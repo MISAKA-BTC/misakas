@@ -78,7 +78,7 @@ impl GgufModelGeometryV1 {
         if self.attn_heads == 0 {
             return Err("a model with no attention heads is not one this family can pin".into());
         }
-        if self.hidden_dim % self.attn_heads as u32 != 0 {
+        if !self.hidden_dim.is_multiple_of(self.attn_heads as u32) {
             return Err(format!(
                 "hidden_dim {} is not divisible by attn_heads {} — the head dimension would be a rounding",
                 self.hidden_dim, self.attn_heads
@@ -106,10 +106,7 @@ impl GgufModelGeometryV1 {
             }
         }
         if self.attn_kv_heads == 0 || self.attn_kv_heads > self.attn_heads {
-            return Err(format!(
-                "attn_kv_heads {} must be between 1 and attn_heads {}",
-                self.attn_kv_heads, self.attn_heads
-            ));
+            return Err(format!("attn_kv_heads {} must be between 1 and attn_heads {}", self.attn_kv_heads, self.attn_heads));
         }
         if self.n_ubatch > self.n_batch {
             return Err(format!("n_ubatch {} exceeds n_batch {}", self.n_ubatch, self.n_batch));
@@ -589,7 +586,10 @@ mod tests {
             u128::MAX / 2,
             5,
             0,
-            kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(Hash64::from_u64_word(7), 0)),
+            kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(
+                Hash64::from_u64_word(7),
+                0,
+            )),
             vec![0u8; 8],
         )
         .expect("a well-formed second registration");
@@ -624,7 +624,10 @@ mod tests {
             u128::MAX / 2,
             5,
             0,
-            kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(Hash64::from_u64_word(7), 0)),
+            kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(
+                Hash64::from_u64_word(7),
+                0,
+            )),
             vec![0u8; 8],
         )
         .expect_err("pins for one model must not register another");
@@ -711,8 +714,8 @@ mod tests {
         let job = cat_m_0001_canonical_job(&pins);
         let reg = cat_m_0001_registration(&pins, 2, 2, 1, u128::MAX / 2, 5, 0);
 
-        let entry = verify_class_admission_v2(&bundle, &profile, &job, &reg)
-            .unwrap_or_else(|e| panic!("CAT-M-0001 is not admissible: {e}"));
+        let entry =
+            verify_class_admission_v2(&bundle, &profile, &job, &reg).unwrap_or_else(|e| panic!("CAT-M-0001 is not admissible: {e}"));
         assert_eq!(entry.class_id, profile.shape_profile_id());
         assert_eq!(entry.canonical_step_leaf_count, CAT_M_0001_CANONICAL.1 as u64, "pwu is the decode budget");
         assert_eq!(entry.artifact_root, gguf_artifact_root_v1());
@@ -771,7 +774,6 @@ mod tests {
             _ => None,
         }
     }
-
 }
 
 #[cfg(test)]
@@ -820,9 +822,8 @@ mod against_a_real_worker {
         .expect("a registration for the real worker");
         let PalwConsensusObjectV2::ClassRegistered { admission, .. } = &reg else { panic!("not a registration") };
         let c = admission.as_ref().expect("carriage");
-        let entry =
-            kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v2(&bundle, &c.profile, &c.canonical, &reg)
-                .unwrap_or_else(|e| panic!("the real worker's class is not admissible: {e}"));
+        let entry = kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v2(&bundle, &c.profile, &c.canonical, &reg)
+            .unwrap_or_else(|e| panic!("the real worker's class is not admissible: {e}"));
         println!("ADMITTED class_id={} pwu={}", entry.class_id, entry.canonical_step_leaf_count);
     }
 }

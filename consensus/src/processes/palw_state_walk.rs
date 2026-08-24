@@ -21,9 +21,7 @@
 //! red on regression (`docs/palw-fp-wiring-atomicity.md`).
 
 use kaspa_consensus_core::BlockHash;
-use kaspa_consensus_core::palw_state_v2::{
-    PalwChainStateV2, PalwStateParamsV2, PalwStateV2Error, apply_delta_v2, revert_delta_v2,
-};
+use kaspa_consensus_core::palw_state_v2::{PalwChainStateV2, PalwStateParamsV2, PalwStateV2Error, apply_delta_v2, revert_delta_v2};
 
 use crate::model::stores::palw_state_v2::DbPalwStateV2Store;
 
@@ -44,7 +42,10 @@ pub enum PalwStateWalkError {
 /// `expected_root` is never `None` here, and that is the point: a carriage's self-consistency
 /// cannot catch a coherent lie about a claim's `pwu` (its own doc says so), so the root is what
 /// makes a tampered snapshot a lie about a DIFFERENT state rather than a plausible one.
-pub fn load_anchor(store: &DbPalwStateV2Store, params: &PalwStateParamsV2) -> Result<(BlockHash, PalwChainStateV2), PalwStateWalkError> {
+pub fn load_anchor(
+    store: &DbPalwStateV2Store,
+    params: &PalwStateParamsV2,
+) -> Result<(BlockHash, PalwChainStateV2), PalwStateWalkError> {
     // `load_tip` demands the recorded root and runs the full `into_state` rebuild, so a tampered
     // or corrupted snapshot is refused here rather than becoming the walk's starting point.
     store.load_tip(params)?.ok_or(PalwStateWalkError::NoAnchor)
@@ -95,11 +96,11 @@ fn load_delta(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use kaspa_consensus_core::palw_state_v2::{
-        PalwBlockContextV2, PalwBlockWorkV3, PalwBondKeyV2, PalwConsensusObjectV2, PalwPanelSeatV2, PalwPwuRuleV2,
-        PalwStateBookV2, PalwStateCarriageV2, apply_palw_transition_v3,
-    };
     use kaspa_consensus_core::palw_freeprompt_v3::{PalwReceiptSpendUnsignedV3, spend_challenge_v3};
+    use kaspa_consensus_core::palw_state_v2::{
+        PalwBlockContextV2, PalwBlockWorkV3, PalwBondKeyV2, PalwConsensusObjectV2, PalwPanelSeatV2, PalwPwuRuleV2, PalwStateBookV2,
+        PalwStateCarriageV2, apply_palw_transition_v3,
+    };
     use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
     use kaspa_database::create_temp_db;
     use kaspa_database::prelude::{CachePolicy, ConnBuilder};
@@ -238,7 +239,8 @@ mod tests {
         }
         let mut branch_b_blocks = Vec::new();
         let mut b = fork_state.clone();
-        for (block, daa, blue, quantum) in [(0xB1u64, 130u64, 20u64, 0u32)] {
+        {
+            let (block, daa, blue, quantum) = (0xB1u64, 130u64, 20u64, 0u32);
             let spend = fp_spend(0xFC, quantum);
             let c = ctx(block, daa, blue);
             let (child, delta) = apply_palw_transition_v3(&b, &p, &c, &[], PalwBlockWorkV3::ReceiptSpend(&spend)).unwrap();
@@ -284,9 +286,20 @@ mod tests {
         let seats = vec![PalwPanelSeatV2 { bond: bond(), operator_id: h64(90) }];
         book.apply_block(h64(0), ctx(1, 100, 1), &registrations(), None).unwrap();
         book.apply_block(h64(1), ctx(2, 101, 2), &[fp_commit(0xFC, 60, 3)], None).unwrap();
-        book.apply_block(h64(2), ctx(3, 102, 3), &[PalwConsensusObjectV2::PanelBound { claim: h64(0xFC), anchor: h64(77), seats }], None)
-            .unwrap();
-        book.apply_block(h64(3), ctx(4, 103, 4), &[PalwConsensusObjectV2::ReceiptLicensed { claim: h64(0xFC), receipts: Vec::new() }], None).unwrap();
+        book.apply_block(
+            h64(2),
+            ctx(3, 102, 3),
+            &[PalwConsensusObjectV2::PanelBound { claim: h64(0xFC), anchor: h64(77), seats }],
+            None,
+        )
+        .unwrap();
+        book.apply_block(
+            h64(3),
+            ctx(4, 103, 4),
+            &[PalwConsensusObjectV2::ReceiptLicensed { claim: h64(0xFC), receipts: Vec::new() }],
+            None,
+        )
+        .unwrap();
         book.apply_block(h64(4), ctx(5, 124, 5), &[], None).unwrap();
         book.apply_block_with_work(h64(5), ctx(0xA1, 130, 6), &[], PalwBlockWorkV3::ReceiptSpend(&fp_spend(0xFC, 0))).unwrap();
         book.apply_block_with_work(h64(0xA1), ctx(0xA2, 131, 7), &[], PalwBlockWorkV3::ReceiptSpend(&fp_spend(0xFC, 1))).unwrap();
@@ -351,9 +364,6 @@ mod tests {
             )
             .unwrap();
         db.write(batch).unwrap();
-        assert!(
-            matches!(load_anchor(&store, &p), Err(PalwStateWalkError::Store(_))),
-            "a tampered anchor cannot load"
-        );
+        assert!(matches!(load_anchor(&store, &p), Err(PalwStateWalkError::Store(_))), "a tampered anchor cannot load");
     }
 }

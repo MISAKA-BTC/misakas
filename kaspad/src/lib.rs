@@ -2,11 +2,11 @@ pub mod args;
 pub mod chain_participation_store;
 pub mod compute;
 pub mod daemon;
-pub mod palw_agent;
 #[cfg(feature = "evm")]
 pub mod eth_rpc;
-pub mod palw_panel;
+pub mod palw_agent;
 pub mod palw_backends;
+pub mod palw_panel;
 pub mod palw_producer;
 pub mod validator_service;
 
@@ -52,10 +52,8 @@ mod workspace_default_members {
         let defaults = list("workspace_default_members");
         assert!(members.len() > 50, "the workspace has many members; got {}", members.len());
 
-        let missing: Vec<&String> = members
-            .iter()
-            .filter(|m| !defaults.contains(m) && !EXCLUDED.iter().any(|e| m.contains(e)))
-            .collect();
+        let missing: Vec<&String> =
+            members.iter().filter(|m| !defaults.contains(m) && !EXCLUDED.iter().any(|e| m.contains(e))).collect();
         assert!(missing.is_empty(), "these members are not in the default build and are not deliberately excluded: {missing:?}");
 
         for e in EXCLUDED {

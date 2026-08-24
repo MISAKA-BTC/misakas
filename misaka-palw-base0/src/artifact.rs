@@ -486,7 +486,11 @@ impl Base0ArtifactV1 {
     /// silently on the global rule, which is the arrangement this exists to replace.
     pub fn with_layer_residual_requant(mut self, per_layer: Vec<[QuantParams; 2]>) -> Result<Self, ArtifactError> {
         if per_layer.len() != self.shape.n_layers {
-            return Err(ArtifactError::WeightLen { tensor: "layer_residual_requant", want: self.shape.n_layers, got: per_layer.len() });
+            return Err(ArtifactError::WeightLen {
+                tensor: "layer_residual_requant",
+                want: self.shape.n_layers,
+                got: per_layer.len(),
+            });
         }
         self.layer_residual_requant = Some(per_layer);
         Ok(self)
@@ -753,7 +757,6 @@ fn absorb_quant(state: &mut blake2b_simd::State, p: &QuantParams) {
     state.update(&p.zero.to_le_bytes());
 }
 
-
 // ---------------------------------------------------------------------------------------------
 // The artifact file — how a converted class reaches the nodes that must run it
 // ---------------------------------------------------------------------------------------------
@@ -804,29 +807,65 @@ impl std::error::Error for ArtifactFileError {}
 
 struct W(Vec<u8>);
 impl W {
-    fn u8(&mut self, v: u8) { self.0.push(v); }
-    fn u32(&mut self, v: u32) { self.0.extend_from_slice(&v.to_le_bytes()); }
-    fn i32(&mut self, v: i32) { self.0.extend_from_slice(&v.to_le_bytes()); }
-    fn u64(&mut self, v: u64) { self.0.extend_from_slice(&v.to_le_bytes()); }
-    fn i64(&mut self, v: i64) { self.0.extend_from_slice(&v.to_le_bytes()); }
-    fn i128(&mut self, v: i128) { self.0.extend_from_slice(&v.to_le_bytes()); }
-    fn usize(&mut self, v: usize) { self.u64(v as u64); }
-    fn i8s(&mut self, v: &[i8]) { self.usize(v.len()); self.0.extend(v.iter().map(|x| *x as u8)); }
-    fn i32s(&mut self, v: &[i32]) { self.usize(v.len()); for x in v { self.i32(*x); } }
-    fn quant(&mut self, q: &QuantParams) { self.i32(q.multiplier); self.u8(q.shift); self.i32(q.zero); }
-    fn scale(&mut self, s: &ScaleParams) { self.i32(s.multiplier); self.u8(s.shift); }
+    fn u8(&mut self, v: u8) {
+        self.0.push(v);
+    }
+    fn u32(&mut self, v: u32) {
+        self.0.extend_from_slice(&v.to_le_bytes());
+    }
+    fn i32(&mut self, v: i32) {
+        self.0.extend_from_slice(&v.to_le_bytes());
+    }
+    fn u64(&mut self, v: u64) {
+        self.0.extend_from_slice(&v.to_le_bytes());
+    }
+    fn i64(&mut self, v: i64) {
+        self.0.extend_from_slice(&v.to_le_bytes());
+    }
+    fn i128(&mut self, v: i128) {
+        self.0.extend_from_slice(&v.to_le_bytes());
+    }
+    fn usize(&mut self, v: usize) {
+        self.u64(v as u64);
+    }
+    fn i8s(&mut self, v: &[i8]) {
+        self.usize(v.len());
+        self.0.extend(v.iter().map(|x| *x as u8));
+    }
+    fn i32s(&mut self, v: &[i32]) {
+        self.usize(v.len());
+        for x in v {
+            self.i32(*x);
+        }
+    }
+    fn quant(&mut self, q: &QuantParams) {
+        self.i32(q.multiplier);
+        self.u8(q.shift);
+        self.i32(q.zero);
+    }
+    fn scale(&mut self, s: &ScaleParams) {
+        self.i32(s.multiplier);
+        self.u8(s.shift);
+    }
 }
 
-struct R<'a> { b: &'a [u8], i: usize }
+struct R<'a> {
+    b: &'a [u8],
+    i: usize,
+}
 impl<'a> R<'a> {
     fn take(&mut self, n: usize, what: &'static str) -> Result<&'a [u8], ArtifactFileError> {
         let end = self.i.checked_add(n).ok_or(ArtifactFileError::Length(what))?;
-        if end > self.b.len() { return Err(ArtifactFileError::Truncated(what)); }
+        if end > self.b.len() {
+            return Err(ArtifactFileError::Truncated(what));
+        }
         let out = &self.b[self.i..end];
         self.i = end;
         Ok(out)
     }
-    fn u8(&mut self, w: &'static str) -> Result<u8, ArtifactFileError> { Ok(self.take(1, w)?[0]) }
+    fn u8(&mut self, w: &'static str) -> Result<u8, ArtifactFileError> {
+        Ok(self.take(1, w)?[0])
+    }
     fn u32(&mut self, w: &'static str) -> Result<u32, ArtifactFileError> {
         Ok(u32::from_le_bytes(self.take(4, w)?.try_into().expect("4")))
     }
@@ -869,28 +908,51 @@ pub fn encode_artifact_file_v1(a: &Base0ArtifactV1) -> Vec<u8> {
     w.0.extend_from_slice(BASE0_ARTIFACT_FILE_MAGIC);
 
     let s = &a.shape;
-    w.usize(s.n_layers); w.usize(s.n_heads); w.usize(s.n_kv_heads); w.usize(s.d_head);
-    w.usize(s.d_ff); w.usize(s.vocab); w.usize(s.max_position);
-    w.i128(s.ln_theta_gen_q); w.i64(s.eps_q);
+    w.usize(s.n_layers);
+    w.usize(s.n_heads);
+    w.usize(s.n_kv_heads);
+    w.usize(s.d_head);
+    w.usize(s.d_ff);
+    w.usize(s.vocab);
+    w.usize(s.max_position);
+    w.i128(s.ln_theta_gen_q);
+    w.i64(s.eps_q);
 
     w.i8s(&a.embed);
     w.i8s(&a.unembed);
 
     w.usize(a.layers.len());
     for l in &a.layers {
-        w.i8s(&l.wq); w.i8s(&l.wk); w.i8s(&l.wv); w.i8s(&l.wo);
-        w.i8s(&l.w_gate); w.i8s(&l.w_up); w.i8s(&l.w_down);
-        for q in &l.requant { w.quant(q); }
+        w.i8s(&l.wq);
+        w.i8s(&l.wk);
+        w.i8s(&l.wv);
+        w.i8s(&l.wo);
+        w.i8s(&l.w_gate);
+        w.i8s(&l.w_up);
+        w.i8s(&l.w_down);
+        for q in &l.requant {
+            w.quant(q);
+        }
         match &l.qkv_channel_requant {
             None => w.u8(0),
-            Some(t) => { w.u8(1); for v in t.iter() { w.usize(v.len()); for q in v { w.quant(q); } } }
+            Some(t) => {
+                w.u8(1);
+                for v in t.iter() {
+                    w.usize(v.len());
+                    for q in v {
+                        w.quant(q);
+                    }
+                }
+            }
         }
         w.scale(&l.attn_logit_scale);
         w.scale(&l.ffn_gate_scale);
     }
 
-    w.usize(a.rope.d_head); w.usize(a.rope.max_position);
-    w.i32s(&a.rope.cos_q); w.i32s(&a.rope.sin_q);
+    w.usize(a.rope.d_head);
+    w.usize(a.rope.max_position);
+    w.i32s(&a.rope.cos_q);
+    w.i32s(&a.rope.sin_q);
 
     w.0.extend_from_slice(a.tokenizer_commitment.as_byte_slice());
     w.quant(&a.norm_requant);
@@ -898,16 +960,35 @@ pub fn encode_artifact_file_v1(a: &Base0ArtifactV1) -> Vec<u8> {
 
     match &a.layer_residual_requant {
         None => w.u8(0),
-        Some(t) => { w.u8(1); w.usize(t.len()); for pair in t { w.quant(&pair[0]); w.quant(&pair[1]); } }
+        Some(t) => {
+            w.u8(1);
+            w.usize(t.len());
+            for pair in t {
+                w.quant(&pair[0]);
+                w.quant(&pair[1]);
+            }
+        }
     }
     match &a.layer_residual_scale {
         None => w.u8(0),
-        Some(t) => { w.u8(1); w.usize(t.len()); for pair in t { w.scale(&pair[0]); w.scale(&pair[1]); } }
+        Some(t) => {
+            w.u8(1);
+            w.usize(t.len());
+            for pair in t {
+                w.scale(&pair[0]);
+                w.scale(&pair[1]);
+            }
+        }
     }
-    for q in &a.class_narrowings { w.quant(q); }
+    for q in &a.class_narrowings {
+        w.quant(q);
+    }
     match a.derived_seed {
         None => w.u8(0),
-        Some(v) => { w.u8(1); w.u64(v); }
+        Some(v) => {
+            w.u8(1);
+            w.u64(v);
+        }
     }
 
     // Declared last, checked first by the reader against what it actually parsed.
@@ -926,10 +1007,15 @@ pub fn decode_artifact_file_v1(bytes: &[u8]) -> Result<Base0ArtifactV1, Artifact
     }
 
     let shape = Base0ShapeV1 {
-        n_layers: r.usize("shape")?, n_heads: r.usize("shape")?, n_kv_heads: r.usize("shape")?,
-        d_head: r.usize("shape")?, d_ff: r.usize("shape")?, vocab: r.usize("shape")?,
+        n_layers: r.usize("shape")?,
+        n_heads: r.usize("shape")?,
+        n_kv_heads: r.usize("shape")?,
+        d_head: r.usize("shape")?,
+        d_ff: r.usize("shape")?,
+        vocab: r.usize("shape")?,
         max_position: r.usize("shape")?,
-        ln_theta_gen_q: r.i128("shape")?, eps_q: r.i64("shape")?,
+        ln_theta_gen_q: r.i128("shape")?,
+        eps_q: r.i64("shape")?,
     };
     shape.validate().map_err(ArtifactFileError::Shape)?;
 
@@ -939,10 +1025,17 @@ pub fn decode_artifact_file_v1(bytes: &[u8]) -> Result<Base0ArtifactV1, Artifact
     let n_layers = r.usize("layer count")?;
     let mut layers = Vec::with_capacity(n_layers.min(1024));
     for _ in 0..n_layers {
-        let wq = r.i8s("wq")?; let wk = r.i8s("wk")?; let wv = r.i8s("wv")?; let wo = r.i8s("wo")?;
-        let w_gate = r.i8s("w_gate")?; let w_up = r.i8s("w_up")?; let w_down = r.i8s("w_down")?;
+        let wq = r.i8s("wq")?;
+        let wk = r.i8s("wk")?;
+        let wv = r.i8s("wv")?;
+        let wo = r.i8s("wo")?;
+        let w_gate = r.i8s("w_gate")?;
+        let w_up = r.i8s("w_up")?;
+        let w_down = r.i8s("w_down")?;
         let mut requant = [QuantParams { multiplier: 0, shift: 0, zero: 0 }; 7];
-        for q in requant.iter_mut() { *q = r.quant("requant")?; }
+        for q in requant.iter_mut() {
+            *q = r.quant("requant")?;
+        }
         let qkv_channel_requant = match r.u8("qkv tag")? {
             0 => None,
             _ => {
@@ -950,7 +1043,9 @@ pub fn decode_artifact_file_v1(bytes: &[u8]) -> Result<Base0ArtifactV1, Artifact
                 for v in out.iter_mut() {
                     let n = r.usize("qkv channel")?;
                     v.reserve(n.min(1 << 20));
-                    for _ in 0..n { v.push(r.quant("qkv channel")?); }
+                    for _ in 0..n {
+                        v.push(r.quant("qkv channel")?);
+                    }
                 }
                 Some(out)
             }
@@ -958,8 +1053,17 @@ pub fn decode_artifact_file_v1(bytes: &[u8]) -> Result<Base0ArtifactV1, Artifact
         let attn_logit_scale = r.scale("attn scale")?;
         let ffn_gate_scale = r.scale("gate scale")?;
         layers.push(Base0LayerWeightsV1 {
-            wq, wk, wv, wo, w_gate, w_up, w_down, requant, qkv_channel_requant,
-            attn_logit_scale, ffn_gate_scale,
+            wq,
+            wk,
+            wv,
+            wo,
+            w_gate,
+            w_up,
+            w_down,
+            requant,
+            qkv_channel_requant,
+            attn_logit_scale,
+            ffn_gate_scale,
         });
     }
 
@@ -982,7 +1086,9 @@ pub fn decode_artifact_file_v1(bytes: &[u8]) -> Result<Base0ArtifactV1, Artifact
         _ => {
             let n = r.usize("layer requant")?;
             let mut t = Vec::with_capacity(n.min(1 << 16));
-            for _ in 0..n { t.push([r.quant("layer requant")?, r.quant("layer requant")?]); }
+            for _ in 0..n {
+                t.push([r.quant("layer requant")?, r.quant("layer requant")?]);
+            }
             Some(t)
         }
     };
@@ -991,22 +1097,38 @@ pub fn decode_artifact_file_v1(bytes: &[u8]) -> Result<Base0ArtifactV1, Artifact
         _ => {
             let n = r.usize("layer scale")?;
             let mut t = Vec::with_capacity(n.min(1 << 16));
-            for _ in 0..n { t.push([r.scale("layer scale")?, r.scale("layer scale")?]); }
+            for _ in 0..n {
+                t.push([r.scale("layer scale")?, r.scale("layer scale")?]);
+            }
             Some(t)
         }
     };
     let mut class_narrowings = [QuantParams { multiplier: 0, shift: 0, zero: 0 }; 3];
-    for q in class_narrowings.iter_mut() { *q = r.quant("class narrowing")?; }
-    let derived_seed = match r.u8("seed tag")? { 0 => None, _ => Some(r.u64("seed")?) };
+    for q in class_narrowings.iter_mut() {
+        *q = r.quant("class narrowing")?;
+    }
+    let derived_seed = match r.u8("seed tag")? {
+        0 => None,
+        _ => Some(r.u64("seed")?),
+    };
 
     let mut dd = [0u8; 64];
     dd.copy_from_slice(r.take(64, "declared digest")?);
     let declared = Hash64::from_bytes(dd);
 
     let artifact = Base0ArtifactV1 {
-        shape, embed, unembed, layers, rope, tokenizer_commitment,
-        norm_requant, residual_requant, layer_residual_requant, layer_residual_scale,
-        class_narrowings, derived_seed,
+        shape,
+        embed,
+        unembed,
+        layers,
+        rope,
+        tokenizer_commitment,
+        norm_requant,
+        residual_requant,
+        layer_residual_requant,
+        layer_residual_scale,
+        class_narrowings,
+        derived_seed,
     };
     let recomputed = artifact.artifact_digest();
     if recomputed != declared {
@@ -1087,8 +1209,7 @@ mod tests {
         let kv = tiny().kv_dim();
         let triple = |zero: i32| QuantParams { multiplier: i32::MAX, shift: 7, zero };
         let mut biased = base.clone();
-        biased.layers[0].qkv_channel_requant =
-            Some([vec![triple(0); d], vec![triple(0); kv], vec![triple(0); kv]]);
+        biased.layers[0].qkv_channel_requant = Some([vec![triple(0); d], vec![triple(0); kv], vec![triple(0); kv]]);
         let unbiased_id = biased.artifact_digest();
         let mut one_bias = biased.clone();
         one_bias.layers[0].qkv_channel_requant.as_mut().unwrap()[0][d - 1] = triple(1);
@@ -1223,15 +1344,7 @@ mod tests {
         a.unembed = flip(&a.unembed);
         assert_ne!(id, a.artifact_digest(), "unembed is outside the digest");
         for li in 0..base.shape.n_layers {
-            for (name, pick) in [
-                ("wq", 0usize),
-                ("wk", 1),
-                ("wv", 2),
-                ("wo", 3),
-                ("w_gate", 4),
-                ("w_up", 5),
-                ("w_down", 6),
-            ] {
+            for (name, pick) in [("wq", 0usize), ("wk", 1), ("wv", 2), ("wo", 3), ("w_gate", 4), ("w_up", 5), ("w_down", 6)] {
                 let mut a = base.clone();
                 let l = &mut a.layers[li];
                 let t = match pick {

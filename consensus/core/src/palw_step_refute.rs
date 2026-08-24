@@ -216,10 +216,7 @@ const KERNEL_CATALOG: &[(&str, KernelProgram)] = &[
 /// declares is servable, and its embedding gather still refuses at `call_index != 0`
 /// (`base0_row`'s `Embed` arm) while its own canonical job is prefill 8 / **decode 4**. Coverage
 /// reported 100 % on a class with a whole call class it could not police.
-pub fn kernel_can_serve_call_class_v1(
-    node: &crate::palw_step::PalwStepNodeV1,
-    call_is_decode: bool,
-) -> Result<(), &'static str> {
+pub fn kernel_can_serve_call_class_v1(node: &crate::palw_step::PalwStepNodeV1, call_is_decode: bool) -> Result<(), &'static str> {
     let Some(program) = resolve_kernel(&node.kernel_semantics_id) else {
         return Err("no program in this build resolves the node's kernel id");
     };
@@ -312,9 +309,7 @@ pub fn kernel_can_serve_node_v1(node: &crate::palw_step::PalwStepNodeV1, table_i
             Ok(())
         }
         // One opened row.
-        KernelProgram::Base0(
-            Base0Op::RmsNorm | Base0Op::Softmax | Base0Op::Silu,
-        )
+        KernelProgram::Base0(Base0Op::RmsNorm | Base0Op::Softmax | Base0Op::Silu)
         | KernelProgram::L2Norm
         | KernelProgram::SigmoidGlibcFma
         | KernelProgram::SoftplusGlibcFma => {
@@ -497,8 +492,7 @@ fn base0_row(
             // Five bytes: one i32 multiplier LE and one u8 shift. Asked for as five rather than
             // as "one element", which is what left op 9 unable to adjudicate through any real
             // opening (ADR-0049 Decision A).
-            let row =
-                weights.operand_bytes(node.weight_name.as_str(), layer, 0, 5).ok_or(PalwStepRefuteError::Unadjudicable)?;
+            let row = weights.operand_bytes(node.weight_name.as_str(), layer, 0, 5).ok_or(PalwStepRefuteError::Unadjudicable)?;
             if row.len() != 5 {
                 return Err(PalwStepRefuteError::InputSetNotCanonical("base0 rescale params are not 5 bytes"));
             }
@@ -1184,10 +1178,7 @@ fn canonical_input_leaves(
         let history: Vec<(u32, u32)> = if out_coord.call_index == 0 {
             (0..=out_coord.position).map(|p| (0, p)).collect()
         } else {
-            (0..context.declared_prefill_tokens)
-                .map(|p| (0, p))
-                .chain((1..=out_coord.call_index).map(|c| (c, 0)))
-                .collect()
+            (0..context.declared_prefill_tokens).map(|p| (0, p)).chain((1..=out_coord.call_index).map(|c| (c, 0))).collect()
         };
         for &r in &node.input_refs {
             let (in_slot, positions_for_ref) = match r {
@@ -1387,7 +1378,9 @@ pub fn check_execution_step_refutation_v1(
         (_, None) => &[],
         (crate::palw_step::PalwStepLaneV1::Float32, Some(PalwDecodeTokenPinV1::FloatV2(d))) => {
             if crate::palw_v2::output_token_ids_hash_v2(&d.generated_token_ids) != d.summary.output_token_ids_hash {
-                return Err(PalwStepRefuteError::InputSetNotCanonical("the carried generated ids are not the ones the summary commits to"));
+                return Err(PalwStepRefuteError::InputSetNotCanonical(
+                    "the carried generated ids are not the ones the summary commits to",
+                ));
             }
             let root = crate::palw_v2::full_logits_trace_root_v2(&context_hash, &d.summary, &d.ordered_event_commitment);
             if root != binding.full_logits_trace_root {
@@ -1482,7 +1475,12 @@ fn run_program(
             let x = inputs.first().ok_or(PalwStepRefuteError::InputSetNotCanonical("rmsnorm needs one input row"))?;
             // Four bytes per value: the fused norm's gain is an f32 lane.
             let wrow = weights
-                .operand_bytes(&node.weight_name, layer, 0, u32::try_from(x.len() * 4).map_err(|_| PalwStepRefuteError::WeightUnavailable)?)
+                .operand_bytes(
+                    &node.weight_name,
+                    layer,
+                    0,
+                    u32::try_from(x.len() * 4).map_err(|_| PalwStepRefuteError::WeightUnavailable)?,
+                )
                 .ok_or(PalwStepRefuteError::WeightUnavailable)?;
             if wrow.len() != x.len() * 4 {
                 return Err(PalwStepRefuteError::WeightUnavailable);
@@ -1819,8 +1817,7 @@ pub(crate) mod tests {
         // The five bytes a `Rescale` node's parameters are: one i32 multiplier LE, one u8 shift.
         let mut bytes = i32::MAX.to_le_bytes().to_vec();
         bytes.push(23);
-        let operand =
-            PalwArtifactOperandV1 { tensor_name: "blk.{layer}.scale".to_string(), layer: Some(0), row_start: 0, bytes };
+        let operand = PalwArtifactOperandV1 { tensor_name: "blk.{layer}.scale".to_string(), layer: Some(0), row_start: 0, bytes };
         let leaf = artifact_leaf_v1(&operand);
         let root = artifact_root_v1(&[leaf]).expect("a one-leaf inventory has a root");
         let opening = PalwArtifactOpeningV1 { operand, leaf_index: 0, leaf_count: 1, path: vec![] };
@@ -1844,7 +1841,6 @@ pub(crate) mod tests {
             "an operand nobody proved leaves the step unchecked rather than decided"
         );
     }
-
 
     /// ADR-0040 H op 9 is adjudicable, and a committed shift outside its domain is refused.
     ///
@@ -1932,8 +1928,7 @@ pub(crate) mod tests {
         let full: Vec<u8> = w.iter().map(|v| *v as u8).collect();
         let kv_got = base0_row(Base0Op::MatMul, &kv, Some(0), &profile(), &input, &FixedRow(full.clone()), 1, NO_GATHER)
             .expect("multiplier x kv_len is a width this arm holds");
-        let kv_want: Vec<u32> =
-            crate::palw_base0_ops::matmul_quant(&w[..8], &x, 2).unwrap().into_iter().map(|v| v as u32).collect();
+        let kv_want: Vec<u32> = crate::palw_base0_ops::matmul_quant(&w[..8], &x, 2).unwrap().into_iter().map(|v| v as u32).collect();
         assert_eq!(kv_got, kv_want, "a kv-scaled node recomputes multiplier x kv_len output rows");
 
         // What IS still refused: a width the oracle cannot serve. Not being able to check is never
@@ -2270,7 +2265,7 @@ pub(crate) mod tests {
 
     /// The weight block the class registered: `32 out x 32 in` int8 codes, deterministic.
     pub(crate) fn base0_matmul_weights() -> Vec<i8> {
-        (0..32 * 32).map(|i| (((i * 7) % 13) as i32 - 6) as i8).collect()
+        (0..32 * 32).map(|i| (((i * 7) % 13) - 6) as i8).collect()
     }
 
     /// An honest BASE-0 execution over [`base0_matmul_profile`], plus its leg material.
@@ -2278,8 +2273,7 @@ pub(crate) mod tests {
     /// Same three position ordinals the GDN fixture uses. Every value stays inside the int8 lane,
     /// because BASE-0 activations are int8 codes riding i32 lanes and an out-of-range lane is
     /// `InputSetNotCanonical` rather than arithmetic.
-    pub(crate) fn base0_honest_execution() -> (PalwStepBindingV2, crate::palw_step_leg::PalwStepLegMaterialV1, Vec<Vec<Vec<u32>>>)
-    {
+    pub(crate) fn base0_honest_execution() -> (PalwStepBindingV2, crate::palw_step_leg::PalwStepLegMaterialV1, Vec<Vec<Vec<u32>>>) {
         let p = base0_matmul_profile();
         let mut ctx = context();
         ctx.shape_profile_id = p.shape_profile_id();
@@ -2291,8 +2285,7 @@ pub(crate) mod tests {
             rows[ord][0] = (0..32).map(|i| (((ord * 5 + i) % 11) as i32 - 5) as u32).collect();
             let x: Vec<i8> = rows[ord][0].iter().map(|v| *v as i32 as i8).collect();
             // gdn (slot 1): the matmul, by the SAME function the court will recompute with.
-            rows[ord][1] =
-                crate::palw_base0_ops::matmul_quant(&w, &x, 32).unwrap().into_iter().map(|v| v as u32).collect();
+            rows[ord][1] = crate::palw_base0_ops::matmul_quant(&w, &x, 32).unwrap().into_iter().map(|v| v as u32).collect();
             // post (slot 2): silu over the layer output.
             rows[ord][2] = crate::palw_base0_ops::silu(&rows[ord][1].iter().map(|v| *v as i32).collect::<Vec<_>>())
                 .into_iter()
@@ -2346,8 +2339,7 @@ pub(crate) mod tests {
     ///
     /// The mirror of [`base0_matmul_fraud`]: same profile, same weights, same coordinate — and
     /// nothing corrupted. What a court does with this is the whole false-slash question.
-    pub(crate) fn base0_honest_case() -> (PalwExecutionStepRefutationV1, Vec<crate::palw_artifact::PalwArtifactOpeningV1>, Hash64)
-    {
+    pub(crate) fn base0_honest_case() -> (PalwExecutionStepRefutationV1, Vec<crate::palw_artifact::PalwArtifactOpeningV1>, Hash64) {
         use crate::palw_artifact::{PalwArtifactOperandV1, artifact_leaf_v1, artifact_root_v1};
         let (binding, material, rows) = base0_honest_execution();
         let coord = PalwStepCoordinateV1 { call_index: 1, node_slot: 1, position: 0, tile_index: 1 };
@@ -2362,15 +2354,13 @@ pub(crate) mod tests {
         const TILE_WIDTH: usize = 16;
         let all_weights = base0_matmul_weights();
         let byte_offset = TILE_START_ROW * IN_LEN;
-        let operands = vec![
-            PalwArtifactOperandV1 {
+        let operands = [PalwArtifactOperandV1 {
                 tensor_name: "blk.{layer}.w".to_string(),
                 layer: Some(0),
                 row_start: byte_offset as u32,
                 bytes: all_weights[byte_offset..byte_offset + TILE_WIDTH * IN_LEN].iter().map(|v| *v as u8).collect(),
             },
-            PalwArtifactOperandV1 { tensor_name: "decoy".to_string(), layer: None, row_start: 0, bytes: vec![9, 9, 9] },
-        ];
+            PalwArtifactOperandV1 { tensor_name: "decoy".to_string(), layer: None, row_start: 0, bytes: vec![9, 9, 9] }];
         let leaves: Vec<Hash64> = operands.iter().map(artifact_leaf_v1).collect();
         let artifact_root = artifact_root_v1(&leaves).unwrap();
         let openings = vec![crate::palw_artifact::PalwArtifactOpeningV1 {
@@ -2410,8 +2400,7 @@ pub(crate) mod tests {
 
     /// The same execution with ONE committed MatMul value corrupted, plus the artifact openings a
     /// challenger carries. Returns everything a `CourtClosed` proof needs.
-    pub(crate) fn base0_matmul_fraud() -> (PalwExecutionStepRefutationV1, Vec<crate::palw_artifact::PalwArtifactOpeningV1>, Hash64)
-    {
+    pub(crate) fn base0_matmul_fraud() -> (PalwExecutionStepRefutationV1, Vec<crate::palw_artifact::PalwArtifactOpeningV1>, Hash64) {
         use crate::palw_artifact::{PalwArtifactOperandV1, artifact_leaf_v1, artifact_root_v1};
         let (mut binding, mut material, rows) = base0_honest_execution();
         let p = binding.shape_profile.clone();
@@ -2468,15 +2457,13 @@ pub(crate) mod tests {
         const TILE_WIDTH: usize = 16;
         let all_weights = base0_matmul_weights();
         let byte_offset = TILE_START_ROW * IN_LEN;
-        let operands = vec![
-            PalwArtifactOperandV1 {
+        let operands = [PalwArtifactOperandV1 {
                 tensor_name: "blk.{layer}.w".to_string(),
                 layer: Some(0),
                 row_start: byte_offset as u32,
                 bytes: all_weights[byte_offset..byte_offset + TILE_WIDTH * IN_LEN].iter().map(|v| *v as u8).collect(),
             },
-            PalwArtifactOperandV1 { tensor_name: "decoy".to_string(), layer: None, row_start: 0, bytes: vec![9, 9, 9] },
-        ];
+            PalwArtifactOperandV1 { tensor_name: "decoy".to_string(), layer: None, row_start: 0, bytes: vec![9, 9, 9] }];
         let leaves: Vec<Hash64> = operands.iter().map(artifact_leaf_v1).collect();
         let artifact_root = artifact_root_v1(&leaves).unwrap();
         let openings = vec![crate::palw_artifact::PalwArtifactOpeningV1 {
@@ -2632,10 +2619,7 @@ pub(crate) mod tests {
         // `InputSetNotCanonical` family — the challenger's evidence is wrong, not the producer's.
         refutation.prompt_token_ids = vec![1, 2, 3];
         assert!(
-            matches!(
-                check_execution_step_refutation_v1(&refutation, &NoWeights),
-                Err(PalwStepRefuteError::InputSetNotCanonical(_))
-            ),
+            matches!(check_execution_step_refutation_v1(&refutation, &NoWeights), Err(PalwStepRefuteError::InputSetNotCanonical(_))),
             "ids the context does not commit to must never reach a kernel"
         );
 
@@ -2997,10 +2981,7 @@ pub(crate) mod tests {
             "position 0's token was honest, and stays cleared"
         );
         assert!(
-            matches!(
-                check_base0_decode_token_refutation_v1(&lb, &lpin, 7),
-                Err(PalwStepRefuteError::InputSetNotCanonical(_))
-            ),
+            matches!(check_base0_decode_token_refutation_v1(&lb, &lpin, 7), Err(PalwStepRefuteError::InputSetNotCanonical(_))),
             "a position outside the job's decode calls is malformed evidence, never a verdict"
         );
     }
@@ -3060,10 +3041,7 @@ pub(crate) mod tests {
         ];
         for (what, bad) in cases {
             assert!(
-                matches!(
-                    check_base0_decode_token_refutation_v1(&binding, &bad, 0),
-                    Err(PalwStepRefuteError::InputSetNotCanonical(_))
-                ),
+                matches!(check_base0_decode_token_refutation_v1(&binding, &bad, 0), Err(PalwStepRefuteError::InputSetNotCanonical(_))),
                 "{what} must be refused as malformed evidence"
             );
         }

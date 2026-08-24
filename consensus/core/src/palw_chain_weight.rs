@@ -296,7 +296,10 @@ mod tests {
         let flat = PalwChainWeightParamsV1 { penalty_sompi_per_pwu: 10, immature_bound_permille: 1_000 };
         let at = |stage: S| chain_weights_v1(&[b(4_242, stage)], &flat).expect("resolves").live;
         assert_eq!(at(S::ReceiptLicensed), at(S::Final), "β = 1000‰ is the neutral boundary");
-        assert!(PalwChainWeightParamsV1 { penalty_sompi_per_pwu: 10, immature_bound_permille: 1_001 }.validate().is_err(), "and nothing past it is admissible");
+        assert!(
+            PalwChainWeightParamsV1 { penalty_sompi_per_pwu: 10, immature_bound_permille: 1_001 }.validate().is_err(),
+            "and nothing past it is admissible"
+        );
     }
 
     /// A deterministic permutation generator — no `rand`, so the suite is reproducible and the
@@ -439,7 +442,10 @@ mod tests {
         );
         // And the bound is enforced by the weight function, not only by an explicit validate call.
         assert_eq!(
-            chain_weights_v1(&[b(1, S::Final)], &PalwChainWeightParamsV1 { penalty_sompi_per_pwu: 10, immature_bound_permille: 1_001 }),
+            chain_weights_v1(
+                &[b(1, S::Final)],
+                &PalwChainWeightParamsV1 { penalty_sompi_per_pwu: 10, immature_bound_permille: 1_001 }
+            ),
             Err(PalwChainWeightError::BoundOutOfRange { got: 1_001 })
         );
     }
@@ -623,11 +629,7 @@ mod adversarial_suite {
                         if order_tips_v1(rule, (a.0, a.1), (z.0, z.1)) == core::cmp::Ordering::Greater
                             && order_tips_v1(rule, (z.0, z.1), (c.0, c.1)) == core::cmp::Ordering::Greater
                         {
-                            assert_eq!(
-                                order_tips_v1(rule, (a.0, a.1), (c.0, c.1)),
-                                core::cmp::Ordering::Greater,
-                                "transitive"
-                            );
+                            assert_eq!(order_tips_v1(rule, (a.0, a.1), (c.0, c.1)), core::cmp::Ordering::Greater, "transitive");
                         }
                     }
                 }

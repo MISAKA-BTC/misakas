@@ -70,7 +70,7 @@ fn main() {
         // it is compiled anyway so the source set stays valid under either choice.
         "vendor/softfloat/source/s_approxRecip32_1.c",
         "vendor/softfloat/source/s_approxRecipSqrt32_1.c",
-        "vendor/softfloat/source/s_approxRecip_1Ks.c",     // seed tables for approxRecip32_1
+        "vendor/softfloat/source/s_approxRecip_1Ks.c", // seed tables for approxRecip32_1
         "vendor/softfloat/source/s_approxRecipSqrt_1Ks.c", // seed tables for approxRecipSqrt32_1
         // Global state: softfloat_roundingMode / softfloat_detectTininess /
         // softfloat_exceptionFlags definitions (referenced by roundPack/raiseFlags).

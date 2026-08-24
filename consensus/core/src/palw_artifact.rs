@@ -131,7 +131,7 @@ pub fn open_artifact_leaf_v1(operands: &[PalwArtifactOperandV1], index: u32) -> 
     while level.len() > 1 {
         let promoted = at == level.len() - 1 && level.len() % 2 == 1;
         if !promoted {
-            path.push(if at % 2 == 0 { level[at + 1] } else { level[at - 1] });
+            path.push(if at.is_multiple_of(2) { level[at + 1] } else { level[at - 1] });
         }
         let mut next = Vec::with_capacity(level.len().div_ceil(2));
         let mut i = 0;
@@ -187,7 +187,7 @@ pub fn verify_artifact_opening_v1(opening: &PalwArtifactOpeningV1, registered_ro
         let promoted = index == width - 1 && width % 2 == 1;
         if !promoted {
             let sibling = supplied.next().ok_or(PalwArtifactError::RootMismatch)?;
-            acc = if index % 2 == 0 { node(&acc, sibling) } else { node(sibling, &acc) };
+            acc = if index.is_multiple_of(2) { node(&acc, sibling) } else { node(sibling, &acc) };
         }
         index /= 2;
         width = width.div_ceil(2);
@@ -233,8 +233,7 @@ impl crate::palw_step_refute::PalwWeightOracleV1 for PalwProvenOperandsV1 {
     /// five bytes, could never adjudicate through a real opening. The contract is bytes on both
     /// sides now; the mismatch had no way to announce itself before.
     fn operand_bytes(&self, tensor_name: &str, layer: Option<u16>, byte_offset: u32, byte_len: u32) -> Option<Vec<u8>> {
-        let operand =
-            self.operands.iter().find(|o| o.tensor_name == tensor_name && o.layer == layer && o.row_start == byte_offset)?;
+        let operand = self.operands.iter().find(|o| o.tensor_name == tensor_name && o.layer == layer && o.row_start == byte_offset)?;
         // The proof binds the bytes that were committed; it says nothing about how many the caller
         // wants. A short opening is a missing operand, not a truncated answer — and a LONG one is
         // refused too, because an opening that proves more than the step reads is an opening whose
@@ -277,10 +276,7 @@ mod tests {
         } else {
             path.push(node(&leaves[0], &leaves[1]));
         }
-        (
-            PalwArtifactOpeningV1 { operand: inv[index].clone(), leaf_index: index as u32, leaf_count: 3, path },
-            root,
-        )
+        (PalwArtifactOpeningV1 { operand: inv[index].clone(), leaf_index: index as u32, leaf_count: 3, path }, root)
     }
 
     /// **The prover and the verifier agree, at every inventory size** — including the odd ones,
@@ -364,10 +360,7 @@ mod tests {
         let (good, root) = open(0);
         let (mut bad, _) = open(1);
         bad.operand.bytes = vec![0xFF; 4];
-        assert_eq!(
-            PalwProvenOperandsV1::from_openings_v1(&[good, bad], root).err(),
-            Some(PalwArtifactError::RootMismatch)
-        );
+        assert_eq!(PalwProvenOperandsV1::from_openings_v1(&[good, bad], root).err(), Some(PalwArtifactError::RootMismatch));
     }
 
     /// Out-of-range and empty inventories are refused rather than reaching the hash.
@@ -390,7 +383,6 @@ mod tests {
     }
 }
 
-
 // ---------------------------------------------------------------------------------------------
 // The canonical inventory (ADR-0049 Decision G)
 // ---------------------------------------------------------------------------------------------
@@ -404,7 +396,9 @@ pub enum PalwInventoryError {
     ZeroLengthRow { tensor: String, index: usize },
     #[error("'{tensor}' appears twice at byte {offset}: two leaves for one position let a producer choose which one an opening meets")]
     DuplicateRow { tensor: String, offset: u32 },
-    #[error("'{tensor}' is out of canonical order at index {index}: (name, layer, offset) ascending is what makes the order one nobody chooses")]
+    #[error(
+        "'{tensor}' is out of canonical order at index {index}: (name, layer, offset) ascending is what makes the order one nobody chooses"
+    )]
     NotCanonicalOrder { tensor: String, index: usize },
     #[error("'{tensor}' does not start at byte 0 — a tensor whose first row is not its first byte has a prefix nothing covers")]
     DoesNotStartAtZero { tensor: String },
@@ -448,10 +442,10 @@ impl PalwArtifactInventoryV1 {
                 // Within one tensor the rows must tile it: the next row starts exactly where the
                 // previous ended. Across tensors the previous end says nothing.
                 if (prev.tensor_name.as_str(), prev.layer) == (o.tensor_name.as_str(), o.layer) {
-                    let end = prev.row_start.checked_add(prev.bytes.len() as u32).ok_or(PalwInventoryError::GapOrOverlap {
-                        tensor: o.tensor_name.clone(),
-                        at: prev.row_start,
-                    })?;
+                    let end = prev
+                        .row_start
+                        .checked_add(prev.bytes.len() as u32)
+                        .ok_or(PalwInventoryError::GapOrOverlap { tensor: o.tensor_name.clone(), at: prev.row_start })?;
                     if end != o.row_start {
                         return Err(PalwInventoryError::GapOrOverlap { tensor: o.tensor_name.clone(), at: end });
                     }
@@ -595,13 +589,15 @@ mod inventory_tests {
 
         // Drop the one the residual narrowing reads — the node ADR-0050 A added — and the gate says
         // which tensor is missing rather than leaving it to be found by a dispute.
-        let without: Vec<PalwArtifactOperandV1> =
-            operands.into_iter().filter(|o| !o.tensor_name.contains("attn_residual")).collect();
+        let without: Vec<PalwArtifactOperandV1> = operands.into_iter().filter(|o| !o.tensor_name.contains("attn_residual")).collect();
         let err = PalwArtifactInventoryV1::new(without)
             .expect("still a legal layout")
             .verify_covers_profile(&profile)
             .expect_err("a graph reading a tensor nobody carries is unprosecutable at that node");
-        assert!(matches!(err, PalwInventoryError::ProfileTensorMissing { ref tensor } if tensor.contains("attn_residual")), "got {err:?}");
+        assert!(
+            matches!(err, PalwInventoryError::ProfileTensorMissing { ref tensor } if tensor.contains("attn_residual")),
+            "got {err:?}"
+        );
     }
 
     /// `{layer}` matches one numeric segment and nothing else, so a template cannot be satisfied by

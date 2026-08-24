@@ -266,7 +266,9 @@ mod tests {
                 pubkey: vec![7; 4],
                 operator_pubkey: vec![0x21; 8],
                 collateral: 1_000_000,
-                payout_payload: h64(0x9A11), signature: Vec::new() },
+                payout_payload: h64(0x9A11),
+                signature: Vec::new(),
+            },
         ];
         let ctx = PalwBlockContextV2 { block: crate::BlockHash::from_u64_word(1), daa_score: 100, blue_score: 1, subsidy: 0 };
         apply_palw_transition_v2(&PalwChainStateV2::genesis(), &state_params(), &ctx, &objects, None).unwrap().0
@@ -512,10 +514,7 @@ pub struct PalwDisputableClaimV2 {
     pub licensed_daa: u64,
 }
 
-pub fn palw_disputable_claims_v2(
-    state: &PalwChainStateV2,
-    mine: &[PalwBondKeyV2],
-) -> Vec<PalwDisputableClaimV2> {
+pub fn palw_disputable_claims_v2(state: &PalwChainStateV2, mine: &[PalwBondKeyV2]) -> Vec<PalwDisputableClaimV2> {
     let mut out = Vec::new();
     for (claim_id, claim) in state.claims_iter() {
         let crate::palw_state_v2::PalwClaimPhaseV2::ReceiptLicensed { licensed_daa } = claim.phase else { continue };

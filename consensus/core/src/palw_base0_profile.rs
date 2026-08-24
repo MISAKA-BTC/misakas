@@ -49,8 +49,8 @@ use crate::palw_step::{
     PalwStepLaneV1, PalwStepNodeRoleV1, PalwStepNodeV1, PalwStepOpKindV1, PalwStepOutLenV1, kernel_semantics_id_v1,
 };
 use crate::palw_step_refute::{
-    KDESC_BASE0_ADD_ELEM, KDESC_BASE0_EMBED, KDESC_BASE0_MATMUL, KDESC_BASE0_MUL_ELEM, KDESC_BASE0_REQUANTIZE,
-    KDESC_BASE0_RESCALE, KDESC_BASE0_RMS_NORM, KDESC_BASE0_ROPE, KDESC_BASE0_SILU, KDESC_BASE0_SOFTMAX,
+    KDESC_BASE0_ADD_ELEM, KDESC_BASE0_EMBED, KDESC_BASE0_MATMUL, KDESC_BASE0_MUL_ELEM, KDESC_BASE0_REQUANTIZE, KDESC_BASE0_RESCALE,
+    KDESC_BASE0_RMS_NORM, KDESC_BASE0_ROPE, KDESC_BASE0_SILU, KDESC_BASE0_SOFTMAX,
 };
 use crate::{Hash64, palw_step::PalwStepError};
 
@@ -172,14 +172,28 @@ pub const BASE0_LAYER_IR: &[Base0IrNodeV1] = &[
     n(PalwStepOpKindV1::MatMulQuant, KDESC_BASE0_MATMUL, "blk.{layer}.attn_k.weight", KvDim, &[Step(1)]),
     n(PalwStepOpKindV1::MulElem, KDESC_BASE0_REQUANTIZE, "blk.{layer}.attn_k.requant", KvDim, &[Step(4)]),
     n(PalwStepOpKindV1::MatMulQuant, KDESC_BASE0_MATMUL, "blk.{layer}.attn_v.weight", KvDim, &[Step(1)]),
-    c(PalwStepOpKindV1::MulElem, PalwStepNodeRoleV1::VCacheWrite, KDESC_BASE0_REQUANTIZE, "blk.{layer}.attn_v.requant", KvDim, &[Step(6)]),
+    c(
+        PalwStepOpKindV1::MulElem,
+        PalwStepNodeRoleV1::VCacheWrite,
+        KDESC_BASE0_REQUANTIZE,
+        "blk.{layer}.attn_v.requant",
+        KvDim,
+        &[Step(6)],
+    ),
     // The rotation of Q **and of K**. The engine rotates both; the declared graph rotated neither's
     // narrowing and K not at all, so a court recomputing attention read unrotated keys — which
     // convicts every honest producer, the one failure this court may never have.
     n(PalwStepOpKindV1::RopeImrope, KDESC_BASE0_ROPE, "blk.{layer}.rope_table", Hidden, &[Step(3)]),
     n(PalwStepOpKindV1::MulElem, KDESC_BASE0_REQUANTIZE, "blk.{layer}.rope_clamp.requant", Hidden, &[Step(8)]),
     n(PalwStepOpKindV1::RopeImrope, KDESC_BASE0_ROPE, "blk.{layer}.rope_table", KvDim, &[Step(5)]),
-    c(PalwStepOpKindV1::MulElem, PalwStepNodeRoleV1::KCacheWrite, KDESC_BASE0_REQUANTIZE, "blk.{layer}.rope_clamp.requant", KvDim, &[Step(10)]),
+    c(
+        PalwStepOpKindV1::MulElem,
+        PalwStepNodeRoleV1::KCacheWrite,
+        KDESC_BASE0_REQUANTIZE,
+        "blk.{layer}.rope_clamp.requant",
+        KvDim,
+        &[Step(10)],
+    ),
     // Scores, amplified into the Qk band SoftMax is defined on, then narrowed back to codes so the
     // value-weighted sum is an ordinary DotI8 (ADR-0040 Decision H).
     // Per QUERY HEAD, concatenated. The engine runs these four once per head; the table declared
@@ -872,19 +886,14 @@ mod tests {
         // A deeper job counts more leaves: the number tracks the execution, so it cannot be
         // restated as a constant.
         let deeper = job(&p, 16, 8);
-        let deeper_entry =
-            base0_catalog_entry_v1(Hash64::from_u64_word(1), Hash64::from_u64_word(0xA7), &p, &deeper, &worst).unwrap();
+        let deeper_entry = base0_catalog_entry_v1(Hash64::from_u64_word(1), Hash64::from_u64_word(0xA7), &p, &deeper, &worst).unwrap();
         assert!(deeper_entry.canonical_step_leaf_count > entry.canonical_step_leaf_count);
 
         // And the reachable set is read off the graph, so the coverage gate cannot pass on a set
         // nobody derived from the thing it covers.
         assert_eq!(
             entry.reachable_kernels,
-            [&p.pre_nodes, &p.gdn_nodes, &p.attn_nodes, &p.post_nodes]
-                .into_iter()
-                .flatten()
-                .map(|n| n.kernel_semantics_id)
-                .collect()
+            [&p.pre_nodes, &p.gdn_nodes, &p.attn_nodes, &p.post_nodes].into_iter().flatten().map(|n| n.kernel_semantics_id).collect()
         );
         assert!(entry.reachable_kernels.is_subset(&catalogued_kernel_ids_v1()), "and every one of them is adjudicable");
     }
@@ -981,7 +990,10 @@ mod tests {
         assert!(kernel_can_serve_node_v1(&oracle_kv, false).is_err(), "a kv-scaled weight matmul names no matrix the oracle holds");
         let mut fed_gather = p.pre_nodes[0].clone();
         fed_gather.input_refs = vec![0];
-        assert!(kernel_can_serve_node_v1(&fed_gather, true).is_err(), "a gather with an opened row declares an input nothing supplies");
+        assert!(
+            kernel_can_serve_node_v1(&fed_gather, true).is_err(),
+            "a gather with an opened row declares an input nothing supplies"
+        );
         let mut tableless = p.pre_nodes[0].clone();
         tableless.weight_name = String::new();
         tableless.weight_dtypes = Vec::new();
@@ -1055,5 +1067,4 @@ mod tests {
         println!("FLOOR_CLASS_ID {}", p.shape_profile_id());
         println!("  pre={} attn={} post={}", p.pre_nodes.len(), p.attn_nodes.len(), p.post_nodes.len());
     }
-
 }

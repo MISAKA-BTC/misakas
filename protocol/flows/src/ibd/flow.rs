@@ -1864,10 +1864,8 @@ impl IbdFlow {
         // A non-V2 network has no PALW order by construction — `palw_candidate_order_v2` returns
         // `None` the moment `palw_state_params_v2` is unset — so without this guard the fail-closed
         // arm below would make every mainnet IBD impossible.
-        if !matches!(
-            self.ctx.config.params.palw_consensus_mode,
-            kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)
-        ) {
+        if !matches!(self.ctx.config.params.palw_consensus_mode, kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(_))
+        {
             return Ok(());
         }
         // And an incumbent standing at genesis defends nothing. On a young network every joining
@@ -1898,12 +1896,10 @@ impl IbdFlow {
         };
         match kaspa_consensus_core::palw_fork_authority_v2::decide_ibd_commit_v2(&incumbent, &challenger) {
             kaspa_consensus_core::palw_fork_authority_v2::PalwIbdCommitV2::Commit => Ok(()),
-            kaspa_consensus_core::palw_fork_authority_v2::PalwIbdCommitV2::KeepIncumbent => {
-                Err(ProtocolError::OtherOwned(format!(
-                    "the staged chain does not win the PALW fork-choice order (staged frontier {} weight {}, local frontier {}                      weight {}); keeping the local chain",
-                    challenger.safe_frontier_blue_score, challenger.safe_weight, incumbent.safe_frontier_blue_score, incumbent.safe_weight
-                )))
-            }
+            kaspa_consensus_core::palw_fork_authority_v2::PalwIbdCommitV2::KeepIncumbent => Err(ProtocolError::OtherOwned(format!(
+                "the staged chain does not win the PALW fork-choice order (staged frontier {} weight {}, local frontier {}                      weight {}); keeping the local chain",
+                challenger.safe_frontier_blue_score, challenger.safe_weight, incumbent.safe_frontier_blue_score, incumbent.safe_weight
+            ))),
         }
     }
 

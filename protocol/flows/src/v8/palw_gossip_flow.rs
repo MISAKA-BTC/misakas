@@ -1,4 +1,3 @@
-
 //! The per-peer receiving end of the PALW material/receipt gossip — see
 //! [`crate::palw_gossip`] for the design and the flood-control contract.
 //!
@@ -17,7 +16,7 @@ use kaspa_p2p_lib::{
     IncomingRoute, Router,
     common::ProtocolError,
     make_message,
-    pb::{PalwSeatReceiptBroadcastMessage, PalwTraceMaterialBroadcastMessage, kaspad_message::Payload},
+    pb::kaspad_message::Payload,
 };
 use std::sync::Arc;
 

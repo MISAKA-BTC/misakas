@@ -456,9 +456,14 @@ mod tests {
                 };
                 // Only the first bond is thinned, so the failure names a bond rather than the set.
                 let c = if i == 0 { collateral } else { FIXTURE_COLLATERAL };
-                objects.push(PalwConsensusObjectV2::BondRegistered { bond, pubkey, operator_pubkey, collateral: c, payout_payload,
-            signature: Vec::new(),
-        });
+                objects.push(PalwConsensusObjectV2::BondRegistered {
+                    bond,
+                    pubkey,
+                    operator_pubkey,
+                    collateral: c,
+                    payout_payload,
+                    signature: Vec::new(),
+                });
             }
             verify_palw_genesis_v2(&bundle, &catalog, &objects, |_| Some(u64::MAX))
         };
@@ -515,8 +520,8 @@ mod tests {
                 operator_pubkey: vec![21; 8],
                 collateral,
                 payout_payload,
-            signature: Vec::new(),
-        });
+                signature: Vec::new(),
+            });
         }
         assert!(
             matches!(

@@ -1189,7 +1189,6 @@ async fn palw_v2_the_escrow_is_carved_out_of_the_block_that_earned_it() {
         .read()
         .load_tip(&bundle.state)
         .unwrap()
-        .map(|(b, s)| (b, s))
         .filter(|(b, _)| *b == tip)
         .expect("the walk's tip is the sink");
     let escrow = vp.palw_v2_escrow_withheld_at(&sp_state, selected_parent);
@@ -2341,7 +2340,7 @@ async fn palw_v2_a_bond_holders_own_resignature_buys_a_block_but_never_a_second_
     // signature is deliberately outside of, so re-signing buys a DAG block and nothing else.
     let vp = ctx.consensus.virtual_processor();
     let (_, state) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("the tip loads");
-    assert_eq!(state.claim(&attempt_id).is_some(), true, "the attempt did produce its one claim");
+    assert!(state.claim(&attempt_id).is_some(), "the attempt did produce its one claim");
     let for_this_attempt = state.claims_iter().filter(|(id, _)| **id == attempt_id).count();
     assert_eq!(for_this_attempt, 1, "one attempt, one claim, however many signatures were spent on it");
 
@@ -2403,8 +2402,7 @@ async fn palw_v2_a_forged_attempt_signature_cannot_become_the_sink() {
 
     // The attempt itself is untouched: the id the PoW commits to is the honest one, which is
     // exactly why an unverified signature was free to vary.
-    let reread =
-        kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2::decode_wire(&forger.header.palw_commitment).unwrap();
+    let reread = kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2::decode_wire(&forger.header.palw_commitment).unwrap();
     assert_eq!(
         kaspa_consensus_core::palw_attempt_v2::attempt_id_v2(&reread.attempt),
         honest_id,
@@ -2420,10 +2418,7 @@ async fn palw_v2_a_forged_attempt_signature_cannot_become_the_sink() {
     // distinct such blocks, a byte flip apiece. Never chain, and never free for anybody else.
     let outcome = ctx.consensus.validate_and_insert_block(forger.to_immutable()).virtual_state_task.await;
     let err = outcome.expect_err("a forged signature must not even enter the DAG");
-    assert!(
-        format!("{err}").contains("signature"),
-        "and the refusal must name the signature rather than a digest mismatch: {err}"
-    );
+    assert!(format!("{err}").contains("signature"), "and the refusal must name the signature rather than a digest mismatch: {err}");
     assert_eq!(ctx.consensus.get_sink(), sink_before, "the sink is untouched");
     assert_ne!(forged_hash, sink_before);
 }

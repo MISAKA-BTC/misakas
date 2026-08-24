@@ -813,7 +813,6 @@ impl PalwShadowLedgerV1 {
 mod tests {
     use super::*;
 
-
     /// **H13, measured rather than asserted: the shipped mainnet identity cannot carry PALW.**
     ///
     /// ADR-0036 Decision 2 and the readiness audit reached this independently, and both state it
@@ -850,10 +849,7 @@ mod tests {
                 params.w_challenge
             );
             assert!(
-                matches!(
-                    params.validate_for_value_network_v1(blockrate),
-                    Err(PalwScheduleError::CadenceNotFrozen { .. })
-                ),
+                matches!(params.validate_for_value_network_v1(blockrate), Err(PalwScheduleError::CadenceNotFrozen { .. })),
                 "{name}: a value network must refuse on the cadence first — the frozen fact is the message"
             );
             // …and the window rule refuses it too, independently of the cadence: `validate`
@@ -1093,7 +1089,7 @@ mod tests {
         // rounds against the 10 both presets afford. The pruning ceiling (12 / 17) is what a
         // proposal to close this has to work inside, and only the 120 s preset has room at all,
         // which is the second reason Decision H froze the cadence there.
-        let floor_leaves = LAYERS * 3 * 1 * 16;
+        let floor_leaves = (LAYERS * 3) * 16;
         assert_eq!(floor_leaves, 1_152);
         assert!(floor_leaves > max_ladder_space_v1(&two_minute), "even the floor of the envelope exceeds the affordable space");
     }

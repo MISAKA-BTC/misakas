@@ -610,12 +610,8 @@ impl PalwShapeProfileV3 {
     pub fn table_layer_span(&self, table: PalwStepTableV1) -> usize {
         match table {
             PalwStepTableV1::Pre | PalwStepTableV1::Post => 1,
-            PalwStepTableV1::Attn => {
-                (0..self.layer_count).filter(|l| self.layer_kind(*l) == PalwLayerKindV1::Attention).count()
-            }
-            PalwStepTableV1::Gdn => {
-                (0..self.layer_count).filter(|l| self.layer_kind(*l) == PalwLayerKindV1::GatedDeltaNet).count()
-            }
+            PalwStepTableV1::Attn => (0..self.layer_count).filter(|l| self.layer_kind(*l) == PalwLayerKindV1::Attention).count(),
+            PalwStepTableV1::Gdn => (0..self.layer_count).filter(|l| self.layer_kind(*l) == PalwLayerKindV1::GatedDeltaNet).count(),
         }
     }
 
@@ -660,7 +656,7 @@ impl PalwShapeProfileV3 {
     /// `layer` is ignored for `Pre`/`Post`, which have no layer.
     pub fn global_node_slot(&self, table: PalwStepTableV1, layer: u16, index: usize) -> Option<u32> {
         match table {
-            PalwStepTableV1::Pre => (index < self.pre_nodes.len()).then(|| index as u32),
+            PalwStepTableV1::Pre => (index < self.pre_nodes.len()).then_some(index as u32),
             PalwStepTableV1::Attn | PalwStepTableV1::Gdn => {
                 if layer >= self.layer_count {
                     return None;
@@ -1171,9 +1167,8 @@ mod tests {
         // `ffn_down.weight` as the file really carries it: Q6_K on twelve layers, Q4_K on twelve.
         const Q4_K: u8 = 12;
         const Q6_K: u8 = 14;
-        let ffn_down_by_layer: Vec<u8> = (0..24u16)
-            .map(|l| if [0, 1, 2, 5, 8, 11, 14, 17, 20, 21, 22, 23].contains(&l) { Q6_K } else { Q4_K })
-            .collect();
+        let ffn_down_by_layer: Vec<u8> =
+            (0..24u16).map(|l| if [0, 1, 2, 5, 8, 11, 14, 17, 20, 21, 22, 23].contains(&l) { Q6_K } else { Q4_K }).collect();
         assert_eq!(ffn_down_by_layer.iter().filter(|d| **d == Q6_K).count(), 12);
         assert_eq!(ffn_down_by_layer.iter().filter(|d| **d == Q4_K).count(), 12);
         assert!(
@@ -1191,10 +1186,8 @@ mod tests {
         p.gdn_nodes = vec![ffn_down.clone()];
         p.attn_nodes = vec![{
             let mut n = ffn_down.clone();
-            n.weight_dtypes = (0..24u16)
-                .filter(|l| p.layer_kind(*l) == PalwLayerKindV1::Attention)
-                .map(|l| ffn_down_by_layer[l as usize])
-                .collect();
+            n.weight_dtypes =
+                (0..24u16).filter(|l| p.layer_kind(*l) == PalwLayerKindV1::Attention).map(|l| ffn_down_by_layer[l as usize]).collect();
             n
         }];
         p.validate_shape().expect("a profile whose dtype lists match its tables is well-formed");

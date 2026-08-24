@@ -24,9 +24,7 @@
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 
-use kaspa_consensus_core::palw_freeprompt_v3::{
-    PalwFpWorkerResultV3, PalwFreePromptCommitmentV3, fp_claim_id_v3, fp_cu_v3,
-};
+use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpWorkerResultV3, PalwFreePromptCommitmentV3, fp_claim_id_v3, fp_cu_v3};
 use kaspa_consensus_core::tx::{TransactionOutpoint, UtxoEntry};
 use kaspa_hashes::Hash64;
 use kaspa_pq_validator_core::{VALIDATOR_SEED_LEN, ValidatorKey};
@@ -177,12 +175,14 @@ fn main() {
         return;
     }
 
-    let seed = read_seed(&seed_path.unwrap_or_else(|| die("--bond-key-seed <file> is required to sign (or use --print-claim)".into())));
+    let seed =
+        read_seed(&seed_path.unwrap_or_else(|| die("--bond-key-seed <file> is required to sign (or use --print-claim)".into())));
     let key = ValidatorKey::from_seed(seed);
     if key.public_key() != commitment.job.executor_pubkey.as_slice() {
         die("the bond key does not match the commitment's executor_pubkey — this key cannot sign this job".into());
     }
-    let funding_outpoint = parse_outpoint(&funding.unwrap_or_else(|| die("--funding-outpoint <txid:index> is required to sign".into())));
+    let funding_outpoint =
+        parse_outpoint(&funding.unwrap_or_else(|| die("--funding-outpoint <txid:index> is required to sign".into())));
     if funding_amount <= fee {
         die(format!("--funding-amount {funding_amount} does not cover the fee {fee}"));
     }

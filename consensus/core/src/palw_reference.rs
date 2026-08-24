@@ -623,11 +623,7 @@ pub fn ref_fma_v2(a: u32, b: u32, c: u32) -> u32 {
 /// sticky and borrows one out of w's trailing-zero run, exactly the RNE-visible effect of
 /// subtracting an ε.
 fn round_wide32_folding(sign: u32, exp: i32, w: u128, other_sign: u32) -> u32 {
-    if sign == other_sign {
-        round_wide32(sign, exp, w | 1)
-    } else {
-        round_wide32(sign, exp - 1, (w << 1) - 1)
-    }
+    if sign == other_sign { round_wide32(sign, exp, w | 1) } else { round_wide32(sign, exp - 1, (w << 1) - 1) }
 }
 
 /// Canonical binary32 division, correctly rounded (ruleset v2).
@@ -1014,11 +1010,7 @@ mod tests {
     /// under the test runner's default FP environment (RNE, no FTZ/DAZ) — which is exactly what
     /// the normative soft path must reproduce without needing that environment.
     fn hw_canon(x: f32) -> u32 {
-        if x.is_nan() {
-            PALW_REFERENCE_CANONICAL_NAN_V1
-        } else {
-            x.to_bits()
-        }
+        if x.is_nan() { PALW_REFERENCE_CANONICAL_NAN_V1 } else { x.to_bits() }
     }
 
     fn hw_add(a: u32, b: u32) -> u32 {
@@ -1149,7 +1141,8 @@ mod tests {
             let exp_b = exp.wrapping_add(rng.next_u32() % 5).clamp(1, 254);
             let sparse_mask = !((1u32 << (rng.next_u32() % 12)) - 1); // clear up to 11 low bits
             let a = ((rng.next_u32() & SIGN_MASK) | (exp << 23) | (rng.next_u32() & FRAC_MASK)) & (SIGN_MASK | EXP_MASK | sparse_mask);
-            let b = ((rng.next_u32() & SIGN_MASK) | (exp_b << 23) | (rng.next_u32() & FRAC_MASK)) & (SIGN_MASK | EXP_MASK | sparse_mask);
+            let b =
+                ((rng.next_u32() & SIGN_MASK) | (exp_b << 23) | (rng.next_u32() & FRAC_MASK)) & (SIGN_MASK | EXP_MASK | sparse_mask);
             assert_eq!(ref_add_v1(a, b), hw_add(a, b), "add {a:08x} {b:08x}");
             assert_eq!(ref_mul_v1(a, b), hw_mul(a, b), "mul {a:08x} {b:08x}");
         }
@@ -1344,10 +1337,7 @@ mod tests {
         assert_eq!(ref_gemm_v1(&[0; 5], &[0; 6], 2, 2, 3), Err(PalwReferenceError::MatrixALengthMismatch { got: 5, expected: 6 }));
         assert_eq!(ref_gemm_v1(&[0; 6], &[0; 5], 2, 2, 3), Err(PalwReferenceError::MatrixBLengthMismatch { got: 5, expected: 6 }));
         // m·n over the output cap, with dims individually legal.
-        assert!(matches!(
-            ref_gemm_v1(&[0; 4096], &[0; 4096], 2048, 2048, 2),
-            Err(PalwReferenceError::OutputTooLarge { .. })
-        ));
+        assert!(matches!(ref_gemm_v1(&[0; 4096], &[0; 4096], 2048, 2048, 2), Err(PalwReferenceError::OutputTooLarge { .. })));
     }
 
     /// Non-finite results are total, deterministic values — the policy layer sees exactly the
@@ -1377,11 +1367,7 @@ mod tests {
     // =========================================================================================
 
     fn hw_canon64(x: f64) -> u64 {
-        if x.is_nan() {
-            PALW_REFERENCE_CANONICAL_NAN64_V2
-        } else {
-            x.to_bits()
-        }
+        if x.is_nan() { PALW_REFERENCE_CANONICAL_NAN64_V2 } else { x.to_bits() }
     }
 
     fn hw_fma(a: u32, b: u32, c: u32) -> u32 {
@@ -1733,11 +1719,7 @@ mod tests {
         if exp == 31 {
             return sign * f64::INFINITY;
         }
-        if exp == 0 {
-            sign * frac * (-24f64).exp2()
-        } else {
-            sign * (1024.0 + frac) * ((exp - 25) as f64).exp2()
-        }
+        if exp == 0 { sign * frac * (-24f64).exp2() } else { sign * (1024.0 + frac) * ((exp - 25) as f64).exp2() }
     }
 
     /// Exact values of the two finite-encoding neighbors of finite h (saturating at the ends).
@@ -1747,11 +1729,7 @@ mod tests {
         let below = if mag == 0 { sign ^ 0x8000 | 1 } else { sign | (mag - 1) }; // crossing zero
         let above = if mag >= 0x7BFF { sign | 0x7BFF } else { sign | (mag + 1) };
         let (a, b) = (manual_f16_value(below), manual_f16_value(above));
-        if a <= b {
-            (a, b)
-        } else {
-            (b, a)
-        }
+        if a <= b { (a, b) } else { (b, a) }
     }
 
     /// fma really is fused (not mul-then-add): the v1 no-FMA witness, inverted.

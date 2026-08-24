@@ -459,9 +459,7 @@ fn palw_metal_class_admission_v1(
     if (pins.prefill_tokens, pins.exact_decode_tokens, pins.max_context_tokens)
         != (canonical.declared_prefill_tokens, canonical.exact_decode_tokens, canonical.max_context_tokens)
     {
-        return Err(PalwClassAdmissionError::Profile(
-            "the class's declared job shape is not the canonical job's".into(),
-        ));
+        return Err(PalwClassAdmissionError::Profile("the class's declared job shape is not the canonical job's".into()));
     }
     if pins.vocab_size != profile.vocab_size {
         return Err(PalwClassAdmissionError::Profile("the class pins a vocabulary its profile does not declare".into()));
@@ -529,7 +527,8 @@ mod tests {
         // engine performs 38 steps, so that pair is 4,194,650 leaves against a 4,194,304 cap.
         // A literal here would be a third description of the class, rotting on its own schedule.
         let court = PalwCourtParamsV2::new(PALW_STEP_MAX_LEAVES, 20, 2).expect("the full ladder is a legal court");
-        let g = crate::palw_qwen25_profile::qwen25_admissible_geometry_v1(QWEN25_1_5B, &court).expect("some pair is admissible under the full ladder");
+        let g = crate::palw_qwen25_profile::qwen25_admissible_geometry_v1(QWEN25_1_5B, &court)
+            .expect("some pair is admissible under the full ladder");
         qwen25_profile_v1(g).expect("the derived geometry is expressible")
     }
 
@@ -1069,10 +1068,7 @@ mod tests {
         ] {
             let reg = metal_registration(profile.shape_profile_id(), metal_terms(seats, quorum), 4);
             assert!(
-                matches!(
-                    verify_class_admission_v2(&bundle, &profile, &job, &reg),
-                    Err(PalwClassAdmissionError::PanelTerms(_))
-                ),
+                matches!(verify_class_admission_v2(&bundle, &profile, &job, &reg), Err(PalwClassAdmissionError::PanelTerms(_))),
                 "a panel {why} must be refused"
             );
         }
@@ -1104,5 +1100,4 @@ mod tests {
         assert_eq!(entry.canonical_step_leaf_count, counted, "still counted in STEP LEAVES, not decode tokens");
         assert!(!entry.reachable_kernels.is_empty(), "and still coverage-checked");
     }
-
 }

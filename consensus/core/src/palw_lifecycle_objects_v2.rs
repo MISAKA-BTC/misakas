@@ -624,7 +624,9 @@ mod tests {
             operator_pubkey: vec![21; 8],
             // The number that would be free: nothing on this path locks a UTXO behind it.
             collateral: 1_000_000_000_000,
-            payout_payload: h64(0x9A11), signature: Vec::new() };
+            payout_payload: h64(0x9A11),
+            signature: Vec::new(),
+        };
         // A class registration with NO admission material: still refused, because there is
         // nothing to check it with (ADR-0049 Decision H replaced the blanket refusal with a gate,
         // and a gate needs an input).
@@ -777,7 +779,9 @@ mod tests {
                     pubkey: vec![3u8; 8],
                     operator_pubkey: vec![5u8; 8],
                     collateral: 1_000_000,
-                    payout_payload: h64(0x1234), signature: Vec::new() },
+                    payout_payload: h64(0x1234),
+                    signature: Vec::new(),
+                },
             })
             .unwrap(),
             // Wrong wire version.

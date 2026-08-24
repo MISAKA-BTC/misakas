@@ -321,12 +321,7 @@ pub struct PalwSeatReceiptV2 {
 /// `H(network_domain ‖ claim ‖ verdict)` — what a seat signs, in this family's own message
 /// domain (the signing CONTEXT is [`PALW_RECEIPT_V2_MLDSA87_CONTEXT`], applied by the verifier
 /// call, never caller-chosen).
-pub fn palw_receipt_message_v2(
-    network_domain: Hash64,
-    claim: Hash64,
-    verdict: PalwReceiptVerdictV2,
-    signed_daa: u64,
-) -> Hash64 {
+pub fn palw_receipt_message_v2(network_domain: Hash64, claim: Hash64, verdict: PalwReceiptVerdictV2, signed_daa: u64) -> Hash64 {
     let mut state = keyed(PALW_RECEIPT_V2_DOMAIN_MESSAGE);
     state.update(network_domain.as_byte_slice());
     state.update(claim.as_byte_slice());
@@ -483,21 +478,7 @@ mod tests {
     }
 
     fn state_params() -> PalwStateParamsV2 {
-        PalwStateParamsV2::new(
-            100,
-            10,
-            10,
-            20,
-            500,
-            1000,
-            h64(1),
-            4,
-            1000,
-            100,
-            1000,
-            0,
-        )
-        .unwrap()
+        PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, 100, 1000, 0).unwrap()
     }
 
     fn panel_params() -> PalwPanelParamsV2 {
@@ -518,7 +499,9 @@ mod tests {
             pubkey: vec![pubkey; 4],
             operator_pubkey: op_key(operator),
             collateral: 1_000_000,
-            payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11), signature: Vec::new() }
+            payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+            signature: Vec::new(),
+        }
     }
 
     fn attempt(pwu: u64, nonce: u64) -> PalwAttemptEnvelopeV2 {
@@ -741,25 +724,15 @@ mod tests {
 
         // Two Valid receipts (quorum 2) license.
         let receipts = vec![sign_as(&seats[0], PalwReceiptVerdictV2::Valid), sign_as(&seats[1], PalwReceiptVerdictV2::Valid)];
-        assert_eq!(
-            check(&bound, &receipts),
-            Ok(PalwReceiptQuorumV2::Licensed { valid: 2 })
-        );
+        assert_eq!(check(&bound, &receipts), Ok(PalwReceiptQuorumV2::Licensed { valid: 2 }));
 
         // Two Unavailable receipts justify the producer default — the seats answered.
-        let receipts =
-            vec![sign_as(&seats[0], unavailable), sign_as(&seats[1], unavailable)];
-        assert_eq!(
-            check(&bound, &receipts),
-            Ok(PalwReceiptQuorumV2::ProducerUnavailable { unavailable: 2 })
-        );
+        let receipts = vec![sign_as(&seats[0], unavailable), sign_as(&seats[1], unavailable)];
+        assert_eq!(check(&bound, &receipts), Ok(PalwReceiptQuorumV2::ProducerUnavailable { unavailable: 2 }));
 
         // A split (1 Valid, 1 Unavailable) is no quorum for either transition.
         let receipts = vec![sign_as(&seats[0], PalwReceiptVerdictV2::Valid), sign_as(&seats[1], unavailable)];
-        assert!(matches!(
-            check(&bound, &receipts),
-            Err(PalwPanelV2Error::NoQuorum { valid: 1, unavailable: 1, needed: 2 })
-        ));
+        assert!(matches!(check(&bound, &receipts), Err(PalwPanelV2Error::NoQuorum { valid: 1, unavailable: 1, needed: 2 })));
 
         // A non-seat cannot vote.
         let outsider = PalwSeatReceiptV2 {
@@ -769,32 +742,20 @@ mod tests {
             signed_daa: SIGNED_DAA,
             signature: vec![7; 4],
         };
-        assert!(matches!(
-            check(&bound, &[outsider]),
-            Err(PalwPanelV2Error::NotASeat(_))
-        ));
+        assert!(matches!(check(&bound, &[outsider]), Err(PalwPanelV2Error::NotASeat(_))));
 
         // One seat cannot vote twice.
         let receipts = vec![sign_as(&seats[0], PalwReceiptVerdictV2::Valid), sign_as(&seats[0], PalwReceiptVerdictV2::Valid)];
-        assert!(matches!(
-            check(&bound, &receipts),
-            Err(PalwPanelV2Error::DuplicateSeat(_))
-        ));
+        assert!(matches!(check(&bound, &receipts), Err(PalwPanelV2Error::DuplicateSeat(_))));
 
         // A garbage signature refuses the set.
         let mut forged = sign_as(&seats[0], PalwReceiptVerdictV2::Valid);
         forged.signature = vec![0xFF; 4];
-        assert!(matches!(
-            check(&bound, &[forged]),
-            Err(PalwPanelV2Error::ReceiptSignatureInvalid)
-        ));
+        assert!(matches!(check(&bound, &[forged]), Err(PalwPanelV2Error::ReceiptSignatureInvalid)));
 
         // Before a panel is bound, no quorum can form (wrong phase).
         let receipts = vec![sign_as(&seats[0], PalwReceiptVerdictV2::Valid)];
-        assert!(matches!(
-            check(&state, &receipts),
-            Err(PalwPanelV2Error::WrongPhase { .. })
-        ));
+        assert!(matches!(check(&state, &receipts), Err(PalwPanelV2Error::WrongPhase { .. })));
     }
 
     /// **Audit C5: an `Unavailable` must name an obligation the producer actually had, inside a
@@ -831,10 +792,7 @@ mod tests {
 
         // A chunk the attempt never committed to is a demand the producer never owed.
         let bad_chunk = PalwReceiptVerdictV2::Unavailable { chunk_index: chunks, requested_daa: bound_daa + 1 };
-        assert!(matches!(
-            check(vec![receipt(bad_chunk, bound_daa + 2)]),
-            Err(PalwPanelV2Error::UnmetObligationNotProven { .. })
-        ));
+        assert!(matches!(check(vec![receipt(bad_chunk, bound_daa + 2)]), Err(PalwPanelV2Error::UnmetObligationNotProven { .. })));
 
         // A request that predates the panel is not about this panel's duty.
         let early = PalwReceiptVerdictV2::Unavailable { chunk_index: 0, requested_daa: bound_daa - 1 };
@@ -987,5 +945,4 @@ mod tests {
         assert_eq!(ops.len(), 2, "one seat per operator");
         assert!(!ops.contains(&op_id(0x21)), "the executor's operator is never seated");
     }
-
 }

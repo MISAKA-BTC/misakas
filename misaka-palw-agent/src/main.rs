@@ -36,9 +36,9 @@ use std::sync::{Arc, Mutex, TryLockError};
 use std::time::{Duration, Instant};
 
 use kaspa_consensus_core::palw_v2::{
-    canonical_compute_units_v2, decode_framed_borsh, job_request_hash_v2, read_framed, write_framed, PalwAgentHealthV1,
-    PalwAgentRequestV1, PalwAgentResponseV1, PalwAgentStateV1, PalwJobContextV2, PalwJobEnvelopeV2, PalwJobResultV2,
-    PalwStopReasonV2, PALW_JOB_WIRE_VERSION_V2, PALW_V2_MAX_FRAME_BYTES,
+    PALW_JOB_WIRE_VERSION_V2, PALW_V2_MAX_FRAME_BYTES, PalwAgentHealthV1, PalwAgentRequestV1, PalwAgentResponseV1, PalwAgentStateV1,
+    PalwJobContextV2, PalwJobEnvelopeV2, PalwJobResultV2, PalwStopReasonV2, canonical_compute_units_v2, decode_framed_borsh,
+    job_request_hash_v2, read_framed, write_framed,
 };
 use kaspa_hashes::Hash64;
 
@@ -88,11 +88,13 @@ fn parse_args() -> AgentConfig {
             }
             "--job-timeout-secs" => {
                 i += 1;
-                job_timeout_secs = args.get(i).and_then(|s| s.parse().ok()).unwrap_or_else(|| die("--job-timeout-secs needs a number".into()));
+                job_timeout_secs =
+                    args.get(i).and_then(|s| s.parse().ok()).unwrap_or_else(|| die("--job-timeout-secs needs a number".into()));
             }
             "--worst-case-job-ms" => {
                 i += 1;
-                worst_case_job_ms = args.get(i).and_then(|s| s.parse().ok()).unwrap_or_else(|| die("--worst-case-job-ms needs a number".into()));
+                worst_case_job_ms =
+                    args.get(i).and_then(|s| s.parse().ok()).unwrap_or_else(|| die("--worst-case-job-ms needs a number".into()));
             }
             "--allow-ungated" => allow_ungated = true,
             "--max-conns" => {
@@ -202,7 +204,10 @@ fn probe_worker_identity(cfg: &AgentConfig) -> WorkerIdentity {
         tokenizer_id: manifest_hash64(&doc, "tokenizer_id_v2"),
         golden_vector_root: manifest_hash64(&doc, "golden_vector_root"),
         golden_registered: doc.get("golden_registered").and_then(|v| v.as_bool()).unwrap_or(false),
-        max_context_tokens: doc.get("max_context_tokens").and_then(|v| v.as_u64()).unwrap_or_else(|| die("worker manifest lacks max_context_tokens".into())) as u32,
+        max_context_tokens: doc
+            .get("max_context_tokens")
+            .and_then(|v| v.as_u64())
+            .unwrap_or_else(|| die("worker manifest lacks max_context_tokens".into())) as u32,
     }
 }
 
@@ -285,9 +290,8 @@ fn peer_is_authorized(stream: &UnixStream) -> bool {
     {
         let mut cred = libc::ucred { pid: 0, uid: u32::MAX, gid: u32::MAX };
         let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
-        let rc = unsafe {
-            libc::getsockopt(fd, libc::SOL_SOCKET, libc::SO_PEERCRED, (&mut cred as *mut libc::ucred).cast(), &mut len)
-        };
+        let rc =
+            unsafe { libc::getsockopt(fd, libc::SOL_SOCKET, libc::SO_PEERCRED, (&mut cred as *mut libc::ucred).cast(), &mut len) };
         rc == 0 && cred.uid == unsafe { libc::geteuid() }
     }
     #[cfg(not(target_os = "linux"))]
@@ -438,7 +442,11 @@ fn run_worker_job(state: &AgentState, envelope: &PalwJobEnvelopeV2) -> PalwAgent
 
     if !status.success() {
         let tail_start = stderr_bytes.len().saturating_sub(STDERR_TAIL_BYTES);
-        return failed(state, "worker_exit", format!("worker exited with {status}: {}", String::from_utf8_lossy(&stderr_bytes[tail_start..])));
+        return failed(
+            state,
+            "worker_exit",
+            format!("worker exited with {status}: {}", String::from_utf8_lossy(&stderr_bytes[tail_start..])),
+        );
     }
 
     // Re-parse and re-bind the result before it leaves this process.
@@ -461,8 +469,7 @@ fn run_worker_job(state: &AgentState, envelope: &PalwJobEnvelopeV2) -> PalwAgent
         return failed(state, "response_binding", "the result names a different job".into());
     }
     let projection = &result.projection;
-    let expected_context =
-        PalwJobContextV2::from_envelope(envelope, state.identity.tokenizer_id).context_hash();
+    let expected_context = PalwJobContextV2::from_envelope(envelope, state.identity.tokenizer_id).context_hash();
     if projection.job_context_hash != expected_context {
         return failed(state, "response_binding", "the result's job context is not this job's context".into());
     }

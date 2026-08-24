@@ -47,33 +47,32 @@ use std::collections::HashSet;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use kaspa_consensus_core::palw_v2::{
-    canonical_compute_units_v2, cu_ruleset_id_v2, decode_framed_borsh, expected_schedule_commitment_v2, full_logits_trace_root_v2,
-    golden_vector_root_unpopulated_v2, job_request_hash_v2, logits_event_hash_v2, output_commitment_v2,
-    output_token_ids_hash_v2, prompt_token_ids_hash_v2, read_framed, rendered_output_hash_v2, shape_profile_id_v2,
-    tokenizer_id_v2_for_gguf, trace_event_merkle_root_v2, trace_scheme_id_v2, write_framed, PalwGoldenExpectedV2, PalwGoldenJobV2,
-    PalwGoldenVectorSetV2, PalwJobContextV2,
-    PalwJobEnvelopeV2, PalwJobResultV2, PalwJobTelemetryV2, PalwLogitsDtypeV2, PalwResultProjectionV2,
-    PalwRuntimeManifestV2, PalwScheduleCommitmentBuilderV2, PalwStopReasonV2, PalwTraceCommitmentV2, PalwTracePhaseV2,
-    PalwTraceSummaryV2, PALW_GOLDEN_SET_VERSION_V2, PALW_JOB_WIRE_VERSION_V2, PALW_RUNTIME_MANIFEST_VERSION_V3,
-    PALW_V2_MAX_FRAME_BYTES,
+use kaspa_consensus_core::palw_freeprompt_v3::{
+    PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_V3_VERSION, PalwFpStopReasonV3, PalwFpWorkerInputV3, PalwFpWorkerRequestV3,
+    PalwFpWorkerResultV3, PalwFreePromptJobV3, fp_job_id_v3, fp_trace_manifest_v3, fp_worker_request_hash_v3,
 };
 use kaspa_consensus_core::palw_legs::{
-    canonical_activation_leaf_coordinates, canonical_activation_leaf_count, canonical_activation_leaf_index,
-    canonical_checkpoint_count, check_legs_opening_answer_v1, check_opening_request_shape, checkpoint_state_root_v1,
-    execution_commitment_scheme_id_v1, leg_opening_v1, state_layout_id_v1, tap_semantics_id_v1, PalwActivationCoordinateV1,
-    PalwActivationLeafV1, PalwActivationTapProfileV1, PalwCheckpointProfileV1, PalwLegsBindingV1, PalwLegsCommitmentBuilderV1,
-    PalwLegsJobResultV1, PalwLegsMaterial, PalwLegsOpeningAnswerV1, PalwLegsOpeningCallV1, PalwLegsOpeningRequestV1,
-    PalwOpenedActivationLeafV1, PalwOpenedCheckpointLeafV1, PALW_LEGS_DOMAIN_ACTIVATION_MERKLE_LEAF,
-    PALW_LEGS_DOMAIN_ACTIVATION_MERKLE_NODE, PALW_LEGS_DOMAIN_CHECKPOINT_MERKLE_LEAF, PALW_LEGS_DOMAIN_CHECKPOINT_MERKLE_NODE,
-    PALW_LEGS_MAX_ACTIVATION_LEAVES, PALW_LEGS_MAX_CHECKPOINTS, PALW_LEGS_OBJECT_VERSION_V1,
-};
-use kaspa_consensus_core::palw_freeprompt_v3::{
-    fp_job_id_v3, fp_trace_manifest_v3, fp_worker_request_hash_v3, PalwFpStopReasonV3, PalwFpWorkerInputV3,
-    PalwFpWorkerRequestV3, PalwFpWorkerResultV3, PalwFreePromptJobV3, PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_V3_VERSION,
+    PALW_LEGS_DOMAIN_ACTIVATION_MERKLE_LEAF, PALW_LEGS_DOMAIN_ACTIVATION_MERKLE_NODE, PALW_LEGS_DOMAIN_CHECKPOINT_MERKLE_LEAF,
+    PALW_LEGS_DOMAIN_CHECKPOINT_MERKLE_NODE, PALW_LEGS_MAX_ACTIVATION_LEAVES, PALW_LEGS_MAX_CHECKPOINTS, PALW_LEGS_OBJECT_VERSION_V1,
+    PalwActivationCoordinateV1, PalwActivationLeafV1, PalwActivationTapProfileV1, PalwCheckpointProfileV1, PalwLegsBindingV1,
+    PalwLegsCommitmentBuilderV1, PalwLegsJobResultV1, PalwLegsMaterial, PalwLegsOpeningAnswerV1, PalwLegsOpeningCallV1,
+    PalwLegsOpeningRequestV1, PalwOpenedActivationLeafV1, PalwOpenedCheckpointLeafV1, canonical_activation_leaf_coordinates,
+    canonical_activation_leaf_count, canonical_activation_leaf_index, canonical_checkpoint_count, check_legs_opening_answer_v1,
+    check_opening_request_shape, checkpoint_state_root_v1, execution_commitment_scheme_id_v1, leg_opening_v1, state_layout_id_v1,
+    tap_semantics_id_v1,
 };
 use kaspa_consensus_core::palw_schedule::{
-    nearest_rank_percentile, replay_p99_fits_v1, PalwScheduleParamsV1, PALW_SCHEDULE_REPLAY_KAPPA,
+    PALW_SCHEDULE_REPLAY_KAPPA, PalwScheduleParamsV1, nearest_rank_percentile, replay_p99_fits_v1,
+};
+use kaspa_consensus_core::palw_v2::{
+    PALW_GOLDEN_SET_VERSION_V2, PALW_JOB_WIRE_VERSION_V2, PALW_RUNTIME_MANIFEST_VERSION_V3, PALW_V2_MAX_FRAME_BYTES,
+    PalwGoldenExpectedV2, PalwGoldenJobV2, PalwGoldenVectorSetV2, PalwJobContextV2, PalwJobEnvelopeV2, PalwJobResultV2,
+    PalwJobTelemetryV2, PalwLogitsDtypeV2, PalwResultProjectionV2, PalwRuntimeManifestV2, PalwScheduleCommitmentBuilderV2,
+    PalwStopReasonV2, PalwTraceCommitmentV2, PalwTracePhaseV2, PalwTraceSummaryV2, canonical_compute_units_v2, cu_ruleset_id_v2,
+    decode_framed_borsh, expected_schedule_commitment_v2, full_logits_trace_root_v2, golden_vector_root_unpopulated_v2,
+    job_request_hash_v2, logits_event_hash_v2, output_commitment_v2, output_token_ids_hash_v2, prompt_token_ids_hash_v2, read_framed,
+    rendered_output_hash_v2, shape_profile_id_v2, tokenizer_id_v2_for_gguf, trace_event_merkle_root_v2, trace_scheme_id_v2,
+    write_framed,
 };
 use kaspa_consensus_core::vlt::{derive_model_weights_hash, derive_runtime_class_id, derive_runtime_hash, qwen35_pins};
 use kaspa_hashes::Hash64;
@@ -89,9 +88,11 @@ const N_CTX: i32 = 4096;
 const N_BATCH: i32 = 512;
 const N_THREADS: i32 = qwen35_pins::CPU_THREADS;
 #[cfg(misaka_palw_cpu)]
-const SHAPE_STRING: &str = "n_ctx=4096/n_batch=512/n_ubatch=512/n_seq=1/n_threads=4/flash-attn=disabled/gpu-layers=none/greedy-argmax-first-index/v1";
+const SHAPE_STRING: &str =
+    "n_ctx=4096/n_batch=512/n_ubatch=512/n_seq=1/n_threads=4/flash-attn=disabled/gpu-layers=none/greedy-argmax-first-index/v1";
 #[cfg(not(misaka_palw_cpu))]
-const SHAPE_STRING: &str = "n_ctx=4096/n_batch=512/n_ubatch=512/n_seq=1/n_threads=4/flash-attn=disabled/gpu-layers=all/greedy-argmax-first-index/v1";
+const SHAPE_STRING: &str =
+    "n_ctx=4096/n_batch=512/n_ubatch=512/n_seq=1/n_threads=4/flash-attn=disabled/gpu-layers=all/greedy-argmax-first-index/v1";
 const CU_RULESET: &str = "cu = prefill + 8*decode";
 const TRACE_SCHEME: &str = "full-logits-per-decode-call/keyed-blake2b-512/v1";
 
@@ -194,12 +195,7 @@ const RUNTIME_CLASS: &str = qwen35_pins::CPU_RUNTIME_CLASS;
 const RUNTIME_CLASS: &str = qwen35_pins::METAL_RUNTIME_CLASS;
 
 fn runtime_manifest_hash() -> Hash64 {
-    derive_runtime_hash(
-        qwen35_pins::LLAMA_COMMIT,
-        qwen35_pins::LLAMA_PATCH_SHA256,
-        qwen35_pins::LLAMA_BUILD_NUMBER,
-        BUILD_PROFILE,
-    )
+    derive_runtime_hash(qwen35_pins::LLAMA_COMMIT, qwen35_pins::LLAMA_PATCH_SHA256, qwen35_pins::LLAMA_BUILD_NUMBER, BUILD_PROFILE)
 }
 
 fn runtime_class_id() -> Hash64 {
@@ -500,7 +496,8 @@ const PALW_GOLDEN_ENV: &str = "MISAKA_PALW_GOLDEN";
 /// model or shape is refused — vectors must not certify a runtime they were not made under.
 fn load_golden_set(path: &str) -> PalwGoldenVectorSetV2 {
     let mut file = std::fs::File::open(path).unwrap_or_else(|e| die(format!("cannot open golden set at {path}: {e}")));
-    let payload = read_framed(&mut file, PALW_V2_MAX_FRAME_BYTES).unwrap_or_else(|e| die(format!("golden set at {path} rejected: {e}")));
+    let payload =
+        read_framed(&mut file, PALW_V2_MAX_FRAME_BYTES).unwrap_or_else(|e| die(format!("golden set at {path} rejected: {e}")));
     // Peek the schema version BEFORE decoding. `version` is the first field of the Borsh layout,
     // and a set from an older layout fails to decode structurally — which surfaces as
     // "Unexpected length of input" at some offset and tells an operator nothing about what to do.
@@ -785,10 +782,7 @@ fn now_unix_ms() -> u64 {
 /// output) is the choice that makes a wrong row impossible to hide — every later layer, and
 /// therefore the logits, is downstream of it.
 fn tap_semantics_string() -> String {
-    format!(
-        "llama.cpp@{}/graph-node/l_out-{{il}}/post-block-residual-stream/f32-le/row-per-position/v1",
-        qwen35_pins::LLAMA_COMMIT
-    )
+    format!("llama.cpp@{}/graph-node/l_out-{{il}}/post-block-residual-stream/f32-le/row-per-position/v1", qwen35_pins::LLAMA_COMMIT)
 }
 
 /// The checkpoint's bytes: llama.cpp's own sequence serialization, which is a format with a
@@ -808,8 +802,7 @@ const CHECKPOINT_INTERVAL_V1: u32 = 8;
 /// localizes the fault to a layer range, which is what makes a challenge cheap.
 fn canonical_tap_layers(n_layer: u32) -> Vec<u16> {
     let last = n_layer.saturating_sub(1);
-    let mut layers: Vec<u16> =
-        [n_layer / 4, n_layer / 2, (3 * n_layer) / 4, last].into_iter().map(|l| l.min(last) as u16).collect();
+    let mut layers: Vec<u16> = [n_layer / 4, n_layer / 2, (3 * n_layer) / 4, last].into_iter().map(|l| l.min(last) as u16).collect();
     layers.sort_unstable();
     layers.dedup();
     layers
@@ -910,9 +903,7 @@ impl LegsCapture {
         }
         self.state_bytes.truncate(written as usize);
         let state_root = checkpoint_state_root_v1(&self.state_layout_id, &self.state_bytes);
-        self.builder
-            .push_checkpoint(decode_call, state_root)
-            .unwrap_or_else(|e| die(format!("v2-legs execution invalid: {e}")));
+        self.builder.push_checkpoint(decode_call, state_root).unwrap_or_else(|e| die(format!("v2-legs execution invalid: {e}")));
     }
 }
 
@@ -1376,7 +1367,9 @@ fn run_geometry() {
             let k = String::from_utf8_lossy(&key[..klen as usize]).to_string();
             let v = String::from_utf8_lossy(&val[..(vlen as usize).min(val.len())]).to_string();
             // Tokenizer tables are megabytes of vocabulary and say nothing about execution shape.
-            if k.starts_with("tokenizer.ggml.") && (k.ends_with("tokens") || k.ends_with("scores") || k.ends_with("token_type") || k.ends_with("merges")) {
+            if k.starts_with("tokenizer.ggml.")
+                && (k.ends_with("tokens") || k.ends_with("scores") || k.ends_with("token_type") || k.ends_with("merges"))
+            {
                 pairs.insert(k, serde_json::json!(format!("<{} bytes elided>", vlen)));
                 continue;
             }
@@ -1430,7 +1423,10 @@ fn run_v3_job(trace_out: &Path) {
         die(format!("v3-job rejected: request version {} is not {}", request.version, PALW_FP_V3_VERSION));
     }
     if request.privacy_mode != PALW_FP_PRIVACY_PUBLIC_DA {
-        die(format!("v3-job rejected: privacy mode {} is not PublicDa — a mode the panel cannot replay must not execute", request.privacy_mode));
+        die(format!(
+            "v3-job rejected: privacy mode {} is not PublicDa — a mode the panel cannot replay must not execute",
+            request.privacy_mode
+        ));
     }
     if request.decode_token_limit == 0 {
         die("v3-job rejected: a zero decode ceiling is not a job".into());
@@ -1596,7 +1592,8 @@ fn run_v3_job(trace_out: &Path) {
         output_token_ids_hash: output_token_ids_hash_v2(&outputs),
         stop_reason: PalwStopReasonV2::ExactBudgetReached,
     };
-    let event_merkle = trace_event_merkle_root_v2(&events).unwrap_or_else(|e| die(format!("internal error: trace merkle failed: {e}")));
+    let event_merkle =
+        trace_event_merkle_root_v2(&events).unwrap_or_else(|e| die(format!("internal error: trace merkle failed: {e}")));
     let trace_root = full_logits_trace_root_v2(&binding, &summary, &event_merkle);
 
     // Retained-trace DA (ADR-0044 Decision 3's obligation trio, made honest): the ordered
@@ -1606,7 +1603,8 @@ fn run_v3_job(trace_out: &Path) {
     // event hashes) + manifest.json (digests, for the serving layer's own bookkeeping).
     let (trace_manifest_root, trace_chunk_count, chunk_digests) = fp_trace_manifest_v3(binding, &events);
     let retain_dir = trace_out.join(hex(binding));
-    std::fs::create_dir_all(&retain_dir).unwrap_or_else(|e| die(format!("cannot create the retention dir {}: {e}", retain_dir.display())));
+    std::fs::create_dir_all(&retain_dir)
+        .unwrap_or_else(|e| die(format!("cannot create the retention dir {}: {e}", retain_dir.display())));
     for (index, chunk) in events.chunks(kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_TRACE_CHUNK_EVENTS_V3 as usize).enumerate() {
         let mut bytes = Vec::with_capacity(chunk.len() * 64);
         for event in chunk {
@@ -1830,8 +1828,7 @@ fn run_v2_legs_open() {
     check_opening_request_shape(&request, &context, taps, expected_checkpoints)
         .unwrap_or_else(|e| die(format!("v2-legs-open rejected: {e}")));
 
-    let wanted: HashSet<(u32, u32, u32)> =
-        request.activation.iter().map(|c| (c.call_index, c.tap_slot, c.position)).collect();
+    let wanted: HashSet<(u32, u32, u32)> = request.activation.iter().map(|c| (c.call_index, c.tap_slot, c.position)).collect();
     let model_path = pinned_model_path_v2();
     let exec = execute_v2_legs_open(&model_path, &envelope, wanted);
     let binding = exec.legs.unwrap_or_else(|| die("internal error: the open path produced no binding".into()));
@@ -1962,11 +1959,7 @@ fn run_v2_replay_bench(name: &str, runs: u32, decode_override: Option<u32>, legs
     let path = std::env::var(PALW_GOLDEN_ENV)
         .unwrap_or_else(|_| die(format!("{PALW_GOLDEN_ENV} is not set; v2-replay-bench needs the golden set")));
     let set = load_golden_set(&path);
-    let job = set
-        .jobs
-        .iter()
-        .find(|job| job.name == name)
-        .unwrap_or_else(|| die(format!("no golden job named {name:?} in this set")));
+    let job = set.jobs.iter().find(|job| job.name == name).unwrap_or_else(|| die(format!("no golden job named {name:?} in this set")));
     let mut envelope = set.envelope_for(job);
     if let Some(decode) = decode_override {
         envelope.exact_decode_tokens = decode;
@@ -2058,11 +2051,7 @@ fn run_v2_golden_envelope(name: &str) {
     let path = std::env::var(PALW_GOLDEN_ENV)
         .unwrap_or_else(|_| die(format!("{PALW_GOLDEN_ENV} is not set; v2-golden-envelope needs the registered golden set")));
     let set = load_golden_set(&path);
-    let job = set
-        .jobs
-        .iter()
-        .find(|job| job.name == name)
-        .unwrap_or_else(|| die(format!("no golden job named {name:?} in this set")));
+    let job = set.jobs.iter().find(|job| job.name == name).unwrap_or_else(|| die(format!("no golden job named {name:?} in this set")));
     let mut envelope = set.envelope_for(job);
     envelope.runtime_manifest_hash = runtime_manifest_v2(worker_binary_sha256(), resolve_golden_root()).manifest_hash();
     let bytes = borsh::to_vec(&envelope).unwrap_or_else(|e| die(format!("cannot serialize the golden envelope: {e}")));
@@ -2109,8 +2098,7 @@ fn run_v2_legs_selftest() {
                     .unwrap_or_else(|| die(format!("internal error: probe leaf {index} has no canonical coordinates")))
             })
             .collect();
-        let wanted: HashSet<(u32, u32, u32)> =
-            probe_coordinates.iter().map(|c| (c.call_index, c.tap_slot, c.position)).collect();
+        let wanted: HashSet<(u32, u32, u32)> = probe_coordinates.iter().map(|c| (c.call_index, c.tap_slot, c.position)).collect();
         let exec = execute_v2_legs_open(&model_path, &envelope, wanted);
         let binding = exec.legs.unwrap_or_else(|| die("internal error: the legs path produced no binding".into()));
         let open = exec.open_material.unwrap_or_else(|| die("internal error: the open path retained no material".into()));
@@ -2325,13 +2313,13 @@ fn execute_on_context(ctx: *mut ShimCtx, input: &[u8], n_predict: u32, started: 
     let mut schedule_event_count: u64 = 0;
 
     let step = |ctx: *mut ShimCtx,
-                    fed: &[i32],
-                    logits: &mut [f32],
-                    logits_bytes: &mut [u8],
-                    trace_events: &mut Vec<u8>,
-                    trace_event_count: &mut u64,
-                    schedule: &mut blake2b_simd::State,
-                    schedule_event_count: &mut u64| {
+                fed: &[i32],
+                logits: &mut [f32],
+                logits_bytes: &mut [u8],
+                trace_events: &mut Vec<u8>,
+                trace_event_count: &mut u64,
+                schedule: &mut blake2b_simd::State,
+                schedule_event_count: &mut u64| {
         let rc = unsafe { shim_decode(ctx, fed.as_ptr(), fed.len() as i32) };
         if rc != 0 {
             die(format!("llama_decode failed with {rc}"));
@@ -2354,7 +2342,16 @@ fn execute_on_context(ctx: *mut ShimCtx, input: &[u8], n_predict: u32, started: 
     // Prefill, then greedy decode. The last sampled token is not fed back (there is nothing left
     // to sample after it), so `schedule_event_count = 1 + tokens fed`, a fact both replicas
     // reproduce exactly.
-    step(ctx, &tokens, &mut logits, &mut logits_bytes, &mut trace_events, &mut trace_event_count, &mut schedule, &mut schedule_event_count);
+    step(
+        ctx,
+        &tokens,
+        &mut logits,
+        &mut logits_bytes,
+        &mut trace_events,
+        &mut trace_event_count,
+        &mut schedule,
+        &mut schedule_event_count,
+    );
     let mut outputs: Vec<i32> = Vec::new();
     let mut rendered: Vec<u8> = Vec::new();
     let mut piece = vec![0u8; 512];
@@ -2385,10 +2382,8 @@ fn execute_on_context(ctx: *mut ShimCtx, input: &[u8], n_predict: u32, started: 
     for t in &outputs {
         output_ids.extend_from_slice(&t.to_le_bytes());
     }
-    let output_commitment = keyed64(
-        b"misaka-palw-lite/output/v1",
-        &[&(outputs.len() as u64).to_le_bytes(), &output_ids, &[0xff], &rendered],
-    );
+    let output_commitment =
+        keyed64(b"misaka-palw-lite/output/v1", &[&(outputs.len() as u64).to_le_bytes(), &output_ids, &[0xff], &rendered]);
     let mut schedule_out = [0u8; 64];
     schedule_out.copy_from_slice(schedule.finalize().as_bytes());
     eprintln!(
@@ -2641,22 +2636,24 @@ fn main() {
     // would be either ignored or silently overriding, and both are worse than an error.
     if matches!(
         mode.as_deref(),
-        Some("v2-job"
-            | "v2-manifest"
-            | "v2-golden-gen"
-            | "v2-selftest"
-            | "v2-golden-show"
-            | "v2-golden-envelope"
-            | "v2-legs-job"
-            | "v2-legs-selftest"
-            | "v2-legs-open"
-            | "v2-legs-open-request"
-            | "v2-legs-open-verify"
-            | "v2-replay-bench"
-            | "v3-job"
-            | "v3-manifest"
-            | "geometry"
-            | "pow-agent")
+        Some(
+            "v2-job"
+                | "v2-manifest"
+                | "v2-golden-gen"
+                | "v2-selftest"
+                | "v2-golden-show"
+                | "v2-golden-envelope"
+                | "v2-legs-job"
+                | "v2-legs-selftest"
+                | "v2-legs-open"
+                | "v2-legs-open-request"
+                | "v2-legs-open-verify"
+                | "v2-replay-bench"
+                | "v3-job"
+                | "v3-manifest"
+                | "geometry"
+                | "pow-agent"
+        )
     ) && n_predict.is_some()
     {
         die("--n-predict does not apply to this mode; the v2 modes take token budgets from the job envelope and              --mode pow-agent takes one per request"
@@ -2667,7 +2664,9 @@ fn main() {
         Some("v2-job") => run_v2_job(),
         Some("v2-manifest") => run_v2_manifest(),
         Some("v3-job") => {
-            let dir = trace_out.unwrap_or_else(|| die("--trace-out <dir> is required for v3-job: a job whose trace is not retained cannot be defended".into()));
+            let dir = trace_out.unwrap_or_else(|| {
+                die("--trace-out <dir> is required for v3-job: a job whose trace is not retained cannot be defended".into())
+            });
             run_v3_job(Path::new(&dir));
         }
         Some("v3-manifest") => run_v3_manifest(),

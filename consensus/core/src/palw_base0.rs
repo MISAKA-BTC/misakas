@@ -68,8 +68,8 @@ pub const RSQRT_ITERS: u32 = 3;
 /// end, which is conservative by construction. A first draft seeded from the leading bit alone
 /// landed exactly on the boundary at `m = 3` and returned 0 (ADR-0040 F2).
 pub const RSQRT_SEED: [i64; 16] = [
-    15_395_829, 14_307_657, 13_421_772, 12_682_383, 12_053_107, 11_509_075, 11_032_629, 10_610_843, 10_234_005, 9_894_662,
-    9_586_980, 9_306_325, 9_048_957, 8_811_825, 8_592_409, 8_388_608,
+    15_395_829, 14_307_657, 13_421_772, 12_682_383, 12_053_107, 11_509_075, 11_032_629, 10_610_843, 10_234_005, 9_894_662, 9_586_980,
+    9_306_325, 9_048_957, 8_811_825, 8_592_409, 8_388_608,
 ];
 
 /// The longest `int8 × int8` dot product that provably cannot overflow an `i32` accumulator:
@@ -584,8 +584,8 @@ mod tests {
     /// no-overflow bound.
     #[test]
     fn reduction_order_cannot_change_an_accumulator() {
-        let a: Vec<i32> = (0..4_096).map(|i| ((i * 37) % 255) as i32 - 127).collect();
-        let b: Vec<i32> = (0..4_096).map(|i| ((i * 101) % 255) as i32 - 127).collect();
+        let a: Vec<i32> = (0..4_096).map(|i| ((i * 37) % 255) - 127).collect();
+        let b: Vec<i32> = (0..4_096).map(|i| ((i * 101) % 255) - 127).collect();
 
         let forward: i32 = a.iter().zip(&b).map(|(x, y)| x * y).sum();
         let backward: i32 = a.iter().zip(&b).rev().map(|(x, y)| x * y).sum();
@@ -648,15 +648,14 @@ mod tests {
     fn the_64_bit_shift_rounds_like_the_32_bit_one() {
         for x in [-9i64, -8, -7, -5, -4, -3, -1, 0, 1, 3, 4, 5, 7, 8, 9, 1 << 40, -(1 << 40)] {
             for s in [0u8, 1, 2, 3, 31] {
-                if let Ok(x32) = i32::try_from(x) {
-                    if s <= 31 {
+                if let Ok(x32) = i32::try_from(x)
+                    && s <= 31 {
                         assert_eq!(
                             rounding_shift_right_64(x, s),
                             rounding_shift_right(x32, s) as i64,
                             "widths disagree at x={x} s={s}"
                         );
                     }
-                }
             }
         }
         // Half rounds AWAY from zero on both signs — the property that makes the rule symmetric.

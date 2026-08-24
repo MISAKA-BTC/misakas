@@ -24,10 +24,10 @@ use kaspa_hashes::Hash64;
 use thiserror::Error;
 
 use crate::palw_legs::PalwCheckpointProfileV1;
-use crate::palw_slash::{check_job_context_shape, PalwSlashError};
+use crate::palw_slash::{PalwSlashError, check_job_context_shape};
 use crate::palw_step::{
-    canonical_step_leaf_index, kv_aux_leaf_count, step_leaf_count, PalwLayerKindV1, PalwShapeProfileV3, PalwStepCoordinateV1,
-    PalwStepError,
+    PalwLayerKindV1, PalwShapeProfileV3, PalwStepCoordinateV1, PalwStepError, canonical_step_leaf_index, kv_aux_leaf_count,
+    step_leaf_count,
 };
 use crate::palw_v2::PalwJobContextV2;
 
@@ -1133,12 +1133,12 @@ fn checkpoint_fault(
 mod tests {
     use super::*;
     use crate::palw_carriage::PALW_CARRIAGE_ALL_DOMAINS;
-    use crate::palw_legs::{leg_opening_root_v1, leg_opening_v1, PalwLegOpeningV1, PALW_LEGS_ALL_DOMAINS};
+    use crate::palw_legs::{PALW_LEGS_ALL_DOMAINS, PalwLegOpeningV1, leg_opening_root_v1, leg_opening_v1};
     use crate::palw_reference::PALW_REFERENCE_ALL_DOMAINS;
     use crate::palw_schedule::PALW_SCHEDULE_ALL_DOMAINS;
     use crate::palw_slash::PALW_S_ALL_DOMAINS;
     use crate::palw_step::{
-        canonical_step_coordinates, PalwStepNodeRoleV1, PalwStepNodeV1, PalwStepOpKindV1, PalwStepOutLenV1, PALW_STEP_ALL_DOMAINS,
+        PALW_STEP_ALL_DOMAINS, PalwStepNodeRoleV1, PalwStepNodeV1, PalwStepOpKindV1, PalwStepOutLenV1, canonical_step_coordinates,
     };
     use crate::palw_v2::{PALW_TRACE_COMMITMENT_VERSION_V2, PALW_V2_ALL_DOMAINS};
 
@@ -1268,7 +1268,7 @@ mod tests {
             for chunk_index in 0..positions.div_ceil(chunk_calls) {
                 let start = chunk_index * chunk_calls;
                 let count = (positions - start).min(chunk_calls);
-                let vals = vec![0x3C, 0x00].repeat(count as usize * p.attn_head_dim as usize); // f16 1.0
+                let vals = [0x3C, 0x00].repeat(count as usize * p.attn_head_dim as usize); // f16 1.0
                 b.push_kv_chunk(&PalwKvChunkLeafV1 {
                     version: PALW_STEP_LEG_OBJECT_VERSION_V1,
                     attn_layer: 1,
@@ -1473,7 +1473,7 @@ mod tests {
             is_v: 0,
             chunk_index: 0,
             position_count: 3,
-            values_f16_le: vec![0x00, 0x3C].repeat(12),
+            values_f16_le: [0x00, 0x3C].repeat(12),
         };
         assert!(matches!(b3.push_kv_chunk(&chunk), Err(PalwStepLegError::KvChunksOutOfOrder)));
     }
@@ -1505,7 +1505,7 @@ mod tests {
             is_v: 0,
             chunk_index: 0,
             position_count: 3,
-            values_f16_le: vec![0x3C, 0x00].repeat(3 * binding.shape_profile.attn_head_dim as usize),
+            values_f16_le: [0x3C, 0x00].repeat(3 * binding.shape_profile.attn_head_dim as usize),
         };
         let r = PalwStepRefutationV1 { binding: binding.clone(), evidence: PalwStepEvidenceV1::KvChunk { opening, preimage } };
         assert_eq!(check_step_refutation_v1(&r), Err(PalwStepLegError::NoFaultFound));

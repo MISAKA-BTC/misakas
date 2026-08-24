@@ -126,9 +126,9 @@ where
         })
         .collect();
     out.sort_by(|a, b| {
-        a.validator_id
-            .cmp(&b.validator_id)
-            .then_with(|| (a.bond_outpoint.transaction_id, a.bond_outpoint.index).cmp(&(b.bond_outpoint.transaction_id, b.bond_outpoint.index)))
+        a.validator_id.cmp(&b.validator_id).then_with(|| {
+            (a.bond_outpoint.transaction_id, a.bond_outpoint.index).cmp(&(b.bond_outpoint.transaction_id, b.bond_outpoint.index))
+        })
     });
     out
 }

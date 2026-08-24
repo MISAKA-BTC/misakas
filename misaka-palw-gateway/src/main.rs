@@ -39,10 +39,10 @@ use std::process::{Command, Stdio};
 use std::sync::Mutex;
 
 use kaspa_consensus_core::palw_freeprompt_v3::{
-    fp_job_id_v3, fp_quanta_v3, fp_worker_request_hash_v3, PalwFpCuWeightsV3, PalwFpStopReasonV3, PalwFpWorkerInputV3,
-    PalwFpWorkerRequestV3, PalwFpWorkerResultV3, PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_V3_VERSION,
+    PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_V3_VERSION, PalwFpCuWeightsV3, PalwFpStopReasonV3, PalwFpWorkerInputV3, PalwFpWorkerRequestV3,
+    PalwFpWorkerResultV3, fp_job_id_v3, fp_quanta_v3, fp_worker_request_hash_v3,
 };
-use kaspa_consensus_core::palw_v2::{read_framed, write_framed, PALW_V2_MAX_FRAME_BYTES};
+use kaspa_consensus_core::palw_v2::{PALW_V2_MAX_FRAME_BYTES, read_framed, write_framed};
 use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
 use kaspa_hashes::Hash64;
 use serde::Deserialize;
@@ -193,7 +193,10 @@ fn load_identity(path: &Path) -> Identity {
     Identity {
         network_domain: hex64(&file.network_domain, "network_domain"),
         class_id: hex64(&file.class_id, "class_id"),
-        executor_bond: TransactionOutpoint { transaction_id: TransactionId::from_bytes(hex64(&file.bond_txid, "bond_txid").as_bytes()), index: file.bond_index },
+        executor_bond: TransactionOutpoint {
+            transaction_id: TransactionId::from_bytes(hex64(&file.bond_txid, "bond_txid").as_bytes()),
+            index: file.bond_index,
+        },
         executor_pubkey: pubkey,
         operator_id: hex64(&file.operator_id, "operator_id"),
     }
@@ -219,9 +222,7 @@ fn query_worker_identity(worker: &Path) -> WorkerIdentity {
     }
     let doc: serde_json::Value =
         serde_json::from_slice(&output.stdout).unwrap_or_else(|e| die(format!("v3-manifest is not JSON: {e}")));
-    let field = |k: &str| -> Hash64 {
-        hex64(doc[k].as_str().unwrap_or_else(|| die(format!("v3-manifest lacks {k}"))), k)
-    };
+    let field = |k: &str| -> Hash64 { hex64(doc[k].as_str().unwrap_or_else(|| die(format!("v3-manifest lacks {k}"))), k) };
     WorkerIdentity {
         model_profile_id: field("model_profile_id"),
         runtime_manifest_hash: field("runtime_manifest_hash"),
@@ -341,10 +342,8 @@ fn read_http_request(stream: &mut TcpStream) -> Result<HttpRequest, String> {
 
 fn respond(stream: &mut TcpStream, status: &str, body: &serde_json::Value) {
     let bytes = body.to_string().into_bytes();
-    let head = format!(
-        "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
-        bytes.len()
-    );
+    let head =
+        format!("HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n", bytes.len());
     let _ = stream.write_all(head.as_bytes());
     let _ = stream.write_all(&bytes);
     let _ = stream.flush();
@@ -505,7 +504,9 @@ fn main() {
             "--cu-prefill-weight" => cu_prefill = value("--cu-prefill-weight").parse().unwrap_or_else(|e| die(format!("{e}"))),
             "--cu-decode-weight" => cu_decode = value("--cu-decode-weight").parse().unwrap_or_else(|e| die(format!("{e}"))),
             "--quantum-cu" => quantum_cu = value("--quantum-cu").parse().unwrap_or_else(|e| die(format!("{e}"))),
-            "--max-decode-default" => max_decode_default = value("--max-decode-default").parse().unwrap_or_else(|e| die(format!("{e}"))),
+            "--max-decode-default" => {
+                max_decode_default = value("--max-decode-default").parse().unwrap_or_else(|e| die(format!("{e}")))
+            }
             "--max-decode-cap" => max_decode_cap = value("--max-decode-cap").parse().unwrap_or_else(|e| die(format!("{e}"))),
             "--trace-retention-window" => {
                 trace_retention_window_daa = value("--trace-retention-window").parse().unwrap_or_else(|e| die(format!("{e}")))
@@ -593,11 +594,7 @@ mod tests {
     /// template id and a new class profile — this golden is the tripwire.
     #[test]
     fn template_v1_is_frozen() {
-        let rendered = render_template_v1(&[
-            msg("system", "You are a concise assistant."),
-            msg("user", "What is 2+2?"),
-        ])
-        .unwrap();
+        let rendered = render_template_v1(&[msg("system", "You are a concise assistant."), msg("user", "What is 2+2?")]).unwrap();
         assert_eq!(rendered, "### System:\nYou are a concise assistant.\n\n### User:\nWhat is 2+2?\n\n### Assistant:\n");
 
         let multi_turn = render_template_v1(&[msg("user", "hi"), msg("assistant", "hello"), msg("user", "bye")]).unwrap();
@@ -637,8 +634,7 @@ mod tests {
         assert_eq!(parsed.max_tokens, Some(32));
         assert_eq!(parsed.stream, None);
 
-        let stream: ChatRequest =
-            serde_json::from_str(r#"{"messages":[{"role":"user","content":"hi"}],"stream":true}"#).unwrap();
+        let stream: ChatRequest = serde_json::from_str(r#"{"messages":[{"role":"user","content":"hi"}],"stream":true}"#).unwrap();
         assert_eq!(stream.stream, Some(true));
     }
 }

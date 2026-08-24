@@ -137,7 +137,9 @@ pub enum PalwCourtV2Error {
     ExecutionRootMismatch,
     #[error("the ladder has not reached a terminal step — a close before the bisection ends decides a dispute nobody narrowed")]
     LadderNotTerminal,
-    #[error("the refutation opens leaf {opened}, but the ladder narrowed to {narrowed} — a close must answer the step the session is about")]
+    #[error(
+        "the refutation opens leaf {opened}, but the ladder narrowed to {narrowed} — a close must answer the step the session is about"
+    )]
     CloseIsNotTheNarrowedStep { opened: u64, narrowed: u64 },
     #[error("the operand openings do not prove against the class's registered artifact root: {0}")]
     OperandProofInvalid(String),
@@ -628,13 +630,17 @@ mod tests {
                 pubkey: vec![7; 4],
                 operator_pubkey: op_key(0x21),
                 collateral: 1_000,
-                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11), signature: Vec::new() },
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+                signature: Vec::new(),
+            },
             PalwConsensusObjectV2::BondRegistered {
                 bond: bond_key(2),
                 pubkey: vec![8; 4],
                 operator_pubkey: op_key(0x22),
                 collateral: 1_000,
-                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11), signature: Vec::new() },
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+                signature: Vec::new(),
+            },
         ];
         let (s1, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None).unwrap();
         let env = attempt(40, 1);
@@ -1015,13 +1021,17 @@ mod tests {
                 pubkey: vec![7; 4],
                 operator_pubkey: op_key(0x21),
                 collateral: 1_000,
-                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11), signature: Vec::new() },
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+                signature: Vec::new(),
+            },
             PalwConsensusObjectV2::BondRegistered {
                 bond: bond_key(2),
                 pubkey: vec![8; 4],
                 operator_pubkey: op_key(0x22),
                 collateral: 1_000,
-                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11), signature: Vec::new() },
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+                signature: Vec::new(),
+            },
         ];
         let (s1, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None).unwrap();
         let mut env = attempt(40, 1);
@@ -1134,13 +1144,17 @@ mod tests {
                     pubkey: vec![7; 4],
                     operator_pubkey: op_key(0x21),
                     collateral: 1_000,
-                    payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11), signature: Vec::new() },
+                    payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+                    signature: Vec::new(),
+                },
                 PalwConsensusObjectV2::BondRegistered {
                     bond: bond_key(2),
                     pubkey: vec![8; 4],
                     operator_pubkey: op_key(0x22),
                     collateral: 1_000,
-                    payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11), signature: Vec::new() },
+                    payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+                    signature: Vec::new(),
+                },
             ];
             let (s1, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None).unwrap();
             let mut env = attempt(40, 1);
@@ -1275,13 +1289,17 @@ mod tests {
                 pubkey: vec![7; 4],
                 operator_pubkey: op_key(0x21),
                 collateral: 1_000,
-                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11), signature: Vec::new() },
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+                signature: Vec::new(),
+            },
             PalwConsensusObjectV2::BondRegistered {
                 bond: bond_key(2),
                 pubkey: vec![8; 4],
                 operator_pubkey: op_key(0x22),
                 collateral: 1_000,
-                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11), signature: Vec::new() },
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+                signature: Vec::new(),
+            },
         ];
         let (s1, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None).unwrap();
         let mut env = attempt(40, 1);

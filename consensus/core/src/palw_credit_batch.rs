@@ -215,10 +215,9 @@ where
         let executor_payload = resolve_spk(&record.executor_bond_outpoint)
             .ok_or(PalwCreditBatchError::PayeeUnresolvable { bond_outpoint: record.executor_bond_outpoint })?;
         if record.executor_amount > 0 {
-            batch.outputs.push(TransactionOutput::new(
-                record.executor_amount,
-                crate::dns_finality::p2pkh_mldsa87_spk(&executor_payload),
-            ));
+            batch
+                .outputs
+                .push(TransactionOutput::new(record.executor_amount, crate::dns_finality::p2pkh_mldsa87_spk(&executor_payload)));
         }
         for (bond_outpoint, award) in &record.verifier_awards {
             let payload =

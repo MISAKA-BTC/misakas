@@ -1,4 +1,3 @@
-
 //! PALW claim-material and seat-receipt gossip (ADR-0042 Decision 7's transport half).
 //!
 //! **What this closes.** The consensus side of the claim lattice was complete — `palw_seat_duties_v2`
@@ -140,8 +139,8 @@ impl PalwGossipCenter {
         }
         state.seen.insert(digest);
         state.seen_order.push_back((digest, material_claim));
-        if state.seen_order.len() > SEEN_CAP {
-            if let Some((old, claim)) = state.seen_order.pop_front() {
+        if state.seen_order.len() > SEEN_CAP
+            && let Some((old, claim)) = state.seen_order.pop_front() {
                 state.seen.remove(&old);
                 // Give the count back with the digest that took it, so the map cannot outlive the
                 // FIFO that feeds it.
@@ -154,7 +153,6 @@ impl PalwGossipCenter {
                     }
                 }
             }
-        }
         PalwGossipAdmit::Fresh
     }
 
@@ -206,7 +204,6 @@ impl PalwGossipCenter {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 
     /// **The per-claim map grew forever, and nothing on the wire was authenticated enough to stop
     /// it.** Claim ids arrive as 64 raw bytes with no on-chain existence check, no signature and

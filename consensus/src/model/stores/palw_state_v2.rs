@@ -247,10 +247,8 @@ impl DbPalwStateV2Store {
     ) -> StoreResult<()> {
         let carriage = PalwStateCarriageV2::from_state(state);
         let carriage_borsh = borsh::to_vec(&carriage).expect("PalwStateCarriageV2 is borsh-serializable");
-        self.pruning_snapshot.write(
-            BatchDbWriter::new(batch),
-            &PalwStateTipRecordV2 { block, state_root: state.state_root(), carriage_borsh },
-        )
+        self.pruning_snapshot
+            .write(BatchDbWriter::new(batch), &PalwStateTipRecordV2 { block, state_root: state.state_root(), carriage_borsh })
     }
 
     /// The raw snapshot row, or `None` when this node has not captured one yet — which is the
@@ -294,29 +292,14 @@ impl DbPalwStateV2Store {
 mod tests {
     use super::*;
     use kaspa_consensus_core::palw_state_v2::{
-        PalwBlockContextV2, PalwBondKeyV2, PalwConsensusObjectV2, PalwPwuRuleV2, apply_palw_transition_v2,
-        revert_delta_v2,
+        PalwBlockContextV2, PalwBondKeyV2, PalwConsensusObjectV2, PalwPwuRuleV2, apply_palw_transition_v2, revert_delta_v2,
     };
     use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
     use kaspa_database::create_temp_db;
     use kaspa_database::prelude::ConnBuilder;
 
     fn params() -> PalwStateParamsV2 {
-        PalwStateParamsV2::new(
-            100,
-            10,
-            10,
-            20,
-            500,
-            1000,
-            Hash64::from_u64_word(1),
-            4,
-            1000,
-            100,
-            1000,
-            0,
-        )
-        .unwrap()
+        PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, Hash64::from_u64_word(1), 4, 1000, 100, 1000, 0).unwrap()
     }
 
     fn ctx(block_word: u64, daa: u64, blue: u64) -> PalwBlockContextV2 {

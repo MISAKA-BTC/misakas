@@ -9,10 +9,9 @@
 //! health. Nothing here is on the block-validation path: a verifier re-runs this and compares the
 //! class id, which is why the conversion has to be bit-reproducible.
 
-use misaka_palw_base0::artifact::{Base0ArtifactV1, Base0ShapeV1, LN_THETA_10000_GEN_Q};
+use misaka_palw_base0::artifact::{Base0ArtifactV1, Base0ShapeV1};
 use misaka_palw_base0::convert::{
-    Qwen25ConvertPlan, activation_scale_of, biased_channel_count, calibrate_layer_residuals, convert_qwen25,
-    measure_depth_health,
+    Qwen25ConvertPlan, activation_scale_of, biased_channel_count, calibrate_layer_residuals, convert_qwen25, measure_depth_health,
 };
 
 fn die(message: String) -> ! {
@@ -22,16 +21,11 @@ fn die(message: String) -> ! {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let dir = args
-        .get(1)
-        .unwrap_or_else(|| die("usage: qwen25-convert <dir> [--layers N] [--max-position N] [--out FILE]".into()));
-    let flag = |name: &str| -> Option<String> {
-        args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned()
-    };
+    let dir = args.get(1).unwrap_or_else(|| die("usage: qwen25-convert <dir> [--layers N] [--max-position N] [--out FILE]".into()));
+    let flag = |name: &str| -> Option<String> { args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned() };
     let out_path = flag("--out");
-    let layer_cap: Option<usize> = flag("--layers").map(|v| {
-        v.parse().unwrap_or_else(|_| die(format!("--layers wants a number, got {v}")))
-    });
+    let layer_cap: Option<usize> =
+        flag("--layers").map(|v| v.parse().unwrap_or_else(|_| die(format!("--layers wants a number, got {v}"))));
 
     // **The class registry is the only arithmetic there is.** This tool used to carry its own copy
     // of the shape — `max_position: 512` and `eps_q: 1 << 8`, the latter inherited from the floor —
@@ -43,20 +37,19 @@ fn main() {
     // So the shape is LOOKED UP, and `config.json` becomes something to check the checkpoint
     // against rather than the thing that decides the class.
     let model_id = flag("--model-id").unwrap_or_else(|| {
-        die("--model-id is required (e.g. Qwen/Qwen2.5-1.5B): a class's arithmetic comes from the registry, not from config.json".into())
+        die("--model-id is required (e.g. Qwen/Qwen2.5-1.5B): a class's arithmetic comes from the registry, not from config.json"
+            .into())
     });
-    let court = kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2::new(
-        kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES, 4, 2,
-    )
-    .unwrap_or_else(|e| die(format!("the shipped court parameters do not build: {e:?}")));
+    let court =
+        kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2::new(kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES, 4, 2)
+            .unwrap_or_else(|e| die(format!("the shipped court parameters do not build: {e:?}")));
     let class = misaka_palw_base0::classes::canonical_class_by_model_id_v1(&court, &model_id)
         .unwrap_or_else(|| die(format!("{model_id} is not a class this build knows")));
 
     let cfg_bytes = std::fs::read(format!("{dir}/config.json")).unwrap_or_else(|e| die(format!("config.json: {e}")));
     let cfg: serde_json::Value = serde_json::from_slice(&cfg_bytes).unwrap_or_else(|e| die(format!("config.json: {e}")));
-    let num = |k: &str| -> usize {
-        cfg.get(k).and_then(|v| v.as_u64()).unwrap_or_else(|| die(format!("config.json has no {k}"))) as usize
-    };
+    let num =
+        |k: &str| -> usize { cfg.get(k).and_then(|v| v.as_u64()).unwrap_or_else(|| die(format!("config.json has no {k}"))) as usize };
     let declared_layers = num("num_hidden_layers");
     let want = class.artifact_shape;
 
@@ -86,8 +79,16 @@ fn main() {
     }
     println!("class {model_id}");
     println!("  canonical id  {}", class.class_id());
-    println!("  geometry      layers {} hidden {} heads {}/{} kv, d_head {}, ffn {}, vocab {}",
-        shape.n_layers, shape.n_heads * shape.d_head, shape.n_heads, shape.n_kv_heads, shape.d_head, shape.d_ff, shape.vocab);
+    println!(
+        "  geometry      layers {} hidden {} heads {}/{} kv, d_head {}, ffn {}, vocab {}",
+        shape.n_layers,
+        shape.n_heads * shape.d_head,
+        shape.n_heads,
+        shape.n_kv_heads,
+        shape.d_head,
+        shape.d_ff,
+        shape.vocab
+    );
     println!("  arithmetic    eps_q {} (registry, not config.json), max_position {}", shape.eps_q, shape.max_position);
 
     let tokenizer = std::fs::read(format!("{dir}/tokenizer.json")).unwrap_or_else(|e| die(format!("tokenizer.json: {e}")));
@@ -106,7 +107,11 @@ fn main() {
 
     let weight_bytes: usize = artifact.embed.len()
         + artifact.unembed.len()
-        + artifact.layers.iter().map(|l| l.wq.len() + l.wk.len() + l.wv.len() + l.wo.len() + l.w_gate.len() + l.w_up.len() + l.w_down.len()).sum::<usize>();
+        + artifact
+            .layers
+            .iter()
+            .map(|l| l.wq.len() + l.wk.len() + l.wv.len() + l.wo.len() + l.w_gate.len() + l.w_up.len() + l.w_down.len())
+            .sum::<usize>();
     println!("class id      {}", artifact.artifact_digest());
     println!("tokenizer     {commitment}");
     println!("int8 weights  {} MiB", weight_bytes / (1 << 20));
@@ -139,7 +144,11 @@ fn main() {
     println!("  alive          {}", health.is_alive());
     println!("  gate asym      {}", health.gate_is_asymmetric());
     println!("  residual peak  min {} max {}", health.residual_peak.iter().min().unwrap(), health.residual_peak.iter().max().unwrap());
-    println!("  gate peak      min {} max {}", health.gate_peak_decay().iter().min().unwrap(), health.gate_peak_decay().iter().max().unwrap());
+    println!(
+        "  gate peak      min {} max {}",
+        health.gate_peak_decay().iter().min().unwrap(),
+        health.gate_peak_decay().iter().max().unwrap()
+    );
     println!("  attn spread    {} (0 = a head selected nothing)", health.min_attention_spread);
     println!("  railed layers  {}/{}", health.saturated_residual.0, health.saturated_residual.1);
     println!("  argmax         {:?}", health.argmax);
@@ -184,17 +193,19 @@ fn main() {
     // this prints both widths for every captured row.
     if args.iter().any(|a| a == "--check-capture") {
         use kaspa_consensus_core::palw_step::PalwStepOutLenV1;
-        let mut engine = misaka_palw_base0::engine::Base0Engine::new(&artifact);
+        let engine = misaka_palw_base0::engine::Base0Engine::new(&artifact);
         let mut cache = misaka_palw_base0::engine::KvCache::new(&artifact);
-        let (_, probe) = engine
-            .forward_token_probed(&mut cache, 1, 0)
-            .unwrap_or_else(|e| die(format!("one probed token did not run: {e:?}")));
+        let (_, probe) =
+            engine.forward_token_probed(&mut cache, 1, 0).unwrap_or_else(|e| die(format!("one probed token did not run: {e:?}")));
         let rows = misaka_palw_base0::legs::base0_captured_rows_v1(&probe);
         println!("capture check: {} rows at position 0", rows.len());
         let mut bad = 0usize;
         for r in &rows {
             let Some(global) = class.profile.global_node_slot(r.table, r.layer, r.index) else {
-                println!("  MISSING SLOT {:?} layer {} index {} (engine produced a row the profile has no node for)", r.table, r.layer, r.index);
+                println!(
+                    "  MISSING SLOT {:?} layer {} index {} (engine produced a row the profile has no node for)",
+                    r.table, r.layer, r.index
+                );
                 bad += 1;
                 continue;
             };
@@ -207,8 +218,14 @@ fn main() {
             if r.row.len() != declared {
                 println!(
                     "  WIDTH  {:?} layer {} index {} slot {global} {:?}: engine {} vs profile {} ({} tiles vs {})",
-                    r.table, r.layer, r.index, node.op_kind, r.row.len(), declared,
-                    r.row.len().div_ceil(node.tile_len as usize), declared.div_ceil(node.tile_len as usize)
+                    r.table,
+                    r.layer,
+                    r.index,
+                    node.op_kind,
+                    r.row.len(),
+                    declared,
+                    r.row.len().div_ceil(node.tile_len as usize),
+                    declared.div_ceil(node.tile_len as usize)
                 );
                 bad += 1;
             }
@@ -224,9 +241,8 @@ fn main() {
         ctx.job_id = anchor;
         ctx.execution_seed = anchor.as_byte_slice()[..32].try_into().expect("64 bytes has 32");
         let job_prompt: Vec<usize> = (0..prefill as usize).map(|i| (i * 7919) % artifact.shape.vocab).collect();
-        ctx.prompt_token_ids_hash = kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(
-            &job_prompt.iter().map(|t| *t as u32).collect::<Vec<_>>(),
-        );
+        ctx.prompt_token_ids_hash =
+            kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(&job_prompt.iter().map(|t| *t as u32).collect::<Vec<_>>());
         let leaves = kaspa_consensus_core::palw_step::step_leaf_count(&class.profile, &ctx)
             .unwrap_or_else(|e| die(format!("the canonical job has no step space: {e:?}")));
         println!("execute: canonical job {prefill} prefill / {decode} decode, {leaves} step leaves");
@@ -253,8 +269,11 @@ fn main() {
         // from this file is the one the chain must have registered, and finding a mismatch after
         // it is on four hosts is finding it in the worst place.
         match misaka_palw_base0::artifact::decode_artifact_file_v1(&bytes) {
-            Ok(back) => println!("  reload class id {} ({})", back.artifact_digest(),
-                if back.artifact_digest() == artifact.artifact_digest() { "matches" } else { "MISMATCH" }),
+            Ok(back) => println!(
+                "  reload class id {} ({})",
+                back.artifact_digest(),
+                if back.artifact_digest() == artifact.artifact_digest() { "matches" } else { "MISMATCH" }
+            ),
             Err(e) => die(format!("the file this tool just wrote does not load: {e}")),
         }
     }

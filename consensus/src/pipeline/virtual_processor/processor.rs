@@ -1014,8 +1014,8 @@ impl VirtualStateProcessor {
                     Some((tip_block, tip_state)) if tip_block == from => Some(tip_state),
                     Some((tip_block, tip_state)) => {
                         let path = self.dag_traversal_manager.calculate_chain_path(tip_block, from, None);
-                        let removed: Vec<BlockHash> = path.removed.iter().copied().collect();
-                        let added: Vec<BlockHash> = path.added.iter().copied().collect();
+                        let removed: Vec<BlockHash> = path.removed.to_vec();
+                        let added: Vec<BlockHash> = path.added.to_vec();
                         let store = self.palw_state_v2_store.read();
                         match crate::processes::palw_state_walk::walk_chain_path(&store, params, tip_state, &removed, &added) {
                             Ok(state) => {
@@ -1294,10 +1294,7 @@ impl VirtualStateProcessor {
                                 let attempt = match self.palw_v2_check_attempt_admission(&header, state, state_params, &point) {
                                     Ok(attempt) => attempt,
                                     Err(adm_error) => {
-                                        info!(
-                                            "Block {} is disqualified from virtual chain (PALW admission): {}",
-                                            current, adm_error
-                                        );
+                                        info!("Block {} is disqualified from virtual chain (PALW admission): {}", current, adm_error);
                                         self.statuses_store.write().set(current, StatusDisqualifiedFromChain).unwrap();
                                         chain_disqualified_counter += 1;
                                         continue;
@@ -1386,7 +1383,7 @@ impl VirtualStateProcessor {
                             let bond_muts = self.dns_bond_mutations_from_acceptance(
                                 current,
                                 &ctx.mergeset_acceptance_data,
-                                &bond_view,
+                                bond_view,
                                 pov_daa_score,
                             );
                             bond_view.apply(&bond_muts);
@@ -2924,7 +2921,8 @@ impl VirtualStateProcessor {
         }
         for added in chain_path.added.iter() {
             let Ok(header) = self.headers_store.get_header(*added) else { continue };
-            for (tx_id, record) in palw_carriage_records_from_accepted_txs(&self.accepted_txs_of_chain_block(*added), header.daa_score, *added)
+            for (tx_id, record) in
+                palw_carriage_records_from_accepted_txs(&self.accepted_txs_of_chain_block(*added), header.daa_score, *added)
             {
                 store.insert_batch(batch, tx_id, Arc::new(record)).unwrap();
             }
@@ -3015,7 +3013,9 @@ impl VirtualStateProcessor {
             if header.daa_score < daa_floor {
                 break;
             }
-            for (_, record) in palw_carriage_records_from_accepted_txs(&self.accepted_txs_of_chain_block(block), header.daa_score, block) {
+            for (_, record) in
+                palw_carriage_records_from_accepted_txs(&self.accepted_txs_of_chain_block(block), header.daa_score, block)
+            {
                 out.push((record.kind, record.accepted_daa_score, record.body));
             }
         }
@@ -3080,7 +3080,11 @@ impl VirtualStateProcessor {
                 let header = self.headers_store.get_header(block).ok()?;
                 let commitment = PalwBlockCommitmentV1::decode(&header.palw_commitment).ok()?;
                 let bond = bonds.active_bond_at(&commitment.executor_bond_outpoint, header.daa_score)?;
-                Some(PalwImmatureWorkV1 { bond_outpoint: commitment.executor_bond_outpoint, collateral_sompi: bond.amount, pwu: w.pwu })
+                Some(PalwImmatureWorkV1 {
+                    bond_outpoint: commitment.executor_bond_outpoint,
+                    collateral_sompi: bond.amount,
+                    pwu: w.pwu,
+                })
             });
             facts.push(weight);
             immature.push(exposure);
@@ -3102,15 +3106,16 @@ impl VirtualStateProcessor {
         let mut admitted = admitted.into_iter();
         let mut over_exposed = 0usize;
         for (fact, exposure) in facts.iter_mut().rev().zip(immature.iter()) {
-            if exposure.is_some() && !admitted.next().unwrap_or(false) {
-                if let Some(w) = fact.as_mut() {
+            if exposure.is_some() && !admitted.next().unwrap_or(false)
+                && let Some(w) = fact.as_mut() {
                     w.stage = PalwWorkRampStageV1::Voided;
                     over_exposed += 1;
                 }
-            }
         }
         if over_exposed > 0 {
-            debug!("[palw-exposure] {over_exposed} immature block(s) on {chain_tip} exceed their bond's collateral and carry no live weight");
+            debug!(
+                "[palw-exposure] {over_exposed} immature block(s) on {chain_tip} exceed their bond's collateral and carry no live weight"
+            );
         }
         chain_weights_v1(&facts, params).ok()
     }
@@ -3174,11 +3179,24 @@ impl VirtualStateProcessor {
         // `Provisional` — which is exactly what a fresh commitment is. The panel is drawn on a
         // later evaluation, once the chain has reached the anchor, and maturity follows then.
         let panel = self
-            .palw_panel_for_block_v1(chain_tip, block, commitment_root, executor_id, commitment.execution_class_id, accepted_daa, bonds, schedule)
+            .palw_panel_for_block_v1(
+                chain_tip,
+                block,
+                commitment_root,
+                executor_id,
+                commitment.execution_class_id,
+                accepted_daa,
+                bonds,
+                schedule,
+            )
             .unwrap_or_default();
 
         let facts = self.palw_class_facts_for_block(&commitment.execution_class_id, &header)?;
-        let classes = PalwOneClassView { class_id: commitment.execution_class_id, class_target: facts.class_target, pwu_per_inference: facts.pwu_per_inference };
+        let classes = PalwOneClassView {
+            class_id: commitment.execution_class_id,
+            class_target: facts.class_target,
+            pwu_per_inference: facts.pwu_per_inference,
+        };
 
         let carriage = self.palw_carriage_on_chain_v1(chain_tip, accepted_daa);
         let oracle = PalwNoWeightsV1;
@@ -3599,7 +3617,10 @@ impl VirtualStateProcessor {
     /// — which is every shipped preset. A candidate this node cannot weigh is also `None`, and
     /// that is deliberately NOT "zero": a chain nobody could weigh must not outrank one that was
     /// weighed and found small.
-    pub(crate) fn palw_candidate_order_v2(&self, candidate: BlockHash) -> Option<kaspa_consensus_core::palw_fork_choice::PalwCandidateOrderV1> {
+    pub(crate) fn palw_candidate_order_v2(
+        &self,
+        candidate: BlockHash,
+    ) -> Option<kaspa_consensus_core::palw_fork_choice::PalwCandidateOrderV1> {
         let state_params = self.palw_state_params_v2.as_ref()?;
         let store = self.palw_state_v2_store.read();
         let (tip_block, tip_state) = store.load_tip(state_params).ok().flatten()?;
@@ -3607,14 +3628,18 @@ impl VirtualStateProcessor {
         // equal and the authority would be a constant (P0-4 in fork-choice clothing). The walk
         // from the materialized tip to the candidate is what makes it candidate-scoped.
         let path = self.dag_traversal_manager.calculate_chain_path(tip_block, candidate, None);
-        let removed: Vec<BlockHash> = path.removed.iter().copied().collect();
-        let added: Vec<BlockHash> = path.added.iter().copied().collect();
+        let removed: Vec<BlockHash> = path.removed.to_vec();
+        let added: Vec<BlockHash> = path.added.to_vec();
         drop(store);
         let store = self.palw_state_v2_store.read();
-        let state =
-            crate::processes::palw_state_walk::walk_chain_path(&store, state_params, tip_state, &removed, &added).ok()?;
+        let state = crate::processes::palw_state_walk::walk_chain_path(&store, state_params, tip_state, &removed, &added).ok()?;
         let (frontier_blue_score, _) = state.safe_frontier();
-        Some(kaspa_consensus_core::palw_fork_choice::PalwCandidateOrderV1::new(frontier_blue_score, state.safe_weight(), state.bounded_immature(), candidate))
+        Some(kaspa_consensus_core::palw_fork_choice::PalwCandidateOrderV1::new(
+            frontier_blue_score,
+            state.safe_weight(),
+            state.bounded_immature(),
+            candidate,
+        ))
     }
 
     /// Unit D, site 3: whether a proposed pruning point respects the safe frontier.
@@ -3756,9 +3781,7 @@ impl VirtualStateProcessor {
     /// read off the chain rather than restated: an entrant priced by its own registrant would be
     /// an entrant whose slash value and starting difficulty are whatever it liked, and "the same
     /// work costs the same everywhere" is the property the share table conserves.
-    pub fn palw_v2_registration_terms_impl(
-        &self,
-    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwRegistrationTermsV2> {
+    pub fn palw_v2_registration_terms_impl(&self) -> Option<kaspa_consensus_core::palw_state_v2::PalwRegistrationTermsV2> {
         let state_params = self.palw_state_params_v2.as_ref()?;
         let bundle = self.palw_v2_bundle.as_ref()?;
         let (_, state) = self.palw_state_v2_store.read().load_tip(state_params).ok().flatten()?;
@@ -3986,10 +4009,7 @@ impl VirtualStateProcessor {
             .collect()
     }
 
-    fn palw_v2_payout_outputs(
-        &self,
-        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
-    ) -> Vec<TransactionOutput> {
+    fn palw_v2_payout_outputs(&self, state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2) -> Vec<TransactionOutput> {
         // The SAME prefix the transition drains — see `PALW_V2_MAX_PAYOUTS_PER_BLOCK`. Both sides
         // read the selected parent's queue in `BTreeMap` key order, so "the first N" names one set
         // on every node. Paying more than the transition clears would pay a claim twice; clearing
@@ -4416,7 +4436,7 @@ impl VirtualStateProcessor {
                         kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2(self.network_id_bytes.as_slice()),
                         claim,
                         receipts,
-                        |key, message, sig, context| Self::verify_mldsa87_with_context_bool(key, message, sig, context),
+                        Self::verify_mldsa87_with_context_bool,
                     )
                     .map_err(|e| format!("claim {claim}'s receipt set does not carry a quorum: {e}"))?;
                     use kaspa_consensus_core::palw_panel_v2::PalwReceiptQuorumV2 as Q;
@@ -4472,9 +4492,8 @@ impl VirtualStateProcessor {
                 // registered. A bond key is a public premine outpoint; the signature is what makes
                 // naming one different from owning it.
                 Obj::BondRetireRequested { bond, signature } => {
-                    let record = state
-                        .bond(bond)
-                        .ok_or_else(|| format!("a retirement names bond {bond:?} this chain does not have"))?;
+                    let record =
+                        state.bond(bond).ok_or_else(|| format!("a retirement names bond {bond:?} this chain does not have"))?;
                     if matches!(record.status, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2::Retiring { .. }) {
                         return Err(format!("bond {bond:?} is already retiring"));
                     }
@@ -4567,11 +4586,7 @@ impl VirtualStateProcessor {
             // The first block BELOW the slot is the witness; the last one recorded at or above it
             // is the anchor.
             let (anchor_block, anchor_daa) = candidate?;
-            return Some(kaspa_consensus_core::palw_panel_v2::PalwAnchorFactV2 {
-                anchor_block,
-                anchor_daa,
-                predecessor_daa: daa,
-            });
+            return Some(kaspa_consensus_core::palw_panel_v2::PalwAnchorFactV2 { anchor_block, anchor_daa, predecessor_daa: daa });
         }
         let (anchor_block, anchor_daa) = candidate?;
         Some(kaspa_consensus_core::palw_panel_v2::PalwAnchorFactV2 { anchor_block, anchor_daa, predecessor_daa: 0 })
@@ -4628,8 +4643,7 @@ impl VirtualStateProcessor {
         // and mint another distinct, valid block from one solved PoW. 3c's deferral rested on
         // "only the bond holder can mint valid-signature siblings", which is a statement about a
         // signature somebody checks.
-        let network_domain =
-            kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2(self.network_id_bytes.as_slice());
+        let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2(self.network_id_bytes.as_slice());
         let pre_pow_hash = kaspa_consensus_core::hashing::header::pre_pow_hash_64(header);
         kaspa_consensus_core::palw_admission_v2::check_palw_attempt_admission_full_v2(
             state,
@@ -4684,9 +4698,7 @@ impl VirtualStateProcessor {
             .ok_or_else(|| "the draw slot overflows the DAA space".to_string())?;
         // Derived from the block's OWN selected parent, so the walk is the candidate's and the
         // beacon cannot be chosen by the party it decides for.
-        let beacon = self
-            .palw_beacon_fact_of_candidate(header.direct_parents()[0], slot)
-            .map_err(|e| e.to_string())?;
+        let beacon = self.palw_beacon_fact_of_candidate(header.direct_parents()[0], slot).map_err(|e| e.to_string())?;
         let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2(self.network_id_bytes.as_slice());
         kaspa_consensus_core::palw_fp_admission_v3::check_palw_receipt_spend_admission_v3(
             state,
@@ -4718,8 +4730,10 @@ impl VirtualStateProcessor {
         &self,
         from: BlockHash,
         slot: u64,
-    ) -> Result<kaspa_consensus_core::palw_freeprompt_v3::PalwBeaconFactV3, kaspa_consensus_core::palw_fp_beacon_v3::PalwBeaconDeriveV3Error>
-    {
+    ) -> Result<
+        kaspa_consensus_core::palw_freeprompt_v3::PalwBeaconFactV3,
+        kaspa_consensus_core::palw_fp_beacon_v3::PalwBeaconDeriveV3Error,
+    > {
         let attempt_algo_id = self.palw_required_algo_id.unwrap_or(kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2);
         let facts = self.reachability_service.default_backward_chain_iterator(from).filter_map(|block| {
             let header = self.headers_store.get_header(block).ok()?;
@@ -4781,8 +4795,7 @@ impl VirtualStateProcessor {
             };
             // A registry too small to seat a panel yields nothing rather than a short one: a
             // partial jury is `derive_panel_v2`'s fail-closed refusal, and it stays that.
-            let Ok(seats) =
-                kaspa_consensus_core::palw_panel_v2::derive_panel_v2(state, panel_params, claim_id, anchor.anchor_block)
+            let Ok(seats) = kaspa_consensus_core::palw_panel_v2::derive_panel_v2(state, panel_params, claim_id, anchor.anchor_block)
             else {
                 continue;
             };
@@ -7121,7 +7134,9 @@ impl VirtualStateProcessor {
                 break;
             }
             chain_rev.push((current, cur_daa));
-            for (tx_id, record) in palw_carriage_records_from_accepted_txs(&self.accepted_txs_of_chain_block(current), cur_daa, current) {
+            for (tx_id, record) in
+                palw_carriage_records_from_accepted_txs(&self.accepted_txs_of_chain_block(current), cur_daa, current)
+            {
                 match decode_palw_stage1_body(record.kind, &record.body) {
                     Ok(PalwCarriageV1::Commitment(c)) => commitments.push((tx_id, c, cur_daa)),
                     Ok(PalwCarriageV1::Attestation(a)) => attestations.push((a, cur_daa)),
@@ -10447,8 +10462,8 @@ impl VirtualStateProcessor {
             tip_state
         } else {
             let path = self.dag_traversal_manager.calculate_chain_path(tip_block, pruning_point, None);
-            let removed: Vec<BlockHash> = path.removed.iter().copied().collect();
-            let added: Vec<BlockHash> = path.added.iter().copied().collect();
+            let removed: Vec<BlockHash> = path.removed.to_vec();
+            let added: Vec<BlockHash> = path.added.to_vec();
             match crate::processes::palw_state_walk::walk_chain_path(&store, params, tip_state, &removed, &added) {
                 Ok(state) => state,
                 Err(e) => {
@@ -10783,6 +10798,29 @@ where
     out
 }
 
+/// The name of a lifecycle object's kind, for logging what a block carried.
+///
+/// Total on purpose — no catch-all — so a new object kind has to decide what it is called here
+/// rather than disappear into "lifecycle object", which is exactly the shape that made a live
+/// court drill unreadable on the panel side.
+fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2) -> &'static str {
+    use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2 as O;
+    match object {
+        O::BondRegistered { .. } => "BondRegistered",
+        O::BondRetireRequested { .. } => "BondRetireRequested",
+        O::ClassRegistered { .. } => "ClassRegistered",
+        O::ClassFrozen { .. } => "ClassFrozen",
+        O::PanelBound { .. } => "PanelBound",
+        O::ReceiptLicensed { .. } => "ReceiptLicensed",
+        O::CourtOpened { .. } => "CourtOpened",
+        O::CourtClosed { .. } => "CourtClosed",
+        O::CourtDisclosed { .. } => "CourtDisclosed",
+        O::CourtVerdictPosted { .. } => "CourtVerdictPosted",
+        O::ProducerDefaulted { .. } => "ProducerDefaulted",
+        O::FreePromptCommitted { .. } => "FreePromptCommitted",
+    }
+}
+
 #[cfg(test)]
 mod palw_equivocation_wiring_tests {
     /// The chain identity these slash tests adjudicate under — it must equal the network the
@@ -10955,28 +10993,5 @@ mod palw_equivocation_wiring_tests {
         forged.certificate.attestation_b.signature = vec![0xFF; 64];
         let txs = vec![carriage_tx(&forged)];
         assert!(palw_equivocation_slashes_v1(&txs, &view(signer, accused), 100, SLASH_NET, true, mock_verify).is_empty());
-    }
-}
-
-/// The name of a lifecycle object's kind, for logging what a block carried.
-///
-/// Total on purpose — no catch-all — so a new object kind has to decide what it is called here
-/// rather than disappear into "lifecycle object", which is exactly the shape that made a live
-/// court drill unreadable on the panel side.
-fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2) -> &'static str {
-    use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2 as O;
-    match object {
-        O::BondRegistered { .. } => "BondRegistered",
-        O::BondRetireRequested { .. } => "BondRetireRequested",
-        O::ClassRegistered { .. } => "ClassRegistered",
-        O::ClassFrozen { .. } => "ClassFrozen",
-        O::PanelBound { .. } => "PanelBound",
-        O::ReceiptLicensed { .. } => "ReceiptLicensed",
-        O::CourtOpened { .. } => "CourtOpened",
-        O::CourtClosed { .. } => "CourtClosed",
-        O::CourtDisclosed { .. } => "CourtDisclosed",
-        O::CourtVerdictPosted { .. } => "CourtVerdictPosted",
-        O::ProducerDefaulted { .. } => "ProducerDefaulted",
-        O::FreePromptCommitted { .. } => "FreePromptCommitted",
     }
 }

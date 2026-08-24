@@ -47,13 +47,10 @@
 
 use crate::Hash64;
 use crate::palw_step::{
-    PALW_STEP_INPUT_LAYER_IN, PALW_STEP_OBJECT_VERSION_V1, PalwShapeProfileV3,
-    PalwStepError, PalwStepLaneV1, PalwStepNodeRoleV1, PalwStepNodeV1, PalwStepOpKindV1, PalwStepOutLenV1,
-    kernel_semantics_id_v1,
+    PALW_STEP_INPUT_LAYER_IN, PALW_STEP_OBJECT_VERSION_V1, PalwShapeProfileV3, PalwStepError, PalwStepLaneV1, PalwStepNodeRoleV1,
+    PalwStepNodeV1, PalwStepOpKindV1, PalwStepOutLenV1, kernel_semantics_id_v1,
 };
-use crate::palw_step_refute::{
-    KDESC_BASE0_EMBED, KDESC_BASE0_MATMUL, KDESC_BASE0_REQUANTIZE, KDESC_BASE0_RMS_NORM,
-};
+use crate::palw_step_refute::{KDESC_BASE0_EMBED, KDESC_BASE0_MATMUL, KDESC_BASE0_REQUANTIZE, KDESC_BASE0_RMS_NORM};
 
 /// The int8 dtype byte. One weight type throughout: the class is integer arithmetic, and any
 /// variance would mean it is not this class.
@@ -237,7 +234,6 @@ pub fn qwen25_tensor_names_v1() -> Vec<&'static str> {
     crate::palw_base0_profile::base0_tensor_names_for_head_v1("token_embd.weight")
 }
 
-
 /// Qwen2.5's graph, for `geometry`.
 ///
 /// Twenty nodes per layer, and the order IS the execution order. `input_refs` names which
@@ -350,7 +346,6 @@ pub fn qwen25_profile_v1(geometry: PalwQwen25GeometryV1) -> Result<PalwShapeProf
         ),
     ];
 
-
     let profile = PalwShapeProfileV3 {
         version: PALW_STEP_OBJECT_VERSION_V1,
         lane: PalwStepLaneV1::Int32,
@@ -436,8 +431,14 @@ mod tests {
         let court = crate::palw_mode_v2::PalwCourtParamsV2::new(crate::palw_step::PALW_STEP_MAX_LEAVES, 4, 2).unwrap();
         let g = qwen25_admissible_geometry_v1(QWEN25_1_5B, &court).unwrap();
         let p = qwen25_profile_v1(g).unwrap();
-        println!("tile_len(geometry)={} pre={} attn={} post={} per-layer-attn={}",
-            g.tile_len, p.pre_nodes.len(), p.attn_nodes.len(), p.post_nodes.len(), p.attn_nodes.len());
+        println!(
+            "tile_len(geometry)={} pre={} attn={} post={} per-layer-attn={}",
+            g.tile_len,
+            p.pre_nodes.len(),
+            p.attn_nodes.len(),
+            p.post_nodes.len(),
+            p.attn_nodes.len()
+        );
         for slot in 0..14u32 {
             if let Some((n, layer)) = p.resolve_node_slot(slot) {
                 let w = match n.out_len {
@@ -476,7 +477,8 @@ mod tests {
             // mismatch, which is what makes `pwu_per_inference` a fact rather than a multiplier
             // the registrant picks. (First run of this test declared 1 and was told 366,184.)
             pwu_rule: crate::palw_state_v2::PalwPwuRuleV2::DerivedV1 {
-                pwu_per_inference: crate::palw_step::step_leaf_count(&profile, &canonical).expect("the canonical job has a step space"),
+                pwu_per_inference: crate::palw_step::step_leaf_count(&profile, &canonical)
+                    .expect("the canonical job has a step space"),
             },
             initial_target: u128::MAX / 2,
             share_permille: 1,
@@ -506,15 +508,19 @@ mod tests {
     #[test]
     #[ignore]
     fn print_admissible_qwen25_geometry() {
-        let court = crate::palw_mode_v2::PalwCourtParamsV2::new(crate::palw_step::PALW_STEP_MAX_LEAVES, 4, 2)
-            .expect("the shipped court");
+        let court =
+            crate::palw_mode_v2::PalwCourtParamsV2::new(crate::palw_step::PALW_STEP_MAX_LEAVES, 4, 2).expect("the shipped court");
         for (name, g) in [("1.5B", QWEN25_1_5B), ("3B", QWEN25_3B)] {
             match qwen25_admissible_geometry_v1(g, &court) {
                 Some(a) => {
                     let p = qwen25_profile_v1(a).expect("expressible");
                     println!(
                         "{name}: tile_len={} n_ctx={} class_id={} (model declared tile={} n_ctx={})",
-                        a.tile_len, a.n_ctx, p.shape_profile_id(), g.tile_len, g.n_ctx
+                        a.tile_len,
+                        a.n_ctx,
+                        p.shape_profile_id(),
+                        g.tile_len,
+                        g.n_ctx
                     );
                 }
                 None => println!("{name}: NO admissible (tile, n_ctx) under this court"),
@@ -578,11 +584,7 @@ mod tests {
         }
         // Tracks the IR, because the layer table IS the IR now (ADR-0049 Decision F) — a literal
         // here is how the hand-written table's 27 nodes went unnoticed against the engine's 38.
-        assert_eq!(
-            checked,
-            1 + crate::palw_base0_profile::BASE0_LAYER_IR.len() + 3,
-            "the whole graph was checked, not a prefix"
-        );
+        assert_eq!(checked, 1 + crate::palw_base0_profile::BASE0_LAYER_IR.len() + 3, "the whole graph was checked, not a prefix");
     }
 
     /// **The three transformations, asserted as absences.**
@@ -611,11 +613,7 @@ mod tests {
         // Tied embeddings: the lm_head reads the embedding table, and no `output.weight` exists.
         // Found by op kind rather than by index: the post table gained its missing narrowing, and
         // an index would have moved silently.
-        let head = p
-            .post_nodes
-            .iter()
-            .find(|n| n.op_kind == PalwStepOpKindV1::MatMulQuant)
-            .expect("the head is a matmul");
+        let head = p.post_nodes.iter().find(|n| n.op_kind == PalwStepOpKindV1::MatMulQuant).expect("the head is a matmul");
         assert_eq!(head.weight_name, "token_embd.weight", "tie_word_embeddings is true");
         assert!(!names.contains(&"output.weight"));
     }
@@ -742,12 +740,12 @@ mod tests {
     #[test]
     fn a_qwen_step_is_adjudicated_from_one_tile_and_no_model() {
         use crate::palw_artifact::{PalwArtifactOperandV1, PalwProvenOperandsV1, artifact_leaf_v1, artifact_root_v1};
+        use crate::palw_legs::PalwCheckpointProfileV1;
         use crate::palw_step::{PalwStepCoordinateV1, canonical_step_coordinates, canonical_step_leaf_index};
         use crate::palw_step_leg::{
             PALW_STEP_LEG_OBJECT_VERSION_V1, PalwStepLegBuilderV1, PalwStepTileLeafV1, checkpoint_empty_root_v2,
             checkpoint_leg_root_v2, execution_commitment_root_v2, step_leg_root_v1, step_opening_v1,
         };
-        use crate::palw_legs::PalwCheckpointProfileV1;
         let g = probe_geometry();
         let p = qwen25_profile_v1(g).unwrap();
         let ctx = probe_context(&p);
@@ -916,7 +914,11 @@ mod tests {
     }
 
     /// The canonical tile width at a coordinate — the ragged last tile included."""
-    fn builder_tile_width(p: &PalwShapeProfileV3, ctx: &crate::palw_v2::PalwJobContextV2, coord: &crate::palw_step::PalwStepCoordinateV1) -> u32 {
+    fn builder_tile_width(
+        p: &PalwShapeProfileV3,
+        ctx: &crate::palw_v2::PalwJobContextV2,
+        coord: &crate::palw_step::PalwStepCoordinateV1,
+    ) -> u32 {
         let (node, _) = p.resolve_node_slot(coord.node_slot).unwrap();
         let kv_len = if coord.call_index == 0 {
             coord.position as u64 + 1

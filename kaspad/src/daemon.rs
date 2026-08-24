@@ -1198,7 +1198,7 @@ Do you confirm? (y/n)";
             kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.clone()),
             _ => None,
         };
-        let palw_court = palw_bundle.as_ref().map(|b| b.court.clone());
+        let palw_court = palw_bundle.as_ref().map(|b| b.court);
         let base_class_id = match &config.params.palw_consensus_mode {
             kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.base_class_id),
             _ => None,
@@ -1253,7 +1253,7 @@ Do you confirm? (y/n)";
                         // class is admissible at and therefore its id, so a producer resolving
                         // against a different court would look for a class the chain never
                         // registered.
-                        court: palw_court.clone().expect("a ConsensusV2 bundle was matched above"),
+                        court: palw_court.expect("a ConsensusV2 bundle was matched above"),
                         class_artifacts: args.palw_class_artifact.iter().map(std::path::PathBuf::from).collect(),
                         metal_worker: args.palw_metal_worker.as_ref().map(std::path::PathBuf::from),
                     },
@@ -1360,7 +1360,7 @@ Do you confirm? (y/n)";
         // The court, from the SAME bundle the mode check reads — a seat resolving a duty's class
         // against a different court would look for a class the chain never registered.
         let panel_court = match &config_for_palw_panel.params.palw_consensus_mode {
-            kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) => Some(b.court.clone()),
+            kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) => Some(b.court),
             _ => None,
         };
         let v2 = panel_court.is_some();
@@ -1380,7 +1380,7 @@ Do you confirm? (y/n)";
                         bond: bond.clone().unwrap_or_default(),
                         fee_outpoint: args.palw_fee_outpoint.clone(),
                         state_dir: app_dir.join(network.to_prefixed()).join("palw-panel"),
-                        court: panel_court.clone().expect("v2 is true exactly when this is Some"),
+                        court: panel_court.expect("v2 is true exactly when this is Some"),
                         class_artifacts: args.palw_class_artifact.iter().map(std::path::PathBuf::from).collect(),
                         challenge: args.palw_challenge || args.palw_drill_challenge_all,
                         // The same directory the producer writes to, so a node that produces can

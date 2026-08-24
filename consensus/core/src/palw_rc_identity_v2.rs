@@ -438,7 +438,7 @@ mod tests {
         use crate::palw_state_v2::PalwBondKeyV2;
 
         let artifact_root = h64(0xA7);
-        let bond = PalwBondKeyV2(crate::config::premine::premine_outpoint(0));
+        let _bond = PalwBondKeyV2(crate::config::premine::premine_outpoint(0));
         let params = crate::config::params::palw_rc_params_from_artifacts(artifact_root, seatable())
             .expect("the RC network derives and validates");
 
@@ -535,7 +535,7 @@ mod tests {
     /// starts.
     #[test]
     fn a_worker_carve_larger_than_the_networks_worker_share_is_refused() {
-        use crate::palw_state_v2::PalwBondKeyV2;
+        
 
         let mut params =
             crate::config::params::palw_rc_params_from_artifacts(h64(0xA7), seatable()).expect("the RC artifacts assemble");
@@ -646,15 +646,20 @@ mod tests {
                 let s = &b.state;
                 println!(
                     "RC windows: bind={} receipt={} challenge={} court={} epoch={}",
-                    s.window_bind(), s.window_receipt(), s.window_challenge(), s.window_court(), s.epoch_length()
+                    s.window_bind(),
+                    s.window_receipt(),
+                    s.window_challenge(),
+                    s.window_court(),
+                    s.epoch_length()
                 );
-                println!("  a claim reaches Final at bind+receipt+challenge = {} DAA after acceptance",
-                    s.window_bind() + s.window_receipt() + s.window_challenge());
+                println!(
+                    "  a claim reaches Final at bind+receipt+challenge = {} DAA after acceptance",
+                    s.window_bind() + s.window_receipt() + s.window_challenge()
+                );
             }
             _ => println!("this build ships no bundle"),
         }
     }
-
 
     /// Print the SHIPPED panel and bond parameters — what liveness actually requires.
     /// `cargo test -p kaspa-consensus-core --lib dump_liveness_requirements -- --ignored --nocapture`
@@ -666,12 +671,16 @@ mod tests {
             crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) => {
                 println!("panel:  seats={} quorum={} anchor_delay={}", b.panel.seat_count(), b.panel.quorum(), b.panel.anchor_delay());
                 println!("min_class_panel: {:?}", b.min_class_panel);
-                println!("state:  bind={} receipt={} challenge={} court={}",
-                    b.state.window_bind(), b.state.window_receipt(), b.state.window_challenge(), b.state.window_court());
+                println!(
+                    "state:  bind={} receipt={} challenge={} court={}",
+                    b.state.window_bind(),
+                    b.state.window_receipt(),
+                    b.state.window_challenge(),
+                    b.state.window_court()
+                );
                 println!("min_collateral_sompi={}", b.state.min_collateral_sompi());
             }
             _ => println!("no bundle"),
         }
     }
-
 }

@@ -631,7 +631,7 @@ mod tests {
         let mut cache = crate::engine::KvCache::new(&a);
         let (_, probe) = engine.forward_token_probed(&mut cache, 3, 0).expect("the pass completes");
         let tiles = base0_step_tiles_v1(&profile, &ctx, leaf_count, 0, 0, &probe.steps).expect("the rows tile");
-        let root = base0_step_merkle_root_v1(&tiles).expect("a populated space has a root");
+        let _root = base0_step_merkle_root_v1(&tiles).expect("a populated space has a root");
 
         let binding = |tiles: &Base0StepTilesV1| {
             base0_binding_from_capture_v1(&profile, &ctx, tiles, Hash64::default(), Hash64::default())
@@ -672,7 +672,7 @@ mod tests {
         let (_, _, row) = lying.iter_mut().find(|(l, slot, _)| *l == 0 && *slot == 34).expect("the step is captured");
         row[0] = row[0].wrapping_add(1);
         let lying_tiles = base0_step_tiles_v1(&profile, &ctx, leaf_count, 0, 0, &lying).expect("the rows tile");
-        let lying_root = base0_step_merkle_root_v1(&lying_tiles).expect("rooted");
+        let _lying_root = base0_step_merkle_root_v1(&lying_tiles).expect("rooted");
         let fraud = base0_refutation_from_capture_v1(&profile, &ctx, &lying_tiles, binding(&lying_tiles), target, Vec::new(), None)
             .expect("a tampered capture assembles the same way");
         let verdict =

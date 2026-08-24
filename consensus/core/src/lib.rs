@@ -133,17 +133,92 @@ pub mod merkle;
 pub mod mining_rules;
 pub mod muhash;
 pub mod network;
-/// MISAKA PALW execution-commitment legs v1 (ADR-0027 consequences): the activation and
-/// checkpoint commitments. Land-stage, consensus-inert.
-pub mod palw_legs;
-/// MISAKA PALW canonical reference arithmetic v1 (ADR-0027 §2): integer soft-float
-/// adjudication maths. Land-stage, consensus-inert.
-pub mod palw_reference;
+pub mod palw_admission_v2;
+/// MISAKA PALW adversarial suite (§12 gate / v0.1 §29 gate 4): a permanent red-team harness of
+/// executable attacks against the Layer-1 machinery — reassociation, FMA smuggling,
+/// transcendental substitution, manufactured mismatch, cross-class collusion, flash-attention
+/// re-enable, non-finite smuggling, domain bridges, kernel-id forgery, layer-kind confusion,
+/// routing-key relabeling, ready-set forgery, unchecked-credit refusal (ADR-0034).
+/// Test-only (`#![cfg(test)]`); ships with the crate's test run.
+#[cfg(test)]
+pub mod palw_adversarial;
+pub mod palw_artifact;
+pub mod palw_attempt_v2;
+pub mod palw_backend;
+pub mod palw_base0;
+pub mod palw_base0_ops;
+pub mod palw_base0_profile;
+/// MISAKA PALW bisection ladder (ADR-0027 §1's degraded path): the pure state machine that
+/// forces incremental disclosure when a miner withholds state — pinned midpoints, monotonic
+/// rung deadlines, attributable no-show offenses, log-bounded convergence to the terminal
+/// one-step check. Land-stage, consensus-inert.
+pub mod palw_bisect;
+/// MISAKA PALW ADR-0038 land-stage modules: block-work identity/signature binding, DAG-native
+/// verification receipts, the receipt-licensed weight ramp, per-class difficulty domains,
+/// the coinbase-carried block commitment, the budgeted credit batch, and the Track-D catalog
+/// coverage gate. All consensus-inert — nothing in validation, fork choice or the header
+/// pipeline consumes any of it until the ADR-0038 change set wires and activates together.
+pub mod palw_block_commitment;
 /// MISAKA PALW chain carriage v1 (ADR-0029): the Stage-0 magic envelope, the five payload
 /// bodies, their caps, and the stateless validators that become the Stage-1 admission
 /// validators verbatim. Land-stage, consensus-inert — the Stage-0 consumer is an external
 /// watcher; no transaction validation or store reads any of it.
 pub mod palw_carriage;
+pub mod palw_catalog_coverage;
+pub mod palw_chain_weight;
+pub mod palw_class_admission_v2;
+pub mod palw_class_daa;
+pub mod palw_court_v2;
+/// MISAKA PALW class registration (B12): the object every "pinned at registration" sentence
+/// across ADR-0026…0033 meant — measured identities, the derived credited ceiling, windows,
+/// commitment form and adjudication depth, with the validation that makes an incoherent
+/// registration unrepresentable. Land-stage, consensus-inert (ADR-0033's gate is its first
+/// consumer).
+pub mod palw_credit;
+pub mod palw_credit_batch;
+pub mod palw_dispute;
+pub mod palw_exposure;
+pub mod palw_facts;
+pub mod palw_fork_authority_v2;
+pub mod palw_fork_choice;
+pub mod palw_fp_admission_v3;
+pub mod palw_fp_beacon_v3;
+pub mod palw_fp_devnet_v3;
+pub mod palw_fp_execution_v3;
+pub mod palw_fp_objects_v3;
+pub mod palw_freeprompt_v3;
+pub mod palw_genesis_v2;
+pub mod palw_job_identity;
+pub mod palw_job_ledger;
+pub mod palw_job_panel;
+/// MISAKA PALW asynchronous job state machine (ADR-0037 Decision 2): the closed, monotone
+/// per-job status algebra and the `PalwJobStateV3` object that replaces the per-block
+/// challenge-horizon walk on value networks. Encodes I8 (refutation locks, never destroys),
+/// I9 (only exact conviction or objective no-show destroys), I10 (`Unadjudicable` slashes
+/// no one, credits nothing, freezes the class). Consensus-inert — nothing constructs it on
+/// any shipped network; the Track-C change set is its first consumer.
+pub mod palw_job_state;
+/// MISAKA PALW execution-commitment legs v1 (ADR-0027 consequences): the activation and
+/// checkpoint commitments. Land-stage, consensus-inert.
+pub mod palw_legs;
+pub mod palw_lifecycle_objects_v2;
+pub mod palw_mode_v2;
+pub mod palw_panel_v2;
+pub mod palw_producer_v2;
+pub mod palw_pwu;
+pub mod palw_qwen25_profile;
+pub mod palw_rc_identity_v2;
+pub mod palw_receipt;
+/// MISAKA PALW canonical reference arithmetic v1 (ADR-0027 §2): integer soft-float
+/// adjudication maths. Land-stage, consensus-inert.
+pub mod palw_reference;
+pub mod palw_registry;
+pub mod palw_reward_v2;
+/// MISAKA PALW re-verification routing (ADR-0034): the four execution-class families, five
+/// model bands, and the binding-aware eligibility/coverage machinery. Consensus-inert —
+/// computed and logged only; no verdict, credit or acceptance path reads any of it, and the
+/// module exposes no crediting API at all (`FINALIZED_WITHOUT_REPLAY` is untypable).
+pub mod palw_routing;
 /// MISAKA PALW challenge scheduling (ADR-0028): assignment tickets, DAA windows and the
 /// Stage-0 shadow ledger that measures `P_check`, no-show and replay cost. Land-stage,
 /// consensus-inert — computed and logged only; nothing consumes it.
@@ -151,6 +226,7 @@ pub mod palw_schedule;
 /// MISAKA PALW-S slash objects (ADR-0027): unilateral, objectively-checkable evidence.
 /// Land-stage, consensus-inert — no slashing is enabled by this module existing.
 pub mod palw_slash;
+pub mod palw_state_v2;
 /// MISAKA PALW step function v1 (ADR-0030): the frozen operator taxonomy, the shape-profile
 /// v3 schema and identity, and the step-index bijection a one-step refutation names steps
 /// with. Land-stage, consensus-inert — every profile VALUE is registration-measured; only
@@ -160,99 +236,23 @@ pub mod palw_step;
 /// chunked checkpoint leg — a NEW scheme family; v1 and its goldens do not move. Land-stage,
 /// consensus-inert.
 pub mod palw_step_leg;
+/// MISAKA PALW `ExecutionStepRefutationV1` (ADR-0027 §1 / ADR-0030 §4): the arithmetic
+/// one-step conviction — canonical-input derivation, the kernel-program catalog, and the
+/// three-way verdict (convicted / NoFaultFound / unadjudicable). Land-stage, consensus-inert.
+pub mod palw_step_refute;
+pub mod palw_terminal;
 /// MISAKA PALW canonical transcendentals (ADR-0031): transcriptions of the SPECIFIC exp/log
 /// algorithms the pinned classes run (ggml's vector polynomial; glibc 2.39's expf/logf in
 /// both contraction variants), written in ruleset-v2 arithmetic. Land-stage, consensus-inert;
 /// exact-bits validation against the class binaries is the registration gate.
 pub mod palw_transcendental;
-/// MISAKA PALW `ExecutionStepRefutationV1` (ADR-0027 §1 / ADR-0030 §4): the arithmetic
-/// one-step conviction — canonical-input derivation, the kernel-program catalog, and the
-/// three-way verdict (convicted / NoFaultFound / unadjudicable). Land-stage, consensus-inert.
-pub mod palw_step_refute;
-/// MISAKA PALW bisection ladder (ADR-0027 §1's degraded path): the pure state machine that
-/// forces incremental disclosure when a miner withholds state — pinned midpoints, monotonic
-/// rung deadlines, attributable no-show offenses, log-bounded convergence to the terminal
-/// one-step check. Land-stage, consensus-inert.
-pub mod palw_bisect;
-/// MISAKA PALW class registration (B12): the object every "pinned at registration" sentence
-/// across ADR-0026…0033 meant — measured identities, the derived credited ceiling, windows,
-/// commitment form and adjudication depth, with the validation that makes an incoherent
-/// registration unrepresentable. Land-stage, consensus-inert (ADR-0033's gate is its first
-/// consumer).
-pub mod palw_credit;
-/// MISAKA PALW ADR-0038 land-stage modules: block-work identity/signature binding, DAG-native
-/// verification receipts, the receipt-licensed weight ramp, per-class difficulty domains,
-/// the coinbase-carried block commitment, the budgeted credit batch, and the Track-D catalog
-/// coverage gate. All consensus-inert — nothing in validation, fork choice or the header
-/// pipeline consumes any of it until the ADR-0038 change set wires and activates together.
-pub mod palw_block_commitment;
-pub mod palw_catalog_coverage;
-pub mod palw_class_admission_v2;
-pub mod palw_class_daa;
-pub mod palw_credit_batch;
-pub mod palw_dispute;
-pub mod palw_job_identity;
-pub mod palw_job_ledger;
-pub mod palw_job_panel;
-pub mod palw_backend;
-pub mod palw_base0;
-pub mod palw_base0_ops;
-pub mod palw_chain_weight;
-pub mod palw_attempt_v2;
-pub mod palw_artifact;
-pub mod palw_terminal;
-pub mod palw_exposure;
-pub mod palw_fork_choice;
-pub mod palw_state_v2;
-pub mod palw_admission_v2;
-pub mod palw_panel_v2;
-pub mod palw_court_v2;
-pub mod palw_fork_authority_v2;
-pub mod palw_reward_v2;
-pub mod palw_mode_v2;
-pub mod palw_freeprompt_v3;
-pub mod palw_fp_admission_v3;
-pub mod palw_fp_devnet_v3;
-pub mod palw_fp_beacon_v3;
-pub mod palw_fp_execution_v3;
-pub mod palw_base0_profile;
-pub mod palw_qwen25_profile;
-pub mod palw_fp_objects_v3;
-pub mod palw_lifecycle_objects_v2;
-pub mod palw_facts;
-pub mod palw_genesis_v2;
-pub mod palw_rc_identity_v2;
-pub mod palw_pwu;
-pub mod palw_producer_v2;
-pub mod palw_receipt;
-pub mod palw_weight;
-/// MISAKA PALW asynchronous job state machine (ADR-0037 Decision 2): the closed, monotone
-/// per-job status algebra and the `PalwJobStateV3` object that replaces the per-block
-/// challenge-horizon walk on value networks. Encodes I8 (refutation locks, never destroys),
-/// I9 (only exact conviction or objective no-show destroys), I10 (`Unadjudicable` slashes
-/// no one, credits nothing, freezes the class). Consensus-inert — nothing constructs it on
-/// any shipped network; the Track-C change set is its first consumer.
-pub mod palw_job_state;
-pub mod palw_registry;
-/// MISAKA PALW re-verification routing (ADR-0034): the four execution-class families, five
-/// model bands, and the binding-aware eligibility/coverage machinery. Consensus-inert —
-/// computed and logged only; no verdict, credit or acceptance path reads any of it, and the
-/// module exposes no crediting API at all (`FINALIZED_WITHOUT_REPLAY` is untypable).
-pub mod palw_routing;
-/// MISAKA PALW adversarial suite (§12 gate / v0.1 §29 gate 4): a permanent red-team harness of
-/// executable attacks against the Layer-1 machinery — reassociation, FMA smuggling,
-/// transcendental substitution, manufactured mismatch, cross-class collusion, flash-attention
-/// re-enable, non-finite smuggling, domain bridges, kernel-id forgery, layer-kind confusion,
-/// routing-key relabeling, ready-set forgery, unchecked-credit refusal (ADR-0034).
-/// Test-only (`#![cfg(test)]`); ships with the crate's test run.
-#[cfg(test)]
-pub mod palw_adversarial;
 /// MISAKA PALW full-logits trace scheme v2 (docs/palw-full-logits-trace-v2-design.md):
 /// Land-stage types, domains and preimage layouts only. Consensus-inert by design —
 /// nothing in validation, fork choice or the header pipeline may consume it until the
 /// staged activations pass their gates. `palw_execution_algo_id = 2` in here is a
 /// PALW-internal namespace, NOT the header-level `pow_algo_id = 2` (historical Argon2id).
 pub mod palw_v2;
+pub mod palw_weight;
 /// kaspa-pq Phase 8 (PR-8.3): Layer 0 PoW finalizer + difficulty-lift
 /// helpers (see docs/adr/0007-layered-pow.md). Self-contained; the
 /// PoW-validation wiring step is PR-8.6.

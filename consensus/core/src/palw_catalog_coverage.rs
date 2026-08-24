@@ -144,15 +144,10 @@ pub enum PalwCoverageError {
 /// [`crate::palw_step_refute::kernel_can_serve_node_v1`] — the statement lives next to the code
 /// that does the serving, so the two cannot drift. A class that fails here is refused at
 /// registration, which is when it is still someone's problem to fix.
-pub fn verify_profile_coverage_v1(
-    profile: &crate::palw_step::PalwShapeProfileV3,
-) -> Result<(), PalwCoverageError> {
-    for (table, nodes) in [
-        ("pre", &profile.pre_nodes),
-        ("gdn", &profile.gdn_nodes),
-        ("attn", &profile.attn_nodes),
-        ("post", &profile.post_nodes),
-    ] {
+pub fn verify_profile_coverage_v1(profile: &crate::palw_step::PalwShapeProfileV3) -> Result<(), PalwCoverageError> {
+    for (table, nodes) in
+        [("pre", &profile.pre_nodes), ("gdn", &profile.gdn_nodes), ("attn", &profile.attn_nodes), ("post", &profile.post_nodes)]
+    {
         for (slot, node) in nodes.iter().enumerate() {
             if let Err(why) = crate::palw_step_refute::kernel_can_serve_node_v1(node, table == "pre") {
                 return Err(PalwCoverageError::NodeNotServable { table, slot: slot as u32, why });
@@ -248,7 +243,6 @@ fn coverage_digest_v1(reachable: &PalwReachableKernelSetV1) -> Hash64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-
 
     /// **PALW-BASE-0 is adjudicable, measured against THIS BUILD's table (ADR-0039 1a, A-6).**
     ///
@@ -382,7 +376,10 @@ mod tests {
     fn certificates_are_invariant_under_insertion_order() {
         let mut backward = three_real();
         backward.reverse();
-        assert_eq!(verify_catalog_coverage_v1(&reachable(0xC1, &three_real())).unwrap(), verify_catalog_coverage_v1(&reachable(0xC1, &backward)).unwrap());
+        assert_eq!(
+            verify_catalog_coverage_v1(&reachable(0xC1, &three_real())).unwrap(),
+            verify_catalog_coverage_v1(&reachable(0xC1, &backward)).unwrap()
+        );
     }
 
     /// **The seal, pinned so a `derive` cannot quietly break it again.**
@@ -465,7 +462,11 @@ mod base0_closure_tests {
             execution_class_id: class(),
             kernel_ids: KDESC_BASE0_ALL.iter().map(|d| kernel_semantics_id_v1(d)).collect(),
         };
-        assert_eq!(reachable.kernel_ids.len(), 10, "ADR-0040 D + H: ten ops — Decision H added `Rescale` (op 9), without which the other nine cannot compute");
+        assert_eq!(
+            reachable.kernel_ids.len(),
+            10,
+            "ADR-0040 D + H: ten ops — Decision H added `Rescale` (op 9), without which the other nine cannot compute"
+        );
         let certificate = verify_catalog_coverage_v1(&reachable).expect("BASE-0 must be fully catalogued");
         assert_eq!(certificate.reachable_count, 10);
         assert_eq!(certificate.execution_class_id, class());

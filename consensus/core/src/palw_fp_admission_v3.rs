@@ -147,8 +147,7 @@ pub fn check_palw_receipt_spend_admission_v3(
     }
 
     // 5. The lottery — the one and only place a receipt block's work is priced (see module doc).
-    let target =
-        state.receipt_target(&claim.class_id).ok_or(PalwFpAdmissionV3Error::ReceiptTargetMissing(claim.class_id))?.target;
+    let target = state.receipt_target(&claim.class_id).ok_or(PalwFpAdmissionV3Error::ReceiptTargetMissing(claim.class_id))?.target;
     let ticket = fp_quantum_ticket_v3(spend.network_domain, spend.beacon_block, spend.claim_id, spend.quantum_index);
     if !palw_ticket_admits_v1(ticket, target) {
         return Err(PalwFpAdmissionV3Error::TicketRejected { ticket, target });
@@ -207,8 +206,8 @@ mod tests {
     use super::*;
     use crate::palw_freeprompt_v3::{PALW_FP_V3_VERSION, PalwReceiptSpendUnsignedV3};
     use crate::palw_state_v2::{
-        PalwBlockContextV2, PalwChainStateV2, PalwConsensusObjectV2, PalwPanelSeatV2, PalwPwuRuleV2,
-        PalwStateParamsV2, apply_palw_transition_v2,
+        PalwBlockContextV2, PalwChainStateV2, PalwConsensusObjectV2, PalwPanelSeatV2, PalwPwuRuleV2, PalwStateParamsV2,
+        apply_palw_transition_v2,
     };
     use crate::tx::{TransactionId, TransactionOutpoint};
     use kaspa_hashes::Hash64 as H;
@@ -250,7 +249,9 @@ mod tests {
                 pubkey: vec![7; 4],
                 operator_pubkey: vec![21; 8],
                 collateral: 1_000,
-                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11), signature: Vec::new() },
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+                signature: Vec::new(),
+            },
         ]
     }
 
@@ -319,7 +320,12 @@ mod tests {
         }
     }
 
-    fn admit(state: &PalwChainStateV2, c: &PalwBlockContextV2, b: &PalwBeaconFactV3, env: &PalwReceiptSpendEnvelopeV3) -> Result<Hash64, PalwFpAdmissionV3Error> {
+    fn admit(
+        state: &PalwChainStateV2,
+        c: &PalwBlockContextV2,
+        b: &PalwBeaconFactV3,
+        env: &PalwReceiptSpendEnvelopeV3,
+    ) -> Result<Hash64, PalwFpAdmissionV3Error> {
         check_palw_receipt_spend_admission_v3(state, c, MATURITY, USE_WINDOW, b, env)
     }
 
@@ -339,7 +345,10 @@ mod tests {
         let genesis = PalwChainStateV2::genesis();
         let (registered, _) = apply_palw_transition_v2(&genesis, &p, &ctx(1, 100, 1), &registrations(u128::MAX), None).unwrap();
 
-        assert_eq!(admit(&registered, &ctx(6, 135, 6), &beacon(), &spend(0)).unwrap_err(), PalwFpAdmissionV3Error::ClaimMissing(h64(0xFC)));
+        assert_eq!(
+            admit(&registered, &ctx(6, 135, 6), &beacon(), &spend(0)).unwrap_err(),
+            PalwFpAdmissionV3Error::ClaimMissing(h64(0xFC))
+        );
 
         // Committed but not certified.
         let commit = PalwConsensusObjectV2::FreePromptCommitted {
@@ -356,7 +365,10 @@ mod tests {
             trace_retention_daa: 999_999,
         };
         let (pending, _) = apply_palw_transition_v2(&registered, &p, &ctx(2, 101, 2), &[commit], None).unwrap();
-        assert_eq!(admit(&pending, &ctx(3, 102, 3), &beacon(), &spend(0)).unwrap_err(), PalwFpAdmissionV3Error::NotCertified(h64(0xFC)));
+        assert_eq!(
+            admit(&pending, &ctx(3, 102, 3), &beacon(), &spend(0)).unwrap_err(),
+            PalwFpAdmissionV3Error::NotCertified(h64(0xFC))
+        );
     }
 
     /// Item 2: out-of-range and already-spent quanta are named, and the spent set the STATE
@@ -457,9 +469,15 @@ mod tests {
         assert_eq!(admit(&state, &ctx(6, 135, 6), &beacon(), &foreign).unwrap_err(), PalwFpAdmissionV3Error::ProducerNotExecutor);
 
         // 6b. A retiring bond backs no new blocks.
-        let retire = PalwConsensusObjectV2::BondRetireRequested { bond: crate::palw_state_v2::PalwBondKeyV2(bond_op(1)), signature: vec![0xEE; 8] };
+        let retire = PalwConsensusObjectV2::BondRetireRequested {
+            bond: crate::palw_state_v2::PalwBondKeyV2(bond_op(1)),
+            signature: vec![0xEE; 8],
+        };
         let (retiring, _) = apply_palw_transition_v2(&state, &p, &ctx(6, 130, 6), &[retire], None).unwrap();
-        assert!(matches!(admit(&retiring, &ctx(7, 135, 7), &beacon(), &spend(0)).unwrap_err(), PalwFpAdmissionV3Error::BondRetiring(_)));
+        assert!(matches!(
+            admit(&retiring, &ctx(7, 135, 7), &beacon(), &spend(0)).unwrap_err(),
+            PalwFpAdmissionV3Error::BondRetiring(_)
+        ));
 
         // 7. The carried key must be the bond's key.
         let mut wrong_key = spend(0);

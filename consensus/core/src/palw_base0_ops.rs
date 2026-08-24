@@ -27,7 +27,9 @@ use thiserror::Error;
 
 #[derive(Error, Debug, Clone, PartialEq, Eq)]
 pub enum PalwBase0OpError {
-    #[error("dot length {got} exceeds MAX_DOT_LEN {MAX_DOT_LEN} — beyond it an i32 accumulator can overflow, and overflow costs the free reduction order (ADR-0040 C3/E)")]
+    #[error(
+        "dot length {got} exceeds MAX_DOT_LEN {MAX_DOT_LEN} — beyond it an i32 accumulator can overflow, and overflow costs the free reduction order (ADR-0040 C3/E)"
+    )]
     DotTooLong { got: usize },
     #[error("operand lengths differ: {a} vs {b}")]
     LengthMismatch { a: usize, b: usize },
@@ -223,7 +225,7 @@ pub fn rope_table(x: &[i32], cos_q: &[i32], sin_q: &[i32]) -> Result<Vec<i32>, P
     if x.is_empty() {
         return Err(PalwBase0OpError::Empty);
     }
-    if x.len() % 2 != 0 {
+    if !x.len().is_multiple_of(2) {
         return Err(PalwBase0OpError::NotAMultiple { got: x.len(), unit: 2 });
     }
     let pairs = x.len() / 2;
@@ -338,8 +340,8 @@ mod tests {
     /// blocked or threaded GEMM produces — gives the identical `i32`.
     #[test]
     fn a_tiled_dot_product_equals_the_whole_one() {
-        let a: Vec<i8> = (0..1_024).map(|i| (((i * 37) % 255) as i32 - 127) as i8).collect();
-        let b: Vec<i8> = (0..1_024).map(|i| (((i * 101) % 255) as i32 - 127) as i8).collect();
+        let a: Vec<i8> = (0..1_024).map(|i| (((i * 37) % 255) - 127) as i8).collect();
+        let b: Vec<i8> = (0..1_024).map(|i| (((i * 101) % 255) - 127) as i8).collect();
         let whole = dot_i8(&a, &b).unwrap();
         for tile in [1usize, 7, 64, 256, 512] {
             let tiled: i32 = a.chunks(tile).zip(b.chunks(tile)).map(|(x, y)| dot_i8(x, y).unwrap()).sum();
@@ -512,7 +514,7 @@ mod tests {
         // Monotone increasing.
         let mut previous = i32::MIN;
         for step in -80..=80 {
-            let s = int_sigmoid((step * ONE as i64 / 10) as i32);
+            let s = int_sigmoid((step * ONE / 10) as i32);
             assert!(s >= previous, "sigmoid must be non-decreasing at {step}");
             previous = s;
         }

@@ -19,8 +19,7 @@ use kaspa_consensus_core::palw_reference::{
 };
 use misaka_palw_reference2::{
     REF2_CANONICAL_NAN16, REF2_CANONICAL_NAN64, ref2_add64, ref2_div, ref2_div64, ref2_f16_to_f32, ref2_f32_to_f16, ref2_fma,
-    ref2_fma64, ref2_mul64, ref2_narrow_f64_to_f32, ref2_neg64, ref2_sqrt, ref2_sub64, ref2_sub64_direct,
-    ref2_widen_f32_to_f64,
+    ref2_fma64, ref2_mul64, ref2_narrow_f64_to_f32, ref2_neg64, ref2_sqrt, ref2_sub64, ref2_sub64_direct, ref2_widen_f32_to_f64,
 };
 
 const SIGN_MASK: u32 = 0x8000_0000;
@@ -427,7 +426,7 @@ fn f32_to_f16_random_500k_agree_exactly() {
         assert_eq!(ref2_f32_to_f16(a), ref_f32_to_f16_v2(a), "CRITICAL f32->f16 disagreement #{i} a={a:08x}");
         // And in the f16-representable neighborhood, where rounding actually decides:
         // squash the exponent into [104, 143] (2^-24 .. 2^16).
-        let squashed = (a & 0x807F_FFFF) | (((104 + (rng.next_u32() % 40)) as u32) << 23);
+        let squashed = (a & 0x807F_FFFF) | ((104 + (rng.next_u32() % 40)) << 23);
         assert_eq!(
             ref2_f32_to_f16(squashed),
             ref_f32_to_f16_v2(squashed),

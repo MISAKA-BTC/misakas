@@ -241,9 +241,7 @@ impl TestConsensus {
                     {
                         target = *initial_target;
                         per_inference = match pwu_rule {
-                            kaspa_consensus_core::palw_state_v2::PalwPwuRuleV2::DerivedV1 { pwu_per_inference } => {
-                                *pwu_per_inference
-                            }
+                            kaspa_consensus_core::palw_state_v2::PalwPwuRuleV2::DerivedV1 { pwu_per_inference } => *pwu_per_inference,
                             kaspa_consensus_core::palw_state_v2::PalwPwuRuleV2::MaxPerAttempt(cap) => *cap,
                         };
                     }

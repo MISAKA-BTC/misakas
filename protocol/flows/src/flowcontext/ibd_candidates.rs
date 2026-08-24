@@ -1170,7 +1170,10 @@ mod tests {
         assert_eq!(r.switches(), 1, "twenty re-syncs to one chain cost one switch");
         assert!(r.note_adoption(BlockHash::from_u64_word(2)), "a genuinely different lineage still counts");
         assert_eq!(r.switches(), 2);
-        assert!(r.note_adoption(BlockHash::from_u64_word(1)), "and switching BACK is a switch — that is the ping-pong the cap exists for");
+        assert!(
+            r.note_adoption(BlockHash::from_u64_word(1)),
+            "and switching BACK is a switch — that is the ping-pong the cap exists for"
+        );
         assert_eq!(r.switches(), 3);
     }
 

@@ -163,11 +163,7 @@ fn requantize_agrees_bit_for_bit() {
     let mut rng = Lcg::new(0x5EED_0004);
     for _ in 0..400_000 {
         let (acc, mult, shift) = (rng.i32(), rng.i32(), rng.below(32) as u8);
-        assert_eq!(
-            spec::requantize(acc, mult, shift),
-            ref2::ref2_requantize(acc, mult, shift),
-            "Requantize({acc}, {mult}, {shift})"
-        );
+        assert_eq!(spec::requantize(acc, mult, shift), ref2::ref2_requantize(acc, mult, shift), "Requantize({acc}, {mult}, {shift})");
     }
 }
 
@@ -188,11 +184,7 @@ fn rescale_agrees_bit_for_bit() {
     let mut rng = Lcg::new(0x5EED_0005);
     for _ in 0..400_000 {
         let (acc, mult, shift) = (rng.i32(), rng.i32(), rng.below(spec::RESCALE_MAX_SHIFT as u64 + 1) as u8);
-        assert_eq!(
-            spec::rescale_q(acc, mult, shift),
-            ref2::ref2_rescale_q(acc, mult, shift),
-            "Rescale({acc}, {mult}, {shift})"
-        );
+        assert_eq!(spec::rescale_q(acc, mult, shift), ref2::ref2_rescale_q(acc, mult, shift), "Rescale({acc}, {mult}, {shift})");
     }
 }
 
@@ -279,11 +271,8 @@ fn the_mantissa_decomposition_is_well_formed() {
         let (mantissa, exponent) = ref2::primitives::ref2_normalize(v).expect("v > 0");
         assert!((one..4 * one).contains(&mantissa), "mantissa {mantissa} outside [1, 4) for v={v}");
         // v ≈ mantissa · 4^exponent, within the floor divisions the normalisation performs.
-        let reconstructed = if exponent >= 0 {
-            mantissa * 4i128.pow(exponent as u32)
-        } else {
-            mantissa / 4i128.pow(exponent.unsigned_abs())
-        };
+        let reconstructed =
+            if exponent >= 0 { mantissa * 4i128.pow(exponent as u32) } else { mantissa / 4i128.pow(exponent.unsigned_abs()) };
         let error = (reconstructed - v as i128).abs();
         assert!(error * 1000 <= v as i128 + 1000, "v={v} reconstructed to {reconstructed}");
     }
@@ -424,22 +413,14 @@ fn requantize_agrees_with_vendored_gemmlowp() {
     for &acc in boundary_i32().iter() {
         for &mult in [i32::MAX, i32::MIN, 1 << 30, -(1 << 30), 1, -1, 0].iter() {
             for shift in 0..=31i32 {
-                assert_eq!(
-                    spec::requantize(acc, mult, shift as u8),
-                    composed(acc, mult, shift),
-                    "Requantize({acc}, {mult}, {shift})"
-                );
+                assert_eq!(spec::requantize(acc, mult, shift as u8), composed(acc, mult, shift), "Requantize({acc}, {mult}, {shift})");
             }
         }
     }
     let mut rng = Lcg::new(0x6EED_0003);
     for _ in 0..300_000 {
         let (acc, mult, shift) = (rng.i32(), rng.i32(), rng.below(32) as i32);
-        assert_eq!(
-            spec::requantize(acc, mult, shift as u8),
-            composed(acc, mult, shift),
-            "Requantize({acc}, {mult}, {shift})"
-        );
+        assert_eq!(spec::requantize(acc, mult, shift as u8), composed(acc, mult, shift), "Requantize({acc}, {mult}, {shift})");
     }
 }
 

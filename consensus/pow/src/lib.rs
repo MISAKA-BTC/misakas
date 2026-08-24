@@ -1006,7 +1006,10 @@ mod tests_pq {
             ("network_domain", Box::new(|a| a.network_domain = Hash64::from_u64_word(0x9999))),
             ("challenge", Box::new(|a| a.challenge = Hash64::from_u64_word(0x1234))),
             ("class_id", Box::new(|a| a.class_id = Hash64::from_u64_word(0xC2))),
-            ("executor_bond", Box::new(|a| a.executor_bond = kaspa_consensus_core::tx::TransactionOutpoint::new(Hash64::from_bytes([9u8; 64]), 2))),
+            (
+                "executor_bond",
+                Box::new(|a| a.executor_bond = kaspa_consensus_core::tx::TransactionOutpoint::new(Hash64::from_bytes([9u8; 64]), 2)),
+            ),
         ];
         for (field, mutate) in positional {
             let mut env = base.clone();
@@ -1023,10 +1026,7 @@ mod tests_pq {
         assert_eq!(state.calculate_pow_layer0(NONCE + 1), Err(PowLayer0Error::PalwV2ChallengeMismatch));
         let mut moved = dummy_header_algo(BITS, NONCE, TS + 1, POW_ALGO_ID_PALW_COMMITTED_V2);
         moved.palw_commitment = base.encode_wire();
-        assert_eq!(
-            StateLayer0::new(&moved, network_id).calculate_pow_layer0(NONCE),
-            Err(PowLayer0Error::PalwV2ChallengeMismatch)
-        );
+        assert_eq!(StateLayer0::new(&moved, network_id).calculate_pow_layer0(NONCE), Err(PowLayer0Error::PalwV2ChallengeMismatch));
 
         // Presence: an algo-6 header with an empty, garbage or wrong-family carrier has no work
         // to check — a named error and a failed proof header, never a panic.

@@ -108,8 +108,11 @@ fn main() {
         println!("cargo:rustc-link-search=native={build}/ggml/src/ggml-metal");
         println!("cargo:rustc-link-search=native={build}/ggml/src/ggml-blas");
     }
-    let libs: &[&str] =
-        if cpu_only { &["llama", "ggml", "ggml-base", "ggml-cpu"] } else { &["llama", "ggml", "ggml-base", "ggml-cpu", "ggml-metal", "ggml-blas"] };
+    let libs: &[&str] = if cpu_only {
+        &["llama", "ggml", "ggml-base", "ggml-cpu"]
+    } else {
+        &["llama", "ggml", "ggml-base", "ggml-cpu", "ggml-metal", "ggml-blas"]
+    };
     for lib in libs {
         println!("cargo:rustc-link-lib=static={lib}");
     }

@@ -19,16 +19,16 @@ use kaspa_consensus_core::dns_finality::{
 use kaspa_consensus_core::hashing::sighash::{Mldsa87SigHashReusedValuesUnsync, calc_mldsa87_signature_hash};
 use kaspa_consensus_core::hashing::sighash_type::SIG_HASH_ALL;
 use kaspa_consensus_core::mass::MassCalculator;
+use kaspa_consensus_core::palw_freeprompt_v3::{
+    PALW_FP_COMMITMENT_TX_MAX_BYTES, PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT, PALW_FP_V3_VERSION, PalwFpCommitmentTxPayloadV3,
+    PalwFreePromptCommitmentV3, fp_claim_id_v3,
+};
 use kaspa_consensus_core::subnets::{
     SUBNETWORK_ID_COMPUTE_CAPABILITY, SUBNETWORK_ID_COMPUTE_CERTIFICATE, SUBNETWORK_ID_COMPUTE_CHALLENGE,
-    SUBNETWORK_ID_COMPUTE_COMMITMENT, SUBNETWORK_ID_COMPUTE_VERDICT, SUBNETWORK_ID_NATIVE, SUBNETWORK_ID_PRECOMMIT_EVIDENCE,
-    SUBNETWORK_ID_SLASHING_EVIDENCE, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD, SUBNETWORK_ID_STAKE_BOND, SUBNETWORK_ID_STAKE_PRECOMMIT,
-    SUBNETWORK_ID_PALW_FP_COMMITMENT, SUBNETWORK_ID_STAKE_UNBOND, SUBNETWORK_ID_TOKEN_BURN, SUBNETWORK_ID_TOKEN_TRANSFER,
-    SubnetworkId,
-};
-use kaspa_consensus_core::palw_freeprompt_v3::{
-    PalwFpCommitmentTxPayloadV3, PalwFreePromptCommitmentV3, PALW_FP_COMMITMENT_TX_MAX_BYTES,
-    PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT, PALW_FP_V3_VERSION, fp_claim_id_v3,
+    SUBNETWORK_ID_COMPUTE_COMMITMENT, SUBNETWORK_ID_COMPUTE_VERDICT, SUBNETWORK_ID_NATIVE, SUBNETWORK_ID_PALW_FP_COMMITMENT,
+    SUBNETWORK_ID_PRECOMMIT_EVIDENCE, SUBNETWORK_ID_SLASHING_EVIDENCE, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD,
+    SUBNETWORK_ID_STAKE_BOND, SUBNETWORK_ID_STAKE_PRECOMMIT, SUBNETWORK_ID_STAKE_UNBOND, SUBNETWORK_ID_TOKEN_BURN,
+    SUBNETWORK_ID_TOKEN_TRANSFER, SubnetworkId,
 };
 use kaspa_consensus_core::token::{
     TOK_ASSET_ID, TOKEN_BURN_MLDSA87_CONTEXT, TOKEN_PAYLOAD_VERSION_V1, TOKEN_TRANSFER_MLDSA87_CONTEXT, TokenBurnPayload,
@@ -821,26 +821,27 @@ impl ValidatorKey {
     ) -> Result<Transaction, String> {
         // Sign the identity first so the payload carries a signature over exactly the bytes the
         // stateless check will re-derive.
-        let signature = self.sign_with_context(fp_claim_id_v3(&commitment).as_bytes().as_slice(), PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT).to_vec();
-        let payload = PalwFpCommitmentTxPayloadV3 {
-            version: PALW_FP_V3_VERSION,
-            commitment,
-            prompt_token_ids,
-            signature,
-        };
+        let signature =
+            self.sign_with_context(fp_claim_id_v3(&commitment).as_bytes().as_slice(), PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT).to_vec();
+        let payload = PalwFpCommitmentTxPayloadV3 { version: PALW_FP_V3_VERSION, commitment, prompt_token_ids, signature };
         // The same stateless rules a peer will apply, applied before spending a fee on them.
-        payload.validate_stateless_v3(network_domain, weights).map_err(|e| format!("free-prompt commitment is not admissible: {e}"))?;
+        payload
+            .validate_stateless_v3(network_domain, weights)
+            .map_err(|e| format!("free-prompt commitment is not admissible: {e}"))?;
         // …and the derivation the state machine will demand: a sub-quantum job never enters the
         // chain, so publishing one is paying a fee for a claim that can never act.
-        let (quanta, pwu) = freeprompt
-            .derive_quanta_and_pwu(payload.commitment.cu)
-            .ok_or_else(|| format!("free-prompt job earns no quanta at cu {} — it certifies nothing the chain can act on", payload.commitment.cu))?;
+        let (quanta, pwu) = freeprompt.derive_quanta_and_pwu(payload.commitment.cu).ok_or_else(|| {
+            format!("free-prompt job earns no quanta at cu {} — it certifies nothing the chain can act on", payload.commitment.cu)
+        })?;
         if quanta == 0 || pwu % (quanta as u64) != 0 || pwu / (quanta as u64) == 0 {
             return Err(format!("free-prompt derivation is not uniform ({pwu} pwu over {quanta} quanta)"));
         }
         let bytes = borsh::to_vec(&payload).map_err(|e| format!("cannot serialize the free-prompt commitment: {e}"))?;
         if bytes.len() > PALW_FP_COMMITMENT_TX_MAX_BYTES {
-            return Err(format!("free-prompt commitment payload is {} bytes, above the {PALW_FP_COMMITMENT_TX_MAX_BYTES} cap", bytes.len()));
+            return Err(format!(
+                "free-prompt commitment payload is {} bytes, above the {PALW_FP_COMMITMENT_TX_MAX_BYTES} cap",
+                bytes.len()
+            ));
         }
         self.build_funded_overlay_tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, bytes, funding_outpoint, funding, fee, false)
     }
@@ -1781,12 +1782,7 @@ pub fn is_spendable(is_coinbase: bool, block_daa_score: u64, virtual_daa: u64, c
 /// coinbase clears two gates, and this is the smaller one. See [`is_spendable_settled`]. A caller
 /// here is either spending a non-coinbase (where the two agree) or has not been audited yet, and
 /// the name is how the second kind stays findable.
-pub fn is_spendable_ignoring_settlement(
-    is_coinbase: bool,
-    block_daa_score: u64,
-    virtual_daa: u64,
-    coinbase_maturity: u64,
-) -> bool {
+pub fn is_spendable_ignoring_settlement(is_coinbase: bool, block_daa_score: u64, virtual_daa: u64, coinbase_maturity: u64) -> bool {
     if !is_coinbase {
         return true;
     }
@@ -1979,9 +1975,7 @@ mod tests {
         key: &ValidatorKey,
         weights: &kaspa_consensus_core::palw_freeprompt_v3::PalwFpCuWeightsV3,
     ) -> (PalwFreePromptCommitmentV3, Vec<u32>) {
-        use kaspa_consensus_core::palw_freeprompt_v3::{
-            PalwFpStopReasonV3, PalwFreePromptJobV3, fp_cu_v3, fp_trace_manifest_v3,
-        };
+        use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpStopReasonV3, PalwFreePromptJobV3, fp_cu_v3, fp_trace_manifest_v3};
         let ids: Vec<u32> = (0..96u32).collect();
         let job = PalwFreePromptJobV3 {
             version: PALW_FP_V3_VERSION,

@@ -302,6 +302,83 @@ pub fn base0_execute_for_attempt_v1(
     })
 }
 
+// ---------------------------------------------------------------------------------------------
+// The panel's half: reading back retained material and deciding a verdict
+// ---------------------------------------------------------------------------------------------
+
+/// The execution material a producer retains for `trace_retention_daa`, as it is stored.
+///
+/// `(binding, tiles, generated ids)` — everything a seat needs to decide whether the producer
+/// committed to what it actually computed, and everything a refutation is assembled from later.
+/// The canonical wire/disk encoding of the retained material — one codec, used by the producer's
+/// retention file, the P2P material broadcast, and the panel seat's decode, so the three cannot
+/// drift. borsh over the tuple, exactly the bytes `retain_execution` has always written.
+pub fn base0_material_encode_v1(run: &Base0ExecutionV1) -> Result<Vec<u8>, ProduceError> {
+    borsh::to_vec(&(&run.binding, &run.tiles.tiles, &run.logits_rows, &run.generated_token_ids))
+        .map_err(|_| ProduceError::Internal("the execution material is not serializable"))
+}
+
+/// Decode what [`base0_material_encode_v1`] produced. `Err` is a seat's honest `Unavailable` —
+/// bytes that do not decode are bytes that were not served.
+pub fn base0_material_decode_v1(bytes: &[u8]) -> Result<Base0RetainedMaterialV1, ProduceError> {
+    borsh::from_slice(bytes).map_err(|_| ProduceError::Internal("the served material does not decode"))
+}
+
+pub type Base0RetainedMaterialV1 = (
+    kaspa_consensus_core::palw_step_leg::PalwStepBindingV2,
+    Vec<(u64, kaspa_consensus_core::palw_step_leg::PalwStepTileLeafV1)>,
+    Vec<Vec<i32>>,
+    Vec<u32>,
+);
+
+/// **What a panel seat checks before it signs `Valid`.**
+///
+/// A seat's receipt is an attestation that the producer served material matching what its claim
+/// committed. The check that makes it more than a rubber stamp is the one the court would run:
+/// rebuild the step leg from the tiles and see whether it reproduces the `execution_root` the claim
+/// carries. A producer that committed one root and retained a different execution fails here —
+/// before any court, and without opening one.
+///
+/// `Err` is "I could not verify", which is a seat's honest `Unavailable`; `Ok(false)` is "the
+/// material does not match what was committed", which is the same verdict for a different reason.
+/// Neither is a conviction: convicting is the court's, on evidence a challenger assembles.
+pub fn base0_material_matches_claim_v1(
+    material: &Base0RetainedMaterialV1,
+    committed_execution_root: Hash64,
+    committed_trace_root: Hash64,
+) -> Result<bool, ProduceError> {
+    let (binding, tiles, logits_rows, generated) = material;
+    // The leg root over the retained tiles, recomputed rather than trusted: a producer that kept a
+    // binding whose root does not match its own tiles kept a commitment, not an execution.
+    let mut leaves = vec![Hash64::default(); binding.step_leaf_count as usize];
+    let ctx_hash = binding.job_context.context_hash();
+    let profile_hash = binding.shape_profile.shape_profile_id();
+    for (index, leaf) in tiles {
+        let Some(slot) = leaves.get_mut(*index as usize) else {
+            return Ok(false); // a tile outside the space it claims to fill
+        };
+        *slot = kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, leaf);
+    }
+    let Ok(root) = kaspa_consensus_core::palw_step_leg::step_merkle_root_v1(&leaves) else {
+        return Ok(false);
+    };
+    if root != binding.step_merkle_root {
+        return Ok(false);
+    }
+    // The logits rows and generated ids must REPRODUCE the integer trace root the binding
+    // carries — equality of the binding's field against the claim says the producer kept the
+    // right commitment; this says it kept the execution behind it, which is what a decode-side
+    // dispute (ADR-0049 Decision E) is adjudicated against.
+    if kaspa_consensus_core::palw_step_refute::base0_logits_trace_root_v1(&binding.job_context, logits_rows, generated)
+        != binding.full_logits_trace_root
+    {
+        return Ok(false);
+    }
+    // And the binding the producer kept must be the one its CLAIM committed — otherwise it retained
+    // a consistent execution of some other job.
+    Ok(binding.committed_execution_root == committed_execution_root && binding.full_logits_trace_root == committed_trace_root)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -632,16 +709,11 @@ mod tests {
         let (artifact, profile, ctx, prompt) = small_job();
         let run = base0_execute_for_attempt_v1(&artifact, &profile, &ctx, &prompt).expect("the job runs");
 
-        let honest = PalwBase0DecodeTokensV1 {
-            logits_rows: run.logits_rows.clone(),
-            generated_token_ids: run.generated_token_ids.clone(),
-        };
+        let honest =
+            PalwBase0DecodeTokensV1 { logits_rows: run.logits_rows.clone(), generated_token_ids: run.generated_token_ids.clone() };
         for p in 0..ctx.exact_decode_tokens {
             assert!(
-                matches!(
-                    check_base0_decode_token_refutation_v1(&run.binding, &honest, p),
-                    Err(PalwStepRefuteError::NoFaultFound)
-                ),
+                matches!(check_base0_decode_token_refutation_v1(&run.binding, &honest, p), Err(PalwStepRefuteError::NoFaultFound)),
                 "the engine's own selection clears at decode position {p}"
             );
         }
@@ -744,81 +816,4 @@ mod tests {
             Some(ProduceError::TokenOutOfVocab { token: 9_999, vocab: artifact.shape.vocab })
         );
     }
-}
-
-// ---------------------------------------------------------------------------------------------
-// The panel's half: reading back retained material and deciding a verdict
-// ---------------------------------------------------------------------------------------------
-
-/// The execution material a producer retains for `trace_retention_daa`, as it is stored.
-///
-/// `(binding, tiles, generated ids)` — everything a seat needs to decide whether the producer
-/// committed to what it actually computed, and everything a refutation is assembled from later.
-/// The canonical wire/disk encoding of the retained material — one codec, used by the producer's
-/// retention file, the P2P material broadcast, and the panel seat's decode, so the three cannot
-/// drift. borsh over the tuple, exactly the bytes `retain_execution` has always written.
-pub fn base0_material_encode_v1(run: &Base0ExecutionV1) -> Result<Vec<u8>, ProduceError> {
-    borsh::to_vec(&(&run.binding, &run.tiles.tiles, &run.logits_rows, &run.generated_token_ids))
-        .map_err(|_| ProduceError::Internal("the execution material is not serializable"))
-}
-
-/// Decode what [`base0_material_encode_v1`] produced. `Err` is a seat's honest `Unavailable` —
-/// bytes that do not decode are bytes that were not served.
-pub fn base0_material_decode_v1(bytes: &[u8]) -> Result<Base0RetainedMaterialV1, ProduceError> {
-    borsh::from_slice(bytes).map_err(|_| ProduceError::Internal("the served material does not decode"))
-}
-
-pub type Base0RetainedMaterialV1 = (
-    kaspa_consensus_core::palw_step_leg::PalwStepBindingV2,
-    Vec<(u64, kaspa_consensus_core::palw_step_leg::PalwStepTileLeafV1)>,
-    Vec<Vec<i32>>,
-    Vec<u32>,
-);
-
-/// **What a panel seat checks before it signs `Valid`.**
-///
-/// A seat's receipt is an attestation that the producer served material matching what its claim
-/// committed. The check that makes it more than a rubber stamp is the one the court would run:
-/// rebuild the step leg from the tiles and see whether it reproduces the `execution_root` the claim
-/// carries. A producer that committed one root and retained a different execution fails here —
-/// before any court, and without opening one.
-///
-/// `Err` is "I could not verify", which is a seat's honest `Unavailable`; `Ok(false)` is "the
-/// material does not match what was committed", which is the same verdict for a different reason.
-/// Neither is a conviction: convicting is the court's, on evidence a challenger assembles.
-pub fn base0_material_matches_claim_v1(
-    material: &Base0RetainedMaterialV1,
-    committed_execution_root: Hash64,
-    committed_trace_root: Hash64,
-) -> Result<bool, ProduceError> {
-    let (binding, tiles, logits_rows, generated) = material;
-    // The leg root over the retained tiles, recomputed rather than trusted: a producer that kept a
-    // binding whose root does not match its own tiles kept a commitment, not an execution.
-    let mut leaves = vec![Hash64::default(); binding.step_leaf_count as usize];
-    let ctx_hash = binding.job_context.context_hash();
-    let profile_hash = binding.shape_profile.shape_profile_id();
-    for (index, leaf) in tiles {
-        let Some(slot) = leaves.get_mut(*index as usize) else {
-            return Ok(false); // a tile outside the space it claims to fill
-        };
-        *slot = kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, leaf);
-    }
-    let Ok(root) = kaspa_consensus_core::palw_step_leg::step_merkle_root_v1(&leaves) else {
-        return Ok(false);
-    };
-    if root != binding.step_merkle_root {
-        return Ok(false);
-    }
-    // The logits rows and generated ids must REPRODUCE the integer trace root the binding
-    // carries — equality of the binding's field against the claim says the producer kept the
-    // right commitment; this says it kept the execution behind it, which is what a decode-side
-    // dispute (ADR-0049 Decision E) is adjudicated against.
-    if kaspa_consensus_core::palw_step_refute::base0_logits_trace_root_v1(&binding.job_context, logits_rows, generated)
-        != binding.full_logits_trace_root
-    {
-        return Ok(false);
-    }
-    // And the binding the producer kept must be the one its CLAIM committed — otherwise it retained
-    // a consistent execution of some other job.
-    Ok(binding.committed_execution_root == committed_execution_root && binding.full_logits_trace_root == committed_trace_root)
 }

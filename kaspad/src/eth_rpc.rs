@@ -1199,7 +1199,7 @@ mod tests {
     /// A linear extension (no reorg) emits only attached events, removed=false.
     #[test]
     fn reorg_ordered_linear_extension() {
-        let pairs = reorg_ordered::<u8, u8>(&[], &[b'A'], |_| vec![1, 2]);
+        let pairs = reorg_ordered::<u8, u8>(&[], b"A", |_| vec![1, 2]);
         assert_eq!(pairs, vec![(1, false), (2, false)]);
     }
 }

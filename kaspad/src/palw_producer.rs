@@ -44,6 +44,7 @@ use kaspa_consensus_core::palw_attempt_v2::{
     PALW_ATTEMPT_V2_MLDSA87_CONTEXT, PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, attempt_id_v2,
     challenge_v2, class_ticket_v2, palw_network_domain_v2,
 };
+use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
 use kaspa_consensus_core::palw_producer_v2::PalwProducerFactsV2;
 use kaspa_consensus_core::tx::TransactionOutpoint;
 use kaspa_consensusmanager::ConsensusManager;
@@ -52,7 +53,6 @@ use kaspa_core::{info, trace, warn};
 use kaspa_hashes::Hash64;
 use kaspa_mining::manager::MiningManagerProxy;
 use kaspa_p2p_flows::flow_context::FlowContext;
-use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
 use misaka_palw_base0::produce::base0_rc_job_anchor_v1;
 
 pub const PALW_PRODUCER: &str = "palw-producer";
@@ -202,9 +202,10 @@ impl PalwProducerService {
         // touches the class they deployed 1.7 GiB for.
         let mut class_artifacts = Vec::new();
         for path in &config.class_artifacts {
-            match std::fs::read(path).map_err(|e| e.to_string()).and_then(|bytes| {
-                misaka_palw_base0::artifact::decode_artifact_file_v1(&bytes).map_err(|e| e.to_string())
-            }) {
+            match std::fs::read(path)
+                .map_err(|e| e.to_string())
+                .and_then(|bytes| misaka_palw_base0::artifact::decode_artifact_file_v1(&bytes).map_err(|e| e.to_string()))
+            {
                 Ok(artifact) => {
                     info!(
                         "[{PALW_PRODUCER}] loaded class artifact {} ({} layers, vocab {}, eps_q {})",
@@ -237,7 +238,7 @@ impl PalwProducerService {
     /// configuration lives.
     fn backends(&self) -> crate::palw_backends::PalwBackendRegistry {
         crate::palw_backends::PalwBackendRegistry::new(
-            self.config.court.clone(),
+            self.config.court,
             self.class_artifacts.clone(),
             self.config.metal_worker.clone(),
             self.config.network_id.as_bytes().to_vec(),
@@ -319,7 +320,7 @@ impl PalwProducerService {
         loop {
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
             ticks += 1;
-            if ticks % 300 == 0 {
+            if ticks.is_multiple_of(300) {
                 // Every ~60 s: re-serve the retained material of still-licensable claims.
                 self.rebroadcast_retained().await;
             }

@@ -182,12 +182,7 @@ pub fn ramp_stage_v1(facts: &PalwWeightFactsV1, params: &PalwWeightParamsV1) -> 
 
 /// `weight(B)`: the spam-hash backbone plus the ramped pwu, in one u128 so no parameter
 /// combination can overflow (`u64 × 1000` fits with room to spare).
-pub fn effective_weight_v1(
-    spam_backbone_work: u64,
-    pwu: u64,
-    stage: PalwWorkRampStageV1,
-    params: &PalwWeightParamsV1,
-) -> u128 {
+pub fn effective_weight_v1(spam_backbone_work: u64, pwu: u64, stage: PalwWorkRampStageV1, params: &PalwWeightParamsV1) -> u128 {
     let ramped: u128 = match stage {
         PalwWorkRampStageV1::Provisional | PalwWorkRampStageV1::Voided => 0,
         PalwWorkRampStageV1::ReceiptLicensed => {
@@ -224,10 +219,7 @@ mod tests {
     #[test]
     fn params_validation_is_closed() {
         assert!(PARAMS.validate().is_ok());
-        assert_eq!(
-            PalwWeightParamsV1 { receipt_quorum: 0, rho_r_permille: 900 }.validate(),
-            Err(PalwWeightError::ZeroReceiptQuorum)
-        );
+        assert_eq!(PalwWeightParamsV1 { receipt_quorum: 0, rho_r_permille: 900 }.validate(), Err(PalwWeightError::ZeroReceiptQuorum));
         assert_eq!(
             PalwWeightParamsV1 { receipt_quorum: 3, rho_r_permille: 1001 }.validate(),
             Err(PalwWeightError::RhoOutOfRange { got: 1001, max: 1000 })
@@ -264,7 +256,11 @@ mod tests {
         // The attacker's fact pattern, exactly: window closed, never refuted, never observed.
         let unobserved = facts(0, true, false);
         assert_eq!(ramp_stage_v1(&unobserved, &PARAMS), S::Provisional, "unobserved work must not mature");
-        assert_eq!(effective_weight_v1(7, u64::MAX, ramp_stage_v1(&unobserved, &PARAMS), &PARAMS), 7, "and it weighs only its spam backbone");
+        assert_eq!(
+            effective_weight_v1(7, u64::MAX, ramp_stage_v1(&unobserved, &PARAMS), &PARAMS),
+            7,
+            "and it weighs only its spam backbone"
+        );
 
         // One receipt short is still short — the quorum is the premise, not a hint.
         assert_eq!(ramp_stage_v1(&facts(PARAMS.receipt_quorum - 1, true, false), &PARAMS), S::Provisional);

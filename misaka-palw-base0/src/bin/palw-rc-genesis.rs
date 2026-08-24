@@ -1,4 +1,3 @@
-
 //! **The PALW-RC genesis card: every constant a testnet-12 binary must ship, printed once.**
 //!
 //! Road-map Gate 4 calls the genesis artifact "the one input code cannot mint". Half of that is no

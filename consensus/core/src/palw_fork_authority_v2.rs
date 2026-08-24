@@ -171,21 +171,7 @@ mod tests {
     // ---- the register's P0-5 differential, at the substrate level ----
 
     fn params() -> PalwStateParamsV2 {
-        PalwStateParamsV2::new(
-            100,
-            10,
-            10,
-            20,
-            500,
-            1000,
-            h64(1),
-            4,
-            1000,
-            100,
-            1000,
-            0,
-        )
-        .unwrap()
+        PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, 100, 1000, 0).unwrap()
     }
 
     fn bond_key(v: u64) -> PalwBondKeyV2 {
@@ -238,7 +224,9 @@ mod tests {
                 pubkey: vec![7; 4],
                 operator_pubkey: op_key(0x21),
                 collateral: 100_000,
-                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11), signature: Vec::new() },
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+                signature: Vec::new(),
+            },
         ]
     }
 

@@ -36,8 +36,8 @@ pub mod consts {
     pub const RSQRT_ITERS: u32 = 3;
     pub const RESCALE_MAX_SHIFT: u8 = 62;
     pub const RSQRT_SEED: [i128; 16] = [
-        15_395_829, 14_307_657, 13_421_772, 12_682_383, 12_053_107, 11_509_075, 11_032_629, 10_610_843, 10_234_005,
-        9_894_662, 9_586_980, 9_306_325, 9_048_957, 8_811_825, 8_592_409, 8_388_608,
+        15_395_829, 14_307_657, 13_421_772, 12_682_383, 12_053_107, 11_509_075, 11_032_629, 10_610_843, 10_234_005, 9_894_662,
+        9_586_980, 9_306_325, 9_048_957, 8_811_825, 8_592_409, 8_388_608,
     ];
 
     /// Every constant this crate re-declared must still be the one the specification pins.
@@ -151,9 +151,7 @@ fn ref2_poly2(p: i128) -> i128 {
     let k = pow2(K);
     let t = p.checked_add(POLY2_B).expect("i128 headroom");
     let square = floor_div(t.checked_mul(t).expect("i128 headroom"), k);
-    floor_div((POLY2_A).checked_mul(square).expect("i128 headroom"), k)
-        .checked_add(POLY2_C)
-        .expect("i128 headroom")
+    floor_div((POLY2_A).checked_mul(square).expect("i128 headroom"), k).checked_add(POLY2_C).expect("i128 headroom")
 }
 
 /// ADR-0040 F1 — `exp(x)` for `x ≤ 0`, Qk in and out.

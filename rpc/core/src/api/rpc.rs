@@ -509,11 +509,8 @@ pub trait RpcApi: Sync + Send + AnySync {
         bond_index: u32,
         with_bond: bool,
     ) -> RpcResult<GetPalwProducerFactsResponse> {
-        self.get_palw_producer_facts_call(
-            None,
-            GetPalwProducerFactsRequest { class_id, bond_transaction_id, bond_index, with_bond },
-        )
-        .await
+        self.get_palw_producer_facts_call(None, GetPalwProducerFactsRequest { class_id, bond_transaction_id, bond_index, with_bond })
+            .await
     }
     /// Default returns `available: false`, so non-server `RpcApi` impls inherit a no-op; the
     /// node's core service overrides it.

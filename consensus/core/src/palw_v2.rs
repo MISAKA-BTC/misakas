@@ -1282,7 +1282,10 @@ impl PalwGoldenVectorSetV2 {
             return Err(PalwV2Error::GoldenSetInvalid("a golden set with no jobs gates nothing".into()));
         }
         if self.jobs.len() > PALW_V2_MAX_GOLDEN_JOBS {
-            return Err(PalwV2Error::GoldenSetInvalid(format!("{} jobs exceeds the {PALW_V2_MAX_GOLDEN_JOBS}-job cap", self.jobs.len())));
+            return Err(PalwV2Error::GoldenSetInvalid(format!(
+                "{} jobs exceeds the {PALW_V2_MAX_GOLDEN_JOBS}-job cap",
+                self.jobs.len()
+            )));
         }
         let mut seen: Vec<&str> = Vec::with_capacity(self.jobs.len());
         for job in &self.jobs {
@@ -1618,14 +1621,11 @@ mod tests {
     fn event_hash_binds_context_phase_step_and_logits() {
         let ctx_hash = test_context().context_hash();
         let mut scratch = Vec::new();
-        let base =
-            logits_event_hash_v2(&ctx_hash, PalwTracePhaseV2::Decode, 3, 4, 16, &test_logits(0.0), &mut scratch).unwrap();
-        let other_ctx =
-            logits_event_hash_v2(&h64(0xEE), PalwTracePhaseV2::Decode, 3, 4, 16, &test_logits(0.0), &mut scratch).unwrap();
+        let base = logits_event_hash_v2(&ctx_hash, PalwTracePhaseV2::Decode, 3, 4, 16, &test_logits(0.0), &mut scratch).unwrap();
+        let other_ctx = logits_event_hash_v2(&h64(0xEE), PalwTracePhaseV2::Decode, 3, 4, 16, &test_logits(0.0), &mut scratch).unwrap();
         let other_phase =
             logits_event_hash_v2(&ctx_hash, PalwTracePhaseV2::Prefill, 3, 4, 16, &test_logits(0.0), &mut scratch).unwrap();
-        let other_step =
-            logits_event_hash_v2(&ctx_hash, PalwTracePhaseV2::Decode, 2, 4, 16, &test_logits(0.0), &mut scratch).unwrap();
+        let other_step = logits_event_hash_v2(&ctx_hash, PalwTracePhaseV2::Decode, 2, 4, 16, &test_logits(0.0), &mut scratch).unwrap();
         let other_logits =
             logits_event_hash_v2(&ctx_hash, PalwTracePhaseV2::Decode, 3, 4, 16, &test_logits(1.0e-6), &mut scratch).unwrap();
         assert_ne!(base, other_ctx, "an event must not be replayable under another job context");
@@ -1803,10 +1803,7 @@ mod tests {
         // Over the cap: rejected before allocation.
         let mut oversized = ((PALW_V2_MAX_FRAME_BYTES + 1).to_le_bytes()).to_vec();
         oversized.extend_from_slice(&[0; 8]);
-        assert!(matches!(
-            read_framed(&mut oversized.as_slice(), PALW_V2_MAX_FRAME_BYTES),
-            Err(PalwV2Error::OversizedFrame { .. })
-        ));
+        assert!(matches!(read_framed(&mut oversized.as_slice(), PALW_V2_MAX_FRAME_BYTES), Err(PalwV2Error::OversizedFrame { .. })));
 
         // Truncated payload.
         let mut truncated = 16u32.to_le_bytes().to_vec();
@@ -1855,10 +1852,7 @@ mod tests {
         // Wrong last-event kind.
         let mut bad_summary = summary;
         bad_summary.last_event_kind = PalwTracePhaseV2::Prefill;
-        assert!(matches!(
-            PalwTraceCommitmentV2::assemble(ctx, bad_summary, events),
-            Err(PalwV2Error::InconsistentCommitment(_))
-        ));
+        assert!(matches!(PalwTraceCommitmentV2::assemble(ctx, bad_summary, events), Err(PalwV2Error::InconsistentCommitment(_))));
     }
 
     #[test]

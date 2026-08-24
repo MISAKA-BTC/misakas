@@ -12,7 +12,9 @@
 
 use crate::artifact::Base0ArtifactV1;
 use crate::classes::ResolvedClassV1;
-use crate::produce::{base0_execute_for_attempt_v1, base0_material_decode_v1, base0_material_encode_v1, base0_material_matches_claim_v1, base0_rc_job_v1};
+use crate::produce::{
+    base0_execute_for_attempt_v1, base0_material_decode_v1, base0_material_encode_v1, base0_material_matches_claim_v1, base0_rc_job_v1,
+};
 use kaspa_consensus_core::palw_backend::{
     PalwClaimRootsV1, PalwExecutionBackendV1, PalwExecutionFamilyV1, PalwExecutionOutcomeV1, PalwMaterialVerdictV1,
 };
@@ -278,8 +280,9 @@ mod tests {
         // --- the executor's side: its own capture clears it at that step ---
         let honest = backend.refutation_for_index(&outcome.material, index).expect("an honest capture opens");
         // One oracle over the WHOLE inventory, proven against its own root — the production path.
-        let inventory = crate::inventory::base0_inventory_v1(&backend.artifact, kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY)
-            .expect("a real inventory");
+        let inventory =
+            crate::inventory::base0_inventory_v1(&backend.artifact, kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY)
+                .expect("a real inventory");
         let inv_root = inventory.root();
         let openings: Vec<_> = (0..inventory.operands().len())
             .map(|i| kaspa_consensus_core::palw_artifact::open_artifact_leaf_v1(inventory.operands(), i as u32).unwrap())
@@ -298,10 +301,7 @@ mod tests {
             let slot = lying_tiles.iter_mut().find(|(i, _)| *i == index).expect("the tile is held");
             slot.1.values_le[0] = slot.1.values_le[0].wrapping_add(1);
         }
-        let lying = crate::legs::Base0StepTilesV1 {
-            leaves: leaves_by_position(&binding, &lying_tiles),
-            tiles: lying_tiles.clone(),
-        };
+        let lying = crate::legs::Base0StepTilesV1 { leaves: leaves_by_position(&binding, &lying_tiles), tiles: lying_tiles.clone() };
         let lying_binding = crate::legs::base0_binding_from_capture_v1(
             &profile,
             &ctx,

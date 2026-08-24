@@ -1081,8 +1081,7 @@ impl PalwFpCommitmentTxPayloadV3 {
         if self.version != PALW_FP_V3_VERSION {
             return Err(PalwFpV3Error::UnsupportedVersion { got: self.version, expected: PALW_FP_V3_VERSION });
         }
-        let envelope =
-            PalwFreePromptCommitmentEnvelopeV3 { commitment: self.commitment.clone(), signature: self.signature.clone() };
+        let envelope = PalwFreePromptCommitmentEnvelopeV3 { commitment: self.commitment.clone(), signature: self.signature.clone() };
         envelope.validate_v3(network_domain, weights)?;
         if self.prompt_token_ids.len() != self.commitment.job.prompt_tokens as usize {
             return Err(PalwFpV3Error::WorkerResultMismatch("the carried prompt length is not the committed prompt length"));
@@ -1391,10 +1390,7 @@ mod tests {
         assert_eq!(spend_ok.validate_stateless_v3(net(), pph, SPEND_TS, SPEND_NONCE), Ok(()));
         // The position binding is RECOMPUTED, not trusted: the same spend announced at another
         // nonce is named — which is what stops one signature minting many block identities.
-        assert_eq!(
-            spend_ok.validate_stateless_v3(net(), pph, SPEND_TS, SPEND_NONCE + 1),
-            Err(PalwFpV3Error::SpendChallengeMismatch)
-        );
+        assert_eq!(spend_ok.validate_stateless_v3(net(), pph, SPEND_TS, SPEND_NONCE + 1), Err(PalwFpV3Error::SpendChallengeMismatch));
         let mut foreign = spend();
         foreign.network_domain = Hash64::from_u64_word(0x99);
         let e = PalwReceiptSpendEnvelopeV3 { spend: foreign, signature: sig() };
@@ -1429,14 +1425,15 @@ mod tests {
 
         assert!(palw_ticket_admits_v1(base, u128::MAX), "the full target admits everything");
         assert!(!palw_ticket_admits_v1(base, 0) || base == 0, "a zero target admits (essentially) nothing");
-        assert_eq!(palw_ticket_admits_v1(base, base), true, "the boundary is inclusive, as the attempt lane's is");
+        assert!(palw_ticket_admits_v1(base, base), "the boundary is inclusive, as the attempt lane's is");
     }
 
     /// The beacon fact is a pair of inequalities, both live: the beacon sits at or after the
     /// slot, and no attempt-class block does so earlier.
     #[test]
     fn beacon_fact_boundaries() {
-        let fact = |beacon_daa, prev| PalwBeaconFactV3 { beacon_block: Hash64::from_u64_word(0xB), beacon_daa, prev_attempt_daa: prev };
+        let fact =
+            |beacon_daa, prev| PalwBeaconFactV3 { beacon_block: Hash64::from_u64_word(0xB), beacon_daa, prev_attempt_daa: prev };
         assert_eq!(validate_beacon_fact_v3(100, &fact(100, 99)), Ok(()), "at the slot, predecessor strictly before");
         assert_eq!(validate_beacon_fact_v3(100, &fact(140, 0)), Ok(()), "after the slot is first if nothing sat between");
         assert!(matches!(validate_beacon_fact_v3(100, &fact(99, 0)), Err(PalwFpV3Error::BeaconBeforeSlot { .. })));
@@ -1579,8 +1576,12 @@ mod tests {
         c.job.prompt_token_ids_hash = crate::palw_v2::prompt_token_ids_hash_v2(&ids);
         c.job.prompt_tokens = ids.len() as u32;
         c.cu = fp_cu_v3(c.job.prompt_tokens, c.decode_tokens_executed, &weights());
-        let payload =
-            PalwFpCommitmentTxPayloadV3 { version: PALW_FP_V3_VERSION, commitment: c, prompt_token_ids: ids.clone(), signature: sig() };
+        let payload = PalwFpCommitmentTxPayloadV3 {
+            version: PALW_FP_V3_VERSION,
+            commitment: c,
+            prompt_token_ids: ids.clone(),
+            signature: sig(),
+        };
         payload.validate_stateless_v3(net(), &weights()).expect("the honest payload validates");
         assert_eq!(payload.claim_id(), fp_claim_id_v3(&payload.commitment));
         assert_eq!(payload.signed_message(), payload.claim_id(), "the signature covers the identity, which is total");

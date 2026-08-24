@@ -68,10 +68,8 @@ pub const PALW_V2_TRACE_FORMAT_VERSION: u16 = 1;
 /// constants, so a build whose contexts differ from what the network committed to refuses to
 /// run — the same shape as the algorithm-finalizer gate. Editing a context string here without
 /// re-minting the ruleset id is a startup failure rather than a silent cross-family replay.
-pub const PALW_V2_SIGNATURE_CONTEXTS: &[&[u8]] = &[
-    crate::palw_attempt_v2::PALW_ATTEMPT_V2_MLDSA87_CONTEXT,
-    crate::palw_panel_v2::PALW_RECEIPT_V2_MLDSA87_CONTEXT,
-];
+pub const PALW_V2_SIGNATURE_CONTEXTS: &[&[u8]] =
+    &[crate::palw_attempt_v2::PALW_ATTEMPT_V2_MLDSA87_CONTEXT, crate::palw_panel_v2::PALW_RECEIPT_V2_MLDSA87_CONTEXT];
 
 pub const PALW_V2_SIGNATURE_CONTEXTS_DOMAIN: &[u8] = b"misaka-palw/ruleset-id-v2/signature-contexts/v1";
 
@@ -242,7 +240,6 @@ impl PalwCourtParamsV2 {
         rounds.checked_mul(self.turn_deadline_daa)
     }
 }
-
 
 /// Bond-side network constants (ADR-0042 Decision 6's withdrawal-delay clause).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -445,7 +442,9 @@ impl PalwConsensusParamsV2 {
         // actually checked against, and a network where they disagree enforces the one nobody
         // audited (audit C5).
         if self.state.min_collateral_sompi() != self.bond.min_collateral_sompi() {
-            return Err(PalwModeV2Error::Invalid("the bond floor the bundle commits to is not the one registrations are checked against"));
+            return Err(PalwModeV2Error::Invalid(
+                "the bond floor the bundle commits to is not the one registrations are checked against",
+            ));
         }
 
         // Same rule, same reason, for the producer carve: `reward` is what the ruleset id commits
@@ -486,8 +485,10 @@ impl PalwConsensusParamsV2 {
 
         // The court backstop exceeds the worst-case honest prosecution — DERIVED from the
         // court's shape by ADR-0042 Decision 8's formula, not asserted as a lone number.
-        let worst_case =
-            self.court.worst_case_duration_daa().ok_or(PalwModeV2Error::Invalid("the worst-case court duration overflows the DAA score"))?;
+        let worst_case = self
+            .court
+            .worst_case_duration_daa()
+            .ok_or(PalwModeV2Error::Invalid("the worst-case court duration overflows the DAA score"))?;
         if self.state.window_court() <= worst_case {
             return Err(PalwModeV2Error::Invalid("window_court does not fit the worst-case honest prosecution"));
         }
@@ -906,8 +907,8 @@ pub(crate) mod tests {
                     operator_pubkey: vec![21; 8],
                     collateral: 100_000,
                     payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
-            signature: Vec::new(),
-        },
+                    signature: Vec::new(),
+                },
             ],
         }
     }
@@ -1404,10 +1405,7 @@ pub(crate) mod tests {
                     b.state = b.state.clone().with_turn_deadline_daa(19).unwrap();
                 }),
             ),
-            (
-                "exposure ratio",
-                Box::new(|b| b.admission = PalwAdmissionParamsV2::new(501).unwrap()),
-            ),
+            ("exposure ratio", Box::new(|b| b.admission = PalwAdmissionParamsV2::new(501).unwrap())),
             (
                 "free-prompt quantum",
                 Box::new(|b| {

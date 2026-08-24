@@ -55,8 +55,8 @@
 //! jury there — becomes an **objective** offense here: two adjacent openings whose hashes do not
 //! chain convict by themselves, no recomputation, no jury (ADR-0027 §4 table gains a row).
 
-use crate::palw_slash::{check_job_context_shape, PalwSlashError};
-use crate::palw_v2::{PalwJobContextV2, PalwJobEnvelopeV2, PalwJobResultV2, PalwLogitsDtypeV2, PALW_V2_MAX_TRACE_EVENTS};
+use crate::palw_slash::{PalwSlashError, check_job_context_shape};
+use crate::palw_v2::{PALW_V2_MAX_TRACE_EVENTS, PalwJobContextV2, PalwJobEnvelopeV2, PalwJobResultV2, PalwLogitsDtypeV2};
 use borsh::{BorshDeserialize, BorshSerialize};
 use kaspa_hashes::Hash64;
 use thiserror::Error;
@@ -850,8 +850,7 @@ fn verify_binding(binding: &PalwLegsBindingV1) -> Result<(Hash64, Hash64, Hash64
         binding.checkpoint_count,
         &binding.checkpoint_merkle_root,
     );
-    let recomputed =
-        execution_commitment_root_v1(&context_hash, &binding.full_logits_trace_root, &activation_root, &checkpoint_root);
+    let recomputed = execution_commitment_root_v1(&context_hash, &binding.full_logits_trace_root, &activation_root, &checkpoint_root);
     if recomputed != binding.committed_execution_root {
         return Err(PalwLegsError::CommittedRootMismatch);
     }
@@ -1294,12 +1293,8 @@ impl PalwLegsCommitmentBuilderV1 {
         checkpoint_profile: PalwCheckpointProfileV1,
     ) -> Result<Self, PalwLegsError> {
         check_job_context_shape(&context).map_err(PalwLegsError::Context)?;
-        tap_profile
-            .validate_shape()
-            .map_err(|reason| PalwLegsError::ProfileNotCanonical { which: "activation tap", reason })?;
-        checkpoint_profile
-            .validate_shape()
-            .map_err(|reason| PalwLegsError::ProfileNotCanonical { which: "checkpoint", reason })?;
+        tap_profile.validate_shape().map_err(|reason| PalwLegsError::ProfileNotCanonical { which: "activation tap", reason })?;
+        checkpoint_profile.validate_shape().map_err(|reason| PalwLegsError::ProfileNotCanonical { which: "checkpoint", reason })?;
 
         let taps = tap_profile.tap_count();
         let expected_activation_leaves = canonical_activation_leaf_count(&context, taps);
@@ -1430,10 +1425,7 @@ impl PalwLegsCommitmentBuilderV1 {
 
     /// [`Self::finish`], also returning the [`PalwLegsMaterial`] an answering producer keeps.
     /// Identical binding — the material is retained bookkeeping, not an input to any hash.
-    pub fn finish_with_material(
-        self,
-        full_logits_trace_root: Hash64,
-    ) -> Result<(PalwLegsBindingV1, PalwLegsMaterial), PalwLegsError> {
+    pub fn finish_with_material(self, full_logits_trace_root: Hash64) -> Result<(PalwLegsBindingV1, PalwLegsMaterial), PalwLegsError> {
         let got = self.activation_hashes.len() as u64;
         if got != self.expected_activation_leaves {
             return Err(PalwLegsError::LegIncomplete { leg: "activation", got, expected: self.expected_activation_leaves });
@@ -1515,12 +1507,12 @@ impl PalwLegsCommitmentBuilderV1 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::palw_slash::{trace_event_opening_root_v1, PalwTraceEventOpeningV1};
-    use crate::palw_slash::PALW_S_ALL_DOMAINS;
     use crate::palw_reference::PALW_REFERENCE_ALL_DOMAINS;
+    use crate::palw_slash::PALW_S_ALL_DOMAINS;
+    use crate::palw_slash::{PalwTraceEventOpeningV1, trace_event_opening_root_v1};
     use crate::palw_v2::{
-        trace_event_merkle_root_v2, trace_scheme_id_v2, PALW_V2_ALL_DOMAINS, PALW_V2_DOMAIN_TRACE_MERKLE_LEAF,
-        PALW_V2_DOMAIN_TRACE_MERKLE_NODE,
+        PALW_V2_ALL_DOMAINS, PALW_V2_DOMAIN_TRACE_MERKLE_LEAF, PALW_V2_DOMAIN_TRACE_MERKLE_NODE, trace_event_merkle_root_v2,
+        trace_scheme_id_v2,
     };
 
     fn h64(seed: u8) -> Hash64 {
@@ -1661,8 +1653,7 @@ mod tests {
             checkpoint_merkle_root,
             committed_execution_root: Hash64::from_bytes([0; 64]), // filled below
         };
-        let mut world =
-            HonestWorld { context, binding, activation_leaves, activation_hashes, checkpoint_leaves, checkpoint_hashes };
+        let mut world = HonestWorld { context, binding, activation_leaves, activation_hashes, checkpoint_leaves, checkpoint_hashes };
         world.binding.committed_execution_root = recompute_committed(&world.binding);
         world
     }
@@ -2342,28 +2333,20 @@ mod tests {
     fn a_short_capture_fails_the_build_instead_of_committing() {
         // Nine of ten rows: the leg the miner would have committed is exactly what
         // `ActivationLeafCountNotCanonical` convicts, so the executor must never reach a receipt.
-        assert_eq!(
-            build_honest(9),
-            Err(PalwLegsError::LegIncomplete { leg: "activation", got: 9, expected: 10 })
-        );
+        assert_eq!(build_honest(9), Err(PalwLegsError::LegIncomplete { leg: "activation", got: 9, expected: 10 }));
     }
 
     #[test]
     fn rows_must_arrive_in_the_pinned_tree_order() {
-        let mut builder =
-            PalwLegsCommitmentBuilderV1::new(test_context(), tap_profile(), checkpoint_profile()).unwrap();
+        let mut builder = PalwLegsCommitmentBuilderV1::new(test_context(), tap_profile(), checkpoint_profile()).unwrap();
         // Position-major (the obvious capture-loop mistake) instead of tap-major.
         builder.push_activation_row(0, 0, 0, &row_values(1)).unwrap();
-        assert_eq!(
-            builder.push_activation_row(0, 1, 0, &row_values(2)),
-            Err(PalwLegsError::RowsOutOfOrder { canonical: 3, next: 1 })
-        );
+        assert_eq!(builder.push_activation_row(0, 1, 0, &row_values(2)), Err(PalwLegsError::RowsOutOfOrder { canonical: 3, next: 1 }));
     }
 
     #[test]
     fn a_non_finite_activation_aborts_the_build() {
-        let mut builder =
-            PalwLegsCommitmentBuilderV1::new(test_context(), tap_profile(), checkpoint_profile()).unwrap();
+        let mut builder = PalwLegsCommitmentBuilderV1::new(test_context(), tap_profile(), checkpoint_profile()).unwrap();
         assert_eq!(
             builder.push_activation_row(0, 0, 0, &[1.0, f32::NAN, 3.0, 4.0]),
             Err(PalwLegsError::NonFiniteActivation { leaf_index: 0, value_index: 1 })
@@ -2376,8 +2359,7 @@ mod tests {
 
     #[test]
     fn a_row_that_is_not_the_profile_hidden_dim_is_refused() {
-        let mut builder =
-            PalwLegsCommitmentBuilderV1::new(test_context(), tap_profile(), checkpoint_profile()).unwrap();
+        let mut builder = PalwLegsCommitmentBuilderV1::new(test_context(), tap_profile(), checkpoint_profile()).unwrap();
         assert_eq!(
             builder.push_activation_row(0, 0, 0, &[1.0, 2.0, 3.0]),
             Err(PalwLegsError::RowNotHiddenDim { got: 3, expected: 4 })
@@ -2386,8 +2368,7 @@ mod tests {
 
     #[test]
     fn a_checkpoint_off_the_interval_schedule_is_refused() {
-        let mut builder =
-            PalwLegsCommitmentBuilderV1::new(test_context(), tap_profile(), checkpoint_profile()).unwrap();
+        let mut builder = PalwLegsCommitmentBuilderV1::new(test_context(), tap_profile(), checkpoint_profile()).unwrap();
         assert_eq!(
             builder.push_checkpoint(3, h64(0x61)),
             Err(PalwLegsError::CheckpointNotCanonical { index: 0, got: 3, expected: 2 })
@@ -2583,10 +2564,7 @@ mod tests {
         // A flipped byte in an opened row: the preimage no longer hashes to the opened leaf.
         let mut flipped = answer.clone();
         flipped.activation[0].preimage.values_le_bytes[0] ^= 0xFF;
-        assert_eq!(
-            check_legs_opening_answer_v1(&request, &flipped),
-            Err(PalwLegsError::LeafPreimageMismatch { leaf: "activation" })
-        );
+        assert_eq!(check_legs_opening_answer_v1(&request, &flipped), Err(PalwLegsError::LeafPreimageMismatch { leaf: "activation" }));
 
         // An opening transplanted to a different index: the path no longer reproduces the root.
         let mut transplanted = answer.clone();
@@ -2654,10 +2632,7 @@ mod tests {
 
         // And the answer checker runs the same shape gate — a non-canonical request cannot be
         // laundered by pairing it with a well-formed answer.
-        assert!(matches!(
-            check_legs_opening_answer_v1(&unsorted, &answer),
-            Err(PalwLegsError::OpeningRequestNotCanonical { .. })
-        ));
+        assert!(matches!(check_legs_opening_answer_v1(&unsorted, &answer), Err(PalwLegsError::OpeningRequestNotCanonical { .. })));
     }
 
     #[test]

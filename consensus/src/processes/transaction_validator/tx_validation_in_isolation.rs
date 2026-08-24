@@ -991,11 +991,11 @@ mod pq_output_class_enforcement_tests {
             PALW_V2_COINBASE_EXTRA_OUTPUTS, PALW_V2_MAX_PAYOUTS_PER_BLOCK, PALW_V2_MAX_VALIDATOR_PAYOUTS,
         };
         // This module is not the one at the top of the file and does not inherit its imports.
-        use kaspa_consensus_core::tx::{ScriptPublicKey, Transaction, TransactionOutput, scriptvec};
-        use kaspa_core::assert_match;
         use crate::params::MAINNET_PARAMS;
         use crate::processes::transaction_validator::{TransactionValidator, errors::TxRuleError};
         use kaspa_consensus_core::subnets::SUBNETWORK_ID_COINBASE;
+        use kaspa_consensus_core::tx::{ScriptPublicKey, Transaction, TransactionOutput, scriptvec};
+        use kaspa_core::assert_match;
 
         let params = MAINNET_PARAMS.clone();
         let tv = TransactionValidator::new_for_tests(
@@ -1013,9 +1013,7 @@ mod pq_output_class_enforcement_tests {
             Transaction::new(
                 0,
                 vec![],
-                (0..n)
-                    .map(|_| TransactionOutput { value: 1, script_public_key: ScriptPublicKey::new(0, scriptvec!(0x51)) })
-                    .collect(),
+                (0..n).map(|_| TransactionOutput { value: 1, script_public_key: ScriptPublicKey::new(0, scriptvec!(0x51)) }).collect(),
                 0,
                 SUBNETWORK_ID_COINBASE,
                 0,
@@ -1025,21 +1023,14 @@ mod pq_output_class_enforcement_tests {
 
         // What the builder can emit at its worst: `k + 1` blues, one aggregate for the reds, the
         // §D bounty, the §E validator payouts, and a full drain of the escrow queue.
-        let worst_case = params.ghostdag_k() as usize
-            + 2
-            + 1
-            + PALW_V2_MAX_VALIDATOR_PAYOUTS as usize
-            + PALW_V2_MAX_PAYOUTS_PER_BLOCK;
+        let worst_case = params.ghostdag_k() as usize + 2 + 1 + PALW_V2_MAX_VALIDATOR_PAYOUTS as usize + PALW_V2_MAX_PAYOUTS_PER_BLOCK;
         assert!(
             tv.check_coinbase_in_isolation(&coinbase_with(worst_case)).is_ok(),
             "a coinbase paying the mergeset plus every appended kind must pass;              the builder can emit {worst_case} outputs"
         );
 
         // And the cap is still a cap.
-        assert_match!(
-            tv.check_coinbase_in_isolation(&coinbase_with(worst_case + 1)),
-            Err(TxRuleError::CoinbaseTooManyOutputs(_, _))
-        );
+        assert_match!(tv.check_coinbase_in_isolation(&coinbase_with(worst_case + 1)), Err(TxRuleError::CoinbaseTooManyOutputs(_, _)));
 
         // The two constants are one statement, so a change to either has to move both.
         assert_eq!(

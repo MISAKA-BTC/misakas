@@ -35,10 +35,10 @@ use kaspa_consensus_core::palw_backend::{
     PalwClaimRootsV1, PalwExecutionBackendV1, PalwExecutionFamilyV1, PalwExecutionOutcomeV1, PalwMaterialVerdictV1,
 };
 use kaspa_consensus_core::palw_legs::PalwLegsJobResultV1;
+use kaspa_consensus_core::palw_v2::PalwJobContextV2;
 use kaspa_consensus_core::palw_v2::{
     PALW_V2_MAX_FRAME_BYTES, PalwJobEnvelopeV2, PalwJobModeV2, decode_framed_borsh, job_request_hash_v2, read_framed, write_framed,
 };
-use kaspa_consensus_core::palw_v2::PalwJobContextV2;
 use kaspa_hashes::Hash64;
 use std::io::Write;
 use std::path::PathBuf;
@@ -117,8 +117,8 @@ impl MetalBackend {
         let text = String::from_utf8_lossy(&out.stdout);
         // The JSON is display-only by the worker's own doc — the canonical identity is the hash —
         // so this reads exactly the one field that IS canonical and ignores the rest.
-        let reported = json_hex_field(&text, "runtime_manifest_hash_v2")
-            .ok_or("the worker's manifest has no runtime_manifest_hash_v2")?;
+        let reported =
+            json_hex_field(&text, "runtime_manifest_hash_v2").ok_or("the worker's manifest has no runtime_manifest_hash_v2")?;
         let want = hex_of(&self.pins.runtime_manifest_hash);
         if reported != want {
             return Err(format!(
@@ -321,9 +321,7 @@ impl PalwExecutionBackendV1 for MetalBackend {
         }
         // The prompt must be the one the carried job commits to — otherwise a seat would replay a
         // prompt the producer chose after the fact.
-        if kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(&decoded.prompt_token_ids)
-            != decoded.job.prompt_token_ids_hash
-        {
+        if kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(&decoded.prompt_token_ids) != decoded.job.prompt_token_ids_hash {
             return PalwMaterialVerdictV1::Mismatch;
         }
         let prompt: Vec<usize> = decoded.prompt_token_ids.iter().map(|t| *t as usize).collect();
@@ -375,9 +373,7 @@ pub fn worker_manifest_fields(worker_path: &std::path::Path, keys: &[&str]) -> R
         return Err(format!("the worker refused to report its manifest: {}", String::from_utf8_lossy(&out.stderr)));
     }
     let text = String::from_utf8_lossy(&out.stdout);
-    keys.iter()
-        .map(|k| json_hex_field(&text, k).ok_or_else(|| format!("the worker's manifest has no {k}")))
-        .collect()
+    keys.iter().map(|k| json_hex_field(&text, k).ok_or_else(|| format!("the worker's manifest has no {k}"))).collect()
 }
 
 fn json_hex_field(text: &str, key: &str) -> Option<String> {

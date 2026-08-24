@@ -55,7 +55,11 @@ pub enum PalwBeaconDeriveV3Error {
 /// attempt-class block strictly BELOW the slot — and that witness is what makes "first at or
 /// after" checkable by someone who did not do the walk. A walk that stops at the slot cannot
 /// produce it, and this returns `WalkTooShort` rather than inventing a zero.
-pub fn derive_beacon_fact_v3<I>(slot: u64, attempt_algo_id: u8, descending_chain: I) -> Result<PalwBeaconFactV3, PalwBeaconDeriveV3Error>
+pub fn derive_beacon_fact_v3<I>(
+    slot: u64,
+    attempt_algo_id: u8,
+    descending_chain: I,
+) -> Result<PalwBeaconFactV3, PalwBeaconDeriveV3Error>
 where
     I: IntoIterator<Item = PalwChainBlockFactV3>,
 {
@@ -109,7 +113,11 @@ where
         }
         if fact.pow_algo_id == attempt_algo_id {
             let beacon = candidate.ok_or(PalwBeaconDeriveV3Error::NoBeaconYet { slot })?;
-            return Ok(PalwBeaconFactV3 { beacon_block: beacon.block, beacon_daa: beacon.daa_score, prev_attempt_daa: fact.daa_score });
+            return Ok(PalwBeaconFactV3 {
+                beacon_block: beacon.block,
+                beacon_daa: beacon.daa_score,
+                prev_attempt_daa: fact.daa_score,
+            });
         }
     }
     let beacon = candidate.ok_or(PalwBeaconDeriveV3Error::NoBeaconYet { slot })?;
@@ -140,8 +148,12 @@ mod tests {
     fn the_beacon_is_the_first_attempt_block_at_or_after_the_slot() {
         // Slot 100. Descending: 140(attempt), 130(receipt), 120(attempt), 110(receipt), 95(attempt).
         // The first attempt at-or-after 100 is 120; the witness below is 95.
-        let fact = derive_beacon_fact_v3(100, ATTEMPT, chain(&[(140, ATTEMPT), (130, RECEIPT), (120, ATTEMPT), (110, RECEIPT), (95, ATTEMPT)]))
-            .unwrap();
+        let fact = derive_beacon_fact_v3(
+            100,
+            ATTEMPT,
+            chain(&[(140, ATTEMPT), (130, RECEIPT), (120, ATTEMPT), (110, RECEIPT), (95, ATTEMPT)]),
+        )
+        .unwrap();
         assert_eq!((fact.beacon_daa, fact.prev_attempt_daa), (120, 95));
         assert_eq!(fact.beacon_block, h64(120));
         validate_beacon_fact_v3(100, &fact).expect("what the chain derived, the validator accepts");
@@ -156,8 +168,8 @@ mod tests {
     /// blocks above the slot has no beacon yet, however many blocks it has.
     #[test]
     fn receipt_blocks_are_never_beacons() {
-        let err = derive_beacon_fact_v3(100, ATTEMPT, chain(&[(160, RECEIPT), (150, RECEIPT), (140, RECEIPT), (95, ATTEMPT)]))
-            .unwrap_err();
+        let err =
+            derive_beacon_fact_v3(100, ATTEMPT, chain(&[(160, RECEIPT), (150, RECEIPT), (140, RECEIPT), (95, ATTEMPT)])).unwrap_err();
         assert_eq!(err, PalwBeaconDeriveV3Error::NoBeaconYet { slot: 100 });
 
         // …and one attempt block among them is the beacon, whatever surrounds it.

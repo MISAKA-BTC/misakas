@@ -123,11 +123,7 @@ where
 /// a procedure. The responder owes disclosures and the terminal opening; the challenger owes
 /// verdicts. Whoever was owed the next move and did not make it loses.
 pub fn adjudicate_timeout_v1(responder_owed_the_move: bool) -> PalwTerminalVerdictV1 {
-    if responder_owed_the_move {
-        PalwTerminalVerdictV1::ResponderDefaults
-    } else {
-        PalwTerminalVerdictV1::ChallengerLoses
-    }
+    if responder_owed_the_move { PalwTerminalVerdictV1::ResponderDefaults } else { PalwTerminalVerdictV1::ChallengerLoses }
 }
 
 #[cfg(test)]
@@ -160,8 +156,7 @@ mod tests {
     fn a_step_that_reproduces_defeats_the_challenge() {
         let (operands, root) = one_operand();
         let o = opening(4, h(0xA), h(0xB), operands);
-        let verdict =
-            adjudicate_terminal_opening_v1(&o, h(0x5E), (4, 5), h(0xA), h(0xB), root, |_pre, _ops| Some(h(0xB))).unwrap();
+        let verdict = adjudicate_terminal_opening_v1(&o, h(0x5E), (4, 5), h(0xA), h(0xB), root, |_pre, _ops| Some(h(0xB))).unwrap();
         assert_eq!(verdict, PalwTerminalVerdictV1::ChallengerLoses);
     }
 
@@ -170,8 +165,7 @@ mod tests {
     fn a_step_that_does_not_reproduce_convicts() {
         let (operands, root) = one_operand();
         let o = opening(4, h(0xA), h(0xB), operands);
-        let verdict =
-            adjudicate_terminal_opening_v1(&o, h(0x5E), (4, 5), h(0xA), h(0xB), root, |_pre, _ops| Some(h(0xFF))).unwrap();
+        let verdict = adjudicate_terminal_opening_v1(&o, h(0x5E), (4, 5), h(0xA), h(0xB), root, |_pre, _ops| Some(h(0xFF))).unwrap();
         assert_eq!(verdict, PalwTerminalVerdictV1::ResponderConvicted);
     }
 
@@ -202,8 +196,8 @@ mod tests {
 
         // Answering another index, or other endpoints, is a default rather than a fresh chance.
         for wrong in [opening(9, junk_pre, junk_post, operands.clone()), opening(4, h(1), junk_post, operands.clone())] {
-            let v = adjudicate_terminal_opening_v1(&wrong, h(0x5E), (4, 5), junk_pre, junk_post, root, |_p, _o| Some(junk_post))
-                .unwrap();
+            let v =
+                adjudicate_terminal_opening_v1(&wrong, h(0x5E), (4, 5), junk_pre, junk_post, root, |_p, _o| Some(junk_post)).unwrap();
             assert_eq!(v, PalwTerminalVerdictV1::ResponderDefaults);
         }
     }

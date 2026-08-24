@@ -355,10 +355,7 @@ impl PalwBlockCommitmentV1 {
     /// and only BINDS the commitment to it, so it can land on its own.
     ///
     /// Same width as the input, so the finalizer's call shape is unchanged.
-    pub fn bind_l1_tag_v1(
-        inference_tag: &[u8],
-        commitment_root: Hash64,
-    ) -> [u8; PALW_BLOCK_COMMITMENT_L1_TAG_BYTES] {
+    pub fn bind_l1_tag_v1(inference_tag: &[u8], commitment_root: Hash64) -> [u8; PALW_BLOCK_COMMITMENT_L1_TAG_BYTES] {
         let mut out = [0u8; PALW_BLOCK_COMMITMENT_L1_TAG_BYTES];
         for (chunk_index, chunk) in out.chunks_mut(64).enumerate() {
             let mut state = blake2b_simd::Params::new().hash_length(64).key(PALW_BLOCK_COMMITMENT_DOMAIN_L1_TAG).to_state();

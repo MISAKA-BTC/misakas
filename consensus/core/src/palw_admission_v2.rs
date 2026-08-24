@@ -216,8 +216,7 @@ pub fn check_palw_attempt_admission_v2(
         // is fetched here rather than shared with item 6b below on purpose: 6b's job is the
         // lottery, this one's is the price, and each names its own missing-fact error.
         PalwPwuRuleV2::DerivedV1 { pwu_per_inference } => {
-            let target =
-                state.class_target(&attempt.class_id).ok_or(PalwAdmissionV2Error::ClassTargetMissing(attempt.class_id))?;
+            let target = state.class_target(&attempt.class_id).ok_or(PalwAdmissionV2Error::ClassTargetMissing(attempt.class_id))?;
             let derived = crate::palw_pwu::palw_pwu_v1(target.target, pwu_per_inference);
             if attempt.pwu != derived {
                 return Err(PalwAdmissionV2Error::PwuClaimNotDerived { claimed: attempt.pwu, derived });
@@ -267,10 +266,8 @@ pub fn check_palw_attempt_admission_v2(
             .epoch_budgets()
             .filter(|b| b.epoch_index == epoch_index)
             .ok_or(PalwAdmissionV2Error::EpochBudgetUnspecified(attempt.class_id))?;
-        let budget = *budgets
-            .budget_blocks
-            .get(&attempt.class_id)
-            .ok_or(PalwAdmissionV2Error::EpochBudgetUnspecified(attempt.class_id))?;
+        let budget =
+            *budgets.budget_blocks.get(&attempt.class_id).ok_or(PalwAdmissionV2Error::EpochBudgetUnspecified(attempt.class_id))?;
         let produced = match state.epoch_counter(&attempt.class_id) {
             Some(counter) if counter.epoch_index == epoch_index => counter.produced_blocks,
             _ => 0,
@@ -380,21 +377,7 @@ mod tests {
     }
 
     fn state_params() -> PalwStateParamsV2 {
-        PalwStateParamsV2::new(
-            100,
-            10,
-            10,
-            20,
-            500,
-            1000,
-            h64(1),
-            4,
-            1000,
-            100,
-            1000,
-            0,
-        )
-        .unwrap()
+        PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, 100, 1000, 0).unwrap()
     }
 
     fn admission_params() -> PalwAdmissionParamsV2 {
@@ -430,7 +413,9 @@ mod tests {
                 pubkey: vec![7; 4],
                 operator_pubkey: op_key(0x21),
                 collateral: 1_000,
-                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11), signature: Vec::new() },
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+                signature: Vec::new(),
+            },
         ];
         let (state, _) =
             apply_palw_transition_v2(&PalwChainStateV2::genesis(), &state_params(), &ctx(1, 100, 1), &objects, None).unwrap();
@@ -518,7 +503,9 @@ mod tests {
                 pubkey: vec![8; 4],
                 operator_pubkey: op_key(0x22),
                 collateral: 2_000_000,
-                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11), signature: Vec::new() },
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+                signature: Vec::new(),
+            },
         ];
         let (state, _) =
             apply_palw_transition_v2(&PalwChainStateV2::genesis(), &state_params(), &ctx(1, 100, 1), &objects, None).unwrap();
@@ -634,7 +621,9 @@ mod tests {
                     pubkey: vec![7; 4],
                     operator_pubkey: op_key(0x21),
                     collateral: 1_000_000,
-                    payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11), signature: Vec::new() },
+                    payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+                    signature: Vec::new(),
+                },
             ];
             apply_palw_transition_v2(&PalwChainStateV2::genesis(), &sp, &ctx(1, 100, 1), &objects, None).unwrap().0
         };
@@ -751,21 +740,25 @@ mod tests {
         assert_eq!(derived, 14, "two expected attempts at seven per inference");
 
         // The one legal value admits (with a nonce that also wins the 6b lottery).
-        check_palw_attempt_admission_v2(&state, &state_params(), &admission, &c, &derived_class_attempt_admitting(derived, u128::MAX / 2))
-            .expect("the derived claim admits");
+        check_palw_attempt_admission_v2(
+            &state,
+            &state_params(),
+            &admission,
+            &c,
+            &derived_class_attempt_admitting(derived, u128::MAX / 2),
+        )
+        .expect("the derived claim admits");
 
         // The H3 attack — claim the maximum — is refused by equality, not by a ceiling.
         let err =
-            check_palw_attempt_admission_v2(&state, &state_params(), &admission, &c, &derived_class_attempt(u64::MAX, 2))
-                .unwrap_err();
+            check_palw_attempt_admission_v2(&state, &state_params(), &admission, &c, &derived_class_attempt(u64::MAX, 2)).unwrap_err();
         assert_eq!(err, PalwAdmissionV2Error::PwuClaimNotDerived { claimed: u64::MAX, derived });
 
         // And so is one unit off in either direction — there is no tolerance band, because
         // neither factor is something the miner chooses.
         for wrong in [derived - 1, derived + 1] {
-            let err =
-                check_palw_attempt_admission_v2(&state, &state_params(), &admission, &c, &derived_class_attempt(wrong, 3))
-                    .unwrap_err();
+            let err = check_palw_attempt_admission_v2(&state, &state_params(), &admission, &c, &derived_class_attempt(wrong, 3))
+                .unwrap_err();
             assert!(matches!(err, PalwAdmissionV2Error::PwuClaimNotDerived { .. }), "got {err:?}");
         }
     }
@@ -783,8 +776,7 @@ mod tests {
 
         check_palw_attempt_admission_v2(&easy, &state_params(), &admission, &c, &derived_class_attempt_admitting(14, u128::MAX / 2))
             .expect("14 is the easy chain's one legal value");
-        let err = check_palw_attempt_admission_v2(&hard, &state_params(), &admission, &c, &derived_class_attempt(14, 1))
-            .unwrap_err();
+        let err = check_palw_attempt_admission_v2(&hard, &state_params(), &admission, &c, &derived_class_attempt(14, 1)).unwrap_err();
         assert_eq!(
             err,
             PalwAdmissionV2Error::PwuClaimNotDerived { claimed: 14, derived: 56 },
@@ -905,19 +897,15 @@ mod tests {
         // refusal of every attempt stops the chain outright.
         let alone = derive(vec![(h64(1), 500u16), (h64(2), 500u16)], vec![h64(1)], 1_000, 1_000);
         assert_eq!(
-            alone.budget_blocks[&h64(1)], 1_000,
+            alone.budget_blocks[&h64(1)],
+            1_000,
             "a sole producer is measured against itself — it may hold the whole span it is the whole of"
         );
         // …and a class that did NOT produce is measured against the set PLUS itself, so it can
         // re-enter without being either strangled or handed the whole epoch.
         assert_eq!(alone.budget_blocks[&h64(2)], 500, "a re-entrant competes with the incumbents plus itself");
         // Two producers share, and neither is affected by a third class sitting out.
-        let both = derive(
-            vec![(h64(1), 400u16), (h64(2), 400u16), (h64(3), 200u16)],
-            vec![h64(1), h64(2)],
-            1_000,
-            1_000,
-        );
+        let both = derive(vec![(h64(1), 400u16), (h64(2), 400u16), (h64(3), 200u16)], vec![h64(1), h64(2)], 1_000, 1_000);
         assert_eq!(both.budget_blocks[&h64(1)], 500, "400/800 of the span, not 400/1000");
         assert_eq!(both.budget_blocks[&h64(2)], 500);
 

@@ -34,8 +34,8 @@
 
 use kaspa_consensus_core::palw_base0::K;
 use kaspa_consensus_core::palw_base0_ops::{
-    self as ops, PalwBase0OpError, ScaleParams, add_elem, dot_i8, embed_lookup, matmul_quant, mul_elem,
-    requantize_row, requantize_row_uniform, rescale_row, rms_norm, rope_table, silu, softmax,
+    self as ops, PalwBase0OpError, ScaleParams, add_elem, dot_i8, embed_lookup, matmul_quant, mul_elem, requantize_row,
+    requantize_row_uniform, rescale_row, rms_norm, rope_table, silu, softmax,
 };
 
 use crate::artifact::Base0ArtifactV1;
@@ -58,7 +58,10 @@ pub enum EngineError {
     /// The position is at or past the artifact's `max_position`, so there is no rotary row for it.
     /// Refused rather than reusing a row: a reused rotation would make two different positions
     /// indistinguishable to attention, silently.
-    PositionOutOfRange { got: usize, max: usize },
+    PositionOutOfRange {
+        got: usize,
+        max: usize,
+    },
     /// The cache belongs to a different artifact than the one being run.
     CacheShapeMismatch,
 }
@@ -300,9 +303,8 @@ impl<'a> Base0Engine<'a> {
                 // Logits: one DotI8 per key, then the amplification that makes softmax
                 // discriminate. Without `rescale_row` here the distribution is uniform to four
                 // decimals regardless of the keys — see ADR-0040 H.
-                let raw: Vec<i32> = (0..history)
-                    .map(|j| dot_i8(qh, &cache.keys[li][j][kv_off..kv_off + shape.d_head]))
-                    .collect::<Result<_, _>>()?;
+                let raw: Vec<i32> =
+                    (0..history).map(|j| dot_i8(qh, &cache.keys[li][j][kv_off..kv_off + shape.d_head])).collect::<Result<_, _>>()?;
                 let amplified = rescale_row(&raw, layer.attn_logit_scale);
                 let probs = softmax(&amplified)?;
                 probe.attention_spread.push(probs.iter().max().copied().unwrap_or(0) - probs.iter().min().copied().unwrap_or(0));
@@ -367,10 +369,9 @@ impl<'a> Base0Engine<'a> {
             probe.steps.push((li as u16, 27, activated.clone()));
             let gate = requantize_row_uniform(&activated, self.artifact.qk_to_code());
             probe.steps.push((li as u16, 28, gate.iter().map(|c| *c as i32).collect()));
-            probe.gate_extremes.push((
-                gate.iter().map(|c| *c as i32).min().unwrap_or(0),
-                gate.iter().map(|c| *c as i32).max().unwrap_or(0),
-            ));
+            probe
+                .gate_extremes
+                .push((gate.iter().map(|c| *c as i32).min().unwrap_or(0), gate.iter().map(|c| *c as i32).max().unwrap_or(0)));
             let up_acc = matmul_quant(&layer.w_up, &normed, shape.d_ff)?;
             probe.steps.push((li as u16, 29, up_acc.clone()));
             let up = requantize_row_uniform(&up_acc, layer.requant[5]);
@@ -631,10 +632,7 @@ mod tests {
             // SiLU floors at −0.278 and passes positives through, so a working gate is markedly
             // asymmetric. `x/2` — what SiLU degenerates to when fed below its Qk domain — is
             // symmetric, so this is the assertion that separates the two.
-            assert!(
-                lo.abs() * 2 < *hi,
-                "layer {i}'s gate is symmetric ({lo}..{hi}) — SiLU has degenerated to a linear x/2"
-            );
+            assert!(lo.abs() * 2 < *hi, "layer {i}'s gate is symmetric ({lo}..{hi}) — SiLU has degenerated to a linear x/2");
         }
         let uniform = ForwardProbe::uniform_probability(5);
         assert!(
@@ -851,7 +849,3 @@ mod tests {
         assert!(out.iter().all(|t| *t < 64));
     }
 }
-
-
-
-

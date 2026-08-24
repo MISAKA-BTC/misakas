@@ -139,42 +139,43 @@ impl HeaderProcessor {
         let network_domain = kaspa_consensus_core::palw_mode_v2::palw_network_domain_v2(&self.network_id);
         let pre_pow_hash = kaspa_consensus_core::hashing::header::pre_pow_hash_64(header);
         let reason = match header.pow_algo_id {
-            POW_ALGO_ID_PALW_COMMITTED_V2 => kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2::decode_wire(
-                &header.palw_commitment,
-            )
-            .map_err(|e| e.to_string())
-            .and_then(|envelope| {
-                envelope
-                    .validate_stateless_v2(network_domain, pre_pow_hash, header.timestamp, header.nonce)
-                    .map_err(|e| e.to_string())?;
-                // **The signature, on the RELAY path** (launch blockers §5).
-                //
-                // It was verified only on the chain walk, and the signature sits OUTSIDE
-                // `commitment_root_v2` (ADR-0042 Decision 3c, deliberately) while the block-identity
-                // digest hashes the raw carrier bytes. So anyone could take a solved block, write
-                // arbitrary bytes of the right length into `signature`, and mint an unbounded number
-                // of distinct blocks that every peer accepted, stored and relayed from ONE proof of
-                // work — a byte flip and a re-hash each. They never became chain, which is why the
-                // chain-walk check was thought sufficient; they did not need to, because the cost of
-                // making one was zero and the cost of carrying one was everybody else's.
-                //
-                // Checkable here because the attempt carries its OWN key: whether that key is the
-                // named bond's is admission item 2's stateful question, but whether the carrier
-                // authored this attempt with the key it claims needs no state at all.
-                envelope.validate_signature_v2(|key, message, sig, context| {
-                    kaspa_txscript::verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false)
-                })
-                .map_err(|e| e.to_string())
-            }),
-            POW_ALGO_ID_PALW_RECEIPT_V3 => kaspa_consensus_core::palw_freeprompt_v3::PalwReceiptSpendEnvelopeV3::decode(
-                &header.palw_commitment,
-            )
-            .map_err(|e| e.to_string())
-            .and_then(|envelope| {
-                envelope
-                    .validate_stateless_v3(network_domain, pre_pow_hash, header.timestamp, header.nonce)
+            POW_ALGO_ID_PALW_COMMITTED_V2 => {
+                kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2::decode_wire(&header.palw_commitment)
                     .map_err(|e| e.to_string())
-            }),
+                    .and_then(|envelope| {
+                        envelope
+                            .validate_stateless_v2(network_domain, pre_pow_hash, header.timestamp, header.nonce)
+                            .map_err(|e| e.to_string())?;
+                        // **The signature, on the RELAY path** (launch blockers §5).
+                        //
+                        // It was verified only on the chain walk, and the signature sits OUTSIDE
+                        // `commitment_root_v2` (ADR-0042 Decision 3c, deliberately) while the block-identity
+                        // digest hashes the raw carrier bytes. So anyone could take a solved block, write
+                        // arbitrary bytes of the right length into `signature`, and mint an unbounded number
+                        // of distinct blocks that every peer accepted, stored and relayed from ONE proof of
+                        // work — a byte flip and a re-hash each. They never became chain, which is why the
+                        // chain-walk check was thought sufficient; they did not need to, because the cost of
+                        // making one was zero and the cost of carrying one was everybody else's.
+                        //
+                        // Checkable here because the attempt carries its OWN key: whether that key is the
+                        // named bond's is admission item 2's stateful question, but whether the carrier
+                        // authored this attempt with the key it claims needs no state at all.
+                        envelope
+                            .validate_signature_v2(|key, message, sig, context| {
+                                kaspa_txscript::verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false)
+                            })
+                            .map_err(|e| e.to_string())
+                    })
+            }
+            POW_ALGO_ID_PALW_RECEIPT_V3 => {
+                kaspa_consensus_core::palw_freeprompt_v3::PalwReceiptSpendEnvelopeV3::decode(&header.palw_commitment)
+                    .map_err(|e| e.to_string())
+                    .and_then(|envelope| {
+                        envelope
+                            .validate_stateless_v3(network_domain, pre_pow_hash, header.timestamp, header.nonce)
+                            .map_err(|e| e.to_string())
+                    })
+            }
             _ => return Ok(()),
         };
         reason.map_err(|reason| RuleError::BadPalwCarriageAdmission { algo_id: header.pow_algo_id, reason })

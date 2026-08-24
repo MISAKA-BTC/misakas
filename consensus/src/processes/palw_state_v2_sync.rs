@@ -171,15 +171,14 @@ impl PalwStateSyncV2 {
                 }
             }
             let (_, delta) = store.delta_of(*block)?;
-            current = revert_delta_v2(&current, &delta, &self.params)
-                .map_err(|source| PalwSyncV2Error::State { block: *block, source })?;
+            current =
+                revert_delta_v2(&current, &delta, &self.params).map_err(|source| PalwSyncV2Error::State { block: *block, source })?;
             store.delete_delta_batch(batch, *block)?;
         }
-        if let Some(point) = current.last_point() {
-            if point.block != fork_point {
+        if let Some(point) = current.last_point()
+            && point.block != fork_point {
                 return Err(PalwSyncV2Error::ForkPointMismatch { expected: fork_point, found: Some(point.block) });
             }
-        }
         store.set_tip_batch(batch, fork_point, &current)?;
         self.tip = Some((fork_point, current));
         Ok(())
@@ -197,21 +196,7 @@ mod tests {
     use kaspa_database::prelude::{CachePolicy, ConnBuilder};
 
     fn params() -> PalwStateParamsV2 {
-        PalwStateParamsV2::new(
-            100,
-            10,
-            10,
-            20,
-            500,
-            1000,
-            class_id(),
-            4,
-            1000,
-            100,
-            1000,
-            0,
-        )
-        .unwrap()
+        PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, class_id(), 4, 1000, 100, 1000, 0).unwrap()
     }
 
     fn class_id() -> Hash64 {

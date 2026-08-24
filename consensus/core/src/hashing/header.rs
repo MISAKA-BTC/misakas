@@ -353,7 +353,9 @@ mod tests {
         // `check_palw_commitment_shape`, which refuses the non-empty case at validation.
         let khh = mk(crate::pow_layer0::POW_ALGO_ID_KHEAVYHASH);
         assert_eq!(khh.clone().with_palw_commitment(vec![0xAA; 100]).hash, khh.hash, "non-PALW identity must NOT move");
-        assert!(crate::pow_layer0::check_palw_commitment_shape(crate::pow_layer0::POW_ALGO_ID_KHEAVYHASH, &[0xAA; 100], false).is_err());
+        assert!(
+            crate::pow_layer0::check_palw_commitment_shape(crate::pow_layer0::POW_ALGO_ID_KHEAVYHASH, &[0xAA; 100], false).is_err()
+        );
         assert!(crate::pow_layer0::check_palw_commitment_shape(crate::pow_layer0::POW_ALGO_ID_KHEAVYHASH, &[], false).is_ok());
 
         // (4) Ollama-PALW (algo 5) hashes it too.
@@ -376,8 +378,9 @@ mod tests {
         assert!(matches!(
             crate::pow_layer0::check_palw_commitment_shape(
                 crate::pow_layer0::POW_ALGO_ID_PALW_LLM,
-                &vec![0u8; crate::pow_layer0::PALW_COMMITMENT_MAX_BYTES + 1]
-            , false),
+                &vec![0u8; crate::pow_layer0::PALW_COMMITMENT_MAX_BYTES + 1],
+                false
+            ),
             Err(crate::pow_layer0::PowLayer0Error::PalwCommitmentTooLong { .. })
         ));
     }

@@ -94,8 +94,7 @@ enum Mode {
     UnityAttenuated,
 }
 
-const MODES: &[(&str, Mode)] =
-    &[("halve", Mode::Halve), ("unity", Mode::Unity), ("unity+atten", Mode::UnityAttenuated)];
+const MODES: &[(&str, Mode)] = &[("halve", Mode::Halve), ("unity", Mode::Unity), ("unity+atten", Mode::UnityAttenuated)];
 
 fn apply_mode(artifact: &mut Base0ArtifactV1, mode: Mode) {
     match mode {
@@ -188,8 +187,7 @@ fn main() {
                 let railed = peaks.iter().filter(|p| **p >= CODE_MAX).count();
 
                 // The influence curve: how far the logits move when each layer is removed.
-                let influence: Vec<i64> =
-                    (0..n_layers).map(|victim| l1(&base_logits, &run(&ablate(&artifact, victim)).0)).collect();
+                let influence: Vec<i64> = (0..n_layers).map(|victim| l1(&base_logits, &run(&ablate(&artifact, victim)).0)).collect();
                 let first = influence[0].max(1);
                 let last = *influence.last().expect("n_layers > 0");
                 // Attention health, as a fraction of the uniform distribution it degenerates to.
@@ -281,8 +279,7 @@ fn residual_decay(params: QuantParams) -> (Vec<i32>, bool) {
 /// `2^b` has `7 - b` bits of the code range left to say anything with.
 fn minimum_write_attenuation(width: &Width, n_layers: usize) -> Option<(u8, i32)> {
     for extra in 0..=7u8 {
-        let mut artifact =
-            Base0ArtifactV1::derive_deterministic(shape(width, n_layers), SEED).expect("the swept shapes are valid");
+        let mut artifact = Base0ArtifactV1::derive_deterministic(shape(width, n_layers), SEED).expect("the swept shapes are valid");
         artifact.residual_requant = QuantParams { multiplier: i32::MAX, shift: 0, zero: 0 };
         for layer in artifact.layers.iter_mut() {
             for slot in [3usize, 6] {

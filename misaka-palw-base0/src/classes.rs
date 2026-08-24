@@ -20,9 +20,9 @@
 //! (`class_id`, `artifact_root`); this says what this binary can supply. [`resolve_class_v1`]
 //! matches the two and refuses anything it cannot prove — derive, never declare (ADR-0046).
 
+use crate::artifact::LN_THETA_10000_GEN_Q;
 use crate::artifact::{Base0ArtifactV1, Base0ShapeV1};
 use crate::inventory::{InventoryBuildError, base0_inventory_v1};
-use crate::artifact::LN_THETA_10000_GEN_Q;
 use kaspa_consensus_core::palw_base0_profile::{
     PALW_RC_BASE0_CANONICAL, PALW_RC_BASE0_GEOMETRY, PalwBase0GeometryV1, base0_profile_v1,
 };
@@ -182,14 +182,27 @@ pub fn canonical_class_by_model_id_v1(court: &PalwCourtParamsV2, model_id: &str)
 pub enum ClassResolveError {
     /// The chain named a class id no entry in this build produces. The node is older than the
     /// chain, or the class was registered by somebody running a different binary.
-    UnknownClass { class_id: Hash64 },
+    UnknownClass {
+        class_id: Hash64,
+    },
     /// The class is known and this node holds no artifact for it.
-    NoArtifact { model_id: &'static str },
+    NoArtifact {
+        model_id: &'static str,
+    },
     /// An artifact was supplied and is not the shape this class is defined at.
-    ArtifactShape { model_id: &'static str, field: &'static str, got: i128, want: i128 },
+    ArtifactShape {
+        model_id: &'static str,
+        field: &'static str,
+        got: i128,
+        want: i128,
+    },
     /// The artifact has the right shape and hashes to a different root than the chain registered.
     /// These are the same weights only if this passes.
-    ArtifactRoot { model_id: &'static str, got: Hash64, want: Hash64 },
+    ArtifactRoot {
+        model_id: &'static str,
+        got: Hash64,
+        want: Hash64,
+    },
     Inventory(InventoryBuildError),
     Artifact(crate::artifact::ArtifactError),
 }
@@ -319,7 +332,10 @@ mod tests {
         let c = canonical_class_by_model_id_v1(&court(), "Qwen/Qwen2.5-1.5B").expect("1.5B is in the registry");
         assert_eq!(c.artifact_shape.eps_q, 1, "the canonical epsilon is the class constant's, not the floor's 1<<8");
         assert_eq!(c.inventory_geometry.tile_len, 64);
-        assert_eq!(c.artifact_shape.max_position, 90, "the admissible context under the projected 38-node graph, not the model's 4096");
+        assert_eq!(
+            c.artifact_shape.max_position, 90,
+            "the admissible context under the projected 38-node graph, not the model's 4096"
+        );
         assert_eq!(c.artifact_shape.n_kv_heads, 2, "grouped-query attention survives into the artifact shape");
         assert_eq!(c.source, ArtifactSourceV1::Converted);
     }

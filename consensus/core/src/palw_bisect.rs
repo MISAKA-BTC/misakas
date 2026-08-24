@@ -510,7 +510,13 @@ mod tests {
             let mid = ladder.expected_midpoint().expect("a non-terminal ladder has a midpoint");
             ladder
                 .apply_disclosure(
-                    &PalwBisectDisclosureV1 { version: 1, session_id: ladder.session_id(), round, midpoint: mid, mid_state: h64(0x40u8.wrapping_add(round as u8)) },
+                    &PalwBisectDisclosureV1 {
+                        version: 1,
+                        session_id: ladder.session_id(),
+                        round,
+                        midpoint: mid,
+                        mid_state: h64(0x40u8.wrapping_add(round as u8)),
+                    },
                     100,
                     10,
                 )
@@ -625,10 +631,7 @@ mod tests {
 
         // Before the deadline there is no offense: an early accusation would let a challenger
         // win by being impatient.
-        assert!(matches!(
-            ladder.declare_no_show(deadline),
-            Err(PalwBisectError::DeadlineNotReached { deadline: 200, observed: 200 })
-        ));
+        assert!(matches!(ladder.declare_no_show(deadline), Err(PalwBisectError::DeadlineNotReached { deadline: 200, observed: 200 })));
 
         let offense = ladder.declare_no_show(deadline + 1).expect("silence past the deadline is an offense");
         assert_eq!(offense.silent_party, PalwBisectPartyV1::Responder);
@@ -764,10 +767,7 @@ mod tests {
                     "space {space} divergence {divergence}: took {} rungs, ceil(log2) is {expected_rounds}",
                     ladder.round()
                 );
-                assert!(
-                    ladder.round() <= PALW_BISECT_MAX_ROUNDS,
-                    "space {space}: the ladder's own budget must cover its own space"
-                );
+                assert!(ladder.round() <= PALW_BISECT_MAX_ROUNDS, "space {space}: the ladder's own budget must cover its own space");
             }
         }
 
@@ -1022,7 +1022,8 @@ mod tests {
         let mut ladder = PalwBisectLadderV1::open(&ctx, &root, &h64(0x33), &h64(0x44), PalwBisectSpaceV1::StepLeaves, 16, 100, 110)
             .expect("a 16-wide space opens");
         let mid = ladder.expected_midpoint().unwrap();
-        let disclose = |state| PalwBisectDisclosureV1 { version: 1, session_id: ladder.session_id(), round: 0, midpoint: mid, mid_state: state };
+        let disclose =
+            |state| PalwBisectDisclosureV1 { version: 1, session_id: ladder.session_id(), round: 0, midpoint: mid, mid_state: state };
 
         assert_eq!(ladder.clone().apply_disclosure(&disclose(ctx), 120, 10), Err(PalwBisectError::MidStateRepeatsAnEndpoint));
         assert_eq!(ladder.clone().apply_disclosure(&disclose(root), 120, 10), Err(PalwBisectError::MidStateRepeatsAnEndpoint));
@@ -1032,9 +1033,12 @@ mod tests {
         // And the anchor moves: after agreeing, the disclosed state IS the low endpoint, so the next
         // rung may not repeat it either. That is what makes the binding cumulative rather than a
         // one-off check against the seeds.
-        ladder.apply_verdict(&PalwBisectVerdictV1 { version: 1, session_id: ladder.session_id(), round: 0, agree: true }, 130, 10).unwrap();
+        ladder
+            .apply_verdict(&PalwBisectVerdictV1 { version: 1, session_id: ladder.session_id(), round: 0, agree: true }, 130, 10)
+            .unwrap();
         let next = ladder.expected_midpoint().unwrap();
-        let repeat = PalwBisectDisclosureV1 { version: 1, session_id: ladder.session_id(), round: 1, midpoint: next, mid_state: h64(0x77) };
+        let repeat =
+            PalwBisectDisclosureV1 { version: 1, session_id: ladder.session_id(), round: 1, midpoint: next, mid_state: h64(0x77) };
         assert_eq!(ladder.apply_disclosure(&repeat, 140, 10), Err(PalwBisectError::MidStateRepeatsAnEndpoint));
     }
 

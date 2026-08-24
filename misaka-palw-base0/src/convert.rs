@@ -48,10 +48,17 @@ pub enum ConvertError {
     /// A tensor the plan needs is not in the file.
     MissingTensor(String),
     /// A tensor is there but the wrong shape — the checkpoint is not the geometry claimed.
-    ShapeMismatch { tensor: String, want: Vec<usize>, got: Vec<usize> },
+    ShapeMismatch {
+        tensor: String,
+        want: Vec<usize>,
+        got: Vec<usize>,
+    },
     /// A dtype this converter does not read. Qwen2.5 ships BF16 throughout; anything else is a
     /// different file and guessing at its layout would produce a plausible, wrong artifact.
-    UnsupportedDtype { tensor: String, dtype: String },
+    UnsupportedDtype {
+        tensor: String,
+        dtype: String,
+    },
     /// A tensor whose every weight is zero has no scale — `absmax / 127` would be a division by
     /// zero, and a silently-1 scale would quantize it to a different tensor.
     DegenerateTensor(String),
@@ -111,11 +118,8 @@ pub fn parse_safetensors_header(blob: &[u8]) -> Result<SafetensorsIndex, Convert
             continue;
         }
         let spec = spec.as_object().ok_or(ConvertError::BadContainer("a tensor entry is not an object"))?;
-        let dtype = spec
-            .get("dtype")
-            .and_then(|v| v.as_str())
-            .ok_or(ConvertError::BadContainer("a tensor entry has no dtype"))?
-            .to_string();
+        let dtype =
+            spec.get("dtype").and_then(|v| v.as_str()).ok_or(ConvertError::BadContainer("a tensor entry has no dtype"))?.to_string();
         let shape: Vec<usize> = spec
             .get("shape")
             .and_then(|v| v.as_array())
@@ -421,8 +425,7 @@ pub fn convert_qwen25(blob: &[u8], plan: &Qwen25ConvertPlan) -> Result<Base0Arti
     // 127 rather than on 1. A shift of `K` would land it on 1 and collapse every normalized value
     // to a handful of levels — which is what this converter did until the bias arithmetic made it
     // visible.
-    let norm_requant =
-        QuantParams { multiplier: i32::MAX, shift: (kaspa_consensus_core::palw_base0::K as u8) - 7, zero: 0 };
+    let norm_requant = QuantParams { multiplier: i32::MAX, shift: (kaspa_consensus_core::palw_base0::K as u8) - 7, zero: 0 };
     let residual_requant = QuantParams { multiplier: i32::MAX, shift: 1, zero: 0 };
     Base0ArtifactV1::from_parts(s, embed, unembed, layers, norm_requant, residual_requant).map_err(ConvertError::Artifact)
 }
@@ -700,10 +703,8 @@ mod tests {
     fn tiny_checkpoint(s: &Base0ShapeV1) -> Vec<u8> {
         let d = s.d_model();
         let kv = s.kv_dim();
-        let mut specs: Vec<(String, Vec<usize>)> = vec![
-            ("model.embed_tokens.weight".into(), vec![s.vocab, d]),
-            ("model.norm.weight".into(), vec![d]),
-        ];
+        let mut specs: Vec<(String, Vec<usize>)> =
+            vec![("model.embed_tokens.weight".into(), vec![s.vocab, d]), ("model.norm.weight".into(), vec![d])];
         for li in 0..s.n_layers {
             for (t, shape) in [
                 ("input_layernorm.weight", vec![d]),
@@ -736,10 +737,7 @@ mod tests {
                 let bits = (v as f32).to_bits();
                 data.extend_from_slice(&((bits >> 16) as u16).to_le_bytes());
             }
-            header.insert(
-                name.clone(),
-                serde_json::json!({ "dtype": "BF16", "shape": shape, "data_offsets": [begin, data.len()] }),
-            );
+            header.insert(name.clone(), serde_json::json!({ "dtype": "BF16", "shape": shape, "data_offsets": [begin, data.len()] }));
         }
         let json = serde_json::to_vec(&serde_json::Value::Object(header)).unwrap();
         let mut blob = (json.len() as u64).to_le_bytes().to_vec();
@@ -850,7 +848,7 @@ mod tests {
             assert_eq!(health.layers, layers);
             assert_eq!(health.residual_peak.len(), layers, "one peak per layer");
 
-            if health.residual_peak.iter().any(|p| *p == 0) {
+            if health.residual_peak.contains(&0) {
                 collapsed_at = Some((layers, health.residual_peak.clone()));
                 continue;
             }

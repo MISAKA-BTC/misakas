@@ -196,10 +196,8 @@ impl PalwExecutorCreditStateV3 {
         }
         // Compute every successor value before writing any, so a late overflow refusal
         // leaves the state exactly as it was (atomicity, same posture as the budget).
-        let new_epoch_amount =
-            self.credited_amount_this_epoch.checked_add(addition).ok_or(PalwJobLedgerError::AmountOverflow)?;
-        let new_exposure =
-            self.active_unfinalized_exposure.checked_add(addition).ok_or(PalwJobLedgerError::AmountOverflow)?;
+        let new_epoch_amount = self.credited_amount_this_epoch.checked_add(addition).ok_or(PalwJobLedgerError::AmountOverflow)?;
+        let new_exposure = self.active_unfinalized_exposure.checked_add(addition).ok_or(PalwJobLedgerError::AmountOverflow)?;
         self.last_credited_daa_by_class.insert(class_id, current_daa);
         self.credited_amount_this_epoch = new_epoch_amount;
         self.active_unfinalized_exposure = new_exposure;
@@ -240,19 +238,11 @@ impl PalwEpochBudgetV3 {
     /// a refusal leaves `spent_this_epoch` untouched.
     pub fn charge_block(&mut self, addition: u64) -> Result<(), PalwJobLedgerError> {
         if addition > self.block_cap {
-            return Err(PalwJobLedgerError::BlockBudgetExceeded {
-                spent: self.spent_this_epoch,
-                addition,
-                cap: self.block_cap,
-            });
+            return Err(PalwJobLedgerError::BlockBudgetExceeded { spent: self.spent_this_epoch, addition, cap: self.block_cap });
         }
         let new_spent = self.spent_this_epoch.checked_add(addition).ok_or(PalwJobLedgerError::AmountOverflow)?;
         if new_spent > self.epoch_cap {
-            return Err(PalwJobLedgerError::EpochBudgetExceeded {
-                spent: self.spent_this_epoch,
-                addition,
-                cap: self.epoch_cap,
-            });
+            return Err(PalwJobLedgerError::EpochBudgetExceeded { spent: self.spent_this_epoch, addition, cap: self.epoch_cap });
         }
         self.spent_this_epoch = new_spent;
         Ok(())
@@ -338,10 +328,7 @@ mod tests {
         // Illegal in `Committed`: the spine refuses, and the status stays put.
         assert_eq!(
             ledger.apply(&id, E::ExactConviction),
-            Err(PalwJobLedgerError::Transition(PalwJobTransitionError {
-                status: S::Committed,
-                event: E::ExactConviction
-            }))
+            Err(PalwJobLedgerError::Transition(PalwJobTransitionError { status: S::Committed, event: E::ExactConviction }))
         );
         assert_eq!(ledger.get(&id).unwrap().status, S::Committed);
         // And an unknown job is I7, not a spine question.
@@ -361,10 +348,7 @@ mod tests {
         ledger.claim_reward(&id, 0).unwrap();
         ledger.claim_reward(&id, 1).unwrap();
         assert_eq!(ledger.get(&id).unwrap().reward_claimed_bitmap, 0b11);
-        assert_eq!(
-            ledger.claim_reward(&id, 0),
-            Err(PalwJobLedgerError::RewardAlreadyClaimed { job_id: id, claimant_bit: 0 })
-        );
+        assert_eq!(ledger.claim_reward(&id, 0), Err(PalwJobLedgerError::RewardAlreadyClaimed { job_id: id, claimant_bit: 0 }));
         assert_eq!(ledger.claim_reward(&id, 32), Err(PalwJobLedgerError::ClaimantBitOutOfRange { got: 32 }));
         assert_eq!(
             ledger.claim_reward(&Hash64::from_u64_word(9), 0),
@@ -382,9 +366,8 @@ mod tests {
         let class_a = Hash64::from_u64_word(0xA);
         let class_b = Hash64::from_u64_word(0xB);
         let mut state = PalwExecutorCreditStateV3::default();
-        let credit = |state: &mut PalwExecutorCreditStateV3, class, daa| {
-            state.check_and_record_credit(class, daa, 100, 10, 1_000_000, 1000)
-        };
+        let credit =
+            |state: &mut PalwExecutorCreditStateV3, class, daa| state.check_and_record_credit(class, daa, 100, 10, 1_000_000, 1000);
         credit(&mut state, class_a, 1_000).unwrap();
         assert_eq!(
             credit(&mut state, class_a, 1_099),
@@ -437,11 +420,8 @@ mod tests {
     /// and `roll_epoch` zeroes the epoch amount but carries exposure across.
     #[test]
     fn release_saturates_and_epoch_roll_keeps_exposure() {
-        let mut state = PalwExecutorCreditStateV3 {
-            credited_amount_this_epoch: 700,
-            active_unfinalized_exposure: 300,
-            ..Default::default()
-        };
+        let mut state =
+            PalwExecutorCreditStateV3 { credited_amount_this_epoch: 700, active_unfinalized_exposure: 300, ..Default::default() };
         state.release_exposure(1_000);
         assert_eq!(state.active_unfinalized_exposure, 0);
         state.active_unfinalized_exposure = 300;
@@ -455,16 +435,10 @@ mod tests {
     #[test]
     fn budget_valve_refuses_atomically() {
         let mut budget = PalwEpochBudgetV3 { block_cap: 100, epoch_cap: 150, spent_this_epoch: 0 };
-        assert_eq!(
-            budget.charge_block(101),
-            Err(PalwJobLedgerError::BlockBudgetExceeded { spent: 0, addition: 101, cap: 100 })
-        );
+        assert_eq!(budget.charge_block(101), Err(PalwJobLedgerError::BlockBudgetExceeded { spent: 0, addition: 101, cap: 100 }));
         budget.charge_block(100).unwrap();
         assert_eq!(budget.spent_this_epoch, 100);
-        assert_eq!(
-            budget.charge_block(100),
-            Err(PalwJobLedgerError::EpochBudgetExceeded { spent: 100, addition: 100, cap: 150 })
-        );
+        assert_eq!(budget.charge_block(100), Err(PalwJobLedgerError::EpochBudgetExceeded { spent: 100, addition: 100, cap: 150 }));
         assert_eq!(budget.spent_this_epoch, 100, "a refusal must record nothing");
         budget.charge_block(50).unwrap();
         assert_eq!(budget.spent_this_epoch, 150);

@@ -415,8 +415,7 @@ impl PalwWorkerRuntime {
         // stays occupied and the validator silently stops auditing. Kill it and report instead.
         // (On the kill path the readers see EOF and finish on their own.)
         self.wait_with_timeout(&mut child)?;
-        let status =
-            child.wait().map_err(|source| PalwError::Spawn { path: self.cfg.worker_bin.display().to_string(), source })?;
+        let status = child.wait().map_err(|source| PalwError::Spawn { path: self.cfg.worker_bin.display().to_string(), source })?;
         let stdout = stdout_reader.join().unwrap_or_default();
         let stderr = stderr_reader.join().unwrap_or_default();
         if !status.success() {

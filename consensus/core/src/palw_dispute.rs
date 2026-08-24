@@ -274,7 +274,7 @@ impl PalwExecutionClassStateV3 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::palw_catalog_coverage::{verify_catalog_coverage_v1, PalwReachableKernelSetV1};
+    use crate::palw_catalog_coverage::{PalwReachableKernelSetV1, verify_catalog_coverage_v1};
     use PalwChallengerBondDispositionV3 as B;
     use PalwClassStatusV3 as C;
     use PalwJobStatusV3 as S;
@@ -310,7 +310,14 @@ mod tests {
 
     fn all_paths() -> [PalwClassPathV1; 6] {
         use PalwClassPathV1 as P;
-        [P::JobAdmission, P::MinerCommitment, P::PanelSelection, P::AttestationAdmission, P::ProvisionalFinalization, P::CreditGeneration]
+        [
+            P::JobAdmission,
+            P::MinerCommitment,
+            P::PanelSelection,
+            P::AttestationAdmission,
+            P::ProvisionalFinalization,
+            P::CreditGeneration,
+        ]
     }
 
     fn class_state(class: u64, status: C) -> PalwExecutionClassStateV3 {
@@ -375,7 +382,11 @@ mod tests {
                     assert!(s.freeze_class);
                 }
                 other => {
-                    assert_eq!(settle_dispute_v3(other), Err(PalwDisputeError::NotACourtTerminal { status: other }), "{other:?} settled");
+                    assert_eq!(
+                        settle_dispute_v3(other),
+                        Err(PalwDisputeError::NotACourtTerminal { status: other }),
+                        "{other:?} settled"
+                    );
                 }
             }
         }

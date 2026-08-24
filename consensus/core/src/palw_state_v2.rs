@@ -373,7 +373,9 @@ impl PalwStateParamsV2 {
             return Err(PalwStateV2Error::InvalidParams("a budget tolerance above the ceiling is a cap no epoch can approach"));
         }
         if min_collateral_sompi == 0 {
-            return Err(PalwStateV2Error::InvalidParams("a zero minimum collateral bonds nothing — panel dedup would be free to defeat"));
+            return Err(PalwStateV2Error::InvalidParams(
+                "a zero minimum collateral bonds nothing — panel dedup would be free to defeat",
+            ));
         }
         if fp_attempt_share_permille == 0 || fp_attempt_share_permille > 1000 {
             return Err(PalwStateV2Error::InvalidParams("the attempt share must be 1..=1000 permille — a zero floor has no beacons"));
@@ -720,7 +722,9 @@ pub struct PalwBondStateV2 {
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub enum PalwClassStatusV2 {
     Active,
-    Frozen { since_daa: u64 },
+    Frozen {
+        since_daa: u64,
+    },
     /// **Registered, adjudicable, and carrying no weight yet (conditions 12 and 13).**
     ///
     /// A class used to become `Active` the instant it was registered, which took cadence share
@@ -735,7 +739,10 @@ pub enum PalwClassStatusV2 {
     ///
     /// The flip is a CLOCK, not an object. Nobody submits it, so there is nothing to forge and no
     /// authority question — the same shape the rung no-show uses, and the reason both are safe.
-    Registered { activation_daa: u64, pending_share_permille: u16 },
+    Registered {
+        activation_daa: u64,
+        pending_share_permille: u16,
+    },
 }
 
 /// The class's PWU rule — what Decision 6 item 6 checks an attempt's claimed `pwu` against.
@@ -846,9 +853,7 @@ impl PalwClassTermsV2 {
                 // ruleset id precisely so it cannot be a registrant's choice. Caught by
                 // `a_network_that_declares_no_floor_refuses_a_thin_class`.
                 if floor_seats == 0 || floor_quorum == 0 {
-                    return Err(
-                        "this network declares no per-class panel floor, so a class may not draw its own panel".to_string()
-                    );
+                    return Err("this network declares no per-class panel floor, so a class may not draw its own panel".to_string());
                 }
                 if seats < floor_seats || quorum < floor_quorum {
                     return Err(format!(
@@ -867,7 +872,9 @@ impl PalwClassTermsV2 {
                 crate::palw_panel_v2::PalwPanelParamsV2::new(seats, quorum, network.anchor_delay())
                     .map_err(|e| format!("the class's panel parameters are not a legal panel: {e:?}"))
             }
-            _ => Err("a class declares both of its panel parameters or neither — a half-specified panel has no quorum rule".to_string()),
+            _ => {
+                Err("a class declares both of its panel parameters or neither — a half-specified panel has no quorum rule".to_string())
+            }
         }
     }
 }
@@ -1559,7 +1566,9 @@ pub enum PalwStateV2Error {
     LadderRefused(Hash64, String),
     #[error("court session {0} was opened over a space its own session id does not name")]
     SessionIdMismatch(Hash64),
-    #[error("class {0} was registered with a zero slash value — its work risks no collateral, so the exposure ceiling is not a ceiling")]
+    #[error(
+        "class {0} was registered with a zero slash value — its work risks no collateral, so the exposure ceiling is not a ceiling"
+    )]
     ZeroSlashValue(Hash64),
     #[error(
         "class {0} was registered with a zero pwu_per_inference — a class whose canonical inference costs nothing is not a PALW class"
@@ -1569,7 +1578,9 @@ pub enum PalwStateV2Error {
     ZeroPwuCeiling(Hash64),
     #[error("per-class retarget failed: {0} — the closed span's facts must satisfy the rule or the block is invalid")]
     Retarget(String),
-    #[error("the first class on a chain must be the base class {base}, not {class_id} — the liveness floor exists before anything else does (ADR-0039 W6′)")]
+    #[error(
+        "the first class on a chain must be the base class {base}, not {class_id} — the liveness floor exists before anything else does (ADR-0039 W6′)"
+    )]
     FirstClassMustBeTheBase { class_id: Hash64, base: Hash64 },
     #[error("the first class must take the whole 1000‰, got {got}‰ — an unallocated permille is a half-funded floor")]
     FirstShareMustBeWhole { got: u16 },
@@ -1974,12 +1985,8 @@ impl PalwChainStateV2 {
         // adjudicable, and a dispute against it must resolve — while holding no permille. What
         // must hold is the two directions separately: every SHARE names a class, and every
         // ACTIVE-or-FROZEN class holds a share. A `Registered` one holds none, by construction.
-        let share_bearing: BTreeSet<&Hash64> = self
-            .classes
-            .iter()
-            .filter(|(_, c)| !matches!(c.status, PalwClassStatusV2::Registered { .. }))
-            .map(|(id, _)| id)
-            .collect();
+        let share_bearing: BTreeSet<&Hash64> =
+            self.classes.iter().filter(|(_, c)| !matches!(c.status, PalwClassStatusV2::Registered { .. })).map(|(id, _)| id).collect();
         if !self.class_shares.keys().collect::<BTreeSet<_>>().eq(&share_bearing) {
             return Err(PalwStateV2Error::CarriageInconsistent(
                 "the class set and the share table disagree — every share names a class, and every class past its activation edge holds a share".into(),
@@ -2686,13 +2693,8 @@ impl<'a> TransitionBuilder<'a> {
         // can reach retirement with a session still open because a VOID does not require the
         // court to have closed, and `CLAIM_RETIREMENT == WINDOW_COURT` on the shipped ruleset, so
         // the two land together rather than needing a DAA jump.
-        let orphans: Vec<Hash64> = self
-            .state
-            .court_sessions
-            .iter()
-            .filter(|(_, session)| session.claim == id)
-            .map(|(session_id, _)| *session_id)
-            .collect();
+        let orphans: Vec<Hash64> =
+            self.state.court_sessions.iter().filter(|(_, session)| session.claim == id).map(|(session_id, _)| *session_id).collect();
         for session_id in orphans {
             self.write_court(session_id, None);
         }
@@ -2772,9 +2774,7 @@ pub fn apply_palw_transition_v3(
     //     The prefix is the first N in `BTreeMap` key order, which is the same set on every node
     //     and the same set `palw_v2_payout_outputs` pays. A backlog drains at N per block against
     //     at most one new claim per block, so the queue cannot grow.
-    for claim_id in
-        builder.state.pending_payouts.keys().copied().take(PALW_V2_MAX_PAYOUTS_PER_BLOCK).collect::<Vec<_>>()
-    {
+    for claim_id in builder.state.pending_payouts.keys().copied().take(PALW_V2_MAX_PAYOUTS_PER_BLOCK).collect::<Vec<_>>() {
         builder.write_payout(claim_id, None);
     }
 
@@ -2932,8 +2932,7 @@ fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCon
         if deadline >= ctx.daa_score {
             break;
         }
-        let mut session =
-            builder.state.court_sessions.get(&session_id).ok_or(PalwStateV2Error::MissingSession(session_id))?.clone();
+        let mut session = builder.state.court_sessions.get(&session_id).ok_or(PalwStateV2Error::MissingSession(session_id))?.clone();
         // **A missing claim drops the session; it does not fail the block.** `retire_claim` closes
         // a claim's sessions with it, so this should be unreachable — and it is written to be
         // survivable anyway, because the alternative failure mode is a chain that stops forever on
@@ -2960,8 +2959,8 @@ fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCon
         // silently invert the outcome: the backstop closes challenger-side, a first-rung silence
         // closes against the responder. So a network without a tighter rung window keeps exactly
         // the pre-ladder behavior, and one with a real ladder gets the rung verdict it configured.
-        let rung_fired = session.ladder.last_deadline_daa() < ctx.daa_score
-            && session.ladder.last_deadline_daa() < session.deadline_daa;
+        let rung_fired =
+            session.ladder.last_deadline_daa() < ctx.daa_score && session.ladder.last_deadline_daa() < session.deadline_daa;
         if rung_fired {
             if let Ok(no_show) = session.ladder.declare_no_show(ctx.daa_score) {
                 builder.write_court(session_id, None);
@@ -3314,8 +3313,7 @@ fn apply_class_retargets(
         // Snapshot the lane census before any write, so the plan is a pure function of the
         // parent state.
         let produced_in_lane: BTreeMap<Hash64, u64> = {
-            let counters =
-                if counters_are_receipts { &builder.state.receipt_epoch_counters } else { &builder.state.epoch_counters };
+            let counters = if counters_are_receipts { &builder.state.receipt_epoch_counters } else { &builder.state.epoch_counters };
             class_ids
                 .iter()
                 .map(|id| {
@@ -3576,10 +3574,7 @@ fn apply_object(
                     slash_value_per_pwu: *slash_value_per_pwu,
                     pwu_rule: *pwu_rule,
                     status: if weightless {
-                        PalwClassStatusV2::Registered {
-                            activation_daa: *activation_daa,
-                            pending_share_permille: *share_permille,
-                        }
+                        PalwClassStatusV2::Registered { activation_daa: *activation_daa, pending_share_permille: *share_permille }
                     } else {
                         PalwClassStatusV2::Active
                     },
@@ -3878,8 +3873,7 @@ fn apply_object(
             };
             builder.reserve_for_claim(&claim)?;
             builder.write_claim(*claim_id, Some(claim));
-            let deadline =
-                ctx.daa_score.checked_add(builder.params.window_bind).ok_or(PalwStateV2Error::Overflow("bind deadline"))?;
+            let deadline = ctx.daa_score.checked_add(builder.params.window_bind).ok_or(PalwStateV2Error::Overflow("bind deadline"))?;
             builder.arm_deadline(deadline, *claim_id);
             // No production census here: commitments are not blocks. The receipt lane's counters
             // move when a quantum is SPENT.
@@ -4570,7 +4564,12 @@ pub(crate) mod tests {
 
     /// A SECOND session on the same dispute. With derived ids, "another court" means another
     /// index space — the same six inputs cannot produce two ids.
-    fn second_court_open(claim_id: Hash64, trace_root: Hash64, executor: PalwBondKeyV2, challenger: PalwBondKeyV2) -> PalwConsensusObjectV2 {
+    fn second_court_open(
+        claim_id: Hash64,
+        trace_root: Hash64,
+        executor: PalwBondKeyV2,
+        challenger: PalwBondKeyV2,
+    ) -> PalwConsensusObjectV2 {
         const SPACE: crate::palw_bisect::PalwBisectSpaceV1 = crate::palw_bisect::PalwBisectSpaceV1::StepLeaves;
         const SIZE: u64 = 32;
         PalwConsensusObjectV2::CourtOpened {
@@ -4584,7 +4583,8 @@ pub(crate) mod tests {
     }
 
     fn second_court_session_of(claim_id: Hash64, trace_root: Hash64, executor: PalwBondKeyV2, challenger: PalwBondKeyV2) -> Hash64 {
-        let PalwConsensusObjectV2::CourtOpened { session_id, .. } = second_court_open(claim_id, trace_root, executor, challenger) else {
+        let PalwConsensusObjectV2::CourtOpened { session_id, .. } = second_court_open(claim_id, trace_root, executor, challenger)
+        else {
             unreachable!("second_court_open builds a CourtOpened")
         };
         session_id
@@ -4640,7 +4640,14 @@ pub(crate) mod tests {
                 activation_daa: 0,
                 admission: None,
             },
-            PalwConsensusObjectV2::BondRegistered { bond: bond_key(1), pubkey: vec![7; 4], operator_pubkey: op_key(21), collateral: 1_000, payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11), signature: Vec::new() },
+            PalwConsensusObjectV2::BondRegistered {
+                bond: bond_key(1),
+                pubkey: vec![7; 4],
+                operator_pubkey: op_key(21),
+                collateral: 1_000,
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+                signature: Vec::new(),
+            },
         ]
     }
 
@@ -4728,7 +4735,13 @@ pub(crate) mod tests {
         assert!(matches!(s3.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::PanelBound { .. }));
         assert_eq!((s3.safe_weight(), s3.bounded_immature()), (0, 4), "binding moves no weight");
 
-        let (s4, _) = apply(&s3, &p, &ctx(4, 103, 4), &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: seat_says(true) }], None);
+        let (s4, _) = apply(
+            &s3,
+            &p,
+            &ctx(4, 103, 4),
+            &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: seat_says(true) }],
+            None,
+        );
         assert!(matches!(s4.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
         assert_eq!((s4.safe_weight(), s4.bounded_immature()), (0, 4), "licensing moves no weight");
 
@@ -4819,8 +4832,13 @@ pub(crate) mod tests {
         let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: op_id(21) }];
         let (s3, _) =
             apply(&s2, &p, &ctx(3, 102, 3), &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }], None);
-        let (s4, _) =
-            apply(&s3, &p, &ctx(4, 103, 4), &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: seat_says(true) }], None);
+        let (s4, _) = apply(
+            &s3,
+            &p,
+            &ctx(4, 103, 4),
+            &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: seat_says(true) }],
+            None,
+        );
         let (s5, _) = apply(&s4, &p, &ctx(5, 124, 5), &[], None);
         assert!(matches!(s5.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }), "the lattice still runs");
         assert!(s5.pending_payouts_iter().next().is_none(), "and nothing was ever payable");
@@ -4914,7 +4932,13 @@ pub(crate) mod tests {
         let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: h64(90) }];
         let (s3, _) =
             apply(&s2, &p, &ctx(3, 102, 3), &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }], None);
-        let (s4, _) = apply(&s3, &p, &ctx(4, 103, 4), &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: seat_says(true) }], None);
+        let (s4, _) = apply(
+            &s3,
+            &p,
+            &ctx(4, 103, 4),
+            &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: seat_says(true) }],
+            None,
+        );
         let (s5, _) = apply(&s4, &p, &ctx(5, 124, 5), &[], None);
 
         let before = s4.candidate_order(h64(1000));
@@ -5012,8 +5036,13 @@ pub(crate) mod tests {
         let (s3, _) =
             apply(&s2, &p, &ctx(3, 102, 3), &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }], None);
         assert!(s3.panels.contains_key(&claim_id), "the panel is keyed on the claim");
-        let (s4, _) =
-            apply(&s3, &p, &ctx(4, 103, 4), &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: seat_says(true) }], None);
+        let (s4, _) = apply(
+            &s3,
+            &p,
+            &ctx(4, 103, 4),
+            &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: seat_says(true) }],
+            None,
+        );
         let (s5, _) = apply(&s4, &p, &ctx(5, 124, 5), &[], None);
         assert!(matches!(s5.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }));
         assert_eq!(s5.safe_weight(), 40);
@@ -5126,7 +5155,13 @@ pub(crate) mod tests {
         let env = attempt(40, 1);
         let claim_id = attempt_id_v2(&env.attempt);
         let (s2, _) = apply(&s1, &p, &ctx(2, 101, 2), &[], Some(&env));
-        let (s3, _) = apply(&s2, &p, &ctx(3, 102, 3), &[PalwConsensusObjectV2::ProducerDefaulted { claim: claim_id, receipts: Vec::new() }], None);
+        let (s3, _) = apply(
+            &s2,
+            &p,
+            &ctx(3, 102, 3),
+            &[PalwConsensusObjectV2::ProducerDefaulted { claim: claim_id, receipts: Vec::new() }],
+            None,
+        );
         match s3.claim(&claim_id).unwrap().phase {
             PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::ProducerWithholding, .. } => {}
             ref other => panic!("expected ProducerWithholding void, got {other:?}"),
@@ -5196,11 +5231,7 @@ pub(crate) mod tests {
 
         // The claim is gone, and nothing is still armed against it.
         assert!(state.claim(&claim_id).is_none(), "the claim retired");
-        assert_eq!(
-            state.court_sessions_for_claim(&claim_id),
-            0,
-            "a retired claim must leave no session armed against it"
-        );
+        assert_eq!(state.court_sessions_for_claim(&claim_id), 0, "a retired claim must leave no session armed against it");
     }
 
     fn an_open_court_blocks_final_and_a_cleared_court_rearms_it() {
@@ -5213,14 +5244,14 @@ pub(crate) mod tests {
         let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: h64(90) }];
         let (s3, _) =
             apply(&s2, &p, &ctx(3, 102, 3), &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }], None);
-        let (s4, _) = apply(&s3, &p, &ctx(4, 103, 4), &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: seat_says(true) }], None);
-        let (s5, _) = apply(
-            &s4,
+        let (s4, _) = apply(
+            &s3,
             &p,
-            &ctx(5, 104, 5),
-            &[court_open(claim_id, h64(31), bond_key(1), bond_key(1))],
+            &ctx(4, 103, 4),
+            &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: seat_says(true) }],
             None,
         );
+        let (s5, _) = apply(&s4, &p, &ctx(5, 104, 5), &[court_open(claim_id, h64(31), bond_key(1), bond_key(1))], None);
         // Far past the challenge window: the claim must NOT final while the court is open.
         let (s6, _) = apply(&s5, &p, &ctx(6, 200, 6), &[], None);
         assert!(
@@ -5233,7 +5264,14 @@ pub(crate) mod tests {
             &s6,
             &p,
             &ctx(7, 210, 7),
-            &[PalwConsensusObjectV2::CourtClosed { session_id: court_session_of(claim_id, h64(31), bond_key(1), bond_key(1)), verdict: PalwCourtVerdictV2::ChallengerDefeated, proof: crate::palw_court_v2::PalwCourtVerdictProofV2::Arithmetic { refutation: crate::palw_step_refute::tests::skeleton_refutation(), operand_openings: Vec::new(),} }],
+            &[PalwConsensusObjectV2::CourtClosed {
+                session_id: court_session_of(claim_id, h64(31), bond_key(1), bond_key(1)),
+                verdict: PalwCourtVerdictV2::ChallengerDefeated,
+                proof: crate::palw_court_v2::PalwCourtVerdictProofV2::Arithmetic {
+                    refutation: crate::palw_step_refute::tests::skeleton_refutation(),
+                    operand_openings: Vec::new(),
+                },
+            }],
             None,
         );
         assert!(matches!(s7.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
@@ -5249,18 +5287,19 @@ pub(crate) mod tests {
         let env = attempt(40, 1);
         let claim_id = attempt_id_v2(&env.attempt);
         let (s2, _) = apply(&s1, &p, &ctx(2, 101, 2), &[], Some(&env));
-        let (s3, _) = apply(
-            &s2,
-            &p,
-            &ctx(3, 102, 3),
-            &[court_open(claim_id, h64(31), bond_key(1), bond_key(1))],
-            None,
-        );
+        let (s3, _) = apply(&s2, &p, &ctx(3, 102, 3), &[court_open(claim_id, h64(31), bond_key(1), bond_key(1))], None);
         let (s4, _) = apply(
             &s3,
             &p,
             &ctx(4, 103, 4),
-            &[PalwConsensusObjectV2::CourtClosed { session_id: court_session_of(claim_id, h64(31), bond_key(1), bond_key(1)), verdict: PalwCourtVerdictV2::ExecutorGuilty, proof: crate::palw_court_v2::PalwCourtVerdictProofV2::Arithmetic { refutation: crate::palw_step_refute::tests::skeleton_refutation(), operand_openings: Vec::new(),} }],
+            &[PalwConsensusObjectV2::CourtClosed {
+                session_id: court_session_of(claim_id, h64(31), bond_key(1), bond_key(1)),
+                verdict: PalwCourtVerdictV2::ExecutorGuilty,
+                proof: crate::palw_court_v2::PalwCourtVerdictProofV2::Arithmetic {
+                    refutation: crate::palw_step_refute::tests::skeleton_refutation(),
+                    operand_openings: Vec::new(),
+                },
+            }],
             None,
         );
         match s4.claim(&claim_id).unwrap().phase {
@@ -5315,14 +5354,14 @@ pub(crate) mod tests {
         let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: h64(90) }];
         let (s3, _) =
             apply(&s2, &p, &ctx(3, 102, 3), &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }], None);
-        let (s4, _) = apply(&s3, &p, &ctx(4, 103, 4), &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: seat_says(true) }], None);
-        let (s5, _) = apply(
-            &s4,
+        let (s4, _) = apply(
+            &s3,
             &p,
-            &ctx(5, 104, 5),
-            &[court_open(claim_id, h64(31), bond_key(1), bond_key(1))],
+            &ctx(4, 103, 4),
+            &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: seat_says(true) }],
             None,
         );
+        let (s5, _) = apply(&s4, &p, &ctx(5, 104, 5), &[court_open(claim_id, h64(31), bond_key(1), bond_key(1))], None);
         // Inside the court budget (opened at 104, window 500 → deadline 604): frozen.
         let (s6, _) = apply(&s5, &p, &ctx(6, 600, 6), &[], None);
         assert!(matches!(s6.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
@@ -5523,7 +5562,9 @@ pub(crate) mod tests {
                 pubkey: vec![7; 4],
                 operator_pubkey: op_key(20 + n),
                 collateral: 1_000,
-                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11), signature: Vec::new() });
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+                signature: Vec::new(),
+            });
         }
         let (s1, _) = apply(&genesis, p, &ctx(1, 100, 1), &objects, None);
         let env = attempt(40, 1);
@@ -5567,10 +5608,7 @@ pub(crate) mod tests {
         );
         assert_eq!(licensed.bond(&bond_key(1)).unwrap().slashed, 0, "the seat that answered with the quorum keeps its stake");
         assert!(licensed.bond(&bond_key(2)).unwrap().slashed > 0, "the refuted seat pays — that part already worked");
-        assert!(
-            licensed.bond(&bond_key(3)).unwrap().slashed > 0,
-            "and the seat that never answered pays too — this is what was free"
-        );
+        assert!(licensed.bond(&bond_key(3)).unwrap().slashed > 0, "and the seat that never answered pays too — this is what was free");
         assert_eq!(
             licensed.bond(&bond_key(3)).unwrap().slashed,
             licensed.bond(&bond_key(2)).unwrap().slashed,
@@ -5653,8 +5691,13 @@ pub(crate) mod tests {
         let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: op_id(21) }];
         let (s3, _) =
             apply(&s2, p, &ctx(3, 102, 3), &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }], None);
-        let (s4, _) =
-            apply(&s3, p, &ctx(4, 103, 4), &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: seat_says(true) }], None);
+        let (s4, _) = apply(
+            &s3,
+            p,
+            &ctx(4, 103, 4),
+            &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: seat_says(true) }],
+            None,
+        );
         let (s5, _) = apply(&s4, p, &ctx(5, 104, 5), &[court_open(claim_id, h64(31), bond_key(1), bond_key(1))], None);
         let sid = court_session_of(claim_id, h64(31), bond_key(1), bond_key(1));
         (s5, claim_id, sid)
@@ -5989,7 +6032,13 @@ pub(crate) mod tests {
         ));
         // Receipt for a claim that does not exist.
         assert!(matches!(
-            apply_palw_transition_v2(&genesis, &p, &c, &[PalwConsensusObjectV2::ReceiptLicensed { claim: h64(1), receipts: Vec::new() }], None),
+            apply_palw_transition_v2(
+                &genesis,
+                &p,
+                &c,
+                &[PalwConsensusObjectV2::ReceiptLicensed { claim: h64(1), receipts: Vec::new() }],
+                None
+            ),
             Err(PalwStateV2Error::MissingClaim(_))
         ));
         // Closing a session that does not exist.
@@ -5998,14 +6047,27 @@ pub(crate) mod tests {
                 &genesis,
                 &p,
                 &c,
-                &[PalwConsensusObjectV2::CourtClosed { session_id: h64(1), verdict: PalwCourtVerdictV2::ExecutorGuilty, proof: crate::palw_court_v2::PalwCourtVerdictProofV2::Arithmetic { refutation: crate::palw_step_refute::tests::skeleton_refutation(), operand_openings: Vec::new(),} }],
+                &[PalwConsensusObjectV2::CourtClosed {
+                    session_id: h64(1),
+                    verdict: PalwCourtVerdictV2::ExecutorGuilty,
+                    proof: crate::palw_court_v2::PalwCourtVerdictProofV2::Arithmetic {
+                        refutation: crate::palw_step_refute::tests::skeleton_refutation(),
+                        operand_openings: Vec::new(),
+                    }
+                }],
                 None
             ),
             Err(PalwStateV2Error::MissingSession(_))
         ));
         // Retiring a bond that does not exist.
         assert!(matches!(
-            apply_palw_transition_v2(&genesis, &p, &c, &[PalwConsensusObjectV2::BondRetireRequested { bond: bond_key(9), signature: vec![0xEE; 8] }], None),
+            apply_palw_transition_v2(
+                &genesis,
+                &p,
+                &c,
+                &[PalwConsensusObjectV2::BondRetireRequested { bond: bond_key(9), signature: vec![0xEE; 8] }],
+                None
+            ),
             Err(PalwStateV2Error::MissingBond(_))
         ));
     }
@@ -6037,7 +6099,13 @@ pub(crate) mod tests {
         ));
 
         // Retiring bond refuses the attempt.
-        let (retiring, _) = apply(&s1, &p, &ctx(2, 101, 2), &[PalwConsensusObjectV2::BondRetireRequested { bond: bond_key(1), signature: vec![0xEE; 8] }], None);
+        let (retiring, _) = apply(
+            &s1,
+            &p,
+            &ctx(2, 101, 2),
+            &[PalwConsensusObjectV2::BondRetireRequested { bond: bond_key(1), signature: vec![0xEE; 8] }],
+            None,
+        );
         assert!(matches!(
             apply_palw_transition_v2(&retiring, &p, &ctx(3, 102, 3), &[], Some(&attempt(40, 1))),
             Err(PalwStateV2Error::RetiringBond(_))
@@ -6082,7 +6150,13 @@ pub(crate) mod tests {
         let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: h64(90) }];
         let (m2, _) =
             apply(&m1, &p, &ctx(3, 102, 3), &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }], None);
-        let (m3, _) = apply(&m2, &p, &ctx(4, 103, 4), &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: seat_says(true) }], None);
+        let (m3, _) = apply(
+            &m2,
+            &p,
+            &ctx(4, 103, 4),
+            &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: seat_says(true) }],
+            None,
+        );
         let (matured, _) = apply(&m3, &p, &ctx(5, 124, 5), &[], None);
 
         // Chain P: three heavier claims, none ever bound — a pile. (Blocks close enough together
@@ -6179,7 +6253,13 @@ pub(crate) mod tests {
         let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: h64(21) }];
         let (h2, _) =
             apply(&h1, &p, &ctx(3, 102, 3), &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }], None);
-        let (h3, _) = apply(&h2, &p, &ctx(4, 103, 4), &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: seat_says(true) }], None);
+        let (h3, _) = apply(
+            &h2,
+            &p,
+            &ctx(4, 103, 4),
+            &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: seat_says(true) }],
+            None,
+        );
         let (honest, _) = apply(&h3, &p, &ctx(5, 124, 5), &[], None);
         assert!(matches!(honest.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }));
 
@@ -6258,7 +6338,14 @@ pub(crate) mod tests {
             &base,
             &p,
             &ctx(2, 101, 2),
-            &[PalwConsensusObjectV2::BondRegistered { bond: bond_key(2), pubkey: vec![8], operator_pubkey: op_key(22), collateral: 1_000, payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11), signature: Vec::new() }],
+            &[PalwConsensusObjectV2::BondRegistered {
+                bond: bond_key(2),
+                pubkey: vec![8],
+                operator_pubkey: op_key(22),
+                collateral: 1_000,
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+                signature: Vec::new(),
+            }],
             None,
         );
         let (with_class, _) = apply(
@@ -6279,8 +6366,13 @@ pub(crate) mod tests {
             None,
         );
         let (with_claim, _) = apply(&base, &p, &ctx(2, 101, 2), &[], Some(&attempt(40, 1)));
-        let (with_retire, _) =
-            apply(&base, &p, &ctx(2, 101, 2), &[PalwConsensusObjectV2::BondRetireRequested { bond: bond_key(1), signature: vec![0xEE; 8] }], None);
+        let (with_retire, _) = apply(
+            &base,
+            &p,
+            &ctx(2, 101, 2),
+            &[PalwConsensusObjectV2::BondRetireRequested { bond: bond_key(1), signature: vec![0xEE; 8] }],
+            None,
+        );
         // The freeze rides an entrant (the floor may not be frozen), which is still a distinct
         // surface: the registration alone and the registration-plus-freeze must differ.
         let (with_freeze, _) = apply(&base, &p, &ctx(2, 101, 2), &[entrant_class(h64(2), 500), freeze(h64(2))], None);
@@ -6363,18 +6455,19 @@ pub(crate) mod tests {
             (2, 101, 2, vec![], Some(env)),
             (3, 102, 3, vec![PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }], Some(orphan)),
             (4, 103, 4, vec![PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: seat_says(true) }], None),
-            (
-                5,
-                104,
-                5,
-                vec![court_open(claim_id, h64(31), bond_key(1), bond_key(1))],
-                None,
-            ),
+            (5, 104, 5, vec![court_open(claim_id, h64(31), bond_key(1), bond_key(1))], None),
             (
                 6,
                 150,
                 6,
-                vec![PalwConsensusObjectV2::CourtClosed { session_id: court_session_of(claim_id, h64(31), bond_key(1), bond_key(1)), verdict: PalwCourtVerdictV2::ChallengerDefeated, proof: crate::palw_court_v2::PalwCourtVerdictProofV2::Arithmetic { refutation: crate::palw_step_refute::tests::skeleton_refutation(), operand_openings: Vec::new(),} }],
+                vec![PalwConsensusObjectV2::CourtClosed {
+                    session_id: court_session_of(claim_id, h64(31), bond_key(1), bond_key(1)),
+                    verdict: PalwCourtVerdictV2::ChallengerDefeated,
+                    proof: crate::palw_court_v2::PalwCourtVerdictProofV2::Arithmetic {
+                        refutation: crate::palw_step_refute::tests::skeleton_refutation(),
+                        operand_openings: Vec::new(),
+                    },
+                }],
                 None,
             ),
             (7, 151, 7, vec![], None),
@@ -6638,7 +6731,9 @@ pub(crate) mod tests {
             pubkey: vec![8; 4],
             operator_pubkey: op_key(22),
             collateral: 1_000,
-            payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11), signature: Vec::new() });
+            payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+            signature: Vec::new(),
+        });
         let (s1, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None);
 
         // Class 1 takes three blocks of the span, class 2 takes one: 750/250 against a 500/500
@@ -6646,7 +6741,8 @@ pub(crate) mod tests {
         let (s2, _) = apply(&s1, &p, &ctx(2, 101, 2), &[], Some(&attempt(4, 1)));
         let (s3, _) = apply(&s2, &p, &ctx(3, 102, 3), &[], Some(&attempt(4, 2)));
         let (s4, _) = apply(&s3, &p, &ctx(4, 103, 4), &[], Some(&attempt(4, 3)));
-        let (s5, _) = apply(&s4, &p, &ctx(5, 104, 5), &[], Some(&attempt_for_class(4, 4, h64(2), bond_key(2), vec![8; 4], h64(22), h64(12))));
+        let (s5, _) =
+            apply(&s4, &p, &ctx(5, 104, 5), &[], Some(&attempt_for_class(4, 4, h64(2), bond_key(2), vec![8; 4], h64(22), h64(12))));
         let (s6, _) = apply(&s5, &p, &ctx(6, 1_001, 6), &[], None);
 
         assert!(s6.class_target(&h64(1)).unwrap().target < boot, "the over-producing class hardens");
@@ -6675,13 +6771,17 @@ pub(crate) mod tests {
                 pubkey: vec![7; 4],
                 operator_pubkey: op_key(0xAA),
                 collateral: 1_000,
-                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11), signature: Vec::new() },
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+                signature: Vec::new(),
+            },
             PalwConsensusObjectV2::BondRegistered {
                 bond: bond_key(2),
                 pubkey: vec![8; 4],
                 operator_pubkey: op_key(0xAA),
                 collateral: 1_000,
-                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11), signature: Vec::new() },
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+                signature: Vec::new(),
+            },
         ];
         let (state, _) = apply(&genesis, &p, &ctx(1, 100, 1), &shared, None);
         assert_eq!(
@@ -6702,7 +6802,9 @@ pub(crate) mod tests {
                 pubkey: vec![9; 4],
                 operator_pubkey: op_key(0xBB),
                 collateral: 1_000,
-                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11), signature: Vec::new() }],
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+                signature: Vec::new(),
+            }],
             None,
         );
         assert_ne!(state2.bond(&bond_key(3)).unwrap().operator_id, op_id(0xAA));
@@ -6717,7 +6819,9 @@ pub(crate) mod tests {
                 pubkey: vec![1; 4],
                 operator_pubkey: op_key(0xCC),
                 collateral: p.min_collateral_sompi() - 1,
-                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11), signature: Vec::new() }],
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+                signature: Vec::new(),
+            }],
             None,
         );
         assert!(matches!(dust, Err(PalwStateV2Error::CollateralBelowMinimum { .. })), "got {dust:?}");
@@ -6732,7 +6836,9 @@ pub(crate) mod tests {
                 pubkey: vec![1; 4],
                 operator_pubkey: op_key(0xCC),
                 collateral: p.min_collateral_sompi(),
-                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11), signature: Vec::new() }],
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+                signature: Vec::new(),
+            }],
             None,
         );
 
@@ -6746,7 +6852,9 @@ pub(crate) mod tests {
                 pubkey: vec![1; 4],
                 operator_pubkey: Vec::new(),
                 collateral: 1_000,
-                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11), signature: Vec::new() }],
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+                signature: Vec::new(),
+            }],
             None,
         );
         assert!(matches!(empty, Err(PalwStateV2Error::EmptyOperatorKey(_))), "got {empty:?}");
@@ -6784,13 +6892,8 @@ pub(crate) mod tests {
 
         // Court conviction: the stake is taken, and recorded as taken.
         let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: h64(90) }];
-        let (s3, _) = apply(
-            &s2,
-            &p,
-            &ctx(3, 102, 3),
-            &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }],
-            None,
-        );
+        let (s3, _) =
+            apply(&s2, &p, &ctx(3, 102, 3), &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }], None);
         let (s4, _) = apply(
             &s3,
             &p,
@@ -6799,18 +6902,19 @@ pub(crate) mod tests {
             None,
         );
         let sid = court_session_of(claim_id, h64(31), bond_key(1), bond_key(1));
-        let (s5, _) = apply(
-            &s4,
-            &p,
-            &ctx(5, 104, 5),
-            &[court_open(claim_id, h64(31), bond_key(1), bond_key(1))],
-            None,
-        );
+        let (s5, _) = apply(&s4, &p, &ctx(5, 104, 5), &[court_open(claim_id, h64(31), bond_key(1), bond_key(1))], None);
         let (s6, _) = apply(
             &s5,
             &p,
             &ctx(6, 105, 6),
-            &[PalwConsensusObjectV2::CourtClosed { session_id: sid, verdict: PalwCourtVerdictV2::ExecutorGuilty, proof: crate::palw_court_v2::PalwCourtVerdictProofV2::Arithmetic { refutation: crate::palw_step_refute::tests::skeleton_refutation(), operand_openings: Vec::new(),} }],
+            &[PalwConsensusObjectV2::CourtClosed {
+                session_id: sid,
+                verdict: PalwCourtVerdictV2::ExecutorGuilty,
+                proof: crate::palw_court_v2::PalwCourtVerdictProofV2::Arithmetic {
+                    refutation: crate::palw_step_refute::tests::skeleton_refutation(),
+                    operand_openings: Vec::new(),
+                },
+            }],
             None,
         );
         let bond = s6.bond(&bond_key(1)).unwrap();
@@ -6845,7 +6949,9 @@ pub(crate) mod tests {
             pubkey: vec![9; 4],
             operator_pubkey: op_key(0x99),
             collateral: 1_000,
-            payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11), signature: Vec::new() });
+            payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+            signature: Vec::new(),
+        });
         let (base, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None);
 
         let env = attempt(40, 1);
@@ -6853,23 +6959,13 @@ pub(crate) mod tests {
         let (s2, _) = apply(&base, &p, &ctx(2, 101, 2), &[], Some(&env));
         let reserved = s2.claim(&claim_id).unwrap().reserved as u64;
         let seats = vec![PalwPanelSeatV2 { bond: bond_key(9), operator_id: h64(0x99) }];
-        let (s3, _) = apply(
-            &s2,
-            &p,
-            &ctx(3, 102, 3),
-            &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }],
-            None,
-        );
+        let (s3, _) =
+            apply(&s2, &p, &ctx(3, 102, 3), &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }], None);
 
         // The quorum said the data WAS served; seat 9 said it was withheld.
         let dissent = vec![seat_receipt(bond_key(9), false)];
-        let (licensed, _) = apply(
-            &s3,
-            &p,
-            &ctx(4, 103, 4),
-            &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: dissent }],
-            None,
-        );
+        let (licensed, _) =
+            apply(&s3, &p, &ctx(4, 103, 4), &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: dissent }], None);
         assert_eq!(licensed.bond(&bond_key(9)).unwrap().slashed, reserved, "the refuted seat pays the stake it attacked");
         assert_eq!(licensed.bond(&bond_key(1)).unwrap().slashed, 0, "the producer, vindicated, pays nothing");
 
@@ -6877,25 +6973,15 @@ pub(crate) mod tests {
         // contradicted one — and the producer is charged too, because Decision 7's default IS
         // the producer's fault by construction.
         let agreeing = vec![seat_receipt(bond_key(9), true)];
-        let (defaulted, _) = apply(
-            &s3,
-            &p,
-            &ctx(4, 103, 4),
-            &[PalwConsensusObjectV2::ProducerDefaulted { claim: claim_id, receipts: agreeing }],
-            None,
-        );
+        let (defaulted, _) =
+            apply(&s3, &p, &ctx(4, 103, 4), &[PalwConsensusObjectV2::ProducerDefaulted { claim: claim_id, receipts: agreeing }], None);
         assert_eq!(defaulted.bond(&bond_key(9)).unwrap().slashed, reserved, "the refuted seat pays in this direction too");
         assert_eq!(defaulted.bond(&bond_key(1)).unwrap().slashed, reserved, "and the producer pays for withholding");
 
         // A seat that voted WITH the quorum is untouched, in both directions.
         let concurring = vec![seat_receipt(bond_key(9), true)];
-        let (clean, _) = apply(
-            &s3,
-            &p,
-            &ctx(4, 103, 4),
-            &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: concurring }],
-            None,
-        );
+        let (clean, _) =
+            apply(&s3, &p, &ctx(4, 103, 4), &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: concurring }], None);
         assert_eq!(clean.bond(&bond_key(9)).unwrap().slashed, 0, "agreeing with the record costs nothing");
     }
 
@@ -7019,10 +7105,7 @@ pub(crate) mod tests {
             *execution_root = Hash64::default();
         }
         let refused = apply_palw_transition_v2(&base, &p, &ctx(2, 101, 2), &[null_root], None);
-        assert!(
-            matches!(refused, Err(PalwStateV2Error::UnadjudicableCommitment(id)) if id == h64(0xFC)),
-            "got {refused:?}"
-        );
+        assert!(matches!(refused, Err(PalwStateV2Error::UnadjudicableCommitment(id)) if id == h64(0xFC)), "got {refused:?}");
 
         // The same claim with a real root is admitted — so the refusal is about the root and not
         // about free-prompt claims in general.
@@ -7354,8 +7437,14 @@ pub(crate) mod tests {
         // and shrinking the epoch to 100 raises it to 10‰ — the share too small to buy one
         // worst-case block per epoch is not grantable, which is what keeps a mid-flight zero
         // budget unrepresentable.
-        assert_eq!(PalwStateParamsV2::new(100, 1, 1, 1, 1, 1000, h64(1), 4, 1000, 100, 1000, 0).unwrap().min_grantable_share_permille(), 1);
-        assert_eq!(PalwStateParamsV2::new(100, 1, 1, 1, 1, 100, h64(1), 4, 1000, 100, 1000, 0).unwrap().min_grantable_share_permille(), 10);
+        assert_eq!(
+            PalwStateParamsV2::new(100, 1, 1, 1, 1, 1000, h64(1), 4, 1000, 100, 1000, 0).unwrap().min_grantable_share_permille(),
+            1
+        );
+        assert_eq!(
+            PalwStateParamsV2::new(100, 1, 1, 1, 1, 100, h64(1), 4, 1000, 100, 1000, 0).unwrap().min_grantable_share_permille(),
+            10
+        );
     }
 
     #[test]
@@ -7436,7 +7525,8 @@ pub(crate) mod tests {
         let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: h64(90) }];
         let (s3, _) =
             apply(&s2, p, &ctx(3, 102, 3), &[PalwConsensusObjectV2::PanelBound { claim: h64(0xFC), anchor: h64(77), seats }], None);
-        let (s4, _) = apply(&s3, p, &ctx(4, 103, 4), &[PalwConsensusObjectV2::ReceiptLicensed { claim: h64(0xFC), receipts: Vec::new() }], None);
+        let (s4, _) =
+            apply(&s3, p, &ctx(4, 103, 4), &[PalwConsensusObjectV2::ReceiptLicensed { claim: h64(0xFC), receipts: Vec::new() }], None);
         let (s5, _) = apply(&s4, p, &ctx(5, 124, 5), &[], None);
         assert!(matches!(s5.claim(&h64(0xFC)).unwrap().phase, PalwClaimPhaseV2::Final { .. }), "the fixture certifies");
         s5
@@ -7520,10 +7610,7 @@ pub(crate) mod tests {
         );
         // …the FP bind deadline is 102 + 10 = 112; the attempt's receipt deadline is 115.
         let (s5, _) = apply(&s4, &p, &ctx(5, 113, 5), &[], None);
-        assert!(matches!(
-            s5.claim(&h64(0xFC)).unwrap().phase,
-            PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::BindTimeout, .. }
-        ));
+        assert!(matches!(s5.claim(&h64(0xFC)).unwrap().phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::BindTimeout, .. }));
         assert!(!s5.claim(&attempt_claim).unwrap().phase.is_terminal(), "the attempt claim is still pending");
         assert_eq!(s5.reserved_exposure(&bond_key(1)), 200, "the void releases the FP reserve, byte for byte");
     }
@@ -7612,9 +7699,20 @@ pub(crate) mod tests {
         // 112, license at 113, challenge window ends 133, swept Final at 140).
         let (s3, _) = apply(&s2, &split, &ctx(3, 111, 3), &[fp_commit(0xFC, 60, 3)], None);
         let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: h64(90) }];
-        let (s4, _) =
-            apply(&s3, &split, &ctx(4, 112, 4), &[PalwConsensusObjectV2::PanelBound { claim: h64(0xFC), anchor: h64(77), seats }], None);
-        let (s5, _) = apply(&s4, &split, &ctx(5, 113, 5), &[PalwConsensusObjectV2::ReceiptLicensed { claim: h64(0xFC), receipts: Vec::new() }], None);
+        let (s4, _) = apply(
+            &s3,
+            &split,
+            &ctx(4, 112, 4),
+            &[PalwConsensusObjectV2::PanelBound { claim: h64(0xFC), anchor: h64(77), seats }],
+            None,
+        );
+        let (s5, _) = apply(
+            &s4,
+            &split,
+            &ctx(5, 113, 5),
+            &[PalwConsensusObjectV2::ReceiptLicensed { claim: h64(0xFC), receipts: Vec::new() }],
+            None,
+        );
         let (s6, _) = apply(&s5, &split, &ctx(6, 140, 6), &[], None);
         let spend0 = fp_spend(0xFC, 0);
         let spend1 = fp_spend(0xFC, 1);
@@ -7701,14 +7799,14 @@ pub(crate) mod tests {
         let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: h64(90) }];
         let (s3, d3) =
             apply(&s2, &p, &ctx(3, 102, 3), &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }], None);
-        let (s4, d4) = apply(&s3, &p, &ctx(4, 103, 4), &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: seat_says(true) }], None);
-        let (_, d5) = apply(
-            &s4,
+        let (s4, d4) = apply(
+            &s3,
             &p,
-            &ctx(5, 104, 5),
-            &[court_open(claim_id, h64(31), bond_key(1), bond_key(1))],
+            &ctx(4, 103, 4),
+            &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: seat_says(true) }],
             None,
         );
+        let (_, d5) = apply(&s4, &p, &ctx(5, 104, 5), &[court_open(claim_id, h64(31), bond_key(1), bond_key(1))], None);
         let certified = certify_fp_claim(&p, 60, 3);
         let spend = fp_spend(0xFC, 0);
         let (_, d6) = apply_work(&certified, &p, &ctx(6, 130, 6), &[], PalwBlockWorkV3::ReceiptSpend(&spend));
@@ -7772,8 +7870,15 @@ pub(crate) mod tests {
         let (s1, d1) = apply(&g, &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
         let (s2, d2) = apply(&s1, &p, &ctx(2, 101, 2), &[fp_commit(0xFC, 60, 3)], None);
         let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: h64(90) }];
-        let (s3, d3) = apply(&s2, &p, &ctx(3, 102, 3), &[PalwConsensusObjectV2::PanelBound { claim: h64(0xFC), anchor: h64(77), seats }], None);
-        let (s4, d4) = apply(&s3, &p, &ctx(4, 103, 4), &[PalwConsensusObjectV2::ReceiptLicensed { claim: h64(0xFC), receipts: Vec::new() }], None);
+        let (s3, d3) =
+            apply(&s2, &p, &ctx(3, 102, 3), &[PalwConsensusObjectV2::PanelBound { claim: h64(0xFC), anchor: h64(77), seats }], None);
+        let (s4, d4) = apply(
+            &s3,
+            &p,
+            &ctx(4, 103, 4),
+            &[PalwConsensusObjectV2::ReceiptLicensed { claim: h64(0xFC), receipts: Vec::new() }],
+            None,
+        );
         let (fork, d5) = apply(&s4, &p, &ctx(5, 124, 5), &[], None);
         assert!(matches!(fork.claim(&h64(0xFC)).unwrap().phase, PalwClaimPhaseV2::Final { .. }));
 
@@ -7872,15 +7977,30 @@ pub(crate) mod tests {
             book.apply_block(genesis_block, ctx(1, 100, 1), &register_class_and_bond(), None).unwrap();
             book.apply_block(block(1), ctx(2, 101, 2), &[fp_commit(0xFC, 60, 3)], None).unwrap();
             let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: h64(90) }];
-            book.apply_block(block(2), ctx(3, 102, 3), &[PalwConsensusObjectV2::PanelBound { claim: h64(0xFC), anchor: h64(77), seats }], None).unwrap();
-            book.apply_block(block(3), ctx(4, 103, 4), &[PalwConsensusObjectV2::ReceiptLicensed { claim: h64(0xFC), receipts: Vec::new() }], None).unwrap();
+            book.apply_block(
+                block(2),
+                ctx(3, 102, 3),
+                &[PalwConsensusObjectV2::PanelBound { claim: h64(0xFC), anchor: h64(77), seats }],
+                None,
+            )
+            .unwrap();
+            book.apply_block(
+                block(3),
+                ctx(4, 103, 4),
+                &[PalwConsensusObjectV2::ReceiptLicensed { claim: h64(0xFC), receipts: Vec::new() }],
+                None,
+            )
+            .unwrap();
             book.apply_block(block(4), ctx(5, 124, 5), &[], None).unwrap();
-            let mut do_a = |book: &mut PalwStateBookV2| {
-                book.apply_block_with_work(block(5), ctx(0xA1, 130, 6), &[], PalwBlockWorkV3::ReceiptSpend(&fp_spend(0xFC, 0))).unwrap();
+            let do_a = |book: &mut PalwStateBookV2| {
+                book.apply_block_with_work(block(5), ctx(0xA1, 130, 6), &[], PalwBlockWorkV3::ReceiptSpend(&fp_spend(0xFC, 0)))
+                    .unwrap();
             };
-            let mut do_b = |book: &mut PalwStateBookV2| {
-                book.apply_block_with_work(block(5), ctx(0xB1, 130, 20), &[], PalwBlockWorkV3::ReceiptSpend(&fp_spend(0xFC, 0))).unwrap();
-                book.apply_block_with_work(block(0xB1), ctx(0xB2, 131, 21), &[], PalwBlockWorkV3::ReceiptSpend(&fp_spend(0xFC, 1))).unwrap();
+            let do_b = |book: &mut PalwStateBookV2| {
+                book.apply_block_with_work(block(5), ctx(0xB1, 130, 20), &[], PalwBlockWorkV3::ReceiptSpend(&fp_spend(0xFC, 0)))
+                    .unwrap();
+                book.apply_block_with_work(block(0xB1), ctx(0xB2, 131, 21), &[], PalwBlockWorkV3::ReceiptSpend(&fp_spend(0xFC, 1)))
+                    .unwrap();
             };
             if insert_a_first {
                 do_a(&mut book);
@@ -7927,10 +8047,7 @@ pub(crate) mod tests {
             out.copy_from_slice(s.finalize().as_bytes());
             Hash64::from_bytes(out)
         }
-        fn spec_collection_root<K: borsh::BorshSerialize, V: borsh::BorshSerialize>(
-            label: &[u8],
-            map: &BTreeMap<K, V>,
-        ) -> Hash64 {
+        fn spec_collection_root<K: borsh::BorshSerialize, V: borsh::BorshSerialize>(label: &[u8], map: &BTreeMap<K, V>) -> Hash64 {
             spec_hash(b"misaka-palw/state-v2/collection/v1", |s| {
                 s.update(&(label.len() as u64).to_le_bytes());
                 s.update(label);
@@ -8040,8 +8157,7 @@ pub(crate) mod tests {
         );
         state.class_targets.insert(h64(0xC1), PalwClassTargetV2 { target: 1 << 100 });
         state.class_shares.insert(h64(0xC1), 1000);
-        state.epoch_budgets =
-            Some(PalwEpochBudgetsV2 { epoch_index: 3, budget_blocks: [(h64(0xC1), 5u64)].into_iter().collect() });
+        state.epoch_budgets = Some(PalwEpochBudgetsV2 { epoch_index: 3, budget_blocks: [(h64(0xC1), 5u64)].into_iter().collect() });
         state.receipt_targets.insert(h64(0xC1), PalwClassTargetV2 { target: 1 << 90 });
         state.capabilities.insert(h64(0xCA), PalwCapabilityStateV2 { class_id: h64(0xC1), bond: bond_key(1), issued_daa: 6 });
         state.claims.insert(
@@ -8201,10 +8317,7 @@ pub(crate) mod tests {
             ("panels", Box::new(|s| s.panels.get_mut(&h64(0xE1)).unwrap().bound_daa += 1)),
             ("court_sessions", Box::new(|s| s.court_sessions.get_mut(&h64(0xD1)).unwrap().deadline_daa += 1)),
             ("epoch_counters", Box::new(|s| s.epoch_counters.get_mut(&h64(0xC1)).unwrap().produced_blocks += 1)),
-            (
-                "receipt_epoch_counters",
-                Box::new(|s| s.receipt_epoch_counters.get_mut(&h64(0xC1)).unwrap().produced_blocks += 1),
-            ),
+            ("receipt_epoch_counters", Box::new(|s| s.receipt_epoch_counters.get_mut(&h64(0xC1)).unwrap().produced_blocks += 1)),
             ("safe_weight", Box::new(|s| s.safe_weight += 1)),
             ("retired_safe_weight", Box::new(|s| s.retired_safe_weight += 1)),
             ("bounded_immature", Box::new(|s| s.bounded_immature += 1)),

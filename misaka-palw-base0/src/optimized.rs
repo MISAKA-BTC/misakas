@@ -47,7 +47,7 @@ pub fn dot_i8_interleaved(a: &[i8], b: &[i8], lanes: usize) -> Result<i32, PalwB
         partial[i % lanes] += (*x as i32) * (*y as i32);
     }
     // Horizontal combine, itself in a different order than the lanes were filled.
-    Ok(partial.iter().rev().fold(0i32, |acc, p| acc + p))
+    Ok(partial.iter().rev().sum::<i32>())
 }
 
 /// `dot_i8` in cache-sized blocks: each block summed on its own, the block results summed after.

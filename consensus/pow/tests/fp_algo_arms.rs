@@ -71,7 +71,8 @@ fn attempt_carriage(header: &Header) -> Vec<u8> {
         trace_chunk_count: 8,
         trace_retention_daa: 999_999,
     };
-    PalwAttemptEnvelopeV2 { attempt, signature: vec![0x5A; kaspa_consensus_core::dns_finality::STAKE_ATTESTATION_SIG_LEN] }.encode_wire()
+    PalwAttemptEnvelopeV2 { attempt, signature: vec![0x5A; kaspa_consensus_core::dns_finality::STAKE_ATTESTATION_SIG_LEN] }
+        .encode_wire()
 }
 
 fn spend_carriage(header: &Header, quantum_index: u32) -> Vec<u8> {
@@ -88,8 +89,7 @@ fn spend_carriage(header: &Header, quantum_index: u32) -> Vec<u8> {
         producer_bond: bond(),
         producer_pubkey: vec![7u8; 32],
     };
-    PalwReceiptSpendEnvelopeV3 { spend, signature: vec![0x5A; kaspa_consensus_core::dns_finality::STAKE_ATTESTATION_SIG_LEN] }
-        .encode()
+    PalwReceiptSpendEnvelopeV3 { spend, signature: vec![0x5A; kaspa_consensus_core::dns_finality::STAKE_ATTESTATION_SIG_LEN] }.encode()
 }
 
 /// **The rule the removed tripwire really protected**: a peer-controlled header must never panic
@@ -146,8 +146,7 @@ fn the_attempt_lane_prices_its_digest_and_binds_every_priced_field() {
     let mut impossible = header_with(POW_ALGO_ID_PALW_COMMITTED_V2, Vec::new());
     impossible.bits = 0x03000001;
     impossible.palw_commitment = attempt_carriage(&impossible);
-    let (impossible_passed, _) =
-        kaspa_pow::StateLayer0::new(&impossible, NETWORK).check_pow_layer0(impossible.nonce).expect("tags");
+    let (impossible_passed, _) = kaspa_pow::StateLayer0::new(&impossible, NETWORK).check_pow_layer0(impossible.nonce).expect("tags");
     assert!(!impossible_passed, "an attempt digest above its target must fail — the comparison happened");
 
     // Every field the commitment root prices moves the digest, through the live path. These are
@@ -281,4 +280,3 @@ fn the_hash_lanes_are_unchanged() {
     }
     assert!(saw_a_level, "the hash lane still earns levels from its digest");
 }
-

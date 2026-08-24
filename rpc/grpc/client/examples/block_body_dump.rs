@@ -29,7 +29,7 @@ async fn main() {
     // The coinbase's outputs are the disputed artifact — print them fully.
     if let Some(cb) = block.transactions.first() {
         for (i, o) in cb.outputs.iter().enumerate() {
-            println!("  coinbase out[{i}] value={} spk={}", o.value, hex_of(&o.script_public_key.script()));
+            println!("  coinbase out[{i}] value={} spk={}", o.value, hex_of(o.script_public_key.script()));
         }
     }
 }

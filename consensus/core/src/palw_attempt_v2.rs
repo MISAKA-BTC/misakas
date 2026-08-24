@@ -612,8 +612,16 @@ mod tests {
             palw_network_domain_v2(b"testnet-11"),
             "the length prefix keeps prefix-related names apart"
         );
-        assert_eq!(format!("{t11}"), "3a9be06a5e9ca299a33afa5400aaa680c228f21e40f1b964b0bf7c96a170fa139214a2f803b3f24a6e20ca881e8653094470cdd060f52e65e1a3807531db9785", "the testnet-11 domain is frozen");
-        assert_eq!(format!("{mainnet}"), "77633d75b1bd12cb14fc0e3f567cc14f42ed24ef6bb45bc2c8eeab58ccf932a0156882cbcd2b33250e6ed5bb754594382beb1cd2a0cba2fe0e571a8643b800aa", "the mainnet domain is frozen");
+        assert_eq!(
+            format!("{t11}"),
+            "3a9be06a5e9ca299a33afa5400aaa680c228f21e40f1b964b0bf7c96a170fa139214a2f803b3f24a6e20ca881e8653094470cdd060f52e65e1a3807531db9785",
+            "the testnet-11 domain is frozen"
+        );
+        assert_eq!(
+            format!("{mainnet}"),
+            "77633d75b1bd12cb14fc0e3f567cc14f42ed24ef6bb45bc2c8eeab58ccf932a0156882cbcd2b33250e6ed5bb754594382beb1cd2a0cba2fe0e571a8643b800aa",
+            "the mainnet domain is frozen"
+        );
     }
 
     /// The module's domains are distinct — a shared key would let one preimage serve two meanings.
@@ -655,7 +663,9 @@ mod tests {
     /// fence to wait for and no fence that could shut it.
     #[test]
     fn the_shape_gate_demands_an_envelope_on_the_v2_id() {
-        use crate::pow_layer0::{POW_ALGO_ID_PALW_COMMITTED_V2, PALW_COMMITMENT_MAX_BYTES, PowLayer0Error, check_palw_commitment_shape};
+        use crate::pow_layer0::{
+            PALW_COMMITMENT_MAX_BYTES, POW_ALGO_ID_PALW_COMMITTED_V2, PowLayer0Error, check_palw_commitment_shape,
+        };
 
         let wire = envelope(attempt()).encode_wire();
         for bound in [false, true] {

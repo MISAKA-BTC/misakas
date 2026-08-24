@@ -104,7 +104,9 @@ fn a_complete_block_admits_and_names_its_payee() {
     let op = outpoint(2);
     let bonds = bonds_with(op);
     let h = header(commitment(op, facts).encode());
-    match check_palw_block_admission_v1(&h, &bonds, |_| Some(facts), NETWORK, true, accept_fixture_signature).expect("every conjunct holds") {
+    match check_palw_block_admission_v1(&h, &bonds, |_| Some(facts), NETWORK, true, accept_fixture_signature)
+        .expect("every conjunct holds")
+    {
         PalwAdmission::Admitted { executor_bond, commitment, ticket } => {
             assert_eq!(executor_bond.bond_outpoint, op, "the payee is the bond that acted");
             assert_eq!(commitment.executor_bond_outpoint, op);
@@ -158,8 +160,7 @@ fn one_pow_solution_cannot_carry_two_commitments() {
 
     // Inert where the fence is shut: no commitment, no binding, the pre-existing digest.
     let bare_header = header(Vec::new());
-    let bare =
-        kaspa_pow::StateLayer0::new(&bare_header, NETWORK).calculate_pow_layer0(bare_header.nonce).expect("fixture tag family");
+    let bare = kaspa_pow::StateLayer0::new(&bare_header, NETWORK).calculate_pow_layer0(bare_header.nonce).expect("fixture tag family");
     assert_ne!(bare, baseline, "a bound header and a bare one are different rule sets");
     let bare_again =
         kaspa_pow::StateLayer0::new(&bare_header, NETWORK).calculate_pow_layer0(bare_header.nonce).expect("fixture tag family");

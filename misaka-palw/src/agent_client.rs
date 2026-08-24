@@ -20,9 +20,9 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use kaspa_consensus_core::palw_v2::{
-    canonical_compute_units_v2, decode_framed_borsh, job_request_hash_v2, read_framed, tokenizer_id_v2_for_gguf,
-    write_framed, PalwAgentHealthV1, PalwAgentRequestV1, PalwAgentResponseV1, PalwJobContextV2, PalwJobEnvelopeV2,
-    PalwJobResultV2, PalwStopReasonV2, PALW_JOB_WIRE_VERSION_V2, PALW_V2_MAX_FRAME_BYTES,
+    PALW_JOB_WIRE_VERSION_V2, PALW_V2_MAX_FRAME_BYTES, PalwAgentHealthV1, PalwAgentRequestV1, PalwAgentResponseV1, PalwJobContextV2,
+    PalwJobEnvelopeV2, PalwJobResultV2, PalwStopReasonV2, canonical_compute_units_v2, decode_framed_borsh, job_request_hash_v2,
+    read_framed, tokenizer_id_v2_for_gguf, write_framed,
 };
 use kaspa_consensus_core::vlt::qwen35_pins;
 use thiserror::Error;
@@ -106,8 +106,7 @@ pub fn validate_result_binding(envelope: &PalwJobEnvelopeV2, result: &PalwJobRes
     if result.version != PALW_JOB_WIRE_VERSION_V2 {
         return fail("result version is not v2");
     }
-    let canonical_request =
-        borsh::to_vec(envelope).map_err(|e| PalwAgentClientError::Protocol(e.to_string()))?;
+    let canonical_request = borsh::to_vec(envelope).map_err(|e| PalwAgentClientError::Protocol(e.to_string()))?;
     if result.request_hash != job_request_hash_v2(&canonical_request) {
         return fail("request hash does not bind this envelope's canonical encoding");
     }
@@ -141,7 +140,7 @@ pub fn validate_result_binding(envelope: &PalwJobEnvelopeV2, result: &PalwJobRes
 mod tests {
     use super::*;
     use kaspa_consensus_core::palw_v2::{
-        output_commitment_v2, rendered_output_hash_v2, PalwJobModeV2, PalwJobTelemetryV2, PalwResultProjectionV2,
+        PalwJobModeV2, PalwJobTelemetryV2, PalwResultProjectionV2, output_commitment_v2, rendered_output_hash_v2,
     };
     use kaspa_hashes::Hash64;
     use std::os::unix::net::UnixListener;
@@ -201,12 +200,10 @@ mod tests {
     /// One-shot mock agent: accepts one connection, hands the request payload to `respond`, and
     /// writes back whatever it returns. The socket path is kept short — a UDS path over ~104
     /// bytes fails to bind on macOS.
-    fn mock_agent(
-        respond: impl FnOnce(Vec<u8>) -> Vec<u8> + Send + 'static,
-    ) -> (PathBuf, std::thread::JoinHandle<()>) {
+    fn mock_agent(respond: impl FnOnce(Vec<u8>) -> Vec<u8> + Send + 'static) -> (PathBuf, std::thread::JoinHandle<()>) {
         static SOCK_SEQ: AtomicU32 = AtomicU32::new(0);
-        let path = std::env::temp_dir()
-            .join(format!("palw-ac-{}-{}.sock", std::process::id(), SOCK_SEQ.fetch_add(1, Ordering::Relaxed)));
+        let path =
+            std::env::temp_dir().join(format!("palw-ac-{}-{}.sock", std::process::id(), SOCK_SEQ.fetch_add(1, Ordering::Relaxed)));
         let _ = std::fs::remove_file(&path);
         let listener = UnixListener::bind(&path).expect("bind mock agent socket");
         let handle = std::thread::spawn(move || {
@@ -273,10 +270,7 @@ mod tests {
     fn rejected_and_failed_map_to_their_errors() {
         let envelope = test_envelope();
         let (path, handle) = mock_agent(|_| {
-            framed(
-                &borsh::to_vec(&PalwAgentResponseV1::JobRejected { code: "busy".into(), message: "slot occupied".into() })
-                    .unwrap(),
-            )
+            framed(&borsh::to_vec(&PalwAgentResponseV1::JobRejected { code: "busy".into(), message: "slot occupied".into() }).unwrap())
         });
         let err = client(&path).execute(&envelope, Duration::from_secs(5)).unwrap_err();
         assert!(matches!(err, PalwAgentClientError::Rejected { ref code, .. } if code == "busy"), "{err:?}");

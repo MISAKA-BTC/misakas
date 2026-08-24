@@ -350,7 +350,7 @@ impl VirtualStateProcessor {
             // or a non-empty PALW V2 registry (audit C-08). `None` only when both are inert, which
             // keeps every shipped network byte-identical to the legacy own-body-only gate.
             let bond_filter = (bond_gate_view.is_some() || !ctx.palw_v2_locked_bonds.is_empty() || !ctx.palw_v2_bond_burns.is_empty())
-                .then(|| BondSpendFilter {
+                .then_some(BondSpendFilter {
                     bond_view: bond_gate_view.as_ref(),
                     daa_score: pov_daa_score,
                     palw_locked: &ctx.palw_v2_locked_bonds,
@@ -1779,7 +1779,7 @@ impl VirtualStateProcessor {
             windows.prosecution_slack,
             true,
         )
-        .map_err(|(spending_tx, bond_outpoint)| AuditBondSpendAgainstDisposition(spending_tx, bond_outpoint).into())
+        .map_err(|(spending_tx, bond_outpoint)| AuditBondSpendAgainstDisposition(spending_tx, bond_outpoint))
     }
 
     /// Every OPENING_CALL on this block's own chain within the gate's horizon, mapped to
@@ -1813,7 +1813,9 @@ impl VirtualStateProcessor {
             if daa_score.saturating_sub(cur_daa) > depth {
                 break;
             }
-            for (tx_id, record) in palw_carriage_records_from_accepted_txs(&self.accepted_txs_of_chain_block(current), cur_daa, current) {
+            for (tx_id, record) in
+                palw_carriage_records_from_accepted_txs(&self.accepted_txs_of_chain_block(current), cur_daa, current)
+            {
                 match decode_palw_stage1_body(record.kind, &record.body) {
                     Ok(PalwCarriageV1::OpeningCall(_)) => {
                         calls.insert(tx_id, cur_daa);

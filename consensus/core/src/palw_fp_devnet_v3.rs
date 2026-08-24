@@ -394,19 +394,17 @@ pub fn palw_fp_devnet_bundle_v3(
         //
         // `pwu_per_inference` is the catalog's counted canonical step-leaf count, which
         // `verify_palw_genesis_v2` checks: the declaration is not the fact.
-        genesis_objects: vec![
-            crate::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
-                class_id: base_class_id,
-                terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
-                artifact_root: genesis_artifact_root,
-                slash_value_per_pwu: SLASH_VALUE_PER_PWU,
-                pwu_rule: crate::palw_state_v2::PalwPwuRuleV2::DerivedV1 { pwu_per_inference: genesis_pwu_per_inference },
-                initial_target: GENESIS_CLASS_TARGET,
-                share_permille: 1000,
-                activation_daa: 0,
-                admission: None,
-            },
-        ]
+        genesis_objects: vec![crate::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
+            class_id: base_class_id,
+            terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
+            artifact_root: genesis_artifact_root,
+            slash_value_per_pwu: SLASH_VALUE_PER_PWU,
+            pwu_rule: crate::palw_state_v2::PalwPwuRuleV2::DerivedV1 { pwu_per_inference: genesis_pwu_per_inference },
+            initial_target: GENESIS_CLASS_TARGET,
+            share_permille: 1000,
+            activation_daa: 0,
+            admission: None,
+        }]
         .into_iter()
         .chain(genesis_bonds.into_iter().map(|b| crate::palw_state_v2::PalwConsensusObjectV2::BondRegistered {
             bond: b.bond,
@@ -414,7 +412,7 @@ pub fn palw_fp_devnet_bundle_v3(
             operator_pubkey: b.operator_pubkey,
             collateral: genesis_collateral,
             payout_payload: b.payout_payload,
-                    // Genesis bonds carry no signature: `verify_palw_genesis_v2` establishes the whole
+            // Genesis bonds carry no signature: `verify_palw_genesis_v2` establishes the whole
             // registry as one artifact, and there is no chain yet for a signature to be replayed
             // across. The field exists for the post-genesis path, where the carrier proves the
             // collateral and this proves the key.
@@ -473,7 +471,7 @@ mod tests {
         let ceiling = (collateral as u128) * (MAX_EXPOSURE_RATIO_PERMILLE as u128) / 1000;
         let admits = ceiling / per_claim;
         assert!(
-            admits >= MAX_CLAIM_EXPOSURE_DAA as u128 + 1,
+            admits > MAX_CLAIM_EXPOSURE_DAA as u128,
             "the ceiling admits {admits} concurrent claims; a claim can hold exposure for {} DAA",
             MAX_CLAIM_EXPOSURE_DAA
         );
@@ -622,7 +620,11 @@ mod tests {
         assert!((8..=32).contains(&chat_quanta), "an ordinary chat job earns a handful of draws, got {chat_quanta}");
 
         let tiny = fp_cu_v3(8, 4, w);
-        assert_eq!(fp_quanta_v3(tiny, b.freeprompt.quantum_cu(), b.freeprompt.max_quanta_per_receipt()), 0, "sub-quantum draws nothing");
+        assert_eq!(
+            fp_quanta_v3(tiny, b.freeprompt.quantum_cu(), b.freeprompt.max_quanta_per_receipt()),
+            0,
+            "sub-quantum draws nothing"
+        );
 
         let huge = fp_cu_v3(b.freeprompt.max_prompt_tokens(), b.freeprompt.max_decode_tokens(), w);
         assert_eq!(

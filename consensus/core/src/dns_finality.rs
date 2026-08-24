@@ -8733,7 +8733,7 @@ mod tests {
         assert_eq!(snap.validators.len(), 3, "eligible-with-zero-weight is a committed fact, not an omission");
         for row in &snap.validators {
             let bond = bonds.iter().find(|b| b.validator_pubkey_hash == row.validator_id).unwrap();
-            assert_eq!(row.effective_weight, validator_voting_weight_of_bond(&bond, &bonds, u64::MAX, 10, &credits, &vlt));
+            assert_eq!(row.effective_weight, validator_voting_weight_of_bond(bond, &bonds, u64::MAX, 10, &credits, &vlt));
             assert_eq!(row.effective_weight, row.raw_recent_compute.min(row.bond_cap));
         }
         let totals = total_voting_weight_by_epoch(&bonds, &BTreeMap::from([(10u64, 0u64)]), &credits, &vlt);
@@ -8814,7 +8814,7 @@ mod tests {
             epoch,
             validator_id: b.validator_pubkey_hash,
             bond_outpoint: b.bond_outpoint,
-            signed_weight: validator_voting_weight_of_bond(&b, &bonds, u64::MAX, epoch, &credits, &vlt),
+            signed_weight: validator_voting_weight_of_bond(b, &bonds, u64::MAX, epoch, &credits, &vlt),
         };
         // Epoch 10: all three sign → quorum. Epoch 11: only two of three → 2/3 exactly, which is
         // NOT strictly above two thirds, so it earns nothing.

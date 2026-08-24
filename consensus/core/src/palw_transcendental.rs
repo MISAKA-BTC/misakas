@@ -27,8 +27,8 @@
 //! class's own binaries is the ADR-0030 §5.1 registration gate**, run on the fleet.
 
 use crate::palw_reference::{
-    ref64_add_v2, ref64_fma_v2, ref64_mul_v2, ref64_sub_v2, ref_add_v1, ref_div_v2, ref_fma_v2, ref_mul_v1, ref_narrow_f64_to_f32_v2,
-    ref_neg_v1, ref_sub_v1, ref_widen_f32_to_f64_v2, PALW_REFERENCE_CANONICAL_NAN_V1,
+    PALW_REFERENCE_CANONICAL_NAN_V1, ref_add_v1, ref_div_v2, ref_fma_v2, ref_mul_v1, ref_narrow_f64_to_f32_v2, ref_neg_v1, ref_sub_v1,
+    ref_widen_f32_to_f64_v2, ref64_add_v2, ref64_fma_v2, ref64_mul_v2, ref64_sub_v2,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -63,11 +63,7 @@ fn f32_gt(a: u32, b: u32) -> bool {
     // Signed-magnitude → two's-complement-orderable mapping.
     let key = |x: u32| -> i64 {
         let mag = (x & 0x7FFF_FFFF) as i64;
-        if x & 0x8000_0000 != 0 {
-            -mag
-        } else {
-            mag
-        }
+        if x & 0x8000_0000 != 0 { -mag } else { mag }
     };
     key(a) > key(b)
 }
@@ -426,7 +422,7 @@ mod tests {
             (0x1_5575B0BE00B6A, -2, LOGF_A1),
         ];
         for &(sig53, p, expected) in cases {
-            assert!(sig53 >= 1 << 52 && sig53 < 1 << 53);
+            assert!((1 << 52..1 << 53).contains(&sig53));
             let bits = (((1023 + p) as u64) << 52) | (sig53 & 0x000F_FFFF_FFFF_FFFF);
             assert_eq!(bits, expected, "constant 0x{sig53:x}p{p}");
         }
@@ -457,11 +453,7 @@ mod tests {
         let d: u32 = if n <= 0.0 { 0x8200_0000 } else { 0 };
         let s1 = f32::from_bits(d.wrapping_add(0x7F00_0000));
         let s2 = f32::from_bits(e.wrapping_sub(d));
-        if n.abs() > 192.0 {
-            s1 * s1
-        } else {
-            s2.mul_add(j, s2) * s1
-        }
+        if n.abs() > 192.0 { s1 * s1 } else { s2.mul_add(j, s2) * s1 }
     }
 
     #[test]
@@ -500,11 +492,7 @@ mod tests {
     fn ulp_diff(a: u32, b: u32) -> u32 {
         let key = |x: u32| -> i64 {
             let mag = (x & 0x7FFF_FFFF) as i64;
-            if x & 0x8000_0000 != 0 {
-                -mag
-            } else {
-                mag
-            }
+            if x & 0x8000_0000 != 0 { -mag } else { mag }
         };
         (key(a) - key(b)).unsigned_abs() as u32
     }

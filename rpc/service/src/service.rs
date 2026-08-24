@@ -788,8 +788,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             // re-derived here: the RPC and the producer must not be able to disagree about what
             // "ready" means. Its key check is against the caller's own key, which this server
             // does not hold — so the answer is given for the key the bond registered.
-            response.not_ready_reason =
-                facts.ready_to_produce(&bond_facts.registered_pubkey).err().unwrap_or_default().to_string();
+            response.not_ready_reason = facts.ready_to_produce(&bond_facts.registered_pubkey).err().unwrap_or_default().to_string();
         }
         Ok(response)
     }

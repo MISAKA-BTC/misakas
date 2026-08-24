@@ -1,4 +1,3 @@
-
 //! The PALW panel service — a seat's whole duty, and the quorum's whole road to the chain
 //! (launch blockers: "what is still missing", pieces 2 and 3).
 //!
@@ -35,10 +34,7 @@ use kaspa_consensus_core::constants::{MAX_TX_IN_SEQUENCE_NUM, TX_VERSION};
 use kaspa_consensus_core::hashing::sighash::{Mldsa87SigHashReusedValuesUnsync, calc_mldsa87_signature_hash};
 use kaspa_consensus_core::hashing::sighash_type::SIG_HASH_ALL;
 use kaspa_consensus_core::mass::MassCalculator;
-use kaspa_consensus_core::palw_lifecycle_objects_v2::{PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxPayloadV2};
-use kaspa_consensus_core::palw_panel_v2::{
-    PALW_RECEIPT_V2_MLDSA87_CONTEXT, PalwReceiptVerdictV2, PalwSeatReceiptV2, palw_receipt_message_v2,
-};
+use kaspa_consensus_core::palw_backend::{PalwClaimRootsV1, PalwExecutionBackendV1, PalwMaterialVerdictV1};
 use kaspa_consensus_core::palw_bisect::{
     PALW_BISECT_OBJECT_VERSION_V1, PalwBisectDisclosureV1, PalwBisectSpaceV1, PalwBisectTurnV1, PalwBisectVerdictV1,
 };
@@ -46,7 +42,11 @@ use kaspa_consensus_core::palw_court_v2::{
     PALW_COURT_V2_MLDSA87_DISCLOSURE_CONTEXT, PALW_COURT_V2_MLDSA87_OPEN_CONTEXT, PALW_COURT_V2_MLDSA87_VERDICT_CONTEXT,
     PalwCourtVerdictProofV2, court_session_id_v2,
 };
-use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwConsensusObjectV2, PalwCourtVerdictV2};
+use kaspa_consensus_core::palw_lifecycle_objects_v2::{PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxPayloadV2};
+use kaspa_consensus_core::palw_panel_v2::{
+    PALW_RECEIPT_V2_MLDSA87_CONTEXT, PalwReceiptVerdictV2, PalwSeatReceiptV2, palw_receipt_message_v2,
+};
+use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwConsensusObjectV2};
 use kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE;
 use kaspa_consensus_core::tx::{MutableTransaction, Transaction, TransactionInput, TransactionOutpoint, TransactionOutput, UtxoEntry};
 use kaspa_consensusmanager::ConsensusManager;
@@ -58,7 +58,6 @@ use kaspa_p2p_flows::flow_context::FlowContext;
 use kaspa_p2p_flows::palw_gossip::PalwGossipEvent;
 use kaspa_pq_validator_core::relay_fee_for_compute_mass;
 use kaspa_txscript::MLDSA87_TX_CONTEXT;
-use kaspa_consensus_core::palw_backend::{PalwClaimRootsV1, PalwExecutionBackendV1, PalwMaterialVerdictV1};
 
 const PALW_PANEL: &str = "palw-panel";
 /// How many receipts one claim's pool holds. A panel has 5 seats; the rest is an attacker's spam,
@@ -160,7 +159,7 @@ impl PalwPanelService {
     /// operator's configuration lives.
     fn backends(&self) -> crate::palw_backends::PalwBackendRegistry {
         crate::palw_backends::PalwBackendRegistry::new(
-            self.config.court.clone(),
+            self.config.court,
             self.class_artifacts.clone(),
             self.config.metal_worker.clone(),
             self.consensus_config.params.net.to_string().into_bytes(),
@@ -199,9 +198,10 @@ impl PalwPanelService {
         // like a seat whose material never arrived.
         let mut class_artifacts = Vec::new();
         for path in &config.class_artifacts {
-            match std::fs::read(path).map_err(|e| e.to_string()).and_then(|bytes| {
-                misaka_palw_base0::artifact::decode_artifact_file_v1(&bytes).map_err(|e| e.to_string())
-            }) {
+            match std::fs::read(path)
+                .map_err(|e| e.to_string())
+                .and_then(|bytes| misaka_palw_base0::artifact::decode_artifact_file_v1(&bytes).map_err(|e| e.to_string()))
+            {
                 Ok(artifact) => {
                     info!("[{PALW_PANEL}] loaded class artifact {}", path.display());
                     class_artifacts.push(artifact);
@@ -218,10 +218,7 @@ impl PalwPanelService {
 
     /// The fee outpoint to spend next: the persisted rolling one if it is still unspent, else the
     /// configured one. Returns the entry with it, which is also the unspent check.
-    async fn resolve_fee_funding(
-        &self,
-        session: &kaspa_consensusmanager::ConsensusProxy,
-    ) -> Option<(TransactionOutpoint, UtxoEntry)> {
+    async fn resolve_fee_funding(&self, session: &kaspa_consensusmanager::ConsensusProxy) -> Option<(TransactionOutpoint, UtxoEntry)> {
         // **"In the UTXO set" and "I can spend it" are different questions — ask the second one.**
         //
         // The virtual UTXO set is the CONFIRMED one: an output a carrier of ours is spending right
@@ -301,7 +298,10 @@ impl PalwPanelService {
                 break;
             }
             if let Some((outpoint, entry)) = found {
-                info!("[{PALW_PANEL}] recovered funding at {}:{} — the remembered outpoints were spent or never mined", outpoint.transaction_id, outpoint.index);
+                info!(
+                    "[{PALW_PANEL}] recovered funding at {}:{} — the remembered outpoints were spent or never mined",
+                    outpoint.transaction_id, outpoint.index
+                );
                 self.persist_fee_outpoint(outpoint);
                 return Some((outpoint, entry));
             }
@@ -475,7 +475,6 @@ impl PalwPanelService {
         }
     }
 
-
     /// **Build the `ClassRegistered` for this node's worker** (ADR-0049 Decision H).
     ///
     /// Every pin comes from the worker itself — it is asked what it is, rather than told — and
@@ -489,12 +488,11 @@ impl PalwPanelService {
         let worker = self.config.metal_worker.clone().ok_or("no --palw-metal-worker to register the class of")?;
         let bond = self.bond.ok_or("no --palw-producer-bond to register under")?;
         let bond_key = PalwBondKeyV2(bond);
-        let terms = session
-            .palw_v2_registration_terms()
-            .ok_or("this chain has no V2 bundle, or does not hold its base class yet")?;
+        let terms = session.palw_v2_registration_terms().ok_or("this chain has no V2 bundle, or does not hold its base class yet")?;
 
-        let pins = misaka_palw_metal::catalog::cat_m_0001_pins_from_worker(worker, self.consensus_config.params.net.to_string().into_bytes())
-            .map_err(|e| format!("the worker did not report a usable identity: {e}"))?;
+        let pins =
+            misaka_palw_metal::catalog::cat_m_0001_pins_from_worker(worker, self.consensus_config.params.net.to_string().into_bytes())
+                .map_err(|e| format!("the worker did not report a usable identity: {e}"))?;
 
         // Built twice on purpose: once to learn the class id the profile derives, and once with
         // the signature over it. Signing anything assembled beside the object would sign a class
@@ -842,7 +840,6 @@ impl PalwPanelService {
             }
             let current_daa = session.get_virtual_daa_score();
 
-
             // --- the challenger's half: dispute a licensed claim whose execution is not the
             // canonical one ---
             //
@@ -900,14 +897,8 @@ impl PalwPanelService {
                     // leaves keeps producing disagreement until the interval narrows back into
                     // range and lands on it.
                     let space_size = self.config.court.max_step_leaf_count();
-                    let session_id = court_session_id_v2(
-                        &target.claim_id,
-                        &target.trace_root,
-                        &target.executor_bond,
-                        &bond_key,
-                        space,
-                        space_size,
-                    );
+                    let session_id =
+                        court_session_id_v2(&target.claim_id, &target.trace_root, &target.executor_bond, &bond_key, space, space_size);
                     let Some(signature) = self.sign(session_id.as_byte_slice(), PALW_COURT_V2_MLDSA87_OPEN_CONTEXT) else { continue };
                     if court_pending.iter().any(|(sid, _, _, _)| *sid == session_id) {
                         continue;
@@ -1319,8 +1310,7 @@ impl PalwPanelService {
                 // The court's moves first: a rung has a deadline and a receipt quorum does not.
                 let mut unsent: Vec<(Hash64, u32, bool, PalwConsensusObjectV2)> = Vec::new();
                 for (session_id, round, mine_is_responder, object) in std::mem::take(&mut court_pending) {
-                    let Some((funding_outpoint, funding_entry)) = funding.clone().filter(|_| inflight < MAX_INFLIGHT_CARRIERS)
-                    else {
+                    let Some((funding_outpoint, funding_entry)) = funding.clone().filter(|_| inflight < MAX_INFLIGHT_CARRIERS) else {
                         // The fee UTXO is busy. Keep the move: a rung has a deadline, and a dispute
                         // dropped here is a dispute that never happens.
                         unsent.push((session_id, round, mine_is_responder, object));
@@ -1354,7 +1344,10 @@ impl PalwPanelService {
                                     }
                                 }
                                 Err(e) => {
-                                    warn!("[{PALW_PANEL}] the mempool refused the {} for session {session_id}: {e}", object_name(&object));
+                                    warn!(
+                                        "[{PALW_PANEL}] the mempool refused the {} for session {session_id}: {e}",
+                                        object_name(&object)
+                                    );
                                     funding = None;
                                 }
                             }
@@ -1451,9 +1444,10 @@ impl PalwPanelService {
             }));
             if self.config.challenge {
                 live.extend(
-                    session.palw_disputable_claims_v2(vec![bond_key]).into_iter().filter_map(|d| {
-                        (!challenged.contains(&d.claim_id)).then_some(d.claim_id)
-                    }),
+                    session
+                        .palw_disputable_claims_v2(vec![bond_key])
+                        .into_iter()
+                        .filter_map(|d| (!challenged.contains(&d.claim_id)).then_some(d.claim_id)),
                 );
             }
             materials.retain(|claim, _| live.contains(claim) || !submitted.contains(claim));

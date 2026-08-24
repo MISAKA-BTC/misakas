@@ -117,23 +117,18 @@ pub fn palw_fp_job_context_v3(
     }
     match facts.stop_reason {
         PalwFpStopReasonV3::ExactBudgetReached if facts.decode_tokens_executed != job.decode_token_limit => {
-            return Err(PalwFpExecutionV3Error::StopReasonInconsistent(
-                "ExactBudgetReached with a count below the ceiling",
-            ));
+            return Err(PalwFpExecutionV3Error::StopReasonInconsistent("ExactBudgetReached with a count below the ceiling"));
         }
         PalwFpStopReasonV3::EndOfGeneration if facts.decode_tokens_executed >= job.decode_token_limit => {
             return Err(PalwFpExecutionV3Error::StopReasonInconsistent("EndOfGeneration at or above the ceiling"));
         }
         _ => {}
     }
-    let total = job
-        .prompt_tokens
-        .checked_add(facts.decode_tokens_executed)
-        .ok_or(PalwFpExecutionV3Error::ContextOverflow {
-            prefill: job.prompt_tokens,
-            decode: facts.decode_tokens_executed,
-            max: job.max_context_tokens,
-        })?;
+    let total = job.prompt_tokens.checked_add(facts.decode_tokens_executed).ok_or(PalwFpExecutionV3Error::ContextOverflow {
+        prefill: job.prompt_tokens,
+        decode: facts.decode_tokens_executed,
+        max: job.max_context_tokens,
+    })?;
     if total > job.max_context_tokens {
         return Err(PalwFpExecutionV3Error::ContextOverflow {
             prefill: job.prompt_tokens,
@@ -351,8 +346,7 @@ mod tests {
         // …and the canonical pairings are accepted.
         palw_fp_job_context_v3(&j, &class(), &facts(128, PalwFpStopReasonV3::ExactBudgetReached), NET)
             .expect("a run that hit its ceiling");
-        palw_fp_job_context_v3(&j, &class(), &facts(1, PalwFpStopReasonV3::EndOfGeneration), NET)
-            .expect("a run that stopped early");
+        palw_fp_job_context_v3(&j, &class(), &facts(1, PalwFpStopReasonV3::EndOfGeneration), NET).expect("a run that stopped early");
 
         let mut tight = job();
         tight.max_context_tokens = 100;

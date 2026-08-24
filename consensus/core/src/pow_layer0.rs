@@ -414,7 +414,6 @@ pub enum PowLayer0Error {
     /// stateful admission.
     #[error("PALW-V2 attempt's carried challenge is not the one this header position derives")]
     PalwV2ChallengeMismatch,
-
 }
 
 /// MISAKA ADR-0038: the PALW family of Layer-1 algo ids — the ids whose headers carry (and
@@ -512,9 +511,7 @@ pub fn check_palw_commitment_shape(algo_id: u8, palw_commitment: &[u8], bound: b
         // instead of a digest mismatch.
         let envelope = crate::palw_attempt_v2::PalwAttemptEnvelopeV2::decode_wire(palw_commitment)
             .map_err(|e| PowLayer0Error::PalwCommitmentMalformed { algo_id, reason: e.to_string() })?;
-        return envelope
-            .validate_shape_v2()
-            .map_err(|e| PowLayer0Error::PalwCommitmentMalformed { algo_id, reason: e.to_string() });
+        return envelope.validate_shape_v2().map_err(|e| PowLayer0Error::PalwCommitmentMalformed { algo_id, reason: e.to_string() });
     }
     if algo_id == POW_ALGO_ID_PALW_RECEIPT_V3 {
         return crate::palw_freeprompt_v3::PalwReceiptSpendEnvelopeV3::decode(palw_commitment)
@@ -1163,7 +1160,10 @@ mod tests {
         // (`StateLayer0::calculate_l1_tag`'s algo-6 arm over the header-carried
         // `PalwAttemptEnvelopeV2`), so the id is listed again, and this flip happened in that
         // same commit — exactly as the delisting comment said it must.
-        assert!(check_algo_id_known(POW_ALGO_ID_PALW_COMMITTED_V2).is_ok(), "the V2 arm exists; delisting 6 now would shut a bootable ruleset");
+        assert!(
+            check_algo_id_known(POW_ALGO_ID_PALW_COMMITTED_V2).is_ok(),
+            "the V2 arm exists; delisting 6 now would shut a bootable ruleset"
+        );
 
         // Knowing the V2 id is not accepting a V2 block. `required_algo_id` has no V2 arm until the
         // atomic bundle lands (ADR-0042 Decision 1), so no combination of today's fork flags demands

@@ -341,9 +341,8 @@ fn palw_rc_bond_fee_floats(net: NetworkId) -> UtxoCollection {
         ));
     }
     // The carve: the main wallet pays for every float, so the total premine is unchanged.
-    let total_float = PALW_RC_BOND_FEE_FLOAT_SOMPI
-        .checked_mul(cards.len() as u64)
-        .expect("a genesis registry is six rows, not enough to overflow");
+    let total_float =
+        PALW_RC_BOND_FEE_FLOAT_SOMPI.checked_mul(cards.len() as u64).expect("a genesis registry is six rows, not enough to overflow");
     // **The network being built, not a literal.** This named testnet-12 through the move to
     // testnet-11, and it happened to be harmless only because `main_address_for` answers with the
     // same address for both suffixes. That is a coincidence with an expiry date: testnet-12 is now
@@ -455,7 +454,8 @@ mod tests {
         };
 
         // Only 11 now: the PALW-RC network moved onto it and 12 is refused at `From<NetworkId>`.
-        for suffix in [11u32] {
+        {
+            let suffix = 11u32;
             let entry = main_of(NetworkId::with_suffix(NetworkType::Testnet, suffix));
             assert_eq!(entry.script_public_key, public_spk, "testnet-{suffix} pays the operator address");
             // testnet-11 carves each genesis bond's fee float OUT of this output (see

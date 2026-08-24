@@ -291,10 +291,7 @@ mod tests {
         assert_eq!(consensus, wallet, "the wallet and consensus disagree about which testnet suffixes exist");
         // Not vacuous: if both tables somehow refused everything the comparison above would still
         // hold, and a wallet that supports no testnet is not the property wanted.
-        assert!(
-            consensus.contains(&10) && consensus.contains(&11),
-            "expected testnet-10 and -11, got {consensus:?}"
-        );
+        assert!(consensus.contains(&10) && consensus.contains(&11), "expected testnet-10 and -11, got {consensus:?}");
         // And 12 must be gone from BOTH, not merely absent from one: it was consolidated into 11,
         // and a table that still answers for it would hand a wallet a network no node will build.
         assert!(!consensus.contains(&12) && !wallet.contains(&12), "testnet-12 was consolidated into 11 and must build nowhere");

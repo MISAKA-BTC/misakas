@@ -185,7 +185,9 @@ mod tests {
     /// runtime "can't run a divergent genesis" property.
     #[test]
     fn all_networks_genesis_constants_match_premine() {
-        use kaspa_consensus_core::config::params::{DEVNET_PARAMS, MAINNET_PARAMS, SIMNET_PARAMS, TESTNET_PARAMS, palw_rc_shipped_params};
+        use kaspa_consensus_core::config::params::{
+            DEVNET_PARAMS, MAINNET_PARAMS, SIMNET_PARAMS, TESTNET_PARAMS, palw_rc_shipped_params,
+        };
         // **The preset a suffix actually routes to, not the const that shares its name.**
         //
         // `TESTNET11_PARAMS` is the legacy algo-4 lane; `From<NetworkId>` has not returned it since

@@ -16,10 +16,8 @@ use kaspa_consensus_core::palw_base0_profile::{
     PALW_RC_BASE0_CANONICAL, PALW_RC_BASE0_GEOMETRY, PALW_RC_BASE0_WORST_CASE, PalwBase0GeometryV1, base0_profile_v1,
 };
 use kaspa_consensus_core::palw_catalog_coverage::{PalwReachableKernelSetV1, verify_catalog_coverage_v1};
-use kaspa_consensus_core::palw_qwen25_profile::{QWEN25_1_5B, QWEN25_3B, PalwQwen25GeometryV1, qwen25_profile_v1};
-use kaspa_consensus_core::palw_step::{
-    PALW_STEP_MAX_LEAVES, PalwShapeProfileV3, step_leaf_count, worst_case_step_leaf_count_v1,
-};
+use kaspa_consensus_core::palw_qwen25_profile::{PalwQwen25GeometryV1, QWEN25_1_5B, QWEN25_3B, qwen25_profile_v1};
+use kaspa_consensus_core::palw_step::{PALW_STEP_MAX_LEAVES, PalwShapeProfileV3, step_leaf_count, worst_case_step_leaf_count_v1};
 use kaspa_consensus_core::palw_step_refute::catalogued_kernel_ids_v1;
 use kaspa_consensus_core::palw_v2::{PALW_TRACE_COMMITMENT_VERSION_V2, PalwJobContextV2, trace_scheme_id_v2};
 use kaspa_hashes::Hash64;
@@ -60,8 +58,10 @@ fn report(name: &str, profile: &PalwShapeProfileV3, jobs: &[(u32, u32)]) {
             .flatten()
             .map(|n| n.kernel_semantics_id)
             .collect();
-    let covered =
-        verify_catalog_coverage_v1(&PalwReachableKernelSetV1 { execution_class_id: profile.shape_profile_id(), kernel_ids: kernel_ids.clone() });
+    let covered = verify_catalog_coverage_v1(&PalwReachableKernelSetV1 {
+        execution_class_id: profile.shape_profile_id(),
+        kernel_ids: kernel_ids.clone(),
+    });
 
     println!("### {name}");
     println!(

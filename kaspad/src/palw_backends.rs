@@ -57,10 +57,8 @@ impl PalwBackendRegistry {
                 Ok(Box::new(misaka_palw_base0::backend::Base0Backend::new(resolved)))
             }
             PalwExecutionFamilyV1::MetalGguf => {
-                let worker = self
-                    .metal_worker
-                    .clone()
-                    .ok_or("this class is Metal/GGUF and this node has no worker (--palw-metal-worker)")?;
+                let worker =
+                    self.metal_worker.clone().ok_or("this class is Metal/GGUF and this node has no worker (--palw-metal-worker)")?;
                 // **The pins come off the CHAIN**, and the worker is then held to them. A node
                 // that took its identity from its own binary would agree with itself; this is what
                 // makes `check_runtime_identity` a check rather than a tautology.

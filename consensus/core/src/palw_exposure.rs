@@ -81,10 +81,7 @@ pub struct PalwImmatureWorkV1 {
 /// keeps its spam-hash backbone; what it loses is the ramped pwu, which is the thing the bond was
 /// supposed to be standing behind. Rejecting the block instead would let anyone grief a producer by
 /// racing cheap commitments onto its bond.
-pub fn admit_within_exposure_v1(
-    blocks: &[PalwImmatureWorkV1],
-    params: &PalwExposureParamsV1,
-) -> Result<Vec<bool>, PalwExposureError> {
+pub fn admit_within_exposure_v1(blocks: &[PalwImmatureWorkV1], params: &PalwExposureParamsV1) -> Result<Vec<bool>, PalwExposureError> {
     params.validate()?;
     // Per bond: how much it has committed, and whether its prefix has already ended. The second is
     // what makes this prefix-mandatory rather than a knapsack — without it the walk would skip an

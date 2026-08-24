@@ -1459,7 +1459,6 @@ try_from!(&protowire::NotifySinkBlueScoreChangedResponseMessage, RpcResult<kaspa
 mod palw_producer_facts_tests {
     use kaspa_rpc_core::{GetPalwProducerFactsRequest, GetPalwProducerFactsResponse, RpcResult};
 
-
     /// **Every field of the producer facts survives the grpc wire, both ways.**
     ///
     /// Twenty fields cross `from!`/`try_from!` by hand, and a dropped one is invisible: it

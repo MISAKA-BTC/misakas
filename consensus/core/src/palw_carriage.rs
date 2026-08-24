@@ -2033,7 +2033,7 @@ mod tests {
         // Fits-one-transaction payloads must not be chunked.
         assert!(matches!(palw_evidence_chunks_v1(&[0u8; 1000]), Err(PalwCarriageError::ChunkingUnnecessary { .. })));
         // Over the group budget refuses.
-        assert!(matches!(super::palw_evidence_chunks_with_cap(&vec![0u8; 100], 10), Err(PalwCarriageError::EvidenceTooLarge { .. })));
+        assert!(matches!(super::palw_evidence_chunks_with_cap(&[0u8; 100], 10), Err(PalwCarriageError::EvidenceTooLarge { .. })));
         // The 0.99 MiB bare-v2 case rides in 3 chunks under the production cap.
         let logits_case = 248_320usize * 4 + 24_000; // row + object overhead margin
         let count = logits_case.div_ceil(PALW_CARRIAGE_MAX_CHUNK_BYTES);
@@ -2580,7 +2580,7 @@ mod equivocation_tests {
         let encoded = encode_palw_carriage_v1(&obj);
         let body = &encoded[7..];
         assert_eq!(decode_palw_stage1_body(PALW_CARRIAGE_KIND_EQUIVOCATION, body).unwrap(), obj);
-        assert_eq!(PALW_S_MLDSA87_ATTESTATION_CONTEXT.is_empty(), false);
+        assert!(!PALW_S_MLDSA87_ATTESTATION_CONTEXT.is_empty());
     }
 }
 
@@ -2993,7 +2993,9 @@ mod bisect_move_tests {
     /// Each conjunct is dropped in turn, because each admits a different forgery.
     #[test]
     fn a_withheld_execution_is_authored_by_the_block_commitment() {
-        use crate::palw_block_commitment::{PALW_BLOCK_COMMITMENT_MLDSA87_CONTEXT, PALW_BLOCK_COMMITMENT_VERSION_V1, PalwBlockCommitmentV1};
+        use crate::palw_block_commitment::{
+            PALW_BLOCK_COMMITMENT_MLDSA87_CONTEXT, PALW_BLOCK_COMMITMENT_VERSION_V1, PalwBlockCommitmentV1,
+        };
         let bond = bond_record_for_authorship();
         let root = Hash64::from_u64_word(0x7A);
         let authorship = PalwWithheldAuthorshipV1 {
