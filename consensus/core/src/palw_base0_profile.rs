@@ -1009,6 +1009,42 @@ mod tests {
         }
     }
 
+    /// **A producer with no model can mine the shipped network, and both lanes are open.**
+    ///
+    /// Two facts an operator depends on and neither was asserted anywhere:
+    ///
+    /// A producer that passes no `--palw-producer-class` mines `bundle.base_class_id`
+    /// (`daemon.rs`), so what that id IS decides whether joining requires downloading a GGUF. It is
+    /// the floor: a deterministic-integer class whose artifact derives from a seed, so a node needs
+    /// no model and no worker to produce. If the shipped bundle's default ever moved to a
+    /// black-box class, every new miner would silently need a multi-gigabyte download first, and
+    /// nothing in the build would have said so.
+    ///
+    /// And the bundle admits two algo ids: the committed attempt (6) and the free-prompt receipt
+    /// spend (7). The gate that enforces this compares against `accepts_algo_id`; a bundle that
+    /// stopped answering for both would close a lane while the gate kept reporting agreement.
+    #[test]
+    fn the_shipped_network_mines_without_a_model_and_opens_both_lanes() {
+        let id: crate::network::NetworkId = "testnet-11".parse().expect("the shipped PALW network");
+        let params = crate::config::params::Params::from(id);
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
+            panic!("testnet-11 is the PALW-RC network; a non-V2 mode here means the suffix stopped routing to it");
+        };
+
+        let floor = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("the floor is expressible");
+        assert_eq!(
+            bundle.base_class_id,
+            floor.shape_profile_id(),
+            "the default producer class must be the floor — anything else makes a model download a \
+             precondition for mining, without any operator being told"
+        );
+
+        assert_eq!(bundle.algorithm_id, crate::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2, "the attempt lane");
+        assert_eq!(bundle.freeprompt.receipt_algorithm_id(), crate::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3, "the receipt lane");
+        assert!(bundle.accepts_algo_id(crate::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2), "the attempt lane must be open");
+        assert!(bundle.accepts_algo_id(crate::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3), "the receipt lane must be open");
+    }
+
     /// Print the floor's class id. It is pinned by the RC genesis and by a live testnet-12, so any
     /// refactor of the projection must leave it byte-identical.
     /// `cargo test -p kaspa-consensus-core --lib dump_floor_class_id -- --ignored --nocapture`
