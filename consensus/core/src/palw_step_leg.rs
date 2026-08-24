@@ -1187,6 +1187,7 @@ mod tests {
             fused_gdn_on: 1,
             use_ref_off: 1,
             kv_cache_f16: 1,
+        gpu_offload_layers: 0,
             n_ctx: 64,
             n_batch: 64,
             n_ubatch: 64,
@@ -1402,8 +1403,8 @@ mod tests {
             // `weight_dtype` became a per-layer list. See `palw_step`'s golden for why the single
             // byte could not describe the pinned model.
             // …and again for `lane` (see `palw_step`'s golden).
-            "0f491307719b0ade811690bba39ec44d99248e6c2d7876fad1e3959d05bbef2c\
-             8f87ce59a41b4c7f4c880661daf8854b86163a0f1a1bff733c982b29c234d07b"
+            "257ef42869d451d8b816778d87142ba113b587dd313f72cc242a2347cd35ce91\
+             671acc720cf49f729041208b314ab21181ed24e736c636c8d65c5080e710ffe9"
         );
     }
 

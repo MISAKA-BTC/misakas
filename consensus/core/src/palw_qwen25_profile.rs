@@ -382,6 +382,9 @@ pub fn qwen25_profile_v1(geometry: PalwQwen25GeometryV1) -> Result<PalwShapeProf
         fused_gdn_on: 0,
         use_ref_off: 0,
         kv_cache_f16: 0,
+        // The deterministic lane is CPU by construction: its court recomputes with a frozen
+        // integer kernel, and a GPU path would be a different arithmetic to adjudicate.
+        gpu_offload_layers: 0,
         n_ctx: geometry.n_ctx,
         n_batch: geometry.n_ctx,
         n_ubatch: geometry.n_ctx,

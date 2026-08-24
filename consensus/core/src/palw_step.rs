@@ -406,6 +406,18 @@ pub struct PalwShapeProfileV3 {
     pub use_ref_off: u8,
     /// 1 = f16 KV cache.
     pub kv_cache_f16: u8,
+    /// **Layers offloaded to a GPU — the fact that splits one model into two classes.**
+    ///
+    /// Every other flag here describes how the CPU path is built; this one says whether that path
+    /// is taken at all. A Metal or CUDA build computes different bytes from the same weights, so a
+    /// seat that replays a GPU producer's job on a CPU build finds a mismatch that is not a lie —
+    /// which is precisely what a class boundary exists to prevent.
+    ///
+    /// It was missing, and the omission was not visible from either side: the worker reports
+    /// `gpu-layers=all` against `gpu-layers=none` and hashes them differently, while the chain
+    /// derived one class id for both. `0` is the CPU path (all layers on the host), and it is what
+    /// every class registered before this field existed meant.
+    pub gpu_offload_layers: u32,
     pub n_ctx: u32,
     pub n_batch: u32,
     pub n_ubatch: u32,
@@ -1066,6 +1078,7 @@ mod tests {
             fused_gdn_on: 1,
             use_ref_off: 1,
             kv_cache_f16: 1,
+            gpu_offload_layers: 0,
             n_ctx: 64,
             n_batch: 64,
             n_ubatch: 64,
@@ -1238,8 +1251,8 @@ mod tests {
             // Re-frozen once more the same day: the profile gained `lane`. A class that commits
             // int32 codes and one that commits f32 are not the same class, and both the leg
             // builder and the adjudicator read the field — so it belongs inside the identity.
-            "24a01c7f90b50beab4ba53d4032119d494f5bebc671c75d271723de634f6fcbe\
-             f98c86768d86d0039e3286f7a297d27a46cbbc4fb3ac5fd9dd682552ecf0845a"
+            "6c10bff7d1f2bb000ca8973d00f180d0999f1bb17f753d02249d06e6000a2859\
+             f17f6d2572348fcab731f911897757fbf6b129f487e999d2c9ae3ca428d9c1ff"
         );
     }
 

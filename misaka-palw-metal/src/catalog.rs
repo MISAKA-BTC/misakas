@@ -68,6 +68,15 @@ pub struct GgufModelGeometryV1 {
     pub n_batch: u32,
     pub n_ubatch: u32,
     pub n_threads: u32,
+    /// **Layers offloaded to a GPU — what makes a Metal build a different class from a CPU one.**
+    ///
+    /// The worker already reports it (`gpu-layers=all` against `gpu-layers=none` in its shape
+    /// string) and hashes the two differently. Until this reached the profile, the CHAIN did not:
+    /// both derived one class id, so only one of the two could ever be registered and the other's
+    /// producers were refused with no class to register instead.
+    ///
+    /// `0` is the CPU path and what every class registered before this field meant.
+    pub gpu_offload_layers: u32,
 }
 
 impl GgufModelGeometryV1 {
@@ -114,6 +123,14 @@ impl GgufModelGeometryV1 {
         if self.n_ubatch > self.n_batch {
             return Err(format!("n_ubatch {} exceeds n_batch {}", self.n_ubatch, self.n_batch));
         }
+        // A model cannot offload more layers than it has. Not a style check: the count is part of
+        // the class id, so an impossible one would mint a class no worker can ever match.
+        if self.gpu_offload_layers > self.layer_count as u32 {
+            return Err(format!(
+                "gpu_offload_layers {} exceeds the model's {} layers",
+                self.gpu_offload_layers, self.layer_count
+            ));
+        }
         Ok(())
     }
 }
@@ -130,6 +147,9 @@ pub const CAT_M_0001_GEOMETRY: GgufModelGeometryV1 = GgufModelGeometryV1 {
     n_batch: 512,
     n_ubatch: 512,
     n_threads: 4,
+    // The fleet's worker is the CPU build; a Metal one derives its own class from the same
+    // geometry with this set.
+    gpu_offload_layers: 0,
 };
 
 /// **The shape half of the pinned identity, for ANY GGUF**: the geometry a loaded model must
@@ -176,6 +196,7 @@ pub fn family_m_profile_v1(g: &GgufModelGeometryV1) -> Result<PalwShapeProfileV3
         n_ubatch: g.n_ubatch,
         n_seq: 1,
         n_threads: g.n_threads,
+        gpu_offload_layers: g.gpu_offload_layers,
         // **Empty by construction.** No court walks this graph; see the module docs.
         pre_nodes: Vec::new(),
         gdn_nodes: Vec::new(),
@@ -488,6 +509,37 @@ pub fn gguf_artifact_root_v1() -> Hash64 {
 
 #[cfg(test)]
 mod tests {
+    /// **A Metal build and a CPU build of one model must be two classes.**
+    ///
+    /// The worker always knew — its shape string reads `gpu-layers=all` against `gpu-layers=none`
+    /// — but the chain's class id did not carry the fact, so both derived the same id. Only one
+    /// could be registered, and the other's producers were refused by `check_runtime_identity`
+    /// with no class left to register. Measured on testnet-11 before the fix: the registered Linux
+    /// CPU class and a Metal worker for the identical GGUF both derived 682756bc….
+    #[test]
+    fn a_gpu_build_is_a_different_class_from_a_cpu_build() {
+        let cpu = family_m_profile_v1(&CAT_M_0001_GEOMETRY).expect("the shipped CPU geometry");
+        let mut g = CAT_M_0001_GEOMETRY;
+        g.gpu_offload_layers = g.layer_count as u32; // all layers on the GPU, as a Metal build reports
+        let gpu = family_m_profile_v1(&g).expect("the same model, offloaded");
+        assert_ne!(
+            cpu.shape_profile_id(),
+            gpu.shape_profile_id(),
+            "one model on two runtimes must be two classes — a seat cannot replay the other's work"
+        );
+        assert_eq!(cpu.gpu_offload_layers, 0, "the shipped class is the CPU path");
+    }
+
+    /// A class cannot offload layers the model does not have: the count is part of the id, so an
+    /// impossible one would mint a class no worker can ever match.
+    #[test]
+    fn a_geometry_cannot_offload_more_layers_than_it_has() {
+        let mut g = CAT_M_0001_GEOMETRY;
+        g.gpu_offload_layers = g.layer_count as u32 + 1;
+        let err = family_m_profile_v1(&g).expect_err("more layers than exist");
+        assert!(err.contains("exceeds the model's"), "the error names the impossibility: {err}");
+    }
+
     /// A stand-in for "some other GGUF": Llama-3.2-3B's published shape. Nothing here is checked
     /// against a downloaded file — the point is that a DIFFERENT geometry travels the same path,
     /// not that these particular numbers are that model's.
@@ -503,6 +555,7 @@ mod tests {
             n_batch: 512,
             n_ubatch: 512,
             n_threads: 4,
+            gpu_offload_layers: 0,
         }
     }
 

@@ -156,6 +156,7 @@ fn attack_profile() -> PalwShapeProfileV3 {
         fused_gdn_on: 1,
         use_ref_off: 1,
         kv_cache_f16: 1,
+        gpu_offload_layers: 0,
         n_ctx: 64,
         n_batch: 64,
         n_ubatch: 64,

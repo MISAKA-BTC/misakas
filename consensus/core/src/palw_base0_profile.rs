@@ -498,6 +498,9 @@ pub fn base0_profile_v1(geometry: PalwBase0GeometryV1) -> Result<PalwShapeProfil
         use_ref_off: 0,
         // No cache holds floats — ADR-0040 Decision D's second deliberate absence.
         kv_cache_f16: 0,
+        // The deterministic lane is CPU by construction: its court recomputes with a frozen
+        // integer kernel, and a GPU path would be a different arithmetic to adjudicate.
+        gpu_offload_layers: 0,
         n_ctx: geometry.n_ctx,
         n_batch: geometry.n_ctx,
         n_ubatch: geometry.n_ctx,

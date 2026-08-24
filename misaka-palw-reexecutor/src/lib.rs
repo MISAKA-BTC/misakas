@@ -773,6 +773,8 @@ pub mod fixtures {
             fused_gdn_on: 1,
             use_ref_off: 1,
             kv_cache_f16: 1,
+            // The re-executor mirrors the class it replays; a GPU class is a different class.
+            gpu_offload_layers: 0,
             n_ctx: 64,
             n_batch: 64,
             n_ubatch: 64,
