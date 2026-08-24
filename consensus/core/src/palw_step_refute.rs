@@ -2129,21 +2129,21 @@ pub(crate) mod tests {
             rows[ord][5] = layer_in.iter().take(16).map(|&v| crate::palw_transcendental::ggml_sigmoid_v1(v, true)).collect();
             // gdn core (slot 6): genesis replay over ordinals 0..=ord.
             let mut gdn_inputs: Vec<Vec<u32>> = Vec::new();
-            for prior in 0..=ord {
-                gdn_inputs.push(rows[prior][1].clone());
-                gdn_inputs.push(rows[prior][2].clone());
-                gdn_inputs.push(rows[prior][3].clone());
-                gdn_inputs.push(rows[prior][4][..2].to_vec()); // 2 heads — hmm, see note below
-                gdn_inputs.push(rows[prior][5][..2].to_vec());
+            for row in rows.iter().take(ord + 1) {
+                gdn_inputs.push(row[1].clone());
+                gdn_inputs.push(row[2].clone());
+                gdn_inputs.push(row[3].clone());
+                gdn_inputs.push(row[4][..2].to_vec()); // 2 heads — hmm, see note below
+                gdn_inputs.push(row[5][..2].to_vec());
             }
             // The checker resolves g/beta rows as the FULL node rows (16 wide); mirror that.
             let mut gdn_inputs_full: Vec<Vec<u32>> = Vec::new();
-            for prior in 0..=ord {
-                gdn_inputs_full.push(rows[prior][1].clone());
-                gdn_inputs_full.push(rows[prior][2].clone());
-                gdn_inputs_full.push(rows[prior][3].clone());
-                gdn_inputs_full.push(rows[prior][4].clone());
-                gdn_inputs_full.push(rows[prior][5].clone());
+            for row in rows.iter().take(ord + 1) {
+                gdn_inputs_full.push(row[1].clone());
+                gdn_inputs_full.push(row[2].clone());
+                gdn_inputs_full.push(row[3].clone());
+                gdn_inputs_full.push(row[4].clone());
+                gdn_inputs_full.push(row[5].clone());
             }
             let _ = gdn_inputs;
             rows[ord][6] = gdn_core_from_wide_rows(&p, &gdn_inputs_full).unwrap();
@@ -2280,14 +2280,14 @@ pub(crate) mod tests {
         let w = base0_matmul_weights();
         let slots = p.global_node_count();
         let mut rows: Vec<Vec<Vec<u32>>> = vec![vec![Vec::new(); slots as usize]; 3];
-        for ord in 0..3usize {
+        for (ord, row) in rows.iter_mut().enumerate().take(3) {
             // pre (slot 0): the embedding row, int8 codes.
-            rows[ord][0] = (0..32).map(|i| (((ord * 5 + i) % 11) as i32 - 5) as u32).collect();
-            let x: Vec<i8> = rows[ord][0].iter().map(|v| *v as i32 as i8).collect();
+            row[0] = (0..32).map(|i| (((ord * 5 + i) % 11) as i32 - 5) as u32).collect();
+            let x: Vec<i8> = row[0].iter().map(|v| *v as i32 as i8).collect();
             // gdn (slot 1): the matmul, by the SAME function the court will recompute with.
-            rows[ord][1] = crate::palw_base0_ops::matmul_quant(&w, &x, 32).unwrap().into_iter().map(|v| v as u32).collect();
+            row[1] = crate::palw_base0_ops::matmul_quant(&w, &x, 32).unwrap().into_iter().map(|v| v as u32).collect();
             // post (slot 2): silu over the layer output.
-            rows[ord][2] = crate::palw_base0_ops::silu(&rows[ord][1].iter().map(|v| *v as i32).collect::<Vec<_>>())
+            row[2] = crate::palw_base0_ops::silu(&row[1].iter().map(|v| *v as i32).collect::<Vec<_>>())
                 .into_iter()
                 .map(|v| v as u32)
                 .collect();
@@ -2354,13 +2354,15 @@ pub(crate) mod tests {
         const TILE_WIDTH: usize = 16;
         let all_weights = base0_matmul_weights();
         let byte_offset = TILE_START_ROW * IN_LEN;
-        let operands = [PalwArtifactOperandV1 {
+        let operands = [
+            PalwArtifactOperandV1 {
                 tensor_name: "blk.{layer}.w".to_string(),
                 layer: Some(0),
                 row_start: byte_offset as u32,
                 bytes: all_weights[byte_offset..byte_offset + TILE_WIDTH * IN_LEN].iter().map(|v| *v as u8).collect(),
             },
-            PalwArtifactOperandV1 { tensor_name: "decoy".to_string(), layer: None, row_start: 0, bytes: vec![9, 9, 9] }];
+            PalwArtifactOperandV1 { tensor_name: "decoy".to_string(), layer: None, row_start: 0, bytes: vec![9, 9, 9] },
+        ];
         let leaves: Vec<Hash64> = operands.iter().map(artifact_leaf_v1).collect();
         let artifact_root = artifact_root_v1(&leaves).unwrap();
         let openings = vec![crate::palw_artifact::PalwArtifactOpeningV1 {
@@ -2457,13 +2459,15 @@ pub(crate) mod tests {
         const TILE_WIDTH: usize = 16;
         let all_weights = base0_matmul_weights();
         let byte_offset = TILE_START_ROW * IN_LEN;
-        let operands = [PalwArtifactOperandV1 {
+        let operands = [
+            PalwArtifactOperandV1 {
                 tensor_name: "blk.{layer}.w".to_string(),
                 layer: Some(0),
                 row_start: byte_offset as u32,
                 bytes: all_weights[byte_offset..byte_offset + TILE_WIDTH * IN_LEN].iter().map(|v| *v as u8).collect(),
             },
-            PalwArtifactOperandV1 { tensor_name: "decoy".to_string(), layer: None, row_start: 0, bytes: vec![9, 9, 9] }];
+            PalwArtifactOperandV1 { tensor_name: "decoy".to_string(), layer: None, row_start: 0, bytes: vec![9, 9, 9] },
+        ];
         let leaves: Vec<Hash64> = operands.iter().map(artifact_leaf_v1).collect();
         let artifact_root = artifact_root_v1(&leaves).unwrap();
         let openings = vec![crate::palw_artifact::PalwArtifactOpeningV1 {

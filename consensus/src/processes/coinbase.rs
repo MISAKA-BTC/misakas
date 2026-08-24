@@ -108,6 +108,10 @@ impl CoinbaseManager {
         self.ttpb_history
     }
 
+    // Eleven arguments against a ceiling of ten. Every one is a distinct consensus input and
+    // bundling them into a struct would move the coupling rather than remove it -- the call
+    // sites would still have to get all eleven right, with one more indirection to read through.
+    #[allow(clippy::too_many_arguments)]
     pub fn expected_coinbase_transaction<T: AsRef<[u8]>>(
         &self,
         daa_score: u64,

@@ -5170,7 +5170,6 @@ pub(crate) mod tests {
 
     // ---- courts ----
 
-    #[test]
     /// **A court session that outlived its claim stopped the chain permanently.**
     ///
     /// `retire_claim` removed the claim and its panel and left the court sessions keyed to it.
@@ -5234,6 +5233,7 @@ pub(crate) mod tests {
         assert_eq!(state.court_sessions_for_claim(&claim_id), 0, "a retired claim must leave no session armed against it");
     }
 
+    #[test]
     fn an_open_court_blocks_final_and_a_cleared_court_rearms_it() {
         let p = params();
         let genesis = PalwChainStateV2::genesis();

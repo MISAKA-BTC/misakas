@@ -140,19 +140,20 @@ impl PalwGossipCenter {
         state.seen.insert(digest);
         state.seen_order.push_back((digest, material_claim));
         if state.seen_order.len() > SEEN_CAP
-            && let Some((old, claim)) = state.seen_order.pop_front() {
-                state.seen.remove(&old);
-                // Give the count back with the digest that took it, so the map cannot outlive the
-                // FIFO that feeds it.
-                if let Some(claim) = claim
-                    && let Some(count) = state.materials_per_claim.get_mut(&claim)
-                {
-                    *count = count.saturating_sub(1);
-                    if *count == 0 {
-                        state.materials_per_claim.remove(&claim);
-                    }
+            && let Some((old, claim)) = state.seen_order.pop_front()
+        {
+            state.seen.remove(&old);
+            // Give the count back with the digest that took it, so the map cannot outlive the
+            // FIFO that feeds it.
+            if let Some(claim) = claim
+                && let Some(count) = state.materials_per_claim.get_mut(&claim)
+            {
+                *count = count.saturating_sub(1);
+                if *count == 0 {
+                    state.materials_per_claim.remove(&claim);
                 }
             }
+        }
         PalwGossipAdmit::Fresh
     }
 

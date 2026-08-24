@@ -956,6 +956,10 @@ impl VirtualStateProcessor {
         Ok(reply)
     }
 
+    // Eleven arguments against a ceiling of ten. Every one is a distinct consensus input and
+    // bundling them into a struct would move the coupling rather than remove it -- the call
+    // sites would still have to get all eleven right, with one more indirection to read through.
+    #[allow(clippy::too_many_arguments)]
     fn verify_coinbase_transaction(
         &self,
         coinbase: &Transaction,

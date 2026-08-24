@@ -1184,13 +1184,8 @@ async fn palw_v2_the_escrow_is_carved_out_of_the_block_that_earned_it() {
     // What the emission schedule allots the selected parent, and what its own claim escrowed.
     let sp_subsidy = vp.coinbase_manager.calc_block_subsidy(sp_daa);
     let sp_worker_share = split_block_subsidy(sp_subsidy, &fee_split).worker_base_sompi;
-    let (_, sp_state) = vp
-        .palw_state_v2_store
-        .read()
-        .load_tip(&bundle.state)
-        .unwrap()
-        .filter(|(b, _)| *b == tip)
-        .expect("the walk's tip is the sink");
+    let (_, sp_state) =
+        vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().filter(|(b, _)| *b == tip).expect("the walk's tip is the sink");
     let escrow = vp.palw_v2_escrow_withheld_at(&sp_state, selected_parent);
     assert!(escrow > 0, "an attempt-lane block escrows its worker carve — otherwise this proves nothing");
     // Measured: 370,468,345 subsidy → 229,690,375 worker share → 229,690,373 escrow. The carve
@@ -1519,7 +1514,7 @@ async fn palw_v2_a_stranger_can_register_their_own_bond() {
             // The collateral, in an output of this very transaction, paying the declared payee.
             vec![TransactionOutput::new(
                 collateral,
-                kaspa_consensus_core::dns_finality::p2pkh_mldsa87_spk(payout_payload.as_byte_slice().try_into().unwrap()),
+                kaspa_consensus_core::dns_finality::p2pkh_mldsa87_spk(payout_payload.as_byte_slice()),
             )],
             0,
             SUBNETWORK_ID_PALW_LIFECYCLE.clone(),

@@ -190,6 +190,9 @@ impl TestConsensus {
     /// The registry's non-executor rows carried four-byte placeholders, which no signature can
     /// verify against — so no fixture could ever sign a panel RECEIPT, which is one reason the
     /// missing `ReceiptLicensed` edge went unnoticed. Row `n` gets a distinct key, deterministically.
+    /// Unused today. Kept as a pair with `palw_v2_registry_pubkey` so the V2 registry fixtures
+    /// stay whole: a half-removed fixture set is how the next test hand-rolls a keypair.
+    #[allow(dead_code)]
     pub(crate) fn palw_v2_registry_keypair(n: u64) -> &'static libcrux_ml_dsa::ml_dsa_87::MLDSA87KeyPair {
         static KPS: std::sync::OnceLock<Vec<libcrux_ml_dsa::ml_dsa_87::MLDSA87KeyPair>> = std::sync::OnceLock::new();
         let all = KPS.get_or_init(|| {
@@ -204,6 +207,8 @@ impl TestConsensus {
         &all[(n as usize) % all.len()]
     }
 
+    /// The other half of the pair above.
+    #[allow(dead_code)]
     pub(crate) fn palw_v2_registry_pubkey(n: u64) -> Vec<u8> {
         Self::palw_v2_registry_keypair(n).verification_key.as_ref().to_vec()
     }

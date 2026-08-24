@@ -872,7 +872,7 @@ mod tests {
                 decode_tokens: None,
             };
             // The class's registered inventory, and the opening that proves this block belongs.
-            let operands = vec![
+            let operands = [
                 // **ADR-0049 Decision B, and the reason this test's name is now true.** It opened
                 // the whole `hidden x q_dim` block and called itself "from one tile". The step
                 // reduces over the challenged tile's output rows alone, so that is what the

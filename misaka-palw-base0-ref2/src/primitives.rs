@@ -80,7 +80,11 @@ fn floor_div(numerator: i128, divisor: i128) -> i128 {
 /// on. Differs from [`floor_div`] on exactly the negative non-exact quotients, which is where the
 /// first implementation's `SRDHM` went wrong.
 fn trunc_div(numerator: i128, divisor: i128) -> i128 {
-    numerator / divisor
+    // Same behaviour, named. `/` already panics on a zero divisor and on `MIN / -1`; saying which
+    // precondition broke is the difference between a court that reports an unadjudicable input and
+    // one that reports "attempt to divide by zero" from inside a reference implementation. The
+    // convention is this file's own -- see `pow2`'s `.expect("callers bound n at 62")`.
+    numerator.checked_div(divisor).expect("trunc_div's divisor is non-zero, and (i128::MIN, -1) is not a caller's pair")
 }
 
 /// Round half away from zero, by rounding the magnitude and reapplying the sign.
@@ -91,7 +95,7 @@ fn round_half_away(numerator: i128, divisor: i128) -> i128 {
     let magnitude = numerator.abs();
     let half = floor_div(divisor, 2);
     let rounded = floor_div(magnitude.checked_add(half).expect("i128 headroom"), divisor);
-    if numerator < 0 { -rounded } else { rounded }
+    if numerator < 0 { rounded.checked_neg().expect("the magnitude was divided down, so it is not i128::MIN") } else { rounded }
 }
 
 fn to_i32(v: i128) -> i32 {
@@ -162,7 +166,8 @@ fn ref2_poly2(p: i128) -> i128 {
 pub fn ref2_int_exp(x: i32) -> i32 {
     let x = (x as i128).min(0);
     let ln2 = LN2_Q;
-    let z = floor_div(-x, ln2).min(Z_MAX);
+    // `x` was clamped to `<= 0` one line up and came from an i32, so its negation is at most 2^31.
+    let z = floor_div(x.checked_neg().expect("x is a clamped i32, so -x cannot overflow i128"), ln2).min(Z_MAX);
     if z >= Z_MAX {
         return 0;
     }

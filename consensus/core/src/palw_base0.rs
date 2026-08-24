@@ -649,13 +649,10 @@ mod tests {
         for x in [-9i64, -8, -7, -5, -4, -3, -1, 0, 1, 3, 4, 5, 7, 8, 9, 1 << 40, -(1 << 40)] {
             for s in [0u8, 1, 2, 3, 31] {
                 if let Ok(x32) = i32::try_from(x)
-                    && s <= 31 {
-                        assert_eq!(
-                            rounding_shift_right_64(x, s),
-                            rounding_shift_right(x32, s) as i64,
-                            "widths disagree at x={x} s={s}"
-                        );
-                    }
+                    && s <= 31
+                {
+                    assert_eq!(rounding_shift_right_64(x, s), rounding_shift_right(x32, s) as i64, "widths disagree at x={x} s={s}");
+                }
             }
         }
         // Half rounds AWAY from zero on both signs — the property that makes the rule symmetric.

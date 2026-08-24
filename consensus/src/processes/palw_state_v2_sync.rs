@@ -176,9 +176,10 @@ impl PalwStateSyncV2 {
             store.delete_delta_batch(batch, *block)?;
         }
         if let Some(point) = current.last_point()
-            && point.block != fork_point {
-                return Err(PalwSyncV2Error::ForkPointMismatch { expected: fork_point, found: Some(point.block) });
-            }
+            && point.block != fork_point
+        {
+            return Err(PalwSyncV2Error::ForkPointMismatch { expected: fork_point, found: Some(point.block) });
+        }
         store.set_tip_batch(batch, fork_point, &current)?;
         self.tip = Some((fork_point, current));
         Ok(())
@@ -330,7 +331,7 @@ mod tests {
         // And the other branch applies on the fork point.
         let branch = PalwChainStepV2 { ctx: ctx(0xB3, 111, 111), objects: vec![], attempt: Some(admitted_attempt(200)) };
         let mut batch = WriteBatch::default();
-        sync.advance(&mut store, &mut batch, &[branch.clone()]).unwrap();
+        sync.advance(&mut store, &mut batch, std::slice::from_ref(&branch)).unwrap();
         db.write(batch).unwrap();
         assert_eq!(*sync.tip().unwrap().0, branch.ctx.block);
     }

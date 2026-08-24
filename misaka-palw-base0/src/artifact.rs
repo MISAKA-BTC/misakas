@@ -810,6 +810,9 @@ impl W {
     fn u8(&mut self, v: u8) {
         self.0.push(v);
     }
+    /// Unused by this format version. Kept so the writer and the reader stay a matched
+    /// pair: a codec missing one direction of a width is how the next field gets hand-rolled.
+    #[allow(dead_code)]
     fn u32(&mut self, v: u32) {
         self.0.extend_from_slice(&v.to_le_bytes());
     }
@@ -866,6 +869,9 @@ impl<'a> R<'a> {
     fn u8(&mut self, w: &'static str) -> Result<u8, ArtifactFileError> {
         Ok(self.take(1, w)?[0])
     }
+    /// Unused by this format version. Kept so the writer and the reader stay a matched
+    /// pair: a codec missing one direction of a width is how the next field gets hand-rolled.
+    #[allow(dead_code)]
     fn u32(&mut self, w: &'static str) -> Result<u32, ArtifactFileError> {
         Ok(u32::from_le_bytes(self.take(4, w)?.try_into().expect("4")))
     }

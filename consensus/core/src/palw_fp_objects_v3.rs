@@ -246,7 +246,7 @@ mod tests {
         let carrier = tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, borsh::to_vec(&p).unwrap());
 
         // A verifier that answers honestly — this fixture carries no real signature.
-        let refused = palw_fp_objects_from_accepted_txs_v3(&[carrier.clone()], net(), &fp, h64(1), |_, _, _, _| false);
+        let refused = palw_fp_objects_from_accepted_txs_v3(std::slice::from_ref(&carrier), net(), &fp, h64(1), |_, _, _, _| false);
         assert!(refused.objects.is_empty(), "an unsigned commitment must not become a claim");
         assert_eq!(refused.skipped.len(), 1, "and it is SKIPPED with a reason, not silently dropped");
         assert!(refused.skipped[0].1.contains("signature"), "got {}", refused.skipped[0].1);
@@ -342,16 +342,16 @@ mod tests {
         let fp = freeprompt();
 
         let junk = tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, vec![0xFF; 32]);
-        let out = palw_fp_objects_from_accepted_txs_v3(&[junk.clone()], net(), &fp, h64(1), |_, _, _, _| true);
+        let out = palw_fp_objects_from_accepted_txs_v3(std::slice::from_ref(&junk), net(), &fp, h64(1), |_, _, _, _| true);
         assert_eq!(out.skipped, vec![(junk.id(), "payload does not decode")]);
 
         let foreign = tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, borsh::to_vec(&payload(96, 256)).unwrap());
-        let out = palw_fp_objects_from_accepted_txs_v3(&[foreign.clone()], h64(0x99), &fp, h64(1), |_, _, _, _| true);
+        let out = palw_fp_objects_from_accepted_txs_v3(std::slice::from_ref(&foreign), h64(0x99), &fp, h64(1), |_, _, _, _| true);
         assert_eq!(out.skipped, vec![(foreign.id(), "payload is not stateless-admissible")], "a foreign network's payload");
 
         // 8 prompt tokens and 4 decode tokens is far under one quantum.
         let tiny = tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, borsh::to_vec(&payload(8, 4)).unwrap());
-        let out = palw_fp_objects_from_accepted_txs_v3(&[tiny.clone()], net(), &fp, h64(1), |_, _, _, _| true);
+        let out = palw_fp_objects_from_accepted_txs_v3(std::slice::from_ref(&tiny), net(), &fp, h64(1), |_, _, _, _| true);
         assert_eq!(out.skipped, vec![(tiny.id(), "job earns no quanta")]);
     }
 

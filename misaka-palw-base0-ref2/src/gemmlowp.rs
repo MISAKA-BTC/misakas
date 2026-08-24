@@ -168,6 +168,13 @@ mod integrity {
 
     /// A dependency-free SHA-256. Written out rather than pulled in because a hash used to police
     /// vendored code should not itself arrive through the dependency graph it is policing.
+    // **The index arithmetic below stays in SHA-256's own notation.** `w[i - 15]`, `w[i - 2]`,
+    // `w[i - 16]` and `w[i - 7]` are the message schedule as FIPS 180-4 writes it, and `i` runs
+    // `16..64`, so every one of those is in range by the loop bound. Rewriting them as
+    // `wrapping_sub` would satisfy the lint and lose the property that makes this file worth
+    // having: that it reads like the specification it is a reference for. The additions already
+    // say `wrapping_add`, which is SHA-256's semantics rather than an oversight.
+    #[allow(clippy::arithmetic_side_effects)]
     fn sha256(message: &[u8]) -> String {
         const K: [u32; 64] = [
             0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5, 0xd807aa98, 0x12835b01,
@@ -180,7 +187,7 @@ mod integrity {
         ];
         let mut h: [u32; 8] = [0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19];
         let mut padded = message.to_vec();
-        let bit_length = (message.len() as u64) * 8;
+        let bit_length = (message.len() as u64).checked_mul(8).expect("a message shorter than 2^61 bytes");
         padded.push(0x80);
         while padded.len() % 64 != 56 {
             padded.push(0);

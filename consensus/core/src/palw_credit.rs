@@ -614,8 +614,8 @@ mod tests {
         }
         assert_eq!(candidates.iter().filter(|c| c.bonded).count(), 1, "exactly the one active bond is eligible");
         assert!(candidates[0].bonded, "the active bond");
-        for i in 1..4 {
-            assert!(!candidates[i].bonded, "pending/unbonding/slashed must not be eligible (index {i})");
+        for (i, candidate) in candidates.iter().enumerate().take(4).skip(1) {
+            assert!(!candidate.bonded, "pending/unbonding/slashed must not be eligible (index {i})");
         }
 
         // And the point of view moves the answer: at a later anchor the pending bond is active and

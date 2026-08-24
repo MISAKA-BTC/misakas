@@ -12,12 +12,7 @@
 
 use crate::{flow_context::FlowContext, flow_trait::Flow};
 use kaspa_hashes::Hash64;
-use kaspa_p2p_lib::{
-    IncomingRoute, Router,
-    common::ProtocolError,
-    make_message,
-    pb::kaspad_message::Payload,
-};
+use kaspa_p2p_lib::{IncomingRoute, Router, common::ProtocolError, make_message, pb::kaspad_message::Payload};
 use std::sync::Arc;
 
 use crate::palw_gossip::PalwGossipAdmit;

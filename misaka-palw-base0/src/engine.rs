@@ -414,11 +414,11 @@ impl<'a> Base0Engine<'a> {
     pub fn generate(&self, prompt: &[usize], new_tokens: usize) -> Result<Vec<usize>, EngineError> {
         let mut cache = KvCache::new(self.artifact);
         let mut out = Vec::with_capacity(new_tokens);
-        let mut position = 0usize;
         let mut token = *prompt.first().unwrap_or(&0);
         for step in 0..prompt.len() + new_tokens {
-            let logits = self.forward_token(&mut cache, token, position)?;
-            position += 1;
+            // The position IS the step: it advanced once per iteration and never restarted, so a
+            // separate counter was a second name for one number and a place for them to drift.
+            let logits = self.forward_token(&mut cache, token, step)?;
             let next = argmax_lowest(&logits);
             if step + 1 < prompt.len() {
                 token = prompt[step + 1];

@@ -1820,7 +1820,6 @@ mod driver {
     /// Validation half of the step: computes + verifies and RETURNS the rows to
     /// stage; `None` = already stored (no-replay). The caller decides the batch.
     #[allow(clippy::too_many_arguments)]
-    #[allow(clippy::too_many_arguments)]
     pub fn evm_validate(
         header_store: &DbEvmHeaderStore,
         state_store: &DbEvmStateStore,

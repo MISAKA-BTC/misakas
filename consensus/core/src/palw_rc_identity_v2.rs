@@ -265,7 +265,6 @@ mod tests {
         p
     }
 
-    #[test]
     /// **Gate 5: the RC cannot mint an identity that can never admit a second class.**
     ///
     /// `max_step_leaf_count` is a bundle field and the bundle is `palw_ruleset_id_v2`, so the
@@ -535,8 +534,6 @@ mod tests {
     /// starts.
     #[test]
     fn a_worker_carve_larger_than_the_networks_worker_share_is_refused() {
-        
-
         let mut params =
             crate::config::params::palw_rc_params_from_artifacts(h64(0xA7), seatable()).expect("the RC artifacts assemble");
         let worker_base_permille =

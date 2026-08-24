@@ -252,7 +252,7 @@ fn main() {
                 println!("  ran in        {:?}", started.elapsed());
                 println!("  trace_root    {}", run.trace_root);
                 println!("  output_root   {}", run.output_root);
-                println!("  execution_root{}", format!(" {}", run.execution_root));
+                println!("  execution_root {}", run.execution_root);
                 println!("  step leaves   {} tiles captured", run.tiles.tiles.len());
                 println!("  generated     {:?}", run.generated_token_ids);
             }

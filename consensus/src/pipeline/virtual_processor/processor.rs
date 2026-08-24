@@ -2125,6 +2125,10 @@ impl VirtualStateProcessor {
         Ok((header, Default::default(), vec![]))
     }
 
+    // Eleven arguments against a ceiling of ten. Every one is a distinct consensus input and
+    // bundling them into a struct would move the coupling rather than remove it -- the call
+    // sites would still have to get all eleven right, with one more indirection to read through.
+    #[allow(clippy::too_many_arguments)]
     fn commit_utxo_state(
         &self,
         current: BlockHash,
@@ -3106,11 +3110,13 @@ impl VirtualStateProcessor {
         let mut admitted = admitted.into_iter();
         let mut over_exposed = 0usize;
         for (fact, exposure) in facts.iter_mut().rev().zip(immature.iter()) {
-            if exposure.is_some() && !admitted.next().unwrap_or(false)
-                && let Some(w) = fact.as_mut() {
-                    w.stage = PalwWorkRampStageV1::Voided;
-                    over_exposed += 1;
-                }
+            if exposure.is_some()
+                && !admitted.next().unwrap_or(false)
+                && let Some(w) = fact.as_mut()
+            {
+                w.stage = PalwWorkRampStageV1::Voided;
+                over_exposed += 1;
+            }
         }
         if over_exposed > 0 {
             debug!(
@@ -9721,11 +9727,11 @@ impl VirtualStateProcessor {
         // queue is the same one the validating walk will read; appended last, matching
         // `verify_expected_utxo_state`'s order exactly. A template that got this wrong would mine
         // blocks its own node rejects.
-        if self.palw_state_params_v2.is_some() {
+        if let Some(state_params) = self.palw_state_params_v2.as_ref() {
             let payouts = self
                 .palw_state_v2_store
                 .read()
-                .load_tip(self.palw_state_params_v2.as_ref().expect("checked above"))
+                .load_tip(state_params)
                 .ok()
                 .flatten()
                 .map(|(_, state)| self.palw_v2_payout_outputs(&state))
@@ -10922,7 +10928,7 @@ mod palw_equivocation_wiring_tests {
             owner_pubkey_hash: h(0x0A0A),
             validator_pubkey_hash: signer,
             validator_pubkey: mock_key(signer),
-            amount: 20_000_00000000,
+            amount: 20_000 * 100_000_000,
             activation_daa_score: 0,
             created_daa_score: 0,
             unbonding_period_blocks: 1_000,

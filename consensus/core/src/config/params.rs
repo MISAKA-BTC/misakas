@@ -4604,7 +4604,7 @@ mod consensus_params_id_tests {
         registration.pwu_per_inference = 0;
         broken.palw_credit = Some(crate::palw_credit::PalwCreditParamsV1 {
             registration,
-            s_eff_sompi: 20_000_00000000,
+            s_eff_sompi: 20_000 * 100_000_000,
             unbonding_period_blocks: 1_209_600,
             activation_daa: 0,
             class_daa: crate::palw_class_daa::PalwClassDaaParamsV1::stage1_defaults(),
@@ -4718,7 +4718,7 @@ mod consensus_params_id_tests {
         // weighed class must fail loudly rather than run a fence that can never convict.
         with_class.palw_credit = Some(crate::palw_credit::PalwCreditParamsV1 {
             registration: crate::palw_registry::tests::fleet_registration(),
-            s_eff_sompi: 20_000_00000000,
+            s_eff_sompi: 20_000 * 100_000_000,
             unbonding_period_blocks: 1_209_600,
             activation_daa: 0,
             class_daa: crate::palw_class_daa::PalwClassDaaParamsV1::stage1_defaults(),
@@ -4730,7 +4730,7 @@ mod consensus_params_id_tests {
         // The covered integer class is runnable.
         with_class.palw_credit = Some(crate::palw_credit::PalwCreditParamsV1 {
             registration: crate::palw_registry::tests::base0_registration(),
-            s_eff_sompi: 20_000_00000000,
+            s_eff_sompi: 20_000 * 100_000_000,
             unbonding_period_blocks: 1_209_600,
             activation_daa: 0,
             class_daa: crate::palw_class_daa::PalwClassDaaParamsV1::stage1_defaults(),

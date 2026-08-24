@@ -700,7 +700,6 @@ mod tests {
         // The "signature" fixture: sig = pubkey bytes; the verifier checks exactly that, plus the
         // context (the family's own) and the message (recomputed).
         // The panel bound at daa 106, so the receipt window is [106, 106 + window_receipt].
-        const BOUND_DAA: u64 = 106;
         const SIGNED_DAA: u64 = 108;
         // An `Unavailable` names the obligation it says went unmet: a chunk the attempt committed
         // to, requested inside the retention window and before the seat signed about it.
