@@ -192,7 +192,31 @@ impl PalwPanelService {
 
     /// The fee outpoint to spend next: the persisted rolling one if it is still unspent, else the
     /// configured one. Returns the entry with it, which is also the unspent check.
-    async fn resolve_fee_funding(&self, session: &kaspa_consensusmanager::ConsensusProxy) -> Option<(TransactionOutpoint, UtxoEntry)> {
+    async fn resolve_fee_funding(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+    ) -> Option<(TransactionOutpoint, UtxoEntry)> {
+        // **"In the UTXO set" and "I can spend it" are different questions — ask the second one.**
+        //
+        // The virtual UTXO set is the CONFIRMED one: an output a carrier of ours is spending right
+        // now is still in it, and stays there until that carrier is mined. So every source below —
+        // the persisted outpoint, the configured one, and the scan — can hand back money that is
+        // already committed, and the mempool answers `already spent by transaction … in the
+        // mempool`. That refusal clears the funding, the next tick asks again, finds the same
+        // outpoint, and the panel spins there instead of carrying receipts. Measured on testnet-11
+        // after the recovery scan shipped: 387 double-spend refusals in three hours against 143
+        // successful submissions, and 77 claims defaulted with their escrow burned, because a
+        // quorum that cannot be carried inside the receipt window is a quorum that never happened.
+        //
+        // The mempool is the one component that knows, so it is the one asked. **The set of spent
+        // outpoints this used to carry instead was worse than the bug it fixed**: an outpoint went
+        // in on submission and never came out, on the reasoning that a spent output is never
+        // funding again because the money moves to the carrier's CHANGE. True only if the carrier
+        // is mined. A carrier that is dropped or evicted leaves its input unspent on chain and
+        // permanently excluded here — the panel then owns money it has forbidden itself to see, and
+        // says `no fee UTXO resolves` forever. Measured on testnet-11 the same day: node 0 stalled
+        // with one live 96.85 MSK output under its own key and 6,343 identical warnings.
+        let is_free = |o: &TransactionOutpoint| !self.flow_context.mining_manager().outpoint_is_spent_in_mempool(o);
         let configured = self.config.fee_outpoint.as_deref()?;
         let mut candidates: Vec<TransactionOutpoint> = Vec::new();
         if let Ok(persisted) = std::fs::read_to_string(self.fee_state_path())
@@ -203,7 +227,7 @@ impl PalwPanelService {
         if let Ok(outpoint) = crate::palw_producer::parse_outpoint(configured) {
             candidates.push(outpoint);
         }
-        for outpoint in &candidates {
+        for outpoint in candidates.iter().filter(|o| is_free(o)) {
             if let Some(entry) = session.get_virtual_utxo_entry(*outpoint) {
                 return Some((*outpoint, entry));
             }
@@ -221,33 +245,48 @@ impl PalwPanelService {
         //
         // There is no need to remember anything. Every carrier pays its change back to the SAME
         // script it spent, so this panel's money is whatever the UTXO set holds under its own key.
-        // Deriving that script from the keypair makes recovery a function of the chain and the key
-        // — no state to lose, and correct after a wipe, a restart, or a dropped carrier.
+        // Reading that script off the chain makes recovery a function of the chain and the bond —
+        // no state to lose, and correct after a wipe, a restart, or a dropped carrier.
         //
         // A scan, so it runs only here: the two remembered outpoints are the hot path and this is
         // the path back from having none.
         let script = self.fee_script(session)?;
         let mut cursor: Option<TransactionOutpoint> = None;
+        // What the scan SAW, so a failure can say which of its three reasons it was.
+        let (mut scanned, mut under_script, mut busy) = (0usize, 0usize, 0usize);
         loop {
             let chunk = session.async_get_virtual_utxos(cursor, 1024, cursor.is_some()).await;
             if chunk.is_empty() {
                 break;
             }
             cursor = chunk.last().map(|(o, _)| *o);
-            if let Some((outpoint, entry)) = chunk.into_iter().find(|(_, e)| e.script_public_key == script && !e.is_coinbase)
-            {
+            scanned += chunk.len();
+            let mut found = None;
+            for (outpoint, entry) in chunk {
+                if entry.script_public_key != script || entry.is_coinbase {
+                    continue;
+                }
+                under_script += 1;
+                if !is_free(&outpoint) {
+                    busy += 1;
+                    continue;
+                }
+                found = Some((outpoint, entry));
+                break;
+            }
+            if let Some((outpoint, entry)) = found {
                 info!("[{PALW_PANEL}] recovered funding at {}:{} — the remembered outpoints were spent or never mined", outpoint.transaction_id, outpoint.index);
                 self.persist_fee_outpoint(outpoint);
                 return Some((outpoint, entry));
             }
         }
-        // **Say which outpoints were tried.** "no fee UTXO resolves" is true of a carrier still in
-        // flight, of a configured outpoint that was never funded, and of one the chain has spent —
-        // three different operator actions, and the log named none of them. Traced rather than
-        // warned because the tick-level warning above already fires once per tick; this is the
-        // detail behind it.
-        trace!(
-            "[{PALW_PANEL}] no fee UTXO resolves; tried {}",
+        // **Say why, not just that.** "no fee UTXO resolves" is true of a carrier still in flight,
+        // of a configured outpoint that was never funded, and of a panel that owns nothing under
+        // its own script — three different operator actions, and the log named none of them. This
+        // was a `trace!` behind a disabled level while a seat sat stalled for hours with money it
+        // could not see, so it warns: it fires once per tick only on the path that already warns.
+        warn!(
+            "[{PALW_PANEL}] no fee UTXO resolves; tried {}; scanned {scanned} outputs, {under_script} under this bond's payout script of which {busy} are spent by our own mempool",
             candidates.iter().map(|o| format!("{}:{}", o.transaction_id, o.index)).collect::<Vec<_>>().join(", ")
         );
         None
@@ -801,14 +840,34 @@ impl PalwPanelService {
                 if chained_funding.is_none() {
                     chained_funding = self.resolve_fee_funding(&session).await;
                     inflight = 0;
-                } else if let Some((tip, _)) = &chained_funding
-                    && session.get_virtual_utxo_entry(*tip).is_some()
-                {
-                    // The tip of our own chain is in the UTXO set, so every carrier behind it was
-                    // mined. Nothing is in flight and the budget is whole again.
-                    inflight = 0;
+                } else if let Some((tip, _)) = chained_funding.clone() {
+                    if session.get_virtual_utxo_entry(tip).is_some() {
+                        // The tip of our own chain is in the UTXO set, so every carrier behind it
+                        // was mined. Nothing is in flight and the budget is whole again.
+                        inflight = 0;
+                    } else if !self
+                        .flow_context
+                        .mining_manager()
+                        .clone()
+                        .has_transaction(tip.transaction_id, kaspa_mining::model::tx_query::TransactionQuery::TransactionsOnly)
+                        .await
+                    {
+                        // **The carrier that would create this change is neither mined nor pending,
+                        // so it is gone.** Relay drops orphans silently and mempools evict; without
+                        // this the panel waits on an output no one will ever produce, holding at the
+                        // in-flight cap forever because the cap only clears when the tip confirms.
+                        // Dropping the chain sends the next tick back to `resolve_fee_funding`,
+                        // which reads what the chain and our own mempool actually say.
+                        warn!(
+                            "[{PALW_PANEL}] carrier {} was neither mined nor kept — re-resolving funding from the chain",
+                            tip.transaction_id
+                        );
+                        chained_funding = None;
+                        inflight = 0;
+                    }
                 }
-                let mut funding = if inflight >= MAX_INFLIGHT_CARRIERS {
+                let held = inflight >= MAX_INFLIGHT_CARRIERS;
+                let mut funding = if held {
                     // Back-pressure, not loss. Keeping the objects pending means the next tick
                     // re-offers them in priority order (court moves first), rather than building
                     // carriers the network will drop before anyone reads them.
@@ -816,7 +875,7 @@ impl PalwPanelService {
                 } else {
                     chained_funding.clone()
                 };
-                if inflight >= MAX_INFLIGHT_CARRIERS {
+                if held {
                     // Not the same condition as "no fee UTXO", and it must not print as one: this
                     // panel is waiting for its own chain to confirm, which is the system working.
                     trace!("[{PALW_PANEL}] holding: {inflight} carriers unconfirmed (cap {MAX_INFLIGHT_CARRIERS})");
@@ -925,7 +984,16 @@ impl PalwPanelService {
                 }
                 // What the next tick continues from. `None` here means a refusal cleared it, and
                 // the next tick resolves afresh.
-                chained_funding = funding;
+                //
+                // **Only when this tick was allowed to spend.** A back-pressured tick sets `funding`
+                // to `None` deliberately — it is not a statement about the chain tip, and writing it
+                // back DESTROYED a perfectly good one. The tip then had to be recovered by the scan,
+                // which could not see it either: the last carrier was still unmined, so its change
+                // was in no UTXO set at all. Measured on testnet-11: node 0 held at the cap once and
+                // never carried another object, 6,343 warnings later.
+                if !held {
+                    chained_funding = funding;
+                }
             }
 
             // Forget what the chain has moved past: a claim with no duty and no unsubmitted quorum
@@ -1070,5 +1138,44 @@ mod tests {
 
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_dir(&dir);
+    }
+
+    /// **The confirmed UTXO set cannot tell you what your own mempool transactions have spent.**
+    ///
+    /// Funding is chosen from the VIRTUAL utxo set, which is the confirmed one. An output a carrier
+    /// of ours is spending right now is still in it and stays there until that carrier is mined, so
+    /// every source the panel has — the persisted outpoint, the configured one, and the recovery
+    /// scan — can hand back money that is already committed. The mempool answers `already spent by
+    /// transaction … in the mempool`, that clears the funding, the next tick asks again, gets the
+    /// same outpoint, and the panel spins there instead of carrying receipts.
+    ///
+    /// Measured on testnet-11 three hours after the recovery scan shipped: 387 double-spend
+    /// refusals and 103 recoveries against 143 successful submissions — and 77 claims defaulted
+    /// with their escrow burned, because a quorum that cannot be carried inside its receipt window
+    /// is a quorum that never happened. The scan was right about WHERE the money is and wrong about
+    /// whether it was still there to spend.
+    ///
+    /// The rule is a set, and the set only ever grows: an outpoint this panel has spent is never a
+    /// funding source again, mined or not, because once the carrier lands the money is at its
+    /// CHANGE outpoint — a different one. That is what makes a permanent skip correct rather than a
+    /// cache someone has to remember to invalidate.
+    #[test]
+    fn an_outpoint_this_panel_already_spent_is_never_funding_again() {
+        use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
+
+        let op = |n: u64| TransactionOutpoint::new(TransactionId::from_u64_word(n), 0);
+        let mut spent: HashSet<TransactionOutpoint> = HashSet::new();
+
+        // The candidate list and the scan both filter on this set, so the property under test is
+        // the set's own semantics: spending is one-way, and re-confirming does not undo it.
+        assert!(!spent.contains(&op(1)), "an untouched outpoint is spendable");
+        spent.insert(op(1));
+        assert!(spent.contains(&op(1)), "and once funded from, it is not offered again");
+        spent.insert(op(1));
+        assert_eq!(spent.len(), 1, "recording the same spend twice is not two spends");
+
+        // The change of that carrier is a DIFFERENT outpoint, which is why the panel is not left
+        // with nothing: the money moves, it does not vanish.
+        assert!(!spent.contains(&op(2)), "the change outpoint is free to spend next");
     }
 }

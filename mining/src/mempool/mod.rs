@@ -14,7 +14,7 @@ use self::{
 };
 use kaspa_consensus_core::{
     block::TemplateTransactionSelector,
-    tx::{MutableTransaction, TransactionId},
+    tx::{MutableTransaction, TransactionId, TransactionOutpoint},
 };
 use kaspa_core::time::Stopwatch;
 use std::sync::Arc;
@@ -76,6 +76,20 @@ impl Mempool {
     pub(crate) fn has_transaction(&self, transaction_id: &TransactionId, query: TransactionQuery) -> bool {
         (query.include_transaction_pool() && self.transaction_pool.has(transaction_id))
             || (query.include_orphan_pool() && self.orphan_pool.has(transaction_id))
+    }
+
+    /// Whether some transaction already in this mempool spends `outpoint`.
+    ///
+    /// The virtual UTXO set cannot answer this: a mempool spend leaves its input sitting in the
+    /// UTXO set until the spending transaction is MINED, so "in the UTXO set" and "spendable by me
+    /// right now" are different questions and only this one is the second. A funding selector that
+    /// asks only the first hands itself the same outpoint every round and the mempool refuses each
+    /// attempt as a double spend.
+    ///
+    /// Orphans are deliberately not consulted: an orphan's inputs are unknown to the pool, and a
+    /// transaction whose parent never arrives never spends anything.
+    pub(crate) fn outpoint_is_spent(&self, outpoint: &TransactionOutpoint) -> bool {
+        self.transaction_pool.get_outpoint_owner_id(outpoint).is_some()
     }
 
     pub(crate) fn get_all_transactions(&self, query: TransactionQuery) -> (Vec<MutableTransaction>, Vec<MutableTransaction>) {

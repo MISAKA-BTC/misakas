@@ -1067,6 +1067,19 @@ impl MiningManager {
         self.mempool.read().has_transaction(transaction_id, query)
     }
 
+    /// Whether a transaction already in this mempool spends `outpoint` — i.e. whether the outpoint
+    /// is still selectable as funding by this node, which "present in the virtual UTXO set" does
+    /// NOT answer (see [`Mempool::outpoint_is_spent`]).
+    ///
+    /// The answer self-heals in both directions and holds no state of its own: the entry appears
+    /// when the spending transaction enters the mempool, and it is gone once that transaction is
+    /// mined (the outpoint leaves the UTXO set with it) or evicted (the outpoint is free again).
+    /// That is what a caller-side "outpoints I have spent" set cannot do — an evicted spend leaves
+    /// such a set excluding an outpoint the chain still says is unspent, forever.
+    pub fn outpoint_is_spent_in_mempool(&self, outpoint: &kaspa_consensus_core::tx::TransactionOutpoint) -> bool {
+        self.mempool.read().outpoint_is_spent(outpoint)
+    }
+
     pub fn get_all_transactions(&self, query: TransactionQuery) -> (Vec<MutableTransaction>, Vec<MutableTransaction>) {
         const TRANSACTION_CHUNK_SIZE: usize = 1000;
         // read lock on mempool by transaction chunks
@@ -1608,6 +1621,13 @@ impl MiningManagerProxy {
     /// Returns whether the mempool holds this transaction in any form.
     pub async fn has_transaction(self, transaction_id: TransactionId, query: TransactionQuery) -> bool {
         spawn_blocking(move || self.inner.has_transaction(&transaction_id, query)).await.unwrap()
+    }
+
+    /// Whether a transaction already in this mempool spends `outpoint`. Synchronous on purpose: the
+    /// callers filter candidate funding outpoints one at a time inside a scan, and a `spawn_blocking`
+    /// per outpoint would cost more than the lock it is avoiding.
+    pub fn outpoint_is_spent_in_mempool(&self, outpoint: &kaspa_consensus_core::tx::TransactionOutpoint) -> bool {
+        self.inner.outpoint_is_spent_in_mempool(outpoint)
     }
 
     pub async fn transaction_count(self, query: TransactionQuery) -> usize {
