@@ -142,10 +142,19 @@ impl AddressManager {
                 return Left(Right(iter::empty()));
             };
             // TODO: Add Check IPv4 or IPv6 match from Go code
+            //
+            // **The port is the one we BOUND, not the network's default.** This branch runs
+            // whenever the listen IP is unspecified — `0.0.0.0:<port>`, which is how a node is
+            // normally run — so pairing each interface with `default_p2p_port()` advertises a port
+            // nothing is listening on the moment an operator moves off the default. Peers dial it,
+            // find nothing, and the node reads as unreachable while its own log says it is
+            // listening; the two facts are printed by different lines and neither mentions the
+            // other. Reported from testnet-11 with `--listen=0.0.0.0:37711` advertising 26311.
+            let advertised_port = listen_address.port;
             Right(network_interfaces.into_iter().map(|(_, ip)| IpAddress::from(ip)).filter(|&ip| ip.is_publicly_routable()).map(
-                |ip| {
-                    info!("Publicly routable local address found: {}", ip);
-                    NetAddress::new(ip, self.config.default_p2p_port())
+                move |ip| {
+                    info!("Publicly routable local address found: {ip} (advertising port {advertised_port})");
+                    NetAddress::new(ip, advertised_port)
                 },
             ))
         } else {

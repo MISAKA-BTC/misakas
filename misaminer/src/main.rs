@@ -272,6 +272,28 @@ async fn main() {
         let state = kaspa_pow::StateLayer0::new(&header, &network_id);
         let palw_ids =
             [kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_LLM, kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_OLLAMA];
+        // **An algo this miner cannot search is a refusal, not a fallback.**
+        //
+        // The `else` below is the Layer-0 HASH scan. Every algo id that is not in `palw_ids` used
+        // to land there, including the ConsensusV2 lanes — so on a network running algo 6 this
+        // miner searched a hash target no algo-6 header is graded by. It never terminates and it
+        // never finds anything, while the loop logs a healthy fetch-search-refetch the whole time.
+        // Measured in the field: four hours at 400% CPU, zero blocks, and the operator had to read
+        // this file against the consensus preset to find out why.
+        //
+        // Implementing the search here is not the fix: an algo-6 nonce is won by running the class's
+        // pinned model, which is what `kaspad --palw-produce` does and what a generic miner has no
+        // way to do. Saying so is.
+        if !palw_ids.contains(&header.pow_algo_id) && header.pow_algo_id >= kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_LLM {
+            log::error!(
+                "this network mines with PoW algo {} (a ConsensusV2 inference lane) and this miner cannot search it — \
+                 a nonce there is won by running the class's pinned model. Blocks on such a network are produced by \
+                 `kaspad --palw-produce` with a bonded producer key; there is no external-miner client for it. \
+                 Stopping rather than searching a hash target no header of this algo is graded by.",
+                header.pow_algo_id
+            );
+            return;
+        }
         let found = if palw_ids.contains(&header.pow_algo_id) {
             mine_palw_sequential(&state, PALW_TEMPLATE_REFRESH)
         } else {
