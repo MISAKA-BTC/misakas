@@ -333,6 +333,13 @@ impl TryCastFromJs for Header {
                     // (a WASM getter/setter is a later follow-on, like the EVM fields).
                     overlay_commitment_root: Default::default(),
                     palw_state_root: Default::default(),
+                    // ADR-0038: the attempt envelope a PALW header carries. Empty here for the
+                    // same reason the fields above are zero — this constructor takes a plain JS
+                    // object and there is no WASM accessor for it yet. It is not optional in
+                    // `Header`, though, and leaving it out is why `Build WASM32 SDK` could not
+                    // compile at all while `Check WASM32` passed: the two exercise different
+                    // features, and only one of them reaches this initializer.
+                    palw_commitment: Default::default(),
                 };
 
                 Ok(header.into())

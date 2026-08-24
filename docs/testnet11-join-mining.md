@@ -83,17 +83,30 @@ kaspad --testnet --netsuffix=11 --appdir=~/.t11 \
   --palw-producer-pay-address=<your misakatest: address>
 ```
 
-The node waits until it is synced, builds one `BondRegistered`, and submits it in a transaction that
-**locks the collateral in its own output**. Then it prints the line you need:
+The node waits until it is synced, builds one `BondRegistered`, submits it in a transaction that
+**locks the collateral in its own output**, and then waits for the bond to actually appear on the
+chain before telling you it did:
 
 ```
-[palw-panel] registered bond <txid>:0 with <n> sompi of collateral.
+[palw-panel] registered bond <txid>:0 with <n> sompi of collateral, in tx <txid>.
 Restart with --palw-producer-bond=<txid>:0 (and --palw-produce) to mine with it
 ```
 
 **That line is the only place the bond's outpoint appears.** It is this transaction's own id, which
 did not exist until the transaction was built — nobody can tell it to you in advance, and the node
 does not store it anywhere else. Keep it.
+
+If instead you see
+
+```
+[palw-panel] carrier <txid> was accepted but no bond appeared within 10 minutes.
+```
+
+then the transaction landed and no bond was created. **Your collateral is not lost** — the output
+is yours and spendable; only the fee is gone. Mempool admission for a lifecycle carrier sees just
+the payload (decode, wire version, may-ride table), so it cannot check the carrier binding, which
+means a network whose nodes predate the index-and-zero-id naming accepts the transaction and then
+drops the registration on extraction. Check that the network runs a build that accepts this form.
 
 If it cannot proceed it says why, once per reason rather than every five seconds. The usual reason
 is that no confirmed non-coinbase UTXO is visible yet; fund the address and it picks it up without a

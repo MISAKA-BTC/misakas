@@ -25,8 +25,14 @@ jobs:
       - name: Set up cache
         uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
 
+      # `--workspace` is deliberately absent: it OVERRIDES `default-members`, and this
+      # repository's `default-members` already excludes `misaka-palw-worker` because that crate
+      # links a pinned llama.cpp build the repository does not contain. With `--workspace` the
+      # step cannot run at all -- it dies in the worker's build script before checking anything --
+      # so every other crate went unchecked and the red gate stopped meaning anything. Set
+      # MISAKA_LLAMA_SRC and name the crate explicitly to check it.
       - name: Run cargo check
-        run: cargo check --tests --workspace --benches
+        run: cargo check --tests --benches
 
   test:
     name: Test Suite
@@ -102,7 +108,7 @@ jobs:
           tool: cargo-nextest
 
       - name: Run cargo build with devnet-prealloc feature
-        run: cargo build --features devnet-prealloc --workspace --all --tests --benches
+        run: cargo build --features devnet-prealloc --tests --benches
 
       - name: Build misaka CLI smoke
         run: |
@@ -119,12 +125,12 @@ jobs:
       # (`kaspa_pow::palw::fixture_permitted_on`), so setting it here changes nothing about any
       # other network's rules: tests that assert real-PoW behaviour still get it.
       - name: Run cargo test regular features
-        run: cargo nextest run --workspace
+        run: cargo nextest run
         env:
           MISAKA_PALW_POW_FIXTURE: "1"
 
       - name: Run cargo doc tests
-        run: cargo test --doc --workspace
+        run: cargo test --doc
         env:
           MISAKA_PALW_POW_FIXTURE: "1"
 
@@ -135,7 +141,7 @@ jobs:
         run: cargo test --doc -p kaspa-hashes --features=no-asm
 
       - name: Run cargo doc
-        run: cargo doc --no-deps --workspace
+        run: cargo doc --no-deps
       - name: Run kip-10 example
         # kaspa-pq PQ-only: the kip-10 example is built on legacy secp256k1
         # P2PKH/P2SH scripts, so it requires the `legacy-secp256k1` feature
@@ -217,7 +223,7 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Run cargo clippy
-        run: cargo clippy --workspace --tests --benches --examples -- -D warnings
+        run: cargo clippy --tests --benches --examples -- -D warnings
 
       - name: Install cargo-deny (advisory gate)
         uses: taiki-e/install-action@7a79fe8c3a13344501c80d99cae481c1c9085912 # v2

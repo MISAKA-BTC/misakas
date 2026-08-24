@@ -723,19 +723,45 @@ impl PalwPanelService {
             let txid = tx.id();
             match self.flow_context.submit_rpc_transaction(&session, tx, Orphan::Forbidden).await {
                 Ok(()) => {
-                    // The bond's key is the outpoint the chain substituted, and an operator has no
-                    // other way to learn it: it is this transaction's id, which did not exist
-                    // until the transaction was built. Printing it IS the handoff.
-                    info!(
-                        "[{PALW_PANEL}] registered bond {txid}:0 with {} sompi of collateral. \
-                         Restart with --palw-producer-bond={txid}:0 (and --palw-produce) to mine with it; \
-                         the collateral is reclaimable at this node's pay address once the bond is retired.",
-                        collateral.value
-                    );
                     // The change is last, so the rolling fee outpoint is the final output.
                     // One extra output (the collateral) ahead of the change, so the change is 1.
                     self.persist_fee_outpoint(TransactionOutpoint::new(txid, 1));
-                    return;
+                    // **Submitted is not registered.** `validate_palw_lifecycle_tx` sees only the
+                    // payload -- decode, wire version, may-ride table -- so it cannot check the
+                    // carrier binding, and a carrier whose object the extractor then drops is an
+                    // accepted transaction that created no bond. The collateral output still
+                    // exists and still pays this node's own address, so the money is recoverable;
+                    // nothing else happened. The likeliest cause is a chain whose nodes predate
+                    // the index-and-zero-id naming and refuse this form on extraction.
+                    //
+                    // So wait for the bond to EXIST before saying it does. Announcing an unchecked
+                    // success is how an operator ends up debugging a producer that was never going
+                    // to start, and the bond's key is only knowable from the chain anyway.
+                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(600);
+                    loop {
+                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                        let session = self.consensus_manager.consensus().unguarded_session();
+                        if let Some(kp) = self.keypair.as_ref()
+                            && let Some(bond) = session.palw_bond_of_pubkey_v2(kp.verification_key.as_ref())
+                        {
+                            info!(
+                                "[{PALW_PANEL}] registered bond {}:{} with {} sompi of collateral, in tx {txid}. \
+                                 Restart with --palw-producer-bond={}:{} (and --palw-produce) to mine with it; \
+                                 the collateral is reclaimable at this node's pay address once the bond is retired.",
+                                bond.0.transaction_id, bond.0.index, collateral.value, bond.0.transaction_id, bond.0.index
+                            );
+                            return;
+                        }
+                        if std::time::Instant::now() >= deadline {
+                            warn!(
+                                "[{PALW_PANEL}] carrier {txid} was accepted but no bond appeared within 10 minutes. \
+                                 The collateral output {txid}:0 is yours and spendable; no bond was created. The \
+                                 usual cause is a network still running a build that predates the index-and-zero-id \
+                                 carrier naming, which drops this registration on extraction."
+                            );
+                            return;
+                        }
+                    }
                 }
                 Err(e) => complain(format!("the carrier was refused: {e}")),
             }
