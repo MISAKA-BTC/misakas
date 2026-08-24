@@ -139,7 +139,8 @@ pub mod palw_admission_v2;
 /// transcendental substitution, manufactured mismatch, cross-class collusion, flash-attention
 /// re-enable, non-finite smuggling, domain bridges, kernel-id forgery, layer-kind confusion,
 /// routing-key relabeling, ready-set forgery, unchecked-credit refusal (ADR-0034).
-/// Test-only (`#![cfg(test)]`); ships with the crate's test run.
+/// Test-only — gated by the `#[cfg(test)]` below, like every other module here. The file used
+/// to repeat it as `#![cfg(test)]`, which is the same statement twice.
 #[cfg(test)]
 pub mod palw_adversarial;
 pub mod palw_artifact;

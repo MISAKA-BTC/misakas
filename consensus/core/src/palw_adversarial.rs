@@ -11,8 +11,6 @@
 //! change to the module it defends, and this suite is what proves the change did not reopen an
 //! old door.
 
-#![cfg(test)]
-
 use kaspa_hashes::Hash64;
 
 use crate::palw_reference::{
