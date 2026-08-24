@@ -183,7 +183,14 @@ impl PalwPanelService {
         let bond = match crate::palw_producer::parse_outpoint(&config.bond) {
             Ok(outpoint) => Some(outpoint),
             Err(err) => {
-                warn!("[{PALW_PANEL}] --palw-producer-bond: {err} — panel service disabled");
+                // A node registering its first bond HAS no bond, and saying "panel service
+                // disabled" at it is both false — the registration worker is what runs — and the
+                // exact wrong thing to read while waiting for that worker to report.
+                if config.register_bond {
+                    info!("[{PALW_PANEL}] no bond yet; registering one (--palw-register-bond)");
+                } else {
+                    warn!("[{PALW_PANEL}] --palw-producer-bond: {err} — panel service disabled");
+                }
                 None
             }
         };
@@ -340,16 +347,15 @@ impl PalwPanelService {
         let text = self.config.pay_address.as_deref().ok_or("no --palw-producer-pay-address to pay this bond to")?;
         let address = kaspa_addresses::Address::try_from(text).map_err(|e| format!("pay address is unusable: {e}"))?;
         if address.version != kaspa_addresses::Version::PubKeyHashMlDsa87 {
-            return Err("a bond's payee must be an ML-DSA-87 P2PKH address — a legacy or ECDSA one cannot hold PQ collateral".to_string());
+            return Err(
+                "a bond's payee must be an ML-DSA-87 P2PKH address — a legacy or ECDSA one cannot hold PQ collateral".to_string()
+            );
         }
         if address.prefix != self.consensus_config.prefix() {
             return Err(format!("pay address is for {} and this node is {}", address.prefix, self.consensus_config.prefix()));
         }
-        let payload: [u8; 64] = address
-            .payload
-            .as_ref()
-            .try_into()
-            .map_err(|_| "an ML-DSA-87 address must carry 64 payload bytes".to_string())?;
+        let payload: [u8; 64] =
+            address.payload.as_ref().try_into().map_err(|_| "an ML-DSA-87 address must carry 64 payload bytes".to_string())?;
         Ok((payload, kaspa_consensus_core::dns_finality::p2pkh_mldsa87_spk(&payload)))
     }
 
@@ -376,7 +382,8 @@ impl PalwPanelService {
         let (payee_bytes, payee_script) = self.pay_payee()?;
         let payout_payload = Hash64::from_bytes(payee_bytes);
 
-        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.consensus_config.params.palw_consensus_mode
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) =
+            &self.consensus_config.params.palw_consensus_mode
         else {
             return Err("this network has no ConsensusV2 bundle, so it has no bonds to register".to_string());
         };
@@ -412,10 +419,16 @@ impl PalwPanelService {
                  chain's floor class currently needs; this bond will register and may then be unable to hold a claim"
             );
         } else if self.config.bond_collateral.is_none() {
-            info!(
-                "[{PALW_PANEL}] sizing collateral at {collateral} sompi — the chain's floor is {floor} and one claim \
-                 on the base class currently needs {for_one_claim}"
-            );
+            // Once. This runs on every 5 s pass of the registration loop, and a node waiting for
+            // funding would otherwise print the same sizing line until the operator gave up
+            // reading the log — which is where the actionable "no confirmed UTXO" line lives.
+            static SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            if !SAID.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                info!(
+                    "[{PALW_PANEL}] sizing collateral at {collateral} sompi — the chain's floor is {floor} and one \
+                     claim on the base class currently needs {for_one_claim}"
+                );
+            }
         }
 
         // The signing key is also the operator identity. Panel dedup is per OPERATOR, so two bonds
@@ -656,9 +669,8 @@ impl PalwPanelService {
 
         let mut last_complaint: Option<(String, std::time::Instant)> = None;
         let mut complain = |why: String| {
-            let fresh = last_complaint.as_ref().is_none_or(|(prev, at)| {
-                prev != &why || at.elapsed() >= std::time::Duration::from_secs(60)
-            });
+            let fresh =
+                last_complaint.as_ref().is_none_or(|(prev, at)| prev != &why || at.elapsed() >= std::time::Duration::from_secs(60));
             if fresh {
                 warn!("[{PALW_PANEL}] cannot register a bond yet: {why}");
                 last_complaint = Some((why, std::time::Instant::now()));
@@ -670,6 +682,21 @@ impl PalwPanelService {
             let session = self.consensus_manager.consensus().unguarded_session();
             if session.async_is_consensus_in_transitional_ibd_state().await {
                 continue;
+            }
+            // **Already bonded? Then this flag is a no-op, not a second payment.** A bond locks
+            // collateral and its key is the carrier's own transaction id, so registering twice is
+            // paying twice — and the likeliest way to do it is leaving this flag in a unit file
+            // that restarts. Asked of the chain rather than a local marker, because this network's
+            // own relaunch instructions tell operators to wipe the datadir.
+            if let Some(kp) = self.keypair.as_ref()
+                && let Some(existing) = session.palw_bond_of_pubkey_v2(kp.verification_key.as_ref())
+            {
+                info!(
+                    "[{PALW_PANEL}] this key already holds bond {}:{} on this chain — not registering another. \
+                     Drop --palw-register-bond and run with --palw-producer-bond={}:{}",
+                    existing.0.transaction_id, existing.0.index, existing.0.transaction_id, existing.0.index
+                );
+                return;
             }
             let (object, collateral) = match self.build_bond_registration(&session) {
                 Ok(built) => built,
@@ -685,7 +712,8 @@ impl PalwPanelService {
                 ));
                 continue;
             };
-            let tx = match self.build_lifecycle_tx_with_outputs(&object, funding_outpoint, &funding, std::slice::from_ref(&collateral)) {
+            let tx = match self.build_lifecycle_tx_with_outputs(&object, funding_outpoint, &funding, std::slice::from_ref(&collateral))
+            {
                 Ok(tx) => tx,
                 Err(why) => {
                     complain(why);

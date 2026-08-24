@@ -1491,8 +1491,7 @@ async fn palw_v2_a_stranger_can_register_their_own_bond() {
     // What a registrant can compute at signing time: "the output at index 0 of whatever carries me".
     let declared = PalwBondKeyV2(TransactionOutpoint::new(TransactionId::default(), 0));
     let sign_over = |key: &PalwBondKeyV2| {
-        let message =
-            palw_bond_registration_message_v2(network_domain, key, &pubkey, &pubkey, collateral, &payout_payload);
+        let message = palw_bond_registration_message_v2(network_domain, key, &pubkey, &pubkey, collateral, &payout_payload);
         libcrux_ml_dsa::ml_dsa_87::sign(
             &keypair.signing_key,
             message.as_byte_slice(),

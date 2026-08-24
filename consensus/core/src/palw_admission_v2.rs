@@ -975,20 +975,59 @@ mod tests {
             activation_daa: 101,
             admission: None,
         };
-        let (next, _) =
-            apply_palw_transition_v2(&state, &state_params(), &ctx(2, 101, 2), std::slice::from_ref(&entrant), None)
-                .expect("registering a class on a running chain is the supported path");
+        let (next, _) = apply_palw_transition_v2(&state, &state_params(), &ctx(2, 101, 2), std::slice::from_ref(&entrant), None)
+            .expect("registering a class on a running chain is the supported path");
 
-        assert_eq!(
-            next.class_share_permille(&h64(2)),
-            Some(500),
-            "the entrant activated and holds share — this half already works"
-        );
+        assert_eq!(next.class_share_permille(&h64(2)), Some(500), "the entrant activated and holds share — this half already works");
         let budgets = next.epoch_budgets().expect("the chain carries a budget table");
         assert!(
             budgets.budget_blocks.get(&h64(2)).copied().unwrap_or(0) > 0,
             "a class holding share must hold budget in the same epoch: share without budget is an \
              Active class that can produce nothing, reporting its budget as spent"
+        );
+    }
+
+    /// **The next boundary grants what the mid-epoch activation did not** — which is why the
+    /// defect above is a delay and not a permanent exclusion, and why a fleet running the
+    /// unfixed code recovers on its own without being upgraded.
+    ///
+    /// `ensure_epoch_budgets` recomputes whenever the stored table is for another epoch. The fix
+    /// changes only WHEN it recomputes, never WHAT `derive_epoch_budgets_v2` returns, so a chain
+    /// that crosses a boundary lands on the same table either way. Asserted because a live network
+    /// was told it would recover at its next boundary, and "it will fix itself" is exactly the kind
+    /// of claim that should not rest on reading the control flow.
+    #[test]
+    fn a_boundary_grants_a_budget_the_mid_epoch_activation_missed() {
+        let state = base_state();
+        let epoch_length = state_params().epoch_length();
+
+        // The entrant activates mid-epoch, which is where it gets share and no budget.
+        let entrant = PalwConsensusObjectV2::ClassRegistered {
+            class_id: h64(2),
+            terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
+            artifact_root: h64(11),
+            slash_value_per_pwu: 5,
+            pwu_rule: PalwPwuRuleV2::MaxPerAttempt(500),
+            initial_target: u128::MAX,
+            share_permille: 500,
+            activation_daa: 101,
+            admission: None,
+        };
+        let (mid, _) = apply_palw_transition_v2(&state, &state_params(), &ctx(2, 101, 2), std::slice::from_ref(&entrant), None)
+            .expect("the entrant registers");
+        assert_eq!(mid.class_share_permille(&h64(2)), Some(500), "it holds share from activation");
+
+        // Now cross into the next epoch, carrying nothing — just a block.
+        let next_epoch_daa = (101 / epoch_length + 1) * epoch_length;
+        let (after, _) = apply_palw_transition_v2(&mid, &state_params(), &ctx(3, next_epoch_daa, 3), &[], None)
+            .expect("a block lands in the next epoch");
+
+        let budgets = after.epoch_budgets().expect("the boundary installs a table");
+        assert_eq!(budgets.epoch_index, next_epoch_daa / epoch_length, "and it is this epoch's");
+        assert!(
+            budgets.budget_blocks.get(&h64(2)).copied().unwrap_or(0) > 0,
+            "the entrant has a budget from the boundary on — this is the self-recovery, and it does \
+             not depend on the mid-epoch fix"
         );
     }
 

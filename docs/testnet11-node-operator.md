@@ -126,18 +126,15 @@ resolve today — do not configure them.
 
 ### Mining
 
-The miner talks to your own node's RPC; it does **not** need its own worker (the node does the
-inference, one per attempted nonce, through the sequential PALW path):
-
-```bash
-cargo build --release -p misaminer --bin misaminer
-./misaminer --rpc=127.0.0.1:37710 --network-id=testnet-11 \
-            --wallet=<your misakatest: address> --worker=<rig name>
-```
-
-`--network-id` **must** be `testnet-11` — it is the Layer-0 domain separator, so a wrong value
-computes tags for another network and nothing you mine will be accepted. Expect one attempt to
-cost seconds, not microseconds; `--blocks=0` runs forever. Emission at launch is §8.
+> **This section described the algo-4 lane and no longer applies.** The published testnet-11 runs
+> ConsensusV2 (PoW algo **6**), where a block carries a signed attempt envelope and the nonce is won
+> by inference. `misaminer` cannot mine it — it refuses with a message saying so rather than
+> searching a target it cannot win — and neither can any other external client. Blocks are produced
+> by `kaspad --palw-produce` with a bonded key.
+>
+> The current path, including how a node that is on no genesis registry obtains a bond, is
+> [testnet11-join-mining.md](testnet11-join-mining.md). Ports and the consensus fingerprint there
+> are the live ones; the ones elsewhere in this document are not.
 
 ---
 

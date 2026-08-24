@@ -3742,6 +3742,14 @@ impl VirtualStateProcessor {
         state.bond(bond).map(|b| b.payout_payload)
     }
 
+    /// The bond this key already registered, if any. See the trait doc: this is what keeps a
+    /// left-in `--palw-register-bond` from locking collateral again on every restart.
+    pub fn palw_bond_of_pubkey_v2_impl(&self, pubkey: &[u8]) -> Option<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2> {
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let (_, state) = self.palw_state_v2_store.read().load_tip(state_params).ok().flatten()?;
+        state.bonds_iter().find(|(_, bond)| bond.pubkey == pubkey).map(|(key, _)| *key)
+    }
+
     /// **The terms a class entrant must take rather than choose** (ADR-0049 Decision H).
     ///
     /// The share and the panel floor are the ruleset's. The economic terms are the BASE CLASS's,
@@ -4507,8 +4515,7 @@ impl VirtualStateProcessor {
                     // because the carrier's id is a function of the payload the signature goes
                     // into; the extractor substituted the real id on the way in. Verifying against
                     // the substituted key would reject every honest registration.
-                    let signed_bond =
-                        kaspa_consensus_core::palw_lifecycle_objects_v2::palw_bond_registration_signed_key_v2(bond);
+                    let signed_bond = kaspa_consensus_core::palw_lifecycle_objects_v2::palw_bond_registration_signed_key_v2(bond);
                     let message = kaspa_consensus_core::palw_state_v2::palw_bond_registration_message_v2(
                         kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2(self.network_id_bytes.as_slice()),
                         &signed_bond,

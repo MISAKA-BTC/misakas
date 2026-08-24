@@ -620,7 +620,6 @@ mod tests {
         assert_eq!(entry.reachable_kernels.len(), 10, "the Qwen graph reaches ten of the catalog's kernels");
     }
 
-
     /// **Registering a model does not make a new network.** The property every "add an LLM" flow
     /// depends on, asserted where it can be broken.
     ///
@@ -655,7 +654,8 @@ mod tests {
             "admitting a class must not move the ruleset id — a handshake would refuse across it"
         );
         assert_eq!(
-            bundle.class_catalog_root, bundle_that_pays_for_qwen().class_catalog_root,
+            bundle.class_catalog_root,
+            bundle_that_pays_for_qwen().class_catalog_root,
             "and the genesis catalog root is still the genesis one"
         );
     }

@@ -546,6 +546,20 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// **Does this chain already hold a bond registered by this key?**
+    ///
+    /// Asked before minting a new one. A bond LOCKS COLLATERAL, and its key is the carrier's own
+    /// transaction id — so registering twice is not idempotent, it is paying twice, and the most
+    /// likely way to do it is leaving `--palw-register-bond` in a unit file that restarts. A local
+    /// marker would not survive the datadir wipe this network's own relaunch instructions ask for,
+    /// so the question is put to the chain, which is where the answer actually lives.
+    ///
+    /// `None` means "no bond under this key", which is also the answer on a network with no V2
+    /// state at all — both mean the same thing to the caller: nothing has been registered here.
+    fn palw_bond_of_pubkey_v2(&self, _pubkey: &[u8]) -> Option<crate::palw_state_v2::PalwBondKeyV2> {
+        None
+    }
+
     /// **What a post-genesis class registration must take from the chain** (ADR-0049 Decision H).
     ///
     /// `None` on every network without a V2 bundle, and on one whose base class this chain does not

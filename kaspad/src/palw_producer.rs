@@ -368,10 +368,8 @@ impl PalwProducerService {
                     facts.epoch_produced_blocks,
                     facts.epoch_budget_blocks,
                     match &facts.bond {
-                        Some(bond) => format!(
-                            " exposure={}/{} per_claim={}",
-                            bond.reserved_exposure, bond.exposure_ceiling, bond.claim_exposure
-                        ),
+                        Some(bond) =>
+                            format!(" exposure={}/{} per_claim={}", bond.reserved_exposure, bond.exposure_ceiling, bond.claim_exposure),
                         None => String::new(),
                     }
                 );

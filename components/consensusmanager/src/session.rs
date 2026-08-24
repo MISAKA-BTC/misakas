@@ -239,6 +239,10 @@ impl ConsensusSessionOwned {
         self.consensus.palw_v2_registration_terms()
     }
 
+    pub fn palw_bond_of_pubkey_v2(&self, pubkey: &[u8]) -> Option<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2> {
+        self.consensus.palw_bond_of_pubkey_v2(pubkey)
+    }
+
     pub fn palw_disputable_claims_v2(
         &self,
         mine: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,

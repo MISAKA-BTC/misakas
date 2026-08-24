@@ -245,10 +245,7 @@ pub fn palw_bond_registration_signed_key_v2(bond: &crate::palw_state_v2::PalwBon
 ///
 /// Every other object passes through unchanged: this substitution exists only because a bond names
 /// an output of its own carrier, and only a carrier knows its own id.
-pub fn palw_bond_registration_keyed_to_its_carrier_v2(
-    carrier: TransactionId,
-    object: PalwConsensusObjectV2,
-) -> PalwConsensusObjectV2 {
+pub fn palw_bond_registration_keyed_to_its_carrier_v2(carrier: TransactionId, object: PalwConsensusObjectV2) -> PalwConsensusObjectV2 {
     match object {
         PalwConsensusObjectV2::BondRegistered { bond, pubkey, operator_pubkey, collateral, payout_payload, signature } => {
             PalwConsensusObjectV2::BondRegistered {
@@ -476,7 +473,11 @@ mod tests {
             bond: crate::palw_state_v2::PalwBondKeyV2(crate::tx::TransactionOutpoint::new(
                 // `t` selects which id the lie uses: the zero sentinel for the honest form, and a
                 // real id for lie 3, which is what naming somebody else's transaction now looks like.
-                if t.payload.is_empty() && t.outputs.first().map(|o| o.value) == Some(999) { t.id() } else { TransactionId::default() },
+                if t.payload.is_empty() && t.outputs.first().map(|o| o.value) == Some(999) {
+                    t.id()
+                } else {
+                    TransactionId::default()
+                },
                 index,
             )),
             pubkey: vec![7; 4],

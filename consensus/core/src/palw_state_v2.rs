@@ -3202,8 +3202,7 @@ fn ensure_epoch_budgets(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCont
     // Covers the TABLE, not just the epoch: a class that activated after this epoch's budget was
     // installed holds share the table has never seen, and reads its budget as zero.
     let covered = builder.state.epoch_budgets.as_ref().is_some_and(|budgets| {
-        budgets.epoch_index == epoch_index
-            && builder.state.class_shares.keys().all(|id| budgets.budget_blocks.contains_key(id))
+        budgets.epoch_index == epoch_index && builder.state.class_shares.keys().all(|id| budgets.budget_blocks.contains_key(id))
     });
     if covered {
         return;

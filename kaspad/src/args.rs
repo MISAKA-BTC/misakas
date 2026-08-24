@@ -825,7 +825,7 @@ pub fn cli() -> Command {
                 .env("KASPAD_PALW_PRODUCER_KEY")
                 .require_equals(true)
                 .value_parser(clap::value_parser!(String))
-                .help("PALW: path to the 32-byte hex ML-DSA-87 seed whose VERIFICATION key the genesis bond registered. Generate it with misaka-cli; this never creates one."),
+                .help("PALW: path to the 32-byte hex ML-DSA-87 seed whose VERIFICATION key the bond registered — a genesis bond, or one this node made with --palw-register-bond. Generate the seed with `misaka key gen`; this never creates one."),
         )
         .arg(
             Arg::new("palw-producer-bond")
@@ -833,7 +833,7 @@ pub fn cli() -> Command {
                 .env("KASPAD_PALW_PRODUCER_BOND")
                 .require_equals(true)
                 .value_parser(clap::value_parser!(String))
-                .help("PALW: <txid>:<index> of the bond output this node signs attempts under — the one the genesis card names."),
+                .help("PALW: <txid>:<index> of the bond output this node signs attempts under. A genesis bond names it on the card; a bond made with --palw-register-bond prints it when the carrier is submitted, and that line is the only place it appears — the outpoint is the carrier's own id."),
         )
         .arg(
             Arg::new("palw-drill-challenge-all")

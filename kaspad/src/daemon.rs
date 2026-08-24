@@ -1353,7 +1353,10 @@ Do you confirm? (y/n)";
     // ADR-0042 Decision 7: the panel service — a bonded node's seat duties, and (funded) the
     // submitter that carries the assembled quorum to the chain. Deliberately independent of
     // --palw-produce: a validator that never mines still judges.
-    let palw_panel_service = if args.palw_panel {
+    // `--palw-register-bond` needs this service too, and requiring `--palw-panel` alongside it
+    // would mean a newcomer who passed only the registration flag got silence: no service, no
+    // message, nothing to read. The registration dispatches to its own worker inside.
+    let palw_panel_service = if args.palw_panel || args.palw_register_bond {
         // The court, from the SAME bundle the mode check reads — a seat resolving a duty's class
         // against a different court would look for a class the chain never registered.
         let panel_court = match &config_for_palw_panel.params.palw_consensus_mode {
@@ -1366,41 +1369,43 @@ Do you confirm? (y/n)";
         // is therefore admitted on the key alone, and the service dispatches to the registration
         // worker instead of the panel duties.
         match (v2, &args.palw_producer_key, &args.palw_producer_bond) {
-            (true, Some(key_path), bond) if bond.is_some() || args.palw_register_bond => Some(Arc::new(crate::palw_panel::PalwPanelService::new(
-                crate::palw_panel::PalwPanelConfig {
-                    register_class: args.palw_register_class,
-                    register_bond: args.palw_register_bond,
-                    bond_collateral: args.palw_bond_collateral,
-                    pay_address: args.palw_producer_pay_address.clone(),
-                    key_path: key_path.clone(),
-                    bond: bond.clone().unwrap_or_default(),
-                    fee_outpoint: args.palw_fee_outpoint.clone(),
-                    state_dir: app_dir.join(network.to_prefixed()).join("palw-panel"),
-                    court: panel_court.clone().expect("v2 is true exactly when this is Some"),
-                    class_artifacts: args.palw_class_artifact.iter().map(std::path::PathBuf::from).collect(),
-                    challenge: args.palw_challenge || args.palw_drill_challenge_all,
-                    // The same directory the producer writes to, so a node that produces can
-                    // answer a court about its own work after its gossip pool has moved on.
-                    retention_dir: app_dir.join(network.to_prefixed()).join("palw-retention"),
-                    drill_challenge_all: match args.palw_drill_challenge_all {
-                        true if network.is_mainnet() => {
-                            panic!("--palw-drill-challenge-all is a drill and is refused on mainnet")
-                        }
-                        true => {
-                            warn!(
-                                "PALW DRILL: this node will open a court against every licensed claim, including ones it \
-                                 reproduces. Those disputes are meant to LOSE, and each costs this bond the claim's stake."
-                            );
-                            true
-                        }
-                        false => false,
+            (true, Some(key_path), bond) if bond.is_some() || args.palw_register_bond => {
+                Some(Arc::new(crate::palw_panel::PalwPanelService::new(
+                    crate::palw_panel::PalwPanelConfig {
+                        register_class: args.palw_register_class,
+                        register_bond: args.palw_register_bond,
+                        bond_collateral: args.palw_bond_collateral,
+                        pay_address: args.palw_producer_pay_address.clone(),
+                        key_path: key_path.clone(),
+                        bond: bond.clone().unwrap_or_default(),
+                        fee_outpoint: args.palw_fee_outpoint.clone(),
+                        state_dir: app_dir.join(network.to_prefixed()).join("palw-panel"),
+                        court: panel_court.clone().expect("v2 is true exactly when this is Some"),
+                        class_artifacts: args.palw_class_artifact.iter().map(std::path::PathBuf::from).collect(),
+                        challenge: args.palw_challenge || args.palw_drill_challenge_all,
+                        // The same directory the producer writes to, so a node that produces can
+                        // answer a court about its own work after its gossip pool has moved on.
+                        retention_dir: app_dir.join(network.to_prefixed()).join("palw-retention"),
+                        drill_challenge_all: match args.palw_drill_challenge_all {
+                            true if network.is_mainnet() => {
+                                panic!("--palw-drill-challenge-all is a drill and is refused on mainnet")
+                            }
+                            true => {
+                                warn!(
+                                    "PALW DRILL: this node will open a court against every licensed claim, including ones it \
+                             reproduces. Those disputes are meant to LOSE, and each costs this bond the claim's stake."
+                                );
+                                true
+                            }
+                            false => false,
+                        },
+                        metal_worker: args.palw_metal_worker.as_ref().map(std::path::PathBuf::from),
                     },
-                    metal_worker: args.palw_metal_worker.as_ref().map(std::path::PathBuf::from),
-                },
-                consensus_manager.clone(),
-                flow_context_for_palw_panel.clone(),
-                config_for_palw_panel.clone(),
-            ))),
+                    consensus_manager.clone(),
+                    flow_context_for_palw_panel.clone(),
+                    config_for_palw_panel.clone(),
+                )))
+            }
             (false, _, _) => {
                 warn!(
                     "--palw-panel was given but {} declares no ConsensusV2 ruleset — no panels exist here, service not started",

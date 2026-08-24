@@ -1575,7 +1575,9 @@ mod two_lane_gate_tests {
                 .unwrap_or_else(|e| panic!("a V2 network must accept its own lane {id}: {e:?}"));
         }
         // The hash floor and the pre-V2 inference lanes are not this network's.
-        for id in [POW_ALGO_ID_KHEAVYHASH, POW_ALGO_ID_ARGON2ID, POW_ALGO_ID_BLAKE2B_SHA3, POW_ALGO_ID_PALW_LLM, POW_ALGO_ID_PALW_OLLAMA] {
+        for id in
+            [POW_ALGO_ID_KHEAVYHASH, POW_ALGO_ID_ARGON2ID, POW_ALGO_ID_BLAKE2B_SHA3, POW_ALGO_ID_PALW_LLM, POW_ALGO_ID_PALW_OLLAMA]
+        {
             assert!(
                 check_algo_id_for_mode_accepting(id, required, mode.accepts_algo_id(id), true, true, true).is_err(),
                 "a V2 network must not accept {id} — its lanes are exclusive"
