@@ -121,6 +121,11 @@ pub struct HeaderProcessor {
     /// ADR-0042 Decision 1 (PR-08 seam): the algo id a `ConsensusV2` network demands, `None`
     /// otherwise (every network today). See the virtual processor's field of the same name.
     pub(super) palw_required_algo_id: Option<u8>,
+    /// **What this network ACCEPTS, which is not the same as what it demands.** A V2 bundle
+    /// admits two lanes — the committed attempt and the free-prompt receipt spend — and the id
+    /// above names only the first. Held whole so the gate asks the bundle rather than a
+    /// pre-computed half of its answer.
+    pub(super) palw_consensus_mode: kaspa_consensus_core::palw_mode_v2::PalwConsensusMode,
     /// ADR-0038 Decision A: the network's commitment fence, `None` on every shipped preset.
     pub(super) palw_block_commitment: Option<kaspa_consensus_core::palw_block_commitment::PalwBlockCommitmentParamsV1>,
     /// ADR-0039 W4′: which rule this network orders candidate tips by. `BlueWorkOnly` on every
@@ -225,6 +230,7 @@ impl HeaderProcessor {
             pow_blake2b_sha3_activation: params.pow_blake2b_sha3_activation,
             pow_palw_activation: params.pow_palw_activation,
             palw_required_algo_id: params.palw_consensus_mode.required_algo_id(),
+            palw_consensus_mode: params.palw_consensus_mode.clone(),
             palw_block_commitment: params.palw_block_commitment,
             palw_tip_order: params.palw_tip_order_v1(),
             pow_palw_ollama_activation: params.pow_palw_ollama_activation,

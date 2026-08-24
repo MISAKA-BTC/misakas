@@ -620,6 +620,45 @@ mod tests {
         assert_eq!(entry.reachable_kernels.len(), 10, "the Qwen graph reaches ten of the catalog's kernels");
     }
 
+
+    /// **Registering a model does not make a new network.** The property every "add an LLM" flow
+    /// depends on, asserted where it can be broken.
+    ///
+    /// `class_catalog_root` commits to the classes a network is BORN with. A post-genesis
+    /// registration is a consensus object that lands in chain state — it never re-enters the
+    /// bundle — so the ruleset id, and therefore the `consensus_params_id` two nodes compare at
+    /// handshake, cannot move because someone registered a class.
+    ///
+    /// If that ever stopped being true, adding a model would fork the network silently: every node
+    /// that had not yet seen the registration would compute a different fingerprint and refuse to
+    /// peer, and the failure would look like a connectivity problem rather than a rule change.
+    #[test]
+    fn registering_a_class_does_not_move_the_ruleset_id() {
+        // The Qwen-scale class needs a network provisioned for its step space; that is a fact
+        // about the CLASS, not about this property, and using the floor's bundle would fail on the
+        // ladder before it ever reached the question being asked here.
+        let bundle = bundle_that_pays_for_qwen();
+        let before = crate::palw_mode_v2::palw_ruleset_id_v2(&bundle);
+
+        // A second class, admitted by the chain's own gate — the same call a node makes.
+        let profile = qwen_admissible();
+        let canonical = context(&profile, 8, 4);
+        let counted = step_leaf_count(&profile, &canonical).expect("counts");
+        let object = registration(profile.shape_profile_id(), counted);
+        verify_class_admission_v2(&bundle, &profile, &canonical, &object).expect("admissible");
+
+        // The bundle is untouched by admitting it: admission RETURNS a catalog entry, it does not
+        // put one into the params. The entry lives in chain state from here on.
+        assert_eq!(
+            crate::palw_mode_v2::palw_ruleset_id_v2(&bundle),
+            before,
+            "admitting a class must not move the ruleset id — a handshake would refuse across it"
+        );
+        assert_eq!(
+            bundle.class_catalog_root, bundle_that_pays_for_qwen().class_catalog_root,
+            "and the genesis catalog root is still the genesis one"
+        );
+    }
     /// The floor is not disturbed by the second class existing — the property that makes "add it
     /// later" different from "run a different network".
     #[test]

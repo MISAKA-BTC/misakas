@@ -625,6 +625,32 @@ pub fn check_algo_id_for_mode(
     palw_llm_active: bool,
     blake2b_sha3_active: bool,
 ) -> Result<(), PowLayer0Error> {
+    check_algo_id_for_mode_accepting(algo_id, mode_required, None, palw_ollama_active, palw_llm_active, blake2b_sha3_active)
+}
+
+/// [`check_algo_id_for_mode`], asking the network what it ACCEPTS rather than what it demands.
+///
+/// A V2 bundle admits two lanes — the committed attempt and the free-prompt receipt spend — and a
+/// gate comparing against `required_algo_id` alone refused every block on the second. The two
+/// questions are genuinely different and both are needed: a PRODUCER building an attempt must
+/// declare `required_algo_id`, while a VALIDATOR deciding whether a header may exist must ask
+/// `accepts_algo_id`. Conflating them is what left the receipt lane unenterable on a network whose
+/// own bundle said it was open.
+///
+/// `mode_accepts` is [`crate::palw_mode_v2::PalwConsensusMode::accepts_algo_id`]. `None` — every
+/// non-V2 preset, and any caller that has not been given the mode — falls through to the exact
+/// single-id comparison this function had before, byte for byte.
+pub fn check_algo_id_for_mode_accepting(
+    algo_id: u8,
+    mode_required: Option<u8>,
+    mode_accepts: Option<bool>,
+    palw_ollama_active: bool,
+    palw_llm_active: bool,
+    blake2b_sha3_active: bool,
+) -> Result<(), PowLayer0Error> {
+    if let Some(accepted) = mode_accepts {
+        return if accepted { Ok(()) } else { Err(PowLayer0Error::UnknownAlgoId(algo_id)) };
+    }
     if algo_id == required_algo_id_for_mode(mode_required, palw_ollama_active, palw_llm_active, blake2b_sha3_active) {
         Ok(())
     } else {
@@ -1525,5 +1551,54 @@ mod tests {
         assert_ne!(seed.as_bytes(), BlockHash::hash(pre_pow_slice).as_bytes());
         assert_ne!(seed.as_bytes(), TransactionHash::hash(pre_pow_slice).as_bytes());
         assert_ne!(seed.as_bytes(), MuHashElementHash::hash(pre_pow_slice).as_bytes());
+    }
+}
+
+#[cfg(test)]
+mod two_lane_gate_tests {
+    use super::*;
+    use crate::palw_mode_v2::PalwConsensusMode;
+
+    /// **A V2 network accepts both of its lanes, and the gate has to ask the right question.**
+    ///
+    /// `required_algo_id` is what a producer DECLARES; `accepts_algo_id` is what a validator
+    /// ALLOWS. They differ by exactly the free-prompt receipt lane — the one that needs no model —
+    /// and a gate using the first refused every block on the second.
+    #[test]
+    fn the_gate_accepts_both_v2_lanes_and_nothing_else() {
+        let bundle = crate::palw_mode_v2::tests::conforming_bundle();
+        let mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+        let required = mode.required_algo_id();
+
+        for id in [POW_ALGO_ID_PALW_COMMITTED_V2, POW_ALGO_ID_PALW_RECEIPT_V3] {
+            check_algo_id_for_mode_accepting(id, required, mode.accepts_algo_id(id), false, false, false)
+                .unwrap_or_else(|e| panic!("a V2 network must accept its own lane {id}: {e:?}"));
+        }
+        // The hash floor and the pre-V2 inference lanes are not this network's.
+        for id in [POW_ALGO_ID_KHEAVYHASH, POW_ALGO_ID_ARGON2ID, POW_ALGO_ID_BLAKE2B_SHA3, POW_ALGO_ID_PALW_LLM, POW_ALGO_ID_PALW_OLLAMA] {
+            assert!(
+                check_algo_id_for_mode_accepting(id, required, mode.accepts_algo_id(id), true, true, true).is_err(),
+                "a V2 network must not accept {id} — its lanes are exclusive"
+            );
+        }
+    }
+
+    /// **Every non-V2 preset is untouched, byte for byte.** `accepts_algo_id` is `None` there, and
+    /// the function falls through to the comparison it always made.
+    #[test]
+    fn a_non_v2_network_falls_through_to_the_v1_cascade() {
+        for mode in [PalwConsensusMode::Disabled, PalwConsensusMode::LegacyTn11] {
+            assert_eq!(mode.accepts_algo_id(POW_ALGO_ID_PALW_RECEIPT_V3), None);
+            let required = mode.required_algo_id();
+            for (ollama, llm, b2s3) in [(false, false, false), (false, false, true), (false, true, false), (true, false, false)] {
+                for id in 0u8..=8 {
+                    assert_eq!(
+                        check_algo_id_for_mode_accepting(id, required, mode.accepts_algo_id(id), ollama, llm, b2s3).is_ok(),
+                        check_algo_id_for_mode(id, required, ollama, llm, b2s3).is_ok(),
+                        "id {id} at ({ollama},{llm},{b2s3}) must decide exactly as it did before"
+                    );
+                }
+            }
+        }
     }
 }

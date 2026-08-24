@@ -133,6 +133,10 @@ pub struct PruningProofManager {
     /// otherwise (every network today). Consulted first by the proof-header algo-id gate so it
     /// enforces the SAME required-algo rule the main pipeline does.
     palw_required_algo_id: Option<u8>,
+    /// **What the network ACCEPTS**, which a V2 bundle answers for two lanes while the id above
+    /// names one. The proof gate must agree with the main pipeline or a node that joined by a
+    /// pruned sync would refuse headers the chain it is joining considers valid.
+    palw_consensus_mode: kaspa_consensus_core::palw_mode_v2::PalwConsensusMode,
 
     is_consensus_exiting: Arc<AtomicBool>,
 }
@@ -159,6 +163,7 @@ impl PruningProofManager {
         palw_block_commitment: Option<kaspa_consensus_core::palw_block_commitment::PalwBlockCommitmentParamsV1>,
         pow_palw_ollama_activation: kaspa_consensus_core::config::params::ForkActivation,
         palw_required_algo_id: Option<u8>,
+        palw_consensus_mode: kaspa_consensus_core::palw_mode_v2::PalwConsensusMode,
         is_consensus_exiting: Arc<AtomicBool>,
     ) -> Self {
         Self {
@@ -199,6 +204,7 @@ impl PruningProofManager {
             palw_block_commitment,
             pow_palw_ollama_activation,
             palw_required_algo_id,
+            palw_consensus_mode,
 
             is_consensus_exiting,
         }
@@ -231,9 +237,10 @@ impl PruningProofManager {
             let palw_ollama_active = self.pow_palw_ollama_activation.is_active(header.daa_score);
             let palw_active = self.pow_palw_activation.is_active(header.daa_score);
             let blake2b_sha3_active = self.pow_blake2b_sha3_activation.is_active(header.daa_score);
-            kaspa_consensus_core::pow_layer0::check_algo_id_for_mode(
+            kaspa_consensus_core::pow_layer0::check_algo_id_for_mode_accepting(
                 header.pow_algo_id,
                 self.palw_required_algo_id,
+                self.palw_consensus_mode.accepts_algo_id(header.pow_algo_id),
                 palw_ollama_active,
                 palw_active,
                 blake2b_sha3_active,

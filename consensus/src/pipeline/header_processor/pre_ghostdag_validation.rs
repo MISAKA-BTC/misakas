@@ -100,9 +100,12 @@ impl HeaderProcessor {
         let palw_ollama_active = self.pow_palw_ollama_activation.is_active(header.daa_score);
         let palw_active = self.pow_palw_activation.is_active(header.daa_score);
         let blake2b_sha3_active = self.pow_blake2b_sha3_activation.is_active(header.daa_score);
-        kaspa_consensus_core::pow_layer0::check_algo_id_for_mode(
+        // Accepts, not demands: a V2 network admits its receipt lane as well as its attempt
+        // lane, and asking only for the demanded id refused every block on the first one.
+        kaspa_consensus_core::pow_layer0::check_algo_id_for_mode_accepting(
             header.pow_algo_id,
             self.palw_required_algo_id,
+            self.palw_consensus_mode.accepts_algo_id(header.pow_algo_id),
             palw_ollama_active,
             palw_active,
             blake2b_sha3_active,

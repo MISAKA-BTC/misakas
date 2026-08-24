@@ -759,6 +759,22 @@ impl PalwConsensusMode {
             PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.algorithm_id),
         }
     }
+
+    /// **Does this network accept a header declaring `algo_id`?**
+    ///
+    /// [`Self::required_algo_id`] answers a narrower question — which id a producer must DECLARE
+    /// when it builds an attempt — and a gate that used it to decide acceptance refused every
+    /// block on the second lane a V2 bundle admits. `accepts_algo_id` is the bundle's own answer
+    /// and it has always been two: the committed-attempt id and the free-prompt receipt id.
+    ///
+    /// `None` means "this network has no V2 opinion", and the caller falls back to the V1 fork
+    /// cascade exactly as before — every shipped non-V2 preset is unaffected.
+    pub fn accepts_algo_id(&self, algo_id: u8) -> Option<bool> {
+        match self {
+            PalwConsensusMode::Disabled | PalwConsensusMode::LegacyTn11 => None,
+            PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.accepts_algo_id(algo_id)),
+        }
+    }
 }
 
 /// Decision 11: `H(canonical(bundle))`. Everything that decides consensus is inside; network
