@@ -223,6 +223,14 @@ pub struct Args {
     /// signed `ClassRegistered` that carries its own profile (ADR-0049 Decision H). Nothing built
     /// or carried such an object, so gaining a class meant re-minting the network.
     pub palw_register_class: bool,
+    /// **Produce for this class instead of the network's floor.**
+    ///
+    /// 128-hex. Defaults to `bundle.base_class_id`, which is the class every node can run and
+    /// therefore the one that keeps the chain alive. A node that holds a worker for some other
+    /// registered class names it here; one that names a class it cannot resolve a backend for is
+    /// refused by `PalwBackendRegistry::resolve` rather than silently falling back, because a
+    /// producer that quietly mined the floor instead would look like it was doing what it was told.
+    pub palw_producer_class: Option<String>,
     /// Re-run every licensed claim and open a court against the ones this node cannot reproduce.
     pub palw_challenge: bool,
     /// DRILL ONLY: corrupt one lane of this leaf in every block this node produces.
@@ -366,6 +374,7 @@ impl Default for Args {
             palw_class_artifact: Vec::new(),
             palw_metal_worker: None,
             palw_register_class: false,
+            palw_producer_class: None,
             palw_challenge: false,
             palw_drill_tamper_leaf: None,
             palw_drill_challenge_all: false,
@@ -869,6 +878,15 @@ pub fn cli() -> Command {
                 ),
         )
         .arg(
+            Arg::new("palw-producer-class")
+                .long("palw-producer-class")
+                .value_name("HEX")
+                .help(
+                    "MISAKA PALW: produce for this 128-hex class id instead of the network's floor class. The node \
+                     must hold a backend for it (e.g. --palw-metal-worker for a Family-M class).",
+                ),
+        )
+        .arg(
             Arg::new("palw-register-class")
                 .long("palw-register-class")
                 .action(ArgAction::SetTrue)
@@ -1366,6 +1384,7 @@ impl Args {
                 .unwrap_or(defaults.palw_class_artifact),
             palw_metal_worker: m.get_one::<String>("palw-metal-worker").cloned().or(defaults.palw_metal_worker),
             palw_register_class: arg_match_unwrap_or::<bool>(&m, "palw-register-class", defaults.palw_register_class),
+            palw_producer_class: m.get_one::<String>("palw-producer-class").cloned().or(defaults.palw_producer_class),
             palw_challenge: m.get_one::<bool>("palw-challenge").copied().unwrap_or(defaults.palw_challenge),
             palw_drill_tamper_leaf: m.get_one::<u64>("palw-drill-tamper-leaf").copied().or(defaults.palw_drill_tamper_leaf),
             palw_drill_challenge_all: m

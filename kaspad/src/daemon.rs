@@ -1203,6 +1203,17 @@ Do you confirm? (y/n)";
             kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.base_class_id),
             _ => None,
         };
+        // **The floor is the default, not the only choice.** A class registered on a running
+        // chain is unusable until a producer asks for it, and this is where the asking happens. An
+        // unparseable id is fatal rather than ignored: a node told to produce for a class, that
+        // then mined the floor because the hex was wrong, would be reporting success for work
+        // nobody asked for.
+        let base_class_id = match (&args.palw_producer_class, base_class_id) {
+            (Some(hex), _) => Some(hex.parse::<kaspa_consensus_core::Hash64>().unwrap_or_else(|e| {
+                panic!("--palw-producer-class {hex} is not a 128-hex class id: {e}");
+            })),
+            (None, base) => base,
+        };
         match (base_class_id, &args.palw_producer_key, &args.palw_producer_bond, &args.palw_producer_pay_address) {
             (Some(class_id), Some(key_path), Some(bond), Some(pay_address)) => {
                 Some(Arc::new(crate::palw_producer::PalwProducerService::new(
