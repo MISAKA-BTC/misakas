@@ -797,7 +797,11 @@ impl IbdFlow {
             .filter_map(|c| c.verified_blue_work().map(|w| (c.id, w)))
             .collect();
         for (id, verified) in pending {
-            self.consider_post_ibd_switch(id, verified).await;
+            // No hold to release here, which is why the `must_use` is discarded rather than acted
+            // on: this path runs only when no IBD is running (checked at the top), so there is no
+            // lease open for a non-adopting call to hand back. The reservation it may take is what
+            // the loop below checks for.
+            let _ = self.consider_post_ibd_switch(id, verified).await;
             if self.ctx.preferred_ibd_candidate().is_some() {
                 break;
             }
