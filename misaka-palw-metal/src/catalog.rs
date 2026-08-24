@@ -399,6 +399,51 @@ pub fn cat_m_0001_runtime_pins(pins: &MetalClassPinsV1) -> kaspa_consensus_core:
     }
 }
 
+/// **The pins for the class THIS worker runs**, read out of the worker itself.
+///
+/// The registrant does not choose any of this. Six of the ids come from the worker's own manifest
+/// — it is the only thing that knows which llama.cpp build it is, which GGUF it loaded and which
+/// tokenizer came inside it — and the seventh, `shape_profile_id`, is the class id this crate
+/// derives, because a class IS its graph and the graph is a fact about the registration rather
+/// than about the binary.
+///
+/// A worker whose manifest cannot be read, or which reports a field this build cannot parse, is a
+/// worker that cannot be registered. That is the safe failure: the alternative is a class pinned
+/// to an identity nobody verified.
+pub fn cat_m_0001_pins_from_worker(worker_path: PathBuf, network_id: Vec<u8>) -> Result<MetalClassPinsV1, String> {
+    const KEYS: [&str; 5] =
+        ["runtime_manifest_hash_v2", "runtime_class_id", "model_profile_id", "tokenizer_id_v2", "cu_ruleset_id_v2"];
+    let got = crate::worker_manifest_fields(&worker_path, &KEYS)?;
+    let h = |i: usize| -> Result<Hash64, String> {
+        got[i].parse::<Hash64>().map_err(|e| format!("the worker's {} is not a Hash64: {e}", KEYS[i]))
+    };
+
+    // **The chain's derivations are not read from the worker where the chain can compute them.**
+    // `trace_scheme_id` and `cu_ruleset_id` are functions of this build, and a worker reporting a
+    // different value is a worker that will not agree with the chain about what it ran — so the
+    // chain's value is used and the worker's is CHECKED against it, rather than the other way
+    // round. Taking the worker's would register a class the chain cannot price.
+    let chain_cu = kaspa_consensus_core::palw_v2::cu_ruleset_id_v2();
+    if h(4)? != chain_cu {
+        return Err(format!(
+            "the worker computes cu_ruleset_id {} and this build computes {chain_cu} — the two would price the same work differently",
+            got[4]
+        ));
+    }
+
+    Ok(cat_m_0001_pins(
+        worker_path,
+        network_id,
+        h(0)?,
+        h(1)?,
+        h(2)?,
+        cat_m_0001_profile().shape_profile_id(),
+        kaspa_consensus_core::palw_v2::trace_scheme_id_v2(),
+        chain_cu,
+        h(3)?,
+    ))
+}
+
 /// The inverse: node-local pins from what the chain holds, plus this node's worker.
 pub fn pins_from_chain(
     worker_path: PathBuf,
@@ -720,11 +765,64 @@ mod tests {
         }
     }
 
-    fn shipped_bundle() -> Option<kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2> {
+    pub(super) fn shipped_bundle() -> Option<kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2> {
         match &kaspa_consensus_core::config::params::palw_rc_shipped_params().palw_consensus_mode {
             kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) => Some(b.clone()),
             _ => None,
         }
     }
 
+}
+
+#[cfg(test)]
+mod against_a_real_worker {
+    use super::tests::shipped_bundle;
+    use super::*;
+
+    /// **Read a real worker's identity and build the class it would register.**
+    ///
+    /// Ignored by default because it needs a binary this repository does not ship. Point
+    /// `MISAKA_PALW_WORKER` at one and it does the whole registrant's job: ask the worker what it
+    /// is, derive the class, and put the result through the chain's own admission gate.
+    #[test]
+    #[ignore]
+    fn a_real_worker_registers_its_class() {
+        let Ok(path) = std::env::var("MISAKA_PALW_WORKER") else {
+            eprintln!("set MISAKA_PALW_WORKER to run this");
+            return;
+        };
+        let pins = cat_m_0001_pins_from_worker(PathBuf::from(&path), b"misaka-palw-rc".to_vec())
+            .unwrap_or_else(|e| panic!("the worker did not report a usable identity: {e}"));
+        println!("runtime_manifest_hash = {}", pins.runtime_manifest_hash);
+        println!("runtime_class_id      = {}", pins.runtime_class_id);
+        println!("model_profile_id      = {}", pins.model_profile_id);
+        println!("tokenizer_id          = {}", pins.tokenizer_id);
+        println!("class_id              = {}", pins.shape_profile_id);
+
+        let Some(mut bundle) = shipped_bundle() else { panic!("no shipped bundle to admit against") };
+        bundle.min_class_panel = (2, 2);
+        let reg = family_m_post_genesis_registration_v1(
+            &CAT_M_0001_GEOMETRY,
+            &pins,
+            gguf_artifact_root_v1(),
+            2,
+            2,
+            bundle.state.min_grantable_share_permille(),
+            u128::MAX / 2,
+            5,
+            0,
+            kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(
+                Hash64::from_u64_word(7),
+                0,
+            )),
+            vec![0u8; 8],
+        )
+        .expect("a registration for the real worker");
+        let PalwConsensusObjectV2::ClassRegistered { admission, .. } = &reg else { panic!("not a registration") };
+        let c = admission.as_ref().expect("carriage");
+        let entry =
+            kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v2(&bundle, &c.profile, &c.canonical, &reg)
+                .unwrap_or_else(|e| panic!("the real worker's class is not admissible: {e}"));
+        println!("ADMITTED class_id={} pwu={}", entry.class_id, entry.canonical_step_leaf_count);
+    }
 }

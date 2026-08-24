@@ -360,6 +360,26 @@ fn hex_of(h: &Hash64) -> String {
 /// Pulls one `"key":"hex"` out of the worker's display JSON without a JSON dependency. The value
 /// is hex by construction (every field this reads is a hash), so the scan is exact rather than
 /// lenient: anything that is not `"<key>":"<hex>"` yields `None` and the caller refuses.
+/// **Ask a worker what it is**, as the hex fields of its own manifest.
+///
+/// `check_runtime_identity` reads one field to compare against a class the chain already holds.
+/// Registering a class needs the other direction — the worker is the only thing that knows its
+/// runtime manifest, its model profile and the tokenizer inside its GGUF — so this returns them
+/// all, and the caller derives nothing it could have asked for.
+pub fn worker_manifest_fields(worker_path: &std::path::Path, keys: &[&str]) -> Result<Vec<String>, String> {
+    let out = std::process::Command::new(worker_path)
+        .args(["--mode", "v2-manifest"])
+        .output()
+        .map_err(|e| format!("cannot run the worker at {}: {e}", worker_path.display()))?;
+    if !out.status.success() {
+        return Err(format!("the worker refused to report its manifest: {}", String::from_utf8_lossy(&out.stderr)));
+    }
+    let text = String::from_utf8_lossy(&out.stdout);
+    keys.iter()
+        .map(|k| json_hex_field(&text, k).ok_or_else(|| format!("the worker's manifest has no {k}")))
+        .collect()
+}
+
 fn json_hex_field(text: &str, key: &str) -> Option<String> {
     let needle = format!("\"{key}\":\"");
     let start = text.find(&needle)? + needle.len();
