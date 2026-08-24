@@ -3198,12 +3198,28 @@ fn activate_due_classes(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCont
 
 fn ensure_epoch_budgets(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2) {
     let epoch_index = ctx.daa_score / builder.params.epoch_length;
-    // Covers the TABLE, not just the epoch: a class that activated after this epoch's budget was
-    // installed holds share the table has never seen, and reads its budget as zero.
-    let covered = builder.state.epoch_budgets.as_ref().is_some_and(|budgets| {
-        budgets.epoch_index == epoch_index && builder.state.class_shares.keys().all(|id| budgets.budget_blocks.contains_key(id))
-    });
-    if covered {
+    // **This returns on the epoch alone, and that is a known defect kept deliberately.** A class
+    // that activates mid-epoch holds share the table has never seen and reads its budget as zero,
+    // so it produces nothing until the next boundary — see
+    // `a_class_that_activates_mid_epoch_is_not_budgeted_until_the_next_boundary`.
+    //
+    // Also covering the TABLE fixes it, and it was written and reverted, because on a chain that
+    // has already run the fix is not a fix: it recomputes the budget table at the block where the
+    // class activated, which changes that block's PALW state root. Measured on testnet-11 — the
+    // class registered at 05:30:37 and block 981c9fde… at 05:33:04 committed
+    // 932853…, while a node carrying the change computes 4ba21e… and disqualifies it. A node built
+    // from that code cannot sync this chain AT ALL, which costs far more than the defect: the
+    // whole point of the surrounding work is that a newcomer can join.
+    //
+    // Fencing it by DAA score would need a field in `PalwStateParamsV2`, which is borsh-serialized
+    // into `palw_ruleset_id_v2` and therefore into `consensus_params_id` — so even a fence set to
+    // "never" for this network changes the fingerprint and stops every node peering with every
+    // other. The honest place for the fix is a network that carries it from genesis.
+    //
+    // The defect self-heals: the boundary recomputes over the whole share table on this code too,
+    // which `a_boundary_grants_a_budget_the_mid_epoch_activation_missed` asserts. On testnet-11
+    // that is at most one epoch — 1000 blocks at a 120 s target.
+    if builder.state.epoch_budgets.as_ref().is_some_and(|b| b.epoch_index == epoch_index) {
         return;
     }
     if builder.state.class_shares.is_empty() {

@@ -917,33 +917,32 @@ mod tests {
         assert_eq!(budgets.budget_blocks[&h64(1)], state_params().epoch_length(), "whole share, whole span");
     }
 
-    /// **A class added to a running chain must be able to produce in the epoch it activates in.**
+    /// **A class added to a running chain is NOT budgeted until the next boundary.** A defect,
+    /// asserted as it ships rather than as it should be.
     ///
-    /// `ensure_epoch_budgets` returns early once a budget exists for the current epoch, and its
-    /// justification is written above it: "the share table is genesis-fixed (a class cannot enter
-    /// through a transaction), so a budget derived mid-epoch equals the one the boundary would
-    /// have derived."
+    /// `ensure_epoch_budgets` returns as soon as a budget exists for the current epoch, while
+    /// `activate_due_classes` runs one step earlier in the same transition and grants share
+    /// mid-epoch to any class reaching its `activation_daa` — the post-genesis registration path.
+    /// So the class is Active, holds share, and `palw_producer_facts_v2` reads its budget through
+    /// `unwrap_or(0)`. What the operator sees is "this class's epoch budget is already spent",
+    /// which states the opposite of what happened: nothing was spent, nothing was granted.
     ///
-    /// That premise no longer holds. `activate_due_classes` grants share at the block where a
-    /// registered class reaches its `activation_daa`, which is mid-epoch for any class that did
-    /// not enter at genesis — exactly the post-genesis registration path that lets an operator add
-    /// a model without re-minting the network. The share lands; the budget table for the epoch in
-    /// flight is never recomputed; `palw_producer_facts_v2` reads `unwrap_or(0)`.
+    /// **Also covering the table fixes it, and that fix was reverted.** On a chain that has
+    /// already run it is not a fix: it recomputes the table at the block where the class
+    /// activated, changing that block's PALW state root. Measured on testnet-11 — the class
+    /// registered at 05:30:37, block 981c9fde… at 05:33:04 committed 932853…, and a node carrying
+    /// the change computes 4ba21e… and disqualifies it. Such a node cannot sync the chain at all.
+    /// Fencing by DAA would need a field in `PalwStateParamsV2`, which is borsh-serialized into
+    /// `palw_ruleset_id_v2` and thus into `consensus_params_id`, so even a fence set to "never"
+    /// moves the fingerprint and stops every node peering. The fix belongs to a network that
+    /// carries it from genesis.
     ///
-    /// The result is a class that is Active, holds share, and can produce nothing until the next
-    /// boundary. What the operator sees is `ready_to_produce` refusing with "this class's epoch
-    /// budget is already spent" — which states the opposite of what happened. Nothing was spent;
-    /// nothing was ever granted. On a chain whose epoch is 1000 blocks at a 120 s cadence that is
-    /// a day and a half of a newly added model mining nothing and reporting exhaustion.
-    ///
-    /// The floor cannot reveal this, because the floor is exempt from the budget: a missing table
-    /// and a missing entry look identical from the only class that keeps producing through both.
+    /// The floor cannot reveal any of this, being exempt from the budget: from the only class that
+    /// keeps producing, a missing table and a missing entry look the same.
     #[test]
-    fn a_class_that_activates_mid_epoch_can_produce_in_that_epoch() {
+    fn a_class_that_activates_mid_epoch_is_not_budgeted_until_the_next_boundary() {
         let state = base_state();
         let epoch_length = state_params().epoch_length();
-        // The fixture's block and the entrant's are the same epoch — this is the mid-epoch case,
-        // not a boundary crossing, and the assertion below is meaningless without it.
         assert_eq!(100 / epoch_length, 101 / epoch_length, "the fixture must sit inside one epoch");
         assert!(
             state.epoch_budgets().is_some_and(|b| b.epoch_index == 100 / epoch_length),
@@ -958,20 +957,19 @@ mod tests {
             pwu_rule: PalwPwuRuleV2::MaxPerAttempt(500),
             initial_target: u128::MAX,
             share_permille: 500,
-            // Due at the very block that registers it: the shape `--palw-register-class` produces
-            // for a class meant to start at once.
             activation_daa: 101,
             admission: None,
         };
         let (next, _) = apply_palw_transition_v2(&state, &state_params(), &ctx(2, 101, 2), std::slice::from_ref(&entrant), None)
             .expect("registering a class on a running chain is the supported path");
 
-        assert_eq!(next.class_share_permille(&h64(2)), Some(500), "the entrant activated and holds share — this half already works");
+        assert_eq!(next.class_share_permille(&h64(2)), Some(500), "the entrant activated and holds share");
         let budgets = next.epoch_budgets().expect("the chain carries a budget table");
-        assert!(
-            budgets.budget_blocks.get(&h64(2)).copied().unwrap_or(0) > 0,
-            "a class holding share must hold budget in the same epoch: share without budget is an \
-             Active class that can produce nothing, reporting its budget as spent"
+        assert_eq!(
+            budgets.budget_blocks.get(&h64(2)).copied().unwrap_or(0),
+            0,
+            "and holds NO budget in this epoch — share without budget, which is the defect this \
+             test exists to keep visible rather than to hide"
         );
     }
 
