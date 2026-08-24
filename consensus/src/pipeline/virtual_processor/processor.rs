@@ -4441,8 +4441,10 @@ impl VirtualStateProcessor {
                 //   certificate freezes a class permanently (there is deliberately no
                 //   `ClassUnfrozen`); inert today only because the liveness floor is exempt, and
                 //   armed the moment a second class exists.
-                // * `PanelBound` and `BondRegistered` were already refused here, for reasons the
-                //   ride list states.
+                // * `PanelBound` is refused here, for the reason the ride list states.
+                //   `BondRegistered` is NOT: the ride list admits it once its carrier locks the
+                //   collateral it declares, and the arm below checks the one thing the carrier
+                //   cannot — that the registrant holds the key it is registering.
                 //
                 // Refusing is not the final answer for either — a bond must eventually be able to
                 // retire and an emergency freeze must eventually be pullable — but a door that

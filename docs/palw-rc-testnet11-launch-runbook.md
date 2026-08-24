@@ -295,7 +295,8 @@ somebody should be able to verify:
 | BASE-0 attempt lane (algo 6) | **live** | every block is a real inference; `[palw-producer] produced block` from block 1 |
 | the claim lattice — panel, receipts, quorum, `Final` | **live** | `submitted ReceiptLicensed` and `live_total` climbing; `weight` follows at DAA 1200 (§5) |
 | the court (step dispute, interactive ladder) | **armed, one-sided** | the ladder narrows and an arithmetic close adjudicates, and a close is now bound to the step the ladder reached. But NOTHING IN THIS TREE CONSTRUCTS `CourtDisclosed` — there is no responder — so a dispute that is opened cannot be answered, only run out. Opening costs the challenger the claim's own stake and the opening rung runs on the session budget, so an unanswerable accusation ends against the accuser rather than convicting the accused; it is a real cost on both sides, not a working two-party protocol |
-| bond retirement | **live** | an owner ML-DSA-87 signature over the bond key releases the collateral lock; `BondRegistered` post-genesis is still not a path |
+| bond retirement | **live** | an owner ML-DSA-87 signature over the bond key releases the collateral lock |
+| bond registration, post-genesis | **live** | `palw_bond_registration_binds_its_carrier_v2` is the collateral lock: the registration must name an output of its OWN carrying transaction, holding at least the collateral it declares, paying to the P2PKH of the payee it names. The carrier proves the money, the signature proves the owner. Genesis bonds remain necessary only to seat the FIRST panel |
 | pruned sync (serving the pruning point's PALW state) | **live** | captured at pruning-advance and served from its own store row; a node that joined by a pruned sync can hand it on |
 | every lattice window | **real values** | bind 600, receipt 600, challenge 1200, court 2400 — none fenced to `u64::MAX` |
 | claim retirement | **live** | `CLAIM_RETIREMENT = WINDOW_COURT` |

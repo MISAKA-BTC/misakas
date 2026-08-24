@@ -13,15 +13,19 @@
 //! The payload is a `PalwConsensusObjectV2` and the extractor accepts a fixed subset of its
 //! variants. The exclusions are the point:
 //!
-//! * **`BondRegistered` may not.** The object DECLARES `collateral`, and nothing on this path
-//!   locks a UTXO behind that number. A transaction that says "I have staked a million" would
-//!   stake a million, and every exposure ceiling, every slash and Decision 7's whole Sybil bound
-//!   are denominated in it. Bonds come from the genesis registration list until a collateral
-//!   lock exists — which is the coinbase/UTXO gate, not this seam. (Audit C-08 closed the GENESIS
-//!   half of that: `verify_palw_genesis_v2` now demands a registered bond's outpoint be a real
-//!   genesis output holding at least what it declares. The transaction path stays shut until the
-//!   lock and the burn exist, because a registration in a block has no genesis set to be checked
-//!   against.)
+//! * **`BondRegistered` may, and the lock is what lets it.** The object DECLARES `collateral`,
+//!   and for a long time nothing on this path locked a UTXO behind that number — a transaction
+//!   saying "I have staked a million" would have staked a million, and every exposure ceiling,
+//!   every slash and Decision 7's whole Sybil bound are denominated in it. So bonds came from the
+//!   genesis registration list only.
+//!
+//!   [`palw_bond_registration_binds_its_carrier_v2`] is that lock, and the extractor calls it on
+//!   every registration: the outpoint must be an output of the CARRYING transaction, holding at
+//!   least the collateral it declares, paying to the P2PKH of the payload the registration names
+//!   as its payee. Nothing is looked up, because nothing needs to be — the output is created by
+//!   the transaction carrying the object, so its existence, amount and script are facts block
+//!   validation established before this object was decoded. The carrier proves the money; the
+//!   signature this list demands proves the owner.
 //! * **`ClassRegistered` may, but only carrying what makes it checkable** (ADR-0049 Decision H —
 //!   this used to be an outright refusal). A class entering a live chain moves the share table
 //!   (ADR-0045 Decision 3 funds an entrant by donation from every incumbent) and brings its own
@@ -282,6 +286,108 @@ pub fn validate_palw_lifecycle_tx(payload: &[u8]) -> Result<(), PalwLifecycleTxE
 
 #[cfg(test)]
 mod tests {
+    /// **A bond CAN enter through a transaction — this is what it has to prove.**
+    ///
+    /// The carrier proves the money and the signature proves the owner. Neither is a promise: the
+    /// output is created by the very transaction carrying the registration, so its existence,
+    /// amount and script are facts block validation established before this object was decoded.
+    #[test]
+    fn a_bond_registration_that_locks_its_collateral_rides() {
+        let payee = h64(0xBEEF);
+        let owner: [u8; 64] = *payee.as_byte_slice();
+        let spk = crate::dns_finality::p2pkh_mldsa87_spk(&owner);
+        let tx = Transaction::new(
+            0,
+            vec![],
+            vec![TransactionOutput::new(500_000, spk.clone())],
+            0,
+            SUBNETWORK_ID_PALW_LIFECYCLE.clone(),
+            0,
+            vec![],
+        );
+        let object = PalwConsensusObjectV2::BondRegistered {
+            bond: crate::palw_state_v2::PalwBondKeyV2(crate::tx::TransactionOutpoint::new(tx.id(), 0)),
+            pubkey: vec![7; 4],
+            operator_pubkey: vec![21; 8],
+            collateral: 500_000,
+            payout_payload: payee,
+            signature: vec![1; 8],
+        };
+        palw_bond_registration_binds_its_carrier_v2(&tx, &object)
+            .expect("a registration whose carrier holds the collateral it declares must bind");
+        palw_lifecycle_object_may_ride_v2(&object).expect("and the ride list must accept it");
+    }
+
+    /// **Every way the lock can be lied to, refused by its own reason.**
+    ///
+    /// These are the four the audit named, and the first is the one that made the whole seam
+    /// unsafe before the lock existed: a registration could DECLARE a million and stake a million,
+    /// because nothing looked at any output.
+    #[test]
+    fn a_bond_registration_cannot_declare_collateral_it_did_not_lock() {
+        let payee = h64(0xBEEF);
+        let owner: [u8; 64] = *payee.as_byte_slice();
+        let spk = crate::dns_finality::p2pkh_mldsa87_spk(&owner);
+        let tx = |value: u64, script: crate::tx::ScriptPublicKey| {
+            Transaction::new(
+                0,
+                vec![],
+                vec![TransactionOutput::new(value, script)],
+                0,
+                SUBNETWORK_ID_PALW_LIFECYCLE.clone(),
+                0,
+                vec![],
+            )
+        };
+        let reg = |t: &Transaction, index: u32, collateral: u64, payee: crate::Hash64| PalwConsensusObjectV2::BondRegistered {
+            bond: crate::palw_state_v2::PalwBondKeyV2(crate::tx::TransactionOutpoint::new(t.id(), index)),
+            pubkey: vec![7; 4],
+            operator_pubkey: vec![21; 8],
+            collateral,
+            payout_payload: payee,
+            signature: vec![1; 8],
+        };
+
+        // 1. Declaring more than the output holds — the free million.
+        let t = tx(500_000, spk.clone());
+        let e = palw_bond_registration_binds_its_carrier_v2(&t, &reg(&t, 0, 1_000_000_000, payee)).unwrap_err();
+        assert!(e.contains("more collateral than the output"), "{e}");
+
+        // 2. Naming an output the carrier does not have.
+        let t = tx(500_000, spk.clone());
+        let e = palw_bond_registration_binds_its_carrier_v2(&t, &reg(&t, 7, 500_000, payee)).unwrap_err();
+        assert!(e.contains("does not have"), "{e}");
+
+        // 3. Naming somebody ELSE's transaction — an output this registration did not create, and
+        //    therefore one no layer on this path can check.
+        let t = tx(500_000, spk.clone());
+        let other = tx(999, spk.clone());
+        let e = palw_bond_registration_binds_its_carrier_v2(&t, &reg(&other, 0, 500_000, payee)).unwrap_err();
+        assert!(e.contains("its own carrying transaction"), "{e}");
+
+        // 4. Locking the money behind a script that is not the payee's, so the collateral and the
+        //    rewards would be reclaimable by different people.
+        let t = tx(500_000, crate::dns_finality::p2pkh_mldsa87_spk(&[9u8; 64]));
+        let e = palw_bond_registration_binds_its_carrier_v2(&t, &reg(&t, 0, 500_000, payee)).unwrap_err();
+        assert!(e.contains("names as its payee"), "{e}");
+    }
+
+    /// A registration with no signature is still refused: the carrier proves the collateral, and
+    /// only the signature proves who owns the key being registered.
+    #[test]
+    fn a_bond_registration_without_a_signature_does_not_ride() {
+        let object = PalwConsensusObjectV2::BondRegistered {
+            bond: bond(9),
+            pubkey: vec![7; 4],
+            operator_pubkey: vec![21; 8],
+            collateral: 500_000,
+            payout_payload: h64(0x9A11),
+            signature: Vec::new(),
+        };
+        let e = palw_lifecycle_object_may_ride_v2(&object).unwrap_err();
+        assert!(e.contains("signature over the key it declares"), "{e}");
+    }
+
     use super::*;
     use crate::palw_state_v2::{PalwBondKeyV2, PalwPanelSeatV2, PalwPwuRuleV2};
     use crate::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT;

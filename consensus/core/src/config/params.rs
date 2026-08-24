@@ -2318,8 +2318,10 @@ pub const TESTNET11_PARAMS: Params = Params {
 /// **The genesis bond set is a list for a reason.** `derive_panel_v2` excludes the executor's own
 /// bond, its operator and its key, so a registry with one bond can never seat a panel and every
 /// claim on such a network would void at `BindTimeout`. A network that carries weight registers
-/// its initial validator set here — bonds cannot enter through a transaction until a collateral
-/// lock exists (`palw_lifecycle_objects_v2`).
+/// its initial validator set here so the FIRST panel can seat. Bonds can also enter through a
+/// transaction — `palw_bond_registration_binds_its_carrier_v2` is the collateral lock that makes
+/// that safe — but a network still needs enough of them at genesis to seat a panel before anyone
+/// has had a chance to register one.
 pub fn palw_rc_params_from_artifacts(
     base0_artifact_root: crate::Hash64,
     genesis_bonds: Vec<crate::palw_fp_devnet_v3::PalwGenesisBondSpecV1>,
