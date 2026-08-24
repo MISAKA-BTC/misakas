@@ -200,8 +200,16 @@ pub fn palw_bond_registration_binds_its_carrier_v2(tx: &Transaction, object: &Pa
     let PalwConsensusObjectV2::BondRegistered { bond, collateral, payout_payload, .. } = object else {
         return Ok(());
     };
-    if bond.0.transaction_id != tx.id() {
-        return Err("a bond registration must name an output of its own carrying transaction");
+    // **Named by index, with a zero id.** The output really must belong to the carrying
+    // transaction — that is what makes the money a fact rather than a claim — but the registration
+    // cannot NAME the carrier by id: the object travels in the payload, and `write_transaction`
+    // folds the payload into the id, so an outpoint naming its own carrier is a hash fixed point.
+    // A registrant would have to find a payload containing the id of the transaction that payload
+    // produces. The zero id is "this carrier", and the chain substitutes the id it observes
+    // (`palw_bond_registration_keyed_to_its_carrier_v2`). The index is checked against the outputs
+    // below, so "belongs to this transaction" is enforced exactly as before.
+    if bond.0.transaction_id != TransactionId::default() {
+        return Err("a bond registration must name its collateral output by index, with a zero transaction id");
     }
     let Some(output) = tx.outputs.get(bond.0.index as usize) else {
         return Err("a bond registration names an output its carrier does not have");
@@ -217,6 +225,43 @@ pub fn palw_bond_registration_binds_its_carrier_v2(tx: &Transaction, object: &Pa
         return Err("a bond's collateral output must pay to the payload the registration names as its payee");
     }
     Ok(())
+}
+
+/// **The bond key a registrant can actually SIGN.**
+///
+/// A carried registration names its collateral output by index with a zero transaction id, because
+/// the carrier's id is a function of the payload the signature goes into — see
+/// [`palw_bond_registration_binds_its_carrier_v2`]. So the signature is made over the zero form,
+/// and every verifier has to rebuild that same form rather than the substituted one.
+///
+/// One function, two call sites — the extractor's substitution and the block validator's signature
+/// check — because a registrant and a verifier that disagreed about which bytes were signed would
+/// reject every honest registration with "not signed by the key it declares".
+pub fn palw_bond_registration_signed_key_v2(bond: &crate::palw_state_v2::PalwBondKeyV2) -> crate::palw_state_v2::PalwBondKeyV2 {
+    crate::palw_state_v2::PalwBondKeyV2(crate::tx::TransactionOutpoint::new(TransactionId::default(), bond.0.index))
+}
+
+/// Key a carried bond registration to the transaction that carried it.
+///
+/// Every other object passes through unchanged: this substitution exists only because a bond names
+/// an output of its own carrier, and only a carrier knows its own id.
+pub fn palw_bond_registration_keyed_to_its_carrier_v2(
+    carrier: TransactionId,
+    object: PalwConsensusObjectV2,
+) -> PalwConsensusObjectV2 {
+    match object {
+        PalwConsensusObjectV2::BondRegistered { bond, pubkey, operator_pubkey, collateral, payout_payload, signature } => {
+            PalwConsensusObjectV2::BondRegistered {
+                bond: crate::palw_state_v2::PalwBondKeyV2(crate::tx::TransactionOutpoint::new(carrier, bond.0.index)),
+                pubkey,
+                operator_pubkey,
+                collateral,
+                payout_payload,
+                signature,
+            }
+        }
+        other => other,
+    }
 }
 
 pub fn palw_lifecycle_objects_from_accepted_txs_v2(txs: &[Transaction]) -> PalwLifecycleExtractionV2 {
@@ -245,7 +290,11 @@ pub fn palw_lifecycle_objects_from_accepted_txs_v2(txs: &[Transaction]) -> PalwL
             out.skipped.push((id, reason));
             continue;
         }
-        out.objects.push(PalwLifecycleCarrierV2 { carrier: id, object: payload.object });
+        // The chain supplies the half the registrant could not: the outpoint the bond is keyed
+        // under from here on is a real one, so state, exposure and `--palw-producer-bond` all name
+        // the same output the collateral sits in.
+        let object = palw_bond_registration_keyed_to_its_carrier_v2(id, payload.object);
+        out.objects.push(PalwLifecycleCarrierV2 { carrier: id, object });
     }
     out
 }
@@ -286,36 +335,120 @@ pub fn validate_palw_lifecycle_tx(payload: &[u8]) -> Result<(), PalwLifecycleTxE
 
 #[cfg(test)]
 mod tests {
+    /// **…except no registrant can build one, and the test above did not notice.**
+    ///
+    /// `a_bond_registration_that_locks_its_collateral_rides` constructs the transaction with an
+    /// EMPTY payload, takes its id, and only then builds the object naming that id. That pair is
+    /// consistent, so the lock accepts it — but it is not a transaction anyone can broadcast,
+    /// because the object has to travel IN the payload and `write_transaction` folds the payload
+    /// into the id (`hashing/tx.rs`). Put the object where it must go and the id moves out from
+    /// under the outpoint that names it.
+    ///
+    /// So `bond.transaction_id == tx.id()` is a hash fixed point: to satisfy it a registrant would
+    /// have to find a payload containing the id of the transaction that payload produces. That is
+    /// preimage resistance, not an engineering problem.
+    ///
+    /// The consequence is the one an operator on testnet-11 reported and was told was fixed: no
+    /// bond can enter after genesis, so only the holders of the genesis registry can ever produce.
+    /// The rule is not wrong about what it wants — the carrier really should prove the money — it
+    /// is wrong about how the carrier can name itself. See
+    /// [`palw_bond_registration_binds_its_carrier_v2`] for the form that is constructible.
+    #[test]
+    fn naming_the_carrier_by_id_is_a_fixed_point_no_registrant_can_solve() {
+        let payee = h64(0xBEEF);
+        let owner: [u8; 64] = *payee.as_byte_slice();
+        let spk = crate::dns_finality::p2pkh_mldsa87_spk(&owner);
+        let outputs = vec![TransactionOutput::new(500_000, spk)];
+
+        // The carrier, built the only way a registrant can build one: the object goes in the
+        // payload, because that is the only place the chain reads it from.
+        let carrier = |named: TransactionId| {
+            let object = PalwConsensusObjectV2::BondRegistered {
+                bond: PalwBondKeyV2(TransactionOutpoint::new(named, 0)),
+                pubkey: vec![7; 4],
+                operator_pubkey: vec![21; 8],
+                collateral: 500_000,
+                payout_payload: payee,
+                signature: vec![1; 8],
+            };
+            let payload = borsh::to_vec(&crate::palw_lifecycle_objects_v2::PalwLifecycleTxPayloadV2 {
+                version: PALW_LIFECYCLE_TX_VERSION_V2,
+                object,
+            })
+            .expect("the lifecycle payload serializes");
+            Transaction::new(0, vec![], outputs.clone(), 0, SUBNETWORK_ID_PALW_LIFECYCLE.clone(), 0, payload)
+        };
+
+        // The registrant's best move: name the id the carrier would have had, then look at the id
+        // it actually has once that name is inside it.
+        let probe = carrier(TransactionId::default());
+        let attempt = carrier(probe.id());
+        assert_ne!(attempt.id(), probe.id(), "writing the id into the payload moves the id");
+
+        // And the chain refuses it, by the rule's own words.
+        let extracted = crate::palw_lifecycle_objects_v2::palw_lifecycle_objects_from_accepted_txs_v2(&[attempt]);
+        assert!(extracted.objects.is_empty(), "no bond may enter through a transaction under this rule");
+        assert_eq!(
+            extracted.skipped.first().map(|(_, why)| *why),
+            Some("a bond registration must name its collateral output by index, with a zero transaction id"),
+            "and the refusal is the carrier-binding rule, pointing at the form that IS constructible"
+        );
+    }
+
     /// **A bond CAN enter through a transaction — this is what it has to prove.**
     ///
     /// The carrier proves the money and the signature proves the owner. Neither is a promise: the
     /// output is created by the very transaction carrying the registration, so its existence,
     /// amount and script are facts block validation established before this object was decoded.
+    ///
+    /// Driven through the REAL round trip — object into the payload, payload into the transaction,
+    /// transaction through the extractor — because the earlier version of this test built the
+    /// transaction with an empty payload and only then named its id. That pair was consistent, so
+    /// the rule accepted it, and the test reported a capability nobody could use: putting the
+    /// object where it must go moves the id out from under the outpoint naming it. A bond seam is
+    /// only proven by the trip a registrant actually makes.
     #[test]
     fn a_bond_registration_that_locks_its_collateral_rides() {
         let payee = h64(0xBEEF);
         let owner: [u8; 64] = *payee.as_byte_slice();
         let spk = crate::dns_finality::p2pkh_mldsa87_spk(&owner);
-        let tx = Transaction::new(
-            0,
-            vec![],
-            vec![TransactionOutput::new(500_000, spk.clone())],
-            0,
-            SUBNETWORK_ID_PALW_LIFECYCLE.clone(),
-            0,
-            vec![],
-        );
         let object = PalwConsensusObjectV2::BondRegistered {
-            bond: crate::palw_state_v2::PalwBondKeyV2(crate::tx::TransactionOutpoint::new(tx.id(), 0)),
+            // Named by index with a zero id: "the output at index 0 of whatever carries me".
+            bond: crate::palw_state_v2::PalwBondKeyV2(crate::tx::TransactionOutpoint::new(TransactionId::default(), 0)),
             pubkey: vec![7; 4],
             operator_pubkey: vec![21; 8],
             collateral: 500_000,
             payout_payload: payee,
             signature: vec![1; 8],
         };
-        palw_bond_registration_binds_its_carrier_v2(&tx, &object)
-            .expect("a registration whose carrier holds the collateral it declares must bind");
-        palw_lifecycle_object_may_ride_v2(&object).expect("and the ride list must accept it");
+        let payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object })
+            .expect("the lifecycle payload serializes");
+        let tx = Transaction::new(
+            0,
+            vec![],
+            vec![TransactionOutput::new(500_000, spk)],
+            0,
+            SUBNETWORK_ID_PALW_LIFECYCLE.clone(),
+            0,
+            payload,
+        );
+
+        let extracted = palw_lifecycle_objects_from_accepted_txs_v2(std::slice::from_ref(&tx));
+        assert!(extracted.skipped.is_empty(), "nothing should be skipped: {:?}", extracted.skipped);
+        let [carried] = &extracted.objects[..] else { panic!("exactly one object rides") };
+        let PalwConsensusObjectV2::BondRegistered { bond, collateral, .. } = &carried.object else {
+            panic!("and it is the bond registration")
+        };
+        // The chain supplied the half the registrant could not.
+        assert_eq!(bond.0.transaction_id, tx.id(), "the bond is keyed to the transaction that carried it");
+        assert_eq!(bond.0.index, 0, "at the output it named");
+        assert_eq!(*collateral, 500_000);
+        // And the verifier can rebuild exactly what was signed, from the substituted key alone.
+        assert_eq!(
+            palw_bond_registration_signed_key_v2(bond).0,
+            crate::tx::TransactionOutpoint::new(TransactionId::default(), 0),
+            "a verifier recovers the signed form without needing the carrier"
+        );
     }
 
     /// **Every way the lock can be lied to, refused by its own reason.**
@@ -340,7 +473,12 @@ mod tests {
             )
         };
         let reg = |t: &Transaction, index: u32, collateral: u64, payee: crate::Hash64| PalwConsensusObjectV2::BondRegistered {
-            bond: crate::palw_state_v2::PalwBondKeyV2(crate::tx::TransactionOutpoint::new(t.id(), index)),
+            bond: crate::palw_state_v2::PalwBondKeyV2(crate::tx::TransactionOutpoint::new(
+                // `t` selects which id the lie uses: the zero sentinel for the honest form, and a
+                // real id for lie 3, which is what naming somebody else's transaction now looks like.
+                if t.payload.is_empty() && t.outputs.first().map(|o| o.value) == Some(999) { t.id() } else { TransactionId::default() },
+                index,
+            )),
             pubkey: vec![7; 4],
             operator_pubkey: vec![21; 8],
             collateral,
@@ -363,7 +501,7 @@ mod tests {
         let t = tx(500_000, spk.clone());
         let other = tx(999, spk.clone());
         let e = palw_bond_registration_binds_its_carrier_v2(&t, &reg(&other, 0, 500_000, payee)).unwrap_err();
-        assert!(e.contains("its own carrying transaction"), "{e}");
+        assert!(e.contains("by index, with a zero transaction id"), "{e}");
 
         // 4. Locking the money behind a script that is not the payee's, so the collateral and the
         //    rewards would be reclaimable by different people.

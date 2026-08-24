@@ -1361,12 +1361,19 @@ Do you confirm? (y/n)";
             _ => None,
         };
         let v2 = panel_court.is_some();
+        // **A node registering its first bond has no bond**, so requiring one here is what kept the
+        // seam closed: the only way to obtain a bond was to already hold one. `--palw-register-bond`
+        // is therefore admitted on the key alone, and the service dispatches to the registration
+        // worker instead of the panel duties.
         match (v2, &args.palw_producer_key, &args.palw_producer_bond) {
-            (true, Some(key_path), Some(bond)) => Some(Arc::new(crate::palw_panel::PalwPanelService::new(
+            (true, Some(key_path), bond) if bond.is_some() || args.palw_register_bond => Some(Arc::new(crate::palw_panel::PalwPanelService::new(
                 crate::palw_panel::PalwPanelConfig {
                     register_class: args.palw_register_class,
+                    register_bond: args.palw_register_bond,
+                    bond_collateral: args.palw_bond_collateral,
+                    pay_address: args.palw_producer_pay_address.clone(),
                     key_path: key_path.clone(),
-                    bond: bond.clone(),
+                    bond: bond.clone().unwrap_or_default(),
                     fee_outpoint: args.palw_fee_outpoint.clone(),
                     state_dir: app_dir.join(network.to_prefixed()).join("palw-panel"),
                     court: panel_court.clone().expect("v2 is true exactly when this is Some"),

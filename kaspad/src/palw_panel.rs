@@ -129,6 +129,17 @@ pub struct PalwPanelConfig {
     /// `--palw-register-class`, it submits exactly one — the class of the worker at
     /// `metal_worker` — and then behaves like any other panel.
     pub register_class: bool,
+    /// Submit ONE `BondRegistered` for this node's own key and stop. The only PALW identity a
+    /// newcomer cannot be handed: until this existed the bonds on a chain were exactly the ones
+    /// its genesis registry named, so nobody outside that list could ever produce.
+    pub register_bond: bool,
+    /// Collateral to lock, in sompi. `None` takes the chain's floor, which is the honest default:
+    /// a newcomer has no way to know what this network demands and the chain does.
+    pub bond_collateral: Option<u64>,
+    /// The address a bond's rewards AND its collateral are reclaimable at. Required to register a
+    /// bond, because the registration names it as payee and the carrier must pay the collateral to
+    /// exactly that script.
+    pub pay_address: Option<String>,
 }
 
 pub struct PalwPanelService {
@@ -310,8 +321,132 @@ impl PalwPanelService {
     /// to, and the recovery scan found nothing while reporting no error: it was looking for money
     /// that does not exist rather than for the money that does.
     fn fee_script(&self, session: &kaspa_consensusmanager::ConsensusProxy) -> Option<kaspa_consensus_core::tx::ScriptPublicKey> {
-        let payload = session.palw_bond_payout_payload_v2(PalwBondKeyV2(self.bond?))?;
+        // A node with no bond yet is registering its first one, and there is no chain fact to read
+        // — the payee it is about to declare is the only answer, and it is the script its own
+        // funding pays to.
+        let Some(bond) = self.bond else {
+            return self.pay_script();
+        };
+        let payload = session.palw_bond_payout_payload_v2(PalwBondKeyV2(bond))?;
         Some(kaspa_consensus_core::dns_finality::p2pkh_mldsa87_spk(&payload.as_bytes()))
+    }
+
+    /// The 64-byte payee behind `--palw-producer-pay-address`, and the script that pays it.
+    ///
+    /// Both come from one decode so the payload a registration DECLARES and the script its carrier
+    /// PAYS cannot disagree — the carrier-binding rule compares them, and a mismatch would be
+    /// refused as "a bond's collateral output must pay to the payload the registration names".
+    fn pay_payee(&self) -> Result<([u8; 64], kaspa_consensus_core::tx::ScriptPublicKey), String> {
+        let text = self.config.pay_address.as_deref().ok_or("no --palw-producer-pay-address to pay this bond to")?;
+        let address = kaspa_addresses::Address::try_from(text).map_err(|e| format!("pay address is unusable: {e}"))?;
+        if address.version != kaspa_addresses::Version::PubKeyHashMlDsa87 {
+            return Err("a bond's payee must be an ML-DSA-87 P2PKH address — a legacy or ECDSA one cannot hold PQ collateral".to_string());
+        }
+        if address.prefix != self.consensus_config.prefix() {
+            return Err(format!("pay address is for {} and this node is {}", address.prefix, self.consensus_config.prefix()));
+        }
+        let payload: [u8; 64] = address
+            .payload
+            .as_ref()
+            .try_into()
+            .map_err(|_| "an ML-DSA-87 address must carry 64 payload bytes".to_string())?;
+        Ok((payload, kaspa_consensus_core::dns_finality::p2pkh_mldsa87_spk(&payload)))
+    }
+
+    fn pay_script(&self) -> Option<kaspa_consensus_core::tx::ScriptPublicKey> {
+        self.pay_payee().ok().map(|(_, script)| script)
+    }
+
+    /// **Build this node's own bond registration, and the collateral output that proves it.**
+    ///
+    /// Returns the object together with the output its carrier must hold at index 0, because the
+    /// two are one fact: `palw_bond_registration_binds_its_carrier_v2` checks the declared
+    /// collateral against that output's value and the declared payee against its script, and a
+    /// caller that assembled them separately could get one of them wrong.
+    ///
+    /// The bond names its output by INDEX with a zero transaction id — the carrier's id is a
+    /// function of the payload this object travels in, so naming it would be a hash fixed point.
+    /// The chain substitutes the id it observes, and the signature is made over the zero form,
+    /// which is what every verifier rebuilds.
+    fn build_bond_registration(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+    ) -> Result<(PalwConsensusObjectV2, kaspa_consensus_core::tx::TransactionOutput), String> {
+        let kp = self.keypair.as_ref().ok_or("no --palw-producer-key to sign a bond registration with")?;
+        let (payee_bytes, payee_script) = self.pay_payee()?;
+        let payout_payload = Hash64::from_bytes(payee_bytes);
+
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &self.consensus_config.params.palw_consensus_mode
+        else {
+            return Err("this network has no ConsensusV2 bundle, so it has no bonds to register".to_string());
+        };
+        let floor = bundle.state.min_collateral_sompi();
+
+        // **The floor is not a usable default.** A bond may hold a claim only while
+        // `reserved_exposure + claim_exposure <= collateral * max_exposure_ratio_permille / 1000`
+        // (`has_exposure_room`), and one claim costs `pwu * slash_value_per_pwu` — where `pwu`
+        // rises with the class's retargeted difficulty. So the chain's minimum collateral buys a
+        // bond that may be unable to hold even ONE claim, and the producer would report "the
+        // bond's exposure ceiling leaves no room for another claim" forever, having locked real
+        // money to get there. Sizing from the chain is the only default that is not silently
+        // useless; the operator can still ask for more.
+        let ratio = bundle.admission.max_exposure_ratio_permille().max(1) as u128;
+        let one_claim = session
+            .palw_producer_facts_v2(bundle.base_class_id, None)
+            .zip(session.palw_v2_registration_terms())
+            .map(|(facts, terms)| (facts.pwu as u128).saturating_mul(terms.slash_value_per_pwu as u128));
+        let for_one_claim = one_claim
+            .map(|exposure| u64::try_from(exposure.saturating_mul(1000).div_ceil(ratio)).unwrap_or(u64::MAX))
+            .unwrap_or(floor);
+        let sized = for_one_claim.max(floor);
+
+        let collateral = self.config.bond_collateral.unwrap_or(sized);
+        if collateral < floor {
+            return Err(format!("--palw-bond-collateral {collateral} is below this chain's floor of {floor} sompi"));
+        }
+        if collateral < sized {
+            // Their money, their call — but not silently. This is the number whose absence turns
+            // into a producer that holds forever.
+            warn!(
+                "[{PALW_PANEL}] --palw-bond-collateral {collateral} is below the {sized} sompi one claim on this \
+                 chain's floor class currently needs; this bond will register and may then be unable to hold a claim"
+            );
+        } else if self.config.bond_collateral.is_none() {
+            info!(
+                "[{PALW_PANEL}] sizing collateral at {collateral} sompi — the chain's floor is {floor} and one claim \
+                 on the base class currently needs {for_one_claim}"
+            );
+        }
+
+        // The signing key is also the operator identity. Panel dedup is per OPERATOR, so two bonds
+        // under one key are one operator by construction — which is the honest reading for a node
+        // registering its own bond, and the only one it can make without a second key to name.
+        let pubkey = kp.verification_key.as_ref().to_vec();
+        let bond = PalwBondKeyV2(TransactionOutpoint::new(kaspa_consensus_core::tx::TransactionId::default(), 0));
+        let network_domain =
+            kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2(self.consensus_config.params.net.to_string().as_bytes());
+        let message = kaspa_consensus_core::palw_state_v2::palw_bond_registration_message_v2(
+            network_domain,
+            &kaspa_consensus_core::palw_lifecycle_objects_v2::palw_bond_registration_signed_key_v2(&bond),
+            &pubkey,
+            &pubkey,
+            collateral,
+            &payout_payload,
+        );
+        let signature = self
+            .sign(message.as_byte_slice(), kaspa_consensus_core::palw_state_v2::PALW_BOND_REGISTRATION_V2_MLDSA87_CONTEXT)
+            .ok_or("this node holds no key, so it cannot sign a bond registration")?;
+        Ok((
+            PalwConsensusObjectV2::BondRegistered {
+                bond,
+                pubkey: pubkey.clone(),
+                operator_pubkey: pubkey,
+                collateral,
+                payout_payload,
+                signature,
+            },
+            kaspa_consensus_core::tx::TransactionOutput::new(collateral, payee_script),
+        ))
     }
 
     /// Sign `message` under this node's bond key in `context`. `None` when the node holds no key,
@@ -399,6 +534,22 @@ impl PalwPanelService {
         funding_outpoint: TransactionOutpoint,
         funding: &UtxoEntry,
     ) -> Result<Transaction, String> {
+        self.build_lifecycle_tx_with_outputs(object, funding_outpoint, funding, &[])
+    }
+
+    /// [`Self::build_lifecycle_tx`] with outputs AHEAD of the change.
+    ///
+    /// A bond registration is the one object whose carrier must also move money: the collateral
+    /// has to sit in an output of this very transaction, at the index the object names. Those
+    /// outputs come first so the index is stable at 0.. regardless of the change, and the change
+    /// is last so the rolling fee outpoint is always `outputs.len() - 1`.
+    fn build_lifecycle_tx_with_outputs(
+        &self,
+        object: &PalwConsensusObjectV2,
+        funding_outpoint: TransactionOutpoint,
+        funding: &UtxoEntry,
+        extra_outputs: &[kaspa_consensus_core::tx::TransactionOutput],
+    ) -> Result<Transaction, String> {
         let kp = self.keypair.as_ref().ok_or("no signing key")?;
         let payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object: object.clone() })
             .map_err(|e| format!("the lifecycle payload does not serialize: {e}"))?;
@@ -412,14 +563,23 @@ impl PalwPanelService {
 
         // Two passes: the fee depends on the mass, and the mass on the (fixed-size) signature. A
         // dummy signature of the real length prices the transaction, then the real one replaces it.
+        let locked: u64 = extra_outputs.iter().map(|o| o.value).sum();
         let build = |fee: u64, signature_script: Vec<u8>| -> Result<Transaction, String> {
-            if funding.amount <= fee {
-                return Err(format!("fee UTXO holds {} sompi, the fee is {fee} — fund the address again", funding.amount));
+            // The collateral is spent as well as the fee, and saying so by name is the difference
+            // between "fund the address again" and an operator wondering why a bond they have the
+            // money for will not register.
+            let needed = fee.saturating_add(locked);
+            if funding.amount <= needed {
+                return Err(format!(
+                    "funding UTXO holds {} sompi; this carrier needs {fee} fee + {locked} locked — fund the address again",
+                    funding.amount
+                ));
             }
             let mut input = TransactionInput::new(funding_outpoint, vec![], MAX_TX_IN_SEQUENCE_NUM, 1);
             input.signature_script = signature_script;
-            let change = TransactionOutput::new(funding.amount - fee, funding.script_public_key.clone());
-            Ok(Transaction::new(TX_VERSION, vec![input], vec![change], 0, SUBNETWORK_ID_PALW_LIFECYCLE.clone(), 0, payload.clone()))
+            let mut outputs = extra_outputs.to_vec();
+            outputs.push(TransactionOutput::new(funding.amount - needed, funding.script_public_key.clone()));
+            Ok(Transaction::new(TX_VERSION, vec![input], outputs, 0, SUBNETWORK_ID_PALW_LIFECYCLE.clone(), 0, payload.clone()))
         };
 
         let dummy_sig_script = {
@@ -462,6 +622,96 @@ impl PalwPanelService {
     /// claim's committed roots before believing them.
     fn retained_capture(&self, claim: &Hash64) -> Option<Vec<u8>> {
         std::fs::read(crate::palw_producer::palw_retained_material_path(&self.config.retention_dir, claim)).ok()
+    }
+
+    /// **Register this node's own bond, once, and say what to do with it.**
+    ///
+    /// Runs instead of the panel duties, because a node doing this has no bond yet and every duty
+    /// is keyed on one. It is the entry point for a newcomer: before it existed the bonds on a
+    /// chain were exactly the ones its genesis registry named, so mining was closed to anyone not
+    /// on that list — the consensus rules admitted a carried registration, and nothing could build
+    /// one.
+    ///
+    /// Keeps trying rather than exiting on the first refusal: the usual reason is that the funding
+    /// address has no confirmed UTXO yet, and an operator who is funding it right now should not
+    /// have to restart the node to be noticed. Every reason is named, and repeats are throttled.
+    pub async fn bond_registration_worker(self: &Arc<Self>) {
+        if self.keypair.is_none() {
+            warn!("[{PALW_PANEL}] --palw-register-bond needs --palw-producer-key — not registering");
+            return;
+        }
+        let payee = match self.pay_payee() {
+            Ok((_, script)) => script,
+            Err(why) => {
+                warn!("[{PALW_PANEL}] --palw-register-bond: {why} — not registering");
+                return;
+            }
+        };
+        info!(
+            "[{PALW_PANEL}] registering this node's bond; collateral and fee are spent from a confirmed UTXO paying to {}",
+            kaspa_txscript::extract_script_pub_key_address(&payee, self.consensus_config.prefix())
+                .map(|a| a.to_string())
+                .unwrap_or_else(|_| "this node's pay address".to_string())
+        );
+
+        let mut last_complaint: Option<(String, std::time::Instant)> = None;
+        let mut complain = |why: String| {
+            let fresh = last_complaint.as_ref().is_none_or(|(prev, at)| {
+                prev != &why || at.elapsed() >= std::time::Duration::from_secs(60)
+            });
+            if fresh {
+                warn!("[{PALW_PANEL}] cannot register a bond yet: {why}");
+                last_complaint = Some((why, std::time::Instant::now()));
+            }
+        };
+
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            let session = self.consensus_manager.consensus().unguarded_session();
+            if session.async_is_consensus_in_transitional_ibd_state().await {
+                continue;
+            }
+            let (object, collateral) = match self.build_bond_registration(&session) {
+                Ok(built) => built,
+                Err(why) => {
+                    complain(why);
+                    continue;
+                }
+            };
+            let Some((funding_outpoint, funding)) = self.resolve_fee_funding(&session).await else {
+                complain(format!(
+                    "no confirmed UTXO to spend — send at least {} sompi plus a fee to this node's pay address",
+                    collateral.value
+                ));
+                continue;
+            };
+            let tx = match self.build_lifecycle_tx_with_outputs(&object, funding_outpoint, &funding, std::slice::from_ref(&collateral)) {
+                Ok(tx) => tx,
+                Err(why) => {
+                    complain(why);
+                    continue;
+                }
+            };
+            let txid = tx.id();
+            match self.flow_context.submit_rpc_transaction(&session, tx, Orphan::Forbidden).await {
+                Ok(()) => {
+                    // The bond's key is the outpoint the chain substituted, and an operator has no
+                    // other way to learn it: it is this transaction's id, which did not exist
+                    // until the transaction was built. Printing it IS the handoff.
+                    info!(
+                        "[{PALW_PANEL}] registered bond {txid}:0 with {} sompi of collateral. \
+                         Restart with --palw-producer-bond={txid}:0 (and --palw-produce) to mine with it; \
+                         the collateral is reclaimable at this node's pay address once the bond is retired.",
+                        collateral.value
+                    );
+                    // The change is last, so the rolling fee outpoint is the final output.
+                    // One extra output (the collateral) ahead of the change, so the change is 1.
+                    self.persist_fee_outpoint(TransactionOutpoint::new(txid, 1));
+                    return;
+                }
+                Err(e) => complain(format!("the carrier was refused: {e}")),
+            }
+        }
     }
 
     pub async fn worker(self: &Arc<Self>) {
@@ -1198,7 +1448,13 @@ impl AsyncService for PalwPanelService {
 
     fn start(self: Arc<Self>) -> AsyncServiceFuture {
         Box::pin(async move {
-            self.worker().await;
+            // A node registering its first bond has none, and every panel duty is keyed on one —
+            // so this is a different job, not a mode of the same one.
+            if self.config.register_bond {
+                self.bond_registration_worker().await;
+            } else {
+                self.worker().await;
+            }
             Ok(())
         })
     }

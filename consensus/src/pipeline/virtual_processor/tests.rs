@@ -1432,6 +1432,129 @@ async fn palw_rc_a_real_execution_produces_a_block_the_chain_accepts() {
     assert!(after.bond.as_ref().unwrap().reserved_exposure > 0, "the claim it created reserves against the bond");
 }
 
+/// **A stranger can create their own bond, and the chain accepts the form they can build.**
+///
+/// This is the seam that decides whether a network is open. Producing needs a bond
+/// (`ready_to_produce`: "the named bond is not registered on this chain"), and the only bonds any
+/// chain had were the ones its genesis registry named — so mining was closed to everyone else. The
+/// rules were not what closed it: `palw_lifecycle_object_may_ride_v2` has always let a
+/// `BondRegistered` ride. What closed it was the carrier-binding rule demanding an outpoint that
+/// named its own carrying transaction by id, which is a hash fixed point (see
+/// `naming_the_carrier_by_id_is_a_fixed_point_no_registrant_can_solve`): the object rides in the
+/// payload, and the payload is in the id.
+///
+/// So the registrant names the output by INDEX with a zero id, the extractor substitutes the id it
+/// observes, and the signature is made over the zero form. Two parties have to agree about which
+/// bytes were signed, and this drives BOTH of them — the real extractor and the real validator —
+/// because a correspondence like that only shows up in a round trip. Signing the substituted form
+/// instead is refused below, which is what makes the passing half meaningful.
+#[tokio::test]
+async fn palw_v2_a_stranger_can_register_their_own_bond() {
+    use kaspa_consensus_core::palw_lifecycle_objects_v2::{
+        PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxPayloadV2, palw_bond_registration_signed_key_v2,
+        palw_lifecycle_objects_from_accepted_txs_v2,
+    };
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    use kaspa_consensus_core::palw_state_v2::{
+        PALW_BOND_REGISTRATION_V2_MLDSA87_CONTEXT, PalwBondKeyV2, PalwConsensusObjectV2 as Obj, palw_bond_registration_message_v2,
+    };
+    use kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE;
+    use kaspa_consensus_core::tx::{Transaction, TransactionId, TransactionOutpoint, TransactionOutput};
+
+    let catalog = palw_v2_test_catalog();
+    let bundle = palw_v2_test_bundle_funded_for(&catalog, 8);
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    let vp = ctx.consensus.virtual_processor();
+    let (tip, state) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("the tip loads");
+    let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+        block: tip,
+        daa_score: ctx.consensus.get_virtual_daa_score(),
+        blue_score: 2,
+        subsidy: 0,
+    };
+
+    // A stranger: a key this chain has never seen, on no registry.
+    let keypair = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([0xC1u8; 32]);
+    let pubkey = keypair.verification_key.as_ref().to_vec();
+    let payout_payload = kaspa_hashes::Hash64::from_bytes([0x5Au8; 64]);
+    let collateral = bundle.state.min_collateral_sompi();
+    let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2(config.params.net.to_string().as_bytes());
+
+    // What a registrant can compute at signing time: "the output at index 0 of whatever carries me".
+    let declared = PalwBondKeyV2(TransactionOutpoint::new(TransactionId::default(), 0));
+    let sign_over = |key: &PalwBondKeyV2| {
+        let message =
+            palw_bond_registration_message_v2(network_domain, key, &pubkey, &pubkey, collateral, &payout_payload);
+        libcrux_ml_dsa::ml_dsa_87::sign(
+            &keypair.signing_key,
+            message.as_byte_slice(),
+            PALW_BOND_REGISTRATION_V2_MLDSA87_CONTEXT,
+            [9u8; 32],
+        )
+        .expect("sign")
+        .as_ref()
+        .to_vec()
+    };
+
+    let carry = |signature: Vec<u8>| {
+        let object = Obj::BondRegistered {
+            bond: declared,
+            pubkey: pubkey.clone(),
+            operator_pubkey: pubkey.clone(),
+            collateral,
+            payout_payload,
+            signature,
+        };
+        let payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object })
+            .expect("the lifecycle payload serializes");
+        Transaction::new(
+            0,
+            vec![],
+            // The collateral, in an output of this very transaction, paying the declared payee.
+            vec![TransactionOutput::new(
+                collateral,
+                kaspa_consensus_core::dns_finality::p2pkh_mldsa87_spk(payout_payload.as_byte_slice().try_into().unwrap()),
+            )],
+            0,
+            SUBNETWORK_ID_PALW_LIFECYCLE.clone(),
+            0,
+            payload,
+        )
+    };
+
+    // **The honest trip.** Signed over the zero form, carried, extracted, validated.
+    let tx = carry(sign_over(&declared));
+    let extracted = palw_lifecycle_objects_from_accepted_txs_v2(std::slice::from_ref(&tx));
+    assert!(extracted.skipped.is_empty(), "the carrier binds: {:?}", extracted.skipped);
+    let [carried] = &extracted.objects[..] else { panic!("exactly one object rides") };
+    let Obj::BondRegistered { bond, .. } = &carried.object else { panic!("and it is the registration") };
+    assert_eq!(bond.0, TransactionOutpoint::new(tx.id(), 0), "the chain keyed the bond to its carrier");
+    assert_eq!(palw_bond_registration_signed_key_v2(bond), declared, "and a verifier recovers what was signed");
+
+    vp.palw_v2_validate_objects(&state, &bundle.state, &point, std::slice::from_ref(&carried.object))
+        .expect("a stranger's own signed, collateral-locking bond registration must be accepted");
+
+    // **Signing the substituted form instead is refused.** Without this the assertion above would
+    // also pass if the verifier had simply stopped checking, and the two halves of the
+    // correspondence would be free to drift apart.
+    let substituted = PalwBondKeyV2(TransactionOutpoint::new(tx.id(), 0));
+    let wrong = carry(sign_over(&substituted));
+    let extracted = palw_lifecycle_objects_from_accepted_txs_v2(std::slice::from_ref(&wrong));
+    let [carried_wrong] = &extracted.objects[..] else { panic!("it still rides — the lock is about money, not signatures") };
+    let err = vp
+        .palw_v2_validate_objects(&state, &bundle.state, &point, std::slice::from_ref(&carried_wrong.object))
+        .expect_err("a signature over the key the chain substituted is not the one the registrant makes");
+    assert!(err.contains("not signed by the key it declares"), "got {err}");
+}
+
 /// **Nobody can register a class without a bond that signed for it** (launch blockers §3).
 ///
 /// ADR-0049 Decision H made post-genesis registration a live path and nothing signed it. A

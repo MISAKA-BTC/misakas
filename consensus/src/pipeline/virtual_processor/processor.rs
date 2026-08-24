@@ -4502,9 +4502,16 @@ impl VirtualStateProcessor {
                 // list of who may be SEATED, so padding it with keys nobody controls is not a
                 // harmless gift.
                 Obj::BondRegistered { bond, pubkey, operator_pubkey, collateral, payout_payload, signature } => {
+                    // **The form the registrant signed, not the one the chain now holds.** A
+                    // carried registration names its output by index with a zero transaction id,
+                    // because the carrier's id is a function of the payload the signature goes
+                    // into; the extractor substituted the real id on the way in. Verifying against
+                    // the substituted key would reject every honest registration.
+                    let signed_bond =
+                        kaspa_consensus_core::palw_lifecycle_objects_v2::palw_bond_registration_signed_key_v2(bond);
                     let message = kaspa_consensus_core::palw_state_v2::palw_bond_registration_message_v2(
                         kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2(self.network_id_bytes.as_slice()),
-                        bond,
+                        &signed_bond,
                         pubkey,
                         operator_pubkey,
                         *collateral,

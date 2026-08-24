@@ -223,6 +223,8 @@ pub struct Args {
     /// signed `ClassRegistered` that carries its own profile (ADR-0049 Decision H). Nothing built
     /// or carried such an object, so gaining a class meant re-minting the network.
     pub palw_register_class: bool,
+    pub palw_register_bond: bool,
+    pub palw_bond_collateral: Option<u64>,
     /// **Produce for this class instead of the network's floor.**
     ///
     /// 128-hex. Defaults to `bundle.base_class_id`, which is the class every node can run and
@@ -374,6 +376,8 @@ impl Default for Args {
             palw_class_artifact: Vec::new(),
             palw_metal_worker: None,
             palw_register_class: false,
+            palw_register_bond: false,
+            palw_bond_collateral: None,
             palw_producer_class: None,
             palw_challenge: false,
             palw_drill_tamper_leaf: None,
@@ -897,6 +901,30 @@ pub fn cli() -> Command {
                 ),
         )
         .arg(
+            Arg::new("palw-register-bond")
+                .long("palw-register-bond")
+                .action(ArgAction::SetTrue)
+                .help(
+                    "MISAKA PALW: submit ONE BondRegistered for this node's own key, locking collateral from a \
+                     confirmed UTXO at --palw-producer-pay-address, then print the bond outpoint and stop. This is \
+                     how a node that is on no genesis registry becomes able to produce at all. Needs \
+                     --palw-producer-key and --palw-producer-pay-address; the bond it creates is what you then pass \
+                     as --palw-producer-bond.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-bond-collateral")
+                .long("palw-bond-collateral")
+                .value_name("sompi")
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "MISAKA PALW: collateral to lock in --palw-register-bond. Defaults to what ONE claim on this \
+                     chain's floor class currently needs, which is above the chain's bare minimum: the minimum buys \
+                     a bond whose exposure ceiling may not fit a single claim, and such a producer holds forever \
+                     having locked real money. More collateral is more claims open at once.",
+                ),
+        )
+        .arg(
             Arg::new("palw-class-artifact")
                 .long("palw-class-artifact")
                 .env("KASPAD_PALW_CLASS_ARTIFACT")
@@ -1384,6 +1412,8 @@ impl Args {
                 .unwrap_or(defaults.palw_class_artifact),
             palw_metal_worker: m.get_one::<String>("palw-metal-worker").cloned().or(defaults.palw_metal_worker),
             palw_register_class: arg_match_unwrap_or::<bool>(&m, "palw-register-class", defaults.palw_register_class),
+            palw_register_bond: arg_match_unwrap_or::<bool>(&m, "palw-register-bond", defaults.palw_register_bond),
+            palw_bond_collateral: m.get_one::<u64>("palw-bond-collateral").copied(),
             palw_producer_class: m.get_one::<String>("palw-producer-class").cloned().or(defaults.palw_producer_class),
             palw_challenge: m.get_one::<bool>("palw-challenge").copied().unwrap_or(defaults.palw_challenge),
             palw_drill_tamper_leaf: m.get_one::<u64>("palw-drill-tamper-leaf").copied().or(defaults.palw_drill_tamper_leaf),
