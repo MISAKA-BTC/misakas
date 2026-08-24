@@ -121,6 +121,14 @@ pub struct PalwPanelConfig {
     /// The pinned Metal worker, if this seat has one (ADR-0051). A seat without one cannot judge a
     /// Metal class and files nothing for it — "I could not verify", never an accusation.
     pub metal_worker: Option<PathBuf>,
+    /// **Register this node's worker class on the running chain, once** (ADR-0049 Decision H).
+    ///
+    /// A network is born with the classes its ruleset id commits to, and every later one arrives
+    /// as a signed `ClassRegistered` carrying its own profile. Nothing built or carried such an
+    /// object, so a second class meant re-minting the network. Set with
+    /// `--palw-register-class`, it submits exactly one — the class of the worker at
+    /// `metal_worker` — and then behaves like any other panel.
+    pub register_class: bool,
 }
 
 pub struct PalwPanelService {
@@ -319,6 +327,62 @@ impl PalwPanelService {
         }
     }
 
+
+    /// **Build the `ClassRegistered` for this node's worker** (ADR-0049 Decision H).
+    ///
+    /// Every pin comes from the worker itself — it is asked what it is, rather than told — and
+    /// every term the gate checks comes from the chain. Nothing here is a number this node picked:
+    /// a registrant that chose its own share, panel floor or slash value would be rejected by the
+    /// value rather than by the choosing, which reads like a protocol error and is not one.
+    async fn build_class_registration(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+    ) -> Result<PalwConsensusObjectV2, String> {
+        let worker = self.config.metal_worker.clone().ok_or("no --palw-metal-worker to register the class of")?;
+        let bond = self.bond.ok_or("no --palw-producer-bond to register under")?;
+        let bond_key = PalwBondKeyV2(bond);
+        let terms = session
+            .palw_v2_registration_terms()
+            .ok_or("this chain has no V2 bundle, or does not hold its base class yet")?;
+
+        let pins = misaka_palw_metal::catalog::cat_m_0001_pins_from_worker(worker, self.consensus_config.params.net.to_string().into_bytes())
+            .map_err(|e| format!("the worker did not report a usable identity: {e}"))?;
+
+        // Built twice on purpose: once to learn the class id the profile derives, and once with
+        // the signature over it. Signing anything assembled beside the object would sign a class
+        // that is not the one being registered.
+        let build = |signature: Vec<u8>| {
+            misaka_palw_metal::catalog::family_m_post_genesis_registration_v1(
+                &misaka_palw_metal::catalog::CAT_M_0001_GEOMETRY,
+                &pins,
+                misaka_palw_metal::catalog::gguf_artifact_root_v1(),
+                terms.min_panel_seats,
+                terms.min_panel_quorum,
+                terms.min_grantable_share_permille,
+                terms.initial_target,
+                terms.slash_value_per_pwu,
+                0,
+                bond_key,
+                signature,
+            )
+        };
+        let unsigned = build(Vec::new())?;
+        let PalwConsensusObjectV2::ClassRegistered { class_id, activation_daa, .. } = &unsigned else {
+            return Err("the builder did not build a registration".to_string());
+        };
+        let message = misaka_palw_metal::catalog::family_m_registration_message_v1(
+            self.consensus_config.params.net.to_string().as_bytes(),
+            *class_id,
+            terms.min_grantable_share_permille,
+            *activation_daa,
+            &bond_key,
+        );
+        let signature = self
+            .sign(message.as_byte_slice(), kaspa_consensus_core::palw_state_v2::PALW_CLASS_REGISTRATION_V2_MLDSA87_CONTEXT)
+            .ok_or("this node holds no bond key, so it cannot sign a registration")?;
+        build(signature)
+    }
+
     fn persist_fee_outpoint(&self, outpoint: TransactionOutpoint) {
         let _ = std::fs::create_dir_all(&self.config.state_dir);
         if let Err(e) = std::fs::write(self.fee_state_path(), format!("{}:{}", outpoint.transaction_id, outpoint.index)) {
@@ -436,6 +500,11 @@ impl PalwPanelService {
         // The fee UTXO we are currently spending from, carried across ticks so a mempool chain is
         // not rebuilt from a stale root every two seconds. See the note at its first use.
         let mut chained_funding: Option<(TransactionOutpoint, UtxoEntry)> = None;
+        // **The class registration, built once and retried until it lands.** Built lazily rather
+        // than at startup because it needs the chain: the share it must take is the ruleset's
+        // minimum grantable one, and a node cannot know that before it has state to read.
+        let mut class_registration: Option<PalwConsensusObjectV2> = None;
+        let mut class_registration_submitted = false;
         // Carriers submitted whose change is not yet on chain. Reset the moment the chain's tip
         // appears in the virtual UTXO set, which is the only honest signal that it was mined.
         let mut inflight: usize = 0;
@@ -888,6 +957,60 @@ impl PalwPanelService {
                          --palw-fee-outpoint ({}) is unfunded or already spent",
                         self.config.fee_outpoint.as_deref().unwrap_or("unset")
                     );
+                }
+                // **The class registration, ahead of everything else and only once.**
+                //
+                // A class that is not registered mines nothing, so this is the one object whose
+                // absence costs the whole lane rather than one claim. It is offered first for the
+                // same reason a court rung is: everything behind it can wait a tick, and it
+                // cannot — a producer with a worker and no class is a node doing nothing.
+                if self.config.register_class && !class_registration_submitted {
+                    if class_registration.is_none() {
+                        match self.build_class_registration(&session).await {
+                            Ok(object) => {
+                                info!("[{PALW_PANEL}] built a class registration for this node's worker");
+                                class_registration = Some(object);
+                            }
+                            // Warned once per tick, not once and then silence: the reasons are all
+                            // operator-fixable (no worker, a worker that is not the class it
+                            // claims, a bond that is not Active) and a node that said so once at
+                            // startup is a node whose message scrolled away.
+                            Err(e) => warn!("[{PALW_PANEL}] cannot register this node's class: {e}"),
+                        }
+                    }
+                    if let Some(object) = class_registration.clone()
+                        && let Some((funding_outpoint, funding_entry)) = funding.clone()
+                    {
+                        match self.build_lifecycle_tx(&object, funding_outpoint, &funding_entry) {
+                            Ok(tx) => {
+                                let txid = tx.id();
+                                let change = tx.outputs[0].clone();
+                                match self.flow_context.submit_rpc_transaction(&session, tx, Orphan::Forbidden).await {
+                                    Ok(()) => {
+                                        info!("[{PALW_PANEL}] submitted the class registration in tx {txid}");
+                                        class_registration_submitted = true;
+                                        let next = TransactionOutpoint::new(txid, 0);
+                                        self.persist_fee_outpoint(next);
+                                        funding = Some((
+                                            next,
+                                            UtxoEntry {
+                                                amount: change.value,
+                                                script_public_key: change.script_public_key,
+                                                block_daa_score: current_daa,
+                                                is_coinbase: false,
+                                            },
+                                        ));
+                                        inflight += 1;
+                                    }
+                                    Err(e) => {
+                                        warn!("[{PALW_PANEL}] the mempool refused the class registration: {e}");
+                                        funding = None;
+                                    }
+                                }
+                            }
+                            Err(e) => warn!("[{PALW_PANEL}] cannot build the class registration carrier: {e}"),
+                        }
+                    }
                 }
                 // The court's moves first: a rung has a deadline and a receipt quorum does not.
                 let mut unsent: Vec<(Hash64, u32, bool, PalwConsensusObjectV2)> = Vec::new();

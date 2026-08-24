@@ -3742,6 +3742,32 @@ impl VirtualStateProcessor {
         state.bond(bond).map(|b| b.payout_payload)
     }
 
+    /// **The terms a class entrant must take rather than choose** (ADR-0049 Decision H).
+    ///
+    /// The share and the panel floor are the ruleset's. The economic terms are the BASE CLASS's,
+    /// read off the chain rather than restated: an entrant priced by its own registrant would be
+    /// an entrant whose slash value and starting difficulty are whatever it liked, and "the same
+    /// work costs the same everywhere" is the property the share table conserves.
+    pub fn palw_v2_registration_terms_impl(
+        &self,
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwRegistrationTermsV2> {
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let bundle = self.palw_v2_bundle.as_ref()?;
+        let (_, state) = self.palw_state_v2_store.read().load_tip(state_params).ok().flatten()?;
+        let base = state.class(&bundle.base_class_id)?;
+        // The target lives beside the class, not inside it — retargeting moves one and not the
+        // other, and an entrant seeded from a stale copy would start at a difficulty the chain
+        // stopped using.
+        let base_target = state.class_target(&bundle.base_class_id)?;
+        Some(kaspa_consensus_core::palw_state_v2::PalwRegistrationTermsV2 {
+            min_grantable_share_permille: state_params.min_grantable_share_permille(),
+            min_panel_seats: bundle.min_panel_seats(),
+            min_panel_quorum: bundle.min_panel_quorum(),
+            slash_value_per_pwu: base.slash_value_per_pwu,
+            initial_target: base_target.target,
+        })
+    }
+
     pub fn palw_seat_duties_v2_impl(
         &self,
         mine: &[kaspa_consensus_core::palw_state_v2::PalwBondKeyV2],

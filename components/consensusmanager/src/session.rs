@@ -235,6 +235,10 @@ impl ConsensusSessionOwned {
         self.consensus.palw_bond_payout_payload_v2(bond)
     }
 
+    pub fn palw_v2_registration_terms(&self) -> Option<kaspa_consensus_core::palw_state_v2::PalwRegistrationTermsV2> {
+        self.consensus.palw_v2_registration_terms()
+    }
+
     pub fn palw_disputable_claims_v2(
         &self,
         mine: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,

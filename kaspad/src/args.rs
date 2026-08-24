@@ -217,6 +217,12 @@ pub struct Args {
     /// never require a runtime a Linux server cannot build. A node without one simply cannot serve
     /// Family-M classes, and says so rather than falling back to a family it can.
     pub palw_metal_worker: Option<String>,
+    /// **Register this node's worker class on the running chain, once.**
+    ///
+    /// A network is born with the classes its ruleset id commits to; every later one arrives as a
+    /// signed `ClassRegistered` that carries its own profile (ADR-0049 Decision H). Nothing built
+    /// or carried such an object, so gaining a class meant re-minting the network.
+    pub palw_register_class: bool,
     /// Re-run every licensed claim and open a court against the ones this node cannot reproduce.
     pub palw_challenge: bool,
     /// DRILL ONLY: corrupt one lane of this leaf in every block this node produces.
@@ -359,6 +365,7 @@ impl Default for Args {
             palw_producer_bond: None,
             palw_class_artifact: Vec::new(),
             palw_metal_worker: None,
+            palw_register_class: false,
             palw_challenge: false,
             palw_drill_tamper_leaf: None,
             palw_drill_challenge_all: false,
@@ -862,6 +869,16 @@ pub fn cli() -> Command {
                 ),
         )
         .arg(
+            Arg::new("palw-register-class")
+                .long("palw-register-class")
+                .action(ArgAction::SetTrue)
+                .help(
+                    "MISAKA PALW: submit ONE ClassRegistered for the class of --palw-metal-worker, so a model can \
+                     join a chain that is already running instead of waiting for a re-mint. Needs an active bond \
+                     (--palw-producer-bond), its key and a funded --palw-fee-outpoint.",
+                ),
+        )
+        .arg(
             Arg::new("palw-class-artifact")
                 .long("palw-class-artifact")
                 .env("KASPAD_PALW_CLASS_ARTIFACT")
@@ -1348,6 +1365,7 @@ impl Args {
                 .map(|v| v.cloned().collect())
                 .unwrap_or(defaults.palw_class_artifact),
             palw_metal_worker: m.get_one::<String>("palw-metal-worker").cloned().or(defaults.palw_metal_worker),
+            palw_register_class: arg_match_unwrap_or::<bool>(&m, "palw-register-class", defaults.palw_register_class),
             palw_challenge: m.get_one::<bool>("palw-challenge").copied().unwrap_or(defaults.palw_challenge),
             palw_drill_tamper_leaf: m.get_one::<u64>("palw-drill-tamper-leaf").copied().or(defaults.palw_drill_tamper_leaf),
             palw_drill_challenge_all: m

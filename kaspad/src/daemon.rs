@@ -1353,6 +1353,7 @@ Do you confirm? (y/n)";
         match (v2, &args.palw_producer_key, &args.palw_producer_bond) {
             (true, Some(key_path), Some(bond)) => Some(Arc::new(crate::palw_panel::PalwPanelService::new(
                 crate::palw_panel::PalwPanelConfig {
+                    register_class: args.palw_register_class,
                     key_path: key_path.clone(),
                     bond: bond.clone(),
                     fee_outpoint: args.palw_fee_outpoint.clone(),

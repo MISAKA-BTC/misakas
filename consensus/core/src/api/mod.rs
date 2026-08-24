@@ -546,6 +546,15 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// **What a post-genesis class registration must take from the chain** (ADR-0049 Decision H).
+    ///
+    /// `None` on every network without a V2 bundle, and on one whose base class this chain does not
+    /// hold yet — both honest answers rather than errors, and both mean the same thing to a caller:
+    /// this is not a chain you can register a class on right now.
+    fn palw_v2_registration_terms(&self) -> Option<crate::palw_state_v2::PalwRegistrationTermsV2> {
+        None
+    }
+
     /// Claims this node could still dispute.
     fn palw_disputable_claims_v2(
         &self,
