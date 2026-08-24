@@ -3956,8 +3956,13 @@ impl VirtualStateProcessor {
         &self,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
     ) -> Vec<TransactionOutput> {
+        // The SAME prefix the transition drains — see `PALW_V2_MAX_PAYOUTS_PER_BLOCK`. Both sides
+        // read the selected parent's queue in `BTreeMap` key order, so "the first N" names one set
+        // on every node. Paying more than the transition clears would pay a claim twice; clearing
+        // more than the coinbase pays would destroy the reward the escrow exists to deliver.
         state
             .pending_payouts_iter()
+            .take(kaspa_consensus_core::palw_state_v2::PALW_V2_MAX_PAYOUTS_PER_BLOCK)
             .map(|(_, payout)| {
                 TransactionOutput::new(
                     payout.amount,

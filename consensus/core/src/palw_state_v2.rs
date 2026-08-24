@@ -135,6 +135,34 @@ pub const PALW_STATE_V2_VERSION: u16 = 7;
 
 pub const PALW_STATE_V2_DOMAIN_OPERATOR_ID: &[u8] = b"misaka-palw/state-v2/operator-id/v1";
 
+/// **How many escrow payouts one block's coinbase may carry (ADR-0042 Decision 10).**
+///
+/// A `Final` claim's escrowed worker reward is released as an extra coinbase output, and the queue
+/// used to be drained whole — so the output count was however many claims finalized at once, with
+/// nothing bounding it. The coinbase's own isolation rule DOES bound it, so the two disagreed and
+/// the chain refused blocks its own producer built.
+///
+/// Eight against at most one new claim per block: a backlog drains eight times faster than it can
+/// be created, so this bounds latency, not throughput.
+pub const PALW_V2_MAX_PAYOUTS_PER_BLOCK: usize = 8;
+
+/// **Coinbase outputs a ConsensusV2 block may carry beyond the classic mergeset payout.**
+///
+/// The classic bound is `ghostdag_k + 2`: one output per mergeset blue (at most `k + 1`) plus one
+/// aggregate for the reds. ConsensusV2 appends three more kinds and none of them were counted:
+/// the ADR-0018 §D worker-inclusion bounty (one), the §E validator participation payouts, and the
+/// ADR-0042 Decision 10 escrow releases (now `PALW_V2_MAX_PAYOUTS_PER_BLOCK`).
+///
+/// Widening the isolation cap cannot admit a wrong coinbase: `validate_coinbase_transaction`
+/// compares the block's coinbase against the one this node computes by EXACT HASH, so the cap is
+/// a cheap early guard on size, never the rule that decides correctness.
+pub const PALW_V2_COINBASE_EXTRA_OUTPUTS: u64 = PALW_V2_MAX_PAYOUTS_PER_BLOCK as u64 + 1 + PALW_V2_MAX_VALIDATOR_PAYOUTS;
+
+/// The §E validator participation payouts one coinbase may carry. Zero are produced on every
+/// network shipped today (no validator is bonded), but the cap must cover the configuration that
+/// pays them, or bonding a validator would stop the chain the same way the first `Final` did.
+pub const PALW_V2_MAX_VALIDATOR_PAYOUTS: u64 = 16;
+
 /// `H(operator_pubkey)` — the operator identity panel dedup runs on.
 ///
 /// Domain-separated so an operator id can never collide with a class id, a claim id or any other
@@ -2713,7 +2741,21 @@ pub fn apply_palw_transition_v3(
     //     NEXT one, and clearing after would erase it. Every node applying this block clears the
     //     same set, because the set is the parent state's — already committed, already hashed
     //     into the root this block's header names.
-    for claim_id in builder.state.pending_payouts.keys().copied().collect::<Vec<_>>() {
+    //
+    //     **At most `PALW_V2_MAX_PAYOUTS_PER_BLOCK`, and the coinbase builder takes the same
+    //     prefix.** Draining the whole queue made the coinbase's output count a function of how
+    //     many claims happened to finalize at once, which is unbounded — while a coinbase may
+    //     carry at most `ghostdag_k + 2 + PALW_V2_COINBASE_EXTRA_OUTPUTS`. On testnet-11 the very
+    //     first `Final` took the count to 4 against a limit of 3 and the producer's own chain
+    //     refused every block it built, 112 in a row, until production stopped entirely. A cap
+    //     nothing enforces is a cap that decides, later, that the network is over.
+    //
+    //     The prefix is the first N in `BTreeMap` key order, which is the same set on every node
+    //     and the same set `palw_v2_payout_outputs` pays. A backlog drains at N per block against
+    //     at most one new claim per block, so the queue cannot grow.
+    for claim_id in
+        builder.state.pending_payouts.keys().copied().take(PALW_V2_MAX_PAYOUTS_PER_BLOCK).collect::<Vec<_>>()
+    {
         builder.write_payout(claim_id, None);
     }
 

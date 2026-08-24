@@ -123,7 +123,16 @@ impl TransactionValidator {
             return Err(TxRuleError::CoinbaseNonZeroMassCommitment);
         }
 
-        let outputs_limit = self.ghostdag_k as u64 + 2;
+        // `ghostdag_k + 2` is the classic mergeset bound: one output per blue (at most `k + 1`)
+        // plus one aggregate for the reds. It was never widened for ConsensusV2, which appends the
+        // §D inclusion bounty, the §E validator payouts and the Decision 10 escrow releases — so on
+        // testnet-11 the first claim to reach `Final` produced a 4-output coinbase against a limit
+        // of 3, and the producer's own chain refused 112 consecutive blocks it had built itself.
+        //
+        // Safe to widen because it is not the rule that decides coinbase correctness:
+        // `validate_coinbase_transaction` compares against the coinbase this node computes, by
+        // exact hash. This is a cheap size guard ahead of that work.
+        let outputs_limit = self.ghostdag_k as u64 + 2 + kaspa_consensus_core::palw_state_v2::PALW_V2_COINBASE_EXTRA_OUTPUTS;
         if tx.outputs.len() as u64 > outputs_limit {
             return Err(TxRuleError::CoinbaseTooManyOutputs(tx.outputs.len(), outputs_limit));
         }
@@ -963,5 +972,80 @@ mod pq_output_class_enforcement_tests {
             Err(TxRuleError::NonPqStandardOutputClass(0))
         );
         assert!(tv.check_transaction_pq_output_classes(&tx_with_output(pq_p2pkh_spk(), SUBNETWORK_ID_STAKE_BOND)).is_ok());
+    }
+
+    /// **The isolation cap must cover every output the ConsensusV2 coinbase builder can emit.**
+    ///
+    /// It did not. `expected_coinbase_transaction` appends the ADR-0018 §D inclusion bounty, the
+    /// §E validator payouts and the ADR-0042 Decision 10 escrow releases on top of the mergeset
+    /// payout, while this rule still allowed `ghostdag_k + 2` — the classic mergeset-only bound.
+    /// On testnet-11 the first claim to reach `Final` released one escrowed reward, the coinbase
+    /// reached 4 outputs against a limit of 3, and the node refused 112 consecutive blocks its own
+    /// producer had built. Nothing in the suite related the two numbers, so nothing objected.
+    ///
+    /// The relationship, not the constant: a coinbase carrying the mergeset AND a full block's
+    /// worth of every appended kind must pass, and one output beyond that must not.
+    #[test]
+    fn the_coinbase_cap_admits_every_output_a_consensus_v2_block_can_pay() {
+        use kaspa_consensus_core::palw_state_v2::{
+            PALW_V2_COINBASE_EXTRA_OUTPUTS, PALW_V2_MAX_PAYOUTS_PER_BLOCK, PALW_V2_MAX_VALIDATOR_PAYOUTS,
+        };
+        // This module is not the one at the top of the file and does not inherit its imports.
+        use kaspa_consensus_core::tx::{ScriptPublicKey, Transaction, TransactionOutput, scriptvec};
+        use kaspa_core::assert_match;
+        use crate::params::MAINNET_PARAMS;
+        use crate::processes::transaction_validator::{TransactionValidator, errors::TxRuleError};
+        use kaspa_consensus_core::subnets::SUBNETWORK_ID_COINBASE;
+
+        let params = MAINNET_PARAMS.clone();
+        let tv = TransactionValidator::new_for_tests(
+            params.max_tx_inputs,
+            params.max_tx_outputs,
+            params.max_signature_script_len,
+            params.max_script_public_key_len,
+            params.coinbase_payload_script_public_key_max_len,
+            params.coinbase_maturity(),
+            params.ghostdag_k(),
+            Default::default(),
+        );
+
+        let coinbase_with = |n: usize| {
+            Transaction::new(
+                0,
+                vec![],
+                (0..n)
+                    .map(|_| TransactionOutput { value: 1, script_public_key: ScriptPublicKey::new(0, scriptvec!(0x51)) })
+                    .collect(),
+                0,
+                SUBNETWORK_ID_COINBASE,
+                0,
+                vec![],
+            )
+        };
+
+        // What the builder can emit at its worst: `k + 1` blues, one aggregate for the reds, the
+        // §D bounty, the §E validator payouts, and a full drain of the escrow queue.
+        let worst_case = params.ghostdag_k() as usize
+            + 2
+            + 1
+            + PALW_V2_MAX_VALIDATOR_PAYOUTS as usize
+            + PALW_V2_MAX_PAYOUTS_PER_BLOCK;
+        assert!(
+            tv.check_coinbase_in_isolation(&coinbase_with(worst_case)).is_ok(),
+            "a coinbase paying the mergeset plus every appended kind must pass;              the builder can emit {worst_case} outputs"
+        );
+
+        // And the cap is still a cap.
+        assert_match!(
+            tv.check_coinbase_in_isolation(&coinbase_with(worst_case + 1)),
+            Err(TxRuleError::CoinbaseTooManyOutputs(_, _))
+        );
+
+        // The two constants are one statement, so a change to either has to move both.
+        assert_eq!(
+            PALW_V2_COINBASE_EXTRA_OUTPUTS,
+            PALW_V2_MAX_PAYOUTS_PER_BLOCK as u64 + 1 + PALW_V2_MAX_VALIDATOR_PAYOUTS,
+            "the extra allowance must be exactly the kinds the builder appends"
+        );
     }
 }
