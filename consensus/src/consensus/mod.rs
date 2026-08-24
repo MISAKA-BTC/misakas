@@ -2138,6 +2138,10 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_bond_payout_payload_v2_impl(&bond)
     }
 
+    fn palw_v2_registration_terms(&self) -> Option<kaspa_consensus_core::palw_state_v2::PalwRegistrationTermsV2> {
+        self.virtual_processor.palw_v2_registration_terms_impl()
+    }
+
     fn palw_disputable_claims_v2(
         &self,
         mine: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,

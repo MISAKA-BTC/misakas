@@ -1228,6 +1228,25 @@ pub fn palw_bond_retirement_message_v2(network_domain: Hash64, bond: &PalwBondKe
 /// The class id is its graph, so signing the id signs the graph; the share is signed because it is
 /// the thing taken from everyone else, and a signature over the class alone would let the share be
 /// swapped underneath it.
+/// **What a post-genesis class registration must take from the chain rather than choose**
+/// (ADR-0049 Decision H).
+///
+/// Every field here is one the admission gate checks against something the chain already holds, so
+/// a registrant that picks its own gets an error about the value rather than about the picking.
+/// Returned as one value because they are read at one moment from one state: three separate
+/// accessors could be called across a reorg and produce terms that never coexisted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwRegistrationTermsV2 {
+    /// The smallest share the ruleset admits. An entrant joins at exactly this — see the share
+    /// rule in `palw_v2_validate_objects`, which refuses anything else.
+    pub min_grantable_share_permille: u16,
+    pub min_panel_seats: u16,
+    pub min_panel_quorum: u16,
+    /// The BASE class's, so an entrant is priced like the incumbent rather than by its registrant.
+    pub slash_value_per_pwu: u64,
+    pub initial_target: u128,
+}
+
 pub fn palw_class_registration_message_v2(
     network_domain: Hash64,
     class_id: Hash64,
