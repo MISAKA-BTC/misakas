@@ -1772,10 +1772,62 @@ impl PalwAttemptJournalStore {
 /// so a (transient) `block_daa_score > virtual_daa` reads as "not yet mature". Takes raw fields
 /// (not a typed entry) so it works for both `UtxoEntry` and the RPC `RpcUtxoEntry` (same fields).
 pub fn is_spendable(is_coinbase: bool, block_daa_score: u64, virtual_daa: u64, coinbase_maturity: u64) -> bool {
+    is_spendable_ignoring_settlement(is_coinbase, block_daa_score, virtual_daa, coinbase_maturity)
+}
+
+/// **The maturity floor ALONE — which is not the rule a node applies to a coinbase spend.**
+///
+/// Kept under a name that says what it omits, because the omission is the whole story: spending a
+/// coinbase clears two gates, and this is the smaller one. See [`is_spendable_settled`]. A caller
+/// here is either spending a non-coinbase (where the two agree) or has not been audited yet, and
+/// the name is how the second kind stays findable.
+pub fn is_spendable_ignoring_settlement(
+    is_coinbase: bool,
+    block_daa_score: u64,
+    virtual_daa: u64,
+    coinbase_maturity: u64,
+) -> bool {
     if !is_coinbase {
         return true;
     }
     virtual_daa.saturating_sub(block_daa_score) >= coinbase_maturity
+}
+
+/// **Both gates, as the node applies them** (ADR-0018 coinbase settlement).
+///
+/// A coinbase output is spendable when it clears the classic maturity floor AND is settled: either
+/// older than `settlement_long_maturity_daa` — the fallback that guarantees nobody is frozen
+/// forever — or covered by a confirmed DNS anchor at or past its block.
+///
+/// A wallet that checks only the floor offers the user money the node will refuse. On testnet-11,
+/// where maturity is 1 and settlement is 600, that was every coinbase younger than 600 DAA: the
+/// UTXO list called 1542 outputs mature and the send was rejected for spending an immature one.
+/// The two numbers answer the same question and a wallet must ask with both.
+///
+/// `settlement_long_maturity_daa == 0` is the feature being off, and then this is the floor alone —
+/// the same thing `coinbase_spend_settled` does with `settlement: None`.
+pub fn is_spendable_settled(
+    is_coinbase: bool,
+    block_daa_score: u64,
+    virtual_daa: u64,
+    coinbase_maturity: u64,
+    settlement_long_maturity_daa: u64,
+    confirmed_anchor_daa: Option<u64>,
+) -> bool {
+    if !is_coinbase {
+        return true;
+    }
+    let age = virtual_daa.saturating_sub(block_daa_score);
+    if age < coinbase_maturity || virtual_daa < block_daa_score {
+        return false;
+    }
+    if settlement_long_maturity_daa == 0 {
+        return true;
+    }
+    if age >= settlement_long_maturity_daa {
+        return true;
+    }
+    confirmed_anchor_daa.is_some_and(|anchor| anchor >= block_daa_score)
 }
 
 /// Choose the funding input for the next attestation tx. Prefers the local funding-chain head (our
@@ -2732,5 +2784,49 @@ mod tests {
         a.record_and_flush(signed_record(1, 0x11)).unwrap();
         // Validator B must refuse to use A's file rather than clobber it.
         assert!(SignedEpochStore::load_or_empty(path, Hash64::from_bytes([0x0bu8; 64]), outpoint).is_err());
+    }
+}
+
+#[cfg(test)]
+mod coinbase_settlement_tests {
+    use super::*;
+
+    /// **The wallet's rule and the node's rule are one rule.**
+    ///
+    /// testnet-11's own numbers: maturity 1, settlement 600. A coinbase 256 DAA old clears the
+    /// floor and is NOT settled, which is precisely the case the wallet used to call spendable and
+    /// the node refused.
+    #[test]
+    fn a_matured_coinbase_is_not_yet_a_settled_one() {
+        let (maturity, settlement) = (1, 600);
+        assert!(
+            is_spendable_ignoring_settlement(true, 1_446, 1_702, maturity),
+            "the floor alone says yes — this is the answer that was wrong"
+        );
+        assert!(
+            !is_spendable_settled(true, 1_446, 1_702, maturity, settlement, None),
+            "and both gates say no, which is what the node said"
+        );
+    }
+
+    /// The long fallback: nobody is frozen forever.
+    #[test]
+    fn past_the_long_maturity_a_coinbase_settles_without_an_anchor() {
+        assert!(is_spendable_settled(true, 1_000, 1_600, 1, 600, None));
+    }
+
+    /// Acceleration: a confirmed anchor at or past the coinbase's block settles it early.
+    #[test]
+    fn a_confirmed_anchor_settles_a_young_coinbase() {
+        assert!(is_spendable_settled(true, 1_446, 1_702, 1, 600, Some(1_446)), "anchor exactly at the block");
+        assert!(!is_spendable_settled(true, 1_446, 1_702, 1, 600, Some(1_445)), "one short of it is not");
+    }
+
+    /// A non-coinbase never touches either gate, and settlement being off leaves the floor alone.
+    #[test]
+    fn the_gates_apply_where_they_are_meant_to() {
+        assert!(is_spendable_settled(false, 1_700, 1_701, 600, 600, None), "a normal output is spendable at once");
+        assert!(is_spendable_settled(true, 1_700, 1_701, 1, 0, None), "settlement off is the floor alone");
+        assert!(!is_spendable_settled(true, 1_700, 1_701, 600, 0, None), "and the floor still applies");
     }
 }

@@ -17,7 +17,7 @@ use kaspa_consensus_core::config::params::Params;
 use kaspa_consensus_core::mass::MassCalculator;
 use kaspa_consensus_core::network::{EndpointKind, NetworkId};
 use kaspa_consensus_core::tx::{TransactionOutpoint, UtxoEntry};
-use kaspa_pq_validator_core::{ValidatorKey, is_spendable, relay_fee_for_compute_mass};
+use kaspa_pq_validator_core::{ValidatorKey, is_spendable_settled, relay_fee_for_compute_mass};
 use kaspa_rpc_core::{RpcTransaction, api::rpc::RpcApi};
 use kaspa_txscript::pay_to_address_script;
 use kaspa_wrpc_client::{
@@ -44,6 +44,12 @@ struct NodeView {
     params: Params,
     virtual_daa: u64,
     coinbase_maturity: u64,
+    /// **The second gate on a coinbase spend** (ADR-0018), which the maturity floor is not.
+    ///
+    /// A wallet that checks only `coinbase_maturity` offers money the node refuses: on testnet-11
+    /// the floor is 1 and this is 600, so every coinbase younger than 600 DAA read as spendable
+    /// and the send was rejected for spending an immature UTXO. `0` is the feature off.
+    settlement_long_maturity_daa: u64,
 }
 
 async fn connect(ctx: &Ctx) -> Result<NodeView, CliError> {
@@ -78,7 +84,8 @@ async fn connect(ctx: &Ctx) -> Result<NodeView, CliError> {
     }
     let params = Params::from(server.network_id);
     let coinbase_maturity = params.coinbase_maturity();
-    Ok(NodeView { client, params, virtual_daa: server.virtual_daa_score, coinbase_maturity })
+    let settlement_long_maturity_daa = params.dns_params.as_ref().map_or(0, |d| d.coinbase_settlement_long_maturity_daa);
+    Ok(NodeView { client, params, virtual_daa: server.virtual_daa_score, coinbase_maturity, settlement_long_maturity_daa })
 }
 
 /// Page the ENTIRE UTXO set of `address` (op 160, ≤1000/page) — never the
@@ -94,7 +101,18 @@ async fn page_all(nv: &NodeView, address: &Address) -> Result<Vec<Funding>, CliE
             .map_err(|e| CliError::new(exit::GENERIC, format!("getUtxosByAddressPage: {e}")))?;
         for e in resp.entries {
             let amount = e.utxo_entry.amount;
-            let mature = is_spendable(e.utxo_entry.is_coinbase, e.utxo_entry.block_daa_score, nv.virtual_daa, nv.coinbase_maturity);
+            // Both gates, as the node applies them. The confirmed anchor is not exposed over RPC,
+            // so `None` is passed: that only ever makes this stricter than the node, which is the
+            // safe direction for a wallet — it may hold back a spendable output, never offer an
+            // unspendable one.
+            let mature = is_spendable_settled(
+                e.utxo_entry.is_coinbase,
+                e.utxo_entry.block_daa_score,
+                nv.virtual_daa,
+                nv.coinbase_maturity,
+                nv.settlement_long_maturity_daa,
+                None,
+            );
             out.push(Funding { outpoint: e.outpoint.into(), entry: e.utxo_entry.into(), mature, amount });
         }
         if resp.next_cursor.is_empty() {
@@ -171,7 +189,13 @@ pub async fn utxo_list(ctx: &Ctx, address: Option<&str>, ks: &KeySource) -> CliR
             println!("Address      : {addr}");
             println!("UTXOs total  : {}", utxos.len());
             println!("  mature     : {mature_n}  ({} MSK)", sompi_to_msk(mature_sum));
-            println!("  immature   : {imm_n}  ({} MSK)  [coinbase < {} blocks]", sompi_to_msk(imm_sum), nv.coinbase_maturity);
+            println!(
+                "  immature   : {imm_n}  ({} MSK)  [coinbase younger than {} DAA: maturity {} + settlement {}]",
+                sompi_to_msk(imm_sum),
+                nv.coinbase_maturity.max(nv.settlement_long_maturity_daa),
+                nv.coinbase_maturity,
+                nv.settlement_long_maturity_daa
+            );
             if utxos.len() > MAX_INPUTS_PER_TX {
                 println!();
                 println!(
