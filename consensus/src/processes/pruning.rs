@@ -1,3 +1,4 @@
+use kaspa_core::warn;
 use std::{collections::VecDeque, sync::Arc};
 
 use crate::model::{
@@ -192,7 +193,38 @@ impl<
         let mut deque = VecDeque::with_capacity(self.pruning_samples_steps as usize);
         // At this point we have verified that sink_pruning_point is a chain block above current_pruning_point
         // (by comparing blue score) so we know the loop must eventually exit correctly
+        //
+        // **Bounded, because "must eventually exit" is a proof about a healthy sample chain and
+        // this loop allocates on every step of an unhealthy one.** The blue-score checks above
+        // establish that `current_pruning_point` is BELOW `sink_pruning_point`; they do not
+        // establish that it is REACHABLE by following `pruning_sample_from_pov`. When it is not —
+        // a sample chain that skips it, or one that cycles — the condition never holds, and
+        // `push_front` runs until the process dies.
+        //
+        // Measured on testnet-11: a node sat flat at 1.4 GB for hours and then took 8.4 GB in a
+        // single minute, reaching ~19 GB and being OOM-killed, every four to six hours, on both
+        // nodes of the fleet. All of it anonymous heap, always immediately after a pruning attempt.
+        // Nothing logged, because nothing here has anything to say.
+        //
+        // The bound is generous — the deque's own capacity hint is `pruning_samples_steps`, so a
+        // walk a thousand times longer than the author's expectation is already pathological. On
+        // any chain where the walk terminates as designed this changes nothing.
+        let max_steps = (self.pruning_samples_steps as usize).saturating_mul(1000).max(1 << 16);
+        let mut steps = 0usize;
         while current != current_pruning_point {
+            if steps >= max_steps {
+                // Returning empty means "do not advance the pruning point this round", which is
+                // exactly what the caller does with an unusable answer anyway. Loudly, because a
+                // sample chain that cannot reach the pruning point is a real defect in this node's
+                // stores and it will not fix itself.
+                warn!(
+                    "pruning sample walk from {sink_pruning_point} did not reach the current pruning point \
+                     {current_pruning_point} in {max_steps} steps — abandoning this round rather than \
+                     allocating without bound. This node's pruning samples are inconsistent; resync if it repeats."
+                );
+                return vec![];
+            }
+            steps += 1;
             deque.push_front(current);
             current = self.pruning_samples_store.pruning_sample_from_pov(current).unwrap();
         }
