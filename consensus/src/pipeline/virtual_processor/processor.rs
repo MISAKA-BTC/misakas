@@ -129,7 +129,7 @@ use kaspa_consensus_notify::{
     root::ConsensusNotificationRoot,
 };
 use kaspa_consensusmanager::SessionLock;
-use kaspa_core::{debug, info, time::unix_now, trace, warn};
+use kaspa_core::{debug, error, info, time::unix_now, trace, warn};
 use kaspa_database::prelude::{StoreError, StoreResultExt, StoreResultUnitExt};
 use kaspa_hashes::ZERO_HASH64;
 use kaspa_muhash::MuHash;
@@ -4902,7 +4902,26 @@ impl VirtualStateProcessor {
     pub(super) fn accepted_txs_from_acceptance_data(&self, acceptance_data: &AcceptanceData) -> Vec<Transaction> {
         let mut txs = Vec::new();
         for mergeset in acceptance_data.iter() {
-            let block_txs = self.block_transactions_store.get(mergeset.block_hash).unwrap();
+            // **A missing entry stops this node, not this walk.** `unwrap()` here turned an absent
+            // `BlockTransactions` row into a process abort, and on testnet-11 it did: one block
+            // whose transactions the store did not hold crashed the chain's only producer 48 times
+            // in a row, deterministically, surviving a datadir wipe because the node re-derived the
+            // same reference on every start. A node that cannot read one block's transactions has
+            // an incomplete store; that is worth an ERROR an operator can act on, and it is not
+            // worth halting a network over.
+            //
+            // The inner loop already tolerates a missing INDEX (`if let Some`), so tolerating a
+            // missing BLOCK is the same posture one level out. On a store that holds the row -- every
+            // healthy node -- this is byte-for-byte what it did before.
+            let Ok(block_txs) = self.block_transactions_store.get(mergeset.block_hash) else {
+                error!(
+                    "acceptance data references block {} whose transactions this node does not hold — \
+                     skipping it. This node's store is incomplete and its derived PALW objects may \
+                     differ from a node that holds it; resync if this repeats.",
+                    mergeset.block_hash
+                );
+                continue;
+            };
             for entry in mergeset.accepted_transactions.iter() {
                 if let Some(tx) = block_txs.get(entry.index_within_block as usize) {
                     txs.push(tx.clone());
