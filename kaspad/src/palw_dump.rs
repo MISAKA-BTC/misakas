@@ -36,12 +36,21 @@ impl PalwDumpService {
             if session.async_is_consensus_in_transitional_ibd_state().await {
                 continue;
             }
+            // **Refuse to answer from genesis.** The first version of this read the class table
+            // before the virtual state was up and printed "1 class ... at daa 0" -- true of the
+            // genesis state and worthless as an answer about the tip. A diagnostic that can report
+            // the wrong epoch without saying so is the exact fault it was written to find.
+            let daa = session.get_virtual_daa_score();
+            if daa == 0 {
+                trace!("[{PALW_DUMP}] virtual daa is still 0 — waiting for the tip rather than answering from genesis");
+                continue;
+            }
             let rows = session.palw_v2_class_table();
             if rows.is_empty() {
                 warn!("[{PALW_DUMP}] this chain holds no PALW classes, or is not a ConsensusV2 network");
                 return;
             }
-            info!("[{PALW_DUMP}] {} class(es) at daa {}", rows.len(), session.get_virtual_daa_score());
+            info!("[{PALW_DUMP}] {} class(es) at daa {}", rows.len(), daa);
             for row in rows {
                 info!(
                     "[{PALW_DUMP}]   class={} base={} status={} share={} budget={}",

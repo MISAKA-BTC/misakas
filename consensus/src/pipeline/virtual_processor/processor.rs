@@ -3780,7 +3780,11 @@ impl VirtualStateProcessor {
     pub fn palw_v2_class_table_impl(&self) -> Vec<kaspa_consensus_core::palw_state_v2::PalwClassRowV2> {
         let Some(state_params) = self.palw_state_params_v2.as_ref() else { return Vec::new() };
         let Ok(Some((_, state))) = self.palw_state_v2_store.read().load_tip(state_params) else { return Vec::new() };
-        let epoch_index = self.virtual_stores.read().state.get().map(|v| v.daa_score).unwrap_or(0) / state_params.epoch_length();
+        // The PALW state's own last point, not the virtual store's: the two can disagree while a
+        // node is coming up, and reading the store's default of 0 answers about genesis while
+        // looking like an answer about now.
+        let daa = state.last_point().map(|p| p.daa_score).unwrap_or(0);
+        let epoch_index = daa / state_params.epoch_length();
         let budgets = state.epoch_budgets().filter(|b| b.epoch_index == epoch_index);
         state
             .classes_iter()
