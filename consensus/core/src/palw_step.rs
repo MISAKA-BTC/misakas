@@ -391,6 +391,20 @@ pub struct PalwShapeProfileV3 {
     /// inside `shape_profile_id` by construction — the id is a digest of this struct's Borsh bytes
     /// — so a class cannot change its epsilon without changing its identity.
     pub base0_rms_eps_q: i64,
+    /// **Which LOGITS commitment this class's producers make — the scheme is the CLASS's, not the
+    /// job's.** [`crate::palw_step_refute::flat_logits_scheme_id_v1`] commits every row whole (a
+    /// decode-token close then carries `decode × vocab × 4` bytes); the tiled id commits per-row
+    /// tile trees (a close carries two tiles and their paths). Nothing per-attempt declares a
+    /// scheme: this field decides which close arm can adjudicate the class, which price
+    /// `derive_court_cost_v1` charges, and which recomputation a seat runs — and it sits inside
+    /// `shape_profile_id`, so a class cannot change its commitment without changing its identity.
+    ///
+    /// Without it the two prices were unbound to anything: a class could be ADMITTED at the tiled
+    /// close cost and then commit flat, and every decode-token dispute against it would exceed
+    /// the carrier ceiling — rejected but unslashed, unfalsifiable work (the "attacker picks the
+    /// job length" rule with the scheme substituted for the length; found on the tiled scheme's
+    /// first review).
+    pub logits_scheme_id: Hash64,
     pub gdn_heads: u16,
     pub gdn_head_k_dim: u32,
     pub gdn_head_v_dim: u32,
@@ -465,6 +479,12 @@ impl PalwShapeProfileV3 {
         }
         if self.hidden_dim == 0 || self.vocab_size == 0 {
             return Err(bad("zero geometry dimension"));
+        }
+        if self.logits_scheme_id == Hash64::default() {
+            // Unset is not a scheme. Which SCHEMES a build can serve is the admission gate's
+            // question; that the class states one is a well-formedness fact, checked here so a
+            // hand-built profile cannot reach any consumer without having decided.
+            return Err(bad("the class declares no logits commitment scheme"));
         }
         if self.flash_attn_disabled != 1 {
             return Err(bad("flash attention must be pinned disabled (ADR-0030 Fact 7)"));
@@ -1050,6 +1070,7 @@ mod tests {
             rope_freq_base_bits: 0x4CBE_BC20, // 1e8f — a bit pattern, never a float
             rms_eps_bits: 0x358637BD,
             base0_rms_eps_q: 1 << 8,
+            logits_scheme_id: crate::palw_step_refute::flat_logits_scheme_id_v1(),
             l2_eps_bits: 0x358637BD,
             gdn_heads: 2,
             gdn_head_k_dim: 4,
@@ -1231,8 +1252,13 @@ mod tests {
             // Re-frozen once more the same day: the profile gained `lane`. A class that commits
             // int32 codes and one that commits f32 are not the same class, and both the leg
             // builder and the adjudicator read the field — so it belongs inside the identity.
-            "24a01c7f90b50beab4ba53d4032119d494f5bebc671c75d271723de634f6fcbe\
-             f98c86768d86d0039e3286f7a297d27a46cbbc4fb3ac5fd9dd682552ecf0845a"
+            //
+            // Re-frozen 2026-08-26: the profile gained `logits_scheme_id`. A class that commits
+            // whole logits rows and one that commits per-row tile trees make different promises
+            // to the court — the close arm, the cost derivation and the seat recomputation all
+            // dispatch on it — so it belongs inside the identity for the same reason `lane` does.
+            "94480f58348a4433b5f210a560a0cf73050ab19d3ecb11cc31e1b08b6c76a006\
+             9d54d35169be54004f180a32f6c97463512b307856d9312905333814296ae03a"
         );
     }
 

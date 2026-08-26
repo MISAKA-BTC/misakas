@@ -243,6 +243,15 @@ pub enum PalwCourtVerdictProofV2 {
         pin: crate::palw_step_refute::PalwBase0DecodeTokensV1,
         position: u32,
     },
+    /// The same terminal for a class whose profile registers the TILED logits commitment
+    /// (`tiled_logits_scheme_id_v1`): the pin carries two tile openings and their paths instead
+    /// of every row, which is what lets a 248,320-lane vocabulary's close ride one lifecycle
+    /// carrier. The VARIANT does not choose the scheme — the class's `logits_scheme_id` does, and
+    /// each check function refuses a pin that does not speak the class's scheme.
+    DecodeTokenTiled {
+        binding: crate::palw_step_leg::PalwStepBindingV2,
+        pin: crate::palw_step_refute::PalwTiledDecodePinV1,
+    },
 }
 
 /// **Who may post a rung, and under whose key (P0-9's forgery half).**
@@ -445,6 +454,13 @@ pub fn adjudicate_close_proof_v2(
             check_execution_root_binding(claim.execution_root, binding.committed_execution_root)?;
             map_refutation_outcome(crate::palw_step_refute::check_base0_decode_token_refutation_v1(binding, pin, *position))
         }
+        PalwCourtVerdictProofV2::DecodeTokenTiled { binding, pin } => {
+            // The same two pins, the same reason; the scheme gate inside the check refuses a
+            // tiled pin against a class that registered the flat commitment.
+            check_arithmetic_close_binding(claim.trace_root, binding_logits_root_of(binding))?;
+            check_execution_root_binding(claim.execution_root, binding.committed_execution_root)?;
+            map_refutation_outcome(crate::palw_step_refute::check_tiled_decode_token_refutation_v1(binding, pin))
+        }
     }
 }
 
@@ -473,6 +489,20 @@ pub fn check_close_cost_v2(
                 .iter()
                 .map(|row| row.len() as u64 * 4)
                 .fold(pin.generated_token_ids.len() as u64 * 4, |a, b| a.saturating_add(b));
+            if bytes > court.max_opening_bytes() {
+                return Err(PalwCourtV2Error::OpeningTooLarge { got: bytes, ceiling: court.max_opening_bytes() });
+            }
+            return Ok(());
+        }
+        PalwCourtVerdictProofV2::DecodeTokenTiled { pin, .. } => {
+            // Two tiles, three paths and the ids — the payload the tiled scheme exists to bound.
+            let bytes: u64 = (pin.committed_tile_lanes.len() as u64 * 4)
+                .saturating_add(pin.beat_tile_lanes.len() as u64 * 4)
+                .saturating_add(
+                    (pin.committed_opening.siblings.len() + pin.beat_opening.siblings.len() + pin.row_opening.siblings.len()) as u64
+                        * 64,
+                )
+                .saturating_add(pin.generated_token_ids.len() as u64 * 4);
             if bytes > court.max_opening_bytes() {
                 return Err(PalwCourtV2Error::OpeningTooLarge { got: bytes, ceiling: court.max_opening_bytes() });
             }

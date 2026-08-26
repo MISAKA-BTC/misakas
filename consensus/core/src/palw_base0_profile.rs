@@ -497,6 +497,9 @@ pub fn base0_profile_v1(geometry: PalwBase0GeometryV1) -> Result<PalwShapeProfil
         rms_eps_bits: 0,
         l2_eps_bits: 0,
         base0_rms_eps_q: geometry.rms_eps_q,
+        // FLAT: the floor's vocabulary is small by construction, so whole rows are the cheaper
+        // close — and it is what `base0_execute_for_attempt_v1` has always committed.
+        logits_scheme_id: crate::palw_step_refute::flat_logits_scheme_id_v1(),
         gdn_heads: 0,
         gdn_head_k_dim: 0,
         gdn_head_v_dim: 0,

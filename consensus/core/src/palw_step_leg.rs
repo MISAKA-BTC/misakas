@@ -756,6 +756,15 @@ pub enum PalwStepFaultV1 {
     DecodeTokenMismatch {
         position: u32,
     } = 16,
+    /// **The committed job exceeds the class's registered context.** The class's every court cost
+    /// is derived over `profile.n_ctx`; a job whose footprint — `prefill + exact_decode − 1`
+    /// cached positions, the enumeration's own count from `step_leaf_count` — exceeds it is work
+    /// the ceilings were never derived over, and a close against it could exceed the carrier
+    /// while the claim stood unprosecutable. So the OVERSIZED COMMITMENT ITSELF is the fault,
+    /// convictable from the binding alone: the profile is authenticated against the committed
+    /// root, the job context is too, and the comparison is two integers (discriminants 0-16
+    /// unmoved).
+    JobExceedsClassContext = 17,
 }
 
 impl PalwStepFaultV1 {
@@ -778,6 +787,7 @@ impl PalwStepFaultV1 {
             PalwStepFaultV1::CheckpointChainBroken => (14, 0),
             PalwStepFaultV1::ComputationMismatch { value_index } => (15, value_index),
             PalwStepFaultV1::DecodeTokenMismatch { position } => (16, position),
+            PalwStepFaultV1::JobExceedsClassContext => (17, 0),
         }
     }
 }
@@ -925,6 +935,16 @@ pub fn check_step_refutation_v1(refutation: &PalwStepRefutationV1) -> Result<Pal
         }
         if binding.checkpoint_profile.validate_shape().is_err() {
             return Some(PalwStepFaultV1::ShapeProfileNotCanonical);
+        }
+        // The class-context bound, in the enumeration's own form — AFTER the profile's own
+        // validation (an ill-formed profile is its own fault and its n_ctx means nothing), BEFORE
+        // the counting walks the enumeration the bound exists to cap, so an oversized job
+        // convicts as WHAT IT IS rather than as whatever its leaf count happens to disagree with.
+        let footprint = (binding.job_context.declared_prefill_tokens as u64)
+            .saturating_add(binding.job_context.exact_decode_tokens.max(1) as u64)
+            .saturating_sub(1);
+        if footprint > binding.shape_profile.n_ctx as u64 {
+            return Some(PalwStepFaultV1::JobExceedsClassContext);
         }
         match step_leaf_count(&binding.shape_profile, &binding.job_context) {
             Ok(count) if count == binding.step_leaf_count => {}
@@ -1212,6 +1232,7 @@ mod tests {
             rope_freq_base_bits: 0x4CBE_BC20,
             rms_eps_bits: 0x358637BD,
             base0_rms_eps_q: 1 << 8,
+            logits_scheme_id: crate::palw_step_refute::flat_logits_scheme_id_v1(),
             l2_eps_bits: 0x358637BD,
             gdn_heads: 2,
             gdn_head_k_dim: 4,
@@ -1439,8 +1460,14 @@ mod tests {
             // `weight_dtype` became a per-layer list. See `palw_step`'s golden for why the single
             // byte could not describe the pinned model.
             // …and again for `lane` (see `palw_step`'s golden).
-            "0f491307719b0ade811690bba39ec44d99248e6c2d7876fad1e3959d05bbef2c\
-             8f87ce59a41b4c7f4c880661daf8854b86163a0f1a1bff733c982b29c234d07b"
+            //
+            // Re-frozen 2026-08-26: the profile gained `logits_scheme_id` — the class's logits
+            // commitment became part of its identity, so every id downstream of the profile moved
+            // with it. Deliberate and network-wide (the RC re-mint the ADR-0053 state bump already
+            // forces); a class that could change its commitment scheme without changing identity
+            // was the fail-open the field exists to close.
+            "b339774009255779d6aeb3c5b6e5a8c70ef1259cc64db6630679a92562a64e34\
+             a7a573fd2ff939ea0098b0fec2ed11dfa06925246c3ab05935f05d0a4da44414"
         );
     }
 
@@ -1633,6 +1660,57 @@ mod tests {
         alien.committed_execution_root = h64(0xDD);
         let r = PalwStepRefutationV1 { binding: alien, evidence: PalwStepEvidenceV1::Shape };
         assert_eq!(check_step_refutation_v1(&r), Err(PalwStepLegError::CommittedRootMismatch));
+    }
+
+    /// **An oversized committed job convicts from the binding alone.** The producer commits a
+    /// job whose footprint exceeds the class's registered context, self-consistently — the
+    /// binding recomputes its own root — and the court's answer is the fault BY NAME, before any
+    /// enumeration of the oversized space runs. An honest binding at the class's own bound stays
+    /// honest, so the rule separates rather than merely refuses.
+    #[test]
+    fn a_job_past_the_registered_context_convicts_by_name() {
+        let (binding, _m, _h, _l) = honest();
+        // The honest fixture is inside its bound and clears the shape sweep.
+        let r = PalwStepRefutationV1 { binding: binding.clone(), evidence: PalwStepEvidenceV1::Shape };
+        assert!(
+            matches!(check_step_refutation_v1(&r), Err(PalwStepLegError::NoFaultFound)),
+            "the honest job is inside the class's context"
+        );
+
+        // A producer commits — self-consistently — a job past the class's bound. The profile is
+        // untouched (it is the CLASS's, authenticated by id); the JOB is the lie.
+        let mut oversized = binding.clone();
+        oversized.job_context.declared_prefill_tokens = oversized.shape_profile.n_ctx + 5;
+        // The job's OWN budget field is producer-declared, so the liar declares a bigger one —
+        // which is exactly the leak: nothing bound `max_context_tokens` to the class until now.
+        oversized.job_context.max_context_tokens = oversized.shape_profile.n_ctx * 4;
+        // Its committed root is recomputed over the lying context, exactly as a fraudulent
+        // producer would commit it — the fault is inside the commitment, not beside it.
+        let ctx_hash = oversized.job_context.context_hash();
+        let profile_hash = oversized.shape_profile.shape_profile_id();
+        let decode_calls = oversized.job_context.exact_decode_tokens.saturating_sub(1);
+        let step_root = step_leg_root_v1(&ctx_hash, &profile_hash, oversized.step_leaf_count, &oversized.step_merkle_root);
+        let ckpt_root = checkpoint_leg_root_v2(
+            &ctx_hash,
+            &oversized.checkpoint_profile.profile_hash(),
+            &oversized.state_chunk_map_id,
+            decode_calls,
+            oversized.checkpoint_count,
+            &oversized.checkpoint_merkle_root,
+        );
+        oversized.committed_execution_root = execution_commitment_root_v2(
+            &ctx_hash,
+            &oversized.full_logits_trace_root,
+            &oversized.activation_leg_root,
+            &ckpt_root,
+            &step_root,
+        );
+        let r = PalwStepRefutationV1 { binding: oversized, evidence: PalwStepEvidenceV1::Shape };
+        assert_eq!(
+            check_step_refutation_v1(&r).expect("the oversized commitment is the fault").fault,
+            PalwStepFaultV1::JobExceedsClassContext,
+            "convicted as WHAT IT IS, not as whatever its leaf count disagrees with"
+        );
     }
 
     #[test]

@@ -4624,7 +4624,13 @@ mod consensus_params_id_tests {
             // lost `terms`, taking `PALW_STATE_V2_VERSION` from 7 to 8. Testnet-11 is the only
             // preset that moves because it is the only one carrying a PALW V2 bundle. Same
             // handshake consequence as above, and the same remedy: everyone upgrades together.
-            ("testnet-11", TESTNET11_PARAMS, "a1284a00a45e7c1f34ece66bc34567663ea0d43a7423a505274d16faae982cbc"),
+            // Moved 2026-08-26 (again, same day): `PalwShapeProfileV3` gained `logits_scheme_id`
+            // — the class's logits commitment became part of its identity — so the floor's class
+            // id, the catalog root and this fingerprint all moved together. The scheme binding is
+            // what stops a class admitted at the tiled close price from committing flat
+            // (unprosecutable work); a coordinated upgrade, riding the re-mint the ADR-0053 state
+            // bump already forces.
+            ("testnet-11", TESTNET11_PARAMS, "edc8202bf95ee5e8faabb8726aaf68cbb106a04f6f86a154b1f406b15e91badd"),
             ("simnet", SIMNET_PARAMS, "135e88c69a659d3cf4b5ce8275953c7597b2c67b03d2a74b3d0696c5d0b703fa"),
             ("devnet", DEVNET_PARAMS, "42cc6be92506a14654cb676184e1416796dec682b15e93cb9c639e8e0d77efa5"),
         ]

@@ -275,6 +275,37 @@ pub fn verify_class_admission_v2(
         return Err(PalwClassAdmissionError::ClassIdIsNotTheProfileId { declared: *class_id, derived: derived_id });
     }
 
+    // **The logits scheme must be one THIS BUILD adjudicates and prices.** `validate_shape` only
+    // required the class to state one — well-formedness — but a scheme the close arms cannot
+    // dispatch is a class whose every decode-token dispute ends unadjudicated, which is the same
+    // fail-open A4 refuses for kernels. Enumerated here rather than in `validate_shape` because
+    // "which schemes exist" is a property of the adjudicator, exactly like the kernel catalog.
+    let known_schemes =
+        [crate::palw_step_refute::flat_logits_scheme_id_v1(), crate::palw_step_refute::tiled_logits_scheme_id_v1()];
+    if !known_schemes.contains(&profile.logits_scheme_id) {
+        return Err(PalwClassAdmissionError::Profile(format!(
+            "the class commits its logits under scheme {}, which this build cannot adjudicate",
+            profile.logits_scheme_id
+        )));
+    }
+
+    // **The canonical job must fit the context the class registered — in the ENUMERATION's own
+    // form.** The step space's largest cached-position count is `prefill + exact_decode − 1`
+    // (`step_leaf_count`: prefill runs kv_len = p+1 for p < prefill, decode call c runs
+    // kv_len = prefill + c with decode_calls = exact_decode − 1), and `n_ctx` is the bound every
+    // court cost is derived over. NOT `prefill + decode <= n_ctx`: that form is one stricter and
+    // would refuse the floor's own declared worst case, (11, 2) at n_ctx 12 — footprint exactly
+    // 12 under the enumeration, span 13 under the stricter reading. Two hand-written descriptions
+    // of one computation is the defect class this file keeps recording.
+    let footprint =
+        (canonical.declared_prefill_tokens as u64).saturating_add(canonical.exact_decode_tokens.max(1) as u64).saturating_sub(1);
+    if footprint > profile.n_ctx as u64 {
+        return Err(PalwClassAdmissionError::Profile(format!(
+            "the canonical job touches {footprint} cached positions and the class registers n_ctx {}",
+            profile.n_ctx
+        )));
+    }
+
     // A4 first: a class whose disputes cannot be adjudicated must not reach any later check, so
     // that a coverage gap can never be reported as some more specific failure.
     let kernel_ids = reachable_kernels_v1(profile);
@@ -491,6 +522,52 @@ mod tests {
             activation_daa: 0,
             admission: None,
         }
+    }
+
+    /// **The scheme is class law and the gate enforces both halves of it.** A scheme this build
+    /// cannot adjudicate is refused (the kernel-catalog rule, applied to the logits commitment);
+    /// and the two shipped schemes are ADMITTED, so the gate separates rather than merely refuses.
+    #[test]
+    fn a_scheme_this_build_cannot_adjudicate_is_refused() {
+        let mut profile = qwen_admissible();
+        let canonical = context(&profile, 8, 4);
+        let counted = step_leaf_count(&profile, &canonical).expect("counts");
+        let bundle = bundle_that_pays_for_qwen();
+        // Known schemes pass this gate (the flat default is the fixture's own).
+        verify_class_admission_v2(&bundle, &profile, &canonical, &registration(profile.shape_profile_id(), counted))
+            .expect("the flat scheme is adjudicable");
+        // An invented scheme is refused BY the scheme gate, not downstream.
+        profile.logits_scheme_id = Hash64::from_u64_word(0xDEAD_5C11E);
+        let counted = step_leaf_count(&profile, &canonical).expect("counts");
+        let err = verify_class_admission_v2(&bundle, &profile, &canonical, &registration(profile.shape_profile_id(), counted))
+            .expect_err("a scheme nothing can adjudicate must not admit");
+        assert!(format!("{err}").contains("cannot adjudicate"), "got {err}");
+    }
+
+    /// **The canonical job must fit the registered context — in the ENUMERATION's form.** The
+    /// footprint is `prefill + exact_decode − 1` cached positions, so a job that touches exactly
+    /// `n_ctx` positions is admissible and one position more is refused; the stricter
+    /// `prefill + decode <= n_ctx` reading would refuse the boundary case, which is the floor's
+    /// own declared worst shape.
+    #[test]
+    fn the_canonical_job_is_bounded_by_the_registered_context_in_the_enumerations_form() {
+        // A context small enough that the probe is refused by THIS gate and not by the global
+        // leaf cap — the fixture's own 4096 sits at the ladder's edge, where an oversized job
+        // trips `TooManyLeaves` before the span rule can be the answer.
+        let mut profile = qwen_admissible();
+        profile.n_ctx = 64;
+        let bundle = bundle_that_pays_for_qwen();
+        // Exactly at the bound: footprint = 63 + 2 − 1 = 64 = n_ctx. Admissible.
+        let at_bound = context(&profile, 63, 2);
+        let counted = step_leaf_count(&profile, &at_bound).expect("the boundary job counts");
+        verify_class_admission_v2(&bundle, &profile, &at_bound, &registration(profile.shape_profile_id(), counted))
+            .expect("a job whose footprint is exactly n_ctx is the declared worst case, not a violation");
+        // One past it: refused by the span gate, by name.
+        let past = context(&profile, 64, 2);
+        let counted = step_leaf_count(&profile, &past).expect("still enumerable — the violation is the class's bound, not the ladder's");
+        let err = verify_class_admission_v2(&bundle, &profile, &past, &registration(profile.shape_profile_id(), counted))
+            .expect_err("a canonical job past the registered context prices work the class never bounded");
+        assert!(format!("{err}").contains("cached positions"), "got {err}");
     }
 
     /// **The plan's load-bearing claim, as a test.** A Qwen-scale BASE-0 class passes every gate a

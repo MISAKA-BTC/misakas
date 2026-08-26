@@ -1739,6 +1739,11 @@ pub fn check_tiled_decode_token_refutation_v1(
     pin: &PalwTiledDecodePinV1,
 ) -> Result<crate::palw_step_leg::PalwStepRefutationVerdictV1, PalwStepRefuteError> {
     let bad = PalwStepRefuteError::InputSetNotCanonical;
+    // The mirror of the flat arm's rule: this arm adjudicates only the class that registered the
+    // tiled commitment.
+    if binding.shape_profile.logits_scheme_id != tiled_logits_scheme_id_v1() {
+        return Err(bad("this class does not commit tiled logits — the tiled pin is not its scheme"));
+    }
     let ctx = &binding.job_context;
     let decode = ctx.exact_decode_tokens as usize;
     let vocab = binding.shape_profile.vocab_size as usize;
@@ -1855,6 +1860,13 @@ pub fn base0_decode_token_select_v1(values: &[i32]) -> usize {
 /// challenger that alters one lane gets a different root and is refused before a single id is
 /// read.
 fn check_base0_decode_pin(binding: &PalwStepBindingV2, pin: &PalwBase0DecodeTokensV1) -> Result<(), PalwStepRefuteError> {
+    // **This arm speaks the FLAT scheme, and only for a class that registered it.** The scheme is
+    // the class's (`shape_profile.logits_scheme_id`, inside the class id), so a flat pin against a
+    // tiled class is malformed evidence whatever it authenticates: the court adjudicating it would
+    // be pricing and checking a commitment the class never promised.
+    if binding.shape_profile.logits_scheme_id != flat_logits_scheme_id_v1() {
+        return Err(PalwStepRefuteError::InputSetNotCanonical("this class does not commit whole logits rows — the flat pin is not its scheme"));
+    }
     let decode = binding.job_context.exact_decode_tokens as usize;
     if pin.logits_rows.len() != decode {
         return Err(PalwStepRefuteError::InputSetNotCanonical("the pin's row count is not the context's decode count"));
@@ -2931,6 +2943,7 @@ pub(crate) mod tests {
             rope_freq_base_bits: 0x4CBE_BC20,
             rms_eps_bits: 0x3583_37BD,
             base0_rms_eps_q: 1 << 8,
+            logits_scheme_id: crate::palw_step_refute::flat_logits_scheme_id_v1(),
             l2_eps_bits: 0x3583_37BD,
             gdn_heads: 2,
             gdn_head_k_dim: 16,
@@ -3934,6 +3947,9 @@ pub(crate) mod tests {
         let vocab = 10_000usize;
         let decode = binding.job_context.exact_decode_tokens as usize;
         binding.shape_profile.vocab_size = vocab as u32;
+        // A class that COMMITS tiled: the fixture registers flat, and the arm now refuses a pin
+        // whose scheme is not the class's.
+        binding.shape_profile.logits_scheme_id = tiled_logits_scheme_id_v1();
         let logits_rows: Vec<Vec<i32>> =
             (0..decode).map(|c| (0..vocab).map(|i| ((c * 131 + i * 7919) % 65_536) as i32 - 32_768).collect()).collect();
         let generated: Vec<u32> = logits_rows.iter().map(|r| base0_decode_token_select_v1(r) as u32).collect();
@@ -3975,6 +3991,50 @@ pub(crate) mod tests {
         assert!(
             matches!(check_tiled_decode_token_refutation_v1(&binding, &bent), Err(PalwStepRefuteError::InputSetNotCanonical(_))),
             "a bent tile must be refused as evidence, never adjudicated"
+        );
+    }
+
+    /// **Neither close arm speaks the other class's scheme.** A flat pin against a tiled class
+    /// and a tiled pin against a flat class are both malformed EVIDENCE — refused before any
+    /// arithmetic, never adjudicated under rules the class did not register. This is the
+    /// per-dispute half of the scheme binding; the admission half refuses unknown schemes.
+    #[test]
+    fn a_pin_that_does_not_speak_the_class_scheme_is_refused() {
+        // Flat pin, tiled class — the class mutation made COHERENTLY: the job declares the new
+        // profile id and the root is recommitted, so the refusal below is the scheme gate's and
+        // not the binding verifier's (which runs first on this entry and would otherwise answer
+        // `ShapeProfileNotTheDeclaredOne` — about a different defect).
+        let (mut binding, _m, _r, pin) = base0_honest_decode_commitment();
+        binding.shape_profile.logits_scheme_id = tiled_logits_scheme_id_v1();
+        binding.job_context.shape_profile_id = binding.shape_profile.shape_profile_id();
+        binding.full_logits_trace_root = base0_logits_trace_root_v1(&binding.job_context, &pin.logits_rows, &pin.generated_token_ids);
+        rebind_committed_root(&mut binding);
+        let err = check_base0_decode_token_refutation_v1(&binding, &pin, 0)
+            .expect_err("a flat pin cannot adjudicate a tiled class");
+        assert!(
+            matches!(err, PalwStepRefuteError::InputSetNotCanonical(why) if why.contains("flat pin is not its scheme")),
+            "refused as evidence, by name"
+        );
+
+        // Tiled pin, flat class: the fixture's profile registers flat, and the tiled arm refuses
+        // before reading a single lane.
+        let (binding, _m2, _r2, _) = base0_honest_decode_commitment();
+        let hollow = PalwTiledDecodePinV1 {
+            position: 0,
+            generated_token_ids: vec![0; binding.job_context.exact_decode_tokens as usize],
+            row_root: Hash64::default(),
+            row_opening: crate::palw_step_leg::PalwStepOpeningV1 { leaf_index: 0, leaf_hash: Hash64::default(), siblings: vec![] },
+            committed_tile_lanes: vec![],
+            committed_opening: crate::palw_step_leg::PalwStepOpeningV1 { leaf_index: 0, leaf_hash: Hash64::default(), siblings: vec![] },
+            beat_tile_lanes: vec![],
+            beat_opening: crate::palw_step_leg::PalwStepOpeningV1 { leaf_index: 0, leaf_hash: Hash64::default(), siblings: vec![] },
+            beat_lane: 0,
+        };
+        let err = check_tiled_decode_token_refutation_v1(&binding, &hollow)
+            .expect_err("a tiled pin cannot adjudicate a flat class");
+        assert!(
+            matches!(err, PalwStepRefuteError::InputSetNotCanonical(why) if why.contains("tiled pin is not its scheme")),
+            "refused as evidence, by name — before its emptiness is even looked at"
         );
     }
 

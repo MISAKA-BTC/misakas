@@ -455,6 +455,9 @@ pub fn qwen36_profile_v1(g: PalwQwen36GeometryV1) -> Result<PalwShapeProfileV3, 
         rms_eps_bits: 0x3589_705F,
         l2_eps_bits: 0x3589_705F,
         base0_rms_eps_q: g.rms_eps_q,
+        // TILED — the scheme this class exists to prove out: at vocab 248,320 one flat row is
+        // 993 KB against the ~80 KiB carrier, and `Qwen36Backend` commits the tiled root.
+        logits_scheme_id: crate::palw_step_refute::tiled_logits_scheme_id_v1(),
         gdn_heads: g.gdn_v_heads,
         gdn_head_k_dim: g.gdn_head_dim,
         gdn_head_v_dim: g.gdn_head_dim,

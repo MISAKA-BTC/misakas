@@ -366,6 +366,11 @@ pub fn qwen25_profile_v1(geometry: PalwQwen25GeometryV1) -> Result<PalwShapeProf
         rms_eps_bits: 0,
         l2_eps_bits: 0,
         base0_rms_eps_q: geometry.rms_eps_q,
+        // FLAT, because that is what this class's executor commits TODAY — and stated honestly:
+        // at vocab 151,936 the flat close exceeds the carrier ceiling, so this class cannot pass
+        // the cost gate until its producer path moves to the tiled scheme. A profile that claimed
+        // tiled while the executor commits flat would admit a class whose every claim voids.
+        logits_scheme_id: crate::palw_step_refute::flat_logits_scheme_id_v1(),
         gdn_heads: 0,
         gdn_head_k_dim: 0,
         gdn_head_v_dim: 0,
