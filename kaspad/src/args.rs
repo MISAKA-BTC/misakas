@@ -255,7 +255,8 @@ pub struct Args {
     pub compute_worker: Option<String>,
     /// PALW v2 (Land stage): path to a `palw-agent` Unix socket to monitor. Observation only —
     /// health-probed and logged, feeding the capability handle nothing consensus-visible
-    /// consumes yet. The VLT compute role (v1) is untouched by it.
+    /// consumes yet. The VLT compute role (v1) is untouched by it. Served on Unix hosts only
+    /// (see `crate::palw_agent`); elsewhere it warns and the capability stays withdrawn.
     pub compute_endpoint: Option<String>,
     pub compute_work_dir: Option<String>,
     pub compute_prompt: Option<String>,
@@ -1028,7 +1029,9 @@ pub fn cli() -> Command {
                 .help(
                     "MISAKA PALW v2: path to a palw-agent Unix socket to health-monitor (Land stage: observation and \
                      capability state only; grants no reward, no work, no fork-choice weight, and does not replace \
-                     --compute-worker). The node runs validator-only regardless of the agent's state.",
+                     --compute-worker). The node runs validator-only regardless of the agent's state. Unix hosts \
+                     only — the agent protocol is AF_UNIX; on Windows the flag is accepted, logs one warning and \
+                     leaves compute capability withdrawn.",
                 ),
         )
         .arg(
