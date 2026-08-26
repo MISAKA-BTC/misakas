@@ -476,15 +476,24 @@ pub fn q36_l2_norm(x: &[i32]) -> Result<Vec<i32>, PalwQwen36OpError> {
 /// `history` is the channel-major window `[t−3, t−2, t−1, t]` — the caller keeps it, because the
 /// runtime's cache is the runtime's problem and an op that owned a buffer could not be replayed
 /// from an oracle.
-pub fn q36_ssm_conv(window: &[i32], taps: &[i32], channels: usize, params: A16QuantParams) -> Result<Vec<i32>, PalwQwen36OpError> {
+pub fn q36_ssm_conv(window: &[i32], taps: &[i32], channels: usize, params: &[A16QuantParams]) -> Result<Vec<i32>, PalwQwen36OpError> {
     if channels == 0 || window.len() != 4 * channels || taps.len() != 4 * channels {
         return Err(PalwQwen36OpError::LengthMismatch { a: window.len(), b: 4 * channels });
     }
+    if params.len() != channels {
+        return Err(PalwQwen36OpError::LengthMismatch { a: params.len(), b: channels });
+    }
     check_a16(window)?;
+    // **Q[`K`] out, and per channel.** The convolution's consumer is `Silu`, whose input scale is
+    // part of the function rather than a convention, so this narrowing targets Q[`K`] and the
+    // `i32` rail rather than the A16 code range — the same shape `MatMulRescale` has for the
+    // FFN gate. Per channel because the taps are quantized per channel like every other weight;
+    // one shared scale would give the quiet channels the loud ones' resolution.
     Ok((0..channels)
         .map(|c| {
             let acc: i64 = (0..4).map(|t| window[t * channels + c] as i64 * taps[t * channels + c] as i64).sum();
-            a16_scale_round(acc, params.multiplier, params.shift).saturating_add(params.zero).clamp(-A16_CODE_MAX, A16_CODE_MAX) as i32
+            let p = params[c];
+            a16_scale_round(acc, p.multiplier, p.shift).saturating_add(p.zero).clamp(i32::MIN as i64, i32::MAX as i64) as i32
         })
         .collect())
 }

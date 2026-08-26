@@ -142,312 +142,312 @@ impl Qwen36RefState {
     }
 }
 
-/// Run one position through the hybrid graph in `f32`, recording every site's range.
-///
-/// `rope` is `(cos, sin)` for this position, `rotary_dim / 2` entries each — the same pinned
-/// integer table the class uses, converted, so the reference rotates by the angles the class
-/// rotates by rather than by the ones a float implementation would have chosen.
-#[allow(clippy::too_many_arguments)]
-pub fn qwen36_reference_token<S: TensorSource>(
-    source: &mut S,
-    shape: &Qwen36ShapeV1,
-    state: &mut Qwen36RefState,
-    calibration: &mut Qwen36CalibrationV1,
-    token_id: usize,
-    position: usize,
-    rope: (&[f32], &[f32]),
-    eps: f32,
-) -> Result<Vec<f32>, String> {
-    let d = shape.d_model;
-    let embed = source.tensor("token_embd.weight")?;
-    let mut h: Vec<f32> = embed[token_id * d..(token_id + 1) * d].to_vec();
-    drop(embed);
-    calibration.observe("embed", &h);
-
-    for li in 0..shape.n_layers() {
-        let g = |s: &str| format!("blk.{li}.{s}");
-        let attn_gain = source.tensor(&g("attn_norm.weight"))?;
-        let normed = rms_norm(&h, &attn_gain, eps);
-        calibration.observe(&g("attn_norm"), &normed);
-
-        let delta = match shape.layer_types[li] {
-            Qwen36LayerKind::LinearAttention => linear_arm(source, shape, state, calibration, li, &normed, eps)?,
-            Qwen36LayerKind::FullAttention => full_arm(source, shape, state, calibration, li, &normed, position, rope, eps)?,
-        };
-        for (a, b) in h.iter_mut().zip(&delta) {
-            *a += b;
-        }
-        calibration.observe(&g("attn_residual"), &h);
-
-        let ffn_gain = source.tensor(&g("post_attention_norm.weight"))?;
-        let normed = rms_norm(&h, &ffn_gain, eps);
-        calibration.observe(&g("ffn_norm"), &normed);
-        let delta = moe(source, shape, calibration, li, &normed)?;
-        for (a, b) in h.iter_mut().zip(&delta) {
-            *a += b;
-        }
-        calibration.observe(&g("ffn_residual"), &h);
-    }
-
-    let final_gain = source.tensor("output_norm.weight")?;
-    let fin = rms_norm(&h, &final_gain, eps);
-    calibration.observe("final_norm", &fin);
-    let output = source.tensor("output.weight")?;
-    let logits = matmul(&output, &fin, shape.vocab);
-    calibration.observe("logits", &logits);
-    calibration.logits.push(logits.clone());
-    Ok(logits)
+/// One linear-attention layer's weights, borrowed. The converter already has these dequantized
+/// when it writes the layer's codes, so the reference reads them rather than fetching again —
+/// which is what lets ONE streaming pass over a 24 GiB checkpoint both quantize the weights and
+/// measure the activations.
+pub struct LinearWeights<'a> {
+    pub attn_norm: &'a [f32],
+    pub post_norm: &'a [f32],
+    pub qkv: &'a [f32],
+    pub gate: &'a [f32],
+    pub conv: &'a [f32],
+    pub alpha: &'a [f32],
+    pub beta: &'a [f32],
+    pub a_log: &'a [f32],
+    pub ssm_norm: &'a [f32],
+    pub out: &'a [f32],
 }
 
-fn linear_arm<S: TensorSource>(
-    source: &mut S,
+/// One gated-attention layer's weights, borrowed.
+pub struct FullWeights<'a> {
+    pub attn_norm: &'a [f32],
+    pub post_norm: &'a [f32],
+    /// Double width: query then gate.
+    pub q: &'a [f32],
+    pub k: &'a [f32],
+    pub v: &'a [f32],
+    pub o: &'a [f32],
+    pub q_norm: &'a [f32],
+    pub k_norm: &'a [f32],
+}
+
+/// One mixture's weights, borrowed.
+pub struct MoeWeights<'a> {
+    pub post_norm: &'a [f32],
+    pub router: &'a [f32],
+    pub gate_exps: &'a [f32],
+    pub up_exps: &'a [f32],
+    pub down_exps: &'a [f32],
+    pub shared_gate: &'a [f32],
+    pub shared_up: &'a [f32],
+    pub shared_down: &'a [f32],
+    pub shared_router: &'a [f32],
+}
+
+/// **Advance every position through one linear-attention layer.**
+///
+/// Layer-major rather than token-major: all positions cross layer `i` while layer `i`'s weights
+/// are in hand. The recurrence makes the order within the layer matter — position `t`'s state
+/// update is what position `t+1` reads — so the positions are walked in order here, which is the
+/// same order a token-major driver would have produced.
+pub fn reference_linear_layer(
     shape: &Qwen36ShapeV1,
     state: &mut Qwen36RefState,
     calibration: &mut Qwen36CalibrationV1,
     li: usize,
-    normed: &[f32],
+    w: &LinearWeights<'_>,
+    positions: &mut [Vec<f32>],
     eps: f32,
-) -> Result<Vec<f32>, String> {
+) {
     let g = |s: &str| format!("blk.{li}.{s}");
     let (d, dk, dv, hd) = (shape.d_model, shape.linear_k_dim(), shape.linear_v_dim(), shape.linear_head_dim);
     let width = 2 * dk + dv;
-
-    let qkv_w = source.tensor(&g("attn_qkv.weight"))?;
-    let qkv = matmul(&qkv_w, normed, width);
-    drop(qkv_w);
-    calibration.observe(&g("linear_qkv"), &qkv);
-    let z_w = source.tensor(&g("attn_gate.weight"))?;
-    let z = matmul(&z_w, normed, dv);
-    drop(z_w);
-    calibration.observe(&g("linear_z"), &z);
-
-    // The four-tap causal convolution, depthwise over the concatenated channels.
-    let window = &mut state.conv[li];
-    window.remove(0);
-    window.push(qkv);
-    let taps = source.tensor(&g("ssm_conv1d.weight"))?;
-    let mut convolved = vec![0f32; width];
-    for (c, slot) in convolved.iter_mut().enumerate() {
-        *slot = (0..shape.conv_kernel).map(|t| window[t][c] * taps[t * width + c]).sum();
-    }
-    drop(taps);
-    let activated = silu(&convolved);
-    calibration.observe(&g("linear_conv"), &activated);
-
-    let (qc, rest) = activated.split_at(dk);
-    let (kc, vc) = rest.split_at(dk);
-
-    let dt_w = source.tensor(&g("ssm_alpha.weight"))?;
-    let dt = matmul(&dt_w, normed, shape.linear_v_heads);
-    drop(dt_w);
-    calibration.observe(&g("linear_dt"), &dt);
-    let beta_w = source.tensor(&g("ssm_beta.weight"))?;
-    let beta_raw = matmul(&beta_w, normed, shape.linear_v_heads);
-    drop(beta_w);
-    calibration.observe(&g("linear_beta"), &beta_raw);
-    let a_log = source.tensor(&g("ssm_a"))?;
-
     let group = shape.linear_v_heads / shape.linear_k_heads;
-    let mut out = Vec::with_capacity(dv);
-    for vh in 0..shape.linear_v_heads {
-        let kh = vh / group;
-        let k = l2_norm(&kc[kh * hd..(kh + 1) * hd]);
-        let q = l2_norm(&qc[kh * hd..(kh + 1) * hd]);
-        let v = &vc[vh * hd..(vh + 1) * hd];
-        // `decay = exp(-exp(A_log) * softplus(dt))`, the form the gate is written in.
-        let softplus = |x: f32| if x > 20.0 { x } else { (1.0 + x.exp()).ln() };
-        let decay = (-a_log[vh].exp() * softplus(dt[vh])).exp();
-        let beta = 1.0 / (1.0 + (-beta_raw[vh]).exp());
-        let s = &mut state.gdn[li][vh];
-        for slot in s.iter_mut() {
-            *slot *= decay;
+
+    for h in positions.iter_mut() {
+        let normed = rms_norm(h, w.attn_norm, eps);
+        calibration.observe(&g("attn_norm"), &normed);
+
+        let qkv = matmul(w.qkv, &normed, width);
+        calibration.observe(&g("linear_qkv"), &qkv);
+        let z = matmul(w.gate, &normed, dv);
+        calibration.observe(&g("linear_z"), &z);
+
+        let window = &mut state.conv[li];
+        window.remove(0);
+        window.push(qkv);
+        let mut convolved = vec![0f32; width];
+        for (c, slot) in convolved.iter_mut().enumerate() {
+            *slot = (0..shape.conv_kernel).map(|t| window[t][c] * w.conv[t * width + c]).sum();
         }
-        let w: Vec<f32> = (0..hd).map(|i| (0..hd).map(|j| s[i * hd + j] * k[j]).sum()).collect();
-        for i in 0..hd {
-            let u = beta * (v[i] - w[i]);
-            for j in 0..hd {
-                s[i * hd + j] += u * k[j];
+        let activated = silu(&convolved);
+        calibration.observe(&g("linear_conv"), &activated);
+        let (qc, rest) = activated.split_at(dk);
+        let (kc, vc) = rest.split_at(dk);
+
+        let dt = matmul(w.alpha, &normed, shape.linear_v_heads);
+        calibration.observe(&g("linear_dt"), &dt);
+        let beta_raw = matmul(w.beta, &normed, shape.linear_v_heads);
+        calibration.observe(&g("linear_beta"), &beta_raw);
+
+        let mut out = Vec::with_capacity(dv);
+        for vh in 0..shape.linear_v_heads {
+            let kh = vh / group;
+            let k = l2_norm(&kc[kh * hd..(kh + 1) * hd]);
+            let q = l2_norm(&qc[kh * hd..(kh + 1) * hd]);
+            let v = &vc[vh * hd..(vh + 1) * hd];
+            let softplus = |x: f32| if x > 20.0 { x } else { (1.0 + x.exp()).ln() };
+            let decay = (-w.a_log[vh].exp() * softplus(dt[vh])).exp();
+            let beta = 1.0 / (1.0 + (-beta_raw[vh]).exp());
+            calibration.observe(&g("linear_decay"), &[decay]);
+            calibration.observe(&g("linear_beta_gate"), &[beta]);
+            let s = &mut state.gdn[li][vh];
+            for slot in s.iter_mut() {
+                *slot *= decay;
             }
+            let pred: Vec<f32> = (0..hd).map(|i| (0..hd).map(|j| s[i * hd + j] * k[j]).sum()).collect();
+            for i in 0..hd {
+                let u = beta * (v[i] - pred[i]);
+                for j in 0..hd {
+                    s[i * hd + j] += u * k[j];
+                }
+            }
+            calibration.observe(&g("linear_state"), s);
+            out.extend((0..hd).map(|i| (0..hd).map(|j| s[i * hd + j] * q[j]).sum::<f32>()));
         }
-        out.extend((0..hd).map(|i| (0..hd).map(|j| s[i * hd + j] * q[j]).sum::<f32>()));
-    }
-    calibration.observe(&g("linear_state_out"), &out);
+        calibration.observe(&g("linear_state_out"), &out);
 
-    // The output gate: RMS-normalized per head with a shared gain, times `silu(z)`.
-    let norm_gain = source.tensor(&g("ssm_norm.weight"))?;
-    let mut gated = Vec::with_capacity(dv);
-    for vh in 0..shape.linear_v_heads {
-        let head = &out[vh * hd..(vh + 1) * hd];
-        gated.extend(rms_norm(head, &norm_gain, eps));
-    }
-    let z_act = silu(&z);
-    for (a, b) in gated.iter_mut().zip(&z_act) {
-        *a *= b;
-    }
-    calibration.observe(&g("linear_gated"), &gated);
+        let mut gated = Vec::with_capacity(dv);
+        for vh in 0..shape.linear_v_heads {
+            gated.extend(rms_norm(&out[vh * hd..(vh + 1) * hd], w.ssm_norm, eps));
+        }
+        let z_act = silu(&z);
+        for (a, b) in gated.iter_mut().zip(&z_act) {
+            *a *= b;
+        }
+        calibration.observe(&g("linear_gated"), &gated);
 
-    let out_w = source.tensor(&g("ssm_out.weight"))?;
-    let delta = matmul(&out_w, &gated, d);
-    calibration.observe(&g("linear_out"), &delta);
-    Ok(delta)
+        let delta = matmul(w.out, &gated, d);
+        calibration.observe(&g("linear_out"), &delta);
+        for (a, b) in h.iter_mut().zip(&delta) {
+            *a += b;
+        }
+        calibration.observe(&g("attn_residual"), h);
+    }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn full_arm<S: TensorSource>(
-    source: &mut S,
+/// **Advance every position through one gated-attention layer.**
+pub fn reference_full_layer(
     shape: &Qwen36ShapeV1,
     state: &mut Qwen36RefState,
     calibration: &mut Qwen36CalibrationV1,
     li: usize,
-    normed: &[f32],
-    position: usize,
-    rope: (&[f32], &[f32]),
+    w: &FullWeights<'_>,
+    positions: &mut [Vec<f32>],
+    rope: &[(Vec<f32>, Vec<f32>)],
     eps: f32,
-) -> Result<Vec<f32>, String> {
+) {
     let g = |s: &str| format!("blk.{li}.{s}");
     let (d, hd) = (shape.d_model, shape.head_dim);
     let q_dim = shape.n_heads * hd;
     let kv_dim = shape.kv_dim();
-
-    // `attn_q` is double width: query then gate.
-    let q_w = source.tensor(&g("attn_q.weight"))?;
-    let both = matmul(&q_w, normed, 2 * q_dim);
-    drop(q_w);
-    let (q_raw, gate_raw) = both.split_at(q_dim);
-    calibration.observe(&g("attn_q"), q_raw);
-    calibration.observe(&g("attn_gate"), gate_raw);
-    let k_w = source.tensor(&g("attn_k.weight"))?;
-    let k_raw = matmul(&k_w, normed, kv_dim);
-    drop(k_w);
-    let v_w = source.tensor(&g("attn_v.weight"))?;
-    let v = matmul(&v_w, normed, kv_dim);
-    drop(v_w);
-    calibration.observe(&g("attn_v"), &v);
-
-    // QK-norm per head, before the rotation.
-    let q_gain = source.tensor(&g("attn_q_norm.weight"))?;
-    let k_gain = source.tensor(&g("attn_k_norm.weight"))?;
-    let rotate = |row: &[f32], heads: usize, gain: &[f32]| -> Vec<f32> {
-        let mut out = Vec::with_capacity(row.len());
-        for head in 0..heads {
-            let normed = rms_norm(&row[head * hd..(head + 1) * hd], gain, eps);
-            let pairs = shape.rotary_dim / 2;
-            for p in 0..pairs {
-                let (a, b) = (normed[2 * p], normed[2 * p + 1]);
-                out.push(a * rope.0[p] - b * rope.1[p]);
-                out.push(a * rope.1[p] + b * rope.0[p]);
-            }
-            out.extend_from_slice(&normed[shape.rotary_dim..]);
-        }
-        out
-    };
-    let q = rotate(q_raw, shape.n_heads, &q_gain);
-    let k = rotate(&k_raw, shape.n_kv_heads, &k_gain);
-    calibration.observe(&g("attn_q_rot"), &q);
-
-    state.keys[li].push(k);
-    state.values[li].push(v);
-    let history = state.keys[li].len();
-    let _ = position;
-
     let group = shape.n_heads / shape.n_kv_heads;
     let scale = 1.0 / (hd as f32).sqrt();
-    let mut attn = Vec::with_capacity(q_dim);
-    for head in 0..shape.n_heads {
-        let qh = &q[head * hd..(head + 1) * hd];
-        let off = (head / group) * hd;
-        let logits: Vec<f32> =
-            (0..history).map(|j| qh.iter().zip(&state.keys[li][j][off..off + hd]).map(|(a, b)| a * b).sum::<f32>() * scale).collect();
-        calibration.observe(&g("attn_logits"), &logits);
-        let probs = softmax(&logits);
-        attn.extend((0..hd).map(|i| (0..history).map(|j| probs[j] * state.values[li][j][off + i]).sum::<f32>()));
-    }
-    calibration.observe(&g("attn_values"), &attn);
 
-    // The output gate.
-    for (a, b) in attn.iter_mut().zip(gate_raw) {
-        *a *= 1.0 / (1.0 + (-b).exp());
-    }
-    calibration.observe(&g("attn_gated"), &attn);
+    for (position, h) in positions.iter_mut().enumerate() {
+        let normed = rms_norm(h, w.attn_norm, eps);
+        calibration.observe(&g("attn_norm"), &normed);
+        let both = matmul(w.q, &normed, 2 * q_dim);
+        let (q_raw, gate_raw) = both.split_at(q_dim);
+        calibration.observe(&g("attn_q"), q_raw);
+        calibration.observe(&g("attn_gate"), gate_raw);
+        let k_raw = matmul(w.k, &normed, kv_dim);
+        let v = matmul(w.v, &normed, kv_dim);
+        calibration.observe(&g("attn_v"), &v);
 
-    let o_w = source.tensor(&g("attn_output.weight"))?;
-    let delta = matmul(&o_w, &attn, d);
-    calibration.observe(&g("attn_out"), &delta);
-    Ok(delta)
+        let (cos, sin) = &rope[position.min(rope.len() - 1)];
+        let rotate = |row: &[f32], heads: usize, gain: &[f32]| -> Vec<f32> {
+            let mut out = Vec::with_capacity(row.len());
+            for head in 0..heads {
+                let n = rms_norm(&row[head * hd..(head + 1) * hd], gain, eps);
+                for p in 0..shape.rotary_dim / 2 {
+                    let (a, b) = (n[2 * p], n[2 * p + 1]);
+                    out.push(a * cos[p] - b * sin[p]);
+                    out.push(a * sin[p] + b * cos[p]);
+                }
+                out.extend_from_slice(&n[shape.rotary_dim..]);
+            }
+            out
+        };
+        let q = rotate(q_raw, shape.n_heads, w.q_norm);
+        let k = rotate(&k_raw, shape.n_kv_heads, w.k_norm);
+        calibration.observe(&g("attn_q_rot"), &q);
+        calibration.observe(&g("attn_k_rot"), &k);
+
+        state.keys[li].push(k);
+        state.values[li].push(v);
+        let history = state.keys[li].len();
+
+        let mut attn = Vec::with_capacity(q_dim);
+        for head in 0..shape.n_heads {
+            let qh = &q[head * hd..(head + 1) * hd];
+            let off = (head / group) * hd;
+            let logits: Vec<f32> = (0..history)
+                .map(|j| qh.iter().zip(&state.keys[li][j][off..off + hd]).map(|(a, b)| a * b).sum::<f32>() * scale)
+                .collect();
+            calibration.observe(&g("attn_logits"), &logits);
+            let probs = softmax(&logits);
+            attn.extend((0..hd).map(|i| (0..history).map(|j| probs[j] * state.values[li][j][off + i]).sum::<f32>()));
+        }
+        calibration.observe(&g("attn_values"), &attn);
+        for (a, b) in attn.iter_mut().zip(gate_raw) {
+            *a *= 1.0 / (1.0 + (-b).exp());
+        }
+        calibration.observe(&g("attn_gated"), &attn);
+        let delta = matmul(w.o, &attn, d);
+        calibration.observe(&g("attn_out"), &delta);
+        for (a, b) in h.iter_mut().zip(&delta) {
+            *a += b;
+        }
+        calibration.observe(&g("attn_residual"), h);
+    }
 }
 
-fn moe<S: TensorSource>(
-    source: &mut S,
+/// **Advance every position through one mixture.**
+pub fn reference_moe_layer(
     shape: &Qwen36ShapeV1,
     calibration: &mut Qwen36CalibrationV1,
     li: usize,
-    normed: &[f32],
-) -> Result<Vec<f32>, String> {
+    w: &MoeWeights<'_>,
+    positions: &mut [Vec<f32>],
+    eps: f32,
+) {
     let g = |s: &str| format!("blk.{li}.{s}");
     let d = shape.d_model;
+    let mid = shape.moe_dim;
+    let (per_up, per_down) = (mid * d, d * mid);
 
-    let router_w = source.tensor(&g("ffn_gate_inp.weight"))?;
-    let router = matmul(&router_w, normed, shape.n_experts);
-    drop(router_w);
-    calibration.observe(&g("ffn_router"), &router);
-    let probs = softmax(&router);
-    // Top-k by (probability descending, index ascending) — the same rule the class's router uses,
-    // so a calibration run and an execution route to the same experts.
-    let mut chosen: Vec<usize> = Vec::with_capacity(shape.experts_per_token);
-    let mut taken = vec![false; shape.n_experts];
-    for _ in 0..shape.experts_per_token {
-        let mut best = usize::MAX;
-        for i in 0..shape.n_experts {
-            if !taken[i] && (best == usize::MAX || probs[i] > probs[best]) {
-                best = i;
+    for h in positions.iter_mut() {
+        let normed = rms_norm(h, w.post_norm_of(), eps);
+        calibration.observe(&g("ffn_norm"), &normed);
+        let router = matmul(w.router, &normed, shape.n_experts);
+        calibration.observe(&g("ffn_router"), &router);
+        let probs = softmax(&router);
+        let mut chosen: Vec<usize> = Vec::with_capacity(shape.experts_per_token);
+        let mut taken = vec![false; shape.n_experts];
+        for _ in 0..shape.experts_per_token {
+            let mut best = usize::MAX;
+            for i in 0..shape.n_experts {
+                if !taken[i] && (best == usize::MAX || probs[i] > probs[best]) {
+                    best = i;
+                }
+            }
+            taken[best] = true;
+            chosen.push(best);
+        }
+        chosen.sort_unstable();
+        let total: f32 = chosen.iter().map(|e| probs[*e]).sum();
+
+        let mut out = vec![0f32; d];
+        for e in &chosen {
+            let weight = probs[*e] / total.max(f32::MIN_POSITIVE);
+            let gate = matmul(&w.gate_exps[e * per_up..(e + 1) * per_up], &normed, mid);
+            let up = matmul(&w.up_exps[e * per_up..(e + 1) * per_up], &normed, mid);
+            calibration.observe(&g("ffn_expert_gate"), &gate);
+            calibration.observe(&g("ffn_expert_up"), &up);
+            let act: Vec<f32> = silu(&gate).iter().zip(&up).map(|(a, b)| a * b).collect();
+            calibration.observe(&g("ffn_expert_gated"), &act);
+            let y = matmul(&w.down_exps[e * per_down..(e + 1) * per_down], &act, d);
+            calibration.observe(&g("ffn_expert_out"), &y);
+            for (slot, v) in out.iter_mut().zip(&y) {
+                *slot += weight * v;
             }
         }
-        taken[best] = true;
-        chosen.push(best);
-    }
-    chosen.sort_unstable();
-    let total: f32 = chosen.iter().map(|e| probs[*e]).sum();
+        calibration.observe(&g("ffn_routed"), &out);
 
-    let gate_all = source.tensor(&g("ffn_gate_exps.weight"))?;
-    let up_all = source.tensor(&g("ffn_up_exps.weight"))?;
-    let down_all = source.tensor(&g("ffn_down_exps.weight"))?;
-    let mid = shape.moe_dim;
-    let per_up = mid * d;
-    let per_down = d * mid;
-    let mut out = vec![0f32; d];
-    for e in &chosen {
-        let w = probs[*e] / total.max(f32::MIN_POSITIVE);
-        let gate = matmul(&gate_all[e * per_up..(e + 1) * per_up], normed, mid);
-        let up = matmul(&up_all[e * per_up..(e + 1) * per_up], normed, mid);
-        let act: Vec<f32> = silu(&gate).iter().zip(&up).map(|(a, b)| a * b).collect();
-        calibration.observe(&g("ffn_expert_gated"), &act);
-        let y = matmul(&down_all[e * per_down..(e + 1) * per_down], &act, d);
-        for (slot, v) in out.iter_mut().zip(&y) {
-            *slot += w * v;
+        let sg = 1.0 / (1.0 + (-matmul(w.shared_router, &normed, 1)[0]).exp());
+        let s_mid = shape.shared_dim;
+        let s_gate = matmul(w.shared_gate, &normed, s_mid);
+        let s_up = matmul(w.shared_up, &normed, s_mid);
+        let act: Vec<f32> = silu(&s_gate).iter().zip(&s_up).map(|(a, b)| a * b).collect();
+        calibration.observe(&g("ffn_shared_gated"), &act);
+        let shared = matmul(w.shared_down, &act, d);
+        for (slot, v) in out.iter_mut().zip(&shared) {
+            *slot += sg * v;
         }
+        calibration.observe(&g("ffn_moe_out"), &out);
+        for (a, b) in h.iter_mut().zip(&out) {
+            *a += b;
+        }
+        calibration.observe(&g("ffn_residual"), h);
     }
-    drop(gate_all);
-    drop(up_all);
-    drop(down_all);
-    calibration.observe(&g("ffn_routed"), &out);
+}
 
-    // The shared expert, always on, behind its scalar gate.
-    let sg_w = source.tensor(&g("ffn_gate_inp_shexp.weight"))?;
-    let sg = 1.0 / (1.0 + (-matmul(&sg_w, normed, 1)[0]).exp());
-    drop(sg_w);
-    let s_mid = shape.shared_dim;
-    let s_gate = source.tensor(&g("ffn_gate_shexp.weight"))?;
-    let s_up = source.tensor(&g("ffn_up_shexp.weight"))?;
-    let act: Vec<f32> = silu(&matmul(&s_gate, normed, s_mid)).iter().zip(&matmul(&s_up, normed, s_mid)).map(|(a, b)| a * b).collect();
-    drop(s_gate);
-    drop(s_up);
-    let s_down = source.tensor(&g("ffn_down_shexp.weight"))?;
-    let shared = matmul(&s_down, &act, d);
-    for (slot, v) in out.iter_mut().zip(&shared) {
-        *slot += sg * v;
+impl MoeWeights<'_> {
+    /// The mixture's own norm gain, carried alongside it so the layer functions stay one argument
+    /// each. The linear and full arms carry it too; only one of the three uses it per layer.
+    fn post_norm_of(&self) -> &[f32] {
+        self.post_norm
     }
-    calibration.observe(&g("ffn_moe_out"), &out);
-    Ok(out)
+}
+
+/// **The final norm and the unembedding**, which close a run.
+pub fn reference_head(
+    shape: &Qwen36ShapeV1,
+    calibration: &mut Qwen36CalibrationV1,
+    output_norm: &[f32],
+    output: &[f32],
+    positions: &[Vec<f32>],
+    eps: f32,
+) {
+    for h in positions {
+        let fin = rms_norm(h, output_norm, eps);
+        calibration.observe("final_norm", &fin);
+        let logits = matmul(output, &fin, shape.vocab);
+        calibration.observe("logits", &logits);
+        calibration.logits.push(logits);
+    }
 }
 
 /// How close an integer run is to this reference: top-1 agreement, top-5 containment, and the rank

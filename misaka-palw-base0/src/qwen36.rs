@@ -424,8 +424,13 @@ impl<'a> Qwen36Engine<'a> {
         window.push(current);
         let flat: Vec<i32> = window.iter().flatten().copied().collect();
         let taps: Vec<i32> = a.tensor_sized(&n("linear_conv.weight"), s.conv_kernel * width)?.iter().map(|c| *c as i32).collect();
-        let convolved = q36_ssm_conv(&flat, &taps, width, a.one_param(&n("linear_conv.a16"))?).map_err(refuse("ssm_conv"))?;
-        // The convolution's activation, then the delta rule's unit key.
+        // `q36_ssm_conv` lands in Q[`K`] — `silu`'s domain — and the requantization after it is
+        // what puts the activation back on the code grid the delta rule reads. An earlier version
+        // narrowed to codes first and handed `silu` a code row as if it were Q[`K`], which is a
+        // different function: at a code scale well below Q[`K`] every input to the nonlinearity is
+        // a tiny fraction of what it should be and `silu` degenerates to the linear `x/2`.
+        let convolved =
+            q36_ssm_conv(&flat, &taps, width, &a.params_sized(&n("linear_conv.a16"), width)?).map_err(refuse("ssm_conv"))?;
         let activated =
             a16_requant(&silu(&convolved), &a.params_sized(&n("linear_conv_act.a16"), width)?).map_err(refuse("conv_silu"))?;
 
