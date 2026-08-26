@@ -48,6 +48,7 @@ pub mod legs;
 pub mod mmap;
 pub mod produce;
 pub mod qwen36;
+pub mod qwen36_backend;
 pub mod rc;
 pub mod rope;
 pub mod tokenizer;

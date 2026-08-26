@@ -947,7 +947,7 @@ mod tests {
     /// dense tier's fixture uses — and the weights are an LCG. What it proves is that the graph
     /// composes and produces a non-degenerate row, which is the question at this stage. Fidelity
     /// is the converter's question and needs a checkpoint.
-    fn fixture(layers: usize, experts: usize) -> Qwen36ArtifactV1 {
+    pub(crate) fn fixture(layers: usize, experts: usize) -> Qwen36ArtifactV1 {
         let shape = Qwen36ShapeV1 {
             layer_types: (0..layers)
                 .map(|i| if (i + 1).is_multiple_of(4) { Qwen36LayerKind::FullAttention } else { Qwen36LayerKind::LinearAttention })
@@ -1275,4 +1275,10 @@ mod tests {
         let mut cache = Qwen36Cache::new(&stripped.shape);
         assert_eq!(engine.forward_token(&mut cache, 1, 0), Err(Qwen36Error::MissingTensor("blk.0.linear_q.weight".to_string())));
     }
+}
+
+/// The Qwen3.6-shaped fixture, for tests in other modules of this crate.
+#[cfg(test)]
+pub(crate) fn test_fixture(layers: usize, experts: usize) -> Qwen36ArtifactV1 {
+    tests::fixture(layers, experts)
 }

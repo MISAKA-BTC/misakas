@@ -55,6 +55,7 @@ const CONSENSUS_PATH: &[&str] = &[
     "src/optimized.rs",
     "src/produce.rs",
     "src/qwen36.rs",
+    "src/qwen36_backend.rs",
     "src/rc.rs",
     "src/rope.rs",
     "src/tokenizer.rs",
