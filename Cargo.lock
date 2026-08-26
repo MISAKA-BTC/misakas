@@ -5989,6 +5989,7 @@ version = "1.1.0"
 dependencies = [
  "cc",
  "kaspa-consensus-core",
+ "misaka-palw-base0",
 ]
 
 [[package]]

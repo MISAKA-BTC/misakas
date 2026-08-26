@@ -15,6 +15,12 @@ repository.workspace = true
 [dependencies]
 kaspa-consensus-core.workspace = true
 
+[dev-dependencies]
+# The KAT set is generated from the specification by `misaka-palw-base0`. It is a dev-dependency
+# and only a dev-dependency: this crate's independence comes from not reading that one, and a
+# normal dependency would let a future edit here reach for the first implementation's answer.
+misaka-palw-base0.workspace = true
+
 [build-dependencies]
 cc.workspace = true
 
