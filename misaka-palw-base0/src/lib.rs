@@ -45,6 +45,7 @@ pub mod engine_a16;
 pub mod inventory;
 pub mod legs;
 pub mod produce;
+pub mod qwen36;
 pub mod rc;
 pub mod rope;
 pub mod tokenizer;
