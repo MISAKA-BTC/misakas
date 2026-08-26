@@ -2367,6 +2367,82 @@ pub fn palw_rc_params_from_artifacts(
     Ok(with_registered_models(params))
 }
 
+/// **The RC network with the Qwen3.6 class registered from genesis** — the two-class form of
+/// [`palw_rc_params_from_artifacts`], for a network minted after the class's weights exist.
+///
+/// The base assembly runs first and unchanged, so the floor's registration, the bond gates and
+/// the panel gate are exactly the shipped ones. Then the second class is added the way the
+/// transition itself defines a later entrant: registered at the bundle's OWN minimum grantable
+/// share (one permille, donated from the floor by largest-remainder — the transition's write, not
+/// this function's), with the floor's slash value and initial target, because a class that chose
+/// its own economics would be choosing its weight. The catalog becomes two entries and its root —
+/// which is inside the ruleset id — moves, so this is a DIFFERENT network identity from the
+/// one-class RC, as it must be: a node that can adjudicate two classes and one that knows of one
+/// would otherwise wear one name.
+///
+/// The genesis gate then re-runs over the extended object list against the two-entry catalog:
+/// every check the one-class network passes, the two-class network must pass again, including the
+/// bind-window arithmetic that sizes the bonds against the FLOOR's per-claim reservation (the
+/// entrant's pwu is higher, so its claims reserve more and fit fewer concurrently — a bond that
+/// carries the floor's window still carries a thinner window of Qwen3.6 claims, which is the
+/// correct consequence of a bigger job, not a gate failure).
+pub fn palw_rc_params_with_qwen36(
+    base0_artifact_root: crate::Hash64,
+    qwen36_artifact_root: crate::Hash64,
+    genesis_bonds: Vec<crate::palw_fp_devnet_v3::PalwGenesisBondSpecV1>,
+) -> Result<Params, crate::palw_mode_v2::PalwModeV2Error> {
+    use crate::palw_mode_v2::PalwModeV2Error as E;
+    let invalid = |what: &'static str| E::Invalid(what);
+
+    let mut params = palw_rc_params_from_artifacts(base0_artifact_root, genesis_bonds)?;
+    let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut params.palw_consensus_mode else {
+        unreachable!("palw_rc_params_from_artifacts installs a ConsensusV2 bundle or returns Err");
+    };
+
+    // The floor's economics, read off the base assembly's own genesis object rather than restated:
+    // a second spelling of the slash value would be a second place for it to drift.
+    let (slash, target) = bundle
+        .genesis_objects
+        .iter()
+        .find_map(|o| match o {
+            crate::palw_state_v2::PalwConsensusObjectV2::ClassRegistered { slash_value_per_pwu, initial_target, .. } => {
+                Some((*slash_value_per_pwu, *initial_target))
+            }
+            _ => None,
+        })
+        .ok_or(invalid("the base assembly carries no class registration"))?;
+
+    let (_profile, entry, object) = crate::palw_qwen36_profile::qwen36_registration_v1(
+        qwen36_artifact_root,
+        bundle.state.min_grantable_share_permille(),
+        slash,
+        target,
+    )
+    .map_err(|_| invalid("the Qwen3.6 registration does not derive"))?;
+
+    // The two-entry catalog. The floor stays FIRST — the genesis gate and the transition both
+    // require the base class to be the first registration, and order here is that order.
+    let (base_profile, base_catalog) = crate::palw_base0_profile::palw_rc_base0_registration_v1(base0_artifact_root)
+        .map_err(|_| invalid("BASE-0's registration does not derive"))?;
+    let base_entry = base_catalog.entries().first().ok_or(invalid("the RC catalog lost its floor"))?.clone();
+    debug_assert_eq!(base_profile.shape_profile_id(), bundle.base_class_id, "the floor the base assembly registered");
+    let catalog = crate::palw_mode_v2::PalwClassCatalogV2::new(vec![base_entry, entry])
+        .map_err(|_| invalid("the two-class catalog is not well-formed"))?;
+    bundle.class_catalog_root = catalog.root();
+    bundle.genesis_objects.push(object);
+
+    // Both gates again, from scratch, over the network actually being shipped.
+    params.validate_palw_v2()?;
+    let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
+        unreachable!("still the bundle installed above");
+    };
+    let genesis_utxos = crate::config::premine::genesis_premine_utxos_for(params.net);
+    crate::palw_genesis_v2::verify_palw_genesis_v2(bundle, &catalog, &bundle.genesis_objects, |outpoint| {
+        genesis_utxos.get(outpoint).map(|entry| entry.amount)
+    })?;
+    Ok(params)
+}
+
 // ---------------------------------------------------------------------------------------------
 // The PALW-RC (testnet-12) genesis card — road-map Gate 4
 // ---------------------------------------------------------------------------------------------
@@ -4535,7 +4611,15 @@ mod consensus_params_id_tests {
             // what peers compare at the handshake, so old and new builds will not agree. Nothing
             // about the floor class's arithmetic changed — only what else the court knows how to
             // re-execute.
-            ("testnet-11", TESTNET11_PARAMS, "a708dc4a0456442333a992ed68fe6325ea2a39bc3efce1857121c41cd9432a94"),
+            //
+            // **Moved again, same day, by ADR-0053 withdrawing the second execution family.** Two
+            // things inside the ruleset id changed: `min_class_panel` left the bundle (it existed
+            // so a Metal class could license with two seats, and it applied to every class,
+            // including deterministic ones, on every preset that shipped it), and the class record
+            // lost `terms`, taking `PALW_STATE_V2_VERSION` from 7 to 8. Testnet-11 is the only
+            // preset that moves because it is the only one carrying a PALW V2 bundle. Same
+            // handshake consequence as above, and the same remedy: everyone upgrades together.
+            ("testnet-11", TESTNET11_PARAMS, "a1284a00a45e7c1f34ece66bc34567663ea0d43a7423a505274d16faae982cbc"),
             ("simnet", SIMNET_PARAMS, "135e88c69a659d3cf4b5ce8275953c7597b2c67b03d2a74b3d0696c5d0b703fa"),
             ("devnet", DEVNET_PARAMS, "42cc6be92506a14654cb676184e1416796dec682b15e93cb9c639e8e0d77efa5"),
         ]
