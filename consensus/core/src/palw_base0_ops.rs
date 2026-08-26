@@ -76,6 +76,11 @@ impl ScaleParams {
         }
         Some(Self { multiplier: i32::MAX, shift: shift as u8 })
     }
+
+    /// A gain of exactly 1 — the no-op a caller can apply unconditionally rather than branching.
+    pub fn unity() -> Self {
+        Self { multiplier: i32::MAX, shift: Self::UNITY_SHIFT }
+    }
 }
 
 // -------------------------------------------------------------------------------------------
@@ -279,6 +284,46 @@ pub fn softmax(logits_q: &[i32]) -> Result<Vec<i32>, PalwBase0OpError> {
     Ok(exps.iter().map(|e| ((e * recip) >> K) as i32).collect())
 }
 
+/// Op 5W: softmax over logits held at a WIDER scale than Qk — `value_qk = x · 2^up_bits`.
+///
+/// [`softmax`]'s Qk domain holds ±2^7: adequate for BASE-0's geometry, and seven bits short of a
+/// real transformer's attention logits — measured on Qwen2.5-1.5B layer 0, the position-carrying
+/// rotary pairs drive `q·k/√d` to ±16,000, so a rescale into Qk saturates every strong key at
+/// the SAME clamp value and softmax returns uniform-over-the-clamped: attention selecting
+/// nothing, exactly where the reference selects hardest.
+///
+/// The repair is the max subtraction BEFORE the widening, in `i64`, where nothing clamps: only
+/// differences survive the subtraction, anything below `−2^31` is dead to `int_exp` anyway
+/// (`exp(−128)` is 2e−56 against a 2^−24 resolution), and the clamp on the DIFFERENCE loses
+/// nothing representable. Same kernel family as [`softmax`] — one max, one exp table, one
+/// reciprocal — with one shift; an adjudicator recomputes it the same way it recomputes op 5.
+///
+/// `softmax_shifted(x, 0)` is byte-identical to `softmax(x)` on every row whose differences fit
+/// `i32`, which is every row op 5 was defined on.
+pub fn softmax_shifted(logits: &[i32], up_bits: u8) -> Result<Vec<i32>, PalwBase0OpError> {
+    if logits.is_empty() {
+        return Err(PalwBase0OpError::Empty);
+    }
+    let up = up_bits.min(62) as i64;
+    let max = *logits.iter().max().expect("non-empty checked above") as i64;
+    let exps: Vec<i64> = logits
+        .iter()
+        .map(|v| {
+            // The difference is non-positive by construction; widened FIRST, clamped SECOND, so
+            // a genuinely enormous gap saturates to `i32::MIN` instead of wrapping.
+            let diff = ((*v as i64 - max) << up).clamp(i32::MIN as i64, 0);
+            int_exp(diff as i32) as i64
+        })
+        .collect();
+    let sum: i64 = exps.iter().sum();
+    if sum <= 0 {
+        let uniform = ONE / (logits.len() as i64);
+        return Ok(vec![uniform as i32; logits.len()]);
+    }
+    let recip = int_recip(sum);
+    Ok(exps.iter().map(|e| ((e * recip) >> K) as i32).collect())
+}
+
 // -------------------------------------------------------------------------------------------
 // 6. Silu — x · sigmoid(x), sharing int_exp with softmax
 // -------------------------------------------------------------------------------------------
@@ -327,6 +372,42 @@ pub fn add_elem(a: &[i8], b: &[i8]) -> Result<Vec<i32>, PalwBase0OpError> {
 
 #[cfg(test)]
 mod tests {
+    /// `softmax_shifted(x, 0)` must be `softmax(x)` bit for bit wherever op 5 is defined — the
+    /// wide op is an extension of the domain, never a different function on the shared one.
+    #[test]
+    fn shifted_softmax_at_zero_is_softmax() {
+        for row in [vec![0i32], vec![1 << 20, -(1 << 20), 3], vec![super::ONE as i32, 0, -5_000_000]] {
+            assert_eq!(super::softmax_shifted(&row, 0).unwrap(), super::softmax(&row).unwrap());
+        }
+    }
+
+    /// The case op 5 cannot serve: logits seven bits past Qk. Under `softmax`-after-rescale the
+    /// two strong keys clamp equal and tie; under the shifted op the stronger one takes the row.
+    #[test]
+    fn shifted_softmax_separates_what_the_clamp_tied() {
+        // Values at a code scale 2^7 above Qk: 16,000 and 15,000 in model units, far past ±128.
+        let codes = vec![125i32, 117, 0];
+        let probs = super::softmax_shifted(&codes, 31).unwrap();
+        assert!(probs[0] > super::softmax_shifted(&codes, 31).unwrap()[1], "the max key must win");
+        assert!(probs[0] > (super::ONE as i32) * 9 / 10, "a 1,000-unit gap is a hard selection");
+        assert_eq!(probs[2], 0, "a 16,000-unit gap is zero at Qk resolution");
+        // And the sum is still a distribution.
+        let sum: i64 = probs.iter().map(|p| *p as i64).sum();
+        assert!((sum - super::ONE).abs() < super::ONE / 100, "sums to ONE, got {sum}");
+    }
+
+    /// Total on the degenerate rows: empty refused, single-key certain, huge `up_bits` clamped.
+    #[test]
+    fn shifted_softmax_edges() {
+        assert!(super::softmax_shifted(&[], 31).is_err());
+        let one = super::softmax_shifted(&[-7], 62).unwrap();
+        assert_eq!(one, vec![super::softmax(&[-7]).unwrap()[0]]);
+        // up_bits beyond 62 behaves as 62 rather than shifting into undefined behavior.
+        let a = super::softmax_shifted(&[5, 4], 255).unwrap();
+        let b = super::softmax_shifted(&[5, 4], 62).unwrap();
+        assert_eq!(a, b);
+    }
+
     use super::*;
 
     fn close(value: i64, want_num: i64, want_den: i64, tol_ppm: i64) -> bool {

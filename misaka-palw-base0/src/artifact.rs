@@ -320,6 +320,11 @@ pub struct Base0ArtifactV1 {
     ///
     /// Order: `[qk_to_code, code_product, rope_clamp]`, which is the order the IR names them.
     pub class_narrowings: [QuantParams; 3],
+    /// **The A16 tier's integer parameter store** (ADR-0047): sorted `(name, bytes)` — 17-byte
+    /// `(m, shift, zero)` triples per channel, `.sink0` overrides, rope tables — one store read
+    /// by the A16 engine at construction and by the court's oracle per dispute. Digest-covered,
+    /// but only when present: see [`Base0ArtifactV1::artifact_digest`].
+    pub a16_params: Option<Vec<(String, Vec<u8>)>>,
     derived_seed: Option<u64>,
 }
 
@@ -412,6 +417,7 @@ impl Base0ArtifactV1 {
             norm_requant,
             residual_requant,
             layer_residual_requant: None,
+            a16_params: None,
             derived_seed: None,
         })
     }
@@ -521,6 +527,26 @@ impl Base0ArtifactV1 {
             Some(per) => per.get(layer).map(|pair| pair[site]).unwrap_or(self.residual_requant),
             None => self.residual_requant,
         }
+    }
+
+    /// Install the A16 parameter store. Entries must be sorted by name and unique — a store two
+    /// implementations could order differently is a digest two nodes could disagree about.
+    pub fn with_a16_params(mut self, entries: Vec<(String, Vec<u8>)>) -> Result<Self, ArtifactError> {
+        if entries.windows(2).any(|w| w[0].0 >= w[1].0) {
+            return Err(ArtifactError::WeightLen { tensor: "a16_params (must be sorted, unique)", want: 0, got: entries.len() });
+        }
+        self.a16_params = Some(entries);
+        Ok(self)
+    }
+
+    /// One A16 parameter row by TEMPLATE name and layer (`{layer}` substituted when present).
+    pub fn a16_param(&self, template: &str, layer: Option<u16>) -> Option<&[u8]> {
+        let store = self.a16_params.as_ref()?;
+        let name = match layer {
+            Some(l) => template.replace("{layer}", &l.to_string()),
+            None => template.to_string(),
+        };
+        store.binary_search_by(|(n, _)| n.as_str().cmp(name.as_str())).ok().map(|i| &store[i].1[..])
     }
 
     /// Declare which tokenizer this class's token ids belong to.
@@ -672,6 +698,28 @@ impl Base0ArtifactV1 {
                 }
             }
         };
+        // **The A16 parameter store absorbs NOTHING when absent, and this is deliberate.**
+        //
+        // Every other optional field above is presence-tagged with a `0u8` for `None`, which is
+        // the right rule for a field that existed when the first class was registered. This one
+        // did not: `a16_params` is new, every artifact already registered has `None`, and a tag
+        // byte would move all of their digests. The digest IS the class id, so that is not a
+        // recomputation — it is a chain whose registered classes no longer resolve, on a network
+        // that is running. The upstream A16 branch could afford the tag because it re-minted.
+        //
+        // Absent absorbs nothing; present absorbs a domain tag and a length, so `Some(vec![])`
+        // and `None` are still different streams and the ambiguity the tag existed to prevent
+        // does not come back.
+        if let Some(entries) = &self.a16_params {
+            state.update(b"a16_params");
+            state.update(&(entries.len() as u64).to_le_bytes());
+            for (name, bytes) in entries {
+                state.update(&(name.len() as u64).to_le_bytes());
+                state.update(name.as_bytes());
+                state.update(&(bytes.len() as u64).to_le_bytes());
+                state.update(bytes);
+            }
+        }
         for (i, l) in self.layers.iter().enumerate() {
             state.update(&(i as u64).to_le_bytes());
             for (label, w) in [
@@ -762,7 +810,15 @@ fn absorb_quant(state: &mut blake2b_simd::State, p: &QuantParams) {
 // ---------------------------------------------------------------------------------------------
 
 /// Magic + version of the on-disk artifact container.
-pub const BASE0_ARTIFACT_FILE_MAGIC: &[u8; 8] = b"PALWB0A1";
+///
+/// `A2` adds the A16 parameter store as a trailing presence-tagged section. `A1` is still read —
+/// it means "no store" — because the format's own doc says it need only be stable across one
+/// build, and a reader that refused every file written yesterday would make that true the
+/// expensive way.
+pub const BASE0_ARTIFACT_FILE_MAGIC: &[u8; 8] = b"PALWB0A2";
+
+/// The predecessor, read as an artifact with no A16 parameter store.
+pub const BASE0_ARTIFACT_FILE_MAGIC_V1: &[u8; 8] = b"PALWB0A1";
 
 /// Why this exists at all: the floor's artifact is **derived** (`derive_deterministic`), so every
 /// node can mint it from a seed and no file is needed. A converted class cannot be — its weights
@@ -997,6 +1053,20 @@ pub fn encode_artifact_file_v1(a: &Base0ArtifactV1) -> Vec<u8> {
         }
     }
 
+    match &a.a16_params {
+        None => w.u8(0),
+        Some(entries) => {
+            w.u8(1);
+            w.usize(entries.len());
+            for (name, bytes) in entries {
+                w.usize(name.len());
+                w.0.extend_from_slice(name.as_bytes());
+                w.usize(bytes.len());
+                w.0.extend_from_slice(bytes);
+            }
+        }
+    }
+
     // Declared last, checked first by the reader against what it actually parsed.
     w.0.extend_from_slice(a.artifact_digest().as_byte_slice());
     w.0
@@ -1008,9 +1078,14 @@ pub fn encode_artifact_file_v1(a: &Base0ArtifactV1) -> Vec<u8> {
 /// run one class under another's name.
 pub fn decode_artifact_file_v1(bytes: &[u8]) -> Result<Base0ArtifactV1, ArtifactFileError> {
     let mut r = R { b: bytes, i: 0 };
-    if r.take(8, "magic")? != BASE0_ARTIFACT_FILE_MAGIC.as_slice() {
+    let magic = r.take(8, "magic")?;
+    let has_a16_section = if magic == BASE0_ARTIFACT_FILE_MAGIC.as_slice() {
+        true
+    } else if magic == BASE0_ARTIFACT_FILE_MAGIC_V1.as_slice() {
+        false
+    } else {
         return Err(ArtifactFileError::Magic);
-    }
+    };
 
     let shape = Base0ShapeV1 {
         n_layers: r.usize("shape")?,
@@ -1118,6 +1193,26 @@ pub fn decode_artifact_file_v1(bytes: &[u8]) -> Result<Base0ArtifactV1, Artifact
         _ => Some(r.u64("seed")?),
     };
 
+    let a16_params = if !has_a16_section {
+        None
+    } else {
+        match r.u8("a16 tag")? {
+            0 => None,
+            _ => {
+                let n = r.usize("a16 store")?;
+                let mut entries = Vec::with_capacity(n.min(1 << 16));
+                for _ in 0..n {
+                    let name_len = r.usize("a16 name")?;
+                    let name = String::from_utf8(r.take(name_len, "a16 name")?.to_vec())
+                        .map_err(|_| ArtifactFileError::Length("a16 name"))?;
+                    let value_len = r.usize("a16 value")?;
+                    entries.push((name, r.take(value_len, "a16 value")?.to_vec()));
+                }
+                Some(entries)
+            }
+        }
+    };
+
     let mut dd = [0u8; 64];
     dd.copy_from_slice(r.take(64, "declared digest")?);
     let declared = Hash64::from_bytes(dd);
@@ -1134,6 +1229,7 @@ pub fn decode_artifact_file_v1(bytes: &[u8]) -> Result<Base0ArtifactV1, Artifact
         layer_residual_requant,
         layer_residual_scale,
         class_narrowings,
+        a16_params,
         derived_seed,
     };
     let recomputed = artifact.artifact_digest();
@@ -1145,6 +1241,111 @@ pub fn decode_artifact_file_v1(bytes: &[u8]) -> Result<Base0ArtifactV1, Artifact
 
 #[cfg(test)]
 mod tests {
+    /// **Adding `a16_params` must not move a single already-registered class id.**
+    ///
+    /// The digest IS the class id. Every artifact registered before the A16 tier existed has
+    /// `a16_params: None`, so if `None` absorbed a presence byte — which is how every other
+    /// optional field on this struct is written, and how the upstream A16 branch wrote this one —
+    /// every one of those ids would change and a running chain would stop resolving its own
+    /// classes. The upstream branch could afford it because it re-minted; this line cannot.
+    ///
+    /// The value below was measured on the commit before the field was added. It is pinned rather
+    /// than recomputed because a test that recomputes both sides proves only that the code agrees
+    /// with itself.
+    #[test]
+    fn the_a16_field_does_not_move_an_existing_class_id() {
+        const BEFORE_A16: &str = "d58eddec6d58da30268cebbd2120fc6a9f7bb71f068ad3e46cb21af0066641466596e96efb77064cdb321721850fd88933c60234d3c40ca2d1c1c54258d1135a";
+        let shape = Base0ShapeV1 {
+            n_layers: 2,
+            n_heads: 2,
+            n_kv_heads: 1,
+            d_head: 4,
+            d_ff: 8,
+            vocab: 16,
+            max_position: 8,
+            ln_theta_gen_q: LN_THETA_10000_GEN_Q,
+            eps_q: 1,
+        };
+        let artifact = Base0ArtifactV1::derive_deterministic(shape, 7).expect("a valid shape");
+        assert!(artifact.a16_params.is_none());
+        assert_eq!(
+            artifact.artifact_digest().to_string(),
+            BEFORE_A16,
+            "an artifact with no A16 store must digest exactly as it did before the field existed"
+        );
+
+        // And a store that IS present must change the id — otherwise the field is not covered and
+        // two different classes would register under one name.
+        let with_store = artifact.clone().with_a16_params(vec![("a".to_string(), vec![1, 2, 3])]).expect("sorted, unique");
+        assert_ne!(with_store.artifact_digest().to_string(), BEFORE_A16);
+        // `Some(vec![])` is a third stream, not a synonym for `None`.
+        let empty_store = artifact.clone().with_a16_params(vec![]).expect("an empty store is well-formed");
+        assert_ne!(empty_store.artifact_digest().to_string(), BEFORE_A16);
+        assert_ne!(empty_store.artifact_digest(), with_store.artifact_digest());
+    }
+
+    /// The container round-trips the store, and a file written by the previous format version is
+    /// still read — as an artifact with no store, which is what it meant.
+    #[test]
+    fn the_artifact_file_round_trips_the_a16_store() {
+        let shape = Base0ShapeV1 {
+            n_layers: 1,
+            n_heads: 2,
+            n_kv_heads: 1,
+            d_head: 4,
+            d_ff: 8,
+            vocab: 16,
+            max_position: 8,
+            ln_theta_gen_q: LN_THETA_10000_GEN_Q,
+            eps_q: 1,
+        };
+        let bare = Base0ArtifactV1::derive_deterministic(shape, 11).expect("a valid shape");
+        let stored = bare
+            .clone()
+            .with_a16_params(vec![("blk.0.attn_q.a16".to_string(), vec![7u8; 17]), ("token_embd.a16".to_string(), vec![9u8; 17])])
+            .expect("sorted, unique");
+
+        for artifact in [&bare, &stored] {
+            let bytes = encode_artifact_file_v1(artifact);
+            let back = decode_artifact_file_v1(&bytes).expect("the container round-trips");
+            assert_eq!(back.a16_params, artifact.a16_params);
+            assert_eq!(back.artifact_digest(), artifact.artifact_digest());
+        }
+
+        // A v1 file: the same bytes with the trailing store section removed and the old magic.
+        let v1_bytes = {
+            let full = encode_artifact_file_v1(&bare);
+            let mut out = full.clone();
+            // The store section for `None` is exactly one tag byte, sitting before the 64-byte digest.
+            out.remove(full.len() - 65);
+            out[..8].copy_from_slice(BASE0_ARTIFACT_FILE_MAGIC_V1);
+            out
+        };
+        let from_v1 = decode_artifact_file_v1(&v1_bytes).expect("a v1 file still reads");
+        assert!(from_v1.a16_params.is_none());
+        assert_eq!(from_v1.artifact_digest(), bare.artifact_digest());
+    }
+
+    /// An out-of-order or duplicated store is refused: two nodes that sorted it differently would
+    /// compute two class ids for one class.
+    #[test]
+    fn an_unsorted_a16_store_is_refused() {
+        let shape = Base0ShapeV1 {
+            n_layers: 1,
+            n_heads: 2,
+            n_kv_heads: 1,
+            d_head: 4,
+            d_ff: 8,
+            vocab: 16,
+            max_position: 8,
+            ln_theta_gen_q: LN_THETA_10000_GEN_Q,
+            eps_q: 1,
+        };
+        let artifact = Base0ArtifactV1::derive_deterministic(shape, 3).expect("a valid shape");
+        assert!(artifact.clone().with_a16_params(vec![("b".into(), vec![1]), ("a".into(), vec![2])]).is_err());
+        assert!(artifact.clone().with_a16_params(vec![("a".into(), vec![1]), ("a".into(), vec![2])]).is_err());
+    }
+
     /// **Condition 6: the tokenizer is inside the class identity.**
     ///
     /// A class's execution is a function of token ids, and an id is only a token because some

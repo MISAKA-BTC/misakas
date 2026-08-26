@@ -147,6 +147,7 @@ pub mod palw_artifact;
 pub mod palw_attempt_v2;
 pub mod palw_backend;
 pub mod palw_base0;
+pub mod palw_base0_a16;
 pub mod palw_base0_ops;
 pub mod palw_base0_profile;
 /// MISAKA PALW bisection ladder (ADR-0027 §1's degraded path): the pure state machine that

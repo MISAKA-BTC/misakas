@@ -47,6 +47,7 @@ const CONSENSUS_PATH: &[&str] = &[
     "src/backend.rs",
     "src/classes.rs",
     "src/engine.rs",
+    "src/engine_a16.rs",
     "src/inventory.rs",
     "src/legs.rs",
     "src/optimized.rs",
@@ -75,7 +76,7 @@ const EXEMPT: &[(&str, &str)] = &[
 /// The primitives themselves live in `consensus-core`, and they are the half of the class this
 /// crate cannot vouch for on its own. Scanned through a relative path because they are the point:
 /// a float appearing in `SRDHM` would be the most expensive possible place for one.
-const CONSENSUS_CORE: &[&str] = &["palw_base0.rs", "palw_base0_ops.rs"];
+const CONSENSUS_CORE: &[&str] = &["palw_base0.rs", "palw_base0_ops.rs", "palw_base0_a16.rs"];
 
 fn crate_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
