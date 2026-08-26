@@ -60,7 +60,11 @@ stated gap.
 
 **2026-08-22 時点の更新:** 上記11項目はすべて close した。以下の各節は**発見時の記述のまま**残してある — 何がどう壊れていたかの記録であり、現状の説明ではない。修正内容は冒頭の2つの表を参照。
 
-残る mainnet の前提は、欠陥ではなく未実装機能である: court responder（`CourtDisclosed` を作る主体）、`BondRegistered` の post-genesis 経路、そして ADR-0049 の canonical IR。
+残る mainnet の前提は、欠陥ではなく未実装機能である: court responder（`CourtDisclosed` を作る主体）と `BondRegistered` の post-genesis 経路。
+
+**2026-08-26 更新:** 3つ目の ADR-0049 canonical IR は **close した**（ADR-0049 Decision F の Landed 注記を参照）。engine の op 列は `BASE0_LAYER_IR` から生成されるようになり（`misaka-palw-base0/src/plan.rs`）、tensor 名→bytes の束縛は1つ（`operands.rs`）を engine と inventory が共有する。pre/attention/post の3表とも両クラスで射影であり、`engine.rs` からカーネル呼び出しは消えた。ADR が「暫定義務」と書いていた *「engine が行う narrowing を profile が名指ししていないクラスの step leg を worker は commit してはならない」* は、`base0_execute_for_attempt_v1` の入口ゲートになった。
+
+作る過程で**実際に生きていた欠陥が1件**出た: inventory が `attn_q.requant` に対して常に tensor 全体の `layer.requant[0]` を返していたが、engine は artifact が per-channel 表を持つときそちらで narrow する（projection bias は各 channel の `zero` に載る)。court は `9 × channels` バイトを要求し、9バイトしか無いと**それを全 channel に循環コピーする**（`palw_step_refute.rs:719`）ので、正直な producer の step を「誰も適用していないパラメータ」で再計算して有罪にする。無音で、しかも bias を持つクラス（= Qwen2.5 全メンバー、floor は非該当）だけで起きる。
 
 以下、**先に詰まる順**。`[A]`=mainnet が値を運ぶ前に作らねばならないもの、`[B]`=欠陥だがコードサイズ、`[C]`=欠陥ではないが明言すべき事実。
 

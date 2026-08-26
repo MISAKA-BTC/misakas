@@ -219,6 +219,50 @@ Until the generator exists, the interim obligation is narrower and immediate: **
 step leg for a class whose profile does not name every narrowing the engine performs.** A commitment
 the court cannot reproduce is a false conviction waiting for its first dispute.
 
+> **Landed (2026-08-26, `09bd647f` / `df63a916` / `de1b67c1`).** The generator exists and the interim
+> obligation is a gate rather than a rule.
+>
+> `misaka-palw-base0/src/plan.rs` compiles `BASE0_LAYER_IR` — and now `BASE0_PRE_IR` and
+> `BASE0_POST_IR` — into the engine's op sequence: which step runs, in what order, reading which
+> earlier step, against which operand, producing how many values. The kernels are untouched, because
+> that arithmetic is the class; what is generated is what the divergences were actually made of.
+> **No kernel is called in `engine.rs` any more.** `misaka-palw-base0/src/operands.rs` is the one
+> binding from an IR tensor name to an artifact's bytes, keyed the way the court asks (template name
+> + layer index), and the engine and the inventory both read through it. Both classes' profiles project
+> every table — neither file writes a `PalwStepNodeV1`.
+>
+> Three properties now fall out of the IR instead of being declared beside it: a step's output TYPE
+> (a narrowing emits codes, everything else accumulators — so feeding a Qk accumulator to a code
+> kernel is a compile-time refusal), where the cache is WRITTEN (from the node roles, both halves
+> committed together), and where the health diagnostics are measured.
+>
+> The interim obligation is enforced at `base0_execute_for_attempt_v1`: `base0_check_graph_v1` runs
+> before the first token, at `kv_len` 1 **and** 2, because at one position a per-head width and a
+> per-layer one are the same number. A class whose declared graph is not the graph this engine
+> performs produces nothing.
+>
+> **What building the generator found, and it was live.** The inventory held its own copy of the
+> name-to-field mapping, and one entry was already wrong: `attn_q.requant` served the tensor-wide
+> `layer.requant[0]` unconditionally, while the engine narrows through the per-channel table whenever
+> the artifact carries one — which is where a projection bias lives, in each channel's `zero`. Every
+> Qwen2.5 member carries one. The failure is not a refusal: `palw_step_refute.rs:719` asks for
+> `9 × channels` bytes, finds a nine-byte row, and **cycles it across every channel** — so the court
+> recomputes an honest step from parameters the producer never applied and convicts. Silently, and
+> only for classes with a bias, which is not the floor. Fixed by construction: the inventory serves
+> what the resolver returns.
+>
+> Byte-identical where it had to be. Both classes' `shape_profile_id` are unmoved — the floor's
+> `c185df95…` is in the RC genesis and a live testnet-12 — `the_engine_matches_its_golden_trace`
+> stands, and the floor's pinned `artifact_root` does not move (the floor has no per-channel table).
+>
+> The golden test Decision F asks for is
+> `the_four_projections_agree_and_a_real_execution_agrees_with_them`, at two positions, over all three
+> tables, plus the live rows an execution produced. Its teeth are
+> `a_divergence_the_width_check_cannot_see_is_named`: five mutations of the profile — wrong operand,
+> wrong kernel, wrong input, wrong cache role, short table — each reported by slot and field. The
+> three the old shape guard could not see are the first three, and each is a court that recomputes an
+> honest step and convicts the producer.
+
 ## Decision G — the canonical artifact inventory, and one meaning for "class id"
 
 `artifact_root` is the Merkle root over a canonical inventory manifest, one leaf per operand row.

@@ -107,6 +107,11 @@ cargo build --release -p misaka-palw-base0 --bin qwen25-convert
 
 ## What closing it needs
 
+> **Both were done, in that order.** The narrower fix landed first (`4ea842b0`: the attention table
+> projected through `Base0IrGeometryV1`, 842 disagreements → 0). The generator followed on
+> 2026-08-26 (`09bd647f`/`df63a916`): the engine's op sequence is compiled from the IR, so the two
+> descriptions are one and `--check-capture` can no longer have anything to find.
+
 One of the two descriptions has to be made from the other. ADR-0049 Decision F's answer is a
 generator — the profile, the engine's op sequence, the adjudicator's node table and the inventory
 all projected from one canonical IR — and until that exists the narrower fix is to rewrite
