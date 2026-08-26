@@ -181,6 +181,13 @@ describes the artifacts the binary is actually made of).
       git clone https://github.com/MISAKA-BTC/misakas
       cd misakas
       ```
+  7. Build the node + the operator CLI
+      ```bash
+      cargo build --release -p kaspad -p misaka-cli
+      ```
+     These two are what CI's `Check (x86_64-pc-windows-msvc)` job builds and smoke-runs on every
+     push, so this command is verified rather than assumed. `kaspa-pq-signer` and `palw-agent`
+     build on Windows but refuse to run there — both are Unix-domain-socket daemons.
  </details>
 
   <details>

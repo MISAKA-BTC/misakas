@@ -34,6 +34,85 @@ jobs:
       - name: Run cargo check
         run: cargo check --tests --benches
 
+  # The gate that did not exist when `misaka-palw` imported `std::os::unix::net::UnixStream`
+  # with no cfg gate (issue #73). `kaspad` depends on `misaka-palw` non-optionally, so that one
+  # line took the whole node off Windows -- and nothing here noticed, because every job above
+  # runs on ubuntu. A platform this repository ships build instructions for needs a job that
+  # compiles for it, not a convention that everyone remembers to write `#[cfg(unix)]`.
+  #
+  # Scope, deliberately: this COMPILES, it does not run the test suite. The failure class it
+  # exists for -- a platform-only API reached without a gate -- is a compile error, and the
+  # suite is where a Windows job would spend most of its (2x-billed) minutes on failures that
+  # are about fixtures and path separators rather than about portability. `--tests --benches`
+  # matches the Check job above so test and bench sources are covered too: they have carried
+  # `std::os::unix` before, gated at the file level (`misaka-palw-reexecutor`).
+  #
+  # `--workspace` is absent for the same reason it is absent above: it would override
+  # `default-members` and die in `misaka-palw-worker`'s build script.
+  check-windows:
+    name: Check (x86_64-pc-windows-msvc)
+    runs-on: windows-latest
+    steps:
+      # Before checkout: CRLF-converted sources are not what rustfmt, or a byte-exact fixture,
+      # was written against.
+      - name: Fix CRLF
+        run: git config --global core.autocrlf false
+
+      - name: Checkout sources
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install stable toolchain
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Set up cache
+        uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+
+      # librocksdb-sys runs bindgen, which needs libclang. The runner image ships LLVM; the
+      # README tells a human operator to set LIBCLANG_PATH by hand, so CI sets the same thing
+      # rather than relying on it being on PATH.
+      - name: Point bindgen at the runner's LLVM
+        shell: pwsh
+        run: |
+          $llvm = "C:\Program Files\LLVM\bin"
+          if (-not (Test-Path $llvm)) { throw "no LLVM at $llvm -- the runner image changed; install LLVM explicitly" }
+          "LIBCLANG_PATH=$llvm" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Run cargo check
+        run: cargo check --locked --tests --benches --target x86_64-pc-windows-msvc
+
+      # Compiling is not linking, and the README promises a Windows operator a node they can
+      # run. One debug link of the two binaries a Windows host is actually offered -- the node
+      # and the operator CLI -- says whether that promise holds.
+      - name: Build and smoke the node + CLI
+        shell: pwsh
+        run: |
+          cargo build --locked --target x86_64-pc-windows-msvc -p kaspad --bin kaspad -p misaka-cli --bin misaka
+          if ($LASTEXITCODE -ne 0) { throw "cargo build exited $LASTEXITCODE" }
+          $bin = "target/x86_64-pc-windows-msvc/debug"
+
+          # Captured, not piped: `Select-Object -First` closes the pipeline early, and a native
+          # process cut off mid-write turns into a broken-pipe failure this step would then
+          # report as the binary's.
+          #
+          # kaspad is asserted on its OUTPUT, not its exit code: `parse_args` hands clap's
+          # `--help` back through the error arm and exits 1, so a non-zero here says nothing
+          # about whether the binary works. `misaka` exits 0 and is checked that way, matching
+          # the Linux smoke step below.
+          $help = & "$bin/kaspad.exe" --help 2>&1 | Out-String
+          if ($help -notmatch "Usage: kaspad") { throw "kaspad.exe --help printed no usage:`n$help" }
+          Write-Host ($help -split "`n" | Select-Object -First 5)
+
+          $help = & "$bin/misaka.exe" --help 2>&1 | Out-String
+          if ($LASTEXITCODE -ne 0) { throw "misaka.exe --help exited $LASTEXITCODE" }
+          Write-Host ($help -split "`n" | Select-Object -First 5)
+
   test:
     name: Test Suite
     # runs-on: ${{ matrix.os }}
