@@ -41,8 +41,9 @@ use crate::kernels::{
 };
 use kaspa_consensus_core::palw_base0_a16::{A16QuantParams, a16_add_elem, a16_requant, a16_rms_norm, a16_softmax_rows};
 use kaspa_consensus_core::palw_base0_ops::silu;
+use kaspa_hashes::Hash64;
 use kaspa_consensus_core::palw_qwen36_ops::{
-    Qwen36GdnParamsV1, Qwen36GdnStateV1, q36_gate_apply, q36_gdn_step, q36_l2_norm, q36_moe_combine, q36_matmul_grouped, q36_matmul_grouped_wide, q36_mul_wide, q36_decay,
+    Qwen36GdnParamsV1, Qwen36GdnStateV1, q36_gate_apply, q36_gdn_step, q36_l2_norm, q36_moe_combine, q36_mul_wide, q36_decay,
     q36_rescale_row, q36_rms_norm_wide, q36_rope_partial, q36_router_topk, q36_sigmoid_gate, q36_ssm_conv,
 };
 use std::collections::BTreeMap;
@@ -269,6 +270,91 @@ impl Qwen36ArtifactV1 {
                 map.i8_slice(offset, len).ok_or_else(|| Qwen36Error::BadTensor { name: name.to_string(), want: len, got: 0 })
             }
         }
+    }
+
+    /// **The artifact's identity: one digest over everything a forward pass reads.**
+    ///
+    /// The shape, every parameter table, the rotary table and every weight byte, each under a
+    /// length-prefixed name so two different directories cannot collide by concatenation. This is
+    /// what a `ClassRegistered` carries as `artifact_root` and what a producer proves it holds —
+    /// a node that computes a different digest is holding different weights, whatever the file is
+    /// called.
+    ///
+    /// One pass over the mapping (~10 s warm for the 33 GiB class, about a minute cold), computed
+    /// at startup rather than per block. The tokenizer is deliberately NOT inside: this class
+    /// binds prompts by token-id hash, so tokenization is outside the computation a court
+    /// reproduces (unlike the dense tier, whose artifact carries a tokenizer commitment).
+    pub fn artifact_root(&self) -> Hash64 {
+        const DOMAIN: &[u8] = b"misaka-palw/qwen36/artifact-root/v1";
+        let mut state = blake2b_simd::Params::new().hash_length(64).key(DOMAIN).to_state();
+        let absorb = |state: &mut blake2b_simd::State, tag: &[u8], name: &str, bytes: &[u8]| {
+            state.update(&(tag.len() as u64).to_le_bytes());
+            state.update(tag);
+            state.update(&(name.len() as u64).to_le_bytes());
+            state.update(name.as_bytes());
+            state.update(&(bytes.len() as u64).to_le_bytes());
+            state.update(bytes);
+        };
+        // The shape, field by field in declaration order — the same bytes `qwen36_shape_id_v1`
+        // reads, but inside this digest rather than beside it.
+        let mut shape = Vec::with_capacity(24 * 8 + self.shape.layer_types.len());
+        for kind in &self.shape.layer_types {
+            shape.push(match kind {
+                Qwen36LayerKind::LinearAttention => 0u8,
+                Qwen36LayerKind::FullAttention => 1u8,
+            });
+        }
+        for v in [
+            self.shape.d_model,
+            self.shape.n_heads,
+            self.shape.n_kv_heads,
+            self.shape.head_dim,
+            self.shape.rotary_dim,
+            self.shape.linear_k_heads,
+            self.shape.linear_v_heads,
+            self.shape.linear_head_dim,
+            self.shape.conv_kernel,
+            self.shape.n_experts,
+            self.shape.experts_per_token,
+            self.shape.moe_dim,
+            self.shape.shared_dim,
+            self.shape.vocab,
+            self.shape.max_position,
+        ] {
+            shape.extend_from_slice(&(v as u64).to_le_bytes());
+        }
+        shape.extend_from_slice(&self.shape.eps_q.to_le_bytes());
+        shape.push(self.shape.router_up_bits);
+        absorb(&mut state, b"shape", "", &shape);
+        let mut rope = Vec::with_capacity((self.rope.cos_q.len() + self.rope.sin_q.len()) * 4 + 16);
+        rope.extend_from_slice(&(self.rope.d_head as u64).to_le_bytes());
+        rope.extend_from_slice(&(self.rope.max_position as u64).to_le_bytes());
+        for v in self.rope.cos_q.iter().chain(&self.rope.sin_q) {
+            rope.extend_from_slice(&v.to_le_bytes());
+        }
+        absorb(&mut state, b"rope", "", &rope);
+        // BTreeMaps, so both stores absorb in one canonical order.
+        for (name, bytes) in &self.params {
+            absorb(&mut state, b"param", name, bytes);
+        }
+        match &self.store {
+            Store::Owned(tensors) => {
+                for (name, codes) in tensors {
+                    // SAFETY-free reinterpret: i8 and u8 share a layout.
+                    let bytes: &[u8] = unsafe { std::slice::from_raw_parts(codes.as_ptr() as *const u8, codes.len()) };
+                    absorb(&mut state, b"tensor", name, bytes);
+                }
+            }
+            Store::Mapped { map, directory } => {
+                for (name, (offset, len)) in directory {
+                    let bytes = map.as_bytes().get(*offset..offset + len).unwrap_or(&[]);
+                    absorb(&mut state, b"tensor", name, bytes);
+                }
+            }
+        }
+        let mut out = [0u8; 64];
+        out.copy_from_slice(state.finalize().as_bytes());
+        Hash64::from_bytes(out)
     }
 
     /// `(offset, len)` of a tensor inside the mapping, or `None` when the artifact is owned
