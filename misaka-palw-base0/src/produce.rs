@@ -372,6 +372,71 @@ pub struct Base0CheckpointReplayV1 {
     pub calls_replayed: u32,
 }
 
+/// What an anchored check of one leaf concluded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Base0AnchoredLeafCheckV1 {
+    pub source: Base0ReplaySourceV1,
+    /// The leg's own leaf hash at this index.
+    pub committed: Hash64,
+    /// What the anchored replay recomputed, or `None` when the source is `Genesis` and this unit
+    /// does not reach the leaf.
+    pub recomputed: Option<Hash64>,
+}
+
+impl Base0AnchoredLeafCheckV1 {
+    /// `Some(false)` is a disagreement a court can act on; `Some(true)` is agreement; **`None` is
+    /// "not checked"** and must never be read as either.
+    pub fn agrees(&self) -> Option<bool> {
+        self.recomputed.map(|h| h == self.committed)
+    }
+}
+
+/// **The unit at the boundary a disputant actually stands at: served bytes in, one leaf's verdict
+/// out.**
+///
+/// [`base0_anchored_leaf_replay_v1`] takes a `Base0CheckpointsV1`, which is what a PRODUCER holds.
+/// A challenger or a seat holds the material the producer served, so without this the unit stopped
+/// one seam short of its own caller.
+///
+/// # The step that makes it sound
+///
+/// The chunks in that material are the producer's. Resuming from them unchecked would let a
+/// producer that lied about a step hand over a state consistent with the LIE and watch the replay
+/// agree with it. So the leg is re-derived from the served chunks and its root compared to the
+/// binding's `checkpoint_merkle_root` **before** anything resumes: the anchor has to be the one the
+/// claim committed, or there is no anchored check to do.
+///
+/// The binding itself is verified the same way it always is — `check_step_refutation_v1`'s
+/// `verify_binding` recomputes `committed_execution_root` — which is deliberately NOT re-done here:
+/// this answers "does this leaf agree with the leg the binding carries", and whether that binding
+/// is the claim's is the caller's separate question, with its own separate answer.
+pub fn base0_anchored_leaf_check_v1(
+    artifact: &Base0ArtifactV1,
+    material: &Base0RetainedMaterialV1,
+    leaf_index: u64,
+) -> Result<Base0AnchoredLeafCheckV1, ProduceError> {
+    let (binding, tiles, _, generated, chunks) = material;
+    let profile = &binding.shape_profile;
+    let ctx = &binding.job_context;
+
+    let checkpoints = crate::legs::Base0CheckpointCaptureV1::from_chunks_v1(ctx, profile, &binding.checkpoint_profile, chunks)
+        .map_err(|_| ProduceError::Internal("the served checkpoint chunks do not form a leg"))?;
+    if checkpoints.merkle_root != binding.checkpoint_merkle_root || checkpoints.leaf_hashes.len() as u32 != binding.checkpoint_count {
+        return Err(ProduceError::Internal("the served checkpoints are not the ones the binding committed"));
+    }
+
+    let committed = tiles
+        .iter()
+        .find(|(i, _)| *i == leaf_index)
+        .map(|(_, leaf)| {
+            kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_v1(&ctx.context_hash(), &profile.shape_profile_id(), leaf)
+        })
+        .ok_or(ProduceError::Internal("the served material holds no tile at the disputed leaf"))?;
+
+    let (recomputed, source) = base0_anchored_leaf_replay_v1(artifact, profile, ctx, &checkpoints, generated, leaf_index)?;
+    Ok(Base0AnchoredLeafCheckV1 { source, committed, recomputed })
+}
+
 /// Where an anchored replay of one disputed leaf has to start.
 ///
 /// `Genesis` is not a failure — it is the honest answer for a leaf in the prefill call, or in a
@@ -792,6 +857,68 @@ mod tests {
         // At interval 1 the nearest checkpoint is always one call back, so no anchored leaf ever
         // costs more than a single call — the property the whole leg exists to buy.
         assert_eq!(worst_calls, 1, "an anchored dispute cost {worst_calls} calls at interval 1");
+    }
+
+    /// **The unit at its own caller's boundary: served bytes in, one leaf's verdict out.**
+    ///
+    /// Three things, and the middle one is the soundness of the whole arrangement:
+    ///
+    /// 1. honest material agrees at an anchored leaf, and reports `None` (never `false`) at a
+    ///    genesis-anchored one;
+    /// 2. a producer that lies about a STEP and hands over checkpoints consistent with the lie is
+    ///    refused before anything resumes — the anchor must be the one the CLAIM committed, or
+    ///    there is no anchored check to do;
+    /// 3. a producer that lies about a step and keeps its honest checkpoints is caught by the
+    ///    replay, which is the case the leg exists for.
+    #[test]
+    fn served_bytes_in_one_leafs_verdict_out() {
+        let (artifact, profile, ctx, prompt) = small_job();
+        let run = base0_execute_for_attempt_v1(&artifact, &profile, &ctx, &prompt).expect("the job runs");
+        let honest: Base0RetainedMaterialV1 = (
+            run.binding.clone(),
+            run.tiles.tiles.clone(),
+            run.logits_rows.clone(),
+            run.generated_token_ids.clone(),
+            run.checkpoints.chunks.clone(),
+        );
+
+        // (1) A leaf in the last decode call — anchored — and one in the prefill — not.
+        let leaf_in = |call: u32| {
+            (0..run.binding.step_leaf_count)
+                .find(|i| {
+                    kaspa_consensus_core::palw_step::canonical_step_coordinates(&profile, &ctx, *i)
+                        .is_some_and(|c| c.call_index == call)
+                })
+                .expect("the call has leaves")
+        };
+        let anchored = base0_anchored_leaf_check_v1(&artifact, &honest, leaf_in(ctx.exact_decode_tokens - 1)).expect("checks");
+        assert!(matches!(anchored.source, Base0ReplaySourceV1::Checkpoint { .. }));
+        assert_eq!(anchored.agrees(), Some(true), "honest material must agree at an anchored leaf");
+
+        let prefill = base0_anchored_leaf_check_v1(&artifact, &honest, leaf_in(0)).expect("checks");
+        assert_eq!(prefill.source, Base0ReplaySourceV1::Genesis { calls: 0 });
+        assert_eq!(prefill.agrees(), None, "not reached must never read as agreement OR disagreement");
+
+        // (2) Lie about a step AND hand over checkpoints consistent with the lie. The leg no longer
+        // re-derives the binding's root, so the check refuses rather than resuming from the
+        // attacker's chosen state.
+        let mut forged = honest.clone();
+        forged.4[0][0][0] ^= 1;
+        let err = base0_anchored_leaf_check_v1(&artifact, &forged, leaf_in(ctx.exact_decode_tokens - 1))
+            .expect_err("checkpoints that are not the committed ones must be refused");
+        assert!(format!("{err:?}").contains("not the ones the binding committed"), "{err:?}");
+
+        // (3) Lie about a STEP, keep the honest checkpoints. The replay is what catches this, and
+        // it is the case the leg exists for.
+        let target = leaf_in(ctx.exact_decode_tokens - 1);
+        let mut lying = honest.clone();
+        {
+            let slot = lying.1.iter_mut().find(|(i, _)| *i == target).expect("the tile is held");
+            slot.1.values_le[0] = slot.1.values_le[0].wrapping_add(1);
+        }
+        let caught = base0_anchored_leaf_check_v1(&artifact, &lying, target).expect("checks");
+        assert_eq!(caught.agrees(), Some(false), "a tampered step must disagree with its anchored replay");
+        assert_eq!(caught.source.calls(), 1, "and it costs one call to say so");
     }
 
     /// The anchor is read from the COMMITTED leaves, so a leg with a checkpoint missing moves the
