@@ -80,6 +80,75 @@ pub const KDESC_BASE0_EMBED: &str = "base0/embed-lookup/row-gather/v1";
 /// makes the class work was the one the court could not adjudicate.
 pub const KDESC_BASE0_RESCALE: &str = "base0/rescale/i64-mul-rshift-sat32/v1";
 
+// --- PALW-QWEN36 (ADR-0052): the A16 tier and the hybrid graph's own ops ---------------------
+//
+// Same discipline as the BASE-0 block above and for the same reason: integer addition is
+// associative, so none of these descriptors pins a reduction order, a lane structure or a libm
+// flavour. What they do name is the WIDTH the accumulator is formed in, because that is
+// arithmetic here — `i64` and `i128` disagree exactly where a sum leaves 63 bits, and the state
+// read of the recurrence does (`q36_gdn_step`'s own doc records the cosine of 0.007 that a wrapped
+// accumulator produced).
+//
+// The A16 group is the tier, not the model: `PALW-QWEN25`'s A16 class reaches the same nine and a
+// class registering either reads them from here.
+pub const KDESC_A16_EMBED: &str = "a16/embed-lookup/row-gather-i8/v1";
+pub const KDESC_A16_MATMUL_REQUANT: &str = "a16/matmul/i8xi16-i64-exact-requant16/v1";
+pub const KDESC_A16_MATMUL_RESCALE: &str = "a16/matmul/i8xi16-i64-exact-rescale32/v1";
+pub const KDESC_A16_RMS_NORM: &str = "a16/rms-norm/i64-sumsq-intrsqrt/v1";
+pub const KDESC_A16_REQUANTIZE: &str = "a16/requantize/i128-mul-rshift-sat16/v1";
+pub const KDESC_A16_ADD_ELEM: &str = "a16/add-elem/i32-exact/v1";
+pub const KDESC_A16_SOFTMAX: &str = "a16/softmax/rowmax-shifted-intexp-intrecip/v1";
+pub const KDESC_A16_ATTN_SCORES: &str = "a16/attn-scores/i16xi16-i64-gqa/v1";
+pub const KDESC_A16_ATTN_VALUES: &str = "a16/attn-values/i16xi16-i64-gqa/v1";
+
+/// The hybrid graph's own ops (ADR-0052). Each names the accumulator width because that is the
+/// only degree of freedom an integer kernel has left.
+pub const KDESC_Q36_MATMUL_GROUPED: &str = "q36/matmul-grouped/i8xi16-per32-exp-i64/v1";
+pub const KDESC_Q36_MATMUL_GROUPED_WIDE: &str = "q36/matmul-grouped-wide/i8xi16-per32-exp-i64-sat32/v1";
+pub const KDESC_Q36_ROPE_PARTIAL: &str = "q36/rope/pinned-table-pairwise-partial/v1";
+pub const KDESC_Q36_SSM_CONV: &str = "q36/ssm-conv/4tap-per-channel-qk/v1";
+pub const KDESC_Q36_L2_NORM: &str = "q36/l2-norm/i64-sumsq-intrsqrt-q15/v1";
+pub const KDESC_Q36_SIGMOID: &str = "q36/sigmoid/intexp-intrecip/v1";
+pub const KDESC_Q36_GATE_APPLY: &str = "q36/gate-apply/i64-mul-narrow16/v1";
+pub const KDESC_Q36_MUL_WIDE: &str = "q36/mul-wide/i32xi32-i64-narrow16/v1";
+pub const KDESC_Q36_RESCALE_ROW: &str = "q36/rescale-row/i128-mul-rshift-sat32/v1";
+pub const KDESC_Q36_RMS_NORM_WIDE: &str = "q36/rms-norm-wide/i128-sumsq-normalized-intrsqrt/v1";
+pub const KDESC_Q36_ROUTER_TOPK: &str = "q36/router-topk/softmax-shifted-k-passes-low-index/v1";
+pub const KDESC_Q36_MOE_COMBINE: &str = "q36/moe-combine/i64-weighted-sum-narrow16/v1";
+pub const KDESC_Q36_GDN_STEP: &str = "q36/gated-delta-net/decay-read-i128-write-shift-i64/v1";
+pub const KDESC_Q36_DECAY: &str = "q36/decay/softplus-intln-exp-refined/v1";
+
+/// The A16 tier's nine, for a caller assembling a reachable set for any class in it.
+pub const KDESC_A16_ALL: &[&str] = &[
+    KDESC_A16_EMBED,
+    KDESC_A16_MATMUL_REQUANT,
+    KDESC_A16_MATMUL_RESCALE,
+    KDESC_A16_RMS_NORM,
+    KDESC_A16_REQUANTIZE,
+    KDESC_A16_ADD_ELEM,
+    KDESC_A16_SOFTMAX,
+    KDESC_A16_ATTN_SCORES,
+    KDESC_A16_ATTN_VALUES,
+];
+
+/// Qwen3.6's own fourteen, on top of [`KDESC_A16_ALL`] and BASE-0's `Silu`.
+pub const KDESC_Q36_ALL: &[&str] = &[
+    KDESC_Q36_MATMUL_GROUPED,
+    KDESC_Q36_MATMUL_GROUPED_WIDE,
+    KDESC_Q36_ROPE_PARTIAL,
+    KDESC_Q36_SSM_CONV,
+    KDESC_Q36_L2_NORM,
+    KDESC_Q36_SIGMOID,
+    KDESC_Q36_GATE_APPLY,
+    KDESC_Q36_MUL_WIDE,
+    KDESC_Q36_RESCALE_ROW,
+    KDESC_Q36_RMS_NORM_WIDE,
+    KDESC_Q36_ROUTER_TOPK,
+    KDESC_Q36_MOE_COMBINE,
+    KDESC_Q36_GDN_STEP,
+    KDESC_Q36_DECAY,
+];
+
 /// Every descriptor this build can adjudicate, in one place so the coverage gate reads the same
 /// table the adjudicator resolves against.
 pub const KDESC_ALL: &[&str] = &[
@@ -100,6 +169,29 @@ pub const KDESC_ALL: &[&str] = &[
     KDESC_BASE0_ADD_ELEM,
     KDESC_BASE0_EMBED,
     KDESC_BASE0_RESCALE,
+    KDESC_A16_EMBED,
+    KDESC_A16_MATMUL_REQUANT,
+    KDESC_A16_MATMUL_RESCALE,
+    KDESC_A16_RMS_NORM,
+    KDESC_A16_REQUANTIZE,
+    KDESC_A16_ADD_ELEM,
+    KDESC_A16_SOFTMAX,
+    KDESC_A16_ATTN_SCORES,
+    KDESC_A16_ATTN_VALUES,
+    KDESC_Q36_MATMUL_GROUPED,
+    KDESC_Q36_MATMUL_GROUPED_WIDE,
+    KDESC_Q36_ROPE_PARTIAL,
+    KDESC_Q36_SSM_CONV,
+    KDESC_Q36_L2_NORM,
+    KDESC_Q36_SIGMOID,
+    KDESC_Q36_GATE_APPLY,
+    KDESC_Q36_MUL_WIDE,
+    KDESC_Q36_RESCALE_ROW,
+    KDESC_Q36_RMS_NORM_WIDE,
+    KDESC_Q36_ROUTER_TOPK,
+    KDESC_Q36_MOE_COMBINE,
+    KDESC_Q36_GDN_STEP,
+    KDESC_Q36_DECAY,
 ];
 
 /// The `kernel_semantics_id`s this build can adjudicate — the catalog side of the ADR-0038 A4
@@ -138,6 +230,8 @@ enum KernelProgram {
     /// ADR-0040's nine. One variant per op; no lane structure and no libm flavour, because an
     /// integer kernel has neither.
     Base0(Base0Op),
+    /// The A16 tier and Qwen3.6's own ops (ADR-0052), same discipline.
+    Qwen36(Qwen36Op),
 }
 
 /// The BASE-0 op a catalogued kernel id resolves to (ADR-0040 Decision D).
@@ -153,6 +247,37 @@ enum Base0Op {
     MulElem,
     AddElem,
     Embed,
+}
+
+/// The A16 tier's nine and the hybrid graph's fourteen (ADR-0052). One variant per op, resolved
+/// by id and executed by calling the SAME function the engine calls — there is no second
+/// implementation of a kernel here, because a court that reimplements the arithmetic it judges is
+/// a court with its own bugs to be wrong about.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Qwen36Op {
+    Embed,
+    MatMulRequant,
+    MatMulRescale,
+    RmsNorm,
+    Requantize,
+    AddElem,
+    Softmax,
+    AttnScores,
+    AttnValues,
+    MatMulGrouped,
+    MatMulGroupedWide,
+    RopePartial,
+    SsmConv,
+    L2Norm,
+    Sigmoid,
+    GateApply,
+    MulWide,
+    RescaleRow,
+    RmsNormWide,
+    RouterTopk,
+    MoeCombine,
+    GdnStep,
+    Decay,
 }
 
 /// The class's `ggml_vec_dot_f32` lane structure (simd-mappings.h, read verbatim).
@@ -191,6 +316,29 @@ const KERNEL_CATALOG: &[(&str, KernelProgram)] = &[
     (KDESC_BASE0_MUL_ELEM, KernelProgram::Base0(Base0Op::MulElem)),
     (KDESC_BASE0_ADD_ELEM, KernelProgram::Base0(Base0Op::AddElem)),
     (KDESC_BASE0_EMBED, KernelProgram::Base0(Base0Op::Embed)),
+    (KDESC_A16_EMBED, KernelProgram::Qwen36(Qwen36Op::Embed)),
+    (KDESC_A16_MATMUL_REQUANT, KernelProgram::Qwen36(Qwen36Op::MatMulRequant)),
+    (KDESC_A16_MATMUL_RESCALE, KernelProgram::Qwen36(Qwen36Op::MatMulRescale)),
+    (KDESC_A16_RMS_NORM, KernelProgram::Qwen36(Qwen36Op::RmsNorm)),
+    (KDESC_A16_REQUANTIZE, KernelProgram::Qwen36(Qwen36Op::Requantize)),
+    (KDESC_A16_ADD_ELEM, KernelProgram::Qwen36(Qwen36Op::AddElem)),
+    (KDESC_A16_SOFTMAX, KernelProgram::Qwen36(Qwen36Op::Softmax)),
+    (KDESC_A16_ATTN_SCORES, KernelProgram::Qwen36(Qwen36Op::AttnScores)),
+    (KDESC_A16_ATTN_VALUES, KernelProgram::Qwen36(Qwen36Op::AttnValues)),
+    (KDESC_Q36_MATMUL_GROUPED, KernelProgram::Qwen36(Qwen36Op::MatMulGrouped)),
+    (KDESC_Q36_MATMUL_GROUPED_WIDE, KernelProgram::Qwen36(Qwen36Op::MatMulGroupedWide)),
+    (KDESC_Q36_ROPE_PARTIAL, KernelProgram::Qwen36(Qwen36Op::RopePartial)),
+    (KDESC_Q36_SSM_CONV, KernelProgram::Qwen36(Qwen36Op::SsmConv)),
+    (KDESC_Q36_L2_NORM, KernelProgram::Qwen36(Qwen36Op::L2Norm)),
+    (KDESC_Q36_SIGMOID, KernelProgram::Qwen36(Qwen36Op::Sigmoid)),
+    (KDESC_Q36_GATE_APPLY, KernelProgram::Qwen36(Qwen36Op::GateApply)),
+    (KDESC_Q36_MUL_WIDE, KernelProgram::Qwen36(Qwen36Op::MulWide)),
+    (KDESC_Q36_RESCALE_ROW, KernelProgram::Qwen36(Qwen36Op::RescaleRow)),
+    (KDESC_Q36_RMS_NORM_WIDE, KernelProgram::Qwen36(Qwen36Op::RmsNormWide)),
+    (KDESC_Q36_ROUTER_TOPK, KernelProgram::Qwen36(Qwen36Op::RouterTopk)),
+    (KDESC_Q36_MOE_COMBINE, KernelProgram::Qwen36(Qwen36Op::MoeCombine)),
+    (KDESC_Q36_GDN_STEP, KernelProgram::Qwen36(Qwen36Op::GdnStep)),
+    (KDESC_Q36_DECAY, KernelProgram::Qwen36(Qwen36Op::Decay)),
 ];
 
 /// **Whether this build's adjudicator can serve THIS node's operand shape (G5).**
@@ -269,6 +417,85 @@ pub fn kernel_can_serve_node_v1(node: &crate::palw_step::PalwStepNodeV1, table_i
     }
     let inputs = node.input_refs.len();
     match program {
+        // **The A16/Q36 matmuls take their matrix from the registry, never from a second row.**
+        // The tier's weights are `int8` rows with (for the grouped pair) a per-32 exponent table
+        // beside them, and neither is an activation a leg could open — so a node that names no
+        // weight has nothing to multiply by, and one that is kv-scaled names a matrix of a width
+        // the oracle cannot know.
+        KernelProgram::Qwen36(
+            Qwen36Op::MatMulRequant | Qwen36Op::MatMulRescale | Qwen36Op::MatMulGrouped | Qwen36Op::MatMulGroupedWide,
+        ) => {
+            if node.weight_name.is_empty() {
+                return Err("an A16 matmul must name its weight tensor: the tier has no weightless form");
+            }
+            if inputs < 1 {
+                return Err("an A16 matmul must name the row it multiplies");
+            }
+            if matches!(node.out_len, PalwStepOutLenV1::KvScaled { .. }) {
+                return Err("a registered weight has a fixed width; a kv-scaled one names no matrix the oracle holds");
+            }
+            Ok(())
+        }
+        // Two opened rows and a registered narrowing: the gate product, the wide product and the
+        // mixture's combine. One row is a node that has nothing to multiply BY.
+        KernelProgram::Qwen36(Qwen36Op::GateApply | Qwen36Op::MulWide | Qwen36Op::MoeCombine | Qwen36Op::AddElem) => {
+            if inputs < 2 {
+                return Err("a two-operand elementwise node must name both rows");
+            }
+            Ok(())
+        }
+        // Attention's two reductions read the query (or the probabilities) and the cached series.
+        KernelProgram::Qwen36(Qwen36Op::AttnScores | Qwen36Op::AttnValues) => {
+            if inputs < 2 {
+                return Err("an attention reduction must name its row and its cached series");
+            }
+            if node.weight_name.is_empty() {
+                return Err("an attention reduction must name the tensor its narrowing is registered in");
+            }
+            Ok(())
+        }
+        // The recurrence reads key, value and query, and its state is the checkpoint sentinel the
+        // caller supplies; the narrowings are registration artifacts.
+        KernelProgram::Qwen36(Qwen36Op::GdnStep) => {
+            if inputs < 3 {
+                return Err("the recurrence must name its key, value and query rows");
+            }
+            if node.weight_name.is_empty() {
+                return Err("the recurrence must name the tensor its four narrowings are registered in");
+            }
+            Ok(())
+        }
+        // Everything else in the tier is one opened row plus, for some, a registered parameter
+        // table. The table is checked when it is read; what is refused here is a node with no row
+        // to compute from at all.
+        KernelProgram::Qwen36(
+            Qwen36Op::RmsNorm
+            | Qwen36Op::Requantize
+            | Qwen36Op::Softmax
+            | Qwen36Op::RopePartial
+            | Qwen36Op::SsmConv
+            | Qwen36Op::L2Norm
+            | Qwen36Op::Sigmoid
+            | Qwen36Op::RescaleRow
+            | Qwen36Op::RmsNormWide
+            | Qwen36Op::RouterTopk
+            | Qwen36Op::Decay,
+        ) => {
+            if inputs < 1 {
+                return Err("a one-operand node must name the row it computes from");
+            }
+            Ok(())
+        }
+        // The gather names a table and no row: its input is the token id, which the court holds.
+        KernelProgram::Qwen36(Qwen36Op::Embed) => {
+            if node.weight_name.is_empty() {
+                return Err("the embedding gather must name its table");
+            }
+            if !inputs.is_multiple_of(1) || inputs != 0 {
+                return Err("the embedding gather reads the carried token ids, not an opened row");
+            }
+            Ok(())
+        }
         // Two operand sources, and exactly two: a registered weight, or a second opened row.
         // A node with neither has nothing to multiply by; one with both would have two answers.
         KernelProgram::Base0(Base0Op::MatMul) => {
@@ -365,6 +592,348 @@ fn base0_kv_chunk_width(node: &crate::palw_step::PalwStepNodeV1, kv_len: u64, ro
                 return Err(PalwStepRefuteError::InputSetNotCanonical("base0 row is empty"));
             }
             Ok(row_len)
+        }
+    }
+}
+
+/// **Recompute one step of the A16 tier or of Qwen3.6's own graph** (ADR-0052).
+///
+/// Every arm calls the SAME function the engine calls. That is the point and not an economy: a
+/// court that reimplements the arithmetic it judges has its own bugs to be wrong about, and the
+/// class's whole claim is that one program has one answer. What this function does is the
+/// plumbing the engine does not need — decoding operands out of opened leaves and registered
+/// tensors, and refusing anything it cannot decode rather than guessing.
+///
+/// Parameters arrive as `A16QuantParams` wire bytes from the oracle, seventeen per channel. A
+/// table that is short, mis-sized or undecodable is [`PalwStepRefuteError::Unadjudicable`] — the
+/// court not being able to check is never someone's fault.
+#[allow(clippy::too_many_arguments)]
+fn qwen36_row(
+    op: Qwen36Op,
+    node: &crate::palw_step::PalwStepNodeV1,
+    layer: Option<u16>,
+    profile: &PalwShapeProfileV3,
+    inputs: &[Vec<u32>],
+    weights: &dyn PalwWeightOracleV1,
+    kv_len: u64,
+    gather: (&PalwStepCoordinateV1, &[u32], &[u32]),
+) -> Result<Vec<u32>, PalwStepRefuteError> {
+    use crate::palw_base0_a16 as a16;
+    use crate::palw_base0_a16::A16QuantParams;
+    use crate::palw_qwen36_ops as q36;
+
+    let need = |n: usize| -> Result<(), PalwStepRefuteError> {
+        if inputs.len() < n {
+            return Err(PalwStepRefuteError::InputSetNotCanonical("a16 node has too few input rows"));
+        }
+        Ok(())
+    };
+    let as_i32 = |row: &Vec<u32>| -> Vec<i32> { row.iter().map(|v| *v as i32).collect() };
+    let out = |row: Vec<i32>| -> Vec<u32> { row.into_iter().map(|v| v as u32).collect() };
+    let shape16 = |_e: a16::PalwA16OpError| PalwStepRefuteError::InputSetNotCanonical("an a16 op refused its operand shape");
+    let shape36 = |_e: q36::PalwQwen36OpError| PalwStepRefuteError::InputSetNotCanonical("a q36 op refused its operand shape");
+
+    // `count` parameter triples from the node's registered tensor, starting at `first`.
+    let params = |first: usize, count: usize| -> Result<Vec<A16QuantParams>, PalwStepRefuteError> {
+        if node.weight_name.is_empty() || count == 0 {
+            return Err(PalwStepRefuteError::Unadjudicable);
+        }
+        let width = A16QuantParams::WIRE_BYTES;
+        let offset = u32::try_from(first.checked_mul(width).ok_or(PalwStepRefuteError::Unadjudicable)?)
+            .map_err(|_| PalwStepRefuteError::Unadjudicable)?;
+        let len = u32::try_from(count.checked_mul(width).ok_or(PalwStepRefuteError::Unadjudicable)?)
+            .map_err(|_| PalwStepRefuteError::Unadjudicable)?;
+        let bytes = weights
+            .operand_bytes(node.weight_name.as_str(), layer, offset, len)
+            .ok_or(PalwStepRefuteError::Unadjudicable)?;
+        if bytes.len() != len as usize {
+            return Err(PalwStepRefuteError::Unadjudicable);
+        }
+        bytes
+            .chunks_exact(width)
+            .map(|c| A16QuantParams::from_wire(c).map_err(|_| PalwStepRefuteError::InputSetNotCanonical("an a16 parameter triple is malformed")))
+            .collect()
+    };
+    let fixed_width = || -> Result<usize, PalwStepRefuteError> {
+        match node.out_len {
+            crate::palw_step::PalwStepOutLenV1::Fixed { elements } => Ok(elements as usize),
+            crate::palw_step::PalwStepOutLenV1::KvScaled { multiplier } => {
+                let n = (multiplier as u64).checked_mul(kv_len).ok_or(PalwStepRefuteError::Unadjudicable)?;
+                usize::try_from(n).map_err(|_| PalwStepRefuteError::Unadjudicable)
+            }
+        }
+    };
+
+    match op {
+        // The gather, adjudicated the way BASE-0's is: the row comes from the registered table at
+        // the token's own offset, and the token from the carried ids the court has already matched
+        // against the job context.
+        Qwen36Op::Embed => {
+            let (coord, prompt_ids, generated_ids) = gather;
+            let token = if coord.call_index == 0 {
+                *prompt_ids.get(coord.position as usize).ok_or(PalwStepRefuteError::Unadjudicable)?
+            } else {
+                let produced = (coord.call_index as usize).checked_sub(1).ok_or(PalwStepRefuteError::Unadjudicable)?;
+                *generated_ids.get(produced).ok_or(PalwStepRefuteError::Unadjudicable)?
+            };
+            let width = fixed_width()?;
+            let start = (token as u64).checked_mul(width as u64).ok_or(PalwStepRefuteError::Unadjudicable)?;
+            let start = u32::try_from(start).map_err(|_| PalwStepRefuteError::Unadjudicable)?;
+            let width32 = u32::try_from(width).map_err(|_| PalwStepRefuteError::Unadjudicable)?;
+            let row = weights
+                .operand_bytes(node.weight_name.as_str(), layer, start, width32)
+                .ok_or(PalwStepRefuteError::Unadjudicable)?;
+            if row.len() != width {
+                return Err(PalwStepRefuteError::Unadjudicable);
+            }
+            Ok(row.iter().map(|b| *b as i8 as i32 as u32).collect())
+        }
+        // **The challenged TILE of the projection, not the whole matrix** (ADR-0049 Decision B).
+        // An output channel reduces over the whole input row and over its own weight row alone, so
+        // a tile of channels needs a contiguous slice of weight rows and nothing else — which is
+        // what keeps the terminal adjudication from growing with the model.
+        Qwen36Op::MatMulRequant | Qwen36Op::MatMulRescale | Qwen36Op::MatMulGrouped | Qwen36Op::MatMulGroupedWide => {
+            need(1)?;
+            let x = as_i32(&inputs[0]);
+            if x.is_empty() {
+                return Err(PalwStepRefuteError::InputSetNotCanonical("a16 matmul input row is empty"));
+            }
+            let out_dim = fixed_width()?;
+            if out_dim == 0 {
+                return Err(PalwStepRefuteError::InputSetNotCanonical("a16 matmul output width is zero"));
+            }
+            let first = (gather.0.tile_index as usize).checked_mul(node.tile_len as usize).ok_or(PalwStepRefuteError::Unadjudicable)?;
+            if first >= out_dim {
+                return Err(PalwStepRefuteError::InputSetNotCanonical("the challenged tile is past the node's output width"));
+            }
+            let rows = (node.tile_len as usize).min(out_dim - first);
+            let byte_offset =
+                u32::try_from(first.checked_mul(x.len()).ok_or(PalwStepRefuteError::Unadjudicable)?).map_err(|_| PalwStepRefuteError::Unadjudicable)?;
+            let byte_len =
+                u32::try_from(rows.checked_mul(x.len()).ok_or(PalwStepRefuteError::Unadjudicable)?).map_err(|_| PalwStepRefuteError::Unadjudicable)?;
+            let w = weights
+                .operand_bytes(node.weight_name.as_str(), layer, byte_offset, byte_len)
+                .ok_or(PalwStepRefuteError::Unadjudicable)?;
+            if w.len() != byte_len as usize {
+                return Err(PalwStepRefuteError::Unadjudicable);
+            }
+            let codes: Vec<i8> = w.iter().map(|b| *b as i8).collect();
+            let p = params(first, rows)?;
+            match op {
+                Qwen36Op::MatMulRequant => Ok(out(a16::a16_matmul_requant(&codes, &x, &p).map_err(shape16)?)),
+                Qwen36Op::MatMulRescale => Ok(out(a16::a16_matmul_rescale(&codes, &x, &p).map_err(shape16)?)),
+                // The grouped pair reads a second registered tensor: one `i8` exponent per 32
+                // weights, named by suffix so a single wiring names both halves of one operand.
+                _ => {
+                    let group = q36::QWEN36_WEIGHT_GROUP;
+                    let groups = x.len().div_ceil(group);
+                    let e_offset = u32::try_from(first.checked_mul(groups).ok_or(PalwStepRefuteError::Unadjudicable)?)
+                        .map_err(|_| PalwStepRefuteError::Unadjudicable)?;
+                    let e_len = u32::try_from(rows.checked_mul(groups).ok_or(PalwStepRefuteError::Unadjudicable)?)
+                        .map_err(|_| PalwStepRefuteError::Unadjudicable)?;
+                    let name = format!("{}.exp", node.weight_name);
+                    let e = weights.operand_bytes(name.as_str(), layer, e_offset, e_len).ok_or(PalwStepRefuteError::Unadjudicable)?;
+                    if e.len() != e_len as usize {
+                        return Err(PalwStepRefuteError::Unadjudicable);
+                    }
+                    let exps: Vec<i8> = e.iter().map(|b| *b as i8).collect();
+                    if op == Qwen36Op::MatMulGrouped {
+                        Ok(out(q36::q36_matmul_grouped(&codes, &exps, &x, &p).map_err(shape36)?))
+                    } else {
+                        Ok(out(q36::q36_matmul_grouped_wide(&codes, &exps, &x, &p).map_err(shape36)?))
+                    }
+                }
+            }
+        }
+        Qwen36Op::RmsNorm => {
+            need(1)?;
+            Ok(out(a16::a16_rms_norm(&as_i32(&inputs[0]), profile.base0_rms_eps_q).map_err(shape16)?))
+        }
+        // **`eps` is a registered triple, not the profile's scalar.** The wide norm compares it
+        // against a mean of squares of CODES, so it is only meaningful at the site's own exponent
+        // — a shared constant rounds to nothing on a loud head and becomes the whole denominator
+        // on a quiet one. The class registers it per head; the court reads what was registered.
+        Qwen36Op::RmsNormWide => {
+            need(1)?;
+            let head = (gather.0.tile_index as usize).saturating_mul(node.tile_len as usize) / inputs[0].len().max(1);
+            let eps = params(head, 1)?[0];
+            Ok(out(q36::q36_rms_norm_wide(&as_i32(&inputs[0]), eps).map_err(shape36)?))
+        }
+        Qwen36Op::Requantize => {
+            need(1)?;
+            let x = as_i32(&inputs[0]);
+            let p = params(0, x.len())?;
+            Ok(out(a16::a16_requant(&x, &p).map_err(shape16)?))
+        }
+        Qwen36Op::RescaleRow => {
+            need(1)?;
+            let x = as_i32(&inputs[0]);
+            let p = params(0, x.len())?;
+            Ok(out(q36::q36_rescale_row(&x, &p).map_err(shape36)?))
+        }
+        Qwen36Op::AddElem => {
+            need(2)?;
+            Ok(out(a16::a16_add_elem(&as_i32(&inputs[0]), &as_i32(&inputs[1])).map_err(shape16)?))
+        }
+        Qwen36Op::L2Norm => {
+            need(1)?;
+            Ok(out(q36::q36_l2_norm(&as_i32(&inputs[0])).map_err(shape36)?))
+        }
+        Qwen36Op::Sigmoid => {
+            need(1)?;
+            Ok(out(q36::q36_sigmoid_gate(&as_i32(&inputs[0]))))
+        }
+        // `exp(a · softplus(dt))` for the head's registered coefficient, which rides the triple's
+        // zero at Q[K] exactly as the converter writes it.
+        Qwen36Op::Decay => {
+            need(1)?;
+            let x = as_i32(&inputs[0]);
+            let p = params(0, x.len())?;
+            Ok(out(x.iter().zip(&p).map(|(v, c)| q36::q36_decay(*v, c.zero) as i32).collect()))
+        }
+        Qwen36Op::GateApply => {
+            need(2)?;
+            let p = params(0, 1)?[0];
+            Ok(out(q36::q36_gate_apply(&as_i32(&inputs[0]), &as_i32(&inputs[1]), p).map_err(shape36)?))
+        }
+        Qwen36Op::MulWide => {
+            need(2)?;
+            let a = as_i32(&inputs[0]);
+            let p = params(0, a.len())?;
+            Ok(out(q36::q36_mul_wide(&a, &as_i32(&inputs[1]), &p).map_err(shape36)?))
+        }
+        Qwen36Op::SsmConv => {
+            need(1)?;
+            let window = as_i32(&inputs[0]);
+            let channels = window.len() / 4;
+            if channels == 0 || window.len() != channels * 4 {
+                return Err(PalwStepRefuteError::InputSetNotCanonical("the conv window is not four taps per channel"));
+            }
+            let byte_len = u32::try_from(window.len()).map_err(|_| PalwStepRefuteError::Unadjudicable)?;
+            let taps = weights
+                .operand_bytes(node.weight_name.as_str(), layer, 0, byte_len)
+                .ok_or(PalwStepRefuteError::Unadjudicable)?;
+            if taps.len() != window.len() {
+                return Err(PalwStepRefuteError::Unadjudicable);
+            }
+            let taps: Vec<i32> = taps.iter().map(|b| *b as i8 as i32).collect();
+            let p = {
+                let name = format!("{}.a16", node.weight_name);
+                let width = A16QuantParams::WIRE_BYTES;
+                let len = u32::try_from(channels * width).map_err(|_| PalwStepRefuteError::Unadjudicable)?;
+                let bytes = weights.operand_bytes(name.as_str(), layer, 0, len).ok_or(PalwStepRefuteError::Unadjudicable)?;
+                if bytes.len() != len as usize {
+                    return Err(PalwStepRefuteError::Unadjudicable);
+                }
+                bytes
+                    .chunks_exact(width)
+                    .map(|c| A16QuantParams::from_wire(c).map_err(|_| PalwStepRefuteError::InputSetNotCanonical("a conv triple is malformed")))
+                    .collect::<Result<Vec<_>, _>>()?
+            };
+            Ok(out(q36::q36_ssm_conv(&window, &taps, channels, &p).map_err(shape36)?))
+        }
+        // The rotation reads the pinned table at this position, which the profile carries rather
+        // than the oracle: a table the court derives is a table the court can get wrong.
+        Qwen36Op::RopePartial => {
+            need(1)?;
+            let x = as_i32(&inputs[0]);
+            let head_dim = profile.attn_head_dim as usize;
+            let rotary = profile.rope_dims as usize;
+            if head_dim == 0 || rotary == 0 || rotary > head_dim {
+                return Err(PalwStepRefuteError::Unadjudicable);
+            }
+            let pairs = rotary / 2;
+            let bytes = u32::try_from(pairs * 8).map_err(|_| PalwStepRefuteError::Unadjudicable)?;
+            let offset = (gather.0.position as u64).checked_mul(pairs as u64 * 8).ok_or(PalwStepRefuteError::Unadjudicable)?;
+            let offset = u32::try_from(offset).map_err(|_| PalwStepRefuteError::Unadjudicable)?;
+            let table = weights
+                .operand_bytes(node.weight_name.as_str(), layer, offset, bytes)
+                .ok_or(PalwStepRefuteError::Unadjudicable)?;
+            if table.len() != pairs * 8 {
+                return Err(PalwStepRefuteError::Unadjudicable);
+            }
+            let cos: Vec<i32> = table[..pairs * 4].chunks_exact(4).map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+            let sin: Vec<i32> = table[pairs * 4..].chunks_exact(4).map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+            let clamp = {
+                let name = format!("{}.clamp", node.weight_name);
+                let width = A16QuantParams::WIRE_BYTES;
+                let bytes = weights
+                    .operand_bytes(name.as_str(), layer, 0, width as u32)
+                    .ok_or(PalwStepRefuteError::Unadjudicable)?;
+                A16QuantParams::from_wire(&bytes).map_err(|_| PalwStepRefuteError::InputSetNotCanonical("the rope clamp triple is malformed"))?
+            };
+            Ok(out(q36::q36_rope_partial(&x, head_dim, rotary, &cos, &sin, clamp).map_err(shape36)?))
+        }
+        // The router commits its narrowed logit row and the court recomputes the SELECTION from
+        // it: the weights the mixture uses, in expert order. The tie rule is part of the op, which
+        // is why the row is committed before the selection rather than after.
+        Qwen36Op::RouterTopk => {
+            need(1)?;
+            let logits = as_i32(&inputs[0]);
+            let p = params(0, 1)?[0];
+            let k = usize::try_from(p.multiplier).map_err(|_| PalwStepRefuteError::Unadjudicable)?;
+            let up = u8::try_from(p.zero.clamp(0, 62)).map_err(|_| PalwStepRefuteError::Unadjudicable)?;
+            let routed = q36::q36_router_topk(&logits, k, up).map_err(shape36)?;
+            Ok(routed.into_iter().flat_map(|r| [r.expert as i32 as u32, r.weight_q as u32]).collect())
+        }
+        Qwen36Op::MoeCombine => {
+            need(2)?;
+            let outputs = as_i32(&inputs[0]);
+            let w = as_i32(&inputs[1]);
+            let width = fixed_width()?;
+            let p = params(0, 1)?[0];
+            Ok(out(q36::q36_moe_combine(&outputs, &w, width, p).map_err(shape36)?))
+        }
+        Qwen36Op::Softmax => {
+            need(1)?;
+            let row_len = usize::try_from(kv_len).map_err(|_| PalwStepRefuteError::Unadjudicable)?;
+            if row_len == 0 {
+                return Err(PalwStepRefuteError::Unadjudicable);
+            }
+            let p = params(0, 1)?[0];
+            let up = u8::try_from(p.zero.clamp(0, 62)).map_err(|_| PalwStepRefuteError::Unadjudicable)?;
+            Ok(out(a16::a16_softmax_rows(&as_i32(&inputs[0]), row_len, up).map_err(shape16)?))
+        }
+        Qwen36Op::AttnScores | Qwen36Op::AttnValues => {
+            need(2)?;
+            let heads = profile.attn_heads as usize;
+            let kv_heads = profile.attn_kv_heads as usize;
+            let d_head = profile.attn_head_dim as usize;
+            if heads == 0 || kv_heads == 0 || d_head == 0 {
+                return Err(PalwStepRefuteError::Unadjudicable);
+            }
+            let row = as_i32(&inputs[0]);
+            let series = as_i32(&inputs[1]);
+            let count = if op == Qwen36Op::AttnScores { heads.saturating_mul(series.len() / (kv_heads * d_head).max(1)) } else { heads * d_head };
+            let p = params(0, count.max(1))?;
+            if op == Qwen36Op::AttnScores {
+                Ok(out(a16::a16_attn_scores(&row, &series, heads, kv_heads, d_head, &p).map_err(shape16)?))
+            } else {
+                Ok(out(a16::a16_attn_values(&row, &series, heads, kv_heads, d_head, &p).map_err(shape16)?))
+            }
+        }
+        // **The recurrence, and the one operand that is not an opened leaf.** The state is the
+        // checkpoint sentinel's material: `PALW_STEP_INPUT_CHECKPOINT` supplies it, and a class
+        // whose state chunk map has not registered has no way to open it — which is
+        // `Unadjudicable` and not a conviction, exactly as ADR-0037 Decision 5 requires.
+        Qwen36Op::GdnStep => {
+            need(4)?;
+            let k = as_i32(&inputs[0]);
+            let v = as_i32(&inputs[1]);
+            let q = as_i32(&inputs[2]);
+            let state_row = as_i32(&inputs[3]);
+            let (d_k, d_v) = (k.len(), v.len());
+            if d_k == 0 || d_v == 0 || q.len() != d_k || state_row.len() != d_k * d_v {
+                return Err(PalwStepRefuteError::InputSetNotCanonical("the recurrence's operands do not agree on the head geometry"));
+            }
+            // Four triples per head: read, delta, write (a shift in `zero`) and out. The two
+            // gates ride the fifth and sixth as Q[K] values, because they are per-position data
+            // the producer commits rather than registration constants.
+            let p = params(0, 6)?;
+            let mut state = q36::Qwen36GdnStateV1 { d_v, d_k, s: state_row };
+            let gdn = q36::Qwen36GdnParamsV1 { read: p[0], delta: p[1], write_shift: p[2].zero as i32, out: p[3] };
+            let head_out = q36::q36_gdn_step(&mut state, &k, &v, &q, p[4].zero, p[5].zero, gdn).map_err(shape36)?;
+            Ok(out(head_out))
         }
     }
 }
@@ -1462,11 +2031,16 @@ fn run_program(
     // Only the BASE-0 matmul narrows what it computes to the challenged tile; every other kernel
     // is elementwise or a whole-row reduction and returns the row it recomputed, at offset 0.
     let row_offset = match program {
-        KernelProgram::Base0(Base0Op::MatMul) => (gather.0.tile_index as usize).saturating_mul(node.tile_len as usize),
+        KernelProgram::Base0(Base0Op::MatMul)
+        | KernelProgram::Qwen36(Qwen36Op::MatMulRequant)
+        | KernelProgram::Qwen36(Qwen36Op::MatMulRescale)
+        | KernelProgram::Qwen36(Qwen36Op::MatMulGrouped)
+        | KernelProgram::Qwen36(Qwen36Op::MatMulGroupedWide) => (gather.0.tile_index as usize).saturating_mul(node.tile_len as usize),
         _ => 0,
     };
     let row = match program {
         KernelProgram::Base0(op) => base0_row(op, node, layer, profile, inputs, weights, kv_len, gather),
+        KernelProgram::Qwen36(op) => qwen36_row(op, node, layer, profile, inputs, weights, kv_len, gather),
         KernelProgram::L2Norm => {
             let x = inputs.first().ok_or(PalwStepRefuteError::InputSetNotCanonical("l2norm needs one input row"))?;
             Ok(l2_norm_row(x, profile.l2_eps_bits))
