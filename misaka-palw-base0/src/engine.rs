@@ -37,6 +37,7 @@ use kaspa_consensus_core::palw_base0_ops::{
     self as ops, PalwBase0OpError, ScaleParams, add_elem, dot_i8, embed_lookup, matmul_quant, mul_elem, requantize_row,
     requantize_row_uniform, rescale_row, rms_norm, rope_table, silu, softmax,
 };
+use kaspa_consensus_core::palw_state_chunk_map::{PalwStateChunkEntryV1, PalwStateChunkGeometryV1, PalwStateChunkKindV1};
 
 use crate::artifact::Base0ArtifactV1;
 
@@ -64,6 +65,18 @@ pub enum EngineError {
     },
     /// The cache belongs to a different artifact than the one being run.
     CacheShapeMismatch,
+    /// A checkpoint's state material does not cover the map. Refused rather than replayed over a
+    /// partial cache: the uncovered rows would be zeros, and a zero row is indistinguishable from
+    /// a computed one once a replay has run over it.
+    CheckpointStateIncomplete {
+        got: u64,
+        want: u64,
+    },
+    /// One chunk is not the canonical bytes its map entry describes — wrong length, or a position
+    /// the entry does not hold. Not adjudicable material, so not replayable material.
+    CheckpointStateNotCanonical {
+        chunk_index: u64,
+    },
 }
 
 impl From<PalwBase0OpError> for EngineError {
@@ -107,6 +120,89 @@ impl KvCache {
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// **Serialize one chunk of the registered state map.**
+    ///
+    /// The map (`palw_state_chunk_map`) says which `(kind, layer, position run)` a chunk index
+    /// holds; this hands back exactly those bytes, in the map's order, one byte per `int8` code.
+    /// It is the producer half of the checkpoint leg and the only place the cache's private shape
+    /// is allowed to become bytes — a second serializer would be a second layout.
+    ///
+    /// `None` rather than a short buffer whenever the cache cannot answer the entry: a chunk of
+    /// the wrong length is refused downstream anyway (`integer_kv_state_row_v1`), and a producer
+    /// that emitted one would be committing to a state it did not hold.
+    pub fn state_chunk_bytes(&self, entry: &PalwStateChunkEntryV1) -> Option<Vec<u8>> {
+        let side = match entry.kind {
+            PalwStateChunkKindV1::Key => &self.keys,
+            PalwStateChunkKindV1::Value => &self.values,
+        };
+        let layer = side.get(entry.attn_layer as usize)?;
+        let mut out = Vec::with_capacity(entry.byte_len() as usize);
+        for p in entry.position_start..entry.position_start + entry.position_count {
+            let row = layer.get(p as usize)?;
+            // The map's row width is derived from the PROFILE; this is the ENGINE's row. They are
+            // the same number for a conforming class, and a class where they differ is one whose
+            // map describes a state it does not hold — which is exactly what must not be
+            // committed to silently.
+            if row.len() != entry.row_bytes as usize {
+                return None;
+            }
+            out.extend(row.iter().map(|v| *v as u8));
+        }
+        Some(out)
+    }
+
+    /// **Rebuild a cache from an opened checkpoint** — the replay half.
+    ///
+    /// This is what makes a dispute cost the calls SINCE a checkpoint rather than the whole
+    /// inference: a verifier hands over the chunks the producer committed and continues
+    /// [`Base0Engine::forward_token`] from there.
+    ///
+    /// Every refusal is a refusal to replay, never a partial cache: a cache assembled from
+    /// material that does not cover the state would replay against zeros, and zeros are
+    /// indistinguishable from computed rows once they are in a commitment.
+    pub fn from_state_chunks(
+        artifact: &Base0ArtifactV1,
+        geometry: &PalwStateChunkGeometryV1,
+        chunks: &[Vec<u8>],
+    ) -> Result<Self, EngineError> {
+        if chunks.len() as u64 != geometry.chunk_count() {
+            return Err(EngineError::CheckpointStateIncomplete { got: chunks.len() as u64, want: geometry.chunk_count() });
+        }
+        let mut cache = Self::new(artifact);
+        let positions = geometry.positions as usize;
+        for side in [&mut cache.keys, &mut cache.values] {
+            for layer in side.iter_mut() {
+                layer.resize(positions, Vec::new());
+            }
+        }
+        for (index, bytes) in chunks.iter().enumerate() {
+            let entry = kaspa_consensus_core::palw_state_chunk_map::integer_kv_state_chunk_entry_v1(geometry, index as u64)
+                .ok_or(EngineError::CheckpointStateIncomplete { got: chunks.len() as u64, want: geometry.chunk_count() })?;
+            for p in entry.position_start..entry.position_start + entry.position_count {
+                let row = kaspa_consensus_core::palw_state_chunk_map::integer_kv_state_row_v1(&entry, bytes, p)
+                    .ok_or(EngineError::CheckpointStateNotCanonical { chunk_index: index as u64 })?;
+                let side = match entry.kind {
+                    PalwStateChunkKindV1::Key => &mut cache.keys,
+                    PalwStateChunkKindV1::Value => &mut cache.values,
+                };
+                let layer = side
+                    .get_mut(entry.attn_layer as usize)
+                    .ok_or(EngineError::CheckpointStateNotCanonical { chunk_index: index as u64 })?;
+                layer[p as usize] = row.iter().map(|b| *b as i8).collect();
+            }
+        }
+        // Every attention layer must now be full. A layer the map never named keeps its empty
+        // rows, and replaying over those is the zero-state failure this refuses to reach.
+        for side in [&cache.keys, &cache.values] {
+            for layer in side.iter() {
+                if layer.len() != positions || layer.iter().any(|r| r.len() != geometry.row_bytes as usize) {
+                    return Err(EngineError::CheckpointStateIncomplete { got: 0, want: geometry.chunk_count() });
+                }
+            }
+        }
+        Ok(cache)
     }
 }
 
