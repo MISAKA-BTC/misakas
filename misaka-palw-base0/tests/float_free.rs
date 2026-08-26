@@ -69,6 +69,7 @@ const STATES_THE_ARITHMETIC: &[&str] = &["src/kat.rs", "src/bin/base0-kat.rs"];
 /// list and [`CONSENSUS_PATH`] can be compared against what is actually on disk.
 const EXEMPT: &[(&str, &str)] = &[
     ("src/convert.rs", "offline PTQ: float in, (multiplier, shift) out, frozen at registration"),
+    ("src/gguf.rs", "offline checkpoint reader: the file it decodes is float, and it never executes"),
     ("src/bin/qwen25-convert.rs", "offline PTQ driver"),
     ("src/reference.rs", "the float reference forward: it measures the checkpoint's ranges so the PTQ can pick scales"),
     ("src/bin/base0-depth-sweep.rs", "measurement tool"),
@@ -76,6 +77,7 @@ const EXEMPT: &[(&str, &str)] = &[
     ("src/bin/palw-rc-genesis.rs", "genesis card generator"),
     ("src/bin/base0-chat.rs", "the runtime's front door: it times itself, and a timer is float"),
     ("examples/base0-throughput.rs", "measurement tool: it times the engine, it is not the engine"),
+    ("examples/gguf-probe.rs", "offline checkpoint inspector"),
 ];
 
 /// The primitives themselves live in `consensus-core`, and they are the half of the class this

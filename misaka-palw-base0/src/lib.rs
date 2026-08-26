@@ -42,6 +42,7 @@ pub mod backend;
 pub mod classes;
 pub mod engine;
 pub mod engine_a16;
+pub mod gguf;
 pub mod inventory;
 pub mod legs;
 pub mod produce;
