@@ -1426,6 +1426,148 @@ async fn palw_rc_a_real_execution_produces_a_block_the_chain_accepts() {
     assert!(after.bond.as_ref().unwrap().reserved_exposure > 0, "the claim it created reserves against the bond");
 }
 
+/// **A block produced by a REAL Qwen3.6-shaped execution, accepted by consensus** — the goal
+/// gate's own sentence, "実用的にブロック生成に使用できる", as a test.
+///
+/// The floor's twin (`palw_rc_a_real_execution_produces_a_block_the_chain_accepts`) proved the RC
+/// path for the class every node derives. This proves the SECOND class — registered from genesis
+/// beside the floor by `palw_rc_params_with_qwen36`, answered for by `palw_producer_facts_v2`,
+/// executed by the real `Qwen36Engine` (a hybrid GDN + gated-attention + MoE forward pass, not a
+/// stub), committed under the TILED logits trace, won at the class's own lottery, signed under a
+/// genesis bond, and accepted into the UTXO tip.
+///
+/// # What stands in, and what does not
+///
+/// The artifact is `qwen36_dev_fixture` — the Qwen3.6-shaped toy, because a CI test cannot mmap
+/// 33 GiB. The stand-in is the WEIGHTS, not the path: the engine, the ops, the commitment scheme
+/// and every consensus check are the production ones. The registered class's geometry is the real
+/// `QWEN36_35B_A3B` (that is what `qwen36_registration_v1` derives), so the chain-side facts —
+/// class id, pwu, target — are the real class's; the drill binary swaps the fixture for the real
+/// artifact and nothing else. The profile's court constants are marked PRE-DERIVATION: the
+/// admission cost work (per-node tiles, head-slice GDN openings, small registered context) tunes
+/// them before any real network mints this genesis, and none of it changes this path.
+#[tokio::test]
+async fn palw_rc_a_qwen36_execution_produces_a_block_the_chain_accepts() {
+    use kaspa_consensus_core::api::ConsensusApi;
+    use kaspa_consensus_core::palw_attempt_v2::{
+        PALW_ATTEMPT_V2_MLDSA87_CONTEXT, PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, attempt_id_v2,
+        challenge_v2, class_ticket_v2, palw_network_domain_v2,
+    };
+    use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
+    use kaspa_consensus_core::palw_qwen36_profile::{QWEN36_35B_A3B, QWEN36_RC_CANONICAL, qwen36_profile_v1};
+    use misaka_palw_base0::produce::base0_rc_job_anchor_v1;
+    use misaka_palw_base0::qwen36_backend::Qwen36Backend;
+
+    // The operator half, exactly as the floor test builds it: row 0's key is ours.
+    let keypair = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([0xB0u8; 32]);
+    let bond_key = kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(kaspa_consensus_core::config::premine::premine_outpoint(0));
+    let base_root = misaka_palw_base0::rc::palw_rc_base0_artifact_root_v1().expect("the floor's artifact derives");
+    let registry: Vec<_> = (0..kaspa_consensus_core::palw_fp_devnet_v3::palw_v2_min_genesis_bonds_v1() as u32)
+        .map(|i| kaspa_consensus_core::palw_fp_devnet_v3::PalwGenesisBondSpecV1 {
+            bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(kaspa_consensus_core::config::premine::premine_outpoint(i)),
+            pubkey: if i == 0 { keypair.verification_key.as_ref().to_vec() } else { vec![7u8.wrapping_add(i as u8); 32] },
+            operator_pubkey: vec![21u8, i as u8, 0, 0, 0, 0, 0, 0],
+            payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11 + i as u64),
+        })
+        .collect();
+
+    // The Qwen3.6 side: the fixture's weights, the real class's identity.
+    let artifact = misaka_palw_base0::qwen36::qwen36_dev_fixture(4, 8);
+    let artifact_root = artifact.artifact_root();
+    let params = kaspa_consensus_core::config::params::palw_rc_params_with_qwen36(base_root, artifact_root, registry)
+        .expect("the two-class RC genesis card assembles");
+    let bundle = match &params.palw_consensus_mode {
+        kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) => b.clone(),
+        _ => panic!("a ConsensusV2 network"),
+    };
+    let qwen36_class_id = qwen36_profile_v1(QWEN36_35B_A3B).expect("the profile projects").shape_profile_id();
+    assert_ne!(qwen36_class_id, bundle.base_class_id, "two classes, and the floor is not the entrant");
+
+    let config = ConfigBuilder::new(params)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            if !cfg!(feature = "evm") {
+                p.evm_activation_daa_score = u64::MAX;
+            }
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+
+    // The chain answers for the entrant: registered at genesis, active, budgeted.
+    let facts = ctx
+        .consensus
+        .palw_producer_facts_v2(qwen36_class_id, Some(bond_key.0))
+        .expect("the two-class network answers for its entrant");
+    assert_eq!(facts.artifact_root, artifact_root, "the chain names the artifact this node holds");
+    assert_eq!(facts.ready_to_produce(keypair.verification_key.as_ref()), Ok(()), "bond, key, and an epoch budget for 1‰");
+
+    // The template anchors the job; the REAL engine runs it.
+    let mut block = ctx.build_block_template_keeping_time(0).block;
+    let timestamp = block.header.timestamp;
+    let network_domain = palw_network_domain_v2(config.params.net.to_string().as_bytes());
+    let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(&block.header);
+    let anchor = base0_rc_job_anchor_v1(network_domain, pre_pow, qwen36_class_id, &bond_key.0);
+
+    let backend = Qwen36Backend::new(
+        artifact,
+        "Qwen3.6-dev-fixture",
+        QWEN36_RC_CANONICAL,
+        qwen36_class_id,
+        config.params.net.to_string().into_bytes(),
+    );
+    let (job, prompt) = backend.job_for_anchor(anchor).expect("the anchor implies a job inside the fixture's table");
+    let run = backend.execute(&job, &prompt).expect("a real hybrid forward pass over the anchored job");
+
+    let mut attempt = PalwAttemptUnsignedV2 {
+        version: PALW_ATTEMPT_V2_VERSION,
+        network_domain,
+        challenge: kaspa_hashes::Hash64::default(),
+        class_id: qwen36_class_id,
+        executor_bond: bond_key.0,
+        executor_pubkey: keypair.verification_key.as_ref().to_vec(),
+        operator_id: facts.bond.as_ref().expect("the pre-flight held a bond").operator_id,
+        artifact_root: facts.artifact_root,
+        trace_root: run.trace_root,
+        output_root: run.output_root,
+        execution_root: run.execution_root,
+        pwu: facts.pwu,
+        trace_manifest_root: run.trace_manifest_root,
+        trace_chunk_count: run.trace_chunk_count,
+        trace_retention_daa: facts.daa_score.saturating_add(facts.min_trace_retention_daa),
+    };
+    let mut won = None;
+    for nonce in 0u64..1_000_000 {
+        attempt.challenge = challenge_v2(network_domain, pre_pow, timestamp, nonce, qwen36_class_id, &bond_key.0);
+        if class_ticket_v2(&attempt) <= facts.class_target {
+            won = Some(nonce);
+            break;
+        }
+    }
+    let nonce = won.expect("the entrant's genesis target is winnable");
+    let signature = libcrux_ml_dsa::ml_dsa_87::sign(
+        &keypair.signing_key,
+        attempt_id_v2(&attempt).as_byte_slice(),
+        PALW_ATTEMPT_V2_MLDSA87_CONTEXT,
+        [0x5Au8; 32],
+    )
+    .expect("ML-DSA-87 sign")
+    .as_ref()
+    .to_vec();
+    block.header.nonce = nonce;
+    block.header.palw_commitment = PalwAttemptEnvelopeV2 { attempt, signature }.encode_wire();
+    block.header.finalize();
+    let hash = block.header.hash;
+
+    ctx.validate_and_insert_block(block.to_immutable()).await.assert_valid_utxo_tip();
+    assert_eq!(ctx.consensus.get_sink(), hash, "the block a Qwen3.6 execution produced is the chain");
+
+    // Counted under the ENTRANT's class, and reserving against the bond — a Qwen3.6 block, not a
+    // floor block wearing its id.
+    let after = ctx.consensus.palw_producer_facts_v2(qwen36_class_id, Some(bond_key.0)).expect("still a V2 network");
+    assert_eq!(after.epoch_produced_blocks, 1, "one block of THIS class, counted");
+    assert!(after.bond.as_ref().expect("bonded").reserved_exposure > 0, "its claim reserves against the bond");
+}
+
 /// **A stranger can create their own bond, and the chain accepts the form they can build.**
 ///
 /// This is the seam that decides whether a network is open. Producing needs a bond

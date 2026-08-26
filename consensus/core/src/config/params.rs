@@ -2420,14 +2420,19 @@ pub fn palw_rc_params_with_qwen36(
     )
     .map_err(|_| invalid("the Qwen3.6 registration does not derive"))?;
 
-    // The two-entry catalog. The floor stays FIRST — the genesis gate and the transition both
-    // require the base class to be the first registration, and order here is that order.
+    // The two-entry catalog. Two DIFFERENT orders, on purpose: the CATALOG is a commitment and
+    // sorts ascending by class id (its canonical form — two assemblers of one class set must
+    // produce one root), while the REGISTRATION LIST keeps the floor first, because the genesis
+    // gate and the transition both require the base class to be the first registration. Conflating
+    // the two orders is exactly what the catalog's own validation refuses.
     let (base_profile, base_catalog) = crate::palw_base0_profile::palw_rc_base0_registration_v1(base0_artifact_root)
         .map_err(|_| invalid("BASE-0's registration does not derive"))?;
     let base_entry = base_catalog.entries().first().ok_or(invalid("the RC catalog lost its floor"))?.clone();
     debug_assert_eq!(base_profile.shape_profile_id(), bundle.base_class_id, "the floor the base assembly registered");
-    let catalog = crate::palw_mode_v2::PalwClassCatalogV2::new(vec![base_entry, entry])
-        .map_err(|_| invalid("the two-class catalog is not well-formed"))?;
+    let mut entries = vec![base_entry, entry];
+    entries.sort_by(|a, b| a.class_id.cmp(&b.class_id));
+    let catalog =
+        crate::palw_mode_v2::PalwClassCatalogV2::new(entries).map_err(|_| invalid("the two-class catalog is not well-formed"))?;
     bundle.class_catalog_root = catalog.root();
     bundle.genesis_objects.push(object);
 
