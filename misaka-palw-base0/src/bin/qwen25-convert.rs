@@ -179,6 +179,20 @@ fn main() {
             .unwrap_or_else(|e| die(format!("a16 conversion failed: {e}")));
         println!("a16 converted in {:?}", started.elapsed());
         println!("a16 artifact  {}", artifact.artifact_digest());
+        // **`--out` is what turns a measurement into a runtime.** Until the artifact could be
+        // written, every use of this class re-read a 3 GiB checkpoint and re-quantized it, which
+        // is a minute per run and is why nothing downstream of conversion had been built.
+        if let Some(i) = args.iter().position(|a| a == "--out") {
+            let path = args.get(i + 1).unwrap_or_else(|| die("--out wants a path".into()));
+            let bytes = misaka_palw_base0::artifact::encode_artifact_file_v1(&artifact);
+            std::fs::write(path, &bytes).unwrap_or_else(|e| die(format!("{path}: {e}")));
+            // Read it straight back: the container verifies the digest on decode, so a write that
+            // cannot be read is caught here rather than by the runtime that loads it tomorrow.
+            let back = misaka_palw_base0::artifact::decode_artifact_file_v1(&bytes)
+                .unwrap_or_else(|e| die(format!("the artifact just written does not decode: {e}")));
+            assert_eq!(back.artifact_digest(), artifact.artifact_digest());
+            println!("a16 written   {} ({} MiB)", path, bytes.len() >> 20);
+        }
         let blob2 = blob;
         let engine = misaka_palw_base0::engine_a16::A16Engine::new(&artifact)
             .unwrap_or_else(|e| die(format!("a16 engine refused the artifact: {e:?}")));

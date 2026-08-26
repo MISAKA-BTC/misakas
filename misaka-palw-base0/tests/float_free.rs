@@ -55,6 +55,7 @@ const CONSENSUS_PATH: &[&str] = &[
     "src/produce.rs",
     "src/rc.rs",
     "src/rope.rs",
+    "src/tokenizer.rs",
 ];
 
 /// Not executed by consensus, but they *state* the class's arithmetic: the KAT set publishes the
@@ -72,6 +73,7 @@ const EXEMPT: &[(&str, &str)] = &[
     ("src/bin/base0-depth-sweep.rs", "measurement tool"),
     ("src/bin/base0-class-sizing.rs", "measurement tool"),
     ("src/bin/palw-rc-genesis.rs", "genesis card generator"),
+    ("src/bin/base0-chat.rs", "the runtime's front door: it times itself, and a timer is float"),
     ("examples/base0-throughput.rs", "measurement tool: it times the engine, it is not the engine"),
 ];
 

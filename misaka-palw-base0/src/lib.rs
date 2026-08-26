@@ -47,6 +47,7 @@ pub mod legs;
 pub mod produce;
 pub mod rc;
 pub mod rope;
+pub mod tokenizer;
 
 pub mod convert;
 pub mod reference;

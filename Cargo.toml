@@ -411,6 +411,11 @@ seqlock = "0.2.0"
 serde = { version = "1.0.190", features = ["derive", "rc"] }
 serde_bytes = "0.11.12"
 serde_json = "1.0.107"
+# The Qwen tokenizer's normalizer is NFC and its pre-tokenizer splits on `\p{L}` / `\p{N}`.
+# Approximating either with `char::is_alphabetic` puts a Roman numeral in the wrong piece, so the
+# Unicode tables come from crates rather than from a guess.
+unicode-normalization = "0.1"
+unicode-properties = "0.1"
 serde_repr = "0.1.18"
 serde-value = "0.7.0"
 serde-wasm-bindgen = "0.6.1"

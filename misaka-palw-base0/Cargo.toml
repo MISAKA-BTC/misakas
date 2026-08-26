@@ -26,3 +26,5 @@ serde_json.workspace = true
 # makes the thread count invisible to the result — in a float class this dependency would be a
 # consensus hazard.
 rayon.workspace = true
+unicode-normalization.workspace = true
+unicode-properties.workspace = true
