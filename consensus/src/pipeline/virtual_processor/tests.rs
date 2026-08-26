@@ -1448,6 +1448,34 @@ async fn palw_rc_a_real_execution_produces_a_block_the_chain_accepts() {
 /// them before any real network mints this genesis, and none of it changes this path.
 #[tokio::test]
 async fn palw_rc_a_qwen36_execution_produces_a_block_the_chain_accepts() {
+    qwen36_block_e2e(misaka_palw_base0::qwen36::qwen36_dev_fixture(4, 8), "Qwen3.6-dev-fixture").await;
+}
+
+/// **The same path over the REAL 33 GiB artifact** — the drill the goal names.
+///
+/// `MISAKA_QWEN36_ARTIFACT=/path/to/q36-40L.palwq36 cargo test --release -p kaspa-consensus ///  real_qwen36_artifact -- --ignored --nocapture`
+///
+/// Ignored in CI because it memory-maps 33 GiB and runs ten true 35B forward passes (about a
+/// minute of inference on the reference M4 Pro, plus one pass over the file for the artifact
+/// root). Everything else — the two-class genesis, the facts, the lottery, the signature, the
+/// acceptance — is byte-for-byte the fixture test's path, which is the point: the drill swaps the
+/// weights and nothing else.
+#[tokio::test]
+#[ignore = "runs the real 33 GiB Qwen3.6 artifact; set MISAKA_QWEN36_ARTIFACT and --ignored"]
+async fn palw_rc_the_real_qwen36_artifact_produces_a_block() {
+    let path = std::env::var("MISAKA_QWEN36_ARTIFACT").expect("MISAKA_QWEN36_ARTIFACT=/path/to/q36-40L.palwq36");
+    let opened = std::time::Instant::now();
+    let artifact = misaka_palw_base0::qwen36::open_artifact(std::path::Path::new(&path)).expect("the artifact opens");
+    eprintln!(
+        "drill: mapped {} layers / {:.2} GiB in {:?}",
+        artifact.shape.n_layers(),
+        artifact.weight_bytes() as f64 / (1u64 << 30) as f64,
+        opened.elapsed()
+    );
+    qwen36_block_e2e(artifact, "Qwen3.6-35B-A3B").await;
+}
+
+async fn qwen36_block_e2e(artifact: misaka_palw_base0::qwen36::Qwen36ArtifactV1, model_id: &str) {
     use kaspa_consensus_core::api::ConsensusApi;
     use kaspa_consensus_core::palw_attempt_v2::{
         PALW_ATTEMPT_V2_MLDSA87_CONTEXT, PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, attempt_id_v2,
@@ -1471,9 +1499,10 @@ async fn palw_rc_a_qwen36_execution_produces_a_block_the_chain_accepts() {
         })
         .collect();
 
-    // The Qwen3.6 side: the fixture's weights, the real class's identity.
-    let artifact = misaka_palw_base0::qwen36::qwen36_dev_fixture(4, 8);
+    // The Qwen3.6 side: whichever weights the caller supplied, the real class's identity.
+    let rooted = std::time::Instant::now();
     let artifact_root = artifact.artifact_root();
+    eprintln!("drill: artifact root {artifact_root} in {:?}", rooted.elapsed());
     let params = kaspa_consensus_core::config::params::palw_rc_params_with_qwen36(base_root, artifact_root, registry)
         .expect("the two-class RC genesis card assembles");
     let bundle = match &params.palw_consensus_mode {
@@ -1508,15 +1537,18 @@ async fn palw_rc_a_qwen36_execution_produces_a_block_the_chain_accepts() {
     let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(&block.header);
     let anchor = base0_rc_job_anchor_v1(network_domain, pre_pow, qwen36_class_id, &bond_key.0);
 
-    let backend = Qwen36Backend::new(
-        artifact,
-        "Qwen3.6-dev-fixture",
-        QWEN36_RC_CANONICAL,
-        qwen36_class_id,
-        config.params.net.to_string().into_bytes(),
-    );
-    let (job, prompt) = backend.job_for_anchor(anchor).expect("the anchor implies a job inside the fixture's table");
+    let backend =
+        Qwen36Backend::new(artifact, model_id, QWEN36_RC_CANONICAL, qwen36_class_id, config.params.net.to_string().into_bytes());
+    let (job, prompt) = backend.job_for_anchor(anchor).expect("the anchor implies a job inside the artifact's table");
+    let ran = std::time::Instant::now();
     let run = backend.execute(&job, &prompt).expect("a real hybrid forward pass over the anchored job");
+    eprintln!(
+        "drill: executed the canonical job ({} prefill + {} decode) in {:?}; material {} bytes",
+        job.declared_prefill_tokens,
+        job.exact_decode_tokens,
+        ran.elapsed(),
+        run.material.len()
+    );
 
     let mut attempt = PalwAttemptUnsignedV2 {
         version: PALW_ATTEMPT_V2_VERSION,
