@@ -45,7 +45,6 @@
 //! parameters carrying the folded biases, the pinned integer rotary table, the tokenizer
 //! commitment — is Phase 2's, and no function can invent it.
 
-use crate::Hash64;
 use crate::palw_step::{
     PALW_STEP_INPUT_LAYER_IN, PALW_STEP_OBJECT_VERSION_V1, PalwShapeProfileV3, PalwStepError, PalwStepLaneV1, PalwStepNodeRoleV1,
     PalwStepNodeV1, PalwStepOpKindV1, PalwStepOutLenV1, kernel_semantics_id_v1,
@@ -395,7 +394,11 @@ pub fn qwen25_profile_v1(geometry: PalwQwen25GeometryV1) -> Result<PalwShapeProf
         transcendental_bindings: Vec::new(),
         contraction_facts: Vec::new(),
         kv_chunk_calls: 0,
-        state_chunk_map_id: Hash64::default(),
+        // **Registered**, and it is the same id BASE-0 registers: this class inherits BASE-0's
+        // arithmetic and its engine, so its replay state is the same int8 KV rows under the same
+        // derived layout (`palw_state_chunk_map`). A second id for one layout would be a second
+        // thing to keep in sync — the defect this class was born from (`rms_eps_q`).
+        state_chunk_map_id: crate::palw_state_chunk_map::integer_kv_state_chunk_map_id_v1(),
     };
     profile.validate_shape()?;
     Ok(profile)
@@ -404,6 +407,7 @@ pub fn qwen25_profile_v1(geometry: PalwQwen25GeometryV1) -> Result<PalwShapeProf
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::Hash64;
     use crate::palw_catalog_coverage::verify_profile_coverage_v1;
     use crate::palw_step::PalwStepTableV1;
     use crate::palw_step_refute::{catalogued_kernel_ids_v1, kernel_can_serve_node_v1};
@@ -744,7 +748,6 @@ mod tests {
     #[test]
     fn a_qwen_step_is_adjudicated_from_one_tile_and_no_model() {
         use crate::palw_artifact::{PalwArtifactOperandV1, PalwProvenOperandsV1, artifact_leaf_v1, artifact_root_v1};
-        use crate::palw_legs::PalwCheckpointProfileV1;
         use crate::palw_step::{PalwStepCoordinateV1, canonical_step_coordinates, canonical_step_leaf_index};
         use crate::palw_step_leg::{
             PALW_STEP_LEG_OBJECT_VERSION_V1, PalwStepLegBuilderV1, PalwStepTileLeafV1, checkpoint_empty_root_v2,
@@ -802,18 +805,18 @@ mod tests {
 
         let ctx_hash = ctx.context_hash();
         let profile_hash = p.shape_profile_id();
-        let ckpt = PalwCheckpointProfileV1 {
-            version: crate::palw_legs::PALW_LEGS_OBJECT_VERSION_V1,
-            checkpoint_interval: 8,
-            state_layout_id: Hash64::from_u64_word(0x55),
-        };
+        // The class's own registered layout, not a fixture number: the binding check below
+        // compares the carried map id against the profile's, and a fixture that files a made-up
+        // one is a fixture testing a binding no producer could build.
+        let ckpt = crate::palw_state_chunk_map::integer_kv_checkpoint_profile_v1(8);
+        let state_chunk_map_id = crate::palw_state_chunk_map::integer_kv_state_chunk_map_id_v1();
         let adjudicate = |corrupt: bool| {
             let material = build(corrupt);
             let step_root = step_leg_root_v1(&ctx_hash, &profile_hash, material.leaf_count, &material.merkle_root);
             let ckpt_root = checkpoint_leg_root_v2(
                 &ctx_hash,
                 &ckpt.profile_hash(),
-                &Hash64::default(),
+                &state_chunk_map_id,
                 1,
                 0,
                 &checkpoint_empty_root_v2(&ctx_hash),
@@ -823,7 +826,7 @@ mod tests {
                 job_context: ctx.clone(),
                 shape_profile: p.clone(),
                 checkpoint_profile: ckpt.clone(),
-                state_chunk_map_id: Hash64::default(),
+                state_chunk_map_id,
                 full_logits_trace_root: Hash64::from_u64_word(0xAA),
                 activation_leg_root: Hash64::from_u64_word(0xBB),
                 step_leaf_count: material.leaf_count,
@@ -874,6 +877,7 @@ mod tests {
                 inputs,
                 prompt_token_ids: Vec::new(),
                 decode_tokens: None,
+                kv_checkpoint: None,
             };
             // The class's registered inventory, and the opening that proves this block belongs.
             let operands = [

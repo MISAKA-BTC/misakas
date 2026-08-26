@@ -4630,7 +4630,23 @@ mod consensus_params_id_tests {
             // what stops a class admitted at the tiled close price from committing flat
             // (unprosecutable work); a coordinated upgrade, riding the re-mint the ADR-0053 state
             // bump already forces.
-            ("testnet-11", TESTNET11_PARAMS, "edc8202bf95ee5e8faabb8726aaf68cbb106a04f6f86a154b1f406b15e91badd"),
+            // Moved a third time, deliberately, when the court learned to READ a checkpoint:
+            // `PALW_V2_TRACE_FORMAT_VERSION` 1 → 2, because a refutation may now carry an
+            // attention step's KV history as one committed checkpoint instead of one opening per
+            // cached position. A v1 court and a v2 court disagree about a verdict on the same
+            // object, which is a fork — the version is what makes them refuse each other at
+            // startup instead of finding out at consensus.
+            // Moved again, deliberately, when BASE-0 registered its checkpoint state chunk map
+            // (`palw_state_chunk_map`). `state_chunk_map_id` is a field of `PalwShapeProfileV3`,
+            // the class id IS the profile id, and the class id is in the RC bundle — so filling in
+            // the unregistered sentinel moves the ruleset. **This build and the one running on t11
+            // are different networks**, and they find out at the handshake rather than at
+            // consensus, which is the direction to fail in. Landing it needs an RC re-mint; no
+            // other preset moved, because no other preset carries a PALW class.
+            // Re-derived at the MERGE of the two lines above (2026-08-26): every move both trails
+            // describe lands in one value, because a fingerprint is a function of the whole
+            // ruleset and not a sum of diffs.
+            ("testnet-11", TESTNET11_PARAMS, "74a2ff4c30cc1af29905d0f8bd9f38f08d602461e07e6fa60597b6f03e8e0925"),
             ("simnet", SIMNET_PARAMS, "135e88c69a659d3cf4b5ce8275953c7597b2c67b03d2a74b3d0696c5d0b703fa"),
             ("devnet", DEVNET_PARAMS, "42cc6be92506a14654cb676184e1416796dec682b15e93cb9c639e8e0d77efa5"),
         ]

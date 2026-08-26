@@ -49,6 +49,16 @@ pub enum LegError {
     NotACanonicalCoordinate { layer: u16, slot: u16, tile: u32 },
     /// The step space has no leaves, so there is nothing to commit.
     EmptySpace,
+    /// The checkpoint capture is short. Same rule as `CaptureIncomplete` and for the same reason:
+    /// `checkpoint_count` is a canonical function of the job, so a producer that commits a count it
+    /// did not capture is committing to checkpoints nobody can open.
+    CheckpointCaptureIncomplete { got: u32, expected: u32 },
+    /// The registered state map refused this job's state — the class is not the integer family, or
+    /// its geometry cannot be chunked.
+    CheckpointStateMap(kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkMapError),
+    /// The cache could not answer a chunk the map names. A checkpoint over a state the engine does
+    /// not hold is not a checkpoint.
+    CheckpointStateUnavailable { chunk_index: u64 },
 }
 
 /// One captured step row, tiled and placed at its canonical leaf index.
@@ -307,6 +317,181 @@ pub fn base0_bisect_prefix_state_v1(ctx: &PalwJobContextV2, leaves: &[Hash64], i
     Hash64::from_bytes(out)
 }
 
+/// **The checkpoint leg, captured** — the half that did not exist.
+///
+/// Until this, `base0_binding_from_capture_v1` committed `checkpoint_count = decode_calls /
+/// interval` beside `Hash64::default()` as the tree root whenever that count was non-zero. For the
+/// RC's own canonical job (prefill 8, decode 4) that is **three checkpoints under a zero root**: a
+/// producer could not open one, a challenger could not dispute one, and the shape check passed
+/// because it only asks whether an EMPTY leg pairs with the empty sentinel.
+///
+/// A checkpoint here is the engine's replay state serialized through the class's REGISTERED map
+/// ([`kaspa_consensus_core::palw_state_chunk_map`]), so what a producer commits and what a verifier
+/// decodes are the same layout by construction rather than by agreement.
+pub struct Base0CheckpointsV1 {
+    pub leaves: Vec<kaspa_consensus_core::palw_step_leg::PalwCheckpointLeafV2>,
+    pub leaf_hashes: Vec<Hash64>,
+    pub merkle_root: Hash64,
+    /// Per checkpoint, its chunk bytes in map order.
+    ///
+    /// Retained for exactly the reason the step tiles are: a producer that discarded them could not
+    /// answer a checkpoint challenge and would lose its bond by default.
+    pub chunks: Vec<Vec<Vec<u8>>>,
+}
+
+/// Accumulates checkpoints in call order, chaining each to the one before it.
+pub struct Base0CheckpointCaptureV1 {
+    ctx: PalwJobContextV2,
+    profile: PalwShapeProfileV3,
+    ctx_hash: Hash64,
+    checkpoint_profile_hash: Hash64,
+    state_chunk_map_id: Hash64,
+    interval: u32,
+    prev: Hash64,
+    leaves: Vec<kaspa_consensus_core::palw_step_leg::PalwCheckpointLeafV2>,
+    leaf_hashes: Vec<Hash64>,
+    chunks: Vec<Vec<Vec<u8>>>,
+}
+
+impl Base0CheckpointCaptureV1 {
+    pub fn new(
+        ctx: &PalwJobContextV2,
+        profile: &PalwShapeProfileV3,
+        checkpoint_profile: &kaspa_consensus_core::palw_legs::PalwCheckpointProfileV1,
+    ) -> Self {
+        let ctx_hash = ctx.context_hash();
+        Self {
+            ctx: ctx.clone(),
+            profile: profile.clone(),
+            ctx_hash,
+            checkpoint_profile_hash: checkpoint_profile.profile_hash(),
+            // **From the profile.** The binding check compares the two, so a capture that reached
+            // for the family constant here would build a leg its own binding refuses.
+            state_chunk_map_id: profile.state_chunk_map_id,
+            interval: checkpoint_profile.checkpoint_interval,
+            prev: kaspa_consensus_core::palw_step_leg::checkpoint_genesis_prev_v2(&ctx_hash),
+            leaves: Vec::new(),
+            leaf_hashes: Vec::new(),
+            chunks: Vec::new(),
+        }
+    }
+
+    /// How many decode calls the NEXT checkpoint will cover — the canonical
+    /// `(index + 1) × interval` the court's `checkpoint_fault` recomputes.
+    pub fn next_covered_decode_call(&self) -> u32 {
+        (self.leaves.len() as u32 + 1) * self.interval
+    }
+
+    /// **Take a checkpoint of `cache`**, which must be the state after
+    /// [`Self::next_covered_decode_call`] decode calls.
+    ///
+    /// The position count is derived from the job and the covered call, never from the cache: a
+    /// cache that is a row short would otherwise be committed as a shorter state, and the shortfall
+    /// would look like a job that ran fewer calls.
+    pub fn push(&mut self, cache: &crate::engine::KvCache) -> Result<(), LegError> {
+        let geometry = self.next_geometry()?;
+        let mut chunk_bytes = Vec::with_capacity(geometry.chunk_count() as usize);
+        for index in 0..geometry.chunk_count() {
+            let entry = kaspa_consensus_core::palw_state_chunk_map::integer_kv_state_chunk_entry_v1(&geometry, index)
+                .ok_or(LegError::CheckpointStateUnavailable { chunk_index: index })?;
+            chunk_bytes.push(cache.state_chunk_bytes(&entry).ok_or(LegError::CheckpointStateUnavailable { chunk_index: index })?);
+        }
+        self.push_chunks(chunk_bytes)
+    }
+
+    /// The map this capture's NEXT checkpoint is taken under.
+    pub fn next_geometry(&self) -> Result<kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkGeometryV1, LegError> {
+        use kaspa_consensus_core::palw_state_chunk_map as map;
+        let positions = map::integer_kv_positions_at_v1(&self.ctx, self.next_covered_decode_call());
+        map::integer_kv_state_geometry_v1(&self.profile, positions).map_err(LegError::CheckpointStateMap)
+    }
+
+    /// **The leaf rule, in one place.** Serializing a cache and re-deriving from served bytes must
+    /// produce the same leaf or a producer and a seat would disagree about what was committed, so
+    /// both go through here rather than each hashing for itself.
+    pub fn push_chunks(&mut self, chunk_bytes: Vec<Vec<u8>>) -> Result<(), LegError> {
+        let geometry = self.next_geometry()?;
+        if chunk_bytes.len() as u64 != geometry.chunk_count() {
+            return Err(LegError::CheckpointStateUnavailable { chunk_index: chunk_bytes.len() as u64 });
+        }
+        let covered_decode_call = self.next_covered_decode_call();
+        let mut chunk_hashes = Vec::with_capacity(chunk_bytes.len());
+        for (index, bytes) in chunk_bytes.iter().enumerate() {
+            // The map's own length for this chunk, checked here: bytes of the wrong length hash to
+            // a leaf nothing can open, and a producer that committed one could not answer for it.
+            let entry = kaspa_consensus_core::palw_state_chunk_map::integer_kv_state_chunk_entry_v1(&geometry, index as u64)
+                .ok_or(LegError::CheckpointStateUnavailable { chunk_index: index as u64 })?;
+            if bytes.len() as u64 != entry.byte_len() {
+                return Err(LegError::CheckpointStateUnavailable { chunk_index: index as u64 });
+            }
+            chunk_hashes.push(kaspa_consensus_core::palw_step_leg::state_chunk_leaf_hash_v1(
+                &self.state_chunk_map_id,
+                index as u32,
+                bytes,
+            ));
+        }
+        let state_chunks_root =
+            kaspa_consensus_core::palw_step_leg::state_chunks_root_v1(&chunk_hashes).map_err(|_| LegError::EmptySpace)?;
+
+        let leaf = kaspa_consensus_core::palw_step_leg::PalwCheckpointLeafV2 {
+            version: PALW_STEP_LEG_OBJECT_VERSION_V1,
+            checkpoint_index: self.leaves.len() as u32,
+            covered_decode_call,
+            prev_checkpoint_leaf_hash: self.prev,
+            state_chunk_count: chunk_hashes.len() as u32,
+            state_chunks_root,
+        };
+        let hash = kaspa_consensus_core::palw_step_leg::checkpoint_leaf_hash_v2(
+            &self.ctx_hash,
+            &self.checkpoint_profile_hash,
+            &self.state_chunk_map_id,
+            &leaf,
+        );
+        self.prev = hash;
+        self.leaves.push(leaf);
+        self.leaf_hashes.push(hash);
+        self.chunks.push(chunk_bytes);
+        Ok(())
+    }
+
+    /// **Re-derive the whole leg from served chunks alone** — the seat's and the challenger's
+    /// entry, and the reason `push_chunks` exists separately from `push`.
+    ///
+    /// A seat that received a producer's state chunks can rebuild the leg and compare its root to
+    /// the one the claim committed, without holding the model, without the producer's cache, and
+    /// without a second implementation of the leaf rule.
+    pub fn from_chunks_v1(
+        ctx: &PalwJobContextV2,
+        profile: &PalwShapeProfileV3,
+        checkpoint_profile: &kaspa_consensus_core::palw_legs::PalwCheckpointProfileV1,
+        chunks: &[Vec<Vec<u8>>],
+    ) -> Result<Base0CheckpointsV1, LegError> {
+        let mut capture = Self::new(ctx, profile, checkpoint_profile);
+        for c in chunks {
+            capture.push_chunks(c.clone())?;
+        }
+        let count = chunks.len() as u32;
+        capture.finish(count)
+    }
+
+    /// Seal the capture at the count the job canonically has.
+    ///
+    /// `expected` is `decode_calls / interval`, which the court recomputes; a producer that sealed
+    /// a different number would be committing to checkpoints it never took (or hiding ones it did).
+    pub fn finish(self, expected: u32) -> Result<Base0CheckpointsV1, LegError> {
+        let got = self.leaves.len() as u32;
+        if got != expected {
+            return Err(LegError::CheckpointCaptureIncomplete { got, expected });
+        }
+        let merkle_root = if got == 0 {
+            kaspa_consensus_core::palw_step_leg::checkpoint_empty_root_v2(&self.ctx_hash)
+        } else {
+            step_merkle_root_v1(&self.leaf_hashes).map_err(|_| LegError::EmptySpace)?
+        };
+        Ok(Base0CheckpointsV1 { leaves: self.leaves, leaf_hashes: self.leaf_hashes, merkle_root, chunks: self.chunks })
+    }
+}
+
 /// **The producer's own commitment, from its own capture** (audit C-01).
 ///
 /// A binding is not a bag of hashes a caller fills in: `verify_binding` recomputes
@@ -323,6 +508,7 @@ pub fn base0_binding_from_capture_v1(
     profile: &PalwShapeProfileV3,
     ctx: &PalwJobContextV2,
     tiles: &Base0StepTilesV1,
+    checkpoints: &Base0CheckpointsV1,
     full_logits_trace_root: Hash64,
     activation_leg_root: Hash64,
 ) -> Result<kaspa_consensus_core::palw_step_leg::PalwStepBindingV2, LegError> {
@@ -332,20 +518,31 @@ pub fn base0_binding_from_capture_v1(
     };
     let context_hash = ctx.context_hash();
     let profile_hash = profile.shape_profile_id();
-    let checkpoint_profile = kaspa_consensus_core::palw_legs::PalwCheckpointProfileV1 {
-        version: kaspa_consensus_core::palw_legs::PALW_LEGS_OBJECT_VERSION_V1,
-        checkpoint_interval: 1,
-        state_layout_id: Hash64::default(),
-    };
+    // The family's registered layout, at this producer's interval. Both were `Hash64::default()`
+    // — the unregistered sentinel — which was the only honest value while no map existed; filing
+    // it now would file a layout the class does not register, and `verify_binding` refuses that.
+    let checkpoint_profile = kaspa_consensus_core::palw_state_chunk_map::integer_kv_checkpoint_profile_v1(1);
     let step_leaf_count = tiles.leaves.len() as u64;
     let step_merkle_root = step_merkle_root_v1(&tiles.leaves).map_err(|_| LegError::EmptySpace)?;
-    let state_chunk_map_id = Hash64::default();
+    // **From the profile, not from the family constant.** A producer files what ITS class
+    // registered; reaching for the constant here would work today and would silently file the
+    // integer family's map for a class that had registered something else. One source.
+    let state_chunk_map_id = profile.state_chunk_map_id;
     // The canonical checkpoint count is `decode_calls / interval`; a job with one decode token has
     // no decode CALLS, so the leg is the empty one — and the shape pass refuses any other pairing
     // of count and root, which is why this is derived rather than chosen.
     let decode_calls = ctx.exact_decode_tokens.saturating_sub(1);
     let checkpoint_count = decode_calls / checkpoint_profile.checkpoint_interval;
-    let checkpoint_merkle_root = if checkpoint_count == 0 { checkpoint_empty_root_v2(&context_hash) } else { Hash64::default() };
+    // **The captured root, not a placeholder.** This line used to read
+    //     if checkpoint_count == 0 { empty } else { Hash64::default() }
+    // which committed a non-zero count under a ZERO tree root — three checkpoints nobody could
+    // open, for the RC's own canonical job. The shape check never caught it because it only asks
+    // whether an EMPTY leg pairs with the empty sentinel.
+    if checkpoints.leaf_hashes.len() as u32 != checkpoint_count {
+        return Err(LegError::CheckpointCaptureIncomplete { got: checkpoints.leaf_hashes.len() as u32, expected: checkpoint_count });
+    }
+    let checkpoint_merkle_root = checkpoints.merkle_root;
+    debug_assert_eq!(checkpoint_count == 0, checkpoint_merkle_root == checkpoint_empty_root_v2(&context_hash));
     let checkpoint_profile_hash = checkpoint_profile.profile_hash();
     let checkpoint_root = checkpoint_leg_root_v2(
         &context_hash,
@@ -389,6 +586,76 @@ pub fn base0_binding_from_capture_v1(
 /// `binding` is the producer's own commitment; its `step_leaf_count` and `step_merkle_root` must be
 /// the ones `tiles` produced or the openings will not verify, which is the check doing its job
 /// rather than a caller's obligation.
+/// **The anchor a refutation of `disputed_call` should carry**, assembled from the producer's own
+/// committed leg.
+///
+/// The opening is over the checkpoint leaf hashes with the leg's own tree, so what comes back
+/// proves against `binding.checkpoint_merkle_root` and nothing else. `None` when the call has no
+/// anchor — the prefill call, or a leg with no checkpoint covering `disputed_call − 1`.
+pub fn base0_kv_anchor_for_call_v1(
+    checkpoints: &Base0CheckpointsV1,
+    disputed_call: u32,
+) -> Option<kaspa_consensus_core::palw_step_refute::PalwCheckpointKvOperandsV1> {
+    let want = disputed_call.checked_sub(1).filter(|_| disputed_call > 0)?;
+    let at = checkpoints.leaves.iter().position(|l| l.covered_decode_call == want)?;
+    let opening = kaspa_consensus_core::palw_step_leg::step_opening_v1(&checkpoints.leaf_hashes, at as u64).ok()?;
+    Some(kaspa_consensus_core::palw_step_refute::PalwCheckpointKvOperandsV1 {
+        leaf: checkpoints.leaves[at].clone(),
+        opening,
+        chunks: checkpoints.chunks.get(at)?.clone(),
+    })
+}
+
+/// **Open a bisection ladder already narrowed to a committed checkpoint** — the bisect half's
+/// caller.
+///
+/// [`kaspa_consensus_core::palw_bisect::PalwBisectLadderV1::open_anchored`] takes an index and a
+/// state and cannot check where they came from; this derives both from the producer's OWN
+/// committed leg, so the ladder is seeded with something the responder is already bound to rather
+/// than with a number a challenger picked.
+///
+/// The index is the first step leaf of the call AFTER the anchor's coverage: everything below it
+/// is execution the checkpoint already commits to, so no divergence the dispute is about can live
+/// there. The state is that checkpoint's own leaf hash.
+///
+/// `None` when the leg has no checkpoint at `covered`, or when the remaining interval is too small
+/// to bisect — both of which are answers, not faults.
+pub fn base0_anchored_ladder_v1(
+    profile: &PalwShapeProfileV3,
+    ctx: &PalwJobContextV2,
+    checkpoints: &Base0CheckpointsV1,
+    binding: &kaspa_consensus_core::palw_step_leg::PalwStepBindingV2,
+    covered_decode_call: u32,
+    challenger_id: &Hash64,
+    responder_id: &Hash64,
+    opened_at_daa: u64,
+    first_deadline_daa: u64,
+) -> Option<kaspa_consensus_core::palw_bisect::PalwBisectLadderV1> {
+    use kaspa_consensus_core::palw_bisect::{PalwBisectLadderV1, PalwBisectSpaceV1};
+    let at = checkpoints.leaves.iter().position(|l| l.covered_decode_call == covered_decode_call)?;
+    // The first leaf of the first call the anchor does NOT cover. Found by walking the space's own
+    // enumeration rather than by arithmetic on it: the bijection is `canonical_step_coordinates`'
+    // to define, and a second derivation here would be a second answer for a court to disagree
+    // with.
+    let anchor_index = (0..binding.step_leaf_count).find(|i| {
+        kaspa_consensus_core::palw_step::canonical_step_coordinates(profile, ctx, *i)
+            .is_some_and(|c| c.call_index > covered_decode_call)
+    })?;
+    PalwBisectLadderV1::open_anchored(
+        &ctx.context_hash(),
+        &binding.committed_execution_root,
+        challenger_id,
+        responder_id,
+        PalwBisectSpaceV1::StepLeaves,
+        binding.step_leaf_count,
+        anchor_index,
+        checkpoints.leaf_hashes[at],
+        opened_at_daa,
+        first_deadline_daa,
+    )
+    .ok()
+}
+
 pub fn base0_refutation_from_capture_v1(
     profile: &PalwShapeProfileV3,
     ctx: &PalwJobContextV2,
@@ -397,9 +664,14 @@ pub fn base0_refutation_from_capture_v1(
     target: PalwStepCoordinateV1,
     prompt_token_ids: Vec<u32>,
     decode_tokens: Option<kaspa_consensus_core::palw_step_refute::PalwDecodeTokenPinV1>,
+    // A verified checkpoint anchor for the KV history, when the caller holds one. `None` builds
+    // the long form: one opening per cached position.
+    kv_checkpoint: Option<kaspa_consensus_core::palw_step_refute::PalwCheckpointKvOperandsV1>,
 ) -> Result<kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1, LegError> {
     use kaspa_consensus_core::palw_step_leg::step_opening_v1;
-    use kaspa_consensus_core::palw_step_refute::{PalwExecutionStepRefutationV1, PalwStepInputOpeningV1, canonical_input_leaves_v1};
+    use kaspa_consensus_core::palw_step_refute::{
+        PalwExecutionStepRefutationV1, PalwStepInputOpeningV1, canonical_input_leaves_v1_anchored,
+    };
 
     let leaf_of =
         |index: u64| -> Option<PalwStepTileLeafV1> { tiles.tiles.iter().find(|(i, _)| *i == index).map(|(_, leaf)| leaf.clone()) };
@@ -417,8 +689,8 @@ pub fn base0_refutation_from_capture_v1(
 
     // The canonical input set, in the checker's own order — asked for rather than reconstructed,
     // so a prover cannot disagree with the court about what a step reads.
-    let required =
-        canonical_input_leaves_v1(profile, ctx, &target).ok_or(LegError::UnknownSlot { layer: 0, slot: target.node_slot as u16 })?;
+    let required = canonical_input_leaves_v1_anchored(profile, ctx, &target, kv_checkpoint.is_some())
+        .ok_or(LegError::UnknownSlot { layer: 0, slot: target.node_slot as u16 })?;
     let mut inputs = Vec::new();
     for row in &required {
         for (index, coord) in row {
@@ -431,7 +703,15 @@ pub fn base0_refutation_from_capture_v1(
             inputs.push(PalwStepInputOpeningV1 { opening, preimage });
         }
     }
-    Ok(PalwExecutionStepRefutationV1 { binding, output_opening, output_preimage, inputs, prompt_token_ids, decode_tokens })
+    Ok(PalwExecutionStepRefutationV1 {
+        binding,
+        output_opening,
+        output_preimage,
+        inputs,
+        prompt_token_ids,
+        decode_tokens,
+        kv_checkpoint,
+    })
 }
 
 #[cfg(test)]
@@ -633,8 +913,16 @@ mod tests {
         let tiles = base0_step_tiles_v1(&profile, &ctx, leaf_count, 0, 0, &probe.steps).expect("the rows tile");
         let _root = base0_step_merkle_root_v1(&tiles).expect("a populated space has a root");
 
+        // decode = 1 ⇒ zero decode CALLS ⇒ zero checkpoints, and the empty leg is the honest one.
+        let no_checkpoints = Base0CheckpointCaptureV1::from_chunks_v1(
+            &ctx,
+            &profile,
+            &kaspa_consensus_core::palw_state_chunk_map::integer_kv_checkpoint_profile_v1(1),
+            &[],
+        )
+        .expect("a job with no decode call has an empty checkpoint leg");
         let binding = |tiles: &Base0StepTilesV1| {
-            base0_binding_from_capture_v1(&profile, &ctx, tiles, Hash64::default(), Hash64::default())
+            base0_binding_from_capture_v1(&profile, &ctx, tiles, &no_checkpoints, Hash64::default(), Hash64::default())
                 .expect("a capture yields its own commitment")
         };
 
@@ -642,7 +930,7 @@ mod tests {
         // (slot 34 of layer 0), which reads the accumulator the step before it produced.
         let target =
             PalwStepCoordinateV1 { call_index: 0, node_slot: profile.pre_nodes.len() as u32 + 34, position: 0, tile_index: 0 };
-        let honest = base0_refutation_from_capture_v1(&profile, &ctx, &tiles, binding(&tiles), target, Vec::new(), None)
+        let honest = base0_refutation_from_capture_v1(&profile, &ctx, &tiles, binding(&tiles), target, Vec::new(), None, None)
             .expect("a capture assembles");
 
         // The oracle is the PRODUCTION inventory, proven against its own root — so this exercises
@@ -673,8 +961,9 @@ mod tests {
         row[0] = row[0].wrapping_add(1);
         let lying_tiles = base0_step_tiles_v1(&profile, &ctx, leaf_count, 0, 0, &lying).expect("the rows tile");
         let _lying_root = base0_step_merkle_root_v1(&lying_tiles).expect("rooted");
-        let fraud = base0_refutation_from_capture_v1(&profile, &ctx, &lying_tiles, binding(&lying_tiles), target, Vec::new(), None)
-            .expect("a tampered capture assembles the same way");
+        let fraud =
+            base0_refutation_from_capture_v1(&profile, &ctx, &lying_tiles, binding(&lying_tiles), target, Vec::new(), None, None)
+                .expect("a tampered capture assembles the same way");
         let verdict =
             check_execution_step_refutation_v1(&fraud, &oracle).expect("a committed row its own inputs do not produce convicts");
         // The conviction is ARITHMETIC, not structural: the tampered leaf was re-hashed and

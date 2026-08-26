@@ -155,6 +155,15 @@ describes the artifacts the binary is actually made of).
   <details>
   <summary>Building on Windows</summary>
 
+  **What a Windows build gives you, and what it does not.** `kaspad` builds and runs on
+  `x86_64-pc-windows-msvc`: it syncs, serves RPC and runs the validator daemon. The **PALW v2
+  agent** path (`--compute-endpoint`) is *not* served on Windows — `misaka-palw-agent-borsh/v1`
+  is a Unix-domain-socket protocol whose admission check is peer credentials (`SO_PEERCRED` /
+  `getpeereid`), and neither has a Windows equivalent. Passing `--compute-endpoint` on Windows is
+  accepted, logs one warning, and leaves v2 compute capability withdrawn; the node keeps
+  validating. If you want to run a `palw-agent`, use Linux or macOS — WSL2 and containers both
+  work and are what the fleet runs.
+
   1. [Install Git for Windows](https://gitforwindows.org/) or an alternative Git distribution.
 
   2. Install [Protocol Buffers](https://github.com/protocolbuffers/protobuf/releases/download/v21.10/protoc-21.10-win64.zip) and add the `bin` directory to your `Path`
@@ -172,6 +181,13 @@ describes the artifacts the binary is actually made of).
       git clone https://github.com/MISAKA-BTC/misakas
       cd misakas
       ```
+  7. Build the node + the operator CLI
+      ```bash
+      cargo build --release -p kaspad -p misaka-cli
+      ```
+     These two are what CI's `Check (x86_64-pc-windows-msvc)` job builds and smoke-runs on every
+     push, so this command is verified rather than assumed. `kaspa-pq-signer` and `palw-agent`
+     build on Windows but refuse to run there — both are Unix-domain-socket daemons.
  </details>
 
   <details>

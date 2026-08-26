@@ -68,6 +68,14 @@ pub use kaspa_consensus_core::vlt::REPLAY_RESIDUAL_COMMITMENT_KEY as PALW_RESIDU
 /// Client for the v2 `palw-agent` UDS protocol (`misaka-palw-agent-borsh/v1`). Separate from the
 /// v1 subprocess bridge below: the v1 `PalwWorkerRuntime` drives `palw-worker --mode self-job`
 /// over the frozen JSON contract, while this speaks framed Borsh to a supervised agent.
+///
+/// **Unix-only, by protocol.** `misaka-palw-agent-borsh/v1` is defined over an `AF_UNIX`
+/// stream socket (VPS design v0.1 §5, §10.3) and its peer-credential admission check
+/// (`SO_PEERCRED`/`getpeereid` in `misaka-palw-agent`) has no Windows equivalent, so this module
+/// is gated rather than stubbed: a stub would compile a client that can never connect. The rest
+/// of this crate — the v1 `PalwWorkerRuntime` subprocess bridge — is portable, which is what
+/// keeps `kaspad` (a non-optional dependent) building on every supported host.
+#[cfg(unix)]
 pub mod agent_client;
 
 /// The submission schema this bridge understands.

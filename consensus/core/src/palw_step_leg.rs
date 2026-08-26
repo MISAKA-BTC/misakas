@@ -139,6 +139,8 @@ pub enum PalwStepLegError {
     Context(PalwSlashError),
     #[error("the binding's shape profile ({got}) is not the one the job context declares ({declared})")]
     ShapeProfileNotTheDeclaredOne { declared: Hash64, got: Hash64 },
+    #[error("the binding's state chunk map ({carried}) is not the one its shape profile registers ({registered})")]
+    StateChunkMapNotTheRegisteredOne { registered: Hash64, carried: Hash64 },
     #[error("step space error: {0}")]
     Step(PalwStepError),
     #[error("leaf count {got} is outside 1..={max}")]
@@ -895,6 +897,22 @@ fn verify_binding(binding: &PalwStepBindingV2) -> Result<(Hash64, Hash64, Hash64
             got: profile_hash,
         });
     }
+    // **The same defect one field over.** The binding carries `state_chunk_map_id` beside a
+    // profile that already registers one, and every checkpoint hash below is computed FROM the
+    // carried copy — `checkpoint_leaf_hash_v2` and `checkpoint_leg_root_v2` both take it as an
+    // argument. So a filer could carry any map id it liked and build a checkpoint leg that
+    // verifies against itself perfectly, under a layout the class never registered; the court
+    // would then read state bytes through the accuser's geometry.
+    //
+    // It has been invisible because every shipped class registers `Hash64::default()` and every
+    // honest filer copies it, so the two sources have never disagreed. Registering a real map is
+    // exactly what would end that, which is why this lands before the registration and not after.
+    if binding.state_chunk_map_id != binding.shape_profile.state_chunk_map_id {
+        return Err(PalwStepLegError::StateChunkMapNotTheRegisteredOne {
+            registered: binding.shape_profile.state_chunk_map_id,
+            carried: binding.state_chunk_map_id,
+        });
+    }
     let checkpoint_profile_hash = binding.checkpoint_profile.profile_hash();
     let decode_calls = binding.job_context.exact_decode_tokens.saturating_sub(1);
     let step_root = step_leg_root_v1(&context_hash, &profile_hash, binding.step_leaf_count, &binding.step_merkle_root);
@@ -1436,6 +1454,32 @@ mod tests {
             verify_binding(&swapped),
             Err(PalwStepLegError::ShapeProfileNotTheDeclaredOne { declared, got }),
             "a profile the job never declared must be refused, by name"
+        );
+    }
+
+    /// **The same defect one field over: the carried state chunk map.**
+    ///
+    /// Every checkpoint hash is computed FROM `binding.state_chunk_map_id`, so a filer carrying an
+    /// id its class never registered builds a checkpoint leg that verifies against itself and
+    /// describes state under a layout of its own choosing. Two sources for one fact, and the
+    /// second one is the accuser's.
+    #[test]
+    fn a_binding_must_carry_the_state_chunk_map_its_profile_registers() {
+        let (binding, _material, _, _) = honest();
+        assert!(verify_binding(&binding).is_ok());
+
+        // The profile keeps its registered map; only the free copy beside it moves. Nothing else
+        // in the binding is touched, which is exactly the shape of the attack.
+        let mut forged = binding.clone();
+        forged.state_chunk_map_id = h64(0xAD);
+        assert_ne!(forged.state_chunk_map_id, forged.shape_profile.state_chunk_map_id);
+        assert_eq!(
+            verify_binding(&forged),
+            Err(PalwStepLegError::StateChunkMapNotTheRegisteredOne {
+                registered: binding.shape_profile.state_chunk_map_id,
+                carried: h64(0xAD),
+            }),
+            "a state chunk map the class never registered must be refused, by name"
         );
     }
 

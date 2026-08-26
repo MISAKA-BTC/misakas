@@ -116,6 +116,7 @@ impl PalwExecutionBackendV1 for Base0Backend {
             &self.profile,
             job,
             &run.tiles,
+            &run.checkpoints,
             run.trace_root,
             crate::produce::base0_activation_leg_root_v1(job),
         )
@@ -134,7 +135,7 @@ impl PalwExecutionBackendV1 for Base0Backend {
     }
 
     fn bisect_prefix_state(&self, material: &[u8], index: u64) -> Option<kaspa_hashes::Hash64> {
-        let (binding, tiles, _, _) = base0_material_decode_v1(material).ok()?;
+        let (binding, tiles, _, _, _) = base0_material_decode_v1(material).ok()?;
         let leaves = leaves_by_position(&binding, &tiles);
         Some(crate::legs::base0_bisect_prefix_state_v1(&binding.job_context, &leaves, index))
     }
@@ -144,7 +145,7 @@ impl PalwExecutionBackendV1 for Base0Backend {
         material: &[u8],
         index: u64,
     ) -> Result<kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1, String> {
-        let (binding, tiles, logits_rows, generated) =
+        let (binding, tiles, logits_rows, generated, _) =
             base0_material_decode_v1(material).map_err(|_| "the capture does not decode".to_string())?;
         // The ladder narrows to an INDEX; the prover addresses a COORDINATE. `canonical_step_
         // coordinates` is the inverse of the index the ladder counts in, and it answers `None` for
@@ -178,6 +179,7 @@ impl PalwExecutionBackendV1 for Base0Backend {
             coord,
             prompt_token_ids,
             Some(pin),
+            None,
         )
         .map_err(|e| format!("{e:?}"))
     }
@@ -254,7 +256,7 @@ mod tests {
         let backend = floor_backend();
         let (job, prompt) = backend.job_for_anchor(Hash64::from_u64_word(0xC0117)).expect("job");
         let outcome = backend.execute(&job, &prompt).expect("the floor runs");
-        let (binding, tiles, logits, generated) =
+        let (binding, tiles, logits, generated, checkpoint_chunks) =
             crate::produce::base0_material_decode_v1(&outcome.material).expect("our own material decodes");
         let profile = binding.shape_profile.clone();
         let ctx = binding.job_context.clone();
@@ -293,15 +295,22 @@ mod tests {
             slot.1.values_le[0] = slot.1.values_le[0].wrapping_add(1);
         }
         let lying = crate::legs::Base0StepTilesV1 { leaves: leaves_by_position(&binding, &lying_tiles), tiles: lying_tiles.clone() };
+        // The run's OWN checkpoints, re-derived from the material it served: this fixture is a
+        // producer lying about one tile, not about its checkpoint leg.
+        let checkpoints =
+            crate::legs::Base0CheckpointCaptureV1::from_chunks_v1(&ctx, &profile, &binding.checkpoint_profile, &checkpoint_chunks)
+                .expect("the served chunks re-derive");
         let lying_binding = crate::legs::base0_binding_from_capture_v1(
             &profile,
             &ctx,
             &lying,
+            &checkpoints,
             binding.full_logits_trace_root,
             crate::produce::base0_activation_leg_root_v1(&ctx),
         )
         .expect("a tampered capture still commits to itself");
-        let lying_material = borsh::to_vec(&(&lying_binding, &lying_tiles, &logits, &generated)).expect("serializes");
+        let lying_material =
+            borsh::to_vec(&(&lying_binding, &lying_tiles, &logits, &generated, &checkpoint_chunks)).expect("serializes");
         let guilty = backend.refutation_for_index(&lying_material, index).expect("a tampered capture opens too");
         assert!(
             check_execution_step_refutation_v1(&guilty, &oracle).is_ok(),
@@ -335,7 +344,7 @@ mod tests {
         let honest = backend.execute(&job, &prompt).expect("the floor runs");
 
         // A leaf the capture actually holds.
-        let (binding, tiles, _, _) = crate::produce::base0_material_decode_v1(&honest.material).expect("decodes");
+        let (binding, tiles, _, _, _) = crate::produce::base0_material_decode_v1(&honest.material).expect("decodes");
         let leaf = tiles.first().map(|(i, _)| *i).expect("the capture holds a tile");
         let lying = backend.execute_with_injected_fault(&job, &prompt, leaf).expect("the drill fault runs");
 
@@ -361,7 +370,7 @@ mod tests {
         // comparison evidence rather than noise.
         assert_eq!(backend.execute(&job, &prompt).expect("re-runs").execution_root, honest.execution_root);
         assert_eq!(binding.step_leaf_count, {
-            let (b2, _, _, _) = crate::produce::base0_material_decode_v1(&lying.material).expect("decodes");
+            let (b2, _, _, _, _) = crate::produce::base0_material_decode_v1(&lying.material).expect("decodes");
             b2.step_leaf_count
         });
     }

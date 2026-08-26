@@ -16,21 +16,38 @@
 //!
 //! Transitions are logged once, not per probe: a fleet operator reading logs needs the moment
 //! the state changed, not thirty lines a minute confirming it has not.
+//!
+//! # Platform scope
+//!
+//! The §10.3 protocol is `AF_UNIX` by definition, so the monitor thread exists on Unix only.
+//! On a non-Unix host this module still compiles and still hands back a capability handle — one
+//! pinned at [`PalwComputeCapability::Unreachable`] — because the failure policy above is
+//! platform-independent: no agent means no v2 compute capability and a node that keeps
+//! validating. What a Windows operator gets instead of a silent no-op is one explicit line
+//! saying `--compute-endpoint` cannot be served here.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
+#[cfg(unix)]
 use std::time::Duration;
 
-use kaspa_consensus_core::palw_v2::{PalwAgentHealthV1, PalwAgentStateV1};
-use kaspa_core::{info, warn};
+use kaspa_consensus_core::palw_v2::PalwAgentHealthV1;
+#[cfg(unix)]
+use kaspa_consensus_core::palw_v2::PalwAgentStateV1;
+#[cfg(unix)]
+use kaspa_core::info;
+use kaspa_core::warn;
+#[cfg(unix)]
 use misaka_palw::agent_client::PalwAgentClient;
 
 const PALW_AGENT: &str = "palw-agent-monitor";
 /// Probe cadence. The agent answers health without touching the worker or the model, so this is
 /// cheap on both sides; 30 s bounds how stale the capability state can be.
+#[cfg(unix)]
 const PROBE_INTERVAL: Duration = Duration::from_secs(30);
 /// Connect/write/read ceiling for one health probe.
+#[cfg(unix)]
 const PROBE_IO_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// What this node currently knows about its v2 compute runtime. `Available` means the agent
@@ -82,19 +99,29 @@ impl PalwAgentCapability {
     }
 }
 
+#[cfg(unix)]
 fn short(hash: &kaspa_hashes::Hash64) -> String {
     faster_hex::hex_string(&hash.as_byte_slice()[..8])
 }
 
 /// Spawns the monitor thread and returns the capability handle. The thread runs for the life of
 /// the process — kaspad's shutdown model for auxiliary observers is process exit.
+///
+/// On a non-Unix host no thread is spawned and the returned handle stays `Unreachable`; see the
+/// module's *Platform scope*.
 pub fn spawn_palw_agent_monitor(endpoint: PathBuf) -> Arc<PalwAgentCapability> {
     let handle = Arc::new(PalwAgentCapability {
         endpoint: endpoint.clone(),
         state: AtomicU8::new(PalwComputeCapability::Unreachable as u8),
         last_health: Mutex::new(None),
     });
-    let shared = Arc::clone(&handle);
+    spawn_probe(endpoint, Arc::clone(&handle));
+    handle
+}
+
+/// The Unix monitor: one health round trip every [`PROBE_INTERVAL`], forever.
+#[cfg(unix)]
+fn spawn_probe(endpoint: PathBuf, shared: Arc<PalwAgentCapability>) {
     info!(
         "[{PALW_AGENT}] monitoring the PALW v2 agent at {} (observation only at this stage; \
          the VLT compute role is configured separately)",
@@ -146,5 +173,22 @@ pub fn spawn_palw_agent_monitor(endpoint: PathBuf) -> Arc<PalwAgentCapability> {
             }
         })
         .expect("spawning the palw-agent monitor thread");
-    handle
+}
+
+/// The non-Unix stand-in. `misaka-palw-agent-borsh/v1` is an `AF_UNIX` protocol whose admission
+/// check is peer credentials, so there is nothing here to connect to and nothing honest to fake:
+/// the capability stays withdrawn. That is the same state a Unix host reaches with its agent
+/// down, and it changes nothing about validation — which is why this is a log line and not an
+/// exit, exactly as on Unix.
+#[cfg(not(unix))]
+fn spawn_probe(endpoint: PathBuf, shared: Arc<PalwAgentCapability>) {
+    // Stated, not merely inherited from the constructor: this is the terminal state here.
+    shared.store(PalwComputeCapability::Unreachable, None);
+    warn!(
+        "[{PALW_AGENT}] --compute-endpoint={} was requested, but the PALW v2 agent protocol is a \
+         Unix-domain-socket protocol and this host is not Unix; v2 compute capability stays \
+         withdrawn for the life of this process. The node continues to sync and validate \
+         normally. To run the agent, use a Linux/macOS host (WSL2 or a container both work).",
+        endpoint.display()
+    );
 }

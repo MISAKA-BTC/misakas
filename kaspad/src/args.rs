@@ -250,7 +250,8 @@ pub struct Args {
     pub compute_worker: Option<String>,
     /// PALW v2 (Land stage): path to a `palw-agent` Unix socket to monitor. Observation only —
     /// health-probed and logged, feeding the capability handle nothing consensus-visible
-    /// consumes yet. The VLT compute role (v1) is untouched by it.
+    /// consumes yet. The VLT compute role (v1) is untouched by it. Served on Unix hosts only
+    /// (see `crate::palw_agent`); elsewhere it warns and the capability stays withdrawn.
     pub compute_endpoint: Option<String>,
     pub compute_work_dir: Option<String>,
     pub compute_prompt: Option<String>,
@@ -1011,7 +1012,9 @@ pub fn cli() -> Command {
                 .help(
                     "MISAKA PALW v2: path to a palw-agent Unix socket to health-monitor (Land stage: observation and \
                      capability state only; grants no reward, no work, no fork-choice weight, and does not replace \
-                     --compute-worker). The node runs validator-only regardless of the agent's state.",
+                     --compute-worker). The node runs validator-only regardless of the agent's state. Unix hosts \
+                     only — the agent protocol is AF_UNIX; on Windows the flag is accepted, logs one warning and \
+                     leaves compute capability withdrawn.",
                 ),
         )
         .arg(
@@ -1327,10 +1330,18 @@ a large RAM (~64GB) can set this value to ~3.0-4.0 and gain superior performance
 pub fn parse_args() -> Args {
     match Args::parse(std::env::args_os()) {
         Ok(args) => args,
-        Err(err) => {
-            println!("{err}");
-            std::process::exit(1);
-        }
+        // `--help` and `--version` arrive HERE, as `Err`. clap models them as errors only to
+        // carry the rendered text; `ErrorKind::DisplayHelp`/`DisplayVersion` are answers, not
+        // failures. The old arm could not tell the difference — it printed everything to
+        // stdout and exited 1 — so `kaspad --version` reported failure to anything that reads
+        // an exit code. The VPS setup wizard's own probe was one of them, and it has been
+        // logging "kaspad check did not finish cleanly" on a perfectly healthy binary.
+        //
+        // `Error::exit` is where that distinction already lives, and it is what every other
+        // binary in this workspace gets for free from clap's derive `Parser::parse`: help and
+        // version to stdout with status 0, a usage error to stderr with clap's usage status
+        // (2, not the 1 this printed). Re-deciding it here is what produced the bug.
+        Err(err) => err.exit(),
     }
 }
 
