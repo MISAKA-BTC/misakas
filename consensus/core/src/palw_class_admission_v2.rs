@@ -253,7 +253,7 @@ fn decode_pin_price_v1(profile: &PalwShapeProfileV3, decode: u64) -> Option<u64>
 /// attempt more for a longer job — `pwu_per_inference` is per inference — so the longest job the
 /// class admits is a job the class must be prosecutable at.
 pub fn derive_court_cost_v1(profile: &PalwShapeProfileV3) -> Result<PalwCourtCostV1, PalwClassAdmissionError> {
-    use crate::palw_step::{PALW_STEP_INPUT_CHECKPOINT_STATE, PALW_STEP_INPUT_KV_K, PALW_STEP_INPUT_KV_V, PalwStepOpKindV1 as Op};
+    use crate::palw_step::{PALW_STEP_INPUT_KV_K, PALW_STEP_INPUT_KV_V, PalwStepOpKindV1 as Op};
     let over = || PalwClassAdmissionError::Profile("the class's court cost overflows a u64".to_string());
     let mut cost = PalwCourtCostV1 { max_close_bytes: 0, max_terminal_macs: 0, max_operand_count: 0 };
 

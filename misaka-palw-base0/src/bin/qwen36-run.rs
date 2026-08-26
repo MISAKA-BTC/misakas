@@ -27,7 +27,7 @@ fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let path =
-        flag(&args, "--artifact").unwrap_or_else(|| die("usage: qwen36-run --artifact <file> [--tokens ids] [--generate N]".into()));
+        flag(&args, "--artifact").unwrap_or_else(|| die("usage: qwen36-run --artifact <file> [--root-only] [--tokens ids] [--generate N]".into()));
     let tokens: Vec<usize> = flag(&args, "--tokens")
         .map(|v| v.split(',').filter_map(|t| t.trim().parse().ok()).collect())
         .unwrap_or_else(|| vec![9707, 11, 1879, 0, 3555, 374]);
@@ -35,6 +35,25 @@ fn main() {
 
     let started = std::time::Instant::now();
     let artifact = open_artifact(std::path::Path::new(path)).unwrap_or_else(|e| die(format!("{path}: {e}")));
+
+    // **`--root-only`: the operator's own copy of the check the node makes.** An artifact is the
+    // class the chain named only if its computed root is the registered one, so this prints that
+    // root and nothing else — one line, diffable against the pinned constant, on stdout so it can
+    // be piped. The node still computes it itself at startup; this exists so an operator can find
+    // out BEFORE a node refuses to serve, rather than from a refusal.
+    if args.iter().any(|a| a == "--root-only") {
+        let root = artifact.artifact_root();
+        println!("{root}");
+        let pinned = kaspa_consensus_core::config::params::PALW_RC_GENESIS_QWEN36_ARTIFACT_ROOT;
+        if root == pinned {
+            eprintln!("matches PALW_RC_GENESIS_QWEN36_ARTIFACT_ROOT — this is the class testnet-11 registers");
+        } else {
+            eprintln!("DOES NOT match the pinned root {pinned}\nthis file is not the class testnet-11 registers");
+            std::process::exit(1);
+        }
+        return;
+    }
+
     let shape = &artifact.shape;
     println!(
         "opened in {:?}: {} layers ({} linear, {} full), {:.2} GiB of weights, vocab {}",

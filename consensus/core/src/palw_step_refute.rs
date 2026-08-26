@@ -40,7 +40,7 @@ use crate::palw_step::{
     kernel_semantics_id_v1,
 };
 use crate::palw_step_leg::{
-    PalwStepBindingV2, PalwStepFaultV1, PalwStepOpeningV1, PalwStepRefutationVerdictV1, PalwStepTileLeafV1, step_opening_root_v1,
+    PalwStepBindingV2, PalwStepFaultV1, PalwStepOpeningV1, PalwStepRefutationVerdictV1, PalwStepTileLeafV1,
     step_tile_leaf_hash_v1,
 };
 use crate::palw_transcendental::{ggml_v_silu_v1, glibc_expf_v1};

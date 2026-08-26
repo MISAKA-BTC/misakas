@@ -1466,6 +1466,13 @@ async fn palw_rc_the_real_qwen36_artifact_produces_a_block() {
     let path = std::env::var("MISAKA_QWEN36_ARTIFACT").expect("MISAKA_QWEN36_ARTIFACT=/path/to/q36-40L.palwq36");
     let opened = std::time::Instant::now();
     let artifact = misaka_palw_base0::qwen36::open_artifact(std::path::Path::new(&path)).expect("the artifact opens");
+    // **The drill's artifact must be the PUBLIC NETWORK's artifact.** Otherwise this passes for a
+    // file nobody on testnet-11 can use, which is the one thing the drill exists to rule out.
+    assert_eq!(
+        artifact.artifact_root(),
+        kaspa_consensus_core::config::params::PALW_RC_GENESIS_QWEN36_ARTIFACT_ROOT,
+        "MISAKA_QWEN36_ARTIFACT is not the artifact testnet-11 registers"
+    );
     eprintln!(
         "drill: mapped {} layers / {:.2} GiB in {:?}",
         artifact.shape.n_layers(),
@@ -1503,41 +1510,13 @@ async fn qwen36_block_e2e(artifact: misaka_palw_base0::qwen36::Qwen36ArtifactV1,
     let rooted = std::time::Instant::now();
     let artifact_root = artifact.artifact_root();
     eprintln!("drill: artifact root {artifact_root} in {:?}", rooted.elapsed());
-    // **Two-phase, and the second phase is the current truth.** The genesis assembly ends at the
-    // boot cost gate today: the class's derived close is ~1.24x the 80 KiB carrier ceiling, all
-    // of it Merkle-path bytes on contiguous leaf runs (each opened leaf carries its own full
-    // path; a RANGE opening — one shared subtree per contiguous run — is the identified fix and
-    // roughly halves every close). Until that format lands, this test asserts the GATE: the
-    // refusal must be the cost ceiling, by name — not a shape error, not coverage, not the
-    // ladder. The day the derived cost fits, the match arm below stops firing and the full block
-    // path resumes without an edit here.
-    let params = match kaspa_consensus_core::config::params::palw_rc_params_with_qwen36(base_root, artifact_root, registry) {
-        Ok(params) => params,
-        Err(e) => {
-            let text = format!("{e:?}");
-            assert!(
-                text.contains("exceeds the ceiling this ruleset pays for"),
-                "the two-class genesis may only fail at the cost gate, got: {text}"
-            );
-            let derived = kaspa_consensus_core::palw_class_admission_v2::derive_court_cost_v1(
-                &qwen36_profile_v1(QWEN36_35B_A3B).expect("projects"),
-            )
-            .expect("derives");
-            eprintln!(
-                "qwen36 block e2e ({model_id}): held at the boot cost gate — derived close {} vs ceiling {} (macs {} / {}, operands {} / 8); range openings are the identified unlock",
-                derived.max_close_bytes,
-                80 * 1024,
-                derived.max_terminal_macs,
-                16 * 1024 * 1024,
-                derived.max_operand_count,
-            );
-            // The gap is pinned so it can only shrink: a change that grows the close past this
-            // fails here before it fails a challenger.
-            assert!(derived.max_close_bytes <= 104_000, "the derived close regressed past its pinned bound: {}", derived.max_close_bytes);
-            assert!(derived.max_terminal_macs <= 16 * 1024 * 1024, "the MAC arm regressed past the ceiling");
-            return;
-        }
-    };
+    // The two-class genesis, assembled by the same function the shipped network uses. It once
+    // failed here at the boot cost gate (the class's derived close was 1.24x the carrier ceiling)
+    // and this call was wrapped in a match that asserted the refusal and returned — which was
+    // honest while it lasted and became a FAIL-OPEN the moment the cost fit: a future regression
+    // past the ceiling would have made this test pass while producing no block. Unconditional now.
+    let params = kaspa_consensus_core::config::params::palw_rc_params_with_qwen36(base_root, artifact_root, registry)
+        .expect("the two-class RC genesis card assembles");
     let bundle = match &params.palw_consensus_mode {
         kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) => b.clone(),
         _ => panic!("a ConsensusV2 network"),

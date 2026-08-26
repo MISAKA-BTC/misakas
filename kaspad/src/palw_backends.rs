@@ -136,6 +136,71 @@ mod tests {
         PalwBackendRegistry::new(court(), Vec::new(), Vec::new(), b"misaka-palw-rc".to_vec())
     }
 
+    /// **The PUBLIC network's own class set, resolved against a node's holdings.**
+    ///
+    /// Not a fixture: this reads `Params::from(testnet-11)` — the ruleset a real node boots with —
+    /// walks the classes its genesis registers, and asks the registry for each. The floor must
+    /// resolve on a node holding nothing (it is derived); Qwen3.6 must be refused BY ROOT with the
+    /// message that names the flag, because a node without the weights still validates the chain
+    /// and simply cannot produce for that class.
+    ///
+    /// This is the test that would have caught a two-class ruleset whose second class no node
+    /// could ever name — the class id the params register and the class id the registry dispatches
+    /// on are derived in different modules, and nothing else compares them.
+    #[test]
+    fn the_public_networks_classes_resolve_the_way_a_node_would_ask() {
+        use kaspa_consensus_core::config::params::palw_rc_qwen36_is_registered;
+        let params: kaspa_consensus_core::config::params::Params =
+            kaspa_consensus_core::network::NetworkId::with_suffix(kaspa_consensus_core::network::NetworkType::Testnet, 11).into();
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
+            panic!("testnet-11 ships a ConsensusV2 bundle");
+        };
+        let classes: Vec<(Hash64, Hash64)> = bundle
+            .genesis_objects
+            .iter()
+            .filter_map(|o| match o {
+                kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegistered { class_id, artifact_root, .. } => {
+                    Some((*class_id, *artifact_root))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            classes.len(),
+            if palw_rc_qwen36_is_registered() { 2 } else { 1 },
+            "the shipped network registers exactly the classes its pins describe"
+        );
+
+        let bare = PalwBackendRegistry::new(bundle.court, Vec::new(), Vec::new(), params.net.to_string().into_bytes());
+        let (floor_id, floor_root) = classes[0];
+        assert_eq!(floor_id, bundle.base_class_id, "the floor is registered first");
+        let floor = bare.resolve(floor_id, floor_root).expect("the derived floor resolves on a node holding nothing");
+        assert_eq!(floor.model_id(), "PALW-BASE-0/rc");
+
+        if let Some(&(qwen_id, qwen_root)) = classes.get(1) {
+            assert_eq!(qwen_id, qwen36_class_id_v1(), "the registered second class is the one this build dispatches on");
+            assert_eq!(
+                qwen_root,
+                kaspa_consensus_core::config::params::PALW_RC_GENESIS_QWEN36_ARTIFACT_ROOT,
+                "the network's artifact root is the pinned one"
+            );
+            let err = match bare.resolve(qwen_id, qwen_root) {
+                Err(e) => e,
+                Ok(b) => panic!("a node holding no weights resolved the class to {}", b.model_id()),
+            };
+            assert!(err.contains("--palw-class-artifact"), "the refusal names the flag that fixes it: {err}");
+            // And an artifact whose computed root is not the chain's is refused too — the file's
+            // NAME is never the answer.
+            let alien = PalwBackendRegistry::new(
+                bundle.court,
+                Vec::new(),
+                vec![(Hash64::from_u64_word(0xA11E), std::sync::Arc::new(misaka_palw_base0::qwen36::qwen36_dev_fixture(1, 8)))],
+                params.net.to_string().into_bytes(),
+            );
+            assert!(matches!(alien.resolve(qwen_id, qwen_root), Err(_)), "a file with the wrong root is not this class");
+        }
+    }
+
     /// **The floor resolves on a node with nothing installed.** It is derived, so it needs no
     /// artifact and no worker — the property that keeps a plain Linux node the liveness anchor,
     /// and the property the withdrawn family could not have (its seats had to hold particular
