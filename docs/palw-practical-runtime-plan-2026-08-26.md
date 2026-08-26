@@ -8,7 +8,38 @@ FMA の縮約が全部答えを変えるので、二台のマシンが一致す�
 Thinking Machines の batch-invariant kernel は約 34〜61% のスループットを払っている）。
 **整数実行はこのカテゴリごと消す** — ADR-0040 Decision E。
 
-## 出発点（2026-08-26 実測、M4 Pro / 24 GB）
+## 到達点（2026-08-26 実測、M4 Pro / 24 GB）
+
+**Qwen2.5-1.5B が BASE-0 上で普通にチャットできる状態になった。**
+
+```
+$ base0-chat --artifact qwen25-1.5b-a16.palwart --tokenizer tokenizer.json \
+             --prompt "What is the capital of Japan?"
+The capital of Japan is Tokyo.
+prefill 15 tok (32.7 tok/s) | decode 7 tok (28.8 tok/s)
+```
+
+日本語（`日本の首都は東京です。`）・俳句・`17 * 23 = 391` も正しい。
+実重みの忠実度は float 参照に対し **top-1 一致 45/57、top-5 56/57、rank 相関 0.893**、
+層ごとの残差ストリーム cosine 0.98–1.00。
+
+| 段階 | decode | prefill(360) | decode after 360 |
+| --- | ---: | ---: | ---: |
+| 着手時（スカラー） | 2.2 tok/s | — | — |
+| NEON vmlal + rayon(per-channel) | 29.9 | 24.2 | 2.5 |
+| block 化 + sdot/usdot | 36.2 | 31.8 | 2.5 |
+| **バッチ prefill + アテンション並列** | **36.2** | **43.6** | **25.3** |
+
+学んだこと 2 つ:
+
+1. **速いカーネルが遅くした。** sdot/usdot 単体では 25.2→23.2 tok/s と**遅くなった**。
+   原因は rayon にチャネルを 1 個ずつ渡していたこと（unembed は 151,936 タスク）。
+   block 化してから測ると vmlal 27.1 / sdot 36.2。カーネルではなくスケジューラが律速だった。
+2. **長文脈の壁はアテンションだった。** 360 履歴からの decode が 2.5 tok/s。
+   `a16_attn_scores` は heads×kv_len 個の独立 dot を 1 本の逐次ループで回していた
+   （1 層 1 トークンあたり 4,320 dot）。プールに載せるだけで 10×。
+
+## 出発点（着手前の実測）
 
 `cargo run --release -p misaka-palw-base0 --example base0-throughput -- 28 16 <tier>`
 
@@ -56,22 +87,21 @@ SIMD は i32 レーンで累算したい。`|w| ≤ 128`、`|x| ≤ 32767` な�
 
 ## 次の段階
 
-### 1. CPU の残り（帯域まで）
-- `dot_i8_a16` は現状 `vmlal_s16`（1 命令 4 MAC）。`usdot`（FEAT_I8MM、Apple M2+）が使えれば
-  x を上位/下位バイトに分解して 2 パスで **1 命令 16 MAC**。分解は代数的に厳密なので値は不変:
-  `Σw·x = 256·Σw·hi + Σw·lo`、各パス上界 `8960×128×255 = 2.9e8 < 2^31`
-- 重みのタイル化と prefetch（現状は素直な row-major 走査）
-- attention アーム（`a16_attn_scores` / `a16_attn_values`）はまだスカラー
+### 1. CPU の残り（帯域まで）— 主要 3 件は完了
+- ~~sdot/usdot~~ 完了（inline asm、intrinsic は Rust 1.94 で未安定）
+- ~~attention アーム~~ 完了（並列化。ただし SIMD はまだ入れていない — i16×i16 なので sdot 不可）
+- ~~バッチ prefill~~ 完了
+- 残: `forward_token` が毎トークン trace を clone している（27 行 × 28 層）、
+  `tile()` が unembed 用に 151,936 要素を毎トークン確保している。合わせて約 10% の無駄
 
 ### 2. Metal バックエンド（決定済みの GPU 第一目標）
 - Metal に `dp4a` 相当は無いので自前 MSL の i32 mad ループ。**整数なので bit-exact は保証される**
 - threadgroup ごとの縮約も同じチャンク規則に従わせる（i32 レーンの 128 項制約は GPU でも同じ）
 - 検証: CPU 参照との全前方一致を、GPU 実行の受領証について実行する
 
-### 3. 実重み（品質）
-- `qwen25-convert` の A16 PTQ 経路は `palw-mainnet-rc-integration` 側にあり、本流へは未移植
-  （`convert.rs` の +464 行）。ここまでは**速度のみ**を測っており、品質は一切測っていない
-- 現在の fixture はスケールを fan-in から導いただけの非較正値。実重みでの perplexity は未測定
+### 3. 実重み（品質）— **完了**
+- A16 PTQ 経路と float 参照較正器を本流へ移植済み。実 Qwen2.5-1.5B で FAITHFUL
+- 未測定なのは perplexity（top-1/top-5/rank 相関では測った）
 
 ### 4. court 側の reconcile（実行とは独立）
 - `palw_step_refute`（+1147 行）と `palw_qwen25_profile`（+967 行）が両ブランチで動いており、
