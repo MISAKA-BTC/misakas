@@ -789,6 +789,32 @@ pub fn base0_check_projections_v1(
     Ok(())
 }
 
+/// **The graph a class declares is the graph this engine performs** — node for node, tile for tile.
+///
+/// ADR-0049 Decision F's interim obligation, made structural: *no worker may commit a step leg for
+/// a class whose profile does not name every narrowing the engine performs.* The profile is the
+/// object a REGISTERED class carries, and it arrives from the chain — so a producer holding this
+/// binary and a class registered against a different graph would commit legs the court cannot
+/// reproduce, and be convicted for arithmetic it performed correctly.
+///
+/// Separate from [`base0_check_projections_v1`] because it needs no inventory: building one
+/// materialises every operand row of the artifact, and this runs on the production path.
+pub fn base0_check_graph_v1(
+    plan: &Base0GraphPlanV1,
+    profile: &PalwShapeProfileV3,
+    shape: &crate::artifact::Base0ShapeV1,
+    kv_len: usize,
+) -> Result<(), ProjectionMismatch> {
+    // All three tables, because the head is where the model's OUTPUT comes from and a hand-written
+    // table of three nodes drifts exactly like one of thirty-eight: both classes' post tables
+    // declared the final norm and not the narrowing after it, for as long as they were written
+    // twice.
+    for (declared, plan) in [(&profile.pre_nodes, &plan.pre), (&profile.attn_nodes, &plan.layer), (&profile.post_nodes, &plan.post)] {
+        check_table(declared, plan, shape, kv_len)?;
+    }
+    Ok(())
+}
+
 fn check_table(
     declared: &[kaspa_consensus_core::palw_step::PalwStepNodeV1],
     plan: &Base0PlanV1,

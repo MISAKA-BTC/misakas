@@ -755,18 +755,21 @@ mod tests {
     /// **Audit C-05: the engine and the declared graph are checked against each other, step by
     /// step.**
     ///
-    /// `base0_profile_v1` is generated from `BASE0_LAYER_IR` and the engine is still written by
-    /// hand, so nothing structural stops the two describing different computations — which they
-    /// did, four times over, and each divergence was found by someone reading rather than by
-    /// anything failing. A generator would make it impossible; short of one, this makes it
-    /// FAIL LOUDLY, which is the property that was missing.
+    /// This was written when the profile was generated from `BASE0_LAYER_IR` and the engine was
+    /// not, so nothing structural stopped the two describing different computations — which they
+    /// did, four times over, each found by someone reading rather than by anything failing. The
+    /// generator it asked for exists now (`plan::Base0PlanV1`): the engine's op sequence is
+    /// compiled from the same table, so a divergence is not detected here, it is unrepresentable.
+    ///
+    /// The test stays, and it is a different kind of statement now. `plan::base0_check_graph_v1`
+    /// compares two TABLES; this runs the engine and measures what it actually emitted, which is
+    /// the only check that would notice a plan that compiles cleanly and executes something else —
+    /// a kernel dispatch that produced the wrong number of values, a per-head loop that ran the
+    /// wrong number of times. Tables agreeing is not rows agreeing.
     ///
     /// What it compares is the whole observable shape of an execution: the slot sequence, in
     /// order, and each row's length against the width the profile declares for that node at this
-    /// position's `kv_len`. A step the engine performs and the graph omits shows up as a slot
-    /// nobody declared; a step the graph declares and the engine skips shows up as a missing slot;
-    /// and a step whose width disagrees — the `KvDim`-vs-`Hidden` attention output, the per-head
-    /// nodes declared once per layer — shows up as a length.
+    /// position's `kv_len`.
     #[test]
     fn the_engine_performs_exactly_the_graph_the_profile_declares() {
         use kaspa_consensus_core::palw_step::PalwStepOutLenV1;
