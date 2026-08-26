@@ -92,16 +92,51 @@ to be something it never claimed" — and that is precisely the argument that sh
 proposal rather than opened an arm around it. A class that cannot be prosecuted is not a class with
 a different verification scheme. It is the thing the gates are for.
 
-### And it could not have run
+### And it could not have run — for a reason no operator could fix
 
-The fleet holds no Apple Silicon hosts, a panel excludes the executor, and exact replay (Decision 4
-as revised) makes a Family-M panel a same-device-family panel. So the family needed three Macs to
-license one claim and had zero. No Family-M block has ever been produced on any chain. A share
-granted to a class that produces nothing is not idle: per-class DAA and epoch budgets reason about
-expected production, and a class that holds a permille and mints nothing has been measured lying
-about its own budget for 33 hours.
+The obvious version of this is **wrong**, and an earlier draft of this ADR published it: "the fleet
+holds no Apple Silicon, so a family whose seats replay on Metal has nobody to seat." What
+testnet-11 actually registered is not a Metal class. `682756bc…` is the **Linux CPU** build of the
+pinned llama.cpp — commit `28f1f623` records the measurement ("the Linux CPU class is live at
+682756bc…"), and the deployed worker reports `accelerate:false, avx2:true`. The family's identity
+is its pins, not its silicon, so a CPU build qualifies; four fleet hosts carry that exact worker.
+Replay capacity existed.
 
----
+It still never produced a block on any chain, and the reason is a **fixed point in the class
+identity** rather than a hardware shortage:
+
+1. every Family-M execution goes through `MetalBackend::run_worker`, which invokes the worker at
+   `--mode v2-legs-job`;
+2. the deployed worker (built 2026-08-14) does not implement that mode. It refuses — measured still
+   refusing, about twice a second, on 2026-08-26;
+3. the repo's worker DOES implement it, and that is exactly why it cannot be deployed:
+   `worker_binary_sha256` is inside the preimage of `PalwRuntimeManifestV2::manifest_hash()`, so a
+   rebuild is a different runtime and `check_runtime_identity` refuses it for a class pinning the
+   old manifest;
+4. and the class id is the shape profile id, which does not move when the binary does — so
+   registering the repaired worker collides with the class already there:
+   `PalwStateV2Error::DuplicateClass`.
+
+No configuration, rebuild or restart closes that loop. Only a re-mint does. A family whose sole
+deployed class cannot be repaired without re-minting the network is not a family having an outage;
+it is one whose identity scheme has no repair path — a structural argument for withdrawal, where
+"we own no Macs" was a contingent one that a reader could answer by buying a Mac.
+
+Two claims from the earlier draft are corrected rather than carried:
+
+* **the panel arithmetic.** Quorum is **3 of 5**, not 5 of 5 (`PALW_V2_PANEL_SEATS = 5`,
+  `PALW_V2_PANEL_QUORUM = 3`), and a drawable panel needs `SEATS + 1` distinct operators because a
+  panel excludes the executor. Both are true of every class on the network, not of this family, so
+  neither carries weight here;
+* **the budget observation.** A class holding share while producing nothing was measured lying
+  about its epoch budget for 33 hours — but the mid-epoch budget fix was **reverted on main**
+  (`b57adc83`, "the mid-epoch budget fix rewrites history, so it cannot ship to a running chain"),
+  and the class now reports `share=1 budget=1` and still produces nothing. It stands as a
+  historical observation, not as a present-tense claim.
+
+The economic point survives both corrections, in its narrow form: a share granted to a class that
+produces nothing is not idle, because per-class DAA and epoch budgets reason about expected
+production.
 
 ## Decision 1 — There is one execution family, and it is not a value
 
