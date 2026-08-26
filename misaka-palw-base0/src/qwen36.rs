@@ -29,10 +29,17 @@
 
 use crate::artifact::ArtifactError;
 use crate::rope::RopeTableV1;
-use kaspa_consensus_core::palw_base0_a16::{
-    A16QuantParams, a16_add_elem, a16_attn_scores, a16_attn_values, a16_matmul_requant, a16_matmul_rescale, a16_mul_elem, a16_requant,
-    a16_rms_norm, a16_softmax_rows,
+// **The projections and the attention arms go through `kernels`, not through the catalog ops.**
+//
+// Every one of them is asserted bit-identical to the op it replaces (`kernels`' own differentials,
+// plus `engine_a16`'s whole-forward comparison), which is the property ADR-0040 Decision E exists
+// to provide: lanes, tiles and threads cannot change an integer result. Reading the catalog ops
+// here instead would make a 40-layer forward roughly thirteen times slower for the same bits.
+use crate::kernels::{
+    a16_attn_scores_fast as a16_attn_scores, a16_attn_values_fast as a16_attn_values, a16_matmul_requant_fast as a16_matmul_requant,
+    a16_matmul_rescale_fast as a16_matmul_rescale,
 };
+use kaspa_consensus_core::palw_base0_a16::{A16QuantParams, a16_add_elem, a16_mul_elem, a16_requant, a16_rms_norm, a16_softmax_rows};
 use kaspa_consensus_core::palw_base0_ops::silu;
 use kaspa_consensus_core::palw_qwen36_ops::{
     Qwen36GdnParamsV1, Qwen36GdnStateV1, q36_gate_apply, q36_gdn_step, q36_l2_norm, q36_moe_combine, q36_pow_q, q36_rope_partial,
@@ -139,7 +146,7 @@ pub enum Qwen36Error {
     MissingParams(String),
     BadTensor { name: String, want: usize, got: usize },
     BadParams(String),
-    OpRefused(&'static str),
+    OpRefused(&'static str, String),
     Position,
 }
 
@@ -150,7 +157,7 @@ impl std::fmt::Display for Qwen36Error {
             Self::MissingParams(n) => write!(f, "the artifact has no parameter row {n}"),
             Self::BadTensor { name, want, got } => write!(f, "tensor {name} should hold {want} values and holds {got}"),
             Self::BadParams(n) => write!(f, "parameter row {n} is malformed"),
-            Self::OpRefused(w) => write!(f, "the op {w} refused its input"),
+            Self::OpRefused(w, why) => write!(f, "the op {w} refused its input: {why}"),
             Self::Position => write!(f, "the position is past the rotary table"),
         }
     }
@@ -229,8 +236,11 @@ impl Qwen36ArtifactV1 {
 /// Every op in this module returns its own error type; the engine returns one. Written as a free
 /// generic rather than a closure per function because a closure's error type is inferred from its
 /// first use and the arms mix `PalwA16OpError` with `PalwQwen36OpError`.
-fn refuse<E>(what: &'static str) -> impl Fn(E) -> Qwen36Error {
-    move |_| Qwen36Error::OpRefused(what)
+fn refuse<E: std::fmt::Debug>(what: &'static str) -> impl Fn(E) -> Qwen36Error {
+    // The inner error is kept. A runtime whose only diagnostic is "an op refused" makes every
+    // conversion bug a bisection over the graph, which is exactly what happened the first time
+    // this ran on real weights.
+    move |e| Qwen36Error::OpRefused(what, format!("{e:?}"))
 }
 
 /// The runtime state one sequence carries.

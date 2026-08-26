@@ -396,7 +396,14 @@ pub fn q36_pow_q(u: i64, c: i64) -> i64 {
         return ONE;
     }
     let arg = ((c as i128 * ln_u as i128) >> K).clamp(i32::MIN as i128, 0) as i32;
-    int_exp(arg) as i64
+    // **The clamp is load-bearing, not defensive.** `u^c` for `u` in (0, 1] and `c >= 0` is a
+    // value in (0, 1] by definition, and the recurrence's gate refuses anything outside `[0, ONE]`
+    // because a "decay" above one is an amplifier. But the frozen `int_exp` OVERSHOOTS at zero —
+    // `int_exp(0)` is 6.8e-5 of `ONE` above it — and `arg` reaches zero whenever `u` is close
+    // enough to one that `c * ln u` rounds away, which on real weights is a head whose `dt` is
+    // strongly negative. The first run of this on a real checkpoint refused at the very first
+    // GatedDeltaNet head for exactly that reason.
+    (int_exp(arg) as i64).clamp(0, ONE)
 }
 
 // -------------------------------------------------------------------------------------------
@@ -714,6 +721,16 @@ mod tests {
     #[test]
     fn the_power_matches_the_real_one() {
         assert_eq!(q36_pow_q(ONE, 3 * ONE), ONE, "1^c is 1");
+        // The case that refused on a real checkpoint: a `u` just under one, where `c * ln u`
+        // rounds to zero and the frozen `int_exp(0)` sits above `ONE`.
+        for u in [ONE - 1, ONE - 2, ONE - 16] {
+            let got = q36_pow_q(u, ONE);
+            assert!((0..=ONE).contains(&got), "u^c must be a gate, got {got} for u={u}");
+        }
+        for c in [1i64, 2, ONE / 1000] {
+            let got = q36_pow_q(ONE - 1, c);
+            assert!((0..=ONE).contains(&got), "u^c must be a gate, got {got} for c={c}");
+        }
         assert_eq!(q36_pow_q(ONE / 2, 0), ONE, "u^0 is 1");
         assert_eq!(q36_pow_q(0, ONE), 0);
         for (u, c) in [(ONE / 2, ONE), (ONE / 2, 2 * ONE), (ONE / 4, ONE / 2), (ONE * 9 / 10, 5 * ONE), (ONE / 100, ONE / 3)] {
