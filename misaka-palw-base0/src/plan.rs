@@ -238,10 +238,10 @@ impl Base0PlanV1 {
             let emits_codes = matches!(ir.kernel, KDESC_BASE0_REQUANTIZE | KDESC_BASE0_EMBED);
             let reads_cache = ir.inputs.iter().any(|r| matches!(r, Base0IrInputV1::CachedK | Base0IrInputV1::CachedV));
             for r in ir.inputs {
-                if let Base0IrInputV1::Step(k) = r {
-                    if *k >= slot {
-                        return Err(PlanError::ForwardReference { slot, input: *k });
-                    }
+                if let Base0IrInputV1::Step(k) = r
+                    && *k >= slot
+                {
+                    return Err(PlanError::ForwardReference { slot, input: *k });
                 }
             }
             // Every operand the step names must resolve at every layer. Asked here, once per
@@ -285,10 +285,10 @@ impl Base0PlanV1 {
                 _ => &[],
             };
             for idx in needs_codes {
-                if let Some(Base0IrInputV1::Step(k)) = ir.inputs.get(*idx) {
-                    if !nodes[*k as usize].emits_codes {
-                        return Err(PlanError::NotCodes { slot, kernel: ir.kernel, input: *k });
-                    }
+                if let Some(Base0IrInputV1::Step(k)) = ir.inputs.get(*idx)
+                    && !nodes[*k as usize].emits_codes
+                {
+                    return Err(PlanError::NotCodes { slot, kernel: ir.kernel, input: *k });
                 }
             }
             nodes.push(Base0PlanNodeV1 {
@@ -320,10 +320,10 @@ impl Base0PlanV1 {
                 if !nodes[k].emits_codes || !nodes[v].emits_codes {
                     return Err(PlanError::CacheOrder { detail: "a cache write must be a narrowing" });
                 }
-                if let Some(r) = first_read {
-                    if r <= k.max(v) {
-                        return Err(PlanError::CacheOrder { detail: "the cache is read before it is written" });
-                    }
+                if let Some(r) = first_read
+                    && r <= k.max(v)
+                {
+                    return Err(PlanError::CacheOrder { detail: "the cache is read before it is written" });
                 }
             }
             (None, None) => {
@@ -432,10 +432,10 @@ impl Base0PlanV1 {
             // The two halves are committed together, immediately before the first step that reads
             // them: a write per step would let a failure in between leave the caches at different
             // lengths, which silently changes every LATER position's attention.
-            if node.reads_cache {
-                if let (Some(k), Some(v)) = (staged_k.take(), staged_v.take()) {
-                    cache.push_layer(layer, k, v);
-                }
+            if node.reads_cache
+                && let (Some(k), Some(v)) = (staged_k.take(), staged_v.take())
+            {
+                cache.push_layer(layer, k, v);
             }
             let out = self.compute(artifact, node, layer, &layer_in_row, &rows, Some(cache), None, position, kv_len)?;
             debug_assert_eq!(
