@@ -10356,6 +10356,20 @@ impl VirtualStateProcessor {
         //
         // Headers are synced before the utxoset sidecars in every IBD path, so such a child
         // normally exists by now, and it arrived under PoW plus the headers proof.
+        // **Every qualifying child must agree, and disagreement is proof of injection.**
+        //
+        // This used to `break` on the FIRST qualifying child, under a doc line — three lines above,
+        // and false — saying the root "comes from the pruning point's OWN header, never from the
+        // peer's message". Every header in a joining node's store at this moment arrived from the
+        // IBD peer, `palw_state_root` is not checked at header validation (the only check is in the
+        // selected-chain walk, long after this import), and `get_children` returns a hash set whose
+        // iteration order is a function of the hashes — i.e. grindable. So the peer chose which
+        // root this node would demand, and could then satisfy it with the carriage it also supplied.
+        //
+        // The honest set is unanimous by construction: every child whose selected parent is the
+        // pruning point commits the same parent state. So requiring unanimity costs an honest peer
+        // nothing and denies the attacker the choice, without needing a selected-chain successor
+        // that may not be resolvable yet at this point in the IBD.
         let children: Vec<BlockHash> = RelationsStoreReader::get_children(&self.relations_service, pruning_point)
             .map(|c| c.read().iter().copied().collect())
             .unwrap_or_default();
@@ -10365,8 +10379,22 @@ impl VirtualStateProcessor {
             if self.ghostdag_store.get_selected_parent(child).ok() != Some(pruning_point) {
                 continue; // commits a different parent's state — not this one
             }
-            expected_root = Some(header.palw_state_root);
-            break;
+            match expected_root {
+                None => expected_root = Some(header.palw_state_root),
+                Some(seen) if seen == header.palw_state_root => {}
+                Some(seen) => {
+                    return Err(PruningImportError::ImportedPalwStateInvalid(
+                        pruning_point,
+                        seen,
+                        format!(
+                            "its children disagree about its state root ({seen} vs {}) — every child whose selected parent \
+                             is this block commits the same parent state, so a disagreement is a header this chain did not \
+                             produce",
+                            header.palw_state_root
+                        ),
+                    ));
+                }
+            }
         }
         // No child header to check against yet: REFUSE rather than write on trust. An unverifiable
         // carriage is exactly the one an attacker supplies, and the IBD can be retried once the
@@ -10454,8 +10482,14 @@ impl VirtualStateProcessor {
                         header.overlay_commitment_root,
                     ));
                 }
+                // **No `break`: every qualifying child is checked, not the first one the hash
+                // order happens to yield.** The comparison above was already right; stopping at
+                // the first child was what let the peer choose which comparison ran. `get_children`
+                // iterates a hash set, so the order is grindable, and a peer that supplies both the
+                // snapshot and a child header agreeing with it wins against an honest majority that
+                // does not. The honest children are unanimous by construction, so continuing costs
+                // nothing and removes the choice.
                 verified_against = Some(child);
-                break;
             }
         }
         if verified_against.is_none() {

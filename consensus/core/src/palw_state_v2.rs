@@ -235,6 +235,23 @@ pub struct PalwStateParamsV2 {
     /// retarget span: each global epoch boundary the chain crosses closes one span and retargets
     /// every share-bearing, unfrozen class against it.
     epoch_length: u64,
+    /// **The share the liveness floor may never be diluted below** (audit 2026-08-26, finding 8).
+    ///
+    /// `granted_share_table_v2` refused only a grant that took a DONOR below
+    /// `min_grantable_share_permille` — 1‰ on the RC bundle — and nothing bounded how many
+    /// entrants there could be. 999 registrations were each individually admissible and left the
+    /// base class at 1‰, at which point the per-epoch retarget clamp (`current / max_factor`)
+    /// cannot bring it back: once it produces nothing, the `observed == 0` arm freezes it at the
+    /// crushed target with no easing path. The floor that guarantees a chain can make blocks at
+    /// all — the model-free class every node can execute — was the one thing arithmetic could
+    /// take to nothing.
+    ///
+    /// **100‰ is a policy choice and the only number here that is.** It is high enough that the
+    /// clamp can recover the floor (×4 per epoch: 100 → 400 → 1000 in two), and low enough to
+    /// leave 90% of cadence available to model-bearing classes, which is the direction the project
+    /// is going. A larger value would cap what the LLM lanes can ever be worth; a smaller one
+    /// re-opens the collapse it exists to prevent.
+    min_base_class_share_permille: u16,
     /// The permanently-Active liveness floor's class id (ADR-0039 W6′). The first registration
     /// on a chain must be this class, at the whole 1000‰ — the transition enforces it — and the
     /// atomic bundle carries the same id, cross-checked at the startup gate (the C5 pattern:
@@ -397,6 +414,7 @@ impl PalwStateParamsV2 {
             // predating the reward wiring meant and still means. See
             // `with_worker_carve_permille`.
             worker_carve_permille: 0,
+            min_base_class_share_permille: 100,
             // The whole session as one rung: the identity that leaves the backstop as the only
             // clock. See the field doc.
             turn_deadline_daa: window_court,
@@ -516,6 +534,20 @@ impl PalwStateParamsV2 {
     /// Enforced at every grant, which is what makes a mid-flight zero budget unrepresentable
     /// instead of an epoch-time cliff (the V1 derivation's `ZeroBudget`, moved to where the
     /// share is chosen).
+    pub fn min_base_class_share_permille(&self) -> u16 {
+        self.min_base_class_share_permille
+    }
+
+    /// Override the liveness floor's share floor. Refused above 1000‰ (it would make the base the
+    /// only class a chain could ever carry) and below the grant floor (it would mean nothing).
+    pub fn with_min_base_class_share_permille(mut self, permille: u16) -> Result<Self, PalwStateV2Error> {
+        if permille > 1000 || permille < self.min_grantable_share_permille() {
+            return Err(PalwStateV2Error::ShareOutOfRange { got: permille });
+        }
+        self.min_base_class_share_permille = permille;
+        Ok(self)
+    }
+
     pub fn min_grantable_share_permille(&self) -> u16 {
         let denom = (self.budget_tolerance_permille as u128) * (self.epoch_length as u128);
         // denom ≥ 1000 (tolerance floor × epoch ≥ 1), so the ceiling division is ≤ 1000 and a
@@ -3075,6 +3107,21 @@ fn granted_share_table_v2(
         table.insert(*id, granted);
     }
     table.insert(entrant, share);
+    // **And the liveness floor keeps its own floor.** Per-entrant and per-donor limits bound one
+    // grant; neither bounds how many grants there may be, so the base class was reachable at 1‰ by
+    // 999 individually-legal registrations — and the retarget clamp cannot recover it from there.
+    // Checked on the assembled table rather than on the entrant, because dilution is a property of
+    // the total and no single grant is the one that does it.
+    if let Some(base_share) = table.get(&params.base_class_id).copied() {
+        let base_floor = params.min_base_class_share_permille();
+        if base_share < base_floor {
+            return Err(PalwStateV2Error::DonationBreaksGrantFloor {
+                donor: params.base_class_id,
+                would_hold: base_share,
+                floor: base_floor,
+            });
+        }
+    }
     debug_assert_eq!(table.values().map(|s| *s as u32).sum::<u32>(), 1000, "the donation arithmetic conserves the denominator");
     Ok(table)
 }
@@ -3204,7 +3251,28 @@ fn activate_due_classes(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCont
         })
         .collect();
     for (class_id, share) in due {
-        let table = granted_share_table_v2(builder.params, &builder.state.class_shares, class_id, share)?;
+        // **A grant that cannot be made freezes the CLASS, not the chain.**
+        //
+        // This was `?`, and the error propagated out of a transition that is a pure function of
+        // (parent state, daa) — so every node failed the same block identically, and every block at
+        // or after that DAA score failed the same way, forever, with the class still `Registered`
+        // and nothing able to change it. The trigger needs no attacker beyond a full share table: a
+        // registration validated against the table as it stood is GRANTED later by this function,
+        // against the table as it then is.
+        //
+        // Freezing is the honest terminal: the registration was accepted, the grant was not
+        // available when it came due, and a class that never activates holds no share and refuses
+        // attempts — which is exactly what "the activation did not happen" means. The chain keeps
+        // going, and the fact is visible in the registry instead of being a halt nobody can read.
+        let table = match granted_share_table_v2(builder.params, &builder.state.class_shares, class_id, share) {
+            Ok(table) => table,
+            Err(_) => {
+                let mut record = builder.state.classes.get(&class_id).expect("just listed").clone();
+                record.status = PalwClassStatusV2::Frozen { since_daa: ctx.daa_score };
+                builder.write_class(class_id, Some(record));
+                continue;
+            }
+        };
         for (id, granted) in table {
             if builder.state.class_shares.get(&id).copied() != Some(granted) {
                 builder.write_share(id, Some(granted));
@@ -7319,6 +7387,60 @@ pub(crate) mod tests {
     /// The shipped bundle satisfies both preconditions — `FP_ABANDON_HOLD` 600 and
     /// `CLAIM_RETIREMENT` 2400 — so this was not a corner: it was every abandoned free-prompt
     /// commitment, 2400 DAA after it was made. What kept it invisible is that no test ran the pair.
+    /// **The liveness floor cannot be diluted to nothing by legal grants.**
+    ///
+    /// Every grant below was individually admissible: each entrant took exactly the grant floor and
+    /// no donor fell below it, which is all `granted_share_table_v2` used to check. Nothing bounded
+    /// how MANY such grants there could be, so 999 of them left the base class at 1‰ — and the
+    /// per-epoch retarget clamp (`current / max_factor`) cannot climb back out once a class at 1‰
+    /// produces nothing and hits the `observed == 0` arm. The class that guarantees a chain can make
+    /// blocks at all was the one arithmetic could take to zero.
+    ///
+    /// Dilution is a property of the TOTAL, so the bound is checked on the assembled table: no
+    /// single grant is the one that does it.
+    #[test]
+    fn the_liveness_floor_keeps_a_floor_of_its_own() {
+        let p = params();
+        let floor = p.min_base_class_share_permille();
+        let grant = p.min_grantable_share_permille();
+        assert!(floor > grant, "a floor at the grant floor would mean nothing");
+
+        // The reported attack, run: entrants at exactly the grant floor, one after another, each
+        // one individually admissible. Before the fix this ran 999 times and left the base at 1‰.
+        let mut table: BTreeMap<Hash64, u16> = [(p.base_class_id(), 1000u16)].into_iter().collect();
+        let mut admitted = 0u32;
+        let refusal = loop {
+            let entrant = h64(0x1000 + admitted as u64);
+            match granted_share_table_v2(&p, &table, entrant, grant) {
+                Ok(next) => {
+                    assert_eq!(next.values().map(|s| *s as u32).sum::<u32>(), 1000, "the table always conserves");
+                    assert!(
+                        next[&p.base_class_id()] >= floor,
+                        "the base must never be observed below its floor, not even transiently — it held {} at entrant {admitted}",
+                        next[&p.base_class_id()]
+                    );
+                    table = next;
+                    admitted += 1;
+                    assert!(admitted < 2000, "the grants must stop being admissible at some point — that is the whole bound");
+                }
+                Err(e) => break e,
+            }
+        };
+        match refusal {
+            PalwStateV2Error::DonationBreaksGrantFloor { donor, would_hold, floor: named } => {
+                assert_eq!(donor, p.base_class_id(), "the refusal names the class being diluted");
+                assert!(would_hold < named, "and says what it would have been left holding: {would_hold} < {named}");
+            }
+            other => panic!("the bound must refuse by naming the dilution, got {other:?}"),
+        }
+        assert!(admitted > 0, "the bound must admit entrants before it refuses them — a floor, not a freeze");
+        assert!(
+            table[&p.base_class_id()] >= floor,
+            "and the table it stops at still holds the floor: {} >= {floor}",
+            table[&p.base_class_id()]
+        );
+    }
+
     /// The one hold test runs with retirement off; the three retirement tests run with the hold at
     /// zero. This test exists to be the combination, and it is red against the unguarded arm.
     #[test]
