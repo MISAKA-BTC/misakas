@@ -49,6 +49,7 @@ pub mod mmap;
 pub mod produce;
 pub mod qwen36;
 pub mod qwen36_backend;
+pub mod qwen36_calibrate;
 pub mod qwen36_reference;
 pub mod rc;
 pub mod rope;
