@@ -1538,7 +1538,7 @@ async fn qwen36_block_e2e(artifact: misaka_palw_base0::qwen36::Qwen36ArtifactV1,
     let anchor = base0_rc_job_anchor_v1(network_domain, pre_pow, qwen36_class_id, &bond_key.0);
 
     let backend =
-        Qwen36Backend::new(artifact, model_id, QWEN36_RC_CANONICAL, qwen36_class_id, config.params.net.to_string().into_bytes());
+        Qwen36Backend::new(std::sync::Arc::new(artifact), model_id, QWEN36_RC_CANONICAL, qwen36_class_id, config.params.net.to_string().into_bytes());
     let (job, prompt) = backend.job_for_anchor(anchor).expect("the anchor implies a job inside the artifact's table");
     let ran = std::time::Instant::now();
     let run = backend.execute(&job, &prompt).expect("a real hybrid forward pass over the anchored job");

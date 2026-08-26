@@ -148,6 +148,7 @@ pub struct PalwPanelService {
     /// Decoded once. Same contract as the producer's: digest-checked here, matched against the
     /// CHAIN per duty.
     class_artifacts: Vec<misaka_palw_base0::artifact::Base0ArtifactV1>,
+    qwen36_artifacts: Vec<(kaspa_hashes::Hash64, std::sync::Arc<misaka_palw_base0::qwen36::Qwen36ArtifactV1>)>,
     consensus_manager: Arc<ConsensusManager>,
     flow_context: Arc<FlowContext>,
     consensus_config: Arc<Config>,
@@ -160,7 +161,12 @@ impl PalwPanelService {
     /// cached, for the same reason the producer's is: a cache would be a second place the
     /// operator's configuration lives.
     fn backends(&self) -> crate::palw_backends::PalwBackendRegistry {
-        crate::palw_backends::PalwBackendRegistry::new(self.config.court, self.class_artifacts.clone())
+        crate::palw_backends::PalwBackendRegistry::new(
+            self.config.court,
+            self.class_artifacts.clone(),
+            self.qwen36_artifacts.clone(),
+            self.consensus_config.params.net.to_string().into_bytes(),
+        )
     }
 
     pub fn new(
@@ -194,19 +200,21 @@ impl PalwPanelService {
         // about rather than skipped, because a seat silently unable to judge a class looks exactly
         // like a seat whose material never arrived.
         let mut class_artifacts = Vec::new();
+        let mut qwen36_artifacts = Vec::new();
         for path in &config.class_artifacts {
-            match std::fs::read(path)
-                .map_err(|e| e.to_string())
-                .and_then(|bytes| misaka_palw_base0::artifact::decode_artifact_file_v1(&bytes).map_err(|e| e.to_string()))
-            {
-                Ok(artifact) => {
+            match crate::palw_backends::load_class_artifact(path) {
+                Ok(crate::palw_backends::LoadedClassArtifact::Dense(artifact)) => {
                     info!("[{PALW_PANEL}] loaded class artifact {}", path.display());
-                    class_artifacts.push(artifact);
+                    class_artifacts.push(*artifact);
+                }
+                Ok(crate::palw_backends::LoadedClassArtifact::Qwen36 { computed_root, artifact }) => {
+                    info!("[{PALW_PANEL}] mapped Qwen3.6 artifact {} (computed root {computed_root})", path.display());
+                    qwen36_artifacts.push((computed_root, artifact));
                 }
                 Err(err) => warn!("[{PALW_PANEL}] class artifact {} is unusable: {err}", path.display()),
             }
         }
-        Self { config, consensus_manager, flow_context, consensus_config, keypair, bond, class_artifacts }
+        Self { config, consensus_manager, flow_context, consensus_config, keypair, bond, class_artifacts, qwen36_artifacts }
     }
 
     fn fee_state_path(&self) -> PathBuf {

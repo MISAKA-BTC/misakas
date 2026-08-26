@@ -111,7 +111,10 @@ pub fn qwen36_prompt_for_anchor(anchor: Hash64, vocab: usize, prefill: u32) -> V
 
 /// One Qwen3.6 class, bound to its artifact.
 pub struct Qwen36Backend {
-    artifact: Qwen36ArtifactV1,
+    /// `Arc`, because a node resolves per block while the artifact is a 33 GiB mapping opened
+    /// once: the per-block cost must be a pointer clone, and a by-value artifact would make every
+    /// resolve either a re-map or an impossible clone.
+    artifact: std::sync::Arc<Qwen36ArtifactV1>,
     model_id: String,
     /// `(prefill, decode)` — the canonical job's shape, a class fact.
     canonical_job: (u32, u32),
@@ -127,7 +130,7 @@ pub struct Qwen36Backend {
 
 impl Qwen36Backend {
     pub fn new(
-        artifact: Qwen36ArtifactV1,
+        artifact: std::sync::Arc<Qwen36ArtifactV1>,
         model_id: impl Into<String>,
         canonical_job: (u32, u32),
         class_profile_id: Hash64,
@@ -363,7 +366,7 @@ mod tests {
 
     fn backend() -> Qwen36Backend {
         let artifact = crate::qwen36::test_fixture(4, 8);
-        Qwen36Backend::new(artifact, "Qwen3.6-fixture", (4, 2), Hash64::from_u64_word(0x36), b"misaka-palw-test".to_vec())
+        Qwen36Backend::new(std::sync::Arc::new(artifact), "Qwen3.6-fixture", (4, 2), Hash64::from_u64_word(0x36), b"misaka-palw-test".to_vec())
     }
 
     /// **A producer can run the job an anchor implies, and two producers get the same roots.**
@@ -448,7 +451,7 @@ mod tests {
     fn a_job_longer_than_the_table_is_refused() {
         let artifact = crate::qwen36::test_fixture(2, 8);
         let context = artifact.shape.max_position as u32;
-        let a = Qwen36Backend::new(artifact, "Qwen3.6-fixture", (context, 1), Hash64::from_u64_word(0x36), b"misaka-palw-test".to_vec());
+        let a = Qwen36Backend::new(std::sync::Arc::new(artifact), "Qwen3.6-fixture", (context, 1), Hash64::from_u64_word(0x36), b"misaka-palw-test".to_vec());
         assert!(a.job_for_anchor(Hash64::default()).is_err());
     }
 

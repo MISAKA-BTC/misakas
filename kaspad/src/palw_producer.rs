@@ -116,6 +116,8 @@ pub struct PalwProducerService {
     /// artifact that hashes to what its own file claims; whether it is the artifact the CHAIN
     /// registered is decided per block, against the producer facts.
     class_artifacts: Vec<misaka_palw_base0::artifact::Base0ArtifactV1>,
+    /// Memory-mapped Qwen3.6 artifacts, opened and rooted once at startup.
+    qwen36_artifacts: Vec<(kaspa_hashes::Hash64, std::sync::Arc<misaka_palw_base0::qwen36::Qwen36ArtifactV1>)>,
     consensus_manager: Arc<ConsensusManager>,
     mining_manager: MiningManagerProxy,
     flow_context: Arc<FlowContext>,
@@ -197,12 +199,10 @@ impl PalwProducerService {
         // that silently fell back to the floor would look like a working producer that never
         // touches the class they deployed 1.7 GiB for.
         let mut class_artifacts = Vec::new();
+        let mut qwen36_artifacts = Vec::new();
         for path in &config.class_artifacts {
-            match std::fs::read(path)
-                .map_err(|e| e.to_string())
-                .and_then(|bytes| misaka_palw_base0::artifact::decode_artifact_file_v1(&bytes).map_err(|e| e.to_string()))
-            {
-                Ok(artifact) => {
+            match crate::palw_backends::load_class_artifact(path) {
+                Ok(crate::palw_backends::LoadedClassArtifact::Dense(artifact)) => {
                     info!(
                         "[{PALW_PRODUCER}] loaded class artifact {} ({} layers, vocab {}, eps_q {})",
                         path.display(),
@@ -210,12 +210,21 @@ impl PalwProducerService {
                         artifact.shape.vocab,
                         artifact.shape.eps_q
                     );
-                    class_artifacts.push(artifact);
+                    class_artifacts.push(*artifact);
+                }
+                Ok(crate::palw_backends::LoadedClassArtifact::Qwen36 { computed_root, artifact }) => {
+                    info!(
+                        "[{PALW_PRODUCER}] mapped Qwen3.6 artifact {} ({} layers, {:.2} GiB, computed root {computed_root})",
+                        path.display(),
+                        artifact.shape.n_layers(),
+                        artifact.weight_bytes() as f64 / (1u64 << 30) as f64,
+                    );
+                    qwen36_artifacts.push((computed_root, artifact));
                 }
                 Err(err) => warn!("[{PALW_PRODUCER}] class artifact {} is unusable: {err}", path.display()),
             }
         }
-        Self { config, consensus_manager, mining_manager, flow_context, keypair, bond, miner_data, class_artifacts }
+        Self { config, consensus_manager, mining_manager, flow_context, keypair, bond, miner_data, class_artifacts, qwen36_artifacts }
     }
 
     /// **Keep what the attempt promises to keep.**
@@ -233,7 +242,12 @@ impl PalwProducerService {
     /// cached: it is a handful of clones, and a cache would be a second place the operator's
     /// configuration lives.
     fn backends(&self) -> crate::palw_backends::PalwBackendRegistry {
-        crate::palw_backends::PalwBackendRegistry::new(self.config.court, self.class_artifacts.clone())
+        crate::palw_backends::PalwBackendRegistry::new(
+            self.config.court,
+            self.class_artifacts.clone(),
+            self.qwen36_artifacts.clone(),
+            self.config.network_id.as_bytes().to_vec(),
+        )
     }
 
     /// Takes the ALREADY-ENCODED material rather than the run: the encoding is the backend's,
