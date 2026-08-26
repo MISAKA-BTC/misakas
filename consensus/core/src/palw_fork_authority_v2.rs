@@ -210,7 +210,6 @@ mod tests {
         vec![
             PalwConsensusObjectV2::ClassRegistered {
                 class_id: h64(1),
-                terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
                 artifact_root: h64(11),
                 slash_value_per_pwu: 5,
                 pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),

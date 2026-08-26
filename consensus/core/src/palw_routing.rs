@@ -188,8 +188,10 @@ pub enum PalwRoutingError {
 #[borsh(use_discriminant = true)]
 #[repr(u8)]
 pub enum PalwExecutionFamilyV1 {
-    /// Apple GPU runtimes. Every Apple-libm-dependent class is `StructuralOnly` in depth
-    /// (ADR-0031's admission boundary) — a family fact surfaced per binding, not assumed.
+    /// **Reserved, empty** since ADR-0053 (see [`family_is_reserved_v1`]). Apple GPU runtimes:
+    /// every Apple-libm-dependent class is `StructuralOnly` in depth (ADR-0031's admission
+    /// boundary) — a family fact surfaced per binding, not assumed. The discriminant stays 1
+    /// because it is on the wire; what changed is that activation refuses it.
     Metal = 1,
     /// **Reserved, empty.** The tree's only CUDA reference is the literal `cuda-off`;
     /// admitting the first binding is the ADR-0027 falsifiable conformance campaign.
@@ -234,11 +236,20 @@ pub fn initial_family_max_active_band_v1(family: PalwExecutionFamilyV1) -> PalwM
     }
 }
 
-/// The two reserved families (ADR-0034 §9): no code paths exist for them today, and admitting
-/// the FIRST binding in either is the ADR-0027 falsifiable conformance campaign — so v1
+/// The reserved families (ADR-0034 §9): no code paths exist for them today, and admitting the
+/// FIRST binding in any of them is the ADR-0027 falsifiable conformance campaign — so v1
 /// activation refuses them outright rather than trusting caller-supplied golden counts.
+///
+/// **Metal joined them with ADR-0053.** It was admissible here for one reason: the withdrawn
+/// Metal/GGUF family was going to route to it, and that family verified within a tolerance, so it
+/// did not need Apple floats to be reproducible. Nothing routes there now. A Metal binding today
+/// would have to be a deterministic-integer class executing on Apple GPUs — there is not one line
+/// of GPU kernel in this tree, and no vendor guarantees the float reproducibility such a class
+/// would have to be adjudicated against. Leaving it admissible would leave an arm open for a
+/// binding nothing can execute and no court can judge, which is the shape ADR-0053 exists to
+/// close. It comes back the way CUDA does: a conformance campaign, not a code edit.
 pub fn family_is_reserved_v1(family: PalwExecutionFamilyV1) -> bool {
-    matches!(family, PalwExecutionFamilyV1::Cuda | PalwExecutionFamilyV1::Rocm)
+    matches!(family, PalwExecutionFamilyV1::Metal | PalwExecutionFamilyV1::Cuda | PalwExecutionFamilyV1::Rocm)
 }
 
 /// Every class tag registered on some PALW network that routing can NAME — the one

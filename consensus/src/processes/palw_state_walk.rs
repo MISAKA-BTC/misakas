@@ -128,7 +128,6 @@ mod tests {
     fn registrations() -> Vec<PalwConsensusObjectV2> {
         vec![
             PalwConsensusObjectV2::ClassRegistered {
-                terms: kaspa_consensus_core::palw_state_v2::PalwClassTermsV2::deterministic_default(),
                 class_id: h64(1),
                 artifact_root: h64(11),
                 slash_value_per_pwu: 5,

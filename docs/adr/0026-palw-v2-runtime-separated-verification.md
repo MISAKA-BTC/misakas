@@ -1,6 +1,9 @@
 # ADR-0026: PALW v2 verification architecture — borrow Ambient's shape, strengthen the proof
 
-Status: **Accepted (architecture).** Operating envelope unchanged: devnet, shadow mode,
+Status: **Accepted (architecture). Restored in full 2026-08-26.** ADR-0051 walked this ADR's
+thesis back for one capped family — accepting a tolerant proof model by name — and
+[ADR-0053](0053-palw-one-execution-family.md) withdrew that family, so the exception is gone: take
+Ambient's architecture, refuse its proof model, build exact-within-pinned-class, everywhere. Operating envelope unchanged: devnet, shadow mode,
 consensus-visible zero-credit only. Every activation gate in the v2 design §12 stands; this ADR
 moves none of them.
 Date: 2026-08-15

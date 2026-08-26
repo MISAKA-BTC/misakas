@@ -397,7 +397,6 @@ mod tests {
         let objects = vec![
             PalwConsensusObjectV2::ClassRegistered {
                 class_id: h64(1),
-                terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
                 artifact_root: h64(11),
                 slash_value_per_pwu: 5,
                 pwu_rule: PalwPwuRuleV2::MaxPerAttempt(500),
@@ -478,7 +477,6 @@ mod tests {
         let objects = vec![
             PalwConsensusObjectV2::ClassRegistered {
                 class_id: h64(1),
-                terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
                 artifact_root: h64(11),
                 slash_value_per_pwu: 5,
                 pwu_rule: PalwPwuRuleV2::MaxPerAttempt(500),
@@ -489,7 +487,6 @@ mod tests {
             },
             PalwConsensusObjectV2::ClassRegistered {
                 class_id: h64(2),
-                terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
                 artifact_root: h64(11),
                 slash_value_per_pwu: 5,
                 pwu_rule: PalwPwuRuleV2::MaxPerAttempt(500),
@@ -607,7 +604,6 @@ mod tests {
             let objects = vec![
                 PalwConsensusObjectV2::ClassRegistered {
                     class_id: h64(1),
-                    terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
                     artifact_root: h64(11),
                     slash_value_per_pwu: 5,
                     pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
@@ -686,7 +682,6 @@ mod tests {
     fn state_with_derived_class(initial_target: u128) -> PalwChainStateV2 {
         let objects = vec![PalwConsensusObjectV2::ClassRegistered {
             class_id: h64(2),
-            terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
             artifact_root: h64(22),
             slash_value_per_pwu: 1,
             pwu_rule: PalwPwuRuleV2::DerivedV1 { pwu_per_inference: 7 },
@@ -951,7 +946,6 @@ mod tests {
 
         let entrant = PalwConsensusObjectV2::ClassRegistered {
             class_id: h64(2),
-            terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
             artifact_root: h64(11),
             slash_value_per_pwu: 5,
             pwu_rule: PalwPwuRuleV2::MaxPerAttempt(500),
@@ -990,7 +984,6 @@ mod tests {
         // The entrant activates mid-epoch, which is where it gets share and no budget.
         let entrant = PalwConsensusObjectV2::ClassRegistered {
             class_id: h64(2),
-            terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
             artifact_root: h64(11),
             slash_value_per_pwu: 5,
             pwu_rule: PalwPwuRuleV2::MaxPerAttempt(500),

@@ -1,67 +1,37 @@
-//! **The execution-backend seam** (ADR-0051 implementation step 1; the adapter surface ADR-0026
-//! adopted from Ambient and never made a type).
+//! **The execution-backend seam** (ADR-0053; the adapter surface ADR-0026 adopted from Ambient
+//! and never made a type).
 //!
 //! A PALW node does three things with an execution and knows, at each of them, only what the CHAIN
 //! told it: run the job this template implies, commit to what it ran, and — as a panel seat —
-//! decide whether somebody else's material answers for the claim they published. Until now all
-//! three reached for `misaka-palw-base0` by name, so the node could execute exactly one family of
-//! class: the deterministic integer one.
+//! decide whether somebody else's material answers for the claim they published. This trait is
+//! where those three verbs live, so that no consumer names a runtime crate directly.
 //!
-//! # Why a family and not a class
+//! # One execution family, and why the seam survives it
 //!
-//! ADR-0051 splits the network into two **execution families**, where a family is a *verification
-//! scheme* rather than a model:
+//! ADR-0051 proposed a second *family* — a verification scheme, not a model: a pinned GGUF under a
+//! pinned Metal runtime, committing what the inference SAID and verified by tolerant replay.
+//! **ADR-0053 withdraws it.** A tolerance can acquit but never convict, so half the economy would
+//! have been non-convictable work, and the three mechanisms that were supposed to bound that —
+//! the 500‰ family cap, the per-class panel, the court exclusion — were respectively never
+//! constructed, never consumed, and a runtime `if`. What removed the motive was measurement:
+//! Qwen3.6 runs in the integer runtime with 100 % kernel-catalog coverage, so the model the black
+//! box existed to serve is adjudicable without it.
 //!
-//! * [`PalwExecutionFamilyV1::DeterministicInteger`] — pinned arithmetic, a graph projected from a
-//!   canonical IR, disputes ending in the ADR-0049 court. Verification is exact and a liar can be
-//!   convicted from one opened tile.
-//! * [`PalwExecutionFamilyV1::MetalGguf`] — a pinned GGUF on a pinned Apple-Silicon/Metal runtime
-//!   build, committing what the inference *said*, verified by bonded same-family replay. No court:
-//!   a tolerance can acquit but never convict, so the only slashable offenses are the objective
-//!   ones (contradictory receipts, equivocation, withholding).
-//!
-//! The families differ in what verification MEANS, which is exactly what a trait boundary is for.
-//! They do not differ in what an attempt carries — [`PalwExecutionOutcomeV1`] is the same four
-//! roots either way, because those roots are the block header's business and the header does not
-//! know which family produced them.
+//! So there is exactly one family — pinned integer arithmetic, a graph projected from a canonical
+//! IR, disputes ending in the ADR-0049 court — and it is not a value any object carries. **Every
+//! registered class is court-adjudicable by construction**, which is a stronger statement than a
+//! flag that says so: there is no arm to get wrong.
 //!
 //! # What this trait deliberately does not abstract
 //!
-//! Not the court. A backend has no `adjudicate`, because only one family has one; a Family-M
-//! dispute has no arithmetic terminal and inventing a uniform `verify_step` would imply otherwise.
-//! Not the artifact format either: the floor DERIVES its weights from a seed and a converted class
-//! ships a file, which `misaka_palw_base0::classes::resolve_class_v1` already reconciles against
-//! the chain's `(class_id, artifact_root)` pair.
+//! Not the court's rules — a backend supplies evidence (`bisect_prefix_state`,
+//! `refutation_for_index`) and never a verdict. Not the artifact format either: the floor DERIVES
+//! its weights from a seed and a converted class ships a file, which
+//! `misaka_palw_base0::classes::resolve_class_v1` already reconciles against the chain's
+//! `(class_id, artifact_root)` pair.
 
 use crate::palw_v2::PalwJobContextV2;
 use kaspa_hashes::Hash64;
-
-/// Which verification scheme a class is registered under (ADR-0051 Decision 1).
-///
-/// Carried as its own type rather than inferred from the profile, because the *economy* keys on
-/// it: the share table is capped at 500‰ per family, so "which family" is a fact the chain reasons
-/// about and not a property a node re-derives from a graph.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
-#[borsh(use_discriminant = true)]
-#[repr(u8)]
-pub enum PalwExecutionFamilyV1 {
-    /// BASE-0 and every class whose disputes end in the ADR-0049 court.
-    DeterministicInteger = 0,
-    /// Pinned GGUF on a pinned Apple-Silicon/Metal runtime (ADR-0051).
-    MetalGguf = 1,
-}
-
-impl PalwExecutionFamilyV1 {
-    /// **Can a dispute in this family end in a conviction?**
-    ///
-    /// The one question the rest of the system must never get wrong. `false` means the court is
-    /// not merely unimplemented for this family — it is unavailable in principle, because the
-    /// comparison the family verifies with is a tolerance and a tolerance cannot separate "lied by
-    /// ε" from "rounded by ε". A close arm that ignored this would convict on rounding.
-    pub fn is_court_adjudicable(self) -> bool {
-        matches!(self, Self::DeterministicInteger)
-    }
-}
 
 /// The roots an attempt carries, and the bytes that answer for them.
 ///
@@ -107,13 +77,12 @@ pub enum PalwMaterialVerdictV1 {
     Unverifiable,
 }
 
-/// One family's execution path, as a node uses it.
+/// The execution path, as a node uses it.
 ///
-/// Implementors: `misaka_palw_base0::backend::Base0Backend` (Family D) and, when ADR-0051 step 2
-/// lands, the Metal/GGUF backend.
+/// Implementor: `misaka_palw_base0::backend::Base0Backend`. The trait stays a trait because the
+/// consumers must not name that crate — a producer, a seat and the court reach an execution
+/// through the same three verbs, and a second implementor is a test double, not a second family.
 pub trait PalwExecutionBackendV1: Send + Sync {
-    fn family(&self) -> PalwExecutionFamilyV1;
-
     /// A human-readable identity for logs — the model id for a converted class, the floor's name
     /// for the derived one. Never used for dispatch: the chain's `class_id` is.
     fn model_id(&self) -> &str;
@@ -129,8 +98,8 @@ pub trait PalwExecutionBackendV1: Send + Sync {
     fn execute(&self, job: &PalwJobContextV2, prompt: &[usize]) -> Result<PalwExecutionOutcomeV1, String>;
 
     /// **A seat's check, before it signs.** Never a conviction — a mismatch is the court's to
-    /// convict where a court exists, and where one does not the claim simply fails to gather a
-    /// quorum and voids.
+    /// convict; a seat that disagrees signs nothing on the merits and the claim voids for want of
+    /// a quorum.
     fn verify_material(&self, material: &[u8], claim: PalwClaimRootsV1) -> PalwMaterialVerdictV1;
 
     /// **A party's answer at one rung of the bisection: its execution's state at `index`.**
@@ -139,9 +108,8 @@ pub trait PalwExecutionBackendV1: Send + Sync {
     /// `index` must agree here, and two differing before it must not — because that is what makes
     /// "the first index we disagree on" the same as "the first leaf our executions differ at".
     ///
-    /// `None` is the honest answer for a family the court cannot adjudicate, and for material this
-    /// backend cannot read. A silent party loses its rung, which is the correct outcome for a party
-    /// that cannot substantiate its own execution.
+    /// `None` is the honest answer for material this backend cannot read. A silent party loses its
+    /// rung, which is the correct outcome for a party that cannot substantiate its own execution.
     fn bisect_prefix_state(&self, _material: &[u8], _index: u64) -> Option<Hash64> {
         None
     }
@@ -153,13 +121,13 @@ pub trait PalwExecutionBackendV1: Send + Sync {
     /// `adjudicate_court_close_v2` is what decides which way it reads. A prover that could only be
     /// run by one side would be a prover that decides the verdict.
     ///
-    /// `Err` for a family with no court, and for an index this capture cannot open.
+    /// `Err` for an index this capture cannot open.
     fn refutation_for_index(
         &self,
         _material: &[u8],
         _index: u64,
     ) -> Result<crate::palw_step_refute::PalwExecutionStepRefutationV1, String> {
-        Err("this execution family cannot be adjudicated".to_string())
+        Err("this backend cannot open a refutation at that index".to_string())
     }
 
     /// **A DRILL fault: run the job, corrupt one lane of one tile, and commit to the result.**
@@ -180,31 +148,24 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         _prompt: &[usize],
         _leaf_index: u64,
     ) -> Result<PalwExecutionOutcomeV1, String> {
-        Err("this execution family has no drill fault".to_string())
+        Err("this backend has no drill fault".to_string())
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
-    /// **The court boundary is a property of the family, asserted once.** Every consumer that
-    /// decides whether to open, accept or close a court reads this; a family added without an
-    /// answer here would default to whatever the first `match` arm happened to be.
+    /// **There is no family value to get wrong.** The type that used to answer "can a dispute
+    /// about this class end in a conviction?" is gone (ADR-0053), and this test is what keeps it
+    /// gone: a re-introduced flag would give some future consumer an arm to take, and the arm the
+    /// withdrawn family needed was the one that skipped the coverage gate.
     #[test]
-    fn only_the_deterministic_family_can_be_convicted() {
-        assert!(PalwExecutionFamilyV1::DeterministicInteger.is_court_adjudicable());
-        assert!(
-            !PalwExecutionFamilyV1::MetalGguf.is_court_adjudicable(),
-            "a tolerance cannot separate a lie from a rounding, so a Metal class must never reach a conviction"
-        );
-    }
-
-    /// The discriminants are on the wire (a class registration carries its family), so they are
-    /// pinned the way every other borsh discriminant in this tree is.
-    #[test]
-    fn the_family_discriminants_are_pinned() {
-        assert_eq!(borsh::to_vec(&PalwExecutionFamilyV1::DeterministicInteger).unwrap(), vec![0]);
-        assert_eq!(borsh::to_vec(&PalwExecutionFamilyV1::MetalGguf).unwrap(), vec![1]);
+    fn the_seam_carries_no_verification_scheme_flag() {
+        let src = include_str!("palw_backend.rs");
+        for banned in ["PalwExecutionFamilyV1", "is_court_adjudicable", "MetalGguf"] {
+            assert!(
+                !src.split("fn the_seam_carries_no_verification_scheme_flag").next().unwrap().contains(banned),
+                "{banned} is back in the execution seam — ADR-0053 withdrew the second family"
+            );
+        }
     }
 }

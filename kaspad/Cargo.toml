@@ -43,7 +43,6 @@ kaspa-p2p-mining.workspace = true
 kaspa-perf-monitor.workspace = true
 kaspa-pq-validator-core.workspace = true
 misaka-palw-base0.workspace = true
-misaka-palw-metal.workspace = true
 kaspa-rpc-core.workspace = true
 kaspa-rpc-service.workspace = true
 kaspa-txscript.workspace = true

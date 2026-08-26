@@ -108,9 +108,6 @@ pub struct PalwProducerConfig {
     /// at startup and matched against what the CHAIN says the class is; a file that does not
     /// match is not used, never trusted into service.
     pub class_artifacts: Vec<std::path::PathBuf>,
-    /// The pinned Metal worker, if this node has one (ADR-0051). `None` everywhere without a GPU
-    /// toolchain, which must stay a supported node: the deterministic floor is the liveness anchor.
-    pub metal_worker: Option<std::path::PathBuf>,
 }
 
 pub struct PalwProducerService {
@@ -232,22 +229,17 @@ impl PalwProducerService {
     /// Written BEFORE the block is published, and a write failure aborts the publish: a promise you
     /// have already broken is not one to make. Keyed by the attempt id, which is what a challenge
     /// names.
-    /// The families this node can serve, from its configuration. Rebuilt per call rather than
+    /// The classes this node can serve, from its configuration. Rebuilt per call rather than
     /// cached: it is a handful of clones, and a cache would be a second place the operator's
     /// configuration lives.
     fn backends(&self) -> crate::palw_backends::PalwBackendRegistry {
-        crate::palw_backends::PalwBackendRegistry::new(
-            self.config.court,
-            self.class_artifacts.clone(),
-            self.config.metal_worker.clone(),
-            self.config.network_id.as_bytes().to_vec(),
-        )
+        crate::palw_backends::PalwBackendRegistry::new(self.config.court, self.class_artifacts.clone())
     }
 
-    /// Takes the ALREADY-ENCODED material rather than the run: the encoding is the backend's
-    /// (ADR-0051 step 1), because only the family that produced material knows how to write it.
-    /// This function's job is the obligation — that the bytes are on disk before the block that
-    /// promises them is published — and that is family-agnostic.
+    /// Takes the ALREADY-ENCODED material rather than the run: the encoding is the backend's,
+    /// because only the code that produced material knows how to write it. This function's job is
+    /// the obligation — that the bytes are on disk before the block that promises them is
+    /// published — and that is the backend's business either way.
     fn retain_execution(&self, attempt_id: Hash64, material: &[u8]) -> Result<Vec<u8>, String> {
         std::fs::create_dir_all(&self.config.retention_dir)
             .map_err(|e| format!("cannot create the retention directory {}: {e}", self.config.retention_dir.display()))?;
@@ -446,9 +438,9 @@ impl PalwProducerService {
         // has what the chain named rather than asserting it.
         let backend = self
             .backends()
-            .resolve(facts.terms, facts.class_id, facts.artifact_root)
+            .resolve(facts.class_id, facts.artifact_root)
             .map_err(|e| format!("this node cannot produce for the registered class: {e}"))?;
-        // **Through the seam** (ADR-0051 step 1). The backend is the family's execution path; this
+        // **Through the seam.** The backend is the class's execution path; this
         // function no longer knows which family it is producing for, which is what lets a second
         // one exist. Which backend it is, is the CHAIN's answer (`facts.terms.family`).
         let (job, prompt) = backend.job_for_anchor(anchor).map_err(|e| format!("the job this template implies: {e}"))?;

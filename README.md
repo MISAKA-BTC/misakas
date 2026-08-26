@@ -76,9 +76,9 @@ DNS hard-inclusion is deliberately liveness-gated: the hard mandatory attestatio
 validator and the CLI. It does **not** build `misaka-palw-worker`, which is excluded from
 `default-members` on purpose: that crate links a **pinned llama.cpp static build** which this
 repository deliberately does not contain, so including it would mean a fresh clone could not build
-at all. Nothing needs it to run a node — it is a separate process a node is *pointed at*
-(`kaspad --palw-metal-worker <path>`) and it serves an execution class testnet-11's genesis does not
-register. If you do want it, build the pinned tree first and say where it is:
+at all. Nothing needs it to run a node — since ADR-0053 there is one execution family and it is BASE-0's,
+which is pure Rust in this tree. The worker survives as the runtime the ADR-0034 capability probe
+interrogates. If you do want it, build the pinned tree first and say where it is:
 
 ```bash
 MISAKA_LLAMA_SRC=/path/to/built/llama.cpp cargo build --release -p misaka-palw-worker

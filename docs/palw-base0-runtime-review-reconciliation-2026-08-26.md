@@ -130,11 +130,13 @@ TEE には依存していない（PQC を掲げる以上 TEE は筋が悪い、�
   レビューの「BASE-0 をゼロから定義するより gemmlowp を出発点に」は、
   `SRDHM` / `RoundingShiftRight` について**そのまま実行されている**
 * **I-BERT 系の整数非線形** — 2 次多項式近似として実装済み
-* **カーネル** — `backend.rs` / `optimized.rs` / `misaka-palw-metal`
+* **カーネル** — `backend.rs` / `optimized.rs` / `kernels.rs`
 
 採用しない：**candle / tract / burn**。BASE-0 は 10 op の閉じた catalog で自己完結しており、
 テンソルフレームワークを持ち込むと catalog の閉性（court の前提）が壊れる。
-`ggml` / `llama.cpp` は GGUF レイアウトの参考として別クラス（`misaka-palw-metal`）側にある。
+`ggml` / `llama.cpp` は GGUF レイアウトの参考として `misaka-palw-base0/src/mmap.rs` の
+コンバータ側にある（`misaka-palw-metal` は ADR-0053 で削除。GGUF を*実行*する経路は無く、
+読むだけの経路が残っている）。
 
 ## 残っている本物のギャップ
 

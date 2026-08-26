@@ -305,7 +305,6 @@ mod tests {
     fn registration(class_id: Hash64, pwu_per_inference: u64) -> PalwConsensusObjectV2 {
         PalwConsensusObjectV2::ClassRegistered {
             class_id,
-            terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
             artifact_root: h64(0xA7),
             slash_value_per_pwu: 5,
             pwu_rule: PalwPwuRuleV2::DerivedV1 { pwu_per_inference },

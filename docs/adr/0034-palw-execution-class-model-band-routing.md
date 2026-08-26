@@ -1,6 +1,11 @@
 # ADR-0034: PALW re-verification routing — four execution-class families, five model bands, one deciding binding
 
-Status: **Accepted (architecture; activates nothing).** Devnet / shadow / zero-credit envelope
+Status: **Accepted (architecture; activates nothing). Amended 2026-08-26 by
+[ADR-0053](0053-palw-one-execution-family.md) Decision 5: the `Metal` routing family joins `Cuda`
+and `Rocm` as reserved.** Nothing routed to it once the Metal/GGUF verification family was
+withdrawn, and a Metal binding today would be a deterministic-integer class on Apple GPUs — a thing
+this tree has no kernel for and no vendor guarantees float reproducibility for. It returns the way
+CUDA does, through the ADR-0027 conformance campaign. Everything else here stands.** Devnet / shadow / zero-credit envelope
 unchanged. This ADR fixes how re-verification work is **routed** once PALW carries more than one
 model and more than one backend: which coarse keys a receipt and a verifier advertise, how the
 two sides are matched automatically without a human picking jobs off a list, and — the part that

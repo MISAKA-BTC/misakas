@@ -343,28 +343,14 @@ pub fn palw_fp_devnet_bundle_v3(
         MAX_BEACON_GAP,
     )?;
     let bundle = PalwConsensusParamsV2 {
-        // **The per-class panel floor, declared — and this is the one thing that cannot arrive by
-        // transaction later.**
-        //
-        // `PalwClassTermsV2::panel_params` reads `(0, 0)` as "this network admits no per-class
-        // panel at all", which is the right fail-closed default for a network that never decided:
-        // admitting a thin panel is a statement about the network's own identity, not a
-        // registrant's to make. But it also means the ONLY panel any class can draw is the network
-        // default of `PALW_V2_PANEL_SEATS` seats — and a panel excludes the executor, so a class
-        // whose executions only some hardware can verify would need seven such machines before it
-        // could seat one.
-        //
-        // Family M (ADR-0051: a pinned GGUF under a pinned Metal runtime) is exactly that class:
-        // Apple Silicon executes it and a seat verifies by full re-execution, so a seat that is not
-        // Apple Silicon cannot judge it at all. Declaring `(2, 2)` lets such a class register its
-        // own two-seat panel, which is three machines rather than seven.
-        //
-        // It is in the genesis rather than added later because it lives inside
-        // `palw_ruleset_id_v2`: everything else Family M needs — the class registration, its share,
-        // its admission proof — is an object a running chain accepts, and this alone would cost a
-        // re-mint. A floor is not a mandate: a class may still declare a wider panel, and one that
-        // declares none keeps the network's.
-        min_class_panel: (2, 2),
+        // **One panel, and it is the network's.** ADR-0051 put a `min_class_panel` floor of
+        // `(2, 2)` here so a Metal class could license with two seats instead of six; ADR-0053
+        // withdrew that family and this goes with it. Two things were wrong with it beyond the
+        // family: the floor was checked BEFORE any family dispatch, so a deterministic class could
+        // draw the thin panel too, on every preset that shipped this bundle — and the per-class
+        // parameters never reached `derive_panel_v2`, which draws from the bundle's own
+        // `PalwPanelParamsV2`, so a class admitted at 2-of-2 was still bound a 5-seat panel. A
+        // ruleset field that weakened the gate and changed no behaviour.
         protocol_version: crate::palw_attempt_v2::PALW_ATTEMPT_V2_VERSION,
         algorithm_id: crate::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2,
         base_class_id,
@@ -396,7 +382,6 @@ pub fn palw_fp_devnet_bundle_v3(
         // `verify_palw_genesis_v2` checks: the declaration is not the fact.
         genesis_objects: vec![crate::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
             class_id: base_class_id,
-            terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
             artifact_root: genesis_artifact_root,
             slash_value_per_pwu: SLASH_VALUE_PER_PWU,
             pwu_rule: crate::palw_state_v2::PalwPwuRuleV2::DerivedV1 { pwu_per_inference: genesis_pwu_per_inference },

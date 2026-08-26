@@ -191,7 +191,7 @@ Qwen2.5-1.5B 実寸（28層・hidden 1536・ffn 8960・GQA 12/2・vocab 151,936�
 | 第 2 実装 | `misaka-palw-base0-ref2`（構造独立）+ vendored gemmlowp（著者独立） | 差分テスト済み |
 | エンジン | `misaka-palw-base0/src/engine{,_a16}.rs` | A16 は本流へ移植済み |
 | **高速カーネル** | `misaka-palw-base0/src/kernels.rs` | **NEON + rayon、本項で新設** |
-| GPU | なし（Family M は pinned llama.cpp の Metal で、float ゆえ裁定不能） | **未着手** |
+| GPU | なし（ADR-0053 で Metal 経路ごと撤去。float は裁定不能で、整数 GPU カーネルは 1 行も無い） | **未着手** |
 
 ## 高速化が「安全である」根拠
 

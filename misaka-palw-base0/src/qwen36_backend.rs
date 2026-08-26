@@ -22,9 +22,7 @@
 //! and every root here is one the court will pin against.
 
 use crate::qwen36::{Qwen36ArtifactV1, Qwen36Cache, Qwen36Engine, Qwen36ShapeV1};
-use kaspa_consensus_core::palw_backend::{
-    PalwClaimRootsV1, PalwExecutionBackendV1, PalwExecutionFamilyV1, PalwExecutionOutcomeV1, PalwMaterialVerdictV1,
-};
+use kaspa_consensus_core::palw_backend::{PalwClaimRootsV1, PalwExecutionBackendV1, PalwExecutionOutcomeV1, PalwMaterialVerdictV1};
 use kaspa_consensus_core::palw_step_refute::base0_logits_trace_root_v1;
 use kaspa_consensus_core::palw_v2::{
     PALW_TRACE_COMMITMENT_VERSION_V2, PalwJobContextV2, output_commitment_v2, prompt_token_ids_hash_v2,
@@ -243,13 +241,6 @@ pub fn qwen36_material_decode_v1(bytes: &[u8]) -> Option<Qwen36RunV1> {
 }
 
 impl PalwExecutionBackendV1 for Qwen36Backend {
-    fn family(&self) -> PalwExecutionFamilyV1 {
-        // The arithmetic IS deterministic-integer; what is missing is the court's step space, not
-        // the family's premise. Registering it as anything else would say the class can never be
-        // adjudicated, which is false.
-        PalwExecutionFamilyV1::DeterministicInteger
-    }
-
     fn model_id(&self) -> &str {
         &self.model_id
     }
@@ -415,7 +406,6 @@ mod tests {
         assert!(a.execute_with_injected_fault(&a.job_for_anchor(Hash64::default()).expect("a job").0, &[1], 0).is_err());
         // And the family is the one whose disputes CAN end in a conviction, because the arithmetic
         // is deterministic-integer — what is missing is the step space, not the premise.
-        assert_eq!(a.family(), PalwExecutionFamilyV1::DeterministicInteger);
     }
 
     /// A job that runs past the rotary table is refused at derivation, not discovered mid-decode.

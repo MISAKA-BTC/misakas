@@ -313,17 +313,6 @@ pub struct PalwConsensusParamsV2 {
     pub state: PalwStateParamsV2,
     pub admission: PalwAdmissionParamsV2,
     pub panel: PalwPanelParamsV2,
-    /// **The floor a class's own panel may not go below** (ADR-0051 Decision 6).
-    ///
-    /// A class may register a thinner panel than the network's — a family whose seats must hold
-    /// particular hardware cannot demand six such operators on the day it launches — and "thinner"
-    /// has to stop somewhere or it stops at one, which is a class that attests to itself. Inside
-    /// the bundle, so it is inside the ruleset id: the terms a network will ever admit a class on
-    /// are part of that network's identity, not a runtime policy a node could relax.
-    ///
-    /// `(0, 0)` is what every bundle meant before this field: no per-class panel, so no floor to
-    /// enforce. A bundle that admits thin classes states a real floor.
-    pub min_class_panel: (u16, u16),
     pub reward: PalwRewardParamsV2,
     pub bond: PalwBondParamsV2,
     /// ADR-0044: the free-prompt receipt lane — a REQUIRED part of the bundle, not a fence. A
@@ -781,14 +770,7 @@ impl PalwConsensusMode {
 /// Decision 11: `H(canonical(bundle))`. Everything that decides consensus is inside; network
 /// identity is not (the challenge's `network_domain` carries it), so the RC and mainnet share
 /// one id and a node can CHECK sameness instead of trusting a release note.
-impl PalwConsensusParamsV2 {
-    pub fn min_panel_seats(&self) -> u16 {
-        self.min_class_panel.0
-    }
-    pub fn min_panel_quorum(&self) -> u16 {
-        self.min_class_panel.1
-    }
-}
+impl PalwConsensusParamsV2 {}
 
 pub fn palw_ruleset_id_v2(bundle: &PalwConsensusParamsV2) -> Hash64 {
     let bytes = borsh::to_vec(bundle).expect("the V2 bundle is borsh-serializable");
@@ -855,7 +837,6 @@ pub(crate) mod tests {
     pub(crate) fn conforming_bundle() -> PalwConsensusParamsV2 {
         let base = h64(1);
         PalwConsensusParamsV2 {
-            min_class_panel: (0, 0),
             protocol_version: crate::palw_attempt_v2::PALW_ATTEMPT_V2_VERSION,
             algorithm_id: crate::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2,
             base_class_id: base,
@@ -889,7 +870,6 @@ pub(crate) mod tests {
             genesis_objects: vec![
                 crate::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
                     class_id: base,
-                    terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
                     artifact_root: h64(11),
                     slash_value_per_pwu: 5,
                     pwu_rule: crate::palw_state_v2::PalwPwuRuleV2::MaxPerAttempt(1_000_000),

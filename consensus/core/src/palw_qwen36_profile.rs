@@ -40,15 +40,15 @@
 
 use crate::Hash64;
 use crate::palw_step::{
-    PALW_STEP_INPUT_KV_K, PALW_STEP_INPUT_KV_V, PALW_STEP_INPUT_LAYER_IN,
-    PALW_STEP_OBJECT_VERSION_V1, PalwShapeProfileV3, PalwStepError, PalwStepLaneV1, PalwStepNodeRoleV1, PalwStepNodeV1,
-    PalwStepOpKindV1, PalwStepOutLenV1, kernel_semantics_id_v1,
+    PALW_STEP_INPUT_KV_K, PALW_STEP_INPUT_KV_V, PALW_STEP_INPUT_LAYER_IN, PALW_STEP_OBJECT_VERSION_V1, PalwShapeProfileV3,
+    PalwStepError, PalwStepLaneV1, PalwStepNodeRoleV1, PalwStepNodeV1, PalwStepOpKindV1, PalwStepOutLenV1, kernel_semantics_id_v1,
 };
 use crate::palw_step_refute::{
-    KDESC_A16_ADD_ELEM, KDESC_A16_ATTN_SCORES, KDESC_A16_ATTN_VALUES, KDESC_A16_EMBED, KDESC_A16_MATMUL_RESCALE, KDESC_A16_REQUANTIZE, KDESC_A16_RMS_NORM, KDESC_A16_SOFTMAX, KDESC_BASE0_SILU,
-    KDESC_Q36_DECAY, KDESC_Q36_GATE_APPLY, KDESC_Q36_GDN_STEP, KDESC_Q36_L2_NORM, KDESC_Q36_MATMUL_GROUPED,
-    KDESC_Q36_MATMUL_GROUPED_WIDE, KDESC_Q36_MOE_COMBINE, KDESC_Q36_MUL_WIDE, KDESC_Q36_RESCALE_ROW,
-    KDESC_Q36_RMS_NORM_WIDE, KDESC_Q36_ROPE_PARTIAL, KDESC_Q36_ROUTER_TOPK, KDESC_Q36_SIGMOID, KDESC_Q36_SSM_CONV,
+    KDESC_A16_ADD_ELEM, KDESC_A16_ATTN_SCORES, KDESC_A16_ATTN_VALUES, KDESC_A16_EMBED, KDESC_A16_MATMUL_RESCALE, KDESC_A16_REQUANTIZE,
+    KDESC_A16_RMS_NORM, KDESC_A16_SOFTMAX, KDESC_BASE0_SILU, KDESC_Q36_DECAY, KDESC_Q36_GATE_APPLY, KDESC_Q36_GDN_STEP,
+    KDESC_Q36_L2_NORM, KDESC_Q36_MATMUL_GROUPED, KDESC_Q36_MATMUL_GROUPED_WIDE, KDESC_Q36_MOE_COMBINE, KDESC_Q36_MUL_WIDE,
+    KDESC_Q36_RESCALE_ROW, KDESC_Q36_RMS_NORM_WIDE, KDESC_Q36_ROPE_PARTIAL, KDESC_Q36_ROUTER_TOPK, KDESC_Q36_SIGMOID,
+    KDESC_Q36_SSM_CONV,
 };
 
 /// The int8 dtype byte, as `palw_qwen25_profile` uses it. Every weight in the tier is `int8` rows
@@ -521,8 +521,10 @@ pub fn qwen36_registration_v1(
     share_permille: u16,
     slash_value_per_pwu: u64,
     initial_target: u128,
-) -> Result<(PalwShapeProfileV3, crate::palw_mode_v2::PalwClassCatalogEntryV2, crate::palw_state_v2::PalwConsensusObjectV2), PalwStepError>
-{
+) -> Result<
+    (PalwShapeProfileV3, crate::palw_mode_v2::PalwClassCatalogEntryV2, crate::palw_state_v2::PalwConsensusObjectV2),
+    PalwStepError,
+> {
     let profile = qwen36_profile_v1(QWEN36_35B_A3B)?;
     let class_id = profile.shape_profile_id();
     let canonical = crate::palw_base0_profile::rc_job_context(&profile, QWEN36_RC_CANONICAL.0, QWEN36_RC_CANONICAL.1);
@@ -537,7 +539,6 @@ pub fn qwen36_registration_v1(
     };
     let object = crate::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
         class_id,
-        terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
         artifact_root,
         slash_value_per_pwu,
         pwu_rule: crate::palw_state_v2::PalwPwuRuleV2::DerivedV1 { pwu_per_inference: counted },
