@@ -112,6 +112,24 @@ If it cannot proceed it says why, once per reason rather than every five seconds
 is that no confirmed non-coinbase UTXO is visible yet; fund the address and it picks it up without a
 restart.
 
+**There is no `--palw-fee-outpoint` in that command, and there should not be.** The node finds its
+own money by reading the UTXO set for outputs under the address it is about to name as payee — a
+newcomer has no outpoint to be told, since the only one it will ever have is the change of the
+carrier it has not built yet. The flag is for a seat that already has an outpoint to spend — a
+genesis fee float, or its own carrier's change — and §4 is where it matters.
+
+That is worth stating because it used to be false in a way nothing revealed: the funding resolver
+returned early when the flag was absent, skipping the scan entirely, and reported
+
+```
+[palw-panel] cannot register a bond yet: no confirmed UTXO to spend — send at least 400000 sompi
+plus a fee to this node's pay address
+```
+
+against an address that `misaka wallet utxo list` showed holding 10 MSK, mature, on the same node's
+RPC. If you are running a build from before 2026-08-26 and see that line while the address is
+funded, pass `--palw-fee-outpoint=<funding txid>:<index>` to work around it.
+
 ### Collateral
 
 `--palw-bond-collateral` is optional and **the default is not the chain's minimum**. A bond may hold
@@ -126,6 +144,32 @@ chain's floor (400,000 sompi, `min_collateral_sompi`) therefore buys a bond that
 **single** claim — and that producer holds forever, having locked real money to get there. The node
 reads the current numbers off the chain and sizes for one claim, logging both. Passing a smaller
 value is allowed and warned about.
+
+**The relay limit sets a second, higher floor, and it is the one that bites first.** A UTXO's
+KIP-0009 storage mass is `C · p² / value`, so it grows as the output SHRINKS: a 400,000 sompi
+output costs 10,000,000 mass against a 480,000 standard-transaction limit, and the carrier holding
+it is refused as non-standard no matter how it is funded —
+
+```
+the carrier was refused: transaction ... is not standard: transaction storage mass of 10000003
+is larger than max allowed size of 480000
+```
+
+On testnet-11 that puts the smallest carryable collateral at **8,333,924 sompi** when the funding
+UTXO holds 10 MSK — twenty times the chain's own floor. (The exact number moves with the funding
+amount and the fee, because the change output pays mass too.) The node computes it from the funding
+UTXO it is about to spend and **raises its default to fit**, saying so:
+
+```
+[palw-panel] raising collateral from 400000 to <n> sompi — an output of 400000 costs 10000003
+storage mass against a relay limit of 480000, so a carrier holding one cannot be submitted.
+Pass --palw-bond-collateral to choose the amount yourself.
+```
+
+A collateral you named yourself is **not** raised — it is your money and your exposure ceiling, so
+too small a value is refused with the number that would work instead. If the funding UTXO is small
+enough that no split of it clears the limit, the message says that too: send more, rather than
+reaching for the collateral knob.
 
 ---
 
@@ -142,6 +186,17 @@ kaspad --testnet --netsuffix=11 --appdir=~/.t11 \
 ```
 
 All four of key, bond, pay address and a class are required or the producer does not start at all.
+
+There is no `--palw-fee-outpoint` here either, and that IS a choice: a panel seat without one runs
+receipts-only and says so at startup —
+
+```
+[palw-panel] starting (bond=…, submitter=off — receipts only)
+```
+
+It will answer and file, but it will not carry anything to the chain. Pass
+`--palw-fee-outpoint=<txid>:1` — the change output of your own bond carrier — to turn the submitter
+on. (Registration is the exception: that job has no outpoint to be given and finds its own funding.)
 
 When it holds instead of producing, the reason carries its numbers:
 

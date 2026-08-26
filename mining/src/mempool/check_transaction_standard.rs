@@ -48,7 +48,7 @@ const MAXIMUM_STANDARD_SIGNATURE_SCRIPT_SIZE: u64 = 16_384;
 /// (`max_block_mass` = 500_000), leaving headroom for the coinbase.
 /// NOTE (mainnet): for a high-traffic network this should be lowered well below the
 /// block budget to preserve an anti-monopolization margin; it is devnet-generous here.
-const MAXIMUM_STANDARD_TRANSACTION_MASS: u64 = 480_000;
+pub const MAXIMUM_STANDARD_TRANSACTION_MASS: u64 = 480_000;
 
 impl Mempool {
     pub(crate) fn check_transaction_standard_in_isolation(&self, transaction: &MutableTransaction) -> NonStandardResult<()> {
