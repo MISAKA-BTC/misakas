@@ -1366,6 +1366,168 @@ pub(crate) fn test_fixture(layers: usize, experts: usize) -> Qwen36ArtifactV1 {
     tests::fixture(layers, experts)
 }
 
+/// **The fixture, for tests in OTHER crates** — the consensus block E2E runs a real
+/// Qwen3.6-shaped engine over it, because a block test that faked its execution would prove only
+/// that fakes are accepted. Always compiled: `#[cfg(test)]` does not cross crates, and a
+/// `testutils` feature would put the block E2E behind a flag nobody runs. It is a FIXTURE and
+/// says so in its name; nothing derives a registrable class from it, and a chain that registered
+/// its artifact root registered a toy on purpose — a drill, which is the only place this belongs.
+pub fn qwen36_dev_fixture(layers: usize, experts: usize) -> Qwen36ArtifactV1 {
+    fixture_impl(layers, experts)
+}
+
+/// The fixture's body, shared by the in-crate door (`tests::fixture`) and the cross-crate one.
+fn fixture_impl(layers: usize, experts: usize) -> Qwen36ArtifactV1 {
+    use crate::artifact::LN_THETA_10000_GEN_Q;
+    let shape = Qwen36ShapeV1 {
+        layer_types: (0..layers)
+            .map(|i| if (i + 1).is_multiple_of(4) { Qwen36LayerKind::FullAttention } else { Qwen36LayerKind::LinearAttention })
+            .collect(),
+        d_model: 32,
+        n_heads: 4,
+        n_kv_heads: 2,
+        head_dim: 16,
+        rotary_dim: 4,
+        linear_k_heads: 2,
+        linear_v_heads: 4,
+        linear_head_dim: 8,
+        conv_kernel: 4,
+        n_experts: experts,
+        experts_per_token: 4,
+        moe_dim: 16,
+        shared_dim: 16,
+        vocab: 64,
+        max_position: 32,
+        eps_q: 1,
+        router_up_bits: 20,
+    };
+    let d = shape.d_model;
+    let rope = RopeTableV1::generate(shape.head_dim, shape.max_position, LN_THETA_10000_GEN_Q).expect("a table");
+    let mut artifact = Qwen36ArtifactV1::new(shape.clone(), rope).expect("a valid shape");
+
+    let mut state = 0x9E37_79B9_7F4A_7C15u64;
+    let mut next = move || -> i8 {
+        state = state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+        (((state >> 40) & 0xFF) as u8 as i8).saturating_abs().wrapping_sub(64)
+    };
+    let mut weights = |n: usize| -> Vec<i8> { (0..n).map(|_| next()).collect() };
+
+    // A projection over `fan_in` attenuates by `2^-(8 + bits(fan_in)/2)`; an elementwise site
+    // is unity. Same rule as the dense fixture, and for the same reason: one gain everywhere
+    // decays the residual stream to zero and the differential would not notice.
+    let projection = |fan_in: usize| -> A16QuantParams {
+        let bits = usize::BITS - fan_in.max(1).leading_zeros();
+        A16QuantParams { multiplier: 1, shift: (8 + bits / 2) as u8, zero: 0 }
+    };
+    let unity = A16QuantParams { multiplier: 1, shift: 0, zero: 0 };
+
+    artifact = artifact
+        .with_tensor("token_embd.weight", weights(shape.vocab * d))
+        .with_tensor("output.weight", weights(shape.vocab * d))
+        .with_params("embed_lift.a16", &[unity])
+        .with_params("final_norm.a16", &[unity])
+        .with_params("output.weight.a16", &[projection(d)]);
+
+    for (li, kind) in shape.layer_types.iter().enumerate() {
+        let n = |suffix: &str| format!("blk.{li}.{suffix}");
+        for row in ["attn_norm.a16", "attn_align.a16", "attn_residual.a16", "ffn_norm.a16", "ffn_align.a16", "ffn_residual.a16"] {
+            artifact = artifact.with_params(n(row), &[unity]);
+        }
+        match kind {
+            Qwen36LayerKind::LinearAttention => {
+                let (dk, dv, hd) = (shape.linear_k_dim(), shape.linear_v_dim(), shape.linear_head_dim);
+                let width = 2 * dk + dv;
+                artifact = artifact
+                    .with_tensor(n("linear_q.weight"), weights(dk * d))
+                    .with_tensor(n("linear_k.weight"), weights(dk * d))
+                    .with_tensor(n("linear_v.weight"), weights(dv * d))
+                    .with_tensor(n("linear_z.weight"), weights(dv * d))
+                    .with_tensor(n("linear_conv.weight"), weights(shape.conv_kernel * width))
+                    .with_tensor(n("linear_dt.weight"), weights(shape.linear_v_heads * d))
+                    .with_tensor(n("linear_beta.weight"), weights(shape.linear_v_heads * d))
+                    .with_tensor(n("linear_o.weight"), weights(d * dv))
+                    .with_params(n("linear_q.weight.a16"), &[projection(d)])
+                    .with_params(n("linear_k.weight.a16"), &[projection(d)])
+                    .with_params(n("linear_v.weight.a16"), &[projection(d)])
+                    .with_params(n("linear_z.weight.a16"), &[projection(d)])
+                    // The convolution reduces over four taps, so it barely attenuates.
+                    .with_params(n("linear_conv.a16"), &[A16QuantParams { multiplier: 1, shift: 16, zero: 0 }])
+                    .with_params(n("linear_conv_act.a16"), &[unity])
+                    .with_params(n("linear_dt.weight.a16"), &[projection(d)])
+                    .with_params(n("linear_beta.weight.a16"), &[projection(d)])
+                    // A coefficient of ONE is `exp(−softplus(dt))`; the bias is zero so the
+                    // fixture's decay is a function of the projection alone.
+                    .with_params(
+                        n("linear_decay_c.a16"),
+                        &[A16QuantParams { multiplier: 1, shift: 0, zero: kaspa_consensus_core::palw_base0::ONE }],
+                    )
+                    .with_params(n("linear_dt_bias.a16"), &[A16QuantParams { multiplier: 1, shift: 0, zero: 0 }])
+                    // The state carries eight bits above the value scale.
+                    .with_params(n("linear_read.a16"), &[A16QuantParams { multiplier: 1, shift: 23, zero: 0 }])
+                    .with_params(n("linear_delta.a16"), &[A16QuantParams { multiplier: 1, shift: 0, zero: 0 }])
+                    .with_params(n("linear_write.a16"), &[A16QuantParams { multiplier: 1, shift: 7, zero: 0 }])
+                    .with_params(n("linear_out.a16"), &[A16QuantParams { multiplier: 1, shift: 23, zero: 0 }])
+                    .with_params(n("linear_norm.a16"), &[unity])
+                    .with_params(n("linear_norm_eps.a16"), &[A16QuantParams { multiplier: 1, shift: 0, zero: 0 }])
+                    .with_params(n("linear_gate.a16"), &[unity])
+                    .with_params(n("linear_gated.a16"), &[A16QuantParams { multiplier: 1, shift: 15, zero: 0 }])
+                    .with_params(n("linear_o.weight.a16"), &[projection(dv)]);
+                let _ = hd;
+            }
+            Qwen36LayerKind::FullAttention => {
+                let (q_dim, kv_dim) = (shape.n_heads * shape.head_dim, shape.kv_dim());
+                artifact = artifact
+                    .with_tensor(n("attn_q.weight"), weights(q_dim * d))
+                    .with_tensor(n("attn_gate.weight"), weights(q_dim * d))
+                    .with_tensor(n("attn_k.weight"), weights(kv_dim * d))
+                    .with_tensor(n("attn_v.weight"), weights(kv_dim * d))
+                    .with_tensor(n("attn_o.weight"), weights(d * q_dim))
+                    .with_params(n("attn_q.weight.a16"), &[projection(d)])
+                    .with_params(n("attn_gate.weight.a16"), &[projection(d)])
+                    .with_params(n("attn_k.weight.a16"), &[projection(d)])
+                    .with_params(n("attn_v.weight.a16"), &[projection(d)])
+                    .with_params(n("attn_q_norm.a16"), &[unity])
+                    .with_params(n("attn_k_norm.a16"), &[unity])
+                    .with_params(n("attn_rope.a16"), &[A16QuantParams { multiplier: 1, shift: 24, zero: 0 }])
+                    .with_params(n("attn_logits.a16"), &[projection(shape.head_dim)])
+                    .with_params(n("attn_softmax_up.a16"), &[A16QuantParams { multiplier: 1, shift: 0, zero: 16 }])
+                    .with_params(n("attn_probs.a16"), &[A16QuantParams { multiplier: 1, shift: 9, zero: 0 }])
+                    .with_params(n("attn_values.a16"), &[A16QuantParams { multiplier: 1, shift: 15, zero: 0 }])
+                    .with_params(n("attn_gated.a16"), &[A16QuantParams { multiplier: 1, shift: 24, zero: 0 }])
+                    .with_params(n("attn_o.weight.a16"), &[projection(q_dim)]);
+            }
+        }
+        // The mixture: a router, every expert, and the shared one.
+        artifact = artifact
+            .with_tensor(n("ffn_router.weight"), weights(shape.n_experts * d))
+            .with_params(n("ffn_router.weight.a16"), &[projection(d)])
+            .with_params(n("ffn_router.a16"), &[unity])
+            // The router's softmax widening, class data per layer rather than a shape constant.
+            .with_params(n("ffn_router_up.a16"), &[A16QuantParams { multiplier: 1, shift: 0, zero: 20 }])
+            .with_params(n("ffn_combine.a16"), &[A16QuantParams { multiplier: 1, shift: 24, zero: 0 }])
+            .with_tensor(n("ffn_shared_gate.weight"), weights(d))
+            .with_params(n("ffn_shared_gate.weight.a16"), &[projection(d)])
+            .with_params(n("ffn_shared_gated.a16"), &[A16QuantParams { multiplier: 1, shift: 24, zero: 0 }])
+            .with_params(n("ffn_moe_out.a16"), &[unity]);
+        for (base, mid) in (0..shape.n_experts)
+            .map(|e| (format!("blk.{li}.ffn_expert.{e}"), shape.moe_dim))
+            .chain(std::iter::once((format!("blk.{li}.ffn_shared_expert"), shape.shared_dim)))
+        {
+            artifact = artifact
+                .with_tensor(format!("{base}_gate.weight"), weights(mid * d))
+                .with_tensor(format!("{base}_up.weight"), weights(mid * d))
+                .with_tensor(format!("{base}_down.weight"), weights(d * mid))
+                .with_params(format!("{base}_gate.weight.a16"), &[projection(d)])
+                .with_params(format!("{base}_up.weight.a16"), &[projection(d)])
+                .with_params(format!("{base}_silu.a16"), &[unity])
+                .with_params(format!("{base}_gated.a16"), &[A16QuantParams { multiplier: 1, shift: 15, zero: 0 }])
+                .with_params(format!("{base}_down.weight.a16"), &[projection(mid)]);
+        }
+    }
+    artifact
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1379,152 +1541,7 @@ mod tests {
     /// composes and produces a non-degenerate row, which is the question at this stage. Fidelity
     /// is the converter's question and needs a checkpoint.
     pub(crate) fn fixture(layers: usize, experts: usize) -> Qwen36ArtifactV1 {
-        let shape = Qwen36ShapeV1 {
-            layer_types: (0..layers)
-                .map(|i| if (i + 1).is_multiple_of(4) { Qwen36LayerKind::FullAttention } else { Qwen36LayerKind::LinearAttention })
-                .collect(),
-            d_model: 32,
-            n_heads: 4,
-            n_kv_heads: 2,
-            head_dim: 16,
-            rotary_dim: 4,
-            linear_k_heads: 2,
-            linear_v_heads: 4,
-            linear_head_dim: 8,
-            conv_kernel: 4,
-            n_experts: experts,
-            experts_per_token: 4,
-            moe_dim: 16,
-            shared_dim: 16,
-            vocab: 64,
-            max_position: 32,
-            eps_q: 1,
-            router_up_bits: 20,
-        };
-        let d = shape.d_model;
-        let rope = RopeTableV1::generate(shape.head_dim, shape.max_position, LN_THETA_10000_GEN_Q).expect("a table");
-        let mut artifact = Qwen36ArtifactV1::new(shape.clone(), rope).expect("a valid shape");
-
-        let mut state = 0x9E37_79B9_7F4A_7C15u64;
-        let mut next = move || -> i8 {
-            state = state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
-            (((state >> 40) & 0xFF) as u8 as i8).saturating_abs().wrapping_sub(64)
-        };
-        let mut weights = |n: usize| -> Vec<i8> { (0..n).map(|_| next()).collect() };
-
-        // A projection over `fan_in` attenuates by `2^-(8 + bits(fan_in)/2)`; an elementwise site
-        // is unity. Same rule as the dense fixture, and for the same reason: one gain everywhere
-        // decays the residual stream to zero and the differential would not notice.
-        let projection = |fan_in: usize| -> A16QuantParams {
-            let bits = usize::BITS - fan_in.max(1).leading_zeros();
-            A16QuantParams { multiplier: 1, shift: (8 + bits / 2) as u8, zero: 0 }
-        };
-        let unity = A16QuantParams { multiplier: 1, shift: 0, zero: 0 };
-
-        artifact = artifact
-            .with_tensor("token_embd.weight", weights(shape.vocab * d))
-            .with_tensor("output.weight", weights(shape.vocab * d))
-            .with_params("embed_lift.a16", &[unity])
-            .with_params("final_norm.a16", &[unity])
-            .with_params("output.weight.a16", &[projection(d)]);
-
-        for (li, kind) in shape.layer_types.iter().enumerate() {
-            let n = |suffix: &str| format!("blk.{li}.{suffix}");
-            for row in ["attn_norm.a16", "attn_align.a16", "attn_residual.a16", "ffn_norm.a16", "ffn_align.a16", "ffn_residual.a16"] {
-                artifact = artifact.with_params(n(row), &[unity]);
-            }
-            match kind {
-                Qwen36LayerKind::LinearAttention => {
-                    let (dk, dv, hd) = (shape.linear_k_dim(), shape.linear_v_dim(), shape.linear_head_dim);
-                    let width = 2 * dk + dv;
-                    artifact = artifact
-                        .with_tensor(n("linear_q.weight"), weights(dk * d))
-                        .with_tensor(n("linear_k.weight"), weights(dk * d))
-                        .with_tensor(n("linear_v.weight"), weights(dv * d))
-                        .with_tensor(n("linear_z.weight"), weights(dv * d))
-                        .with_tensor(n("linear_conv.weight"), weights(shape.conv_kernel * width))
-                        .with_tensor(n("linear_dt.weight"), weights(shape.linear_v_heads * d))
-                        .with_tensor(n("linear_beta.weight"), weights(shape.linear_v_heads * d))
-                        .with_tensor(n("linear_o.weight"), weights(d * dv))
-                        .with_params(n("linear_q.weight.a16"), &[projection(d)])
-                        .with_params(n("linear_k.weight.a16"), &[projection(d)])
-                        .with_params(n("linear_v.weight.a16"), &[projection(d)])
-                        .with_params(n("linear_z.weight.a16"), &[projection(d)])
-                        // The convolution reduces over four taps, so it barely attenuates.
-                        .with_params(n("linear_conv.a16"), &[A16QuantParams { multiplier: 1, shift: 16, zero: 0 }])
-                        .with_params(n("linear_conv_act.a16"), &[unity])
-                        .with_params(n("linear_dt.weight.a16"), &[projection(d)])
-                        .with_params(n("linear_beta.weight.a16"), &[projection(d)])
-                        // A coefficient of ONE is `exp(−softplus(dt))`; the bias is zero so the
-                        // fixture's decay is a function of the projection alone.
-                        .with_params(
-                            n("linear_decay_c.a16"),
-                            &[A16QuantParams { multiplier: 1, shift: 0, zero: kaspa_consensus_core::palw_base0::ONE }],
-                        )
-                        .with_params(n("linear_dt_bias.a16"), &[A16QuantParams { multiplier: 1, shift: 0, zero: 0 }])
-                        // The state carries eight bits above the value scale.
-                        .with_params(n("linear_read.a16"), &[A16QuantParams { multiplier: 1, shift: 23, zero: 0 }])
-                        .with_params(n("linear_delta.a16"), &[A16QuantParams { multiplier: 1, shift: 0, zero: 0 }])
-                        .with_params(n("linear_write.a16"), &[A16QuantParams { multiplier: 1, shift: 7, zero: 0 }])
-                        .with_params(n("linear_out.a16"), &[A16QuantParams { multiplier: 1, shift: 23, zero: 0 }])
-                        .with_params(n("linear_norm.a16"), &[unity])
-                        .with_params(n("linear_norm_eps.a16"), &[A16QuantParams { multiplier: 1, shift: 0, zero: 0 }])
-                        .with_params(n("linear_gate.a16"), &[unity])
-                        .with_params(n("linear_gated.a16"), &[A16QuantParams { multiplier: 1, shift: 15, zero: 0 }])
-                        .with_params(n("linear_o.weight.a16"), &[projection(dv)]);
-                    let _ = hd;
-                }
-                Qwen36LayerKind::FullAttention => {
-                    let (q_dim, kv_dim) = (shape.n_heads * shape.head_dim, shape.kv_dim());
-                    artifact = artifact
-                        .with_tensor(n("attn_q.weight"), weights(q_dim * d))
-                        .with_tensor(n("attn_gate.weight"), weights(q_dim * d))
-                        .with_tensor(n("attn_k.weight"), weights(kv_dim * d))
-                        .with_tensor(n("attn_v.weight"), weights(kv_dim * d))
-                        .with_tensor(n("attn_o.weight"), weights(d * q_dim))
-                        .with_params(n("attn_q.weight.a16"), &[projection(d)])
-                        .with_params(n("attn_gate.weight.a16"), &[projection(d)])
-                        .with_params(n("attn_k.weight.a16"), &[projection(d)])
-                        .with_params(n("attn_v.weight.a16"), &[projection(d)])
-                        .with_params(n("attn_q_norm.a16"), &[unity])
-                        .with_params(n("attn_k_norm.a16"), &[unity])
-                        .with_params(n("attn_rope.a16"), &[A16QuantParams { multiplier: 1, shift: 24, zero: 0 }])
-                        .with_params(n("attn_logits.a16"), &[projection(shape.head_dim)])
-                        .with_params(n("attn_softmax_up.a16"), &[A16QuantParams { multiplier: 1, shift: 0, zero: 16 }])
-                        .with_params(n("attn_probs.a16"), &[A16QuantParams { multiplier: 1, shift: 9, zero: 0 }])
-                        .with_params(n("attn_values.a16"), &[A16QuantParams { multiplier: 1, shift: 15, zero: 0 }])
-                        .with_params(n("attn_gated.a16"), &[A16QuantParams { multiplier: 1, shift: 24, zero: 0 }])
-                        .with_params(n("attn_o.weight.a16"), &[projection(q_dim)]);
-                }
-            }
-            // The mixture: a router, every expert, and the shared one.
-            artifact = artifact
-                .with_tensor(n("ffn_router.weight"), weights(shape.n_experts * d))
-                .with_params(n("ffn_router.weight.a16"), &[projection(d)])
-                .with_params(n("ffn_router.a16"), &[unity])
-                // The router's softmax widening, class data per layer rather than a shape constant.
-                .with_params(n("ffn_router_up.a16"), &[A16QuantParams { multiplier: 1, shift: 0, zero: 20 }])
-                .with_params(n("ffn_combine.a16"), &[A16QuantParams { multiplier: 1, shift: 24, zero: 0 }])
-                .with_tensor(n("ffn_shared_gate.weight"), weights(d))
-                .with_params(n("ffn_shared_gate.weight.a16"), &[projection(d)])
-                .with_params(n("ffn_shared_gated.a16"), &[A16QuantParams { multiplier: 1, shift: 24, zero: 0 }])
-                .with_params(n("ffn_moe_out.a16"), &[unity]);
-            for (base, mid) in (0..shape.n_experts)
-                .map(|e| (format!("blk.{li}.ffn_expert.{e}"), shape.moe_dim))
-                .chain(std::iter::once((format!("blk.{li}.ffn_shared_expert"), shape.shared_dim)))
-            {
-                artifact = artifact
-                    .with_tensor(format!("{base}_gate.weight"), weights(mid * d))
-                    .with_tensor(format!("{base}_up.weight"), weights(mid * d))
-                    .with_tensor(format!("{base}_down.weight"), weights(d * mid))
-                    .with_params(format!("{base}_gate.weight.a16"), &[projection(d)])
-                    .with_params(format!("{base}_up.weight.a16"), &[projection(d)])
-                    .with_params(format!("{base}_silu.a16"), &[unity])
-                    .with_params(format!("{base}_gated.a16"), &[A16QuantParams { multiplier: 1, shift: 15, zero: 0 }])
-                    .with_params(format!("{base}_down.weight.a16"), &[projection(mid)]);
-            }
-        }
-        artifact
+        super::fixture_impl(layers, experts)
     }
 
     /// **The graph composes.** Both arms, the mixture, the residual stream, forty-style layer
