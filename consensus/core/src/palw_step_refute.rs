@@ -1616,6 +1616,15 @@ pub const PALW_TILED_LOGITS_DOMAIN_ROW: &[u8] = b"misaka-palw/tiled-logits/row/v
 pub const PALW_TILED_LOGITS_DOMAIN_ROOT: &[u8] = b"misaka-palw/tiled-logits/root/v1";
 pub const PALW_TILED_LOGITS_DOMAIN_SCHEME: &[u8] = b"misaka-palw/tiled-logits/scheme/v1";
 
+/// **The FLAT scheme's identity — named so it can be bound.** The flat root predates scheme ids
+/// entirely: nothing named it, so nothing could bind a class to it, and a class admitted at the
+/// tiled price could execute at the flat one (the "attacker picks the job length" rule with the
+/// scheme substituted for the length). A registration that means "the flat commitment" says this
+/// id; the acceptance-side equality check is what makes saying it binding.
+pub fn flat_logits_scheme_id_v1() -> Hash64 {
+    tiled_keyed(PALW_TILED_LOGITS_DOMAIN_SCHEME, &[b"flat-logits-v1", PALW_BASE0_DOMAIN_LOGITS_TRACE])
+}
+
 /// The scheme's identity, for the registration and the job context's `trace_scheme_id` slot. A
 /// constant of the DOMAIN string rather than of a version number, so two schemes cannot collide by
 /// both being "3".
