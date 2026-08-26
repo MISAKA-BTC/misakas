@@ -58,7 +58,14 @@ pub const PALW_V2_FORK_CHOICE_VERSION: u16 = 1;
 /// Version of the trace/step object format the court adjudicates against
 /// (`PalwStepBindingV2` and the leaf encodings under it). Also named by Decision 11 and also
 /// absent: a network that changed the trace format would still fingerprint identically.
-pub const PALW_V2_TRACE_FORMAT_VERSION: u16 = 1;
+///
+/// **2** since `PalwExecutionStepRefutationV1` gained `kv_checkpoint`: a refutation may supply an
+/// attention step's KV history as one committed checkpoint instead of one opening per cached
+/// position. That changes the object's encoding AND what is adjudicable — a v1 court handed a v2
+/// refutation would read the anchor as trailing bytes, and a v2 court accepts material a v1 court
+/// would have called `InputSetNotCanonical`. Either way the two disagree about a verdict, which is
+/// a fork, so the version is what makes them refuse each other at startup instead.
+pub const PALW_V2_TRACE_FORMAT_VERSION: u16 = 2;
 
 /// The ML-DSA-87 signing contexts the V2 ruleset uses, in a fixed order.
 ///

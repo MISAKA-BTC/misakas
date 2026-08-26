@@ -873,6 +873,7 @@ mod tests {
                 inputs,
                 prompt_token_ids: Vec::new(),
                 decode_tokens: None,
+                kv_checkpoint: None,
             };
             // The class's registered inventory, and the opening that proves this block belongs.
             let operands = [

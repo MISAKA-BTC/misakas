@@ -185,6 +185,7 @@ impl PalwExecutionBackendV1 for Base0Backend {
             coord,
             prompt_token_ids,
             Some(pin),
+            None,
         )
         .map_err(|e| format!("{e:?}"))
     }

@@ -276,6 +276,74 @@ impl PalwBisectLadderV1 {
         })
     }
 
+    /// **Open a ladder already narrowed to a committed checkpoint's window** (ADR-0030 §3, the
+    /// consumption side).
+    ///
+    /// [`Self::open`] starts at `[0, space_size)` with `lo_state` = the job context, because that
+    /// is the only start two parties are guaranteed to agree about. A committed checkpoint is a
+    /// **better** one: it is a state the responder is already bound to, under
+    /// `checkpoint_merkle_root` and therefore under `committed_execution_root`, so it can be an
+    /// interval endpoint without either party conceding anything they had not already said.
+    ///
+    /// The ladder then bisects `[anchor_index, space_size)` instead of the whole space — `log₂` of
+    /// what is left rather than of everything — and the rungs a dispute costs fall with it.
+    ///
+    /// # Why the session id does NOT move
+    ///
+    /// It is [`bisect_session_id_v1`] over the same six inputs, byte for byte. `court_session_id_v2`
+    /// derives it from the CLAIM (claim id, trace root, both parties, space, space size), and a V2
+    /// court would reject a ladder whose id it cannot recompute — so an anchor that changed the id
+    /// would be a ladder no court accepts. There is one dispute per id and the anchor lives inside
+    /// it, so nothing collides.
+    ///
+    /// # Why a wrong anchor is the challenger's problem and nobody else's
+    ///
+    /// The caller must have verified `anchor_state` against the claim's checkpoint leg — this
+    /// machine takes hashes and cannot check that, the same way it cannot check any disclosure.
+    /// What it does not need to check is *which* committed checkpoint was chosen: narrowing past
+    /// the divergence loses the challenger its own bond, and narrowing short of it only costs extra
+    /// rungs. A challenger cannot use the anchor to make the responder defend a region the claim
+    /// never covered, because every index in `[anchor_index, space_size)` is inside the space the
+    /// id already names.
+    pub fn open_anchored(
+        job_context_hash: &Hash64,
+        committed_root: &Hash64,
+        challenger_id: &Hash64,
+        responder_id: &Hash64,
+        space: PalwBisectSpaceV1,
+        space_size: u64,
+        anchor_index: u64,
+        anchor_state: Hash64,
+        opened_at_daa: u64,
+        first_deadline_daa: u64,
+    ) -> Result<Self, PalwBisectError> {
+        let mut ladder = Self::open(
+            job_context_hash,
+            committed_root,
+            challenger_id,
+            responder_id,
+            space,
+            space_size,
+            opened_at_daa,
+            first_deadline_daa,
+        )?;
+        // The interval must still contain something to bisect. `anchor_index == space_size - 1`
+        // leaves one index, which is a terminal, not a ladder — refused here rather than opened
+        // into a machine whose first midpoint is its own endpoint.
+        if anchor_index + 1 >= space_size {
+            return Err(PalwBisectError::SpaceOutOfRange { got: space_size - anchor_index, max: PALW_BISECT_MAX_SPACE });
+        }
+        // An anchor equal to the announced root is an interval whose ends agree — no divergence
+        // inside it, so the dispute has disproved itself before a rung. The same rule
+        // `apply_disclosure` enforces on every later state, applied to the seed.
+        if anchor_state == *committed_root {
+            return Err(PalwBisectError::MidStateRepeatsAnEndpoint);
+        }
+        ladder.lo = anchor_index;
+        ladder.lo_state = anchor_state;
+        Ok(ladder)
+    }
+
     /// One rung window past the block that accepted the move.
     ///
     /// A zero `w_round` would make every move instantly overdue, so it is refused here rather
@@ -1051,5 +1119,52 @@ mod tests {
         assert_eq!(bisect_midpoint_v1(5, 8), 6);
         assert_eq!(bisect_midpoint_v1(0, u64::MAX), u64::MAX / 2);
         assert_eq!(bisect_midpoint_v1((1 << 40) - 2, 1 << 40), (1 << 40) - 1);
+    }
+    /// **An anchored ladder bisects what is LEFT, and is the same session while doing it.**
+    ///
+    /// Three things, and the middle one is why the anchor can exist at all: an anchored ladder
+    /// costs fewer rungs, it carries the SAME session id (so a V2 court that derives the id from
+    /// the claim still recognises it), and it refuses the two seeds that would make it meaningless.
+    #[test]
+    fn an_anchored_ladder_narrows_what_is_left_under_the_same_session_id() {
+        let (ctx, root, ch, re) = (h64(0x11), h64(0x22), h64(0x33), h64(0x44));
+        let space = PalwBisectSpaceV1::StepLeaves;
+        let size = 1024u64;
+
+        let plain = PalwBisectLadderV1::open(&ctx, &root, &ch, &re, space, size, 100, 200).expect("opens");
+        let anchored = PalwBisectLadderV1::open_anchored(&ctx, &root, &ch, &re, space, size, 960, h64(0x55), 100, 200).expect("opens");
+
+        // Same dispute, same id — the V2 court derives it from the claim and would not recognise
+        // a ladder whose anchor had moved it.
+        assert_eq!(plain.session_id(), anchored.session_id());
+        assert_eq!(plain.interval(), (0, size));
+        assert_eq!(anchored.interval(), (960, size));
+
+        // Fewer rungs, which is the whole point: ⌈log₂ 1024⌉ = 10 against ⌈log₂ 64⌉ = 6.
+        let rungs = |mut lo: u64, hi: u64| {
+            let mut n = 0;
+            let mut hi = hi;
+            while hi - lo > 1 {
+                let mid = bisect_midpoint_v1(lo, hi);
+                if n % 2 == 0 {
+                    hi = mid
+                } else {
+                    lo = mid
+                }
+                n += 1;
+            }
+            n
+        };
+        assert!(rungs(960, size) < rungs(0, size), "the anchor bought no rungs");
+
+        // An anchor at the last index leaves nothing to bisect — a terminal, not a ladder.
+        assert!(PalwBisectLadderV1::open_anchored(&ctx, &root, &ch, &re, space, size, size - 1, h64(0x55), 100, 200).is_err());
+        // An anchor equal to the announced root is an interval whose ends agree: the dispute has
+        // disproved itself before a rung, and seeding it is refused the same way a disclosure that
+        // repeats an endpoint is.
+        assert_eq!(
+            PalwBisectLadderV1::open_anchored(&ctx, &root, &ch, &re, space, size, 960, root, 100, 200),
+            Err(PalwBisectError::MidStateRepeatsAnEndpoint)
+        );
     }
 }
