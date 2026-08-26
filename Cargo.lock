@@ -5980,6 +5980,7 @@ dependencies = [
  "kaspa-hashes",
  "kaspa-pq-validator-core",
  "kaspa-txscript",
+ "libc",
  "rayon",
  "serde_json",
  "unicode-normalization",

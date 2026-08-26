@@ -130,10 +130,19 @@ impl Qwen36ShapeV1 {
 
 /// The artifact: a shape, a named weight store, a named parameter store, and the pinned rotary
 /// table.
-#[derive(Clone, Debug)]
+/// Where a tensor's codes live.
+///
+/// `Owned` is a fixture or a small class. `Mapped` is a 33 GiB file that does not fit in RAM and
+/// is not supposed to: the mixture reads eight of 256 experts per token, so the resident set is a
+/// fraction of the file and the page cache already implements that policy.
+enum Store {
+    Owned(BTreeMap<String, Vec<i8>>),
+    Mapped { map: crate::mmap::ReadOnlyMap, directory: BTreeMap<String, (usize, usize)> },
+}
+
 pub struct Qwen36ArtifactV1 {
     pub shape: Qwen36ShapeV1,
-    tensors: BTreeMap<String, Vec<i8>>,
+    store: Store,
     params: BTreeMap<String, Vec<u8>>,
     pub rope: RopeTableV1,
 }
@@ -168,11 +177,16 @@ impl std::error::Error for Qwen36Error {}
 impl Qwen36ArtifactV1 {
     pub fn new(shape: Qwen36ShapeV1, rope: RopeTableV1) -> Result<Self, ArtifactError> {
         shape.validate()?;
-        Ok(Self { shape, tensors: BTreeMap::new(), params: BTreeMap::new(), rope })
+        Ok(Self { shape, store: Store::Owned(BTreeMap::new()), params: BTreeMap::new(), rope })
     }
 
     pub fn with_tensor(mut self, name: impl Into<String>, values: Vec<i8>) -> Self {
-        self.tensors.insert(name.into(), values);
+        match &mut self.store {
+            Store::Owned(t) => {
+                t.insert(name.into(), values);
+            }
+            Store::Mapped { .. } => panic!("a mapped artifact is read-only; build it with the writer"),
+        }
         self
     }
 
@@ -182,7 +196,31 @@ impl Qwen36ArtifactV1 {
     }
 
     pub fn tensor(&self, name: &str) -> Result<&[i8], Qwen36Error> {
-        self.tensors.get(name).map(|v| &v[..]).ok_or_else(|| Qwen36Error::MissingTensor(name.to_string()))
+        match &self.store {
+            Store::Owned(t) => t.get(name).map(|v| &v[..]).ok_or_else(|| Qwen36Error::MissingTensor(name.to_string())),
+            Store::Mapped { map, directory } => {
+                let (offset, len) = *directory.get(name).ok_or_else(|| Qwen36Error::MissingTensor(name.to_string()))?;
+                // A directory entry that leaves the mapping is a truncated file, which is a
+                // refusal rather than a fault — the bytes are data a producer was handed.
+                map.i8_slice(offset, len).ok_or_else(|| Qwen36Error::BadTensor { name: name.to_string(), want: len, got: 0 })
+            }
+        }
+    }
+
+    /// Every tensor name the artifact holds, in order.
+    pub fn tensor_names(&self) -> Vec<&str> {
+        match &self.store {
+            Store::Owned(t) => t.keys().map(|k| k.as_str()).collect(),
+            Store::Mapped { directory, .. } => directory.keys().map(|k| k.as_str()).collect(),
+        }
+    }
+
+    /// Total bytes of weight codes.
+    pub fn weight_bytes(&self) -> usize {
+        match &self.store {
+            Store::Owned(t) => t.values().map(|v| v.len()).sum(),
+            Store::Mapped { directory, .. } => directory.values().map(|(_, n)| *n).sum(),
+        }
     }
 
     fn tensor_sized(&self, name: &str, want: usize) -> Result<&[i8], Qwen36Error> {
@@ -631,6 +669,272 @@ impl Qwen36ShapeV1 {
     }
 }
 
+// -------------------------------------------------------------------------------------------
+// The artifact file — a directory the runtime maps rather than reads
+// -------------------------------------------------------------------------------------------
+
+/// Magic and version. The format is deliberately dull: fixed-width little-endian scalars,
+/// length-prefixed names, and one page-aligned blob at the end.
+pub const QWEN36_FILE_MAGIC: &[u8; 8] = b"PALWQ361";
+
+/// Where the weight region starts. Page-aligned so the mapping's offsets are the file's.
+const DATA_ALIGNMENT: usize = 16384;
+
+/// **The writer, which is streaming on purpose.**
+///
+/// A 33 GiB artifact cannot be built in memory and then written; it has to be written as it is
+/// produced. The directory is therefore computed BEFORE any data — every tensor's length is known
+/// from the shape, so the offsets are arithmetic — and the tensors then arrive in the order the
+/// plan declared them.
+pub struct Qwen36Writer {
+    file: std::io::BufWriter<std::fs::File>,
+    plan: Vec<(String, usize)>,
+    next: usize,
+    written: usize,
+}
+
+impl Qwen36Writer {
+    /// `plan` is every tensor in the order it will be supplied, with its length in codes.
+    pub fn create(
+        path: &std::path::Path,
+        shape: &Qwen36ShapeV1,
+        rope: &RopeTableV1,
+        params: &BTreeMap<String, Vec<u8>>,
+        plan: Vec<(String, usize)>,
+    ) -> std::io::Result<Self> {
+        use std::io::Write;
+        let mut out = Vec::with_capacity(1 << 20);
+        out.extend_from_slice(QWEN36_FILE_MAGIC);
+        write_shape(&mut out, shape);
+        write_usize(&mut out, rope.d_head);
+        write_usize(&mut out, rope.max_position);
+        write_i32s(&mut out, &rope.cos_q);
+        write_i32s(&mut out, &rope.sin_q);
+        write_usize(&mut out, params.len());
+        for (name, bytes) in params {
+            write_name(&mut out, name);
+            write_usize(&mut out, bytes.len());
+            out.extend_from_slice(bytes);
+        }
+        write_usize(&mut out, plan.len());
+        // The offsets are relative to the data region, which starts at the first aligned boundary
+        // after the header. The header's own length depends on the directory, and the directory's
+        // entries are fixed-width once the names are written — so the region start is computed
+        // after the whole header is laid out, and the offsets do not depend on it.
+        let mut offset = 0usize;
+        for (name, len) in &plan {
+            write_name(&mut out, name);
+            write_usize(&mut out, offset);
+            write_usize(&mut out, *len);
+            offset += *len;
+        }
+        let data_start = out.len().next_multiple_of(DATA_ALIGNMENT);
+        // The region start is recorded so the reader does not have to reproduce the padding rule.
+        let start_field = out.len();
+        write_usize(&mut out, 0);
+        let data_start = (start_field + 8).next_multiple_of(DATA_ALIGNMENT).max(data_start);
+        out[start_field..start_field + 8].copy_from_slice(&(data_start as u64).to_le_bytes());
+        out.resize(data_start, 0);
+
+        let mut file = std::io::BufWriter::with_capacity(1 << 22, std::fs::File::create(path)?);
+        file.write_all(&out)?;
+        Ok(Self { file, plan, next: 0, written: 0 })
+    }
+
+    /// Append the next tensor. Refuses a name or a length the plan did not declare — the
+    /// directory is already on disk, so a tensor that arrives out of order would be silently
+    /// mis-addressed by every reader.
+    pub fn push(&mut self, name: &str, codes: &[i8]) -> std::io::Result<()> {
+        use std::io::Write;
+        let Some((want_name, want_len)) = self.plan.get(self.next) else {
+            return Err(std::io::Error::other(format!("the plan has no slot for {name}")));
+        };
+        if want_name != name || *want_len != codes.len() {
+            return Err(std::io::Error::other(format!(
+                "the plan expects {want_name} with {want_len} codes and got {name} with {}",
+                codes.len()
+            )));
+        }
+        // SAFETY-free reinterpretation: `i8` and `u8` have the same layout, and this is a write.
+        let bytes: &[u8] = unsafe { std::slice::from_raw_parts(codes.as_ptr() as *const u8, codes.len()) };
+        self.file.write_all(bytes)?;
+        self.next += 1;
+        self.written += codes.len();
+        Ok(())
+    }
+
+    /// Finish. Refuses to close a file the plan did not fill.
+    pub fn finish(mut self) -> std::io::Result<usize> {
+        use std::io::Write;
+        if self.next != self.plan.len() {
+            return Err(std::io::Error::other(format!("the plan declared {} tensors and {} arrived", self.plan.len(), self.next)));
+        }
+        self.file.flush()?;
+        Ok(self.written)
+    }
+}
+
+fn write_usize(out: &mut Vec<u8>, v: usize) {
+    out.extend_from_slice(&(v as u64).to_le_bytes());
+}
+
+fn write_name(out: &mut Vec<u8>, name: &str) {
+    write_usize(out, name.len());
+    out.extend_from_slice(name.as_bytes());
+}
+
+fn write_i32s(out: &mut Vec<u8>, v: &[i32]) {
+    write_usize(out, v.len());
+    for x in v {
+        out.extend_from_slice(&x.to_le_bytes());
+    }
+}
+
+fn write_shape(out: &mut Vec<u8>, s: &Qwen36ShapeV1) {
+    write_usize(out, s.layer_types.len());
+    for k in &s.layer_types {
+        out.push(match k {
+            Qwen36LayerKind::LinearAttention => 0,
+            Qwen36LayerKind::FullAttention => 1,
+        });
+    }
+    for v in [
+        s.d_model,
+        s.n_heads,
+        s.n_kv_heads,
+        s.head_dim,
+        s.rotary_dim,
+        s.linear_k_heads,
+        s.linear_v_heads,
+        s.linear_head_dim,
+        s.conv_kernel,
+        s.n_experts,
+        s.experts_per_token,
+        s.moe_dim,
+        s.shared_dim,
+        s.vocab,
+        s.max_position,
+    ] {
+        write_usize(out, v);
+    }
+    out.extend_from_slice(&s.eps_q.to_le_bytes());
+    out.push(s.router_up_bits);
+}
+
+struct HeaderReader<'a> {
+    b: &'a [u8],
+    i: usize,
+}
+
+impl<'a> HeaderReader<'a> {
+    fn take(&mut self, n: usize) -> Option<&'a [u8]> {
+        let end = self.i.checked_add(n)?;
+        if end > self.b.len() {
+            return None;
+        }
+        let out = &self.b[self.i..end];
+        self.i = end;
+        Some(out)
+    }
+    fn usize(&mut self) -> Option<usize> {
+        Some(u64::from_le_bytes(self.take(8)?.try_into().ok()?) as usize)
+    }
+    fn i64(&mut self) -> Option<i64> {
+        Some(i64::from_le_bytes(self.take(8)?.try_into().ok()?))
+    }
+    fn name(&mut self) -> Option<String> {
+        let n = self.usize()?;
+        Some(String::from_utf8_lossy(self.take(n)?).into_owned())
+    }
+    fn i32s(&mut self) -> Option<Vec<i32>> {
+        let n = self.usize()?;
+        Some(self.take(n * 4)?.chunks_exact(4).map(|c| i32::from_le_bytes(c.try_into().expect("4"))).collect())
+    }
+}
+
+/// Open an artifact file. The header is parsed and the weight region is mapped, so opening a
+/// 33 GiB artifact costs the header and no more.
+pub fn open_artifact(path: &std::path::Path) -> Result<Qwen36ArtifactV1, Qwen36Error> {
+    let map = crate::mmap::ReadOnlyMap::open(path).map_err(|e| Qwen36Error::BadParams(format!("{}: {e}", path.display())))?;
+    map.advise_random();
+    let bytes = map.as_bytes();
+    let bad = |what: &str| Qwen36Error::BadParams(format!("artifact file: {what}"));
+    let mut r = HeaderReader { b: bytes, i: 0 };
+    if r.take(8).ok_or_else(|| bad("no magic"))? != QWEN36_FILE_MAGIC.as_slice() {
+        return Err(bad("not a PALW-QWEN36 artifact"));
+    }
+    let n_layers = r.usize().ok_or_else(|| bad("layer count"))?;
+    let mut layer_types = Vec::with_capacity(n_layers);
+    for _ in 0..n_layers {
+        layer_types.push(match r.take(1).ok_or_else(|| bad("layer kind"))?[0] {
+            0 => Qwen36LayerKind::LinearAttention,
+            1 => Qwen36LayerKind::FullAttention,
+            _ => return Err(bad("a layer kind this build does not read")),
+        });
+    }
+    let mut field = || r.usize().ok_or_else(|| Qwen36Error::BadParams("artifact file: shape".into()));
+    let shape = Qwen36ShapeV1 {
+        layer_types,
+        d_model: field()?,
+        n_heads: field()?,
+        n_kv_heads: field()?,
+        head_dim: field()?,
+        rotary_dim: field()?,
+        linear_k_heads: field()?,
+        linear_v_heads: field()?,
+        linear_head_dim: field()?,
+        conv_kernel: field()?,
+        n_experts: field()?,
+        experts_per_token: field()?,
+        moe_dim: field()?,
+        shared_dim: field()?,
+        vocab: field()?,
+        max_position: field()?,
+        eps_q: r.i64().ok_or_else(|| bad("eps"))?,
+        router_up_bits: r.take(1).ok_or_else(|| bad("router bits"))?[0],
+    };
+    shape.validate().map_err(|e| Qwen36Error::BadParams(format!("artifact file: {e:?}")))?;
+
+    let rope = RopeTableV1 {
+        d_head: r.usize().ok_or_else(|| bad("rope d_head"))?,
+        max_position: r.usize().ok_or_else(|| bad("rope max_position"))?,
+        cos_q: r.i32s().ok_or_else(|| bad("rope cos"))?,
+        sin_q: r.i32s().ok_or_else(|| bad("rope sin"))?,
+    };
+
+    let mut params = BTreeMap::new();
+    let n_params = r.usize().ok_or_else(|| bad("param count"))?;
+    for _ in 0..n_params {
+        let name = r.name().ok_or_else(|| bad("param name"))?;
+        let n = r.usize().ok_or_else(|| bad("param length"))?;
+        params.insert(name, r.take(n).ok_or_else(|| bad("param bytes"))?.to_vec());
+    }
+
+    let mut directory = BTreeMap::new();
+    let n_tensors = r.usize().ok_or_else(|| bad("tensor count"))?;
+    let mut entries = Vec::with_capacity(n_tensors);
+    for _ in 0..n_tensors {
+        let name = r.name().ok_or_else(|| bad("tensor name"))?;
+        let offset = r.usize().ok_or_else(|| bad("tensor offset"))?;
+        let len = r.usize().ok_or_else(|| bad("tensor length"))?;
+        entries.push((name, offset, len));
+    }
+    let data_start = r.usize().ok_or_else(|| bad("data start"))?;
+    for (name, offset, len) in entries {
+        let absolute = data_start.checked_add(offset).ok_or_else(|| bad("a tensor offset overflows"))?;
+        directory.insert(name, (absolute, len));
+    }
+
+    Ok(Qwen36ArtifactV1 { shape, store: Store::Mapped { map, directory }, params, rope })
+}
+
+/// The parameter store a writer needs, taken out of an in-memory artifact.
+impl Qwen36ArtifactV1 {
+    pub fn params_map(&self) -> &BTreeMap<String, Vec<u8>> {
+        &self.params
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -893,13 +1197,80 @@ mod tests {
         }
     }
 
+    /// **The artifact file round-trips, and a mapped artifact runs.**
+    ///
+    /// Not "the bytes match" — the ENGINE must produce the same logits from the mapped artifact as
+    /// from the in-memory one, because the mapped path is the only one a 33 GiB class can use and
+    /// a difference there would be invisible until a court disagreed with a producer.
+    #[test]
+    fn a_mapped_artifact_runs_identically_to_an_owned_one() {
+        let owned = fixture(4, 8);
+        let path = std::env::temp_dir().join(format!("misaka-q36-{}.palwq36", std::process::id()));
+
+        let plan: Vec<(String, usize)> =
+            owned.tensor_names().iter().map(|n| (n.to_string(), owned.tensor(n).expect("present").len())).collect();
+        let mut writer =
+            Qwen36Writer::create(&path, &owned.shape, &owned.rope, owned.params_map(), plan.clone()).expect("the file is created");
+        for (name, _) in &plan {
+            writer.push(name, owned.tensor(name).expect("present")).expect("the tensor is appended");
+        }
+        let written = writer.finish().expect("the plan is filled");
+        assert_eq!(written, owned.weight_bytes());
+
+        let mapped = open_artifact(&path).expect("the artifact opens");
+        assert_eq!(mapped.shape, owned.shape);
+        assert_eq!(mapped.rope.cos_q, owned.rope.cos_q);
+        assert_eq!(mapped.weight_bytes(), owned.weight_bytes());
+        for name in owned.tensor_names() {
+            assert_eq!(mapped.tensor(name).expect("mapped"), owned.tensor(name).expect("owned"), "tensor {name}");
+        }
+
+        let run = |a: &Qwen36ArtifactV1| {
+            let engine = Qwen36Engine::new(a);
+            let mut cache = Qwen36Cache::new(&a.shape);
+            let mut last = Vec::new();
+            for position in 0..5 {
+                last = engine.forward_token(&mut cache, (position * 7 + 3) % a.shape.vocab, position).expect("completes");
+            }
+            last
+        };
+        assert_eq!(run(&mapped), run(&owned), "a mapped artifact must compute what an owned one computes");
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// The writer refuses a tensor the plan did not declare. The directory is already on disk when
+    /// the first tensor arrives, so a tensor out of order would be silently mis-addressed by every
+    /// reader — there is no later moment at which that could be noticed.
+    #[test]
+    fn the_writer_refuses_a_tensor_the_plan_did_not_declare() {
+        let owned = fixture(1, 8);
+        let path = std::env::temp_dir().join(format!("misaka-q36-plan-{}.palwq36", std::process::id()));
+        let names = owned.tensor_names();
+        let plan: Vec<(String, usize)> = names.iter().map(|n| (n.to_string(), owned.tensor(n).expect("present").len())).collect();
+
+        let mut writer = Qwen36Writer::create(&path, &owned.shape, &owned.rope, owned.params_map(), plan.clone()).expect("created");
+        // Out of order.
+        assert!(writer.push(&plan[1].0, owned.tensor(&plan[1].0).expect("present")).is_err());
+        // Right name, wrong length.
+        assert!(writer.push(&plan[0].0, &[0i8]).is_err());
+        // And a file that is not filled does not close.
+        assert!(writer.finish().is_err());
+        std::fs::remove_file(&path).ok();
+    }
+
     /// A missing tensor names itself. The store is the whole registration surface, so a class that
     /// is missing a row has to say which one.
     #[test]
     fn a_missing_row_names_itself() {
-        let artifact = fixture(4, 8);
-        let mut stripped = artifact.clone();
-        stripped.tensors.remove("blk.0.linear_q.weight");
+        // A fresh fixture rather than a clone: a mapped artifact cannot be cloned (the map is a
+        // resource, not a value), so the type is not `Clone` and this test builds what it strips.
+        let mut stripped = fixture(4, 8);
+        match &mut stripped.store {
+            Store::Owned(t) => {
+                t.remove("blk.0.linear_q.weight");
+            }
+            Store::Mapped { .. } => unreachable!("the fixture is owned"),
+        }
         let engine = Qwen36Engine::new(&stripped);
         let mut cache = Qwen36Cache::new(&stripped.shape);
         assert_eq!(engine.forward_token(&mut cache, 1, 0), Err(Qwen36Error::MissingTensor("blk.0.linear_q.weight".to_string())));
