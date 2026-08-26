@@ -209,6 +209,7 @@ pub mod palw_panel_v2;
 pub mod palw_producer_v2;
 pub mod palw_pwu;
 pub mod palw_qwen25_profile;
+pub mod palw_qwen36_ops;
 pub mod palw_rc_identity_v2;
 pub mod palw_receipt;
 /// MISAKA PALW canonical reference arithmetic v1 (ADR-0027 §2): integer soft-float
