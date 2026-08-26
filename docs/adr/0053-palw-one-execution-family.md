@@ -128,6 +128,43 @@ moves, and `the_version_8_state_root_golden_vectors` is where that is declared. 
 second implementation of the state root moves with it — the correspondence is a round trip or it is
 nothing.
 
+## Decision 1a — What "one gate" does and does not claim, at genesis
+
+Decision 1 is a statement about `verify_class_admission_v2`, the POST-GENESIS path: there is one
+arm, and every registration that reaches it runs the whole of `validate_shape`, the ADR-0038 A4
+coverage walk, the ladder-depth check and the ADR-0049 Decision C court-cost ceilings. Removing the
+family removed the second arm; it did not make the genesis path identical to that one, and this
+section says so rather than letting a reader assume it.
+
+A **genesis** registration carries `admission: None`, because the ruleset id already commits to a
+catalog describing the class. `verify_palw_genesis_v2` therefore checks the registration against
+`PalwClassCatalogV2` rather than against a carried profile, and `verify_against_catalog` gates:
+
+* the catalog is the one the ruleset root commits to;
+* BASE-0 is present (the liveness floor is registered);
+* **A4 coverage, for every entry** — so a genesis class whose graph reaches an uncatalogued kernel
+  is refused, exactly as a post-genesis one is;
+* **ladder depth** — `court.max_step_leaf_count() >= catalog.max_step_leaf_count()`.
+
+It does **not** check the court-cost ceilings. `derive_court_cost_v1` appears nowhere in the
+genesis path, so `max_opening_bytes` / `max_terminal_macs` / `max_operand_count` bound a
+post-genesis entrant and not a class minted into a genesis. A class can therefore be seated at
+block zero whose cheapest prosecutable step costs more than the ruleset allows — coverage-clean,
+ladder-deep enough, and unpolicable, which is the exact condition ADR-0049 Decision C named.
+
+Two further facts about the genesis path, stated so nobody has to rediscover them:
+
+* the catalog's numbers (`reachable_kernels`, the two leaf counts) are **minted, not re-derived**.
+  With no carried profile there is no graph to walk at load, so coverage is checked against the set
+  the catalog asserts. Whoever mints a genesis is trusted to have derived it from the profile —
+  which is why the mint path and the admission path must build entries with the same function, and
+  why `verify_class_admission_v2` returns "what a genesis catalog would have held for this class";
+* this is a **pre-existing** hole, not one this ADR opens. It is recorded here because Decision 1's
+  "there is no arm that skips it" is true of the gate it names and would be false as a claim about
+  every path a class can enter by. The fix — carrying the derived cost in the catalog entry so the
+  bundle can check it the way it already checks depth — belongs to the class-catalog work, not to
+  withdrawing a family.
+
 ## Decision 3 — One panel: the network's
 
 Panel seats and quorum are bundle-global again. A class does not get to be licensed by fewer
