@@ -81,7 +81,11 @@ pub const PALW_STEP_MAX_LAYERS: u16 = 1024;
 /// Most nodes one layer template may declare.
 pub const PALW_STEP_MAX_NODES_PER_TABLE: usize = 64;
 /// Tile length bounds (elements per committed tile).
-pub const PALW_STEP_MIN_TILE_LEN: u32 = 16;
+/// Lowered 16 → 8 (2026-08-26): a projection reducing over 4,096 lanes cannot close under the
+/// 80 KiB carrier at tile 16 — its Decision-B opening alone is 64 KiB — and 8 is where the widest
+/// row a registered class carries fits with its evidence beside it. A floor, not a suggestion:
+/// existing profiles all sit at 16 or above and none moves.
+pub const PALW_STEP_MIN_TILE_LEN: u32 = 8;
 pub const PALW_STEP_MAX_TILE_LEN: u32 = 65_536;
 /// Bounds on the KV aux-chunk width (calls per chunk leaf); 0 disables the aux series.
 pub const PALW_STEP_MAX_KV_CHUNK_CALLS: u32 = 4096;

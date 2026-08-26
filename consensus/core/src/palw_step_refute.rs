@@ -95,8 +95,8 @@ pub const KDESC_A16_EMBED: &str = "a16/embed-lookup/row-gather-i8/v1";
 pub const KDESC_A16_MATMUL_REQUANT: &str = "a16/matmul/i8xi16-i64-exact-requant16/v1";
 pub const KDESC_A16_MATMUL_RESCALE: &str = "a16/matmul/i8xi16-i64-exact-rescale32/v1";
 pub const KDESC_A16_RMS_NORM: &str = "a16/rms-norm/i64-sumsq-intrsqrt/v1";
-pub const KDESC_A16_REQUANTIZE: &str = "a16/requantize/i128-mul-rshift-sat16/v1";
-pub const KDESC_A16_ADD_ELEM: &str = "a16/add-elem/i32-exact/v1";
+pub const KDESC_A16_REQUANTIZE: &str = "a16/requantize/lane-sliced/i128-mul-rshift-sat16/v1";
+pub const KDESC_A16_ADD_ELEM: &str = "a16/add-elem/lane-sliced/i32-exact/v1";
 pub const KDESC_A16_SOFTMAX: &str = "a16/softmax/rowmax-shifted-intexp-intrecip/v1";
 pub const KDESC_A16_ATTN_SCORES: &str = "a16/attn-scores/i16xi16-i64-gqa/v1";
 pub const KDESC_A16_ATTN_VALUES: &str = "a16/attn-values/i16xi16-i64-gqa/v1";
@@ -106,16 +106,24 @@ pub const KDESC_A16_ATTN_VALUES: &str = "a16/attn-values/i16xi16-i64-gqa/v1";
 pub const KDESC_Q36_MATMUL_GROUPED: &str = "q36/matmul-grouped/i8xi16-per32-exp-i64/v1";
 pub const KDESC_Q36_MATMUL_GROUPED_WIDE: &str = "q36/matmul-grouped-wide/i8xi16-per32-exp-i64-sat32/v1";
 pub const KDESC_Q36_ROPE_PARTIAL: &str = "q36/rope/pinned-table-pairwise-partial/v1";
-pub const KDESC_Q36_SSM_CONV: &str = "q36/ssm-conv/4tap-per-channel-qk/v1";
-pub const KDESC_Q36_L2_NORM: &str = "q36/l2-norm/i64-sumsq-intrsqrt-q15/v1";
-pub const KDESC_Q36_SIGMOID: &str = "q36/sigmoid/intexp-intrecip/v1";
-pub const KDESC_Q36_GATE_APPLY: &str = "q36/gate-apply/i64-mul-narrow16/v1";
-pub const KDESC_Q36_MUL_WIDE: &str = "q36/mul-wide/i32xi32-i64-narrow16/v1";
-pub const KDESC_Q36_RESCALE_ROW: &str = "q36/rescale-row/i128-mul-rshift-sat32/v1";
-pub const KDESC_Q36_RMS_NORM_WIDE: &str = "q36/rms-norm-wide/i128-sumsq-normalized-intrsqrt/v1";
+pub const KDESC_Q36_SSM_CONV: &str = "q36/ssm-conv/4tap-channel-sliced-window-qk/v1";
+/// The QK-norm: `a16_rms_norm` applied PER HEAD, which is what makes it head-sliced in court —
+/// a distinct descriptor from the whole-row `KDESC_A16_RMS_NORM` because a kernel id names its
+/// leaf set, and the two normalize over different reductions.
+pub const KDESC_Q36_HEAD_RMS_NORM: &str = "q36/rms-norm/head-sliced/i64-sumsq-intrsqrt/v1";
+pub const KDESC_Q36_L2_NORM: &str = "q36/l2-norm/head-sliced/i64-sumsq-intrsqrt-q15/v1";
+pub const KDESC_Q36_SIGMOID: &str = "q36/sigmoid/lane-sliced/intexp-intrecip/v1";
+pub const KDESC_Q36_GATE_APPLY: &str = "q36/gate-apply/lane-sliced/i64-mul-narrow16/v1";
+pub const KDESC_Q36_MUL_WIDE: &str = "q36/mul-wide/lane-sliced/i32xi32-i64-narrow16/v1";
+pub const KDESC_Q36_RESCALE_ROW: &str = "q36/rescale-row/lane-sliced/i128-mul-rshift-sat32/v1";
+pub const KDESC_Q36_RMS_NORM_WIDE: &str = "q36/rms-norm-wide/head-sliced/i128-sumsq-normalized-intrsqrt/v1";
 pub const KDESC_Q36_ROUTER_TOPK: &str = "q36/router-topk/softmax-shifted-k-passes-low-index/v1";
-pub const KDESC_Q36_MOE_COMBINE: &str = "q36/moe-combine/i64-weighted-sum-narrow16/v1";
-pub const KDESC_Q36_GDN_STEP: &str = "q36/gated-delta-net/decay-read-i128-write-shift-i64/v1";
+pub const KDESC_Q36_MOE_COMBINE: &str = "q36/moe-combine/expert-strided-slice/i64-weighted-sum-narrow16/v1";
+pub const KDESC_Q36_GDN_STEP: &str = "q36/gated-delta-net/head-sliced-genesis-replay/decay-read-i128-write-shift-i64/v1";
+/// The elementwise activation on this graph's own lane-sliced terms. The FUNCTION is the
+/// floor's `silu` unchanged; the DESCRIPTOR is this class's, because a kernel id names its court
+/// leaf set too, and lane-slicing a shared id would silently re-adjudicate the floor.
+pub const KDESC_Q36_SILU: &str = "q36/silu/lane-sliced/intexp-sigmoid/v1";
 pub const KDESC_Q36_DECAY: &str = "q36/decay/softplus-intln-exp-refined/v1";
 
 /// The A16 tier's nine, for a caller assembling a reachable set for any class in it.
@@ -147,6 +155,8 @@ pub const KDESC_Q36_ALL: &[&str] = &[
     KDESC_Q36_MOE_COMBINE,
     KDESC_Q36_GDN_STEP,
     KDESC_Q36_DECAY,
+    KDESC_Q36_SILU,
+    KDESC_Q36_HEAD_RMS_NORM,
 ];
 
 /// Every descriptor this build can adjudicate, in one place so the coverage gate reads the same
@@ -192,6 +202,8 @@ pub const KDESC_ALL: &[&str] = &[
     KDESC_Q36_MOE_COMBINE,
     KDESC_Q36_GDN_STEP,
     KDESC_Q36_DECAY,
+    KDESC_Q36_SILU,
+    KDESC_Q36_HEAD_RMS_NORM,
 ];
 
 /// The `kernel_semantics_id`s this build can adjudicate — the catalog side of the ADR-0038 A4
@@ -278,6 +290,8 @@ enum Qwen36Op {
     MoeCombine,
     GdnStep,
     Decay,
+    Silu,
+    HeadRmsNorm,
 }
 
 /// The class's `ggml_vec_dot_f32` lane structure (simd-mappings.h, read verbatim).
@@ -339,6 +353,8 @@ const KERNEL_CATALOG: &[(&str, KernelProgram)] = &[
     (KDESC_Q36_MOE_COMBINE, KernelProgram::Qwen36(Qwen36Op::MoeCombine)),
     (KDESC_Q36_GDN_STEP, KernelProgram::Qwen36(Qwen36Op::GdnStep)),
     (KDESC_Q36_DECAY, KernelProgram::Qwen36(Qwen36Op::Decay)),
+    (KDESC_Q36_SILU, KernelProgram::Qwen36(Qwen36Op::Silu)),
+    (KDESC_Q36_HEAD_RMS_NORM, KernelProgram::Qwen36(Qwen36Op::HeadRmsNorm)),
 ];
 
 /// **Whether this build's adjudicator can serve THIS node's operand shape (G5).**
@@ -478,7 +494,9 @@ pub fn kernel_can_serve_node_v1(node: &crate::palw_step::PalwStepNodeV1, table_i
             | Qwen36Op::RescaleRow
             | Qwen36Op::RmsNormWide
             | Qwen36Op::RouterTopk
-            | Qwen36Op::Decay,
+            | Qwen36Op::Decay
+            | Qwen36Op::Silu
+            | Qwen36Op::HeadRmsNorm,
         ) => {
             if inputs < 1 {
                 return Err("a one-operand node must name the row it computes from");
@@ -672,6 +690,63 @@ fn qwen36_row(
             }
         }
     };
+    // The SAME ref-width derivation `canonical_input_leaves` runs, so the slice this side
+    // extracts is the slice that side opened — one function, or a wrong conviction.
+    let ref_widths = || -> Option<Vec<u64>> {
+        let table_first_slot = gather.0.node_slot - intra_table_index(profile, gather.0.node_slot)? as u32;
+        node.input_refs
+            .iter()
+            .map(|&r| {
+                if r >= crate::palw_step::PALW_STEP_INPUT_SENTINEL_MIN {
+                    return None;
+                }
+                let (n, _) = profile.resolve_node_slot(table_first_slot + r as u32)?;
+                match n.out_len {
+                    crate::palw_step::PalwStepOutLenV1::Fixed { elements } => Some(elements as u64),
+                    crate::palw_step::PalwStepOutLenV1::KvScaled { .. } => None,
+                }
+            })
+            .collect()
+    };
+    let table_first_slot = || -> Result<u32, PalwStepRefuteError> {
+        Ok(gather.0.node_slot - intra_table_index(profile, gather.0.node_slot).ok_or(PalwStepRefuteError::Unadjudicable)? as u32)
+    };
+    // The producing node's tile width for ref `ordinal` — what the covering tiles were cut at.
+    let src_tile = |ordinal: usize| -> Result<u64, PalwStepRefuteError> {
+        let r = node.input_refs.get(ordinal).copied().ok_or(PalwStepRefuteError::Unadjudicable)?;
+        let (n, _) = profile.resolve_node_slot(table_first_slot()? + r as u32).ok_or(PalwStepRefuteError::Unadjudicable)?;
+        Ok(n.tile_len as u64)
+    };
+    // The lane-sliced family's slice for THIS step, from the same derivation the leaf set used.
+    let node_out_w = match node.out_len {
+        crate::palw_step::PalwStepOutLenV1::Fixed { elements } => elements as u64,
+        crate::palw_step::PalwStepOutLenV1::KvScaled { .. } => 0,
+    };
+    let lane_slice = qwen36_lane_slice_v1(node, node_out_w, gather.0.tile_index)
+        .or_else(|| qwen36_head_norm_slice_v1(node, node_out_w, gather.0.tile_index));
+    // A slice `[start, end)` of a source row, out of the COVERING TILES the leaf set opened for
+    // it (the row arrives as those tiles concatenated, starting at the first covering tile).
+    let extract = |opened: &Vec<u32>, src_tile: u64, start: u64, end: u64| -> Result<Vec<i32>, PalwStepRefuteError> {
+        let first_tile_lane = (start / src_tile.max(1)) * src_tile;
+        let from = (start - first_tile_lane) as usize;
+        let to = (end - first_tile_lane) as usize;
+        if to > opened.len() || from > to {
+            return Err(PalwStepRefuteError::InputSetNotCanonical("an opened slice does not cover its kernel's lanes"));
+        }
+        Ok(opened[from..to].iter().map(|v| *v as i32).collect())
+    };
+
+    // Ref `ordinal` as this step's lanes: the slice when the kernel is lane-sliced, the whole
+    // row otherwise. One reader for every elementwise arm, so an arm cannot forget the slice.
+    let lane_input = |ordinal: usize| -> Result<Vec<i32>, PalwStepRefuteError> {
+        let opened = inputs.get(ordinal).ok_or(PalwStepRefuteError::InputSetNotCanonical("a lane op is missing an input row"))?;
+        match lane_slice {
+            Some((ls, le)) => extract(opened, src_tile(ordinal)?, ls, le),
+            None => Ok(as_i32(opened)),
+        }
+    };
+    // Where a per-lane parameter table starts for this step: the slice's own first lane.
+    let lane_param_base = lane_slice.map(|(ls, _)| ls as usize).unwrap_or(0);
 
     match op {
         // The gather, adjudicated the way BASE-0's is: the row comes from the registered table at
@@ -758,19 +833,26 @@ fn qwen36_row(
             need(1)?;
             Ok(out(a16::a16_rms_norm(&as_i32(&inputs[0]), profile.base0_rms_eps_q).map_err(shape16)?))
         }
+        // The same norm over ONE head — the challenged tile's own slice, which the leaf set
+        // opened and nothing wider.
+        Qwen36Op::HeadRmsNorm => {
+            need(1)?;
+            Ok(out(a16::a16_rms_norm(&lane_input(0)?, profile.base0_rms_eps_q).map_err(shape16)?))
+        }
         // **`eps` is a registered triple, not the profile's scalar.** The wide norm compares it
         // against a mean of squares of CODES, so it is only meaningful at the site's own exponent
         // — a shared constant rounds to nothing on a loud head and becomes the whole denominator
         // on a quiet one. The class registers it per head; the court reads what was registered.
         Qwen36Op::RmsNormWide => {
             need(1)?;
-            let x = as_i32(&inputs[0]);
+            let x = lane_input(0)?;
             let hd = profile.gdn_head_v_dim as usize;
             if hd == 0 || !x.len().is_multiple_of(hd) {
                 return Err(PalwStepRefuteError::InputSetNotCanonical("the wide-norm row is not a whole number of heads"));
             }
             let heads = x.len() / hd;
-            let eps = params(0, heads)?;
+            // Per head, at the challenged head's own offset when sliced.
+            let eps = params(lane_param_base / hd.max(1), heads)?;
             let mut row = Vec::with_capacity(x.len());
             for (h, head) in x.chunks_exact(hd).enumerate() {
                 row.extend(q36::q36_rms_norm_wide(head, eps[h]).map_err(shape36)?);
@@ -779,25 +861,25 @@ fn qwen36_row(
         }
         Qwen36Op::Requantize => {
             need(1)?;
-            let x = as_i32(&inputs[0]);
-            let p = params(0, x.len())?;
+            let x = lane_input(0)?;
+            let p = params(lane_param_base, x.len())?;
             Ok(out(a16::a16_requant(&x, &p).map_err(shape16)?))
         }
         Qwen36Op::RescaleRow => {
             need(1)?;
-            let x = as_i32(&inputs[0]);
-            let p = params(0, x.len())?;
+            let x = lane_input(0)?;
+            let p = params(lane_param_base, x.len())?;
             Ok(out(q36::q36_rescale_row(&x, &p).map_err(shape36)?))
         }
         Qwen36Op::AddElem => {
             need(2)?;
-            Ok(out(a16::a16_add_elem(&as_i32(&inputs[0]), &as_i32(&inputs[1])).map_err(shape16)?))
+            Ok(out(a16::a16_add_elem(&lane_input(0)?, &lane_input(1)?).map_err(shape16)?))
         }
         // **Per head over the row** — the node's width is the concatenation of every head, so a
         // one-head step space would not contain heads 1..N. The head dim is the profile's.
         Qwen36Op::L2Norm => {
             need(1)?;
-            let x = as_i32(&inputs[0]);
+            let x = lane_input(0)?;
             let hd = profile.gdn_head_k_dim as usize;
             if hd == 0 || !x.len().is_multiple_of(hd) {
                 return Err(PalwStepRefuteError::InputSetNotCanonical("the l2 row is not a whole number of heads"));
@@ -810,7 +892,12 @@ fn qwen36_row(
         }
         Qwen36Op::Sigmoid => {
             need(1)?;
-            Ok(out(q36::q36_sigmoid_gate(&as_i32(&inputs[0]))))
+            Ok(out(q36::q36_sigmoid_gate(&lane_input(0)?)))
+        }
+        // Lane-pure and parameterless: the slice the leaf set opened is the slice this computes.
+        Qwen36Op::Silu => {
+            need(1)?;
+            Ok(out(crate::palw_base0_ops::silu(&lane_input(0)?)))
         }
         // `exp(a · softplus(dt))` for the head's registered coefficient, which rides the triple's
         // zero at Q[K] exactly as the converter writes it.
@@ -822,66 +909,77 @@ fn qwen36_row(
         }
         Qwen36Op::GateApply => {
             need(2)?;
+            // One triple for the whole node — a per-node narrowing has no lane offset.
             let p = params(0, 1)?[0];
-            Ok(out(q36::q36_gate_apply(&as_i32(&inputs[0]), &as_i32(&inputs[1]), p).map_err(shape36)?))
+            Ok(out(q36::q36_gate_apply(&lane_input(0)?, &lane_input(1)?, p).map_err(shape36)?))
         }
         Qwen36Op::MulWide => {
             need(2)?;
-            let a = as_i32(&inputs[0]);
-            let p = params(0, a.len())?;
-            Ok(out(q36::q36_mul_wide(&a, &as_i32(&inputs[1]), &p).map_err(shape36)?))
+            let a = lane_input(0)?;
+            let p = params(lane_param_base, a.len())?;
+            Ok(out(q36::q36_mul_wide(&a, &lane_input(1)?, &p).map_err(shape36)?))
         }
-        // **The window is assembled from the last (up to) four positions' projections** — three
-        // rows per position, position-major, exactly the order `canonical_input_leaves` lists.
-        // Missing leading positions are zero rows, which is the window the engine starts from.
+        // **The channel-sliced window** (the depthwise property as adjudication): output channel
+        // `c` depends only on lane `c` of ONE ref across the four positions, so the leaf set
+        // opened, per position, exactly the covering tiles of the challenged channels within that
+        // one ref — one row per position, at most four positions, oldest first, zero rows for
+        // positions before the sequence start. The taps and the triples are read at the GLOBAL
+        // channel offset, which the same slice derivation names.
         Qwen36Op::SsmConv => {
-            if inputs.is_empty() || !inputs.len().is_multiple_of(3) || inputs.len() > 12 {
-                return Err(PalwStepRefuteError::InputSetNotCanonical("the conv window is three rows per position, at most four positions"));
+            let widths = ref_widths().ok_or(PalwStepRefuteError::Unadjudicable)?;
+            let Some((slice_ref, s0, s1, global_start)) = qwen36_conv_slice_v1(node, &widths, gather.0.tile_index) else {
+                return Err(PalwStepRefuteError::Unadjudicable);
+            };
+            let channels = (s1 - s0) as usize;
+            if inputs.is_empty() || inputs.len() > 4 {
+                return Err(PalwStepRefuteError::InputSetNotCanonical("the conv window is one sliced row per position, at most four"));
             }
-            let rows: Vec<Vec<i32>> = inputs
-                .chunks_exact(3)
-                .map(|c| {
-                    let mut row = as_i32(&c[0]);
-                    row.extend(as_i32(&c[1]));
-                    row.extend(as_i32(&c[2]));
-                    row
-                })
-                .collect();
-            let channels = rows.last().map(|r| r.len()).unwrap_or(0);
-            if channels == 0 || rows.iter().any(|r| r.len() != channels) {
+            let table_first_slot =
+                gather.0.node_slot - intra_table_index(profile, gather.0.node_slot).ok_or(PalwStepRefuteError::Unadjudicable)? as u32;
+            let src_tile = {
+                let r = node.input_refs.get(slice_ref).copied().ok_or(PalwStepRefuteError::Unadjudicable)?;
+                let (n, _) = profile.resolve_node_slot(table_first_slot + r as u32).ok_or(PalwStepRefuteError::Unadjudicable)?;
+                n.tile_len as u64
+            };
+            let rows: Vec<Vec<i32>> =
+                inputs.iter().map(|opened| extract(opened, src_tile, s0, s1)).collect::<Result<_, _>>()?;
+            if rows.iter().any(|r| r.len() != channels) {
                 return Err(PalwStepRefuteError::InputSetNotCanonical("the window's positions disagree about the channel count"));
             }
             let mut window = vec![0i32; (4 - rows.len()) * channels];
             for row in &rows {
                 window.extend_from_slice(row);
             }
-            // `q36_ssm_conv` reads `window[t * channels + c]` — position-major, oldest first —
-            // which is exactly the concatenation above.
-            let byte_len = u32::try_from(window.len()).map_err(|_| PalwStepRefuteError::Unadjudicable)?;
+            // Taps and triples at the global channel offset — the slice derivation's fourth
+            // return, so the weights this side reads are the weights those channels own.
+            let taps_bytes = u32::try_from(channels * 4).map_err(|_| PalwStepRefuteError::Unadjudicable)?;
+            let taps_off = u32::try_from(global_start * 4).map_err(|_| PalwStepRefuteError::Unadjudicable)?;
             let taps = weights
-                .operand_bytes(node.weight_name.as_str(), layer, 0, byte_len)
+                .operand_bytes(node.weight_name.as_str(), layer, taps_off, taps_bytes)
                 .ok_or(PalwStepRefuteError::Unadjudicable)?;
-            if taps.len() != window.len() {
+            if taps.len() != channels * 4 {
                 return Err(PalwStepRefuteError::Unadjudicable);
             }
             let taps: Vec<i32> = taps.iter().map(|b| *b as i8 as i32).collect();
             let p = {
                 let name = format!("{}.a16", node.weight_name);
                 let width = A16QuantParams::WIRE_BYTES;
+                let off = u32::try_from(global_start as usize * width).map_err(|_| PalwStepRefuteError::Unadjudicable)?;
                 let len = u32::try_from(channels * width).map_err(|_| PalwStepRefuteError::Unadjudicable)?;
-                let bytes = weights.operand_bytes(name.as_str(), layer, 0, len).ok_or(PalwStepRefuteError::Unadjudicable)?;
-                if bytes.len() != len as usize {
+                let bytes = weights.operand_bytes(name.as_str(), layer, off, len).ok_or(PalwStepRefuteError::Unadjudicable)?;
+                if bytes.len() != channels * width {
                     return Err(PalwStepRefuteError::Unadjudicable);
                 }
                 bytes
                     .chunks_exact(width)
-                    .map(|c| A16QuantParams::from_wire(c).map_err(|_| PalwStepRefuteError::InputSetNotCanonical("a conv triple is malformed")))
+                    .map(|c| {
+                        A16QuantParams::from_wire(c)
+                            .map_err(|_| PalwStepRefuteError::InputSetNotCanonical("a conv triple is malformed"))
+                    })
                     .collect::<Result<Vec<_>, _>>()?
             };
             Ok(out(q36::q36_ssm_conv(&window, &taps, channels, &p).map_err(shape36)?))
         }
-        // The rotation reads the pinned table at this position, which the profile carries rather
-        // than the oracle: a table the court derives is a table the court can get wrong.
         Qwen36Op::RopePartial => {
             need(1)?;
             let x = as_i32(&inputs[0]);
@@ -924,13 +1022,53 @@ fn qwen36_row(
             let routed = q36::q36_router_topk(&logits, k, up).map_err(shape36)?;
             Ok(routed.into_iter().flat_map(|r| [r.expert as i32 as u32, r.weight_q as u32]).collect())
         }
+        // **Expert-strided**: the challenged tile's lanes, extracted from each expert's block —
+        // `k` ranges the leaf set opened as covering tiles, reassembled here into the compact
+        // `k × tile` layout the combine's own per-lane arithmetic runs on. The weight row rides
+        // whole (it is `2k` lanes). Width for the compute is the SLICE's, not the node's: the
+        // combine is lane-pure across blocks, so a tile-wide combine of tile-wide slices is the
+        // same arithmetic as the row-wide one at those lanes.
         Qwen36Op::MoeCombine => {
             need(2)?;
-            let outputs = as_i32(&inputs[0]);
-            let w = as_i32(&inputs[1]);
-            let width = fixed_width()?;
-            let p = params(0, 1)?[0];
-            Ok(out(q36::q36_moe_combine(&outputs, &w, width, p).map_err(shape36)?))
+            let widths = ref_widths().ok_or(PalwStepRefuteError::Unadjudicable)?;
+            let out_w = fixed_width()? as u64;
+            match qwen36_combine_slice_v1(node, widths.first().copied().unwrap_or(0), out_w, gather.0.tile_index) {
+                Some(ranges) => {
+                    let st = src_tile(0)?;
+                    // Block-aligned geometry means no two ranges share a covering tile (the
+                    // expert width is a multiple of the producer's tile — checked, not assumed),
+                    // so the opened row is the ranges' covering runs, in order, disjoint.
+                    if ranges.iter().any(|&(rs, _)| !(rs % out_w.max(1) == ranges[0].0 % out_w.max(1))) || out_w % st != 0 {
+                        return Err(PalwStepRefuteError::Unadjudicable);
+                    }
+                    let opened = &inputs[0];
+                    let mut outputs = Vec::new();
+                    let mut consumed = 0usize;
+                    for &(rs, re) in &ranges {
+                        let first_tile = rs / st;
+                        let last_tile = (re - 1) / st;
+                        let run_lanes = ((last_tile - first_tile + 1) * st) as usize;
+                        let offset = (rs - first_tile * st) as usize;
+                        let take = (re - rs) as usize;
+                        if consumed + offset + take > opened.len() {
+                            return Err(PalwStepRefuteError::InputSetNotCanonical("the combine's opened tiles do not cover its ranges"));
+                        }
+                        outputs.extend(opened[consumed + offset..consumed + offset + take].iter().map(|v| *v as i32));
+                        consumed += run_lanes;
+                    }
+                    let w = as_i32(&inputs[1]);
+                    let p = params(0, 1)?[0];
+                    let tile_width = (ranges.first().map(|(a, b)| b - a).unwrap_or(0)) as usize;
+                    Ok(out(q36::q36_moe_combine(&outputs, &w, tile_width, p).map_err(shape36)?))
+                }
+                None => {
+                    let outputs = as_i32(&inputs[0]);
+                    let w = as_i32(&inputs[1]);
+                    let width = fixed_width()?;
+                    let p = params(0, 1)?[0];
+                    Ok(out(q36::q36_moe_combine(&outputs, &w, width, p).map_err(shape36)?))
+                }
+            }
         }
         Qwen36Op::Softmax => {
             need(1)?;
@@ -960,68 +1098,49 @@ fn qwen36_row(
                 Ok(out(a16::a16_attn_values(&row, &series, heads, kv_heads, d_head, &p).map_err(shape16)?))
             }
         }
-        // **The recurrence, replayed from the genesis** — the same anchoring the float `GdnCore`
-        // uses, and for the same reason: the state is never an opened operand, so the court
-        // recomputes it from the committed per-position rows. Five rows per position, position-
-        // major and ascending, exactly as `canonical_input_leaves` lists them: the unit keys, the
-        // conv row (whose third block is `v`), the unit queries, the decay gates and the beta
-        // gates. A registered state chunk map later turns this checkpoint-anchored.
+        // **The recurrence, replayed from the genesis, ONE HEAD at a time.** The challenged tile
+        // IS the head (`tile_len == gdn_head_v_dim`), and the leaf set opened, per replay
+        // position, only the covering tiles of this head's five slices — the same derivation
+        // (`qwen36_gdn_slice_v1`) both sides read. Replaying one head instead of thirty-two is
+        // not a byte optimization: it divides the court's recomputation by the head count, which
+        // is what lets a 40-layer hybrid have a context at all (the whole-graph form priced
+        // 536 M multiply-accumulates at the declared context, 32x the terminal ceiling).
+        //
+        // A registered state chunk map later turns the replay checkpoint-anchored; the sentinel
+        // it would use stays refused today.
         Qwen36Op::GdnStep => {
+            let widths = ref_widths().ok_or(PalwStepRefuteError::Unadjudicable)?;
+            let Some(slices) = qwen36_gdn_slice_v1(profile, node, &widths, gather.0.tile_index) else {
+                return Err(PalwStepRefuteError::Unadjudicable);
+            };
             if inputs.is_empty() || !inputs.len().is_multiple_of(5) {
-                return Err(PalwStepRefuteError::InputSetNotCanonical("the recurrence reads five rows per position"));
+                return Err(PalwStepRefuteError::InputSetNotCanonical("the recurrence reads five sliced rows per position"));
             }
             let (hd_k, hd_v) = (profile.gdn_head_k_dim as usize, profile.gdn_head_v_dim as usize);
-            let heads = profile.gdn_heads as usize;
-            if hd_k == 0 || hd_v == 0 || heads == 0 {
-                return Err(PalwStepRefuteError::Unadjudicable);
-            }
-            // Four registered triples per head: read, delta, write (a shift in `zero`), out.
-            let p = params(0, 4 * heads)?;
-            let mut states: Vec<q36::Qwen36GdnStateV1> =
-                (0..heads).map(|_| q36::Qwen36GdnStateV1 { d_v: hd_v, d_k: hd_k, s: vec![0; hd_v * hd_k] }).collect();
-            let k_heads = {
-                // The key row tiles the value heads: `vh % k_heads`, as the engine and the
-                // reference both read it.
-                let k_row = inputs[0].len();
-                if k_row == 0 || !k_row.is_multiple_of(hd_k) {
-                    return Err(PalwStepRefuteError::InputSetNotCanonical("the key row is not a whole number of heads"));
-                }
-                k_row / hd_k
+            let vh = gather.0.tile_index as usize;
+            let table_first_slot =
+                gather.0.node_slot - intra_table_index(profile, gather.0.node_slot).ok_or(PalwStepRefuteError::Unadjudicable)? as u32;
+            let src_tile = |ordinal: usize| -> Result<u64, PalwStepRefuteError> {
+                let r = node.input_refs.get(ordinal).copied().ok_or(PalwStepRefuteError::Unadjudicable)?;
+                let (n, _) = profile.resolve_node_slot(table_first_slot + r as u32).ok_or(PalwStepRefuteError::Unadjudicable)?;
+                Ok(n.tile_len as u64)
             };
+            let tiles = [src_tile(0)?, src_tile(1)?, src_tile(2)?, src_tile(3)?, src_tile(4)?];
+            // Four registered triples for THIS head: read, delta, write (a shift in `zero`), out.
+            let p = params(4 * vh, 4)?;
+            let gdn = q36::Qwen36GdnParamsV1 { read: p[0], delta: p[1], write_shift: p[2].zero as i32, out: p[3] };
+            let mut state = q36::Qwen36GdnStateV1 { d_v: hd_v, d_k: hd_k, s: vec![0; hd_v * hd_k] };
             let mut last = Vec::new();
             for step in inputs.chunks_exact(5) {
-                let unit_k = as_i32(&step[0]);
-                let conv = as_i32(&step[1]);
-                let unit_q = as_i32(&step[2]);
-                let decays = as_i32(&step[3]);
-                let betas = as_i32(&step[4]);
-                let dk_total = k_heads * hd_k;
-                if conv.len() < 2 * dk_total + heads * hd_v || decays.len() < heads || betas.len() < heads {
-                    return Err(PalwStepRefuteError::InputSetNotCanonical("a replay position's rows do not cover the geometry"));
+                let unit_k = extract(&step[0], tiles[0], slices[0].0, slices[0].1)?;
+                let v = extract(&step[1], tiles[1], slices[1].0, slices[1].1)?;
+                let unit_q = extract(&step[2], tiles[2], slices[2].0, slices[2].1)?;
+                let decay = extract(&step[3], tiles[3], slices[3].0, slices[3].1)?;
+                let beta = extract(&step[4], tiles[4], slices[4].0, slices[4].1)?;
+                if unit_k.len() != hd_k || v.len() != hd_v || unit_q.len() != hd_k || decay.len() != 1 || beta.len() != 1 {
+                    return Err(PalwStepRefuteError::InputSetNotCanonical("a replay position's slices do not match the head geometry"));
                 }
-                let v_block = &conv[2 * dk_total..];
-                let mut row = Vec::with_capacity(heads * hd_v);
-                for vh in 0..heads {
-                    let kh = vh % k_heads;
-                    let gdn = q36::Qwen36GdnParamsV1 {
-                        read: p[4 * vh],
-                        delta: p[4 * vh + 1],
-                        write_shift: p[4 * vh + 2].zero as i32,
-                        out: p[4 * vh + 3],
-                    };
-                    let head_out = q36::q36_gdn_step(
-                        &mut states[vh],
-                        &unit_k[kh * hd_k..(kh + 1) * hd_k],
-                        &v_block[vh * hd_v..(vh + 1) * hd_v],
-                        &unit_q[kh * hd_k..(kh + 1) * hd_k],
-                        decays[vh] as i64,
-                        betas[vh] as i64,
-                        gdn,
-                    )
-                    .map_err(shape36)?;
-                    row.extend(head_out);
-                }
-                last = row;
+                last = q36::q36_gdn_step(&mut state, &unit_k, &v, &unit_q, decay[0] as i64, beta[0] as i64, gdn).map_err(shape36)?;
             }
             Ok(out(last))
         }
@@ -1735,6 +1854,162 @@ pub struct PalwTiledDecodePinV1 {
     pub beat_lane: u32,
 }
 
+/// **One ref's lane slice for a head-sliced GDN step** — the single derivation the leaf set, the
+/// executor and the cost bound all read (a second copy of this mapping is the "second
+/// name-to-bytes mapping" defect: it fails as a wrong conviction at the first real dispute).
+///
+/// The kernel's wiring order is part of its semantics: refs are `[unit_k, conv, unit_q, decay,
+/// beta]`. The challenged tile IS the head (`tile_len == gdn_head_v_dim`), the key head tiles as
+/// `vh % k_heads`, and the conv row's value block is its TAIL (`width − heads · hd_v`).
+/// Returns one `(lane_start, lane_end)` per ref, in ref order; `None` when the node is not the
+/// head-sliced kernel or the geometry does not cohere — the caller then treats the step as any
+/// other (whole rows), which for a mis-declared node means the mismatch surfaces as evidence
+/// nothing can verify rather than as a silent narrowing.
+pub fn qwen36_gdn_slice_v1(
+    profile: &PalwShapeProfileV3,
+    node: &crate::palw_step::PalwStepNodeV1,
+    ref_widths: &[u64],
+    tile_index: u32,
+) -> Option<Vec<(u64, u64)>> {
+    if node.kernel_semantics_id != kernel_semantics_id_v1(KDESC_Q36_GDN_STEP) {
+        return None;
+    }
+    let (heads, hd_k, hd_v) = (profile.gdn_heads as u64, profile.gdn_head_k_dim as u64, profile.gdn_head_v_dim as u64);
+    if heads == 0 || hd_k == 0 || hd_v == 0 || node.tile_len as u64 != hd_v || ref_widths.len() != 5 {
+        return None;
+    }
+    let vh = tile_index as u64;
+    if vh >= heads {
+        return None;
+    }
+    let k_heads = ref_widths[0] / hd_k.max(1);
+    if k_heads == 0 || ref_widths[0] != k_heads * hd_k || ref_widths[2] != ref_widths[0] {
+        return None;
+    }
+    let kh = vh % k_heads;
+    let v_block = ref_widths[1].checked_sub(heads * hd_v)?;
+    if ref_widths[3] < heads || ref_widths[4] < heads {
+        return None;
+    }
+    Some(vec![
+        (kh * hd_k, (kh + 1) * hd_k),
+        (v_block + vh * hd_v, v_block + (vh + 1) * hd_v),
+        (kh * hd_k, (kh + 1) * hd_k),
+        (vh, vh + 1),
+        (vh, vh + 1),
+    ])
+}
+
+/// **The lane-sliced elementwise family** — every op whose lane `c` depends on lane `c` of its
+/// refs and nothing else, so the court's slice is the challenged tile's own range, identically on
+/// every ref. Membership is BY KERNEL ID (the descriptors say "lane-sliced" in their own names);
+/// an op that reduces across lanes — a norm, a softmax, the router — can never join, whatever its
+/// width, because its output is not a function of the slice.
+pub fn qwen36_lane_slice_v1(node: &crate::palw_step::PalwStepNodeV1, out_w: u64, tile_index: u32) -> Option<(u64, u64)> {
+    let lane_sliced = [
+        KDESC_A16_REQUANTIZE,
+        KDESC_A16_ADD_ELEM,
+        KDESC_Q36_SIGMOID,
+        KDESC_Q36_GATE_APPLY,
+        KDESC_Q36_MUL_WIDE,
+        KDESC_Q36_RESCALE_ROW,
+        KDESC_Q36_SILU,
+    ];
+    if !lane_sliced.iter().any(|d| kernel_semantics_id_v1(d) == node.kernel_semantics_id) {
+        return None;
+    }
+    let tile = node.tile_len as u64;
+    let start = (tile_index as u64).checked_mul(tile)?;
+    if start >= out_w {
+        return None;
+    }
+    Some((start, (start + tile).min(out_w)))
+}
+
+/// **The head-reducing norms' slice.** `q36_l2_norm` and `q36_rms_norm_wide` reduce WITHIN a head
+/// and never across heads, so output lane `c` depends on its own head's lanes and nothing else —
+/// the court opens one head, not the row. Not the lane-sliced family (their output is not a
+/// function of the challenged LANES; it is a function of the challenged HEAD), which is why this
+/// is its own derivation and why the tile must be the head width for it to apply.
+pub fn qwen36_head_norm_slice_v1(node: &crate::palw_step::PalwStepNodeV1, out_w: u64, tile_index: u32) -> Option<(u64, u64)> {
+    let head_reducing = [KDESC_Q36_L2_NORM, KDESC_Q36_RMS_NORM_WIDE, KDESC_Q36_HEAD_RMS_NORM];
+    if !head_reducing.iter().any(|d| kernel_semantics_id_v1(d) == node.kernel_semantics_id) {
+        return None;
+    }
+    let head = node.tile_len as u64;
+    if head == 0 || !out_w.is_multiple_of(head) {
+        return None;
+    }
+    let start = (tile_index as u64).checked_mul(head)?;
+    if start >= out_w {
+        return None;
+    }
+    Some((start, start + head))
+}
+
+/// **The mixture combine's expert-strided slice.** Output lane `c` reads lane `c` of EVERY
+/// expert's block — `outputs[e·width + c]` — so a challenged tile opens `k` ranges of its own
+/// lane span, one per block, and the tiny weight row whole. Returns the ranges for the outputs
+/// ref; the caller opens the weights ref unsliced.
+pub fn qwen36_combine_slice_v1(
+    node: &crate::palw_step::PalwStepNodeV1,
+    outputs_width: u64,
+    out_w: u64,
+    tile_index: u32,
+) -> Option<Vec<(u64, u64)>> {
+    if kernel_semantics_id_v1(KDESC_Q36_MOE_COMBINE) != node.kernel_semantics_id {
+        return None;
+    }
+    if out_w == 0 || !outputs_width.is_multiple_of(out_w) {
+        return None;
+    }
+    let k = outputs_width / out_w;
+    let tile = node.tile_len as u64;
+    let start = (tile_index as u64).checked_mul(tile)?;
+    if start >= out_w {
+        return None;
+    }
+    let end = (start + tile).min(out_w);
+    Some((0..k).map(|e| (e * out_w + start, e * out_w + end)).collect())
+}
+
+/// **The channel-sliced conv's lane slice** — the depthwise property as a derivation: output
+/// channel `c` depends only on lane `c` of ONE ref across the window (`[q | k | v]`
+/// concatenated), so a challenged tile of channels opens exactly one ref's matching range per
+/// position and the other two refs open NOTHING. Returns `(ref_ordinal, lane_start, lane_end)`
+/// within that ref, plus the global channel start (which names the taps and the triples).
+pub fn qwen36_conv_slice_v1(
+    node: &crate::palw_step::PalwStepNodeV1,
+    ref_widths: &[u64],
+    tile_index: u32,
+) -> Option<(usize, u64, u64, u64)> {
+    if node.kernel_semantics_id != kernel_semantics_id_v1(KDESC_Q36_SSM_CONV) {
+        return None;
+    }
+    if ref_widths.len() != 3 {
+        return None;
+    }
+    let width: u64 = ref_widths.iter().sum();
+    let tile = node.tile_len as u64;
+    let start = (tile_index as u64).checked_mul(tile)?;
+    if start >= width {
+        return None;
+    }
+    let end = (start + tile).min(width);
+    // The slice must sit inside one ref — a court cannot open half a channel from each of two
+    // rows. Alignment is the profile's to arrange (every region width a multiple of the tile),
+    // and a misaligned declaration is refused rather than split.
+    let mut region_start = 0u64;
+    for (ordinal, w) in ref_widths.iter().enumerate() {
+        let region_end = region_start + w;
+        if start >= region_start && end <= region_end {
+            return Some((ordinal, start - region_start, end - region_start, start));
+        }
+        region_start = region_end;
+    }
+    None
+}
+
 /// **Refute a committed decode token under the tiled scheme.**
 ///
 /// The tie rule is [`base0_decode_token_select_v1`]'s, restated arithmetically: lane `j` beats the
@@ -2185,8 +2460,49 @@ fn canonical_input_leaves_anchored(
         return Some(out);
     }
 
+    // **The kernel-derived slices** (the -1e/-ae discipline: the slice set is a property of the
+    // KERNEL PROGRAM, never a registration-declared narrowing, and it is derived once — here,
+    // in the executor and in the cost bound, all through the same two functions).
+    //
+    // The head-sliced recurrence opens, per replay position, only the tiles covering the
+    // challenged head's five slices; the channel-sliced conv opens, per window position, only the
+    // one ref whose region holds the challenged channels. A node carrying either kernel id whose
+    // geometry does not cohere gets NO slice (`None` from the derivation) and falls through to
+    // whole rows — the mismatch then surfaces as evidence nothing verifies, not as a silent
+    // narrowing.
+    let ref_widths: Option<Vec<u64>> = node
+        .input_refs
+        .iter()
+        .map(|&r| {
+            let slot = if r >= PALW_STEP_INPUT_SENTINEL_MIN { return None } else { table_first_slot + r as u32 };
+            let (n, _) = profile.resolve_node_slot(slot)?;
+            match n.out_len {
+                crate::palw_step::PalwStepOutLenV1::Fixed { elements } => Some(elements as u64),
+                crate::palw_step::PalwStepOutLenV1::KvScaled { .. } => None,
+            }
+        })
+        .collect();
+    let gdn_slices = ref_widths.as_deref().and_then(|w| qwen36_gdn_slice_v1(profile, node, w, out_coord.tile_index));
+    let conv_slice = ref_widths.as_deref().and_then(|w| qwen36_conv_slice_v1(node, w, out_coord.tile_index));
+    let node_out_w = match node.out_len {
+        crate::palw_step::PalwStepOutLenV1::Fixed { elements } => elements as u64,
+        crate::palw_step::PalwStepOutLenV1::KvScaled { .. } => 0,
+    };
+    let lane_slice = qwen36_lane_slice_v1(node, node_out_w, out_coord.tile_index)
+        .or_else(|| qwen36_head_norm_slice_v1(node, node_out_w, out_coord.tile_index));
+    let combine_slices = ref_widths
+        .as_deref()
+        .and_then(|w| qwen36_combine_slice_v1(node, w.first().copied().unwrap_or(0), node_out_w, out_coord.tile_index));
+
     for &(call, pos) in &positions {
-        for &r in &node.input_refs {
+        for (ordinal, &r) in node.input_refs.iter().enumerate() {
+            // The conv opens ONE ref per position; the others contribute no lanes to the
+            // challenged channels and are not opened at all.
+            if let Some((slice_ref, _, _, _)) = conv_slice {
+                if ordinal != slice_ref {
+                    continue;
+                }
+            }
             let in_slot = if r >= PALW_STEP_INPUT_SENTINEL_MIN {
                 match r {
                     PALW_STEP_INPUT_LAYER_IN => {
@@ -2206,12 +2522,39 @@ fn canonical_input_leaves_anchored(
                 crate::palw_step::PalwStepOutLenV1::Fixed { elements } => elements as u64,
                 crate::palw_step::PalwStepOutLenV1::KvScaled { multiplier } => multiplier as u64 * kv_len,
             };
-            let tiles = len.div_ceil(in_node.tile_len as u64) as u32;
-            let mut row = Vec::with_capacity(tiles as usize);
-            for t in 0..tiles {
-                let coord = PalwStepCoordinateV1 { call_index: call, node_slot: in_slot, position: pos, tile_index: t };
-                let idx = canonical_step_leaf_index(profile, context, &coord)?;
-                row.push((idx, coord));
+            // Whole row, or the kernel's slice(s) of it — one range for the head-sliced,
+            // channel-sliced and lane-sliced kernels, `k` strided ranges for the combine's
+            // outputs ref, whole for everything else.
+            let ranges: Vec<(u64, u64)> = if let Some(slices) = &gdn_slices {
+                vec![slices[ordinal]]
+            } else if let Some((_, rs, re, _)) = conv_slice {
+                vec![(rs, re)]
+            } else if let Some((ls, le)) = lane_slice {
+                vec![(ls.min(len), le.min(len))]
+            } else if let Some(strided) = &combine_slices {
+                if ordinal == 0 { strided.clone() } else { vec![(0, len)] }
+            } else {
+                vec![(0, len)]
+            };
+            let src_tile = in_node.tile_len as u64;
+            let mut row = Vec::new();
+            let mut last_emitted: Option<u32> = None;
+            for &(lane_start, lane_end) in &ranges {
+                if lane_end > len || lane_start >= lane_end {
+                    return None;
+                }
+                let first_tile = (lane_start / src_tile) as u32;
+                let last_tile = ((lane_end - 1) / src_tile) as u32;
+                for t in first_tile..=last_tile {
+                    // Strided ranges can share a boundary tile; a leaf is opened once.
+                    if last_emitted == Some(t) {
+                        continue;
+                    }
+                    last_emitted = Some(t);
+                    let coord = PalwStepCoordinateV1 { call_index: call, node_slot: in_slot, position: pos, tile_index: t };
+                    let idx = canonical_step_leaf_index(profile, context, &coord)?;
+                    row.push((idx, coord));
+                }
             }
             out.push(row);
         }
@@ -2600,7 +2943,11 @@ fn run_program(
         | KernelProgram::Qwen36(Qwen36Op::MatMulRequant)
         | KernelProgram::Qwen36(Qwen36Op::MatMulRescale)
         | KernelProgram::Qwen36(Qwen36Op::MatMulGrouped)
-        | KernelProgram::Qwen36(Qwen36Op::MatMulGroupedWide) => (gather.0.tile_index as usize).saturating_mul(node.tile_len as usize),
+        | KernelProgram::Qwen36(Qwen36Op::MatMulGroupedWide)
+        // The two SLICED kernels recompute only the challenged tile's lanes — the head, or the
+        // channel range — and say so, exactly as the tile-local matmuls do.
+        | KernelProgram::Qwen36(Qwen36Op::GdnStep)
+        | KernelProgram::Qwen36(Qwen36Op::SsmConv) => (gather.0.tile_index as usize).saturating_mul(node.tile_len as usize),
         _ => 0,
     };
     let row = match program {

@@ -275,13 +275,55 @@ pub fn derive_court_cost_v1(profile: &PalwShapeProfileV3) -> Result<PalwCourtCos
 
             // The artifact bytes this node's parameters occupy, per catalogued kernel. A node with
             // no weight operand opens nothing from the artifact — its inputs ride the leg.
+            let lane_sliced = [
+                crate::palw_step_refute::KDESC_A16_REQUANTIZE,
+                crate::palw_step_refute::KDESC_A16_ADD_ELEM,
+                crate::palw_step_refute::KDESC_Q36_SIGMOID,
+                crate::palw_step_refute::KDESC_Q36_GATE_APPLY,
+                crate::palw_step_refute::KDESC_Q36_MUL_WIDE,
+                crate::palw_step_refute::KDESC_Q36_RESCALE_ROW,
+                crate::palw_step_refute::KDESC_Q36_SILU,
+            ]
+            .iter()
+            .any(|d| crate::palw_step::kernel_semantics_id_v1(d) == node.kernel_semantics_id)
+                || [
+                    crate::palw_step_refute::KDESC_Q36_L2_NORM,
+                    crate::palw_step_refute::KDESC_Q36_RMS_NORM_WIDE,
+                    crate::palw_step_refute::KDESC_Q36_HEAD_RMS_NORM,
+                ]
+                    .iter()
+                    .any(|d| crate::palw_step::kernel_semantics_id_v1(d) == node.kernel_semantics_id);
+            let strided_combine = node.kernel_semantics_id
+                == crate::palw_step::kernel_semantics_id_v1(crate::palw_step_refute::KDESC_Q36_MOE_COMBINE);
+            let head_sliced_gdn = node.op_kind == Op::GatedDeltaNet
+                && node.kernel_semantics_id
+                    == crate::palw_step::kernel_semantics_id_v1(crate::palw_step_refute::KDESC_Q36_GDN_STEP);
+            let sliced_conv = node.op_kind == Op::SsmConv
+                && node.kernel_semantics_id
+                    == crate::palw_step::kernel_semantics_id_v1(crate::palw_step_refute::KDESC_Q36_SSM_CONV);
             let opening = if node.weight_name.is_empty() {
                 0
             } else {
+                let attn_reduction = [crate::palw_step_refute::KDESC_A16_ATTN_SCORES, crate::palw_step_refute::KDESC_A16_ATTN_VALUES]
+                    .iter()
+                    .any(|d| crate::palw_step::kernel_semantics_id_v1(d) == node.kernel_semantics_id);
                 let payload = match node.op_kind {
+                    // The attention reductions multiply ACTIVATIONS (q·K, probs·V); their named
+                    // "weight" is one narrowing triple, not a matrix, so charging `tile × in_w`
+                    // priced an opening the executor never requests — 65 KiB of nothing at the
+                    // scores step, which was the class's binding node for one whole round of the
+                    // derivation.
+                    Op::MatMulQuant if attn_reduction => 17,
+                    // The head-sliced recurrence opens its head's four registered triples.
+                    Op::GatedDeltaNet if head_sliced_gdn => 4 * 17,
                     // Tile-local since Decision B: the tile's own weight rows, one byte per int8.
                     Op::MatMulQuant => tile.checked_mul(in_w).ok_or_else(over)?,
-                    // (multiplier LE, shift, zero LE) per channel.
+                    // (multiplier LE, shift, zero LE) per channel — per SLICE channel where the
+                    // kernel is lane-sliced, because the executor reads its triples at the
+                    // slice's own offset and nothing else is served.
+                    Op::MulElem if lane_sliced || strided_combine => 9u64.checked_mul(tile.min(out_w)).ok_or_else(over)?,
+                    // Four taps and one triple per SLICE channel.
+                    Op::SsmConv if sliced_conv => 21u64.checked_mul(tile.min(out_w)).ok_or_else(over)?,
                     Op::MulElem => 9u64.checked_mul(out_w).ok_or_else(over)?,
                     // cos then sin, four bytes each, one pair per two lanes.
                     Op::RopeImrope => 8u64.checked_mul(out_w / 2).ok_or_else(over)?,
@@ -320,12 +362,49 @@ pub fn derive_court_cost_v1(profile: &PalwShapeProfileV3) -> Result<PalwCourtCos
             // indices, so keying this off the checkpoint sentinel charged them once and priced the
             // recurrence at 6,592 bytes where the court requires 327,680 of Merkle path alone.
             // `the_gdn_arm_covers_what_the_court_actually_opens` is that measurement.
+            // **The sliced kernels price what their court opens** — the same derivation
+            // (`qwen36_gdn_slice_v1` / `qwen36_conv_slice_v1`) the leaf set and the executor
+            // read, restated here as widths because the bound integrates over every tile while
+            // those functions answer for one. A head-sliced recurrence still replays every
+            // position, but each position opens one head's slices; the channel-sliced conv opens
+            // four window positions of ONE ref's channel range (it was priced at a single
+            // position before, which under-charged the window by 4x — found while the slicing
+            // moved the width the other way).
             let positions = match node.op_kind {
                 Op::GatedDeltaNet => n_ctx,
+                Op::SsmConv if sliced_conv => 4,
                 _ => 1,
             };
-            for r in &node.input_refs {
-                let width = input_width_v1(*r, table, profile).ok_or_else(over)?;
+            for (ordinal, r) in node.input_refs.iter().enumerate() {
+                let mut width = input_width_v1(*r, table, profile).ok_or_else(over)?;
+                if head_sliced_gdn {
+                    // Ref order is the kernel's: [unit_k, conv, unit_q, decay, beta] — one head's
+                    // slice of each.
+                    width = match ordinal {
+                        0 | 2 => profile.gdn_head_k_dim as u64,
+                        1 => profile.gdn_head_v_dim as u64,
+                        _ => 1,
+                    };
+                }
+                if sliced_conv {
+                    if ordinal != 0 {
+                        // One ref per position carries the challenged channels; the others open
+                        // nothing. Priced as ref 0 because the three regions share a tile width
+                        // and the bound wants the shape, not the identity.
+                        continue;
+                    }
+                    width = tile;
+                }
+                if lane_sliced {
+                    // Every ref opens the challenged tile's own lane range.
+                    width = tile.min(width);
+                }
+                if strided_combine && ordinal == 0 {
+                    // The outputs ref: `k` expert blocks, each contributing the tile's lanes.
+                    // `k` is the blocks in the concatenation — outputs width over the node's row.
+                    let k = width / out_w.max(1);
+                    width = k.max(1).checked_mul(tile).ok_or_else(over)?;
+                }
                 let src_tile = source_tile_len_v1(table, node, *r);
                 let leaves = match *r {
                     // The cache is one row per position however the reading node is programmed.
@@ -370,6 +449,16 @@ pub fn derive_court_cost_v1(profile: &PalwShapeProfileV3) -> Result<PalwCourtCos
             // estimate.
             let macs = match node.op_kind {
                 Op::MatMulQuant => tile.checked_mul(in_w).ok_or_else(over)?,
+                // The head-sliced form divides the recomputation by the head count: the court
+                // replays ONE head's `k_dim x v_dim` state, which is what lets a 40-layer hybrid
+                // have a context at all (the whole-graph form priced 536 M at the declared
+                // context, 32x the terminal ceiling — measured, not estimated, on the first
+                // profile to reach this arm).
+                Op::GatedDeltaNet if head_sliced_gdn => positions
+                    .checked_mul(profile.gdn_head_k_dim as u64)
+                    .and_then(|v| v.checked_mul(profile.gdn_head_v_dim as u64))
+                    .and_then(|v| v.checked_mul(4))
+                    .ok_or_else(over)?,
                 Op::GatedDeltaNet => positions
                     .checked_mul(profile.gdn_heads as u64)
                     .and_then(|v| v.checked_mul(profile.gdn_head_k_dim as u64))
@@ -1126,13 +1215,24 @@ mod tests {
         assert!(!p.gdn_nodes.is_empty(), "the fixture must actually carry a recurrence");
 
         let cost = derive_court_cost_v1(&p).expect("derivable");
-        // One pass over the recurrence's own state, at every position the court can open — the
-        // same floor the fixture test uses, restated against this class's numbers.
-        let state_pass = u64::from(p.n_ctx) * u64::from(p.gdn_heads) * u64::from(p.gdn_head_k_dim) * u64::from(p.gdn_head_v_dim);
+        // One pass over ONE HEAD's state, at every position the court can open. The whole-graph
+        // floor (`x gdn_heads`) this test first asserted was superseded BY DESIGN: this class's
+        // recurrence registers the head-sliced kernel, whose court replays the challenged head
+        // alone — dividing the recomputation by the head count is what lets a 40-layer hybrid
+        // have a context at all. The floor that still detects a dead arm is the per-head pass:
+        // a derivation below it is once again pricing a row width instead of a replay.
+        let head_pass = u64::from(p.n_ctx) * u64::from(p.gdn_head_k_dim) * u64::from(p.gdn_head_v_dim);
         assert!(
-            cost.max_terminal_macs >= state_pass,
-            "the derivation charges {} multiply-accumulates for the real hybrid class; one pass over its state is {state_pass}",
+            cost.max_terminal_macs >= head_pass,
+            "the derivation charges {} multiply-accumulates for the real hybrid class; one pass over one head's state is {head_pass}",
             cost.max_terminal_macs
+        );
+        // And the whole-graph form still prices a class that does NOT register the head-sliced
+        // kernel — the fixture test covers that side; here the sliced kernel must be what changed
+        // the price, not a vanished arm.
+        assert!(
+            cost.max_terminal_macs < u64::from(p.gdn_heads) * head_pass,
+            "the head-sliced class must not be charged the whole-graph replay"
         );
         // And the byte side sees the context rather than one position of it.
         let one_position = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("expressible");

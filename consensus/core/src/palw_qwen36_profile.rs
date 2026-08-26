@@ -45,7 +45,7 @@ use crate::palw_step::{
 };
 use crate::palw_step_refute::{
     KDESC_A16_ADD_ELEM, KDESC_A16_ATTN_SCORES, KDESC_A16_ATTN_VALUES, KDESC_A16_EMBED, KDESC_A16_MATMUL_RESCALE, KDESC_A16_REQUANTIZE,
-    KDESC_A16_RMS_NORM, KDESC_A16_SOFTMAX, KDESC_BASE0_SILU, KDESC_Q36_DECAY, KDESC_Q36_GATE_APPLY, KDESC_Q36_GDN_STEP,
+    KDESC_A16_RMS_NORM, KDESC_A16_SOFTMAX, KDESC_Q36_HEAD_RMS_NORM, KDESC_Q36_SILU, KDESC_Q36_DECAY, KDESC_Q36_GATE_APPLY, KDESC_Q36_GDN_STEP,
     KDESC_Q36_L2_NORM, KDESC_Q36_MATMUL_GROUPED, KDESC_Q36_MATMUL_GROUPED_WIDE, KDESC_Q36_MOE_COMBINE, KDESC_Q36_MUL_WIDE,
     KDESC_Q36_RESCALE_ROW, KDESC_Q36_RMS_NORM_WIDE, KDESC_Q36_ROPE_PARTIAL, KDESC_Q36_ROUTER_TOPK, KDESC_Q36_SIGMOID,
     KDESC_Q36_SSM_CONV,
@@ -108,13 +108,17 @@ pub const QWEN36_35B_A3B: PalwQwen36GeometryV1 = PalwQwen36GeometryV1 {
     moe_dim: 512,
     shared_dim: 512,
     vocab_size: 248_320,
-    // **256, and it is the ladder that says so.** The step space grows linearly in the context
-    // and the hybrid graph carries ~95 nodes per layer over forty layers: at 512 the worst case
-    // is 4.2M leaves against `PALW_STEP_MAX_LEAVES`' 2^22 — over by a tenth of a percent. The
-    // runtime's rotary table covers 512; what this bounds is the JOB a claim may declare, which
-    // the canonical job (8 + 2) is nowhere near. A deeper ladder is a bundle decision, not a
-    // profile one.
-    n_ctx: 256,
+    // **12, and it is the whole-close derivation that says so** — the same number the floor
+    // landed on, for the same reason. The byte arm is nearly independent of context (the fat
+    // matmuls' tile-local openings dominate, fixed by the per-node tiles); what the context
+    // multiplies is the recurrence's replay evidence (~5 KB per position of head slices and
+    // paths) and its recomputation (per-head, `n_ctx × 128 × 128 × 4` MACs), and 12 holds both
+    // under the ceilings with margin while covering the canonical job (8 + 2, footprint 9).
+    // The runtime's rotary table still covers 512: this bounds the JOB a claim may declare, not
+    // what the engine serves off-chain. A larger context returns when the recurrence's replay is
+    // checkpoint-anchored (the state chunk map is registered; the anchor consumption is wired for
+    // attention and not yet for the recurrence).
+    n_ctx: 9,
     n_threads: 1,
     rms_eps_q: 17,
     // 512, not 256: at 256 the worst-case step space is 4,198,428 leaves against the ladder's
@@ -208,14 +212,14 @@ macro_rules! moe_tail {
             // The eight chosen experts, as the concatenation the engine builds.
             n(K::MatMulQuant, KDESC_Q36_MATMUL_GROUPED, "blk.{layer}.ffn_gate_exps.routed", RoutedMid, &[Step($first + 1)]),
             n(K::MatMulQuant, KDESC_Q36_MATMUL_GROUPED_WIDE, "blk.{layer}.ffn_up_exps.routed", RoutedMid, &[Step($first + 1)]),
-            n(K::Silu, KDESC_BASE0_SILU, "", RoutedMid, &[Step($first + 5)]),
+            n(K::Silu, KDESC_Q36_SILU, "", RoutedMid, &[Step($first + 5)]),
             n(K::MulElem, KDESC_Q36_MUL_WIDE, "blk.{layer}.ffn_expert_gated.a16", RoutedMid, &[Step($first + 7), Step($first + 6)]),
             n(K::MatMulQuant, KDESC_Q36_MATMUL_GROUPED_WIDE, "blk.{layer}.ffn_down_exps.routed", RoutedOut, &[Step($first + 8)]),
             n(K::MulElem, KDESC_Q36_MOE_COMBINE, "blk.{layer}.ffn_combine.a16", Hidden, &[Step($first + 9), Step($first + 4)]),
             // The shared expert, always on, behind its own scalar gate.
             n(K::MatMulQuant, KDESC_Q36_MATMUL_GROUPED, "blk.{layer}.ffn_shared_gate.weight", SharedMid, &[Step($first + 1)]),
             n(K::MatMulQuant, KDESC_Q36_MATMUL_GROUPED_WIDE, "blk.{layer}.ffn_shared_up.weight", SharedMid, &[Step($first + 1)]),
-            n(K::Silu, KDESC_BASE0_SILU, "", SharedMid, &[Step($first + 11)]),
+            n(K::Silu, KDESC_Q36_SILU, "", SharedMid, &[Step($first + 11)]),
             n(K::MulElem, KDESC_Q36_MUL_WIDE, "blk.{layer}.ffn_shared_gated.a16", SharedMid, &[Step($first + 13), Step($first + 12)]),
             n(K::MatMulQuant, KDESC_Q36_MATMUL_GROUPED_WIDE, "blk.{layer}.ffn_shared_down.weight", Hidden, &[Step($first + 14)]),
             n(K::MatMulQuant, KDESC_A16_MATMUL_RESCALE, "blk.{layer}.ffn_shared_scalar.weight", One, &[Step($first + 1)]),
@@ -247,7 +251,7 @@ const QWEN36_LINEAR_IR: &[Ir] = &{
         // set like the KV arms', not a sentinel. Positions before the sequence start are zero
         // rows, which is the window the engine starts from.
         n(K::SsmConv, KDESC_Q36_SSM_CONV, "blk.{layer}.linear_conv.weight", Conv, &[Step(2), Step(3), Step(4)]),
-        n(K::Silu, KDESC_BASE0_SILU, "", Conv, &[Step(6)]),
+        n(K::Silu, KDESC_Q36_SILU, "", Conv, &[Step(6)]),
         // **Per head, not per row.** The row holds sixteen query heads, sixteen key heads and
         // thirty-two value heads, and one exponent over all of them is set by the loudest.
         n(K::MulElem, KDESC_A16_REQUANTIZE, "blk.{layer}.linear_conv_act.a16", Conv, &[Step(7)]),
@@ -281,7 +285,7 @@ const QWEN36_LINEAR_IR: &[Ir] = &{
         // --- the output norm and gate -----------------------------------------------------------
         n(K::RmsNorm, KDESC_Q36_RMS_NORM_WIDE, "blk.{layer}.linear_norm_eps.a16", GdnV, &[Step(15)]),
         n(K::Scale, KDESC_Q36_RESCALE_ROW, "blk.{layer}.linear_norm.a16", GdnV, &[Step(16)]),
-        n(K::Silu, KDESC_BASE0_SILU, "", GdnV, &[Step(5)]),
+        n(K::Silu, KDESC_Q36_SILU, "", GdnV, &[Step(5)]),
         n(K::MulElem, KDESC_Q36_MUL_WIDE, "blk.{layer}.linear_gated.a16", GdnV, &[Step(17), Step(18)]),
         n(K::MatMulQuant, KDESC_Q36_MATMUL_GROUPED, "blk.{layer}.linear_o.weight", Hidden, &[Step(19)]),
         // --- the residual -----------------------------------------------------------------------
@@ -312,9 +316,9 @@ const QWEN36_ATTN_IR: &[Ir] = &{
         n(K::MatMulQuant, KDESC_Q36_MATMUL_GROUPED, "blk.{layer}.attn_k.weight", KvDim, &[Step(1)]),
         n(K::MatMulQuant, KDESC_Q36_MATMUL_GROUPED, "blk.{layer}.attn_v.weight", KvDim, &[Step(1)]),
         // QK-norm per head, before the rotation.
-        n(K::RmsNorm, KDESC_A16_RMS_NORM, "", QDim, &[Step(2)]),
+        n(K::RmsNorm, KDESC_Q36_HEAD_RMS_NORM, "", QDim, &[Step(2)]),
         n(K::MulElem, KDESC_A16_REQUANTIZE, "blk.{layer}.attn_q_norm.a16", QDim, &[Step(6)]),
-        n(K::RmsNorm, KDESC_A16_RMS_NORM, "", KvDim, &[Step(4)]),
+        n(K::RmsNorm, KDESC_Q36_HEAD_RMS_NORM, "", KvDim, &[Step(4)]),
         n(K::MulElem, KDESC_A16_REQUANTIZE, "blk.{layer}.attn_k_norm.a16", KvDim, &[Step(8)]),
         // The rotation, over the first 64 of each head's 256 dimensions. **The cache holds the
         // ROTATED key**: a court recomputing against unrotated keys convicts every honest producer.
@@ -391,7 +395,31 @@ fn width(w: W, g: &PalwQwen36GeometryV1) -> PalwStepOutLenV1 {
     }
 }
 
+/// The Decision-B artifact opening a challenged matmul tile costs is `tile × in_w` bytes, and the
+/// whole close must ride one lifecycle carrier (~80 KiB) — so the tile is BUDGETED per node from
+/// the row it reduces over. 24 KiB, not most of the carrier: the opening is one TERM of the close,
+/// and the evidence beside it (the opened input rows and their paths) is the other. A budget that
+/// spent the whole ceiling on weights left nothing for the rows those weights multiply.
+/// One tile for every node was the U-shape: the number that made the fat matmuls' openings fit
+/// exploded the narrow nodes' leaf counts, and vice versa. The field was always per-node; only
+/// the projection flattened it.
+const QWEN36_MATMUL_OPENING_BUDGET: usize = 24 * 1024;
+
 fn project(ir: &[Ir], g: &PalwQwen36GeometryV1, layer_span: usize) -> Vec<PalwStepNodeV1> {
+    // A matmul's reduction width, from the IR's own wiring — the first input's row.
+    let in_width = |node: &Ir| -> usize {
+        node.inputs
+            .first()
+            .and_then(|i| match i {
+                I::Step(s) => match width(ir[*s as usize].out, g) {
+                    PalwStepOutLenV1::Fixed { elements } => Some(elements as usize),
+                    PalwStepOutLenV1::KvScaled { .. } => None,
+                },
+                I::LayerIn => Some(g.hidden_dim as usize),
+                _ => None,
+            })
+            .unwrap_or(g.hidden_dim as usize)
+    };
     ir.iter()
         .map(|node| PalwStepNodeV1 {
             op_kind: node.op,
@@ -399,11 +427,54 @@ fn project(ir: &[Ir], g: &PalwQwen36GeometryV1, layer_span: usize) -> Vec<PalwSt
             weight_name: node.weight.to_string(),
             weight_dtypes: if node.weight.is_empty() { Vec::new() } else { vec![QWEN36_WEIGHT_DTYPE_I8; layer_span] },
             out_len: width(node.out, g),
-            // A node narrower than the minimum tile is one tile; the cap is a floor on the tile,
-            // not on the row.
-            tile_len: match width(node.out, g) {
-                PalwStepOutLenV1::Fixed { elements } => g.tile_len.min(elements.max(crate::palw_step::PALW_STEP_MIN_TILE_LEN)),
-                PalwStepOutLenV1::KvScaled { .. } => g.tile_len,
+            tile_len: {
+                let out_elems = match width(node.out, g) {
+                    PalwStepOutLenV1::Fixed { elements } => elements as usize,
+                    PalwStepOutLenV1::KvScaled { .. } => usize::MAX,
+                };
+                let chosen = match node.op {
+                    // Budgeted from the reduction width, so the opening fits the carrier whatever
+                    // the row's fan-in: in_w 2048 → tile 32, in_w 512 → tile 128.
+                    K::MatMulQuant => (QWEN36_MATMUL_OPENING_BUDGET / in_width(node).max(1))
+                        .next_power_of_two()
+                        .checked_shr(1)
+                        .unwrap_or(1)
+                        .clamp(crate::palw_step::PALW_STEP_MIN_TILE_LEN as usize, g.tile_len as usize),
+                    // The head-sliced recurrence: the tile IS the head, by the slice derivation's
+                    // own precondition (`tile_len == gdn_head_v_dim`).
+                    K::GatedDeltaNet => g.gdn_head_dim as usize,
+                    // The head-reducing norms: the tile IS the head, by their slice derivation's
+                    // own precondition — a court opens one head, so a tile that spanned several
+                    // would open rows the step does not read.
+                    K::L2Norm => g.gdn_head_dim as usize,
+                    K::RmsNorm if node.kernel == KDESC_Q36_RMS_NORM_WIDE => g.gdn_head_dim as usize,
+                    K::RmsNorm if node.kernel == KDESC_Q36_HEAD_RMS_NORM => g.attn_head_dim as usize,
+                    // **The evidence-heavy nodes get the minimum tile.** A step's close carries
+                    // one opened leaf per covering tile of every ref it reads, so for a node that
+                    // reads MANY rows the tile is an evidence multiplier and not an opening
+                    // budget: the mixture's combine opens the challenged lanes of all eight
+                    // experts' blocks, and the convolution opens four window positions. At the
+                    // shared 512 those two priced the whole class (349 KB and 93 KB of evidence);
+                    // at 16 they are the same arithmetic over a sixteenth of the bytes. Selected
+                    // by KERNEL, because "how many rows does this node read" is a property of the
+                    // program, not of the width.
+                    // The two MULTI-ROW readers: the mixture's combine opens the challenged
+                    // lanes of all eight expert blocks, the convolution four window positions. For
+                    // them the tile is an evidence multiplier rather than an opening budget, so
+                    // they take the minimum. Every other lane-sliced node keeps a WIDE tile: it is
+                    // the SOURCE tile of whatever reads it, and a matmul reading a 2,048-lane row
+                    // cut at 16 opens 128 leaves of path where 4 would do.
+                    K::MulElem if node.kernel == KDESC_Q36_MOE_COMBINE => crate::palw_step::PALW_STEP_MIN_TILE_LEN as usize,
+                    // The conv's tile is the RECURRENCE's slice unit: the head-sliced GDN reads
+                    // one value-head slice of the conv row per replay position, and a conv tile
+                    // equal to that slice makes the read exactly one leaf. Its own window close
+                    // opens `4 × (tile / producer-tile)` leaves, which this width keeps small.
+                    K::SsmConv => g.gdn_head_dim as usize,
+                    _ => g.tile_len as usize,
+                };
+                // A node narrower than the minimum tile is one tile; the cap is a floor on the
+                // tile, not on the row.
+                (chosen.min(out_elems.max(crate::palw_step::PALW_STEP_MIN_TILE_LEN as usize))) as u32
             },
             kernel_semantics_id: kernel_semantics_id_v1(node.kernel),
             input_refs: node
