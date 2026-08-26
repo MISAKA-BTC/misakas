@@ -75,6 +75,7 @@ const EXEMPT: &[(&str, &str)] = &[
     ("src/bin/qwen25-convert.rs", "offline PTQ driver"),
     ("src/bin/qwen36-convert.rs", "offline PTQ driver for the hybrid architecture"),
     ("src/bin/qwen36-run.rs", "the hybrid runtime's driver: it times itself, and a timer is float"),
+    ("src/qwen36_reference.rs", "the hybrid graph in f32: it measures the checkpoint's ranges so the PTQ can pick scales"),
     ("src/reference.rs", "the float reference forward: it measures the checkpoint's ranges so the PTQ can pick scales"),
     ("src/bin/base0-depth-sweep.rs", "measurement tool"),
     ("src/bin/base0-class-sizing.rs", "measurement tool"),

@@ -935,6 +935,12 @@ impl Qwen36ArtifactV1 {
     }
 }
 
+/// The Qwen3.6-shaped fixture, for tests in other modules of this crate.
+#[cfg(test)]
+pub(crate) fn test_fixture(layers: usize, experts: usize) -> Qwen36ArtifactV1 {
+    tests::fixture(layers, experts)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1275,10 +1281,4 @@ mod tests {
         let mut cache = Qwen36Cache::new(&stripped.shape);
         assert_eq!(engine.forward_token(&mut cache, 1, 0), Err(Qwen36Error::MissingTensor("blk.0.linear_q.weight".to_string())));
     }
-}
-
-/// The Qwen3.6-shaped fixture, for tests in other modules of this crate.
-#[cfg(test)]
-pub(crate) fn test_fixture(layers: usize, experts: usize) -> Qwen36ArtifactV1 {
-    tests::fixture(layers, experts)
 }
