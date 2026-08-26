@@ -577,12 +577,17 @@ pub fn base0_catalog_entry_v1(
         .flatten()
         .map(|node| node.kernel_semantics_id)
         .collect();
+    // The SAME derivation the post-genesis gate runs — mint and admission must build entries
+    // with one function, or the genesis door enforces a different metric than the running chain.
+    let court_cost = crate::palw_class_admission_v2::derive_court_cost_v1(profile)
+        .map_err(|_| PalwStepError::ProfileNotCanonical("the class's court cost does not derive"))?;
     Ok(crate::palw_mode_v2::PalwClassCatalogEntryV2 {
         class_id,
         artifact_root,
         max_step_leaf_count,
         canonical_step_leaf_count,
         reachable_kernels,
+        court_cost,
     })
 }
 

@@ -90,7 +90,7 @@ pub const PALW_RC_COURT_MAX_STEP_LEAF_COUNT: u64 = crate::palw_step::PALW_STEP_M
 /// which is ~223 MiB for Qwen2.5-1.5B's unembed against a court-close budget of 152 KB. Decision B
 /// made the opening tile-local; this is what turns "small" into "bounded", so a class cannot be
 /// admitted whose disputes are unprosecutable in a transaction.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwCourtCostV1 {
     /// Bytes a refutation must open from the artifact for the most expensive single step.
     pub max_opening_bytes: u64,
@@ -371,6 +371,9 @@ pub fn verify_class_admission_v2(
         max_step_leaf_count: worst,
         canonical_step_leaf_count: counted,
         reachable_kernels: kernel_ids,
+        // The cost this gate just checked, carried so the entry a registration folds is the same
+        // shape a genesis catalog holds — one derivation, two doors.
+        court_cost: cost,
     })
 }
 

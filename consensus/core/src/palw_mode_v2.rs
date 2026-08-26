@@ -627,6 +627,19 @@ pub struct PalwClassCatalogEntryV2 {
     /// Every `kernel_semantics_id` this class's shape profile can reach at adjudication time.
     /// `verify_catalog_coverage_v1` compares it against THIS BUILD's adjudicable catalog.
     pub reachable_kernels: BTreeSet<Hash64>,
+    /// **What prosecuting this class costs, DERIVED at mint** — the same
+    /// `derive_court_cost_v1(profile)` the post-genesis admission gate runs, carried here so the
+    /// genesis path can enforce the same ceilings. The catalog already holds the derived
+    /// `max_step_leaf_count` for exactly this reason: with `admission: None` a genesis
+    /// registration carries no profile, so nothing at boot can re-derive a number — the catalog
+    /// asserts it and the mint is the one place the derivation runs. A second, genesis-only cost
+    /// computation would be a second metric to drift from the admission one (the defect class the
+    /// mint/admission same-function rule exists for).
+    ///
+    /// Without this field a class minted into a genesis bypassed ADR-0049 Decision C entirely:
+    /// coverage-clean, ladder-deep enough, and unprosecutable — the ceilings gated only the
+    /// post-genesis door (found on the two-class genesis's first review).
+    pub court_cost: crate::palw_class_admission_v2::PalwCourtCostV1,
 }
 
 /// The registered class set, ordered and unique by class id.
@@ -729,6 +742,26 @@ impl PalwConsensusParamsV2 {
             return Err(PalwModeV2Error::Invalid(
                 "the court's worst-case trace depth is shallower than the catalog's — the ladder cannot reach the deepest class",
             ));
+        }
+        // The three cost ceilings, beside the ladder and by the same discipline: the catalog
+        // asserts the derived cost, the ruleset asserts what it will pay for, and a class whose
+        // disputes cannot ride a carrier must fail the BOOT gate, not its first challenger.
+        for entry in catalog.entries() {
+            if entry.court_cost.max_opening_bytes > self.court.max_opening_bytes() {
+                return Err(PalwModeV2Error::Invalid(
+                    "a registered class's terminal opening exceeds the ceiling this ruleset pays for",
+                ));
+            }
+            if entry.court_cost.max_terminal_macs > self.court.max_terminal_macs() {
+                return Err(PalwModeV2Error::Invalid(
+                    "a registered class's terminal recomputation exceeds the ceiling this ruleset pays for",
+                ));
+            }
+            if entry.court_cost.max_operand_count > self.court.max_operand_count() {
+                return Err(PalwModeV2Error::Invalid(
+                    "a registered class's operand count exceeds the ceiling this ruleset pays for",
+                ));
+            }
         }
         Ok(())
     }
@@ -1250,7 +1283,33 @@ pub(crate) mod tests {
             // The BASE-0 kernels this build adjudicates — the honest reachable set for a class
             // whose shape profile is BASE-0's.
             reachable_kernels: crate::palw_step_refute::catalogued_kernel_ids_v1(),
+            court_cost: crate::palw_class_admission_v2::PalwCourtCostV1 { max_opening_bytes: 1, max_terminal_macs: 1, max_operand_count: 1 },
         }
+    }
+
+    /// **A class the ruleset cannot pay to prosecute fails the BOOT gate, not its first
+    /// challenger.** The ceilings gated only the post-genesis door until the catalog carried the
+    /// derived cost; a genesis-minted class sailed past them — coverage-clean, ladder-deep
+    /// enough, unprosecutable (ADR-0049 Decision C's exact refusal condition, at the one entry
+    /// point that did not test it).
+    #[test]
+    fn a_class_whose_close_cannot_ride_a_carrier_fails_at_boot() {
+        let mut entry = catalog_entry(h64(1), 1 << 10);
+        // A close bigger than what the ruleset pays for — one byte past the ceiling.
+        entry.court_cost.max_opening_bytes = crate::palw_mode_v2::DEFAULT_MAX_OPENING_BYTES + 1;
+        let catalog = PalwClassCatalogV2::new(vec![entry]).expect("well-formed");
+        let mut bundle = conforming_bundle();
+        bundle.base_class_id = h64(1);
+        bundle.class_catalog_root = catalog.root();
+        let err = bundle.verify_against_catalog(&catalog).expect_err("an unprosecutable class must not boot");
+        assert!(format!("{err:?}").contains("terminal opening"), "refused by the cost gate, by name: {err:?}");
+
+        // And the same class inside the ceilings boots — the gate separates.
+        let mut entry = catalog_entry(h64(1), 1 << 10);
+        entry.court_cost.max_opening_bytes = crate::palw_mode_v2::DEFAULT_MAX_OPENING_BYTES;
+        let catalog = PalwClassCatalogV2::new(vec![entry]).expect("well-formed");
+        bundle.class_catalog_root = catalog.root();
+        bundle.verify_against_catalog(&catalog).expect("a class at the ceiling is a class the ruleset pays for");
     }
 
     /// **Audit C1/H2: the invariants that need the catalog PREIMAGE, not just its root.**

@@ -539,6 +539,8 @@ pub fn qwen36_registration_v1(
         max_step_leaf_count: worst,
         canonical_step_leaf_count: counted,
         reachable_kernels: qwen36_reachable_kernels_v1(QWEN36_35B_A3B)?,
+        court_cost: crate::palw_class_admission_v2::derive_court_cost_v1(&profile)
+            .map_err(|_| PalwStepError::ProfileNotCanonical("the class's court cost does not derive"))?,
     };
     let object = crate::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
         class_id,

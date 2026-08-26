@@ -4646,7 +4646,12 @@ mod consensus_params_id_tests {
             // Re-derived at the MERGE of the two lines above (2026-08-26): every move both trails
             // describe lands in one value, because a fingerprint is a function of the whole
             // ruleset and not a sum of diffs.
-            ("testnet-11", TESTNET11_PARAMS, "74a2ff4c30cc1af29905d0f8bd9f38f08d602461e07e6fa60597b6f03e8e0925"),
+            //
+            // And once more the same day: the class catalog gained `court_cost` — the derived
+            // close price, carried so the BOOT gate enforces the ceilings a genesis-minted class
+            // previously bypassed. The catalog root is inside the ruleset id, so asserting more
+            // about a class moves the network's identity, as it must.
+            ("testnet-11", TESTNET11_PARAMS, "40f8599b051a04b6f351793669b6c0ff7a7c313fba6be39f8d6c7e063ca52069"),
             ("simnet", SIMNET_PARAMS, "135e88c69a659d3cf4b5ce8275953c7597b2c67b03d2a74b3d0696c5d0b703fa"),
             ("devnet", DEVNET_PARAMS, "42cc6be92506a14654cb676184e1416796dec682b15e93cb9c639e8e0d77efa5"),
         ]
