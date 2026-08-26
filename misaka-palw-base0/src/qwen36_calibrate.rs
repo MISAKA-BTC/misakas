@@ -40,7 +40,8 @@ pub const HEADROOM_BITS: i32 = 1;
 ///
 /// `code = value · 2^e`, so `e = floor(log2(A16_CODE_MAX / absmax)) − HEADROOM`.
 pub fn site_exponent(absmax: f64) -> i32 {
-    if !(absmax > 0.0) {
+    // NaN and non-positive both take this branch, spelled so that neither reaches the logarithm.
+    if absmax.is_nan() || absmax <= 0.0 {
         // A site that never moved gets a scale that cannot overflow rather than one derived from
         // a zero: the alternative is an exponent of infinity.
         return 0;
@@ -55,7 +56,8 @@ pub fn site_exponent(absmax: f64) -> i32 {
 /// significant bits — far more than any scale needs, and the excess is what stops a chain of
 /// narrowings from accumulating a bias.
 pub fn mul_shift(x: f64) -> (i64, u8) {
-    if !(x.abs() > 0.0) || !x.is_finite() {
+    // NaN is not finite, so one test covers it and the infinities alike.
+    if !x.is_finite() || x == 0.0 {
         return (0, 0);
     }
     let mut shift = 0i32;
