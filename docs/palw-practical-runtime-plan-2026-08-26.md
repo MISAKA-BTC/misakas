@@ -35,6 +35,27 @@ $ qwen36-chat ... --prompt "日本で二番目に高い山は何ですか。一�
 リポジトリに `tokenizer.json` は無い）。33.27 GiB のアーティファクトを 24 GB のマシンで mmap して
 **prefill 1.7 / decode 1.75 tok/s**（初版 0.4-0.6 の 3.4 倍）。
 
+### ブロック生成 到達（同日）
+
+**実 33 GiB アーティファクトによるブロックが実 consensus に受理された。**
+`palw_rc_the_real_qwen36_artifact_produces_a_block`（`--ignored`、`MISAKA_QWEN36_ARTIFACT` で実行）:
+
+```
+mapped 40 layers / 33.27 GiB in 1.43 s
+artifact root (1 pass, cold)     116.6 s   ← ノード起動時に1回
+canonical job (8 prefill + 2 decode = 実推論10 passes)   9.02 s
+lottery + ML-DSA-87 + acceptance → UTXO tip、クラス別に計数、bond に exposure 予約
+```
+
+CI 版 `palw_rc_a_qwen36_execution_produces_a_block_the_chain_accepts` は同一経路を
+dev fixture の重みで常時実行（差は重みだけ — engine/ops/commitment/全 consensus チェックは本物）。
+genesis は `palw_rc_params_with_qwen36`（floor + Qwen3.6 の2クラス、entrant は最小 1‰）。
+kaspad 側も配線済み: `--palw-class-artifact` が `.palwq36` を file magic で受け、起動時に
+root を**計算**して chain の登録と照合（宣言ではなく導出）。
+
+per-class DAA は実現産出の share へ retarget するので、9 秒/job はブロック生成として実用域 —
+job の大きさは遅延を買うだけで weight は産出に比例する。
+
 ### court 側も閉じた（ADR-0039 の前提条件）
 
 `palw_step_refute` に **A16 tier 9 + Qwen3.6 固有 14 の計 23 descriptor** を追加し、裁定は
