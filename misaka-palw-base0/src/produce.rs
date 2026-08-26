@@ -1227,12 +1227,22 @@ mod tests {
 
         // (1) The cost. The long form opens the whole cached history; the anchored one opens this
         // call's own write and nothing else.
-        assert!(
-            anchored.inputs.len() < long.inputs.len(),
-            "anchored opened {} leaves, long opened {}",
-            anchored.inputs.len(),
-            long.inputs.len()
-        );
+        // **Pinned, not merely "fewer".** `assert!(a < b)` passes at 21 against 20 and would let
+        // the whole point quietly evaporate, so the numbers are derived from the geometry and
+        // compared.
+        //
+        // The scores node is `[Step(q_rot), CachedK]`. The query row is one position; the cache is
+        // the whole history — `prefill + call` positions — and each row is `kv_dim` wide, tiled at
+        // the node's `tile_len`. Anchored, the cache contributes ONE position.
+        let tiles_of = |elements: u32| elements.div_ceil(profile.attn_nodes[idx].tile_len) as usize;
+        let kv_dim = profile.attn_kv_heads as u32 * profile.attn_head_dim;
+        let history = ctx.declared_prefill_tokens + call;
+        let q_tiles = long.inputs.len() - history as usize * tiles_of(kv_dim);
+        assert_eq!(long.inputs.len(), q_tiles + history as usize * tiles_of(kv_dim), "the long set is not the history it should be");
+        assert_eq!(anchored.inputs.len(), q_tiles + tiles_of(kv_dim), "the anchored set is not one cached position");
+        // On this fixture: 12 → 4, the cache's share 10 → 2. On the RC's worst-case shape
+        // (prefill 64, decode 64, kv_dim 256, tile_len 64) the same arithmetic is 508 → 4.
+        assert_eq!((long.inputs.len(), anchored.inputs.len()), (12, 4), "the fixture's opening counts moved");
 
         let oracle = kaspa_consensus_core::palw_step_refute::PalwNoWeightsV1;
         let verdict_of = |r: &kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1| {
