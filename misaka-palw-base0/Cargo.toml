@@ -22,3 +22,10 @@ faster-hex.workspace = true
 kaspa-hashes.workspace = true
 blake2b_simd.workspace = true
 serde_json.workspace = true
+
+[dev-dependencies]
+# `class-weight-report` only. Family M's canonical job and its `pwu_per_inference` are facts of
+# that crate's catalog, and a report that re-declared them here would be a second place they could
+# be wrong. A dev-dependency keeps the edge out of the production graph — nothing a node links
+# gains a path from the integer family to the Metal one.
+misaka-palw-metal.workspace = true
