@@ -34,6 +34,12 @@ and on testnet-11 it is already spent.**
 > does not retire a live registration: as of today's dump, class `682756bc…` is still `Active` on
 > testnet-11 holding `share=1, budget=1`, and it is still unable to produce for the reason §1 gives.
 > It stops being true of that network when testnet-11 is re-minted, not when the branch lands.
+>
+> For the record: the withdrawal line now contains `origin/main` as well (merge `fd458d21`), with
+> both corrections to ADR-0053's causal claim, and its fingerprint test is green at `9be3b64f…`. So
+> the code-side withdrawal sits on a superset of the mainline while `682756bc…` stays `Active` on
+> testnet-11. Those two facts are not in tension; they are the difference between a branch and a
+> network.
 
 ---
 
@@ -274,8 +280,11 @@ worth having has to be written into a genesis card. On testnet-11 that decision 
 One latent gap belongs here, because it becomes live the moment a mint hands a second class real
 share: `PalwClassAdmissionError::FamilyShareCap` — *"ADR-0051 Decision 1. Family M's classes are
 capped at half the share table, so the half that can convict a liar stays in charge of the tie"* —
-is **declared and never constructed**, on the deployed build and on `origin/main` alike. Today the
-forced-minimum share makes it unreachable, so nothing is wrong on this chain. A genesis card that
+is **declared and never constructed**, on the deployed build and on `origin/main` alike. Nothing on
+this chain reaches it — but by accident, not by design: the acceptance gate forces a post-genesis
+entrant's share to *equal* `min_grantable_share_permille`, so no class can grow to a permille worth
+capping, and a different rule happens to stand where this one would have. *"It never mattered"* and
+*"it never fired"* are different claims, and only the second is about this code. A genesis card that
 grants a non-adjudicable family 600‰ would be accepted.
 
 Its neighbour in the same gate is the opposite shape and worse for it. `verify_class_admission_v2`
@@ -313,7 +322,11 @@ that fires and lets the thing through.
    granted against it is arbitrary in exactly the direction a registrant would choose. In the same
    pass: raise `FamilyShareCap` from a message to a check, and decide whether `min_class_panel`
    should still be `(2, 2)` once the family it was written for is gone (§6). A 2-of-2 panel on a
-   5-seat/3-quorum network is two operators licensing each other.
+   5-seat/3-quorum network is two operators licensing each other. **The withdrawal line has already
+   answered the second half**: on `palw-base0-runtime-hardening` the field, its accessors and the
+   shipped `(2, 2)` are deleted (verified — only two comments survive, saying it left the bundle),
+   so the allowance goes with its justification instead of outliving it. The question stays open
+   only for a ruleset that keeps the field, which the mainline does in four files today.
 5. **And land an x86 integer kernel before the share is worth racing for.** Not because the fleet
    cannot serve the class — 11.6 s an inference fits a 120 s cadence — but because an M-series host
    would out-ticket it 36 to 1 inside the class (§5).
