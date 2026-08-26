@@ -3127,7 +3127,12 @@ pub(crate) mod tests {
 
     /// A pure-GDN profile: pre = embed(one row feeding everything), one GDN layer whose
     /// nodes are the five wiring inputs then the core. Geometry: 2 heads × k16 × v16.
-    fn profile() -> PalwShapeProfileV3 {
+    ///
+    /// `pub(crate)` because it is the only real GatedDeltaNet wiring in the tree, and
+    /// `palw_class_admission_v2`'s cost derivation has to be checked against the SAME profile the
+    /// court's own input rule is written for. A second hand-written GDN profile over there would be
+    /// a second description of this one, which is the defect that arm already had.
+    pub(crate) fn profile() -> PalwShapeProfileV3 {
         let mk = |kind, elements, desc: &str, refs: Vec<u16>| PalwStepNodeV1 {
             op_kind: kind,
             role: PalwStepNodeRoleV1::Plain,
@@ -3192,7 +3197,7 @@ pub(crate) mod tests {
         }
     }
 
-    fn context() -> PalwJobContextV2 {
+    pub(crate) fn context() -> PalwJobContextV2 {
         let mut ctx = PalwJobContextV2 {
             version: PALW_TRACE_COMMITMENT_VERSION_V2,
             network_id: b"step-refute-test".to_vec(),

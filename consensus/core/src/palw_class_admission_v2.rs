@@ -266,16 +266,31 @@ pub fn derive_court_cost_v1(profile: &PalwShapeProfileV3) -> Result<PalwCourtCos
             // The class's worst job is its whole context as prefill, so the worst step is exactly
             // where no anchor exists. Bounding the cheap form would have understated the shipped
             // floor by 2x, and `the_derived_close_cost_bounds_a_real_one` is what said so.
+            // **How many POSITIONS this step opens its inputs at, from the node's own kernel.**
+            //
+            // `required_positions` expands a `GdnCore` step over every prior position — `0..=p`
+            // inside the prefill call, and all of prefill plus every decode call at a decode step —
+            // and each of those positions opens every one of the node's refs. Every other program
+            // opens one position. The multiplier therefore belongs to the OP, not to the kind of
+            // reference: a real GatedDeltaNet node wires its five inputs as ordinary intra-table
+            // indices, so keying this off the checkpoint sentinel charged them once and priced the
+            // recurrence at 6,592 bytes where the court requires 327,680 of Merkle path alone.
+            // `the_gdn_arm_covers_what_the_court_actually_opens` is that measurement.
+            let positions = match node.op_kind {
+                Op::GatedDeltaNet => n_ctx,
+                _ => 1,
+            };
             for r in &node.input_refs {
                 let width = input_width_v1(*r, table, profile).ok_or_else(over)?;
                 let src_tile = source_tile_len_v1(table, node, *r);
                 let leaves = match *r {
+                    // The cache is one row per position however the reading node is programmed.
                     PALW_STEP_INPUT_KV_K | PALW_STEP_INPUT_KV_V => n_ctx.checked_mul(kv_dim.div_ceil(src_tile)),
-                    // The recurrence's state, and every ordinary row: one row, cut on the source's
-                    // own tiling. A GDN node re-reads its prior positions, so the whole context
-                    // pays for the recurrence exactly as it does for the cache.
-                    PALW_STEP_INPUT_CHECKPOINT_STATE => n_ctx.checked_mul(width.div_ceil(src_tile)),
-                    _ => Some(width.div_ceil(src_tile)),
+                    // Everything else is `positions` copies of its own row. The checkpoint sentinel
+                    // is included and is priced pessimistically on purpose: `canonical_input_leaves`
+                    // refuses it outright today ("registration-opaque"), so a class reaching it is
+                    // unadjudicable rather than cheap, and a low price here would read as approval.
+                    _ => positions.checked_mul(width.div_ceil(src_tile)),
                 }
                 .ok_or_else(over)?;
                 let per_leaf = leaf_bytes(src_tile.min(width.max(1))).ok_or_else(over)?;
@@ -305,9 +320,25 @@ pub fn derive_court_cost_v1(profile: &PalwShapeProfileV3) -> Result<PalwCourtCos
             // is read, so they cost bytes rather than trust.
             evidence = evidence.checked_add(n_ctx.checked_mul(4).ok_or_else(over)?).ok_or_else(over)?;
 
-            // Recomputation. Only a reduction is quadratic in the row; everything else is a pass.
+            // Recomputation: what a full node spends to redo this one step, on peer-supplied input.
+            //
+            // The recurrence is its own case for the same reason it is in the byte arm, and it was
+            // wrong the same way. `gdn_core_genesis_replay` walks EVERY prior position and, per
+            // position and head, makes a small constant number of passes over a `k_dim x v_dim`
+            // state: decay it, take `v_dim` dot products of length `k_dim` against it, then update
+            // it. Charging `out_w` — the width of the row it finally emits — priced the fixture's
+            // recurrence at 32 against 32,768 actually performed, and a Qwen3.6-shaped one at 2,048
+            // against ~67 M, which is four times the ceiling it would have been admitted under.
+            // Four passes is above the three the kernel makes, so this is a bound rather than an
+            // estimate.
             let macs = match node.op_kind {
                 Op::MatMulQuant => tile.checked_mul(in_w).ok_or_else(over)?,
+                Op::GatedDeltaNet => positions
+                    .checked_mul(profile.gdn_heads as u64)
+                    .and_then(|v| v.checked_mul(profile.gdn_head_k_dim as u64))
+                    .and_then(|v| v.checked_mul(profile.gdn_head_v_dim as u64))
+                    .and_then(|v| v.checked_mul(4))
+                    .ok_or_else(over)?,
                 _ => out_w,
             };
 
@@ -917,6 +948,78 @@ mod tests {
         }
         let err = verify_class_admission_v2(&bundle, &profile, &canonical, &bounded).expect_err("bounded is not derived");
         assert!(matches!(err, PalwClassAdmissionError::ClassIsNotDerived), "got {err:?}");
+    }
+
+    /// **The GatedDeltaNet arm, against the court's own input rule.**
+    ///
+    /// This arm had never been reached by anything. Both shipped deterministic profiles set
+    /// `gdn_nodes: Vec::new()` — `base0_profile_v1` and `qwen25_profile_v1` — and BASE-0's own test
+    /// asserts a plain decoder-only transformer has no GatedDeltaNet arm, so the only class that
+    /// would reach it is one nobody has registered yet. A cost bound that has never priced a class
+    /// of a given shape is a bound about that shape only in the sense that a comment is.
+    ///
+    /// What it got wrong, and in the fail-open direction: `required_positions` expands a `GdnCore`
+    /// step over EVERY prior position — `0..=position` within the prefill call, and all of prefill
+    /// plus every decode call at a decode step — and each of those positions opens every one of the
+    /// node's input refs. The derivation charged the refs ONCE, because a real GDN node wires its
+    /// inputs as ordinary intra-table indices and those fell to the single-position arm. The
+    /// `n_ctx` multiplier sat on `PALW_STEP_INPUT_CHECKPOINT_STATE` instead — a sentinel
+    /// `canonical_input_leaves` refuses outright ("registration-opaque today"), so it priced a
+    /// shape the court cannot adjudicate while under-pricing the one it can, by a factor of the
+    /// context.
+    ///
+    /// The bound is compared against a floor that owes nothing to this function's arithmetic: the
+    /// PATH bytes alone of the leaves the court actually requires, ignoring every tile's values.
+    /// A real close is strictly larger than that.
+    #[test]
+    fn the_gdn_arm_covers_what_the_court_actually_opens() {
+        use crate::palw_step_refute::canonical_input_leaves_v1;
+
+        let p = crate::palw_step_refute::tests::profile();
+        // The longest job this class admits, which is what the bound is derived over.
+        let mut ctx = crate::palw_step_refute::tests::context();
+        ctx.declared_prefill_tokens = p.n_ctx - 1;
+        ctx.exact_decode_tokens = 2;
+
+        // The recurrence itself, found by op rather than by slot number.
+        let slot = (0..p.global_node_count())
+            .find(|s| {
+                p.resolve_node_slot(*s).map(|(n, _)| n.op_kind == crate::palw_step::PalwStepOpKindV1::GatedDeltaNet).unwrap_or(false)
+            })
+            .expect("the fixture has a GatedDeltaNet node");
+        // Its last decode call, where the expansion is widest.
+        let coord = crate::palw_step::PalwStepCoordinateV1 { call_index: 1, node_slot: slot, position: 0, tile_index: 0 };
+
+        let required = canonical_input_leaves_v1(&p, &ctx, &coord).expect("the court can enumerate this step's inputs");
+        let leaves: u64 = required.iter().map(|row| row.len() as u64).sum();
+        assert!(
+            leaves > u64::from(p.n_ctx),
+            "the fixture must actually exercise the expansion — {leaves} leaves at n_ctx {}",
+            p.n_ctx
+        );
+
+        let worst = worst_case_step_leaf_count_v1(&p).expect("inside the cap");
+        let path_bytes = u64::from(worst.max(2).next_power_of_two().trailing_zeros()) * 64;
+        let floor_bytes = leaves * path_bytes;
+
+        let cost = derive_court_cost_v1(&p).expect("derivable");
+        assert!(
+            cost.max_close_bytes >= floor_bytes,
+            "the derivation charges {} for this class; the court requires {leaves} leaves whose PATHS alone \
+             are {floor_bytes} bytes — the bound is below the evidence it is supposed to bound",
+            cost.max_close_bytes
+        );
+
+        // **And the same shape in the sibling arm.** The recurrence's recomputation walks every
+        // prior position over a `k_dim x v_dim` state per head; charging the emitted row's width
+        // priced this fixture's step at 32 multiply-accumulates. The floor here owes nothing to the
+        // derivation's constant: one pass over the state, at every position the court opens.
+        let state_pass = u64::from(p.n_ctx) * u64::from(p.gdn_heads) * u64::from(p.gdn_head_k_dim) * u64::from(p.gdn_head_v_dim);
+        assert!(
+            cost.max_terminal_macs >= state_pass,
+            "the derivation charges {} multiply-accumulates; one pass over the recurrence's own state costs {state_pass}",
+            cost.max_terminal_macs
+        );
     }
 
     /// **The other genesis decision, as arithmetic: the close ceiling is what a transaction can
