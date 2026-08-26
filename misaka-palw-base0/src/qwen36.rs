@@ -42,7 +42,7 @@ use crate::kernels::{
 use kaspa_consensus_core::palw_base0_a16::{A16QuantParams, a16_add_elem, a16_requant, a16_rms_norm, a16_softmax_rows};
 use kaspa_consensus_core::palw_base0_ops::silu;
 use kaspa_consensus_core::palw_qwen36_ops::{
-    Qwen36GdnParamsV1, Qwen36GdnStateV1, q36_gate_apply, q36_gdn_step, q36_l2_norm, q36_moe_combine, q36_mul_wide, q36_pow_q,
+    Qwen36GdnParamsV1, Qwen36GdnStateV1, q36_gate_apply, q36_gdn_step, q36_l2_norm, q36_moe_combine, q36_matmul_grouped, q36_matmul_grouped_wide, q36_mul_wide, q36_decay,
     q36_rescale_row, q36_rms_norm_wide, q36_rope_partial, q36_router_topk, q36_sigmoid_gate, q36_ssm_conv,
 };
 use std::collections::BTreeMap;
@@ -264,6 +264,14 @@ impl Qwen36ArtifactV1 {
         Err(Qwen36Error::BadParams(name.to_string()))
     }
 
+    /// A group-scale exponent table for a weight tensor, if the class registered one.
+    ///
+    /// Absent means the weights carry one scale per output row, which is what a fixture and the
+    /// first artifacts hold. Present means a power-of-two scale per 32 elements.
+    pub fn group_exponents(&self, name: &str) -> Option<&[i8]> {
+        self.tensor(&format!("{name}.exp")).ok()
+    }
+
     /// A registered scalar, in Q[`K`]. Carried in a triple's `zero` so the store has one wire
     /// format rather than two.
     fn scalar(&self, name: &str) -> Result<i64, Qwen36Error> {
@@ -274,6 +282,12 @@ impl Qwen36ArtifactV1 {
 /// Every op in this module returns its own error type; the engine returns one. Written as a free
 /// generic rather than a closure per function because a closure's error type is inferred from its
 /// first use and the arms mix `PalwA16OpError` with `PalwQwen36OpError`.
+/// A projection's error label. `refuse` wants a `&'static str` and a tensor name is not one, so
+/// the site is named by its kind and the tensor appears in the message the op itself produced.
+fn name_leak(_name: &str) -> &'static str {
+    "projection"
+}
+
 fn refuse<E: std::fmt::Debug>(what: &'static str) -> impl Fn(E) -> Qwen36Error {
     // The inner error is kept. A runtime whose only diagnostic is "an op refused" makes every
     // conversion bug a bisection over the graph, which is exactly what happened the first time
@@ -336,7 +350,27 @@ pub struct Qwen36Engine<'a> {
     pub artifact: &'a Qwen36ArtifactV1,
 }
 
+
 impl<'a> Qwen36Engine<'a> {
+    /// **One projection, through whichever weight representation the class registered.**
+    ///
+    /// Every projection in this graph goes through here so that adding a finer weight scale is one
+    /// decision rather than eighteen. When the artifact carries `<name>.exp` the weights hold a
+    /// power-of-two scale per 32 elements — Q4_K's granularity, and measured at 5.3e-3 relative
+    /// against 8.7e-3 for one scale per row — and otherwise the plain per-row form is used, which
+    /// is what a fixture and the older artifacts carry.
+    fn project(&self, name: &str, x: &[i32], out_dim: usize, wide: bool) -> Result<Vec<i32>, Qwen36Error> {
+        let a = self.artifact;
+        let weights = a.tensor_sized(name, out_dim * x.len())?;
+        let params = a.params_sized(&format!("{name}.a16"), out_dim)?;
+        match a.group_exponents(name) {
+            Some(exps) if wide => q36_matmul_grouped_wide(weights, exps, x, &params).map_err(refuse(name_leak(name))),
+            Some(exps) => q36_matmul_grouped(weights, exps, x, &params).map_err(refuse(name_leak(name))),
+            None if wide => a16_matmul_rescale(weights, x, &params).map_err(refuse(name_leak(name))),
+            None => a16_matmul_requant(weights, x, &params).map_err(refuse(name_leak(name))),
+        }
+    }
+
     pub fn new(artifact: &'a Qwen36ArtifactV1) -> Self {
         Self { artifact }
     }
@@ -423,8 +457,7 @@ impl<'a> Qwen36Engine<'a> {
         let unit = a16_rms_norm(&h, s.eps_q).map_err(refuse("final_norm"))?;
         let fin = a16_requant(&unit, &a.params_sized("final_norm.a16", d)?).map_err(refuse("final_req"))?;
         probe.push(("final_norm".to_string(), fin.clone()));
-        let unembed = a.tensor_sized("output.weight", s.vocab * d)?;
-        let logits = a16_matmul_requant(unembed, &fin, &a.params_sized("output.weight.a16", s.vocab)?).map_err(refuse("logits"))?;
+        let logits = self.project("output.weight", &fin, s.vocab, false)?;
         probe.push(("logits".to_string(), logits.clone()));
         Ok((logits, probe))
     }
@@ -440,40 +473,20 @@ impl<'a> Qwen36Engine<'a> {
     ) -> Result<Vec<i32>, Qwen36Error> {
         let a = self.artifact;
         let s = &a.shape;
-        let (d, dk, dv, hd) = (s.d_model, s.linear_k_dim(), s.linear_v_dim(), s.linear_head_dim);
+        let (_d, dk, dv, hd) = (s.d_model, s.linear_k_dim(), s.linear_v_dim(), s.linear_head_dim);
         let n = |suffix: &str| format!("blk.{li}.{suffix}");
 
         // The three projections that feed the convolution, plus the gate and the two scalars the
         // decay needs. Separate tensors rather than one fused `in_proj`: a court opening addresses
         // a tensor, and a fused one would need an offset convention on top of the name.
-        let q = a16_matmul_requant(
-            a.tensor_sized(&n("linear_q.weight"), dk * d)?,
-            normed,
-            &a.params_sized(&n("linear_q.weight.a16"), dk)?,
-        )
-        .map_err(refuse("linear_q"))?;
-        let k = a16_matmul_requant(
-            a.tensor_sized(&n("linear_k.weight"), dk * d)?,
-            normed,
-            &a.params_sized(&n("linear_k.weight.a16"), dk)?,
-        )
-        .map_err(refuse("linear_k"))?;
-        let v = a16_matmul_requant(
-            a.tensor_sized(&n("linear_v.weight"), dv * d)?,
-            normed,
-            &a.params_sized(&n("linear_v.weight.a16"), dv)?,
-        )
-        .map_err(refuse("linear_v"))?;
+        let q = self.project(&n("linear_q.weight"), normed, dk, false)?;
+        let k = self.project(&n("linear_k.weight"), normed, dk, false)?;
+        let v = self.project(&n("linear_v.weight"), normed, dv, false)?;
         // The gate reaches `silu` and therefore has to arrive in Q[`K`], not on the code grid —
         // `MatMulRescale` rather than `MatMulRequant`, for the same reason the FFN's gate uses it.
         // With `Requant` the row clamps at the code rail and `silu` sees a value four orders down,
         // which is what the probe showed: a gate of 2 where the reference says 6.9.
-        let z = a16_matmul_rescale(
-            a.tensor_sized(&n("linear_z.weight"), dv * d)?,
-            normed,
-            &a.params_sized(&n("linear_z.weight.a16"), dv)?,
-        )
-        .map_err(refuse("linear_z"))?;
+        let z = self.project(&n("linear_z.weight"), normed, dv, true)?;
 
         // The four-tap causal convolution over the concatenated channels. The window is the
         // cache's, oldest first; a fresh sequence sees zeros before it, which is what "causal"
@@ -503,21 +516,13 @@ impl<'a> Qwen36Engine<'a> {
         let (qc, rest) = activated.split_at(dk);
         let (kc, vc) = rest.split_at(dk);
 
-        // The gates. `decay = u^c` with `u = sigmoid(−dt)` and `c` the head's registered constant;
-        // `beta = sigmoid(b)`. Both projections are one lane per value head.
-        let dt = a16_matmul_rescale(
-            a.tensor_sized(&n("linear_dt.weight"), s.linear_v_heads * d)?,
-            normed,
-            &a.params_sized(&n("linear_dt.weight.a16"), s.linear_v_heads)?,
-        )
-        .map_err(refuse("linear_dt"))?;
-        let beta_raw = a16_matmul_rescale(
-            a.tensor_sized(&n("linear_beta.weight"), s.linear_v_heads * d)?,
-            normed,
-            &a.params_sized(&n("linear_beta.weight.a16"), s.linear_v_heads)?,
-        )
-        .map_err(refuse("linear_beta"))?;
+        // The gates. `decay = exp(−c · softplus(dt + dt_bias))` with `c` the head's registered
+        // coefficient; `beta = sigmoid(b)`. Both projections are one lane per value head, and the
+        // bias is a tensor of its own — see [`cal::dt_bias`] for why it cannot be dropped.
+        let dt = self.project(&n("linear_dt.weight"), normed, s.linear_v_heads, true)?;
+        let beta_raw = self.project(&n("linear_beta.weight"), normed, s.linear_v_heads, true)?;
         let decay_c = a.param_rows(&n("linear_decay_c.a16"))?;
+        let dt_bias = a.param_rows(&n("linear_dt_bias.a16"))?;
         // **The state's output narrowing is PER HEAD, and that is not a refinement.**
         //
         // The row that leaves the recurrence is normalized per head immediately afterwards, and an
@@ -533,30 +538,45 @@ impl<'a> Qwen36Engine<'a> {
         let read_rows = a.param_rows(&n("linear_read.a16"))?;
         let write_rows = a.param_rows(&n("linear_write.a16"))?;
         let out_rows = a.param_rows(&n("linear_out.a16"))?;
+        let delta_rows = a.param_rows(&n("linear_delta.a16"))?;
         let per_head = |rows: &[A16QuantParams], vh: usize| -> A16QuantParams {
             if rows.len() == 1 { rows[0] } else { rows[vh.min(rows.len() - 1)] }
         };
 
         let group = s.linear_v_heads / s.linear_k_heads;
         let mut out = Vec::with_capacity(dv);
+        let mut decays: Vec<i32> = Vec::with_capacity(s.linear_v_heads);
+        let mut betas: Vec<i32> = Vec::with_capacity(s.linear_v_heads);
         for vh in 0..s.linear_v_heads {
             let kh = vh / group;
             let unit_k = q36_l2_norm(&kc[kh * hd..(kh + 1) * hd]).map_err(refuse("l2_k"))?;
             let unit_q = q36_l2_norm(&qc[kh * hd..(kh + 1) * hd]).map_err(refuse("l2_q"))?;
             let vslice = &vc[vh * hd..(vh + 1) * hd];
             let c = decay_c.get(vh.min(decay_c.len().saturating_sub(1))).map(|p| p.zero).unwrap_or(0);
-            let u = q36_sigmoid_gate(&[-dt[vh]])[0] as i64;
-            let decay = q36_pow_q(u, c);
+            let biased = dt[vh].saturating_add(dt_bias.get(vh.min(dt_bias.len().saturating_sub(1))).map(|p| p.zero).unwrap_or(0) as i32);
+            let decay = q36_decay(biased, c);
             let beta = q36_sigmoid_gate(&[beta_raw[vh]])[0] as i64;
+            decays.push(decay as i32);
+            betas.push(beta as i32);
             let gdn_params =
-                Qwen36GdnParamsV1 { read: per_head(&read_rows, vh), write: per_head(&write_rows, vh), out: per_head(&out_rows, vh) };
+                Qwen36GdnParamsV1 {
+                    read: per_head(&read_rows, vh),
+                    delta: per_head(&delta_rows, vh),
+                    // The write is a shift, carried in the triple's `zero` so the store keeps one
+                    // wire format.
+                    write_shift: per_head(&write_rows, vh).zero as i32,
+                    out: per_head(&out_rows, vh),
+                };
             let head_out =
                 q36_gdn_step(&mut cache.gdn[li][vh], &unit_k, vslice, &unit_q, decay, beta, gdn_params).map_err(refuse("gdn_step"))?;
             out.extend(head_out);
         }
 
+        probe.push((n("linear_decay"), decays));
+        probe.push((n("linear_beta_gate"), betas));
         probe.push((n("linear_state_out"), out.clone()));
-        probe.push((n("linear_state"), cache.gdn[li].iter().flat_map(|st| st.s.iter()).copied().collect()));
+        // The LAST head's state, which is the one the reference's per-head site keeps.
+        probe.push((n("linear_state"), cache.gdn[li].last().map(|st| st.s.clone()).unwrap_or_default()));
         // The output gate: RMS-normalized PER HEAD, then multiplied by `silu(z)` — a gate on the
         // value stream rather than on the logits, so it is `MulElem` and not a softmax.
         //
@@ -574,10 +594,12 @@ impl<'a> Qwen36Engine<'a> {
         // large. It took this site from a cosine of 0.98 against the float reference to 0.71 —
         // and it does not read as a scale error, because the magnitudes come out right.
         let norm_params = a.params_sized(&n("linear_norm.a16"), dv)?;
+        // Per head, because the head's own output exponent is what `eps` has to be stated against.
+        let norm_eps = a.param_rows(&n("linear_norm_eps.a16"))?;
         let mut normed_out = Vec::with_capacity(dv);
         for vh in 0..s.linear_v_heads {
             let head = &out[vh * hd..(vh + 1) * hd];
-            let unit = q36_rms_norm_wide(head, s.eps_q).map_err(refuse("gdn_norm"))?;
+            let unit = q36_rms_norm_wide(head, norm_eps[vh.min(norm_eps.len() - 1)]).map_err(refuse("gdn_norm"))?;
             normed_out.extend(q36_rescale_row(&unit, &norm_params[vh * hd..(vh + 1) * hd]).map_err(refuse("gdn_norm_req"))?);
         }
         let gate = silu(&z);
@@ -587,12 +609,7 @@ impl<'a> Qwen36Engine<'a> {
         let gated = q36_mul_wide(&normed_out, &gate, &a.params_sized(&n("linear_gated.a16"), dv)?).map_err(refuse("gdn_gated"))?;
         probe.push((n("linear_gated"), gated.clone()));
 
-        a16_matmul_requant(
-            a.tensor_sized(&n("linear_o.weight"), s.d_model * dv)?,
-            &gated,
-            &a.params_sized(&n("linear_o.weight.a16"), s.d_model)?,
-        )
-        .map_err(refuse("linear_o"))
+        self.project(&n("linear_o.weight"), &gated, s.d_model, false)
     }
 
     /// **The gated-attention arm.** QK-norm per head before the rotation, partial rotation, GQA
@@ -613,30 +630,10 @@ impl<'a> Qwen36Engine<'a> {
 
         // `attn_output_gate: true` — the q projection is double width and the second half is the
         // gate. Stored as two tensors so a court opening addresses either half by name.
-        let q = a16_matmul_requant(
-            a.tensor_sized(&n("attn_q.weight"), q_dim * d)?,
-            normed,
-            &a.params_sized(&n("attn_q.weight.a16"), q_dim)?,
-        )
-        .map_err(refuse("attn_q"))?;
-        let gate_raw = a16_matmul_rescale(
-            a.tensor_sized(&n("attn_gate.weight"), q_dim * d)?,
-            normed,
-            &a.params_sized(&n("attn_gate.weight.a16"), q_dim)?,
-        )
-        .map_err(refuse("attn_gate"))?;
-        let k = a16_matmul_requant(
-            a.tensor_sized(&n("attn_k.weight"), kv_dim * d)?,
-            normed,
-            &a.params_sized(&n("attn_k.weight.a16"), kv_dim)?,
-        )
-        .map_err(refuse("attn_k"))?;
-        let v = a16_matmul_requant(
-            a.tensor_sized(&n("attn_v.weight"), kv_dim * d)?,
-            normed,
-            &a.params_sized(&n("attn_v.weight.a16"), kv_dim)?,
-        )
-        .map_err(refuse("attn_v"))?;
+        let q = self.project(&n("attn_q.weight"), normed, q_dim, false)?;
+        let gate_raw = self.project(&n("attn_gate.weight"), normed, q_dim, true)?;
+        let k = self.project(&n("attn_k.weight"), normed, kv_dim, false)?;
+        let v = self.project(&n("attn_v.weight"), normed, kv_dim, false)?;
 
         // QK-norm: RMSNorm PER HEAD, before the rotation. Normalizing the whole row instead would
         // couple the heads, and doing it after the rotation would normalize away part of what the
@@ -698,12 +695,7 @@ impl<'a> Qwen36Engine<'a> {
         let d = s.d_model;
         let n = |suffix: &str| format!("blk.{li}.{suffix}");
 
-        let router = a16_matmul_rescale(
-            a.tensor_sized(&n("ffn_router.weight"), s.n_experts * d)?,
-            normed,
-            &a.params_sized(&n("ffn_router.weight.a16"), s.n_experts)?,
-        )
-        .map_err(refuse("router"))?;
+        let router = self.project(&n("ffn_router.weight"), normed, s.n_experts, true)?;
         // The router's logits are narrowed to codes before the selection, because the tie rule is
         // defined on what the class commits to and a wider intermediate would let two
         // implementations disagree about a tie that the committed row does not have.
@@ -730,12 +722,7 @@ impl<'a> Qwen36Engine<'a> {
 
         // The shared expert, always on, behind its own scalar gate.
         let shared = self.expert(li, usize::MAX, normed, s.shared_dim, "shared")?;
-        let shared_gate_raw = a16_matmul_rescale(
-            a.tensor_sized(&n("ffn_shared_gate.weight"), d)?,
-            normed,
-            &a.params_sized(&n("ffn_shared_gate.weight.a16"), 1)?,
-        )
-        .map_err(refuse("shared_gate"))?;
+        let shared_gate_raw = self.project(&n("ffn_shared_gate.weight"), normed, 1, true)?;
         let g = q36_sigmoid_gate(&shared_gate_raw)[0];
         // The shared expert's output is wide like the routed ones, so the scalar gate goes through
         // the wide product and lands on the same code grid the combine did.
@@ -762,18 +749,8 @@ impl<'a> Qwen36Engine<'a> {
         let base = if which == usize::MAX { format!("blk.{li}.ffn_shared_expert") } else { format!("blk.{li}.ffn_expert.{which}") };
         let _ = kind;
 
-        let gate = a16_matmul_rescale(
-            a.tensor_sized(&format!("{base}_gate.weight"), mid * d)?,
-            x,
-            &a.params_sized(&format!("{base}_gate.weight.a16"), mid)?,
-        )
-        .map_err(refuse("expert_gate"))?;
-        let up = a16_matmul_requant(
-            a.tensor_sized(&format!("{base}_up.weight"), mid * d)?,
-            x,
-            &a.params_sized(&format!("{base}_up.weight.a16"), mid)?,
-        )
-        .map_err(refuse("expert_up"))?;
+        let gate = self.project(&format!("{base}_gate.weight"), x, mid, true)?;
+        let up = self.project(&format!("{base}_up.weight"), x, mid, false)?;
         // Same cancellation, same fix: `silu(gate)` stays in Q[`K`] and the product narrows once.
         let activated =
             q36_rescale_row(&silu(&gate), &a.params_sized(&format!("{base}_silu.a16"), mid)?).map_err(refuse("expert_silu"))?;
@@ -781,12 +758,7 @@ impl<'a> Qwen36Engine<'a> {
             q36_mul_wide(&activated, &up, &a.params_sized(&format!("{base}_gated.a16"), mid)?).map_err(refuse("expert_gated"))?;
         // Wide out: the combine sums eight of these and the sum cancels, so each row keeps its
         // precision until the one narrowing after the sum.
-        a16_matmul_rescale(
-            a.tensor_sized(&format!("{base}_down.weight"), d * mid)?,
-            &gated,
-            &a.params_sized(&format!("{base}_down.weight.a16"), d)?,
-        )
-        .map_err(refuse("expert_down"))
+        self.project(&format!("{base}_down.weight"), &gated, d, true)
     }
 }
 
@@ -1194,17 +1166,20 @@ mod tests {
                         .with_params(n("linear_conv_act.a16"), &[unity])
                         .with_params(n("linear_dt.weight.a16"), &[projection(d)])
                         .with_params(n("linear_beta.weight.a16"), &[projection(d)])
-                        // A decay exponent of ONE reproduces `sigmoid(-dt)` exactly, which is the
-                        // c = 1 case `q36_pow_q` short-circuits.
+                        // A coefficient of ONE is `exp(−softplus(dt))`; the bias is zero so the
+                        // fixture's decay is a function of the projection alone.
                         .with_params(
                             n("linear_decay_c.a16"),
                             &[A16QuantParams { multiplier: 1, shift: 0, zero: kaspa_consensus_core::palw_base0::ONE }],
                         )
+                        .with_params(n("linear_dt_bias.a16"), &[A16QuantParams { multiplier: 1, shift: 0, zero: 0 }])
                         // The state carries eight bits above the value scale.
                         .with_params(n("linear_read.a16"), &[A16QuantParams { multiplier: 1, shift: 23, zero: 0 }])
+                        .with_params(n("linear_delta.a16"), &[A16QuantParams { multiplier: 1, shift: 0, zero: 0 }])
                         .with_params(n("linear_write.a16"), &[A16QuantParams { multiplier: 1, shift: 7, zero: 0 }])
                         .with_params(n("linear_out.a16"), &[A16QuantParams { multiplier: 1, shift: 23, zero: 0 }])
                         .with_params(n("linear_norm.a16"), &[unity])
+                        .with_params(n("linear_norm_eps.a16"), &[A16QuantParams { multiplier: 1, shift: 0, zero: 0 }])
                         .with_params(n("linear_gate.a16"), &[unity])
                         .with_params(n("linear_gated.a16"), &[A16QuantParams { multiplier: 1, shift: 15, zero: 0 }])
                         .with_params(n("linear_o.weight.a16"), &[projection(dv)]);

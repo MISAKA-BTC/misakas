@@ -184,6 +184,54 @@ fn main() {
             }
             let cos = if na > 0.0 && nb > 0.0 { dot / (na.sqrt() * nb.sqrt()) } else { 0.0 };
             println!("{name:38} {cos:8.4}  {}", row.len());
+            // **A whole-row cosine over a per-head site says nothing.** Every head carries its own
+            // exponent there, so a row cosine also measures the scales BETWEEN heads — which is a
+            // real property of the arm, but not the one that names a broken head. The per-head
+            // breakdown separates the two: a low row cosine with high head cosines is the heads
+            // disagreeing about scale, and a low head cosine is that head computing the wrong
+            // thing.
+            let heads = shape.linear_v_heads;
+            if heads > 1 && name.contains("linear_") && row.len() == heads * shape.linear_head_dim {
+                let hd = shape.linear_head_dim;
+                let mut per: Vec<(f64, usize)> = (0..heads)
+                    .map(|h| {
+                        let (mut d, mut a2, mut b2) = (0f64, 0f64, 0f64);
+                        for i in h * hd..(h + 1) * hd {
+                            let (x, y) = (r[i] as f64, row[i] as f64);
+                            d += x * y;
+                            a2 += x * x;
+                            b2 += y * y;
+                        }
+                        (if a2 > 0.0 && b2 > 0.0 { d / (a2.sqrt() * b2.sqrt()) } else { 0.0 }, h)
+                    })
+                    .collect();
+                per.sort_by(|a, b| a.0.total_cmp(&b.0));
+                let worst: Vec<String> = per.iter().take(4).map(|(c, h)| format!("h{h}:{c:.3}")).collect();
+                let mean = per.iter().map(|(c, _)| c).sum::<f64>() / heads as f64;
+                println!("{:38} per-head mean {mean:.4}  worst {}", "", worst.join(" "));
+                // The magnitude each head contributes, engine over reference, normalized by the
+                // median so a global scale reads as 1.0. This is the other half of a row cosine
+                // that a per-head cosine says nothing about.
+                let mut alpha: Vec<(f64, usize)> = (0..heads)
+                    .map(|h| {
+                        let (mut a2, mut b2) = (0f64, 0f64);
+                        for i in h * hd..(h + 1) * hd {
+                            a2 += (r[i] as f64) * (r[i] as f64);
+                            b2 += (row[i] as f64) * (row[i] as f64);
+                        }
+                        (if a2 > 0.0 { (b2 / a2).sqrt() } else { 0.0 }, h)
+                    })
+                    .collect();
+                let mut sorted: Vec<f64> = alpha.iter().map(|(a, _)| *a).collect();
+                sorted.sort_by(f64::total_cmp);
+                let median = sorted[heads / 2].max(f64::MIN_POSITIVE);
+                for a in alpha.iter_mut() {
+                    a.0 /= median;
+                }
+                alpha.sort_by(|a, b| b.0.total_cmp(&a.0));
+                let spread: Vec<String> = alpha.iter().take(3).chain(alpha.iter().rev().take(2)).map(|(a, h)| format!("h{h}:{a:.2}")).collect();
+                println!("{:38} scale/median  {}", "", spread.join(" "));
+            }
         }
     }
 

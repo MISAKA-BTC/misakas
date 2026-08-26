@@ -333,29 +333,170 @@ pub fn q36_mul_wide(a: &[i32], b: &[i32], params: &[A16QuantParams]) -> Result<V
 /// squares in `i128`, brings it into `int_rsqrt`'s domain by an even shift (which scales the
 /// reciprocal square root by a known power of two), and undoes that on the product.
 ///
-/// `eps_q` is at the same scale as the mean of squares, exactly as in [`a16_rms_norm`].
-pub fn q36_rms_norm_wide(x: &[i32], eps_q: i64) -> Result<Vec<i32>, PalwQwen36OpError> {
+/// # `eps` is class data, and it has to be at the CALLER's scale
+///
+/// `eps` stabilizes the reciprocal of a small magnitude, so it is only meaningful against the
+/// TRUE mean of squares — and this op is handed codes, whose mean of squares is that times
+/// `2^(2e)` for whatever exponent the caller's site carries. A single constant is therefore not a
+/// constant: on a site whose codes sit near the rail it rounds to nothing, and the op returns a
+/// unit row where the model returns a suppressed one.
+///
+/// That is not a corner case here. Qwen3.6's GatedDeltaNet output has heads whose row is three
+/// thousand times quieter than the loudest — head 17 of layer 0 has an rms of `1.9e−5` against
+/// `6.0e−2` — and for those heads `eps = 1e−6` is not a stabilizer, it IS the denominator: the
+/// reference normalizes head 17 to a magnitude **fifty-two times below** the unit row this op
+/// produced when `eps` was passed as one shared integer. Every head's direction was right to four
+/// decimals and the arm was still wrong, because the heads no longer had the right sizes relative
+/// to one another.
+///
+/// So `eps` arrives as a mantissa and a left shift — `eps.zero << eps.shift`, formed in `i128` —
+/// which lets the caller state `eps · 2^(2e + K)` for an `e` large enough that the product leaves
+/// an `i64`. `multiplier` is unused and must be one.
+pub fn q36_rms_norm_wide(x: &[i32], eps: A16QuantParams) -> Result<Vec<i32>, PalwQwen36OpError> {
     if x.is_empty() {
         return Err(PalwQwen36OpError::Empty);
     }
     let n = x.len() as i128;
-    let mut sum: i128 = x.iter().map(|v| (*v as i128) * (*v as i128)).sum();
-    // `mean_q = (sum << K) / n` must fit an `i64`. Shifting `sum` right by two multiplies the
-    // reciprocal square root by two, which is undone on the product below.
-    let mut halvings = 0u32;
-    while ((sum << K) / n) > i64::MAX as i128 {
-        sum >>= 2;
+    let sum: i128 = x.iter().map(|v| (*v as i128) * (*v as i128)).sum();
+    if eps.zero < 0 {
+        return Err(PalwQwen36OpError::Empty);
+    }
+    let mut mean = ((sum << K) / n) + ((eps.zero as i128) << eps.shift.min(96));
+    if mean <= 0 {
+        return Ok(vec![0; x.len()]);
+    }
+    // **Take the exponent out before the reciprocal square root, not after.**
+    //
+    // `int_rsqrt` normalizes internally and then puts the exponent back with `y >> e` — a TRUNCATING
+    // shift on a Q[`K`] value. Its argument here is a mean of squares of `i32` codes, which reaches
+    // `2^62`; that is `e ≈ 19`, so the twenty-four significant bits of the reciprocal square root
+    // are shifted down to five before anything multiplies by them. The op is accurate; the caller
+    // was asking it to return a number it has no room to express.
+    //
+    // Each factor of four in the argument is a factor of two in the result, so normalizing into
+    // `[1, 4)` — where `int_rsqrt` returns its full precision and `e` is zero — and undoing it on
+    // the PRODUCT is exact. The product is `i128` and `v/rms(v) ≤ √n`, so the correction has room
+    // on both sides.
+    //
+    // Measured on Qwen3.6's GatedDeltaNet output: three of thirty-two heads came out of the norm
+    // with magnitudes 2.6, 4.3 and **52 times** what the reference had, while every head's
+    // DIRECTION was right to four decimals — the signature of a shared reciprocal that is quantized
+    // rather than wrong.
+    let mut halvings: i32 = 0;
+    while mean >= 4 * ONE as i128 {
+        mean >>= 2;
         halvings += 1;
-        if halvings > 31 {
+    }
+    while mean < ONE as i128 {
+        mean <<= 2;
+        halvings -= 1;
+        if halvings < -40 {
             return Err(PalwQwen36OpError::Empty);
         }
     }
-    let mean_q = ((sum << K) / n) as i64;
-    let r = int_rsqrt(mean_q.saturating_add(eps_q));
+    let r = int_rsqrt(mean as i64) as i128;
     Ok(x.iter()
         .map(|v| {
-            let scaled = ((*v as i128) * (r as i128)) >> halvings;
+            let product = (*v as i128) * r;
+            let scaled = if halvings >= 0 { product >> halvings } else { product << (-halvings) };
             scaled.clamp(i32::MIN as i128, i32::MAX as i128) as i32
+        })
+        .collect())
+}
+
+/// Weights per group in a grouped projection. Q4_K's granularity, and the reason for it.
+pub const QWEN36_WEIGHT_GROUP: usize = 32;
+
+/// The largest per-group exponent a weight table may carry. `partial · 2^e` must stay inside an
+/// `i64` once summed over the groups: `32 · 127 · 32767 · 2^20 · 2^12 ≈ 5.9e20`… which is past it,
+/// so the real bound is checked against the row length at the op's entry.
+pub const QWEN36_MAX_GROUP_EXP: i8 = 20;
+
+/// **Op Q4e: `MatMulGrouped` — a projection whose weights carry a scale per 32 elements.**
+///
+/// `int8` with one scale per output ROW is eight bits spread over two thousand weights, and a row
+/// with an outlier spends most of them on it. Measured on Qwen3.6's fused qkv projection against
+/// the `f32` the checkpoint dequantizes to: **8.7e-3 relative with one scale per row, 5.3e-3 with
+/// one per 32** — and the per-row figure is the dominant term in what the arm's output was missing.
+/// Q4_K, which the checkpoint is stored in, carries a scale per 32 for exactly this reason.
+///
+/// The group scale is a power of two held as an `i8` exponent, so the combine is a shift and the
+/// table costs one byte per 32 weights — three percent, against a factor of 1.6 in the error.
+///
+/// `w[c·n + i]` is the code; `exps[c·groups + g]` is the group's exponent, non-negative, and the
+/// channel's own `(multiplier, shift, zero)` carries the row scale as usual:
+///
+/// ```text
+/// out[c] = narrow( Σ_g 2^exps[c,g] · Σ_{i in group g} w[c·n+i] · x[i] )
+/// ```
+pub fn q36_matmul_grouped(
+    weights: &[i8],
+    exps: &[i8],
+    x: &[i32],
+    params: &[A16QuantParams],
+) -> Result<Vec<i32>, PalwQwen36OpError> {
+    check_a16(x)?;
+    let n = x.len();
+    let out_dim = params.len();
+    if out_dim == 0 || n == 0 {
+        return Err(PalwQwen36OpError::Empty);
+    }
+    if weights.len() != out_dim * n {
+        return Err(PalwQwen36OpError::LengthMismatch { a: weights.len(), b: out_dim * n });
+    }
+    let groups = n.div_ceil(QWEN36_WEIGHT_GROUP);
+    if exps.len() != out_dim * groups {
+        return Err(PalwQwen36OpError::LengthMismatch { a: exps.len(), b: out_dim * groups });
+    }
+    // The accumulator's bound, checked once rather than assumed: a group contributes at most
+    // `32 · 128 · 32767 · 2^max_exp`, and there are `groups` of them.
+    let max_exp = exps.iter().copied().max().unwrap_or(0);
+    if !(0..=QWEN36_MAX_GROUP_EXP).contains(&max_exp) {
+        return Err(PalwQwen36OpError::BadK { k: max_exp as usize, experts: QWEN36_MAX_GROUP_EXP as usize });
+    }
+    let per_group = (QWEN36_WEIGHT_GROUP as i128) * 128 * (A16_CODE_MAX as i128) * (1i128 << max_exp);
+    if per_group * groups as i128 > i64::MAX as i128 {
+        return Err(PalwQwen36OpError::NotAMultiple { got: n, unit: QWEN36_WEIGHT_GROUP });
+    }
+    Ok((0..out_dim)
+        .map(|c| {
+            let row = &weights[c * n..(c + 1) * n];
+            let mut acc: i64 = 0;
+            for (g, chunk) in row.chunks(QWEN36_WEIGHT_GROUP).enumerate() {
+                let from = g * QWEN36_WEIGHT_GROUP;
+                let partial: i64 = chunk.iter().zip(&x[from..from + chunk.len()]).map(|(w, v)| *w as i64 * *v as i64).sum();
+                acc += partial << exps[c * groups + g];
+            }
+            let p = params[c];
+            a16_scale_round(acc, p.multiplier, p.shift).saturating_add(p.zero).clamp(-A16_CODE_MAX, A16_CODE_MAX) as i32
+        })
+        .collect())
+}
+
+/// The same projection with the Q[`K`] tail, for the sites whose consumer is a nonlinearity.
+pub fn q36_matmul_grouped_wide(
+    weights: &[i8],
+    exps: &[i8],
+    x: &[i32],
+    params: &[A16QuantParams],
+) -> Result<Vec<i32>, PalwQwen36OpError> {
+    // The narrow form is called first for its validation only — every bound it checks is the same
+    // one — and its result is discarded because the two differ solely in where they clamp.
+    q36_matmul_grouped(weights, exps, x, params)?;
+    let n = x.len();
+    let out_dim = params.len();
+    let groups = n.div_ceil(QWEN36_WEIGHT_GROUP);
+    Ok((0..out_dim)
+        .map(|c| {
+            let row = &weights[c * n..(c + 1) * n];
+            let mut acc: i64 = 0;
+            for (g, chunk) in row.chunks(QWEN36_WEIGHT_GROUP).enumerate() {
+                let from = g * QWEN36_WEIGHT_GROUP;
+                let partial: i64 = chunk.iter().zip(&x[from..from + chunk.len()]).map(|(w, v)| *w as i64 * *v as i64).sum();
+                acc += partial << exps[c * groups + g];
+            }
+            let p = params[c];
+            a16_scale_round(acc, p.multiplier, p.shift).saturating_add(p.zero).clamp(i32::MIN as i64, i32::MAX as i64) as i32
         })
         .collect())
 }
@@ -548,6 +689,52 @@ pub fn q36_pow_q(u: i64, c: i64) -> i64 {
     q36_exp_refined(arg).clamp(0, ONE)
 }
 
+/// **Op Q7b: `Softplus` — `ln(1 + e^x)` in Q[`K`], total and non-negative.**
+///
+/// Split at the sign so the exponential is only ever evaluated on a non-positive argument, which
+/// is the only side [`int_exp`] is defined on:
+///
+/// ```text
+/// x ≤ 0:  ln(1 + e^x)
+/// x > 0:  x + ln(1 + e^−x)
+/// ```
+///
+/// The two branches agree at zero (`ln 2` from both), so nothing steps.
+pub fn q36_softplus(x_q: i32) -> i64 {
+    let magnitude = x_q.saturating_abs();
+    let e = int_exp(-magnitude) as i64;
+    // `1 + e` is in `[ONE, 2·ONE]`, the range `q36_int_ln` is most accurate on.
+    let tail = q36_int_ln(ONE + e).unwrap_or(0);
+    if x_q <= 0 { tail } else { x_q as i64 + tail }
+}
+
+/// **Op Q7c: `Decay` — the GatedDeltaNet gate `exp(a · softplus(dt))` for a registered `a ≤ 0`.**
+///
+/// `c` is `−a` at Q[`K`], non-negative, so the argument handed to the exponential is non-positive
+/// by construction and the result lands in `(0, ONE]` where the recurrence requires it.
+///
+/// # Why not `sigmoid(−dt)^a`
+///
+/// The identity `exp(−A·softplus(dt)) = σ(−dt)^A` is exact in the reals and was how this was first
+/// written. In fixed point it is not: `σ(−dt)` for a head whose `dt` is strongly positive is a
+/// value like `1.7e−7`, which on the Q[`K`] grid is the integer **3**. Taking a logarithm of a
+/// three-unit quantity and multiplying it by `A` carries that quantization straight into the gate,
+/// and past `dt ≈ 18` the code is zero and the decay collapses to zero — a state reset where the
+/// model wanted `exp(−2.5)`. Real checkpoints live there: this checkpoint's `ssm_dt` bias reaches
+/// **15.6** before the projection contributes anything.
+///
+/// Evaluating `softplus` directly keeps the large argument large — for `dt > 0` it is `dt` plus a
+/// bounded tail — and the single exponential at the end is applied to a value the class can
+/// represent.
+pub fn q36_decay(dt_q: i32, c_q: i64) -> i64 {
+    if c_q <= 0 {
+        return ONE;
+    }
+    let sp = q36_softplus(dt_q);
+    let arg = ((c_q as i128 * sp as i128) >> K).clamp(0, -(i32::MIN as i128)) as i128;
+    q36_exp_refined((-arg) as i32).clamp(0, ONE)
+}
+
 // -------------------------------------------------------------------------------------------
 // Q8. `L2Norm` — the key vector the delta rule needs on the unit sphere
 // -------------------------------------------------------------------------------------------
@@ -650,6 +837,11 @@ pub fn q36_ssm_conv(window: &[i32], taps: &[i32], channels: usize, params: &[A16
 // Q10. The gated delta rule — the recurrence, and the one op with STATE
 // -------------------------------------------------------------------------------------------
 
+/// The width the delta `u = β(v − w)` is held at. Twenty-four bits: eight more than a code, which
+/// is what the cancellation needs, and few enough that `u · k` stays inside `i64` under the
+/// write's shift.
+pub const QWEN36_DELTA_MAX: i64 = (1 << 24) - 1;
+
 /// The largest state magnitude the bounds below are proved for. The state is `i32`, so this is
 /// the type's own limit named as a premise rather than assumed.
 pub const QWEN36_STATE_MAX: i64 = i32::MAX as i64;
@@ -673,11 +865,6 @@ const _: () = assert!(
 /// × 32 heads × 30 layers = **15.7 million narrowings per token**. At `i128` that is the whole
 /// token. So the state's two narrowings are `i64` with a bound proved at the op's entry instead
 /// of a width that makes the bound unnecessary.
-#[inline]
-fn state_scale(x: i64, m: i64, shift: u8) -> i64 {
-    rounding_shift_right_64(x.wrapping_mul(m), shift.min(62))
-}
-
 /// One head's recurrent state: `d_v × d_k`, row-major, in the class's registered state scale.
 ///
 /// Held by the caller rather than by the op. A runtime keeps this in an arena and a court
@@ -707,8 +894,24 @@ impl Qwen36GdnStateV1 {
 pub struct Qwen36GdnParamsV1 {
     /// `S·k` (state scale × Q15) → the value code scale, so the delta is formed in `v`'s units.
     pub read: A16QuantParams,
-    /// `u ⊗ k` (code × Q15) → the state scale.
-    pub write: A16QuantParams,
+    /// **`u ⊗ k` → the state scale, as a SHIFT.** Positive shifts left.
+    ///
+    /// A shift rather than a triple for two reasons, and the second is the one that matters. It is
+    /// a power of two by construction — every exponent in this class is — so a multiplier adds
+    /// nothing. And the delta `u = β(v − w)` is WIDE: the delta rule's whole premise is that the
+    /// state learns to predict `v`, so `v − w` is a cancellation by design and holding it at
+    /// sixteen bits throws away most of it. A wide `u` times a Q15 key reaches `2^39`, which a
+    /// shift survives in `i64` and a `2^30` multiplier does not — and this is the `d_v · d_k` site,
+    /// 15.7 million per token, where `i128` is the whole token.
+    pub write_shift: i32,
+    /// **`β(v − w)` → the delta's own scale.**
+    ///
+    /// The delta rule's premise is that the state learns to predict `v`, so `v − w` is a
+    /// cancellation BY DESIGN and its magnitude is far below `v`'s. Holding it at `v`'s scale
+    /// leaves it a handful of bits, which is the resolution the whole recurrence then accumulates.
+    /// A wider clamp does not help — the delta is small, not large — so it gets a finer exponent
+    /// instead, and the write's shift is measured against that.
+    pub delta: A16QuantParams,
     /// `S·q` (state scale × Q15) → the output code scale.
     pub out: A16QuantParams,
 }
@@ -769,10 +972,18 @@ pub fn q36_gdn_step(
     if !(0..=ONE).contains(&decay_q) || !(0..=ONE).contains(&beta_q) {
         return Err(PalwQwen36OpError::Empty);
     }
-    for m in [params.read.multiplier, params.write.multiplier, params.out.multiplier] {
+    for m in [params.read.multiplier, params.out.multiplier, params.delta.multiplier] {
         if m.abs() > QWEN36_STATE_MULT_MAX {
             return Err(PalwQwen36OpError::Empty);
         }
+    }
+    // The write's shift is bounded on BOTH sides, and the upper bound is arithmetic rather than
+    // defensive: `u ⊗ k` is at most `2^24 · 2^15 = 2^39`, so a left shift past twenty leaves the
+    // `i64` the write is formed in. Refused rather than clamped — a silently truncated shift is a
+    // state scaled by a power of two nobody chose, and it would look like a calibration that
+    // merely underperformed.
+    if !(-62..=20).contains(&params.write_shift) {
+        return Err(PalwQwen36OpError::Empty);
     }
 
     // 1. The gate. `|s| ≤ 2^31` and `decay ≤ 2^24`, so the product is at most `2^55`.
@@ -801,7 +1012,8 @@ pub fn q36_gdn_step(
         // 3. `u = beta * (v - w)`, in v's units and on the code grid.
         let delta = (*vi as i64).saturating_sub(w);
         let scaled = rounding_shift_right_64(delta.saturating_mul(beta_q), K as u8);
-        u.push(scaled.clamp(-A16_CODE_MAX, A16_CODE_MAX) as i32);
+        let narrowed = a16_scale_round(scaled, params.delta.multiplier, params.delta.shift).saturating_add(params.delta.zero);
+        u.push(narrowed.clamp(-QWEN36_DELTA_MAX, QWEN36_DELTA_MAX) as i32);
     }
 
     // 4. The rank-one write. `u · k` is at most `2^30`, and the multiplier is bounded above, so
@@ -812,7 +1024,12 @@ pub fn q36_gdn_step(
             continue;
         }
         for (slot, kj) in row.iter_mut().zip(k) {
-            let write = state_scale(ui * *kj as i64, params.write.multiplier, params.write.shift).saturating_add(params.write.zero);
+            let product = ui * *kj as i64;
+            let write = if params.write_shift >= 0 {
+                product.saturating_mul(1i64 << params.write_shift)
+            } else {
+                rounding_shift_right_64(product, (-params.write_shift) as u8)
+            };
             *slot = (*slot as i64).saturating_add(write).clamp(-QWEN36_STATE_MAX, QWEN36_STATE_MAX) as i32;
         }
     }
@@ -990,8 +1207,10 @@ mod tests {
         let params = Qwen36GdnParamsV1 {
             // S·k is (code · 2^8) × Q15 → code: divide by 2^(15+8).
             read: A16QuantParams { multiplier: 1, shift: 15 + state_bits, zero: 0 },
-            // u ⊗ k is code × Q15 → code · 2^8: divide by 2^(15−8).
-            write: A16QuantParams { multiplier: 1, shift: 15 - state_bits, zero: 0 },
+            // The delta stays at v's scale here: the fixture is measuring drift, not resolution.
+            delta: A16QuantParams { multiplier: 1, shift: 0, zero: 0 },
+            // u ⊗ k is code × Q15 → code · 2^8: shift left by 8 − 15.
+            write_shift: state_bits as i32 - 15,
             out: A16QuantParams { multiplier: 1, shift: 15 + state_bits, zero: 0 },
         };
 
@@ -1054,12 +1273,62 @@ mod tests {
     }
 
     /// Determinism and the refusals, which the fidelity test above cannot see.
+    /// `softplus` must agree with `ln(1 + e^x)` on both sides of the split, and the two branches
+    /// must meet at zero — a step there would be a discontinuity in every head's decay.
+    #[test]
+    fn softplus_matches_the_real_function_on_both_branches() {
+        for x in [-40.0f64, -12.0, -3.0, -1.0, -0.25, 0.0, 0.25, 1.0, 3.0, 12.0, 15.6, 40.0] {
+            let got = q36_softplus((x * ONE as f64) as i32) as f64 / ONE as f64;
+            let want = (1.0 + x.exp()).ln();
+            let tolerance = 4e-3 * want.max(1.0);
+            assert!((got - want).abs() <= tolerance, "softplus({x}) = {got}, want {want}");
+        }
+        // The branches meet: `ln 2` from either side.
+        assert_eq!(q36_softplus(0), q36_softplus(-0));
+    }
+
+    /// The decay is `exp(a · softplus(dt))` and it must stay a decay: inside `(0, ONE]` for every
+    /// input, including the ones the identity it replaced could not represent.
+    #[test]
+    fn the_decay_is_a_contraction_everywhere() {
+        for c in [0.0186f64, 0.036, 0.137, 1.0, 12.0, 72.33] {
+            for dt in [-20.0f64, -5.28, -1.0, 0.0, 1.0, 10.125, 15.5625, 30.0] {
+                let got = q36_decay((dt * ONE as f64) as i32, (c * ONE as f64) as i64);
+                assert!((0..=ONE).contains(&got), "decay({dt}, {c}) = {got} is not a contraction");
+                let want = (-c * (1.0 + dt.exp()).ln()).exp();
+                // Relative, because the interesting decays are the ones near one: a head at
+                // 0.99937 and a head at 0.99 are different models.
+                let error = (got as f64 / ONE as f64 - want).abs() / want.max(1e-9);
+                assert!(error < 2e-2 || want < 1e-6, "decay({dt}, {c}) = {got} vs {want} (rel {error:e})");
+            }
+        }
+    }
+
+    /// **The failure the identity had, stated as a test.** `sigmoid(−dt)^c` cannot represent a
+    /// head whose `dt` is large: the sigmoid underflows the Q[`K`] grid and the decay collapses to
+    /// zero. `ssm_dt` on the shipped checkpoint reaches 15.6, so this is not a corner.
+    #[test]
+    fn a_large_dt_decays_rather_than_resetting() {
+        let c = (0.137f64 * ONE as f64) as i64;
+        let dt = (18.0f64 * ONE as f64) as i32;
+        let identity = q36_pow_q(q36_sigmoid_gate(&[-dt])[0] as i64, c);
+        let direct = q36_decay(dt, c);
+        let want = (-0.137f64 * 18.0).exp();
+        assert_eq!(identity, 0, "the identity was expected to underflow — if it no longer does, say so");
+        assert!(
+            (direct as f64 / ONE as f64 - want).abs() < 2e-2 * want,
+            "decay {direct} ({}) vs {want}",
+            direct as f64 / ONE as f64
+        );
+    }
+
     #[test]
     fn the_recurrence_is_deterministic_and_total() {
         let (d_v, d_k) = (8usize, 8usize);
         let params = Qwen36GdnParamsV1 {
             read: A16QuantParams { multiplier: 1, shift: 23, zero: 0 },
-            write: A16QuantParams { multiplier: 1, shift: 7, zero: 0 },
+            delta: A16QuantParams { multiplier: 1, shift: 0, zero: 0 },
+            write_shift: 8,
             out: A16QuantParams { multiplier: 1, shift: 23, zero: 0 },
         };
         let k = q36_l2_norm(&(0..d_k).map(|i| (i as i32 + 1) * 900).collect::<Vec<_>>()).expect("well-formed");

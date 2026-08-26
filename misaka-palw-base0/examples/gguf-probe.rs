@@ -44,4 +44,40 @@ fn main() {
     let zeros = values.iter().filter(|v| **v == 0.0).count();
     println!("  n {n} mean {mean:.6} rms {rms:.6} absmax {absmax:.6} zeros {zeros}");
     println!("  first 8: {:?}", &values[..8.min(n)]);
+
+    // **What int8 costs against what the checkpoint already carries.**
+    //
+    // Q4_K is four bits with a scale per 32 elements; int8 with one scale per output ROW is eight
+    // bits over 2,048. Which is more accurate is not obvious from the bit widths, and the answer
+    // decides whether a finer weight scale is the next thing to build.
+    if let Some(out_dim) = std::env::args().nth(4).and_then(|v| v.parse::<usize>().ok()) {
+        let k = n / out_dim.max(1);
+        let mut row_err = 0f64;
+        let mut row_sig = 0f64;
+        let mut grp_err = 0f64;
+        for c in 0..out_dim {
+            let row = &values[c * k..(c + 1) * k];
+            let absmax = row.iter().fold(0f32, |a, v| a.max(v.abs())) as f64;
+            let scale = if absmax > 0.0 { absmax / 127.0 } else { 1.0 };
+            for v in row {
+                let q = (*v as f64 / scale).round().clamp(-127.0, 127.0) * scale;
+                row_err += (q - *v as f64).powi(2);
+                row_sig += (*v as f64).powi(2);
+            }
+            // The same eight bits with a scale per 32, which is Q4_K's granularity.
+            for group in row.chunks(32) {
+                let a = group.iter().fold(0f32, |a, v| a.max(v.abs())) as f64;
+                let s = if a > 0.0 { a / 127.0 } else { 1.0 };
+                for v in group {
+                    let q = (*v as f64 / s).round().clamp(-127.0, 127.0) * s;
+                    grp_err += (q - *v as f64).powi(2);
+                }
+            }
+        }
+        println!(
+            "  int8 per row    relative error {:.4e}\n  int8 per 32     relative error {:.4e}",
+            (row_err / row_sig).sqrt(),
+            (grp_err / row_sig).sqrt()
+        );
+    }
 }

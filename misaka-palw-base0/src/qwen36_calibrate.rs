@@ -26,7 +26,7 @@
 
 use crate::qwen36_reference::SiteRangeV1;
 use kaspa_consensus_core::palw_base0::{K, ONE};
-use kaspa_consensus_core::palw_base0_a16::{A16_CODE_MAX, A16QuantParams};
+use kaspa_consensus_core::palw_base0_a16::{A16_CODE_MAX, A16_MAX_SHIFT, A16QuantParams};
 
 /// How many bits of headroom a site keeps above the largest magnitude it was seen at.
 ///
@@ -188,18 +188,62 @@ pub fn router_params(row_scales: &[f64], e_in: i32, absmax: f64) -> (Vec<A16Quan
 /// * `read`: `S·k` is `(value · 2^e_state) × Q15` → the value code scale, so `2^(e_value − e_state − 15)`.
 /// * `write`: `u ⊗ k` is `(code at e_value) × Q15` → the state scale, so `2^(e_state − e_value − 15)`.
 /// * `out`: `S·q` likewise, into the output site's exponent.
-pub fn gdn_params(e_state: i32, e_value: i32, e_out: i32) -> (A16QuantParams, A16QuantParams, A16QuantParams) {
+pub fn gdn_params(e_state: i32, e_value: i32, e_delta: i32, e_out: i32, d_k: usize) -> (A16QuantParams, A16QuantParams, i32, A16QuantParams) {
     (
         state_triple(2f64.powi(e_value - e_state - 15)),
-        state_triple(2f64.powi(e_state - e_value - 15)),
-        state_triple(2f64.powi(e_out - e_state - 15)),
+        // The delta is formed at `v`'s scale and narrowed to its own, which is finer because the
+        // delta rule cancels.
+        state_triple(2f64.powi(e_delta - e_value)),
+        // The write is a shift: `u ⊗ k` is `(code at e_delta) × Q15` and the state is at `e_state`.
+        e_state - e_delta - 15,
+        // **`1/√d_k` rides here.** The delta rule scales the query by the inverse root of the key
+        // dimension before the read, exactly as scaled dot-product attention does. A per-head
+        // constant is invisible to the RMS norm that follows — which is why it went unnoticed —
+        // but it is not invisible to the CODE: the narrowing is calibrated from a reference that
+        // applies it, so an engine that does not would sit eleven times up the grid and saturate.
+        state_triple(2f64.powi(e_out - e_state - 15) / (d_k.max(1) as f64).sqrt()),
     )
 }
 
-/// The decay exponent `c = exp(A_log)`, carried in a triple's `zero` at Q[`K`].
-pub fn decay_exponent(a_log: f32) -> A16QuantParams {
-    let c = (a_log as f64).exp() * ONE as f64;
+/// `eps` for [`q36_rms_norm_wide`], stated at a site whose codes carry `e` bits above the truth.
+///
+/// The op compares it against a mean of SQUARES of codes, so the shift is `2e + K`; the mantissa
+/// is carried at Q40 rather than Q[`K`] because on a head where `eps` dominates it is not a
+/// stabilizer but the whole denominator, and `1e−6` at Q[`K`] is the integer 17 — a one percent
+/// error on that head's entire magnitude.
+pub fn norm_eps_params(eps: f64, e: i32) -> A16QuantParams {
+    // The wire's shift is a `u8` the decoder refuses past 62, so the split between mantissa bits
+    // and shift is chosen to land inside it: any exponent the shift cannot carry goes into the
+    // mantissa, which an `i64` has room for well past the exponents a real site produces.
+    let want = 2 * e + K as i32;
+    let bits = want.clamp(40, 80).max(want - A16_MAX_SHIFT as i32).min(80);
+    let shift = (want - bits).clamp(0, A16_MAX_SHIFT as i32);
+    let mantissa = (eps * 2f64.powi(bits)).round().clamp(0.0, i64::MAX as f64) as i64;
+    A16QuantParams { multiplier: 1, shift: shift as u8, zero: mantissa }
+}
+
+/// The decay coefficient `c = −a`, carried in a triple's `zero` at Q[`K`].
+///
+/// **The checkpoint stores `−exp(A_log)`, not `A_log`.** The tensor is named `ssm_a` and the
+/// module that produced it holds `A_log`, which is what the first reading of this assumed — but
+/// the GGUF converter applies the negation and the exponential when it writes, so the values on
+/// disk are already the coefficient. Measured on this checkpoint they run from `−72.33` to
+/// `−0.0186`: every one of them negative, which `A_log` never is, and spanning four orders of
+/// magnitude, which is what an exponential of a trained log-parameter looks like. Reading them as
+/// `A_log` turned a head's coefficient of `0.036` into `exp(−0.036) = 0.965`, a factor of
+/// twenty-seven, and did it to all thirty-two heads of all thirty linear layers.
+pub fn decay_exponent(ssm_a: f32) -> A16QuantParams {
+    let c = -(ssm_a as f64) * ONE as f64;
     A16QuantParams { multiplier: 1, shift: 0, zero: c.clamp(0.0, i64::MAX as f64) as i64 }
+}
+
+/// The `dt` bias, added before the softplus, at Q[`K`] in a triple's `zero`.
+///
+/// A separate tensor (`ssm_dt`) rather than a column of the projection, and it is not optional:
+/// this checkpoint's biases run from `−5.3` to `+15.6`, so the softplus argument is dominated by
+/// the bias and dropping it does not perturb the decay, it replaces it.
+pub fn dt_bias(bias: f32) -> A16QuantParams {
+    A16QuantParams { multiplier: 1, shift: 0, zero: ((bias as f64) * ONE as f64).round() as i64 }
 }
 
 /// **Why there is no per-LANE version of any of these, and there must not be.**
@@ -294,8 +338,10 @@ mod tests {
     fn the_state_triples_fit_the_recurrence_bound() {
         let bound = kaspa_consensus_core::palw_qwen36_ops::QWEN36_STATE_MULT_MAX;
         for (e_state, e_value, e_out) in [(0i32, 0i32, 0i32), (12, 10, 14), (20, -5, 30), (9, 20, -3)] {
-            let (read, write, out) = gdn_params(e_state, e_value, e_out);
-            for p in [read, write, out] {
+            let (read, delta, write, out) = gdn_params(e_state, e_value, e_value, e_out, 128);
+            let _ = delta;
+            assert!((-62..=20).contains(&write), "the write shift must be one the op can apply, got {write}");
+            for p in [read, out] {
                 assert!(p.multiplier.abs() <= bound, "multiplier {} is past the bound {bound}", p.multiplier);
                 assert!(p.shift <= 62);
             }
@@ -317,10 +363,10 @@ mod tests {
         // A state that reaches 2.6 with values at 3.4: the read/write pair must be inverses up to
         // the Q15 the key carries.
         let (e_state, e_value, e_out) = (site_exponent(2.6), site_exponent(3.4), site_exponent(0.58));
-        let (read, write, _) = gdn_params(e_state, e_value, e_out);
+        let (read, _, write, _) = gdn_params(e_state, e_value, e_value, e_out, 1);
         let g = |p: &A16QuantParams| p.multiplier as f64 / 2f64.powi(p.shift as i32);
-        // read · write = 2^-30 — the two Q15 the key contributes on the way in and on the way out.
-        assert!((g(&read) * g(&write) - 2f64.powi(-30)).abs() / 2f64.powi(-30) < 1e-6);
+        // read · 2^write = 2^-30 — the two Q15 the key contributes on the way in and on the way out.
+        assert!((g(&read) * 2f64.powi(write) - 2f64.powi(-30)).abs() / 2f64.powi(-30) < 1e-6);
         // And the state's rail holds the value it was measured at, with the headroom the exponent
         // was chosen for.
         assert!(2.6 * 2f64.powi(e_state) < i32::MAX as f64);

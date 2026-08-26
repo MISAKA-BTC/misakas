@@ -171,7 +171,10 @@ pub struct LinearWeights<'a> {
     pub conv: &'a [f32],
     pub alpha: &'a [f32],
     pub beta: &'a [f32],
-    pub a_log: &'a [f32],
+    /// `−exp(A_log)`, already negated and exponentiated by the GGUF writer.
+    pub ssm_a: &'a [f32],
+    /// Added to the `dt` projection before the softplus.
+    pub dt_bias: &'a [f32],
     pub ssm_norm: &'a [f32],
     pub out: &'a [f32],
 }
@@ -253,30 +256,55 @@ pub fn reference_linear_layer(
         calibration.observe(&g("linear_beta"), &beta_raw);
 
         let mut out = Vec::with_capacity(dv);
+        // **One row of all the heads' gates, not one site per head.** A single-lane site is
+        // overwritten by the next head, so what a row dump keeps is head 31 and nothing else —
+        // and a gate that is wrong for one head is exactly the failure that looks like a
+        // magnitude error the norm then hides.
+        let mut decays: Vec<f32> = Vec::with_capacity(shape.linear_v_heads);
+        let mut betas: Vec<f32> = Vec::with_capacity(shape.linear_v_heads);
+        // **One lane per head, holding that head's crest.** The state and the delta are the two
+        // sites whose magnitude varies by ORDERS between heads, because the decay does: a head at
+        // `0.9999` accumulates a thousand positions of history and a head at `0.25` accumulates
+        // one. A single exponent over all thirty-two then spends its bits on the loudest head and
+        // leaves the quiet ones a handful — which the head-wise norm downstream promptly amplifies
+        // back to O(1) error. These two sites exist so the converter can give each head its own.
+        let mut state_crest: Vec<f32> = Vec::with_capacity(shape.linear_v_heads);
+        let mut delta_crest: Vec<f32> = Vec::with_capacity(shape.linear_v_heads);
         for vh in 0..shape.linear_v_heads {
             let kh = vh / group;
             let k = l2_norm(&kc[kh * hd..(kh + 1) * hd]);
-            let q = l2_norm(&qc[kh * hd..(kh + 1) * hd]);
+            // The delta rule scales the query by `1/√d_k`, like any scaled dot product.
+            let scale = 1.0 / (hd as f32).sqrt();
+            let q: Vec<f32> = l2_norm(&qc[kh * hd..(kh + 1) * hd]).iter().map(|v| v * scale).collect();
             let v = &vc[vh * hd..(vh + 1) * hd];
             let softplus = |x: f32| if x > 20.0 { x } else { (1.0 + x.exp()).ln() };
-            let decay = (-w.a_log[vh].exp() * softplus(dt[vh])).exp();
+            // `g = a · softplus(dt + dt_bias)` with `a` already negative on disk.
+            let decay = (w.ssm_a[vh] * softplus(dt[vh] + w.dt_bias[vh])).exp();
             let beta = 1.0 / (1.0 + (-beta_raw[vh]).exp());
-            calibration.observe(&g("linear_decay"), &[decay]);
-            calibration.observe(&g("linear_beta_gate"), &[beta]);
+            decays.push(decay);
+            betas.push(beta);
             let s = &mut state.gdn[li][vh];
             for slot in s.iter_mut() {
                 *slot *= decay;
             }
             let pred: Vec<f32> = (0..hd).map(|i| (0..hd).map(|j| s[i * hd + j] * k[j]).sum()).collect();
+            let deltas: Vec<f32> = (0..hd).map(|i| beta * (v[i] - pred[i])).collect();
+            calibration.observe(&g("linear_delta"), &deltas);
+            delta_crest.push(deltas.iter().fold(0f32, |m, v| m.max(v.abs())));
             for i in 0..hd {
-                let u = beta * (v[i] - pred[i]);
+                let u = deltas[i];
                 for j in 0..hd {
                     s[i * hd + j] += u * k[j];
                 }
             }
             calibration.observe(&g("linear_state"), s);
+            state_crest.push(s.iter().fold(0f32, |m, v| m.max(v.abs())));
             out.extend((0..hd).map(|i| (0..hd).map(|j| s[i * hd + j] * q[j]).sum::<f32>()));
         }
+        calibration.observe(&g("linear_state_head"), &state_crest);
+        calibration.observe(&g("linear_delta_head"), &delta_crest);
+        calibration.observe(&g("linear_decay"), &decays);
+        calibration.observe(&g("linear_beta_gate"), &betas);
         calibration.observe(&g("linear_state_out"), &out);
 
         // **Three sites, not one.** The head-wise norm CHANGES the magnitude — that is what a norm

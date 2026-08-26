@@ -35,6 +35,44 @@ use misaka_palw_base0::rope::RopeTableV1;
 use std::collections::BTreeMap;
 use std::io::{Read, Seek, SeekFrom};
 
+/// Permute the head-dimension axis of a `[out][in]` projection's ROWS from the checkpoint's
+/// half-split rotary layout into the pinned table's pairwise one — **over the rotary prefix only**.
+///
+/// The checkpoint pairs `(i, i + r/2)` for `i < r/2`, where `r` is the rotary width; the pinned
+/// table pairs `(2i, 2i+1)`. Qwen3.6 rotates `r = 64` of each head's 256 dimensions, so the
+/// permutation is confined to the first 64 rows of each head and the carried 192 are copied
+/// through — a whole-head permutation would shuffle dimensions no rotation ever touches.
+///
+/// This is the same repair `convert.rs` makes for Qwen2.5, where `r = d_head` and the distinction
+/// does not arise. It is applied to `q` and `k` and to nothing else: `v` is never rotated, and
+/// permuting it would silently reorder the value space.
+fn permute_rotary_rows(w: &[f32], out_dim: usize, in_dim: usize, d_head: usize, rotary: usize) -> Vec<f32> {
+    let mut out = w.to_vec();
+    let half = rotary / 2;
+    for h in 0..out_dim / d_head {
+        for i in 0..half {
+            for (dst, src) in [(2 * i, i), (2 * i + 1, half + i)] {
+                let s = (h * d_head + src) * in_dim;
+                let d = (h * d_head + dst) * in_dim;
+                out[d..d + in_dim].copy_from_slice(&w[s..s + in_dim]);
+            }
+        }
+    }
+    out
+}
+
+/// The same permutation for a per-head-dimension vector — the QK-norm gain, which is indexed by
+/// the axis the rows were permuted along and is applied before the rotation.
+fn permute_rotary_gain(v: &[f32], rotary: usize) -> Vec<f32> {
+    let mut out = v.to_vec();
+    let half = rotary / 2;
+    for i in 0..half {
+        out[2 * i] = v[i];
+        out[2 * i + 1] = v[half + i];
+    }
+    out
+}
+
 fn die(message: String) -> ! {
     eprintln!("qwen36-convert: {message}");
     std::process::exit(1)
@@ -92,7 +130,12 @@ impl Reader<'_> {
     }
 }
 
-/// Per-output-channel symmetric int8 quantization: the codes, and each row's scale.
+/// Per-output-channel int8, one scale per row.
+///
+/// For the two tensors that are read as RAW CODES rather than through a projection: the embedding
+/// is a gather and the convolution's taps are consumed by `q36_ssm_conv`, and neither applies a
+/// group exponent. Handing them grouped codes makes every loud group 2^max_exp too small, which
+/// is a silent all-zero forward pass — measured, once.
 fn quantize_rows(values: &[f32], out_dim: usize) -> (Vec<i8>, Vec<f64>) {
     let n = values.len() / out_dim.max(1);
     let mut codes = Vec::with_capacity(values.len());
@@ -100,9 +143,6 @@ fn quantize_rows(values: &[f32], out_dim: usize) -> (Vec<i8>, Vec<f64>) {
     for c in 0..out_dim {
         let row = &values[c * n..(c + 1) * n];
         let absmax = row.iter().fold(0f32, |a, v| a.max(v.abs())) as f64;
-        // A row of zeros gets a scale of one rather than of zero: the codes are all zero either
-        // way, and a zero scale would make the narrowing's gain zero for a channel that might be
-        // non-zero in a later revision of the checkpoint.
         let scale = if absmax > 0.0 { absmax / 127.0 } else { 1.0 };
         scales.push(scale);
         for v in row {
@@ -110,6 +150,58 @@ fn quantize_rows(values: &[f32], out_dim: usize) -> (Vec<i8>, Vec<f64>) {
         }
     }
     (codes, scales)
+}
+
+/// **Per-output-channel int8 with a power-of-two scale per 32 elements.**
+///
+/// One scale per output ROW spends eight bits on the row's outlier; Q4_K, which this checkpoint is
+/// stored in, carries a scale per 32 for that reason. Measured on the fused qkv projection against
+/// the `f32` it dequantizes to: 8.7e-3 relative per row, 5.3e-3 per 32.
+///
+/// The channel's scale is the FINEST group's, and each group carries a non-negative exponent
+/// above it, so the op's combine is a left shift and nothing is thrown away in the accumulator.
+/// Returns the codes, the exponent table, and each channel's scale.
+fn quantize_rows_grouped(values: &[f32], out_dim: usize) -> (Vec<i8>, Vec<i8>, Vec<f64>) {
+    let group = kaspa_consensus_core::palw_qwen36_ops::QWEN36_WEIGHT_GROUP;
+    let max_exp = kaspa_consensus_core::palw_qwen36_ops::QWEN36_MAX_GROUP_EXP;
+    let n = values.len() / out_dim.max(1);
+    let groups = n.div_ceil(group);
+    let mut codes = Vec::with_capacity(values.len());
+    let mut exps = Vec::with_capacity(out_dim * groups);
+    let mut scales = Vec::with_capacity(out_dim);
+    for c in 0..out_dim {
+        let row = &values[c * n..(c + 1) * n];
+        let peaks: Vec<f64> = row.chunks(group).map(|g| g.iter().fold(0f32, |a, v| a.max(v.abs())) as f64).collect();
+        // **The channel's scale comes from the LOUDEST group, divided down by the exponent budget.**
+        //
+        // The first version took it from the quietest non-empty group, on the reasoning that the
+        // finest scale is the one worth having. It is not available: one group of near-zero
+        // weights then forces every other group past the exponent ceiling, and they clip. Measured,
+        // that took the arm's output projection from a cosine of 0.97 against the reference to
+        // 0.69 — worse than the per-row scale it was meant to improve on.
+        //
+        // Anchoring at the top instead makes every exponent land in `[0, max_exp]` by
+        // construction: `e_g = floor(log2(peak_g · 2^max_exp / peak_max))`, and a group quieter
+        // than `peak_max / 2^max_exp` simply gets the coarsest scale, which is all its magnitude
+        // needs.
+        let loudest = peaks.iter().copied().fold(0.0f64, f64::max);
+        let scale = if loudest > 0.0 { loudest / (127.0 * 2f64.powi(max_exp as i32)) } else { 1.0 };
+        scales.push(scale);
+        for (g, chunk) in row.chunks(group).enumerate() {
+            let ratio = if peaks[g] > 0.0 { peaks[g] / (127.0 * scale) } else { 1.0 };
+            // **`ceil`, not `floor`.** The exponent has to be at least the ratio, or the group's
+            // own peak lands past the code rail: with `floor` the code maximum is `127·ratio/2^e`,
+            // which is in `[127, 254)` — every second group clipping, and the whole point of a
+            // finer scale lost.
+            let e = (ratio.log2().ceil().max(0.0) as i32).min(max_exp as i32) as i8;
+            exps.push(e);
+            let step = scale * 2f64.powi(e as i32);
+            for v in chunk {
+                codes.push((*v as f64 / step).round().clamp(-127.0, 127.0) as i8);
+            }
+        }
+    }
+    (codes, exps, scales)
 }
 
 fn wire(rows: &[A16QuantParams]) -> Vec<u8> {
@@ -209,41 +301,49 @@ fn main() {
     println!("calibration prompt: {} positions", prompt.len());
 
     // ---- the tensor plan, in the order it will be written ----------------------------------
-    let mut plan: Vec<(String, usize)> = vec![("token_embd.weight".into(), vocab * d)];
+    // Every weight tensor is followed in the plan by its group-exponent table, so the writer sees
+    // them in the order they are produced.
+    let group = kaspa_consensus_core::palw_qwen36_ops::QWEN36_WEIGHT_GROUP;
+    let with_exp = |plan: &mut Vec<(String, usize)>, name: String, out_dim: usize, n: usize| {
+        plan.push((name.clone(), out_dim * n));
+        plan.push((format!("{name}.exp"), out_dim * n.div_ceil(group)));
+    };
+    let mut plan: Vec<(String, usize)> = Vec::new();
+    plan.push(("token_embd.weight".into(), vocab * d));
     for li in 0..layers {
         let g = |s: &str| format!("blk.{li}.{s}");
         match shape.layer_types[li] {
             Qwen36LayerKind::LinearAttention => {
-                plan.push((g("linear_q.weight"), dk * d));
-                plan.push((g("linear_k.weight"), dk * d));
-                plan.push((g("linear_v.weight"), dv * d));
-                plan.push((g("linear_z.weight"), dv * d));
+                with_exp(&mut plan, g("linear_q.weight"), dk, d);
+                with_exp(&mut plan, g("linear_k.weight"), dk, d);
+                with_exp(&mut plan, g("linear_v.weight"), dv, d);
+                with_exp(&mut plan, g("linear_z.weight"), dv, d);
                 plan.push((g("linear_conv.weight"), conv_kernel * width));
-                plan.push((g("linear_dt.weight"), linear_v_heads * d));
-                plan.push((g("linear_beta.weight"), linear_v_heads * d));
-                plan.push((g("linear_o.weight"), d * dv));
+                with_exp(&mut plan, g("linear_dt.weight"), linear_v_heads, d);
+                with_exp(&mut plan, g("linear_beta.weight"), linear_v_heads, d);
+                with_exp(&mut plan, g("linear_o.weight"), d, dv);
             }
             Qwen36LayerKind::FullAttention => {
-                plan.push((g("attn_q.weight"), q_dim * d));
-                plan.push((g("attn_gate.weight"), q_dim * d));
-                plan.push((g("attn_k.weight"), kv_dim * d));
-                plan.push((g("attn_v.weight"), kv_dim * d));
-                plan.push((g("attn_o.weight"), d * q_dim));
+                with_exp(&mut plan, g("attn_q.weight"), q_dim, d);
+                with_exp(&mut plan, g("attn_gate.weight"), q_dim, d);
+                with_exp(&mut plan, g("attn_k.weight"), kv_dim, d);
+                with_exp(&mut plan, g("attn_v.weight"), kv_dim, d);
+                with_exp(&mut plan, g("attn_o.weight"), d, q_dim);
             }
         }
-        plan.push((g("ffn_router.weight"), n_experts * d));
-        plan.push((g("ffn_shared_gate.weight"), d));
+        with_exp(&mut plan, g("ffn_router.weight"), n_experts, d);
+        with_exp(&mut plan, g("ffn_shared_gate.weight"), 1, d);
         for e in 0..n_experts {
-            plan.push((format!("blk.{li}.ffn_expert.{e}_gate.weight"), moe_dim * d));
-            plan.push((format!("blk.{li}.ffn_expert.{e}_up.weight"), moe_dim * d));
-            plan.push((format!("blk.{li}.ffn_expert.{e}_down.weight"), d * moe_dim));
+            with_exp(&mut plan, format!("blk.{li}.ffn_expert.{e}_gate.weight"), moe_dim, d);
+            with_exp(&mut plan, format!("blk.{li}.ffn_expert.{e}_up.weight"), moe_dim, d);
+            with_exp(&mut plan, format!("blk.{li}.ffn_expert.{e}_down.weight"), d, moe_dim);
         }
-        plan.push((format!("blk.{li}.ffn_shared_expert_gate.weight"), shared_dim * d));
-        plan.push((format!("blk.{li}.ffn_shared_expert_up.weight"), shared_dim * d));
-        plan.push((format!("blk.{li}.ffn_shared_expert_down.weight"), d * shared_dim));
+        with_exp(&mut plan, format!("blk.{li}.ffn_shared_expert_gate.weight"), shared_dim, d);
+        with_exp(&mut plan, format!("blk.{li}.ffn_shared_expert_up.weight"), shared_dim, d);
+        with_exp(&mut plan, format!("blk.{li}.ffn_shared_expert_down.weight"), d, shared_dim);
     }
     // Last, because the reference needs it only after every layer has run.
-    plan.push(("output.weight".into(), vocab * d));
+    with_exp(&mut plan, "output.weight".into(), vocab, d);
     let total: usize = plan.iter().map(|(_, n)| n).sum();
     println!("plan: {} tensors, {:.2} GiB of int8 weights", plan.len(), total as f64 / (1u64 << 30) as f64);
 
@@ -287,10 +387,13 @@ fn main() {
                     ("linear_dt.weight.a16", linear_v_heads),
                     ("linear_beta.weight.a16", linear_v_heads),
                     ("linear_decay_c.a16", linear_v_heads),
+                    ("linear_dt_bias.a16", linear_v_heads),
                     ("linear_read.a16", linear_v_heads),
+                    ("linear_delta.a16", linear_v_heads),
                     ("linear_write.a16", linear_v_heads),
                     ("linear_out.a16", linear_v_heads),
                     ("linear_norm.a16", dv),
+                    ("linear_norm_eps.a16", linear_v_heads),
                     ("linear_gate.a16", dv),
                     ("linear_gated.a16", dv),
                     ("linear_o.weight.a16", d),
@@ -388,8 +491,9 @@ fn main() {
         // The arm's weights, quantized and written as they arrive, with their row scales kept.
         let mut scales: BTreeMap<String, Vec<f64>> = BTreeMap::new();
         let push = |writer: &mut Qwen36Writer, scales: &mut BTreeMap<String, Vec<f64>>, name: &str, values: &[f32], out_dim: usize| {
-            let (codes, s) = quantize_rows(values, out_dim);
+            let (codes, exps, s) = quantize_rows_grouped(values, out_dim);
             writer.push(name, &codes).unwrap_or_else(|e| die(format!("writing {name}: {e}")));
+            writer.push(&format!("{name}.exp"), &exps).unwrap_or_else(|e| die(format!("writing {name}.exp: {e}")));
             scales.insert(name.to_string(), s);
         };
 
@@ -403,14 +507,21 @@ fn main() {
                 let z = reader.get(&g("attn_gate.weight"));
                 push(&mut writer, &mut scales, &g("linear_z.weight"), &z, dv);
                 let conv = reader.get(&g("ssm_conv1d.weight"));
-                push(&mut writer, &mut scales, &g("linear_conv.weight"), &conv, width);
+                {
+                    // Per row: the taps are read as raw codes by `q36_ssm_conv`, which applies no
+                    // group exponent.
+                    let (codes, sc) = quantize_rows(&conv, width);
+                    writer.push(&g("linear_conv.weight"), &codes).unwrap_or_else(|e| die(format!("linear_conv: {e}")));
+                    scales.insert(g("linear_conv.weight"), sc);
+                }
                 let alpha = reader.get(&g("ssm_alpha.weight"));
                 push(&mut writer, &mut scales, &g("linear_dt.weight"), &alpha, linear_v_heads);
                 let beta = reader.get(&g("ssm_beta.weight"));
                 push(&mut writer, &mut scales, &g("linear_beta.weight"), &beta, linear_v_heads);
                 let out = reader.get(&g("ssm_out.weight"));
                 push(&mut writer, &mut scales, &g("linear_o.weight"), &out, d);
-                let a_log = reader.get(&g("ssm_a"));
+                let ssm_a = reader.get(&g("ssm_a"));
+                let ssm_dt = reader.get(&g("ssm_dt"));
                 let ssm_norm = reader.get(&g("ssm_norm.weight"));
 
                 let w = reference::LinearWeights {
@@ -421,7 +532,8 @@ fn main() {
                     conv: &conv,
                     alpha: &alpha,
                     beta: &beta,
-                    a_log: &a_log,
+                    ssm_a: &ssm_a,
+                    dt_bias: &ssm_dt,
                     ssm_norm: &ssm_norm,
                     out: &out,
                 };
@@ -457,7 +569,7 @@ fn main() {
                 // to O(1). Per head is safe where per lane is not: the norm reduces WITHIN a head,
                 // and the only reduction across heads is the output projection, which runs after
                 // the row is back on one exponent.
-                let state_lanes = calibration.sites.get(&g("linear_state")).map(|r| r.lanes.clone()).unwrap_or_default();
+                let state_lanes = calibration.sites.get(&g("linear_state_head")).map(|r| r.lanes.clone()).unwrap_or_default();
                 let out_lanes = calibration.sites.get(&g("linear_state_out")).map(|r| r.lanes.clone()).unwrap_or_default();
                 let v_lanes = calibration.sites.get(&g("linear_conv")).map(|r| r.lanes.clone()).unwrap_or_default();
                 let head_max = |lanes: &[f64], from: usize, len: usize, fallback: f64| -> f64 {
@@ -467,28 +579,43 @@ fn main() {
                 };
                 let hd = linear_head_dim;
                 let (mut read_rows, mut write_rows, mut out_rows) = (Vec::new(), Vec::new(), Vec::new());
+                let mut delta_rows: Vec<A16QuantParams> = Vec::new();
+                let mut eps_rows: Vec<A16QuantParams> = Vec::new();
+                let mut v_exponents: Vec<i32> = Vec::new();
+                let delta_lanes = calibration.sites.get(&g("linear_delta_head")).map(|r| r.lanes.clone()).unwrap_or_default();
                 for vh in 0..linear_v_heads {
-                    // The state's lanes are recorded one head at a time, so what survives is the
-                    // last head's; the row peak is the honest fallback for the others.
                     // **The state is `i32`, so its exponent targets the `i32` rail.**
                     // `site_exponent` sizes against the A16 code rail, which is the right rail for
                     // anything that will be an activation and the wrong one for a recurrent state
                     // — the state is never narrowed to a code, and sizing it as if it were left
                     // fifteen of its thirty-one bits unused. That is precision the recurrence
                     // carries forward, and it is what the arm's output was missing.
-                    let e_state =
-                        cal::site_exponent(head_max(&state_lanes, 0, state_lanes.len(), site(&calibration, &g("linear_state")))) + 15;
+                    // Per head — `linear_state_head` carries one lane per head, so this is that
+                    // head's own crest and not the loudest head's.
+                    let e_state = cal::site_exponent(head_max(&state_lanes, vh, 1, site(&calibration, &g("linear_state")))) + 15;
                     // `v` is the conv output's third block, `[2·dk, 2·dk + dv)`.
                     let e_v = cal::site_exponent(head_max(&v_lanes, 2 * dk + vh * hd, hd, site(&calibration, &g("linear_conv"))));
+                    v_exponents.push(e_v);
                     // Wide out: the recurrence's row is normalized per head and never reduced
                     // across heads, so it is sized against the `i32` rail like the state.
                     let e_o = cal::site_exponent(head_max(&out_lanes, vh * hd, hd, site(&calibration, &g("linear_state_out")))) + 15;
-                    let (r, w, o) = cal::gdn_params(e_state, e_v, e_o);
+                    // The delta rule cancels, so `β(v − w)` is far below `v` and gets its own,
+                    // finer exponent — measured, not inherited.
+                    let e_delta = cal::site_exponent(head_max(&delta_lanes, vh, 1, site(&calibration, &g("linear_delta"))));
+                    let (r, dl, w, o) = cal::gdn_params(e_state, e_v, e_delta, e_o, hd);
+                    // `eps` against THIS head's output scale. Both sides take the MEAN of squares,
+                    // so the only conversion is the code exponent: `e_o` is measured on a reference
+                    // that already carries the query's `1/√d_k`, so a code is `2^e_o` times the
+                    // value the reference norm sees.
+                    eps_rows.push(cal::norm_eps_params(eps as f64, e_o));
+                    delta_rows.push(dl);
                     read_rows.push(r);
-                    write_rows.push(w);
+                    // The write is a shift; the store's wire format is a triple, so it rides in
+                    // `zero` rather than gaining a second format for one integer.
+                    write_rows.push(A16QuantParams { multiplier: 1, shift: 0, zero: w as i64 });
                     out_rows.push(o);
                 }
-                let _ = (e_conv_act, e_state_out);
+                let _ = e_state_out;
 
                 measured.insert(g("attn_norm.a16"), wire(&cal::norm_params(&attn_gain, e_normed)));
                 for (name, out_dim) in [("linear_q.weight", dk), ("linear_k.weight", dk), ("linear_v.weight", dv)] {
@@ -497,17 +624,53 @@ fn main() {
                 }
                 measured.insert(g("linear_z.weight.a16"), wire(&cal::to_qk_params(&scales[&g("linear_z.weight")], e_normed)));
                 measured.insert(g("linear_conv.a16"), wire(&cal::to_qk_params(&scales[&g("linear_conv.weight")], e_qkv)));
-                measured.insert(g("linear_conv_act.a16"), wire(&vec![cal::rescale_params(K as i32, e_conv_act); width]));
+                // **The convolution's output is narrowed PER HEAD, not per row.**
+                //
+                // One exponent over all 8,192 lanes is set by the loudest of them, and the row
+                // holds three different things: sixteen query heads, sixteen key heads and
+                // thirty-two value heads. Measured on layer 0, value head 17's row is a hundred
+                // times quieter than head 0's — at a shared exponent its codes peak at **64**, six
+                // bits, and the delta rule then builds that head's entire state out of them.
+                //
+                // Per head is legal here for the same reason it is legal on the state's output:
+                // every reduction downstream stays inside one head. `q`/`k` are L2-normalized
+                // within their head — which is scale-free, so their exponent is free — and `v`
+                // enters the recurrence, which reduces over `d_k` inside the head and narrows with
+                // that head's own registered triple. Nothing sums across heads until the output
+                // projection, by which point the row is back on one exponent.
+                //
+                // It is also the exponent the delta rule was already told about: `e_v` is what the
+                // read and the delta triples are derived from, and before this the codes arrived
+                // at the row's exponent instead — the two disagreed by `2^(e_v − e_row)`, which is
+                // a factor of two on the loud heads and a hundred and twenty-eight on head 17.
+                let mut conv_act: Vec<A16QuantParams> = Vec::with_capacity(width);
+                let block = |from: usize, len: usize| cal::site_exponent(head_max(&v_lanes, from, len, site(&calibration, &g("linear_conv"))));
+                for kh in 0..linear_k_heads {
+                    let e = block(kh * hd, hd);
+                    conv_act.extend(std::iter::repeat_n(cal::rescale_params(K as i32, e), hd));
+                }
+                for kh in 0..linear_k_heads {
+                    let e = block(dk + kh * hd, hd);
+                    conv_act.extend(std::iter::repeat_n(cal::rescale_params(K as i32, e), hd));
+                }
+                for vh in 0..linear_v_heads {
+                    let e = v_exponents.get(vh).copied().unwrap_or(e_conv_act);
+                    conv_act.extend(std::iter::repeat_n(cal::rescale_params(K as i32, e), hd));
+                }
+                measured.insert(g("linear_conv_act.a16"), wire(&conv_act));
                 measured.insert(g("linear_dt.weight.a16"), wire(&cal::to_qk_params(&scales[&g("linear_dt.weight")], e_normed)));
                 measured.insert(g("linear_beta.weight.a16"), wire(&cal::to_qk_params(&scales[&g("linear_beta.weight")], e_normed)));
-                measured.insert(g("linear_decay_c.a16"), wire(&a_log.iter().map(|v| cal::decay_exponent(*v)).collect::<Vec<_>>()));
+                measured.insert(g("linear_decay_c.a16"), wire(&ssm_a.iter().map(|v| cal::decay_exponent(*v)).collect::<Vec<_>>()));
+                measured.insert(g("linear_dt_bias.a16"), wire(&ssm_dt.iter().map(|v| cal::dt_bias(*v)).collect::<Vec<_>>()));
                 measured.insert(g("linear_read.a16"), wire(&read_rows));
+                measured.insert(g("linear_delta.a16"), wire(&delta_rows));
                 measured.insert(g("linear_write.a16"), wire(&write_rows));
                 measured.insert(g("linear_out.a16"), wire(&out_rows));
                 // The norm stays WIDE: γ is applied at Q[K], so the gate multiply sees the precision
                 // the norm produced rather than a sixteen-bit rounding of it.
                 let _ = e_normed_out;
                 measured.insert(g("linear_norm.a16"), wire(&cal::norm_params(&ssm_norm.repeat(linear_v_heads), K as i32)));
+                measured.insert(g("linear_norm_eps.a16"), wire(&eps_rows));
                 // `linear_gate.a16` is no longer read: the gate reaches the multiply in Q[K].
                 let _ = e_gate;
                 measured.insert(g("linear_gated.a16"), wire(&vec![cal::product_params(K as i32, K as i32, e_gated); dv]));
@@ -518,17 +681,21 @@ fn main() {
                 e_stream = e_stream_out;
             }
             Qwen36LayerKind::FullAttention => {
-                let q = reader.get(&g("attn_q.weight"));
+                // The rotated projections are permuted into the pinned table's pairing; the gate
+                // half of `attn_q` is not rotated and keeps the checkpoint's order.
+                let q_raw = reader.get(&g("attn_q.weight"));
+                let mut q = permute_rotary_rows(&q_raw[..q_dim * d], q_dim, d, head_dim, rotary_dim);
+                q.extend_from_slice(&q_raw[q_dim * d..]);
                 push(&mut writer, &mut scales, &g("attn_q.weight"), &q[..q_dim * d], q_dim);
                 push(&mut writer, &mut scales, &g("attn_gate.weight"), &q[q_dim * d..], q_dim);
-                let k = reader.get(&g("attn_k.weight"));
+                let k = permute_rotary_rows(&reader.get(&g("attn_k.weight")), kv_dim, d, head_dim, rotary_dim);
                 push(&mut writer, &mut scales, &g("attn_k.weight"), &k, kv_dim);
                 let v = reader.get(&g("attn_v.weight"));
                 push(&mut writer, &mut scales, &g("attn_v.weight"), &v, kv_dim);
                 let o = reader.get(&g("attn_output.weight"));
                 push(&mut writer, &mut scales, &g("attn_o.weight"), &o, d);
-                let q_norm = reader.get(&g("attn_q_norm.weight"));
-                let k_norm = reader.get(&g("attn_k_norm.weight"));
+                let q_norm = permute_rotary_gain(&reader.get(&g("attn_q_norm.weight")), rotary_dim);
+                let k_norm = permute_rotary_gain(&reader.get(&g("attn_k_norm.weight")), rotary_dim);
 
                 let w = reference::FullWeights {
                     attn_norm: &attn_gain,
@@ -694,9 +861,11 @@ fn main() {
     // ---- the head --------------------------------------------------------------------------
     let output_norm = reader.get("output_norm.weight");
     let output = reader.get("output.weight");
-    let (codes, out_scales) = quantize_rows(&output, vocab);
+    let (codes, out_exps, out_scales) = quantize_rows_grouped(&output, vocab);
     writer.push("output.weight", &codes).unwrap_or_else(|e| die(format!("output.weight: {e}")));
+    writer.push("output.weight.exp", &out_exps).unwrap_or_else(|e| die(format!("output.weight.exp: {e}")));
     drop(codes);
+    drop(out_exps);
     reference::reference_head(&shape, &mut calibration, &output_norm, &output, &h, eps);
     drop(output);
     let e_final = cal::site_exponent(site(&calibration, "final_norm"));
