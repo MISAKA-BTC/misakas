@@ -162,3 +162,59 @@ the same Decision E argument; it is not specified here.
 * Two ops in this set — the router's tie rule and the decay's clamp — are places where "close" is
   not a degraded answer but a different model. Both are stated as rules rather than left to an
   implementation's judgement.
+
+## Amendment (2026-08-26, same day): the two "not decided" items above are now decided
+
+Both undecided sections closed the same day, by measurement rather than by plan.
+
+### Calibration → the class is faithful, and the check that proved it is now part of the tool
+
+The converter calibrates from a float reference of the hybrid graph over a real prompt, and the
+40-layer class measures **cosine 0.9967 / rank correlation 0.9598 / top-1 151/155** against it —
+after which text in, text out works ("日本で二番目に高い山は北岳です。", stopped on the stop
+token). The decisive instrument was not any per-site cosine: **an architecture error shared by the
+reference and the engine is invisible to every differential**, and the whole model sat at chance
+(median rank of the true next token 123,653 of 248,320) while every site read 0.99+. The converter
+therefore prints, on every run, whether the f32 reference predicts its own calibration text
+(top-1 72.1 %, median rank 0 once two tensor-layout misreadings were fixed). `--reference-only`
+runs that check in five minutes without writing the artifact.
+
+### The court → the catalog is complete and the admission gate passes
+
+The paragraph above said "no step space: no coordinates, no tile leaves, no refutation prover."
+All three exist now:
+
+* **Twenty-three descriptors** — the A16 tier's nine and this graph's fourteen — in
+  `palw_step_refute`'s catalog, each naming only its accumulator width, because integer addition
+  leaves an op no other degree of freedom. The adjudicator calls the SAME functions the engine
+  calls; there is no second implementation to diverge.
+* **The profile is projected from an IR that transcribes the engine's own step order**
+  (`palw_qwen36_profile`), 48 nodes per recurrent layer and 47 per attention layer. The mixture is
+  six nodes: eight experts against one input row are arithmetic-identical to one concatenated
+  matrix, and which eight is the committed router row's answer.
+* **The recurrence is adjudicated by genesis-anchored replay**, exactly as the float `GdnCore` is:
+  five committed rows per position, the court replays the state. The registration-opaque
+  checkpoint sentinel stays refused; a registered state chunk map later makes replay
+  checkpoint-anchored. The conv window is the last four positions' projections, a per-ref
+  position set like the KV arms'.
+* **Per-head structure lives inside the kernels** (L2, the wide norm, the recurrence): a one-head
+  node would declare a step space that does not contain heads 1..31 — the exact defect the
+  `KvPerHead` width fixed for attention.
+
+`the_admission_gate_admits_this_class` runs the whole of `verify_class_admission_v2`'s
+deterministic branch: shape validation, both coverage gates, ladder depth, court-cost ceilings and
+the PWU recount. Two profile constants were set by that gate, not by preference: **tile_len 512**
+(at 256 the worst case is 4,198,428 leaves against the ladder's 2^22 — over by 0.1 %) and
+**n_ctx 256** (the step space is linear in context; the runtime's rotary table still covers 512,
+and the bound prices the JOB a claim may declare, which the canonical 8+2 job is nowhere near).
+
+`qwen36_registration_v1` derives the profile, catalog entry and genesis-form `ClassRegistered`
+from one geometry. The court catalog is consensus — growing it moved testnet-11's
+`consensus_params_id`, declared as a coordinated upgrade in the pin's own comment.
+
+### Still open
+
+The producer-side step-leg capture (the material an honest producer answers a bisection with) is
+not yet emitted by `Qwen36Engine` — the profile above is its specification. And the weight-width
+question (a four-bit tier) remains unspecified, now with the measured note that expert residency
+plus the NEON grouped kernels took the 33 GiB class from 0.4 to 1.75 tok/s on a 24 GiB machine.
