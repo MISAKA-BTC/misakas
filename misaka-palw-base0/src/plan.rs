@@ -990,6 +990,75 @@ mod tests {
         assert_eq!(check(&short), Err(ProjectionMismatch::NodeCount { profile: 18, plan: plan.layer.len() }));
     }
 
+    /// **A finding the correspondence check surfaced: a tied-head class has no canonical inventory
+    /// yet** (ADR-0049 Decision G, not F).
+    ///
+    /// Qwen2.5 ties its embeddings, so its lm_head reads `token_embd.weight` and there is no
+    /// `output.weight`. `base0_inventory_v1` is the floor's builder and always emits the head as a
+    /// tiled `output.weight` — so for a tied class the inventory carries a tensor no step can open,
+    /// and the tensor its head DOES read is carried in the wrong row shape: a gather emits one row
+    /// per token id (`d_model` bytes), and a `MatMulQuant` opening asks for `tile_len × d_model`
+    /// bytes at a tile offset. `operand_bytes` requires an exact `(name, layer, row_start)` match at
+    /// exactly the requested length, so the head adjudicates `Unadjudicable` at every tile — and
+    /// `qwen25_admissible_geometry_v1` searches upward from `tile_len` 64, so the one width where a
+    /// gather row and a matmul tile coincide is never chosen.
+    ///
+    /// Not fixed here, because it is a Decision G question rather than a Decision F one: one tensor
+    /// cannot carry both row shapes without overlapping rows, which the canonical layout refuses on
+    /// purpose. What Decision F buys is that the class says so instead of registering quietly.
+    #[test]
+    fn a_tied_head_class_is_named_by_the_check_rather_than_registering_quietly() {
+        use kaspa_consensus_core::palw_base0_profile::{BASE0_POST_IR, Base0IrGeometryV1, Base0IrScopeV1, base0_ir_nodes_v1};
+
+        let g = PALW_RC_BASE0_GEOMETRY;
+        let artifact = rc_artifact();
+        let inventory = base0_inventory_v1(&artifact, g).expect("the builder runs");
+        let plan = Base0GraphPlanV1::compile(&artifact).expect("executable");
+
+        // The floor's own graph, with the head retargeted at the tied tensor — which is exactly
+        // what `qwen25_profile_v1` projects, at this geometry so the artifact fits.
+        let mut tied = base0_profile_v1(g).expect("the floor's graph");
+        tied.post_nodes = base0_ir_nodes_v1(
+            BASE0_POST_IR,
+            Base0IrGeometryV1 {
+                layer_count: g.layer_count,
+                hidden_dim: g.hidden_dim,
+                ffn_dim: g.ffn_dim,
+                attn_heads: g.attn_heads,
+                attn_kv_heads: g.attn_heads,
+                attn_head_dim: g.attn_head_dim,
+                tile_len: g.tile_len,
+                vocab_size: g.vocab_size,
+                weight_dtype: kaspa_consensus_core::palw_base0_profile::BASE0_WEIGHT_DTYPE_I8,
+            },
+            Base0IrScopeV1::Graph,
+            "token_embd.weight",
+        );
+
+        // The graph itself is fine — the head placeholder is the one name a class may choose.
+        base0_check_graph_v1(&plan, &tied, &artifact.shape, 2).expect("the tied head is a legal graph");
+
+        // The inventory is not: it carries the untied head, which this class's graph cannot open.
+        assert_eq!(
+            base0_check_projections_v1(&plan, &tied, &inventory, &artifact.shape, 2),
+            Err(ProjectionMismatch::RowNobodyOpens { tensor: "output.weight".to_string() })
+        );
+
+        // And the tensor the head DOES read is carried in the GATHER's row shape. An opening is
+        // served only on an exact `(name, layer, row_start)` match at exactly the requested length
+        // (`palw_artifact.rs:235`), so a `MatMulQuant` asking for `tile_len × d_model` bytes at tile
+        // 0 meets a row of `d_model` and is refused — at every tile.
+        let d = artifact.shape.d_model();
+        let head_row = inventory
+            .operands()
+            .iter()
+            .find(|o| o.tensor_name == "token_embd.weight" && o.layer.is_none() && o.row_start == 0)
+            .expect("the embedding table is carried");
+        assert_eq!(head_row.bytes.len(), d, "one token's row — what the GATHER opens");
+        assert_ne!(head_row.bytes.len(), g.tile_len as usize * d, "not what the head's matmul opens");
+        assert!(g.tile_len > 1, "at tile_len 1 the two row shapes coincide, and nothing selects 1");
+    }
+
     // --- the compile-time refusals, exercised against graphs written to break them -------------
 
     const fn node(

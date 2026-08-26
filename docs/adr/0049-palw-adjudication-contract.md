@@ -283,6 +283,25 @@ and the manifest is refused for any of: a duplicate entry, a missing tensor the 
 overlapping byte range, a byte of the artifact no entry covers, or a non-canonical order. "Every byte
 is covered exactly once, in one order" is what makes an opening's absence meaningful.
 
+> **Open, found by landing Decision F (2026-08-26): a tied-head class has no canonical inventory.**
+>
+> Qwen2.5 ties its embeddings, so its lm_head reads `token_embd.weight` and no `output.weight` exists.
+> `base0_inventory_v1` always emits the head as a tiled `output.weight`, so a tied class's inventory
+> carries a tensor no step can open — and the tensor its head *does* read is carried in the wrong row
+> shape. A gather emits one row per token id (`d_model` bytes); a `MatMulQuant` opening asks for
+> `tile_len × d_model` bytes at a tile offset; `operand_bytes` serves only an exact
+> `(name, layer, row_start)` match at exactly the requested length. So the head adjudicates
+> `Unadjudicable` at every tile, and `qwen25_admissible_geometry_v1` searches upward from `tile_len`
+> 64 — the one width where a gather row and a matmul tile coincide is never chosen.
+>
+> This is a Decision G question, not a Decision F one: one tensor cannot carry both row shapes
+> without overlapping rows, which the canonical layout refuses on purpose. Deciding it needs a rule —
+> a second row family under a derived name, or a head that opens through the gather's coordinates —
+> and that is a rule about what an opening addresses. What Decision F bought is that the class now
+> says so: `a_tied_head_class_is_named_by_the_check_rather_than_registering_quietly` reports it as
+> `RowNobodyOpens { "output.weight" }` instead of the class registering quietly and finding out at
+> its first dispute.
+
 This also settles the two things called a class id. **`execution_class_id` is the shape profile id** —
 a class is its graph, which is what the chain already keys on. The artifact digest is
 `artifact_root` and is a separate value with a separate job: the graph says what is computed, the root
