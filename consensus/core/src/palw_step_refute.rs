@@ -454,11 +454,11 @@ pub fn kernel_can_serve_node_v1(node: &crate::palw_step::PalwStepNodeV1, table_i
             }
             Ok(())
         }
-        // The recurrence reads key, value and query, and its state is the checkpoint sentinel the
-        // caller supplies; the narrowings are registration artifacts.
+        // The recurrence reads five rows per position — keys, the conv row, queries and the two
+        // gates — and replays from the genesis; the narrowings are registration artifacts.
         KernelProgram::Qwen36(Qwen36Op::GdnStep) => {
-            if inputs < 3 {
-                return Err("the recurrence must name its key, value and query rows");
+            if inputs < 5 {
+                return Err("the recurrence must name its five per-position rows");
             }
             if node.weight_name.is_empty() {
                 return Err("the recurrence must name the tensor its four narrowings are registered in");
@@ -473,7 +473,6 @@ pub fn kernel_can_serve_node_v1(node: &crate::palw_step::PalwStepNodeV1, table_i
             | Qwen36Op::Requantize
             | Qwen36Op::Softmax
             | Qwen36Op::RopePartial
-            | Qwen36Op::SsmConv
             | Qwen36Op::L2Norm
             | Qwen36Op::Sigmoid
             | Qwen36Op::RescaleRow
@@ -483,6 +482,16 @@ pub fn kernel_can_serve_node_v1(node: &crate::palw_step::PalwStepNodeV1, table_i
         ) => {
             if inputs < 1 {
                 return Err("a one-operand node must name the row it computes from");
+            }
+            Ok(())
+        }
+        // The window: the three projection rows, whose per-position expansion is the leaf set's.
+        KernelProgram::Qwen36(Qwen36Op::SsmConv) => {
+            if inputs < 3 {
+                return Err("the convolution must name the three projection rows its window is built from");
+            }
+            if node.weight_name.is_empty() {
+                return Err("the convolution must name its tap tensor");
             }
             Ok(())
         }
@@ -755,9 +764,18 @@ fn qwen36_row(
         // on a quiet one. The class registers it per head; the court reads what was registered.
         Qwen36Op::RmsNormWide => {
             need(1)?;
-            let head = (gather.0.tile_index as usize).saturating_mul(node.tile_len as usize) / inputs[0].len().max(1);
-            let eps = params(head, 1)?[0];
-            Ok(out(q36::q36_rms_norm_wide(&as_i32(&inputs[0]), eps).map_err(shape36)?))
+            let x = as_i32(&inputs[0]);
+            let hd = profile.gdn_head_v_dim as usize;
+            if hd == 0 || !x.len().is_multiple_of(hd) {
+                return Err(PalwStepRefuteError::InputSetNotCanonical("the wide-norm row is not a whole number of heads"));
+            }
+            let heads = x.len() / hd;
+            let eps = params(0, heads)?;
+            let mut row = Vec::with_capacity(x.len());
+            for (h, head) in x.chunks_exact(hd).enumerate() {
+                row.extend(q36::q36_rms_norm_wide(head, eps[h]).map_err(shape36)?);
+            }
+            Ok(out(row))
         }
         Qwen36Op::Requantize => {
             need(1)?;
@@ -775,9 +793,20 @@ fn qwen36_row(
             need(2)?;
             Ok(out(a16::a16_add_elem(&as_i32(&inputs[0]), &as_i32(&inputs[1])).map_err(shape16)?))
         }
+        // **Per head over the row** — the node's width is the concatenation of every head, so a
+        // one-head step space would not contain heads 1..N. The head dim is the profile's.
         Qwen36Op::L2Norm => {
             need(1)?;
-            Ok(out(q36::q36_l2_norm(&as_i32(&inputs[0])).map_err(shape36)?))
+            let x = as_i32(&inputs[0]);
+            let hd = profile.gdn_head_k_dim as usize;
+            if hd == 0 || !x.len().is_multiple_of(hd) {
+                return Err(PalwStepRefuteError::InputSetNotCanonical("the l2 row is not a whole number of heads"));
+            }
+            let mut row = Vec::with_capacity(x.len());
+            for head in x.chunks_exact(hd) {
+                row.extend(q36::q36_l2_norm(head).map_err(shape36)?);
+            }
+            Ok(out(row))
         }
         Qwen36Op::Sigmoid => {
             need(1)?;
@@ -802,13 +831,32 @@ fn qwen36_row(
             let p = params(0, a.len())?;
             Ok(out(q36::q36_mul_wide(&a, &as_i32(&inputs[1]), &p).map_err(shape36)?))
         }
+        // **The window is assembled from the last (up to) four positions' projections** — three
+        // rows per position, position-major, exactly the order `canonical_input_leaves` lists.
+        // Missing leading positions are zero rows, which is the window the engine starts from.
         Qwen36Op::SsmConv => {
-            need(1)?;
-            let window = as_i32(&inputs[0]);
-            let channels = window.len() / 4;
-            if channels == 0 || window.len() != channels * 4 {
-                return Err(PalwStepRefuteError::InputSetNotCanonical("the conv window is not four taps per channel"));
+            if inputs.is_empty() || !inputs.len().is_multiple_of(3) || inputs.len() > 12 {
+                return Err(PalwStepRefuteError::InputSetNotCanonical("the conv window is three rows per position, at most four positions"));
             }
+            let rows: Vec<Vec<i32>> = inputs
+                .chunks_exact(3)
+                .map(|c| {
+                    let mut row = as_i32(&c[0]);
+                    row.extend(as_i32(&c[1]));
+                    row.extend(as_i32(&c[2]));
+                    row
+                })
+                .collect();
+            let channels = rows.last().map(|r| r.len()).unwrap_or(0);
+            if channels == 0 || rows.iter().any(|r| r.len() != channels) {
+                return Err(PalwStepRefuteError::InputSetNotCanonical("the window's positions disagree about the channel count"));
+            }
+            let mut window = vec![0i32; (4 - rows.len()) * channels];
+            for row in &rows {
+                window.extend_from_slice(row);
+            }
+            // `q36_ssm_conv` reads `window[t * channels + c]` — position-major, oldest first —
+            // which is exactly the concatenation above.
             let byte_len = u32::try_from(window.len()).map_err(|_| PalwStepRefuteError::Unadjudicable)?;
             let taps = weights
                 .operand_bytes(node.weight_name.as_str(), layer, 0, byte_len)
@@ -912,28 +960,70 @@ fn qwen36_row(
                 Ok(out(a16::a16_attn_values(&row, &series, heads, kv_heads, d_head, &p).map_err(shape16)?))
             }
         }
-        // **The recurrence, and the one operand that is not an opened leaf.** The state is the
-        // checkpoint sentinel's material: `PALW_STEP_INPUT_CHECKPOINT` supplies it, and a class
-        // whose state chunk map has not registered has no way to open it — which is
-        // `Unadjudicable` and not a conviction, exactly as ADR-0037 Decision 5 requires.
+        // **The recurrence, replayed from the genesis** — the same anchoring the float `GdnCore`
+        // uses, and for the same reason: the state is never an opened operand, so the court
+        // recomputes it from the committed per-position rows. Five rows per position, position-
+        // major and ascending, exactly as `canonical_input_leaves` lists them: the unit keys, the
+        // conv row (whose third block is `v`), the unit queries, the decay gates and the beta
+        // gates. A registered state chunk map later turns this checkpoint-anchored.
         Qwen36Op::GdnStep => {
-            need(4)?;
-            let k = as_i32(&inputs[0]);
-            let v = as_i32(&inputs[1]);
-            let q = as_i32(&inputs[2]);
-            let state_row = as_i32(&inputs[3]);
-            let (d_k, d_v) = (k.len(), v.len());
-            if d_k == 0 || d_v == 0 || q.len() != d_k || state_row.len() != d_k * d_v {
-                return Err(PalwStepRefuteError::InputSetNotCanonical("the recurrence's operands do not agree on the head geometry"));
+            if inputs.is_empty() || !inputs.len().is_multiple_of(5) {
+                return Err(PalwStepRefuteError::InputSetNotCanonical("the recurrence reads five rows per position"));
             }
-            // Four triples per head: read, delta, write (a shift in `zero`) and out. The two
-            // gates ride the fifth and sixth as Q[K] values, because they are per-position data
-            // the producer commits rather than registration constants.
-            let p = params(0, 6)?;
-            let mut state = q36::Qwen36GdnStateV1 { d_v, d_k, s: state_row };
-            let gdn = q36::Qwen36GdnParamsV1 { read: p[0], delta: p[1], write_shift: p[2].zero as i32, out: p[3] };
-            let head_out = q36::q36_gdn_step(&mut state, &k, &v, &q, p[4].zero, p[5].zero, gdn).map_err(shape36)?;
-            Ok(out(head_out))
+            let (hd_k, hd_v) = (profile.gdn_head_k_dim as usize, profile.gdn_head_v_dim as usize);
+            let heads = profile.gdn_heads as usize;
+            if hd_k == 0 || hd_v == 0 || heads == 0 {
+                return Err(PalwStepRefuteError::Unadjudicable);
+            }
+            // Four registered triples per head: read, delta, write (a shift in `zero`), out.
+            let p = params(0, 4 * heads)?;
+            let mut states: Vec<q36::Qwen36GdnStateV1> =
+                (0..heads).map(|_| q36::Qwen36GdnStateV1 { d_v: hd_v, d_k: hd_k, s: vec![0; hd_v * hd_k] }).collect();
+            let k_heads = {
+                // The key row tiles the value heads: `vh % k_heads`, as the engine and the
+                // reference both read it.
+                let k_row = inputs[0].len();
+                if k_row == 0 || !k_row.is_multiple_of(hd_k) {
+                    return Err(PalwStepRefuteError::InputSetNotCanonical("the key row is not a whole number of heads"));
+                }
+                k_row / hd_k
+            };
+            let mut last = Vec::new();
+            for step in inputs.chunks_exact(5) {
+                let unit_k = as_i32(&step[0]);
+                let conv = as_i32(&step[1]);
+                let unit_q = as_i32(&step[2]);
+                let decays = as_i32(&step[3]);
+                let betas = as_i32(&step[4]);
+                let dk_total = k_heads * hd_k;
+                if conv.len() < 2 * dk_total + heads * hd_v || decays.len() < heads || betas.len() < heads {
+                    return Err(PalwStepRefuteError::InputSetNotCanonical("a replay position's rows do not cover the geometry"));
+                }
+                let v_block = &conv[2 * dk_total..];
+                let mut row = Vec::with_capacity(heads * hd_v);
+                for vh in 0..heads {
+                    let kh = vh % k_heads;
+                    let gdn = q36::Qwen36GdnParamsV1 {
+                        read: p[4 * vh],
+                        delta: p[4 * vh + 1],
+                        write_shift: p[4 * vh + 2].zero as i32,
+                        out: p[4 * vh + 3],
+                    };
+                    let head_out = q36::q36_gdn_step(
+                        &mut states[vh],
+                        &unit_k[kh * hd_k..(kh + 1) * hd_k],
+                        &v_block[vh * hd_v..(vh + 1) * hd_v],
+                        &unit_q[kh * hd_k..(kh + 1) * hd_k],
+                        decays[vh] as i64,
+                        betas[vh] as i64,
+                        gdn,
+                    )
+                    .map_err(shape36)?;
+                    row.extend(head_out);
+                }
+                last = row;
+            }
+            Ok(out(last))
         }
     }
 }
@@ -1664,7 +1754,10 @@ impl PalwWeightOracleV1 for PalwNoWeightsV1 {
 /// every position from the genesis up to and including the output's.
 fn required_positions(program: KernelProgram, out: &PalwStepCoordinateV1) -> Vec<(u32, u32)> {
     match program {
-        KernelProgram::GdnCore { .. } => {
+        // **The integer recurrence replays from the genesis, exactly as the float one does.** A
+        // registered state chunk map later turns this checkpoint-anchored; until then the state is
+        // never an opened operand and the replay is the adjudication.
+        KernelProgram::GdnCore { .. } | KernelProgram::Qwen36(Qwen36Op::GdnStep) => {
             let mut v = Vec::new();
             // Prefill positions 0..=(p or all), then decode calls 1..=c.
             if out.call_index == 0 {
@@ -1681,6 +1774,21 @@ fn required_positions(program: KernelProgram, out: &PalwStepCoordinateV1) -> Vec
                 }
             }
             v
+        }
+        // The four-tap window: this position and up to three before it, crossing the
+        // prefill/decode boundary the same way the recurrence's prefix does. `u32::MAX` markers
+        // are expanded by the caller, which holds the prefill length this function does not.
+        KernelProgram::Qwen36(Qwen36Op::SsmConv) => {
+            if out.call_index == 0 {
+                (out.position.saturating_sub(3)..=out.position).map(|p| (0, p)).collect()
+            } else {
+                // Decode call `c` sits after the whole prefill: the window is the last four of
+                // [prefill…, call 1…c]. The marker asks the expander for the prefill TAIL.
+                let calls_in_window = out.call_index.min(3);
+                let mut v = vec![(u32::MAX, 3 - calls_in_window.min(3))];
+                v.extend((out.call_index.saturating_sub(calls_in_window.saturating_sub(1))..=out.call_index).map(|c| (c, 0)));
+                v
+            }
         }
         _ => vec![(out.call_index, out.position)],
     }
@@ -1722,9 +1830,12 @@ fn canonical_input_leaves(
     let table_first_slot = out_slot - intra_table_index(profile, out_slot)? as u32;
     let mut out = Vec::new();
     let mut positions = required_positions(program, out_coord);
-    // Expand the prefill marker for decode-call GDN steps.
-    if positions.first() == Some(&(u32::MAX, 0)) {
-        let mut expanded: Vec<(u32, u32)> = (0..context.declared_prefill_tokens).map(|p| (0, p)).collect();
+    // Expand the prefill markers. `(MAX, 0)` is the WHOLE prefill (the recurrence's prefix);
+    // `(MAX, k)` for `k > 0` is its last `k` positions (the conv window's tail).
+    if let Some(&(u32::MAX, tail)) = positions.first() {
+        let prefill = context.declared_prefill_tokens;
+        let from = if tail == 0 { 0 } else { prefill.saturating_sub(tail) };
+        let mut expanded: Vec<(u32, u32)> = (from..prefill).map(|p| (0, p)).collect();
         expanded.extend(positions.drain(1..));
         positions = expanded;
     }

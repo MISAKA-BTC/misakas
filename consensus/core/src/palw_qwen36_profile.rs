@@ -40,7 +40,7 @@
 
 use crate::Hash64;
 use crate::palw_step::{
-    PALW_STEP_INPUT_CHECKPOINT_STATE, PALW_STEP_INPUT_KV_K, PALW_STEP_INPUT_KV_V, PALW_STEP_INPUT_LAYER_IN,
+    PALW_STEP_INPUT_KV_K, PALW_STEP_INPUT_KV_V, PALW_STEP_INPUT_LAYER_IN,
     PALW_STEP_OBJECT_VERSION_V1, PalwShapeProfileV3, PalwStepError, PalwStepLaneV1, PalwStepNodeRoleV1, PalwStepNodeV1,
     PalwStepOpKindV1, PalwStepOutLenV1, kernel_semantics_id_v1,
 };
@@ -108,10 +108,20 @@ pub const QWEN36_35B_A3B: PalwQwen36GeometryV1 = PalwQwen36GeometryV1 {
     moe_dim: 512,
     shared_dim: 512,
     vocab_size: 248_320,
-    n_ctx: 512,
+    // **256, and it is the ladder that says so.** The step space grows linearly in the context
+    // and the hybrid graph carries ~95 nodes per layer over forty layers: at 512 the worst case
+    // is 4.2M leaves against `PALW_STEP_MAX_LEAVES`' 2^22 — over by a tenth of a percent. The
+    // runtime's rotary table covers 512; what this bounds is the JOB a claim may declare, which
+    // the canonical job (8 + 2) is nowhere near. A deeper ladder is a bundle decision, not a
+    // profile one.
+    n_ctx: 256,
     n_threads: 1,
     rms_eps_q: 17,
-    tile_len: 256,
+    // 512, not 256: at 256 the worst-case step space is 4,198,428 leaves against the ladder's
+    // 2^22 — over by a tenth of a percent, which is the worst kind of over. The tile is a court
+    // fact (what one dispute opens), not an engine fact, and 512 puts the space at half the
+    // ceiling with the terminal opening still far inside the byte budget.
+    tile_len: 512,
 };
 
 /// A step's output width, named the way the engine names it.
@@ -126,10 +136,6 @@ enum W {
     Conv,
     /// One lane per value head (the two gates).
     GdnHeads,
-    /// One head of the recurrence.
-    HeadV,
-    /// One head of the key space.
-    HeadK,
     QDim,
     KvDim,
     Experts,
@@ -153,9 +159,6 @@ enum I {
     LayerIn,
     CachedK,
     CachedV,
-    /// The recurrence's state and the convolution's window — registration-opaque until the state
-    /// chunk map registers, and `Unadjudicable` rather than a conviction until then.
-    State,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -182,9 +185,9 @@ const fn c(
     Ir { op, role, kernel, weight, out, inputs }
 }
 
-use I::{CachedK, CachedV, LayerIn, State, Step};
+use I::{CachedK, CachedV, LayerIn, Step};
 use PalwStepOpKindV1 as K;
-use W::{Conv, Experts, GdnHeads, GdnK, GdnV, HeadK, HeadV, Hidden, KvDim, KvPerHead, One, QDim, RoutedMid, RoutedOut, SharedMid, TopK2, Vocab};
+use W::{Conv, Experts, GdnHeads, GdnK, GdnV, Hidden, KvDim, KvPerHead, One, QDim, RoutedMid, RoutedOut, SharedMid, TopK2, Vocab};
 
 /// The mixture, appended verbatim to both arms — it is the same computation after either.
 ///
@@ -240,7 +243,10 @@ const QWEN36_LINEAR_IR: &[Ir] = &{
         n(K::MatMulQuant, KDESC_Q36_MATMUL_GROUPED, "blk.{layer}.linear_v.weight", GdnV, &[Step(1)]),
         n(K::MatMulQuant, KDESC_Q36_MATMUL_GROUPED_WIDE, "blk.{layer}.linear_z.weight", GdnV, &[Step(1)]),
         // --- the convolution, over the four-position window -------------------------------------
-        n(K::SsmConv, KDESC_Q36_SSM_CONV, "blk.{layer}.linear_conv.weight", Conv, &[Step(2), Step(3), Step(4), State]),
+        // The window is the three projections at the last four positions — a per-ref position
+        // set like the KV arms', not a sentinel. Positions before the sequence start are zero
+        // rows, which is the window the engine starts from.
+        n(K::SsmConv, KDESC_Q36_SSM_CONV, "blk.{layer}.linear_conv.weight", Conv, &[Step(2), Step(3), Step(4)]),
         n(K::Silu, KDESC_BASE0_SILU, "", Conv, &[Step(6)]),
         // **Per head, not per row.** The row holds sixteen query heads, sixteen key heads and
         // thirty-two value heads, and one exponent over all of them is set by the loudest.
@@ -253,19 +259,27 @@ const QWEN36_LINEAR_IR: &[Ir] = &{
         // biases, which reach 15.6.
         n(K::Softplus, KDESC_Q36_DECAY, "blk.{layer}.linear_decay.a16", GdnHeads, &[Step(9)]),
         n(K::Sigmoid, KDESC_Q36_SIGMOID, "", GdnHeads, &[Step(10)]),
-        // --- the recurrence, per head -----------------------------------------------------------
-        n(K::L2Norm, KDESC_Q36_L2_NORM, "", HeadK, &[Step(8)]),
-        n(K::L2Norm, KDESC_Q36_L2_NORM, "", HeadK, &[Step(8)]),
+        // --- the recurrence -----------------------------------------------------------------
+        // Per-head structure lives INSIDE the kernels (the arm splits by the profile's head
+        // dims), the same way `a16_attn_scores` holds sixteen query heads in one node — a
+        // one-head node would declare a step space that does not contain heads 1..31.
+        n(K::L2Norm, KDESC_Q36_L2_NORM, "", GdnK, &[Step(8)]),
+        n(K::L2Norm, KDESC_Q36_L2_NORM, "", GdnK, &[Step(8)]),
+        // **Genesis-anchored replay, exactly as the float `GdnCore` is adjudicated.** The state
+        // is not an opened operand: the five rows are read at EVERY position from the genesis up
+        // to the challenged one, and the court replays the recurrence. A registered state chunk
+        // map later turns this checkpoint-anchored; the sentinel it would use is refused today
+        // as registration-opaque, which is the honest answer rather than a hole.
         c(
             K::GatedDeltaNet,
             PalwStepNodeRoleV1::Plain,
             KDESC_Q36_GDN_STEP,
             "blk.{layer}.linear_gdn.a16",
-            HeadV,
-            &[Step(13), Step(8), Step(14), State],
+            GdnV,
+            &[Step(13), Step(8), Step(14), Step(11), Step(12)],
         ),
         // --- the output norm and gate -----------------------------------------------------------
-        n(K::RmsNorm, KDESC_Q36_RMS_NORM_WIDE, "blk.{layer}.linear_norm_eps.a16", HeadV, &[Step(15)]),
+        n(K::RmsNorm, KDESC_Q36_RMS_NORM_WIDE, "blk.{layer}.linear_norm_eps.a16", GdnV, &[Step(15)]),
         n(K::Scale, KDESC_Q36_RESCALE_ROW, "blk.{layer}.linear_norm.a16", GdnV, &[Step(16)]),
         n(K::Silu, KDESC_BASE0_SILU, "", GdnV, &[Step(5)]),
         n(K::MulElem, KDESC_Q36_MUL_WIDE, "blk.{layer}.linear_gated.a16", GdnV, &[Step(17), Step(18)]),
@@ -364,7 +378,6 @@ fn width(w: W, g: &PalwQwen36GeometryV1) -> PalwStepOutLenV1 {
         W::GdnV => fixed(v_dim),
         W::Conv => fixed(2 * k_dim + v_dim),
         W::GdnHeads => fixed(g.gdn_v_heads as u32),
-        W::HeadV | W::HeadK => fixed(g.gdn_head_dim),
         W::QDim => fixed(g.attn_heads as u32 * g.attn_head_dim),
         W::KvDim => fixed(g.attn_kv_heads as u32 * g.attn_head_dim),
         W::Experts => fixed(g.n_experts),
@@ -401,7 +414,6 @@ fn project(ir: &[Ir], g: &PalwQwen36GeometryV1, layer_span: usize) -> Vec<PalwSt
                     I::LayerIn => PALW_STEP_INPUT_LAYER_IN,
                     I::CachedK => PALW_STEP_INPUT_KV_K,
                     I::CachedV => PALW_STEP_INPUT_KV_V,
-                    I::State => PALW_STEP_INPUT_CHECKPOINT_STATE,
                 })
                 .collect(),
         })
@@ -489,6 +501,57 @@ pub fn qwen36_reachable_kernels_v1(g: PalwQwen36GeometryV1) -> Result<std::colle
     Ok(ids)
 }
 
+/// **The canonical job's shape** — `(prefill, decode)`, the unit of this class's work.
+///
+/// Small on purpose: ten forward passes of a 35B hybrid is what one block costs, and per-class DAA
+/// retargets the cadence to what producers actually achieve, so the job's size buys latency and
+/// nothing else. The court prices this exact job (`pwu_per_inference` is its counted leaves), so
+/// changing it changes the class id — which is what "canonical" means.
+pub const QWEN36_RC_CANONICAL: (u32, u32) = (8, 2);
+
+/// **Everything a chain needs to carry this class** — the profile, its catalog entry and the
+/// genesis-form registration, derived from one geometry so no two of them can disagree.
+///
+/// `artifact_root` is the one input code cannot mint: which converted weights the class runs.
+/// `share_permille`, `slash_value_per_pwu` and `initial_target` are the network's economics and
+/// arrive from the bundle being assembled, because a class that chose its own would be choosing
+/// its weight.
+pub fn qwen36_registration_v1(
+    artifact_root: Hash64,
+    share_permille: u16,
+    slash_value_per_pwu: u64,
+    initial_target: u128,
+) -> Result<(PalwShapeProfileV3, crate::palw_mode_v2::PalwClassCatalogEntryV2, crate::palw_state_v2::PalwConsensusObjectV2), PalwStepError>
+{
+    let profile = qwen36_profile_v1(QWEN36_35B_A3B)?;
+    let class_id = profile.shape_profile_id();
+    let canonical = crate::palw_base0_profile::rc_job_context(&profile, QWEN36_RC_CANONICAL.0, QWEN36_RC_CANONICAL.1);
+    let worst = crate::palw_step::worst_case_step_leaf_count_v1(&profile)?;
+    let counted = crate::palw_step::step_leaf_count(&profile, &canonical)?;
+    let entry = crate::palw_mode_v2::PalwClassCatalogEntryV2 {
+        class_id,
+        artifact_root,
+        max_step_leaf_count: worst,
+        canonical_step_leaf_count: counted,
+        reachable_kernels: qwen36_reachable_kernels_v1(QWEN36_35B_A3B)?,
+    };
+    let object = crate::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
+        class_id,
+        terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
+        artifact_root,
+        slash_value_per_pwu,
+        pwu_rule: crate::palw_state_v2::PalwPwuRuleV2::DerivedV1 { pwu_per_inference: counted },
+        initial_target,
+        share_permille,
+        activation_daa: 0,
+        // Genesis form: the gate that reads the admission carriage is the post-genesis acceptance
+        // path; a genesis registration is authorized by `verify_palw_genesis_v2` over the whole
+        // artifact, exactly as the floor's is.
+        admission: None,
+    };
+    Ok((profile, entry, object))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -530,6 +593,24 @@ mod tests {
             kernel_ids: qwen36_reachable_kernels_v1(QWEN36_35B_A3B).expect("the profile projects"),
         };
         verify_catalog_coverage_v1(&reachable).expect("every reachable kernel is adjudicable");
+    }
+
+    /// **The whole admission gate, on this profile** — the checks a post-genesis
+    /// `ClassRegistered` for this class must pass: shape validation, the coverage pair (ids AND
+    /// per-node shape service), the ladder depth, the court cost ceilings and the PWU recount.
+    /// This is the test that says "registrable", not merely "expressible".
+    #[test]
+    fn the_admission_gate_admits_this_class() {
+        use crate::palw_step::{step_leaf_count, worst_case_step_leaf_count_v1};
+        let p = qwen36_profile_v1(QWEN36_35B_A3B).expect("the profile projects");
+        p.validate_shape().expect("the shape validates");
+        crate::palw_catalog_coverage::verify_profile_coverage_v1(&p).expect("every node's shape is servable");
+        let worst = worst_case_step_leaf_count_v1(&p).expect("the step space enumerates");
+        let canonical = crate::palw_base0_profile::rc_job_context(&p, 8, 2);
+        let counted = step_leaf_count(&p, &canonical).expect("the canonical job counts");
+        assert!(counted <= worst, "canonical {counted} inside worst {worst}");
+        // Stated so a registration knows what to declare: `pwu_per_inference` must equal this.
+        assert!(counted > 0, "the canonical job commits at least one leaf, counted {counted}");
     }
 
     /// A node may only read something computed before it — the property that makes a step's input
