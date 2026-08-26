@@ -1935,6 +1935,54 @@ async fn palw_v2_a_node_with_no_palw_state_refuses_to_run() {
     );
 }
 
+/// **A staging consensus is not a node, and refusing it closed the network to newcomers.**
+///
+/// `IbdType::DownloadHeadersProof` — the path every fresh join takes onto a chain with history —
+/// creates a staging consensus to replay the proof into. Staging holds no PALW state by
+/// construction: it is a scratch database that is promoted or discarded, and the guard above says
+/// so in its own words ("the one legitimate stateless case").
+///
+/// It could not recognise it. `db_has_history` was read AFTER `virtual_processor.init()`, and
+/// `init` writes `past_pruning_points[0]` on any database that lacks a pruning point — so the row
+/// that was supposed to mean "this database carries a chain" was written by the same constructor,
+/// three lines earlier, for every consensus that has ever existed. Staging looked like a resuming
+/// node, the guard fired, and the node died one second into its first IBD.
+///
+/// Measured on testnet-11 on 2026-08-26: three fresh hosts, three identical panics, no way to join
+/// the network except to restart until the datadir had enough state to pass — which is not a join
+/// path, it is a coin flip an operator has to know about.
+///
+/// This is the staging case; `palw_v2_constructing_a_bundled_consensus_over_an_empty_store_panics`
+/// is the resuming one, and both must hold: a guard that cannot tell them apart is either a network
+/// with no newcomers or a node whose PALW authority silently fails open.
+#[test]
+fn palw_v2_a_staging_consensus_without_palw_state_is_allowed() {
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+
+    let catalog = palw_v2_test_catalog();
+    let bundle = palw_v2_test_bundle(&catalog);
+    // Exactly what `ConsensusFactory::new_staging_consensus` builds: the network's own config with
+    // genesis skipped, over a database nothing has written to.
+    let staging = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+        })
+        .skip_adding_genesis()
+        .build();
+
+    let (_lifetime, db) = kaspa_database::create_temp_db!(kaspa_database::prelude::ConnBuilder::default().with_files_limit(10));
+    let (sender, _r) = async_channel::unbounded();
+    // Constructing it is the whole assertion — the defect was a panic in `Consensus::new`.
+    let consensus = crate::consensus::test_consensus::TestConsensus::with_db(db, &staging, sender);
+    assert!(
+        consensus.virtual_processor().palw_state_v2_store.read().tip_record().unwrap().is_none(),
+        "and it is still stateless afterwards — the point is that staging is ALLOWED to be, not that \
+         something quietly installed a tip to get past the guard"
+    );
+}
+
 /// **And the guard actually refuses** — a ConsensusV2 consensus cannot be constructed over an empty
 /// PALW store.
 ///

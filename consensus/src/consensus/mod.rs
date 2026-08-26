@@ -304,15 +304,24 @@ impl Consensus {
             is_consensus_exiting.clone(),
         ));
 
+        // Does this database already carry a chain? `past_pruning_points[0]` is the pruning-proof
+        // anchor and is never pruned, so its presence separates "a node resuming its own history"
+        // from "a fresh or staging database".
+        //
+        // **Read BEFORE `virtual_processor.init()`, which is what writes it.** `init` registers a
+        // pruning point on any database that has none — `past_pruning_points_store.insert(0,
+        // genesis)` — so asking afterwards returns true for every consensus ever constructed,
+        // including a staging one three lines old. The guard below then has no way to recognise
+        // the single case its own comment calls legitimate, and a `ConsensusV2` node that reached
+        // `IbdType::DownloadHeadersProof` killed itself on the staging consensus it had just
+        // created. Measured on testnet-11 on 2026-08-26: three fresh joins, three identical
+        // panics, one second into IBD — a newcomer could not join the network at all.
+        let db_has_history = storage.past_pruning_points_store.get(0).is_ok();
+
         // Ensure the relations stores are initialized
         header_processor.init();
         // Ensure that some pruning point is registered
         virtual_processor.init();
-
-        // Does this database already carry a chain? `past_pruning_points[0]` is written by
-        // `process_genesis` and never pruned — it is the pruning-proof anchor — so its presence is
-        // what separates "a node resuming its own history" from "a fresh or staging database".
-        let db_has_history = storage.past_pruning_points_store.get(0).is_ok();
 
         // Ensure that genesis was processed
         if config.process_genesis {
@@ -363,7 +372,10 @@ impl Consensus {
         // `.skip_adding_genesis()` on a fresh database, holding nothing until it is promoted. It is
         // told apart by its database, not by a flag: staging has no history, while a node resuming
         // its own chain has `past_pruning_points[0]`. So the guard runs when this consensus either
-        // installed genesis itself or is resuming a real history.
+        // installed genesis itself or is resuming a real history — and `db_has_history` is read
+        // above `init`, because `init` would otherwise hand staging the very row that distinguishes
+        // it. A staging consensus never survives a restart (`delete_inactive_consensus_entries`
+        // drops the entry at startup), so "fresh" and "staging" are the same database twice over.
         if (config.process_genesis || db_has_history)
             && matches!(config.params.palw_consensus_mode, kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(_))
         {
