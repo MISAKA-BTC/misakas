@@ -859,6 +859,58 @@ mod tests {
         assert_eq!(worst_calls, 1, "an anchored dispute cost {worst_calls} calls at interval 1");
     }
 
+    /// **What the leg costs to retain and serve, pinned.**
+    ///
+    /// This is a cost the unit CREATED. Before it, `checkpoint_merkle_root` was a zero placeholder
+    /// and a producer retained nothing for it; now real state travels in the material a producer
+    /// must keep and serve. A number nobody measured is a number that grows, so it is asserted
+    /// here against the map's own arithmetic rather than left to be discovered on a fleet.
+    ///
+    /// At `checkpoint_interval = 1` the producer takes a checkpoint per decode call — the most
+    /// expensive end for the producer and the cheapest for a disputant (never more than one call to
+    /// replay). That is a producer-side trade, and this test is where a change to it becomes
+    /// visible instead of silent.
+    #[test]
+    fn the_checkpoint_leg_costs_what_the_map_says_it_costs() {
+        use kaspa_consensus_core::palw_state_chunk_map as map;
+        let (artifact, profile, ctx, prompt) = small_job();
+        let run = base0_execute_for_attempt_v1(&artifact, &profile, &ctx, &prompt).expect("the job runs");
+
+        let row = profile.attn_kv_heads as u64 * profile.attn_head_dim as u64;
+        let layers = (0..profile.layer_count)
+            .filter(|l| profile.layer_kind(*l) == kaspa_consensus_core::palw_step::PalwLayerKindV1::Attention)
+            .count() as u64;
+
+        let mut total = 0u64;
+        for (i, leaf) in run.checkpoints.leaves.iter().enumerate() {
+            let positions = map::integer_kv_positions_at_v1(&ctx, leaf.covered_decode_call) as u64;
+            // K and V, every attention layer, one byte per element — the map, restated from the
+            // geometry so the test cannot pass by agreeing with the code it is checking.
+            let expected = 2 * layers * positions * row;
+            let got: u64 = run.checkpoints.chunks[i].iter().map(|c| c.len() as u64).sum();
+            assert_eq!(got, expected, "checkpoint {i} retains {got} bytes, the map implies {expected}");
+            total += got;
+        }
+
+        // The whole leg, for this job's shape. `small_job` is prefill 3 / decode 3 on a 2-layer,
+        // 2-head, 32-wide fixture: rows are 64 bytes, checkpoints cover calls 1 and 2 at 4 and 5
+        // positions, so 2 × 2 × (4 + 5) × 64.
+        assert_eq!(row, 64);
+        assert_eq!(layers, 2);
+        assert_eq!(total, 2 * 2 * (4 + 5) * 64, "the leg's retained size moved");
+
+        // And it is what actually ships: the material carries these bytes and nothing else for the
+        // leg — the leaves are re-derived, never sent.
+        let encoded = base0_material_encode_v1(&run).expect("encodes");
+        let bare = borsh::to_vec(&(&run.binding, &run.tiles.tiles, &run.logits_rows, &run.generated_token_ids))
+            .expect("encodes without the leg");
+        let overhead = encoded.len() as u64 - bare.len() as u64;
+        assert!(
+            overhead >= total && overhead < total + 256,
+            "the leg adds {overhead} bytes to the material for {total} bytes of state — framing should be the only difference"
+        );
+    }
+
     /// **The unit at its own caller's boundary: served bytes in, one leaf's verdict out.**
     ///
     /// Three things, and the middle one is the soundness of the whole arrangement:
