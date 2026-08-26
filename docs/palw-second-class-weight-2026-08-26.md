@@ -13,6 +13,28 @@ unit weight is denominated in does not measure work; and a running chain hands a
 minimum grantable share and has no arithmetic that could ever raise it. **Gate 3 is a mint decision,
 and on testnet-11 it is already spent.**
 
+> **Read this first, if you are reading it after 2026-08-26.**
+>
+> "The second class" in this document is **Family M / CAT-M-0001** (`682756bc…`), the pinned-GGUF
+> class that testnet-11 registered on 2026-08-24. Later the same day, `palw-base0-runtime-hardening`
+> withdrew that family entirely (ADR-0053, `a2dd4459` + `243c77ed`): one execution family, the
+> deterministic-integer one, and `verify_class_admission_v2` with no arm around it. So on any branch
+> that carries ADR-0053, "the second class" means ADR-0052's `PALW-QWEN36` — **same family as the
+> floor, adjudicable, not a black box**. Do not carry §2's conclusions across to it: §2 is about a
+> class with no court, and Qwen3.6 has one.
+>
+> **What does not change with the family:** §3 (`pwu_per_inference` is court granularity, not work
+> — 31.6× across tiles for identical compute), §4 (testnet-11's frozen ceilings admit a Qwen class
+> only at tile 64 / n_ctx 90), §5 (the fast integer kernels are aarch64-only), and §6 (a running
+> chain hands an entrant the minimum grantable share and holds no arithmetic that could raise it).
+> Those are statements about the integer family and the ruleset, and ADR-0053 does not touch them.
+> §6's dead `FamilyShareCap` is cited by ADR-0053 as the first of its three unimplemented mechanisms.
+>
+> **And this document still describes a chain that is running.** Withdrawing a family from the code
+> does not retire a live registration: as of today's dump, class `682756bc…` is still `Active` on
+> testnet-11 holding `share=1, budget=1`, and it is still unable to produce for the reason §1 gives.
+> It stops being true of that network when testnet-11 is re-minted, not when the branch lands.
+
 ---
 
 ## 0. What the chain holds right now
