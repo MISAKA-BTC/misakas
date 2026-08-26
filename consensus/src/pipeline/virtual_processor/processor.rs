@@ -1156,9 +1156,32 @@ impl VirtualStateProcessor {
                     // that is where the coinbase is verified against it.
                     ctx.palw_v2_payout_outputs = palw_state.as_ref().map(|s| self.palw_v2_payout_outputs(s)).unwrap_or_default();
                     // Audit C-08: and the collateral this block may not let anyone spend, from the
-                    // same parent state and for the same reason.
+                    // same parent state and for the same reason — PLUS every bond this block's own
+                    // mergeset declares.
+                    //
+                    // The parent state alone cannot hold a bond this block registers, and the
+                    // registration is extracted from acceptance data AFTER the mergeset is already
+                    // accepted. So the collateral output of a bond was spendable in the very block
+                    // that registered it: `palw_bond_registration_binds_its_carrier_v2` proves the
+                    // named output EXISTS in the carrier, never that it survived, and `apply_object`
+                    // checks only `collateral >= min`. Chained transactions are forbidden inside one
+                    // block but not across a mergeset, and `composed_view` is recomputed per merged
+                    // block — so a transaction in a later merged block spends an output an earlier
+                    // one created. The result is an Active bond backed by nothing.
+                    //
+                    // The DNS half of this same filter has had the treatment since the mergeset
+                    // fence: `bond_gate_view` is the selected parent's bonds UNION every bond
+                    // declared anywhere in this mergeset, on the argument that including a
+                    // declaration that turns out UTXO-invalid is a harmless SAFE SUPERSET — its
+                    // output does not exist, so nothing could spend it anyway. The same argument
+                    // holds here, and the filter only ever FORBIDS a spend, so a superset cannot
+                    // admit anything. Deterministic in the shared (parent state, mergeset) inputs,
+                    // so construction and validation compute the same set.
                     ctx.palw_v2_locked_bonds =
                         palw_state.as_ref().map(|s| self.palw_v2_locked_bond_outpoints(s, pov_daa_score)).unwrap_or_default();
+                    if palw_state.is_some() {
+                        ctx.palw_v2_locked_bonds.extend(self.palw_v2_bonds_declared_in_mergeset(&ctx));
+                    }
                     // ADR-0042 Decision 10: and what the selected parent's own claim already
                     // spent of its worker reward, so this coinbase does not pay it twice.
                     ctx.palw_v2_escrow_withheld =
@@ -3859,6 +3882,36 @@ impl VirtualStateProcessor {
             class_id,
             bond.map(kaspa_consensus_core::palw_state_v2::PalwBondKeyV2).as_ref(),
         )
+    }
+
+    /// **The bonds this block's own mergeset declares** — the half the parent state cannot hold.
+    ///
+    /// A safe superset by construction, and by the same argument the DNS `bond_gate_view` makes:
+    /// a declaration that turns out to be UTXO-invalid names an output that does not exist, so
+    /// forbidding its spend forbids nothing. This set is only ever UNIONED into the locked set,
+    /// which only ever refuses, so no superset can admit a spend that the parent-state half would
+    /// have refused.
+    ///
+    /// Reads the RAW mergeset transactions — the same set the acceptance loop iterates — rather
+    /// than acceptance data, because acceptance data does not exist yet at this point in the walk,
+    /// and that is precisely why the collateral was spendable in its own registering block.
+    pub(super) fn palw_v2_bonds_declared_in_mergeset(
+        &self,
+        ctx: &UtxoProcessingContext,
+    ) -> std::collections::HashSet<TransactionOutpoint> {
+        use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
+        let mergeset_txs: Vec<kaspa_consensus_core::tx::Transaction> = std::iter::once(ctx.selected_parent())
+            .chain(ctx.ghostdag_data.consensus_ordered_mergeset_without_selected_parent(self.ghostdag_store.deref()))
+            .flat_map(|b| (*self.block_transactions_store.get(b).unwrap()).clone())
+            .collect();
+        kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_objects_from_accepted_txs_v2(&mergeset_txs)
+            .objects
+            .iter()
+            .filter_map(|carried| match &carried.object {
+                PalwConsensusObjectV2::BondRegistered { bond, .. } => Some(bond.0),
+                _ => None,
+            })
+            .collect()
     }
 
     pub(super) fn palw_v2_locked_bond_outpoints(

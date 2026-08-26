@@ -251,34 +251,24 @@ impl HeaderProcessor {
         // (algo_id=1) kHeavyHash inner loop inside the domain-separated Layer 0
         // finalizer; the block level is derived from the 512-bit pow value
         // (ADR-0007 / ADR-0008).
-        let state = kaspa_pow::StateLayer0::new(header, &self.network_id);
-        // The PALW split here mirrors `kaspa_pow::calc_block_level_check_pow_layer0` exactly, so
-        // the two cannot drift (ADR-0042 Decision 4, PR-02):
+        // **One implementation, called — not two a comment claims are identical.**
         //
-        // * `PalwWorkerFailed` — this node HAS a registered model runtime and it broke,
-        //   persistently (the driver's bounded retries absorb the transient half). That is a fact
-        //   about the NODE, applying to every header equally; mapping it to `InvalidPoW` would
-        //   reject every honest block and ban every honest peer, so the one deployment that opted
-        //   into a model still fails LOUD.
-        // * `PalwUnavailable` — no runtime is registered in this process (or one configured off
-        //   this network's class). A full node without a model is the NORMAL case, and a header
-        //   priced by an inference this node never promised to run is simply a failed PoW. A
-        //   network whose rules demand such headers refuses to boot a kaspad without a verified
-        //   runtime at the startup rail, so this arm is not reachable as a silent-fork state
-        //   there; everywhere else it is junk pricing, working as designed.
-        let (passed, pow_512) = match state.check_pow_layer0(header.nonce) {
-            Ok(ok) => ok,
-            Err(e @ kaspa_consensus_core::pow_layer0::PowLayer0Error::PalwWorkerFailed(_)) => {
-                panic!("PALW PoW validation cannot run on this node: {e}")
-            }
-            // `PalwUnavailable`, and the rest — finalizer-internal misuse, impossible for a
-            // well-formed header. A failed PoW is the fail-closed reading of them all.
-            Err(_) => return Err(RuleError::InvalidPoW),
-        };
-        if passed || self.skip_proof_of_work {
-            Ok(kaspa_pow::calc_level_from_pow_512(pow_512, self.max_block_level))
-        } else {
-            Err(RuleError::InvalidPoW)
-        }
+        // This used to reproduce `kaspa_pow::calc_block_level_check_pow_layer0`'s error arms and
+        // assert in a comment that the two "cannot drift". They had already drifted: the shared
+        // function clamps an algo-7 receipt header to level 0 — "deriving a level from a free
+        // digest would sell hierarchy position, the pruning-proof structure, for the price of one
+        // signature" — and this copy called `calc_level_from_pow_512` unconditionally. The ORDINARY
+        // block path runs this one, so the unclamped level is what reached the headers store, while
+        // the pruning-proof and trusted-import paths used the clamped one. The test named for the
+        // property asserts it through the shared function, which is not the path that stores it.
+        //
+        // Delegating is the fix rather than copying the missing arm, because the defect was never
+        // the arm — it was that a duplicated invariant has no way to stay true.
+        //
+        // The shared function's parentless-root short-circuit is unreachable from here:
+        // `check_parents_limit` rejects an empty parent set and runs before this on both callers
+        // (`validate_header_in_isolation` and the ordinary `validate_header`).
+        let (level, passed) = kaspa_pow::calc_block_level_check_pow_layer0(header, &self.network_id, self.max_block_level);
+        if passed || self.skip_proof_of_work { Ok(level) } else { Err(RuleError::InvalidPoW) }
     }
 }
