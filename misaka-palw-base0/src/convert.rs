@@ -37,6 +37,9 @@
 //! Which checkpoint. `Qwen2.5-2B` does not exist; the caller passes the geometry it read from a
 //! real `config.json`, and [`crate::convert::Qwen25ConvertPlan`] carries it.
 
+// `PalwQkSplitV1` / `PalwSinkLaneV1` are the W8A8 lane's structures on the branch this file came
+// from; the A16 path stores everything in `Base0ArtifactV1::a16_params`, so they are not imported
+// here and this line is the whole difference.
 use crate::artifact::{ArtifactError, Base0ArtifactV1, Base0LayerWeightsV1, Base0ShapeV1};
 use kaspa_consensus_core::palw_base0_ops::{QuantParams, ScaleParams};
 use std::collections::BTreeMap;
@@ -192,6 +195,30 @@ fn quantize(value: f32, scale: f64) -> i8 {
 fn quantize_tensor(name: &str, values: &[f32]) -> Result<(Vec<i8>, f64), ConvertError> {
     let scale = scale_of(values).ok_or_else(|| ConvertError::DegenerateTensor(name.to_string()))?;
     Ok((values.iter().map(|v| quantize(*v, scale)).collect(), scale))
+}
+
+/// Quantize a `[out][in]` matrix PER ROW — each output channel at its own absmax.
+///
+/// A trained projection's rows spread over several bits, and one tensor-wide scale forfeits
+/// exactly that many from every quiet row. The row scale is absorbed downstream by the output
+/// channel's requant multiplier, so the accumulator arithmetic is unchanged; this is where the
+/// weight precision the per-tensor path was leaving on the floor comes back.
+fn quantize_rows(name: &str, values: &[f32], out_dim: usize) -> Result<(Vec<i8>, Vec<f64>), ConvertError> {
+    let in_dim = values.len() / out_dim.max(1);
+    let mut codes = Vec::with_capacity(values.len());
+    let mut scales = Vec::with_capacity(out_dim);
+    for r in 0..out_dim {
+        let row = &values[r * in_dim..(r + 1) * in_dim];
+        // A dead row is legal (scale 1, all-zero codes): refusing it would refuse real
+        // checkpoints over one pruned channel, and a zero row contributes zero either way.
+        let scale = scale_of(row).unwrap_or(1.0);
+        codes.extend(row.iter().map(|v| quantize(*v, scale)));
+        scales.push(scale);
+    }
+    if codes.iter().all(|c| *c == 0) {
+        return Err(ConvertError::DegenerateTensor(name.to_string()));
+    }
+    Ok((codes, scales))
 }
 
 /// **The amplifying gain a `fan_in`-long int8 dot needs to land in the Qk band (ADR-0040 H).**
@@ -430,6 +457,232 @@ pub fn convert_qwen25(blob: &[u8], plan: &Qwen25ConvertPlan) -> Result<Base0Arti
     Base0ArtifactV1::from_parts(s, embed, unembed, layers, norm_requant, residual_requant).map_err(ConvertError::Artifact)
 }
 
+/// The power-of-two CODE EXPONENT for a measured range: the `e` with `absmax / 2^e ≤ 127`,
+/// tightest. Codes at scale `2^e` then use most of the int8 range without saturating on the
+/// calibration data. (Beyond it they clamp — which is what int8 means.)
+fn pow2_exp(absmax: f64) -> i32 {
+    if absmax <= 0.0 {
+        // A degenerate site (an all-zero activation). Any scale represents zero; a very fine one
+        // at least keeps the requant multipliers well-conditioned.
+        return -20;
+    }
+    (absmax / 127.0).log2().ceil() as i32
+}
+
+/// **The smoothing split for one norm site (the SmoothQuant trade, in powers of two).**
+///
+/// A normed row's absmax is an outlier channel tens of times the ordinary ones, so one uniform
+/// scale gives the ordinary channels — the ones carrying the computation — three bits. Instead,
+/// each channel above the median gets a coarser own scale (`base + t_c`), and the consuming
+/// weight COLUMNS absorb the inverse (`× 2^t_c`): the activation range migrates into the weights,
+/// half the distance in bits (α = 1/2), capped so no column can blow the weight tensor's scale.
+///
+/// Returns `(base_exponent, per-channel extra bits)`.
+pub fn smoothing_plan(channel_absmax: &[f64]) -> (i32, Vec<i32>) {
+    let mut exps: Vec<i32> = channel_absmax.iter().map(|a| pow2_exp(*a)).collect();
+    let mut sorted = exps.clone();
+    sorted.sort_unstable();
+    let base = sorted[sorted.len() / 2];
+    for e in exps.iter_mut() {
+        // SYMMETRIC: quiet channels get finer scales (negative bits — their weight columns
+        // shrink, spending weight range that was idle) exactly as loud ones get coarser. The
+        // first version only coarsened, which left every below-median channel at one to three
+        // codes and capped the normed row's own cosine at 0.81 — a floor that compounds
+        // twenty-eight times.
+        let half = (*e - base).div_euclid(2) + ((*e - base).rem_euclid(2) != 0) as i32 * ((*e >= base) as i32);
+        *e = half.clamp(-6, 6);
+    }
+    (base, exps)
+}
+
+/// `(m, shift)` with `x ≈ m / 2^shift`, mantissa normalized into the top bits — the A16 wire's
+/// multiplier is `i64`, so the shift stays ≤ 62 and the mantissa keeps ~62 significant bits.
+fn a16_mul_shift(x: f64) -> (i64, u8) {
+    if x <= 0.0 {
+        return (0, 0);
+    }
+    let mut shift = 62u8;
+    loop {
+        let m = x * 2f64.powi(shift as i32);
+        if m < (1i64 << 62) as f64 || shift == 0 {
+            return ((m.round() as i64).max(1), shift);
+        }
+        shift -= 1;
+    }
+}
+
+/// **The W8A16 conversion (ADR-0040 W) — weights per row, activations wide, and every runtime
+/// number INTEGER before the artifact exists.**
+///
+/// The first A16 engine consumed `f64` scales at run time; a court cannot open a float, so the
+/// formalized artifact carries the derived `(m, shift, zero)` triples instead — in
+/// [`Base0ArtifactV1::a16_params`], keyed exactly as the shape profile names them, which is the
+/// same store the dispute oracle serves. Position zero's sink-lane overrides ride the `.sink0`
+/// suffix. The unembedding is TIED for real: the same int8 embedding codes serve the gather and
+/// the logits, and the logits triple absorbs the scale.
+pub fn convert_qwen25_a16(
+    blob: &[u8],
+    plan: &Qwen25ConvertPlan,
+    stats: &crate::reference::CalibStatsV1,
+) -> Result<Base0ArtifactV1, ConvertError> {
+    use kaspa_consensus_core::palw_base0_a16::A16QuantParams;
+    let index = parse_safetensors_header(blob)?;
+    let s = plan.shape;
+    let d = s.d_model();
+    let kv = s.kv_dim();
+    let k_bits = kaspa_consensus_core::palw_base0::K as i32;
+    let read = |name: &str, want: &[usize]| read_bf16_tensor(blob, &index, name, want);
+
+    let embed_f = read("model.embed_tokens.weight", &[s.vocab, d])?;
+    let e_emb = pow2_exp(scale_of(&embed_f).ok_or(ConvertError::DegenerateTensor("embed".into()))? * 127.0);
+    let embed: Vec<i8> = embed_f.iter().map(|v| quantize(*v, 2f64.powi(e_emb))).collect();
+    // Tied for real: one set of codes serves the gather and the logits.
+    let unembed = embed.clone();
+    drop(embed_f);
+
+    // Site exponents at 15-bit budgets with one bit of drift headroom.
+    let e15 = |a: f64| -> i32 { if a <= 0.0 { -24 } else { (a.max(1e-9) / 32_767.0).log2().ceil() as i32 + 1 } };
+    let triple = |x: f64, zero: i64| -> A16QuantParams {
+        let (multiplier, shift) = a16_mul_shift(x.abs());
+        A16QuantParams { multiplier: if x < 0.0 { -multiplier } else { multiplier }, shift, zero }
+    };
+    let wire = |rows: &[A16QuantParams]| -> Vec<u8> { rows.iter().flat_map(|p| p.to_wire()).collect() };
+
+    let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
+    // The stream enters at the lifted embedding scale (seven spare bits of the sixteen).
+    let e_entry = e_emb - 7;
+    entries.push(("embed_lift.a16".into(), wire(&[triple(128.0, 0)])));
+
+    let mut layers = Vec::with_capacity(s.n_layers);
+    let mut e_in = e_entry;
+    let mut e_in_sink = e_entry;
+    for (li, st) in stats.per_layer.iter().enumerate() {
+        let at = |t: &str| format!("model.layers.{li}.{t}");
+        let name = |t: &str| format!("blk.{li}.{t}");
+        let attn_gain = read(&at("input_layernorm.weight"), &[d])?;
+        let ffn_gain = read(&at("post_attention_layernorm.weight"), &[d])?;
+        let wq_f = permute_rope_rows(&read(&at("self_attn.q_proj.weight"), &[d, d])?, d, d, s.d_head);
+        let wk_f = permute_rope_rows(&read(&at("self_attn.k_proj.weight"), &[kv, d])?, kv, d, s.d_head);
+        let bq = permute_rope_vector(&read(&at("self_attn.q_proj.bias"), &[d])?, s.d_head);
+        let bk = permute_rope_vector(&read(&at("self_attn.k_proj.bias"), &[kv])?, s.d_head);
+        let bv = read(&at("self_attn.v_proj.bias"), &[kv])?;
+        let (wq, sq_rows) = quantize_rows(&at("q_proj"), &wq_f, d)?;
+        let (wk, sk_rows) = quantize_rows(&at("k_proj"), &wk_f, kv)?;
+        let (wv, sv_rows) = quantize_rows(&at("v_proj"), &read(&at("self_attn.v_proj.weight"), &[kv, d])?, kv)?;
+        let (wo, so_rows) = quantize_rows(&at("o_proj"), &read(&at("self_attn.o_proj.weight"), &[d, d])?, d)?;
+        let (w_gate, sg_rows) = quantize_rows(&at("gate_proj"), &read(&at("mlp.gate_proj.weight"), &[s.d_ff, d])?, s.d_ff)?;
+        let (w_up, su_rows) = quantize_rows(&at("up_proj"), &read(&at("mlp.up_proj.weight"), &[s.d_ff, d])?, s.d_ff)?;
+        let (w_down, sd_rows) = quantize_rows(&at("down_proj"), &read(&at("mlp.down_proj.weight"), &[d, s.d_ff])?, d)?;
+
+        let e_n1 = e15(st.norm_absmax[0]);
+        let e_n2 = e15(st.norm_absmax[1]);
+        let e_q = e15(st.q_absmax);
+        let e_k = e15(st.k_absmax);
+        let e_v = e15(st.v_absmax);
+        let e_att = e15(st.attn_absmax);
+        let e_mid = e15(st.h_absmax[0]);
+        let e_out = e15(st.h_absmax[1]);
+        let e_silu = e15(st.silu_absmax);
+        let e_up = e15(st.up_absmax);
+        let e_gated = e15(st.gated_absmax);
+        // The sink lane's own stream and FFN exponents (never tighter than the generic ones).
+        let e_mid_s = e15(st.sink_stream_absmax[0].max(st.h_absmax[0]));
+        let e_out_s = e15(st.sink_stream_absmax[1].max(st.h_absmax[1]));
+        let e_silu_s = e15(st.sink_ffn_absmax[0].max(st.silu_absmax));
+        let e_up_s = e15(st.sink_ffn_absmax[1].max(st.up_absmax));
+        let e_gated_s = e15(st.sink_ffn_absmax[2].max(st.gated_absmax));
+        // The shared per-layer logit-code scale: one scale for every head (the head spread fits
+        // inside fifteen bits; a per-head scale would need per-head court parameters for no
+        // measured gain).
+        let e_lg = e15(st.logit_absmax.iter().fold(0f64, |a, v| a.max(*v)));
+
+        // Norm rows: gain in the signed multipliers.
+        let norm_row = |gain: &[f32], e_base: i32| -> Vec<A16QuantParams> {
+            gain.iter().map(|g| triple(*g as f64 * 2f64.powi(-k_bits - e_base), 0)).collect()
+        };
+        entries.push((name("attn_norm.a16"), wire(&norm_row(&attn_gain, e_n1))));
+        entries.push((name("ffn_norm.a16"), wire(&norm_row(&ffn_gain, e_n2))));
+
+        // Projections: per-row weight scale, site scale change, bias zero — one triple each.
+        let proj_row = |scales: &[f64], bias: Option<&[f32]>, e_in: i32, e_out: i32| -> Vec<A16QuantParams> {
+            scales
+                .iter()
+                .enumerate()
+                .map(|(c, sr)| {
+                    let z = bias.map_or(0i64, |b| (b[c] as f64 / 2f64.powi(e_out)).round() as i64);
+                    triple(sr * 2f64.powi(e_in - e_out), z)
+                })
+                .collect()
+        };
+        entries.push((name("attn_q.weight.a16"), wire(&proj_row(&sq_rows, Some(&bq), e_n1, e_q))));
+        entries.push((name("attn_k.weight.a16"), wire(&proj_row(&sk_rows, Some(&bk), e_n1, e_k))));
+        entries.push((name("attn_v.weight.a16"), wire(&proj_row(&sv_rows, Some(&bv), e_n1, e_v))));
+        entries.push((name("attn_output.weight.a16"), wire(&proj_row(&so_rows, None, e_att, e_mid))));
+        entries.push((name("attn_output.weight.a16.sink0"), wire(&proj_row(&so_rows, None, e_att, e_mid_s))));
+        entries.push((name("ffn_up.weight.a16"), wire(&proj_row(&su_rows, None, e_n2, e_up))));
+        entries.push((name("ffn_up.weight.a16.sink0"), wire(&proj_row(&su_rows, None, e_n2, e_up_s))));
+        entries.push((name("ffn_down.weight.a16"), wire(&proj_row(&sd_rows, None, e_gated, e_out))));
+        entries.push((name("ffn_down.weight.a16.sink0"), wire(&proj_row(&sd_rows, None, e_gated_s, e_out_s))));
+        // The gate reaches SiLU in exact Qk.
+        let gate_row: Vec<A16QuantParams> = sg_rows.iter().map(|sr| triple(sr * 2f64.powi(e_n2 + k_bits), 0)).collect();
+        entries.push((name("ffn_gate.weight.a16"), wire(&gate_row)));
+
+        // Attention: logits codes, op 5W's byte, probability codes, the value sum.
+        entries.push((name("attn_logits.a16"), wire(&[triple(2f64.powi(e_q + e_k - e_lg) / (s.d_head as f64).sqrt(), 0)])));
+        entries.push((name("attn_softmax_up"), vec![(k_bits + e_lg).clamp(0, 62) as u8]));
+        entries.push((name("attn_probs.a16"), wire(&[A16QuantParams { multiplier: 1, shift: (k_bits - 15) as u8, zero: 0 }])));
+        entries.push((name("attn_values.a16"), wire(&[triple(2f64.powi(e_v - 15 - e_att), 0)])));
+
+        // The residual seams: align to the add scale, identity-clamp after the add.
+        let identity = A16QuantParams { multiplier: 1, shift: 0, zero: 0 };
+        entries.push((name("attn_align.a16"), wire(&[triple(2f64.powi(e_in - e_mid), 0)])));
+        entries.push((name("attn_align.a16.sink0"), wire(&[triple(2f64.powi(e_in_sink - e_mid_s), 0)])));
+        entries.push((name("attn_residual.a16"), wire(&[identity])));
+        entries.push((name("ffn_align.a16"), wire(&[triple(2f64.powi(e_mid - e_out), 0)])));
+        entries.push((name("ffn_align.a16.sink0"), wire(&[triple(2f64.powi(e_mid_s - e_out_s), 0)])));
+        entries.push((name("ffn_residual.a16"), wire(&[identity])));
+
+        // The FFN's uniform seams.
+        entries.push((name("ffn_silu.a16"), wire(&[triple(2f64.powi(-k_bits - e_silu), 0)])));
+        entries.push((name("ffn_silu.a16.sink0"), wire(&[triple(2f64.powi(-k_bits - e_silu_s), 0)])));
+        entries.push((name("ffn_gated.a16"), wire(&[triple(2f64.powi(e_silu + e_up - e_gated), 0)])));
+        entries.push((name("ffn_gated.a16.sink0"), wire(&[triple(2f64.powi(e_silu_s + e_up_s - e_gated_s), 0)])));
+
+        let benign = QuantParams { multiplier: i32::MAX, shift: 0, zero: 0 };
+        layers.push(Base0LayerWeightsV1 {
+            wq,
+            wk,
+            wv,
+            wo,
+            w_gate,
+            w_up,
+            w_down,
+            qkv_channel_requant: None,
+            requant: [benign; 7],
+            attn_logit_scale: ScaleParams::unity(),
+            ffn_gate_scale: ScaleParams::unity(),
+        });
+        e_in = e_out;
+        e_in_sink = e_out_s;
+    }
+
+    let final_gain = read("model.norm.weight", &[d])?;
+    let e_fn = e15(stats.final_norm_absmax);
+    let e_logit = e15(stats.final_logit_absmax);
+    let final_row: Vec<A16QuantParams> = final_gain.iter().map(|g| triple(*g as f64 * 2f64.powi(-k_bits - e_fn), 0)).collect();
+    entries.push(("final_norm.a16".into(), wire(&final_row)));
+    // The tied logits: embedding codes at 2^e_emb against final-norm codes at 2^e_fn, committed
+    // as i16 logit codes at 2^e_logit.
+    entries.push(("token_embd.weight.a16".into(), wire(&[triple(2f64.powi(e_emb + e_fn - e_logit), 0)])));
+
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let norm_requant = QuantParams { multiplier: i32::MAX, shift: (k_bits as u8) - 7, zero: 0 };
+    Base0ArtifactV1::from_parts(s, embed, unembed, layers, norm_requant, QuantParams { multiplier: i32::MAX, shift: 0, zero: 0 })
+        .and_then(|a| a.with_a16_params(entries))
+        .map_err(ConvertError::Artifact)
+}
+
 /// How many q/k/v channels of a converted artifact carry a NON-ZERO bias.
 ///
 /// A conversion where this is zero has not carried the biases: they rounded away, because
@@ -473,6 +726,10 @@ pub struct DepthHealthV1 {
     pub residual_peak: Vec<i32>,
     /// Per layer: `(most negative, most positive)` SiLU gate code.
     pub gate_extremes: Vec<(i32, i32)>,
+    /// Per layer: the smallest attention spread any of its heads produced, at a position with
+    /// more than one key. This is what the servo steers `attn_logit_scale` by — a global minimum
+    /// says a head somewhere is flat and cannot say which layer to lift.
+    pub attention_spread_per_layer: Vec<i32>,
     /// The smallest attention spread seen at a position with MORE THAN ONE key. Zero means some
     /// head selected nothing among keys it had a choice between.
     ///
@@ -533,6 +790,7 @@ pub fn measure_depth_health(artifact: &Base0ArtifactV1, prompt: &[usize]) -> Res
     let mut residual_peak = vec![0i32; n];
     let mut gate_extremes = vec![(0i32, 0i32); n];
     let mut min_attention_spread = i32::MAX;
+    let mut per_layer_spread = vec![i32::MAX; n];
     let mut argmax = Vec::with_capacity(prompt.len());
     let mut logits_digest = Vec::with_capacity(prompt.len());
 
@@ -545,10 +803,17 @@ pub fn measure_depth_health(artifact: &Base0ArtifactV1, prompt: &[usize]) -> Res
             gate_extremes[i].0 = gate_extremes[i].0.min(*lo);
             gate_extremes[i].1 = gate_extremes[i].1.max(*hi);
         }
-        // Only where there was a choice to make (see the field's doc).
-        if position > 0 {
-            for s in &probe.attention_spread {
+        // Only where there was a choice to make (see the field's doc). The probe emits one entry
+        // per (layer, head) in layer-major order, so the layer is the index divided by the head
+        // count — which is how a per-layer minimum is recovered without the probe carrying one.
+        if position > 0 && !probe.attention_spread.is_empty() {
+            let heads = probe.attention_spread.len() / n.max(1);
+            for (i, s) in probe.attention_spread.iter().enumerate() {
                 min_attention_spread = min_attention_spread.min(*s);
+                if heads > 0 {
+                    let layer = (i / heads).min(n - 1);
+                    per_layer_spread[layer] = per_layer_spread[layer].min(*s);
+                }
             }
         }
         argmax.push(crate::engine::argmax_lowest(&logits));
@@ -568,6 +833,7 @@ pub fn measure_depth_health(artifact: &Base0ArtifactV1, prompt: &[usize]) -> Res
         layers: n,
         residual_peak,
         gate_extremes,
+        attention_spread_per_layer: per_layer_spread.into_iter().map(|s| if s == i32::MAX { 0 } else { s }).collect(),
         min_attention_spread: if min_attention_spread == i32::MAX { 0 } else { min_attention_spread },
         saturated_residual: (railed, n),
         argmax,
@@ -693,14 +959,14 @@ pub fn calibrate_layer_residuals(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod convert_test_fixtures {
     use super::*;
     use crate::artifact::LN_THETA_10000_GEN_Q;
 
     /// A tiny Qwen2.5-shaped checkpoint, written as a real `safetensors` blob so the parser is
     /// exercised rather than bypassed. Values are a fixed integer sequence: reproducible, and
     /// distinct per tensor so a mixed-up name shows as a wrong number rather than a wrong shape.
-    fn tiny_checkpoint(s: &Base0ShapeV1) -> Vec<u8> {
+    pub(crate) fn tiny_checkpoint(s: &Base0ShapeV1) -> Vec<u8> {
         let d = s.d_model();
         let kv = s.kv_dim();
         let mut specs: Vec<(String, Vec<usize>)> =
@@ -746,7 +1012,7 @@ mod tests {
         blob
     }
 
-    fn tiny_qwen_shape() -> Base0ShapeV1 {
+    pub(crate) fn tiny_qwen_shape() -> Base0ShapeV1 {
         // Qwen2.5's structure at a size a test can run: grouped-query attention with a real
         // group, and the head dim even so the rotary pairing is defined.
         Base0ShapeV1 {
@@ -761,7 +1027,22 @@ mod tests {
             eps_q: 1 << 8,
         }
     }
+}
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    pub(crate) use super::convert_test_fixtures::{tiny_checkpoint, tiny_qwen_shape};
+
+    /// **`the_court_recomputes_the_a16_engine_from_the_artifact_alone` is not on this branch.**
+    ///
+    /// It drove `A16ArtifactOracleV1`, `qwen25_a16_profile_v1` and `recompute_step_row_v1` — the
+    /// court-side half of the A16 work, which is still on `palw-mainnet-rc-integration` and whose
+    /// reconcile touches `palw_step_refute` and `palw_qwen25_profile`, both of which moved on both
+    /// branches. The converter does not need it: it builds the artifact, and the court replays the
+    /// artifact rather than the converter. The test comes back with that reconcile.
+    ///
     /// **Condition 5: a checkpoint converts to an artifact, and the same checkpoint always
     /// converts to the SAME artifact.**
     ///

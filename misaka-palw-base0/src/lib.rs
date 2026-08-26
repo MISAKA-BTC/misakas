@@ -49,6 +49,7 @@ pub mod rc;
 pub mod rope;
 
 pub mod convert;
+pub mod reference;
 pub mod kat;
 pub mod kernels;
 pub mod optimized;

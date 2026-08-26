@@ -68,6 +68,7 @@ const STATES_THE_ARITHMETIC: &[&str] = &["src/kat.rs", "src/bin/base0-kat.rs"];
 const EXEMPT: &[(&str, &str)] = &[
     ("src/convert.rs", "offline PTQ: float in, (multiplier, shift) out, frozen at registration"),
     ("src/bin/qwen25-convert.rs", "offline PTQ driver"),
+    ("src/reference.rs", "the float reference forward: it measures the checkpoint's ranges so the PTQ can pick scales"),
     ("src/bin/base0-depth-sweep.rs", "measurement tool"),
     ("src/bin/base0-class-sizing.rs", "measurement tool"),
     ("src/bin/palw-rc-genesis.rs", "genesis card generator"),

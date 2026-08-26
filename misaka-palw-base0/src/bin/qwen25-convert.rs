@@ -9,10 +9,12 @@
 //! health. Nothing here is on the block-validation path: a verifier re-runs this and compares the
 //! class id, which is why the conversion has to be bit-reproducible.
 
-use misaka_palw_base0::artifact::{Base0ArtifactV1, Base0ShapeV1};
+use misaka_palw_base0::artifact::{Base0ArtifactV1, Base0ShapeV1, LN_THETA_1000000_GEN_Q};
 use misaka_palw_base0::convert::{
     Qwen25ConvertPlan, activation_scale_of, biased_channel_count, calibrate_layer_residuals, convert_qwen25, measure_depth_health,
 };
+use misaka_palw_base0::engine::{Base0Engine, KvCache};
+use misaka_palw_base0::reference::{RefConfigV1, reference_forward_full, score_fidelity};
 
 fn die(message: String) -> ! {
     eprintln!("qwen25-convert: {message}");
@@ -21,75 +23,41 @@ fn die(message: String) -> ! {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let dir = args.get(1).unwrap_or_else(|| die("usage: qwen25-convert <dir> [--layers N] [--max-position N] [--out FILE]".into()));
-    let flag = |name: &str| -> Option<String> { args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).cloned() };
-    let out_path = flag("--out");
-    let layer_cap: Option<usize> =
-        flag("--layers").map(|v| v.parse().unwrap_or_else(|_| die(format!("--layers wants a number, got {v}"))));
-
-    // **The class registry is the only arithmetic there is.** This tool used to carry its own copy
-    // of the shape — `max_position: 512` and `eps_q: 1 << 8`, the latter inherited from the floor —
-    // while `QWEN25_1_5B` declares `rms_eps_q: 1`. Two arithmetic specifications under one model
-    // id, and not a cosmetic split: the engine norms with the ARTIFACT's epsilon and the court
-    // re-norms with the CLASS's, so an artifact built at 256 under a class registered at 1 has
-    // every honest execution convicted — a bug already in this repo's history.
-    //
-    // So the shape is LOOKED UP, and `config.json` becomes something to check the checkpoint
-    // against rather than the thing that decides the class.
-    let model_id = flag("--model-id").unwrap_or_else(|| {
-        die("--model-id is required (e.g. Qwen/Qwen2.5-1.5B): a class's arithmetic comes from the registry, not from config.json"
-            .into())
-    });
-    let court =
-        kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2::new(kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES, 4, 2)
-            .unwrap_or_else(|e| die(format!("the shipped court parameters do not build: {e:?}")));
-    let class = misaka_palw_base0::classes::canonical_class_by_model_id_v1(&court, &model_id)
-        .unwrap_or_else(|| die(format!("{model_id} is not a class this build knows")));
+    let dir = args.get(1).unwrap_or_else(|| die("usage: qwen25-convert <dir> [--layers N]".into()));
+    let layer_cap: Option<usize> = args
+        .iter()
+        .position(|a| a == "--layers")
+        .and_then(|i| args.get(i + 1))
+        .map(|v| v.parse().unwrap_or_else(|_| die(format!("--layers wants a number, got {v}"))));
 
     let cfg_bytes = std::fs::read(format!("{dir}/config.json")).unwrap_or_else(|e| die(format!("config.json: {e}")));
     let cfg: serde_json::Value = serde_json::from_slice(&cfg_bytes).unwrap_or_else(|e| die(format!("config.json: {e}")));
     let num =
         |k: &str| -> usize { cfg.get(k).and_then(|v| v.as_u64()).unwrap_or_else(|| die(format!("config.json has no {k}"))) as usize };
+    let hidden = num("hidden_size");
+    let heads = num("num_attention_heads");
     let declared_layers = num("num_hidden_layers");
-    let want = class.artifact_shape;
-
-    // The checkpoint must BE the model the class is defined for. A mismatch means this directory
-    // holds a different checkpoint than `--model-id` claims, and converting it anyway would mint
-    // an artifact under a class id that describes something else.
-    for (field, got, expect) in [
-        ("hidden_size", num("hidden_size"), want.n_heads * want.d_head),
-        ("num_attention_heads", num("num_attention_heads"), want.n_heads),
-        ("num_key_value_heads", num("num_key_value_heads"), want.n_kv_heads),
-        ("intermediate_size", num("intermediate_size"), want.d_ff),
-        ("vocab_size", num("vocab_size"), want.vocab),
-    ] {
-        if got != expect {
-            die(format!("config.json says {field}={got} and {model_id} is defined at {expect} — wrong checkpoint"));
-        }
-    }
-    if layer_cap.is_none() && declared_layers != want.n_layers {
-        die(format!("config.json says {declared_layers} layers and {model_id} is defined at {} — wrong checkpoint", want.n_layers));
-    }
-
-    // Every field from the registry. `--layers` still truncates for a smoke test, and says so:
-    // the artifact it produces matches no registered class, by construction.
-    let shape = Base0ShapeV1 { n_layers: layer_cap.unwrap_or(want.n_layers).min(declared_layers), ..want };
-    if shape.n_layers != want.n_layers {
-        println!("WARNING: --layers {} truncates the class; this artifact matches no registered class", shape.n_layers);
-    }
-    println!("class {model_id}");
-    println!("  canonical id  {}", class.class_id());
+    let shape = Base0ShapeV1 {
+        n_layers: layer_cap.unwrap_or(declared_layers).min(declared_layers),
+        n_heads: heads,
+        n_kv_heads: num("num_key_value_heads"),
+        d_head: hidden / heads,
+        d_ff: num("intermediate_size"),
+        vocab: num("vocab_size"),
+        // The rotary table is generated for this many positions, and generating 32k of them for a
+        // conversion smoke test costs more than it proves. The class a network registers picks its
+        // own; this is the tool's default, printed below so it is never a silent choice.
+        max_position: 512,
+        // Qwen2.5's base, NOT the conventional 10,000 — the config says rope_theta 1e6, and the
+        // wrong base is a silently-wrong model (measured: layer-0 attention delta at cosine 0.73
+        // against the reference, from the rotation alone).
+        ln_theta_gen_q: LN_THETA_1000000_GEN_Q,
+        eps_q: 1 << 8,
+    };
     println!(
-        "  geometry      layers {} hidden {} heads {}/{} kv, d_head {}, ffn {}, vocab {}",
-        shape.n_layers,
-        shape.n_heads * shape.d_head,
-        shape.n_heads,
-        shape.n_kv_heads,
-        shape.d_head,
-        shape.d_ff,
-        shape.vocab
+        "config: hidden {hidden}, heads {heads}/{} kv, d_head {}, ffn {}, layers {}/{declared_layers}, vocab {}",
+        shape.n_kv_heads, shape.d_head, shape.d_ff, shape.n_layers, shape.vocab
     );
-    println!("  arithmetic    eps_q {} (registry, not config.json), max_position {}", shape.eps_q, shape.max_position);
 
     let tokenizer = std::fs::read(format!("{dir}/tokenizer.json")).unwrap_or_else(|e| die(format!("tokenizer.json: {e}")));
     let commitment = Base0ArtifactV1::tokenizer_commitment_of(&tokenizer);
@@ -99,7 +67,196 @@ fn main() {
     println!("read {} MiB in {:?}", blob.len() / (1 << 20), started.elapsed());
 
     let plan = Qwen25ConvertPlan { shape, rms_norm_eps_bits: 1e-6f32.to_bits() };
+
+    // 57 tokens of real prose (the runbook's own words, tokenized by the model's tokenizer.json).
+    // A 4-token prompt gave 3 generic positions — too few for activation ranges, and any
+    // staticness question is unmeasurable at n=3.
+    let prompt: Vec<usize> = vec![
+        785, 8781, 69180, 24821, 825, 3019, 315, 279, 11320, 25, 264, 88737, 37201, 628, 288, 279, 10023, 504, 11163, 54510, 323,
+        42465, 4078, 17966, 13, 1416, 807, 28295, 11, 279, 5473, 15885, 279, 54510, 323, 279, 34784, 27627, 892, 3108, 46153, 13,
+        4440, 5256, 374, 68903, 11, 773, 279, 1973, 315, 45735, 4157, 2297, 279, 1102, 13,
+    ];
+    let ref_cfg = RefConfigV1 {
+        n_layers: shape.n_layers,
+        n_heads: shape.n_heads,
+        n_kv_heads: shape.n_kv_heads,
+        d_head: shape.d_head,
+        d_ff: shape.d_ff,
+        vocab: shape.vocab,
+        rms_eps: cfg.get("rms_norm_eps").and_then(|v| v.as_f64()).unwrap_or(1e-6) as f32,
+        rope_theta: cfg.get("rope_theta").and_then(|v| v.as_f64()).unwrap_or(1e6) as f32,
+    };
+
+    // The float reference runs FIRST: it is both the calibration measurement and, at the end,
+    // the quality bar. One pass serves both.
     let started = std::time::Instant::now();
+    let (reference, ref_probe, stats) =
+        reference_forward_full(&blob, &ref_cfg, &prompt).unwrap_or_else(|e| die(format!("reference failed: {e}")));
+    let ref_streams = &ref_probe.streams;
+    println!("reference forward in {:?}", started.elapsed());
+    let ref_argmax: Vec<usize> = reference
+        .iter()
+        .map(|row| {
+            let mut best = 0usize;
+            for (i, v) in row.iter().enumerate() {
+                if *v > row[best] {
+                    best = i;
+                }
+            }
+            best
+        })
+        .collect();
+    println!("  reference argmax {ref_argmax:?}");
+    if args.iter().any(|a| a == "--dump-stats") {
+        for (li, st) in stats.per_layer.iter().enumerate() {
+            println!(
+                "  L{li:02} n1 {:.2} n2 {:.2} | q {:.1} k {:.1} v {:.1} attn {:.2} | d0 {:.1} h0 {:.1} d1 {:.1} h1 {:.1} | gate {:.1} silu {:.1} up {:.1} gu {:.1}",
+                st.norm_absmax[0],
+                st.norm_absmax[1],
+                st.q_absmax,
+                st.k_absmax,
+                st.v_absmax,
+                st.attn_absmax,
+                st.delta_absmax[0],
+                st.h_absmax[0],
+                st.delta_absmax[1],
+                st.h_absmax[1],
+                st.gate_absmax,
+                st.silu_absmax,
+                st.up_absmax,
+                st.gated_absmax
+            );
+        }
+        println!("  final norm absmax {:.2}", stats.final_norm_absmax);
+        // The geometry of the outliers: per position, and per channel at the worst layer. If the
+        // massive values ride ONE position they are a sink token; if they ride every position at
+        // fixed channels they are a stream bias. The two need different arithmetic.
+        for li in [1usize, 2, 13, 26].into_iter().filter(|l| *l < shape.n_layers) {
+            let per_pos: Vec<String> =
+                ref_streams[li].iter().map(|row| format!("{:.0}", row.iter().fold(0f32, |a, v| a.max(v.abs())))).collect();
+            println!("  L{li:02} per-position |h| {}", per_pos.join(" "));
+        }
+        // Staticness of the heavy stream channels: if a heavy channel's value is near-constant
+        // across positions, it is a BIAS wearing a channel — subtractable by a requant zero — and
+        // the stream's dynamic range shrinks by its magnitude. If it varies, it is signal and
+        // int8 must carry it.
+        for li in [5usize, 13, 21].into_iter().filter(|l| *l < shape.n_layers) {
+            let rows: Vec<&Vec<f32>> = ref_probe.streams[li].iter().skip(1).collect();
+            let d = rows[0].len();
+            let n = rows.len() as f32;
+            let mut mean = vec![0f32; d];
+            for r in &rows {
+                for (c, v) in r.iter().enumerate() {
+                    mean[c] += v / n;
+                }
+            }
+            let mut var = vec![0f32; d];
+            for r in &rows {
+                for (c, v) in r.iter().enumerate() {
+                    var[c] += (v - mean[c]) * (v - mean[c]) / n;
+                }
+            }
+            let mut idx: Vec<usize> = (0..d).collect();
+            idx.sort_by(|a, b| mean[*b].abs().partial_cmp(&mean[*a].abs()).unwrap());
+            let line: Vec<String> = idx.iter().take(8).map(|c| format!("[{c}] {:.1}±{:.1}", mean[*c], var[*c].sqrt())).collect();
+            println!("  L{li:02} heavy channels (mean±std over {} generic positions): {}", rows.len(), line.join("  "));
+        }
+        // Worst channels at layer 2, last position: which channels are massive, and how many.
+        let row = &ref_streams[2][prompt.len() - 1];
+        let mut idx: Vec<usize> = (0..row.len()).collect();
+        idx.sort_by(|a, b| row[*b].abs().partial_cmp(&row[*a].abs()).unwrap());
+        let top: Vec<String> = idx.iter().take(8).map(|i| format!("[{i}]={:.0}", row[*i])).collect();
+        println!("  L02 top channels {}", top.join(" "));
+        let big = row.iter().filter(|v| v.abs() > 100.0).count();
+        println!("  L02 channels past |100| {big}/{}", row.len());
+    }
+
+    if args.iter().any(|a| a == "--a16") {
+        // The W8A16 path: measure fidelity and stop — this is the activation width the
+        // quantization-regime ladder said the architecture needs.
+        let started = std::time::Instant::now();
+        let artifact = misaka_palw_base0::convert::convert_qwen25_a16(&blob, &plan, &stats)
+            .unwrap_or_else(|e| die(format!("a16 conversion failed: {e}")));
+        println!("a16 converted in {:?}", started.elapsed());
+        println!("a16 artifact  {}", artifact.artifact_digest());
+        let blob2 = blob;
+        let engine = misaka_palw_base0::engine_a16::A16Engine::new(&artifact)
+            .unwrap_or_else(|e| die(format!("a16 engine refused the artifact: {e:?}")));
+        let mut cache = misaka_palw_base0::engine_a16::A16Cache::new(shape.n_layers);
+        let started = std::time::Instant::now();
+        let mut logits: Vec<Vec<i32>> = Vec::new();
+        let mut a16_streams: Vec<Vec<Vec<i32>>> = Vec::new();
+        for (position, token) in prompt.iter().enumerate() {
+            let (l, st) =
+                engine.forward_token_probed(&mut cache, *token, position).unwrap_or_else(|e| die(format!("a16 forward: {e:?}")));
+            logits.push(l);
+            a16_streams.push(st);
+        }
+        println!("a16 forward {} tokens in {:?}", prompt.len(), started.elapsed());
+        // The rows ARE the committed i16 logit codes (in i32 lanes) — scored as-is, because the
+        // class output is DEFINED over them.
+        let fidelity = score_fidelity(&reference, &logits);
+        println!("  a16 top-1 agree      {}/{}", fidelity.top1_agree, fidelity.positions);
+        println!("  a16 top-5 contains   {}/{}", fidelity.top5_contains, fidelity.positions);
+        println!("  a16 rank corr (100)  {:.4}", fidelity.top100_rank_correlation);
+        println!("  a16 FAITHFUL         {}", fidelity.is_faithful());
+        // Determinism on the real thing, and the held-out check: the score above is on the
+        // CALIBRATION prompt (in-sample). A class whose fidelity only holds on the prompt its
+        // scales were measured from is a curve fit, so `--held-out` scores a second prompt the
+        // calibration never saw, against its own reference.
+        if let Some(pos) = args.iter().position(|a| a == "--held-out") {
+            let held: Vec<usize> = args
+                .get(pos + 1)
+                .unwrap_or_else(|| die("--held-out wants a comma-separated token list".into()))
+                .split(',')
+                .map(|v| v.parse().unwrap_or_else(|_| die(format!("bad held-out token: {v}"))))
+                .collect();
+            let (held_ref, _, _) =
+                reference_forward_full(&blob2, &ref_cfg, &held).unwrap_or_else(|e| die(format!("held-out reference failed: {e}")));
+            let mut cache = misaka_palw_base0::engine_a16::A16Cache::new(shape.n_layers);
+            let held_logits: Vec<Vec<i32>> = held
+                .iter()
+                .enumerate()
+                .map(|(position, token)| {
+                    engine.forward_token(&mut cache, *token, position).unwrap_or_else(|e| die(format!("a16 held-out forward: {e:?}")))
+                })
+                .collect();
+            let held_fid = score_fidelity(&held_ref, &held_logits);
+            println!("  a16 HELD-OUT top-1   {}/{}", held_fid.top1_agree, held_fid.positions);
+            println!("  a16 HELD-OUT top-5   {}/{}", held_fid.top5_contains, held_fid.positions);
+            println!("  a16 HELD-OUT corr    {:.4}", held_fid.top100_rank_correlation);
+            println!("  a16 HELD-OUT FAITHFUL {}", held_fid.is_faithful());
+        }
+        let last = prompt.len() - 1;
+        let line: Vec<String> = (0..shape.n_layers)
+            .map(|li| {
+                let ints: Vec<f32> = a16_streams[last][li].iter().map(|c| *c as f32).collect();
+                let (mut dot, mut na, mut nb) = (0f64, 0f64, 0f64);
+                for (a, b) in ref_probe.streams[li][last].iter().zip(&ints) {
+                    dot += *a as f64 * *b as f64;
+                    na += *a as f64 * *a as f64;
+                    nb += *b as f64 * *b as f64;
+                }
+                format!("{:.2}", if na > 0.0 && nb > 0.0 { dot / (na.sqrt() * nb.sqrt()) } else { 0.0 })
+            })
+            .collect();
+        println!("  a16 stream cosine {}", line.join(" "));
+        // **`--replay` / `--dispute-replay` are not wired on this line.** They drive
+        // `misaka_palw_base0::replay`, which reads the court's A16 dispatch — the half of the A16
+        // work that still lives on `palw-mainnet-rc-integration` and whose reconcile touches
+        // `palw_step_refute` and `palw_qwen25_profile`, both of which moved on both branches.
+        // Conversion does not need it: what is being built here is the artifact, and the court
+        // replays the artifact rather than the converter.
+        if args.iter().any(|a| a == "--replay" || a == "--dispute-replay") {
+            println!("note: --replay needs the court-side A16 reconcile; not available on this branch");
+        }
+        return;
+    }
+
+    let started = std::time::Instant::now();
+    // The static-calibrated float converter retired with the A16 tier (its whole apparatus —
+    // smoothing, per-channel folds, sink lanes — was the ceiling A16 removed); the float lane
+    // converts plainly and calibrates per-layer residual shifts below.
     let artifact = convert_qwen25(&blob, &plan).unwrap_or_else(|e| die(format!("conversion failed: {e}")));
     let artifact = artifact.with_tokenizer_commitment(commitment);
     println!("converted in {:?}", started.elapsed());
@@ -116,8 +273,8 @@ fn main() {
     println!("tokenizer     {commitment}");
     println!("int8 weights  {} MiB", weight_bytes / (1 << 20));
     println!("biased chans  {} (zero would mean the biases rounded away)", biased_channel_count(&artifact));
-    println!("act scale     {}", activation_scale_of(&artifact.norm_requant));
-    println!("max_position  {} (the class's context, from the registry)", artifact.shape.max_position);
+    println!("act scale     {} (the legacy global; calibrated sites carry their own)", activation_scale_of(&artifact.norm_requant));
+    println!("max_position  {} (the tool's default, not the model's context length)", artifact.shape.max_position);
 
     let prompt = [9707usize, 11, 1879, 0];
 
@@ -157,124 +314,39 @@ fn main() {
     let again = measure_depth_health(&artifact, &prompt).unwrap();
     println!("  reproducible   {}", again == health);
 
-    // **The artifact has to leave this process to be worth anything.** The floor's is DERIVED, so
-    // every node mints it from a seed; a converted class cannot be, so until it could be written
-    // the only class the tree could actually run was the one it could re-derive. The file is
-    // digest-checked on load, so a truncated copy is refused rather than run as some other class.
-    // **The two values a registration needs, and they are NOT the same value.** ADR-0049 Decision
-    // G: `execution_class_id` is the SHAPE PROFILE id — a class is its graph — while
-    // `artifact_root` is the Merkle root over the canonical operand inventory, which is what an
-    // opening proves against. The line printed as "class id" above is neither: it is
-    // `artifact_digest()`, the artifact's own content hash. Printing all three with their real
-    // names, because registering the wrong one is a class nobody can adjudicate.
-    // **The two values a registration needs, and they are NOT the same value.** ADR-0049 G:
-    // `execution_class_id` is the SHAPE PROFILE id — a class IS its graph — while `artifact_root`
-    // is the Merkle root over the canonical operand inventory, which is what an opening proves
-    // against. The "class id" this tool has always printed is neither: it is `artifact_digest()`,
-    // the artifact's own content hash. Both come from the registry entry, at the tile length the
-    // class is defined at, so neither can be a local choice.
-    match class.artifact_root(&artifact) {
-        Ok(root) => {
-            println!("artifact_root      {root}");
-            println!("execution_class_id {}", class.class_id());
-        }
-        Err(e) => println!("artifact_root      UNAVAILABLE: {e:?}"),
+    let engine = Base0Engine::new(&artifact);
+    let mut cache = KvCache::new(&artifact);
+    let mut integer: Vec<Vec<i32>> = Vec::new();
+    for (position, token) in prompt.iter().enumerate() {
+        let (logits, probe) =
+            engine.forward_token_probed(&mut cache, *token, position).unwrap_or_else(|e| die(format!("engine: {e:?}")));
+        integer.push(logits);
+        let _ = probe;
     }
 
-    // **The producer's own path, before anything is deployed.** `measure_depth_health` is a
-    // forward pass; a block needs the STEP CAPTURE too — every node output tiled and Merkleised
-    // into the commitment an attempt carries. That is the expensive half and the one that decides
-    // whether this class can produce at all, so it is measured here rather than discovered on a
-    // fleet host.
-    // **Engine width vs profile width, node by node.** ADR-0049 Decision F: the engine, the
-    // profile, the adjudicator and the inventory are four hand-written descriptions of one
-    // computation, and a capture that will not become a leg is those descriptions disagreeing.
-    // The leg error names a table-LOCAL index and no width, which is not enough to act on, so
-    // this prints both widths for every captured row.
-    if args.iter().any(|a| a == "--check-capture") {
-        use kaspa_consensus_core::palw_step::PalwStepOutLenV1;
-        let engine = misaka_palw_base0::engine::Base0Engine::new(&artifact);
-        let mut cache = misaka_palw_base0::engine::KvCache::new(&artifact);
-        let (_, probe) =
-            engine.forward_token_probed(&mut cache, 1, 0).unwrap_or_else(|e| die(format!("one probed token did not run: {e:?}")));
-        let rows = misaka_palw_base0::legs::base0_captured_rows_v1(&probe);
-        println!("capture check: {} rows at position 0", rows.len());
-        let mut bad = 0usize;
-        for r in &rows {
-            let Some(global) = class.profile.global_node_slot(r.table, r.layer, r.index) else {
-                println!(
-                    "  MISSING SLOT {:?} layer {} index {} (engine produced a row the profile has no node for)",
-                    r.table, r.layer, r.index
-                );
-                bad += 1;
-                continue;
-            };
-            let (node, _) = class.profile.resolve_node_slot(global).expect("resolvable");
-            // kv_len at position 0 is 1: prefill position p sees p+1 keys.
-            let declared = match node.out_len {
-                PalwStepOutLenV1::Fixed { elements } => elements as usize,
-                PalwStepOutLenV1::KvScaled { multiplier } => multiplier as usize,
-            };
-            if r.row.len() != declared {
-                println!(
-                    "  WIDTH  {:?} layer {} index {} slot {global} {:?}: engine {} vs profile {} ({} tiles vs {})",
-                    r.table,
-                    r.layer,
-                    r.index,
-                    node.op_kind,
-                    r.row.len(),
-                    declared,
-                    r.row.len().div_ceil(node.tile_len as usize),
-                    declared.div_ceil(node.tile_len as usize)
-                );
-                bad += 1;
-            }
+    if args.iter().any(|a| a == "--dump-stats") {
+        // The last pass again, probed, for the per-layer internals the health summary collapses.
+        let mut cache = KvCache::new(&artifact);
+        let mut last = None;
+        for (position, token) in prompt.iter().enumerate() {
+            last = Some(engine.forward_token_probed(&mut cache, *token, position).unwrap());
         }
-        println!("capture check: {bad} disagreement(s)");
-    }
-
-    if args.iter().any(|a| a == "--execute") {
-        use kaspa_consensus_core::palw_base0_profile::rc_job_context;
-        let anchor = kaspa_hashes::Hash64::from_u64_word(0x9E4D_1234);
-        let (prefill, decode) = class.canonical_job;
-        let mut ctx = rc_job_context(&class.profile, prefill, decode);
-        ctx.job_id = anchor;
-        ctx.execution_seed = anchor.as_byte_slice()[..32].try_into().expect("64 bytes has 32");
-        let job_prompt: Vec<usize> = (0..prefill as usize).map(|i| (i * 7919) % artifact.shape.vocab).collect();
-        ctx.prompt_token_ids_hash =
-            kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(&job_prompt.iter().map(|t| *t as u32).collect::<Vec<_>>());
-        let leaves = kaspa_consensus_core::palw_step::step_leaf_count(&class.profile, &ctx)
-            .unwrap_or_else(|e| die(format!("the canonical job has no step space: {e:?}")));
-        println!("execute: canonical job {prefill} prefill / {decode} decode, {leaves} step leaves");
-        let started = std::time::Instant::now();
-        match misaka_palw_base0::produce::base0_execute_for_attempt_v1(&artifact, &class.profile, &ctx, &job_prompt) {
-            Ok(run) => {
-                println!("  ran in        {:?}", started.elapsed());
-                println!("  trace_root    {}", run.trace_root);
-                println!("  output_root   {}", run.output_root);
-                println!("  execution_root {}", run.execution_root);
-                println!("  step leaves   {} tiles captured", run.tiles.tiles.len());
-                println!("  generated     {:?}", run.generated_token_ids);
-            }
-            Err(e) => die(format!("the canonical job did not execute: {e}")),
+        let (_, probe) = last.unwrap();
+        let heads = shape.n_heads;
+        for li in 0..shape.n_layers {
+            let spreads = &probe.attention_spread[li * heads..(li + 1) * heads];
+            let uniform = spreads.iter().filter(|s| **s == 0).count();
+            println!(
+                "  L{li:02} attn spread min {:>9} max {:>9} uniform-heads {uniform}/{heads}  residual peak {}",
+                spreads.iter().min().unwrap(),
+                spreads.iter().max().unwrap(),
+                probe.residual_peak[li]
+            );
         }
     }
-
-    if let Some(path) = out_path {
-        let started = std::time::Instant::now();
-        let bytes = misaka_palw_base0::artifact::encode_artifact_file_v1(&artifact);
-        std::fs::write(&path, &bytes).unwrap_or_else(|e| die(format!("writing {path}: {e}")));
-        println!("wrote {} ({} MiB) in {:?}", path, bytes.len() / (1 << 20), started.elapsed());
-        // Read it back HERE rather than trusting the writer: the class id a node will compute
-        // from this file is the one the chain must have registered, and finding a mismatch after
-        // it is on four hosts is finding it in the worst place.
-        match misaka_palw_base0::artifact::decode_artifact_file_v1(&bytes) {
-            Ok(back) => println!(
-                "  reload class id {} ({})",
-                back.artifact_digest(),
-                if back.artifact_digest() == artifact.artifact_digest() { "matches" } else { "MISMATCH" }
-            ),
-            Err(e) => die(format!("the file this tool just wrote does not load: {e}")),
-        }
-    }
+    let fidelity = score_fidelity(&reference, &integer);
+    println!("  top-1 agree      {}/{}", fidelity.top1_agree, fidelity.positions);
+    println!("  top-5 contains   {}/{}", fidelity.top5_contains, fidelity.positions);
+    println!("  rank corr (100)  {:.4}", fidelity.top100_rank_correlation);
+    println!("  FAITHFUL         {}", fidelity.is_faithful());
 }

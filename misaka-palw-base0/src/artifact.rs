@@ -46,6 +46,11 @@ pub const PALW_BASE0_TOKENIZER_DOMAIN: &[u8] = b"MISAKA/PALW/BASE0/TOKENIZER/V1\
 /// `ln 10000` at `rope::GEN_Q` — the conventional RoPE base, carried as the default.
 pub const LN_THETA_10000_GEN_Q: i128 = 2_592_480_341_699_211;
 
+/// `ln 1_000_000` at `rope::GEN_Q` — Qwen2.5's RoPE base. Converting that family with the
+/// 10,000 constant rotates every position by the wrong angles; nothing crashes, attention is
+/// simply computed against misplaced keys everywhere except position 0.
+pub const LN_THETA_1000000_GEN_Q: i128 = 3_888_720_512_548_816;
+
 /// A gain that lifts a `fan_in`-long `int8` dot product into the Qk band `SoftMax` and `Silu` are
 /// defined on.
 ///
