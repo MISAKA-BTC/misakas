@@ -202,6 +202,16 @@ pub fn decay_exponent(a_log: f32) -> A16QuantParams {
     A16QuantParams { multiplier: 1, shift: 0, zero: c.clamp(0.0, i64::MAX as f64) as i64 }
 }
 
+/// **Why there is no per-LANE version of any of these, and there must not be.**
+///
+/// A per-channel scale is right for a WEIGHT row: each output channel is reduced over its own
+/// inputs and its scale is undone by its own narrowing. It is wrong for an ACTIVATION lane,
+/// because the next op reduces ACROSS lanes — a dot product over a row whose lanes carry different
+/// exponents is a sum of incomparable numbers.
+///
+/// Tried, measured, reverted: giving each lane of the gate multiply the exponent its own range
+/// supports took that site's cosine against the reference from 0.98 to 0.22. The dynamic range a
+/// uniform exponent wastes is real; it is the price of a row that can be reduced.
 /// A site's exponent from its measured range, or a fallback when the site was never observed.
 ///
 /// The fallback is deliberately conservative rather than clever: a site the calibration prompt did

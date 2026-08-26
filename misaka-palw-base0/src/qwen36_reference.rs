@@ -52,14 +52,24 @@ pub struct SiteRangeV1 {
     pub absmax: f64,
     pub sum_squares: f64,
     pub count: u64,
+    /// Per lane, over every position. **A site's crest is not its lanes' crests.** An elementwise
+    /// product of two well-conditioned rows can have a crest of forty-five — the large values do
+    /// not co-occur — and one exponent chosen from the whole row's peak then leaves the ordinary
+    /// lanes four or five bits. Measured, that cost the arm's output a cosine of 0.7 against the
+    /// reference while every magnitude looked correct.
+    pub lanes: Vec<f64>,
 }
 
 impl SiteRangeV1 {
     fn observe(&mut self, values: &[f32]) {
-        for v in values {
-            let x = *v as f64;
-            self.absmax = self.absmax.max(x.abs());
+        if self.lanes.len() < values.len() {
+            self.lanes.resize(values.len(), 0.0);
+        }
+        for (i, v) in values.iter().enumerate() {
+            let x = (*v as f64).abs();
+            self.absmax = self.absmax.max(x);
             self.sum_squares += x * x;
+            self.lanes[i] = self.lanes[i].max(x);
         }
         self.count += values.len() as u64;
     }
