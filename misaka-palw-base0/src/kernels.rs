@@ -25,6 +25,31 @@
 //!
 //! Get the chunk wrong and nothing tells you: the wrap is silent in release, and the differential
 //! below is what stands between that and a producer whose blocks are refutable.
+//!
+//! # The dot-product path, and why it needs no chunk at all
+//!
+//! `vmlal_s16` does four multiply-accumulates per instruction. ARM's `sdot` does sixteen, and
+//! `usdot` (FEAT_I8MM) does sixteen mixed-sign — but both are `int8 × int8`, and this tier's
+//! activation is `i16`. The split is algebraic and exact:
+//!
+//! ```text
+//! x = 256·hi + lo      hi = x >> 8  (arithmetic, so hi ∈ [-128, 127])
+//!                      lo = x & 255 (so lo ∈ [0, 255], unsigned — hence usdot)
+//! Σ w·x = 256·Σ(w·hi) + Σ(w·lo)
+//! ```
+//!
+//! `hi` is signed and pairs with `sdot`; `lo` is unsigned and pairs with `usdot`, whose operand
+//! order is (unsigned, signed). Two instructions replace four and the widening of `w` disappears.
+//!
+//! The lane bound is looser than the `vmlal` path's, not tighter: `sdot` accumulates `n/4`
+//! products per lane, so the worst case is `(n/4) · 128 · 255 = n · 8160`, which stays inside an
+//! `i32` for every `n` the tier admits — `A16_MAX_DOT_LEN` is 262,144 and the bound breaks at
+//! 263,192. So this path has **no chunking**, asserted at compile time below.
+//!
+//! The intrinsics (`vdotq_s32`, `vusdotq_s32`) are still unstable in Rust 1.94, so the two
+//! instructions are written as inline assembly, which is stable. Availability is detected at
+//! runtime — `dotprod` is ARMv8.2 and `i8mm` is ARMv8.6, and an Apple M1 has the first and not
+//! the second — with the `vmlal` path as the fallback that every machine has.
 
 use kaspa_consensus_core::palw_base0_a16::{A16_CODE_MAX, A16_MAX_DOT_LEN, A16QuantParams, PalwA16OpError, a16_scale_round};
 use rayon::prelude::*;
@@ -110,6 +135,116 @@ unsafe fn dot_i8_a16_neon(w: &[i8], x: &[i16]) -> i64 {
     total
 }
 
+const _: () = assert!(
+    (A16_MAX_DOT_LEN as i64 / 4) * 128 * 255 < i32::MAX as i64,
+    "an sdot/usdot lane accumulates n/4 products of at most 128·255; past this the whole tier's \
+     longest reduction would wrap and the dot path would need a chunk like the vmlal path"
+);
+
+/// The activation row, split once for the whole projection.
+///
+/// Splitting per channel would redo `n` shifts and masks `out_dim` times — 8,960 lanes against
+/// 1,536 channels on Qwen2.5's down-projection — which is most of what the fast path saves.
+pub struct A16Operand {
+    codes: Vec<i16>,
+    hi: Vec<i8>,
+    lo: Vec<u8>,
+}
+
+impl A16Operand {
+    pub fn new(codes: Vec<i16>) -> Self {
+        let hi = codes.iter().map(|v| (*v >> 8) as i8).collect();
+        let lo = codes.iter().map(|v| (*v as u16 & 0xFF) as u8).collect();
+        Self { codes, hi, lo }
+    }
+    pub fn len(&self) -> usize {
+        self.codes.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.codes.is_empty()
+    }
+}
+
+/// Whether this machine has both dot-product extensions. Read once: `is_aarch64_feature_detected`
+/// is cheap but not free, and it is asked per channel otherwise.
+#[cfg(target_arch = "aarch64")]
+fn has_dot_extensions() -> bool {
+    use std::sync::OnceLock;
+    static DETECTED: OnceLock<bool> = OnceLock::new();
+    *DETECTED.get_or_init(|| {
+        // A diagnostic, not a consensus switch: the two paths are asserted bit-identical, so
+        // turning one off changes speed and nothing else. It exists because "the fast path is
+        // faster" is a claim that needs an A/B on the same machine, and rebuilding to get one
+        // measures the build as well as the kernel.
+        if std::env::var_os("MISAKA_PALW_NO_DOTPROD").is_some() {
+            return false;
+        }
+        std::arch::is_aarch64_feature_detected!("dotprod") && std::arch::is_aarch64_feature_detected!("i8mm")
+    })
+}
+
+/// `Σ w·x` through the split operand, using whichever path this machine has.
+#[inline]
+pub fn dot_operand(w: &[i8], x: &A16Operand) -> i64 {
+    debug_assert_eq!(w.len(), x.codes.len());
+    #[cfg(target_arch = "aarch64")]
+    if has_dot_extensions() {
+        // SAFETY: the extensions were detected above, and the block count keeps every load
+        // inside all three slices.
+        return unsafe { dot_i8_a16_dotprod(w, x) };
+    }
+    dot_i8_a16(w, &x.codes)
+}
+
+#[cfg(target_arch = "aarch64")]
+#[target_feature(enable = "dotprod")]
+#[target_feature(enable = "i8mm")]
+unsafe fn dot_i8_a16_dotprod(w: &[i8], x: &A16Operand) -> i64 {
+    let blocks = w.len() / 16;
+    let mut sum_hi = [0i32; 4];
+    let mut sum_lo = [0i32; 4];
+    if blocks > 0 {
+        // SAFETY: `blocks · 16 <= len` for all three slices, and the loop advances each pointer
+        // by exactly 16 bytes per iteration.
+        unsafe {
+            std::arch::asm!(
+                "movi v0.4s, #0",
+                "movi v1.4s, #0",
+                "2:",
+                "ld1 {{v2.16b}}, [{w}], #16",
+                "ld1 {{v3.16b}}, [{hi}], #16",
+                "ld1 {{v4.16b}}, [{lo}], #16",
+                // `sdot Vd.4S, Vn.16B, Vm.16B` — four byte-products summed into each lane.
+                "sdot v0.4s, v2.16b, v3.16b",
+                // `usdot Vd.4S, Vn.16B, Vm.16B` — Vn is the UNSIGNED operand, so the low bytes
+                // come first and the weights second. The other order computes a different sum.
+                "usdot v1.4s, v4.16b, v2.16b",
+                "subs {n}, {n}, #1",
+                "b.ne 2b",
+                "st1 {{v0.4s}}, [{oh}]",
+                "st1 {{v1.4s}}, [{ol}]",
+                w = inout(reg) w.as_ptr() => _,
+                hi = inout(reg) x.hi.as_ptr() => _,
+                lo = inout(reg) x.lo.as_ptr() => _,
+                n = inout(reg) blocks => _,
+                oh = in(reg) sum_hi.as_mut_ptr(),
+                ol = in(reg) sum_lo.as_mut_ptr(),
+                out("v0") _,
+                out("v1") _,
+                out("v2") _,
+                out("v3") _,
+                out("v4") _,
+                options(nostack)
+            );
+        }
+    }
+    let head = blocks * 16;
+    let hi: i64 = sum_hi.iter().map(|v| *v as i64).sum();
+    let lo: i64 = sum_lo.iter().map(|v| *v as i64).sum();
+    // The tail is at most fifteen elements and is the same addition.
+    256 * hi + lo + dot_i8_a16_scalar(&w[head..], &x.codes[head..])
+}
+
 /// The A16 code check the reference applies through its private `as_a16`, reproduced here so the
 /// fast path refuses exactly what the reference refuses.
 fn as_a16_codes(row: &[i32]) -> Result<Vec<i16>, PalwA16OpError> {
@@ -126,6 +261,43 @@ fn as_a16_codes(row: &[i32]) -> Result<Vec<i16>, PalwA16OpError> {
 /// a handful of rows costs less than the pool costs to reach.
 const PARALLEL_MIN_CHANNELS: usize = 64;
 
+/// **Channels are handed out in blocks, not one at a time.**
+///
+/// The first version mapped `into_par_iter()` over `0..out_dim`, which on the unembedding is
+/// 151,936 tasks each doing a 1,536-length dot — a few microseconds of work behind a work-stealing
+/// deque. Measured, the whole engine sat at 39 tok/s while the arithmetic said it should be
+/// bandwidth-bound, and switching the dot kernel from `vmlal` to `sdot`/`usdot` made it *slower*,
+/// which is the signature of an overhead-bound loop rather than an instruction-bound one.
+///
+/// Blocks are sized so that every thread gets a handful — enough to balance a ragged tail, few
+/// enough that the deque is not the workload.
+fn block_size(out_dim: usize) -> usize {
+    let target = rayon::current_num_threads().max(1) * 4;
+    out_dim.div_ceil(target).max(32)
+}
+
+/// Fill `out` with `channel(c)` for every `c`, in blocks, on the pool when it is worth it.
+fn fill_channels<F>(out_dim: usize, channel: F) -> Vec<i32>
+where
+    F: Fn(usize) -> i32 + Sync + Send,
+{
+    let mut out = vec![0i32; out_dim];
+    if out_dim < PARALLEL_MIN_CHANNELS {
+        for (c, slot) in out.iter_mut().enumerate() {
+            *slot = channel(c);
+        }
+        return out;
+    }
+    let block = block_size(out_dim);
+    out.par_chunks_mut(block).enumerate().for_each(|(bi, slice)| {
+        let base = bi * block;
+        for (i, slot) in slice.iter_mut().enumerate() {
+            *slot = channel(base + i);
+        }
+    });
+    out
+}
+
 /// **Op W1 at speed** — bit-identical to `palw_base0_a16::a16_matmul_requant`.
 ///
 /// The activation row is narrowed to `i16` ONCE for the whole projection rather than per channel:
@@ -136,7 +308,7 @@ const PARALLEL_MIN_CHANNELS: usize = 64;
 /// run in parallel. That the parallel result equals the serial one is not a hope about scheduling;
 /// it is that no channel's arithmetic can observe another's.
 pub fn a16_matmul_requant_fast(weights: &[i8], x: &[i32], params: &[A16QuantParams]) -> Result<Vec<i32>, PalwA16OpError> {
-    let codes = as_a16_codes(x)?;
+    let codes = A16Operand::new(as_a16_codes(x)?);
     let n = codes.len();
     if n > A16_MAX_DOT_LEN {
         return Err(PalwA16OpError::DotTooLong { got: n });
@@ -149,15 +321,11 @@ pub fn a16_matmul_requant_fast(weights: &[i8], x: &[i32], params: &[A16QuantPara
         return Err(PalwA16OpError::LengthMismatch { a: weights.len(), b: out_dim * n });
     }
     let channel = |c: usize| -> i32 {
-        let acc = dot_i8_a16(&weights[c * n..(c + 1) * n], &codes);
+        let acc = dot_operand(&weights[c * n..(c + 1) * n], &codes);
         let p = params[c];
         a16_scale_round(acc, p.multiplier, p.shift).saturating_add(p.zero).clamp(-A16_CODE_MAX, A16_CODE_MAX) as i32
     };
-    if out_dim >= PARALLEL_MIN_CHANNELS {
-        Ok((0..out_dim).into_par_iter().map(channel).collect())
-    } else {
-        Ok((0..out_dim).map(channel).collect())
-    }
+    Ok(fill_channels(out_dim, channel))
 }
 
 /// **Op W3 at speed** — bit-identical to `palw_base0_a16::a16_matmul_rescale`.
@@ -165,7 +333,7 @@ pub fn a16_matmul_requant_fast(weights: &[i8], x: &[i32], params: &[A16QuantPara
 /// The same projection with the Q[`K`] tail: no `clamp16`, saturation at the `i32` rail instead,
 /// because `Silu` is defined on Q[`K`] values and narrowing here would change the function.
 pub fn a16_matmul_rescale_fast(weights: &[i8], x: &[i32], params: &[A16QuantParams]) -> Result<Vec<i32>, PalwA16OpError> {
-    let codes = as_a16_codes(x)?;
+    let codes = A16Operand::new(as_a16_codes(x)?);
     let n = codes.len();
     if n > A16_MAX_DOT_LEN {
         return Err(PalwA16OpError::DotTooLong { got: n });
@@ -178,15 +346,11 @@ pub fn a16_matmul_rescale_fast(weights: &[i8], x: &[i32], params: &[A16QuantPara
         return Err(PalwA16OpError::LengthMismatch { a: weights.len(), b: out_dim * n });
     }
     let channel = |c: usize| -> i32 {
-        let acc = dot_i8_a16(&weights[c * n..(c + 1) * n], &codes);
+        let acc = dot_operand(&weights[c * n..(c + 1) * n], &codes);
         let p = params[c];
         a16_scale_round(acc, p.multiplier, p.shift).saturating_add(p.zero).clamp(i32::MIN as i64, i32::MAX as i64) as i32
     };
-    if out_dim >= PARALLEL_MIN_CHANNELS {
-        Ok((0..out_dim).into_par_iter().map(channel).collect())
-    } else {
-        Ok((0..out_dim).map(channel).collect())
-    }
+    Ok(fill_channels(out_dim, channel))
 }
 
 #[cfg(test)]
@@ -278,6 +442,37 @@ mod tests {
                 dot_i8_a16_scalar(&w[offset..offset + n], &x[offset..offset + n]),
                 "offset={offset}"
             );
+        }
+    }
+
+    /// The dot-product path against the scalar one, over the lengths and both code rails. The
+    /// matmul differential covers it too, but this names a length when it fails and it is also
+    /// the only test that runs when the machine HAS the extensions and the fallback does not.
+    #[test]
+    fn the_dot_extension_path_equals_the_scalar_one() {
+        let mut rng = Lcg(0xA16_0004);
+        let w: Vec<i8> = (0..20_000).map(|_| rng.i8()).collect();
+        let codes: Vec<i16> = (0..20_000).map(|_| rng.code() as i16).collect();
+        for n in [0usize, 1, 15, 16, 17, 31, 512, 1536, 8960, 20_000] {
+            let operand = A16Operand::new(codes[..n].to_vec());
+            assert_eq!(dot_operand(&w[..n], &operand), dot_i8_a16_scalar(&w[..n], &codes[..n]), "n={n}");
+        }
+        // Both rails at the longest projection width: the worst case for an sdot/usdot lane.
+        for (weight, code) in [(-128i8, -32_767i16), (-128, 32_767), (127, 32_767), (127, -32_767)] {
+            let n = 8960;
+            let operand = A16Operand::new(vec![code; n]);
+            assert_eq!(dot_operand(&vec![weight; n], &operand), n as i64 * weight as i64 * code as i64, "w={weight} code={code}");
+        }
+    }
+
+    /// The split itself: `256·hi + lo` must reconstruct every `i16`, negatives included. This is
+    /// the identity the whole path rests on, and it is the one a reader will doubt.
+    #[test]
+    fn the_high_low_split_is_exact() {
+        for v in [i16::MIN, -32_767, -256, -255, -1, 0, 1, 255, 256, 32_767, i16::MAX] {
+            let operand = A16Operand::new(vec![v]);
+            assert_eq!(256 * operand.hi[0] as i32 + operand.lo[0] as i32, v as i32, "v={v}");
+            assert!((-128..=127).contains(&(operand.hi[0] as i32)), "hi must fit an i8 for v={v}");
         }
     }
 
