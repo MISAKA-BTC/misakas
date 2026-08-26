@@ -23,7 +23,6 @@
 
 use crate::qwen36::{Qwen36ArtifactV1, Qwen36Cache, Qwen36Engine, Qwen36ShapeV1};
 use kaspa_consensus_core::palw_backend::{PalwClaimRootsV1, PalwExecutionBackendV1, PalwExecutionOutcomeV1, PalwMaterialVerdictV1};
-use kaspa_consensus_core::palw_step_refute::base0_logits_trace_root_v1;
 use kaspa_consensus_core::palw_v2::{
     PALW_TRACE_COMMITMENT_VERSION_V2, PalwJobContextV2, output_commitment_v2, prompt_token_ids_hash_v2,
 };
@@ -117,12 +116,25 @@ pub struct Qwen36Backend {
     /// `(prefill, decode)` — the canonical job's shape, a class fact.
     canonical_job: (u32, u32),
     shape_id: Hash64,
+    /// **The chain's id for this class** — `qwen36_profile_v1(...).shape_profile_id()`, passed in
+    /// rather than re-derived per call (the profile is 95 nodes × 40 layers). The job context
+    /// carries it, so the job a seat re-derives and the class the chain named cannot disagree.
+    class_profile_id: Hash64,
+    /// The network the node runs, from its own configuration — a job context is not portable
+    /// across networks and a hardcoded string said otherwise.
+    network_id: Vec<u8>,
 }
 
 impl Qwen36Backend {
-    pub fn new(artifact: Qwen36ArtifactV1, model_id: impl Into<String>, canonical_job: (u32, u32)) -> Self {
+    pub fn new(
+        artifact: Qwen36ArtifactV1,
+        model_id: impl Into<String>,
+        canonical_job: (u32, u32),
+        class_profile_id: Hash64,
+        network_id: Vec<u8>,
+    ) -> Self {
         let shape_id = qwen36_shape_id_v1(&artifact.shape);
-        Self { artifact, model_id: model_id.into(), canonical_job, shape_id }
+        Self { artifact, model_id: model_id.into(), canonical_job, shape_id, class_profile_id, network_id }
     }
 
     pub fn artifact(&self) -> &Qwen36ArtifactV1 {
@@ -175,7 +187,23 @@ pub struct Qwen36RunV1 {
 /// yet, so it holds the thing that is true today and is stated as such rather than dressed up.
 pub fn qwen36_roots_v1(job: &PalwJobContextV2, shape_id: Hash64, run: &Qwen36RunV1) -> (Hash64, Hash64, Hash64, Hash64) {
     let context = job.context_hash();
-    let trace_root = base0_logits_trace_root_v1(job, &run.logits_rows, &run.generated);
+    // **The tiled trace, over the SELECTING rows.** The run keeps every logits row it produced —
+    // prefill rows included — but the committed set is one row per generated token: the row that
+    // token was selected FROM, which is `rows[prefill − 1 + i]`. Committing the prefill rows too
+    // would put `prefill × vocab` lanes behind the root for no adjudicable claim: no token is
+    // selected from them, so no decode-token dispute can ever open one.
+    let prefill = job.declared_prefill_tokens as usize;
+    let selecting: Vec<Vec<i32>> = (0..run.generated.len())
+        .map(|i| run.logits_rows.get(prefill.saturating_sub(1) + i).cloned().unwrap_or_default())
+        .collect();
+    debug_assert!(
+        selecting
+            .iter()
+            .zip(&run.generated)
+            .all(|(row, t)| kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(row) as u32 == *t),
+        "every committed token is its own row's argmax — the property the close adjudicates"
+    );
+    let trace_root = kaspa_consensus_core::palw_step_refute::tiled_logits_trace_root_v1(job, &selecting, &run.generated);
     // Nothing renders text on this path — the class commits token ids — so the rendered-output
     // hash is over the ids' own encoding rather than over bytes no one produced.
     let rendered =
@@ -259,7 +287,7 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
         let ctx = PalwJobContextV2 {
             version: PALW_TRACE_COMMITMENT_VERSION_V2,
-            network_id: b"misaka-palw-qwen36".to_vec(),
+            network_id: self.network_id.clone(),
             job_id: anchor,
             job_nullifier: keyed(QWEN36_DOMAIN_EXECUTION, &[b"nullifier", anchor.as_byte_slice()]),
             assignment_id: Hash64::default(),
@@ -267,8 +295,15 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
             model_profile_id: self.shape_id,
             runtime_manifest_hash: Hash64::default(),
             runtime_class_id: self.shape_id,
-            shape_profile_id: self.shape_id,
-            trace_scheme_id: kaspa_consensus_core::palw_v2::trace_scheme_id_v2(),
+            // The COURT's id, not the backend's own shape hash: the chain registered the class by
+            // its shape profile, and a job that named anything else would be a job for a class
+            // that does not exist.
+            shape_profile_id: self.class_profile_id,
+            // The TILED commitment (the flat one prices a decode-token close at decode × vocab ×
+            // 4 bytes, which at this vocabulary is megabytes against the ~80 KiB a lifecycle
+            // carrier can relay). Declared here and nowhere else on this path: the scheme is what
+            // the class registers, and the binding check compares this field against it.
+            trace_scheme_id: kaspa_consensus_core::palw_step_refute::tiled_logits_scheme_id_v1(),
             cu_ruleset_id: Hash64::default(),
             tokenizer_id: Hash64::default(),
             prompt_token_ids_hash: prompt_token_ids_hash_v2(&ids),
@@ -328,7 +363,7 @@ mod tests {
 
     fn backend() -> Qwen36Backend {
         let artifact = crate::qwen36::test_fixture(4, 8);
-        Qwen36Backend::new(artifact, "Qwen3.6-fixture", (4, 2))
+        Qwen36Backend::new(artifact, "Qwen3.6-fixture", (4, 2), Hash64::from_u64_word(0x36), b"misaka-palw-test".to_vec())
     }
 
     /// **A producer can run the job an anchor implies, and two producers get the same roots.**
@@ -413,7 +448,7 @@ mod tests {
     fn a_job_longer_than_the_table_is_refused() {
         let artifact = crate::qwen36::test_fixture(2, 8);
         let context = artifact.shape.max_position as u32;
-        let a = Qwen36Backend::new(artifact, "Qwen3.6-fixture", (context, 1));
+        let a = Qwen36Backend::new(artifact, "Qwen3.6-fixture", (context, 1), Hash64::from_u64_word(0x36), b"misaka-palw-test".to_vec());
         assert!(a.job_for_anchor(Hash64::default()).is_err());
     }
 
