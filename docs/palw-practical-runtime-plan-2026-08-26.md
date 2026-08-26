@@ -33,7 +33,37 @@ $ qwen36-chat ... --prompt "日本で二番目に高い山は何ですか。一�
 
 どちらも stop token で停止。トークナイザは GGUF ヘッダ内（248,320 語彙・247,587 マージ、
 リポジトリに `tokenizer.json` は無い）。33.27 GiB のアーティファクトを 24 GB のマシンで mmap して
-**0.4-0.6 tok/s**（ページング律速）。
+**prefill 1.7 / decode 1.75 tok/s**（初版 0.4-0.6 の 3.4 倍）。
+
+### court 側も閉じた（ADR-0039 の前提条件）
+
+`palw_step_refute` に **A16 tier 9 + Qwen3.6 固有 14 の計 23 descriptor** を追加し、裁定は
+エンジンと同じ関数を呼ぶ（裁定器が算術を再実装したら、裁定器自身のバグを持つ）。
+`palw_qwen36_profile` はエンジンの実行順を transcribe した IR から射影（手書きテーブルが
+27 vs 38 nodeでずれた qwen25 の教訓）。MoE はエキスパート連結で 6 node（256 個別 node ではなく、
+同一入力への 8 行列 = 1 つの [4096×2048] と算術同値; どの 8 個かは committed router 行が決める）。
+**`the_coverage_gate_certifies_this_class` が gate 自身のコンストラクタで通過** — 到達可能 kernel
+全てが裁定可能。court catalog root は consensus の一部なので testnet-11 の fingerprint が移動
+（coordinated upgrade として pin を更新済み）。
+
+### FreeToken 型の最適化（expert LRU + mmap + 配置政策）
+
+page cache は「エキスパート」を知らないページ LRU なので、毎トークン 8/256 のランダム読みが
+**全トークンが必要とする重み**（norm・GDN 射影・attention・router・共有エキスパート・508 MiB の
+unembedding）を追い出す。→ 常駐制御をエンジン側に:
+
+- **always-set は pin**（routed expert 以外を open 時に MADV_WILLNEED、返さない）
+- **routed expert はバイト予算つき LRU**（admission=WILLNEED, eviction=DONTNEED —
+  private read-only map では無損失でページを落とすだけ）
+- **router が commit した瞬間に選ばれた 8 個 × 3 tensor の range を一括 prefetch**
+  （8 個目の読みが 1 個目の算術と重なる）
+- 10 GiB 予算で **84.6 % hit**（155 token）。算術は 1 bit も動かない（配置はどこにバイトが
+  あるかの決定で、クラスの主張は「答えがそれに依存しない」こと）。`--expert-cache-gib` で指定
+
+同時に、全射影が通る `q36_matmul_grouped`（Q4_K の per-32 scale を per-32 指数で保持）が
+唯一スカラー参照のままだったので NEON + block 並列化（`q36_matmul_grouped_fast`）。
+検証は**参照側を 1 channel probe で走らせる**ので fast path は参照が拒むものを通せない;
+differential test がビット一致を固定（端数グループ含む）。
 
 ### モデル全体が「チャンス」だったこと、そしてなぜ cosine では見えなかったか
 
