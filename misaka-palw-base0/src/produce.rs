@@ -195,6 +195,10 @@ pub struct Base0ExecutionV1 {
     /// Every step leaf, kept for the same reason — a producer that discarded these could not
     /// answer a challenge and would lose its bond by default.
     pub tiles: Base0StepTilesV1,
+    /// The checkpoint leg's leaves and their state chunks. Kept for the third time for the same
+    /// reason, and for one more: these are what let a challenge be answered — and adjudicated —
+    /// from the calls SINCE a checkpoint instead of from the whole inference.
+    pub checkpoints: crate::legs::Base0CheckpointsV1,
     /// Every logits row, i32 lanes, one per call — kept because a decode-side dispute
     /// (ADR-0049 Decision E) is adjudicated against them, and a producer that discarded them
     /// could not carry the pin that clears it.
@@ -230,6 +234,10 @@ pub fn base0_execute_for_attempt_v1(
     let mut capture = Base0StepCaptureV1::new(leaf_count).map_err(ProduceError::Leg)?;
     let engine = Base0Engine::new(artifact);
     let mut cache = KvCache::new(artifact);
+    // The class's own checkpoint profile, at the producer's interval — the same object the binding
+    // files, so the capture and the commitment cannot disagree about the layout or the cadence.
+    let checkpoint_profile = kaspa_consensus_core::palw_state_chunk_map::integer_kv_checkpoint_profile_v1(1);
+    let mut checkpoints = crate::legs::Base0CheckpointCaptureV1::new(ctx, profile, &checkpoint_profile);
     let mut logits_rows: Vec<Vec<i32>> = Vec::with_capacity(decode_tokens);
     let mut generated: Vec<u32> = Vec::with_capacity(decode_tokens);
 
@@ -261,12 +269,19 @@ pub fn base0_execute_for_attempt_v1(
         next = argmax_lowest(&logits);
         generated.push(next as u32);
         logits_rows.push(logits);
+        // A checkpoint after this call if the cadence says so. `call` IS the covered decode call —
+        // the cache now holds `prefill + call` positions, which is what the map derives for it.
+        if call as u32 == checkpoints.next_covered_decode_call() {
+            checkpoints.push(&cache).map_err(ProduceError::Leg)?;
+        }
     }
 
+    let decode_calls = ctx.exact_decode_tokens.saturating_sub(1);
+    let checkpoints = checkpoints.finish(decode_calls / checkpoint_profile.checkpoint_interval).map_err(ProduceError::Leg)?;
     let tiles = capture.finish().map_err(ProduceError::Leg)?;
     let trace_root = base0_logits_trace_root_v1(ctx, &logits_rows, &generated);
     let activation_leg_root = base0_activation_leg_root_v1(ctx);
-    let binding = crate::legs::base0_binding_from_capture_v1(profile, ctx, &tiles, trace_root, activation_leg_root)
+    let binding = crate::legs::base0_binding_from_capture_v1(profile, ctx, &tiles, &checkpoints, trace_root, activation_leg_root)
         .map_err(ProduceError::Leg)?;
     let ctx_hash = ctx.context_hash();
     // BASE-0 has no tokenizer, so there are no rendered bytes — and the empty rendering is the
@@ -297,6 +312,7 @@ pub fn base0_execute_for_attempt_v1(
         trace_chunk_count: 1,
         binding,
         tiles,
+        checkpoints,
         logits_rows,
         generated_token_ids: generated,
     })
@@ -314,7 +330,7 @@ pub fn base0_execute_for_attempt_v1(
 /// retention file, the P2P material broadcast, and the panel seat's decode, so the three cannot
 /// drift. borsh over the tuple, exactly the bytes `retain_execution` has always written.
 pub fn base0_material_encode_v1(run: &Base0ExecutionV1) -> Result<Vec<u8>, ProduceError> {
-    borsh::to_vec(&(&run.binding, &run.tiles.tiles, &run.logits_rows, &run.generated_token_ids))
+    borsh::to_vec(&(&run.binding, &run.tiles.tiles, &run.logits_rows, &run.generated_token_ids, &run.checkpoints.chunks))
         .map_err(|_| ProduceError::Internal("the execution material is not serializable"))
 }
 
@@ -329,7 +345,277 @@ pub type Base0RetainedMaterialV1 = (
     Vec<(u64, kaspa_consensus_core::palw_step_leg::PalwStepTileLeafV1)>,
     Vec<Vec<i32>>,
     Vec<u32>,
+    // **Per checkpoint, its state chunks in map order** — added when the checkpoint leg started
+    // carrying real state.
+    //
+    // Only the chunks travel, not the leaves: a leaf is a pure function of its chunks, the chain
+    // and the job, so carrying it too would be a second source for the same fact and the received
+    // copy would be the one a dishonest producer controls. `Base0CheckpointsV1::from_chunks_v1`
+    // re-derives.
+    //
+    // This changes the retained-material encoding. Land-stage and crate-local — an older retention
+    // file no longer decodes, which is a seat's honest `Unavailable` rather than a silent
+    // mis-parse, because borsh refuses a short tuple.
+    Vec<Vec<Vec<u8>>>,
 );
+
+/// What a replay from a checkpoint produced.
+///
+/// The leaves are keyed by their canonical index, so a caller compares them against the committed
+/// leg by index rather than by walking a whole execution — which is the point of the thing.
+pub struct Base0CheckpointReplayV1 {
+    pub tiles: Vec<(u64, kaspa_consensus_core::palw_step_leg::PalwStepTileLeafV1)>,
+    pub leaf_hashes: Vec<(u64, Hash64)>,
+    pub logits_rows: Vec<Vec<i32>>,
+    pub generated_token_ids: Vec<u32>,
+    /// Decode calls actually run. The number a dispute pays instead of the whole inference.
+    pub calls_replayed: u32,
+}
+
+/// What an anchored check of one leaf concluded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Base0AnchoredLeafCheckV1 {
+    pub source: Base0ReplaySourceV1,
+    /// The leg's own leaf hash at this index.
+    pub committed: Hash64,
+    /// What the anchored replay recomputed, or `None` when the source is `Genesis` and this unit
+    /// does not reach the leaf.
+    pub recomputed: Option<Hash64>,
+}
+
+impl Base0AnchoredLeafCheckV1 {
+    /// `Some(false)` is a disagreement a court can act on; `Some(true)` is agreement; **`None` is
+    /// "not checked"** and must never be read as either.
+    pub fn agrees(&self) -> Option<bool> {
+        self.recomputed.map(|h| h == self.committed)
+    }
+}
+
+/// **The unit at the boundary a disputant actually stands at: served bytes in, one leaf's verdict
+/// out.**
+///
+/// [`base0_anchored_leaf_replay_v1`] takes a `Base0CheckpointsV1`, which is what a PRODUCER holds.
+/// A challenger or a seat holds the material the producer served, so without this the unit stopped
+/// one seam short of its own caller.
+///
+/// # The step that makes it sound
+///
+/// The chunks in that material are the producer's. Resuming from them unchecked would let a
+/// producer that lied about a step hand over a state consistent with the LIE and watch the replay
+/// agree with it. So the leg is re-derived from the served chunks and its root compared to the
+/// binding's `checkpoint_merkle_root` **before** anything resumes: the anchor has to be the one the
+/// claim committed, or there is no anchored check to do.
+///
+/// The binding itself is verified the same way it always is — `check_step_refutation_v1`'s
+/// `verify_binding` recomputes `committed_execution_root` — which is deliberately NOT re-done here:
+/// this answers "does this leaf agree with the leg the binding carries", and whether that binding
+/// is the claim's is the caller's separate question, with its own separate answer.
+pub fn base0_anchored_leaf_check_v1(
+    artifact: &Base0ArtifactV1,
+    material: &Base0RetainedMaterialV1,
+    leaf_index: u64,
+) -> Result<Base0AnchoredLeafCheckV1, ProduceError> {
+    let (binding, tiles, _, generated, chunks) = material;
+    let profile = &binding.shape_profile;
+    let ctx = &binding.job_context;
+
+    let checkpoints = crate::legs::Base0CheckpointCaptureV1::from_chunks_v1(ctx, profile, &binding.checkpoint_profile, chunks)
+        .map_err(|_| ProduceError::Internal("the served checkpoint chunks do not form a leg"))?;
+    if checkpoints.merkle_root != binding.checkpoint_merkle_root || checkpoints.leaf_hashes.len() as u32 != binding.checkpoint_count {
+        return Err(ProduceError::Internal("the served checkpoints are not the ones the binding committed"));
+    }
+
+    let committed = tiles
+        .iter()
+        .find(|(i, _)| *i == leaf_index)
+        .map(|(_, leaf)| {
+            kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_v1(&ctx.context_hash(), &profile.shape_profile_id(), leaf)
+        })
+        .ok_or(ProduceError::Internal("the served material holds no tile at the disputed leaf"))?;
+
+    let (recomputed, source) = base0_anchored_leaf_replay_v1(artifact, profile, ctx, &checkpoints, generated, leaf_index)?;
+    Ok(Base0AnchoredLeafCheckV1 { source, committed, recomputed })
+}
+
+/// Where an anchored replay of one disputed leaf has to start.
+///
+/// `Genesis` is not a failure — it is the honest answer for a leaf in the prefill call, or in a
+/// decode call that runs before the first checkpoint. A unit that pretended every leaf had an
+/// anchor would hand a court a resume point that does not reach the step under dispute.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Base0ReplaySourceV1 {
+    /// No committed checkpoint precedes the disputed call. `calls` is what a run from the prefill
+    /// costs — carried so a caller can state the cost rather than discover it.
+    Genesis { calls: u32 },
+    /// Resume from checkpoint `index`, which covers `covered_decode_call`, and run `calls` calls.
+    Checkpoint { index: u32, covered_decode_call: u32, calls: u32 },
+}
+
+impl Base0ReplaySourceV1 {
+    /// Decode calls this source has to run.
+    pub fn calls(&self) -> u32 {
+        match self {
+            Self::Genesis { calls } | Self::Checkpoint { calls, .. } => *calls,
+        }
+    }
+}
+
+/// **Which checkpoint a disputed leaf should be replayed from** — the piece that turns a resume
+/// primitive into an anchored replay.
+///
+/// The leaf index names a coordinate ([`kaspa_consensus_core::palw_step::canonical_step_coordinates`]),
+/// the coordinate names a call, and the anchor is the LAST checkpoint whose `covered_decode_call`
+/// is strictly below that call. Strictly: a checkpoint that covers the disputed call is the state
+/// AFTER it ran, and resuming from there would skip the very step under dispute.
+///
+/// Chosen from the committed leaves rather than computed from the interval, because the leaves are
+/// what a challenger holds and what the leg's root binds. Deriving the anchor from the interval
+/// would agree with them only as long as nothing drifted, and a court would then resume from a
+/// checkpoint the claim never committed.
+pub fn base0_replay_anchor_for_leaf_v1(
+    profile: &PalwShapeProfileV3,
+    ctx: &PalwJobContextV2,
+    checkpoints: &crate::legs::Base0CheckpointsV1,
+    leaf_index: u64,
+) -> Option<Base0ReplaySourceV1> {
+    let coord = kaspa_consensus_core::palw_step::canonical_step_coordinates(profile, ctx, leaf_index)?;
+    let disputed_call = coord.call_index;
+    // Call 0 is the prefill: no checkpoint exists before it, by construction.
+    if disputed_call == 0 {
+        return Some(Base0ReplaySourceV1::Genesis { calls: 0 });
+    }
+    let best =
+        checkpoints.leaves.iter().filter(|leaf| leaf.covered_decode_call < disputed_call).max_by_key(|leaf| leaf.covered_decode_call);
+    Some(match best {
+        Some(leaf) => Base0ReplaySourceV1::Checkpoint {
+            index: leaf.checkpoint_index,
+            covered_decode_call: leaf.covered_decode_call,
+            calls: disputed_call - leaf.covered_decode_call,
+        },
+        None => Base0ReplaySourceV1::Genesis { calls: disputed_call },
+    })
+}
+
+/// **Capture → restore → anchored replay, as one call.**
+///
+/// Given a disputed leaf, this picks the anchor, rebuilds the cache from the checkpoint the claim
+/// committed, replays only the calls between, and hands back the leaf hash it recomputed beside the
+/// source it used. Comparing that hash to the committed leg is the whole adjudication of that leaf,
+/// and it costs the calls since a checkpoint rather than the inference.
+///
+/// `Ok(None)` for the leaf hash means the answer is honest and negative: the anchor is `Genesis`,
+/// so this unit cannot reach the leaf and a caller must not read silence as agreement. That case is
+/// returned rather than errored because it is a fact about the leaf, not a fault.
+pub fn base0_anchored_leaf_replay_v1(
+    artifact: &Base0ArtifactV1,
+    profile: &PalwShapeProfileV3,
+    ctx: &PalwJobContextV2,
+    checkpoints: &crate::legs::Base0CheckpointsV1,
+    generated_token_ids: &[u32],
+    leaf_index: u64,
+) -> Result<(Option<Hash64>, Base0ReplaySourceV1), ProduceError> {
+    let source = base0_replay_anchor_for_leaf_v1(profile, ctx, checkpoints, leaf_index)
+        .ok_or(ProduceError::Internal("the leaf index is not a main step coordinate"))?;
+    let Base0ReplaySourceV1::Checkpoint { index, covered_decode_call, calls } = source else {
+        return Ok((None, source));
+    };
+    // **By POSITION in the leg, not by `checkpoint_index`.** They coincide in a complete leg and
+    // stop coinciding the moment one is absent — and a leg with a checkpoint missing is exactly the
+    // material a dispute arrives with. Indexing `chunks` by the field would then pair a leaf with
+    // another checkpoint's bytes, and the replay would resume from a state that verifies against
+    // nothing.
+    let at = checkpoints
+        .leaves
+        .iter()
+        .position(|l| l.checkpoint_index == index)
+        .ok_or(ProduceError::Internal("the chosen anchor is not in the leg it was chosen from"))?;
+    let chunks = checkpoints.chunks.get(at).ok_or(ProduceError::Internal("the checkpoint leg holds no chunks for its own leaf"))?;
+    let leaf = &checkpoints.leaves[at];
+    // The token the call after the checkpoint consumes is the one the covered call produced.
+    let seed = *generated_token_ids
+        .get(covered_decode_call as usize)
+        .ok_or(ProduceError::Internal("the trace material does not carry the token the anchor resumes on"))?;
+    let replay = base0_replay_from_checkpoint_v1(artifact, profile, ctx, leaf, chunks, seed, calls)?;
+    Ok((replay.leaf_hashes.iter().find(|(i, _)| *i == leaf_index).map(|(_, h)| *h), source))
+}
+
+/// **Replay forward from a committed checkpoint** — the reason the checkpoint leg exists.
+///
+/// A dispute over a leaf in decode call `k` used to cost the whole inference: prefill over every
+/// position, then every decode call up to `k`, because the KV state had no committed form anyone
+/// could resume from. With the state map registered and the leg captured, a verifier rebuilds the
+/// cache from the chunks the producer committed and runs only the calls SINCE that checkpoint.
+///
+/// # What makes this sound rather than merely cheaper
+///
+/// The cache is rebuilt from bytes whose hash is under `checkpoint.state_chunks_root`, which is
+/// under the checkpoint leaf, which is under `checkpoint_merkle_root`, which is inside
+/// `committed_execution_root`. So resuming from it is resuming from something the producer is
+/// already bound to: a producer that hands over state its execution did not have has changed its
+/// own commitment, and a producer that hands over the honest state cannot then disown what the
+/// replay computes from it.
+///
+/// The seed token is the caller's, deliberately. It is `generated[covered_decode_call − 1 + 1]` =
+/// `generated[covered_decode_call]` — the token the next call consumes — and it comes from the
+/// trace root's own material, which is bound separately. Deriving it here from the replay would
+/// make the replay agree with itself instead of with the claim.
+pub fn base0_replay_from_checkpoint_v1(
+    artifact: &Base0ArtifactV1,
+    profile: &PalwShapeProfileV3,
+    ctx: &PalwJobContextV2,
+    checkpoint: &kaspa_consensus_core::palw_step_leg::PalwCheckpointLeafV2,
+    chunks: &[Vec<u8>],
+    seed_token: u32,
+    calls: u32,
+) -> Result<Base0CheckpointReplayV1, ProduceError> {
+    use kaspa_consensus_core::palw_state_chunk_map as map;
+    let prefill = ctx.declared_prefill_tokens;
+    let decode_calls = ctx.exact_decode_tokens.saturating_sub(1);
+    let covered = checkpoint.covered_decode_call;
+    if covered > decode_calls || calls == 0 || covered.saturating_add(calls) > decode_calls {
+        return Err(ProduceError::Internal("the replay window is not inside this job's decode calls"));
+    }
+    let positions = map::integer_kv_positions_at_v1(ctx, covered);
+    let geometry = map::integer_kv_state_geometry_v1(profile, positions).map_err(|_| ProduceError::Internal("no state map"))?;
+    let mut cache = KvCache::from_state_chunks(artifact, &geometry, chunks).map_err(ProduceError::Engine)?;
+
+    let leaf_count = step_leaf_count(profile, ctx).map_err(ProduceError::StepSpace)?;
+    let mut capture = Base0StepCaptureV1::new(leaf_count).map_err(ProduceError::Leg)?;
+    let engine = Base0Engine::new(artifact);
+    let mut next = seed_token as usize;
+    if next >= artifact.shape.vocab {
+        return Err(ProduceError::TokenOutOfVocab { token: next, vocab: artifact.shape.vocab });
+    }
+    let mut logits_rows = Vec::with_capacity(calls as usize);
+    let mut generated = Vec::with_capacity(calls as usize);
+    for call in covered + 1..=covered + calls {
+        let cache_position = (prefill + call - 1) as usize;
+        let (logits, probe) = engine.forward_token_probed(&mut cache, next, cache_position).map_err(ProduceError::Engine)?;
+        let rows: Vec<Base0CapturedRowV1> = base0_captured_rows_v1(&probe);
+        capture.push_call(profile, ctx, call, 0, &rows).map_err(ProduceError::Leg)?;
+        next = argmax_lowest(&logits);
+        generated.push(next as u32);
+        logits_rows.push(logits);
+    }
+    // `finish_partial` is correct HERE and nowhere else: a replay deliberately covers a window, and
+    // the leaves it did not touch are not claims about zero — they are simply not this replay's.
+    // Which is why only the touched ones are returned.
+    let partial = capture.finish_partial();
+    let ctx_hash = ctx.context_hash();
+    let profile_hash = profile.shape_profile_id();
+    let leaf_hashes = partial
+        .tiles
+        .iter()
+        .map(|(i, leaf)| (*i, kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, leaf)))
+        .collect();
+    Ok(Base0CheckpointReplayV1 {
+        tiles: partial.tiles,
+        leaf_hashes,
+        logits_rows,
+        generated_token_ids: generated,
+        calls_replayed: calls,
+    })
+}
 
 /// **What a panel seat checks before it signs `Valid`.**
 ///
@@ -347,7 +633,7 @@ pub fn base0_material_matches_claim_v1(
     committed_execution_root: Hash64,
     committed_trace_root: Hash64,
 ) -> Result<bool, ProduceError> {
-    let (binding, tiles, logits_rows, generated) = material;
+    let (binding, tiles, logits_rows, generated, checkpoint_chunks) = material;
     // The leg root over the retained tiles, recomputed rather than trusted: a producer that kept a
     // binding whose root does not match its own tiles kept a commitment, not an execution.
     let mut leaves = vec![Hash64::default(); binding.step_leaf_count as usize];
@@ -372,6 +658,27 @@ pub fn base0_material_matches_claim_v1(
     if kaspa_consensus_core::palw_step_refute::base0_logits_trace_root_v1(&binding.job_context, logits_rows, generated)
         != binding.full_logits_trace_root
     {
+        return Ok(false);
+    }
+    // **And the checkpoints must be the ones it committed.**
+    //
+    // Re-derived from the served chunks, not read from a served leaf: a leaf is a pure function of
+    // its chunks, the chain and the job, so a producer that also SENT its leaves would be sending
+    // the one copy it controls. This way the chunks are the only thing that can be wrong, and a
+    // wrong one moves the root.
+    //
+    // Without this the checkpoint leg was unchecked material: a seat signed `Valid` over a claim
+    // whose checkpoints it had never reproduced, and the first thing to notice would have been a
+    // court that could not open one.
+    let Ok(rebuilt) = crate::legs::Base0CheckpointCaptureV1::from_chunks_v1(
+        &binding.job_context,
+        &binding.shape_profile,
+        &binding.checkpoint_profile,
+        checkpoint_chunks,
+    ) else {
+        return Ok(false);
+    };
+    if rebuilt.merkle_root != binding.checkpoint_merkle_root || rebuilt.leaf_hashes.len() as u32 != binding.checkpoint_count {
         return Ok(false);
     }
     // And the binding the producer kept must be the one its CLAIM committed — otherwise it retained
@@ -415,6 +722,347 @@ mod tests {
         let profile = base0_profile_v1(geometry).expect("expressible");
         let (ctx, prompt) = base0_rc_job_v1(&profile, Hash64::from_u64_word(0xA9C40), geometry.vocab_size as usize, 3, 3);
         (artifact, profile, ctx, prompt)
+    }
+
+    /// **The whole point, end to end: capture a checkpoint, resume from it, and refute from it.**
+    ///
+    /// `small_job` is prefill 3 / decode 3, so there are two decode CALLS and — at interval 1 —
+    /// two checkpoints. Checkpoint 0 covers call 1; resuming from it costs ONE call, where a
+    /// genesis-anchored replay of the same dispute costs the prefill's three positions plus both
+    /// decode calls.
+    ///
+    /// Three claims, and the third is the one that makes the first two worth anything:
+    ///
+    /// 1. the resumed call reproduces the committed leaves **exactly** — same indices, same
+    ///    hashes, so a court can compare by index instead of walking an execution;
+    /// 2. it costs one call rather than the whole inference;
+    /// 3. a single flipped byte in the committed state makes the replay disagree — so this is a
+    ///    refutation channel and not merely a shortcut that happens to agree.
+    #[test]
+    fn a_committed_checkpoint_is_resumed_from_and_refuted_from() {
+        let (artifact, profile, ctx, prompt) = small_job();
+        let run = base0_execute_for_attempt_v1(&artifact, &profile, &ctx, &prompt).expect("the job runs");
+
+        let decode_calls = ctx.exact_decode_tokens - 1;
+        assert_eq!(run.checkpoints.leaves.len() as u32, decode_calls, "one checkpoint per decode call at interval 1");
+        assert_eq!(run.binding.checkpoint_count, decode_calls);
+        assert_eq!(run.binding.checkpoint_merkle_root, run.checkpoints.merkle_root, "the binding carries the captured root");
+        assert_ne!(run.binding.checkpoint_merkle_root, Hash64::default(), "a zero root is the placeholder this replaced");
+
+        // Resume from checkpoint 0, which covers decode call 1, and replay only call 2.
+        let ckpt = &run.checkpoints.leaves[0];
+        assert_eq!(ckpt.covered_decode_call, 1);
+        let replay = base0_replay_from_checkpoint_v1(
+            &artifact,
+            &profile,
+            &ctx,
+            ckpt,
+            &run.checkpoints.chunks[0],
+            // The token call 2 consumes is the one call 1 produced.
+            run.generated_token_ids[ckpt.covered_decode_call as usize],
+            1,
+        )
+        .expect("the committed state resumes");
+
+        assert_eq!(replay.calls_replayed, 1, "one call, not the whole inference");
+        // Substantive, not one leaf: a call that filled a handful would make the comparison
+        // vacuous while still passing an is-empty check.
+        assert!(replay.leaf_hashes.len() >= 16, "a replayed call filled only {} leaves", replay.leaf_hashes.len());
+        for (index, hash) in &replay.leaf_hashes {
+            assert_eq!(
+                run.tiles.leaves[*index as usize], *hash,
+                "leaf {index} replayed from the checkpoint differs from the committed one"
+            );
+        }
+        assert_eq!(
+            replay.generated_token_ids[0],
+            run.generated_token_ids[(ckpt.covered_decode_call + 1) as usize],
+            "the resumed call produces the token the claim committed"
+        );
+
+        // (3) The refutation channel. One byte of the committed state, flipped: the resumed call
+        // now computes something else, and the disagreement is exactly what a court reads.
+        let mut tampered = run.checkpoints.chunks[0].clone();
+        tampered[0][0] ^= 1;
+        let refuted = base0_replay_from_checkpoint_v1(
+            &artifact,
+            &profile,
+            &ctx,
+            ckpt,
+            &tampered,
+            run.generated_token_ids[ckpt.covered_decode_call as usize],
+            1,
+        )
+        .expect("a tampered state still runs — it is the RESULT that must differ");
+        assert!(
+            refuted.leaf_hashes.iter().any(|(index, hash)| run.tiles.leaves[*index as usize] != *hash),
+            "a flipped state byte produced identical leaves — the replay is not reading the state"
+        );
+
+        // And the tampered chunks do not re-derive the committed leg, so a seat refuses them
+        // before any court is opened.
+        let rebuilt = crate::legs::Base0CheckpointCaptureV1::from_chunks_v1(
+            &ctx,
+            &profile,
+            &run.binding.checkpoint_profile,
+            &[tampered, run.checkpoints.chunks[1].clone()],
+        )
+        .expect("wrong bytes of the right length still re-derive a leg");
+        assert_ne!(rebuilt.merkle_root, run.binding.checkpoint_merkle_root, "a tampered chunk must move the leg root");
+    }
+
+    /// **The unit, closed: every leaf of the job is adjudicated through the anchor the leg gives
+    /// it, and every one of them agrees with the commitment.**
+    ///
+    /// This is the difference between "a resume primitive exists" and "capture → restore →
+    /// anchored replay is a thing you can hand a court". Nothing here picks a checkpoint by hand:
+    /// the leaf index names a call, the call selects the last checkpoint strictly before it, and
+    /// the replay runs from there.
+    ///
+    /// The `Genesis` arm is asserted too, not skipped. A leaf in the prefill call has no anchor by
+    /// construction, and a unit that quietly returned "agrees" for those would be reporting
+    /// agreement it never checked.
+    #[test]
+    fn every_leaf_is_adjudicated_through_the_anchor_its_leg_gives_it() {
+        let (artifact, profile, ctx, prompt) = small_job();
+        let run = base0_execute_for_attempt_v1(&artifact, &profile, &ctx, &prompt).expect("the job runs");
+
+        let mut anchored = 0u32;
+        let mut genesis = 0u32;
+        let mut worst_calls = 0u32;
+        for leaf_index in 0..run.binding.step_leaf_count {
+            let (hash, source) =
+                base0_anchored_leaf_replay_v1(&artifact, &profile, &ctx, &run.checkpoints, &run.generated_token_ids, leaf_index)
+                    .expect("every main leaf resolves an anchor");
+            match source {
+                Base0ReplaySourceV1::Genesis { .. } => {
+                    assert!(hash.is_none(), "a genesis-anchored leaf must not report a replayed hash");
+                    genesis += 1;
+                }
+                Base0ReplaySourceV1::Checkpoint { covered_decode_call, calls, .. } => {
+                    let coord = kaspa_consensus_core::palw_step::canonical_step_coordinates(&profile, &ctx, leaf_index)
+                        .expect("a main leaf has coordinates");
+                    // The anchor is strictly before the disputed call — resuming from a checkpoint
+                    // that covered it would skip the step under dispute.
+                    assert!(covered_decode_call < coord.call_index, "the anchor is not strictly before the disputed call");
+                    assert_eq!(calls, coord.call_index - covered_decode_call);
+                    let hash = hash.expect("an anchored leaf is reached by its own replay");
+                    assert_eq!(hash, run.tiles.leaves[leaf_index as usize], "leaf {leaf_index} disagrees with the commitment");
+                    worst_calls = worst_calls.max(calls);
+                    anchored += 1;
+                }
+            }
+        }
+        assert!(anchored > 0 && genesis > 0, "the fixture must exercise both arms (anchored {anchored}, genesis {genesis})");
+        // At interval 1 the nearest checkpoint is always one call back, so no anchored leaf ever
+        // costs more than a single call — the property the whole leg exists to buy.
+        assert_eq!(worst_calls, 1, "an anchored dispute cost {worst_calls} calls at interval 1");
+    }
+
+    /// **What the leg costs to retain and serve, pinned.**
+    ///
+    /// This is a cost the unit CREATED. Before it, `checkpoint_merkle_root` was a zero placeholder
+    /// and a producer retained nothing for it; now real state travels in the material a producer
+    /// must keep and serve. A number nobody measured is a number that grows, so it is asserted
+    /// here against the map's own arithmetic rather than left to be discovered on a fleet.
+    ///
+    /// At `checkpoint_interval = 1` the producer takes a checkpoint per decode call — the most
+    /// expensive end for the producer and the cheapest for a disputant (never more than one call to
+    /// replay). That is a producer-side trade, and this test is where a change to it becomes
+    /// visible instead of silent.
+    #[test]
+    fn the_checkpoint_leg_costs_what_the_map_says_it_costs() {
+        use kaspa_consensus_core::palw_state_chunk_map as map;
+        let (artifact, profile, ctx, prompt) = small_job();
+        let run = base0_execute_for_attempt_v1(&artifact, &profile, &ctx, &prompt).expect("the job runs");
+
+        let row = profile.attn_kv_heads as u64 * profile.attn_head_dim as u64;
+        let layers = (0..profile.layer_count)
+            .filter(|l| profile.layer_kind(*l) == kaspa_consensus_core::palw_step::PalwLayerKindV1::Attention)
+            .count() as u64;
+
+        let mut total = 0u64;
+        for (i, leaf) in run.checkpoints.leaves.iter().enumerate() {
+            let positions = map::integer_kv_positions_at_v1(&ctx, leaf.covered_decode_call) as u64;
+            // K and V, every attention layer, one byte per element — the map, restated from the
+            // geometry so the test cannot pass by agreeing with the code it is checking.
+            let expected = 2 * layers * positions * row;
+            let got: u64 = run.checkpoints.chunks[i].iter().map(|c| c.len() as u64).sum();
+            assert_eq!(got, expected, "checkpoint {i} retains {got} bytes, the map implies {expected}");
+            total += got;
+        }
+
+        // The whole leg, for this job's shape. `small_job` is prefill 3 / decode 3 on a 2-layer,
+        // 2-head, 32-wide fixture: rows are 64 bytes, checkpoints cover calls 1 and 2 at 4 and 5
+        // positions, so 2 × 2 × (4 + 5) × 64.
+        assert_eq!(row, 64);
+        assert_eq!(layers, 2);
+        assert_eq!(total, 2 * 2 * (4 + 5) * 64, "the leg's retained size moved");
+
+        // And it is what actually ships: the material carries these bytes and nothing else for the
+        // leg — the leaves are re-derived, never sent.
+        let encoded = base0_material_encode_v1(&run).expect("encodes");
+        let bare = borsh::to_vec(&(&run.binding, &run.tiles.tiles, &run.logits_rows, &run.generated_token_ids))
+            .expect("encodes without the leg");
+        let overhead = encoded.len() as u64 - bare.len() as u64;
+        assert!(
+            overhead >= total && overhead < total + 256,
+            "the leg adds {overhead} bytes to the material for {total} bytes of state — framing should be the only difference"
+        );
+    }
+
+    /// **The unit at its own caller's boundary: served bytes in, one leaf's verdict out.**
+    ///
+    /// Three things, and the middle one is the soundness of the whole arrangement:
+    ///
+    /// 1. honest material agrees at an anchored leaf, and reports `None` (never `false`) at a
+    ///    genesis-anchored one;
+    /// 2. a producer that lies about a STEP and hands over checkpoints consistent with the lie is
+    ///    refused before anything resumes — the anchor must be the one the CLAIM committed, or
+    ///    there is no anchored check to do;
+    /// 3. a producer that lies about a step and keeps its honest checkpoints is caught by the
+    ///    replay, which is the case the leg exists for.
+    #[test]
+    fn served_bytes_in_one_leafs_verdict_out() {
+        let (artifact, profile, ctx, prompt) = small_job();
+        let run = base0_execute_for_attempt_v1(&artifact, &profile, &ctx, &prompt).expect("the job runs");
+        let honest: Base0RetainedMaterialV1 = (
+            run.binding.clone(),
+            run.tiles.tiles.clone(),
+            run.logits_rows.clone(),
+            run.generated_token_ids.clone(),
+            run.checkpoints.chunks.clone(),
+        );
+
+        // (1) A leaf in the last decode call — anchored — and one in the prefill — not.
+        let leaf_in = |call: u32| {
+            (0..run.binding.step_leaf_count)
+                .find(|i| {
+                    kaspa_consensus_core::palw_step::canonical_step_coordinates(&profile, &ctx, *i)
+                        .is_some_and(|c| c.call_index == call)
+                })
+                .expect("the call has leaves")
+        };
+        let anchored = base0_anchored_leaf_check_v1(&artifact, &honest, leaf_in(ctx.exact_decode_tokens - 1)).expect("checks");
+        assert!(matches!(anchored.source, Base0ReplaySourceV1::Checkpoint { .. }));
+        assert_eq!(anchored.agrees(), Some(true), "honest material must agree at an anchored leaf");
+
+        let prefill = base0_anchored_leaf_check_v1(&artifact, &honest, leaf_in(0)).expect("checks");
+        assert_eq!(prefill.source, Base0ReplaySourceV1::Genesis { calls: 0 });
+        assert_eq!(prefill.agrees(), None, "not reached must never read as agreement OR disagreement");
+
+        // (2) Lie about a step AND hand over checkpoints consistent with the lie. The leg no longer
+        // re-derives the binding's root, so the check refuses rather than resuming from the
+        // attacker's chosen state.
+        let mut forged = honest.clone();
+        forged.4[0][0][0] ^= 1;
+        let err = base0_anchored_leaf_check_v1(&artifact, &forged, leaf_in(ctx.exact_decode_tokens - 1))
+            .expect_err("checkpoints that are not the committed ones must be refused");
+        assert!(format!("{err:?}").contains("not the ones the binding committed"), "{err:?}");
+
+        // (3) Lie about a STEP, keep the honest checkpoints. The replay is what catches this, and
+        // it is the case the leg exists for.
+        let target = leaf_in(ctx.exact_decode_tokens - 1);
+        let mut lying = honest.clone();
+        {
+            let slot = lying.1.iter_mut().find(|(i, _)| *i == target).expect("the tile is held");
+            slot.1.values_le[0] = slot.1.values_le[0].wrapping_add(1);
+        }
+        let caught = base0_anchored_leaf_check_v1(&artifact, &lying, target).expect("checks");
+        assert_eq!(caught.agrees(), Some(false), "a tampered step must disagree with its anchored replay");
+        assert_eq!(caught.source.calls(), 1, "and it costs one call to say so");
+    }
+
+    /// The anchor is read from the COMMITTED leaves, so a leg with a checkpoint missing moves the
+    /// anchor back rather than inventing one — and the bytes it resumes from are still that
+    /// checkpoint's own.
+    ///
+    /// The second half is not decoration. `chunks` is positional and `checkpoint_index` is a field;
+    /// they coincide only in a complete leg, and a dispute is precisely where one might not be.
+    #[test]
+    fn a_missing_checkpoint_moves_the_anchor_back_instead_of_inventing_one() {
+        let (artifact, profile, ctx, prompt) = small_job();
+        let run = base0_execute_for_attempt_v1(&artifact, &profile, &ctx, &prompt).expect("the job runs");
+
+        // A leaf in the last decode call. Checkpoint `c` covers call `c + 1`, and the anchor is the
+        // last one STRICTLY before the disputed call — so call 2's anchor is checkpoint 0.
+        let last_call = ctx.exact_decode_tokens - 1;
+        let leaf_index = (0..run.binding.step_leaf_count)
+            .find(|i| {
+                kaspa_consensus_core::palw_step::canonical_step_coordinates(&profile, &ctx, *i)
+                    .is_some_and(|c| c.call_index == last_call)
+            })
+            .expect("the last call has leaves");
+        let (hash, full) =
+            base0_anchored_leaf_replay_v1(&artifact, &profile, &ctx, &run.checkpoints, &run.generated_token_ids, leaf_index)
+                .expect("resolves");
+        assert_eq!(full, Base0ReplaySourceV1::Checkpoint { index: last_call - 2, covered_decode_call: last_call - 1, calls: 1 });
+        assert_eq!(hash.expect("reached"), run.tiles.leaves[leaf_index as usize]);
+
+        // Remove the checkpoint that WAS the anchor. Nothing committed now precedes the disputed
+        // call, so the honest answer is `Genesis` — never the later checkpoint, which covers the
+        // very call under dispute.
+        let mut thinned = crate::legs::Base0CheckpointsV1 {
+            leaves: run.checkpoints.leaves.clone(),
+            leaf_hashes: run.checkpoints.leaf_hashes.clone(),
+            merkle_root: run.checkpoints.merkle_root,
+            chunks: run.checkpoints.chunks.clone(),
+        };
+        thinned.leaves.remove(0);
+        thinned.leaf_hashes.remove(0);
+        thinned.chunks.remove(0);
+        let (hash, thin) = base0_anchored_leaf_replay_v1(&artifact, &profile, &ctx, &thinned, &run.generated_token_ids, leaf_index)
+            .expect("resolves against the thinner leg");
+        assert_eq!(thin, Base0ReplaySourceV1::Genesis { calls: last_call });
+        assert!(hash.is_none(), "a genesis anchor reports no replayed hash");
+        assert!(thin.calls() >= full.calls(), "a thinner leg cannot make a dispute cheaper");
+
+        // And a leaf whose anchor SURVIVES the removal still resumes from that checkpoint's own
+        // bytes — the positional lookup, exercised on a leg where the field and the position have
+        // stopped agreeing (`leaves[0].checkpoint_index` is now 1).
+        assert_eq!(thinned.leaves[0].checkpoint_index, 1, "the fixture must actually desynchronise them");
+        let later_leaf = (0..run.binding.step_leaf_count)
+            .find(|i| {
+                kaspa_consensus_core::palw_step::canonical_step_coordinates(&profile, &ctx, *i).is_some_and(|c| c.call_index == 0)
+            })
+            .expect("the prefill call has leaves");
+        let (_, prefill_source) =
+            base0_anchored_leaf_replay_v1(&artifact, &profile, &ctx, &thinned, &run.generated_token_ids, later_leaf)
+                .expect("resolves");
+        assert_eq!(prefill_source, Base0ReplaySourceV1::Genesis { calls: 0 }, "the prefill call never has an anchor");
+    }
+
+    /// A seat's `Valid` now covers the checkpoint leg too: served chunks that do not re-derive the
+    /// committed root are material that does not match the claim.
+    #[test]
+    fn a_seat_refuses_material_whose_checkpoints_do_not_rebuild() {
+        let (artifact, profile, ctx, prompt) = small_job();
+        let run = base0_execute_for_attempt_v1(&artifact, &profile, &ctx, &prompt).expect("the job runs");
+        let honest: Base0RetainedMaterialV1 = (
+            run.binding.clone(),
+            run.tiles.tiles.clone(),
+            run.logits_rows.clone(),
+            run.generated_token_ids.clone(),
+            run.checkpoints.chunks.clone(),
+        );
+        assert!(base0_material_matches_claim_v1(&honest, run.execution_root, run.trace_root).expect("checkable"));
+
+        let mut chunks = run.checkpoints.chunks.clone();
+        chunks[1][0][0] ^= 1;
+        let served: Base0RetainedMaterialV1 =
+            (run.binding.clone(), run.tiles.tiles.clone(), run.logits_rows.clone(), run.generated_token_ids.clone(), chunks);
+        assert!(
+            !base0_material_matches_claim_v1(&served, run.execution_root, run.trace_root).expect("checkable"),
+            "a tampered checkpoint chunk must fail the seat's check"
+        );
+
+        // And withholding them entirely is not a way to pass.
+        let empty: Base0RetainedMaterialV1 =
+            (run.binding.clone(), run.tiles.tiles.clone(), run.logits_rows.clone(), run.generated_token_ids.clone(), Vec::new());
+        assert!(
+            !base0_material_matches_claim_v1(&empty, run.execution_root, run.trace_root).expect("checkable"),
+            "material with no checkpoints must fail a claim that committed some"
+        );
     }
 
     /// **The capture covers the WHOLE step space** — which is the property the roots are worth
@@ -675,9 +1323,15 @@ mod tests {
             let leaf_hash =
                 kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_v1(&ctx.context_hash(), &profile.shape_profile_id(), &slot.1);
             lying.leaves[index as usize] = leaf_hash;
-            let binding =
-                crate::legs::base0_binding_from_capture_v1(&profile, &ctx, &lying, run.trace_root, base0_activation_leg_root_v1(&ctx))
-                    .expect("a tampered capture still commits");
+            let binding = crate::legs::base0_binding_from_capture_v1(
+                &profile,
+                &ctx,
+                &lying,
+                &run.checkpoints,
+                run.trace_root,
+                base0_activation_leg_root_v1(&ctx),
+            )
+            .expect("a tampered capture still commits");
             let refutation =
                 crate::legs::base0_refutation_from_capture_v1(&profile, &ctx, &lying, binding, coord, ids.clone(), Some(pin.clone()))
                     .expect("assembles");
@@ -723,9 +1377,15 @@ mod tests {
         let mut lying_ids = run.generated_token_ids.clone();
         lying_ids[1] = (lying_ids[1] + 1) % artifact.shape.vocab as u32;
         let lying_root = base0_logits_trace_root_v1(&ctx, &run.logits_rows, &lying_ids);
-        let lying_binding =
-            crate::legs::base0_binding_from_capture_v1(&profile, &ctx, &run.tiles, lying_root, base0_activation_leg_root_v1(&ctx))
-                .expect("a lying commitment still binds");
+        let lying_binding = crate::legs::base0_binding_from_capture_v1(
+            &profile,
+            &ctx,
+            &run.tiles,
+            &run.checkpoints,
+            lying_root,
+            base0_activation_leg_root_v1(&ctx),
+        )
+        .expect("a lying commitment still binds");
         let lying_pin = PalwBase0DecodeTokensV1 { logits_rows: run.logits_rows.clone(), generated_token_ids: lying_ids };
         let verdict = check_base0_decode_token_refutation_v1(&lying_binding, &lying_pin, 1)
             .expect("a committed token the selection rule refutes convicts");
@@ -773,8 +1433,13 @@ mod tests {
     fn a_seat_licenses_only_material_that_matches_the_claim() {
         let (artifact, profile, ctx, prompt) = small_job();
         let run = base0_execute_for_attempt_v1(&artifact, &profile, &ctx, &prompt).expect("the job runs");
-        let material: Base0RetainedMaterialV1 =
-            (run.binding.clone(), run.tiles.tiles.clone(), run.logits_rows.clone(), run.generated_token_ids.clone());
+        let material: Base0RetainedMaterialV1 = (
+            run.binding.clone(),
+            run.tiles.tiles.clone(),
+            run.logits_rows.clone(),
+            run.generated_token_ids.clone(),
+            run.checkpoints.chunks.clone(),
+        );
 
         assert!(
             base0_material_matches_claim_v1(&material, run.execution_root, run.trace_root).expect("checkable"),

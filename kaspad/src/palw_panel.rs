@@ -861,7 +861,7 @@ impl PalwPanelService {
                         continue;
                     };
                     let Some(capture) = materials.get(&target.claim_id).and_then(|pool| pool.first()) else { continue };
-                    let Ok((binding, _, _, _)) = misaka_palw_base0::produce::base0_material_decode_v1(capture) else { continue };
+                    let Ok((binding, _, _, _, _)) = misaka_palw_base0::produce::base0_material_decode_v1(capture) else { continue };
                     // The job is the ANCHOR's, and the anchor is the job's own id — so the
                     // canonical job is recomputed rather than taken from the producer.
                     let Ok((job, prompt)) = backend.job_for_anchor(binding.job_context.job_id) else { continue };
