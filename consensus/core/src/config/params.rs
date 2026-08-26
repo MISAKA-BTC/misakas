@@ -4524,7 +4524,14 @@ mod consensus_params_id_tests {
             // `LegacyTn11` lane, which was never published and is not running anywhere. The const
             // beside it is still the old one — the test materializes by NETWORK ID, which is what a
             // node reports, and that is the whole reason this test pins the materialized value.
-            ("testnet-11", TESTNET11_PARAMS, "048e69026e559e67584ded64f1b6279148e3459975ef9d710e029eaaed638ee0"),
+            // Moved again, deliberately, when BASE-0 registered its checkpoint state chunk map
+            // (`palw_state_chunk_map`). `state_chunk_map_id` is a field of `PalwShapeProfileV3`,
+            // the class id IS the profile id, and the class id is in the RC bundle — so filling in
+            // the unregistered sentinel moves the ruleset. **This build and the one running on t11
+            // are different networks**, and they find out at the handshake rather than at
+            // consensus, which is the direction to fail in. Landing it needs an RC re-mint; no
+            // other preset moved, because no other preset carries a PALW class.
+            ("testnet-11", TESTNET11_PARAMS, "ea4633fb5b266955837abcbb0f5396be1ad095d2dd8f0c37cab0cdcaf0e3baf1"),
             ("simnet", SIMNET_PARAMS, "135e88c69a659d3cf4b5ce8275953c7597b2c67b03d2a74b3d0696c5d0b703fa"),
             ("devnet", DEVNET_PARAMS, "42cc6be92506a14654cb676184e1416796dec682b15e93cb9c639e8e0d77efa5"),
         ]

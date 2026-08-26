@@ -51,6 +51,34 @@ use crate::palw_v2::PalwJobContextV2;
 pub const PALW_INTEGER_KV_STATE_CHUNK_MAP_NAME_V1: &str = "palw-integer-kv/i8/kind-major(k,v)/layer-asc/position-asc/row=attn_kv_heads*attn_head_dim/\
      chunk=floor(1048576/row)/v1";
 
+/// The registration preimage of the integer family's `state_layout_id`.
+///
+/// The map's companion. `PalwCheckpointProfileV1` carries a `state_layout_id` inside its
+/// `profile_hash`, and the v2 checkpoint leg carries the chunk map beside it — two identities over
+/// one set of bytes, which is two chances to drift. They are minted from the SAME descriptor here,
+/// under their own domains, so "the layout" and "the chunking of the layout" cannot disagree about
+/// which bytes they are talking about.
+pub const PALW_INTEGER_KV_STATE_LAYOUT_NAME_V1: &str = PALW_INTEGER_KV_STATE_CHUNK_MAP_NAME_V1;
+
+/// `state_layout_id` for every class in the deterministic-integer family.
+pub fn integer_kv_state_layout_id_v1() -> Hash64 {
+    crate::palw_legs::state_layout_id_v1(PALW_INTEGER_KV_STATE_LAYOUT_NAME_V1)
+}
+
+/// **The checkpoint profile a producer in this family must file**, at the interval its class
+/// registered.
+///
+/// A constructor rather than a constant because the interval is the one free parameter; the layout
+/// is not. Before this there was no canonical `state_layout_id` to file at all, so every producer
+/// would have invented one and every one of them would have been a different class of checkpoint.
+pub fn integer_kv_checkpoint_profile_v1(checkpoint_interval: u32) -> crate::palw_legs::PalwCheckpointProfileV1 {
+    crate::palw_legs::PalwCheckpointProfileV1 {
+        version: crate::palw_legs::PALW_LEGS_OBJECT_VERSION_V1,
+        checkpoint_interval,
+        state_layout_id: integer_kv_state_layout_id_v1(),
+    }
+}
+
 /// `state_chunk_map_id` for every class in the deterministic-integer family.
 ///
 /// One id for the whole family, not one per class: the map is a function of the profile, and the
@@ -367,6 +395,22 @@ mod tests {
             integer_kv_positions_at_v1(&ctx, ctx.exact_decode_tokens - 1),
             ctx.declared_prefill_tokens + ctx.exact_decode_tokens - 1
         );
+    }
+
+    /// The two identities over one set of bytes are minted from one descriptor and separated only
+    /// by their domains — so they cannot drift, and they cannot collide either.
+    #[test]
+    fn the_layout_and_the_chunk_map_share_a_descriptor_and_not_a_domain() {
+        assert_ne!(integer_kv_state_layout_id_v1(), integer_kv_state_chunk_map_id_v1(), "distinct domains, distinct ids");
+        assert_ne!(integer_kv_state_layout_id_v1(), Hash64::default());
+        let profile = integer_kv_checkpoint_profile_v1(8);
+        assert!(profile.validate_shape().is_ok());
+        assert_eq!(profile.checkpoint_interval, 8);
+        assert_eq!(profile.state_layout_id, integer_kv_state_layout_id_v1());
+        // The interval is the only thing a producer chooses; the layout moves with neither it nor
+        // the producer.
+        assert_eq!(integer_kv_checkpoint_profile_v1(1).state_layout_id, profile.state_layout_id);
+        assert_ne!(integer_kv_checkpoint_profile_v1(1).profile_hash(), profile.profile_hash());
     }
 
     #[test]
