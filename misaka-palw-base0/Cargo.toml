@@ -22,3 +22,7 @@ faster-hex.workspace = true
 kaspa-hashes.workspace = true
 blake2b_simd.workspace = true
 serde_json.workspace = true
+# The A16 fast kernels run output channels in parallel. Safe to add because ADR-0040 Decision E
+# makes the thread count invisible to the result — in a float class this dependency would be a
+# consensus hazard.
+rayon.workspace = true

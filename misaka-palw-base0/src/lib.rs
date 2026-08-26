@@ -50,6 +50,7 @@ pub mod rope;
 
 pub mod convert;
 pub mod kat;
+pub mod kernels;
 pub mod optimized;
 pub use artifact::{ArtifactError, Base0ArtifactV1, Base0LayerWeightsV1, Base0ShapeV1, LN_THETA_10000_GEN_Q};
 pub use engine::{Base0Engine, EngineError, KvCache};

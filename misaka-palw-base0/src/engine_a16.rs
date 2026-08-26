@@ -19,12 +19,36 @@
 //! class's argmax — lowest index on ties — is defined over the narrowed codes here and in any
 //! dispute alike.
 
-use crate::artifact::Base0ArtifactV1;
+use crate::artifact::{Base0ArtifactV1, Base0ShapeV1};
 use kaspa_consensus_core::palw_base0_a16::{
-    A16QuantParams, a16_add_elem, a16_attn_scores, a16_attn_values, a16_matmul_requant, a16_matmul_rescale, a16_mul_elem, a16_requant,
-    a16_rms_norm, a16_rope, a16_softmax_rows,
+    A16QuantParams, a16_add_elem, a16_attn_scores, a16_attn_values, a16_mul_elem, a16_requant, a16_rms_norm, a16_rope,
+    a16_softmax_rows,
 };
 use kaspa_consensus_core::palw_base0_ops::silu;
+
+// **The two projections go through the fast kernels, and this is not a fork of the catalog.**
+//
+// `kernels::a16_matmul_requant_fast` and `..._rescale_fast` are asserted bit-identical to the
+// catalog ops they replace — over the projection lengths this engine uses, at both code rails,
+// and across the parallel/serial threshold (`kernels`' own tests, plus
+// `the_fast_engine_and_the_catalog_agree_token_for_token` below, which compares whole forwards).
+// They may be swapped in precisely because ADR-0040 Decision E makes lanes and threads invisible
+// to the value; the day that stops being true is the day those tests fail.
+use kaspa_consensus_core::palw_base0_a16::{
+    PalwA16OpError, a16_matmul_requant as catalog_matmul_requant, a16_matmul_rescale as catalog_matmul_rescale,
+};
+
+/// Op W1 through whichever implementation this engine was built with.
+#[inline]
+fn a16_matmul_requant(fast: bool, w: &[i8], x: &[i32], p: &[A16QuantParams]) -> Result<Vec<i32>, PalwA16OpError> {
+    if fast { crate::kernels::a16_matmul_requant_fast(w, x, p) } else { catalog_matmul_requant(w, x, p) }
+}
+
+/// Op W3 likewise.
+#[inline]
+fn a16_matmul_rescale(fast: bool, w: &[i8], x: &[i32], p: &[A16QuantParams]) -> Result<Vec<i32>, PalwA16OpError> {
+    if fast { crate::kernels::a16_matmul_rescale_fast(w, x, p) } else { catalog_matmul_rescale(w, x, p) }
+}
 
 /// Why the engine refused to run. Everything here is a REGISTRATION defect — a missing or
 /// malformed parameter row — surfaced at construction, never mid-forward.
@@ -77,6 +101,11 @@ struct LayerParams {
 
 pub struct A16Engine<'a> {
     pub artifact: &'a Base0ArtifactV1,
+    /// Whether the two projections run through `kernels` or through the catalog ops directly.
+    /// Both produce the same bits — that is what `A16Engine::new_reference` exists to keep true —
+    /// and the catalog path is roughly thirteen times slower, so it is a test instrument rather
+    /// than a mode anyone would run.
+    fast: bool,
     embed_lift: A16QuantParams,
     final_norm: Vec<A16QuantParams>,
     logits_out: A16QuantParams,
@@ -169,11 +198,18 @@ impl<'a> A16Engine<'a> {
         }
         Ok(Self {
             artifact,
+            fast: true,
             embed_lift: one("embed_lift.a16", None, "embed_lift")?,
             final_norm: many("final_norm.a16", None, d, "final_norm")?,
             logits_out: one("token_embd.weight.a16", None, "logits_out")?,
             layers,
         })
+    }
+
+    /// The same engine with the two projections routed through the catalog ops rather than the
+    /// fast kernels. Only a test builds one: it is the other side of the differential.
+    pub fn new_reference(artifact: &'a Base0ArtifactV1) -> Result<Self, A16EngineError> {
+        Ok(Self { fast: false, ..Self::new(artifact)? })
     }
 
     /// One token; returns the COMMITTED logit row: i16 codes in i32 lanes. Ties in any argmax
@@ -230,9 +266,9 @@ impl<'a> A16Engine<'a> {
             // ---- attention (nodes 0..=14) ---------------------------------------------------
             let unit = push(&mut nodes, a16_rms_norm(&h, shape.eps_q).map_err(refuse("norm1"))?);
             let normed = push(&mut nodes, a16_requant(&unit, &lp.attn_norm).map_err(refuse("norm1_req"))?);
-            let q = push(&mut nodes, a16_matmul_requant(&lw.wq, &normed, &lp.q).map_err(refuse("q"))?);
-            let k = push(&mut nodes, a16_matmul_requant(&lw.wk, &normed, &lp.k).map_err(refuse("k"))?);
-            let v = push(&mut nodes, a16_matmul_requant(&lw.wv, &normed, &lp.v).map_err(refuse("v"))?);
+            let q = push(&mut nodes, a16_matmul_requant(self.fast, &lw.wq, &normed, &lp.q).map_err(refuse("q"))?);
+            let k = push(&mut nodes, a16_matmul_requant(self.fast, &lw.wk, &normed, &lp.k).map_err(refuse("k"))?);
+            let v = push(&mut nodes, a16_matmul_requant(self.fast, &lw.wv, &normed, &lp.v).map_err(refuse("v"))?);
             let rope_heads = |row: &[i32], heads: usize, what: &'static str| -> Result<Vec<i32>, A16EngineError> {
                 let mut out = Vec::with_capacity(row.len());
                 for hd in 0..heads {
@@ -284,7 +320,7 @@ impl<'a> A16Engine<'a> {
             );
 
             let wo_params = if sink { &lp.wo_sink } else { &lp.wo };
-            let delta = push(&mut nodes, a16_matmul_requant(&lw.wo, &attn, wo_params).map_err(refuse("wo"))?);
+            let delta = push(&mut nodes, a16_matmul_requant(self.fast, &lw.wo, &attn, wo_params).map_err(refuse("wo"))?);
             let align = if sink { lp.attn_align_sink } else { lp.attn_align };
             let aligned = push(&mut nodes, a16_requant(&h, &tile(align, d)).map_err(refuse("attn_align"))?);
             let sum = push(&mut nodes, a16_add_elem(&aligned, &delta).map_err(refuse("attn_add"))?);
@@ -293,17 +329,17 @@ impl<'a> A16Engine<'a> {
             // ---- SwiGLU (nodes 15..=26) -----------------------------------------------------
             let unit = push(&mut nodes, a16_rms_norm(&h, shape.eps_q).map_err(refuse("norm2"))?);
             let normed = push(&mut nodes, a16_requant(&unit, &lp.ffn_norm).map_err(refuse("norm2_req"))?);
-            let gate_q = push(&mut nodes, a16_matmul_rescale(&lw.w_gate, &normed, &lp.gate).map_err(refuse("gate"))?);
+            let gate_q = push(&mut nodes, a16_matmul_rescale(self.fast, &lw.w_gate, &normed, &lp.gate).map_err(refuse("gate"))?);
             let silu_q = push(&mut nodes, silu(&gate_q));
             let s_p = if sink { lp.silu_sink } else { lp.silu_q };
             let s16 = push(&mut nodes, a16_requant(&silu_q, &tile(s_p, shape.d_ff)).map_err(refuse("silu16"))?);
             let up_params = if sink { &lp.up_sink } else { &lp.up };
-            let up = push(&mut nodes, a16_matmul_requant(&lw.w_up, &normed, up_params).map_err(refuse("up"))?);
+            let up = push(&mut nodes, a16_matmul_requant(self.fast, &lw.w_up, &normed, up_params).map_err(refuse("up"))?);
             let prod = push(&mut nodes, a16_mul_elem(&s16, &up).map_err(refuse("mul"))?);
             let g_p = if sink { lp.gated_sink } else { lp.gated };
             let gated = push(&mut nodes, a16_requant(&prod, &tile(g_p, shape.d_ff)).map_err(refuse("gated"))?);
             let down_params = if sink { &lp.down_sink } else { &lp.down };
-            let delta = push(&mut nodes, a16_matmul_requant(&lw.w_down, &gated, down_params).map_err(refuse("down"))?);
+            let delta = push(&mut nodes, a16_matmul_requant(self.fast, &lw.w_down, &gated, down_params).map_err(refuse("down"))?);
             let align = if sink { lp.ffn_align_sink } else { lp.ffn_align };
             let aligned = push(&mut nodes, a16_requant(&h, &tile(align, d)).map_err(refuse("ffn_align"))?);
             let sum = push(&mut nodes, a16_add_elem(&aligned, &delta).map_err(refuse("ffn_add"))?);
@@ -316,9 +352,150 @@ impl<'a> A16Engine<'a> {
         trace.post.push(unit.clone());
         let fin = a16_requant(&unit, &self.final_norm).map_err(refuse("final_req"))?;
         trace.post.push(fin.clone());
-        let logits =
-            a16_matmul_requant(&self.artifact.unembed, &fin, &tile(self.logits_out, shape.vocab)).map_err(refuse("logits_out"))?;
+        let logits = a16_matmul_requant(self.fast, &self.artifact.unembed, &fin, &tile(self.logits_out, shape.vocab))
+            .map_err(refuse("logits_out"))?;
         trace.post.push(logits.clone());
         Ok((logits, trace))
+    }
+}
+
+/// **A well-formed A16 parameter store for a shape** — the tier's analogue of
+/// `Base0ArtifactV1::derive_deterministic`, and marked as sharply.
+///
+/// It is NOT a calibration. A converted class gets its triples from the PTQ pipeline, measured
+/// from the checkpoint; these are chosen only so that every row `A16Engine::new` resolves exists
+/// and a forward pass produces something other than zeros. An artifact carrying this store is
+/// still `is_derived()`, so it cannot be mistaken for a registered class.
+///
+/// # Why the scales are split by SITE and derived from the fan-in
+///
+/// The first version of this used one gain everywhere and the engine returned an all-zero logit
+/// row: a matmul's accumulator grows with its fan-in and an elementwise requant's does not, so an
+/// attenuation big enough for the first is applied ~10 times per layer to the second and the
+/// residual stream decays to nothing. That is not a subtle failure — but it is a SILENT one. It
+/// passed a fast-versus-reference differential (both agree on zero) and was caught only by asking
+/// whether two different tokens produce two different rows.
+///
+/// So a projection over `fan_in` gets `2^-(8 + bits(fan_in)/2)`, tracking the `√fan_in` growth of
+/// a random dot product, and an elementwise site gets unity.
+pub fn derived_a16_store(shape: &Base0ShapeV1) -> Vec<(String, Vec<u8>)> {
+    let (d, kv, ff) = (shape.d_model(), shape.kv_dim(), shape.d_ff);
+    let wire = |m: i64, s: u8, n: usize| -> Vec<u8> {
+        A16QuantParams { multiplier: m, shift: s, zero: 0 }
+            .to_wire()
+            .iter()
+            .cycle()
+            .take(n * A16QuantParams::WIRE_BYTES)
+            .copied()
+            .collect()
+    };
+    let projection = |fan_in: usize, n: usize| -> Vec<u8> {
+        let bits = usize::BITS - fan_in.max(1).leading_zeros();
+        wire(1, (8 + bits / 2) as u8, n)
+    };
+    let unity = |n: usize| wire(1, 0, n);
+
+    let mut store: Vec<(String, Vec<u8>)> = vec![
+        ("embed_lift.a16".into(), unity(1)),
+        ("final_norm.a16".into(), unity(d)),
+        ("token_embd.weight.a16".into(), projection(d, 1)),
+    ];
+    for li in 0..shape.n_layers {
+        let b = format!("blk.{li}");
+        let rows: [(&str, Vec<u8>); 25] = [
+            ("attn_norm.a16", unity(d)),
+            ("attn_q.weight.a16", projection(d, d)),
+            ("attn_k.weight.a16", projection(d, kv)),
+            ("attn_v.weight.a16", projection(d, kv)),
+            ("attn_logits.a16", projection(shape.d_head, 1)),
+            ("attn_probs.a16", unity(1)),
+            ("attn_values.a16", projection(shape.d_head, 1)),
+            ("attn_output.weight.a16", projection(d, d)),
+            ("attn_output.weight.a16.sink0", projection(d, d)),
+            ("attn_align.a16", unity(1)),
+            ("attn_align.a16.sink0", unity(1)),
+            ("attn_residual.a16", unity(1)),
+            ("ffn_norm.a16", unity(d)),
+            ("ffn_gate.weight.a16", projection(d, ff)),
+            ("ffn_silu.a16", unity(1)),
+            ("ffn_silu.a16.sink0", unity(1)),
+            ("ffn_up.weight.a16", projection(d, ff)),
+            ("ffn_up.weight.a16.sink0", projection(d, ff)),
+            ("ffn_gated.a16", unity(1)),
+            ("ffn_gated.a16.sink0", unity(1)),
+            ("ffn_down.weight.a16", projection(ff, d)),
+            ("ffn_down.weight.a16.sink0", projection(ff, d)),
+            ("ffn_align.a16", unity(1)),
+            ("ffn_align.a16.sink0", unity(1)),
+            ("ffn_residual.a16", unity(1)),
+        ];
+        for (suffix, bytes) in rows {
+            store.push((format!("{b}.{suffix}"), bytes));
+        }
+        // Not a triple: one raw byte, the softmax widening the tier reads directly.
+        store.push((format!("{b}.attn_softmax_up"), vec![24u8]));
+    }
+    store.sort_by(|a, b| a.0.cmp(&b.0));
+    store
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::artifact::LN_THETA_10000_GEN_Q;
+
+    fn artifact(n_layers: usize, d_head: usize, d_ff: usize) -> Base0ArtifactV1 {
+        let shape = Base0ShapeV1 {
+            n_layers,
+            n_heads: 4,
+            n_kv_heads: 2,
+            d_head,
+            d_ff,
+            vocab: 64,
+            max_position: 32,
+            ln_theta_gen_q: LN_THETA_10000_GEN_Q,
+            eps_q: 1,
+        };
+        Base0ArtifactV1::derive_deterministic(shape, 0x5A16)
+            .expect("a valid shape")
+            .with_a16_params(derived_a16_store(&shape))
+            .expect("the derived store is sorted and unique")
+    }
+
+    /// **The claim the fast kernels are allowed to exist on.**
+    ///
+    /// `kernels`' own tests compare one projection at a time. This compares whole forward passes,
+    /// where a divergence would also have to survive the residual stream, the KV cache and the
+    /// attention arms — which is the only place a kernel bug that cancels inside one matmul would
+    /// still show up. Every logit of every token, exactly equal.
+    #[test]
+    fn the_fast_engine_and_the_catalog_agree_token_for_token() {
+        // Widths on both sides of the kernel's 16-element vector block and its 64-channel
+        // parallel threshold, so neither path is exercised by only one of its branches.
+        for (layers, d_head, d_ff) in [(1usize, 4usize, 8usize), (2, 8, 32), (2, 32, 160)] {
+            let artifact = artifact(layers, d_head, d_ff);
+            let fast = A16Engine::new(&artifact).expect("the store resolves");
+            let reference = A16Engine::new_reference(&artifact).expect("the store resolves");
+            let (mut fast_cache, mut reference_cache) = (A16Cache::new(layers), A16Cache::new(layers));
+            for position in 0..12usize {
+                let token = (position * 7 + 3) % artifact.shape.vocab;
+                let a = fast.forward_token(&mut fast_cache, token, position).expect("the token decodes");
+                let b = reference.forward_token(&mut reference_cache, token, position).expect("the token decodes");
+                assert_eq!(a, b, "layers={layers} d_head={d_head} d_ff={d_ff} position={position}");
+            }
+        }
+    }
+
+    /// A forward pass that returns the same row for every token would satisfy the differential
+    /// above while computing nothing, so the fixture is checked for being non-degenerate.
+    #[test]
+    fn the_fixture_actually_computes_something() {
+        let artifact = artifact(2, 8, 32);
+        let engine = A16Engine::new(&artifact).expect("the store resolves");
+        let mut cache = A16Cache::new(2);
+        let first = engine.forward_token(&mut cache, 5, 0).expect("decodes");
+        let second = engine.forward_token(&mut cache, 9, 1).expect("decodes");
+        assert_ne!(first, second, "a different token at a different position must move the logits");
+        assert!(first.iter().any(|v| *v != 0), "an all-zero logit row is a dead pass");
     }
 }

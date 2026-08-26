@@ -15,63 +15,9 @@
 //!
 //! Both tiers run the same geometry, so the second number is what the wider activation costs.
 
-use kaspa_consensus_core::palw_base0_a16::A16QuantParams;
 use misaka_palw_base0::artifact::{Base0ArtifactV1, Base0ShapeV1};
 use misaka_palw_base0::engine::{Base0Engine, KvCache};
-use misaka_palw_base0::engine_a16::{A16Cache, A16Engine};
-
-/// A well-formed A16 parameter store for a shape, so the W8A16 engine has something to run on.
-///
-/// The analogue of `derive_deterministic` and it exists for the same reason: throughput is a
-/// function of the geometry, and the tier's cost per token does not depend on what the triples
-/// mean. It is NOT a calibration — a converted class gets its triples from the PTQ pipeline — and
-/// nothing here should ever reach a registration.
-fn derived_a16_store(shape: &Base0ShapeV1) -> Vec<(String, Vec<u8>)> {
-    let (d, kv, ff) = (shape.n_heads * shape.d_head, shape.n_kv_heads * shape.d_head, shape.d_ff);
-    // A gain near 2^-10: the accumulators a real projection produces land inside the i16 code
-    // range rather than all clamping, so the measured path is the one a class would take.
-    let triple = A16QuantParams { multiplier: 1, shift: 10, zero: 0 }.to_wire().to_vec();
-    let rows = |n: usize| -> Vec<u8> { triple.iter().cycle().take(n * A16QuantParams::WIRE_BYTES).copied().collect() };
-
-    let mut store: Vec<(String, Vec<u8>)> =
-        vec![("embed_lift.a16".into(), rows(1)), ("final_norm.a16".into(), rows(d)), ("token_embd.weight.a16".into(), rows(1))];
-    for li in 0..shape.n_layers {
-        let b = format!("blk.{li}");
-        for (suffix, count) in [
-            ("attn_norm.a16", d),
-            ("attn_q.weight.a16", d),
-            ("attn_k.weight.a16", kv),
-            ("attn_v.weight.a16", kv),
-            ("attn_logits.a16", 1),
-            ("attn_probs.a16", 1),
-            ("attn_values.a16", 1),
-            ("attn_output.weight.a16", d),
-            ("attn_output.weight.a16.sink0", d),
-            ("attn_align.a16", 1),
-            ("attn_align.a16.sink0", 1),
-            ("attn_residual.a16", 1),
-            ("ffn_norm.a16", d),
-            ("ffn_gate.weight.a16", ff),
-            ("ffn_silu.a16", 1),
-            ("ffn_silu.a16.sink0", 1),
-            ("ffn_up.weight.a16", ff),
-            ("ffn_up.weight.a16.sink0", ff),
-            ("ffn_gated.a16", 1),
-            ("ffn_gated.a16.sink0", 1),
-            ("ffn_down.weight.a16", d),
-            ("ffn_down.weight.a16.sink0", d),
-            ("ffn_align.a16", 1),
-            ("ffn_align.a16.sink0", 1),
-            ("ffn_residual.a16", 1),
-        ] {
-            store.push((format!("{b}.{suffix}"), rows(count)));
-        }
-        // Not a triple: one raw byte, the softmax widening the tier reads directly.
-        store.push((format!("{b}.attn_softmax_up"), vec![24u8]));
-    }
-    store.sort_by(|a, b| a.0.cmp(&b.0));
-    store
-}
+use misaka_palw_base0::engine_a16::{A16Cache, A16Engine, derived_a16_store};
 
 fn main() {
     let mut args = std::env::args().skip(1);
