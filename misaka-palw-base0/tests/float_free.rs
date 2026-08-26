@@ -69,6 +69,7 @@ const EXEMPT: &[(&str, &str)] = &[
     ("src/bin/base0-depth-sweep.rs", "measurement tool"),
     ("src/bin/base0-class-sizing.rs", "measurement tool"),
     ("src/bin/palw-rc-genesis.rs", "genesis card generator"),
+    ("examples/base0-throughput.rs", "measurement tool: it times the engine, it is not the engine"),
 ];
 
 /// The primitives themselves live in `consensus-core`, and they are the half of the class this
@@ -222,8 +223,10 @@ fn every_source_file_is_classified() {
     known.extend(EXEMPT.iter().map(|(path, _)| path.to_string()));
 
     let mut on_disk = BTreeSet::new();
-    for (directory, prefix) in [(root.join("src"), "src"), (root.join("src/bin"), "src/bin")] {
-        for entry in std::fs::read_dir(&directory).expect("the crate has a src/ and a src/bin/") {
+    for (directory, prefix) in [(root.join("src"), "src"), (root.join("src/bin"), "src/bin"), (root.join("examples"), "examples")] {
+        for entry in std::fs::read_dir(&directory)
+            .unwrap_or_else(|e| panic!("{} must exist for the classification to be complete: {e}", directory.display()))
+        {
             let entry = entry.expect("a readable directory entry");
             if entry.path().extension().is_some_and(|e| e == "rs") {
                 on_disk.insert(format!("{prefix}/{}", entry.file_name().to_string_lossy()));
