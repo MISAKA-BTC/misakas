@@ -49,6 +49,11 @@ share rules allowed, and the bound that made the family acceptable was a doc com
 This is the failure mode this repository has now recorded four times: *a gate that never fires is
 more dangerous than no gate*, because the design reasons as though it fired.
 
+It is currently harmless for one reason nobody designed: the acceptance gate forces a post-genesis
+entrant's share to EQUAL `min_grantable_share_permille`, so no registration can reach a permille
+worth capping. The cap is not load-bearing because a different rule happens to stand where it would
+have stood.
+
 ### The per-class panel was checked and then ignored
 
 Decision 6 called per-class panel parameters "the one structural consensus change this ADR
@@ -66,6 +71,13 @@ Two things were true of the implementation:
    `derive_panel_v2(state, panel_params, …)` in the virtual processor, and `panel_params` there is
    the node's bundle-global `PalwPanelParamsV2`. The class's registered `(seats, quorum)` never
    reaches it. A class admitted at 2-of-2 was still bound a 5-seat panel.
+
+**These two failures are opposite, and filing them together would produce the wrong fix.**
+`FamilyShareCap` is declared and never constructed — it *cannot fire*. `min_class_panel` is
+enforced exactly as written — it *fires and lets the thing through*. One is a missing check; the
+other is a working check whose rule is wrong. A reader who reaches for the same remedy for both
+will fix neither. (The distinction is misaka-testnet-ed's, from an independent audit of the same
+two mechanisms on the mainline and on the deployed t11 build.)
 
 A ruleset field that weakened a gate and altered no behaviour is not a feature with a bug in it. It
 is a schema cost paid for nothing, twice: `PALW_STATE_V2_VERSION` went 5 → 6 → 7 in a single day to
