@@ -323,6 +323,14 @@ impl Qwen36Cache {
     }
 }
 
+/// One probe entry: a site's name and the committed lanes at it.
+///
+/// A named type because the alternative reads as three levels of tuple at every signature.
+pub type Qwen36ProbeV1 = Vec<(String, Vec<i32>)>;
+
+/// One probe entry reduced to a peak.
+pub type Qwen36PeaksV1 = Vec<(String, i32)>;
+
 /// The engine.
 pub struct Qwen36Engine<'a> {
     pub artifact: &'a Qwen36ArtifactV1,
@@ -336,6 +344,33 @@ impl<'a> Qwen36Engine<'a> {
     /// One position. Returns the committed logit row: i16 codes in i32 lanes, argmax over which
     /// breaks ties to the lowest id.
     pub fn forward_token(&self, cache: &mut Qwen36Cache, token_id: usize, position: usize) -> Result<Vec<i32>, Qwen36Error> {
+        self.forward_token_probed(cache, token_id, position).map(|(logits, _)| logits)
+    }
+
+    /// The probe reduced to one peak per site.
+    pub fn forward_token_peaks(
+        &self,
+        cache: &mut Qwen36Cache,
+        token_id: usize,
+        position: usize,
+    ) -> Result<(Vec<i32>, Qwen36PeaksV1), Qwen36Error> {
+        let (logits, rows) = self.forward_token_probed(cache, token_id, position)?;
+        let peaks = rows.into_iter().map(|(n, r)| (n, r.iter().map(|v| v.abs()).max().unwrap_or(0))).collect();
+        Ok((logits, peaks))
+    }
+
+    /// The same pass, plus the residual stream after every arm and every mixture.
+    ///
+    /// A quantized graph that runs and says nothing sensible is a graph with a scale error, and a
+    /// scale error is invisible in the logits — it looks like a different model. What makes it
+    /// findable is comparing the stream's MAGNITUDE against the reference's at the same site: the
+    /// stage where the ratio stops being one is the stage that is wrong.
+    pub fn forward_token_probed(
+        &self,
+        cache: &mut Qwen36Cache,
+        token_id: usize,
+        position: usize,
+    ) -> Result<(Vec<i32>, Qwen36ProbeV1), Qwen36Error> {
         let a = self.artifact;
         let s = &a.shape;
         let d = s.d_model;
@@ -345,39 +380,64 @@ impl<'a> Qwen36Engine<'a> {
 
         let embed = a.tensor_sized("token_embd.weight", s.vocab * d)?;
         let row: Vec<i32> = embed[token_id * d..(token_id + 1) * d].iter().map(|c| *c as i32).collect();
-        let mut h = a16_requant(&row, &a.params_sized("embed_lift.a16", d)?).map_err(refuse("embed_lift"))?;
+        // **The lift is per TOKEN, not per class.** One scale for a 248,320-row embedding table is
+        // one scale for its outliers, and a prompt's ordinary rows then land on a fraction of the
+        // int8 range — the resolution the whole forward pass starts from. A store with one row is
+        // still read (a fixture has one); a store with `vocab` rows is indexed by the token.
+        let lift = a.param_rows("embed_lift.a16")?;
+        let p = if lift.len() == 1 {
+            lift[0]
+        } else {
+            *lift.get(token_id).ok_or_else(|| Qwen36Error::BadParams("embed_lift.a16 is shorter than the vocabulary".into()))?
+        };
+        let mut h = a16_requant(&row, &vec![p; d]).map_err(refuse("embed_lift"))?;
+        let mut probe: Vec<(String, Vec<i32>)> = vec![("embed".to_string(), h.clone())];
 
         for li in 0..s.n_layers() {
             let n = |suffix: &str| format!("blk.{li}.{suffix}");
             // ---- the arm ------------------------------------------------------------------
             let unit = a16_rms_norm(&h, s.eps_q).map_err(refuse("attn_norm"))?;
             let normed = a16_requant(&unit, &a.params_sized(&n("attn_norm.a16"), d)?).map_err(refuse("attn_norm_req"))?;
+            probe.push((n("attn_norm"), normed.clone()));
             let delta = match s.layer_types[li] {
-                Qwen36LayerKind::LinearAttention => self.linear_arm(cache, li, &normed)?,
+                Qwen36LayerKind::LinearAttention => self.linear_arm(cache, li, &normed, &mut probe)?,
                 Qwen36LayerKind::FullAttention => self.full_arm(cache, li, &normed, position)?,
             };
+            probe.push((n("linear_out"), delta.clone()));
             let aligned = a16_requant(&h, &a.params_sized(&n("attn_align.a16"), d)?).map_err(refuse("attn_align"))?;
             let sum = a16_add_elem(&aligned, &delta).map_err(refuse("attn_add"))?;
             h = a16_requant(&sum, &a.params_sized(&n("attn_residual.a16"), d)?).map_err(refuse("attn_res"))?;
+            probe.push((n("attn_residual"), h.clone()));
 
             // ---- the mixture ---------------------------------------------------------------
             let unit = a16_rms_norm(&h, s.eps_q).map_err(refuse("ffn_norm"))?;
             let normed = a16_requant(&unit, &a.params_sized(&n("ffn_norm.a16"), d)?).map_err(refuse("ffn_norm_req"))?;
-            let delta = self.moe(li, &normed)?;
+            probe.push((n("ffn_norm"), normed.clone()));
+            let delta = self.moe(li, &normed, &mut probe)?;
             let aligned = a16_requant(&h, &a.params_sized(&n("ffn_align.a16"), d)?).map_err(refuse("ffn_align"))?;
             let sum = a16_add_elem(&aligned, &delta).map_err(refuse("ffn_add"))?;
             h = a16_requant(&sum, &a.params_sized(&n("ffn_residual.a16"), d)?).map_err(refuse("ffn_res"))?;
+            probe.push((n("ffn_residual"), h.clone()));
         }
 
         let unit = a16_rms_norm(&h, s.eps_q).map_err(refuse("final_norm"))?;
         let fin = a16_requant(&unit, &a.params_sized("final_norm.a16", d)?).map_err(refuse("final_req"))?;
+        probe.push(("final_norm".to_string(), fin.clone()));
         let unembed = a.tensor_sized("output.weight", s.vocab * d)?;
-        a16_matmul_requant(unembed, &fin, &a.params_sized("output.weight.a16", s.vocab)?).map_err(refuse("logits"))
+        let logits = a16_matmul_requant(unembed, &fin, &a.params_sized("output.weight.a16", s.vocab)?).map_err(refuse("logits"))?;
+        probe.push(("logits".to_string(), logits.clone()));
+        Ok((logits, probe))
     }
 
     /// **The GatedDeltaNet arm.** Convolve, normalize the key, run the recurrence, gate the
     /// output, project out. Four nodes plus the projections, none of them fused.
-    fn linear_arm(&self, cache: &mut Qwen36Cache, li: usize, normed: &[i32]) -> Result<Vec<i32>, Qwen36Error> {
+    fn linear_arm(
+        &self,
+        cache: &mut Qwen36Cache,
+        li: usize,
+        normed: &[i32],
+        probe: &mut Vec<(String, Vec<i32>)>,
+    ) -> Result<Vec<i32>, Qwen36Error> {
         let a = self.artifact;
         let s = &a.shape;
         let (d, dk, dv, hd) = (s.d_model, s.linear_k_dim(), s.linear_v_dim(), s.linear_head_dim);
@@ -404,7 +464,11 @@ impl<'a> Qwen36Engine<'a> {
             &a.params_sized(&n("linear_v.weight.a16"), dv)?,
         )
         .map_err(refuse("linear_v"))?;
-        let z = a16_matmul_requant(
+        // The gate reaches `silu` and therefore has to arrive in Q[`K`], not on the code grid —
+        // `MatMulRescale` rather than `MatMulRequant`, for the same reason the FFN's gate uses it.
+        // With `Requant` the row clamps at the code rail and `silu` sees a value four orders down,
+        // which is what the probe showed: a gate of 2 where the reference says 6.9.
+        let z = a16_matmul_rescale(
             a.tensor_sized(&n("linear_z.weight"), dv * d)?,
             normed,
             &a.params_sized(&n("linear_z.weight.a16"), dv)?,
@@ -434,6 +498,8 @@ impl<'a> Qwen36Engine<'a> {
         let activated =
             a16_requant(&silu(&convolved), &a.params_sized(&n("linear_conv_act.a16"), width)?).map_err(refuse("conv_silu"))?;
 
+        probe.push((n("linear_qkv"), q.iter().chain(&k).chain(&v).copied().collect()));
+        probe.push((n("linear_conv"), activated.clone()));
         let (qc, rest) = activated.split_at(dk);
         let (kc, vc) = rest.split_at(dk);
 
@@ -474,13 +540,30 @@ impl<'a> Qwen36Engine<'a> {
             out.extend(head_out);
         }
 
-        // The output gate: RMS-normalized, then multiplied by `silu(z)` — a gate on the value
-        // stream rather than on the logits, so it is `MulElem` and not a softmax.
-        let unit = a16_rms_norm(&out, s.eps_q).map_err(refuse("gdn_norm"))?;
-        let normed_out = a16_requant(&unit, &a.params_sized(&n("linear_norm.a16"), dv)?).map_err(refuse("gdn_norm_req"))?;
+        probe.push((n("linear_state_out"), out.clone()));
+        probe.push((n("linear_state"), cache.gdn[li].iter().flat_map(|st| st.s.iter()).copied().collect()));
+        // The output gate: RMS-normalized PER HEAD, then multiplied by `silu(z)` — a gate on the
+        // value stream rather than on the logits, so it is `MulElem` and not a softmax.
+        //
+        // **Per head.** `ssm_norm.weight` is `[head_dim]`, which is the model saying so, and a norm
+        // over the whole 4,096-wide row divides all thirty-two heads by one shared RMS. The
+        // magnitudes barely move — that is what a norm does — so this does not show up as a scale
+        // error; it shows up as the arm computing a different function, which is exactly what a
+        // rank correlation of 0.15 against the reference looked like.
+        let norm_params = a.params_sized(&n("linear_norm.a16"), dv)?;
+        let mut normed_out = Vec::with_capacity(dv);
+        for vh in 0..s.linear_v_heads {
+            let head = &out[vh * hd..(vh + 1) * hd];
+            let unit = a16_rms_norm(head, s.eps_q).map_err(refuse("gdn_norm"))?;
+            normed_out.extend(a16_requant(&unit, &norm_params[vh * hd..(vh + 1) * hd]).map_err(refuse("gdn_norm_req"))?);
+        }
         let gate = a16_requant(&silu(&z), &a.params_sized(&n("linear_gate.a16"), dv)?).map_err(refuse("gdn_gate"))?;
+        probe.push((n("linear_z"), z.clone()));
+        probe.push((n("linear_normed"), normed_out.clone()));
+        probe.push((n("linear_gate_act"), gate.clone()));
         let gated = a16_mul_elem(&normed_out, &gate).map_err(refuse("gdn_mul"))?;
         let gated = a16_requant(&gated, &a.params_sized(&n("linear_gated.a16"), dv)?).map_err(refuse("gdn_gated"))?;
+        probe.push((n("linear_gated"), gated.clone()));
 
         a16_matmul_requant(
             a.tensor_sized(&n("linear_o.weight"), s.d_model * dv)?,
@@ -587,7 +670,7 @@ impl<'a> Qwen36Engine<'a> {
     /// The experts are run one at a time rather than gathered into a dense matmul: at 8 of 256 the
     /// gather is 97 % waste, and the whole point of the architecture is that only the chosen
     /// weights are read. That is also what makes the MoE the part a memory map serves best.
-    fn moe(&self, li: usize, normed: &[i32]) -> Result<Vec<i32>, Qwen36Error> {
+    fn moe(&self, li: usize, normed: &[i32], probe: &mut Vec<(String, Vec<i32>)>) -> Result<Vec<i32>, Qwen36Error> {
         let a = self.artifact;
         let s = &a.shape;
         let d = s.d_model;
@@ -603,7 +686,13 @@ impl<'a> Qwen36Engine<'a> {
         // defined on what the class commits to and a wider intermediate would let two
         // implementations disagree about a tie that the committed row does not have.
         let router_codes = a16_requant(&router, &a.params_sized(&n("ffn_router.a16"), s.n_experts)?).map_err(refuse("router_req"))?;
-        let routed = q36_router_topk(&router_codes, s.experts_per_token, s.shape_router_up(s)).map_err(refuse("router_topk"))?;
+        // **The widening is class data per layer, not a shape constant.** `softmax_shifted` needs
+        // to know how far below Q[`K`] the committed router codes sit, and that is a property of
+        // the layer's measured logit range. Reading it from the shape used a single number for
+        // forty layers, which is a temperature error of up to a factor of sixty-four — enough to
+        // make the router select nearly uniformly or nearly one-hot.
+        let up = a.scalar(&n("ffn_router_up.a16"))?.clamp(0, 62) as u8;
+        let routed = q36_router_topk(&router_codes, s.experts_per_token, up).map_err(refuse("router_topk"))?;
 
         let mut outputs = Vec::with_capacity(routed.len() * d);
         let mut weights = Vec::with_capacity(routed.len());
@@ -612,7 +701,10 @@ impl<'a> Qwen36Engine<'a> {
             outputs.extend(self.expert(li, e, normed, s.moe_dim, "expert")?);
             weights.push(r.weight_q);
         }
+        probe.push((n("ffn_router"), router_codes.clone()));
+        probe.push((n("ffn_expert_out"), outputs.clone()));
         let combined = q36_moe_combine(&outputs, &weights, d, a.one_param(&n("ffn_combine.a16"))?).map_err(refuse("moe_combine"))?;
+        probe.push((n("ffn_routed"), combined.clone()));
 
         // The shared expert, always on, behind its own scalar gate.
         let shared = self.expert(li, usize::MAX, normed, s.shared_dim, "shared")?;
@@ -625,8 +717,11 @@ impl<'a> Qwen36Engine<'a> {
         let g = q36_sigmoid_gate(&shared_gate_raw)[0];
         let shared_gated =
             q36_gate_apply(&shared, &vec![g; d], a.one_param(&n("ffn_shared_gated.a16"))?).map_err(refuse("shared_apply"))?;
+        probe.push((n("ffn_shared_out"), shared.clone()));
         let sum = a16_add_elem(&combined, &shared_gated).map_err(refuse("moe_add"))?;
-        a16_requant(&sum, &a.params_sized(&n("ffn_moe_out.a16"), d)?).map_err(refuse("moe_out"))
+        let out = a16_requant(&sum, &a.params_sized(&n("ffn_moe_out.a16"), d)?).map_err(refuse("moe_out"))?;
+        probe.push((n("ffn_moe_out"), out.clone()));
+        Ok(out)
     }
 
     /// One SwiGLU expert. `which` is the expert index, or `usize::MAX` for the shared one, which
@@ -665,12 +760,6 @@ impl<'a> Qwen36Engine<'a> {
             &a.params_sized(&format!("{base}_down.weight.a16"), d)?,
         )
         .map_err(refuse("expert_down"))
-    }
-}
-
-impl Qwen36ShapeV1 {
-    fn shape_router_up(&self, _s: &Qwen36ShapeV1) -> u8 {
-        self.router_up_bits
     }
 }
 
@@ -1122,6 +1211,8 @@ mod tests {
                 .with_tensor(n("ffn_router.weight"), weights(shape.n_experts * d))
                 .with_params(n("ffn_router.weight.a16"), &[projection(d)])
                 .with_params(n("ffn_router.a16"), &[unity])
+                // The router's softmax widening, class data per layer rather than a shape constant.
+                .with_params(n("ffn_router_up.a16"), &[A16QuantParams { multiplier: 1, shift: 0, zero: 20 }])
                 .with_params(n("ffn_combine.a16"), &[A16QuantParams { multiplier: 1, shift: 24, zero: 0 }])
                 .with_tensor(n("ffn_shared_gate.weight"), weights(d))
                 .with_params(n("ffn_shared_gate.weight.a16"), &[projection(d)])

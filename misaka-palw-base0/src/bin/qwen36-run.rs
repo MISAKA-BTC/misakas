@@ -13,6 +13,7 @@
 
 use misaka_palw_base0::engine::argmax_lowest;
 use misaka_palw_base0::qwen36::{Qwen36Cache, Qwen36Engine, open_artifact};
+use misaka_palw_base0::qwen36_reference::qwen36_score_fidelity;
 
 fn die(message: String) -> ! {
     eprintln!("qwen36-run: {message}");
@@ -67,6 +68,124 @@ fn main() {
         logits = engine.forward_token(&mut cache, next, position).unwrap_or_else(|e| die(format!("decode at {position}: {e}")));
     }
     let decode = decode_started.elapsed();
+
+    // **The fidelity check.** A calibrated class is one whose logits rank the same tokens the
+    // unquantized model does, and only a comparison against the reference says whether they do.
+    if let Some(path) = flag(&args, "--reference") {
+        let bytes = std::fs::read(path).unwrap_or_else(|e| die(format!("{path}: {e}")));
+        let mut i = 0usize;
+        let u64_at = |i: &mut usize| -> u64 {
+            let v = u64::from_le_bytes(bytes[*i..*i + 8].try_into().expect("8"));
+            *i += 8;
+            v
+        };
+        let rows = u64_at(&mut i) as usize;
+        let mut reference = Vec::with_capacity(rows);
+        for _ in 0..rows {
+            let n = u64_at(&mut i) as usize;
+            reference
+                .push(bytes[i..i + n * 4].chunks_exact(4).map(|c| f32::from_le_bytes(c.try_into().expect("4"))).collect::<Vec<f32>>());
+            i += n * 4;
+        }
+        // Re-run the prompt keeping every row, since the decode loop above kept only the last.
+        let mut fresh = Qwen36Cache::new(shape);
+        let mut integer = Vec::with_capacity(tokens.len());
+        for (position, token) in tokens.iter().enumerate() {
+            integer.push(
+                engine.forward_token(&mut fresh, *token, position).unwrap_or_else(|e| die(format!("scoring at {position}: {e}"))),
+            );
+        }
+        let scored = qwen36_score_fidelity(&reference, &integer);
+        println!("fidelity vs the f32 reference");
+        println!("  top-1 agree     {}/{}", scored.top1_agree, scored.positions);
+        println!("  top-5 contains  {}/{}", scored.top5_contains, scored.positions);
+        println!("  rank corr (100) {:.4}", scored.rank_correlation);
+        println!("  cosine          {:.4}", scored.cosine);
+        println!("  FAITHFUL        {}", scored.is_faithful());
+    }
+
+    // **Magnitude, site by site.** A scale error is invisible in the logits — it looks like a
+    // different model — and shows immediately as a stream whose peak is a factor away from the
+    // reference's at the same place.
+    if let Some(path) = flag(&args, "--sites") {
+        let text = std::fs::read_to_string(path).unwrap_or_else(|e| die(format!("{path}: {e}")));
+        let mut reference: std::collections::BTreeMap<&str, (f64, i32)> = std::collections::BTreeMap::new();
+        for line in text.lines() {
+            let f: Vec<&str> = line.split('\t').collect();
+            if f.len() == 4 {
+                reference.insert(f[0], (f[1].parse().unwrap_or(0.0), f[3].parse().unwrap_or(0)));
+            }
+        }
+        // Across ALL positions, because the reference's absmax is: comparing one position's peak
+        // against every position's makes a healthy site look crushed.
+        let mut fresh = Qwen36Cache::new(shape);
+        let mut probe: Vec<(String, i32)> = Vec::new();
+        for (position, token) in tokens.iter().enumerate() {
+            let (_, p) = engine.forward_token_peaks(&mut fresh, *token, position).unwrap_or_else(|e| die(format!("probe: {e}")));
+            if probe.is_empty() {
+                probe = p;
+            } else {
+                for (slot, (_, peak)) in probe.iter_mut().zip(&p) {
+                    slot.1 = slot.1.max(*peak);
+                }
+            }
+        }
+        println!("site                                   int-peak  ref-absmax    e   int/ref");
+        for (name, peak) in &probe {
+            let (absmax, e) = reference.get(name.as_str()).copied().unwrap_or((0.0, 0));
+            let value = *peak as f64 / 2f64.powi(e);
+            let ratio = if absmax > 0.0 { value / absmax } else { 0.0 };
+            println!("{name:38} {peak:8}  {absmax:.3e}  {e:3}   {ratio:.3}");
+        }
+    }
+
+    // **Direction, site by site.** A cosine that is one at a site and halved at the next names
+    // the stage whose computation is wrong; a magnitude cannot, because a wrong function of the
+    // right size looks healthy.
+    if let Some(path) = flag(&args, "--rows") {
+        let bytes = std::fs::read(path).unwrap_or_else(|e| die(format!("{path}: {e}")));
+        let mut i = 0usize;
+        let u64_at = |i: &mut usize| -> u64 {
+            let v = u64::from_le_bytes(bytes[*i..*i + 8].try_into().expect("8"));
+            *i += 8;
+            v
+        };
+        let n = u64_at(&mut i) as usize;
+        let mut reference: std::collections::BTreeMap<String, Vec<f32>> = std::collections::BTreeMap::new();
+        for _ in 0..n {
+            let len = u64_at(&mut i) as usize;
+            let name = String::from_utf8_lossy(&bytes[i..i + len]).into_owned();
+            i += len;
+            let m = u64_at(&mut i) as usize;
+            let row = bytes[i..i + m * 4].chunks_exact(4).map(|c| f32::from_le_bytes(c.try_into().expect("4"))).collect();
+            i += m * 4;
+            reference.insert(name, row);
+        }
+        let mut fresh = Qwen36Cache::new(shape);
+        let mut rows: Vec<(String, Vec<i32>)> = Vec::new();
+        for (position, token) in tokens.iter().enumerate() {
+            let (_, r) = engine.forward_token_probed(&mut fresh, *token, position).unwrap_or_else(|e| die(format!("rows: {e}")));
+            rows = r;
+            let _ = position;
+        }
+        println!("site                                    cosine   len");
+        for (name, row) in &rows {
+            let Some(r) = reference.get(name) else { continue };
+            if r.len() != row.len() {
+                println!("{name:38} LEN {} vs {}", row.len(), r.len());
+                continue;
+            }
+            let (mut dot, mut na, mut nb) = (0f64, 0f64, 0f64);
+            for (x, y) in r.iter().zip(row) {
+                let (x, y) = (*x as f64, *y as f64);
+                dot += x * y;
+                na += x * x;
+                nb += y * y;
+            }
+            let cos = if na > 0.0 && nb > 0.0 { dot / (na.sqrt() * nb.sqrt()) } else { 0.0 };
+            println!("{name:38} {cos:8.4}  {}", row.len());
+        }
+    }
 
     let filled = cache.gdn.iter().flatten().filter(|s| s.s.iter().any(|v| *v != 0)).count();
     let heads: usize = cache.gdn.iter().map(|l| l.len()).sum();

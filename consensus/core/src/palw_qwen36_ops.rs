@@ -473,9 +473,15 @@ pub fn q36_l2_norm(x: &[i32]) -> Result<Vec<i32>, PalwQwen36OpError> {
 /// there is no reduction across channels and no accumulator to bound beyond one lane's four
 /// products.
 ///
-/// `history` is the channel-major window `[t−3, t−2, t−1, t]` — the caller keeps it, because the
+/// `window` is the channel-major history `[t−3, t−2, t−1, t]` — the caller keeps it, because the
 /// runtime's cache is the runtime's problem and an op that owned a buffer could not be replayed
 /// from an oracle.
+///
+/// **`taps` is `[channel][tap]`, not `[tap][channel]`.** That is the layout the checkpoint stores
+/// (`ssm_conv1d.weight` is `[4, 8192]`, which in GGUF's fastest-varying-first order is 8,192 rows
+/// of four) and the layout a per-channel quantization produces. The first version indexed it the
+/// other way; nothing errored, the convolution simply computed a different function, and it
+/// surfaced as an activation 2.4× past what the reference said the site reaches.
 pub fn q36_ssm_conv(window: &[i32], taps: &[i32], channels: usize, params: &[A16QuantParams]) -> Result<Vec<i32>, PalwQwen36OpError> {
     if channels == 0 || window.len() != 4 * channels || taps.len() != 4 * channels {
         return Err(PalwQwen36OpError::LengthMismatch { a: window.len(), b: 4 * channels });
@@ -491,7 +497,7 @@ pub fn q36_ssm_conv(window: &[i32], taps: &[i32], channels: usize, params: &[A16
     // one shared scale would give the quiet channels the loud ones' resolution.
     Ok((0..channels)
         .map(|c| {
-            let acc: i64 = (0..4).map(|t| window[t * channels + c] as i64 * taps[t * channels + c] as i64).sum();
+            let acc: i64 = (0..4).map(|t| window[t * channels + c] as i64 * taps[c * 4 + t] as i64).sum();
             let p = params[c];
             a16_scale_round(acc, p.multiplier, p.shift).saturating_add(p.zero).clamp(i32::MIN as i64, i32::MAX as i64) as i32
         })

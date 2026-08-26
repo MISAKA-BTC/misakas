@@ -80,6 +80,41 @@ pub fn triple(x: f64) -> A16QuantParams {
     A16QuantParams { multiplier, shift, zero: 0 }
 }
 
+/// `(multiplier, shift)` with the mantissa normalized into `bits` rather than into all 62.
+///
+/// **The recurrence's narrowings need this and the rest do not.** Every other site narrows through
+/// `a16_scale_round`, which widens to `i128` and does not care how large the multiplier is. The
+/// state's two narrowings are `i64` — a decay touches `d_v · d_k` lanes per head and `i128` there
+/// is the whole token — so their multiplier is bounded by `QWEN36_STATE_MULT_MAX`, and a triple
+/// built by [`mul_shift`] carries about 2^62 and is refused.
+///
+/// Found by running a calibrated four-layer conversion: the engine refused at the first
+/// GatedDeltaNet head with the bound's own error, which is the refusal doing its job.
+pub fn mul_shift_bounded(x: f64, bits: u32) -> (i64, u8) {
+    if !x.is_finite() || x == 0.0 {
+        return (0, 0);
+    }
+    let cap = (1u64 << bits) as f64;
+    let mut shift = 0i32;
+    let mut v = x.abs();
+    while v < cap / 2.0 && shift < 62 {
+        v *= 2.0;
+        shift += 1;
+    }
+    while v >= cap && shift > 0 {
+        v /= 2.0;
+        shift -= 1;
+    }
+    let m = v.round() as i64;
+    if x < 0.0 { (-m, shift as u8) } else { (m, shift as u8) }
+}
+
+/// A triple whose multiplier fits the recurrence's `i64` bound.
+pub fn state_triple(x: f64) -> A16QuantParams {
+    let (multiplier, shift) = mul_shift_bounded(x, 30);
+    A16QuantParams { multiplier, shift, zero: 0 }
+}
+
 /// **A projection's per-channel narrowing.**
 ///
 /// `acc_c = Σ (W_ci / s_c) · (X_i · 2^e_in) = (2^e_in / s_c) · Out_c`, and the wanted code is
@@ -141,24 +176,24 @@ pub fn router_params(row_scales: &[f64], e_in: i32, absmax: f64) -> (Vec<A16Quan
     (projection_params(row_scales, e_in, e_router), rescale_params(e_router, e_router), softmax_up_bits(e_router))
 }
 
-/// **The gated delta rule's three narrowings**, from the state's own exponent.
+/// **The gated delta rule's three narrowings, from the state's MEASURED exponent.**
 ///
-/// The state carries `state_bits` above the value scale, and the bound that sets it is
-/// `‖S‖ ≤ max‖v‖ · β / (1 − decay)` — the contraction argument from ADR-0052 Decision E, which is
-/// where the number comes from rather than a guess.
-pub fn gdn_state_bits(decay_max: f64, beta_max: f64) -> u8 {
-    let growth = (beta_max / (1.0 - decay_max.min(0.999_999)).max(1e-6)).max(1.0);
-    (growth.log2().ceil() as i32).clamp(1, 24) as u8
-}
-
-/// `(read, write, out)` for one head, given the value scale's exponent and the state's extra bits.
+/// The first version derived the state's width from ADR-0052's contraction bound,
+/// `‖S‖ ≤ max‖v‖ · β / (1 − decay)`. That bound is true and it is the wrong number to build a
+/// scale from: a single head whose gate sits at `decay ≈ 1` sends it to a million, the state's
+/// grid is then a million times finer than it needs to be, and the values that actually occur —
+/// measured at 2.6 where the bound says 10^6 — saturate the `i32` rail on the first token. The
+/// bound says the recurrence is stable. What the scale needs is what the state actually reaches.
 ///
-/// * `read`: `S·k` is `(code · 2^bits) × Q15` → the value code scale, so `2^-(15 + bits)`.
-/// * `write`: `u ⊗ k` is `code × Q15` → the state scale, so `2^-(15 − bits)`.
-/// * `out`: like `read`, into the output site's exponent.
-pub fn gdn_params(state_bits: u8, e_value: i32, e_out: i32) -> (A16QuantParams, A16QuantParams, A16QuantParams) {
-    let bits = state_bits as i32;
-    (triple(2f64.powi(-(15 + bits))), triple(2f64.powi(-(15 - bits))), triple(2f64.powi(e_out - e_value - 15 - bits)))
+/// * `read`: `S·k` is `(value · 2^e_state) × Q15` → the value code scale, so `2^(e_value − e_state − 15)`.
+/// * `write`: `u ⊗ k` is `(code at e_value) × Q15` → the state scale, so `2^(e_state − e_value − 15)`.
+/// * `out`: `S·q` likewise, into the output site's exponent.
+pub fn gdn_params(e_state: i32, e_value: i32, e_out: i32) -> (A16QuantParams, A16QuantParams, A16QuantParams) {
+    (
+        state_triple(2f64.powi(e_value - e_state - 15)),
+        state_triple(2f64.powi(e_state - e_value - 15)),
+        state_triple(2f64.powi(e_out - e_state - 15)),
+    )
 }
 
 /// The decay exponent `c = exp(A_log)`, carried in a triple's `zero` at Q[`K`].
@@ -242,16 +277,43 @@ mod tests {
         }
     }
 
-    /// The state's extra bits come from the contraction bound, not from a guess.
+    /// **The recurrence's multipliers must fit its `i64` bound.** `mul_shift` normalizes into all
+    /// 62 bits, which the state's narrowings refuse — and the refusal is what caught it, at the
+    /// first GatedDeltaNet head of the first calibrated conversion.
     #[test]
-    fn the_state_width_follows_the_contraction_bound() {
-        // A gate that barely decays needs many bits; one that decays fast needs few.
-        assert!(gdn_state_bits(0.999, 1.0) > gdn_state_bits(0.5, 1.0));
-        // β/(1−decay) = 1/0.01 = 100 → ceil(log2 100) = 7.
-        assert_eq!(gdn_state_bits(0.99, 1.0), 7);
-        // And it is bounded on both ends rather than producing a shift the wire cannot carry.
-        assert!(gdn_state_bits(1.0, 1.0) <= 24);
-        assert!(gdn_state_bits(0.0, 0.0) >= 1);
+    fn the_state_triples_fit_the_recurrence_bound() {
+        let bound = kaspa_consensus_core::palw_qwen36_ops::QWEN36_STATE_MULT_MAX;
+        for (e_state, e_value, e_out) in [(0i32, 0i32, 0i32), (12, 10, 14), (20, -5, 30), (9, 20, -3)] {
+            let (read, write, out) = gdn_params(e_state, e_value, e_out);
+            for p in [read, write, out] {
+                assert!(p.multiplier.abs() <= bound, "multiplier {} is past the bound {bound}", p.multiplier);
+                assert!(p.shift <= 62);
+            }
+        }
+        // And the bounded form still reproduces the gain it was given.
+        for x in [1.0f64, 2f64.powi(-23), 2f64.powi(-7), 3.5e-9] {
+            let (m, s) = mul_shift_bounded(x, 30);
+            let back = m as f64 / 2f64.powi(s as i32);
+            assert!((back - x).abs() / x < 1e-8, "{x} came back as {back}");
+        }
+    }
+
+    /// **The state's exponent is measured, not derived from the bound.** A head whose gate sits at
+    /// `decay ≈ 1` sends the contraction bound to a million; the state's grid becomes a million
+    /// times finer than it needs to be and the values that actually occur saturate on the first
+    /// token. This is what that looked like and what fixed it.
+    #[test]
+    fn the_state_exponent_holds_what_the_state_reaches() {
+        // A state that reaches 2.6 with values at 3.4: the read/write pair must be inverses up to
+        // the Q15 the key carries.
+        let (e_state, e_value, e_out) = (site_exponent(2.6), site_exponent(3.4), site_exponent(0.58));
+        let (read, write, _) = gdn_params(e_state, e_value, e_out);
+        let g = |p: &A16QuantParams| p.multiplier as f64 / 2f64.powi(p.shift as i32);
+        // read · write = 2^-30 — the two Q15 the key contributes on the way in and on the way out.
+        assert!((g(&read) * g(&write) - 2f64.powi(-30)).abs() / 2f64.powi(-30) < 1e-6);
+        // And the state's rail holds the value it was measured at, with the headroom the exponent
+        // was chosen for.
+        assert!(2.6 * 2f64.powi(e_state) < i32::MAX as f64);
     }
 
     /// The softmax widening is the distance from the logit codes up to Q[K], clamped to the op's

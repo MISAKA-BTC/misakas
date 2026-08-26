@@ -80,11 +80,18 @@ pub struct Qwen36CalibrationV1 {
     pub sites: BTreeMap<String, SiteRangeV1>,
     /// The logit rows the reference produced, for scoring the integer class against.
     pub logits: Vec<Vec<f32>>,
+    /// The LAST position's row at each named site. Magnitudes say whether a scale is right;
+    /// only the rows say whether the computation is. A cosine that is fine at one site and halved
+    /// at the next names the stage that is wrong, which no aggregate can.
+    pub rows: BTreeMap<String, Vec<f32>>,
 }
 
 impl Qwen36CalibrationV1 {
     fn observe(&mut self, site: &str, values: &[f32]) {
         self.sites.entry(site.to_string()).or_default().observe(values);
+        // Overwritten per position, so what survives is the last one — the same position the
+        // integer probe reports.
+        self.rows.insert(site.to_string(), values.to_vec());
     }
 }
 
@@ -219,7 +226,11 @@ pub fn reference_linear_layer(
         window.push(qkv);
         let mut convolved = vec![0f32; width];
         for (c, slot) in convolved.iter_mut().enumerate() {
-            *slot = (0..shape.conv_kernel).map(|t| window[t][c] * w.conv[t * width + c]).sum();
+            // `[channel][tap]`, matching the checkpoint: `ssm_conv1d.weight` is `[4, 8192]`, which
+            // in GGUF's fastest-varying-first order is 8,192 rows of four. Reading it the other way
+            // computes a different convolution, and the reference has to compute the one the class
+            // computes or the calibration measures the wrong ranges.
+            *slot = (0..shape.conv_kernel).map(|t| window[t][c] * w.conv[c * shape.conv_kernel + t]).sum();
         }
         let activated = silu(&convolved);
         calibration.observe(&g("linear_conv"), &activated);
@@ -258,14 +269,19 @@ pub fn reference_linear_layer(
         }
         calibration.observe(&g("linear_state_out"), &out);
 
-        let mut gated = Vec::with_capacity(dv);
+        // **Three sites, not one.** The head-wise norm CHANGES the magnitude — that is what a norm
+        // is — so the value that reaches the multiply is not the state output and cannot ride its
+        // exponent. Placing it there put a value of 22 on a grid whose rail is 2, and the whole
+        // arm's contribution was crushed by an order of magnitude. The gate is separate for the
+        // same reason: `silu(z)` is unbounded above, so a probability's exponent saturates it.
+        let mut normed_out = Vec::with_capacity(dv);
         for vh in 0..shape.linear_v_heads {
-            gated.extend(rms_norm(&out[vh * hd..(vh + 1) * hd], w.ssm_norm, eps));
+            normed_out.extend(rms_norm(&out[vh * hd..(vh + 1) * hd], w.ssm_norm, eps));
         }
+        calibration.observe(&g("linear_normed"), &normed_out);
         let z_act = silu(&z);
-        for (a, b) in gated.iter_mut().zip(&z_act) {
-            *a *= b;
-        }
+        calibration.observe(&g("linear_gate_act"), &z_act);
+        let gated: Vec<f32> = normed_out.iter().zip(&z_act).map(|(a, b)| a * b).collect();
         calibration.observe(&g("linear_gated"), &gated);
 
         let delta = matmul(w.out, &gated, d);
@@ -413,6 +429,7 @@ pub fn reference_moe_layer(
         let act: Vec<f32> = silu(&s_gate).iter().zip(&s_up).map(|(a, b)| a * b).collect();
         calibration.observe(&g("ffn_shared_gated"), &act);
         let shared = matmul(w.shared_down, &act, d);
+        calibration.observe(&g("ffn_shared_out"), &shared);
         for (slot, v) in out.iter_mut().zip(&shared) {
             *slot += sg * v;
         }
@@ -461,6 +478,10 @@ pub struct Qwen36FidelityV1 {
     pub top1_agree: usize,
     pub top5_contains: usize,
     pub rank_correlation: f64,
+    /// Cosine of the whole logit vector. It separates "the head is right and the top is noisy"
+    /// from "the model is computing something else": a rank correlation can be low for either
+    /// reason and a cosine near one rules the second out.
+    pub cosine: f64,
 }
 
 impl Qwen36FidelityV1 {
@@ -508,9 +529,21 @@ pub fn qwen36_score_fidelity(reference: &[Vec<f32>], integer: &[Vec<i32>]) -> Qw
             .sum();
         let rho = if n > 1.0 { 1.0 - 6.0 * d2 / (n * (n * n - 1.0)) } else { 1.0 };
         out.rank_correlation += rho;
+
+        let (mut dot, mut na, mut nb) = (0f64, 0f64, 0f64);
+        for (x, y) in r.iter().zip(i) {
+            let (x, y) = (*x as f64, *y as f64);
+            dot += x * y;
+            na += x * x;
+            nb += y * y;
+        }
+        if na > 0.0 && nb > 0.0 {
+            out.cosine += dot / (na.sqrt() * nb.sqrt());
+        }
     }
     if out.positions > 0 {
         out.rank_correlation /= out.positions as f64;
+        out.cosine /= out.positions as f64;
     }
     out
 }
