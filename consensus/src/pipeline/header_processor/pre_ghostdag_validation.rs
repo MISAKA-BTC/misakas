@@ -129,11 +129,19 @@ impl HeaderProcessor {
     /// header whose carriage decoded but was never checked against its own position is a solved
     /// PoW that can be re-announced elsewhere — audit P0-1, arriving through the new lanes.
     ///
-    /// The SIGNATURE is deliberately not verified here. Its cost is ~1 ms of ML-DSA per header,
-    /// and what it proves ("the carried key signed this claim") is only meaningful next to the
-    /// stateful fact that the carried key IS the named bond's key — which needs chain state. Both
-    /// live in the stateful admission (Unit C's consumers); here we do the free, position-bound
-    /// checks that let a peer discard a mis-announced header without touching state.
+    /// **The SIGNATURE is verified here, on both PALW lanes** — this paragraph used to say the
+    /// opposite, and the arms below have disagreed with it since launch blockers §5.
+    ///
+    /// The original reasoning was that a signature is only meaningful beside the stateful fact
+    /// that the carried key IS the named bond's key, so it belonged in Unit C's admission and the
+    /// ~1 ms of ML-DSA per header was not worth spending twice. That is true of what the signature
+    /// PROVES and false about what its absence COSTS. The proof-of-work pre-image excludes
+    /// `palw_commitment` while the block identity includes it, so an unverified signature is free
+    /// bytes inside the identity and outside the work: one solved block becomes unbounded distinct
+    /// blocks, each accepted, stored and relayed by every peer. The attempt lane was fixed; the
+    /// receipt lane was written afterwards from the paragraph rather than from the code, and
+    /// inherited the hole. Both are checked now, and the stateful admission checks the signature
+    /// again beside the bond — the two answer different questions and neither replaces the other.
     fn check_palw_carriage_stateless(&self, header: &Header) -> BlockProcessResult<()> {
         use kaspa_consensus_core::pow_layer0::{POW_ALGO_ID_PALW_COMMITTED_V2, POW_ALGO_ID_PALW_RECEIPT_V3};
         let network_domain = kaspa_consensus_core::palw_mode_v2::palw_network_domain_v2(&self.network_id);
@@ -173,6 +181,23 @@ impl HeaderProcessor {
                     .and_then(|envelope| {
                         envelope
                             .validate_stateless_v3(network_domain, pre_pow_hash, header.timestamp, header.nonce)
+                            .map_err(|e| e.to_string())?;
+                        // **The same signature, on the same relay path, for the same reason** — the
+                        // arm above learned this and this one was written without it.
+                        //
+                        // `validate_stateless_v3` checks the signature's LENGTH and recomputes the
+                        // challenge; it never verifies the bytes. The challenge commits to
+                        // `pre_pow_hash`, `timestamp` and `nonce` but not to the signature, and the
+                        // signature is not inside the spend id it signs — so flipping one byte of it
+                        // leaves the stateless check passing, the proof of work untouched, and the
+                        // block a different block. One solve, unbounded distinct valid blocks, each
+                        // one accepted, stored and relayed by every peer. That is verbatim the attack
+                        // the attempt lane documents ten lines above, and the receipt lane inherited
+                        // its shape without its fix.
+                        envelope
+                            .validate_signature_v3(|key, message, sig, context| {
+                                kaspa_txscript::verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false)
+                            })
                             .map_err(|e| e.to_string())
                     })
             }

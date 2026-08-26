@@ -4729,16 +4729,31 @@ impl VirtualStateProcessor {
         // beacon cannot be chosen by the party it decides for.
         let beacon = self.palw_beacon_fact_of_candidate(header.direct_parents()[0], slot).map_err(|e| e.to_string())?;
         let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2(self.network_id_bytes.as_slice());
-        kaspa_consensus_core::palw_fp_admission_v3::check_palw_receipt_spend_admission_v3(
+        // **The composed admission, which is what this site was always missing.**
+        //
+        // `network_domain` was computed here and thrown away by the `let _` below — the input the
+        // signature check needs, sitting one line from the call that never consumed it. The stateful
+        // half alone was being run, and its item 7 (`bond.pubkey != spend.producer_pubkey`) compares
+        // the bond's key against a field the block's author supplies. With no signature that
+        // comparison is not authority, it is a copy: anyone could name a bonded key they do not
+        // hold and spend that producer's certified quantum. `_full_v3` — documented as "the composed
+        // admission a wiring layer should call" and covered by three tests — had no non-test caller.
+        let pre_pow_hash = kaspa_consensus_core::hashing::header::pre_pow_hash_64(header);
+        kaspa_consensus_core::palw_fp_admission_v3::check_palw_receipt_spend_admission_full_v3(
             state,
             point,
+            network_domain,
+            pre_pow_hash,
+            header.timestamp,
+            header.nonce,
             freeprompt.receipt_maturity_daa(),
             freeprompt.receipt_use_window_daa(),
             &beacon,
             &envelope,
+            |key, message, sig, context| kaspa_txscript::verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false),
         )
         .map_err(|e| e.to_string())?;
-        let _ = (state_params, network_domain);
+        let _ = state_params;
         Ok(Some(envelope))
     }
 
