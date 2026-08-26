@@ -4537,7 +4537,15 @@ mod consensus_params_id_tests {
             // are different networks**, and they find out at the handshake rather than at
             // consensus, which is the direction to fail in. Landing it needs an RC re-mint; no
             // other preset moved, because no other preset carries a PALW class.
-            ("testnet-11", TESTNET11_PARAMS, "de94f93103a66fd9d0100c24f81f1e5e270c66e407ee2ed869cfa398df8f8e95"),
+            // Moved again by ADR-0053 withdrawing the second execution family. Two things inside
+            // the ruleset id changed: `min_class_panel` left the bundle — it was there so a Metal
+            // class could license with two seats, it sat AHEAD of the family dispatch, and it
+            // therefore lowered the licensing bar for deterministic classes on every preset that
+            // shipped it — and the class record lost `terms`, taking `PALW_STATE_V2_VERSION` from
+            // 7 to 8. Same handshake consequence as every move above, same remedy: this build and
+            // the one running on t11 are different networks and say so at the handshake. Testnet-11
+            // is the only preset that moves, being the only one that carries a PALW bundle.
+            ("testnet-11", TESTNET11_PARAMS, "5cefa8b83833a01f43de53bb35e00130aca31ae9662c9dee22c1fa7632988da3"),
             ("simnet", SIMNET_PARAMS, "135e88c69a659d3cf4b5ce8275953c7597b2c67b03d2a74b3d0696c5d0b703fa"),
             ("devnet", DEVNET_PARAMS, "42cc6be92506a14654cb676184e1416796dec682b15e93cb9c639e8e0d77efa5"),
         ]
