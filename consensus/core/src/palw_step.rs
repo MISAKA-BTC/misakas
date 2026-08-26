@@ -81,11 +81,17 @@ pub const PALW_STEP_MAX_LAYERS: u16 = 1024;
 /// Most nodes one layer template may declare.
 pub const PALW_STEP_MAX_NODES_PER_TABLE: usize = 64;
 /// Tile length bounds (elements per committed tile).
-/// Lowered 16 → 8 (2026-08-26): a projection reducing over 4,096 lanes cannot close under the
-/// 80 KiB carrier at tile 16 — its Decision-B opening alone is 64 KiB — and 8 is where the widest
-/// row a registered class carries fits with its evidence beside it. A floor, not a suggestion:
-/// existing profiles all sit at 16 or above and none moves.
-pub const PALW_STEP_MIN_TILE_LEN: u32 = 8;
+/// Lowered 16 → 8 → **4** (2026-08-26/27), each time by the same arithmetic: a step's Decision-B
+/// opening is `tile × in_w` bytes and the whole close must ride one ~80 KiB carrier, so the widest
+/// reduction a registered class performs sets the floor. 4,096 lanes needed 8; a dense SwiGLU's
+/// down projection reduces over **8,960** and needs 4 (35,840 bytes of weights, leaving room for
+/// the 8,960-lane input row beside them).
+///
+/// It is a floor, not a target: every profile derives its tiles from its own opening budget and
+/// clamps HERE, so lowering it permits finer tiles and forces none — the floor's and the hybrid
+/// class's geometries are unmoved by this change. The real protection against a class declaring
+/// tile 1 and exploding its own step space is the ladder gate, which is per class and measured.
+pub const PALW_STEP_MIN_TILE_LEN: u32 = 4;
 pub const PALW_STEP_MAX_TILE_LEN: u32 = 65_536;
 /// Bounds on the KV aux-chunk width (calls per chunk leaf); 0 disables the aux series.
 pub const PALW_STEP_MAX_KV_CHUNK_CALLS: u32 = 4096;

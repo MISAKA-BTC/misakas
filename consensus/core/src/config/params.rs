@@ -4714,7 +4714,12 @@ mod consensus_params_id_tests {
             // the old value and a node on this one are on different networks and find out at the
             // handshake, which is the direction to fail in; joining needs the re-mint the whole
             // day's work already forced.
-            ("testnet-11", TESTNET11_PARAMS, "71bcf0db1fe3f89247056ab16ec26ff322f4919a676f7a1a1259c9c2eaf4fee3"),
+            // Moved again by the A16 dense tier joining the COURT (2026-08-27): two kernels the tier
+            // had always performed and the catalog never named (its rotation and its elementwise
+            // product), and the tile floor down to 4 so an 8,960-lane reduction can close. The
+            // catalog root is inside the ruleset id, so teaching the court a new op moves the
+            // network — the same coordinated upgrade as every other move on this line.
+            ("testnet-11", TESTNET11_PARAMS, "6721a7b899c85a00ab3babafdc05111b4157359790e834381431aa54fa8448c7"),
             ("simnet", SIMNET_PARAMS, "135e88c69a659d3cf4b5ce8275953c7597b2c67b03d2a74b3d0696c5d0b703fa"),
             ("devnet", DEVNET_PARAMS, "42cc6be92506a14654cb676184e1416796dec682b15e93cb9c639e8e0d77efa5"),
         ]

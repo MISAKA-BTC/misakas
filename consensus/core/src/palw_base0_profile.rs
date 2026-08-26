@@ -50,7 +50,9 @@ use crate::palw_step::{
 };
 use crate::palw_step_refute::{
     KDESC_BASE0_ADD_ELEM, KDESC_BASE0_EMBED, KDESC_BASE0_MATMUL, KDESC_BASE0_MUL_ELEM, KDESC_BASE0_REQUANTIZE, KDESC_BASE0_RESCALE,
-    KDESC_BASE0_RMS_NORM, KDESC_BASE0_ROPE, KDESC_BASE0_SILU, KDESC_BASE0_SOFTMAX,
+    KDESC_A16_ADD_ELEM, KDESC_A16_ATTN_SCORES, KDESC_A16_ATTN_VALUES, KDESC_A16_EMBED, KDESC_A16_MATMUL_REQUANT,
+    KDESC_A16_MATMUL_RESCALE, KDESC_A16_MUL_ELEM, KDESC_A16_REQUANTIZE, KDESC_A16_RMS_NORM, KDESC_A16_ROPE, KDESC_A16_SOFTMAX,
+    KDESC_BASE0_RMS_NORM, KDESC_BASE0_ROPE, KDESC_BASE0_SILU, KDESC_BASE0_SOFTMAX, KDESC_Q36_SILU,
 };
 use crate::{Hash64, palw_step::PalwStepError};
 
@@ -124,6 +126,10 @@ pub enum Base0IrWidthV1 {
     /// concatenation, and which head a tile belongs to is `tile · tile_len / kv_len`. The step
     /// space grows to contain every head; nothing about how a step is named changes.
     KvPerHead,
+    /// **The head's width: the vocabulary.** A class whose unembedding is a registered tensor
+    /// needs this to declare its last step; the floor's post table was hand-written beside the IR
+    /// and never needed a name for it.
+    Vocab,
 }
 
 /// Where a step's operand comes from.
@@ -237,6 +243,81 @@ pub const BASE0_LAYER_IR: &[Base0IrNodeV1] = &[
 ];
 
 /// `const fn` so the table above reads as a list rather than as a struct literal thirty-six times.
+/// **The A16 tier's dense layer, in `engine_a16.rs`'s own order** — twenty-seven steps against
+/// [`BASE0_LAYER_IR`]'s thirty-seven, because W8A16 spends no step re-narrowing an activation to
+/// eight bits between every pair of matmuls.
+///
+/// # Why a dense class needs its own table rather than the floor's
+///
+/// The floor's IR describes `engine.rs`, whose activations are seven-bit codes. Static PTQ of a
+/// real checkpoint into that stream is where Qwen2.5's argmax degenerates to a constant — a
+/// measured result, not a suspicion (ADR-0053). `engine_a16` is the tier the quantization ladder
+/// said this architecture needs, and Qwen2.5-1.5B is FAITHFUL on it. Registering the floor's graph
+/// for a Qwen2.5 class therefore registers the wrong engine: the one that runs and does not work.
+///
+/// The differences from the floor's table are the tier's, and each is visible here:
+/// * one narrowing after each norm instead of one after every step (`a16_requant`);
+/// * the rotation is `a16_rope`, which narrows with its own rule rather than through a registered
+///   clamp, so it is [`KDESC_A16_ROPE`] and not the partial-rotary op;
+/// * the SwiGLU multiplies two CODE rows ([`KDESC_A16_MUL_ELEM`]), so `silu` is followed by one
+///   narrowing and the product by one more;
+/// * the attention reductions carry their scale in a registered triple instead of a separate
+///   `Scale` step.
+pub const QWEN25_A16_LAYER_IR: &[Base0IrNodeV1] = &[
+    // --- attention ---------------------------------------------------------------------------
+    n(PalwStepOpKindV1::RmsNorm, KDESC_A16_RMS_NORM, "", Hidden, &[LayerIn]),
+    n(PalwStepOpKindV1::MulElem, KDESC_A16_REQUANTIZE, "blk.{layer}.attn_norm.a16", Hidden, &[Step(0)]),
+    n(PalwStepOpKindV1::MatMulQuant, KDESC_A16_MATMUL_REQUANT, "blk.{layer}.attn_q.weight", Hidden, &[Step(1)]),
+    n(PalwStepOpKindV1::MatMulQuant, KDESC_A16_MATMUL_REQUANT, "blk.{layer}.attn_k.weight", KvDim, &[Step(1)]),
+    // V is the value cache's write — unrotated, which is why the role sits here and not later.
+    c(
+        PalwStepOpKindV1::MatMulQuant,
+        PalwStepNodeRoleV1::VCacheWrite,
+        KDESC_A16_MATMUL_REQUANT,
+        "blk.{layer}.attn_v.weight",
+        KvDim,
+        &[Step(1)],
+    ),
+    n(PalwStepOpKindV1::RopeImrope, KDESC_A16_ROPE, "rope", Hidden, &[Step(2)]),
+    // And the key cache is written with the ROTATED key, because that is what a later position
+    // reads — the same correction the floor's table carries.
+    c(PalwStepOpKindV1::RopeImrope, PalwStepNodeRoleV1::KCacheWrite, KDESC_A16_ROPE, "rope", KvDim, &[Step(3)]),
+    n(PalwStepOpKindV1::MatMulQuant, KDESC_A16_ATTN_SCORES, "blk.{layer}.attn_logits.a16", KvPerHead, &[Step(5), CachedK]),
+    n(PalwStepOpKindV1::SoftMax, KDESC_A16_SOFTMAX, "blk.{layer}.attn_softmax_up", KvPerHead, &[Step(7)]),
+    n(PalwStepOpKindV1::MulElem, KDESC_A16_REQUANTIZE, "blk.{layer}.attn_probs.a16", KvPerHead, &[Step(8)]),
+    n(PalwStepOpKindV1::MatMulQuant, KDESC_A16_ATTN_VALUES, "blk.{layer}.attn_values.a16", Hidden, &[Step(9), CachedV]),
+    n(PalwStepOpKindV1::MatMulQuant, KDESC_A16_MATMUL_REQUANT, "blk.{layer}.attn_output.weight", Hidden, &[Step(10)]),
+    n(PalwStepOpKindV1::MulElem, KDESC_A16_REQUANTIZE, "blk.{layer}.attn_align.a16", Hidden, &[LayerIn]),
+    n(PalwStepOpKindV1::AddElem, KDESC_A16_ADD_ELEM, "", Hidden, &[Step(12), Step(11)]),
+    n(PalwStepOpKindV1::MulElem, KDESC_A16_REQUANTIZE, "blk.{layer}.attn_residual.a16", Hidden, &[Step(13)]),
+    // --- SwiGLU -------------------------------------------------------------------------------
+    n(PalwStepOpKindV1::RmsNorm, KDESC_A16_RMS_NORM, "", Hidden, &[Step(14)]),
+    n(PalwStepOpKindV1::MulElem, KDESC_A16_REQUANTIZE, "blk.{layer}.ffn_norm.a16", Hidden, &[Step(15)]),
+    // The gate leaves the matmul WIDE — `silu` is defined on Q[K], not on codes, and a class that
+    // narrowed here would hand the nonlinearity a fraction of its argument (the floor's own
+    // `rescale_q` correction, in this tier's costume).
+    n(PalwStepOpKindV1::MatMulQuant, KDESC_A16_MATMUL_RESCALE, "blk.{layer}.ffn_gate.weight", FfnDim, &[Step(16)]),
+    n(PalwStepOpKindV1::MatMulQuant, KDESC_A16_MATMUL_REQUANT, "blk.{layer}.ffn_up.weight", FfnDim, &[Step(16)]),
+    n(PalwStepOpKindV1::Silu, KDESC_Q36_SILU, "", FfnDim, &[Step(17)]),
+    n(PalwStepOpKindV1::MulElem, KDESC_A16_REQUANTIZE, "blk.{layer}.ffn_silu.a16", FfnDim, &[Step(19)]),
+    n(PalwStepOpKindV1::MulElem, KDESC_A16_MUL_ELEM, "", FfnDim, &[Step(20), Step(18)]),
+    n(PalwStepOpKindV1::MulElem, KDESC_A16_REQUANTIZE, "blk.{layer}.ffn_gated.a16", FfnDim, &[Step(21)]),
+    n(PalwStepOpKindV1::MatMulQuant, KDESC_A16_MATMUL_REQUANT, "blk.{layer}.ffn_down.weight", Hidden, &[Step(22)]),
+    n(PalwStepOpKindV1::MulElem, KDESC_A16_REQUANTIZE, "blk.{layer}.ffn_align.a16", Hidden, &[Step(14)]),
+    n(PalwStepOpKindV1::AddElem, KDESC_A16_ADD_ELEM, "", Hidden, &[Step(24), Step(23)]),
+    n(PalwStepOpKindV1::MulElem, KDESC_A16_REQUANTIZE, "blk.{layer}.ffn_residual.a16", Hidden, &[Step(25)]),
+];
+
+/// The A16 tier's pre and post tables — the gather, and the head's three steps.
+pub const QWEN25_A16_PRE_IR: &[Base0IrNodeV1] =
+    &[n(PalwStepOpKindV1::EmbedLookup, KDESC_A16_EMBED, "token_embd.weight", Hidden, &[])];
+
+pub const QWEN25_A16_POST_IR: &[Base0IrNodeV1] = &[
+    n(PalwStepOpKindV1::RmsNorm, KDESC_A16_RMS_NORM, "", Hidden, &[LayerIn]),
+    n(PalwStepOpKindV1::MulElem, KDESC_A16_REQUANTIZE, "final_norm.a16", Hidden, &[Step(0)]),
+    n(PalwStepOpKindV1::MatMulQuant, KDESC_A16_MATMUL_REQUANT, "token_embd.weight", Base0IrWidthV1::Vocab, &[Step(1)]),
+];
+
 const fn n(
     op: PalwStepOpKindV1,
     kernel: &'static str,
@@ -320,6 +401,9 @@ pub fn base0_tensor_names_for_head_v1(head: &'static str) -> Vec<&'static str> {
 /// step leg.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Base0IrGeometryV1 {
+    /// The unembedding's output width. Zero is legal for a table that never reaches
+    /// [`Base0IrWidthV1::Vocab`], which is every table written before one did.
+    pub vocab_size: u32,
     pub layer_count: u16,
     pub hidden_dim: u32,
     pub ffn_dim: u32,
@@ -337,10 +421,31 @@ pub struct Base0IrGeometryV1 {
 ///
 /// The one place a layer's node table comes from. Both classes call it; neither writes a node.
 pub fn base0_ir_attn_nodes_v1(g: Base0IrGeometryV1) -> Vec<PalwStepNodeV1> {
-    let layers = (g.layer_count as usize).max(1);
+    base0_ir_nodes_v1(BASE0_LAYER_IR, g, Base0IrScopeV1::PerLayer)
+}
+
+/// **How many layers a table covers**, which decides its nodes' dtype lists. A layer table is
+/// instantiated once per layer and its weights carry one dtype byte for each; a pre or post table
+/// exists once for the whole graph and carries exactly one. `validate_shape` checks the length, so
+/// getting this wrong is refused rather than silently wrong — which is how the first A16 profile
+/// found out it needed the distinction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Base0IrScopeV1 {
+    PerLayer,
+    Graph,
+}
+
+/// **The projector, over ANY IR table** — the floor's layer graph, the A16 tier's, or a class's
+/// pre/post tables. One projection for every table there is, because a second one is a second
+/// description of what a step space looks like.
+pub fn base0_ir_nodes_v1(table: &[Base0IrNodeV1], g: Base0IrGeometryV1, scope: Base0IrScopeV1) -> Vec<PalwStepNodeV1> {
+    let layers = match scope {
+        Base0IrScopeV1::PerLayer => (g.layer_count as usize).max(1),
+        Base0IrScopeV1::Graph => 1,
+    };
     let per_layer = vec![g.weight_dtype; layers];
     let kv_dim = g.attn_kv_heads as u32 * g.attn_head_dim;
-    BASE0_LAYER_IR
+    table
         .iter()
         .map(|ir| PalwStepNodeV1 {
             op_kind: ir.op,
@@ -354,6 +459,7 @@ pub fn base0_ir_attn_nodes_v1(g: Base0IrGeometryV1) -> Vec<PalwStepNodeV1> {
                 HeadDim => PalwStepOutLenV1::Fixed { elements: g.attn_head_dim },
                 KvScaled(m) => PalwStepOutLenV1::KvScaled { multiplier: m },
                 KvPerHead => PalwStepOutLenV1::KvScaled { multiplier: g.attn_heads as u32 },
+                Base0IrWidthV1::Vocab => PalwStepOutLenV1::Fixed { elements: g.vocab_size },
             },
             tile_len: g.tile_len,
             kernel_semantics_id: kernel_semantics_id_v1(ir.kernel),
@@ -432,6 +538,7 @@ pub fn base0_profile_v1(geometry: PalwBase0GeometryV1) -> Result<PalwShapeProfil
     // count — which is what `kv_dim` above has always assumed and what keeps this byte-identical
     // to the hand-rolled projection this replaced.
     let attn_nodes: Vec<PalwStepNodeV1> = base0_ir_attn_nodes_v1(Base0IrGeometryV1 {
+        vocab_size: geometry.vocab_size,
         layer_count: geometry.layer_count,
         hidden_dim: hidden,
         ffn_dim: geometry.ffn_dim,

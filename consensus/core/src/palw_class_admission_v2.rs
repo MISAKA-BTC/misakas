@@ -275,24 +275,10 @@ pub fn derive_court_cost_v1(profile: &PalwShapeProfileV3) -> Result<PalwCourtCos
 
             // The artifact bytes this node's parameters occupy, per catalogued kernel. A node with
             // no weight operand opens nothing from the artifact — its inputs ride the leg.
-            let lane_sliced = [
-                crate::palw_step_refute::KDESC_A16_REQUANTIZE,
-                crate::palw_step_refute::KDESC_A16_ADD_ELEM,
-                crate::palw_step_refute::KDESC_Q36_SIGMOID,
-                crate::palw_step_refute::KDESC_Q36_GATE_APPLY,
-                crate::palw_step_refute::KDESC_Q36_MUL_WIDE,
-                crate::palw_step_refute::KDESC_Q36_RESCALE_ROW,
-                crate::palw_step_refute::KDESC_Q36_SILU,
-            ]
-            .iter()
-            .any(|d| crate::palw_step::kernel_semantics_id_v1(d) == node.kernel_semantics_id)
-                || [
-                    crate::palw_step_refute::KDESC_Q36_L2_NORM,
-                    crate::palw_step_refute::KDESC_Q36_RMS_NORM_WIDE,
-                    crate::palw_step_refute::KDESC_Q36_HEAD_RMS_NORM,
-                ]
-                    .iter()
-                    .any(|d| crate::palw_step::kernel_semantics_id_v1(d) == node.kernel_semantics_id);
+            // ONE list, in the module that owns the slice derivations — this arm carried its own
+            // copy for a round and priced a lane-sliced node as if it opened whole rows.
+            let lane_sliced = crate::palw_step_refute::palw_kernel_is_lane_sliced_v1(node.kernel_semantics_id)
+                || crate::palw_step_refute::palw_kernel_is_head_sliced_v1(node.kernel_semantics_id);
             let strided_combine = node.kernel_semantics_id
                 == crate::palw_step::kernel_semantics_id_v1(crate::palw_step_refute::KDESC_Q36_MOE_COMBINE);
             let head_sliced_gdn = node.op_kind == Op::GatedDeltaNet

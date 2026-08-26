@@ -45,6 +45,7 @@
 //! parameters carrying the folded biases, the pinned integer rotary table, the tokenizer
 //! commitment — is Phase 2's, and no function can invent it.
 
+use crate::Hash64;
 use crate::palw_step::{
     PALW_STEP_INPUT_LAYER_IN, PALW_STEP_OBJECT_VERSION_V1, PalwShapeProfileV3, PalwStepError, PalwStepLaneV1, PalwStepNodeRoleV1,
     PalwStepNodeV1, PalwStepOpKindV1, PalwStepOutLenV1, kernel_semantics_id_v1,
@@ -243,6 +244,199 @@ pub fn qwen25_tensor_names_v1() -> Vec<&'static str> {
 /// key enters the cache, so a later position's attention must read the rotated value. That is
 /// what the roles select, and getting it backwards would have the court recompute attention
 /// against unrotated keys and convict every honest producer.
+/// **The A16 tier's profile for a dense Qwen2.5 — the engine that actually works, registered.**
+///
+/// [`qwen25_profile_v1`] describes `engine.rs`, whose seven-bit activations are where static PTQ of
+/// this checkpoint degenerates (ADR-0053). This describes `engine_a16.rs`, where Qwen2.5-1.5B is
+/// FAITHFUL against its own float reference and chats. The difference is not a tuning knob: they
+/// are different graphs, so they are different classes with different ids, and only one of them is
+/// worth a network's cadence.
+///
+/// Three things it does that the W8A8 profile cannot:
+/// * projects [`crate::palw_base0_profile::QWEN25_A16_LAYER_IR`] — the A16 engine's own
+///   twenty-seven step order — through the same projector the floor uses, so the declared graph
+///   cannot drift from the performed one (the 842-disagreement defect, structurally excluded);
+/// * commits the **tiled** logits scheme, which a 151,936-lane vocabulary requires: one flat pin
+///   row is 607,744 bytes against a carrier that holds 81,920;
+/// * budgets its tiles PER NODE from the row each step reduces over, so an opening is bounded by
+///   what a transaction can carry rather than by one number chosen for the whole graph.
+pub fn qwen25_a16_profile_v1(geometry: PalwQwen25GeometryV1) -> Result<PalwShapeProfileV3, PalwStepError> {
+    use crate::palw_base0_profile::{
+        Base0IrGeometryV1, Base0IrScopeV1, QWEN25_A16_LAYER_IR, QWEN25_A16_POST_IR, QWEN25_A16_PRE_IR, base0_ir_nodes_v1,
+    };
+
+    let ir_geometry = |tile: u32| Base0IrGeometryV1 {
+        vocab_size: geometry.vocab_size,
+        layer_count: geometry.layer_count,
+        hidden_dim: geometry.hidden_dim,
+        ffn_dim: geometry.ffn_dim,
+        attn_heads: geometry.attn_heads,
+        attn_kv_heads: geometry.attn_kv_heads,
+        attn_head_dim: geometry.attn_head_dim,
+        tile_len: tile,
+        weight_dtype: QWEN25_WEIGHT_DTYPE_I8,
+    };
+    // **The per-node tile, budgeted from the reduction** — the same rule the hybrid class uses and
+    // for the same reason: a step's Decision-B opening is `tile x in_w` bytes and the whole close
+    // must ride one carrier, so one tile for every node is the U-shape where the number that fits
+    // the fat matmuls explodes the narrow nodes' leaf counts.
+    let budget = |nodes: &mut Vec<PalwStepNodeV1>, table: &[crate::palw_base0_profile::Base0IrNodeV1]| {
+        for (node, ir) in nodes.iter_mut().zip(table) {
+            let in_w = ir
+                .inputs
+                .first()
+                .map(|i| match i {
+                    crate::palw_base0_profile::Base0IrInputV1::LayerIn => geometry.hidden_dim as usize,
+                    crate::palw_base0_profile::Base0IrInputV1::CachedK | crate::palw_base0_profile::Base0IrInputV1::CachedV => {
+                        (geometry.attn_kv_heads as usize) * (geometry.attn_head_dim as usize) * (geometry.n_ctx as usize)
+                    }
+                    crate::palw_base0_profile::Base0IrInputV1::Step(prev) => match table.get(*prev as usize).map(|p| p.out) {
+                        Some(crate::palw_base0_profile::Base0IrWidthV1::FfnDim) => geometry.ffn_dim as usize,
+                        Some(crate::palw_base0_profile::Base0IrWidthV1::KvDim) => {
+                            (geometry.attn_kv_heads as usize) * (geometry.attn_head_dim as usize)
+                        }
+                        Some(crate::palw_base0_profile::Base0IrWidthV1::Vocab) => geometry.vocab_size as usize,
+                        _ => geometry.hidden_dim as usize,
+                    },
+                })
+                .unwrap_or(geometry.hidden_dim as usize);
+            let out_elems = match node.out_len {
+                PalwStepOutLenV1::Fixed { elements } => elements as usize,
+                PalwStepOutLenV1::KvScaled { .. } => usize::MAX,
+            };
+            let chosen = if node.op_kind == PalwStepOpKindV1::MatMulQuant {
+                (QWEN25_A16_MATMUL_OPENING_BUDGET / in_w.max(1))
+                    .next_power_of_two()
+                    .checked_shr(1)
+                    .unwrap_or(1)
+                    .clamp(crate::palw_step::PALW_STEP_MIN_TILE_LEN as usize, geometry.tile_len as usize)
+            } else {
+                geometry.tile_len as usize
+            };
+            node.tile_len = chosen.min(out_elems.max(crate::palw_step::PALW_STEP_MIN_TILE_LEN as usize)) as u32;
+        }
+    };
+
+    let mut pre_nodes = base0_ir_nodes_v1(QWEN25_A16_PRE_IR, ir_geometry(geometry.tile_len), Base0IrScopeV1::Graph);
+    budget(&mut pre_nodes, QWEN25_A16_PRE_IR);
+    let mut attn_nodes = base0_ir_nodes_v1(QWEN25_A16_LAYER_IR, ir_geometry(geometry.tile_len), Base0IrScopeV1::PerLayer);
+    budget(&mut attn_nodes, QWEN25_A16_LAYER_IR);
+    let mut post_nodes = base0_ir_nodes_v1(QWEN25_A16_POST_IR, ir_geometry(geometry.tile_len), Base0IrScopeV1::Graph);
+    budget(&mut post_nodes, QWEN25_A16_POST_IR);
+
+    let profile = PalwShapeProfileV3 {
+        version: PALW_STEP_OBJECT_VERSION_V1,
+        lane: PalwStepLaneV1::Int32,
+        layer_count: geometry.layer_count,
+        full_attention_interval: 1,
+        hidden_dim: geometry.hidden_dim,
+        ffn_dim: geometry.ffn_dim,
+        attn_heads: geometry.attn_heads,
+        attn_kv_heads: geometry.attn_kv_heads,
+        attn_head_dim: geometry.attn_head_dim,
+        rope_dims: geometry.attn_head_dim as u16,
+        rope_sections: [0, 0, 0, 0],
+        rope_freq_base_bits: 0,
+        rms_eps_bits: 0,
+        l2_eps_bits: 0,
+        base0_rms_eps_q: geometry.rms_eps_q,
+        // TILED — and this class can produce it: the A16 producer commits
+        // `tiled_logits_trace_root_v1`, so the scheme it registers is the scheme its executor
+        // builds. (The floor stays flat for exactly the opposite reason.)
+        logits_scheme_id: crate::palw_step_refute::tiled_logits_scheme_id_v1(),
+        gdn_heads: 0,
+        gdn_head_k_dim: 0,
+        gdn_head_v_dim: 0,
+        gdn_conv_kernel: 0,
+        vocab_size: geometry.vocab_size,
+        repack_on: 0,
+        llamafile_on: 0,
+        flash_attn_disabled: 1,
+        fused_gdn_on: 0,
+        use_ref_off: 0,
+        kv_cache_f16: 0,
+        n_ctx: geometry.n_ctx,
+        n_batch: geometry.n_ctx,
+        n_ubatch: geometry.n_ctx,
+        n_seq: 1,
+        n_threads: geometry.n_threads,
+        pre_nodes,
+        gdn_nodes: Vec::new(),
+        attn_nodes,
+        post_nodes,
+        reference_ruleset_id: crate::palw_reference::reference_arithmetic_ruleset_id_v2(),
+        transcendental_bindings: Vec::new(),
+        contraction_facts: Vec::new(),
+        // The A16 KV cache is `i32` codes, not f16 — the same integer chunk map the W8A8 class
+        // registers, because the map describes the CACHE's element type and both tiers cache codes.
+        kv_chunk_calls: 0,
+        state_chunk_map_id: crate::palw_state_chunk_map::integer_kv_state_chunk_map_id_v1(),
+    };
+    profile.validate_shape()?;
+    Ok(profile)
+}
+
+/// **The A16 dense class as testnet registers it** — the geometry the court's own ceilings chose,
+/// not a preference.
+///
+/// `n_ctx` 16 is the widest context whose worst close stays inside the carrier (96 % of 81,920);
+/// 24 is 112 % and 32 is 148 %, and past 32 the step space leaves the ladder entirely. The binding
+/// node is the SwiGLU's down projection, whose 8,960-lane reduction opens 35,840 bytes of weights
+/// at the tile floor — the same arithmetic that set the floor.
+///
+/// The canonical job is (14, 2): footprint `14 + 2 − 1 = 15`, one inside the context, so the class
+/// is priced at a job it can actually declare.
+pub const QWEN25_1_5B_A16: PalwQwen25GeometryV1 = PalwQwen25GeometryV1 { n_ctx: 16, ..QWEN25_1_5B };
+pub const QWEN25_A16_CANONICAL: (u32, u32) = (14, 2);
+
+/// The class id testnet-11 registers for the A16 dense tier, derived from its own profile.
+pub fn qwen25_a16_class_id_v1() -> Hash64 {
+    qwen25_a16_profile_v1(QWEN25_1_5B_A16).expect("the registered A16 geometry projects").shape_profile_id()
+}
+
+/// **Everything a chain needs to carry the A16 dense class** — profile, catalog entry and the
+/// genesis-form registration, from one geometry so no two can disagree.
+pub fn qwen25_a16_registration_v1(
+    artifact_root: Hash64,
+    share_permille: u16,
+    slash_value_per_pwu: u64,
+    initial_target: u128,
+) -> Result<(PalwShapeProfileV3, crate::palw_mode_v2::PalwClassCatalogEntryV2, crate::palw_state_v2::PalwConsensusObjectV2), PalwStepError>
+{
+    let profile = qwen25_a16_profile_v1(QWEN25_1_5B_A16)?;
+    let class_id = profile.shape_profile_id();
+    let canonical = crate::palw_base0_profile::rc_job_context(&profile, QWEN25_A16_CANONICAL.0, QWEN25_A16_CANONICAL.1);
+    let counted = crate::palw_step::step_leaf_count(&profile, &canonical)?;
+    let entry = crate::palw_mode_v2::PalwClassCatalogEntryV2 {
+        class_id,
+        artifact_root,
+        max_step_leaf_count: crate::palw_step::worst_case_step_leaf_count_v1(&profile)?,
+        canonical_step_leaf_count: counted,
+        reachable_kernels: [&profile.pre_nodes, &profile.attn_nodes, &profile.post_nodes]
+            .into_iter()
+            .flatten()
+            .map(|n| n.kernel_semantics_id)
+            .collect(),
+        court_cost: crate::palw_class_admission_v2::derive_court_cost_v1(&profile)
+            .map_err(|_| PalwStepError::ProfileNotCanonical("the A16 dense class's court cost does not derive"))?,
+    };
+    let object = crate::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
+        class_id,
+        artifact_root,
+        slash_value_per_pwu,
+        pwu_rule: crate::palw_state_v2::PalwPwuRuleV2::DerivedV1 { pwu_per_inference: counted },
+        initial_target,
+        share_permille,
+        activation_daa: 0,
+        admission: None,
+    };
+    Ok((profile, entry, object))
+}
+
+/// The A16 dense class's opening budget — 24 KiB, the same share of the carrier the hybrid class
+/// reserves for weights so that the evidence beside them still fits.
+const QWEN25_A16_MATMUL_OPENING_BUDGET: usize = 24 * 1024;
+
 pub fn qwen25_profile_v1(geometry: PalwQwen25GeometryV1) -> Result<PalwShapeProfileV3, PalwStepError> {
     let once = vec![QWEN25_WEIGHT_DTYPE_I8];
     let tile = geometry.tile_len;
@@ -306,6 +500,7 @@ pub fn qwen25_profile_v1(geometry: PalwQwen25GeometryV1) -> Result<PalwShapeProf
     // grouped-query attention, because it read `PalwBase0GeometryV1`, which has no kv-head count.
     // `Base0IrGeometryV1` supplies one, and both classes now come from the same call.
     let attn_nodes = crate::palw_base0_profile::base0_ir_attn_nodes_v1(crate::palw_base0_profile::Base0IrGeometryV1 {
+        vocab_size: geometry.vocab_size,
         layer_count: geometry.layer_count,
         hidden_dim: hidden,
         ffn_dim: geometry.ffn_dim,
@@ -406,6 +601,57 @@ pub fn qwen25_profile_v1(geometry: PalwQwen25GeometryV1) -> Result<PalwShapeProf
 
 #[cfg(test)]
 mod tests {
+    /// **The A16 dense class passes the whole admission gate.** Not a cost check: the same
+    /// `verify_class_admission_v2` a post-genesis registration answers to — shape validation, both
+    /// coverage gates, the ladder, the three court-cost ceilings and the PWU recount.
+    ///
+    /// This is the test the W8A8 Qwen2.5 class could never pass, and the reason is not tuning: at
+    /// vocabulary 151,936 its FLAT pin alone is 607,744 bytes against an 81,920-byte carrier, so
+    /// no (tile, context) pair existed. The A16 class commits the tiled scheme, which its own
+    /// producer builds.
+    #[test]
+    fn the_a16_dense_class_passes_the_admission_gate() {
+        use crate::palw_state_v2::{PalwConsensusObjectV2, PalwPwuRuleV2};
+        let (profile, entry, object) = qwen25_a16_registration_v1(Hash64::from_u64_word(0xA16), 1, 1, 1).expect("derives");
+        assert_eq!(entry.class_id, qwen25_a16_class_id_v1(), "the entry is the registered class");
+        assert_eq!(profile.attn_nodes.len(), crate::palw_base0_profile::QWEN25_A16_LAYER_IR.len());
+        assert_eq!(
+            profile.logits_scheme_id,
+            crate::palw_step_refute::tiled_logits_scheme_id_v1(),
+            "a 151,936-lane vocabulary cannot commit flat and be prosecutable"
+        );
+
+        let catalog = crate::palw_mode_v2::PalwClassCatalogV2::new(vec![entry.clone()]).expect("well-formed");
+        let mut bundle = crate::palw_fp_devnet_v3::palw_fp_devnet_bundle_v3(
+            entry.class_id,
+            catalog.root(),
+            crate::palw_catalog_coverage::palw_court_catalog_root_v1(),
+            entry.canonical_step_leaf_count,
+            entry.artifact_root,
+            Vec::new(),
+        )
+        .expect("a bundle for this class assembles");
+        bundle.court = crate::palw_mode_v2::PalwCourtParamsV2::new(crate::palw_step::PALW_STEP_MAX_LEAVES, 20, 2)
+            .expect("the full ladder is a legal court");
+        let canonical = crate::palw_base0_profile::rc_job_context(&profile, QWEN25_A16_CANONICAL.0, QWEN25_A16_CANONICAL.1);
+        let admitted = crate::palw_class_admission_v2::verify_class_admission_v2(&bundle, &profile, &canonical, &object)
+            .expect("the A16 dense class is admissible on a network with the shipped ceilings");
+        assert_eq!(admitted.court_cost, entry.court_cost, "the gate and the mint derive one cost");
+        assert!(
+            admitted.court_cost.max_close_bytes <= bundle.court.max_close_bytes(),
+            "close {} against ceiling {}",
+            admitted.court_cost.max_close_bytes,
+            bundle.court.max_close_bytes()
+        );
+        let PalwConsensusObjectV2::ClassRegistered { pwu_rule: PalwPwuRuleV2::DerivedV1 { pwu_per_inference }, .. } = object else {
+            panic!("a derived registration");
+        };
+        assert_eq!(pwu_per_inference, entry.canonical_step_leaf_count, "the declared pwu is the counted one");
+
+        // The canonical job fits the registered context in the enumeration's own form.
+        let footprint = QWEN25_A16_CANONICAL.0 + QWEN25_A16_CANONICAL.1 - 1;
+        assert!(footprint <= profile.n_ctx, "canonical footprint {footprint} inside n_ctx {}", profile.n_ctx);
+    }
     use super::*;
     use crate::Hash64;
     use crate::palw_catalog_coverage::verify_profile_coverage_v1;

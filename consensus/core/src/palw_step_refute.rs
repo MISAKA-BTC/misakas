@@ -127,6 +127,13 @@ pub const KDESC_Q36_SILU: &str = "q36/silu/lane-sliced/intexp-sigmoid/v1";
 pub const KDESC_Q36_DECAY: &str = "q36/decay/softplus-intln-exp-refined/v1";
 
 /// The A16 tier's nine, for a caller assembling a reachable set for any class in it.
+/// **The A16 rotation and the A16 elementwise product** — two ops the tier's engine has always
+/// performed and the catalog never named, because until a dense A16 class was registered nothing
+/// asked the court to recompute them. Both are lane-local (`Rope` pairs within a head, `MulElem`
+/// is lane by lane), so both join the sliced families rather than opening whole rows.
+pub const KDESC_A16_ROPE: &str = "a16/rope/lane-sliced/pinned-table-i64-narrow16/v1";
+pub const KDESC_A16_MUL_ELEM: &str = "a16/mul-elem/lane-sliced/i32xi32-narrow16/v1";
+
 pub const KDESC_A16_ALL: &[&str] = &[
     KDESC_A16_EMBED,
     KDESC_A16_MATMUL_REQUANT,
@@ -137,6 +144,8 @@ pub const KDESC_A16_ALL: &[&str] = &[
     KDESC_A16_SOFTMAX,
     KDESC_A16_ATTN_SCORES,
     KDESC_A16_ATTN_VALUES,
+    KDESC_A16_ROPE,
+    KDESC_A16_MUL_ELEM,
 ];
 
 /// Qwen3.6's own fourteen, on top of [`KDESC_A16_ALL`] and BASE-0's `Silu`.
@@ -204,6 +213,8 @@ pub const KDESC_ALL: &[&str] = &[
     KDESC_Q36_DECAY,
     KDESC_Q36_SILU,
     KDESC_Q36_HEAD_RMS_NORM,
+    KDESC_A16_ROPE,
+    KDESC_A16_MUL_ELEM,
 ];
 
 /// The `kernel_semantics_id`s this build can adjudicate — the catalog side of the ADR-0038 A4
@@ -292,6 +303,8 @@ enum Qwen36Op {
     Decay,
     Silu,
     HeadRmsNorm,
+    A16Rope,
+    A16MulElem,
 }
 
 /// The class's `ggml_vec_dot_f32` lane structure (simd-mappings.h, read verbatim).
@@ -339,6 +352,8 @@ const KERNEL_CATALOG: &[(&str, KernelProgram)] = &[
     (KDESC_A16_SOFTMAX, KernelProgram::Qwen36(Qwen36Op::Softmax)),
     (KDESC_A16_ATTN_SCORES, KernelProgram::Qwen36(Qwen36Op::AttnScores)),
     (KDESC_A16_ATTN_VALUES, KernelProgram::Qwen36(Qwen36Op::AttnValues)),
+    (KDESC_A16_ROPE, KernelProgram::Qwen36(Qwen36Op::A16Rope)),
+    (KDESC_A16_MUL_ELEM, KernelProgram::Qwen36(Qwen36Op::A16MulElem)),
     (KDESC_Q36_MATMUL_GROUPED, KernelProgram::Qwen36(Qwen36Op::MatMulGrouped)),
     (KDESC_Q36_MATMUL_GROUPED_WIDE, KernelProgram::Qwen36(Qwen36Op::MatMulGroupedWide)),
     (KDESC_Q36_ROPE_PARTIAL, KernelProgram::Qwen36(Qwen36Op::RopePartial)),
@@ -496,7 +511,9 @@ pub fn kernel_can_serve_node_v1(node: &crate::palw_step::PalwStepNodeV1, table_i
             | Qwen36Op::RouterTopk
             | Qwen36Op::Decay
             | Qwen36Op::Silu
-            | Qwen36Op::HeadRmsNorm,
+            | Qwen36Op::HeadRmsNorm
+            | Qwen36Op::A16Rope
+            | Qwen36Op::A16MulElem,
         ) => {
             if inputs < 1 {
                 return Err("a one-operand node must name the row it computes from");
@@ -724,6 +741,16 @@ fn qwen36_row(
     };
     let lane_slice = qwen36_lane_slice_v1(node, node_out_w, gather.0.tile_index)
         .or_else(|| qwen36_head_norm_slice_v1(node, node_out_w, gather.0.tile_index));
+    // **The true sequence position of the token this step computes.** A prefill coordinate carries
+    // it directly; a DECODE coordinate carries `position = 0` and puts the information in
+    // `call_index`, so decode call `c` is generating the token at `prefill + c − 1`. Anything that
+    // indexes a per-position table — the rotation, and only the rotation — must use this rather
+    // than the raw field, which reads row 0 for every decode call and rotates a generated token as
+    // if it were the first token of the prompt.
+    // It is `kv_len − 1` in BOTH cases and needs nothing else: a prefill position sees `pos + 1`
+    // keys, a decode call `c` sees `prefill + c`, and the token being computed is the last one
+    // visible either way.
+    let true_position = || -> Option<u64> { kv_len.checked_sub(1) };
     // A slice `[start, end)` of a source row, out of the COVERING TILES the leaf set opened for
     // it (the row arrives as those tiles concatenated, starting at the first covering tile).
     let extract = |opened: &Vec<u32>, src_tile: u64, start: u64, end: u64| -> Result<Vec<i32>, PalwStepRefuteError> {
@@ -894,6 +921,42 @@ fn qwen36_row(
             need(1)?;
             Ok(out(q36::q36_sigmoid_gate(&lane_input(0)?)))
         }
+        // The A16 product of two code rows, lane by lane — the SwiGLU's `silu(gate) * up`.
+        Qwen36Op::A16MulElem => {
+            need(2)?;
+            Ok(out(a16::a16_mul_elem(&lane_input(0)?, &lane_input(1)?).map_err(shape16)?))
+        }
+        // **The full rotation, per head, from the pinned table.** Not `q36_rope_partial` with
+        // `rotary_dim = head_dim`: that op re-narrows through a registered clamp and this tier's
+        // engine calls `a16_rope`, which narrows with the op's own rule. Two functions that agree
+        // on paper and differ by a rounding is exactly what a separate descriptor is for.
+        Qwen36Op::A16Rope => {
+            need(1)?;
+            let head = profile.attn_head_dim as usize;
+            let x = as_i32(&inputs[0]);
+            if head == 0 || !x.len().is_multiple_of(head) {
+                return Err(PalwStepRefuteError::InputSetNotCanonical("a rotation's row is not a whole number of heads"));
+            }
+            let pairs = head / 2;
+            let bytes = u32::try_from(pairs * 8).map_err(|_| PalwStepRefuteError::Unadjudicable)?;
+            let offset = true_position()
+                .and_then(|p| p.checked_mul(pairs as u64 * 8))
+                .and_then(|v| u32::try_from(v).ok())
+                .ok_or(PalwStepRefuteError::Unadjudicable)?;
+            let table = weights
+                .operand_bytes(node.weight_name.as_str(), layer, offset, bytes)
+                .ok_or(PalwStepRefuteError::Unadjudicable)?;
+            if table.len() != pairs * 8 {
+                return Err(PalwStepRefuteError::Unadjudicable);
+            }
+            let cos: Vec<i32> = table[..pairs * 4].chunks_exact(4).map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+            let sin: Vec<i32> = table[pairs * 4..].chunks_exact(4).map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+            let mut row = Vec::with_capacity(x.len());
+            for h in x.chunks_exact(head) {
+                row.extend(a16::a16_rope(h, &cos, &sin).map_err(shape16)?);
+            }
+            Ok(out(row))
+        }
         // Lane-pure and parameterless: the slice the leaf set opened is the slice this computes.
         Qwen36Op::Silu => {
             need(1)?;
@@ -990,7 +1053,9 @@ fn qwen36_row(
             }
             let pairs = rotary / 2;
             let bytes = u32::try_from(pairs * 8).map_err(|_| PalwStepRefuteError::Unadjudicable)?;
-            let offset = (gather.0.position as u64).checked_mul(pairs as u64 * 8).ok_or(PalwStepRefuteError::Unadjudicable)?;
+            let offset = true_position()
+                .and_then(|p| p.checked_mul(pairs as u64 * 8))
+                .ok_or(PalwStepRefuteError::Unadjudicable)?;
             let offset = u32::try_from(offset).map_err(|_| PalwStepRefuteError::Unadjudicable)?;
             let table = weights
                 .operand_bytes(node.weight_name.as_str(), layer, offset, bytes)
@@ -1925,17 +1990,36 @@ pub fn qwen36_gdn_slice_v1(
 /// every ref. Membership is BY KERNEL ID (the descriptors say "lane-sliced" in their own names);
 /// an op that reduces across lanes — a norm, a softmax, the router — can never join, whatever its
 /// width, because its output is not a function of the slice.
+/// **The lane-sliced family, as ONE list.** The slice derivation and the cost bound both need to
+/// know which kernels are lane-local, and for one round they each carried their own copy: the
+/// bound then priced a lane-sliced `MulElem` as if it opened whole 8,960-lane rows — 105 KiB
+/// against the 4 KiB it actually opens — and the class it was pricing failed admission for a
+/// reason that was not true. Membership is a property of the KERNEL, so it is stated once.
+pub const KDESC_LANE_SLICED_ALL: &[&str] = &[
+    KDESC_A16_REQUANTIZE,
+    KDESC_A16_ADD_ELEM,
+    KDESC_A16_MUL_ELEM,
+    KDESC_A16_ROPE,
+    KDESC_Q36_SIGMOID,
+    KDESC_Q36_GATE_APPLY,
+    KDESC_Q36_MUL_WIDE,
+    KDESC_Q36_RESCALE_ROW,
+    KDESC_Q36_SILU,
+];
+
+/// The head-reducing family — one head per challenged tile, never a lane and never the row.
+pub const KDESC_HEAD_SLICED_ALL: &[&str] = &[KDESC_Q36_L2_NORM, KDESC_Q36_RMS_NORM_WIDE, KDESC_Q36_HEAD_RMS_NORM];
+
+pub fn palw_kernel_is_lane_sliced_v1(kernel_semantics_id: Hash64) -> bool {
+    KDESC_LANE_SLICED_ALL.iter().any(|d| kernel_semantics_id_v1(d) == kernel_semantics_id)
+}
+
+pub fn palw_kernel_is_head_sliced_v1(kernel_semantics_id: Hash64) -> bool {
+    KDESC_HEAD_SLICED_ALL.iter().any(|d| kernel_semantics_id_v1(d) == kernel_semantics_id)
+}
+
 pub fn qwen36_lane_slice_v1(node: &crate::palw_step::PalwStepNodeV1, out_w: u64, tile_index: u32) -> Option<(u64, u64)> {
-    let lane_sliced = [
-        KDESC_A16_REQUANTIZE,
-        KDESC_A16_ADD_ELEM,
-        KDESC_Q36_SIGMOID,
-        KDESC_Q36_GATE_APPLY,
-        KDESC_Q36_MUL_WIDE,
-        KDESC_Q36_RESCALE_ROW,
-        KDESC_Q36_SILU,
-    ];
-    if !lane_sliced.iter().any(|d| kernel_semantics_id_v1(d) == node.kernel_semantics_id) {
+    if !palw_kernel_is_lane_sliced_v1(node.kernel_semantics_id) {
         return None;
     }
     let tile = node.tile_len as u64;
@@ -1952,8 +2036,7 @@ pub fn qwen36_lane_slice_v1(node: &crate::palw_step::PalwStepNodeV1, out_w: u64,
 /// function of the challenged LANES; it is a function of the challenged HEAD), which is why this
 /// is its own derivation and why the tile must be the head width for it to apply.
 pub fn qwen36_head_norm_slice_v1(node: &crate::palw_step::PalwStepNodeV1, out_w: u64, tile_index: u32) -> Option<(u64, u64)> {
-    let head_reducing = [KDESC_Q36_L2_NORM, KDESC_Q36_RMS_NORM_WIDE, KDESC_Q36_HEAD_RMS_NORM];
-    if !head_reducing.iter().any(|d| kernel_semantics_id_v1(d) == node.kernel_semantics_id) {
+    if !palw_kernel_is_head_sliced_v1(node.kernel_semantics_id) {
         return None;
     }
     let head = node.tile_len as u64;
