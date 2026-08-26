@@ -435,7 +435,7 @@ impl<'a> Qwen36Engine<'a> {
             probe.push((n("attn_norm"), normed.clone()));
             let delta = match s.layer_types[li] {
                 Qwen36LayerKind::LinearAttention => self.linear_arm(cache, li, &normed, &mut probe)?,
-                Qwen36LayerKind::FullAttention => self.full_arm(cache, li, &normed, position)?,
+                Qwen36LayerKind::FullAttention => self.full_arm(cache, li, &normed, position, &mut probe)?,
             };
             probe.push((n("linear_out"), delta.clone()));
             let aligned = a16_requant(&h, &a.params_sized(&n("attn_align.a16"), d)?).map_err(refuse("attn_align"))?;
@@ -614,7 +614,14 @@ impl<'a> Qwen36Engine<'a> {
 
     /// **The gated-attention arm.** QK-norm per head before the rotation, partial rotation, GQA
     /// softmax attention, then an elementwise `sigmoid` gate on the output.
-    fn full_arm(&self, cache: &mut Qwen36Cache, li: usize, normed: &[i32], position: usize) -> Result<Vec<i32>, Qwen36Error> {
+    fn full_arm(
+        &self,
+        cache: &mut Qwen36Cache,
+        li: usize,
+        normed: &[i32],
+        position: usize,
+        probe: &mut Vec<(String, Vec<i32>)>,
+    ) -> Result<Vec<i32>, Qwen36Error> {
         let a = self.artifact;
         let s = &a.shape;
         let (d, hd) = (s.d_model, s.head_dim);
@@ -634,6 +641,9 @@ impl<'a> Qwen36Engine<'a> {
         let gate_raw = self.project(&n("attn_gate.weight"), normed, q_dim, true)?;
         let k = self.project(&n("attn_k.weight"), normed, kv_dim, false)?;
         let v = self.project(&n("attn_v.weight"), normed, kv_dim, false)?;
+        probe.push((n("attn_q"), q.clone()));
+        probe.push((n("attn_gate"), gate_raw.clone()));
+        probe.push((n("attn_v"), v.clone()));
 
         // QK-norm: RMSNorm PER HEAD, before the rotation. Normalizing the whole row instead would
         // couple the heads, and doing it after the rotation would normalize away part of what the
@@ -654,6 +664,8 @@ impl<'a> Qwen36Engine<'a> {
         let clamp = a.one_param(&n("attn_rope.a16"))?;
         let q = q36_rope_partial(&q, hd, s.rotary_dim, cos_row, sin_row, clamp).map_err(refuse("rope_q"))?;
         let k = q36_rope_partial(&k, hd, s.rotary_dim, cos_row, sin_row, clamp).map_err(refuse("rope_k"))?;
+        probe.push((n("attn_q_rot"), q.clone()));
+        probe.push((n("attn_k_rot"), k.clone()));
 
         cache.keys[li].push(k);
         cache.values[li].push(v);
@@ -679,9 +691,18 @@ impl<'a> Qwen36Engine<'a> {
         // The output gate. `sigmoid` of the gate row, applied elementwise before the projection.
         let gate = q36_sigmoid_gate(&gate_raw);
         let gated = q36_gate_apply(&attn, &gate, a.one_param(&n("attn_gated.a16"))?).map_err(refuse("attn_gate_apply"))?;
+        probe.push((n("attn_values"), attn));
+        probe.push((n("attn_gated"), gated.clone()));
 
-        a16_matmul_requant(a.tensor_sized(&n("attn_o.weight"), d * q_dim)?, &gated, &a.params_sized(&n("attn_o.weight.a16"), d)?)
-            .map_err(refuse("attn_o"))
+        // Through `project`, not the plain matmul: every weight tensor this converter writes
+        // carries a per-32 group exponent, and a matmul that ignores it reads codes anchored
+        // `2^QWEN36_MAX_GROUP_EXP` below their true scale. The output projection was the one site
+        // still calling the dense form, and it did not read as an approximation — the dot product
+        // came out a million times small and the narrowing rounded the whole row to **zero**.
+        let out = self.project(&n("attn_o.weight"), &gated, d, false)?;
+        let _ = q_dim;
+        probe.push((n("attn_out"), out.clone()));
+        Ok(out)
     }
 
     /// **The mixture.** Route, run the eight chosen experts and the always-on shared one, combine.
