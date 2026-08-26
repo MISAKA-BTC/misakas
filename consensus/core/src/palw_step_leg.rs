@@ -228,6 +228,43 @@ pub fn step_merkle_root_v1(ordered_leaf_hashes: &[Hash64]) -> Result<Hash64, Pal
     Ok(level[0])
 }
 
+/// **The sibling path for one leaf of the tree [`step_merkle_root_v1`] builds** — the producing
+/// side of the opening [`step_opening_root_v1`] verifies.
+///
+/// Exported beside the root builder rather than reimplemented by each carrier, because the
+/// promote-odd shape lives in exactly two loops today and a third copy in a challenger is the
+/// "second name-to-bytes mapping" class of defect: it fails silently as an opening nobody can
+/// verify, or worse, verifies against the wrong tree.
+pub fn step_merkle_path_v1(ordered_leaf_hashes: &[Hash64], mut index: usize) -> Result<Vec<Hash64>, PalwStepLegError> {
+    let count = ordered_leaf_hashes.len() as u64;
+    if count == 0 || count > PALW_STEP_LEG_MAX_LEAVES {
+        return Err(PalwStepLegError::LeafCountOutOfRange { got: count, max: PALW_STEP_LEG_MAX_LEAVES });
+    }
+    if index as u64 >= count {
+        return Err(PalwStepLegError::LeafIndexOutOfRange { index: index as u64, count });
+    }
+    let mut level: Vec<Hash64> = ordered_leaf_hashes.iter().enumerate().map(|(i, leaf)| step_merkle_leaf(i as u64, leaf)).collect();
+    let mut path = Vec::new();
+    while level.len() > 1 {
+        let promoted = !level.len().is_multiple_of(2) && index == level.len() - 1;
+        if !promoted {
+            let sibling = if index.is_multiple_of(2) { index + 1 } else { index - 1 };
+            path.push(level[sibling]);
+        }
+        let mut next = Vec::with_capacity(level.len().div_ceil(2));
+        let mut chunks = level.chunks_exact(2);
+        for pair in &mut chunks {
+            next.push(keyed64(PALW_STEP_LEG_DOMAIN_MERKLE_NODE, &[pair[0].as_byte_slice(), pair[1].as_byte_slice()]));
+        }
+        if let [odd] = chunks.remainder() {
+            next.push(*odd);
+        }
+        index /= 2;
+        level = next;
+    }
+    Ok(path)
+}
+
 /// Recomputes the root a valid opening implies (the caller compares to the committed root).
 /// Promote levels are derived from `(leaf_index, leaf_count)` and consume nothing.
 pub fn step_opening_root_v1(leaf_count: u64, opening: &PalwStepOpeningV1) -> Result<Hash64, PalwStepLegError> {

@@ -1601,6 +1601,229 @@ pub fn base0_logits_trace_root_v1(
     Hash64::from_bytes(out)
 }
 
+// -------------------------------------------------------------------------------------------
+// The TILED logits trace — the openable commitment a large vocabulary requires
+// -------------------------------------------------------------------------------------------
+
+/// Lanes per logits tile in the tiled scheme. 4,096 lanes is 16 KiB of `i32`: two tile openings
+/// plus their paths — the whole of a decode-token close under this scheme — is ~36 KiB against the
+/// 80 KiB a lifecycle carrier can relay, and at Qwen3.6's 248,320-lane vocabulary a row is 61
+/// tiles, a six-deep tree.
+pub const PALW_LOGITS_TILE_LANES: usize = 4_096;
+
+pub const PALW_TILED_LOGITS_DOMAIN_TILE: &[u8] = b"misaka-palw/tiled-logits/tile/v1";
+pub const PALW_TILED_LOGITS_DOMAIN_ROW: &[u8] = b"misaka-palw/tiled-logits/row/v1";
+pub const PALW_TILED_LOGITS_DOMAIN_ROOT: &[u8] = b"misaka-palw/tiled-logits/root/v1";
+pub const PALW_TILED_LOGITS_DOMAIN_SCHEME: &[u8] = b"misaka-palw/tiled-logits/scheme/v1";
+
+/// The scheme's identity, for the registration and the job context's `trace_scheme_id` slot. A
+/// constant of the DOMAIN string rather than of a version number, so two schemes cannot collide by
+/// both being "3".
+pub fn tiled_logits_scheme_id_v1() -> Hash64 {
+    tiled_keyed(PALW_TILED_LOGITS_DOMAIN_SCHEME, &[b"tiled-logits-v1"])
+}
+
+fn tiled_keyed(domain: &'static [u8], parts: &[&[u8]]) -> Hash64 {
+    let mut h = blake2b_simd::Params::new().hash_length(64).key(domain).to_state();
+    for p in parts {
+        h.update(&(p.len() as u64).to_le_bytes());
+        h.update(p);
+    }
+    let mut out = [0u8; 64];
+    out.copy_from_slice(h.finalize().as_bytes());
+    Hash64::from_bytes(out)
+}
+
+/// One tile's leaf hash: the context, the row, the tile index and the lanes. The context is inside
+/// every leaf for the same reason it is inside a step tile's — a leaf that verifies under one job
+/// must not verify under another.
+pub fn tiled_logits_tile_leaf_v1(ctx_hash: &Hash64, row: u32, tile: u32, lanes: &[i32]) -> Hash64 {
+    let mut bytes = Vec::with_capacity(lanes.len() * 4);
+    for v in lanes {
+        bytes.extend_from_slice(&v.to_le_bytes());
+    }
+    tiled_keyed(
+        PALW_TILED_LOGITS_DOMAIN_TILE,
+        &[ctx_hash.as_byte_slice(), &(row as u64).to_le_bytes(), &(tile as u64).to_le_bytes(), &bytes],
+    )
+}
+
+/// A row's root: the step leg's own Merkle (promote-odd, the same node domain), over the row's
+/// tile leaves. ONE tree implementation in the codebase — `step_opening_root_v1` walks the
+/// openings for this tree exactly as it walks a leg's, because a second Merkle idiom is a second
+/// place to get an odd node wrong.
+pub fn tiled_logits_row_root_v1(ctx_hash: &Hash64, row: u32, lanes: &[i32]) -> Hash64 {
+    let leaves: Vec<Hash64> = lanes
+        .chunks(PALW_LOGITS_TILE_LANES)
+        .enumerate()
+        .map(|(t, chunk)| tiled_logits_tile_leaf_v1(ctx_hash, row, t as u32, chunk))
+        .collect();
+    crate::palw_step_leg::step_merkle_root_v1(&leaves).expect("a row has at least one tile and fewer than the leg cap")
+}
+
+/// The trace root: the context, the run's shape, a MERKLE root over the row roots — a tree, not a
+/// chain, because recomputing a chained root needs every link and at 4,096 decode tokens the links
+/// alone are 256 KiB, past the whole close budget — and the generated ids flat, which at four
+/// bytes each stay under 16 KiB at any decode this court admits.
+pub fn tiled_logits_trace_root_v1(ctx: &crate::palw_v2::PalwJobContextV2, logits_rows: &[Vec<i32>], generated: &[u32]) -> Hash64 {
+    let ctx_hash = ctx.context_hash();
+    let row_roots: Vec<Hash64> =
+        logits_rows.iter().enumerate().map(|(r, row)| tiled_logits_row_root_v1(&ctx_hash, r as u32, row)).collect();
+    let rows_root = crate::palw_step_leg::step_merkle_root_v1(&row_roots).expect("a run has at least one row and fewer than the leg cap");
+    let mut ids = Vec::with_capacity(generated.len() * 4);
+    for t in generated {
+        ids.extend_from_slice(&t.to_le_bytes());
+    }
+    tiled_keyed(
+        PALW_TILED_LOGITS_DOMAIN_ROOT,
+        &[
+            ctx_hash.as_byte_slice(),
+            &(ctx.declared_prefill_tokens as u64).to_le_bytes(),
+            &(ctx.exact_decode_tokens as u64).to_le_bytes(),
+            &(logits_rows.len() as u64).to_le_bytes(),
+            rows_root.as_byte_slice(),
+            &ids,
+        ],
+    )
+}
+
+/// **The tiled decode-token pin: everything a challenger carries to refute one committed token,
+/// O(tile + log) in the vocabulary.**
+///
+/// No claimed value rides anywhere in it. The committed token is `generated[position]`, its value
+/// is READ from the opened tile that contains its lane, and the beating value is read from the
+/// other opened tile — so the "fabricate a value above the whole row" attack has nothing to
+/// fabricate into, and the two arms a claimed-value scheme would need collapse into one two-tile
+/// form. When both lanes share a tile the two openings are the same opening, carried twice.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwTiledDecodePinV1 {
+    /// Which decode step's token is challenged (0-based over the decode calls).
+    pub position: u32,
+    /// Every generated id, flat — they are inside the trace root's preimage and four bytes each.
+    pub generated_token_ids: Vec<u32>,
+    /// The challenged row's root, opened against the trace root's rows tree.
+    pub row_root: Hash64,
+    pub row_opening: crate::palw_step_leg::PalwStepOpeningV1,
+    /// The tile holding the COMMITTED token's lane, and its lanes verbatim.
+    pub committed_tile_lanes: Vec<i32>,
+    pub committed_opening: crate::palw_step_leg::PalwStepOpeningV1,
+    /// The tile holding the lane the challenger says BEATS it.
+    pub beat_tile_lanes: Vec<i32>,
+    pub beat_opening: crate::palw_step_leg::PalwStepOpeningV1,
+    /// The beating lane's index in the vocabulary.
+    pub beat_lane: u32,
+}
+
+/// **Refute a committed decode token under the tiled scheme.**
+///
+/// The tie rule is [`base0_decode_token_select_v1`]'s, restated arithmetically: lane `j` beats the
+/// committed lane `c` iff `v_j > v_c`, or `v_j == v_c` and `j < c`. The court applies the SAME
+/// rule the engine's decode loop applies — decode argmax on this family has already produced one
+/// real coordinate bug, so the rule is a named thing, not an accident of iteration order.
+///
+/// Verification order is authentication first, arithmetic second: the ids and the row root are
+/// checked against the claim's committed trace root, both tiles against the row root, and only
+/// then are two lanes compared. A pin that fails any recomputation is `InputSetNotCanonical` —
+/// malformed evidence, never a verdict either way.
+pub fn check_tiled_decode_token_refutation_v1(
+    binding: &PalwStepBindingV2,
+    pin: &PalwTiledDecodePinV1,
+) -> Result<crate::palw_step_leg::PalwStepRefutationVerdictV1, PalwStepRefuteError> {
+    let bad = PalwStepRefuteError::InputSetNotCanonical;
+    let ctx = &binding.job_context;
+    let decode = ctx.exact_decode_tokens as usize;
+    let vocab = binding.shape_profile.vocab_size as usize;
+    if pin.generated_token_ids.len() != decode {
+        return Err(bad("the pin's id count is not the context's decode count"));
+    }
+    let position = pin.position as usize;
+    if position >= decode {
+        return Err(bad("the challenged position is past the decode count"));
+    }
+    // The trace root, from the carried ids and the carried rows-tree opening of this row's root.
+    // Row `position`'s logits are the row SELECTED FROM at that step: prefill contributes one row
+    // (the last prefill position's) and each decode call appends one, so the row index in the
+    // committed row set is exactly `position` for the first committed layout this scheme serves —
+    // the producer commits `decode` rows, one per generated token, each the row its token was
+    // selected from.
+    let row_count = decode as u64;
+    let recomputed_row_root = crate::palw_step_leg::step_opening_root_v1(row_count, &pin.row_opening).map_err(|_| bad("the row opening does not walk"))?;
+    if pin.row_opening.leaf_index != position as u64 || pin.row_opening.leaf_hash != pin.row_root {
+        return Err(bad("the row opening does not open the challenged row's root"));
+    }
+    let ctx_hash = ctx.context_hash();
+    let mut ids = Vec::with_capacity(decode * 4);
+    for t in &pin.generated_token_ids {
+        ids.extend_from_slice(&t.to_le_bytes());
+    }
+    let trace_root = tiled_keyed(
+        PALW_TILED_LOGITS_DOMAIN_ROOT,
+        &[
+            ctx_hash.as_byte_slice(),
+            &(ctx.declared_prefill_tokens as u64).to_le_bytes(),
+            &(ctx.exact_decode_tokens as u64).to_le_bytes(),
+            &row_count.to_le_bytes(),
+            recomputed_row_root.as_byte_slice(),
+            &ids,
+        ],
+    );
+    if trace_root != binding.full_logits_trace_root {
+        return Err(bad("the carried material does not reproduce the claim's own trace root"));
+    }
+
+    // Both tiles, against the row root. The tile width is the scheme constant; the LAST tile is
+    // ragged when the vocabulary is not a multiple of it.
+    let tiles = vocab.div_ceil(PALW_LOGITS_TILE_LANES) as u64;
+    let committed = *pin.generated_token_ids.get(position).expect("bounded above") as usize;
+    if committed >= vocab {
+        return Err(bad("the committed token is past the registered vocabulary"));
+    }
+    let open_tile = |lanes: &[i32], opening: &crate::palw_step_leg::PalwStepOpeningV1, lane: usize| -> Result<i32, PalwStepRefuteError> {
+        let tile = lane / PALW_LOGITS_TILE_LANES;
+        let expected_len = if (tile as u64) + 1 == tiles && !vocab.is_multiple_of(PALW_LOGITS_TILE_LANES) {
+            vocab % PALW_LOGITS_TILE_LANES
+        } else {
+            PALW_LOGITS_TILE_LANES
+        };
+        if lanes.len() != expected_len {
+            return Err(bad("an opened tile is not the scheme's width"));
+        }
+        if opening.leaf_index != tile as u64 {
+            return Err(bad("an opening does not name the lane's own tile"));
+        }
+        if opening.leaf_hash != tiled_logits_tile_leaf_v1(&ctx_hash, pin.position, tile as u32, lanes) {
+            return Err(bad("an opened tile's lanes do not hash to its leaf"));
+        }
+        let root = crate::palw_step_leg::step_opening_root_v1(tiles, opening).map_err(|_| bad("a tile opening does not walk"))?;
+        if root != pin.row_root {
+            return Err(bad("a tile opening does not reach the challenged row's root"));
+        }
+        Ok(lanes[lane % PALW_LOGITS_TILE_LANES])
+    };
+    let beat_lane = pin.beat_lane as usize;
+    if beat_lane >= vocab {
+        return Err(bad("the beating lane is past the registered vocabulary"));
+    }
+    let v_committed = open_tile(&pin.committed_tile_lanes, &pin.committed_opening, committed)?;
+    let v_beat = open_tile(&pin.beat_tile_lanes, &pin.beat_opening, beat_lane)?;
+
+    // The rule, exactly as the engine selects: strictly greater wins; equal goes to the LOWER index.
+    let beats = v_beat > v_committed || (v_beat == v_committed && beat_lane < committed);
+    if beats {
+        let fault = crate::palw_step_leg::PalwStepFaultV1::DecodeTokenMismatch { position: pin.position };
+        return Ok(crate::palw_step_leg::PalwStepRefutationVerdictV1 {
+            fault,
+            evidence_id: crate::palw_step_leg::step_refutation_evidence_id(
+                &binding.committed_execution_root,
+                PALW_DECODE_TOKEN_EVIDENCE_KIND,
+                pin.position as u64,
+                fault,
+            ),
+        });
+    }
+    Err(PalwStepRefuteError::NoFaultFound)
+}
+
 /// **ADR-0049 Decision E's selection rule, pinned: argmax with ties broken to the LOWEST
 /// index.** The engine's decode loop and the court's decode-token adjudication both call this
 /// one function; a committed token is refutable exactly because the rule is a thing that can be
@@ -3643,6 +3866,107 @@ pub(crate) mod tests {
             (0..decode).map(|c| (0..vocab).map(|i| ((c * 31 + i * 7) % 23) as i32 - 11).collect()).collect();
         let generated: Vec<u32> = logits_rows.iter().map(|r| base0_decode_token_select_v1(r) as u32).collect();
         base0_binding_with_decode_root(logits_rows, generated)
+    }
+
+    /// Assemble a challenger's tiled pin for one position, from the full rows — the same work a
+    /// real challenger does from served material, so a test that uses it is exercising the real
+    /// opening path and not a shortcut past it.
+    fn tiled_pin(
+        ctx: &crate::palw_v2::PalwJobContextV2,
+        logits_rows: &[Vec<i32>],
+        generated: &[u32],
+        position: u32,
+        beat_lane: u32,
+    ) -> PalwTiledDecodePinV1 {
+        use crate::palw_step_leg::PalwStepOpeningV1;
+        let ctx_hash = ctx.context_hash();
+        let decode = logits_rows.len();
+        let row = &logits_rows[position as usize];
+        let tiles: Vec<Vec<i32>> = row.chunks(PALW_LOGITS_TILE_LANES).map(<[i32]>::to_vec).collect();
+        let tile_leaves: Vec<Hash64> = tiles
+            .iter()
+            .enumerate()
+            .map(|(t, lanes)| tiled_logits_tile_leaf_v1(&ctx_hash, position, t as u32, lanes))
+            .collect();
+        let path_for = |leaves: &[Hash64], index: usize| -> Vec<Hash64> {
+            crate::palw_step_leg::step_merkle_path_v1(leaves, index).expect("the test's trees are inside the leg bounds")
+        };
+        let row_roots: Vec<Hash64> =
+            logits_rows.iter().enumerate().map(|(r, lanes)| tiled_logits_row_root_v1(&ctx_hash, r as u32, lanes)).collect();
+        let committed = generated[position as usize] as usize;
+        let (ct, bt) = (committed / PALW_LOGITS_TILE_LANES, beat_lane as usize / PALW_LOGITS_TILE_LANES);
+        let _ = decode;
+        PalwTiledDecodePinV1 {
+            position,
+            generated_token_ids: generated.to_vec(),
+            row_root: row_roots[position as usize],
+            row_opening: PalwStepOpeningV1 {
+                leaf_index: position as u64,
+                leaf_hash: row_roots[position as usize],
+                siblings: path_for(&row_roots, position as usize),
+            },
+            committed_tile_lanes: tiles[ct].clone(),
+            committed_opening: PalwStepOpeningV1 { leaf_index: ct as u64, leaf_hash: tile_leaves[ct], siblings: path_for(&tile_leaves, ct) },
+            beat_tile_lanes: tiles[bt].clone(),
+            beat_opening: PalwStepOpeningV1 { leaf_index: bt as u64, leaf_hash: tile_leaves[bt], siblings: path_for(&tile_leaves, bt) },
+            beat_lane,
+        }
+    }
+
+    /// **The tiled scheme convicts a lying token and clears an honest one, at a vocabulary the
+    /// flat pin could not carry** — multi-tile rows with a ragged last tile, the exact geometry
+    /// Qwen-scale classes have. Also measures the pin: the whole close stays under the 80 KiB a
+    /// lifecycle carrier can relay, which is the number this scheme exists for.
+    #[test]
+    fn the_tiled_decode_pin_convicts_and_stays_carriable() {
+        let (mut binding, _m, _r, _) = base0_honest_decode_commitment();
+        // A vocabulary of 10,000: three tiles, the last ragged — past anything the flat pin
+        // admits at this budget, small enough for a test to build rows for.
+        let vocab = 10_000usize;
+        let decode = binding.job_context.exact_decode_tokens as usize;
+        binding.shape_profile.vocab_size = vocab as u32;
+        let logits_rows: Vec<Vec<i32>> =
+            (0..decode).map(|c| (0..vocab).map(|i| ((c * 131 + i * 7919) % 65_536) as i32 - 32_768).collect()).collect();
+        let generated: Vec<u32> = logits_rows.iter().map(|r| base0_decode_token_select_v1(r) as u32).collect();
+        binding.full_logits_trace_root = tiled_logits_trace_root_v1(&binding.job_context, &logits_rows, &generated);
+        rebind_committed_root(&mut binding);
+
+        // Honest: no beating lane exists, whichever tile a challenger opens.
+        for p in 0..decode as u32 {
+            let argmax = generated[p as usize];
+            let elsewhere = if argmax == 0 { 1 } else { argmax - 1 };
+            let pin = tiled_pin(&binding.job_context, &logits_rows, &generated, p, elsewhere);
+            assert!(
+                matches!(check_tiled_decode_token_refutation_v1(&binding, &pin), Err(PalwStepRefuteError::NoFaultFound)),
+                "an honest committed token at position {p} clears"
+            );
+        }
+
+        // The lie is inside the commitment, exactly as a fraudulent producer would make it.
+        let mut lying = generated.clone();
+        lying[1] = lying[1].wrapping_add(3) % vocab as u32;
+        binding.full_logits_trace_root = tiled_logits_trace_root_v1(&binding.job_context, &logits_rows, &lying);
+        rebind_committed_root(&mut binding);
+        let true_argmax = generated[1];
+        let pin = tiled_pin(&binding.job_context, &logits_rows, &lying, 1, true_argmax);
+        let verdict = check_tiled_decode_token_refutation_v1(&binding, &pin).expect("the true argmax beats the lie");
+        assert_eq!(verdict.fault, crate::palw_step_leg::PalwStepFaultV1::DecodeTokenMismatch { position: 1 });
+
+        // The carriable-close measurement, at QWEN3.6's real vocabulary arithmetic: two tiles of
+        // 4,096 lanes, the paths a 248,320-lane row needs, the ids of the canonical job.
+        let tile_bytes = PALW_LOGITS_TILE_LANES * 4;
+        let tiles_per_row = 248_320usize.div_ceil(PALW_LOGITS_TILE_LANES);
+        let path = 64 * tiles_per_row.next_power_of_two().trailing_zeros() as usize;
+        let close = 2 * (tile_bytes + path) + 64 + 64 * 1 + 4 * decode + 64;
+        assert!(close < 80 * 1024, "the tiled close is {close} bytes against the 80 KiB carrier budget");
+
+        // And a tampered pin is malformed evidence, not a verdict: bend one lane of the beat tile.
+        let mut bent = tiled_pin(&binding.job_context, &logits_rows, &lying, 1, true_argmax);
+        bent.beat_tile_lanes[0] = bent.beat_tile_lanes[0].wrapping_add(1);
+        assert!(
+            matches!(check_tiled_decode_token_refutation_v1(&binding, &bent), Err(PalwStepRefuteError::InputSetNotCanonical(_))),
+            "a bent tile must be refused as evidence, never adjudicated"
+        );
     }
 
     /// **ADR-0049 Decision E fires, and fires positionally.** An honest commitment clears at
