@@ -332,14 +332,16 @@ pub fn base0_binding_from_capture_v1(
     };
     let context_hash = ctx.context_hash();
     let profile_hash = profile.shape_profile_id();
-    let checkpoint_profile = kaspa_consensus_core::palw_legs::PalwCheckpointProfileV1 {
-        version: kaspa_consensus_core::palw_legs::PALW_LEGS_OBJECT_VERSION_V1,
-        checkpoint_interval: 1,
-        state_layout_id: Hash64::default(),
-    };
+    // The family's registered layout, at this producer's interval. Both were `Hash64::default()`
+    // — the unregistered sentinel — which was the only honest value while no map existed; filing
+    // it now would file a layout the class does not register, and `verify_binding` refuses that.
+    let checkpoint_profile = kaspa_consensus_core::palw_state_chunk_map::integer_kv_checkpoint_profile_v1(1);
     let step_leaf_count = tiles.leaves.len() as u64;
     let step_merkle_root = step_merkle_root_v1(&tiles.leaves).map_err(|_| LegError::EmptySpace)?;
-    let state_chunk_map_id = Hash64::default();
+    // **From the profile, not from the family constant.** A producer files what ITS class
+    // registered; reaching for the constant here would work today and would silently file the
+    // integer family's map for a class that had registered something else. One source.
+    let state_chunk_map_id = profile.state_chunk_map_id;
     // The canonical checkpoint count is `decode_calls / interval`; a job with one decode token has
     // no decode CALLS, so the leg is the empty one — and the shape pass refuses any other pairing
     // of count and root, which is why this is derived rather than chosen.

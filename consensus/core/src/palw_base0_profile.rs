@@ -533,7 +533,12 @@ pub fn base0_profile_v1(geometry: PalwBase0GeometryV1) -> Result<PalwShapeProfil
         // no FMA contraction to pin (ADR-0040 Decision E).
         contraction_facts: Vec::new(),
         kv_chunk_calls: 0,
-        state_chunk_map_id: Hash64::default(),
+        // **Registered** (was `Hash64::default()`, the unregistered sentinel). This class's
+        // replay state is int8 KV rows whose layout is a function of the geometry above, so
+        // the map derives rather than being measured — see `palw_state_chunk_map`. Until this
+        // line, the checkpoint leg committed to bytes nothing could interpret and every
+        // dispute replayed from step 0.
+        state_chunk_map_id: crate::palw_state_chunk_map::integer_kv_state_chunk_map_id_v1(),
     };
     profile.validate_shape()?;
     Ok(profile)
