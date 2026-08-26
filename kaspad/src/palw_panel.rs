@@ -1496,13 +1496,23 @@ impl AsyncService for PalwPanelService {
 
     fn start(self: Arc<Self>) -> AsyncServiceFuture {
         Box::pin(async move {
-            // A node registering its first bond has none, and every panel duty is keyed on one —
-            // so this is a different job, not a mode of the same one.
+            // **Registration is a precondition, not a mode.** A node registering its first bond has
+            // none, so the registration job runs first — but it used to run INSTEAD, and
+            // `--palw-register-bond` left in a service unit therefore replaced the panel with a
+            // one-shot. `bond_registration_worker` sees the key already holds a bond, says so in one
+            // INFO line, and returns; the service future completed and the seat answered nothing for
+            // the rest of the process's life. Panels are derived from CHAIN state, not from whether
+            // this process runs the service, so the bond kept being drawn — and `slash_silent_seats`
+            // charges an absent seat `claim.reserved` at the receipt timeout and at both court
+            // closes. The flag that was supposed to create a bond was quietly spending it.
+            //
+            // Falling through is safe in every case: `worker()` declines by itself, with its own
+            // message, when there is no seat identity to run as — which is exactly the state a node
+            // that has only just registered is in.
             if self.config.register_bond {
                 self.bond_registration_worker().await;
-            } else {
-                self.worker().await;
             }
+            self.worker().await;
             Ok(())
         })
     }

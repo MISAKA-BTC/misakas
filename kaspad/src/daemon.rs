@@ -1209,9 +1209,25 @@ Do you confirm? (y/n)";
         // then mined the floor because the hex was wrong, would be reporting success for work
         // nobody asked for.
         let base_class_id = match (&args.palw_producer_class, base_class_id) {
-            (Some(hex), _) => Some(hex.parse::<kaspa_consensus_core::Hash64>().unwrap_or_else(|e| {
+            // **The override is gated on the bundle, because the class it names is resolved against
+            // the bundle's court.** It used to apply on any network, and the dispatch below keys on
+            // this very value — so on a hash-only network the flag made the tuple all-`Some`,
+            // control reached `palw_court.expect("a ConsensusV2 bundle was matched above")`, and
+            // none had been. The process died on an assertion that was false, and the arm written
+            // for exactly this case — "declares no ConsensusV2 ruleset — nothing to produce" — was
+            // unreachable whenever the flag was present. The sibling panel wiring gates on
+            // `palw_court.is_some()`, which is what makes this a lost invariant and not a style.
+            (Some(hex), Some(_)) => Some(hex.parse::<kaspa_consensus_core::Hash64>().unwrap_or_else(|e| {
                 panic!("--palw-producer-class {hex} is not a 128-hex class id: {e}");
             })),
+            (Some(hex), None) => {
+                warn!(
+                    "--palw-producer-class {hex} names a class, but {} declares no ConsensusV2 ruleset — there is no court to \
+                     resolve it against",
+                    config.params.net
+                );
+                None
+            }
             (None, base) => base,
         };
         match (base_class_id, &args.palw_producer_key, &args.palw_producer_bond, &args.palw_producer_pay_address) {

@@ -3466,8 +3466,24 @@ fn sweep_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2
             // deadline fired, so the hold is over by construction — the predicate is asserted
             // rather than re-tested, because a deadline armed by `void_claim` and a hold computed
             // from the record are the same arithmetic.
-            PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::BindTimeout, .. }
-                if matches!(claim.source, PalwClaimSourceV2::FreePrompt { .. }) && builder.params.fp_abandon_hold_daa > 0 =>
+            // **Guarded on WHICH deadline fired, not only on the phase.** An abandoned free-prompt
+            // claim owns TWO deadlines over its life — the hold's, then its retirement's — and this
+            // arm sits above the generic terminal-retirement arm, so without the equality below the
+            // second one re-entered here. `release_abandon_hold` then read the entry it had already
+            // removed as `unwrap_or(0)` and `0.checked_sub(reserved)` returned `None`: a transition
+            // that is a pure function of (parent state, daa) fails identically on every node, so the
+            // block is disqualified everywhere and the chain never advances again. The shipped
+            // bundle satisfies both preconditions (`FP_ABANDON_HOLD` 600, `CLAIM_RETIREMENT` 2400)
+            // and no test covered the pair: the hold test runs with retirement off and the three
+            // retirement tests run with the hold at zero.
+            //
+            // The `debug_assert!` below could not catch it — it is true on both entries — which is
+            // the shape this codebase keeps finding: a gate whose predicate cannot distinguish the
+            // case it exists to distinguish.
+            PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::BindTimeout, voided_daa }
+                if matches!(claim.source, PalwClaimSourceV2::FreePrompt { .. })
+                    && builder.params.fp_abandon_hold_daa > 0
+                    && deadline == voided_daa.saturating_add(builder.params.fp_abandon_hold_daa) =>
             {
                 debug_assert!(
                     !palw_claim_is_on_abandon_hold_v2(&claim, builder.params, ctx.daa_score),
@@ -7289,6 +7305,57 @@ pub(crate) mod tests {
     /// exist yet (`anchor_delay > 0` is enforced precisely so "the attempt's own block cannot
     /// seed its panel"). What remains is a CHOICE WITH A PRICE — decline to bind and forfeit a
     /// block — not a free re-roll. What is genuinely open, and stated in the register rather than
+    /// **An abandoned free-prompt claim owns TWO deadlines, and the second one used to halt the
+    /// chain forever.**
+    ///
+    /// The hold's expiry and the retirement are both entries in the same `deadlines` set, and the
+    /// hold arm matched on the claim's PHASE — `Voided{BindTimeout}` + free-prompt + hold enabled —
+    /// without asking which of the two had fired. So the retirement re-entered the hold arm,
+    /// `release_abandon_hold` read the exposure entry it had already removed as `unwrap_or(0)`, and
+    /// `0.checked_sub(reserved)` returned `None`. That error leaves a PURE function of (parent
+    /// state, daa): every node fails it identically, the block is disqualified everywhere, and no
+    /// later block can ever apply. There is no recovery object.
+    ///
+    /// The shipped bundle satisfies both preconditions — `FP_ABANDON_HOLD` 600 and
+    /// `CLAIM_RETIREMENT` 2400 — so this was not a corner: it was every abandoned free-prompt
+    /// commitment, 2400 DAA after it was made. What kept it invisible is that no test ran the pair.
+    /// The one hold test runs with retirement off; the three retirement tests run with the hold at
+    /// zero. This test exists to be the combination, and it is red against the unguarded arm.
+    #[test]
+    fn an_abandoned_claim_survives_both_of_its_deadlines() {
+        // The hold fixture, plus a retirement strictly later than the hold — the shipped ordering.
+        let p = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, 100, 1000, 50)
+            .unwrap()
+            .with_claim_retirement_daa(200)
+            .unwrap();
+        let (base, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+        let (s2, _) = apply(&base, &p, &ctx(2, 101, 2), &[fp_commit(0xFC, 60, 3)], None);
+        assert_eq!(s2.reserved_exposure(&bond_key(1)), 300, "the commitment reserves against its bond");
+
+        // 1. The bind window lapses: the claim is voided and the hold starts at daa 200.
+        let (voided, _) = apply(&s2, &p, &ctx(3, 200, 3), &[], None);
+        assert!(matches!(
+            voided.claim(&h64(0xFC)).unwrap().phase,
+            PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::BindTimeout, .. }
+        ));
+        assert_eq!(voided.reserved_exposure(&bond_key(1)), 300, "the hold keeps the reservation");
+
+        // 2. The hold elapses at 200 + 50 and gives the collateral back.
+        let (released, _) = apply(&voided, &p, &ctx(4, 260, 4), &[], None);
+        assert_eq!(released.reserved_exposure(&bond_key(1)), 0, "the hold expires and returns what it held");
+        assert!(released.claim(&h64(0xFC)).is_some(), "released is not retired — the record still owes a retirement");
+
+        // 3. The retirement fires at 200 + 200. THIS is the block that used to fail, and to keep
+        //    failing on every node forever after.
+        let (retired, _) = apply(&released, &p, &ctx(5, 420, 5), &[], None);
+        assert!(retired.claim(&h64(0xFC)).is_none(), "the second deadline retires the claim instead of erroring the transition");
+        assert_eq!(retired.reserved_exposure(&bond_key(1)), 0, "and it does not release a hold that was already released");
+
+        // 4. The chain keeps going. A halt is only visible if something comes after it.
+        let (after, _) = apply(&retired, &p, &ctx(6, 421, 6), &[], None);
+        assert!(after.claim(&h64(0xFC)).is_none(), "and the block after the retirement applies like any other");
+    }
+
     /// papered over here: binding is permissionless but nobody is paid to bind someone else's
     /// claim, so in practice the producer decides.
     #[test]
