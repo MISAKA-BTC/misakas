@@ -1308,15 +1308,23 @@ mod tests {
         // The scores node is `[Step(q_rot), CachedK]`. The query row is one position; the cache is
         // the whole history — `prefill + call` positions — and each row is `kv_dim` wide, tiled at
         // the node's `tile_len`. Anchored, the cache contributes ONE position.
+        // Under the range carrier `inputs` is ROWS (one per ref), so the history lives in the
+        // KV row's PREIMAGE count — same pinned arithmetic, one level down.
         let tiles_of = |elements: u32| elements.div_ceil(profile.attn_nodes[idx].tile_len) as usize;
         let kv_dim = profile.attn_kv_heads as u32 * profile.attn_head_dim;
         let history = ctx.declared_prefill_tokens + call;
-        let q_tiles = long.inputs.len() - history as usize * tiles_of(kv_dim);
-        assert_eq!(long.inputs.len(), q_tiles + history as usize * tiles_of(kv_dim), "the long set is not the history it should be");
-        assert_eq!(anchored.inputs.len(), q_tiles + tiles_of(kv_dim), "the anchored set is not one cached position");
-        // On this fixture: 12 → 4, the cache's share 10 → 2. On the RC's worst-case shape
-        // (prefill 64, decode 64, kv_dim 256, tile_len 64) the same arithmetic is 508 → 4.
-        assert_eq!((long.inputs.len(), anchored.inputs.len()), (12, 4), "the fixture's opening counts moved");
+        assert_eq!(long.inputs.len(), 2, "the scores node reads two refs");
+        assert_eq!(anchored.inputs.len(), 2, "anchored too — the anchor replaces leaves, not rows");
+        let leaves =
+            |r: &kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1| (r.inputs[0].preimages.len(), r.inputs[1].preimages.len());
+        assert_eq!(leaves(&long), (tiles_of(kv_dim) * 0 + 2, history as usize * tiles_of(kv_dim)), "the long set is not the history it should be");
+        assert_eq!(leaves(&anchored), (2, tiles_of(kv_dim)), "the anchored set is not one cached position");
+        // On this fixture: 12 → 4 total leaves, the cache's share 10 → 2. On the RC's worst-case
+        // shape (prefill 64, decode 64, kv_dim 256, tile_len 64) the same arithmetic is 508 → 4.
+        let total = |r: &kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1| {
+            r.inputs.iter().map(|i| i.preimages.len()).sum::<usize>()
+        };
+        assert_eq!((total(&long), total(&anchored)), (12, 4), "the fixture's opening counts moved");
 
         let oracle = kaspa_consensus_core::palw_step_refute::PalwNoWeightsV1;
         let verdict_of = |r: &kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1| {

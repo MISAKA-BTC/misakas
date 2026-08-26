@@ -406,18 +406,31 @@ pub fn derive_court_cost_v1(profile: &PalwShapeProfileV3) -> Result<PalwCourtCos
                     width = k.max(1).checked_mul(tile).ok_or_else(over)?;
                 }
                 let src_tile = source_tile_len_v1(table, node, *r);
-                let leaves = match *r {
-                    // The cache is one row per position however the reading node is programmed.
-                    PALW_STEP_INPUT_KV_K | PALW_STEP_INPUT_KV_V => n_ctx.checked_mul(kv_dim.div_ceil(src_tile)),
-                    // Everything else is `positions` copies of its own row. The checkpoint sentinel
-                    // is included and is priced pessimistically on purpose: `canonical_input_leaves`
-                    // refuses it outright today ("registration-opaque"), so a class reaching it is
-                    // unadjudicable rather than cheap, and a low price here would read as approval.
-                    _ => positions.checked_mul(width.div_ceil(src_tile)),
-                }
-                .ok_or_else(over)?;
-                let per_leaf = leaf_bytes(src_tile.min(width.max(1))).ok_or_else(over)?;
-                evidence = evidence.checked_add(leaves.checked_mul(per_leaf).ok_or_else(over)?).ok_or_else(over)?;
+                // **Priced as RANGE RUNS, because that is the carrier's form.** One position of
+                // one ref is a contiguous run of tiles (the enumeration puts a node's tiles at
+                // consecutive indices), and a run costs its lanes once plus ONE bounded sibling
+                // set — `depth + ceil(log2 k) + 1` hashes, the range walk's own worst case —
+                // plus a small per-leaf preimage header. Per-leaf full paths priced a 2,048-lane
+                // row at tile 8 at 327 KiB of path for 8 KiB of lanes, and the whole class's
+                // admissibility hung on exactly that difference.
+                let (runs, run_tiles, run_lanes) = match *r {
+                    // The cache: one run per position, each `kv_dim` wide.
+                    PALW_STEP_INPUT_KV_K | PALW_STEP_INPUT_KV_V => (n_ctx, kv_dim.div_ceil(src_tile), kv_dim),
+                    // Everything else: `positions` runs of the (possibly sliced) row. The
+                    // checkpoint sentinel stays priced pessimistically on purpose: the leaf set
+                    // refuses it outright today, so a class reaching it is unadjudicable rather
+                    // than cheap, and a low price here would read as approval.
+                    _ => (positions, width.div_ceil(src_tile), width),
+                };
+                let run_path = step_path_bytes
+                    .checked_add(64 * (u64::from(run_tiles.max(1).next_power_of_two().trailing_zeros()) + 1))
+                    .ok_or_else(over)?;
+                let per_run = run_lanes
+                    .checked_mul(4)
+                    .and_then(|lanes| lanes.checked_add(run_path))
+                    .and_then(|v| v.checked_add(24u64.checked_mul(run_tiles)?))
+                    .ok_or_else(over)?;
+                evidence = evidence.checked_add(runs.checked_mul(per_run).ok_or_else(over)?).ok_or_else(over)?;
             }
 
             // **The generated-token pin** (ADR-0049 Decision E). A gather at a DECODE position
@@ -1124,9 +1137,26 @@ mod tests {
             p.n_ctx
         );
 
+        // The model-free floor, in the CARRIER's own form: since the range openings landed, a
+        // canonical row rides one sibling set per contiguous run, so the floor is the runs'
+        // sibling bytes — counted by the same `step_range_sibling_count_v1` the verifier's walk
+        // consumes, over the run structure the required set itself implies. (The per-leaf floor
+        // this test first asserted became an OVERSTATEMENT the day paths were shared; a real
+        // close is strictly larger than the runs' paths, and no longer larger than the leaves'.)
         let worst = worst_case_step_leaf_count_v1(&p).expect("inside the cap");
-        let path_bytes = u64::from(worst.max(2).next_power_of_two().trailing_zeros()) * 64;
-        let floor_bytes = leaves * path_bytes;
+        let mut floor_bytes = 0u64;
+        for row in &required {
+            let mut runs: Vec<(u64, u64)> = Vec::new();
+            for (idx, _) in row {
+                match runs.last_mut() {
+                    Some((start, len)) if *start + *len == *idx => *len += 1,
+                    _ => runs.push((*idx, 1)),
+                }
+            }
+            for (first, k) in runs {
+                floor_bytes += crate::palw_step_leg::step_range_sibling_count_v1(worst, first, k) * 64;
+            }
+        }
 
         let cost = derive_court_cost_v1(&p).expect("derivable");
         assert!(
@@ -1170,7 +1200,8 @@ mod tests {
         // The floor as it ships: flat, and inside the ceiling with the margin it was sized for.
         let floor = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("expressible");
         assert_eq!(floor.logits_scheme_id, flat_logits_scheme_id_v1(), "the floor commits the scheme its producer can build");
-        assert_eq!(derive_court_cost_v1(&floor).expect("derivable").max_close_bytes, 61_040);
+        // Re-frozen with the range-opening carrier — see `no_qwen_geometry_...` for the trail.
+        assert_eq!(derive_court_cost_v1(&floor).expect("derivable").max_close_bytes, 52_704);
 
         let at = |vocab: u32, scheme| {
             let mut p =
@@ -1186,11 +1217,14 @@ mod tests {
 
         // Tiled: the pin stops being the binding arm at any vocabulary, so the same close price
         // comes back however wide the head gets. Two tiles and three paths do not grow with it.
+        // Re-frozen 61,040 → 39,408 with the range-opening carrier (the same move the floor's
+        // own number made); the INVARIANT is the vocabulary-independence, and it is asserted as
+        // such — three widths, one price.
         for vocab in [2_048u32, 4_096, 16_384] {
             assert_eq!(
                 at(vocab, tiled_logits_scheme_id_v1()),
-                61_040,
-                "under the tiled scheme vocab {vocab} must cost what the KV history alone costs"
+                39_408,
+                "under the tiled scheme vocab {vocab} must cost what the non-pin evidence alone costs"
             );
         }
         assert!(at(16_384, tiled_logits_scheme_id_v1()) * 5 <= ceiling * 4, "and still inside the 80% rule");
@@ -1281,7 +1315,8 @@ mod tests {
         // geometry comment carries the sweep; this is the pin.
         let floor = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("expressible");
         let cost = derive_court_cost_v1(&floor).expect("derivable");
-        assert_eq!(cost.max_close_bytes, 61_040, "the floor's most expensive close");
+        // Re-frozen with the range-opening carrier — see `no_qwen_geometry_...` for the trail.
+        assert_eq!(cost.max_close_bytes, 52_704, "the floor's most expensive close");
         assert_eq!(cost.max_terminal_macs, 32_768, "and what a node recomputes to close it");
         assert_eq!(cost.max_operand_count, 2);
         assert!(
@@ -1382,7 +1417,11 @@ mod tests {
     fn no_qwen_geometry_has_a_close_a_transaction_could_carry() {
         let floor = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("expressible");
         let floor_cost = derive_court_cost_v1(&floor).expect("derivable");
-        assert_eq!(floor_cost.max_close_bytes, 61_040, "the floor's most expensive close, measured");
+        // Re-frozen 61,040 → 52,704 when the carrier learned range openings: a canonical row now
+        // rides one sibling set per contiguous run instead of one full path per leaf, and the
+        // floor's binding row was four tiles wide. The ceiling did not move; the close got
+        // cheaper, which is the direction a format change is allowed to move a frozen number.
+        assert_eq!(floor_cost.max_close_bytes, 52_704, "the floor's most expensive close, measured");
         assert!(
             floor_cost.max_close_bytes * 5 <= crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES * 4,
             "the floor stays under 80% of the ceiling — the margin `PALW_RC_BASE0_GEOMETRY` was chosen for"

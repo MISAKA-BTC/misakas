@@ -561,7 +561,14 @@ pub fn arithmetic_close_bytes_v2(proof: &PalwCourtVerdictProofV2) -> Option<u64>
         .saturating_add(step_opening_bytes_v2(&refutation.output_opening))
         .saturating_add(refutation.output_preimage.values_le.len() as u64);
     for input in &refutation.inputs {
-        bytes = bytes.saturating_add(step_opening_bytes_v2(&input.opening)).saturating_add(input.preimage.values_le.len() as u64);
+        // A row costs its lanes plus one sibling set per derived run — the range form's whole
+        // point. Preimage headers ride at the borsh level and are bounded by the same count.
+        for preimage in &input.preimages {
+            bytes = bytes.saturating_add(preimage.values_le.len() as u64).saturating_add(24);
+        }
+        for run in &input.run_siblings {
+            bytes = bytes.saturating_add((run.len() as u64).saturating_mul(64));
+        }
     }
     // **The anchored KV history** (ADR-0030 §3). The checkpoint replaces `prefill + call` step
     // openings per ref with one opening and that checkpoint's state chunks — cheaper, and not free:

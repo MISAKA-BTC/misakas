@@ -4665,7 +4665,12 @@ mod consensus_params_id_tests {
             // floor lowered to 8, and the class constants the whole-close derivation chose —
             // every one inside profile ids or the catalog, so the fingerprint moves once more on
             // the same re-mint.
-            ("testnet-11", TESTNET11_PARAMS, "fc0005633049b3fa0ca4777915586416acc76c11ce28c17d480f2fddaf149fed"),
+            // And once more when the court learned RANGE OPENINGS (2026-08-27): a canonical row
+            // rides one sibling set per contiguous run instead of one path per leaf, the metric
+            // prices runs, and the derivation then CHOSE the hybrid class's constants — canonical
+            // (7,2), n_ctx 8 — landing its worst close at 73,636 of the 81,920 carrier. The
+            // two-class genesis assembles from this value on.
+            ("testnet-11", TESTNET11_PARAMS, "f44239e431ca0cfe558b9969a19a04b61929971c9bb281e0052032056f99f45a"),
             ("simnet", SIMNET_PARAMS, "135e88c69a659d3cf4b5ce8275953c7597b2c67b03d2a74b3d0696c5d0b703fa"),
             ("devnet", DEVNET_PARAMS, "42cc6be92506a14654cb676184e1416796dec682b15e93cb9c639e8e0d77efa5"),
         ]

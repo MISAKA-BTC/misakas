@@ -108,17 +108,16 @@ pub const QWEN36_35B_A3B: PalwQwen36GeometryV1 = PalwQwen36GeometryV1 {
     moe_dim: 512,
     shared_dim: 512,
     vocab_size: 248_320,
-    // **12, and it is the whole-close derivation that says so** — the same number the floor
-    // landed on, for the same reason. The byte arm is nearly independent of context (the fat
-    // matmuls' tile-local openings dominate, fixed by the per-node tiles); what the context
-    // multiplies is the recurrence's replay evidence (~5 KB per position of head slices and
-    // paths) and its recomputation (per-head, `n_ctx × 128 × 128 × 4` MACs), and 12 holds both
-    // under the ceilings with margin while covering the canonical job (8 + 2, footprint 9).
-    // The runtime's rotary table still covers 512: this bounds the JOB a claim may declare, not
-    // what the engine serves off-chain. A larger context returns when the recurrence's replay is
-    // checkpoint-anchored (the state chunk map is registered; the anchor consumption is wired for
-    // attention and not yet for the recurrence).
-    n_ctx: 9,
+    // **8, and it is the whole-close derivation that says so.** What the context multiplies is
+    // the recurrence's replay evidence — five sliced rows per position, and even in range form
+    // each row is one Merkle sibling set, so the replay costs ~8.4 KB of mostly-path per
+    // position — and its per-head recomputation (`n_ctx × 128 × 128 × 4` MACs). Eight positions
+    // hold the worst close at ~90 % of the 80 KiB carrier with the canonical job (7 + 2,
+    // footprint 8) at the boundary. The runtime's rotary table still covers 512: this bounds the
+    // JOB a claim may declare, not what the engine serves off-chain. A larger context returns
+    // when the recurrence's replay is checkpoint-anchored (the state chunk map is registered;
+    // the anchor consumption is wired for attention and not yet for the recurrence).
+    n_ctx: 8,
     n_threads: 1,
     rms_eps_q: 17,
     // 512, not 256: at 256 the worst-case step space is 4,198,428 leaves against the ladder's
@@ -581,7 +580,7 @@ pub fn qwen36_reachable_kernels_v1(g: PalwQwen36GeometryV1) -> Result<std::colle
 /// retargets the cadence to what producers actually achieve, so the job's size buys latency and
 /// nothing else. The court prices this exact job (`pwu_per_inference` is its counted leaves), so
 /// changing it changes the class id — which is what "canonical" means.
-pub const QWEN36_RC_CANONICAL: (u32, u32) = (8, 2);
+pub const QWEN36_RC_CANONICAL: (u32, u32) = (7, 2);
 
 /// **Everything a chain needs to carry this class** — the profile, its catalog entry and the
 /// genesis-form registration, derived from one geometry so no two of them can disagree.
@@ -683,7 +682,10 @@ mod tests {
         p.validate_shape().expect("the shape validates");
         crate::palw_catalog_coverage::verify_profile_coverage_v1(&p).expect("every node's shape is servable");
         let worst = worst_case_step_leaf_count_v1(&p).expect("the step space enumerates");
-        let canonical = crate::palw_base0_profile::rc_job_context(&p, 8, 2);
+        // The canonical CONSTANT, not a literal copy of it — the (8, 2) this line once spelled
+        // out went stale the day the derivation moved the job to (7, 2), and a stale copy here
+        // asserts a job the class no longer prices.
+        let canonical = crate::palw_base0_profile::rc_job_context(&p, QWEN36_RC_CANONICAL.0, QWEN36_RC_CANONICAL.1);
         let counted = step_leaf_count(&p, &canonical).expect("the canonical job counts");
         assert!(counted <= worst, "canonical {counted} inside worst {worst}");
         // Stated so a registration knows what to declare: `pwu_per_inference` must equal this.

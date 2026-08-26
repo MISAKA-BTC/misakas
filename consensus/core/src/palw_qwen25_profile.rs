@@ -860,23 +860,31 @@ mod tests {
             if corrupt {
                 committed[3] = (committed[3] as i32).wrapping_add(1) as u32;
             }
-            let inputs = (0..(q_dim as u32).div_ceil(p.attn_nodes[13].tile_len))
-                .map(|t| {
-                    let c = PalwStepCoordinateV1 { call_index: 1, node_slot: in_slot, position: 0, tile_index: t };
-                    let idx = canonical_step_leaf_index(&p, &ctx, &c).unwrap();
-                    let w = builder_tile_width(&p, &ctx, &c) as usize;
-                    let start = t as usize * p.attn_nodes[13].tile_len as usize;
-                    crate::palw_step_refute::PalwStepInputOpeningV1 {
-                        opening: step_opening_v1(&material.leaf_hashes, idx).unwrap(),
-                        preimage: PalwStepTileLeafV1 {
-                            version: PALW_STEP_LEG_OBJECT_VERSION_V1,
-                            coord: c,
-                            value_count: w as u32,
-                            values_le: input[start..start + w].iter().flat_map(|v| v.to_le_bytes()).collect(),
-                        },
-                    }
-                })
-                .collect();
+            // One canonical row: the input's tiles are consecutive leaves, so it rides as one
+            // range run — the row form the carrier now requires.
+            let tiles_n = (q_dim as u32).div_ceil(p.attn_nodes[13].tile_len);
+            let mut preimages = Vec::with_capacity(tiles_n as usize);
+            let mut first_idx = None;
+            for t in 0..tiles_n {
+                let c = PalwStepCoordinateV1 { call_index: 1, node_slot: in_slot, position: 0, tile_index: t };
+                let idx = canonical_step_leaf_index(&p, &ctx, &c).unwrap();
+                first_idx.get_or_insert(idx);
+                let w = builder_tile_width(&p, &ctx, &c) as usize;
+                let start = t as usize * p.attn_nodes[13].tile_len as usize;
+                preimages.push(PalwStepTileLeafV1 {
+                    version: PALW_STEP_LEG_OBJECT_VERSION_V1,
+                    coord: c,
+                    value_count: w as u32,
+                    values_le: input[start..start + w].iter().flat_map(|v| v.to_le_bytes()).collect(),
+                });
+            }
+            let run = crate::palw_step_leg::step_merkle_range_siblings_v1(
+                &material.leaf_hashes,
+                first_idx.unwrap() as usize,
+                tiles_n as usize,
+            )
+            .unwrap();
+            let inputs = vec![crate::palw_step_refute::PalwStepInputRowV1 { preimages, run_siblings: vec![run] }];
             let refutation = crate::palw_step_refute::PalwExecutionStepRefutationV1 {
                 binding,
                 output_opening: step_opening_v1(&material.leaf_hashes, out_idx).unwrap(),

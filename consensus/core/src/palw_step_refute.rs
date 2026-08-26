@@ -1594,6 +1594,25 @@ pub struct PalwStepInputOpeningV1 {
     pub preimage: PalwStepTileLeafV1,
 }
 
+/// **One canonical input ROW, carried as preimages plus range proofs** — the form that stopped a
+/// 2,048-lane row at tile 8 costing 256 full Merkle paths (327 KiB of path for 8 KiB of lanes).
+///
+/// The row's RUN STRUCTURE is never declared: the verifier derives maximal contiguous runs from
+/// the canonical leaf indices it computed itself, and the carrier supplies exactly one sibling
+/// set per derived run (`step_range_opening_root_v1`'s form). Leaf hashes are not carried at all
+/// — they are recomputed from the preimages, so a run authenticates its members, not a span
+/// beside them. A row whose leaves are all mutually non-adjacent (the KV history: one leaf per
+/// position, positions far apart in the enumeration) degenerates to one run per leaf and costs
+/// exactly what the per-leaf form cost — the range form is never worse.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwStepInputRowV1 {
+    /// The row's tile preimages, in the canonical order (ascending tile within each run, runs in
+    /// canonical order).
+    pub preimages: Vec<PalwStepTileLeafV1>,
+    /// One sibling set per DERIVED contiguous run, in run order.
+    pub run_siblings: Vec<Vec<Hash64>>,
+}
+
 /// ADR-0027 §1's object, with ADR-0030 coordinates: the committed root binding, the
 /// challenged output tile, and the canonical inputs.
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -1601,8 +1620,9 @@ pub struct PalwExecutionStepRefutationV1 {
     pub binding: PalwStepBindingV2,
     pub output_opening: PalwStepOpeningV1,
     pub output_preimage: PalwStepTileLeafV1,
-    /// MUST be exactly the canonical input set, in canonical order (§ Input integrity).
-    pub inputs: Vec<PalwStepInputOpeningV1>,
+    /// MUST be exactly the canonical input set, one entry per canonical ROW, in canonical order
+    /// (§ Input integrity).
+    pub inputs: Vec<PalwStepInputRowV1>,
     /// **The prompt's token ids (G5d), carried because a gather cannot be checked without them.**
     ///
     /// The fault a court reads is "the committed tile differs from the correct computation", and
@@ -2752,23 +2772,45 @@ pub fn check_execution_step_refutation_v1(
         anchor.is_some(),
     )
     .ok_or(PalwStepRefuteError::Unadjudicable)?;
-    let required_flat: Vec<&(u64, PalwStepCoordinateV1)> = required.iter().flatten().collect();
-    if refutation.inputs.len() != required_flat.len() {
-        return Err(PalwStepRefuteError::InputSetNotCanonical("input count differs from the canonical set"));
+    if refutation.inputs.len() != required.len() {
+        return Err(PalwStepRefuteError::InputSetNotCanonical("input row count differs from the canonical set"));
     }
-    for (supplied, (want_idx, want_coord)) in refutation.inputs.iter().zip(required_flat.iter().copied()) {
-        if supplied.opening.leaf_index != *want_idx || supplied.preimage.coord != *want_coord {
-            return Err(PalwStepRefuteError::InputSetNotCanonical("input leaf is not the canonical one"));
+    for (supplied, want_row) in refutation.inputs.iter().zip(required.iter()) {
+        if supplied.preimages.len() != want_row.len() {
+            return Err(PalwStepRefuteError::InputSetNotCanonical("an input row's leaf count is not the canonical one"));
         }
-        let implied = step_opening_root_v1(binding.step_leaf_count, &supplied.opening)?;
-        if implied != binding.step_merkle_root {
-            return Err(PalwStepRefuteError::Leg(crate::palw_step_leg::PalwStepLegError::CommittedRootMismatch));
+        let mut leaf_hashes = Vec::with_capacity(want_row.len());
+        for (preimage, (_, want_coord)) in supplied.preimages.iter().zip(want_row.iter()) {
+            if preimage.coord != *want_coord {
+                return Err(PalwStepRefuteError::InputSetNotCanonical("input leaf is not the canonical one"));
+            }
+            if preimage.values_le.len() != 4 * preimage.value_count as usize {
+                return Err(PalwStepRefuteError::InputSetNotCanonical("input bytes are not 4 per value"));
+            }
+            leaf_hashes.push(step_tile_leaf_hash_v1(&context_hash, &profile_hash, preimage));
         }
-        if step_tile_leaf_hash_v1(&context_hash, &profile_hash, &supplied.preimage) != supplied.opening.leaf_hash {
-            return Err(PalwStepRefuteError::Leg(crate::palw_step_leg::PalwStepLegError::LeafPreimageMismatch { leaf: "input tile" }));
+        // Maximal contiguous runs, DERIVED from the canonical indices — the carrier never says
+        // where its runs are, it only answers for the ones the enumeration implies.
+        let mut runs: Vec<(usize, usize)> = Vec::new();
+        for (i, (idx, _)) in want_row.iter().enumerate() {
+            match runs.last_mut() {
+                Some((start, len)) if want_row[*start].0 + *len as u64 == *idx => *len += 1,
+                _ => runs.push((i, 1)),
+            }
         }
-        if supplied.preimage.values_le.len() != 4 * supplied.preimage.value_count as usize {
-            return Err(PalwStepRefuteError::InputSetNotCanonical("input bytes are not 4 per value"));
+        if supplied.run_siblings.len() != runs.len() {
+            return Err(PalwStepRefuteError::InputSetNotCanonical("an input row's run count is not the canonical one"));
+        }
+        for ((start, len), siblings) in runs.iter().zip(supplied.run_siblings.iter()) {
+            let opening = crate::palw_step_leg::PalwStepRangeOpeningV1 {
+                first_leaf_index: want_row[*start].0,
+                leaf_hashes: leaf_hashes[*start..*start + *len].to_vec(),
+                siblings: siblings.clone(),
+            };
+            let implied = crate::palw_step_leg::step_range_opening_root_v1(binding.step_leaf_count, &opening)?;
+            if implied != binding.step_merkle_root {
+                return Err(PalwStepRefuteError::Leg(crate::palw_step_leg::PalwStepLegError::CommittedRootMismatch));
+            }
         }
     }
 
@@ -2819,11 +2861,11 @@ pub fn check_execution_step_refutation_v1(
             }
             _ => Vec::new(),
         };
-        for _ in row_tiles {
-            let supplied = &refutation.inputs[cursor];
-            row.extend(supplied.preimage.values_le.chunks_exact(4).map(|q| u32::from_le_bytes([q[0], q[1], q[2], q[3]])));
-            cursor += 1;
+        let _ = row_tiles;
+        for preimage in &refutation.inputs[cursor].preimages {
+            row.extend(preimage.values_le.chunks_exact(4).map(|q| u32::from_le_bytes([q[0], q[1], q[2], q[3]])));
         }
+        cursor += 1;
         inputs.push(row);
     }
     // The TRUE kv length of the challenged position — never the padded cache length (ADR-0030
@@ -4319,8 +4361,8 @@ pub(crate) mod tests {
         // Swap in a DIFFERENT honest tile as "the input".
         let alien_coord = PalwStepCoordinateV1 { call_index: 0, node_slot: 0, position: 1, tile_index: 0 };
         let alien_idx = canonical_step_leaf_index(&binding.shape_profile, &binding.job_context, &alien_coord).unwrap();
-        refutation.inputs[0].opening = step_opening_v1(&material.leaf_hashes, alien_idx).unwrap();
-        refutation.inputs[0].preimage = tile_preimage(&rows, &binding, alien_coord);
+        refutation.inputs[0].preimages[0] = tile_preimage(&rows, &binding, alien_coord);
+        refutation.inputs[0].run_siblings[0] = crate::palw_step_leg::step_merkle_range_siblings_v1(&material.leaf_hashes, alien_idx as usize, 1).unwrap();
         let got = check_execution_step_refutation_v1(&refutation, &NoWeights);
         assert!(
             matches!(got, Err(PalwStepRefuteError::InputSetNotCanonical(_))),
@@ -4383,14 +4425,29 @@ pub(crate) mod tests {
         let out_idx = canonical_step_leaf_index(p, ctx, &coord).unwrap();
         let (node, _) = p.resolve_node_slot(coord.node_slot).unwrap();
         let program = resolve_kernel(&node.kernel_semantics_id);
+        // The ROW form the carrier requires: preimages plus one sibling set per derived run —
+        // built with the exported range builder, exactly as a real challenger builds it.
         let inputs = match program {
             Some(prog) => canonical_input_leaves_anchored(p, ctx, coord.node_slot, &coord, prog, false)
                 .unwrap_or_default()
                 .into_iter()
-                .flatten()
-                .map(|(idx, c)| PalwStepInputOpeningV1 {
-                    opening: step_opening_v1(&material.leaf_hashes, idx).unwrap(),
-                    preimage: tile_preimage(rows, binding, c),
+                .map(|row| {
+                    let preimages = row.iter().map(|(_, c)| tile_preimage(rows, binding, *c)).collect();
+                    let mut runs: Vec<(usize, usize)> = Vec::new();
+                    for (i, (idx, _)) in row.iter().enumerate() {
+                        match runs.last_mut() {
+                            Some((start, len)) if row[*start].0 + *len as u64 == *idx => *len += 1,
+                            _ => runs.push((i, 1)),
+                        }
+                    }
+                    let run_siblings = runs
+                        .iter()
+                        .map(|(start, len)| {
+                            crate::palw_step_leg::step_merkle_range_siblings_v1(&material.leaf_hashes, row[*start].0 as usize, *len)
+                                .unwrap()
+                        })
+                        .collect();
+                    PalwStepInputRowV1 { preimages, run_siblings }
                 })
                 .collect(),
             None => Vec::new(),

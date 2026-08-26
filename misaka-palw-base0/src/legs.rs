@@ -670,7 +670,7 @@ pub fn base0_refutation_from_capture_v1(
 ) -> Result<kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1, LegError> {
     use kaspa_consensus_core::palw_step_leg::step_opening_v1;
     use kaspa_consensus_core::palw_step_refute::{
-        PalwExecutionStepRefutationV1, PalwStepInputOpeningV1, canonical_input_leaves_v1_anchored,
+        PalwExecutionStepRefutationV1, PalwStepInputRowV1, canonical_input_leaves_v1_anchored,
     };
 
     let leaf_of =
@@ -691,17 +691,32 @@ pub fn base0_refutation_from_capture_v1(
     // so a prover cannot disagree with the court about what a step reads.
     let required = canonical_input_leaves_v1_anchored(profile, ctx, &target, kv_checkpoint.is_some())
         .ok_or(LegError::UnknownSlot { layer: 0, slot: target.node_slot as u16 })?;
+    // Row form: preimages in canonical order plus one range sibling set per contiguous run —
+    // the runs DERIVED from the canonical indices, the same derivation the court applies, so the
+    // prover cannot disagree with the checker about where a run begins.
     let mut inputs = Vec::new();
     for row in &required {
+        let mut preimages = Vec::with_capacity(row.len());
         for (index, coord) in row {
-            let preimage = leaf_of(*index).ok_or(LegError::UnknownSlot { layer: 0, slot: coord.node_slot as u16 })?;
-            let opening = step_opening_v1(&tiles.leaves, *index).map_err(|_| LegError::NotACanonicalCoordinate {
-                layer: 0,
-                slot: coord.node_slot as u16,
-                tile: coord.tile_index,
-            })?;
-            inputs.push(PalwStepInputOpeningV1 { opening, preimage });
+            preimages.push(leaf_of(*index).ok_or(LegError::UnknownSlot { layer: 0, slot: coord.node_slot as u16 })?);
         }
+        let mut runs: Vec<(usize, usize)> = Vec::new();
+        for (i, (index, _)) in row.iter().enumerate() {
+            match runs.last_mut() {
+                Some((start, len)) if row[*start].0 + *len as u64 == *index => *len += 1,
+                _ => runs.push((i, 1)),
+            }
+        }
+        let mut run_siblings = Vec::with_capacity(runs.len());
+        for (start, len) in runs {
+            let first = row[start].0 as usize;
+            run_siblings.push(
+                kaspa_consensus_core::palw_step_leg::step_merkle_range_siblings_v1(&tiles.leaves, first, len).map_err(|_| {
+                    LegError::NotACanonicalCoordinate { layer: 0, slot: row[start].1.node_slot as u16, tile: row[start].1.tile_index }
+                })?,
+            );
+        }
+        inputs.push(PalwStepInputRowV1 { preimages, run_siblings });
     }
     Ok(PalwExecutionStepRefutationV1 {
         binding,
