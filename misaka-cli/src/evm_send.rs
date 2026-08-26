@@ -166,13 +166,14 @@ pub fn wallet_address(ctx: &Ctx, ks: &EvmKeySource) -> CliResult {
 }
 
 fn write_secret_file(out: &str, bytes: &[u8]) -> Result<(), CliError> {
-    use std::os::unix::fs::OpenOptionsExt;
-    let mut f = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(out)
-        .map_err(|e| CliError::new(exit::GENERIC, format!("create {out}: {e} (refusing to overwrite)")))?;
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        opts.mode(0o600);
+    }
+    let mut f = opts.open(out).map_err(|e| CliError::new(exit::GENERIC, format!("create {out}: {e} (refusing to overwrite)")))?;
     f.write_all(bytes).map_err(|e| CliError::new(exit::GENERIC, format!("write {out}: {e}")))?;
     f.write_all(b"\n").ok();
     Ok(())

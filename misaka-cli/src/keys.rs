@@ -63,15 +63,20 @@ fn decode_seed_hex(s: &str) -> Result<[u8; VALIDATOR_SEED_LEN], CliError> {
 /// write it hex-encoded to `path` (mode 0600, REFUSE to overwrite), and return
 /// the derived funding (P2PKH-ML-DSA) address for `prefix`.
 pub fn generate(path: &str, prefix: Prefix) -> Result<(Address, [u8; VALIDATOR_SEED_LEN]), CliError> {
-    use std::os::unix::fs::OpenOptionsExt;
     let mut seed = [0u8; VALIDATOR_SEED_LEN];
     fill_random(&mut seed)?;
     let mut hex = vec![0u8; VALIDATOR_SEED_LEN * 2];
     faster_hex::hex_encode(&seed, &mut hex).expect("hex encode");
-    let mut f = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true) // O_EXCL: never clobber an existing key
-        .mode(0o600)
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true); // O_EXCL: never clobber an existing key
+    // The 0600 is a Unix mode; on other hosts the O_EXCL create still holds and the file
+    // inherits the directory's ACL. Same treatment as `wallet/pq-cli` and `misaka-palw-shadow`.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        opts.mode(0o600);
+    }
+    let mut f = opts
         .open(path)
         .map_err(|e| CliError::new(exit::GENERIC, format!("create {path}: {e} (refusing to overwrite an existing key file)")))?;
     f.write_all(&hex).map_err(|e| CliError::new(exit::GENERIC, format!("write {path}: {e}")))?;
