@@ -1142,6 +1142,7 @@ mod tests {
             target,
             prompt.iter().map(|t| *t as u32).collect(),
             None,
+            None,
         )
         .expect("a coordinate the capture covers produces a refutation");
 
@@ -1169,6 +1170,208 @@ mod tests {
             matches!(verdict, Err(kaspa_consensus_core::palw_step_refute::PalwStepRefuteError::NoFaultFound)),
             "an honest execution is not convicted by its own evidence: {verdict:?}"
         );
+    }
+
+    /// **The court reads a checkpoint-anchored KV history and reaches the SAME verdict.**
+    ///
+    /// This is the consumption side of the checkpoint leg, and the property that has to hold is
+    /// equivalence, not merely "it also works": the anchored route and the long route are two
+    /// encodings of the same committed rows, so a court must not be able to tell them apart by the
+    /// answer it gives. If they could differ, a challenger would pick whichever route convicts.
+    ///
+    /// Four claims:
+    ///
+    /// 1. the anchored refutation opens **far fewer** leaves — that is the entire point;
+    /// 2. it reaches the same verdict on honest material as the long form;
+    /// 3. a tampered chunk is REFUSED, not silently ignored and not quietly convicting;
+    /// 4. an anchor for the wrong call is refused by name.
+    #[test]
+    fn an_anchored_kv_history_reaches_the_same_verdict_as_the_long_one() {
+        use kaspa_consensus_core::palw_step::PalwStepCoordinateV1;
+        use kaspa_consensus_core::palw_step_refute::{PalwStepRefuteError, check_execution_step_refutation_v1};
+
+        let (artifact, profile, ctx, prompt) = small_job();
+        let run = base0_execute_for_attempt_v1(&artifact, &profile, &ctx, &prompt).expect("the job runs");
+
+        // The scores node: `[Step(q_rot), CachedK]` — a MIXED input set, which is what the
+        // anchored form has to cope with, at the last decode call so an anchor exists.
+        let call = ctx.exact_decode_tokens - 1;
+        let (idx, node) = profile
+            .attn_nodes
+            .iter()
+            .enumerate()
+            .find(|(_, n)| n.input_refs.contains(&kaspa_consensus_core::palw_step::PALW_STEP_INPUT_KV_K))
+            .expect("BASE-0's attention reads the K cache");
+        assert!(node.input_refs.len() > 1, "the fixture must exercise a MIXED input set");
+        let slot = profile.global_node_slot(PalwStepTableV1::Attn, 0, idx).expect("the node has a global slot");
+        let target = PalwStepCoordinateV1 { call_index: call, node_slot: slot, position: 0, tile_index: 0 };
+
+        let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        let build = |anchor: Option<kaspa_consensus_core::palw_step_refute::PalwCheckpointKvOperandsV1>| {
+            crate::legs::base0_refutation_from_capture_v1(
+                &profile,
+                &ctx,
+                &run.tiles,
+                run.binding.clone(),
+                target,
+                ids.clone(),
+                None,
+                anchor,
+            )
+            .expect("a coordinate the capture covers produces a refutation")
+        };
+
+        let long = build(None);
+        let anchor = crate::legs::base0_kv_anchor_for_call_v1(&run.checkpoints, call).expect("the leg has this call's anchor");
+        let anchored = build(Some(anchor.clone()));
+
+        // (1) The cost. The long form opens the whole cached history; the anchored one opens this
+        // call's own write and nothing else.
+        // **Pinned, not merely "fewer".** `assert!(a < b)` passes at 21 against 20 and would let
+        // the whole point quietly evaporate, so the numbers are derived from the geometry and
+        // compared.
+        //
+        // The scores node is `[Step(q_rot), CachedK]`. The query row is one position; the cache is
+        // the whole history — `prefill + call` positions — and each row is `kv_dim` wide, tiled at
+        // the node's `tile_len`. Anchored, the cache contributes ONE position.
+        let tiles_of = |elements: u32| elements.div_ceil(profile.attn_nodes[idx].tile_len) as usize;
+        let kv_dim = profile.attn_kv_heads as u32 * profile.attn_head_dim;
+        let history = ctx.declared_prefill_tokens + call;
+        let q_tiles = long.inputs.len() - history as usize * tiles_of(kv_dim);
+        assert_eq!(long.inputs.len(), q_tiles + history as usize * tiles_of(kv_dim), "the long set is not the history it should be");
+        assert_eq!(anchored.inputs.len(), q_tiles + tiles_of(kv_dim), "the anchored set is not one cached position");
+        // On this fixture: 12 → 4, the cache's share 10 → 2. On the RC's worst-case shape
+        // (prefill 64, decode 64, kv_dim 256, tile_len 64) the same arithmetic is 508 → 4.
+        assert_eq!((long.inputs.len(), anchored.inputs.len()), (12, 4), "the fixture's opening counts moved");
+
+        let oracle = kaspa_consensus_core::palw_step_refute::PalwNoWeightsV1;
+        let verdict_of = |r: &kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1| {
+            format!("{:?}", check_execution_step_refutation_v1(r, &oracle))
+        };
+        // (2) Equivalence on honest material. The scores node is weightless, so `PalwNoWeightsV1`
+        // is enough and the answer is about the KV history and nothing else.
+        assert_eq!(verdict_of(&long), verdict_of(&anchored), "the two encodings of one history disagree");
+        // And it is the HONEST verdict, not a shared `Unadjudicable`: two routes that both refuse
+        // to answer agree about nothing.
+        assert!(
+            matches!(check_execution_step_refutation_v1(&anchored, &oracle), Err(PalwStepRefuteError::NoFaultFound)),
+            "the anchored route must reach the merits, got {}",
+            verdict_of(&anchored)
+        );
+
+        // (2b) **And it convicts.** A route that can only acquit is not an adjudication. One lane
+        // of the challenged tile is tampered, the binding is re-derived from the tampered capture
+        // so its roots are its own, and both routes must convict — identically.
+        let index = kaspa_consensus_core::palw_step::canonical_step_leaf_index(&profile, &ctx, &target).expect("canonical");
+        let mut lying = run.tiles.clone();
+        {
+            let slot = lying.tiles.iter_mut().find(|(i, _)| *i == index).expect("the capture holds the tile");
+            slot.1.values_le[0] = slot.1.values_le[0].wrapping_add(1);
+            lying.leaves[index as usize] =
+                kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_v1(&ctx.context_hash(), &profile.shape_profile_id(), &slot.1);
+        }
+        let lying_binding = crate::legs::base0_binding_from_capture_v1(
+            &profile,
+            &ctx,
+            &lying,
+            &run.checkpoints,
+            run.trace_root,
+            base0_activation_leg_root_v1(&ctx),
+        )
+        .expect("a tampered capture still commits to itself");
+        let lying_anchor =
+            crate::legs::base0_kv_anchor_for_call_v1(&run.checkpoints, call).expect("the honest leg still has this anchor");
+        let build_lying = |a: Option<kaspa_consensus_core::palw_step_refute::PalwCheckpointKvOperandsV1>| {
+            crate::legs::base0_refutation_from_capture_v1(&profile, &ctx, &lying, lying_binding.clone(), target, ids.clone(), None, a)
+                .expect("assembles")
+        };
+        let convicted_long = check_execution_step_refutation_v1(&build_lying(None), &oracle);
+        let convicted_anchored = check_execution_step_refutation_v1(&build_lying(Some(lying_anchor)), &oracle);
+        assert!(convicted_long.is_ok(), "the long route must convict a tampered tile, got {convicted_long:?}");
+        assert_eq!(
+            format!("{convicted_long:?}"),
+            format!("{convicted_anchored:?}"),
+            "the anchored route reaches a different conviction than the long one"
+        );
+
+        // (3) A tampered chunk. The leg root moves, so the anchor stops being the claim's.
+        let mut bad = anchor.clone();
+        bad.chunks[0][0] ^= 1;
+        let err = check_execution_step_refutation_v1(&build(Some(bad)), &oracle).expect_err("a tampered anchor must be refused");
+        assert!(
+            matches!(err, PalwStepRefuteError::InputSetNotCanonical(m) if m.contains("state root")),
+            "a tampered chunk must be refused by name, got {err:?}"
+        );
+
+        // (4) An anchor for another call. `covered_decode_call` must be exactly `call − 1`.
+        if let Some(other) = crate::legs::base0_kv_anchor_for_call_v1(&run.checkpoints, call - 1) {
+            let err = check_execution_step_refutation_v1(&build(Some(other)), &oracle)
+                .expect_err("an anchor for another call must be refused");
+            assert!(matches!(err, PalwStepRefuteError::InputSetNotCanonical(m) if m.contains("this step's anchor")), "got {err:?}");
+        }
+    }
+
+    /// **The bisect half, on real committed material: a ladder seeded from the producer's own leg.**
+    ///
+    /// `open_anchored` takes an index and a state and cannot check where they came from. This is
+    /// the caller that makes them derived rather than chosen: the state is a committed checkpoint's
+    /// own leaf hash, and the index is the first step leaf of the first call that checkpoint does
+    /// NOT cover — found by walking the space's own enumeration, not by arithmetic beside it.
+    ///
+    /// The property asserted is the one the anchor exists for: the ladder starts strictly inside
+    /// the space, everything below the anchor is execution the checkpoint already commits to, and
+    /// the interval left to bisect is smaller than the whole.
+    #[test]
+    fn a_ladder_seeded_from_the_committed_leg_starts_inside_the_space() {
+        use kaspa_consensus_core::palw_step::canonical_step_coordinates;
+        let (artifact, profile, ctx, prompt) = small_job();
+        let run = base0_execute_for_attempt_v1(&artifact, &profile, &ctx, &prompt).expect("the job runs");
+
+        let covered = 1u32;
+        let ladder = crate::legs::base0_anchored_ladder_v1(
+            &profile,
+            &ctx,
+            &run.checkpoints,
+            &run.binding,
+            covered,
+            &Hash64::from_u64_word(0xC1),
+            &Hash64::from_u64_word(0xE2),
+            100,
+            200,
+        )
+        .expect("the leg has a checkpoint at this call and room left to bisect");
+
+        let (lo, hi) = ladder.interval();
+        assert_eq!(hi, run.binding.step_leaf_count, "the ladder still spans to the end of the space");
+        assert!(lo > 0 && lo < hi, "the anchor must start the ladder strictly inside the space, got {lo}..{hi}");
+
+        // Everything below the anchor belongs to calls the checkpoint covers; the anchor itself is
+        // the first leaf of the first call it does not. That is the whole claim about correctness —
+        // an anchor one leaf too high would skip a step the dispute may be about.
+        assert!(
+            canonical_step_coordinates(&profile, &ctx, lo).expect("canonical").call_index > covered,
+            "the anchor leaf belongs to a call the checkpoint already covers"
+        );
+        assert!(
+            canonical_step_coordinates(&profile, &ctx, lo - 1).expect("canonical").call_index <= covered,
+            "the leaf before the anchor is NOT covered — the anchor is too high and skips execution"
+        );
+
+        // Same session as the unanchored form: a court derives the id from the claim, and a ladder
+        // whose id moved is a ladder no court accepts.
+        let plain = kaspa_consensus_core::palw_bisect::PalwBisectLadderV1::open(
+            &ctx.context_hash(),
+            &run.binding.committed_execution_root,
+            &Hash64::from_u64_word(0xC1),
+            &Hash64::from_u64_word(0xE2),
+            kaspa_consensus_core::palw_bisect::PalwBisectSpaceV1::StepLeaves,
+            run.binding.step_leaf_count,
+            100,
+            200,
+        )
+        .expect("opens");
+        assert_eq!(ladder.session_id(), plain.session_id());
+        assert_eq!(plain.interval(), (0, run.binding.step_leaf_count));
     }
 
     /// The fixture geometry, as a `PalwBase0GeometryV1` — needed to build the inventory oracle.
@@ -1270,6 +1473,7 @@ mod tests {
                 coord,
                 ids.clone(),
                 Some(pin.clone()),
+                None,
             ) {
                 Ok(r) => r,
                 Err(e) => panic!("leaf {leaf} at {coord:?} could not even be assembled: {e:?}"),
@@ -1332,9 +1536,17 @@ mod tests {
                 base0_activation_leg_root_v1(&ctx),
             )
             .expect("a tampered capture still commits");
-            let refutation =
-                crate::legs::base0_refutation_from_capture_v1(&profile, &ctx, &lying, binding, coord, ids.clone(), Some(pin.clone()))
-                    .expect("assembles");
+            let refutation = crate::legs::base0_refutation_from_capture_v1(
+                &profile,
+                &ctx,
+                &lying,
+                binding,
+                coord,
+                ids.clone(),
+                Some(pin.clone()),
+                None,
+            )
+            .expect("assembles");
             match check_execution_step_refutation_v1(&refutation, &oracle) {
                 Ok(_) => still_convicts += 1,
                 Err(PalwStepRefuteError::NoFaultFound) => {

@@ -4524,6 +4524,12 @@ mod consensus_params_id_tests {
             // `LegacyTn11` lane, which was never published and is not running anywhere. The const
             // beside it is still the old one — the test materializes by NETWORK ID, which is what a
             // node reports, and that is the whole reason this test pins the materialized value.
+            // Moved a third time, deliberately, when the court learned to READ a checkpoint:
+            // `PALW_V2_TRACE_FORMAT_VERSION` 1 → 2, because a refutation may now carry an
+            // attention step's KV history as one committed checkpoint instead of one opening per
+            // cached position. A v1 court and a v2 court disagree about a verdict on the same
+            // object, which is a fork — the version is what makes them refuse each other at
+            // startup instead of finding out at consensus.
             // Moved again, deliberately, when BASE-0 registered its checkpoint state chunk map
             // (`palw_state_chunk_map`). `state_chunk_map_id` is a field of `PalwShapeProfileV3`,
             // the class id IS the profile id, and the class id is in the RC bundle — so filling in
@@ -4531,7 +4537,7 @@ mod consensus_params_id_tests {
             // are different networks**, and they find out at the handshake rather than at
             // consensus, which is the direction to fail in. Landing it needs an RC re-mint; no
             // other preset moved, because no other preset carries a PALW class.
-            ("testnet-11", TESTNET11_PARAMS, "ea4633fb5b266955837abcbb0f5396be1ad095d2dd8f0c37cab0cdcaf0e3baf1"),
+            ("testnet-11", TESTNET11_PARAMS, "de94f93103a66fd9d0100c24f81f1e5e270c66e407ee2ed869cfa398df8f8e95"),
             ("simnet", SIMNET_PARAMS, "135e88c69a659d3cf4b5ce8275953c7597b2c67b03d2a74b3d0696c5d0b703fa"),
             ("devnet", DEVNET_PARAMS, "42cc6be92506a14654cb676184e1416796dec682b15e93cb9c639e8e0d77efa5"),
         ]

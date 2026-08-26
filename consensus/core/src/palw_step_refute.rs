@@ -855,6 +855,18 @@ pub struct PalwExecutionStepRefutationV1 {
     /// `None` means the refutation addresses no decode gather, which is every refutation of a
     /// prefill-only class and most refutations of any class.
     pub decode_tokens: Option<PalwDecodeTokenPinV1>,
+    /// **The KV history, anchored** ([`PalwCheckpointKvOperandsV1`]).
+    ///
+    /// `None` is the original shape and stays exactly adjudicable: the history arrives as one step
+    /// opening per cached position. `Some` replaces all but the current call's write with one
+    /// committed checkpoint, which is the difference between a refutation of a few kilobytes and
+    /// one that carries the execution it disputes.
+    ///
+    /// A challenger chooses which to send; it never chooses which rules apply. An anchor that does
+    /// not verify against the binding is a refusal, not a fallback to the long form — falling back
+    /// would let a challenger attach junk and have it ignored, and "ignored evidence" is how a
+    /// refutation ends up meaning something other than what it says.
+    pub kv_checkpoint: Option<PalwCheckpointKvOperandsV1>,
 }
 
 /// What a court needs to recompute `full_logits_trace_root_v2` and so pin the generated tokens.
@@ -1132,9 +1144,23 @@ pub fn canonical_input_leaves_v1(
     ctx: &crate::palw_v2::PalwJobContextV2,
     coord: &PalwStepCoordinateV1,
 ) -> Option<Vec<Vec<(u64, PalwStepCoordinateV1)>>> {
+    canonical_input_leaves_v1_anchored(profile, ctx, coord, false)
+}
+
+/// [`canonical_input_leaves_v1`], for a refutation that carries a checkpoint anchor.
+///
+/// A builder MUST pass the same `anchored` its refutation will carry: the checker derives the
+/// required set the same way, and a builder that opened the long history while carrying an anchor
+/// would supply a set the checker does not want — `InputSetNotCanonical`, on honest material.
+pub fn canonical_input_leaves_v1_anchored(
+    profile: &crate::palw_step::PalwShapeProfileV3,
+    ctx: &crate::palw_v2::PalwJobContextV2,
+    coord: &PalwStepCoordinateV1,
+    anchored: bool,
+) -> Option<Vec<Vec<(u64, PalwStepCoordinateV1)>>> {
     let (node, _) = profile.resolve_node_slot(coord.node_slot)?;
     let program = resolve_kernel(&node.kernel_semantics_id)?;
-    canonical_input_leaves(profile, ctx, coord.node_slot, coord, program)
+    canonical_input_leaves_anchored(profile, ctx, coord.node_slot, coord, program, anchored)
 }
 
 /// The canonical input rows for one step: one entry per (required position × input_ref),
@@ -1142,12 +1168,19 @@ pub fn canonical_input_leaves_v1(
 /// opening order; the grouping is what programs consume (whole rows, not tiles). Returns
 /// `None` when the wiring uses a sentinel this checker cannot resolve yet (→
 /// `Unadjudicable`).
-fn canonical_input_leaves(
+/// [`canonical_input_leaves`], with the KV history optionally supplied by a verified checkpoint.
+///
+/// `anchored` shortens exactly one thing: a KV ref's position list drops every position the anchor
+/// covers, leaving the current call's own cache write — the one position no earlier checkpoint can
+/// hold. Everything else about the set, including its order and the non-KV refs, is untouched, so
+/// the two routes are the same canonical set read from two encodings of the same committed rows.
+fn canonical_input_leaves_anchored(
     profile: &PalwShapeProfileV3,
     context: &crate::palw_v2::PalwJobContextV2,
     out_slot: u32,
     out_coord: &PalwStepCoordinateV1,
     program: KernelProgram,
+    anchored: bool,
 ) -> Option<Vec<Vec<(u64, PalwStepCoordinateV1)>>> {
     let (node, layer) = profile.resolve_node_slot(out_slot)?;
     let table_first_slot = out_slot - intra_table_index(profile, out_slot)? as u32;
@@ -1177,6 +1210,9 @@ fn canonical_input_leaves(
     if node.input_refs.iter().any(|r| *r == PALW_STEP_INPUT_KV_K || *r == PALW_STEP_INPUT_KV_V) {
         let history: Vec<(u32, u32)> = if out_coord.call_index == 0 {
             (0..=out_coord.position).map(|p| (0, p)).collect()
+        } else if anchored {
+            // The anchor covers the prefill and calls 1..c−1; only this call's own write remains.
+            vec![(out_coord.call_index, 0)]
         } else {
             (0..context.declared_prefill_tokens).map(|p| (0, p)).chain((1..=out_coord.call_index).map(|c| (c, 0))).collect()
         };
@@ -1285,6 +1321,121 @@ fn intra_table_index(profile: &PalwShapeProfileV3, slot: u32) -> Option<usize> {
 
 /// Adjudicates one arithmetic step refutation. Structural faults in the opened output leaf
 /// convict structurally (they subsume); an honest recomputation returns `NoFaultFound`.
+/// **A committed checkpoint, opened as the KV history's source** (ADR-0030 §3, the consumption
+/// side).
+///
+/// # The cost this removes
+///
+/// An attention step at decode call `c` reads the cached keys or values at EVERY position up to
+/// it, so `canonical_input_leaves` requires `prefill + c` row-openings **per KV ref**. On the RC's
+/// worst-case shape that is 127 rows per ref, twice, to adjudicate one step — the refutation is
+/// then larger than the thing it disputes, and every byte of it rides a block.
+///
+/// The checkpoint at `covered_decode_call = c − 1` already commits to that entire history under
+/// `checkpoint_merkle_root`, which is inside `committed_execution_root`. So the history arrives as
+/// ONE opening plus its state chunks, and exactly one step opening remains: the current call's own
+/// cache write, which no earlier checkpoint can hold.
+///
+/// # Why substituting is sound
+///
+/// The cache row and the cache-write node's step tile are the SAME values — the engine pushes one
+/// `k_rot` into the cache as `int8` and records the same vector as the step row widened to `i32`.
+/// So this is a second encoding of committed material, not a second source of truth, and the
+/// adjudicator reads whichever the refutation carries with the same arithmetic downstream.
+///
+/// Every part is checked before a byte is read: the chunks hash to the leaf's `state_chunks_root`,
+/// the leaf hashes to the opened leaf, the opening proves against the binding's
+/// `checkpoint_merkle_root`, and the leaf's `covered_decode_call` must be **exactly** `c − 1`.
+/// Exactly, not "at most": a further-back checkpoint would leave positions this evidence does not
+/// cover, and a challenger choosing among anchors would be choosing which positions the court
+/// never sees.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwCheckpointKvOperandsV1 {
+    pub leaf: crate::palw_step_leg::PalwCheckpointLeafV2,
+    /// The leaf's opening against `binding.checkpoint_merkle_root`.
+    pub opening: PalwStepOpeningV1,
+    /// Every state chunk of that checkpoint, in map order.
+    pub chunks: Vec<Vec<u8>>,
+}
+
+/// The geometry a verified anchor's chunks are read under, plus the anchor itself.
+struct VerifiedKvAnchor<'a> {
+    ops: &'a PalwCheckpointKvOperandsV1,
+    geometry: crate::palw_state_chunk_map::PalwStateChunkGeometryV1,
+}
+
+/// Verify a carried anchor against the binding, for a step at `disputed_call`.
+fn verify_kv_anchor<'a>(
+    binding: &crate::palw_step_leg::PalwStepBindingV2,
+    ops: &'a PalwCheckpointKvOperandsV1,
+    disputed_call: u32,
+) -> Result<VerifiedKvAnchor<'a>, PalwStepRefuteError> {
+    use crate::palw_state_chunk_map as map;
+    use crate::palw_step_leg::{checkpoint_leaf_hash_v2, state_chunk_leaf_hash_v1, state_chunks_root_v1, step_opening_root_v1};
+
+    // Prefill has no anchor at all; a decode call's anchor is the checkpoint before it, exactly.
+    let want_covered = disputed_call.checked_sub(1).filter(|_| disputed_call > 0).ok_or(PalwStepRefuteError::Unadjudicable)?;
+    if ops.leaf.covered_decode_call != want_covered {
+        return Err(PalwStepRefuteError::InputSetNotCanonical("the carried checkpoint is not this step's anchor"));
+    }
+    if ops.opening.leaf_index != ops.leaf.checkpoint_index as u64 {
+        return Err(PalwStepRefuteError::InputSetNotCanonical("the checkpoint opening addresses another index than its leaf"));
+    }
+    if ops.leaf.state_chunk_count as usize != ops.chunks.len() {
+        return Err(PalwStepRefuteError::InputSetNotCanonical("the carried chunk count is not the leaf's own"));
+    }
+
+    let map_id = &binding.state_chunk_map_id;
+    let hashes: Vec<crate::Hash64> =
+        ops.chunks.iter().enumerate().map(|(i, c)| state_chunk_leaf_hash_v1(map_id, i as u32, c)).collect();
+    let root = state_chunks_root_v1(&hashes).map_err(|_| PalwStepRefuteError::Unadjudicable)?;
+    if root != ops.leaf.state_chunks_root {
+        return Err(PalwStepRefuteError::InputSetNotCanonical("the carried chunks do not build the leaf's state root"));
+    }
+
+    let context_hash = binding.job_context.context_hash();
+    let checkpoint_profile_hash = binding.checkpoint_profile.profile_hash();
+    if checkpoint_leaf_hash_v2(&context_hash, &checkpoint_profile_hash, map_id, &ops.leaf) != ops.opening.leaf_hash {
+        return Err(PalwStepRefuteError::Leg(crate::palw_step_leg::PalwStepLegError::LeafPreimageMismatch {
+            leaf: "checkpoint leaf",
+        }));
+    }
+    let implied = step_opening_root_v1(binding.checkpoint_count as u64, &ops.opening)
+        .map_err(|_| PalwStepRefuteError::InputSetNotCanonical("the checkpoint opening is malformed for this leg"))?;
+    if implied != binding.checkpoint_merkle_root {
+        return Err(PalwStepRefuteError::Leg(crate::palw_step_leg::PalwStepLegError::CommittedRootMismatch));
+    }
+
+    let positions = map::integer_kv_positions_at_v1(&binding.job_context, ops.leaf.covered_decode_call);
+    let geometry =
+        map::integer_kv_state_geometry_v1(&binding.shape_profile, positions).map_err(|_| PalwStepRefuteError::Unadjudicable)?;
+    if geometry.chunk_count() as usize != ops.chunks.len() {
+        return Err(PalwStepRefuteError::InputSetNotCanonical("the carried chunk count is not the map's for this state"));
+    }
+    Ok(VerifiedKvAnchor { ops, geometry })
+}
+
+impl VerifiedKvAnchor<'_> {
+    /// The anchor's rows for one `(kind, layer)`, ascending by position, as the `u32` lanes a step
+    /// tile would have carried.
+    ///
+    /// `int8` → `i32` → `u32` is the engine's own widening: the cache holds the codes and the step
+    /// row records `*c as i32`, so this reproduces the committed tile's values rather than
+    /// reinterpreting them.
+    fn rows(&self, kind: crate::palw_state_chunk_map::PalwStateChunkKindV1, layer: u16) -> Option<Vec<u32>> {
+        use crate::palw_state_chunk_map as map;
+        let mut out = Vec::with_capacity(self.geometry.positions as usize * self.geometry.row_bytes as usize);
+        for position in 0..self.geometry.positions {
+            let (chunk_index, _) = map::integer_kv_state_locate_v1(&self.geometry, kind, layer, position)?;
+            let entry = map::integer_kv_state_chunk_entry_v1(&self.geometry, chunk_index)?;
+            let bytes = self.ops.chunks.get(chunk_index as usize)?;
+            let row = map::integer_kv_state_row_v1(&entry, bytes, position)?;
+            out.extend(row.iter().map(|b| (*b as i8) as i32 as u32));
+        }
+        Some(out)
+    }
+}
+
 pub fn check_execution_step_refutation_v1(
     refutation: &PalwExecutionStepRefutationV1,
     weights: &dyn PalwWeightOracleV1,
@@ -1314,8 +1465,26 @@ pub fn check_execution_step_refutation_v1(
     let program = resolve_kernel(&node.kernel_semantics_id).ok_or(PalwStepRefuteError::Unadjudicable)?;
 
     // 2) Canonical input set: exact leaves, exact order, all verified against the tree.
-    let required = canonical_input_leaves(&binding.shape_profile, &binding.job_context, out_coord.node_slot, &out_coord, program)
-        .ok_or(PalwStepRefuteError::Unadjudicable)?;
+    //
+    // **The anchor is verified BEFORE the set is derived from it.** Deriving a shorter required set
+    // from an unverified carried object would let a challenger shrink what it must open by
+    // attaching a checkpoint nobody committed — the set has to follow from the CLAIM, not from the
+    // accusation. A carried anchor that does not verify is a refusal, never a fallback to the long
+    // form: silently ignoring attached evidence makes a refutation mean something other than what
+    // it says.
+    let anchor = match refutation.kv_checkpoint.as_ref() {
+        Some(ops) => Some(verify_kv_anchor(binding, ops, out_coord.call_index)?),
+        None => None,
+    };
+    let required = canonical_input_leaves_anchored(
+        &binding.shape_profile,
+        &binding.job_context,
+        out_coord.node_slot,
+        &out_coord,
+        program,
+        anchor.is_some(),
+    )
+    .ok_or(PalwStepRefuteError::Unadjudicable)?;
     let required_flat: Vec<&(u64, PalwStepCoordinateV1)> = required.iter().flatten().collect();
     if refutation.inputs.len() != required_flat.len() {
         return Err(PalwStepRefuteError::InputSetNotCanonical("input count differs from the canonical set"));
@@ -1340,8 +1509,49 @@ pub fn check_execution_step_refutation_v1(
     //    each logical input row's tiles back into one row.
     let mut inputs: Vec<Vec<u32>> = Vec::with_capacity(required.len());
     let mut cursor = 0usize;
-    for row_tiles in &required {
-        let mut row = Vec::new();
+    // Which logical rows are the KV refs, in the order `canonical_input_leaves` emits them — the
+    // anchor's history is prepended to exactly those, and to nothing else.
+    // `canonical_input_leaves`' KV branch emits exactly one required row per `input_refs` entry, in
+    // order, so a ref's kind is read positionally. The attention nodes that need this are MIXED —
+    // BASE-0's score node is `[Step(q), CachedK]` — so the anchor must supply the KV row and leave
+    // the ordinary one to its opening, which is why this is per-ref and not a whole-node switch.
+    let kv_refs: Vec<Option<crate::palw_state_chunk_map::PalwStateChunkKindV1>> = if anchor.is_some() {
+        use crate::palw_state_chunk_map::PalwStateChunkKindV1;
+        use crate::palw_step::{PALW_STEP_INPUT_KV_K, PALW_STEP_INPUT_KV_V};
+        let kinds: Vec<_> = node
+            .input_refs
+            .iter()
+            .map(|r| match *r {
+                PALW_STEP_INPUT_KV_K => Some(PalwStateChunkKindV1::Key),
+                PALW_STEP_INPUT_KV_V => Some(PalwStateChunkKindV1::Value),
+                _ => None,
+            })
+            .collect();
+        // An anchor carried for a node that reads no cache is evidence for a question nobody
+        // asked. Refused rather than ignored: ignored evidence makes a refutation mean something
+        // other than what it says.
+        if kinds.iter().all(Option::is_none) {
+            return Err(PalwStepRefuteError::InputSetNotCanonical(
+                "a checkpoint anchor was carried for a step that reads no KV cache",
+            ));
+        }
+        if kinds.len() != required.len() {
+            return Err(PalwStepRefuteError::InputSetNotCanonical("the required set does not align with this node's input refs"));
+        }
+        kinds
+    } else {
+        Vec::new()
+    };
+    for (row_index, row_tiles) in required.iter().enumerate() {
+        // The anchor's committed history first, then this call's own cache write from the opening —
+        // the same concatenation order the unanchored route produces, because the map enumerates
+        // positions ascending and the history is the prefill followed by each decode write.
+        let mut row = match (&anchor, kv_refs.get(row_index).copied().flatten()) {
+            (Some(a), Some(kind)) => {
+                a.rows(kind, layer.ok_or(PalwStepRefuteError::Unadjudicable)?).ok_or(PalwStepRefuteError::Unadjudicable)?
+            }
+            _ => Vec::new(),
+        };
         for _ in row_tiles {
             let supplied = &refutation.inputs[cursor];
             row.extend(supplied.preimage.values_le.chunks_exact(4).map(|q| u32::from_le_bytes([q[0], q[1], q[2], q[3]])));
@@ -2103,6 +2313,7 @@ pub(crate) mod tests {
             inputs: Vec::new(),
             prompt_token_ids: Vec::new(),
             decode_tokens: None,
+            kv_checkpoint: None,
         }
     }
 
@@ -2713,7 +2924,7 @@ pub(crate) mod tests {
         // cached keys at positions 0 and 1.
         let scores_slot = 1 + 3; // pre(1) + attn slots 0..2
         let coord = PalwStepCoordinateV1 { call_index: 0, node_slot: scores_slot, position: 1, tile_index: 0 };
-        let required = canonical_input_leaves(&p, &ctx, scores_slot, &coord, KernelProgram::Base0(Base0Op::MatMul))
+        let required = canonical_input_leaves_anchored(&p, &ctx, scores_slot, &coord, KernelProgram::Base0(Base0Op::MatMul), false)
             .expect("the KV sentinel resolves — this returned None before G5c");
 
         assert_eq!(required.len(), 2, "one group per input ref: the query row, then the whole key history");
@@ -2729,8 +2940,9 @@ pub(crate) mod tests {
         // The V sentinel names the OTHER role, so the two are not interchangeable.
         let mut v_node = p.clone();
         v_node.attn_nodes[3].input_refs = vec![0, PALW_STEP_INPUT_KV_V];
-        let required_v = canonical_input_leaves(&v_node, &ctx, scores_slot, &coord, KernelProgram::Base0(Base0Op::MatMul))
-            .expect("the V sentinel resolves too");
+        let required_v =
+            canonical_input_leaves_anchored(&v_node, &ctx, scores_slot, &coord, KernelProgram::Base0(Base0Op::MatMul), false)
+                .expect("the V sentinel resolves too");
         assert_eq!(
             required_v[1].iter().map(|(_, c)| c.node_slot).collect::<Vec<_>>(),
             vec![3, 3],
@@ -2741,7 +2953,8 @@ pub(crate) mod tests {
         let mut roleless = p.clone();
         roleless.attn_nodes[1].role = PalwStepNodeRoleV1::Plain;
         assert!(
-            canonical_input_leaves(&roleless, &ctx, scores_slot, &coord, KernelProgram::Base0(Base0Op::MatMul)).is_none(),
+            canonical_input_leaves_anchored(&roleless, &ctx, scores_slot, &coord, KernelProgram::Base0(Base0Op::MatMul), false)
+                .is_none(),
             "no KCacheWrite node means the K sentinel names nothing"
         );
         // Two of them would make "the K cache" ambiguous, and a court that had to choose would be
@@ -2749,7 +2962,8 @@ pub(crate) mod tests {
         let mut doubled = p.clone();
         doubled.attn_nodes[2].role = PalwStepNodeRoleV1::KCacheWrite;
         assert!(
-            canonical_input_leaves(&doubled, &ctx, scores_slot, &coord, KernelProgram::Base0(Base0Op::MatMul)).is_none(),
+            canonical_input_leaves_anchored(&doubled, &ctx, scores_slot, &coord, KernelProgram::Base0(Base0Op::MatMul), false)
+                .is_none(),
             "two KCacheWrite nodes is an ambiguous cache"
         );
     }
@@ -2888,7 +3102,7 @@ pub(crate) mod tests {
         let (node, _) = p.resolve_node_slot(coord.node_slot).unwrap();
         let program = resolve_kernel(&node.kernel_semantics_id);
         let inputs = match program {
-            Some(prog) => canonical_input_leaves(p, ctx, coord.node_slot, &coord, prog)
+            Some(prog) => canonical_input_leaves_anchored(p, ctx, coord.node_slot, &coord, prog, false)
                 .unwrap_or_default()
                 .into_iter()
                 .flatten()
@@ -2906,6 +3120,7 @@ pub(crate) mod tests {
             inputs,
             prompt_token_ids: Vec::new(),
             decode_tokens: None,
+            kv_checkpoint: None,
         }
     }
 
