@@ -33,7 +33,7 @@ use kaspa_consensus_core::config::Config;
 use kaspa_consensus_core::constants::{MAX_TX_IN_SEQUENCE_NUM, TX_VERSION};
 use kaspa_consensus_core::hashing::sighash::{Mldsa87SigHashReusedValuesUnsync, calc_mldsa87_signature_hash};
 use kaspa_consensus_core::hashing::sighash_type::SIG_HASH_ALL;
-use kaspa_consensus_core::mass::MassCalculator;
+use kaspa_consensus_core::mass::{MassCalculator, UtxoCell, calc_storage_mass, utxo_plurality};
 use kaspa_consensus_core::palw_backend::{PalwClaimRootsV1, PalwMaterialVerdictV1};
 use kaspa_consensus_core::palw_bisect::{
     PALW_BISECT_OBJECT_VERSION_V1, PalwBisectDisclosureV1, PalwBisectSpaceV1, PalwBisectTurnV1, PalwBisectVerdictV1,
@@ -53,11 +53,13 @@ use kaspa_consensusmanager::ConsensusManager;
 use kaspa_core::task::service::{AsyncService, AsyncServiceFuture};
 use kaspa_core::{info, trace, warn};
 use kaspa_hashes::Hash64;
+use kaspa_mining::MAXIMUM_STANDARD_TRANSACTION_MASS;
 use kaspa_mining::mempool::tx::Orphan;
 use kaspa_p2p_flows::flow_context::FlowContext;
 use kaspa_p2p_flows::palw_gossip::PalwGossipEvent;
 use kaspa_pq_validator_core::relay_fee_for_compute_mass;
 use kaspa_txscript::MLDSA87_TX_CONTEXT;
+use kaspa_utils::triggers::SingleTrigger;
 
 const PALW_PANEL: &str = "palw-panel";
 /// How many receipts one claim's pool holds. A panel has 5 seats; the rest is an attacker's spam,
@@ -154,6 +156,13 @@ pub struct PalwPanelService {
     consensus_config: Arc<Config>,
     keypair: Option<Box<libcrux_ml_dsa::ml_dsa_87::MLDSA87KeyPair>>,
     bond: Option<TransactionOutpoint>,
+    /// Fired by `signal_exit` so this service's `start` future can finish. Both panel loops are
+    /// `loop { sleep; work }` with nothing else that a shutdown could cancel, so without it the
+    /// AsyncRuntime's shutdown join waits on a future that never completes. Measured on
+    /// testnet-11: a node registering a bond kept its 5 s loop running for 11 minutes after SIGINT
+    /// — past systemd's TimeoutStopSec — with the gRPC and P2P servers already stopped, and only
+    /// SIGKILL ended it. The same shape as the fix in `eth_rpc`.
+    shutdown: SingleTrigger,
 }
 
 impl PalwPanelService {
@@ -214,7 +223,17 @@ impl PalwPanelService {
                 Err(err) => warn!("[{PALW_PANEL}] class artifact {} is unusable: {err}", path.display()),
             }
         }
-        Self { config, consensus_manager, flow_context, consensus_config, keypair, bond, class_artifacts, qwen36_artifacts }
+        Self {
+            config,
+            consensus_manager,
+            flow_context,
+            consensus_config,
+            keypair,
+            bond,
+            class_artifacts,
+            qwen36_artifacts,
+            shutdown: SingleTrigger::default(),
+        }
     }
 
     fn fee_state_path(&self) -> PathBuf {
@@ -222,7 +241,8 @@ impl PalwPanelService {
     }
 
     /// The fee outpoint to spend next: the persisted rolling one if it is still unspent, else the
-    /// configured one. Returns the entry with it, which is also the unspent check.
+    /// configured one, else whatever the chain holds under this bond's payout script. Returns the
+    /// entry with it, which is also the unspent check.
     async fn resolve_fee_funding(&self, session: &kaspa_consensusmanager::ConsensusProxy) -> Option<(TransactionOutpoint, UtxoEntry)> {
         // **"In the UTXO set" and "I can spend it" are different questions — ask the second one.**
         //
@@ -245,14 +265,34 @@ impl PalwPanelService {
         // says `no fee UTXO resolves` forever. Measured on testnet-11 the same day: node 0 stalled
         // with one live 96.85 MSK output under its own key and 6,343 identical warnings.
         let is_free = |o: &TransactionOutpoint| !self.flow_context.mining_manager().outpoint_is_spent_in_mempool(o);
-        let configured = self.config.fee_outpoint.as_deref()?;
+        // **No configured outpoint means two different things, and this used to answer both the
+        // same way.**
+        //
+        // For a PANEL SEAT it is a mode: `--palw-fee-outpoint` absent is "off -- receipts only",
+        // said in this service's own startup line, and a seat in that mode must not start spending
+        // money it finds under the payout script. That is why the early return exists and it stays.
+        //
+        // For a BOND REGISTRATION it is a certainty, not a choice. The only outpoint such a node
+        // will ever own is the change of the carrier it has not built yet, so there is nothing an
+        // operator could pass, and the scan below -- whose whole argument is that there is nothing
+        // worth remembering -- is the only thing that can find its funding. It never ran for the
+        // one job that needed it most: the panel reported `no confirmed UTXO to spend -- send at
+        // least N sompi plus a fee` while `misaka wallet utxo list` against this same node's RPC
+        // showed the address holding 10 MSK, mature. The money was there, the scan was skipped, and
+        // the message blamed the operator. Measured on testnet-11 while onboarding two hosts on
+        // 2026-08-26, following §3 of the join doc, which does not mention the flag at all.
+        if self.config.fee_outpoint.is_none() && !self.config.register_bond {
+            return None;
+        }
         let mut candidates: Vec<TransactionOutpoint> = Vec::new();
         if let Ok(persisted) = std::fs::read_to_string(self.fee_state_path())
             && let Ok(outpoint) = crate::palw_producer::parse_outpoint(persisted.trim())
         {
             candidates.push(outpoint);
         }
-        if let Ok(outpoint) = crate::palw_producer::parse_outpoint(configured) {
+        if let Some(configured) = self.config.fee_outpoint.as_deref()
+            && let Ok(outpoint) = crate::palw_producer::parse_outpoint(configured)
+        {
             candidates.push(outpoint);
         }
         for outpoint in candidates.iter().filter(|o| is_free(o)) {
@@ -318,7 +358,14 @@ impl PalwPanelService {
         // could not see, so it warns: it fires once per tick only on the path that already warns.
         warn!(
             "[{PALW_PANEL}] no fee UTXO resolves; tried {}; scanned {scanned} outputs, {under_script} under this bond's payout script of which {busy} are spent by our own mempool",
-            candidates.iter().map(|o| format!("{}:{}", o.transaction_id, o.index)).collect::<Vec<_>>().join(", ")
+            if candidates.is_empty() {
+                // A node with no remembered outpoint is the normal newcomer case, not an omission
+                // in this line: it says the scan is the whole story so nobody looks for a missing
+                // --palw-fee-outpoint that was never needed.
+                "no remembered outpoint (nothing persisted, none configured)".to_string()
+            } else {
+                candidates.iter().map(|o| format!("{}:{}", o.transaction_id, o.index)).collect::<Vec<_>>().join(", ")
+            }
         );
         None
     }
@@ -368,25 +415,13 @@ impl PalwPanelService {
         self.pay_payee().ok().map(|(_, script)| script)
     }
 
-    /// **Build this node's own bond registration, and the collateral output that proves it.**
+    /// **What this bond will lock, decided before the carrier that has to fit it exists.**
     ///
-    /// Returns the object together with the output its carrier must hold at index 0, because the
-    /// two are one fact: `palw_bond_registration_binds_its_carrier_v2` checks the declared
-    /// collateral against that output's value and the declared payee against its script, and a
-    /// caller that assembled them separately could get one of them wrong.
-    ///
-    /// The bond names its output by INDEX with a zero transaction id — the carrier's id is a
-    /// function of the payload this object travels in, so naming it would be a hash fixed point.
-    /// The chain substitutes the id it observes, and the signature is made over the zero form,
-    /// which is what every verifier rebuilds.
-    fn build_bond_registration(
-        &self,
-        session: &kaspa_consensusmanager::ConsensusProxy,
-    ) -> Result<(PalwConsensusObjectV2, kaspa_consensus_core::tx::TransactionOutput), String> {
-        let kp = self.keypair.as_ref().ok_or("no --palw-producer-key to sign a bond registration with")?;
-        let (payee_bytes, payee_script) = self.pay_payee()?;
-        let payout_payload = Hash64::from_bytes(payee_bytes);
-
+    /// Split from the signing half because the number has to survive a second question that this
+    /// one cannot ask: whether a carrier holding an output that small can be relayed at all. That
+    /// answer needs the funding UTXO, which is resolved after this — see
+    /// `min_carryable_collateral`.
+    fn size_bond_collateral(&self, session: &kaspa_consensusmanager::ConsensusProxy) -> Result<u64, String> {
         let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) =
             &self.consensus_config.params.palw_consensus_mode
         else {
@@ -435,6 +470,30 @@ impl PalwPanelService {
                 );
             }
         }
+        Ok(collateral)
+    }
+
+    /// **Build this node's own bond registration, and the collateral output that proves it.**
+    ///
+    /// Returns the object together with the output its carrier must hold at index 0, because the
+    /// two are one fact: `palw_bond_registration_binds_its_carrier_v2` checks the declared
+    /// collateral against that output's value and the declared payee against its script, and a
+    /// caller that assembled them separately could get one of them wrong.
+    ///
+    /// The bond names its output by INDEX with a zero transaction id — the carrier's id is a
+    /// function of the payload this object travels in, so naming it would be a hash fixed point.
+    /// The chain substitutes the id it observes, and the signature is made over the zero form,
+    /// which is what every verifier rebuilds.
+    ///
+    /// `collateral` comes from `size_bond_collateral`, raised if necessary to what the carrier's
+    /// storage mass allows — this half signs the number, it does not choose it.
+    fn build_bond_registration(
+        &self,
+        collateral: u64,
+    ) -> Result<(PalwConsensusObjectV2, kaspa_consensus_core::tx::TransactionOutput), String> {
+        let kp = self.keypair.as_ref().ok_or("no --palw-producer-key to sign a bond registration with")?;
+        let (payee_bytes, payee_script) = self.pay_payee()?;
+        let payout_payload = Hash64::from_bytes(payee_bytes);
 
         // The signing key is also the operator identity. Panel dedup is per OPERATOR, so two bonds
         // under one key are one operator by construction — which is the honest reading for a node
@@ -645,6 +704,136 @@ impl PalwPanelService {
         Ok(tx)
     }
 
+    /// Wait out one pass of a panel loop, or stop because the node is shutting down.
+    ///
+    /// `false` means "return now". Every panel loop begins with this, which is what makes
+    /// `signal_exit` reach code that would otherwise sleep forever.
+    async fn tick(&self, period: std::time::Duration) -> bool {
+        tokio::select! {
+            _ = tokio::time::sleep(period) => true,
+            _ = self.shutdown.listener.clone() => false,
+        }
+    }
+
+    /// **What a collateral output costs to exist, before there is a funding UTXO to measure.**
+    ///
+    /// The collateral output alone costs `C · p² / value`, so `value >= C · p² / limit` is
+    /// necessary however it is funded — the change and input terms can only push the answer up.
+    /// That makes this a sound floor to quote to an operator who has not sent anything yet, which
+    /// is the one moment `min_carryable_collateral` cannot help: it needs the UTXO.
+    ///
+    /// It matters because the number this replaces was the chain's own floor, and on testnet-11
+    /// that told a waiting operator to send 400,000 sompi for a bond that needs upwards of
+    /// 8,333,334 — an answer they would have funded, watched fail, and had no way to connect to
+    /// the mass in the refusal.
+    fn collateral_relay_lower_bound(&self) -> Option<u64> {
+        let payee = self.pay_payee().ok()?.1;
+        let plurality = utxo_plurality(&payee);
+        let c = self.consensus_config.params.storage_mass_parameter;
+        Some(c.saturating_mul(plurality).saturating_mul(plurality).div_ceil(MAXIMUM_STANDARD_TRANSACTION_MASS))
+    }
+
+    /// This chain's minimum collateral, or `None` on a network with no bonds to register.
+    fn collateral_floor(&self) -> Option<u64> {
+        match &self.consensus_config.params.palw_consensus_mode {
+            kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.state.min_collateral_sompi()),
+            _ => None,
+        }
+    }
+
+    /// **Build the carrier for this node's bond registration, at a collateral the relay accepts.**
+    ///
+    /// `size_bond_collateral` answers "how much does this bond need to be useful"; this answers
+    /// "how much can a transaction actually carry", and the second question cannot be asked until
+    /// the funding UTXO is known. The two disagree, and the chain's own floor is on the losing
+    /// side — see `min_carryable_collateral` — so a panel that asked only the first question built
+    /// a carrier that could never be submitted, and said nothing about why: the mempool's refusal
+    /// names a mass, not a collateral, and the sizing line above it looked correct.
+    ///
+    /// An operator who NAMED a collateral is refused with the number that would work rather than
+    /// silently overridden — it is their money and their exposure ceiling. A DEFAULT is raised,
+    /// because the alternative is a default that can never register a bond.
+    fn build_registration_carrier(
+        &self,
+        sized: u64,
+        funding_outpoint: TransactionOutpoint,
+        funding: &UtxoEntry,
+    ) -> Result<(u64, Transaction), String> {
+        let storm = self.consensus_config.params.storage_mass_parameter;
+        let build = |collateral: u64| -> Result<(u64, Transaction), String> {
+            let (object, output) = self.build_bond_registration(collateral)?;
+            let tx = self.build_lifecycle_tx_with_outputs(&object, funding_outpoint, funding, std::slice::from_ref(&output))?;
+            Ok((collateral, tx))
+        };
+        let storage_mass = |tx: &Transaction| {
+            calc_storage_mass(false, std::iter::once(UtxoCell::from(funding)), tx.outputs.iter().map(UtxoCell::from), storm)
+        };
+
+        let (collateral, tx) = build(sized)?;
+        let mass = storage_mass(&tx);
+        if mass.is_some_and(|m| m <= MAXIMUM_STANDARD_TRANSACTION_MASS) {
+            return Ok((collateral, tx));
+        }
+
+        // The fee is a function of the carrier's COMPUTE mass, which does not move with an output's
+        // VALUE — same inputs, same outputs, same payload, same bytes — so the fee measured here is
+        // the fee the rebuilt carrier pays, and the search below can treat it as fixed.
+        let fee = funding.amount.saturating_sub(tx.outputs.iter().map(|o| o.value).sum::<u64>());
+        let payee = self.pay_payee()?.1;
+        let floor = self.collateral_floor().unwrap_or(1);
+        let measured = mass.map(|m| m.to_string()).unwrap_or_else(|| "an incomputable amount of".to_string());
+        let minimum =
+            min_carryable_collateral(funding, fee, &payee, storm, MAXIMUM_STANDARD_TRANSACTION_MASS, floor).ok_or_else(|| {
+                format!(
+                    "this funding UTXO holds {} sompi and cannot carry a bond registration at ANY collateral — every \
+                     split of it exceeds the {MAXIMUM_STANDARD_TRANSACTION_MASS} relay mass limit. Send more to this \
+                     node's pay address; the collateral is not the problem.",
+                    funding.amount
+                )
+            })?;
+        // **The mass is U-shaped, so "too small" and "too large" both land here — and only one of
+        // them is fixed by more collateral.** Past the even split it is the CHANGE output that is
+        // too small to relay, and raising the collateral makes it smaller still. Saying "raise it"
+        // there would send an operator the wrong way down a curve.
+        if minimum <= sized {
+            return Err(format!(
+                "a collateral of {sized} sompi leaves this {} sompi funding UTXO a change output too small to relay \
+                 ({measured} storage mass against a limit of {MAXIMUM_STANDARD_TRANSACTION_MASS}). Fund this node's \
+                 pay address with more, or lower the collateral.",
+                funding.amount
+            ));
+        }
+        if self.config.bond_collateral.is_some() {
+            return Err(format!(
+                "--palw-bond-collateral {sized} sompi cannot be carried: an output that small costs {measured} storage \
+                 mass against a relay limit of {MAXIMUM_STANDARD_TRANSACTION_MASS}, so the carrier is refused as \
+                 non-standard however it is funded. The smallest collateral this funding can carry is {minimum} sompi."
+            ));
+        }
+
+        let (collateral, tx) = build(minimum)?;
+        match storage_mass(&tx) {
+            Some(m) if m <= MAXIMUM_STANDARD_TRANSACTION_MASS => {}
+            other => {
+                return Err(format!(
+                    "raising the collateral to {minimum} sompi did not bring the carrier under the relay mass limit \
+                     ({}); this node cannot register a bond from this funding UTXO",
+                    other.map(|m| m.to_string()).unwrap_or_else(|| "incomputable".to_string())
+                ));
+            }
+        }
+        // Once: this runs on every pass of the registration loop until the carrier is accepted.
+        static SAID: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if !SAID.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            info!(
+                "[{PALW_PANEL}] raising collateral from {sized} to {minimum} sompi — an output of {sized} costs \
+                 {measured} storage mass against a relay limit of {MAXIMUM_STANDARD_TRANSACTION_MASS}, so a carrier \
+                 holding one cannot be submitted. Pass --palw-bond-collateral to choose the amount yourself."
+            );
+        }
+        Ok((collateral, tx))
+    }
+
     /// The capture this node's own producer persisted for `claim`, if it is still on disk.
     ///
     /// Best-effort by design: a seat that never produced has no retention directory, and a claim
@@ -696,7 +885,10 @@ impl PalwPanelService {
         };
 
         loop {
-            tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+            if !self.tick(std::time::Duration::from_secs(5)).await {
+                info!("[{PALW_PANEL}] stopping: no bond was registered before this node was asked to shut down");
+                return;
+            }
             let session = self.consensus_manager.consensus().unguarded_session();
             if session.async_is_consensus_in_transitional_ibd_state().await {
                 continue;
@@ -716,23 +908,26 @@ impl PalwPanelService {
                 );
                 return;
             }
-            let (object, collateral) = match self.build_bond_registration(&session) {
-                Ok(built) => built,
+            let sized = match self.size_bond_collateral(&session) {
+                Ok(sized) => sized,
                 Err(why) => {
                     complain(why);
                     continue;
                 }
             };
             let Some((funding_outpoint, funding)) = self.resolve_fee_funding(&session).await else {
-                complain(format!(
-                    "no confirmed UTXO to spend — send at least {} sompi plus a fee to this node's pay address",
-                    collateral.value
-                ));
+                // Quote the relay's floor, not just the chain's: what a bond NEEDS and what a
+                // carrier can HOLD are different numbers, and an operator funding this address is
+                // about to discover which one is larger.
+                let need = self.collateral_relay_lower_bound().map_or(sized, |bound| sized.max(bound));
+                complain(format!("no confirmed UTXO to spend — send at least {need} sompi plus a fee to this node's pay address"));
                 continue;
             };
-            let tx = match self.build_lifecycle_tx_with_outputs(&object, funding_outpoint, &funding, std::slice::from_ref(&collateral))
-            {
-                Ok(tx) => tx,
+            // Funding first, then the carrier: what a bond NEEDS is a chain fact, but what a
+            // carrier can HOLD depends on the UTXO paying for it, and only one of those two
+            // numbers can be decided without the other.
+            let (collateral, tx) = match self.build_registration_carrier(sized, funding_outpoint, &funding) {
+                Ok(built) => built,
                 Err(why) => {
                     complain(why);
                     continue;
@@ -757,7 +952,14 @@ impl PalwPanelService {
                     // to start, and the bond's key is only knowable from the chain anyway.
                     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(600);
                     loop {
-                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                        if !self.tick(std::time::Duration::from_secs(5)).await {
+                            warn!(
+                                "[{PALW_PANEL}] shutting down while waiting for carrier {txid} to produce a bond. \
+                                 It may still land: check with --palw-register-bond on the next start, which asks the \
+                                 chain before registering a second one."
+                            );
+                            return;
+                        }
                         let session = self.consensus_manager.consensus().unguarded_session();
                         if let Some(kp) = self.keypair.as_ref()
                             && let Some(bond) = session.palw_bond_of_pubkey_v2(kp.verification_key.as_ref())
@@ -766,7 +968,7 @@ impl PalwPanelService {
                                 "[{PALW_PANEL}] registered bond {}:{} with {} sompi of collateral, in tx {txid}. \
                                  Restart with --palw-producer-bond={}:{} (and --palw-produce) to mine with it; \
                                  the collateral is reclaimable at this node's pay address once the bond is retired.",
-                                bond.0.transaction_id, bond.0.index, collateral.value, bond.0.transaction_id, bond.0.index
+                                bond.0.transaction_id, bond.0.index, collateral, bond.0.transaction_id, bond.0.index
                             );
                             return;
                         }
@@ -832,7 +1034,10 @@ impl PalwPanelService {
         let mut inflight: usize = 0;
 
         loop {
-            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            if !self.tick(std::time::Duration::from_secs(2)).await {
+                info!("[{PALW_PANEL}] stopping");
+                return;
+            }
 
             // Drain the gossip inbox first, so this tick's decisions see this tick's mail.
             while let Ok(event) = inbox.try_recv() {
@@ -1477,6 +1682,65 @@ impl PalwPanelService {
     }
 }
 
+/// **The smallest collateral a bond carrier can hold and still be relayed.**
+///
+/// A UTXO's KIP-0009 storage mass is `C · p² / value`, so it grows as the output SHRINKS. The
+/// chain's own collateral floor is therefore not a value a carrier can necessarily hold: on
+/// testnet-11, `min_collateral_sompi` is 400,000 sompi, whose output alone costs 10,000,000 mass
+/// against a 480,000 relay limit — 20× over, whatever funds it, forever. The panel sized itself at
+/// exactly that floor, built the carrier, and watched the mempool refuse it every five seconds:
+/// `transaction storage mass of 10000003 is larger than max allowed size of 480000`.
+///
+/// The mass of the two-output carrier is `C·p²/collateral + C·p²/change − (the input term)`, and
+/// both output terms grow as their side of the split shrinks — so it is U-shaped in the collateral
+/// with its minimum at the even split. On `[floor, spendable/2]` it is therefore monotonically
+/// decreasing, which is what makes the binary search below correct, and what makes the mass at
+/// `spendable/2` the verdict on whether ANY split of this funding can be carried.
+///
+/// `None` means no split works: the funding is too small to carry a bond at all, which is a
+/// different operator action (send more) than "this bond needs more collateral".
+fn min_carryable_collateral(
+    funding: &UtxoEntry,
+    fee: u64,
+    collateral_script: &kaspa_consensus_core::tx::ScriptPublicKey,
+    storage_mass_parameter: u64,
+    limit: u64,
+    floor: u64,
+) -> Option<u64> {
+    let spendable = funding.amount.checked_sub(fee)?;
+    let input = UtxoCell::from(funding);
+    let (p_collateral, p_change) = (utxo_plurality(collateral_script), utxo_plurality(&funding.script_public_key));
+    let mass_at = |collateral: u64| -> Option<u64> {
+        let change = spendable.checked_sub(collateral)?;
+        // `calc_storage_mass` states non-zero values as a precondition — it divides by them.
+        if collateral == 0 || change == 0 {
+            return None;
+        }
+        calc_storage_mass(
+            false,
+            std::iter::once(input),
+            [UtxoCell::new(p_collateral, collateral), UtxoCell::new(p_change, change)].into_iter(),
+            storage_mass_parameter,
+        )
+    };
+    let (mut lo, mut hi) = (floor.max(1), spendable / 2);
+    if lo > hi || mass_at(hi)? > limit {
+        return None;
+    }
+    if mass_at(lo).is_some_and(|m| m <= limit) {
+        return Some(lo);
+    }
+    // `lo` never fits and `hi` always does, so the answer is `hi` once they are adjacent.
+    while lo + 1 < hi {
+        let mid = lo + (hi - lo) / 2;
+        match mass_at(mid) {
+            Some(m) if m <= limit => hi = mid,
+            _ => lo = mid,
+        }
+    }
+    Some(hi)
+}
+
 fn verdict_name(verdict: &PalwReceiptVerdictV2) -> &'static str {
     match verdict {
         PalwReceiptVerdictV2::Valid => "Valid",
@@ -1529,6 +1793,7 @@ impl AsyncService for PalwPanelService {
 
     fn signal_exit(self: Arc<Self>) {
         trace!("sending an exit signal to {}", PALW_PANEL);
+        self.shutdown.trigger.trigger();
     }
 
     fn stop(self: Arc<Self>) -> AsyncServiceFuture {
@@ -1542,6 +1807,123 @@ impl AsyncService for PalwPanelService {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The two-output bond carrier this node builds: one collateral output to the payee, one
+    /// change output back to the funding script, one input.
+    fn carrier_storage_mass(funding: &UtxoEntry, fee: u64, collateral: u64, payee: &kaspa_consensus_core::tx::ScriptPublicKey) -> u64 {
+        let change = funding.amount - fee - collateral;
+        calc_storage_mass(
+            false,
+            std::iter::once(UtxoCell::from(funding)),
+            [UtxoCell::new(utxo_plurality(payee), collateral), UtxoCell::new(utxo_plurality(&funding.script_public_key), change)]
+                .into_iter(),
+            kaspa_consensus_core::constants::STORAGE_MASS_PARAMETER,
+        )
+        .expect("this carrier's storage mass is computable")
+    }
+
+    fn mldsa_script(byte: u8) -> kaspa_consensus_core::tx::ScriptPublicKey {
+        kaspa_consensus_core::dns_finality::p2pkh_mldsa87_spk(&[byte; 64])
+    }
+
+    /// **This chain's floor collateral cannot be carried at all, and the fix is a number, not a
+    /// bigger funding UTXO.**
+    ///
+    /// The measured case from testnet-11 on 2026-08-26: a node funded with 10 MSK sized itself at
+    /// the chain's 400,000 sompi floor and the mempool refused every carrier it built with
+    /// `transaction storage mass of 10000003 is larger than max allowed size of 480000`. The
+    /// refusal is a property of the OUTPUT's value, so no amount of funding fixes it — which is
+    /// why the panel now asks this question before it submits.
+    #[test]
+    fn the_chain_floor_collateral_cannot_be_carried() {
+        let payee = mldsa_script(7);
+        let funding = UtxoEntry::new(1_000_000_000, mldsa_script(9), 0, false);
+        let fee = 349_438;
+        let floor = 400_000;
+
+        let at_floor = carrier_storage_mass(&funding, fee, floor, &payee);
+        assert!(
+            at_floor > MAXIMUM_STANDARD_TRANSACTION_MASS,
+            "a {floor} sompi output costs {at_floor} storage mass, which is what made this unregisterable"
+        );
+
+        let minimum = min_carryable_collateral(
+            &funding,
+            fee,
+            &payee,
+            kaspa_consensus_core::constants::STORAGE_MASS_PARAMETER,
+            MAXIMUM_STANDARD_TRANSACTION_MASS,
+            floor,
+        )
+        .expect("10 MSK can carry a bond at some collateral");
+
+        assert!(minimum > floor, "the answer has to be above the floor, or the floor was carryable after all");
+        assert!(
+            carrier_storage_mass(&funding, fee, minimum, &payee) <= MAXIMUM_STANDARD_TRANSACTION_MASS,
+            "the collateral this returns must actually be relayable"
+        );
+        assert!(
+            carrier_storage_mass(&funding, fee, minimum - 1, &payee) > MAXIMUM_STANDARD_TRANSACTION_MASS,
+            "one sompi less must NOT be relayable — otherwise this is not the minimum, and an operator locks more \
+             money than the limit asked for"
+        );
+        // The value the two hosts were registered with, kept as the record of what worked live.
+        assert!(20_000_000 >= minimum, "20,000,000 sompi registered two bonds on testnet-11, so it cannot be below the minimum");
+
+        // **The number quoted before any funding exists must never exceed the number the funding
+        // then demands.** It is the figure a waiting operator funds the address with, and if it
+        // could land above the real minimum they would send exactly what they were told and still
+        // be refused. `collateral_relay_lower_bound` computes this same expression from the payee
+        // script; it drops the change and input terms, which can only push the true answer up.
+        let c = kaspa_consensus_core::constants::STORAGE_MASS_PARAMETER;
+        let plurality = utxo_plurality(&payee);
+        let quoted_before_funding = c * plurality * plurality / MAXIMUM_STANDARD_TRANSACTION_MASS;
+        assert!(
+            quoted_before_funding <= minimum,
+            "the pre-funding floor ({quoted_before_funding}) has to be a LOWER bound on the real minimum ({minimum})"
+        );
+    }
+
+    /// **"No collateral works" and "this collateral is too small" are different operator actions.**
+    ///
+    /// A funding UTXO whose every split is over the limit needs more money sent to it; saying
+    /// "raise the collateral" would send the operator to a knob that cannot help.
+    #[test]
+    fn funding_too_small_to_carry_any_bond_says_so() {
+        let payee = mldsa_script(7);
+        let funding = UtxoEntry::new(1_000_000, mldsa_script(9), 0, false);
+        assert!(
+            min_carryable_collateral(
+                &funding,
+                349_438,
+                &payee,
+                kaspa_consensus_core::constants::STORAGE_MASS_PARAMETER,
+                MAXIMUM_STANDARD_TRANSACTION_MASS,
+                400_000,
+            )
+            .is_none(),
+            "1 MSK cannot carry a bond at any split, and the answer must be None rather than an unusable number"
+        );
+    }
+
+    /// A collateral that already fits is returned unchanged — the floor is the answer when the
+    /// floor works, so this never raises an operator's locked money without cause.
+    #[test]
+    fn a_carryable_floor_is_left_alone() {
+        let payee = mldsa_script(7);
+        let funding = UtxoEntry::new(10_000_000_000, mldsa_script(9), 0, false);
+        let floor = 50_000_000;
+        let minimum = min_carryable_collateral(
+            &funding,
+            349_438,
+            &payee,
+            kaspa_consensus_core::constants::STORAGE_MASS_PARAMETER,
+            MAXIMUM_STANDARD_TRANSACTION_MASS,
+            floor,
+        )
+        .expect("a 50,000,000 sompi output is well under the relay limit");
+        assert_eq!(minimum, floor, "a floor that fits is the answer; raising it would lock money for nothing");
+    }
 
     /// **A responder must be able to answer a court about work it has already forgotten.**
     ///

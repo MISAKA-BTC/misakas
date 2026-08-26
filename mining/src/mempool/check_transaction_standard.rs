@@ -48,7 +48,7 @@ const MAXIMUM_STANDARD_SIGNATURE_SCRIPT_SIZE: u64 = 16_384;
 /// (`max_block_mass` = 500_000), leaving headroom for the coinbase.
 /// NOTE (mainnet): for a high-traffic network this should be lowered well below the
 /// block budget to preserve an anti-monopolization margin; it is devnet-generous here.
-const MAXIMUM_STANDARD_TRANSACTION_MASS: u64 = 480_000;
+pub const MAXIMUM_STANDARD_TRANSACTION_MASS: u64 = 480_000;
 
 /// **The PALW court's close ceiling is derived from the constant above** (ADR-0049 Decision C):
 /// a court close rides one lifecycle transaction, so the largest close that can be RAISED is what
