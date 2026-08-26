@@ -4524,7 +4524,18 @@ mod consensus_params_id_tests {
             // `LegacyTn11` lane, which was never published and is not running anywhere. The const
             // beside it is still the old one — the test materializes by NETWORK ID, which is what a
             // node reports, and that is the whole reason this test pins the materialized value.
-            ("testnet-11", TESTNET11_PARAMS, "048e69026e559e67584ded64f1b6279148e3459975ef9d710e029eaaed638ee0"),
+            // **Moved 2026-08-26 by the court catalog growing** (ADR-0052). The RC params carry
+            // `palw_court_catalog_root_v1()`, so the set of kernels the court can adjudicate is
+            // part of this network's identity — which is the design: a node that cannot adjudicate
+            // what its peers can is a node that will disagree about a conviction. `PALW-QWEN36`
+            // added twenty-three integer descriptors (the A16 tier's nine and the hybrid graph's
+            // fourteen), so the root moved and this pin moves with it.
+            //
+            // **Operationally this is a coordinated upgrade for testnet-11**: the fingerprint is
+            // what peers compare at the handshake, so old and new builds will not agree. Nothing
+            // about the floor class's arithmetic changed — only what else the court knows how to
+            // re-execute.
+            ("testnet-11", TESTNET11_PARAMS, "a708dc4a0456442333a992ed68fe6325ea2a39bc3efce1857121c41cd9432a94"),
             ("simnet", SIMNET_PARAMS, "135e88c69a659d3cf4b5ce8275953c7597b2c67b03d2a74b3d0696c5d0b703fa"),
             ("devnet", DEVNET_PARAMS, "42cc6be92506a14654cb676184e1416796dec682b15e93cb9c639e8e0d77efa5"),
         ]

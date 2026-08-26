@@ -445,7 +445,7 @@ mod tests {
 mod base0_closure_tests {
     use super::*;
     use crate::palw_step::kernel_semantics_id_v1;
-    use crate::palw_step_refute::{KDESC_ALL, KDESC_BASE0_ALL, catalogued_kernel_ids_v1};
+    use crate::palw_step_refute::{KDESC_A16_ALL, KDESC_ALL, KDESC_BASE0_ALL, KDESC_Q36_ALL, catalogued_kernel_ids_v1};
 
     fn class() -> Hash64 {
         Hash64::from_u64_word(0xBA5E)
@@ -507,7 +507,13 @@ mod base0_closure_tests {
     #[test]
     fn the_float_classes_remain_uncovered_and_that_is_recorded() {
         // The float vocabulary is 17 op kinds; the catalog holds 7 float descriptors.
-        let float_descriptors = KDESC_ALL.len() - KDESC_BASE0_ALL.len();
+        //
+        // Subtracted rather than counted, so an INTEGER class arriving cannot be mistaken for the
+        // float catalog growing. It has happened once already: `PALW-QWEN36` added twenty-three
+        // integer descriptors and this test read them as float coverage, which is the opposite of
+        // what it exists to notice.
+        let integer_descriptors = KDESC_BASE0_ALL.len() + KDESC_A16_ALL.len() + KDESC_Q36_ALL.len();
+        let float_descriptors = KDESC_ALL.len() - integer_descriptors;
         assert_eq!(float_descriptors, 7, "the float catalog has not grown");
         assert!(
             float_descriptors < 17,
