@@ -1347,10 +1347,18 @@ a large RAM (~64GB) can set this value to ~3.0-4.0 and gain superior performance
 pub fn parse_args() -> Args {
     match Args::parse(std::env::args_os()) {
         Ok(args) => args,
-        Err(err) => {
-            println!("{err}");
-            std::process::exit(1);
-        }
+        // `--help` and `--version` arrive HERE, as `Err`. clap models them as errors only to
+        // carry the rendered text; `ErrorKind::DisplayHelp`/`DisplayVersion` are answers, not
+        // failures. The old arm could not tell the difference — it printed everything to
+        // stdout and exited 1 — so `kaspad --version` reported failure to anything that reads
+        // an exit code. The VPS setup wizard's own probe was one of them, and it has been
+        // logging "kaspad check did not finish cleanly" on a perfectly healthy binary.
+        //
+        // `Error::exit` is where that distinction already lives, and it is what every other
+        // binary in this workspace gets for free from clap's derive `Parser::parse`: help and
+        // version to stdout with status 0, a usage error to stderr with clap's usage status
+        // (2, not the 1 this printed). Re-deciding it here is what produced the bug.
+        Err(err) => err.exit(),
     }
 }
 

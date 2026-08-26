@@ -100,18 +100,12 @@ jobs:
           # Captured, not piped: `Select-Object -First` closes the pipeline early, and a native
           # process cut off mid-write turns into a broken-pipe failure this step would then
           # report as the binary's.
-          #
-          # kaspad is asserted on its OUTPUT, not its exit code: `parse_args` hands clap's
-          # `--help` back through the error arm and exits 1, so a non-zero here says nothing
-          # about whether the binary works. `misaka` exits 0 and is checked that way, matching
-          # the Linux smoke step below.
-          $help = & "$bin/kaspad.exe" --help 2>&1 | Out-String
-          if ($help -notmatch "Usage: kaspad") { throw "kaspad.exe --help printed no usage:`n$help" }
-          Write-Host ($help -split "`n" | Select-Object -First 5)
-
-          $help = & "$bin/misaka.exe" --help 2>&1 | Out-String
-          if ($LASTEXITCODE -ne 0) { throw "misaka.exe --help exited $LASTEXITCODE" }
-          Write-Host ($help -split "`n" | Select-Object -First 5)
+          foreach ($exe in @("kaspad.exe", "misaka.exe")) {
+            $help = & "$bin/$exe" --help 2>&1 | Out-String
+            if ($LASTEXITCODE -ne 0) { throw "$exe --help exited $LASTEXITCODE" }
+            Write-Host "--- $exe ---"
+            Write-Host ($help -split "`n" | Select-Object -First 5)
+          }
 
   test:
     name: Test Suite
