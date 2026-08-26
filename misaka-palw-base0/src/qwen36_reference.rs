@@ -443,6 +443,9 @@ pub fn reference_moe_layer(
         chosen.sort_unstable();
         let total: f32 = chosen.iter().map(|e| probs[*e]).sum();
 
+        calibration.observe(&g("ffn_choice"), &chosen.iter().map(|e| *e as f32).collect::<Vec<_>>());
+        calibration
+            .observe(&g("ffn_weight"), &chosen.iter().map(|e| probs[*e] / total.max(f32::MIN_POSITIVE)).collect::<Vec<_>>());
         let mut out = vec![0f32; d];
         for e in &chosen {
             let weight = probs[*e] / total.max(f32::MIN_POSITIVE);

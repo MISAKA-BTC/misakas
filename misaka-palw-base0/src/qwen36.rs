@@ -737,6 +737,11 @@ impl<'a> Qwen36Engine<'a> {
             weights.push(r.weight_q);
         }
         probe.push((n("ffn_router"), router_codes.clone()));
+        // The selection itself, so a routed output that disagrees with the reference can be told
+        // apart from one that chose a different eighth expert. Ids and weights are separate rows
+        // because a cosine over ids means nothing and a cosine over weights means everything.
+        probe.push((n("ffn_choice"), routed.iter().map(|r| r.expert as i32).collect()));
+        probe.push((n("ffn_weight"), weights.clone()));
         probe.push((n("ffn_expert_out"), outputs.clone()));
         let combined = q36_moe_combine(&outputs, &weights, d, a.one_param(&n("ffn_combine.a16"))?).map_err(refuse("moe_combine"))?;
         probe.push((n("ffn_routed"), combined.clone()));

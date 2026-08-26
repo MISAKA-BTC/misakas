@@ -122,7 +122,17 @@ pub enum GgufValue {
     Bool(bool),
     Str(String),
     ArrayLen(usize),
+    /// A retained string array. Kept only for the keys [`KEEP_ARRAYS`] names — the vocabulary is
+    /// 248,320 strings and every other array in the file is metadata nobody reads.
+    Strings(Vec<String>),
+    /// A retained integer array, for the token-type table.
+    Ints(Vec<i64>),
 }
+
+/// Metadata keys whose arrays are kept rather than counted. The tokenizer lives in the GGUF for
+/// this checkpoint — the repository ships no `tokenizer.json` — so it is the one array a loader
+/// that wants to turn text into ids cannot skip.
+pub const KEEP_ARRAYS: [&str; 3] = ["tokenizer.ggml.tokens", "tokenizer.ggml.merges", "tokenizer.ggml.token_type"];
 
 impl GgufValue {
     pub fn as_u64(&self) -> Option<u64> {
@@ -140,6 +150,20 @@ impl GgufValue {
             _ => None,
         }
     }
+    pub fn as_strings(&self) -> Option<&[String]> {
+        match self {
+            Self::Strings(v) => Some(v),
+            _ => None,
+        }
+    }
+
+    pub fn as_ints(&self) -> Option<&[i64]> {
+        match self {
+            Self::Ints(v) => Some(v),
+            _ => None,
+        }
+    }
+
     pub fn as_str(&self) -> Option<&str> {
         match self {
             Self::Str(v) => Some(v),
@@ -173,8 +197,8 @@ impl<'a> Reader<'a> {
         let n = self.u64(w)? as usize;
         Ok(String::from_utf8_lossy(self.take(n, w)?).into_owned())
     }
-    /// One typed value. Arrays consume their elements and report only a length.
-    fn value(&mut self, tag: u32) -> Result<GgufValue, GgufError> {
+    /// One typed value. Arrays consume their elements and report only a length unless `keep`.
+    fn value(&mut self, tag: u32, keep: bool) -> Result<GgufValue, GgufError> {
         Ok(match tag {
             0 => GgufValue::U64(self.take(1, "u8")?[0] as u64),
             1 => GgufValue::I64(self.take(1, "i8")?[0] as i8 as i64),
@@ -188,10 +212,31 @@ impl<'a> Reader<'a> {
             9 => {
                 let element = self.u32("array type")?;
                 let n = self.u64("array length")? as usize;
-                for _ in 0..n {
-                    self.value(element)?;
+                if !keep {
+                    for _ in 0..n {
+                        self.value(element, false)?;
+                    }
+                    return Ok(GgufValue::ArrayLen(n));
                 }
-                GgufValue::ArrayLen(n)
+                if element == 8 {
+                    let mut out = Vec::with_capacity(n.min(1 << 20));
+                    for _ in 0..n {
+                        out.push(self.string("array string")?);
+                    }
+                    GgufValue::Strings(out)
+                } else {
+                    let mut out = Vec::with_capacity(n.min(1 << 20));
+                    for _ in 0..n {
+                        out.push(match self.value(element, false)? {
+                            GgufValue::U64(v) => v as i64,
+                            GgufValue::I64(v) => v,
+                            GgufValue::F64(v) => v as i64,
+                            GgufValue::Bool(v) => v as i64,
+                            _ => return Err(GgufError::Truncated("array element")),
+                        });
+                    }
+                    GgufValue::Ints(out)
+                }
             }
             10 => GgufValue::U64(self.u64("u64")?),
             11 => GgufValue::I64(i64::from_le_bytes(self.take(8, "i64")?.try_into().expect("8"))),
@@ -219,7 +264,8 @@ pub fn parse_directory(bytes: &[u8]) -> Result<GgufDirectory, GgufError> {
     for _ in 0..n_kv {
         let key = r.string("metadata key")?;
         let tag = r.u32("metadata type")?;
-        metadata.insert(key, r.value(tag)?);
+        let keep = KEEP_ARRAYS.contains(&key.as_str());
+        metadata.insert(key, r.value(tag, keep)?);
     }
 
     let mut entries = Vec::with_capacity(n_tensors);

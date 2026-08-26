@@ -181,6 +181,51 @@ impl QwenTokenizer {
         Ok(Self { vocab, tokens, merges, added, byte_to_char, char_to_byte, source_len: bytes.len() })
     }
 
+    /// Build from a GGUF's `tokenizer.ggml.*` metadata.
+    ///
+    /// This checkpoint's repository ships no `tokenizer.json` — the vocabulary and the merge table
+    /// live in the GGUF header, which is where llama.cpp reads them from too. The pieces are the
+    /// same ones [`Self::from_json`] takes and the byte-level alphabet is identical; what differs
+    /// is only where they were written down.
+    ///
+    /// `token_type` is GGUF's per-token classification. Types 3 (CONTROL) and 4 (USER_DEFINED) are
+    /// the added tokens: matched whole, before any splitting, exactly as `added_tokens` are in the
+    /// JSON form. Anything else is an ordinary BPE piece.
+    ///
+    /// `source_len` is the number of bytes the vocabulary and merges occupy, so a caller that
+    /// commits to a tokenizer commits to a length that changes when either does.
+    pub fn from_gguf(tokens: &[String], merges: &[String], token_type: &[i64]) -> Result<Self, TokenizerError> {
+        if tokens.is_empty() {
+            return Err(TokenizerError::Malformed("no tokenizer.ggml.tokens"));
+        }
+        let mut vocab = HashMap::with_capacity(tokens.len());
+        for (id, token) in tokens.iter().enumerate() {
+            // First id wins: a duplicate string in the table is the vocabulary's own business and
+            // the lower id is the one a greedy encoder should reach for.
+            vocab.entry(token.clone()).or_insert(id as u32);
+        }
+        let mut table = HashMap::with_capacity(merges.len());
+        for (rank, entry) in merges.iter().enumerate() {
+            let mut it = entry.splitn(2, ' ');
+            match (it.next(), it.next()) {
+                (Some(a), Some(b)) => table.insert((a.to_string(), b.to_string()), rank as u32),
+                _ => return Err(TokenizerError::Malformed("a merge is not two pieces")),
+            };
+        }
+        let mut added: Vec<AddedToken> = token_type
+            .iter()
+            .enumerate()
+            .filter(|(id, kind)| matches!(**kind, 3 | 4) && *id < tokens.len())
+            .map(|(id, kind)| AddedToken { id: id as u32, content: tokens[id].clone(), special: *kind == 3 })
+            .collect();
+        added.sort_by(|a, b| b.content.len().cmp(&a.content.len()).then(a.id.cmp(&b.id)));
+
+        let byte_to_char = byte_to_char_table();
+        let char_to_byte = byte_to_char.iter().enumerate().map(|(b, c)| (*c, b as u8)).collect();
+        let source_len = tokens.iter().map(|t| t.len()).sum::<usize>() + merges.iter().map(|m| m.len()).sum::<usize>();
+        Ok(Self { vocab, tokens: tokens.to_vec(), merges: table, added, byte_to_char, char_to_byte, source_len })
+    }
+
     /// Ids this tokenizer can produce, one past the highest. Not the model's `vocab_size`, which
     /// is padded — a mismatch between the two is normal and is why the engine's logit row is wider
     /// than this.
