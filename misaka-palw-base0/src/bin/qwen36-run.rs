@@ -46,7 +46,10 @@ fn main() {
         shape.vocab
     );
 
-    let engine = Qwen36Engine::new(&artifact);
+    let engine = match flag(&args, "--expert-cache-gib").and_then(|v| v.parse::<f64>().ok()) {
+        Some(gib) if gib > 0.0 => Qwen36Engine::with_residency(&artifact, (gib * (1u64 << 30) as f64) as usize),
+        _ => Qwen36Engine::new(&artifact),
+    };
     let mut cache = Qwen36Cache::new(shape);
 
     let prefill_started = std::time::Instant::now();
@@ -242,4 +245,12 @@ fn main() {
     println!("  gdn heads with state  {filled}/{heads}");
     println!("  logits nonzero        {}/{}", logits.iter().filter(|v| **v != 0).count(), logits.len());
     println!("  produced token ids    {produced:?}");
+    if let Some((hits, misses, evictions, bytes)) = engine.residency_stats() {
+        println!(
+            "  expert residency      {hits} hits / {} lookups ({:.1} %), {evictions} evictions, {:.2} GiB resident",
+            hits + misses,
+            100.0 * hits as f64 / (hits + misses).max(1) as f64,
+            bytes as f64 / (1u64 << 30) as f64
+        );
+    }
 }

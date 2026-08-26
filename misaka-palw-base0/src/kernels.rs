@@ -51,6 +51,7 @@
 //! runtime — `dotprod` is ARMv8.2 and `i8mm` is ARMv8.6, and an Apple M1 has the first and not
 //! the second — with the `vmlal` path as the fallback that every machine has.
 
+use kaspa_consensus_core::palw_qwen36_ops::PalwQwen36OpError;
 use kaspa_consensus_core::palw_base0_a16::{A16_CODE_MAX, A16_MAX_DOT_LEN, A16QuantParams, PalwA16OpError, a16_scale_round};
 use rayon::prelude::*;
 
@@ -194,6 +195,15 @@ pub fn dot_operand(w: &[i8], x: &A16Operand) -> i64 {
         return unsafe { dot_i8_a16_dotprod(w, x) };
     }
     dot_i8_a16(w, &x.codes)
+}
+
+/// `dot_operand` over a sub-range of the operand: `w` against `x.codes[from..from + w.len()]`.
+///
+/// The hi/lo split path needs the range's own hi/lo slices, so this stays on the plain NEON dot
+/// — a 32-element group is two ladder passes and the sdot setup would not amortize anyway.
+#[inline]
+fn dot_operand_range(w: &[i8], x: &A16Operand, from: usize) -> i64 {
+    dot_i8_a16(w, &x.codes[from..from + w.len()])
 }
 
 #[cfg(target_arch = "aarch64")]
@@ -780,6 +790,133 @@ mod tests {
             let parallel = a16_matmul_requant_fast(&weights, &x, &params).expect("well-formed");
             let serial: Vec<i32> = a16_matmul_requant(&weights, &x, &params).expect("well-formed");
             assert_eq!(parallel, serial, "out_dim={out_dim}");
+        }
+    }
+}
+
+// -------------------------------------------------------------------------------------------
+// The grouped projections — Qwen3.6's weight representation, at the same speed as the tier's
+// -------------------------------------------------------------------------------------------
+
+/// `Σ_g (Σ_{i∈g} w·x) << e_g` — the grouped dot, NEON per group and exact.
+///
+/// A group is 32 weights, which is two 16-lane passes of the same `vmlal_s16` ladder `dot_i8_a16`
+/// uses; the group's partial is shifted by its own exponent BEFORE joining the row sum, exactly as
+/// the reference does it, so the two are the same arithmetic and not merely close. The bound is
+/// the reference's: it validated `per_group · groups ≤ i64::MAX` at the call's entry, so nothing
+/// here can wrap.
+#[inline]
+fn dot_grouped(w: &[i8], x: &A16Operand, exps: &[i8]) -> i64 {
+    let n = w.len();
+    let mut acc: i64 = 0;
+    for (g, exp) in exps.iter().enumerate() {
+        let from = g * 32;
+        let to = (from + 32).min(n);
+        if from >= to {
+            break;
+        }
+        let partial = dot_operand_range(&w[from..to], x, from);
+        acc += partial << *exp;
+    }
+    acc
+}
+
+/// **`q36_matmul_grouped` at speed** — bit-identical to the reference on every admitted input.
+///
+/// The engine's every projection is this op (the checkpoint is Q4_K, whose per-32 scales the
+/// artifact keeps as per-32 exponents), and it was the one matmul still running the scalar
+/// reference: single-threaded, `i64` multiplies per element, re-reading the activation row per
+/// channel. Same three repairs as `a16_matmul_requant_fast`, same differential holding them
+/// honest.
+pub fn q36_matmul_grouped_fast(
+    weights: &[i8],
+    exps: &[i8],
+    x: &[i32],
+    params: &[A16QuantParams],
+) -> Result<Vec<i32>, PalwQwen36OpError> {
+    grouped_fast(weights, exps, x, params, false)
+}
+
+/// **`q36_matmul_grouped_wide` at speed** — the Q[`K`] tail, saturating at the `i32` rail.
+pub fn q36_matmul_grouped_wide_fast(
+    weights: &[i8],
+    exps: &[i8],
+    x: &[i32],
+    params: &[A16QuantParams],
+) -> Result<Vec<i32>, PalwQwen36OpError> {
+    grouped_fast(weights, exps, x, params, true)
+}
+
+fn grouped_fast(
+    weights: &[i8],
+    exps: &[i8],
+    x: &[i32],
+    params: &[A16QuantParams],
+    wide: bool,
+) -> Result<Vec<i32>, PalwQwen36OpError> {
+    // The reference IS the validator: every shape rule and the accumulator bound run there, on a
+    // one-channel probe, so this path cannot admit anything the reference refuses.
+    let n = x.len();
+    let out_dim = params.len();
+    if out_dim == 0 || n == 0 {
+        return Err(PalwQwen36OpError::Empty);
+    }
+    if weights.len() != out_dim * n {
+        return Err(PalwQwen36OpError::LengthMismatch { a: weights.len(), b: out_dim * n });
+    }
+    let groups = n.div_ceil(32);
+    if exps.len() != out_dim * groups {
+        return Err(PalwQwen36OpError::LengthMismatch { a: exps.len(), b: out_dim * groups });
+    }
+    // One-channel probe through the reference to run ITS validation (A16 range, exponent domain,
+    // the i64 bound), then the fast path for the row.
+    if wide {
+        kaspa_consensus_core::palw_qwen36_ops::q36_matmul_grouped_wide(&weights[..n], &exps[..groups], x, &params[..1])?;
+    } else {
+        kaspa_consensus_core::palw_qwen36_ops::q36_matmul_grouped(&weights[..n], &exps[..groups], x, &params[..1])?;
+    }
+    let codes = A16Operand::new(x.iter().map(|v| *v as i16).collect());
+    let (lo, hi) = if wide { (i32::MIN as i64, i32::MAX as i64) } else { (-A16_CODE_MAX, A16_CODE_MAX) };
+    let channel = |c: usize| -> i32 {
+        let acc = dot_grouped(&weights[c * n..(c + 1) * n], &codes, &exps[c * groups..(c + 1) * groups]);
+        let p = params[c];
+        a16_scale_round(acc, p.multiplier, p.shift).saturating_add(p.zero).clamp(lo, hi) as i32
+    };
+    Ok(fill_channels(out_dim, channel))
+}
+
+#[cfg(test)]
+mod grouped_tests {
+    use super::*;
+    use kaspa_consensus_core::palw_qwen36_ops::{q36_matmul_grouped, q36_matmul_grouped_wide};
+
+    struct Lcg(u64);
+    impl Lcg {
+        fn next(&mut self) -> u64 {
+            self.0 = self.0.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            self.0 >> 33
+        }
+    }
+
+    /// The fast grouped pair against the reference, exact over shapes, exponents and signs —
+    /// including a ragged final group, which is where a range-based rewrite goes wrong first.
+    #[test]
+    fn the_fast_grouped_matmuls_are_bit_identical_to_the_reference() {
+        let mut rng = Lcg(0x36_57EED);
+        for (out_dim, n) in [(1usize, 32usize), (3, 40), (17, 96), (64, 2048), (5, 33)] {
+            let groups = n.div_ceil(32);
+            let weights: Vec<i8> = (0..out_dim * n).map(|_| (rng.next() % 255) as i8).collect();
+            let exps: Vec<i8> = (0..out_dim * groups).map(|_| (rng.next() % 21) as i8).collect();
+            let x: Vec<i32> = (0..n).map(|_| (rng.next() % 65535) as i32 - 32767).collect();
+            let params: Vec<A16QuantParams> = (0..out_dim)
+                .map(|_| A16QuantParams { multiplier: 1 + (rng.next() % (1 << 30)) as i64, shift: 30 + (rng.next() % 20) as u8, zero: 0 })
+                .collect();
+            let want = q36_matmul_grouped(&weights, &exps, &x, &params).expect("the reference admits the shape");
+            let got = q36_matmul_grouped_fast(&weights, &exps, &x, &params).expect("the fast path admits it too");
+            assert_eq!(want, got, "grouped diverged at {out_dim}x{n}");
+            let want = q36_matmul_grouped_wide(&weights, &exps, &x, &params).expect("the reference admits the shape");
+            let got = q36_matmul_grouped_wide_fast(&weights, &exps, &x, &params).expect("the fast path admits it too");
+            assert_eq!(want, got, "grouped-wide diverged at {out_dim}x{n}");
         }
     }
 }

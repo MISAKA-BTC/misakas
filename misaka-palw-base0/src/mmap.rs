@@ -59,6 +59,46 @@ impl ReadOnlyMap {
         }
     }
 
+    /// **Ask the kernel to start reading a range now** (`MADV_WILLNEED`).
+    ///
+    /// Advisory and asynchronous: the call returns before the pages arrive, which is exactly what
+    /// makes it useful. The mixture knows which eight experts it needs the moment the router
+    /// commits, and issuing all of their ranges before computing the first one lets the read of
+    /// the eighth overlap the arithmetic of the first.
+    ///
+    /// Rounded outward to page boundaries, because `madvise` requires an aligned start and a range
+    /// that stops mid-page leaves the tail unread.
+    pub fn will_need(&self, offset: usize, len: usize) {
+        self.advise(offset, len, libc::MADV_WILLNEED);
+    }
+
+    /// **Give a range back** (`MADV_DONTNEED`).
+    ///
+    /// On a private read-only mapping this drops the resident pages and the next touch re-reads
+    /// them from the file — no data is lost and nothing is written. It is how an expert cache
+    /// EVICTS: without it the page cache keeps every expert it has ever seen and pays for that by
+    /// evicting the weights every token needs.
+    pub fn dont_need(&self, offset: usize, len: usize) {
+        self.advise(offset, len, libc::MADV_DONTNEED);
+    }
+
+    fn advise(&self, offset: usize, len: usize, advice: i32) {
+        if self.len == 0 || len == 0 || offset >= self.len {
+            return;
+        }
+        let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) }.max(1) as usize;
+        let start = offset - offset % page;
+        let end = (offset + len).min(self.len).next_multiple_of(page).min(self.len.next_multiple_of(page));
+        if end <= start {
+            return;
+        }
+        // SAFETY: the range is inside the live mapping and the advice is purely a hint — a failure
+        // leaves the mapping correct, which is why the result is discarded.
+        unsafe {
+            libc::madvise(self.ptr.add(start) as *mut libc::c_void, end - start, advice);
+        }
+    }
+
     pub fn len(&self) -> usize {
         self.len
     }

@@ -136,7 +136,15 @@ fn main() {
     let stop = if raw { tokenizer.added_id("<|endoftext|>") } else { tokenizer.added_id("<|im_end|>") };
     eprintln!("prompt    {} tokens, stop {stop:?}", ids.len());
 
-    let engine = Qwen36Engine::new(&artifact);
+    // **Residency, in the runtime's hands rather than the page cache's** (see `Qwen36Residency`).
+    // A budget of zero leaves it to the kernel, which is the measurement this is compared against.
+    let engine = match flag(&args, "--expert-cache-gib").and_then(|v| v.parse::<f64>().ok()) {
+        Some(gib) if gib > 0.0 => {
+            eprintln!("residency  pinning the always-set, {gib:.1} GiB budget for routed experts");
+            Qwen36Engine::with_residency(&artifact, (gib * (1u64 << 30) as f64) as usize)
+        }
+        _ => Qwen36Engine::new(&artifact),
+    };
     let mut cache = Qwen36Cache::new(shape);
 
     let prefill_started = std::time::Instant::now();
@@ -186,4 +194,12 @@ fn main() {
         generated.len(),
         generated.len() as f64 / decode.as_secs_f64().max(f64::MIN_POSITIVE)
     );
+    if let Some((hits, misses, evictions, bytes)) = engine.residency_stats() {
+        eprintln!(
+            "residency  {hits} hits / {} lookups ({:.1} %), {evictions} evictions, {:.1} GiB resident",
+            hits + misses,
+            100.0 * hits as f64 / (hits + misses).max(1) as f64,
+            bytes as f64 / (1u64 << 30) as f64
+        );
+    }
 }

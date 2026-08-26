@@ -147,6 +147,70 @@ pub struct Qwen36ArtifactV1 {
     pub rope: RopeTableV1,
 }
 
+/// **An expert-residency cache: which of the mixture's weights this machine keeps in memory.**
+///
+/// The mixture reads eight of two hundred and fifty-six experts per layer per token, so 97 % of
+/// the weights are untouched on any given step — which is the property that makes a memory map the
+/// right shape, and it is not the whole story. The kernel's page cache is an LRU over PAGES with
+/// no idea what an expert is, and eight effectively-random experts per layer per token are enough
+/// to evict the weights that EVERY token needs: the norms, the four GatedDeltaNet projections,
+/// attention, the router, the shared expert and the 508 MiB unembedding. Measured on a 24 GiB
+/// machine against a 33 GiB artifact, that is the difference between reading a few hundred
+/// megabytes per token and reading gigabytes.
+///
+/// So residency is decided here instead:
+///
+/// * **The always-set is pinned.** Everything that is not a routed expert is asked for once, at
+///   open, and never given back. It is about 2 GiB and it is needed by every token, so it is the
+///   last thing that should be evicted and the page cache had no way to know that.
+/// * **Routed experts are an LRU with a byte budget.** Admission is `MADV_WILLNEED`, eviction is
+///   `MADV_DONTNEED` — which on a private read-only mapping drops resident pages and re-reads on
+///   the next touch, so nothing is lost and nothing is written.
+/// * **The eight are prefetched before the first is computed.** The router commits before any
+///   expert runs, so all twenty-four ranges (gate, up and down for each) are handed to the kernel
+///   at once and the read of the eighth overlaps the arithmetic of the first.
+///
+/// # What it does NOT do
+///
+/// It does not change one bit of arithmetic. Residency is a decision about where bytes are, and
+/// the class's whole claim is that the answer does not depend on that — which is also why the same
+/// policy is what a GPU tier would use, with the placement decision widened from
+/// "resident or not" to "resident where".
+#[derive(Debug)]
+pub struct Qwen36Residency {
+    /// `(offset, len)` per admitted tensor, most recently used last.
+    order: std::collections::VecDeque<(String, usize, usize)>,
+    resident: std::collections::BTreeSet<String>,
+    bytes: usize,
+    budget: usize,
+    hits: u64,
+    misses: u64,
+    evictions: u64,
+}
+
+impl Qwen36Residency {
+    /// A cache holding at most `budget` bytes of routed experts. A budget of zero disables
+    /// admission entirely and leaves the page cache to it, which is the honest way to measure
+    /// whether any of this helps.
+    pub fn new(budget: usize) -> Self {
+        Self {
+            order: std::collections::VecDeque::new(),
+            resident: std::collections::BTreeSet::new(),
+            bytes: 0,
+            budget,
+            hits: 0,
+            misses: 0,
+            evictions: 0,
+        }
+    }
+
+    /// Hits, misses, evictions and resident bytes — the four numbers that say whether the budget
+    /// is the right one, and the reason this is reported rather than assumed.
+    pub fn stats(&self) -> (u64, u64, u64, usize) {
+        (self.hits, self.misses, self.evictions, self.bytes)
+    }
+}
+
 /// Why the engine refused. Every one is a REGISTRATION defect surfaced before the pass starts,
 /// except `Position`, which is a caller error.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -204,6 +268,50 @@ impl Qwen36ArtifactV1 {
                 // refusal rather than a fault — the bytes are data a producer was handed.
                 map.i8_slice(offset, len).ok_or_else(|| Qwen36Error::BadTensor { name: name.to_string(), want: len, got: 0 })
             }
+        }
+    }
+
+    /// `(offset, len)` of a tensor inside the mapping, or `None` when the artifact is owned
+    /// rather than mapped — residency is a property of a map and there is nothing to advise about
+    /// a `Vec`.
+    pub fn extent(&self, name: &str) -> Option<(usize, usize)> {
+        match &self.store {
+            Store::Owned(_) => None,
+            Store::Mapped { directory, .. } => directory.get(name).copied(),
+        }
+    }
+
+    pub fn will_need(&self, offset: usize, len: usize) {
+        if let Store::Mapped { map, .. } = &self.store {
+            map.will_need(offset, len);
+        }
+    }
+
+    pub fn dont_need(&self, offset: usize, len: usize) {
+        if let Store::Mapped { map, .. } = &self.store {
+            map.dont_need(offset, len);
+        }
+    }
+
+    /// **Ask for everything that is not a routed expert, once.**
+    ///
+    /// The always-set: norms, the four GatedDeltaNet projections, attention, the router, the
+    /// shared expert, the rotary table, the embedding and the unembedding. Every token reads all
+    /// of it, and on a machine smaller than the artifact the page cache will otherwise evict it to
+    /// make room for experts that are read once — which is the whole of why a mapped mixture can
+    /// be slower than its own resident set.
+    ///
+    /// Identified by name: `blk.N.ffn_expert.K_*` is a routed expert and everything else is not.
+    /// A name-shaped rule rather than a flag on the directory, because the artifact format is a
+    /// directory of names and inventing a second classification would be a second thing to keep
+    /// true.
+    pub fn pin_always_set(&self) {
+        let Store::Mapped { map, directory } = &self.store else { return };
+        for (name, (offset, len)) in directory {
+            if name.contains(".ffn_expert.") {
+                continue;
+            }
+            map.will_need(*offset, *len);
         }
     }
 
@@ -348,6 +456,10 @@ pub type Qwen36PeaksV1 = Vec<(String, i32)>;
 /// The engine.
 pub struct Qwen36Engine<'a> {
     pub artifact: &'a Qwen36ArtifactV1,
+    /// Present when the caller has chosen a residency budget. Behind a `Mutex` because the
+    /// forward pass takes `&self` and residency is the one thing in it that is stateful — and
+    /// uncontended, because a token is one pass.
+    residency: Option<std::sync::Mutex<Qwen36Residency>>,
 }
 
 
@@ -364,15 +476,75 @@ impl<'a> Qwen36Engine<'a> {
         let weights = a.tensor_sized(name, out_dim * x.len())?;
         let params = a.params_sized(&format!("{name}.a16"), out_dim)?;
         match a.group_exponents(name) {
-            Some(exps) if wide => q36_matmul_grouped_wide(weights, exps, x, &params).map_err(refuse(name_leak(name))),
-            Some(exps) => q36_matmul_grouped(weights, exps, x, &params).map_err(refuse(name_leak(name))),
+            Some(exps) if wide => {
+                crate::kernels::q36_matmul_grouped_wide_fast(weights, exps, x, &params).map_err(refuse(name_leak(name)))
+            }
+            Some(exps) => crate::kernels::q36_matmul_grouped_fast(weights, exps, x, &params).map_err(refuse(name_leak(name))),
             None if wide => a16_matmul_rescale(weights, x, &params).map_err(refuse(name_leak(name))),
             None => a16_matmul_requant(weights, x, &params).map_err(refuse(name_leak(name))),
         }
     }
 
     pub fn new(artifact: &'a Qwen36ArtifactV1) -> Self {
-        Self { artifact }
+        Self { artifact, residency: None }
+    }
+
+    /// **Take residency into the runtime's own hands**, with `budget` bytes for routed experts.
+    ///
+    /// Pins the always-set on the way in: every tensor that is not a routed expert, asked for once
+    /// and never given back. That is the half that matters most — those weights are read by every
+    /// token, and leaving them to compete with eight fresh experts per layer is what makes a
+    /// memory-mapped mixture slower than its own resident set.
+    pub fn with_residency(artifact: &'a Qwen36ArtifactV1, budget: usize) -> Self {
+        artifact.pin_always_set();
+        Self { artifact, residency: Some(std::sync::Mutex::new(Qwen36Residency::new(budget))) }
+    }
+
+    /// The cache's four numbers, or `None` when the caller left residency to the page cache.
+    pub fn residency_stats(&self) -> Option<(u64, u64, u64, usize)> {
+        self.residency.as_ref().map(|r| r.lock().expect("the residency lock is never poisoned").stats())
+    }
+
+    /// **Hand the kernel every byte the chosen experts need, before computing any of them.**
+    ///
+    /// Called with the routing the moment it commits and before the first expert runs, so the
+    /// twenty-four reads are in flight together rather than one at a time behind the arithmetic
+    /// that consumes them.
+    fn admit_experts(&self, li: usize, chosen: &[usize]) {
+        let Some(cache) = self.residency.as_ref() else { return };
+        let mut cache = cache.lock().expect("the residency lock is never poisoned");
+        for which in chosen {
+            for role in ["_gate.weight", "_up.weight", "_down.weight"] {
+                let name = format!("blk.{li}.ffn_expert.{which}{role}");
+                match self.artifact.extent(&name) {
+                    Some((offset, len)) => {
+                        if cache.resident.contains(&name) {
+                            cache.hits += 1;
+                            // Most recently used last: a hit moves the entry to the back so the
+                            // eviction end of the queue really is the cold end.
+                            if let Some(i) = cache.order.iter().position(|(n, _, _)| n == &name) {
+                                let entry = cache.order.remove(i).expect("the index came from the queue");
+                                cache.order.push_back(entry);
+                            }
+                            continue;
+                        }
+                        cache.misses += 1;
+                        self.artifact.will_need(offset, len);
+                        cache.resident.insert(name.clone());
+                        cache.order.push_back((name, offset, len));
+                        cache.bytes += len;
+                    }
+                    None => continue,
+                }
+            }
+        }
+        while cache.bytes > cache.budget {
+            let Some((name, offset, len)) = cache.order.pop_front() else { break };
+            self.artifact.dont_need(offset, len);
+            cache.resident.remove(&name);
+            cache.bytes = cache.bytes.saturating_sub(len);
+            cache.evictions += 1;
+        }
     }
 
     /// One position. Returns the committed logit row: i16 codes in i32 lanes, argmax over which
@@ -730,6 +902,10 @@ impl<'a> Qwen36Engine<'a> {
         let up = a.scalar(&n("ffn_router_up.a16"))?.clamp(0, 62) as u8;
         let routed = q36_router_topk(&router_codes, s.experts_per_token, up).map_err(refuse("router_topk"))?;
 
+        // **The prefetch.** The routing is committed and no expert has run yet, so this is the
+        // one moment where every byte the mixture will read is known and none of it is needed
+        // instantly — which is exactly when to ask for it.
+        self.admit_experts(li, &routed.iter().map(|r| r.expert as usize).collect::<Vec<_>>());
         let mut outputs = Vec::with_capacity(routed.len() * d);
         let mut weights = Vec::with_capacity(routed.len());
         for r in &routed {
