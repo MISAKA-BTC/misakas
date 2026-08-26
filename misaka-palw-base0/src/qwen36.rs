@@ -691,6 +691,16 @@ pub struct Qwen36Writer {
     plan: Vec<(String, usize)>,
     next: usize,
     written: usize,
+    /// Where each parameter row's VALUE bytes start in the file, so a calibrating converter can
+    /// rewrite them after the pass that measured them.
+    ///
+    /// A quantization scale is a statement about a range and a range has to be observed, but the
+    /// weights can be quantized without one — the codes are a per-output-channel property of the
+    /// weight and nothing else. So one pass writes the codes and measures the ranges, and the
+    /// triples are patched in place at the end. The layout does not change: only the seventeen
+    /// bytes of each triple do, which is what makes this a patch rather than a second format.
+    param_offsets: std::collections::BTreeMap<String, (usize, usize)>,
+    path: std::path::PathBuf,
 }
 
 impl Qwen36Writer {
@@ -711,9 +721,11 @@ impl Qwen36Writer {
         write_i32s(&mut out, &rope.cos_q);
         write_i32s(&mut out, &rope.sin_q);
         write_usize(&mut out, params.len());
+        let mut param_offsets = std::collections::BTreeMap::new();
         for (name, bytes) in params {
             write_name(&mut out, name);
             write_usize(&mut out, bytes.len());
+            param_offsets.insert(name.clone(), (out.len(), bytes.len()));
             out.extend_from_slice(bytes);
         }
         write_usize(&mut out, plan.len());
@@ -738,7 +750,7 @@ impl Qwen36Writer {
 
         let mut file = std::io::BufWriter::with_capacity(1 << 22, std::fs::File::create(path)?);
         file.write_all(&out)?;
-        Ok(Self { file, plan, next: 0, written: 0 })
+        Ok(Self { file, plan, next: 0, written: 0, param_offsets, path: path.to_path_buf() })
     }
 
     /// Append the next tensor. Refuses a name or a length the plan did not declare — the
@@ -770,6 +782,37 @@ impl Qwen36Writer {
             return Err(std::io::Error::other(format!("the plan declared {} tensors and {} arrived", self.plan.len(), self.next)));
         }
         self.file.flush()?;
+        Ok(self.written)
+    }
+
+    /// Finish, rewriting the parameter values measured during the pass.
+    ///
+    /// Every name must be one the header already declared and every replacement must be the same
+    /// length: the directory is on disk and a row that changed width would move every row after
+    /// it. A name that was not declared is an error rather than an append, because a parameter the
+    /// header does not list is a parameter no reader will ever look for.
+    pub fn finish_with_params(mut self, measured: &BTreeMap<String, Vec<u8>>) -> std::io::Result<usize> {
+        use std::io::{Seek, SeekFrom, Write};
+        if self.next != self.plan.len() {
+            return Err(std::io::Error::other(format!("the plan declared {} tensors and {} arrived", self.plan.len(), self.next)));
+        }
+        self.file.flush()?;
+        drop(self.file);
+        let mut file = std::fs::OpenOptions::new().write(true).open(&self.path)?;
+        for (name, bytes) in measured {
+            let Some((offset, len)) = self.param_offsets.get(name) else {
+                return Err(std::io::Error::other(format!("the header does not declare a parameter row {name}")));
+            };
+            if *len != bytes.len() {
+                return Err(std::io::Error::other(format!(
+                    "parameter {name} was declared {len} bytes and the measurement is {}",
+                    bytes.len()
+                )));
+            }
+            file.seek(SeekFrom::Start(*offset as u64))?;
+            file.write_all(bytes)?;
+        }
+        file.flush()?;
         Ok(self.written)
     }
 }
@@ -1241,6 +1284,63 @@ mod tests {
             last
         };
         assert_eq!(run(&mapped), run(&owned), "a mapped artifact must compute what an owned one computes");
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// **Parameters are patched in place after the pass that measured them.**
+    ///
+    /// The weights can be quantized without a calibration — the codes are a per-output-channel
+    /// property of the weight and nothing else — but a scale is a statement about a RANGE, and a
+    /// range has to be observed by running the model. One pass therefore writes the codes and
+    /// measures the ranges, and the triples are rewritten at the end. Only the seventeen bytes of
+    /// each triple move; the directory does not.
+    #[test]
+    fn parameters_can_be_rewritten_after_the_weights_are_written() {
+        let owned = fixture(2, 8);
+        let path = std::env::temp_dir().join(format!("misaka-q36-patch-{}.palwq36", std::process::id()));
+        let plan: Vec<(String, usize)> =
+            owned.tensor_names().iter().map(|n| (n.to_string(), owned.tensor(n).expect("present").len())).collect();
+        let mut writer = Qwen36Writer::create(&path, &owned.shape, &owned.rope, owned.params_map(), plan.clone()).expect("created");
+        for (name, _) in &plan {
+            writer.push(name, owned.tensor(name).expect("present")).expect("appended");
+        }
+
+        // A measured value for one row, the same width as the placeholder.
+        let target = "blk.0.attn_norm.a16".to_string();
+        let measured = A16QuantParams { multiplier: 12_345, shift: 9, zero: -7 };
+        let mut patch = BTreeMap::new();
+        patch.insert(target.clone(), measured.to_wire().to_vec());
+        writer.finish_with_params(&patch).expect("the patch lands");
+
+        let mapped = open_artifact(&path).expect("opens");
+        assert_eq!(mapped.param_rows(&target).expect("present"), vec![measured]);
+        // Everything else is untouched, weights included.
+        for name in owned.tensor_names() {
+            assert_eq!(mapped.tensor(name).expect("mapped"), owned.tensor(name).expect("owned"), "tensor {name}");
+        }
+        assert_eq!(
+            mapped.param_rows("blk.0.attn_align.a16").expect("present"),
+            owned.param_rows("blk.0.attn_align.a16").expect("present")
+        );
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// A patch the header did not declare, or one of a different width, is an error. A row the
+    /// header does not list is a row no reader will look for, and a row that changed width would
+    /// move every row after it.
+    #[test]
+    fn a_patch_the_header_did_not_declare_is_refused() {
+        let owned = fixture(1, 8);
+        let path = std::env::temp_dir().join(format!("misaka-q36-badpatch-{}.palwq36", std::process::id()));
+        let plan: Vec<(String, usize)> =
+            owned.tensor_names().iter().map(|n| (n.to_string(), owned.tensor(n).expect("present").len())).collect();
+        let mut writer = Qwen36Writer::create(&path, &owned.shape, &owned.rope, owned.params_map(), plan.clone()).expect("created");
+        for (name, _) in &plan {
+            writer.push(name, owned.tensor(name).expect("present")).expect("appended");
+        }
+        let mut patch = BTreeMap::new();
+        patch.insert("blk.0.not_a_row.a16".to_string(), vec![0u8; A16QuantParams::WIRE_BYTES]);
+        assert!(writer.finish_with_params(&patch).is_err());
         std::fs::remove_file(&path).ok();
     }
 
