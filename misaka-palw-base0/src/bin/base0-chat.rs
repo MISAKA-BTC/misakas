@@ -41,6 +41,10 @@ fn main() {
     let system = flag(&args, "--system");
     let max_tokens: usize = flag(&args, "--max-tokens").and_then(|v| v.parse().ok()).unwrap_or(128);
     let raw = args.iter().any(|a| a == "--raw");
+    // Prefill batch width. 32 is where the arithmetic-per-byte stops being the limit on this
+    // machine; 1 reproduces the token-at-a-time path exactly, which is what makes it a knob worth
+    // having rather than a constant.
+    let batch: usize = flag(&args, "--batch").and_then(|v| v.parse().ok()).unwrap_or(32);
 
     let started = std::time::Instant::now();
     let bytes = std::fs::read(artifact_path).unwrap_or_else(|e| die(format!("{artifact_path}: {e}")));
@@ -74,16 +78,14 @@ fn main() {
     eprintln!("loaded in {load:?}, prompt {} tokens", ids.len());
 
     let mut cache = A16Cache::new(shape.n_layers);
-    let mut logits = Vec::new();
 
-    // **Prefill.** Every prompt token through the forward pass, keeping only the last row: the
-    // earlier rows predict tokens the prompt already contains.
+    // **Prefill.** Batched: every prompt token needs the same weight row, so the row is read once
+    // and used `batch` times. Only the last row's logits are kept — the earlier ones predict
+    // tokens the prompt already contains — so the unembedding runs once instead of `n` times.
     let prefill_started = std::time::Instant::now();
-    for (position, token) in ids.iter().enumerate() {
-        logits = engine
-            .forward_token(&mut cache, *token as usize, position)
-            .unwrap_or_else(|e| die(format!("prefill failed at position {position}: {e:?}")));
-    }
+    let prompt_ids: Vec<usize> = ids.iter().map(|v| *v as usize).collect();
+    let mut logits =
+        engine.forward_prefill(&mut cache, &prompt_ids, 0, batch).unwrap_or_else(|e| die(format!("prefill failed: {e:?}")));
     let prefill = prefill_started.elapsed();
 
     // **Decode.** Greedy, one token at a time, streamed. The text is re-decoded from the whole

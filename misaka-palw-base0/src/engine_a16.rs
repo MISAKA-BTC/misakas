@@ -20,10 +20,46 @@
 //! dispute alike.
 
 use crate::artifact::{Base0ArtifactV1, Base0ShapeV1};
+use crate::kernels::{a16_matmul_requant_batch, a16_matmul_rescale_batch};
 use kaspa_consensus_core::palw_base0_a16::{
-    A16QuantParams, a16_add_elem, a16_attn_scores, a16_attn_values, a16_mul_elem, a16_requant, a16_rms_norm, a16_rope,
-    a16_softmax_rows,
+    A16QuantParams, a16_add_elem, a16_mul_elem, a16_requant, a16_rms_norm, a16_rope, a16_softmax_rows,
 };
+
+/// Op W9 through whichever implementation this engine was built with.
+#[inline]
+fn a16_attn_scores(
+    fast: bool,
+    q: &[i32],
+    k: &[i32],
+    heads: usize,
+    kv_heads: usize,
+    d_head: usize,
+    p: &[A16QuantParams],
+) -> Result<Vec<i32>, PalwA16OpError> {
+    if fast {
+        crate::kernels::a16_attn_scores_fast(q, k, heads, kv_heads, d_head, p)
+    } else {
+        catalog_attn_scores(q, k, heads, kv_heads, d_head, p)
+    }
+}
+
+/// Op W10 likewise.
+#[inline]
+fn a16_attn_values(
+    fast: bool,
+    probs: &[i32],
+    v: &[i32],
+    heads: usize,
+    kv_heads: usize,
+    d_head: usize,
+    p: &[A16QuantParams],
+) -> Result<Vec<i32>, PalwA16OpError> {
+    if fast {
+        crate::kernels::a16_attn_values_fast(probs, v, heads, kv_heads, d_head, p)
+    } else {
+        catalog_attn_values(probs, v, heads, kv_heads, d_head, p)
+    }
+}
 use kaspa_consensus_core::palw_base0_ops::silu;
 
 // **The two projections go through the fast kernels, and this is not a fork of the catalog.**
@@ -35,7 +71,8 @@ use kaspa_consensus_core::palw_base0_ops::silu;
 // They may be swapped in precisely because ADR-0040 Decision E makes lanes and threads invisible
 // to the value; the day that stops being true is the day those tests fail.
 use kaspa_consensus_core::palw_base0_a16::{
-    PalwA16OpError, a16_matmul_requant as catalog_matmul_requant, a16_matmul_rescale as catalog_matmul_rescale,
+    PalwA16OpError, a16_attn_scores as catalog_attn_scores, a16_attn_values as catalog_attn_values,
+    a16_matmul_requant as catalog_matmul_requant, a16_matmul_rescale as catalog_matmul_rescale,
 };
 
 /// Op W1 through whichever implementation this engine was built with.
@@ -206,6 +243,191 @@ impl<'a> A16Engine<'a> {
         })
     }
 
+    /// **Prefill a run of tokens, batched.**
+    ///
+    /// Decode reads the whole 1.65 GiB weight set to produce one token, so it is bandwidth-bound
+    /// and no kernel can fix that — the model has to be read. A prompt does not have that excuse:
+    /// every one of its tokens needs the same weight row, so reading it once and using it `batch`
+    /// times raises the arithmetic per byte by `batch`.
+    ///
+    /// Returns the LAST position's logits, which is all a prefill is for: the earlier rows predict
+    /// tokens the prompt already contains. The unembedding — 233M multiply-accumulates, 15 % of a
+    /// token — is therefore computed once rather than `n` times.
+    ///
+    /// # Three things this must not change, and how each is held
+    ///
+    /// * **The KV cache.** Prefill and decode meet in it, so a batched prefill has to leave
+    ///   exactly the state a token-at-a-time prefill would have left. Every op here is per row and
+    ///   the batched projections are asserted bit-identical to the single-row ones.
+    /// * **The sink.** Position 0 rides its own parameters at seven seams (ADR-0050), so it is not
+    ///   batched with anything: when the run starts at position 0 that token goes through
+    ///   [`Self::forward_token`] alone and the batch starts at position 1. Mixing it in would need
+    ///   per-row parameters on three projections, for one row.
+    /// * **Attention's history.** Row `i` of a batch attends to everything before the batch plus
+    ///   rows `0..=i` of it — never to `i+1`. The full series is built once after all the keys are
+    ///   appended and each row reads a PREFIX of it, which is the same bytes the sequential path
+    ///   would have concatenated and is `batch` times less copying.
+    pub fn forward_prefill(
+        &self,
+        cache: &mut A16Cache,
+        tokens: &[usize],
+        start_position: usize,
+        batch: usize,
+    ) -> Result<Vec<i32>, A16EngineError> {
+        if tokens.is_empty() {
+            return Err(A16EngineError::OpRefused("an empty prefill"));
+        }
+        let batch = batch.max(1);
+        let mut logits = Vec::new();
+        let mut at = 0usize;
+        // The sink is never batched.
+        if start_position == 0 {
+            logits = self.forward_token(cache, tokens[0], 0)?;
+            at = 1;
+        }
+        while at < tokens.len() {
+            let end = (at + batch).min(tokens.len());
+            let last = end == tokens.len();
+            logits = self.forward_batch(cache, &tokens[at..end], start_position + at, last)?;
+            at = end;
+        }
+        Ok(logits)
+    }
+
+    /// One batch of non-sink positions. `want_logits` skips the unembedding for every batch but
+    /// the last.
+    fn forward_batch(
+        &self,
+        cache: &mut A16Cache,
+        tokens: &[usize],
+        start_position: usize,
+        want_logits: bool,
+    ) -> Result<Vec<i32>, A16EngineError> {
+        let shape = &self.artifact.shape;
+        let d = shape.d_model();
+        let kv_dim = shape.kv_dim();
+        let batch = tokens.len();
+        let refuse =
+            |what: &'static str| move |_e: kaspa_consensus_core::palw_base0_a16::PalwA16OpError| A16EngineError::OpRefused(what);
+        let tile = |p: A16QuantParams, n: usize| -> Vec<A16QuantParams> { vec![p; n] };
+
+        let rope_rows: Vec<(&[i32], &[i32])> = (0..batch)
+            .map(|i| self.artifact.rope.row(start_position + i).ok_or(A16EngineError::PositionOutOfRange))
+            .collect::<Result<_, _>>()?;
+
+        // ---- pre: the gather and the lift, per row -----------------------------------------
+        let mut h: Vec<Vec<i32>> = Vec::with_capacity(batch);
+        for token_id in tokens {
+            let embed_row: Vec<i32> = self.artifact.embed[token_id * d..(token_id + 1) * d].iter().map(|c| *c as i32).collect();
+            h.push(a16_requant(&embed_row, &tile(self.embed_lift, d)).map_err(refuse("embed_lift"))?);
+        }
+
+        for (li, lp) in self.layers.iter().enumerate() {
+            let lw = &self.artifact.layers[li];
+
+            // ---- attention ---------------------------------------------------------------
+            let mut normed = Vec::with_capacity(batch);
+            for row in &h {
+                let unit = a16_rms_norm(row, shape.eps_q).map_err(refuse("norm1"))?;
+                normed.push(a16_requant(&unit, &lp.attn_norm).map_err(refuse("norm1_req"))?);
+            }
+            let q = a16_matmul_requant_batch(&lw.wq, &normed, &lp.q).map_err(refuse("q"))?;
+            let k = a16_matmul_requant_batch(&lw.wk, &normed, &lp.k).map_err(refuse("k"))?;
+            let v = a16_matmul_requant_batch(&lw.wv, &normed, &lp.v).map_err(refuse("v"))?;
+
+            let history_before = cache.keys[li].len();
+            let mut q_rot = Vec::with_capacity(batch);
+            for (i, (cos_row, sin_row)) in rope_rows.iter().enumerate() {
+                let rope_heads = |row: &[i32], heads: usize, what: &'static str| -> Result<Vec<i32>, A16EngineError> {
+                    let mut out = Vec::with_capacity(row.len());
+                    for hd in 0..heads {
+                        let slice = &row[hd * shape.d_head..(hd + 1) * shape.d_head];
+                        out.extend(a16_rope(slice, cos_row, sin_row).map_err(|_| A16EngineError::OpRefused(what))?);
+                    }
+                    Ok(out)
+                };
+                q_rot.push(rope_heads(&q[i], shape.n_heads, "rope_q")?);
+                cache.keys[li].push(rope_heads(&k[i], shape.n_kv_heads, "rope_k")?);
+                cache.values[li].push(v[i].clone());
+            }
+
+            // The whole series once; row `i` reads the prefix that ends at its own position.
+            let history = history_before + batch;
+            let mut k_series = Vec::with_capacity(history * kv_dim);
+            let mut v_series = Vec::with_capacity(history * kv_dim);
+            for j in 0..history {
+                k_series.extend_from_slice(&cache.keys[li][j]);
+                v_series.extend_from_slice(&cache.values[li][j]);
+            }
+
+            let mut attn_rows = Vec::with_capacity(batch);
+            for (i, q_row) in q_rot.iter().enumerate() {
+                let visible = history_before + i + 1;
+                let logits_row = a16_attn_scores(
+                    self.fast,
+                    q_row,
+                    &k_series[..visible * kv_dim],
+                    shape.n_heads,
+                    shape.n_kv_heads,
+                    shape.d_head,
+                    &tile(lp.logits, shape.n_heads * visible),
+                )
+                .map_err(refuse("logits"))?;
+                let probs_row = a16_softmax_rows(&logits_row, visible, lp.softmax_up).map_err(refuse("softmax"))?;
+                let p15 = a16_requant(&probs_row, &tile(lp.probs, shape.n_heads * visible)).map_err(refuse("p15"))?;
+                attn_rows.push(
+                    a16_attn_values(
+                        self.fast,
+                        &p15,
+                        &v_series[..visible * kv_dim],
+                        shape.n_heads,
+                        shape.n_kv_heads,
+                        shape.d_head,
+                        &tile(lp.values, shape.n_heads * shape.d_head),
+                    )
+                    .map_err(refuse("values"))?,
+                );
+            }
+
+            let delta = a16_matmul_requant_batch(&lw.wo, &attn_rows, &lp.wo).map_err(refuse("wo"))?;
+            for (i, row) in h.iter_mut().enumerate() {
+                let aligned = a16_requant(row, &tile(lp.attn_align, d)).map_err(refuse("attn_align"))?;
+                let sum = a16_add_elem(&aligned, &delta[i]).map_err(refuse("attn_add"))?;
+                *row = a16_requant(&sum, &tile(lp.attn_residual, d)).map_err(refuse("attn_res"))?;
+            }
+
+            // ---- SwiGLU -------------------------------------------------------------------
+            let mut normed = Vec::with_capacity(batch);
+            for row in &h {
+                let unit = a16_rms_norm(row, shape.eps_q).map_err(refuse("norm2"))?;
+                normed.push(a16_requant(&unit, &lp.ffn_norm).map_err(refuse("norm2_req"))?);
+            }
+            let gate_q = a16_matmul_rescale_batch(&lw.w_gate, &normed, &lp.gate).map_err(refuse("gate"))?;
+            let up = a16_matmul_requant_batch(&lw.w_up, &normed, &lp.up).map_err(refuse("up"))?;
+            let mut gated_rows = Vec::with_capacity(batch);
+            for i in 0..batch {
+                let silu_q = silu(&gate_q[i]);
+                let s16 = a16_requant(&silu_q, &tile(lp.silu_q, shape.d_ff)).map_err(refuse("silu16"))?;
+                let prod = a16_mul_elem(&s16, &up[i]).map_err(refuse("mul"))?;
+                gated_rows.push(a16_requant(&prod, &tile(lp.gated, shape.d_ff)).map_err(refuse("gated"))?);
+            }
+            let delta = a16_matmul_requant_batch(&lw.w_down, &gated_rows, &lp.down).map_err(refuse("down"))?;
+            for (i, row) in h.iter_mut().enumerate() {
+                let aligned = a16_requant(row, &tile(lp.ffn_align, d)).map_err(refuse("ffn_align"))?;
+                let sum = a16_add_elem(&aligned, &delta[i]).map_err(refuse("ffn_add"))?;
+                *row = a16_requant(&sum, &tile(lp.ffn_residual, d)).map_err(refuse("ffn_res"))?;
+            }
+        }
+
+        if !want_logits {
+            return Ok(Vec::new());
+        }
+        let last = h.last().expect("a non-empty batch");
+        let unit = a16_rms_norm(last, shape.eps_q).map_err(refuse("final_norm"))?;
+        let fin = a16_requant(&unit, &self.final_norm).map_err(refuse("final_req"))?;
+        a16_matmul_requant(self.fast, &self.artifact.unembed, &fin, &tile(self.logits_out, shape.vocab)).map_err(refuse("logits_out"))
+    }
+
     /// The same engine with the two projections routed through the catalog ops rather than the
     /// fast kernels. Only a test builds one: it is the other side of the differential.
     pub fn new_reference(artifact: &'a Base0ArtifactV1) -> Result<Self, A16EngineError> {
@@ -295,6 +517,7 @@ impl<'a> A16Engine<'a> {
             let logits_row = push(
                 &mut nodes,
                 a16_attn_scores(
+                    self.fast,
                     &q_rot,
                     &k_series,
                     shape.n_heads,
@@ -309,6 +532,7 @@ impl<'a> A16Engine<'a> {
             let attn = push(
                 &mut nodes,
                 a16_attn_values(
+                    self.fast,
                     &p15,
                     &v_series,
                     shape.n_heads,
@@ -483,6 +707,77 @@ mod tests {
                 let b = reference.forward_token(&mut reference_cache, token, position).expect("the token decodes");
                 assert_eq!(a, b, "layers={layers} d_head={d_head} d_ff={d_ff} position={position}");
             }
+        }
+    }
+
+    /// **A batched prefill must leave exactly what a sequential one leaves.**
+    ///
+    /// Not "the same logits" — the same KV CACHE, because the next decode token reads it. A batch
+    /// that got attention's visibility wrong by one would still produce a plausible last row and
+    /// then poison every token after it.
+    ///
+    /// Batch sizes straddle the run length so that the last chunk is ragged, and the run starts
+    /// both at 0 (where the sink is peeled off and processed alone) and mid-context.
+    #[test]
+    fn a_batched_prefill_leaves_the_same_state_as_a_sequential_one() {
+        for (layers, d_head, d_ff) in [(1usize, 4usize, 8usize), (2, 8, 32)] {
+            let artifact = artifact(layers, d_head, d_ff);
+            let engine = A16Engine::new(&artifact).expect("the store resolves");
+            let tokens: Vec<usize> = (0..11).map(|i| (i * 5 + 1) % artifact.shape.vocab).collect();
+
+            for batch in [1usize, 2, 3, 4, 16] {
+                for start in [0usize, 1, 5] {
+                    let mut sequential = A16Cache::new(layers);
+                    let mut expected = Vec::new();
+                    // The sequential run needs the same history in front of it when `start` is
+                    // not zero, so the leading positions are filled the same way for both.
+                    for position in 0..start {
+                        let _ = engine.forward_token(&mut sequential, position % artifact.shape.vocab, position).expect("decodes");
+                    }
+                    let mut batched = A16Cache::new(layers);
+                    for position in 0..start {
+                        let _ = engine.forward_token(&mut batched, position % artifact.shape.vocab, position).expect("decodes");
+                    }
+                    for (i, token) in tokens.iter().enumerate() {
+                        expected = engine.forward_token(&mut sequential, *token, start + i).expect("decodes");
+                    }
+                    let got = engine.forward_prefill(&mut batched, &tokens, start, batch).expect("prefills");
+
+                    assert_eq!(got, expected, "logits: layers={layers} batch={batch} start={start}");
+                    assert_eq!(batched.len(), sequential.len(), "cache depth: batch={batch} start={start}");
+                    for li in 0..layers {
+                        assert_eq!(batched.keys[li], sequential.keys[li], "keys layer {li}: batch={batch} start={start}");
+                        assert_eq!(batched.values[li], sequential.values[li], "values layer {li}: batch={batch} start={start}");
+                    }
+                }
+            }
+        }
+    }
+
+    /// And the cache a batched prefill leaves must carry a decode that continues from it — the
+    /// property the test above is a proxy for, checked directly.
+    #[test]
+    fn decoding_continues_identically_from_a_batched_prefill() {
+        let artifact = artifact(2, 8, 32);
+        let engine = A16Engine::new(&artifact).expect("the store resolves");
+        let prompt: Vec<usize> = vec![3, 9, 17, 4, 11, 2, 8];
+
+        let mut sequential = A16Cache::new(2);
+        let mut logits_a = Vec::new();
+        for (i, t) in prompt.iter().enumerate() {
+            logits_a = engine.forward_token(&mut sequential, *t, i).expect("decodes");
+        }
+        let mut batched = A16Cache::new(2);
+        let mut logits_b = engine.forward_prefill(&mut batched, &prompt, 0, 4).expect("prefills");
+        assert_eq!(logits_a, logits_b);
+
+        for step in 0..6 {
+            let next_a = crate::engine::argmax_lowest(&logits_a);
+            let next_b = crate::engine::argmax_lowest(&logits_b);
+            assert_eq!(next_a, next_b, "step {step}");
+            logits_a = engine.forward_token(&mut sequential, next_a, prompt.len() + step).expect("decodes");
+            logits_b = engine.forward_token(&mut batched, next_b, prompt.len() + step).expect("decodes");
+            assert_eq!(logits_a, logits_b, "step {step}");
         }
     }
 

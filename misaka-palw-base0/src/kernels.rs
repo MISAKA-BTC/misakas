@@ -353,6 +353,218 @@ pub fn a16_matmul_rescale_fast(weights: &[i8], x: &[i32], params: &[A16QuantPara
     Ok(fill_channels(out_dim, channel))
 }
 
+// -------------------------------------------------------------------------------------------
+// The batched projections — the same weight row against many tokens
+// -------------------------------------------------------------------------------------------
+
+/// **Op W1 over a batch** — `B` activation rows through one projection.
+///
+/// Decode reads 1.65 GiB of weights to produce one token, so it is bandwidth-bound and no kernel
+/// can fix that: the model has to be read. Prefill does not have to be. Every prompt token needs
+/// the same weight row, so reading it once and using it `B` times raises the arithmetic per byte
+/// by a factor of `B` and turns a bandwidth problem into an arithmetic one.
+///
+/// Output is `B` rows of `out_dim`, bit-identical to calling `a16_matmul_requant_fast` on each
+/// row — which it must be, because prefill and decode meet in the same KV cache and a prompt
+/// prefilled in a batch has to leave the state a token-at-a-time prefill would have left.
+///
+/// The channel loop writes channel-major and transposes at the end. Writing `out[b][c]` directly
+/// would need `B` disjoint mutable rows per channel block, which is a borrow the channel-parallel
+/// shape does not have; the transpose is `B · out_dim` `i32` copies and is not where this goes.
+pub fn a16_matmul_requant_batch(
+    weights: &[i8],
+    rows: &[Vec<i32>],
+    params: &[A16QuantParams],
+) -> Result<Vec<Vec<i32>>, PalwA16OpError> {
+    batch_projection(weights, rows, params, true)
+}
+
+/// **Op W3 over a batch** — the Q[`K`] tail rather than the `int8`-code one.
+pub fn a16_matmul_rescale_batch(
+    weights: &[i8],
+    rows: &[Vec<i32>],
+    params: &[A16QuantParams],
+) -> Result<Vec<Vec<i32>>, PalwA16OpError> {
+    batch_projection(weights, rows, params, false)
+}
+
+fn batch_projection(
+    weights: &[i8],
+    rows: &[Vec<i32>],
+    params: &[A16QuantParams],
+    narrow_to_codes: bool,
+) -> Result<Vec<Vec<i32>>, PalwA16OpError> {
+    if rows.is_empty() {
+        return Err(PalwA16OpError::Empty);
+    }
+    let operands: Vec<A16Operand> = rows.iter().map(|r| as_a16_codes(r).map(A16Operand::new)).collect::<Result<_, _>>()?;
+    let n = operands[0].len();
+    if operands.iter().any(|o| o.len() != n) {
+        return Err(PalwA16OpError::LengthMismatch { a: n, b: operands.iter().map(|o| o.len()).max().unwrap_or(0) });
+    }
+    if n > A16_MAX_DOT_LEN {
+        return Err(PalwA16OpError::DotTooLong { got: n });
+    }
+    let out_dim = params.len();
+    if out_dim == 0 {
+        return Err(PalwA16OpError::Empty);
+    }
+    if weights.len() != out_dim * n {
+        return Err(PalwA16OpError::LengthMismatch { a: weights.len(), b: out_dim * n });
+    }
+    let batch = operands.len();
+
+    let mut channel_major = vec![0i32; out_dim * batch];
+    let block = block_size(out_dim);
+    let write = |slice: &mut [i32], base: usize| {
+        for (i, chunk) in slice.chunks_exact_mut(batch).enumerate() {
+            let c = base + i;
+            let w = &weights[c * n..(c + 1) * n];
+            let p = params[c];
+            for (b, slot) in chunk.iter_mut().enumerate() {
+                let acc = dot_operand(w, &operands[b]);
+                let scaled = a16_scale_round(acc, p.multiplier, p.shift).saturating_add(p.zero);
+                *slot = if narrow_to_codes {
+                    scaled.clamp(-A16_CODE_MAX, A16_CODE_MAX) as i32
+                } else {
+                    scaled.clamp(i32::MIN as i64, i32::MAX as i64) as i32
+                };
+            }
+        }
+    };
+    if out_dim < PARALLEL_MIN_CHANNELS {
+        write(&mut channel_major, 0);
+    } else {
+        channel_major.par_chunks_mut(block * batch).enumerate().for_each(|(bi, slice)| write(slice, bi * block));
+    }
+
+    let mut out = vec![vec![0i32; out_dim]; batch];
+    for (c, chunk) in channel_major.chunks_exact(batch).enumerate() {
+        for (b, v) in chunk.iter().enumerate() {
+            out[b][c] = *v;
+        }
+    }
+    Ok(out)
+}
+
+// -------------------------------------------------------------------------------------------
+// The attention arms — the same ops, on the pool
+// -------------------------------------------------------------------------------------------
+
+/// `Σ a·b` over two rows of A16 codes carried in `i32` lanes.
+///
+/// Both operands are `i16` here, not `int8 × i16` like a projection, so `sdot` does not apply: a
+/// single product reaches `32767² = 1.07e9` and only the accumulator's width saves it. The sum is
+/// `i64` and the products are exact, so the reduction order is free here for the same reason it is
+/// everywhere else.
+#[inline]
+pub fn dot_codes(a: &[i32], b: &[i32]) -> i64 {
+    a.iter().zip(b).map(|(x, y)| *x as i64 * *y as i64).sum()
+}
+
+/// **Op W9 on the pool** — `q · Kᵀ` per head, per key.
+///
+/// The reference walks `heads × kv_len` independent dots in one serial loop. At a 360-token
+/// history that is 4,320 dots of 128 elements per layer per token, and it was the whole reason a
+/// decode after a long prefill ran at 2.5 tok/s while the projections ran at 56 GMAC/s: attention
+/// is the part that grows with the context, and it was the part with no kernel.
+///
+/// Every output element depends on one query head and one key, so nothing here is shared and the
+/// only question was scheduling. Bit-identical to `a16_attn_scores` by construction — same
+/// products, same order within a dot, same narrowing.
+pub fn a16_attn_scores_fast(
+    q: &[i32],
+    k_series: &[i32],
+    heads: usize,
+    kv_heads: usize,
+    d_head: usize,
+    params: &[A16QuantParams],
+) -> Result<Vec<i32>, PalwA16OpError> {
+    check_codes(q)?;
+    check_codes(k_series)?;
+    if heads == 0 || kv_heads == 0 || d_head == 0 || !heads.is_multiple_of(kv_heads) {
+        return Err(PalwA16OpError::Empty);
+    }
+    if d_head > A16_MAX_DOT_LEN {
+        return Err(PalwA16OpError::DotTooLong { got: d_head });
+    }
+    if q.len() != heads * d_head {
+        return Err(PalwA16OpError::LengthMismatch { a: q.len(), b: heads * d_head });
+    }
+    let kv_dim = kv_heads * d_head;
+    if k_series.is_empty() || !k_series.len().is_multiple_of(kv_dim) {
+        return Err(PalwA16OpError::NotAMultiple { got: k_series.len(), unit: kv_dim });
+    }
+    let kv_len = k_series.len() / kv_dim;
+    if params.len() != heads * kv_len {
+        return Err(PalwA16OpError::LengthMismatch { a: params.len(), b: heads * kv_len });
+    }
+    let group = heads / kv_heads;
+    Ok(fill_channels(heads * kv_len, |i| {
+        let (h, j) = (i / kv_len, i % kv_len);
+        let qh = &q[h * d_head..(h + 1) * d_head];
+        let kv_off = (h / group) * d_head;
+        let kh = &k_series[j * kv_dim + kv_off..j * kv_dim + kv_off + d_head];
+        let p = params[i];
+        a16_scale_round(dot_codes(qh, kh), p.multiplier, p.shift).saturating_add(p.zero).clamp(-A16_CODE_MAX, A16_CODE_MAX) as i32
+    }))
+}
+
+/// **Op W10 on the pool** — `p · V` per head, per output lane.
+///
+/// The reduction is over the history, so this one gets LONGER as the context grows while the
+/// scores arm gets WIDER. Both are `heads × …` independent outputs and both were serial.
+pub fn a16_attn_values_fast(
+    probs: &[i32],
+    v_series: &[i32],
+    heads: usize,
+    kv_heads: usize,
+    d_head: usize,
+    params: &[A16QuantParams],
+) -> Result<Vec<i32>, PalwA16OpError> {
+    check_codes(probs)?;
+    check_codes(v_series)?;
+    if heads == 0 || kv_heads == 0 || d_head == 0 || !heads.is_multiple_of(kv_heads) {
+        return Err(PalwA16OpError::Empty);
+    }
+    let kv_dim = kv_heads * d_head;
+    if v_series.is_empty() || !v_series.len().is_multiple_of(kv_dim) {
+        return Err(PalwA16OpError::NotAMultiple { got: v_series.len(), unit: kv_dim });
+    }
+    let kv_len = v_series.len() / kv_dim;
+    if kv_len > A16_MAX_DOT_LEN {
+        return Err(PalwA16OpError::DotTooLong { got: kv_len });
+    }
+    if probs.len() != heads * kv_len {
+        return Err(PalwA16OpError::LengthMismatch { a: probs.len(), b: heads * kv_len });
+    }
+    if params.len() != heads * d_head {
+        return Err(PalwA16OpError::LengthMismatch { a: params.len(), b: heads * d_head });
+    }
+    let group = heads / kv_heads;
+    Ok(fill_channels(heads * d_head, |idx| {
+        let (h, i) = (idx / d_head, idx % d_head);
+        let ph = &probs[h * kv_len..(h + 1) * kv_len];
+        let kv_off = (h / group) * d_head;
+        // `V` is position-major, so this reduction strides by `kv_dim` — the one place in this
+        // module where the inner loop is not contiguous, and the reason it is written as an
+        // explicit sum rather than through `dot_codes`.
+        let acc: i64 = (0..kv_len).map(|j| ph[j] as i64 * v_series[j * kv_dim + kv_off + i] as i64).sum();
+        let p = params[idx];
+        a16_scale_round(acc, p.multiplier, p.shift).saturating_add(p.zero).clamp(-A16_CODE_MAX, A16_CODE_MAX) as i32
+    }))
+}
+
+fn check_codes(row: &[i32]) -> Result<(), PalwA16OpError> {
+    if row.is_empty() {
+        return Err(PalwA16OpError::Empty);
+    }
+    if row.iter().any(|v| (*v as i64).abs() > A16_CODE_MAX) {
+        return Err(PalwA16OpError::LengthMismatch { a: row.len(), b: row.len() });
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -473,6 +685,66 @@ mod tests {
             let operand = A16Operand::new(vec![v]);
             assert_eq!(256 * operand.hi[0] as i32 + operand.lo[0] as i32, v as i32, "v={v}");
             assert!((-128..=127).contains(&(operand.hi[0] as i32)), "hi must fit an i8 for v={v}");
+        }
+    }
+
+    /// A batched projection must equal the same rows one at a time. Prefill and decode meet in
+    /// one KV cache, so a prompt prefilled in a batch has to leave the state a token-at-a-time
+    /// prefill would have left — not a close one.
+    #[test]
+    fn the_batched_projection_equals_the_rows_one_at_a_time() {
+        let mut rng = Lcg(0xA16_0005);
+        for (n, out_dim) in [(16usize, 8usize), (1536, 64), (1536, 1536), (8960, 1536), (1536, 8960)] {
+            let weights: Vec<i8> = (0..out_dim * n).map(|_| rng.i8()).collect();
+            let params: Vec<A16QuantParams> =
+                (0..out_dim).map(|_| A16QuantParams { multiplier: 1 << 20, shift: 34, zero: rng.code() as i64 % 8 }).collect();
+            for batch in [1usize, 2, 7, 16] {
+                let rows: Vec<Vec<i32>> = (0..batch).map(|_| (0..n).map(|_| rng.code()).collect()).collect();
+                let batched = a16_matmul_requant_batch(&weights, &rows, &params).expect("well-formed");
+                let batched_rescale = a16_matmul_rescale_batch(&weights, &rows, &params).expect("well-formed");
+                for (b, row) in rows.iter().enumerate() {
+                    assert_eq!(
+                        batched[b],
+                        a16_matmul_requant_fast(&weights, row, &params).expect("well-formed"),
+                        "n={n} out_dim={out_dim} batch={batch} row={b}"
+                    );
+                    assert_eq!(
+                        batched_rescale[b],
+                        a16_matmul_rescale_fast(&weights, row, &params).expect("well-formed"),
+                        "rescale n={n} batch={batch} row={b}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The attention arms against the catalog ops, at the head geometry Qwen2.5 uses (12 query
+    /// heads over 2 kv heads) and at histories on both sides of the parallel threshold.
+    #[test]
+    fn the_attention_arms_equal_the_catalog_ops() {
+        use kaspa_consensus_core::palw_base0_a16::{a16_attn_scores, a16_attn_values};
+        let mut rng = Lcg(0xA16_0006);
+        let (heads, kv_heads, d_head) = (12usize, 2usize, 128usize);
+        let kv_dim = kv_heads * d_head;
+        for kv_len in [1usize, 5, 63, 64, 65, 360] {
+            let q: Vec<i32> = (0..heads * d_head).map(|_| rng.code()).collect();
+            let k: Vec<i32> = (0..kv_len * kv_dim).map(|_| rng.code()).collect();
+            let v: Vec<i32> = (0..kv_len * kv_dim).map(|_| rng.code()).collect();
+            let probs: Vec<i32> = (0..heads * kv_len).map(|_| rng.code().abs() % 32_768).collect();
+            let score_params: Vec<A16QuantParams> =
+                (0..heads * kv_len).map(|_| A16QuantParams { multiplier: 1, shift: 26, zero: 0 }).collect();
+            let value_params: Vec<A16QuantParams> =
+                (0..heads * d_head).map(|_| A16QuantParams { multiplier: 3, shift: 27, zero: 1 }).collect();
+            assert_eq!(
+                a16_attn_scores_fast(&q, &k, heads, kv_heads, d_head, &score_params),
+                a16_attn_scores(&q, &k, heads, kv_heads, d_head, &score_params),
+                "scores kv_len={kv_len}"
+            );
+            assert_eq!(
+                a16_attn_values_fast(&probs, &v, heads, kv_heads, d_head, &value_params),
+                a16_attn_values(&probs, &v, heads, kv_heads, d_head, &value_params),
+                "values kv_len={kv_len}"
+            );
         }
     }
 
