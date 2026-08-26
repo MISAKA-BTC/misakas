@@ -184,6 +184,50 @@ fn source_tile_len_v1(table: &[crate::palw_step::PalwStepNodeV1], node: &crate::
     .max(1)
 }
 
+/// **What the generated-token pin costs, by the scheme the CLASS committed to** (ADR-0049
+/// Decision E, and the tiled scheme that followed it).
+///
+/// `logits_scheme_id` is a field of `PalwShapeProfileV3`, so it is inside `shape_profile_id` and
+/// therefore inside the class id: a class cannot change how its decode tokens are pinned without
+/// becoming a different class. That is what makes this dispatchable at all. The earlier shape —
+/// a `trace_scheme_id` on the job context — would have let a class register under the cheap scheme
+/// and produce under the expensive one, which is "an attacker picks the job length" with the
+/// scheme substituted for the length.
+///
+/// The two prices are the two the court's own cost gate counts on a real object
+/// (`check_close_cost_v2`), restated from the geometry:
+///
+/// * **flat** — `base0_logits_trace_root_v1` is a hash over every row, so recomputing it needs all
+///   of them: `decode x vocabulary x 4`. At Qwen3.6's 248,320 lanes ONE row is 993 KB.
+/// * **tiled** — two tile openings, three Merkle paths and the ids. `PALW_LOGITS_TILE_LANES` is
+///   4,096, so a tile is 16 KiB and the paths are `ceil(log2(vocab / lanes))` deep within a row
+///   plus `ceil(log2(decode))` over the rows tree.
+///
+/// An unrecognised scheme is priced at the most expensive one this function knows. Admission
+/// refuses such a class outright, so this is belt and braces — but the belt has to fail closed,
+/// because a scheme nobody can price is not a scheme nobody can register.
+fn decode_pin_price_v1(profile: &PalwShapeProfileV3, decode: u64) -> Option<u64> {
+    // The float lane's pin is a trace SUMMARY and the ids; the rows stay in the event tree the
+    // summary roots, so there is nothing here for it to carry.
+    if profile.lane == crate::palw_step::PalwStepLaneV1::Float32 {
+        return Some(0);
+    }
+    let vocab = profile.vocab_size as u64;
+    let flat = decode.checked_mul(vocab)?.checked_mul(4)?;
+    if profile.logits_scheme_id != crate::palw_step_refute::tiled_logits_scheme_id_v1() {
+        return Some(flat);
+    }
+    let lanes = crate::palw_step_refute::PALW_LOGITS_TILE_LANES as u64;
+    let tile_bytes = lanes.min(vocab.max(1)).checked_mul(4)?;
+    let ceil_log2 = |n: u64| -> u64 { if n <= 1 { 0 } else { u64::from((n - 1).next_power_of_two().trailing_zeros()) } };
+    let within_row = ceil_log2(vocab.div_ceil(lanes));
+    let across_rows = ceil_log2(decode);
+    let paths = within_row.checked_mul(2)?.checked_add(across_rows)?.checked_mul(64)?;
+    // Two tiles (the committed lane's and the beating lane's), their paths, the row opening's
+    // path, and every generated id.
+    tile_bytes.checked_mul(2)?.checked_add(paths)?.checked_add(decode.checked_mul(4)?)
+}
+
 /// The cost of the most expensive step this profile can be challenged at.
 ///
 /// Every quantity is read off the graph. Nothing is declared, so a registration cannot understate
@@ -305,14 +349,7 @@ pub fn derive_court_cost_v1(profile: &PalwShapeProfileV3) -> Result<PalwCourtCos
             // decode: the bound is the whole context. Only a gather pays it.
             if node.op_kind == Op::EmbedLookup {
                 let ids = n_ctx.checked_mul(4).ok_or_else(over)?;
-                let pin = match profile.lane {
-                    crate::palw_step::PalwStepLaneV1::Int32 => {
-                        n_ctx.checked_mul(profile.vocab_size as u64).and_then(|v| v.checked_mul(4)).ok_or_else(over)?
-                    }
-                    // The float lane's pin is a trace SUMMARY and the ids; the rows stay in the
-                    // event tree the summary roots.
-                    crate::palw_step::PalwStepLaneV1::Float32 => 0,
-                };
+                let pin = decode_pin_price_v1(profile, n_ctx).ok_or_else(over)?;
                 evidence = evidence.checked_add(ids).and_then(|e| e.checked_add(pin)).ok_or_else(over)?;
             }
             // The prompt ids ride every refutation that addresses a gather, and a challenger may
@@ -446,8 +483,7 @@ pub fn verify_class_admission_v2(
     // dispatch is a class whose every decode-token dispute ends unadjudicated, which is the same
     // fail-open A4 refuses for kernels. Enumerated here rather than in `validate_shape` because
     // "which schemes exist" is a property of the adjudicator, exactly like the kernel catalog.
-    let known_schemes =
-        [crate::palw_step_refute::flat_logits_scheme_id_v1(), crate::palw_step_refute::tiled_logits_scheme_id_v1()];
+    let known_schemes = [crate::palw_step_refute::flat_logits_scheme_id_v1(), crate::palw_step_refute::tiled_logits_scheme_id_v1()];
     if !known_schemes.contains(&profile.logits_scheme_id) {
         return Err(PalwClassAdmissionError::Profile(format!(
             "the class commits its logits under scheme {}, which this build cannot adjudicate",
@@ -759,7 +795,8 @@ mod tests {
             .expect("a job whose footprint is exactly n_ctx is the declared worst case, not a violation");
         // One past it: refused by the span gate, by name.
         let past = context(&profile, 64, 2);
-        let counted = step_leaf_count(&profile, &past).expect("still enumerable — the violation is the class's bound, not the ladder's");
+        let counted =
+            step_leaf_count(&profile, &past).expect("still enumerable — the violation is the class's bound, not the ladder's");
         let err = verify_class_admission_v2(&bundle, &profile, &past, &registration(profile.shape_profile_id(), counted))
             .expect_err("a canonical job past the registered context prices work the class never bounded");
         assert!(format!("{err}").contains("cached positions"), "got {err}");
@@ -1019,6 +1056,90 @@ mod tests {
             cost.max_terminal_macs >= state_pass,
             "the derivation charges {} multiply-accumulates; one pass over the recurrence's own state costs {state_pass}",
             cost.max_terminal_macs
+        );
+    }
+
+    /// **The pin arm dispatches on the class's own commitment, and that is what the floor's
+    /// vocabulary is priced by.**
+    ///
+    /// `logits_scheme_id` rides `PalwShapeProfileV3`, so it is inside the class id: a class cannot
+    /// register under the cheap scheme and produce under the expensive one. Under the FLAT scheme
+    /// the pin is `decode x vocab x 4` and it is what holds `PALW_RC_BASE0_GEOMETRY`'s vocabulary
+    /// at 1,024 — 2,048 is already 124% of the ceiling at `n_ctx` 12. Under the TILED scheme the
+    /// pin stops binding at any vocabulary at all, and the KV history becomes the sole constraint.
+    ///
+    /// That is the lever, and this is where a change to it becomes visible. The floor does not pull
+    /// it: `misaka-palw-base0`'s producer builds `base0_logits_trace_root_v1` and nothing else, so a
+    /// floor that COMMITTED the tiled scheme could not produce the commitment it committed to —
+    /// the liveness class would mint and then make no blocks. Moving it is a producer change first
+    /// and a geometry change second, in that order.
+    #[test]
+    fn the_pin_price_follows_the_class_and_the_floors_vocabulary_follows_the_pin() {
+        use crate::palw_step_refute::{flat_logits_scheme_id_v1, tiled_logits_scheme_id_v1};
+        let ceiling = crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES;
+
+        // The floor as it ships: flat, and inside the ceiling with the margin it was sized for.
+        let floor = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("expressible");
+        assert_eq!(floor.logits_scheme_id, flat_logits_scheme_id_v1(), "the floor commits the scheme its producer can build");
+        assert_eq!(derive_court_cost_v1(&floor).expect("derivable").max_close_bytes, 61_040);
+
+        let at = |vocab: u32, scheme| {
+            let mut p =
+                base0_profile_v1(crate::palw_base0_profile::PalwBase0GeometryV1 { vocab_size: vocab, ..PALW_RC_BASE0_GEOMETRY })
+                    .expect("expressible");
+            p.logits_scheme_id = scheme;
+            derive_court_cost_v1(&p).expect("derivable").max_close_bytes
+        };
+
+        // Flat: the vocabulary IS the constraint, and one doubling leaves the ceiling behind.
+        assert!(at(2_048, flat_logits_scheme_id_v1()) > ceiling, "vocab 2,048 flat must not fit — it is why the floor is 1,024");
+        assert_eq!(at(4_096, flat_logits_scheme_id_v1()), 200_160);
+
+        // Tiled: the pin stops being the binding arm at any vocabulary, so the same close price
+        // comes back however wide the head gets. Two tiles and three paths do not grow with it.
+        for vocab in [2_048u32, 4_096, 16_384] {
+            assert_eq!(
+                at(vocab, tiled_logits_scheme_id_v1()),
+                61_040,
+                "under the tiled scheme vocab {vocab} must cost what the KV history alone costs"
+            );
+        }
+        assert!(at(16_384, tiled_logits_scheme_id_v1()) * 5 <= ceiling * 4, "and still inside the 80% rule");
+    }
+
+    /// **The GatedDeltaNet arm, against a class somebody actually built.**
+    ///
+    /// `the_gdn_arm_covers_what_the_court_actually_opens` checks the arm against the court's own
+    /// input rule on the court's own fixture. This checks it against the real thing: Qwen3.6-35B-A3B
+    /// is the class whose measured recurrence found the arm was fail-open in the first place, and a
+    /// bound that priced the fixture correctly and the shipped class wrongly would be no better
+    /// than the one it replaced.
+    ///
+    /// It is deliberately NOT an admissibility assertion. Whether this class fits the ceiling is a
+    /// question about constants its authors are still deriving; what must hold today is that the
+    /// derivation SEES its recurrence — that the number is large because the class is large, rather
+    /// than small because an arm never fired.
+    #[test]
+    fn the_gdn_arm_prices_the_real_hybrid_class() {
+        let g = crate::palw_qwen36_profile::QWEN36_35B_A3B;
+        let p = crate::palw_qwen36_profile::qwen36_profile_v1(g).expect("the shipped hybrid geometry is expressible");
+        assert!(!p.gdn_nodes.is_empty(), "the fixture must actually carry a recurrence");
+
+        let cost = derive_court_cost_v1(&p).expect("derivable");
+        // One pass over the recurrence's own state, at every position the court can open — the
+        // same floor the fixture test uses, restated against this class's numbers.
+        let state_pass = u64::from(p.n_ctx) * u64::from(p.gdn_heads) * u64::from(p.gdn_head_k_dim) * u64::from(p.gdn_head_v_dim);
+        assert!(
+            cost.max_terminal_macs >= state_pass,
+            "the derivation charges {} multiply-accumulates for the real hybrid class; one pass over its state is {state_pass}",
+            cost.max_terminal_macs
+        );
+        // And the byte side sees the context rather than one position of it.
+        let one_position = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("expressible");
+        assert!(
+            cost.max_close_bytes > derive_court_cost_v1(&one_position).expect("derivable").max_close_bytes,
+            "a 40-layer hybrid at n_ctx {} must not price below the four-layer floor",
+            p.n_ctx
         );
     }
 

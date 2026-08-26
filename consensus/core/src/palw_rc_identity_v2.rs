@@ -228,7 +228,11 @@ mod tests {
                 .iter()
                 .map(|d| crate::palw_step::kernel_semantics_id_v1(d))
                 .collect(),
-            court_cost: crate::palw_class_admission_v2::PalwCourtCostV1 { max_opening_bytes: 1, max_terminal_macs: 1, max_operand_count: 1 },
+            court_cost: crate::palw_class_admission_v2::PalwCourtCostV1 {
+                max_close_bytes: 1,
+                max_terminal_macs: 1,
+                max_operand_count: 1,
+            },
         }])
         .expect("a well-formed catalog")
     }

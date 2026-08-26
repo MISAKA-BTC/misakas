@@ -4660,7 +4660,7 @@ mod consensus_params_id_tests {
             // `PALW_RC_BASE0_GEOMETRY` is `vocab_size` 1,024 / `n_ctx` 12, because at 4,096/512 the
             // floor's own closes were megabytes and no block could carry them. The geometry is the
             // class id, the class id is in the catalog root, and the catalog root is in the bundle.
-            ("testnet-11", TESTNET11_PARAMS, "PENDING_REDERIVE"),
+            ("testnet-11", TESTNET11_PARAMS, "9be3b64fef961482c5f5da5b34499bbea192302b771aa5d9f39f64163331b433"),
             ("simnet", SIMNET_PARAMS, "135e88c69a659d3cf4b5ce8275953c7597b2c67b03d2a74b3d0696c5d0b703fa"),
             ("devnet", DEVNET_PARAMS, "42cc6be92506a14654cb676184e1416796dec682b15e93cb9c639e8e0d77efa5"),
         ]

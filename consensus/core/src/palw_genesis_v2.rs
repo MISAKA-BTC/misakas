@@ -285,7 +285,11 @@ mod tests {
             max_step_leaf_count: LEAVES,
             canonical_step_leaf_count: CANONICAL,
             reachable_kernels: crate::palw_step_refute::catalogued_kernel_ids_v1(),
-            court_cost: crate::palw_class_admission_v2::PalwCourtCostV1 { max_opening_bytes: 1, max_terminal_macs: 1, max_operand_count: 1 },
+            court_cost: crate::palw_class_admission_v2::PalwCourtCostV1 {
+                max_close_bytes: 1,
+                max_terminal_macs: 1,
+                max_operand_count: 1,
+            },
         }
     }
 

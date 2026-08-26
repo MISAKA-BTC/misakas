@@ -816,7 +816,7 @@ impl PalwConsensusParamsV2 {
         // asserts the derived cost, the ruleset asserts what it will pay for, and a class whose
         // disputes cannot ride a carrier must fail the BOOT gate, not its first challenger.
         for entry in catalog.entries() {
-            if entry.court_cost.max_opening_bytes > self.court.max_opening_bytes() {
+            if entry.court_cost.max_close_bytes > self.court.max_close_bytes() {
                 return Err(PalwModeV2Error::Invalid(
                     "a registered class's terminal opening exceeds the ceiling this ruleset pays for",
                 ));
@@ -827,9 +827,7 @@ impl PalwConsensusParamsV2 {
                 ));
             }
             if entry.court_cost.max_operand_count > self.court.max_operand_count() {
-                return Err(PalwModeV2Error::Invalid(
-                    "a registered class's operand count exceeds the ceiling this ruleset pays for",
-                ));
+                return Err(PalwModeV2Error::Invalid("a registered class's operand count exceeds the ceiling this ruleset pays for"));
             }
         }
         Ok(())
@@ -1352,7 +1350,11 @@ pub(crate) mod tests {
             // The BASE-0 kernels this build adjudicates — the honest reachable set for a class
             // whose shape profile is BASE-0's.
             reachable_kernels: crate::palw_step_refute::catalogued_kernel_ids_v1(),
-            court_cost: crate::palw_class_admission_v2::PalwCourtCostV1 { max_opening_bytes: 1, max_terminal_macs: 1, max_operand_count: 1 },
+            court_cost: crate::palw_class_admission_v2::PalwCourtCostV1 {
+                max_close_bytes: 1,
+                max_terminal_macs: 1,
+                max_operand_count: 1,
+            },
         }
     }
 
@@ -1365,7 +1367,7 @@ pub(crate) mod tests {
     fn a_class_whose_close_cannot_ride_a_carrier_fails_at_boot() {
         let mut entry = catalog_entry(h64(1), 1 << 10);
         // A close bigger than what the ruleset pays for — one byte past the ceiling.
-        entry.court_cost.max_opening_bytes = crate::palw_mode_v2::DEFAULT_MAX_OPENING_BYTES + 1;
+        entry.court_cost.max_close_bytes = crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES + 1;
         let catalog = PalwClassCatalogV2::new(vec![entry]).expect("well-formed");
         let mut bundle = conforming_bundle();
         bundle.base_class_id = h64(1);
@@ -1375,7 +1377,7 @@ pub(crate) mod tests {
 
         // And the same class inside the ceilings boots — the gate separates.
         let mut entry = catalog_entry(h64(1), 1 << 10);
-        entry.court_cost.max_opening_bytes = crate::palw_mode_v2::DEFAULT_MAX_OPENING_BYTES;
+        entry.court_cost.max_close_bytes = crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES;
         let catalog = PalwClassCatalogV2::new(vec![entry]).expect("well-formed");
         bundle.class_catalog_root = catalog.root();
         bundle.verify_against_catalog(&catalog).expect("a class at the ceiling is a class the ruleset pays for");

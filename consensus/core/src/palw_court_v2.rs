@@ -248,10 +248,7 @@ pub enum PalwCourtVerdictProofV2 {
     /// of every row, which is what lets a 248,320-lane vocabulary's close ride one lifecycle
     /// carrier. The VARIANT does not choose the scheme — the class's `logits_scheme_id` does, and
     /// each check function refuses a pin that does not speak the class's scheme.
-    DecodeTokenTiled {
-        binding: crate::palw_step_leg::PalwStepBindingV2,
-        pin: crate::palw_step_refute::PalwTiledDecodePinV1,
-    },
+    DecodeTokenTiled { binding: crate::palw_step_leg::PalwStepBindingV2, pin: crate::palw_step_refute::PalwTiledDecodePinV1 },
 }
 
 /// **Who may post a rung, and under whose key (P0-9's forgery half).**
@@ -501,8 +498,8 @@ pub fn check_close_cost_v2(
                         * 64,
                 )
                 .saturating_add(pin.generated_token_ids.len() as u64 * 4);
-            if bytes > court.max_opening_bytes() {
-                return Err(PalwCourtV2Error::OpeningTooLarge { got: bytes, ceiling: court.max_opening_bytes() });
+            if bytes > court.max_close_bytes() {
+                return Err(PalwCourtV2Error::CloseTooLarge { got: bytes, ceiling: court.max_close_bytes() });
             }
             return Ok(());
         }
