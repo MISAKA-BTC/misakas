@@ -34,7 +34,6 @@ members = [
     "misaka-palw-agent",
     "misaka-palw-gateway",
     "misaka-palw-worker",
-    "misaka-palw-metal",
     "misaka-palw-base0",
     "misaka-palw-base0-ref2",
     "misaka-palw-reference2",
@@ -103,9 +102,9 @@ members = [
 # config — so `cargo build -p misaka-palw-worker` works the moment the runtime is present, and
 # `default_members_covers_every_member_but_the_pinned_runtime` keeps this list from drifting.
 #
-# Nothing needs the worker to run a node. It is a separate process kaspad is POINTED at
-# (`--palw-metal-worker <path>`), it serves the Metal/GGUF class, and testnet-11's genesis does
-# not register that class at all — the floor is BASE-0, which is pure Rust in this tree.
+# Nothing needs the worker to run a node. Since ADR-0053 there is one execution family — BASE-0's
+# deterministic integer arithmetic, pure Rust in this tree — and no registered class runs on this
+# worker. It survives as the runtime the ADR-0034 capability probe interrogates.
 default-members = [
     "daemon",
     "cli",
@@ -139,7 +138,6 @@ default-members = [
     "misaka-palw-pow-driver",
     "misaka-palw-agent",
     "misaka-palw-gateway",
-    "misaka-palw-metal",
     "misaka-palw-base0",
     "misaka-palw-base0-ref2",
     "misaka-palw-reference2",
@@ -275,7 +273,6 @@ kaspa-wrpc-example-subscriber = { version = "1.1.0", path = "rpc/wrpc/examples/s
 kaspad = { version = "1.1.0", path = "kaspad" }
 kaspa-pq-validator-core = { version = "1.1.0", path = "kaspa-pq-validator-core" }
 misaka-palw-base0 = { version = "1.0.1", path = "misaka-palw-base0" }
-misaka-palw-metal = { version = "1.1.0", path = "misaka-palw-metal" }
 kaspa-alloc = { version = "1.1.0", path = "utils/alloc" }
 misaka-endpoints = { version = "1.1.0", path = "misaka-endpoints" }
 misaka-palw = { version = "1.1.0", path = "misaka-palw" }

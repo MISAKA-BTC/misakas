@@ -212,12 +212,7 @@ pub struct Args {
     /// then matched against what the CHAIN says the class is; a file matching neither the
     /// registered graph nor the registered weights is not used.
     pub palw_class_artifact: Vec<String>,
-    /// **The pinned Metal/GGUF worker** (ADR-0051). Absent on every node without a GPU toolchain,
-    /// which stays a fully supported node: the deterministic floor is the liveness anchor and may
-    /// never require a runtime a Linux server cannot build. A node without one simply cannot serve
-    /// Family-M classes, and says so rather than falling back to a family it can.
-    pub palw_metal_worker: Option<String>,
-    /// **Register this node's worker class on the running chain, once.**
+    /// **Register the class of this node's converted artifact on the running chain, once.**
     ///
     /// A network is born with the classes its ruleset id commits to; every later one arrives as a
     /// signed `ClassRegistered` that carries its own profile (ADR-0049 Decision H). Nothing built
@@ -376,7 +371,6 @@ impl Default for Args {
             palw_producer_key: None,
             palw_producer_bond: None,
             palw_class_artifact: Vec::new(),
-            palw_metal_worker: None,
             palw_register_class: false,
             palw_register_bond: false,
             palw_dump_classes: false,
@@ -874,23 +868,12 @@ pub fn cli() -> Command {
                 ),
         )
         .arg(
-            Arg::new("palw-metal-worker")
-                .long("palw-metal-worker")
-                .env("KASPAD_PALW_METAL_WORKER")
-                .require_equals(true)
-                .value_parser(clap::value_parser!(String))
-                .help(
-                    "PALW: path to the pinned Metal/GGUF worker. Only needed to serve a Metal class; the node checks the \
-                     worker's measured identity against what the chain registered before producing under it.",
-                ),
-        )
-        .arg(
             Arg::new("palw-producer-class")
                 .long("palw-producer-class")
                 .value_name("HEX")
                 .help(
                     "MISAKA PALW: produce for this 128-hex class id instead of the network's floor class. The node \
-                     must hold a backend for it (e.g. --palw-metal-worker for a Family-M class).",
+                     must be able to resolve it (the floor is derived; any other class needs its --palw-class-artifact).",
                 ),
         )
         .arg(
@@ -898,7 +881,7 @@ pub fn cli() -> Command {
                 .long("palw-register-class")
                 .action(ArgAction::SetTrue)
                 .help(
-                    "MISAKA PALW: submit ONE ClassRegistered for the class of --palw-metal-worker, so a model can \
+                    "MISAKA PALW: submit ONE ClassRegistered for the class of this node's --palw-class-artifact, so a model can \
                      join a chain that is already running instead of waiting for a re-mint. Needs an active bond \
                      (--palw-producer-bond), its key and a funded --palw-fee-outpoint.",
                 ),
@@ -1435,7 +1418,6 @@ impl Args {
                 .get_many::<String>("palw-class-artifact")
                 .map(|v| v.cloned().collect())
                 .unwrap_or(defaults.palw_class_artifact),
-            palw_metal_worker: m.get_one::<String>("palw-metal-worker").cloned().or(defaults.palw_metal_worker),
             palw_register_class: arg_match_unwrap_or::<bool>(&m, "palw-register-class", defaults.palw_register_class),
             palw_register_bond: arg_match_unwrap_or::<bool>(&m, "palw-register-bond", defaults.palw_register_bond),
             palw_dump_classes: arg_match_unwrap_or::<bool>(&m, "palw-dump-classes", defaults.palw_dump_classes),

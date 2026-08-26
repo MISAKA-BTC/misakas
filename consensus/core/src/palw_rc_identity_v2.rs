@@ -219,7 +219,6 @@ mod tests {
         vec![
             PalwConsensusObjectV2::ClassRegistered {
                 class_id: h64(1),
-                terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
                 artifact_root: h64(0xA7),
                 slash_value_per_pwu: 5,
                 pwu_rule: PalwPwuRuleV2::DerivedV1 { pwu_per_inference: CANONICAL },
@@ -667,7 +666,6 @@ mod tests {
         match &p.palw_consensus_mode {
             crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) => {
                 println!("panel:  seats={} quorum={} anchor_delay={}", b.panel.seat_count(), b.panel.quorum(), b.panel.anchor_delay());
-                println!("min_class_panel: {:?}", b.min_class_panel);
                 println!(
                     "state:  bind={} receipt={} challenge={} court={}",
                     b.state.window_bind(),

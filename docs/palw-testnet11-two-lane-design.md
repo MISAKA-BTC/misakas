@@ -1,3 +1,11 @@
+> **SUPERSEDED 2026-08-26 by [ADR-0053](adr/0053-palw-one-execution-family.md).** There is one
+> lane. Family M — the Metal/GGUF lane this document describes as "the one nobody can seat yet" —
+> was withdrawn, and the document's own central observation is why: a lane that cannot be seated
+> with the hardware that exists, whose share nobody can fill, is not a lane held open. It is a hole
+> in the economy that the gates below it were disabled to accommodate. What replaced it is not a
+> second lane but a second CLASS in the one family: ADR-0052's `PALW-QWEN36`, which the court can
+> re-execute. Kept for the reasoning about panels, seats and operator gating, which stands.
+
 # testnet-11: two lanes, one of which nobody can seat yet
 
 **Decision: the suffix stops climbing here.** testnet-12 and testnet-13 were never published as

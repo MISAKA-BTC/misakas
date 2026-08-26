@@ -50,11 +50,11 @@ fn main() {
              misaka-palw-worker links the PINNED llama.cpp build, which this repository does not\n\
              contain, and MISAKA_LLAMA_SRC is not set.\n\
              \n\
-             You almost certainly do not need this crate. It is a separate process a node is\n\
-             POINTED at (`kaspad --palw-metal-worker <path>`), it serves the Metal/GGUF class, and\n\
-             testnet-11's genesis does not register that class — the floor is BASE-0, which is pure\n\
-             Rust in this tree. `cargo build --release` skips this crate by default; you are seeing\n\
-             this because something asked for it explicitly.\n\
+             You almost certainly do not need this crate. No node needs it to produce or verify a\n\
+             block: since ADR-0053 there is one execution family and it is BASE-0's, which is pure\n\
+             Rust in this tree. What still drives this worker is the ADR-0034 capability probe (the\n\
+             re-executor asks it what runtime it is). `cargo build --release` skips this crate by\n\
+             default; you are seeing this because something asked for it explicitly.\n\
              \n\
              To build it anyway: check out ggml-org/llama.cpp at the pinned commit\n\
              (`kaspa_consensus_core::vlt::qwen35_pins::LLAMA_COMMIT`), build it with the pinned\n\

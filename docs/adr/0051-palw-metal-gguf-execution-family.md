@@ -1,8 +1,19 @@
 # ADR-0051: The Metal/GGUF execution family — native-speed inference as half the work, quorum-verified beside the deterministic floor
 
-Status: **Proposed.** Activates nothing. Defines the second execution *family*, its verification
-scheme, its economy cap, and the one structural consensus change it needs (per-class panel
-parameters). Every number here is a proposal until the family's first class is registered.
+Status: **SUPERSEDED by [ADR-0053](0053-palw-one-execution-family.md) (2026-08-26).** Withdrawn
+four days after it was written, for two reasons that arrived together. Its **motive expired**:
+ADR-0052 put Qwen3.6's forty layers through the integer runtime with 100 % kernel-catalog coverage,
+so the model this family existed to serve is adjudicable without a black box. And its **safety
+mechanisms turned out not to exist in the shipped code**: the 500‰ family cap of Decision 1 had
+zero construction sites, the per-class panel of Decision 6 was validated at admission and then
+never passed to `derive_panel_v2`, and its `min_class_panel` floor sat ahead of the family dispatch
+so deterministic classes could take the thin panel too. Worst, the family's admission arm skipped
+`validate_shape`, the ADR-0038 A4 coverage gate, the ladder-depth check and the ADR-0049 court-cost
+ceilings, and wrote a catalog entry with an EMPTY `reachable_kernels`.
+
+Kept in the tree unedited below this banner, because the reasoning is worth reading and because the
+measurement it responded to was real. Nothing below is implemented; every code reference in it has
+been removed.
 
 Date: 2026-08-22
 

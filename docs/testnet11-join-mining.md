@@ -159,12 +159,14 @@ you tell them apart (`budget=0` is the second).
 
 Omitting `--palw-producer-class` mines `bundle.base_class_id`, which on testnet-11 is the **BASE-0
 floor** — `c185df95…c654a`, a deterministic-integer class whose artifact is derived from a seed on
-every node. **No GGUF, no download, no `--palw-metal-worker`.** The floor is also exempt from the
-per-class epoch budget, so it is the one class that can always produce.
+every node. **No GGUF, no download, no worker binary.** The floor is also exempt from the per-class epoch
+budget, so it is the one class that can always produce.
 
 To mine a registered model class instead, pass its id with `--palw-producer-class` and give the node
-the runtime that class pins (`--palw-metal-worker`). A class registered while an epoch is already
-running has share from the moment it activates.
+that class's converted artifact (`--palw-class-artifact`). A class registered while an epoch is
+already running has share from the moment it activates. Since ADR-0053 there is one execution
+family, so any class you can be pointed at is one this build can execute and the court can
+adjudicate — there is no second verification scheme to be on the wrong side of.
 
 ---
 

@@ -53,10 +53,6 @@ impl PalwProducerBondFactsV2 {
 /// Everything a producer needs from the chain, at one chain point.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwProducerFactsV2 {
-    /// **ADR-0051: the class's registered terms** — which family runs it, and the panel it draws.
-    /// The producer dispatches on this rather than assuming the floor's family, which is what let
-    /// `class_id` be a setting that decided nothing.
-    pub terms: crate::palw_state_v2::PalwClassTermsV2,
     /// The block these facts were read at — virtual's selected parent, which is the point a block
     /// template builds on. A producer that sees this move knows its template is stale without
     /// having to guess from a timestamp.
@@ -194,7 +190,6 @@ pub fn palw_producer_facts_v2(
         })
     });
     Some(PalwProducerFactsV2 {
-        terms: class.terms,
         is_base_class: class_id == state_params.base_class_id(),
         min_trace_retention_daa: state_params
             .window_bind()
@@ -252,7 +247,6 @@ mod tests {
         let objects = vec![
             PalwConsensusObjectV2::ClassRegistered {
                 class_id: h64(1),
-                terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
                 artifact_root: h64(11),
                 slash_value_per_pwu: 5,
                 pwu_rule: PalwPwuRuleV2::DerivedV1 { pwu_per_inference: 7 },
@@ -458,14 +452,10 @@ mod tests {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwSeatDutyV2 {
     pub claim_id: Hash64,
-    /// The class's registered terms, for the same reason the producer gets them: a seat that
-    /// assumed a family would verify one family's material under another's rules.
-    pub terms: crate::palw_state_v2::PalwClassTermsV2,
-    /// **Which class this claim is of** — and therefore which family's rules a seat judges it by
-    /// (ADR-0051). Carried rather than looked up: a seat that resolved the class separately could
-    /// verify with one family's scheme material committed under another's, and the two schemes
-    /// disagree about what "matches" means. It comes off the claim record, so it is the chain's
-    /// answer and not the seat's.
+    /// **Which class this claim is of** — and therefore which graph a seat re-executes.
+    /// Carried rather than looked up: a seat that resolved the class separately could verify
+    /// material against a class the chain does not say the claim is of. It comes off the claim
+    /// record, so it is the chain's answer and not the seat's.
     pub class_id: Hash64,
     /// The class's registered artifact root, for the same reason the producer is handed one: the
     /// seat must hold the SAME weights, and "the same" is this value.
@@ -502,9 +492,6 @@ pub struct PalwSeatDutyV2 {
 /// and belongs here beside the seat and court duty lists.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwDisputableClaimV2 {
-    /// The class's registered terms (ADR-0051): a challenger, like a producer and a seat, must
-    /// act under the family the CHAIN says the class is verified by.
-    pub terms: crate::palw_state_v2::PalwClassTermsV2,
     pub claim_id: Hash64,
     pub class_id: Hash64,
     pub artifact_root: Hash64,
@@ -528,9 +515,8 @@ pub fn palw_disputable_claims_v2(state: &PalwChainStateV2, mine: &[PalwBondKeyV2
         if state.court_sessions_iter().any(|(_, s)| s.claim == *claim_id && mine.contains(&s.challenger_bond)) {
             continue;
         }
-        let Some((artifact_root, terms)) = state.class(&claim.class_id).map(|c| (c.artifact_root, c.terms)) else { continue };
+        let Some(artifact_root) = state.class(&claim.class_id).map(|c| c.artifact_root) else { continue };
         out.push(PalwDisputableClaimV2 {
-            terms,
             claim_id: *claim_id,
             class_id: claim.class_id,
             artifact_root,
@@ -552,9 +538,6 @@ pub fn palw_disputable_claims_v2(state: &PalwChainStateV2, mine: &[PalwBondKeyV2
 /// one of the two bonds. This is the asking.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwCourtDutyV2 {
-    /// The class's registered terms (ADR-0051): a challenger, like a producer and a seat, must
-    /// act under the family the CHAIN says the class is verified by.
-    pub terms: crate::palw_state_v2::PalwClassTermsV2,
     pub session_id: Hash64,
     pub claim_id: Hash64,
     pub class_id: Hash64,
@@ -596,10 +579,9 @@ pub fn palw_court_duties_v2(state: &PalwChainStateV2, mine: &[PalwBondKeyV2]) ->
         }
         // A claim whose class has left the registry cannot be adjudicated by anyone, so it yields
         // no duty rather than a duty nobody can discharge — the same rule the seat list uses.
-        let Some((artifact_root, terms)) = state.class(&claim.class_id).map(|c| (c.artifact_root, c.terms)) else { continue };
+        let Some(artifact_root) = state.class(&claim.class_id).map(|c| c.artifact_root) else { continue };
         let (lo, hi) = session.ladder.interval();
         out.push(PalwCourtDutyV2 {
-            terms,
             session_id: *session_id,
             claim_id: session.claim,
             class_id: claim.class_id,
@@ -633,7 +615,7 @@ pub fn palw_seat_duties_v2(state: &PalwChainStateV2, state_params: &PalwStatePar
         // The class's registered root, read where the claim is read. A claim whose class is gone
         // from the registry is not judgeable by anyone, so it yields no duty rather than a duty
         // nobody can act on.
-        let Some((class_artifact_root, class_terms)) = state.class(&claim.class_id).map(|c| (c.artifact_root, c.terms)) else {
+        let Some(class_artifact_root) = state.class(&claim.class_id).map(|c| c.artifact_root) else {
             continue;
         };
         for seat in &panel.seats {
@@ -642,7 +624,6 @@ pub fn palw_seat_duties_v2(state: &PalwChainStateV2, state_params: &PalwStatePar
             }
             out.push(PalwSeatDutyV2 {
                 claim_id: *claim_id,
-                terms: class_terms,
                 class_id: claim.class_id,
                 artifact_root: class_artifact_root,
                 seat_bond: seat.bond,

@@ -120,18 +120,21 @@ use std::collections::{BTreeMap, BTreeSet};
 /// testnet-12's genesis is being re-minted regardless, which is exactly why M-02 had to settle
 /// before the ruleset id froze and not after.
 ///
-/// Version 6: ADR-0051's two execution families. `PalwClassStateV2` gains `terms` — which family
-/// verifies the class, and the panel it draws — so the class collection's record encoding moves
+/// Version 6: ADR-0051's two execution families. `PalwClassStateV2` gained `terms` — which family
+/// verifies the class, and the panel it draws — so the class collection's record encoding moved
 /// and every `state_root` with it. Exactly the change ADR-0043 §2's rule is written for, and the
-/// bump is here rather than discovered later because `the_version_7_state_root_golden_vectors`
+/// bump was there rather than discovered later because `the_version_7_state_root_golden_vectors`
 /// caught it: the gate M-02 installed fired on the first change that came after it.
 ///
-/// Version 7: ADR-0051 step 6. `PalwClassTermsV2` gains `runtime_pins` — the runtime, model and
-/// tokenizer a black-box class is held to — which a Metal class must carry and a deterministic one
-/// must not. It moves the class record again, so it moves the root again, and the golden vectors
-/// said so the moment it did. Two bumps in one day is the change rule working, not thrashing: each
-/// is a real preimage move that would otherwise have been a silent fork.
-pub const PALW_STATE_V2_VERSION: u16 = 7;
+/// Version 7: ADR-0051 step 6. `PalwClassTermsV2` gained `runtime_pins` — the runtime, model and
+/// tokenizer a black-box class is held to.
+///
+/// Version 8: **ADR-0053 withdraws the second family**, so `terms` leaves the class record
+/// entirely — no family value, no runtime pins, no per-class panel. The record shrinks rather than
+/// grows, and the same rule applies to shrinking: the preimage moves, so the version moves. Note
+/// what versions 6 and 7 cost, both spent inside one day, to carry a family that never produced a
+/// block: that is the price of a schema field admitted ahead of the thing that needed it.
+pub const PALW_STATE_V2_VERSION: u16 = 8;
 
 pub const PALW_STATE_V2_DOMAIN_OPERATOR_ID: &[u8] = b"misaka-palw/state-v2/operator-id/v1";
 
@@ -768,27 +771,6 @@ pub enum PalwPwuRuleV2 {
     DerivedV1 { pwu_per_inference: u64 },
 }
 
-/// **A class's verification terms** (ADR-0051 Decisions 1 and 6).
-///
-/// Two facts that used to be network-global and cannot be, once a chain carries more than one
-/// execution family:
-///
-/// * which **family** the class is verified under — and therefore whether a dispute about it can
-///   end in a conviction at all. A tolerance-verified class has no arithmetic terminal, so a court
-///   opened against one would be a court that can only acquit;
-/// * how large its **panel** is. The shipped rule is 5 seats from 5 distinct operators, which on a
-///   family whose seats must hold particular hardware means six such operators before a single
-///   claim can license. Requiring that on the day a family launches is requiring the family not to
-///   exist.
-///
-/// Both are in the registration and therefore on chain, which is the point: a class verified by a
-/// thin panel is *visibly* thin, and anyone weighing its share can see the terms it was admitted
-/// under rather than assume the network's.
-/// **What a black-box class pins** (ADR-0051 Decision 2), on chain.
-///
-/// A deterministic class's identity is its graph, and the graph is in the profile the class id
-/// hashes. A Metal/GGUF class's identity is *which runtime, which weights, which tokenizer* — and
-/// none of that is in a shape profile, so the chain must carry it or a node has nothing to check
 /// One class as an operator needs to see it: what it is, and the two numbers that gate producing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwClassRowV2 {
@@ -803,102 +785,8 @@ pub struct PalwClassRowV2 {
     pub is_base_class: bool,
 }
 
-/// its own worker against. Without these on chain, `check_runtime_identity` would be a binary
-/// agreeing with itself.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
-pub struct PalwRuntimePinsV2 {
-    pub runtime_manifest_hash: Hash64,
-    pub runtime_class_id: Hash64,
-    pub model_profile_id: Hash64,
-    pub trace_scheme_id: Hash64,
-    pub cu_ruleset_id: Hash64,
-    pub tokenizer_id: Hash64,
-    /// The canonical job's shape. `exact_decode_tokens` is also the class's `pwu_per_inference`,
-    /// which the gate recounts rather than believes.
-    pub prefill_tokens: u32,
-    pub exact_decode_tokens: u32,
-    pub max_context_tokens: u32,
-    pub vocab_size: u32,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
-pub struct PalwClassTermsV2 {
-    pub family: crate::palw_backend::PalwExecutionFamilyV1,
-    /// Present exactly for a family whose identity is not its graph. A deterministic class
-    /// carrying pins, or a Metal class carrying none, is refused at admission: the pins are the
-    /// only thing a black-box class can be held to.
-    pub runtime_pins: Option<PalwRuntimePinsV2>,
-    /// Seats this class's panels are drawn at. `None` uses the bundle's global parameters, which
-    /// is what every class registered before this field meant.
-    pub panel_seats: Option<u16>,
-    /// Same-verdict signatures a quorum needs. Meaningless without `panel_seats` and refused
-    /// without it, so the pair cannot be half-specified.
-    pub panel_quorum: Option<u16>,
-}
-
-impl PalwClassTermsV2 {
-    /// The terms every class registered before ADR-0051 meant: the deterministic family, on the
-    /// network's own panel.
-    pub fn deterministic_default() -> Self {
-        Self {
-            family: crate::palw_backend::PalwExecutionFamilyV1::DeterministicInteger,
-            runtime_pins: None,
-            panel_seats: None,
-            panel_quorum: None,
-        }
-    }
-
-    /// The panel this class draws, given the network's. `Err` names what is wrong rather than
-    /// silently falling back — a class whose terms do not parse must not be admitted at all.
-    pub fn panel_params(
-        &self,
-        network: &crate::palw_panel_v2::PalwPanelParamsV2,
-        floor_seats: u16,
-        floor_quorum: u16,
-    ) -> Result<crate::palw_panel_v2::PalwPanelParamsV2, String> {
-        match (self.panel_seats, self.panel_quorum) {
-            (None, None) => Ok(*network),
-            (Some(seats), Some(quorum)) => {
-                // **A network that declared no floor admits no per-class panel at all.**
-                //
-                // Read as "no minimum to enforce" this was fail-OPEN: a chain that never opted
-                // into thin panels would silently accept a two-seat class, and admitting one is a
-                // decision a network makes about its own identity — the floor is inside the
-                // ruleset id precisely so it cannot be a registrant's choice. Caught by
-                // `a_network_that_declares_no_floor_refuses_a_thin_class`.
-                if floor_seats == 0 || floor_quorum == 0 {
-                    return Err("this network declares no per-class panel floor, so a class may not draw its own panel".to_string());
-                }
-                if seats < floor_seats || quorum < floor_quorum {
-                    return Err(format!(
-                        "a class may not register a panel below the network's floor ({floor_seats} seats / {floor_quorum} quorum); \
-                         this one asks for {seats}/{quorum}"
-                    ));
-                }
-                if seats > network.seat_count() || quorum > network.quorum() {
-                    return Err(format!(
-                        "a class may not register a panel ABOVE the network's own ({}/{}) — the draw could not be satisfied; \
-                         this one asks for {seats}/{quorum}",
-                        network.seat_count(),
-                        network.quorum()
-                    ));
-                }
-                crate::palw_panel_v2::PalwPanelParamsV2::new(seats, quorum, network.anchor_delay())
-                    .map_err(|e| format!("the class's panel parameters are not a legal panel: {e:?}"))
-            }
-            _ => {
-                Err("a class declares both of its panel parameters or neither — a half-specified panel has no quorum rule".to_string())
-            }
-        }
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwClassStateV2 {
-    /// ADR-0051: which family verifies this class, and the panel it draws. Stored rather than
-    /// re-derived because the economy and the court boundary both key on it, and a node that
-    /// inferred the family from a graph would be a second opinion about a consensus fact.
-    pub terms: PalwClassTermsV2,
     /// What artifact openings prove against; an attempt whose `artifact_root` differs is
     /// admission-rejected (Decision 6 item 5).
     pub artifact_root: Hash64,
@@ -1261,8 +1149,6 @@ pub struct PalwRegistrationTermsV2 {
     /// The smallest share the ruleset admits. An entrant joins at exactly this — see the share
     /// rule in `palw_v2_validate_objects`, which refuses anything else.
     pub min_grantable_share_permille: u16,
-    pub min_panel_seats: u16,
-    pub min_panel_quorum: u16,
     /// The BASE class's, so an entrant is priced like the incumbent rather than by its registrant.
     pub slash_value_per_pwu: u64,
     pub initial_target: u128,
@@ -1339,13 +1225,6 @@ pub enum PalwConsensusObjectV2 {
         /// disputable, and holding no cadence — so it can be soaked on a live chain before it
         /// takes a permille from anyone. See [`PalwClassStatusV2::Registered`].
         activation_daa: u64,
-        /// **ADR-0051: the family that verifies this class, and the panel it draws.**
-        ///
-        /// On the registration rather than inferred, because both are consensus facts: the family
-        /// decides whether a dispute can end in a conviction, and the panel decides how many
-        /// distinct operators a claim needs before it can license. A class admitted on thinner
-        /// terms is visibly thinner to anyone weighing its share.
-        terms: PalwClassTermsV2,
         /// **What a POST-GENESIS registration must carry to be checkable (ADR-0049 Decision H).**
         ///
         /// Three policies coexisted: the lifecycle carriage refused `ClassRegistered` outright,
@@ -3545,7 +3424,6 @@ fn apply_object(
         }
         PalwConsensusObjectV2::ClassRegistered {
             class_id,
-            terms,
             artifact_root,
             slash_value_per_pwu,
             pwu_rule,
@@ -3606,7 +3484,6 @@ fn apply_object(
             builder.write_class(
                 *class_id,
                 Some(PalwClassStateV2 {
-                    terms: *terms,
                     artifact_root: *artifact_root,
                     slash_value_per_pwu: *slash_value_per_pwu,
                     pwu_rule: *pwu_rule,
@@ -4535,7 +4412,6 @@ pub(crate) mod tests {
     pub(crate) fn entrant_class(class_id: Hash64, share_permille: u16) -> PalwConsensusObjectV2 {
         PalwConsensusObjectV2::ClassRegistered {
             class_id,
-            terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
             artifact_root: h64(12),
             slash_value_per_pwu: 5,
             pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
@@ -4668,7 +4544,6 @@ pub(crate) mod tests {
         vec![
             PalwConsensusObjectV2::ClassRegistered {
                 class_id: h64(1),
-                terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
                 artifact_root: h64(11),
                 slash_value_per_pwu: 5,
                 pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
@@ -5438,7 +5313,6 @@ pub(crate) mod tests {
         let mut objects = register_class_and_bond();
         objects.push(PalwConsensusObjectV2::ClassRegistered {
             class_id: entrant,
-            terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
             artifact_root: h64(0xA7),
             slash_value_per_pwu: 5,
             pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
@@ -6391,7 +6265,6 @@ pub(crate) mod tests {
             &ctx(2, 101, 2),
             &[PalwConsensusObjectV2::ClassRegistered {
                 class_id: h64(2),
-                terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
                 artifact_root: h64(12),
                 slash_value_per_pwu: 1,
                 pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
@@ -6653,7 +6526,6 @@ pub(crate) mod tests {
         let mut objects = register_class_and_bond();
         objects.push(PalwConsensusObjectV2::ClassRegistered {
             class_id: h64(2),
-            terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
             artifact_root: h64(12),
             slash_value_per_pwu: 5,
             pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
@@ -6711,7 +6583,6 @@ pub(crate) mod tests {
         let mut objects = register_class_and_bond();
         objects.push(PalwConsensusObjectV2::ClassRegistered {
             class_id: h64(2),
-            terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
             artifact_root: h64(12),
             slash_value_per_pwu: 5,
             pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
@@ -6754,7 +6625,6 @@ pub(crate) mod tests {
         let mut objects = register_class_and_bond();
         objects.push(PalwConsensusObjectV2::ClassRegistered {
             class_id: h64(2),
-            terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
             artifact_root: h64(12),
             slash_value_per_pwu: 5,
             pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
@@ -7040,7 +6910,6 @@ pub(crate) mod tests {
         let mut objects = register_class_and_bond();
         objects.push(PalwConsensusObjectV2::ClassRegistered {
             class_id: h64(2),
-            terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
             artifact_root: h64(12),
             slash_value_per_pwu: 5,
             pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
@@ -7357,7 +7226,6 @@ pub(crate) mod tests {
         let genesis = PalwChainStateV2::genesis();
         let register = |class_id: u64, share: u16| PalwConsensusObjectV2::ClassRegistered {
             class_id: h64(class_id),
-            terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
             artifact_root: h64(19),
             slash_value_per_pwu: 1,
             pwu_rule: PalwPwuRuleV2::MaxPerAttempt(10),
@@ -7410,7 +7278,6 @@ pub(crate) mod tests {
             &ctx(1, 100, 1),
             &[PalwConsensusObjectV2::ClassRegistered {
                 class_id: h64(9),
-                terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
                 artifact_root: h64(19),
                 slash_value_per_pwu: 1,
                 pwu_rule: PalwPwuRuleV2::MaxPerAttempt(10),
@@ -7435,7 +7302,6 @@ pub(crate) mod tests {
                 &ctx(1, 100, 1),
                 &[PalwConsensusObjectV2::ClassRegistered {
                     class_id: h64(9),
-                    terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
                     artifact_root: h64(19),
                     slash_value_per_pwu: 1,
                     pwu_rule: rule,
@@ -8100,7 +7966,7 @@ pub(crate) mod tests {
             })
         }
         spec_hash(b"misaka-palw/state-v2/state-root/v1", |s| {
-            s.update(&7u16.to_le_bytes()); // version_le(2) = 7, restated from the ADR
+            s.update(&8u16.to_le_bytes()); // version_le(2) = 8, restated from the ADR
             s.update(spec_collection_root(b"bonds", &c.bonds).as_byte_slice());
             s.update(spec_collection_root(b"reserved_exposure", &c.reserved_exposure).as_byte_slice());
             s.update(spec_collection_root(b"classes", &c.classes).as_byte_slice());
@@ -8173,7 +8039,6 @@ pub(crate) mod tests {
         state.classes.insert(
             h64(0xC1),
             PalwClassStateV2 {
-                terms: PalwClassTermsV2::deterministic_default(),
                 artifact_root: h64(0xAF),
                 slash_value_per_pwu: 5,
                 pwu_rule: PalwPwuRuleV2::DerivedV1 { pwu_per_inference: 15_800 },
@@ -8184,7 +8049,6 @@ pub(crate) mod tests {
         state.classes.insert(
             h64(0xC2),
             PalwClassStateV2 {
-                terms: PalwClassTermsV2::deterministic_default(),
                 artifact_root: h64(0xB0),
                 slash_value_per_pwu: 7,
                 pwu_rule: PalwPwuRuleV2::MaxPerAttempt(100),
@@ -8380,22 +8244,24 @@ pub(crate) mod tests {
 
     /// **The golden vectors M-02 warned about, fixed against the AMENDED ADR.**
     ///
-    /// They have already earned their keep once: ADR-0051 added `terms` to the class record and
-    /// this test is what said so, before the preimage change could ship as a silent fork. Any change to
-    /// the preimage — field, order, tag, domain, version, or any record's Borsh shape — moves
-    /// one of these constants, which is the visible flag ADR-0043's change rule demands. Update
-    /// them ONLY together with a version bump and an ADR-0043 amendment.
+    /// They have earned their keep twice now, in both directions: ADR-0051 ADDED `terms` to the
+    /// class record and this test said so before the preimage change could ship as a silent fork,
+    /// and ADR-0053 REMOVED it and this test said so again. A shrinking record forks a chain
+    /// exactly as loudly as a growing one, and nothing else in the tree would have noticed. Any
+    /// change to the preimage — field, order, tag, domain, version, or any record's Borsh shape —
+    /// moves one of these constants, which is the visible flag ADR-0043's change rule demands.
+    /// Update them ONLY together with a version bump and an ADR-0043 amendment.
     #[test]
-    fn the_version_7_state_root_golden_vectors() {
+    fn the_version_8_state_root_golden_vectors() {
         assert_eq!(
             PalwChainStateV2::genesis().state_root().to_string(),
-            "d7db6b79278a8a472bb33b47cec7e0a259c33bd7df8638576922d5e069bea120d793bef9c4c04c99e01fefbedd0b9f6fe1de22869701ff1c3b25f012edd77b91",
-            "the empty state's version-7 root moved"
+            "00b0f79fa5dfff6e4e4aca5c201300a760b13b18f0d0540f549150940ea5e05ed3d07a97651d1025d011283bf2c7002230d5f5f706267e00065281c254afb301",
+            "the empty state's version-8 root moved"
         );
         assert_eq!(
             m02_populated_state().state_root().to_string(),
-            "032065bce0a4e1a8e2a52a2a2f3ec6d5ed86df94175691faeb7ee4c29d7ed28b6e262025cb80900477a1eacb299b40a991ee8a723ff56d19b39757f98af6f628",
-            "the inhabited state's version-7 root moved"
+            "4bb5b1067d636d09579e1828a1542eed55988e4180559f43b98002ed7939073968cb9a07b35b367e8797a97a5b248b7f1d7d65ac1156bb6aa9adc8d5b16143d2",
+            "the inhabited state's version-8 root moved"
         );
     }
 }

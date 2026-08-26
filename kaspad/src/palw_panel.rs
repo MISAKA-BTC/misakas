@@ -117,16 +117,18 @@ pub struct PalwPanelConfig {
     /// (`trace_retention_daa`); this is the panel reading it rather than a second copy of the
     /// same promise. Measured on the drill: 143 sessions opened, 4 answered.
     pub retention_dir: PathBuf,
-    /// The pinned Metal worker, if this seat has one (ADR-0051). A seat without one cannot judge a
-    /// Metal class and files nothing for it — "I could not verify", never an accusation.
-    pub metal_worker: Option<PathBuf>,
     /// **Register this node's worker class on the running chain, once** (ADR-0049 Decision H).
     ///
     /// A network is born with the classes its ruleset id commits to, and every later one arrives
     /// as a signed `ClassRegistered` carrying its own profile. Nothing built or carried such an
-    /// object, so a second class meant re-minting the network. Set with
-    /// `--palw-register-class`, it submits exactly one — the class of the worker at
-    /// `metal_worker` — and then behaves like any other panel.
+    /// object, so a second class meant re-minting the network. Set with `--palw-register-class`,
+    /// it submits exactly one — the class of the converted artifact this node loaded — and then
+    /// behaves like any other panel.
+    ///
+    /// It used to register the class of the pinned Metal worker, which was the only builder that
+    /// existed (ADR-0051). ADR-0053 withdrew that family; the path survives it because the thing
+    /// it carries is generic — a profile, a canonical job, a bond's signature — and what a node
+    /// registers now is a class the court can adjudicate.
     pub register_class: bool,
     /// Submit ONE `BondRegistered` for this node's own key and stop. The only PALW identity a
     /// newcomer cannot be handed: until this existed the bonds on a chain were exactly the ones
@@ -154,16 +156,11 @@ pub struct PalwPanelService {
 }
 
 impl PalwPanelService {
-    /// The families this seat can serve, from its configuration. Rebuilt per use rather than
+    /// The classes this seat can serve, from its configuration. Rebuilt per use rather than
     /// cached, for the same reason the producer's is: a cache would be a second place the
     /// operator's configuration lives.
     fn backends(&self) -> crate::palw_backends::PalwBackendRegistry {
-        crate::palw_backends::PalwBackendRegistry::new(
-            self.config.court,
-            self.class_artifacts.clone(),
-            self.config.metal_worker.clone(),
-            self.consensus_config.params.net.to_string().into_bytes(),
-        )
+        crate::palw_backends::PalwBackendRegistry::new(self.config.court, self.class_artifacts.clone())
     }
 
     pub fn new(
@@ -475,35 +472,49 @@ impl PalwPanelService {
         }
     }
 
-    /// **Build the `ClassRegistered` for this node's worker** (ADR-0049 Decision H).
+    /// **Build the `ClassRegistered` for the class this node holds an artifact for**
+    /// (ADR-0049 Decision H, ADR-0053).
     ///
-    /// Every pin comes from the worker itself — it is asked what it is, rather than told — and
-    /// every term the gate checks comes from the chain. Nothing here is a number this node picked:
-    /// a registrant that chose its own share, panel floor or slash value would be rejected by the
-    /// value rather than by the choosing, which reads like a protocol error and is not one.
+    /// Every term the gate checks comes from the chain. Nothing here is a number this node picked:
+    /// a registrant that chose its own share, initial target or slash value would be rejected by
+    /// the value rather than by the choosing, which reads like a protocol error and is not one.
+    ///
+    /// The class comes from what the node loaded rather than from a flag naming one. An operator
+    /// who has put a converted artifact on disk has already said which class this node is for, and
+    /// a second declaration is a second place for them to disagree.
     async fn build_class_registration(
         &self,
         session: &kaspa_consensusmanager::ConsensusProxy,
     ) -> Result<PalwConsensusObjectV2, String> {
-        let worker = self.config.metal_worker.clone().ok_or("no --palw-metal-worker to register the class of")?;
         let bond = self.bond.ok_or("no --palw-producer-bond to register under")?;
         let bond_key = PalwBondKeyV2(bond);
         let terms = session.palw_v2_registration_terms().ok_or("this chain has no V2 bundle, or does not hold its base class yet")?;
 
-        let pins =
-            misaka_palw_metal::catalog::cat_m_0001_pins_from_worker(worker, self.consensus_config.params.net.to_string().into_bytes())
-                .map_err(|e| format!("the worker did not report a usable identity: {e}"))?;
+        // The class of the artifact this node carries — matched by SHAPE against the build's own
+        // registry, so a file that is not any class this build knows is refused here rather than
+        // registered as a class nobody can execute.
+        let (entry, artifact_root) = self
+            .class_artifacts
+            .iter()
+            .find_map(|artifact| {
+                misaka_palw_base0::classes::canonical_classes_v1(&self.config.court)
+                    .into_iter()
+                    .filter(|c| c.shape_matches(artifact).is_ok())
+                    .find_map(|c| c.artifact_root(artifact).ok().map(|root| (c, root)))
+            })
+            .ok_or("no --palw-class-artifact matches a class this build knows, so there is nothing to register")?;
+
+        let canonical =
+            kaspa_consensus_core::palw_base0_profile::rc_job_context(&entry.profile, entry.canonical_job.0, entry.canonical_job.1);
 
         // Built twice on purpose: once to learn the class id the profile derives, and once with
         // the signature over it. Signing anything assembled beside the object would sign a class
         // that is not the one being registered.
         let build = |signature: Vec<u8>| {
-            misaka_palw_metal::catalog::family_m_post_genesis_registration_v1(
-                &misaka_palw_metal::catalog::CAT_M_0001_GEOMETRY,
-                &pins,
-                misaka_palw_metal::catalog::gguf_artifact_root_v1(),
-                terms.min_panel_seats,
-                terms.min_panel_quorum,
+            kaspa_consensus_core::palw_class_admission_v2::palw_post_genesis_registration_v1(
+                entry.profile.clone(),
+                canonical.clone(),
+                artifact_root,
                 terms.min_grantable_share_permille,
                 terms.initial_target,
                 terms.slash_value_per_pwu,
@@ -511,13 +522,14 @@ impl PalwPanelService {
                 bond_key,
                 signature,
             )
+            .map_err(|e| format!("this node cannot build a registration for {}: {e}", entry.model_id))
         };
         let unsigned = build(Vec::new())?;
         let PalwConsensusObjectV2::ClassRegistered { class_id, activation_daa, .. } = &unsigned else {
             return Err("the builder did not build a registration".to_string());
         };
-        let message = misaka_palw_metal::catalog::family_m_registration_message_v1(
-            self.consensus_config.params.net.to_string().as_bytes(),
+        let message = kaspa_consensus_core::palw_state_v2::palw_class_registration_message_v2(
+            kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2(self.consensus_config.params.net.to_string().as_bytes()),
             *class_id,
             terms.min_grantable_share_permille,
             *activation_daa,
@@ -857,7 +869,7 @@ impl PalwPanelService {
                     if challenged.contains(&target.claim_id) {
                         continue;
                     }
-                    let Ok(backend) = self.backends().resolve(target.terms, target.class_id, target.artifact_root) else {
+                    let Ok(backend) = self.backends().resolve(target.class_id, target.artifact_root) else {
                         continue;
                     };
                     let Some(capture) = materials.get(&target.claim_id).and_then(|pool| pool.first()) else { continue };
@@ -945,7 +957,7 @@ impl PalwPanelService {
                 // The capture, and the family's backend for it. A party with no material — or a
                 // family with no court — cannot answer honestly, and answering dishonestly is what
                 // the terminal close exists to punish, so it stays silent and lets the clock decide.
-                let backend = match self.backends().resolve(duty.terms, duty.class_id, duty.artifact_root) {
+                let backend = match self.backends().resolve(duty.class_id, duty.artifact_root) {
                     Ok(backend) => backend,
                     Err(why) => {
                         // Not rate-limited by session: this one is a NODE-level misconfiguration
@@ -1122,17 +1134,17 @@ impl PalwPanelService {
                 first_seen.entry(duty.claim_id).or_insert(current_daa.max(duty.bound_daa));
                 let verdict = 'verdict: {
                     for bytes in materials.get(&duty.claim_id).map(|v| v.as_slice()).unwrap_or(&[]) {
-                        // Through the family's backend (ADR-0051 step 1). A seat does not know
-                        // which family it is judging — Family D recomputes the leg root exactly,
-                        // Family M will spot-replay within a tolerance — and `Mismatch` is
-                        // deliberately NOT an accusation here: it gathers no quorum and the claim
-                        // voids, which is the soft failure both families share.
-                        // Resolved per duty from what the CHAIN says the claim's class is
-                        // (ADR-0051 step 1). A seat holding no material for that class cannot
+                        // Through the backend seam, which recomputes the leg root exactly.
+                        // `Mismatch` is deliberately NOT an accusation here: it gathers no quorum
+                        // and the claim voids. Convicting is the court's move, on evidence, and a
+                        // seat that cannot reproduce a claim has not yet produced any.
+                        //
+                        // Resolved per duty from what the CHAIN says the claim's class is. A seat
+                        // holding no material for that class cannot
                         // judge it and says so by filing nothing — which is the same shape as
                         // "the material has not arrived", and correctly so: both are "I cannot
                         // verify", never "the producer lied".
-                        let Ok(backend) = self.backends().resolve(duty.terms, duty.class_id, duty.artifact_root) else {
+                        let Ok(backend) = self.backends().resolve(duty.class_id, duty.artifact_root) else {
                             break 'verdict None;
                         };
                         if backend.verify_material(

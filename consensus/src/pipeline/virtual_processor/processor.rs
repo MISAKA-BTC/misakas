@@ -3821,8 +3821,6 @@ impl VirtualStateProcessor {
         let base_target = state.class_target(&bundle.base_class_id)?;
         Some(kaspa_consensus_core::palw_state_v2::PalwRegistrationTermsV2 {
             min_grantable_share_permille: state_params.min_grantable_share_permille(),
-            min_panel_seats: bundle.min_panel_seats(),
-            min_panel_quorum: bundle.min_panel_quorum(),
             slash_value_per_pwu: base.slash_value_per_pwu,
             initial_target: base_target.target,
         })

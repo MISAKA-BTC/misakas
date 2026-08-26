@@ -632,7 +632,6 @@ mod tests {
         // and a gate needs an input).
         let class_registration = PalwConsensusObjectV2::ClassRegistered {
             class_id: h64(0xC1A55),
-            terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
             artifact_root: h64(0xA7),
             slash_value_per_pwu: 1,
             // The rule genesis refuses, arriving through the side door.
@@ -695,7 +694,6 @@ mod tests {
         };
         let registration = |admission: Option<Box<PalwClassAdmissionCarriageV2>>| PalwConsensusObjectV2::ClassRegistered {
             class_id: profile.shape_profile_id(),
-            terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
             artifact_root: h64(0xA7),
             slash_value_per_pwu: 1,
             pwu_rule: PalwPwuRuleV2::DerivedV1 { pwu_per_inference: 4_096 },

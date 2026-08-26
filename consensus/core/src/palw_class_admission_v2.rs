@@ -190,15 +190,6 @@ pub fn derive_court_cost_v1(profile: &PalwShapeProfileV3) -> Result<PalwCourtCos
 pub enum PalwClassAdmissionError {
     #[error("the object is not a class registration")]
     NotARegistration,
-    /// ADR-0051 Decision 6. A class may register a thinner panel than the network's, down to a
-    /// floor the bundle carries — but never below it, never above the network's own draw, and
-    /// never half-specified.
-    #[error("the class's panel terms are not admissible: {0}")]
-    PanelTerms(String),
-    /// ADR-0051 Decision 1. Family M's classes are capped at half the share table, so the half
-    /// that can convict a liar stays in charge of the tie.
-    #[error("this registration would put family {family:?} at {would_be}permille, past the {cap}permille cap")]
-    FamilyShareCap { family: crate::palw_backend::PalwExecutionFamilyV1, would_be: u32, cap: u32 },
     /// A class IS its graph. Two registrations of the same profile are the same class and a
     /// different profile cannot borrow an id, so the id is checked against the profile rather than
     /// accepted as a label.
@@ -261,50 +252,17 @@ pub fn verify_class_admission_v2(
     canonical: &PalwJobContextV2,
     registration: &PalwConsensusObjectV2,
 ) -> Result<PalwClassCatalogEntryV2, PalwClassAdmissionError> {
-    let PalwConsensusObjectV2::ClassRegistered { class_id, artifact_root, pwu_rule, terms, .. } = registration else {
+    let PalwConsensusObjectV2::ClassRegistered { class_id, artifact_root, pwu_rule, .. } = registration else {
         return Err(PalwClassAdmissionError::NotARegistration);
     };
 
-    // **The panel first, because it is a property of the registration rather than of the graph**
-    // (ADR-0051 Decision 6). A class may draw a thinner panel than the network's — a family whose
-    // seats must hold particular hardware cannot demand six such operators on its first day — but
-    // the terms are on chain, so a thin class is visibly thin, and the bundle's floor is what
-    // stops "thinner" becoming "one".
-    terms
-        .panel_params(&bundle.panel, bundle.min_panel_seats(), bundle.min_panel_quorum())
-        .map_err(PalwClassAdmissionError::PanelTerms)?;
-
-    // **A family that cannot be convicted is admitted on different evidence** (ADR-0051 Decision
-    // 2). There is no step space to count, no ladder to fit inside and no opening to price,
-    // because a black-box runtime has none of them — so the checks below, every one of which is
-    // about the SHAPE of an adjudicable graph, do not apply and must not be run. Running them
-    // anyway would refuse every Family-M class for failing to be something it never claimed.
-    //
-    // What replaces them is the identity the family actually rests on, and the class carries it
-    // in the same place a Family-D class carries its graph: the profile's ids ARE the runtime
-    // manifest, model, tokenizer and shape pins that a producer's worker must reproduce before it
-    // may produce (`MetalBackend::check_runtime_identity`).
-    // **Pins exist exactly when the family's identity is not its graph.** A deterministic class
-    // carrying them would be declaring an identity nothing checks; a black-box class without them
-    // could be run by any runtime, since nothing downstream re-derives the arithmetic.
-    match (terms.family.is_court_adjudicable(), terms.runtime_pins.is_some()) {
-        (true, true) => {
-            return Err(PalwClassAdmissionError::Profile(
-                "a deterministic class's identity is its graph; runtime pins on it are an identity nothing checks".into(),
-            ));
-        }
-        (false, false) => {
-            return Err(PalwClassAdmissionError::Profile(
-                "a black-box class must pin its runtime, model and tokenizer — without them any runtime could claim to be it".into(),
-            ));
-        }
-        _ => {}
-    }
-
-    if !terms.family.is_court_adjudicable() {
-        let pins = terms.runtime_pins.expect("checked just above");
-        return palw_metal_class_admission_v1(bundle, profile, canonical, &pins, *class_id, *artifact_root, *pwu_rule);
-    }
+    // **Every class that reaches this gate is court-adjudicable, and there is no arm that skips
+    // it** (ADR-0053). The withdrawn Metal/GGUF family was admitted by a sibling arm that ran
+    // `validate_geometry` instead of `validate_shape`, skipped the A4 coverage gate, skipped the
+    // ladder-depth check and the court-cost ceilings, and wrote a catalog entry whose
+    // `reachable_kernels` was EMPTY — a class the court could not adjudicate, admitted by a gate
+    // whose whole job is refusing those. It is gone, and with it the question "which family is
+    // this?" that every consumer downstream had to get right.
 
     // **Well-formedness first, before anything reads the shape.** Every check below — the id
     // derivation, the kernel walk, the leaf enumeration — is driven by `n_ctx` and `layer_count`,
@@ -385,120 +343,63 @@ pub fn verify_class_admission_v2(
     })
 }
 
-/// **The Family-M admission gate** (ADR-0051 Decision 2).
+/// **A registration for a chain that is ALREADY RUNNING** (ADR-0049 Decision H).
 ///
-/// What it checks instead of a step space:
+/// A network is born with the classes its ruleset id commits to, and a class added later has no
+/// such entry: nothing on chain can check its graph, its canonical job or its `pwu` rule, so the
+/// object carries them and [`verify_class_admission_v2`] decides. Without a builder, a second
+/// class means re-minting the network.
 ///
-/// * the class id is still the profile's id — a class IS its graph in every family, and for this
-///   one the "graph" is the pinned identity set (runtime manifest, model, tokenizer, shape);
-/// * every identity is actually pinned. A zero hash is a field nobody set, and a class that did
-///   not pin its runtime is a class any runtime could claim to be — which is the entire security
-///   of a family that never re-derives the arithmetic;
-/// * the canonical job is inside the class's own context, and its decode budget is the
-///   `pwu_per_inference` the registration declares. Counted, not believed, exactly as the
-///   deterministic gate recounts step leaves: `pwu` is a direct multiplier on fork-choice weight
-///   and a registrant that could declare it could mint weight from nothing.
+/// This replaces the withdrawn family's `family_m_post_genesis_registration_v1` (ADR-0053), and
+/// the replacement is a generalization rather than a port: the old one could only ever build the
+/// one black-box class its own crate pinned, because a black-box class's identity was a set of
+/// runtime pins that crate held. A deterministic class's identity is its graph, which the caller
+/// already has, so this builds a registration for ANY profile — the floor, a converted checkpoint,
+/// whatever the node holds an artifact for.
 ///
-/// It deliberately does NOT check a court window, a ladder depth or an opening cost. Those price
-/// a dispute this family cannot have.
-fn palw_metal_class_admission_v1(
-    bundle: &PalwConsensusParamsV2,
-    profile: &PalwShapeProfileV3,
-    canonical: &PalwJobContextV2,
-    pins: &crate::palw_state_v2::PalwRuntimePinsV2,
-    class_id: Hash64,
+/// Three things are NOT the caller's to choose, and are therefore not parameters:
+///
+/// * **the share** — a post-genesis entrant joins at the ruleset's minimum grantable share, and a
+///   registrant naming its own permille would be donating itself a slice of every incumbent's
+///   cadence. The validator refuses anything else;
+/// * **the class id** — it is the profile's id. A class IS its graph;
+/// * **`pwu_per_inference`** — the canonical job's counted step leaves. A declared value is checked
+///   against the count, so the only thing a choice could do here is fail.
+///
+/// The signature is the caller's because the bond key is: this crate never sees key material.
+/// Build once with an empty signature to learn the `class_id` to sign over, then again with it.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_post_genesis_registration_v1(
+    profile: PalwShapeProfileV3,
+    canonical: PalwJobContextV2,
     artifact_root: Hash64,
-    pwu_rule: crate::palw_state_v2::PalwPwuRuleV2,
-) -> Result<PalwClassCatalogEntryV2, PalwClassAdmissionError> {
-    // GEOMETRY, not the graph: the node-table rules refuse an empty table, which is exactly what
-    // a class with no court declares, and refusing it here would refuse the family for being
-    // itself. Same reasoning as skipping the ladder and the opening cost.
-    profile.validate_geometry().map_err(|e| PalwClassAdmissionError::Profile(e.to_string()))?;
-    let derived_id = profile.shape_profile_id();
-    if class_id != derived_id {
-        return Err(PalwClassAdmissionError::ClassIdIsNotTheProfileId { declared: class_id, derived: derived_id });
-    }
-
-    // Every pin present. `Hash64::default()` is the "nobody set this" value everywhere in this
-    // tree, and a Family-M class with an unset runtime pin is one whose producer's claim about
-    // what it ran cannot be contradicted by anything.
-    for (what, value) in [
-        ("artifact_root", artifact_root),
-        ("runtime_manifest_hash", pins.runtime_manifest_hash),
-        ("runtime_class_id", pins.runtime_class_id),
-        ("model_profile_id", pins.model_profile_id),
-        ("tokenizer_id", pins.tokenizer_id),
-        ("trace_scheme_id", pins.trace_scheme_id),
-        ("cu_ruleset_id", pins.cu_ruleset_id),
-    ] {
-        if value == Hash64::default() {
-            return Err(PalwClassAdmissionError::Profile(format!(
-                "a Metal/GGUF class must pin its {what}; an unset one is a class any runtime could claim to be"
-            )));
-        }
-    }
-
-    // **The pins and the canonical job are one statement.** They are two encodings of the same
-    // identity — the registration's, and the job it is priced over — and a registration whose job
-    // was run under a different runtime than the class pins is a class priced for work it does not
-    // describe. Correspondence checked here because this is the only place both are in hand.
-    for (what, a, b) in [
-        ("runtime_manifest_hash", pins.runtime_manifest_hash, canonical.runtime_manifest_hash),
-        ("runtime_class_id", pins.runtime_class_id, canonical.runtime_class_id),
-        ("model_profile_id", pins.model_profile_id, canonical.model_profile_id),
-        ("tokenizer_id", pins.tokenizer_id, canonical.tokenizer_id),
-        ("trace_scheme_id", pins.trace_scheme_id, canonical.trace_scheme_id),
-        ("cu_ruleset_id", pins.cu_ruleset_id, canonical.cu_ruleset_id),
-    ] {
-        if a != b {
-            return Err(PalwClassAdmissionError::Profile(format!(
-                "the class pins {what} {a} and its canonical job was run at {b} — two identities under one registration"
-            )));
-        }
-    }
-    if (pins.prefill_tokens, pins.exact_decode_tokens, pins.max_context_tokens)
-        != (canonical.declared_prefill_tokens, canonical.exact_decode_tokens, canonical.max_context_tokens)
-    {
-        return Err(PalwClassAdmissionError::Profile("the class's declared job shape is not the canonical job's".into()));
-    }
-    if pins.vocab_size != profile.vocab_size {
-        return Err(PalwClassAdmissionError::Profile("the class pins a vocabulary its profile does not declare".into()));
-    }
-
-    if canonical.exact_decode_tokens == 0 {
-        return Err(PalwClassAdmissionError::Profile("a canonical job that decodes nothing is not one unit of work".into()));
-    }
-    let span = canonical.declared_prefill_tokens.saturating_add(canonical.exact_decode_tokens);
-    if span > canonical.max_context_tokens || canonical.max_context_tokens > profile.n_ctx {
-        return Err(PalwClassAdmissionError::Profile(format!(
-            "the canonical job spans {span} tokens against a declared context of {} and a class context of {}",
-            canonical.max_context_tokens, profile.n_ctx
-        )));
-    }
-
-    // **`pwu_per_inference` is the decode budget, counted.** There are no step leaves to count
-    // here, and the decode budget is the honest unit: it is what the runtime is exactly held to
-    // (`exact_decode_tokens`, no early stop) and what a seat re-runs.
-    let counted = canonical.exact_decode_tokens as u64;
-    match pwu_rule {
-        crate::palw_state_v2::PalwPwuRuleV2::DerivedV1 { pwu_per_inference } if pwu_per_inference == counted => {}
-        crate::palw_state_v2::PalwPwuRuleV2::DerivedV1 { pwu_per_inference } => {
-            return Err(PalwClassAdmissionError::PwuPerInferenceMismatch { declared: pwu_per_inference, counted });
-        }
-        crate::palw_state_v2::PalwPwuRuleV2::MaxPerAttempt(_) => {
-            return Err(PalwClassAdmissionError::Profile(
-                "a Metal/GGUF class registers a derived pwu; MaxPerAttempt is pre-derivation scaffolding and mints weight from a choice".into(),
-            ));
-        }
-    }
-
-    let _ = bundle;
-    Ok(PalwClassCatalogEntryV2 {
+    min_grantable_share_permille: u16,
+    initial_target: u128,
+    slash_value_per_pwu: u64,
+    activation_daa: u64,
+    registrant_bond: crate::palw_state_v2::PalwBondKeyV2,
+    signature: Vec<u8>,
+) -> Result<PalwConsensusObjectV2, PalwClassAdmissionError> {
+    let class_id = profile.shape_profile_id();
+    // Counted here, from the same canonical job the carriage carries, so the object the gate reads
+    // and the number it recounts come from one value. A caller that computed the count separately
+    // could hand the gate two statements about one class.
+    let counted = crate::palw_step::step_leaf_count(&profile, &canonical)
+        .map_err(|e| PalwClassAdmissionError::Profile(format!("the canonical job does not count against this profile: {e}")))?;
+    Ok(PalwConsensusObjectV2::ClassRegistered {
         class_id,
         artifact_root,
-        canonical_step_leaf_count: counted,
-        max_step_leaf_count: counted,
-        reachable_kernels: Default::default(),
+        slash_value_per_pwu,
+        pwu_rule: crate::palw_state_v2::PalwPwuRuleV2::DerivedV1 { pwu_per_inference: counted },
+        initial_target,
+        share_permille: min_grantable_share_permille,
+        activation_daa,
+        admission: Some(Box::new(crate::palw_state_v2::PalwClassAdmissionCarriageV2 {
+            profile,
+            canonical,
+            registrant_bond,
+            signature,
+        })),
     })
 }
 
@@ -582,7 +483,6 @@ mod tests {
     fn registration(class_id: Hash64, pwu_per_inference: u64) -> PalwConsensusObjectV2 {
         PalwConsensusObjectV2::ClassRegistered {
             class_id,
-            terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
             artifact_root: Hash64::from_u64_word(0xA271FAC7),
             slash_value_per_pwu: 1,
             pwu_rule: PalwPwuRuleV2::DerivedV1 { pwu_per_inference },
@@ -934,160 +834,17 @@ mod tests {
         }
     }
 
-    // ---------------------------------------------------------------------------------------
-    // ADR-0051: the Metal/GGUF family's own gate
-    // ---------------------------------------------------------------------------------------
-
-    use crate::palw_backend::PalwExecutionFamilyV1;
-    use crate::palw_state_v2::PalwClassTermsV2;
-
-    fn metal_pins() -> crate::palw_state_v2::PalwRuntimePinsV2 {
-        crate::palw_state_v2::PalwRuntimePinsV2 {
-            runtime_manifest_hash: Hash64::from_u64_word(0x1),
-            runtime_class_id: Hash64::from_u64_word(0x2),
-            model_profile_id: Hash64::from_u64_word(0x3),
-            trace_scheme_id: Hash64::from_u64_word(0x5),
-            cu_ruleset_id: Hash64::from_u64_word(0x6),
-            tokenizer_id: Hash64::from_u64_word(0x4),
-            prefill_tokens: 8,
-            exact_decode_tokens: 4,
-            max_context_tokens: 512,
-            vocab_size: base0_profile_v1(PALW_RC_BASE0_GEOMETRY).unwrap().vocab_size,
-        }
-    }
-
-    fn metal_terms(seats: Option<u16>, quorum: Option<u16>) -> PalwClassTermsV2 {
-        PalwClassTermsV2 {
-            family: PalwExecutionFamilyV1::MetalGguf,
-            runtime_pins: Some(metal_pins()),
-            panel_seats: seats,
-            panel_quorum: quorum,
-        }
-    }
-
-    /// A canonical job with every Family-M identity pinned. The profile is the floor's — a
-    /// Family-M class's "graph" is its pinned identity set, and the shape only has to be
-    /// well-formed and wide enough for the job.
-    fn metal_job(profile: &PalwShapeProfileV3, prefill: u32, decode: u32) -> PalwJobContextV2 {
-        let mut c = context(profile, prefill, decode);
-        c.runtime_manifest_hash = Hash64::from_u64_word(0x1);
-        c.runtime_class_id = Hash64::from_u64_word(0x2);
-        c.model_profile_id = Hash64::from_u64_word(0x3);
-        c.tokenizer_id = Hash64::from_u64_word(0x4);
-        c.trace_scheme_id = Hash64::from_u64_word(0x5);
-        c.cu_ruleset_id = Hash64::from_u64_word(0x6);
-        // The pins and the job are one statement, so the fixture states it once: the job's shape
-        // must be the pins' too, or the correspondence check refuses — as it should, and as it did
-        // the first time this fixture set only half of them.
-        c.max_context_tokens = 512;
-        c
-    }
-
-    fn metal_registration(class_id: Hash64, terms: PalwClassTermsV2, pwu: u64) -> PalwConsensusObjectV2 {
-        PalwConsensusObjectV2::ClassRegistered {
-            class_id,
-            terms,
-            artifact_root: Hash64::from_u64_word(0xA7),
-            slash_value_per_pwu: 5,
-            pwu_rule: PalwPwuRuleV2::DerivedV1 { pwu_per_inference: pwu },
-            initial_target: u128::MAX / 2,
-            share_permille: 1,
-            activation_daa: 0,
-            admission: None,
-        }
-    }
-
-    /// **A Metal class is admitted on its pins, not on a step space** — and the step-space checks
-    /// that would refuse it are not run, because a black-box runtime has no step space to fail.
+    /// **The one gate, on the one family.** Every registration goes through the step-space gate:
+    /// counted leaves, a full coverage walk, the ladder and the court's cost ceilings. There is no
+    /// second arm to fall into (ADR-0053).
     #[test]
-    fn a_metal_class_is_admitted_on_its_pinned_identity() {
-        let mut bundle = bundle_with_full_ladder();
-        bundle.min_class_panel = (2, 2);
-        let profile = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("expressible");
-        let job = metal_job(&profile, 8, 4);
-        let reg = metal_registration(profile.shape_profile_id(), metal_terms(Some(2), Some(2)), 4);
-        let entry = verify_class_admission_v2(&bundle, &profile, &job, &reg).expect("a pinned Metal class is admissible");
-        assert_eq!(entry.class_id, profile.shape_profile_id());
-        // pwu is the DECODE BUDGET for this family, counted from the canonical job.
-        assert_eq!(entry.canonical_step_leaf_count, 4);
-    }
-
-    /// **An unpinned identity is refused by name.** A class that did not pin its runtime is one
-    /// any runtime could claim to be, and this family re-derives no arithmetic to catch that.
-    #[test]
-    fn a_metal_class_must_pin_every_identity() {
-        let mut bundle = bundle_with_full_ladder();
-        bundle.min_class_panel = (2, 2);
-        let profile = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("expressible");
-        for clear in ["runtime_manifest_hash", "runtime_class_id", "model_profile_id", "tokenizer_id"] {
-            let mut job = metal_job(&profile, 8, 4);
-            match clear {
-                "runtime_manifest_hash" => job.runtime_manifest_hash = Hash64::default(),
-                "runtime_class_id" => job.runtime_class_id = Hash64::default(),
-                "model_profile_id" => job.model_profile_id = Hash64::default(),
-                _ => job.tokenizer_id = Hash64::default(),
-            }
-            let reg = metal_registration(profile.shape_profile_id(), metal_terms(Some(2), Some(2)), 4);
-            let err = verify_class_admission_v2(&bundle, &profile, &job, &reg).expect_err("an unset pin is refused");
-            assert!(format!("{err}").contains(clear), "the refusal names the missing pin: {err}");
-        }
-    }
-
-    /// `pwu_per_inference` is counted here too — the unit differs (decode tokens, not step
-    /// leaves) but the rule does not: a registrant that could declare it could mint weight.
-    #[test]
-    fn a_metal_class_cannot_declare_its_own_pwu() {
-        let mut bundle = bundle_with_full_ladder();
-        bundle.min_class_panel = (2, 2);
-        let profile = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("expressible");
-        let job = metal_job(&profile, 8, 4);
-        let reg = metal_registration(profile.shape_profile_id(), metal_terms(Some(2), Some(2)), 400);
-        match verify_class_admission_v2(&bundle, &profile, &job, &reg) {
-            Err(PalwClassAdmissionError::PwuPerInferenceMismatch { declared, counted }) => {
-                assert_eq!((declared, counted), (400, 4));
-            }
-            other => panic!("an overstated pwu must be refused, got {other:?}"),
-        }
-    }
-
-    /// **The panel floor is real in both directions**: below the bundle's floor is refused, above
-    /// the network's own draw is refused, and half-specified is refused.
-    #[test]
-    fn the_per_class_panel_is_floored_and_capped() {
-        let mut bundle = bundle_with_full_ladder();
-        bundle.min_class_panel = (2, 2);
-        let profile = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("expressible");
-        let job = metal_job(&profile, 8, 4);
-        let net_seats = bundle.panel.seat_count();
-
-        for (seats, quorum, why) in [
-            (Some(1u16), Some(1u16), "below the floor"),
-            (Some(net_seats + 1), Some(2), "above the network's own draw"),
-            (Some(2), None, "half-specified"),
-            (None, Some(2), "half-specified the other way"),
-        ] {
-            let reg = metal_registration(profile.shape_profile_id(), metal_terms(seats, quorum), 4);
-            assert!(
-                matches!(verify_class_admission_v2(&bundle, &profile, &job, &reg), Err(PalwClassAdmissionError::PanelTerms(_))),
-                "a panel {why} must be refused"
-            );
-        }
-        // And `None`/`None` — the network's own panel — is always admissible.
-        let reg = metal_registration(profile.shape_profile_id(), metal_terms(None, None), 4);
-        assert!(verify_class_admission_v2(&bundle, &profile, &job, &reg).is_ok());
-    }
-
-    /// **The deterministic family is unchanged by all of this.** A Family-D registration still
-    /// goes through the step-space gate, which is the half of the network that can convict.
-    #[test]
-    fn the_deterministic_gate_is_untouched() {
+    fn every_registration_goes_through_the_step_space_gate() {
         let bundle = bundle_with_full_ladder();
         let profile = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("expressible");
         let canonical = context(&profile, 8, 4);
         let counted = step_leaf_count(&profile, &canonical).expect("the floor counts");
         let reg = PalwConsensusObjectV2::ClassRegistered {
             class_id: profile.shape_profile_id(),
-            terms: PalwClassTermsV2::deterministic_default(),
             artifact_root: Hash64::from_u64_word(0xA1),
             slash_value_per_pwu: 5,
             pwu_rule: PalwPwuRuleV2::DerivedV1 { pwu_per_inference: counted },

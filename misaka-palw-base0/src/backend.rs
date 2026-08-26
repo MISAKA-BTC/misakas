@@ -1,4 +1,4 @@
-//! **Family D behind the backend seam** (ADR-0051 step 1).
+//! **BASE-0 behind the backend seam.**
 //!
 //! Nothing here is new arithmetic. It is the existing floor path — `resolve_class_v1` for the
 //! material, `base0_rc_job_v1` for the job, `base0_execute_for_attempt_v1` for the run,
@@ -15,9 +15,7 @@ use crate::classes::ResolvedClassV1;
 use crate::produce::{
     base0_execute_for_attempt_v1, base0_material_decode_v1, base0_material_encode_v1, base0_material_matches_claim_v1, base0_rc_job_v1,
 };
-use kaspa_consensus_core::palw_backend::{
-    PalwClaimRootsV1, PalwExecutionBackendV1, PalwExecutionFamilyV1, PalwExecutionOutcomeV1, PalwMaterialVerdictV1,
-};
+use kaspa_consensus_core::palw_backend::{PalwClaimRootsV1, PalwExecutionBackendV1, PalwExecutionOutcomeV1, PalwMaterialVerdictV1};
 use kaspa_consensus_core::palw_step::PalwShapeProfileV3;
 use kaspa_consensus_core::palw_v2::PalwJobContextV2;
 use kaspa_hashes::Hash64;
@@ -53,10 +51,6 @@ impl Base0Backend {
 }
 
 impl PalwExecutionBackendV1 for Base0Backend {
-    fn family(&self) -> PalwExecutionFamilyV1 {
-        PalwExecutionFamilyV1::DeterministicInteger
-    }
-
     fn model_id(&self) -> &str {
         &self.model_id
     }
@@ -231,9 +225,6 @@ mod tests {
     #[test]
     fn the_floor_executes_through_the_seam() {
         let backend = floor_backend();
-        assert_eq!(backend.family(), PalwExecutionFamilyV1::DeterministicInteger);
-        assert!(backend.family().is_court_adjudicable(), "the floor is the family a court can convict in");
-
         let anchor = Hash64::from_u64_word(0x5EA_u64);
         let (job, prompt) = backend.job_for_anchor(anchor).expect("the anchor implies a job");
         let outcome = backend.execute(&job, &prompt).expect("the floor's canonical job runs");

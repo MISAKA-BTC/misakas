@@ -5275,7 +5275,6 @@ dependencies = [
  "misaka-endpoints",
  "misaka-palw",
  "misaka-palw-base0",
- "misaka-palw-metal",
  "misaka-palw-pow-driver",
  "num_cpus",
  "rand 0.8.6",
@@ -6003,16 +6002,6 @@ dependencies = [
  "rand 0.8.6",
  "serde",
  "serde_json",
-]
-
-[[package]]
-name = "misaka-palw-metal"
-version = "1.1.0"
-dependencies = [
- "blake2b_simd",
- "borsh",
- "kaspa-consensus-core",
- "kaspa-hashes",
 ]
 
 [[package]]

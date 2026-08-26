@@ -310,7 +310,6 @@ mod tests {
         vec![
             PalwConsensusObjectV2::ClassRegistered {
                 class_id: Hash64::from_u64_word(1),
-                terms: kaspa_consensus_core::palw_state_v2::PalwClassTermsV2::deterministic_default(),
                 artifact_root: Hash64::from_u64_word(11),
                 slash_value_per_pwu: 5,
                 pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
