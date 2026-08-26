@@ -43,6 +43,8 @@ pub mod classes;
 pub mod engine;
 pub mod inventory;
 pub mod legs;
+pub mod operands;
+pub mod plan;
 pub mod produce;
 pub mod rc;
 pub mod rope;
