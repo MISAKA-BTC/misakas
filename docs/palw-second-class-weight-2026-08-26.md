@@ -7,10 +7,11 @@ Everything below is a number this repository or that chain produced today. The t
 structural half is `misaka-palw-base0/examples/class-weight-report.rs`; run it where the producers
 run. Nothing here is an estimate unless it says so.
 
-**The short answer: no — and the three reasons are facts, not caution.** The class that exists
-cannot produce a block and cannot be repaired; it could not carry meaningful weight even if it
-could; and the unit weight is denominated in does not measure work. Gate 3 does not close on
-testnet-11.
+**The short answer: no — and the four reasons are facts, not caution.** The class that exists cannot
+produce a block and cannot be repaired; it could not carry meaningful weight even if it could; the
+unit weight is denominated in does not measure work; and a running chain hands a second class the
+minimum grantable share and has no arithmetic that could ever raise it. **Gate 3 is a mint decision,
+and on testnet-11 it is already spent.**
 
 ---
 
@@ -192,42 +193,110 @@ bundle — so raising a mint's ceilings buys context only up to 2048 without an 
 
 ## 5. What the fleet can actually run
 
-Decode throughput at the real Qwen2.5-1.5B shape (`base0-throughput`, 28 layers, 12 tokens):
+Decode throughput at the real Qwen2.5-1.5B shape (`base0-throughput`, 28 layers, 12 tokens), on the
+same two machines every other timing here was taken on:
 
-| tier | M4 Pro | GMAC/s |
-| --- | ---: | ---: |
-| W8A8, scalar | 473.7 ms/token (2.11 tok/s) | 3.26 |
-| W8A16 + NEON + rayon | **26.3 ms/token (37.98 tok/s)** | 58.62 |
+| tier | M4 Pro | idle EPYC fleet host | ratio |
+| --- | ---: | ---: | ---: |
+| W8A8, scalar | 473.7 ms/token | 1409.2 ms/token | 3.0× |
+| W8A16 | **26.3 ms/token** (37.98 tok/s, 58.62 GMAC/s) | **967.7 ms/token** (1.03 tok/s, 1.60 GMAC/s) | **36.8×** |
 
-The 18× is the kernels, not the tier — and `misaka-palw-base0/src/kernels.rs` gates every fast path
-on `#[cfg(target_arch = "aarch64")]` with `dotprod` and `i8mm`. **The testnet-11 fleet is x86
-EPYC.** An x86 producer gets the scalar path. That is the same shape of fault as §1: a class the
-chain admits and the fleet cannot serve.
+The 18× the Mac gains from W8A16 is the *kernels*, not the tier: `misaka-palw-base0/src/kernels.rs`
+gates every fast path on `#[cfg(target_arch = "aarch64")]` with `dotprod` and `i8mm`, and x86 falls
+through to the scalar reference — which is why W8A16 buys x86 only 1.5×.
+
+**This is not a liveness problem; it is a fairness one.** A canonical 8+4 inference is 12 tokens, so
+at the rates above it costs an x86 producer ≈11.6 s and an Apple-Silicon producer ≈0.32 s — computed
+from the per-token measurement, not timed as one run, and excluding the leaf commitment, which at
+tile 2048 is 16,038 leaves and small beside either. A producer gets one inference per template and
+4,000,000 nonces against it. Both fit a 120 s cadence with room to spare — but within
+one class the ticket lottery is a race, and the class retarget only equalises *between* classes.
+**An M-series host would take roughly 36× the tickets per second of an EPYC host at the same
+class.** The fleet is EPYC; the machine this tier was developed on is not.
+
+Family M pays a second cost the integer family does not: `MetalBackend::verify_material` answers by
+**re-running the job** (`self.execute(...)`), because the family has no cheaper check. Every seat
+pays the full ≈5.6 s on every claim. `Base0Backend::verify_material` decodes and compares roots.
 
 ---
 
-## 6. The decision
+## 6. A running chain cannot raise a class's share
 
-1. **Family M gets no weight, and should not keep the seat it has.** It is unbacked (no court),
-   mispriced by three orders of magnitude (§2), and permanently unproducible (§1). Leave its share
-   at the 1‰ minimum or freeze it, and stop pointing a producer at `682756bc…` — every attempt it
-   makes is a spawn that cannot succeed. Re-mint it as a *new class id* only behind `28f1f623`.
+This is the part that decides where the answer can even be given.
+
+`granted_share_table_v2` is, by its own doc, *"the ONLY arithmetic that ever moves a permille"*, and
+`write_share` has exactly two callers: the `ClassRegistered` transition and the activation edge that
+pays out the share that registration recorded. There is no third.
+
+And the acceptance gate pins what a post-genesis registration may ask for
+(`virtual_processor/processor.rs`, the `ClassRegistered` arm):
+
+```rust
+let floor = state_params.min_grantable_share_permille();
+if *share_permille != floor { return Err(… "a post-genesis entrant joins at the
+    minimum grantable share ({floor}‰) — ADR-0049 Decision H" …); }
+```
+
+Not *at most* the floor — **exactly** it. Which is why the live table reads `share=1`: 1‰ is
+testnet-11's `min_grantable_share_permille`, and it is the only number a second class on this chain
+was ever able to hold.
+
+So: **"does the second class get weight" is a mint question, not an operations question.** A share
+worth having has to be written into a genesis card. On testnet-11 that decision is already spent.
+
+One latent gap belongs here, because it becomes live the moment a mint hands a second class real
+share: `PalwClassAdmissionError::FamilyShareCap` — *"ADR-0051 Decision 1. Family M's classes are
+capped at half the share table, so the half that can convict a liar stays in charge of the tie"* —
+is **declared and never constructed**, on the deployed build and on `origin/main` alike. Today the
+forced-minimum share makes it unreachable, so nothing is wrong on this chain. A genesis card that
+grants a non-adjudicable family 600‰ would be accepted.
+
+---
+
+## 7. The decision
+
+1. **Family M gets no weight, and should not keep the producer pointed at it.** It is unbacked (no
+   court), mispriced by three orders of magnitude (§2), and permanently unproducible (§1). Every
+   attempt its seat makes is a worker spawn that cannot succeed — about 2.3 per second, on the host
+   that is already the fleet's OOM risk. Re-mint it as a *new class id* only behind `28f1f623`.
 2. **The second weight-bearing class is Qwen2.5-1.5B A16 at tile 2048 / n_ctx 2048** — the only
-   candidate that is court-adjudicable, fidelity-green, and inside the `2^22` ladder.
-3. **It cannot be registered onto testnet-11.** It needs `max_opening_bytes ≥ 37,748,736` and
-   `max_terminal_macs ≥ 37,748,736`, both frozen in the ruleset id. **Gate 3 closes on the next
-   mint, not on this chain.** Those two numbers are the fourth item of the pre-mint cost-ceiling
-   decision, now measured rather than guessed.
+   candidate that is court-adjudicable, fidelity-green (44/57 top-1, ρ 0.863), and inside the `2^22`
+   ladder (3,875,306 leaves, 7.6% headroom).
+3. **It cannot be registered onto testnet-11, and could not be given a share if it were.** It needs
+   `max_opening_bytes ≥ 37,748,736` (36× what t11 declares) and `max_terminal_macs ≥ 37,748,736`
+   (2.2×), both frozen inside `palw_ruleset_id_v2` — and §6 says a running chain hands an entrant
+   the minimum share and nothing else. **Gate 3 closes on the next mint.** Those two ceilings are
+   the fourth pre-mint cost-ceiling number, now measured rather than guessed.
 4. **Before that mint, close the unit.** `pwu_per_inference` varies 30× with tile for identical
    compute and is denominated differently per family (§3). A share granted against it is arbitrary
-   in exactly the direction a registrant would choose.
-5. **And before granting it share, land an x86 kernel.** The A16 fast path is aarch64-only (§5);
-   the fleet is not.
+   in exactly the direction a registrant would choose. Raise `FamilyShareCap` from a message to a
+   check in the same pass (§6).
+5. **And land an x86 integer kernel before the share is worth racing for.** Not because the fleet
+   cannot serve the class — 11.6 s an inference fits a 120 s cadence — but because an M-series host
+   would out-ticket it 36 to 1 inside the class (§5).
 
-## 7. What would change this answer
+## 8. What would change this answer
 
-* an x86 integer kernel, which turns (5) from a blocker into a number;
-* a commensurable work unit — or an explicit rule that `safe_weight` only sums adjudicable
-  families, which would make Family M's 4 harmless instead of merely tiny;
+* an x86 integer kernel, which turns (5) from a fairness hole into a number;
+* a commensurable work unit — or an explicit rule that `safe_weight` only sums adjudicable families,
+  which would make Family M's 4 harmless instead of merely tiny;
 * `28f1f623` merged, which is what lets a Family-M model be re-registered when its runtime moves
   rather than dying with the binary it was minted against.
+
+---
+
+## Reproducing this
+
+```bash
+cargo run --release -p misaka-palw-base0 --example class-weight-report -- --reps 3
+```
+
+Timings are host-dependent by design — run it where the producers run. `--skip-timing` prints the
+structural half, which is not. The class ids it derives are a check on itself: at `3aa28476` they
+are the two the running chain prints, and if they are not, the binary is pricing a different
+network than the one being asked about.
+
+Family M's own numbers come from the deployed worker
+(`palw-worker --mode v2-manifest`, `--mode self-job --prompt-stdin --n-predict 12`) and the A16
+throughput from `base0-throughput` on `palw-base0-runtime-hardening`, which is where the A16 tier
+lives; neither is on `origin/main`.
