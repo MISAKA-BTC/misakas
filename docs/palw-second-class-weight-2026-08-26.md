@@ -109,18 +109,23 @@ is reloading the model**. A 68-token run took 80.3 s.
 
 ## 3. `pwu_per_inference` is court granularity, not work
 
-Same model, same canonical job, same arithmetic — only the tile changes (Qwen2.5-1.5B A16,
-`palw-mainnet-rc-integration`):
+Same model, same canonical job, same arithmetic, one profile — only the tile changes
+(Qwen2.5-1.5B **A16**, measured on `palw-mainnet-rc-integration`):
 
-| tile_len | pwu/inference (8+4) | worst-case leaves |
+| tile_len | pwu/inference (8+4) | worst-case leaves at n_ctx 2048 |
 | ---: | ---: | ---: |
-| 64 | 366,184 | 2,978,036 |
+| 64 | 385,024 | ≥102,730,988 (over) |
+| 128 | 192,764 | ≥51,408,502 (over) |
+| 256 | 96,804 | ≥25,747,260 (over) |
 | 512 | 50,250 | ≥13,174,686 (over) |
 | 1024 | 28,376 | ≥7,148,498 (over) |
 | 2048 | **16,038** | 3,875,306 |
 | 4096 | 12,194 | 2,670,840 |
 
-**A 30× spread in claimed weight for identical compute.** `pwu_per_inference` is the step-leaf
+Exactly halving per doubling, and independent of `n_ctx` — tile 64 claims 385,024 at n_ctx 90 and at
+n_ctx 2048 alike, because the canonical job is 8+4 either way.
+
+**A 31.6× spread in claimed weight for identical compute.** `pwu_per_inference` is the step-leaf
 count: how finely the execution is committed, which is a *court* property. The admission gate is
 right to recount it rather than let a registrant declare it — but recounting a number that does not
 measure work only makes the wrong quantity trustworthy.

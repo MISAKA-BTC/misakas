@@ -82,7 +82,7 @@ fn main() {
     row("Qwen2.5-1.5B A16", PALW_RC_QWEN25_1_5B, true);
     row("Qwen2.5-1.5B int8, same geometry", PALW_RC_QWEN25_1_5B, false);
     row("Qwen2.5-1.5B int8, t11's admissible", PalwQwen25GeometryV1 { n_ctx: 90, tile_len: 64, ..PALW_RC_QWEN25_1_5B }, false);
-    for (tile, ctx) in [(2048u32, 4096u32), (4096, 2048), (1024, 2048), (512, 2048)] {
+    for (tile, ctx) in [(2048u32, 4096u32), (4096, 2048), (1024, 2048), (512, 2048), (256, 2048), (128, 2048), (64, 2048), (64, 90), (128, 90), (2048, 90)] {
         row(
             &format!("A16 @ tile {tile} / ctx {ctx}"),
             PalwQwen25GeometryV1 { n_ctx: ctx, tile_len: tile, ..PALW_RC_QWEN25_1_5B },
