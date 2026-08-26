@@ -606,6 +606,56 @@ pub fn base0_kv_anchor_for_call_v1(
     })
 }
 
+/// **Open a bisection ladder already narrowed to a committed checkpoint** — the bisect half's
+/// caller.
+///
+/// [`kaspa_consensus_core::palw_bisect::PalwBisectLadderV1::open_anchored`] takes an index and a
+/// state and cannot check where they came from; this derives both from the producer's OWN
+/// committed leg, so the ladder is seeded with something the responder is already bound to rather
+/// than with a number a challenger picked.
+///
+/// The index is the first step leaf of the call AFTER the anchor's coverage: everything below it
+/// is execution the checkpoint already commits to, so no divergence the dispute is about can live
+/// there. The state is that checkpoint's own leaf hash.
+///
+/// `None` when the leg has no checkpoint at `covered`, or when the remaining interval is too small
+/// to bisect — both of which are answers, not faults.
+pub fn base0_anchored_ladder_v1(
+    profile: &PalwShapeProfileV3,
+    ctx: &PalwJobContextV2,
+    checkpoints: &Base0CheckpointsV1,
+    binding: &kaspa_consensus_core::palw_step_leg::PalwStepBindingV2,
+    covered_decode_call: u32,
+    challenger_id: &Hash64,
+    responder_id: &Hash64,
+    opened_at_daa: u64,
+    first_deadline_daa: u64,
+) -> Option<kaspa_consensus_core::palw_bisect::PalwBisectLadderV1> {
+    use kaspa_consensus_core::palw_bisect::{PalwBisectLadderV1, PalwBisectSpaceV1};
+    let at = checkpoints.leaves.iter().position(|l| l.covered_decode_call == covered_decode_call)?;
+    // The first leaf of the first call the anchor does NOT cover. Found by walking the space's own
+    // enumeration rather than by arithmetic on it: the bijection is `canonical_step_coordinates`'
+    // to define, and a second derivation here would be a second answer for a court to disagree
+    // with.
+    let anchor_index = (0..binding.step_leaf_count).find(|i| {
+        kaspa_consensus_core::palw_step::canonical_step_coordinates(profile, ctx, *i)
+            .is_some_and(|c| c.call_index > covered_decode_call)
+    })?;
+    PalwBisectLadderV1::open_anchored(
+        &ctx.context_hash(),
+        &binding.committed_execution_root,
+        challenger_id,
+        responder_id,
+        PalwBisectSpaceV1::StepLeaves,
+        binding.step_leaf_count,
+        anchor_index,
+        checkpoints.leaf_hashes[at],
+        opened_at_daa,
+        first_deadline_daa,
+    )
+    .ok()
+}
+
 pub fn base0_refutation_from_capture_v1(
     profile: &PalwShapeProfileV3,
     ctx: &PalwJobContextV2,

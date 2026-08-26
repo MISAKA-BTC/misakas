@@ -1301,6 +1301,69 @@ mod tests {
         }
     }
 
+    /// **The bisect half, on real committed material: a ladder seeded from the producer's own leg.**
+    ///
+    /// `open_anchored` takes an index and a state and cannot check where they came from. This is
+    /// the caller that makes them derived rather than chosen: the state is a committed checkpoint's
+    /// own leaf hash, and the index is the first step leaf of the first call that checkpoint does
+    /// NOT cover — found by walking the space's own enumeration, not by arithmetic beside it.
+    ///
+    /// The property asserted is the one the anchor exists for: the ladder starts strictly inside
+    /// the space, everything below the anchor is execution the checkpoint already commits to, and
+    /// the interval left to bisect is smaller than the whole.
+    #[test]
+    fn a_ladder_seeded_from_the_committed_leg_starts_inside_the_space() {
+        use kaspa_consensus_core::palw_step::canonical_step_coordinates;
+        let (artifact, profile, ctx, prompt) = small_job();
+        let run = base0_execute_for_attempt_v1(&artifact, &profile, &ctx, &prompt).expect("the job runs");
+
+        let covered = 1u32;
+        let ladder = crate::legs::base0_anchored_ladder_v1(
+            &profile,
+            &ctx,
+            &run.checkpoints,
+            &run.binding,
+            covered,
+            &Hash64::from_u64_word(0xC1),
+            &Hash64::from_u64_word(0xE2),
+            100,
+            200,
+        )
+        .expect("the leg has a checkpoint at this call and room left to bisect");
+
+        let (lo, hi) = ladder.interval();
+        assert_eq!(hi, run.binding.step_leaf_count, "the ladder still spans to the end of the space");
+        assert!(lo > 0 && lo < hi, "the anchor must start the ladder strictly inside the space, got {lo}..{hi}");
+
+        // Everything below the anchor belongs to calls the checkpoint covers; the anchor itself is
+        // the first leaf of the first call it does not. That is the whole claim about correctness —
+        // an anchor one leaf too high would skip a step the dispute may be about.
+        assert!(
+            canonical_step_coordinates(&profile, &ctx, lo).expect("canonical").call_index > covered,
+            "the anchor leaf belongs to a call the checkpoint already covers"
+        );
+        assert!(
+            canonical_step_coordinates(&profile, &ctx, lo - 1).expect("canonical").call_index <= covered,
+            "the leaf before the anchor is NOT covered — the anchor is too high and skips execution"
+        );
+
+        // Same session as the unanchored form: a court derives the id from the claim, and a ladder
+        // whose id moved is a ladder no court accepts.
+        let plain = kaspa_consensus_core::palw_bisect::PalwBisectLadderV1::open(
+            &ctx.context_hash(),
+            &run.binding.committed_execution_root,
+            &Hash64::from_u64_word(0xC1),
+            &Hash64::from_u64_word(0xE2),
+            kaspa_consensus_core::palw_bisect::PalwBisectSpaceV1::StepLeaves,
+            run.binding.step_leaf_count,
+            100,
+            200,
+        )
+        .expect("opens");
+        assert_eq!(ladder.session_id(), plain.session_id());
+        assert_eq!(plain.interval(), (0, run.binding.step_leaf_count));
+    }
+
     /// The fixture geometry, as a `PalwBase0GeometryV1` — needed to build the inventory oracle.
     fn small_geometry() -> kaspa_consensus_core::palw_base0_profile::PalwBase0GeometryV1 {
         let mut g = PALW_RC_BASE0_GEOMETRY;
