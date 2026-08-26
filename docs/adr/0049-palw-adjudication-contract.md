@@ -255,6 +255,13 @@ the court cannot reproduce is a false conviction waiting for its first dispute.
 > `c185df95…` is in the RC genesis and a live testnet-12 — `the_engine_matches_its_golden_trace`
 > stands, and the floor's pinned `artifact_root` does not move (the floor has no per-channel table).
 >
+> **And it is not slower**, which was the open question: this engine is on the block-production path.
+> Measured A/B against the pre-change tree at the RC geometry, release, 160 forward passes each, twice:
+> **1.69–1.72 ms/token against 1.74–1.75 ms/token**, about 3% faster. Dispatching a step costs a row
+> copy that reading a local variable did not, and it is dominated by the projections — while the loop
+> this replaced computed the value-weighted attention dot products **twice**, once into `attn` and
+> once into the captured row, which the plan does once because the graph declares one node there.
+>
 > The golden test Decision F asks for is
 > `the_four_projections_agree_and_a_real_execution_agrees_with_them`, at two positions, over all three
 > tables, plus the live rows an execution produced. Its teeth are
