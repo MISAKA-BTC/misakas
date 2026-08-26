@@ -39,11 +39,11 @@ use crate::kernels::{
     a16_attn_scores_fast as a16_attn_scores, a16_attn_values_fast as a16_attn_values, a16_matmul_requant_fast as a16_matmul_requant,
     a16_matmul_rescale_fast as a16_matmul_rescale,
 };
-use kaspa_consensus_core::palw_base0_a16::{A16QuantParams, a16_add_elem, a16_mul_elem, a16_requant, a16_rms_norm, a16_softmax_rows};
+use kaspa_consensus_core::palw_base0_a16::{A16QuantParams, a16_add_elem, a16_requant, a16_rms_norm, a16_softmax_rows};
 use kaspa_consensus_core::palw_base0_ops::silu;
 use kaspa_consensus_core::palw_qwen36_ops::{
-    Qwen36GdnParamsV1, Qwen36GdnStateV1, q36_gate_apply, q36_gdn_step, q36_l2_norm, q36_moe_combine, q36_pow_q, q36_rope_partial,
-    q36_router_topk, q36_sigmoid_gate, q36_ssm_conv,
+    Qwen36GdnParamsV1, Qwen36GdnStateV1, q36_gate_apply, q36_gdn_step, q36_l2_norm, q36_moe_combine, q36_mul_wide, q36_pow_q,
+    q36_rescale_row, q36_rms_norm_wide, q36_rope_partial, q36_router_topk, q36_sigmoid_gate, q36_ssm_conv,
 };
 use std::collections::BTreeMap;
 
@@ -518,10 +518,23 @@ impl<'a> Qwen36Engine<'a> {
         )
         .map_err(refuse("linear_beta"))?;
         let decay_c = a.param_rows(&n("linear_decay_c.a16"))?;
-        let gdn_params = Qwen36GdnParamsV1 {
-            read: a.one_param(&n("linear_read.a16"))?,
-            write: a.one_param(&n("linear_write.a16"))?,
-            out: a.one_param(&n("linear_out.a16"))?,
+        // **The state's output narrowing is PER HEAD, and that is not a refinement.**
+        //
+        // The row that leaves the recurrence is normalized per head immediately afterwards, and an
+        // RMS norm divides by the head's own magnitude — so a head whose values are small gets few
+        // code bits at a shared exponent and the norm then AMPLIFIES its relative error to O(1).
+        // Measured, that is the whole of what was left: the state output matches the reference at
+        // 0.9999 over the row and its normalization at 0.98, and the gate multiply turns 0.98 into
+        // 0.71 because the error lands where the gate is large.
+        //
+        // Per head is safe where per lane is not: the norm reduces WITHIN a head and the only
+        // reduction across heads is the output projection, which happens after the multiply, by
+        // which point the row is back on one exponent.
+        let read_rows = a.param_rows(&n("linear_read.a16"))?;
+        let write_rows = a.param_rows(&n("linear_write.a16"))?;
+        let out_rows = a.param_rows(&n("linear_out.a16"))?;
+        let per_head = |rows: &[A16QuantParams], vh: usize| -> A16QuantParams {
+            if rows.len() == 1 { rows[0] } else { rows[vh.min(rows.len() - 1)] }
         };
 
         let group = s.linear_v_heads / s.linear_k_heads;
@@ -535,6 +548,8 @@ impl<'a> Qwen36Engine<'a> {
             let u = q36_sigmoid_gate(&[-dt[vh]])[0] as i64;
             let decay = q36_pow_q(u, c);
             let beta = q36_sigmoid_gate(&[beta_raw[vh]])[0] as i64;
+            let gdn_params =
+                Qwen36GdnParamsV1 { read: per_head(&read_rows, vh), write: per_head(&write_rows, vh), out: per_head(&out_rows, vh) };
             let head_out =
                 q36_gdn_step(&mut cache.gdn[li][vh], &unit_k, vslice, &unit_q, decay, beta, gdn_params).map_err(refuse("gdn_step"))?;
             out.extend(head_out);
@@ -550,19 +565,26 @@ impl<'a> Qwen36Engine<'a> {
         // magnitudes barely move — that is what a norm does — so this does not show up as a scale
         // error; it shows up as the arm computing a different function, which is exactly what a
         // rank correlation of 0.15 against the reference looked like.
+        // **Both factors stay wide until after the multiply.**
+        //
+        // The gate multiply is a cancellation: measured, its output's rms is thirteen times below
+        // the product of its factors' rms, because the two rows are anticorrelated in magnitude.
+        // Quantization error is uniform in ABSOLUTE terms, so narrowing each factor to sixteen
+        // bits first puts a large RELATIVE error on exactly the lanes where the other factor is
+        // large. It took this site from a cosine of 0.98 against the float reference to 0.71 —
+        // and it does not read as a scale error, because the magnitudes come out right.
         let norm_params = a.params_sized(&n("linear_norm.a16"), dv)?;
         let mut normed_out = Vec::with_capacity(dv);
         for vh in 0..s.linear_v_heads {
             let head = &out[vh * hd..(vh + 1) * hd];
-            let unit = a16_rms_norm(head, s.eps_q).map_err(refuse("gdn_norm"))?;
-            normed_out.extend(a16_requant(&unit, &norm_params[vh * hd..(vh + 1) * hd]).map_err(refuse("gdn_norm_req"))?);
+            let unit = q36_rms_norm_wide(head, s.eps_q).map_err(refuse("gdn_norm"))?;
+            normed_out.extend(q36_rescale_row(&unit, &norm_params[vh * hd..(vh + 1) * hd]).map_err(refuse("gdn_norm_req"))?);
         }
-        let gate = a16_requant(&silu(&z), &a.params_sized(&n("linear_gate.a16"), dv)?).map_err(refuse("gdn_gate"))?;
+        let gate = silu(&z);
         probe.push((n("linear_z"), z.clone()));
         probe.push((n("linear_normed"), normed_out.clone()));
         probe.push((n("linear_gate_act"), gate.clone()));
-        let gated = a16_mul_elem(&normed_out, &gate).map_err(refuse("gdn_mul"))?;
-        let gated = a16_requant(&gated, &a.params_sized(&n("linear_gated.a16"), dv)?).map_err(refuse("gdn_gated"))?;
+        let gated = q36_mul_wide(&normed_out, &gate, &a.params_sized(&n("linear_gated.a16"), dv)?).map_err(refuse("gdn_gated"))?;
         probe.push((n("linear_gated"), gated.clone()));
 
         a16_matmul_requant(
@@ -715,8 +737,10 @@ impl<'a> Qwen36Engine<'a> {
         )
         .map_err(refuse("shared_gate"))?;
         let g = q36_sigmoid_gate(&shared_gate_raw)[0];
+        // The shared expert's output is wide like the routed ones, so the scalar gate goes through
+        // the wide product and lands on the same code grid the combine did.
         let shared_gated =
-            q36_gate_apply(&shared, &vec![g; d], a.one_param(&n("ffn_shared_gated.a16"))?).map_err(refuse("shared_apply"))?;
+            q36_mul_wide(&shared, &vec![g; d], &vec![a.one_param(&n("ffn_shared_gated.a16"))?; d]).map_err(refuse("shared_apply"))?;
         probe.push((n("ffn_shared_out"), shared.clone()));
         let sum = a16_add_elem(&combined, &shared_gated).map_err(refuse("moe_add"))?;
         let out = a16_requant(&sum, &a.params_sized(&n("ffn_moe_out.a16"), d)?).map_err(refuse("moe_out"))?;
@@ -750,11 +774,14 @@ impl<'a> Qwen36Engine<'a> {
             &a.params_sized(&format!("{base}_up.weight.a16"), mid)?,
         )
         .map_err(refuse("expert_up"))?;
+        // Same cancellation, same fix: `silu(gate)` stays in Q[`K`] and the product narrows once.
         let activated =
-            a16_requant(&silu(&gate), &a.params_sized(&format!("{base}_silu.a16"), mid)?).map_err(refuse("expert_silu"))?;
-        let product = a16_mul_elem(&activated, &up).map_err(refuse("expert_mul"))?;
-        let gated = a16_requant(&product, &a.params_sized(&format!("{base}_gated.a16"), mid)?).map_err(refuse("expert_gated"))?;
-        a16_matmul_requant(
+            q36_rescale_row(&silu(&gate), &a.params_sized(&format!("{base}_silu.a16"), mid)?).map_err(refuse("expert_silu"))?;
+        let gated =
+            q36_mul_wide(&activated, &up, &a.params_sized(&format!("{base}_gated.a16"), mid)?).map_err(refuse("expert_gated"))?;
+        // Wide out: the combine sums eight of these and the sum cancels, so each row keeps its
+        // precision until the one narrowing after the sum.
+        a16_matmul_rescale(
             a.tensor_sized(&format!("{base}_down.weight"), d * mid)?,
             &gated,
             &a.params_sized(&format!("{base}_down.weight.a16"), d)?,

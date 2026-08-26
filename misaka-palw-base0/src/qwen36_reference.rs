@@ -436,6 +436,7 @@ pub fn reference_moe_layer(
         let s_mid = shape.shared_dim;
         let s_gate = matmul(w.shared_gate, &normed, s_mid);
         let s_up = matmul(w.shared_up, &normed, s_mid);
+        calibration.observe(&g("ffn_shared_up"), &s_up);
         let act: Vec<f32> = silu(&s_gate).iter().zip(&s_up).map(|(a, b)| a * b).collect();
         calibration.observe(&g("ffn_shared_gated"), &act);
         let shared = matmul(w.shared_down, &act, d);

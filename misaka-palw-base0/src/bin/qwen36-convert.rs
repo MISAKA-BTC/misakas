@@ -287,9 +287,9 @@ fn main() {
                     ("linear_dt.weight.a16", linear_v_heads),
                     ("linear_beta.weight.a16", linear_v_heads),
                     ("linear_decay_c.a16", linear_v_heads),
-                    ("linear_read.a16", 1),
-                    ("linear_write.a16", 1),
-                    ("linear_out.a16", 1),
+                    ("linear_read.a16", linear_v_heads),
+                    ("linear_write.a16", linear_v_heads),
+                    ("linear_out.a16", linear_v_heads),
                     ("linear_norm.a16", dv),
                     ("linear_gate.a16", dv),
                     ("linear_gated.a16", dv),
@@ -451,8 +451,44 @@ fn main() {
                 // The state's exponent is what the state REACHED, not what the contraction bound
                 // allows: a head at `decay ≈ 1` sends the bound to a million and the grid it
                 // implies saturates on the first token.
-                let e_state = cal::site_exponent(site(&calibration, &g("linear_state")));
-                let (read, write, out_p) = cal::gdn_params(e_state, e_conv_act, e_state_out);
+                // **Per head.** The row that leaves the recurrence is normalized per head, and an
+                // RMS norm divides by that head's own magnitude — so a head whose values are small
+                // gets few code bits at a shared exponent and the norm amplifies its relative error
+                // to O(1). Per head is safe where per lane is not: the norm reduces WITHIN a head,
+                // and the only reduction across heads is the output projection, which runs after
+                // the row is back on one exponent.
+                let state_lanes = calibration.sites.get(&g("linear_state")).map(|r| r.lanes.clone()).unwrap_or_default();
+                let out_lanes = calibration.sites.get(&g("linear_state_out")).map(|r| r.lanes.clone()).unwrap_or_default();
+                let v_lanes = calibration.sites.get(&g("linear_conv")).map(|r| r.lanes.clone()).unwrap_or_default();
+                let head_max = |lanes: &[f64], from: usize, len: usize, fallback: f64| -> f64 {
+                    let slice = lanes.get(from..from + len).unwrap_or(&[]);
+                    let m = slice.iter().fold(0.0f64, |a, v| a.max(*v));
+                    if m > 0.0 { m } else { fallback }
+                };
+                let hd = linear_head_dim;
+                let (mut read_rows, mut write_rows, mut out_rows) = (Vec::new(), Vec::new(), Vec::new());
+                for vh in 0..linear_v_heads {
+                    // The state's lanes are recorded one head at a time, so what survives is the
+                    // last head's; the row peak is the honest fallback for the others.
+                    // **The state is `i32`, so its exponent targets the `i32` rail.**
+                    // `site_exponent` sizes against the A16 code rail, which is the right rail for
+                    // anything that will be an activation and the wrong one for a recurrent state
+                    // — the state is never narrowed to a code, and sizing it as if it were left
+                    // fifteen of its thirty-one bits unused. That is precision the recurrence
+                    // carries forward, and it is what the arm's output was missing.
+                    let e_state =
+                        cal::site_exponent(head_max(&state_lanes, 0, state_lanes.len(), site(&calibration, &g("linear_state")))) + 15;
+                    // `v` is the conv output's third block, `[2·dk, 2·dk + dv)`.
+                    let e_v = cal::site_exponent(head_max(&v_lanes, 2 * dk + vh * hd, hd, site(&calibration, &g("linear_conv"))));
+                    // Wide out: the recurrence's row is normalized per head and never reduced
+                    // across heads, so it is sized against the `i32` rail like the state.
+                    let e_o = cal::site_exponent(head_max(&out_lanes, vh * hd, hd, site(&calibration, &g("linear_state_out")))) + 15;
+                    let (r, w, o) = cal::gdn_params(e_state, e_v, e_o);
+                    read_rows.push(r);
+                    write_rows.push(w);
+                    out_rows.push(o);
+                }
+                let _ = (e_conv_act, e_state_out);
 
                 measured.insert(g("attn_norm.a16"), wire(&cal::norm_params(&attn_gain, e_normed)));
                 for (name, out_dim) in [("linear_q.weight", dk), ("linear_k.weight", dk), ("linear_v.weight", dv)] {
@@ -465,12 +501,16 @@ fn main() {
                 measured.insert(g("linear_dt.weight.a16"), wire(&cal::to_qk_params(&scales[&g("linear_dt.weight")], e_normed)));
                 measured.insert(g("linear_beta.weight.a16"), wire(&cal::to_qk_params(&scales[&g("linear_beta.weight")], e_normed)));
                 measured.insert(g("linear_decay_c.a16"), wire(&a_log.iter().map(|v| cal::decay_exponent(*v)).collect::<Vec<_>>()));
-                measured.insert(g("linear_read.a16"), wire(&[read]));
-                measured.insert(g("linear_write.a16"), wire(&[write]));
-                measured.insert(g("linear_out.a16"), wire(&[out_p]));
-                measured.insert(g("linear_norm.a16"), wire(&cal::norm_params(&ssm_norm.repeat(linear_v_heads), e_normed_out)));
-                measured.insert(g("linear_gate.a16"), wire(&vec![cal::rescale_params(K as i32, e_gate); dv]));
-                measured.insert(g("linear_gated.a16"), wire(&vec![cal::product_params(e_normed_out, e_gate, e_gated); dv]));
+                measured.insert(g("linear_read.a16"), wire(&read_rows));
+                measured.insert(g("linear_write.a16"), wire(&write_rows));
+                measured.insert(g("linear_out.a16"), wire(&out_rows));
+                // The norm stays WIDE: γ is applied at Q[K], so the gate multiply sees the precision
+                // the norm produced rather than a sixteen-bit rounding of it.
+                let _ = e_normed_out;
+                measured.insert(g("linear_norm.a16"), wire(&cal::norm_params(&ssm_norm.repeat(linear_v_heads), K as i32)));
+                // `linear_gate.a16` is no longer read: the gate reaches the multiply in Q[K].
+                let _ = e_gate;
+                measured.insert(g("linear_gated.a16"), wire(&vec![cal::product_params(K as i32, K as i32, e_gated); dv]));
                 measured
                     .insert(g("linear_o.weight.a16"), wire(&cal::projection_params(&scales[&g("linear_o.weight")], e_gated, e_delta)));
                 measured.insert(g("attn_align.a16"), wire(&vec![cal::rescale_params(e_stream_in, e_delta); d]));
@@ -589,14 +629,18 @@ fn main() {
 
         let e_ffn_normed = cal::site_exponent(site(&calibration, &g("ffn_norm")));
         let e_expert_gated = cal::site_exponent(site(&calibration, &g("ffn_expert_gated")));
-        let e_expert_out = cal::site_exponent(site(&calibration, &g("ffn_expert_out")));
+        let e_expert_up = cal::site_exponent(site(&calibration, &g("ffn_expert_up")));
+        // The expert's output is wide now, so its exponent is chosen against the i32 rail rather
+        // than the code rail — fifteen more bits of resolution for a row the combine cancels.
+        let e_expert_out = cal::site_exponent(site(&calibration, &g("ffn_expert_out"))) + 15;
         let e_routed = cal::site_exponent(site(&calibration, &g("ffn_routed")));
         // Same rule as the arms': the mixture's output rides the post-residual stream's exponent,
         // so the aligned stream does not saturate on its way into the addition.
         let e_stream_out_ffn = cal::site_exponent(site(&calibration, &g("ffn_residual")));
         let e_moe_out = e_stream_out_ffn;
         let e_shared_gated = cal::site_exponent(site(&calibration, &g("ffn_shared_gated")));
-        let e_shared_out = cal::site_exponent(site(&calibration, &g("ffn_shared_out")));
+        let e_shared_out = cal::site_exponent(site(&calibration, &g("ffn_shared_out"))) + 15;
+        let e_shared_up = cal::site_exponent(site(&calibration, &g("ffn_shared_up")));
 
         measured.insert(g("ffn_norm.a16"), wire(&cal::norm_params(&post_gain, e_ffn_normed)));
         let (router_p, router_narrow, up_bits) =
@@ -616,13 +660,12 @@ fn main() {
                 .insert(format!("{b}_gate.weight.a16"), wire(&cal::to_qk_params(&scales[&format!("{b}_gate.weight")], e_ffn_normed)));
             measured.insert(
                 format!("{b}_up.weight.a16"),
-                wire(&cal::projection_params(&scales[&format!("{b}_up.weight")], e_ffn_normed, e_expert_gated)),
+                wire(&cal::projection_params(&scales[&format!("{b}_up.weight")], e_ffn_normed, e_expert_up)),
             );
-            measured.insert(format!("{b}_silu.a16"), wire(&vec![cal::rescale_params(K as i32, e_expert_gated); moe_dim]));
-            measured.insert(
-                format!("{b}_gated.a16"),
-                wire(&vec![cal::product_params(e_expert_gated, e_expert_gated, e_expert_gated); moe_dim]),
-            );
+            // Wide: the silu stays at Q[K] and the product narrows once.
+            measured.insert(format!("{b}_silu.a16"), wire(&vec![cal::rescale_params(K as i32, K as i32); moe_dim]));
+            measured
+                .insert(format!("{b}_gated.a16"), wire(&vec![cal::product_params(K as i32, e_expert_up, e_expert_gated); moe_dim]));
             measured.insert(
                 format!("{b}_down.weight.a16"),
                 wire(&cal::projection_params(&scales[&format!("{b}_down.weight")], e_expert_gated, e_expert_out)),
@@ -632,13 +675,11 @@ fn main() {
             .insert(format!("{sb}_gate.weight.a16"), wire(&cal::to_qk_params(&scales[&format!("{sb}_gate.weight")], e_ffn_normed)));
         measured.insert(
             format!("{sb}_up.weight.a16"),
-            wire(&cal::projection_params(&scales[&format!("{sb}_up.weight")], e_ffn_normed, e_shared_gated)),
+            wire(&cal::projection_params(&scales[&format!("{sb}_up.weight")], e_ffn_normed, e_shared_up)),
         );
-        measured.insert(format!("{sb}_silu.a16"), wire(&vec![cal::rescale_params(K as i32, e_shared_gated); shared_dim]));
-        measured.insert(
-            format!("{sb}_gated.a16"),
-            wire(&vec![cal::product_params(e_shared_gated, e_shared_gated, e_shared_gated); shared_dim]),
-        );
+        measured.insert(format!("{sb}_silu.a16"), wire(&vec![cal::rescale_params(K as i32, K as i32); shared_dim]));
+        measured
+            .insert(format!("{sb}_gated.a16"), wire(&vec![cal::product_params(K as i32, e_shared_up, e_shared_gated); shared_dim]));
         measured.insert(
             format!("{sb}_down.weight.a16"),
             wire(&cal::projection_params(&scales[&format!("{sb}_down.weight")], e_shared_gated, e_shared_out)),

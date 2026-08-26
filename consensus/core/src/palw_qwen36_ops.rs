@@ -44,9 +44,9 @@ pub const QWEN36_EXPERTS_PER_TOKEN: usize = 8;
 pub const QWEN36_MAX_ROUTED: usize = 64;
 
 const _: () = assert!(
-    QWEN36_MAX_ROUTED as i64 * ONE * A16_CODE_MAX < i64::MAX / 1024,
-    "the weighted combine accumulates k terms of (Q[K] weight × A16 code) in i64; past this the \
-     sum can overflow and the free reduction order stops holding"
+    QWEN36_MAX_ROUTED as i64 * ONE * (i32::MAX as i64) < i64::MAX / 4,
+    "the weighted combine accumulates k terms of (Q[K] weight × a WIDE i32 lane) in i64; past this \
+     the sum can overflow and the free reduction order stops holding"
 );
 
 /// One routed expert: which one, and the renormalized weight it carries in Q[`K`].
@@ -192,7 +192,14 @@ pub fn q36_moe_combine(outputs: &[i32], weights: &[i32], width: usize, params: A
     if k > QWEN36_MAX_ROUTED {
         return Err(PalwQwen36OpError::BadK { k, experts: k });
     }
-    check_a16(outputs)?;
+    // **The expert rows may be WIDE.** The combine is a cancellation — measured on Qwen3.6, the
+    // sum of eight expert outputs has a peak three and a half times below the individual rows —
+    // so narrowing each expert to sixteen bits before adding puts a large relative error on
+    // exactly the lanes the sum is small in. The accumulator is `i64` and `k` is bounded, so the
+    // bound is `k · ONE · i32::MAX < 2^63`, which is why `QWEN36_MAX_ROUTED` is 64 and not larger.
+    if outputs.is_empty() {
+        return Err(PalwQwen36OpError::Empty);
+    }
     let mut out = Vec::with_capacity(width);
     for lane in 0..width {
         let acc: i64 = (0..k).map(|e| weights[e] as i64 * outputs[e * width + lane] as i64).sum();
@@ -245,6 +252,110 @@ pub fn q36_gate_apply(y: &[i32], gate_q: &[i32], params: A16QuantParams) -> Resu
         .map(|(v, g)| {
             let acc = *v as i64 * *g as i64;
             a16_scale_round(acc, params.multiplier, params.shift).saturating_add(params.zero).clamp(-A16_CODE_MAX, A16_CODE_MAX) as i32
+        })
+        .collect())
+}
+
+// -------------------------------------------------------------------------------------------
+// Q4b. The wide pair — a rescale that does NOT narrow, and a product that multiplies before it
+// -------------------------------------------------------------------------------------------
+
+/// **Op Q4b: `RescaleRow` — a per-channel scale that stays wide.**
+///
+/// [`a16_requant`] ends at the A16 code grid, which is the right ending for a value that is about
+/// to be reduced over. It is the wrong ending for one that is about to be MULTIPLIED by another
+/// activation, and the difference is not small.
+///
+/// Measured on Qwen3.6's linear arm: the gate multiply's output has an rms thirteen times below
+/// the product of its factors' rms — the two rows are anticorrelated in magnitude, so each lane is
+/// a cancellation. Quantization error is uniform in absolute terms, so the lanes where one factor
+/// is small carry a large RELATIVE error, and those are exactly the lanes where the other factor
+/// is large. Narrowing both factors to sixteen bits first took that site from a cosine of 0.98
+/// against the float reference to 0.71; keeping them wide and narrowing once, after the multiply,
+/// is what this op and [`q36_mul_wide`] exist for.
+///
+/// Saturates at the `i32` rail rather than at the code rail, and nothing wraps.
+pub fn q36_rescale_row(x: &[i32], params: &[A16QuantParams]) -> Result<Vec<i32>, PalwQwen36OpError> {
+    if x.is_empty() {
+        return Err(PalwQwen36OpError::Empty);
+    }
+    if params.len() != x.len() {
+        return Err(PalwQwen36OpError::LengthMismatch { a: params.len(), b: x.len() });
+    }
+    Ok(x.iter()
+        .zip(params)
+        .map(|(v, p)| {
+            a16_scale_round(*v as i64, p.multiplier, p.shift).saturating_add(p.zero).clamp(i32::MIN as i64, i32::MAX as i64) as i32
+        })
+        .collect())
+}
+
+/// **Op Q4c: `MulWide` — the elementwise product of two WIDE rows, narrowed once.**
+///
+/// `a` and `b` are `i32` at whatever scales their sites carry; the product is formed in `i64` and
+/// the single narrowing puts it on the code grid. [`a16_mul_elem`] cannot do this: it requires
+/// both operands to be A16 codes, which is the rounding this op exists to avoid.
+///
+/// The bound is the types': two `i32` multiply into an `i64` with a bit to spare, and the tier's
+/// free reduction order does not apply here because there is no reduction — every lane is
+/// independent.
+pub fn q36_mul_wide(a: &[i32], b: &[i32], params: &[A16QuantParams]) -> Result<Vec<i32>, PalwQwen36OpError> {
+    if a.is_empty() {
+        return Err(PalwQwen36OpError::Empty);
+    }
+    if a.len() != b.len() {
+        return Err(PalwQwen36OpError::LengthMismatch { a: a.len(), b: b.len() });
+    }
+    if params.len() != a.len() {
+        return Err(PalwQwen36OpError::LengthMismatch { a: params.len(), b: a.len() });
+    }
+    Ok(a.iter()
+        .zip(b)
+        .zip(params)
+        .map(|((x, y), p)| {
+            let product = *x as i64 * *y as i64;
+            // `i64 · i64` would overflow; `i32 · i32` does not, and the scale is applied in `i128`
+            // by `a16_scale_round` so the narrowing cannot either.
+            a16_scale_round(product, p.multiplier, p.shift).saturating_add(p.zero).clamp(-A16_CODE_MAX, A16_CODE_MAX) as i32
+        })
+        .collect())
+}
+
+/// **Op Q4d: `RmsNormWide` — the RMS norm on a row that is not A16 codes.**
+///
+/// [`a16_rms_norm`] takes A16 codes and it is not being conservative: its `(sum_squares << K)`
+/// reaches `2^39` at 128 lanes of `32767²`, which is the top of an `i64`. So sixteen bits is not a
+/// convention there, it is the width the op's arithmetic admits — and it caps the precision of
+/// anything whose only consumer is a norm.
+///
+/// The recurrence's output is exactly that: it is normalized per head immediately and never
+/// reduced across heads, so it wants the `i32` rail it already lives on. This computes the sum of
+/// squares in `i128`, brings it into `int_rsqrt`'s domain by an even shift (which scales the
+/// reciprocal square root by a known power of two), and undoes that on the product.
+///
+/// `eps_q` is at the same scale as the mean of squares, exactly as in [`a16_rms_norm`].
+pub fn q36_rms_norm_wide(x: &[i32], eps_q: i64) -> Result<Vec<i32>, PalwQwen36OpError> {
+    if x.is_empty() {
+        return Err(PalwQwen36OpError::Empty);
+    }
+    let n = x.len() as i128;
+    let mut sum: i128 = x.iter().map(|v| (*v as i128) * (*v as i128)).sum();
+    // `mean_q = (sum << K) / n` must fit an `i64`. Shifting `sum` right by two multiplies the
+    // reciprocal square root by two, which is undone on the product below.
+    let mut halvings = 0u32;
+    while ((sum << K) / n) > i64::MAX as i128 {
+        sum >>= 2;
+        halvings += 1;
+        if halvings > 31 {
+            return Err(PalwQwen36OpError::Empty);
+        }
+    }
+    let mean_q = ((sum << K) / n) as i64;
+    let r = int_rsqrt(mean_q.saturating_add(eps_q));
+    Ok(x.iter()
+        .map(|v| {
+            let scaled = ((*v as i128) * (r as i128)) >> halvings;
+            scaled.clamp(i32::MIN as i128, i32::MAX as i128) as i32
         })
         .collect())
 }
@@ -376,6 +487,37 @@ pub fn q36_int_ln(x: i64) -> Option<i64> {
     Some(2 * sum + s * LN2_Q as i64)
 }
 
+/// **Op Q6b: `ExpRefined` — `e^x` for `x ≤ 0`, corrected by the logarithm.**
+///
+/// The frozen `int_exp` is a quadratic and is up to 3.0e-3 relative — measured, worst near
+/// `x = −0.53`. `q36_int_ln` is 1e-7. One Newton step in the direction that has the accurate
+/// function therefore works where the one inside `q36_int_ln` did not:
+///
+/// ```text
+/// y ← y · (1 + (x − ln y))
+/// ```
+///
+/// `ln y` carries `int_exp`'s error into a quantity `x` is exact in, so the correction IS that
+/// error and applying it squares it. This is the same lesson as the removed refinement in
+/// `q36_int_ln`, read the other way round: refine with the accurate function, not with the one
+/// being refined.
+///
+/// It matters because the recurrence's decay is `u^c` and a 3e-3 error in a decay compounds:
+/// eight positions of `decay^8` turn it into 2.4 %, which lands in the state and then in
+/// everything the arm produces.
+pub fn q36_exp_refined(x: i32) -> i64 {
+    let y0 = int_exp(x) as i64;
+    if y0 <= 0 {
+        return 0;
+    }
+    let Some(ln_y) = q36_int_ln(y0) else { return y0 };
+    // `x − ln y` in Q[K]; small by construction, and clamped so a pathological input cannot turn
+    // a correction into an amplification.
+    let correction = (x as i64 - ln_y).clamp(-(ONE / 4), ONE / 4);
+    let adjusted = (y0 as i128) + ((y0 as i128 * correction as i128) >> K);
+    adjusted.clamp(0, ONE as i128) as i64
+}
+
 /// **Op Q7: `PowQ` — `u^c` for `u ∈ (0, 1]` and a registered non-negative `c`, in Q[`K`].**
 ///
 /// `exp(c · ln u)`, which is the decay gate once the identity above is applied. `u = ONE` returns
@@ -403,7 +545,7 @@ pub fn q36_pow_q(u: i64, c: i64) -> i64 {
     // enough to one that `c * ln u` rounds away, which on real weights is a head whose `dt` is
     // strongly negative. The first run of this on a real checkpoint refused at the very first
     // GatedDeltaNet head for exactly that reason.
-    (int_exp(arg) as i64).clamp(0, ONE)
+    q36_exp_refined(arg).clamp(0, ONE)
 }
 
 // -------------------------------------------------------------------------------------------
@@ -519,7 +661,9 @@ pub const QWEN36_STATE_MULT_MAX: i64 = 1 << 30;
 
 const _: () = assert!(
     QWEN36_STATE_MAX * QWEN36_STATE_MULT_MAX < i64::MAX / 2,
-    "every state product is formed in i64; past this the recurrence wraps and the wrap is silent"
+    "the decay and the rank-one write form their products in i64; past this the recurrence wraps \
+     and the wrap is silent. The read and the output are i128 because their operand is a SUM over \
+     d_k and reaches 2^53, which this bound does not cover"
 );
 
 /// `round(x · m / 2^shift)`, half away from zero, in `i64` rather than `i128`.
@@ -644,7 +788,16 @@ pub fn q36_gdn_step(
     let mut u = Vec::with_capacity(d_v);
     for (row, vi) in state.s.chunks_exact(d_k).zip(v) {
         let acc: i64 = row.iter().zip(k).map(|(a, b)| *a as i64 * *b as i64).sum();
-        let w = state_scale(acc, params.read.multiplier, params.read.shift).saturating_add(params.read.zero);
+        // **`i128` here, `i64` in the decay and the write.** `acc` is a sum over `d_k` of
+        // `state × key`, which reaches `2^53` — multiplying that by a `2^30` scale overflows an
+        // `i64`, and the overflow is silent. The decay and the rank-one write stay `i64` because
+        // they are the `d_v · d_k` sites, 15.7 million per token at this geometry, where a `i128`
+        // narrowing is the whole token; the read and the output are `d_v` sites, 128 per head, and
+        // the width there costs nothing.
+        //
+        // Found by widening the state to the `i32` rail it lives on: the arm's output went to a
+        // cosine of 0.007 against the reference, which is what a wrapped accumulator looks like.
+        let w = a16_scale_round(acc, params.read.multiplier, params.read.shift).saturating_add(params.read.zero);
         // 3. `u = beta * (v - w)`, in v's units and on the code grid.
         let delta = (*vi as i64).saturating_sub(w);
         let scaled = rounding_shift_right_64(delta.saturating_mul(beta_q), K as u8);
@@ -670,9 +823,12 @@ pub fn q36_gdn_step(
         .chunks_exact(d_k)
         .map(|row| {
             let acc: i64 = row.iter().zip(q).map(|(a, b)| *a as i64 * *b as i64).sum();
-            state_scale(acc, params.out.multiplier, params.out.shift)
+            // **Wide out.** The row that leaves the recurrence is normalized per head by
+            // `q36_rms_norm_wide` and never reduced across heads, so narrowing it to the A16 code
+            // rail would throw away fifteen bits for nothing.
+            a16_scale_round(acc, params.out.multiplier, params.out.shift)
                 .saturating_add(params.out.zero)
-                .clamp(-A16_CODE_MAX, A16_CODE_MAX) as i32
+                .clamp(i32::MIN as i64, i32::MAX as i64) as i32
         })
         .collect())
 }
@@ -730,6 +886,35 @@ mod tests {
         assert_eq!(q36_int_ln(-5), None);
         // ln 1 = 0 exactly, which the series gives without help.
         assert_eq!(q36_int_ln(ONE), Some(0));
+    }
+
+    /// **The refined exponential beats the frozen one, and by the margin the argument predicts.**
+    #[test]
+    fn the_refined_exponential_is_more_accurate_than_the_frozen_one() {
+        let mut worst_raw = 0f64;
+        let mut worst_refined = 0f64;
+        for step in 0..2000i64 {
+            let x = -(step * ONE / 200);
+            if x < i32::MIN as i64 {
+                break;
+            }
+            let want = (x as f64 / ONE as f64).exp();
+            let raw = int_exp(x as i32) as f64 / ONE as f64;
+            let refined = q36_exp_refined(x as i32) as f64 / ONE as f64;
+            if want > 1e-9 {
+                worst_raw = worst_raw.max((raw - want).abs() / want);
+                worst_refined = worst_refined.max((refined - want).abs() / want);
+            }
+        }
+        assert!(worst_raw > 1e-3, "the frozen exponential is supposed to be the loose one, got {worst_raw}");
+        // Measured: 3.5e-3 becomes 1.2e-3, a factor of 2.8. Not the squaring a Newton step gives
+        // on a smooth function, because the correction is itself quantized at Q[K] and `q36_int_ln`
+        // contributes its own units — but it is the accuracy the decay gate compounds over
+        // positions, so it is worth the two extra calls.
+        assert!(worst_refined < worst_raw / 2.0, "refining must be worth doing: {worst_refined} against {worst_raw}");
+        // And the identities survive it.
+        assert_eq!(q36_exp_refined(0).min(ONE), ONE.min(q36_exp_refined(0)));
+        assert!(q36_exp_refined(i32::MIN) >= 0);
     }
 
     /// The power the decay gate is. `c = 0` and `u = 1` are the identities and must be exact.
