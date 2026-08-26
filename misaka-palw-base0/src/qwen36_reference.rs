@@ -223,7 +223,6 @@ pub fn reference_linear_layer(
     let g = |s: &str| format!("blk.{li}.{s}");
     let (d, dk, dv, hd) = (shape.d_model, shape.linear_k_dim(), shape.linear_v_dim(), shape.linear_head_dim);
     let width = 2 * dk + dv;
-    let group = shape.linear_v_heads / shape.linear_k_heads;
 
     for h in positions.iter_mut() {
         let normed = rms_norm(h, w.attn_norm, eps);
@@ -271,7 +270,11 @@ pub fn reference_linear_layer(
         let mut state_crest: Vec<f32> = Vec::with_capacity(shape.linear_v_heads);
         let mut delta_crest: Vec<f32> = Vec::with_capacity(shape.linear_v_heads);
         for vh in 0..shape.linear_v_heads {
-            let kh = vh / group;
+            // **The key head a value head reads is `vh % n_k`, not `vh / (n_v/n_k)`.** Thirty-two
+            // value heads over sixteen key heads tile rather than group: head 0 and head 16 share
+            // key head 0, not heads 0 and 1. Getting it the other way round pairs every value head
+            // with the wrong key from layer 0 onward.
+            let kh = vh % shape.linear_k_heads;
             let k = l2_norm(&kc[kh * hd..(kh + 1) * hd]);
             // The delta rule scales the query by `1/√d_k`, like any scaled dot product.
             let scale = 1.0 / (hd as f32).sqrt();

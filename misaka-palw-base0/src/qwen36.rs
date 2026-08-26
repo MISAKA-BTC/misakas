@@ -543,12 +543,13 @@ impl<'a> Qwen36Engine<'a> {
             if rows.len() == 1 { rows[0] } else { rows[vh.min(rows.len() - 1)] }
         };
 
-        let group = s.linear_v_heads / s.linear_k_heads;
         let mut out = Vec::with_capacity(dv);
         let mut decays: Vec<i32> = Vec::with_capacity(s.linear_v_heads);
         let mut betas: Vec<i32> = Vec::with_capacity(s.linear_v_heads);
         for vh in 0..s.linear_v_heads {
-            let kh = vh / group;
+            // `vh % n_k`, not `vh / (n_v/n_k)`: the heads tile, they do not group. See the
+            // reference for what the other reading costs.
+            let kh = vh % s.linear_k_heads;
             let unit_k = q36_l2_norm(&kc[kh * hd..(kh + 1) * hd]).map_err(refuse("l2_k"))?;
             let unit_q = q36_l2_norm(&qc[kh * hd..(kh + 1) * hd]).map_err(refuse("l2_q"))?;
             let vslice = &vc[vh * hd..(vh + 1) * hd];

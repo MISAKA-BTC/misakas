@@ -210,6 +210,7 @@ fn wire(rows: &[A16QuantParams]) -> Vec<u8> {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    let reference_only = args.iter().any(|a| a == "--reference-only");
     let out_path = flag(&args, "--out")
         .unwrap_or_else(|| die("usage: qwen36-convert (--gguf FILE | --url URL --header FILE) --out FILE [--layers N]".into()));
     let layer_cap: Option<usize> = flag(&args, "--layers").and_then(|v| v.parse().ok());
@@ -472,7 +473,9 @@ fn main() {
     // Per row, which is per token: one scale for the whole table is one scale for its outliers,
     // and the ordinary rows a prompt actually uses then start on a fraction of the int8 range.
     let (embed_codes, embed_scales) = quantize_rows(&embed_f, vocab);
-    writer.push("token_embd.weight", &embed_codes).unwrap_or_else(|e| die(format!("token_embd: {e}")));
+    if !reference_only {
+        writer.push("token_embd.weight", &embed_codes).unwrap_or_else(|e| die(format!("token_embd: {e}")));
+    }
     drop(embed_codes);
     let mut h: Vec<Vec<f32>> = prompt.iter().map(|t| embed_f[t * d..(t + 1) * d].to_vec()).collect();
     drop(embed_f);
@@ -492,8 +495,14 @@ fn main() {
         let mut scales: BTreeMap<String, Vec<f64>> = BTreeMap::new();
         let push = |writer: &mut Qwen36Writer, scales: &mut BTreeMap<String, Vec<f64>>, name: &str, values: &[f32], out_dim: usize| {
             let (codes, exps, s) = quantize_rows_grouped(values, out_dim);
-            writer.push(name, &codes).unwrap_or_else(|e| die(format!("writing {name}: {e}")));
-            writer.push(&format!("{name}.exp"), &exps).unwrap_or_else(|e| die(format!("writing {name}.exp: {e}")));
+            // **`--reference-only` still quantizes.** The row scales are what the calibration
+            // derives its triples from, so skipping the quantization would measure a different
+            // thing; what it skips is the 33 GiB of writing, which is the whole cost of a run whose
+            // question is only whether the f32 reference behaves like a language model.
+            if !reference_only {
+                writer.push(name, &codes).unwrap_or_else(|e| die(format!("writing {name}: {e}")));
+                writer.push(&format!("{name}.exp"), &exps).unwrap_or_else(|e| die(format!("writing {name}.exp: {e}")));
+            }
             scales.insert(name.to_string(), s);
         };
 
@@ -511,7 +520,9 @@ fn main() {
                     // Per row: the taps are read as raw codes by `q36_ssm_conv`, which applies no
                     // group exponent.
                     let (codes, sc) = quantize_rows(&conv, width);
-                    writer.push(&g("linear_conv.weight"), &codes).unwrap_or_else(|e| die(format!("linear_conv: {e}")));
+                    if !reference_only {
+                        writer.push(&g("linear_conv.weight"), &codes).unwrap_or_else(|e| die(format!("linear_conv: {e}")));
+                    }
                     scales.insert(g("linear_conv.weight"), sc);
                 }
                 let alpha = reader.get(&g("ssm_alpha.weight"));
@@ -695,11 +706,24 @@ fn main() {
                 e_stream = e_stream_out;
             }
             Qwen36LayerKind::FullAttention => {
-                // The rotated projections are permuted into the pinned table's pairing; the gate
-                // half of `attn_q` is not rotated and keeps the checkpoint's order.
-                let q_raw = reader.get(&g("attn_q.weight"));
-                let mut q = permute_rotary_rows(&q_raw[..q_dim * d], q_dim, d, head_dim, rotary_dim);
-                q.extend_from_slice(&q_raw[q_dim * d..]);
+                // **`attn_q` is query and gate INTERLEAVED per head, not two halves.** Head `h`
+                // owns rows `[512h, 512h+256)` for the query and `[512h+256, 512h+512)` for the
+                // gate. Reading it as a contiguous 4,096-row query followed by a 4,096-row gate
+                // gives head 0 the right query, head 1 head 0's gate, and so on — every head after
+                // the first mixes the two. It does not fail; it produces a model that predicts at
+                // chance, which is what the whole-model reference did before this.
+                let fused = reader.get(&g("attn_q.weight"));
+                let mut q_rows = Vec::with_capacity(q_dim * d);
+                let mut gate_rows = Vec::with_capacity(q_dim * d);
+                for h in 0..n_heads {
+                    let base = 2 * h * head_dim * d;
+                    q_rows.extend_from_slice(&fused[base..base + head_dim * d]);
+                    gate_rows.extend_from_slice(&fused[base + head_dim * d..base + 2 * head_dim * d]);
+                }
+                // The rotated projection is permuted into the pinned table's pairing; the gate is
+                // not rotated and keeps the checkpoint's order.
+                let mut q = permute_rotary_rows(&q_rows, q_dim, d, head_dim, rotary_dim);
+                q.extend_from_slice(&gate_rows);
                 push(&mut writer, &mut scales, &g("attn_q.weight"), &q[..q_dim * d], q_dim);
                 push(&mut writer, &mut scales, &g("attn_gate.weight"), &q[q_dim * d..], q_dim);
                 let k = permute_rotary_rows(&reader.get(&g("attn_k.weight")), kv_dim, d, head_dim, rotary_dim);
@@ -876,8 +900,10 @@ fn main() {
     let output_norm = reader.get("output_norm.weight");
     let output = reader.get("output.weight");
     let (codes, out_exps, out_scales) = quantize_rows_grouped(&output, vocab);
-    writer.push("output.weight", &codes).unwrap_or_else(|e| die(format!("output.weight: {e}")));
-    writer.push("output.weight.exp", &out_exps).unwrap_or_else(|e| die(format!("output.weight.exp: {e}")));
+    if !reference_only {
+        writer.push("output.weight", &codes).unwrap_or_else(|e| die(format!("output.weight: {e}")));
+        writer.push("output.weight.exp", &out_exps).unwrap_or_else(|e| die(format!("output.weight.exp: {e}")));
+    }
     drop(codes);
     drop(out_exps);
     reference::reference_head(&shape, &mut calibration, &output_norm, &output, &h, eps);
@@ -887,13 +913,19 @@ fn main() {
     measured.insert("final_norm.a16".into(), wire(&cal::norm_params(&output_norm, e_final)));
     measured.insert("output.weight.a16".into(), wire(&cal::projection_params(&out_scales, e_final, e_logits)));
 
-    let written = writer.finish_with_params(&measured).unwrap_or_else(|e| die(format!("closing {out_path}: {e}")));
-    println!(
-        "wrote {out_path}: {:.2} GiB in {:?} ({} sites calibrated)",
-        written as f64 / (1u64 << 30) as f64,
-        started.elapsed(),
-        measured.len()
-    );
+    if reference_only {
+        drop(writer);
+        let _ = std::fs::remove_file(out_path);
+        println!("reference-only: {} sites calibrated in {:?}, nothing written", measured.len(), started.elapsed());
+    } else {
+        let written = writer.finish_with_params(&measured).unwrap_or_else(|e| die(format!("closing {out_path}: {e}")));
+        println!(
+            "wrote {out_path}: {:.2} GiB in {:?} ({} sites calibrated)",
+            written as f64 / (1u64 << 30) as f64,
+            started.elapsed(),
+            measured.len()
+        );
+    }
 
     // The reference's measured ranges, for comparing a run's magnitudes against them site by site.
     if let Some(path) = flag(&args, "--dump-sites") {
@@ -922,6 +954,33 @@ fn main() {
     }
 
     // The reference's own logits, for a fidelity check against a run of the artifact.
+    // **Does the f32 reference predict the text it was given?**
+    //
+    // Every other measurement in this tool compares the integer engine against this reference, and
+    // a reference that is wrong about the architecture takes the engine with it — silently, because
+    // both sides share the mistake and every per-site cosine reads 1.000. The only check that sees
+    // through that is whether the model behaves like a language model: the token that actually
+    // follows position `i` should be near the top of row `i`. At chance it sits at rank
+    // `vocab / 2`, which is what a mislaid tensor layout produces and what nothing else caught.
+    if !calibration.logits.is_empty() {
+        let (mut top1, mut ranks) = (0usize, Vec::new());
+        for (i, row) in calibration.logits.iter().enumerate() {
+            let Some(next) = prompt.get(i + 1).copied() else { break };
+            let Some(&value) = row.get(next) else { break };
+            let rank = row.iter().filter(|v| **v > value).count();
+            top1 += usize::from(rank == 0);
+            ranks.push(rank);
+        }
+        ranks.sort_unstable();
+        let median = ranks.get(ranks.len() / 2).copied().unwrap_or(0);
+        println!(
+            "reference next-token: top-1 {top1}/{} ({:.1} %), median rank {median} of {vocab} — chance is {}",
+            ranks.len(),
+            100.0 * top1 as f64 / ranks.len().max(1) as f64,
+            vocab / 2
+        );
+    }
+
     if let Some(path) = flag(&args, "--reference-logits") {
         let mut out = Vec::with_capacity(calibration.logits.len() * vocab * 4 + 8);
         out.extend_from_slice(&(calibration.logits.len() as u64).to_le_bytes());
