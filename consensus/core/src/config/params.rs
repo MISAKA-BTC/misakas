@@ -2463,12 +2463,14 @@ pub fn palw_rc_params_with_qwen36(
 /// to be handed a correct copy of.
 ///
 /// `the_pinned_rc_artifact_root_is_the_one_the_floor_derives` (in `misaka-palw-base0`, which is the
-/// only crate that can hold both sides) fails if either side moves.
+/// only crate that can hold both sides) fails if either side moves — and it did: the floor's
+/// `vocab_size` and `n_ctx` are chosen by the court's cost ceiling now (ADR-0049 Decision C), so
+/// every weight byte the seed produces moved with them.
 pub const PALW_RC_GENESIS_ARTIFACT_ROOT: crate::Hash64 = crate::Hash64::from_bytes([
-    0x20, 0x4f, 0xea, 0x77, 0x88, 0xfd, 0x4c, 0x2d, 0xc2, 0x08, 0x12, 0xd0, 0xc0, 0x7e, 0x0a, 0xa3, 0xb9, 0xed, 0xea, 0x60, 0xba,
-    0xa7, 0xc8, 0x9f, 0x74, 0x1b, 0xf9, 0x95, 0xbc, 0x60, 0x44, 0xab, 0x13, 0x0c, 0xe2, 0x5c, 0xe6, 0xce, 0x55, 0x64, 0x54, 0xac,
-    0xf7, 0x96, 0xa7, 0x6e, 0xa0, 0xbc, 0x75, 0xe8, 0xd1, 0xc0, 0x8c, 0xd6, 0xf4, 0xde, 0xcc, 0x8c, 0xd9, 0xaa, 0xac, 0x66, 0xaf,
-    0xfd,
+    0xbc, 0xf2, 0xd9, 0xeb, 0x73, 0x57, 0xbd, 0x6c, 0x26, 0x7d, 0xf2, 0xdf, 0x65, 0x88, 0x39, 0x3c, 0xa7, 0x1c, 0x67, 0xd7, 0xc8,
+    0x02, 0x90, 0x3c, 0xa7, 0x03, 0x19, 0x48, 0x30, 0x3c, 0x79, 0x3d, 0xcb, 0x78, 0xbf, 0xe2, 0x64, 0x88, 0xf5, 0x2d, 0x03, 0x93,
+    0xbe, 0x08, 0xe0, 0xcc, 0x07, 0x77, 0xb0, 0x80, 0xe2, 0xdc, 0xe9, 0x35, 0x5d, 0x35, 0x76, 0x03, 0x6b, 0x73, 0x45, 0x45, 0xb8,
+    0xdf,
 ]);
 
 /// **The genesis bond — the three facts code cannot mint, and does not pretend to.**
@@ -4651,7 +4653,14 @@ mod consensus_params_id_tests {
             // close price, carried so the BOOT gate enforces the ceilings a genesis-minted class
             // previously bypassed. The catalog root is inside the ruleset id, so asserting more
             // about a class moves the network's identity, as it must.
-            ("testnet-11", TESTNET11_PARAMS, "40f8599b051a04b6f351793669b6c0ff7a7c313fba6be39f8d6c7e063ca52069"),
+            //
+            // And once more for the ceilings themselves, which is what that `court_cost` is a
+            // price against: `PalwCourtParamsV2::max_close_bytes` is 80 KiB — derived from what a
+            // standard transaction can carry rather than left at a generous default — and
+            // `PALW_RC_BASE0_GEOMETRY` is `vocab_size` 1,024 / `n_ctx` 12, because at 4,096/512 the
+            // floor's own closes were megabytes and no block could carry them. The geometry is the
+            // class id, the class id is in the catalog root, and the catalog root is in the bundle.
+            ("testnet-11", TESTNET11_PARAMS, "PENDING_REDERIVE"),
             ("simnet", SIMNET_PARAMS, "135e88c69a659d3cf4b5ce8275953c7597b2c67b03d2a74b3d0696c5d0b703fa"),
             ("devnet", DEVNET_PARAMS, "42cc6be92506a14654cb676184e1416796dec682b15e93cb9c639e8e0d77efa5"),
         ]

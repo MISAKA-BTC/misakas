@@ -50,6 +50,22 @@ const MAXIMUM_STANDARD_SIGNATURE_SCRIPT_SIZE: u64 = 16_384;
 /// block budget to preserve an anti-monopolization margin; it is devnet-generous here.
 const MAXIMUM_STANDARD_TRANSACTION_MASS: u64 = 480_000;
 
+/// **The PALW court's close ceiling is derived from the constant above** (ADR-0049 Decision C):
+/// a court close rides one lifecycle transaction, so the largest close that can be RAISED is what
+/// a standard transaction can carry. `kaspa-consensus-core` cannot see a private constant in this
+/// crate, so it mirrors the value; this is the guard that keeps the mirror honest, placed on the
+/// side that owns the number rather than the side that copies it.
+#[test]
+fn the_palw_close_ceiling_mirror_is_the_real_limit() {
+    assert_eq!(
+        kaspa_consensus_core::palw_mode_v2::PALW_MIRRORED_STANDARD_TX_MASS,
+        MAXIMUM_STANDARD_TRANSACTION_MASS,
+        "the PALW close ceiling is derived from this limit; moving it moves what a dispute can carry, \
+         and `DEFAULT_MAX_CLOSE_BYTES` must be re-derived (it is inside `palw_ruleset_id_v2`, so that \
+         is a new network, not an edit)"
+    );
+}
+
 impl Mempool {
     pub(crate) fn check_transaction_standard_in_isolation(&self, transaction: &MutableTransaction) -> NonStandardResult<()> {
         let transaction_id = transaction.id();

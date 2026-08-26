@@ -164,13 +164,26 @@ against an adjudication contract that does not close. Gate 0 is its precondition
 ## The two decisions that expire
 
 Everything else can be fixed later. These cannot, because they are inside `palw_ruleset_id_v2` and
-therefore inside the network's identity:
+therefore inside the network's identity. **Both are closed as of 2026-08-26** — each is a refusal in
+`assemble_palw_rc_identity_v2` rather than a value an operator may type:
 
 1. **the court ladder** — already gated: `assemble_palw_rc_identity_v2` refuses any
    `max_step_leaf_count` but `PALW_STEP_MAX_LEAVES`. Four extra bisection rounds buys every class
    that could ever be adjudicable.
-2. **the four cost ceilings** (2.1) — not yet gated. Too small forecloses classes; too large admits
-   a proof nobody can verify in time.
+2. **the four cost ceilings** (2.1) — **gated 2026-08-26**, and the number is derived rather than
+   chosen. A close rides one lifecycle transaction, transient mass is `size × 4` against a 480,000
+   standard limit, so the largest close that can be RAISED is 120,000 bytes minus its carrier:
+   `DEFAULT_MAX_CLOSE_BYTES` is 80 KiB and `assemble_palw_rc_identity_v2` gate 6 refuses an RC
+   identity carrying anything else.
+
+   Two things had to be true first, and neither was. **The ceiling was on the wrong quantity** — it
+   counted the artifact opening, and a real close of the shipped floor at a 64/64 job weighs 750,716
+   bytes against a derived 32,768, the difference being the KV history and the generated-token pin.
+   And **the floor could not pass it**: at `vocab_size` 4,096 / `n_ctx` 512 the network's own liveness
+   class was unprosecutable at its longest jobs, so the geometry is 1,024 / 12 now, at 75% of the
+   ceiling. See ADR-0049 Decision C's 2026-08-26 amendment for the arithmetic and for what it
+   forecloses (nothing that was ever carriable: Qwen2.5's cheapest close is 1.2 MB at every tile,
+   because one logits row is four times a transaction).
 
 ## What is safe to say today, revised
 

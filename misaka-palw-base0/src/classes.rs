@@ -301,6 +301,24 @@ mod tests {
         PalwCourtParamsV2::new(kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES, 4, 2).expect("shipped court")
     }
 
+    /// The full ladder with no cost ceiling — the court a Qwen entry needs to exist at all.
+    ///
+    /// Under the SHIPPED ceilings there is no admissible Qwen geometry (`max_close_bytes` counts
+    /// what a close costs to carry, and one 128,256-lane logits row is four times a standard
+    /// transaction), so the registry has no Qwen row and the tests that describe one have to say
+    /// which court they are describing.
+    fn ladder_only_court() -> PalwCourtParamsV2 {
+        PalwCourtParamsV2::with_cost_ceilings(
+            kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES,
+            4,
+            2,
+            u64::MAX,
+            u64::MAX,
+            u32::MAX,
+        )
+        .expect("a court that refuses only on depth is legal")
+    }
+
     /// **The registry is the only arithmetic there is.** Every entry's artifact shape carries the
     /// epsilon its own profile was built with — the split this module exists to close would show
     /// up here as a mismatch between the two.
@@ -325,17 +343,29 @@ mod tests {
         }
     }
 
-    /// Qwen2.5-1.5B is present and is registered at the ADMISSIBLE geometry, not the model's own —
-    /// and its epsilon is the constant's `1`, which is what the converter must now build at.
+    /// Qwen2.5-1.5B is registered at the ADMISSIBLE geometry, not the model's own — and its
+    /// epsilon is the constant's `1`, which is what the converter must now build at.
+    ///
+    /// **The shipped court has no such entry at all**, and that is asserted first: the registry is
+    /// a function of the court, and a class whose closes no transaction can carry is one the
+    /// registry must not offer a converter a target for.
     #[test]
     fn the_qwen_entry_is_the_admissible_one() {
-        let c = canonical_class_by_model_id_v1(&court(), "Qwen/Qwen2.5-1.5B").expect("1.5B is in the registry");
-        assert_eq!(c.artifact_shape.eps_q, 1, "the canonical epsilon is the class constant's, not the floor's 1<<8");
-        assert_eq!(c.inventory_geometry.tile_len, 64);
-        assert_eq!(
-            c.artifact_shape.max_position, 90,
-            "the admissible context under the projected 38-node graph, not the model's 4096"
+        assert!(
+            canonical_class_by_model_id_v1(&court(), "Qwen/Qwen2.5-1.5B").is_none(),
+            "the shipped court's cost ceiling admits no Qwen geometry, so the registry must not carry one"
         );
+        let c = canonical_class_by_model_id_v1(&ladder_only_court(), "Qwen/Qwen2.5-1.5B").expect("1.5B is in the registry");
+        assert_eq!(c.artifact_shape.eps_q, 1, "the canonical epsilon is the class constant's, not the floor's 1<<8");
+        // The pair is the COURT's answer, not a literal — `qwen25_admissible_geometry_v1` searches
+        // it, and pinning one side of a search is how a fixture stops describing the thing it
+        // resolves. Under a ladder-only court the widest context wins, which is a different pair
+        // from the one a cost-bounded court would pick.
+        let derived = kaspa_consensus_core::palw_qwen25_profile::qwen25_admissible_geometry_v1(QWEN25_1_5B, &ladder_only_court())
+            .expect("the ladder admits a pair");
+        assert_eq!(c.inventory_geometry.tile_len, derived.tile_len);
+        assert_eq!(c.artifact_shape.max_position, derived.n_ctx as usize);
+        assert!(derived.n_ctx < QWEN25_1_5B.n_ctx, "the context still shrinks against the model's own 4096");
         assert_eq!(c.artifact_shape.n_kv_heads, 2, "grouped-query attention survives into the artifact shape");
         assert_eq!(c.source, ArtifactSourceV1::Converted);
     }
@@ -377,8 +407,8 @@ mod tests {
     /// "resolution failed" on a node with several artifacts loaded is not actionable.
     #[test]
     fn a_converted_class_with_no_artifact_names_itself() {
-        let c = canonical_class_by_model_id_v1(&court(), "Qwen/Qwen2.5-1.5B").expect("1.5B");
-        match resolve_class_v1(&court(), c.class_id(), Hash64::from_u64_word(1), &[]) {
+        let c = canonical_class_by_model_id_v1(&ladder_only_court(), "Qwen/Qwen2.5-1.5B").expect("1.5B");
+        match resolve_class_v1(&ladder_only_court(), c.class_id(), Hash64::from_u64_word(1), &[]) {
             Err(ClassResolveError::NoArtifact { model_id }) => assert_eq!(model_id, "Qwen/Qwen2.5-1.5B"),
             other => panic!("expected NoArtifact, got {other:?}"),
         }

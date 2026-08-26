@@ -153,10 +153,10 @@ pub enum PalwCourtV2Error {
     )]
     TooManyOperands { got: u64, ceiling: u64 },
     #[error(
-        "the close's openings carry {got} bytes; the ruleset admits at most {ceiling} \
+        "the close carries {got} bytes of evidence; the ruleset admits at most {ceiling} \
          (ADR-0049 Decision C — the cost bound is what makes 'a full node can close this court' true)"
     )]
-    OpeningTooLarge { got: u64, ceiling: u64 },
+    CloseTooLarge { got: u64, ceiling: u64 },
 }
 
 /// May THIS `CourtOpened` object be accepted at THIS chain point?
@@ -473,24 +473,22 @@ pub fn adjudicate_close_proof_v2(
 /// million openings, and every validating node would verify every Merkle path before the
 /// adjudication refused it on the merits.
 ///
-/// A pure function of the object, so it needs no chain state and costs two length comparisons.
+/// A pure function of the object, so it needs no chain state and costs a walk over lengths — no
+/// re-encoding, no hashing, nothing that could itself be the expensive thing a cost bound exists
+/// to avoid paying.
 pub fn check_close_cost_v2(
     proof: &PalwCourtVerdictProofV2,
     court: &crate::palw_mode_v2::PalwCourtParamsV2,
 ) -> Result<(), PalwCourtV2Error> {
     let operand_openings: &[PalwArtifactOpeningV1] = match proof {
         PalwCourtVerdictProofV2::Arithmetic { operand_openings, .. } => operand_openings,
-        // A decode-token close opens nothing; its whole payload is the pin, bounded here by the
-        // same byte ceiling an opening set answers to — the cost of a close is the cost of a
-        // close, whichever arm carries it.
+        // A decode-token close opens nothing from the artifact; its whole payload is the pin,
+        // measured by the same byte ceiling an opening set answers to — the cost of a close is the
+        // cost of a close, whichever arm carries it.
         PalwCourtVerdictProofV2::DecodeToken { pin, .. } => {
-            let bytes: u64 = pin
-                .logits_rows
-                .iter()
-                .map(|row| row.len() as u64 * 4)
-                .fold(pin.generated_token_ids.len() as u64 * 4, |a, b| a.saturating_add(b));
-            if bytes > court.max_opening_bytes() {
-                return Err(PalwCourtV2Error::OpeningTooLarge { got: bytes, ceiling: court.max_opening_bytes() });
+            let bytes = base0_decode_bytes_v2(pin);
+            if bytes > court.max_close_bytes() {
+                return Err(PalwCourtV2Error::CloseTooLarge { got: bytes, ceiling: court.max_close_bytes() });
             }
             return Ok(());
         }
@@ -514,17 +512,75 @@ pub fn check_close_cost_v2(
     if count > operand_ceiling {
         return Err(PalwCourtV2Error::TooManyOperands { got: count, ceiling: operand_ceiling });
     }
-    // The opened BYTES, which is what a node pays to hold and to hash. Merkle path elements are
-    // counted with them: a path element is 64 bytes a peer chose, and an opening whose path is
-    // longer than its payload is still an opening someone has to walk.
-    let bytes: u64 = operand_openings
-        .iter()
-        .map(|o| o.operand.bytes.len() as u64 + (o.path.len() as u64) * 64)
-        .fold(0u64, |a, b| a.saturating_add(b));
-    if bytes > court.max_opening_bytes() {
-        return Err(PalwCourtV2Error::OpeningTooLarge { got: bytes, ceiling: court.max_opening_bytes() });
+    // **The whole close, not the artifact half of it.**
+    //
+    // A path element is 64 bytes a peer chose, so paths are counted with the payload they prove.
+    // So is the REFUTATION: its input openings are the KV history of the disputed step, and on the
+    // shipped floor they are twenty-three times the weight bytes beside them (750,716 against
+    // 32,768 at a 64/64 job). A ceiling that saw only the artifact half admitted classes whose
+    // evidence could not be mined and called them adjudicable.
+    let bytes = arithmetic_close_bytes_v2(proof).unwrap_or(u64::MAX);
+    if bytes > court.max_close_bytes() {
+        return Err(PalwCourtV2Error::CloseTooLarge { got: bytes, ceiling: court.max_close_bytes() });
     }
     Ok(())
+}
+
+/// One step opening: the siblings a verifier must hash, at 64 bytes each.
+fn step_opening_bytes_v2(opening: &crate::palw_step_leg::PalwStepOpeningV1) -> u64 {
+    (opening.siblings.len() as u64).saturating_mul(64)
+}
+
+/// The integer lane's generated-token pin: every logits row it carries, plus the ids.
+fn base0_decode_bytes_v2(pin: &crate::palw_step_refute::PalwBase0DecodeTokensV1) -> u64 {
+    pin.logits_rows
+        .iter()
+        .map(|row| (row.len() as u64).saturating_mul(4))
+        .fold((pin.generated_token_ids.len() as u64).saturating_mul(4), |a, b| a.saturating_add(b))
+}
+
+/// The generated-token pin, whichever lane's form it takes.
+fn decode_pin_bytes_v2(pin: &crate::palw_step_refute::PalwDecodeTokenPinV1) -> u64 {
+    use crate::palw_step_refute::PalwDecodeTokenPinV1 as Pin;
+    match pin {
+        Pin::FloatV2(d) => (d.generated_token_ids.len() as u64).saturating_mul(4),
+        Pin::Base0V1(d) => base0_decode_bytes_v2(d),
+    }
+}
+
+/// **What an arithmetic close weighs**, in the units [`crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES`]
+/// is denominated in: opened payload plus every Merkle path element on it, artifact side and step
+/// side alike. `None` for a non-arithmetic proof.
+///
+/// Public because `derive_court_cost_v1` must bound the SAME quantity from a class's graph, and a
+/// ceiling whose two sides measure different things is a ceiling that cannot be reasoned about.
+pub fn arithmetic_close_bytes_v2(proof: &PalwCourtVerdictProofV2) -> Option<u64> {
+    let PalwCourtVerdictProofV2::Arithmetic { refutation, operand_openings } = proof else { return None };
+    let mut bytes: u64 = operand_openings
+        .iter()
+        .map(|o| (o.operand.bytes.len() as u64).saturating_add((o.path.len() as u64).saturating_mul(64)))
+        .fold(0u64, |a, b| a.saturating_add(b));
+    bytes = bytes
+        .saturating_add(step_opening_bytes_v2(&refutation.output_opening))
+        .saturating_add(refutation.output_preimage.values_le.len() as u64);
+    for input in &refutation.inputs {
+        bytes = bytes.saturating_add(step_opening_bytes_v2(&input.opening)).saturating_add(input.preimage.values_le.len() as u64);
+    }
+    // **The anchored KV history** (ADR-0030 §3). The checkpoint replaces `prefill + call` step
+    // openings per ref with one opening and that checkpoint's state chunks — cheaper, and not free:
+    // the chunks ARE the history, at one byte per int8 element. Counting the openings it replaced
+    // and not the bytes it carries would price the cheap form as if it were empty.
+    if let Some(anchor) = refutation.kv_checkpoint.as_ref() {
+        bytes = bytes.saturating_add(step_opening_bytes_v2(&anchor.opening));
+        for chunk in &anchor.chunks {
+            bytes = bytes.saturating_add(chunk.len() as u64);
+        }
+    }
+    bytes = bytes.saturating_add((refutation.prompt_token_ids.len() as u64).saturating_mul(4));
+    if let Some(pin) = refutation.decode_tokens.as_ref() {
+        bytes = bytes.saturating_add(decode_pin_bytes_v2(pin));
+    }
+    Some(bytes)
 }
 
 /// The outcome mapping, isolated so every arm is unit-testable without a full refutation
@@ -1261,7 +1317,7 @@ mod tests {
     #[test]
     fn an_oversized_decode_pin_is_refused_by_the_cost_gate() {
         let c = court();
-        let lanes_per_row = (c.max_opening_bytes() / 4) as usize + 1;
+        let lanes_per_row = (c.max_close_bytes() / 4) as usize + 1;
         let proof = PalwCourtVerdictProofV2::DecodeToken {
             binding: crate::palw_step_refute::tests::base0_honest_decode_commitment().0,
             pin: crate::palw_step_refute::PalwBase0DecodeTokensV1 {
@@ -1271,7 +1327,7 @@ mod tests {
             position: 0,
         };
         assert!(
-            matches!(check_close_cost_v2(&proof, &c), Err(PalwCourtV2Error::OpeningTooLarge { .. })),
+            matches!(check_close_cost_v2(&proof, &c), Err(PalwCourtV2Error::CloseTooLarge { .. })),
             "a pin past the byte ceiling is refused on its face"
         );
     }
@@ -1542,7 +1598,7 @@ mod tests {
         // Within the count and over the bytes — refused by size.
         let fat = proof(vec![opening(2_048, 0)]);
         assert!(
-            matches!(adjudicate_court_close_v2(&state, &sid, &fat, &tight), Err(PalwCourtV2Error::OpeningTooLarge { .. })),
+            matches!(adjudicate_court_close_v2(&state, &sid, &fat, &tight), Err(PalwCourtV2Error::CloseTooLarge { .. })),
             "2 KiB against a 1 KiB ceiling"
         );
 
@@ -1550,7 +1606,7 @@ mod tests {
         // walk every one. Sixteen path elements is 1 KiB on their own.
         let long_path = proof(vec![opening(1, 17)]);
         assert!(
-            matches!(adjudicate_court_close_v2(&state, &sid, &long_path, &tight), Err(PalwCourtV2Error::OpeningTooLarge { .. })),
+            matches!(adjudicate_court_close_v2(&state, &sid, &long_path, &tight), Err(PalwCourtV2Error::CloseTooLarge { .. })),
             "a long path is an opening someone still has to walk"
         );
 

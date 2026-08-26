@@ -859,6 +859,80 @@ mod tests {
         assert_eq!(worst_calls, 1, "an anchored dispute cost {worst_calls} calls at interval 1");
     }
 
+    /// **The two sides of the cost ceiling agree, on a real close.**
+    ///
+    /// `derive_court_cost_v1` bounds what prosecuting a CLASS costs, from its graph, at admission.
+    /// `arithmetic_close_bytes_v2` measures what an OBJECT costs, on the wire, at acceptance. The
+    /// ceiling between them is inside `palw_ruleset_id_v2`, so if the two ever measure different
+    /// quantities the network admits classes it cannot police, or refuses closes it admitted the
+    /// class for — and neither failure announces itself.
+    ///
+    /// Nothing but a round trip finds that. This assembles the RC floor's most expensive close from
+    /// a real execution — the KV-reading attention matmul at the last position of the longest job
+    /// the class admits, anchored, which is the form an honest challenger builds — and asserts the
+    /// derived bound covers what the real object weighs.
+    ///
+    /// It is a BOUND, not an equality: the derivation is over the class's worst node at its worst
+    /// job, and any one close is at most that. The second assertion keeps the bound from going
+    /// slack enough to stop meaning anything.
+    #[test]
+    fn the_derived_close_cost_bounds_a_real_one() {
+        use kaspa_consensus_core::palw_base0_profile::{PALW_RC_BASE0_GEOMETRY, PALW_RC_BASE0_WORST_CASE, base0_profile_v1};
+        use kaspa_consensus_core::palw_class_admission_v2::derive_court_cost_v1;
+        use kaspa_consensus_core::palw_court_v2::{PalwCourtVerdictProofV2, arithmetic_close_bytes_v2};
+        use kaspa_consensus_core::palw_step::{PalwStepCoordinateV1, PalwStepOpKindV1};
+
+        let artifact = crate::rc::palw_rc_base0_artifact_v1().expect("the floor's artifact derives");
+        let profile = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("expressible");
+        let (prefill, decode) = PALW_RC_BASE0_WORST_CASE;
+        let anchor_id = Hash64::from_u64_word(0xC057);
+        let (ctx, prompt) = base0_rc_job_v1(&profile, anchor_id, artifact.shape.vocab, prefill, decode);
+        let run = base0_execute_for_attempt_v1(&artifact, &profile, &ctx, &prompt).expect("the longest job runs");
+        let binding = crate::legs::base0_binding_from_capture_v1(
+            &profile,
+            &ctx,
+            &run.tiles,
+            &run.checkpoints,
+            Hash64::default(),
+            Hash64::default(),
+        )
+        .expect("a capture yields its own commitment");
+
+        // The node whose close costs most: an attention matmul reading the cached keys. Found by
+        // ROLE rather than by slot number, so a graph edit moves the test instead of silencing it.
+        let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        let mut worst = 0u64;
+        for slot in 0..profile.global_node_count() {
+            let Some((node, layer)) = profile.resolve_node_slot(slot) else { continue };
+            if layer != Some(0) || node.op_kind != PalwStepOpKindV1::MatMulQuant || !node.weight_name.is_empty() {
+                continue;
+            }
+            // The last decode call, where the history is longest and an anchor exists.
+            let call = decode - 1;
+            let kv_anchor = crate::legs::base0_kv_anchor_for_call_v1(&run.checkpoints, call);
+            let target = PalwStepCoordinateV1 { call_index: call, node_slot: slot, position: 0, tile_index: 0 };
+            let Ok(refutation) = crate::legs::base0_refutation_from_capture_v1(
+                &profile,
+                &ctx,
+                &run.tiles,
+                binding.clone(),
+                target,
+                ids.clone(),
+                None,
+                kv_anchor,
+            ) else {
+                continue;
+            };
+            let proof = PalwCourtVerdictProofV2::Arithmetic { refutation, operand_openings: Vec::new() };
+            worst = worst.max(arithmetic_close_bytes_v2(&proof).expect("an arithmetic proof has a size"));
+        }
+        assert!(worst > 0, "no KV-reading attention step assembled — the fixture found nothing to measure");
+
+        let derived = derive_court_cost_v1(&profile).expect("derivable").max_close_bytes;
+        assert!(worst <= derived, "a real close ({worst}) must fit the bound admission checked ({derived})");
+        assert!(worst * 4 >= derived, "the bound has gone slack: {worst} real against {derived} derived");
+    }
+
     /// **What the leg costs to retain and serve, pinned.**
     ///
     /// This is a cost the unit CREATED. Before it, `checkpoint_merkle_root` was a zero placeholder

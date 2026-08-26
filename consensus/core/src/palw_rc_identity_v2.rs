@@ -41,6 +41,12 @@
 //!    admit a second class, and the answer is decided once, here, and cannot be revisited. It is a
 //!    refusal rather than an installation because silently rewriting a caller's court would change
 //!    the ruleset id underneath them.
+//! 6. **and the court's cost ceilings are the ones a transaction can carry.** The ladder's sibling
+//!    (ADR-0049 Decision C): `max_close_bytes`, `max_terminal_macs` and `max_operand_count` are
+//!    bundle fields too, so a class whose disputes cost more than they allow can no more join later
+//!    than a deeper one can. The road map called these "the four cost ceilings ... not yet gated";
+//!    this is the gate, and it is the same shape as 5 — an exact match against a constant, because
+//!    "at least as generous" is the wrong comparison for a value that is inside a hash.
 //!
 //! It is **not** a shipped preset, and nothing here adds one. `params_do_not_install_a_palw_fence`
 //! still holds: every network in `config::params` is `Disabled` or `LegacyTn11`. Shipping is
@@ -72,6 +78,13 @@ pub enum PalwRcIdentityError {
         "the court's ladder is {got} step leaves; an RC identity must provision the whole step space ({want})          or it can never admit a second class — the value is inside the ruleset id and cannot be revisited"
     )]
     LadderNotProvisionedForTheStepSpace { got: u64, want: u64 },
+    /// Gate 6. ADR-0049 Decision C's ceilings, frozen. `max_close_bytes` is derived from what a
+    /// standard transaction can carry (`DEFAULT_MAX_CLOSE_BYTES`); the other two from the widest
+    /// step any admissible class performs. All three are inside `palw_ruleset_id_v2`.
+    #[error(
+        "the court's {what} ceiling is {got}; an RC identity must freeze it at {want} — the value is inside the          ruleset id, so a class that exceeds it could never join this network and a genesis cannot revisit it"
+    )]
+    CostCeilingIsNotTheRcCeiling { what: &'static str, got: u64, want: u64 },
 }
 
 /// The assembled identity: the params a node would run, and the state its genesis block produces.
@@ -119,6 +132,22 @@ pub fn assemble_palw_rc_identity_v2(
     }
     // The catalog gates run BEFORE the params are assembled, so a bad artifact never produces a
     // `Params` value at all — there is no half-built identity for a caller to mistake for one.
+    // Gate 6, beside gate 5 and for the same reason: the ladder bounds a dispute's ROUNDS and
+    // these bound what a round costs. Both are bundle fields, both are therefore inside
+    // `palw_ruleset_id_v2`, and both stop being choosable the moment a genesis is minted.
+    for (what, got, want) in [
+        ("close-byte", bundle.court.max_close_bytes(), crate::palw_class_admission_v2::PALW_RC_COURT_MAX_CLOSE_BYTES),
+        ("terminal-MAC", bundle.court.max_terminal_macs(), crate::palw_class_admission_v2::PALW_RC_COURT_MAX_TERMINAL_MACS),
+        (
+            "operand-count",
+            u64::from(bundle.court.max_operand_count()),
+            u64::from(crate::palw_class_admission_v2::PALW_RC_COURT_MAX_OPERAND_COUNT),
+        ),
+    ] {
+        if got != want {
+            return Err(PalwRcIdentityError::CostCeilingIsNotTheRcCeiling { what, got, want });
+        }
+    }
     verify_palw_genesis_v2(&bundle, catalog, genesis_objects, genesis_output_value)?;
 
     let mut params = base.clone();
@@ -300,6 +329,50 @@ mod tests {
             assemble_palw_rc_identity_v2(&base(), over, &catalog, &genesis_objects(), &ctx(), funded).is_err(),
             "a ladder past the step space is a ladder for classes that cannot exist"
         );
+    }
+
+    /// **Gate 6: the cost ceilings are frozen too, and for the same reason.**
+    ///
+    /// The road map called these "the four cost ceilings ... not yet gated", beside the ladder,
+    /// under the heading "the two decisions that expire". They expire because they are bundle
+    /// fields: a class whose disputes cost more than the ruleset allows can no more join a running
+    /// chain than a class deeper than the ladder can.
+    ///
+    /// Exact, not "at least as generous", for the reason gate 5 is exact — the ruleset id is a hash
+    /// over the bundle, so a network with a different ceiling is a different network, and an
+    /// assembler that quietly accepted a wider one would mint an identity nobody chose. Each of the
+    /// three is mutated separately, because a loop that only ever exercised the first would let the
+    /// other two rot.
+    #[test]
+    fn an_identity_whose_court_costs_more_than_a_transaction_carries_is_refused() {
+        use crate::palw_class_admission_v2::{
+            PALW_RC_COURT_MAX_CLOSE_BYTES, PALW_RC_COURT_MAX_OPERAND_COUNT, PALW_RC_COURT_MAX_STEP_LEAF_COUNT,
+            PALW_RC_COURT_MAX_TERMINAL_MACS,
+        };
+        let catalog = catalog();
+
+        // The shipped triple assembles — the gate has to be able to pass, or it says nothing.
+        assemble_palw_rc_identity_v2(&base(), bundle(&catalog), &catalog, &genesis_objects(), &ctx(), funded)
+            .expect("the RC's own ceilings are the ones this gate demands");
+
+        for (what, close, macs, operands) in [
+            // Too generous: a close nobody could relay, admitted at genesis and unfixable after.
+            ("close-byte", PALW_RC_COURT_MAX_CLOSE_BYTES * 2, PALW_RC_COURT_MAX_TERMINAL_MACS, PALW_RC_COURT_MAX_OPERAND_COUNT),
+            // Too tight: the network's own floor class stops being admissible.
+            ("close-byte", PALW_RC_COURT_MAX_CLOSE_BYTES / 2, PALW_RC_COURT_MAX_TERMINAL_MACS, PALW_RC_COURT_MAX_OPERAND_COUNT),
+            ("terminal-MAC", PALW_RC_COURT_MAX_CLOSE_BYTES, PALW_RC_COURT_MAX_TERMINAL_MACS + 1, PALW_RC_COURT_MAX_OPERAND_COUNT),
+            ("operand-count", PALW_RC_COURT_MAX_CLOSE_BYTES, PALW_RC_COURT_MAX_TERMINAL_MACS, PALW_RC_COURT_MAX_OPERAND_COUNT + 1),
+        ] {
+            let mut moved = bundle(&catalog);
+            moved.court = PalwCourtParamsV2::with_cost_ceilings(PALW_RC_COURT_MAX_STEP_LEAF_COUNT, 4, 2, close, macs, operands)
+                .expect("the mutated court is still well-formed — it is the RC gate that must refuse it");
+            let err = assemble_palw_rc_identity_v2(&base(), moved, &catalog, &genesis_objects(), &ctx(), funded)
+                .expect_err("an identity that moved a frozen ceiling is not an RC identity");
+            assert!(
+                matches!(err, PalwRcIdentityError::CostCeilingIsNotTheRcCeiling { what: got, .. } if got == what),
+                "expected the {what} ceiling to be named, got {err:?}"
+            );
+        }
     }
 
     #[test]

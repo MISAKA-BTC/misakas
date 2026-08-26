@@ -107,6 +107,19 @@ const COURT_MAX_STEP_LEAVES: u64 = crate::palw_step::PALW_STEP_MAX_LEAVES;
 const COURT_TURN_DEADLINE: u64 = 60;
 const COURT_TERMINAL_ROUNDS: u32 = 2;
 
+/// **What a round may COST** (ADR-0049 Decision C), named here rather than left to the
+/// constructor's defaults.
+///
+/// `PalwCourtParamsV2::new` installs the same values, so this changes no byte of the bundle — and
+/// that is the point. These three are inside `palw_ruleset_id_v2` exactly as the ladder is, and
+/// `assemble_palw_rc_identity_v2` gate 6 refuses an identity carrying anything else, so the RC's
+/// own bundle must SAY them: a ruleset whose most consequential frozen numbers arrive as a
+/// default is a ruleset nobody chose. See `palw_class_admission_v2::PALW_RC_COURT_MAX_CLOSE_BYTES`
+/// for the carriage arithmetic that fixes the first.
+const COURT_MAX_CLOSE_BYTES: u64 = crate::palw_class_admission_v2::PALW_RC_COURT_MAX_CLOSE_BYTES;
+const COURT_MAX_TERMINAL_MACS: u64 = crate::palw_class_admission_v2::PALW_RC_COURT_MAX_TERMINAL_MACS;
+const COURT_MAX_OPERAND_COUNT: u32 = crate::palw_class_admission_v2::PALW_RC_COURT_MAX_OPERAND_COUNT;
+
 /// CU pricing (ADR-0044 Decision 7). Prefill is batched and roughly an order of magnitude cheaper
 /// per token than decode, and the invariant is that mispricing may only ever UNDER-pay — so the
 /// prefill weight starts at the conservative end (1 : 64).
@@ -368,7 +381,14 @@ pub fn palw_fp_devnet_bundle_v3(
         bond: PalwBondParamsV2::new(MIN_COLLATERAL_SOMPI, WITHDRAWAL_DELAY)?,
         freeprompt,
         reorg_margin_daa: REORG_MARGIN,
-        court: PalwCourtParamsV2::new(COURT_MAX_STEP_LEAVES, COURT_TURN_DEADLINE, COURT_TERMINAL_ROUNDS)?,
+        court: PalwCourtParamsV2::with_cost_ceilings(
+            COURT_MAX_STEP_LEAVES,
+            COURT_TURN_DEADLINE,
+            COURT_TERMINAL_ROUNDS,
+            COURT_MAX_CLOSE_BYTES,
+            COURT_MAX_TERMINAL_MACS,
+            COURT_MAX_OPERAND_COUNT,
+        )?,
         cadence_target_time_per_block_ms: PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS,
         fork_choice_version: PALW_V2_FORK_CHOICE_VERSION,
         trace_format_version: PALW_V2_TRACE_FORMAT_VERSION,
@@ -529,6 +549,26 @@ mod tests {
 
     /// **The interlock exists.** Every Decision-1 and ADR-0044 startup invariant holds on one
     /// concrete parameter set — the claim this module was written to make checkable.
+    /// **The RC ships the ceilings its own gate demands** (ADR-0049 Decision C).
+    ///
+    /// `assemble_palw_rc_identity_v2` gate 6 refuses an identity carrying anything else, so this is
+    /// the other half of that gate: a bundle that could not pass it would make the network
+    /// unmintable, and the failure would surface at genesis rather than here. Written against the
+    /// constants rather than against literals, because a literal here would be a second opinion
+    /// about a number whose whole point is that there is only one.
+    #[test]
+    fn the_bundle_carries_the_rc_cost_ceilings() {
+        use crate::palw_class_admission_v2::{
+            PALW_RC_COURT_MAX_CLOSE_BYTES, PALW_RC_COURT_MAX_OPERAND_COUNT, PALW_RC_COURT_MAX_STEP_LEAF_COUNT,
+            PALW_RC_COURT_MAX_TERMINAL_MACS,
+        };
+        let b = bundle();
+        assert_eq!(b.court.max_step_leaf_count(), PALW_RC_COURT_MAX_STEP_LEAF_COUNT, "gate 5's value");
+        assert_eq!(b.court.max_close_bytes(), PALW_RC_COURT_MAX_CLOSE_BYTES, "gate 6's, and the one derived from carriage");
+        assert_eq!(b.court.max_terminal_macs(), PALW_RC_COURT_MAX_TERMINAL_MACS);
+        assert_eq!(b.court.max_operand_count(), PALW_RC_COURT_MAX_OPERAND_COUNT);
+    }
+
     #[test]
     fn the_devnet_bundle_boots() {
         let b = bundle();

@@ -147,6 +147,60 @@ for every class the network ever intends to admit.
 many rounds a dispute takes; these bound how much each round costs. A ruleset that fixed one and left
 the other free was bounding the number of steps in a walk without bounding the length of a step.
 
+### Amendment, 2026-08-26 — the ceilings are numbers now, and the metric they are on changed
+
+Decision C shipped as three fields on `PalwCourtParamsV2` with generous defaults, gated nowhere. The
+road map called the result "the four cost ceilings … not yet gated", beside the ladder, under *the
+two decisions that expire*. Choosing them turned out to require fixing what they measure first.
+
+**What was measured, and what it should have been.** `derive_court_cost_v1` returned the artifact
+opening — the weight bytes of the widest tile. A close is not its weight bytes. Assembled from real
+executions of the shipped floor, one close weighed **750,716 bytes at a 64/64 job** against a derived
+32,768: the difference is the disputed step's own leaves, and above all the KV history, which an
+attention matmul reads at every position up to its own. A second arm was invisible the same way: a
+decode-position gather must carry every logits row so the court can recompute
+`base0_logits_trace_root_v1`, so it costs `decode_tokens × vocabulary × 4`. Both grow with the job,
+and nothing charges an attempt more for a longer job, so **an attacker picks the job length** — the
+rule `worst_case_step_leaf_count_v1` already states, applied to cost.
+
+So the field is `max_close_bytes` and it counts what `palw_court_v2::arithmetic_close_bytes_v2`
+counts on a real object: opened payload plus every Merkle path element proving it, artifact side and
+step side alike. The ADR's own table said as much ("per refutation and per court close … plus Merkle
+paths"); the implementation was narrower than the sentence.
+
+**The fourth ceiling is the byte ceiling.** "Max Merkle path count" is not a separate field: a path
+element is 64 bytes and both sides count it in the byte total, so a count would refuse exactly the
+set the byte bound already refuses. Three fields, four bounds.
+
+**The number, derived rather than chosen.** A close rides one `SUBNETWORK_ID_PALW_LIFECYCLE`
+transaction — no chunked-evidence path carries a `PalwConsensusObjectV2` — and transient mass is
+`size × 4` against a 480,000 standard limit, so a relayable transaction is 120,000 bytes. Allowing
+18,000 for a carrier and the measured ~1.2× encoding overhead gives ceiling ≤ 85,000;
+`DEFAULT_MAX_CLOSE_BYTES` is **80 KiB**. `assemble_palw_rc_identity_v2` gate 6 refuses an RC identity
+carrying any other value, exactly as gate 5 does for the ladder.
+
+**What it forecloses: nothing that was ever carriable.** Qwen2.5-1.5B's cheapest possible close is
+1,220,368 bytes at any tile length and any context, because one row of a 128,256-token vocabulary is
+513,024 bytes on its own — four times the largest standard transaction. A larger ceiling would not
+buy that class; it would admit a class whose disputes nobody could raise, which is what Decision C
+exists to refuse. Carrying a model at that scale needs an **openable** logits commitment (Decision E
+says "O(1) in vocabulary"; the root is a flat hash over every row) and a per-layer slice of the
+checkpoint the KV history arrives in. Both are code, not a bigger number in a genesis.
+
+**What it cost the floor.** `PALW_RC_BASE0_GEOMETRY` was `vocab_size` 4,096 / `n_ctx` 512, whose
+worst close is megabytes — the network's own liveness floor was coverage-clean, ladder-deep enough
+and unprosecutable at its longest jobs. It is `1,024` / `12` now, chosen by the rule *the largest
+pair whose worst close stays under 80% of the ceiling* (61,040 of 81,920), so that a later
+leg-format change cannot make the floor inadmissible on its own network. The canonical job — 8
+prefill, 4 decode — is unchanged.
+
+**ADR-0030 §3's checkpoint anchor does not change this**, and the reason is worth recording: a
+checkpoint covers a decode call, so a dispute at call `c` needs the one covering `c − 1`. None exists
+at a prefill position or at the first decode call — which is exactly where the worst job's worst step
+is. The anchor makes late-decode disputes cheap; the bound is over the coordinate that has no anchor.
+A first draft of this amendment bounded the anchored form and understated the floor by 2×, which
+`the_derived_close_cost_bounds_a_real_one` caught by assembling a real close and comparing.
+
 ## Decision D — coverage is over reachable coordinates, not over kernel ids
 
 A class is adjudicable **iff every reachable `(call_index, node_slot, position, tile_index)`

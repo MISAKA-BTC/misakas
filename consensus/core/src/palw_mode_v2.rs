@@ -120,30 +120,92 @@ pub use crate::palw_attempt_v2::palw_network_domain_v2;
 /// NAMED fact with a place to be checked: the leaf count is a property of the registered class
 /// catalog, which the RC genesis loader verifies against the catalog preimage, and the turn
 /// deadline is a protocol constant a reader can compare against the ladder's own measurement.
-/// **Sized from the liveness floor, with headroom — not from a class that does not fit.**
+/// **Sized from what a court close can be CARRIED in, not from a number that sounded generous** —
+/// see below.
 ///
-/// Measured by `derive_court_cost_v1`: `PALW_RC_BASE0_GEOMETRY` at its own `tile_len` of 64 opens
-/// **32 KiB** for its most expensive step. This default is 1 MiB, thirty-two times that, so the
-/// floor and any class of a similar shape pass without the ceiling being a formality.
+/// # What one court close may cost to carry, in bytes
 ///
-/// **What it admits of a Qwen-scale class is a 125-token context, and that is the finding.**
-/// Measured: Qwen2.5-1.5B opens 560 KiB at `tile_len` 64 (adjudicable `n_ctx` 125) — inside this
-/// ceiling — 1.09 MiB at 128, and 24 MiB at the 16,384 its declared 4,096-token context requires.
-/// So `tile_len` does trade context against court cost, and at the floor's ceiling the window is
-/// one tile wide and buys a toy context. A network intending to carry Qwen at a real context
-/// chooses a ceiling twenty-four times larger, at genesis and irrevocably, or reduces the opening
-/// by bisecting WITHIN a step's reduction as well as across its output tiles — which would be its
-/// own ADR and is the only route that does not make court proofs multi-megabyte.
+/// ADR-0049 Decision C, restated to the quantity the ADR's own table names ("per refutation and
+/// per court close ... plus Merkle paths") rather than to the weight bytes alone.
 ///
-/// ADR-0046 budgets a court close under 152 KB. Qwen exceeds that at every tile length; its
-/// cheapest step is nearly four times it.
-pub const DEFAULT_MAX_OPENING_BYTES: u64 = 1024 * 1024;
+/// ## Why this is a carriage number and not a taste number
+///
+/// A close is one transaction on `SUBNETWORK_ID_PALW_LIFECYCLE`. There is no chunked-evidence path
+/// for a `PalwConsensusObjectV2` — `palw_carriage`'s four-chunk envelope is the Stage-0 v1 format
+/// and carries no V2 object — so whatever a close weighs, it weighs in one payload. Two rules then
+/// decide the largest close that can exist:
+///
+/// * `transient_mass = size × TRANSIENT_BYTE_TO_MASS_FACTOR` (4), and the mempool refuses a
+///   transaction whose transient mass exceeds `MAXIMUM_STANDARD_TRANSACTION_MASS` (480,000), so a
+///   RELAYABLE transaction is at most **120,000 bytes**;
+/// * body validation refuses a block whose total transient mass exceeds `max_block_mass`
+///   (500,000), so even a hand-delivered one is at most 125,000 bytes.
+///
+/// A close that cannot be relayed is a dispute only a friendly miner could raise, so 120,000 is the
+/// bound. Against it: a measured carrier (one ML-DSA-87 input and a change output) is 7,457 bytes
+/// and a worst-case standard one is ~18,000; the encoded object runs about 1.2x the bytes this
+/// ceiling counts, because every opening carries its own coordinate and length prefixes. So
+///
+/// ```text
+/// ceiling x 1.20 + 18,000 <= 120,000   =>   ceiling <= 85,000
+/// ```
+///
+/// and the value below is 80 KiB, the round number under it.
+///
+/// ## What a close is made of, measured on the shipped floor
+///
+/// Three arms, and the two that grow with the job are the ones a weight-bytes ceiling never saw:
+///
+/// | arm | grows with | floor at the old `n_ctx` 512 / vocab 4,096 |
+/// |---|---|---|
+/// | the artifact opening | tile x row | 32,768 |
+/// | the disputed step's KV history | `n_ctx` — one step opening per position per ref, each with its own path; ADR-0030's checkpoint anchor makes this cheap, but no anchor exists at a prefill position or the first decode call | ~3 MB |
+/// | the generated-token pin (Decision E) | `decode_tokens x vocabulary` — `base0_logits_trace_root_v1` is a flat hash, so no single row can be opened | 65,536 at the canonical job, 8 MB at the longest |
+///
+/// Measured whole closes, assembled from real executions before the anchor landed: 90,893 bytes at
+/// `n_ctx` 16, 139,437 at 24, and **750,716 at the floor's own declared 64/64 job** — against a
+/// derived 32,768. That gap is what this ceiling exists to make visible at admission instead of at
+/// dispute time.
+///
+/// ## What it admits
+///
+/// `PALW_RC_BASE0_GEOMETRY` is `vocab_size` 1,024 and `n_ctx` 12 BECAUSE of this number: its worst
+/// close is 61,040, or 75% of the ceiling. `n_ctx` 16 reaches 97% and 20 exceeds it; `vocab_size`
+/// 2,048 exceeds it at every context. No Qwen2.5 geometry fits — its
+/// cheapest artifact opening alone is 143,360 — so a larger ceiling would not buy that class, only
+/// admit one whose disputes nobody could raise. Carrying a model at that scale needs bisection
+/// WITHIN a step's reduction and an OPENABLE logits commitment, not a bigger number here.
+///
+/// ## It is frozen with the network
+///
+/// This is a `PalwConsensusParamsV2` field and therefore inside `palw_ruleset_id_v2`. A class that
+/// exceeds it cannot join a running chain, so it is chosen once, at genesis, for every class the
+/// network will ever admit — which is why `assemble_palw_rc_identity_v2` refuses an RC identity
+/// carrying any other value.
+pub const DEFAULT_MAX_CLOSE_BYTES: u64 = 80 * 1024;
+
+/// **The mempool's standard-transaction mass, mirrored** — the number
+/// [`DEFAULT_MAX_CLOSE_BYTES`] is derived from.
+///
+/// The constant itself is `mining::mempool::check_transaction_standard`'s and private to that
+/// crate, which `kaspa-consensus-core` does not depend on. Mirroring it is a second source, so it
+/// is guarded from the side that owns it: `the_palw_close_ceiling_mirror_is_the_real_limit` in that
+/// module fails if the two ever differ. A mirror nobody compares is how a derived number quietly
+/// stops being derived from anything.
+pub const PALW_MIRRORED_STANDARD_TX_MASS: u64 = 480_000;
+
+/// The largest STANDARD transaction, in bytes: transient mass is `size x 4`, and a transaction
+/// whose transient mass exceeds the standard limit is refused before it is relayed.
+pub const PALW_STANDARD_TX_BYTES: u64 = PALW_MIRRORED_STANDARD_TX_MASS / crate::constants::TRANSIENT_BYTE_TO_MASS_FACTOR;
 /// The floor's widest step is 32,768 multiply-accumulates. This is 512 times that: generous for a
 /// class of the floor's shape, and still milliseconds of scalar `int8` CPU, which is the budget the
-/// court was always sized for. Qwen2.5-1.5B needs 3.1 M at `tile_len` 64 and 75 M at 16,384.
+/// court was always sized for. A close is bounded to 80 KiB of payload, and a `MatMulQuant`'s
+/// multiply-accumulate count equals its opened weight bytes, so only a `KvScaled` node can
+/// approach this at all — the floor's own widest is 131,072.
 pub const DEFAULT_MAX_TERMINAL_MACS: u64 = 16 * 1024 * 1024;
 /// A step reads its `input_refs` and at most one weight operand. Eight is well past any node in the
-/// BASE-0 or Qwen graphs (the widest is the gated-delta-net recurrence's five rows).
+/// BASE-0 or Qwen graphs (the widest is the gated-delta-net recurrence's five rows; the floor's is
+/// two).
 pub const DEFAULT_MAX_OPERAND_COUNT: u32 = 8;
 
 /// One opaque number becomes three checkable ones.
@@ -160,12 +222,19 @@ pub struct PalwCourtParamsV2 {
     /// rounds a dispute takes and nothing bounded the size of a round, so the terminal
     /// adjudication's price was the model's — ~223 MiB of opening for Qwen2.5-1.5B's unembed
     /// against ADR-0046's 152 KB court-close budget. These three are compared against
-    /// `palw_class_admission_v2::derive_court_cost_v1`, which reads them off a class's graph.
+    /// `palw_class_admission_v2::derive_court_cost_v1`, which reads them off a class's graph, and
+    /// against the close that actually arrives (`palw_court_v2::check_close_cost_v2`).
+    ///
+    /// `max_close_bytes` counts **the whole close** — the artifact openings, the refutation's own
+    /// step leaves, and every Merkle path element on both — because that is what has to fit in one
+    /// transaction. It was named `max_opening_bytes` and counted the weight bytes alone, which
+    /// understated the shipped floor's most expensive close by 23x: 32,768 derived against 750,716
+    /// real, the difference being a KV history that the ceiling never looked at.
     ///
     /// They are here, inside `palw_ruleset_id_v2`, for the same reason the ladder is: a class that
     /// exceeds them cannot join a running chain, so the ceiling is chosen once, at genesis, for
     /// every class the network ever intends to admit.
-    max_opening_bytes: u64,
+    max_close_bytes: u64,
     max_terminal_macs: u64,
     max_operand_count: u32,
 }
@@ -179,7 +248,7 @@ impl PalwCourtParamsV2 {
             max_step_leaf_count,
             turn_deadline_daa,
             terminal_rounds,
-            DEFAULT_MAX_OPENING_BYTES,
+            DEFAULT_MAX_CLOSE_BYTES,
             DEFAULT_MAX_TERMINAL_MACS,
             DEFAULT_MAX_OPERAND_COUNT,
         )
@@ -190,11 +259,11 @@ impl PalwCourtParamsV2 {
         max_step_leaf_count: u64,
         turn_deadline_daa: u64,
         terminal_rounds: u32,
-        max_opening_bytes: u64,
+        max_close_bytes: u64,
         max_terminal_macs: u64,
         max_operand_count: u32,
     ) -> Result<Self, PalwModeV2Error> {
-        if max_opening_bytes == 0 || max_terminal_macs == 0 || max_operand_count == 0 {
+        if max_close_bytes == 0 || max_terminal_macs == 0 || max_operand_count == 0 {
             return Err(PalwModeV2Error::Invalid("a zero court cost ceiling admits no class at all"));
         }
         if max_step_leaf_count < 2 {
@@ -206,11 +275,11 @@ impl PalwCourtParamsV2 {
         if terminal_rounds == 0 {
             return Err(PalwModeV2Error::Invalid("the terminal adjudication is a round; zero of them never reaches a verdict"));
         }
-        Ok(Self { max_step_leaf_count, turn_deadline_daa, terminal_rounds, max_opening_bytes, max_terminal_macs, max_operand_count })
+        Ok(Self { max_step_leaf_count, turn_deadline_daa, terminal_rounds, max_close_bytes, max_terminal_macs, max_operand_count })
     }
 
-    pub fn max_opening_bytes(&self) -> u64 {
-        self.max_opening_bytes
+    pub fn max_close_bytes(&self) -> u64 {
+        self.max_close_bytes
     }
 
     pub fn max_terminal_macs(&self) -> u64 {

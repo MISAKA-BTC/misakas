@@ -189,7 +189,7 @@ pub fn qwen25_admissible_geometry_v1(
         }
         // ADR-0049 Decision C: and what prosecuting one of its steps costs.
         let Ok(cost) = crate::palw_class_admission_v2::derive_court_cost_v1(&profile) else { return false };
-        cost.max_opening_bytes <= court.max_opening_bytes()
+        cost.max_close_bytes <= court.max_close_bytes()
             && cost.max_terminal_macs <= court.max_terminal_macs()
             && u64::from(cost.max_operand_count) <= u64::from(court.max_operand_count())
     };
@@ -459,26 +459,45 @@ mod tests {
         }
     }
 
-    /// **Would the chain admit this class?** — the four checks `verify_class_admission_v2` runs,
-    /// against the SHIPPED bundle, on the geometry a Qwen2.5-1.5B registration would actually use.
+    /// **Would the chain admit this class?** — asked against the SHIPPED bundle, which is the only
+    /// bundle whose answer matters.
     ///
-    /// Run before deploying anything: a registration that fails here fails on-chain, and finding
-    /// that out with a 1.7 GiB artifact already on four hosts is finding it in the worst place.
-    /// The artifact root is a placeholder because the gate does not check it — that binding is the
-    /// producer's (its attempt must name the class's registered root) and the genesis gate's.
+    /// It used to derive the pair a Qwen2.5-1.5B registration would use and run the gate on it.
+    /// Under a `max_close_bytes` that counts what a close costs to carry there is no such pair, so
+    /// the honest form of this test is the refusal and its reason: a registration attempted today
+    /// fails on-chain, and finding that out with a 1.7 GiB artifact already on four hosts is
+    /// finding it in the worst place.
+    ///
+    /// What has to change is code, not the genesis number: an openable logits commitment (ADR-0049
+    /// Decision E says "O(1) in vocabulary"; the root is a flat hash over every row) and a
+    /// per-layer slice of the checkpoint the KV history arrives in.
     #[test]
-    fn the_admissible_qwen25_class_passes_the_admission_gate() {
+    fn the_shipped_court_admits_no_qwen25_geometry_and_says_why() {
         let bundle = match &crate::config::params::palw_rc_shipped_params().palw_consensus_mode {
             crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) => b.clone(),
             _ => return, // a build whose card is unset ships no bundle; nothing to check against
         };
-        let admissible = qwen25_admissible_geometry_v1(QWEN25_1_5B, &bundle.court)
-            .expect("1.5B has an admissible (tile, n_ctx) under the shipped court");
-        let profile = qwen25_profile_v1(admissible).expect("expressible");
-        let class_id = profile.shape_profile_id();
+        assert!(
+            qwen25_admissible_geometry_v1(QWEN25_1_5B, &bundle.court).is_none(),
+            "the shipped court admitted a Qwen pair — either the ceiling or this expectation moved"
+        );
+
+        // The gate's own refusal, on the pair the LADDER would allow, so the error a deployer would
+        // actually read is exercised rather than described.
+        let ladder_only = crate::palw_mode_v2::PalwCourtParamsV2::with_cost_ceilings(
+            bundle.court.max_step_leaf_count(),
+            bundle.court.turn_deadline_daa(),
+            bundle.court.terminal_rounds(),
+            u64::MAX,
+            u64::MAX,
+            u32::MAX,
+        )
+        .unwrap();
+        let pair = qwen25_admissible_geometry_v1(QWEN25_1_5B, &ladder_only).expect("the ladder admits a pair");
+        let profile = qwen25_profile_v1(pair).expect("expressible");
         let canonical = crate::palw_base0_profile::rc_job_context(&profile, 8, 4);
         let registration = crate::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
-            class_id,
+            class_id: profile.shape_profile_id(),
             artifact_root: crate::Hash64::from_u64_word(0xA1),
             slash_value_per_pwu: 5,
             // COUNTED from the canonical job, never declared — the gate recounts and refuses a
@@ -494,18 +513,11 @@ mod tests {
             admission: None,
         };
         match crate::palw_class_admission_v2::verify_class_admission_v2(&bundle, &profile, &canonical, &registration) {
-            Ok(entry) => {
-                assert_eq!(entry.class_id, class_id);
-                println!(
-                    "ADMITTED  class_id={class_id}  tile={} n_ctx={} canonical_leaves={}",
-                    admissible.tile_len, admissible.n_ctx, entry.canonical_step_leaf_count
-                );
+            Err(crate::palw_class_admission_v2::PalwClassAdmissionError::CourtCostExceedsCeiling { what, got, ceiling }) => {
+                assert_eq!(what, "court close");
+                assert!(got > ceiling * 10, "the refusal is by an order of magnitude: {got} against {ceiling}");
             }
-            Err(e) => panic!(
-                "the admissible Qwen2.5-1.5B geometry is REFUSED by the gate it was derived for: {e:?}\n\
-                 (tile={} n_ctx={})",
-                admissible.tile_len, admissible.n_ctx
-            ),
+            other => panic!("the shipped gate must refuse Qwen2.5-1.5B on court cost, got {other:?}"),
         }
     }
 
@@ -958,63 +970,69 @@ mod tests {
         assert_eq!(used, declared, "the graph's operands and the declared inventory are one list");
     }
 
-    /// **Audit H-04: "either the tile grows or the context shrinks" is a value now, not a
-    /// sentence.**
+    /// **Audit H-04's question, answered by a ceiling that counts the whole close: there is no
+    /// admissible pair at all.**
     ///
-    /// The shipped constants stay the MODEL — 4,096 tokens is what Qwen2.5 has, and a constant
-    /// that said otherwise would lie about the thing it names. What was missing is the other
-    /// number: given a court, which `(tile_len, n_ctx)` pair does the model actually fit into.
-    /// Two ceilings pull against each other, so it is a search, and leaving it as prose is how the
-    /// pair stayed unstated after the measurement was done.
+    /// "Either the tile grows or the context shrinks" was the right shape of answer for a ceiling
+    /// on WEIGHT BYTES, where `tile_len` traded context against opening size. It stops being the
+    /// question once the ceiling counts what a close costs to carry, because the arm that dominates
+    /// a Qwen close does not depend on `tile_len` at all: a decode-position gather must carry every
+    /// logits row so the court can recompute `base0_logits_trace_root_v1`, and ONE row of a 128,256
+    /// vocabulary is 513,024 bytes — four times the largest standard transaction.
+    ///
+    /// So the pair a genesis reads is `None`, at every tile and every context, and the shipped
+    /// constants stay the MODEL's: 4,096 tokens is what Qwen2.5 has.
     #[test]
-    fn the_admissible_qwen_geometry_is_derived_from_the_court_that_must_adjudicate_it() {
-        let floor_sized = crate::palw_mode_v2::PalwCourtParamsV2::new(crate::palw_step::PALW_STEP_MAX_LEAVES, 4, 2).unwrap();
-
-        // Under the shipped (floor-sized) ceilings, both models fit — at a context that IS the
-        // finding rather than a target.
-        let small = qwen25_admissible_geometry_v1(QWEN25_1_5B, &floor_sized).expect("some pair is admissible");
-        let big = qwen25_admissible_geometry_v1(QWEN25_3B, &floor_sized).expect("some pair is admissible");
-        // Pinned, because these two pairs are the answer a genesis reads.
-        //
-        // **They moved when the graph became honest** (ADR-0049 Decision F): 1.5B was 125 and 3B
-        // was 79 against a hand-written table of 27 nodes per layer, and the engine performs 38.
-        // The projected graph is bigger, so the same ladder buys less context — 125 -> 90 and
-        // 79 -> 56. The old numbers were not a measurement of this class; they were a measurement
-        // of a graph nothing executed. `DEFAULT_MAX_OPENING_BYTES`' doc still records 125, and
-        // that reference is now stale for the same reason.
-        assert_eq!((small.tile_len, small.n_ctx), (64, 90), "1.5B under the shipped ceilings");
-        assert_eq!((big.tile_len, big.n_ctx), (64, 56), "3B is deeper, so it buys less context for the same court");
-        for (name, model, found) in [("1.5B", QWEN25_1_5B, small), ("3B", QWEN25_3B, big)] {
-            let profile = qwen25_profile_v1(found).expect("expressible");
+    fn no_qwen_geometry_is_admissible_under_a_carriable_ceiling() {
+        let shipped = crate::palw_mode_v2::PalwCourtParamsV2::new(crate::palw_step::PALW_STEP_MAX_LEAVES, 4, 2).unwrap();
+        for (name, model) in [("1.5B", QWEN25_1_5B), ("3B", QWEN25_3B)] {
             assert!(
-                crate::palw_step::worst_case_step_leaf_count_v1(&profile).unwrap() <= floor_sized.max_step_leaf_count(),
-                "{name}: the derived pair must fit the ladder"
+                qwen25_admissible_geometry_v1(model, &shipped).is_none(),
+                "{name}: a pair was admitted under a ceiling no transaction can carry"
             );
-            let cost = crate::palw_class_admission_v2::derive_court_cost_v1(&profile).unwrap();
-            assert!(cost.max_opening_bytes <= floor_sized.max_opening_bytes(), "{name}: and the opening ceiling");
-            assert!(cost.max_terminal_macs <= floor_sized.max_terminal_macs(), "{name}: and the MAC ceiling");
-            assert!(found.n_ctx < model.n_ctx, "{name}: the context really did shrink — that is the finding");
-            // Everything except the two knobs is the model's own.
-            assert_eq!(found.layer_count, model.layer_count);
-            assert_eq!(found.hidden_dim, model.hidden_dim);
-            assert_eq!(found.vocab_size, model.vocab_size);
         }
 
-        // A court with a bigger opening ceiling buys context — which is the trade a genesis makes,
-        // irrevocably, and now it can be priced before it is made instead of after.
-        let generous = crate::palw_mode_v2::PalwCourtParamsV2::with_cost_ceilings(
+        // The cheapest close either model could ever be asked for — the minimum context, swept over
+        // every legal tile. Pinned because it is the size of the gap, and because a change that
+        // closes it should be visible here rather than inferred.
+        let cheapest = |model: PalwQwen25GeometryV1| -> u64 {
+            let mut best = u64::MAX;
+            for n_ctx in [2u32, 4, 8, 16, 32, 64] {
+                let mut tile = crate::palw_step::PALW_STEP_MIN_TILE_LEN;
+                while tile <= crate::palw_step::PALW_STEP_MAX_TILE_LEN {
+                    if let Ok(p) = qwen25_profile_v1(PalwQwen25GeometryV1 { n_ctx, tile_len: tile, ..model })
+                        && crate::palw_step::worst_case_step_leaf_count_v1(&p).is_ok()
+                        && let Ok(c) = crate::palw_class_admission_v2::derive_court_cost_v1(&p)
+                    {
+                        best = best.min(c.max_close_bytes);
+                    }
+                    tile = tile.saturating_mul(2);
+                }
+            }
+            best
+        };
+        assert_eq!(cheapest(QWEN25_1_5B), 1_220_368, "1.5B's cheapest possible close");
+        assert_eq!(cheapest(QWEN25_3B), 1_220_944, "3B's, and the two are within 0.05% — the pin dominates both");
+        assert!(
+            cheapest(QWEN25_1_5B) > 14 * crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES,
+            "the gap is an order of magnitude, not a tuning margin"
+        );
+
+        // And a court with no ceiling at all still says something useful: the LADDER alone admits a
+        // pair, so what refuses Qwen here is cost and not depth.
+        let ladder_only = crate::palw_mode_v2::PalwCourtParamsV2::with_cost_ceilings(
             crate::palw_step::PALW_STEP_MAX_LEAVES,
             4,
             2,
-            32 * 1024 * 1024,
-            1 << 30,
-            8,
+            u64::MAX,
+            u64::MAX,
+            u32::MAX,
         )
         .unwrap();
-        let wider = qwen25_admissible_geometry_v1(QWEN25_1_5B, &generous).expect("admissible");
-        assert!(wider.n_ctx > small.n_ctx, "a larger opening ceiling buys context: {} -> {}", small.n_ctx, wider.n_ctx);
+        let pair = qwen25_admissible_geometry_v1(QWEN25_1_5B, &ladder_only).expect("the ladder admits a pair");
+        assert!(pair.n_ctx < QWEN25_1_5B.n_ctx, "even then the context shrinks — that part of H-04 stands");
 
-        // And a court that admits nothing says so, rather than returning a pair nobody can use.
+        // A court that admits nothing says so, rather than returning a pair nobody can use.
         let impossible =
             crate::palw_mode_v2::PalwCourtParamsV2::with_cost_ceilings(crate::palw_step::PALW_STEP_MAX_LEAVES, 4, 2, 1, 1, 8).unwrap();
         assert!(qwen25_admissible_geometry_v1(QWEN25_1_5B, &impossible).is_none());
