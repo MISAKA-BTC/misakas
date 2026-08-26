@@ -44,20 +44,23 @@
 
 use kaspa_consensus_core::palw_artifact::PalwArtifactInventoryV1;
 use kaspa_consensus_core::palw_base0_ops::{
-    add_elem, dot_i8, matmul_quant, mul_elem, requantize_row, requantize_row_uniform, rescale_row, rms_norm, rope_table, silu, softmax,
+    add_elem, dot_i8, embed_lookup, matmul_quant, mul_elem, requantize_row, requantize_row_uniform, rescale_row, rms_norm, rope_table,
+    silu, softmax,
 };
-use kaspa_consensus_core::palw_base0_profile::{Base0IrInputV1, Base0IrNodeV1, Base0IrWidthV1, BASE0_LAYER_IR};
+use kaspa_consensus_core::palw_base0_profile::{
+    BASE0_LAYER_IR, BASE0_POST_IR, BASE0_PRE_IR, Base0IrInputV1, Base0IrNodeV1, Base0IrScopeV1, Base0IrWidthV1,
+};
 use kaspa_consensus_core::palw_step::{
-    kernel_semantics_id_v1, PalwShapeProfileV3, PalwStepNodeRoleV1, PalwStepOpKindV1, PalwStepOutLenV1, PALW_STEP_INPUT_KV_K,
-    PALW_STEP_INPUT_KV_V, PALW_STEP_INPUT_LAYER_IN,
+    PALW_STEP_INPUT_KV_K, PALW_STEP_INPUT_KV_V, PALW_STEP_INPUT_LAYER_IN, PalwShapeProfileV3, PalwStepNodeRoleV1, PalwStepOpKindV1,
+    PalwStepOutLenV1, kernel_semantics_id_v1,
 };
 use kaspa_consensus_core::palw_step_refute::{
-    KDESC_BASE0_ADD_ELEM, KDESC_BASE0_MATMUL, KDESC_BASE0_MUL_ELEM, KDESC_BASE0_REQUANTIZE, KDESC_BASE0_RESCALE, KDESC_BASE0_RMS_NORM,
-    KDESC_BASE0_ROPE, KDESC_BASE0_SILU, KDESC_BASE0_SOFTMAX,
+    KDESC_BASE0_ADD_ELEM, KDESC_BASE0_EMBED, KDESC_BASE0_MATMUL, KDESC_BASE0_MUL_ELEM, KDESC_BASE0_REQUANTIZE, KDESC_BASE0_RESCALE,
+    KDESC_BASE0_RMS_NORM, KDESC_BASE0_ROPE, KDESC_BASE0_SILU, KDESC_BASE0_SOFTMAX,
 };
 
 use crate::artifact::Base0ArtifactV1;
-use crate::operands::{base0_resolve_operand_v1, Base0OperandV1, Base0QuantOperandV1, OperandError};
+use crate::operands::{BASE0_IR_HEAD_TENSOR, Base0OperandV1, Base0QuantOperandV1, OperandError, base0_resolve_operand_v1};
 
 /// The engine's own head tensor.
 ///
@@ -216,17 +219,23 @@ pub struct Base0PlanV1 {
 impl Base0PlanV1 {
     /// Compile [`BASE0_LAYER_IR`] against `artifact`.
     pub fn compile(artifact: &Base0ArtifactV1) -> Result<Self, PlanError> {
-        Self::compile_table(BASE0_LAYER_IR, artifact)
+        Self::compile_table(BASE0_LAYER_IR, artifact, Base0IrScopeV1::PerLayer)
     }
 
-    pub fn compile_table(table: &'static [Base0IrNodeV1], artifact: &Base0ArtifactV1) -> Result<Self, PlanError> {
+    pub fn compile_table(
+        table: &'static [Base0IrNodeV1],
+        artifact: &Base0ArtifactV1,
+        scope: Base0IrScopeV1,
+    ) -> Result<Self, PlanError> {
         if table.is_empty() {
             return Err(PlanError::NoSteps);
         }
         let mut nodes: Vec<Base0PlanNodeV1> = Vec::with_capacity(table.len());
         for (i, ir) in table.iter().enumerate() {
             let slot = i as u16;
-            let emits_codes = ir.kernel == KDESC_BASE0_REQUANTIZE;
+            // A narrowing produces codes; so does the gather, which does not compute at all — it
+            // selects a row of the registered table, and those are already `int8`.
+            let emits_codes = matches!(ir.kernel, KDESC_BASE0_REQUANTIZE | KDESC_BASE0_EMBED);
             let reads_cache = ir.inputs.iter().any(|r| matches!(r, Base0IrInputV1::CachedK | Base0IrInputV1::CachedV));
             for r in ir.inputs {
                 if let Base0IrInputV1::Step(k) = r {
@@ -239,16 +248,19 @@ impl Base0PlanV1 {
             // class, rather than per forward pass: a name that resolves at layer 0 and not at
             // layer 7 is a class that would fail in the middle of an execution.
             if !ir.weight.is_empty() {
-                for li in 0..artifact.shape.n_layers {
-                    base0_resolve_operand_v1(artifact, ir.weight, Some(li), BASE0_ENGINE_HEAD_TENSOR)?;
+                match scope {
+                    Base0IrScopeV1::PerLayer => {
+                        for li in 0..artifact.shape.n_layers {
+                            base0_resolve_operand_v1(artifact, ir.weight, Some(li), BASE0_ENGINE_HEAD_TENSOR)?;
+                        }
+                    }
+                    Base0IrScopeV1::Graph => {
+                        base0_resolve_operand_v1(artifact, ir.weight, None, BASE0_ENGINE_HEAD_TENSOR)?;
+                    }
                 }
             }
             let arity = |want: usize| -> Result<(), PlanError> {
-                if ir.inputs.len() == want {
-                    Ok(())
-                } else {
-                    Err(PlanError::Arity { slot, kernel: ir.kernel, got: ir.inputs.len() })
-                }
+                if ir.inputs.len() == want { Ok(()) } else { Err(PlanError::Arity { slot, kernel: ir.kernel, got: ir.inputs.len() }) }
             };
             match ir.kernel {
                 KDESC_BASE0_RMS_NORM
@@ -259,6 +271,9 @@ impl Base0PlanV1 {
                 | KDESC_BASE0_ROPE => arity(1)?,
                 KDESC_BASE0_MUL_ELEM | KDESC_BASE0_ADD_ELEM => arity(2)?,
                 KDESC_BASE0_MATMUL => arity(if ir.weight.is_empty() { 2 } else { 1 })?,
+                // A gather's operands are the registered table and the TOKEN ID, not an opened
+                // row, so it has no input refs at all (ADR-0049 Decision E / G5d).
+                KDESC_BASE0_EMBED => arity(0)?,
                 other => return Err(PlanError::UnknownKernel { slot, kernel: other }),
             }
             // Which kernels are defined on codes. A step feeding one an accumulator is the
@@ -319,9 +334,14 @@ impl Base0PlanV1 {
             _ => return Err(PlanError::CacheOrder { detail: "one half of the cache is written and the other is not" }),
         }
 
-        let last = nodes.last().expect("the table is not empty");
-        if !last.emits_codes {
-            return Err(PlanError::LayerOutputNotCodes { slot: last.slot });
+        // The residual stream leaving a layer is what the next layer's norm reads, so a per-layer
+        // table must end on a narrowing. A graph-level table ends wherever the graph ends — the
+        // head's output is the logits, which are accumulators by definition.
+        if scope == Base0IrScopeV1::PerLayer {
+            let last = nodes.last().expect("the table is not empty");
+            if !last.emits_codes {
+                return Err(PlanError::LayerOutputNotCodes { slot: last.slot });
+            }
         }
 
         let softmax_slot = nodes.iter().find(|n| n.kernel == KDESC_BASE0_SOFTMAX).map(|n| n.slot as usize);
@@ -370,6 +390,7 @@ pub fn base0_ir_width_elements_v1(width: Base0IrWidthV1, shape: &crate::artifact
         Base0IrWidthV1::HeadDim => shape.d_head,
         Base0IrWidthV1::KvScaled(m) => m as usize * kv_len,
         Base0IrWidthV1::KvPerHead => shape.n_heads * kv_len,
+        Base0IrWidthV1::Vocab => shape.vocab,
     }
 }
 
@@ -416,7 +437,7 @@ impl Base0PlanV1 {
                     cache.push_layer(layer, k, v);
                 }
             }
-            let out = self.compute(artifact, node, layer, &layer_in_row, &rows, cache, position, kv_len)?;
+            let out = self.compute(artifact, node, layer, &layer_in_row, &rows, Some(cache), None, position, kv_len)?;
             debug_assert_eq!(
                 out.len(),
                 base0_ir_width_elements_v1(node.out, shape, kv_len),
@@ -456,6 +477,36 @@ impl Base0PlanV1 {
         Ok((out, trace))
     }
 
+    /// **Execute a graph-level table — the embedding gather, or the head.**
+    ///
+    /// No cache and no layer index: neither table has a `blk.{layer}.` operand or a cached input,
+    /// which `compile_table` checked at `Base0IrScopeV1::Graph` rather than trusting.
+    pub(crate) fn execute_graph(
+        &self,
+        artifact: &Base0ArtifactV1,
+        layer_in: &[i8],
+        token_id: Option<usize>,
+        position: usize,
+    ) -> Result<(Base0RowV1, Vec<Vec<i32>>), crate::engine::EngineError> {
+        let kv_len = position + 1;
+        let layer_in_row = Base0RowV1::Codes(layer_in.to_vec());
+        let mut rows: Vec<Base0RowV1> = Vec::with_capacity(self.nodes.len());
+        let mut lanes: Vec<Vec<i32>> = Vec::with_capacity(self.nodes.len());
+        for node in &self.nodes {
+            let out = self.compute(artifact, node, 0, &layer_in_row, &rows, None, token_id, position, kv_len)?;
+            debug_assert_eq!(
+                out.len(),
+                base0_ir_width_elements_v1(node.out, &artifact.shape, kv_len),
+                "slot {} produced a row the graph does not declare",
+                node.slot
+            );
+            lanes.push(out.to_lanes());
+            rows.push(out);
+        }
+        let last = rows.pop().ok_or(crate::engine::EngineError::Plan(PlanError::NoSteps))?;
+        Ok((last, lanes))
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn compute(
         &self,
@@ -464,7 +515,8 @@ impl Base0PlanV1 {
         layer: usize,
         layer_in_row: &Base0RowV1,
         rows: &[Base0RowV1],
-        cache: &crate::engine::KvCache,
+        cache: Option<&crate::engine::KvCache>,
+        token_id: Option<usize>,
         position: usize,
         kv_len: usize,
     ) -> Result<Base0RowV1, crate::engine::EngineError> {
@@ -570,11 +622,23 @@ impl Base0PlanV1 {
                 }
                 Base0RowV1::Acc(out)
             }
+            KDESC_BASE0_EMBED => {
+                // The one step whose operand is not a row: a gather of the registered table at the
+                // token id. `EmbedLookup` refuses an id past the table rather than wrapping — a
+                // wrapped id would make two different tokens compute the same thing, silently.
+                let Base0OperandV1::Gather { data, width } = operand(node.weight)? else {
+                    return Err(EngineError::Plan(PlanError::UnknownKernel { slot: node.slot, kernel: node.kernel }));
+                };
+                let token = token_id.ok_or(EngineError::Plan(PlanError::Arity { slot: node.slot, kernel: node.kernel, got: 0 }))?;
+                Base0RowV1::Codes(embed_lookup(data, data.len() / width.max(1), width, token)?.to_vec())
+            }
             KDESC_BASE0_MATMUL => {
                 if node.weight.is_empty() {
                     // Attention. The second operand is the cache rather than a registered tensor,
                     // and which cache decides the reduction: over KEYS it is one dot per history
                     // position per query head, over VALUES one dot per head lane.
+                    let cache = cache
+                        .ok_or(EngineError::Plan(PlanError::CacheOrder { detail: "a graph-level table cannot read the cache" }))?;
                     let group = shape.gqa_group().max(1);
                     let history = cache.layer_len(layer);
                     let mut out = Vec::with_capacity(out_elements);
@@ -625,6 +689,29 @@ impl Base0PlanV1 {
     }
 }
 
+/// **The whole graph, compiled: the gather, the layer template, and the head.**
+///
+/// Three tables because the court's step space has three — `Pre`, `Attn` and `Post` — and a row's
+/// TABLE is what decides its global slot. One object because they are one graph, and compiling them
+/// separately at three call sites is how a class comes to be executable in one table and not
+/// another.
+#[derive(Clone, Debug)]
+pub struct Base0GraphPlanV1 {
+    pub pre: Base0PlanV1,
+    pub layer: Base0PlanV1,
+    pub post: Base0PlanV1,
+}
+
+impl Base0GraphPlanV1 {
+    pub fn compile(artifact: &Base0ArtifactV1) -> Result<Self, PlanError> {
+        Ok(Self {
+            pre: Base0PlanV1::compile_table(BASE0_PRE_IR, artifact, Base0IrScopeV1::Graph)?,
+            layer: Base0PlanV1::compile(artifact)?,
+            post: Base0PlanV1::compile_table(BASE0_POST_IR, artifact, Base0IrScopeV1::Graph)?,
+        })
+    }
+}
+
 /// Where two projections of one description stop agreeing.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ProjectionMismatch {
@@ -670,13 +757,44 @@ impl std::error::Error for ProjectionMismatch {}
 /// `kv_len` is the position the widths are compared at. One position cannot tell a per-head width
 /// from a per-layer one — both are `kv_len` at one — so a caller checking properly checks two.
 pub fn base0_check_projections_v1(
-    plan: &Base0PlanV1,
+    plan: &Base0GraphPlanV1,
     profile: &PalwShapeProfileV3,
     inventory: &PalwArtifactInventoryV1,
     shape: &crate::artifact::Base0ShapeV1,
     kv_len: usize,
 ) -> Result<(), ProjectionMismatch> {
-    let declared = &profile.attn_nodes;
+    // All three tables, because the head is where the model's OUTPUT comes from and a hand-written
+    // table of three nodes drifts exactly like one of thirty-eight: both classes' post tables
+    // declared the final norm and not the narrowing after it, for as long as they were written
+    // twice.
+    for (declared, plan) in [(&profile.pre_nodes, &plan.pre), (&profile.attn_nodes, &plan.layer), (&profile.post_nodes, &plan.post)] {
+        check_table(declared, plan, shape, kv_len)?;
+    }
+
+    // Tensor for tensor, both directions. `verify_covers_profile` already asks the first — every
+    // tensor the graph reads is carried — over every table; this asks the second, which nothing
+    // did: a row the inventory carries that no step in the graph can open.
+    inventory.verify_covers_profile(profile).map_err(|e| ProjectionMismatch::TensorNotCarried { tensor: format!("{e:?}") })?;
+    let read: Vec<&str> = [&profile.pre_nodes, &profile.gdn_nodes, &profile.attn_nodes, &profile.post_nodes]
+        .into_iter()
+        .flat_map(|t| t.iter())
+        .filter(|n| !n.weight_name.is_empty())
+        .map(|n| n.weight_name.as_str())
+        .collect();
+    for row in inventory.operands() {
+        if !read.contains(&row.tensor_name.as_str()) {
+            return Err(ProjectionMismatch::RowNobodyOpens { tensor: row.tensor_name.clone() });
+        }
+    }
+    Ok(())
+}
+
+fn check_table(
+    declared: &[kaspa_consensus_core::palw_step::PalwStepNodeV1],
+    plan: &Base0PlanV1,
+    shape: &crate::artifact::Base0ShapeV1,
+    kv_len: usize,
+) -> Result<(), ProjectionMismatch> {
     if declared.len() != plan.len() {
         return Err(ProjectionMismatch::NodeCount { profile: declared.len(), plan: plan.len() });
     }
@@ -695,7 +813,10 @@ pub fn base0_check_projections_v1(
         if want.kernel_semantics_id != kernel_semantics_id_v1(node.kernel) {
             return Err(bad("kernel"));
         }
-        if want.weight_name != node.weight {
+        // The head is the one name the graph leaves to the class — the profile carries the
+        // class's (`output.weight`, or `token_embd.weight` when the embeddings are tied) and the
+        // plan carries the engine's. Every other operand must match outright.
+        if want.weight_name != node.weight && node.weight != BASE0_IR_HEAD_TENSOR {
             return Err(bad("operand"));
         }
         let want_elements = match want.out_len {
@@ -720,21 +841,6 @@ pub fn base0_check_projections_v1(
         }
     }
 
-    // Tensor for tensor, both directions. `verify_covers_profile` already asks the first — every
-    // tensor the graph reads is carried — over every table; this asks the second, which nothing
-    // did: a row the inventory carries that no step in the graph can open.
-    inventory.verify_covers_profile(profile).map_err(|e| ProjectionMismatch::TensorNotCarried { tensor: format!("{e:?}") })?;
-    let read: Vec<&str> = [&profile.pre_nodes, &profile.gdn_nodes, &profile.attn_nodes, &profile.post_nodes]
-        .into_iter()
-        .flat_map(|t| t.iter())
-        .filter(|n| !n.weight_name.is_empty())
-        .map(|n| n.weight_name.as_str())
-        .collect();
-    for row in inventory.operands() {
-        if !read.contains(&row.tensor_name.as_str()) {
-            return Err(ProjectionMismatch::RowNobodyOpens { tensor: row.tensor_name.clone() });
-        }
-    }
     Ok(())
 }
 
@@ -743,7 +849,7 @@ mod tests {
     use super::*;
     use crate::artifact::{Base0ShapeV1, LN_THETA_10000_GEN_Q};
     use crate::inventory::base0_inventory_v1;
-    use kaspa_consensus_core::palw_base0_profile::{base0_profile_v1, PALW_RC_BASE0_GEOMETRY};
+    use kaspa_consensus_core::palw_base0_profile::{PALW_RC_BASE0_GEOMETRY, base0_profile_v1};
 
     fn rc_shape() -> Base0ShapeV1 {
         let g = PALW_RC_BASE0_GEOMETRY;
@@ -780,7 +886,7 @@ mod tests {
         let artifact = rc_artifact();
         let profile = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("the floor's graph");
         let inventory = base0_inventory_v1(&artifact, PALW_RC_BASE0_GEOMETRY).expect("the floor's inventory");
-        let plan = Base0PlanV1::compile(&artifact).expect("the floor's graph is executable");
+        let plan = Base0GraphPlanV1::compile(&artifact).expect("the floor's graph is executable");
 
         for kv_len in 1..=2 {
             base0_check_projections_v1(&plan, &profile, &inventory, &artifact.shape, kv_len)
@@ -798,13 +904,13 @@ mod tests {
             for (layer, slot, row) in &probe.steps {
                 assert_eq!(
                     row.len(),
-                    plan.out_elements(*slot as usize, &artifact.shape, kv_len),
+                    plan.layer.out_elements(*slot as usize, &artifact.shape, kv_len),
                     "layer {layer} slot {slot} at kv_len {kv_len}"
                 );
             }
             assert_eq!(
                 probe.steps.len(),
-                plan.len() * artifact.shape.n_layers,
+                plan.layer.len() * artifact.shape.n_layers,
                 "every step of every layer is captured, at kv_len {kv_len}"
             );
         }
@@ -825,7 +931,7 @@ mod tests {
         let artifact = rc_artifact();
         let good = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("the floor's graph");
         let inventory = base0_inventory_v1(&artifact, PALW_RC_BASE0_GEOMETRY).expect("the floor's inventory");
-        let plan = Base0PlanV1::compile(&artifact).expect("executable");
+        let plan = Base0GraphPlanV1::compile(&artifact).expect("executable");
         let check = |p: &PalwShapeProfileV3| base0_check_projections_v1(&plan, p, &inventory, &artifact.shape, 2);
         check(&good).expect("the unmutated graph agrees");
 
@@ -855,7 +961,7 @@ mod tests {
         // actually declared before it was projected.
         let mut short = good.clone();
         short.attn_nodes.truncate(18);
-        assert_eq!(check(&short), Err(ProjectionMismatch::NodeCount { profile: 18, plan: plan.len() }));
+        assert_eq!(check(&short), Err(ProjectionMismatch::NodeCount { profile: 18, plan: plan.layer.len() }));
     }
 
     // --- the compile-time refusals, exercised against graphs written to break them -------------
@@ -898,7 +1004,7 @@ mod tests {
     #[test]
     fn a_graph_that_cannot_be_executed_is_refused_by_name() {
         let artifact = rc_artifact();
-        let refusal = |t| Base0PlanV1::compile_table(t, &artifact).err();
+        let refusal = |t| Base0PlanV1::compile_table(t, &artifact, Base0IrScopeV1::PerLayer).err();
 
         assert_eq!(refusal(READS_ITSELF), Some(PlanError::ForwardReference { slot: 0, input: 0 }));
         assert_eq!(
@@ -913,6 +1019,13 @@ mod tests {
         assert_eq!(refusal(ENDS_ON_AN_ACCUMULATOR), Some(PlanError::LayerOutputNotCodes { slot: 0 }));
 
         // And the one that must compile: the graph the class actually is.
-        assert_eq!(Base0PlanV1::compile_table(BASE0_LAYER_IR, &artifact).expect("the floor compiles").len(), BASE0_LAYER_IR.len());
+        assert_eq!(
+            Base0PlanV1::compile_table(BASE0_LAYER_IR, &artifact, Base0IrScopeV1::PerLayer).expect("the floor compiles").len(),
+            BASE0_LAYER_IR.len()
+        );
+
+        // And the two graph-level tables, which a per-layer scope would reject on their last node:
+        // the head's output is the logits, and logits are accumulators.
+        Base0GraphPlanV1::compile(&artifact).expect("the whole graph compiles");
     }
 }

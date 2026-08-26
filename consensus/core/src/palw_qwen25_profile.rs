@@ -45,11 +45,7 @@
 //! parameters carrying the folded biases, the pinned integer rotary table, the tokenizer
 //! commitment — is Phase 2's, and no function can invent it.
 
-use crate::palw_step::{
-    PALW_STEP_INPUT_LAYER_IN, PALW_STEP_OBJECT_VERSION_V1, PalwShapeProfileV3, PalwStepError, PalwStepLaneV1, PalwStepNodeRoleV1,
-    PalwStepNodeV1, PalwStepOpKindV1, PalwStepOutLenV1, kernel_semantics_id_v1,
-};
-use crate::palw_step_refute::{KDESC_BASE0_EMBED, KDESC_BASE0_MATMUL, KDESC_BASE0_REQUANTIZE, KDESC_BASE0_RMS_NORM};
+use crate::palw_step::{PALW_STEP_OBJECT_VERSION_V1, PalwShapeProfileV3, PalwStepError, PalwStepLaneV1};
 
 /// The int8 dtype byte. One weight type throughout: the class is integer arithmetic, and any
 /// variance would mean it is not this class.
@@ -217,6 +213,12 @@ pub fn qwen25_admissible_geometry_v1(
 ///
 /// Compare against the measured safetensors table: the norm gains are ABSENT (G1 folds them), the
 /// q/k/v biases are absent as tensors and present as requantization zero points (G2), and there
+/// **This family's head tensor: the embedding table itself.**
+///
+/// `tie_word_embeddings` is true for every member, so there is no `output.weight` and the lm_head
+/// reads `token_embd.weight`. It is the one name the post IR leaves to the class.
+pub const QWEN25_HEAD_TENSOR: &str = "token_embd.weight";
+
 /// is no `output.weight` because `tie_word_embeddings` is true — the lm_head reads the embedding
 /// table. The `.requant` entries are the per-channel `(multiplier, shift, zero)` triples.
 /// **Projected from the IR** (ADR-0049 Decision F), with this family's head tensor.
@@ -230,7 +232,7 @@ pub fn qwen25_admissible_geometry_v1(
 pub fn qwen25_tensor_names_v1() -> Vec<&'static str> {
     // Tied embeddings: the head reads the embedding table, which is already first in the list, so
     // naming it here dedups to nothing and no `output.weight` is declared.
-    crate::palw_base0_profile::base0_tensor_names_for_head_v1("token_embd.weight")
+    crate::palw_base0_profile::base0_tensor_names_for_head_v1(QWEN25_HEAD_TENSOR)
 }
 
 /// Qwen2.5's graph, for `geometry`.
@@ -244,49 +246,35 @@ pub fn qwen25_tensor_names_v1() -> Vec<&'static str> {
 /// what the roles select, and getting it backwards would have the court recompute attention
 /// against unrotated keys and convict every honest producer.
 pub fn qwen25_profile_v1(geometry: PalwQwen25GeometryV1) -> Result<PalwShapeProfileV3, PalwStepError> {
-    let once = vec![QWEN25_WEIGHT_DTYPE_I8];
     let tile = geometry.tile_len;
     let hidden = geometry.hidden_dim;
     let q_dim = geometry.attn_heads as u32 * geometry.attn_head_dim;
     let kv_dim = geometry.attn_kv_heads as u32 * geometry.attn_head_dim;
 
-    let plain = |kind: PalwStepOpKindV1, desc: &str, out: PalwStepOutLenV1, refs: Vec<u16>| PalwStepNodeV1 {
-        op_kind: kind,
-        role: PalwStepNodeRoleV1::Plain,
-        weight_name: String::new(),
-        weight_dtypes: Vec::new(),
-        out_len: out,
-        tile_len: tile,
-        kernel_semantics_id: kernel_semantics_id_v1(desc),
-        input_refs: refs,
-    };
-    let weighted = |kind: PalwStepOpKindV1,
-                    desc: &str,
-                    name: &str,
-                    dtypes: &[u8],
-                    role: PalwStepNodeRoleV1,
-                    out: PalwStepOutLenV1,
-                    refs: Vec<u16>| PalwStepNodeV1 {
-        op_kind: kind,
-        role,
-        weight_name: name.to_string(),
-        weight_dtypes: dtypes.to_vec(),
-        out_len: out,
-        tile_len: tile,
-        kernel_semantics_id: kernel_semantics_id_v1(desc),
-        input_refs: refs,
-    };
-    let fixed = |n: u32| PalwStepOutLenV1::Fixed { elements: n };
+    // **No node is written here** (ADR-0049 Decision F): every table below is projected from the
+    // IR, so the hand builders that used to stand here have nothing left to build.
 
-    let pre_nodes = vec![weighted(
-        PalwStepOpKindV1::EmbedLookup,
-        KDESC_BASE0_EMBED,
-        "token_embd.weight",
-        &once,
-        PalwStepNodeRoleV1::Plain,
-        fixed(hidden),
-        Vec::new(),
-    )];
+    let ir_geometry = crate::palw_base0_profile::Base0IrGeometryV1 {
+        layer_count: geometry.layer_count,
+        hidden_dim: hidden,
+        ffn_dim: geometry.ffn_dim,
+        attn_heads: geometry.attn_heads,
+        attn_kv_heads: geometry.attn_kv_heads,
+        attn_head_dim: geometry.attn_head_dim,
+        tile_len: tile,
+        vocab_size: geometry.vocab_size,
+        weight_dtype: QWEN25_WEIGHT_DTYPE_I8,
+    };
+
+    // **Projected too, at this family's head tensor** (ADR-0049 Decision F). One node, and it was
+    // still a second description of one step — as the post table below proves a small table drifts
+    // exactly like a large one.
+    let pre_nodes = crate::palw_base0_profile::base0_ir_nodes_v1(
+        crate::palw_base0_profile::BASE0_PRE_IR,
+        ir_geometry,
+        crate::palw_base0_profile::Base0IrScopeV1::Graph,
+        QWEN25_HEAD_TENSOR,
+    );
 
     // **Projected from `BASE0_LAYER_IR`, the engine's own step order** (ADR-0049 Decision F).
     //
@@ -305,45 +293,20 @@ pub fn qwen25_profile_v1(geometry: PalwQwen25GeometryV1) -> Result<PalwShapeProf
     // The floor was already projected from the IR; the projection just could not express
     // grouped-query attention, because it read `PalwBase0GeometryV1`, which has no kv-head count.
     // `Base0IrGeometryV1` supplies one, and both classes now come from the same call.
-    let attn_nodes = crate::palw_base0_profile::base0_ir_attn_nodes_v1(crate::palw_base0_profile::Base0IrGeometryV1 {
-        layer_count: geometry.layer_count,
-        hidden_dim: hidden,
-        ffn_dim: geometry.ffn_dim,
-        attn_heads: geometry.attn_heads,
-        attn_kv_heads: geometry.attn_kv_heads,
-        attn_head_dim: geometry.attn_head_dim,
-        tile_len: tile,
-        weight_dtype: QWEN25_WEIGHT_DTYPE_I8,
-    });
+    let attn_nodes = crate::palw_base0_profile::base0_ir_attn_nodes_v1(ir_geometry);
     debug_assert_eq!(kv_dim, geometry.attn_kv_heads as u32 * geometry.attn_head_dim);
     debug_assert_eq!(q_dim, hidden, "the query width is the hidden width for every member of this family");
 
-    // The head, and it is THREE steps, not two. `Base0Engine::norm_to_code` is `rms_norm` followed
-    // by the narrowing back to activation codes; this table declared the first and not the second,
-    // which is the same omission the floor's post table carried before it was corrected — a court
-    // recomputing the head would compare a Qk value against a code. The engine emits three rows
-    // here and the profile now has three nodes for them.
-    let post_nodes = vec![
-        plain(PalwStepOpKindV1::RmsNorm, KDESC_BASE0_RMS_NORM, fixed(hidden), vec![PALW_STEP_INPUT_LAYER_IN]),
-        weighted(
-            PalwStepOpKindV1::MulElem,
-            KDESC_BASE0_REQUANTIZE,
-            "output_norm.requant",
-            &once,
-            PalwStepNodeRoleV1::Plain,
-            fixed(hidden),
-            vec![0],
-        ),
-        weighted(
-            PalwStepOpKindV1::MatMulQuant,
-            KDESC_BASE0_MATMUL,
-            "token_embd.weight",
-            &once,
-            PalwStepNodeRoleV1::Plain,
-            fixed(geometry.vocab_size),
-            vec![1],
-        ),
-    ];
+    // The head, and it is THREE steps, not two. The final norm is `rms_norm` followed by the
+    // narrowing back to activation codes; this table declared the first and not the second — the
+    // same omission the floor's post table carried, in a table written twice. Projected now, from
+    // `BASE0_POST_IR`, so the two classes cannot differ about what the head is.
+    let post_nodes = crate::palw_base0_profile::base0_ir_nodes_v1(
+        crate::palw_base0_profile::BASE0_POST_IR,
+        ir_geometry,
+        crate::palw_base0_profile::Base0IrScopeV1::Graph,
+        QWEN25_HEAD_TENSOR,
+    );
 
     let profile = PalwShapeProfileV3 {
         version: PALW_STEP_OBJECT_VERSION_V1,
@@ -404,7 +367,7 @@ mod tests {
     use super::*;
     use crate::Hash64;
     use crate::palw_catalog_coverage::verify_profile_coverage_v1;
-    use crate::palw_step::PalwStepTableV1;
+    use crate::palw_step::{PalwStepNodeRoleV1, PalwStepOpKindV1, PalwStepOutLenV1, PalwStepTableV1, kernel_semantics_id_v1};
     use crate::palw_step_refute::{catalogued_kernel_ids_v1, kernel_can_serve_node_v1};
 
     /// Diagnostic: the smallest tile_len that admits the declared 4096 context, projected.
@@ -595,6 +558,47 @@ mod tests {
     ///
     /// G1, G2 and G3 are exact and applied when the artifact is built, so the way they show up
     /// here is that certain nodes are NOT in the graph. Asserting the absence is what stops one of
+    /// **Both classes' heads are one table, and the head tensor is the only thing that differs**
+    /// (ADR-0049 Decision F).
+    ///
+    /// The pre and post tables were written by hand in BOTH files, three nodes each, and drifted
+    /// the same way a thirty-eight-node table drifts: each declared the final `RmsNorm` and not the
+    /// narrowing after it, so a court recomputing the head would compare a Qk value against a code.
+    /// Two hand copies means a fix applied to one and not the other, which is what "generated from
+    /// one description" is for.
+    ///
+    /// What a class is still allowed to choose is its head tensor: this family ties the embeddings,
+    /// so its lm_head reads `token_embd.weight` and no `output.weight` exists. That is the one name
+    /// `BASE0_POST_IR` leaves open, and it is the only field below that may differ.
+    #[test]
+    fn the_head_is_one_table_projected_at_two_head_tensors() {
+        let qwen = qwen25_profile_v1(QWEN25_1_5B).expect("the family's graph");
+        let floor =
+            crate::palw_base0_profile::base0_profile_v1(crate::palw_base0_profile::PALW_RC_BASE0_GEOMETRY).expect("the floor's graph");
+
+        assert_eq!(qwen.post_nodes.len(), 3, "the head is norm, narrowing, logits");
+        assert_eq!(qwen.pre_nodes.len(), floor.pre_nodes.len());
+        for (q, f) in qwen.post_nodes.iter().zip(floor.post_nodes.iter()) {
+            assert_eq!(q.op_kind, f.op_kind);
+            assert_eq!(q.kernel_semantics_id, f.kernel_semantics_id);
+            assert_eq!(q.input_refs, f.input_refs);
+            assert_eq!(q.role, f.role);
+        }
+        // The head tensor, and nothing else, follows the class.
+        assert_eq!(qwen.post_nodes[0].weight_name, floor.post_nodes[0].weight_name, "the norm reads no tensor");
+        assert_eq!(qwen.post_nodes[1].weight_name, floor.post_nodes[1].weight_name, "one narrowing name");
+        assert_eq!(qwen.post_nodes[2].weight_name, QWEN25_HEAD_TENSOR);
+        assert_eq!(floor.post_nodes[2].weight_name, crate::palw_base0_profile::BASE0_FLOOR_HEAD_TENSOR);
+        assert_ne!(qwen.post_nodes[2].weight_name, floor.post_nodes[2].weight_name);
+
+        // And the narrowing the hand-written tables omitted is present in both, reading the norm.
+        for p in [&qwen, &floor] {
+            assert_eq!(p.post_nodes[1].op_kind, PalwStepOpKindV1::MulElem, "the head narrows before it projects");
+            assert_eq!(p.post_nodes[1].input_refs, vec![0]);
+            assert!(matches!(p.post_nodes[2].out_len, PalwStepOutLenV1::Fixed { elements } if elements == p.vocab_size));
+        }
+    }
+
     /// them being quietly re-added as an unadjudicable op later.
     #[test]
     fn the_folded_transformations_leave_no_node_behind() {

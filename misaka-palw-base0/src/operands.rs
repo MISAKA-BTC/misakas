@@ -37,12 +37,9 @@ use crate::rope::RopeTableV1;
 /// The `blk.{layer}.` prefix every per-layer tensor name carries.
 pub const BASE0_LAYER_PREFIX: &str = "blk.{layer}.";
 
-/// **The head tensor's placeholder.**
-///
-/// The lm_head is the one operand that is a property of the CLASS rather than of the graph: the
-/// floor reads `output.weight`, and a class with tied embeddings reads `token_embd.weight` and
-/// carries no `output.weight` at all. Everything else in the IR is named outright.
-pub const BASE0_IR_HEAD_TENSOR: &str = "{head}";
+/// The head tensor's placeholder, re-exported from the IR that defines it — a second copy of this
+/// string would be a second answer to "which tensor is the head", which is the whole subject here.
+pub use kaspa_consensus_core::palw_base0_profile::BASE0_IR_HEAD_TENSOR;
 
 /// A narrowing's parameters, tensor-wide or per output channel.
 ///
@@ -213,7 +210,7 @@ pub fn base0_resolve_operand_v1<'a>(
 mod tests {
     use super::*;
     use crate::artifact::{Base0ShapeV1, LN_THETA_10000_GEN_Q};
-    use kaspa_consensus_core::palw_base0_profile::{base0_tensor_names_v1, BASE0_LAYER_IR};
+    use kaspa_consensus_core::palw_base0_profile::{BASE0_LAYER_IR, base0_tensor_names_v1};
 
     fn shape() -> Base0ShapeV1 {
         Base0ShapeV1 {

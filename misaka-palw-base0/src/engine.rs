@@ -33,9 +33,10 @@
 //! that every reduction in the graph is the same op.
 
 use kaspa_consensus_core::palw_base0::K;
-use kaspa_consensus_core::palw_base0_ops::{
-    self as ops, embed_lookup, matmul_quant, requantize_row_uniform, rms_norm, PalwBase0OpError, ScaleParams,
-};
+// **No kernel is called in this file** (ADR-0049 Decision F). Every arithmetic step of the forward
+// pass is dispatched by `plan`, from `BASE0_LAYER_IR`; what is left here is the loop over layers,
+// the cache's shape rules, and the probe.
+use kaspa_consensus_core::palw_base0_ops::{self as ops, PalwBase0OpError, ScaleParams};
 use kaspa_consensus_core::palw_state_chunk_map::{PalwStateChunkEntryV1, PalwStateChunkGeometryV1, PalwStateChunkKindV1};
 
 use crate::artifact::Base0ArtifactV1;
@@ -315,12 +316,12 @@ pub struct Base0Engine<'a> {
     /// tensor the graph names resolve, does every step read an earlier one, is every kernel
     /// dispatchable — are properties of the class, and a class this binary cannot execute should
     /// say so before the first forward pass rather than in the middle of one.
-    plan: Result<crate::plan::Base0PlanV1, crate::plan::PlanError>,
+    plan: Result<crate::plan::Base0GraphPlanV1, crate::plan::PlanError>,
 }
 
 impl<'a> Base0Engine<'a> {
     pub fn new(artifact: &'a Base0ArtifactV1) -> Self {
-        Self { artifact, artifact_digest: artifact.artifact_digest(), plan: crate::plan::Base0PlanV1::compile(artifact) }
+        Self { artifact, artifact_digest: artifact.artifact_digest(), plan: crate::plan::Base0GraphPlanV1::compile(artifact) }
     }
 
     pub fn artifact(&self) -> &Base0ArtifactV1 {
@@ -328,7 +329,7 @@ impl<'a> Base0Engine<'a> {
     }
 
     /// The compiled graph, or the reason this artifact's class cannot be executed.
-    pub fn plan(&self) -> Result<&crate::plan::Base0PlanV1, EngineError> {
+    pub fn plan(&self) -> Result<&crate::plan::Base0GraphPlanV1, EngineError> {
         self.plan.as_ref().map_err(|e| EngineError::Plan(e.clone()))
     }
 
@@ -366,8 +367,14 @@ impl<'a> Base0Engine<'a> {
             return Err(EngineError::PositionOutOfRange { got: position, max: shape.max_position });
         }
 
-        let mut h: Vec<i8> = embed_lookup(&self.artifact.embed, shape.vocab, d, token_id)?.to_vec();
-        probe.pre_steps.push((0, h.iter().map(|c| *c as i32).collect()));
+        // The gather is a step of the graph like any other, and it is walked like one.
+        let (embedded, pre_rows) = plan.pre.execute_graph(self.artifact, &[], Some(token_id), position)?;
+        for (slot, row) in pre_rows.into_iter().enumerate() {
+            probe.pre_steps.push((slot as u16, row));
+        }
+        let crate::plan::Base0RowV1::Codes(mut h) = embedded else {
+            return Err(EngineError::Plan(crate::plan::PlanError::LayerOutputNotCodes { slot: 0 }));
+        };
 
         // **The layer graph is WALKED, not written** (ADR-0049 Decision F).
         //
@@ -379,7 +386,7 @@ impl<'a> Base0Engine<'a> {
         // rotated, the cache role on the raw projection, the per-head attention nodes declared once
         // per layer. Each was found by someone reading.
         for li in 0..shape.n_layers {
-            let (next, trace) = plan.execute_layer(self.artifact, li, &h, cache, position)?;
+            let (next, trace) = plan.layer.execute_layer(self.artifact, li, &h, cache, position)?;
             let crate::plan::Base0LayerTraceV1 { rows, attention_spread, gate_extremes } = trace;
             for (slot, row) in rows.into_iter().enumerate() {
                 probe.steps.push((li as u16, slot as u16, row));
@@ -392,15 +399,17 @@ impl<'a> Base0Engine<'a> {
             h = next;
         }
 
-        // Inlined rather than `norm_to_code`, because the post table declares the norm and its
-        // narrowing as TWO nodes and a court recomputing the head opens them separately: a capture
-        // that only kept the pair's output could not answer for either.
-        let final_norm_q = rms_norm(&h, self.artifact.shape.eps_q)?;
-        probe.post_steps.push((0, final_norm_q.clone()));
-        let final_state = requantize_row_uniform(&final_norm_q, self.artifact.norm_requant);
-        probe.post_steps.push((1, final_state.iter().map(|c| *c as i32).collect()));
-        let logits = matmul_quant(&self.artifact.unembed, &final_state, shape.vocab)?;
-        probe.post_steps.push((2, logits.clone()));
+        // The head — the final norm, its narrowing, and the logits — walked from `BASE0_POST_IR`.
+        // It used to be inlined here, three steps written beside a three-node table, and both
+        // classes' tables declared the norm and not the narrowing after it for as long as that
+        // lasted: a court recomputing the head would have compared a Qk value against a code.
+        let (logits, post_rows) = plan.post.execute_graph(self.artifact, &h, None, position)?;
+        for (slot, row) in post_rows.into_iter().enumerate() {
+            probe.post_steps.push((slot as u16, row));
+        }
+        let crate::plan::Base0RowV1::Acc(logits) = logits else {
+            return Err(EngineError::Plan(crate::plan::PlanError::LayerOutputNotCodes { slot: 2 }));
+        };
         Ok((logits, probe))
     }
 

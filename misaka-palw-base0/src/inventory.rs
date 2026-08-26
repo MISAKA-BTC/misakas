@@ -43,10 +43,10 @@
 
 use kaspa_consensus_core::palw_artifact::{PalwArtifactInventoryV1, PalwArtifactOperandV1, PalwInventoryError};
 use kaspa_consensus_core::palw_base0_ops::ScaleParams;
-use kaspa_consensus_core::palw_base0_profile::{base0_tensor_names_v1, PalwBase0GeometryV1};
+use kaspa_consensus_core::palw_base0_profile::{PalwBase0GeometryV1, base0_tensor_names_v1};
 
 use crate::artifact::{ArtifactError, Base0ArtifactV1};
-use crate::operands::{base0_resolve_operand_v1, Base0OperandV1, OperandError, BASE0_LAYER_PREFIX};
+use crate::operands::{BASE0_LAYER_PREFIX, Base0OperandV1, OperandError, base0_resolve_operand_v1};
 use crate::plan::BASE0_ENGINE_HEAD_TENSOR;
 
 /// Why an artifact yields no inventory.
@@ -199,7 +199,7 @@ mod tests {
     use super::*;
     use crate::artifact::{Base0ShapeV1, LN_THETA_10000_GEN_Q};
     use kaspa_consensus_core::palw_base0_ops::QuantParams;
-    use kaspa_consensus_core::palw_base0_profile::{base0_profile_v1, PALW_RC_BASE0_GEOMETRY};
+    use kaspa_consensus_core::palw_base0_profile::{PALW_RC_BASE0_GEOMETRY, base0_profile_v1};
 
     fn rc_shape() -> Base0ShapeV1 {
         let g = PALW_RC_BASE0_GEOMETRY;
