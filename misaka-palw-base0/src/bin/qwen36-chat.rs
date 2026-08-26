@@ -122,17 +122,19 @@ fn main() {
 
     let text = if raw { prompt.to_string() } else { chat_prompt(system, prompt, thinking) };
     let ids = tokenizer.encode(&text).unwrap_or_else(|e| die(format!("tokenizing: {e}")));
+    // Before the context check: what a tokenizer produced is worth seeing even when no artifact in
+    // hand is large enough to run it.
+    if args.iter().any(|a| a == "--show-ids") {
+        println!("{}", ids.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(","));
+        eprintln!("{} tokens, round-trip {}", ids.len(), if tokenizer.decode(&ids).ok().as_deref() == Some(text.as_str()) { "exact" } else { "LOSSY" });
+        return;
+    }
     if ids.len() >= shape.max_position {
         die(format!("the prompt is {} tokens and this artifact's rotary table covers {}", ids.len(), shape.max_position));
     }
     // By content, not by id: the number is a property of the vocabulary the checkpoint shipped.
     let stop = if raw { tokenizer.added_id("<|endoftext|>") } else { tokenizer.added_id("<|im_end|>") };
     eprintln!("prompt    {} tokens, stop {stop:?}", ids.len());
-    if args.iter().any(|a| a == "--show-ids") {
-        eprintln!("ids       {ids:?}");
-        eprintln!("round-trip {:?}", tokenizer.decode(&ids).ok());
-        std::process::exit(0);
-    }
 
     let engine = Qwen36Engine::new(&artifact);
     let mut cache = Qwen36Cache::new(shape);

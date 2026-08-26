@@ -544,7 +544,7 @@ fn main() {
                 let e_qkv = cal::site_exponent(site(&calibration, &g("linear_qkv")));
                 let e_conv_act = cal::site_exponent(site(&calibration, &g("linear_conv")));
                 let e_state_out = cal::site_exponent(site(&calibration, &g("linear_state_out")));
-                let e_gated = cal::site_exponent(site(&calibration, &g("linear_gated")));
+                let e_gated = cal::site_exponent_with(site(&calibration, &g("linear_gated")), cal::PRODUCT_HEADROOM_BITS);
                 // The head-wise norm changes the magnitude, so the value that reaches the multiply
                 // has its own exponent — it is not the state output's.
                 let e_normed_out = cal::site_exponent(site(&calibration, &g("linear_normed")));
@@ -582,6 +582,9 @@ fn main() {
                 let mut delta_rows: Vec<A16QuantParams> = Vec::new();
                 let mut eps_rows: Vec<A16QuantParams> = Vec::new();
                 let mut v_exponents: Vec<i32> = Vec::new();
+                // Per head, the loudest decay the calibration saw — the one that accumulates most
+                // between the calibration's horizon and the artifact's.
+                let decay_lanes = calibration.sites.get(&g("linear_decay")).map(|r| r.lanes.clone()).unwrap_or_default();
                 let delta_lanes = calibration.sites.get(&g("linear_delta_head")).map(|r| r.lanes.clone()).unwrap_or_default();
                 for vh in 0..linear_v_heads {
                     // **The state is `i32`, so its exponent targets the `i32` rail.**
@@ -592,13 +595,22 @@ fn main() {
                     // carries forward, and it is what the arm's output was missing.
                     // Per head — `linear_state_head` carries one lane per head, so this is that
                     // head's own crest and not the loudest head's.
-                    let e_state = cal::site_exponent(head_max(&state_lanes, vh, 1, site(&calibration, &g("linear_state")))) + 15;
+                    // **The horizon correction.** The calibration ran `prompt.len()` positions and
+                    // the artifact's rotary table covers `max_position`; a recurrent state's
+                    // geometric sum grows between the two by a factor this head's own decay fixes.
+                    // Without it a 56-position run saturates the state's output at `i32::MAX` while
+                    // the 8-position calibration reported room to spare.
+                    let grow = cal::horizon_growth_bits(decay_lanes.get(vh).copied().unwrap_or(1.0), prompt.len(), max_position);
+                    let e_state = cal::site_exponent(head_max(&state_lanes, vh, 1, site(&calibration, &g("linear_state")))) + 15 - grow;
                     // `v` is the conv output's third block, `[2·dk, 2·dk + dv)`.
-                    let e_v = cal::site_exponent(head_max(&v_lanes, 2 * dk + vh * hd, hd, site(&calibration, &g("linear_conv"))));
+                    let e_v = cal::site_exponent_with(
+                        head_max(&v_lanes, 2 * dk + vh * hd, hd, site(&calibration, &g("linear_conv"))),
+                        cal::PRODUCT_HEADROOM_BITS,
+                    );
                     v_exponents.push(e_v);
                     // Wide out: the recurrence's row is normalized per head and never reduced
                     // across heads, so it is sized against the `i32` rail like the state.
-                    let e_o = cal::site_exponent(head_max(&out_lanes, vh * hd, hd, site(&calibration, &g("linear_state_out")))) + 15;
+                    let e_o = cal::site_exponent(head_max(&out_lanes, vh * hd, hd, site(&calibration, &g("linear_state_out")))) + 15 - grow;
                     // The delta rule cancels, so `β(v − w)` is far below `v` and gets its own,
                     // finer exponent — measured, not inherited.
                     let e_delta = cal::site_exponent(head_max(&delta_lanes, vh, 1, site(&calibration, &g("linear_delta"))));
@@ -644,7 +656,9 @@ fn main() {
                 // at the row's exponent instead — the two disagreed by `2^(e_v − e_row)`, which is
                 // a factor of two on the loud heads and a hundred and twenty-eight on head 17.
                 let mut conv_act: Vec<A16QuantParams> = Vec::with_capacity(width);
-                let block = |from: usize, len: usize| cal::site_exponent(head_max(&v_lanes, from, len, site(&calibration, &g("linear_conv"))));
+                let block = |from: usize, len: usize| {
+                    cal::site_exponent_with(head_max(&v_lanes, from, len, site(&calibration, &g("linear_conv"))), cal::PRODUCT_HEADROOM_BITS)
+                };
                 for kh in 0..linear_k_heads {
                     let e = block(kh * hd, hd);
                     conv_act.extend(std::iter::repeat_n(cal::rescale_params(K as i32, e), hd));
@@ -716,7 +730,7 @@ fn main() {
                 let e_qn = cal::site_exponent(site(&calibration, &g("attn_q_rot")));
                 let e_logit = cal::site_exponent(site(&calibration, &g("attn_logits")));
                 let e_attn = cal::site_exponent(site(&calibration, &g("attn_values")));
-                let e_gated = cal::site_exponent(site(&calibration, &g("attn_gated")));
+                let e_gated = cal::site_exponent_with(site(&calibration, &g("attn_gated")), cal::PRODUCT_HEADROOM_BITS);
                 let e_stream_out = cal::site_exponent(site(&calibration, &g("attn_residual")));
                 // **The delta is produced at the POST-residual stream's exponent, not at its own.**
                 //

@@ -40,14 +40,40 @@ pub const HEADROOM_BITS: i32 = 1;
 ///
 /// `code = value · 2^e`, so `e = floor(log2(A16_CODE_MAX / absmax)) − HEADROOM`.
 pub fn site_exponent(absmax: f64) -> i32 {
+    site_exponent_with(absmax, HEADROOM_BITS)
+}
+
+/// **Extra headroom, for the sites whose crest is not a function of their inputs' crests.**
+///
+/// A projection's range is bounded by its inputs and its weights, and a calibration that saw the
+/// inputs has seen most of it. A PRODUCT's is not: two well-conditioned rows whose large values do
+/// not co-occur have a crest far above the typical lane, and which lanes are large is a property of
+/// the text. Same for what follows a nonlinearity with a long tail.
+///
+/// Measured on this checkpoint at 56 positions against an 8-position calibration: `linear_conv` —
+/// a four-tap convolution followed by `silu` — overshot its calibrated crest by **3.7x** and
+/// saturated, and so did one layer's gate product. Nothing else in forty sites did. One bit was
+/// enough for everything whose range is inherited and not enough for the two that make their own.
+pub fn site_exponent_with(absmax: f64, headroom: i32) -> i32 {
     // NaN and non-positive both take this branch, spelled so that neither reaches the logarithm.
     if absmax.is_nan() || absmax <= 0.0 {
         // A site that never moved gets a scale that cannot overflow rather than one derived from
         // a zero: the alternative is an exponent of infinity.
         return 0;
     }
-    (A16_CODE_MAX as f64 / absmax).log2().floor() as i32 - HEADROOM_BITS
+    (A16_CODE_MAX as f64 / absmax).log2().floor() as i32 - headroom
 }
+
+/// The headroom a site whose crest is not inherited from its inputs keeps.
+///
+/// **One bit today, and the reason it is not more is measured.** Three bits stopped every observed
+/// saturation and cost the four-layer artifact's fidelity against its reference a cosine of 0.9952
+/// -> 0.9829; two bits cost 0.9860 and did not stop all of it, because the gate product on one
+/// layer overshoots by more than four. Buying range with resolution is the wrong trade while the
+/// calibration is eight tokens long: what those sites need is a prompt that visits their range, not
+/// a scale that assumes it was missed. Raise this once the calibration is representative and the
+/// remaining overshoot is a property of the model rather than of the sample.
+pub const PRODUCT_HEADROOM_BITS: i32 = 1;
 
 /// `(multiplier, shift)` with `x ≈ multiplier / 2^shift`, the mantissa normalized into the top
 /// bits of an `i64`.
@@ -203,6 +229,40 @@ pub fn gdn_params(e_state: i32, e_value: i32, e_delta: i32, e_out: i32, d_k: usi
         // applies it, so an engine that does not would sit eleven times up the grid and saturate.
         state_triple(2f64.powi(e_out - e_state - 15) / (d_k.max(1) as f64).sqrt()),
     )
+}
+
+/// **How much further a recurrent state can travel than the calibration saw it travel.**
+///
+/// The state is a geometric sum: after `n` positions it holds `sum_{i<n} decay^i` times a typical
+/// per-step write, so a calibration over `n` positions measures a crest the same input at `context`
+/// positions exceeds by
+///
+/// ```text
+/// (1 - decay^context) / (1 - decay^n)
+/// ```
+///
+/// and by nothing more, whatever the data does. This is the ONLY correction that turns a measured
+/// range into a bound: the raw contraction bound `1/(1-decay)` ignores the measurement entirely and
+/// on a head at `decay = 0.99937` asks for a million, which makes the grid a million times finer
+/// than the values that occur and saturates on the first token. The ratio of the two horizons asks
+/// only for what the horizon actually adds — a factor of 55 on that head at a 512-position context,
+/// and exactly 1 on a head at `decay = 0.25`, which has no memory to accumulate into.
+///
+/// Measured on this checkpoint: without it, a 56-position run saturates `linear_state_out` at
+/// `i32::MAX` on layer 0 while an 8-position calibration reported a comfortable peak.
+pub fn horizon_growth_bits(decay: f64, calibrated: usize, context: usize) -> i32 {
+    if !(0.0..1.0).contains(&decay) || calibrated == 0 || context <= calibrated {
+        // `decay >= 1` is not a decay; the caller's own gate refuses it, and the honest answer
+        // here is the linear one.
+        let ratio = (context.max(1) as f64) / (calibrated.max(1) as f64);
+        return ratio.max(1.0).log2().ceil() as i32;
+    }
+    let seen = 1.0 - decay.powi(calibrated as i32);
+    let full = 1.0 - decay.powi(context as i32);
+    if seen <= 0.0 {
+        return 0;
+    }
+    (full / seen).max(1.0).log2().ceil() as i32
 }
 
 /// `eps` for [`q36_rms_norm_wide`], stated at a site whose codes carry `e` bits above the truth.
