@@ -195,11 +195,6 @@ const SHARE_DECAY_EPOCHS: u32 = 4;
 /// what this rule is about.
 const RECLAIM_EPOCHS: u32 = 12;
 
-/// **The liveness floor's protected permille** (Decision 4's last clause). 300‰ leaves 700‰ for
-/// every other class — enough for a busy registry — while keeping the class every node can run at
-/// nearly a third of the cadence. ADR-0039 W6′ says the floor must always be able to produce;
-/// this is that sentence in permille.
-const FLOOR_PROTECTED_PERMILLE: u16 = 300;
 const WITHDRAWAL_DELAY: u64 = 6_000;
 
 /// Per-adjustment retarget clamp (ADR-0038 Decision D) and the ADR-0045 Decision 2 epoch-budget
@@ -390,7 +385,6 @@ pub fn palw_fp_devnet_bundle_v3(
         SHARE_DECAY_FILL_PERMILLE,
         SHARE_DECAY_EPOCHS,
         RECLAIM_EPOCHS,
-        FLOOR_PROTECTED_PERMILLE,
     )?;
     // The epoch budget: what one class may produce per epoch, in pwu. Sized so a full epoch of
     // receipt blocks at `PWU_PER_QUANTUM` fits with headroom — a budget that binds before the

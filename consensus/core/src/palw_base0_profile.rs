@@ -683,8 +683,43 @@ pub const PALW_RC_BASE0_GEOMETRY: PalwBase0GeometryV1 = PalwBase0GeometryV1 {
     ffn_dim: 512,
     attn_heads: 4,
     attn_head_dim: 64,
-    vocab_size: 4_096,
-    n_ctx: 512,
+    // **`vocab_size` and `n_ctx` are chosen by the court's cost ceiling, not by capability.**
+    //
+    // They were 4,096 and 512. Under a ceiling that counts what a CLOSE costs to CARRY (ADR-0049
+    // Decision C, `derive_court_cost_v1`) the old pair is not prosecutable, and the two arms that
+    // break it are the two a weight-bytes ceiling never looked at:
+    //
+    //   * an attention step reads the KV history: `prefill + call` step openings per ref, each
+    //     tile carrying its own Merkle path, which measured 750,716 bytes at a mere 64/64 job.
+    //     ADR-0030 §3's checkpoint anchor makes that cheap — but only where an anchor EXISTS, and
+    //     none does at a prefill position or at the first decode call, which is where the worst
+    //     job's worst step is;
+    //   * a decode-position gather carries the generated-token pin, and `base0_logits_trace_root_v1`
+    //     is a flat hash over every logits row, so that arm is `decode_tokens x vocab x 4`.
+    //
+    // A standard transaction holds 120,000 bytes. The class was coverage-clean, ladder-deep enough,
+    // and unpolicable at its own longest jobs — which is exactly the shape ADR-0049 exists to refuse.
+    //
+    // Measured with `derive_court_cost_v1` against `PALW_RC_COURT_MAX_CLOSE_BYTES` (81,920):
+    //
+    //   vocab <= 1,024, n_ctx  8 ->  44,640  (55%)
+    //   vocab <= 1,024, n_ctx 12 ->  61,040  (75%)   <- this
+    //   vocab <= 1,024, n_ctx 16 ->  79,552  (97%)
+    //   vocab <= 1,024, n_ctx 20 ->  98,000  (120%)
+    //   vocab    2,048, n_ctx 12 -> 101,856  (124%)
+    //   vocab    4,096, n_ctx 12 -> 200,160  (244%)
+    //
+    // The rule was "the largest pair whose worst close stays under 80% of the ceiling", because
+    // this number is frozen into the class id and a later leg-format change must not be able to
+    // make the network's own floor inadmissible. The floor's job is liveness and adjudicability
+    // (ADR-0039), not capability, and `PALW_RC_BASE0_CANONICAL` — 8 prefill, 4 decode — fits inside
+    // this context twice over.
+    //
+    // What buys larger numbers back is an OPENABLE logits commitment (Decision E says "O(1) in
+    // vocabulary"; the root is a flat hash, so the pin is O(decode x vocab)) and a per-layer slice
+    // of the checkpoint instead of the whole one. Both are code, not genesis.
+    vocab_size: 1_024,
+    n_ctx: 12,
     n_threads: 1,
     rms_eps_q: 1 << 8,
     tile_len: 64,

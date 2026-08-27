@@ -245,6 +245,23 @@ pub struct PalwStateParamsV2 {
     /// retarget span: each global epoch boundary the chain crosses closes one span and retargets
     /// every share-bearing, unfrozen class against it.
     epoch_length: u64,
+    /// **The share the liveness floor may never be diluted below** (audit 2026-08-26, finding 8).
+    ///
+    /// `granted_share_table_v2` refused only a grant that took a DONOR below
+    /// `min_grantable_share_permille` — 1‰ on the RC bundle — and nothing bounded how many
+    /// entrants there could be. 999 registrations were each individually admissible and left the
+    /// base class at 1‰, at which point the per-epoch retarget clamp (`current / max_factor`)
+    /// cannot bring it back: once it produces nothing, the `observed == 0` arm freezes it at the
+    /// crushed target with no easing path. The floor that guarantees a chain can make blocks at
+    /// all — the model-free class every node can execute — was the one thing arithmetic could
+    /// take to nothing.
+    ///
+    /// **100‰ is a policy choice and the only number here that is.** It is high enough that the
+    /// clamp can recover the floor (×4 per epoch: 100 → 400 → 1000 in two), and low enough to
+    /// leave 90% of cadence available to model-bearing classes, which is the direction the project
+    /// is going. A larger value would cap what the LLM lanes can ever be worth; a smaller one
+    /// re-opens the collapse it exists to prevent.
+    min_base_class_share_permille: u16,
     /// The permanently-Active liveness floor's class id (ADR-0039 W6′). The first registration
     /// on a chain must be this class, at the whole 1000‰ — the transition enforces it — and the
     /// atomic bundle carries the same id, cross-checked at the startup gate (the C5 pattern:
@@ -347,13 +364,6 @@ pub struct PalwStateParamsV2 {
     /// class becomes `Dormant`, returning its share and freeing its registration exposure. Zero
     /// disables reclamation.
     reclaim_epochs: u32,
-    /// **The permille the liveness floor may never be pushed below, by any donation path.**
-    ///
-    /// ADR-0039 made the floor unfreezable; this keeps it un-diluteable below the level where
-    /// "every node can always produce" is true in cadence and not only in principle. Applies to
-    /// registration donation and to the Decision 4 walk alike. Zero leaves the floor bounded only
-    /// by the grant floor, which is this field's own pre-Decision-4 behaviour.
-    floor_protected_permille: u16,
     /// **Audit C5's free panel re-roll, priced (the free-prompt lane's half).**
     ///
     /// On the attempt lane, abandoning a claim at `BindTimeout` already costs three things and
@@ -448,7 +458,13 @@ impl PalwStateParamsV2 {
             share_decay_fill_permille: 0,
             share_decay_epochs: 0,
             reclaim_epochs: 0,
-            floor_protected_permille: 0,
+            // **The floor's reserve, and there is exactly ONE of it.** Three lines of work reached
+            // this same guard independently — an audit finding (999 individually-legal grants take
+            // the floor to 1‰), ADR-0054 Decision 4's walk, and the share-growth rule's own
+            // reserve — and three fields would have been three places for the bound to differ.
+            // This name is the audit's, because its version landed first and closes a measured
+            // critical; every path that can move a permille now checks it.
+            min_base_class_share_permille: 100,
             // The whole session as one rung: the identity that leaves the backstop as the only
             // clock. See the field doc.
             turn_deadline_daa: window_court,
@@ -508,26 +524,21 @@ impl PalwStateParamsV2 {
         share_decay_fill_permille: u32,
         share_decay_epochs: u32,
         reclaim_epochs: u32,
-        floor_protected_permille: u16,
     ) -> Result<Self, PalwStateV2Error> {
         if share_raise_epochs > 0 && share_decay_epochs > 0 && share_decay_fill_permille >= share_raise_fill_permille {
             return Err(PalwStateV2Error::InvalidParams(
                 "the decay threshold must sit strictly below the raise threshold — otherwise one epoch qualifies for both",
             ));
         }
-        if floor_protected_permille >= 1000 {
-            return Err(PalwStateV2Error::InvalidParams("a protected floor of 1000‰ leaves no share for any other class"));
-        }
-        if floor_protected_permille > 0 && floor_protected_permille < self.min_grantable_share_permille() {
-            return Err(PalwStateV2Error::InvalidParams("a protected floor below the grant floor is a bound that never binds"));
-        }
+        // The floor's reserve is NOT an argument here: it is `min_base_class_share_permille`, set
+        // by its own builder because the registration path needs it whether or not the walk is on.
+        // A second copy taken here would be a second bound to drift.
         self.registration_exposure_sompi = registration_exposure_sompi;
         self.share_raise_fill_permille = share_raise_fill_permille;
         self.share_raise_epochs = share_raise_epochs;
         self.share_decay_fill_permille = share_decay_fill_permille;
         self.share_decay_epochs = share_decay_epochs;
         self.reclaim_epochs = reclaim_epochs;
-        self.floor_protected_permille = floor_protected_permille;
         Ok(self)
     }
 
@@ -548,10 +559,6 @@ impl PalwStateParamsV2 {
     }
     pub fn reclaim_epochs(&self) -> u32 {
         self.reclaim_epochs
-    }
-    /// The floor's protected permille, never below the grant floor when it is set at all.
-    pub fn floor_protected_permille(&self) -> u16 {
-        self.floor_protected_permille
     }
 
     /// Set the producer carve (ADR-0042 Decision 10). Consuming-builder rather than a `new`
@@ -633,6 +640,20 @@ impl PalwStateParamsV2 {
     /// Enforced at every grant, which is what makes a mid-flight zero budget unrepresentable
     /// instead of an epoch-time cliff (the V1 derivation's `ZeroBudget`, moved to where the
     /// share is chosen).
+    pub fn min_base_class_share_permille(&self) -> u16 {
+        self.min_base_class_share_permille
+    }
+
+    /// Override the liveness floor's share floor. Refused above 1000‰ (it would make the base the
+    /// only class a chain could ever carry) and below the grant floor (it would mean nothing).
+    pub fn with_min_base_class_share_permille(mut self, permille: u16) -> Result<Self, PalwStateV2Error> {
+        if permille > 1000 || permille < self.min_grantable_share_permille() {
+            return Err(PalwStateV2Error::ShareOutOfRange { got: permille });
+        }
+        self.min_base_class_share_permille = permille;
+        Ok(self)
+    }
+
     pub fn min_grantable_share_permille(&self) -> u16 {
         let denom = (self.budget_tolerance_permille as u128) * (self.epoch_length as u128);
         // denom ≥ 1000 (tolerance floor × epoch ≥ 1), so the ceiling division is ≤ 1000 and a
@@ -3210,6 +3231,21 @@ fn granted_share_table_v2(
         table.insert(*id, granted);
     }
     table.insert(entrant, share);
+    // **And the liveness floor keeps its own floor.** Per-entrant and per-donor limits bound one
+    // grant; neither bounds how many grants there may be, so the base class was reachable at 1‰ by
+    // 999 individually-legal registrations — and the retarget clamp cannot recover it from there.
+    // Checked on the assembled table rather than on the entrant, because dilution is a property of
+    // the total and no single grant is the one that does it.
+    if let Some(base_share) = table.get(&params.base_class_id).copied() {
+        let base_floor = params.min_base_class_share_permille();
+        if base_share < base_floor {
+            return Err(PalwStateV2Error::DonationBreaksGrantFloor {
+                donor: params.base_class_id,
+                would_hold: base_share,
+                floor: base_floor,
+            });
+        }
+    }
     debug_assert_eq!(table.values().map(|s| *s as u32).sum::<u32>(), 1000, "the donation arithmetic conserves the denominator");
     Ok(table)
 }
@@ -3339,7 +3375,28 @@ fn activate_due_classes(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCont
         })
         .collect();
     for (class_id, share) in due {
-        let table = granted_share_table_v2(builder.params, &builder.state.class_shares, class_id, share)?;
+        // **A grant that cannot be made freezes the CLASS, not the chain.**
+        //
+        // This was `?`, and the error propagated out of a transition that is a pure function of
+        // (parent state, daa) — so every node failed the same block identically, and every block at
+        // or after that DAA score failed the same way, forever, with the class still `Registered`
+        // and nothing able to change it. The trigger needs no attacker beyond a full share table: a
+        // registration validated against the table as it stood is GRANTED later by this function,
+        // against the table as it then is.
+        //
+        // Freezing is the honest terminal: the registration was accepted, the grant was not
+        // available when it came due, and a class that never activates holds no share and refuses
+        // attempts — which is exactly what "the activation did not happen" means. The chain keeps
+        // going, and the fact is visible in the registry instead of being a halt nobody can read.
+        let table = match granted_share_table_v2(builder.params, &builder.state.class_shares, class_id, share) {
+            Ok(table) => table,
+            Err(_) => {
+                let mut record = builder.state.classes.get(&class_id).expect("just listed").clone();
+                record.status = PalwClassStatusV2::Frozen { since_daa: ctx.daa_score };
+                builder.write_class(class_id, Some(record));
+                continue;
+            }
+        };
         for (id, granted) in table {
             if builder.state.class_shares.get(&id).copied() != Some(granted) {
                 builder.write_share(id, Some(granted));
@@ -3578,7 +3635,7 @@ fn apply_class_share_walk(
 /// level for the liveness floor (ADR-0054 Decision 4's last clause).
 fn floor_limit_for_v1(params: &PalwStateParamsV2, class_id: Hash64) -> u16 {
     if class_id == params.base_class_id() {
-        params.floor_protected_permille().max(params.min_grantable_share_permille())
+        params.min_base_class_share_permille().max(params.min_grantable_share_permille())
     } else {
         params.min_grantable_share_permille()
     }
@@ -3831,8 +3888,24 @@ fn sweep_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2
             // deadline fired, so the hold is over by construction — the predicate is asserted
             // rather than re-tested, because a deadline armed by `void_claim` and a hold computed
             // from the record are the same arithmetic.
-            PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::BindTimeout, .. }
-                if matches!(claim.source, PalwClaimSourceV2::FreePrompt { .. }) && builder.params.fp_abandon_hold_daa > 0 =>
+            // **Guarded on WHICH deadline fired, not only on the phase.** An abandoned free-prompt
+            // claim owns TWO deadlines over its life — the hold's, then its retirement's — and this
+            // arm sits above the generic terminal-retirement arm, so without the equality below the
+            // second one re-entered here. `release_abandon_hold` then read the entry it had already
+            // removed as `unwrap_or(0)` and `0.checked_sub(reserved)` returned `None`: a transition
+            // that is a pure function of (parent state, daa) fails identically on every node, so the
+            // block is disqualified everywhere and the chain never advances again. The shipped
+            // bundle satisfies both preconditions (`FP_ABANDON_HOLD` 600, `CLAIM_RETIREMENT` 2400)
+            // and no test covered the pair: the hold test runs with retirement off and the three
+            // retirement tests run with the hold at zero.
+            //
+            // The `debug_assert!` below could not catch it — it is true on both entries — which is
+            // the shape this codebase keeps finding: a gate whose predicate cannot distinguish the
+            // case it exists to distinguish.
+            PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::BindTimeout, voided_daa }
+                if matches!(claim.source, PalwClaimSourceV2::FreePrompt { .. })
+                    && builder.params.fp_abandon_hold_daa > 0
+                    && deadline == voided_daa.saturating_add(builder.params.fp_abandon_hold_daa) =>
             {
                 debug_assert!(
                     !palw_claim_is_on_abandon_hold_v2(&claim, builder.params, ctx.daa_score),
@@ -4097,23 +4170,40 @@ fn apply_object(
             builder.state.bonds.get(challenger_bond).ok_or(PalwStateV2Error::MissingBond(*challenger_bond))?;
             let deadline_daa =
                 ctx.daa_score.checked_add(builder.params.window_court).ok_or(PalwStateV2Error::Overflow("court deadline"))?;
-            // **The responder's FIRST rung runs on the session budget, not on the rung clock.**
+            // **The opening rung is clocked like every other rung — because a responder now ships.**
             //
             // A rung clock convicts on silence: `declare_no_show` reads whose turn it was and ends
-            // the session against them. That is sound when the silent party COULD have moved — and
-            // for the opening rung, nothing in this tree can. `CourtDisclosed` is constructed
-            // nowhere: it exists in the object definition, this transition and the validator, and
-            // the panel service emits only `ReceiptLicensed` and `ProducerDefaulted`. So with a
-            // `turn_deadline_daa` tighter than `window_court`, anyone holding one bond convicts any
-            // producer by opening a court and waiting — for the price of one transaction, against
-            // a producer whose only fault is that no responder software exists.
+            // the session against them. That is only sound when the silent party COULD have moved,
+            // and this rung once had no mover: `CourtDisclosed` was constructed nowhere in this
+            // tree, so a tight clock let anyone holding one bond convict any producer by opening a
+            // court and waiting — against a producer whose only fault was that no responder
+            // software existed. The rung was therefore given the whole session budget as a
+            // backstop, and its lapse ended the dispute on the CHALLENGER's side.
             //
-            // Until a responder ships, the opening rung may not be clocked tighter than the whole
-            // session: the backstop still ends the dispute, and it ends it on the CHALLENGER's
-            // side, which is the correct default for an unproven accusation. Later rungs keep the
-            // tight clock, because reaching one means the responder answered the first — so it
-            // demonstrably can.
-            let first_deadline_daa = deadline_daa;
+            // The panel service now emits `CourtDisclosed` (`palw_panel.rs`, the disclosure arm),
+            // and a close now carries the operand openings the court needs to read, so a producer
+            // that answers is a producer the chain can adjudicate end to end. With a mover in the
+            // field the backstop inverts: it made SILENCE the winning move for a guilty producer,
+            // which is the one outcome a fraud court may not have. So the opening rung takes
+            // `turn_deadline_daa` like the rest of the ladder.
+            //
+            // **What this asks of a bundle.** `turn_deadline_daa` is now a real deadline for the
+            // producer's first move, so it has to be wider than the responder's own cadence: the
+            // panel wakes on a 2-second tick and answers from a capture it already holds, so on a
+            // one-block-per-second network a window of a handful of DAA is a coin flip and one of
+            // a few dozen is comfortable. No shipped preset carries `ConsensusV2` — the bundle
+            // arrives with a network's genesis — so this is a genesis-time choice, and a bundle
+            // whose window is tighter than its own software convicts honest producers.
+            //
+            // **The deployment gate is the ruleset, not a flag.** This changes what silence costs,
+            // so it may not reach a network whose producers are running a build with no responder
+            // in it — and it does not: `palw_ruleset_id_v2` covers these params, and the networks
+            // that adopt it are the ones re-minted from this build.
+            let first_deadline_daa = ctx
+                .daa_score
+                .checked_add(builder.params.turn_deadline_daa())
+                .ok_or(PalwStateV2Error::Overflow("court opening rung deadline"))?
+                .min(deadline_daa);
             // The ladder's id is derived from the same six inputs `court_session_id_v2` uses, so
             // a ladder whose id is not `session_id` means the object's declared space does not
             // match the id it was opened under — refused here, not merely at the acceptance
@@ -4868,7 +4958,9 @@ pub(crate) mod tests {
     /// ≥800‰ fill, a decay 2 epochs below 200‰, reclamation 3 idle epochs, and the floor is
     /// protected at 300‰.
     fn economy_params() -> PalwStateParamsV2 {
-        params().with_class_economy_v1(1_000, 800, 2, 200, 2, 3, 300).unwrap()
+        // The floor's reserve is the audit batch's own field now, set by its own builder — one
+        // bound, whichever path tries to move a permille.
+        params().with_class_economy_v1(1_000, 800, 2, 200, 2, 3).unwrap().with_min_base_class_share_permille(300).unwrap()
     }
 
     fn registration(class_id: Hash64, share: u16, registrant: Option<PalwBondKeyV2>) -> PalwConsensusObjectV2 {
@@ -5064,7 +5156,7 @@ pub(crate) mod tests {
         let (state, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &p, &ctx(1, 10, 1), &objects, None)
             .expect("forty registrations in one block");
         let floor_share = state.class_shares.get(&h64(1)).copied().expect("the floor holds share");
-        assert!(floor_share >= p.floor_protected_permille(), "the floor kept {floor_share}‰ against a protection of {}‰", p.floor_protected_permille());
+        assert!(floor_share >= p.min_base_class_share_permille(), "the floor kept {floor_share}‰ against a protection of {}‰", p.min_base_class_share_permille());
         let sum: u32 = state.class_shares.values().map(|s| *s as u32).sum();
         assert_eq!(sum, 1000, "and the table still conserves exactly 1000‰");
 
@@ -5081,7 +5173,7 @@ pub(crate) mod tests {
             matches!(state.classes.get(&h64(1)).map(|r| &r.status), Some(PalwClassStatusV2::Active)),
             "the floor is never reclaimed, however idle"
         );
-        assert!(state.class_shares.get(&h64(1)).copied().unwrap_or(0) >= p.floor_protected_permille());
+        assert!(state.class_shares.get(&h64(1)).copied().unwrap_or(0) >= p.min_base_class_share_permille());
         assert_eq!(state.class_shares.values().map(|s| *s as u32).sum::<u32>(), 1000);
         state.assert_internal_consistency(&p).expect("conserved through every boundary");
     }
@@ -6404,10 +6496,9 @@ pub(crate) mod tests {
         let ladder = &s5.court_session(&sid).unwrap().ladder;
         assert_eq!(ladder.interval(), (0, 16), "the dispute opens over the whole space");
         assert_eq!(ladder.turn(), crate::palw_bisect::PalwBisectTurnV1::AwaitDisclosure, "the responder moves first");
-        // The OPENING rung runs on the session budget, not the rung window: no software in this
-        // tree can make the responder's first move, so silence there may not convict it. See
-        // `a_responder_is_not_convicted_for_a_move_no_software_can_make`.
-        assert_eq!(ladder.last_deadline_daa(), 604, "the opening rung is the backstop, opened at 104 + window_court");
+        // The opening rung takes the rung window like every other rung: a responder ships now, so
+        // silence there is a choice. See `a_silent_responder_now_loses_the_opening_rung`.
+        assert_eq!(ladder.last_deadline_daa(), 124, "the opening rung is clocked at 104 + turn_deadline");
 
         // Round 0: disclose at midpoint 8, challenger disagrees ⇒ the divergence is below.
         let (s6, _) = apply(&s5, &p, &ctx(6, 105, 6), &[disclose(sid, 0, 8, 0xD0)], None);
@@ -6563,8 +6654,12 @@ pub(crate) mod tests {
             "opening a court must cost the challenger the claim's own stake, not a transaction fee"
         );
 
-        // The backstop lapses with nothing proved: the session ends and the stake comes back.
-        let (s6, _) = apply(&s5, &p, &ctx(6, 605, 6), &[], None);
+        // Nothing proved, ended on the CHALLENGER's side — which is the exit this test is about,
+        // and since the opening rung is clocked it has to be reached deliberately: the responder
+        // answers its first rung, and then the accusation is the side that goes quiet.
+        let sid = court_session_of(claim_id, h64(31), bond_key(1), bond_key(1));
+        let (s5, _) = apply(&s5, &p, &ctx(6, 105, 6), &[disclose(sid, 0, 8, 0xD0)], None);
+        let (s6, _) = apply(&s5, &p, &ctx(7, 605, 7), &[], None);
         assert!(s6.court_session(&court_session_of(claim_id, h64(31), bond_key(1), bond_key(1))).is_none(), "the session is gone");
         assert_eq!(
             s6.reserved_exposure(&bond_key(1)),
@@ -6573,42 +6668,40 @@ pub(crate) mod tests {
         );
     }
 
-    /// **A silent responder loses — but only once it has shown it can answer.**
+    /// **A silent responder loses the opening rung — now that answering it is possible.**
     ///
-    /// The verdict comes from the chain's own clock plus an absence, which is why the ladder had to
-    /// become chain state: there is no message for an attacker to forge. What that reasoning needs
-    /// is that the silent party COULD have moved, and on the OPENING rung nothing in this tree can:
-    /// `CourtDisclosed` is constructed nowhere — it exists in the object definition, the transition
-    /// and the validator, and the panel service emits only `ReceiptLicensed` and
-    /// `ProducerDefaulted`. Clocking that rung tightly therefore let anyone holding one bond
-    /// convict any producer by opening a court and waiting, for one transaction fee.
+    /// This rung used to run on the session budget instead of the rung clock, because a rung clock
+    /// convicts on silence and nothing in this tree could break that silence: `CourtDisclosed` was
+    /// constructed nowhere. Clocking it tightly would have let anyone holding one bond convict any
+    /// producer by opening a court and waiting.
     ///
-    /// So the opening rung runs on the session budget and its lapse ends the dispute on the
-    /// CHALLENGER's side — an accusation nobody completed. A later rung keeps the tight clock,
-    /// because reaching one means the responder answered the first.
+    /// The panel service emits `CourtDisclosed` now, and its close carries the operand openings the
+    /// court has to read — so a producer that answers can be adjudicated end to end, and one that
+    /// does not has chosen not to. The backstop is therefore the wrong default: it made silence the
+    /// winning move for a guilty producer, which is the one outcome a fraud court may not have.
     #[test]
-    fn a_responder_is_not_convicted_for_a_move_no_software_can_make() {
+    fn a_silent_responder_now_loses_the_opening_rung() {
         let p = params_with_ladder();
         let (s5, claim_id, sid) = licensed_with_court(&p);
-        // The opening rung is the backstop now, not 124.
-        let (s6, _) = apply(&s5, &p, &ctx(6, 125, 6), &[], None);
-        assert!(s6.court_session(&sid).is_some(), "the opening rung has not lapsed at the old rung clock");
-        assert!(matches!(s6.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
+        // Inside the rung window, nothing has happened yet: the clock is a deadline, not a hair
+        // trigger, and a responder that answers in time is never charged.
+        let (s6, _) = apply(&s5, &p, &ctx(6, 120, 6), &[], None);
+        assert!(s6.court_session(&sid).is_some(), "the rung has not run out at 120");
         assert_eq!(s6.bond(&bond_key(1)).unwrap().slashed, 0, "and nothing has been charged");
 
-        // Past the SESSION budget, still with no disclosure: the dispute ends, and it ends against
-        // the accusation rather than against the accused.
-        let (s7, _) = apply(&s6, &p, &ctx(7, 605, 7), &[], None);
+        // Past it, with no disclosure: the executor defaulted on the only defence it had.
+        let (s7, _) = apply(&s6, &p, &ctx(7, 125, 7), &[], None);
         assert!(s7.court_session(&sid).is_none(), "the session is decided and gone");
         assert!(
-            !matches!(s7.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }),
-            "an unanswered opening rung must not convict the executor of fraud"
+            matches!(s7.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }),
+            "a responder that would not stand behind its own root at the index it was asked about loses the claim"
         );
-        assert_eq!(s7.bond(&bond_key(1)).unwrap().slashed, 0, "and it must not cost the executor its stake");
+        assert!(s7.bond(&bond_key(1)).unwrap().slashed > 0, "and it costs the executor its stake");
     }
 
-    /// The other half of the same rule: once the responder HAS answered, the tight rung clock is
-    /// legitimate and silence at a later rung does decide against it.
+    /// The other half of the same rule, and the one that survived the opening rung's re-clocking
+    /// unchanged: a responder that answered once has demonstrably got software that can move, so
+    /// silence at a LATER rung has always decided against it.
     #[test]
     fn palw_v2_a_silent_responder_loses_the_dispute() {
         let p = params_with_ladder();
@@ -7909,6 +8002,111 @@ pub(crate) mod tests {
     /// exist yet (`anchor_delay > 0` is enforced precisely so "the attempt's own block cannot
     /// seed its panel"). What remains is a CHOICE WITH A PRICE — decline to bind and forfeit a
     /// block — not a free re-roll. What is genuinely open, and stated in the register rather than
+    /// **An abandoned free-prompt claim owns TWO deadlines, and the second one used to halt the
+    /// chain forever.**
+    ///
+    /// The hold's expiry and the retirement are both entries in the same `deadlines` set, and the
+    /// hold arm matched on the claim's PHASE — `Voided{BindTimeout}` + free-prompt + hold enabled —
+    /// without asking which of the two had fired. So the retirement re-entered the hold arm,
+    /// `release_abandon_hold` read the exposure entry it had already removed as `unwrap_or(0)`, and
+    /// `0.checked_sub(reserved)` returned `None`. That error leaves a PURE function of (parent
+    /// state, daa): every node fails it identically, the block is disqualified everywhere, and no
+    /// later block can ever apply. There is no recovery object.
+    ///
+    /// The shipped bundle satisfies both preconditions — `FP_ABANDON_HOLD` 600 and
+    /// `CLAIM_RETIREMENT` 2400 — so this was not a corner: it was every abandoned free-prompt
+    /// commitment, 2400 DAA after it was made. What kept it invisible is that no test ran the pair.
+    /// **The liveness floor cannot be diluted to nothing by legal grants.**
+    ///
+    /// Every grant below was individually admissible: each entrant took exactly the grant floor and
+    /// no donor fell below it, which is all `granted_share_table_v2` used to check. Nothing bounded
+    /// how MANY such grants there could be, so 999 of them left the base class at 1‰ — and the
+    /// per-epoch retarget clamp (`current / max_factor`) cannot climb back out once a class at 1‰
+    /// produces nothing and hits the `observed == 0` arm. The class that guarantees a chain can make
+    /// blocks at all was the one arithmetic could take to zero.
+    ///
+    /// Dilution is a property of the TOTAL, so the bound is checked on the assembled table: no
+    /// single grant is the one that does it.
+    #[test]
+    fn the_liveness_floor_keeps_a_floor_of_its_own() {
+        let p = params();
+        let floor = p.min_base_class_share_permille();
+        let grant = p.min_grantable_share_permille();
+        assert!(floor > grant, "a floor at the grant floor would mean nothing");
+
+        // The reported attack, run: entrants at exactly the grant floor, one after another, each
+        // one individually admissible. Before the fix this ran 999 times and left the base at 1‰.
+        let mut table: BTreeMap<Hash64, u16> = [(p.base_class_id(), 1000u16)].into_iter().collect();
+        let mut admitted = 0u32;
+        let refusal = loop {
+            let entrant = h64(0x1000 + admitted as u64);
+            match granted_share_table_v2(&p, &table, entrant, grant) {
+                Ok(next) => {
+                    assert_eq!(next.values().map(|s| *s as u32).sum::<u32>(), 1000, "the table always conserves");
+                    assert!(
+                        next[&p.base_class_id()] >= floor,
+                        "the base must never be observed below its floor, not even transiently — it held {} at entrant {admitted}",
+                        next[&p.base_class_id()]
+                    );
+                    table = next;
+                    admitted += 1;
+                    assert!(admitted < 2000, "the grants must stop being admissible at some point — that is the whole bound");
+                }
+                Err(e) => break e,
+            }
+        };
+        match refusal {
+            PalwStateV2Error::DonationBreaksGrantFloor { donor, would_hold, floor: named } => {
+                assert_eq!(donor, p.base_class_id(), "the refusal names the class being diluted");
+                assert!(would_hold < named, "and says what it would have been left holding: {would_hold} < {named}");
+            }
+            other => panic!("the bound must refuse by naming the dilution, got {other:?}"),
+        }
+        assert!(admitted > 0, "the bound must admit entrants before it refuses them — a floor, not a freeze");
+        assert!(
+            table[&p.base_class_id()] >= floor,
+            "and the table it stops at still holds the floor: {} >= {floor}",
+            table[&p.base_class_id()]
+        );
+    }
+
+    /// The one hold test runs with retirement off; the three retirement tests run with the hold at
+    /// zero. This test exists to be the combination, and it is red against the unguarded arm.
+    #[test]
+    fn an_abandoned_claim_survives_both_of_its_deadlines() {
+        // The hold fixture, plus a retirement strictly later than the hold — the shipped ordering.
+        let p = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, 100, 1000, 50)
+            .unwrap()
+            .with_claim_retirement_daa(200)
+            .unwrap();
+        let (base, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+        let (s2, _) = apply(&base, &p, &ctx(2, 101, 2), &[fp_commit(0xFC, 60, 3)], None);
+        assert_eq!(s2.reserved_exposure(&bond_key(1)), 300, "the commitment reserves against its bond");
+
+        // 1. The bind window lapses: the claim is voided and the hold starts at daa 200.
+        let (voided, _) = apply(&s2, &p, &ctx(3, 200, 3), &[], None);
+        assert!(matches!(
+            voided.claim(&h64(0xFC)).unwrap().phase,
+            PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::BindTimeout, .. }
+        ));
+        assert_eq!(voided.reserved_exposure(&bond_key(1)), 300, "the hold keeps the reservation");
+
+        // 2. The hold elapses at 200 + 50 and gives the collateral back.
+        let (released, _) = apply(&voided, &p, &ctx(4, 260, 4), &[], None);
+        assert_eq!(released.reserved_exposure(&bond_key(1)), 0, "the hold expires and returns what it held");
+        assert!(released.claim(&h64(0xFC)).is_some(), "released is not retired — the record still owes a retirement");
+
+        // 3. The retirement fires at 200 + 200. THIS is the block that used to fail, and to keep
+        //    failing on every node forever after.
+        let (retired, _) = apply(&released, &p, &ctx(5, 420, 5), &[], None);
+        assert!(retired.claim(&h64(0xFC)).is_none(), "the second deadline retires the claim instead of erroring the transition");
+        assert_eq!(retired.reserved_exposure(&bond_key(1)), 0, "and it does not release a hold that was already released");
+
+        // 4. The chain keeps going. A halt is only visible if something comes after it.
+        let (after, _) = apply(&retired, &p, &ctx(6, 421, 6), &[], None);
+        assert!(after.claim(&h64(0xFC)).is_none(), "and the block after the retirement applies like any other");
+    }
+
     /// papered over here: binding is permissionless but nobody is paid to bind someone else's
     /// claim, so in practice the producer decides.
     #[test]

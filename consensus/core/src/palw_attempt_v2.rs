@@ -44,6 +44,15 @@ use blake2b_simd::Params;
 /// one failure the fingerprint exists to prevent. `PalwConsensusParamsV2::protocol_version` is
 /// pinned to this constant precisely so a rule change has somewhere to be declared.
 ///
+/// **4 → 5** (2026-08-27): the court's opening rung is clocked. It used to run on the whole
+/// session budget, because `CourtDisclosed` was constructed nowhere and silence there could not
+/// fairly convict; the panel emits one now, and a close now carries the operand openings the court
+/// must read, so the backstop's effect had inverted into "a guilty producer wins by saying
+/// nothing". The change lives in the state transition rather than in a params field, so the
+/// ruleset id would NOT have moved on its own — an old binary and a new one would agree on every
+/// block and disagree on whether a silent producer was slashed, which is the divergence class the
+/// 3 → 4 note describes. This is where that gets declared.
+///
 /// **3 → 4** (2026-08-22, later the same day): the court's close rules. A close is now bound to
 /// the step its session narrowed to, and the close binding compares the claim's trace root against
 /// the binding's LOGITS root rather than its step Merkle root. Both change which `CourtClosed`
@@ -59,7 +68,42 @@ use blake2b_simd::Params;
 /// build accepted. A node running the older rules produces attempts this one must not accept, and
 /// now cannot: the version check refuses them by construction rather than by hoping the two never
 /// meet.
-pub const PALW_ATTEMPT_V2_VERSION: u16 = 4;
+pub const PALW_ATTEMPT_V2_VERSION: u16 = 5;
+
+/// The anchor's domain key. Unchanged from where this function used to live
+/// (`misaka_palw_base0::produce`), name included: moving it must not move the value, or every
+/// producer on every V2 network starts running a different job than the chain expects.
+pub const PALW_DOMAIN_JOB_ANCHOR_V1: &[u8] = b"misaka-palw/base0/rc-job-anchor/v1";
+
+/// **The job a block asks for** — `(network domain, pre-pow hash, class, bond)`, and nothing else.
+///
+/// It lives here rather than in an execution family's crate because it is not a family's choice.
+/// The producer computes it before it resolves a backend at all, so every family already shared
+/// it; what was missing was a way for a VERIFIER to compute it without depending on one particular
+/// family's crate. Without that, a verifier read the anchor out of the material it was judging —
+/// which is the accused setting the question, and the answer always agrees.
+///
+/// Not derived from the challenge, which also binds the timestamp and the nonce: `l1_tag_v2` is a
+/// free CPU hash precisely so the Layer-0 nonce search stays a nonce search, and a job that moved
+/// with the nonce would price one full inference per PoW try. What a producer CAN still move is the
+/// pre-pow hash, by reshuffling the block it builds — that is job grinding, it is real, and it
+/// costs a full inference per try, which is the price the design means to charge.
+pub fn palw_job_anchor_v1(
+    network_domain: Hash64,
+    pre_pow_hash: Hash64,
+    class_id: Hash64,
+    bond: &crate::tx::TransactionOutpoint,
+) -> Hash64 {
+    let mut h = blake2b_simd::Params::new().hash_length(64).key(PALW_DOMAIN_JOB_ANCHOR_V1).to_state();
+    h.update(network_domain.as_byte_slice());
+    h.update(pre_pow_hash.as_byte_slice());
+    h.update(class_id.as_byte_slice());
+    h.update(bond.transaction_id.as_bytes().as_slice());
+    h.update(&bond.index.to_le_bytes());
+    let mut out = [0u8; 64];
+    out.copy_from_slice(h.finalize().as_bytes());
+    Hash64::from_bytes(out)
+}
 
 /// Width of the expanded L1 tag, matching algo-4's so the finalizer's call shape is unchanged.
 pub const PALW_ATTEMPT_V2_L1_TAG_BYTES: usize = 200;

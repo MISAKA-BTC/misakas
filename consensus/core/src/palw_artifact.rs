@@ -233,12 +233,70 @@ impl crate::palw_step_refute::PalwWeightOracleV1 for PalwProvenOperandsV1 {
     /// five bytes, could never adjudicate through a real opening. The contract is bytes on both
     /// sides now; the mismatch had no way to announce itself before.
     fn operand_bytes(&self, tensor_name: &str, layer: Option<u16>, byte_offset: u32, byte_len: u32) -> Option<Vec<u8>> {
-        let operand = self.operands.iter().find(|o| o.tensor_name == tensor_name && o.layer == layer && o.row_start == byte_offset)?;
-        // The proof binds the bytes that were committed; it says nothing about how many the caller
-        // wants. A short opening is a missing operand, not a truncated answer — and a LONG one is
-        // refused too, because an opening that proves more than the step reads is an opening whose
-        // extra bytes nothing checked.
-        (operand.bytes.len() == byte_len as usize).then(|| operand.bytes.clone())
+        find_operand_v1(&self.operands, tensor_name, layer, byte_offset, byte_len).map(|(_, bytes)| bytes)
+    }
+}
+
+/// **The one lookup an oracle performs**, shared by the verifier's proven set and the prover's
+/// recorder so the two cannot answer the same question differently.
+///
+/// The proof binds the bytes that were committed; it says nothing about how many the caller wants.
+/// A short opening is a missing operand, not a truncated answer — and a LONG one is refused too,
+/// because an opening that proves more than the step reads is an opening whose extra bytes nothing
+/// checked.
+pub fn find_operand_v1(
+    operands: &[PalwArtifactOperandV1],
+    tensor_name: &str,
+    layer: Option<u16>,
+    byte_offset: u32,
+    byte_len: u32,
+) -> Option<(usize, Vec<u8>)> {
+    let (index, operand) =
+        operands.iter().enumerate().find(|(_, o)| o.tensor_name == tensor_name && o.layer == layer && o.row_start == byte_offset)?;
+    (operand.bytes.len() == byte_len as usize).then(|| (index, operand.bytes.clone()))
+}
+
+/// **An oracle over a FULL inventory that remembers which operands were asked for.**
+///
+/// The prover's problem is not "what does this step read" — it is "what will the ADJUDICATOR ask
+/// for", and those are the same question only if two pieces of code agree. Writing the enumeration
+/// a second time on the prover side is exactly the correspondence defect this tree keeps finding,
+/// so the prover does not write it: it runs the adjudicator against the whole inventory, records
+/// every row the adjudicator actually resolved, and opens those.
+///
+/// The recorded set is therefore correct BY CONSTRUCTION for any op kind, present or future — a
+/// new kernel that reads a new tensor needs no change here, because nothing here knows what a
+/// kernel is.
+pub struct PalwRecordingOracleV1<'a> {
+    inventory: &'a [PalwArtifactOperandV1],
+    used: std::cell::RefCell<std::collections::BTreeSet<usize>>,
+}
+
+impl<'a> PalwRecordingOracleV1<'a> {
+    pub fn new(inventory: &'a [PalwArtifactOperandV1]) -> Self {
+        Self { inventory, used: Default::default() }
+    }
+
+    /// The openings for every operand the adjudicator resolved, in inventory order.
+    ///
+    /// `None` when any recorded index cannot be opened, which cannot happen for an inventory this
+    /// oracle answered from and is therefore a corrupt inventory rather than a missing operand.
+    pub fn openings(&self) -> Option<Vec<PalwArtifactOpeningV1>> {
+        self.used.borrow().iter().map(|i| open_artifact_leaf_v1(self.inventory, *i as u32)).collect()
+    }
+
+    /// How many rows were resolved — the cost half of the same answer, for a caller sizing a close
+    /// against the court's opening ceiling before it builds one.
+    pub fn recorded(&self) -> usize {
+        self.used.borrow().len()
+    }
+}
+
+impl crate::palw_step_refute::PalwWeightOracleV1 for PalwRecordingOracleV1<'_> {
+    fn operand_bytes(&self, tensor_name: &str, layer: Option<u16>, byte_offset: u32, byte_len: u32) -> Option<Vec<u8>> {
+        let (index, bytes) = find_operand_v1(self.inventory, tensor_name, layer, byte_offset, byte_len)?;
+        self.used.borrow_mut().insert(index);
+        Some(bytes)
     }
 }
 
@@ -257,6 +315,60 @@ mod tests {
             operand("blk.{layer}.attn_k.weight", Some(0), 0, &[5, 6, 7, 8]),
             operand("blk.{layer}.ffn_up.weight", Some(1), 0, &[9, 10]),
         ]
+    }
+
+    /// **What the prover opens is what the verifier resolves, because the prover asked the
+    /// verifier.**
+    ///
+    /// The production close carried `operand_openings: Vec::new()`, so no step that reads a weight
+    /// could adjudicate in either direction — the court could not convict a liar and could not
+    /// acquit an honest producer. Building the set by hand on the prover side would mean writing
+    /// the adjudicator's operand enumeration twice, and every correspondence defect in this tree
+    /// has come from exactly that. So the prover runs the adjudicator against the whole inventory
+    /// and opens what it recorded.
+    ///
+    /// This pins the round trip: what the recorder collects verifies against the registered root,
+    /// and a `PalwProvenOperandsV1` rebuilt from those openings answers the SAME queries with the
+    /// SAME bytes. Anything the recorder missed shows up here as a `None` from the proven set.
+    #[test]
+    fn a_recorded_opening_set_answers_exactly_what_the_verifier_asks() {
+        let inv = inventory();
+        let leaves: Vec<Hash64> = inv.iter().map(artifact_leaf_v1).collect();
+        let root = artifact_root_v1(&leaves).unwrap();
+
+        // The queries a step makes. The recorder does not know they are coming; it learns them.
+        let queries: [(&str, Option<u16>, u32, u32); 2] =
+            [("blk.{layer}.attn_q.weight", Some(0), 0, 4), ("blk.{layer}.ffn_up.weight", Some(1), 0, 2)];
+
+        let recorder = PalwRecordingOracleV1::new(&inv);
+        let mut expected: Vec<Vec<u8>> = Vec::new();
+        for (name, layer, off, len) in queries {
+            expected.push(recorder.operand_bytes(name, layer, off, len).expect("the full inventory answers"));
+        }
+        assert_eq!(recorder.recorded(), 2, "two rows resolved, and the untouched third is not opened");
+
+        let openings = recorder.openings().expect("every recorded row opens");
+        for opening in &openings {
+            verify_artifact_opening_v1(opening, root).expect("a recorded opening verifies against the registered root");
+        }
+
+        // The verifier's side, built from exactly those openings.
+        let proven = PalwProvenOperandsV1::from_openings_v1(&openings, root).expect("the openings compose");
+        for ((name, layer, off, len), want) in queries.into_iter().zip(expected) {
+            assert_eq!(
+                proven.operand_bytes(name, layer, off, len),
+                Some(want),
+                "the proven set must answer what the recorder answered, byte for byte"
+            );
+        }
+
+        // And nothing else: a row the step never read is not carried, so the close does not pay for
+        // bytes no refutation reads.
+        assert_eq!(
+            proven.operand_bytes("blk.{layer}.attn_k.weight", Some(0), 0, 4),
+            None,
+            "an operand the adjudicator never asked for must not be in the close"
+        );
     }
 
     fn open(index: usize) -> (PalwArtifactOpeningV1, Hash64) {

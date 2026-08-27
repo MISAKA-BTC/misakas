@@ -186,6 +186,23 @@ pub fn base0_inventory_v1(
         }
     }
 
+    // **Audit finding 11 (per-channel q/k/v narrowings) is closed here by NOT being here.**
+    //
+    // The finding was real and its consequence the worst kind: the loop this replaced emitted one
+    // tensor-wide 9-byte narrowing per tensor while the engine narrows through the per-CHANNEL
+    // table when the artifact carries one, `operand_bytes` refused the exact-length request, and
+    // `palw_step_refute`'s `.cycle()` fallback answered with the uniform leaf repeated —
+    // recomputing every channel with ZERO bias and convicting an honest producer of arithmetic it
+    // never performed.
+    //
+    // Two lines of work found it independently and fixed it in different places. The fix that
+    // survives is ADR-0049 Decision F's: `operands.rs` is the ONE resolver the engine and this
+    // inventory both read through (`emit` above goes through it), and it serves
+    // `qkv_channel_requant` when the artifact has one. Re-adding the hand-written emission here
+    // would restore exactly the defect both fixes were about — two name-to-bytes mappings, free to
+    // disagree — so the audit's own remedy is deliberately not taken, and its FINDING is what this
+    // comment preserves.
+
     // The canonical order is `(tensor_name, layer, row_start)` ascending, and the constructor
     // refuses anything else. Sorting HERE rather than emitting in order keeps the layout above
     // readable as the graph — and the constructor still checks, so a sort that got it wrong is a

@@ -4676,7 +4676,7 @@ mod consensus_params_id_tests {
             // see docs/testnet10-palw-rollout-runbook.md — and pinned MATERIALIZED (below) per
             // the 8208cd6 lesson, so the pre-merge values (`32cbf80f…` re-genesis-const /
             // `d07cb673…` shadow-materialized) were both superseded by that merge.
-            ("testnet", TESTNET_PARAMS, "48462b2b931522d3bfe3931790a4c8711df6bb931c471a9559db78fe388f3eda"),
+            ("testnet", TESTNET_PARAMS, "41de4731dca9fa11be4b1a7a415dfb739781c1875e3f6c78af8fa4f3bf780ce0"),
             // The PALW staging net (gate-4 soak): differs from "testnet" in exactly the three
             // activation flips (hash lane off, PALW-4 on, Ollama off) + the TN11 genesis. Its own
             // pin proves the t10 row above did NOT move when this preset was added.
@@ -4776,9 +4776,18 @@ mod consensus_params_id_tests {
             // record's registrant bond, the `Dormant` status and the two new accumulators earn.
             // Every one of them decides who holds cadence, so every one is in the fingerprint.
             // Same coordinated upgrade as every other move on this line.
-            ("testnet-11", TESTNET11_PARAMS, "a30ec7a821ff5571080fc9c7fb1011ff3866a6d5ab60dfcb0552fd84762173bb"),
-            ("simnet", SIMNET_PARAMS, "135e88c69a659d3cf4b5ce8275953c7597b2c67b03d2a74b3d0696c5d0b703fa"),
-            ("devnet", DEVNET_PARAMS, "42cc6be92506a14654cb676184e1416796dec682b15e93cb9c639e8e0d77efa5"),
+            // **simnet and devnet move for the first time on this line**, and the cause is the audit
+            // batch's re-genesis: the test networks mint a 10B premine, which is a genesis input and
+            // therefore a fingerprint input. Mainnet's is untouched, which is the point of a change
+            // that only re-genesis networks nobody has value on.
+            ("simnet", SIMNET_PARAMS, "dae24a4cddc3bd324d7e99dc61c9e14269b9a4619fecb639836b8286e144664f"),
+            ("devnet", DEVNET_PARAMS, "f8981a530bf6070e4c27696d2666673ee36a1d9f1f5b4b315c4c7400b84136c0"),
+            // And once more for the audit batch: the liveness floor gained a reserve
+            // (`min_base_class_share_permille`) after 999 individually-legal grants were shown to
+            // take it to 1‰, and the test networks re-genesis at a 10B premine. Both are inside
+            // the bundle, so both move this value — re-derived once at the end of the merge rather
+            // than carried from either line.
+            ("testnet-11", TESTNET11_PARAMS, "141035d18cdbaa536c87b450da5f7c964d0ff38e13553422b898f6cf773677f5"),
         ]
         .into_iter()
         .filter_map(|(name, params, expected)| {

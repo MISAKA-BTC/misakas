@@ -113,7 +113,9 @@ pub fn base0_activation_leg_root_v1(ctx: &PalwJobContextV2) -> Hash64 {
     Hash64::from_bytes(out)
 }
 
-pub const PALW_BASE0_DOMAIN_JOB_ANCHOR: &[u8] = b"misaka-palw/base0/rc-job-anchor/v1";
+/// Re-exported, not re-typed. The derivation moved to `kaspa_consensus_core::palw_attempt_v2`;
+/// two spellings of one domain key is how the anchor quietly moves for half the network.
+pub use kaspa_consensus_core::palw_attempt_v2::PALW_DOMAIN_JOB_ANCHOR_V1 as PALW_BASE0_DOMAIN_JOB_ANCHOR;
 pub const PALW_BASE0_DOMAIN_JOB_PROMPT: &[u8] = b"misaka-palw/base0/rc-job-prompt/v1";
 
 /// **What the RC's job is a function of — and what it deliberately is NOT.**
@@ -140,15 +142,11 @@ pub fn base0_rc_job_anchor_v1(
     class_id: Hash64,
     bond: &kaspa_consensus_core::tx::TransactionOutpoint,
 ) -> Hash64 {
-    let mut h = blake2b_simd::Params::new().hash_length(64).key(PALW_BASE0_DOMAIN_JOB_ANCHOR).to_state();
-    h.update(network_domain.as_byte_slice());
-    h.update(pre_pow_hash.as_byte_slice());
-    h.update(class_id.as_byte_slice());
-    h.update(bond.transaction_id.as_bytes().as_slice());
-    h.update(&bond.index.to_le_bytes());
-    let mut out = [0u8; 64];
-    out.copy_from_slice(h.finalize().as_bytes());
-    Hash64::from_bytes(out)
+    // The derivation moved to `kaspa_consensus_core::palw_attempt_v2` — it is the protocol's
+    // anchor, not this family's, and a verifier must be able to compute it without depending on an
+    // execution family's crate. Kept as a delegating name because the producer and the fixtures
+    // call it here, and because two copies of a hash is how the value quietly moves.
+    kaspa_consensus_core::palw_attempt_v2::palw_job_anchor_v1(network_domain, pre_pow_hash, class_id, bond)
 }
 
 /// **The anchor's job: the prompt it names, and the context that commits to it.**
@@ -669,8 +667,20 @@ pub fn base0_material_matches_claim_v1(
     committed_trace_root: Hash64,
 ) -> Result<bool, ProduceError> {
     let (binding, tiles, logits_rows, generated, checkpoint_chunks) = material;
-    // The leg root over the retained tiles, recomputed rather than trusted: a producer that kept a
-    // binding whose root does not match its own tiles kept a commitment, not an execution.
+    // **Bound the count BEFORE allocating from it.** `step_leaf_count` is a plain `u64` that
+    // arrived over gossip inside a borsh blob, and `step_merkle_root_v1` — the only thing that ever
+    // compares it to `PALW_STEP_LEG_MAX_LEAVES` — is called five lines below, after the vector of
+    // that many `Hash64` already exists. A `Hash64` is 64 bytes, so a few hundred bytes of material
+    // asking for 2^48 leaves is a 2^54-byte allocation: under `isize::MAX`, so it is
+    // `handle_alloc_error` and a process ABORT, not a catchable panic. Every seat that touched the
+    // blob would die, and `PalwGossipFlow` relays a blob before anything decodes it, so the blob
+    // arrives everywhere first.
+    //
+    // The check is the same one `step_merkle_root_v1` makes; the defect was never the rule, it was
+    // that the rule stood downstream of the memory it was supposed to protect.
+    if binding.step_leaf_count == 0 || binding.step_leaf_count > kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES {
+        return Ok(false);
+    }
     let mut leaves = vec![Hash64::default(); binding.step_leaf_count as usize];
     let ctx_hash = binding.job_context.context_hash();
     let profile_hash = binding.shape_profile.shape_profile_id();
@@ -1800,6 +1810,48 @@ mod tests {
     /// and this is that decision: rebuild the leg from the retained tiles and ask whether it
     /// reproduces the roots the CLAIM carries. A rubber stamp would license a producer that
     /// committed one root and kept another.
+    /// **A gossiped leaf count used to size an allocation before anything bounded it.**
+    ///
+    /// `step_leaf_count` is a plain `u64` inside a borsh blob that `PalwGossipFlow` relays before
+    /// anything decodes it. The only rule that ever compares it to `PALW_STEP_LEG_MAX_LEAVES` lives
+    /// in `step_merkle_root_v1`, five lines BELOW the `vec![Hash64::default(); count]` that used to
+    /// come first. A `Hash64` is 64 bytes, so a few hundred bytes of material asking for 2^40 leaves
+    /// is a 2^46-byte allocation: under `isize::MAX`, therefore `handle_alloc_error` and a process
+    /// ABORT — not a panic anything can catch. Every seat that touched the blob would die.
+    ///
+    /// Note what this test does against the UNFIXED code: it does not fail, it takes the harness
+    /// down with it. That is the defect stated exactly.
+    #[test]
+    fn a_seat_refuses_an_impossible_leaf_count_before_it_allocates_from_it() {
+        let (artifact, profile, ctx, prompt) = small_job();
+        let run = base0_execute_for_attempt_v1(&artifact, &profile, &ctx, &prompt).expect("the job runs");
+        let mut binding = run.binding.clone();
+        binding.step_leaf_count = 1 << 40;
+        let hostile: Base0RetainedMaterialV1 = (
+            binding,
+            run.tiles.tiles.clone(),
+            run.logits_rows.clone(),
+            run.generated_token_ids.clone(),
+            run.checkpoints.chunks.clone(),
+        );
+        assert!(
+            !base0_material_matches_claim_v1(&hostile, run.execution_root, run.trace_root).expect("a refusal, not an abort"),
+            "an out-of-range leaf count is material that does not match — and it must be refused before it is allocated from"
+        );
+
+        // Zero is the other end of the same rule, and `step_merkle_root_v1` refuses it too.
+        let mut empty_binding = run.binding.clone();
+        empty_binding.step_leaf_count = 0;
+        let empty: Base0RetainedMaterialV1 = (
+            empty_binding,
+            run.tiles.tiles.clone(),
+            run.logits_rows.clone(),
+            run.generated_token_ids.clone(),
+            run.checkpoints.chunks.clone(),
+        );
+        assert!(!base0_material_matches_claim_v1(&empty, run.execution_root, run.trace_root).expect("checkable"));
+    }
+
     #[test]
     fn a_seat_licenses_only_material_that_matches_the_claim() {
         let (artifact, profile, ctx, prompt) = small_job();

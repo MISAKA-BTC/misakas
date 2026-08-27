@@ -39,10 +39,35 @@ use kaspa_hashes::Hash64;
 pub const VAULT_PREMINE_SOMPI: u64 = 100_000_000 * SOMPI_PER_KASPA;
 /// Main-wallet premine amount: 9B KAS.
 pub const MAIN_PREMINE_SOMPI: u64 = 9_000_000_000 * SOMPI_PER_KASPA;
+
+/// **The re-minted networks' main wallet: 6B, for a 10B premine** (operator decision, 2026-08-26).
+///
+/// Scoped to the networks being re-genesised, and NOT to mainnet, because the premine feeds the
+/// genesis `utxo_commitment` and therefore the genesis hash: moving it on mainnet re-genesises a
+/// live chain, which is not what "re-genesis testnet-11" asks for. Mainnet keeps 13B and its
+/// identity does not move.
+///
+/// The reduction is taken entirely from the main wallet and none of it from the vaults, because the
+/// 40 vault outputs are addressed BY INDEX from outside this file: genesis bond registrations name
+/// `<premine-txid>:<index>` and node units carry fee outpoints at fixed indices. Changing the vault
+/// count or order would silently repoint every one of them; changing the main output's VALUE
+/// repoints nothing. 40 x 0.1B + 6B = 10B.
+pub const TESTNET_MAIN_PREMINE_SOMPI: u64 = 6_000_000_000 * SOMPI_PER_KASPA;
+
+/// The main-wallet amount for `net` — the only place the two answers are chosen between.
+pub const fn main_premine_sompi_for(net: NetworkType) -> u64 {
+    match net {
+        NetworkType::Mainnet => MAIN_PREMINE_SOMPI,
+        _ => TESTNET_MAIN_PREMINE_SOMPI,
+    }
+}
 /// Number of vault UTXOs.
 pub const VAULT_COUNT: usize = 40;
 /// Total genesis premine = 40 × 0.1B + 9B = **13B KAS**.
 pub const MISAKA_PREMINE_SOMPI: u64 = (VAULT_COUNT as u64) * VAULT_PREMINE_SOMPI + MAIN_PREMINE_SOMPI;
+
+/// The same total on the re-minted networks: 40 x 0.1B + 6B = 10B.
+pub const MISAKA_TESTNET_PREMINE_SOMPI: u64 = (VAULT_COUNT as u64) * VAULT_PREMINE_SOMPI + TESTNET_MAIN_PREMINE_SOMPI;
 
 /// The 40 mainnet vault custody addresses (single-key ML-DSA-87 P2PKH). The payloads
 /// are network-independent (used on every network); the fixed order feeds the genesis
@@ -189,17 +214,17 @@ pub fn misaka_premine_utxos(network_type: NetworkType) -> UtxoCollection {
     // point takes only the type — so the suffix-less answer is expressed directly rather than
     // by constructing an id that cannot exist. Callers who have a suffix use
     // `misaka_premine_utxos_for`, which is the only way to reach the public PALW nets' wallet.
-    misaka_premine_utxos_inner(main_address(network_type))
+    misaka_premine_utxos_inner(main_address(network_type), main_premine_sompi_for(network_type))
 }
 
 /// The same set, chosen by NETWORK ID so the public PALW nets can hold their main wallet at
 /// their own address (see [`main_address_for`]). [`misaka_premine_utxos`] is this with a
 /// suffix-less id, which is what every non-suffixed caller means.
 pub fn misaka_premine_utxos_for(net: NetworkId) -> UtxoCollection {
-    misaka_premine_utxos_inner(main_address_for(net))
+    misaka_premine_utxos_inner(main_address_for(net), main_premine_sompi_for(net.network_type))
 }
 
-fn misaka_premine_utxos_inner(main: &str) -> UtxoCollection {
+fn misaka_premine_utxos_inner(main: &str, main_amount: u64) -> UtxoCollection {
     let txid = Hash64::from_bytes(MISAKA_PREMINE_TXID);
     let mut utxos: Vec<(TransactionOutpoint, UtxoEntry)> = Vec::with_capacity(VAULT_COUNT + 1);
     for (i, addr) in VAULT_ADDRESSES.iter().enumerate() {
@@ -209,7 +234,7 @@ fn misaka_premine_utxos_inner(main: &str) -> UtxoCollection {
     }
     let script_public_key = crate::dns_finality::p2pkh_mldsa87_spk(&owner_payload(main));
     let outpoint = TransactionOutpoint { transaction_id: txid, index: VAULT_COUNT as u32 };
-    utxos.push((outpoint, UtxoEntry { amount: MAIN_PREMINE_SOMPI, script_public_key, block_daa_score: 0, is_coinbase: false }));
+    utxos.push((outpoint, UtxoEntry { amount: main_amount, script_public_key, block_daa_score: 0, is_coinbase: false }));
     UtxoCollection::from_iter(utxos)
 }
 
@@ -236,10 +261,12 @@ pub const TESTNET11_COMMUNITY_ALLOCATIONS: &[(&str, u64)] = &[
     ("misakatest:qt0meznnlhgxx9h99yn78erahuyql0fnaeh9fxwjhw5j2qftsvsdjy38hm89ul7dfvddy0v2uqkgr4tqgr9nxp23xtn4tylf370f2k9f8hpry2wz", 100_000_000),
     // tetsu31 (changed address, 2026-08-18)
     ("misakatest:qt8j52desseh38y3ed5wzt452fqycl5xz8ptdm0yu2m4jpppesa353nkr4wc6gsnu48ald2qy592j7sztzpj93nlaay2wcy90xme9urqkfzywukt", 5_000_000),
-    // Kurenai (2026-08-11)
-    ("misakatest:qtjw605sgh0uha25crcxy4sp8hl644x4ddl3msrtnurv3c4prz6cnag9hle8a5vyqkxgw54cl6tzyuap7j47yajf4wq3cl0tqdgup50rkdm9r4k3", 30_000_000),
-    // タケヤマ #1 (2026-08-12)
-    ("misakatest:q2utpunet56y6hxlm0pg39mx6sd6zertjqmrf2vrwhv9grr769pga6dsxhncyteexr6hvs8gcxyaumwxveth2qupe06l6maqpc5jhlp96s64ys7a", 100_000_000),
+    // Kurenai (re-registered address, 2026-08-23)
+    ("misakatest:q2hftf0vsn23n5lpqzq9lealff4frahnr420lz4zwfjadtdfnq8jm375wddxrqa60f5ma706jq2j2htlrvgx7qf2xx04canvrtjq64n9r9e7tf4w", 30_000_000),
+    // タケヤマ #1 (changed address, 2026-08-23). #2 below is deliberately unchanged: the operator
+    // confirmed one wallet moved, not both, so the two entries still name two different addresses
+    // and the 200M total does not move.
+    ("misakatest:qtdksp2u6vkc8pxem5kecpt4cc9g4kdc9qkmaw2ehv530suad40rfvs2xwtx0s3j2hwvff6cg0ruqhu4fqsq6fft050h0gfwf464ume679e56p50", 100_000_000),
     // タケヤマ #2 (2026-08-12)
     ("misakatest:qgm8ft3wk722xp8ju7mv0weuhq9anqcp3q3v37fq2dz4xfhhc96ujw2hf39k6ncjav27mp2hkajyyyu4m4s8rgggaxtj8g2qtmuqgsk5y34fsncq", 100_000_000),
     // コタヌキM (2026-08-12)
@@ -250,10 +277,17 @@ pub const TESTNET11_COMMUNITY_ALLOCATIONS: &[(&str, u64)] = &[
     ("misakatest:qfcqlqw7kfgtg9g09rsz3m0e808th2e0p4stz0r4hn8prtnmvp6xy9adngl3xhfkyplpppwehfh7vkqlvqenhh2rj5sp388mezrc8tnk5uyxt65r", 5_000_000),
     // kamil (2026-08-17)
     ("misakatest:qga0xgy5xctju8da7scuwfxj93e205er5fs59qcr5w57nejl9h93rgt9thjnd87mmv5z98wxv26ewzqha4496nnxnza66s9l3jgyk5pq0wmepk43", 1_000_000),
+    // **New members are APPENDED, never inserted.** The outpoint index is the position in this
+    // table, so inserting one in the middle silently re-points every entry after it at a different
+    // person's money.
+    // Daifuku (2026-08-22)
+    ("misakatest:q2wr70tgc8rtnz54026l5xntydq5hp7nuvp0fyxv30e2sk9jx2kc4gyt7tet0htttl5p4d36lyt25dshm45kqefdjpu8kcjurrakwx74rlpceqyt", 100_000_000),
+    // ほうじ茶 (2026-08-26)
+    ("misakatest:qgz4mlmfhw39yfh2dg3xul2ex9es9pxyrn46wu7th4gl2ldchugw85j30a84kv3wwv5r6ls9wg8ffzd5huzecejh7fhf3gf7rjgtcvlwdeqfcy34", 100_000_000),
 ];
 
-/// Total community allocation: 347M MSK (100+5+30+100+100+1+5+5+1).
-pub const TESTNET11_COMMUNITY_SOMPI: u64 = 347_000_000 * SOMPI_PER_KASPA;
+/// Total community allocation: 547M MSK (100+5+30+100+100+1+5+5+1+100+100).
+pub const TESTNET11_COMMUNITY_SOMPI: u64 = 547_000_000 * SOMPI_PER_KASPA;
 
 /// Deterministic sentinel txid for the t11 community UTXOs: ASCII "misaka-t11-community"
 /// (20 bytes) zero-padded to 64. Distinct from [`MISAKA_PREMINE_TXID`] so the two tables can
@@ -502,19 +536,23 @@ mod tests {
         }
     }
 
-    /// The community list is exactly what the operator collected: nine entrants, 347M total, and
-    /// the two who changed address appear ONCE, at their new one.
+    /// The community list is exactly what the operator collected: eleven entrants, 547M total, and
+    /// everyone who changed address appears ONCE, at their new one.
     #[test]
     fn the_community_allocation_is_the_collected_list() {
-        assert_eq!(TESTNET11_COMMUNITY_ALLOCATIONS.len(), 9);
+        assert_eq!(TESTNET11_COMMUNITY_ALLOCATIONS.len(), 11);
         let total: u64 = TESTNET11_COMMUNITY_ALLOCATIONS.iter().map(|(_, msk)| *msk).sum();
-        assert_eq!(total, 347_000_000, "100+5+30+100+100+1+5+5+1");
+        assert_eq!(total, 547_000_000, "100+5+30+100+100+1+5+5+1+100+100");
         assert_eq!(TESTNET11_COMMUNITY_SOMPI, total * SOMPI_PER_KASPA);
 
         // The superseded addresses are ABSENT — an entrant paid twice is an entrant paid wrong.
+        // The 2026-08-23 round added two more: Kurenai re-registered and タケヤマ moved one of
+        // their two wallets, and both old addresses must be gone rather than paid beside the new.
         for superseded in [
             "qfdqr02rxqyqh4jqtcn8qhwgsad3xqqn502tw26yajv7jg7eqap5slhggrcyngq8g789cxymezhc8mjfr3q2fj0w8j5w7mk986fta7u049hfph2n",
             "qfa2z97yspcra7pel80h06jg4a6mg0669fj5qx63e4v5y8geddd8hvyvy75rqaejgrq69e8yv4nd66rzlt5tqepw95q7q3k55qev84g6ey5yj8x8",
+            "qtjw605sgh0uha25crcxy4sp8hl644x4ddl3msrtnurv3c4prz6cnag9hle8a5vyqkxgw54cl6tzyuap7j47yajf4wq3cl0tqdgup50rkdm9r4k3",
+            "q2utpunet56y6hxlm0pg39mx6sd6zertjqmrf2vrwhv9grr769pga6dsxhncyteexr6hvs8gcxyaumwxveth2qupe06l6maqpc5jhlp96s64ys7a",
         ] {
             assert!(
                 !TESTNET11_COMMUNITY_ALLOCATIONS.iter().any(|(a, _)| a.contains(superseded)),
@@ -571,14 +609,27 @@ mod tests {
         use kaspa_addresses::Prefix;
 
         let utxos = testnet11_community_utxos();
-        assert_eq!(utxos.len(), 9, "nine entrants");
+        assert_eq!(utxos.len(), 11, "eleven entrants");
         let total: u64 = utxos.values().map(|e| e.amount).sum();
-        assert_eq!(total, TESTNET11_COMMUNITY_SOMPI, "347M MSK exactly");
-        assert_eq!(total, 347_000_000 * SOMPI_PER_KASPA);
+        assert_eq!(total, TESTNET11_COMMUNITY_SOMPI, "547M MSK exactly");
+        assert_eq!(total, 547_000_000 * SOMPI_PER_KASPA);
 
-        // Per-entry amounts, in table order (100/5/30/100/100/1/5/5/1 M).
-        let expected_msk =
-            [100_000_000u64, 5_000_000, 30_000_000, 100_000_000, 100_000_000, 1_000_000, 5_000_000, 5_000_000, 1_000_000];
+        // Per-entry amounts, in table order (100/5/30/100/100/1/5/5/1/100/100 M). The order is the
+        // outpoint index, so the two 2026-08-26 entrants are APPENDED — inserting either of them
+        // earlier would hand every later index to a different person.
+        let expected_msk = [
+            100_000_000u64,
+            5_000_000,
+            30_000_000,
+            100_000_000,
+            100_000_000,
+            1_000_000,
+            5_000_000,
+            5_000_000,
+            1_000_000,
+            100_000_000,
+            100_000_000,
+        ];
         let txid = Hash64::from_bytes(TESTNET11_COMMUNITY_TXID);
         for (i, want) in expected_msk.iter().enumerate() {
             let entry = &utxos[&TransactionOutpoint { transaction_id: txid, index: i as u32 }];
@@ -611,8 +662,8 @@ mod tests {
         let t11 = genesis_premine_utxos_for(NetworkId::with_suffix(NetworkType::Testnet, 11));
         assert_eq!(
             t11.len(),
-            VAULT_COUNT + 1 + 9 + crate::config::params::PALW_RC_GENESIS_BONDS.len(),
-            "t11 = 41 premine + 9 community + one float per RC bond"
+            VAULT_COUNT + 1 + TESTNET11_COMMUNITY_ALLOCATIONS.len() + crate::config::params::PALW_RC_GENESIS_BONDS.len(),
+            "t11 = 41 premine + one per community entrant + one float per RC bond"
         );
         let t10 = genesis_premine_utxos_for(NetworkId::with_suffix(NetworkType::Testnet, 10));
         assert_eq!(t10.len(), VAULT_COUNT + 1, "t10 keeps the running chain's exact set");
@@ -621,20 +672,34 @@ mod tests {
         }
     }
 
-    /// The premine is exactly 41 UTXOs (40 vaults × 0.1B + 1 main × 9B) = 13B KAS,
-    /// each a 69-byte ML-DSA-87 P2PKH spendable from block 0.
+    /// The premine is exactly 41 UTXOs (40 vaults × 0.1B + one main) on every network — 13B on
+    /// mainnet, 10B on the re-minted ones — each a 69-byte ML-DSA-87 P2PKH spendable from block 0.
+    ///
+    /// The two totals are asserted separately AND against the same constants the builder uses, so
+    /// a future change to either amount has to move this test rather than slip past it. The split
+    /// is per network because the premine feeds the genesis commitment: reducing it everywhere
+    /// would have re-genesised a live mainnet, which is not what the reduction was for.
     #[test]
-    fn premine_is_the_13b_split() {
-        for net in [NetworkType::Mainnet, NetworkType::Testnet] {
+    fn premine_is_the_expected_split_on_every_network() {
+        for (net, expected_total, expected_main) in [
+            (NetworkType::Mainnet, 13_000_000_000 * SOMPI_PER_KASPA, MAIN_PREMINE_SOMPI),
+            (NetworkType::Testnet, 10_000_000_000 * SOMPI_PER_KASPA, TESTNET_MAIN_PREMINE_SOMPI),
+            (NetworkType::Devnet, 10_000_000_000 * SOMPI_PER_KASPA, TESTNET_MAIN_PREMINE_SOMPI),
+            (NetworkType::Simnet, 10_000_000_000 * SOMPI_PER_KASPA, TESTNET_MAIN_PREMINE_SOMPI),
+        ] {
             let utxos = misaka_premine_utxos(net);
             assert_eq!(utxos.len(), VAULT_COUNT + 1, "premine is 40 vaults + 1 main = 41 UTXOs");
             let total: u64 = utxos.values().map(|e| e.amount).sum();
-            assert_eq!(total, MISAKA_PREMINE_SOMPI, "premine total");
-            assert_eq!(total, 13_000_000_000 * SOMPI_PER_KASPA, "13B KAS");
+            assert_eq!(total, expected_total, "{net:?} premine total");
+            assert_eq!(
+                total,
+                (VAULT_COUNT as u64) * VAULT_PREMINE_SOMPI + main_premine_sompi_for(net),
+                "the total is the constants the builder itself reads, not a number written twice"
+            );
             let vaults = utxos.values().filter(|e| e.amount == VAULT_PREMINE_SOMPI).count();
-            let mains = utxos.values().filter(|e| e.amount == MAIN_PREMINE_SOMPI).count();
+            let mains = utxos.values().filter(|e| e.amount == expected_main).count();
             assert_eq!(vaults, VAULT_COUNT, "40 vault UTXOs of 0.1B");
-            assert_eq!(mains, 1, "1 main UTXO of 9B");
+            assert_eq!(mains, 1, "one main UTXO at this network's amount");
             for entry in utxos.values() {
                 assert!(!entry.is_coinbase, "premine must be non-coinbase (spendable from block 0)");
                 assert_eq!(entry.block_daa_score, 0);

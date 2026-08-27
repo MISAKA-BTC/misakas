@@ -58,6 +58,21 @@ pub struct PalwExecutionOutcomeV1 {
 pub struct PalwClaimRootsV1 {
     pub execution_root: Hash64,
     pub trace_root: Hash64,
+    /// **The job this claim's block asked for**, derived from the block — never read off the
+    /// capture being checked.
+    ///
+    /// The roots alone say "this material computes to what the claim announced". They do not say
+    /// WHICH question was answered, and the anchor is the question: it is a pure function of the
+    /// claim's own block (its pre-PoW hash), its network, its class and its executor bond. Without
+    /// it a gossiped capture is a re-usable asset — anyone can mine a fresh block, announce the
+    /// borrowed roots, and both halves of the verification agree, because a seat compares roots and
+    /// a challenger re-executes the anchor the capture itself names. One inference, unlimited
+    /// blocks, by parties that ran nothing.
+    ///
+    /// `Hash64::default()` means "this caller has no block to bind to" and skips the check — the
+    /// producer checking its own fresh run, and the fixtures. Every path that judges SOMEBODY
+    /// ELSE's material must supply it.
+    pub anchor: Hash64,
 }
 
 /// What a seat concluded about served material.
@@ -128,6 +143,57 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         _index: u64,
     ) -> Result<crate::palw_step_refute::PalwExecutionStepRefutationV1, String> {
         Err("this backend cannot open a refutation at that index".to_string())
+    }
+
+    /// **The anchor a block asks its job of** — the family's own derivation, from chain facts only.
+    ///
+    /// Every input is recomputable by anyone holding the block: the network domain, the header's
+    /// pre-PoW hash, the class, and the executor's bond outpoint. That is what makes the anchor
+    /// checkable rather than merely declared — a producer cannot choose it, and a party verifying
+    /// somebody else's claim derives the same value the producer was forced to use.
+    ///
+    /// **The default is the shared derivation, deliberately** — the producer computes the anchor
+    /// before it resolves a backend at all, so every family already runs the job this names. A
+    /// `None` default would have been the quiet kind of wrong: a family that simply never
+    /// implemented the method would answer "I cannot derive it", every seat would decline to judge
+    /// its claims, and the class would stop licensing with nothing in any log saying why.
+    ///
+    /// A family that genuinely derives its job differently overrides this. `None` is reserved for
+    /// a family with no canonical job at all, and a caller that gets it must decline to judge
+    /// rather than fall back to the anchor named inside the material — that is the thing under
+    /// test.
+    fn job_anchor_v1(
+        &self,
+        network_domain: Hash64,
+        pre_pow_hash: Hash64,
+        class_id: Hash64,
+        executor_bond: &crate::tx::TransactionOutpoint,
+    ) -> Option<Hash64> {
+        Some(crate::palw_attempt_v2::palw_job_anchor_v1(network_domain, pre_pow_hash, class_id, executor_bond))
+    }
+
+    /// **The weight rows that refutation reads — exactly those, proven against the class root.**
+    ///
+    /// The court recomputes the disputed step, and recomputing it means reading operands out of
+    /// the registered artifact. It holds no weights of its own, so a close must carry them; and it
+    /// refuses any row that does not prove against the `artifact_root` the class registered under,
+    /// so carrying the wrong ones is the same as carrying none.
+    ///
+    /// **Asked of the adjudicator, never enumerated here.** The set of rows a step reads is decided
+    /// by the arithmetic the adjudicator walks, and a second enumeration written on the prover side
+    /// would be a second opinion about that — one that agrees today and diverges the first time a
+    /// kernel changes which operand it touches, in the direction where an honest producer cannot
+    /// close. So the implementation runs the real adjudicator against the full inventory through a
+    /// recording oracle and opens what it actually resolved. Opening the whole inventory instead
+    /// would be correct and unaffordable: a close has a byte ceiling, and a class's weights do not
+    /// fit under it.
+    ///
+    /// `Err` for a family with no court and for an artifact this backend cannot root.
+    fn operand_openings_for(
+        &self,
+        _refutation: &crate::palw_step_refute::PalwExecutionStepRefutationV1,
+    ) -> Result<Vec<crate::palw_artifact::PalwArtifactOpeningV1>, String> {
+        Err("this execution family cannot be adjudicated".to_string())
     }
 
     /// **A DRILL fault: run the job, corrupt one lane of one tile, and commit to the result.**

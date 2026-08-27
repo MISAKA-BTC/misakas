@@ -30,6 +30,8 @@ pub struct Base0Backend {
     profile: PalwShapeProfileV3,
     artifact: Base0ArtifactV1,
     canonical_job: (u32, u32),
+    /// The geometry this class's `artifact_root` was matched under — see `ResolvedClassV1`.
+    inventory_geometry: kaspa_consensus_core::palw_base0_profile::PalwBase0GeometryV1,
 }
 
 impl Base0Backend {
@@ -39,6 +41,7 @@ impl Base0Backend {
             profile: resolved.profile,
             artifact: resolved.artifact,
             canonical_job: resolved.canonical_job,
+            inventory_geometry: resolved.inventory_geometry,
         }
     }
 
@@ -82,6 +85,15 @@ impl PalwExecutionBackendV1 for Base0Backend {
             // `Unavailable`, not an accusation that the producer computed the wrong thing.
             return PalwMaterialVerdictV1::Unverifiable;
         };
+        // **Which question did this answer?** The roots say the arithmetic is self-consistent;
+        // they cannot say the job was the one this claim's block asked for. A capture carries its
+        // own `job_id`, so reading the anchor from it and then checking the capture against it
+        // would be a tautology — and it is precisely the tautology that made a gossiped capture
+        // re-mineable by anyone, forever, with no inference. The caller derives the anchor from the
+        // BLOCK; here we only insist the capture answers it.
+        if claim.anchor != Hash64::default() && decoded.0.job_context.job_id != claim.anchor {
+            return PalwMaterialVerdictV1::Mismatch;
+        }
         match base0_material_matches_claim_v1(&decoded, claim.execution_root, claim.trace_root) {
             Ok(true) => PalwMaterialVerdictV1::Matches,
             Ok(false) => PalwMaterialVerdictV1::Mismatch,
@@ -183,6 +195,21 @@ impl PalwExecutionBackendV1 for Base0Backend {
         )
         .map_err(|e| format!("{e:?}"))
     }
+
+    fn operand_openings_for(
+        &self,
+        refutation: &kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1,
+    ) -> Result<Vec<kaspa_consensus_core::palw_artifact::PalwArtifactOpeningV1>, String> {
+        let inventory = crate::inventory::base0_inventory_v1(&self.artifact, self.inventory_geometry).map_err(|e| format!("{e:?}"))?;
+        let recorder = kaspa_consensus_core::palw_artifact::PalwRecordingOracleV1::new(inventory.operands());
+        // **The verdict is not ours to read here.** This runs the adjudicator only to learn WHICH
+        // rows it resolves, and it resolves the same rows whether the step clears or convicts —
+        // so an error return (including `NoFaultFound`, which is what an honest party's own close
+        // produces) is not a reason to withhold the openings. The chain re-runs the same check
+        // against these rows and says what it means.
+        let _ = kaspa_consensus_core::palw_step_refute::check_execution_step_refutation_v1(refutation, &recorder);
+        recorder.openings().ok_or_else(|| "the inventory cannot open a row its own oracle resolved".to_string())
+    }
 }
 
 /// The capture's leaf hashes, laid out BY POSITION over the whole step space.
@@ -233,7 +260,8 @@ mod tests {
         assert!(!outcome.material.is_empty(), "a producer that retained nothing could not answer a challenge");
 
         // The seat's half, against the roots this very run committed.
-        let claim = PalwClaimRootsV1 { execution_root: outcome.execution_root, trace_root: outcome.trace_root };
+        let claim =
+            PalwClaimRootsV1 { execution_root: outcome.execution_root, trace_root: outcome.trace_root, anchor: Hash64::default() };
         assert_eq!(backend.verify_material(&outcome.material, claim), PalwMaterialVerdictV1::Matches);
     }
 
@@ -326,6 +354,133 @@ mod tests {
         assert_ne!(honest_after, lying_after, "and including it, they differ — which is what makes the rung informative");
     }
 
+    /// **A capture answers a question, and the question has to be this block's.**
+    ///
+    /// The roots say the arithmetic is self-consistent. They do not say which job was run, so a
+    /// gossiped capture used to be a re-usable asset: mine a fresh block, announce the borrowed
+    /// roots, and every check agreed — the seat compared roots (they match, they are real roots)
+    /// and the challenger re-executed the anchor the capture itself named (it reproduces, it is a
+    /// real execution). One inference, unlimited blocks, by parties that ran nothing.
+    ///
+    /// So the claim carries the anchor its own block implies, and material that answers a
+    /// different anchor is a `Mismatch` — the same verdict a wrong root gets, because it is the
+    /// same lie: this is not the work this claim was paid for.
+    #[test]
+    fn material_that_answers_another_blocks_job_is_a_mismatch() {
+        let backend = floor_backend();
+        let anchor = Hash64::from_u64_word(0xA0C0DE);
+        let (job, prompt) = backend.job_for_anchor(anchor).expect("the anchor implies a job");
+        let outcome = backend.execute(&job, &prompt).expect("the floor runs");
+
+        // Its own block: roots and anchor both this run's.
+        let mine = PalwClaimRootsV1 { execution_root: outcome.execution_root, trace_root: outcome.trace_root, anchor };
+        assert_eq!(backend.verify_material(&outcome.material, mine), PalwMaterialVerdictV1::Matches);
+
+        // Somebody else's block, borrowing this run's roots. The roots are genuine and the
+        // execution is genuine; what is missing is that anyone ever asked this question here.
+        let borrowed = PalwClaimRootsV1 { anchor: Hash64::from_u64_word(0xB0_44_0D), ..mine };
+        assert_eq!(
+            backend.verify_material(&outcome.material, borrowed),
+            PalwMaterialVerdictV1::Mismatch,
+            "a capture that answers another block's job must not license this one"
+        );
+
+        // And the derivation itself is a function of the block, so two blocks never share an
+        // anchor — which is what makes the check above bite at all.
+        let bond = kaspa_consensus_core::tx::TransactionOutpoint::new(Hash64::from_u64_word(9), 0);
+        let net = Hash64::from_u64_word(0x7E57);
+        let a = backend.job_anchor_v1(net, Hash64::from_u64_word(1), Hash64::from_u64_word(0xC), &bond).expect("the floor has a job");
+        let b = backend.job_anchor_v1(net, Hash64::from_u64_word(2), Hash64::from_u64_word(0xC), &bond).expect("the floor has a job");
+        assert_ne!(a, b, "two blocks must ask different questions, or re-mining is free again");
+    }
+
+    /// **A close carries the rows the court reads — exactly those, and it still goes both ways.**
+    ///
+    /// `a_court_goes_both_ways_through_one_prover` proves the ARITHMETIC by handing the adjudicator
+    /// the entire inventory, which no real close can do: a close has a byte ceiling and a class's
+    /// weights do not fit under it. So the panel's actual path is the one under test here — ask the
+    /// backend for the openings, prove those alone against the class root, and require the same two
+    /// verdicts. A `Vec::new()` here (what the panel shipped before) reads as `NoFaultFound` on the
+    /// guilty side, so a court wired that way could never convict; that is the defect this pins.
+    #[test]
+    fn a_close_carries_exactly_the_rows_the_court_reads() {
+        use kaspa_consensus_core::palw_artifact::PalwProvenOperandsV1;
+        use kaspa_consensus_core::palw_step::{canonical_step_coordinates, canonical_step_leaf_index};
+        use kaspa_consensus_core::palw_step_refute::{PalwStepRefuteError, check_execution_step_refutation_v1};
+
+        let backend = floor_backend();
+        let class_root = crate::rc::palw_rc_base0_artifact_root_v1().expect("the floor's pinned root");
+        let (job, prompt) = backend.job_for_anchor(Hash64::from_u64_word(0x09E_4ED)).expect("job");
+        let outcome = backend.execute(&job, &prompt).expect("the floor runs");
+        let (binding, tiles, logits, generated, checkpoint_chunks) =
+            crate::produce::base0_material_decode_v1(&outcome.material).expect("our own material decodes");
+        let profile = binding.shape_profile.clone();
+        let ctx = binding.job_context.clone();
+        let (index, _) = (0..binding.step_leaf_count)
+            .find_map(|i| {
+                let c = canonical_step_coordinates(&profile, &ctx, i)?;
+                let idx = canonical_step_leaf_index(&profile, &ctx, &c)?;
+                tiles.iter().any(|(t, _)| *t == idx).then_some((idx, c))
+            })
+            .expect("the capture holds at least one openable main leaf");
+
+        // --- honest: the recorded rows clear the step, and the SAME rows prove against the root ---
+        let honest = backend.refutation_for_index(&outcome.material, index).expect("an honest capture opens");
+        let honest_openings = backend.operand_openings_for(&honest).expect("the class opens its own rows");
+        let honest_oracle =
+            PalwProvenOperandsV1::from_openings_v1(&honest_openings, class_root).expect("recorded rows prove against the class root");
+        assert!(
+            matches!(check_execution_step_refutation_v1(&honest, &honest_oracle), Err(PalwStepRefuteError::NoFaultFound)),
+            "an honest close must clear itself from the rows it carried"
+        );
+
+        // ...and it carried a close-sized set, not the artifact. This is the whole reason the
+        // recording oracle exists, so it is asserted rather than assumed.
+        let whole = crate::inventory::base0_inventory_v1(&backend.artifact, backend.inventory_geometry).expect("a real inventory");
+        assert!(
+            honest_openings.len() < whole.operands().len(),
+            "a close that carries every row is a close no ceiling admits ({} of {})",
+            honest_openings.len(),
+            whole.operands().len()
+        );
+        assert!(!honest_openings.is_empty(), "a step that reads no weight at all would make the artifact root decorative");
+
+        // --- guilty: one tampered lane at that same step, closed the same way, convicts ---
+        let mut lying_tiles = tiles.clone();
+        let pos = lying_tiles.iter().position(|(t, _)| *t == index).expect("the disputed tile is held");
+        lying_tiles[pos].1.values_le[0] = lying_tiles[pos].1.values_le[0].wrapping_add(1);
+        let lying = crate::legs::Base0StepTilesV1 { leaves: leaves_by_position(&binding, &lying_tiles), tiles: lying_tiles.clone() };
+        let checkpoints =
+            crate::legs::Base0CheckpointCaptureV1::from_chunks_v1(&ctx, &profile, &binding.checkpoint_profile, &checkpoint_chunks)
+                .expect("the served chunks re-derive");
+        let lying_binding = crate::legs::base0_binding_from_capture_v1(
+            &profile,
+            &ctx,
+            &lying,
+            &checkpoints,
+            binding.full_logits_trace_root,
+            crate::produce::base0_activation_leg_root_v1(&ctx),
+        )
+        .expect("a tampered capture still commits to itself");
+        let lying_material =
+            borsh::to_vec(&(&lying_binding, &lying_tiles, &logits, &generated, &checkpoint_chunks)).expect("serializes");
+        let guilty = backend.refutation_for_index(&lying_material, index).expect("a tampered capture opens too");
+        let guilty_openings = backend.operand_openings_for(&guilty).expect("the class opens the guilty step's rows too");
+        let guilty_oracle =
+            PalwProvenOperandsV1::from_openings_v1(&guilty_openings, class_root).expect("recorded rows prove against the class root");
+        assert!(
+            check_execution_step_refutation_v1(&guilty, &guilty_oracle).is_ok(),
+            "a tampered lane must convict from the rows the close carried, not read as no fault"
+        );
+
+        // --- and the empty set the panel used to send convicts NOTHING: the bug, pinned ---
+        let empty = PalwProvenOperandsV1::from_openings_v1(&[], class_root).expect("an empty set is well-formed");
+        assert!(
+            check_execution_step_refutation_v1(&guilty, &empty).is_err(),
+            "a close carrying no operands must not be able to convict — if it can, the court is reading something it was not given"
+        );
+    }
+
     /// **The drill fault has to be the fraud a court is FOR, not a mismatch anyone can see.**
     ///
     /// A producer whose roots disagree with its own material is caught by every seat before any
@@ -353,7 +508,8 @@ mod tests {
 
         // 2. And it is SELF-CONSISTENT: the liar's own material verifies against the liar's own
         //    claim, so no seat check refuses it and the claim licenses normally.
-        let its_own = PalwClaimRootsV1 { execution_root: lying.execution_root, trace_root: lying.trace_root };
+        let its_own =
+            PalwClaimRootsV1 { execution_root: lying.execution_root, trace_root: lying.trace_root, anchor: Hash64::default() };
         assert_eq!(
             backend.verify_material(&lying.material, its_own),
             PalwMaterialVerdictV1::Matches,
@@ -383,7 +539,8 @@ mod tests {
         let backend = floor_backend();
         let (job, prompt) = backend.job_for_anchor(Hash64::from_u64_word(7)).expect("job");
         let outcome = backend.execute(&job, &prompt).expect("runs");
-        let claim = PalwClaimRootsV1 { execution_root: outcome.execution_root, trace_root: outcome.trace_root };
+        let claim =
+            PalwClaimRootsV1 { execution_root: outcome.execution_root, trace_root: outcome.trace_root, anchor: Hash64::default() };
 
         assert_eq!(backend.verify_material(b"not material at all", claim), PalwMaterialVerdictV1::Unverifiable);
         // Real material, a claim committing a DIFFERENT execution: the case a rubber stamp signs.

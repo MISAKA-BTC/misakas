@@ -1455,7 +1455,14 @@ fn base0_row(
                         let q = x.get(head * head_dim..head * head_dim + head_dim).ok_or(
                             PalwStepRefuteError::InputSetNotCanonical("base0 attention query row is not attn_heads x head_dim"),
                         )?;
-                        let k = &cache[j * kv_dim + kv_off..j * kv_dim + kv_off + head_dim];
+                        // Checked, like the query slice three lines above. Nothing relates a
+                        // profile's `hidden_dim` to `attn_heads * attn_head_dim` at registration,
+                        // so `kv_off` is registrant-arithmetic and this slice is registrant-indexed
+                        // — and it runs inside block validation, where a panic is a chain halt for
+                        // everyone rather than an error for the filer.
+                        let k = cache.get(j * kv_dim + kv_off..j * kv_dim + kv_off + head_dim).ok_or(
+                            PalwStepRefuteError::InputSetNotCanonical("base0 attention key slice falls outside the KV cache"),
+                        )?;
                         ops::dot_i8(q, k).map_err(shape)?
                     } else {
                         // P·V: output is `attn_heads x head_dim`, head-major. Lane `(h, i)` reduces
@@ -1466,7 +1473,13 @@ fn base0_row(
                         let probs = x.get(head * history..head * history + history).ok_or(
                             PalwStepRefuteError::InputSetNotCanonical("base0 attention probability row is not attn_heads x kv_len"),
                         )?;
-                        let column: Vec<i8> = (0..history).map(|j| cache[j * kv_dim + kv_off + i]).collect();
+                        let column: Vec<i8> = (0..history)
+                            .map(|j| {
+                                cache.get(j * kv_dim + kv_off + i).copied().ok_or(PalwStepRefuteError::InputSetNotCanonical(
+                                    "base0 attention value column falls outside the KV cache",
+                                ))
+                            })
+                            .collect::<Result<_, _>>()?;
                         ops::dot_i8(probs, &column).map_err(shape)?
                     };
                     acc.push(value);
@@ -3252,7 +3265,16 @@ fn gdn_core_genesis_replay(
     let heads = profile.gdn_heads as usize;
     let kd = profile.gdn_head_k_dim as usize;
     let vd = profile.gdn_head_v_dim as usize;
-    if kd == 0 || vd == 0 || heads == 0 || !kd.is_multiple_of(16) {
+    // **The modulus comes from the RESOLVED kernel, not from a literal.** This read `16` while the
+    // kernel actually running may be `Step32Epr8`, whose AVX2 shape consumes 32 lanes per step — so
+    // `gdn_head_k_dim` of 16, 48, 80 … cleared the guard and the dot then read past the end of a
+    // slice that short. The only thing standing between that and an out-of-bounds read was a
+    // `debug_assert!`, which release builds compile out, on a path inside block validation.
+    let step = match dot {
+        DotStructure::Step16Epr4 => 16,
+        DotStructure::Step32Epr8 => 32,
+    };
+    if kd == 0 || vd == 0 || heads == 0 || !kd.is_multiple_of(step) {
         return Err(PalwStepRefuteError::Unadjudicable);
     }
     if !inputs.len().is_multiple_of(5) || inputs.is_empty() {

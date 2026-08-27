@@ -1156,9 +1156,32 @@ impl VirtualStateProcessor {
                     // that is where the coinbase is verified against it.
                     ctx.palw_v2_payout_outputs = palw_state.as_ref().map(|s| self.palw_v2_payout_outputs(s)).unwrap_or_default();
                     // Audit C-08: and the collateral this block may not let anyone spend, from the
-                    // same parent state and for the same reason.
+                    // same parent state and for the same reason — PLUS every bond this block's own
+                    // mergeset declares.
+                    //
+                    // The parent state alone cannot hold a bond this block registers, and the
+                    // registration is extracted from acceptance data AFTER the mergeset is already
+                    // accepted. So the collateral output of a bond was spendable in the very block
+                    // that registered it: `palw_bond_registration_binds_its_carrier_v2` proves the
+                    // named output EXISTS in the carrier, never that it survived, and `apply_object`
+                    // checks only `collateral >= min`. Chained transactions are forbidden inside one
+                    // block but not across a mergeset, and `composed_view` is recomputed per merged
+                    // block — so a transaction in a later merged block spends an output an earlier
+                    // one created. The result is an Active bond backed by nothing.
+                    //
+                    // The DNS half of this same filter has had the treatment since the mergeset
+                    // fence: `bond_gate_view` is the selected parent's bonds UNION every bond
+                    // declared anywhere in this mergeset, on the argument that including a
+                    // declaration that turns out UTXO-invalid is a harmless SAFE SUPERSET — its
+                    // output does not exist, so nothing could spend it anyway. The same argument
+                    // holds here, and the filter only ever FORBIDS a spend, so a superset cannot
+                    // admit anything. Deterministic in the shared (parent state, mergeset) inputs,
+                    // so construction and validation compute the same set.
                     ctx.palw_v2_locked_bonds =
                         palw_state.as_ref().map(|s| self.palw_v2_locked_bond_outpoints(s, pov_daa_score)).unwrap_or_default();
+                    if palw_state.is_some() {
+                        ctx.palw_v2_locked_bonds.extend(self.palw_v2_bonds_declared_in_mergeset(&ctx));
+                    }
                     // ADR-0042 Decision 10: and what the selected parent's own claim already
                     // spent of its worker reward, so this coinbase does not pay it twice.
                     ctx.palw_v2_escrow_withheld =
@@ -2341,6 +2364,14 @@ impl VirtualStateProcessor {
             .as_ref()
             .map(|(_, state)| self.palw_v2_locked_bond_outpoints(state, virtual_daa_window.daa_score))
             .unwrap_or_default();
+        // …including the bonds this mergeset itself declares, exactly as the candidate walk above
+        // does. The two sides must compute the SAME set or the claim made there — "construction and
+        // validation compute the same set" — is false in the direction that hurts: a template built
+        // from the smaller set includes a spend every validating node refuses, so the block this
+        // node mines is invalid on arrival and the work is thrown away.
+        if virtual_palw_state.is_some() {
+            ctx.palw_v2_locked_bonds.extend(self.palw_v2_bonds_declared_in_mergeset(&ctx));
+        }
         ctx.palw_v2_bond_burns = virtual_palw_state
             .as_ref()
             .map(|(_, state)| self.palw_v2_bond_burn_obligations(state, virtual_daa_window.daa_score))
@@ -3859,6 +3890,36 @@ impl VirtualStateProcessor {
         )
     }
 
+    /// **The bonds this block's own mergeset declares** — the half the parent state cannot hold.
+    ///
+    /// A safe superset by construction, and by the same argument the DNS `bond_gate_view` makes:
+    /// a declaration that turns out to be UTXO-invalid names an output that does not exist, so
+    /// forbidding its spend forbids nothing. This set is only ever UNIONED into the locked set,
+    /// which only ever refuses, so no superset can admit a spend that the parent-state half would
+    /// have refused.
+    ///
+    /// Reads the RAW mergeset transactions — the same set the acceptance loop iterates — rather
+    /// than acceptance data, because acceptance data does not exist yet at this point in the walk,
+    /// and that is precisely why the collateral was spendable in its own registering block.
+    pub(super) fn palw_v2_bonds_declared_in_mergeset(
+        &self,
+        ctx: &UtxoProcessingContext,
+    ) -> std::collections::HashSet<TransactionOutpoint> {
+        use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
+        let mergeset_txs: Vec<kaspa_consensus_core::tx::Transaction> = std::iter::once(ctx.selected_parent())
+            .chain(ctx.ghostdag_data.consensus_ordered_mergeset_without_selected_parent(self.ghostdag_store.deref()))
+            .flat_map(|b| (*self.block_transactions_store.get(b).unwrap()).clone())
+            .collect();
+        kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_objects_from_accepted_txs_v2(&mergeset_txs)
+            .objects
+            .iter()
+            .filter_map(|carried| match &carried.object {
+                PalwConsensusObjectV2::BondRegistered { bond, .. } => Some(bond.0),
+                _ => None,
+            })
+            .collect()
+    }
+
     pub(super) fn palw_v2_locked_bond_outpoints(
         &self,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
@@ -3933,7 +3994,21 @@ impl VirtualStateProcessor {
         // Identities already paid or claimed in THIS mergeset. The state answers for identities
         // the chain has already seen; nothing but this answers for two siblings carrying one.
         let mut seen_here: std::collections::HashSet<kaspa_consensus_core::Hash64> = Default::default();
-        for blue in ghostdag_data.mergeset_blues.iter().filter(|h| !mergeset_non_daa.contains(h)) {
+        // **Blues AND reds.** This iterated `mergeset_blues` alone, so the set could never contain a
+        // red — and the coinbase's reds loop had no skip to apply one anyway. At the frozen 120 s
+        // cadence `ghostdag_k = 1` against a `mergeset_size_limit` of 180, so the blues this
+        // filtered were at most ONE block per mergeset and the reds it did not filter were
+        // everything else: every red was paid its full worker share to the merging miner, with no
+        // bond, class, lottery, budget or exposure behind it. The door does not compensate — the
+        // header gate checks shape, the challenge equation and a signature under the CARRIED key,
+        // and leaves trace, output and execution roots unchecked.
+        //
+        // A red is not a chain block, so the selected-parent exemption below cannot apply to one,
+        // and the same entitlement question is the right question for both colours: did this chain
+        // accept work from that block.
+        let mergeset_daa =
+            ghostdag_data.mergeset_blues.iter().chain(ghostdag_data.mergeset_reds.iter()).filter(|h| !mergeset_non_daa.contains(h));
+        for blue in mergeset_daa {
             // The selected parent went through the full admission on its way to becoming a chain
             // block, and its reward is escrowed rather than paid. Re-deciding it here could only
             // ever disagree with the transition that already accepted it.
@@ -9725,11 +9800,24 @@ impl VirtualStateProcessor {
         // (Stage 3) selected by DAA, identically to the validation path.
         let carve = self.dns_params.as_ref().and_then(|p| p.reward_fee_split(virtual_state.daa_score));
         let validator_pool = carve.map_or(0, |fs| {
+            // The template computes the SAME set the validator will, from the same state it is
+            // building on — a template whose pool disagreed with validation would build a coinbase
+            // its own node then refuses.
+            // No params means no V2 bundle, which means no entitlement question — and an `expect`
+            // here panics every hash-only network's template, because the DNS carve this closure
+            // computes exists on networks PALW does not.
+            let unentitled = self
+                .palw_state_params_v2
+                .as_ref()
+                .and_then(|params| self.palw_state_v2_store.read().load_tip(params).ok().flatten())
+                .map(|(_, state)| self.palw_v2_unentitled_blues(&state, &virtual_state.ghostdag_data, &virtual_state.mergeset_non_daa))
+                .unwrap_or_default();
             self.coinbase_manager.coinbase_validator_pool(
                 &virtual_state.ghostdag_data,
                 &virtual_state.mergeset_rewards,
                 &virtual_state.mergeset_non_daa,
                 fs,
+                &unentitled,
             )
         });
         let (validator_reward_outputs, _rewarded_keys, newly_included_stake, expected_stake) = self
@@ -10316,6 +10404,20 @@ impl VirtualStateProcessor {
         //
         // Headers are synced before the utxoset sidecars in every IBD path, so such a child
         // normally exists by now, and it arrived under PoW plus the headers proof.
+        // **Every qualifying child must agree, and disagreement is proof of injection.**
+        //
+        // This used to `break` on the FIRST qualifying child, under a doc line — three lines above,
+        // and false — saying the root "comes from the pruning point's OWN header, never from the
+        // peer's message". Every header in a joining node's store at this moment arrived from the
+        // IBD peer, `palw_state_root` is not checked at header validation (the only check is in the
+        // selected-chain walk, long after this import), and `get_children` returns a hash set whose
+        // iteration order is a function of the hashes — i.e. grindable. So the peer chose which
+        // root this node would demand, and could then satisfy it with the carriage it also supplied.
+        //
+        // The honest set is unanimous by construction: every child whose selected parent is the
+        // pruning point commits the same parent state. So requiring unanimity costs an honest peer
+        // nothing and denies the attacker the choice, without needing a selected-chain successor
+        // that may not be resolvable yet at this point in the IBD.
         let children: Vec<BlockHash> = RelationsStoreReader::get_children(&self.relations_service, pruning_point)
             .map(|c| c.read().iter().copied().collect())
             .unwrap_or_default();
@@ -10325,8 +10427,22 @@ impl VirtualStateProcessor {
             if self.ghostdag_store.get_selected_parent(child).ok() != Some(pruning_point) {
                 continue; // commits a different parent's state — not this one
             }
-            expected_root = Some(header.palw_state_root);
-            break;
+            match expected_root {
+                None => expected_root = Some(header.palw_state_root),
+                Some(seen) if seen == header.palw_state_root => {}
+                Some(seen) => {
+                    return Err(PruningImportError::ImportedPalwStateInvalid(
+                        pruning_point,
+                        seen,
+                        format!(
+                            "its children disagree about its state root ({seen} vs {}) — every child whose selected parent \
+                             is this block commits the same parent state, so a disagreement is a header this chain did not \
+                             produce",
+                            header.palw_state_root
+                        ),
+                    ));
+                }
+            }
         }
         // No child header to check against yet: REFUSE rather than write on trust. An unverifiable
         // carriage is exactly the one an attacker supplies, and the IBD can be retried once the
@@ -10414,8 +10530,14 @@ impl VirtualStateProcessor {
                         header.overlay_commitment_root,
                     ));
                 }
+                // **No `break`: every qualifying child is checked, not the first one the hash
+                // order happens to yield.** The comparison above was already right; stopping at
+                // the first child was what let the peer choose which comparison ran. `get_children`
+                // iterates a hash set, so the order is grindable, and a peer that supplies both the
+                // snapshot and a child header agreeing with it wins against an honest majority that
+                // does not. The honest children are unanimous by construction, so continuing costs
+                // nothing and removes the choice.
                 verified_against = Some(child);
-                break;
             }
         }
         if verified_against.is_none() {

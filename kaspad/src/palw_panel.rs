@@ -840,6 +840,30 @@ impl PalwPanelService {
     /// past its retention window has no file. Both are "cannot answer", which is the same silence
     /// a party with no material has always been allowed. The caller verifies the bytes against the
     /// claim's committed roots before believing them.
+    /// **The job a claim's block asked for, derived from the block.**
+    ///
+    /// Four inputs, every one of them a fact about the claim itself that any node can read: the
+    /// network, the accepted block's pre-PoW hash, the class, and the executor's bond outpoint.
+    /// Nothing here is taken from the material under judgement — that is the entire point. A
+    /// capture names its own job, so a verifier that reads the anchor out of the capture is asking
+    /// the accused to set the question, and the answer always agrees.
+    ///
+    /// `None` when the block is not in this node's store (pruned, or not yet synced) or when the
+    /// family has no canonical job. Callers must then decline to judge rather than fall back.
+    fn job_anchor_for_claim(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
+        network_domain: Hash64,
+        accepted_block: Hash64,
+        class_id: Hash64,
+        executor_bond: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+    ) -> Option<Hash64> {
+        let header = session.palw_claim_block_header_v2(accepted_block)?;
+        let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(&header);
+        backend.job_anchor_v1(network_domain, pre_pow, class_id, &executor_bond.0)
+    }
+
     fn retained_capture(&self, claim: &Hash64) -> Option<Vec<u8>> {
         std::fs::read(crate::palw_producer::palw_retained_material_path(&self.config.retention_dir, claim)).ok()
     }
@@ -1085,11 +1109,36 @@ impl PalwPanelService {
                     let Ok(backend) = self.backends().resolve(target.class_id, target.artifact_root) else {
                         continue;
                     };
-                    let Some(capture) = materials.get(&target.claim_id).and_then(|pool| pool.first()) else { continue };
-                    let Ok((binding, _, _, _, _)) = misaka_palw_base0::produce::base0_material_decode_v1(capture) else { continue };
-                    // The job is the ANCHOR's, and the anchor is the job's own id — so the
-                    // canonical job is recomputed rather than taken from the producer.
-                    let Ok((job, prompt)) = backend.job_for_anchor(binding.job_context.job_id) else { continue };
+                    // The capture is not read here any more — the anchor comes from the block
+                    // below — but its PRESENCE still gates the dispute: a claim whose material
+                    // nobody has served is a data-availability matter for the seats, not a fraud
+                    // this bond should stake its money on.
+                    if materials.get(&target.claim_id).and_then(|pool| pool.first()).is_none() {
+                        continue;
+                    }
+                    // **The anchor comes from the block, never from the capture.** This used to
+                    // read `binding.job_context.job_id` — the anchor named INSIDE the material
+                    // being judged — and call that "recomputed rather than taken from the
+                    // producer". It was taken from the producer: a capture states its own job, so
+                    // re-executing that job reproduces its own roots by construction, and the
+                    // check passed for material that answered a question no block ever asked. One
+                    // gossiped capture could then be re-mined by anyone, forever, with no
+                    // inference: mine a fresh block, announce the borrowed roots, and both the
+                    // seat (roots match) and the challenger (re-execution matches) agree.
+                    //
+                    // Every input to the real anchor is a fact about the CLAIM's own block, so any
+                    // third party derives the same value the producer was forced to use.
+                    let Some(anchor) = self.job_anchor_for_claim(
+                        &session,
+                        backend.as_ref(),
+                        network_domain,
+                        target.accepted_block,
+                        target.class_id,
+                        &target.executor_bond,
+                    ) else {
+                        continue;
+                    };
+                    let Ok((job, prompt)) = backend.job_for_anchor(anchor) else { continue };
                     let Ok(mine_run) = backend.execute(&job, &prompt) else { continue };
                     let reproduced = mine_run.execution_root == target.execution_root && mine_run.trace_root == target.trace_root;
                     if reproduced && !self.config.drill_challenge_all {
@@ -1201,7 +1250,25 @@ impl PalwPanelService {
                 // the claim `live` — so the retention rule below keeps it for the session's life
                 // and the next tick costs nothing. Still gated by `verify_material`: a file is
                 // evidence only if it reproduces the roots the claim committed to.
-                let roots = PalwClaimRootsV1 { execution_root: duty.execution_root, trace_root: duty.trace_root };
+                // **Selecting evidence, not judging a producer** — so an anchor this node cannot
+                // derive degrades to the roots-only check here rather than skipping the duty.
+                // These are the responder's OWN captures: refusing to load them because the block
+                // header is momentarily unreadable would make the node silent at its own court,
+                // and silence at the opening rung now costs it the claim. The judging site (the
+                // receipt verdict below) takes the opposite branch, and correctly: there an
+                // underivable anchor means "no opinion", because verifying without it is exactly
+                // what let borrowed material pass.
+                let anchor = self
+                    .job_anchor_for_claim(
+                        &session,
+                        backend.as_ref(),
+                        network_domain,
+                        duty.accepted_block,
+                        duty.class_id,
+                        &duty.executor_bond,
+                    )
+                    .unwrap_or_default();
+                let roots = PalwClaimRootsV1 { execution_root: duty.execution_root, trace_root: duty.trace_root, anchor };
                 let pool_has_it = materials
                     .get(&duty.claim_id)
                     .map(|pool| pool.iter().any(|b| backend.verify_material(b, roots) == PalwMaterialVerdictV1::Matches))
@@ -1304,7 +1371,19 @@ impl PalwPanelService {
                                 continue;
                             }
                         };
-                        let proof = PalwCourtVerdictProofV2::Arithmetic { refutation, operand_openings: Vec::new() };
+                        // **The rows the court will need to read, asked of the adjudicator.**
+                        // A close whose openings are empty is a close the court cannot recompute
+                        // from: it holds no weights, so every operand the disputed step reads has
+                        // to arrive with the evidence, proven against the class root.
+                        let operand_openings = match backend.operand_openings_for(&refutation) {
+                            Ok(o) => o,
+                            Err(e) => {
+                                *court_stalls.entry("the class cannot open the rows this step reads").or_default() += 1;
+                                warn!("[{PALW_PANEL}] cannot open operands for session {}: {e}", duty.session_id);
+                                continue;
+                            }
+                        };
+                        let proof = PalwCourtVerdictProofV2::Arithmetic { refutation, operand_openings };
                         // **The chain says what the evidence means, not us.** A `CourtClosed` must
                         // announce the verdict the proof derives to, and the pipeline refuses one
                         // that names any other — so asking first is both the only way to spend a
@@ -1360,9 +1439,19 @@ impl PalwPanelService {
                         let Ok(backend) = self.backends().resolve(duty.class_id, duty.artifact_root) else {
                             break 'verdict None;
                         };
+                        let Some(anchor) = self.job_anchor_for_claim(
+                            &session,
+                            backend.as_ref(),
+                            network_domain,
+                            duty.accepted_block,
+                            duty.class_id,
+                            &duty.executor_bond,
+                        ) else {
+                            break 'verdict None;
+                        };
                         if backend.verify_material(
                             bytes,
-                            PalwClaimRootsV1 { execution_root: duty.execution_root, trace_root: duty.trace_root },
+                            PalwClaimRootsV1 { execution_root: duty.execution_root, trace_root: duty.trace_root, anchor },
                         ) == PalwMaterialVerdictV1::Matches
                         {
                             break 'verdict Some(PalwReceiptVerdictV2::Valid);
@@ -1780,13 +1869,23 @@ impl AsyncService for PalwPanelService {
 
     fn start(self: Arc<Self>) -> AsyncServiceFuture {
         Box::pin(async move {
-            // A node registering its first bond has none, and every panel duty is keyed on one —
-            // so this is a different job, not a mode of the same one.
+            // **Registration is a precondition, not a mode.** A node registering its first bond has
+            // none, so the registration job runs first — but it used to run INSTEAD, and
+            // `--palw-register-bond` left in a service unit therefore replaced the panel with a
+            // one-shot. `bond_registration_worker` sees the key already holds a bond, says so in one
+            // INFO line, and returns; the service future completed and the seat answered nothing for
+            // the rest of the process's life. Panels are derived from CHAIN state, not from whether
+            // this process runs the service, so the bond kept being drawn — and `slash_silent_seats`
+            // charges an absent seat `claim.reserved` at the receipt timeout and at both court
+            // closes. The flag that was supposed to create a bond was quietly spending it.
+            //
+            // Falling through is safe in every case: `worker()` declines by itself, with its own
+            // message, when there is no seat identity to run as — which is exactly the state a node
+            // that has only just registered is in.
             if self.config.register_bond {
                 self.bond_registration_worker().await;
-            } else {
-                self.worker().await;
             }
+            self.worker().await;
             Ok(())
         })
     }

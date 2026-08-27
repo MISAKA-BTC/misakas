@@ -228,6 +228,13 @@ fn the_receipt_lane_binds_identity_without_pricing_or_buying_level() {
     // A free digest must not buy hierarchy position: the receipt lane sits at the base level for
     // EVERY nonce, while the attempt lane's level still varies with its digest (so the arm did
     // not flatten the hierarchy for everyone).
+    //
+    // **This assertion only became true of the stored level in this commit.** It goes through
+    // `calc_block_level_check_pow_layer0`, and until now the ordinary block path did NOT — the
+    // header processor kept its own copy of the split, without this clamp, and that copy is what
+    // wrote the level into the headers store. The pipeline delegates here now, so there is one
+    // implementation and this test pins it. If a future change reintroduces a second copy, this
+    // test goes back to passing for a reason other than the one its name states.
     let mut attempt_saw_a_level = false;
     for nonce in 0..24u64 {
         let mut receipt = header.clone();

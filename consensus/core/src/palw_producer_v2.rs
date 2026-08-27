@@ -451,6 +451,13 @@ mod tests {
 /// that had to fetch them separately could be handed a different pair than the chain holds.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwSeatDutyV2 {
+    /// **The block this claim was accepted on** — the anchor's only unforgeable input.
+    ///
+    /// A party judging somebody else's material derives the job anchor from this block's pre-PoW
+    /// hash rather than reading it out of the material. Carried on the view because that is where
+    /// the judging happens, and because a view that omitted it left the verifier with no honest
+    /// source for the question the claim was supposed to answer.
+    pub accepted_block: Hash64,
     pub claim_id: Hash64,
     /// **Which class this claim is of** — and therefore which graph a seat re-executes.
     /// Carried rather than looked up: a seat that resolved the class separately could verify
@@ -492,6 +499,13 @@ pub struct PalwSeatDutyV2 {
 /// and belongs here beside the seat and court duty lists.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwDisputableClaimV2 {
+    /// **The block this claim was accepted on** — the anchor's only unforgeable input.
+    ///
+    /// A party judging somebody else's material derives the job anchor from this block's pre-PoW
+    /// hash rather than reading it out of the material. Carried on the view because that is where
+    /// the judging happens, and because a view that omitted it left the verifier with no honest
+    /// source for the question the claim was supposed to answer.
+    pub accepted_block: Hash64,
     pub claim_id: Hash64,
     pub class_id: Hash64,
     pub artifact_root: Hash64,
@@ -517,6 +531,7 @@ pub fn palw_disputable_claims_v2(state: &PalwChainStateV2, mine: &[PalwBondKeyV2
         }
         let Some(artifact_root) = state.class(&claim.class_id).map(|c| c.artifact_root) else { continue };
         out.push(PalwDisputableClaimV2 {
+            accepted_block: claim.accepted_block,
             claim_id: *claim_id,
             class_id: claim.class_id,
             artifact_root,
@@ -538,6 +553,13 @@ pub fn palw_disputable_claims_v2(state: &PalwChainStateV2, mine: &[PalwBondKeyV2
 /// one of the two bonds. This is the asking.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwCourtDutyV2 {
+    /// **The block this claim was accepted on** — the anchor's only unforgeable input.
+    ///
+    /// A party judging somebody else's material derives the job anchor from this block's pre-PoW
+    /// hash rather than reading it out of the material. Carried on the view because that is where
+    /// the judging happens, and because a view that omitted it left the verifier with no honest
+    /// source for the question the claim was supposed to answer.
+    pub accepted_block: Hash64,
     pub session_id: Hash64,
     pub claim_id: Hash64,
     pub class_id: Hash64,
@@ -582,6 +604,7 @@ pub fn palw_court_duties_v2(state: &PalwChainStateV2, mine: &[PalwBondKeyV2]) ->
         let Some(artifact_root) = state.class(&claim.class_id).map(|c| c.artifact_root) else { continue };
         let (lo, hi) = session.ladder.interval();
         out.push(PalwCourtDutyV2 {
+            accepted_block: claim.accepted_block,
             session_id: *session_id,
             claim_id: session.claim,
             class_id: claim.class_id,
@@ -623,6 +646,7 @@ pub fn palw_seat_duties_v2(state: &PalwChainStateV2, state_params: &PalwStatePar
                 continue;
             }
             out.push(PalwSeatDutyV2 {
+                accepted_block: claim.accepted_block,
                 claim_id: *claim_id,
                 class_id: claim.class_id,
                 artifact_root: class_artifact_root,

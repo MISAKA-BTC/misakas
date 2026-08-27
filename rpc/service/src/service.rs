@@ -746,13 +746,18 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         // (ADR-0046) — the class target, the pwu it implies, the artifact root, the registered
         // key, the operator id and the exposure room — because exposing the ingredients would
         // give every producer an independent chance to disagree with admission.
-        let Ok(class_id) = request.class_id.parse::<kaspa_hashes::Hash64>() else {
-            return Ok(GetPalwProducerFactsResponse::default());
-        };
+        // **A malformed request is an ERROR, not an answer.** These two arms used to return the
+        // default response, whose `available: false` this struct documents as "not a ConsensusV2
+        // network" — so a caller who fat-fingered a class id was told the chain was something it is
+        // not. Three different failures shared one indistinguishable reply.
+        let class_id = request
+            .class_id
+            .parse::<kaspa_hashes::Hash64>()
+            .map_err(|_| RpcError::General(format!("class id '{}' is not a 128-hex Hash64", request.class_id)))?;
         let bond = if request.with_bond {
-            let Ok(transaction_id) = request.bond_transaction_id.parse::<kaspa_consensus_core::tx::TransactionId>() else {
-                return Ok(GetPalwProducerFactsResponse::default());
-            };
+            let transaction_id = request.bond_transaction_id.parse::<kaspa_consensus_core::tx::TransactionId>().map_err(|_| {
+                RpcError::General(format!("bond transaction id '{}' is not a 128-hex transaction id", request.bond_transaction_id))
+            })?;
             Some(kaspa_consensus_core::tx::TransactionOutpoint { transaction_id, index: request.bond_index })
         } else {
             None
@@ -784,12 +789,29 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             response.bond_reserved_exposure = bond_facts.reserved_exposure.to_string();
             response.bond_exposure_ceiling = bond_facts.exposure_ceiling.to_string();
             response.bond_claim_exposure = bond_facts.claim_exposure.to_string();
-            // The readiness verdict comes from `ready_to_produce` itself rather than being
-            // re-derived here: the RPC and the producer must not be able to disagree about what
-            // "ready" means. Its key check is against the caller's own key, which this server
-            // does not hold — so the answer is given for the key the bond registered.
-            response.not_ready_reason = facts.ready_to_produce(&bond_facts.registered_pubkey).err().unwrap_or_default().to_string();
         }
+        // **The verdict is computed for every request, not only for bonds that exist.**
+        //
+        // This call used to live inside the `if let` above, so a caller naming a bond the chain has
+        // never registered got `not_ready_reason: ""` — which this struct documents as "this bond
+        // may produce now". `ready_to_produce`'s FIRST line is the arm that answers that case, it is
+        // directly unit-tested, and the one RPC that exists to serve the verdict could not reach it.
+        //
+        // Empty must keep exactly one meaning ("ready"), so a request that named no bond gets a
+        // sentence of its own rather than an empty string: readiness is a property of a bond, and
+        // not asking about one is not the same as asking and being told yes.
+        //
+        // The verdict still comes from `ready_to_produce` rather than being re-derived here — the
+        // RPC and the producer must not be able to disagree about what "ready" means. Its key check
+        // is against the caller's own key, which this server does not hold, so the answer is given
+        // for the key the bond registered; with no bond there is no such key and the first arm
+        // fires before the comparison.
+        response.not_ready_reason = if !request.with_bond {
+            "no bond was named in this request — readiness is a property of a bond".to_string()
+        } else {
+            let key = facts.bond.as_ref().map(|b| b.registered_pubkey.as_slice()).unwrap_or(&[]);
+            facts.ready_to_produce(key).err().unwrap_or_default().to_string()
+        };
         Ok(response)
     }
 

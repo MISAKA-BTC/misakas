@@ -254,6 +254,17 @@ impl ConsensusSessionOwned {
         self.consensus.palw_disputable_claims_v2(mine)
     }
 
+    /// **A claim's own block header**, for deriving the job anchor a verifier must judge against.
+    ///
+    /// One header read per claim under judgement, on the panel's cadence — the same store-tip
+    /// profile as the duty lists above, and unavoidable: the anchor is a function of the block, and
+    /// a verifier that skipped it would be back to trusting the anchor named inside the material
+    /// it is checking. `None` for a block this node no longer holds, which is a reason to decline
+    /// to judge, never a reason to judge without it.
+    pub fn palw_claim_block_header_v2(&self, hash: BlockHash) -> Option<std::sync::Arc<Header>> {
+        self.consensus.get_header(hash).ok()
+    }
+
     pub fn palw_court_close_verdict_v2(
         &self,
         session_id: &kaspa_consensus_core::Hash64,

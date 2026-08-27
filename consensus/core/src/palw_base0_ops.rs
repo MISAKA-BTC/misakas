@@ -198,7 +198,10 @@ pub fn rms_norm(x: &[i8], eps_q: i64) -> Result<Vec<i32>, PalwBase0OpError> {
     // Mean of squares in Qk. The divisor is a graph constant (the row length), so a plain integer
     // division is exact and frozen — see `int_recip`'s note on which divisions need an algorithm.
     let mean_q = (sum_squares << K) / (x.len() as i64);
-    let r = int_rsqrt(mean_q + eps_q);
+    // Saturating: `eps_q` reaches here from `base0_rms_eps_q`, a plain `pub i64` on a profile the
+    // registrant writes, and this crate builds with `overflow-checks = true` — so a plain `+` is a
+    // panic an attacker chooses, inside block validation.
+    let r = int_rsqrt(mean_q.saturating_add(eps_q));
     // `x_i` is a plain integer code and `r` is Qk, so the product is already Qk — a further
     // `>> K` would divide every output by 2^24 and collapse the row to a handful of units,
     // which is precisely what an earlier draft did and what a too-loose test let through.

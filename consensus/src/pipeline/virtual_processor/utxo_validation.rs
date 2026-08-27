@@ -835,7 +835,13 @@ impl VirtualStateProcessor {
         // (Stage 3) selected by DAA, identically to the construction path.
         let carve = self.dns_params.as_ref().and_then(|p| p.reward_fee_split(header.daa_score));
         let validator_pool = carve.map_or(0, |fs| {
-            self.coinbase_manager.coinbase_validator_pool(&ctx.ghostdag_data, &ctx.mergeset_rewards, &mergeset_non_daa, fs)
+            self.coinbase_manager.coinbase_validator_pool(
+                &ctx.ghostdag_data,
+                &ctx.mergeset_rewards,
+                &mergeset_non_daa,
+                fs,
+                &ctx.palw_v2_unentitled_blues,
+            )
         });
         let (validator_reward_outputs, rewarded_keys, newly_included_stake, expected_stake) = self.validator_reward_outputs_for_block(
             &txs,
