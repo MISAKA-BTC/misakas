@@ -346,10 +346,25 @@ impl Qwen36ArtifactV1 {
                 }
             }
             Store::Mapped { map, directory } => {
-                for (name, (offset, len)) in directory {
-                    let bytes = map.as_bytes().get(*offset..offset + len).unwrap_or(&[]);
+                // The pass is one straight read of nearly the whole file, and the map's standing
+                // advice is RANDOM — which turns kernel readahead off, so every touch was a
+                // synchronous 4 KiB fault. Measured on the fleet's own VPS: 5 MB/s against a
+                // device that streams at 1.3 GB/s, a two-hour startup priced by an advice meant
+                // for the mixture's eight-of-256 expert reads. Sequential for the pass, one
+                // tensor of asynchronous lookahead so the read of the next overlaps the hash of
+                // the current, and RANDOM again after, because inference follows. Advice only:
+                // the bytes absorbed — and therefore the root — are exactly what they were.
+                map.advise_sequential();
+                let extents: Vec<(&String, (usize, usize))> = directory.iter().map(|(name, extent)| (name, *extent)).collect();
+                for i in 0..extents.len() {
+                    if let Some(&(_, (next_offset, next_len))) = extents.get(i + 1) {
+                        map.will_need(next_offset, next_len);
+                    }
+                    let (name, (offset, len)) = &extents[i];
+                    let bytes = map.as_bytes().get(*offset..*offset + *len).unwrap_or(&[]);
                     absorb(&mut state, b"tensor", name, bytes);
                 }
+                map.advise_random();
             }
         }
         let mut out = [0u8; 64];

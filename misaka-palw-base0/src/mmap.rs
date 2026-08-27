@@ -59,6 +59,22 @@ impl ReadOnlyMap {
         }
     }
 
+    /// Tell the kernel the access pattern is sequential — the ROOT PASS's shape, not the
+    /// mixture's. `MADV_RANDOM` turns readahead off, which is right for eight-of-256 expert reads
+    /// and exactly wrong for one straight walk over the whole file: every touch becomes a
+    /// synchronous 4 KiB fault, and the fleet's own VPS measured 5 MB/s against a device that
+    /// streams at 1.3 GB/s. Advisory like its sibling, and always paired with a return to
+    /// [`Self::advise_random`] when the pass is done, because inference follows.
+    pub fn advise_sequential(&self) {
+        if self.len == 0 {
+            return;
+        }
+        // SAFETY: the mapping is live and the length is its own.
+        unsafe {
+            libc::madvise(self.ptr as *mut libc::c_void, self.len, libc::MADV_SEQUENTIAL);
+        }
+    }
+
     /// **Ask the kernel to start reading a range now** (`MADV_WILLNEED`).
     ///
     /// Advisory and asynchronous: the call returns before the pages arrive, which is exactly what
