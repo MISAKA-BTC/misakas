@@ -6010,6 +6010,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "misaka-palw-jobs-export"
+version = "1.1.0"
+dependencies = [
+ "kaspa-consensus-core",
+ "kaspa-hashes",
+ "kaspa-math",
+ "misaka-palw-base0",
+ "serde_json",
+]
+
+[[package]]
 name = "misaka-palw-pow-driver"
 version = "1.1.0"
 dependencies = [
