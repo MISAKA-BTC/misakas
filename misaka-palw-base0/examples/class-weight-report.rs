@@ -27,7 +27,6 @@ use std::time::Instant;
 
 use kaspa_consensus_core::config::params::Params;
 use kaspa_consensus_core::network::{NetworkId, NetworkType};
-use kaspa_consensus_core::palw_backend::PalwExecutionFamilyV1;
 use kaspa_consensus_core::palw_base0_profile::rc_job_context;
 use kaspa_consensus_core::palw_catalog_coverage::{PalwReachableKernelSetV1, verify_catalog_coverage_v1};
 use kaspa_consensus_core::palw_class_admission_v2::derive_court_cost_v1;
@@ -58,8 +57,8 @@ fn refusal(g: PalwQwen25GeometryV1, court: &PalwCourtParamsV2) -> Option<&'stati
         Ok(_) => {}
     }
     let Ok(cost) = derive_court_cost_v1(&profile) else { return Some("no court cost") };
-    if cost.max_opening_bytes > court.max_opening_bytes() {
-        return Some("max_opening_bytes");
+    if cost.max_close_bytes > court.max_close_bytes() {
+        return Some("max_close_bytes");
     }
     if cost.max_terminal_macs > court.max_terminal_macs() {
         return Some("max_terminal_macs");
@@ -103,7 +102,6 @@ fn artifact_bytes(a: &Base0ArtifactV1) -> usize {
 struct Measured {
     label: String,
     class_id: Hash64,
-    family: PalwExecutionFamilyV1,
     geometry: String,
     canonical_job: (u32, u32),
     pwu_per_inference: u64,
@@ -158,7 +156,7 @@ fn main() {
     println!("| ceiling | value |");
     println!("| --- | ---: |");
     println!("| max_step_leaf_count (the ladder) | {} |", court.max_step_leaf_count());
-    println!("| max_opening_bytes | {} |", court.max_opening_bytes());
+    println!("| max_close_bytes | {} |", court.max_close_bytes());
     println!("| max_terminal_macs | {} |", court.max_terminal_macs());
     println!("| max_operand_count | {} |", court.max_operand_count());
     println!();
@@ -226,7 +224,6 @@ fn main() {
                 }
             ),
             class_id: class.class_id(),
-            family: PalwExecutionFamilyV1::DeterministicInteger,
             geometry: format!("tile {} / n_ctx {}", class.inventory_geometry.tile_len, class.inventory_geometry.n_ctx),
             canonical_job: class.canonical_job,
             pwu_per_inference: pwu,
@@ -237,49 +234,31 @@ fn main() {
         });
     }
 
-    // --- Family M: the class testnet-11 actually registered second ------------------------------
-    //
-    // Its numbers come from the catalog that defines it, not from constants restated here. It is
-    // NOT timed by this binary: the inference happens in a separate pinned worker process, so the
-    // honest measurement is that worker's own, on the host that runs it.
-    {
-        let profile = misaka_palw_metal::catalog::cat_m_0001_profile();
-        let canonical = misaka_palw_metal::catalog::CAT_M_0001_CANONICAL;
-        rows.push(Measured {
-            label: "CAT-M-0001 Qwen3.5-2B-Q4_K_M (Family M)".to_string(),
-            class_id: profile.shape_profile_id(),
-            family: PalwExecutionFamilyV1::MetalGguf,
-            geometry: format!("n_ctx {}", misaka_palw_metal::catalog::CAT_M_0001_N_CTX),
-            canonical_job: canonical,
-            // ADR-0051: the family prices an inference by the tokens it decodes, because it has no
-            // step space to count — which is the same fact as having no court.
-            pwu_per_inference: canonical.1 as u64,
-            worst_case_leaves: 0,
-            coverage: false,
-            artifact_bytes: 1_280_835_840,
-            secs_per_inference: None,
-        });
-    }
+    // **Family M's row is gone, and its absence is the measurement.** ADR-0053 withdrew the
+    // second execution family and deleted the crate this block read its catalog from: a tolerance
+    // can acquit but never convict, so half the economy would have been non-convictable work. What
+    // replaced it is in the rows above — Qwen3.6 runs in the integer runtime with a complete kernel
+    // catalog, so the model the black box existed to serve is priced here like every other class.
 
     println!("## 3. The classes, priced");
     println!();
-    println!(
-        "| class | family | court? | geometry | canonical job | pwu/inference | worst-case leaves | coverage | weights | s/inference |"
-    );
-    println!("| --- | --- | :-: | --- | ---: | ---: | ---: | :-: | ---: | ---: |");
+    // **No family column, and no "court?" column.** ADR-0053 left exactly one execution family, so
+    // both would print the same value on every row — and a constant column reads as a choice that
+    // was made per class. Every registered class is court-adjudicable by construction now; what is
+    // still worth a column is whether its COVERAGE gate passes, which is a fact about the class.
+    println!("| class | geometry | canonical job | pwu/inference | worst-case leaves | coverage | weights | s/inference |");
+    println!("| --- | --- | ---: | ---: | ---: | :-: | ---: | ---: |");
     for r in &rows {
         println!(
-            "| {} `{}` | {:?} | {} | {} | {}+{} | {} | {} | {} | {} | {} |",
+            "| {} `{}` | {} | {}+{} | {} | {} | {} | {} | {} |",
             r.label,
             short(&r.class_id),
-            r.family,
-            if r.family.is_court_adjudicable() { "yes" } else { "**no**" },
             r.geometry,
             r.canonical_job.0,
             r.canonical_job.1,
             r.pwu_per_inference,
             if r.worst_case_leaves == 0 { "n/a".to_string() } else { r.worst_case_leaves.to_string() },
-            if r.family.is_court_adjudicable() { if r.coverage { "PASS" } else { "GAP" } } else { "n/a" },
+            if r.coverage { "PASS" } else { "GAP" },
             if r.artifact_bytes == 0 { "—".to_string() } else { format!("{:.2} GiB", r.artifact_bytes as f64 / (1 << 30) as f64) },
             r.secs_per_inference.map(|s| format!("{s:.3}")).unwrap_or_else(|| "—".to_string()),
         );
@@ -327,7 +306,7 @@ fn main() {
     println!("class that wants them cannot be registered onto a chain that declared less.");
     println!();
     println!(
-        "| tile_len | n_ctx | worst-case leaves (`≥` = the walk stopped at PALW_STEP_MAX_LEAVES, a CODE constant) | max_opening_bytes | max_terminal_macs | operands | vs shipped |"
+        "| tile_len | n_ctx | worst-case leaves (`≥` = the walk stopped at PALW_STEP_MAX_LEAVES, a CODE constant) | max_close_bytes | max_terminal_macs | operands | vs shipped |"
     );
     println!("| ---: | ---: | ---: | ---: | ---: | ---: | --- |");
     for (tile, n_ctx) in [(64u32, 90u32), (64, 512), (128, 512), (512, 2048), (2048, 2048), (2048, 4096)] {
@@ -359,11 +338,11 @@ fn main() {
             "| {tile} | {n_ctx} | {}{} | {} | {} | {} | ladder {} · open {} · macs {} · operands {} |",
             if leaves_over_code_cap { "≥" } else { "" },
             leaves,
-            cost.max_opening_bytes,
+            cost.max_close_bytes,
             cost.max_terminal_macs,
             cost.max_operand_count,
             if leaves_over_code_cap { "OVER".to_string() } else { over(leaves, court.max_step_leaf_count()) },
-            over(cost.max_opening_bytes, court.max_opening_bytes()),
+            over(cost.max_close_bytes, court.max_close_bytes()),
             over(cost.max_terminal_macs, court.max_terminal_macs()),
             over(u64::from(cost.max_operand_count), u64::from(court.max_operand_count())),
         );
