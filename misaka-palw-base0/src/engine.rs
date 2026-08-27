@@ -33,10 +33,10 @@
 //! that every reduction in the graph is the same op.
 
 use kaspa_consensus_core::palw_base0::K;
-use kaspa_consensus_core::palw_base0_ops::{
-    self as ops, PalwBase0OpError, ScaleParams, add_elem, dot_i8, embed_lookup, matmul_quant, mul_elem, requantize_row,
-    requantize_row_uniform, rescale_row, rms_norm, rope_table, silu, softmax,
-};
+// **No kernel is called in this file** (ADR-0049 Decision F). Every arithmetic step of the forward
+// pass is dispatched by `plan`, from `BASE0_LAYER_IR`; what is left here is the loop over layers,
+// the cache's shape rules, and the probe.
+use kaspa_consensus_core::palw_base0_ops::{self as ops, PalwBase0OpError, ScaleParams};
 use kaspa_consensus_core::palw_state_chunk_map::{PalwStateChunkEntryV1, PalwStateChunkGeometryV1, PalwStateChunkKindV1};
 
 use crate::artifact::Base0ArtifactV1;
@@ -77,11 +77,24 @@ pub enum EngineError {
     CheckpointStateNotCanonical {
         chunk_index: u64,
     },
+    /// **The class's graph cannot be executed by this binary** (ADR-0049 Decision F).
+    ///
+    /// The engine's op sequence is compiled from `BASE0_LAYER_IR` rather than written beside it, so
+    /// a graph naming an operand this artifact does not carry, a kernel with no dispatch, or a step
+    /// reading a step that has not run yet is refused HERE — before any arithmetic — instead of
+    /// producing a row nobody can adjudicate.
+    Plan(crate::plan::PlanError),
 }
 
 impl From<PalwBase0OpError> for EngineError {
     fn from(e: PalwBase0OpError) -> Self {
         EngineError::Op(e)
+    }
+}
+
+impl From<crate::plan::PlanError> for EngineError {
+    fn from(e: crate::plan::PlanError) -> Self {
+        EngineError::Plan(e)
     }
 }
 
@@ -116,6 +129,31 @@ impl KvCache {
     /// Number of positions already written.
     pub fn len(&self) -> usize {
         self.keys.first().map(|l| l.len()).unwrap_or(0)
+    }
+
+    /// How many positions one layer holds. Equal to [`Self::len`] for a cache that has only ever
+    /// been advanced through [`Self::push_layer`], which is the only way a forward pass writes it.
+    pub(crate) fn layer_len(&self, layer: usize) -> usize {
+        self.keys.get(layer).map(|l| l.len()).unwrap_or(0)
+    }
+
+    /// One head's slice of a cached key.
+    pub(crate) fn key_at(&self, layer: usize, position: usize, offset: usize, len: usize) -> &[i8] {
+        &self.keys[layer][position][offset..offset + len]
+    }
+
+    /// One lane of a cached value.
+    pub(crate) fn value_at(&self, layer: usize, position: usize, lane: usize) -> i8 {
+        self.values[layer][position][lane]
+    }
+
+    /// **Append one position's key and value together.**
+    ///
+    /// Both halves or neither: a cache whose keys are one position longer than its values changes
+    /// what every LATER position's attention reduces over, and nothing downstream would say so.
+    pub(crate) fn push_layer(&mut self, layer: usize, key: Vec<i8>, value: Vec<i8>) {
+        self.keys[layer].push(key);
+        self.values[layer].push(value);
     }
 
     pub fn is_empty(&self) -> bool {
@@ -272,15 +310,27 @@ impl ForwardProbe {
 pub struct Base0Engine<'a> {
     artifact: &'a Base0ArtifactV1,
     artifact_digest: kaspa_hashes::Hash64,
+    /// **The layer graph, compiled from `BASE0_LAYER_IR` against this artifact** (ADR-0049 F).
+    ///
+    /// Compiled once per engine rather than per token: the questions it answers — does every
+    /// tensor the graph names resolve, does every step read an earlier one, is every kernel
+    /// dispatchable — are properties of the class, and a class this binary cannot execute should
+    /// say so before the first forward pass rather than in the middle of one.
+    plan: Result<crate::plan::Base0GraphPlanV1, crate::plan::PlanError>,
 }
 
 impl<'a> Base0Engine<'a> {
     pub fn new(artifact: &'a Base0ArtifactV1) -> Self {
-        Self { artifact, artifact_digest: artifact.artifact_digest() }
+        Self { artifact, artifact_digest: artifact.artifact_digest(), plan: crate::plan::Base0GraphPlanV1::compile(artifact) }
     }
 
     pub fn artifact(&self) -> &Base0ArtifactV1 {
         self.artifact
+    }
+
+    /// The compiled graph, or the reason this artifact's class cannot be executed.
+    pub fn plan(&self) -> Result<&crate::plan::Base0GraphPlanV1, EngineError> {
+        self.plan.as_ref().map_err(|e| EngineError::Plan(e.clone()))
     }
 
     /// One token through the whole stack, returning `vocab` logits at accumulator scale.
@@ -301,6 +351,7 @@ impl<'a> Base0Engine<'a> {
         position: usize,
     ) -> Result<(Vec<i32>, ForwardProbe), EngineError> {
         let mut probe = ForwardProbe::default();
+        let plan = self.plan()?;
         let shape = &self.artifact.shape;
         let d = shape.d_model();
         if cache.artifact_digest != self.artifact_digest || cache.d_model != d || cache.keys.len() != shape.n_layers {
@@ -309,195 +360,56 @@ impl<'a> Base0Engine<'a> {
         if position >= shape.max_position || position != cache.len() {
             return Err(EngineError::PositionOutOfRange { got: position, max: shape.max_position });
         }
-        let (cos_row, sin_row) =
-            self.artifact.rope.row(position).ok_or(EngineError::PositionOutOfRange { got: position, max: shape.max_position })?;
-
-        let mut h: Vec<i8> = embed_lookup(&self.artifact.embed, shape.vocab, d, token_id)?.to_vec();
-        probe.pre_steps.push((0, h.iter().map(|c| *c as i32).collect()));
-
-        for li in 0..shape.n_layers {
-            let layer = &self.artifact.layers[li];
-
-            // ---- attention ------------------------------------------------------------------
-            // **Every IR slot is captured** (audit C-01/C-05). The probe used to record ten of the
-            // thirty-six, so a step leg could commit only the rows the capture happened to keep and
-            // `execution_root` was, for the other twenty-six, whatever the miner wrote.
-            let norm_q = rms_norm(&h, self.artifact.shape.eps_q)?;
-            probe.steps.push((li as u16, 0, norm_q.clone()));
-            let normed = requantize_row_uniform(&norm_q, self.artifact.norm_requant);
-            probe.steps.push((li as u16, 1, normed.iter().map(|c| *c as i32).collect()));
-            // Per-channel when the artifact supplies it — that is where a projection BIAS lives,
-            // in the `zero` of each channel's triple — and tensor-wide otherwise, which is what
-            // every artifact built before grouped-query attention meant.
-            let narrow = |acc: &[i32], idx: usize| -> Result<Vec<i8>, EngineError> {
-                match &layer.qkv_channel_requant {
-                    Some(per) => requantize_row(acc, &per[idx]).map_err(EngineError::from),
-                    None => Ok(requantize_row_uniform(acc, layer.requant[idx])),
-                }
-            };
-            let kv = shape.kv_dim();
-            let q_acc = matmul_quant(&layer.wq, &normed, d)?;
-            probe.steps.push((li as u16, 2, q_acc.clone()));
-            let q = narrow(&q_acc, 0)?;
-            probe.steps.push((li as u16, 3, q.iter().map(|c| *c as i32).collect()));
-            let k_acc = matmul_quant(&layer.wk, &normed, kv)?;
-            probe.steps.push((li as u16, 4, k_acc.clone()));
-            let k = narrow(&k_acc, 1)?;
-            probe.steps.push((li as u16, 5, k.iter().map(|c| *c as i32).collect()));
-            let v_acc = matmul_quant(&layer.wv, &normed, kv)?;
-            probe.steps.push((li as u16, 6, v_acc.clone()));
-            let v = narrow(&v_acc, 2)?;
-            probe.steps.push((li as u16, 7, v.iter().map(|c| *c as i32).collect()));
-
-            // Rotate each head's q and k in place. `RopeTable` preserves the scale it is handed,
-            // so the widening here is a reinterpretation and the narrowing after is only a clamp.
-            let mut q_rot = Vec::with_capacity(d);
-            let mut q_rot_raw: Vec<i32> = Vec::with_capacity(d);
-            for head in 0..shape.n_heads {
-                let r = head * shape.d_head..(head + 1) * shape.d_head;
-                let qh: Vec<i32> = q[r].iter().map(|c| *c as i32).collect();
-                let rotated = rope_table(&qh, cos_row, sin_row)?;
-                q_rot_raw.extend(rotated.iter().copied());
-                q_rot.extend(requantize_row_uniform(&rotated, self.artifact.rope_clamp()));
-            }
-            probe.steps.push((li as u16, 8, q_rot_raw));
-            probe.steps.push((li as u16, 9, q_rot.iter().map(|c| *c as i32).collect()));
-            // The KEY heads are rotated over `n_kv_heads`, not `n_heads`: under grouped-query
-            // attention there are fewer of them, and rotating `n_heads` of them would read past
-            // the projection.
-            let mut k_rot = Vec::with_capacity(kv);
-            let mut k_rot_raw: Vec<i32> = Vec::with_capacity(kv);
-            for head in 0..shape.n_kv_heads {
-                let r = head * shape.d_head..(head + 1) * shape.d_head;
-                let kh: Vec<i32> = k[r].iter().map(|c| *c as i32).collect();
-                let rotated = rope_table(&kh, cos_row, sin_row)?;
-                k_rot_raw.extend(rotated.iter().copied());
-                k_rot.extend(requantize_row_uniform(&rotated, self.artifact.rope_clamp()));
-            }
-            probe.steps.push((li as u16, 10, k_rot_raw));
-            probe.steps.push((li as u16, 11, k_rot.iter().map(|c| *c as i32).collect()));
-
-            cache.keys[li].push(k_rot);
-            cache.values[li].push(v);
-            let history = cache.keys[li].len();
-
-            let mut attn = vec![0i8; d];
-            // Slots 12..=15 of the IR, accumulated head-major across the loop below.
-            let mut per_head: [Vec<i32>; 4] = [Vec::new(), Vec::new(), Vec::new(), Vec::new()];
-            let mut weighted_raw: Vec<i32> = Vec::with_capacity(d);
-            let group = shape.gqa_group();
-            for head in 0..shape.n_heads {
-                let off = head * shape.d_head;
-                // Which kv head this query head reads. Contiguous grouping — query heads
-                // `[g·group, (g+1)·group)` share kv head `g` — which is the layout every
-                // Qwen2/LLaMA-family checkpoint stores; an interleaved reading would pair each
-                // query with the wrong key and produce a model that is wrong everywhere without
-                // being wrong anywhere in particular.
-                let kv_off = (head / group) * shape.d_head;
-                let qh = &q_rot[off..off + shape.d_head];
-
-                // Logits: one DotI8 per key, then the amplification that makes softmax
-                // discriminate. Without `rescale_row` here the distribution is uniform to four
-                // decimals regardless of the keys — see ADR-0040 H.
-                let raw: Vec<i32> =
-                    (0..history).map(|j| dot_i8(qh, &cache.keys[li][j][kv_off..kv_off + shape.d_head])).collect::<Result<_, _>>()?;
-                let amplified = rescale_row(&raw, layer.attn_logit_scale);
-                let probs = softmax(&amplified)?;
-                probe.attention_spread.push(probs.iter().max().copied().unwrap_or(0) - probs.iter().min().copied().unwrap_or(0));
-                // Narrowed so the value-weighted sum is an ordinary DotI8 rather than a
-                // mixed-scale reduction with no op in the catalog.
-                let p8 = requantize_row_uniform(&probs, self.artifact.qk_to_code());
-                // **The four per-head steps, captured** (ADR-0049 Decision F, audit C-01/C-05).
-                //
-                // The engine runs these once per QUERY HEAD and the probe recorded none of them,
-                // so no step leg could carry the arithmetic attention actually happens in — the
-                // capture went straight from the rotated key to the output projection. They are
-                // appended head-major into one row per slot, which is exactly the `KvPerHead`
-                // width the IR declares: `attn_heads x kv_len`, one tile index space over the
-                // concatenation.
-                per_head[0].extend(raw.iter().copied());
-                per_head[1].extend(amplified.iter().copied());
-                per_head[2].extend(probs.iter().copied());
-                per_head[3].extend(p8.iter().map(|c| *c as i32));
-
-                for i in 0..shape.d_head {
-                    let column: Vec<i8> = (0..history).map(|j| cache.values[li][j][kv_off + i]).collect();
-                    let weighted = dot_i8(&p8, &column)?;
-                    attn[off + i] = requantize_row_uniform(&[weighted], self.artifact.code_product())[0];
-                }
-                weighted_raw.extend((0..shape.d_head).map(|i| {
-                    let column: Vec<i8> = (0..history).map(|j| cache.values[li][j][kv_off + i]).collect();
-                    dot_i8(&p8, &column).unwrap_or(0)
-                }));
-            }
-            for (offset, row) in per_head.iter().enumerate() {
-                probe.steps.push((li as u16, 12 + offset as u16, row.clone()));
-            }
-            probe.steps.push((li as u16, 16, weighted_raw));
-            probe.steps.push((li as u16, 17, attn.iter().map(|c| *c as i32).collect()));
-
-            let projected_acc = matmul_quant(&layer.wo, &attn, d)?;
-            probe.steps.push((li as u16, 18, projected_acc.clone()));
-            let projected = requantize_row_uniform(&projected_acc, layer.requant[3]);
-            probe.steps.push((li as u16, 19, projected.iter().map(|c| *c as i32).collect()));
-            let residual = add_elem(&h, &projected)?;
-            probe.steps.push((li as u16, 20, residual.clone()));
-            // **ADR-0050 Decision B: the residual may amplify.** A requantization can only reduce,
-            // so a stream that has decayed has nothing to be given — measured on the real
-            // checkpoint at 5 of 127, with every layer already at `shift = 0`. Unity when the
-            // artifact declares no gain, which is what BASE-0's own class is: the arithmetic does
-            // not move until a calibration sets one.
-            let lifted = rescale_row(&residual, self.artifact.residual_scale_at(li, 0));
-            probe.steps.push((li as u16, 21, lifted.clone()));
-            h = requantize_row_uniform(&lifted, self.artifact.residual_requant_at(li, 0));
-            probe.steps.push((li as u16, 22, h.iter().map(|c| *c as i32).collect()));
-
-            // ---- SwiGLU feed-forward --------------------------------------------------------
-            let ffn_norm_q = rms_norm(&h, self.artifact.shape.eps_q)?;
-            probe.steps.push((li as u16, 23, ffn_norm_q.clone()));
-            let normed = requantize_row_uniform(&ffn_norm_q, self.artifact.norm_requant);
-            probe.steps.push((li as u16, 24, normed.iter().map(|c| *c as i32).collect()));
-            let gate_acc = matmul_quant(&layer.w_gate, &normed, shape.d_ff)?;
-            probe.steps.push((li as u16, 25, gate_acc.clone()));
-            let gate_q = rescale_row(&gate_acc, layer.ffn_gate_scale);
-            probe.steps.push((li as u16, 26, gate_q.clone()));
-            let activated = silu(&gate_q);
-            probe.steps.push((li as u16, 27, activated.clone()));
-            let gate = requantize_row_uniform(&activated, self.artifact.qk_to_code());
-            probe.steps.push((li as u16, 28, gate.iter().map(|c| *c as i32).collect()));
-            probe
-                .gate_extremes
-                .push((gate.iter().map(|c| *c as i32).min().unwrap_or(0), gate.iter().map(|c| *c as i32).max().unwrap_or(0)));
-            let up_acc = matmul_quant(&layer.w_up, &normed, shape.d_ff)?;
-            probe.steps.push((li as u16, 29, up_acc.clone()));
-            let up = requantize_row_uniform(&up_acc, layer.requant[5]);
-            probe.steps.push((li as u16, 30, up.iter().map(|c| *c as i32).collect()));
-            let product = mul_elem(&gate, &up)?;
-            probe.steps.push((li as u16, 31, product.clone()));
-            let gated = requantize_row_uniform(&product, self.artifact.code_product());
-            probe.steps.push((li as u16, 32, gated.iter().map(|c| *c as i32).collect()));
-            let down_acc = matmul_quant(&layer.w_down, &gated, d)?;
-            probe.steps.push((li as u16, 33, down_acc.clone()));
-            let down = requantize_row_uniform(&down_acc, layer.requant[6]);
-            probe.steps.push((li as u16, 34, down.iter().map(|c| *c as i32).collect()));
-            let ffn_residual = add_elem(&h, &down)?;
-            probe.steps.push((li as u16, 35, ffn_residual.clone()));
-            let ffn_lifted = rescale_row(&ffn_residual, self.artifact.residual_scale_at(li, 1));
-            probe.steps.push((li as u16, 36, ffn_lifted.clone()));
-            h = requantize_row_uniform(&ffn_lifted, self.artifact.residual_requant_at(li, 1));
-            probe.steps.push((li as u16, 37, h.iter().map(|c| *c as i32).collect()));
-            probe.residual_peak.push(h.iter().map(|c| (*c as i32).abs()).max().unwrap_or(0));
+        // The rotation resolves its own table through the operand binding; this stays because the
+        // refusal must happen before any arithmetic, and a table shorter than the shape says is a
+        // class that cannot run at this position at all.
+        if self.artifact.rope.row(position).is_none() {
+            return Err(EngineError::PositionOutOfRange { got: position, max: shape.max_position });
         }
 
-        // Inlined rather than `norm_to_code`, because the post table declares the norm and its
-        // narrowing as TWO nodes and a court recomputing the head opens them separately: a capture
-        // that only kept the pair's output could not answer for either.
-        let final_norm_q = rms_norm(&h, self.artifact.shape.eps_q)?;
-        probe.post_steps.push((0, final_norm_q.clone()));
-        let final_state = requantize_row_uniform(&final_norm_q, self.artifact.norm_requant);
-        probe.post_steps.push((1, final_state.iter().map(|c| *c as i32).collect()));
-        let logits = matmul_quant(&self.artifact.unembed, &final_state, shape.vocab)?;
-        probe.post_steps.push((2, logits.clone()));
+        // The gather is a step of the graph like any other, and it is walked like one.
+        let (embedded, pre_rows) = plan.pre.execute_graph(self.artifact, &[], Some(token_id), position)?;
+        for (slot, row) in pre_rows.into_iter().enumerate() {
+            probe.pre_steps.push((slot as u16, row));
+        }
+        let crate::plan::Base0RowV1::Codes(mut h) = embedded else {
+            return Err(EngineError::Plan(crate::plan::PlanError::LayerOutputNotCodes { slot: 0 }));
+        };
+
+        // **The layer graph is WALKED, not written** (ADR-0049 Decision F).
+        //
+        // Every step below — which kernel, in what order, reading which earlier step, against which
+        // operand of this artifact, producing how many values — comes from `BASE0_LAYER_IR`, the
+        // same table `base0_profile_v1` projects the court's node table and the inventory's tensor
+        // list from. The loop this replaced was a second description of that computation, and it
+        // diverged from the first four times: eighteen of thirty-six steps declared, K never
+        // rotated, the cache role on the raw projection, the per-head attention nodes declared once
+        // per layer. Each was found by someone reading.
+        for li in 0..shape.n_layers {
+            let (next, trace) = plan.layer.execute_layer(self.artifact, li, &h, cache, position)?;
+            let crate::plan::Base0LayerTraceV1 { rows, attention_spread, gate_extremes } = trace;
+            for (slot, row) in rows.into_iter().enumerate() {
+                probe.steps.push((li as u16, slot as u16, row));
+            }
+            probe.attention_spread.extend(attention_spread);
+            if let Some(extremes) = gate_extremes {
+                probe.gate_extremes.push(extremes);
+            }
+            probe.residual_peak.push(next.iter().map(|c| (*c as i32).abs()).max().unwrap_or(0));
+            h = next;
+        }
+
+        // The head — the final norm, its narrowing, and the logits — walked from `BASE0_POST_IR`.
+        // It used to be inlined here, three steps written beside a three-node table, and both
+        // classes' tables declared the norm and not the narrowing after it for as long as that
+        // lasted: a court recomputing the head would have compared a Qk value against a code.
+        let (logits, post_rows) = plan.post.execute_graph(self.artifact, &h, None, position)?;
+        for (slot, row) in post_rows.into_iter().enumerate() {
+            probe.post_steps.push((slot as u16, row));
+        }
+        let crate::plan::Base0RowV1::Acc(logits) = logits else {
+            return Err(EngineError::Plan(crate::plan::PlanError::LayerOutputNotCodes { slot: 2 }));
+        };
         Ok((logits, probe))
     }
 

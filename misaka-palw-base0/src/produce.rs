@@ -70,12 +70,19 @@ pub enum ProduceError {
     /// A codec failure with a fixed description — serialization is infallible for honest data, so
     /// hitting this on the encode side is a bug and on the decode side is a peer's garbage.
     Internal(&'static str),
+    /// **The class's declared graph is not the graph this engine performs** (ADR-0049 Decision F).
+    ///
+    /// The profile arrives from the chain and the engine executes `BASE0_LAYER_IR`. If the two
+    /// describe different computations, every leg this producer commits is a leg the court
+    /// recomputes differently — so it is refused here rather than mined and convicted later.
+    GraphMismatch(crate::plan::ProjectionMismatch),
 }
 
 impl std::fmt::Display for ProduceError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Engine(e) => write!(f, "the engine refused the pass: {e:?}"),
+            Self::GraphMismatch(e) => write!(f, "the class declares a graph this engine does not perform: {e}"),
             Self::Leg(e) => write!(f, "the capture could not become a leg: {e:?}"),
             Self::StepSpace(e) => write!(f, "the job has no step space: {e:?}"),
             Self::EmptyJob => write!(f, "a job needs at least one prefill token and one decode token"),
@@ -233,6 +240,20 @@ pub fn base0_execute_for_attempt_v1(
     let leaf_count = step_leaf_count(profile, ctx).map_err(ProduceError::StepSpace)?;
     let mut capture = Base0StepCaptureV1::new(leaf_count).map_err(ProduceError::Leg)?;
     let engine = Base0Engine::new(artifact);
+    // **ADR-0049 Decision F's obligation, before the first token.**
+    //
+    // "No worker may commit a step leg for a class whose profile does not name every narrowing the
+    // engine performs." The profile is the registered class's graph and it comes from the chain;
+    // the engine's steps come from `BASE0_LAYER_IR`. A producer that ran anyway would commit to
+    // arithmetic the court recomputes differently and be convicted for performing it correctly.
+    //
+    // Checked at kv_len 1 AND 2: every `KvScaled` width is a function of the position, and at one
+    // position a per-head width and a per-layer one are the same number — which is exactly how the
+    // four attention nodes came to be declared once per layer.
+    for kv_len in 1..=2 {
+        crate::plan::base0_check_graph_v1(engine.plan().map_err(ProduceError::Engine)?, profile, &artifact.shape, kv_len)
+            .map_err(ProduceError::GraphMismatch)?;
+    }
     let mut cache = KvCache::new(artifact);
     // The class's own checkpoint profile, at the producer's interval — the same object the binding
     // files, so the capture and the commitment cannot disagree about the layout or the cadence.
@@ -582,6 +603,20 @@ pub fn base0_replay_from_checkpoint_v1(
     let leaf_count = step_leaf_count(profile, ctx).map_err(ProduceError::StepSpace)?;
     let mut capture = Base0StepCaptureV1::new(leaf_count).map_err(ProduceError::Leg)?;
     let engine = Base0Engine::new(artifact);
+    // **ADR-0049 Decision F's obligation, before the first token.**
+    //
+    // "No worker may commit a step leg for a class whose profile does not name every narrowing the
+    // engine performs." The profile is the registered class's graph and it comes from the chain;
+    // the engine's steps come from `BASE0_LAYER_IR`. A producer that ran anyway would commit to
+    // arithmetic the court recomputes differently and be convicted for performing it correctly.
+    //
+    // Checked at kv_len 1 AND 2: every `KvScaled` width is a function of the position, and at one
+    // position a per-head width and a per-layer one are the same number — which is exactly how the
+    // four attention nodes came to be declared once per layer.
+    for kv_len in 1..=2 {
+        crate::plan::base0_check_graph_v1(engine.plan().map_err(ProduceError::Engine)?, profile, &artifact.shape, kv_len)
+            .map_err(ProduceError::GraphMismatch)?;
+    }
     let mut next = seed_token as usize;
     if next >= artifact.shape.vocab {
         return Err(ProduceError::TokenOutOfVocab { token: next, vocab: artifact.shape.vocab });
@@ -1691,6 +1726,48 @@ mod tests {
         assert!(
             matches!(check_base0_decode_token_refutation_v1(&lying_binding, &lying_pin, 0), Err(PalwStepRefuteError::NoFaultFound)),
             "position 0's token was honest, and stays cleared"
+        );
+    }
+
+    /// **ADR-0049 Decision F's obligation fires before the first token is run.**
+    ///
+    /// "No worker may commit a step leg for a class whose profile does not name every narrowing the
+    /// engine performs." The profile is the graph a REGISTERED class carries and it arrives from the
+    /// chain; the engine's steps come from `BASE0_LAYER_IR`. A producer that ran anyway would commit
+    /// to arithmetic the court recomputes differently — and be convicted for arithmetic it performed
+    /// correctly, which is the one verdict this court may never return.
+    ///
+    /// Both mutations below are invisible to a width comparison: the same op, the same row length,
+    /// different arithmetic. That is why the guard is a correspondence check rather than a shape one.
+    #[test]
+    fn a_class_whose_graph_this_engine_does_not_perform_produces_nothing() {
+        let (artifact, profile, ctx, prompt) = small_job();
+        base0_execute_for_attempt_v1(&artifact, &profile, &ctx, &prompt).expect("the class this engine performs runs");
+
+        // A narrowing pointed at another tensor's parameters.
+        let mut wrong_operand = profile.clone();
+        wrong_operand.attn_nodes[17].weight_name = "blk.{layer}.attn_output.requant".to_string();
+        assert!(
+            matches!(
+                base0_execute_for_attempt_v1(&artifact, &wrong_operand, &ctx, &prompt),
+                Err(ProduceError::GraphMismatch(crate::plan::ProjectionMismatch::Node { slot: 17, field: "operand" }))
+            ),
+            "a producer must not commit a leg the court will recompute from other parameters"
+        );
+
+        // The per-head attention widths declared once per layer — the divergence that made 842 of
+        // 1068 captured rows disagree, and the reason a single position cannot be trusted to find
+        // it: at kv_len 1 this profile and the engine agree exactly.
+        let mut per_layer_widths = profile.clone();
+        for slot in 12..=15 {
+            per_layer_widths.attn_nodes[slot].out_len = kaspa_consensus_core::palw_step::PalwStepOutLenV1::KvScaled { multiplier: 1 };
+        }
+        assert!(
+            matches!(
+                base0_execute_for_attempt_v1(&artifact, &per_layer_widths, &ctx, &prompt),
+                Err(ProduceError::GraphMismatch(crate::plan::ProjectionMismatch::Node { field: "output width", .. }))
+            ),
+            "a width that only differs above one position is still a different graph"
         );
     }
 

@@ -54,7 +54,7 @@ time. Adding classes before it closes makes unconnected parts more impressive, n
 | # | item | why it blocks | size |
 |---|---|---|---|
 | 0.1 | **ADR-0050 A — the residual site gains its declared narrowing** | `palw_base0_profile.rs:246` is a bare `AddElem`; node 11 consumes it via `as_i8`, and an `AddElem` of two int8 codes ranges over `[-256, 254]`. The declared graph does not adjudicate at its residual sites the moment the residual carries signal. The FFN residual is worse — both operands are raw i32. | small |
-| 0.2 | **ADR-0049 F — one canonical execution IR** | 0.1 exists because engine, profile, court and inventory are four hand-written descriptions of one computation. Fixing the residual by hand leaves the next divergence to be found the same way. Interim rule until the generator exists: **no worker may commit a step leg for a profile that omits a narrowing the engine performs.** | medium |
+| 0.2 | **ADR-0049 F — one canonical execution IR** — **CLOSED 2026-08-26** | 0.1 exists because engine, profile, court and inventory are four hand-written descriptions of one computation. Fixing the residual by hand leaves the next divergence to be found the same way. Interim rule until the generator exists: **no worker may commit a step leg for a profile that omits a narrowing the engine performs.** | medium |
 | 0.3 | **ADR-0049 E — adjudicable decode** | `palw_step_refute.rs:394` refuses embedding at `call_index != 0`, and BASE-0's own canonical job is prefill 8 / **decode 4**. Commit the logits root per decode position; a challenger opens ONE index to refute the argmax. O(1) in vocabulary. Required, not optional: on the free-prompt lane the generated text is the product. | medium |
 | 0.4 | **ADR-0049 D — coverage over coordinates** | 0.3 is invisible to the current gate, which compares kernel ids. Every kernel BASE-0 reaches is catalogued and a whole call class still refuses. | small |
 | 0.5 | **ADR-0049 G — the canonical artifact inventory** | A real opening needs a real inventory: one leaf per operand row, every byte covered exactly once, duplicates/overlaps/gaps refused. Also settles the two things called "class id" — `execution_class_id` is the shape profile id, `artifact_root` is the Merkle root over the manifest. | medium |
@@ -79,6 +79,19 @@ synthetic leaf anywhere in the chain of custody.
 > where the engine writes `d_model`; and the inventory naming layers by substitution where the court
 > asks by template. `the_engine_performs_exactly_the_graph_the_profile_declares` is what fails
 > loudly on the sixth.
+
+> **0.2 closed (2026-08-26).** The engine's op sequence is compiled from `BASE0_LAYER_IR` rather
+> than written beside it (`plan.rs`), and one name-to-bytes binding (`operands.rs`) serves the engine
+> and the inventory both. All three tables are projected in both classes — pre, attention and post —
+> and **no kernel is called in `engine.rs` any more**. The interim rule is now a gate: the producer
+> refuses to execute a class whose declared graph is not the graph this engine performs, checked at
+> two positions because at one a per-head width and a per-layer one are the same number.
+>
+> The sixth divergence the note above predicted arrived immediately, from the direction nothing was
+> watching: `attn_q.requant` served the tensor-wide narrowing while the engine applied the
+> per-channel one, so a court would have recomputed an honest step from parameters nobody applied —
+> for every class with a projection bias, which is every Qwen2.5 member and not the floor. The width
+> check could never have seen it; only asking both sides to name their operand could.
 
 ## Gate 1 — the chain can actually run the class
 

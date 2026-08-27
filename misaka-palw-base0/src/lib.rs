@@ -46,6 +46,8 @@ pub mod gguf;
 pub mod inventory;
 pub mod legs;
 pub mod mmap;
+pub mod operands;
+pub mod plan;
 pub mod produce;
 pub mod qwen36;
 pub mod qwen25_a16_backend;

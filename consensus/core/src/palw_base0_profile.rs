@@ -49,10 +49,7 @@ use crate::palw_step::{
     PalwStepLaneV1, PalwStepNodeRoleV1, PalwStepNodeV1, PalwStepOpKindV1, PalwStepOutLenV1, kernel_semantics_id_v1,
 };
 use crate::palw_step_refute::{
-    KDESC_BASE0_ADD_ELEM, KDESC_BASE0_EMBED, KDESC_BASE0_MATMUL, KDESC_BASE0_MUL_ELEM, KDESC_BASE0_REQUANTIZE, KDESC_BASE0_RESCALE,
-    KDESC_A16_ADD_ELEM, KDESC_A16_ATTN_SCORES, KDESC_A16_ATTN_VALUES, KDESC_A16_EMBED, KDESC_A16_MATMUL_REQUANT,
-    KDESC_A16_MATMUL_RESCALE, KDESC_A16_MUL_ELEM, KDESC_A16_REQUANTIZE, KDESC_A16_RMS_NORM, KDESC_A16_ROPE, KDESC_A16_SOFTMAX,
-    KDESC_BASE0_RMS_NORM, KDESC_BASE0_ROPE, KDESC_BASE0_SILU, KDESC_BASE0_SOFTMAX, KDESC_Q36_SILU,
+    KDESC_A16_ADD_ELEM, KDESC_A16_ATTN_SCORES, KDESC_A16_ATTN_VALUES, KDESC_A16_EMBED, KDESC_A16_MATMUL_REQUANT, KDESC_A16_MATMUL_RESCALE, KDESC_A16_MUL_ELEM, KDESC_A16_REQUANTIZE, KDESC_A16_RMS_NORM, KDESC_A16_ROPE, KDESC_A16_SOFTMAX, KDESC_BASE0_ADD_ELEM, KDESC_BASE0_EMBED, KDESC_BASE0_MATMUL, KDESC_BASE0_MUL_ELEM, KDESC_BASE0_REQUANTIZE, KDESC_BASE0_RESCALE, KDESC_BASE0_RMS_NORM, KDESC_BASE0_ROPE, KDESC_BASE0_SILU, KDESC_BASE0_SOFTMAX, KDESC_Q36_SILU,
 };
 use crate::{Hash64, palw_step::PalwStepError};
 
@@ -126,9 +123,8 @@ pub enum Base0IrWidthV1 {
     /// concatenation, and which head a tile belongs to is `tile · tile_len / kv_len`. The step
     /// space grows to contain every head; nothing about how a step is named changes.
     KvPerHead,
-    /// **The head's width: the vocabulary.** A class whose unembedding is a registered tensor
-    /// needs this to declare its last step; the floor's post table was hand-written beside the IR
-    /// and never needed a name for it.
+    /// The vocabulary — the logits row, and the only width in the graph that is not a function of
+    /// the hidden size.
     Vocab,
 }
 
@@ -160,7 +156,7 @@ pub struct Base0IrNodeV1 {
 }
 
 use Base0IrInputV1::{CachedK, CachedV, LayerIn, Step};
-use Base0IrWidthV1::{FfnDim, HeadDim, Hidden, KvDim, KvPerHead, KvScaled};
+use Base0IrWidthV1::{FfnDim, HeadDim, Hidden, KvDim, KvPerHead, KvScaled, Vocab};
 
 /// The thirty-six steps, in the engine's own order (`misaka-palw-base0/src/engine.rs`).
 pub const BASE0_LAYER_IR: &[Base0IrNodeV1] = &[
@@ -242,7 +238,36 @@ pub const BASE0_LAYER_IR: &[Base0IrNodeV1] = &[
     n(PalwStepOpKindV1::MulElem, KDESC_BASE0_REQUANTIZE, "blk.{layer}.ffn_residual.requant", Hidden, &[Step(36)]),
 ];
 
+/// **The head tensor's placeholder.**
+///
+/// The lm_head is the one operand that is a property of the CLASS rather than of the graph: the
+/// floor reads `output.weight`, and a class with tied embeddings reads `token_embd.weight` and
+/// carries no `output.weight` at all. Everything else in the IR is named outright, and this is
+/// substituted at projection time — which is what lets both classes share one post table.
+pub const BASE0_IR_HEAD_TENSOR: &str = "{head}";
+
+/// **The graph's first step: the embedding gather.**
+///
+/// No input refs, and that is the shape G5d settled: a gather's operands are the registered table
+/// and the TOKEN ID, not an opened row. The pre table has no upstream to supply one, and the id
+/// rides the refutation hash-checked against the job context's commitment.
+pub const BASE0_PRE_IR: &[Base0IrNodeV1] = &[n(PalwStepOpKindV1::EmbedLookup, KDESC_BASE0_EMBED, "token_embd.weight", Hidden, &[])];
+
+/// **The head, and it is THREE steps.**
+///
+/// `Base0Engine`'s final norm is `rms_norm` followed by the narrowing back to activation codes.
+/// Both classes' post tables declared the first and not the second — the same omission the layer
+/// table carried before it was generated, where a court recomputing the head would compare a Qk
+/// value against a code. Written once here so it cannot be omitted in one class and not the other.
+pub const BASE0_POST_IR: &[Base0IrNodeV1] = &[
+    n(PalwStepOpKindV1::RmsNorm, KDESC_BASE0_RMS_NORM, "", Hidden, &[LayerIn]),
+    n(PalwStepOpKindV1::MulElem, KDESC_BASE0_REQUANTIZE, "output_norm.requant", Hidden, &[Step(0)]),
+    n(PalwStepOpKindV1::MatMulQuant, KDESC_BASE0_MATMUL, BASE0_IR_HEAD_TENSOR, Vocab, &[Step(1)]),
+];
+
 /// `const fn` so the table above reads as a list rather than as a struct literal thirty-six times.
+
+
 /// **The A16 tier's dense layer, in `engine_a16.rs`'s own order** — twenty-seven steps against
 /// [`BASE0_LAYER_IR`]'s thirty-seven, because W8A16 spends no step re-narrowing an activation to
 /// eight bits between every pair of matmuls.
@@ -315,7 +340,7 @@ pub const QWEN25_A16_PRE_IR: &[Base0IrNodeV1] =
 pub const QWEN25_A16_POST_IR: &[Base0IrNodeV1] = &[
     n(PalwStepOpKindV1::RmsNorm, KDESC_A16_RMS_NORM, "", Hidden, &[LayerIn]),
     n(PalwStepOpKindV1::MulElem, KDESC_A16_REQUANTIZE, "final_norm.a16", Hidden, &[Step(0)]),
-    n(PalwStepOpKindV1::MatMulQuant, KDESC_A16_MATMUL_REQUANT, "token_embd.weight", Base0IrWidthV1::Vocab, &[Step(1)]),
+    n(PalwStepOpKindV1::MatMulQuant, KDESC_A16_MATMUL_REQUANT, BASE0_IR_HEAD_TENSOR, Base0IrWidthV1::Vocab, &[Step(1)]),
 ];
 
 const fn n(
@@ -343,6 +368,10 @@ const fn c(
 /// Unused placeholder so `HeadDim` is not an unreachable variant while the IR is per-row.
 const _: Base0IrWidthV1 = HeadDim;
 
+/// The floor's head tensor: an untied `output.weight`, kept separate from the embedding table so
+/// that a class which ties them does so by carrying equal bytes and the digest still sees it.
+pub const BASE0_FLOOR_HEAD_TENSOR: &str = "output.weight";
+
 /// The tensor names BASE-0's registration inventory must contain, with `{layer}` standing for the
 /// layer index. Public because the inventory is built from them and `verify_palw_genesis_v2`'s
 /// artifact root is over that inventory — one list, not two.
@@ -352,7 +381,7 @@ const _: Base0IrWidthV1 = HeadDim;
 /// the pre and post tables read. Maintaining this list by hand is how it came to omit every
 /// narrowing's parameters while listing three norm gains the engine never reads.
 pub fn base0_tensor_names_v1() -> Vec<&'static str> {
-    base0_tensor_names_for_head_v1("output.weight")
+    base0_tensor_names_for_head_v1(BASE0_FLOOR_HEAD_TENSOR)
 }
 
 /// The same list for a class whose head reads a different tensor.
@@ -364,15 +393,16 @@ pub fn base0_tensor_names_v1() -> Vec<&'static str> {
 /// it replaces declared 17 tensors against a graph that reads 27, omitting every narrowing exactly
 /// as the hand-written node table omitted every narrowing node.
 pub fn base0_tensor_names_for_head_v1(head: &'static str) -> Vec<&'static str> {
-    let mut names: Vec<&'static str> = vec!["token_embd.weight"];
-    for ir in BASE0_LAYER_IR {
-        if !ir.weight.is_empty() && !names.contains(&ir.weight) {
-            names.push(ir.weight);
-        }
-    }
-    for graph_level in ["output_norm.requant", head] {
-        if !names.contains(&graph_level) {
-            names.push(graph_level);
+    let mut names: Vec<&'static str> = Vec::new();
+    // Every table, in execution order — the pre table's gather, the layer's operands, the head's.
+    // Listing the graph-level ones by hand beside the projected layer ones is what let the post
+    // table's narrowing go unnamed for as long as the post table itself omitted it.
+    for table in [BASE0_PRE_IR, BASE0_LAYER_IR, BASE0_POST_IR] {
+        for ir in table {
+            let name = if ir.weight == BASE0_IR_HEAD_TENSOR { head } else { ir.weight };
+            if !name.is_empty() && !names.contains(&name) {
+                names.push(name);
+            }
         }
     }
     names
@@ -401,9 +431,6 @@ pub fn base0_tensor_names_for_head_v1(head: &'static str) -> Vec<&'static str> {
 /// step leg.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Base0IrGeometryV1 {
-    /// The unembedding's output width. Zero is legal for a table that never reaches
-    /// [`Base0IrWidthV1::Vocab`], which is every table written before one did.
-    pub vocab_size: u32,
     pub layer_count: u16,
     pub hidden_dim: u32,
     pub ffn_dim: u32,
@@ -413,32 +440,35 @@ pub struct Base0IrGeometryV1 {
     pub attn_kv_heads: u16,
     pub attn_head_dim: u32,
     pub tile_len: u32,
+    /// The logits width — the post table's last node, and the only width here that is not a
+    /// function of the hidden size.
+    pub vocab_size: u32,
     /// One byte per weight dtype entry — the projection needs the layer count it covers.
     pub weight_dtype: u8,
 }
 
-/// **Project `BASE0_LAYER_IR` into a profile's attention table.**
+/// How many layers a table's operands cover — which decides how long its `weight_dtypes` list is.
 ///
-/// The one place a layer's node table comes from. Both classes call it; neither writes a node.
-pub fn base0_ir_attn_nodes_v1(g: Base0IrGeometryV1) -> Vec<PalwStepNodeV1> {
-    base0_ir_nodes_v1(BASE0_LAYER_IR, g, Base0IrScopeV1::PerLayer)
-}
-
-/// **How many layers a table covers**, which decides its nodes' dtype lists. A layer table is
-/// instantiated once per layer and its weights carry one dtype byte for each; a pre or post table
-/// exists once for the whole graph and carries exactly one. `validate_shape` checks the length, so
-/// getting this wrong is refused rather than silently wrong — which is how the first A16 profile
-/// found out it needed the distinction.
+/// A per-layer tensor carries one dtype byte per layer; a graph-level one carries a single byte.
+/// It is a property of the TABLE rather than a parameter, which is why it is named rather than
+/// passed as a count.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Base0IrScopeV1 {
     PerLayer,
     Graph,
 }
 
-/// **The projector, over ANY IR table** — the floor's layer graph, the A16 tier's, or a class's
-/// pre/post tables. One projection for every table there is, because a second one is a second
-/// description of what a step space looks like.
-pub fn base0_ir_nodes_v1(table: &[Base0IrNodeV1], g: Base0IrGeometryV1, scope: Base0IrScopeV1) -> Vec<PalwStepNodeV1> {
+/// **Project `BASE0_LAYER_IR` into a profile's attention table.**
+///
+/// The one place a layer's node table comes from. Both classes call it; neither writes a node.
+pub fn base0_ir_attn_nodes_v1(g: Base0IrGeometryV1) -> Vec<PalwStepNodeV1> {
+    base0_ir_nodes_v1(BASE0_LAYER_IR, g, Base0IrScopeV1::PerLayer, "")
+}
+
+/// **Project any of the three IR tables into a profile's node table.**
+///
+/// `head` substitutes [`BASE0_IR_HEAD_TENSOR`], which only the post table names.
+pub fn base0_ir_nodes_v1(table: &[Base0IrNodeV1], g: Base0IrGeometryV1, scope: Base0IrScopeV1, head: &str) -> Vec<PalwStepNodeV1> {
     let layers = match scope {
         Base0IrScopeV1::PerLayer => (g.layer_count as usize).max(1),
         Base0IrScopeV1::Graph => 1,
@@ -450,7 +480,7 @@ pub fn base0_ir_nodes_v1(table: &[Base0IrNodeV1], g: Base0IrGeometryV1, scope: B
         .map(|ir| PalwStepNodeV1 {
             op_kind: ir.op,
             role: ir.role,
-            weight_name: ir.weight.to_string(),
+            weight_name: if ir.weight == BASE0_IR_HEAD_TENSOR { head.to_string() } else { ir.weight.to_string() },
             weight_dtypes: if ir.weight.is_empty() { Vec::new() } else { per_layer.clone() },
             out_len: match ir.out {
                 Hidden => PalwStepOutLenV1::Fixed { elements: g.hidden_dim },
@@ -459,7 +489,7 @@ pub fn base0_ir_nodes_v1(table: &[Base0IrNodeV1], g: Base0IrGeometryV1, scope: B
                 HeadDim => PalwStepOutLenV1::Fixed { elements: g.attn_head_dim },
                 KvScaled(m) => PalwStepOutLenV1::KvScaled { multiplier: m },
                 KvPerHead => PalwStepOutLenV1::KvScaled { multiplier: g.attn_heads as u32 },
-                Base0IrWidthV1::Vocab => PalwStepOutLenV1::Fixed { elements: g.vocab_size },
+                Vocab => PalwStepOutLenV1::Fixed { elements: g.vocab_size },
             },
             tile_len: g.tile_len,
             kernel_semantics_id: kernel_semantics_id_v1(ir.kernel),
@@ -478,55 +508,32 @@ pub fn base0_ir_nodes_v1(table: &[Base0IrNodeV1], g: Base0IrGeometryV1, scope: B
 }
 
 pub fn base0_profile_v1(geometry: PalwBase0GeometryV1) -> Result<PalwShapeProfileV3, PalwStepError> {
-    let i8_once = vec![BASE0_WEIGHT_DTYPE_I8];
     let tile = geometry.tile_len;
     let hidden = geometry.hidden_dim;
     let kv_dim = geometry.attn_heads as u32 * geometry.attn_head_dim;
 
-    // A node with no weight operand.
-    #[allow(unused_variables)]
-    let plain = |kind: PalwStepOpKindV1, desc: &str, elements: u32, refs: Vec<u16>| PalwStepNodeV1 {
-        op_kind: kind,
-        role: PalwStepNodeRoleV1::Plain,
-        weight_name: String::new(),
-        weight_dtypes: Vec::new(),
-        out_len: PalwStepOutLenV1::Fixed { elements },
+    // **Every node table is projected — pre, attention and post** (ADR-0049 Decision F). The
+    // builders that used to stand here (`plain`, `weighted`) existed to write nodes by hand, and
+    // nothing in this file writes one any more.
+    let ir_geometry = Base0IrGeometryV1 {
+        layer_count: geometry.layer_count,
+        hidden_dim: hidden,
+        ffn_dim: geometry.ffn_dim,
+        attn_heads: geometry.attn_heads,
+        attn_kv_heads: geometry.attn_heads,
+        attn_head_dim: geometry.attn_head_dim,
         tile_len: tile,
-        kernel_semantics_id: kernel_semantics_id_v1(desc),
-        input_refs: refs,
-    };
-    // A node that consumes a registered tensor. `dtypes` is one byte per layer the table covers.
-    let weighted = |kind: PalwStepOpKindV1,
-                    desc: &str,
-                    name: &str,
-                    dtypes: &[u8],
-                    role: PalwStepNodeRoleV1,
-                    out: PalwStepOutLenV1,
-                    refs: Vec<u16>| PalwStepNodeV1 {
-        op_kind: kind,
-        role,
-        weight_name: name.to_string(),
-        weight_dtypes: dtypes.to_vec(),
-        out_len: out,
-        tile_len: tile,
-        kernel_semantics_id: kernel_semantics_id_v1(desc),
-        input_refs: refs,
+        vocab_size: geometry.vocab_size,
+        weight_dtype: BASE0_WEIGHT_DTYPE_I8,
     };
 
     // --- pre: the embedding gather ---
     //
-    // No input refs, and that is the shape G5d settled: a gather's operands are the registered
-    // table and the TOKEN ID, not an opened row. The pre table has no upstream to supply one, and
-    // the id rides the refutation hash-checked against the job context's commitment.
-    let pre_nodes = vec![weighted(
-        PalwStepOpKindV1::EmbedLookup,
-        KDESC_BASE0_EMBED,
-        "token_embd.weight",
-        &i8_once,
-        PalwStepNodeRoleV1::Plain,
-        PalwStepOutLenV1::Fixed { elements: hidden },
-        Vec::new(),
-    )];
+    // **Projected too** (ADR-0049 Decision F). A hand-written table of one node is still a second
+    // description of one step, and the post table below is the proof that a small hand-written
+    // table drifts exactly like a large one: it declared the final norm and not the narrowing after
+    // it, in BOTH classes, for as long as it was written twice.
+    let pre_nodes = base0_ir_nodes_v1(BASE0_PRE_IR, ir_geometry, Base0IrScopeV1::Graph, BASE0_FLOOR_HEAD_TENSOR);
 
     // --- the per-layer template. Slot numbers are intra-table indices; `input_refs` uses them. ---
     // **Generated from `BASE0_LAYER_IR`, which is the engine's own step order** (ADR-0049
@@ -537,48 +544,14 @@ pub fn base0_profile_v1(geometry: PalwBase0GeometryV1) -> Result<PalwShapeProfil
     // Projected, not written. The floor is multi-head, so its kv-head count IS its query-head
     // count — which is what `kv_dim` above has always assumed and what keeps this byte-identical
     // to the hand-rolled projection this replaced.
-    let attn_nodes: Vec<PalwStepNodeV1> = base0_ir_attn_nodes_v1(Base0IrGeometryV1 {
-        vocab_size: geometry.vocab_size,
-        layer_count: geometry.layer_count,
-        hidden_dim: hidden,
-        ffn_dim: geometry.ffn_dim,
-        attn_heads: geometry.attn_heads,
-        attn_kv_heads: geometry.attn_heads,
-        attn_head_dim: geometry.attn_head_dim,
-        tile_len: tile,
-        weight_dtype: BASE0_WEIGHT_DTYPE_I8,
-    });
+    let attn_nodes: Vec<PalwStepNodeV1> = base0_ir_attn_nodes_v1(ir_geometry);
     debug_assert_eq!(kv_dim, geometry.attn_heads as u32 * geometry.attn_head_dim);
 
     // The `KvScaled` widths come from the IR now. They used to be patched in here by slot
     // index, which silently rewrote two unrelated nodes the moment the graph gained its narrowings.
 
-    // --- post: the final norm and the logits ---
-    // The final norm is `Base0Engine::norm_to_code`, which is TWO steps: `rms_norm` (no gain —
-    // BASE-0 carries none) and the narrowing back to activation codes. The table declared the
-    // first and not the second, which is the same omission the layer table carried before it was
-    // generated from the IR: a court recomputing the head would compare a Qk value against a code.
-    let post_nodes = vec![
-        plain(PalwStepOpKindV1::RmsNorm, KDESC_BASE0_RMS_NORM, hidden, vec![PALW_STEP_INPUT_LAYER_IN]),
-        weighted(
-            PalwStepOpKindV1::MulElem,
-            KDESC_BASE0_REQUANTIZE,
-            "output_norm.requant",
-            &i8_once,
-            PalwStepNodeRoleV1::Plain,
-            PalwStepOutLenV1::Fixed { elements: hidden },
-            vec![0],
-        ),
-        weighted(
-            PalwStepOpKindV1::MatMulQuant,
-            KDESC_BASE0_MATMUL,
-            "output.weight",
-            &i8_once,
-            PalwStepNodeRoleV1::Plain,
-            PalwStepOutLenV1::Fixed { elements: geometry.vocab_size },
-            vec![1],
-        ),
-    ];
+    // --- post: the final norm, its narrowing, and the logits head ---
+    let post_nodes = base0_ir_nodes_v1(BASE0_POST_IR, ir_geometry, Base0IrScopeV1::Graph, BASE0_FLOOR_HEAD_TENSOR);
 
     let profile = PalwShapeProfileV3 {
         version: PALW_STEP_OBJECT_VERSION_V1,
@@ -684,17 +657,17 @@ pub fn base0_catalog_entry_v1(
         .flatten()
         .map(|node| node.kernel_semantics_id)
         .collect();
-    // The SAME derivation the post-genesis gate runs — mint and admission must build entries
-    // with one function, or the genesis door enforces a different metric than the running chain.
+    // The SAME derivation the post-genesis gate runs — mint and admission build entries with one
+    // function, or the genesis door enforces a different metric than the running chain.
     let court_cost = crate::palw_class_admission_v2::derive_court_cost_v1(profile)
         .map_err(|_| PalwStepError::ProfileNotCanonical("the class's court cost does not derive"))?;
     Ok(crate::palw_mode_v2::PalwClassCatalogEntryV2 {
+        court_cost,
         class_id,
         artifact_root,
         max_step_leaf_count,
         canonical_step_leaf_count,
         reachable_kernels,
-        court_cost,
     })
 }
 
@@ -710,43 +683,8 @@ pub const PALW_RC_BASE0_GEOMETRY: PalwBase0GeometryV1 = PalwBase0GeometryV1 {
     ffn_dim: 512,
     attn_heads: 4,
     attn_head_dim: 64,
-    // **`vocab_size` and `n_ctx` are chosen by the court's cost ceiling, not by capability.**
-    //
-    // They were 4,096 and 512. Under a ceiling that counts what a CLOSE costs to CARRY (ADR-0049
-    // Decision C, `derive_court_cost_v1`) the old pair is not prosecutable, and the two arms that
-    // break it are the two a weight-bytes ceiling never looked at:
-    //
-    //   * an attention step reads the KV history: `prefill + call` step openings per ref, each
-    //     tile carrying its own Merkle path, which measured 750,716 bytes at a mere 64/64 job.
-    //     ADR-0030 §3's checkpoint anchor makes that cheap — but only where an anchor EXISTS, and
-    //     none does at a prefill position or at the first decode call, which is where the worst
-    //     job's worst step is;
-    //   * a decode-position gather carries the generated-token pin, and `base0_logits_trace_root_v1`
-    //     is a flat hash over every logits row, so that arm is `decode_tokens x vocab x 4`.
-    //
-    // A standard transaction holds 120,000 bytes. The class was coverage-clean, ladder-deep enough,
-    // and unpolicable at its own longest jobs — which is exactly the shape ADR-0049 exists to refuse.
-    //
-    // Measured with `derive_court_cost_v1` against `PALW_RC_COURT_MAX_CLOSE_BYTES` (81,920):
-    //
-    //   vocab <= 1,024, n_ctx  8 ->  44,640  (55%)
-    //   vocab <= 1,024, n_ctx 12 ->  61,040  (75%)   <- this
-    //   vocab <= 1,024, n_ctx 16 ->  79,552  (97%)
-    //   vocab <= 1,024, n_ctx 20 ->  98,000  (120%)
-    //   vocab    2,048, n_ctx 12 -> 101,856  (124%)
-    //   vocab    4,096, n_ctx 12 -> 200,160  (244%)
-    //
-    // The rule was "the largest pair whose worst close stays under 80% of the ceiling", because
-    // this number is frozen into the class id and a later leg-format change must not be able to
-    // make the network's own floor inadmissible. The floor's job is liveness and adjudicability
-    // (ADR-0039), not capability, and `PALW_RC_BASE0_CANONICAL` — 8 prefill, 4 decode — fits inside
-    // this context twice over.
-    //
-    // What buys larger numbers back is an OPENABLE logits commitment (Decision E says "O(1) in
-    // vocabulary"; the root is a flat hash, so the pin is O(decode x vocab)) and a per-layer slice
-    // of the checkpoint instead of the whole one. Both are code, not genesis.
-    vocab_size: 1_024,
-    n_ctx: 12,
+    vocab_size: 4_096,
+    n_ctx: 512,
     n_threads: 1,
     rms_eps_q: 1 << 8,
     tile_len: 64,
@@ -754,11 +692,7 @@ pub const PALW_RC_BASE0_GEOMETRY: PalwBase0GeometryV1 = PalwBase0GeometryV1 {
 
 /// The canonical inference BASE-0 is paid per, and the worst case its ladder must walk.
 pub const PALW_RC_BASE0_CANONICAL: (u32, u32) = (8, 4);
-/// The longest job the class admits, and therefore the one its ladder and its cost ceiling are
-/// checked against: the whole context as prefill plus one decode call. It was `(64, 64)`, which
-/// `n_ctx` 12 no longer expresses — and which was never the class's worst case anyway, because
-/// nothing charges an attempt more for a longer job, so an attacker picks the length.
-pub const PALW_RC_BASE0_WORST_CASE: (u32, u32) = (11, 2);
+pub const PALW_RC_BASE0_WORST_CASE: (u32, u32) = (64, 64);
 
 /// **Everything the RC's BASE-0 registration needs, from the ONE thing code cannot mint.**
 ///

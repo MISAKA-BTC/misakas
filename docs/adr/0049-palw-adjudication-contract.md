@@ -273,6 +273,57 @@ Until the generator exists, the interim obligation is narrower and immediate: **
 step leg for a class whose profile does not name every narrowing the engine performs.** A commitment
 the court cannot reproduce is a false conviction waiting for its first dispute.
 
+> **Landed (2026-08-26, `09bd647f` / `df63a916` / `de1b67c1`).** The generator exists and the interim
+> obligation is a gate rather than a rule.
+>
+> `misaka-palw-base0/src/plan.rs` compiles `BASE0_LAYER_IR` — and now `BASE0_PRE_IR` and
+> `BASE0_POST_IR` — into the engine's op sequence: which step runs, in what order, reading which
+> earlier step, against which operand, producing how many values. The kernels are untouched, because
+> that arithmetic is the class; what is generated is what the divergences were actually made of.
+> **No kernel is called in `engine.rs` any more.** `misaka-palw-base0/src/operands.rs` is the one
+> binding from an IR tensor name to an artifact's bytes, keyed the way the court asks (template name
+> + layer index), and the engine and the inventory both read through it. Both classes' profiles project
+> every table — neither file writes a `PalwStepNodeV1`.
+>
+> Three properties now fall out of the IR instead of being declared beside it: a step's output TYPE
+> (a narrowing emits codes, everything else accumulators — so feeding a Qk accumulator to a code
+> kernel is a compile-time refusal), where the cache is WRITTEN (from the node roles, both halves
+> committed together), and where the health diagnostics are measured.
+>
+> The interim obligation is enforced at `base0_execute_for_attempt_v1`: `base0_check_graph_v1` runs
+> before the first token, at `kv_len` 1 **and** 2, because at one position a per-head width and a
+> per-layer one are the same number. A class whose declared graph is not the graph this engine
+> performs produces nothing.
+>
+> **What building the generator found, and it was live.** The inventory held its own copy of the
+> name-to-field mapping, and one entry was already wrong: `attn_q.requant` served the tensor-wide
+> `layer.requant[0]` unconditionally, while the engine narrows through the per-channel table whenever
+> the artifact carries one — which is where a projection bias lives, in each channel's `zero`. Every
+> Qwen2.5 member carries one. The failure is not a refusal: `palw_step_refute.rs:719` asks for
+> `9 × channels` bytes, finds a nine-byte row, and **cycles it across every channel** — so the court
+> recomputes an honest step from parameters the producer never applied and convicts. Silently, and
+> only for classes with a bias, which is not the floor. Fixed by construction: the inventory serves
+> what the resolver returns.
+>
+> Byte-identical where it had to be. Both classes' `shape_profile_id` are unmoved — the floor's
+> `c185df95…` is in the RC genesis and a live testnet-12 — `the_engine_matches_its_golden_trace`
+> stands, and the floor's pinned `artifact_root` does not move (the floor has no per-channel table).
+>
+> **And it is not slower**, which was the open question: this engine is on the block-production path.
+> Measured A/B against the pre-change tree at the RC geometry, release, 160 forward passes each, twice:
+> **1.69–1.72 ms/token against 1.74–1.75 ms/token**, about 3% faster. Dispatching a step costs a row
+> copy that reading a local variable did not, and it is dominated by the projections — while the loop
+> this replaced computed the value-weighted attention dot products **twice**, once into `attn` and
+> once into the captured row, which the plan does once because the graph declares one node there.
+>
+> The golden test Decision F asks for is
+> `the_four_projections_agree_and_a_real_execution_agrees_with_them`, at two positions, over all three
+> tables, plus the live rows an execution produced. Its teeth are
+> `a_divergence_the_width_check_cannot_see_is_named`: five mutations of the profile — wrong operand,
+> wrong kernel, wrong input, wrong cache role, short table — each reported by slot and field. The
+> three the old shape guard could not see are the first three, and each is a court that recomputes an
+> honest step and convicts the producer.
+
 ## Decision G — the canonical artifact inventory, and one meaning for "class id"
 
 `artifact_root` is the Merkle root over a canonical inventory manifest, one leaf per operand row.
@@ -285,6 +336,25 @@ tensor name · layer · dtype · shape · byte_offset · byte_len · quantizatio
 and the manifest is refused for any of: a duplicate entry, a missing tensor the profile names, an
 overlapping byte range, a byte of the artifact no entry covers, or a non-canonical order. "Every byte
 is covered exactly once, in one order" is what makes an opening's absence meaningful.
+
+> **Open, found by landing Decision F (2026-08-26): a tied-head class has no canonical inventory.**
+>
+> Qwen2.5 ties its embeddings, so its lm_head reads `token_embd.weight` and no `output.weight` exists.
+> `base0_inventory_v1` always emits the head as a tiled `output.weight`, so a tied class's inventory
+> carries a tensor no step can open — and the tensor its head *does* read is carried in the wrong row
+> shape. A gather emits one row per token id (`d_model` bytes); a `MatMulQuant` opening asks for
+> `tile_len × d_model` bytes at a tile offset; `operand_bytes` serves only an exact
+> `(name, layer, row_start)` match at exactly the requested length. So the head adjudicates
+> `Unadjudicable` at every tile, and `qwen25_admissible_geometry_v1` searches upward from `tile_len`
+> 64 — the one width where a gather row and a matmul tile coincide is never chosen.
+>
+> This is a Decision G question, not a Decision F one: one tensor cannot carry both row shapes
+> without overlapping rows, which the canonical layout refuses on purpose. Deciding it needs a rule —
+> a second row family under a derived name, or a head that opens through the gather's coordinates —
+> and that is a rule about what an opening addresses. What Decision F bought is that the class now
+> says so: `a_tied_head_class_is_named_by_the_check_rather_than_registering_quietly` reports it as
+> `RowNobodyOpens { "output.weight" }` instead of the class registering quietly and finding out at
+> its first dispute.
 
 This also settles the two things called a class id. **`execution_class_id` is the shape profile id** —
 a class is its graph, which is what the chain already keys on. The artifact digest is

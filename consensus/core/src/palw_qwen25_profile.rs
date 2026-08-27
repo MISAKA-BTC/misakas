@@ -47,10 +47,9 @@
 
 use crate::Hash64;
 use crate::palw_step::{
-    PALW_STEP_INPUT_LAYER_IN, PALW_STEP_OBJECT_VERSION_V1, PalwShapeProfileV3, PalwStepError, PalwStepLaneV1, PalwStepNodeRoleV1,
-    PalwStepNodeV1, PalwStepOpKindV1, PalwStepOutLenV1, kernel_semantics_id_v1,
+    PALW_STEP_OBJECT_VERSION_V1, PalwShapeProfileV3, PalwStepError, PalwStepLaneV1, PalwStepNodeV1, PalwStepOpKindV1,
+    PalwStepOutLenV1,
 };
-use crate::palw_step_refute::{KDESC_BASE0_EMBED, KDESC_BASE0_MATMUL, KDESC_BASE0_REQUANTIZE, KDESC_BASE0_RMS_NORM};
 
 /// The int8 dtype byte. One weight type throughout: the class is integer arithmetic, and any
 /// variance would mean it is not this class.
@@ -218,6 +217,12 @@ pub fn qwen25_admissible_geometry_v1(
 ///
 /// Compare against the measured safetensors table: the norm gains are ABSENT (G1 folds them), the
 /// q/k/v biases are absent as tensors and present as requantization zero points (G2), and there
+/// **This family's head tensor: the embedding table itself.**
+///
+/// `tie_word_embeddings` is true for every member, so there is no `output.weight` and the lm_head
+/// reads `token_embd.weight`. It is the one name the post IR leaves to the class.
+pub const QWEN25_HEAD_TENSOR: &str = "token_embd.weight";
+
 /// is no `output.weight` because `tie_word_embeddings` is true — the lm_head reads the embedding
 /// table. The `.requant` entries are the per-channel `(multiplier, shift, zero)` triples.
 /// **Projected from the IR** (ADR-0049 Decision F), with this family's head tensor.
@@ -231,7 +236,7 @@ pub fn qwen25_admissible_geometry_v1(
 pub fn qwen25_tensor_names_v1() -> Vec<&'static str> {
     // Tied embeddings: the head reads the embedding table, which is already first in the list, so
     // naming it here dedups to nothing and no `output.weight` is declared.
-    crate::palw_base0_profile::base0_tensor_names_for_head_v1("token_embd.weight")
+    crate::palw_base0_profile::base0_tensor_names_for_head_v1(QWEN25_HEAD_TENSOR)
 }
 
 /// Qwen2.5's graph, for `geometry`.
@@ -317,11 +322,11 @@ pub fn qwen25_a16_profile_v1(geometry: PalwQwen25GeometryV1) -> Result<PalwShape
         }
     };
 
-    let mut pre_nodes = base0_ir_nodes_v1(QWEN25_A16_PRE_IR, ir_geometry(geometry.tile_len), Base0IrScopeV1::Graph);
+    let mut pre_nodes = base0_ir_nodes_v1(QWEN25_A16_PRE_IR, ir_geometry(geometry.tile_len), Base0IrScopeV1::Graph, QWEN25_HEAD_TENSOR);
     budget(&mut pre_nodes, QWEN25_A16_PRE_IR);
-    let mut attn_nodes = base0_ir_nodes_v1(QWEN25_A16_LAYER_IR, ir_geometry(geometry.tile_len), Base0IrScopeV1::PerLayer);
+    let mut attn_nodes = base0_ir_nodes_v1(QWEN25_A16_LAYER_IR, ir_geometry(geometry.tile_len), Base0IrScopeV1::PerLayer, "");
     budget(&mut attn_nodes, QWEN25_A16_LAYER_IR);
-    let mut post_nodes = base0_ir_nodes_v1(QWEN25_A16_POST_IR, ir_geometry(geometry.tile_len), Base0IrScopeV1::Graph);
+    let mut post_nodes = base0_ir_nodes_v1(QWEN25_A16_POST_IR, ir_geometry(geometry.tile_len), Base0IrScopeV1::Graph, QWEN25_HEAD_TENSOR);
     budget(&mut post_nodes, QWEN25_A16_POST_IR);
 
     let profile = PalwShapeProfileV3 {
@@ -438,49 +443,35 @@ pub fn qwen25_a16_registration_v1(
 const QWEN25_A16_MATMUL_OPENING_BUDGET: usize = 24 * 1024;
 
 pub fn qwen25_profile_v1(geometry: PalwQwen25GeometryV1) -> Result<PalwShapeProfileV3, PalwStepError> {
-    let once = vec![QWEN25_WEIGHT_DTYPE_I8];
     let tile = geometry.tile_len;
     let hidden = geometry.hidden_dim;
     let q_dim = geometry.attn_heads as u32 * geometry.attn_head_dim;
     let kv_dim = geometry.attn_kv_heads as u32 * geometry.attn_head_dim;
 
-    let plain = |kind: PalwStepOpKindV1, desc: &str, out: PalwStepOutLenV1, refs: Vec<u16>| PalwStepNodeV1 {
-        op_kind: kind,
-        role: PalwStepNodeRoleV1::Plain,
-        weight_name: String::new(),
-        weight_dtypes: Vec::new(),
-        out_len: out,
-        tile_len: tile,
-        kernel_semantics_id: kernel_semantics_id_v1(desc),
-        input_refs: refs,
-    };
-    let weighted = |kind: PalwStepOpKindV1,
-                    desc: &str,
-                    name: &str,
-                    dtypes: &[u8],
-                    role: PalwStepNodeRoleV1,
-                    out: PalwStepOutLenV1,
-                    refs: Vec<u16>| PalwStepNodeV1 {
-        op_kind: kind,
-        role,
-        weight_name: name.to_string(),
-        weight_dtypes: dtypes.to_vec(),
-        out_len: out,
-        tile_len: tile,
-        kernel_semantics_id: kernel_semantics_id_v1(desc),
-        input_refs: refs,
-    };
-    let fixed = |n: u32| PalwStepOutLenV1::Fixed { elements: n };
+    // **No node is written here** (ADR-0049 Decision F): every table below is projected from the
+    // IR, so the hand builders that used to stand here have nothing left to build.
 
-    let pre_nodes = vec![weighted(
-        PalwStepOpKindV1::EmbedLookup,
-        KDESC_BASE0_EMBED,
-        "token_embd.weight",
-        &once,
-        PalwStepNodeRoleV1::Plain,
-        fixed(hidden),
-        Vec::new(),
-    )];
+    let ir_geometry = crate::palw_base0_profile::Base0IrGeometryV1 {
+        layer_count: geometry.layer_count,
+        hidden_dim: hidden,
+        ffn_dim: geometry.ffn_dim,
+        attn_heads: geometry.attn_heads,
+        attn_kv_heads: geometry.attn_kv_heads,
+        attn_head_dim: geometry.attn_head_dim,
+        tile_len: tile,
+        vocab_size: geometry.vocab_size,
+        weight_dtype: QWEN25_WEIGHT_DTYPE_I8,
+    };
+
+    // **Projected too, at this family's head tensor** (ADR-0049 Decision F). One node, and it was
+    // still a second description of one step — as the post table below proves a small table drifts
+    // exactly like a large one.
+    let pre_nodes = crate::palw_base0_profile::base0_ir_nodes_v1(
+        crate::palw_base0_profile::BASE0_PRE_IR,
+        ir_geometry,
+        crate::palw_base0_profile::Base0IrScopeV1::Graph,
+        QWEN25_HEAD_TENSOR,
+    );
 
     // **Projected from `BASE0_LAYER_IR`, the engine's own step order** (ADR-0049 Decision F).
     //
@@ -499,46 +490,20 @@ pub fn qwen25_profile_v1(geometry: PalwQwen25GeometryV1) -> Result<PalwShapeProf
     // The floor was already projected from the IR; the projection just could not express
     // grouped-query attention, because it read `PalwBase0GeometryV1`, which has no kv-head count.
     // `Base0IrGeometryV1` supplies one, and both classes now come from the same call.
-    let attn_nodes = crate::palw_base0_profile::base0_ir_attn_nodes_v1(crate::palw_base0_profile::Base0IrGeometryV1 {
-        vocab_size: geometry.vocab_size,
-        layer_count: geometry.layer_count,
-        hidden_dim: hidden,
-        ffn_dim: geometry.ffn_dim,
-        attn_heads: geometry.attn_heads,
-        attn_kv_heads: geometry.attn_kv_heads,
-        attn_head_dim: geometry.attn_head_dim,
-        tile_len: tile,
-        weight_dtype: QWEN25_WEIGHT_DTYPE_I8,
-    });
+    let attn_nodes = crate::palw_base0_profile::base0_ir_attn_nodes_v1(ir_geometry);
     debug_assert_eq!(kv_dim, geometry.attn_kv_heads as u32 * geometry.attn_head_dim);
     debug_assert_eq!(q_dim, hidden, "the query width is the hidden width for every member of this family");
 
-    // The head, and it is THREE steps, not two. `Base0Engine::norm_to_code` is `rms_norm` followed
-    // by the narrowing back to activation codes; this table declared the first and not the second,
-    // which is the same omission the floor's post table carried before it was corrected — a court
-    // recomputing the head would compare a Qk value against a code. The engine emits three rows
-    // here and the profile now has three nodes for them.
-    let post_nodes = vec![
-        plain(PalwStepOpKindV1::RmsNorm, KDESC_BASE0_RMS_NORM, fixed(hidden), vec![PALW_STEP_INPUT_LAYER_IN]),
-        weighted(
-            PalwStepOpKindV1::MulElem,
-            KDESC_BASE0_REQUANTIZE,
-            "output_norm.requant",
-            &once,
-            PalwStepNodeRoleV1::Plain,
-            fixed(hidden),
-            vec![0],
-        ),
-        weighted(
-            PalwStepOpKindV1::MatMulQuant,
-            KDESC_BASE0_MATMUL,
-            "token_embd.weight",
-            &once,
-            PalwStepNodeRoleV1::Plain,
-            fixed(geometry.vocab_size),
-            vec![1],
-        ),
-    ];
+    // The head, and it is THREE steps, not two. The final norm is `rms_norm` followed by the
+    // narrowing back to activation codes; this table declared the first and not the second — the
+    // same omission the floor's post table carried, in a table written twice. Projected now, from
+    // `BASE0_POST_IR`, so the two classes cannot differ about what the head is.
+    let post_nodes = crate::palw_base0_profile::base0_ir_nodes_v1(
+        crate::palw_base0_profile::BASE0_POST_IR,
+        ir_geometry,
+        crate::palw_base0_profile::Base0IrScopeV1::Graph,
+        QWEN25_HEAD_TENSOR,
+    );
 
     let profile = PalwShapeProfileV3 {
         version: PALW_STEP_OBJECT_VERSION_V1,
@@ -561,9 +526,8 @@ pub fn qwen25_profile_v1(geometry: PalwQwen25GeometryV1) -> Result<PalwShapeProf
         l2_eps_bits: 0,
         base0_rms_eps_q: geometry.rms_eps_q,
         // FLAT, because that is what this class's executor commits TODAY — and stated honestly:
-        // at vocab 151,936 the flat close exceeds the carrier ceiling, so this class cannot pass
-        // the cost gate until its producer path moves to the tiled scheme. A profile that claimed
-        // tiled while the executor commits flat would admit a class whose every claim voids.
+        // at vocab 151,936 the flat close exceeds the carrier ceiling, so this W8A8 class cannot
+        // pass the cost gate. The tier that can is `qwen25_a16_profile_v1`, which commits tiled.
         logits_scheme_id: crate::palw_step_refute::flat_logits_scheme_id_v1(),
         gdn_heads: 0,
         gdn_head_k_dim: 0,
@@ -601,61 +565,10 @@ pub fn qwen25_profile_v1(geometry: PalwQwen25GeometryV1) -> Result<PalwShapeProf
 
 #[cfg(test)]
 mod tests {
-    /// **The A16 dense class passes the whole admission gate.** Not a cost check: the same
-    /// `verify_class_admission_v2` a post-genesis registration answers to — shape validation, both
-    /// coverage gates, the ladder, the three court-cost ceilings and the PWU recount.
-    ///
-    /// This is the test the W8A8 Qwen2.5 class could never pass, and the reason is not tuning: at
-    /// vocabulary 151,936 its FLAT pin alone is 607,744 bytes against an 81,920-byte carrier, so
-    /// no (tile, context) pair existed. The A16 class commits the tiled scheme, which its own
-    /// producer builds.
-    #[test]
-    fn the_a16_dense_class_passes_the_admission_gate() {
-        use crate::palw_state_v2::{PalwConsensusObjectV2, PalwPwuRuleV2};
-        let (profile, entry, object) = qwen25_a16_registration_v1(Hash64::from_u64_word(0xA16), 1, 1, 1).expect("derives");
-        assert_eq!(entry.class_id, qwen25_a16_class_id_v1(), "the entry is the registered class");
-        assert_eq!(profile.attn_nodes.len(), crate::palw_base0_profile::QWEN25_A16_LAYER_IR.len());
-        assert_eq!(
-            profile.logits_scheme_id,
-            crate::palw_step_refute::tiled_logits_scheme_id_v1(),
-            "a 151,936-lane vocabulary cannot commit flat and be prosecutable"
-        );
-
-        let catalog = crate::palw_mode_v2::PalwClassCatalogV2::new(vec![entry.clone()]).expect("well-formed");
-        let mut bundle = crate::palw_fp_devnet_v3::palw_fp_devnet_bundle_v3(
-            entry.class_id,
-            catalog.root(),
-            crate::palw_catalog_coverage::palw_court_catalog_root_v1(),
-            entry.canonical_step_leaf_count,
-            entry.artifact_root,
-            Vec::new(),
-        )
-        .expect("a bundle for this class assembles");
-        bundle.court = crate::palw_mode_v2::PalwCourtParamsV2::new(crate::palw_step::PALW_STEP_MAX_LEAVES, 20, 2)
-            .expect("the full ladder is a legal court");
-        let canonical = crate::palw_base0_profile::rc_job_context(&profile, QWEN25_A16_CANONICAL.0, QWEN25_A16_CANONICAL.1);
-        let admitted = crate::palw_class_admission_v2::verify_class_admission_v2(&bundle, &profile, &canonical, &object)
-            .expect("the A16 dense class is admissible on a network with the shipped ceilings");
-        assert_eq!(admitted.court_cost, entry.court_cost, "the gate and the mint derive one cost");
-        assert!(
-            admitted.court_cost.max_close_bytes <= bundle.court.max_close_bytes(),
-            "close {} against ceiling {}",
-            admitted.court_cost.max_close_bytes,
-            bundle.court.max_close_bytes()
-        );
-        let PalwConsensusObjectV2::ClassRegistered { pwu_rule: PalwPwuRuleV2::DerivedV1 { pwu_per_inference }, .. } = object else {
-            panic!("a derived registration");
-        };
-        assert_eq!(pwu_per_inference, entry.canonical_step_leaf_count, "the declared pwu is the counted one");
-
-        // The canonical job fits the registered context in the enumeration's own form.
-        let footprint = QWEN25_A16_CANONICAL.0 + QWEN25_A16_CANONICAL.1 - 1;
-        assert!(footprint <= profile.n_ctx, "canonical footprint {footprint} inside n_ctx {}", profile.n_ctx);
-    }
     use super::*;
     use crate::Hash64;
     use crate::palw_catalog_coverage::verify_profile_coverage_v1;
-    use crate::palw_step::PalwStepTableV1;
+    use crate::palw_step::{PalwStepNodeRoleV1, PalwStepOpKindV1, PalwStepOutLenV1, PalwStepTableV1, kernel_semantics_id_v1};
     use crate::palw_step_refute::{catalogued_kernel_ids_v1, kernel_can_serve_node_v1};
 
     /// Diagnostic: the smallest tile_len that admits the declared 4096 context, projected.
@@ -705,45 +618,27 @@ mod tests {
         }
     }
 
-    /// **Would the chain admit this class?** — asked against the SHIPPED bundle, which is the only
-    /// bundle whose answer matters.
+    /// **Would the chain admit this class?** — the four checks `verify_class_admission_v2` runs,
+    /// against the SHIPPED bundle, on the geometry a Qwen2.5-1.5B registration would actually use.
     ///
-    /// It used to derive the pair a Qwen2.5-1.5B registration would use and run the gate on it.
-    /// Under a `max_close_bytes` that counts what a close costs to carry there is no such pair, so
-    /// the honest form of this test is the refusal and its reason: a registration attempted today
-    /// fails on-chain, and finding that out with a 1.7 GiB artifact already on four hosts is
-    /// finding it in the worst place.
-    ///
-    /// What has to change is code, not the genesis number: an openable logits commitment (ADR-0049
-    /// Decision E says "O(1) in vocabulary"; the root is a flat hash over every row) and a
-    /// per-layer slice of the checkpoint the KV history arrives in.
+    /// Run before deploying anything: a registration that fails here fails on-chain, and finding
+    /// that out with a 1.7 GiB artifact already on four hosts is finding it in the worst place.
+    /// The artifact root is a placeholder because the gate does not check it — that binding is the
+    /// producer's (its attempt must name the class's registered root) and the genesis gate's.
     #[test]
-    fn the_shipped_court_admits_no_qwen25_geometry_and_says_why() {
+    fn the_admissible_qwen25_class_passes_the_admission_gate() {
         let bundle = match &crate::config::params::palw_rc_shipped_params().palw_consensus_mode {
             crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) => b.clone(),
             _ => return, // a build whose card is unset ships no bundle; nothing to check against
         };
-        assert!(
-            qwen25_admissible_geometry_v1(QWEN25_1_5B, &bundle.court).is_none(),
-            "the shipped court admitted a Qwen pair — either the ceiling or this expectation moved"
-        );
-
-        // The gate's own refusal, on the pair the LADDER would allow, so the error a deployer would
-        // actually read is exercised rather than described.
-        let ladder_only = crate::palw_mode_v2::PalwCourtParamsV2::with_cost_ceilings(
-            bundle.court.max_step_leaf_count(),
-            bundle.court.turn_deadline_daa(),
-            bundle.court.terminal_rounds(),
-            u64::MAX,
-            u64::MAX,
-            u32::MAX,
-        )
-        .unwrap();
-        let pair = qwen25_admissible_geometry_v1(QWEN25_1_5B, &ladder_only).expect("the ladder admits a pair");
-        let profile = qwen25_profile_v1(pair).expect("expressible");
+        let admissible = qwen25_admissible_geometry_v1(QWEN25_1_5B, &bundle.court)
+            .expect("1.5B has an admissible (tile, n_ctx) under the shipped court");
+        let profile = qwen25_profile_v1(admissible).expect("expressible");
+        let class_id = profile.shape_profile_id();
         let canonical = crate::palw_base0_profile::rc_job_context(&profile, 8, 4);
         let registration = crate::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
-            class_id: profile.shape_profile_id(),
+            class_id,
+            terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
             artifact_root: crate::Hash64::from_u64_word(0xA1),
             slash_value_per_pwu: 5,
             // COUNTED from the canonical job, never declared — the gate recounts and refuses a
@@ -759,11 +654,18 @@ mod tests {
             admission: None,
         };
         match crate::palw_class_admission_v2::verify_class_admission_v2(&bundle, &profile, &canonical, &registration) {
-            Err(crate::palw_class_admission_v2::PalwClassAdmissionError::CourtCostExceedsCeiling { what, got, ceiling }) => {
-                assert_eq!(what, "court close");
-                assert!(got > ceiling * 10, "the refusal is by an order of magnitude: {got} against {ceiling}");
+            Ok(entry) => {
+                assert_eq!(entry.class_id, class_id);
+                println!(
+                    "ADMITTED  class_id={class_id}  tile={} n_ctx={} canonical_leaves={}",
+                    admissible.tile_len, admissible.n_ctx, entry.canonical_step_leaf_count
+                );
             }
-            other => panic!("the shipped gate must refuse Qwen2.5-1.5B on court cost, got {other:?}"),
+            Err(e) => panic!(
+                "the admissible Qwen2.5-1.5B geometry is REFUSED by the gate it was derived for: {e:?}\n\
+                 (tile={} n_ctx={})",
+                admissible.tile_len, admissible.n_ctx
+            ),
         }
     }
 
@@ -857,6 +759,47 @@ mod tests {
     ///
     /// G1, G2 and G3 are exact and applied when the artifact is built, so the way they show up
     /// here is that certain nodes are NOT in the graph. Asserting the absence is what stops one of
+    /// **Both classes' heads are one table, and the head tensor is the only thing that differs**
+    /// (ADR-0049 Decision F).
+    ///
+    /// The pre and post tables were written by hand in BOTH files, three nodes each, and drifted
+    /// the same way a thirty-eight-node table drifts: each declared the final `RmsNorm` and not the
+    /// narrowing after it, so a court recomputing the head would compare a Qk value against a code.
+    /// Two hand copies means a fix applied to one and not the other, which is what "generated from
+    /// one description" is for.
+    ///
+    /// What a class is still allowed to choose is its head tensor: this family ties the embeddings,
+    /// so its lm_head reads `token_embd.weight` and no `output.weight` exists. That is the one name
+    /// `BASE0_POST_IR` leaves open, and it is the only field below that may differ.
+    #[test]
+    fn the_head_is_one_table_projected_at_two_head_tensors() {
+        let qwen = qwen25_profile_v1(QWEN25_1_5B).expect("the family's graph");
+        let floor =
+            crate::palw_base0_profile::base0_profile_v1(crate::palw_base0_profile::PALW_RC_BASE0_GEOMETRY).expect("the floor's graph");
+
+        assert_eq!(qwen.post_nodes.len(), 3, "the head is norm, narrowing, logits");
+        assert_eq!(qwen.pre_nodes.len(), floor.pre_nodes.len());
+        for (q, f) in qwen.post_nodes.iter().zip(floor.post_nodes.iter()) {
+            assert_eq!(q.op_kind, f.op_kind);
+            assert_eq!(q.kernel_semantics_id, f.kernel_semantics_id);
+            assert_eq!(q.input_refs, f.input_refs);
+            assert_eq!(q.role, f.role);
+        }
+        // The head tensor, and nothing else, follows the class.
+        assert_eq!(qwen.post_nodes[0].weight_name, floor.post_nodes[0].weight_name, "the norm reads no tensor");
+        assert_eq!(qwen.post_nodes[1].weight_name, floor.post_nodes[1].weight_name, "one narrowing name");
+        assert_eq!(qwen.post_nodes[2].weight_name, QWEN25_HEAD_TENSOR);
+        assert_eq!(floor.post_nodes[2].weight_name, crate::palw_base0_profile::BASE0_FLOOR_HEAD_TENSOR);
+        assert_ne!(qwen.post_nodes[2].weight_name, floor.post_nodes[2].weight_name);
+
+        // And the narrowing the hand-written tables omitted is present in both, reading the norm.
+        for p in [&qwen, &floor] {
+            assert_eq!(p.post_nodes[1].op_kind, PalwStepOpKindV1::MulElem, "the head narrows before it projects");
+            assert_eq!(p.post_nodes[1].input_refs, vec![0]);
+            assert!(matches!(p.post_nodes[2].out_len, PalwStepOutLenV1::Fixed { elements } if elements == p.vocab_size));
+        }
+    }
+
     /// them being quietly re-added as an unadjudicable op later.
     #[test]
     fn the_folded_transformations_leave_no_node_behind() {
@@ -1106,31 +1049,23 @@ mod tests {
             if corrupt {
                 committed[3] = (committed[3] as i32).wrapping_add(1) as u32;
             }
-            // One canonical row: the input's tiles are consecutive leaves, so it rides as one
-            // range run — the row form the carrier now requires.
-            let tiles_n = (q_dim as u32).div_ceil(p.attn_nodes[13].tile_len);
-            let mut preimages = Vec::with_capacity(tiles_n as usize);
-            let mut first_idx = None;
-            for t in 0..tiles_n {
-                let c = PalwStepCoordinateV1 { call_index: 1, node_slot: in_slot, position: 0, tile_index: t };
-                let idx = canonical_step_leaf_index(&p, &ctx, &c).unwrap();
-                first_idx.get_or_insert(idx);
-                let w = builder_tile_width(&p, &ctx, &c) as usize;
-                let start = t as usize * p.attn_nodes[13].tile_len as usize;
-                preimages.push(PalwStepTileLeafV1 {
-                    version: PALW_STEP_LEG_OBJECT_VERSION_V1,
-                    coord: c,
-                    value_count: w as u32,
-                    values_le: input[start..start + w].iter().flat_map(|v| v.to_le_bytes()).collect(),
-                });
-            }
-            let run = crate::palw_step_leg::step_merkle_range_siblings_v1(
-                &material.leaf_hashes,
-                first_idx.unwrap() as usize,
-                tiles_n as usize,
-            )
-            .unwrap();
-            let inputs = vec![crate::palw_step_refute::PalwStepInputRowV1 { preimages, run_siblings: vec![run] }];
+            let inputs = (0..(q_dim as u32).div_ceil(p.attn_nodes[13].tile_len))
+                .map(|t| {
+                    let c = PalwStepCoordinateV1 { call_index: 1, node_slot: in_slot, position: 0, tile_index: t };
+                    let idx = canonical_step_leaf_index(&p, &ctx, &c).unwrap();
+                    let w = builder_tile_width(&p, &ctx, &c) as usize;
+                    let start = t as usize * p.attn_nodes[13].tile_len as usize;
+                    crate::palw_step_refute::PalwStepInputOpeningV1 {
+                        opening: step_opening_v1(&material.leaf_hashes, idx).unwrap(),
+                        preimage: PalwStepTileLeafV1 {
+                            version: PALW_STEP_LEG_OBJECT_VERSION_V1,
+                            coord: c,
+                            value_count: w as u32,
+                            values_le: input[start..start + w].iter().flat_map(|v| v.to_le_bytes()).collect(),
+                        },
+                    }
+                })
+                .collect();
             let refutation = crate::palw_step_refute::PalwExecutionStepRefutationV1 {
                 binding,
                 output_opening: step_opening_v1(&material.leaf_hashes, out_idx).unwrap(),
@@ -1143,7 +1078,6 @@ mod tests {
                 inputs,
                 prompt_token_ids: Vec::new(),
                 decode_tokens: None,
-                kv_checkpoint: None,
             };
             // The class's registered inventory, and the opening that proves this block belongs.
             let operands = [
@@ -1224,69 +1158,63 @@ mod tests {
         assert_eq!(used, declared, "the graph's operands and the declared inventory are one list");
     }
 
-    /// **Audit H-04's question, answered by a ceiling that counts the whole close: there is no
-    /// admissible pair at all.**
+    /// **Audit H-04: "either the tile grows or the context shrinks" is a value now, not a
+    /// sentence.**
     ///
-    /// "Either the tile grows or the context shrinks" was the right shape of answer for a ceiling
-    /// on WEIGHT BYTES, where `tile_len` traded context against opening size. It stops being the
-    /// question once the ceiling counts what a close costs to carry, because the arm that dominates
-    /// a Qwen close does not depend on `tile_len` at all: a decode-position gather must carry every
-    /// logits row so the court can recompute `base0_logits_trace_root_v1`, and ONE row of a 128,256
-    /// vocabulary is 513,024 bytes — four times the largest standard transaction.
-    ///
-    /// So the pair a genesis reads is `None`, at every tile and every context, and the shipped
-    /// constants stay the MODEL's: 4,096 tokens is what Qwen2.5 has.
+    /// The shipped constants stay the MODEL — 4,096 tokens is what Qwen2.5 has, and a constant
+    /// that said otherwise would lie about the thing it names. What was missing is the other
+    /// number: given a court, which `(tile_len, n_ctx)` pair does the model actually fit into.
+    /// Two ceilings pull against each other, so it is a search, and leaving it as prose is how the
+    /// pair stayed unstated after the measurement was done.
     #[test]
-    fn no_qwen_geometry_is_admissible_under_a_carriable_ceiling() {
-        let shipped = crate::palw_mode_v2::PalwCourtParamsV2::new(crate::palw_step::PALW_STEP_MAX_LEAVES, 4, 2).unwrap();
-        for (name, model) in [("1.5B", QWEN25_1_5B), ("3B", QWEN25_3B)] {
+    fn the_admissible_qwen_geometry_is_derived_from_the_court_that_must_adjudicate_it() {
+        let floor_sized = crate::palw_mode_v2::PalwCourtParamsV2::new(crate::palw_step::PALW_STEP_MAX_LEAVES, 4, 2).unwrap();
+
+        // Under the shipped (floor-sized) ceilings, both models fit — at a context that IS the
+        // finding rather than a target.
+        let small = qwen25_admissible_geometry_v1(QWEN25_1_5B, &floor_sized).expect("some pair is admissible");
+        let big = qwen25_admissible_geometry_v1(QWEN25_3B, &floor_sized).expect("some pair is admissible");
+        // Pinned, because these two pairs are the answer a genesis reads.
+        //
+        // **They moved when the graph became honest** (ADR-0049 Decision F): 1.5B was 125 and 3B
+        // was 79 against a hand-written table of 27 nodes per layer, and the engine performs 38.
+        // The projected graph is bigger, so the same ladder buys less context — 125 -> 90 and
+        // 79 -> 56. The old numbers were not a measurement of this class; they were a measurement
+        // of a graph nothing executed. `DEFAULT_MAX_OPENING_BYTES`' doc still records 125, and
+        // that reference is now stale for the same reason.
+        assert_eq!((small.tile_len, small.n_ctx), (64, 90), "1.5B under the shipped ceilings");
+        assert_eq!((big.tile_len, big.n_ctx), (64, 56), "3B is deeper, so it buys less context for the same court");
+        for (name, model, found) in [("1.5B", QWEN25_1_5B, small), ("3B", QWEN25_3B, big)] {
+            let profile = qwen25_profile_v1(found).expect("expressible");
             assert!(
-                qwen25_admissible_geometry_v1(model, &shipped).is_none(),
-                "{name}: a pair was admitted under a ceiling no transaction can carry"
+                crate::palw_step::worst_case_step_leaf_count_v1(&profile).unwrap() <= floor_sized.max_step_leaf_count(),
+                "{name}: the derived pair must fit the ladder"
             );
+            let cost = crate::palw_class_admission_v2::derive_court_cost_v1(&profile).unwrap();
+            assert!(cost.max_close_bytes <= floor_sized.max_close_bytes(), "{name}: and the opening ceiling");
+            assert!(cost.max_terminal_macs <= floor_sized.max_terminal_macs(), "{name}: and the MAC ceiling");
+            assert!(found.n_ctx < model.n_ctx, "{name}: the context really did shrink — that is the finding");
+            // Everything except the two knobs is the model's own.
+            assert_eq!(found.layer_count, model.layer_count);
+            assert_eq!(found.hidden_dim, model.hidden_dim);
+            assert_eq!(found.vocab_size, model.vocab_size);
         }
 
-        // The cheapest close either model could ever be asked for — the minimum context, swept over
-        // every legal tile. Pinned because it is the size of the gap, and because a change that
-        // closes it should be visible here rather than inferred.
-        let cheapest = |model: PalwQwen25GeometryV1| -> u64 {
-            let mut best = u64::MAX;
-            for n_ctx in [2u32, 4, 8, 16, 32, 64] {
-                let mut tile = crate::palw_step::PALW_STEP_MIN_TILE_LEN;
-                while tile <= crate::palw_step::PALW_STEP_MAX_TILE_LEN {
-                    if let Ok(p) = qwen25_profile_v1(PalwQwen25GeometryV1 { n_ctx, tile_len: tile, ..model })
-                        && crate::palw_step::worst_case_step_leaf_count_v1(&p).is_ok()
-                        && let Ok(c) = crate::palw_class_admission_v2::derive_court_cost_v1(&p)
-                    {
-                        best = best.min(c.max_close_bytes);
-                    }
-                    tile = tile.saturating_mul(2);
-                }
-            }
-            best
-        };
-        assert_eq!(cheapest(QWEN25_1_5B), 1_220_368, "1.5B's cheapest possible close");
-        assert_eq!(cheapest(QWEN25_3B), 1_220_944, "3B's, and the two are within 0.05% — the pin dominates both");
-        assert!(
-            cheapest(QWEN25_1_5B) > 14 * crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES,
-            "the gap is an order of magnitude, not a tuning margin"
-        );
-
-        // And a court with no ceiling at all still says something useful: the LADDER alone admits a
-        // pair, so what refuses Qwen here is cost and not depth.
-        let ladder_only = crate::palw_mode_v2::PalwCourtParamsV2::with_cost_ceilings(
+        // A court with a bigger opening ceiling buys context — which is the trade a genesis makes,
+        // irrevocably, and now it can be priced before it is made instead of after.
+        let generous = crate::palw_mode_v2::PalwCourtParamsV2::with_cost_ceilings(
             crate::palw_step::PALW_STEP_MAX_LEAVES,
             4,
             2,
-            u64::MAX,
-            u64::MAX,
-            u32::MAX,
+            32 * 1024 * 1024,
+            1 << 30,
+            8,
         )
         .unwrap();
-        let pair = qwen25_admissible_geometry_v1(QWEN25_1_5B, &ladder_only).expect("the ladder admits a pair");
-        assert!(pair.n_ctx < QWEN25_1_5B.n_ctx, "even then the context shrinks — that part of H-04 stands");
+        let wider = qwen25_admissible_geometry_v1(QWEN25_1_5B, &generous).expect("admissible");
+        assert!(wider.n_ctx > small.n_ctx, "a larger opening ceiling buys context: {} -> {}", small.n_ctx, wider.n_ctx);
 
-        // A court that admits nothing says so, rather than returning a pair nobody can use.
+        // And a court that admits nothing says so, rather than returning a pair nobody can use.
         let impossible =
             crate::palw_mode_v2::PalwCourtParamsV2::with_cost_ceilings(crate::palw_step::PALW_STEP_MAX_LEAVES, 4, 2, 1, 1, 8).unwrap();
         assert!(qwen25_admissible_geometry_v1(QWEN25_1_5B, &impossible).is_none());

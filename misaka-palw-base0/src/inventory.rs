@@ -42,10 +42,12 @@
 //!   parameter nothing can open.
 
 use kaspa_consensus_core::palw_artifact::{PalwArtifactInventoryV1, PalwArtifactOperandV1, PalwInventoryError};
-use kaspa_consensus_core::palw_base0_ops::{QuantParams, ScaleParams};
-use kaspa_consensus_core::palw_base0_profile::PalwBase0GeometryV1;
+use kaspa_consensus_core::palw_base0_ops::ScaleParams;
+use kaspa_consensus_core::palw_base0_profile::{PalwBase0GeometryV1, base0_tensor_names_v1};
 
 use crate::artifact::{ArtifactError, Base0ArtifactV1};
+use crate::operands::{BASE0_LAYER_PREFIX, Base0OperandV1, OperandError, base0_resolve_operand_v1};
+use crate::plan::BASE0_ENGINE_HEAD_TENSOR;
 
 /// Why an artifact yields no inventory.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -57,15 +59,10 @@ pub enum InventoryBuildError {
     /// The rows are laid out but do not satisfy the canonical-layout rules — a bug in this builder
     /// rather than in its input, surfaced rather than shipped.
     NotCanonical(PalwInventoryError),
-}
-
-/// `(multiplier LE, shift, zero LE)` — the nine bytes `palw_step_refute` reads per channel.
-fn quant_bytes(q: QuantParams) -> Vec<u8> {
-    let mut out = Vec::with_capacity(9);
-    out.extend_from_slice(&q.multiplier.to_le_bytes());
-    out.push(q.shift);
-    out.extend_from_slice(&q.zero.to_le_bytes());
-    out
+    /// The graph names a tensor this artifact does not carry. The same refusal the engine gives
+    /// when it compiles the graph, because it is the same question: an operand nothing can serve
+    /// is a step nothing can open.
+    Operand(OperandError),
 }
 
 /// `(multiplier LE, shift)` — the five bytes op 9 reads.
@@ -81,14 +78,14 @@ fn scale_bytes(s: ScaleParams) -> Vec<u8> {
 ///
 /// One row per POSITION, because that is what a rotation at position `p` opens. The table is
 /// `[position][pair]` row-major, so a position's slice is contiguous and the rows tile it exactly.
-fn rope_row_bytes(artifact: &Base0ArtifactV1, position: usize) -> Vec<u8> {
-    let pairs = artifact.shape.d_head / 2;
+fn rope_row_bytes(table: &crate::rope::RopeTableV1, d_head: usize, position: usize) -> Vec<u8> {
+    let pairs = d_head / 2;
     let start = position * pairs;
     let mut out = Vec::with_capacity(8 * pairs);
-    for v in &artifact.rope.cos_q[start..start + pairs] {
+    for v in &table.cos_q[start..start + pairs] {
         out.extend_from_slice(&v.to_le_bytes());
     }
-    for v in &artifact.rope.sin_q[start..start + pairs] {
+    for v in &table.sin_q[start..start + pairs] {
         out.extend_from_slice(&v.to_le_bytes());
     }
     out
@@ -132,95 +129,61 @@ pub fn base0_inventory_v1(
     }
     let tile = geometry.tile_len as usize;
     let shape = artifact.shape;
-    let d = shape.d_model();
-    let kv = shape.kv_dim();
     let mut rows: Vec<PalwArtifactOperandV1> = Vec::new();
 
-    // --- graph-level -------------------------------------------------------------------------
-    // The embedding table: one row per token id, because `EmbedLookup` opens `(token · width,
-    // width)`. Not tiled — a gather's operand is the row it gathered, and tiling it would make
-    // every lookup open the neighbours it did not read.
-    for token in 0..shape.vocab {
-        rows.push(PalwArtifactOperandV1 {
-            tensor_name: "token_embd.weight".to_string(),
-            layer: None,
-            row_start: (token * d) as u32,
-            bytes: artifact.embed[token * d..(token + 1) * d].iter().map(|v| *v as u8).collect(),
-        });
-    }
-    rows.extend(tile_matrix("output.weight", None, &artifact.unembed, d, tile));
-    // The final narrowing, which the post table declares now that the engine's `norm_to_code` is
-    // described as the two steps it is.
-    rows.push(PalwArtifactOperandV1 {
-        tensor_name: "output_norm.requant".to_string(),
-        layer: None,
-        row_start: 0,
-        bytes: quant_bytes(artifact.norm_requant),
-    });
+    // **Every tensor the graph names, resolved through the one binding the engine reads**
+    // (ADR-0049 Decision F). The list is `base0_tensor_names_v1`, projected from `BASE0_LAYER_IR`;
+    // the bytes come from `base0_resolve_operand_v1`, which is what the forward pass computes
+    // against. This module used to carry a second copy of that mapping — twenty-five suffixes
+    // beside twenty-five artifact fields — and one entry of it was already wrong: `attn_q.requant`
+    // served `layer.requant[0]` unconditionally, while the engine narrows through the per-channel
+    // table whenever the artifact carries one. A court opening that tensor against a class with a
+    // projection bias would have recomputed an honest step from parameters nobody applied.
+    //
+    // The ROW SHAPE is still this module's, because it is the refuter's: a matmul opens a tile of
+    // output rows, a gather opens the row it gathered, a narrowing opens its whole parameter
+    // block, a rotation opens one position.
+    let emit = |name: &'static str, layer: Option<usize>, rows: &mut Vec<PalwArtifactOperandV1>| -> Result<(), InventoryBuildError> {
+        let li = layer.map(|l| l as u16);
+        let block = |bytes: Vec<u8>| PalwArtifactOperandV1 { tensor_name: name.to_string(), layer: li, row_start: 0, bytes };
+        match base0_resolve_operand_v1(artifact, name, layer, BASE0_ENGINE_HEAD_TENSOR).map_err(InventoryBuildError::Operand)? {
+            Base0OperandV1::Matrix { data, in_dim } => rows.extend(tile_matrix(name, li, data, in_dim, tile)),
+            Base0OperandV1::Gather { data, width } => {
+                for token in 0..data.len() / width.max(1) {
+                    rows.push(PalwArtifactOperandV1 {
+                        tensor_name: name.to_string(),
+                        layer: li,
+                        row_start: (token * width) as u32,
+                        bytes: data[token * width..(token + 1) * width].iter().map(|v| *v as u8).collect(),
+                    });
+                }
+            }
+            // Nine bytes for a tensor-wide narrowing, nine per channel for a per-channel one —
+            // the two shapes `palw_step_refute` accepts, and which one this is is the artifact's
+            // answer rather than this module's guess.
+            Base0OperandV1::Quant(q) => rows.push(block(q.bytes())),
+            Base0OperandV1::Scale(s) => rows.push(block(scale_bytes(s))),
+            Base0OperandV1::Rope(table) => {
+                let mut offset = 0u32;
+                for position in 0..shape.max_position {
+                    let bytes = rope_row_bytes(table, shape.d_head, position);
+                    let len = bytes.len() as u32;
+                    rows.push(PalwArtifactOperandV1 { tensor_name: name.to_string(), layer: li, row_start: offset, bytes });
+                    offset += len;
+                }
+            }
+        }
+        Ok(())
+    };
 
-    // --- per layer ---------------------------------------------------------------------------
-    for (li, layer) in artifact.layers.iter().enumerate() {
-        let l = Some(li as u16);
-        // **The TEMPLATE name, with the layer in the `layer` field** — not a substituted one.
-        // `palw_step_refute` asks the oracle with `node.weight_name`, which is the IR's own
-        // `blk.{layer}.…` string, and passes the layer index beside it. An inventory that
-        // substituted the index into the name would answer no request the court ever makes —
-        // and `verify_covers_profile` would still pass, because it matches a template against a
-        // substituted name deliberately. Found by closing the refutation round trip, which is
-        // the only thing that asks the two sides to agree.
-        let named = |suffix: &str| format!("blk.{{layer}}.{suffix}");
-        for (suffix, weights, in_dim) in [
-            ("attn_q.weight", &layer.wq, d),
-            ("attn_k.weight", &layer.wk, d),
-            ("attn_v.weight", &layer.wv, d),
-            ("attn_output.weight", &layer.wo, d),
-            ("ffn_gate.weight", &layer.w_gate, d),
-            ("ffn_up.weight", &layer.w_up, d),
-            ("ffn_down.weight", &layer.w_down, shape.d_ff),
-        ] {
-            rows.extend(tile_matrix(&named(suffix), l, weights, in_dim, tile));
+    for name in base0_tensor_names_v1() {
+        if name.starts_with(BASE0_LAYER_PREFIX) {
+            for li in 0..shape.n_layers {
+                emit(name, Some(li), &mut rows)?;
+            }
+        } else {
+            emit(name, None, &mut rows)?;
         }
-        // The narrowings, each one block. A uniform narrowing is nine bytes for the whole row —
-        // the shape `palw_step_refute` accepts beside the per-channel one, and the only shape a
-        // fixed inventory can carry for a step whose row length is a function of the position
-        // (`qk_to_code` at the attention site is applied to a `kv_len`-long softmax output).
-        for (suffix, params) in [
-            ("attn_norm.requant", artifact.norm_requant),
-            ("ffn_norm.requant", artifact.norm_requant),
-            ("attn_q.requant", layer.requant[0]),
-            ("attn_k.requant", layer.requant[1]),
-            ("attn_v.requant", layer.requant[2]),
-            ("attn_output.requant", layer.requant[3]),
-            ("ffn_up.requant", layer.requant[5]),
-            ("ffn_down.requant", layer.requant[6]),
-            ("qk_to_code.requant", artifact.qk_to_code()),
-            ("code_product.requant", artifact.code_product()),
-            ("rope_clamp.requant", artifact.rope_clamp()),
-            ("attn_residual.requant", artifact.residual_requant_at(li, 0)),
-            ("ffn_residual.requant", artifact.residual_requant_at(li, 1)),
-        ] {
-            rows.push(PalwArtifactOperandV1 { tensor_name: named(suffix), layer: l, row_start: 0, bytes: quant_bytes(params) });
-        }
-        for (suffix, params) in [
-            ("attn_logit.scale", layer.attn_logit_scale),
-            ("ffn_gate.scale", layer.ffn_gate_scale),
-            // ADR-0050 Decision D: the residual gains are TENSORS, not struct fields, because the
-            // court resolves a `Rescale` node's parameters through the weight oracle — a gain that
-            // cannot be opened against `artifact_root` is a step that is `Unadjudicable`.
-            ("attn_residual.scale", artifact.residual_scale_at(li, 0)),
-            ("ffn_residual.scale", artifact.residual_scale_at(li, 1)),
-        ] {
-            rows.push(PalwArtifactOperandV1 { tensor_name: named(suffix), layer: l, row_start: 0, bytes: scale_bytes(params) });
-        }
-        // The rotary table, one row per position — what a rotation at position `p` opens.
-        let mut offset = 0u32;
-        for position in 0..shape.max_position {
-            let bytes = rope_row_bytes(artifact, position);
-            let len = bytes.len() as u32;
-            rows.push(PalwArtifactOperandV1 { tensor_name: named("rope_table"), layer: l, row_start: offset, bytes });
-            offset += len;
-        }
-        let _ = kv;
     }
 
     // The canonical order is `(tensor_name, layer, row_start)` ascending, and the constructor
@@ -235,6 +198,7 @@ pub fn base0_inventory_v1(
 mod tests {
     use super::*;
     use crate::artifact::{Base0ShapeV1, LN_THETA_10000_GEN_Q};
+    use kaspa_consensus_core::palw_base0_ops::QuantParams;
     use kaspa_consensus_core::palw_base0_profile::{PALW_RC_BASE0_GEOMETRY, base0_profile_v1};
 
     fn rc_shape() -> Base0ShapeV1 {
@@ -254,6 +218,66 @@ mod tests {
 
     fn rc_artifact() -> Base0ArtifactV1 {
         Base0ArtifactV1::derive_deterministic(rc_shape(), 20_260_821).unwrap()
+    }
+
+    /// **A narrowing is served as the producer APPLIED it, not as one field of the container.**
+    ///
+    /// The engine narrows q, k and v through `qkv_channel_requant` whenever the artifact carries
+    /// one — that is where a projection bias lives, in each channel's `zero` — and this module used
+    /// to emit `layer.requant[0]` for `attn_q.requant` unconditionally, because it held its own
+    /// copy of the name-to-field mapping.
+    ///
+    /// The failure that makes is not a refusal. `palw_step_refute` asks for `9 × channels` bytes
+    /// and, finding a nine-byte row, CYCLES it across every channel (`palw_step_refute.rs:719`) —
+    /// so the court recomputes an honest step from a tensor-wide narrowing the producer never
+    /// applied, gets a different row, and convicts. Silently, and only for classes with a bias,
+    /// which is every Qwen2.5 member and not the floor.
+    ///
+    /// Against the old builder this fails on the row's LENGTH: nine bytes where the producer's
+    /// parameters are nine per channel. The old bytes are reconstructed here so the difference is
+    /// asserted rather than described.
+    #[test]
+    fn a_per_channel_narrowing_is_served_as_the_producer_applied_it() {
+        let mut artifact = rc_artifact();
+        let d = artifact.shape.d_model();
+        let kv = artifact.shape.kv_dim();
+        let table = |n: usize, zero: i32| -> Vec<QuantParams> {
+            (0..n).map(|i| QuantParams { multiplier: i32::MAX, shift: 7, zero: zero + i as i32 }).collect()
+        };
+        for l in artifact.layers.iter_mut() {
+            l.qkv_channel_requant = Some([table(d, 1_000), table(kv, 2_000), table(kv, 3_000)]);
+        }
+        let inventory = base0_inventory_v1(&artifact, PALW_RC_BASE0_GEOMETRY).expect("a legal layout");
+
+        // What the old builder emitted: nine bytes of the tensor-wide parameter.
+        let uniform = artifact.layers[0].requant[0];
+        let mut old = Vec::with_capacity(9);
+        old.extend_from_slice(&uniform.multiplier.to_le_bytes());
+        old.push(uniform.shift);
+        old.extend_from_slice(&uniform.zero.to_le_bytes());
+
+        let row = inventory
+            .operands()
+            .iter()
+            .find(|o| o.tensor_name == "blk.{layer}.attn_q.requant" && o.layer == Some(0))
+            .expect("the narrowing is carried");
+        assert_eq!(row.bytes.len(), 9 * d, "one block of nine bytes per output channel");
+        assert_ne!(row.bytes, old, "the old builder's row is not the one the producer applied");
+        // Each channel's own zero point, in order — the bias the court would otherwise cycle away.
+        for (i, chunk) in row.bytes.chunks_exact(9).enumerate() {
+            assert_eq!(i32::from_le_bytes([chunk[5], chunk[6], chunk[7], chunk[8]]), 1_000 + i as i32, "channel {i}");
+        }
+
+        // The other two narrowings follow their own tables, not q's.
+        for (name, base, len) in [("attn_k.requant", 2_000, kv), ("attn_v.requant", 3_000, kv)] {
+            let row = inventory
+                .operands()
+                .iter()
+                .find(|o| o.tensor_name == format!("blk.{{layer}}.{name}") && o.layer == Some(1))
+                .unwrap_or_else(|| panic!("{name} is carried"));
+            assert_eq!(row.bytes.len(), 9 * len);
+            assert_eq!(i32::from_le_bytes([row.bytes[5], row.bytes[6], row.bytes[7], row.bytes[8]]), base, "{name}");
+        }
     }
 
     /// **Audit C-06: a real inventory, from a real artifact, covering the real graph.**
