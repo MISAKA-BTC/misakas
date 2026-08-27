@@ -567,9 +567,22 @@ fn the_shipped_three_class_card_grows_both_entrants() {
         bond: kaspa_consensus_core::config::premine::premine_outpoint(0),
     };
     chain.step(None, &bundle.genesis_objects);
-    for entrant in entrants {
-        assert_eq!(chain.state.class_share_permille(entrant), Some(1), "an entrant enters on the grant floor");
-    }
+    // **The table the card actually mints.** The constants name what each tier KEEPS, and the
+    // hybrid declares more than that because the dense tier's donation dilutes it — so the only
+    // honest check is to fold the real transition over the real objects and read the result.
+    let floor_share = chain.state.class_share_permille(&base).unwrap();
+    let entrant_shares: Vec<u16> = entrants.iter().map(|c| chain.state.class_share_permille(c).unwrap()).collect();
+    assert_eq!(
+        entrant_shares,
+        vec![
+            kaspa_consensus_core::config::params::PALW_RC_GENESIS_QWEN36_SHARE_PERMILLE,
+            kaspa_consensus_core::config::params::PALW_RC_GENESIS_QWEN25_A16_SHARE_PERMILLE
+        ],
+        "each tier keeps what its constant names, dilution inverted"
+    );
+    assert_eq!(floor_share as u32 + entrant_shares.iter().map(|s| u32::from(*s)).sum::<u32>(), 1000);
+    assert!(floor_share >= reserve, "and the floor starts at or above its own reserve");
+    println!("minted table: floor {floor_share}‰, tiers {entrant_shares:?}");
 
     println!();
     println!("=== the shipped three-class card, ADR-0054 on ===");
@@ -608,4 +621,186 @@ fn the_shipped_three_class_card_grows_both_entrants() {
     for (entrant, share) in entrants.iter().zip(entrants.iter().map(|c| chain.state.class_share_permille(c).unwrap())) {
         assert!(share > 1, "class {entrant} earned its way off the grant floor");
     }
+}
+
+/// Mirrors the block-level run at the transition, to tell a rule from its plumbing: the two-class
+/// card, the hybrid filling exactly its funded budget in epoch 0, and the crossing block.
+#[test]
+fn a_funded_tier_that_fills_its_budget_grows_at_the_first_boundary() {
+    use kaspa_consensus_core::config::params::palw_rc_params_with_qwen36;
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+
+    let registry: Vec<_> = (0..kaspa_consensus_core::palw_fp_devnet_v3::palw_v2_min_genesis_bonds_v1() as u32)
+        .map(|i| kaspa_consensus_core::palw_fp_devnet_v3::PalwGenesisBondSpecV1 {
+            bond: PalwBondKeyV2(kaspa_consensus_core::config::premine::premine_outpoint(i)),
+            pubkey: vec![7u8.wrapping_add(i as u8); 32],
+            operator_pubkey: vec![21u8, i as u8, 0, 0, 0, 0, 0, 0],
+            payout_payload: h(0x9A11 + i as u64),
+        })
+        .collect();
+    let params = palw_rc_params_with_qwen36(h(0xB0), h(0x93), registry).expect("assembles");
+    let PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else { panic!() };
+    let p = bundle.state.clone();
+    let epoch_length = p.epoch_length();
+    let ids: Vec<Hash64> = bundle
+        .genesis_objects
+        .iter()
+        .filter_map(|o| match o {
+            Obj::ClassRegistered { class_id, .. } => Some(*class_id),
+            _ => None,
+        })
+        .collect();
+    let (base, qwen) = (ids[0], ids[1]);
+    let mut chain = Chain {
+        state: PalwChainStateV2::genesis(),
+        params: p,
+        daa: 0,
+        produced: Default::default(),
+        bond: kaspa_consensus_core::config::premine::premine_outpoint(0),
+    };
+    chain.step(None, &bundle.genesis_objects);
+    let quota = chain.state.epoch_budgets().and_then(|b| b.budget_blocks.get(&qwen).copied()).unwrap_or(0);
+    let opening = chain.state.class_share_permille(&qwen).unwrap();
+    println!("opening share {opening}‰, epoch-0 budget {quota}");
+    let mut made = 0u64;
+    while chain.daa < epoch_length - 1 {
+        let class = if made < quota {
+            made += 1;
+            qwen
+        } else {
+            base
+        };
+        chain.step(Some(class), &[]);
+    }
+    let counted = chain.state.epoch_counter(&qwen).map(|c| (c.epoch_index, c.produced_blocks));
+    let budget_now = chain.state.epoch_budgets().map(|b| (b.epoch_index, b.budget_blocks.get(&qwen).copied()));
+    println!("before the crossing: daa {}, counter {:?}, budget table {:?}", chain.daa, counted, budget_now);
+    chain.step(Some(base), &[]); // the crossing
+    println!(
+        "after the crossing: qwen {}‰, base {}‰",
+        chain.state.class_share_permille(&qwen).unwrap(),
+        chain.state.class_share_permille(&base).unwrap()
+    );
+    assert!(chain.state.class_share_permille(&qwen).unwrap() > opening, "a tier that filled its budget grows");
+}
+
+/// What the genesis bond outpoints actually hold — the ceiling on how heavy a class the shipped
+/// registry can carry, since `verify_palw_genesis_v2` refuses a bond declaring more than its
+/// outpoint holds.
+#[test]
+fn what_the_genesis_bond_outpoints_hold() {
+    let net = kaspa_consensus_core::network::NetworkId::with_suffix(kaspa_consensus_core::network::NetworkType::Testnet, 11);
+    let utxos = kaspa_consensus_core::config::premine::genesis_premine_utxos_for(net);
+    let bonds = kaspa_consensus_core::palw_fp_devnet_v3::palw_v2_min_genesis_bonds_v1();
+    let mut total = 0u64;
+    for i in 0..bonds as u32 {
+        let outpoint = kaspa_consensus_core::config::premine::premine_outpoint(i);
+        let amount = utxos.get(&outpoint).map(|e| e.amount).unwrap_or(0);
+        total += amount;
+        println!("bond {i}: {amount} sompi = {:.2} MSK", amount as f64 / 1e8);
+    }
+    println!("total across {bonds} bonds: {:.2} MSK", total as f64 / 1e8);
+    println!(
+        "floor-sized collateral {:.2} MSK, Qwen3.6-sized {:.2} MSK",
+        kaspa_consensus_core::palw_fp_devnet_v3::palw_v2_collateral_for_claim_lifetime_v1(7_708) as f64 / 1e8,
+        kaspa_consensus_core::palw_fp_devnet_v3::palw_v2_collateral_for_claim_lifetime_v1(2_685_440) as f64 / 1e8
+    );
+}
+
+/// **The bind-window gate answers about the class that costs most to hold.**
+///
+/// It read the BASE class's per-claim exposure, which on a network that registers a model tier
+/// beside the floor is the cheapest claim a bond will ever carry — so a registry funded for the
+/// floor passed while the genesis was allocating cadence to a tier whose claims reserve 348× as
+/// much. Measured through the block path: fifteen blocks accepted against a two-hundred-block
+/// allowance, then `the bond's exposure ceiling leaves no room for another claim`, which is the
+/// deadlock this gate's own comment describes.
+#[test]
+fn the_bind_window_gate_measures_the_dearest_class() {
+    use kaspa_consensus_core::config::params::palw_rc_params_with_classes;
+    use kaspa_consensus_core::palw_genesis_v2::{PalwGenesisV2Error, verify_palw_genesis_v2};
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+
+    let registry: Vec<_> = (0..kaspa_consensus_core::palw_fp_devnet_v3::palw_v2_min_genesis_bonds_v1() as u32)
+        .map(|i| kaspa_consensus_core::palw_fp_devnet_v3::PalwGenesisBondSpecV1 {
+            bond: PalwBondKeyV2(kaspa_consensus_core::config::premine::premine_outpoint(i)),
+            pubkey: vec![7u8.wrapping_add(i as u8); 32],
+            operator_pubkey: vec![21u8, i as u8, 0, 0, 0, 0, 0, 0],
+            payout_payload: h(0x9A11 + i as u64),
+        })
+        .collect();
+    let params = palw_rc_params_with_classes(h(0xB0), h(0x93), Some(h(0x25)), registry).expect("the card assembles");
+    let PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else { panic!("a ConsensusV2 network") };
+
+    // The card funds its bonds for the dearest class, so the floor's own sizing is far below what
+    // the registry declares — that gap IS the fix.
+    let floor_sized = kaspa_consensus_core::palw_fp_devnet_v3::palw_v2_collateral_for_claim_lifetime_v1(7_708);
+    let declared = bundle
+        .genesis_objects
+        .iter()
+        .find_map(|o| match o {
+            Obj::BondRegistered { collateral, .. } => Some(*collateral),
+            _ => None,
+        })
+        .expect("the card registers bonds");
+    assert!(declared > floor_sized * 100, "the registry is sized for the tiers, not for the floor: {declared} vs {floor_sized}");
+
+    // And the gate refuses the registry the old sizing would have shipped.
+    // The catalog preimage, rebuilt from the same public registrations the card assembles from —
+    // the bundle carries only its root.
+    let mut entries = Vec::new();
+    let (_, base_catalog) = kaspa_consensus_core::palw_base0_profile::palw_rc_base0_registration_v1(h(0xB0)).expect("derives");
+    entries.push(base_catalog.entries().first().expect("the floor").clone());
+    for object in &bundle.genesis_objects {
+        let Obj::ClassRegistered { class_id, artifact_root, share_permille, slash_value_per_pwu, initial_target, .. } = object else {
+            continue;
+        };
+        if *class_id == bundle.state.base_class_id() {
+            continue;
+        }
+        let built = kaspa_consensus_core::palw_qwen36_profile::qwen36_registration_v1(
+            *artifact_root,
+            *share_permille,
+            *slash_value_per_pwu,
+            *initial_target,
+        )
+        .ok()
+        .filter(|(_, entry, _)| entry.class_id == *class_id)
+        .or_else(|| {
+            kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_registration_v1(
+                *artifact_root,
+                *share_permille,
+                *slash_value_per_pwu,
+                *initial_target,
+            )
+            .ok()
+        })
+        .expect("one of the two tiers derives this registration");
+        entries.push(built.1);
+    }
+    entries.sort_by(|a, b| a.class_id.cmp(&b.class_id));
+    let catalog = kaspa_consensus_core::palw_mode_v2::PalwClassCatalogV2::new(entries).expect("well-formed");
+    let starved: Vec<_> = bundle
+        .genesis_objects
+        .iter()
+        .cloned()
+        .map(|o| match o {
+            Obj::BondRegistered { bond, pubkey, operator_pubkey, payout_payload, signature, .. } => Obj::BondRegistered {
+                bond,
+                pubkey,
+                operator_pubkey,
+                collateral: floor_sized,
+                payout_payload,
+                signature,
+            },
+            other => other,
+        })
+        .collect();
+    let utxos = kaspa_consensus_core::config::premine::genesis_premine_utxos_for(params.net);
+    let err = verify_palw_genesis_v2(bundle, &catalog, &starved, |outpoint| utxos.get(outpoint).map(|e| e.amount))
+        .expect_err("a registry that cannot carry the tiers it funds must be refused");
+    assert!(
+        matches!(err, PalwGenesisV2Error::BondCannotSustainBindWindow { .. }),
+        "and refused for the reason that is true, got {err:?}"
+    );
 }

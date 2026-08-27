@@ -2394,6 +2394,41 @@ pub fn palw_rc_params_with_qwen36(
     palw_rc_params_with_classes(base0_artifact_root, qwen36_artifact_root, None, genesis_bonds)
 }
 
+/// The per-inference work a class registration declares, or zero for anything else — the input the
+/// genesis bond sizing takes its maximum over.
+fn genesis_pwu_of(object: &crate::palw_state_v2::PalwConsensusObjectV2) -> u64 {
+    match object {
+        crate::palw_state_v2::PalwConsensusObjectV2::ClassRegistered { pwu_rule, .. } => match pwu_rule {
+            crate::palw_state_v2::PalwPwuRuleV2::DerivedV1 { pwu_per_inference } => *pwu_per_inference,
+            crate::palw_state_v2::PalwPwuRuleV2::MaxPerAttempt(cap) => *cap,
+        },
+        _ => 0,
+    }
+}
+
+/// **The cadence the hybrid tier holds when the network starts** (permille of the share table).
+///
+/// Not the grant floor: see the note inside `palw_rc_params_with_classes`. Two hundred permille is
+/// one block in five, which is a tier a public network can actually watch — and it is small enough
+/// that a tier nobody runs costs the chain nothing, because the retarget's census renormalizes over
+/// the classes that PRODUCED (audit H1) and ADR-0054 decays a silent class back into the floor.
+///
+/// **This is a bootstrap, not a ceiling.** ADR-0054 lets any class earn cadence afterwards by
+/// filling its budget, so a tier funded at the grant floor is not stuck there — it is 23 closed
+/// epochs from 200‰ (1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 15, 18, 22, 27, 33, 41, 51, 63, 78, 97, 121,
+/// 151, 188, 235), which at testnet-11's measured ~30 h epoch is about four weeks of uninterrupted
+/// production. What genesis funding buys is that month, and a public network that shows what it is
+/// on its first day instead of in its second month.
+///
+/// Changing it changes `palw_ruleset_id_v2` — the genesis object list is inside the bundle — so it
+/// is a mint-time decision. Nothing raises a share by fiat afterwards; production does.
+pub const PALW_RC_GENESIS_QWEN36_SHARE_PERMILLE: u16 = 200;
+
+/// **The dense tier's, at genesis.** Equal to the hybrid's on purpose: the two differ enormously in
+/// what they cost to run, and nothing about that difference is knowable at mint time. ADR-0054 is
+/// what separates them afterwards, out of what they each produce.
+pub const PALW_RC_GENESIS_QWEN25_A16_SHARE_PERMILLE: u16 = 200;
+
 /// The same assembly, with the A16 dense class when its root is pinned. `None` is the two-class
 /// network exactly as before — an unpinned class is absent, never a placeholder.
 pub fn palw_rc_params_with_classes(
@@ -2423,20 +2458,78 @@ pub fn palw_rc_params_with_classes(
         })
         .ok_or(invalid("the base assembly carries no class registration"))?;
 
-    let share = bundle.state.min_grantable_share_permille();
+    // **What each class is given at genesis, and why it is not the grant floor.**
+    //
+    // A post-genesis entrant takes `min_grantable_share_permille` and may take nothing else
+    // (ADR-0049 Decision H), and ADR-0054's growth rule is what lets it earn more afterwards. That
+    // is the right shape for a stranger arriving on a running chain. It is the wrong shape for a
+    // class the network is being MINTED around: the grant floor is defined to make its holder's
+    // expectation exactly one block per epoch, so a genesis that hands the model tiers 1‰ ships a
+    // network whose two model classes may produce one block each per epoch — a public network that
+    // is, in practice, the floor with two demonstrations attached.
+    //
+    // Genesis is the one moment cadence can be allocated rather than earned, because there is no
+    // incumbent to take it from: the floor holds the whole table by construction and every permille
+    // any class ever holds came from it. So the model tiers are funded here, and ADR-0054 decides
+    // what happens next in both directions — a tier that fills its budget grows, one that goes
+    // quiet decays back into the floor.
+    let floor_reserve = bundle.state.base_class_reserve_permille();
+    let dense_share = qwen25_a16_artifact_root.map(|_| PALW_RC_GENESIS_QWEN25_A16_SHARE_PERMILLE).unwrap_or(0);
+    // **The hybrid asks for more than it keeps, because the dense tier dilutes it.**
+    //
+    // `granted_share_table_v2` funds an entrant by scaling every incumbent to `1000 - share`, and
+    // the dense tier registers second — so whatever the hybrid holds when the dense tier arrives is
+    // multiplied by `(1000 - dense) / 1000`. Declaring the intended figure would land the hybrid
+    // BELOW it, silently, and the two tiers would not be the equals this card means them to be.
+    // Inverting the dilution here is what makes the constants above describe the table the chain
+    // actually starts with, which a test asserts by folding the real transition over these objects.
+    let hybrid_share = u16::try_from(
+        (u32::from(PALW_RC_GENESIS_QWEN36_SHARE_PERMILLE) * 1000).div_ceil(1000 - u32::from(dense_share)),
+    )
+    .map_err(|_| invalid("the hybrid's genesis share does not fit a permille"))?;
+    // The floor after both donations, in the same arithmetic the transition applies. A genesis that
+    // starts the floor below the reserve ADR-0054 would never let a growing class cross is a
+    // genesis in a state its own rules could not have produced.
+    let floor_after = (1000u32 - u32::from(hybrid_share)) * (1000 - u32::from(dense_share)) / 1000;
+    if floor_after < u32::from(floor_reserve) {
+        return Err(invalid("the genesis class shares would start the liveness floor below its own reserve"));
+    }
     let (_profile, entry, object) =
-        crate::palw_qwen36_profile::qwen36_registration_v1(qwen36_artifact_root, share, slash, target)
+        crate::palw_qwen36_profile::qwen36_registration_v1(qwen36_artifact_root, hybrid_share, slash, target)
             .map_err(|_| invalid("the Qwen3.6 registration does not derive"))?;
-    // The A16 dense class, when its artifact root is pinned. Registered at the SAME minimum
-    // grantable share as the hybrid, from the same floor economics — a class does not choose its
-    // own weight, and two entrants arriving in one genesis must not differ in how they were sized.
+    // The A16 dense class, when its artifact root is pinned. It registers last, so what it declares
+    // is what it keeps — no dilution follows it.
     let dense = match qwen25_a16_artifact_root {
         Some(root) => Some(
-            crate::palw_qwen25_profile::qwen25_a16_registration_v1(root, share, slash, target)
+            crate::palw_qwen25_profile::qwen25_a16_registration_v1(root, dense_share, slash, target)
                 .map_err(|_| invalid("the Qwen2.5 A16 registration does not derive"))?,
         ),
         None => None,
     };
+
+    // **The registry has to be able to CARRY the tiers this card funds.**
+    //
+    // A claim reserves `pwu × slash_value` against its bond until it resolves, and the bond
+    // collateral the base assembly declared was derived from the FLOOR's counted work. A model
+    // tier's claims are hundreds of times dearer (Qwen3.6's canonical inference counts 348× the
+    // floor's), so a registry sized for the floor admits a couple of dozen of them and then holds:
+    // `the bond's exposure ceiling leaves no room for another claim`, measured at fifteen blocks
+    // against a two-hundred-block allowance. Allocating cadence a bond cannot carry is allocating
+    // nothing, so the collateral is re-derived here from the DEAREST class the card registers, by
+    // the same rule the base assembly used for the floor.
+    let dearest_pwu_per_inference = std::iter::once(genesis_pwu_of(&object))
+        .chain(dense.as_ref().map(|(_, _, dense_object)| genesis_pwu_of(dense_object)))
+        .chain(bundle.genesis_objects.iter().map(genesis_pwu_of))
+        .max()
+        .unwrap_or(0);
+    let carried_collateral = crate::palw_fp_devnet_v3::palw_v2_collateral_for_claim_lifetime_v1(dearest_pwu_per_inference);
+    for genesis_object in bundle.genesis_objects.iter_mut() {
+        if let crate::palw_state_v2::PalwConsensusObjectV2::BondRegistered { collateral, .. } = genesis_object
+            && *collateral < carried_collateral
+        {
+            *collateral = carried_collateral;
+        }
+    }
 
     // The two-entry catalog. Two DIFFERENT orders, on purpose: the CATALOG is a commitment and
     // sorts ascending by class id (its canonical form — two assemblers of one class set must
@@ -4783,7 +4876,18 @@ mod consensus_params_id_tests {
             // pin here is NEITHER side's: a fingerprint is a function of the whole ruleset, not a
             // sum of diffs, and carrying one side's number through a merge would pin a network
             // nobody runs.
-            ("testnet-11", TESTNET11_PARAMS, "ab36f3617b52b65cfea5c852a39bff0f312b201689a46b17266c04dc7d04a0fd"),
+            // And once more when the model tiers were FUNDED at genesis rather than admitted at the
+            // grant floor (2026-08-27): the hybrid and the dense tier hold 200‰ each and the floor
+            // 600‰, which is three numbers inside the genesis object list and therefore inside the
+            // bundle. ADR-0054 could have walked them there over about four weeks of production;
+            // this is the network deciding to start where it means to be.
+            // And once more when the genesis registry was sized to CARRY those tiers: a claim of the
+            // hybrid class reserves 348x what a floor claim does, so bonds funded for the floor
+            // admitted fifteen of them against a two-hundred-block allowance and then held. The
+            // declared collateral is re-derived from the dearest class the card registers, and the
+            // bind-window gate now measures that class instead of the base one — both inside the
+            // bundle, both moving this value.
+            ("testnet-11", TESTNET11_PARAMS, "25a74c81be1553c90fa526d8b136639d79d82710901fdff3b5667fa3ea8be49d"),
             ("simnet", SIMNET_PARAMS, "135e88c69a659d3cf4b5ce8275953c7597b2c67b03d2a74b3d0696c5d0b703fa"),
             ("devnet", DEVNET_PARAMS, "42cc6be92506a14654cb676184e1416796dec682b15e93cb9c639e8e0d77efa5"),
         ]

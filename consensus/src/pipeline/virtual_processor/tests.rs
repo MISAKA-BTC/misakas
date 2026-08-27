@@ -8019,12 +8019,21 @@ async fn palw_rc_qwen36_earns_share_through_real_blocks() {
     let share_of = |ctx: &TestContext, class_id| {
         ctx.consensus.palw_v2_class_table().into_iter().find(|r| r.class_id == class_id).and_then(|r| r.share_permille)
     };
-    assert_eq!(share_of(&ctx, qwen_class_id), Some(1), "the entrant starts on the grant floor");
+    let opening_share = share_of(&ctx, qwen_class_id).expect("the entrant is in the table");
+    assert_eq!(
+        opening_share,
+        kaspa_consensus_core::config::params::PALW_RC_GENESIS_QWEN36_SHARE_PERMILLE,
+        "the card funds the hybrid tier at genesis"
+    );
+    // The budget IS the share, so filling it is the only signal a class has — and the only way to
+    // produce that signal is to make every block it is allowed to.
+    let quota = ctx.consensus.palw_producer_facts_v2(qwen_class_id, None).expect("answers").epoch_budget_blocks;
+    assert!(quota > 1, "a funded tier's allowance is more than one block");
 
     let mut qwen_made = 0u64;
     // One epoch, plus the block that crosses the boundary — the crossing is what pays.
     while ctx.consensus.get_virtual_daa_score() <= epoch_length {
-        let want_qwen = qwen_made == 0;
+        let want_qwen = qwen_made < quota;
         let (class_id, bond_index) = if want_qwen { (qwen_class_id, 1u32) } else { (base_class_id, 0u32) };
         let bond = kaspa_consensus_core::config::premine::premine_outpoint(bond_index);
         let facts = ctx.consensus.palw_producer_facts_v2(class_id, Some(bond)).expect("a V2 network answers");
@@ -8075,12 +8084,25 @@ async fn palw_rc_qwen36_earns_share_through_real_blocks() {
         }
     }
 
+    {
+        // The closed epoch as the rule read it. Kept because the first version of this test passed
+        // its own loop counter and failed its assertion: 200 blocks built, 15 accepted, and only
+        // the store could say which of those two numbers the chain believed.
+        let vp = ctx.consensus.virtual_processor();
+        let (_, state) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("the tip loads");
+        let counted = state.epoch_counter(&qwen_class_id).map(|c| (c.epoch_index, c.produced_blocks));
+        eprintln!("at the crossing: counter {counted:?}");
+        assert_eq!(counted, Some((0, quota)), "every block the loop built was accepted and counted");
+    }
     let qwen_share = share_of(&ctx, qwen_class_id).expect("the entrant is in the table");
     let base_share = share_of(&ctx, base_class_id).expect("the floor is in the table");
-    eprintln!("after one epoch of real blocks: QWEN36 {qwen_share} permille, BASE-0 {base_share} permille");
-    assert_eq!(qwen_share, 2, "it filled its one-block budget, so it took a step from the floor");
-    assert_eq!(base_share, 998, "which the floor funded");
+    eprintln!(
+        "after one epoch of real blocks: QWEN36 {qwen_share} permille (from {opening_share}, having made {qwen_made} of {quota}), BASE-0 {base_share} permille"
+    );
+    assert_eq!(qwen_made, quota, "it made every block its allowance permitted");
+    let step = (u32::from(opening_share) * 250 / 1000).max(1) as u16;
+    assert_eq!(qwen_share, opening_share + step, "it filled its budget, so it took a step from the floor");
     assert_eq!(qwen_share + base_share, 1000, "and the denominator is conserved through the block path");
     let facts = ctx.consensus.palw_producer_facts_v2(qwen_class_id, None).expect("answers");
-    assert_eq!(facts.epoch_budget_blocks, 2, "the new epoch's budget follows the new share");
+    assert_eq!(facts.epoch_budget_blocks as u16, qwen_share, "the new epoch's budget follows the new share");
 }
