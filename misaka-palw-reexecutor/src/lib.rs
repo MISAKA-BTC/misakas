@@ -746,6 +746,11 @@ pub mod fixtures {
         };
         let shape_profile = PalwShapeProfileV3 {
             version: PALW_STEP_OBJECT_VERSION_V1,
+            // The profile gained a logits scheme when the tiled close landed, and `validate`
+            // refuses the default: a class that does not say how its output row is committed is a
+            // class a court cannot open. Flat, because this fixture's row is sixteen lanes wide —
+            // the same choice `palw_step`'s and `palw_base0_profile`'s own fixtures make.
+            logits_scheme_id: kaspa_consensus_core::palw_step_refute::flat_logits_scheme_id_v1(),
             lane: kaspa_consensus_core::palw_step::PalwStepLaneV1::Float32,
             layer_count: 4,
             full_attention_interval: 4,
