@@ -2603,16 +2603,18 @@ pub const PALW_RC_GENESIS_ARTIFACT_ROOT: crate::Hash64 = crate::Hash64::from_byt
 /// rebuild this file from the published GGUF or download it and let their node verify the root;
 /// both routes end at this constant.
 ///
-/// **Re-pinned 2026-08-27.** The first pin (`c970d693…`) was measured on an artifact
-/// (`q36-40L.palwq36`) that no longer exists anywhere, and that no conversion reproduces: the
-/// pin commit's own converter, HEAD's converter on arm64/macOS and HEAD's converter on
-/// x86-64/Linux all produce ONE root from the pinned GGUF under default flags, and it is not
-/// that one — three independent reconstructions against a value with no surviving witness. The
-/// conversion path's diff since the pin is formatting-only, so whatever produced `c970d693…`
-/// (a different flag set, an edited tree, or a different input) was never written down. This
-/// constant is now the value the published converter actually produces, held to that by
-/// `the_real_qwen36_artifact_produces_a_block`'s root assertion — and no converter change may
-/// ever chase a pin; the pin follows the converter.
+/// **Re-pinned 2026-08-27.** The first pin (`c970d693…`) named an artifact that could be
+/// DOWNLOADED but not REBUILT. The original file survives on HuggingFace as
+/// `palw-runtime/qwen36-35b-a3b.palwq36` (SHA-256 `5fe1d15c…`; its computed root equals the
+/// old pin — verified after this note first claimed the file was lost, which was wrong). What
+/// was true, and what forced the re-pin, is the other half: no conversion from the pinned GGUF
+/// reproduces it. The pin commit's own converter, HEAD's converter on arm64/macOS and HEAD's
+/// converter on x86-64/Linux all produce ONE root under default flags, and it is not that one —
+/// while the SAME converter reproduces the dense tier's pin from its public checkpoint exactly.
+/// Whatever produced `c970d693…` (a different flag set, an edited tree, or a different input)
+/// was never written down, so the runbook's "rebuild it yourself" route was unsatisfiable. This
+/// constant is now the value the published converter actually produces, and no converter change
+/// may ever chase a pin; the pin follows the converter.
 ///
 /// **Unset (all zero) means the class is not on the network.** `palw_rc_shipped_params` then
 /// assembles the one-class RC exactly as before, so a build with no Qwen3.6 root is the shipped

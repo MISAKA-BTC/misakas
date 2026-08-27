@@ -116,9 +116,10 @@ That is `PALW_RC_GENESIS_QWEN36_ARTIFACT_ROOT` — the value testnet-11's genesi
 covers the shape, every parameter table, the rotary table and every weight byte, each under a
 length-prefixed tagged name.
 
-**Provenance of this pin** (re-pinned 2026-08-27; the first pin was measured on an artifact that
-no longer exists and that no conversion reproduces — see the constant's own doc in
-`config/params.rs`):
+**Provenance of this pin** (re-pinned 2026-08-27; the first pin's artifact survives on
+HuggingFace as `palw-runtime/qwen36-35b-a3b.palwq36` and verifies to the OLD root, but no
+conversion from the pinned GGUF reproduces it — the download route worked and the rebuild route
+never could; see the constant's own doc in `config/params.rs`):
 
 | fact | value |
 |---|---|
