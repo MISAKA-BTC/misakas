@@ -56,6 +56,9 @@ const CONSENSUS_PATH: &[&str] = &[
     "src/produce.rs",
     "src/qwen36.rs",
     "src/qwen36_backend.rs",
+    // The dense A16 tier's producer — same rule, same reason: an execution path may not
+    // compute in floats, and this one derives its job, runs the engine and commits four roots.
+    "src/qwen25_a16_backend.rs",
     "src/rc.rs",
     "src/rope.rs",
     "src/tokenizer.rs",

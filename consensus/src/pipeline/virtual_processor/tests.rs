@@ -1426,6 +1426,160 @@ async fn palw_rc_a_real_execution_produces_a_block_the_chain_accepts() {
     assert!(after.bond.as_ref().unwrap().reserved_exposure > 0, "the claim it created reserves against the bond");
 }
 
+/// **A block produced by the REAL Qwen2.5-1.5B A16 model, accepted by consensus.**
+///
+/// The dense tier's own goal sentence. This is not a shaped fixture: it maps the converted
+/// `.palwart` of `Qwen/Qwen2.5-1.5B-Instruct` (1.7 GiB, 28 layers, vocabulary 151,936 — the
+/// checkpoint that answers "The capital of France is Paris." on this engine), registers it beside
+/// the floor and the hybrid in a three-class genesis, runs the anchored canonical job through
+/// `A16Engine`, commits under the TILED logits trace, wins the class's lottery, signs under a
+/// genesis bond, and lands in the UTXO tip.
+///
+/// Ignored in CI only because of the 1.7 GiB artifact; everything it exercises is the shipped path.
+///
+/// ```text
+/// MISAKA_QWEN25_A16_ARTIFACT=/path/to/qwen25-1.5b-a16.palwart \
+///   cargo test --release -p kaspa-consensus real_qwen25_a16 -- --ignored --nocapture
+/// ```
+#[tokio::test]
+#[ignore = "maps the real 1.7 GiB Qwen2.5 A16 artifact; set MISAKA_QWEN25_A16_ARTIFACT and --ignored"]
+async fn palw_rc_the_real_qwen25_a16_model_produces_a_block() {
+    use kaspa_consensus_core::api::ConsensusApi;
+    use kaspa_consensus_core::palw_attempt_v2::{
+        PALW_ATTEMPT_V2_MLDSA87_CONTEXT, PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, attempt_id_v2,
+        challenge_v2, class_ticket_v2, palw_network_domain_v2,
+    };
+    use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
+    use kaspa_consensus_core::palw_qwen25_profile::{QWEN25_A16_CANONICAL, qwen25_a16_class_id_v1};
+    use misaka_palw_base0::produce::base0_rc_job_anchor_v1;
+    use misaka_palw_base0::qwen25_a16_backend::Qwen25A16Backend;
+
+    let path = std::env::var("MISAKA_QWEN25_A16_ARTIFACT").expect("MISAKA_QWEN25_A16_ARTIFACT=/path/to/qwen25-1.5b-a16.palwart");
+    let opened = std::time::Instant::now();
+    let bytes = std::fs::read(&path).expect("the artifact reads");
+    let artifact = misaka_palw_base0::artifact::decode_artifact_file_v1(&bytes).expect("the artifact decodes");
+    let artifact_root = artifact.artifact_digest();
+    eprintln!(
+        "dense drill: {} layers / vocab {} / root {artifact_root} in {:?}",
+        artifact.shape.n_layers,
+        artifact.shape.vocab,
+        opened.elapsed()
+    );
+
+    let keypair = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([0xB0u8; 32]);
+    let bond_key = kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(kaspa_consensus_core::config::premine::premine_outpoint(0));
+    let base_root = misaka_palw_base0::rc::palw_rc_base0_artifact_root_v1().expect("the floor's artifact derives");
+    let registry: Vec<_> = (0..kaspa_consensus_core::palw_fp_devnet_v3::palw_v2_min_genesis_bonds_v1() as u32)
+        .map(|i| kaspa_consensus_core::palw_fp_devnet_v3::PalwGenesisBondSpecV1 {
+            bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(kaspa_consensus_core::config::premine::premine_outpoint(i)),
+            pubkey: if i == 0 { keypair.verification_key.as_ref().to_vec() } else { vec![7u8.wrapping_add(i as u8); 32] },
+            operator_pubkey: vec![21u8, i as u8, 0, 0, 0, 0, 0, 0],
+            payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11 + i as u64),
+        })
+        .collect();
+
+    // THREE classes: the floor, the hybrid (its dev fixture's root — this drill is about the dense
+    // one), and the dense model whose weights are on disk.
+    let hybrid_root = misaka_palw_base0::qwen36::qwen36_dev_fixture(1, 8).artifact_root();
+    let params = kaspa_consensus_core::config::params::palw_rc_params_with_classes(
+        base_root,
+        hybrid_root,
+        Some(artifact_root),
+        registry,
+    )
+    .expect("the three-class RC genesis card assembles");
+    let bundle = match &params.palw_consensus_mode {
+        kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) => b.clone(),
+        _ => panic!("the RC ships a ConsensusV2 bundle"),
+    };
+    let dense_class_id = qwen25_a16_class_id_v1();
+    assert_ne!(dense_class_id, bundle.base_class_id, "the dense class is not the floor");
+
+    let config = ConfigBuilder::new(params)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            if !cfg!(feature = "evm") {
+                p.evm_activation_daa_score = u64::MAX;
+            }
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+
+    let facts = ctx
+        .consensus
+        .palw_producer_facts_v2(dense_class_id, Some(bond_key.0))
+        .expect("the three-class network answers for its dense entrant");
+    assert_eq!(facts.artifact_root, artifact_root, "the chain names the artifact this node holds");
+    assert_eq!(facts.ready_to_produce(keypair.verification_key.as_ref()), Ok(()), "bond, key and an epoch budget");
+
+    let mut block = ctx.build_block_template_keeping_time(0).block;
+    let timestamp = block.header.timestamp;
+    let network_domain = palw_network_domain_v2(config.params.net.to_string().as_bytes());
+    let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(&block.header);
+    let anchor = base0_rc_job_anchor_v1(network_domain, pre_pow, dense_class_id, &bond_key.0);
+
+    let backend = Qwen25A16Backend::new(
+        std::sync::Arc::new(artifact),
+        config.params.net.to_string().into_bytes(),
+        dense_class_id,
+        QWEN25_A16_CANONICAL,
+    );
+    let (job, prompt) = backend.job_for_anchor(anchor).expect("the anchor implies a job inside the artifact's table");
+    let ran = std::time::Instant::now();
+    let run = backend.execute(&job, &prompt).expect("a real Qwen2.5-1.5B forward pass over the anchored job");
+    eprintln!(
+        "dense drill: executed ({} prefill + {} decode) in {:?}; material {} bytes",
+        job.declared_prefill_tokens,
+        job.exact_decode_tokens,
+        ran.elapsed(),
+        run.material.len()
+    );
+
+    let mut attempt = PalwAttemptUnsignedV2 {
+        version: PALW_ATTEMPT_V2_VERSION,
+        network_domain,
+        challenge: kaspa_hashes::Hash64::default(),
+        class_id: dense_class_id,
+        executor_bond: bond_key.0,
+        executor_pubkey: keypair.verification_key.as_ref().to_vec(),
+        operator_id: facts.bond.as_ref().expect("the pre-flight held a bond").operator_id,
+        artifact_root: facts.artifact_root,
+        trace_root: run.trace_root,
+        output_root: run.output_root,
+        execution_root: run.execution_root,
+        pwu: facts.pwu,
+        trace_manifest_root: run.trace_manifest_root,
+        trace_chunk_count: run.trace_chunk_count,
+        trace_retention_daa: facts.daa_score.saturating_add(facts.min_trace_retention_daa),
+    };
+    let mut won = None;
+    for nonce in 0u64..1_000_000 {
+        attempt.challenge = challenge_v2(network_domain, pre_pow, timestamp, nonce, dense_class_id, &bond_key.0);
+        if class_ticket_v2(&attempt) <= facts.class_target {
+            won = Some(nonce);
+            break;
+        }
+    }
+    let nonce = won.expect("the entrant's genesis target is winnable");
+    let signature = libcrux_ml_dsa::ml_dsa_87::sign(
+        &keypair.signing_key,
+        attempt_id_v2(&attempt).as_byte_slice(),
+        PALW_ATTEMPT_V2_MLDSA87_CONTEXT,
+        [0x5Au8; 32],
+    )
+    .expect("ML-DSA-87 sign")
+    .as_ref()
+    .to_vec();
+    block.header.nonce = nonce;
+    block.header.palw_commitment = PalwAttemptEnvelopeV2 { attempt, signature }.encode_wire();
+    block.header.finalize();
+    let hash = block.header.hash;
+
+    ctx.validate_and_insert_block(block.to_immutable()).await.assert_valid_utxo_tip();
+    assert_eq!(ctx.consensus.get_sink(), hash, "the block a real Qwen2.5-1.5B execution produced is the chain");
+    eprintln!("dense drill: block {hash} accepted");
+}
+
 /// **A block produced by a REAL Qwen3.6-shaped execution, accepted by consensus** — the goal
 /// gate's own sentence, "実用的にブロック生成に使用できる", as a test.
 ///
@@ -1466,6 +1620,13 @@ async fn palw_rc_the_real_qwen36_artifact_produces_a_block() {
     let path = std::env::var("MISAKA_QWEN36_ARTIFACT").expect("MISAKA_QWEN36_ARTIFACT=/path/to/q36-40L.palwq36");
     let opened = std::time::Instant::now();
     let artifact = misaka_palw_base0::qwen36::open_artifact(std::path::Path::new(&path)).expect("the artifact opens");
+    // **The drill's artifact must be the PUBLIC NETWORK's artifact.** Otherwise this passes for a
+    // file nobody on testnet-11 can use, which is the one thing the drill exists to rule out.
+    assert_eq!(
+        artifact.artifact_root(),
+        kaspa_consensus_core::config::params::PALW_RC_GENESIS_QWEN36_ARTIFACT_ROOT,
+        "MISAKA_QWEN36_ARTIFACT is not the artifact testnet-11 registers"
+    );
     eprintln!(
         "drill: mapped {} layers / {:.2} GiB in {:?}",
         artifact.shape.n_layers(),
@@ -1503,41 +1664,13 @@ async fn qwen36_block_e2e(artifact: misaka_palw_base0::qwen36::Qwen36ArtifactV1,
     let rooted = std::time::Instant::now();
     let artifact_root = artifact.artifact_root();
     eprintln!("drill: artifact root {artifact_root} in {:?}", rooted.elapsed());
-    // **Two-phase, and the second phase is the current truth.** The genesis assembly ends at the
-    // boot cost gate today: the class's derived close is ~1.24x the 80 KiB carrier ceiling, all
-    // of it Merkle-path bytes on contiguous leaf runs (each opened leaf carries its own full
-    // path; a RANGE opening — one shared subtree per contiguous run — is the identified fix and
-    // roughly halves every close). Until that format lands, this test asserts the GATE: the
-    // refusal must be the cost ceiling, by name — not a shape error, not coverage, not the
-    // ladder. The day the derived cost fits, the match arm below stops firing and the full block
-    // path resumes without an edit here.
-    let params = match kaspa_consensus_core::config::params::palw_rc_params_with_qwen36(base_root, artifact_root, registry) {
-        Ok(params) => params,
-        Err(e) => {
-            let text = format!("{e:?}");
-            assert!(
-                text.contains("exceeds the ceiling this ruleset pays for"),
-                "the two-class genesis may only fail at the cost gate, got: {text}"
-            );
-            let derived = kaspa_consensus_core::palw_class_admission_v2::derive_court_cost_v1(
-                &qwen36_profile_v1(QWEN36_35B_A3B).expect("projects"),
-            )
-            .expect("derives");
-            eprintln!(
-                "qwen36 block e2e ({model_id}): held at the boot cost gate — derived close {} vs ceiling {} (macs {} / {}, operands {} / 8); range openings are the identified unlock",
-                derived.max_close_bytes,
-                80 * 1024,
-                derived.max_terminal_macs,
-                16 * 1024 * 1024,
-                derived.max_operand_count,
-            );
-            // The gap is pinned so it can only shrink: a change that grows the close past this
-            // fails here before it fails a challenger.
-            assert!(derived.max_close_bytes <= 104_000, "the derived close regressed past its pinned bound: {}", derived.max_close_bytes);
-            assert!(derived.max_terminal_macs <= 16 * 1024 * 1024, "the MAC arm regressed past the ceiling");
-            return;
-        }
-    };
+    // The two-class genesis, assembled by the same function the shipped network uses. It once
+    // failed here at the boot cost gate (the class's derived close was 1.24x the carrier ceiling)
+    // and this call was wrapped in a match that asserted the refusal and returned — which was
+    // honest while it lasted and became a FAIL-OPEN the moment the cost fit: a future regression
+    // past the ceiling would have made this test pass while producing no block. Unconditional now.
+    let params = kaspa_consensus_core::config::params::palw_rc_params_with_qwen36(base_root, artifact_root, registry)
+        .expect("the two-class RC genesis card assembles");
     let bundle = match &params.palw_consensus_mode {
         kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) => b.clone(),
         _ => panic!("a ConsensusV2 network"),

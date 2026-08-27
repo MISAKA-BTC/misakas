@@ -61,6 +61,23 @@ impl PalwBackendRegistry {
         // The hybrid class. Its id is the court profile's — the same derivation the registration
         // used — so a chain that named it and a node that holds its artifact meet on two facts,
         // and a mismatch on either is a refusal that says which.
+        // **The A16 dense class.** Its artifact rides the same container as the floor's, so it is
+        // found in the same list — by its DIGEST, which is what the chain registered. Tried before
+        // the hybrid because both are dense-file classes and only the id separates them.
+        let dense_id = kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_class_id_v1();
+        if class_id == dense_id {
+            if let Some(artifact) = self.class_artifacts.iter().find(|a| a.artifact_digest() == artifact_root) {
+                return Ok(Box::new(misaka_palw_base0::qwen25_a16_backend::Qwen25A16Backend::new(
+                    std::sync::Arc::new(artifact.clone()),
+                    self.network_id.clone(),
+                    dense_id,
+                    kaspa_consensus_core::palw_qwen25_profile::QWEN25_A16_CANONICAL,
+                )));
+            }
+            return Err(format!(
+                "the chain names the Qwen2.5 A16 class and this node holds no artifact whose digest is {artifact_root}                  (pass the converted .palwart with --palw-class-artifact)"
+            ));
+        }
         let qwen36_id = qwen36_class_id_v1();
         if class_id == qwen36_id {
             if let Some((_, artifact)) = self.qwen36_artifacts.iter().find(|(root, _)| *root == artifact_root) {
@@ -134,6 +151,96 @@ mod tests {
 
     fn registry() -> PalwBackendRegistry {
         PalwBackendRegistry::new(court(), Vec::new(), Vec::new(), b"misaka-palw-rc".to_vec())
+    }
+
+    /// **The PUBLIC network's own class set, resolved against a node's holdings.**
+    ///
+    /// Not a fixture: this reads `Params::from(testnet-11)` — the ruleset a real node boots with —
+    /// walks the classes its genesis registers, and asks the registry for each. The floor must
+    /// resolve on a node holding nothing (it is derived); Qwen3.6 must be refused BY ROOT with the
+    /// message that names the flag, because a node without the weights still validates the chain
+    /// and simply cannot produce for that class.
+    ///
+    /// This is the test that would have caught a two-class ruleset whose second class no node
+    /// could ever name — the class id the params register and the class id the registry dispatches
+    /// on are derived in different modules, and nothing else compares them.
+    #[test]
+    fn the_public_networks_classes_resolve_the_way_a_node_would_ask() {
+        use kaspa_consensus_core::config::params::palw_rc_qwen36_is_registered;
+        let params: kaspa_consensus_core::config::params::Params =
+            kaspa_consensus_core::network::NetworkId::with_suffix(kaspa_consensus_core::network::NetworkType::Testnet, 11).into();
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
+            panic!("testnet-11 ships a ConsensusV2 bundle");
+        };
+        let classes: Vec<(Hash64, Hash64)> = bundle
+            .genesis_objects
+            .iter()
+            .filter_map(|o| match o {
+                kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegistered { class_id, artifact_root, .. } => {
+                    Some((*class_id, *artifact_root))
+                }
+                _ => None,
+            })
+            .collect();
+        let expected = 1
+            + usize::from(palw_rc_qwen36_is_registered())
+            + usize::from(kaspa_consensus_core::config::params::palw_rc_qwen25_a16_is_registered());
+        assert_eq!(classes.len(), expected, "the shipped network registers exactly the classes its pins describe");
+
+        let bare = PalwBackendRegistry::new(bundle.court, Vec::new(), Vec::new(), params.net.to_string().into_bytes());
+        let (floor_id, floor_root) = classes[0];
+        assert_eq!(floor_id, bundle.base_class_id, "the floor is registered first");
+        let floor = bare.resolve(floor_id, floor_root).expect("the derived floor resolves on a node holding nothing");
+        assert_eq!(floor.model_id(), "PALW-BASE-0/rc");
+
+        // Every non-floor class must be one this build can NAME (its id derives from a pinned
+        // geometry here) and REFUSE BY ROOT on a node holding nothing. The floor is index 0; the
+        // rest are checked by membership rather than by position, because the registration list's
+        // order is the genesis gate's business and not this test's.
+        let known: Vec<(Hash64, Hash64)> = [
+            palw_rc_qwen36_is_registered()
+                .then(|| (qwen36_class_id_v1(), kaspa_consensus_core::config::params::PALW_RC_GENESIS_QWEN36_ARTIFACT_ROOT)),
+            kaspa_consensus_core::config::params::palw_rc_qwen25_a16_is_registered().then(|| {
+                (
+                    kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_class_id_v1(),
+                    kaspa_consensus_core::config::params::PALW_RC_GENESIS_QWEN25_A16_ARTIFACT_ROOT,
+                )
+            }),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        for (id, root) in &known {
+            let (_, registered_root) = classes
+                .iter()
+                .find(|(c, _)| c == id)
+                .unwrap_or_else(|| panic!("the network registers a class this build dispatches on: {id}"));
+            assert_eq!(registered_root, root, "the network's artifact root for {id} is the pinned one");
+            let err = match bare.resolve(*id, *root) {
+                Err(e) => e,
+                Ok(b) => panic!("a node holding no weights resolved {id} to {}", b.model_id()),
+            };
+            assert!(err.contains("--palw-class-artifact"), "the refusal names the flag that fixes it: {err}");
+        }
+        assert_eq!(known.len() + 1, classes.len(), "every registered class is one this build can name");
+
+        if let Some(&(qwen_id, qwen_root)) = classes.iter().find(|(c, _)| *c == qwen36_class_id_v1()) {
+            assert_eq!(qwen_id, qwen36_class_id_v1(), "the registered second class is the one this build dispatches on");
+            assert_eq!(
+                qwen_root,
+                kaspa_consensus_core::config::params::PALW_RC_GENESIS_QWEN36_ARTIFACT_ROOT,
+                "the network's artifact root is the pinned one"
+            );
+            // And an artifact whose computed root is not the chain's is refused too — the file's
+            // NAME is never the answer.
+            let alien = PalwBackendRegistry::new(
+                bundle.court,
+                Vec::new(),
+                vec![(Hash64::from_u64_word(0xA11E), std::sync::Arc::new(misaka_palw_base0::qwen36::qwen36_dev_fixture(1, 8)))],
+                params.net.to_string().into_bytes(),
+            );
+            assert!(matches!(alien.resolve(qwen_id, qwen_root), Err(_)), "a file with the wrong root is not this class");
+        }
     }
 
     /// **The floor resolves on a node with nothing installed.** It is derived, so it needs no

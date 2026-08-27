@@ -2391,6 +2391,17 @@ pub fn palw_rc_params_with_qwen36(
     qwen36_artifact_root: crate::Hash64,
     genesis_bonds: Vec<crate::palw_fp_devnet_v3::PalwGenesisBondSpecV1>,
 ) -> Result<Params, crate::palw_mode_v2::PalwModeV2Error> {
+    palw_rc_params_with_classes(base0_artifact_root, qwen36_artifact_root, None, genesis_bonds)
+}
+
+/// The same assembly, with the A16 dense class when its root is pinned. `None` is the two-class
+/// network exactly as before — an unpinned class is absent, never a placeholder.
+pub fn palw_rc_params_with_classes(
+    base0_artifact_root: crate::Hash64,
+    qwen36_artifact_root: crate::Hash64,
+    qwen25_a16_artifact_root: Option<crate::Hash64>,
+    genesis_bonds: Vec<crate::palw_fp_devnet_v3::PalwGenesisBondSpecV1>,
+) -> Result<Params, crate::palw_mode_v2::PalwModeV2Error> {
     use crate::palw_mode_v2::PalwModeV2Error as E;
     let invalid = |what: &'static str| E::Invalid(what);
 
@@ -2412,13 +2423,20 @@ pub fn palw_rc_params_with_qwen36(
         })
         .ok_or(invalid("the base assembly carries no class registration"))?;
 
-    let (_profile, entry, object) = crate::palw_qwen36_profile::qwen36_registration_v1(
-        qwen36_artifact_root,
-        bundle.state.min_grantable_share_permille(),
-        slash,
-        target,
-    )
-    .map_err(|_| invalid("the Qwen3.6 registration does not derive"))?;
+    let share = bundle.state.min_grantable_share_permille();
+    let (_profile, entry, object) =
+        crate::palw_qwen36_profile::qwen36_registration_v1(qwen36_artifact_root, share, slash, target)
+            .map_err(|_| invalid("the Qwen3.6 registration does not derive"))?;
+    // The A16 dense class, when its artifact root is pinned. Registered at the SAME minimum
+    // grantable share as the hybrid, from the same floor economics — a class does not choose its
+    // own weight, and two entrants arriving in one genesis must not differ in how they were sized.
+    let dense = match qwen25_a16_artifact_root {
+        Some(root) => Some(
+            crate::palw_qwen25_profile::qwen25_a16_registration_v1(root, share, slash, target)
+                .map_err(|_| invalid("the Qwen2.5 A16 registration does not derive"))?,
+        ),
+        None => None,
+    };
 
     // The two-entry catalog. Two DIFFERENT orders, on purpose: the CATALOG is a commitment and
     // sorts ascending by class id (its canonical form — two assemblers of one class set must
@@ -2430,11 +2448,17 @@ pub fn palw_rc_params_with_qwen36(
     let base_entry = base_catalog.entries().first().ok_or(invalid("the RC catalog lost its floor"))?.clone();
     debug_assert_eq!(base_profile.shape_profile_id(), bundle.base_class_id, "the floor the base assembly registered");
     let mut entries = vec![base_entry, entry];
+    if let Some((_, dense_entry, _)) = &dense {
+        entries.push(dense_entry.clone());
+    }
     entries.sort_by(|a, b| a.class_id.cmp(&b.class_id));
     let catalog =
-        crate::palw_mode_v2::PalwClassCatalogV2::new(entries).map_err(|_| invalid("the two-class catalog is not well-formed"))?;
+        crate::palw_mode_v2::PalwClassCatalogV2::new(entries).map_err(|_| invalid("the registered catalog is not well-formed"))?;
     bundle.class_catalog_root = catalog.root();
     bundle.genesis_objects.push(object);
+    if let Some((_, _, dense_object)) = dense {
+        bundle.genesis_objects.push(dense_object);
+    }
 
     // Both gates again, from scratch, over the network actually being shipped.
     params.validate_palw_v2()?;
@@ -2472,6 +2496,56 @@ pub const PALW_RC_GENESIS_ARTIFACT_ROOT: crate::Hash64 = crate::Hash64::from_byt
     0xbe, 0x08, 0xe0, 0xcc, 0x07, 0x77, 0xb0, 0x80, 0xe2, 0xdc, 0xe9, 0x35, 0x5d, 0x35, 0x76, 0x03, 0x6b, 0x73, 0x45, 0x45, 0xb8,
     0xdf,
 ]);
+
+/// **The Qwen3.6 class's artifact root — the one fact about it code cannot mint.**
+///
+/// `Qwen36ArtifactV1::artifact_root()` over the converted `.palwq36`: the shape, every parameter
+/// table, the rotary table and every weight byte, each under a length-prefixed tagged name. A node
+/// that computes a different root for its file is holding different weights, whatever the file is
+/// called — which is why the chain names the ROOT and never a path or a filename.
+///
+/// Measured on the artifact converted from
+/// `Qwen3.6-abliterated-35b-Claude-4.7-Q4_K_M.gguf` (33.27 GiB of `int8` codes over 40 layers).
+/// The conversion is deterministic — see `docs/qwen36-public-testnet-runbook.md` for the recipe
+/// and the two-run check — so an operator may either rebuild this file from the published GGUF or
+/// download it and let their node verify the root; both routes end at this constant.
+///
+/// **Unset (all zero) means the class is not on the network.** `palw_rc_shipped_params` then
+/// assembles the one-class RC exactly as before, so a build with no Qwen3.6 root is the shipped
+/// floor-only network rather than a broken two-class one.
+pub const PALW_RC_GENESIS_QWEN36_ARTIFACT_ROOT: crate::Hash64 = crate::Hash64::from_bytes([
+    0xc9, 0x70, 0xd6, 0x93, 0x27, 0xbf, 0x65, 0xd6, 0xb2, 0x50, 0x2a, 0x8e, 0x53, 0xa0, 0x21, 0x73, 0x9f, 0x25, 0x79, 0xc2, 0x27,
+    0x47, 0x54, 0x79, 0x08, 0x69, 0x32, 0x03, 0x52, 0xa9, 0x2c, 0x7a, 0x4a, 0x8d, 0xeb, 0x5d, 0xa0, 0x8e, 0x27, 0xe9, 0x0f, 0x09,
+    0xd5, 0xae, 0x9b, 0x4f, 0x7e, 0x44, 0xc9, 0x83, 0x30, 0x4a, 0xf7, 0xbb, 0xa8, 0x12, 0x7d, 0x28, 0xe2, 0xd8, 0x59, 0x96, 0xb2,
+    0x36,
+]);
+
+/// **The Qwen2.5-1.5B A16 class's artifact root** — `Base0ArtifactV1::artifact_digest()` over the
+/// `.palwart` converted from `Qwen/Qwen2.5-1.5B-Instruct` with `qwen25-convert --a16`.
+///
+/// The dense tier the network registers is W8A16, not the floor's W8A8: static PTQ of this
+/// checkpoint into a seven-bit activation stream degenerates (ADR-0053), while on A16 the same
+/// weights score FAITHFUL against their own float reference (top-1 45/57, top-5 56/57, rank
+/// correlation 0.893, per-layer stream cosine 0.98–1.00) and answer "The capital of France is
+/// Paris." at 33 tokens per second. A class is its graph, so those are two classes and only one of
+/// them is worth a network's cadence.
+///
+/// Zero means the class is absent — the two-class network exactly as before, never a placeholder.
+pub const PALW_RC_GENESIS_QWEN25_A16_ARTIFACT_ROOT: crate::Hash64 = crate::Hash64::from_bytes([
+    0xc0, 0x0f, 0xaa, 0x48, 0x0f, 0x23, 0x44, 0xd4, 0xa7, 0x37, 0xe5, 0xb2, 0xe8, 0x7a, 0xb6, 0x06, 0x4d, 0x8d, 0x6e, 0x42, 0xc1,
+    0xff, 0xeb, 0x6a, 0xa0, 0xa1, 0x4e, 0xd6, 0x21, 0x34, 0x29, 0x9a, 0x7c, 0x9d, 0xc0, 0x8f, 0x15, 0x34, 0x2c, 0xef, 0xca, 0x1e,
+    0x29, 0x39, 0x08, 0x10, 0xe6, 0xd2, 0xc5, 0x87, 0x9f, 0x4c, 0x38, 0x53, 0xeb, 0xe4, 0x3a, 0x9e, 0x2d, 0x47, 0xed, 0x57, 0xba,
+    0x17,
+]);
+
+pub fn palw_rc_qwen25_a16_is_registered() -> bool {
+    PALW_RC_GENESIS_QWEN25_A16_ARTIFACT_ROOT != crate::Hash64::from_bytes([0u8; 64])
+}
+
+/// Is the Qwen3.6 class part of this build's network?
+pub fn palw_rc_qwen36_is_registered() -> bool {
+    PALW_RC_GENESIS_QWEN36_ARTIFACT_ROOT != crate::Hash64::from_bytes([0u8; 64])
+}
 
 /// **The genesis bond — the three facts code cannot mint, and does not pretend to.**
 ///
@@ -4177,18 +4251,28 @@ pub fn palw_rc_shipped_params() -> Params {
     if !palw_rc_genesis_card_is_set() {
         return palw_rc_base_params();
     }
-    palw_rc_params_from_artifacts(
-        PALW_RC_GENESIS_ARTIFACT_ROOT,
-        PALW_RC_GENESIS_BONDS
-            .iter()
-            .map(|c| crate::palw_fp_devnet_v3::PalwGenesisBondSpecV1 {
-                bond: crate::palw_state_v2::PalwBondKeyV2(crate::config::premine::premine_outpoint(c.premine_index)),
-                pubkey: c.bond_pubkey.to_vec(),
-                operator_pubkey: c.operator_pubkey.to_vec(),
-                payout_payload: crate::Hash64::from_bytes(c.payout_payload),
-            })
-            .collect(),
-    )
+    let bonds: Vec<_> = PALW_RC_GENESIS_BONDS
+        .iter()
+        .map(|c| crate::palw_fp_devnet_v3::PalwGenesisBondSpecV1 {
+            bond: crate::palw_state_v2::PalwBondKeyV2(crate::config::premine::premine_outpoint(c.premine_index)),
+            pubkey: c.bond_pubkey.to_vec(),
+            operator_pubkey: c.operator_pubkey.to_vec(),
+            payout_payload: crate::Hash64::from_bytes(c.payout_payload),
+        })
+        .collect();
+    // **Two classes when the Qwen3.6 root is pinned, one when it is not.** The branch is on a
+    // CONSTANT, not on what the node happens to hold: a network's class set is part of its ruleset
+    // id, so a node that decided this from a local file would fingerprint differently from its
+    // peers and the two would refuse each other — which is the fail-safe direction but the wrong
+    // question. Whether this node can SERVE the class is a separate matter, answered by the
+    // backend registry at the moment a claim names it (`--palw-class-artifact`); a node without
+    // the weights still validates the chain, it simply cannot produce for that class.
+    if palw_rc_qwen36_is_registered() {
+        let dense = palw_rc_qwen25_a16_is_registered().then_some(PALW_RC_GENESIS_QWEN25_A16_ARTIFACT_ROOT);
+        return palw_rc_params_with_classes(PALW_RC_GENESIS_ARTIFACT_ROOT, PALW_RC_GENESIS_QWEN36_ARTIFACT_ROOT, dense, bonds)
+            .unwrap_or_else(|e| panic!("the pinned PALW-RC genesis card does not assemble: {e}"));
+    }
+    palw_rc_params_from_artifacts(PALW_RC_GENESIS_ARTIFACT_ROOT, bonds)
     // A card that is set and does not assemble is a binary that would boot a network its own
     // genesis gate refuses. Failing at startup with the gate's own message is the only honest
     // outcome; silently falling back to the bundle-free base would put a node on a chain it
@@ -4670,6 +4754,22 @@ mod consensus_params_id_tests {
             // prices runs, and the derivation then CHOSE the hybrid class's constants — canonical
             // (7,2), n_ctx 8 — landing its worst close at 73,636 of the 81,920 carrier. The
             // two-class genesis assembles from this value on.
+            // **And the move this whole line was for: testnet-11 now registers TWO classes.**
+            // `PALW_RC_GENESIS_QWEN36_ARTIFACT_ROOT` is pinned, so `palw_rc_shipped_params`
+            // assembles the two-class card — the catalog gains the Qwen3.6 entry, the genesis
+            // object list gains its registration, and both are inside the ruleset id. A node on
+            // the old value and a node on this one are on different networks and find out at the
+            // handshake, which is the direction to fail in; joining needs the re-mint the whole
+            // day's work already forced.
+            // Moved again by the A16 dense tier joining the COURT (2026-08-27): two kernels the tier
+            // had always performed and the catalog never named (its rotation and its elementwise
+            // product), and the tile floor down to 4 so an 8,960-lane reduction can close. The
+            // catalog root is inside the ruleset id, so teaching the court a new op moves the
+            // network — the same coordinated upgrade as every other move on this line.
+            // **THREE classes now.** The A16 dense tier joins the floor and the hybrid: the
+            // Qwen2.5-1.5B artifact root is pinned, so `palw_rc_shipped_params` registers it in
+            // genesis and the catalog gains its entry. Same handshake consequence as every other
+            // move on this line, and the same remedy — everyone upgrades together.
             // And once more for the SHARE-RAISE path (ADR-0054, 2026-08-27): `PalwStateParamsV2`
             // gains `class_growth_permille` and `base_class_reserve_permille`, and the RC bundle
             // turns them on at 250‰ / 500‰. The state params are borsh-serialized into
@@ -4678,7 +4778,12 @@ mod consensus_params_id_tests {
             // floor forever — which is exactly what a fingerprint is for. Lands on the same
             // re-mint as the class above; no other preset carries a PALW bundle, so no other
             // preset moves.
-            ("testnet-11", TESTNET11_PARAMS, "d4ec4a40b1d548dd0d133b191ad78be43f9769d03e2bf4ab57b8200617035677"),
+            // **Re-derived at the merge of those two lines (2026-08-27).** The three-class card and
+            // ADR-0054's share rule landed on separate branches and both move this value, so the
+            // pin here is NEITHER side's: a fingerprint is a function of the whole ruleset, not a
+            // sum of diffs, and carrying one side's number through a merge would pin a network
+            // nobody runs.
+            ("testnet-11", TESTNET11_PARAMS, "ab36f3617b52b65cfea5c852a39bff0f312b201689a46b17266c04dc7d04a0fd"),
             ("simnet", SIMNET_PARAMS, "135e88c69a659d3cf4b5ce8275953c7597b2c67b03d2a74b3d0696c5d0b703fa"),
             ("devnet", DEVNET_PARAMS, "42cc6be92506a14654cb676184e1416796dec682b15e93cb9c639e8e0d77efa5"),
         ]

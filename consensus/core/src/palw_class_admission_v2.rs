@@ -253,7 +253,7 @@ fn decode_pin_price_v1(profile: &PalwShapeProfileV3, decode: u64) -> Option<u64>
 /// attempt more for a longer job — `pwu_per_inference` is per inference — so the longest job the
 /// class admits is a job the class must be prosecutable at.
 pub fn derive_court_cost_v1(profile: &PalwShapeProfileV3) -> Result<PalwCourtCostV1, PalwClassAdmissionError> {
-    use crate::palw_step::{PALW_STEP_INPUT_CHECKPOINT_STATE, PALW_STEP_INPUT_KV_K, PALW_STEP_INPUT_KV_V, PalwStepOpKindV1 as Op};
+    use crate::palw_step::{PALW_STEP_INPUT_KV_K, PALW_STEP_INPUT_KV_V, PalwStepOpKindV1 as Op};
     let over = || PalwClassAdmissionError::Profile("the class's court cost overflows a u64".to_string());
     let mut cost = PalwCourtCostV1 { max_close_bytes: 0, max_terminal_macs: 0, max_operand_count: 0 };
 
@@ -275,24 +275,10 @@ pub fn derive_court_cost_v1(profile: &PalwShapeProfileV3) -> Result<PalwCourtCos
 
             // The artifact bytes this node's parameters occupy, per catalogued kernel. A node with
             // no weight operand opens nothing from the artifact — its inputs ride the leg.
-            let lane_sliced = [
-                crate::palw_step_refute::KDESC_A16_REQUANTIZE,
-                crate::palw_step_refute::KDESC_A16_ADD_ELEM,
-                crate::palw_step_refute::KDESC_Q36_SIGMOID,
-                crate::palw_step_refute::KDESC_Q36_GATE_APPLY,
-                crate::palw_step_refute::KDESC_Q36_MUL_WIDE,
-                crate::palw_step_refute::KDESC_Q36_RESCALE_ROW,
-                crate::palw_step_refute::KDESC_Q36_SILU,
-            ]
-            .iter()
-            .any(|d| crate::palw_step::kernel_semantics_id_v1(d) == node.kernel_semantics_id)
-                || [
-                    crate::palw_step_refute::KDESC_Q36_L2_NORM,
-                    crate::palw_step_refute::KDESC_Q36_RMS_NORM_WIDE,
-                    crate::palw_step_refute::KDESC_Q36_HEAD_RMS_NORM,
-                ]
-                    .iter()
-                    .any(|d| crate::palw_step::kernel_semantics_id_v1(d) == node.kernel_semantics_id);
+            // ONE list, in the module that owns the slice derivations — this arm carried its own
+            // copy for a round and priced a lane-sliced node as if it opened whole rows.
+            let lane_sliced = crate::palw_step_refute::palw_kernel_is_lane_sliced_v1(node.kernel_semantics_id)
+                || crate::palw_step_refute::palw_kernel_is_head_sliced_v1(node.kernel_semantics_id);
             let strided_combine = node.kernel_semantics_id
                 == crate::palw_step::kernel_semantics_id_v1(crate::palw_step_refute::KDESC_Q36_MOE_COMBINE);
             let head_sliced_gdn = node.op_kind == Op::GatedDeltaNet

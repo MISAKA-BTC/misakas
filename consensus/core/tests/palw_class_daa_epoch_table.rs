@@ -526,3 +526,86 @@ fn the_share_rule_fires_only_where_it_should() {
     idle.step(None, &[]);
     assert_eq!(idle.state.class_share_permille(&qwen), before, "an outage is nobody's fault and costs nobody their share");
 }
+
+/// **The shipped three-class card, under ADR-0054: both entrants earn, the floor funds both.**
+///
+/// `palw_rc_shipped_params` is what a node actually runs — the floor, the Qwen3.6 hybrid tier and
+/// the Qwen2.5-A16 dense tier, each pinned by its own artifact root. The share rule and the
+/// three-class card landed on separate branches; this is the property that only exists once they
+/// are together: two classes drawing on ONE reservoir, in one epoch, without either of them or the
+/// pair of them breaching the floor's reserve.
+#[test]
+fn the_shipped_three_class_card_grows_both_entrants() {
+    use kaspa_consensus_core::config::params::palw_rc_shipped_params;
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+
+    let params = palw_rc_shipped_params();
+    let PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
+        panic!("the shipped RC card assembles a ConsensusV2 network")
+    };
+    let classes: Vec<Hash64> = bundle
+        .genesis_objects
+        .iter()
+        .filter_map(|o| match o {
+            Obj::ClassRegistered { class_id, .. } => Some(*class_id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(classes.len(), 3, "the floor, the hybrid tier and the dense tier");
+    let (base, entrants) = (classes[0], &classes[1..]);
+    assert_eq!(base, bundle.state.base_class_id(), "the floor registers first");
+
+    let p = bundle.state.clone();
+    assert!(p.class_growth_permille() > 0, "the shipped bundle carries ADR-0054");
+    let epoch_length = p.epoch_length();
+    let reserve = p.base_class_reserve_permille();
+    let mut chain = Chain {
+        state: PalwChainStateV2::genesis(),
+        params: p,
+        daa: 0,
+        produced: Default::default(),
+        bond: kaspa_consensus_core::config::premine::premine_outpoint(0),
+    };
+    chain.step(None, &bundle.genesis_objects);
+    for entrant in entrants {
+        assert_eq!(chain.state.class_share_permille(entrant), Some(1), "an entrant enters on the grant floor");
+    }
+
+    println!();
+    println!("=== the shipped three-class card, ADR-0054 on ===");
+    println!("{:>5} {:>12} {:>12} {:>12}", "epoch", "floor ‰", "entrant A ‰", "entrant B ‰");
+    for _ in 0..10u64 {
+        // Each entrant produces every block its own budget allows; the floor takes the rest.
+        let mut quota: Vec<u64> = entrants
+            .iter()
+            .map(|c| chain.state.epoch_budgets().and_then(|b| b.budget_blocks.get(c).copied()).unwrap_or(0))
+            .collect();
+        loop {
+            let next = entrants.iter().zip(quota.iter_mut()).find(|(_, left)| **left > 0);
+            let class = match next {
+                Some((class, left)) => {
+                    *left -= 1;
+                    *class
+                }
+                None => base,
+            };
+            chain.step(Some(class), &[]);
+            if (chain.daa + 1) % epoch_length == 0 {
+                break;
+            }
+        }
+        chain.step(Some(base), &[]); // the crossing pays
+        let floor_share = chain.state.class_share_permille(&base).unwrap();
+        let shares: Vec<u16> = entrants.iter().map(|c| chain.state.class_share_permille(c).unwrap()).collect();
+        println!("{:>5} {:>11}‰ {:>11}‰ {:>11}‰", chain.daa / epoch_length - 1, floor_share, shares[0], shares[1]);
+        assert_eq!(
+            floor_share as u32 + shares.iter().map(|s| u32::from(*s)).sum::<u32>(),
+            1000,
+            "three classes, one denominator"
+        );
+        assert!(floor_share >= reserve, "the floor funds both entrants and still keeps its reserve");
+    }
+    for (entrant, share) in entrants.iter().zip(entrants.iter().map(|c| chain.state.class_share_permille(c).unwrap())) {
+        assert!(share > 1, "class {entrant} earned its way off the grant floor");
+    }
+}
