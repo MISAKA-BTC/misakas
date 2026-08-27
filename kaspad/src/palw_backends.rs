@@ -64,18 +64,23 @@ impl PalwBackendRegistry {
         // **The A16 dense class.** Its artifact rides the same container as the floor's, so it is
         // found in the same list — by its DIGEST, which is what the chain registered. Tried before
         // the hybrid because both are dense-file classes and only the id separates them.
-        let dense_id = kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_class_id_v1();
-        if class_id == dense_id {
+        if let Some(entry) = misaka_palw_base0::classes::canonical_classes_v1(&self.court)
+            .into_iter()
+            .filter(|c| matches!(c.source, misaka_palw_base0::classes::ArtifactSourceV1::ConvertedA16))
+            .find(|c| c.class_id() == class_id)
+        {
             if let Some(artifact) = self.class_artifacts.iter().find(|a| a.artifact_digest() == artifact_root) {
                 return Ok(Box::new(misaka_palw_base0::qwen25_a16_backend::Qwen25A16Backend::new(
                     std::sync::Arc::new(artifact.clone()),
                     self.network_id.clone(),
-                    dense_id,
-                    kaspa_consensus_core::palw_qwen25_profile::QWEN25_A16_CANONICAL,
+                    class_id,
+                    entry.canonical_job,
                 )));
             }
             return Err(format!(
-                "the chain names the Qwen2.5 A16 class and this node holds no artifact whose digest is {artifact_root}                  (pass the converted .palwart with --palw-class-artifact)"
+                "the chain names the {} class and this node holds no artifact whose digest is {artifact_root} \
+                 (pass the converted .palwart with --palw-class-artifact)",
+                entry.model_id
             ));
         }
         let qwen36_id = qwen36_class_id_v1();

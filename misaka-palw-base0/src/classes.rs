@@ -28,7 +28,7 @@ use kaspa_consensus_core::palw_base0_profile::{
 };
 use kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2;
 use kaspa_consensus_core::palw_qwen25_profile::{
-    QWEN25_1_5B, QWEN25_3B, qwen25_admissible_geometry_v1, qwen25_artifact_shape_v1, qwen25_profile_v1,
+    PalwQwen25GeometryV1, QWEN25_1_5B, QWEN25_A16_CANONICAL, qwen25_a16_profile_v1,
 };
 use kaspa_consensus_core::palw_step::PalwShapeProfileV3;
 use kaspa_hashes::Hash64;
@@ -41,6 +41,12 @@ pub enum ArtifactSourceV1 {
     /// Quantized from a checkpoint offline and shipped as a file. The only way a real model can
     /// reach a node, because its weights are not a function of anything the node holds.
     Converted,
+    /// Converted like [`Self::Converted`], but the root a registration pins is the artifact's own
+    /// **digest**, not an operand-inventory root — the A16 tier's courts open logits tiles from
+    /// the trace, not weight rows from an inventory, so the digest is what its openings prove
+    /// against. Resolved by [`crate::qwen25_a16_backend::Qwen25A16Backend`], never by the floor's
+    /// integer engine.
+    ConvertedA16,
 }
 
 /// One class this build knows the canonical form of.
@@ -71,7 +77,11 @@ impl CanonicalClassV1 {
     /// inventory. **Not** `artifact_digest()`, which is the artifact's own content hash and is not
     /// what openings prove against.
     pub fn artifact_root(&self, artifact: &Base0ArtifactV1) -> Result<Hash64, InventoryBuildError> {
-        Ok(base0_inventory_v1(artifact, self.inventory_geometry)?.root())
+        match self.source {
+            // The A16 tier registers the artifact's own digest — see [`ArtifactSourceV1::ConvertedA16`].
+            ArtifactSourceV1::ConvertedA16 => Ok(artifact.artifact_digest()),
+            _ => Ok(base0_inventory_v1(artifact, self.inventory_geometry)?.root()),
+        }
     }
 
     /// Does this artifact have the shape this class is defined at? Checked field by field rather
@@ -100,13 +110,18 @@ impl CanonicalClassV1 {
     }
 }
 
-/// Every class this build can supply, at the geometry a given court admits.
+/// Every class this build can supply.
 ///
-/// The court is an argument because admissibility is a function of it: Qwen's own declared
-/// geometry is far past `PALW_STEP_MAX_LEAVES`, so the class registers at a derived
-/// `(tile_len, n_ctx)` and a different court would derive a different one — and therefore a
-/// different class id.
+/// The court argument is currently unread: every entry is a FROZEN geometry — the floor's
+/// constant, and the A16 family's fixed context ladder — because a class id is the profile's id
+/// and a geometry that moved with the court would silently rename a class the chain already
+/// registered. Whether an entry is admissible under a given court is the admission gate's
+/// question (`verify_class_admission_v2`), answered at registration; the
+/// `a16_context_ladder_against_the_shipped_bundle` test pins that today's ladder fits today's
+/// court. The argument stays because "what this build can supply" is conceptually per-court, and
+/// every caller already holds one.
 pub fn canonical_classes_v1(court: &PalwCourtParamsV2) -> Vec<CanonicalClassV1> {
+    let _ = court;
     let mut out = Vec::new();
 
     // The floor. Derived, so it needs no deployment and every node has it.
@@ -133,29 +148,46 @@ pub fn canonical_classes_v1(court: &PalwCourtParamsV2) -> Vec<CanonicalClassV1> 
         });
     }
 
-    for (model_id, declared) in [("Qwen/Qwen2.5-1.5B", QWEN25_1_5B), ("Qwen/Qwen2.5-3B", QWEN25_3B)] {
-        let Some(g) = qwen25_admissible_geometry_v1(declared, court) else { continue };
-        let Ok(profile) = qwen25_profile_v1(g) else { continue };
-        let s = qwen25_artifact_shape_v1(g);
+    // **The A16 dense family: one arithmetic lineage, one entry per MODEL.**
+    //
+    // A class IS its graph (`shape_profile_id`), and the chain refuses a second registration of
+    // the same id — so two weight-sets of the same geometry need two profiles, and `n_ctx` is the
+    // axis that changes nothing else about the arithmetic. The base model sits at the geometry
+    // testnet-11's genesis registered (n_ctx 16, class f942e268…, asserted by test below); each
+    // later model in the lineage takes the next context bound. The REAL ceiling is the court's:
+    // n_ctx 20 is the last value the RC close budget admits (measured 2026-08-28), so this table
+    // has room for four models before the family needs a second axis.
+    //
+    // `artifact_shape` is what `qwen25-convert --a16` actually writes — `max_position` is the
+    // converter's rotary-table default and `eps_q` the engine's, both independent of the profile's
+    // `n_ctx`/`rms_eps_q` — so sibling models are NOT separable by shape. Registration therefore
+    // takes the model id from the operator (`--palw-register-class <model-id>`) when more than one
+    // entry matches, and the chain's duplicate-class refusal backstops a wrong pick of an already
+    // registered sibling.
+    for (model_id, n_ctx) in [("Qwen/Qwen2.5-1.5B", 16u32), ("Qwen/Qwen2.5-Coder-1.5B-Instruct", 17)] {
+        let g = PalwQwen25GeometryV1 { n_ctx, ..QWEN25_1_5B };
+        let Ok(profile) = qwen25_a16_profile_v1(g) else { continue };
         out.push(CanonicalClassV1 {
             model_id,
             profile,
             artifact_shape: Base0ShapeV1 {
-                n_layers: s.n_layers,
-                n_heads: s.n_heads,
-                n_kv_heads: s.n_kv_heads,
-                d_head: s.d_head,
-                d_ff: s.d_ff,
-                vocab: s.vocab,
-                max_position: s.max_position,
-                ln_theta_gen_q: LN_THETA_10000_GEN_Q,
-                eps_q: s.eps_q,
+                n_layers: g.layer_count as usize,
+                n_heads: g.attn_heads as usize,
+                n_kv_heads: g.attn_kv_heads as usize,
+                d_head: g.attn_head_dim as usize,
+                d_ff: g.ffn_dim as usize,
+                vocab: g.vocab_size as usize,
+                // The converter's rotary-table default, NOT the profile's n_ctx: the artifact
+                // states what the weights can do, the profile states what the court admits.
+                max_position: 512,
+                // Qwen2.5's rope base is 1e6; the A16 engine norms at the shipped 1 << 8.
+                ln_theta_gen_q: crate::artifact::LN_THETA_1000000_GEN_Q,
+                eps_q: 1 << 8,
             },
-            // The floor's shape of job, which is what `pwu_per_inference` is counted over. It is a
-            // declaration either way — the gate recounts it — so it is stated here once rather
-            // than chosen at each call site.
-            canonical_job: PALW_RC_BASE0_CANONICAL,
-            source: ArtifactSourceV1::Converted,
+            canonical_job: QWEN25_A16_CANONICAL,
+            source: ArtifactSourceV1::ConvertedA16,
+            // Unused by the A16 resolve path (the root is a digest), filled from the geometry so
+            // nothing downstream reads a floor constant by accident.
             inventory_geometry: PalwBase0GeometryV1 {
                 layer_count: g.layer_count,
                 hidden_dim: g.hidden_dim,
@@ -266,6 +298,10 @@ pub fn resolve_class_v1(
 ) -> Result<ResolvedClassV1, ClassResolveError> {
     let entry = canonical_classes_v1(court)
         .into_iter()
+        // The A16 tier resolves through its own backend (digest root, logits-tile courts) —
+        // matching it here would build a 1.7 GiB operand inventory per block and then refuse on
+        // the root anyway. Its dispatch lives in the backend registry.
+        .filter(|c| !matches!(c.source, ArtifactSourceV1::ConvertedA16))
         .find(|c| c.class_id() == class_id)
         .ok_or(ClassResolveError::UnknownClass { class_id })?;
 
@@ -274,6 +310,8 @@ pub fn resolve_class_v1(
             vec![Base0ArtifactV1::derive_deterministic(entry.artifact_shape, seed).map_err(ClassResolveError::Artifact)?]
         }
         ArtifactSourceV1::Converted => supplied.to_vec(),
+        // Filtered out of `entry` above — an A16 class resolves through its own backend.
+        ArtifactSourceV1::ConvertedA16 => unreachable!("A16 entries never reach the floor engine's resolve"),
     };
 
     let mut shape_error: Option<ClassResolveError> = None;
@@ -334,11 +372,13 @@ mod tests {
     #[test]
     fn every_canonical_class_agrees_with_its_own_profile() {
         for c in canonical_classes_v1(&court()) {
-            assert_eq!(
-                c.artifact_shape.eps_q, c.profile.base0_rms_eps_q,
-                "{}: the artifact would be quantized at one epsilon and adjudicated at another",
-                c.model_id
-            );
+            if !matches!(c.source, ArtifactSourceV1::ConvertedA16) {
+                assert_eq!(
+                    c.artifact_shape.eps_q, c.profile.base0_rms_eps_q,
+                    "{}: the artifact would be quantized at one epsilon and adjudicated at another",
+                    c.model_id
+                );
+            }
             assert_eq!(c.artifact_shape.n_layers, c.profile.layer_count as usize, "{}", c.model_id);
             assert_eq!(c.artifact_shape.d_ff, c.profile.ffn_dim as usize, "{}", c.model_id);
             assert_eq!(c.artifact_shape.vocab, c.profile.vocab_size as usize, "{}", c.model_id);
@@ -348,35 +388,47 @@ mod tests {
                 "{}: the artifact's width is not the graph's",
                 c.model_id
             );
-            assert_eq!(c.artifact_shape.max_position, c.inventory_geometry.n_ctx as usize, "{}", c.model_id);
+            match c.source {
+                // The A16 tier: the artifact states what the weights can do (the converter's
+                // rotary-table span), the profile states what the court admits — the two are
+                // decoupled BY DESIGN, and the only inequality that matters is that the class
+                // never asks for a position the artifact cannot rotate.
+                ArtifactSourceV1::ConvertedA16 => assert!(
+                    c.artifact_shape.max_position >= c.profile.n_ctx as usize,
+                    "{}: the court would admit positions the artifact cannot rotate",
+                    c.model_id
+                ),
+                _ => assert_eq!(c.artifact_shape.max_position, c.inventory_geometry.n_ctx as usize, "{}", c.model_id),
+            }
         }
     }
 
-    /// Qwen2.5-1.5B is registered at the ADMISSIBLE geometry, not the model's own — and its
-    /// epsilon is the constant's `1`, which is what the converter must now build at.
+    /// **The A16 family: the base model derives the class testnet-11's genesis registered, and
+    /// the Coder sibling derives a DIFFERENT class at the next rung of the context ladder.**
     ///
-    /// **The shipped court has no such entry at all**, and that is asserted first: the registry is
-    /// a function of the court, and a class whose closes no transaction can carry is one the
-    /// registry must not offer a converter a target for.
+    /// The first id is pinned byte-for-byte because it is on chain: a registry that stopped
+    /// deriving it could no longer name the class the network already runs (the exact failure
+    /// this rewrite closed — the old registry enumerated a non-A16 geometry no genesis ever
+    /// registered, and `--palw-register-class` refused even the running class's own artifact).
+    /// The sibling id only has to be admissible, distinct, and stable-under-this-test.
     #[test]
-    fn the_qwen_entry_is_the_admissible_one() {
-        assert!(
-            canonical_class_by_model_id_v1(&court(), "Qwen/Qwen2.5-1.5B").is_none(),
-            "the shipped court's cost ceiling admits no Qwen geometry, so the registry must not carry one"
+    fn the_a16_family_derives_the_genesis_class_and_a_distinct_sibling() {
+        let base = canonical_class_by_model_id_v1(&court(), "Qwen/Qwen2.5-1.5B").expect("the base A16 model is in the registry");
+        assert_eq!(
+            base.class_id().to_string(),
+            "f942e268f43f05461f648adcb76a1300dbedd93f022d3bba0e88c2ef4349e38f3ac1b70871f3b5195b3b2fb3da221f9c29fe291773a094596add6951aa7902c1",
+            "the registry no longer derives the class testnet-11 registered"
         );
-        let c = canonical_class_by_model_id_v1(&ladder_only_court(), "Qwen/Qwen2.5-1.5B").expect("1.5B is in the registry");
-        assert_eq!(c.artifact_shape.eps_q, 1, "the canonical epsilon is the class constant's, not the floor's 1<<8");
-        // The pair is the COURT's answer, not a literal — `qwen25_admissible_geometry_v1` searches
-        // it, and pinning one side of a search is how a fixture stops describing the thing it
-        // resolves. Under a ladder-only court the widest context wins, which is a different pair
-        // from the one a cost-bounded court would pick.
-        let derived = kaspa_consensus_core::palw_qwen25_profile::qwen25_admissible_geometry_v1(QWEN25_1_5B, &ladder_only_court())
-            .expect("the ladder admits a pair");
-        assert_eq!(c.inventory_geometry.tile_len, derived.tile_len);
-        assert_eq!(c.artifact_shape.max_position, derived.n_ctx as usize);
-        assert!(derived.n_ctx < QWEN25_1_5B.n_ctx, "the context still shrinks against the model's own 4096");
-        assert_eq!(c.artifact_shape.n_kv_heads, 2, "grouped-query attention survives into the artifact shape");
-        assert_eq!(c.source, ArtifactSourceV1::Converted);
+        assert_eq!(base.source, ArtifactSourceV1::ConvertedA16);
+        assert_eq!(base.canonical_job, QWEN25_A16_CANONICAL);
+        assert_eq!(base.profile.n_ctx, 16);
+
+        let coder = canonical_class_by_model_id_v1(&court(), "Qwen/Qwen2.5-Coder-1.5B-Instruct").expect("the sibling is in the registry");
+        assert_eq!(coder.profile.n_ctx, 17, "the sibling takes the next rung of the ladder");
+        assert_ne!(coder.class_id(), base.class_id(), "siblings must be DIFFERENT classes — the chain refuses a duplicate id");
+        // And the whole reason registration needs a model id: the two entries are
+        // indistinguishable by converted shape.
+        assert_eq!(coder.artifact_shape, base.artifact_shape, "siblings share one converted shape by design");
     }
 
     /// **The floor resolves with no file at all** — it is derived, which is why the RC needs no
@@ -412,14 +464,17 @@ mod tests {
         }
     }
 
-    /// A converted class with nothing supplied says WHICH class is missing its artifact, because
-    /// "resolution failed" on a node with several artifacts loaded is not actionable.
+    /// **A16 entries never resolve through the floor engine.** The registry knows them (they are
+    /// what registration derives), but `resolve_class_v1` must skip them: its resolution builds a
+    /// full operand inventory — 1.7 GiB of tree per call for a dense artifact — and would then
+    /// refuse on the root anyway, because an A16 registration pins the artifact's DIGEST. Their
+    /// backend dispatch lives in the kaspad registry, keyed on the same ledger.
     #[test]
-    fn a_converted_class_with_no_artifact_names_itself() {
-        let c = canonical_class_by_model_id_v1(&ladder_only_court(), "Qwen/Qwen2.5-1.5B").expect("1.5B");
-        match resolve_class_v1(&ladder_only_court(), c.class_id(), Hash64::from_u64_word(1), &[]) {
-            Err(ClassResolveError::NoArtifact { model_id }) => assert_eq!(model_id, "Qwen/Qwen2.5-1.5B"),
-            other => panic!("expected NoArtifact, got {other:?}"),
+    fn a16_entries_are_unknown_to_the_floor_resolver() {
+        let c = canonical_class_by_model_id_v1(&court(), "Qwen/Qwen2.5-1.5B").expect("1.5B");
+        match resolve_class_v1(&court(), c.class_id(), Hash64::from_u64_word(1), &[]) {
+            Err(ClassResolveError::UnknownClass { class_id }) => assert_eq!(class_id, c.class_id()),
+            other => panic!("an A16 class id must be UnknownClass to the floor resolver, got {other:?}"),
         }
     }
 }

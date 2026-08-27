@@ -217,7 +217,10 @@ pub struct Args {
     /// A network is born with the classes its ruleset id commits to; every later one arrives as a
     /// signed `ClassRegistered` that carries its own profile (ADR-0049 Decision H). Nothing built
     /// or carried such an object, so gaining a class meant re-minting the network.
-    pub palw_register_class: bool,
+    /// `Some("")` means "register whatever single class my artifact matches"; a non-empty value
+    /// names the model id when the artifact's shape matches several ledger siblings (the A16
+    /// family shares one converted shape, so shape alone cannot pick between them).
+    pub palw_register_class: Option<String>,
     pub palw_register_bond: bool,
     pub palw_dump_classes: bool,
     pub palw_bond_collateral: Option<u64>,
@@ -371,7 +374,7 @@ impl Default for Args {
             palw_producer_key: None,
             palw_producer_bond: None,
             palw_class_artifact: Vec::new(),
-            palw_register_class: false,
+            palw_register_class: None,
             palw_register_bond: false,
             palw_dump_classes: false,
             palw_bond_collateral: None,
@@ -879,11 +882,16 @@ pub fn cli() -> Command {
         .arg(
             Arg::new("palw-register-class")
                 .long("palw-register-class")
-                .action(ArgAction::SetTrue)
+                .num_args(0..=1)
+                .default_missing_value("")
+                .require_equals(false)
+                .value_name("model-id")
                 .help(
                     "MISAKA PALW: submit ONE ClassRegistered for the class of this node's --palw-class-artifact, so a model can \
                      join a chain that is already running instead of waiting for a re-mint. Needs an active bond \
-                     (--palw-producer-bond), its key and a funded --palw-fee-outpoint.",
+                     (--palw-producer-bond), its key and a funded --palw-fee-outpoint. Give a model id (e.g. \
+                     \"Qwen/Qwen2.5-Coder-1.5B-Instruct\") when the artifact's shape matches more than one class this build \
+                     knows — sibling models share a converted shape, so the file alone cannot say which one it is.",
                 ),
         )
         .arg(
@@ -1418,7 +1426,7 @@ impl Args {
                 .get_many::<String>("palw-class-artifact")
                 .map(|v| v.cloned().collect())
                 .unwrap_or(defaults.palw_class_artifact),
-            palw_register_class: arg_match_unwrap_or::<bool>(&m, "palw-register-class", defaults.palw_register_class),
+            palw_register_class: m.get_one::<String>("palw-register-class").cloned().or(defaults.palw_register_class.clone()),
             palw_register_bond: arg_match_unwrap_or::<bool>(&m, "palw-register-bond", defaults.palw_register_bond),
             palw_dump_classes: arg_match_unwrap_or::<bool>(&m, "palw-dump-classes", defaults.palw_dump_classes),
             palw_bond_collateral: m.get_one::<u64>("palw-bond-collateral").copied(),

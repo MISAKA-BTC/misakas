@@ -3903,6 +3903,7 @@ impl VirtualStateProcessor {
             min_grantable_share_permille: state_params.min_grantable_share_permille(),
             slash_value_per_pwu: base.slash_value_per_pwu,
             initial_target: base_target.target,
+            registered_class_ids: state.class_ids(),
         })
     }
 

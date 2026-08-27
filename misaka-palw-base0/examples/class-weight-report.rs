@@ -119,7 +119,7 @@ fn time_integer_class(class: &CanonicalClassV1, reps: u32) -> Result<(f64, usize
         // do not change what a forward pass costs — only the shape does — so the cost is measured
         // over a derived artifact of the class's own shape, and the report says so rather than
         // pretending the real checkpoint was loaded.
-        ArtifactSourceV1::Converted => 0x5EED_0BA5_E000_0001,
+        ArtifactSourceV1::Converted | ArtifactSourceV1::ConvertedA16 => 0x5EED_0BA5_E000_0001,
     };
     let artifact = Base0ArtifactV1::derive_deterministic(class.artifact_shape, seed).map_err(|e| format!("{e:?}"))?;
     let bytes = artifact_bytes(&artifact);
@@ -221,6 +221,7 @@ fn main() {
                 match class.source {
                     ArtifactSourceV1::Derived(_) => " (derived)",
                     ArtifactSourceV1::Converted => " (converted)",
+                    ArtifactSourceV1::ConvertedA16 => " (converted, A16)",
                 }
             ),
             class_id: class.class_id(),

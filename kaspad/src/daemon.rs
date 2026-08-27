@@ -1387,7 +1387,7 @@ Do you confirm? (y/n)";
             (true, Some(key_path), bond) if bond.is_some() || args.palw_register_bond => {
                 Some(Arc::new(crate::palw_panel::PalwPanelService::new(
                     crate::palw_panel::PalwPanelConfig {
-                        register_class: args.palw_register_class,
+                        register_class: args.palw_register_class.clone(),
                         register_bond: args.palw_register_bond,
                         bond_collateral: args.palw_bond_collateral,
                         pay_address: args.palw_producer_pay_address.clone(),

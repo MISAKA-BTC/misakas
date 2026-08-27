@@ -147,7 +147,10 @@ pub struct PalwPanelConfig {
     /// existed (ADR-0051). ADR-0053 withdrew that family; the path survives it because the thing
     /// it carries is generic — a profile, a canonical job, a bond's signature — and what a node
     /// registers now is a class the court can adjudicate.
-    pub register_class: bool,
+    /// `Some("")` registers the single class the artifact matches; a non-empty value names the
+    /// model id when siblings share a converted shape (the A16 family) and the file alone cannot
+    /// say which model it is.
+    pub register_class: Option<String>,
     /// Submit ONE `BondRegistered` for this node's own key and stop. The only PALW identity a
     /// newcomer cannot be handed: until this existed the bonds on a chain were exactly the ones
     /// its genesis registry named, so nobody outside that list could ever produce.
@@ -575,17 +578,48 @@ impl PalwPanelService {
 
         // The class of the artifact this node carries — matched by SHAPE against the build's own
         // registry, so a file that is not any class this build knows is refused here rather than
-        // registered as a class nobody can execute.
-        let (entry, artifact_root) = self
-            .class_artifacts
-            .iter()
-            .find_map(|artifact| {
-                misaka_palw_base0::classes::canonical_classes_v1(&self.config.court)
-                    .into_iter()
-                    .filter(|c| c.shape_matches(artifact).is_ok())
-                    .find_map(|c| c.artifact_root(artifact).ok().map(|root| (c, root)))
-            })
-            .ok_or("no --palw-class-artifact matches a class this build knows, so there is nothing to register")?;
+        // registered as a class nobody can execute. Shape alone cannot finish the job: sibling
+        // models of one family share a converted shape (the A16 tier's file says nothing about
+        // WHICH weights it holds), so the already-registered ids are dropped — submitting one is
+        // a guaranteed `DuplicateClass` refusal — and if more than one candidate is still
+        // standing, the operator's `--palw-register-class <model-id>` is what picks.
+        let mut candidates: Vec<(misaka_palw_base0::classes::CanonicalClassV1, Hash64)> = Vec::new();
+        for artifact in &self.class_artifacts {
+            for c in misaka_palw_base0::classes::canonical_classes_v1(&self.config.court) {
+                if c.shape_matches(artifact).is_ok()
+                    && let Ok(root) = c.artifact_root(artifact)
+                    && !candidates.iter().any(|(seen, _)| seen.class_id() == c.class_id())
+                {
+                    candidates.push((c, root));
+                }
+            }
+        }
+        if candidates.is_empty() {
+            return Err("no --palw-class-artifact matches a class this build knows, so there is nothing to register".to_string());
+        }
+        candidates.retain(|(c, _)| !terms.registered_class_ids.contains(&c.class_id()));
+        if candidates.is_empty() {
+            return Err("every class this node's artifacts match is already registered on this chain".to_string());
+        }
+        let wanted = self.config.register_class.as_deref().unwrap_or("");
+        if !wanted.is_empty() {
+            candidates.retain(|(c, _)| c.model_id == wanted);
+            if candidates.is_empty() {
+                return Err(format!(
+                    "--palw-register-class {wanted} names no unregistered class this node's artifacts match — \
+                     check the model id against the build's ledger and the artifact against the model"
+                ));
+            }
+        }
+        if candidates.len() > 1 {
+            let names: Vec<&str> = candidates.iter().map(|(c, _)| c.model_id).collect();
+            return Err(format!(
+                "this node's artifacts match {} unregistered classes ({}) — name one with --palw-register-class <model-id>",
+                names.len(),
+                names.join(", ")
+            ));
+        }
+        let (entry, artifact_root) = candidates.pop().expect("length checked above");
 
         let canonical =
             kaspa_consensus_core::palw_base0_profile::rc_job_context(&entry.profile, entry.canonical_job.0, entry.canonical_job.1);
@@ -1627,7 +1661,7 @@ impl PalwPanelService {
                 // absence costs the whole lane rather than one claim. It is offered first for the
                 // same reason a court rung is: everything behind it can wait a tick, and it
                 // cannot — a producer with a worker and no class is a node doing nothing.
-                if self.config.register_class && !class_registration_submitted {
+                if self.config.register_class.is_some() && !class_registration_submitted {
                     if class_registration.is_none() {
                         match self.build_class_registration(&session).await {
                             Ok(object) => {

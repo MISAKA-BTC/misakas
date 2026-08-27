@@ -175,6 +175,45 @@ pub const QWEN25_3B: PalwQwen25GeometryV1 = PalwQwen25GeometryV1 {
 /// Deterministic: tiles are tried in ascending order and the FIRST tile achieving the maximum
 /// context wins, so two nodes computing this reach one geometry. `None` means the court admits
 /// this model at no context at all, which is a real answer about a real ruleset.
+#[cfg(test)]
+mod a16_family {
+    use super::*;
+    /// **The A16 family's context ladder against the REAL shipped bundle.**
+    ///
+    /// Three facts the class ledger (`misaka_palw_base0::classes`) builds on, pinned here where
+    /// the geometry lives: n_ctx 16 IS the genesis-registered dense class (its id is asserted
+    /// byte-for-byte — a drift here would mean the ledger can no longer name the class the chain
+    /// already runs); n_ctx 17..=20 are admissible under the RC court, which is the room the
+    /// family has for sibling models before it needs a second axis; and everything past 20 is
+    /// refused by the close budget or the ladder, so a sibling CANNOT be given a bigger context
+    /// instead of a place in line.
+    #[test]
+    fn a16_context_ladder_against_the_shipped_bundle() {
+        let p = crate::config::params::palw_rc_shipped_params();
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) = &p.palw_consensus_mode else { panic!() };
+        for nctx in [15u32, 16, 17, 18, 20, 24, 32, 48, 64, 90, 128] {
+            let g = PalwQwen25GeometryV1 { n_ctx: nctx, ..QWEN25_1_5B };
+            let profile = match qwen25_a16_profile_v1(g) { Ok(pr) => pr, Err(e) => { eprintln!("nctx {nctx}: profile err {e:?}"); continue } };
+            let canonical = crate::palw_base0_profile::rc_job_context(&profile, QWEN25_A16_CANONICAL.0, QWEN25_A16_CANONICAL.1);
+            let reg = crate::palw_class_admission_v2::palw_post_genesis_registration_v1(
+                profile.clone(), canonical.clone(), kaspa_hashes::Hash64::default(), 1, 1, 5, 0,
+                crate::palw_state_v2::PalwBondKeyV2(crate::tx::TransactionOutpoint::new(kaspa_hashes::Hash64::default(), 0)), vec![]).unwrap();
+            let verdict = crate::palw_class_admission_v2::verify_class_admission_v2(b, &profile, &canonical, &reg);
+            match nctx {
+                16 => {
+                    assert!(verdict.is_ok(), "the genesis dense geometry must stay admissible: {verdict:?}");
+                    assert_eq!(
+                        profile.shape_profile_id().to_string(),
+                        "f942e268f43f05461f648adcb76a1300dbedd93f022d3bba0e88c2ef4349e38f3ac1b70871f3b5195b3b2fb3da221f9c29fe291773a094596add6951aa7902c1",
+                        "n_ctx 16 no longer derives the class testnet-11 registered"
+                    );
+                }
+                15 | 17 | 18 | 20 => assert!(verdict.is_ok(), "n_ctx {nctx} fell out of the family's room: {verdict:?}"),
+                _ => assert!(verdict.is_err(), "n_ctx {nctx} was admitted — the family's ceiling moved, revisit the ledger comment"),
+            }
+        }
+    }
+}
 pub fn qwen25_admissible_geometry_v1(
     model: PalwQwen25GeometryV1,
     court: &crate::palw_mode_v2::PalwCourtParamsV2,

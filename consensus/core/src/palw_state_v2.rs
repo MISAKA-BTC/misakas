@@ -1412,7 +1412,7 @@ pub fn palw_bond_retirement_message_v2(network_domain: Hash64, bond: &PalwBondKe
 /// a registrant that picks its own gets an error about the value rather than about the picking.
 /// Returned as one value because they are read at one moment from one state: three separate
 /// accessors could be called across a reorg and produce terms that never coexisted.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwRegistrationTermsV2 {
     /// The smallest share the ruleset admits. An entrant joins at exactly this — see the share
     /// rule in `palw_v2_validate_objects`, which refuses anything else.
@@ -1420,6 +1420,11 @@ pub struct PalwRegistrationTermsV2 {
     /// The BASE class's, so an entrant is priced like the incumbent rather than by its registrant.
     pub slash_value_per_pwu: u64,
     pub initial_target: u128,
+    /// Every class id the chain already holds, in the SAME state read as the terms above — a
+    /// registrant that filtered against a separate query could see a set the terms never coexisted
+    /// with. A registration for one of these is refused by the transition (`DuplicateClass`), so a
+    /// builder uses this to skip siblings that are already on chain rather than submit a refusal.
+    pub registered_class_ids: Vec<Hash64>,
 }
 
 pub fn palw_class_registration_message_v2(
@@ -1933,6 +1938,12 @@ impl PalwChainStateV2 {
 
     pub fn bond(&self, key: &PalwBondKeyV2) -> Option<&PalwBondStateV2> {
         self.bonds.get(key)
+    }
+
+    /// Every registered class id, whatever its status — the transition refuses a duplicate for
+    /// any non-Dormant status, so a registration builder filters against the whole set.
+    pub fn class_ids(&self) -> Vec<Hash64> {
+        self.classes.keys().copied().collect()
     }
 
     pub fn class(&self, id: &Hash64) -> Option<&PalwClassStateV2> {
