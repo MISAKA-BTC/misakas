@@ -42,6 +42,14 @@ fn hex_bytes(s: &str) -> Option<Vec<u8>> {
     (0..s.len() / 2).map(|i| u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).ok()).collect()
 }
 
+/// wRPC serializes byte fields as JSON arrays of numbers; a dump may also carry them as hex.
+fn json_bytes(v: &Value) -> Option<Vec<u8>> {
+    if let Some(s) = v.as_str() {
+        return hex_bytes(s);
+    }
+    v.as_array()?.iter().map(|x| x.as_u64().and_then(|n| u8::try_from(n).ok())).collect()
+}
+
 fn h64(v: &Value) -> Option<Hash64> {
     let b = hex_bytes(v.as_str()?)?;
     <[u8; 64]>::try_from(b.as_slice()).ok().map(Hash64::from_bytes)
@@ -80,7 +88,7 @@ fn header_from_json(h: &Value) -> Option<Header> {
     header.evm_commitment_root = h.get("evmCommitmentRoot").and_then(h64).unwrap_or_default();
     header.overlay_commitment_root = h.get("overlayCommitmentRoot").and_then(h64).unwrap_or_default();
     header.palw_state_root = h.get("palwStateRoot").and_then(h64).unwrap_or_default();
-    header.palw_commitment = h.get("palwCommitment").and_then(|v| hex_bytes(v.as_str()?)).unwrap_or_default();
+    header.palw_commitment = h.get("palwCommitment").and_then(json_bytes).unwrap_or_default();
     header.hash = header_hash(&header);
     Some(header)
 }
@@ -114,8 +122,8 @@ fn main() {
     let mut hash_mismatch = 0usize;
     for b in blocks {
         let Some(h) = b.get("header") else { continue };
-        let Some(commit_hex) = h.get("palwCommitment").and_then(|v| v.as_str()) else { continue };
-        if commit_hex.is_empty() {
+        let Some(commitment) = h.get("palwCommitment").and_then(json_bytes) else { continue };
+        if commitment.is_empty() {
             continue;
         }
         let Some(header) = header_from_json(h) else { continue };
