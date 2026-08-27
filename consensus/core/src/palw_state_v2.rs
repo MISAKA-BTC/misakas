@@ -141,7 +141,14 @@ use std::collections::{BTreeMap, BTreeSet};
 /// share walk folds). Every one of them is read by a rule that decides who holds cadence, so every
 /// one is in the root, so the version moves. This is the opposite of what 6 and 7 bought: the
 /// mechanism these fields serve is implemented and tested in the same change.
-pub const PALW_STATE_V2_VERSION: u16 = 9;
+///
+/// **Version 10: ADR-0058.** A chain block now applies the PALW work of its whole blue mergeset,
+/// not just its own — merged claims exist, counters count them, and every root from genesis
+/// onward is a different fact. No schema change; the SEMANTICS of step 4 moved, which is exactly
+/// the case a version constant exists for. This bump is also the first hashed into the params
+/// fingerprint directly (see `Params` — every earlier bump moved the handshake only because it
+/// happened to ride a bundle-shape change).
+pub const PALW_STATE_V2_VERSION: u16 = 10;
 
 pub const PALW_STATE_V2_DOMAIN_OPERATOR_ID: &[u8] = b"misaka-palw/state-v2/operator-id/v1";
 
@@ -1658,6 +1665,29 @@ pub enum PalwBlockWorkV3<'a> {
     ReceiptSpend(&'a PalwReceiptSpendUnsignedV3),
 }
 
+/// One merged block's PALW work — blue or red — carried into the ACCEPTING chain block's
+/// transition (ADR-0058). `carrying_block` is the merged block itself — the one whose header
+/// holds the work — and it is what the claim records as `accepted_block`, because the panel
+/// derives the job anchor from the carrying header's pre-PoW hash and the producer bound its
+/// material to that block, never to the chain block that happened to merge it. Reds are the
+/// common case, not the exception: at `ghostdag_k = 1` every block slower than the floor's
+/// cadence lands in the red set.
+pub struct PalwMergedWorkV1<'a> {
+    pub carrying_block: BlockHash,
+    pub work: PalwBlockWorkV3<'a>,
+}
+
+/// Where an attempt entered the chain — its own chain block, or a merged blue (ADR-0058).
+///
+/// The flag is the escrow rule, not a hint: the coinbase withholds escrow only from the
+/// selected parent (the one mergeset member whose claim it can know about before validating),
+/// so a claim created FOR a merged blue must escrow nothing or the withhold and the release
+/// would disagree about whether the carve was ever taken.
+struct PalwAttemptOriginV1 {
+    carrying_block: BlockHash,
+    escrows_reward: bool,
+}
+
 // ---------------------------------------------------------------------------------------------
 // Errors
 // ---------------------------------------------------------------------------------------------
@@ -2796,6 +2826,19 @@ impl<'a> TransitionBuilder<'a> {
 
     // ---- shared accounting moves ----
 
+    /// A rollback point for ADR-0058's merged-work fold: the state by value, the delta by
+    /// length. `restore` must return the builder to EXACTLY this point or a skipped work would
+    /// leave fingerprints in the root — which is why this is a full clone rather than an undo
+    /// log: an `apply_*` that grows a new mid-write failure mode cannot corrupt a clone.
+    fn checkpoint(&self) -> (PalwChainStateV2, usize) {
+        (self.state.clone(), self.entries.len())
+    }
+
+    fn restore(&mut self, checkpoint: (PalwChainStateV2, usize)) {
+        self.state = checkpoint.0;
+        self.entries.truncate(checkpoint.1);
+    }
+
     fn reserve_for_claim(&mut self, claim: &PalwClaimStateV2) -> Result<(), PalwStateV2Error> {
         let current = self.state.reserved_exposure.get(&claim.bond).copied().unwrap_or(0);
         let next = current.checked_add(claim.reserved).ok_or(PalwStateV2Error::Overflow("reserved_exposure"))?;
@@ -3098,9 +3141,9 @@ pub fn apply_palw_transition_v2(
     apply_palw_transition_v3(parent, params, ctx, accepted_objects, work)
 }
 
-/// Apply one chain block's PALW content to its parent state. Pure: `(parent, params, ctx,
-/// objects, work) → (child, delta)`, or an error that rejects the block's PALW content
-/// wholesale — a partial application is a state nobody else can recompute.
+/// The merged-work-free face of [`apply_palw_transition_v4`]: byte-identical semantics to the
+/// pre-ADR-0058 transition, kept so every caller and test that predates the mergeset rule reads
+/// exactly as before. An empty mergeset needs no admission params, hence the `None`.
 pub fn apply_palw_transition_v3(
     parent: &PalwChainStateV2,
     params: &PalwStateParamsV2,
@@ -3108,6 +3151,30 @@ pub fn apply_palw_transition_v3(
     accepted_objects: &[PalwConsensusObjectV2],
     block_work: PalwBlockWorkV3<'_>,
 ) -> Result<(PalwChainStateV2, PalwStateDeltaV2), PalwStateV2Error> {
+    apply_palw_transition_v4(parent, params, None, ctx, accepted_objects, block_work, &[]).map(|(state, delta, _)| (state, delta))
+}
+
+/// Apply one chain block's PALW content to its parent state. Pure: `(parent, params, admission,
+/// ctx, objects, own work, merged work) → (child, delta, skipped merged works)`, or an error
+/// that rejects the block's PALW content wholesale — a partial application is a state nobody
+/// else can recompute.
+///
+/// ADR-0058: `merged_work` is the blue mergeset's work (selected parent excluded), in consensus
+/// order. Own work failing is FATAL — the producer authored it. A merged work failing is a SKIP
+/// — the producer did not author its anticone — recorded in the third return so the caller can
+/// say so, and deterministic because the verdict is a pure function of the fold state at that
+/// point. `admission` gates each merged attempt against the LIVE fold state (two merged blues
+/// cannot both take the last budget slot); `None` with a non-empty merged attempt list skips
+/// them all, because unchecked admission is not admission.
+pub fn apply_palw_transition_v4(
+    parent: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    admission: Option<&crate::palw_admission_v2::PalwAdmissionParamsV2>,
+    ctx: &PalwBlockContextV2,
+    accepted_objects: &[PalwConsensusObjectV2],
+    block_work: PalwBlockWorkV3<'_>,
+    merged_work: &[PalwMergedWorkV1<'_>],
+) -> Result<(PalwChainStateV2, PalwStateDeltaV2, Vec<(BlockHash, String)>), PalwStateV2Error> {
     // 1. Context monotonicity: blue score strictly increases along a chain, DAA never decreases.
     if let Some(last) = &parent.last_point {
         if ctx.blue_score <= last.blue_score {
@@ -3185,8 +3252,63 @@ pub fn apply_palw_transition_v3(
     // 4. The block's own work — an attempt, a certified-quantum spend, or none.
     match block_work {
         PalwBlockWorkV3::None => {}
-        PalwBlockWorkV3::Attempt(envelope) => apply_attempt(&mut builder, ctx, envelope)?,
+        PalwBlockWorkV3::Attempt(envelope) => {
+            apply_attempt(&mut builder, ctx, envelope, PalwAttemptOriginV1 { carrying_block: ctx.block, escrows_reward: true })?
+        }
         PalwBlockWorkV3::ReceiptSpend(spend) => apply_receipt_spend(&mut builder, ctx, spend)?,
+    }
+
+    // 4b. The mergeset's work — blues and reds alike — in consensus order, selected parent
+    //     excluded (ADR-0058).
+    //
+    //     Each attempt passes the full stateful admission against the LIVE fold state — not the
+    //     parent state the processor's per-blue pre-checks ran against — because the works ahead
+    //     of it in this very block consume budget and exposure, and two blues must not both take
+    //     the last slot. A refusal SKIPS (checkpoint, try, restore): the accepting block did not
+    //     author its anticone, so nothing about a merged blue may disqualify it. The skip list is
+    //     returned, never folded — logs are not state.
+    let mut merged_skips: Vec<(BlockHash, String)> = Vec::new();
+    for merged in merged_work {
+        let refusal: Option<String> = match merged.work {
+            PalwBlockWorkV3::None => None,
+            PalwBlockWorkV3::Attempt(envelope) => match admission {
+                None => Some("a merged attempt on a caller that supplied no admission params".to_string()),
+                Some(admission) => {
+                    match crate::palw_admission_v2::check_palw_attempt_admission_v2(&builder.state, params, admission, ctx, envelope)
+                    {
+                        Err(refused) => Some(refused.to_string()),
+                        Ok(_) => {
+                            let checkpoint = builder.checkpoint();
+                            match apply_attempt(
+                                &mut builder,
+                                ctx,
+                                envelope,
+                                PalwAttemptOriginV1 { carrying_block: merged.carrying_block, escrows_reward: false },
+                            ) {
+                                Ok(()) => None,
+                                Err(refused) => {
+                                    builder.restore(checkpoint);
+                                    Some(refused.to_string())
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            PalwBlockWorkV3::ReceiptSpend(spend) => {
+                let checkpoint = builder.checkpoint();
+                match apply_receipt_spend(&mut builder, ctx, spend) {
+                    Ok(()) => None,
+                    Err(refused) => {
+                        builder.restore(checkpoint);
+                        Some(refused.to_string())
+                    }
+                }
+            }
+        };
+        if let Some(reason) = refusal {
+            merged_skips.push((merged.carrying_block, reason));
+        }
     }
 
     // 5. Frontier observation — the definition `palw_fork_choice` states and this used to miss:
@@ -3250,7 +3372,7 @@ pub fn apply_palw_transition_v3(
     builder.state.last_point = Some(*ctx);
 
     let delta = PalwStateDeltaV2 { point: *ctx, entries: builder.entries };
-    Ok((builder.state, delta))
+    Ok((builder.state, delta, merged_skips))
 }
 
 /// After the LAST open session on a licensed claim ends challenger-side (an explicit
@@ -4698,6 +4820,7 @@ fn apply_attempt(
     builder: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
     envelope: &PalwAttemptEnvelopeV2,
+    origin: PalwAttemptOriginV1,
 ) -> Result<(), PalwStateV2Error> {
     let attempt = &envelope.attempt;
     let claim_id = attempt_id_v2(attempt);
@@ -4722,7 +4845,11 @@ fn apply_attempt(
         pwu: attempt.pwu,
         accepted_daa: ctx.daa_score,
         accepted_blue_score: ctx.blue_score,
-        accepted_block: ctx.block,
+        // ADR-0058 Decision 4: the CARRYING block — for the chain block's own work that is
+        // `ctx.block`, for a merged blue it is the blue itself, which is where the panel's job
+        // anchor and the producer's retained material actually live. The daa/blue pair above
+        // stays the accepting block's: deadlines and the frontier are chain-order facts.
+        accepted_block: origin.carrying_block,
         trace_root: attempt.trace_root,
         output_root: attempt.output_root,
         execution_root: attempt.execution_root,
@@ -4730,9 +4857,12 @@ fn apply_attempt(
         trace_retention_daa: attempt.trace_retention_daa,
         reserved,
         immature_contribution: immature_contribution_v2(builder.params, attempt.pwu),
-        // An attempt claim IS this block, so the block's carve funds exactly one claim and the
-        // "never exceeds the subsidy" bound is structural rather than arithmetic.
-        escrowed_reward: worker_carve_v2(builder.params, ctx.subsidy),
+        // For the block's OWN attempt: the claim IS this block, so the block's carve funds
+        // exactly one claim and the "never exceeds the subsidy" bound is structural rather than
+        // arithmetic. For a MERGED blue's attempt (ADR-0058 Decision 5): zero — the coinbase
+        // already paid that blue its worker share in full and withheld nothing, so an escrow
+        // here would be a release with no matching withhold, minted on top of the schedule.
+        escrowed_reward: if origin.escrows_reward { worker_carve_v2(builder.params, ctx.subsidy) } else { 0 },
         phase: PalwClaimPhaseV2::Provisional,
     };
     builder.reserve_for_claim(&claim)?;
@@ -8736,6 +8866,48 @@ pub(crate) mod tests {
         assert_eq!(s5.reserved_exposure(&bond_key(1)), 200, "the void releases the FP reserve, byte for byte");
     }
 
+    /// ADR-0058: a merged work the state refuses SKIPS — the accepting block stands, the skip
+    /// is named, and the fold is left byte-identical to one that was never offered the work.
+    /// Root equality is the whole claim: a skip that leaves any fingerprint is a consensus fault.
+    #[test]
+    fn a_refused_merged_work_skips_and_leaves_no_fingerprint() {
+        let p = params();
+        let genesis = PalwChainStateV2::genesis();
+        let (s1, _) = apply(&genesis, &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+
+        // A spend naming a claim that does not exist: refused inside the fold, after checkpoint.
+        let ghost = fp_spend(0xDEAD, 0);
+        let merged = [PalwMergedWorkV1 { carrying_block: h64(0xB1u64), work: PalwBlockWorkV3::ReceiptSpend(&ghost) }];
+        let (with_skip, delta_with, skips) =
+            apply_palw_transition_v4(&s1, &p, None, &ctx(2, 101, 2), &[], PalwBlockWorkV3::None, &merged)
+                .expect("the accepting block stands");
+        assert_eq!(skips.len(), 1, "the refusal is recorded, not swallowed");
+        assert_eq!(skips[0].0, h64(0xB1u64), "and it names the carrying blue");
+
+        let (without, delta_without) =
+            apply_palw_transition_v3(&s1, &p, &ctx(2, 101, 2), &[], PalwBlockWorkV3::None).expect("baseline");
+        assert_eq!(with_skip.state_root(), without.state_root(), "a skipped work leaves no fingerprint in the root");
+        assert_eq!(delta_with.entries.len(), delta_without.entries.len(), "nor in the delta");
+    }
+
+    /// ADR-0058: a merged ATTEMPT with no admission params is skipped, never applied — unchecked
+    /// admission is not admission, and failing open here would mint claims nobody gated.
+    #[test]
+    fn a_merged_attempt_without_admission_params_fails_closed() {
+        let p = params();
+        let genesis = PalwChainStateV2::genesis();
+        let (s1, _) = apply(&genesis, &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+
+        let env = attempt(40, 1);
+        let claim_id = attempt_id_v2(&env.attempt);
+        let merged = [PalwMergedWorkV1 { carrying_block: h64(0xB2u64), work: PalwBlockWorkV3::Attempt(&env) }];
+        let (s2, _, skips) = apply_palw_transition_v4(&s1, &p, None, &ctx(2, 101, 2), &[], PalwBlockWorkV3::None, &merged)
+            .expect("the accepting block stands");
+        assert_eq!(skips.len(), 1, "skipped, with the missing-params reason");
+        assert!(s2.claim(&claim_id).is_none(), "and no claim was minted");
+        assert_eq!(s2.reserved_exposure(&bond_key(1)), 0, "and nothing was reserved");
+    }
+
     /// A spend licenses only what is certified: wrong phase, wrong source, absent claim — each
     /// refusal is named.
     #[test]
@@ -9186,7 +9358,7 @@ pub(crate) mod tests {
             })
         }
         spec_hash(b"misaka-palw/state-v2/state-root/v1", |s| {
-            s.update(&9u16.to_le_bytes()); // version_le(2) = 9, restated from the ADR (0054 D3-5)
+            s.update(&10u16.to_le_bytes()); // version_le(2) = 10, restated from the ADR (0058: merged work)
             s.update(spec_collection_root(b"bonds", &c.bonds).as_byte_slice());
             s.update(spec_collection_root(b"reserved_exposure", &c.reserved_exposure).as_byte_slice());
             s.update(spec_collection_root(b"classes", &c.classes).as_byte_slice());
@@ -9479,16 +9651,16 @@ pub(crate) mod tests {
     /// moves one of these constants, which is the visible flag ADR-0043's change rule demands.
     /// Update them ONLY together with a version bump and an ADR-0043 amendment.
     #[test]
-    fn the_version_9_state_root_golden_vectors() {
+    fn the_version_10_state_root_golden_vectors() {
         assert_eq!(
             PalwChainStateV2::genesis().state_root().to_string(),
-            "ec23cdd26f8508cda309b06b87b1eb3ed40dec3163e3475d038c630d65fe534fc20e83d004a47fa53a2d513c422905772d51c005de8a6731475d26c1df4e3d56",
-            "the empty state's version-8 root moved"
+            "bd833c0049e199effe7f976f3c6c187b863e65e4e62749cc5a2aed2732c2cfac7cc8a55f2942bcfc3cf7a080b7db3623ceb2fcf7b26cb585feb349b2c3835455",
+            "the empty state's version-10 root moved"
         );
         assert_eq!(
             m02_populated_state().state_root().to_string(),
-            "53a0e61b124d5610966a954ab2578f155b437e9bd6a86954e33069c698a93e75f47f39e26582f7e6a7d21d18d4ed6bf971b7bbf5a09d1a7be743949f1e913497",
-            "the inhabited state's version-8 root moved"
+            "71f4946fa68aaf71e2d5419a867eabd45fdab9ba9ab33bdffb4274a5ed60b277d90c76c2c8c1df91690a3e0062327f5cf3dfd652d17203dbae30f8bc3e4720ce",
+            "the inhabited state's version-10 root moved"
         );
     }
 }

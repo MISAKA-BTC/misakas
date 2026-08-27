@@ -568,6 +568,14 @@ impl kaspa_consensus_core::palw_facts::PalwClassFactsViewV1 for PalwOneClassView
     }
 }
 
+/// ADR-0058: one mergeset blue's admitted PALW work, held by value between assembly (against
+/// the walk state) and the transition call (which borrows it). Two arms because a header
+/// declares exactly one lane by its algorithm id.
+enum PalwMergedOwnedWorkV1 {
+    Attempt(BlockHash, kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2),
+    Spend(BlockHash, kaspa_consensus_core::palw_freeprompt_v3::PalwReceiptSpendEnvelopeV3),
+}
+
 impl VirtualStateProcessor {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -1359,14 +1367,55 @@ impl VirtualStateProcessor {
                                     }
                                     (None, None) => kaspa_consensus_core::palw_state_v2::PalwBlockWorkV3::None,
                                 };
-                                match kaspa_consensus_core::palw_state_v2::apply_palw_transition_v3(
+                                // ADR-0058: the anticone's work rides this block's transition.
+                                // Assembled against the walk state (the parent's); the transition
+                                // re-runs the stateful admission per work against its LIVE fold
+                                // state, so order inside the block cannot over-commit a budget.
+                                let (merged_owned, merged_preskips) = self.palw_v2_merged_works(
+                                    current,
+                                    &ctx.ghostdag_data,
                                     state,
                                     state_params,
                                     &point,
+                                );
+                                let merged_refs: Vec<kaspa_consensus_core::palw_state_v2::PalwMergedWorkV1<'_>> = merged_owned
+                                    .iter()
+                                    .map(|owned| match owned {
+                                        PalwMergedOwnedWorkV1::Attempt(blue, envelope) => {
+                                            kaspa_consensus_core::palw_state_v2::PalwMergedWorkV1 {
+                                                carrying_block: *blue,
+                                                work: kaspa_consensus_core::palw_state_v2::PalwBlockWorkV3::Attempt(envelope),
+                                            }
+                                        }
+                                        PalwMergedOwnedWorkV1::Spend(blue, envelope) => {
+                                            kaspa_consensus_core::palw_state_v2::PalwMergedWorkV1 {
+                                                carrying_block: *blue,
+                                                work: kaspa_consensus_core::palw_state_v2::PalwBlockWorkV3::ReceiptSpend(
+                                                    &envelope.spend,
+                                                ),
+                                            }
+                                        }
+                                    })
+                                    .collect();
+                                match kaspa_consensus_core::palw_state_v2::apply_palw_transition_v4(
+                                    state,
+                                    state_params,
+                                    self.palw_admission_params_v2.as_ref(),
+                                    &point,
                                     &objects,
                                     work,
+                                    &merged_refs,
                                 ) {
-                                    Ok((next, delta)) => {
+                                    Ok((next, delta, merged_skips)) => {
+                                        // A skipped merged work is the block standing while a
+                                        // piece of its anticone is refused — say which and why,
+                                        // because a silent skip of real work is the defect class
+                                        // ADR-0058 exists to close.
+                                        for (blue, why) in merged_preskips.iter().chain(merged_skips.iter()) {
+                                            info!(
+                                                "PALW: merged blue {blue} carried work this chain point refused (the accepting block stands): {why}"
+                                            );
+                                        }
                                         *state = next;
                                         // Launch blockers §8: say it out loud. A voided claim's
                                         // escrow is burned by don't-mint (Decision 10), and a
@@ -4790,6 +4839,60 @@ impl VirtualStateProcessor {
     /// weight. Checked-then-dropped, a receipt-lane block burned its quantum nowhere — the ledger
     /// never recorded the spend, so the same quantum stayed spendable forever and the weight it
     /// was supposed to add never arrived.
+    /// ADR-0058: the works this chain block's WHOLE mergeset carries — blues and reds alike,
+    /// consensus order, selected parent excluded (it applied its own work as the previous chain
+    /// block), non-DAA blocks excluded (the coinbase's pay set — a timestamp-deviant block earns
+    /// neither pay nor a claim). Reds are not an edge case here, they are the POINT: at the
+    /// frozen 120 s cadence `ghostdag_k = 1`, so any block whose anticone holds two or more
+    /// blocks — every block of every class slower than the floor — is a red by construction.
+    /// A blues-only rule would measure nothing.
+    ///
+    /// The full admission — stateless shape, challenge binding, executor signature, and the
+    /// stateful list against the WALK state — runs here once per merged block; the transition
+    /// then re-runs the stateful half against its live fold state. A merged block that fails is
+    /// returned with its reason and skipped: nothing about its anticone may disqualify the
+    /// accepting block.
+    fn palw_v2_merged_works(
+        &self,
+        current: BlockHash,
+        ghostdag_data: &GhostdagData,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+    ) -> (Vec<PalwMergedOwnedWorkV1>, Vec<(BlockHash, String)>) {
+        use crate::model::stores::daa::DaaStoreReader;
+        let mut works = Vec::new();
+        let mut skips = Vec::new();
+        if ghostdag_data.mergeset_blues.len() <= 1 && ghostdag_data.mergeset_reds.is_empty() {
+            return (works, skips);
+        }
+        let non_daa = self.daa_excluded_store.get_mergeset_non_daa(current).unwrap_or_default();
+        let merged: Vec<BlockHash> =
+            ghostdag_data.consensus_ordered_mergeset_without_selected_parent(self.ghostdag_store.as_ref()).collect();
+        for blue in merged.iter() {
+            if non_daa.contains(blue) {
+                continue;
+            }
+            let header = match self.headers_store.get_header(*blue) {
+                Ok(header) => header,
+                Err(missing) => {
+                    skips.push((*blue, format!("no header for a mergeset block: {missing}")));
+                    continue;
+                }
+            };
+            match self.palw_v2_check_attempt_admission(&header, state, state_params, point) {
+                Ok(Some(envelope)) => works.push(PalwMergedOwnedWorkV1::Attempt(*blue, envelope)),
+                Ok(None) => match self.palw_v2_check_receipt_spend(&header, state, state_params, point) {
+                    Ok(Some(envelope)) => works.push(PalwMergedOwnedWorkV1::Spend(*blue, envelope)),
+                    Ok(None) => {}
+                    Err(why) => skips.push((*blue, why)),
+                },
+                Err(why) => skips.push((*blue, why)),
+            }
+        }
+        (works, skips)
+    }
+
     fn palw_v2_check_receipt_spend(
         &self,
         header: &Header,
@@ -9949,6 +10052,7 @@ impl VirtualStateProcessor {
                 (newly_included_stake, expected_stake),
                 palw_escrow_withheld,
                 &palw_unentitled_blues,
+                self.palw_state_params_v2.is_some(),
             )
             .unwrap();
         txs.insert(0, coinbase.tx);

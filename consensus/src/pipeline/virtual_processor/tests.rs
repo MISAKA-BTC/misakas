@@ -8168,3 +8168,282 @@ async fn palw_rc_qwen36_earns_share_through_real_blocks() {
     let facts = ctx.consensus.palw_producer_facts_v2(qwen_class_id, None).expect("answers");
     assert_eq!(facts.epoch_budget_blocks as u16, qwen_share, "the new epoch's budget follows the new share");
 }
+
+/// **ADR-0058 under real block validation: a class that never wins a chain slot still counts.**
+///
+/// The sibling test above hands the entrant every chain slot its budget allows. This one hands it
+/// NONE — every Qwen block is built on a parent four chain blocks stale, so it always loses tip
+/// selection by blue work and is only ever MERGED — which is testnet-11 as measured (12 of 12
+/// real-inference blocks merged, zero on the selected chain, share frozen at genesis forever).
+/// The assertions are the mechanism ADR-0058 restores: the epoch counter fills from the mergeset,
+/// the budget cap holds against over-production (three extra blocks are skipped, not counted),
+/// the share steps up at the boundary exactly as if the blocks had been chain blocks, and every
+/// merged claim names its CARRYING block and escrows nothing.
+///
+/// One epoch is 1,000 DAA and one block is one DAA; ignored in CI for the same reason as above.
+#[tokio::test]
+#[ignore = "produces a full 1000-block epoch; run with --ignored --nocapture"]
+async fn palw_rc_qwen36_counts_merged_work() {
+    kaspa_core::log::try_init_logger("info");
+    use kaspa_consensus_core::api::ConsensusApi;
+    use kaspa_consensus_core::palw_attempt_v2::{
+        PALW_ATTEMPT_V2_MLDSA87_CONTEXT, PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, attempt_id_v2,
+        challenge_v2, class_ticket_v2, palw_network_domain_v2,
+    };
+    use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
+    use kaspa_consensus_core::palw_base0_profile::{PALW_RC_BASE0_CANONICAL, PALW_RC_BASE0_GEOMETRY, base0_profile_v1};
+    use kaspa_consensus_core::palw_qwen36_profile::{QWEN36_35B_A3B, QWEN36_RC_CANONICAL, qwen36_profile_v1};
+    use misaka_palw_base0::produce::{base0_execute_for_attempt_v1, base0_rc_job_anchor_v1, base0_rc_job_v1};
+    use misaka_palw_base0::qwen36_backend::Qwen36Backend;
+    use std::collections::HashSet;
+
+    let keys: Vec<_> = (0..kaspa_consensus_core::palw_fp_devnet_v3::palw_v2_min_genesis_bonds_v1() as u32)
+        .map(|i| libcrux_ml_dsa::ml_dsa_87::generate_key_pair([0xB0u8.wrapping_add(i as u8); 32]))
+        .collect();
+    let registry: Vec<_> = keys
+        .iter()
+        .enumerate()
+        .map(|(i, kp)| kaspa_consensus_core::palw_fp_devnet_v3::PalwGenesisBondSpecV1 {
+            bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(kaspa_consensus_core::config::premine::premine_outpoint(
+                i as u32,
+            )),
+            pubkey: kp.verification_key.as_ref().to_vec(),
+            operator_pubkey: vec![21u8, i as u8, 0, 0, 0, 0, 0, 0],
+            payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11 + i as u64),
+        })
+        .collect();
+    let base_root = misaka_palw_base0::rc::palw_rc_base0_artifact_root_v1().expect("derives");
+    let qwen_artifact = misaka_palw_base0::qwen36::qwen36_dev_fixture(4, 8);
+    let qwen_root = qwen_artifact.artifact_root();
+    let params = kaspa_consensus_core::config::params::palw_rc_params_with_qwen36(base_root, qwen_root, registry)
+        .expect("the two-class genesis assembles");
+    let bundle = match &params.palw_consensus_mode {
+        kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) => b.clone(),
+        _ => panic!("a ConsensusV2 network"),
+    };
+    let epoch_length = bundle.state.epoch_length();
+    let base_class_id = bundle.base_class_id;
+    let qwen_class_id = qwen36_profile_v1(QWEN36_35B_A3B).expect("projects").shape_profile_id();
+
+    let config = ConfigBuilder::new(params)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            if !cfg!(feature = "evm") {
+                p.evm_activation_daa_score = u64::MAX;
+            }
+        })
+        .build();
+    let network_domain = palw_network_domain_v2(config.params.net.to_string().as_bytes());
+    let ctx = TestContext::new(TestConsensus::new(&config));
+
+    let base_profile = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("expressible");
+    let base_artifact = misaka_palw_base0::rc::palw_rc_base0_artifact_v1().expect("derives");
+    let seed = base0_rc_job_anchor_v1(
+        network_domain,
+        kaspa_hashes::Hash64::from_u64_word(1),
+        base_class_id,
+        &kaspa_consensus_core::config::premine::premine_outpoint(0),
+    );
+    let (base_job, base_prompt) =
+        base0_rc_job_v1(&base_profile, seed, base_artifact.shape.vocab, PALW_RC_BASE0_CANONICAL.0, PALW_RC_BASE0_CANONICAL.1);
+    let base_run = base0_execute_for_attempt_v1(&base_artifact, &base_profile, &base_job, &base_prompt).expect("the floor runs");
+    let backend = Qwen36Backend::new(
+        std::sync::Arc::new(qwen_artifact),
+        "Qwen3.6-dev-fixture",
+        QWEN36_RC_CANONICAL,
+        qwen_class_id,
+        config.params.net.to_string().into_bytes(),
+    );
+    let qwen_anchor = base0_rc_job_anchor_v1(
+        network_domain,
+        kaspa_hashes::Hash64::from_u64_word(2),
+        qwen_class_id,
+        &kaspa_consensus_core::config::premine::premine_outpoint(1),
+    );
+    let (qwen_job, qwen_prompt) = backend.job_for_anchor(qwen_anchor).expect("the anchor implies a job");
+    let qwen_run = backend.execute(&qwen_job, &qwen_prompt).expect("a real hybrid forward pass");
+    let base_roots =
+        (base_run.trace_root, base_run.output_root, base_run.execution_root, base_run.trace_manifest_root, base_run.trace_chunk_count);
+    let qwen_roots =
+        (qwen_run.trace_root, qwen_run.output_root, qwen_run.execution_root, qwen_run.trace_manifest_root, qwen_run.trace_chunk_count);
+
+    let share_of = |ctx: &TestContext, class_id| {
+        ctx.consensus.palw_v2_class_table().into_iter().find(|r| r.class_id == class_id).and_then(|r| r.share_permille)
+    };
+    let opening_share = share_of(&ctx, qwen_class_id).expect("the entrant is in the table");
+    let quota = ctx.consensus.palw_producer_facts_v2(qwen_class_id, None).expect("answers").epoch_budget_blocks;
+    assert!(quota > 1, "a funded tier's allowance is more than one block");
+
+    // How stale a Qwen block's parent is, in chain blocks. Four floor blocks of blue work is the
+    // margin the real network showed (2M–14M ≈ 2–10 blocks), and it guarantees the side block
+    // loses tip selection here for the same reason it loses it there.
+    const STALE_DEPTH: usize = 4;
+    // Three blocks past the budget: the cap must SKIP them (deterministically, every node),
+    // not count them — over-production is the attack the budget exists for.
+    let overproduce = quota + 3;
+
+    let mut chain_tips: Vec<BlockHash> = vec![config.genesis.hash];
+    let mut qwen_blocks: HashSet<BlockHash> = HashSet::new();
+    let mut qwen_made = 0u64;
+    let sign = |keys: &[libcrux_ml_dsa::ml_dsa_87::MLDSA87KeyPair], bond_index: u32, attempt: &PalwAttemptUnsignedV2| {
+        libcrux_ml_dsa::ml_dsa_87::sign(
+            &keys[bond_index as usize].signing_key,
+            attempt_id_v2(attempt).as_byte_slice(),
+            PALW_ATTEMPT_V2_MLDSA87_CONTEXT,
+            [0x5Au8; 32],
+        )
+        .expect("sign")
+        .as_ref()
+        .to_vec()
+    };
+
+    while ctx.consensus.get_virtual_daa_score() <= epoch_length {
+        // A Qwen SIDE block first, whenever allowance (plus the deliberate excess) remains and
+        // the chain is deep enough to have a stale parent for it.
+        if qwen_made < overproduce && chain_tips.len() > STALE_DEPTH {
+            let stale = chain_tips[chain_tips.len() - 1 - STALE_DEPTH];
+            let bond = kaspa_consensus_core::config::premine::premine_outpoint(1);
+            let facts = ctx.consensus.palw_producer_facts_v2(qwen_class_id, Some(bond)).expect("a V2 network answers");
+            // NOT the UTXO-valid template builder: its pov sink search runs the deep-reorg
+            // gate, which correctly refuses to re-anchor virtual on a stale parent (and then
+            // walks past genesis into ORIGIN). A side blue needs no UTXO validity — only a
+            // chain-block candidate is ever UTXO-validated, and this block must never be one.
+            let mut block = ctx.consensus.build_block_with_parents_and_transactions(blockhash::NONE, vec![stale], vec![]);
+            let timestamp = block.header.timestamp;
+            let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(&block.header);
+            let mut attempt = PalwAttemptUnsignedV2 {
+                version: PALW_ATTEMPT_V2_VERSION,
+                network_domain,
+                challenge: kaspa_hashes::Hash64::default(),
+                class_id: qwen_class_id,
+                executor_bond: bond,
+                executor_pubkey: keys[1].verification_key.as_ref().to_vec(),
+                operator_id: facts.bond.as_ref().expect("a genesis bond").operator_id,
+                artifact_root: facts.artifact_root,
+                trace_root: qwen_roots.0,
+                output_root: qwen_roots.1,
+                execution_root: qwen_roots.2,
+                pwu: facts.pwu,
+                trace_manifest_root: qwen_roots.3,
+                trace_chunk_count: qwen_roots.4,
+                trace_retention_daa: facts.daa_score.saturating_add(facts.min_trace_retention_daa),
+            };
+            let mut won = None;
+            for nonce in 0u64..1_000_000 {
+                attempt.challenge = challenge_v2(network_domain, pre_pow, timestamp, nonce, qwen_class_id, &bond);
+                if class_ticket_v2(&attempt) <= facts.class_target {
+                    won = Some(nonce);
+                    break;
+                }
+            }
+            let signature = sign(&keys, 1, &attempt);
+            block.header.nonce = won.expect("the class target is winnable");
+            block.header.palw_commitment = PalwAttemptEnvelopeV2 { attempt, signature }.encode_wire();
+            block.header.finalize();
+            let qwen_hash = block.header.hash;
+            ctx.consensus.validate_and_insert_block(block.to_immutable()).virtual_state_task.await.expect("the DAG accepts it");
+            qwen_blocks.insert(qwen_hash);
+            qwen_made += 1;
+        }
+
+        // Then the floor's chain block, which merges whatever the anticone holds.
+        {
+            let bond = kaspa_consensus_core::config::premine::premine_outpoint(0);
+            let facts = ctx.consensus.palw_producer_facts_v2(base_class_id, Some(bond)).expect("a V2 network answers");
+            let mut block = ctx.build_block_template_keeping_time(0).block;
+            let timestamp = block.header.timestamp;
+            let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(&block.header);
+            let mut attempt = PalwAttemptUnsignedV2 {
+                version: PALW_ATTEMPT_V2_VERSION,
+                network_domain,
+                challenge: kaspa_hashes::Hash64::default(),
+                class_id: base_class_id,
+                executor_bond: bond,
+                executor_pubkey: keys[0].verification_key.as_ref().to_vec(),
+                operator_id: facts.bond.as_ref().expect("a genesis bond").operator_id,
+                artifact_root: facts.artifact_root,
+                trace_root: base_roots.0,
+                output_root: base_roots.1,
+                execution_root: base_roots.2,
+                pwu: facts.pwu,
+                trace_manifest_root: base_roots.3,
+                trace_chunk_count: base_roots.4,
+                trace_retention_daa: facts.daa_score.saturating_add(facts.min_trace_retention_daa),
+            };
+            let mut won = None;
+            for nonce in 0u64..1_000_000 {
+                attempt.challenge = challenge_v2(network_domain, pre_pow, timestamp, nonce, base_class_id, &bond);
+                if class_ticket_v2(&attempt) <= facts.class_target {
+                    won = Some(nonce);
+                    break;
+                }
+            }
+            let signature = sign(&keys, 0, &attempt);
+            block.header.nonce = won.expect("the class target is winnable");
+            block.header.palw_commitment = PalwAttemptEnvelopeV2 { attempt, signature }.encode_wire();
+            block.header.finalize();
+            ctx.consensus.validate_and_insert_block(block.to_immutable()).virtual_state_task.await.expect("the chain accepts it");
+            chain_tips.push(ctx.consensus.get_sink());
+        }
+    }
+
+    // 1. Not one Qwen block won a chain slot — the starvation is real, not assumed.
+    let chain: HashSet<BlockHash> = ctx
+        .consensus
+        .get_virtual_chain_from_block(config.genesis.hash, None)
+        .expect("the chain walks")
+        .added
+        .iter()
+        .copied()
+        .collect();
+    assert!(qwen_blocks.iter().all(|q| !chain.contains(q)), "every Qwen block stayed off the selected chain");
+
+    // 1b. And not because they were quietly blue: at ghostdag_k = 1 a four-deep side block's
+    // anticone makes it a RED by construction, so this test only proves ADR-0058 if the works
+    // it counted rode the red half of the mergeset — which is where every slower-than-the-floor
+    // class lives at the frozen cadence.
+    {
+        use crate::model::stores::ghostdag::GhostdagStoreReader;
+        let vp_diag = ctx.consensus.virtual_processor();
+        let mut in_blues = 0usize;
+        let mut in_reds = 0usize;
+        for cb in &chain {
+            if let Ok(gd) = vp_diag.ghostdag_store.get_data(*cb) {
+                in_blues += gd.mergeset_blues.iter().filter(|b| qwen_blocks.contains(*b)).count();
+                in_reds += gd.mergeset_reds.iter().filter(|b| qwen_blocks.contains(*b)).count();
+            }
+        }
+        eprintln!("side blocks: {} total, {in_blues} merged as blues, {in_reds} as reds", qwen_blocks.len());
+        assert_eq!(in_blues + in_reds, qwen_blocks.len(), "every side block was merged exactly once");
+        assert!(in_reds > 0, "at k = 1 the side blocks land in the red set — the set the old rule never read");
+    }
+
+    // 2. The counter filled from the MERGESET, and the budget cap held against the excess.
+    let vp = ctx.consensus.virtual_processor();
+    let (_, state) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("the tip loads");
+    let counted = state.epoch_counter(&qwen_class_id).map(|c| (c.epoch_index, c.produced_blocks));
+    let base_counted = state.epoch_counter(&base_class_id).map(|c| (c.epoch_index, c.produced_blocks));
+    let qwen_claims_total = state.claims_iter().filter(|(_, c)| c.class_id == qwen_class_id).count();
+    let all_claims_total = state.claims_iter().count();
+    eprintln!(
+        "at the crossing: qwen counter {counted:?}, base counter {base_counted:?}, qwen claims in state {qwen_claims_total}, all claims {all_claims_total}, side blocks built {qwen_made} (budget {quota})"
+    );
+    assert_eq!(counted, Some((0, quota)), "merged production filled the budget exactly; the three excess blocks were skipped");
+
+    // 3. Every merged claim names its CARRYING block and escrows nothing (ADR-0058 D4/D5).
+    let mut merged_claims = 0usize;
+    for (_, claim) in state.claims_iter().filter(|(_, c)| c.class_id == qwen_class_id) {
+        assert!(qwen_blocks.contains(&claim.accepted_block), "a merged claim names the blue that carried it");
+        assert_eq!(claim.escrowed_reward, 0, "a merged claim escrows nothing — its blue was paid by the coinbase in full");
+        merged_claims += 1;
+    }
+    assert!(merged_claims > 0, "the tip state still holds merged claims");
+
+    // 4. The boundary paid: the share stepped up off merged production alone.
+    let qwen_share = share_of(&ctx, qwen_class_id).expect("the entrant is in the table");
+    let base_share = share_of(&ctx, base_class_id).expect("the floor is in the table");
+    eprintln!("after one epoch of MERGED-ONLY production: QWEN36 {qwen_share} permille (from {opening_share}), BASE-0 {base_share} permille");
+    let step = (u32::from(opening_share) * 250 / 1000).max(1) as u16;
+    assert_eq!(qwen_share, opening_share + step, "it filled its budget from the anticone, so it took a step from the floor");
+    assert_eq!(qwen_share + base_share, 1000, "and the denominator is conserved");
+}

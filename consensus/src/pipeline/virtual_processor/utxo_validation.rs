@@ -1003,6 +1003,7 @@ impl VirtualStateProcessor {
                 inclusion,
                 palw_escrow_withheld,
                 palw_unentitled_blues,
+                self.palw_state_params_v2.is_some(),
             )
             .unwrap()
             .tx;

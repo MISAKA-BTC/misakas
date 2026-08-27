@@ -949,6 +949,13 @@ impl Params {
             crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => {
                 h.write([2u8]);
                 h.write(crate::palw_mode_v2::palw_ruleset_id_v2(bundle).as_byte_slice());
+                // ADR-0058: the state-machine VERSION is block validity — every root is
+                // domain-separated by it — and each earlier bump moved this fingerprint only
+                // because it happened to ride a bundle-shape change. Hashed explicitly so a
+                // semantic-only bump parts old and new nodes at handshake instead of at their
+                // first disagreeing root. Inside the V2 arm, so every non-V2 preset
+                // fingerprints byte-identically to before.
+                h.write(crate::palw_state_v2::PALW_STATE_V2_VERSION.to_le_bytes());
             }
         }
 
@@ -4931,7 +4938,9 @@ mod consensus_params_id_tests {
             // class catalog, both inside the ruleset id, so correcting it is a re-mint — which is
             // the honest shape: a network whose registered class nobody can obtain and one whose
             // class anyone can rebuild from the public GGUF must not wear one name.
-            ("testnet-11", TESTNET11_PARAMS, "bb0a3ad375673a52b7b883032e4b48a89a36387dd2b12d9681d2d6850572ab84"),
+            // ADR-0058 (merged work is counted): PALW_STATE_V2_VERSION 9 → 10 entered the
+            // fingerprint, deliberately — deploying this build is a re-mint.
+            ("testnet-11", TESTNET11_PARAMS, "15bab795442ec3efc3a58e02dd9c7a6f3015ff0634bc4a50a7af589338857ad0"),
             ("simnet", SIMNET_PARAMS, "dae24a4cddc3bd324d7e99dc61c9e14269b9a4619fecb639836b8286e144664f"),
             ("devnet", DEVNET_PARAMS, "f8981a530bf6070e4c27696d2666673ee36a1d9f1f5b4b315c4c7400b84136c0"),
         ]

@@ -177,6 +177,15 @@ impl CoinbaseManager {
         //
         // Empty on every network without a V2 bundle, which is every shipped preset.
         palw_unentitled_blues: &BlockHashSet,
+        // **ADR-0058: on a `ConsensusV2` network an entitled, in-DAA-window red is paid its
+        // worker share to ITS OWN miner script, exactly as a blue is** — not lumped into the
+        // merging miner's red reward. At the frozen 120 s cadence `ghostdag_k = 1`, so any block
+        // whose anticone holds two or more blocks is a red BY CONSTRUCTION — which is every
+        // block of every class slower than the floor. Its claim (created by the accepting
+        // block's transition, ADR-0058) carries the slash exposure; paying the includer instead
+        // would put the stake on one key and the reward on another. `false` outside V2 keeps the
+        // legacy lump byte-identical.
+        palw_pay_entitled_reds_to_their_miner: bool,
     ) -> CoinbaseResult<CoinbaseTransactionTemplate> {
         // §D base inclusion bounty: the worker-inclusion sub-pool summed over the SAME
         // mergeset blue(∩DAA)+red iteration the Worker carve uses (paid to the includer below).
@@ -255,6 +264,26 @@ impl CoinbaseManager {
             } else {
                 (reward_data.subsidy, reward_data.total_fees)
             };
+            // ADR-0058: see the parameter — an entitled in-window red's share goes to the red's
+            // own script, through the same carve arithmetic as the lump below, so moving a block
+            // between the two pay paths never changes the amount, only the payee.
+            if palw_pay_entitled_reds_to_their_miner && !mergeset_non_daa.contains(red) {
+                let value = match carve {
+                    Some(fs) => {
+                        let s = split_block_subsidy(eff_subsidy, fs);
+                        worker_inclusion_pool = worker_inclusion_pool.saturating_add(s.worker_inclusion_sompi);
+                        let finality = reward_data.finality_fees.min(eff_fees);
+                        s.worker_base_sompi
+                            .saturating_add(split_normal_tx_fees(eff_fees - finality, fs).worker_sompi)
+                            .saturating_add(split_finality_fees(finality, fs).worker_sompi)
+                    }
+                    None => eff_subsidy + eff_fees,
+                };
+                if value > 0 {
+                    outputs.push(TransactionOutput::new(value, reward_data.script_public_key.clone()));
+                }
+                continue;
+            }
             // §F carve: accumulate the Worker share EXCLUDING the §D inclusion sub-pool; else full.
             // Per-class fee split mirrors the blues loop above (and `split_block_reward`).
             red_reward += match carve {
