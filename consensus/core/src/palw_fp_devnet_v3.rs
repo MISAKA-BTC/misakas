@@ -157,6 +157,49 @@ const MAX_EXPOSURE_RATIO_PERMILLE: u32 = 500;
 /// attempt on this bundle refusable: `reserved 0 + 40960 > ceiling 10000`. Measured the moment
 /// P0-10's check was wired into the pipeline, which is exactly what that check is for.
 const MIN_COLLATERAL_SOMPI: u64 = 400_000;
+
+// ---------------------------------------------------------------------------------------------
+// ADR-0054 Decisions 3–5: the class economy
+// ---------------------------------------------------------------------------------------------
+
+/// **What one live registration reserves against its registrant's bond** (Decision 3).
+///
+/// Sized against `MIN_COLLATERAL_SOMPI` and `MAX_EXPOSURE_RATIO_PERMILLE`, not chosen: a minimum
+/// bond's ceiling is `400,000 × 500‰ = 200,000` sompi, so at 40,000 a smallest-possible bond can
+/// hold **five** live registrations and nothing else — and each one it adds is a claim it can no
+/// longer make, because both draw on the one ceiling. An operator running one honest model spends
+/// a fifth of a minimum bond's headroom; a flooder wanting a hundred dead classes needs twenty
+/// minimum bonds' worth of collateral, idle, for as long as the classes live.
+///
+/// A reservation, never a burn: it returns at reclamation or freezing, so what a flood pays is the
+/// TIME VALUE of that collateral, and what an honest registrant pays is the same thing for as long
+/// as their class is useful.
+const REGISTRATION_EXPOSURE_SOMPI: u64 = 40_000;
+
+/// Decision 4's raise arm: fill at least 800‰ of your own epoch budget, four epochs running, to
+/// gain one permille. Four epochs at `EPOCH_LENGTH` 1,000 and a 120 s target is roughly five and a
+/// half days of sustained production per permille — slow enough that the table is legible, and
+/// long enough that one lucky epoch buys nothing.
+const SHARE_RAISE_FILL_PERMILLE: u32 = 800;
+const SHARE_RAISE_EPOCHS: u32 = 4;
+
+/// The decay arm: below 200‰ of budget, four epochs running, lose one. The gap between 200‰ and
+/// 800‰ is deliberate dead band — a class oscillating around one threshold would walk its share
+/// up and down forever, and the band is what makes the walk settle.
+const SHARE_DECAY_FILL_PERMILLE: u32 = 200;
+const SHARE_DECAY_EPOCHS: u32 = 4;
+
+/// Decision 5: twelve consecutive epochs of ZERO production reclaims the class. Three times the
+/// decay window, because reclamation takes the whole share and frees the collateral — a heavier
+/// move deserves a longer look, and a class that produced even one block in twelve epochs is not
+/// what this rule is about.
+const RECLAIM_EPOCHS: u32 = 12;
+
+/// **The liveness floor's protected permille** (Decision 4's last clause). 300‰ leaves 700‰ for
+/// every other class — enough for a busy registry — while keeping the class every node can run at
+/// nearly a third of the cadence. ADR-0039 W6′ says the floor must always be able to produce;
+/// this is that sentence in permille.
+const FLOOR_PROTECTED_PERMILLE: u16 = 300;
 const WITHDRAWAL_DELAY: u64 = 6_000;
 
 /// Per-adjustment retarget clamp (ADR-0038 Decision D) and the ADR-0045 Decision 2 epoch-budget
@@ -338,7 +381,17 @@ pub fn palw_fp_devnet_bundle_v3(
     // inside `WINDOW_COURT`, which is what makes a rung deadline able to fire at all.
     .with_worker_carve_permille(WORKER_CARVE_PERMILLE)?
     .with_turn_deadline_daa(COURT_TURN_DEADLINE)?
-    .with_claim_retirement_daa(CLAIM_RETIREMENT)?;
+    .with_claim_retirement_daa(CLAIM_RETIREMENT)?
+    // **ADR-0054 Decisions 3–5, as this network sets them.**
+    .with_class_economy_v1(
+        REGISTRATION_EXPOSURE_SOMPI,
+        SHARE_RAISE_FILL_PERMILLE,
+        SHARE_RAISE_EPOCHS,
+        SHARE_DECAY_FILL_PERMILLE,
+        SHARE_DECAY_EPOCHS,
+        RECLAIM_EPOCHS,
+        FLOOR_PROTECTED_PERMILLE,
+    )?;
     // The epoch budget: what one class may produce per epoch, in pwu. Sized so a full epoch of
     // receipt blocks at `PWU_PER_QUANTUM` fits with headroom — a budget that binds before the
     // difficulty does would make the DAA a decoration.

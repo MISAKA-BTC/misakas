@@ -4770,7 +4770,13 @@ mod consensus_params_id_tests {
             // Qwen2.5-1.5B artifact root is pinned, so `palw_rc_shipped_params` registers it in
             // genesis and the catalog gains its entry. Same handshake consequence as every other
             // move on this line, and the same remedy — everyone upgrades together.
-            ("testnet-11", TESTNET11_PARAMS, "a14333bf81444b14b972df92d5e6d2c52a5c9ef0cb7ae06d99407c2731a0f8d2"),
+            // **ADR-0054 Decisions 3-5: the class economy enters the ruleset.** Seven parameters
+            // (the registration reservation, the four share-walk constants, the reclamation window
+            // and the floor's protected permille) plus state version 8 -> 9, which the class
+            // record's registrant bond, the `Dormant` status and the two new accumulators earn.
+            // Every one of them decides who holds cadence, so every one is in the fingerprint.
+            // Same coordinated upgrade as every other move on this line.
+            ("testnet-11", TESTNET11_PARAMS, "a30ec7a821ff5571080fc9c7fb1011ff3866a6d5ab60dfcb0552fd84762173bb"),
             ("simnet", SIMNET_PARAMS, "135e88c69a659d3cf4b5ce8275953c7597b2c67b03d2a74b3d0696c5d0b703fa"),
             ("devnet", DEVNET_PARAMS, "42cc6be92506a14654cb676184e1416796dec682b15e93cb9c639e8e0d77efa5"),
         ]

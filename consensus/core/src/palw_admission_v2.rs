@@ -121,6 +121,10 @@ pub enum PalwAdmissionV2Error {
     Overflow(&'static str),
     #[error("class {class_id} is registered but weightless until DAA {activation_daa} — it holds no cadence share yet")]
     ClassNotYetActive { class_id: Hash64, activation_daa: u64 },
+    /// ADR-0054 Decision 5: the class was reclaimed for producing nothing. Re-registering it is
+    /// the way back, at the grant floor and a fresh soak.
+    #[error("class {class_id} was reclaimed as dormant at DAA {since_daa} and holds no share")]
+    ClassDormant { class_id: Hash64, since_daa: u64 },
 }
 
 /// **Items 1–5 alone: is the party behind this attempt entitled to produce at all?**
@@ -173,6 +177,14 @@ pub fn check_palw_producer_entitlement_v2(
         // says which of the two facts is the reason.
         PalwClassStatusV2::Registered { activation_daa, .. } => {
             return Err(PalwAdmissionV2Error::ClassNotYetActive { class_id: attempt.class_id, activation_daa });
+        }
+        // ADR-0054 Decision 5: reclaimed for producing nothing. It holds no share and has no
+        // budget entry, exactly like a pre-activation class, and it is refused for the same
+        // reason — with its own name, because "you produced nothing for long enough that the chain
+        // took the permille back" and "you have not activated yet" are different facts and an
+        // operator has to be able to tell which one they are looking at.
+        PalwClassStatusV2::Dormant { since_daa } => {
+            return Err(PalwAdmissionV2Error::ClassDormant { class_id: attempt.class_id, since_daa });
         }
     }
 
@@ -297,7 +309,14 @@ pub fn check_palw_attempt_admission_v2(
 
     // 8. The exposure ceiling (closes P0-10): what this bond already backs, plus what this claim
     //    would reserve, against collateral × ratio. Floor on the ceiling — conservative.
-    let reserved = state.reserved_exposure(&bond_key);
+    // **ADR-0054 Decision 3: the ceiling is checked against BOTH ledgers.** A bond's claims and
+    // the classes it registered draw on one collateral, so flooding the registry and producing
+    // blocks compete for the same capital — which is the whole mechanism, and it lives here, at
+    // the one place a ceiling is applied. Two accumulators, summed at the point of use.
+    let reserved = state
+        .reserved_exposure(&bond_key)
+        .checked_add(state.registration_exposure(&bond_key))
+        .ok_or(PalwAdmissionV2Error::Overflow("total exposure"))?;
     let claim_exposure = (attempt.pwu as u128)
         .checked_mul(class.slash_value_per_pwu as u128)
         .ok_or(PalwAdmissionV2Error::Overflow("claim exposure"))?;
