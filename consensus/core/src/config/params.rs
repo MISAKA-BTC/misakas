@@ -4670,7 +4670,15 @@ mod consensus_params_id_tests {
             // prices runs, and the derivation then CHOSE the hybrid class's constants — canonical
             // (7,2), n_ctx 8 — landing its worst close at 73,636 of the 81,920 carrier. The
             // two-class genesis assembles from this value on.
-            ("testnet-11", TESTNET11_PARAMS, "f44239e431ca0cfe558b9969a19a04b61929971c9bb281e0052032056f99f45a"),
+            // And once more for the SHARE-RAISE path (ADR-0054, 2026-08-27): `PalwStateParamsV2`
+            // gains `class_growth_permille` and `base_class_reserve_permille`, and the RC bundle
+            // turns them on at 250‰ / 500‰. The state params are borsh-serialized into
+            // `palw_ruleset_id_v2`, so a rule that lets a class's cadence share follow its own
+            // production is a different network from one where a share is fixed at the grant
+            // floor forever — which is exactly what a fingerprint is for. Lands on the same
+            // re-mint as the class above; no other preset carries a PALW bundle, so no other
+            // preset moves.
+            ("testnet-11", TESTNET11_PARAMS, "d4ec4a40b1d548dd0d133b191ad78be43f9769d03e2bf4ab57b8200617035677"),
             ("simnet", SIMNET_PARAMS, "135e88c69a659d3cf4b5ce8275953c7597b2c67b03d2a74b3d0696c5d0b703fa"),
             ("devnet", DEVNET_PARAMS, "42cc6be92506a14654cb676184e1416796dec682b15e93cb9c639e8e0d77efa5"),
         ]

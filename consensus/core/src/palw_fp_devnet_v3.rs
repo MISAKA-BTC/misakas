@@ -163,6 +163,21 @@ const WITHDRAWAL_DELAY: u64 = 6_000;
 /// tolerance, in permille of a class's cadence share. Unity is the floor (below it a budget
 /// starves its own class); 1000‰ is the devnet's honest "exactly its share" setting.
 const CLASS_DAA_MAX_FACTOR: u32 = 4;
+
+/// **ADR-0054: how fast a class's cadence share follows its own production.**
+///
+/// A quarter of its own share per closed epoch, so a class needs sustained production to reach a
+/// meaningful permille — the measured trajectory from the grant floor is 1, 2, 3, 4, 5, 6, 7, 8,
+/// 10, 12, 15, 18, 22, 27, 33 over fourteen epochs — and gives it back at the same rate when it
+/// stops. Fast enough that a class worth running is not waiting a year; slow enough that nobody
+/// takes the cadence table before anyone has watched them produce.
+const CLASS_GROWTH_PERMILLE: u16 = 250;
+
+/// **The permille the liveness floor keeps** (ADR-0054). Half the table stays with the class every
+/// node can run without an artifact, whatever the model classes earn: ADR-0039 W6' says the floor's
+/// share may never be zero, and against a rule that moves permille every epoch that bound is worth
+/// only what the reserve says it is.
+const BASE_CLASS_RESERVE_PERMILLE: u16 = 500;
 const BUDGET_TOLERANCE_PERMILLE: u32 = 1_000;
 
 /// Audit C5's abandon hold, in DAA: how long a free-prompt commitment abandoned at `BindTimeout`
@@ -338,7 +353,13 @@ pub fn palw_fp_devnet_bundle_v3(
     // inside `WINDOW_COURT`, which is what makes a rung deadline able to fire at all.
     .with_worker_carve_permille(WORKER_CARVE_PERMILLE)?
     .with_turn_deadline_daa(COURT_TURN_DEADLINE)?
-    .with_claim_retirement_daa(CLAIM_RETIREMENT)?;
+    .with_claim_retirement_daa(CLAIM_RETIREMENT)?
+    // ADR-0054: the share table follows production. Without it a post-genesis entrant holds
+    // `min_grantable_share_permille` forever, its expectation and its budget are both one block per
+    // epoch, and the per-class retarget has no reachable input — measured on a two-class chain
+    // carrying the real Qwen3.6 class, whose target did not move across four epochs in either state
+    // its share allowed it to be in.
+    .with_class_share_growth_v1(CLASS_GROWTH_PERMILLE, BASE_CLASS_RESERVE_PERMILLE)?;
     // The epoch budget: what one class may produce per epoch, in pwu. Sized so a full epoch of
     // receipt blocks at `PWU_PER_QUANTUM` fits with headroom — a budget that binds before the
     // difficulty does would make the DAA a decoration.

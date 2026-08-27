@@ -336,6 +336,38 @@ pub struct PalwStateParamsV2 {
     /// `0` disables the hold (the pre-FP configuration, and what every attempt-only fixture runs
     /// at — on that lane the block cost already does this job).
     fp_abandon_hold_daa: u64,
+    /// **ADR-0054: how fast a class's cadence share may follow its own production, in permille of
+    /// its own share per closed epoch.**
+    ///
+    /// A share was a constant from the moment it was granted — `write_share` had exactly one
+    /// caller, the activation grant — so a post-genesis entrant held
+    /// `min_grantable_share_permille` forever. That share is defined to make its holder's
+    /// expectation exactly one block per epoch and ADR-0045's budget caps it at exactly that, so
+    /// the per-class retarget had nothing it could measure: observed was either 0 (skipped, audit
+    /// H1) or 1 (its expectation, a no-op). A class whose model is worth running could never earn
+    /// the cadence to run it.
+    ///
+    /// With this set, a class that produced every block its budget allowed takes
+    /// `max(1‰, share × this / 1000)` from the floor at the epoch boundary, and one that produced
+    /// nothing gives the same step back. Both are bounded by the floor's reserve and by the grant
+    /// floor — see [`crate::palw_class_daa::derive_class_share_growth_v1`].
+    ///
+    /// **`0` disables the rule**, which is exactly what every network built before ADR-0054 runs
+    /// at: no share moves except at an activation grant, and every existing fixture keeps its
+    /// meaning.
+    class_growth_permille: u16,
+    /// **The permille the liveness floor may never be donated below** (ADR-0054, and ADR-0039 W6′
+    /// read as a quantity rather than a status).
+    ///
+    /// The floor is the reservoir every growing class draws from, and it is the one class every
+    /// node can run without an artifact. W6′ said its share "may never be zero"; a growth rule
+    /// makes that bound too weak to be worth anything, because a rule that can walk the floor down
+    /// to one permille has ended liveness while satisfying the letter of it. This is the number
+    /// that says how much cadence the chain keeps in the class that always works.
+    ///
+    /// Raised to the grant floor when it is set below it — a reserve under the smallest grantable
+    /// share is not a reserve.
+    base_class_reserve_permille: u16,
 }
 
 impl PalwStateParamsV2 {
@@ -404,6 +436,11 @@ impl PalwStateParamsV2 {
             // clock. See the field doc.
             turn_deadline_daa: window_court,
             claim_retirement_daa: 0,
+            // Zero: `new` builds a network whose share table moves only at an activation grant,
+            // which is what every caller predating ADR-0054 meant. See
+            // `with_class_share_growth_v1`.
+            class_growth_permille: 0,
+            base_class_reserve_permille: 0,
         })
     }
 
@@ -454,6 +491,50 @@ impl PalwStateParamsV2 {
 
     pub fn worker_carve_permille(&self) -> u16 {
         self.worker_carve_permille
+    }
+
+    /// **Turn on the share-raise path** (ADR-0054): the per-epoch growth step, in permille of a
+    /// class's own share, and the permille the liveness floor keeps.
+    ///
+    /// A consuming builder for the same reason the carve is one: adding a fourteenth positional
+    /// `u16` beside `fp_attempt_share_permille` and `budget_tolerance_permille` is the argument a
+    /// reader mis-binds, and a share rule bound to the wrong slot moves the cadence table.
+    ///
+    /// Refused: a growth step above the whole denominator (a class that could more than double
+    /// every epoch is not following its production, it is racing it), and a reserve above the
+    /// denominator. A reserve BELOW the grant floor is not refused — it is raised to it, because
+    /// the floor is a bound the table already enforces everywhere else.
+    pub fn with_class_share_growth_v1(
+        mut self,
+        class_growth_permille: u16,
+        base_class_reserve_permille: u16,
+    ) -> Result<Self, PalwStateV2Error> {
+        if class_growth_permille > 1000 {
+            return Err(PalwStateV2Error::InvalidParams("a growth step above 1000‰ would more than double a share in one epoch"));
+        }
+        if base_class_reserve_permille > 1000 {
+            return Err(PalwStateV2Error::InvalidParams("the floor's reserve cannot exceed the whole table"));
+        }
+        if class_growth_permille > 0 && base_class_reserve_permille == 0 {
+            return Err(PalwStateV2Error::InvalidParams(
+                "a growth rule with no floor reserve can walk the liveness floor to the grant floor (ADR-0039 W6′)",
+            ));
+        }
+        self.class_growth_permille = class_growth_permille;
+        self.base_class_reserve_permille = base_class_reserve_permille;
+        Ok(self)
+    }
+
+    /// ADR-0054's growth step, in permille of a class's own share per closed epoch. `0` = the rule
+    /// is off and no share moves outside an activation grant.
+    pub fn class_growth_permille(&self) -> u16 {
+        self.class_growth_permille
+    }
+
+    /// The permille the liveness floor keeps, never below the grant floor — the reserve a growing
+    /// class may not draw past.
+    pub fn base_class_reserve_permille(&self) -> u16 {
+        self.base_class_reserve_permille.max(self.min_grantable_share_permille())
     }
 
     pub fn min_collateral_sompi(&self) -> u64 {
@@ -2689,6 +2770,14 @@ pub fn apply_palw_transition_v3(
     //     between the sweeps and the objects — a fixed slot, because fixed IS the requirement.
     apply_class_retargets(&mut builder, parent, ctx)?;
 
+    // 2c. ADR-0054's share-raise path, on the same closed span the retarget just measured: a class
+    //     that produced every block its budget allowed takes a step of cadence from the floor, and
+    //     one that produced nothing gives a step back. It runs HERE — after the retarget, which
+    //     reads the same census, and before the objects and `ensure_epoch_budgets`, so the new
+    //     epoch's budgets are derived from the table this leaves behind rather than from the one
+    //     the closed epoch had. Off entirely when `class_growth_permille` is zero.
+    apply_class_share_growth(&mut builder, parent, ctx);
+
     // 3. The block's accepted objects, in consensus acceptance order.
     for object in accepted_objects {
         apply_object(&mut builder, ctx, object)?;
@@ -3159,6 +3248,79 @@ fn ensure_epoch_budgets(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCont
         epoch_index,
     );
     builder.write_epoch_budgets(Some(budgets));
+}
+
+/// **ADR-0054: the share table follows production, at one closed epoch boundary.**
+///
+/// The arithmetic is [`crate::palw_class_daa::derive_class_share_growth_v1`] and is pure; what
+/// lives here is the decision of WHEN it runs and WHICH facts it reads — the same closed span the
+/// retarget measures, from the same counters, plus that span's own budget table.
+///
+/// Reading the budget of the CLOSED epoch is what makes "filled its allowance" a fact rather than
+/// a guess: `ensure_epoch_budgets` has not yet run for the new epoch at this point in the
+/// transition, so `state.epoch_budgets` still holds the table the closed epoch was capped by. A
+/// budget from any other epoch is not evidence about this one and is skipped.
+///
+/// Silent when the rule is off, when no boundary was crossed, or when the span produced nothing:
+/// an empty span says nothing about any class's need for cadence, in either direction.
+fn apply_class_share_growth(builder: &mut TransitionBuilder<'_>, parent: &PalwChainStateV2, ctx: &PalwBlockContextV2) {
+    if builder.params.class_growth_permille() == 0 {
+        return;
+    }
+    let Some(last) = &parent.last_point else { return };
+    let epoch_length = builder.params.epoch_length;
+    let closed_epoch = last.daa_score / epoch_length;
+    if ctx.daa_score / epoch_length <= closed_epoch {
+        return;
+    }
+    // The closed epoch's budget table, or nothing: a table stamped with another epoch caps a
+    // different span, and comparing production against it would invent a verdict.
+    let budgets = match builder.state.epoch_budgets.as_ref() {
+        Some(budgets) if budgets.epoch_index == closed_epoch => budgets.budget_blocks.clone(),
+        _ => return,
+    };
+    let use_by_class: BTreeMap<Hash64, crate::palw_class_daa::PalwClassEpochUseV1> = builder
+        .state
+        .class_shares
+        .keys()
+        .map(|class_id| {
+            let produced = builder
+                .state
+                .epoch_counters
+                .get(class_id)
+                .filter(|counter| counter.epoch_index == closed_epoch)
+                .map(|counter| counter.produced_blocks)
+                .unwrap_or(0);
+            (*class_id, crate::palw_class_daa::PalwClassEpochUseV1 { produced, budget: budgets.get(class_id).copied().unwrap_or(0) })
+        })
+        .collect();
+    if use_by_class.values().all(|used| used.produced == 0) {
+        // A span nobody produced in measures nothing. Without this, every class in the table would
+        // decay on a gap epoch and the floor would collect the whole table for an outage that was
+        // never any class's fault.
+        return;
+    }
+    let frozen: BTreeSet<Hash64> = builder
+        .state
+        .classes
+        .iter()
+        .filter(|(_, record)| matches!(record.status, PalwClassStatusV2::Frozen { .. }))
+        .map(|(id, _)| *id)
+        .collect();
+    let moved = crate::palw_class_daa::derive_class_share_growth_v1(
+        &builder.state.class_shares,
+        &frozen,
+        &use_by_class,
+        builder.params.base_class_id,
+        builder.params.class_growth_permille(),
+        builder.params.base_class_reserve_permille(),
+        builder.params.min_grantable_share_permille(),
+    );
+    for (class_id, share) in moved.shares {
+        if builder.state.class_shares.get(&class_id).copied() != Some(share) {
+            builder.write_share(class_id, Some(share));
+        }
+    }
 }
 
 fn apply_class_retargets(
