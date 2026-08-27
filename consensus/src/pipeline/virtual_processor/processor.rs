@@ -3988,7 +3988,21 @@ impl VirtualStateProcessor {
         // Identities already paid or claimed in THIS mergeset. The state answers for identities
         // the chain has already seen; nothing but this answers for two siblings carrying one.
         let mut seen_here: std::collections::HashSet<kaspa_consensus_core::Hash64> = Default::default();
-        for blue in ghostdag_data.mergeset_blues.iter().filter(|h| !mergeset_non_daa.contains(h)) {
+        // **Blues AND reds.** This iterated `mergeset_blues` alone, so the set could never contain a
+        // red — and the coinbase's reds loop had no skip to apply one anyway. At the frozen 120 s
+        // cadence `ghostdag_k = 1` against a `mergeset_size_limit` of 180, so the blues this
+        // filtered were at most ONE block per mergeset and the reds it did not filter were
+        // everything else: every red was paid its full worker share to the merging miner, with no
+        // bond, class, lottery, budget or exposure behind it. The door does not compensate — the
+        // header gate checks shape, the challenge equation and a signature under the CARRIED key,
+        // and leaves trace, output and execution roots unchecked.
+        //
+        // A red is not a chain block, so the selected-parent exemption below cannot apply to one,
+        // and the same entitlement question is the right question for both colours: did this chain
+        // accept work from that block.
+        let mergeset_daa =
+            ghostdag_data.mergeset_blues.iter().chain(ghostdag_data.mergeset_reds.iter()).filter(|h| !mergeset_non_daa.contains(h));
+        for blue in mergeset_daa {
             // The selected parent went through the full admission on its way to becoming a chain
             // block, and its reward is escrowed rather than paid. Re-deciding it here could only
             // ever disagree with the transition that already accepted it.
@@ -9765,11 +9779,24 @@ impl VirtualStateProcessor {
         // (Stage 3) selected by DAA, identically to the validation path.
         let carve = self.dns_params.as_ref().and_then(|p| p.reward_fee_split(virtual_state.daa_score));
         let validator_pool = carve.map_or(0, |fs| {
+            // The template computes the SAME set the validator will, from the same state it is
+            // building on — a template whose pool disagreed with validation would build a coinbase
+            // its own node then refuses.
+            // No params means no V2 bundle, which means no entitlement question — and an `expect`
+            // here panics every hash-only network's template, because the DNS carve this closure
+            // computes exists on networks PALW does not.
+            let unentitled = self
+                .palw_state_params_v2
+                .as_ref()
+                .and_then(|params| self.palw_state_v2_store.read().load_tip(params).ok().flatten())
+                .map(|(_, state)| self.palw_v2_unentitled_blues(&state, &virtual_state.ghostdag_data, &virtual_state.mergeset_non_daa))
+                .unwrap_or_default();
             self.coinbase_manager.coinbase_validator_pool(
                 &virtual_state.ghostdag_data,
                 &virtual_state.mergeset_rewards,
                 &virtual_state.mergeset_non_daa,
                 fs,
+                &unentitled,
             )
         });
         let (validator_reward_outputs, _rewarded_keys, newly_included_stake, expected_stake) = self

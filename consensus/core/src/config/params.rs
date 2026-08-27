@@ -4509,7 +4509,7 @@ mod consensus_params_id_tests {
             // see docs/testnet10-palw-rollout-runbook.md — and pinned MATERIALIZED (below) per
             // the 8208cd6 lesson, so the pre-merge values (`32cbf80f…` re-genesis-const /
             // `d07cb673…` shadow-materialized) were both superseded by that merge.
-            ("testnet", TESTNET_PARAMS, "48462b2b931522d3bfe3931790a4c8711df6bb931c471a9559db78fe388f3eda"),
+            ("testnet", TESTNET_PARAMS, "41de4731dca9fa11be4b1a7a415dfb739781c1875e3f6c78af8fa4f3bf780ce0"),
             // The PALW staging net (gate-4 soak): differs from "testnet" in exactly the three
             // activation flips (hash lane off, PALW-4 on, Ollama off) + the TN11 genesis. Its own
             // pin proves the t10 row above did NOT move when this preset was added.
@@ -4537,9 +4537,9 @@ mod consensus_params_id_tests {
             // are different networks**, and they find out at the handshake rather than at
             // consensus, which is the direction to fail in. Landing it needs an RC re-mint; no
             // other preset moved, because no other preset carries a PALW class.
-            ("testnet-11", TESTNET11_PARAMS, "de94f93103a66fd9d0100c24f81f1e5e270c66e407ee2ed869cfa398df8f8e95"),
-            ("simnet", SIMNET_PARAMS, "135e88c69a659d3cf4b5ce8275953c7597b2c67b03d2a74b3d0696c5d0b703fa"),
-            ("devnet", DEVNET_PARAMS, "42cc6be92506a14654cb676184e1416796dec682b15e93cb9c639e8e0d77efa5"),
+            ("testnet-11", TESTNET11_PARAMS, "f4ab37588ffdeb740c98ad7200c97149021eaea35d63f72a4aafb4651cd62cc2"),
+            ("simnet", SIMNET_PARAMS, "dae24a4cddc3bd324d7e99dc61c9e14269b9a4619fecb639836b8286e144664f"),
+            ("devnet", DEVNET_PARAMS, "f8981a530bf6070e4c27696d2666673ee36a1d9f1f5b4b315c4c7400b84136c0"),
         ]
         .into_iter()
         .filter_map(|(name, params, expected)| {

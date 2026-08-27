@@ -122,28 +122,26 @@ mod repin {
 mod tests {
     use super::*;
     use kaspa_consensus_core::{
-        config::{
-            Config,
-            params::SIMNET_PARAMS,
-            premine::{MISAKA_PREMINE_SOMPI, misaka_premine_utxos},
-        },
+        config::{Config, params::SIMNET_PARAMS, premine::misaka_premine_utxos},
         constants::SOMPI_PER_KASPA,
         muhash::MuHashExtensions,
         network::NetworkType,
     };
 
     #[test]
-    fn premine_is_the_13b_split() {
-        // Re-genesis 2026-06-17: 40 vault UTXOs × 0.1B + 1 main × 9B = 13B KAS.
+    fn premine_is_the_expected_split() {
+        // Re-genesis 2026-08-26: the main wallet is per network — mainnet keeps 9B (13B total),
+        // the re-minted networks hold 6B (10B total). This fixture is simnet, so it is the 10B
+        // side; `config::premine::tests::premine_is_the_expected_split_on_every_network` is the
+        // one that asserts both, against the constants the builder itself reads.
         let utxos = misaka_premine_utxos(NetworkType::Simnet);
         assert_eq!(utxos.len(), 41, "premine is 40 vaults + 1 main = 41 UTXOs");
         let total: u64 = utxos.values().map(|e| e.amount).sum();
-        assert_eq!(total, MISAKA_PREMINE_SOMPI);
-        assert_eq!(total, 13_000_000_000 * SOMPI_PER_KASPA, "13B KAS");
+        assert_eq!(total, 10_000_000_000 * SOMPI_PER_KASPA, "10B KAS on a re-minted network");
         let vaults = utxos.values().filter(|e| e.amount == 100_000_000 * SOMPI_PER_KASPA).count();
-        let mains = utxos.values().filter(|e| e.amount == 9_000_000_000 * SOMPI_PER_KASPA).count();
+        let mains = utxos.values().filter(|e| e.amount == 6_000_000_000 * SOMPI_PER_KASPA).count();
         assert_eq!(vaults, 40, "40 vault UTXOs of 0.1B");
-        assert_eq!(mains, 1, "1 main UTXO of 9B");
+        assert_eq!(mains, 1, "1 main UTXO of 6B");
         for entry in utxos.values() {
             assert!(!entry.is_coinbase, "premine must be non-coinbase (spendable from block 0)");
             assert_eq!(entry.block_daa_score, 0);

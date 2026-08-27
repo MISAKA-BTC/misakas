@@ -184,15 +184,53 @@ pub fn base0_inventory_v1(
         // the shape `palw_step_refute` accepts beside the per-channel one, and the only shape a
         // fixed inventory can carry for a step whose row length is a function of the position
         // (`qk_to_code` at the attention site is applied to a `kv_len`-long softmax output).
+        // **The q/k/v narrowings are per CHANNEL when the artifact carries them, and the inventory
+        // has to say so** (audit 2026-08-26, finding 11).
+        //
+        // A converted artifact puts the projection BIASES in each channel's zero point
+        // (`convert.rs`) and the engine narrows with them (`engine.rs`), while this loop emitted
+        // one tensor-wide 9-byte leaf per tensor and the identifier `qkv_channel_requant` appeared
+        // nowhere here. So `artifact_root` covered numbers the execution does not use. At dispute
+        // the court asked for `9 x channels`, `operand_bytes` refused on length, and the
+        // `.cycle()` fallback in `palw_step_refute` answered with the uniform leaf repeated —
+        // recomputing the narrowing with ZERO bias on every channel and convicting an honest
+        // producer of arithmetic it never performed. The test that was supposed to pin this
+        // asserted `artifact_digest()`, which the same file documents as a value nothing can be
+        // opened against, and the only court round trip runs the derived floor, whose field is
+        // `None` — the one case where the fallback happens to be right.
+        //
+        // Emitting the real triples makes the exact-length request succeed, so the fallback is
+        // never reached for these tensors. It moves `artifact_root`, and therefore the class id:
+        // that is a re-mint, and it is the correct price for a root that did not commit to the
+        // execution it names.
+        if let Some(per_channel) = layer.qkv_channel_requant.as_ref() {
+            for (suffix, params) in
+                [("attn_q.requant", &per_channel[0]), ("attn_k.requant", &per_channel[1]), ("attn_v.requant", &per_channel[2])]
+            {
+                let bytes: Vec<u8> = params.iter().flat_map(|q| quant_bytes(*q)).collect();
+                rows.push(PalwArtifactOperandV1 { tensor_name: named(suffix), layer: l, row_start: 0, bytes });
+            }
+        }
         for (suffix, params) in [
             ("attn_norm.requant", artifact.norm_requant),
             ("ffn_norm.requant", artifact.norm_requant),
-            ("attn_q.requant", layer.requant[0]),
-            ("attn_k.requant", layer.requant[1]),
-            ("attn_v.requant", layer.requant[2]),
             ("attn_output.requant", layer.requant[3]),
             ("ffn_up.requant", layer.requant[5]),
             ("ffn_down.requant", layer.requant[6]),
+            // Emitted here only when the artifact declares no per-channel table; the `Some` arm
+            // above owns these three names otherwise, and two rows under one name would be an
+            // inventory that answers the same question twice.
+        ] {
+            rows.push(PalwArtifactOperandV1 { tensor_name: named(suffix), layer: l, row_start: 0, bytes: quant_bytes(params) });
+        }
+        if layer.qkv_channel_requant.is_none() {
+            for (suffix, params) in
+                [("attn_q.requant", layer.requant[0]), ("attn_k.requant", layer.requant[1]), ("attn_v.requant", layer.requant[2])]
+            {
+                rows.push(PalwArtifactOperandV1 { tensor_name: named(suffix), layer: l, row_start: 0, bytes: quant_bytes(params) });
+            }
+        }
+        for (suffix, params) in [
             ("qk_to_code.requant", artifact.qk_to_code()),
             ("code_product.requant", artifact.code_product()),
             ("rope_clamp.requant", artifact.rope_clamp()),

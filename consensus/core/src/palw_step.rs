@@ -77,6 +77,14 @@ pub const PALW_STEP_MAX_ENUMERATION: u64 = 1 << 24;
 /// Ceiling on declared layers. A layer's table is walked at every position, so this is the inner
 /// factor of [`PALW_STEP_MAX_ENUMERATION`]; it is also far above any architecture the court can
 /// adjudicate.
+/// The largest stabiliser an rms epsilon may declare (audit finding 4c).
+///
+/// It is added to a Qk mean of squares in `i64` and this crate builds with `overflow-checks`, so
+/// the only question is where the line sits. 2^40 is far above any epsilon a real profile uses
+/// (the shipped ones are single-digit Qk units) and far below the range where the addition can
+/// carry, so it refuses the attack without constraining an honest class.
+pub const PALW_STEP_MAX_RMS_EPS_Q: i64 = 1 << 40;
+
 pub const PALW_STEP_MAX_LAYERS: u16 = 1024;
 /// Most nodes one layer template may declare.
 pub const PALW_STEP_MAX_NODES_PER_TABLE: usize = 64;
@@ -471,6 +479,31 @@ impl PalwShapeProfileV3 {
         }
         if self.n_threads == 0 {
             return Err(bad("thread count is zero"));
+        }
+        // **The invariants the adjudicator's arithmetic assumes, refused HERE instead of discovered
+        // in a dispute** (audit 2026-08-26, finding 4).
+        //
+        // The attention arms decompose an output index into a head and slice the KV cache at
+        // `(head / group) * head_dim`, so a zero on either factor makes that arithmetic meaningless
+        // before any cache exists.
+        //
+        // **What is NOT enforced, deliberately, and against the audit's own suggested fix:**
+        // `attn_heads * attn_head_dim == hidden_dim`. It is true of every model this tree ships
+        // (Qwen2.5-1.5B is 12 x 128 = 1536) and it is NOT a universal architectural identity — an
+        // attention projection need not be square with the residual width, and the adjudicator's
+        // own fixtures exercise 32 / 1 / 16 through paths that adjudicate correctly. Refusing that
+        // profile would refuse classes this court can already judge. The reachable defect the
+        // identity was proposed against — an out-of-range KV slice inside block validation — is
+        // closed where it actually lives, by making those arms total (`get(..).ok_or(..)`), which
+        // is a refusal of the DISPUTE rather than a refusal of the class.
+        if self.attn_heads == 0 || self.attn_head_dim == 0 {
+            return Err(bad("zero attention geometry"));
+        }
+        // `base0_rms_eps_q` is added to a Qk mean of squares in `i64` under `overflow-checks`, so a
+        // registrant-chosen epsilon anywhere near the type's range is a panic they choose. An
+        // epsilon is a small stabiliser by definition; a negative one is not an epsilon at all.
+        if self.base0_rms_eps_q < 0 || self.base0_rms_eps_q > PALW_STEP_MAX_RMS_EPS_Q {
+            return Err(bad("the rms epsilon is outside the adjudicable range"));
         }
         Ok(())
     }

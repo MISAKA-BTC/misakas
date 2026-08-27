@@ -239,6 +239,15 @@ impl CoinbaseManager {
         let mut red_reward = 0u64;
 
         for red in ghostdag_data.mergeset_reds.iter() {
+            // **The same skip the blues loop has, for the same reason.** It was missing here
+            // while the set was built from blues alone, so the two halves agreed only by never
+            // meeting: an unentitled red was paid its full worker share to this block's miner.
+            // At the frozen cadence `ghostdag_k = 1` against a mergeset limit of 180, so the
+            // blues this filtered were at most ONE block and the reds it did not were
+            // everything else — which is where the value actually was.
+            if palw_unentitled_blues.contains(red) {
+                continue;
+            }
             let reward_data = mergeset_rewards.get(red).unwrap();
             // Reds ∩ DAA earn subsidy + fees; non-DAA reds earn fees only (both fee classes kept).
             let (eff_subsidy, eff_fees) = if mergeset_non_daa.contains(red) {
@@ -320,21 +329,33 @@ impl CoinbaseManager {
     /// `validator_reward_outputs`. The caller passes `fee_split` only past
     /// `dns_activation_daa_score` (= 0 everywhere today), so this is active from
     /// genesis on every current network.
+    /// `palw_unentitled` is the same set the coinbase itself refuses to pay. This function's doc
+    /// used to claim it iterates identically to the coinbase "so the pool and the carve never
+    /// drift", and it took no such argument — so at `subsidy_validator_bps = 3000`, 30% of an
+    /// unentitled block's subsidy was still minted into the attester pool the coinbase had just
+    /// declined to fund. The pool is a payout SCALE, not a burn ceiling, so that value was paid.
     pub fn coinbase_validator_pool(
         &self,
         ghostdag_data: &GhostdagData,
         mergeset_rewards: &BlockHashMap<BlockRewardData>,
         mergeset_non_daa: &BlockHashSet,
         fee_split: &FeeSplitParams,
+        palw_unentitled: &BlockHashSet,
     ) -> u64 {
         let mut pool = 0u64;
         for blue in ghostdag_data.mergeset_blues.iter().filter(|h| !mergeset_non_daa.contains(h)) {
+            if palw_unentitled.contains(blue) {
+                continue;
+            }
             let reward_data = mergeset_rewards.get(blue).unwrap();
             pool = pool.saturating_add(
                 split_block_reward(reward_data.subsidy, reward_data.total_fees, reward_data.finality_fees, fee_split).validator_sompi,
             );
         }
         for red in ghostdag_data.mergeset_reds.iter() {
+            if palw_unentitled.contains(red) {
+                continue;
+            }
             let reward_data = mergeset_rewards.get(red).unwrap();
             let (eff_subsidy, eff_fees) = if mergeset_non_daa.contains(red) {
                 (0, reward_data.total_fees)
