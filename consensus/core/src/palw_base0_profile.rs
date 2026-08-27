@@ -268,8 +268,6 @@ pub const BASE0_POST_IR: &[Base0IrNodeV1] = &[
     n(PalwStepOpKindV1::MatMulQuant, KDESC_BASE0_MATMUL, BASE0_IR_HEAD_TENSOR, Vocab, &[Step(1)]),
 ];
 
-/// `const fn` so the table above reads as a list rather than as a struct literal thirty-six times.
-
 /// **The A16 tier's dense layer, in `engine_a16.rs`'s own order** — twenty-seven steps against
 /// [`BASE0_LAYER_IR`]'s thirty-seven, because W8A16 spends no step re-narrowing an activation to
 /// eight bits between every pair of matmuls.

@@ -7737,3 +7737,434 @@ async fn dns_stale_anchor_ttl_releases_a_dead_branch_wedge() {
         "with the anchor aged past the TTL the veto releases and the node follows the work-dominant chain"
     );
 }
+
+/// **Qwen3.6's own three series, per epoch, on a two-class chain: expected, observed, target.**
+///
+/// The live testnet cannot answer this — testnet-11 registered no second class (its 2026-08-24
+/// registration carrier was never mined), so its only class holds the whole table and the
+/// retarget is an exact no-op by construction. This runs the same question against the same
+/// consensus code on the two-class RC genesis, where the entrant is the REAL `PALW-QWEN36` class:
+/// its own `shape_profile_id`, its own counted `pwu_per_inference`, its own registered target.
+///
+/// Every block here is a real block: template, attempt, class lottery, ML-DSA-87 signature, and
+/// `validate_and_insert_block` through the virtual processor. What is reused rather than recomputed
+/// is the EXECUTION behind one class's roots — one forward pass per class, then the nonce moves the
+/// challenge. Acceptance never re-runs an execution (that is the panel's and the court's), so this
+/// changes nothing the difficulty loop reads.
+///
+/// Run: `cargo test --release -p kaspa-consensus qwen36_per_epoch -- --ignored --nocapture`
+#[tokio::test]
+#[ignore = "produces thousands of real blocks; run explicitly with --ignored --nocapture"]
+async fn palw_rc_qwen36_per_epoch_expected_observed_target() {
+    use kaspa_consensus_core::api::ConsensusApi;
+    use kaspa_consensus_core::palw_attempt_v2::{
+        PALW_ATTEMPT_V2_MLDSA87_CONTEXT, PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, attempt_id_v2,
+        challenge_v2, class_ticket_v2, palw_network_domain_v2,
+    };
+    use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
+    use kaspa_consensus_core::palw_base0_profile::{PALW_RC_BASE0_CANONICAL, PALW_RC_BASE0_GEOMETRY, base0_profile_v1};
+    use kaspa_consensus_core::palw_qwen36_profile::{QWEN36_35B_A3B, QWEN36_RC_CANONICAL, qwen36_profile_v1};
+    use misaka_palw_base0::produce::{base0_execute_for_attempt_v1, base0_rc_job_anchor_v1, base0_rc_job_v1};
+    use misaka_palw_base0::qwen36_backend::Qwen36Backend;
+
+    let epochs: u64 = std::env::var("MISAKA_EPOCHS").ok().and_then(|v| v.parse().ok()).unwrap_or(3);
+
+    // Every registry row gets a REAL key, so claims can be spread over more than one bond: a
+    // 1000-block epoch holds ~`window_bind` claims open at once, and one bond is sized for one
+    // class's span.
+    let keys: Vec<_> = (0..kaspa_consensus_core::palw_fp_devnet_v3::palw_v2_min_genesis_bonds_v1() as u32)
+        .map(|i| libcrux_ml_dsa::ml_dsa_87::generate_key_pair([0xB0u8.wrapping_add(i as u8); 32]))
+        .collect();
+    let registry: Vec<_> = keys
+        .iter()
+        .enumerate()
+        .map(|(i, kp)| kaspa_consensus_core::palw_fp_devnet_v3::PalwGenesisBondSpecV1 {
+            bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(kaspa_consensus_core::config::premine::premine_outpoint(
+                i as u32,
+            )),
+            pubkey: kp.verification_key.as_ref().to_vec(),
+            operator_pubkey: vec![21u8, i as u8, 0, 0, 0, 0, 0, 0],
+            payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11 + i as u64),
+        })
+        .collect();
+
+    let base_root = misaka_palw_base0::rc::palw_rc_base0_artifact_root_v1().expect("the floor's artifact derives");
+    let qwen_artifact = misaka_palw_base0::qwen36::qwen36_dev_fixture(4, 8);
+    let qwen_root = qwen_artifact.artifact_root();
+    let params = kaspa_consensus_core::config::params::palw_rc_params_with_qwen36(base_root, qwen_root, registry)
+        .expect("the two-class genesis assembles");
+    let bundle = match &params.palw_consensus_mode {
+        kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) => b.clone(),
+        _ => panic!("a ConsensusV2 network"),
+    };
+    let epoch_length = bundle.state.epoch_length();
+    let qwen_class_id = qwen36_profile_v1(QWEN36_35B_A3B).expect("projects").shape_profile_id();
+    let base_class_id = bundle.base_class_id;
+
+    let config = ConfigBuilder::new(params)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            if !cfg!(feature = "evm") {
+                p.evm_activation_daa_score = u64::MAX;
+            }
+        })
+        .build();
+    let network_domain = palw_network_domain_v2(config.params.net.to_string().as_bytes());
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+
+    // One execution per class; the nonce does the rest.
+    let base_profile = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("expressible");
+    let base_artifact = misaka_palw_base0::rc::palw_rc_base0_artifact_v1().expect("derives");
+    let seed_anchor = base0_rc_job_anchor_v1(
+        network_domain,
+        kaspa_hashes::Hash64::from_u64_word(1),
+        base_class_id,
+        &kaspa_consensus_core::config::premine::premine_outpoint(0),
+    );
+    let (base_job, base_prompt) =
+        base0_rc_job_v1(&base_profile, seed_anchor, base_artifact.shape.vocab, PALW_RC_BASE0_CANONICAL.0, PALW_RC_BASE0_CANONICAL.1);
+    let base_run = base0_execute_for_attempt_v1(&base_artifact, &base_profile, &base_job, &base_prompt).expect("the floor runs");
+    let qwen_backend = Qwen36Backend::new(
+        std::sync::Arc::new(qwen_artifact),
+        "Qwen3.6-dev-fixture",
+        QWEN36_RC_CANONICAL,
+        qwen_class_id,
+        config.params.net.to_string().into_bytes(),
+    );
+    let qwen_anchor = base0_rc_job_anchor_v1(
+        network_domain,
+        kaspa_hashes::Hash64::from_u64_word(2),
+        qwen_class_id,
+        &kaspa_consensus_core::config::premine::premine_outpoint(1),
+    );
+    let (qwen_job, qwen_prompt) = qwen_backend.job_for_anchor(qwen_anchor).expect("the anchor implies a job");
+    let qwen_run = qwen_backend.execute(&qwen_job, &qwen_prompt).expect("a real hybrid forward pass");
+    // The four roots and the chunk count are all an attempt carries out of an execution, and the
+    // two engines return different types — so the commitment material, not the run, is what the
+    // loop below selects between.
+    let base_roots =
+        (base_run.trace_root, base_run.output_root, base_run.execution_root, base_run.trace_manifest_root, base_run.trace_chunk_count);
+    let qwen_roots =
+        (qwen_run.trace_root, qwen_run.output_root, qwen_run.execution_root, qwen_run.trace_manifest_root, qwen_run.trace_chunk_count);
+
+    println!();
+    println!("=== two-class RC chain: BASE-0 {} + QWEN36 {} ===", &base_class_id.to_string()[..16], &qwen_class_id.to_string()[..16]);
+    println!("epoch_length {epoch_length}, entrant share {}‰", bundle.state.min_grantable_share_permille());
+    println!(
+        "{:>5} {:>7} {:>6} {:>9} {:>9} {:>7} {:>12} {:>16} {:>16}",
+        "epoch", "class", "share", "expected", "observed", "budget", "pwu", "target before", "target after"
+    );
+
+    // Per epoch: how many blocks the entrant tries to produce.
+    let qwen_quota = |epoch: u64| -> u64 { if epoch == 0 { 0 } else { 1 } };
+    let mut refused_over_budget = 0u64;
+    // The counters roll the moment the boundary block lands, so the closed epoch's numbers have to
+    // be taken from inside it — the last read before the crossing is the epoch's final state.
+    let mut last_in_epoch: Vec<(&'static str, u16, u64, u64, u64, u128, u64)> = Vec::new();
+
+    for epoch in 0..epochs {
+        loop {
+            let daa = ctx.consensus.get_virtual_daa_score();
+            if daa / epoch_length != epoch {
+                break;
+            }
+            let produced_qwen = ctx
+                .consensus
+                .palw_producer_facts_v2(qwen_class_id, None)
+                .map(|f| if f.epoch_index == epoch { f.epoch_produced_blocks } else { 0 })
+                .unwrap_or(0);
+            let want_qwen = produced_qwen < qwen_quota(epoch);
+            let (class_id, bond_index) = if want_qwen { (qwen_class_id, 1u32) } else { (base_class_id, 0u32) };
+            let bond = kaspa_consensus_core::config::premine::premine_outpoint(bond_index);
+            let facts = ctx.consensus.palw_producer_facts_v2(class_id, Some(bond)).expect("a V2 network answers");
+            let run = if want_qwen { qwen_roots } else { base_roots };
+            let mut block = ctx.build_block_template_keeping_time(0).block;
+            let timestamp = block.header.timestamp;
+            let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(&block.header);
+            let mut attempt = PalwAttemptUnsignedV2 {
+                version: PALW_ATTEMPT_V2_VERSION,
+                network_domain,
+                challenge: kaspa_hashes::Hash64::default(),
+                class_id,
+                executor_bond: bond,
+                executor_pubkey: keys[bond_index as usize].verification_key.as_ref().to_vec(),
+                operator_id: facts.bond.as_ref().expect("a genesis bond").operator_id,
+                artifact_root: facts.artifact_root,
+                trace_root: run.0,
+                output_root: run.1,
+                execution_root: run.2,
+                pwu: facts.pwu,
+                trace_manifest_root: run.3,
+                trace_chunk_count: run.4,
+                trace_retention_daa: facts.daa_score.saturating_add(facts.min_trace_retention_daa),
+            };
+            let mut won = None;
+            for nonce in 0u64..1_000_000 {
+                attempt.challenge = challenge_v2(network_domain, pre_pow, timestamp, nonce, class_id, &bond);
+                if class_ticket_v2(&attempt) <= facts.class_target {
+                    won = Some(nonce);
+                    break;
+                }
+            }
+            let nonce = won.expect("the class target is winnable");
+            let signature = libcrux_ml_dsa::ml_dsa_87::sign(
+                &keys[bond_index as usize].signing_key,
+                attempt_id_v2(&attempt).as_byte_slice(),
+                PALW_ATTEMPT_V2_MLDSA87_CONTEXT,
+                [0x5Au8; 32],
+            )
+            .expect("sign")
+            .as_ref()
+            .to_vec();
+            block.header.nonce = nonce;
+            block.header.palw_commitment = PalwAttemptEnvelopeV2 { attempt, signature }.encode_wire();
+            block.header.finalize();
+            let inserted = block.to_immutable();
+            let status = ctx.consensus.validate_and_insert_block(inserted).virtual_state_task.await;
+            match status {
+                Ok(_) => {}
+                Err(e) => {
+                    let text = format!("{e:?}");
+                    assert!(
+                        text.contains("budget") || text.contains("exposure"),
+                        "a block may only be refused for the budget or the bond, got: {text}"
+                    );
+                    refused_over_budget += 1;
+                    if refused_over_budget > 4 {
+                        panic!("the chain refused five blocks running: {text}");
+                    }
+                    break;
+                }
+            }
+            // `palw_producer_facts_v2` answers for the CANDIDATE, so the last read inside an epoch
+            // already describes the next one — keep only the reads that still describe this epoch.
+            let captured: Vec<_> = [("BASE-0", base_class_id, 0u32), ("QWEN36", qwen_class_id, 1u32)]
+                .into_iter()
+                .map(|(name, class_id, bond_index)| {
+                    let f = ctx
+                        .consensus
+                        .palw_producer_facts_v2(class_id, Some(kaspa_consensus_core::config::premine::premine_outpoint(bond_index)))
+                        .expect("answers");
+                    let share = ctx
+                        .consensus
+                        .palw_v2_class_table()
+                        .into_iter()
+                        .find(|r| r.class_id == class_id)
+                        .and_then(|r| r.share_permille)
+                        .unwrap_or(0);
+                    (name, share, f.epoch_produced_blocks, f.epoch_budget_blocks, f.pwu, f.class_target, f.epoch_index)
+                })
+                .collect();
+            if captured.iter().all(|row| row.6 == epoch) {
+                last_in_epoch = captured;
+            }
+        }
+        // The closed epoch's own numbers, captured inside it.
+        let rows = std::mem::take(&mut last_in_epoch);
+        let realized: u64 = rows.iter().map(|r| r.2).sum();
+        for (name, share, observed, budget, pwu, target, seen_epoch) in rows {
+            let expected = (realized * share as u64 + 500) / 1000;
+            let class_id = if name == "BASE-0" { base_class_id } else { qwen_class_id };
+            let after = ctx.consensus.palw_producer_facts_v2(class_id, None).map(|f| f.class_target).unwrap_or(target);
+            println!(
+                "{:>5} {:>7} {:>5}‰ {:>9} {:>9} {:>7} {:>12} {:>16.9} {:>16.9}",
+                seen_epoch,
+                name,
+                share,
+                expected,
+                observed,
+                budget,
+                pwu,
+                (target as f64 + 1.0) / (u128::MAX as f64 + 1.0),
+                (after as f64 + 1.0) / (u128::MAX as f64 + 1.0)
+            );
+        }
+    }
+    println!("blocks refused for budget/exposure during the run: {refused_over_budget}");
+}
+
+/// **ADR-0054 under real block validation: the entrant's share moves at the boundary.**
+///
+/// `the_real_qwen36_class_earns_share_by_producing` drives the transition directly, which is where
+/// the rule lives; this drives the BLOCKS — every one of them templated, ticketed, signed and
+/// accepted — so the share the chain reports afterwards is one that survived the whole pipeline,
+/// and it is read back through the same `palw_v2_class_table` an operator sees.
+///
+/// One epoch is 1,000 DAA and one block is one DAA, so this is a thousand real blocks; ignored in
+/// CI for that reason.
+#[tokio::test]
+#[ignore = "produces a full 1000-block epoch; run with --ignored --nocapture"]
+async fn palw_rc_qwen36_earns_share_through_real_blocks() {
+    use kaspa_consensus_core::api::ConsensusApi;
+    use kaspa_consensus_core::palw_attempt_v2::{
+        PALW_ATTEMPT_V2_MLDSA87_CONTEXT, PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, attempt_id_v2,
+        challenge_v2, class_ticket_v2, palw_network_domain_v2,
+    };
+    use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
+    use kaspa_consensus_core::palw_base0_profile::{PALW_RC_BASE0_CANONICAL, PALW_RC_BASE0_GEOMETRY, base0_profile_v1};
+    use kaspa_consensus_core::palw_qwen36_profile::{QWEN36_35B_A3B, QWEN36_RC_CANONICAL, qwen36_profile_v1};
+    use misaka_palw_base0::produce::{base0_execute_for_attempt_v1, base0_rc_job_anchor_v1, base0_rc_job_v1};
+    use misaka_palw_base0::qwen36_backend::Qwen36Backend;
+
+    let keys: Vec<_> = (0..kaspa_consensus_core::palw_fp_devnet_v3::palw_v2_min_genesis_bonds_v1() as u32)
+        .map(|i| libcrux_ml_dsa::ml_dsa_87::generate_key_pair([0xB0u8.wrapping_add(i as u8); 32]))
+        .collect();
+    let registry: Vec<_> = keys
+        .iter()
+        .enumerate()
+        .map(|(i, kp)| kaspa_consensus_core::palw_fp_devnet_v3::PalwGenesisBondSpecV1 {
+            bond: kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(kaspa_consensus_core::config::premine::premine_outpoint(
+                i as u32,
+            )),
+            pubkey: kp.verification_key.as_ref().to_vec(),
+            operator_pubkey: vec![21u8, i as u8, 0, 0, 0, 0, 0, 0],
+            payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11 + i as u64),
+        })
+        .collect();
+    let base_root = misaka_palw_base0::rc::palw_rc_base0_artifact_root_v1().expect("derives");
+    let qwen_artifact = misaka_palw_base0::qwen36::qwen36_dev_fixture(4, 8);
+    let qwen_root = qwen_artifact.artifact_root();
+    let params = kaspa_consensus_core::config::params::palw_rc_params_with_qwen36(base_root, qwen_root, registry)
+        .expect("the two-class genesis assembles");
+    let bundle = match &params.palw_consensus_mode {
+        kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) => b.clone(),
+        _ => panic!("a ConsensusV2 network"),
+    };
+    assert!(bundle.state.class_growth_permille() > 0, "the RC bundle carries ADR-0054");
+    let epoch_length = bundle.state.epoch_length();
+    let base_class_id = bundle.base_class_id;
+    let qwen_class_id = qwen36_profile_v1(QWEN36_35B_A3B).expect("projects").shape_profile_id();
+
+    let config = ConfigBuilder::new(params)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            if !cfg!(feature = "evm") {
+                p.evm_activation_daa_score = u64::MAX;
+            }
+        })
+        .build();
+    let network_domain = palw_network_domain_v2(config.params.net.to_string().as_bytes());
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+
+    // One execution per class; the nonce moves the challenge, which is what the ticket reads.
+    let base_profile = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("expressible");
+    let base_artifact = misaka_palw_base0::rc::palw_rc_base0_artifact_v1().expect("derives");
+    let seed = base0_rc_job_anchor_v1(
+        network_domain,
+        kaspa_hashes::Hash64::from_u64_word(1),
+        base_class_id,
+        &kaspa_consensus_core::config::premine::premine_outpoint(0),
+    );
+    let (base_job, base_prompt) =
+        base0_rc_job_v1(&base_profile, seed, base_artifact.shape.vocab, PALW_RC_BASE0_CANONICAL.0, PALW_RC_BASE0_CANONICAL.1);
+    let base_run = base0_execute_for_attempt_v1(&base_artifact, &base_profile, &base_job, &base_prompt).expect("the floor runs");
+    let backend = Qwen36Backend::new(
+        std::sync::Arc::new(qwen_artifact),
+        "Qwen3.6-dev-fixture",
+        QWEN36_RC_CANONICAL,
+        qwen_class_id,
+        config.params.net.to_string().into_bytes(),
+    );
+    let qwen_anchor = base0_rc_job_anchor_v1(
+        network_domain,
+        kaspa_hashes::Hash64::from_u64_word(2),
+        qwen_class_id,
+        &kaspa_consensus_core::config::premine::premine_outpoint(1),
+    );
+    let (qwen_job, qwen_prompt) = backend.job_for_anchor(qwen_anchor).expect("the anchor implies a job");
+    let qwen_run = backend.execute(&qwen_job, &qwen_prompt).expect("a real hybrid forward pass");
+    let base_roots =
+        (base_run.trace_root, base_run.output_root, base_run.execution_root, base_run.trace_manifest_root, base_run.trace_chunk_count);
+    let qwen_roots =
+        (qwen_run.trace_root, qwen_run.output_root, qwen_run.execution_root, qwen_run.trace_manifest_root, qwen_run.trace_chunk_count);
+
+    let share_of = |ctx: &TestContext, class_id| {
+        ctx.consensus.palw_v2_class_table().into_iter().find(|r| r.class_id == class_id).and_then(|r| r.share_permille)
+    };
+    let opening_share = share_of(&ctx, qwen_class_id).expect("the entrant is in the table");
+    assert_eq!(
+        opening_share,
+        kaspa_consensus_core::config::params::PALW_RC_GENESIS_QWEN36_SHARE_PERMILLE,
+        "the card funds the hybrid tier at genesis"
+    );
+    // The budget IS the share, so filling it is the only signal a class has — and the only way to
+    // produce that signal is to make every block it is allowed to.
+    let quota = ctx.consensus.palw_producer_facts_v2(qwen_class_id, None).expect("answers").epoch_budget_blocks;
+    assert!(quota > 1, "a funded tier's allowance is more than one block");
+
+    let mut qwen_made = 0u64;
+    // One epoch, plus the block that crosses the boundary — the crossing is what pays.
+    while ctx.consensus.get_virtual_daa_score() <= epoch_length {
+        let want_qwen = qwen_made < quota;
+        let (class_id, bond_index) = if want_qwen { (qwen_class_id, 1u32) } else { (base_class_id, 0u32) };
+        let bond = kaspa_consensus_core::config::premine::premine_outpoint(bond_index);
+        let facts = ctx.consensus.palw_producer_facts_v2(class_id, Some(bond)).expect("a V2 network answers");
+        let run = if want_qwen { qwen_roots } else { base_roots };
+        let mut block = ctx.build_block_template_keeping_time(0).block;
+        let timestamp = block.header.timestamp;
+        let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(&block.header);
+        let mut attempt = PalwAttemptUnsignedV2 {
+            version: PALW_ATTEMPT_V2_VERSION,
+            network_domain,
+            challenge: kaspa_hashes::Hash64::default(),
+            class_id,
+            executor_bond: bond,
+            executor_pubkey: keys[bond_index as usize].verification_key.as_ref().to_vec(),
+            operator_id: facts.bond.as_ref().expect("a genesis bond").operator_id,
+            artifact_root: facts.artifact_root,
+            trace_root: run.0,
+            output_root: run.1,
+            execution_root: run.2,
+            pwu: facts.pwu,
+            trace_manifest_root: run.3,
+            trace_chunk_count: run.4,
+            trace_retention_daa: facts.daa_score.saturating_add(facts.min_trace_retention_daa),
+        };
+        let mut won = None;
+        for nonce in 0u64..1_000_000 {
+            attempt.challenge = challenge_v2(network_domain, pre_pow, timestamp, nonce, class_id, &bond);
+            if class_ticket_v2(&attempt) <= facts.class_target {
+                won = Some(nonce);
+                break;
+            }
+        }
+        let signature = libcrux_ml_dsa::ml_dsa_87::sign(
+            &keys[bond_index as usize].signing_key,
+            attempt_id_v2(&attempt).as_byte_slice(),
+            PALW_ATTEMPT_V2_MLDSA87_CONTEXT,
+            [0x5Au8; 32],
+        )
+        .expect("sign")
+        .as_ref()
+        .to_vec();
+        block.header.nonce = won.expect("the class target is winnable");
+        block.header.palw_commitment = PalwAttemptEnvelopeV2 { attempt, signature }.encode_wire();
+        block.header.finalize();
+        ctx.consensus.validate_and_insert_block(block.to_immutable()).virtual_state_task.await.expect("the chain accepts it");
+        if want_qwen {
+            qwen_made += 1;
+        }
+    }
+
+    {
+        // The closed epoch as the rule read it. Kept because the first version of this test passed
+        // its own loop counter and failed its assertion: 200 blocks built, 15 accepted, and only
+        // the store could say which of those two numbers the chain believed.
+        let vp = ctx.consensus.virtual_processor();
+        let (_, state) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("the tip loads");
+        let counted = state.epoch_counter(&qwen_class_id).map(|c| (c.epoch_index, c.produced_blocks));
+        eprintln!("at the crossing: counter {counted:?}");
+        assert_eq!(counted, Some((0, quota)), "every block the loop built was accepted and counted");
+    }
+    let qwen_share = share_of(&ctx, qwen_class_id).expect("the entrant is in the table");
+    let base_share = share_of(&ctx, base_class_id).expect("the floor is in the table");
+    eprintln!(
+        "after one epoch of real blocks: QWEN36 {qwen_share} permille (from {opening_share}, having made {qwen_made} of {quota}), BASE-0 {base_share} permille"
+    );
+    assert_eq!(qwen_made, quota, "it made every block its allowance permitted");
+    let step = (u32::from(opening_share) * 250 / 1000).max(1) as u16;
+    assert_eq!(qwen_share, opening_share + step, "it filled its budget, so it took a step from the floor");
+    assert_eq!(qwen_share + base_share, 1000, "and the denominator is conserved through the block path");
+    let facts = ctx.consensus.palw_producer_facts_v2(qwen_class_id, None).expect("answers");
+    assert_eq!(facts.epoch_budget_blocks as u16, qwen_share, "the new epoch's budget follows the new share");
+}

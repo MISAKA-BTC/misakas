@@ -47,8 +47,7 @@
 
 use crate::Hash64;
 use crate::palw_step::{
-    PALW_STEP_OBJECT_VERSION_V1, PalwShapeProfileV3, PalwStepError, PalwStepLaneV1, PalwStepNodeRoleV1, PalwStepNodeV1,
-    PalwStepOpKindV1, PalwStepOutLenV1, kernel_semantics_id_v1,
+    PALW_STEP_OBJECT_VERSION_V1, PalwShapeProfileV3, PalwStepError, PalwStepLaneV1, PalwStepNodeV1, PalwStepOpKindV1, PalwStepOutLenV1,
 };
 
 /// The int8 dtype byte. One weight type throughout: the class is integer arithmetic, and any
@@ -621,9 +620,12 @@ mod tests {
         assert!(footprint <= profile.n_ctx, "canonical footprint {footprint} inside n_ctx {}", profile.n_ctx);
     }
     use super::*;
+    // Test-only: the lib target does not name either of these, and an import that is unused
+    // outside `cfg(test)` is a warning clippy denies.
     use crate::Hash64;
     use crate::palw_catalog_coverage::verify_profile_coverage_v1;
     use crate::palw_step::PalwStepTableV1;
+    use crate::palw_step::{PalwStepNodeRoleV1, kernel_semantics_id_v1};
     use crate::palw_step_refute::{catalogued_kernel_ids_v1, kernel_can_serve_node_v1};
 
     /// Diagnostic: the smallest tile_len that admits the declared 4096 context, projected.

@@ -1367,7 +1367,8 @@ mod tests {
         };
         assert_eq!(
             leaves(&long),
-            (tiles_of(kv_dim) * 0 + 2, history as usize * tiles_of(kv_dim)),
+            // The query row is two tiles whatever the cache is; the SECOND ref is the history.
+            (2, history as usize * tiles_of(kv_dim)),
             "the long set is not the history it should be"
         );
         assert_eq!(leaves(&anchored), (2, tiles_of(kv_dim)), "the anchored set is not one cached position");

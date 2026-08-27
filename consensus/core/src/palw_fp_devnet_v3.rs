@@ -174,7 +174,7 @@ const MAX_EXPOSURE_RATIO_PERMILLE: u32 = 500;
 const MIN_COLLATERAL_SOMPI: u64 = 400_000;
 
 // ---------------------------------------------------------------------------------------------
-// ADR-0054 Decisions 3–5: the class economy
+// ADR-0056 Decisions 3 and 5: the class economy
 // ---------------------------------------------------------------------------------------------
 
 /// **What one live registration reserves against its registrant's bond** (Decision 3).
@@ -191,19 +191,6 @@ const MIN_COLLATERAL_SOMPI: u64 = 400_000;
 /// as their class is useful.
 const REGISTRATION_EXPOSURE_SOMPI: u64 = 40_000;
 
-/// Decision 4's raise arm: fill at least 800‰ of your own epoch budget, four epochs running, to
-/// gain one permille. Four epochs at `EPOCH_LENGTH` 1,000 and a 120 s target is roughly five and a
-/// half days of sustained production per permille — slow enough that the table is legible, and
-/// long enough that one lucky epoch buys nothing.
-const SHARE_RAISE_FILL_PERMILLE: u32 = 800;
-const SHARE_RAISE_EPOCHS: u32 = 4;
-
-/// The decay arm: below 200‰ of budget, four epochs running, lose one. The gap between 200‰ and
-/// 800‰ is deliberate dead band — a class oscillating around one threshold would walk its share
-/// up and down forever, and the band is what makes the walk settle.
-const SHARE_DECAY_FILL_PERMILLE: u32 = 200;
-const SHARE_DECAY_EPOCHS: u32 = 4;
-
 /// Decision 5: twelve consecutive epochs of ZERO production reclaims the class. Three times the
 /// decay window, because reclamation takes the whole share and frees the collateral — a heavier
 /// move deserves a longer look, and a class that produced even one block in twelve epochs is not
@@ -216,6 +203,25 @@ const WITHDRAWAL_DELAY: u64 = 6_000;
 /// tolerance, in permille of a class's cadence share. Unity is the floor (below it a budget
 /// starves its own class); 1000‰ is the devnet's honest "exactly its share" setting.
 const CLASS_DAA_MAX_FACTOR: u32 = 4;
+
+/// **ADR-0054: how fast a class's cadence share follows its own production.**
+///
+/// A quarter of its own share per closed epoch, so a class needs sustained production to reach a
+/// meaningful permille — the measured trajectory from the grant floor is 1, 2, 3, 4, 5, 6, 7, 8,
+/// 10, 12, 15, 18, 22, 27, 33 over fourteen epochs — and gives it back at the same rate when it
+/// stops. Fast enough that a class worth running is not waiting a year; slow enough that nobody
+/// takes the cadence table before anyone has watched them produce.
+const CLASS_GROWTH_PERMILLE: u16 = 250;
+
+/// **The permille the liveness floor keeps** (ADR-0054 Decision 2). Half the table stays with the
+/// class every node can run without an artifact, whatever the model classes earn: ADR-0039 W6' says
+/// the floor's share may never be zero, and against a rule that moves permille every epoch that
+/// bound is worth only what the reserve says it is.
+///
+/// Set through `with_min_base_class_share_permille`, not through the growth builder: the merge
+/// converged three independent floor guards onto that one field, so a grant and a growth step check
+/// the same number.
+const BASE_CLASS_RESERVE_PERMILLE: u16 = 500;
 const BUDGET_TOLERANCE_PERMILLE: u32 = 1_000;
 
 /// Audit C5's abandon hold, in DAA: how long a free-prompt commitment abandoned at `BindTimeout`
@@ -392,15 +398,17 @@ pub fn palw_fp_devnet_bundle_v3(
     .with_worker_carve_permille(WORKER_CARVE_PERMILLE)?
     .with_turn_deadline_daa(COURT_TURN_DEADLINE)?
     .with_claim_retirement_daa(CLAIM_RETIREMENT)?
-    // **ADR-0054 Decisions 3–5, as this network sets them.**
-    .with_class_economy_v1(
-        REGISTRATION_EXPOSURE_SOMPI,
-        SHARE_RAISE_FILL_PERMILLE,
-        SHARE_RAISE_EPOCHS,
-        SHARE_DECAY_FILL_PERMILLE,
-        SHARE_DECAY_EPOCHS,
-        RECLAIM_EPOCHS,
-    )?;
+    // **ADR-0056 Decisions 3 and 5, as this network sets them**: the registration reservation and
+    // the reclamation window. The share WALK is not here — it is the growth rule below, which
+    // measures filled budget instead of a streak.
+    .with_min_base_class_share_permille(BASE_CLASS_RESERVE_PERMILLE)?
+    .with_class_economy_v1(REGISTRATION_EXPOSURE_SOMPI, RECLAIM_EPOCHS)?
+    // ADR-0054: the share table follows production. Without it a post-genesis entrant holds
+    // `min_grantable_share_permille` forever, its expectation and its budget are both one block per
+    // epoch, and the per-class retarget has no reachable input — measured on a two-class chain
+    // carrying the real Qwen3.6 class, whose target did not move across four epochs in either state
+    // its share allowed it to be in.
+    .with_class_share_growth_v1(CLASS_GROWTH_PERMILLE)?;
     // The epoch budget: what one class may produce per epoch, in pwu. Sized so a full epoch of
     // receipt blocks at `PWU_PER_QUANTUM` fits with headroom — a budget that binds before the
     // difficulty does would make the DAA a decoration.

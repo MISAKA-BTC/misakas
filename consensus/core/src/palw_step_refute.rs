@@ -4730,7 +4730,7 @@ pub(crate) mod tests {
         let tile_bytes = PALW_LOGITS_TILE_LANES * 4;
         let tiles_per_row = 248_320usize.div_ceil(PALW_LOGITS_TILE_LANES);
         let path = 64 * tiles_per_row.next_power_of_two().trailing_zeros() as usize;
-        let close = 2 * (tile_bytes + path) + 64 + 64 * 1 + 4 * decode + 64;
+        let close = 2 * (tile_bytes + path) + 64 + 64 + 4 * decode + 64;
         assert!(close < 80 * 1024, "the tiled close is {close} bytes against the 80 KiB carrier budget");
 
         // And a tampered pin is malformed evidence, not a verdict: bend one lane of the beat tile.

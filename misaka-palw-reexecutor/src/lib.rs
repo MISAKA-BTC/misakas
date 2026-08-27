@@ -746,6 +746,11 @@ pub mod fixtures {
         };
         let shape_profile = PalwShapeProfileV3 {
             version: PALW_STEP_OBJECT_VERSION_V1,
+            // The profile gained a logits scheme when the tiled close landed, and `validate`
+            // refuses the default: a class that does not say how its output row is committed is a
+            // class a court cannot open. Flat, because this fixture's row is sixteen lanes wide —
+            // the same choice `palw_step`'s and `palw_base0_profile`'s own fixtures make.
+            logits_scheme_id: kaspa_consensus_core::palw_step_refute::flat_logits_scheme_id_v1(),
             lane: kaspa_consensus_core::palw_step::PalwStepLaneV1::Float32,
             layer_count: 4,
             full_attention_interval: 4,
@@ -762,8 +767,6 @@ pub mod fixtures {
             // The registered BASE-0 epsilon (Q8), matching the registry's fleet fixture. A
             // profile field, not an adjudicator constant: see `palw_step`'s own note.
             base0_rms_eps_q: 1 << 8,
-            // The fixture reproduces the FLOOR, which commits whole logits rows.
-            logits_scheme_id: kaspa_consensus_core::palw_step_refute::flat_logits_scheme_id_v1(),
             gdn_heads: 1,
             gdn_head_k_dim: 16,
             gdn_head_v_dim: 16,

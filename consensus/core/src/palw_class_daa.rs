@@ -689,6 +689,143 @@ fn mul_div_u128(a: u128, b: u128, d: u128) -> u128 {
     (a / d).saturating_mul(b).saturating_add((a % d) * b / d)
 }
 
+// =============================================================================================
+// ADR-0054 — a class's cadence share follows its own production (the share-raise path)
+// =============================================================================================
+
+/// **What one class did with the cadence it was already given, over one closed epoch.**
+///
+/// Both numbers are the chain's own: `produced` is the epoch counter the transition increments per
+/// accepted block, and `budget` is the cap ADR-0045 Decision 2 derived for that same epoch. Their
+/// relation is the whole signal — a class that produced everything its budget allowed was stopped
+/// by its SHARE and not by its ability, and a class that produced nothing was not using the share
+/// it holds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwClassEpochUseV1 {
+    pub produced: u64,
+    pub budget: u64,
+}
+
+/// The share table after one epoch of growth and decay, and the reason each permille moved.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct PalwShareGrowthV1 {
+    /// The new table. Always sums to the same denominator the input did.
+    pub shares: BTreeMap<Hash64, u16>,
+    /// Classes that filled their budget and took permille from the floor, with the amount.
+    pub grew: BTreeMap<Hash64, u16>,
+    /// Classes that produced nothing and returned permille to the floor, with the amount.
+    pub decayed: BTreeMap<Hash64, u16>,
+}
+
+/// **The share-raise path: production earns cadence, silence returns it** (ADR-0054).
+///
+/// Until this existed a class's share was fixed the moment it was granted — `write_share` had one
+/// caller, the activation grant — so a post-genesis entrant was pinned at
+/// `min_grantable_share_permille` forever. That number is chosen so its holder's expectation is
+/// exactly one block per epoch, and ADR-0045's budget caps it at exactly that, so the per-class
+/// retarget had no reachable input: observed could only be 0 (skipped, audit H1) or 1 (its
+/// expectation, a no-op). Measured on a two-class chain carrying the real `PALW-QWEN36` class, its
+/// target did not move across four epochs in either state. The difficulty loop was not broken; it
+/// was starved of the one quantity that could feed it.
+///
+/// # Why this is derived rather than granted
+///
+/// ADR-0038 Decision D's rule for prices is that they are discovered and never maintained, and
+/// ADR-0045 left "automatic share re-allocation from class health" as the future object with "its
+/// own authorization story". This is that re-allocation with NO authorization story, which is the
+/// point: nobody submits it, so there is nothing to forge, nobody to bribe, and no key whose loss
+/// freezes the table. A class grows only by producing every block its current share admits — work
+/// it must actually perform, priced by its own difficulty — and shrinks only by producing nothing.
+///
+/// # The floor is the reservoir, and it has a reserve
+///
+/// Every permille moved comes from or returns to the BASE class, which starts holding the whole
+/// table and is the one class every node can always run. Two bounds make that safe:
+///
+/// * the floor is never donated below `base_reserve_permille` (nor below the grant floor), so the
+///   class that guarantees liveness always keeps enough cadence to carry the chain, and
+/// * a class never falls below `grant_floor_permille`, because a share below it is a zero epoch
+///   budget — a class that cannot produce is a frozen class wearing the wrong status.
+///
+/// Growth and decay are the same step — `max(1‰, share × growth‰ / 1000)` — so the mechanism is
+/// symmetric and bounded: a class needs many consecutive productive epochs to reach a large share
+/// and gives it back at the same rate. `growth_permille = 0` disables the whole rule, which is
+/// what every network built before ADR-0054 runs at.
+///
+/// Consensus-inert on its own: this is arithmetic. The transition decides WHEN it runs (one closed
+/// epoch boundary, immediately after the retarget and before the new epoch's budgets are derived).
+pub fn derive_class_share_growth_v1(
+    shares: &BTreeMap<Hash64, u16>,
+    frozen: &std::collections::BTreeSet<Hash64>,
+    use_by_class: &BTreeMap<Hash64, PalwClassEpochUseV1>,
+    base_class_id: Hash64,
+    growth_permille: u16,
+    base_reserve_permille: u16,
+    grant_floor_permille: u16,
+) -> PalwShareGrowthV1 {
+    let mut out = PalwShareGrowthV1 { shares: shares.clone(), ..Default::default() };
+    if growth_permille == 0 || !shares.contains_key(&base_class_id) {
+        return out;
+    }
+    let step = |share: u16| -> u16 {
+        let scaled = (u32::from(share) * u32::from(growth_permille)) / 1000;
+        u16::try_from(scaled.max(1)).unwrap_or(u16::MAX)
+    };
+    // The floor's own floor: whichever of the two bounds binds first.
+    let base_reserve = base_reserve_permille.max(grant_floor_permille);
+
+    // Decay first, then growth: a silent class's permille is back in the reservoir before the
+    // productive ones draw on it, so one epoch can move a permille from an idle class to a busy
+    // one. Growth-first would make the same pair of facts take two epochs, and which order runs
+    // is a consensus rule either way — so it is stated here rather than left to map iteration.
+    for (class_id, share) in shares.iter() {
+        if *class_id == base_class_id || frozen.contains(class_id) {
+            continue;
+        }
+        let produced = use_by_class.get(class_id).map(|u| u.produced).unwrap_or(0);
+        if produced > 0 {
+            continue;
+        }
+        let give = step(*share).min(share.saturating_sub(grant_floor_permille));
+        if give == 0 {
+            continue;
+        }
+        *out.shares.entry(*class_id).or_insert(*share) = share - give;
+        *out.shares.entry(base_class_id).or_insert(0) += give;
+        out.decayed.insert(*class_id, give);
+    }
+
+    for (class_id, share) in shares.iter() {
+        if *class_id == base_class_id || frozen.contains(class_id) {
+            continue;
+        }
+        let Some(used) = use_by_class.get(class_id) else { continue };
+        // Filled its allowance: the budget stopped it, which is a statement about its SHARE.
+        if used.budget == 0 || used.produced < used.budget {
+            continue;
+        }
+        let base_share = out.shares.get(&base_class_id).copied().unwrap_or(0);
+        let available = base_share.saturating_sub(base_reserve);
+        // The current share, not the input's: a class cannot both decay and grow, but the floor's
+        // balance moves under this loop as earlier classes draw on it.
+        let current = out.shares.get(class_id).copied().unwrap_or(*share);
+        let take = step(current).min(available);
+        if take == 0 {
+            continue;
+        }
+        *out.shares.entry(*class_id).or_insert(current) = current + take;
+        *out.shares.entry(base_class_id).or_insert(0) = base_share - take;
+        out.grew.insert(*class_id, take);
+    }
+
+    debug_assert_eq!(
+        out.shares.values().map(|s| u32::from(*s)).sum::<u32>(),
+        shares.values().map(|s| u32::from(*s)).sum::<u32>(),
+        "every permille moved is a transfer with the floor, so the denominator is conserved"
+    );
+    out
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -1433,5 +1570,171 @@ mod tests {
     fn domain_set_roundtrips_borsh() {
         let s = set(10, &[(1, 500), (2, 490)]);
         assert_eq!(s, borsh::from_slice::<PalwDifficultyDomainSetV1>(&borsh::to_vec(&s).unwrap()).unwrap());
+    }
+
+    // =========================================================================================
+    // ADR-0054 — the share-raise path
+    // =========================================================================================
+
+    const BASE: u64 = 0xBA5E;
+    const ENTRANT: u64 = 0x9E4;
+    const OTHER: u64 = 0x07;
+
+    fn shares(rows: &[(u64, u16)]) -> BTreeMap<Hash64, u16> {
+        rows.iter().map(|(id, s)| (Hash64::from_u64_word(*id), *s)).collect()
+    }
+
+    fn used(rows: &[(u64, u64, u64)]) -> BTreeMap<Hash64, PalwClassEpochUseV1> {
+        rows.iter()
+            .map(|(id, produced, budget)| (Hash64::from_u64_word(*id), PalwClassEpochUseV1 { produced: *produced, budget: *budget }))
+            .collect()
+    }
+
+    fn grow(table: &[(u64, u16)], use_rows: &[(u64, u64, u64)], growth: u16, reserve: u16, floor: u16) -> PalwShareGrowthV1 {
+        derive_class_share_growth_v1(
+            &shares(table),
+            &std::collections::BTreeSet::new(),
+            &used(use_rows),
+            Hash64::from_u64_word(BASE),
+            growth,
+            reserve,
+            floor,
+        )
+    }
+
+    /// **The path exists at all.** An entrant that filled its budget takes a step of cadence from
+    /// the floor — the state a minimum-share class was permanently stuck in before ADR-0054.
+    #[test]
+    fn a_class_that_filled_its_budget_takes_a_step_from_the_floor() {
+        let out = grow(&[(BASE, 999), (ENTRANT, 1)], &[(BASE, 999, 999), (ENTRANT, 1, 1)], 250, 500, 1);
+        assert_eq!(out.shares[&Hash64::from_u64_word(ENTRANT)], 2, "1 permille plus max(1, 25% of 1)");
+        assert_eq!(out.shares[&Hash64::from_u64_word(BASE)], 998, "and the floor funded exactly that");
+        assert_eq!(out.grew[&Hash64::from_u64_word(ENTRANT)], 1);
+        assert!(out.decayed.is_empty());
+    }
+
+    /// The step is a fraction of the class's OWN share, so growth accelerates as a class earns —
+    /// and a large share never moves by a single permille per epoch.
+    #[test]
+    fn the_step_is_relative_to_the_share_it_grows() {
+        let out = grow(&[(BASE, 900), (ENTRANT, 100)], &[(BASE, 900, 900), (ENTRANT, 100, 100)], 250, 500, 1);
+        assert_eq!(out.grew[&Hash64::from_u64_word(ENTRANT)], 25, "a quarter of 100 permille");
+        assert_eq!(out.shares[&Hash64::from_u64_word(BASE)], 875);
+    }
+
+    /// **Producing SOMETHING is not producing everything.** A class under its budget is running at
+    /// its natural rate and its share is already right — nothing moves.
+    #[test]
+    fn a_class_under_its_budget_neither_grows_nor_decays() {
+        let out = grow(&[(BASE, 900), (ENTRANT, 100)], &[(BASE, 940, 900), (ENTRANT, 60, 100)], 250, 500, 1);
+        assert!(out.grew.is_empty(), "it did not fill its allowance");
+        assert!(out.decayed.is_empty(), "and it is not silent either");
+        assert_eq!(out.shares[&Hash64::from_u64_word(ENTRANT)], 100);
+    }
+
+    /// Silence returns cadence. Without it the floor bleeds one way and a dead class holds a
+    /// permille nobody can reclaim — the case ADR-0045 left open.
+    #[test]
+    fn a_silent_class_gives_its_step_back_to_the_floor() {
+        let out = grow(&[(BASE, 900), (ENTRANT, 100)], &[(BASE, 1000, 900)], 250, 500, 1);
+        assert_eq!(out.decayed[&Hash64::from_u64_word(ENTRANT)], 25);
+        assert_eq!(out.shares[&Hash64::from_u64_word(ENTRANT)], 75);
+        assert_eq!(out.shares[&Hash64::from_u64_word(BASE)], 925);
+    }
+
+    /// A decayed class keeps its seat: the grant floor is where decay stops, because a share below
+    /// it is a zero epoch budget — a class that cannot produce is a frozen class in the wrong
+    /// costume.
+    #[test]
+    fn decay_stops_at_the_grant_floor() {
+        let out = grow(&[(BASE, 998), (ENTRANT, 2)], &[(BASE, 998, 998)], 250, 500, 2);
+        assert!(out.decayed.is_empty(), "it is already at the floor");
+        assert_eq!(out.shares[&Hash64::from_u64_word(ENTRANT)], 2);
+    }
+
+    /// **The liveness floor's reserve is a hard bound.** The one class every node can run keeps its
+    /// cadence however many classes are hungry — ADR-0039 W6 prime as a quantity, not a status.
+    #[test]
+    fn growth_stops_at_the_floors_reserve() {
+        let out = grow(&[(BASE, 501), (ENTRANT, 499)], &[(BASE, 501, 501), (ENTRANT, 499, 499)], 250, 500, 1);
+        assert_eq!(out.grew[&Hash64::from_u64_word(ENTRANT)], 1, "only the one permille above the reserve was available");
+        assert_eq!(out.shares[&Hash64::from_u64_word(BASE)], 500);
+
+        let at_reserve = grow(&[(BASE, 500), (ENTRANT, 500)], &[(BASE, 500, 500), (ENTRANT, 500, 500)], 250, 500, 1);
+        assert!(at_reserve.grew.is_empty(), "at the reserve the floor funds nothing");
+        assert_eq!(at_reserve.shares[&Hash64::from_u64_word(BASE)], 500);
+    }
+
+    /// Two classes drawing in one epoch cannot together breach the reserve: the second reads the
+    /// balance the first left, not the one the epoch started with.
+    #[test]
+    fn two_growing_classes_share_one_reserve() {
+        let out = grow(
+            &[(BASE, 502), (ENTRANT, 249), (OTHER, 249)],
+            &[(BASE, 502, 502), (ENTRANT, 249, 249), (OTHER, 249, 249)],
+            250,
+            500,
+            1,
+        );
+        assert_eq!(out.shares[&Hash64::from_u64_word(BASE)], 500, "the floor stops at its reserve");
+        let gained: u32 = out.grew.values().map(|g| u32::from(*g)).sum();
+        assert_eq!(gained, 2, "and the two classes took only what was above it");
+    }
+
+    /// The denominator is conserved at every mutation — the property ADR-0045 Decision 3 makes a
+    /// construction rather than an assertion, held through a rule that moves permille every epoch.
+    #[test]
+    fn every_move_conserves_the_denominator() {
+        for (table, rows) in [
+            (vec![(BASE, 999u16), (ENTRANT, 1)], vec![(BASE, 999u64, 999u64), (ENTRANT, 1, 1)]),
+            (vec![(BASE, 800), (ENTRANT, 100), (OTHER, 100)], vec![(BASE, 800, 800), (ENTRANT, 100, 100)]),
+            (vec![(BASE, 600), (ENTRANT, 200), (OTHER, 200)], vec![(BASE, 1000, 600)]),
+        ] {
+            let out = grow(&table, &rows, 250, 500, 1);
+            assert_eq!(
+                out.shares.values().map(|s| u32::from(*s)).sum::<u32>(),
+                1000,
+                "the table sums to the denominator after growth and decay"
+            );
+        }
+    }
+
+    /// **Off by default.** Every network built before ADR-0054 runs at growth zero, and the rule
+    /// must be exactly the identity there — turning a feature on by omission is how a fixture's
+    /// meaning changes underneath it.
+    #[test]
+    fn a_zero_growth_step_moves_nothing() {
+        let table = [(BASE, 999u16), (ENTRANT, 1)];
+        let out = grow(&table, &[(BASE, 999, 999), (ENTRANT, 1, 1)], 0, 500, 1);
+        assert_eq!(out.shares, shares(&table));
+        assert!(out.grew.is_empty() && out.decayed.is_empty());
+    }
+
+    /// A frozen class is not measured in either direction — ADR-0045's "freeze and unfreeze move no
+    /// share", held through a rule that would otherwise decay it while it is unable to produce by
+    /// construction.
+    #[test]
+    fn a_frozen_class_is_left_alone() {
+        let frozen: std::collections::BTreeSet<Hash64> = [Hash64::from_u64_word(ENTRANT)].into_iter().collect();
+        let out = derive_class_share_growth_v1(
+            &shares(&[(BASE, 900), (ENTRANT, 100)]),
+            &frozen,
+            &used(&[(BASE, 1000, 900)]),
+            Hash64::from_u64_word(BASE),
+            250,
+            500,
+            1,
+        );
+        assert!(out.decayed.is_empty(), "a frozen class produced nothing BY CONSTRUCTION");
+        assert_eq!(out.shares[&Hash64::from_u64_word(ENTRANT)], 100);
+    }
+
+    /// The floor is the reservoir and never grows on its own account, however much of its budget it
+    /// fills — otherwise the one class that always produces would collect the table.
+    #[test]
+    fn the_floor_never_grows_itself() {
+        let out = grow(&[(BASE, 900), (ENTRANT, 100)], &[(BASE, 900, 900), (ENTRANT, 100, 100)], 250, 500, 1);
+        assert!(!out.grew.contains_key(&Hash64::from_u64_word(BASE)));
+        assert!(out.shares[&Hash64::from_u64_word(BASE)] < 900, "it funded the entrant instead");
     }
 }

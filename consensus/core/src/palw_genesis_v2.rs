@@ -211,24 +211,38 @@ pub fn verify_palw_genesis_v2(
     // are produced. If a bond's ceiling admits fewer concurrent claims than the window is long,
     // the producer fills the ceiling and then needs DAA it can only get by producing — a deadlock
     // with no timeout, no operator action, and no error message. The chain simply stops.
-    let base = registrations
-        .iter()
-        .find_map(|o| match o {
-            PalwConsensusObjectV2::ClassRegistered { class_id, slash_value_per_pwu, pwu_rule, initial_target, .. }
-                if *class_id == bundle.base_class_id =>
-            {
-                Some((*slash_value_per_pwu, pwu_rule, *initial_target))
-            }
-            _ => None,
-        })
-        .ok_or(PalwGenesisV2Error::FirstClassIsNotTheBase { first, base: bundle.base_class_id })?;
-    let (slash_value_per_pwu, pwu_rule, initial_target) = base;
-    let pwu = match pwu_rule {
-        PalwPwuRuleV2::DerivedV1 { pwu_per_inference } => crate::palw_pwu::palw_pwu_v1(initial_target, *pwu_per_inference),
-        // A value network cannot register one of these (checked above); the arm keeps the match total.
-        PalwPwuRuleV2::MaxPerAttempt(cap) => *cap,
-    };
-    let per_claim = (pwu as u128).saturating_mul(slash_value_per_pwu as u128).max(1);
+    // **The HEAVIEST class, not the base one.** A claim's reservation is `pwu × slash_value`, and
+    // `pwu` is the class's counted work — so on a network that registers a model tier beside the
+    // floor the two differ by orders of magnitude (measured: Qwen3.6's canonical inference counts
+    // 348× the floor's). Reading the base class alone made this gate answer about the cheapest
+    // claims a bond will ever hold while the genesis was allocating cadence to the dearest: the
+    // registry passed, and a producer for the funded tier wedged after fifteen blocks with exactly
+    // the message this gate exists to prevent. The bound belongs to whichever class costs most to
+    // hold, because that is the one that fills a ceiling first.
+    let mut per_claim = 0u128;
+    let mut dearest = bundle.base_class_id;
+    let mut saw_base = false;
+    for object in registrations {
+        let PalwConsensusObjectV2::ClassRegistered { class_id, slash_value_per_pwu, pwu_rule, initial_target, .. } = object else {
+            continue;
+        };
+        saw_base |= *class_id == bundle.base_class_id;
+        let pwu = match pwu_rule {
+            PalwPwuRuleV2::DerivedV1 { pwu_per_inference } => crate::palw_pwu::palw_pwu_v1(*initial_target, *pwu_per_inference),
+            // A value network cannot register one of these (checked above); the arm keeps the match total.
+            PalwPwuRuleV2::MaxPerAttempt(cap) => *cap,
+        };
+        let cost = (pwu as u128).saturating_mul(*slash_value_per_pwu as u128).max(1);
+        if cost > per_claim {
+            per_claim = cost;
+            dearest = *class_id;
+        }
+    }
+    if !saw_base {
+        return Err(PalwGenesisV2Error::FirstClassIsNotTheBase { first, base: bundle.base_class_id });
+    }
+    let _ = dearest;
+    let per_claim = per_claim.max(1);
     let window_bind = bundle.state.window_bind();
     let ratio = bundle.admission.max_exposure_ratio_permille() as u128;
     for (bond, collateral, _) in &bonds {

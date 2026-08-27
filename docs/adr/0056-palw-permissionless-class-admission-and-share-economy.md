@@ -1,8 +1,13 @@
-# ADR-0054: Permissionless class admission, and the share economy that survives it
+# ADR-0056: Permissionless class admission, and the share economy that survives it
 
-**Status:** Accepted and **implemented** (2026-08-27, `788b656d`). Decisions 1, 2 and 7 were
-already the shipped design; Decisions 3, 4 and 5 landed with the state version 8 → 9 this ADR
-predicted, and Decision 6 is a policy the gate keeps by not deduplicating.
+**Status:** Accepted and **implemented** (2026-08-27). Decisions 1, 2 and 7 were already the
+shipped design; Decisions 3 and 5 landed with the state version 8 → 9 this ADR predicted, and
+Decision 6 is a policy the gate keeps by not deduplicating. **Decision 4 is withdrawn** in favour
+of ADR-0054 Decision 1, which answers the same question with a proportional step instead of a
+streak — see that decision for the measurement that settled it.
+
+**Renumbered** from 0054 at the merge: ADR-0054 and ADR-0055 were taken by two branches whose
+documents were written earlier the same day.
 **Date:** 2026-08-27
 **Depends on:** ADR-0038 (PALW is the consensus work), ADR-0039 (the floor; no weight without a
 complete catalog), ADR-0045 (the class economy: one share table, conservation, donation),
@@ -139,46 +144,43 @@ money sink whose size is a policy knob. A reservation punishes only *holding man
 simultaneously*, which is precisely the attack, and it composes with Decision 5: reclamation
 frees the spammer's collateral only by also freeing the share they squatted.
 
-## Decision 4 — Share moves at epoch boundaries, by production, bounded
+## Decision 4 — Withdrawn: the share walk is ADR-0054's, not this one's
 
-**Implemented** as `apply_class_share_walk`, in transition slot 2c — after the retarget (which
-must see the closed epoch's census unchanged) and before the objects and the budgets (a share it
-moves is a share the new epoch's budgets derive from).
+**Withdrawn 2026-08-27 at the merge, in favour of ADR-0054 Decision 1.** Two branches wrote a
+share-movement rule the same afternoon. They agree on everything that matters — the signal is a
+class's own FILLED BUDGET and nothing else, because jobs are self-originated on this network and
+every other "demand" signal is manufacturable by the class's own operators at no cost; the step is
+bounded per epoch; the floor is the reservoir and conservation is a construction rather than an
+assertion. This one is not kept, and the reason is a measurement rather than a preference.
 
-The share table currently has no arithmetic to change after registration. This decision gives it
-exactly one, and makes it boring:
+This decision's step was a STREAK: *n* consecutive epochs at or above a fill threshold buys one
+permille. ADR-0054's is proportional: a class that filled its budget takes
+`max(1‰, share × g / 1000)` at every qualifying boundary. On a minimum-share class the streak rule
+has no reachable input at all — the grant floor is defined so that `expected = 1` for every
+entrant on every network, and ADR-0045 Decision 2's budget then caps the same class at one block
+per epoch, so its only two states are "produced 0" (the retarget skips it, audit H1) and
+"produced 1" (`expected == observed`, an exact no-op). Measured on a two-class chain carrying the
+real `PALW-QWEN36` class over four epochs in both states: the target never moved. A rule keyed to
+those states is a rule with no input on exactly the class that most needs to grow.
 
-* **Signal.** For each class, the closed epoch's `produced / budget` ratio — both numbers the
-  state already carries. Nothing else: not fees, not demand claims, not votes. Jobs are
-  self-originated on this network (there is no orderer), so any "demand" signal is trivially
-  manufactured by the class's own operators; *filled budget* is the one signal that costs real
-  inference, real bonded claims, and real carve escrow per block to fake, and whose fake is
-  indistinguishable from the honest thing because it **is** the honest thing.
-* **Step.** A class that filled ≥ `SHARE_RAISE_FILL_PERMILLE` of its budget for
-  `SHARE_RAISE_EPOCHS` consecutive epochs gains **+1‰**. A class that filled
-  < `SHARE_DECAY_FILL_PERMILLE` for `SHARE_DECAY_EPOCHS` consecutive epochs loses **−1‰**, never
-  below the 1‰ grant floor. One permille per boundary per class, in either direction — the walk
-  is bounded by the clock, so no epoch's outcome moves the table faster than everyone can see.
-* **Funding.** Raises are funded by the decayers of the same boundary first, then pro rata from
-  all incumbents by the same largest-remainder arithmetic as registration donation
-  (`granted_share_table_v2`'s scaling, reused, not re-implemented). Conservation stays a
-  construction: Σ = 1000‰ before and after every boundary.
-* **The floor is protected.** `PALW-BASE-0`'s share never drops below
-  `FLOOR_PROTECTED_PERMILLE` (a bundle parameter) by *any* donation — registration or
-  epoch-boundary. ADR-0039 made the floor unfreezable; this makes it un-diluteable below the
-  level where "every node can always produce" stays true in cadence and not only in principle.
-  The floor does not *gain* by the production rule either: it is the fallback, not a competitor.
+The proportional step is also the faster one where speed is the point: an entrant reaches a few
+percent of cadence in a fortnight instead of months, which is the difference between a public
+network with two model tiers and a public network with two demonstrations attached.
 
-*Why this is sybil-neutral.* Share follows realized, collateralized production. An operator who
-fills a class's budget with their own jobs at their own expense is not gaming the metric — they
-are *being* the class's production, paying full price for it (inference cost + claim exposure +
-worker carve escrow), at a growth rate capped at 1‰ per `SHARE_RAISE_EPOCHS`. The same money
-spent on honest demand buys the same permille. There is nothing cheaper behind the metric,
-which is the definition of a metric that cannot be gamed, only paid.
+**What this ADR still owns of the economy:** Decision 3 (a live registration is EXPOSURE against
+its registrant's bond, so registering a thousand classes costs a thousand reservations) and
+Decision 5 below (a class that produces nothing for `reclaim_epochs` gives the seat back). Those
+two are what make admission permissionless without making it free, and ADR-0054 explicitly leaves
+both undecided. The floor's protected permille, which all three lines arrived at independently, is
+one field — `min_base_class_share_permille`, the audit's name, because its version landed first
+and closes a measured critical — and every path that can move a permille checks it.
 
 ## Decision 5 — Reclamation: dead classes give the network back
 
-**Implemented** in the same boundary arm; the status flip is written exactly as
+**Implemented** as `apply_class_reclamation`, in transition slot 2d — at the same boundary and off
+the same closed epoch's census as ADR-0054's growth step, and immediately after it, because a class
+the growth rule just decayed and a class that has been silent for `reclaim_epochs` are different
+facts and only the second takes a class out of the table. The status flip is written exactly as
 `activate_due_classes` writes activation — a clock, not an object.
 
 A class that produced **zero** blocks for `RECLAIM_EPOCHS` consecutive epochs transitions
@@ -231,14 +233,14 @@ consensus, and a benchmark is an oracle.
 |---|---|---|
 | Register hundreds of dead classes to dilute incumbents | Each reserves bonded exposure while alive; zero production reclaims share and only then frees the collateral — steady state is rent on nothing | 3 + 5 |
 | Name your own share at entry | Acceptance pins entrants to the 1‰ grant floor | (shipped) |
-| Grow share by fake demand | The only growth signal is filled budget, which costs full production price to fake; +1‰ per window, capped | 4 |
-| Squat share without producing | Decay to the floor, then reclamation to Dormant, by clock | 4 + 5 |
+| Grow share by fake demand | The only growth signal is filled budget, which costs full production price to fake; one bounded step per epoch | ADR-0054 D1 |
+| Squat share without producing | Decay to the floor, then reclamation to Dormant, by clock | ADR-0054 D1 + 5 |
 | Register someone else's class id | `class_id == shape_profile_id`, derived not declared | (shipped) |
 | Overstate `pwu_per_inference` to inflate weight | Declared value must equal the counted step-leaf count | (shipped) |
 | Register a class the court cannot try | Coverage, scheme, ladder and cost gates refuse by name | (shipped) |
 | Sneak a new kernel in by transaction | Impossible by construction: the catalog is in the binary, growing it moves the ruleset id | 2 |
 | Freeze a competitor | `ClassFrozen` needs a structural contradiction certificate; the floor is unfreezable | (shipped) |
-| Dilute the floor below liveness | `FLOOR_PROTECTED_PERMILLE` bounds every donation path | 4 |
+| Dilute the floor below liveness | `min_base_class_share_permille` bounds every donation path | 3 + ADR-0054 D2 |
 | Flood-register to slow incumbents' *budgets* | Census denominator: idle share is excluded from competing budgets | (shipped, H1) |
 | Re-register a reclaimed class to reset its slate | Allowed — and it re-enters at 1‰ with fresh exposure and a fresh soak; there is no slate to reset | 5 |
 
@@ -253,19 +255,19 @@ consensus, and a benchmark is an oracle.
   | Parameter | RC value | Where it comes from |
   |---|---|---|
   | `REGISTRATION_EXPOSURE_SOMPI` | 40,000 | A minimum bond's ceiling is `400,000 × 500‰ = 200,000`, so a smallest-possible bond holds **five** live registrations and no claims. A hundred dead classes needs twenty minimum bonds, idle. |
-  | `SHARE_RAISE_FILL_PERMILLE` / `_EPOCHS` | 800‰ / 4 | Four epochs at `EPOCH_LENGTH` 1,000 and a 120 s target is ≈5.5 days of sustained production per permille. One lucky epoch buys nothing. |
-  | `SHARE_DECAY_FILL_PERMILLE` / `_EPOCHS` | 200‰ / 4 | The 200–800 gap is deliberate dead band: a class oscillating around a single threshold would walk its share forever, and the band is what makes the walk settle. |
-  | `RECLAIM_EPOCHS` | 12 | Three times the decay window, because reclamation takes the WHOLE share. One block in twelve epochs is not what this rule is about. |
-  | `FLOOR_PROTECTED_PERMILLE` | 300‰ | Leaves 700‰ for a busy registry while keeping the class every node can run at nearly a third of the cadence. |
+  | `RECLAIM_EPOCHS` | 12 | Reclamation takes the WHOLE share, so it is deliberately far slower than ADR-0054's step. One block in twelve epochs is not what this rule is about. |
+  | `min_base_class_share_permille` | 300‰ | Leaves 700‰ for a busy registry while keeping the class every node can run at nearly a third of the cadence. One field, checked by growth, decay and grants alike — see Decision 4. |
 
-* Seven bundle parameters and state version 8 → 9 entered the ruleset id together; landing them
-  was a re-mint, like every ruleset move on this line (testnet-11: `a30ec7a8…`).
+* Two bundle parameters and state version 8 → 9 entered the ruleset id together; landing them was
+  a re-mint, like every ruleset move on this line. The shipped testnet-11 value is re-derived over
+  the whole merged ruleset rather than carried from any one branch, so no number from this ADR's
+  drafting survives as a pin.
 * **What the implementation added that the ADR text did not anticipate:** a class with NO budget
   for the closed epoch is not measured at all — it could not have filled a ceiling nobody gave it
   (the mid-epoch activation case), and counting that as a decay would punish a class for the
   boundary's own arithmetic.
-* The share table becomes a slow, legible instrument: at most ±1‰ per class per epoch boundary,
-  every move derivable by every observer from on-chain state alone.
+* The share table becomes a slow, legible instrument: one bounded step per class per epoch
+  boundary, every move derivable by every observer from on-chain state alone.
 * Nothing in this ADR adds an authority. The list of things that can move a permille after it
   lands: a signed registration (in), the epoch clock (up, down, back). Every one is validated by
   recomputation.

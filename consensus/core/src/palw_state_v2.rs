@@ -135,7 +135,7 @@ use std::collections::{BTreeMap, BTreeSet};
 /// what versions 6 and 7 cost, both spent inside one day, to carry a family that never produced a
 /// block: that is the price of a schema field admitted ahead of the thing that needed it.
 ///
-/// **Version 9: ADR-0054 Decisions 3–5.** The class record gains `registrant_bond`, the status
+/// **Version 9: ADR-0056 Decisions 3 and 5.** The class record gains `registrant_bond`, the status
 /// gains `Dormant`, and the state gains two accumulators — `registration_exposure` (the registry's
 /// own ledger, kept apart from the claims') and `class_walks` (the consecutive-epoch counters the
 /// share walk folds). Every one of them is read by a rule that decides who holds cadence, so every
@@ -339,7 +339,7 @@ pub struct PalwStateParamsV2 {
     /// carries value sets it through [`PalwStateParamsV2::with_worker_carve_permille`], and
     /// Decision 1's startup gate is where a live network's non-zero requirement belongs.
     worker_carve_permille: u16,
-    /// **ADR-0054 Decision 3: what a live registration reserves against its registrant's bond.**
+    /// **ADR-0056 Decision 3: what a live registration reserves against its registrant's bond.**
     ///
     /// Sompi held for as long as the class it registered is `Registered` or `Active`, released at
     /// reclamation or freezing. A RESERVATION, not a burn: an honest registrant gets it back, so
@@ -350,17 +350,7 @@ pub struct PalwStateParamsV2 {
     ///
     /// **Zero disables Decision 3** and is what every preset that has not decided carries.
     registration_exposure_sompi: u64,
-    /// ADR-0054 Decision 4: the fill ratio, in permille of a class's own epoch budget, at or above
-    /// which a closed epoch counts toward a raise.
-    share_raise_fill_permille: u32,
-    /// Consecutive qualifying epochs a class needs before it gains one permille. Zero disables
-    /// raises.
-    share_raise_epochs: u32,
-    /// The fill ratio below which a closed epoch counts toward a decay.
-    share_decay_fill_permille: u32,
-    /// Consecutive qualifying epochs before a class loses one permille. Zero disables decays.
-    share_decay_epochs: u32,
-    /// ADR-0054 Decision 5: consecutive closed epochs of ZERO production after which an `Active`
+    /// ADR-0056 Decision 5: consecutive closed epochs of ZERO production after which an `Active`
     /// class becomes `Dormant`, returning its share and freeing its registration exposure. Zero
     /// disables reclamation.
     reclaim_epochs: u32,
@@ -385,6 +375,26 @@ pub struct PalwStateParamsV2 {
     /// `0` disables the hold (the pre-FP configuration, and what every attempt-only fixture runs
     /// at — on that lane the block cost already does this job).
     fp_abandon_hold_daa: u64,
+    /// **ADR-0054: how fast a class's cadence share may follow its own production, in permille of
+    /// its own share per closed epoch.**
+    ///
+    /// A share was a constant from the moment it was granted — `write_share` had exactly one
+    /// caller, the activation grant — so a post-genesis entrant held
+    /// `min_grantable_share_permille` forever. That share is defined to make its holder's
+    /// expectation exactly one block per epoch and ADR-0045's budget caps it at exactly that, so
+    /// the per-class retarget had nothing it could measure: observed was either 0 (skipped, audit
+    /// H1) or 1 (its expectation, a no-op). A class whose model is worth running could never earn
+    /// the cadence to run it.
+    ///
+    /// With this set, a class that produced every block its budget allowed takes
+    /// `max(1‰, share × this / 1000)` from the floor at the epoch boundary, and one that produced
+    /// nothing gives the same step back. Both are bounded by the floor's reserve and by the grant
+    /// floor — see [`crate::palw_class_daa::derive_class_share_growth_v1`].
+    ///
+    /// **`0` disables the rule**, which is exactly what every network built before ADR-0054 runs
+    /// at: no share moves except at an activation grant, and every existing fixture keeps its
+    /// meaning.
+    class_growth_permille: u16,
 }
 
 impl PalwStateParamsV2 {
@@ -449,18 +459,14 @@ impl PalwStateParamsV2 {
             // predating the reward wiring meant and still means. See
             // `with_worker_carve_permille`.
             worker_carve_permille: 0,
-            // ADR-0054 Decisions 3–5 are OFF unless a network decides them: an all-zero economy is
+            // ADR-0056 Decisions 3 and 5 are OFF unless a network decides them: an all-zero economy is
             // exactly the behaviour every preset had before this ADR, so adding the fields moves
             // the fingerprint and moves nothing else.
             registration_exposure_sompi: 0,
-            share_raise_fill_permille: 0,
-            share_raise_epochs: 0,
-            share_decay_fill_permille: 0,
-            share_decay_epochs: 0,
             reclaim_epochs: 0,
             // **The floor's reserve, and there is exactly ONE of it.** Three lines of work reached
             // this same guard independently — an audit finding (999 individually-legal grants take
-            // the floor to 1‰), ADR-0054 Decision 4's walk, and the share-growth rule's own
+            // the floor to 1‰), ADR-0056's withdrawn Decision 4 walk, and the share-growth rule's own
             // reserve — and three fields would have been three places for the bound to differ.
             // This name is the audit's, because its version landed first and closes a measured
             // critical; every path that can move a permille now checks it.
@@ -469,6 +475,10 @@ impl PalwStateParamsV2 {
             // clock. See the field doc.
             turn_deadline_daa: window_court,
             claim_retirement_daa: 0,
+            // Zero: `new` builds a network whose share table moves only at an activation grant,
+            // which is what every caller predating ADR-0054 meant. See
+            // `with_class_share_growth_v1`.
+            class_growth_permille: 0,
         })
     }
 
@@ -505,57 +515,30 @@ impl PalwStateParamsV2 {
         self.claim_retirement_daa
     }
 
-    /// **ADR-0054 Decisions 3–5, as one call.** Seven numbers that only make sense together: a
-    /// registry price, a walk, and a reclamation clock. A consuming builder rather than seven
-    /// `new` arguments for the reason every other late field here is one — a positional list of
-    /// same-typed integers is a place to transpose two of them silently.
+    /// **ADR-0056 Decisions 3 and 5, as one call**: a registry price and a reclamation clock.
     ///
-    /// Refuses the combinations that would be nonsense rather than merely inert:
-    /// * a decay threshold at or above the raise threshold (a class would qualify for both, and
-    ///   the walk would depend on which arm was written first);
-    /// * a protected floor at or above 1000‰ (nothing else could ever hold share);
-    /// * a protected floor below the grant floor (it would be a bound that never binds).
-    #[allow(clippy::too_many_arguments)]
-    pub fn with_class_economy_v1(
-        mut self,
-        registration_exposure_sompi: u64,
-        share_raise_fill_permille: u32,
-        share_raise_epochs: u32,
-        share_decay_fill_permille: u32,
-        share_decay_epochs: u32,
-        reclaim_epochs: u32,
-    ) -> Result<Self, PalwStateV2Error> {
-        if share_raise_epochs > 0 && share_decay_epochs > 0 && share_decay_fill_permille >= share_raise_fill_permille {
-            return Err(PalwStateV2Error::InvalidParams(
-                "the decay threshold must sit strictly below the raise threshold — otherwise one epoch qualifies for both",
-            ));
-        }
+    /// The share WALK is not here. Two branches wrote one, and the one that shipped is
+    /// [`Self::with_class_share_growth_v1`]: it measures a class's FILLED BUDGET against the same
+    /// closed epoch the retarget reads, where this line's version counted consecutive epochs above
+    /// and below two fill thresholds. Filled budget is the better signal for a reason the other
+    /// line measured rather than argued — a minimum-share class has `expected == observed == 1`
+    /// in the only two states its budget allows, so a streak rule keyed to those states has no
+    /// reachable input on exactly the class that most needs to grow.
+    ///
+    /// A consuming builder rather than two more `new` arguments for the reason every other late
+    /// field here is one: a positional list of same-typed integers is a place to transpose two of
+    /// them silently.
+    pub fn with_class_economy_v1(mut self, registration_exposure_sompi: u64, reclaim_epochs: u32) -> Result<Self, PalwStateV2Error> {
         // The floor's reserve is NOT an argument here: it is `min_base_class_share_permille`, set
         // by its own builder because the registration path needs it whether or not the walk is on.
         // A second copy taken here would be a second bound to drift.
         self.registration_exposure_sompi = registration_exposure_sompi;
-        self.share_raise_fill_permille = share_raise_fill_permille;
-        self.share_raise_epochs = share_raise_epochs;
-        self.share_decay_fill_permille = share_decay_fill_permille;
-        self.share_decay_epochs = share_decay_epochs;
         self.reclaim_epochs = reclaim_epochs;
         Ok(self)
     }
 
     pub fn registration_exposure_sompi(&self) -> u64 {
         self.registration_exposure_sompi
-    }
-    pub fn share_raise_fill_permille(&self) -> u32 {
-        self.share_raise_fill_permille
-    }
-    pub fn share_raise_epochs(&self) -> u32 {
-        self.share_raise_epochs
-    }
-    pub fn share_decay_fill_permille(&self) -> u32 {
-        self.share_decay_fill_permille
-    }
-    pub fn share_decay_epochs(&self) -> u32 {
-        self.share_decay_epochs
     }
     pub fn reclaim_epochs(&self) -> u32 {
         self.reclaim_epochs
@@ -575,6 +558,58 @@ impl PalwStateParamsV2 {
 
     pub fn worker_carve_permille(&self) -> u16 {
         self.worker_carve_permille
+    }
+
+    /// **Turn on the share-raise path** (ADR-0054): the per-epoch growth step, in permille of a
+    /// class's own share, and the permille the liveness floor keeps.
+    ///
+    /// A consuming builder for the same reason the carve is one: adding a fourteenth positional
+    /// `u16` beside `fp_attempt_share_permille` and `budget_tolerance_permille` is the argument a
+    /// reader mis-binds, and a share rule bound to the wrong slot moves the cadence table.
+    ///
+    /// Refused: a growth step above the whole denominator (a class that could more than double
+    /// every epoch is not following its production, it is racing it), and a reserve above the
+    /// denominator. A reserve BELOW the grant floor is not refused — it is raised to it, because
+    /// the floor is a bound the table already enforces everywhere else.
+    /// **The reserve is not an argument.** ADR-0054 Decision 2 asks for a quantity the floor keeps,
+    /// and the table already has one: `min_base_class_share_permille`, which the audit added after
+    /// showing 999 individually-legal grants could walk the floor to 1‰. A second stored reserve
+    /// would be a second place for the same bound to be set, and the two would differ the first
+    /// time someone set one of them. So this takes the growth step alone and reads the bound from
+    /// the field that owns it — see `base_class_reserve_permille`.
+    pub fn with_class_share_growth_v1(mut self, class_growth_permille: u16) -> Result<Self, PalwStateV2Error> {
+        if class_growth_permille > 1000 {
+            return Err(PalwStateV2Error::InvalidParams("a growth step above 1000‰ would more than double a share in one epoch"));
+        }
+        if class_growth_permille > 0 && self.min_base_class_share_permille == 0 {
+            return Err(PalwStateV2Error::InvalidParams(
+                "a growth rule with no floor reserve can walk the liveness floor to the grant floor (ADR-0039 W6′)",
+            ));
+        }
+        self.class_growth_permille = class_growth_permille;
+        Ok(self)
+    }
+
+    /// ADR-0054's growth step, in permille of a class's own share per closed epoch. `0` = the rule
+    /// is off and no share moves outside an activation grant.
+    pub fn class_growth_permille(&self) -> u16 {
+        self.class_growth_permille
+    }
+
+    /// **The permille the liveness floor keeps** — the reserve a growing class may not draw past
+    /// (ADR-0054 Decision 2, ADR-0039 W6′).
+    ///
+    /// Derived, not stored. The floor is the reservoir every growing class draws from and the one
+    /// class every node can run without an artifact; W6′ said its share "may never be zero", and a
+    /// rule that moves permille every epoch makes that bound worthless, because a table walked down
+    /// to one permille has ended liveness while satisfying the letter of it.
+    ///
+    /// The quantity is `min_base_class_share_permille`, the field the audit added when it showed
+    /// the same walk could be performed by 999 individually-legal GRANTS. Growth and granting are
+    /// two ways to move a permille and there is one bound between them, raised to the grant floor
+    /// because a reserve under the smallest grantable share is not a reserve.
+    pub fn base_class_reserve_permille(&self) -> u16 {
+        self.min_base_class_share_permille.max(self.min_grantable_share_permille())
     }
 
     pub fn min_collateral_sompi(&self) -> u64 {
@@ -896,7 +931,7 @@ pub enum PalwClassStatusV2 {
         activation_daa: u64,
         pending_share_permille: u16,
     },
-    /// **ADR-0054 Decision 5: reclaimed for producing nothing.**
+    /// **ADR-0056 Decision 5: reclaimed for producing nothing.**
     ///
     /// A class that produced zero blocks for `reclaim_epochs` consecutive closed epochs returns
     /// its share to the incumbents and frees its registrant's registration exposure. It is NOT
@@ -962,7 +997,7 @@ pub struct PalwClassStateV2 {
     pub pwu_rule: PalwPwuRuleV2,
     pub status: PalwClassStatusV2,
     pub registered_daa: u64,
-    /// **Whose bond paid for this class to exist** (ADR-0054 Decision 3), or `None` for a class
+    /// **Whose bond paid for this class to exist** (ADR-0056 Decision 3), or `None` for a class
     /// the GENESIS registered — the network's own decision, which no one had to buy entry for.
     ///
     /// The registration exposure is charged here and released here, so the record has to carry it:
@@ -971,17 +1006,18 @@ pub struct PalwClassStateV2 {
     pub registrant_bond: Option<PalwBondKeyV2>,
 }
 
-/// **ADR-0054 Decision 4/5: one class's position in the share walk.**
+/// **ADR-0056 Decision 5: one class's silence, counted.**
 ///
-/// Three consecutive-epoch counters and the epoch that last folded them. Consecutive is the whole
-/// point — a single epoch's fill is noise, and a rule that moved share on one epoch would hand the
-/// table to whoever could arrange one good epoch.
+/// One consecutive-epoch counter and the epoch that last folded it. Consecutive is the whole point
+/// — a class that misses one epoch has had a bad epoch, and a rule that reclaimed on that would
+/// take the seat of anyone whose node restarted.
+///
+/// It carried a `raise_streak` and a `decay_streak` too, for a walk this line wrote and the merge
+/// did not keep (see `with_class_economy_v1`). They are gone rather than left at zero: an unwritten
+/// counter inside the state root is a field every node must agree about and nothing can ever
+/// disagree over, which is the shape a later reader mistakes for a live signal.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwClassWalkV2 {
-    /// Consecutive closed epochs whose fill ratio met the raise threshold.
-    pub raise_streak: u32,
-    /// Consecutive closed epochs whose fill ratio fell below the decay threshold.
-    pub decay_streak: u32,
     /// Consecutive closed epochs with zero produced blocks.
     pub idle_streak: u32,
     /// The last epoch index folded into these counters. A boundary folds each closed epoch exactly
@@ -1780,7 +1816,7 @@ pub struct PalwChainStateV2 {
     /// Receipt-lane production census per class (spent quanta as blocks/pwu), feeding the
     /// receipt-lane retarget exactly as `epoch_counters` feeds the attempt lane's.
     receipt_epoch_counters: BTreeMap<Hash64, PalwEpochCounterV2>,
-    /// **ADR-0054 Decision 3: the registry's own exposure ledger, kept SEPARATE from the claims'.**
+    /// **ADR-0056 Decision 3: the registry's own exposure ledger, kept SEPARATE from the claims'.**
     ///
     /// `reserved_exposure` is an accumulator over live claims, and
     /// `assert_internal_consistency` proves it equals the claims it summarizes — a real safety
@@ -1790,7 +1826,7 @@ pub struct PalwChainStateV2 {
     /// and whose `registrant_bond` is set), independently checked, and SUMMED with the claims'
     /// only where the ceiling is applied.
     registration_exposure: BTreeMap<PalwBondKeyV2, u128>,
-    /// ADR-0054 Decision 4/5: each class's consecutive-epoch counters. Keyed like `classes`, and
+    /// ADR-0056 Decision 5: each class's consecutive-epoch counters. Keyed like `classes`, and
     /// only for classes the walk has folded at least one closed epoch for — absence is a class
     /// that has not seen a boundary yet, which is not the same as a class with zero streaks.
     class_walks: BTreeMap<Hash64, PalwClassWalkV2>,
@@ -1948,7 +1984,7 @@ impl PalwChainStateV2 {
         self.reserved_exposure.get(key).copied().unwrap_or(0)
     }
 
-    /// ADR-0054 Decision 3: what this bond has reserved by REGISTERING classes, as opposed to by
+    /// ADR-0056 Decision 3: what this bond has reserved by REGISTERING classes, as opposed to by
     /// making claims. The ceiling is applied to the sum; they are kept apart so each stays
     /// derivable from the collection it summarizes.
     pub fn registration_exposure(&self, key: &PalwBondKeyV2) -> u128 {
@@ -2018,7 +2054,7 @@ impl PalwChainStateV2 {
         state.update(collection_root(b"classes", &self.classes).as_byte_slice());
         state.update(collection_root(b"class_targets", &self.class_targets).as_byte_slice());
         state.update(collection_root(b"class_shares", &self.class_shares).as_byte_slice());
-        // ADR-0054 Decisions 3–5. Rooted here, after the share table they are the economics of.
+        // ADR-0056 Decisions 3 and 5. Rooted here, after the share table they are the economics of.
         state.update(collection_root(b"registration_exposure", &self.registration_exposure).as_byte_slice());
         state.update(collection_root(b"class_walks", &self.class_walks).as_byte_slice());
         match &self.epoch_budgets {
@@ -2146,7 +2182,7 @@ impl PalwChainStateV2 {
         // must hold is the two directions separately: every SHARE names a class, and every
         // ACTIVE-or-FROZEN class holds a share. A `Registered` one holds none, by construction.
         //
-        // **And a `Dormant` one holds none either** (ADR-0054 Decision 5). It is the same shape as
+        // **And a `Dormant` one holds none either** (ADR-0056 Decision 5). It is the same shape as
         // a pre-activation class from the table's point of view — in the registry, adjudicable,
         // carrying no permille — arrived at from the other end. This invariant caught the new
         // status the first time reclamation ran, which is what it is for.
@@ -2172,7 +2208,7 @@ impl PalwChainStateV2 {
         if exposure != self.reserved_exposure {
             return Err(PalwStateV2Error::CarriageInconsistent("reserved_exposure differs from the claims it summarizes".into()));
         }
-        // **ADR-0054 Decision 3, the same property for the registry's own ledger.** Two
+        // **ADR-0056 Decision 3, the same property for the registry's own ledger.** Two
         // accumulators, each derivable from the collection it summarizes and each checked against
         // it — which is exactly why they are not one map: folding registrations into
         // `reserved_exposure` would have made the check above unable to state anything.
@@ -2419,7 +2455,7 @@ pub enum PalwDeltaEntryV2 {
         old: Option<u128>,
         new: Option<u128>,
     },
-    /// ADR-0054 Decision 3 / 4-5. Journalled like every other write so a delta replays exactly.
+    /// ADR-0056 Decisions 3 and 5. Journalled like every other write so a delta replays exactly.
     RegistrationExposure {
         key: PalwBondKeyV2,
         old: Option<u128>,
@@ -2597,7 +2633,7 @@ impl<'a> TransitionBuilder<'a> {
         self.entries.push(PalwDeltaEntryV2::ClassWalk { key, old, new });
     }
 
-    /// **ADR-0054 Decision 3: take the registry's price, or give it back.** One function for both
+    /// **ADR-0056 Decision 3: take the registry's price, or give it back.** One function for both
     /// directions so the two can never disagree about the amount — the reservation is the
     /// parameter's value at the moment it is taken, and release subtracts exactly that.
     fn move_registration_exposure(&mut self, bond: PalwBondKeyV2, take: bool) -> Result<(), PalwStateV2Error> {
@@ -3116,11 +3152,18 @@ pub fn apply_palw_transition_v3(
     //     between the sweeps and the objects — a fixed slot, because fixed IS the requirement.
     apply_class_retargets(&mut builder, parent, ctx)?;
 
-    // 2c. ADR-0054 Decisions 4/5: the share walk and reclamation, at the same boundary and off the
-    //     same counters. AFTER the retarget (which reads the closed epoch's census and must see it
-    //     unchanged) and BEFORE the objects and the budgets — a share this moves is a share the
-    //     new epoch's budgets derive from.
-    apply_class_share_walk(&mut builder, parent, ctx)?;
+    // 2c. ADR-0054's share-raise path, on the same closed span the retarget just measured: a class
+    //     that produced every block its budget allowed takes a step of cadence from the floor, and
+    //     one that produced nothing gives a step back. It runs HERE — after the retarget, which
+    //     reads the same census, and before the objects and `ensure_epoch_budgets`, so the new
+    //     epoch's budgets are derived from the table this leaves behind rather than from the one
+    //     the closed epoch had. Off entirely when `class_growth_permille` is zero.
+    apply_class_share_growth(&mut builder, parent, ctx);
+    // 2d. Reclamation (this line's ADR Decision 5), at the same boundary and off the same census.
+    //     AFTER the growth step, because a class the growth rule just decayed to nothing and a
+    //     class that has been silent for `reclaim_epochs` are different facts, and only the second
+    //     one takes a class out of the table.
+    apply_class_reclamation(&mut builder, parent, ctx)?;
 
     // 3. The block's accepted objects, in consensus acceptance order.
     for object in accepted_objects {
@@ -3646,41 +3689,111 @@ fn ensure_epoch_budgets(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCont
     builder.write_epoch_budgets(Some(budgets));
 }
 
-/// **ADR-0054 Decisions 4 and 5: the share walk, and reclamation.**
+/// **ADR-0054: the share table follows production, at one closed epoch boundary.**
 ///
-/// Runs at the same boundary `apply_class_retargets` runs at, reading the same closed epoch's
-/// counters, and BEFORE `ensure_epoch_budgets` derives the new epoch's budgets — because a share
-/// this changes is a share those budgets must be derived from.
+/// The arithmetic is [`crate::palw_class_daa::derive_class_share_growth_v1`] and is pure; what
+/// lives here is the decision of WHEN it runs and WHICH facts it reads — the same closed span the
+/// retarget measures, from the same counters, plus that span's own budget table.
 ///
-/// # What it reads, and why nothing else
+/// Reading the budget of the CLOSED epoch is what makes "filled its allowance" a fact rather than
+/// a guess: `ensure_epoch_budgets` has not yet run for the new epoch at this point in the
+/// transition, so `state.epoch_budgets` still holds the table the closed epoch was capped by. A
+/// budget from any other epoch is not evidence about this one and is skipped.
 ///
-/// One signal: the closed epoch's `produced_blocks / budget_blocks` for each class. Jobs on this
-/// network are self-originated (there is no orderer), so every "demand" signal — fees offered,
-/// requests seen, users claimed — is manufacturable by the class's own operators at no cost.
-/// Filled budget is the one number whose fake costs exactly what the real thing costs: an
-/// inference per block, a claim's exposure reserved against a real bond, and a carve escrowed from
-/// a real subsidy. Faking it *is* paying for it, which is the only property that makes a metric
-/// ungameable rather than merely hard to game.
+/// Silent when the rule is off, when no boundary was crossed, or when the span produced nothing:
+/// an empty span says nothing about any class's need for cadence, in either direction.
+fn apply_class_share_growth(builder: &mut TransitionBuilder<'_>, parent: &PalwChainStateV2, ctx: &PalwBlockContextV2) {
+    if builder.params.class_growth_permille() == 0 {
+        return;
+    }
+    let Some(last) = &parent.last_point else { return };
+    let epoch_length = builder.params.epoch_length;
+    let closed_epoch = last.daa_score / epoch_length;
+    if ctx.daa_score / epoch_length <= closed_epoch {
+        return;
+    }
+    // The closed epoch's budget table, or nothing: a table stamped with another epoch caps a
+    // different span, and comparing production against it would invent a verdict.
+    let budgets = match builder.state.epoch_budgets.as_ref() {
+        Some(budgets) if budgets.epoch_index == closed_epoch => budgets.budget_blocks.clone(),
+        _ => return,
+    };
+    let use_by_class: BTreeMap<Hash64, crate::palw_class_daa::PalwClassEpochUseV1> = builder
+        .state
+        .class_shares
+        .keys()
+        .map(|class_id| {
+            let produced = builder
+                .state
+                .epoch_counters
+                .get(class_id)
+                .filter(|counter| counter.epoch_index == closed_epoch)
+                .map(|counter| counter.produced_blocks)
+                .unwrap_or(0);
+            (*class_id, crate::palw_class_daa::PalwClassEpochUseV1 { produced, budget: budgets.get(class_id).copied().unwrap_or(0) })
+        })
+        .collect();
+    if use_by_class.values().all(|used| used.produced == 0) {
+        // A span nobody produced in measures nothing. Without this, every class in the table would
+        // decay on a gap epoch and the floor would collect the whole table for an outage that was
+        // never any class's fault.
+        return;
+    }
+    let frozen: BTreeSet<Hash64> = builder
+        .state
+        .classes
+        .iter()
+        .filter(|(_, record)| matches!(record.status, PalwClassStatusV2::Frozen { .. }))
+        .map(|(id, _)| *id)
+        .collect();
+    let moved = crate::palw_class_daa::derive_class_share_growth_v1(
+        &builder.state.class_shares,
+        &frozen,
+        &use_by_class,
+        builder.params.base_class_id,
+        builder.params.class_growth_permille(),
+        builder.params.base_class_reserve_permille(),
+        builder.params.min_grantable_share_permille(),
+    );
+    for (class_id, share) in moved.shares {
+        if builder.state.class_shares.get(&class_id).copied() != Some(share) {
+            builder.write_share(class_id, Some(share));
+        }
+    }
+}
+
+/// **Reclamation: a class that has stopped producing gives its seat back** (this line's ADR
+/// Decision 5).
 ///
-/// # What it does
+/// Runs at the same boundary `apply_class_retargets` and `apply_class_share_growth` run at, off
+/// the same closed epoch's counters, and BEFORE `ensure_epoch_budgets` derives the new epoch's
+/// budgets — a share this returns is a share those budgets must be derived from.
 ///
-/// At most ±1‰ per class per boundary, so the table moves slower than everyone watching it. Raises
-/// are funded from the same boundary's decayers first and only then pro rata from the rest, by the
-/// same largest-remainder arithmetic registration donation uses — conservation stays a
-/// construction. A class that produced nothing for `reclaim_epochs` consecutive closed epochs goes
-/// `Dormant`: its whole share returns, its registrant's Decision 3 reservation is released, and it
-/// keeps its place in the registry so its past work stays adjudicable.
-fn apply_class_share_walk(
+/// # Why this is not the growth rule's decay arm
+///
+/// ADR-0054 Decision 1 moves ONE step of permille per epoch off filled-budget, which is a price
+/// signal: a class running below its share is running at its natural rate and its share walks down
+/// toward it. That never removes a class, by design — Decision 2 stops decay at the grant floor,
+/// because a share below it is a zero budget and a class that cannot produce is a frozen class
+/// wearing the wrong status.
+///
+/// Reclamation answers a different question: not "is this class using its cadence" but "is this
+/// class still here". A registrant that walked away holds a seat, a share, and — Decision 3 — an
+/// exposure reservation against its bond, and none of the three come back on their own. So the
+/// signal is absolute silence (`produced == 0`) for `reclaim_epochs` CONSECUTIVE closed epochs, and
+/// the effect is total: the whole share returns to the incumbents, the record goes `Dormant`, and
+/// the reservation is released.
+///
+/// The registry entry itself is kept. A class's past work stays adjudicable after its operators
+/// leave — a court that could not resolve a class id would turn walking away into an amnesty.
+fn apply_class_reclamation(
     builder: &mut TransitionBuilder<'_>,
     parent: &PalwChainStateV2,
     ctx: &PalwBlockContextV2,
 ) -> Result<(), PalwStateV2Error> {
     let params = builder.params;
-    let raise_on = params.share_raise_epochs() > 0;
-    let decay_on = params.share_decay_epochs() > 0;
-    let reclaim_on = params.reclaim_epochs() > 0;
-    if !raise_on && !decay_on && !reclaim_on {
-        return Ok(()); // ADR-0054 Decisions 4/5 are off on this network.
+    if params.reclaim_epochs() == 0 {
+        return Ok(()); // Decision 5 is off on this network.
     }
     let Some(last) = &parent.last_point else { return Ok(()) };
     let epoch_length = params.epoch_length;
@@ -3690,10 +3803,8 @@ fn apply_class_share_walk(
     }
     let budgets = builder.state.epoch_budgets.clone();
 
-    // ---- 1. Fold the closed epoch into every share-bearing class's counters -----------------
-    //
-    // Share-bearing and unfrozen: a frozen class is out of the lane by verdict and its counters
-    // must not decay it further, and a pre-activation class has no budget to fill.
+    // Share-bearing and Active: a frozen class is out of the lane by verdict and its silence is the
+    // verdict's doing, and a pre-activation class has no budget to have filled.
     let walking: Vec<Hash64> = builder
         .state
         .class_shares
@@ -3701,8 +3812,6 @@ fn apply_class_share_walk(
         .copied()
         .filter(|id| matches!(builder.state.classes.get(id).map(|r| &r.status), Some(PalwClassStatusV2::Active)))
         .collect();
-    let mut raises: Vec<Hash64> = Vec::new();
-    let mut decays: Vec<Hash64> = Vec::new();
     let mut reclaims: Vec<Hash64> = Vec::new();
     for id in &walking {
         let mut walk = builder.state.class_walks.get(id).copied().unwrap_or_default();
@@ -3720,35 +3829,22 @@ fn apply_class_share_walk(
         let budget =
             budgets.as_ref().filter(|b| b.epoch_index == closed_epoch).and_then(|b| b.budget_blocks.get(id).copied()).unwrap_or(0);
         // **A class with no budget for the closed epoch is not measured.** It could not have
-        // filled a ceiling nobody gave it — the mid-epoch activation case — and counting that as a
-        // decay would punish a class for the boundary's own arithmetic.
+        // produced under a ceiling nobody gave it — the mid-epoch activation case — and counting
+        // that silence would reclaim a class for the boundary's own arithmetic.
         if budget == 0 {
             walk.last_epoch = closed_epoch;
             builder.write_class_walk(*id, Some(walk));
             continue;
         }
-        let fill_permille = ((produced as u128) * 1000 / (budget as u128)).min(u32::MAX as u128) as u32;
-        walk.raise_streak = if raise_on && fill_permille >= params.share_raise_fill_permille() { walk.raise_streak + 1 } else { 0 };
-        walk.decay_streak = if decay_on && fill_permille < params.share_decay_fill_permille() { walk.decay_streak + 1 } else { 0 };
         walk.idle_streak = if produced == 0 { walk.idle_streak + 1 } else { 0 };
         walk.last_epoch = closed_epoch;
-
-        // Reclamation outranks the walk: a class being taken out of the table is not also moved
-        // one permille inside it.
-        if reclaim_on && walk.idle_streak >= params.reclaim_epochs() {
+        if walk.idle_streak >= params.reclaim_epochs() {
             reclaims.push(*id);
             walk = PalwClassWalkV2 { last_epoch: closed_epoch, ..Default::default() };
-        } else if raise_on && walk.raise_streak >= params.share_raise_epochs() {
-            raises.push(*id);
-            walk.raise_streak = 0;
-        } else if decay_on && walk.decay_streak >= params.share_decay_epochs() {
-            decays.push(*id);
-            walk.decay_streak = 0;
         }
         builder.write_class_walk(*id, Some(walk));
     }
 
-    // ---- 2. Reclaim, which returns whole shares ---------------------------------------------
     for id in &reclaims {
         let Some(record) = builder.state.classes.get(id).cloned() else { continue };
         let returned = builder.state.class_shares.get(id).copied().unwrap_or(0);
@@ -3769,63 +3865,7 @@ fn apply_class_share_walk(
         }
         redistribute_permille_v1(builder, returned, None)?;
     }
-
-    // ---- 3. Decays, then raises funded by them ----------------------------------------------
-    let mut pool: u32 = 0;
-    for id in &decays {
-        let held = builder.state.class_shares.get(id).copied().unwrap_or(0);
-        // Never below the grant floor, and never below the floor class's protected level.
-        let limit = floor_limit_for_v1(params, *id);
-        if held <= limit {
-            continue;
-        }
-        builder.write_share(*id, Some(held - 1));
-        pool += 1;
-    }
-    for id in &raises {
-        // A raise is one permille, funded first from this boundary's decayers and otherwise taken
-        // pro rata from the incumbents — the same conservation registration donation keeps.
-        if pool > 0 {
-            pool -= 1;
-        } else if !take_one_permille_v1(builder, *id)? {
-            continue; // nobody could donate without breaking a floor: the raise simply does not happen
-        }
-        let held = builder.state.class_shares.get(id).copied().unwrap_or(0);
-        builder.write_share(*id, Some(held.saturating_add(1)));
-    }
-    // Any decayed permille no raise claimed goes back to the incumbents, so the table conserves.
-    if pool > 0 {
-        redistribute_permille_v1(builder, pool as u16, None)?;
-    }
     Ok(())
-}
-
-/// The lowest permille a class may be pushed to: the grant floor for everyone, and the protected
-/// level for the liveness floor (ADR-0054 Decision 4's last clause).
-fn floor_limit_for_v1(params: &PalwStateParamsV2, class_id: Hash64) -> u16 {
-    if class_id == params.base_class_id() {
-        params.min_base_class_share_permille().max(params.min_grantable_share_permille())
-    } else {
-        params.min_grantable_share_permille()
-    }
-}
-
-/// Take one permille from the largest holder that can spare it, skipping `beneficiary`. Returns
-/// false when nobody can — a raise that would break a floor does not happen.
-fn take_one_permille_v1(builder: &mut TransitionBuilder<'_>, beneficiary: Hash64) -> Result<bool, PalwStateV2Error> {
-    let params = builder.params;
-    // Largest holder first, class id on ties: a total order, so two nodes cannot take the permille
-    // from different classes.
-    let mut candidates: Vec<(u16, Hash64)> =
-        builder.state.class_shares.iter().filter(|(id, _)| **id != beneficiary).map(|(id, share)| (*share, *id)).collect();
-    candidates.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
-    for (held, id) in candidates {
-        if held > floor_limit_for_v1(params, id) {
-            builder.write_share(id, Some(held - 1));
-            return Ok(true);
-        }
-    }
-    Ok(false)
 }
 
 /// Give `amount` permille back to the incumbents, largest remainder over their current holdings,
@@ -3861,7 +3901,6 @@ fn redistribute_permille_v1(
     }
     Ok(())
 }
-
 fn apply_class_retargets(
     builder: &mut TransitionBuilder<'_>,
     parent: &PalwChainStateV2,
@@ -4154,11 +4193,11 @@ fn apply_object(
             // may be folded at all.
             //
             // Its `registrant_bond` IS read here, and that is not the graph walk: whose bond pays
-            // the ADR-0054 Decision 3 reservation is referential integrity, the transition's own
+            // the ADR-0056 Decision 3 reservation is referential integrity, the transition's own
             // business, and the only place the fact exists.
             admission,
         } => {
-            // **ADR-0054 Decision 5: a Dormant class is the one id that may be registered twice.**
+            // **ADR-0056 Decision 5: a Dormant class is the one id that may be registered twice.**
             //
             // It was reclaimed for producing nothing, not convicted of anything, so the way back is
             // the way in: a fresh signature, a fresh exposure reservation, a fresh soak, and the
@@ -4245,7 +4284,7 @@ fn apply_object(
                         PalwClassStatusV2::Active
                     },
                     registered_daa: ctx.daa_score,
-                    // ADR-0054 Decision 3: whose bond paid for this to exist. The carriage is the
+                    // ADR-0056 Decision 3: whose bond paid for this to exist. The carriage is the
                     // post-genesis form and names its registrant; a genesis registration has none,
                     // and pays nothing, because the network itself decided it.
                     registrant_bond: admission.as_ref().map(|carriage| carriage.registrant_bond),
@@ -4924,7 +4963,7 @@ pub struct PalwStateCarriageV2 {
     pub classes: BTreeMap<Hash64, PalwClassStateV2>,
     pub class_targets: BTreeMap<Hash64, PalwClassTargetV2>,
     pub class_shares: BTreeMap<Hash64, u16>,
-    /// ADR-0054 Decision 3/4/5. Carried like every other accumulator so a syncing node rebuilds
+    /// ADR-0056 Decisions 3 and 5. Carried like every other accumulator so a syncing node rebuilds
     /// the same root; both are re-derived and compared by `assert_internal_consistency`.
     pub registration_exposure: BTreeMap<PalwBondKeyV2, u128>,
     pub class_walks: BTreeMap<Hash64, PalwClassWalkV2>,
@@ -5132,15 +5171,20 @@ pub(crate) mod tests {
         PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, 100, 1000, 0).unwrap()
     }
 
-    // ---- ADR-0054 Decisions 3-5 ------------------------------------------------------------
+    // ---- ADR-0056 Decisions 3 and 5 ------------------------------------------------------------
 
-    /// Params with the class economy ON: registration costs 1,000 sompi, a raise needs 2 epochs at
-    /// ≥800‰ fill, a decay 2 epochs below 200‰, reclamation 3 idle epochs, and the floor is
-    /// protected at 300‰.
+    /// Params with the class economy ON: registration costs 1,000 sompi, reclamation takes 3 idle
+    /// epochs, the growth step is 250‰ of a class's own share, and the floor is protected at 300‰.
     fn economy_params() -> PalwStateParamsV2 {
         // The floor's reserve is the audit batch's own field now, set by its own builder — one
-        // bound, whichever path tries to move a permille.
-        params().with_class_economy_v1(1_000, 800, 2, 200, 2, 3).unwrap().with_min_base_class_share_permille(300).unwrap()
+        // bound, whichever path tries to move a permille (growth, decay, or a grant).
+        params()
+            .with_class_economy_v1(1_000, 3)
+            .unwrap()
+            .with_min_base_class_share_permille(300)
+            .unwrap()
+            .with_class_share_growth_v1(250)
+            .unwrap()
     }
 
     fn registration(class_id: Hash64, share: u16, registrant: Option<PalwBondKeyV2>) -> PalwConsensusObjectV2 {
@@ -5265,13 +5309,15 @@ pub(crate) mod tests {
         assert_eq!(back.class_walk(&h64(2)), None, "and with no streaks carried over");
     }
 
-    /// **Decision 4: filling the budget raises the share, one permille at a time, funded and
-    /// conserved.**
+    /// **ADR-0054 Decision 1 at the transition layer: filling the budget raises the share, and the
+    /// table still conserves.**
     ///
-    /// The other arm of the walk, and the one an implementation is likeliest to leave dead: the
-    /// reclamation tests above would all pass with `raises` never used. Production is written
-    /// straight into the epoch counters, which is what an attempt does — this test is about what
-    /// the BOUNDARY makes of them.
+    /// The growth rule has its own epoch-table suite (`palw_class_daa_epoch_table`); what this adds
+    /// is the seam it shares with reclamation. Both run at the same boundary, off the same census,
+    /// against the same share table, and this asserts the pair leaves 1000‰ behind — a raise funded
+    /// from the floor and a reclamation returning a whole share are two writers on one collection,
+    /// which is where a conservation bug would live. Production is written straight into the epoch
+    /// counters, which is what an attempt does.
     #[test]
     fn filling_the_budget_raises_the_share_and_the_table_still_conserves() {
         let p = economy_params();
@@ -5302,8 +5348,10 @@ pub(crate) mod tests {
             state.assert_internal_consistency(&p).expect("and internally consistent");
         }
         let ended = state.class_shares.get(&h64(2)).copied().expect("still holds share");
-        assert!(ended > started, "two full epochs must raise the entrant: {started}‰ -> {ended}‰");
-        assert!(ended - started <= 2, "at most one permille per boundary, and three boundaries saw two qualifying epochs");
+        assert!(ended > started, "a class that filled its budget must be raised: {started}‰ -> {ended}‰");
+        // `max(1‰, share x g / 1000)` per qualifying boundary, and three boundaries qualified — so
+        // the entrant cannot have moved further than the rule's own step allows it to.
+        assert!(ended - started <= 3, "at most one step per boundary, got {started}‰ -> {ended}‰");
         assert!(
             matches!(state.classes.get(&h64(2)).map(|r| &r.status), Some(PalwClassStatusV2::Active)),
             "a producing class is never reclaimed"
@@ -9144,7 +9192,7 @@ pub(crate) mod tests {
             s.update(spec_collection_root(b"classes", &c.classes).as_byte_slice());
             s.update(spec_collection_root(b"class_targets", &c.class_targets).as_byte_slice());
             s.update(spec_collection_root(b"class_shares", &c.class_shares).as_byte_slice());
-            // ADR-0054 Decisions 3–5, in the position the implementation roots them.
+            // ADR-0056 Decisions 3 and 5, in the position the implementation roots them.
             s.update(spec_collection_root(b"registration_exposure", &c.registration_exposure).as_byte_slice());
             s.update(spec_collection_root(b"class_walks", &c.class_walks).as_byte_slice());
             match &c.epoch_budgets {
