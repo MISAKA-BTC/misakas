@@ -39,11 +39,16 @@ that changed.
 | MSK | enough to cover the collateral plus a transaction fee, in a **non-coinbase** output (§2) |
 | a model | **no.** The default class is the integer floor; see §5 |
 
-`--netsuffix=11`, P2P **26311**, RPC **26312**. A node on the right chain logs
+`--netsuffix=11`, P2P **26311**, RPC **26312**. DNS seeding is live, so no `--addpeer` is needed
+(fallback entry nodes: `169.58.232.113:26311`, `169.58.232.114:26311`, `169.58.39.220:26311`).
+A node on the right chain logs
 
 ```
-Consensus params fingerprint: 048e69026e559e67584ded64f1b6279148e3459975ef9d710e029eaaed638ee0 (network testnet-11)
+Consensus params fingerprint: 15bab795442ec3efc3a58e02dd9c7a6f3015ff0634bc4a50a7af589338857ad0 (network testnet-11)
 ```
+
+(Identity as of the 2026-08-27 re-mint for ADR-0058. If you joined an earlier testnet-11, wipe the
+appdir; the old chain is archived, not continued.)
 
 A different fingerprint means a different ruleset, and the two will refuse each other at handshake.
 Do not treat that as a connectivity problem.
@@ -231,3 +236,47 @@ The collateral is locked in the output the registration names and is reclaimable
 address once the bond is retired (an owner ML-DSA-87 signature over the bond key releases it). It is
 also what a court can slash if this node commits a provably wrong execution — that is the whole
 point of it, and it is why the exposure ceiling exists.
+
+---
+
+## 6. Slow classes count too (ADR-0058), and how to mine the LLM classes
+
+The floor produces a block roughly every two minutes; an LLM-class inference takes minutes on its
+own. Before ADR-0058 that meant an LLM block almost never won tip selection, and only chain blocks
+created claims — so the work went uncounted and unpaid. Since the 2026-08-27 re-mint **the whole
+mergeset carries claims**: a red block (which, at `ghostdag_k = 1`, is every block slower than the
+floor's cadence) is admitted against the accepting chain state, creates a claim, is
+panel-verified, **is paid its worker share to its own miner script**, and moves its class's
+per-class difficulty and ADR-0054 share growth. You do not need to win the tip race; you need the
+work to be real, because the panel re-derives it and a false claim is slashed against your bond.
+
+To produce in an LLM class instead of the floor, everything in §1–§4 stays the same (same bond,
+same key, same node) plus the class artifact and two flags:
+
+| class | artifact | obtain |
+|---|---|---|
+| `QWEN36` (hybrid 35B, 200‰ share) | `qwen36.palwq36`, 34 GiB, SHA-256 `7a944595a4256ab0…` | [download](https://huggingface.co/Misakachain/Qwen3.6-35B-A3B-PALW-runtime/resolve/main/qwen36.palwq36) or convert from the [source GGUF](https://huggingface.co/Misakachain/Qwen3.6-35B-A3B-PALW-runtime/resolve/main/Qwen3.6-abliterated-35b-Claude-4.7-Q4_K_M.gguf) |
+| `QWEN25-A16` (dense 1.5B, 200‰ share) | `.palwart`, 1.7 GiB | convert locally from Qwen2.5-1.5B-Instruct |
+
+Model repository: **<https://huggingface.co/Misakachain/Qwen3.6-35B-A3B-PALW-runtime>**. Verify
+before use — the chain pins the artifact **root**, not a filename:
+
+```bash
+./target/release/qwen36-run --artifact qwen36.palwq36 --root-only
+# must print f4aad4fd543928eb… — anything else is not the registered class
+```
+
+Then produce with:
+
+```bash
+kaspad --testnet --netsuffix=11 \
+  --palw-produce --palw-panel \
+  --palw-class-artifact=/path/to/qwen36.palwq36 \
+  --palw-producer-class=ec7bbcbffe13f36f1c2c418c65bdab840dd40b2bc22b217522dae836153078ddb77a92fb0645d34f98e9e3a1302e4543448a3924b3cd152fc74774ad3f02fb3f \
+  ... (bond, key, pay-address and fee-outpoint flags exactly as in §4)
+```
+
+Conversion recipes, per-class hardware requirements, and how a panel seat serves an LLM class are
+in [palw-public-testnet-classes-runbook.md](palw-public-testnet-classes-runbook.md). The floor
+remains the zero-download path and the liveness guarantee; the LLM classes are where the share
+economy (ADR-0054/0056) grows.

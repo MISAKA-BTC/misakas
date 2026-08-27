@@ -4,10 +4,15 @@
 
 The node binary is still named `kaspad` and the crates keep their upstream `kaspa-*` names (this is a fork, not a rename); the **network**, addresses (`misaka…` mainnet / `misakatest…` testnet / `misakadev…` devnet), and project branding are misakas.
 
-> **Status (2026-08-23).** The live public network is **`testnet-11`** — the PALW release candidate,
-> explorer at **[misakascan.com](https://misakascan.com)**. `testnet-10` has been **stopped**; its
-> parameter set still exists so historical data can be read, but nothing operates it and its public
-> entry point is closed.
+> **Status (2026-08-27).** The live public network is **`testnet-11`** — the PALW release candidate.
+> Explorer at **[misakascan.com](https://misakascan.com)**, web wallet at
+> **[wallet.misakascan.com](https://wallet.misakascan.com)**. Current network identity: consensus
+> fingerprint **`15bab795442ec3ef…`**, genesis **`c664a224…`** (three execution classes and the
+> 347M MSK community allocation in genesis). The chain was re-minted 2026-08-27 for ADR-0058
+> (merged work is counted) — a node with older state must wipe its appdir and resync; a node on an
+> older ruleset is refused at handshake by fingerprint, which is the intended behaviour.
+> `testnet-10` has been **stopped**; its parameter set still exists so historical data can be read,
+> but nothing operates it and its public entry point is closed.
 >
 > PQ-only consensus and the DNS-finality reward overlay are **active from genesis on every defined
 > network** (`pq_activation_daa_score = 0`, `dns_activation_daa_score = 0`). The `mainnet` parameter
@@ -33,9 +38,49 @@ serve and verify, but not produce. The genesis registry seats the initial set.
 parameter construction if anything tries to change it. Inference takes real time, and a block
 interval shorter than the work it certifies is a chain that certifies nothing.
 
-The execution class shipped in the genesis is **PALW-BASE-0**: a deterministic integer model whose
-every step this build can re-derive and adjudicate. It is pure Rust in this tree — running a node
-needs no model file and no GPU.
+Three execution classes ship in the genesis:
+
+| class | model | share | needs a model file? |
+|---|---|---|---|
+| **PALW-BASE-0** (the floor) | deterministic integer model, pure Rust in this tree | 600‰ | **no** — no GPU, no download |
+| **QWEN25-A16** | Qwen2.5-1.5B-Instruct, A16 static-PTQ conversion | 200‰ | yes (convert locally) |
+| **QWEN36** | Qwen3.6-abliterated-35B-A3B (Q4_K_M), hybrid runtime | 200‰ | yes (~34 GiB, download or convert) |
+
+Running or verifying a node needs none of them for the floor; producing in a model class needs that
+class's artifact. Both model artifacts derive deterministically from public weights on
+[Hugging Face — Misakachain/Qwen3.6-35B-A3B-PALW-runtime](https://huggingface.co/Misakachain/Qwen3.6-35B-A3B-PALW-runtime),
+and every panel seat re-derives the same bytes or the class does not license
+(see [docs/palw-public-testnet-classes-runbook.md](docs/palw-public-testnet-classes-runbook.md)).
+
+Since ADR-0058 a block does not need to win tip selection for its work to count: the whole
+mergeset — reds included, which at 120 s cadence and `ghostdag_k = 1` is every block of every
+class slower than the floor — creates claims, is verified, is paid, and moves the per-class
+difficulty and share. A slow class starves no more.
+
+## Joining testnet-11
+
+The network is permissionless. DNS seeding is live (`seeder1.misakascan.com`), so a fresh node
+needs **no flags beyond the network selection**:
+
+```bash
+cargo build --release -p kaspad
+./target/release/kaspad --testnet --netsuffix=11 --utxoindex
+```
+
+The log must show this fingerprint, or you are on the wrong ruleset:
+
+```
+Consensus params fingerprint: 15bab795442ec3efc3a58e02dd9c7a6f3015ff0634bc4a50a7af589338857ad0 (network testnet-11)
+```
+
+If DNS is blocked where you run, add the public entry nodes by hand:
+`--addpeer=169.58.232.113:26311 --addpeer=169.58.232.114:26311 --addpeer=169.58.39.220:26311`.
+
+| I want to… | read |
+|---|---|
+| run a node / verify the chain | [docs/testnet11-node-operator.md](docs/testnet11-node-operator.md) |
+| produce blocks (floor class, no model needed) | [docs/testnet11-join-mining.md](docs/testnet11-join-mining.md) |
+| produce or verify with the LLM classes | [docs/palw-public-testnet-classes-runbook.md](docs/palw-public-testnet-classes-runbook.md) |
 
 ## What's different from Kaspa
 

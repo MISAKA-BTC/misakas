@@ -7,13 +7,16 @@ testnet-11 is the public PALW network. Every post-genesis block's proof-of-work 
 deterministic LLM inference**, not a hash. There is no hash lane to fall back to — that is the
 point, and it is what makes the rest of this document necessary.
 
-> **Relaunch 2 (2026-08-20) — wipe your datadir before joining.** The genesis changed: it now
-> carries the 347M MSK community allocation, and its coinbase marker moved `11,1` → `11,2`. A node
-> with Relaunch-1 state does not resume on the new chain; it stops at the startup genesis-mismatch
-> guard, which is the intended behaviour. `rm -rf` the appdir (or use a new one). The new identity
-> is genesis `3564ea39…`, `utxo_commitment` `80fad3c3…`, consensus fingerprint `49ff9628…` — see
-> [testnet11-relaunch2-genesis.md](testnet11-relaunch2-genesis.md) for the allocation table and how
-> every constant is re-derived.
+> **Current identity (2026-08-27 re-mint, ADR-0058) — wipe your datadir if you joined earlier.**
+> The live chain's consensus fingerprint is **`15bab795442ec3efc3a58e02dd9c7a6f3015ff0634bc4a50a7af589338857ad0`**,
+> genesis **`c664a224…`** (three execution classes + the 347M MSK community allocation baked in).
+> A node holding any earlier testnet-11 state does not resume on this chain — it is refused at
+> handshake by fingerprint, which is the intended behaviour; `rm -rf` the appdir (or use a new
+> one). Earlier identities, all dead: `49ff9628…` (Relaunch 2, 2026-08-20, genesis `3564ea39…`),
+> `048e6902…`, `25a74c81…`, `bb3e06b4…`, and `bb0a3ad3…` (the 2026-08-27 morning root re-pin,
+> superseded the same day). See [testnet11-relaunch2-genesis.md](testnet11-relaunch2-genesis.md)
+> for how the allocation constants derive, and ADR-0058 for what the re-mint changed. DNS seeding
+> is live (`seeder1.misakascan.com`): a fresh node needs no `--addpeer`.
 
 Read §2 before you build anything. A node outside the determinism class does not sync slowly or
 mine badly; it computes different tags, rejects every honest block, and has its own rejected. It
