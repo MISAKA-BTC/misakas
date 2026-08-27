@@ -48,6 +48,7 @@ pub mod legs;
 pub mod mmap;
 pub mod produce;
 pub mod qwen36;
+pub mod qwen25_a16_backend;
 pub mod qwen36_backend;
 pub mod qwen36_calibrate;
 pub mod qwen36_reference;
