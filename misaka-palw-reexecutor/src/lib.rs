@@ -762,6 +762,8 @@ pub mod fixtures {
             // The registered BASE-0 epsilon (Q8), matching the registry's fleet fixture. A
             // profile field, not an adjudicator constant: see `palw_step`'s own note.
             base0_rms_eps_q: 1 << 8,
+            // The fixture reproduces the FLOOR, which commits whole logits rows.
+            logits_scheme_id: kaspa_consensus_core::palw_step_refute::flat_logits_scheme_id_v1(),
             gdn_heads: 1,
             gdn_head_k_dim: 16,
             gdn_head_v_dim: 16,
