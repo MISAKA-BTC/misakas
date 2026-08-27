@@ -22,6 +22,10 @@ pub use block_template::{policy::Policy, selector::RebalancingWeightedTransactio
 pub use mempool::model::frontier::{Frontier, feerate_key::FeerateTransactionKey, search_tree::SearchTree};
 // kaspa-pq DNS-finality: the attestation mempool/mining policy, wired by the daemon from DnsParams.
 pub use mempool::attestation::AttestationMempoolPolicy;
+// The relay limit a builder has to fit under. Exported so the one place that CONSTRUCTS a
+// transaction it needs relayed -- the PALW panel's bond carrier -- can size its outputs against
+// the same number the mempool will judge them by, instead of a copy that drifts.
+pub use mempool::check_transaction_standard::MAXIMUM_STANDARD_TRANSACTION_MASS;
 
 #[cfg(test)]
 pub mod testutils;
