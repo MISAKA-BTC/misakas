@@ -1,7 +1,8 @@
 # ADR-0054: Permissionless class admission, and the share economy that survives it
 
-**Status:** Accepted — Decisions 1, 2 and 7 are implemented today (citations inline); Decisions
-3–6 are normative and not yet implemented, each with its enforcement point named.
+**Status:** Accepted and **implemented** (2026-08-27, `788b656d`). Decisions 1, 2 and 7 were
+already the shipped design; Decisions 3, 4 and 5 landed with the state version 8 → 9 this ADR
+predicted, and Decision 6 is a policy the gate keeps by not deduplicating.
 **Date:** 2026-08-27
 **Depends on:** ADR-0038 (PALW is the consensus work), ADR-0039 (the floor; no weight without a
 complete catalog), ADR-0045 (the class economy: one share table, conservation, donation),
@@ -115,9 +116,8 @@ gate afterwards.
 
 ## Decision 3 — Registration exposure: entry is priced in bonded collateral
 
-**Normative; not yet implemented.** Enforcement point: the acceptance arm above plus the
-transition's `ClassRegistered` arm; accounting reuses the bond `reserved` field
-(`PalwBondRecordV2.reserved`, `reserved_exposure`).
+**Implemented.** The transition's `ClassRegistered` arm reserves; `ClassFrozen` and reclamation
+release; `verify_admission_v2`'s ceiling reads the sum of both ledgers.
 
 A registration reserves **`REGISTRATION_EXPOSURE_SOMPI`** against the registrant's bond for as
 long as the class it registered is `Registered` or `Active`, released when the class is
@@ -141,9 +141,9 @@ frees the spammer's collateral only by also freeing the share they squatted.
 
 ## Decision 4 — Share moves at epoch boundaries, by production, bounded
 
-**Normative; not yet implemented.** Enforcement point: the epoch-boundary arm of
-`apply_palw_transition_v2`, beside `derive_epoch_budgets_v2`, reading the same per-epoch
-produced-blocks census that already exists.
+**Implemented** as `apply_class_share_walk`, in transition slot 2c — after the retarget (which
+must see the closed epoch's census unchanged) and before the objects and the budgets (a share it
+moves is a share the new epoch's budgets derive from).
 
 The share table currently has no arithmetic to change after registration. This decision gives it
 exactly one, and makes it boring:
@@ -178,9 +178,8 @@ which is the definition of a metric that cannot be gamed, only paid.
 
 ## Decision 5 — Reclamation: dead classes give the network back
 
-**Normative; not yet implemented.** Enforcement point: the same epoch-boundary arm; the
-transition writes the status flip exactly as `activate_due_classes` writes activation — a clock,
-not an object.
+**Implemented** in the same boundary arm; the status flip is written exactly as
+`activate_due_classes` writes activation — a clock, not an object.
 
 A class that produced **zero** blocks for `RECLAIM_EPOCHS` consecutive epochs transitions
 `Active → Dormant`:
@@ -203,7 +202,7 @@ attack's steady state is *paying rent on nothing*.
 
 ## Decision 6 — Duplicates are priced, not policed
 
-**Normative (the policy is implemented implicitly today; this makes it a decision).** The same
+**Implemented by absence, and now decided.** The same
 `artifact_root` under a different profile is a **different class** — legitimately: a geometry
 upgrade (a wider context after a court-format improvement, a different tile budget) is exactly a
 new profile over the same weights, and this repository has already done it twice. The gate does
@@ -249,9 +248,22 @@ consensus, and a benchmark is an oracle.
   bond — the gate is live end to end (`the_a16_dense_class_passes_the_admission_gate` and the
   acceptance arm are its tests). What ships with Decisions 3–5 is the guarantee that the
   *thousandth* registration is as harmless as the fourth.
-* Four new bundle parameters enter the ruleset id when Decisions 3–5 land:
-  `REGISTRATION_EXPOSURE_SOMPI`, the four share-walk constants, `RECLAIM_EPOCHS`,
-  `FLOOR_PROTECTED_PERMILLE`. Landing them is a re-mint, like every ruleset move on this line.
+* **The constants this network chose, and why each is derived rather than picked:**
+
+  | Parameter | RC value | Where it comes from |
+  |---|---|---|
+  | `REGISTRATION_EXPOSURE_SOMPI` | 40,000 | A minimum bond's ceiling is `400,000 × 500‰ = 200,000`, so a smallest-possible bond holds **five** live registrations and no claims. A hundred dead classes needs twenty minimum bonds, idle. |
+  | `SHARE_RAISE_FILL_PERMILLE` / `_EPOCHS` | 800‰ / 4 | Four epochs at `EPOCH_LENGTH` 1,000 and a 120 s target is ≈5.5 days of sustained production per permille. One lucky epoch buys nothing. |
+  | `SHARE_DECAY_FILL_PERMILLE` / `_EPOCHS` | 200‰ / 4 | The 200–800 gap is deliberate dead band: a class oscillating around a single threshold would walk its share forever, and the band is what makes the walk settle. |
+  | `RECLAIM_EPOCHS` | 12 | Three times the decay window, because reclamation takes the WHOLE share. One block in twelve epochs is not what this rule is about. |
+  | `FLOOR_PROTECTED_PERMILLE` | 300‰ | Leaves 700‰ for a busy registry while keeping the class every node can run at nearly a third of the cadence. |
+
+* Seven bundle parameters and state version 8 → 9 entered the ruleset id together; landing them
+  was a re-mint, like every ruleset move on this line (testnet-11: `a30ec7a8…`).
+* **What the implementation added that the ADR text did not anticipate:** a class with NO budget
+  for the closed epoch is not measured at all — it could not have filled a ceiling nobody gave it
+  (the mid-epoch activation case), and counting that as a decay would punish a class for the
+  boundary's own arithmetic.
 * The share table becomes a slow, legible instrument: at most ±1‰ per class per epoch boundary,
   every move derivable by every observer from on-chain state alone.
 * Nothing in this ADR adds an authority. The list of things that can move a permille after it
