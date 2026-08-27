@@ -135,8 +135,13 @@ the same input hash identically.
 ## 3. Run a node that can produce for it
 
 ```bash
-kaspad --netsuffix=11 --palw-class-artifact=/path/to/qwen36.palwq36
+kaspad --testnet --netsuffix=11 --palw-class-artifact=/path/to/qwen36.palwq36
 ```
+
+**`--testnet` is not optional.** `--netsuffix=11` alone boots MAINNET — measured on the shipped
+binary, which then reports mainnet's fingerprint and never loads a PALW class. With both flags the
+node prints testnet-11's fingerprint (`a14333bf…`, the three-class ruleset) and logs the artifact
+it loaded.
 
 Repeatable — pass the floor's artifact too if you carry one. The flag is also
 `KASPAD_PALW_CLASS_ARTIFACT`. On startup the node maps the file, computes its root, and matches it
@@ -146,7 +151,7 @@ the message.
 To produce for it rather than for the floor:
 
 ```bash
-kaspad --netsuffix=11 --palw-class-artifact=/path/to/qwen36.palwq36 \
+kaspad --testnet --netsuffix=11 --palw-class-artifact=/path/to/qwen36.palwq36 \
        --palw-producer-class=<the 128-hex class id> --palw-producer-bond=<outpoint> ...
 ```
 
