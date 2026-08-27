@@ -109,12 +109,25 @@ unverified artifact is a file, not a class.
 It must print exactly:
 
 ```
-c970d69327bf65d6b2502a8e53a021739f2579c2274754790869320352a92c7a4a8deb5da08e27e90f09d5ae9b4f7e44c983304af7bba8127d28e2d85996b236
+f4aad4fd543928eb2d3a737555b09da9bf685fc515c0f8d4520988efcffacf0813d1b727537f0d03d349253aa11ef427e4047c2166b69fd7edb46a4a9984b368
 ```
 
 That is `PALW_RC_GENESIS_QWEN36_ARTIFACT_ROOT` — the value testnet-11's genesis registers. The root
 covers the shape, every parameter table, the rotary table and every weight byte, each under a
 length-prefixed tagged name.
+
+**Provenance of this pin** (re-pinned 2026-08-27; the first pin was measured on an artifact that
+no longer exists and that no conversion reproduces — see the constant's own doc in
+`config/params.rs`):
+
+| fact | value |
+|---|---|
+| source GGUF | `Qwen3.6-abliterated-35b-Claude-4.7-Q4_K_M.gguf`, SHA-256 `1dc494614bee8a3bc00e79fe5a49da0fc1c36b3b118c4156e223e98e5a0a671b`, 23,938,321,728 bytes |
+| conversion | `qwen36-convert`, default flags (`--context 512`, built-in 8-token calibration prompt), 40 layers, 62,393 tensors, 33.27 GiB of int8 codes |
+| artifact | `qwen36.palwq36`, SHA-256 `7a944595a4256ab0aa4ca8b59f39fea268654b3630e54fb354cf1fa7658cf08c`, 36,492,831,232 bytes |
+| reproduced by | two full conversions on x86-64/Linux (byte-compared), one full conversion on arm64/macOS streaming the public URL, and 1-layer probes from three separate builds — every route lands on this root |
+| class id | unchanged — the class id is `shape_profile_id()`, a function of the graph, not of the weights |
+
 
 **The node checks this itself** at startup and refuses a mismatch, so this step is for your own
 diagnosis, not a substitute for it. A file with the wrong root is not this class however it is

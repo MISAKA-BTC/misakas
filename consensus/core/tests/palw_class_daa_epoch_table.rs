@@ -803,3 +803,25 @@ fn the_bind_window_gate_measures_the_dearest_class() {
         "and refused for the reason that is true, got {err:?}"
     );
 }
+
+/// **Step-5 witness for the root re-pin: the class id is a function of the graph, and the graph
+/// did not move.** Printed from BOTH derivations that exist — the profile's own
+/// `shape_profile_id()` and the shipped card's registered id — so a divergence between the two
+/// (the C5 pattern) cannot hide behind either one.
+#[test]
+fn the_qwen36_class_id_is_the_same_through_every_derivation() {
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    use kaspa_consensus_core::palw_qwen36_profile::{QWEN36_35B_A3B, qwen36_profile_v1};
+    let profile_id = qwen36_profile_v1(QWEN36_35B_A3B).expect("projects").shape_profile_id();
+    println!("qwen36 shape_profile_id: {profile_id}");
+    let params = kaspa_consensus_core::config::params::palw_rc_shipped_params();
+    let PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else { panic!() };
+    for object in &bundle.genesis_objects {
+        if let Obj::ClassRegistered { class_id, artifact_root, share_permille, .. } = object {
+            println!("registered: {class_id} root {artifact_root} share {share_permille}");
+            if *artifact_root == kaspa_consensus_core::config::params::PALW_RC_GENESIS_QWEN36_ARTIFACT_ROOT {
+                assert_eq!(*class_id, profile_id, "the registered hybrid id IS the profile id — one derivation, not two");
+            }
+        }
+    }
+}

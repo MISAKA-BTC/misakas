@@ -2597,19 +2597,31 @@ pub const PALW_RC_GENESIS_ARTIFACT_ROOT: crate::Hash64 = crate::Hash64::from_byt
 /// called — which is why the chain names the ROOT and never a path or a filename.
 ///
 /// Measured on the artifact converted from
-/// `Qwen3.6-abliterated-35b-Claude-4.7-Q4_K_M.gguf` (33.27 GiB of `int8` codes over 40 layers).
-/// The conversion is deterministic — see `docs/qwen36-public-testnet-runbook.md` for the recipe
-/// and the two-run check — so an operator may either rebuild this file from the published GGUF or
-/// download it and let their node verify the root; both routes end at this constant.
+/// `Qwen3.6-abliterated-35b-Claude-4.7-Q4_K_M.gguf` (33.27 GiB of `int8` codes over 40 layers,
+/// GGUF SHA-256 `1dc49461…`, default flags). The conversion is deterministic — see
+/// `docs/palw-public-testnet-classes-runbook.md` for the recipe — so an operator may either
+/// rebuild this file from the published GGUF or download it and let their node verify the root;
+/// both routes end at this constant.
+///
+/// **Re-pinned 2026-08-27.** The first pin (`c970d693…`) was measured on an artifact
+/// (`q36-40L.palwq36`) that no longer exists anywhere, and that no conversion reproduces: the
+/// pin commit's own converter, HEAD's converter on arm64/macOS and HEAD's converter on
+/// x86-64/Linux all produce ONE root from the pinned GGUF under default flags, and it is not
+/// that one — three independent reconstructions against a value with no surviving witness. The
+/// conversion path's diff since the pin is formatting-only, so whatever produced `c970d693…`
+/// (a different flag set, an edited tree, or a different input) was never written down. This
+/// constant is now the value the published converter actually produces, held to that by
+/// `the_real_qwen36_artifact_produces_a_block`'s root assertion — and no converter change may
+/// ever chase a pin; the pin follows the converter.
 ///
 /// **Unset (all zero) means the class is not on the network.** `palw_rc_shipped_params` then
 /// assembles the one-class RC exactly as before, so a build with no Qwen3.6 root is the shipped
 /// floor-only network rather than a broken two-class one.
 pub const PALW_RC_GENESIS_QWEN36_ARTIFACT_ROOT: crate::Hash64 = crate::Hash64::from_bytes([
-    0xc9, 0x70, 0xd6, 0x93, 0x27, 0xbf, 0x65, 0xd6, 0xb2, 0x50, 0x2a, 0x8e, 0x53, 0xa0, 0x21, 0x73, 0x9f, 0x25, 0x79, 0xc2, 0x27,
-    0x47, 0x54, 0x79, 0x08, 0x69, 0x32, 0x03, 0x52, 0xa9, 0x2c, 0x7a, 0x4a, 0x8d, 0xeb, 0x5d, 0xa0, 0x8e, 0x27, 0xe9, 0x0f, 0x09,
-    0xd5, 0xae, 0x9b, 0x4f, 0x7e, 0x44, 0xc9, 0x83, 0x30, 0x4a, 0xf7, 0xbb, 0xa8, 0x12, 0x7d, 0x28, 0xe2, 0xd8, 0x59, 0x96, 0xb2,
-    0x36,
+    0xf4, 0xaa, 0xd4, 0xfd, 0x54, 0x39, 0x28, 0xeb, 0x2d, 0x3a, 0x73, 0x75, 0x55, 0xb0, 0x9d, 0xa9, 0xbf, 0x68, 0x5f, 0xc5, 0x15,
+    0xc0, 0xf8, 0xd4, 0x52, 0x09, 0x88, 0xef, 0xcf, 0xfa, 0xcf, 0x08, 0x13, 0xd1, 0xb7, 0x27, 0x53, 0x7f, 0x0d, 0x03, 0xd3, 0x49,
+    0x25, 0x3a, 0xa1, 0x1e, 0xf4, 0x27, 0xe4, 0x04, 0x7c, 0x21, 0x66, 0xb6, 0x9f, 0xd7, 0xed, 0xb4, 0x6a, 0x4a, 0x99, 0x84, 0xb3,
+    0x68,
 ]);
 
 /// **The Qwen2.5-1.5B A16 class's artifact root** — `Base0ArtifactV1::artifact_digest()` over the
@@ -4909,7 +4921,15 @@ mod consensus_params_id_tests {
             // **Re-derived once at the END of this merge**, over the union: the three-class card,
             // the HIGH ledger, and ADR-0054's share rule all move it, and the shipped value is the
             // ruleset's own function rather than any one branch's number.
-            ("testnet-11", TESTNET11_PARAMS, "bb3e06b409749f33cf37cd504baabf282c5ab464fc74b625683b1163ed88205f"),
+            // And once more when the Qwen3.6 artifact root was RE-PINNED (2026-08-27): the first
+            // pin was measured on an artifact that no longer exists and that no conversion
+            // reproduces — three independent reconstructions (the pin commit's own converter,
+            // HEAD on arm64/macOS, HEAD on x86-64/Linux) agree on one root from the pinned GGUF,
+            // and it is not the pinned one. The root sits in the genesis registration and the
+            // class catalog, both inside the ruleset id, so correcting it is a re-mint — which is
+            // the honest shape: a network whose registered class nobody can obtain and one whose
+            // class anyone can rebuild from the public GGUF must not wear one name.
+            ("testnet-11", TESTNET11_PARAMS, "bb0a3ad375673a52b7b883032e4b48a89a36387dd2b12d9681d2d6850572ab84"),
             ("simnet", SIMNET_PARAMS, "dae24a4cddc3bd324d7e99dc61c9e14269b9a4619fecb639836b8286e144664f"),
             ("devnet", DEVNET_PARAMS, "f8981a530bf6070e4c27696d2666673ee36a1d9f1f5b4b315c4c7400b84136c0"),
         ]
