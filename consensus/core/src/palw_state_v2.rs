@@ -686,6 +686,21 @@ pub enum PalwBondStatusV2 {
 /// owner's and the slashed sompi are nobody's. Freezing a whole collateral over one sompi of slash
 /// was the honest reading while the alternative was under-punishing to exactly zero; it stops
 /// being the honest reading once the money can actually be destroyed.
+/// **May this bond be given work — a panel seat, a claim to stand behind?**
+///
+/// `Active` is a status, not a balance, and the two came apart the moment slashing existed.
+/// `slash_bond` clamps every debit to the collateral that remains, so a bond driven to zero keeps
+/// `Active` for the rest of the chain's life while every further charge against it is a silent
+/// success. The sortition asked only for `Active`, so such a bond went on drawing seats forever:
+/// a juror who cannot be fined, which is the one seat a fraud court must not have.
+///
+/// The floor is the registry's own `min_collateral_sompi`. A bond that could not be registered
+/// today is not one the network should be leaning on today — and the zero case is called out
+/// separately so the rule still bites on a network whose floor is zero.
+pub fn palw_bond_may_take_work_v2(bond: &PalwBondStateV2, min_collateral_sompi: u64) -> bool {
+    matches!(bond.status, PalwBondStatusV2::Active) && bond.collateral > 0 && bond.collateral >= min_collateral_sompi
+}
+
 pub fn palw_bond_collateral_is_locked_v2(bond: &PalwBondStateV2, now_daa: u64, withdrawal_delay_daa: u64) -> bool {
     match bond.status {
         PalwBondStatusV2::Active => true,
@@ -1088,21 +1103,56 @@ pub struct PalwClaimStateV2 {
 /// the reduction in one function is what stops the two readers from disagreeing about what
 /// "served" means.
 pub fn palw_seat_verdicts_of_v2(receipts: &[crate::palw_panel_v2::PalwSeatReceiptV2]) -> Vec<PalwSeatVerdictV2> {
+    use crate::palw_panel_v2::PalwReceiptVerdictV2;
     receipts
         .iter()
         .map(|r| PalwSeatVerdictV2 {
             seat_bond: r.seat_bond,
-            served: matches!(r.verdict, crate::palw_panel_v2::PalwReceiptVerdictV2::Valid),
+            answer: match r.verdict {
+                PalwReceiptVerdictV2::Valid => PalwSeatAnswerV2::Served,
+                PalwReceiptVerdictV2::Unavailable { .. } => PalwSeatAnswerV2::Withheld,
+                PalwReceiptVerdictV2::Incapable => PalwSeatAnswerV2::Incapable,
+            },
         })
         .collect()
+}
+
+/// **What a seat said** — three answers, because two could not express the true one.
+///
+/// Seats are drawn by sortition with no regard for which class the node can execute, so a seat
+/// routinely lands on a claim whose family it does not hold. With only `Served` and `Withheld` it
+/// had no honest move: claiming the data verified would be a lie, claiming it was withheld is a
+/// signed accusation of data-withholding against a producer that did nothing wrong, and saying
+/// nothing is charged as a no-show. Every road led to a slash, for the offence of being picked.
+///
+/// `Incapable` is the missing answer. It is never charged, and it counts toward neither side of
+/// the quorum — a seat that cannot judge does not get to decide. It is refused for the liveness
+/// floor (see `palw_seat_may_plead_incapable_v2`): every node can run BASE-0 by construction, so
+/// there the plea is always false, and admitting it would let a quorum of liars stall the one
+/// class the chain cannot live without.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub enum PalwSeatAnswerV2 {
+    /// The trace was served, opened against the committed roots, and verified.
+    Served,
+    /// The producer failed to serve data it owed.
+    Withheld,
+    /// This seat does not hold the class and cannot judge the claim either way.
+    Incapable,
+}
+
+/// May a seat on this claim plead `Incapable`? Never for the liveness floor.
+///
+/// BASE-0 is pure Rust in this tree — every node that can validate a block can execute it — so
+/// "I cannot serve the floor" is not a fact any honest node can state. Admitting it there would
+/// hand a quorum of seats a way to stall the one class the chain is guaranteed to have.
+pub fn palw_seat_may_plead_incapable_v2(class_id: Hash64, base_class_id: Hash64) -> bool {
+    class_id != base_class_id
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwSeatVerdictV2 {
     pub seat_bond: PalwBondKeyV2,
-    /// `true` = the seat said the trace was served and verified; `false` = it said the producer
-    /// withheld.
-    pub served: bool,
+    pub answer: PalwSeatAnswerV2,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -1616,6 +1666,10 @@ pub enum PalwStateV2Error {
         "class {0} was registered with a zero slash value — its work risks no collateral, so the exposure ceiling is not a ceiling"
     )]
     ZeroSlashValue(Hash64),
+    #[error(
+        "class {class} declares {got} sompi per work unit but this network's unit is {want} — weight per sompi at risk is not a class's to choose"
+    )]
+    SlashValueNotTheNetworks { class: Hash64, got: u64, want: u64 },
     #[error(
         "class {0} was registered with a zero pwu_per_inference — a class whose canonical inference costs nothing is not a PALW class"
     )]
@@ -2557,6 +2611,24 @@ impl<'a> TransitionBuilder<'a> {
     /// to the challenger, to the next producer — is a live design question this deliberately does
     /// not answer; burning is the only destination that needs no policy and cannot be gamed by
     /// whoever would have received it.
+    /// **Charge a SEAT — bounded by what the chain says, not by what a registrant wrote.**
+    ///
+    /// A seat's penalty is `claim.reserved`, which is `pwu x slash_value_per_pwu`. Both factors
+    /// come from the class REGISTRATION: the registrant picks the slash value and picks the pwu
+    /// ceiling, and nothing bounded either beyond "not zero". So one registration could name a
+    /// class whose every claim charges an arbitrary sum, get panels drawn from other operators'
+    /// bonds, and empty them — with a single class object and one claim. It composes with the
+    /// sortition ignoring execution capability: a seat that cannot run the class is silent, and
+    /// silence is charged the same.
+    ///
+    /// You may put YOUR OWN money at risk on terms you choose; you may not put other people's at
+    /// risk on terms you choose. The executor still stands behind `reserved` in full — it chose it
+    /// and it collects on it — while a seat's exposure per claim is capped at the registry's own
+    /// `min_collateral_sompi`: the most the network ever demanded anyone post to participate.
+    fn slash_seat(&mut self, bond: PalwBondKeyV2, amount: u128, min_collateral_sompi: u64) -> Result<(), PalwStateV2Error> {
+        self.slash_bond(bond, amount.min(min_collateral_sompi as u128))
+    }
+
     fn slash_bond(&mut self, bond: PalwBondKeyV2, amount: u128) -> Result<(), PalwStateV2Error> {
         let record = self.state.bonds.get(&bond).ok_or(PalwStateV2Error::MissingBond(bond))?.clone();
         let debit = u64::try_from(amount.min(record.collateral as u128)).expect("clamped to a u64 collateral");
@@ -2598,9 +2670,17 @@ impl<'a> TransitionBuilder<'a> {
         receipts: &[PalwSeatVerdictV2],
         served_won: bool,
     ) -> Result<(), PalwStateV2Error> {
+        let seat_cap = self.params.min_collateral_sompi();
         for receipt in receipts {
-            if receipt.served != served_won {
-                self.slash_bond(receipt.seat_bond, claim.reserved)?;
+            // Only a seat that took a SIDE can have contradicted the quorum. `Incapable` is not a
+            // side — it is the seat saying it had no standing to judge — so it is never charged.
+            let took = match receipt.answer {
+                PalwSeatAnswerV2::Served => true,
+                PalwSeatAnswerV2::Withheld => false,
+                PalwSeatAnswerV2::Incapable => continue,
+            };
+            if took != served_won {
+                self.slash_seat(receipt.seat_bond, claim.reserved, seat_cap)?;
             }
         }
         Ok(())
@@ -2630,9 +2710,10 @@ impl<'a> TransitionBuilder<'a> {
             // ever bound is the `BindTimeout` case, and that is the producer's failure alone.
             return Ok(());
         };
+        let seat_cap = self.params.min_collateral_sompi();
         for seat in &panel.seats {
             if !answered.iter().any(|r| r.seat_bond == seat.bond) {
-                self.slash_bond(seat.bond, claim.reserved)?;
+                self.slash_seat(seat.bond, claim.reserved, seat_cap)?;
             }
         }
         Ok(())
@@ -2938,7 +3019,23 @@ fn rearm_after_challenger_side_close(
     ctx: &PalwBlockContextV2,
     claim_id: Hash64,
     claim: &PalwClaimStateV2,
+    challenger_bond: PalwBondKeyV2,
 ) -> Result<(), PalwStateV2Error> {
+    // **A failed accusation costs the accuser.**
+    //
+    // Opening a court RESERVES the claim's stake against the challenger's bond, and every
+    // challenger-side exit released it and charged nothing — so the whole price of accusing an
+    // honest producer was one transaction fee and the temporary use of one's own collateral. On
+    // the other side of the same session, a responder that loses is slashed its whole stake. A
+    // game where one side pays for losing and the other does not is a game that gets played in
+    // one direction: open courts on everyone, drop the ones you cannot win, freeze honest claims
+    // for a whole window each time.
+    //
+    // Capped exactly as a seat's charge is, and for the same reason: `claim.reserved` is
+    // `pwu x slash_value_per_pwu`, both picked by whoever registered the CLASS. Left uncapped, a
+    // registrant could make challenging its own class ruinous and buy itself immunity from the
+    // court. The floor is the registry's own.
+    builder.slash_seat(challenger_bond, claim.reserved, builder.params.min_collateral_sompi())?;
     if !builder.state.open_courts_by_claim.contains_key(&claim_id)
         && let PalwClaimPhaseV2::ReceiptLicensed { licensed_daa } = claim.phase
     {
@@ -3030,7 +3127,7 @@ fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCon
                         }
                     }
                     crate::palw_bisect::PalwBisectPartyV1::Challenger => {
-                        rearm_after_challenger_side_close(builder, ctx, session.claim, &claim)?;
+                        rearm_after_challenger_side_close(builder, ctx, session.claim, &claim, session.challenger_bond)?;
                     }
                 }
                 continue;
@@ -3047,7 +3144,7 @@ fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCon
         // The backstop (or an abandoned ladder whose session budget is also spent): closed
         // challenger-side, because an unfinished challenge must not freeze an honest claim.
         builder.write_court(session_id, None);
-        rearm_after_challenger_side_close(builder, ctx, session.claim, &claim)?;
+        rearm_after_challenger_side_close(builder, ctx, session.claim, &claim, session.challenger_bond)?;
     }
     Ok(())
 }
@@ -3658,6 +3755,29 @@ fn apply_object(
             if *slash_value_per_pwu == 0 {
                 return Err(PalwStateV2Error::ZeroSlashValue(*class_id));
             }
+            // **One slash value for the network, because it sets weight-per-collateral.**
+            //
+            // A claim contributes `pwu * beta` of weight and reserves `pwu * slash_value_per_pwu`
+            // of collateral, so the weight a bond buys per sompi at risk is `beta /
+            // slash_value_per_pwu` — and the denominator was picked by whoever registered the
+            // class. A registrant naming 1 where the floor names 5 gets five times the finality
+            // weight for the same money at risk, which is finality sold at a discount to the party
+            // that set its own price.
+            //
+            // The per-class cost differences already have a home: `pwu_per_inference` is what says
+            // one class's inference is worth more work than another's. `slash_value_per_pwu` is a
+            // UNIT — sompi per work unit — and a network with two units has no single meaning for
+            // either quantity. So every class carries the liveness floor's, and the floor's own
+            // registration is the one that sets it.
+            if let Some(base) = builder.state.classes.get(&builder.params.base_class_id)
+                && *slash_value_per_pwu != base.slash_value_per_pwu
+            {
+                return Err(PalwStateV2Error::SlashValueNotTheNetworks {
+                    class: *class_id,
+                    got: *slash_value_per_pwu,
+                    want: base.slash_value_per_pwu,
+                });
+            }
             // ADR-0045 Decision 1: both rule shapes must license SOMETHING. A `DerivedV1` with a
             // zero per-inference cost would derive pwu = 0 for every attempt while the stateless
             // layer requires pwu ≥ 1 — a class nobody can ever mine, registered as if it worked.
@@ -3888,7 +4008,7 @@ fn apply_object(
                     }
                 }
                 PalwCourtVerdictV2::ChallengerDefeated => {
-                    rearm_after_challenger_side_close(builder, ctx, claim_id, &claim)?;
+                    rearm_after_challenger_side_close(builder, ctx, claim_id, &claim, session.challenger_bond)?;
                 }
             }
         }
@@ -4112,7 +4232,6 @@ fn apply_attempt(
     }
     let reserved =
         (attempt.pwu as u128).checked_mul(class.slash_value_per_pwu as u128).ok_or(PalwStateV2Error::Overflow("reserve"))?;
-
     let claim = PalwClaimStateV2 {
         source: PalwClaimSourceV2::Attempt,
         class_id: attempt.class_id,
@@ -5994,6 +6113,22 @@ pub(crate) mod tests {
             matches!(outcome, Err(PalwCourtV2Error::CloseIsNotTheNarrowedStep { opened: o, narrowed: 4 }) if o == opened),
             "a close about another step must be refused, got {outcome:?}"
         );
+
+        // **And the OTHER arm, which was exempt from all of this.** A `DecodeToken` close names its
+        // own `position`, so the accused could pick a token it emitted correctly, take
+        // `NoFaultFound` — which reads as `ChallengerDefeated` — and buy its own acquittal at a
+        // position the bisection never chose. The rule the paragraph above describes applied to one
+        // of the two doors; this is the other one.
+        let decode = crate::palw_court_v2::PalwCourtVerdictProofV2::DecodeToken {
+            binding: crate::palw_step_refute::tests::skeleton_refutation().binding,
+            pin: crate::palw_step_refute::PalwBase0DecodeTokensV1 { logits_rows: vec![vec![1, 2]], generated_token_ids: vec![0] },
+            position: 7,
+        };
+        let outcome = adjudicate_court_close_v2(&s13, &sid, &decode, &court_params());
+        assert!(
+            matches!(outcome, Err(PalwCourtV2Error::CloseIsNotTheNarrowedStep { opened: 7, narrowed: 4 })),
+            "a decode-token close at a position the ladder did not narrow to must be refused, got {outcome:?}"
+        );
     }
 
     /// **Opening a court costs the accuser what it puts at risk for the accused.**
@@ -6123,7 +6258,19 @@ pub(crate) mod tests {
             matches!(s7.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }),
             "the claim survives an abandoned prosecution and resumes its path to Final"
         );
-        assert_eq!(s7.bond(&bond_key(1)).unwrap().slashed, 0, "and the executor is not punished for the challenger's silence");
+        // **What it costs the accuser to walk away.** A challenger-side close now charges the
+        // challenger's bond — an accusation that is dropped is not free, or opening courts on
+        // honest producers costs one fee and freezes their claims for a window each time.
+        //
+        // This fixture gives BOTH roles to `bond_key(1)`, so the charge shows up on the same
+        // record as the executor's. "The executor is not punished" is therefore asserted where it
+        // is actually visible: its claim survives and walks on to `Final`, which is what a
+        // conviction would have taken away.
+        assert_eq!(
+            s7.bond(&bond_key(1)).unwrap().slashed,
+            p.min_collateral_sompi(),
+            "the abandoned prosecution costs the challenger exactly the capped stake"
+        );
     }
 
     /// The default configuration has no ladder clock, so an unfinished challenge still ends at
@@ -6141,7 +6288,13 @@ pub(crate) mod tests {
             matches!(s6.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }),
             "the pre-ladder outcome, unchanged"
         );
-        assert_eq!(s6.bond(&bond_key(1)).unwrap().slashed, 0, "and nobody is slashed for it");
+        // The backstop is a challenger-side close like any other, so it carries the same charge —
+        // and on this fixture the challenger and the executor are one bond (see the sibling test).
+        assert_eq!(
+            s6.bond(&bond_key(1)).unwrap().slashed,
+            p.min_collateral_sompi(),
+            "an unfinished challenge is charged at the backstop too"
+        );
     }
 
     // ---- strictness: a missing fact is an error ----
@@ -6495,7 +6648,7 @@ pub(crate) mod tests {
                 class_id: h64(2),
                 terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
                 artifact_root: h64(12),
-                slash_value_per_pwu: 1,
+                slash_value_per_pwu: 5,
                 pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
                 initial_target: u128::MAX / 2,
                 share_permille: 500,
@@ -7105,7 +7258,18 @@ pub(crate) mod tests {
         let dissent = vec![seat_receipt(bond_key(9), false)];
         let (licensed, _) =
             apply(&s3, &p, &ctx(4, 103, 4), &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: dissent }], None);
-        assert_eq!(licensed.bond(&bond_key(9)).unwrap().slashed, reserved, "the refuted seat pays the stake it attacked");
+        // **What a seat pays is bounded by the CHAIN, not by the class's registrant.** The stake it
+        // attacked is `claim.reserved` = `pwu x slash_value_per_pwu`, and both factors come from a
+        // class registration — so an unbounded charge here was a registrant's power to empty other
+        // operators' bonds by naming a large enough number. A seat's exposure per claim is capped
+        // at `min_collateral_sompi`, the most the network ever asked anyone to post.
+        let seat_cap = p.min_collateral_sompi();
+        assert!(seat_cap < reserved, "this fixture must exercise the cap, or it is asserting nothing");
+        assert_eq!(
+            licensed.bond(&bond_key(9)).unwrap().slashed,
+            seat_cap,
+            "the refuted seat pays the stake it attacked, up to what the chain permits"
+        );
         assert_eq!(licensed.bond(&bond_key(1)).unwrap().slashed, 0, "the producer, vindicated, pays nothing");
 
         // Symmetric: on a producer default, a seat that insisted the data was served is the
@@ -7114,8 +7278,12 @@ pub(crate) mod tests {
         let agreeing = vec![seat_receipt(bond_key(9), true)];
         let (defaulted, _) =
             apply(&s3, &p, &ctx(4, 103, 4), &[PalwConsensusObjectV2::ProducerDefaulted { claim: claim_id, receipts: agreeing }], None);
-        assert_eq!(defaulted.bond(&bond_key(9)).unwrap().slashed, reserved, "the refuted seat pays in this direction too");
-        assert_eq!(defaulted.bond(&bond_key(1)).unwrap().slashed, reserved, "and the producer pays for withholding");
+        assert_eq!(defaulted.bond(&bond_key(9)).unwrap().slashed, seat_cap, "the refuted seat pays in this direction too, same cap");
+        assert_eq!(
+            defaulted.bond(&bond_key(1)).unwrap().slashed,
+            reserved,
+            "and the PRODUCER pays the whole stake it named — the cap protects other people's bonds, not its own"
+        );
 
         // A seat that voted WITH the quorum is untouched, in both directions.
         let concurring = vec![seat_receipt(bond_key(9), true)];
@@ -7566,7 +7734,7 @@ pub(crate) mod tests {
             class_id: h64(class_id),
             terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
             artifact_root: h64(19),
-            slash_value_per_pwu: 1,
+            slash_value_per_pwu: 5,
             pwu_rule: PalwPwuRuleV2::MaxPerAttempt(10),
             initial_target: u128::MAX / 2,
             share_permille: share,
@@ -7619,7 +7787,7 @@ pub(crate) mod tests {
                 class_id: h64(9),
                 terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
                 artifact_root: h64(19),
-                slash_value_per_pwu: 1,
+                slash_value_per_pwu: 5,
                 pwu_rule: PalwPwuRuleV2::MaxPerAttempt(10),
                 initial_target: 0,
                 share_permille: 1000,
@@ -7644,7 +7812,7 @@ pub(crate) mod tests {
                     class_id: h64(9),
                     terms: crate::palw_state_v2::PalwClassTermsV2::deterministic_default(),
                     artifact_root: h64(19),
-                    slash_value_per_pwu: 1,
+                    slash_value_per_pwu: 5,
                     pwu_rule: rule,
                     initial_target: u128::MAX / 2,
                     share_permille: 1000,

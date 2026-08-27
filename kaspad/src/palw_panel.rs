@@ -81,8 +81,24 @@ const MATERIALS_PER_CLAIM: usize = 4;
 /// WHICH work gets the scarce slots, because court moves are built and submitted before receipt
 /// quorums: a rung has a deadline and a quorum does not.
 const MAX_INFLIGHT_CARRIERS: usize = 8;
+
+/// **How long a submitted court move is assumed to be in flight.**
+///
+/// Long enough that an accepted carrier normally reaches a block inside it — otherwise the panel
+/// pays a second fee for a move that was going to land anyway — and short enough that a LOST move
+/// is re-planned many times over before its rung expires. A rung window is a genesis-time choice
+/// and is expected to be dozens of DAA; this is a small multiple of block time, so a lost carrier
+/// gets on the order of ten retries rather than one.
+const COURT_MOVE_REPLAN_DAA: u64 = 10;
 /// Submission attempts per assembled object before giving up (each tick retries).
 const SUBMIT_ATTEMPTS: u32 = 3;
+/// **How long the panel keeps a claim it is not being asked about.**
+///
+/// The in-memory pools are keyed by claim and were pruned only when a claim was LIVE or already
+/// submitted for — so a claim the panel could never submit for was kept for the life of the
+/// process, with its gossiped materials. Generous against every lattice window (a claim that can
+/// still license is still live), and finite, which is the whole point.
+const PANEL_POOL_RETENTION_DAA: u64 = 4_000;
 
 pub struct PalwPanelConfig {
     /// Path to the 32-byte hex ML-DSA-87 seed of the bond that holds this node's seats.
@@ -811,11 +827,31 @@ impl PalwPanelService {
         let mut receipts: HashMap<Hash64, Vec<PalwSeatReceiptV2>> = HashMap::new();
         let mut answered: HashSet<Hash64> = HashSet::new();
         let mut first_seen: HashMap<Hash64, u64> = HashMap::new();
-        let mut submitted: HashSet<Hash64> = HashSet::new();
+        // **The DAA a claim's license was last handed to the mempool — a debounce, not a receipt.**
+        //
+        // This was a `HashSet` written on mempool acceptance and never cleared, so "the mempool
+        // took it" meant "the chain has it" forever. It does not: a carrier can be evicted,
+        // out-fee'd, orphaned, or simply lose its block, and the claim was then never re-licensed.
+        // It voids at its receipt deadline and its escrowed worker carve is DESTROYED — measured
+        // on testnet-11 at roughly three quarters of all claims and 1.8M MSK a day, with the
+        // panel's own logs showing receipts filed and licenses submitted for claims that never
+        // reached `ReceiptLicensed`.
+        let mut submitted: HashMap<Hash64, u64> = HashMap::new();
         let mut submit_attempts: HashMap<Hash64, u32> = HashMap::new();
         // One move per (session, round, side): the ladder advances on acceptance, so a move
         // resubmitted before the block that carries it lands is a duplicate the chain drops.
-        let mut court_moved: HashSet<(Hash64, u32, bool)> = HashSet::new();
+        // **A debounce, not a receipt.** This used to be a `HashSet` written on MEMPOOL acceptance
+        // and never cleared, which made "I handed it to the mempool" mean "the chain has it". Those
+        // are different facts: a carrier can be evicted, out-fee'd, orphaned by a reorg, or lost to
+        // a double-spend on the fee outpoint, and every one of those leaves the move permanently
+        // unsent while the panel skips it forever. The chain then reads a party that said nothing —
+        // and since the opening rung is clocked (ADR-0055 D3), saying nothing costs the responder
+        // its claim. The loss the code detects and logs was the loss it made unrecoverable.
+        //
+        // The DAA at send instead: skip while the send is plausibly still in flight, then let the
+        // CHAIN decide by re-planning. A duty only survives re-planning if chain state still says
+        // that move is due, so a landed move disappears on its own when the round advances.
+        let mut court_moved: HashMap<(Hash64, u32, bool), u64> = HashMap::new();
         // Claims this node has already judged: either reproduced (nothing to say) or disputed.
         let mut challenged: HashSet<Hash64> = HashSet::new();
         // **Pending court moves survive the tick.** They used to be built into a per-tick vector
@@ -988,7 +1024,9 @@ impl PalwPanelService {
             let court_duties = session.palw_court_duties_v2(vec![bond_key]);
             let mut court_stalls: BTreeMap<&'static str, usize> = BTreeMap::new();
             for duty in &court_duties {
-                if court_moved.contains(&(duty.session_id, duty.round, duty.i_am_responder)) {
+                if let Some(sent_daa) = court_moved.get(&(duty.session_id, duty.round, duty.i_am_responder))
+                    && current_daa < sent_daa.saturating_add(COURT_MOVE_REPLAN_DAA)
+                {
                     continue;
                 }
                 // The capture, and the family's backend for it. A party with no material — or a
@@ -1208,11 +1246,18 @@ impl PalwPanelService {
                         // voids, which is the soft failure both families share.
                         // Resolved per duty from what the CHAIN says the claim's class is
                         // (ADR-0051 step 1). A seat holding no material for that class cannot
-                        // judge it and says so by filing nothing — which is the same shape as
-                        // "the material has not arrived", and correctly so: both are "I cannot
-                        // verify", never "the producer lied".
+                        // judge it — and it now SAYS so, instead of filing nothing.
+                        //
+                        // Filing nothing was read by the chain as a no-show and charged. Sortition
+                        // does not ask which classes a node can execute, so that charge landed on
+                        // seats whose only fault was being picked, and no answer avoided it:
+                        // `Valid` would be a lie and `Unavailable` a signed accusation against an
+                        // honest producer. `Incapable` is the missing answer — free, and counting
+                        // toward neither side of the quorum. The chain refuses it for the liveness
+                        // floor, where no node can truthfully claim it, so filing it there would
+                        // only waste a fee.
                         let Ok(backend) = self.backends().resolve(duty.terms, duty.class_id, duty.artifact_root) else {
-                            break 'verdict None;
+                            break 'verdict Some(PalwReceiptVerdictV2::Incapable);
                         };
                         let Some(anchor) = self.job_anchor_for_claim(
                             &session,
@@ -1332,7 +1377,7 @@ impl PalwPanelService {
                     // Not the same condition as "no fee UTXO", and it must not print as one: this
                     // panel is waiting for its own chain to confirm, which is the system working.
                     trace!("[{PALW_PANEL}] holding: {inflight} carriers unconfirmed (cap {MAX_INFLIGHT_CARRIERS})");
-                } else if funding.is_none() && receipts.keys().any(|c| !submitted.contains(c)) {
+                } else if funding.is_none() && receipts.keys().any(|c| !submitted.contains_key(c)) {
                     // Once per tick, not once per claim: a pending carrier keeps every quorum
                     // unfundable until it is mined, and that used to be tens of thousands of
                     // identical lines an hour.
@@ -1427,7 +1472,7 @@ impl PalwPanelService {
                                         },
                                     ));
                                     inflight += 1;
-                                    court_moved.insert((session_id, round, mine_is_responder));
+                                    court_moved.insert((session_id, round, mine_is_responder), current_daa);
                                     if let PalwConsensusObjectV2::CourtOpened { claim, .. } = &object {
                                         challenged.insert(*claim);
                                     }
@@ -1451,7 +1496,16 @@ impl PalwPanelService {
                         break;
                     }
                     let Some((funding_outpoint, funding_entry)) = funding.clone() else { break };
-                    if submitted.contains(&claim) || submit_attempts.get(&claim).copied().unwrap_or(0) >= SUBMIT_ATTEMPTS {
+                    if let Some(at) = submitted.get(&claim)
+                        && current_daa < at.saturating_add(COURT_MOVE_REPLAN_DAA)
+                    {
+                        continue;
+                    }
+                    // The attempt budget bounds consecutive FAILURES to build or submit, not the
+                    // claim's whole life — it is cleared on a successful submit below, because a
+                    // carrier that was accepted and then lost is not evidence that this object
+                    // cannot be built.
+                    if submit_attempts.get(&claim).copied().unwrap_or(0) >= SUBMIT_ATTEMPTS {
                         continue;
                     }
                     let pool = receipts.get(&claim).cloned().unwrap_or_default();
@@ -1478,7 +1532,8 @@ impl PalwPanelService {
                                         },
                                     ));
                                     inflight += 1;
-                                    submitted.insert(claim);
+                                    submitted.insert(claim, current_daa);
+                                    submit_attempts.remove(&claim);
                                 }
                                 Err(e) => {
                                     // The chain we were spending is gone or was never there; stop
@@ -1539,8 +1594,28 @@ impl PalwPanelService {
                         .filter_map(|d| (!challenged.contains(&d.claim_id)).then_some(d.claim_id)),
                 );
             }
-            materials.retain(|claim, _| live.contains(claim) || !submitted.contains(claim));
-            receipts.retain(|claim, _| live.contains(claim) || !submitted.contains(claim));
+            // **"Not yet submitted" is not a bounded condition.** The rule was: keep a claim's
+            // material while it is LIVE (a duty or a dispute names it) or while this node has not
+            // submitted for it. The second half never becomes false for a claim the panel cannot
+            // submit for — no quorum assembled, the class was never resolvable, the receipt window
+            // lapsed — so its material stayed in memory for the life of the process. Measured on
+            // testnet-11: hundreds of such claims a day, each holding up to four gossiped
+            // materials, against a node whose RSS climbed from zero to 11 GB in twelve hours and
+            // was OOM-killed roughly every thirty.
+            //
+            // Bounded by the claim's own age instead. Past the window, a claim that is not live
+            // is one no duty, no dispute and no license will ever ask about again — and the
+            // court's own path does not depend on this pool anyway: it re-reads the capture from
+            // `retained_capture` on disk, which is what the retention obligation is for.
+            let stale =
+                |claim: &Hash64| first_seen.get(claim).is_some_and(|seen| current_daa > seen.saturating_add(PANEL_POOL_RETENTION_DAA));
+            materials.retain(|claim, _| live.contains(claim) || (!submitted.contains_key(claim) && !stale(claim)));
+            receipts.retain(|claim, _| live.contains(claim) || (!submitted.contains_key(claim) && !stale(claim)));
+            // The bookkeeping keyed on those claims goes with them, or the maps that decide what to
+            // keep become the thing that grows.
+            first_seen.retain(|claim, _| materials.contains_key(claim) || receipts.contains_key(claim) || live.contains(claim));
+            submit_attempts.retain(|claim, _| receipts.contains_key(claim));
+            submitted.retain(|_claim, at| current_daa <= at.saturating_add(PANEL_POOL_RETENTION_DAA));
             trace!("[{PALW_PANEL}] tick: {} duties, {} claims pooled", duties.len(), receipts.len());
         }
     }
@@ -1550,6 +1625,7 @@ fn verdict_name(verdict: &PalwReceiptVerdictV2) -> &'static str {
     match verdict {
         PalwReceiptVerdictV2::Valid => "Valid",
         PalwReceiptVerdictV2::Unavailable { .. } => "Unavailable",
+        PalwReceiptVerdictV2::Incapable => "Incapable",
     }
 }
 

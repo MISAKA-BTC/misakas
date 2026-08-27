@@ -40,7 +40,7 @@
 use crate::BlockHash;
 use crate::Hash64;
 use crate::palw_state_v2::{
-    PalwBlockContextV2, PalwBondKeyV2, PalwBondStatusV2, PalwChainStateV2, PalwClaimPhaseV2, PalwPanelSeatV2, PalwStateParamsV2,
+    PalwBlockContextV2, PalwBondKeyV2, PalwChainStateV2, PalwClaimPhaseV2, PalwPanelSeatV2, PalwStateParamsV2,
 };
 use blake2b_simd::Params;
 
@@ -183,6 +183,7 @@ pub fn derive_panel_v2(
     params: &PalwPanelParamsV2,
     claim_id: &Hash64,
     anchor_block: BlockHash,
+    min_collateral_sompi: u64,
 ) -> Result<Vec<PalwPanelSeatV2>, PalwPanelV2Error> {
     let claim = state.claim(claim_id).ok_or(PalwPanelV2Error::MissingClaim(*claim_id))?;
     let executor_bond = claim.bond;
@@ -195,7 +196,10 @@ pub fn derive_panel_v2(
     // namespace exists for them to diverge in (the P0-7 defect).
     let mut tickets: Vec<(Hash64, PalwBondKeyV2, Hash64)> = Vec::new();
     for (bond_key, bond) in state.bonds_iter() {
-        if !matches!(bond.status, PalwBondStatusV2::Active) {
+        // **A seat has to have something left to lose** — status AND balance, through the one
+        // predicate, so the RPC that reports eligibility and the sortition that decides it cannot
+        // answer differently.
+        if !crate::palw_state_v2::palw_bond_may_take_work_v2(bond, min_collateral_sompi) {
             continue;
         }
         if *bond_key == executor_bond || bond.operator_id == executor_operator || bond.pubkey == executor_key {
@@ -275,7 +279,7 @@ pub fn validate_panel_bound_v2(
         return Err(PalwPanelV2Error::BindOutsideWindow("the bind window has already lapsed"));
     }
 
-    let derived = derive_panel_v2(state, params, claim_id, anchor.anchor_block)?;
+    let derived = derive_panel_v2(state, params, claim_id, anchor.anchor_block, state_params.min_collateral_sompi())?;
     if derived != proposed_seats {
         return Err(PalwPanelV2Error::PanelMismatch);
     }
@@ -303,6 +307,17 @@ pub enum PalwReceiptVerdictV2 {
         /// after the seat signed.
         requested_daa: u64,
     },
+    /// **This seat does not hold the class and cannot judge the claim either way.**
+    ///
+    /// Sortition ignores which classes a node can execute, so a seat routinely lands on a family
+    /// it does not have. With only the two verdicts above, such a seat had no honest move: `Valid`
+    /// would be a lie, `Unavailable` is a signed accusation against a producer that did nothing
+    /// wrong, and silence is charged as a no-show — every road ended in a slash for the offence of
+    /// being picked. This is the honest answer, and it is free.
+    ///
+    /// It counts toward neither side: a seat that cannot judge does not get to decide. And it is
+    /// refused on the liveness floor, where no node can truthfully claim it.
+    Incapable,
 }
 
 /// One seat's signed receipt.
@@ -330,6 +345,7 @@ pub fn palw_receipt_message_v2(network_domain: Hash64, claim: Hash64, verdict: P
     // the accusation's whole content, swapped underneath a valid signature.
     match verdict {
         PalwReceiptVerdictV2::Valid => state.update(&[1u8]),
+        PalwReceiptVerdictV2::Incapable => state.update(&[3u8]),
         PalwReceiptVerdictV2::Unavailable { chunk_index, requested_daa } => {
             state.update(&[2u8]);
             state.update(&chunk_index.to_le_bytes());
@@ -413,6 +429,19 @@ where
         answered.push(receipt.seat_bond);
         match receipt.verdict {
             PalwReceiptVerdictV2::Valid => valid += 1,
+            // **Answered, but not a vote.** The seat is on the record — so it is not a no-show and
+            // is not charged — and it counts toward neither side, because a party that says it
+            // cannot judge does not get to decide. Refused on the liveness floor, where the plea
+            // cannot be true: BASE-0 is in every binary that can validate a block, so admitting it
+            // there would let a quorum of seats stall the one class the chain must always have.
+            PalwReceiptVerdictV2::Incapable => {
+                if !crate::palw_state_v2::palw_seat_may_plead_incapable_v2(claim.class_id, state_params.base_class_id()) {
+                    return Err(PalwPanelV2Error::UnmetObligationNotProven {
+                        seat: receipt.seat_bond,
+                        why: "no node may plead it cannot execute the liveness floor",
+                    });
+                }
+            }
             PalwReceiptVerdictV2::Unavailable { chunk_index, requested_daa } => {
                 // An accusation has to name an obligation the producer ACTUALLY HAD. None of
                 // this proves a byte went unsent — nothing on-chain can — but it removes the
@@ -576,6 +605,79 @@ mod tests {
         assert!(too_late.validate_against_state_params(&state_params()).is_err(), "anchor at the deadline binds nothing");
     }
 
+    /// **A seat that cannot judge is not charged for saying so — except on the floor.**
+    ///
+    /// Sortition never asked which classes a node can execute, so a seat routinely landed on a
+    /// family it did not hold. With two verdicts it had no honest move: `Valid` is a lie,
+    /// `Unavailable` is a signed accusation against a producer that did nothing wrong, and silence
+    /// is charged as a no-show. Every road ended in a slash for the offence of being picked.
+    ///
+    /// The escape has to be closed on the liveness floor, or a quorum of seats could plead their
+    /// way out of judging the one class the chain is guaranteed to have.
+    #[test]
+    fn a_seat_may_plead_incapable_except_on_the_floor() {
+        use crate::palw_state_v2::{PalwSeatAnswerV2, palw_seat_may_plead_incapable_v2, palw_seat_verdicts_of_v2};
+        let floor = h64(0xF100);
+        assert!(!palw_seat_may_plead_incapable_v2(floor, floor), "no node may claim it cannot run BASE-0");
+        assert!(palw_seat_may_plead_incapable_v2(h64(0xC1), floor), "an entrant class is a different matter");
+
+        // And the plea reduces to an answer that takes no side, so the transition can tell it
+        // apart from both a vote and a no-show.
+        let receipts = vec![
+            PalwSeatReceiptV2 {
+                claim: h64(1),
+                seat_bond: PalwBondKeyV2(bond_outpoint(2)),
+                verdict: PalwReceiptVerdictV2::Incapable,
+                signed_daa: 1,
+                signature: Vec::new(),
+            },
+            PalwSeatReceiptV2 {
+                claim: h64(1),
+                seat_bond: PalwBondKeyV2(bond_outpoint(3)),
+                verdict: PalwReceiptVerdictV2::Valid,
+                signed_daa: 1,
+                signature: Vec::new(),
+            },
+        ];
+        let answers = palw_seat_verdicts_of_v2(&receipts);
+        assert_eq!(answers[0].answer, PalwSeatAnswerV2::Incapable);
+        assert_eq!(answers[1].answer, PalwSeatAnswerV2::Served);
+    }
+
+    /// **A bond with nothing left to lose stops being a seat.**
+    ///
+    /// `Active` is a status, not a balance. `slash_bond` clamps every debit to the collateral that
+    /// remains, so once a bond reaches zero every further charge is a silent success — and the
+    /// sortition, which only ever asked for `Active`, went on seating it for the rest of the
+    /// chain's life. That is a juror who cannot be fined: the one seat a fraud court must not have.
+    ///
+    /// Asserted on the predicate the draw calls, because the state transition offers no way to
+    /// hand a test an exhausted bond without running a whole court to produce one.
+    #[test]
+    fn a_bond_with_nothing_left_to_lose_may_not_take_work() {
+        use crate::palw_state_v2::{PalwBondStateV2, PalwBondStatusV2, palw_bond_may_take_work_v2};
+        let live = PalwBondStateV2 {
+            pubkey: vec![1, 2, 3],
+            operator_id: h64(0x21),
+            collateral: 1_000,
+            slashed: 0,
+            status: PalwBondStatusV2::Active,
+            registered_daa: 0,
+            payout_payload: Hash64::default(),
+        };
+        assert!(palw_bond_may_take_work_v2(&live, 1_000), "a fully-collateralised Active bond seats");
+
+        let exhausted = PalwBondStateV2 { collateral: 0, slashed: 1_000, ..live.clone() };
+        assert!(matches!(exhausted.status, PalwBondStatusV2::Active), "slashing never changed the status — that is the defect");
+        assert!(!palw_bond_may_take_work_v2(&exhausted, 0), "and it must not seat even where the floor is zero");
+
+        let thin = PalwBondStateV2 { collateral: 999, slashed: 1, ..live.clone() };
+        assert!(!palw_bond_may_take_work_v2(&thin, 1_000), "a bond that could not register today does not seat today");
+
+        let retiring = PalwBondStateV2 { status: PalwBondStatusV2::Retiring { since_daa: 5 }, ..live };
+        assert!(!palw_bond_may_take_work_v2(&retiring, 0), "and retirement still excludes, collateral or not");
+    }
+
     /// **The audit register's P0-7 exclusion red test.** The trio reads the ONE registry: the
     /// executor's bond, its operator (even on a different bond), and its key never seat — and
     /// one operator never seats twice.
@@ -583,7 +685,7 @@ mod tests {
     fn palw_v2_executor_excluded_from_own_panel() {
         let (state, claim_id) = populated_state();
         let anchor = BlockHash::from_u64_word(0xA0C0);
-        let seats = derive_panel_v2(&state, &panel_params(), &claim_id, anchor).expect("3 eligible seats exist");
+        let seats = derive_panel_v2(&state, &panel_params(), &claim_id, anchor, 0).expect("3 eligible seats exist");
         assert_eq!(seats.len(), 3);
         for seat in &seats {
             assert_ne!(seat.bond, PalwBondKeyV2(bond_outpoint(1)), "the executor's bond never seats");
@@ -602,15 +704,15 @@ mod tests {
     #[test]
     fn the_draw_is_a_function_of_the_anchor_and_fails_closed_when_thin() {
         let (state, claim_id) = populated_state();
-        let a = derive_panel_v2(&state, &panel_params(), &claim_id, BlockHash::from_u64_word(0xA1)).unwrap();
-        let b = derive_panel_v2(&state, &panel_params(), &claim_id, BlockHash::from_u64_word(0xA1)).unwrap();
+        let a = derive_panel_v2(&state, &panel_params(), &claim_id, BlockHash::from_u64_word(0xA1), 0).unwrap();
+        let b = derive_panel_v2(&state, &panel_params(), &claim_id, BlockHash::from_u64_word(0xA1), 0).unwrap();
         assert_eq!(a, b, "same anchor, same panel — determinism");
 
         // Ask for more seats than the registry can seat: refused, never quietly smaller.
         // (3 of 4: the majority the exclusivity invariant now requires.)
         let wide = PalwPanelParamsV2::new(4, 3, 4).unwrap();
         assert!(matches!(
-            derive_panel_v2(&state, &wide, &claim_id, BlockHash::from_u64_word(0xA1)),
+            derive_panel_v2(&state, &wide, &claim_id, BlockHash::from_u64_word(0xA1), 0),
             Err(PalwPanelV2Error::InsufficientEligibleBonds { needed: 4, available: 3 })
         ));
     }
@@ -623,7 +725,7 @@ mod tests {
         // Claim accepted at daa 101; anchor slot = 105; bind deadline = 111.
         let anchor_block = BlockHash::from_u64_word(0xA0C0);
         let anchor = PalwAnchorFactV2 { anchor_block, anchor_daa: 105, predecessor_daa: 104 };
-        let seats = derive_panel_v2(&state, &p, &claim_id, anchor_block).unwrap();
+        let seats = derive_panel_v2(&state, &p, &claim_id, anchor_block, 0).unwrap();
 
         let ok = validate_panel_bound_v2(&state, &p, &sp, &ctx(3, 106, 3), &claim_id, &anchor, anchor_block, &seats);
         assert!(ok.is_ok(), "a conforming binding is accepted: {ok:?}");
@@ -666,7 +768,7 @@ mod tests {
         let p = panel_params();
         let sp = state_params();
         let anchor_block = BlockHash::from_u64_word(0xA0C0);
-        let seats = derive_panel_v2(&state, &p, &claim_id, anchor_block).unwrap();
+        let seats = derive_panel_v2(&state, &p, &claim_id, anchor_block, 0).unwrap();
         let (bound, _) = apply_palw_transition_v2(
             &state,
             &sp,
@@ -686,7 +788,7 @@ mod tests {
         let p = panel_params();
         let sp = state_params();
         let anchor_block = BlockHash::from_u64_word(0xA0C0);
-        let seats = derive_panel_v2(&state, &p, &claim_id, anchor_block).unwrap();
+        let seats = derive_panel_v2(&state, &p, &claim_id, anchor_block, 0).unwrap();
         let (bound, _) = apply_palw_transition_v2(
             &state,
             &sp,
@@ -926,7 +1028,7 @@ mod tests {
         // Four eligible OPERATORS (eight eligible bonds) against five seats: refused, and the
         // error reports the operator count rather than the bond count.
         let five = PalwPanelParamsV2::new(5, 3, 4).unwrap();
-        match derive_panel_v2(&state, &five, &claim_id, anchor) {
+        match derive_panel_v2(&state, &five, &claim_id, anchor, 0) {
             Err(PalwPanelV2Error::InsufficientEligibleBonds { needed, available }) => {
                 assert_eq!(needed, 5);
                 assert_eq!(available, 4, "eight bonds under four operators seat four — one per operator");
@@ -936,7 +1038,7 @@ mod tests {
 
         // The floor `(2, 2)` a class may thin to needs three distinct operators: executor + two.
         let two = PalwPanelParamsV2::new(2, 2, 4).unwrap();
-        let seats = derive_panel_v2(&state, &two, &claim_id, anchor).expect("two seats from four eligible operators");
+        let seats = derive_panel_v2(&state, &two, &claim_id, anchor, 0).expect("two seats from four eligible operators");
         assert_eq!(seats.len(), 2);
         let mut ops: Vec<Hash64> = seats.iter().map(|s| s.operator_id).collect();
         ops.sort();

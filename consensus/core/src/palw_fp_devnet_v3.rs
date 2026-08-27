@@ -69,9 +69,24 @@ const EPOCH_LENGTH: u64 = 1_000;
 /// target reaches its floor of 1 and the class lottery then refuses every attempt. A chain that
 /// stops with no path back, roughly 63 epochs in.
 ///
-/// `PalwConsensusParamsV2::validate` now refuses any other value while algo-7 is unreachable, so
-/// this cannot drift back without the lane it presumes.
-const ATTEMPT_SHARE_PERMILLE: u16 = 1_000;
+/// **The premise above is false, and the value moved back off the rail.**
+///
+/// `PalwConsensusMode::accepts_algo_id` returns true for `receipt_algorithm_id()`, so algo-7
+/// headers are accepted and receipt blocks reach the census. Holding 1000‰ then produces the
+/// error in the other direction and on an axis anyone can push: the attempt lane is expected to
+/// hold the whole census while receipt blocks dilute it, so it is measured as an UNDER-producer at
+/// every boundary and its target is eased without bound — while the receipt lane, holding no
+/// share, never retargets at all.
+///
+/// 900‰/100‰ rather than the original 150‰/850‰. Two things changed under that number: receipt
+/// blocks now carry no blue work at all (ADR-0055 D1), so a receipt-dominant cadence would grow
+/// chain weight at a fraction of the block rate; and a receipt block spends a CERTIFIED quantum,
+/// which only an attempt claim reaching `Final` can supply, so the receipt lane cannot outrun the
+/// lane that feeds it. `ANCHOR_MAX_GAP` below was derived at 150‰ and stays correct here for the
+/// safe reason: more attempt blocks make the wait for one shorter, never longer.
+///
+/// This is a genesis-time economic choice, and it rides the re-mint with the rest of ADR-0055.
+const ATTEMPT_SHARE_PERMILLE: u16 = 900;
 
 /// The panel's anchor delay: 20 DAA after acceptance the claim's beacon slot opens.
 const ANCHOR_DELAY: u64 = 20;
@@ -558,12 +573,31 @@ mod tests {
         assert!(b.freeprompt.receipt_maturity_daa() >= b.reorg_margin_daa, "the draw beacon sits past the reorgable fringe");
         let liability = s.window_bind() + s.window_receipt() + s.window_challenge() + s.window_court() + b.reorg_margin_daa;
         assert!(b.bond.withdrawal_delay_daa() > liability, "a bond cannot leave before its fraud is provable");
-        // The attempt lane holds the whole cadence while algo-7 is unreachable — see
-        // `ATTEMPT_SHARE_PERMILLE` for why any other value stops the chain.
-        assert_eq!(
-            s.fp_attempt_share_permille(),
-            crate::palw_class_daa::PALW_CLASS_SHARE_DENOMINATOR,
-            "an unproducible lane holds no cadence"
+        // **The genesis/post-genesis asymmetry, and why it stays.**
+        //
+        // Genesis demands a bond fund a whole bind window of concurrent claims
+        // (`palw_v2_collateral_for_claim_lifetime_v1`); post-genesis registration checks only
+        // `min_collateral_sompi`. That reads like a hole and is not one: a genesis bond is the
+        // ONLY producer, so exhausting its exposure headroom stops the DAA, and nothing then
+        // releases the claims that would give the headroom back — the chain wedges. A bond joining
+        // a RUNNING chain has no such property. Other bonds keep producing, DAA advances, its
+        // claims mature and release; a thin bond is limited, and limited only for itself.
+        //
+        // What the floor must still do is fund at least one claim, or registration admits bonds
+        // that can never produce. It does, by construction: the derived figure takes
+        // `.max(MIN_COLLATERAL_SOMPI)`, so the floor is a lower bound on a number already sized
+        // against the reserve.
+        assert!(
+            palw_v2_collateral_for_claim_lifetime_v1(PWU_PER_QUANTUM) >= s.min_collateral_sompi(),
+            "the derived lifetime collateral is what genesis demands, and it never falls below the floor"
+        );
+
+        // Both lanes are producible (`accepts_algo_id` takes algo-7), so both must hold a share —
+        // see `ATTEMPT_SHARE_PERMILLE` for what each end of the range does to the retarget.
+        let split = s.fp_attempt_share_permille();
+        assert!(
+            split > 0 && split < crate::palw_class_daa::PALW_CLASS_SHARE_DENOMINATOR,
+            "a producible lane holds a real cadence share: {split}"
         );
     }
 

@@ -521,7 +521,9 @@ pub fn base0_binding_from_capture_v1(
     // The family's registered layout, at this producer's interval. Both were `Hash64::default()`
     // — the unregistered sentinel — which was the only honest value while no map existed; filing
     // it now would file a layout the class does not register, and `verify_binding` refuses that.
-    let checkpoint_profile = kaspa_consensus_core::palw_state_chunk_map::integer_kv_checkpoint_profile_v1(1);
+    let checkpoint_profile = kaspa_consensus_core::palw_state_chunk_map::integer_kv_checkpoint_profile_v1(
+        kaspa_consensus_core::palw_state_chunk_map::PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1,
+    );
     let step_leaf_count = tiles.leaves.len() as u64;
     let step_merkle_root = step_merkle_root_v1(&tiles.leaves).map_err(|_| LegError::EmptySpace)?;
     // **From the profile, not from the family constant.** A producer files what ITS class
@@ -917,7 +919,9 @@ mod tests {
         let no_checkpoints = Base0CheckpointCaptureV1::from_chunks_v1(
             &ctx,
             &profile,
-            &kaspa_consensus_core::palw_state_chunk_map::integer_kv_checkpoint_profile_v1(1),
+            &kaspa_consensus_core::palw_state_chunk_map::integer_kv_checkpoint_profile_v1(
+                kaspa_consensus_core::palw_state_chunk_map::PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1,
+            ),
             &[],
         )
         .expect("a job with no decode call has an empty checkpoint leg");

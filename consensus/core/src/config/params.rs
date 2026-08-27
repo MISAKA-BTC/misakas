@@ -4537,7 +4537,7 @@ mod consensus_params_id_tests {
             // are different networks**, and they find out at the handshake rather than at
             // consensus, which is the direction to fail in. Landing it needs an RC re-mint; no
             // other preset moved, because no other preset carries a PALW class.
-            ("testnet-11", TESTNET11_PARAMS, "f5d8df883d42d7a7979377129c1e047439edd701ffe4588be8f30ba67f261c30"),
+            ("testnet-11", TESTNET11_PARAMS, "934ad9de59a61ccb41e69f81604e3cb32d8d827c009004eab2d5fb6853053504"),
             ("simnet", SIMNET_PARAMS, "dae24a4cddc3bd324d7e99dc61c9e14269b9a4619fecb639836b8286e144664f"),
             ("devnet", DEVNET_PARAMS, "f8981a530bf6070e4c27696d2666673ee36a1d9f1f5b4b315c4c7400b84136c0"),
         ]

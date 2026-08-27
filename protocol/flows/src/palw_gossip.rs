@@ -77,6 +77,15 @@ pub struct PalwGossipCenter {
     state: Mutex<GossipState>,
     inbox_tx: mpsc::Sender<PalwGossipEvent>,
     inbox_rx: Mutex<Option<mpsc::Receiver<PalwGossipEvent>>>,
+    /// **Is anybody reading?** Set once, when the node's PALW service takes the receiver.
+    ///
+    /// Most nodes on a PALW network run no panel and no producer, so most nodes never take it —
+    /// and an untaken `mpsc` channel is not a no-op, it is a buffer. Every relayed material was
+    /// copied into it and held for the life of the process: `INBOX_CAP` * `PALW_MATERIAL_MAX_BYTES`
+    /// is 2 GiB of memory a node accrues for a role it does not have, filled by peers, with no
+    /// bond and no block required. Checking this before the `to_vec` skips the copy as well as the
+    /// queue, on the majority of nodes.
+    inbox_taken: std::sync::atomic::AtomicBool,
     hasher: RandomState,
 }
 
@@ -103,6 +112,7 @@ impl Default for PalwGossipCenter {
             state: Mutex::new(GossipState { seen: HashSet::new(), seen_order: VecDeque::new(), materials_per_claim: HashMap::new() }),
             inbox_tx,
             inbox_rx: Mutex::new(Some(inbox_rx)),
+            inbox_taken: std::sync::atomic::AtomicBool::new(false),
             hasher: RandomState::new(),
         }
     }
@@ -112,7 +122,17 @@ impl PalwGossipCenter {
     /// The consuming end, taken exactly once by the node's PALW panel/producer service. A second
     /// taker gets `None` — two consumers would each see half the events.
     pub fn take_inbox(&self) -> Option<mpsc::Receiver<PalwGossipEvent>> {
-        self.inbox_rx.lock().unwrap().take()
+        let taken = self.inbox_rx.lock().unwrap().take();
+        if taken.is_some() {
+            self.inbox_taken.store(true, std::sync::atomic::Ordering::Release);
+        }
+        taken
+    }
+
+    /// Whether anything will ever read what we queue. Relay and dedup do not depend on it — a node
+    /// with no PALW role still carries the network's traffic; it just does not keep a copy.
+    fn has_consumer(&self) -> bool {
+        self.inbox_taken.load(std::sync::atomic::Ordering::Acquire)
     }
 
     fn digest(&self, kind: u8, claim: Option<&Hash64>, bytes: &[u8]) -> u64 {
@@ -164,8 +184,8 @@ impl PalwGossipCenter {
             return PalwGossipAdmit::TooBig;
         }
         let verdict = self.admit_digest(self.digest(1, Some(&claim), bytes), Some(claim));
-        if verdict == PalwGossipAdmit::Fresh {
-            // Drop-on-full: a node with no consumer is not obliged to remember.
+        // Drop-on-full: a node with no consumer is not obliged to remember.
+        if verdict == PalwGossipAdmit::Fresh && self.has_consumer() {
             let _ = self.inbox_tx.try_send(PalwGossipEvent::Material { claim, bytes: bytes.to_vec() });
         }
         verdict
@@ -177,7 +197,7 @@ impl PalwGossipCenter {
             return PalwGossipAdmit::TooBig;
         }
         let verdict = self.admit_digest(self.digest(2, None, bytes), None);
-        if verdict == PalwGossipAdmit::Fresh {
+        if verdict == PalwGossipAdmit::Fresh && self.has_consumer() {
             let _ = self.inbox_tx.try_send(PalwGossipEvent::Receipt { bytes: bytes.to_vec() });
         }
         verdict
@@ -194,7 +214,9 @@ impl PalwGossipCenter {
     /// over the wire, so the executor being the one node without them was the wrong asymmetry.
     pub fn mark_own_material(&self, claim: Hash64, bytes: &[u8]) {
         let _ = self.admit_digest(self.digest(1, Some(&claim), bytes), Some(claim));
-        let _ = self.inbox_tx.try_send(PalwGossipEvent::Material { claim, bytes: bytes.to_vec() });
+        if self.has_consumer() {
+            let _ = self.inbox_tx.try_send(PalwGossipEvent::Material { claim, bytes: bytes.to_vec() });
+        }
     }
 
     pub fn mark_own_receipt(&self, bytes: &[u8]) {
@@ -204,6 +226,31 @@ impl PalwGossipCenter {
 
 #[cfg(test)]
 mod tests {
+
+    /// **A node with no PALW role keeps no copies.**
+    ///
+    /// The inbox is an `mpsc` channel, and an untaken channel is a buffer, not a no-op: every
+    /// relayed material was copied into it and held for the life of the process. `INBOX_CAP` *
+    /// `PALW_MATERIAL_MAX_BYTES` is 2 GiB that peers could make a bystander hold, with no bond and
+    /// no block. Relay and dedup must be unaffected — a node without the role still carries the
+    /// network's traffic.
+    #[test]
+    fn a_node_with_no_consumer_relays_without_buffering() {
+        let center = PalwGossipCenter::default();
+        let claim = Hash64::from_u64_word(7);
+        assert_eq!(center.admit_material(claim, b"first"), PalwGossipAdmit::Fresh, "relay is not gated on having a consumer");
+        assert_eq!(center.admit_material(claim, b"first"), PalwGossipAdmit::Duplicate, "and dedup still works");
+        assert!(!center.has_consumer());
+
+        // Nothing was queued, so the receiver a late-starting service takes is empty rather than
+        // holding what arrived while nobody was reading.
+        let mut rx = center.take_inbox().expect("the first taker gets it");
+        assert!(rx.try_recv().is_err(), "a bystander must not have accumulated payloads");
+
+        // ...and once somebody IS reading, the same call queues.
+        assert_eq!(center.admit_material(Hash64::from_u64_word(8), b"second"), PalwGossipAdmit::Fresh);
+        assert!(rx.try_recv().is_ok(), "with a consumer present the event is delivered");
+    }
     use super::*;
 
     /// **The per-claim map grew forever, and nothing on the wire was authenticated enough to stop
@@ -237,6 +284,12 @@ mod tests {
     #[test]
     fn the_gossip_center_bounds_what_it_relays() {
         let center = PalwGossipCenter::default();
+        // This test measures what reaches the INBOX, so it has to be a node that reads one. The
+        // receiver is taken up front rather than at the end because queuing is now conditional on
+        // a consumer existing (see `a_node_with_no_consumer_relays_without_buffering`) — taking it
+        // afterwards measured a bystander and would report zero.
+        let mut rx = center.take_inbox().expect("first taker");
+        assert!(center.take_inbox().is_none(), "one consumer, once");
         let claim = h64(7);
 
         assert_eq!(center.admit_material(claim, b"honest"), PalwGossipAdmit::Fresh);
@@ -261,8 +314,6 @@ mod tests {
         assert_eq!(center.admit_receipt(b"mine"), PalwGossipAdmit::Duplicate, "our own echo does not come back as an event");
 
         // And the inbox saw exactly the fresh ones that were not our own mark.
-        let mut rx = center.take_inbox().expect("first taker");
-        assert!(center.take_inbox().is_none(), "one consumer, once");
         let mut materials = 0;
         let mut receipts = 0;
         while let Ok(event) = rx.try_recv() {

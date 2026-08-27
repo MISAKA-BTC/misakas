@@ -71,6 +71,21 @@ pub fn integer_kv_state_layout_id_v1() -> Hash64 {
 /// A constructor rather than a constant because the interval is the one free parameter; the layout
 /// is not. Before this there was no canonical `state_layout_id` to file at all, so every producer
 /// would have invented one and every one of them would have been a different class of checkpoint.
+/// **The interval the deterministic-integer family actually runs**, and the only one its court
+/// will accept.
+///
+/// The interval was the profile's one free parameter, carried inside `committed_execution_root`
+/// and checked by nothing. Two things followed. A producer could name an interval larger than its
+/// decode count and file a binding with ZERO checkpoints — opting out of the leg the checkpoint
+/// evidence exists to provide — and pass, because `checkpoint_count == decode_calls / interval`
+/// was satisfied at zero. And an honest producer and an honest challenger picking different
+/// intervals computed different execution roots for the SAME job, so the challenger read a
+/// reproducible execution as fraud.
+///
+/// One is what every producer in this tree files. Pinning it is the interim; naming it per class
+/// in the catalog is the fuller answer and moves the catalog root.
+pub const PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1: u32 = 1;
+
 pub fn integer_kv_checkpoint_profile_v1(checkpoint_interval: u32) -> crate::palw_legs::PalwCheckpointProfileV1 {
     crate::palw_legs::PalwCheckpointProfileV1 {
         version: crate::palw_legs::PALW_LEGS_OBJECT_VERSION_V1,

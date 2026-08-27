@@ -234,7 +234,9 @@ pub fn base0_execute_for_attempt_v1(
     let mut cache = KvCache::new(artifact);
     // The class's own checkpoint profile, at the producer's interval — the same object the binding
     // files, so the capture and the commitment cannot disagree about the layout or the cadence.
-    let checkpoint_profile = kaspa_consensus_core::palw_state_chunk_map::integer_kv_checkpoint_profile_v1(1);
+    let checkpoint_profile = kaspa_consensus_core::palw_state_chunk_map::integer_kv_checkpoint_profile_v1(
+        kaspa_consensus_core::palw_state_chunk_map::PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1,
+    );
     let mut checkpoints = crate::legs::Base0CheckpointCaptureV1::new(ctx, profile, &checkpoint_profile);
     let mut logits_rows: Vec<Vec<i32>> = Vec::with_capacity(decode_tokens);
     let mut generated: Vec<u32> = Vec::with_capacity(decode_tokens);

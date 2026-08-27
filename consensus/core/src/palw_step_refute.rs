@@ -2405,8 +2405,11 @@ pub(crate) mod tests {
         let profile_hash = p.shape_profile_id();
         let ckpt_profile = PalwCheckpointProfileV1 {
             version: crate::palw_legs::PALW_LEGS_OBJECT_VERSION_V1,
+            // The interval stays this fixture's own — only the LAYOUT is the family's, which is
+            // what `verify_binding_v1` pins. See its comment for why the interval belongs in the
+            // class catalog rather than here.
             checkpoint_interval: 8,
-            state_layout_id: h64(0x55),
+            state_layout_id: crate::palw_state_chunk_map::integer_kv_state_layout_id_v1(),
         };
         let step_root = step_leg_root_v1(&ctx_hash, &profile_hash, material.leaf_count, &material.merkle_root);
         let ckpt_root =
@@ -2544,8 +2547,11 @@ pub(crate) mod tests {
         let profile_hash = p.shape_profile_id();
         let ckpt_profile = PalwCheckpointProfileV1 {
             version: crate::palw_legs::PALW_LEGS_OBJECT_VERSION_V1,
+            // The interval stays this fixture's own — only the LAYOUT is the family's, which is
+            // what `verify_binding_v1` pins. See its comment for why the interval belongs in the
+            // class catalog rather than here.
             checkpoint_interval: 8,
-            state_layout_id: h64(0x55),
+            state_layout_id: crate::palw_state_chunk_map::integer_kv_state_layout_id_v1(),
         };
         let step_root = step_leg_root_v1(&ctx_hash, &profile_hash, material.leaf_count, &material.merkle_root);
         let ckpt_root =

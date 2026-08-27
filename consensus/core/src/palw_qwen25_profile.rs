@@ -467,8 +467,12 @@ mod tests {
             crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) => b.clone(),
             _ => return, // a build whose card is unset ships no bundle; nothing to check against
         };
-        let admissible = qwen25_admissible_geometry_v1(QWEN25_1_5B, &bundle.court)
-            .expect("1.5B has an admissible (tile, n_ctx) under the shipped court");
+        // The shipped court's opening ceiling is what a carrier transaction can hold, and Qwen's
+        // cheapest step is larger than the mempool's whole standard mass budget — so the shipped
+        // bundle admits no geometry of this class, and there is nothing here to gate. Returning is
+        // the honest outcome rather than expecting a pair that cannot exist; the fact itself is
+        // asserted in `the_admissible_qwen_geometry_is_derived_from_the_court_that_must_adjudicate_it`.
+        let Some(admissible) = qwen25_admissible_geometry_v1(QWEN25_1_5B, &bundle.court) else { return };
         let profile = qwen25_profile_v1(admissible).expect("expressible");
         let class_id = profile.shape_profile_id();
         let canonical = crate::palw_base0_profile::rc_job_context(&profile, 8, 4);
@@ -804,7 +808,13 @@ mod tests {
         // The class's own registered layout, not a fixture number: the binding check below
         // compares the carried map id against the profile's, and a fixture that files a made-up
         // one is a fixture testing a binding no producer could build.
-        let ckpt = crate::palw_state_chunk_map::integer_kv_checkpoint_profile_v1(8);
+        let ckpt = crate::palw_legs::PalwCheckpointProfileV1 {
+            version: crate::palw_legs::PALW_LEGS_OBJECT_VERSION_V1,
+            // This fixture's own interval; only the LAYOUT is the family's, and that is what
+            // `verify_binding_v1` pins.
+            checkpoint_interval: 8,
+            state_layout_id: crate::palw_state_chunk_map::integer_kv_state_layout_id_v1(),
+        };
         let state_chunk_map_id = crate::palw_state_chunk_map::integer_kv_state_chunk_map_id_v1();
         let adjudicate = |corrupt: bool| {
             let material = build(corrupt);
@@ -964,13 +974,34 @@ mod tests {
     /// pair stayed unstated after the measurement was done.
     #[test]
     fn the_admissible_qwen_geometry_is_derived_from_the_court_that_must_adjudicate_it() {
-        let floor_sized = crate::palw_mode_v2::PalwCourtParamsV2::new(crate::palw_step::PALW_STEP_MAX_LEAVES, 4, 2).unwrap();
+        // **Under the SHIPPED ceilings, neither model fits any more.** The opening ceiling is
+        // derived from what a carrier transaction can hold now, and Qwen's cheapest step is larger
+        // than the mempool's whole standard mass budget — so no `(tile_len, n_ctx)` pair of this
+        // class is deliverable, and `qwen25_admissible_geometry_v1` correctly finds none. The
+        // search below therefore runs against a court whose ceiling is stated rather than
+        // defaulted: what the class would need, and what no transaction can carry.
+        let shipped = crate::palw_mode_v2::PalwCourtParamsV2::new(crate::palw_step::PALW_STEP_MAX_LEAVES, 4, 2).unwrap();
+        assert!(
+            qwen25_admissible_geometry_v1(QWEN25_1_5B, &shipped).is_none(),
+            "no Qwen geometry fits a ceiling a close can travel in — see DEFAULT_MAX_OPENING_BYTES"
+        );
+        let floor_sized = crate::palw_mode_v2::PalwCourtParamsV2::with_cost_ceilings(
+            crate::palw_step::PALW_STEP_MAX_LEAVES,
+            4,
+            2,
+            24 * 1024 * 1024,
+            crate::palw_mode_v2::DEFAULT_MAX_TERMINAL_MACS,
+            crate::palw_mode_v2::DEFAULT_MAX_OPERAND_COUNT,
+        )
+        .unwrap();
 
         // Under the shipped (floor-sized) ceilings, both models fit — at a context that IS the
         // finding rather than a target.
         let small = qwen25_admissible_geometry_v1(QWEN25_1_5B, &floor_sized).expect("some pair is admissible");
         let big = qwen25_admissible_geometry_v1(QWEN25_3B, &floor_sized).expect("some pair is admissible");
-        // Pinned, because these two pairs are the answer a genesis reads.
+        // Pinned, because these two pairs are what the class WOULD need — not what a genesis can
+        // read. No transaction can carry a close at this ceiling, so these are the measurement
+        // that says how far the intra-step bisection has to close the gap, and nothing more.
         //
         // **They moved when the graph became honest** (ADR-0049 Decision F): 1.5B was 125 and 3B
         // was 79 against a hand-written table of 27 nodes per layer, and the engine performs 38.
@@ -978,8 +1009,8 @@ mod tests {
         // 79 -> 56. The old numbers were not a measurement of this class; they were a measurement
         // of a graph nothing executed. `DEFAULT_MAX_OPENING_BYTES`' doc still records 125, and
         // that reference is now stale for the same reason.
-        assert_eq!((small.tile_len, small.n_ctx), (64, 90), "1.5B under the shipped ceilings");
-        assert_eq!((big.tile_len, big.n_ctx), (64, 56), "3B is deeper, so it buys less context for the same court");
+        assert_eq!((small.tile_len, small.n_ctx), (1024, 1037), "1.5B under an over-provisioned court");
+        assert_eq!((big.tile_len, big.n_ctx), (1024, 732), "3B is deeper, so it buys less context for the same court");
         for (name, model, found) in [("1.5B", QWEN25_1_5B, small), ("3B", QWEN25_3B, big)] {
             let profile = qwen25_profile_v1(found).expect("expressible");
             assert!(

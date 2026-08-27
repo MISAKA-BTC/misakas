@@ -526,9 +526,29 @@ mod tests {
         // table; the table is projected from `BASE0_LAYER_IR` now (ADR-0049 Decision F) and the
         // engine performs 38 steps, so that pair is 4,194,650 leaves against a 4,194,304 cap.
         // A literal here would be a third description of the class, rotting on its own schedule.
-        let court = PalwCourtParamsV2::new(PALW_STEP_MAX_LEAVES, 20, 2).expect("the full ladder is a legal court");
+        // **Deliberately over-provisioned, and deliberately not relayable.**
+        //
+        // `DEFAULT_MAX_OPENING_BYTES` is derived from what a carrier transaction can hold, and no
+        // Qwen geometry fits it — its cheapest step is larger than the mempool's whole standard
+        // mass budget. That is a fact about the class, recorded in
+        // `no_qwen_geometry_fits_a_ceiling_a_transaction_can_carry`.
+        //
+        // The tests that use this fixture are about ADMISSION MECHANICS with a big class present —
+        // catalog roots, ladder sizing, share tables — not about Qwen being deliverable. So they
+        // get a court whose ceiling is stated here rather than defaulted, and the fixture says out
+        // loud that such a network could assemble these closes and not relay them.
+        const OVER_PROVISIONED_OPENING_BYTES: u64 = 24 * 1024 * 1024;
+        let court = PalwCourtParamsV2::with_cost_ceilings(
+            PALW_STEP_MAX_LEAVES,
+            20,
+            2,
+            OVER_PROVISIONED_OPENING_BYTES,
+            crate::palw_mode_v2::DEFAULT_MAX_TERMINAL_MACS,
+            crate::palw_mode_v2::DEFAULT_MAX_OPERAND_COUNT,
+        )
+        .expect("the full ladder is a legal court");
         let g = crate::palw_qwen25_profile::qwen25_admissible_geometry_v1(QWEN25_1_5B, &court)
-            .expect("some pair is admissible under the full ladder");
+            .expect("some pair is admissible under the over-provisioned ladder");
         qwen25_profile_v1(g).expect("the derived geometry is expressible")
     }
 
@@ -834,7 +854,15 @@ mod tests {
         let floor = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("expressible");
         let floor_cost = derive_court_cost_v1(&floor).expect("derivable");
         assert_eq!(floor_cost.max_opening_bytes, 32 * 1024, "the floor's widest step opens 32 KiB");
-        assert!(floor_cost.max_opening_bytes * 32 <= crate::palw_mode_v2::DEFAULT_MAX_OPENING_BYTES, "the default is floor-derived");
+        // The default used to be `32 * this` — derived from the floor's appetite, which is the
+        // wrong axis: a close travels as a transaction payload, so the binding constraint is what
+        // the mempool will relay, not what a class would enjoy. It is carrier-derived now, and the
+        // property that matters here is the one this test can still check — the floor fits under it
+        // with room, so the liveness class is never the one the ceiling excludes.
+        assert!(
+            floor_cost.max_opening_bytes * 12 <= crate::palw_mode_v2::DEFAULT_MAX_OPENING_BYTES,
+            "the floor's widest step fits the carrier-derived ceiling many times over"
+        );
 
         // Each tile is priced at the LONGEST context it can adjudicate, because that is the class a
         // network would actually register — a tile bought for its context and then not used for it
@@ -873,8 +901,24 @@ mod tests {
                 Err(e) => panic!("tile {tile}: unexpected {e:?}"),
             }
         }
-        assert_eq!(fits, vec![64], "only the smallest tile fits a floor-sized court, and it buys a toy context");
-        assert!(widest_adjudicable_ctx(64) < 200, "the tile that fits a floor-sized court buys a toy context");
+        // **No tile fits any more, and that is the finding.** `tile_len` 64 used to squeeze under
+        // the old 1 MiB ceiling at a 125-token context — but 1 MiB was never a number a close
+        // could travel in. The ceiling is derived from the carrier now, and Qwen's cheapest step is
+        // larger than the mempool's whole standard mass budget, so no geometry of this class is
+        // deliverable at all. Refusing it at REGISTRATION is the improvement: before, such a class
+        // registered cleanly and its court could only be discovered to be unreachable by having a
+        // dispute and watching the evidence fail to relay.
+        //
+        // The route to carrying Qwen is the intra-step bisection `DEFAULT_MAX_OPENING_BYTES` names,
+        // not a larger ceiling — a larger ceiling only moves where the lie is told.
+        assert!(fits.is_empty(), "no Qwen tile length fits a ceiling a transaction can carry, got {fits:?}");
+        assert!(
+            derive_court_cost_v1(&qwen25_profile_v1(PalwQwen25GeometryV1 { n_ctx: 2, tile_len: 64, ..QWEN25_1_5B }).unwrap())
+                .unwrap()
+                .max_opening_bytes
+                > crate::palw_mode_v2::DEFAULT_MAX_OPENING_BYTES,
+            "even at the smallest expressible context the cheapest step is over the carrier's budget"
+        );
 
         // **The declared 4,096-token context is not adjudicable at ANY legal tile length**, and
         // that is a change: against the hand-written 27-node layer table `tile_len` 16,384 reached

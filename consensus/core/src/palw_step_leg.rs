@@ -721,6 +721,10 @@ pub enum PalwStepFaultV1 {
     DecodeTokenMismatch {
         position: u32,
     } = 16,
+    /// The binding's checkpoint profile is not the family's canonical one — a free interval let a
+    /// producer file zero checkpoints, and made two honest parties compute different execution
+    /// roots for the same job (discriminants 0-16 unmoved).
+    CheckpointProfileNotCanonical = 17,
 }
 
 impl PalwStepFaultV1 {
@@ -728,6 +732,7 @@ impl PalwStepFaultV1 {
         match self {
             PalwStepFaultV1::ShapeProfileNotCanonical => (0, 0),
             PalwStepFaultV1::StepLeafCountNotCanonical => (1, 0),
+            PalwStepFaultV1::CheckpointProfileNotCanonical => (17, 0),
             PalwStepFaultV1::StepCoordinatesNotCanonical => (2, 0),
             PalwStepFaultV1::StepLeafIndexNotCanonical => (3, 0),
             PalwStepFaultV1::StepBytesNotFourPerValue => (4, 0),
@@ -910,6 +915,28 @@ pub fn check_step_refutation_v1(refutation: &PalwStepRefutationV1) -> Result<Pal
         match step_leaf_count(&binding.shape_profile, &binding.job_context) {
             Ok(count) if count == binding.step_leaf_count => {}
             _ => return Some(PalwStepFaultV1::StepLeafCountNotCanonical),
+        }
+        // **The state layout is the family's, not the filer's.**
+        //
+        // The checkpoint profile is hashed into `committed_execution_root` and nothing checked any
+        // of it. `state_layout_id` is the half that has a canonical answer — one layout for the
+        // whole deterministic-integer family, which is exactly why
+        // `integer_kv_state_layout_id_v1` exists ("before this there was no canonical
+        // `state_layout_id` to file at all, so every producer would have invented one and every
+        // one of them would have been a different class of checkpoint"). An invented layout makes
+        // an honest execution unreproducible by anyone else, which is a conviction waiting for a
+        // challenger to run the same job and get a different root.
+        //
+        // **The INTERVAL is still the filer's, and that is the residual.** A producer that names
+        // an interval past its own decode count files zero checkpoints and opts out of the leg.
+        // Pinning it here would be wrong rather than merely expensive: the right interval is a
+        // property of the CLASS — a long-context class checkpointing every call pays for evidence
+        // nobody needs — so it belongs in the catalog entry beside the geometry, which moves the
+        // catalog root and the class id. Recorded rather than half-done.
+        if binding.shape_profile.lane == crate::palw_step::PalwStepLaneV1::Int32
+            && binding.checkpoint_profile.state_layout_id != crate::palw_state_chunk_map::integer_kv_state_layout_id_v1()
+        {
+            return Some(PalwStepFaultV1::CheckpointProfileNotCanonical);
         }
         let decode_calls = binding.job_context.exact_decode_tokens.saturating_sub(1);
         let canonical_ckpts = decode_calls / binding.checkpoint_profile.checkpoint_interval;
@@ -1306,7 +1333,7 @@ mod tests {
         let ckpt_profile = PalwCheckpointProfileV1 {
             version: crate::palw_legs::PALW_LEGS_OBJECT_VERSION_V1,
             checkpoint_interval: 1,
-            state_layout_id: h64(0x55),
+            state_layout_id: crate::palw_state_chunk_map::integer_kv_state_layout_id_v1(),
         };
         let map_id = h64(0x44);
         let chunk0 = state_chunk_leaf_hash_v1(&map_id, 0, b"state-a");
@@ -1446,8 +1473,8 @@ mod tests {
             // `weight_dtype` became a per-layer list. See `palw_step`'s golden for why the single
             // byte could not describe the pinned model.
             // …and again for `lane` (see `palw_step`'s golden).
-            "0f491307719b0ade811690bba39ec44d99248e6c2d7876fad1e3959d05bbef2c\
-             8f87ce59a41b4c7f4c880661daf8854b86163a0f1a1bff733c982b29c234d07b"
+            "6d24a7e793f1f13be61e6583d63a780a2d636159457cdc90186ca3e7a1d4079b\
+             0737354107e84d2e6ce145baed5582c0a6fb0ece0beef1acdef299344783992b"
         );
     }
 
