@@ -79,9 +79,24 @@ pub fn dot_i8_a16(w: &[i8], x: &[i16]) -> i64 {
     unsafe { dot_i8_a16_neon(w, x) }
 }
 
-/// Every other target, for now. A `vpdpbusd`/`__dp4a` path belongs here and would be held to the
-/// same differential.
-#[cfg(not(target_arch = "aarch64"))]
+/// x86-64 — the fleet's own architecture, and until ADR-0055 the one still running the scalar
+/// fold. Dispatches to AVX2 when the machine has it (every EPYC in the fleet does; detection is
+/// per-process, below), scalar otherwise.
+#[cfg(target_arch = "x86_64")]
+#[inline]
+pub fn dot_i8_a16(w: &[i8], x: &[i16]) -> i64 {
+    debug_assert_eq!(w.len(), x.len());
+    if has_avx2() {
+        // SAFETY: AVX2 was detected above, and the chunk arithmetic bounds every load.
+        return unsafe { dot_i8_a16_avx2(w, x) };
+    }
+    dot_i8_a16_scalar(w, x)
+}
+
+/// Every remaining target. A `vpdpwssd` (AVX-512 VNNI) path belongs beside the AVX2 one when a
+/// fleet host grows the flag, and a `__dp4a` path in a CUDA backend — each held to the same
+/// differential.
+#[cfg(not(any(target_arch = "aarch64", target_arch = "x86_64")))]
 #[inline]
 pub fn dot_i8_a16(w: &[i8], x: &[i16]) -> i64 {
     debug_assert_eq!(w.len(), x.len());
@@ -140,6 +155,85 @@ const _: () = assert!(
     (A16_MAX_DOT_LEN as i64 / 4) * 128 * 255 < i32::MAX as i64,
     "an sdot/usdot lane accumulates n/4 products of at most 128·255; past this the whole tier's \
      longest reduction would wrap and the dot path would need a chunk like the vmlal path"
+);
+
+/// Whether this machine has AVX2. Read once, for the same reason as `has_dot_extensions`, and
+/// with the same kind of kill-switch: `MISAKA_PALW_NO_AVX2` turns the fast path off so a slowdown
+/// report can A/B the kernel on one machine without rebuilding. A diagnostic, never a consensus
+/// switch — the two paths are asserted bit-identical, so the variable changes speed and nothing
+/// else.
+#[cfg(target_arch = "x86_64")]
+fn has_avx2() -> bool {
+    use std::sync::OnceLock;
+    static DETECTED: OnceLock<bool> = OnceLock::new();
+    *DETECTED.get_or_init(|| {
+        if std::env::var_os("MISAKA_PALW_NO_AVX2").is_some() {
+            return false;
+        }
+        std::arch::is_x86_feature_detected!("avx2")
+    })
+}
+
+/// The AVX2 ladder: sign-extend sixteen weights to `i16`, `vpmaddwd` them against sixteen codes
+/// — sixteen exact `i16 × i16` products, pair-summed into eight `i32` lanes — and accumulate.
+///
+/// **Why `vpmaddwd` and not the `vpmaddubsw` trick.** The classic int8 path abs-and-signs the
+/// operands to fit the unsigned×signed instruction, and it is NOT exact: negating an `i8` of
+/// −128 wraps back to −128, so any row holding that rail computes the wrong sign. This tier's
+/// activation is `i16` anyway, so the widening form is both the honest one and the natural one —
+/// a `vpmaddwd` pair sum reaches at most `2 · 128 · 32_767 = 8.4e6`, exact in `i32` with no
+/// saturation arm at all.
+///
+/// The lane bound is the module's usual arithmetic: eight lanes carry `CHUNK / 8` = 64 products
+/// each, `64 · 4.19e6 = 2.7e8`, an eight-fold margin — asserted below, beside the constant it
+/// depends on. Chunk totals are widened to `i64` before crossing chunks, exactly as the NEON
+/// path does, and the tail inside each chunk is the scalar fold, which is the same addition.
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn dot_i8_a16_avx2(w: &[i8], x: &[i16]) -> i64 {
+    use std::arch::x86_64::*;
+    let n = w.len();
+    let mut total: i64 = 0;
+    let mut base = 0usize;
+    while base < n {
+        let end = (base + CHUNK).min(n);
+        // SAFETY: register-only.
+        let mut acc = unsafe { _mm256_setzero_si256() };
+        let mut i = base;
+        while i + 16 <= end {
+            // SAFETY: 16 elements remain in both slices from `i` — 16 bytes of `w`, 32 bytes
+            // of `x` — and unaligned loads are what the `loadu` forms are for.
+            unsafe {
+                let wv = _mm_loadu_si128(w.as_ptr().add(i) as *const __m128i);
+                let w16 = _mm256_cvtepi8_epi16(wv);
+                let xv = _mm256_loadu_si256(x.as_ptr().add(i) as *const __m256i);
+                acc = _mm256_add_epi32(acc, _mm256_madd_epi16(w16, xv));
+            }
+            i += 16;
+        }
+        // Widen the lanes into `i64` before combining chunks — the lanes are the only place an
+        // `i32` may hold a partial sum, and it stops being allowed at `CHUNK`.
+        // SAFETY: register-only, then a store into a stack array of exactly four lanes.
+        unsafe {
+            let lo64 = _mm256_cvtepi32_epi64(_mm256_castsi256_si128(acc));
+            let hi64 = _mm256_cvtepi32_epi64(_mm256_extracti128_si256::<1>(acc));
+            let sum = _mm256_add_epi64(lo64, hi64);
+            let mut lanes = [0i64; 4];
+            _mm256_storeu_si256(lanes.as_mut_ptr() as *mut __m256i, sum);
+            total += lanes[0] + lanes[1] + lanes[2] + lanes[3];
+        }
+        // The chunk's tail, scalar. It is at most 15 elements and it is the same addition.
+        total += dot_i8_a16_scalar(&w[i..end], &x[i..end]);
+        base = end;
+    }
+    total
+}
+
+#[cfg(target_arch = "x86_64")]
+const _: () = assert!(
+    (CHUNK as i64 / 8) * 2 * 128 * A16_CODE_MAX < i32::MAX as i64,
+    "a vpmaddwd lane accumulates CHUNK/8 pair sums of two worst-case products — past that the \
+     lane wraps silently and the AVX2 path stops being the same number as the reference"
 );
 
 /// The activation row, split once for the whole projection.
@@ -665,6 +759,82 @@ mod tests {
                 "offset={offset}"
             );
         }
+    }
+
+    /// The AVX2 path against the scalar fold, FORCED rather than dispatched — the x86 twin of
+    /// `the_dot_extension_path_equals_the_scalar_one`. The dispatcher tests cover whichever path
+    /// this machine picked; this one exists so a machine with the feature cannot pass the suite
+    /// without the vector path having run, kill-switch or no kill-switch.
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn the_avx2_path_equals_the_scalar_one() {
+        if !std::arch::is_x86_feature_detected!("avx2") {
+            // The dispatcher test already covered the scalar path this machine will actually run.
+            return;
+        }
+        let mut rng = Lcg(0xA16_0005);
+        let w: Vec<i8> = (0..20_000).map(|_| rng.i8()).collect();
+        let x: Vec<i16> = (0..20_000).map(|_| rng.code() as i16).collect();
+        for n in [0usize, 1, 7, 15, 16, 17, 31, 32, 33, 511, 512, 513, 527, 1023, 1024, 1536, 8960, 20_000] {
+            // SAFETY: the feature was detected above.
+            let got = unsafe { dot_i8_a16_avx2(&w[..n], &x[..n]) };
+            assert_eq!(got, dot_i8_a16_scalar(&w[..n], &x[..n]), "n={n}");
+        }
+        for offset in [1usize, 3, 8, 9] {
+            let n = 4096;
+            // SAFETY: as above.
+            let got = unsafe { dot_i8_a16_avx2(&w[offset..offset + n], &x[offset..offset + n]) };
+            assert_eq!(got, dot_i8_a16_scalar(&w[offset..offset + n], &x[offset..offset + n]), "offset={offset}");
+        }
+        // The rails, constructed: the products every lane bound is sized against, across the
+        // chunk boundary and at the tier's longest row.
+        for n in [512usize, 513, 8960, A16_MAX_DOT_LEN] {
+            for (wv, xv) in [(-128i8, -(A16_CODE_MAX as i16)), (-128, A16_CODE_MAX as i16), (127, A16_CODE_MAX as i16)] {
+                let w = vec![wv; n];
+                let x = vec![xv; n];
+                // SAFETY: as above.
+                let got = unsafe { dot_i8_a16_avx2(&w, &x) };
+                assert_eq!(got, n as i64 * wv as i64 * xv as i64, "rails n={n} w={wv} x={xv}");
+            }
+        }
+    }
+
+    /// Not an assertion — a meter, for the A/B the kill-switches exist to serve.
+    /// `cargo test -p misaka-palw-base0 --release measure_dot_throughput -- --ignored --nocapture`
+    #[test]
+    #[ignore = "prints throughput; run explicitly on the machine being measured"]
+    fn measure_dot_throughput() {
+        let mut rng = Lcg(0xA16_BEEF);
+        let n = 8960usize;
+        let w: Vec<i8> = (0..n).map(|_| rng.i8()).collect();
+        let x: Vec<i16> = (0..n).map(|_| rng.code() as i16).collect();
+        let operand = A16Operand::new(x.clone());
+        let iters = 20_000u32;
+        let gmacs = |d: std::time::Duration| (n as f64 * iters as f64) / d.as_secs_f64() / 1e9;
+        let mut sink = 0i64;
+        let t = std::time::Instant::now();
+        for _ in 0..iters {
+            sink = sink.wrapping_add(dot_i8_a16_scalar(&w, &x));
+        }
+        let scalar = t.elapsed();
+        let t = std::time::Instant::now();
+        for _ in 0..iters {
+            sink = sink.wrapping_add(dot_i8_a16(&w, &x));
+        }
+        let vector = t.elapsed();
+        let t = std::time::Instant::now();
+        for _ in 0..iters {
+            sink = sink.wrapping_add(dot_operand(&w, &operand));
+        }
+        let operand_path = t.elapsed();
+        println!(
+            "dot n={n}: scalar {:.2} GMAC/s | dot_i8_a16 {:.2} GMAC/s ({:.1}x) | dot_operand {:.2} GMAC/s ({:.1}x) [sink {sink}]",
+            gmacs(scalar),
+            gmacs(vector),
+            scalar.as_secs_f64() / vector.as_secs_f64(),
+            gmacs(operand_path),
+            scalar.as_secs_f64() / operand_path.as_secs_f64()
+        );
     }
 
     /// The dot-product path against the scalar one, over the lengths and both code rails. The
