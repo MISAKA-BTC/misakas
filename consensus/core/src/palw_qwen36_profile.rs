@@ -404,7 +404,114 @@ fn width(w: W, g: &PalwQwen36GeometryV1) -> PalwStepOutLenV1 {
 /// the projection flattened it.
 const QWEN36_MATMUL_OPENING_BUDGET: usize = 24 * 1024;
 
+/// **Strip the shared-expert subgraph from a layer IR, for members with `shared_dim == 0`.**
+///
+/// qwen3moe (Qwen3-Coder and kin) routes every token through the mixture ONLY — there is no
+/// always-on shared expert, no scalar gate over it, and no add that folds it back in. The IR
+/// tables are consts written for the hybrid's layer, so the projection derives the smaller graph
+/// instead of a second hand-kept table (a table beside a table is how graphs drift):
+///
+/// 1. seed: every node whose weight lives under `ffn_shared`;
+/// 2. closure: a node ALL of whose step inputs are already being dropped (the anonymous Silu and
+///    Sigmoid between the seeded matmuls) joins them;
+/// 3. references into the dropped set are removed from surviving nodes' input lists, and a
+///    two-input add left with one input this way (the fold of mixture + shared) is an identity —
+///    it is dropped too, and references to IT forward to its surviving input;
+/// 4. everything is re-indexed.
+///
+/// For a hybrid geometry the seed is empty and the function is the identity, so the shipped
+/// class's profile — and therefore its id — cannot move.
+fn strip_shared_expert(ir: &[Ir]) -> Vec<Ir> {
+    let mut dropped = vec![false; ir.len()];
+    for (i, node) in ir.iter().enumerate() {
+        if node.weight.contains("ffn_shared") {
+            dropped[i] = true;
+        }
+    }
+    loop {
+        let mut changed = false;
+        for (i, node) in ir.iter().enumerate() {
+            if dropped[i] || node.inputs.is_empty() {
+                continue;
+            }
+            let all_dropped = node.inputs.iter().all(|r| matches!(r, I::Step(s) if dropped[*s as usize]));
+            if all_dropped {
+                dropped[i] = true;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    // The fold: an AddElem whose OTHER input was the shared path. Forward it to the mixture side.
+    let mut forward: Vec<Option<u16>> = vec![None; ir.len()];
+    for (i, node) in ir.iter().enumerate() {
+        if dropped[i] || node.op != PalwStepOpKindV1::AddElem {
+            continue;
+        }
+        let survivors: Vec<u16> = node
+            .inputs
+            .iter()
+            .filter_map(|r| match r {
+                I::Step(s) if !dropped[*s as usize] => Some(*s),
+                _ => None,
+            })
+            .collect();
+        if node.inputs.len() == 2 && survivors.len() == 1 {
+            dropped[i] = true;
+            forward[i] = Some(survivors[0]);
+        }
+    }
+    let mut new_index = vec![0u16; ir.len()];
+    let mut next = 0u16;
+    for (i, d) in dropped.iter().enumerate() {
+        if !*d {
+            new_index[i] = next;
+            next += 1;
+        }
+    }
+    let resolve = |mut s: u16| -> u16 {
+        while let Some(f) = forward[s as usize] {
+            s = f;
+        }
+        assert!(!dropped[s as usize], "a surviving node referenced a dropped one that forwards nowhere");
+        new_index[s as usize]
+    };
+    let mut out = Vec::with_capacity(ir.len());
+    for (i, node) in ir.iter().enumerate() {
+        if dropped[i] {
+            continue;
+        }
+        let inputs: Vec<I> = node
+            .inputs
+            .iter()
+            .map(|r| match r {
+                I::Step(s) => I::Step(resolve(*s)),
+                other => *other,
+            })
+            .collect();
+        out.push(Ir { inputs: Box::leak(inputs.into_boxed_slice()), ..*node });
+    }
+    out
+}
+
 fn project(ir: &[Ir], g: &PalwQwen36GeometryV1, layer_span: usize) -> Vec<PalwStepNodeV1> {
+    // **A span of zero layers is an empty table, not a table of zero-weight nodes.** The
+    // full-attention-only members of this lineage (qwen3moe: every layer is attention,
+    // `full_attention_interval == 1`) have no GDN layers at all, and `validate_shape` rightly
+    // refuses a declared node table for a layer kind that does not exist. The hybrid members
+    // pass a positive span here and are untouched.
+    if layer_span == 0 {
+        return Vec::new();
+    }
+    let stripped;
+    let ir = if g.shared_dim == 0 {
+        stripped = strip_shared_expert(ir);
+        &stripped[..]
+    } else {
+        ir
+    };
     // A matmul's reduction width, from the IR's own wiring — the first input's row.
     let in_width = |node: &Ir| -> usize {
         node.inputs
@@ -503,6 +610,61 @@ fn layer_spans(g: &PalwQwen36GeometryV1) -> (usize, usize) {
 }
 
 /// **The class's shape profile.** Projected from the IR above, which is the engine's own order.
+#[cfg(test)]
+mod qwen3moe_family {
+    use super::*;
+    /// **The qwen3moe (full-attention-only MoE) members are expressible and admissible.**
+    ///
+    /// Qwen3-Coder-30B-A3B's geometry — every layer attention (`full_attention_interval` 1, so
+    /// the GDN table is EMPTY), no shared expert (`shared_dim` 0, so the shared subgraph is
+    /// stripped), rope over the whole 128-dim head — projected through the same IR as the
+    /// shipped hybrid and pushed through the REAL bundle's admission gate. The ladder measured
+    /// 2026-08-28: n_ctx 4..=10 admit (close ≈54 KiB), 12 is past the step ladder — so the
+    /// family's base registers at n_ctx 9 (canonical (7,2), footprint 8) with one rung of head
+    /// room, and siblings take the remaining rungs.
+    #[test]
+    fn qwen3moe_geometry_probe() {
+        let p = crate::config::params::palw_rc_shipped_params();
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) = &p.palw_consensus_mode else { panic!() };
+        for nctx in [4u32, 6, 8, 9, 10, 12, 16] {
+            let g = PalwQwen36GeometryV1 {
+                layer_count: 48,
+                full_attention_interval: 1,
+                hidden_dim: 2048,
+                attn_heads: 32,
+                attn_kv_heads: 4,
+                attn_head_dim: 128,
+                rope_dims: 128,
+                rope_freq_base_bits: 0x4B18_9680,
+                gdn_k_heads: 0,
+                gdn_v_heads: 0,
+                gdn_head_dim: 0,
+                gdn_conv_kernel: 0,
+                n_experts: 128,
+                experts_per_token: 8,
+                moe_dim: 768,
+                shared_dim: 0,
+                vocab_size: 151_936,
+                n_ctx: nctx,
+                n_threads: 1,
+                rms_eps_q: 17,
+                tile_len: 512,
+            };
+            let profile = match qwen36_profile_v1(g) { Ok(pr) => pr, Err(e) => { eprintln!("nctx {nctx}: profile err {e:?}"); continue } };
+            let canonical = crate::palw_base0_profile::rc_job_context(&profile, (nctx - 1).min(7), 2);
+            let reg = match crate::palw_class_admission_v2::palw_post_genesis_registration_v1(
+                profile.clone(), canonical.clone(), kaspa_hashes::Hash64::default(), 1, 1, 5, 0,
+                crate::palw_state_v2::PalwBondKeyV2(crate::tx::TransactionOutpoint::new(kaspa_hashes::Hash64::default(), 0)), vec![]) {
+                Ok(r) => r, Err(e) => { eprintln!("nctx {nctx}: builder err {e}"); continue }
+            };
+            let verdict = crate::palw_class_admission_v2::verify_class_admission_v2(b, &profile, &canonical, &reg);
+            match nctx {
+                4 | 6 | 8 | 9 | 10 => assert!(verdict.is_ok(), "n_ctx {nctx} fell out of the qwen3moe family's room: {verdict:?}"),
+                _ => assert!(verdict.is_err(), "n_ctx {nctx} was admitted — the qwen3moe ceiling moved, revisit the ladder comment"),
+            }
+        }
+    }
+}
 pub fn qwen36_profile_v1(g: PalwQwen36GeometryV1) -> Result<PalwShapeProfileV3, PalwStepError> {
     let (gdn_span, attn_span) = layer_spans(&g);
     let profile = PalwShapeProfileV3 {
