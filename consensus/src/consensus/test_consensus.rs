@@ -219,6 +219,48 @@ impl TestConsensus {
         Self::palw_v2_harness_keypair().verification_key.as_ref().to_vec()
     }
 
+    /// A receipt-lane (algo-7) carriage for `header`, signed or not.
+    ///
+    /// `signed: false` is the attacker: a spend whose challenge binds this header correctly and
+    /// whose signature is the right LENGTH and nothing else. That is precisely what
+    /// `validate_stateless_v3` accepts, and for a while it was all any node checked.
+    #[allow(dead_code)]
+    pub(crate) fn palw_v3_test_receipt_carriage(&self, header: &Header, signed: bool) -> Vec<u8> {
+        use kaspa_consensus_core::palw_freeprompt_v3::{
+            PALW_FP_V3_MLDSA87_SPEND_CONTEXT, PALW_FP_V3_VERSION, PalwReceiptSpendEnvelopeV3, PalwReceiptSpendUnsignedV3,
+            fp_spend_id_v3, spend_challenge_v3,
+        };
+        use kaspa_consensus_core::palw_mode_v2::palw_network_domain_v2;
+        use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
+        let network_id = self.params.net.to_string();
+        let network_domain = palw_network_domain_v2(network_id.as_bytes());
+        let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(header);
+        let claim_id = kaspa_hashes::Hash64::from_u64_word(0xFC);
+        let quantum_index = 0u32;
+        let bond = TransactionOutpoint::new(TransactionId::from_u64_word(0xB0), 0);
+        let kp = Self::palw_v2_harness_keypair();
+        let spend = PalwReceiptSpendUnsignedV3 {
+            version: PALW_FP_V3_VERSION,
+            network_domain,
+            challenge: spend_challenge_v3(network_domain, pre_pow, header.timestamp, header.nonce, claim_id, quantum_index, &bond),
+            claim_id,
+            quantum_index,
+            beacon_block: kaspa_hashes::Hash64::from_u64_word(0xBEAC),
+            producer_bond: bond,
+            producer_pubkey: Self::palw_v2_harness_pubkey(),
+        };
+        let signature = if signed {
+            let message = fp_spend_id_v3(&spend);
+            libcrux_ml_dsa::ml_dsa_87::sign(&kp.signing_key, message.as_byte_slice(), PALW_FP_V3_MLDSA87_SPEND_CONTEXT, [0u8; 32])
+                .expect("the harness signs")
+                .as_ref()
+                .to_vec()
+        } else {
+            vec![0x5A; kaspa_consensus_core::dns_finality::STAKE_ATTESTATION_SIG_LEN]
+        };
+        PalwReceiptSpendEnvelopeV3 { spend, signature }.encode()
+    }
+
     pub(crate) fn palw_v2_test_carriage(&self, header: &Header) -> Vec<u8> {
         use kaspa_consensus_core::palw_attempt_v2::{
             PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, challenge_v2, palw_network_domain_v2,

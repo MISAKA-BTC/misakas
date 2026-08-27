@@ -374,6 +374,78 @@ async fn palw_v2_state_walks_with_the_utxo_diff() {
 ///    header position derives. A block cannot claim a wrong root and keep a valid ticket.
 /// 2. **Re-mining the ticket for the new position gets a valid block with a lying root**, and
 ///    that is what the chain-level check is for: it never becomes the sink. Asserted the way this
+/// **One solve, unbounded blocks: the receipt lane inherited the attempt lane's shape without its fix.**
+///
+/// The proof-of-work pre-image EXCLUDES `palw_commitment` (`PalwCommitmentDigestRule::Exclude`,
+/// hashing/header.rs) while the block identity includes it. `validate_stateless_v3` checks the
+/// signature's LENGTH and recomputes the challenge — and the challenge commits to `pre_pow_hash`,
+/// `timestamp` and `nonce`, not to the signature. So on a node that never verifies the bytes, any
+/// solved receipt block can be re-signed with garbage, re-hashed, and re-announced as a different
+/// block, for free, without redoing the work. Every peer accepts, stores and relays each one.
+///
+/// The attempt lane (algo 6) documents this attack verbatim ten lines above the receipt arm and
+/// verifies `validate_signature_v2` against it. The receipt arm was written without the second
+/// half. This test is the receipt lane's copy of that gate; deleting the `validate_signature_v3`
+/// call in `check_palw_carriage_stateless` makes it pass a junk signature again.
+#[tokio::test]
+async fn palw_v3_a_receipt_carriage_with_a_junk_signature_is_refused_at_the_header() {
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+
+    let catalog = palw_v2_test_catalog();
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(palw_v2_test_bundle(&catalog));
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+
+    let honest = ctx.build_block_template(7, ctx.simulated_time + 1);
+
+    // A receipt-lane header whose spend binds THIS position correctly and carries a signature of
+    // the right length and no authority — exactly what the stateless list accepts.
+    let mut forged = honest.block.clone();
+    forged.header.pow_algo_id = kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3;
+    forged.header.palw_commitment = ctx.consensus.palw_v3_test_receipt_carriage(&forged.header, false);
+    forged.header.finalize();
+
+    match ctx.consensus.validate_and_insert_block(forged.to_immutable()).virtual_state_task.await {
+        Err(kaspa_consensus_core::errors::block::RuleError::BadPalwCarriageAdmission { algo_id: 7, reason }) => {
+            assert!(
+                reason.to_lowercase().contains("signature"),
+                "the refusal must NAME the signature — a receipt block refused for some other reason \
+                 would let this test pass while the gate stayed unwired. got: {reason}"
+            );
+        }
+        other => panic!("a receipt carriage with a junk signature must be refused at the header stage, got {other:?}"),
+    }
+
+    // **And the gate refuses the SIGNATURE, not the lane.** The same header with a real ML-DSA-87
+    // signature over the same spend must get past this stage — it is refused later, on the stateful
+    // facts (there is no such claim on this chain), and that is a different complaint. Without this
+    // half, a test that merely rejected every algo-7 block would look identical to a working gate.
+    let mut signed = honest.block.clone();
+    signed.header.pow_algo_id = kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3;
+    signed.header.palw_commitment = ctx.consensus.palw_v3_test_receipt_carriage(&signed.header, true);
+    signed.header.finalize();
+    // Anything other than a signature complaint is out of this gate's scope and deliberately not
+    // asserted. Measured while writing this: a correctly signed spend naming a claim this chain
+    // does not hold is ACCEPTED as a block — the stateful admission (`palw_v2_check_receipt_spend`)
+    // runs on the chain candidate, not on every insertion, so a receipt block that never becomes
+    // chain is never asked about its claim. That is a separate question and must not be smuggled
+    // into this test's assertions.
+    if let Err(kaspa_consensus_core::errors::block::RuleError::BadPalwCarriageAdmission { algo_id: 7, reason }) =
+        ctx.consensus.validate_and_insert_block(signed.to_immutable()).virtual_state_task.await
+    {
+        assert!(
+            !reason.to_lowercase().contains("signature"),
+            "a correctly signed spend must not be refused for its signature; got: {reason}"
+        );
+    }
+}
+
 ///    file's existing disqualification tests assert it — the sink does not move — because "did
 ///    not become the selected chain" is the property, and a status code is only its shadow.
 #[tokio::test]
