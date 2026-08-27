@@ -1,10 +1,22 @@
 # Qwen3.6-35B-A3B on the public testnet — what an operator does
 
-**What this is.** `testnet-11` (PALW ConsensusV2) now registers **two** execution classes at
-genesis: `PALW-BASE-0/rc`, the derived liveness floor every node can run from a seed, and
-**`PALW-QWEN36`**, a 35B hybrid model converted from
-`Qwen3.6-abliterated-35b-Claude-4.7-Q4_K_M.gguf`. This is the operator-side path for the second
-one: how to obtain the artifact, how to prove it is the right one, and what a node does with it.
+**What this is.** `testnet-11` (PALW ConsensusV2) registers **three** execution classes at genesis:
+
+| class | weights | artifact | what it is for |
+|---|---|---|---|
+| `PALW-BASE-0/rc` | derived from a seed | none | the liveness floor — every node runs it, no files |
+| `PALW-QWEN25-A16` | Qwen2.5-1.5B-Instruct | `.palwart`, 1.7 GiB | the dense tier, W8A16 |
+| `PALW-QWEN36` | Qwen3.6-35B-A3B | `.palwq36`, 33 GiB | the hybrid tier |
+
+This is the operator-side path for the two converted ones: how to obtain each artifact, how to
+prove it is the right one, and what a node does with it.
+
+**Why the dense class is W8A16 and not the floor's W8A8.** Static PTQ of a real checkpoint into a
+seven-bit activation stream degenerates — Qwen2.5's argmax collapses to a constant (ADR-0053). On
+W8A16 the same weights are FAITHFUL against their own float reference (top-1 45/57, top-5 56/57,
+rank correlation 0.893, per-layer stream cosine 0.98–1.00) and the model answers "The capital of
+France is Paris." A class is its graph, so those are two different classes and only one is worth a
+network's cadence.
 
 Every number below is measured on the reference host (M4 Pro, 24 GiB), not estimated.
 
@@ -28,7 +40,34 @@ disk: a node with the weights and a node without them fingerprint identically an
 
 ---
 
-## 1. Get the artifact
+## 1a. Get the DENSE artifact (Qwen2.5-1.5B)
+
+```bash
+# the checkpoint: config.json, tokenizer.json and model.safetensors in one directory
+cargo build --release -p misaka-palw-base0 --bin qwen25-convert
+./target/release/qwen25-convert /path/to/Qwen2.5-1.5B-Instruct --a16 --out qwen25-1.5b-a16.palwart
+```
+
+It prints the fidelity it measured and the artifact digest, which must be:
+
+```
+c00faa480f2344d4a737e5b2e87ab6064d8d6e42c1ffeb6aa0a14ed62134299a7c9dc08f15342cefca1e29390810e6d2c5879f4c3853ebe43a9e2d47ed57ba17
+```
+
+That is `PALW_RC_GENESIS_QWEN25_A16_ARTIFACT_ROOT`. **Cost:** 2.9 GiB read, ~3 s to convert, 1.7 GiB
+written. The node re-checks the digest on load (the container verifies it on decode).
+
+Try it before you trust it:
+
+```bash
+./target/release/base0-chat --artifact qwen25-1.5b-a16.palwart --tokenizer /path/to/tokenizer.json \
+  --prompt "What is the capital of France? Answer in one sentence."
+```
+
+**Producing for it costs 474 ms per block** — the canonical job is 14 prefill + 2 decode tokens,
+measured on the reference host, with 9.7 MB of committed material.
+
+## 1. Get the HYBRID artifact (Qwen3.6)
 
 Two routes end at the same 64-byte root. Take either.
 
