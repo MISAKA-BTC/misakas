@@ -2424,9 +2424,8 @@ pub fn palw_rc_params_with_classes(
         .ok_or(invalid("the base assembly carries no class registration"))?;
 
     let share = bundle.state.min_grantable_share_permille();
-    let (_profile, entry, object) =
-        crate::palw_qwen36_profile::qwen36_registration_v1(qwen36_artifact_root, share, slash, target)
-            .map_err(|_| invalid("the Qwen3.6 registration does not derive"))?;
+    let (_profile, entry, object) = crate::palw_qwen36_profile::qwen36_registration_v1(qwen36_artifact_root, share, slash, target)
+        .map_err(|_| invalid("the Qwen3.6 registration does not derive"))?;
     // The A16 dense class, when its artifact root is pinned. Registered at the SAME minimum
     // grantable share as the hybrid, from the same floor economics — a class does not choose its
     // own weight, and two entrants arriving in one genesis must not differ in how they were sized.
@@ -4780,6 +4779,11 @@ mod consensus_params_id_tests {
             // batch's re-genesis: the test networks mint a 10B premine, which is a genesis input and
             // therefore a fingerprint input. Mainnet's is untouched, which is the point of a change
             // that only re-genesis networks nobody has value on.
+            // **And once more for the HIGH ledger** (`fix/audit-batch-1`, 2026-08-27): fifteen
+            // findings fixed, of which `PALW_ATTEMPT_V2_VERSION` 4 -> 5, the lane split and the
+            // opening ceiling are ruleset fields. Their line derived 934ad9de before this merge;
+            // the value below is the re-derivation over BOTH lines, because a fingerprint is a
+            // function of the whole ruleset and never a sum of diffs.
             ("simnet", SIMNET_PARAMS, "dae24a4cddc3bd324d7e99dc61c9e14269b9a4619fecb639836b8286e144664f"),
             ("devnet", DEVNET_PARAMS, "f8981a530bf6070e4c27696d2666673ee36a1d9f1f5b4b315c4c7400b84136c0"),
             // And once more for the audit batch: the liveness floor gained a reserve
@@ -4787,7 +4791,7 @@ mod consensus_params_id_tests {
             // take it to 1‰, and the test networks re-genesis at a 10B premine. Both are inside
             // the bundle, so both move this value — re-derived once at the end of the merge rather
             // than carried from either line.
-            ("testnet-11", TESTNET11_PARAMS, "141035d18cdbaa536c87b450da5f7c964d0ff38e13553422b898f6cf773677f5"),
+            ("testnet-11", TESTNET11_PARAMS, "14c366eb9b1f8689f57f374a534f5b382f377e73cebc61911b82aa1efe9a02da"),
         ]
         .into_iter()
         .filter_map(|(name, params, expected)| {

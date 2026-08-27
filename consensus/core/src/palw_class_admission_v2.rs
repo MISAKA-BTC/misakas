@@ -279,14 +279,12 @@ pub fn derive_court_cost_v1(profile: &PalwShapeProfileV3) -> Result<PalwCourtCos
             // copy for a round and priced a lane-sliced node as if it opened whole rows.
             let lane_sliced = crate::palw_step_refute::palw_kernel_is_lane_sliced_v1(node.kernel_semantics_id)
                 || crate::palw_step_refute::palw_kernel_is_head_sliced_v1(node.kernel_semantics_id);
-            let strided_combine = node.kernel_semantics_id
-                == crate::palw_step::kernel_semantics_id_v1(crate::palw_step_refute::KDESC_Q36_MOE_COMBINE);
+            let strided_combine =
+                node.kernel_semantics_id == crate::palw_step::kernel_semantics_id_v1(crate::palw_step_refute::KDESC_Q36_MOE_COMBINE);
             let head_sliced_gdn = node.op_kind == Op::GatedDeltaNet
-                && node.kernel_semantics_id
-                    == crate::palw_step::kernel_semantics_id_v1(crate::palw_step_refute::KDESC_Q36_GDN_STEP);
+                && node.kernel_semantics_id == crate::palw_step::kernel_semantics_id_v1(crate::palw_step_refute::KDESC_Q36_GDN_STEP);
             let sliced_conv = node.op_kind == Op::SsmConv
-                && node.kernel_semantics_id
-                    == crate::palw_step::kernel_semantics_id_v1(crate::palw_step_refute::KDESC_Q36_SSM_CONV);
+                && node.kernel_semantics_id == crate::palw_step::kernel_semantics_id_v1(crate::palw_step_refute::KDESC_Q36_SSM_CONV);
             let opening = if node.weight_name.is_empty() {
                 0
             } else {
@@ -760,11 +758,18 @@ mod tests {
         // A literal here would be a third description of the class, rotting on its own schedule.
         let court = generous_court();
         let g = crate::palw_qwen25_profile::qwen25_admissible_geometry_v1(QWEN25_1_5B, &court)
-            .expect("some pair is admissible under the full ladder");
+            .expect("some pair is admissible under the over-provisioned ladder");
         qwen25_profile_v1(g).expect("the derived geometry is expressible")
     }
 
     /// The full ladder, with cost ceilings wide enough that only the ladder can refuse.
+    /// **Deliberately over-provisioned, and deliberately not relayable.**
+    ///
+    /// The tests that use this fixture are about ADMISSION MECHANICS with a big class present —
+    /// catalog roots, ladder sizing, share tables — not about any such class being deliverable. A
+    /// network actually configured this way could assemble closes it could not relay, which is
+    /// what `DEFAULT_MAX_CLOSE_BYTES` exists to refuse at registration; nothing here may be read
+    /// as a statement that a class admitted under it would work.
     fn generous_court() -> PalwCourtParamsV2 {
         PalwCourtParamsV2::with_cost_ceilings(PALW_STEP_MAX_LEAVES, 20, 2, u64::MAX, u64::MAX, u32::MAX)
             .expect("a court that refuses only on depth is legal")
@@ -1451,6 +1456,13 @@ mod tests {
             }
         }
         assert!(fits.is_empty(), "no tile length gives Qwen2.5-1.5B a close a transaction could carry, got {fits:?}");
+        assert!(
+            derive_court_cost_v1(&qwen25_profile_v1(PalwQwen25GeometryV1 { n_ctx: 2, tile_len: 64, ..QWEN25_1_5B }).unwrap())
+                .unwrap()
+                .max_close_bytes
+                > crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES,
+            "even at the smallest expressible context the cheapest close is over the carrier's budget"
+        );
 
         // **The declared 4,096-token context is not adjudicable at ANY legal tile length**, and
         // that is a change: against the hand-written 27-node layer table `tile_len` 16,384 reached

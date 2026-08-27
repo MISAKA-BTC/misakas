@@ -410,10 +410,53 @@ pub fn adjudicate_court_close_v2(
     // ladder is `Terminal` and only an arithmetic close can finish the job" — so this makes the
     // code agree with the sentence the ladder was built for.
     let narrowed = session.ladder.terminal_index().ok_or(PalwCourtV2Error::LadderNotTerminal)?;
-    if let PalwCourtVerdictProofV2::Arithmetic { refutation, .. } = proof {
-        let opened = refutation.output_opening.leaf_index;
-        if opened != narrowed {
-            return Err(PalwCourtV2Error::CloseIsNotTheNarrowedStep { opened, narrowed });
+    match proof {
+        PalwCourtVerdictProofV2::Arithmetic { refutation, .. } => {
+            let opened = refutation.output_opening.leaf_index;
+            if opened != narrowed {
+                return Err(PalwCourtV2Error::CloseIsNotTheNarrowedStep { opened, narrowed });
+            }
+        }
+        // **The same rule, in the arm that was exempt from it.**
+        //
+        // The paragraph above describes exactly this attack and then closed only one of the two
+        // doors: a `DecodeToken` close names its own `position`, so the accused could pick a token
+        // it had emitted correctly, take `NoFaultFound` — which reads as `ChallengerDefeated` —
+        // and buy its own acquittal for one transaction, at a position the bisection never chose.
+        // A ladder that narrows to a step and then lets either party be judged somewhere else is
+        // not a bisection; it is a formality in front of a free choice.
+        //
+        // The two spaces meet at the decode CALL: a leaf index maps to a coordinate whose
+        // `call_index` is the decode call that produced the token, and `position` indexes the same
+        // calls. Binding at call granularity is the right grain — one call emits one token, and
+        // the token is the whole subject of this arm.
+        //
+        // The mapping reads the close's own profile, which is not yet pinned to the claim here —
+        // and does not need to be. A close that forges a geometry to make its chosen position land
+        // on the narrowed step still meets `check_execution_root_binding` in
+        // `adjudicate_close_proof_v2` immediately below, so no verdict is ever produced from an
+        // unpinned binding. Checking the procedural rule first is also what keeps the two arms
+        // symmetric: both answer "is this a legal move in this session" before anything is read
+        // for its merits.
+        PalwCourtVerdictProofV2::DecodeToken { binding, position, .. } => {
+            let coord = crate::palw_step::canonical_step_coordinates(&binding.shape_profile, &binding.job_context, narrowed)
+                .ok_or(PalwCourtV2Error::CloseIsNotTheNarrowedStep { opened: u64::from(*position), narrowed })?;
+            if coord.call_index != *position {
+                return Err(PalwCourtV2Error::CloseIsNotTheNarrowedStep { opened: u64::from(*position), narrowed });
+            }
+        }
+        // **And the tiled arm, which is the same door.**
+        //
+        // `DecodeTokenTiled` names its own `position` exactly as the flat arm does. The rule above
+        // was written against the arm that existed when it was written; a new commitment scheme
+        // that skipped it would be a free choice of position again, and the fix would have closed
+        // one of three doors instead of one of two. Two schemes, one procedural rule.
+        PalwCourtVerdictProofV2::DecodeTokenTiled { binding, pin } => {
+            let coord = crate::palw_step::canonical_step_coordinates(&binding.shape_profile, &binding.job_context, narrowed)
+                .ok_or(PalwCourtV2Error::CloseIsNotTheNarrowedStep { opened: u64::from(pin.position), narrowed })?;
+            if coord.call_index != pin.position {
+                return Err(PalwCourtV2Error::CloseIsNotTheNarrowedStep { opened: u64::from(pin.position), narrowed });
+            }
         }
     }
     adjudicate_close_proof_v2(state, claim, proof, court)

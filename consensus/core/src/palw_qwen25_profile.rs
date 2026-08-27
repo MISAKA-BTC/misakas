@@ -322,11 +322,13 @@ pub fn qwen25_a16_profile_v1(geometry: PalwQwen25GeometryV1) -> Result<PalwShape
         }
     };
 
-    let mut pre_nodes = base0_ir_nodes_v1(QWEN25_A16_PRE_IR, ir_geometry(geometry.tile_len), Base0IrScopeV1::Graph, QWEN25_HEAD_TENSOR);
+    let mut pre_nodes =
+        base0_ir_nodes_v1(QWEN25_A16_PRE_IR, ir_geometry(geometry.tile_len), Base0IrScopeV1::Graph, QWEN25_HEAD_TENSOR);
     budget(&mut pre_nodes, QWEN25_A16_PRE_IR);
     let mut attn_nodes = base0_ir_nodes_v1(QWEN25_A16_LAYER_IR, ir_geometry(geometry.tile_len), Base0IrScopeV1::PerLayer, "");
     budget(&mut attn_nodes, QWEN25_A16_LAYER_IR);
-    let mut post_nodes = base0_ir_nodes_v1(QWEN25_A16_POST_IR, ir_geometry(geometry.tile_len), Base0IrScopeV1::Graph, QWEN25_HEAD_TENSOR);
+    let mut post_nodes =
+        base0_ir_nodes_v1(QWEN25_A16_POST_IR, ir_geometry(geometry.tile_len), Base0IrScopeV1::Graph, QWEN25_HEAD_TENSOR);
     budget(&mut post_nodes, QWEN25_A16_POST_IR);
 
     let profile = PalwShapeProfileV3 {
@@ -406,8 +408,10 @@ pub fn qwen25_a16_registration_v1(
     share_permille: u16,
     slash_value_per_pwu: u64,
     initial_target: u128,
-) -> Result<(PalwShapeProfileV3, crate::palw_mode_v2::PalwClassCatalogEntryV2, crate::palw_state_v2::PalwConsensusObjectV2), PalwStepError>
-{
+) -> Result<
+    (PalwShapeProfileV3, crate::palw_mode_v2::PalwClassCatalogEntryV2, crate::palw_state_v2::PalwConsensusObjectV2),
+    PalwStepError,
+> {
     let profile = qwen25_a16_profile_v1(QWEN25_1_5B_A16)?;
     let class_id = profile.shape_profile_id();
     let canonical = crate::palw_base0_profile::rc_job_context(&profile, QWEN25_A16_CANONICAL.0, QWEN25_A16_CANONICAL.1);
@@ -1030,7 +1034,13 @@ mod tests {
         // The class's own registered layout, not a fixture number: the binding check below
         // compares the carried map id against the profile's, and a fixture that files a made-up
         // one is a fixture testing a binding no producer could build.
-        let ckpt = crate::palw_state_chunk_map::integer_kv_checkpoint_profile_v1(8);
+        let ckpt = crate::palw_legs::PalwCheckpointProfileV1 {
+            version: crate::palw_legs::PALW_LEGS_OBJECT_VERSION_V1,
+            // This fixture's own interval; only the LAYOUT is the family's, and that is what
+            // `verify_binding_v1` pins.
+            checkpoint_interval: 8,
+            state_layout_id: crate::palw_state_chunk_map::integer_kv_state_layout_id_v1(),
+        };
         let state_chunk_map_id = crate::palw_state_chunk_map::integer_kv_state_chunk_map_id_v1();
         let adjudicate = |corrupt: bool| {
             let material = build(corrupt);

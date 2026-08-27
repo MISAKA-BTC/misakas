@@ -126,7 +126,11 @@ fn main() {
     // hand is large enough to run it.
     if args.iter().any(|a| a == "--show-ids") {
         println!("{}", ids.iter().map(|v| v.to_string()).collect::<Vec<_>>().join(","));
-        eprintln!("{} tokens, round-trip {}", ids.len(), if tokenizer.decode(&ids).ok().as_deref() == Some(text.as_str()) { "exact" } else { "LOSSY" });
+        eprintln!(
+            "{} tokens, round-trip {}",
+            ids.len(),
+            if tokenizer.decode(&ids).ok().as_deref() == Some(text.as_str()) { "exact" } else { "LOSSY" }
+        );
         return;
     }
     if ids.len() >= shape.max_position {

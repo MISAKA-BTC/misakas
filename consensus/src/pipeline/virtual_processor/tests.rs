@@ -1553,13 +1553,9 @@ async fn palw_rc_the_real_qwen25_a16_model_produces_a_block() {
     // THREE classes: the floor, the hybrid (its dev fixture's root — this drill is about the dense
     // one), and the dense model whose weights are on disk.
     let hybrid_root = misaka_palw_base0::qwen36::qwen36_dev_fixture(1, 8).artifact_root();
-    let params = kaspa_consensus_core::config::params::palw_rc_params_with_classes(
-        base_root,
-        hybrid_root,
-        Some(artifact_root),
-        registry,
-    )
-    .expect("the three-class RC genesis card assembles");
+    let params =
+        kaspa_consensus_core::config::params::palw_rc_params_with_classes(base_root, hybrid_root, Some(artifact_root), registry)
+            .expect("the three-class RC genesis card assembles");
     let bundle = match &params.palw_consensus_mode {
         kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) => b.clone(),
         _ => panic!("the RC ships a ConsensusV2 bundle"),

@@ -41,11 +41,11 @@ use crate::kernels::{
 };
 use kaspa_consensus_core::palw_base0_a16::{A16QuantParams, a16_add_elem, a16_requant, a16_rms_norm, a16_softmax_rows};
 use kaspa_consensus_core::palw_base0_ops::silu;
-use kaspa_hashes::Hash64;
 use kaspa_consensus_core::palw_qwen36_ops::{
-    Qwen36GdnParamsV1, Qwen36GdnStateV1, q36_gate_apply, q36_gdn_step, q36_l2_norm, q36_moe_combine, q36_mul_wide, q36_decay,
+    Qwen36GdnParamsV1, Qwen36GdnStateV1, q36_decay, q36_gate_apply, q36_gdn_step, q36_l2_norm, q36_moe_combine, q36_mul_wide,
     q36_rescale_row, q36_rms_norm_wide, q36_rope_partial, q36_router_topk, q36_sigmoid_gate, q36_ssm_conv,
 };
+use kaspa_hashes::Hash64;
 use std::collections::BTreeMap;
 
 /// Which arm a layer carries. `config.json` calls these `linear_attention` and `full_attention`
@@ -548,7 +548,6 @@ pub struct Qwen36Engine<'a> {
     residency: Option<std::sync::Mutex<Qwen36Residency>>,
 }
 
-
 impl<'a> Qwen36Engine<'a> {
     /// **One projection, through whichever weight representation the class registered.**
     ///
@@ -812,20 +811,20 @@ impl<'a> Qwen36Engine<'a> {
             let unit_q = q36_l2_norm(&qc[kh * hd..(kh + 1) * hd]).map_err(refuse("l2_q"))?;
             let vslice = &vc[vh * hd..(vh + 1) * hd];
             let c = decay_c.get(vh.min(decay_c.len().saturating_sub(1))).map(|p| p.zero).unwrap_or(0);
-            let biased = dt[vh].saturating_add(dt_bias.get(vh.min(dt_bias.len().saturating_sub(1))).map(|p| p.zero).unwrap_or(0) as i32);
+            let biased =
+                dt[vh].saturating_add(dt_bias.get(vh.min(dt_bias.len().saturating_sub(1))).map(|p| p.zero).unwrap_or(0) as i32);
             let decay = q36_decay(biased, c);
             let beta = q36_sigmoid_gate(&[beta_raw[vh]])[0] as i64;
             decays.push(decay as i32);
             betas.push(beta as i32);
-            let gdn_params =
-                Qwen36GdnParamsV1 {
-                    read: per_head(&read_rows, vh),
-                    delta: per_head(&delta_rows, vh),
-                    // The write is a shift, carried in the triple's `zero` so the store keeps one
-                    // wire format.
-                    write_shift: per_head(&write_rows, vh).zero as i32,
-                    out: per_head(&out_rows, vh),
-                };
+            let gdn_params = Qwen36GdnParamsV1 {
+                read: per_head(&read_rows, vh),
+                delta: per_head(&delta_rows, vh),
+                // The write is a shift, carried in the triple's `zero` so the store keeps one
+                // wire format.
+                write_shift: per_head(&write_rows, vh).zero as i32,
+                out: per_head(&out_rows, vh),
+            };
             let head_out =
                 q36_gdn_step(&mut cache.gdn[li][vh], &unit_k, vslice, &unit_q, decay, beta, gdn_params).map_err(refuse("gdn_step"))?;
             out.extend(head_out);
@@ -1526,7 +1525,6 @@ fn fixture_impl(layers: usize, experts: usize) -> Qwen36ArtifactV1 {
     }
     artifact
 }
-
 
 #[cfg(test)]
 mod tests {

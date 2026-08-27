@@ -182,6 +182,21 @@ pub use crate::palw_attempt_v2::palw_network_domain_v2;
 /// exceeds it cannot join a running chain, so it is chosen once, at genesis, for every class the
 /// network will ever admit — which is why `assemble_palw_rc_identity_v2` refuses an RC identity
 /// carrying any other value.
+///
+/// ## The other line derived 400 KiB, and 400 KiB does not relay
+///
+/// `fix/audit-batch-1` lowered this same field from 1 MiB for the same reason — a close no node
+/// would relay makes a court that "looks configured and is unreachable" — but sized it against
+/// `compute_mass` alone (`mass_per_tx_byte` is 1, so 480,000 mass reads as 480,000 bytes). The
+/// mempool checks BOTH arms: `check_transaction_standard.rs` rejects on `transient_mass` too, and
+/// that arm is `size x 4`. So the relay bound is 120,000 bytes, and 400 KiB is 3.4x past it — the
+/// larger number would have re-admitted exactly the class the change was meant to refuse. The
+/// derivation above is the transient arm, which is the binding one.
+///
+/// Their line also records that Qwen2.5-1.5B "needs 560 KiB and does not fit any ceiling a
+/// transaction can carry". That was true of a flat logits commitment and one Merkle path per leaf.
+/// It is no longer: the tiled logits root and range openings put the hybrid class's worst close at
+/// 73,636 bytes, and the A16 dense tier is registered against this same 80 KiB.
 pub const DEFAULT_MAX_CLOSE_BYTES: u64 = 80 * 1024;
 
 /// **The mempool's standard-transaction mass, mirrored** — the number
@@ -197,6 +212,7 @@ pub const PALW_MIRRORED_STANDARD_TX_MASS: u64 = 480_000;
 /// The largest STANDARD transaction, in bytes: transient mass is `size x 4`, and a transaction
 /// whose transient mass exceeds the standard limit is refused before it is relayed.
 pub const PALW_STANDARD_TX_BYTES: u64 = PALW_MIRRORED_STANDARD_TX_MASS / crate::constants::TRANSIENT_BYTE_TO_MASS_FACTOR;
+
 /// The floor's widest step is 32,768 multiply-accumulates. This is 512 times that: generous for a
 /// class of the floor's shape, and still milliseconds of scalar `int8` CPU, which is the budget the
 /// court was always sized for. A close is bounded to 80 KiB of payload, and a `MatMulQuant`'s
@@ -615,10 +631,26 @@ impl PalwConsensusParamsV2 {
         // `1..=999` range the moment it is not. When the receipt lane becomes producible this
         // becomes a two-sided check again — and it will be a ruleset change, which is where a
         // change of this shape belongs.
+        //
+        // **That moment already came, and the exemption outlived it.** The premise above —
+        // "the header gate rejects every algo-7 header before its admission path is reached" — is
+        // contradicted by `accepts_algo_id`, ten lines further down this same file, which returns
+        // true for `freeprompt.receipt_algorithm_id()`. Receipt blocks are producible and reach the
+        // census.
+        //
+        // With the exemption in place the error runs the other way from the one it was written to
+        // prevent: the attempt lane is expected to hold 1000‰ of a census that also counts receipt
+        // blocks, so it is measured as an UNDER-producer at every epoch boundary and its target is
+        // eased — without bound, and on an axis anyone can push, because minting receipt blocks
+        // dilutes the denominator. Meanwhile the receipt lane holds no share, so its own target
+        // never retargets at all.
+        //
+        // Restored to the two-sided check the paragraph above says belongs here. A V2 bundle
+        // arrives with a network's genesis, so this is a genesis-time choice: name a real split.
         let split = self.state.fp_attempt_share_permille();
-        if split != crate::palw_class_daa::PALW_CLASS_SHARE_DENOMINATOR {
+        if split == 0 || split >= crate::palw_class_daa::PALW_CLASS_SHARE_DENOMINATOR {
             return Err(PalwModeV2Error::Invalid(
-                "the receipt lane holds a cadence share on a network whose algorithm_id makes an algo-7 block                  impossible — every epoch would measure the attempt lane as an over-producer and divide its target                  to the floor, stopping the chain with no path back",
+                "both lanes are producible on a V2 network, so both must hold a cadence share: a lane with 0\u{2030} has no blocks to measure and a lane with 1000\u{2030} makes every other lane's production dilute its own expectation, easing its target without bound",
             ));
         }
 
@@ -891,6 +923,39 @@ pub fn palw_ruleset_id_v2(bundle: &PalwConsensusParamsV2) -> Hash64 {
 
 #[cfg(test)]
 pub(crate) mod tests {
+
+    /// **The court's close ceiling has to be a number a transaction can carry.**
+    ///
+    /// A close travels as the payload of a lifecycle carrier, and a carrier is an ordinary
+    /// standard transaction. Every paragraph that chose the old 1 MiB ceiling sized it against what
+    /// a CLASS wants; none asked what a carrier can hold, so the ceiling admitted closes no node
+    /// would relay — a court that looks configured and is unreachable, discoverable only by having
+    /// a dispute.
+    ///
+    /// **Which mass arm is the bound is the whole question.** `fix/audit-batch-1` derived 400 KiB
+    /// from `compute_mass` alone: `mass_per_tx_byte` is 1, so 480,000 mass reads as 480,000 bytes.
+    /// But `check_transaction_standard` checks BOTH arms and rejects on `transient_mass` too, and
+    /// that arm is `size x TRANSIENT_BYTE_TO_MASS_FACTOR` — four times the bytes. So the relayable
+    /// size is 120,000, not 480,000, and a 400 KiB ceiling is 3.4x past it: it would have
+    /// re-admitted exactly the unreachable court the change was written to refuse. This asserts the
+    /// binding arm, against the mirrored figure the module already guards from the side that owns
+    /// it.
+    #[test]
+    fn the_close_ceiling_fits_a_carrier_transaction() {
+        let payload_budget = PALW_STANDARD_TX_BYTES;
+        assert_eq!(payload_budget, 120_000, "the transient arm is size x 4, not size x 1");
+        assert!(
+            DEFAULT_MAX_CLOSE_BYTES < payload_budget,
+            "a close at the ceiling ({DEFAULT_MAX_CLOSE_BYTES} bytes) must fit a standard transaction ({payload_budget})"
+        );
+        // And not merely fit: the carrier's own weight has to fit beside it. An ML-DSA-87 signature
+        // script alone is a few thousand bytes.
+        let carrier_overhead = payload_budget - DEFAULT_MAX_CLOSE_BYTES;
+        assert!(carrier_overhead > 32 * 1024, "the carrier needs room of its own beside the openings, got {carrier_overhead}");
+        // The number the other line would have shipped, refused here so the reasoning cannot be
+        // re-derived by accident.
+        assert!(400 * 1024 > payload_budget, "400 KiB was never relayable");
+    }
     use super::*;
 
     fn h64(v: u64) -> Hash64 {
@@ -914,7 +979,7 @@ pub(crate) mod tests {
         // Carries the same carve `conforming_bundle`'s `reward` declares: this helper is used to
         // REPLACE that bundle's state, and dropping the carve on the way would trip the coherence
         // check instead of testing the thing the caller named.
-        PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, min_collateral, 1000, 0)
+        PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, min_collateral, 900, 0)
             .unwrap()
             .with_worker_carve_permille(620)
             .unwrap()
@@ -949,11 +1014,12 @@ pub(crate) mod tests {
             base_class_id: base,
             class_catalog_root: h64(0xCA7),
             court_catalog_root: h64(0xC0517),
-            // Split 1000‰: the attempt lane holds the whole cadence, because `algorithm_id` makes
-            // an algo-7 block impossible and a lane that cannot produce must not be expected to.
-            // The carve is set on BOTH, because `validate` requires them equal — the fixture has
-            // to be a bundle a node would actually start on, or the tests below prove nothing.
-            state: PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, base, 4, 1000, 100, 1000, 0)
+            // Split 900‰/100‰: both lanes are producible (`accepts_algo_id` takes algo-7), so both
+            // must hold a real share or the retarget measures one against a census the other
+            // dilutes. The carve is set on BOTH, because `validate` requires them equal — the
+            // fixture has to be a bundle a node would actually start on, or the tests below prove
+            // nothing.
+            state: PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, base, 4, 1000, 100, 900, 0)
                 .unwrap()
                 .with_worker_carve_permille(620)
                 .unwrap()
@@ -1560,17 +1626,27 @@ pub(crate) mod tests {
                 }),
             ),
         ];
-        // **A lane that cannot produce holds no cadence** (launch blockers §6) — asserted here
-        // rather than only in the shipped bundle, so a future edit that reintroduces a receipt
-        // permille fails a test instead of shipping a chain that stops.
+        // **A producible lane holds a real cadence share** — the rule this test used to assert the
+        // negation of.
         //
-        // The retarget measures each lane against the COMBINED census. An unproducible lane's
-        // permille stays in the expectation while its blocks are missing from the total, so the
-        // attempt lane holds 100% of what happened while being expected to hold `split` of it —
-        // an over-producer verdict at EVERY epoch boundary, each dividing the target by up to
-        // `class_daa_max_factor`, until it reaches the floor of 1 and the class lottery refuses
-        // every attempt. The shipped bundle carried 150‰ and would have stopped ~63 epochs in.
-        for bad_split in [1u16, 150, 800, 999] {
+        // It was written when the premise held that algo-7 headers were unreachable, so an
+        // unproducible receipt lane's permille would stay in the retarget's expectation while its
+        // blocks were missing from the census, and the attempt lane would be judged an
+        // over-producer at every boundary until its target hit the floor. `accepts_algo_id` takes
+        // algo-7, so the premise was false and the error ran the other way: at 1000‰ the attempt
+        // lane is expected to hold a census that receipt blocks dilute, so it is measured as an
+        // UNDER-producer and eased without bound — on an axis anyone can push by minting receipt
+        // blocks.
+        //
+        // The failing values are therefore the two ENDS, not the middle (see ADR-0055). Zero is
+        // refused a layer earlier — `PalwStateParamsV2::new` will not build it — so the bundle
+        // gate only ever sees the other end.
+        assert!(
+            PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, 100, 0, 0).is_err(),
+            "a zero attempt share is refused before a bundle can carry it"
+        );
+        {
+            let bad_split = crate::palw_class_daa::PALW_CLASS_SHARE_DENOMINATOR;
             let mut bundle = conforming_bundle();
             bundle.state = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, bundle.base_class_id, 4, 1000, 100, bad_split, 0)
                 .unwrap()
@@ -1582,7 +1658,7 @@ pub(crate) mod tests {
                 .unwrap();
             assert!(
                 bundle.validate().is_err(),
-                "a {bad_split}permille attempt share leaves the receipt lane a cadence it can never produce"
+                "a {bad_split}permille attempt share leaves one of the two producible lanes without a cadence"
             );
         }
 

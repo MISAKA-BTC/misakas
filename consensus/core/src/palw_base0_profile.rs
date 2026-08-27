@@ -49,7 +49,10 @@ use crate::palw_step::{
     PalwStepLaneV1, PalwStepNodeRoleV1, PalwStepNodeV1, PalwStepOpKindV1, PalwStepOutLenV1, kernel_semantics_id_v1,
 };
 use crate::palw_step_refute::{
-    KDESC_A16_ADD_ELEM, KDESC_A16_ATTN_SCORES, KDESC_A16_ATTN_VALUES, KDESC_A16_EMBED, KDESC_A16_MATMUL_REQUANT, KDESC_A16_MATMUL_RESCALE, KDESC_A16_MUL_ELEM, KDESC_A16_REQUANTIZE, KDESC_A16_RMS_NORM, KDESC_A16_ROPE, KDESC_A16_SOFTMAX, KDESC_BASE0_ADD_ELEM, KDESC_BASE0_EMBED, KDESC_BASE0_MATMUL, KDESC_BASE0_MUL_ELEM, KDESC_BASE0_REQUANTIZE, KDESC_BASE0_RESCALE, KDESC_BASE0_RMS_NORM, KDESC_BASE0_ROPE, KDESC_BASE0_SILU, KDESC_BASE0_SOFTMAX, KDESC_Q36_SILU,
+    KDESC_A16_ADD_ELEM, KDESC_A16_ATTN_SCORES, KDESC_A16_ATTN_VALUES, KDESC_A16_EMBED, KDESC_A16_MATMUL_REQUANT,
+    KDESC_A16_MATMUL_RESCALE, KDESC_A16_MUL_ELEM, KDESC_A16_REQUANTIZE, KDESC_A16_RMS_NORM, KDESC_A16_ROPE, KDESC_A16_SOFTMAX,
+    KDESC_BASE0_ADD_ELEM, KDESC_BASE0_EMBED, KDESC_BASE0_MATMUL, KDESC_BASE0_MUL_ELEM, KDESC_BASE0_REQUANTIZE, KDESC_BASE0_RESCALE,
+    KDESC_BASE0_RMS_NORM, KDESC_BASE0_ROPE, KDESC_BASE0_SILU, KDESC_BASE0_SOFTMAX, KDESC_Q36_SILU,
 };
 use crate::{Hash64, palw_step::PalwStepError};
 
@@ -267,7 +270,6 @@ pub const BASE0_POST_IR: &[Base0IrNodeV1] = &[
 
 /// `const fn` so the table above reads as a list rather than as a struct literal thirty-six times.
 
-
 /// **The A16 tier's dense layer, in `engine_a16.rs`'s own order** — twenty-seven steps against
 /// [`BASE0_LAYER_IR`]'s thirty-seven, because W8A16 spends no step re-narrowing an activation to
 /// eight bits between every pair of matmuls.
@@ -334,8 +336,7 @@ pub const QWEN25_A16_LAYER_IR: &[Base0IrNodeV1] = &[
 ];
 
 /// The A16 tier's pre and post tables — the gather, and the head's three steps.
-pub const QWEN25_A16_PRE_IR: &[Base0IrNodeV1] =
-    &[n(PalwStepOpKindV1::EmbedLookup, KDESC_A16_EMBED, "token_embd.weight", Hidden, &[])];
+pub const QWEN25_A16_PRE_IR: &[Base0IrNodeV1] = &[n(PalwStepOpKindV1::EmbedLookup, KDESC_A16_EMBED, "token_embd.weight", Hidden, &[])];
 
 pub const QWEN25_A16_POST_IR: &[Base0IrNodeV1] = &[
     n(PalwStepOpKindV1::RmsNorm, KDESC_A16_RMS_NORM, "", Hidden, &[LayerIn]),
@@ -727,7 +728,11 @@ pub const PALW_RC_BASE0_GEOMETRY: PalwBase0GeometryV1 = PalwBase0GeometryV1 {
 
 /// The canonical inference BASE-0 is paid per, and the worst case its ladder must walk.
 pub const PALW_RC_BASE0_CANONICAL: (u32, u32) = (8, 4);
-pub const PALW_RC_BASE0_WORST_CASE: (u32, u32) = (64, 64);
+/// The longest job the class admits, and therefore the one its ladder and its cost ceiling are
+/// checked against: the whole context as prefill plus one decode call. It was `(64, 64)`, which
+/// `n_ctx` 12 no longer expresses — and which was never the class's worst case anyway, because
+/// nothing charges an attempt more for a longer job, so an attacker picks the length.
+pub const PALW_RC_BASE0_WORST_CASE: (u32, u32) = (11, 2);
 
 /// **Everything the RC's BASE-0 registration needs, from the ONE thing code cannot mint.**
 ///

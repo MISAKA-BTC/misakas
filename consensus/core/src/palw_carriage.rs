@@ -1517,8 +1517,11 @@ mod tests {
             hidden_dim: 4,
             dtype: PalwLogitsDtypeV2::F32Le,
         };
-        let ckpt =
-            PalwCheckpointProfileV1 { version: PALW_LEGS_OBJECT_VERSION_V1, checkpoint_interval: 2, state_layout_id: h64(0x51) };
+        let ckpt = PalwCheckpointProfileV1 {
+            version: PALW_LEGS_OBJECT_VERSION_V1,
+            checkpoint_interval: 2,
+            state_layout_id: crate::palw_state_chunk_map::integer_kv_state_layout_id_v1(),
+        };
         let mut builder = PalwLegsCommitmentBuilderV1::new(context, tap, ckpt).expect("canonical inputs");
         for position in 0..3u32 {
             builder.push_activation_row(0, 0, position, &[1.0, 2.0, 3.0, 4.0 + position as f32]).unwrap();
@@ -1729,10 +1732,10 @@ mod tests {
         // `bond_outpoint`), so the attestation payload and every payload carrying a PALW-S object
         // version moved with it.
         let golden: [(&str, &str); 5] = [
-            ("commitment", "2ef18007f17d928e80c6ecf94e6e9b71eabd24ba9b879f7045a18b72665fef14"),
-            ("attestation", "50a5feacbf6b5ccd608e8e40977c14b2f3c863795edfba0669799a4d817d0f07"),
-            ("opening-call", "aa0328847eae54b9fab887704631f020fed2e468d2906c564c32f2577001eea1"),
-            ("opening-answer", "bb106d592e6d7ce811f40471497198d230cd6611106689b70bba180f6113bea7"),
+            ("commitment", "868a99a9a90d59596020685d4d771b7c6734e18d20e91890c448c1c79ea44581"),
+            ("attestation", "1fba18962ac22800bdd7a52a25b27a17a6efff4492f391e7f8a8c7451b2fc2b4"),
+            ("opening-call", "5dc500952b1503bc3b7e91571341bb4ba95b0fcadc244ae7f76e43ebbf71052d"),
+            ("opening-answer", "612dfcfe5b663816707a3d23e14b0e1c579e8e96d3f1c8d75832db6e9de3d988"),
             ("refutation", "284fb2fb9fcc2c95c49b8f575a6afb8b73b5bb2762ffd0fc47bded18452cd02d"),
         ];
         for (carriage, (name, expected)) in all_five().iter().zip(golden) {

@@ -702,7 +702,7 @@ mod tests {
         let objects = vec![PalwConsensusObjectV2::ClassRegistered {
             class_id: h64(2),
             artifact_root: h64(22),
-            slash_value_per_pwu: 1,
+            slash_value_per_pwu: 5,
             pwu_rule: PalwPwuRuleV2::DerivedV1 { pwu_per_inference: 7 },
             initial_target,
             share_permille: 100,

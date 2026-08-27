@@ -3471,6 +3471,21 @@ pub fn validator_participation_reward_outputs(
         if spent.saturating_add(reward) > participation_pool {
             break;
         }
+        // **And a COUNT cap, which the pool cap is not.**
+        //
+        // `PALW_V2_MAX_VALIDATOR_PAYOUTS` is what the coinbase's isolation bound reserves for this
+        // fan-out, and nothing here respected it: one output per attesting validator, bounded only
+        // by value. Enough validators bonding — a number in the low tens, not a large one — makes
+        // every coinbase exceed `outputs_limit`, so every block is rejected by every node, forever,
+        // with no way back because the validators are registered on chain. The chain would halt
+        // for the offence of being popular.
+        //
+        // Same tail semantics as the pool cap, and they work for the same reason: the paid keys go
+        // into `rewarded_keys` and are skipped next block, so the queue drains in canonical order
+        // instead of starving.
+        if outputs.len() as u64 >= crate::palw_state_v2::PALW_V2_MAX_VALIDATOR_PAYOUTS {
+            break;
+        }
         spent += reward;
         outputs.push(TransactionOutput::new(reward as u64, p2pkh_mldsa87_spk(payload)));
         rewarded_keys.push(key);
@@ -12450,6 +12465,21 @@ mod tests {
 
         // Degenerate denominator → no outputs.
         assert!(validator_participation_reward_outputs(1000, 0, &[(op1, 5, a, 60)], &empty).0.is_empty());
+
+        // **The COUNT cap, which the pool cap is not.** `PALW_V2_MAX_VALIDATOR_PAYOUTS` is what the
+        // coinbase's isolation bound reserves for this fan-out; nothing here respected it, so
+        // enough validators bonding made every coinbase exceed `outputs_limit` and every node
+        // reject every block, permanently. A large pool and small rewards is exactly the shape
+        // that used to produce an unbounded number of outputs.
+        let cap = crate::palw_state_v2::PALW_V2_MAX_VALIDATOR_PAYOUTS as usize;
+        let many: Vec<_> = (0..(cap as u64 + 5))
+            .map(|i| (TransactionOutpoint::new(Hash64::from_u64_word(0x900 + i), 0), 5u64, [0xc3u8; 64], 1u64))
+            .collect();
+        // Each attester holds 1 of an expected 1000, so every reward is a thousandth of the pool:
+        // twenty-one of them fit comfortably, and only the COUNT cap can stop the fan-out.
+        let (outs, keys) = validator_participation_reward_outputs(1_000_000, 1_000, &many, &empty);
+        assert_eq!(outs.len(), cap, "the fan-out is capped at what the coinbase can carry");
+        assert_eq!(keys.len(), cap, "and exactly the paid ones are marked, so the tail drains next block");
     }
 
     #[test]

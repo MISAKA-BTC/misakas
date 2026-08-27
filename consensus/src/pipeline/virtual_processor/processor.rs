@@ -4680,9 +4680,24 @@ impl VirtualStateProcessor {
         let slot = accepted_daa.checked_add(panel_params.anchor_delay())?;
         let mut candidate: Option<(BlockHash, u64)> = None;
         for block in self.reachability_service.default_backward_chain_iterator(from) {
-            let daa = self.headers_store.get_header(block).ok()?.daa_score;
+            let header = self.headers_store.get_header(block).ok()?;
+            let daa = header.daa_score;
             if daa >= slot {
-                candidate = Some((block, daa));
+                // **The anchor has to cost an inference to move.**
+                //
+                // This block's hash is one of the two randomness inputs the panel draw runs on, so
+                // whoever can cheaply produce blocks at the anchor slot can re-roll the panel that
+                // will judge them. Every lane was eligible, and the receipt lane is precisely the
+                // one whose headers cost nothing to re-produce — a producer could mint algo-7
+                // blocks until one landed at the slot with a hash whose draw it liked.
+                //
+                // Restricting the anchor to the attempt lane prices that grind at one full
+                // inference per try, which is the same charge the job anchor makes for the same
+                // reason. Skipping over a receipt block only delays the anchor to the next attempt
+                // block, and the attempt lane is the main lane on a V2 network.
+                if !kaspa_consensus_core::pow_layer0::algo_id_carries_no_chain_position(header.pow_algo_id) {
+                    candidate = Some((block, daa));
+                }
                 continue;
             }
             // The first block BELOW the slot is the witness; the last one recorded at or above it
@@ -4800,7 +4815,17 @@ impl VirtualStateProcessor {
             .ok_or_else(|| "the draw slot overflows the DAA space".to_string())?;
         // Derived from the block's OWN selected parent, so the walk is the candidate's and the
         // beacon cannot be chosen by the party it decides for.
-        let beacon = self.palw_beacon_fact_of_candidate(header.direct_parents()[0], slot).map_err(|e| e.to_string())?;
+        //
+        // **`direct_parents()[0]` is not the selected parent.** It is the first entry of an array
+        // the block's own producer writes and orders, so the sentence above was describing a
+        // property the code did not have: a producer could list whichever parent it liked first and
+        // walk the beacon down that branch instead, re-rolling the draw it was about to be judged
+        // by. GHOSTDAG's answer is the one nobody chooses.
+        let selected_parent = self
+            .ghostdag_store
+            .get_selected_parent(header.hash)
+            .map_err(|e| format!("the candidate's own ghostdag data is unreadable: {e}"))?;
+        let beacon = self.palw_beacon_fact_of_candidate(selected_parent, slot).map_err(|e| e.to_string())?;
         let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2(self.network_id_bytes.as_slice());
         // **The composed admission, which is what this site was always missing.**
         //
@@ -4899,6 +4924,11 @@ impl VirtualStateProcessor {
     ) -> Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
         use kaspa_consensus_core::palw_state_v2::PalwClaimPhaseV2;
         let Some(panel_params) = self.palw_panel_params_v2.as_ref() else { return Vec::new() };
+        // The seat-eligibility floor is the registry's own, so the derivation here and the one the
+        // acceptance layer runs read the same number (see `palw_bond_may_take_work_v2`).
+        let Some(min_collateral) = self.palw_state_params_v2.as_ref().map(|p| p.min_collateral_sompi()) else {
+            return Vec::new();
+        };
         let mut out = Vec::new();
         for (claim_id, claim) in state.claims_iter() {
             if !matches!(claim.phase, PalwClaimPhaseV2::Provisional) {
@@ -4912,8 +4942,13 @@ impl VirtualStateProcessor {
             };
             // A registry too small to seat a panel yields nothing rather than a short one: a
             // partial jury is `derive_panel_v2`'s fail-closed refusal, and it stays that.
-            let Ok(seats) = kaspa_consensus_core::palw_panel_v2::derive_panel_v2(state, panel_params, claim_id, anchor.anchor_block)
-            else {
+            let Ok(seats) = kaspa_consensus_core::palw_panel_v2::derive_panel_v2(
+                state,
+                panel_params,
+                claim_id,
+                anchor.anchor_block,
+                min_collateral,
+            ) else {
                 continue;
             };
             out.push(kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::PanelBound {

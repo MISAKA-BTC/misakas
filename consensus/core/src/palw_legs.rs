@@ -1555,7 +1555,11 @@ mod tests {
     }
 
     fn checkpoint_profile() -> PalwCheckpointProfileV1 {
-        PalwCheckpointProfileV1 { version: PALW_LEGS_OBJECT_VERSION_V1, checkpoint_interval: 2, state_layout_id: h64(0x51) }
+        PalwCheckpointProfileV1 {
+            version: PALW_LEGS_OBJECT_VERSION_V1,
+            checkpoint_interval: 2,
+            state_layout_id: crate::palw_state_chunk_map::integer_kv_state_layout_id_v1(),
+        }
     }
 
     fn row(seed: u32) -> PalwActivationLeafV1 {
@@ -1752,8 +1756,8 @@ mod tests {
         let expected: Vec<(&str, String)> = vec![
             ("scheme_id", "426f7278957cf5c552e5a583993735712737498515ee9c1f9b880dfcba0abdd2533e6d7782cb38e65029ea91e89e12e331d04425a3e704fe5d9711689c21b653".to_string()),
             ("tap_profile", "c48db4ab8b8af2ab4d164ef87d25c621e7084b6bb673e25a951eedf3fe1004156eff9c05afe0c8178fa66055bd72cf919fc162bc156061262023d6edf0d3e98f".to_string()),
-            ("checkpoint_profile", "d5ccb637270deeb4503e656c593d029f43af02018651bd4d06f1c4bd4d751400b17f69b3e29d5371b3eae087a85ddbd00e0b5bb9fea694251a1d9751b028ade3".to_string()),
-            ("committed_root", "1bdeb18789f5124cf71261fb57796c5330363aa1fb1f99a68fc923813d0a9678d7985d2c26fbe67df1b40e4c2cc09edd97da80b370d2e351545eaeb33e9eb49d".to_string()),
+            ("checkpoint_profile", "604336f3a27ddd49eff6568063f528b375c2f8bfcd4e473229ad48f203268626d45b274172e098c8ec9f46b83c109fa8f5ef3ce5d5f8bb059af692592299e37c".to_string()),
+            ("committed_root", "c044399292567fa19b4340230536f5fe2261859b139f1a2a76f296bedc854165711266e6fd02e66c3c2888989d7769635ec5a544765833d58342ce6a3a55f92e".to_string()),
         ];
         assert_eq!(got, expected);
     }
@@ -2385,8 +2389,11 @@ mod tests {
     fn an_empty_checkpoint_leg_takes_the_sentinel_not_a_root_over_nothing() {
         let context = test_context();
         // Interval 8 over a 2-decode-call job ⇒ no checkpoint boundary is reached.
-        let profile =
-            PalwCheckpointProfileV1 { version: PALW_LEGS_OBJECT_VERSION_V1, checkpoint_interval: 8, state_layout_id: h64(0x51) };
+        let profile = PalwCheckpointProfileV1 {
+            version: PALW_LEGS_OBJECT_VERSION_V1,
+            checkpoint_interval: 8,
+            state_layout_id: crate::palw_state_chunk_map::integer_kv_state_layout_id_v1(),
+        };
         let mut builder = PalwLegsCommitmentBuilderV1::new(context.clone(), tap_profile(), profile).unwrap();
         assert_eq!(builder.expected_checkpoint_count(), 0);
         for tap_slot in 0..tap_profile().tap_count() {

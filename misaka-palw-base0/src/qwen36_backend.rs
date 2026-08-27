@@ -196,9 +196,8 @@ pub fn qwen36_roots_v1(job: &PalwJobContextV2, shape_id: Hash64, run: &Qwen36Run
     // would put `prefill × vocab` lanes behind the root for no adjudicable claim: no token is
     // selected from them, so no decode-token dispute can ever open one.
     let prefill = job.declared_prefill_tokens as usize;
-    let selecting: Vec<Vec<i32>> = (0..run.generated.len())
-        .map(|i| run.logits_rows.get(prefill.saturating_sub(1) + i).cloned().unwrap_or_default())
-        .collect();
+    let selecting: Vec<Vec<i32>> =
+        (0..run.generated.len()).map(|i| run.logits_rows.get(prefill.saturating_sub(1) + i).cloned().unwrap_or_default()).collect();
     debug_assert!(
         selecting
             .iter()
@@ -334,11 +333,16 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         let Some(run) = qwen36_material_decode_v1(material) else {
             return PalwMaterialVerdictV1::Unverifiable;
         };
-        // The seat needs the job the claim was made under, and the material does not carry it.
-        // What it can check without one is that the material is self-consistent with the claimed
-        // trace root under the job the ANCHOR implies — which is the job the chain asked for, and
-        // the only one a producer was entitled to run.
-        let Ok((job, _)) = self.job_for_anchor(claim_anchor(&claim)) else {
+        // **The claim carries the anchor now**, so the seat recomputes under the job the CHAIN
+        // asked for rather than under one the material names about itself. That is the whole point
+        // of the field: without it a gossiped capture is a re-usable asset — mine a fresh block,
+        // announce the borrowed roots, and both halves of the check agree because both read the
+        // capture. A seat with no anchor (`Hash64::default()`) has no block to bind to and says
+        // `Unverifiable` rather than guessing a job.
+        if claim.anchor == Hash64::default() {
+            return PalwMaterialVerdictV1::Unverifiable;
+        }
+        let Ok((job, _)) = self.job_for_anchor(claim.anchor) else {
             return PalwMaterialVerdictV1::Unverifiable;
         };
         let (trace_root, _, execution_root, _) = qwen36_roots_v1(&job, self.shape_id, &run);
@@ -350,15 +354,6 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
     }
 }
 
-/// The claim carries roots and not an anchor, and the job is a function of the anchor. Until the
-/// seat check is handed the template it is checking, the anchor is recovered from the execution
-/// root's own binding — which is only possible because the root commits to the context. This is a
-/// placeholder shape, marked as one: it returns a default and so a seat check against a claim it
-/// was not given the job for reports `Mismatch` rather than pretending.
-fn claim_anchor(_claim: &PalwClaimRootsV1) -> Hash64 {
-    Hash64::default()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -366,7 +361,13 @@ mod tests {
 
     fn backend() -> Qwen36Backend {
         let artifact = crate::qwen36::test_fixture(4, 8);
-        Qwen36Backend::new(std::sync::Arc::new(artifact), "Qwen3.6-fixture", (4, 2), Hash64::from_u64_word(0x36), b"misaka-palw-test".to_vec())
+        Qwen36Backend::new(
+            std::sync::Arc::new(artifact),
+            "Qwen3.6-fixture",
+            (4, 2),
+            Hash64::from_u64_word(0x36),
+            b"misaka-palw-test".to_vec(),
+        )
     }
 
     /// **A producer can run the job an anchor implies, and two producers get the same roots.**
@@ -428,7 +429,10 @@ mod tests {
         extra.push(0);
         assert!(qwen36_material_decode_v1(&extra).is_none(), "trailing bytes are not this format");
         assert_eq!(
-            a.verify_material(b"not material", PalwClaimRootsV1 { execution_root: out.execution_root, trace_root: out.trace_root }),
+            a.verify_material(
+                b"not material",
+                PalwClaimRootsV1 { execution_root: out.execution_root, trace_root: out.trace_root, anchor: Hash64::from_u64_word(7) }
+            ),
             PalwMaterialVerdictV1::Unverifiable
         );
     }
@@ -451,7 +455,13 @@ mod tests {
     fn a_job_longer_than_the_table_is_refused() {
         let artifact = crate::qwen36::test_fixture(2, 8);
         let context = artifact.shape.max_position as u32;
-        let a = Qwen36Backend::new(std::sync::Arc::new(artifact), "Qwen3.6-fixture", (context, 1), Hash64::from_u64_word(0x36), b"misaka-palw-test".to_vec());
+        let a = Qwen36Backend::new(
+            std::sync::Arc::new(artifact),
+            "Qwen3.6-fixture",
+            (context, 1),
+            Hash64::from_u64_word(0x36),
+            b"misaka-palw-test".to_vec(),
+        );
         assert!(a.job_for_anchor(Hash64::default()).is_err());
     }
 

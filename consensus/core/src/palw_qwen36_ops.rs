@@ -429,12 +429,7 @@ pub const QWEN36_MAX_GROUP_EXP: i8 = 20;
 /// ```text
 /// out[c] = narrow( Σ_g 2^exps[c,g] · Σ_{i in group g} w[c·n+i] · x[i] )
 /// ```
-pub fn q36_matmul_grouped(
-    weights: &[i8],
-    exps: &[i8],
-    x: &[i32],
-    params: &[A16QuantParams],
-) -> Result<Vec<i32>, PalwQwen36OpError> {
+pub fn q36_matmul_grouped(weights: &[i8], exps: &[i8], x: &[i32], params: &[A16QuantParams]) -> Result<Vec<i32>, PalwQwen36OpError> {
     check_a16(x)?;
     let n = x.len();
     let out_dim = params.len();
@@ -1315,11 +1310,7 @@ mod tests {
         let direct = q36_decay(dt, c);
         let want = (-0.137f64 * 18.0).exp();
         assert_eq!(identity, 0, "the identity was expected to underflow — if it no longer does, say so");
-        assert!(
-            (direct as f64 / ONE as f64 - want).abs() < 2e-2 * want,
-            "decay {direct} ({}) vs {want}",
-            direct as f64 / ONE as f64
-        );
+        assert!((direct as f64 / ONE as f64 - want).abs() < 2e-2 * want, "decay {direct} ({}) vs {want}", direct as f64 / ONE as f64);
     }
 
     #[test]

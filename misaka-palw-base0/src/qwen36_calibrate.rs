@@ -214,7 +214,13 @@ pub fn router_params(row_scales: &[f64], e_in: i32, absmax: f64) -> (Vec<A16Quan
 /// * `read`: `S·k` is `(value · 2^e_state) × Q15` → the value code scale, so `2^(e_value − e_state − 15)`.
 /// * `write`: `u ⊗ k` is `(code at e_value) × Q15` → the state scale, so `2^(e_state − e_value − 15)`.
 /// * `out`: `S·q` likewise, into the output site's exponent.
-pub fn gdn_params(e_state: i32, e_value: i32, e_delta: i32, e_out: i32, d_k: usize) -> (A16QuantParams, A16QuantParams, i32, A16QuantParams) {
+pub fn gdn_params(
+    e_state: i32,
+    e_value: i32,
+    e_delta: i32,
+    e_out: i32,
+    d_k: usize,
+) -> (A16QuantParams, A16QuantParams, i32, A16QuantParams) {
     (
         state_triple(2f64.powi(e_value - e_state - 15)),
         // The delta is formed at `v`'s scale and narrowed to its own, which is finer because the

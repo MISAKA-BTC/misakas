@@ -612,7 +612,8 @@ fn main() {
                     // Without it a 56-position run saturates the state's output at `i32::MAX` while
                     // the 8-position calibration reported room to spare.
                     let grow = cal::horizon_growth_bits(decay_lanes.get(vh).copied().unwrap_or(1.0), prompt.len(), max_position);
-                    let e_state = cal::site_exponent(head_max(&state_lanes, vh, 1, site(&calibration, &g("linear_state")))) + 15 - grow;
+                    let e_state =
+                        cal::site_exponent(head_max(&state_lanes, vh, 1, site(&calibration, &g("linear_state")))) + 15 - grow;
                     // `v` is the conv output's third block, `[2·dk, 2·dk + dv)`.
                     let e_v = cal::site_exponent_with(
                         head_max(&v_lanes, 2 * dk + vh * hd, hd, site(&calibration, &g("linear_conv"))),
@@ -621,7 +622,8 @@ fn main() {
                     v_exponents.push(e_v);
                     // Wide out: the recurrence's row is normalized per head and never reduced
                     // across heads, so it is sized against the `i32` rail like the state.
-                    let e_o = cal::site_exponent(head_max(&out_lanes, vh * hd, hd, site(&calibration, &g("linear_state_out")))) + 15 - grow;
+                    let e_o =
+                        cal::site_exponent(head_max(&out_lanes, vh * hd, hd, site(&calibration, &g("linear_state_out")))) + 15 - grow;
                     // The delta rule cancels, so `β(v − w)` is far below `v` and gets its own,
                     // finer exponent — measured, not inherited.
                     let e_delta = cal::site_exponent(head_max(&delta_lanes, vh, 1, site(&calibration, &g("linear_delta"))));
@@ -668,7 +670,10 @@ fn main() {
                 // a factor of two on the loud heads and a hundred and twenty-eight on head 17.
                 let mut conv_act: Vec<A16QuantParams> = Vec::with_capacity(width);
                 let block = |from: usize, len: usize| {
-                    cal::site_exponent_with(head_max(&v_lanes, from, len, site(&calibration, &g("linear_conv"))), cal::PRODUCT_HEADROOM_BITS)
+                    cal::site_exponent_with(
+                        head_max(&v_lanes, from, len, site(&calibration, &g("linear_conv"))),
+                        cal::PRODUCT_HEADROOM_BITS,
+                    )
                 };
                 for kh in 0..linear_k_heads {
                     let e = block(kh * hd, hd);

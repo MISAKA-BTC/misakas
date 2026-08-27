@@ -255,7 +255,9 @@ pub fn base0_execute_for_attempt_v1(
     let mut cache = KvCache::new(artifact);
     // The class's own checkpoint profile, at the producer's interval — the same object the binding
     // files, so the capture and the commitment cannot disagree about the layout or the cadence.
-    let checkpoint_profile = kaspa_consensus_core::palw_state_chunk_map::integer_kv_checkpoint_profile_v1(1);
+    let checkpoint_profile = kaspa_consensus_core::palw_state_chunk_map::integer_kv_checkpoint_profile_v1(
+        kaspa_consensus_core::palw_state_chunk_map::PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1,
+    );
     let mut checkpoints = crate::legs::Base0CheckpointCaptureV1::new(ctx, profile, &checkpoint_profile);
     let mut logits_rows: Vec<Vec<i32>> = Vec::with_capacity(decode_tokens);
     let mut generated: Vec<u32> = Vec::with_capacity(decode_tokens);
@@ -1360,9 +1362,14 @@ mod tests {
         let history = ctx.declared_prefill_tokens + call;
         assert_eq!(long.inputs.len(), 2, "the scores node reads two refs");
         assert_eq!(anchored.inputs.len(), 2, "anchored too — the anchor replaces leaves, not rows");
-        let leaves =
-            |r: &kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1| (r.inputs[0].preimages.len(), r.inputs[1].preimages.len());
-        assert_eq!(leaves(&long), (tiles_of(kv_dim) * 0 + 2, history as usize * tiles_of(kv_dim)), "the long set is not the history it should be");
+        let leaves = |r: &kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1| {
+            (r.inputs[0].preimages.len(), r.inputs[1].preimages.len())
+        };
+        assert_eq!(
+            leaves(&long),
+            (tiles_of(kv_dim) * 0 + 2, history as usize * tiles_of(kv_dim)),
+            "the long set is not the history it should be"
+        );
         assert_eq!(leaves(&anchored), (2, tiles_of(kv_dim)), "the anchored set is not one cached position");
         // On this fixture: 12 → 4 total leaves, the cache's share 10 → 2. On the RC's worst-case
         // shape (prefill 64, decode 64, kv_dim 256, tile_len 64) the same arithmetic is 508 → 4.

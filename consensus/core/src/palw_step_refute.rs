@@ -40,8 +40,7 @@ use crate::palw_step::{
     kernel_semantics_id_v1,
 };
 use crate::palw_step_leg::{
-    PalwStepBindingV2, PalwStepFaultV1, PalwStepOpeningV1, PalwStepRefutationVerdictV1, PalwStepTileLeafV1,
-    step_tile_leaf_hash_v1,
+    PalwStepBindingV2, PalwStepFaultV1, PalwStepOpeningV1, PalwStepRefutationVerdictV1, PalwStepTileLeafV1, step_tile_leaf_hash_v1,
 };
 use crate::palw_transcendental::{ggml_v_silu_v1, glibc_expf_v1};
 
@@ -687,15 +686,16 @@ fn qwen36_row(
             .map_err(|_| PalwStepRefuteError::Unadjudicable)?;
         let len = u32::try_from(count.checked_mul(width).ok_or(PalwStepRefuteError::Unadjudicable)?)
             .map_err(|_| PalwStepRefuteError::Unadjudicable)?;
-        let bytes = weights
-            .operand_bytes(node.weight_name.as_str(), layer, offset, len)
-            .ok_or(PalwStepRefuteError::Unadjudicable)?;
+        let bytes = weights.operand_bytes(node.weight_name.as_str(), layer, offset, len).ok_or(PalwStepRefuteError::Unadjudicable)?;
         if bytes.len() != len as usize {
             return Err(PalwStepRefuteError::Unadjudicable);
         }
         bytes
             .chunks_exact(width)
-            .map(|c| A16QuantParams::from_wire(c).map_err(|_| PalwStepRefuteError::InputSetNotCanonical("an a16 parameter triple is malformed")))
+            .map(|c| {
+                A16QuantParams::from_wire(c)
+                    .map_err(|_| PalwStepRefuteError::InputSetNotCanonical("an a16 parameter triple is malformed"))
+            })
             .collect()
     };
     let fixed_width = || -> Result<usize, PalwStepRefuteError> {
@@ -791,9 +791,8 @@ fn qwen36_row(
             let start = (token as u64).checked_mul(width as u64).ok_or(PalwStepRefuteError::Unadjudicable)?;
             let start = u32::try_from(start).map_err(|_| PalwStepRefuteError::Unadjudicable)?;
             let width32 = u32::try_from(width).map_err(|_| PalwStepRefuteError::Unadjudicable)?;
-            let row = weights
-                .operand_bytes(node.weight_name.as_str(), layer, start, width32)
-                .ok_or(PalwStepRefuteError::Unadjudicable)?;
+            let row =
+                weights.operand_bytes(node.weight_name.as_str(), layer, start, width32).ok_or(PalwStepRefuteError::Unadjudicable)?;
             if row.len() != width {
                 return Err(PalwStepRefuteError::Unadjudicable);
             }
@@ -813,15 +812,16 @@ fn qwen36_row(
             if out_dim == 0 {
                 return Err(PalwStepRefuteError::InputSetNotCanonical("a16 matmul output width is zero"));
             }
-            let first = (gather.0.tile_index as usize).checked_mul(node.tile_len as usize).ok_or(PalwStepRefuteError::Unadjudicable)?;
+            let first =
+                (gather.0.tile_index as usize).checked_mul(node.tile_len as usize).ok_or(PalwStepRefuteError::Unadjudicable)?;
             if first >= out_dim {
                 return Err(PalwStepRefuteError::InputSetNotCanonical("the challenged tile is past the node's output width"));
             }
             let rows = (node.tile_len as usize).min(out_dim - first);
-            let byte_offset =
-                u32::try_from(first.checked_mul(x.len()).ok_or(PalwStepRefuteError::Unadjudicable)?).map_err(|_| PalwStepRefuteError::Unadjudicable)?;
-            let byte_len =
-                u32::try_from(rows.checked_mul(x.len()).ok_or(PalwStepRefuteError::Unadjudicable)?).map_err(|_| PalwStepRefuteError::Unadjudicable)?;
+            let byte_offset = u32::try_from(first.checked_mul(x.len()).ok_or(PalwStepRefuteError::Unadjudicable)?)
+                .map_err(|_| PalwStepRefuteError::Unadjudicable)?;
+            let byte_len = u32::try_from(rows.checked_mul(x.len()).ok_or(PalwStepRefuteError::Unadjudicable)?)
+                .map_err(|_| PalwStepRefuteError::Unadjudicable)?;
             let w = weights
                 .operand_bytes(node.weight_name.as_str(), layer, byte_offset, byte_len)
                 .ok_or(PalwStepRefuteError::Unadjudicable)?;
@@ -943,9 +943,8 @@ fn qwen36_row(
                 .and_then(|p| p.checked_mul(pairs as u64 * 8))
                 .and_then(|v| u32::try_from(v).ok())
                 .ok_or(PalwStepRefuteError::Unadjudicable)?;
-            let table = weights
-                .operand_bytes(node.weight_name.as_str(), layer, offset, bytes)
-                .ok_or(PalwStepRefuteError::Unadjudicable)?;
+            let table =
+                weights.operand_bytes(node.weight_name.as_str(), layer, offset, bytes).ok_or(PalwStepRefuteError::Unadjudicable)?;
             if table.len() != pairs * 8 {
                 return Err(PalwStepRefuteError::Unadjudicable);
             }
@@ -1004,8 +1003,7 @@ fn qwen36_row(
                 let (n, _) = profile.resolve_node_slot(table_first_slot + r as u32).ok_or(PalwStepRefuteError::Unadjudicable)?;
                 n.tile_len as u64
             };
-            let rows: Vec<Vec<i32>> =
-                inputs.iter().map(|opened| extract(opened, src_tile, s0, s1)).collect::<Result<_, _>>()?;
+            let rows: Vec<Vec<i32>> = inputs.iter().map(|opened| extract(opened, src_tile, s0, s1)).collect::<Result<_, _>>()?;
             if rows.iter().any(|r| r.len() != channels) {
                 return Err(PalwStepRefuteError::InputSetNotCanonical("the window's positions disagree about the channel count"));
             }
@@ -1053,13 +1051,10 @@ fn qwen36_row(
             }
             let pairs = rotary / 2;
             let bytes = u32::try_from(pairs * 8).map_err(|_| PalwStepRefuteError::Unadjudicable)?;
-            let offset = true_position()
-                .and_then(|p| p.checked_mul(pairs as u64 * 8))
-                .ok_or(PalwStepRefuteError::Unadjudicable)?;
+            let offset = true_position().and_then(|p| p.checked_mul(pairs as u64 * 8)).ok_or(PalwStepRefuteError::Unadjudicable)?;
             let offset = u32::try_from(offset).map_err(|_| PalwStepRefuteError::Unadjudicable)?;
-            let table = weights
-                .operand_bytes(node.weight_name.as_str(), layer, offset, bytes)
-                .ok_or(PalwStepRefuteError::Unadjudicable)?;
+            let table =
+                weights.operand_bytes(node.weight_name.as_str(), layer, offset, bytes).ok_or(PalwStepRefuteError::Unadjudicable)?;
             if table.len() != pairs * 8 {
                 return Err(PalwStepRefuteError::Unadjudicable);
             }
@@ -1068,10 +1063,9 @@ fn qwen36_row(
             let clamp = {
                 let name = format!("{}.clamp", node.weight_name);
                 let width = A16QuantParams::WIRE_BYTES;
-                let bytes = weights
-                    .operand_bytes(name.as_str(), layer, 0, width as u32)
-                    .ok_or(PalwStepRefuteError::Unadjudicable)?;
-                A16QuantParams::from_wire(&bytes).map_err(|_| PalwStepRefuteError::InputSetNotCanonical("the rope clamp triple is malformed"))?
+                let bytes = weights.operand_bytes(name.as_str(), layer, 0, width as u32).ok_or(PalwStepRefuteError::Unadjudicable)?;
+                A16QuantParams::from_wire(&bytes)
+                    .map_err(|_| PalwStepRefuteError::InputSetNotCanonical("the rope clamp triple is malformed"))?
             };
             Ok(out(q36::q36_rope_partial(&x, head_dim, rotary, &cos, &sin, clamp).map_err(shape36)?))
         }
@@ -1116,7 +1110,9 @@ fn qwen36_row(
                         let offset = (rs - first_tile * st) as usize;
                         let take = (re - rs) as usize;
                         if consumed + offset + take > opened.len() {
-                            return Err(PalwStepRefuteError::InputSetNotCanonical("the combine's opened tiles do not cover its ranges"));
+                            return Err(PalwStepRefuteError::InputSetNotCanonical(
+                                "the combine's opened tiles do not cover its ranges",
+                            ));
                         }
                         outputs.extend(opened[consumed + offset..consumed + offset + take].iter().map(|v| *v as i32));
                         consumed += run_lanes;
@@ -1155,7 +1151,11 @@ fn qwen36_row(
             }
             let row = as_i32(&inputs[0]);
             let series = as_i32(&inputs[1]);
-            let count = if op == Qwen36Op::AttnScores { heads.saturating_mul(series.len() / (kv_heads * d_head).max(1)) } else { heads * d_head };
+            let count = if op == Qwen36Op::AttnScores {
+                heads.saturating_mul(series.len() / (kv_heads * d_head).max(1))
+            } else {
+                heads * d_head
+            };
             let p = params(0, count.max(1))?;
             if op == Qwen36Op::AttnScores {
                 Ok(out(a16::a16_attn_scores(&row, &series, heads, kv_heads, d_head, &p).map_err(shape16)?))
@@ -1203,7 +1203,9 @@ fn qwen36_row(
                 let decay = extract(&step[3], tiles[3], slices[3].0, slices[3].1)?;
                 let beta = extract(&step[4], tiles[4], slices[4].0, slices[4].1)?;
                 if unit_k.len() != hd_k || v.len() != hd_v || unit_q.len() != hd_k || decay.len() != 1 || beta.len() != 1 {
-                    return Err(PalwStepRefuteError::InputSetNotCanonical("a replay position's slices do not match the head geometry"));
+                    return Err(PalwStepRefuteError::InputSetNotCanonical(
+                        "a replay position's slices do not match the head geometry",
+                    ));
                 }
                 last = q36::q36_gdn_step(&mut state, &unit_k, &v, &unit_q, decay[0] as i64, beta[0] as i64, gdn).map_err(shape36)?;
             }
@@ -1907,7 +1909,8 @@ pub fn tiled_logits_trace_root_v1(ctx: &crate::palw_v2::PalwJobContextV2, logits
     let ctx_hash = ctx.context_hash();
     let row_roots: Vec<Hash64> =
         logits_rows.iter().enumerate().map(|(r, row)| tiled_logits_row_root_v1(&ctx_hash, r as u32, row)).collect();
-    let rows_root = crate::palw_step_leg::step_merkle_root_v1(&row_roots).expect("a run has at least one row and fewer than the leg cap");
+    let rows_root =
+        crate::palw_step_leg::step_merkle_root_v1(&row_roots).expect("a run has at least one row and fewer than the leg cap");
     let mut ids = Vec::with_capacity(generated.len() * 4);
     for t in generated {
         ids.extend_from_slice(&t.to_le_bytes());
@@ -2164,7 +2167,8 @@ pub fn check_tiled_decode_token_refutation_v1(
     // the producer commits `decode` rows, one per generated token, each the row its token was
     // selected from.
     let row_count = decode as u64;
-    let recomputed_row_root = crate::palw_step_leg::step_opening_root_v1(row_count, &pin.row_opening).map_err(|_| bad("the row opening does not walk"))?;
+    let recomputed_row_root =
+        crate::palw_step_leg::step_opening_root_v1(row_count, &pin.row_opening).map_err(|_| bad("the row opening does not walk"))?;
     if pin.row_opening.leaf_index != position as u64 || pin.row_opening.leaf_hash != pin.row_root {
         return Err(bad("the row opening does not open the challenged row's root"));
     }
@@ -2195,28 +2199,29 @@ pub fn check_tiled_decode_token_refutation_v1(
     if committed >= vocab {
         return Err(bad("the committed token is past the registered vocabulary"));
     }
-    let open_tile = |lanes: &[i32], opening: &crate::palw_step_leg::PalwStepOpeningV1, lane: usize| -> Result<i32, PalwStepRefuteError> {
-        let tile = lane / PALW_LOGITS_TILE_LANES;
-        let expected_len = if (tile as u64) + 1 == tiles && !vocab.is_multiple_of(PALW_LOGITS_TILE_LANES) {
-            vocab % PALW_LOGITS_TILE_LANES
-        } else {
-            PALW_LOGITS_TILE_LANES
+    let open_tile =
+        |lanes: &[i32], opening: &crate::palw_step_leg::PalwStepOpeningV1, lane: usize| -> Result<i32, PalwStepRefuteError> {
+            let tile = lane / PALW_LOGITS_TILE_LANES;
+            let expected_len = if (tile as u64) + 1 == tiles && !vocab.is_multiple_of(PALW_LOGITS_TILE_LANES) {
+                vocab % PALW_LOGITS_TILE_LANES
+            } else {
+                PALW_LOGITS_TILE_LANES
+            };
+            if lanes.len() != expected_len {
+                return Err(bad("an opened tile is not the scheme's width"));
+            }
+            if opening.leaf_index != tile as u64 {
+                return Err(bad("an opening does not name the lane's own tile"));
+            }
+            if opening.leaf_hash != tiled_logits_tile_leaf_v1(&ctx_hash, pin.position, tile as u32, lanes) {
+                return Err(bad("an opened tile's lanes do not hash to its leaf"));
+            }
+            let root = crate::palw_step_leg::step_opening_root_v1(tiles, opening).map_err(|_| bad("a tile opening does not walk"))?;
+            if root != pin.row_root {
+                return Err(bad("a tile opening does not reach the challenged row's root"));
+            }
+            Ok(lanes[lane % PALW_LOGITS_TILE_LANES])
         };
-        if lanes.len() != expected_len {
-            return Err(bad("an opened tile is not the scheme's width"));
-        }
-        if opening.leaf_index != tile as u64 {
-            return Err(bad("an opening does not name the lane's own tile"));
-        }
-        if opening.leaf_hash != tiled_logits_tile_leaf_v1(&ctx_hash, pin.position, tile as u32, lanes) {
-            return Err(bad("an opened tile's lanes do not hash to its leaf"));
-        }
-        let root = crate::palw_step_leg::step_opening_root_v1(tiles, opening).map_err(|_| bad("a tile opening does not walk"))?;
-        if root != pin.row_root {
-            return Err(bad("a tile opening does not reach the challenged row's root"));
-        }
-        Ok(lanes[lane % PALW_LOGITS_TILE_LANES])
-    };
     let beat_lane = pin.beat_lane as usize;
     if beat_lane >= vocab {
         return Err(bad("the beating lane is past the registered vocabulary"));
@@ -2268,7 +2273,9 @@ fn check_base0_decode_pin(binding: &PalwStepBindingV2, pin: &PalwBase0DecodeToke
     // tiled class is malformed evidence whatever it authenticates: the court adjudicating it would
     // be pricing and checking a commitment the class never promised.
     if binding.shape_profile.logits_scheme_id != flat_logits_scheme_id_v1() {
-        return Err(PalwStepRefuteError::InputSetNotCanonical("this class does not commit whole logits rows — the flat pin is not its scheme"));
+        return Err(PalwStepRefuteError::InputSetNotCanonical(
+            "this class does not commit whole logits rows — the flat pin is not its scheme",
+        ));
     }
     let decode = binding.job_context.exact_decode_tokens as usize;
     if pin.logits_rows.len() != decode {
@@ -3812,8 +3819,11 @@ pub(crate) mod tests {
         let profile_hash = p.shape_profile_id();
         let ckpt_profile = PalwCheckpointProfileV1 {
             version: crate::palw_legs::PALW_LEGS_OBJECT_VERSION_V1,
+            // The interval stays this fixture's own — only the LAYOUT is the family's, which is
+            // what `verify_binding_v1` pins. See its comment for why the interval belongs in the
+            // class catalog rather than here.
             checkpoint_interval: 8,
-            state_layout_id: h64(0x55),
+            state_layout_id: crate::palw_state_chunk_map::integer_kv_state_layout_id_v1(),
         };
         let step_root = step_leg_root_v1(&ctx_hash, &profile_hash, material.leaf_count, &material.merkle_root);
         let ckpt_root =
@@ -3951,8 +3961,11 @@ pub(crate) mod tests {
         let profile_hash = p.shape_profile_id();
         let ckpt_profile = PalwCheckpointProfileV1 {
             version: crate::palw_legs::PALW_LEGS_OBJECT_VERSION_V1,
+            // The interval stays this fixture's own — only the LAYOUT is the family's, which is
+            // what `verify_binding_v1` pins. See its comment for why the interval belongs in the
+            // class catalog rather than here.
             checkpoint_interval: 8,
-            state_layout_id: h64(0x55),
+            state_layout_id: crate::palw_state_chunk_map::integer_kv_state_layout_id_v1(),
         };
         let step_root = step_leg_root_v1(&ctx_hash, &profile_hash, material.leaf_count, &material.merkle_root);
         let ckpt_root =
@@ -4467,7 +4480,8 @@ pub(crate) mod tests {
         let alien_coord = PalwStepCoordinateV1 { call_index: 0, node_slot: 0, position: 1, tile_index: 0 };
         let alien_idx = canonical_step_leaf_index(&binding.shape_profile, &binding.job_context, &alien_coord).unwrap();
         refutation.inputs[0].preimages[0] = tile_preimage(&rows, &binding, alien_coord);
-        refutation.inputs[0].run_siblings[0] = crate::palw_step_leg::step_merkle_range_siblings_v1(&material.leaf_hashes, alien_idx as usize, 1).unwrap();
+        refutation.inputs[0].run_siblings[0] =
+            crate::palw_step_leg::step_merkle_range_siblings_v1(&material.leaf_hashes, alien_idx as usize, 1).unwrap();
         let got = check_execution_step_refutation_v1(&refutation, &NoWeights);
         assert!(
             matches!(got, Err(PalwStepRefuteError::InputSetNotCanonical(_))),
@@ -4634,11 +4648,8 @@ pub(crate) mod tests {
         let decode = logits_rows.len();
         let row = &logits_rows[position as usize];
         let tiles: Vec<Vec<i32>> = row.chunks(PALW_LOGITS_TILE_LANES).map(<[i32]>::to_vec).collect();
-        let tile_leaves: Vec<Hash64> = tiles
-            .iter()
-            .enumerate()
-            .map(|(t, lanes)| tiled_logits_tile_leaf_v1(&ctx_hash, position, t as u32, lanes))
-            .collect();
+        let tile_leaves: Vec<Hash64> =
+            tiles.iter().enumerate().map(|(t, lanes)| tiled_logits_tile_leaf_v1(&ctx_hash, position, t as u32, lanes)).collect();
         let path_for = |leaves: &[Hash64], index: usize| -> Vec<Hash64> {
             crate::palw_step_leg::step_merkle_path_v1(leaves, index).expect("the test's trees are inside the leg bounds")
         };
@@ -4657,9 +4668,17 @@ pub(crate) mod tests {
                 siblings: path_for(&row_roots, position as usize),
             },
             committed_tile_lanes: tiles[ct].clone(),
-            committed_opening: PalwStepOpeningV1 { leaf_index: ct as u64, leaf_hash: tile_leaves[ct], siblings: path_for(&tile_leaves, ct) },
+            committed_opening: PalwStepOpeningV1 {
+                leaf_index: ct as u64,
+                leaf_hash: tile_leaves[ct],
+                siblings: path_for(&tile_leaves, ct),
+            },
             beat_tile_lanes: tiles[bt].clone(),
-            beat_opening: PalwStepOpeningV1 { leaf_index: bt as u64, leaf_hash: tile_leaves[bt], siblings: path_for(&tile_leaves, bt) },
+            beat_opening: PalwStepOpeningV1 {
+                leaf_index: bt as u64,
+                leaf_hash: tile_leaves[bt],
+                siblings: path_for(&tile_leaves, bt),
+            },
             beat_lane,
         }
     }
@@ -4738,8 +4757,7 @@ pub(crate) mod tests {
         binding.job_context.shape_profile_id = binding.shape_profile.shape_profile_id();
         binding.full_logits_trace_root = base0_logits_trace_root_v1(&binding.job_context, &pin.logits_rows, &pin.generated_token_ids);
         rebind_committed_root(&mut binding);
-        let err = check_base0_decode_token_refutation_v1(&binding, &pin, 0)
-            .expect_err("a flat pin cannot adjudicate a tiled class");
+        let err = check_base0_decode_token_refutation_v1(&binding, &pin, 0).expect_err("a flat pin cannot adjudicate a tiled class");
         assert!(
             matches!(err, PalwStepRefuteError::InputSetNotCanonical(why) if why.contains("flat pin is not its scheme")),
             "refused as evidence, by name"
@@ -4754,13 +4772,16 @@ pub(crate) mod tests {
             row_root: Hash64::default(),
             row_opening: crate::palw_step_leg::PalwStepOpeningV1 { leaf_index: 0, leaf_hash: Hash64::default(), siblings: vec![] },
             committed_tile_lanes: vec![],
-            committed_opening: crate::palw_step_leg::PalwStepOpeningV1 { leaf_index: 0, leaf_hash: Hash64::default(), siblings: vec![] },
+            committed_opening: crate::palw_step_leg::PalwStepOpeningV1 {
+                leaf_index: 0,
+                leaf_hash: Hash64::default(),
+                siblings: vec![],
+            },
             beat_tile_lanes: vec![],
             beat_opening: crate::palw_step_leg::PalwStepOpeningV1 { leaf_index: 0, leaf_hash: Hash64::default(), siblings: vec![] },
             beat_lane: 0,
         };
-        let err = check_tiled_decode_token_refutation_v1(&binding, &hollow)
-            .expect_err("a tiled pin cannot adjudicate a flat class");
+        let err = check_tiled_decode_token_refutation_v1(&binding, &hollow).expect_err("a tiled pin cannot adjudicate a flat class");
         assert!(
             matches!(err, PalwStepRefuteError::InputSetNotCanonical(why) if why.contains("tiled pin is not its scheme")),
             "refused as evidence, by name — before its emptiness is even looked at"

@@ -26,8 +26,8 @@ fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let path =
-        flag(&args, "--artifact").unwrap_or_else(|| die("usage: qwen36-run --artifact <file> [--root-only] [--tokens ids] [--generate N]".into()));
+    let path = flag(&args, "--artifact")
+        .unwrap_or_else(|| die("usage: qwen36-run --artifact <file> [--root-only] [--tokens ids] [--generate N]".into()));
     let tokens: Vec<usize> = flag(&args, "--tokens")
         .map(|v| v.split(',').filter_map(|t| t.trim().parse().ok()).collect())
         .unwrap_or_else(|| vec![9707, 11, 1879, 0, 3555, 374]);
@@ -251,7 +251,8 @@ fn main() {
                     a.0 /= median;
                 }
                 alpha.sort_by(|a, b| b.0.total_cmp(&a.0));
-                let spread: Vec<String> = alpha.iter().take(3).chain(alpha.iter().rev().take(2)).map(|(a, h)| format!("h{h}:{a:.2}")).collect();
+                let spread: Vec<String> =
+                    alpha.iter().take(3).chain(alpha.iter().rev().take(2)).map(|(a, h)| format!("h{h}:{a:.2}")).collect();
                 println!("{:38} scale/median  {}", "", spread.join(" "));
             }
         }

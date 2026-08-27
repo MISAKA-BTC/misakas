@@ -300,12 +300,8 @@ pub fn step_range_opening_root_v1(leaf_count: u64, opening: &PalwStepRangeOpenin
     if opening.siblings.len() > 2 * PALW_STEP_LEG_MAX_OPENING_SIBLINGS {
         return Err(PalwStepLegError::OpeningTooDeep { got: opening.siblings.len(), max: 2 * PALW_STEP_LEG_MAX_OPENING_SIBLINGS });
     }
-    let mut nodes: Vec<Hash64> = opening
-        .leaf_hashes
-        .iter()
-        .enumerate()
-        .map(|(i, leaf)| step_merkle_leaf(opening.first_leaf_index + i as u64, leaf))
-        .collect();
+    let mut nodes: Vec<Hash64> =
+        opening.leaf_hashes.iter().enumerate().map(|(i, leaf)| step_merkle_leaf(opening.first_leaf_index + i as u64, leaf)).collect();
     let (mut a, mut b) = (opening.first_leaf_index, opening.first_leaf_index + k);
     let mut width = leaf_count;
     let mut siblings = opening.siblings.iter();
@@ -349,7 +345,11 @@ pub fn step_range_opening_root_v1(leaf_count: u64, opening: &PalwStepRangeOpenin
 /// The challenger side: the sibling set [`step_range_opening_root_v1`] consumes for
 /// `[start, start + count)` of `ordered_leaf_hashes` — the same one-implementation rule
 /// [`step_merkle_path_v1`] follows.
-pub fn step_merkle_range_siblings_v1(ordered_leaf_hashes: &[Hash64], start: usize, count: usize) -> Result<Vec<Hash64>, PalwStepLegError> {
+pub fn step_merkle_range_siblings_v1(
+    ordered_leaf_hashes: &[Hash64],
+    start: usize,
+    count: usize,
+) -> Result<Vec<Hash64>, PalwStepLegError> {
     let total = ordered_leaf_hashes.len() as u64;
     if total == 0 || total > PALW_STEP_LEG_MAX_LEAVES {
         return Err(PalwStepLegError::LeafCountOutOfRange { got: total, max: PALW_STEP_LEG_MAX_LEAVES });
@@ -894,15 +894,19 @@ pub enum PalwStepFaultV1 {
     DecodeTokenMismatch {
         position: u32,
     } = 16,
+    /// The binding's checkpoint profile is not the family's canonical one — a free interval let a
+    /// producer file zero checkpoints, and made two honest parties compute different execution
+    /// roots for the same job (discriminants 0-16 unmoved).
+    CheckpointProfileNotCanonical = 17,
     /// **The committed job exceeds the class's registered context.** The class's every court cost
     /// is derived over `profile.n_ctx`; a job whose footprint — `prefill + exact_decode − 1`
     /// cached positions, the enumeration's own count from `step_leaf_count` — exceeds it is work
     /// the ceilings were never derived over, and a close against it could exceed the carrier
     /// while the claim stood unprosecutable. So the OVERSIZED COMMITMENT ITSELF is the fault,
     /// convictable from the binding alone: the profile is authenticated against the committed
-    /// root, the job context is too, and the comparison is two integers (discriminants 0-16
+    /// root, the job context is too, and the comparison is two integers (discriminants 0-17
     /// unmoved).
-    JobExceedsClassContext = 17,
+    JobExceedsClassContext = 18,
 }
 
 impl PalwStepFaultV1 {
@@ -910,6 +914,7 @@ impl PalwStepFaultV1 {
         match self {
             PalwStepFaultV1::ShapeProfileNotCanonical => (0, 0),
             PalwStepFaultV1::StepLeafCountNotCanonical => (1, 0),
+            PalwStepFaultV1::CheckpointProfileNotCanonical => (17, 0),
             PalwStepFaultV1::StepCoordinatesNotCanonical => (2, 0),
             PalwStepFaultV1::StepLeafIndexNotCanonical => (3, 0),
             PalwStepFaultV1::StepBytesNotFourPerValue => (4, 0),
@@ -925,7 +930,7 @@ impl PalwStepFaultV1 {
             PalwStepFaultV1::CheckpointChainBroken => (14, 0),
             PalwStepFaultV1::ComputationMismatch { value_index } => (15, value_index),
             PalwStepFaultV1::DecodeTokenMismatch { position } => (16, position),
-            PalwStepFaultV1::JobExceedsClassContext => (17, 0),
+            PalwStepFaultV1::JobExceedsClassContext => (18, 0),
         }
     }
 }
@@ -1103,6 +1108,28 @@ pub fn check_step_refutation_v1(refutation: &PalwStepRefutationV1) -> Result<Pal
         match step_leaf_count(&binding.shape_profile, &binding.job_context) {
             Ok(count) if count == binding.step_leaf_count => {}
             _ => return Some(PalwStepFaultV1::StepLeafCountNotCanonical),
+        }
+        // **The state layout is the family's, not the filer's.**
+        //
+        // The checkpoint profile is hashed into `committed_execution_root` and nothing checked any
+        // of it. `state_layout_id` is the half that has a canonical answer — one layout for the
+        // whole deterministic-integer family, which is exactly why
+        // `integer_kv_state_layout_id_v1` exists ("before this there was no canonical
+        // `state_layout_id` to file at all, so every producer would have invented one and every
+        // one of them would have been a different class of checkpoint"). An invented layout makes
+        // an honest execution unreproducible by anyone else, which is a conviction waiting for a
+        // challenger to run the same job and get a different root.
+        //
+        // **The INTERVAL is still the filer's, and that is the residual.** A producer that names
+        // an interval past its own decode count files zero checkpoints and opts out of the leg.
+        // Pinning it here would be wrong rather than merely expensive: the right interval is a
+        // property of the CLASS — a long-context class checkpointing every call pays for evidence
+        // nobody needs — so it belongs in the catalog entry beside the geometry, which moves the
+        // catalog root and the class id. Recorded rather than half-done.
+        if binding.shape_profile.lane == crate::palw_step::PalwStepLaneV1::Int32
+            && binding.checkpoint_profile.state_layout_id != crate::palw_state_chunk_map::integer_kv_state_layout_id_v1()
+        {
+            return Some(PalwStepFaultV1::CheckpointProfileNotCanonical);
         }
         let decode_calls = binding.job_context.exact_decode_tokens.saturating_sub(1);
         let canonical_ckpts = decode_calls / binding.checkpoint_profile.checkpoint_interval;
@@ -1500,7 +1527,7 @@ mod tests {
         let ckpt_profile = PalwCheckpointProfileV1 {
             version: crate::palw_legs::PALW_LEGS_OBJECT_VERSION_V1,
             checkpoint_interval: 1,
-            state_layout_id: h64(0x55),
+            state_layout_id: crate::palw_state_chunk_map::integer_kv_state_layout_id_v1(),
         };
         let map_id = h64(0x44);
         let chunk0 = state_chunk_leaf_hash_v1(&map_id, 0, b"state-a");
@@ -1646,8 +1673,10 @@ mod tests {
             // with it. Deliberate and network-wide (the RC re-mint the ADR-0053 state bump already
             // forces); a class that could change its commitment scheme without changing identity
             // was the fail-open the field exists to close.
-            "b339774009255779d6aeb3c5b6e5a8c70ef1259cc64db6630679a92562a64e34\
-             a7a573fd2ff939ea0098b0fec2ed11dfa06925246c3ab05935f05d0a4da44414"
+            "5466a0a2a7a5342232aeb1e96d4ba9aaae20bdc7b13c84348f470f8b980a7148\
+             6e65dcf218166ad0d166bae68f32948ecd51236cc46cdc26a39348ee7ba91bda" // Re-derived once more at the MERGE with `fix/audit-batch-1` (2026-08-27), which moved
+                                                                               // it from its own side: the checkpoint profile joined the binding and the fault table
+                                                                               // gained a variant. One value over both lines, not two values summed.
         );
     }
 

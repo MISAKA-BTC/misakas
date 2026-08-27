@@ -51,8 +51,8 @@
 //! runtime — `dotprod` is ARMv8.2 and `i8mm` is ARMv8.6, and an Apple M1 has the first and not
 //! the second — with the `vmlal` path as the fallback that every machine has.
 
-use kaspa_consensus_core::palw_qwen36_ops::PalwQwen36OpError;
 use kaspa_consensus_core::palw_base0_a16::{A16_CODE_MAX, A16_MAX_DOT_LEN, A16QuantParams, PalwA16OpError, a16_scale_round};
+use kaspa_consensus_core::palw_qwen36_ops::PalwQwen36OpError;
 use rayon::prelude::*;
 
 /// Terms per `i32` accumulation chunk. `512 · 128 · 32_767 = 2.15e9`… which is over `i32::MAX`,
@@ -847,13 +847,7 @@ pub fn q36_matmul_grouped_wide_fast(
     grouped_fast(weights, exps, x, params, true)
 }
 
-fn grouped_fast(
-    weights: &[i8],
-    exps: &[i8],
-    x: &[i32],
-    params: &[A16QuantParams],
-    wide: bool,
-) -> Result<Vec<i32>, PalwQwen36OpError> {
+fn grouped_fast(weights: &[i8], exps: &[i8], x: &[i32], params: &[A16QuantParams], wide: bool) -> Result<Vec<i32>, PalwQwen36OpError> {
     // The reference IS the validator: every shape rule and the accumulator bound run there, on a
     // one-channel probe, so this path cannot admit anything the reference refuses.
     let n = x.len();
@@ -909,7 +903,11 @@ mod grouped_tests {
             let exps: Vec<i8> = (0..out_dim * groups).map(|_| (rng.next() % 21) as i8).collect();
             let x: Vec<i32> = (0..n).map(|_| (rng.next() % 65535) as i32 - 32767).collect();
             let params: Vec<A16QuantParams> = (0..out_dim)
-                .map(|_| A16QuantParams { multiplier: 1 + (rng.next() % (1 << 30)) as i64, shift: 30 + (rng.next() % 20) as u8, zero: 0 })
+                .map(|_| A16QuantParams {
+                    multiplier: 1 + (rng.next() % (1 << 30)) as i64,
+                    shift: 30 + (rng.next() % 20) as u8,
+                    zero: 0,
+                })
                 .collect();
             let want = q36_matmul_grouped(&weights, &exps, &x, &params).expect("the reference admits the shape");
             let got = q36_matmul_grouped_fast(&weights, &exps, &x, &params).expect("the fast path admits it too");

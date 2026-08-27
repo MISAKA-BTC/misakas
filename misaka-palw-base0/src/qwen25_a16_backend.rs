@@ -20,7 +20,9 @@
 use crate::artifact::Base0ArtifactV1;
 use crate::engine_a16::{A16Cache, A16Engine};
 use kaspa_consensus_core::palw_backend::{PalwClaimRootsV1, PalwExecutionBackendV1, PalwExecutionOutcomeV1, PalwMaterialVerdictV1};
-use kaspa_consensus_core::palw_v2::{PALW_TRACE_COMMITMENT_VERSION_V2, PalwJobContextV2, output_commitment_v2, prompt_token_ids_hash_v2};
+use kaspa_consensus_core::palw_v2::{
+    PALW_TRACE_COMMITMENT_VERSION_V2, PalwJobContextV2, output_commitment_v2, prompt_token_ids_hash_v2,
+};
 use kaspa_hashes::Hash64;
 
 pub const QWEN25_A16_DOMAIN_EXECUTION: &[u8] = b"misaka-palw/qwen25-a16/execution/v1";
@@ -70,9 +72,8 @@ pub fn qwen25_a16_prompt_for_anchor(anchor: Hash64, vocab: usize, prefill: u32) 
 pub fn qwen25_a16_roots_v1(job: &PalwJobContextV2, shape_id: Hash64, run: &Qwen25A16RunV1) -> (Hash64, Hash64, Hash64, Hash64) {
     let context = job.context_hash();
     let prefill = job.declared_prefill_tokens as usize;
-    let selecting: Vec<Vec<i32>> = (0..run.generated.len())
-        .map(|i| run.logits_rows.get(prefill.saturating_sub(1) + i).cloned().unwrap_or_default())
-        .collect();
+    let selecting: Vec<Vec<i32>> =
+        (0..run.generated.len()).map(|i| run.logits_rows.get(prefill.saturating_sub(1) + i).cloned().unwrap_or_default()).collect();
     debug_assert!(
         selecting
             .iter()
@@ -81,10 +82,8 @@ pub fn qwen25_a16_roots_v1(job: &PalwJobContextV2, shape_id: Hash64, run: &Qwen2
         "every committed token is its own row's argmax — the property the close adjudicates"
     );
     let trace_root = kaspa_consensus_core::palw_step_refute::tiled_logits_trace_root_v1(job, &selecting, &run.generated);
-    let rendered = keyed(
-        QWEN25_A16_DOMAIN_EXECUTION,
-        &[b"rendered", &run.generated.iter().flat_map(|t| t.to_le_bytes()).collect::<Vec<_>>()],
-    );
+    let rendered =
+        keyed(QWEN25_A16_DOMAIN_EXECUTION, &[b"rendered", &run.generated.iter().flat_map(|t| t.to_le_bytes()).collect::<Vec<_>>()]);
     let output_root = output_commitment_v2(&context, &run.generated, &rendered);
     let execution_root = keyed(
         QWEN25_A16_DOMAIN_EXECUTION,
@@ -188,9 +187,7 @@ impl Qwen25A16Backend {
             let next = kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(last) as u32;
             generated.push(next);
             let position = prompt.len() + step;
-            let row = engine
-                .forward_token(&mut cache, next as usize, position)
-                .map_err(|e| format!("decode at {position}: {e:?}"))?;
+            let row = engine.forward_token(&mut cache, next as usize, position).map_err(|e| format!("decode at {position}: {e:?}"))?;
             logits_rows.push(row);
         }
         Ok(Qwen25A16RunV1 { logits_rows, generated })
@@ -253,10 +250,21 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         let Some(run) = qwen25_a16_material_decode_v1(material) else {
             return PalwMaterialVerdictV1::Unverifiable;
         };
-        // The same limit `qwen36_backend` records: a claim carries roots and not an anchor, so
-        // until a seat check is handed the template it is checking there is no job to recompute
-        // under. Reported as `Unverifiable` rather than guessed.
-        let _ = (&run, &claim);
-        PalwMaterialVerdictV1::Unverifiable
+        // Recomputed under the job the claim's ANCHOR implies — the job the chain asked for, and
+        // the only one a producer was entitled to run. A claim with no anchor has no block to bind
+        // to, and a capture verified without one is re-usable by anyone who mines a fresh block, so
+        // that case is `Unverifiable` rather than a guess.
+        if claim.anchor == Hash64::default() {
+            return PalwMaterialVerdictV1::Unverifiable;
+        }
+        let Ok((job, _)) = self.job_for_anchor(claim.anchor) else {
+            return PalwMaterialVerdictV1::Unverifiable;
+        };
+        let (trace_root, _, execution_root, _) = qwen25_a16_roots_v1(&job, self.shape_id, &run);
+        if trace_root == claim.trace_root && execution_root == claim.execution_root {
+            PalwMaterialVerdictV1::Matches
+        } else {
+            PalwMaterialVerdictV1::Mismatch
+        }
     }
 }

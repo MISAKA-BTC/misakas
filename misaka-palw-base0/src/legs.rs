@@ -521,7 +521,9 @@ pub fn base0_binding_from_capture_v1(
     // The family's registered layout, at this producer's interval. Both were `Hash64::default()`
     // — the unregistered sentinel — which was the only honest value while no map existed; filing
     // it now would file a layout the class does not register, and `verify_binding` refuses that.
-    let checkpoint_profile = kaspa_consensus_core::palw_state_chunk_map::integer_kv_checkpoint_profile_v1(1);
+    let checkpoint_profile = kaspa_consensus_core::palw_state_chunk_map::integer_kv_checkpoint_profile_v1(
+        kaspa_consensus_core::palw_state_chunk_map::PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1,
+    );
     let step_leaf_count = tiles.leaves.len() as u64;
     let step_merkle_root = step_merkle_root_v1(&tiles.leaves).map_err(|_| LegError::EmptySpace)?;
     // **From the profile, not from the family constant.** A producer files what ITS class
@@ -710,11 +712,9 @@ pub fn base0_refutation_from_capture_v1(
         let mut run_siblings = Vec::with_capacity(runs.len());
         for (start, len) in runs {
             let first = row[start].0 as usize;
-            run_siblings.push(
-                kaspa_consensus_core::palw_step_leg::step_merkle_range_siblings_v1(&tiles.leaves, first, len).map_err(|_| {
-                    LegError::NotACanonicalCoordinate { layer: 0, slot: row[start].1.node_slot as u16, tile: row[start].1.tile_index }
-                })?,
-            );
+            run_siblings.push(kaspa_consensus_core::palw_step_leg::step_merkle_range_siblings_v1(&tiles.leaves, first, len).map_err(
+                |_| LegError::NotACanonicalCoordinate { layer: 0, slot: row[start].1.node_slot as u16, tile: row[start].1.tile_index },
+            )?);
         }
         inputs.push(PalwStepInputRowV1 { preimages, run_siblings });
     }
@@ -935,7 +935,9 @@ mod tests {
         let no_checkpoints = Base0CheckpointCaptureV1::from_chunks_v1(
             &ctx,
             &profile,
-            &kaspa_consensus_core::palw_state_chunk_map::integer_kv_checkpoint_profile_v1(1),
+            &kaspa_consensus_core::palw_state_chunk_map::integer_kv_checkpoint_profile_v1(
+                kaspa_consensus_core::palw_state_chunk_map::PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1,
+            ),
             &[],
         )
         .expect("a job with no decode call has an empty checkpoint leg");

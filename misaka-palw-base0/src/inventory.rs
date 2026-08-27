@@ -213,6 +213,57 @@ pub fn base0_inventory_v1(
 
 #[cfg(test)]
 mod tests {
+
+    /// **A tied head is adjudicable, because the two views are two tensors.**
+    ///
+    /// One tensor cannot serve both a per-token GATHER (whose operand is the single row it read)
+    /// and a tile-width head MATMUL (whose operand is a tile spanning many rows) — tiling the
+    /// gather would make every lookup open neighbours it never touched, and not tiling the matmul
+    /// would make one operand the whole table. A class that ties its embedding to its head would
+    /// then have a logits step no canonical inventory could open, and the court would be unable to
+    /// adjudicate the one step that decides the token.
+    ///
+    /// `Base0ArtifactV1` settles it upstream: `embed` and `unembed` are separate fields, and an
+    /// artifact that ties them "does so by carrying equal bytes". The inventory emits both views
+    /// unconditionally, so a tied class is a size question — the same weights appear twice — and
+    /// never an adjudicability one. Pinned here because the property is invisible at the point it
+    /// is relied on.
+    #[test]
+    fn a_tied_head_still_gets_both_views_in_the_inventory() {
+        let mut g = kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY;
+        g.layer_count = 2;
+        g.hidden_dim = 64;
+        g.ffn_dim = 128;
+        g.attn_heads = 2;
+        g.attn_head_dim = 32;
+        g.vocab_size = 128;
+        g.n_ctx = 32;
+        let shape = crate::artifact::Base0ShapeV1 {
+            n_layers: g.layer_count as usize,
+            n_heads: g.attn_heads as usize,
+            n_kv_heads: g.attn_heads as usize,
+            d_head: g.attn_head_dim as usize,
+            d_ff: g.ffn_dim as usize,
+            vocab: g.vocab_size as usize,
+            max_position: g.n_ctx as usize,
+            eps_q: g.rms_eps_q,
+            ln_theta_gen_q: crate::artifact::LN_THETA_10000_GEN_Q,
+        };
+        let mut artifact = Base0ArtifactV1::derive_deterministic(shape, 0x71ED).expect("derivable");
+        // Tie them, the only way this format can: equal bytes.
+        artifact.unembed = artifact.embed.clone();
+        let inventory = base0_inventory_v1(&artifact, g).expect("a tied artifact still roots");
+        let names: std::collections::BTreeSet<&str> = inventory.operands().iter().map(|o| o.tensor_name.as_str()).collect();
+        assert!(names.contains("token_embd.weight"), "the gather's view is present");
+        assert!(names.contains("output.weight"), "and so is the head matmul's, for the same bytes");
+
+        // And they really are different SHAPES of the same weights: one row per token against
+        // tiles of `tile_len`.
+        let gather_rows = inventory.operands().iter().filter(|o| o.tensor_name == "token_embd.weight").count();
+        let head_tiles = inventory.operands().iter().filter(|o| o.tensor_name == "output.weight").count();
+        assert_eq!(gather_rows, artifact.shape.vocab, "one operand per token id");
+        assert_ne!(head_tiles, gather_rows, "the head is tiled, which is why one view could not serve both");
+    }
     use super::*;
     use crate::artifact::{Base0ShapeV1, LN_THETA_10000_GEN_Q};
     use kaspa_consensus_core::palw_base0_ops::QuantParams;

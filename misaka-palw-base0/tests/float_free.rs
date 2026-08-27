@@ -59,6 +59,12 @@ const CONSENSUS_PATH: &[&str] = &[
     // The dense A16 tier's producer — same rule, same reason: an execution path may not
     // compute in floats, and this one derives its job, runs the engine and commits four roots.
     "src/qwen25_a16_backend.rs",
+    // ADR-0049 Decision F/G, arrived with the canonical IR: the engine's op sequence is COMPILED
+    // from `BASE0_LAYER_IR` and its operands are RESOLVED by name. Both are on the execution path
+    // by construction — they decide what the engine performs and which bytes it reads — so
+    // Decision A binds them exactly as it binds the engine they replaced.
+    "src/plan.rs",
+    "src/operands.rs",
     "src/rc.rs",
     "src/rope.rs",
     "src/tokenizer.rs",
@@ -88,6 +94,7 @@ const EXEMPT: &[(&str, &str)] = &[
     ("src/bin/base0-chat.rs", "the runtime's front door: it times itself, and a timer is float"),
     ("examples/base0-throughput.rs", "measurement tool: it times the engine, it is not the engine"),
     ("examples/gguf-probe.rs", "offline checkpoint inspector"),
+    ("examples/class-weight-report.rs", "measurement tool: it reports what a class would be worth, in floats, and executes nothing"),
 ];
 
 /// The primitives themselves live in `consensus-core`, and they are the half of the class this
