@@ -1463,6 +1463,15 @@ impl PalwPanelService {
                 }
                 first_seen.entry(duty.claim_id).or_insert(current_daa.max(duty.bound_daa));
                 let verdict = 'verdict: {
+                    // **Class capability is decided BEFORE looking at deliveries.** This resolve
+                    // lived inside the per-material loop, so a seat that received NOTHING never
+                    // reached its own `Incapable` answer and fell through to `Unavailable` — a
+                    // signed accusation of withholding from a seat that could not have judged the
+                    // data had it arrived. Zero deliveries and zero capability must answer the
+                    // same thing.
+                    if self.backends().resolve(duty.class_id, duty.artifact_root).is_err() {
+                        break 'verdict Some(PalwReceiptVerdictV2::Incapable);
+                    }
                     for bytes in materials.get(&duty.claim_id).map(|v| v.as_slice()).unwrap_or(&[]) {
                         // Through the backend seam, which recomputes the leg root exactly.
                         // `Mismatch` is deliberately NOT an accusation here: it gathers no quorum

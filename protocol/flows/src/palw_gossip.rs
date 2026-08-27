@@ -32,9 +32,16 @@ use std::sync::Mutex;
 use kaspa_hashes::Hash64;
 use tokio::sync::mpsc;
 
-/// Hard cap on one material broadcast. The RC floor's real encoding is 2.27 MB; this is ~3.5×
-/// headroom for a bigger canonical job without letting a peer hand us a memory bill.
-pub const PALW_MATERIAL_MAX_BYTES: usize = 8 << 20;
+/// Hard cap on one material broadcast.
+///
+/// Sized from the LARGEST registered class, not the floor: QWEN25-A16's canonical job encodes to
+/// 9.7 MB and QWEN36's to 8.9 MB, and the previous 8 MiB cap — "~3.5× headroom" over the floor's
+/// 2.27 MB — silently dropped both. The failure it caused was not a bigger memory bill but a
+/// SLASHING machine: no seat ever received an LLM claim's material, every panel concluded
+/// `Unavailable` at the half-window, and every honest LLM producer was defaulted and slashed by
+/// quorum, block after block. A transport cap must never be able to overrule an admission the
+/// consensus already accepted — so it is sized ~1.7× over the largest class this build ships.
+pub const PALW_MATERIAL_MAX_BYTES: usize = 16 << 20;
 /// Hard cap on one receipt broadcast — an ML-DSA-87 signature is 4,627 bytes and the rest of the
 /// receipt is under a hundred.
 pub const PALW_RECEIPT_MAX_BYTES: usize = 16 << 10;
