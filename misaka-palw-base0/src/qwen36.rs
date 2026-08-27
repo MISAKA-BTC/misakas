@@ -346,25 +346,39 @@ impl Qwen36ArtifactV1 {
                 }
             }
             Store::Mapped { map, directory } => {
-                // The pass is one straight read of nearly the whole file, and the map's standing
-                // advice is RANDOM — which turns kernel readahead off, so every touch was a
-                // synchronous 4 KiB fault. Measured on the fleet's own VPS: 5 MB/s against a
-                // device that streams at 1.3 GB/s, a two-hour startup priced by an advice meant
-                // for the mixture's eight-of-256 expert reads. Sequential for the pass, one
-                // tensor of asynchronous lookahead so the read of the next overlaps the hash of
-                // the current, and RANDOM again after, because inference follows. Advice only:
-                // the bytes absorbed — and therefore the root — are exactly what they were.
-                map.advise_sequential();
-                let extents: Vec<(&String, (usize, usize))> = directory.iter().map(|(name, extent)| (name, *extent)).collect();
-                for i in 0..extents.len() {
-                    if let Some(&(_, (next_offset, next_len))) = extents.get(i + 1) {
-                        map.will_need(next_offset, next_len);
+                // The pass reads nearly the whole file once, and it deliberately does NOT read it
+                // through the mapping: a cold page through the map is a synchronous 4 KiB fault,
+                // and on the fleet's own virtio disks fault readahead never engages — not under
+                // MADV_SEQUENTIAL, not under MADV_WILLNEED, not with the device's readahead
+                // window raised, all three measured on the day this line was written, at 6 MB/s
+                // against a device that streams at 1.3 GB/s. So the pass streams each tensor
+                // through `read_exact_at` in large chunks instead — same inode, same page cache,
+                // same bytes, and the hash is a stream, so absorbing a tensor in chunks is the
+                // same state as absorbing it whole. The length prefix keeps the old semantics
+                // exactly: an extent outside the map absorbs as empty, never as a short read.
+                let mut buf = vec![0u8; 32 << 20];
+                for (name, (offset, len)) in directory {
+                    let in_range = offset.checked_add(*len).is_some_and(|end| end <= map.as_bytes().len());
+                    let absorbed = if in_range { *len } else { 0 };
+                    state.update(&(b"tensor".len() as u64).to_le_bytes());
+                    state.update(b"tensor");
+                    state.update(&(name.len() as u64).to_le_bytes());
+                    state.update(name.as_bytes());
+                    state.update(&(absorbed as u64).to_le_bytes());
+                    let mut at = *offset as u64;
+                    let mut remaining = absorbed;
+                    while remaining > 0 {
+                        let take = remaining.min(buf.len());
+                        // An IO error mid-pass is the mapped path's SIGBUS with a name on it: the
+                        // artifact is unreadable and no root this node could report is true.
+                        map.read_exact_at(at, &mut buf[..take]).unwrap_or_else(|e| {
+                            panic!("the artifact became unreadable at byte {at} while computing its root: {e}")
+                        });
+                        state.update(&buf[..take]);
+                        at += take as u64;
+                        remaining -= take;
                     }
-                    let (name, (offset, len)) = &extents[i];
-                    let bytes = map.as_bytes().get(*offset..*offset + *len).unwrap_or(&[]);
-                    absorb(&mut state, b"tensor", name, bytes);
                 }
-                map.advise_random();
             }
         }
         let mut out = [0u8; 64];
@@ -1739,6 +1753,27 @@ mod tests {
             mapped.param_rows("blk.0.attn_align.a16").expect("present"),
             owned.param_rows("blk.0.attn_align.a16").expect("present")
         );
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// **The root does not depend on the access path.** The streaming pass over a mapped file
+    /// and the in-memory walk over the same content are one digest — which is what licenses the
+    /// root pass to read through the file descriptor instead of faulting the map. The hash is a
+    /// stream, so chunking is invisible; this pins that against both stores.
+    #[test]
+    fn the_mapped_root_equals_the_owned_root() {
+        let owned = fixture(2, 8);
+        let path = std::env::temp_dir().join(format!("misaka-q36-rootpath-{}.palwq36", std::process::id()));
+        let plan: Vec<(String, usize)> =
+            owned.tensor_names().iter().map(|n| (n.to_string(), owned.tensor(n).expect("present").len())).collect();
+        let mut writer = Qwen36Writer::create(&path, &owned.shape, &owned.rope, owned.params_map(), plan.clone()).expect("created");
+        for (name, _) in &plan {
+            writer.push(name, owned.tensor(name).expect("present")).expect("appended");
+        }
+        writer.finish().expect("closed");
+        let mapped = open_artifact(&path).expect("opens");
+        assert!(matches!(mapped.store, Store::Mapped { .. }), "the reopened artifact is the mapped store");
+        assert_eq!(mapped.artifact_root(), owned.artifact_root(), "one digest, two access paths");
         std::fs::remove_file(&path).ok();
     }
 

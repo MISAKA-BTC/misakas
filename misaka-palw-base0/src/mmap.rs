@@ -22,6 +22,9 @@ use std::os::unix::io::AsRawFd;
 pub struct ReadOnlyMap {
     ptr: *const u8,
     len: usize,
+    /// Kept open so [`Self::read_at`] exists. `mmap` does not need the descriptor after the map
+    /// is made; the streaming path does, and one open fd is the whole cost.
+    file: File,
 }
 
 // SAFETY: the mapping is read-only and immutable for its whole life, and the pointer is valid
@@ -36,14 +39,29 @@ impl ReadOnlyMap {
         let file = File::open(path)?;
         let len = file.metadata()?.len() as usize;
         if len == 0 {
-            return Ok(Self { ptr: std::ptr::NonNull::<u8>::dangling().as_ptr(), len: 0 });
+            return Ok(Self { ptr: std::ptr::NonNull::<u8>::dangling().as_ptr(), len: 0, file });
         }
         // SAFETY: `fd` is a valid open descriptor for the length reported by its own metadata.
         let ptr = unsafe { libc::mmap(std::ptr::null_mut(), len, libc::PROT_READ, libc::MAP_PRIVATE, file.as_raw_fd(), 0) };
         if ptr == libc::MAP_FAILED {
             return Err(std::io::Error::last_os_error());
         }
-        Ok(Self { ptr: ptr as *const u8, len })
+        Ok(Self { ptr: ptr as *const u8, len, file })
+    }
+
+    /// Read a range through the file descriptor rather than the mapping — the same inode, the
+    /// same page cache, the same bytes; only the syscall that touches a cold page differs.
+    ///
+    /// It differs enormously. A page-cache miss through the mapping is a synchronous 4 KiB
+    /// fault, and on the fleet's own virtio disks fault readahead never engages — not under
+    /// `MADV_SEQUENTIAL`, not under `MADV_WILLNEED`, not with the block device's readahead
+    /// window raised. Measured on the same device, same file, same day: 6 MB/s through the map,
+    /// 68 MB/s through a default `read()`, 1.3 GB/s through reads this size. A whole-file pass
+    /// belongs on this path; per-token expert access stays on the map, whose resident-set
+    /// behavior is the reason the map exists.
+    pub fn read_exact_at(&self, offset: u64, buf: &mut [u8]) -> std::io::Result<()> {
+        use std::os::unix::fs::FileExt;
+        self.file.read_exact_at(buf, offset)
     }
 
     /// Tell the kernel the access pattern is random, which is what a router that picks eight of
@@ -56,22 +74,6 @@ impl ReadOnlyMap {
         // SAFETY: the mapping is live and the length is its own.
         unsafe {
             libc::madvise(self.ptr as *mut libc::c_void, self.len, libc::MADV_RANDOM);
-        }
-    }
-
-    /// Tell the kernel the access pattern is sequential — the ROOT PASS's shape, not the
-    /// mixture's. `MADV_RANDOM` turns readahead off, which is right for eight-of-256 expert reads
-    /// and exactly wrong for one straight walk over the whole file: every touch becomes a
-    /// synchronous 4 KiB fault, and the fleet's own VPS measured 5 MB/s against a device that
-    /// streams at 1.3 GB/s. Advisory like its sibling, and always paired with a return to
-    /// [`Self::advise_random`] when the pass is done, because inference follows.
-    pub fn advise_sequential(&self) {
-        if self.len == 0 {
-            return;
-        }
-        // SAFETY: the mapping is live and the length is its own.
-        unsafe {
-            libc::madvise(self.ptr as *mut libc::c_void, self.len, libc::MADV_SEQUENTIAL);
         }
     }
 
