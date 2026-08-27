@@ -151,8 +151,9 @@ fn main() {
             qwen25_a16_prompt_for_anchor(anchor, vocab, job.0)
         };
         let claim = attempt_id_v2(a);
-        let material_path = format!("{retention}/{claim}.material");
-        let generated: Option<Vec<u32>> = std::fs::read(&material_path).ok().and_then(|bytes| {
+        // `--retention` is comma-separated: each producer holds only its own executions, and this
+        // host may run several (the QWEN36 producer and the QWEN25 producer are different nodes).
+        let generated: Option<Vec<u32>> = retention.split(',').find_map(|dir| std::fs::read(format!("{dir}/{claim}.material")).ok()).and_then(|bytes| {
             if class_hex == QWEN36_CLASS {
                 qwen36_material_decode_v1(&bytes).map(|r| r.generated)
             } else {
