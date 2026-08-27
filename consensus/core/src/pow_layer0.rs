@@ -229,6 +229,24 @@ pub const POW_ALGO_ID_PALW_COMMITTED_V2: u8 = 6;
 /// remote-crash shape the unknown-algo-id P0 already exhibited once.
 pub const POW_ALGO_ID_PALW_RECEIPT_V3: u8 = 7;
 
+/// **Does a header of this algorithm buy position in the chain?**
+///
+/// A receipt header's digest is free to re-roll: nothing in it costs anything to produce, so any
+/// position it buys is bought with a signature. Two things are position — the pruning-proof
+/// hierarchy (block LEVEL) and the fork-choice weight (blue WORK) — and both must answer no, for
+/// the same reason. They used to answer separately, and only the level half said no; a receipt
+/// block still added `calc_work(bits)` to its descendants' blue work, which is reorg weight minted
+/// out of signatures.
+///
+/// The lane's real meter is the quantum ticket (ADR-0044 Decision 6), which draws against a beacon
+/// derived from the candidate's own chain — so it can only run on a chain candidate and cannot gate
+/// DAG entry at all. A merged-but-never-candidate receipt block never faces it, which is why the
+/// answer here may not be "the ticket handles it".
+#[inline]
+pub fn algo_id_carries_no_chain_position(algo_id: u8) -> bool {
+    algo_id == POW_ALGO_ID_PALW_RECEIPT_V3
+}
+
 /// Output width of the `algo_id = 5` tag:
 /// `response_digest (64) ∥ prompt_eval_count (4, LE) ∥ eval_count (4, LE)` = 72 bytes.
 pub const POW_L1_PALW_OLLAMA_OUT_BYTES: usize = 72;
@@ -1219,6 +1237,19 @@ mod tests {
     #[test]
     fn the_receipt_v3_id_is_known_to_the_family_and_demanded_by_nothing() {
         assert!(is_palw_algo_id(POW_ALGO_ID_PALW_RECEIPT_V3), "a receipt header carries (and hashes) its spend carriage");
+        // **Position, both kinds, refused together.** The level half and the work half used to be
+        // two independent decisions and only one of them said no; a receipt block took level 0 and
+        // still handed its descendants `calc_work(bits)` of blue work, which is fork-choice weight
+        // bought with a signature. They read this one predicate now, so neither can drift.
+        assert!(
+            algo_id_carries_no_chain_position(POW_ALGO_ID_PALW_RECEIPT_V3),
+            "a receipt header buys neither pruning-proof level nor blue work"
+        );
+        assert!(
+            !algo_id_carries_no_chain_position(POW_ALGO_ID_PALW_COMMITTED_V2),
+            "the attempt lane is where chain position comes from — its digests are inference-priced"
+        );
+        assert!(!algo_id_carries_no_chain_position(POW_ALGO_ID_KHEAVYHASH), "and a hash network is untouched by any of this");
         assert!(
             check_algo_id_known(POW_ALGO_ID_PALW_RECEIPT_V3).is_ok(),
             "since Unit B the pruning-proof gate can derive this tag, so it must not refuse the id"

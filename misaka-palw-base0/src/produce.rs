@@ -106,7 +106,9 @@ pub fn base0_activation_leg_root_v1(ctx: &PalwJobContextV2) -> Hash64 {
     Hash64::from_bytes(out)
 }
 
-pub const PALW_BASE0_DOMAIN_JOB_ANCHOR: &[u8] = b"misaka-palw/base0/rc-job-anchor/v1";
+/// Re-exported, not re-typed. The derivation moved to `kaspa_consensus_core::palw_attempt_v2`;
+/// two spellings of one domain key is how the anchor quietly moves for half the network.
+pub use kaspa_consensus_core::palw_attempt_v2::PALW_DOMAIN_JOB_ANCHOR_V1 as PALW_BASE0_DOMAIN_JOB_ANCHOR;
 pub const PALW_BASE0_DOMAIN_JOB_PROMPT: &[u8] = b"misaka-palw/base0/rc-job-prompt/v1";
 
 /// **What the RC's job is a function of — and what it deliberately is NOT.**
@@ -133,15 +135,11 @@ pub fn base0_rc_job_anchor_v1(
     class_id: Hash64,
     bond: &kaspa_consensus_core::tx::TransactionOutpoint,
 ) -> Hash64 {
-    let mut h = blake2b_simd::Params::new().hash_length(64).key(PALW_BASE0_DOMAIN_JOB_ANCHOR).to_state();
-    h.update(network_domain.as_byte_slice());
-    h.update(pre_pow_hash.as_byte_slice());
-    h.update(class_id.as_byte_slice());
-    h.update(bond.transaction_id.as_bytes().as_slice());
-    h.update(&bond.index.to_le_bytes());
-    let mut out = [0u8; 64];
-    out.copy_from_slice(h.finalize().as_bytes());
-    Hash64::from_bytes(out)
+    // The derivation moved to `kaspa_consensus_core::palw_attempt_v2` — it is the protocol's
+    // anchor, not this family's, and a verifier must be able to compute it without depending on an
+    // execution family's crate. Kept as a delegating name because the producer and the fixtures
+    // call it here, and because two copies of a hash is how the value quietly moves.
+    kaspa_consensus_core::palw_attempt_v2::palw_job_anchor_v1(network_domain, pre_pow_hash, class_id, bond)
 }
 
 /// **The anchor's job: the prompt it names, and the context that commits to it.**

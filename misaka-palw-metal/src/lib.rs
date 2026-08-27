@@ -523,7 +523,7 @@ mod tests {
 
         // A seat's transport check passes against the roots this run committed, and fails against
         // somebody else's.
-        let claim = PalwClaimRootsV1 { execution_root: a.execution_root, trace_root: a.trace_root };
+        let claim = PalwClaimRootsV1 { execution_root: a.execution_root, trace_root: a.trace_root, anchor: Hash64::default() };
         let seat_started = std::time::Instant::now();
         assert_eq!(
             backend.verify_material(&a.material, claim),

@@ -3787,23 +3787,40 @@ fn apply_object(
             builder.state.bonds.get(challenger_bond).ok_or(PalwStateV2Error::MissingBond(*challenger_bond))?;
             let deadline_daa =
                 ctx.daa_score.checked_add(builder.params.window_court).ok_or(PalwStateV2Error::Overflow("court deadline"))?;
-            // **The responder's FIRST rung runs on the session budget, not on the rung clock.**
+            // **The opening rung is clocked like every other rung — because a responder now ships.**
             //
             // A rung clock convicts on silence: `declare_no_show` reads whose turn it was and ends
-            // the session against them. That is sound when the silent party COULD have moved — and
-            // for the opening rung, nothing in this tree can. `CourtDisclosed` is constructed
-            // nowhere: it exists in the object definition, this transition and the validator, and
-            // the panel service emits only `ReceiptLicensed` and `ProducerDefaulted`. So with a
-            // `turn_deadline_daa` tighter than `window_court`, anyone holding one bond convicts any
-            // producer by opening a court and waiting — for the price of one transaction, against
-            // a producer whose only fault is that no responder software exists.
+            // the session against them. That is only sound when the silent party COULD have moved,
+            // and this rung once had no mover: `CourtDisclosed` was constructed nowhere in this
+            // tree, so a tight clock let anyone holding one bond convict any producer by opening a
+            // court and waiting — against a producer whose only fault was that no responder
+            // software existed. The rung was therefore given the whole session budget as a
+            // backstop, and its lapse ended the dispute on the CHALLENGER's side.
             //
-            // Until a responder ships, the opening rung may not be clocked tighter than the whole
-            // session: the backstop still ends the dispute, and it ends it on the CHALLENGER's
-            // side, which is the correct default for an unproven accusation. Later rungs keep the
-            // tight clock, because reaching one means the responder answered the first — so it
-            // demonstrably can.
-            let first_deadline_daa = deadline_daa;
+            // The panel service now emits `CourtDisclosed` (`palw_panel.rs`, the disclosure arm),
+            // and a close now carries the operand openings the court needs to read, so a producer
+            // that answers is a producer the chain can adjudicate end to end. With a mover in the
+            // field the backstop inverts: it made SILENCE the winning move for a guilty producer,
+            // which is the one outcome a fraud court may not have. So the opening rung takes
+            // `turn_deadline_daa` like the rest of the ladder.
+            //
+            // **What this asks of a bundle.** `turn_deadline_daa` is now a real deadline for the
+            // producer's first move, so it has to be wider than the responder's own cadence: the
+            // panel wakes on a 2-second tick and answers from a capture it already holds, so on a
+            // one-block-per-second network a window of a handful of DAA is a coin flip and one of
+            // a few dozen is comfortable. No shipped preset carries `ConsensusV2` — the bundle
+            // arrives with a network's genesis — so this is a genesis-time choice, and a bundle
+            // whose window is tighter than its own software convicts honest producers.
+            //
+            // **The deployment gate is the ruleset, not a flag.** This changes what silence costs,
+            // so it may not reach a network whose producers are running a build with no responder
+            // in it — and it does not: `palw_ruleset_id_v2` covers these params, and the networks
+            // that adopt it are the ones re-minted from this build.
+            let first_deadline_daa = ctx
+                .daa_score
+                .checked_add(builder.params.turn_deadline_daa())
+                .ok_or(PalwStateV2Error::Overflow("court opening rung deadline"))?
+                .min(deadline_daa);
             // The ladder's id is derived from the same six inputs `court_session_id_v2` uses, so
             // a ladder whose id is not `session_id` means the object's declared space does not
             // match the id it was opened under — refused here, not merely at the acceptance
@@ -5863,10 +5880,9 @@ pub(crate) mod tests {
         let ladder = &s5.court_session(&sid).unwrap().ladder;
         assert_eq!(ladder.interval(), (0, 16), "the dispute opens over the whole space");
         assert_eq!(ladder.turn(), crate::palw_bisect::PalwBisectTurnV1::AwaitDisclosure, "the responder moves first");
-        // The OPENING rung runs on the session budget, not the rung window: no software in this
-        // tree can make the responder's first move, so silence there may not convict it. See
-        // `a_responder_is_not_convicted_for_a_move_no_software_can_make`.
-        assert_eq!(ladder.last_deadline_daa(), 604, "the opening rung is the backstop, opened at 104 + window_court");
+        // The opening rung takes the rung window like every other rung: a responder ships now, so
+        // silence there is a choice. See `a_silent_responder_now_loses_the_opening_rung`.
+        assert_eq!(ladder.last_deadline_daa(), 124, "the opening rung is clocked at 104 + turn_deadline");
 
         // Round 0: disclose at midpoint 8, challenger disagrees ⇒ the divergence is below.
         let (s6, _) = apply(&s5, &p, &ctx(6, 105, 6), &[disclose(sid, 0, 8, 0xD0)], None);
@@ -6022,8 +6038,12 @@ pub(crate) mod tests {
             "opening a court must cost the challenger the claim's own stake, not a transaction fee"
         );
 
-        // The backstop lapses with nothing proved: the session ends and the stake comes back.
-        let (s6, _) = apply(&s5, &p, &ctx(6, 605, 6), &[], None);
+        // Nothing proved, ended on the CHALLENGER's side — which is the exit this test is about,
+        // and since the opening rung is clocked it has to be reached deliberately: the responder
+        // answers its first rung, and then the accusation is the side that goes quiet.
+        let sid = court_session_of(claim_id, h64(31), bond_key(1), bond_key(1));
+        let (s5, _) = apply(&s5, &p, &ctx(6, 105, 6), &[disclose(sid, 0, 8, 0xD0)], None);
+        let (s6, _) = apply(&s5, &p, &ctx(7, 605, 7), &[], None);
         assert!(s6.court_session(&court_session_of(claim_id, h64(31), bond_key(1), bond_key(1))).is_none(), "the session is gone");
         assert_eq!(
             s6.reserved_exposure(&bond_key(1)),
@@ -6032,42 +6052,40 @@ pub(crate) mod tests {
         );
     }
 
-    /// **A silent responder loses — but only once it has shown it can answer.**
+    /// **A silent responder loses the opening rung — now that answering it is possible.**
     ///
-    /// The verdict comes from the chain's own clock plus an absence, which is why the ladder had to
-    /// become chain state: there is no message for an attacker to forge. What that reasoning needs
-    /// is that the silent party COULD have moved, and on the OPENING rung nothing in this tree can:
-    /// `CourtDisclosed` is constructed nowhere — it exists in the object definition, the transition
-    /// and the validator, and the panel service emits only `ReceiptLicensed` and
-    /// `ProducerDefaulted`. Clocking that rung tightly therefore let anyone holding one bond
-    /// convict any producer by opening a court and waiting, for one transaction fee.
+    /// This rung used to run on the session budget instead of the rung clock, because a rung clock
+    /// convicts on silence and nothing in this tree could break that silence: `CourtDisclosed` was
+    /// constructed nowhere. Clocking it tightly would have let anyone holding one bond convict any
+    /// producer by opening a court and waiting.
     ///
-    /// So the opening rung runs on the session budget and its lapse ends the dispute on the
-    /// CHALLENGER's side — an accusation nobody completed. A later rung keeps the tight clock,
-    /// because reaching one means the responder answered the first.
+    /// The panel service emits `CourtDisclosed` now, and its close carries the operand openings the
+    /// court has to read — so a producer that answers can be adjudicated end to end, and one that
+    /// does not has chosen not to. The backstop is therefore the wrong default: it made silence the
+    /// winning move for a guilty producer, which is the one outcome a fraud court may not have.
     #[test]
-    fn a_responder_is_not_convicted_for_a_move_no_software_can_make() {
+    fn a_silent_responder_now_loses_the_opening_rung() {
         let p = params_with_ladder();
         let (s5, claim_id, sid) = licensed_with_court(&p);
-        // The opening rung is the backstop now, not 124.
-        let (s6, _) = apply(&s5, &p, &ctx(6, 125, 6), &[], None);
-        assert!(s6.court_session(&sid).is_some(), "the opening rung has not lapsed at the old rung clock");
-        assert!(matches!(s6.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::ReceiptLicensed { .. }));
+        // Inside the rung window, nothing has happened yet: the clock is a deadline, not a hair
+        // trigger, and a responder that answers in time is never charged.
+        let (s6, _) = apply(&s5, &p, &ctx(6, 120, 6), &[], None);
+        assert!(s6.court_session(&sid).is_some(), "the rung has not run out at 120");
         assert_eq!(s6.bond(&bond_key(1)).unwrap().slashed, 0, "and nothing has been charged");
 
-        // Past the SESSION budget, still with no disclosure: the dispute ends, and it ends against
-        // the accusation rather than against the accused.
-        let (s7, _) = apply(&s6, &p, &ctx(7, 605, 7), &[], None);
+        // Past it, with no disclosure: the executor defaulted on the only defence it had.
+        let (s7, _) = apply(&s6, &p, &ctx(7, 125, 7), &[], None);
         assert!(s7.court_session(&sid).is_none(), "the session is decided and gone");
         assert!(
-            !matches!(s7.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }),
-            "an unanswered opening rung must not convict the executor of fraud"
+            matches!(s7.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }),
+            "a responder that would not stand behind its own root at the index it was asked about loses the claim"
         );
-        assert_eq!(s7.bond(&bond_key(1)).unwrap().slashed, 0, "and it must not cost the executor its stake");
+        assert!(s7.bond(&bond_key(1)).unwrap().slashed > 0, "and it costs the executor its stake");
     }
 
-    /// The other half of the same rule: once the responder HAS answered, the tight rung clock is
-    /// legitimate and silence at a later rung does decide against it.
+    /// The other half of the same rule, and the one that survived the opening rung's re-clocking
+    /// unchanged: a responder that answered once has demonstrably got software that can move, so
+    /// silence at a LATER rung has always decided against it.
     #[test]
     fn palw_v2_a_silent_responder_loses_the_dispute() {
         let p = params_with_ladder();

@@ -124,7 +124,7 @@ pub fn calc_block_level_check_pow_layer0(header: &Header, network_id: &[u8], max
         // price of one signature. Receipt blocks sit at the base level; the level hierarchy is
         // built by the attempt lane, whose digests are inference-priced. (This is the same
         // reasoning as the `passed` arm above, applied to the other thing a digest buys.)
-        Ok((passed, _)) if header.pow_algo_id == POW_ALGO_ID_PALW_RECEIPT_V3 => (0, passed),
+        Ok((passed, _)) if kaspa_consensus_core::pow_layer0::algo_id_carries_no_chain_position(header.pow_algo_id) => (0, passed),
         Ok((passed, pow_512)) => (calc_level_from_pow_512(pow_512, max_block_level), passed),
         // `PalwWorkerFailed` is a statement about THIS node: it has a registered model runtime
         // and the runtime broke, persistently — the driver's bounded retries absorb the transient
@@ -935,10 +935,10 @@ mod tests_pq {
         const TS: u64 = 1_700_000_000;
         // A fixture, not a constant of the protocol: it must SOLVE the (very easy) target below,
         // and the digest moves whenever the envelope's encoding does — as it did when
-        // `PALW_ATTEMPT_V2_VERSION` went 2 → 3. If this test starts failing on
+        // `PALW_ATTEMPT_V2_VERSION` went 2 → 3, and again at 4 → 5. If this test starts failing on
         // "the solved header passes at its target", the envelope changed and this needs re-picking,
         // not the code under test.
-        const NONCE: u64 = 0;
+        const NONCE: u64 = 3;
         const BITS: u32 = 0x207fffff;
         let network_id: &[u8] = b"simnet";
 

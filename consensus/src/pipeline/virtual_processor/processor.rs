@@ -2364,6 +2364,14 @@ impl VirtualStateProcessor {
             .as_ref()
             .map(|(_, state)| self.palw_v2_locked_bond_outpoints(state, virtual_daa_window.daa_score))
             .unwrap_or_default();
+        // …including the bonds this mergeset itself declares, exactly as the candidate walk above
+        // does. The two sides must compute the SAME set or the claim made there — "construction and
+        // validation compute the same set" — is false in the direction that hurts: a template built
+        // from the smaller set includes a spend every validating node refuses, so the block this
+        // node mines is invalid on arrival and the work is thrown away.
+        if virtual_palw_state.is_some() {
+            ctx.palw_v2_locked_bonds.extend(self.palw_v2_bonds_declared_in_mergeset(&ctx));
+        }
         ctx.palw_v2_bond_burns = virtual_palw_state
             .as_ref()
             .map(|(_, state)| self.palw_v2_bond_burn_obligations(state, virtual_daa_window.daa_score))

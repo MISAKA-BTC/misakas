@@ -237,6 +237,14 @@ pub struct ResolvedClassV1 {
     pub canonical_job: (u32, u32),
     /// Recomputed here, never taken from the caller: this is the value the chain matched on.
     pub artifact_root: Hash64,
+    /// **The geometry `artifact_root` was computed under**, carried rather than re-named.
+    ///
+    /// Anything that later opens a row of this artifact must root it the same way the chain
+    /// matched it, and the family — not a constant at the use site — is what decided that. A
+    /// caller that reached for `PALW_RC_BASE0_GEOMETRY` instead would agree with this entry today
+    /// and diverge silently the first time a class registers under a different one, producing
+    /// openings that prove against a root no court holds.
+    pub inventory_geometry: PalwBase0GeometryV1,
 }
 
 /// **Resolve the class the chain named.**
@@ -286,6 +294,7 @@ pub fn resolve_class_v1(
             artifact,
             canonical_job: entry.canonical_job,
             artifact_root: got,
+            inventory_geometry: entry.inventory_geometry,
         });
     }
     // The most specific failure wins: a wrong root is a nearer miss than a wrong shape, and both

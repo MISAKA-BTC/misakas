@@ -156,7 +156,28 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
             .mergeset_blues
             .iter()
             .cloned()
-            .map(|hash| calc_work(self.headers_store.get_bits(hash).unwrap()).max(self.level_work))
+            .map(|hash| {
+                let header = self.headers_store.get_header(hash).unwrap();
+                // **A receipt block's work is zero** (ADR-0044 Decision 6, extended).
+                //
+                // `calc_block_level_check_pow_layer0` already refuses to derive a block LEVEL from
+                // a receipt digest, because nothing in a receipt header costs anything to re-roll
+                // and hierarchy position would be sold for the price of one signature. Chain
+                // WEIGHT is the same purchase and a cheaper one: blue work is what decides which
+                // chain wins, so a receipt block that adds `calc_work(bits)` lets a producer mint
+                // reorg weight out of signatures.
+                //
+                // The lane's meter is the quantum ticket, and the ticket is chain-relative by
+                // construction — it draws against a beacon derived from the candidate's own chain,
+                // which is exactly why it can only run on a chain candidate and cannot gate DAG
+                // entry. So a merged-but-never-candidate receipt block never faces it. Zero is the
+                // only figure that is right whether or not the ticket ever runs: all chain weight
+                // comes from the attempt lane, whose digests are inference-priced.
+                if kaspa_consensus_core::pow_layer0::algo_id_carries_no_chain_position(header.pow_algo_id) {
+                    return BlueWorkType::from(0u64);
+                }
+                calc_work(header.bits).max(self.level_work)
+            })
             .sum();
         let blue_work: BlueWorkType = self.ghostdag_store.get_blue_work(selected_parent).unwrap() + added_blue_work;
 
