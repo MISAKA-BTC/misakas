@@ -4379,15 +4379,6 @@ pub fn palw_rc_genesis_card_is_set() -> bool {
 /// ADR-0042 Decision 11's promise ("it reads the RC's canonical ruleset bytes rather than a human
 /// re-typing parameters"). A per-node config file would make every operator's ruleset a local
 /// decision, and the handshake would be the first place anyone found out.
-#[cfg(test)]
-mod genesis_probe {
-    #[test]
-    fn t11_genesis_hash_probe() {
-        let p = super::palw_rc_shipped_params();
-        eprintln!("t11 genesis: {}", p.genesis.hash);
-    }
-}
-
 pub fn palw_rc_shipped_params() -> Params {
     if !palw_rc_genesis_card_is_set() {
         return palw_rc_base_params();
