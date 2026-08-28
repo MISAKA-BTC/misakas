@@ -530,7 +530,9 @@ async fn equivocate(args: EquivocateArgs) -> Result<(), String> {
     const EVIDENCE_PAYLOAD_BYTES: usize = 2 * 4627 + 12 * 64 + 128;
     let fee = args.fee.unwrap_or_else(|| reporter.estimate_overlay_fee(&mass_calc, prefix, EVIDENCE_PAYLOAD_BYTES, true));
     let funding_addr = reporter.funding_address(prefix);
-    let coinbase_maturity = params.coinbase_maturity();
+    // The EFFECTIVE spend maturity (floor ∨ ADR-0018 settlement) — the floor alone selects
+    // coinbases the node refuses (issue #81).
+    let coinbase_maturity = params.coinbase_spend_maturity();
     let (mut candidates, mature_seen) =
         top_mature_funding_paged(submit_client, &funding_addr, server.virtual_daa_score, coinbase_maturity, 1, Some(bond_outpoint))
             .await?;
@@ -732,7 +734,9 @@ async fn bond(args: BondArgs) -> Result<(), String> {
     // gets the bond tx rejected "spends an immature UTXO"). Mass-based fee unless overridden — the
     // StakeBond payload carries the 2592-byte pubkey and each ML-DSA-87 input is ~7 KB, so the fee
     // grows with the input count and is re-estimated as UTXOs are added.
-    let coinbase_maturity = params.coinbase_maturity();
+    // The EFFECTIVE spend maturity (floor ∨ ADR-0018 settlement) — the floor alone selects
+    // coinbases the node refuses (issue #81).
+    let coinbase_maturity = params.coinbase_spend_maturity();
     let virtual_daa = server.virtual_daa_score;
     // Largest-first greedy selection. Cap the input count so the bond tx stays within the block
     // mass limit (each ML-DSA-87 input is ~7 KB); 20 comfortably fits a reasonable testnet bond.
@@ -879,7 +883,9 @@ async fn deposit_lock(args: DepositLockArgs) -> Result<(), String> {
     );
 
     // Same mature-UTXO aggregation as `bond`.
-    let coinbase_maturity = params.coinbase_maturity();
+    // The EFFECTIVE spend maturity (floor ∨ ADR-0018 settlement) — the floor alone selects
+    // coinbases the node refuses (issue #81).
+    let coinbase_maturity = params.coinbase_spend_maturity();
     let virtual_daa = server.virtual_daa_score;
     const MAX_DEPOSIT_INPUTS: usize = 20;
     let (mature, mature_seen) =
@@ -972,7 +978,9 @@ async fn unbond(args: UnbondArgs) -> Result<(), String> {
     // output-0: the consensus bond-spend-gate keeps that locked until release, so trying to pay the
     // fee from it would be rejected. Coinbase maturity is filtered for the same reason as `bond`
     // (a miner still paying this address mints a fresh immature coinbase every block).
-    let coinbase_maturity = params.coinbase_maturity();
+    // The EFFECTIVE spend maturity (floor ∨ ADR-0018 settlement) — the floor alone selects
+    // coinbases the node refuses (issue #81).
+    let coinbase_maturity = params.coinbase_spend_maturity();
     let virtual_daa = server.virtual_daa_score;
     let (mut candidates, mature_seen) =
         top_mature_funding_paged(&client, &funding_addr, virtual_daa, coinbase_maturity, 1, Some(bond_outpoint)).await?;
@@ -1018,7 +1026,9 @@ async fn spam(args: SpamArgs) -> Result<(), String> {
     let prefix = prefix_for(server.network_id.network_type);
     let funding_addr = key.funding_address(prefix);
     let params = Params::from(server.network_id);
-    let coinbase_maturity = params.coinbase_maturity();
+    // The EFFECTIVE spend maturity (floor ∨ ADR-0018 settlement) — the floor alone selects
+    // coinbases the node refuses (issue #81).
+    let coinbase_maturity = params.coinbase_spend_maturity();
     let storage_mass_parameter = params.storage_mass_parameter;
     info!(
         "[{VALIDATOR}] SPAM: flooding {node_network} from {funding_addr} (fanout={}, fee={}, interval={}ms). Fund it via `misaminer --wallet {funding_addr}`.",
@@ -1223,7 +1233,9 @@ async fn run_daemon(args: RunArgs) -> Result<(), String> {
     }
     let prefix = prefix_for(server.network_id.network_type);
     let params = Params::from(server.network_id);
-    let coinbase_maturity = params.coinbase_maturity();
+    // The EFFECTIVE spend maturity (floor ∨ ADR-0018 settlement) — the floor alone selects
+    // coinbases the node refuses (issue #81).
+    let coinbase_maturity = params.coinbase_spend_maturity();
     let mass_calc = MassCalculator::new(
         params.mass_per_tx_byte,
         params.mass_per_script_pub_key_byte,

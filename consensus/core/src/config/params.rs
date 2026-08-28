@@ -1083,6 +1083,25 @@ impl Params {
         self.blockrate.coinbase_maturity
     }
 
+    /// ADR-0018 coinbase settlement's long-maturity fallback, `0` on networks without the
+    /// feature. **A coinbase spend clears TWO gates** — the classic maturity floor above and
+    /// this one — and a spender that asks only the floor offers the node money it will refuse
+    /// (on testnet-11 the floor is 1 and this is 600, so that was every coinbase younger than
+    /// 600 DAA). See [`Self::coinbase_spend_maturity`] for the number a spend selector wants.
+    pub fn coinbase_settlement_long_maturity_daa(&self) -> u64 {
+        self.dns_params.as_ref().map_or(0, |d| d.coinbase_settlement_long_maturity_daa)
+    }
+
+    /// **The age at which a coinbase is spendable without an anchor** — the larger of the two
+    /// gates. A selector using this is conservative by construction: a confirmed DNS anchor can
+    /// legalise a younger coinbase, but not consulting the anchor only delays a candidate, never
+    /// selects an illegal one. Issue #81 is what asking the floor alone does: the validator kept
+    /// choosing a 427-DAA-old coinbase ("mature" by the floor of 1) while the node refused it for
+    /// 600, and attestation stopped for exactly the remaining maturity window.
+    pub fn coinbase_spend_maturity(&self) -> u64 {
+        self.coinbase_maturity().max(self.coinbase_settlement_long_maturity_daa())
+    }
+
     pub fn finality_duration_in_milliseconds(&self) -> u64 {
         self.blockrate.target_time_per_block * self.blockrate.finality_depth
     }
@@ -4360,6 +4379,15 @@ pub fn palw_rc_genesis_card_is_set() -> bool {
 /// ADR-0042 Decision 11's promise ("it reads the RC's canonical ruleset bytes rather than a human
 /// re-typing parameters"). A per-node config file would make every operator's ruleset a local
 /// decision, and the handshake would be the first place anyone found out.
+#[cfg(test)]
+mod genesis_probe {
+    #[test]
+    fn t11_genesis_hash_probe() {
+        let p = super::palw_rc_shipped_params();
+        eprintln!("t11 genesis: {}", p.genesis.hash);
+    }
+}
+
 pub fn palw_rc_shipped_params() -> Params {
     if !palw_rc_genesis_card_is_set() {
         return palw_rc_base_params();

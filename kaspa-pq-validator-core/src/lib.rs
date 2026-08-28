@@ -2390,6 +2390,34 @@ mod tests {
         assert_eq!(sel_op, fop(0x88, 0), "only the mature, sufficiently-funded UTXO qualifies");
     }
 
+    /// **Issue #81, with its own numbers.** testnet-11's coinbase maturity FLOOR is 1 while the
+    /// ADR-0018 settlement gate is 600 — asking the floor alone calls a 427-DAA-old coinbase
+    /// "mature", `max_by_key(amount)` then prefers it over the small real transfers, the node
+    /// refuses the spend for the settlement gate, and attestation stops until that exact outpoint
+    /// ages past 600 (measured live: stopped at DAA 1319, self-recovered at 1504 = 892 + 600 + a
+    /// tick). The caller must pass the EFFECTIVE spend maturity
+    /// (`Params::coinbase_spend_maturity`, = floor ∨ settlement); with it the selector takes the
+    /// small mature transfer over the large not-yet-spendable coinbase.
+    #[test]
+    fn select_funding_asks_with_both_maturities_issue_81() {
+        let virtual_daa = 1_319u64;
+        let coinbase = (fop(0xA1, 2), fentry(1_000_000_000, 892, true)); // 38k-MSK-style fragment, age 427
+        let transfer = (fop(0xA2, 0), fentry(1_000_000_000_0 / 10_000, 100, false)); // a 10-MSK-style top-up
+
+        // The floor alone (the bug): the big coinbase counts as mature and wins on amount.
+        let (wrong, _) =
+            select_funding(&None, &HashSet::new(), vec![coinbase.clone(), transfer.clone()], SF_FEE, virtual_daa, 1).unwrap();
+        assert_eq!(wrong, fop(0xA1, 2), "the floor alone reproduces the bug — this guards the test itself");
+
+        // The effective maturity (floor 1 ∨ settlement 600): the coinbase is not yet spendable,
+        // the mature transfer is chosen, and attestation never latches onto an illegal outpoint.
+        let effective = 1u64.max(600);
+        let (sel_op, sel_en) =
+            select_funding(&None, &HashSet::new(), vec![coinbase, transfer], SF_FEE, virtual_daa, effective).unwrap();
+        assert_eq!(sel_op, fop(0xA2, 0), "the mature transfer wins over the bigger unsettled coinbase");
+        assert!(!sel_en.is_coinbase);
+    }
+
     #[test]
     fn select_funding_errors_when_no_candidate() {
         // No chain head and every node UTXO excluded/ineligible → a descriptive error, no panic.

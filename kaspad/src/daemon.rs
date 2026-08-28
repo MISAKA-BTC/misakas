@@ -1166,7 +1166,9 @@ Do you confirm? (y/n)";
             flow_context.clone(),
             validator_mass_calculator,
             index_service.as_ref().map(|x| x.utxoindex().unwrap()),
-            config.params.coinbase_maturity(),
+            // Effective spend maturity (floor ∨ settlement): the floor alone selects coinbases
+            // the node refuses (issue #81).
+            config.params.coinbase_spend_maturity(),
         )))
     } else {
         None
