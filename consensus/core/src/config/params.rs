@@ -598,6 +598,31 @@ impl Params {
         if self.pow_palw_activation.is_active(u64::MAX - 1) || self.pow_palw_ollama_activation.is_active(u64::MAX - 1) {
             return Err(PalwModeV2Error::Invalid("a ConsensusV2 network may not activate any V1 PALW proof-of-work"));
         }
+        // **The chain must still hold what the lattice will ask it for** (audit M2-20).
+        //
+        // Every judgement in the claim lattice is anchored on the claim block's own header, and the
+        // pruning processor deletes headers outside the pruning horizon — so a lattice longer than
+        // that horizon produces courts nobody can adjudicate and seats that accuse because they
+        // cannot derive an anchor. The finality/anticone bound is the same class of defect one
+        // level down: it was silently clamped to `pruning_depth` under a comment about test
+        // networks. Both are asserted at construction, so a preset that violates either cannot be
+        // built rather than failing days into a dispute.
+        let lattice = bundle.state.window_bind()
+            + bundle.state.window_receipt()
+            + bundle.state.window_challenge()
+            + bundle.state.window_court();
+        if lattice > self.blockrate.pruning_depth {
+            return Err(PalwModeV2Error::Invalid(
+                "the claim lattice outlives the pruning horizon — the headers its judgements are anchored on would be deleted first",
+            ));
+        }
+        let k = self.blockrate.ghostdag_k as u64;
+        let anticone_bound = self.blockrate.finality_depth + self.blockrate.merge_depth + 4 * self.blockrate.mergeset_size_limit * k + 2 * k + 2;
+        if anticone_bound > self.blockrate.pruning_depth {
+            return Err(PalwModeV2Error::Invalid(
+                "anticone finalization depth exceeds the pruning depth — the clamp that hides this is for test networks",
+            ));
+        }
         // ADR-0038 Decision H, enforced where the decision says it must be — at construction.
         //
         // Audit H2: the cadence is in neither `PalwConsensusParamsV2` nor therefore
@@ -4601,6 +4626,31 @@ pub fn palw_rc_params(
     // `finality_depth < w_challenge`. Half the window, so the inequality holds with margin rather
     // than by one.
     params.blockrate.finality_depth = bundle.state.window_challenge() / 2;
+    // **And the depths that DEPEND on finality move with it** (audit M2-20). Writing one field of
+    // a derived set left `pruning_depth` at the value computed for the inherited finality depth, so
+    // `anticone_finalization_depth()` — 1,354 for this preset — was silently clamped to a
+    // pruning_depth of 1,144 under a comment about test networks, and, worse, the claim lattice
+    // (bind + receipt + challenge + court DAA) outran the horizon in which the chain keeps the
+    // headers every judgement is anchored on: `job_anchor_for_claim` reads the claim block's
+    // header, and the pruning processor deletes it. A court that cannot derive the anchor cannot
+    // adjudicate, and the seat that cannot verify accuses.
+    //
+    // Recomputed here from the same decomposition the constructor uses, then raised to hold the
+    // whole lattice. `validate_palw_v2` asserts both bounds so a preset that violates either
+    // cannot be constructed at all.
+    {
+        let k = params.blockrate.ghostdag_k as u64;
+        let lower_bound = params.blockrate.finality_depth
+            + params.blockrate.merge_depth * 2
+            + 4 * params.blockrate.mergeset_size_limit * k
+            + 2 * k
+            + 2;
+        let lattice = bundle.state.window_bind()
+            + bundle.state.window_receipt()
+            + bundle.state.window_challenge()
+            + bundle.state.window_court();
+        params.blockrate.pruning_depth = params.blockrate.pruning_depth.max(lower_bound).max(lattice);
+    }
     params.palw_consensus_mode = crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle);
     params.validate_palw_v2()?;
     Ok(params)
@@ -5093,7 +5143,13 @@ mod consensus_params_id_tests {
             // class anyone can rebuild from the public GGUF must not wear one name.
             // ADR-0058 (merged work is counted): PALW_STATE_V2_VERSION 9 → 10 entered the
             // fingerprint, deliberately — deploying this build is a re-mint.
-            ("testnet-11", TESTNET11_PARAMS, "15bab795442ec3efc3a58e02dd9c7a6f3015ff0634bc4a50a7af589338857ad0"),
+            ("testnet-11", TESTNET11_PARAMS, // Re-pinned 2026-08-28 with the audit fixes: the ruleset id now commits to every ML-DSA
+            // context the acceptance layer verifies under (M2-23), and the transition's rules
+            // changed in ways that alter which blocks are valid (M2-3, M2-5, M2-7, M2-8, M2-11,
+            // M2-12, M2-16). A moved fingerprint is the CORRECT outcome of that — this project's
+            // own lesson is that a rule change not declared by a version bump forks the network
+            // silently. testnet-11 must be re-minted onto this build; mainnet has not launched.
+            "404f8715d962c9284c957f63031ef8d77fe43bd5c80534dc37d51eb19ad8bf7a"),
             ("simnet", SIMNET_PARAMS, "dae24a4cddc3bd324d7e99dc61c9e14269b9a4619fecb639836b8286e144664f"),
             ("devnet", DEVNET_PARAMS, "f8981a530bf6070e4c27696d2666673ee36a1d9f1f5b4b315c4c7400b84136c0"),
         ]

@@ -75,8 +75,25 @@ pub const PALW_V2_TRACE_FORMAT_VERSION: u16 = 2;
 /// constants, so a build whose contexts differ from what the network committed to refuses to
 /// run — the same shape as the algorithm-finalizer gate. Editing a context string here without
 /// re-minting the ruleset id is a startup failure rather than a silent cross-family replay.
-pub const PALW_V2_SIGNATURE_CONTEXTS: &[&[u8]] =
-    &[crate::palw_attempt_v2::PALW_ATTEMPT_V2_MLDSA87_CONTEXT, crate::palw_panel_v2::PALW_RECEIPT_V2_MLDSA87_CONTEXT];
+/// **Every ML-DSA context the ConsensusV2 acceptance layer verifies under.**
+///
+/// It listed two of them (audit M2-23) — the attempt and the receipt — while the acceptance layer
+/// also verifies bond registration, bond retirement, class registration, the carriage commitment
+/// and both court moves. A context is what separates one signature's meaning from another's, so a
+/// list that omits six of them commits to a ruleset identity that two builds can share while
+/// disagreeing about what a signature authorises. A refused object is SKIPPED and the block stands,
+/// so such a disagreement splits the class registry with no block ever rejected and nothing in
+/// either log saying so.
+pub const PALW_V2_SIGNATURE_CONTEXTS: &[&[u8]] = &[
+    crate::palw_attempt_v2::PALW_ATTEMPT_V2_MLDSA87_CONTEXT,
+    crate::palw_panel_v2::PALW_RECEIPT_V2_MLDSA87_CONTEXT,
+    crate::palw_state_v2::PALW_BOND_REGISTRATION_V2_MLDSA87_CONTEXT,
+    crate::palw_state_v2::PALW_BOND_RETIREMENT_V2_MLDSA87_CONTEXT,
+    crate::palw_state_v2::PALW_CLASS_REGISTRATION_V2_MLDSA87_CONTEXT,
+    crate::palw_court_v2::PALW_COURT_V2_MLDSA87_OPEN_CONTEXT,
+    crate::palw_court_v2::PALW_COURT_V2_MLDSA87_DISCLOSURE_CONTEXT,
+    crate::palw_court_v2::PALW_COURT_V2_MLDSA87_VERDICT_CONTEXT,
+];
 
 pub const PALW_V2_SIGNATURE_CONTEXTS_DOMAIN: &[u8] = b"misaka-palw/ruleset-id-v2/signature-contexts/v1";
 
@@ -328,8 +345,15 @@ impl PalwCourtParamsV2 {
     /// treats as a refusal rather than a saturation — a court window that cannot be represented
     /// is not a long window.
     pub fn worst_case_duration_daa(&self) -> Option<u64> {
-        let rounds = u64::from(self.bisection_rounds()).checked_add(u64::from(self.terminal_rounds))?;
-        rounds.checked_mul(self.turn_deadline_daa)
+        // **A round is TWO clocked moves, and the clock runs per move** (audit M2-24). Each
+        // bisection round is a disclosure and a verdict, each with its own `turn_deadline_daa`, so
+        // counting rounds understated the ladder by a factor of two — a party moving at
+        // `deadline − 1` every time outlasts a `window_court` sized from this number, and the
+        // backstop then closes a dispute that was being played correctly. The terminal rounds are
+        // single moves and are counted as such.
+        let bisection_moves = u64::from(self.bisection_rounds()).checked_mul(2)?;
+        let moves = bisection_moves.checked_add(u64::from(self.terminal_rounds))?;
+        moves.checked_mul(self.turn_deadline_daa)
     }
 }
 
@@ -979,7 +1003,8 @@ pub(crate) mod tests {
         // Carries the same carve `conforming_bundle`'s `reward` declares: this helper is used to
         // REPLACE that bundle's state, and dropping the carve on the way would trip the coherence
         // check instead of testing the thing the caller named.
-        PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, min_collateral, 900, 0)
+        // window_court 900 — the same corrected worst case `conforming_bundle` carries (M2-24).
+        PalwStateParamsV2::new(100, 10, 10, 20, 900, 1000, h64(1), 4, 1000, min_collateral, 900, 0)
             .unwrap()
             .with_worker_carve_permille(620)
             .unwrap()
@@ -1019,7 +1044,9 @@ pub(crate) mod tests {
             // dilutes. The carve is set on BOTH, because `validate` requires them equal — the
             // fixture has to be a bundle a node would actually start on, or the tests below prove
             // nothing.
-            state: PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, base, 4, 1000, 100, 900, 0)
+            // window_court 900: the corrected worst case (audit M2-24) is (2 x 20 + 2) x 20 = 840
+            // for this fixture's 2^20 ladder, and the invariant demands the window hold it.
+            state: PalwStateParamsV2::new(100, 10, 10, 20, 900, 1000, base, 4, 1000, 100, 900, 0)
                 .unwrap()
                 .with_worker_carve_permille(620)
                 .unwrap()
@@ -1033,8 +1060,8 @@ pub(crate) mod tests {
             bond: PalwBondParamsV2::new(100, 2_000).unwrap(),
             freeprompt: conforming_freeprompt(),
             reorg_margin_daa: 100,
-            // 2^20 step leaves -> 20 bisection rounds, +2 terminal, x20 DAA per turn = 440,
-            // which must fit strictly inside the fixture's `window_court` of 500.
+            // 2^20 step leaves -> 20 bisection rounds = 40 clocked moves, +2 terminal, x20 DAA
+            // per move = 840, which must fit strictly inside the fixture's `window_court` of 900.
             court: PalwCourtParamsV2::new(1_048_576, 20, 2).unwrap(),
             cadence_target_time_per_block_ms: PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS,
             fork_choice_version: PALW_V2_FORK_CHOICE_VERSION,
@@ -1367,11 +1394,27 @@ pub(crate) mod tests {
         // The signature contexts are committed as their own BYTES, not as a version number, so
         // editing a context string is a startup failure rather than a silent cross-family replay.
         assert_eq!(base.signature_contexts_root, palw_v2_signature_contexts_root());
-        assert_eq!(
-            PALW_V2_SIGNATURE_CONTEXTS,
-            [crate::palw_attempt_v2::PALW_ATTEMPT_V2_MLDSA87_CONTEXT, crate::palw_panel_v2::PALW_RECEIPT_V2_MLDSA87_CONTEXT],
-            "the committed context set is the one the V2 objects actually sign under"
-        );
+        // **Every context the acceptance layer verifies under, not the two it started with**
+        // (audit M2-23). Restated as a set membership so the list is checked against its MEANING —
+        // "a signature this ruleset gives weight to" — rather than against a copy of itself.
+        for context in [
+            crate::palw_attempt_v2::PALW_ATTEMPT_V2_MLDSA87_CONTEXT,
+            crate::palw_panel_v2::PALW_RECEIPT_V2_MLDSA87_CONTEXT,
+            crate::palw_state_v2::PALW_BOND_REGISTRATION_V2_MLDSA87_CONTEXT,
+            crate::palw_state_v2::PALW_BOND_RETIREMENT_V2_MLDSA87_CONTEXT,
+            crate::palw_state_v2::PALW_CLASS_REGISTRATION_V2_MLDSA87_CONTEXT,
+            crate::palw_court_v2::PALW_COURT_V2_MLDSA87_OPEN_CONTEXT,
+            crate::palw_court_v2::PALW_COURT_V2_MLDSA87_DISCLOSURE_CONTEXT,
+            crate::palw_court_v2::PALW_COURT_V2_MLDSA87_VERDICT_CONTEXT,
+        ] {
+            assert!(
+                PALW_V2_SIGNATURE_CONTEXTS.contains(&context),
+                "a context the acceptance layer verifies under is not committed by the ruleset id: {}",
+                String::from_utf8_lossy(context)
+            );
+        }
+        let unique: std::collections::BTreeSet<&&[u8]> = PALW_V2_SIGNATURE_CONTEXTS.iter().collect();
+        assert_eq!(unique.len(), PALW_V2_SIGNATURE_CONTEXTS.len(), "two objects must not share a context");
     }
 
     /// **Audit H2: the worst-case court duration is DERIVED, not asserted.**
@@ -1387,9 +1430,10 @@ pub(crate) mod tests {
         assert_eq!(PalwCourtParamsV2::new(1_025, 1, 1).unwrap().bisection_rounds(), 11, "a non-power-of-two rounds UP");
         assert_eq!(PalwCourtParamsV2::new(1 << 40, 1, 1).unwrap().bisection_rounds(), 40);
 
-        // rounds = ceil(log2(leaves)) + terminal, duration = rounds * turn deadline.
+        // **Moves, not rounds** (audit M2-24): each bisection round is a disclosure AND a
+        // verdict, each clocked separately, while a terminal round is a single move.
         let court = PalwCourtParamsV2::new(1_048_576, 20, 2).unwrap();
-        assert_eq!(court.worst_case_duration_daa(), Some((20 + 2) * 20));
+        assert_eq!(court.worst_case_duration_daa(), Some((2 * 20 + 2) * 20));
 
         // Overflow is a refusal, not a saturation: a window that cannot be represented is not a
         // long window.

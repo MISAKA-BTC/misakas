@@ -79,8 +79,14 @@ pub const PALW_COURT_V2_MLDSA87_VERDICT_CONTEXT: &[u8] = b"misaka-palw/court-v2/
 /// an opening cannot be replayed as a disclosure or a verdict.
 pub const PALW_COURT_V2_MLDSA87_OPEN_CONTEXT: &[u8] = b"misaka-palw/court-v2/open/mldsa87/v1";
 
-pub const PALW_COURT_V2_ALL_DOMAINS: &[&[u8]] =
-    &[PALW_COURT_V2_DOMAIN_PARTY_ID, PALW_COURT_V2_MLDSA87_DISCLOSURE_CONTEXT, PALW_COURT_V2_MLDSA87_VERDICT_CONTEXT];
+pub const PALW_COURT_V2_ALL_DOMAINS: &[&[u8]] = &[
+    PALW_COURT_V2_DOMAIN_PARTY_ID,
+    // The OPEN context was missing from its own uniqueness check (audit M2-23) — the one court
+    // move a stranger makes was the one whose domain nothing compared against the others.
+    PALW_COURT_V2_MLDSA87_OPEN_CONTEXT,
+    PALW_COURT_V2_MLDSA87_DISCLOSURE_CONTEXT,
+    PALW_COURT_V2_MLDSA87_VERDICT_CONTEXT,
+];
 
 /// A bond outpoint as a 64-byte dispute-party identity (what the bisect session id space
 /// expects). Domain-separated so a party id can never collide with an attempt id, a claim id, or
@@ -1587,7 +1593,7 @@ mod tests {
         // The party id, and the two rung signing contexts. The count is pinned so ADDING a domain
         // is a decision someone makes here rather than a line that slips in; the cross-family
         // collision test reads the list itself.
-        assert_eq!(PALW_COURT_V2_ALL_DOMAINS.len(), 3);
+        assert_eq!(PALW_COURT_V2_ALL_DOMAINS.len(), 4);
         let unique: std::collections::BTreeSet<_> = PALW_COURT_V2_ALL_DOMAINS.iter().collect();
         assert_eq!(unique.len(), PALW_COURT_V2_ALL_DOMAINS.len(), "a repeated domain is a collision inside one family");
         // The two rung contexts in particular: the parties have opposite interests, so one shared

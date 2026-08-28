@@ -46,7 +46,15 @@ const BETA_PERMILLE: u16 = 100;
 const WINDOW_BIND: u64 = 600;
 const WINDOW_RECEIPT: u64 = 600;
 const WINDOW_CHALLENGE: u64 = 1_200;
-const WINDOW_COURT: u64 = 2_400;
+/// **3,000, from the corrected worst case** (audit M2-24). The ladder's clock runs per MOVE, and a
+/// bisection round is two of them — a disclosure and a verdict — so a 22-rung ladder plus two
+/// terminal moves is `(2 x 22 + 2) x 60 = 2,760` DAA of honest prosecution. `worst_case_duration_daa`
+/// counted rounds and returned 1,440, so 2,400 looked like generous headroom while being 360 DAA
+/// short: two parties each moving at `deadline − 1` would have run past the backstop, and the
+/// backstop closes on the challenger's side — a dispute lost for being played correctly. 3,000
+/// leaves ~9 % margin and keeps the startup invariant that refuses a bundle where the window cannot
+/// hold its own ladder.
+const WINDOW_COURT: u64 = 3_000;
 
 /// Class-production epoch / retarget span.
 const EPOCH_LENGTH: u64 = 1_000;

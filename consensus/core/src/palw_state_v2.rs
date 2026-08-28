@@ -1810,6 +1810,12 @@ pub enum PalwStateV2Error {
     #[error("bond {bond:?} holds {collateral} sompi against a floor of {floor} — too little to stand behind an accusation")]
     BondBelowFloor { bond: PalwBondKeyV2, collateral: u64, floor: u64 },
     #[error(
+        "class {class} cannot be registered: its registrant already holds {already} sompi of exposure and this registration costs {price}, against {collateral} of collateral"
+    )]
+    RegistrationExposureUnaffordable { class: Hash64, already: u128, price: u128, collateral: u64 },
+    #[error("bond {0:?} registers a key this chain already holds a bond for — one key, one bond, or seats can be manufactured by splitting collateral")]
+    DuplicateBondKey(PalwBondKeyV2),
+    #[error(
         "class {class} declares {got} sompi per work unit but this network's unit is {want} — weight per sompi at risk is not a class's to choose"
     )]
     SlashValueNotTheNetworks { class: Hash64, got: u64, want: u64 },
@@ -1996,10 +2002,21 @@ impl PalwChainStateV2 {
         self.classes.keys().copied().collect()
     }
 
-    /// Every registered class's pinned artifact root — the companion of [`Self::class_ids`],
-    /// for the registration builder's known-weights filter.
+    /// Every LIVE registration's pinned artifact root — the companion of [`Self::class_ids`], for
+    /// the registration builder's known-weights filter.
+    ///
+    /// Filtered to `Active` and `Registered` (audit M2-17). A class reclaimed to `Dormant` keeps
+    /// its row, and ADR-0056 Decision 5 makes that row's id the one path back — "a fresh
+    /// signature, a fresh exposure reservation, a fresh soak, and the grant floor again". With
+    /// reclaimed roots in this list the shipped node refused to re-register the very weights that
+    /// re-entry is for, and the only alternative — a changed profile — is a different class and
+    /// another permanent registry row.
     pub fn class_artifact_roots(&self) -> Vec<Hash64> {
-        self.classes.values().map(|record| record.artifact_root).collect()
+        self.classes
+            .values()
+            .filter(|record| matches!(record.status, PalwClassStatusV2::Active | PalwClassStatusV2::Registered { .. }))
+            .map(|record| record.artifact_root)
+            .collect()
     }
 
     pub fn class(&self, id: &Hash64) -> Option<&PalwClassStateV2> {
@@ -3432,6 +3449,14 @@ pub fn apply_palw_transition_v4(
         && claim.accepted_blue_score > old_frontier.0
     {
         builder.state.safe_frontier_blue_score = claim.accepted_blue_score;
+        // **This hash is the claim's CARRYING block, which since ADR-0058 need not be on the
+        // selected chain** (audit M2-27). For a merged work it is the merged block — at
+        // `ghostdag_k = 1` typically a RED. The pair is still coherent (both halves describe that
+        // same block), and every consumer today reads only the blue score, which is what fork
+        // choice compares. What is NOT true any more is the old sentence "the deepest block on this
+        // chain": a consumer that resolves this hash must not assume chain membership, and the
+        // field's own definition is corrected to say so rather than the value being changed —
+        // the carrying block is what the job anchor is derived from, so it is load-bearing here.
         builder.state.safe_frontier = claim.accepted_block;
     }
     let new_frontier = (builder.state.safe_frontier_blue_score, builder.state.safe_frontier);
@@ -4387,6 +4412,15 @@ fn apply_object(
             // matured would be minted straight into an unspendable output, and the producer would
             // find out block by block. Registration is where that is knowable, so it is where it
             // is refused.
+            // **One key, one bond — the rule this codebase states everywhere and enforced nowhere**
+            // (audit M2-19). Panel sortition already refuses a seat sharing the executor's `pubkey`
+            // or `operator_id`, which is only meaningful if a key cannot hold several bonds: with
+            // no uniqueness check, splitting collateral across N registrations of the SAME key
+            // manufactured N independent seat tickets, and a 3-of-5 panel is a permanent quorum for
+            // whoever holds three of them.
+            if builder.state.bonds.values().any(|existing| existing.pubkey == *pubkey) {
+                return Err(PalwStateV2Error::DuplicateBondKey(*bond));
+            }
             if *payout_payload == Hash64::default() {
                 return Err(PalwStateV2Error::EmptyPayoutPayload(*bond));
             }
@@ -4518,6 +4552,35 @@ fn apply_object(
                     now: ctx.daa_score,
                     max_lookahead: PALW_CLASS_ACTIVATION_MAX_LOOKAHEAD_DAA,
                 });
+            }
+            // **The registry's price must actually be affordable** (audit M2-16). The reservation
+            // is TAKEN at :move_registration_exposure and never checked against anything, so a bond
+            // at the minimum could register unbounded classes while its ledger recorded exposure
+            // far past its collateral. The attempt path's full ceiling (collateral x ratio) needs
+            // the admission params, which the transition does not hold; the weaker invariant that
+            // IS reachable here — total exposure may not exceed the collateral itself — is the one
+            // that makes the price real, and it is strictly implied by the ratio ceiling.
+            if let Some(carriage) = admission.as_ref() {
+                let carriage_bond = carriage.registrant_bond;
+                // Whether the bond EXISTS is `move_registration_exposure`'s question, asked below
+                // and with its own error; this check is about affordability and says nothing when
+                // there is no bond to ask about.
+                if let Some(collateral) = builder.state.bonds.get(&carriage_bond).map(|b| b.collateral) {
+                    let already = builder
+                        .state
+                        .reserved_exposure(&carriage_bond)
+                        .checked_add(builder.state.registration_exposure(&carriage_bond))
+                        .ok_or(PalwStateV2Error::Overflow("total exposure"))?;
+                    let price = builder.params.registration_exposure_sompi() as u128;
+                    if already.saturating_add(price) > collateral as u128 {
+                        return Err(PalwStateV2Error::RegistrationExposureUnaffordable {
+                            class: *class_id,
+                            already,
+                            price,
+                            collateral,
+                        });
+                    }
+                }
             }
             let mut share_view = builder.state.class_shares.clone();
             for (id, record) in builder.state.classes.iter() {
@@ -5277,6 +5340,14 @@ pub struct PalwStateCarriageV2 {
     pub retired_safe_weight: u128,
     pub bounded_immature: u128,
     pub safe_frontier_blue_score: u64,
+    /// The block that carried the deepest `Final` work, and its blue score above.
+    ///
+    /// **Not necessarily on the selected chain** (audit M2-27): since ADR-0058 a claim's
+    /// `accepted_block` is its CARRYING block, and a merged work's carrying block is the merged
+    /// one — a red at `ghostdag_k = 1`. Fork choice compares the blue score, which is well defined
+    /// either way; a future consumer that resolves this hash must handle a non-chain block rather
+    /// than assume the old "deepest block on this chain" reading, which stopped being true when
+    /// merged work started creating claims.
     pub safe_frontier: BlockHash,
     pub last_point: Option<PalwBlockContextV2>,
 }
@@ -6825,7 +6896,9 @@ pub(crate) mod tests {
         for n in 2..=3u64 {
             objects.push(PalwConsensusObjectV2::BondRegistered {
                 bond: bond_key(n),
-                pubkey: vec![7; 4],
+                // A key per seat: one key can hold one bond (audit M2-19), and the whole point of
+                // three seats is that they are three parties.
+                pubkey: vec![7, n as u8],
                 operator_pubkey: op_key(20 + n),
                 collateral: 1_000,
                 payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),

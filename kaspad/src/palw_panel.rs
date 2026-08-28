@@ -533,7 +533,7 @@ impl PalwPanelService {
         let pubkey = kp.verification_key.as_ref().to_vec();
         let bond = PalwBondKeyV2(TransactionOutpoint::new(kaspa_consensus_core::tx::TransactionId::default(), 0));
         let network_domain =
-            kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2(self.consensus_config.params.net.to_string().as_bytes());
+            kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(self.consensus_config.params.net.to_string().as_bytes(), Some(self.consensus_config.genesis.hash));
         let message = kaspa_consensus_core::palw_state_v2::palw_bond_registration_message_v2(
             network_domain,
             &kaspa_consensus_core::palw_lifecycle_objects_v2::palw_bond_registration_signed_key_v2(&bond),
@@ -714,7 +714,7 @@ impl PalwPanelService {
         // said "signing anything assembled beside the object would sign a class that is not the one
         // being registered", and this is that comment made true.
         let message = kaspa_consensus_core::palw_state_v2::palw_class_registration_message_v2(
-            kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2(self.consensus_config.params.net.to_string().as_bytes()),
+            kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(self.consensus_config.params.net.to_string().as_bytes(), Some(self.consensus_config.genesis.hash)),
             *class_id,
             terms.min_grantable_share_permille,
             *activation_daa,
@@ -1209,7 +1209,7 @@ impl PalwPanelService {
             return;
         };
         let network_domain =
-            kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2(self.consensus_config.params.net.to_string().as_bytes());
+            kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(self.consensus_config.params.net.to_string().as_bytes(), Some(self.consensus_config.genesis.hash));
         info!(
             "[{PALW_PANEL}] starting (bond={bond}, submitter={}, register={})",
             if self.config.fee_outpoint.is_some() { "funded" } else { "off — receipts only" },

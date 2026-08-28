@@ -4366,7 +4366,7 @@ impl VirtualStateProcessor {
             blue_score: virtual_state.ghostdag_data.blue_score,
             subsidy: 0,
         };
-        let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2(self.network_id_bytes.as_slice());
+        let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(self.network_id_bytes.as_slice(), Some(self.genesis.hash));
         let verify = |key: &[u8], message: &[u8], sig: &[u8], context: &[u8]| {
             Self::verify_mldsa87_with_context_bool(key, message, sig, context)
         };
@@ -4591,7 +4591,7 @@ impl VirtualStateProcessor {
                         return Err(format!("class {class_id} is registered under a bond that is not Active"));
                     }
                     let message = kaspa_consensus_core::palw_state_v2::palw_class_registration_message_v2(
-                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2(self.network_id_bytes.as_slice()),
+                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(self.network_id_bytes.as_slice(), Some(self.genesis.hash)),
                         *class_id,
                         *share_permille,
                         *activation_daa,
@@ -4640,7 +4640,7 @@ impl VirtualStateProcessor {
                         panel_params,
                         state_params,
                         point,
-                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2(self.network_id_bytes.as_slice()),
+                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(self.network_id_bytes.as_slice(), Some(self.genesis.hash)),
                         claim,
                         receipts,
                         Self::verify_mldsa87_with_context_bool,
@@ -4705,7 +4705,7 @@ impl VirtualStateProcessor {
                         return Err(format!("bond {bond:?} is already retiring"));
                     }
                     let message = kaspa_consensus_core::palw_state_v2::palw_bond_retirement_message_v2(
-                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2(self.network_id_bytes.as_slice()),
+                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(self.network_id_bytes.as_slice(), Some(self.genesis.hash)),
                         bond,
                     );
                     if !Self::verify_mldsa87_with_context_bool(
@@ -4743,7 +4743,7 @@ impl VirtualStateProcessor {
                     // the substituted key would reject every honest registration.
                     let signed_bond = kaspa_consensus_core::palw_lifecycle_objects_v2::palw_bond_registration_signed_key_v2(bond);
                     let message = kaspa_consensus_core::palw_state_v2::palw_bond_registration_message_v2(
-                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2(self.network_id_bytes.as_slice()),
+                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(self.network_id_bytes.as_slice(), Some(self.genesis.hash)),
                         &signed_bond,
                         pubkey,
                         operator_pubkey,
@@ -4865,7 +4865,7 @@ impl VirtualStateProcessor {
         // and mint another distinct, valid block from one solved PoW. 3c's deferral rested on
         // "only the bond holder can mint valid-signature siblings", which is a statement about a
         // signature somebody checks.
-        let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2(self.network_id_bytes.as_slice());
+        let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(self.network_id_bytes.as_slice(), Some(self.genesis.hash));
         let pre_pow_hash = kaspa_consensus_core::hashing::header::pre_pow_hash_64(header);
         kaspa_consensus_core::palw_admission_v2::check_palw_attempt_admission_full_v2(
             state,
@@ -4985,7 +4985,7 @@ impl VirtualStateProcessor {
             .get_selected_parent(header.hash)
             .map_err(|e| format!("the candidate's own ghostdag data is unreadable: {e}"))?;
         let beacon = self.palw_beacon_fact_of_candidate(selected_parent, slot).map_err(|e| e.to_string())?;
-        let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2(self.network_id_bytes.as_slice());
+        let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(self.network_id_bytes.as_slice(), Some(self.genesis.hash));
         // **The composed admission, which is what this site was always missing.**
         //
         // `network_domain` was computed here and thrown away by the `let _` below — the input the
@@ -5129,7 +5129,7 @@ impl VirtualStateProcessor {
             return Vec::new();
         };
         let txs = self.accepted_txs_from_acceptance_data(acceptance);
-        let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2(self.network_id_bytes.as_slice());
+        let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(self.network_id_bytes.as_slice(), Some(self.genesis.hash));
         let extraction = kaspa_consensus_core::palw_fp_objects_v3::palw_fp_objects_from_accepted_txs_v3(
             &txs,
             network_domain,
