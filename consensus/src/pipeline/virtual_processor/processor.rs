@@ -3904,6 +3904,7 @@ impl VirtualStateProcessor {
             slash_value_per_pwu: base.slash_value_per_pwu,
             initial_target: base_target.target,
             registered_class_ids: state.class_ids(),
+            registered_artifact_roots: state.class_artifact_roots(),
         })
     }
 

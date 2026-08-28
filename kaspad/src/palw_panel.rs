@@ -595,6 +595,15 @@ impl PalwPanelService {
         }
         let mut candidates: Vec<RegistrationCandidateV1> = Vec::new();
         for artifact in &self.class_artifacts {
+            // **A file whose digest the chain already pinned is not a candidate for a NEW class.**
+            // Re-registering known weights under a fresh id is never meaningful — and with two
+            // same-shape artifacts loaded it is exactly how the first file used to fill every
+            // sibling ledger entry before the second file's turn came (2026-08-28: the genesis
+            // 1.5B digest landed under the Coder class id). Known weights serve their own class;
+            // only unknown weights are looking for one.
+            if terms.registered_artifact_roots.contains(&artifact.artifact_digest()) {
+                continue;
+            }
             for c in misaka_palw_base0::classes::canonical_classes_v1(&self.config.court) {
                 if c.shape_matches(artifact).is_ok()
                     && let Ok(root) = c.artifact_root(artifact)
@@ -610,6 +619,9 @@ impl PalwPanelService {
             }
         }
         for (computed_root, artifact) in &self.qwen36_artifacts {
+            if terms.registered_artifact_roots.contains(computed_root) {
+                continue;
+            }
             for c in misaka_palw_base0::classes::qwen36_canonical_classes_v1() {
                 if c.shape_matches(&artifact.shape).is_ok()
                     && let Ok(profile) = c.profile()

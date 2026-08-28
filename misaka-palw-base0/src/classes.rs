@@ -164,7 +164,12 @@ pub fn canonical_classes_v1(court: &PalwCourtParamsV2) -> Vec<CanonicalClassV1> 
     // takes the model id from the operator (`--palw-register-class <model-id>`) when more than one
     // entry matches, and the chain's duplicate-class refusal backstops a wrong pick of an already
     // registered sibling.
-    for (model_id, n_ctx) in [("Qwen/Qwen2.5-1.5B", 16u32), ("Qwen/Qwen2.5-Coder-1.5B-Instruct", 17)] {
+    // n_ctx 17 is BURNED: the 2026-08-28 mispairing registered it on chain with the genesis
+    // 1.5B digest (class 7886359c…, root c00faa48…) before the known-weights filter existed.
+    // That class stays on chain — nothing produces for it, panels answer Incapable, and the
+    // reclaim path is welcome to it — but this ledger must never derive it again, so the Coder
+    // takes the next rung.
+    for (model_id, n_ctx) in [("Qwen/Qwen2.5-1.5B", 16u32), ("Qwen/Qwen2.5-Coder-1.5B-Instruct", 18)] {
         let g = PalwQwen25GeometryV1 { n_ctx, ..QWEN25_1_5B };
         let Ok(profile) = qwen25_a16_profile_v1(g) else { continue };
         out.push(CanonicalClassV1 {
@@ -517,7 +522,7 @@ mod tests {
         assert_eq!(base.profile.n_ctx, 16);
 
         let coder = canonical_class_by_model_id_v1(&court(), "Qwen/Qwen2.5-Coder-1.5B-Instruct").expect("the sibling is in the registry");
-        assert_eq!(coder.profile.n_ctx, 17, "the sibling takes the next rung of the ladder");
+        assert_eq!(coder.profile.n_ctx, 18, "the sibling takes the next unburned rung of the ladder");
         assert_ne!(coder.class_id(), base.class_id(), "siblings must be DIFFERENT classes — the chain refuses a duplicate id");
         // And the whole reason registration needs a model id: the two entries are
         // indistinguishable by converted shape.

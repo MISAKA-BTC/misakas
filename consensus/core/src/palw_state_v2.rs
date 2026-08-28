@@ -1425,6 +1425,13 @@ pub struct PalwRegistrationTermsV2 {
     /// with. A registration for one of these is refused by the transition (`DuplicateClass`), so a
     /// builder uses this to skip siblings that are already on chain rather than submit a refusal.
     pub registered_class_ids: Vec<Hash64>,
+    /// Every artifact root those classes pinned, same read. A registration whose root is already
+    /// on this list would re-register WEIGHTS the chain already has under a new class id — never
+    /// meaningful, and exactly the mispairing that put the genesis 1.5B digest under the Coder
+    /// class id on 2026-08-28: with two same-shape artifacts loaded, the first file filled every
+    /// sibling ledger entry before the second file's turn came. Excluding known roots makes the
+    /// pairing unambiguous again.
+    pub registered_artifact_roots: Vec<Hash64>,
 }
 
 pub fn palw_class_registration_message_v2(
@@ -1944,6 +1951,12 @@ impl PalwChainStateV2 {
     /// any non-Dormant status, so a registration builder filters against the whole set.
     pub fn class_ids(&self) -> Vec<Hash64> {
         self.classes.keys().copied().collect()
+    }
+
+    /// Every registered class's pinned artifact root — the companion of [`Self::class_ids`],
+    /// for the registration builder's known-weights filter.
+    pub fn class_artifact_roots(&self) -> Vec<Hash64> {
+        self.classes.values().map(|record| record.artifact_root).collect()
     }
 
     pub fn class(&self, id: &Hash64) -> Option<&PalwClassStateV2> {
