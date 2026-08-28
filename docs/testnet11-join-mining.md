@@ -239,7 +239,33 @@ point of it, and it is why the exposure ceiling exists.
 
 ---
 
-## 6. Slow classes count too (ADR-0058), and how to mine the LLM classes
+## 6b. Do not stop your node with claims in flight
+
+Every block you produce opens a **claim** that lives on chain for hours (bind → receipts →
+challenge → court; the whole lattice is several thousand DAA). Until it resolves, **your node is
+the party responsible for serving that claim's execution material** — the panel seats verify what
+you produced from the bytes you broadcast, and a claim whose material nobody can obtain is
+**voided and slashed against your bond**. That is the data-availability half of the protocol, not
+a bug: work you cannot show is work nobody can check.
+
+Practical rules:
+
+* mine only while you can leave the node up for the day — if you must stop, expect the claims
+  from your last few hours to default and cost `pwu × slash_value_per_pwu` each off your bond;
+* the fleet also remembers: since protocol 104 every panel seat persists any material it has
+  heard and **re-serves it on request** (`PalwMaterialRequest`), so a brief restart is survivable
+  as long as your material reached at least one live seat while you were up. A node that was
+  never well-connected has no such safety net — check your peer count before relying on it;
+* your retention directory (`palw-retention/` under the app dir) is the durable copy the node
+  itself re-serves after a restart. Do not delete it while claims are unresolved.
+
+On 2026-08-28 five outside floor producers mined for a few hours, stopped their nodes, and every
+in-flight claim of theirs defaulted with the stake slashed — this section and the pull transport
+exist so the next operator does not repeat that.
+
+---
+
+## 6c. Slow classes count too (ADR-0058), and how to mine the LLM classes
 
 The floor produces a block roughly every two minutes; an LLM-class inference takes minutes on its
 own. Before ADR-0058 that meant an LLM block almost never won tip selection, and only chain blocks
