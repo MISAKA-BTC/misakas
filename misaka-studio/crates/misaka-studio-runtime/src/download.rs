@@ -162,7 +162,10 @@ impl DownloadManager {
         let id = format!("{repo}/{file}");
 
         if destination.exists() {
-            return Err(Error::bad_request(format!("{} already exists — delete it first to download it again", destination.display())));
+            return Err(Error::bad_request(format!(
+                "{} already exists — delete it first to download it again",
+                destination.display()
+            )));
         }
         {
             let jobs = self.jobs.read().await;
@@ -338,7 +341,9 @@ impl DownloadManager {
                     // model directory.
                     let _ = tokio::fs::remove_file(&part).await;
                     return Err(Error::Download {
-                        message: format!("the downloaded file does not match the digest the repository published (expected {expected}, got {actual}); it has been discarded"),
+                        message: format!(
+                            "the downloaded file does not match the digest the repository published (expected {expected}, got {actual}); it has been discarded"
+                        ),
                     });
                 }
                 Some(actual)
@@ -364,7 +369,9 @@ impl DownloadManager {
             p.status = status;
             p.error = error;
             p.bytes_per_second = 0.0;
-            if status == DownloadStatus::Completed && let Some(total) = p.total {
+            if status == DownloadStatus::Completed
+                && let Some(total) = p.total
+            {
                 p.downloaded = total;
             }
         })

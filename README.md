@@ -457,6 +457,28 @@ Logging in `kaspad` and `simpa` is [filtered](https://docs.rs/env_logger/0.10.0/
 Experiment with non-standard consensus parameters in non-mainnet environments via `--override-params-file <path>`. See [docs/override-params.md](docs/override-params.md).
 </details>
 
+## MISAKA Studio
+
+[`misaka-studio/`](misaka-studio/) is a local LLM desktop app in this repository — search Hugging
+Face, download a model, run it, and serve an OpenAI-compatible API on `localhost`, on Windows,
+macOS and Linux. It is **a separate cargo workspace** (named in the root `exclude`), so nothing
+here changes what `cargo build` produces for a node.
+
+It is in this tree rather than its own because of one thing it does that no other local-LLM app
+does: every completion is recorded with the identity of what produced it — the model's `h_M`, the
+runtime's `h_R` and determinism class — derived byte-for-byte the way
+[`consensus/core/src/vlt.rs`](consensus/core/src/vlt.rs) derives them. A model downloaded in the
+Studio already carries the identity a validator would compute for it. Verification, credit and the
+PALW path are deliberately **not** implemented there yet; the records they will need are.
+
+See [misaka-studio/README.md](misaka-studio/README.md) to run it and
+[docs/misaka-studio-design-v0.1.md](docs/misaka-studio-design-v0.1.md) for the design.
+
 ## Upstream & License
 
 misakas is a fork of [rusty-kaspa](https://github.com/kaspanet/rusty-kaspa) (the Rust Kaspa full-node by the Kaspa developers). All upstream credit goes to the Kaspa project; the post-quantum migration is layered on top. Distributed under the same ISC license — see [LICENSE](LICENSE).
+
+MISAKA Studio is ISC too. It was designed against [Jan](https://github.com/janhq/jan) (Apache-2.0,
+Menlo Research) as its reference open-source implementation and drives llama.cpp and MLX (both MIT)
+as external processes; see [misaka-studio/NOTICE](misaka-studio/NOTICE) for the attribution and the
+terms that apply.

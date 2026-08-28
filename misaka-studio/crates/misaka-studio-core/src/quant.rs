@@ -74,12 +74,7 @@ impl Quantization {
     /// An unrecognised tag. Kept rather than dropped: showing `Q4_0_4_8` with no numbers beats
     /// showing nothing, and beats claiming it is something it is not.
     pub fn unknown(label: impl Into<String>) -> Self {
-        Quantization {
-            label: label.into(),
-            bits_per_weight: None,
-            family: QuantFamily::Unknown,
-            tier: QuantTier::Unknown,
-        }
+        Quantization { label: label.into(), bits_per_weight: None, family: QuantFamily::Unknown, tier: QuantTier::Unknown }
     }
 
     /// From `general.file_type` — llama.cpp's `LLAMA_FTYPE` enum.

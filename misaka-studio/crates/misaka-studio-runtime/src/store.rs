@@ -285,10 +285,7 @@ fn inspect_mlx_dir(path: &Path) -> Option<LocalModel> {
     if !config_path.is_file() {
         return None;
     }
-    let has_weights = std::fs::read_dir(path)
-        .ok()?
-        .flatten()
-        .any(|e| e.file_name().to_string_lossy().ends_with(".safetensors"));
+    let has_weights = std::fs::read_dir(path).ok()?.flatten().any(|e| e.file_name().to_string_lossy().ends_with(".safetensors"));
     if !has_weights {
         return None;
     }
@@ -343,7 +340,7 @@ mod tests {
         out.extend_from_slice(&3u32.to_le_bytes());
         out.extend_from_slice(&0u64.to_le_bytes()); // tensors
         out.extend_from_slice(&2u64.to_le_bytes()); // kv pairs
-        let mut kv = |key: &str, value: &[u8], ty: u32, out: &mut Vec<u8>| {
+        let kv = |key: &str, value: &[u8], ty: u32, out: &mut Vec<u8>| {
             out.extend_from_slice(&(key.len() as u64).to_le_bytes());
             out.extend_from_slice(key.as_bytes());
             out.extend_from_slice(&ty.to_le_bytes());

@@ -51,6 +51,24 @@ struct Args {
     #[arg(long, env = "MISAKA_STUDIO_LLAMA_SERVER")]
     llama_server: Option<PathBuf>,
 
+    /// Exit when standard input closes.
+    ///
+    /// How the desktop shell makes sure this process cannot outlive it: the shell spawns the
+    /// runtime with a pipe on stdin and never writes to it, so when the shell dies — normally, on
+    /// a crash, or on a force-quit — the OS closes the write end and this process reads EOF.
+    ///
+    /// The obvious alternative, polling the parent's PID, was tried first and does not work. A
+    /// force-quit leaves the parent a zombie until its own parent reaps it, and a zombie is still
+    /// a row in the process table with the right PID, the right start time and, on Linux, a
+    /// status `sysinfo` did not report as dead — so the runtime kept serving indefinitely, which
+    /// is exactly the failure this exists to prevent. The pipe has no such ambiguity: the kernel
+    /// closes it when the process dies, reaped or not.
+    ///
+    /// Only pass this when stdin really is such a pipe. From a terminal, stdin is the tty and
+    /// Ctrl-D would stop the runtime.
+    #[arg(long)]
+    exit_on_stdin_close: bool,
+
     /// Log filter, in `tracing` syntax.
     #[arg(long, env = "MISAKA_STUDIO_LOG", default_value = "info")]
     log: String,
@@ -84,15 +102,13 @@ impl From<BackendArg> for BackendKind {
 async fn main() -> anyhow::Result<()> {
     let args = Args::parse();
 
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::new(&args.log))
-        .with_target(false)
-        .init();
+    tracing_subscriber::fmt().with_env_filter(tracing_subscriber::EnvFilter::new(&args.log)).with_target(false).init();
 
     let data_dir = args.data_dir.clone().unwrap_or_else(default_data_dir);
-    let settings_path = args.settings.clone().unwrap_or_else(|| {
-        if args.data_dir.is_some() { data_dir.join("settings.json") } else { default_settings_path() }
-    });
+    let settings_path = args
+        .settings
+        .clone()
+        .unwrap_or_else(|| if args.data_dir.is_some() { data_dir.join("settings.json") } else { default_settings_path() });
 
     let mut settings = Settings::load(&settings_path)?;
     if let Some(host) = args.host.clone() {
@@ -159,23 +175,39 @@ async fn main() -> anyhow::Result<()> {
         tracing::info!("  UI                    : not bundled; serving the API only");
     }
 
+    let parent_gone = args.exit_on_stdin_close.then(watch_stdin_eof);
+
     axum::serve(listener, app)
-        .with_graceful_shutdown(async {
-            // Both signals, because a desktop shell stopping its sidecar sends SIGTERM and a
-            // developer in a terminal sends SIGINT — and an engine left running holds the GPU.
-            #[cfg(unix)]
-            {
-                let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).expect("SIGTERM handler");
-                tokio::select! {
-                    _ = tokio::signal::ctrl_c() => {}
-                    _ = term.recv() => {}
+        .with_graceful_shutdown(async move {
+            let signals = async {
+                // Both signals, because a desktop shell stopping its sidecar sends SIGTERM and a
+                // developer in a terminal sends SIGINT — and an engine left running holds the GPU.
+                #[cfg(unix)]
+                {
+                    let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).expect("SIGTERM handler");
+                    tokio::select! {
+                        _ = tokio::signal::ctrl_c() => {}
+                        _ = term.recv() => {}
+                    }
+                }
+                #[cfg(not(unix))]
+                {
+                    let _ = tokio::signal::ctrl_c().await;
+                }
+            };
+
+            match parent_gone {
+                Some(parent_gone) => {
+                    tokio::select! {
+                        _ = signals => tracing::info!("shutting down"),
+                        _ = parent_gone => tracing::info!("standard input closed; the parent is gone, shutting down"),
+                    }
+                }
+                None => {
+                    signals.await;
+                    tracing::info!("shutting down");
                 }
             }
-            #[cfg(not(unix))]
-            {
-                let _ = tokio::signal::ctrl_c().await;
-            }
-            tracing::info!("shutting down");
         })
         .await?;
 
@@ -185,4 +217,26 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!("could not stop the engine cleanly: {e}");
     }
     Ok(())
+}
+
+/// Resolves when standard input reaches EOF — see `--exit-on-stdin-close`.
+///
+/// A blocking read on the blocking pool: a read on stdin cannot be made async portably, and this
+/// one is meant to block for the entire life of the process.
+fn watch_stdin_eof() -> tokio::task::JoinHandle<()> {
+    tokio::task::spawn_blocking(|| {
+        use std::io::Read;
+        let mut stdin = std::io::stdin();
+        let mut buffer = [0u8; 64];
+        loop {
+            match stdin.read(&mut buffer) {
+                // EOF: the write end of the pipe is gone, which means the parent is.
+                Ok(0) => return,
+                // Anything written is ignored — the pipe is a liveness signal, not a channel.
+                Ok(_) => {}
+                // A read error is not recoverable, and means the same thing.
+                Err(_) => return,
+            }
+        }
+    })
 }

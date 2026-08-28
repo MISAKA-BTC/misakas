@@ -82,12 +82,8 @@ impl InferenceBackend for MockBackend {
 
     fn load(&self, request: LoadRequest) -> BoxFuture<'_, Result<LoadedModel>> {
         Box::pin(async move {
-            let model = LoadedModel {
-                model_id: request.model_id,
-                context_size: request.context_size,
-                gpu_layers: Some(0),
-                load_ms: 0,
-            };
+            let model =
+                LoadedModel { model_id: request.model_id, context_size: request.context_size, gpu_layers: Some(0), load_ms: 0 };
             *self.loaded.lock().expect("mock lock") = Some(model.clone());
             Ok(model)
         })
@@ -109,7 +105,10 @@ impl InferenceBackend for MockBackend {
         Box::pin(async move {
             let text = Self::compose(&request);
             let prompt_tokens = approximate_tokens(
-                &request.prompt.clone().unwrap_or_else(|| request.messages.iter().map(|m| m.content.as_str()).collect::<Vec<_>>().join(" ")),
+                &request
+                    .prompt
+                    .clone()
+                    .unwrap_or_else(|| request.messages.iter().map(|m| m.content.as_str()).collect::<Vec<_>>().join(" ")),
             );
             // Split on spaces but keep them, so reassembling the deltas reproduces the text
             // exactly — a stream whose concatenation differs from the whole answer is the bug
@@ -138,11 +137,7 @@ impl InferenceBackend for MockBackend {
                 }
                 let _ = tx
                     .send(Ok(StreamEvent::Done {
-                        usage: Usage {
-                            prompt_tokens,
-                            completion_tokens,
-                            total_tokens: prompt_tokens + completion_tokens,
-                        },
+                        usage: Usage { prompt_tokens, completion_tokens, total_tokens: prompt_tokens + completion_tokens },
                         finish_reason: "stop".into(),
                     }))
                     .await;

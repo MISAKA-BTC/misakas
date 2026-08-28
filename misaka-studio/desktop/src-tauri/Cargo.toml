@@ -1,0 +1,30 @@
+[package]
+name = "misaka-studio-desktop"
+description = "MISAKA Studio desktop shell: a native window over the Studio UI and its runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+# `misaka-studio` is the app; the library exists so `cargo test` can reach the sidecar-resolution
+# logic, which is the only part of this crate with decisions in it.
+[[bin]]
+name = "misaka-studio"
+path = "src/main.rs"
+
+[lib]
+name = "misaka_studio_desktop"
+path = "src/lib.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+tauri = { version = "2", features = [] }
+
+[dev-dependencies]
+tempfile = "3"

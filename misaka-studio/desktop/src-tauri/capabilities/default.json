@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "The shell's window talks to the runtime over loopback HTTP and needs nothing else. No filesystem, shell, or HTTP plugin capability is granted — the model directory, the downloads and the process supervision all live in the runtime, where they are already guarded.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

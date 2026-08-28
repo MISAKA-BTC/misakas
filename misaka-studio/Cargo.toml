@@ -10,7 +10,7 @@
 # `cargo build` inside this directory builds the Studio.
 [workspace]
 resolver = "2"
-members = ["crates/misaka-studio-core", "crates/misaka-studio-runtime"]
+members = ["crates/misaka-studio-core", "crates/misaka-studio-runtime", "desktop/src-tauri"]
 
 # The Tauri shell is a member but NOT a default member: it links the platform webview
 # (webkit2gtk on Linux, WebView2 on Windows, WKWebView on macOS), which a headless CI runner

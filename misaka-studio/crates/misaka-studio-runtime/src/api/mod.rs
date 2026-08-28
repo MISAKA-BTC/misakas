@@ -69,11 +69,8 @@ async fn authenticate(State(state): State<Arc<AppState>>, headers: HeaderMap, re
         return next.run(request).await;
     }
 
-    let presented = headers
-        .get(header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .map(str::trim);
+    let presented =
+        headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("Bearer ")).map(str::trim);
 
     match presented {
         Some(token) if constant_time_eq(token.as_bytes(), key.as_bytes()) => next.run(request).await,

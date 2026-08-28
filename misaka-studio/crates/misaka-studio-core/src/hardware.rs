@@ -138,11 +138,7 @@ impl HardwareSnapshot {
 
     /// The largest single memory pool a model could live in: the best accelerator, or system RAM.
     pub fn best_usable_memory(&self) -> u64 {
-        self.accelerators
-            .iter()
-            .filter_map(|a| a.usable_memory)
-            .max()
-            .unwrap_or_else(|| cpu_usable_memory(self.total_memory))
+        self.accelerators.iter().filter_map(|a| a.usable_memory).max().unwrap_or_else(|| cpu_usable_memory(self.total_memory))
     }
 
     /// True when GPU offload is possible at all — the UI hides offload controls otherwise.
@@ -202,11 +198,8 @@ impl HardwareMonitor {
         self.system.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[self.pid]));
 
         let cpu_percent = self.system.global_cpu_usage();
-        let (process_cpu_percent, process_memory) = self
-            .system
-            .process(self.pid)
-            .map(|p| (p.cpu_usage(), p.memory()))
-            .unwrap_or((0.0, 0));
+        let (process_cpu_percent, process_memory) =
+            self.system.process(self.pid).map(|p| (p.cpu_usage(), p.memory())).unwrap_or((0.0, 0));
 
         let stale = self.gpu_polled_at.map(|t| t.elapsed() >= GPU_POLL_INTERVAL).unwrap_or(true);
         if stale && self.accelerators.iter().any(|a| a.kind != AcceleratorKind::Cpu) {
@@ -239,10 +232,9 @@ fn run(cmd: &str, args: &[&str]) -> Option<String> {
 }
 
 fn detect_nvidia() -> Vec<Accelerator> {
-    let Some(text) = run(
-        "nvidia-smi",
-        &["--query-gpu=index,name,memory.total,memory.free,driver_version", "--format=csv,noheader,nounits"],
-    ) else {
+    let Some(text) =
+        run("nvidia-smi", &["--query-gpu=index,name,memory.total,memory.free,driver_version", "--format=csv,noheader,nounits"])
+    else {
         return Vec::new();
     };
     text.lines()
@@ -284,7 +276,7 @@ fn detect_amd_inner() -> Option<Vec<Accelerator>> {
     let used_col = col("vram total used memory");
     let devices = lines
         .enumerate()
-        .filter_map(|(i, line)| {
+        .map(|(i, line)| {
             let f: Vec<&str> = line.split(',').map(str::trim).collect();
             let get = |c: Option<usize>| c.and_then(|c| f.get(c)).copied();
             let total = get(total_col).and_then(|v| v.parse::<u64>().ok());
@@ -293,7 +285,7 @@ fn detect_amd_inner() -> Option<Vec<Accelerator>> {
                 (Some(t), Some(u)) => Some(t.saturating_sub(u)),
                 _ => None,
             };
-            Some(Accelerator {
+            Accelerator {
                 kind: AcceleratorKind::Rocm,
                 name: get(name_col).unwrap_or("AMD GPU").to_string(),
                 total_memory: total,
@@ -301,7 +293,7 @@ fn detect_amd_inner() -> Option<Vec<Accelerator>> {
                 usable_memory: free.map(|b| (b as f64 * 0.9) as u64),
                 driver: None,
                 index: i as u32,
-            })
+            }
         })
         .collect();
     Some(devices)

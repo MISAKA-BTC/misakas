@@ -1,0 +1,138 @@
+name: MISAKA Studio
+
+# Path-filtered, and its own workflow rather than jobs bolted onto `ci.yaml`, for the same reason
+# the Studio is its own cargo workspace: it has a separate lockfile, a Node toolchain and a
+# webview dependency, none of which belong in the gate a validator's build has to pass. A change
+# to `consensus/` should not wait on an npm install, and a change here should not be able to turn
+# the node's gate red.
+on:
+  push:
+    paths:
+      - 'misaka-studio/**'
+      - '.github/workflows/misaka-studio.yaml'
+  pull_request:
+    paths:
+      - 'misaka-studio/**'
+      - '.github/workflows/misaka-studio.yaml'
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: Runtime (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # All three platforms the Studio ships on. The runtime supervises child processes, reads
+        # `/proc`-shaped things through `sysinfo`, and builds engine command lines with platform
+        # binary names — every one of those is a class of bug that only shows up when compiled for
+        # the platform in question, and the node's own `check-windows` job exists for the same
+        # reason.
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    defaults:
+      run:
+        working-directory: misaka-studio
+    steps:
+      - name: Fix CRLF
+        if: runner.os == 'Windows'
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: misaka-studio
+
+      # Formatting and lints only need to be checked once; running them on three platforms would
+      # report the same diff three times.
+      - name: Formatting
+        if: runner.os == 'Linux'
+        run: cargo fmt --check
+
+      - name: Clippy
+        if: runner.os == 'Linux'
+        # `--all-targets` covers tests and examples: they have carried the platform-specific
+        # mistakes before.
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test
+
+      # The default members are the runtime and core; the Tauri shell is deliberately outside them
+      # (it links the platform webview) and gets its own job below.
+      - name: Build
+        run: cargo build --release
+
+  ui:
+    name: UI
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: misaka-studio/ui
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: misaka-studio/ui/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      # `npm run build` runs `tsc --noEmit` first, so a type error fails here rather than shipping
+      # a bundle that throws at runtime.
+      - name: Typecheck and bundle
+        run: npm run build
+
+  desktop:
+    name: Desktop shell
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: misaka-studio
+
+      # Tauri links the platform webview. macOS and Windows runners have theirs; Linux needs the
+      # GTK/WebKit development packages installed.
+      - name: Install webview dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: misaka-studio/ui/package-lock.json
+
+      # `tauri.conf.json` points `frontendDist` at `ui/dist`, and `tauri-build` embeds it — so the
+      # bundle has to exist before the shell compiles.
+      - name: Build the UI bundle
+        working-directory: misaka-studio/ui
+        run: npm ci && npm run build
+
+      - name: Check the shell
+        working-directory: misaka-studio
+        # `check`, not `build`: this job exists to catch a shell that stopped compiling, and the
+        # link step of a webview binary costs minutes for no additional signal.
+        run: cargo check -p misaka-studio-desktop --all-targets
+
+      - name: Test the shell
+        working-directory: misaka-studio
+        run: cargo test -p misaka-studio-desktop

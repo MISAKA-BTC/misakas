@@ -234,14 +234,7 @@ mod tests {
         let path = dir.path().join("records.jsonl");
         let store = RecordStore::open(path.clone(), 100, true).await;
         store.append(record("good")).await;
-        tokio::fs::OpenOptions::new()
-            .append(true)
-            .open(&path)
-            .await
-            .expect("open")
-            .write_all(b"{ truncated\n")
-            .await
-            .expect("write");
+        tokio::fs::OpenOptions::new().append(true).open(&path).await.expect("open").write_all(b"{ truncated\n").await.expect("write");
 
         let reopened = RecordStore::open(path, 100, true).await;
         assert_eq!(reopened.list(10).await.len(), 1);

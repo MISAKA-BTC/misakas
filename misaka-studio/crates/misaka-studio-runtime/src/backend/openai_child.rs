@@ -41,6 +41,12 @@ const LOG_LINES: usize = 400;
 /// How often the health endpoint is polled while waiting for a load.
 const HEALTH_POLL: Duration = Duration::from_millis(250);
 
+/// Builds an engine's command line from a load request and the port it should listen on.
+///
+/// A named type rather than the inline `Box<dyn Fn…>` so the one thing that differs between
+/// backends has a name where the reader meets it.
+pub type ArgsBuilder = Box<dyn Fn(&LoadRequest, u16) -> Vec<String> + Send + Sync>;
+
 /// What a concrete backend must supply.
 pub struct ChildEngineConfig {
     /// Backend name, as it appears in records: `llamacpp`, `mlx`.
@@ -48,7 +54,7 @@ pub struct ChildEngineConfig {
     /// The executable.
     pub program: PathBuf,
     /// Build the argument list for a load, given the request and the port to listen on.
-    pub args: Box<dyn Fn(&LoadRequest, u16) -> Vec<String> + Send + Sync>,
+    pub args: ArgsBuilder,
     /// Path of the health endpoint, relative to the base URL.
     pub health_path: &'static str,
     /// Seconds to wait for the engine to report healthy.
@@ -150,11 +156,9 @@ impl ChildEngine {
             .kill_on_drop(true);
 
         tracing::info!(program = %self.config.program.display(), ?args, "starting engine");
-        let mut child = command.spawn().map_err(|e| {
-            Error::Engine {
-                backend: self.config.name,
-                message: format!("could not start {}: {e}", self.config.program.display()),
-            }
+        let mut child = command.spawn().map_err(|e| Error::Engine {
+            backend: self.config.name,
+            message: format!("could not start {}: {e}", self.config.program.display()),
         })?;
 
         for stream in [child.stdout.take().map(Pipe::Out), child.stderr.take().map(Pipe::Err)].into_iter().flatten() {
@@ -246,10 +250,12 @@ impl ChildEngine {
                 .unwrap_or_else(|| request.messages.iter().map(|m| m.content.as_str()).collect::<Vec<_>>().join("\n")),
         );
 
-        let response = http.post(&url).json(&body).send().await.map_err(|e| Error::Engine {
-            backend,
-            message: format!("the engine did not accept the request: {e}"),
-        })?;
+        let response = http
+            .post(&url)
+            .json(&body)
+            .send()
+            .await
+            .map_err(|e| Error::Engine { backend, message: format!("the engine did not accept the request: {e}") })?;
 
         if !response.status().is_success() {
             let status = response.status();

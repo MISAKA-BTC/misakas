@@ -393,10 +393,8 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.expect("binds");
         let addr = listener.local_addr().expect("addr");
         tokio::spawn(async move {
-            let app = axum::Router::new().route(
-                "/api/models/{*rest}",
-                get(|| async { (axum::http::StatusCode::NOT_FOUND, "Repo not found") }),
-            );
+            let app = axum::Router::new()
+                .route("/api/models/{*rest}", get(|| async { (axum::http::StatusCode::NOT_FOUND, "Repo not found") }));
             let _ = axum::serve(listener, app).await;
         });
         let catalog = Catalog::new(format!("http://{addr}"), None);

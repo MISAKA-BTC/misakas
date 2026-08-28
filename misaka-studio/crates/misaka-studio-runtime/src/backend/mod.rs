@@ -29,6 +29,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 pub mod llamacpp;
+pub mod misaka;
 pub mod mlx;
 pub mod mock;
 pub mod openai_child;
@@ -141,11 +142,16 @@ pub trait InferenceBackend: Send + Sync {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "state", rename_all = "snake_case")]
 pub enum Availability {
-    Available { detail: String },
+    Available {
+        detail: String,
+    },
     /// Present in principle, missing something concrete. `remedy` is shown to the user, so it is
     /// an instruction ("install llama.cpp, or set backend.llama_server_path") rather than a
     /// diagnosis.
-    Unavailable { reason: String, remedy: String },
+    Unavailable {
+        reason: String,
+        remedy: String,
+    },
 }
 
 impl Availability {

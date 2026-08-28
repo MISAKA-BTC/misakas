@@ -18,8 +18,15 @@ import type {
   SystemInfo,
 } from './types'
 
-/** Where the runtime is. Same origin when it serves the bundle; the Vite proxy in development. */
-export const API_BASE = ''
+/**
+ * Where the runtime is.
+ *
+ * Empty — same origin — when the runtime is serving this bundle over HTTP, and when the Vite dev
+ * server is proxying to it. The desktop shell loads the bundle from disk instead, where there is
+ * no origin to be same as, so it injects the runtime's URL before this module runs. One bundle,
+ * three ways of reaching the same API.
+ */
+export const API_BASE: string = (globalThis as { __MISAKA_STUDIO_API__?: string }).__MISAKA_STUDIO_API__ ?? ''
 
 export class ApiError extends Error {
   constructor(

@@ -375,11 +375,8 @@ impl InferenceRecord {
             ],
         );
 
-        let tokens_per_second = if inputs.duration_ms > 0 {
-            inputs.completion_tokens as f64 * 1000.0 / inputs.duration_ms as f64
-        } else {
-            0.0
-        };
+        let tokens_per_second =
+            if inputs.duration_ms > 0 { inputs.completion_tokens as f64 * 1000.0 / inputs.duration_ms as f64 } else { 0.0 };
 
         InferenceRecord {
             id: id.into(),

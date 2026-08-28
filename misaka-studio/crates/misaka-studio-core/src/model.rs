@@ -100,11 +100,7 @@ impl LocalModel {
             has_chat_template: gguf.chat_template().is_some(),
             source,
             sha256: None,
-            modified_at: meta
-                .modified()
-                .ok()
-                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                .map(|d| d.as_secs()),
+            modified_at: meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_secs()),
         })
     }
 
@@ -349,7 +345,7 @@ mod tests {
         };
         let laptop = machine(16, None);
         let ctx = model.recommended_context(&laptop);
-        assert!(ctx >= 2048 && ctx < 131_072, "got {ctx}");
+        assert!((2048..131_072).contains(&ctx), "got {ctx}");
         assert!(model.requirements(ctx).total_bytes <= laptop.best_usable_memory());
 
         // A workstation should not be punished for the laptop's limits.

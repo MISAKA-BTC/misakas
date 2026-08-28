@@ -179,7 +179,11 @@ fn completion_id(chat: bool) -> String {
 }
 
 /// Collect the whole generation into one response.
-async fn aggregate(mut stream: futures_util::stream::BoxStream<'static, Result<StreamEvent>>, model: String, chat: bool) -> Result<Response> {
+async fn aggregate(
+    mut stream: futures_util::stream::BoxStream<'static, Result<StreamEvent>>,
+    model: String,
+    chat: bool,
+) -> Result<Response> {
     let mut text = String::new();
     let mut usage = Usage::default();
     let mut finish_reason = "stop".to_string();

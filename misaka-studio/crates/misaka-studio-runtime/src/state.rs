@@ -6,6 +6,7 @@
 //! needs to see "23 of 33 layers offloaded, VRAM was the limit" rather than a spinner.
 
 use crate::backend::llamacpp::{LlamaCppBackend, accelerator_tag};
+use crate::backend::misaka::MisakaBackend;
 use crate::backend::mlx::MlxBackend;
 use crate::backend::mock::MockBackend;
 use crate::backend::{ChatMessage, GenerationRequest, LoadRequest, LoadedModel, SharedBackend, StreamEvent, Usage};
@@ -166,9 +167,8 @@ impl AppState {
             return Err(Error::BackendUnavailable { backend: backend.name().to_string(), reason, remedy });
         }
 
-        let context_size = context_override
-            .or(settings.generation.context_size)
-            .unwrap_or_else(|| model.recommended_context(&self.hardware) as u32);
+        let context_size =
+            context_override.or(settings.generation.context_size).unwrap_or_else(|| model.recommended_context(&self.hardware) as u32);
         let gpu_layers = plan_gpu_layers(&model, &self.hardware, context_size as u64, settings.backend.gpu_layers);
 
         let loaded = backend
@@ -274,13 +274,7 @@ impl AppState {
             None => messages.iter().map(|m| format!("{}:{}", m.role, m.content)).collect::<Vec<_>>().join("\n"),
         };
 
-        let request = GenerationRequest {
-            model: state.model.id.clone(),
-            messages,
-            prompt,
-            params,
-            stop,
-        };
+        let request = GenerationRequest { model: state.model.id.clone(), messages, prompt, params, stop };
 
         self.metrics.generation_started();
         let inner = match backend.generate(request).await {
@@ -385,8 +379,8 @@ pub fn build_backend(settings: &Settings, hardware: &HardwareSnapshot) -> Shared
         BackendKind::Mlx => Arc::new(MlxBackend::new(settings.backend.mlx_server_path.clone(), timeout)),
         BackendKind::LlamaCpp => Arc::new(LlamaCppBackend::new(settings.backend.llama_server_path.clone(), tag, timeout)),
         // Reserved, and refused rather than silently substituted: a user who selected the MISAKA
-        // runtime must not be given llama.cpp and a record claiming it.
-        BackendKind::Misaka => Arc::new(LlamaCppBackend::new(settings.backend.llama_server_path.clone(), tag, timeout)),
+        // runtime must not be given llama.cpp under a record that names MISAKA.
+        BackendKind::Misaka => Arc::new(MisakaBackend),
         // Auto: MLX where it can run, llama.cpp everywhere else. MLX is chosen only on Apple
         // Silicon, and only when its server is actually installed — the check happens at load,
         // where a missing engine is reported with a remedy.

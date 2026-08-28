@@ -311,10 +311,7 @@ pub fn default_data_dir() -> PathBuf {
     } else if cfg!(target_os = "macos") {
         home().join("Library/Application Support/MISAKA Studio")
     } else {
-        std::env::var_os("XDG_DATA_HOME")
-            .map(PathBuf::from)
-            .unwrap_or_else(|| home().join(".local/share"))
-            .join("misaka-studio")
+        std::env::var_os("XDG_DATA_HOME").map(PathBuf::from).unwrap_or_else(|| home().join(".local/share")).join("misaka-studio")
     }
 }
 

@@ -79,9 +79,7 @@ impl InferenceBackend for MlxBackend {
                     remedy: "Use the llama.cpp backend on this machine.".into(),
                 };
             }
-            self.engine
-                .availability("Install it with `pip install mlx-lm`, or set backend.mlx_server_path to the script.")
-                .await
+            self.engine.availability("Install it with `pip install mlx-lm`, or set backend.mlx_server_path to the script.").await
         })
     }
 

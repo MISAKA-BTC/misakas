@@ -96,7 +96,9 @@ async fn metrics_now(State(state): State<Arc<AppState>>) -> Json<crate::metrics:
 }
 
 /// Live metrics over SSE.
-async fn metrics_stream(State(state): State<Arc<AppState>>) -> Sse<impl futures_util::Stream<Item = std::result::Result<Event, Infallible>>> {
+async fn metrics_stream(
+    State(state): State<Arc<AppState>>,
+) -> Sse<impl futures_util::Stream<Item = std::result::Result<Event, Infallible>>> {
     let rx = state.metrics.subscribe();
     let stream = tokio_stream::wrappers::BroadcastStream::new(rx).filter_map(|sample| async move {
         // A lagged receiver has missed samples. Skipping them is right for a gauge: the next
@@ -124,14 +126,7 @@ fn view(model: &LocalModel, hardware: &HardwareSnapshot) -> ModelView {
     let recommended_context = model.recommended_context(hardware);
     let requirements = model.requirements(recommended_context);
     let fit = FitVerdict::assess(&requirements, hardware);
-    ModelView {
-        recommended_context,
-        requirements,
-        fit_summary: fit.summary(),
-        fit,
-        identity: model.identity(),
-        model: model.clone(),
-    }
+    ModelView { recommended_context, requirements, fit_summary: fit.summary(), fit, identity: model.identity(), model: model.clone() }
 }
 
 async fn list_models(State(state): State<Arc<AppState>>) -> Json<Vec<ModelView>> {
@@ -205,14 +200,16 @@ struct BackendInfo {
 
 /// Which engines this machine could use. What the Settings screen lists.
 async fn backends(State(state): State<Arc<AppState>>) -> Json<Vec<BackendInfo>> {
+    use misaka_studio_core::settings::{BackendKind, BackendSettings};
+
     let settings = state.settings.read().await.clone();
     let selected = state.backend().await;
     let mut out = Vec::new();
-    for backend in [
-        crate::state::build_backend(&Settings { backend: misaka_studio_core::settings::BackendSettings { kind: misaka_studio_core::settings::BackendKind::LlamaCpp, ..settings.backend.clone() }, ..settings.clone() }, &state.hardware),
-        crate::state::build_backend(&Settings { backend: misaka_studio_core::settings::BackendSettings { kind: misaka_studio_core::settings::BackendKind::Mlx, ..settings.backend.clone() }, ..settings.clone() }, &state.hardware),
-        crate::state::build_backend(&Settings { backend: misaka_studio_core::settings::BackendSettings { kind: misaka_studio_core::settings::BackendKind::Mock, ..settings.backend.clone() }, ..settings.clone() }, &state.hardware),
-    ] {
+    // `Auto` is not listed: it is a rule for choosing among these, not a backend, and showing it
+    // beside them would invite "is Auto available?" — a question with no answer.
+    for kind in [BackendKind::LlamaCpp, BackendKind::Mlx, BackendKind::Misaka, BackendKind::Mock] {
+        let probe = Settings { backend: BackendSettings { kind, ..settings.backend.clone() }, ..settings.clone() };
+        let backend = crate::state::build_backend(&probe, &state.hardware);
         out.push(BackendInfo {
             selected: backend.name() == selected.name(),
             availability: backend.availability().await,
@@ -233,7 +230,10 @@ fn default_limit() -> usize {
     20
 }
 
-async fn search(State(state): State<Arc<AppState>>, Query(query): Query<SearchQuery>) -> Result<Json<Vec<crate::catalog::CatalogEntry>>> {
+async fn search(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<SearchQuery>,
+) -> Result<Json<Vec<crate::catalog::CatalogEntry>>> {
     let catalog = state.catalog().await;
     Ok(Json(catalog.search(&query.q, query.limit).await?))
 }
@@ -293,17 +293,7 @@ async fn start_download(State(state): State<Arc<AppState>>, Json(body): Json<Sta
 
     let progress = state
         .downloads
-        .start(
-            &catalog,
-            state.store.clone(),
-            settings.models_dir.clone(),
-            body.repo,
-            revision,
-            body.file,
-            sha256,
-            size,
-            base_model,
-        )
+        .start(&catalog, state.store.clone(), settings.models_dir.clone(), body.repo, revision, body.file, sha256, size, base_model)
         .await?;
     Ok(Json(progress))
 }
