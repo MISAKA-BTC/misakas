@@ -583,27 +583,56 @@ impl PalwPanelService {
         // WHICH weights it holds), so the already-registered ids are dropped — submitting one is
         // a guaranteed `DuplicateClass` refusal — and if more than one candidate is still
         // standing, the operator's `--palw-register-class <model-id>` is what picks.
-        let mut candidates: Vec<(misaka_palw_base0::classes::CanonicalClassV1, Hash64)> = Vec::new();
+        // One candidate shape regardless of lineage: what a registration needs is the model id
+        // (for the operator), the profile (the class), the canonical job (what it is paid per)
+        // and the root its artifact pins.
+        struct RegistrationCandidateV1 {
+            model_id: &'static str,
+            profile: kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+            canonical_job: (u32, u32),
+            artifact_root: Hash64,
+        }
+        let mut candidates: Vec<RegistrationCandidateV1> = Vec::new();
         for artifact in &self.class_artifacts {
             for c in misaka_palw_base0::classes::canonical_classes_v1(&self.config.court) {
                 if c.shape_matches(artifact).is_ok()
                     && let Ok(root) = c.artifact_root(artifact)
-                    && !candidates.iter().any(|(seen, _)| seen.class_id() == c.class_id())
+                    && !candidates.iter().any(|seen| seen.profile.shape_profile_id() == c.class_id())
                 {
-                    candidates.push((c, root));
+                    candidates.push(RegistrationCandidateV1 {
+                        model_id: c.model_id,
+                        profile: c.profile.clone(),
+                        canonical_job: c.canonical_job,
+                        artifact_root: root,
+                    });
+                }
+            }
+        }
+        for (computed_root, artifact) in &self.qwen36_artifacts {
+            for c in misaka_palw_base0::classes::qwen36_canonical_classes_v1() {
+                if c.shape_matches(&artifact.shape).is_ok()
+                    && let Ok(profile) = c.profile()
+                    && !candidates.iter().any(|seen| seen.profile.shape_profile_id() == profile.shape_profile_id())
+                {
+                    candidates.push(RegistrationCandidateV1 {
+                        model_id: c.model_id,
+                        profile,
+                        canonical_job: c.canonical_job,
+                        artifact_root: *computed_root,
+                    });
                 }
             }
         }
         if candidates.is_empty() {
             return Err("no --palw-class-artifact matches a class this build knows, so there is nothing to register".to_string());
         }
-        candidates.retain(|(c, _)| !terms.registered_class_ids.contains(&c.class_id()));
+        candidates.retain(|c| !terms.registered_class_ids.contains(&c.profile.shape_profile_id()));
         if candidates.is_empty() {
             return Err("every class this node's artifacts match is already registered on this chain".to_string());
         }
         let wanted = self.config.register_class.as_deref().unwrap_or("");
         if !wanted.is_empty() {
-            candidates.retain(|(c, _)| c.model_id == wanted);
+            candidates.retain(|c| c.model_id == wanted);
             if candidates.is_empty() {
                 return Err(format!(
                     "--palw-register-class {wanted} names no unregistered class this node's artifacts match — \
@@ -612,14 +641,15 @@ impl PalwPanelService {
             }
         }
         if candidates.len() > 1 {
-            let names: Vec<&str> = candidates.iter().map(|(c, _)| c.model_id).collect();
+            let names: Vec<&str> = candidates.iter().map(|c| c.model_id).collect();
             return Err(format!(
                 "this node's artifacts match {} unregistered classes ({}) — name one with --palw-register-class <model-id>",
                 names.len(),
                 names.join(", ")
             ));
         }
-        let (entry, artifact_root) = candidates.pop().expect("length checked above");
+        let entry = candidates.pop().expect("length checked above");
+        let artifact_root = entry.artifact_root;
 
         let canonical =
             kaspa_consensus_core::palw_base0_profile::rc_job_context(&entry.profile, entry.canonical_job.0, entry.canonical_job.1);

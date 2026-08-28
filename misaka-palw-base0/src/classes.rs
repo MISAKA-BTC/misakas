@@ -205,6 +205,99 @@ pub fn canonical_classes_v1(court: &PalwCourtParamsV2) -> Vec<CanonicalClassV1> 
     out
 }
 
+/// **One class of the qwen36 lineage this build knows the canonical form of.**
+///
+/// A separate table from [`CanonicalClassV1`] because the artifact is a different животное: a
+/// memory-mapped `.palwq36` whose root is COMPUTED over the mapping (`Qwen36ArtifactV1`), not a
+/// dense `.palwart` matched by digest — so the shape check, the root derivation and the backend
+/// dispatch are all different code. What the two tables share is the CONTRACT: model id →
+/// frozen geometry → profile whose id is the class id, and registration/resolution both read
+/// this table rather than a hard-coded id.
+#[derive(Clone, Debug)]
+pub struct Qwen36CanonicalClassV1 {
+    pub model_id: &'static str,
+    pub geometry: kaspa_consensus_core::palw_qwen36_profile::PalwQwen36GeometryV1,
+    pub canonical_job: (u32, u32),
+}
+
+impl Qwen36CanonicalClassV1 {
+    pub fn profile(&self) -> Result<PalwShapeProfileV3, kaspa_consensus_core::palw_step::PalwStepError> {
+        kaspa_consensus_core::palw_qwen36_profile::qwen36_profile_v1(self.geometry)
+    }
+
+    /// The class id: its graph's id, same rule as the dense table's.
+    pub fn class_id(&self) -> Option<Hash64> {
+        self.profile().ok().map(|p| p.shape_profile_id())
+    }
+
+    /// Does this artifact have the shape this class is defined at? Dimension by dimension, so
+    /// the error names the field. `max_position` is deliberately NOT compared — the artifact
+    /// states what its rotary table covers, the profile states what the court admits — and the
+    /// epsilons are not either, for the same reason the dense table skips them on its A16 arm:
+    /// the engine's integer epsilon is the artifact format's, the class constant is the court's.
+    pub fn shape_matches(&self, shape: &crate::qwen36::Qwen36ShapeV1) -> Result<(), String> {
+        let g = &self.geometry;
+        let want_kinds: Vec<crate::qwen36::Qwen36LayerKind> = (0..g.layer_count as usize)
+            .map(|i| {
+                if g.full_attention_interval != 0 && (i + 1).is_multiple_of(g.full_attention_interval as usize) {
+                    crate::qwen36::Qwen36LayerKind::FullAttention
+                } else {
+                    crate::qwen36::Qwen36LayerKind::LinearAttention
+                }
+            })
+            .collect();
+        if shape.layer_types != want_kinds {
+            return Err(format!("{}: the layer stack is not this class's ({} layers)", self.model_id, shape.layer_types.len()));
+        }
+        let fields: [(&str, usize, usize); 12] = [
+            ("d_model", shape.d_model, g.hidden_dim as usize),
+            ("n_heads", shape.n_heads, g.attn_heads as usize),
+            ("n_kv_heads", shape.n_kv_heads, g.attn_kv_heads as usize),
+            ("head_dim", shape.head_dim, g.attn_head_dim as usize),
+            ("rotary_dim", shape.rotary_dim, g.rope_dims as usize),
+            ("linear_k_heads", shape.linear_k_heads, g.gdn_k_heads as usize),
+            ("linear_v_heads", shape.linear_v_heads, g.gdn_v_heads as usize),
+            ("conv_kernel", shape.conv_kernel, g.gdn_conv_kernel as usize),
+            ("n_experts", shape.n_experts, g.n_experts as usize),
+            ("experts_per_token", shape.experts_per_token, g.experts_per_token as usize),
+            ("moe_dim", shape.moe_dim, g.moe_dim as usize),
+            ("vocab", shape.vocab, g.vocab_size as usize),
+        ];
+        for (field, got, want) in fields {
+            if got != want {
+                return Err(format!("{}: the artifact has {field} {got}, and the class is defined at {want}", self.model_id));
+            }
+        }
+        // shared_dim separates the hybrid from the qwen3moe members even at equal dims.
+        if shape.shared_dim != g.shared_dim as usize {
+            return Err(format!(
+                "{}: the artifact has shared_dim {}, and the class is defined at {}",
+                self.model_id, shape.shared_dim, g.shared_dim
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// Every qwen36-lineage class this build can supply, at FROZEN geometries — same discipline as
+/// [`canonical_classes_v1`]: a geometry that moved would rename a class the chain already runs.
+/// The hybrid's entry derives the class testnet-11 registered; the qwen3moe entry is the first
+/// permissionless member (ladder facts on the constant itself).
+pub fn qwen36_canonical_classes_v1() -> Vec<Qwen36CanonicalClassV1> {
+    vec![
+        Qwen36CanonicalClassV1 {
+            model_id: "Qwen3.6-35B-A3B",
+            geometry: kaspa_consensus_core::palw_qwen36_profile::QWEN36_35B_A3B,
+            canonical_job: kaspa_consensus_core::palw_qwen36_profile::QWEN36_RC_CANONICAL,
+        },
+        Qwen36CanonicalClassV1 {
+            model_id: "huihui-ai/Huihui-Qwen3-Coder-30B-A3B-Instruct-abliterated",
+            geometry: kaspa_consensus_core::palw_qwen36_profile::QWEN3_CODER_30B_A3B,
+            canonical_job: kaspa_consensus_core::palw_qwen36_profile::QWEN36_RC_CANONICAL,
+        },
+    ]
+}
+
 /// The canonical form of one model id, at this court.
 pub fn canonical_class_by_model_id_v1(court: &PalwCourtParamsV2, model_id: &str) -> Option<CanonicalClassV1> {
     canonical_classes_v1(court).into_iter().find(|c| c.model_id == model_id)
@@ -462,6 +555,61 @@ mod tests {
             }
             other => panic!("weights that are not the registered ones must be refused by the root, got {other:?}"),
         }
+    }
+
+    /// **The qwen36 table: two members, two DIFFERENT classes, and shapes that cannot cross.**
+    ///
+    /// The hybrid entry derives its id from the same geometry the genesis registration used, so
+    /// it names the class the chain runs (the fleet's facts are the cross-check; a unit test here
+    /// would compare the derivation to itself). What this test can and does pin: the qwen3moe
+    /// entry is a distinct class, both profiles actually project, and a synthetic shape of either
+    /// member matches exactly its own entry — the mixed cases all name the field that disagrees.
+    #[test]
+    fn the_qwen36_table_separates_its_members() {
+        let table = qwen36_canonical_classes_v1();
+        assert_eq!(table.len(), 2);
+        let hybrid = &table[0];
+        let coder = &table[1];
+        assert_eq!(hybrid.model_id, "Qwen3.6-35B-A3B");
+        assert_eq!(coder.model_id, "huihui-ai/Huihui-Qwen3-Coder-30B-A3B-Instruct-abliterated");
+        let hybrid_id = hybrid.class_id().expect("the hybrid geometry projects");
+        let coder_id = coder.class_id().expect("the qwen3moe geometry projects");
+        assert_ne!(hybrid_id, coder_id, "two models must be two classes");
+
+        let shape_of = |c: &Qwen36CanonicalClassV1| crate::qwen36::Qwen36ShapeV1 {
+            layer_types: (0..c.geometry.layer_count as usize)
+                .map(|i| {
+                    if c.geometry.full_attention_interval != 0
+                        && (i + 1).is_multiple_of(c.geometry.full_attention_interval as usize)
+                    {
+                        crate::qwen36::Qwen36LayerKind::FullAttention
+                    } else {
+                        crate::qwen36::Qwen36LayerKind::LinearAttention
+                    }
+                })
+                .collect(),
+            d_model: c.geometry.hidden_dim as usize,
+            n_heads: c.geometry.attn_heads as usize,
+            n_kv_heads: c.geometry.attn_kv_heads as usize,
+            head_dim: c.geometry.attn_head_dim as usize,
+            rotary_dim: c.geometry.rope_dims as usize,
+            linear_k_heads: c.geometry.gdn_k_heads as usize,
+            linear_v_heads: c.geometry.gdn_v_heads as usize,
+            linear_head_dim: c.geometry.gdn_head_dim as usize,
+            conv_kernel: c.geometry.gdn_conv_kernel as usize,
+            n_experts: c.geometry.n_experts as usize,
+            experts_per_token: c.geometry.experts_per_token as usize,
+            moe_dim: c.geometry.moe_dim as usize,
+            shared_dim: c.geometry.shared_dim as usize,
+            vocab: c.geometry.vocab_size as usize,
+            max_position: 512,
+            eps_q: 1,
+            router_up_bits: 20,
+        };
+        assert!(hybrid.shape_matches(&shape_of(hybrid)).is_ok());
+        assert!(coder.shape_matches(&shape_of(coder)).is_ok());
+        assert!(hybrid.shape_matches(&shape_of(coder)).is_err(), "a qwen3moe artifact must not pass as the hybrid");
+        assert!(coder.shape_matches(&shape_of(hybrid)).is_err(), "the hybrid's artifact must not pass as qwen3moe");
     }
 
     /// **A16 entries never resolve through the floor engine.** The registry knows them (they are

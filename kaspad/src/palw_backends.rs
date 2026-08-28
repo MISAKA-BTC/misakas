@@ -83,19 +83,23 @@ impl PalwBackendRegistry {
                 entry.model_id
             ));
         }
-        let qwen36_id = qwen36_class_id_v1();
-        if class_id == qwen36_id {
+        if let Some(entry) = misaka_palw_base0::classes::qwen36_canonical_classes_v1()
+            .into_iter()
+            .find(|c| c.class_id() == Some(class_id))
+        {
             if let Some((_, artifact)) = self.qwen36_artifacts.iter().find(|(root, _)| *root == artifact_root) {
                 return Ok(Box::new(misaka_palw_base0::qwen36_backend::Qwen36Backend::new(
                     artifact.clone(),
-                    "Qwen3.6-35B-A3B",
-                    kaspa_consensus_core::palw_qwen36_profile::QWEN36_RC_CANONICAL,
-                    qwen36_id,
+                    entry.model_id,
+                    entry.canonical_job,
+                    class_id,
                     self.network_id.clone(),
                 )));
             }
             return Err(format!(
-                "the chain names the Qwen3.6 class and this node holds no artifact whose computed root is {artifact_root}                  (pass the converted .palwq36 with --palw-class-artifact)"
+                "the chain names the {} class and this node holds no artifact whose computed root is {artifact_root} \
+                 (pass the converted .palwq36 with --palw-class-artifact)",
+                entry.model_id
             ));
         }
         Err(format!("this node cannot serve the registered class {class_id} (artifact root {artifact_root})"))

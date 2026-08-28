@@ -103,9 +103,40 @@ impl Qwen36ShapeV1 {
         self.linear_v_heads * self.linear_head_dim
     }
 
+    /// **The qwen3moe members: every layer is full attention.** Qwen3-Coder-30B-A3B and kin —
+    /// no GDN recurrence anywhere in the stack.
+    pub fn is_full_attention_only(&self) -> bool {
+        self.layer_types.iter().all(|k| *k == Qwen36LayerKind::FullAttention)
+    }
+
+    /// **Whether the attention output rides a sigmoid gate** — DERIVED, not stored, so the
+    /// artifact format did not change: in this lineage the hybrid (Qwen3.6) fuses a gate into its
+    /// q projection and the full-attention-only members (qwen3moe) are plain q/k/v/o. If a
+    /// gateless hybrid or a gated all-attention model ever ships, this becomes a stored field —
+    /// bump the file magic then, not now.
+    pub fn attn_output_gate(&self) -> bool {
+        !self.is_full_attention_only()
+    }
+
+    /// **Whether the mixture carries the always-on shared expert** beside the routed ones.
+    pub fn has_shared_expert(&self) -> bool {
+        self.shared_dim > 0
+    }
+
     /// Refuse a shape the engine cannot run, at construction rather than three layers into a
     /// forward pass.
     pub fn validate(&self) -> Result<(), ArtifactError> {
+        // The recurrence's dimensions bind only where a linear layer exists: the qwen3moe
+        // members are all-attention and carry zeros there.
+        let linear_ok = if self.is_full_attention_only() {
+            self.linear_k_heads == 0 && self.linear_v_heads == 0 && self.linear_head_dim == 0 && self.conv_kernel == 0
+        } else {
+            self.linear_k_heads > 0
+                && self.linear_v_heads > 0
+                && self.linear_v_heads.is_multiple_of(self.linear_k_heads)
+                && self.linear_head_dim > 0
+                && self.conv_kernel > 0
+        };
         let ok = !self.layer_types.is_empty()
             && self.d_model > 0
             && self.n_heads > 0
@@ -114,11 +145,7 @@ impl Qwen36ShapeV1 {
             && self.head_dim > 0
             && self.rotary_dim <= self.head_dim
             && self.rotary_dim.is_multiple_of(2)
-            && self.linear_k_heads > 0
-            && self.linear_v_heads > 0
-            && self.linear_v_heads.is_multiple_of(self.linear_k_heads)
-            && self.linear_head_dim > 0
-            && self.conv_kernel > 0
+            && linear_ok
             && self.n_experts > 0
             && self.experts_per_token > 0
             && self.experts_per_token <= self.n_experts
@@ -922,14 +949,17 @@ impl<'a> Qwen36Engine<'a> {
         }
         let (cos_row, sin_row) = (&cos_row[..pairs], &sin_row[..pairs]);
 
-        // `attn_output_gate: true` — the q projection is double width and the second half is the
-        // gate. Stored as two tensors so a court opening addresses either half by name.
+        // Hybrid members (`attn_output_gate()`): the q projection is double width and the second
+        // half is the gate, stored as two tensors so a court opening addresses either half by
+        // name. The qwen3moe members are plain q — no gate tensor exists in their artifact.
         let q = self.project(&n("attn_q.weight"), normed, q_dim, false)?;
-        let gate_raw = self.project(&n("attn_gate.weight"), normed, q_dim, true)?;
+        let gate_raw = if s.attn_output_gate() { Some(self.project(&n("attn_gate.weight"), normed, q_dim, true)?) } else { None };
         let k = self.project(&n("attn_k.weight"), normed, kv_dim, false)?;
         let v = self.project(&n("attn_v.weight"), normed, kv_dim, false)?;
         probe.push((n("attn_q"), q.clone()));
-        probe.push((n("attn_gate"), gate_raw.clone()));
+        if let Some(gate_raw) = &gate_raw {
+            probe.push((n("attn_gate"), gate_raw.clone()));
+        }
         probe.push((n("attn_v"), v.clone()));
 
         // QK-norm: RMSNorm PER HEAD, before the rotation. Normalizing the whole row instead would
@@ -975,11 +1005,20 @@ impl<'a> Qwen36Engine<'a> {
         let attn = a16_attn_values(&narrowed, &v_series, s.n_heads, s.n_kv_heads, hd, &vec![value_p; q_dim])
             .map_err(refuse("attn_values"))?;
 
-        // The output gate. `sigmoid` of the gate row, applied elementwise before the projection.
-        let gate = q36_sigmoid_gate(&gate_raw);
-        let gated = q36_gate_apply(&attn, &gate, a.one_param(&n("attn_gated.a16"))?).map_err(refuse("attn_gate_apply"))?;
+        // The output gate. `sigmoid` of the gate row, applied elementwise before the projection —
+        // hybrid members only; on a gateless member the attention row goes to the projection as
+        // it is, exactly as the stripped profile says.
+        let gated = match &gate_raw {
+            Some(gate_raw) => {
+                let gate = q36_sigmoid_gate(gate_raw);
+                q36_gate_apply(&attn, &gate, a.one_param(&n("attn_gated.a16"))?).map_err(refuse("attn_gate_apply"))?
+            }
+            None => attn.clone(),
+        };
         probe.push((n("attn_values"), attn));
-        probe.push((n("attn_gated"), gated.clone()));
+        if gate_raw.is_some() {
+            probe.push((n("attn_gated"), gated.clone()));
+        }
 
         // Through `project`, not the plain matmul: every weight tensor this converter writes
         // carries a per-32 group exponent, and a matmul that ignores it reads codes anchored
@@ -1037,16 +1076,22 @@ impl<'a> Qwen36Engine<'a> {
         let combined = q36_moe_combine(&outputs, &weights, d, a.one_param(&n("ffn_combine.a16"))?).map_err(refuse("moe_combine"))?;
         probe.push((n("ffn_routed"), combined.clone()));
 
-        // The shared expert, always on, behind its own scalar gate.
-        let shared = self.expert(li, usize::MAX, normed, s.shared_dim, "shared")?;
-        let shared_gate_raw = self.project(&n("ffn_shared_gate.weight"), normed, 1, true)?;
-        let g = q36_sigmoid_gate(&shared_gate_raw)[0];
-        // The shared expert's output is wide like the routed ones, so the scalar gate goes through
-        // the wide product and lands on the same code grid the combine did.
-        let shared_gated =
-            q36_mul_wide(&shared, &vec![g; d], &vec![a.one_param(&n("ffn_shared_gated.a16"))?; d]).map_err(refuse("shared_apply"))?;
-        probe.push((n("ffn_shared_out"), shared.clone()));
-        let sum = a16_add_elem(&combined, &shared_gated).map_err(refuse("moe_add"))?;
+        // The shared expert, always on, behind its own scalar gate — hybrid members only. The
+        // qwen3moe members route through the mixture alone, and their stripped profile has no
+        // fold to feed: the combine goes straight to the narrowing.
+        let sum = if s.has_shared_expert() {
+            let shared = self.expert(li, usize::MAX, normed, s.shared_dim, "shared")?;
+            let shared_gate_raw = self.project(&n("ffn_shared_gate.weight"), normed, 1, true)?;
+            let g = q36_sigmoid_gate(&shared_gate_raw)[0];
+            // The shared expert's output is wide like the routed ones, so the scalar gate goes
+            // through the wide product and lands on the same code grid the combine did.
+            let shared_gated = q36_mul_wide(&shared, &vec![g; d], &vec![a.one_param(&n("ffn_shared_gated.a16"))?; d])
+                .map_err(refuse("shared_apply"))?;
+            probe.push((n("ffn_shared_out"), shared.clone()));
+            a16_add_elem(&combined, &shared_gated).map_err(refuse("moe_add"))?
+        } else {
+            combined.clone()
+        };
         let out = a16_requant(&sum, &a.params_sized(&n("ffn_moe_out.a16"), d)?).map_err(refuse("moe_out"))?;
         probe.push((n("ffn_moe_out"), out.clone()));
         Ok(out)

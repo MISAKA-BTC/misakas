@@ -355,10 +355,15 @@ pub fn reference_full_layer(
     for (position, h) in positions.iter_mut().enumerate() {
         let normed = rms_norm(h, w.attn_norm, eps);
         calibration.observe(&g("attn_norm"), &normed);
-        let both = matmul(w.q, &normed, 2 * q_dim);
-        let (q_raw, gate_raw) = both.split_at(q_dim);
+        // Hybrid members: `w.q` is query and gate, de-interleaved by the converter. The qwen3moe
+        // members are plain q — no gate tensor, no gate site.
+        let gated_attention = shape.attn_output_gate();
+        let both = matmul(w.q, &normed, if gated_attention { 2 * q_dim } else { q_dim });
+        let (q_raw, gate_raw) = if gated_attention { both.split_at(q_dim) } else { (&both[..], &[][..]) };
         calibration.observe(&g("attn_q"), q_raw);
-        calibration.observe(&g("attn_gate"), gate_raw);
+        if gated_attention {
+            calibration.observe(&g("attn_gate"), gate_raw);
+        }
         let k_raw = matmul(w.k, &normed, kv_dim);
         let v = matmul(w.v, &normed, kv_dim);
         calibration.observe(&g("attn_v"), &v);
@@ -398,10 +403,12 @@ pub fn reference_full_layer(
             attn.extend((0..hd).map(|i| (0..history).map(|j| probs[j] * state.values[li][j][off + i]).sum::<f32>()));
         }
         calibration.observe(&g("attn_values"), &attn);
-        for (a, b) in attn.iter_mut().zip(gate_raw) {
-            *a *= 1.0 / (1.0 + (-b).exp());
+        if gated_attention {
+            for (a, b) in attn.iter_mut().zip(gate_raw) {
+                *a *= 1.0 / (1.0 + (-b).exp());
+            }
+            calibration.observe(&g("attn_gated"), &attn);
         }
-        calibration.observe(&g("attn_gated"), &attn);
         let delta = matmul(w.o, &attn, d);
         calibration.observe(&g("attn_out"), &delta);
         for (a, b) in h.iter_mut().zip(&delta) {
@@ -465,6 +472,8 @@ pub fn reference_moe_layer(
         }
         calibration.observe(&g("ffn_routed"), &out);
 
+        // The shared expert — hybrid members only; a qwen3moe layer's mixture is the whole FFN.
+        if shape.has_shared_expert() {
         let sg = 1.0 / (1.0 + (-matmul(w.shared_router, &normed, 1)[0]).exp());
         let s_mid = shape.shared_dim;
         let s_gate = matmul(w.shared_gate, &normed, s_mid);
@@ -476,6 +485,7 @@ pub fn reference_moe_layer(
         calibration.observe(&g("ffn_shared_out"), &shared);
         for (slot, v) in out.iter_mut().zip(&shared) {
             *slot += sg * v;
+        }
         }
         calibration.observe(&g("ffn_moe_out"), &out);
         for (a, b) in h.iter_mut().zip(&out) {

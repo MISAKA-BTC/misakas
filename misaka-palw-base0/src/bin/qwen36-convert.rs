@@ -233,32 +233,52 @@ fn main() {
     let dir = parse_directory(&header).unwrap_or_else(|e| die(format!("header: {e}")));
     let mut reader = Reader { dir: &dir, source };
 
-    let meta = |k: &str| -> u64 { dir.metadata.get(k).and_then(|v| v.as_u64()).unwrap_or_else(|| die(format!("no metadata {k}"))) };
-    if dir.metadata.get("general.architecture").and_then(|v| v.as_str()) != Some("qwen35moe") {
-        die("this converter reads qwen35moe checkpoints".into());
+    // Two architectures ride this converter: the hybrid (qwen35moe — GDN recurrence layers, a
+    // fused q/gate projection, an always-on shared expert) and the full-attention-only MoE
+    // (qwen3moe: Qwen3-Coder and kin — every layer plain attention, no ssm.* metadata at all).
+    let arch = dir
+        .metadata
+        .get("general.architecture")
+        .and_then(|v| v.as_str())
+        .unwrap_or_else(|| die("the checkpoint declares no architecture".into()))
+        .to_string();
+    if arch != "qwen35moe" && arch != "qwen3moe" {
+        die(format!("this converter reads qwen35moe or qwen3moe checkpoints, not {arch}"));
     }
-    let declared = meta("qwen35moe.block_count") as usize;
+    let hybrid = arch == "qwen35moe";
+    let meta = |k: &str| -> u64 {
+        dir.metadata.get(&format!("{arch}.{k}")).and_then(|v| v.as_u64()).unwrap_or_else(|| die(format!("no metadata {arch}.{k}")))
+    };
+    let declared = meta("block_count") as usize;
     let layers = layer_cap.unwrap_or(declared).min(declared);
-    let interval = meta("qwen35moe.full_attention_interval") as usize;
-    let d = meta("qwen35moe.embedding_length") as usize;
-    let head_dim = meta("qwen35moe.attention.key_length") as usize;
-    let n_heads = meta("qwen35moe.attention.head_count") as usize;
-    let rotary_dim = meta("qwen35moe.rope.dimension_count") as usize;
-    let linear_head_dim = meta("qwen35moe.ssm.state_size") as usize;
-    let linear_k_heads = meta("qwen35moe.ssm.group_count") as usize;
-    let linear_v_heads = meta("qwen35moe.ssm.time_step_rank") as usize;
-    let conv_kernel = meta("qwen35moe.ssm.conv_kernel") as usize;
-    let n_experts = meta("qwen35moe.expert_count") as usize;
-    let experts_per_token = meta("qwen35moe.expert_used_count") as usize;
-    let moe_dim = meta("qwen35moe.expert_feed_forward_length") as usize;
-    let shared_dim = meta("qwen35moe.expert_shared_feed_forward_length") as usize;
+    // qwen3moe has no interval key because every layer is full attention.
+    let interval = if hybrid { meta("full_attention_interval") as usize } else { 1 };
+    let d = meta("embedding_length") as usize;
+    let head_dim = meta("attention.key_length") as usize;
+    let n_heads = meta("attention.head_count") as usize;
+    // qwen3moe rotates the whole head (no partial-rotary key).
+    let rotary_dim = if hybrid { meta("rope.dimension_count") as usize } else { head_dim };
+    let linear_head_dim = if hybrid { meta("ssm.state_size") as usize } else { 0 };
+    let linear_k_heads = if hybrid { meta("ssm.group_count") as usize } else { 0 };
+    let linear_v_heads = if hybrid { meta("ssm.time_step_rank") as usize } else { 0 };
+    let conv_kernel = if hybrid { meta("ssm.conv_kernel") as usize } else { 0 };
+    let n_experts = meta("expert_count") as usize;
+    let experts_per_token = meta("expert_used_count") as usize;
+    let moe_dim = meta("expert_feed_forward_length") as usize;
+    let shared_dim = meta("expert_shared_feed_forward_length") as usize;
+    if hybrid && shared_dim == 0 {
+        die("a qwen35moe checkpoint without a shared expert is not a shape this pipeline has measured".into());
+    }
+    if !hybrid && shared_dim != 0 {
+        die("a qwen3moe checkpoint with a shared expert is not a shape this pipeline has measured".into());
+    }
     let vocab = dir.tensors.get("token_embd.weight").map(|t| t.dims[1] as usize).unwrap_or_else(|| die("no token_embd".into()));
     let kv_dim = dir
         .tensors
         .get(&format!("blk.{}.attn_k.weight", interval - 1))
         .map(|t| t.dims[1] as usize)
         .unwrap_or_else(|| die("no full-attention layer in the checkpoint".into()));
-    let eps = dir.metadata.get("qwen35moe.attention.layer_norm_rms_epsilon").and_then(|v| v.as_f64()).unwrap_or(1e-6) as f32;
+    let eps = dir.metadata.get(&format!("{arch}.attention.layer_norm_rms_epsilon")).and_then(|v| v.as_f64()).unwrap_or(1e-6) as f32;
 
     let shape = Qwen36ShapeV1 {
         layer_types: (0..layers)
@@ -326,22 +346,28 @@ fn main() {
             }
             Qwen36LayerKind::FullAttention => {
                 with_exp(&mut plan, g("attn_q.weight"), q_dim, d);
-                with_exp(&mut plan, g("attn_gate.weight"), q_dim, d);
+                if hybrid {
+                    with_exp(&mut plan, g("attn_gate.weight"), q_dim, d);
+                }
                 with_exp(&mut plan, g("attn_k.weight"), kv_dim, d);
                 with_exp(&mut plan, g("attn_v.weight"), kv_dim, d);
                 with_exp(&mut plan, g("attn_o.weight"), d, q_dim);
             }
         }
         with_exp(&mut plan, g("ffn_router.weight"), n_experts, d);
-        with_exp(&mut plan, g("ffn_shared_gate.weight"), 1, d);
+        if shared_dim > 0 {
+            with_exp(&mut plan, g("ffn_shared_gate.weight"), 1, d);
+        }
         for e in 0..n_experts {
             with_exp(&mut plan, format!("blk.{li}.ffn_expert.{e}_gate.weight"), moe_dim, d);
             with_exp(&mut plan, format!("blk.{li}.ffn_expert.{e}_up.weight"), moe_dim, d);
             with_exp(&mut plan, format!("blk.{li}.ffn_expert.{e}_down.weight"), d, moe_dim);
         }
-        with_exp(&mut plan, format!("blk.{li}.ffn_shared_expert_gate.weight"), shared_dim, d);
-        with_exp(&mut plan, format!("blk.{li}.ffn_shared_expert_up.weight"), shared_dim, d);
-        with_exp(&mut plan, format!("blk.{li}.ffn_shared_expert_down.weight"), d, shared_dim);
+        if shared_dim > 0 {
+            with_exp(&mut plan, format!("blk.{li}.ffn_shared_expert_gate.weight"), shared_dim, d);
+            with_exp(&mut plan, format!("blk.{li}.ffn_shared_expert_up.weight"), shared_dim, d);
+            with_exp(&mut plan, format!("blk.{li}.ffn_shared_expert_down.weight"), d, shared_dim);
+        }
     }
     // Last, because the reference needs it only after every layer has run.
     with_exp(&mut plan, "output.weight".into(), vocab, d);
@@ -370,11 +396,13 @@ fn main() {
             ("ffn_router.a16", n_experts),
             ("ffn_router_up.a16", 1),
             ("ffn_combine.a16", 1),
-            ("ffn_shared_gate.weight.a16", 1),
-            ("ffn_shared_gated.a16", 1),
             ("ffn_moe_out.a16", d),
         ] {
             place(&mut params, g(name), rows);
+        }
+        if shared_dim > 0 {
+            place(&mut params, g("ffn_shared_gate.weight.a16"), 1);
+            place(&mut params, g("ffn_shared_gated.a16"), 1);
         }
         match shape.layer_types[li] {
             Qwen36LayerKind::LinearAttention => {
@@ -405,7 +433,6 @@ fn main() {
             Qwen36LayerKind::FullAttention => {
                 for (name, rows) in [
                     ("attn_q.weight.a16", q_dim),
-                    ("attn_gate.weight.a16", q_dim),
                     ("attn_k.weight.a16", kv_dim),
                     ("attn_v.weight.a16", kv_dim),
                     ("attn_q_norm.a16", head_dim),
@@ -415,10 +442,13 @@ fn main() {
                     ("attn_softmax_up.a16", 1),
                     ("attn_probs.a16", 1),
                     ("attn_values.a16", 1),
-                    ("attn_gated.a16", 1),
                     ("attn_o.weight.a16", d),
                 ] {
                     place(&mut params, g(name), rows);
+                }
+                if hybrid {
+                    place(&mut params, g("attn_gate.weight.a16"), q_dim);
+                    place(&mut params, g("attn_gated.a16"), 1);
                 }
             }
         }
@@ -434,19 +464,21 @@ fn main() {
                 place(&mut params, format!("{b}{suffix}"), rows);
             }
         }
-        let b = format!("blk.{li}.ffn_shared_expert");
-        for (suffix, rows) in [
-            ("_gate.weight.a16", shared_dim),
-            ("_up.weight.a16", shared_dim),
-            ("_silu.a16", shared_dim),
-            ("_gated.a16", shared_dim),
-            ("_down.weight.a16", d),
-        ] {
-            place(&mut params, format!("{b}{suffix}"), rows);
+        if shared_dim > 0 {
+            let b = format!("blk.{li}.ffn_shared_expert");
+            for (suffix, rows) in [
+                ("_gate.weight.a16", shared_dim),
+                ("_up.weight.a16", shared_dim),
+                ("_silu.a16", shared_dim),
+                ("_gated.a16", shared_dim),
+                ("_down.weight.a16", d),
+            ] {
+                place(&mut params, format!("{b}{suffix}"), rows);
+            }
         }
     }
 
-    let rope_base = dir.metadata.get("qwen35moe.rope.freq_base").and_then(|v| v.as_f64()).unwrap_or(10_000.0);
+    let rope_base = dir.metadata.get(&format!("{arch}.rope.freq_base")).and_then(|v| v.as_f64()).unwrap_or(10_000.0);
     let ln_theta = (rope_base.ln() * (1u128 << 50) as f64) as i128;
     let rope = RopeTableV1::generate(head_dim, max_position, ln_theta).unwrap_or_else(|e| die(format!("rotary table: {e:?}")));
     // The reference rotates by the pinned table's angles, converted, rather than by the ones a
@@ -489,7 +521,8 @@ fn main() {
     for li in 0..layers {
         let g = |s: &str| format!("blk.{li}.{s}");
         let attn_gain = reader.get(&g("attn_norm.weight"));
-        let post_gain = reader.get(&g("post_attention_norm.weight"));
+        // llama.cpp names the pre-FFN norm differently per family.
+        let post_gain = reader.get(&g(if hybrid { "post_attention_norm.weight" } else { "ffn_norm.weight" }));
 
         // The arm's weights, quantized and written as they arrive, with their row scales kept.
         let mut scales: BTreeMap<String, Vec<f64>> = BTreeMap::new();
@@ -711,26 +744,34 @@ fn main() {
                 e_stream = e_stream_out;
             }
             Qwen36LayerKind::FullAttention => {
-                // **`attn_q` is query and gate INTERLEAVED per head, not two halves.** Head `h`
-                // owns rows `[512h, 512h+256)` for the query and `[512h+256, 512h+512)` for the
-                // gate. Reading it as a contiguous 4,096-row query followed by a 4,096-row gate
-                // gives head 0 the right query, head 1 head 0's gate, and so on — every head after
-                // the first mixes the two. It does not fail; it produces a model that predicts at
-                // chance, which is what the whole-model reference did before this.
+                // **Hybrid: `attn_q` is query and gate INTERLEAVED per head, not two halves.**
+                // Head `h` owns rows `[512h, 512h+256)` for the query and `[512h+256, 512h+512)`
+                // for the gate. Reading it as a contiguous 4,096-row query followed by a
+                // 4,096-row gate gives head 0 the right query, head 1 head 0's gate, and so on —
+                // every head after the first mixes the two. It does not fail; it produces a model
+                // that predicts at chance, which is what the whole-model reference did before
+                // this. **qwen3moe: plain q, no gate half.**
                 let fused = reader.get(&g("attn_q.weight"));
-                let mut q_rows = Vec::with_capacity(q_dim * d);
-                let mut gate_rows = Vec::with_capacity(q_dim * d);
-                for h in 0..n_heads {
-                    let base = 2 * h * head_dim * d;
-                    q_rows.extend_from_slice(&fused[base..base + head_dim * d]);
-                    gate_rows.extend_from_slice(&fused[base + head_dim * d..base + 2 * head_dim * d]);
-                }
+                let (q_rows, gate_rows) = if hybrid {
+                    let mut q_rows = Vec::with_capacity(q_dim * d);
+                    let mut gate_rows = Vec::with_capacity(q_dim * d);
+                    for h in 0..n_heads {
+                        let base = 2 * h * head_dim * d;
+                        q_rows.extend_from_slice(&fused[base..base + head_dim * d]);
+                        gate_rows.extend_from_slice(&fused[base + head_dim * d..base + 2 * head_dim * d]);
+                    }
+                    (q_rows, gate_rows)
+                } else {
+                    (fused, Vec::new())
+                };
                 // The rotated projection is permuted into the pinned table's pairing; the gate is
                 // not rotated and keeps the checkpoint's order.
                 let mut q = permute_rotary_rows(&q_rows, q_dim, d, head_dim, rotary_dim);
                 q.extend_from_slice(&gate_rows);
                 push(&mut writer, &mut scales, &g("attn_q.weight"), &q[..q_dim * d], q_dim);
-                push(&mut writer, &mut scales, &g("attn_gate.weight"), &q[q_dim * d..], q_dim);
+                if hybrid {
+                    push(&mut writer, &mut scales, &g("attn_gate.weight"), &q[q_dim * d..], q_dim);
+                }
                 let k = permute_rotary_rows(&reader.get(&g("attn_k.weight")), kv_dim, d, head_dim, rotary_dim);
                 push(&mut writer, &mut scales, &g("attn_k.weight"), &k, kv_dim);
                 let v = reader.get(&g("attn_v.weight"));
@@ -759,7 +800,8 @@ fn main() {
                 let e_qn = cal::site_exponent(site(&calibration, &g("attn_q_rot")));
                 let e_logit = cal::site_exponent(site(&calibration, &g("attn_logits")));
                 let e_attn = cal::site_exponent(site(&calibration, &g("attn_values")));
-                let e_gated = cal::site_exponent_with(site(&calibration, &g("attn_gated")), cal::PRODUCT_HEADROOM_BITS);
+                let e_gated =
+                    if hybrid { cal::site_exponent_with(site(&calibration, &g("attn_gated")), cal::PRODUCT_HEADROOM_BITS) } else { 0 };
                 let e_stream_out = cal::site_exponent(site(&calibration, &g("attn_residual")));
                 // **The delta is produced at the POST-residual stream's exponent, not at its own.**
                 //
@@ -773,7 +815,9 @@ fn main() {
 
                 measured.insert(g("attn_norm.a16"), wire(&cal::norm_params(&attn_gain, e_normed)));
                 measured.insert(g("attn_q.weight.a16"), wire(&cal::projection_params(&scales[&g("attn_q.weight")], e_normed, e_q)));
-                measured.insert(g("attn_gate.weight.a16"), wire(&cal::to_qk_params(&scales[&g("attn_gate.weight")], e_normed)));
+                if hybrid {
+                    measured.insert(g("attn_gate.weight.a16"), wire(&cal::to_qk_params(&scales[&g("attn_gate.weight")], e_normed)));
+                }
                 measured.insert(g("attn_k.weight.a16"), wire(&cal::projection_params(&scales[&g("attn_k.weight")], e_normed, e_k)));
                 measured.insert(g("attn_v.weight.a16"), wire(&cal::projection_params(&scales[&g("attn_v.weight")], e_normed, e_v)));
                 // The QK-norms take the projection's codes to the rotated code scale.
@@ -791,8 +835,12 @@ fn main() {
                 // where a probability's natural exponent is the one that maps 1.0 to the rail.
                 measured.insert(g("attn_probs.a16"), wire(&[cal::rescale_params(K as i32, cal::site_exponent(1.0))]));
                 measured.insert(g("attn_values.a16"), wire(&[cal::product_params(cal::site_exponent(1.0), e_v, e_attn)]));
-                measured.insert(g("attn_gated.a16"), wire(&[cal::product_params(e_attn, K as i32, e_gated)]));
-                measured.insert(g("attn_o.weight.a16"), wire(&cal::projection_params(&scales[&g("attn_o.weight")], e_gated, e_delta)));
+                if hybrid {
+                    measured.insert(g("attn_gated.a16"), wire(&[cal::product_params(e_attn, K as i32, e_gated)]));
+                }
+                // Gateless members project the attention row itself: its exponent is the values'.
+                let e_o_in = if hybrid { e_gated } else { e_attn };
+                measured.insert(g("attn_o.weight.a16"), wire(&cal::projection_params(&scales[&g("attn_o.weight")], e_o_in, e_delta)));
                 measured.insert(g("attn_align.a16"), wire(&vec![cal::rescale_params(e_stream_in, e_delta); d]));
                 measured.insert(g("attn_residual.a16"), wire(&vec![cal::rescale_params(e_delta, e_stream_out); d]));
                 e_stream = e_stream_out;
@@ -802,8 +850,10 @@ fn main() {
         // ---- the mixture ------------------------------------------------------------------
         let router = reader.get(&g("ffn_gate_inp.weight"));
         push(&mut writer, &mut scales, &g("ffn_router.weight"), &router, n_experts);
-        let shared_router = reader.get(&g("ffn_gate_inp_shexp.weight"));
-        push(&mut writer, &mut scales, &g("ffn_shared_gate.weight"), &shared_router, 1);
+        let shared_router = if shared_dim > 0 { reader.get(&g("ffn_gate_inp_shexp.weight")) } else { Vec::new() };
+        if shared_dim > 0 {
+            push(&mut writer, &mut scales, &g("ffn_shared_gate.weight"), &shared_router, 1);
+        }
         let gate_exps = reader.get(&g("ffn_gate_exps.weight"));
         let up_exps = reader.get(&g("ffn_up_exps.weight"));
         let down_exps = reader.get(&g("ffn_down_exps.weight"));
@@ -815,13 +865,17 @@ fn main() {
             push(&mut writer, &mut scales, &format!("{b}_up.weight"), &up_exps[e * per_up..(e + 1) * per_up], moe_dim);
             push(&mut writer, &mut scales, &format!("{b}_down.weight"), &down_exps[e * per_down..(e + 1) * per_down], d);
         }
-        let shared_gate = reader.get(&g("ffn_gate_shexp.weight"));
-        let shared_up = reader.get(&g("ffn_up_shexp.weight"));
-        let shared_down = reader.get(&g("ffn_down_shexp.weight"));
+        let (shared_gate, shared_up, shared_down) = if shared_dim > 0 {
+            (reader.get(&g("ffn_gate_shexp.weight")), reader.get(&g("ffn_up_shexp.weight")), reader.get(&g("ffn_down_shexp.weight")))
+        } else {
+            (Vec::new(), Vec::new(), Vec::new())
+        };
         let sb = format!("blk.{li}.ffn_shared_expert");
-        push(&mut writer, &mut scales, &format!("{sb}_gate.weight"), &shared_gate, shared_dim);
-        push(&mut writer, &mut scales, &format!("{sb}_up.weight"), &shared_up, shared_dim);
-        push(&mut writer, &mut scales, &format!("{sb}_down.weight"), &shared_down, d);
+        if shared_dim > 0 {
+            push(&mut writer, &mut scales, &format!("{sb}_gate.weight"), &shared_gate, shared_dim);
+            push(&mut writer, &mut scales, &format!("{sb}_up.weight"), &shared_up, shared_dim);
+            push(&mut writer, &mut scales, &format!("{sb}_down.weight"), &shared_down, d);
+        }
 
         let mw = reference::MoeWeights {
             post_norm: &post_gain,
@@ -848,9 +902,10 @@ fn main() {
         // so the aligned stream does not saturate on its way into the addition.
         let e_stream_out_ffn = cal::site_exponent(site(&calibration, &g("ffn_residual")));
         let e_moe_out = e_stream_out_ffn;
-        let e_shared_gated = cal::site_exponent(site(&calibration, &g("ffn_shared_gated")));
-        let e_shared_out = cal::site_exponent(site(&calibration, &g("ffn_shared_out"))) + 15;
-        let e_shared_up = cal::site_exponent(site(&calibration, &g("ffn_shared_up")));
+        let e_shared_gated =
+            if shared_dim > 0 { cal::site_exponent(site(&calibration, &g("ffn_shared_gated"))) } else { 0 };
+        let e_shared_out = if shared_dim > 0 { cal::site_exponent(site(&calibration, &g("ffn_shared_out"))) + 15 } else { 0 };
+        let e_shared_up = if shared_dim > 0 { cal::site_exponent(site(&calibration, &g("ffn_shared_up"))) } else { 0 };
 
         measured.insert(g("ffn_norm.a16"), wire(&cal::norm_params(&post_gain, e_ffn_normed)));
         let (router_p, router_narrow, up_bits) =
@@ -860,9 +915,13 @@ fn main() {
         measured.insert(g("ffn_router_up.a16"), wire(&[A16QuantParams { multiplier: 1, shift: 0, zero: up_bits as i64 }]));
         // The routed combine: Q[K] weights times expert codes, into the routed site's exponent.
         measured.insert(g("ffn_combine.a16"), wire(&[cal::product_params(K as i32, e_expert_out, e_routed)]));
-        measured
-            .insert(g("ffn_shared_gate.weight.a16"), wire(&cal::to_qk_params(&scales[&g("ffn_shared_gate.weight")], e_ffn_normed)));
-        measured.insert(g("ffn_shared_gated.a16"), wire(&[cal::product_params(e_shared_out, K as i32, e_routed)]));
+        if shared_dim > 0 {
+            measured.insert(
+                g("ffn_shared_gate.weight.a16"),
+                wire(&cal::to_qk_params(&scales[&g("ffn_shared_gate.weight")], e_ffn_normed)),
+            );
+            measured.insert(g("ffn_shared_gated.a16"), wire(&[cal::product_params(e_shared_out, K as i32, e_routed)]));
+        }
         measured.insert(g("ffn_moe_out.a16"), wire(&vec![cal::rescale_params(e_routed, e_moe_out); d]));
         for e in 0..n_experts {
             let b = format!("blk.{li}.ffn_expert.{e}");
@@ -881,19 +940,21 @@ fn main() {
                 wire(&cal::projection_params(&scales[&format!("{b}_down.weight")], e_expert_gated, e_expert_out)),
             );
         }
-        measured
-            .insert(format!("{sb}_gate.weight.a16"), wire(&cal::to_qk_params(&scales[&format!("{sb}_gate.weight")], e_ffn_normed)));
-        measured.insert(
-            format!("{sb}_up.weight.a16"),
-            wire(&cal::projection_params(&scales[&format!("{sb}_up.weight")], e_ffn_normed, e_shared_up)),
-        );
-        measured.insert(format!("{sb}_silu.a16"), wire(&vec![cal::rescale_params(K as i32, K as i32); shared_dim]));
-        measured
-            .insert(format!("{sb}_gated.a16"), wire(&vec![cal::product_params(K as i32, e_shared_up, e_shared_gated); shared_dim]));
-        measured.insert(
-            format!("{sb}_down.weight.a16"),
-            wire(&cal::projection_params(&scales[&format!("{sb}_down.weight")], e_shared_gated, e_shared_out)),
-        );
+        if shared_dim > 0 {
+            measured
+                .insert(format!("{sb}_gate.weight.a16"), wire(&cal::to_qk_params(&scales[&format!("{sb}_gate.weight")], e_ffn_normed)));
+            measured.insert(
+                format!("{sb}_up.weight.a16"),
+                wire(&cal::projection_params(&scales[&format!("{sb}_up.weight")], e_ffn_normed, e_shared_up)),
+            );
+            measured.insert(format!("{sb}_silu.a16"), wire(&vec![cal::rescale_params(K as i32, K as i32); shared_dim]));
+            measured
+                .insert(format!("{sb}_gated.a16"), wire(&vec![cal::product_params(K as i32, e_shared_up, e_shared_gated); shared_dim]));
+            measured.insert(
+                format!("{sb}_down.weight.a16"),
+                wire(&cal::projection_params(&scales[&format!("{sb}_down.weight")], e_shared_gated, e_shared_out)),
+            );
+        }
         measured.insert(g("ffn_align.a16"), wire(&vec![cal::rescale_params(e_stream_in, e_moe_out); d]));
         measured.insert(g("ffn_residual.a16"), wire(&vec![cal::rescale_params(e_moe_out, e_stream_out_ffn); d]));
         e_stream = e_stream_out_ffn;

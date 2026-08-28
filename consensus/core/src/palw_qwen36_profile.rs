@@ -78,6 +78,11 @@ pub struct PalwQwen36GeometryV1 {
     pub experts_per_token: u32,
     pub moe_dim: u32,
     pub shared_dim: u32,
+    /// 1 when the attention output rides a sigmoid gate off a fused q/gate projection (the
+    /// hybrid's full-attention layers); 0 for the qwen3moe members, whose attention is plain
+    /// q/k/v/o — the gate subgraph is then stripped from the projection the same way the shared
+    /// expert is.
+    pub attn_output_gate: u8,
     pub vocab_size: u32,
     pub n_ctx: u32,
     pub n_threads: u32,
@@ -107,6 +112,7 @@ pub const QWEN36_35B_A3B: PalwQwen36GeometryV1 = PalwQwen36GeometryV1 {
     experts_per_token: 8,
     moe_dim: 512,
     shared_dim: 512,
+    attn_output_gate: 1,
     vocab_size: 248_320,
     // **8, and it is the whole-close derivation that says so.** What the context multiplies is
     // the recurrence's replay evidence — five sliced rows per position, and even in range form
@@ -124,6 +130,41 @@ pub const QWEN36_35B_A3B: PalwQwen36GeometryV1 = PalwQwen36GeometryV1 {
     // 2^22 — over by a tenth of a percent, which is the worst kind of over. The tile is a court
     // fact (what one dispute opens), not an engine fact, and 512 puts the space at half the
     // ceiling with the terminal opening still far inside the byte budget.
+    tile_len: 512,
+};
+
+/// **`Qwen3-Coder-30B-A3B`** — and its finetunes (e.g. the Huihui abliteration), which share the
+/// geometry exactly — read from its GGUF metadata 2026-08-28. The first full-attention-only
+/// (qwen3moe) member: every layer is attention (`full_attention_interval` 1, the GDN dimensions
+/// are zeros), the mixture has no shared expert, the attention no output gate, and the rotation
+/// covers the whole 128-dim head at the same 1e7 base the hybrid uses.
+pub const QWEN3_CODER_30B_A3B: PalwQwen36GeometryV1 = PalwQwen36GeometryV1 {
+    layer_count: 48,
+    full_attention_interval: 1,
+    hidden_dim: 2048,
+    attn_heads: 32,
+    attn_kv_heads: 4,
+    attn_head_dim: 128,
+    rope_dims: 128,
+    // 1e7 as f32 — the same base the hybrid pins.
+    rope_freq_base_bits: 0x4B18_9680,
+    gdn_k_heads: 0,
+    gdn_v_heads: 0,
+    gdn_head_dim: 0,
+    gdn_conv_kernel: 0,
+    n_experts: 128,
+    experts_per_token: 8,
+    moe_dim: 768,
+    shared_dim: 0,
+    attn_output_gate: 0,
+    vocab_size: 151_936,
+    // **9, from the family ladder** (`qwen3moe_geometry_probe`): without the recurrence there is
+    // no per-position replay to pay for, so the binding constraint is the step LADDER, which
+    // admits n_ctx 4..=10 under the RC bundle (close ≈54 KiB throughout). 9 carries the (7, 2)
+    // canonical job (footprint 8) with one rung of head room, and leaves 10 for a sibling.
+    n_ctx: 9,
+    n_threads: 1,
+    rms_eps_q: 17,
     tile_len: 512,
 };
 
@@ -404,27 +445,30 @@ fn width(w: W, g: &PalwQwen36GeometryV1) -> PalwStepOutLenV1 {
 /// the projection flattened it.
 const QWEN36_MATMUL_OPENING_BUDGET: usize = 24 * 1024;
 
-/// **Strip the shared-expert subgraph from a layer IR, for members with `shared_dim == 0`.**
+/// **Strip the subgraphs a member's geometry does not have.**
 ///
-/// qwen3moe (Qwen3-Coder and kin) routes every token through the mixture ONLY — there is no
-/// always-on shared expert, no scalar gate over it, and no add that folds it back in. The IR
-/// tables are consts written for the hybrid's layer, so the projection derives the smaller graph
-/// instead of a second hand-kept table (a table beside a table is how graphs drift):
+/// qwen3moe (Qwen3-Coder and kin) is the hybrid's layer minus two pieces: the always-on shared
+/// expert (`shared_dim == 0` — no scalar gate over it, no add folding it back in) and the
+/// attention output gate (`attn_output_gate == 0` — plain q/k/v/o, no fused gate projection, no
+/// sigmoid, no gated multiply). The IR tables are consts written for the hybrid's layer, so the
+/// projection derives the smaller graph instead of a second hand-kept table (a table beside a
+/// table is how graphs drift):
 ///
-/// 1. seed: every node whose weight lives under `ffn_shared`;
-/// 2. closure: a node ALL of whose step inputs are already being dropped (the anonymous Silu and
-///    Sigmoid between the seeded matmuls) joins them;
+/// 1. seed: every node whose weight lives under an absent subgraph's tensor prefix;
+/// 2. closure: a node ALL of whose step inputs are already being dropped (the anonymous
+///    activations between the seeded matmuls) joins them;
 /// 3. references into the dropped set are removed from surviving nodes' input lists, and a
-///    two-input add left with one input this way (the fold of mixture + shared) is an identity —
-///    it is dropped too, and references to IT forward to its surviving input;
+///    two-input fold left with one input this way — the mixture+shared AddElem, the gated-values
+///    MulElem — is an identity: it is dropped too, and references to IT forward to its surviving
+///    input;
 /// 4. everything is re-indexed.
 ///
-/// For a hybrid geometry the seed is empty and the function is the identity, so the shipped
+/// For a hybrid geometry every seed is empty and the function is the identity, so the shipped
 /// class's profile — and therefore its id — cannot move.
-fn strip_shared_expert(ir: &[Ir]) -> Vec<Ir> {
+fn strip_absent_subgraphs(ir: &[Ir], seeds: &[&str]) -> Vec<Ir> {
     let mut dropped = vec![false; ir.len()];
     for (i, node) in ir.iter().enumerate() {
-        if node.weight.contains("ffn_shared") {
+        if seeds.iter().any(|prefix| node.weight.contains(prefix)) {
             dropped[i] = true;
         }
     }
@@ -444,10 +488,11 @@ fn strip_shared_expert(ir: &[Ir]) -> Vec<Ir> {
             break;
         }
     }
-    // The fold: an AddElem whose OTHER input was the shared path. Forward it to the mixture side.
+    // The fold: a two-input combine whose OTHER input was the stripped path — the mixture+shared
+    // AddElem, the attention gate's MulElem. Forward it to its surviving side.
     let mut forward: Vec<Option<u16>> = vec![None; ir.len()];
     for (i, node) in ir.iter().enumerate() {
-        if dropped[i] || node.op != PalwStepOpKindV1::AddElem {
+        if dropped[i] || !matches!(node.op, PalwStepOpKindV1::AddElem | PalwStepOpKindV1::MulElem) {
             continue;
         }
         let survivors: Vec<u16> = node
@@ -505,12 +550,22 @@ fn project(ir: &[Ir], g: &PalwQwen36GeometryV1, layer_span: usize) -> Vec<PalwSt
     if layer_span == 0 {
         return Vec::new();
     }
+    let mut seeds: Vec<&str> = Vec::new();
+    if g.shared_dim == 0 {
+        seeds.push("ffn_shared");
+    }
+    if g.attn_output_gate == 0 {
+        // `attn_gate.weight` (the fused projection's gate half) and the gated multiply's own
+        // narrowing scale; the sigmoid between them falls to the closure.
+        seeds.push("attn_gate.weight");
+        seeds.push("attn_gated.a16");
+    }
     let stripped;
-    let ir = if g.shared_dim == 0 {
-        stripped = strip_shared_expert(ir);
-        &stripped[..]
-    } else {
+    let ir = if seeds.is_empty() {
         ir
+    } else {
+        stripped = strip_absent_subgraphs(ir, &seeds);
+        &stripped[..]
     };
     // A matmul's reduction width, from the IR's own wiring — the first input's row.
     let in_width = |node: &Ir| -> usize {
@@ -644,6 +699,7 @@ mod qwen3moe_family {
                 experts_per_token: 8,
                 moe_dim: 768,
                 shared_dim: 0,
+                attn_output_gate: 0,
                 vocab_size: 151_936,
                 n_ctx: nctx,
                 n_threads: 1,
