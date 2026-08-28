@@ -94,6 +94,15 @@ pub struct PalwGossipCenter {
     /// queue, on the majority of nodes.
     inbox_taken: std::sync::atomic::AtomicBool,
     hasher: RandomState,
+    /// **Where a served material comes from** — registered by the node's panel service, which is
+    /// the party holding a retention directory (its own captures AND, since the pull transport,
+    /// every foreign material it heard). `None` on the majority of nodes, which then simply never
+    /// answer a request. The closure does disk I/O; callers hold no lock while invoking it.
+    material_resolver: Mutex<Option<Box<dyn Fn(Hash64) -> Option<Vec<u8>> + Send + Sync>>>,
+    /// Serve throttle: a claim answered within the last window is not answered again — one
+    /// request refills every peer (the serve is a broadcast), so immediate repeats are pure
+    /// amplification. Keyed by claim, pruned inline.
+    served_recently: Mutex<HashMap<Hash64, std::time::Instant>>,
 }
 
 struct GossipState {
@@ -121,6 +130,8 @@ impl Default for PalwGossipCenter {
             inbox_rx: Mutex::new(Some(inbox_rx)),
             inbox_taken: std::sync::atomic::AtomicBool::new(false),
             hasher: RandomState::new(),
+            material_resolver: Mutex::new(None),
+            served_recently: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -128,6 +139,39 @@ impl Default for PalwGossipCenter {
 impl PalwGossipCenter {
     /// The consuming end, taken exactly once by the node's PALW panel/producer service. A second
     /// taker gets `None` — two consumers would each see half the events.
+    /// Register the closure a serve consults — panel service only; see the field's doc.
+    pub fn set_material_resolver(&self, resolver: Box<dyn Fn(Hash64) -> Option<Vec<u8>> + Send + Sync>) {
+        *self.material_resolver.lock().unwrap() = Some(resolver);
+    }
+
+    /// The material behind `claim`, if this node holds it and has not just served it.
+    ///
+    /// `None` is "stay silent" — no resolver registered (not a panel), nothing on disk, or served
+    /// within the throttle window. The 10-second window is per claim: the serve is a broadcast,
+    /// so one answer refills every peer at once and an immediate repeat can only be a replay or a
+    /// flood.
+    pub fn resolve_material_for_serve(&self, claim: Hash64) -> Option<Vec<u8>> {
+        {
+            let mut served = self.served_recently.lock().unwrap();
+            let now = std::time::Instant::now();
+            served.retain(|_, at| now.duration_since(*at) < std::time::Duration::from_secs(60));
+            if let Some(at) = served.get(&claim)
+                && now.duration_since(*at) < std::time::Duration::from_secs(10)
+            {
+                return None;
+            }
+        }
+        let bytes = {
+            let resolver = self.material_resolver.lock().unwrap();
+            resolver.as_ref().and_then(|r| r(claim))
+        }?;
+        if bytes.len() > PALW_MATERIAL_MAX_BYTES {
+            return None; // never serve what the transport would refuse
+        }
+        self.served_recently.lock().unwrap().insert(claim, std::time::Instant::now());
+        Some(bytes)
+    }
+
     pub fn take_inbox(&self) -> Option<mpsc::Receiver<PalwGossipEvent>> {
         let taken = self.inbox_rx.lock().unwrap().take();
         if taken.is_some() {

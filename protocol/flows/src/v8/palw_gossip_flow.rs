@@ -60,6 +60,23 @@ impl PalwGossipFlow {
                         self.ctx.hub().broadcast(relay, Some(self.router.key())).await;
                     }
                 }
+                Some(Payload::PalwMaterialRequest(inner)) => {
+                    let Some(claim) = inner.claim_id.and_then(|h| Hash64::try_from(h).ok()) else {
+                        continue;
+                    };
+                    // Serve by RE-BROADCASTING on the push message — to everybody, not just the
+                    // asker. Every peer routes that type (old protocol included), the admit dedup
+                    // makes the flood idempotent, and one answered request refills the whole
+                    // neighbourhood, which is exactly the durability the pull exists to restore.
+                    if let Some(bytes) = self.ctx.palw_gossip().resolve_material_for_serve(claim) {
+                        self.ctx.palw_gossip().mark_own_material(claim, &bytes);
+                        let msg = make_message!(
+                            Payload::PalwTraceMaterialBroadcast,
+                            kaspa_p2p_lib::pb::PalwTraceMaterialBroadcastMessage { claim_id: Some(claim.into()), material: bytes }
+                        );
+                        self.ctx.hub().broadcast(msg, None).await;
+                    }
+                }
                 _ => {}
             }
         }

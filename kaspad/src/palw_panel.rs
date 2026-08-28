@@ -944,6 +944,32 @@ impl PalwPanelService {
         backend.job_anchor_v1(network_domain, pre_pow, class_id, &executor_bond.0)
     }
 
+    /// Persist a foreign (gossiped) material under `retention/foreign/`, best-effort.
+    ///
+    /// Write-once per claim file; pruned by age on every write so the directory stays bounded
+    /// (~2.3 MB a floor material, a few hundred claims a day, 72 h of them ≈ single-digit GiB
+    /// worst case, far less in practice). Errors are swallowed: durability here is an assist to
+    /// the pull transport, not an obligation — the OBLIGATED copy is the producer's.
+    fn persist_foreign_material(&self, claim: &Hash64, bytes: &[u8]) {
+        let dir = self.config.retention_dir.join("foreign");
+        let path = dir.join(format!("{claim}.material"));
+        if path.exists() {
+            return;
+        }
+        let _ = std::fs::create_dir_all(&dir);
+        let _ = std::fs::write(&path, bytes);
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            let cutoff = std::time::SystemTime::now() - std::time::Duration::from_secs(72 * 3600);
+            for entry in entries.flatten() {
+                if let Ok(meta) = entry.metadata()
+                    && meta.modified().map(|m| m < cutoff).unwrap_or(false)
+                {
+                    let _ = std::fs::remove_file(entry.path());
+                }
+            }
+        }
+    }
+
     fn retained_capture(&self, claim: &Hash64) -> Option<Vec<u8>> {
         std::fs::read(crate::palw_producer::palw_retained_material_path(&self.config.retention_dir, claim)).ok()
     }
@@ -1109,10 +1135,26 @@ impl PalwPanelService {
             if self.config.fee_outpoint.is_some() { "funded" } else { "off — receipts only" }
         );
 
+        // **This node now answers material pulls** (the request half is in flow_context): its own
+        // captures first, then every foreign material it persisted below. Registered here because
+        // the panel is the party that owns a retention directory; a node running no panel stays
+        // silent, which is the resolver's None.
+        {
+            let retention = self.config.retention_dir.clone();
+            self.flow_context.palw_gossip().set_material_resolver(Box::new(move |claim| {
+                std::fs::read(crate::palw_producer::palw_retained_material_path(&retention, &claim))
+                    .ok()
+                    .or_else(|| std::fs::read(retention.join("foreign").join(format!("{claim}.material"))).ok())
+            }));
+        }
+
         let mut materials: HashMap<Hash64, Vec<Vec<u8>>> = HashMap::new();
         let mut receipts: HashMap<Hash64, Vec<PalwSeatReceiptV2>> = HashMap::new();
         let mut answered: HashSet<Hash64> = HashSet::new();
         let mut first_seen: HashMap<Hash64, u64> = HashMap::new();
+        // When this seat last pulled for a claim it holds no material for, so a slow answer is
+        // not re-asked every 2-second tick.
+        let mut requested: HashMap<Hash64, u64> = HashMap::new();
         // **The DAA a claim's license was last handed to the mempool — a debounce, not a receipt.**
         //
         // This was a `HashSet` written on mempool acceptance and never cleared, so "the mempool
@@ -1167,6 +1209,14 @@ impl PalwPanelService {
             while let Ok(event) = inbox.try_recv() {
                 match event {
                     PalwGossipEvent::Material { claim, bytes } => {
+                        // **Persisted the moment it arrives, before any verdict.** The bytes are
+                        // self-authenticating (every reader verifies against the claim's committed
+                        // roots), and the producer that broadcast them may be gone by the time a
+                        // panel — or a court — needs them: five outside floor producers stopped
+                        // their nodes on 2026-08-28 and every in-flight claim of theirs defaulted,
+                        // because the only durable copies were the producers' own. One surviving
+                        // copy anywhere in the fleet now serves the whole network via the pull.
+                        self.persist_foreign_material(&claim, &bytes);
                         let pool = materials.entry(claim).or_default();
                         if pool.len() < MATERIALS_PER_CLAIM {
                             pool.push(bytes);
@@ -1575,9 +1625,18 @@ impl PalwPanelService {
                             break 'verdict Some(PalwReceiptVerdictV2::Valid);
                         }
                     }
-                    // No verifying material yet. Wait out half the window before accusing —
-                    // gossip is not instant and an early `Unavailable` is a false accusation
-                    // with a signature on it.
+                    // No verifying material yet. Ask the network before accusing: the
+                    // producer may be gone, but any peer that ever heard the broadcast can
+                    // re-serve it (and does, to everybody). Throttled per claim; the serve side
+                    // throttles too, so the worst case is one small request per claim per 25 DAA.
+                    if materials.get(&duty.claim_id).map(|pool| pool.is_empty()).unwrap_or(true)
+                        && requested.get(&duty.claim_id).is_none_or(|at| current_daa >= at.saturating_add(25))
+                    {
+                        requested.insert(duty.claim_id, current_daa);
+                        self.flow_context.request_palw_material(duty.claim_id).await;
+                    }
+                    // Wait out half the window before accusing — gossip is not instant and an
+                    // early `Unavailable` is a false accusation with a signature on it.
                     let window = duty.receipt_deadline.saturating_sub(duty.bound_daa);
                     if current_daa >= duty.bound_daa.saturating_add(window / 2) {
                         break 'verdict Some(PalwReceiptVerdictV2::Unavailable {
@@ -1912,6 +1971,7 @@ impl PalwPanelService {
             // The bookkeeping keyed on those claims goes with them, or the maps that decide what to
             // keep become the thing that grows.
             first_seen.retain(|claim, _| materials.contains_key(claim) || receipts.contains_key(claim) || live.contains(claim));
+            requested.retain(|claim, _| first_seen.contains_key(claim) || live.contains(claim));
             submit_attempts.retain(|claim, _| receipts.contains_key(claim));
             submitted.retain(|_claim, at| current_daa <= at.saturating_add(PANEL_POOL_RETENTION_DAA));
             trace!("[{PALW_PANEL}] tick: {} duties, {} claims pooled", duties.len(), receipts.len());

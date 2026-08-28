@@ -61,6 +61,9 @@ pub enum KaspadMessagePayloadType {
     PruningPointPalwState,
     PalwTraceMaterialBroadcast,
     PalwSeatReceiptBroadcast,
+    // The pull half of the material transport (protocol >= 104): request only — the serve side
+    // rides PalwTraceMaterialBroadcast.
+    PalwMaterialRequest,
     // kaspa-pq EVM Lane v0.4 (§14.2): pending EVM deposit-claim relay (protocol ≥ 101).
     InvEvmDepositClaims,
     RequestEvmDepositClaims,
@@ -139,6 +142,7 @@ impl From<&KaspadMessagePayload> for KaspadMessagePayloadType {
             KaspadMessagePayload::PruningPointPalwState(_) => KaspadMessagePayloadType::PruningPointPalwState,
             KaspadMessagePayload::PalwTraceMaterialBroadcast(_) => KaspadMessagePayloadType::PalwTraceMaterialBroadcast,
             KaspadMessagePayload::PalwSeatReceiptBroadcast(_) => KaspadMessagePayloadType::PalwSeatReceiptBroadcast,
+            KaspadMessagePayload::PalwMaterialRequest(_) => KaspadMessagePayloadType::PalwMaterialRequest,
             KaspadMessagePayload::InvEvmDepositClaims(_) => KaspadMessagePayloadType::InvEvmDepositClaims,
             KaspadMessagePayload::RequestEvmDepositClaims(_) => KaspadMessagePayloadType::RequestEvmDepositClaims,
             KaspadMessagePayload::EvmDepositClaim(_) => KaspadMessagePayloadType::EvmDepositClaim,

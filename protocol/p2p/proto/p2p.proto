@@ -462,3 +462,13 @@ message PalwTraceMaterialBroadcastMessage{
 message PalwSeatReceiptBroadcastMessage{
   bytes receipt = 1;
 }
+
+// **Pull half of the material transport.** A panel seat that holds a duty but no material asks the
+// network before accusing: the producer may already be gone (measured 2026-08-28 — five outside
+// floor producers stopped their nodes and every in-flight claim of theirs defaulted hours later),
+// but any peer that heard the broadcast once can re-serve it. The SERVE side answers on the
+// existing PalwTraceMaterialBroadcastMessage — every peer can route that, old protocol included —
+// so only this request needs a protocol-version gate.
+message PalwMaterialRequestMessage{
+  Hash claimId = 1;
+}

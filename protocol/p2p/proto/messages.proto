@@ -81,6 +81,7 @@ message KaspadMessage {
     PruningPointPalwStateMessage pruningPointPalwState = 74;
     PalwTraceMaterialBroadcastMessage palwTraceMaterialBroadcast = 75;
     PalwSeatReceiptBroadcastMessage palwSeatReceiptBroadcast = 76;
+    PalwMaterialRequestMessage palwMaterialRequest = 77;
   }
 }
 

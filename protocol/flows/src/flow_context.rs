@@ -85,7 +85,7 @@ use uuid::Uuid;
 // never be sent a message they have no route for — routing an unknown payload type
 // disconnects the peer, so all EVM gossip is version-filtered to the exact peer set
 // that understands it (EVM-tx ≥101, deposit-claim ≥102).
-const PROTOCOL_VERSION: u32 = 103;
+const PROTOCOL_VERSION: u32 = 104;
 /// The last protocol version WITHOUT the EVM relay messages (still accepted).
 const PROTOCOL_VERSION_NO_EVM_RELAY: u32 = 100;
 /// The minimum protocol version that understands the EVM-tx relay messages.
@@ -94,6 +94,12 @@ pub(crate) const PROTOCOL_VERSION_EVM_RELAY: u32 = 101;
 /// messages. 101 peers (EVM-tx relay only) and older must NEVER be sent a claim
 /// message (unroutable → disconnect), so claim gossip is filtered to >= this.
 pub(crate) const PROTOCOL_VERSION_CLAIM_RELAY: u32 = 102;
+/// The PALW material PULL (`PalwMaterialRequest`, oneof 77). Only the REQUEST is gated: the serve
+/// side answers on the pre-existing broadcast message, which every older peer already routes.
+/// A 103 peer simply never gets asked — it can still hear, hold and push materials as before.
+pub(crate) const PROTOCOL_VERSION_PALW_PULL: u32 = 104;
+/// The 104-set minus the material pull: everything a 103 peer can route.
+pub(crate) const PROTOCOL_VERSION_PRE_PALW_PULL: u32 = 103;
 
 /// See `check_orphan_resolution_range`
 const BASELINE_ORPHAN_RESOLUTION_RANGE: u32 = 5;
@@ -522,6 +528,23 @@ impl FlowContext {
             kaspa_p2p_lib::pb::PalwTraceMaterialBroadcastMessage { claim_id: Some(claim.into()), material: bytes }
         );
         self.hub().broadcast(msg, None).await;
+    }
+
+    /// **Ask the network for a claim's material** — the pull half of the transport.
+    ///
+    /// Sent when a panel seat holds a duty and no material: the producer may be gone, but any
+    /// peer that heard the broadcast once (or produced it) re-serves it — to EVERYBODY, on the
+    /// push message, so one answered request refills the whole neighbourhood. Version-filtered:
+    /// a pre-pull peer has no route for this type and an unroutable payload disconnects it.
+    pub async fn request_palw_material(&self, claim: kaspa_hashes::Hash64) {
+        if !self.palw_v2_active() {
+            return;
+        }
+        let msg = kaspa_p2p_lib::make_message!(
+            kaspa_p2p_lib::pb::kaspad_message::Payload::PalwMaterialRequest,
+            kaspa_p2p_lib::pb::PalwMaterialRequestMessage { claim_id: Some(claim.into()) }
+        );
+        self.hub().broadcast_to_peers_with_min_version(msg, PROTOCOL_VERSION_PALW_PULL).await;
     }
 
     /// Broadcast one signed seat receipt (borsh(`PalwSeatReceiptV2`)) to every peer.
@@ -1374,6 +1397,12 @@ impl ConnectionInitializer for FlowContext {
         // Register all flows according to version
         let (flows, applied_protocol_version) = match peer_version.protocol_version {
             v if v >= PROTOCOL_VERSION => (v8::register(self.clone(), router.clone(), PROTOCOL_VERSION), PROTOCOL_VERSION),
+            // Back-compat: the 103 set (everything but the material pull). Claim/EVM relays and
+            // the PALW push gossip are all present; such a peer is never sent a
+            // PalwMaterialRequest (the send is version-filtered), so nothing unroutable reaches it.
+            PROTOCOL_VERSION_PRE_PALW_PULL => {
+                (v8::register(self.clone(), router.clone(), PROTOCOL_VERSION_PRE_PALW_PULL), PROTOCOL_VERSION_PRE_PALW_PULL)
+            }
             // §14.2 back-compat: an EVM-tx-relay (101) peer that predates the
             // deposit-claim relay. Register the 101 flow set (EVM-tx relay, NO
             // claim relay) — claim messages (oneof 67-70) are version-filtered to

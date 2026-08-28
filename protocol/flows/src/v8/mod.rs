@@ -146,6 +146,9 @@ pub fn register(ctx: FlowContext, router: Arc<Router>, protocol_version: u32) ->
             router.subscribe(vec![
                 KaspadMessagePayloadType::PalwTraceMaterialBroadcast,
                 KaspadMessagePayloadType::PalwSeatReceiptBroadcast,
+                // The pull request (>= 104 peers send it; subscribing unconditionally is harmless
+                // — an older peer simply never emits the type).
+                KaspadMessagePayloadType::PalwMaterialRequest,
             ]),
         )),
         Box::new(RequestPruningPointPalwStateFlow::new(
