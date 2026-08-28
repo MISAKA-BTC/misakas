@@ -574,6 +574,7 @@ impl PalwPanelService {
     ) -> Result<PalwConsensusObjectV2, String> {
         let bond = self.bond.ok_or("no --palw-producer-bond to register under")?;
         let bond_key = PalwBondKeyV2(bond);
+        info!("[{PALW_PANEL}] attempting the class registration (filter: {})", self.config.register_class.as_deref().unwrap_or("<unset>"));
         let terms = session.palw_v2_registration_terms().ok_or("this chain has no V2 bundle, or does not hold its base class yet")?;
 
         // The class of the artifact this node carries — matched by SHAPE against the build's own
@@ -1131,8 +1132,16 @@ impl PalwPanelService {
         let network_domain =
             kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2(self.consensus_config.params.net.to_string().as_bytes());
         info!(
-            "[{PALW_PANEL}] starting (bond={bond}, submitter={})",
-            if self.config.fee_outpoint.is_some() { "funded" } else { "off — receipts only" }
+            "[{PALW_PANEL}] starting (bond={bond}, submitter={}, register={})",
+            if self.config.fee_outpoint.is_some() { "funded" } else { "off — receipts only" },
+            // The operator's one-shot intent, echoed so a silent registration path is
+            // diagnosable from the startup line alone (it went silent once — this line is why
+            // that cannot happen twice).
+            match self.config.register_class.as_deref() {
+                None => "off".to_string(),
+                Some("") => "any-unregistered".to_string(),
+                Some(id) => id.to_string(),
+            }
         );
 
         // **This node now answers material pulls** (the request half is in flow_context): its own
