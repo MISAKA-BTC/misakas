@@ -1805,6 +1805,10 @@ pub enum PalwStateV2Error {
         activation_daa.saturating_sub(*now)
     )]
     ClassActivationTooFarAhead { class: Hash64, activation_daa: u64, now: u64, max_lookahead: u64 },
+    #[error("bond {0:?} is not Active — opening a court risks collateral, and collateral that is leaving risks nothing")]
+    BondNotActive(PalwBondKeyV2),
+    #[error("bond {bond:?} holds {collateral} sompi against a floor of {floor} — too little to stand behind an accusation")]
+    BondBelowFloor { bond: PalwBondKeyV2, collateral: u64, floor: u64 },
     #[error(
         "class {class} declares {got} sompi per work unit but this network's unit is {want} — weight per sompi at risk is not a class's to choose"
     )]
@@ -3570,6 +3574,25 @@ fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCon
             if let Ok(no_show) = session.ladder.declare_no_show(ctx.daa_score) {
                 builder.write_court(session_id, None);
                 match no_show.silent_party {
+                    // **A silence at the OPENING rung is not a conviction** (audit M2-5).
+                    //
+                    // The rung clock convicts a responder that will not stand behind its own root
+                    // at the index it was asked about. That is only a meaningful accusation once
+                    // the responder has shown it can play at all: two of this chain's three genesis
+                    // classes (40 % of cadence between them) have no `bisect_prefix_state` in this
+                    // tree, so their honest producers CANNOT make the first move — and an attacker
+                    // holding any minimum bond could open one court per licensed claim and take the
+                    // producer's reservation 60 DAA later, recovering its own stake in full. The
+                    // 2026-08-22 audit closed exactly this and it was re-opened on the strength of a
+                    // responder that exists for one family out of three.
+                    //
+                    // Round 0 therefore falls through to the session backstop, which closes on the
+                    // challenger's side — the right answer for an accusation that was never
+                    // supported by an exchange. A responder that has answered once and then goes
+                    // silent still loses at the next rung, which is the case the ladder is for.
+                    crate::palw_bisect::PalwBisectPartyV1::Responder if session.ladder.round() == 0 => {
+                        rearm_after_challenger_side_close(builder, ctx, session.claim, &claim, session.challenger_bond)?;
+                    }
                     crate::palw_bisect::PalwBisectPartyV1::Responder => {
                         // Same treatment a proven fault gets, and for the same reason: an
                         // executor that will not stand behind its own announced root at the
@@ -4632,7 +4655,23 @@ fn apply_object(
             if claim.phase.is_terminal() {
                 return Err(PalwStateV2Error::WrongPhase { claim: *claim_id, edge: "CourtOpened" });
             }
-            builder.state.bonds.get(challenger_bond).ok_or(PalwStateV2Error::MissingBond(*challenger_bond))?;
+            // **Opening a court is a bonded act, and this only checked that the bond EXISTS**
+            // (audit M2-11). A retiring or under-funded bond could open unlimited sessions — each
+            // one freezing an honest claim for a whole window and reserving that claim's stake
+            // against collateral that may already be leaving. The attempt path demands Active and
+            // the registry floor before it will let a bond risk anything; the court is the same
+            // question and now asks it the same way.
+            let challenger = builder.state.bonds.get(challenger_bond).ok_or(PalwStateV2Error::MissingBond(*challenger_bond))?;
+            if !matches!(challenger.status, PalwBondStatusV2::Active) {
+                return Err(PalwStateV2Error::BondNotActive(*challenger_bond));
+            }
+            if challenger.collateral < builder.params.min_collateral_sompi() {
+                return Err(PalwStateV2Error::BondBelowFloor {
+                    bond: *challenger_bond,
+                    collateral: challenger.collateral,
+                    floor: builder.params.min_collateral_sompi(),
+                });
+            }
             let deadline_daa =
                 ctx.daa_score.checked_add(builder.params.window_court).ok_or(PalwStateV2Error::Overflow("court deadline"))?;
             // **The opening rung is clocked like every other rung — because a responder now ships.**
@@ -7169,35 +7208,45 @@ pub(crate) mod tests {
         );
     }
 
-    /// **A silent responder loses the opening rung — now that answering it is possible.**
+    /// **The opening rung does NOT convict on silence** (audit M2-5).
     ///
-    /// This rung used to run on the session budget instead of the rung clock, because a rung clock
-    /// convicts on silence and nothing in this tree could break that silence: `CourtDisclosed` was
-    /// constructed nowhere. Clocking it tightly would have let anyone holding one bond convict any
-    /// producer by opening a court and waiting.
+    /// This rung was re-clocked onto the tight rung window on the strength of a responder the
+    /// panel service had just gained — but only `Base0Backend` implements `bisect_prefix_state`.
+    /// Both Qwen families take the trait default `None`, and between them they hold 40 % of genesis
+    /// cadence, so their honest producers cannot make the first move at all. Anyone holding one
+    /// minimum bond could open a court against a licensed claim of theirs and take the producer's
+    /// reservation 60 DAA later while recovering its own stake in full — one court per claim, for a
+    /// transaction fee each.
     ///
-    /// The panel service emits `CourtDisclosed` now, and its close carries the operand openings the
-    /// court has to read — so a producer that answers can be adjudicated end to end, and one that
-    /// does not has chosen not to. The backstop is therefore the wrong default: it made silence the
-    /// winning move for a guilty producer, which is the one outcome a fraud court may not have.
+    /// So round 0 falls through to the session backstop, which closes on the challenger's side:
+    /// an accusation never supported by a single exchange convicts nobody. A responder that HAS
+    /// answered once has demonstrably got software that can move, and silence at a later rung still
+    /// decides against it — that is `palw_v2_a_silent_responder_loses_the_dispute`, directly below,
+    /// and it is the case the ladder exists for.
     #[test]
-    fn a_silent_responder_now_loses_the_opening_rung() {
+    fn the_opening_rung_does_not_convict_a_responder_that_never_moved() {
         let p = params_with_ladder();
         let (s5, claim_id, sid) = licensed_with_court(&p);
-        // Inside the rung window, nothing has happened yet: the clock is a deadline, not a hair
-        // trigger, and a responder that answers in time is never charged.
+        // Inside the rung window, nothing has happened yet.
         let (s6, _) = apply(&s5, &p, &ctx(6, 120, 6), &[], None);
         assert!(s6.court_session(&sid).is_some(), "the rung has not run out at 120");
         assert_eq!(s6.bond(&bond_key(1)).unwrap().slashed, 0, "and nothing has been charged");
 
-        // Past it, with no disclosure: the executor defaulted on the only defence it had.
+        // Past it, with no disclosure and no exchange ever having happened.
         let (s7, _) = apply(&s6, &p, &ctx(7, 125, 7), &[], None);
         assert!(s7.court_session(&sid).is_none(), "the session is decided and gone");
         assert!(
-            matches!(s7.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }),
-            "a responder that would not stand behind its own root at the index it was asked about loses the claim"
+            !matches!(s7.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }),
+            "an accusation that produced no exchange must not convict the producer of fraud"
         );
-        assert!(s7.bond(&bond_key(1)).unwrap().slashed > 0, "and it costs the executor its stake");
+        // The fixture's challenger and executor are one bond, so the charge cannot be told apart by
+        // amount — what distinguishes the two outcomes is the REASON the claim carries and whether
+        // it survives. A challenger-side close re-arms the claim; a fraud conviction voids it.
+        assert!(
+            !matches!(s7.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Voided { .. }),
+            "the claim survives an accusation nobody supported — two of three genesis classes cannot answer a \
+             rung at all, so convicting on opening-rung silence is a machine for voiding honest claims"
+        );
     }
 
     /// The other half of the same rule, and the one that survived the opening rung's re-clocking

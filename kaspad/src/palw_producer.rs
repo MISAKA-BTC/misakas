@@ -115,7 +115,7 @@ pub struct PalwProducerService {
     /// Decoded once at construction. Digest-checked by the decoder, so anything in here is an
     /// artifact that hashes to what its own file claims; whether it is the artifact the CHAIN
     /// registered is decided per block, against the producer facts.
-    class_artifacts: Vec<misaka_palw_base0::artifact::Base0ArtifactV1>,
+    class_artifacts: Vec<std::sync::Arc<misaka_palw_base0::artifact::Base0ArtifactV1>>,
     /// Memory-mapped Qwen3.6 artifacts, opened and rooted once at startup.
     qwen36_artifacts: Vec<(kaspa_hashes::Hash64, std::sync::Arc<misaka_palw_base0::qwen36::Qwen36ArtifactV1>)>,
     consensus_manager: Arc<ConsensusManager>,
@@ -210,7 +210,7 @@ impl PalwProducerService {
                         artifact.shape.vocab,
                         artifact.shape.eps_q
                     );
-                    class_artifacts.push(*artifact);
+                    class_artifacts.push(std::sync::Arc::new(*artifact));
                 }
                 Ok(crate::palw_backends::LoadedClassArtifact::Qwen36 { computed_root, artifact }) => {
                     info!(

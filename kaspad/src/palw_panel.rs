@@ -168,7 +168,7 @@ pub struct PalwPanelService {
     config: PalwPanelConfig,
     /// Decoded once. Same contract as the producer's: digest-checked here, matched against the
     /// CHAIN per duty.
-    class_artifacts: Vec<misaka_palw_base0::artifact::Base0ArtifactV1>,
+    class_artifacts: Vec<std::sync::Arc<misaka_palw_base0::artifact::Base0ArtifactV1>>,
     qwen36_artifacts: Vec<(kaspa_hashes::Hash64, std::sync::Arc<misaka_palw_base0::qwen36::Qwen36ArtifactV1>)>,
     consensus_manager: Arc<ConsensusManager>,
     flow_context: Arc<FlowContext>,
@@ -236,7 +236,7 @@ impl PalwPanelService {
             match crate::palw_backends::load_class_artifact(path) {
                 Ok(crate::palw_backends::LoadedClassArtifact::Dense(artifact)) => {
                     info!("[{PALW_PANEL}] loaded class artifact {}", path.display());
-                    class_artifacts.push(*artifact);
+                    class_artifacts.push(std::sync::Arc::new(*artifact));
                 }
                 Ok(crate::palw_backends::LoadedClassArtifact::Qwen36 { computed_root, artifact }) => {
                     info!("[{PALW_PANEL}] mapped Qwen3.6 artifact {} (computed root {computed_root})", path.display());
@@ -355,6 +355,15 @@ impl PalwPanelService {
             let mut found = None;
             for (outpoint, entry) in chunk {
                 if entry.script_public_key != script || entry.is_coinbase {
+                    continue;
+                }
+                // **Never the bond's own output-0** (audit M2-13). The recovery scan looks for any
+                // spendable output under this node's payout script, and on a node whose only such
+                // output IS its collateral it selected exactly that: the carrier is then refused by
+                // the spend gate as a chain block, or — where the mergeset fence is not armed —
+                // accepted through a merged block and the collateral simply leaves. Every other
+                // funding path in this tree carries this exclusion by name.
+                if self.bond.is_some_and(|bond| bond == outpoint) {
                     continue;
                 }
                 under_script += 1;
@@ -1505,6 +1514,18 @@ impl PalwPanelService {
                 {
                     continue;
                 }
+                // **Already queued, from a tick that could not fund it** (audit M2-15). Moves that
+                // do not fit the in-flight budget are carried over to the next tick, and this loop
+                // rebuilt the same move every 2 seconds and pushed a duplicate — so the queue grew
+                // by a copy per tick, `submitted_this_tick` spent the budget on the oldest copies,
+                // and later sessions' moves were dropped unsent. A rung is clocked, so the moves
+                // crowded out are exactly the ones whose lapse convicts the responder. The
+                // opening-court branch has always had this guard; the responder branch did not.
+                if court_pending.iter().any(|(sid, round, responder, _)| {
+                    *sid == duty.session_id && *round == duty.round && *responder == duty.i_am_responder
+                }) {
+                    continue;
+                }
                 // The capture, and the family's backend for it. A party with no material — or a
                 // family with no court — cannot answer honestly, and answering dishonestly is what
                 // the terminal close exists to punish, so it stays silent and lets the clock decide.
@@ -1806,6 +1827,31 @@ impl PalwPanelService {
                             break 'verdict Some(PalwReceiptVerdictV2::Valid);
                         }
                     }
+                    // **This node's own disk, before the network and before any accusation**
+                    // (audit M2-21). A seat that restarts loses its pool but keeps its retention,
+                    // and the court arm already reads it — the verdict arm did not, so a restarted
+                    // seat signed `Unavailable` against a producer whose material was sitting in
+                    // its own directory. Verified like anything else: a file is evidence only if it
+                    // reproduces the roots the claim committed to.
+                    if let Some(bytes) = self.retained_capture(&duty.claim_id).or_else(|| {
+                        std::fs::read(self.config.retention_dir.join("foreign").join(format!("{}.material", duty.claim_id))).ok()
+                    }) && let Ok(backend) = self.backends().resolve(duty.class_id, duty.artifact_root)
+                        && let Some(anchor) = self.job_anchor_for_claim(
+                            &session,
+                            backend.as_ref(),
+                            network_domain,
+                            duty.accepted_block,
+                            duty.class_id,
+                            &duty.executor_bond,
+                        )
+                        && backend.verify_material(
+                            &bytes,
+                            PalwClaimRootsV1 { execution_root: duty.execution_root, trace_root: duty.trace_root, anchor },
+                        ) == PalwMaterialVerdictV1::Matches
+                    {
+                        materials.entry(duty.claim_id).or_default().push(bytes);
+                        break 'verdict Some(PalwReceiptVerdictV2::Valid);
+                    }
                     // No verifying material yet. Ask the network before accusing: the producer may
                     // be gone, but any peer that heard the broadcast can re-serve it.
                     //
@@ -2044,7 +2090,6 @@ impl PalwPanelService {
                     }
                     let pool = receipts.get(&claim).cloned().unwrap_or_default();
                     let Some(object) = session.palw_v2_receipt_quorum_assemble(claim, pool) else { continue };
-                    *submit_attempts.entry(claim).or_insert(0) += 1;
                     match self.build_lifecycle_tx(&object, funding_outpoint, &funding_entry) {
                         Ok(tx) => {
                             let txid = tx.id();
@@ -2077,7 +2122,16 @@ impl PalwPanelService {
                                 }
                             }
                         }
-                        Err(e) => warn!("[{PALW_PANEL}] cannot build the carrier for claim {claim}: {e}"),
+                        // **Counted only for a failure THIS claim's object caused** (audit M2-25).
+                        // The attempt was charged before the build, so one panel-wide condition —
+                        // an unfunded fee outpoint, a mempool refusal, a storage-mass ceiling —
+                        // spent an attempt for every pooled claim in the same tick, and three such
+                        // ticks retired every quorum the node held. A build that fails on this
+                        // object's own shape is a real attempt; anything else is the node's weather.
+                        Err(e) => {
+                            *submit_attempts.entry(claim).or_insert(0) += 1;
+                            warn!("[{PALW_PANEL}] cannot build the carrier for claim {claim}: {e}");
+                        }
                     }
                 }
                 // What the next tick continues from. `None` here means a refusal cleared it, and

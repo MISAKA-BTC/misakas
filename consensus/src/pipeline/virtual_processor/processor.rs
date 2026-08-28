@@ -4553,6 +4553,20 @@ impl VirtualStateProcessor {
                     // no more. A registrant that could name its own permille would be donating
                     // itself an arbitrary slice of every incumbent's cadence, which is the share
                     // table's own conservation rule read backwards.
+                    // **The entrant's difficulty is the chain's, not the registrant's** (audit
+                    // M2-12). `initial_target` seeds the class's own retarget, so a registrant
+                    // naming a huge one mines its class for free until the first retarget catches
+                    // up — and naming a tiny one makes the class unminable, which is a way to park
+                    // a share nobody can use. The base class's live target is what a registration
+                    // is offered (`palw_v2_registration_terms`), and it is what must arrive.
+                    if let Some(base_target) = state.class_target(&bundle.base_class_id)
+                        && *initial_target != base_target.target
+                    {
+                        return Err(format!(
+                            "class {class_id} registers at target {initial_target}; a post-genesis entrant starts at the                              chain's own ({}) — difficulty is not a registrant's to choose",
+                            base_target.target
+                        ));
+                    }
                     let floor = state_params.min_grantable_share_permille();
                     if *share_permille != floor {
                         return Err(format!(
