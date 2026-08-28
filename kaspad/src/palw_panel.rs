@@ -1248,6 +1248,25 @@ impl PalwPanelService {
             }
             let current_daa = session.get_virtual_daa_score();
 
+            // **Build the class registration FIRST — the comment always said "ahead of
+            // everything else", the code had it BEHIND the duty sweep.** On a healthy tick that
+            // was invisible; on a node started into a duty backlog (dozens of defaulted foreign
+            // claims, each costing an ML-DSA signature and a broadcast) the first sweep takes
+            // minutes — and on a memory-tight host the process never survived to the end of it,
+            // so the registration silently never happened. Measured 2026-08-28: three OOM cycles
+            // in a row, each dying mid-sweep, an armed --palw-register-class and not one build
+            // attempt. Building is chain-reads only; the SUBMIT still rides the funding block
+            // below, where the fee UTXO lives.
+            if self.config.register_class.is_some() && !class_registration_submitted && class_registration.is_none() {
+                match self.build_class_registration(&session).await {
+                    Ok(object) => {
+                        info!("[{PALW_PANEL}] built a class registration for this node's worker");
+                        class_registration = Some(object);
+                    }
+                    Err(e) => warn!("[{PALW_PANEL}] cannot register this node's class: {e}"),
+                }
+            }
+
             // --- the challenger's half: dispute a licensed claim whose execution is not the
             // canonical one ---
             //
@@ -1760,19 +1779,8 @@ impl PalwPanelService {
                 // same reason a court rung is: everything behind it can wait a tick, and it
                 // cannot — a producer with a worker and no class is a node doing nothing.
                 if self.config.register_class.is_some() && !class_registration_submitted {
-                    if class_registration.is_none() {
-                        match self.build_class_registration(&session).await {
-                            Ok(object) => {
-                                info!("[{PALW_PANEL}] built a class registration for this node's worker");
-                                class_registration = Some(object);
-                            }
-                            // Warned once per tick, not once and then silence: the reasons are all
-                            // operator-fixable (no worker, a worker that is not the class it
-                            // claims, a bond that is not Active) and a node that said so once at
-                            // startup is a node whose message scrolled away.
-                            Err(e) => warn!("[{PALW_PANEL}] cannot register this node's class: {e}"),
-                        }
-                    }
+                    // Built at the top of the tick (chain reads only); this block owns the SUBMIT
+                    // because the fee UTXO lives here.
                     if let Some(object) = class_registration.clone()
                         && let Some((funding_outpoint, funding_entry)) = funding.clone()
                     {
