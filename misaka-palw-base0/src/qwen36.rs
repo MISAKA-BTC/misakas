@@ -1449,6 +1449,35 @@ pub fn qwen36_dev_fixture(layers: usize, experts: usize) -> Qwen36ArtifactV1 {
     fixture_impl(layers, experts)
 }
 
+/// The qwen3moe-flavored fixture: every layer full attention, no gate, no shared expert, full
+/// rotation. Same discipline (and the same warning) as [`qwen36_dev_fixture`].
+pub fn qwen3moe_dev_fixture(layers: usize, experts: usize) -> Qwen36ArtifactV1 {
+    use crate::artifact::LN_THETA_10000_GEN_Q;
+    let shape = Qwen36ShapeV1 {
+        layer_types: vec![Qwen36LayerKind::FullAttention; layers],
+        d_model: 32,
+        n_heads: 4,
+        n_kv_heads: 2,
+        head_dim: 16,
+        rotary_dim: 16,
+        linear_k_heads: 0,
+        linear_v_heads: 0,
+        linear_head_dim: 0,
+        conv_kernel: 0,
+        n_experts: experts,
+        experts_per_token: 4,
+        moe_dim: 16,
+        shared_dim: 0,
+        vocab: 64,
+        max_position: 32,
+        eps_q: 1,
+        router_up_bits: 20,
+    };
+    let rope = RopeTableV1::generate(shape.head_dim, shape.max_position, LN_THETA_10000_GEN_Q).expect("a table");
+    let artifact = Qwen36ArtifactV1::new(shape.clone(), rope).expect("a valid qwen3moe shape");
+    fill_fixture(artifact, shape)
+}
+
 /// The fixture's body, shared by the in-crate door (`tests::fixture`) and the cross-crate one.
 fn fixture_impl(layers: usize, experts: usize) -> Qwen36ArtifactV1 {
     use crate::artifact::LN_THETA_10000_GEN_Q;
@@ -1474,9 +1503,16 @@ fn fixture_impl(layers: usize, experts: usize) -> Qwen36ArtifactV1 {
         eps_q: 1,
         router_up_bits: 20,
     };
-    let d = shape.d_model;
     let rope = RopeTableV1::generate(shape.head_dim, shape.max_position, LN_THETA_10000_GEN_Q).expect("a table");
-    let mut artifact = Qwen36ArtifactV1::new(shape.clone(), rope).expect("a valid shape");
+    let artifact = Qwen36ArtifactV1::new(shape.clone(), rope).expect("a valid shape");
+    fill_fixture(artifact, shape)
+}
+
+/// Deterministic weights and workable narrowing params for a fixture of either flavor — the
+/// per-layer walk reads the shape, so the gate, the recurrence and the shared expert appear
+/// exactly where the shape has them.
+fn fill_fixture(mut artifact: Qwen36ArtifactV1, shape: Qwen36ShapeV1) -> Qwen36ArtifactV1 {
+    let d = shape.d_model;
 
     let mut state = 0x9E37_79B9_7F4A_7C15u64;
     let mut next = move || -> i8 {
@@ -1549,14 +1585,18 @@ fn fixture_impl(layers: usize, experts: usize) -> Qwen36ArtifactV1 {
             }
             Qwen36LayerKind::FullAttention => {
                 let (q_dim, kv_dim) = (shape.n_heads * shape.head_dim, shape.kv_dim());
+                if shape.attn_output_gate() {
+                    artifact = artifact
+                        .with_tensor(n("attn_gate.weight"), weights(q_dim * d))
+                        .with_params(n("attn_gate.weight.a16"), &[projection(d)])
+                        .with_params(n("attn_gated.a16"), &[A16QuantParams { multiplier: 1, shift: 24, zero: 0 }]);
+                }
                 artifact = artifact
                     .with_tensor(n("attn_q.weight"), weights(q_dim * d))
-                    .with_tensor(n("attn_gate.weight"), weights(q_dim * d))
                     .with_tensor(n("attn_k.weight"), weights(kv_dim * d))
                     .with_tensor(n("attn_v.weight"), weights(kv_dim * d))
                     .with_tensor(n("attn_o.weight"), weights(d * q_dim))
                     .with_params(n("attn_q.weight.a16"), &[projection(d)])
-                    .with_params(n("attn_gate.weight.a16"), &[projection(d)])
                     .with_params(n("attn_k.weight.a16"), &[projection(d)])
                     .with_params(n("attn_v.weight.a16"), &[projection(d)])
                     .with_params(n("attn_q_norm.a16"), &[unity])
@@ -1566,11 +1606,10 @@ fn fixture_impl(layers: usize, experts: usize) -> Qwen36ArtifactV1 {
                     .with_params(n("attn_softmax_up.a16"), &[A16QuantParams { multiplier: 1, shift: 0, zero: 16 }])
                     .with_params(n("attn_probs.a16"), &[A16QuantParams { multiplier: 1, shift: 9, zero: 0 }])
                     .with_params(n("attn_values.a16"), &[A16QuantParams { multiplier: 1, shift: 15, zero: 0 }])
-                    .with_params(n("attn_gated.a16"), &[A16QuantParams { multiplier: 1, shift: 24, zero: 0 }])
                     .with_params(n("attn_o.weight.a16"), &[projection(q_dim)]);
             }
         }
-        // The mixture: a router, every expert, and the shared one.
+        // The mixture: a router, every expert — and the shared one where the shape has it.
         artifact = artifact
             .with_tensor(n("ffn_router.weight"), weights(shape.n_experts * d))
             .with_params(n("ffn_router.weight.a16"), &[projection(d)])
@@ -1578,14 +1617,19 @@ fn fixture_impl(layers: usize, experts: usize) -> Qwen36ArtifactV1 {
             // The router's softmax widening, class data per layer rather than a shape constant.
             .with_params(n("ffn_router_up.a16"), &[A16QuantParams { multiplier: 1, shift: 0, zero: 20 }])
             .with_params(n("ffn_combine.a16"), &[A16QuantParams { multiplier: 1, shift: 24, zero: 0 }])
-            .with_tensor(n("ffn_shared_gate.weight"), weights(d))
-            .with_params(n("ffn_shared_gate.weight.a16"), &[projection(d)])
-            .with_params(n("ffn_shared_gated.a16"), &[A16QuantParams { multiplier: 1, shift: 24, zero: 0 }])
             .with_params(n("ffn_moe_out.a16"), &[unity]);
-        for (base, mid) in (0..shape.n_experts)
-            .map(|e| (format!("blk.{li}.ffn_expert.{e}"), shape.moe_dim))
-            .chain(std::iter::once((format!("blk.{li}.ffn_shared_expert"), shape.shared_dim)))
-        {
+        if shape.has_shared_expert() {
+            artifact = artifact
+                .with_tensor(n("ffn_shared_gate.weight"), weights(d))
+                .with_params(n("ffn_shared_gate.weight.a16"), &[projection(d)])
+                .with_params(n("ffn_shared_gated.a16"), &[A16QuantParams { multiplier: 1, shift: 24, zero: 0 }]);
+        }
+        let shared_tail: Vec<(String, usize)> = if shape.has_shared_expert() {
+            vec![(format!("blk.{li}.ffn_shared_expert"), shape.shared_dim)]
+        } else {
+            Vec::new()
+        };
+        for (base, mid) in (0..shape.n_experts).map(|e| (format!("blk.{li}.ffn_expert.{e}"), shape.moe_dim)).chain(shared_tail) {
             artifact = artifact
                 .with_tensor(format!("{base}_gate.weight"), weights(mid * d))
                 .with_tensor(format!("{base}_up.weight"), weights(mid * d))
@@ -1618,6 +1662,37 @@ mod tests {
 
     /// **The graph composes.** Both arms, the mixture, the residual stream, forty-style layer
     /// alternation — end to end, with a row out that is neither zero nor constant.
+    /// **The qwen3moe flavor runs end to end** — gateless attention, no shared expert, no
+    /// recurrence anywhere — through the same engine the hybrid uses. The cheap in-crate proof
+    /// that the 30B conversion is worth starting.
+    #[test]
+    fn the_qwen3moe_graph_runs_end_to_end() {
+        let artifact = super::qwen3moe_dev_fixture(3, 8);
+        assert!(artifact.shape.is_full_attention_only() && !artifact.shape.attn_output_gate());
+        let engine = Qwen36Engine::new(&artifact);
+        let mut cache = Qwen36Cache::new(&artifact.shape);
+        let mut rows = Vec::new();
+        for position in 0..6 {
+            let token = (position * 7 + 3) % artifact.shape.vocab;
+            rows.push(engine.forward_token(&mut cache, token, position).expect("the gateless pass completes"));
+        }
+        for (i, row) in rows.iter().enumerate() {
+            assert_eq!(row.len(), artifact.shape.vocab);
+            assert!(row.iter().any(|v| *v != 0), "position {i} produced an all-zero logit row");
+        }
+        assert_ne!(rows[0], rows[1]);
+        // And determinism, which is the property the class registers.
+        let rerun = {
+            let mut cache = Qwen36Cache::new(&artifact.shape);
+            let mut last = Vec::new();
+            for position in 0..6 {
+                last = engine.forward_token(&mut cache, (position * 7 + 3) % artifact.shape.vocab, position).expect("completes");
+            }
+            last
+        };
+        assert_eq!(rows[5], rerun);
+    }
+
     #[test]
     fn the_hybrid_graph_runs_end_to_end() {
         let artifact = fixture(8, 16);
