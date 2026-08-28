@@ -73,6 +73,14 @@ The log must show this fingerprint, or you are on the wrong ruleset:
 Consensus params fingerprint: 15bab795442ec3efc3a58e02dd9c7a6f3015ff0634bc4a50a7af589338857ad0 (network testnet-11)
 ```
 
+and the genesis the network builds on is
+`c664a224acb3f53b…` (the node prints it in any `Genesis mismatch` warning). If your log shows
+**`Genesis mismatch … local: d25a80b9…`**, your datadir holds a RETIRED pre-relaunch chain —
+most likely synced from a stale node that was still answering on the network name (observed live
+2026-08-28). The current network refuses that history at handshake, so the node sits peerless
+forever. Recovery: stop the node, delete the app dir (`~/.kaspa-pq/misaka-testnet-11` or your
+`--appdir`), rebuild from current `main`, and resync — the real chain re-downloads in minutes.
+
 If DNS is blocked where you run, add the public entry nodes by hand:
 `--addpeer=169.58.232.113:26311 --addpeer=169.58.232.114:26311 --addpeer=169.58.39.220:26311`.
 
