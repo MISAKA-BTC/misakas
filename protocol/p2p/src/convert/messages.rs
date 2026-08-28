@@ -37,6 +37,8 @@ impl From<Version> for protowire::VersionMessage {
             network: item.network.clone(),
             genesis_hash: item.genesis_hash,
             consensus_params_id: item.consensus_params_id,
+            consensus_identity_id: item.consensus_identity_id,
+            consensus_schedule_id: item.consensus_schedule_id,
         }
     }
 }
@@ -60,6 +62,8 @@ impl TryFrom<protowire::VersionMessage> for Version {
             network: msg.network.clone(),
             genesis_hash: msg.genesis_hash,
             consensus_params_id: msg.consensus_params_id,
+            consensus_identity_id: msg.consensus_identity_id,
+            consensus_schedule_id: msg.consensus_schedule_id,
         })
     }
 }

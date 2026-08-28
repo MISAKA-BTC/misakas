@@ -754,6 +754,85 @@ impl Params {
         }
     }
 
+    /// **The rules whose change invalidates history — everything the fingerprint covers EXCEPT the
+    /// activation schedule.**
+    ///
+    /// Two builds that agree on every rule and differ only in WHEN a future rule turns on produce
+    /// the same identity. That is the whole point (audit M1-6): `consensus_params_id` hashes the raw
+    /// score of every fence, and the handshake refuses any peer whose value differs — so publishing
+    /// a build that schedules a fence at a coordinated future height H disconnects the first
+    /// upgrading operator from every un-upgraded peer IMMEDIATELY, and two disjoint meshes build two
+    /// chains for the whole rollout. Nothing about H is involved; the split starts at deploy. That
+    /// is what made the standing "no re-genesis, ship as an activation" policy unusable on a
+    /// value-bearing network.
+    ///
+    /// Implemented by normalising every fence to a single sentinel and re-using the same writer, so
+    /// there is exactly one description of what the fingerprint covers. Peers still diverge at H —
+    /// that is a consensus question and fork choice answers it — but they stay peers until then,
+    /// which is the only way a scheduled upgrade can propagate at all.
+    pub fn consensus_identity_id(&self) -> Hash {
+        let mut normalized = self.clone();
+        let sentinel = ForkActivation::never();
+        normalized.crescendo_activation = sentinel;
+        normalized.pow_blake2b_sha3_activation = sentinel;
+        normalized.pow_palw_activation = sentinel;
+        normalized.pow_palw_ollama_activation = sentinel;
+        normalized.pq_activation_daa_score = u64::MAX;
+        normalized.evm_activation_daa_score = u64::MAX;
+        normalized.evm_gas_pool_v2_activation_daa_score = u64::MAX;
+        normalized.evm_f002_withdraw_cap_activation_daa_score = u64::MAX;
+        normalized.evm_f003_mldsa_verify_activation_daa_score = u64::MAX;
+        normalized.evm_typed_receipt_root_activation_daa_score = u64::MAX;
+        if let Some(dns) = normalized.dns_params.as_mut() {
+            dns.dns_activation_daa_score = u64::MAX;
+            dns.pos_v2_activation_daa_score = u64::MAX;
+            dns.finality_fee_activation_daa_score = u64::MAX;
+            dns.bond_spend_gate_mergeset_activation_daa_score = u64::MAX;
+            dns.coinbase_settlement_consensus_activation_daa_score = u64::MAX;
+            dns.unbond_authz_mergeset_activation_daa_score = u64::MAX;
+        }
+        normalized.consensus_params_id()
+    }
+
+    /// **The activation schedule alone**, so a mismatch can be REPORTED precisely rather than only
+    /// detected. Not a gate: two nodes with the same identity and different schedules are peers,
+    /// and the operator log says which build is scheduling what.
+    pub fn consensus_schedule_id(&self) -> Hash {
+        let mut h = ConsensusParamsId::new();
+        h.write(CONSENSUS_FINGERPRINT_DOMAIN_V1);
+        h.write(b"schedule");
+        for score in [
+            self.crescendo_activation.daa_score(),
+            self.pow_blake2b_sha3_activation.daa_score(),
+            self.pow_palw_activation.daa_score(),
+            self.pow_palw_ollama_activation.daa_score(),
+            self.pq_activation_daa_score,
+            self.evm_activation_daa_score,
+            self.evm_gas_pool_v2_activation_daa_score,
+            self.evm_f002_withdraw_cap_activation_daa_score,
+            self.evm_f003_mldsa_verify_activation_daa_score,
+            self.evm_typed_receipt_root_activation_daa_score,
+        ] {
+            h.write(score.to_le_bytes());
+        }
+        match self.dns_params.as_ref() {
+            Some(dns) => {
+                for score in [
+                    dns.dns_activation_daa_score,
+                    dns.pos_v2_activation_daa_score,
+                    dns.finality_fee_activation_daa_score,
+                    dns.bond_spend_gate_mergeset_activation_daa_score,
+                    dns.coinbase_settlement_consensus_activation_daa_score,
+                    dns.unbond_authz_mergeset_activation_daa_score,
+                ] {
+                    h.write(score.to_le_bytes());
+                }
+            }
+            None => h.write(u64::MAX.to_le_bytes()),
+        }
+        h.finalize()
+    }
+
     /// A fingerprint of the consensus rules this node runs, for the P2P handshake.
     ///
     /// Two nodes that answer the same network name but disagree here cannot reach consensus — this
@@ -1628,21 +1707,31 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
     // alone cannot reroute fees there). NOT a genesis-block input; the classification change
     // rides the ADR-0007 Phase-3 re-genesis (BlockRewardData/VirtualState store-format change).
     finality_fee_activation_daa_score: 0,
-    // kaspa-pq bond spend-gate mergeset hardening: still inert (u64::MAX) on mainnet+testnet, and
-    // that is now a SCHEDULING decision rather than a default (2026-08-11 audit P0).
+    // kaspa-pq bond spend-gate mergeset hardening: **ACTIVE FROM GENESIS on mainnet**, because
+    // mainnet has no history and this preset's own overlay does not either (audit M1-1, 2026-08-28).
     //
-    // The hole is real and open here: the legacy own-body gate never sees a spend that arrives via
-    // the MERGESET, so a validator can withdraw its locked collateral out from under an `Active`
-    // bond — removing exactly the backing `λ·B_i` caps weight against and slashing threatens.
-    // Devnet/simnet start with the acceptance-time skip at genesis (see GENESIS_ACTIVE_DNS_PARAMS);
-    // a public network cannot, because activating it re-classifies transactions and is therefore a
-    // coordinated hard fork with real history behind it.
+    // The hole this closes: the legacy own-body gate never sees a spend that arrives via the
+    // MERGESET, so a validator could withdraw its locked collateral out from under an `Active`
+    // bond — removing exactly the backing `λ·B_i` caps weight against and slashing threatens. The
+    // block carrying such a spend is disqualified as a CHAIN block, but it stays in the DAG, is
+    // merged blue later, and its transactions are then accepted with no bond check at all
+    // (`utxo_validation.rs:352-359`: with the fence at `u64::MAX` and PALW disabled, `bond_filter`
+    // is `None`). The record survives untouched — `BondMutation` is only ever derived from
+    // DNS-subnetwork transactions — so the bond keeps counting toward `min_active_stake_sompi` and
+    // the attestation quorum while its collateral is a free UTXO.
     //
-    // It must move in the SAME release as the VLT shadow fence — that fence turns on challenge
-    // slashing, and slashing an unbacked bond is theatre. See
-    // `docs/testnet10-vlt-shadow-fork-runbook.md`, which refuses to have its `H` chosen until
-    // this and the forged-evidence gap close.
-    bond_spend_gate_mergeset_activation_daa_score: u64::MAX,
+    // It sat at `u64::MAX` here because activating it on a network WITH history re-classifies
+    // transactions and is therefore a coordinated hard fork. That reasoning is sound and does not
+    // apply to a network that has not launched: this preset ships `dns_activation_daa_score: 0`, so
+    // on mainnet the overlay and its spend gate now start together, which is the devnet/simnet
+    // posture (`GENESIS_ACTIVE_DNS_PARAMS`) for exactly the same reason — "on a network that starts
+    // with it there is no history to fork".
+    //
+    // **Testnet is deliberately not changed by this line.** `TESTNET_DNS_PARAMS` overrides the
+    // field with `TESTNET_VLT_SHADOW_FORK_DAA_SCORE`, so a live testnet's fingerprint — and
+    // therefore its handshake — is untouched; scheduling the fence on a network with history is
+    // still that network's problem, and M1-6 is why it cannot be rolled out gradually today.
+    bond_spend_gate_mergeset_activation_daa_score: 0,
     // kaspa-pq liveness-first DNS finality: keep attestation below the base-chain validity layer.
     // Missing or below-floor shards degrade StakeScore / DNS health and pause finality-dependent
     // flows, but miners can still advance the PoW/GHOSTDAG ledger while validators recover. Invalid
@@ -4754,6 +4843,46 @@ mod consensus_params_id_tests {
         assert_ne!(base.consensus_params_id(), tweaked.consensus_params_id());
     }
 
+    /// **A scheduled fence moves the params id and NOT the identity id** (audit M1-6).
+    ///
+    /// This is the property the whole split exists for: two builds that agree on every rule and
+    /// differ only in when a future rule turns on must be able to peer. If this ever fails, the
+    /// handshake is back to partitioning the network at deploy time, and the standing "ship
+    /// consensus changes as an activation" policy is unusable again.
+    #[test]
+    fn scheduling_a_fence_moves_the_params_id_but_not_the_identity() {
+        let today = MAINNET_PARAMS;
+        let mut scheduled = MAINNET_PARAMS;
+        // The shape of a real upgrade: a fence that is off today is armed at a future height.
+        scheduled.evm_f003_mldsa_verify_activation_daa_score = 9_000_000;
+
+        assert_ne!(
+            today.consensus_params_id(),
+            scheduled.consensus_params_id(),
+            "the legacy fingerprint must still notice a schedule change — old peers rely on it"
+        );
+        assert_eq!(
+            today.consensus_identity_id(),
+            scheduled.consensus_identity_id(),
+            "scheduling a fence changed the identity: upgrading nodes would be refused by every un-upgraded peer"
+        );
+        assert_ne!(
+            today.consensus_schedule_id(),
+            scheduled.consensus_schedule_id(),
+            "the schedule id must name the difference the operator log reports"
+        );
+
+        // And a change to a rule that decides the validity of blocks already on the chain still
+        // moves the identity — the gate must keep refusing exactly those.
+        let mut different_rules = MAINNET_PARAMS;
+        different_rules.max_tx_inputs += 1;
+        assert_ne!(
+            today.consensus_identity_id(),
+            different_rules.consensus_identity_id(),
+            "a real rule change must still be refused at the handshake"
+        );
+    }
+
     #[test]
     fn shipped_presets_have_pinned_fingerprints() {
         // Golden vectors. Any change to what goes into the fingerprint, or to how it is encoded,
@@ -4790,7 +4919,12 @@ mod consensus_params_id_tests {
             // whose `dns_veto_ttl_daa_score` is 2_000, and this lineage keeps 120 for the reason
             // recorded at `TESTNET_DNS_PARAMS` — a 10 bps constant would be ~2.8 days at the frozen
             // 120 s cadence. The pin below is the merged tree's own value, checked by this test.
-            ("mainnet", MAINNET_PARAMS, "9110ee1c8bedfc8cd0e32336a7adeeb2940752737e385d1c69b65aee662334c2"),
+            // Re-pinned 2026-08-28 for audit M1-1: the mainnet bond spend gate now activates at
+            // genesis, so the fingerprint moves. Legal exactly because mainnet has not launched —
+            // no live node holds the old value, and the same change on a network WITH history
+            // would be a partition (which is what M1-6 is about). Testnet's pin is unchanged in
+            // the same edit, which is the check that this touched only the unlaunched preset.
+            ("mainnet", MAINNET_PARAMS, "b824da1c83b50ca43285945a4b3aa3dcfe1b2271827a3b4275ff32e90ed5039d"),
             // Moved by the bps01⊕iso unification (2026-08-16): the CPU pins are now the UNION of
             // the two facts the branches discovered separately — `single-variant` (bps01, by
             // disassembly) ∧ `no-openmp` (iso, by the Linux link error) in `CPU_BUILD_PROFILE`,

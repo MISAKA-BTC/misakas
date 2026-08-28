@@ -1711,7 +1711,15 @@ async fn mempool_status(client: &KaspaRpcClient, txid: TransactionId) -> Mempool
         // this, a mined funding tx is judged `Unknown`, its outpoint is never dropped
         // from `inflight_spent`, and the exclusion set grows without bound until the
         // per-attest cleanup scan outlasts the epoch and every attestation misses.
-        Err(RpcError::RpcSubsystem(msg)) if msg.starts_with("Transaction") && msg.ends_with("not found") => MempoolStatus::Gone,
+        // **Match the PAYLOAD, not the rendered wrapper.** The anchored form above never fired over
+        // the only transport this binary uses (audit M1-5): the borsh wRPC client renders the
+        // server error through `RpcCall`'s `{0:?}` — DEBUG — so what arrives is
+        // `RPC response error Text("Transaction <id> not found")`, which starts with `RPC` and ends
+        // with `")`. Both anchors failed, `Gone` was unreachable, and `inflight_spent` therefore
+        // grew one entry per attested epoch forever, spending up to INFLIGHT_SCAN_CAP serial
+        // round-trips before every build. Requiring the txid keeps a generic "method not found"
+        // from being read as Gone, which was what the anchors were defending against.
+        Err(RpcError::RpcSubsystem(msg)) if msg.contains(&txid.to_string()) && msg.contains("not found") => MempoolStatus::Gone,
         Err(_) => MempoolStatus::Unknown,
     }
 }
@@ -2178,5 +2186,40 @@ mod eip55_tests {
         assert_eq!(eip55_checksum(&bytes("fb6916095ca1df60bb79ce92ce3ea74c37c5d359")), "0xfB6916095ca1df60bB79Ce92cE3Ea74c37c5d359");
         assert_eq!(eip55_checksum(&bytes("dbf03b407c01e7cd3cbea99509d93f8dddc8c6fb")), "0xdbF03B407c01E7cD3CBea99509d93f8DDDC8C6FB");
         assert_eq!(eip55_checksum(&bytes("d1220a0cf47c7b9be7a2e6ba89f429762e7b9adb")), "0xD1220A0cf47c7B9Be7A2E6BA89F429762e7b9aDb");
+    }
+}
+
+#[cfg(test)]
+mod mempool_status_shape_tests {
+    //! The wire shape of "transaction not found" over the transport the validator actually uses.
+    //!
+    //! `mempool_status` is not callable without a live client, so what is pinned here is the
+    //! predicate over the STRING the borsh wRPC stack produces — reproduced by composing the exact
+    //! renderings: server `ServerError::Text(e.to_string())`, then `RpcCall`'s `{0:?}`.
+    use kaspa_consensus_core::tx::TransactionId;
+
+    fn gone(msg: &str, txid: TransactionId) -> bool {
+        msg.contains(&txid.to_string()) && msg.contains("not found")
+    }
+
+    #[test]
+    fn the_borsh_wrpc_rendering_is_recognised_as_gone() {
+        let txid = TransactionId::from_bytes([0xAB; 64]);
+        // What the server produces, then what the client's Debug rendering wraps it in.
+        let server = format!("Transaction {txid} not found");
+        let wire = format!("RPC response error Text({server:?})");
+        assert!(!wire.starts_with("Transaction"), "the anchored form this replaced never matched the wire shape");
+        assert!(gone(&wire, txid), "the borsh wRPC rendering must be read as Gone");
+        // And the in-process/gRPC rendering still is.
+        assert!(gone(&server, txid));
+    }
+
+    #[test]
+    fn an_unrelated_not_found_is_not_gone() {
+        let txid = TransactionId::from_bytes([7u8; 64]);
+        assert!(!gone("RPC response error Text(\"method not found\")", txid), "a generic not-found must not free an outpoint");
+        let other = TransactionId::from_bytes([8u8; 64]);
+        let wire = format!("RPC response error Text({:?})", format!("Transaction {other} not found"));
+        assert!(!gone(&wire, txid), "another transaction's not-found must not free this outpoint");
     }
 }

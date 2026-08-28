@@ -23,6 +23,12 @@ pub struct Version {
     /// Fingerprint of this node's consensus parameters — see `Params::consensus_params_id`.
     /// Empty from peers predating this field. Opaque: only ever compared, never interpreted.
     pub consensus_params_id: Vec<u8>,
+    /// The fingerprint with every activation fence normalised away — what a handshake may refuse
+    /// on. Empty from peers predating the field (then the exact `consensus_params_id` comparison
+    /// stands, which is what those peers expect anyway).
+    pub consensus_identity_id: Vec<u8>,
+    /// The activation fences alone. Never a gate; reported so a schedule difference is legible.
+    pub consensus_schedule_id: Vec<u8>,
 }
 
 impl Version {
@@ -34,6 +40,8 @@ impl Version {
         protocol_version: u32,
         genesis_hash: Vec<u8>,
         consensus_params_id: Vec<u8>,
+        consensus_identity_id: Vec<u8>,
+        consensus_schedule_id: Vec<u8>,
     ) -> Self {
         Self {
             protocol_version,
@@ -47,6 +55,8 @@ impl Version {
             subnetwork_id,
             genesis_hash,
             consensus_params_id,
+            consensus_identity_id,
+            consensus_schedule_id,
         }
     }
 

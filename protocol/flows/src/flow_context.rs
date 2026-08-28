@@ -1338,6 +1338,8 @@ impl ConnectionInitializer for FlowContext {
             PROTOCOL_VERSION,
             self.config.genesis.hash.as_bytes().to_vec(),
             self.config.params.consensus_params_id().as_bytes().to_vec(),
+            self.config.params.consensus_identity_id().as_bytes().to_vec(),
+            self.config.params.consensus_schedule_id().as_bytes().to_vec(),
         );
         self_version_message.add_user_agent(name(), version(), &self.config.user_agent_comments);
         // TODO: get number of live services
@@ -1383,13 +1385,35 @@ impl ConnectionInitializer for FlowContext {
             ));
         }
 
+        // **Refuse on the rules; report on the schedule** (audit M1-6).
+        //
+        // The exact comparison below is what a peer predating the split expects, and it is still
+        // what runs against one. Between two builds that carry the identity id, the gate moves to
+        // the half whose difference actually invalidates history: a build that merely SCHEDULES a
+        // fence at a future height agrees with an un-upgraded peer about every block either can
+        // produce today, and refusing it there partitions the network for the whole rollout —
+        // which is what made "ship consensus changes as an activation, never a re-genesis"
+        // impossible to obey. They diverge at H, where fork choice is the right instrument.
         let local_params_id = self.config.params.consensus_params_id();
         if peer_version.consensus_params_id != local_params_id.as_bytes().to_vec() {
-            return Err(ProtocolError::WrongConsensusParams(
-                network_name,
-                local_params_id.to_string(),
-                describe_fingerprint(&peer_version.consensus_params_id),
-            ));
+            let local_identity = self.config.params.consensus_identity_id();
+            let identity_agrees =
+                !peer_version.consensus_identity_id.is_empty() && peer_version.consensus_identity_id == local_identity.as_bytes();
+            if !identity_agrees {
+                return Err(ProtocolError::WrongConsensusParams(
+                    network_name,
+                    local_params_id.to_string(),
+                    describe_fingerprint(&peer_version.consensus_params_id),
+                ));
+            }
+            warn!(
+                "peer {} runs the same consensus rules on a DIFFERENT activation schedule (local {}, peer {}); \
+                 keeping the peer — the two builds agree on every block until the earliest fence they disagree \
+                 about, and diverge there",
+                peer_version.id,
+                self.config.params.consensus_schedule_id(),
+                describe_fingerprint(&peer_version.consensus_schedule_id),
+            );
         }
 
         debug!("protocol versions - self: {}, peer: {}", PROTOCOL_VERSION, peer_version.protocol_version);

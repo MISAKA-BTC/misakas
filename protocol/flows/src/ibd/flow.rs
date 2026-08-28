@@ -2172,6 +2172,23 @@ impl IbdFlow {
         } else {
             None
         };
+        // **The two child-verified sidecars are imported here — still before anything is
+        // destroyed** (audit M1-2). Both check the peer's bytes against a child header of the
+        // pruning point, so they need only headers and the peer's answer; running them after the
+        // clear meant a verification failure — including one an attacker can manufacture for every
+        // joining node with a single cheap side block — left the node with its pruning utxoset
+        // deleted and `is_utxo_stable = false` latched, recoverable only by wiping the datadir.
+        // Moving the fetch alone (2026-08-22) fixed the not-found case and left the mismatch case.
+        //
+        // Ordering against the stable flag is unchanged: the flag is still set only after the
+        // utxoset and the EVM state land, and a failure anywhere leaves it unset, so the next IBD
+        // re-runs the whole import. These two writes are idempotent under that retry.
+        if pruning_point != self.ctx.config.genesis.hash {
+            self.sync_pruning_point_overlay_snapshot(consensus, pruning_point).await?;
+            if let Some(carriage) = palw_carriage {
+                self.import_pruning_point_palw_state(consensus, pruning_point, carriage).await?;
+            }
+        }
         // A better solution could be to create a copy of the old utxo state for some sort of fallback rather than delete it.
         consensus.async_clear_pruning_utxo_set().await; // this deletes the old pruning utxoset and also sets the pruning utxo as invalidated
         self.sync_pruning_point_utxoset(consensus, pruning_point).await?;
@@ -2186,11 +2203,8 @@ impl IbdFlow {
         // unstable, so the next IBD re-runs the whole import). Skipped at genesis: there is no
         // below-genesis state and the peer has captured no snapshot (it would answer not-found and abort).
         if pruning_point != self.ctx.config.genesis.hash {
+            // The overlay and PALW sidecars landed above, before the clear.
             self.sync_pruning_point_evm_state(consensus, pruning_point).await?;
-            self.sync_pruning_point_overlay_snapshot(consensus, pruning_point).await?;
-            if let Some(carriage) = palw_carriage {
-                self.import_pruning_point_palw_state(consensus, pruning_point, carriage).await?;
-            }
         }
         // Only if the function has reached here (utxoset + EVM + overlay all imported), is the utxo "final"
         consensus.async_set_pruning_utxoset_stable().await;
