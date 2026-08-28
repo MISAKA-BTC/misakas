@@ -689,15 +689,32 @@ impl PalwPanelService {
             .map_err(|e| format!("this node cannot build a registration for {}: {e}", entry.model_id))
         };
         let unsigned = build(Vec::new())?;
-        let PalwConsensusObjectV2::ClassRegistered { class_id, activation_daa, .. } = &unsigned else {
+        let PalwConsensusObjectV2::ClassRegistered {
+            class_id,
+            activation_daa,
+            artifact_root: signed_root,
+            slash_value_per_pwu: signed_slash,
+            initial_target: signed_target,
+            pwu_rule: signed_rule,
+            ..
+        } = &unsigned
+        else {
             return Err("the builder did not build a registration".to_string());
         };
+        // The whole object, not five of its fields (audit M2-6) — the signer's own comment already
+        // said "signing anything assembled beside the object would sign a class that is not the one
+        // being registered", and this is that comment made true.
         let message = kaspa_consensus_core::palw_state_v2::palw_class_registration_message_v2(
             kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2(self.consensus_config.params.net.to_string().as_bytes()),
             *class_id,
             terms.min_grantable_share_permille,
             *activation_daa,
             &bond_key,
+            *signed_root,
+            *signed_slash,
+            *signed_target,
+            signed_rule,
+            &canonical,
         );
         let signature = self
             .sign(message.as_byte_slice(), kaspa_consensus_core::palw_state_v2::PALW_CLASS_REGISTRATION_V2_MLDSA87_CONTEXT)
@@ -1211,6 +1228,12 @@ impl PalwPanelService {
         }
 
         let mut materials: HashMap<Hash64, Vec<Vec<u8>>> = HashMap::new();
+        // **What THIS node computed for a claim it disputes** — kept apart from `materials`, which
+        // holds what the network says about a claim (audit M2-4). A challenger that bisects the
+        // accused's own capture can never find a fault: both sides read the same bytes through the
+        // same pure function, every rung `agree`s, and the ladder walks to an index no real job
+        // opens. The dispute is only a dispute if the two sides speak from two executions.
+        let mut own_executions: HashMap<Hash64, Vec<u8>> = HashMap::new();
         let mut receipts: HashMap<Hash64, Vec<PalwSeatReceiptV2>> = HashMap::new();
         let mut answered: HashSet<Hash64> = HashSet::new();
         let mut first_seen: HashMap<Hash64, u64> = HashMap::new();
@@ -1296,8 +1319,22 @@ impl PalwPanelService {
                     }
                     PalwGossipEvent::Receipt { bytes } => {
                         if let Ok(receipt) = borsh::from_slice::<PalwSeatReceiptV2>(&bytes) {
+                            // **A receipt with no signature is not a receipt.** The pool is
+                            // unauthenticated and capped, so sixteen well-formed junk receipts
+                            // naming a live claim used to fill it before any real one arrived —
+                            // every honest receipt was then dropped at the door and no quorum
+                            // assembled (audit M2-7, failure path 3). Consensus re-verifies every
+                            // signature at acceptance; this is the door check that keeps the pool
+                            // from being a free denial of service.
+                            let plausible = !receipt.signature.is_empty();
                             let pool = receipts.entry(receipt.claim).or_default();
-                            if pool.len() < RECEIPTS_PER_CLAIM && !pool.contains(&receipt) {
+                            if plausible && !pool.contains(&receipt) {
+                                // Oldest out rather than newest refused, for the same reason the
+                                // material pool evicts: whoever is first must not be able to lock
+                                // out whoever is right.
+                                if pool.len() >= RECEIPTS_PER_CLAIM {
+                                    pool.remove(0);
+                                }
                                 pool.push(receipt);
                             }
                         }
@@ -1401,6 +1438,9 @@ impl PalwPanelService {
                             target.claim_id
                         );
                     } else {
+                        // Ours, for the ladder: the challenger answers every rung from THIS, and
+                        // the responder from the claim's own capture.
+                        own_executions.insert(target.claim_id, mine_run.material.clone());
                         warn!(
                             "[{PALW_PANEL}] claim {} committed an execution this node does not reproduce — opening a court",
                             target.claim_id
@@ -1535,10 +1575,49 @@ impl PalwPanelService {
                         pool.push(bytes);
                     }
                 }
-                let Some(capture) = materials
-                    .get(&duty.claim_id)
-                    .and_then(|pool| pool.iter().find(|b| backend.verify_material(b, roots) == PalwMaterialVerdictV1::Matches))
-                else {
+                // **The capture is chosen by ROLE** (audit M2-4).
+                //
+                // The responder speaks for the accused execution, so it answers from the capture
+                // that reproduces the claim's committed roots. The CHALLENGER speaks for its own
+                // — the execution whose roots differed, which is the entire content of its
+                // accusation — so it answers from that. Feeding one capture to both sides made
+                // `agree` true at every rung by construction (`bisect_prefix_state` is a pure
+                // function of the bytes and the index), the interval walked to the last leaf of a
+                // 2^22 space, and no close could be assembled by anyone: fraud escaped, and an
+                // attacker who merely agreed 22 times had the honest producer convicted by the
+                // backstop for 23 transaction fees.
+                //
+                // A challenger that has lost its own execution (a restart) re-runs the job here
+                // rather than borrowing the accused's — silence costs it the dispute, which is the
+                // right price for an accusation it can no longer support.
+                if !duty.i_am_responder && !own_executions.contains_key(&duty.claim_id) {
+                    let rerun = self
+                        .job_anchor_for_claim(
+                            &session,
+                            backend.as_ref(),
+                            network_domain,
+                            duty.accepted_block,
+                            duty.class_id,
+                            &duty.executor_bond,
+                        )
+                        .and_then(|anchor| backend.job_for_anchor(anchor).ok())
+                        .and_then(|(job, prompt)| backend.execute(&job, &prompt).ok());
+                    match rerun {
+                        Some(outcome) => {
+                            own_executions.insert(duty.claim_id, outcome.material);
+                        }
+                        None => {
+                            *court_stalls.entry("the challenger cannot re-execute its own accusation").or_default() += 1;
+                            continue;
+                        }
+                    }
+                }
+                let capture_from_own = (!duty.i_am_responder).then(|| own_executions.get(&duty.claim_id)).flatten();
+                let Some(capture) = capture_from_own.or_else(|| {
+                    materials
+                        .get(&duty.claim_id)
+                        .and_then(|pool| pool.iter().find(|b| backend.verify_material(b, roots) == PalwMaterialVerdictV1::Matches))
+                }) else {
                     *court_stalls
                         .entry(if materials.contains_key(&duty.claim_id) {
                             // Held material, and none of it reproduces the claim's roots — a
@@ -2077,6 +2156,8 @@ impl PalwPanelService {
             // keep become the thing that grows.
             first_seen.retain(|claim, _| materials.contains_key(claim) || receipts.contains_key(claim) || live.contains(claim));
             requested.retain(|claim, _| first_seen.contains_key(claim) || live.contains(claim));
+            // Our own executions are only needed while the dispute they support is open.
+            own_executions.retain(|claim, _| live.contains(claim));
             submit_attempts.retain(|claim, _| receipts.contains_key(claim));
             submitted.retain(|_claim, at| current_daa <= at.saturating_add(PANEL_POOL_RETENTION_DAA));
             trace!("[{PALW_PANEL}] tick: {} duties, {} claims pooled", duties.len(), receipts.len());

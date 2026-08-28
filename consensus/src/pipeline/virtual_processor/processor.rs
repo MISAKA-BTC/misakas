@@ -4116,7 +4116,31 @@ impl VirtualStateProcessor {
                         continue;
                     }
                     match state.class_target(&envelope.attempt.class_id) {
-                        Some(target) if class_ticket_v2(&envelope.attempt) <= target.target => {}
+                        Some(target) if class_ticket_v2(&envelope.attempt) <= target.target => {
+                            // **And the price, which is what the payment used to take on trust**
+                            // (audit M2-3). ADR-0045 Decision 1 makes pwu a chain fact — the
+                            // class's target times its registered per-inference cost — and the
+                            // transition refuses any other value with `PwuClaimNotDerived`. But a
+                            // refused merged work SKIPS (the accepting block stands), while this
+                            // site decided payment on three weaker questions, so an attempt with an
+                            // arbitrary pwu was PAID its full worker carve and created no claim, no
+                            // panel duty and no reserved exposure — and the anti-replay keys on the
+                            // claim that was never created, so it never engaged. The stateless
+                            // header rule is only `pwu >= 1`, so nothing else caught it.
+                            //
+                            // Derived from the same two chain facts the transition uses, at the
+                            // same parent state, so the two predicates agree by construction.
+                            let derived = match state.class(&envelope.attempt.class_id).map(|c| c.pwu_rule) {
+                                Some(kaspa_consensus_core::palw_state_v2::PalwPwuRuleV2::DerivedV1 { pwu_per_inference }) => {
+                                    Some(kaspa_consensus_core::palw_pwu::palw_pwu_v1(target.target, pwu_per_inference))
+                                }
+                                _ => None,
+                            };
+                            if derived.is_some_and(|derived| envelope.attempt.pwu != derived) {
+                                debug!("merged blue {blue} claims a pwu the chain does not derive; not entitled");
+                                unentitled.insert(*blue);
+                            }
+                        }
                         _ => {
                             debug!("merged blue {blue} did not win its class lottery");
                             unentitled.insert(*blue);
@@ -4492,7 +4516,16 @@ impl VirtualStateProcessor {
                         return Err(format!("court {session_id} declares {verdict:?}; its own proof adjudicates {derived:?}"));
                     }
                 }
-                Obj::ClassRegistered { class_id, share_permille, admission, activation_daa, .. } => {
+                Obj::ClassRegistered {
+                    class_id,
+                    share_permille,
+                    admission,
+                    activation_daa,
+                    artifact_root,
+                    slash_value_per_pwu,
+                    initial_target,
+                    pwu_rule,
+                } => {
                     // **ADR-0049 Decision H: the gate, where the refusal used to be.**
                     //
                     // A class registration is the one object whose validity is an arithmetic fact
@@ -4549,6 +4582,13 @@ impl VirtualStateProcessor {
                         *share_permille,
                         *activation_daa,
                         &carriage.registrant_bond,
+                        // The four fields the signature used to leave open, and the canonical job
+                        // the pwu rule is derived from (audit M2-6).
+                        *artifact_root,
+                        *slash_value_per_pwu,
+                        *initial_target,
+                        pwu_rule,
+                        &carriage.canonical,
                     );
                     if !Self::verify_mldsa87_with_context_bool(
                         &registrant.pubkey,

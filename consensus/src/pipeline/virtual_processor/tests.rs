@@ -2013,7 +2013,23 @@ async fn palw_v2_a_class_registration_needs_a_bond_that_signed_for_it() {
         0,
     ));
     let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2(config.params.net.to_string().as_bytes());
-    let message = palw_class_registration_message_v2(network_domain, class_id, share, 0, &registrant);
+    // The signed preimage is the whole object (audit M2-6), so the fixture states the same values
+    // the `make` closure below builds it with — a mismatch here is the attack the fix closes.
+    let signed_artifact_root = kaspa_hashes::Hash64::from_u64_word(0xA7);
+    let signed_rule = PalwPwuRuleV2::DerivedV1 { pwu_per_inference: 1 };
+    let signed_canonical = kaspa_consensus_core::palw_base0_profile::rc_job_context(&profile, 8, 4);
+    let message = palw_class_registration_message_v2(
+        network_domain,
+        class_id,
+        share,
+        0,
+        &registrant,
+        signed_artifact_root,
+        1,
+        u128::MAX / 2,
+        &signed_rule,
+        &signed_canonical,
+    );
     let sign = |kp: &libcrux_ml_dsa::ml_dsa_87::MLDSA87KeyPair| {
         libcrux_ml_dsa::ml_dsa_87::sign(
             &kp.signing_key,
