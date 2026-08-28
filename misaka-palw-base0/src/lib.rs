@@ -45,6 +45,7 @@ pub mod engine_a16;
 pub mod gguf;
 pub mod inventory;
 pub mod legs;
+pub mod lmstudio;
 pub mod mmap;
 pub mod operands;
 pub mod plan;

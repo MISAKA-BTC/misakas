@@ -8,7 +8,12 @@
 //! ```text
 //! base0-chat --artifact qwen25-1.5b-a16.palwart --tokenizer tokenizer.json \
 //!            --prompt "What is the capital of Japan?" [--system S] [--max-tokens N] [--raw]
+//! base0-chat --artifact … --gguf <model.gguf> --prompt …   # tokenizer from the GGUF header
 //! ```
+//!
+//! `--gguf` exists for the LM Studio lane: a model downloaded there ships no `tokenizer.json` —
+//! the vocabulary and merge table travel inside the GGUF header — so the same file that fed
+//! `qwen25-convert` also answers for tokenization, exactly as `qwen36-chat` reads its own.
 //!
 //! # Greedy, and deliberately only greedy
 //!
@@ -34,9 +39,14 @@ fn flag<'a>(args: &'a [String], name: &str) -> Option<&'a str> {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let artifact_path = flag(&args, "--artifact")
-        .unwrap_or_else(|| die("usage: base0-chat --artifact <file> --tokenizer <file> --prompt <text>".into()));
-    let tokenizer_path = flag(&args, "--tokenizer").unwrap_or_else(|| die("--tokenizer <tokenizer.json> is required".into()));
+    let artifact_path = flag(&args, "--artifact").unwrap_or_else(|| {
+        die("usage: base0-chat --artifact <file> (--tokenizer <tokenizer.json> | --gguf <model.gguf>) --prompt <text>".into())
+    });
+    let tokenizer_path = flag(&args, "--tokenizer");
+    let gguf_path = flag(&args, "--gguf");
+    if tokenizer_path.is_none() && gguf_path.is_none() {
+        die("--tokenizer <tokenizer.json> or --gguf <model.gguf> is required".into());
+    }
     let prompt = flag(&args, "--prompt").unwrap_or_else(|| die("--prompt <text> is required".into()));
     let system = flag(&args, "--system");
     let max_tokens: usize = flag(&args, "--max-tokens").and_then(|v| v.parse().ok()).unwrap_or(128);
@@ -52,8 +62,20 @@ fn main() {
     let load = started.elapsed();
     drop(bytes);
 
-    let tokenizer_bytes = std::fs::read(tokenizer_path).unwrap_or_else(|e| die(format!("{tokenizer_path}: {e}")));
-    let tokenizer = QwenTokenizer::from_json(&tokenizer_bytes).unwrap_or_else(|e| die(format!("{tokenizer_path}: {e}")));
+    let tokenizer = match (tokenizer_path, gguf_path) {
+        (Some(path), _) => {
+            let tokenizer_bytes = std::fs::read(path).unwrap_or_else(|e| die(format!("{path}: {e}")));
+            QwenTokenizer::from_json(&tokenizer_bytes).unwrap_or_else(|e| die(format!("{path}: {e}")))
+        }
+        (None, Some(path)) => {
+            // The whole file reads — a 1.5B GGUF is small enough — and only the header's arrays
+            // are kept. A header-only prefix (the hybrid's 48 MiB trick) works too.
+            let gguf_bytes = std::fs::read(path).unwrap_or_else(|e| die(format!("{path}: {e}")));
+            let dir = misaka_palw_base0::gguf::parse_directory(&gguf_bytes).unwrap_or_else(|e| die(format!("{path}: {e}")));
+            misaka_palw_base0::lmstudio::tokenizer_from_gguf(&dir).unwrap_or_else(|e| die(format!("{path}: {e}")))
+        }
+        (None, None) => unreachable!("checked above"),
+    };
 
     let engine = A16Engine::new(&artifact).unwrap_or_else(|e| die(format!("the artifact is not an A16 class: {e:?}")));
     let shape = &artifact.shape;

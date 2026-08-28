@@ -1,19 +1,32 @@
 //! Convert a real Qwen2.5 checkpoint to a PALW integer artifact, and report what it produced.
 //!
 //! ```text
-//! qwen25-convert <dir>          # dir holds model.safetensors, config.json, tokenizer.json
-//! qwen25-convert <dir> --layers N   # convert only the first N layers (a depth sweep)
+//! qwen25-convert <dir>            # dir holds model.safetensors, config.json, tokenizer.json
+//! qwen25-convert <file.gguf>      # a GGUF checkpoint, as LM Studio stores one
+//! qwen25-convert <dir-of-ggufs>   # an LM Studio <publisher>/<repo> directory
+//! qwen25-convert --lmstudio [query]   # find the model in LM Studio's own models directory
+//! qwen25-convert <input> --layers N   # convert only the first N layers (a depth sweep)
 //! ```
 //!
 //! Prints the class id, the artifact's size, the bias coverage and a forward pass's depth
 //! health. Nothing here is on the block-validation path: a verifier re-runs this and compares the
 //! class id, which is why the conversion has to be bit-reproducible.
+//!
+//! # The GGUF lane, and what it does to the class id
+//!
+//! A GGUF is read once and re-encoded as the HF checkpoint (`lmstudio.rs`); everything after that
+//! line is the same code the `safetensors` lane runs. A carrier that preserves the BF16 weights
+//! (`BF16` 2-D tensors, `F32` 1-D) reproduces the HF conversion's artifact root bit-for-bit; a
+//! quantized carrier (`Q4_K_M`, `Q8_0`, …) is DIFFERENT WEIGHTS and therefore a different root —
+//! the tool says which of the two happened, and whether the result is the root the public
+//! testnet's genesis pinned.
 
 use misaka_palw_base0::artifact::{Base0ArtifactV1, Base0ShapeV1, LN_THETA_1000000_GEN_Q};
 use misaka_palw_base0::convert::{
     Qwen25ConvertPlan, activation_scale_of, biased_channel_count, calibrate_layer_residuals, convert_qwen25, measure_depth_health,
 };
 use misaka_palw_base0::engine::{Base0Engine, KvCache};
+use misaka_palw_base0::lmstudio;
 use misaka_palw_base0::reference::{RefConfigV1, reference_forward_full, score_fidelity};
 
 fn die(message: String) -> ! {
@@ -21,15 +34,73 @@ fn die(message: String) -> ! {
     std::process::exit(1)
 }
 
-fn main() {
-    let args: Vec<String> = std::env::args().collect();
-    let dir = args.get(1).unwrap_or_else(|| die("usage: qwen25-convert <dir> [--layers N]".into()));
-    let layer_cap: Option<usize> = args
-        .iter()
-        .position(|a| a == "--layers")
-        .and_then(|i| args.get(i + 1))
-        .map(|v| v.parse().unwrap_or_else(|_| die(format!("--layers wants a number, got {v}"))));
+/// What the input phase hands the conversion, whichever door the checkpoint came through.
+struct ResolvedCheckpoint {
+    blob: Vec<u8>,
+    shape: Base0ShapeV1,
+    declared_layers: usize,
+    ref_cfg: RefConfigV1,
+    /// `Some` only when a `tokenizer.json` existed to commit to (the HF directory lane).
+    tokenizer_commitment: Option<kaspa_hashes::Hash64>,
+    /// `Some((summary, lossless))` on the GGUF lane.
+    carrier: Option<(String, bool)>,
+}
 
+fn resolve_gguf(path: &std::path::Path, layer_cap: Option<usize>) -> ResolvedCheckpoint {
+    let started = std::time::Instant::now();
+    let bytes = std::fs::read(path).unwrap_or_else(|e| die(format!("{}: {e}", path.display())));
+    println!("gguf input    {} ({} MiB) in {:?}", path.display(), bytes.len() >> 20, started.elapsed());
+    let started = std::time::Instant::now();
+    let ck = lmstudio::qwen25_checkpoint_from_gguf(&bytes).unwrap_or_else(|e| die(format!("{}: {e}", path.display())));
+    drop(bytes);
+    let cfg = &ck.config;
+    println!(
+        "gguf carrier  {} — {}",
+        ck.carrier_summary,
+        if ck.lossless_carrier {
+            "preserves the BF16 weights; the artifact root can match the HF conversion's"
+        } else {
+            "QUANTIZED: different weights than the HF checkpoint, so a different artifact root"
+        }
+    );
+    if let Some(name) = &cfg.model_name {
+        println!("gguf model    {name}");
+    }
+    println!("synthesized the HF checkpoint ({} MiB) in {:?}", ck.blob.len() >> 20, started.elapsed());
+    let shape = Base0ShapeV1 {
+        n_layers: layer_cap.unwrap_or(cfg.num_hidden_layers).min(cfg.num_hidden_layers),
+        n_heads: cfg.num_attention_heads,
+        n_kv_heads: cfg.num_key_value_heads,
+        d_head: cfg.hidden_size / cfg.num_attention_heads,
+        d_ff: cfg.intermediate_size,
+        vocab: cfg.vocab_size,
+        // Same default as the directory lane, printed below so it is never a silent choice.
+        max_position: 512,
+        // From the file's own `qwen2.rope.freq_base` — a pinned table exists or the tool refuses.
+        ln_theta_gen_q: lmstudio::ln_theta_gen_q_for_rope_base(cfg.rope_theta).unwrap_or_else(|e| die(e.to_string())),
+        eps_q: 1 << 8,
+    };
+    let ref_cfg = RefConfigV1 {
+        n_layers: shape.n_layers,
+        n_heads: shape.n_heads,
+        n_kv_heads: shape.n_kv_heads,
+        d_head: shape.d_head,
+        d_ff: shape.d_ff,
+        vocab: shape.vocab,
+        rms_eps: cfg.rms_norm_eps,
+        rope_theta: cfg.rope_theta,
+    };
+    ResolvedCheckpoint {
+        blob: ck.blob,
+        shape,
+        declared_layers: cfg.num_hidden_layers,
+        ref_cfg,
+        tokenizer_commitment: None,
+        carrier: Some((ck.carrier_summary, ck.lossless_carrier)),
+    }
+}
+
+fn resolve_hf_dir(dir: &str, layer_cap: Option<usize>) -> ResolvedCheckpoint {
     let cfg_bytes = std::fs::read(format!("{dir}/config.json")).unwrap_or_else(|e| die(format!("config.json: {e}")));
     let cfg: serde_json::Value = serde_json::from_slice(&cfg_bytes).unwrap_or_else(|e| die(format!("config.json: {e}")));
     let num =
@@ -54,10 +125,6 @@ fn main() {
         ln_theta_gen_q: LN_THETA_1000000_GEN_Q,
         eps_q: 1 << 8,
     };
-    println!(
-        "config: hidden {hidden}, heads {heads}/{} kv, d_head {}, ffn {}, layers {}/{declared_layers}, vocab {}",
-        shape.n_kv_heads, shape.d_head, shape.d_ff, shape.n_layers, shape.vocab
-    );
 
     let tokenizer = std::fs::read(format!("{dir}/tokenizer.json")).unwrap_or_else(|e| die(format!("tokenizer.json: {e}")));
     let commitment = Base0ArtifactV1::tokenizer_commitment_of(&tokenizer);
@@ -66,16 +133,6 @@ fn main() {
     let blob = std::fs::read(format!("{dir}/model.safetensors")).unwrap_or_else(|e| die(format!("model.safetensors: {e}")));
     println!("read {} MiB in {:?}", blob.len() / (1 << 20), started.elapsed());
 
-    let plan = Qwen25ConvertPlan { shape, rms_norm_eps_bits: 1e-6f32.to_bits() };
-
-    // 57 tokens of real prose (the runbook's own words, tokenized by the model's tokenizer.json).
-    // A 4-token prompt gave 3 generic positions — too few for activation ranges, and any
-    // staticness question is unmeasurable at n=3.
-    let prompt: Vec<usize> = vec![
-        785, 8781, 69180, 24821, 825, 3019, 315, 279, 11320, 25, 264, 88737, 37201, 628, 288, 279, 10023, 504, 11163, 54510, 323,
-        42465, 4078, 17966, 13, 1416, 807, 28295, 11, 279, 5473, 15885, 279, 54510, 323, 279, 34784, 27627, 892, 3108, 46153, 13,
-        4440, 5256, 374, 68903, 11, 773, 279, 1973, 315, 45735, 4157, 2297, 279, 1102, 13,
-    ];
     let ref_cfg = RefConfigV1 {
         n_layers: shape.n_layers,
         n_heads: shape.n_heads,
@@ -85,6 +142,84 @@ fn main() {
         vocab: shape.vocab,
         rms_eps: cfg.get("rms_norm_eps").and_then(|v| v.as_f64()).unwrap_or(1e-6) as f32,
         rope_theta: cfg.get("rope_theta").and_then(|v| v.as_f64()).unwrap_or(1e6) as f32,
+    };
+    ResolvedCheckpoint { blob, shape, declared_layers, ref_cfg, tokenizer_commitment: Some(commitment), carrier: None }
+}
+
+fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    let layer_cap: Option<usize> = args
+        .iter()
+        .position(|a| a == "--layers")
+        .and_then(|i| args.get(i + 1))
+        .map(|v| v.parse().unwrap_or_else(|_| die(format!("--layers wants a number, got {v}"))));
+
+    let resolved = if let Some(i) = args.iter().position(|a| a == "--lmstudio") {
+        // The LM Studio door: find the model where the app put it. The query is optional and
+        // defaults to the model this class is for.
+        let query = match args.get(i + 1) {
+            Some(v) if !v.starts_with("--") => v.clone(),
+            _ => "qwen2.5 1.5b instruct".to_string(),
+        };
+        let roots = lmstudio::lmstudio_model_roots();
+        if roots.is_empty() {
+            die("no LM Studio models directory found (looked at $LMSTUDIO_MODELS, ~/.lmstudio/models, ~/.cache/lm-studio/models)"
+                .into());
+        }
+        let hits = lmstudio::find_lmstudio_models(&query, &roots);
+        if hits.is_empty() {
+            die(format!("nothing matching {query:?} under {roots:?} — download the model in LM Studio first"));
+        }
+        for hit in &hits {
+            println!("lmstudio      {}", hit.path.display());
+        }
+        let best = &hits[0];
+        println!("lmstudio pick {} (highest-fidelity carrier found)", best.path.display());
+        match best.kind {
+            lmstudio::LmStudioModelKindV1::Gguf => resolve_gguf(&best.path, layer_cap),
+            lmstudio::LmStudioModelKindV1::SafetensorsDir => resolve_hf_dir(&best.path.to_string_lossy(), layer_cap),
+        }
+    } else {
+        let input = args
+            .get(1)
+            .filter(|a| !a.starts_with("--"))
+            .unwrap_or_else(|| die("usage: qwen25-convert <dir | file.gguf | --lmstudio [query]> [--a16] [--out FILE]".into()));
+        let path = std::path::Path::new(input);
+        if path.is_file() {
+            resolve_gguf(path, layer_cap)
+        } else if path.join("model.safetensors").is_file() {
+            resolve_hf_dir(input, layer_cap)
+        } else if let Some(gguf) = lmstudio::pick_gguf_in_dir(path) {
+            resolve_gguf(&gguf, layer_cap)
+        } else {
+            die(format!("{input}: neither an HF checkpoint directory (model.safetensors), a .gguf file, nor a directory holding one"))
+        }
+    };
+    let ResolvedCheckpoint { blob, shape, declared_layers, ref_cfg, tokenizer_commitment, carrier } = resolved;
+    let hidden = shape.d_model();
+    println!(
+        "config: hidden {hidden}, heads {}/{} kv, d_head {}, ffn {}, layers {}/{declared_layers}, vocab {}",
+        shape.n_heads, shape.n_kv_heads, shape.d_head, shape.d_ff, shape.n_layers, shape.vocab
+    );
+
+    let plan = Qwen25ConvertPlan { shape, rms_norm_eps_bits: ref_cfg.rms_eps.to_bits() };
+
+    // 57 tokens of real prose (the runbook's own words, tokenized by the model's tokenizer.json).
+    // A 4-token prompt gave 3 generic positions — too few for activation ranges, and any
+    // staticness question is unmeasurable at n=3.
+    let prompt: Vec<usize> = vec![
+        785, 8781, 69180, 24821, 825, 3019, 315, 279, 11320, 25, 264, 88737, 37201, 628, 288, 279, 10023, 504, 11163, 54510, 323,
+        42465, 4078, 17966, 13, 1416, 807, 28295, 11, 279, 5473, 15885, 279, 54510, 323, 279, 34784, 27627, 892, 3108, 46153, 13,
+        4440, 5256, 374, 68903, 11, 773, 279, 1973, 315, 45735, 4157, 2297, 279, 1102, 13,
+    ];
+    // Any real Qwen2.5 vocabulary covers these ids. A dev-scale checkpoint (the GGUF fixture, a
+    // truncated experiment) does not, so the prompt folds into what the embedding can index —
+    // said out loud, because a folded calibration is not the real class's calibration.
+    let prompt: Vec<usize> = if prompt.iter().any(|t| *t >= shape.vocab) {
+        println!("note: vocabulary {} does not cover the calibration prompt — folding token ids (dev-scale checkpoint)", shape.vocab);
+        prompt.iter().map(|t| t % shape.vocab).collect()
+    } else {
+        prompt
     };
 
     // The float reference runs FIRST: it is both the calibration measurement and, at the end,
@@ -179,6 +314,25 @@ fn main() {
             .unwrap_or_else(|e| die(format!("a16 conversion failed: {e}")));
         println!("a16 converted in {:?}", started.elapsed());
         println!("a16 artifact  {}", artifact.artifact_digest());
+        // Say where this root can produce, instead of letting the node's refusal be the first
+        // symptom: the public testnet's genesis names ONE root for the dense class, and a
+        // quantized carrier can never reach it.
+        if kaspa_consensus_core::config::params::palw_rc_qwen25_a16_is_registered() {
+            let pin = kaspa_consensus_core::config::params::PALW_RC_GENESIS_QWEN25_A16_ARTIFACT_ROOT;
+            if artifact.artifact_digest() == pin {
+                println!("a16 pin       MATCHES the public-testnet genesis root — this file can produce for QWEN25-A16");
+            } else {
+                println!("a16 pin       does not match the public-testnet genesis root ({pin})");
+                match &carrier {
+                    Some((_, false)) => println!(
+                        "              expected: the carrier re-quantized the weights. This artifact still chats, drills\n\
+                         \x20             and registers as its own class; producing for the genesis QWEN25-A16 class needs a\n\
+                         \x20             carrier that preserves the BF16 weights (the HF checkpoint, or a BF16 GGUF)."
+                    ),
+                    _ => println!("              the weights differ from the checkpoint the genesis pin was converted from."),
+                }
+            }
+        }
         // **`--out` is what turns a measurement into a runtime.** Until the artifact could be
         // written, every use of this class re-read a 3 GiB checkpoint and re-quantized it, which
         // is a minute per run and is why nothing downstream of conversion had been built.
@@ -272,7 +426,12 @@ fn main() {
     // smoothing, per-channel folds, sink lanes — was the ceiling A16 removed); the float lane
     // converts plainly and calibrates per-layer residual shifts below.
     let artifact = convert_qwen25(&blob, &plan).unwrap_or_else(|e| die(format!("conversion failed: {e}")));
-    let artifact = artifact.with_tokenizer_commitment(commitment);
+    let artifact = match tokenizer_commitment {
+        Some(commitment) => artifact.with_tokenizer_commitment(commitment),
+        // The GGUF lane: the vocabulary travels inside the file and no tokenizer.json exists to
+        // commit to. Same as the a16 lane, which never commits one.
+        None => artifact,
+    };
     println!("converted in {:?}", started.elapsed());
     drop(blob);
 
@@ -284,7 +443,11 @@ fn main() {
             .map(|l| l.wq.len() + l.wk.len() + l.wv.len() + l.wo.len() + l.w_gate.len() + l.w_up.len() + l.w_down.len())
             .sum::<usize>();
     println!("class id      {}", artifact.artifact_digest());
-    println!("tokenizer     {commitment}");
+    if artifact.tokenizer_commitment == kaspa_hashes::Hash64::default() {
+        println!("tokenizer     (uncommitted — GGUF input carries no tokenizer.json)");
+    } else {
+        println!("tokenizer     {}", artifact.tokenizer_commitment);
+    }
     println!("int8 weights  {} MiB", weight_bytes / (1 << 20));
     println!("biased chans  {} (zero would mean the biases rounded away)", biased_channel_count(&artifact));
     println!("act scale     {} (the legacy global; calibrated sites carry their own)", activation_scale_of(&artifact.norm_requant));

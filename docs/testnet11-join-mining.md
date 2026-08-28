@@ -282,7 +282,7 @@ same key, same node) plus the class artifact and two flags:
 | class | artifact | obtain |
 |---|---|---|
 | `QWEN36` (hybrid 35B, 200‰ share) | `qwen36.palwq36`, 34 GiB, SHA-256 `7a944595a4256ab0…` | [download](https://huggingface.co/Misakachain/Qwen3.6-35B-A3B-PALW-runtime/resolve/main/qwen36.palwq36) or convert from the [source GGUF](https://huggingface.co/Misakachain/Qwen3.6-35B-A3B-PALW-runtime/resolve/main/Qwen3.6-abliterated-35b-Claude-4.7-Q4_K_M.gguf) |
-| `QWEN25-A16` (dense 1.5B, 200‰ share) | `.palwart`, 1.7 GiB | convert locally from Qwen2.5-1.5B-Instruct |
+| `QWEN25-A16` (dense 1.5B, 200‰ share) | `.palwart`, 1.7 GiB | convert locally from Qwen2.5-1.5B-Instruct — the HF checkpoint reproduces the pinned root; an LM Studio GGUF also converts, but a quantized one becomes its own class ([runbook](palw-lmstudio-qwen25-a16-runbook-ja.md)) |
 
 Model repository: **<https://huggingface.co/Misakachain/Qwen3.6-35B-A3B-PALW-runtime>**. Verify
 before use — the chain pins the artifact **root**, not a filename:

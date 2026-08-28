@@ -48,6 +48,13 @@ cargo build --release -p misaka-palw-base0 --bin qwen25-convert
 ./target/release/qwen25-convert /path/to/Qwen2.5-1.5B-Instruct --a16 --out qwen25-1.5b-a16.palwart
 ```
 
+The converter also reads a **GGUF** — a file, a directory holding one, or `--lmstudio` to find the
+model where LM Studio put it. A carrier that preserves the BF16 weights can reproduce the digest
+below; a quantized one (`Q4_K_M`, `Q8_0`, …) converts into a working, adjudicable class with a
+DIFFERENT root, which this genesis did not register — the tool prints which case happened. The
+whole lane, including what a quantized carrier is still good for, is
+[palw-lmstudio-qwen25-a16-runbook-ja.md](palw-lmstudio-qwen25-a16-runbook-ja.md).
+
 It prints the fidelity it measured and the artifact digest, which must be:
 
 ```

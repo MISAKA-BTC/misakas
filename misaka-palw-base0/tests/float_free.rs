@@ -81,6 +81,7 @@ const STATES_THE_ARITHMETIC: &[&str] = &["src/kat.rs", "src/bin/base0-kat.rs"];
 const EXEMPT: &[(&str, &str)] = &[
     ("src/convert.rs", "offline PTQ: float in, (multiplier, shift) out, frozen at registration"),
     ("src/gguf.rs", "offline checkpoint reader: the file it decodes is float, and it never executes"),
+    ("src/lmstudio.rs", "offline checkpoint bridge: it re-encodes a GGUF's float weights as the HF checkpoint, and it never executes"),
     ("src/bin/qwen25-convert.rs", "offline PTQ driver"),
     ("src/bin/qwen36-convert.rs", "offline PTQ driver for the hybrid architecture"),
     ("src/bin/qwen36-run.rs", "the hybrid runtime's driver: it times itself, and a timer is float"),
@@ -94,6 +95,10 @@ const EXEMPT: &[(&str, &str)] = &[
     ("src/bin/base0-chat.rs", "the runtime's front door: it times itself, and a timer is float"),
     ("examples/base0-throughput.rs", "measurement tool: it times the engine, it is not the engine"),
     ("examples/gguf-probe.rs", "offline checkpoint inspector"),
+    (
+        "examples/qwen25-gguf-fixture.rs",
+        "dev fixture writer: it emits a GGUF for the LM Studio lane's smoke test, and executes nothing",
+    ),
     ("examples/class-weight-report.rs", "measurement tool: it reports what a class would be worth, in floats, and executes nothing"),
 ];
 

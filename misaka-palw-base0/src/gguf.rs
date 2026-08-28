@@ -1,9 +1,15 @@
-//! **A GGUF reader, and the two k-quant dequantizers Qwen3.6 is stored in.**
+//! **A GGUF reader, and the dequantizers the checkpoints this repository converts are stored in.**
 //!
-//! The checkpoint the goal names is a 24 GiB GGUF: `Q4_K` for most projections, `Q6_K` for the
-//! value and down projections and the output head, `F32` for the norms, `F16` for two scalars.
-//! Converting it is the only path to running the model — the bf16 safetensors are 70 GiB and the
-//! machine that has to do the conversion does not have that.
+//! The first checkpoint this reader existed for is a 24 GiB GGUF: `Q4_K` for most projections,
+//! `Q6_K` for the value and down projections and the output head, `F32` for the norms, `F16` for
+//! two scalars. Converting it is the only path to running the model — the bf16 safetensors are
+//! 70 GiB and the machine that has to do the conversion does not have that.
+//!
+//! The LM Studio lane (`lmstudio.rs`) widened the set: a model manager stores whatever quant its
+//! catalog lists, and for Qwen2.5-1.5B-Instruct that menu is `Q4_K_M` (= `Q4_K` + `Q6_K`),
+//! `Q5_K_M`, `Q6_K`, `Q8_0`, `F16` and occasionally `BF16`. `Q8_0`, `Q5_K` and `BF16` are the
+//! additions; everything else on the menu was already decoded. Types outside the set are still
+//! refused **by name**, never guessed at.
 //!
 //! # Offline, and float on purpose
 //!
@@ -25,7 +31,10 @@ use std::collections::BTreeMap;
 pub enum GgufType {
     F32,
     F16,
+    Bf16,
+    Q8_0,
     Q4K,
+    Q5K,
     Q6K,
 }
 
@@ -34,21 +43,39 @@ impl GgufType {
         match tag {
             0 => Some(Self::F32),
             1 => Some(Self::F16),
+            8 => Some(Self::Q8_0),
             12 => Some(Self::Q4K),
+            13 => Some(Self::Q5K),
             14 => Some(Self::Q6K),
+            30 => Some(Self::Bf16),
             _ => None,
         }
     }
 
-    /// Bytes for `n` values. The k-quants are super-blocks of 256, so `n` must be a whole number
-    /// of them — llama.cpp guarantees that for every tensor it writes.
+    /// Bytes for `n` values. The k-quants are super-blocks of 256 and `Q8_0` is blocks of 32, so
+    /// `n` must be a whole number of them — llama.cpp guarantees that for every tensor it writes.
     pub fn bytes_for(&self, n: usize) -> Option<usize> {
         match self {
             Self::F32 => Some(n * 4),
-            Self::F16 => Some(n * 2),
+            Self::F16 | Self::Bf16 => Some(n * 2),
+            Self::Q8_0 => n.is_multiple_of(32).then(|| n / 32 * 34),
             Self::Q4K => n.is_multiple_of(256).then(|| n / 256 * 144),
+            Self::Q5K => n.is_multiple_of(256).then(|| n / 256 * 176),
             Self::Q6K => n.is_multiple_of(256).then(|| n / 256 * 210),
         }
+    }
+
+    /// Whether this carrier hands back the checkpoint's ORIGINAL `bf16` weight bits exactly.
+    ///
+    /// Qwen2.5 ships `bf16` throughout, so the question a carrier has to answer is whether a
+    /// value that was `bf16` survives the trip through it. `BF16` carries the bits themselves;
+    /// `F32` is a strict superset (llama.cpp writes every 1-D tensor as `F32`, exactly widened
+    /// from the checkpoint). `F16` is deliberately NOT on this list: it keeps more mantissa than
+    /// `bf16` but less exponent, so a subnormal-range weight is flushed — near-lossless is not
+    /// lossless, and this flag exists so nobody has to argue about "near". The quantized carriers
+    /// obviously are not.
+    pub fn preserves_bf16(&self) -> bool {
+        matches!(self, Self::F32 | Self::Bf16)
     }
 }
 
@@ -400,6 +427,63 @@ pub fn dequantize_q6k(data: &[u8], elements: usize) -> Result<Vec<f32>, GgufErro
     Ok(out)
 }
 
+/// Dequantize `Q8_0`: 32 values per 34-byte block — an `f16` scale and 32 signed bytes. The
+/// simplest quant llama.cpp writes, and the highest-fidelity one a model manager's catalog
+/// usually lists.
+pub fn dequantize_q8_0(data: &[u8], elements: usize) -> Result<Vec<f32>, GgufError> {
+    let blocks = elements / 32;
+    if !elements.is_multiple_of(32) || data.len() < blocks * 34 {
+        return Err(GgufError::ShortData { tensor: "<q8_0>".into(), want: blocks * 34, got: data.len() });
+    }
+    let mut out = Vec::with_capacity(elements);
+    for b in 0..blocks {
+        let block = &data[b * 34..(b + 1) * 34];
+        let d = f16(u16::from_le_bytes([block[0], block[1]]));
+        for q in &block[2..34] {
+            out.push(d * (*q as i8) as f32);
+        }
+    }
+    Ok(out)
+}
+
+/// Dequantize `Q5_K`: 256 values per 176-byte super-block — the `Q4_K` layout plus one high bit
+/// per value in a 32-byte plane. The scale/min packing is `Q4_K`'s own ([`q4k_scale_min`]), which
+/// is why this transcription can lean on the test that pins that packing.
+pub fn dequantize_q5k(data: &[u8], elements: usize) -> Result<Vec<f32>, GgufError> {
+    let blocks = elements / 256;
+    if !elements.is_multiple_of(256) || data.len() < blocks * 176 {
+        return Err(GgufError::ShortData { tensor: "<q5_k>".into(), want: blocks * 176, got: data.len() });
+    }
+    let mut out = Vec::with_capacity(elements);
+    for b in 0..blocks {
+        let block = &data[b * 176..(b + 1) * 176];
+        let d = f16(u16::from_le_bytes([block[0], block[1]]));
+        let dmin = f16(u16::from_le_bytes([block[2], block[3]]));
+        let scales: [u8; 12] = block[4..16].try_into().expect("12");
+        let qh = &block[16..48];
+        let qs = &block[48..176];
+        // llama.cpp's loop: four strides of 64, each two sub-blocks of 32 — low nibbles then high
+        // nibbles of the same 32 bytes, with the fifth bit walking up `qh` two lanes per stride.
+        let (mut u1, mut u2) = (1u8, 2u8);
+        for j in 0..4 {
+            let (sc1, m1) = q4k_scale_min(&scales, 2 * j);
+            let (sc2, m2) = q4k_scale_min(&scales, 2 * j + 1);
+            let (d1, min1) = (d * sc1 as f32, dmin * m1 as f32);
+            let (d2, min2) = (d * sc2 as f32, dmin * m2 as f32);
+            let ql = &qs[j * 32..j * 32 + 32];
+            for l in 0..32 {
+                out.push(d1 * ((ql[l] & 0xF) as f32 + if qh[l] & u1 != 0 { 16.0 } else { 0.0 }) - min1);
+            }
+            for l in 0..32 {
+                out.push(d2 * ((ql[l] >> 4) as f32 + if qh[l] & u2 != 0 { 16.0 } else { 0.0 }) - min2);
+            }
+            u1 <<= 2;
+            u2 <<= 2;
+        }
+    }
+    Ok(out)
+}
+
 /// Dequantize whatever a tensor holds, given exactly its bytes.
 pub fn dequantize(tensor: &GgufTensor, data: &[u8]) -> Result<Vec<f32>, GgufError> {
     if data.len() < tensor.bytes {
@@ -409,7 +493,13 @@ pub fn dequantize(tensor: &GgufTensor, data: &[u8]) -> Result<Vec<f32>, GgufErro
     match tensor.kind {
         GgufType::F32 => Ok(data[..n * 4].chunks_exact(4).map(|c| f32::from_le_bytes(c.try_into().expect("4"))).collect()),
         GgufType::F16 => Ok(data[..n * 2].chunks_exact(2).map(|c| f16(u16::from_le_bytes(c.try_into().expect("2")))).collect()),
+        // BF16 is the top 16 bits of an f32: widening is a shift, exact and platform-independent.
+        GgufType::Bf16 => {
+            Ok(data[..n * 2].chunks_exact(2).map(|c| f32::from_bits(u32::from(u16::from_le_bytes([c[0], c[1]])) << 16)).collect())
+        }
+        GgufType::Q8_0 => dequantize_q8_0(data, n),
         GgufType::Q4K => dequantize_q4k(data, n),
+        GgufType::Q5K => dequantize_q5k(data, n),
         GgufType::Q6K => dequantize_q6k(data, n),
     }
 }
@@ -436,11 +526,91 @@ mod tests {
     #[test]
     fn the_block_sizes_are_the_formats() {
         assert_eq!(GgufType::Q4K.bytes_for(256), Some(144));
+        assert_eq!(GgufType::Q5K.bytes_for(256), Some(176));
         assert_eq!(GgufType::Q6K.bytes_for(256), Some(210));
+        assert_eq!(GgufType::Q8_0.bytes_for(32), Some(34));
         assert_eq!(GgufType::Q4K.bytes_for(2048 * 8192), Some(2048 * 8192 / 256 * 144));
         assert_eq!(GgufType::F32.bytes_for(7), Some(28));
-        // A k-quant length that is not a whole super-block is refused rather than rounded.
+        assert_eq!(GgufType::Bf16.bytes_for(7), Some(14));
+        // A length that is not a whole number of blocks is refused rather than rounded.
         assert_eq!(GgufType::Q4K.bytes_for(255), None);
+        assert_eq!(GgufType::Q8_0.bytes_for(33), None);
+    }
+
+    /// A hand-built `Q8_0` block: the format is an `f16` scale times a signed byte, and the test
+    /// pins both the arithmetic and the 34-byte stride.
+    #[test]
+    fn a_q8_0_block_decodes() {
+        let mut data = vec![0u8; 68];
+        // Block 0: d = 0.5, quants 0..32 ascending.
+        data[0..2].copy_from_slice(&0x3800u16.to_le_bytes());
+        for (i, byte) in data[2..34].iter_mut().enumerate() {
+            *byte = i as u8;
+        }
+        // Block 1: d = 2.0, quants all -3.
+        data[34..36].copy_from_slice(&0x4000u16.to_le_bytes());
+        for byte in data[36..68].iter_mut() {
+            *byte = (-3i8) as u8;
+        }
+        let values = dequantize_q8_0(&data, 64).expect("two blocks");
+        assert_eq!(values.len(), 64);
+        assert!((0..32).all(|i| (values[i] - 0.5 * i as f32).abs() < 1e-6), "block 0 is 0.5 times its byte");
+        assert!(values[32..].iter().all(|v| (*v + 6.0).abs() < 1e-6), "block 1 is 2.0 times -3");
+        // A truncated buffer is refused, not zero-padded.
+        assert!(dequantize_q8_0(&data[..40], 64).is_err());
+    }
+
+    /// A hand-built `Q5_K` super-block: the scale packing is `Q4_K`'s (already pinned above), so
+    /// what this checks is the fifth bit — which `qh` lane feeds which sub-block, and that the
+    /// nibble planes are the same 32 bytes twice.
+    #[test]
+    fn a_q5k_super_block_decodes() {
+        let mut block = vec![0u8; 176];
+        // d = 1.0, dmin = 0.0.
+        block[0..2].copy_from_slice(&0x3C00u16.to_le_bytes());
+        block[2..4].copy_from_slice(&0x0000u16.to_le_bytes());
+        // Sub-block 0: scale 1. Sub-block 1: scale 2. (Mins stay 0.)
+        block[4] = 1;
+        block[5] = 2;
+        // Nibbles: every byte 0x53 in the first 32 → sub-block 0 reads 3, sub-block 1 reads 5.
+        for byte in block[48..80].iter_mut() {
+            *byte = 0x53;
+        }
+        // The fifth bit: lane 0 (mask 1) feeds sub-block 0, lane 1 (mask 2) feeds sub-block 1.
+        // Set it for the first 4 values of sub-block 0 only.
+        for qh in block[16..20].iter_mut() {
+            *qh = 1;
+        }
+        let values = dequantize_q5k(&block, 256).expect("one super-block");
+        assert_eq!(values.len(), 256);
+        assert!(values[..4].iter().all(|v| (*v - 19.0).abs() < 1e-6), "3 + 16 (the fifth bit), at scale 1");
+        assert!(values[4..32].iter().all(|v| (*v - 3.0).abs() < 1e-6), "the low nibble alone");
+        assert!(values[32..64].iter().all(|v| (*v - 10.0).abs() < 1e-6), "the high nibble at scale 2, fifth bit clear");
+        assert!(values[64..].iter().all(|v| v.abs() < 1e-6), "the untouched sub-blocks are zero");
+    }
+
+    /// `BF16` widens by a shift, exactly — the property the LM Studio lane's "the carrier does
+    /// not move the class" claim rests on.
+    #[test]
+    fn bf16_widens_exactly() {
+        let tensor = GgufTensor {
+            name: "t".into(),
+            dims: vec![4],
+            kind: GgufType::Bf16,
+            offset: 0,
+            bytes: GgufType::Bf16.bytes_for(4).unwrap(),
+        };
+        let mut data = Vec::new();
+        for bits in [0x3F80u16, 0xBF80, 0x4049, 0x0001] {
+            data.extend_from_slice(&bits.to_le_bytes());
+        }
+        let values = dequantize(&tensor, &data).expect("bf16 decodes");
+        assert_eq!(values[0], 1.0);
+        assert_eq!(values[1], -1.0);
+        assert_eq!(values[2].to_bits(), 0x40490000, "the mantissa is the bf16 mantissa, nothing invented");
+        assert_eq!(values[3].to_bits(), 0x00010000, "even a subnormal bf16 is just a shift");
+        assert!(GgufType::Bf16.preserves_bf16() && GgufType::F32.preserves_bf16());
+        assert!(!GgufType::F16.preserves_bf16() && !GgufType::Q8_0.preserves_bf16());
     }
 
     /// A hand-built super-block, decoded. The scale packing is the part that produces plausible

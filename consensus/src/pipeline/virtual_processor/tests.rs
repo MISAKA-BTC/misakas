@@ -1516,6 +1516,92 @@ async fn palw_rc_a_real_execution_produces_a_block_the_chain_accepts() {
 #[tokio::test]
 #[ignore = "maps the real 1.7 GiB Qwen2.5 A16 artifact; set MISAKA_QWEN25_A16_ARTIFACT and --ignored"]
 async fn palw_rc_the_real_qwen25_a16_model_produces_a_block() {
+    let path = std::env::var("MISAKA_QWEN25_A16_ARTIFACT").expect("MISAKA_QWEN25_A16_ARTIFACT=/path/to/qwen25-1.5b-a16.palwart");
+    let opened = std::time::Instant::now();
+    let bytes = std::fs::read(&path).expect("the artifact reads");
+    let artifact = misaka_palw_base0::artifact::decode_artifact_file_v1(&bytes).expect("the artifact decodes");
+    eprintln!(
+        "dense drill: {} layers / vocab {} / root {} in {:?}",
+        artifact.shape.n_layers,
+        artifact.shape.vocab,
+        artifact.artifact_digest(),
+        opened.elapsed()
+    );
+    qwen25_a16_block_e2e(artifact).await;
+}
+
+/// **The LM Studio lane produces a block: GGUF in, W8A16 static PTQ, consensus accepts.**
+///
+/// The dense drill above starts from a `.palwart` somebody already converted. This starts where
+/// an LM Studio user starts — a **GGUF file** — and walks the whole lane in one test: the GGUF is
+/// written and re-read through the real parser, `lmstudio::qwen25_checkpoint_from_gguf`
+/// synthesizes the HF checkpoint, the float reference measures the calibration ranges, and
+/// `convert_qwen25_a16` performs the same static PTQ that built the shipped class. The artifact
+/// that falls out goes through the byte-for-byte block path of the drill: a three-class genesis
+/// naming ITS root, the anchored canonical job on `A16Engine`, the tiled logits commitment, the
+/// class lottery, an ML-DSA-87 signature, and acceptance into the UTXO tip.
+///
+/// # What stands in, and what does not
+///
+/// The checkpoint is `lmstudio::qwen25_gguf_dev_fixture` — Qwen2.5's structure at a size CI can
+/// calibrate (grouped-query attention with a real group, biases, both norms) — because a CI test
+/// cannot hold a 1.5B model. The stand-in is the WEIGHTS, not the path: the GGUF reader, the
+/// checkpoint synthesis, the calibrator, the converter, the engine, the commitment scheme and
+/// every consensus check are the production ones. The drill above swaps in the real artifact and
+/// nothing else; `the_gguf_carrier_does_not_move_the_class` (in `misaka-palw-base0`) is the
+/// crate-level proof that a preserving carrier reproduces the HF conversion bit-for-bit.
+///
+/// The carrier here is `Q8_0` on purpose — the LOSSY case, the one an LM Studio download most
+/// resembles — because that is the artifact that can never match a public pin and still has to be
+/// a first-class citizen of a genesis that names it.
+#[tokio::test]
+async fn palw_rc_an_lmstudio_gguf_conversion_produces_a_block_the_chain_accepts() {
+    use misaka_palw_base0::artifact::{Base0ShapeV1, LN_THETA_10000_GEN_Q};
+    use misaka_palw_base0::convert::{Qwen25ConvertPlan, convert_qwen25_a16};
+    use misaka_palw_base0::lmstudio::{DevFixtureCarrierV1, qwen25_checkpoint_from_gguf, qwen25_gguf_dev_fixture};
+    use misaka_palw_base0::reference::{RefConfigV1, reference_forward_full};
+
+    // Qwen2.5's structure at fixture scale. `max_position` must clear the canonical job's
+    // 14 prefill + 2 decode positions; 32 leaves the same headroom ratio the real class keeps.
+    let shape = Base0ShapeV1 {
+        n_layers: 2,
+        n_heads: 4,
+        n_kv_heads: 2,
+        d_head: 8,
+        d_ff: 64,
+        vocab: 32,
+        max_position: 32,
+        ln_theta_gen_q: LN_THETA_10000_GEN_Q,
+        eps_q: 1 << 8,
+    };
+    let gguf = qwen25_gguf_dev_fixture(&shape, DevFixtureCarrierV1::Q8_0);
+    let ck = qwen25_checkpoint_from_gguf(&gguf).expect("the GGUF ingests into the checkpoint the converter reads");
+    assert!(!ck.lossless_carrier, "Q8_0 is the lossy case, and it must say so");
+
+    // The same two-phase conversion `qwen25-convert --a16` performs: the float reference measures
+    // the ranges (the static calibration), then the PTQ freezes them into integer triples.
+    let ref_cfg = RefConfigV1 {
+        n_layers: shape.n_layers,
+        n_heads: shape.n_heads,
+        n_kv_heads: shape.n_kv_heads,
+        d_head: shape.d_head,
+        d_ff: shape.d_ff,
+        vocab: shape.vocab,
+        rms_eps: ck.config.rms_norm_eps,
+        rope_theta: ck.config.rope_theta,
+    };
+    let calibration: Vec<usize> = vec![3, 1, 4, 1, 5, 9, 2, 6, 5, 3, 5, 8];
+    let (_, _, stats) = reference_forward_full(&ck.blob, &ref_cfg, &calibration).expect("the float reference runs");
+    let plan = Qwen25ConvertPlan { shape, rms_norm_eps_bits: ck.config.rms_norm_eps.to_bits() };
+    let artifact = convert_qwen25_a16(&ck.blob, &plan, &stats).expect("the W8A16 static PTQ converts");
+    eprintln!("lmstudio drill: carrier [{}] converted to root {}", ck.carrier_summary, artifact.artifact_digest());
+
+    qwen25_a16_block_e2e(artifact).await;
+}
+
+/// The dense tier's block path, over whichever A16 artifact the caller supplied — the drill and
+/// the LM Studio lane differ in where the artifact came from and in nothing after that.
+async fn qwen25_a16_block_e2e(artifact: misaka_palw_base0::artifact::Base0ArtifactV1) {
     use kaspa_consensus_core::api::ConsensusApi;
     use kaspa_consensus_core::palw_attempt_v2::{
         PALW_ATTEMPT_V2_MLDSA87_CONTEXT, PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, attempt_id_v2,
@@ -1526,18 +1612,7 @@ async fn palw_rc_the_real_qwen25_a16_model_produces_a_block() {
     use misaka_palw_base0::produce::base0_rc_job_anchor_v1;
     use misaka_palw_base0::qwen25_a16_backend::Qwen25A16Backend;
 
-    let path = std::env::var("MISAKA_QWEN25_A16_ARTIFACT").expect("MISAKA_QWEN25_A16_ARTIFACT=/path/to/qwen25-1.5b-a16.palwart");
-    let opened = std::time::Instant::now();
-    let bytes = std::fs::read(&path).expect("the artifact reads");
-    let artifact = misaka_palw_base0::artifact::decode_artifact_file_v1(&bytes).expect("the artifact decodes");
     let artifact_root = artifact.artifact_digest();
-    eprintln!(
-        "dense drill: {} layers / vocab {} / root {artifact_root} in {:?}",
-        artifact.shape.n_layers,
-        artifact.shape.vocab,
-        opened.elapsed()
-    );
-
     let keypair = libcrux_ml_dsa::ml_dsa_87::generate_key_pair([0xB0u8; 32]);
     let bond_key = kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(kaspa_consensus_core::config::premine::premine_outpoint(0));
     let base_root = misaka_palw_base0::rc::palw_rc_base0_artifact_root_v1().expect("the floor's artifact derives");
@@ -8442,7 +8517,9 @@ async fn palw_rc_qwen36_counts_merged_work() {
     // 4. The boundary paid: the share stepped up off merged production alone.
     let qwen_share = share_of(&ctx, qwen_class_id).expect("the entrant is in the table");
     let base_share = share_of(&ctx, base_class_id).expect("the floor is in the table");
-    eprintln!("after one epoch of MERGED-ONLY production: QWEN36 {qwen_share} permille (from {opening_share}), BASE-0 {base_share} permille");
+    eprintln!(
+        "after one epoch of MERGED-ONLY production: QWEN36 {qwen_share} permille (from {opening_share}), BASE-0 {base_share} permille"
+    );
     let step = (u32::from(opening_share) * 250 / 1000).max(1) as u16;
     assert_eq!(qwen_share, opening_share + step, "it filled its budget from the anticone, so it took a step from the floor");
     assert_eq!(qwen_share + base_share, 1000, "and the denominator is conserved");
