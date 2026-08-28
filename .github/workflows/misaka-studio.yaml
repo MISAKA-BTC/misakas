@@ -6,6 +6,9 @@ name: MISAKA Studio
 # to `consensus/` should not wait on an npm install, and a change here should not be able to turn
 # the node's gate red.
 on:
+  # `workflow_dispatch` also runs the engine job below, which builds llama.cpp — 10-15 minutes that
+  # every pull request does not need, and that is worth having on demand before a release.
+  workflow_dispatch:
   push:
     paths:
       - 'misaka-studio/**'
@@ -136,3 +139,37 @@ jobs:
       - name: Test the shell
         working-directory: misaka-studio
         run: cargo test -p misaka-studio-desktop
+
+  engine:
+    name: Against a real llama.cpp
+    # On demand only. Building an engine on every push would triple this workflow's time to catch
+    # a class of bug that changes when llama.cpp changes, not when this repository does.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # stable
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          workspaces: misaka-studio
+
+      - name: Build llama-server
+        run: |
+          git clone --depth 1 https://github.com/ggml-org/llama.cpp.git "$RUNNER_TEMP/llama.cpp"
+          cmake -S "$RUNNER_TEMP/llama.cpp" -B "$RUNNER_TEMP/llama.cpp/build" \
+            -DCMAKE_BUILD_TYPE=Release -DGGML_NATIVE=OFF -DLLAMA_CURL=OFF \
+            -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF
+          cmake --build "$RUNNER_TEMP/llama.cpp/build" --target llama-server -j "$(nproc)"
+
+      - name: Make the fixture model
+        working-directory: misaka-studio
+        run: python3 testing/make_tiny_gguf.py "$RUNNER_TEMP/models/tiny-llama-F32.gguf"
+
+      - name: End to end
+        working-directory: misaka-studio
+        env:
+          MISAKA_TEST_LLAMA_SERVER: ${{ runner.temp }}/llama.cpp/build/bin/llama-server
+          MISAKA_TEST_MODELS_DIR: ${{ runner.temp }}/models
+        run: cargo test -p misaka-studio-runtime --test llamacpp_e2e -- --nocapture

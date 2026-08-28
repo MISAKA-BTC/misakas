@@ -55,6 +55,50 @@ pub enum GpuLayers {
     },
 }
 
+/// Whether to ask the engine for flash attention.
+///
+/// Three states rather than a bool, because the honest default is "let the engine decide". Current
+/// llama.cpp defaults to `auto` — it enables flash attention where the backend supports it and
+/// falls back where it does not, which is a better decision than this app can make from outside.
+///
+/// It is also the only option that works on every engine. `-fa` as a bare flag was accepted for
+/// years and is now an error (`expected value for argument`); `--flash-attn on` is accepted now
+/// and was not then. Passing nothing is compatible with both, so `Auto` passes nothing — measured
+/// against a real build, after the bare flag turned every load into a usage message.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FlashAttention {
+    /// Say nothing and let the engine choose.
+    #[default]
+    Auto,
+    On,
+    Off,
+}
+
+impl<'de> Deserialize<'de> for FlashAttention {
+    /// Accepts `"auto"`, `"on"`, `"off"` — and the `true`/`false` this field used to be.
+    ///
+    /// A settings file written by an earlier build must still load. The alternative is an app that
+    /// refuses to start after an update, with a parse error naming a field the user never set.
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Raw {
+            Bool(bool),
+            Text(String),
+        }
+        Ok(match Raw::deserialize(deserializer)? {
+            Raw::Bool(true) => FlashAttention::On,
+            Raw::Bool(false) => FlashAttention::Off,
+            Raw::Text(text) => match text.to_ascii_lowercase().as_str() {
+                "on" | "true" | "enabled" => FlashAttention::On,
+                "off" | "false" | "disabled" => FlashAttention::Off,
+                _ => FlashAttention::Auto,
+            },
+        })
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct BackendSettings {
@@ -67,9 +111,8 @@ pub struct BackendSettings {
     /// Generation threads. `None` lets the engine choose, which it does better than a fixed
     /// default copied from someone else's machine.
     pub threads: Option<u32>,
-    /// Flash attention. Large memory win on long contexts; not supported by every build, so it
-    /// is a setting rather than an assumption.
-    pub flash_attention: bool,
+    /// Flash attention. A large memory win on long contexts, and not every build has it.
+    pub flash_attention: FlashAttention,
     pub use_mmap: bool,
     /// Lock the model in RAM. Prevents the OS swapping weights out mid-generation, at the cost
     /// of being unable to load anything that does not fit.
@@ -89,7 +132,7 @@ impl Default for BackendSettings {
             mlx_server_path: None,
             gpu_layers: GpuLayers::Auto,
             threads: None,
-            flash_attention: true,
+            flash_attention: FlashAttention::default(),
             use_mmap: true,
             use_mlock: false,
             extra_args: Vec::new(),

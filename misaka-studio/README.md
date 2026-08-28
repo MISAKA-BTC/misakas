@@ -25,9 +25,11 @@ applications use is the API this app uses, and it cannot rot without the app bre
 ## Status
 
 **v0.1 — working MVP.** Model management, the runtime, chat, the performance monitor and the API
-are implemented and tested; the desktop shell builds and runs. Not yet done: MLX is wired but
-untested on hardware we do not have, and the MISAKA network path is an interface with no chain
-client behind it (deliberately — see *Provenance* below).
+are implemented and tested. The llama.cpp backend has been run end to end against a real
+`llama-server` — load, streaming, token counts, runtime identity — and the desktop shell opens,
+spawns its runtime and takes it down again. Not yet done: MLX is wired but has never run on a Mac,
+no CUDA or Metal machine has executed a model here, and the MISAKA network path is an interface
+with no chain client behind it (deliberately — see *Provenance* below).
 
 ## Quick start
 
@@ -181,6 +183,27 @@ npm --prefix ui run build                # typecheck + bundle
 
 The mock backend exists so the streaming, metrics and provenance paths are testable with no GPU and
 no multi-gigabyte download — which is what makes them testable in CI at all.
+
+### Against a real engine
+
+The mock cannot tell you whether the llama.cpp backend actually starts a process, survives the
+health wait, parses that engine's SSE framing, or reads a version banner a real binary printed. So
+there is a test that does, and a fixture small enough to make it cheap:
+
+```bash
+# A ~50 kB llama-architecture GGUF with random weights. It generates nonsense; nothing here tests
+# what a model says.
+python3 testing/make_tiny_gguf.py /tmp/misaka-models/tiny-llama-F32.gguf
+
+MISAKA_TEST_LLAMA_SERVER=/path/to/llama-server \
+MISAKA_TEST_MODELS_DIR=/tmp/misaka-models \
+  cargo test -p misaka-studio-runtime --test llamacpp_e2e -- --nocapture
+```
+
+It skips itself, loudly, when those are not set. Three bugs were found by running it and by no
+other means: llama.cpp's current version banner (`version: 0.3.0-dev (build 1, commit 90c26fc)`)
+parsed to a commit that was a whole sentence; `-fa` as a bare flag is now an error, so every load
+died in a usage message; and a model with no chat template answered `400 unordered_map::at`.
 
 ## Licensing
 

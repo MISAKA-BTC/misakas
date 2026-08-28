@@ -24,6 +24,7 @@ use crate::Result;
 use futures_util::future::BoxFuture;
 use futures_util::stream::BoxStream;
 use misaka_studio_core::provenance::RuntimeDescriptor;
+use misaka_studio_core::settings::FlashAttention;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -116,14 +117,31 @@ fn build_args(request: &LoadRequest, port: u16) -> Vec<String> {
         args.push("--threads".into());
         args.push(threads.to_string());
     }
-    if request.flash_attention {
-        args.push("-fa".into());
+    match request.flash_attention {
+        // Nothing at all: the engine's own default is `auto`, and every engine old enough not to
+        // have a default is also old enough to reject the value form of the flag.
+        FlashAttention::Auto => {}
+        FlashAttention::On => {
+            args.push("--flash-attn".into());
+            args.push("on".into());
+        }
+        FlashAttention::Off => {
+            args.push("--flash-attn".into());
+            args.push("off".into());
+        }
     }
     if !request.use_mmap {
         args.push("--no-mmap".into());
     }
     if request.use_mlock {
         args.push("--mlock".into());
+    }
+    if request.needs_default_chat_template {
+        // ChatML: what current llama.cpp would pick anyway, named here so that stays true when
+        // the engine's default changes. A model that ships its own template never reaches this
+        // branch — the engine uses that one, which is what `h_M` binds.
+        args.push("--chat-template".into());
+        args.push("chatml".into());
     }
     args.extend(request.extra_args.iter().cloned());
     args
@@ -194,9 +212,10 @@ mod tests {
             context_size: 8192,
             gpu_layers: Some(33),
             threads: Some(8),
-            flash_attention: true,
+            flash_attention: FlashAttention::On,
             use_mmap: true,
             use_mlock: false,
+            needs_default_chat_template: false,
             extra_args: vec!["--verbose".into()],
         }
     }
@@ -210,7 +229,7 @@ mod tests {
         assert!(joined.contains("--ctx-size 8192"));
         assert!(joined.contains("--n-gpu-layers 33"));
         assert!(joined.contains("--threads 8"));
-        assert!(joined.contains("-fa"));
+        assert!(joined.contains("--flash-attn on"));
         assert!(joined.ends_with("--verbose"), "extra args go last so they can override");
         assert!(!joined.contains("--no-mmap"));
     }
@@ -229,12 +248,24 @@ mod tests {
         let mut req = request();
         req.gpu_layers = None;
         req.threads = None;
-        req.flash_attention = false;
+        req.flash_attention = FlashAttention::Auto;
         req.extra_args.clear();
         let joined = build_args(&req, 1).join(" ");
         assert!(!joined.contains("--n-gpu-layers"));
         assert!(!joined.contains("--threads"));
-        assert!(!joined.contains("-fa"));
+        assert!(!joined.contains("--flash-attn"), "auto says nothing at all: {joined}");
+    }
+
+    /// The 400-with-a-C++-message bug: a model with no template of its own must have one supplied,
+    /// and a model that has one must not be overridden.
+    #[test]
+    fn a_model_without_a_chat_template_is_given_one() {
+        let mut req = request();
+        req.needs_default_chat_template = true;
+        let joined = build_args(&req, 1).join(" ");
+        assert!(joined.contains("--chat-template chatml"), "got {joined}");
+
+        assert!(!build_args(&request(), 1).join(" ").contains("--chat-template"));
     }
 
     #[test]

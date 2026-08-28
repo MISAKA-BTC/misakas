@@ -91,9 +91,19 @@ pub struct LoadRequest {
     /// Layers to place on the accelerator. `None` lets the backend decide.
     pub gpu_layers: Option<u32>,
     pub threads: Option<u32>,
-    pub flash_attention: bool,
+    pub flash_attention: misaka_studio_core::settings::FlashAttention,
     pub use_mmap: bool,
     pub use_mlock: bool,
+    /// The model carries no chat template of its own, so name one explicitly.
+    ///
+    /// Not a workaround — current llama.cpp already falls back to ChatML on its own (measured).
+    /// It is about **which** template, staying fixed. The record's `h_M` binds the GGUF, and the
+    /// argument that `(h_M, prompt_commitment)` determines the token sequence holds only because
+    /// the template lives in that GGUF. For a model with no template, the renderer is the
+    /// engine's built-in default instead — a value that can change between engine versions, which
+    /// would silently make the same conversation render to different tokens on a different
+    /// machine. Naming it takes that dependency out.
+    pub needs_default_chat_template: bool,
     pub extra_args: Vec<String>,
 }
 

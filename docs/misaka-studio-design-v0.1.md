@@ -123,6 +123,21 @@ functions. What keeps the copy honest is that the test vectors were produced by 
 implementation — Python's `hashlib.blake2b` — so agreement is a cross-check rather than a copy
 agreeing with itself. If either side changes, `provenance::tests` fails.
 
+### What the prompt commitment covers
+
+The **conversation as the runtime received it**, in a length-prefixed canonical encoding — not the
+token sequence the engine ran. Two things follow.
+
+First, the encoding has to be injective, and the obvious one is not: `role: content` joined by
+newlines lets a single user message reading `a\nassistant:b` flatten to the same bytes as the
+two-message exchange `[user "a", assistant "b"]`, so one conversation could be committed and
+another claimed. Every field is therefore length-prefixed (`canonical_prompt_bytes`), and a raw
+`/v1/completions` prompt is tagged apart from a chat conversation carrying the same text.
+
+Second, the step from conversation to tokens — the chat template and the tokenizer — lives inside
+the GGUF, and `h_M` binds the GGUF. So `(h_M, prompt_commitment)` determines the token sequence
+without this layer re-implementing a template it would only get subtly wrong.
+
 ### What is deliberately outside the commitment
 
 Wall-clock time, tokens per second, the machine's name. All recorded, none committed: a verifier
@@ -192,6 +207,19 @@ paths testable with no GPU and no multi-gigabyte download — which is what make
 CI at all. Selecting it is explicit, every reply says what it is, and its class tag
 (`misaka-studio-mock/v1`) is distinct, so a mock record can never be mistaken for a real one.
 
+**Flash attention is a tri-state that defaults to silence.** Not a bool. `-fa` as a bare flag was
+accepted by llama.cpp for years and is now an error (`expected value for argument`);
+`--flash-attn on` is accepted now and was not then. Current engines default to `auto` and decide
+per backend, better than this app can from outside — so `Auto` passes no flag at all, which is the
+only setting compatible with every engine version. Found by running one: the bare flag turned
+every load into a usage message.
+
+**A model without a chat template gets one named explicitly.** Current llama.cpp already falls
+back to ChatML, so this is not a workaround — it is about *which* template, staying fixed. The
+provenance argument that `(h_M, prompt_commitment)` determines the tokens holds because the
+template is in the GGUF; for a model without one the renderer is the engine's built-in default, a
+value that can change between engine versions and silently re-render the same conversation.
+
 **Stopping means stopping.** The Stop button aborts the HTTP request; the runtime drops the
 response; the engine stops generating. A "stop" that only hid the output would leave the GPU busy
 for another thousand tokens.
@@ -201,6 +229,26 @@ never runs that handler. So the runtime is spawned with a pipe on stdin and exit
 kernel closes the pipe when the shell dies, however it dies. (Polling the parent's PID was tried
 first and does not work — a force-quit leaves a zombie with the right PID and start time, and the
 runtime kept serving. Measured, not reasoned.)
+
+## 5a. What has actually been run
+
+Claims in a design document are cheap. These were measured on this machine:
+
+* **llama.cpp end to end** — a real `llama-server` (built from source, commit `90c26fc`) loading a
+  real GGUF, streaming a completion, reporting its own token counts, and being identified by its
+  version banner. 255 ms to load, 217 tokens/s, first token in 24 ms on a 4-core CPU with the
+  fixture model. `crates/misaka-studio-runtime/tests/llamacpp_e2e.rs` reproduces it; it skips
+  itself unless pointed at an engine and a model directory.
+* **The fixture** — `testing/make_tiny_gguf.py` writes a ~50 kB llama-architecture GGUF with
+  random weights, so that test needs a build but not a download.
+* **The desktop shell** — opened under Xvfb, spawned its runtime, and took it down again when
+  force-killed.
+* **The UI** — all four views in a real browser against the running runtime, light and dark, with
+  no console errors.
+
+Three of the bugs above were found this way and by no other means: the version banner in its
+current shape, the bare `-fa` flag, and a `400 unordered_map::at` from a model with no chat
+template.
 
 ## 6. Platforms
 
@@ -237,7 +285,9 @@ processes, not bundled. No closed-source application was used, copied, or revers
 ## 9. What is not done
 
 * **MLX is untested on hardware.** The code path exists and reports itself unavailable off Apple
-  Silicon; nobody has run it on a Mac yet.
+  Silicon; nobody has run it on a Mac yet. llama.cpp, by contrast, is verified end to end (§5a).
+* **No CUDA or Metal machine has run this.** The detection, the offload planning and the class
+  tags are written and unit-tested; what has actually executed a model here is a CPU build.
 * **`BackendKind::Misaka` refuses to run**, which is the intended state until the in-tree runtime
   is wired: it reports unavailable with a remedy and errors on load, rather than handing the work
   to llama.cpp under a record that names MISAKA. It is listed in `/api/v1/runtime/backends` so it

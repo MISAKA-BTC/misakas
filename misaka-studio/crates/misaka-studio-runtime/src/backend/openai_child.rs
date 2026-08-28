@@ -367,14 +367,49 @@ fn request_body(request: &GenerationRequest, chat: bool) -> serde_json::Value {
     body
 }
 
-/// `version: 4589 (a1b2c3d)` → `("a1b2c3d", 4589)`.
+/// Read an engine's version banner into `(commit, build number)`.
+///
+/// Two shapes, because llama.cpp has printed both and a user's engine may be any age:
+///
+/// ```text
+/// version: 0.3.0-dev (build 1, commit 90c26fc)   ← current
+/// version: 4589 (a1b2c3d)                        ← older
+/// ```
+///
+/// The first was found by running a real `llama-server`: the older parser read its commit as the
+/// literal string `build 1, commit 90c26fc` and its build number as nothing — an `h_R` that looked
+/// filled in and identified no binary at all. Which is the argument for parsing what an engine
+/// actually prints rather than what its source suggests it prints.
 fn parse_version(text: &str) -> (Option<String>, Option<u64>) {
     for line in text.lines() {
         let line = line.trim();
         let Some(rest) = line.strip_prefix("version:") else { continue };
         let rest = rest.trim();
+
+        let inside = rest.split_once('(').and_then(|(_, c)| c.split_once(')')).map(|(c, _)| c.trim());
+
+        // The labelled form: the parenthesis holds `build N, commit SHA`.
+        if let Some(inside) = inside
+            && inside.contains("commit")
+        {
+            let mut commit = None;
+            let mut build = None;
+            for field in inside.split(',') {
+                let field = field.trim();
+                if let Some(value) = field.strip_prefix("commit") {
+                    commit = Some(value.trim().to_string()).filter(|v: &String| !v.is_empty());
+                } else if let Some(value) = field.strip_prefix("build") {
+                    build = value.trim().parse::<u64>().ok();
+                }
+            }
+            if commit.is_some() || build.is_some() {
+                return (commit, build);
+            }
+        }
+
+        // The bare form: a build number, then the commit in parentheses.
         let build = rest.split_whitespace().next().and_then(|n| n.parse::<u64>().ok());
-        let commit = rest.split_once('(').and_then(|(_, c)| c.split_once(')')).map(|(c, _)| c.trim().to_string());
+        let commit = inside.map(str::to_string).filter(|c| !c.is_empty());
         if build.is_some() || commit.is_some() {
             return (commit, build);
         }
@@ -460,8 +495,14 @@ impl SseParser {
 mod tests {
     use super::*;
 
+    /// Both banner shapes. The labelled one is what a `llama-server` built in 2026 actually
+    /// prints — copied from a real run, not from the source.
     #[test]
     fn a_version_banner_yields_a_commit_and_a_build_number() {
+        let (commit, build) = parse_version("version: 0.3.0-dev (build 1, commit 90c26fc)\nbuilt with GNU 13.3.0 for Linux x86_64\n");
+        assert_eq!(commit.as_deref(), Some("90c26fc"));
+        assert_eq!(build, Some(1));
+
         let (commit, build) = parse_version("version: 4589 (a1b2c3d)\nbuilt with cc\n");
         assert_eq!(commit.as_deref(), Some("a1b2c3d"));
         assert_eq!(build, Some(4589));
@@ -469,6 +510,16 @@ mod tests {
         let (commit, build) = parse_version("some other program 1.2.3");
         assert_eq!(commit, None);
         assert_eq!(build, None);
+    }
+
+    /// The failure the labelled form used to produce: a commit that is a whole phrase is an `h_R`
+    /// that looks filled in and identifies nothing.
+    #[test]
+    fn the_commit_is_a_commit_and_not_a_sentence() {
+        let (commit, _) = parse_version("version: 0.3.0-dev (build 6712, commit deadbeef)");
+        let commit = commit.expect("a commit");
+        assert!(!commit.contains(' '), "got {commit:?}");
+        assert!(!commit.contains("build"), "got {commit:?}");
     }
 
     /// The parser's real job: chunk boundaries fall wherever the network puts them.

@@ -127,9 +127,10 @@ mod tests {
             context_size: 8192,
             gpu_layers: None,
             threads: None,
-            flash_attention: false,
+            flash_attention: misaka_studio_core::settings::FlashAttention::Auto,
             use_mmap: true,
             use_mlock: false,
+            needs_default_chat_template: false,
             extra_args: Vec::new(),
         };
         let joined = build_args(&request, 7000).join(" ");

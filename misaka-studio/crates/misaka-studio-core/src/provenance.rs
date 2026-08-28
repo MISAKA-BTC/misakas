@@ -303,6 +303,45 @@ pub fn commit_prompt(bytes: &[u8]) -> Digest64 {
     keyed(STUDIO_PROMPT_KEY, &[&(bytes.len() as u64).to_le_bytes(), bytes])
 }
 
+/// The canonical bytes of a conversation, for [`commit_prompt`].
+///
+/// **Length-prefixed, and that is the whole point.** The obvious encoding — `role: content`, one
+/// per line — lets two different conversations produce identical bytes: a single user message
+/// reading `a\nassistant:b` and the two-message exchange `[user "a", assistant "b"]` flatten to
+/// the same string, so one could be committed and the other claimed. Prefixing every field with
+/// its length makes the encoding injective, which is the minimum a commitment has to be.
+///
+/// # What this commits to, precisely
+///
+/// The **conversation as the runtime received it** — not the token sequence the engine ran. The
+/// chat template that turns one into the other lives inside the GGUF, and `h_M` binds the GGUF;
+/// the tokenizer does too, for the same reason. So `(h_M, prompt_commitment)` determines the
+/// tokens without this layer having to re-implement a template it would only get subtly wrong.
+pub fn canonical_prompt_bytes(messages: &[(&str, &str)]) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(&(messages.len() as u64).to_le_bytes());
+    for (role, content) in messages {
+        out.extend_from_slice(&(role.len() as u64).to_le_bytes());
+        out.extend_from_slice(role.as_bytes());
+        out.extend_from_slice(&(content.len() as u64).to_le_bytes());
+        out.extend_from_slice(content.as_bytes());
+    }
+    out
+}
+
+/// The canonical bytes of a raw completion prompt.
+///
+/// Tagged apart from a chat conversation so that a `/v1/completions` request and a
+/// `/v1/chat/completions` request carrying the same text are different commitments — they are
+/// different jobs, and the engine renders them differently.
+pub fn canonical_raw_prompt_bytes(prompt: &str) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(&u64::MAX.to_le_bytes()); // a message count no conversation can have
+    out.extend_from_slice(&(prompt.len() as u64).to_le_bytes());
+    out.extend_from_slice(prompt.as_bytes());
+    out
+}
+
 pub fn commit_output(bytes: &[u8]) -> Digest64 {
     keyed(STUDIO_OUTPUT_KEY, &[&(bytes.len() as u64).to_le_bytes(), bytes])
 }
@@ -554,6 +593,37 @@ mod tests {
             SamplingCommitment { temperature: 0.0, seed: None, ..Default::default() }.replayability(),
             Replayability::Deterministic,
             "greedy decoding needs no seed"
+        );
+    }
+
+    /// The collision the length prefixes exist for. Without them, `[user "a\nassistant:b"]` and
+    /// `[user "a", assistant "b"]` flatten to the same string, and one conversation can be
+    /// committed while another is claimed.
+    #[test]
+    fn two_conversations_cannot_share_a_commitment() {
+        let flattened = canonical_prompt_bytes(&[("user", "a\nassistant:b")]);
+        let exchange = canonical_prompt_bytes(&[("user", "a"), ("assistant", "b")]);
+        assert_ne!(flattened, exchange);
+        assert_ne!(commit_prompt(&flattened), commit_prompt(&exchange));
+
+        // Moving a character across the role/content boundary must also change the bytes.
+        assert_ne!(canonical_prompt_bytes(&[("us", "era")]), canonical_prompt_bytes(&[("user", "a")]));
+    }
+
+    #[test]
+    fn a_raw_prompt_is_a_different_job_from_the_same_text_as_a_message() {
+        let raw = canonical_raw_prompt_bytes("hello");
+        let chat = canonical_prompt_bytes(&[("user", "hello")]);
+        assert_ne!(commit_prompt(&raw), commit_prompt(&chat));
+    }
+
+    #[test]
+    fn the_canonical_encoding_is_stable() {
+        // A change here changes every historical commitment, so it is pinned by a vector.
+        let bytes = canonical_prompt_bytes(&[("user", "hi")]);
+        assert_eq!(
+            bytes,
+            [1u64.to_le_bytes().as_slice(), 4u64.to_le_bytes().as_slice(), b"user", 2u64.to_le_bytes().as_slice(), b"hi"].concat()
         );
     }
 

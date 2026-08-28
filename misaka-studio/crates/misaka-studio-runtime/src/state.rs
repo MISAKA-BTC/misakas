@@ -20,7 +20,10 @@ use futures_util::StreamExt;
 use futures_util::stream::BoxStream;
 use misaka_studio_core::HardwareSnapshot;
 use misaka_studio_core::model::LocalModel;
-use misaka_studio_core::provenance::{InferenceInputs, InferenceRecord, ModelIdentity, RuntimeIdentity, SamplingCommitment};
+use misaka_studio_core::provenance::{
+    InferenceInputs, InferenceRecord, ModelIdentity, RuntimeIdentity, SamplingCommitment, canonical_prompt_bytes,
+    canonical_raw_prompt_bytes,
+};
 use misaka_studio_core::settings::{BackendKind, GpuLayers, Settings};
 use serde::Serialize;
 use std::path::PathBuf;
@@ -181,6 +184,8 @@ impl AppState {
                 flash_attention: settings.backend.flash_attention,
                 use_mmap: settings.backend.use_mmap,
                 use_mlock: settings.backend.use_mlock,
+                // The header already told us; the engine has no way to guess.
+                needs_default_chat_template: !model.has_chat_template,
                 extra_args: settings.backend.extra_args.clone(),
             })
             .await?;
@@ -269,9 +274,15 @@ impl AppState {
         let state = self.loaded().await.ok_or(Error::NoModelLoaded)?;
         let backend = self.backend().await;
 
+        // The bytes the record commits to. Canonical and length-prefixed — see
+        // `canonical_prompt_bytes`, which exists because the obvious `role: content` flattening
+        // lets two different conversations produce the same commitment.
         let prompt_bytes = match &prompt {
-            Some(p) => p.clone(),
-            None => messages.iter().map(|m| format!("{}:{}", m.role, m.content)).collect::<Vec<_>>().join("\n"),
+            Some(raw) => canonical_raw_prompt_bytes(raw),
+            None => {
+                let pairs: Vec<(&str, &str)> = messages.iter().map(|m| (m.role.as_str(), m.content.as_str())).collect();
+                canonical_prompt_bytes(&pairs)
+            }
         };
 
         let request = GenerationRequest { model: state.model.id.clone(), messages, prompt, params, stop };
@@ -328,7 +339,7 @@ impl AppState {
     async fn record(
         &self,
         state: &LoadedState,
-        prompt: &str,
+        prompt: &[u8],
         completion: &str,
         usage: Usage,
         started_at_unix_ms: u64,
@@ -350,7 +361,7 @@ impl AppState {
                 model: identity.as_ref(),
                 runtime: &state.runtime,
                 params,
-                prompt: prompt.as_bytes(),
+                prompt,
                 output: completion.as_bytes(),
                 prompt_tokens: usage.prompt_tokens,
                 completion_tokens: usage.completion_tokens,
@@ -362,7 +373,10 @@ impl AppState {
         records
             .append(StoredRecord {
                 record,
-                prompt: keep_transcripts.then(|| prompt.to_string()),
+                // The transcript is the readable text, not the canonical commitment bytes:
+                // a person auditing this log wants the conversation, and the commitment is
+                // already the hash beside it.
+                prompt: keep_transcripts.then(|| String::from_utf8_lossy(prompt).into_owned()),
                 completion: keep_transcripts.then(|| completion.to_string()),
                 model_id: Some(state.model.id.clone()),
             })

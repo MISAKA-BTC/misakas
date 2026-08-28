@@ -138,13 +138,19 @@ export function SettingsView() {
             </Field>
           </div>
 
+          <Field label="Flash attention" hint="A large memory saving on long contexts. Auto lets the engine decide, which is what it does best — and is the only setting every engine version accepts.">
+            <select
+              className="input mt-1"
+              value={draft.backend.flash_attention}
+              onChange={(e) => set('backend', { ...draft.backend, flash_attention: e.target.value as Settings['backend']['flash_attention'] })}
+            >
+              <option value="auto">Auto — let the engine choose</option>
+              <option value="on">On</option>
+              <option value="off">Off</option>
+            </select>
+          </Field>
+
           <div className="space-y-2.5">
-            <Toggle
-              label="Flash attention"
-              checked={draft.backend.flash_attention}
-              onChange={(flash_attention) => set('backend', { ...draft.backend, flash_attention })}
-              hint="Large memory saving on long contexts. Not every engine build supports it."
-            />
             <Toggle
               label="Memory-map the model"
               checked={draft.backend.use_mmap}

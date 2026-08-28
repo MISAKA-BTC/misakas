@@ -196,7 +196,7 @@ export type Settings = {
     mlx_server_path: string | null
     gpu_layers: { mode: 'auto' } | { mode: 'all' } | { mode: 'none' } | { mode: 'fixed'; layers: number }
     threads: number | null
-    flash_attention: boolean
+    flash_attention: 'auto' | 'on' | 'off'
     use_mmap: boolean
     use_mlock: boolean
     extra_args: string[]
