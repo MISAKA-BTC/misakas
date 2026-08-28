@@ -64,17 +64,18 @@ impl PalwGossipFlow {
                     let Some(claim) = inner.claim_id.and_then(|h| Hash64::try_from(h).ok()) else {
                         continue;
                     };
-                    // Serve by RE-BROADCASTING on the push message — to everybody, not just the
-                    // asker. Every peer routes that type (old protocol included), the admit dedup
-                    // makes the flood idempotent, and one answered request refills the whole
-                    // neighbourhood, which is exactly the durability the pull exists to restore.
+                    // **Answer the ASKER, not the neighbourhood** (audit M2-2). Serving by
+                    // broadcast turned a ~70-byte request into up to 16 MiB per peer — with K
+                    // planted claim ids cycled past the per-claim throttle, 4.5 KB of requests
+                    // enqueued gigabytes of message clones, and the queue is deep enough
+                    // (131,328) that back-pressure never arrives. The asker gets what it asked
+                    // for; anyone else who needs it can ask, which is what the pull is for.
                     if let Some(bytes) = self.ctx.palw_gossip().resolve_material_for_serve(claim) {
-                        self.ctx.palw_gossip().mark_own_material(claim, &bytes);
                         let msg = make_message!(
                             Payload::PalwTraceMaterialBroadcast,
                             kaspa_p2p_lib::pb::PalwTraceMaterialBroadcastMessage { claim_id: Some(claim.into()), material: bytes }
                         );
-                        self.ctx.hub().broadcast(msg, None).await;
+                        let _ = self.router.enqueue(msg).await;
                     }
                 }
                 _ => {}

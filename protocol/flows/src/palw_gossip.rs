@@ -98,12 +98,36 @@ pub struct PalwGossipCenter {
     /// the party holding a retention directory (its own captures AND, since the pull transport,
     /// every foreign material it heard). `None` on the majority of nodes, which then simply never
     /// answer a request. The closure does disk I/O; callers hold no lock while invoking it.
-    material_resolver: Mutex<Option<Box<dyn Fn(Hash64) -> Option<Vec<u8>> + Send + Sync>>>,
+    material_resolver: Mutex<Option<std::sync::Arc<dyn Fn(Hash64) -> Option<Vec<u8>> + Send + Sync>>>,
     /// Serve throttle: a claim answered within the last window is not answered again — one
     /// request refills every peer (the serve is a broadcast), so immediate repeats are pure
     /// amplification. Keyed by claim, pruned inline.
     served_recently: Mutex<HashMap<Hash64, std::time::Instant>>,
+    /// What this node has ASKED for and not yet received, with the time it asked.
+    ///
+    /// A solicited answer must not be refused by the per-claim relay budget (audit M2-1): four
+    /// ~70-byte payloads from a stranger spend that budget before the honest multi-megabyte
+    /// material arrives, and then the very pull that exists to recover from it is dropped too.
+    /// Bounded by count and by TTL, and only this node's own requests ever write it.
+    outstanding_pulls: Mutex<HashMap<Hash64, std::time::Instant>>,
+    /// How many bytes this node has emitted answering pulls in the current window.
+    serve_budget: Mutex<ServeBudget>,
 }
+
+struct ServeBudget {
+    window_started: std::time::Instant,
+    bytes_served: u64,
+}
+
+/// The window and ceiling for answering pulls. 64 MiB a minute is ~8 of the largest registered
+/// class's materials — enough to unstick a neighbourhood, far below what a request loop can
+/// otherwise conjure (measured attack: 8 GiB enqueued from 4.5 KB of requests).
+const SERVE_BUDGET_WINDOW: std::time::Duration = std::time::Duration::from_secs(60);
+const SERVE_BUDGET_BYTES_PER_WINDOW: u64 = 64 << 20;
+/// A pull's answer is exempt from the per-claim budget for this long after asking.
+const PULL_SOLICITED_TTL: std::time::Duration = std::time::Duration::from_secs(120);
+/// Never track more outstanding pulls than a panel could plausibly have open at once.
+const OUTSTANDING_PULL_CAP: usize = 512;
 
 struct GossipState {
     seen: HashSet<u64>,
@@ -132,6 +156,8 @@ impl Default for PalwGossipCenter {
             hasher: RandomState::new(),
             material_resolver: Mutex::new(None),
             served_recently: Mutex::new(HashMap::new()),
+            outstanding_pulls: Mutex::new(HashMap::new()),
+            serve_budget: Mutex::new(ServeBudget { window_started: std::time::Instant::now(), bytes_served: 0 }),
         }
     }
 }
@@ -140,7 +166,7 @@ impl PalwGossipCenter {
     /// The consuming end, taken exactly once by the node's PALW panel/producer service. A second
     /// taker gets `None` — two consumers would each see half the events.
     /// Register the closure a serve consults — panel service only; see the field's doc.
-    pub fn set_material_resolver(&self, resolver: Box<dyn Fn(Hash64) -> Option<Vec<u8>> + Send + Sync>) {
+    pub fn set_material_resolver(&self, resolver: std::sync::Arc<dyn Fn(Hash64) -> Option<Vec<u8>> + Send + Sync>) {
         *self.material_resolver.lock().unwrap() = Some(resolver);
     }
 
@@ -161,12 +187,29 @@ impl PalwGossipCenter {
                 return None;
             }
         }
-        let bytes = {
-            let resolver = self.material_resolver.lock().unwrap();
-            resolver.as_ref().and_then(|r| r(claim))
-        }?;
+        // **The disk read happens with NO lock held.** The closure reads up to 16 MiB
+        // synchronously; holding the global resolver mutex across it (as this did until audit
+        // M2-2) serialises every serve on the slowest one and contradicts the field's own doc.
+        let resolver = { self.material_resolver.lock().unwrap().clone() }?;
+        let bytes = resolver(claim)?;
         if bytes.len() > PALW_MATERIAL_MAX_BYTES {
             return None; // never serve what the transport would refuse
+        }
+        // **A global budget, because the per-claim throttle is not one** (audit M2-2). The
+        // requester picks the claim, so a per-claim window bounds repetition and nothing else: K
+        // planted claim ids cycled past it produce K serves back to back. This caps what the node
+        // will emit in answer to pulls at all, whatever mix of claims is asked for.
+        {
+            let mut budget = self.serve_budget.lock().unwrap();
+            let now = std::time::Instant::now();
+            if now.duration_since(budget.window_started) >= SERVE_BUDGET_WINDOW {
+                budget.window_started = now;
+                budget.bytes_served = 0;
+            }
+            if budget.bytes_served.saturating_add(bytes.len() as u64) > SERVE_BUDGET_BYTES_PER_WINDOW {
+                return None;
+            }
+            budget.bytes_served += bytes.len() as u64;
         }
         self.served_recently.lock().unwrap().insert(claim, std::time::Instant::now());
         Some(bytes)
@@ -196,14 +239,41 @@ impl PalwGossipCenter {
         h.finish()
     }
 
-    fn admit_digest(&self, digest: u64, material_claim: Option<Hash64>) -> PalwGossipAdmit {
+    /// **Record that this node has asked the network for `claim`.**
+    ///
+    /// Called by the panel just before it emits a `PalwMaterialRequest`. For the next
+    /// [`PULL_SOLICITED_TTL`] the answer is exempt from the per-claim relay budget — see
+    /// [`Self::admit_material`]. Bounded by TTL and by [`OUTSTANDING_PULL_CAP`].
+    pub fn note_pull_request(&self, claim: Hash64) {
+        let mut pulls = self.outstanding_pulls.lock().unwrap();
+        let now = std::time::Instant::now();
+        pulls.retain(|_, at| now.duration_since(*at) < PULL_SOLICITED_TTL);
+        if pulls.len() >= OUTSTANDING_PULL_CAP {
+            return;
+        }
+        pulls.insert(claim, now);
+    }
+
+    /// Is an answer for `claim` something this node asked for and is still waiting on?
+    fn is_solicited(&self, claim: Hash64) -> bool {
+        let pulls = self.outstanding_pulls.lock().unwrap();
+        pulls.get(&claim).is_some_and(|at| std::time::Instant::now().duration_since(*at) < PULL_SOLICITED_TTL)
+    }
+
+    fn admit_digest(&self, digest: u64, material_claim: Option<Hash64>, solicited: bool) -> PalwGossipAdmit {
         let mut state = self.state.lock().unwrap();
         if state.seen.contains(&digest) {
             return PalwGossipAdmit::Duplicate;
         }
         if let Some(claim) = material_claim {
             let count = state.materials_per_claim.entry(claim).or_insert(0);
-            if *count >= PALW_MATERIALS_PER_CLAIM {
+            // **The budget does not apply to an answer this node asked for** (audit M2-1). The
+            // counter is charged before anything knows who sent the bytes or whether they verify,
+            // so four ~70-byte payloads from a stranger make the honest material `Duplicate`
+            // network-wide — the seat then never sees it, signs `Unavailable`, and an honest
+            // producer's bond is slashed for ~280 bytes of attacker traffic. A solicited answer is
+            // still digest-deduplicated and still size-capped; it just cannot be crowded out.
+            if *count >= PALW_MATERIALS_PER_CLAIM && !solicited {
                 return PalwGossipAdmit::Duplicate;
             }
             *count += 1;
@@ -234,7 +304,7 @@ impl PalwGossipCenter {
         if bytes.len() > PALW_MATERIAL_MAX_BYTES {
             return PalwGossipAdmit::TooBig;
         }
-        let verdict = self.admit_digest(self.digest(1, Some(&claim), bytes), Some(claim));
+        let verdict = self.admit_digest(self.digest(1, Some(&claim), bytes), Some(claim), self.is_solicited(claim));
         // Drop-on-full: a node with no consumer is not obliged to remember.
         if verdict == PalwGossipAdmit::Fresh && self.has_consumer() {
             let _ = self.inbox_tx.try_send(PalwGossipEvent::Material { claim, bytes: bytes.to_vec() });
@@ -247,7 +317,7 @@ impl PalwGossipCenter {
         if bytes.len() > PALW_RECEIPT_MAX_BYTES {
             return PalwGossipAdmit::TooBig;
         }
-        let verdict = self.admit_digest(self.digest(2, None, bytes), None);
+        let verdict = self.admit_digest(self.digest(2, None, bytes), None, false);
         if verdict == PalwGossipAdmit::Fresh && self.has_consumer() {
             let _ = self.inbox_tx.try_send(PalwGossipEvent::Receipt { bytes: bytes.to_vec() });
         }
@@ -264,14 +334,14 @@ impl PalwGossipCenter {
     /// service had nothing to answer with, and the session ran out. Everyone else gets these bytes
     /// over the wire, so the executor being the one node without them was the wrong asymmetry.
     pub fn mark_own_material(&self, claim: Hash64, bytes: &[u8]) {
-        let _ = self.admit_digest(self.digest(1, Some(&claim), bytes), Some(claim));
+        let _ = self.admit_digest(self.digest(1, Some(&claim), bytes), Some(claim), true);
         if self.has_consumer() {
             let _ = self.inbox_tx.try_send(PalwGossipEvent::Material { claim, bytes: bytes.to_vec() });
         }
     }
 
     pub fn mark_own_receipt(&self, bytes: &[u8]) {
-        let _ = self.admit_digest(self.digest(2, None, bytes), None);
+        let _ = self.admit_digest(self.digest(2, None, bytes), None, true);
     }
 }
 
@@ -315,7 +385,7 @@ mod tests {
         for n in 0..(SEEN_CAP as u64 * 3) {
             let claim = Hash64::from_u64_word(n);
             let digest = center.digest(1, Some(&claim), &n.to_le_bytes());
-            let _ = center.admit_digest(digest, Some(claim));
+            let _ = center.admit_digest(digest, Some(claim), false);
         }
         let state = center.state.lock().unwrap();
         assert!(
