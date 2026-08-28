@@ -136,31 +136,62 @@ fn bf16_bits(v: f32) -> u16 {
     ((x.wrapping_add(round)) >> 16) as u16
 }
 
-/// Encode named `f32` tensors as a BF16 `safetensors` container, in the order given.
-///
-/// The intermediate the whole lane funnels through — and public because the dev fixture writes
-/// its safetensors twin with it, which is what lets a test state "the carrier does not move the
-/// class" as a byte comparison.
-pub fn encode_safetensors_bf16(tensors: &[(String, Vec<usize>, Vec<f32>)]) -> Vec<u8> {
-    let mut header = String::from("{");
-    let mut data: Vec<u8> = Vec::new();
-    for (i, (name, shape, values)) in tensors.iter().enumerate() {
+/// An incrementally-built BF16 `safetensors` container: push one tensor, drop its floats, push
+/// the next. The point is peak memory — a 1.5B checkpoint is ~6 GiB as `f32`, and holding all of
+/// it beside the source GGUF and the output blob is the difference between converting on a 16 GiB
+/// machine and not.
+pub struct SafetensorsBf16BuilderV1 {
+    header: String,
+    data: Vec<u8>,
+    tensors: usize,
+}
+
+impl Default for SafetensorsBf16BuilderV1 {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SafetensorsBf16BuilderV1 {
+    pub fn new() -> Self {
+        Self { header: String::from("{"), data: Vec::new(), tensors: 0 }
+    }
+
+    pub fn push(&mut self, name: &str, shape: &[usize], values: &[f32]) {
         debug_assert_eq!(shape.iter().product::<usize>(), values.len(), "{name}: shape and data agree");
-        let begin = data.len();
+        let begin = self.data.len();
         for v in values {
-            data.extend_from_slice(&bf16_bits(*v).to_le_bytes());
+            self.data.extend_from_slice(&bf16_bits(*v).to_le_bytes());
         }
-        if i > 0 {
-            header.push(',');
+        if self.tensors > 0 {
+            self.header.push(',');
         }
         let dims = shape.iter().map(|d| d.to_string()).collect::<Vec<_>>().join(",");
-        header.push_str(&format!("\"{name}\":{{\"dtype\":\"BF16\",\"shape\":[{dims}],\"data_offsets\":[{begin},{}]}}", data.len()));
+        self.header
+            .push_str(&format!("\"{name}\":{{\"dtype\":\"BF16\",\"shape\":[{dims}],\"data_offsets\":[{begin},{}]}}", self.data.len()));
+        self.tensors += 1;
     }
-    header.push('}');
-    let mut blob = (header.len() as u64).to_le_bytes().to_vec();
-    blob.extend_from_slice(header.as_bytes());
-    blob.extend_from_slice(&data);
-    blob
+
+    pub fn finish(mut self) -> Vec<u8> {
+        self.header.push('}');
+        let mut blob = (self.header.len() as u64).to_le_bytes().to_vec();
+        blob.extend_from_slice(self.header.as_bytes());
+        blob.extend_from_slice(&self.data);
+        blob
+    }
+}
+
+/// Encode named `f32` tensors as a BF16 `safetensors` container, in the order given.
+///
+/// The one-shot form of [`SafetensorsBf16BuilderV1`] — public because the dev fixture writes its
+/// safetensors twin with it, which is what lets a test state "the carrier does not move the
+/// class" as a byte comparison.
+pub fn encode_safetensors_bf16(tensors: &[(String, Vec<usize>, Vec<f32>)]) -> Vec<u8> {
+    let mut builder = SafetensorsBf16BuilderV1::new();
+    for (name, shape, values) in tensors {
+        builder.push(name, shape, values);
+    }
+    builder.finish()
 }
 
 /// The tensor correspondence: what the graph needs, by both names. GGUF dimension order is
@@ -230,7 +261,9 @@ pub fn qwen25_checkpoint_from_gguf(bytes: &[u8]) -> Result<Qwen25GgufCheckpointV
 
     let mut carriers: BTreeMap<&'static str, usize> = BTreeMap::new();
     let mut lossless = true;
-    let mut tensors: Vec<(String, Vec<usize>, Vec<f32>)> = Vec::new();
+    // Streamed: each tensor's floats are encoded and DROPPED before the next dequantizes, so the
+    // peak is the source file + the growing blob + ONE tensor — not the whole model twice over.
+    let mut builder = SafetensorsBf16BuilderV1::new();
     for (gguf_name, hf_name, want) in qwen25_tensor_specs(layers, d, kv, d_ff, vocab) {
         let tensor = dir.tensors.get(&gguf_name).ok_or_else(|| LmStudioError::MissingTensor(gguf_name.clone()))?;
         let got: Vec<usize> = tensor.dims.iter().map(|v| *v as usize).collect();
@@ -262,10 +295,10 @@ pub fn qwen25_checkpoint_from_gguf(bytes: &[u8]) -> Result<Qwen25GgufCheckpointV
                 GgufType::Q6K => "Q6_K",
             })
             .or_insert(0) += 1;
-        tensors.push((hf_name, want, values));
+        builder.push(&hf_name, &want, &values);
     }
 
-    let blob = encode_safetensors_bf16(&tensors);
+    let blob = builder.finish();
     let carrier_summary = carriers.iter().map(|(k, n)| format!("{k}×{n}")).collect::<Vec<_>>().join(" ");
     Ok(Qwen25GgufCheckpointV1 {
         blob,
