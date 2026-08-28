@@ -61,3 +61,8 @@ rothschild-generated-key.hex
 
 # PALW worker per-cwd GGUF sha cache (generated wherever a worker runs)
 .palw-gguf-sha.json
+
+# MISAKA Studio: build output of the UI bundle. `target/` and `node_modules/` are already
+# covered above; `dist/` is the third generated directory and the one nothing else here has.
+misaka-studio/ui/dist/
+misaka-studio/desktop/src-tauri/gen/

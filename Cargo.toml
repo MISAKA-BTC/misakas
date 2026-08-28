@@ -90,6 +90,15 @@ members = [
     "metrics/perf_monitor",
     "utils/alloc",
 ]
+
+# MISAKA Studio is its own cargo workspace (`misaka-studio/Cargo.toml`) and is named here so that
+# stays true by declaration rather than by cargo inferring it from a nested `[workspace]` table.
+#
+# A desktop app's dependency graph — an HTTP server, a TLS stack, a webview binding — has no
+# business in the lockfile a validator builds from, and `cargo build` at this root must keep
+# producing exactly the node it produced before the Studio existed.
+exclude = ["misaka-studio"]
+
 # **What a plain `cargo build --release` produces — everything except the crates that need a
 # runtime this repository does not contain.**
 #

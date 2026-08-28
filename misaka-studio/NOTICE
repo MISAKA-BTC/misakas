@@ -1,0 +1,79 @@
+MISAKA Studio
+Copyright (c) 2026 MISAKA contributors
+
+This product is licensed under the ISC License (see the repository root LICENSE).
+
+--------------------------------------------------------------------------------
+Jan — https://github.com/janhq/jan
+Copyright 2025 Menlo Research
+Licensed under the Apache License, Version 2.0
+--------------------------------------------------------------------------------
+
+Jan is the reference open-source local-LLM desktop application MISAKA Studio was
+designed against. Specifically, the following were taken from Jan as prior art
+and re-implemented here:
+
+  * the overall shape of a local-LLM desktop app — a Tauri shell over a web UI,
+    with the inference engine supervised as a separate process rather than linked
+    into the application;
+  * serving an OpenAI-compatible API on localhost as the app's own primary
+    interface, so third-party clients and the app's UI use the same surface;
+  * managing GGUF models by downloading them from the Hugging Face Hub into a
+    user-configurable model directory.
+
+**No Jan source code is included in this tree.** Every file under `misaka-studio/`
+was written for this repository: the runtime is Rust (Jan's is TypeScript over a
+Tauri core), the model store, catalog client, backend abstraction, provenance
+layer and UI are MISAKA's own. Attribution is given here because Jan's Apache-2.0
+NOTICE requests it for user-facing materials, and because the design debt is real
+whether or not any code moved.
+
+Should Jan source ever be vendored into this tree, it must land under
+`misaka-studio/third_party/jan/` with Jan's LICENSE and NOTICE files intact, each
+modified file carrying a change notice, as Apache-2.0 section 4 requires.
+
+--------------------------------------------------------------------------------
+llama.cpp — https://github.com/ggml-org/llama.cpp
+Copyright (c) 2023-2026 The ggml authors
+Licensed under the MIT License
+--------------------------------------------------------------------------------
+
+MISAKA Studio's default backend runs llama.cpp's `llama-server` as a child
+process. No llama.cpp source or binary is contained in or distributed with this
+tree; the Studio locates an engine the user installed, or one a packaged build
+ships beside the executable. A distribution that does bundle `llama-server` must
+include llama.cpp's MIT licence text with it.
+
+--------------------------------------------------------------------------------
+MLX / mlx-lm — https://github.com/ml-explore/mlx-lm
+Copyright (c) 2023-2026 Apple Inc.
+Licensed under the MIT License
+--------------------------------------------------------------------------------
+
+Driven the same way, as an optional child process on Apple Silicon. Not bundled.
+
+--------------------------------------------------------------------------------
+Hugging Face Hub
+--------------------------------------------------------------------------------
+
+Model search and downloads use the public Hugging Face Hub HTTP API. Models
+downloaded through it carry their own licences, which are the user's to accept —
+the Studio records the repository and revision it fetched from so the licence
+that applies can always be identified.
+
+--------------------------------------------------------------------------------
+Rust and JavaScript dependencies
+--------------------------------------------------------------------------------
+
+Third-party crates and npm packages are listed with their exact versions in
+`misaka-studio/Cargo.lock` and `misaka-studio/ui/package-lock.json`. All are used
+unmodified under their own licences (predominantly MIT and Apache-2.0).
+
+--------------------------------------------------------------------------------
+What was deliberately NOT used
+--------------------------------------------------------------------------------
+
+LM Studio and other closed-source local-LLM applications. No part of this work
+derives from their code, their protocols, or from reverse-engineering them.
+Where MISAKA Studio and such products share a feature, it is because both solve
+the same problem for the same users.
