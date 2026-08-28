@@ -241,6 +241,11 @@ Claims in a design document are cheap. These were measured on this machine:
   itself unless pointed at an engine and a model directory.
 * **The fixture** — `testing/make_tiny_gguf.py` writes a ~50 kB llama-architecture GGUF with
   random weights, so that test needs a build but not a download.
+* **The download path** — search, repository listing, download, digest verification and the
+  provenance sidecar, driven through the UI against a local stand-in for the Hugging Face API
+  (`huggingface.co` is not reachable from the environment this was built in). The stand-in serves
+  the shapes the real API does, including `gated` as a string and the digest in the LFS block; the
+  same shapes are asserted in `catalog.rs`'s unit tests. **The live Hub has not been contacted.**
 * **The desktop shell** — opened under Xvfb, spawned its runtime, and took it down again when
   force-killed.
 * **The UI** — all four views in a real browser against the running runtime, light and dark, with
