@@ -1558,6 +1558,10 @@ impl PalwPanelService {
             // could not distinguish "the responder is broken" from "the responder is not a party".
             // `court_stalls` counts the reasons and the tick prints them, which is bounded (one
             // line per tick, only when something stalled) and turns silence into a measurement.
+            // Claims whose ACCUSED capture a court move needs and this node does not hold. Collected
+            // rather than awaited inline: the request borrows `self.flow_context` while the loop
+            // still holds a borrow of `materials` (audit3 S-01).
+            let mut pull_for_close: Vec<Hash64> = Vec::new();
             let court_duties = session.palw_court_duties_v2(vec![bond_key]);
             let mut court_stalls: BTreeMap<&'static str, usize> = BTreeMap::new();
             for duty in &court_duties {
@@ -1685,12 +1689,36 @@ impl PalwPanelService {
                         }
                     }
                 }
+                // **The ACCUSED execution — the bytes that reproduce the claim's committed roots.**
+                //
+                // Role-splitting the capture is right for the rungs and wrong for the terminal move
+                // (audit3 S-01). `refutation_for_index` derives the refutation's binding FROM the
+                // material it is handed, and `adjudicate_court_close_v2` pins that binding to the
+                // accused claim before it reads any evidence:
+                //
+                //     check_arithmetic_close_binding(claim.trace_root, binding_logits_root_of(..))?;
+                //     check_execution_root_binding(claim.execution_root, ..committed_execution_root)?;
+                //
+                // A challenger only reaches `Terminal` because its roots DIFFER from the claim's —
+                // that difference is the accusation. So a close assembled from the challenger's own
+                // capture carries the challenger's roots, fails the first binding check, and
+                // `palw_court_close_verdict_v2` returns `None`. The challenger files nothing; the
+                // responder is the fraudster and will not convict itself; no rung clock runs at
+                // `Terminal`; and the `window_court` backstop then slashes the CHALLENGER's
+                // collateral and re-arms the fraudulent claim, which finalizes and is paid. Proven
+                // fraud became unpunishable, and the only party that can detect it paid to report
+                // it.
+                //
+                // The backend's own contract says which capture the close comes from: "Returned by
+                // BOTH sides, and deliberately the same call for both: an honest executor closing
+                // its own case and a challenger closing a real fraud assemble the identical
+                // object." Identical objects require identical material, and the material both
+                // sides can name is the accused's.
+                let accused_capture = materials
+                    .get(&duty.claim_id)
+                    .and_then(|pool| pool.iter().find(|b| backend.verify_material(b, roots) == PalwMaterialVerdictV1::Matches));
                 let capture_from_own = (!duty.i_am_responder).then(|| own_executions.get(&duty.claim_id)).flatten();
-                let Some(capture) = capture_from_own.or_else(|| {
-                    materials
-                        .get(&duty.claim_id)
-                        .and_then(|pool| pool.iter().find(|b| backend.verify_material(b, roots) == PalwMaterialVerdictV1::Matches))
-                }) else {
+                let Some(capture) = capture_from_own.or(accused_capture) else {
                     *court_stalls
                         .entry(if materials.contains_key(&duty.claim_id) {
                             // Held material, and none of it reproduces the claim's roots — a
@@ -1759,12 +1787,45 @@ impl PalwPanelService {
                     // closing a real fraud assemble the identical object, and
                     // `adjudicate_court_close_v2` is what decides which way it reads. A prover only
                     // one side could run would be a prover that decides the verdict.
+                    //
+                    // **STILL NOT COVERED BY A TEST.** The 2026-08-28 audit set the acceptance
+                    // condition for M2-4 as a live round trip that convicts a real fault AND
+                    // acquits a real innocent; the 2026-08-29 re-audit recorded that it was unmet
+                    // and that nothing in the tree tests it; it is still unmet here. The repair
+                    // below is verified by reading the adjudicator's binding checks, which is the
+                    // same standing M2-4 was recorded `fixed` at — so it is written down where the
+                    // code is rather than claimed in a table. The test needs a two-node court
+                    // harness that does not exist.
                     (PalwBisectTurnV1::Terminal, _) => {
                         let Some(index) = duty.terminal_index else {
                             *court_stalls.entry("the ladder has not narrowed to a step").or_default() += 1;
                             continue;
                         };
-                        let refutation = match backend.refutation_for_index(capture, index) {
+                        // The rungs speak from each party's OWN execution — that is what makes a
+                        // disagreement possible at all. The close does not: it is an assertion
+                        // about the accused's step, so it is assembled from the accused's bytes by
+                        // whichever party is making it (audit3 S-01).
+                        let Some(accused) = accused_capture else {
+                            // **And ASK for it.** The pull lived only in the receipt-duty loop, so
+                            // a challenger that never needed the accused's bytes to open its case
+                            // — it compares roots, not material — had no way to obtain them for
+                            // the close. Without this the repair above would trade a court that
+                            // convicts nobody for a court that stalls, which the same backstop
+                            // punishes the same way. Same 25-DAA throttle and the same
+                            // solicited-answer registration the receipt path uses.
+                            if requested.get(&duty.claim_id).is_none_or(|at| current_daa >= at.saturating_add(25)) {
+                                requested.insert(duty.claim_id, current_daa);
+                                pull_for_close.push(duty.claim_id);
+                            }
+                            *court_stalls.entry("the close needs the ACCUSED capture and this node holds none — pulling").or_default() +=
+                                1;
+                            trace!(
+                                "[{PALW_PANEL}] session {} has narrowed to a step but this node holds no capture matching the claim's roots",
+                                duty.session_id
+                            );
+                            continue;
+                        };
+                        let refutation = match backend.refutation_for_index(accused, index) {
                             Ok(r) => r,
                             Err(e) => {
                                 *court_stalls.entry("the close does not assemble from this capture").or_default() += 1;
@@ -1807,6 +1868,13 @@ impl PalwPanelService {
                 };
                 let Some(object) = object else { continue };
                 court_pending.push((duty.session_id, duty.round, duty.i_am_responder, object));
+            }
+            // Ask for every accused capture a close needed and this node did not hold. Outside the
+            // logging guard below deliberately: a request that only goes out when a summary line
+            // happens to be printed is a request nobody can reason about.
+            for claim in pull_for_close.drain(..) {
+                self.flow_context.palw_gossip().note_pull_request(claim);
+                self.flow_context.request_palw_material(claim).await;
             }
             if !court_stalls.is_empty() {
                 let responder_of = court_duties.iter().filter(|d| d.i_am_responder).count();
