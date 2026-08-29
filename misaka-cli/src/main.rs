@@ -26,6 +26,7 @@ mod eth;
 mod evm_send;
 mod forward;
 mod keys;
+mod mtp;
 mod node;
 #[cfg(feature = "evm-send")]
 mod prea;
@@ -161,6 +162,171 @@ enum Command {
     /// rest of this chain is built on: the request is pinned, so another host of the same class
     /// reproduces the answer byte for byte. `--verify <receipt>` is that check.
     Ask(ask::AskArgs),
+    /// `misaka mtp …` — testnet Points (MTP): query points, verify a signed epoch ledger, and
+    /// manually award the verification-required categories (bug / verify / infra).
+    #[command(subcommand)]
+    Mtp(MtpCmd),
+}
+
+#[derive(Subcommand, Debug)]
+enum MtpCmd {
+    /// Sign an operator-issued invitation and emit the registration request to submit.
+    ///
+    /// Registration binds your GitHub identity to a MISAKA address so node/validator facts resolve
+    /// to one ledger id. It is OFFLINE by design: the MTP HTTP surface is read-only (ADR-0038 D3),
+    /// so nothing is sent — you submit the emitted JSON through the operator's channel and they
+    /// ingest it with `misaka-mtp-service register`.
+    Register {
+        /// The operator-issued invitation JSON (from `misaka-mtp-service issue-nonce`).
+        #[arg(long)]
+        invitation: String,
+        /// Your hex 32-byte ML-DSA-87 seed file — the key that owns the invited address.
+        #[arg(long)]
+        key_file: String,
+        /// Write the signed request here instead of stdout.
+        #[arg(long)]
+        out: Option<String>,
+        /// Where your points accrue: `github` (default, `gh:<handle>`) or `address`
+        /// (`addr:<your misakatest: address>`). Your choice is part of what you sign, so the
+        /// operator cannot redirect it. Pick `address` to keep rewards off a platform account.
+        #[arg(long, default_value = "github")]
+        attribution: String,
+    },
+    /// Record what this host's node currently sees, as C1 uptime observations (JSONL).
+    ///
+    /// Asks the local node `getConnectedPeerInfo` and emits one line per peer: a stable node_key,
+    /// whether it is in sync (a peer still in IBD is up but not usable), its user agent and
+    /// address. Attribution to a ledger id is the operator's roster step — a peer cannot assert
+    /// ownership on the wire.
+    Collect {
+        /// This observation point's label (e.g. JP, DE) — recorded as the sample's evidence link.
+        #[arg(long)]
+        vantage: String,
+        /// Append the JSONL here instead of stdout.
+        #[arg(long)]
+        out: Option<String>,
+    },
+    /// Emit the bonded validator roster and its slash state, one JSONL line per stake bond.
+    ///
+    /// Chain-derived registry state via `getStakeBonds`: validator id, owner, amount, and whether
+    /// the bond is active, unbonding or slashed. It does NOT carry per-epoch attestation — no RPC
+    /// reports which validator signed which epoch, so that needs a block indexer.
+    Validators {
+        /// Append the JSONL here instead of stdout.
+        #[arg(long)]
+        out: Option<String>,
+    },
+    /// Index per-validator, per-epoch attestations out of blocks (one JSONL row each).
+    ///
+    /// No RPC reports which validator signed which epoch, so this walks blocks for transactions on
+    /// the stake-attestation-shard subnetwork and decodes their payloads. A pruned node holds
+    /// nothing below its pruning point: absence in the scanned range is not proof of non-attestation.
+    Attestations {
+        /// Start the walk here. Defaults to the node's pruning point — the oldest height it can
+        /// answer for.
+        #[arg(long)]
+        low_hash: Option<String>,
+        /// Stop after scanning this many blocks.
+        #[arg(long, default_value_t = 50_000)]
+        max_blocks: usize,
+        /// Append the JSONL here instead of stdout.
+        #[arg(long)]
+        out: Option<String>,
+    },
+    /// Index accepted PALW replica work (C5) off the finality-buried selected chain (JSONL).
+    ///
+    /// Walks blocks for leaf-chunk registrations and algo-4 acceptances, then resolves each
+    /// accepted leaf's Receipt-DA Object-v2 from --da-dir and verifies it against the leaf's
+    /// chain-committed receipt_da_root before trusting a byte of it. One line per resolved leaf:
+    /// the accepting chain block, both replica slots (execution nullifier, worker credential,
+    /// bond, owner address) and the node-side k=2 verdict. Feed the output to
+    /// `misaka-mtp-service ingest-palw`.
+    PalwLeaves {
+        /// Directory holding `<receipt_da_root>.palwda` Object-v2 files — the kaspad
+        /// `--palw-da-import-dir` spool root (its `incoming/` subdirectory is also searched).
+        #[arg(long)]
+        da_dir: String,
+        /// Start the walk here. Defaults to the node's pruning point — the oldest height it can
+        /// answer for.
+        #[arg(long)]
+        low_hash: Option<String>,
+        /// Stop after scanning this many blocks.
+        #[arg(long, default_value_t = 50_000)]
+        max_blocks: usize,
+        /// Append the JSONL here instead of stdout.
+        #[arg(long)]
+        out: Option<String>,
+    },
+    /// Look up an identity's testnet points from the MTP service (self-serve view).
+    /// The numbers are a mirror of signed ledgers — use `verify-epoch` for the proof.
+    Points {
+        /// Ledger id, e.g. `gh:alice`.
+        id: String,
+        /// MTP service base URL. Resolution: CLI > env MISAKA_MTP_ENDPOINT > localhost.
+        #[arg(long, env = "MISAKA_MTP_ENDPOINT", default_value = "http://127.0.0.1:8790")]
+        endpoint: String,
+    },
+    /// Show the FULL points leaderboard — every id's cumulative testnet points, ranked.
+    /// A read-only mirror of the service's signed ledgers (`GET /mtp/v1/points`, testnet-only).
+    Leaderboard {
+        /// MTP service base URL. Resolution: CLI > env MISAKA_MTP_ENDPOINT > localhost.
+        #[arg(long, env = "MISAKA_MTP_ENDPOINT", default_value = "http://127.0.0.1:8790")]
+        endpoint: String,
+        /// Show only the top N rows (0 = all).
+        #[arg(long, default_value_t = 0)]
+        top: usize,
+    },
+    /// Verify a published, ML-DSA-87-signed epoch ledger JSONL locally: signature +
+    /// rules-hash, and — with `--facts` — a full deterministic recompute byte-compare.
+    VerifyEpoch {
+        /// Path to the signed epoch ledger JSONL file (e.g. `points/epoch-12.0.jsonl`).
+        file: String,
+        /// Operator ML-DSA-87 pubkey as hex (2592 bytes).
+        #[arg(long)]
+        pubkey: Option<String>,
+        /// ...or a file containing that hex (pinned in-repo / on misakascan).
+        #[arg(long)]
+        pubkey_file: Option<String>,
+        /// Optional published `EpochInput` (facts) JSON to run the full recompute.
+        #[arg(long)]
+        facts: Option<String>,
+    },
+    /// Manually award a verification-required contribution (bug / verify / infra) that is
+    /// NOT auto-collected. Appends one hand-curated entry to a local manual-awards JSONL that
+    /// the epoch recompute merges alongside the auto (node/validator) facts. This is the
+    /// operator's "add points by hand after our own review" path (§ manual-award).
+    Award {
+        /// Manual-awards JSONL to append to (created if absent). The epoch recompute reads this.
+        #[arg(long, default_value = "manual-awards.jsonl")]
+        file: String,
+        /// Epoch number this award applies to (matches the service's `EpochWindow.epoch`).
+        #[arg(long)]
+        epoch: u64,
+        /// Network this award applies to (matches `EpochWindow.network`).
+        #[arg(long, default_value = "testnet-palw-10")]
+        network: String,
+        /// Ledger id / actor, e.g. `gh:alice`.
+        #[arg(long)]
+        id: String,
+        /// Category: `bug` (C2) | `verify` (C3) | `infra` (C4). `node` is auto-only and rejected here.
+        #[arg(long)]
+        category: String,
+        /// Points to award (required for `verify` / `infra`; ignored for `bug`, which uses `--severity`).
+        #[arg(long)]
+        points: Option<u64>,
+        /// Bug severity `S0|S1|S2|S3` (for `--category bug`); resolves to the rules' per-severity points.
+        #[arg(long)]
+        severity: Option<String>,
+        /// Mark this bug as the FIRST report of the issue (the first-report weighting applies).
+        #[arg(long)]
+        first_report: bool,
+        /// Mark this bug as having an accepted fix PR (the accepted-fix bonus applies).
+        #[arg(long)]
+        fix_accepted: bool,
+        /// Free-text note recorded with the award for the audit trail (reason / PR / issue link).
+        #[arg(long, default_value = "")]
+        note: String,
+    },
 }
 
 /// Port-free node launch args for `node start` / `join`: an optional RPC `--profile` plus
@@ -739,6 +905,25 @@ async fn main() -> std::process::ExitCode {
             prea::run_sign_session(ctx.output, &key.source(), &account, version, call_index, &max_relayer_fee, &to, &value, &calldata)
         }
         Command::Ask(args) => ask::run(args),
+        Command::Mtp(MtpCmd::Points { id, endpoint }) => mtp::points(&ctx, &id, &endpoint),
+        Command::Mtp(MtpCmd::Leaderboard { endpoint, top }) => mtp::leaderboard(&ctx, &endpoint, top),
+        Command::Mtp(MtpCmd::VerifyEpoch { file, pubkey, pubkey_file, facts }) => {
+            mtp::verify_epoch(ctx.output, &file, pubkey.as_deref(), pubkey_file.as_deref(), facts.as_deref())
+        }
+        Command::Mtp(MtpCmd::Collect { vantage, out }) => mtp::collect(&ctx, &vantage, out.as_deref()).await,
+        Command::Mtp(MtpCmd::Validators { out }) => mtp::validators(&ctx, out.as_deref()).await,
+        Command::Mtp(MtpCmd::Attestations { low_hash, max_blocks, out }) => {
+            mtp::attestations(&ctx, low_hash.as_deref(), max_blocks, out.as_deref()).await
+        }
+        Command::Mtp(MtpCmd::PalwLeaves { da_dir, low_hash, max_blocks, out }) => {
+            mtp::palw_leaves(&ctx, &da_dir, low_hash.as_deref(), max_blocks, out.as_deref()).await
+        }
+        Command::Mtp(MtpCmd::Register { invitation, key_file, out, attribution }) => {
+            mtp::register(&ctx, &invitation, &key_file, out.as_deref(), &attribution)
+        }
+        Command::Mtp(MtpCmd::Award { file, epoch, network, id, category, points, severity, first_report, fix_accepted, note }) => {
+            mtp::award(&ctx, &file, epoch, &network, &id, &category, points, severity.as_deref(), first_report, fix_accepted, &note)
+        }
     };
 
     match result {

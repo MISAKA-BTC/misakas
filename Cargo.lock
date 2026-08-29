@@ -5857,11 +5857,14 @@ dependencies = [
  "alloy-signer-local",
  "alloy-sol-types",
  "blake2b_simd",
+ "borsh",
  "clap 4.5.51",
  "dirs",
  "faster-hex 0.9.0",
+ "getrandom 0.2.15",
  "kaspa-addresses",
  "kaspa-bip32",
+ "kaspa-consensus",
  "kaspa-consensus-core",
  "kaspa-evm",
  "kaspa-hashes",
@@ -5869,10 +5872,15 @@ dependencies = [
  "kaspa-rpc-core",
  "kaspa-txscript",
  "kaspa-wrpc-client",
+ "libc",
  "misaka-endpoints",
+ "misaka-mtp",
+ "misaka-mtp-collectors",
+ "misaka-palw",
  "misaka-palw-pow-driver",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "toml",
  "zeroize",
@@ -5937,6 +5945,50 @@ dependencies = [
  "thiserror 1.0.64",
  "tokio",
  "tokio-postgres",
+]
+
+[[package]]
+name = "misaka-mtp"
+version = "1.1.0"
+dependencies = [
+ "borsh",
+ "faster-hex 0.9.0",
+ "kaspa-addresses",
+ "kaspa-hashes",
+ "kaspa-pq-validator-core",
+ "kaspa-txscript",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.64",
+]
+
+[[package]]
+name = "misaka-mtp-collectors"
+version = "1.1.0"
+dependencies = [
+ "misaka-mtp",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.64",
+]
+
+[[package]]
+name = "misaka-mtp-service"
+version = "1.1.0"
+dependencies = [
+ "borsh",
+ "chrono",
+ "faster-hex 0.9.0",
+ "kaspa-addresses",
+ "kaspa-hashes",
+ "kaspa-pq-validator-core",
+ "log",
+ "misaka-mtp",
+ "misaka-mtp-collectors",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.64",
+ "tokio",
 ]
 
 [[package]]

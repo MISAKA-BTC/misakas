@@ -607,17 +607,16 @@ impl Params {
         // level down: it was silently clamped to `pruning_depth` under a comment about test
         // networks. Both are asserted at construction, so a preset that violates either cannot be
         // built rather than failing days into a dispute.
-        let lattice = bundle.state.window_bind()
-            + bundle.state.window_receipt()
-            + bundle.state.window_challenge()
-            + bundle.state.window_court();
+        let lattice =
+            bundle.state.window_bind() + bundle.state.window_receipt() + bundle.state.window_challenge() + bundle.state.window_court();
         if lattice > self.blockrate.pruning_depth {
             return Err(PalwModeV2Error::Invalid(
                 "the claim lattice outlives the pruning horizon — the headers its judgements are anchored on would be deleted first",
             ));
         }
         let k = self.blockrate.ghostdag_k as u64;
-        let anticone_bound = self.blockrate.finality_depth + self.blockrate.merge_depth + 4 * self.blockrate.mergeset_size_limit * k + 2 * k + 2;
+        let anticone_bound =
+            self.blockrate.finality_depth + self.blockrate.merge_depth + 4 * self.blockrate.mergeset_size_limit * k + 2 * k + 2;
         if anticone_bound > self.blockrate.pruning_depth {
             return Err(PalwModeV2Error::Invalid(
                 "anticone finalization depth exceeds the pruning depth — the clamp that hides this is for test networks",
@@ -4645,10 +4644,8 @@ pub fn palw_rc_params(
             + 4 * params.blockrate.mergeset_size_limit * k
             + 2 * k
             + 2;
-        let lattice = bundle.state.window_bind()
-            + bundle.state.window_receipt()
-            + bundle.state.window_challenge()
-            + bundle.state.window_court();
+        let lattice =
+            bundle.state.window_bind() + bundle.state.window_receipt() + bundle.state.window_challenge() + bundle.state.window_court();
         params.blockrate.pruning_depth = params.blockrate.pruning_depth.max(lower_bound).max(lattice);
     }
     params.palw_consensus_mode = crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle);
@@ -5143,13 +5140,16 @@ mod consensus_params_id_tests {
             // class anyone can rebuild from the public GGUF must not wear one name.
             // ADR-0058 (merged work is counted): PALW_STATE_V2_VERSION 9 → 10 entered the
             // fingerprint, deliberately — deploying this build is a re-mint.
-            ("testnet-11", TESTNET11_PARAMS, // Re-pinned 2026-08-28 with the audit fixes: the ruleset id now commits to every ML-DSA
-            // context the acceptance layer verifies under (M2-23), and the transition's rules
-            // changed in ways that alter which blocks are valid (M2-3, M2-5, M2-7, M2-8, M2-11,
-            // M2-12, M2-16). A moved fingerprint is the CORRECT outcome of that — this project's
-            // own lesson is that a rule change not declared by a version bump forks the network
-            // silently. testnet-11 must be re-minted onto this build; mainnet has not launched.
-            "404f8715d962c9284c957f63031ef8d77fe43bd5c80534dc37d51eb19ad8bf7a"),
+            (
+                "testnet-11",
+                TESTNET11_PARAMS, // Re-pinned 2026-08-28 with the audit fixes: the ruleset id now commits to every ML-DSA
+                // context the acceptance layer verifies under (M2-23), and the transition's rules
+                // changed in ways that alter which blocks are valid (M2-3, M2-5, M2-7, M2-8, M2-11,
+                // M2-12, M2-16). A moved fingerprint is the CORRECT outcome of that — this project's
+                // own lesson is that a rule change not declared by a version bump forks the network
+                // silently. testnet-11 must be re-minted onto this build; mainnet has not launched.
+                "404f8715d962c9284c957f63031ef8d77fe43bd5c80534dc37d51eb19ad8bf7a",
+            ),
             ("simnet", SIMNET_PARAMS, "dae24a4cddc3bd324d7e99dc61c9e14269b9a4619fecb639836b8286e144664f"),
             ("devnet", DEVNET_PARAMS, "f8981a530bf6070e4c27696d2666673ee36a1d9f1f5b4b315c4c7400b84136c0"),
         ]

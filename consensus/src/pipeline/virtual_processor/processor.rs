@@ -1371,13 +1371,8 @@ impl VirtualStateProcessor {
                                 // Assembled against the walk state (the parent's); the transition
                                 // re-runs the stateful admission per work against its LIVE fold
                                 // state, so order inside the block cannot over-commit a budget.
-                                let (merged_owned, merged_preskips) = self.palw_v2_merged_works(
-                                    current,
-                                    &ctx.ghostdag_data,
-                                    state,
-                                    state_params,
-                                    &point,
-                                );
+                                let (merged_owned, merged_preskips) =
+                                    self.palw_v2_merged_works(current, &ctx.ghostdag_data, state, state_params, &point);
                                 let merged_refs: Vec<kaspa_consensus_core::palw_state_v2::PalwMergedWorkV1<'_>> = merged_owned
                                     .iter()
                                     .map(|owned| match owned {
@@ -4366,7 +4361,10 @@ impl VirtualStateProcessor {
             blue_score: virtual_state.ghostdag_data.blue_score,
             subsidy: 0,
         };
-        let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(self.network_id_bytes.as_slice(), Some(self.genesis.hash));
+        let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+            self.network_id_bytes.as_slice(),
+            Some(self.genesis.hash),
+        );
         let verify = |key: &[u8], message: &[u8], sig: &[u8], context: &[u8]| {
             Self::verify_mldsa87_with_context_bool(key, message, sig, context)
         };
@@ -4591,7 +4589,10 @@ impl VirtualStateProcessor {
                         return Err(format!("class {class_id} is registered under a bond that is not Active"));
                     }
                     let message = kaspa_consensus_core::palw_state_v2::palw_class_registration_message_v2(
-                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(self.network_id_bytes.as_slice(), Some(self.genesis.hash)),
+                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                            self.network_id_bytes.as_slice(),
+                            Some(self.genesis.hash),
+                        ),
                         *class_id,
                         *share_permille,
                         *activation_daa,
@@ -4640,7 +4641,10 @@ impl VirtualStateProcessor {
                         panel_params,
                         state_params,
                         point,
-                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(self.network_id_bytes.as_slice(), Some(self.genesis.hash)),
+                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                            self.network_id_bytes.as_slice(),
+                            Some(self.genesis.hash),
+                        ),
                         claim,
                         receipts,
                         Self::verify_mldsa87_with_context_bool,
@@ -4705,7 +4709,10 @@ impl VirtualStateProcessor {
                         return Err(format!("bond {bond:?} is already retiring"));
                     }
                     let message = kaspa_consensus_core::palw_state_v2::palw_bond_retirement_message_v2(
-                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(self.network_id_bytes.as_slice(), Some(self.genesis.hash)),
+                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                            self.network_id_bytes.as_slice(),
+                            Some(self.genesis.hash),
+                        ),
                         bond,
                     );
                     if !Self::verify_mldsa87_with_context_bool(
@@ -4743,7 +4750,10 @@ impl VirtualStateProcessor {
                     // the substituted key would reject every honest registration.
                     let signed_bond = kaspa_consensus_core::palw_lifecycle_objects_v2::palw_bond_registration_signed_key_v2(bond);
                     let message = kaspa_consensus_core::palw_state_v2::palw_bond_registration_message_v2(
-                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(self.network_id_bytes.as_slice(), Some(self.genesis.hash)),
+                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                            self.network_id_bytes.as_slice(),
+                            Some(self.genesis.hash),
+                        ),
                         &signed_bond,
                         pubkey,
                         operator_pubkey,
@@ -4865,7 +4875,10 @@ impl VirtualStateProcessor {
         // and mint another distinct, valid block from one solved PoW. 3c's deferral rested on
         // "only the bond holder can mint valid-signature siblings", which is a statement about a
         // signature somebody checks.
-        let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(self.network_id_bytes.as_slice(), Some(self.genesis.hash));
+        let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+            self.network_id_bytes.as_slice(),
+            Some(self.genesis.hash),
+        );
         let pre_pow_hash = kaspa_consensus_core::hashing::header::pre_pow_hash_64(header);
         kaspa_consensus_core::palw_admission_v2::check_palw_attempt_admission_full_v2(
             state,
@@ -4985,7 +4998,10 @@ impl VirtualStateProcessor {
             .get_selected_parent(header.hash)
             .map_err(|e| format!("the candidate's own ghostdag data is unreadable: {e}"))?;
         let beacon = self.palw_beacon_fact_of_candidate(selected_parent, slot).map_err(|e| e.to_string())?;
-        let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(self.network_id_bytes.as_slice(), Some(self.genesis.hash));
+        let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+            self.network_id_bytes.as_slice(),
+            Some(self.genesis.hash),
+        );
         // **The composed admission, which is what this site was always missing.**
         //
         // `network_domain` was computed here and thrown away by the `let _` below — the input the
@@ -5129,7 +5145,10 @@ impl VirtualStateProcessor {
             return Vec::new();
         };
         let txs = self.accepted_txs_from_acceptance_data(acceptance);
-        let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(self.network_id_bytes.as_slice(), Some(self.genesis.hash));
+        let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+            self.network_id_bytes.as_slice(),
+            Some(self.genesis.hash),
+        );
         let extraction = kaspa_consensus_core::palw_fp_objects_v3::palw_fp_objects_from_accepted_txs_v3(
             &txs,
             network_domain,
@@ -10617,8 +10636,10 @@ impl VirtualStateProcessor {
         // one-block poisoning that audit M1-2 found on the overlay twin applied verbatim here: a
         // side block committing a garbage `palw_state_root` made every child-disagreement fatal,
         // and the disagreement is a fact of the DAG that no retry and no other peer can remove.
-        let expected_root =
-            self.pruning_point_witness_child(pruning_point).and_then(|child| self.headers_store.get_header(child).ok()).map(|h| h.palw_state_root);
+        let expected_root = self
+            .pruning_point_witness_child(pruning_point)
+            .and_then(|child| self.headers_store.get_header(child).ok())
+            .map(|h| h.palw_state_root);
         // No child header to check against yet: REFUSE rather than write on trust. An unverifiable
         // carriage is exactly the one an attacker supplies, and the IBD can be retried once the
         // child header is in hand.

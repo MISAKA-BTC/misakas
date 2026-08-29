@@ -1,0 +1,26 @@
+[package]
+name = "misaka-mtp"
+description = "MISAKA Testnet Points Program (MTP, ADR-0027): deterministic contribution scoring, TGE settlement, and ML-DSA-87-signed epoch ledgers. Off-chain, consensus-neutral."
+publish = false
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+kaspa-addresses.workspace = true
+kaspa-hashes.workspace = true
+kaspa-txscript.workspace = true
+kaspa-pq-validator-core.workspace = true
+
+borsh.workspace = true
+faster-hex.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

@@ -27,9 +27,7 @@ use kaspa_consensus_core::palw_base0_profile::{
     PALW_RC_BASE0_CANONICAL, PALW_RC_BASE0_GEOMETRY, PalwBase0GeometryV1, base0_profile_v1,
 };
 use kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2;
-use kaspa_consensus_core::palw_qwen25_profile::{
-    PalwQwen25GeometryV1, QWEN25_1_5B, QWEN25_A16_CANONICAL, qwen25_a16_profile_v1,
-};
+use kaspa_consensus_core::palw_qwen25_profile::{PalwQwen25GeometryV1, QWEN25_1_5B, QWEN25_A16_CANONICAL, qwen25_a16_profile_v1};
 use kaspa_consensus_core::palw_step::PalwShapeProfileV3;
 use kaspa_hashes::Hash64;
 
@@ -521,7 +519,8 @@ mod tests {
         assert_eq!(base.canonical_job, QWEN25_A16_CANONICAL);
         assert_eq!(base.profile.n_ctx, 16);
 
-        let coder = canonical_class_by_model_id_v1(&court(), "Qwen/Qwen2.5-Coder-1.5B-Instruct").expect("the sibling is in the registry");
+        let coder =
+            canonical_class_by_model_id_v1(&court(), "Qwen/Qwen2.5-Coder-1.5B-Instruct").expect("the sibling is in the registry");
         assert_eq!(coder.profile.n_ctx, 18, "the sibling takes the next unburned rung of the ladder");
         assert_ne!(coder.class_id(), base.class_id(), "siblings must be DIFFERENT classes — the chain refuses a duplicate id");
         // And the whole reason registration needs a model id: the two entries are
@@ -584,9 +583,7 @@ mod tests {
         let shape_of = |c: &Qwen36CanonicalClassV1| crate::qwen36::Qwen36ShapeV1 {
             layer_types: (0..c.geometry.layer_count as usize)
                 .map(|i| {
-                    if c.geometry.full_attention_interval != 0
-                        && (i + 1).is_multiple_of(c.geometry.full_attention_interval as usize)
-                    {
+                    if c.geometry.full_attention_interval != 0 && (i + 1).is_multiple_of(c.geometry.full_attention_interval as usize) {
                         crate::qwen36::Qwen36LayerKind::FullAttention
                     } else {
                         crate::qwen36::Qwen36LayerKind::LinearAttention

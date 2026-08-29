@@ -14,17 +14,17 @@
 //! row, never papered over.
 use kaspa_consensus_core::hashing::header::{hash as header_hash, pre_pow_hash_64};
 use kaspa_consensus_core::header::Header;
-use kaspa_consensus_core::palw_attempt_v2::{
-    PalwAttemptEnvelopeV2, attempt_id_v2, palw_job_anchor_v1, palw_network_domain_v2,
-};
+use kaspa_consensus_core::palw_attempt_v2::{PalwAttemptEnvelopeV2, attempt_id_v2, palw_job_anchor_v1, palw_network_domain_v2};
 use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
 use kaspa_hashes::Hash64;
 use misaka_palw_base0::qwen25_a16_backend::{qwen25_a16_material_decode_v1, qwen25_a16_prompt_for_anchor};
 use misaka_palw_base0::qwen36_backend::{qwen36_material_decode_v1, qwen36_prompt_for_anchor};
 use serde_json::{Value, json};
 
-const QWEN36_CLASS: &str = "ec7bbcbffe13f36f1c2c418c65bdab840dd40b2bc22b217522dae836153078ddb77a92fb0645d34f98e9e3a1302e4543448a3924b3cd152fc74774ad3f02fb3f";
-const QWEN25_CLASS: &str = "f942e268f43f05461f648adcb76a1300dbedd93f022d3bba0e88c2ef4349e38f3ac1b70871f3b5195b3b2fb3da221f9c29fe291773a094596add6951aa7902c1";
+const QWEN36_CLASS: &str =
+    "ec7bbcbffe13f36f1c2c418c65bdab840dd40b2bc22b217522dae836153078ddb77a92fb0645d34f98e9e3a1302e4543448a3924b3cd152fc74774ad3f02fb3f";
+const QWEN25_CLASS: &str =
+    "f942e268f43f05461f648adcb76a1300dbedd93f022d3bba0e88c2ef4349e38f3ac1b70871f3b5195b3b2fb3da221f9c29fe291773a094596add6951aa7902c1";
 const QWEN36_VOCAB: usize = 248_320;
 const QWEN25_VOCAB: usize = 151_936;
 const QWEN36_JOB: (u32, u32) = (7, 2); // QWEN36_RC_CANONICAL
@@ -143,7 +143,8 @@ fn main() {
             continue; // the floor's job is integer arithmetic, not tokens — out of scope here
         };
         let pre_pow = pre_pow_hash_64(&header);
-        let bond = TransactionOutpoint::new(TransactionId::from_bytes(a.executor_bond.transaction_id.as_bytes()), a.executor_bond.index);
+        let bond =
+            TransactionOutpoint::new(TransactionId::from_bytes(a.executor_bond.transaction_id.as_bytes()), a.executor_bond.index);
         let anchor = palw_job_anchor_v1(domain, pre_pow, a.class_id, &bond);
         let prompt: Vec<usize> = if class_hex == QWEN36_CLASS {
             qwen36_prompt_for_anchor(anchor, vocab, job.0)
@@ -153,13 +154,14 @@ fn main() {
         let claim = attempt_id_v2(a);
         // `--retention` is comma-separated: each producer holds only its own executions, and this
         // host may run several (the QWEN36 producer and the QWEN25 producer are different nodes).
-        let generated: Option<Vec<u32>> = retention.split(',').find_map(|dir| std::fs::read(format!("{dir}/{claim}.material")).ok()).and_then(|bytes| {
-            if class_hex == QWEN36_CLASS {
-                qwen36_material_decode_v1(&bytes).map(|r| r.generated)
-            } else {
-                qwen25_a16_material_decode_v1(&bytes).map(|r| r.generated)
-            }
-        });
+        let generated: Option<Vec<u32>> =
+            retention.split(',').find_map(|dir| std::fs::read(format!("{dir}/{claim}.material")).ok()).and_then(|bytes| {
+                if class_hex == QWEN36_CLASS {
+                    qwen36_material_decode_v1(&bytes).map(|r| r.generated)
+                } else {
+                    qwen25_a16_material_decode_v1(&bytes).map(|r| r.generated)
+                }
+            });
         rows.push(json!({
             "block": dumped_hash,
             "daa": h.get("daaScore").map(u64of),

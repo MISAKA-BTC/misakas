@@ -326,8 +326,10 @@ impl PalwProducerService {
             info!("[{PALW_PRODUCER}] not producing (no signing key)");
             return;
         }
-        let network_domain =
-            kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(self.config.network_id.as_bytes(), Some(self.config.genesis_hash));
+        let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+            self.config.network_id.as_bytes(),
+            Some(self.config.genesis_hash),
+        );
         info!("[{PALW_PRODUCER}] starting (bond={bond}, key={})", self.config.key_path);
 
         let mut produced = 0u64;

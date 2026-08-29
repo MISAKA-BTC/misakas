@@ -61,7 +61,7 @@ fn probe_port(host: &str, port: u16, timeout: Duration) -> bool {
         .unwrap_or(false)
 }
 
-async fn try_connect(url: &str, timeout: Duration) -> Result<KaspaRpcClient, String> {
+pub(crate) async fn try_connect(url: &str, timeout: Duration) -> Result<KaspaRpcClient, String> {
     let client = KaspaRpcClient::new(WrpcEncoding::Borsh, Some(url), None, None, None).map_err(|e| e.to_string())?;
     // One-shot (Fallback): doctor does not keep a reconnect loop alive.
     let options = ConnectOptions {

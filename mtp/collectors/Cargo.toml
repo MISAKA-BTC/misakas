@@ -1,0 +1,25 @@
+[package]
+name = "misaka-mtp-collectors"
+description = "MISAKA Testnet Points Program (MTP, ADR-0027) I/O layer: normalizes raw contribution facts (p2p-crawler / chain-indexer / github-sync / campaign-forms) into a fact store, applies §5 Sybil resistance (node-rank decrement + /24-ASN cap), and folds them into the deterministic-core EpochInput. Off-chain, consensus-neutral."
+publish = false
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "misaka_mtp_collectors"
+path = "src/lib.rs"
+
+[dependencies]
+misaka-mtp.workspace = true
+
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

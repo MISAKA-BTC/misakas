@@ -15,6 +15,13 @@ name = "misaka"
 path = "src/main.rs"
 
 [dependencies]
+kaspa-consensus.workspace = true
+misaka-palw.workspace = true
+misaka-mtp.workspace = true
+misaka-mtp-collectors.workspace = true
+getrandom.workspace = true
+libc = "0.2"
+borsh.workspace = true
 kaspa-addresses.workspace = true
 kaspa-consensus-core.workspace = true
 kaspa-pq-validator-core.workspace = true
@@ -49,14 +56,15 @@ alloy-primitives = { version = "0.8", features = ["rlp"], optional = true }
 alloy-sol-types = { version = "0.8", optional = true }
 kaspa-bip32 = { workspace = true, features = ["legacy-secp256k1"], optional = true }
 # BLAKE2b helpers for the PREA F003 v0x02 root preimage (signer only).
-kaspa-hashes = { workspace = true, optional = true }
+kaspa-hashes.workspace = true
 # Wipe in-memory key/mnemonic buffers on drop (audit M-07).
 zeroize = { workspace = true, optional = true }
 
 [features]
-evm-send = ["dep:alloy-consensus", "dep:alloy-signer", "dep:alloy-signer-local", "dep:alloy-eips", "dep:alloy-primitives", "dep:alloy-sol-types", "dep:kaspa-bip32", "dep:kaspa-hashes", "dep:zeroize"]
+evm-send = ["dep:alloy-consensus", "dep:alloy-signer", "dep:alloy-signer-local", "dep:alloy-eips", "dep:alloy-primitives", "dep:alloy-sol-types", "dep:kaspa-bip32", "dep:zeroize"]
 
 [dev-dependencies]
+tempfile.workspace = true
 # Round-trip the PREA signer's F003 v0x02 output through the REAL precompile logic.
 kaspa-evm.workspace = true
 

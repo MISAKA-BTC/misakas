@@ -193,11 +193,26 @@ mod a16_family {
         let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) = &p.palw_consensus_mode else { panic!() };
         for nctx in [15u32, 16, 17, 18, 20, 24, 32, 48, 64, 90, 128] {
             let g = PalwQwen25GeometryV1 { n_ctx: nctx, ..QWEN25_1_5B };
-            let profile = match qwen25_a16_profile_v1(g) { Ok(pr) => pr, Err(e) => { eprintln!("nctx {nctx}: profile err {e:?}"); continue } };
+            let profile = match qwen25_a16_profile_v1(g) {
+                Ok(pr) => pr,
+                Err(e) => {
+                    eprintln!("nctx {nctx}: profile err {e:?}");
+                    continue;
+                }
+            };
             let canonical = crate::palw_base0_profile::rc_job_context(&profile, QWEN25_A16_CANONICAL.0, QWEN25_A16_CANONICAL.1);
             let reg = crate::palw_class_admission_v2::palw_post_genesis_registration_v1(
-                profile.clone(), canonical.clone(), kaspa_hashes::Hash64::default(), 1, 1, 5, 0,
-                crate::palw_state_v2::PalwBondKeyV2(crate::tx::TransactionOutpoint::new(kaspa_hashes::Hash64::default(), 0)), vec![]).unwrap();
+                profile.clone(),
+                canonical.clone(),
+                kaspa_hashes::Hash64::default(),
+                1,
+                1,
+                5,
+                0,
+                crate::palw_state_v2::PalwBondKeyV2(crate::tx::TransactionOutpoint::new(kaspa_hashes::Hash64::default(), 0)),
+                vec![],
+            )
+            .unwrap();
             let verdict = crate::palw_class_admission_v2::verify_class_admission_v2(b, &profile, &canonical, &reg);
             match nctx {
                 16 => {

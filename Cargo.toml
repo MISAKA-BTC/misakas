@@ -27,6 +27,9 @@ members = [
     "kaspa-pq-validator-core",
     "kaspa-pq-signer",
     "misaka-cli",
+    "mtp",
+    "mtp/collectors",
+    "mtp/service",
     "misaka-endpoints",
     "misaka-palw",
     "misaka-palw-shadow",
@@ -216,6 +219,8 @@ include = [
 ]
 
 [workspace.dependencies]
+misaka-mtp = { version = "1.1.0", path = "mtp" }
+misaka-mtp-collectors = { version = "1.1.0", path = "mtp/collectors" }
 kaspa-testing-integration = { version = "1.1.0", path = "testing/integration" }
 kaspa-addresses = { version = "1.1.0", path = "crypto/addresses" }
 kaspa-addressmanager = { version = "1.1.0", path = "components/addressmanager" }

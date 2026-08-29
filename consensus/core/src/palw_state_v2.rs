@@ -1813,7 +1813,9 @@ pub enum PalwStateV2Error {
         "class {class} cannot be registered: its registrant already holds {already} sompi of exposure and this registration costs {price}, against {collateral} of collateral"
     )]
     RegistrationExposureUnaffordable { class: Hash64, already: u128, price: u128, collateral: u64 },
-    #[error("bond {0:?} registers a key this chain already holds a bond for — one key, one bond, or seats can be manufactured by splitting collateral")]
+    #[error(
+        "bond {0:?} registers a key this chain already holds a bond for — one key, one bond, or seats can be manufactured by splitting collateral"
+    )]
     DuplicateBondKey(PalwBondKeyV2),
     #[error(
         "class {class} declares {got} sompi per work unit but this network's unit is {want} — weight per sompi at risk is not a class's to choose"
@@ -3370,8 +3372,7 @@ pub fn apply_palw_transition_v4(
             PalwBlockWorkV3::Attempt(envelope) => match admission {
                 None => Some("a merged attempt on a caller that supplied no admission params".to_string()),
                 Some(admission) => {
-                    match crate::palw_admission_v2::check_palw_attempt_admission_v2(&builder.state, params, admission, ctx, envelope)
-                    {
+                    match crate::palw_admission_v2::check_palw_attempt_admission_v2(&builder.state, params, admission, ctx, envelope) {
                         Err(refused) => Some(refused.to_string()),
                         Ok(_) => {
                             let checkpoint = builder.checkpoint();

@@ -57,10 +57,8 @@ impl PalwBackendRegistry {
     /// A node that cannot serve that class says so — it does not fall back to one it can, because
     /// producing or judging under a class the chain did not name is worse than not participating.
     pub fn resolve(&self, class_id: Hash64, artifact_root: Hash64) -> Result<Box<dyn PalwExecutionBackendV1>, String> {
-        let dense: Vec<misaka_palw_base0::artifact::Base0ArtifactV1> =
-            self.class_artifacts.iter().map(|a| (**a).clone()).collect();
-        if let Ok(resolved) = misaka_palw_base0::classes::resolve_class_v1(&self.court, class_id, artifact_root, &dense)
-        {
+        let dense: Vec<misaka_palw_base0::artifact::Base0ArtifactV1> = self.class_artifacts.iter().map(|a| (**a).clone()).collect();
+        if let Ok(resolved) = misaka_palw_base0::classes::resolve_class_v1(&self.court, class_id, artifact_root, &dense) {
             return Ok(Box::new(misaka_palw_base0::backend::Base0Backend::new(resolved)));
         }
         // The hybrid class. Its id is the court profile's — the same derivation the registration
@@ -88,9 +86,8 @@ impl PalwBackendRegistry {
                 entry.model_id
             ));
         }
-        if let Some(entry) = misaka_palw_base0::classes::qwen36_canonical_classes_v1()
-            .into_iter()
-            .find(|c| c.class_id() == Some(class_id))
+        if let Some(entry) =
+            misaka_palw_base0::classes::qwen36_canonical_classes_v1().into_iter().find(|c| c.class_id() == Some(class_id))
         {
             if let Some((_, artifact)) = self.qwen36_artifacts.iter().find(|(root, _)| *root == artifact_root) {
                 return Ok(Box::new(misaka_palw_base0::qwen36_backend::Qwen36Backend::new(
