@@ -5276,6 +5276,7 @@ dependencies = [
  "misaka-palw",
  "misaka-palw-base0",
  "misaka-palw-pow-driver",
+ "misaka-palw-sdk",
  "num_cpus",
  "rand 0.8.6",
  "rayon",
@@ -6061,6 +6062,15 @@ version = "1.1.0"
 dependencies = [
  "cc",
  "kaspa-consensus-core",
+]
+
+[[package]]
+name = "misaka-palw-sdk"
+version = "1.1.0"
+dependencies = [
+ "kaspa-consensus-core",
+ "kaspa-hashes",
+ "misaka-palw-base0",
 ]
 
 [[package]]
