@@ -2296,8 +2296,14 @@ pub struct GetPalwProducerFactsResponse {
     /// Empty when this bond may produce now; otherwise the reason it may not, which is exactly
     /// what `PalwProducerFactsV2::ready_to_produce` says — one answer, not two.
     pub not_ready_reason: String,
-    /// **Every PALW bond outpoint whose collateral may not be spent right now**, `txid:index` with
-    /// a 128-hex transaction id (audit3 H3).
+    /// **Every outpoint a wallet must not spend**, `txid:index` with a 128-hex transaction id.
+    ///
+    /// Two sources, deliberately in ONE list so a wallet cannot read half of it (audit3 H3, H12):
+    /// PALW bond collateral locked by consensus, and the outpoints this NODE has reserved to fund
+    /// the lifecycle objects its own panel carries (`--palw-fee-outpoint` and every rolling
+    /// successor). The second is node-local — the chain has no opinion about which of a producer's
+    /// outputs its panel intends to spend — and it is exactly what `wallet send` selects, because
+    /// it sits at the producer's pay address beside its mining rewards.
     ///
     /// Answered whenever this is a `ConsensusV2` network, INCLUDING for a request that names no
     /// class — a wallet needs this and has no class id to offer. `get_stake_bonds` reads the DNS

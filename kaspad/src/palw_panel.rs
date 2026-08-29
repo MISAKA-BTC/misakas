@@ -338,6 +338,10 @@ impl PalwPanelService {
         {
             candidates.push(outpoint);
         }
+        // Every candidate is off-limits to a wallet, whether or not this tick picks it (audit3 H12).
+        for outpoint in candidates.iter() {
+            self.flow_context.palw_reserve_outpoint(*outpoint);
+        }
         for outpoint in candidates.iter().filter(|o| is_free(o)) {
             if let Some(entry) = session.get_virtual_utxo_entry(*outpoint) {
                 return Some((*outpoint, entry));
@@ -752,6 +756,12 @@ impl PalwPanelService {
     }
 
     fn persist_fee_outpoint(&self, outpoint: TransactionOutpoint) {
+        // **Tell the wallet before telling the disk** (audit3 H12). This output funds every
+        // lifecycle object this node carries, it sits at the producer's own pay address next to
+        // its mining rewards, and nothing else stops `wallet send` selecting it. Proven live on
+        // 2026-08-29: a send from the producer's address chose the panel's fee outpoint and was
+        // rejected only because the panel's own carrier had already spent it in the mempool.
+        self.flow_context.palw_reserve_outpoint(outpoint);
         let _ = std::fs::create_dir_all(&self.config.state_dir);
         if let Err(e) = std::fs::write(self.fee_state_path(), format!("{}:{}", outpoint.transaction_id, outpoint.index)) {
             warn!("[{PALW_PANEL}] cannot persist the rolling fee outpoint: {e} — a restart will fall back to --palw-fee-outpoint");

@@ -263,6 +263,37 @@ mod tests {
         Transaction::new(TX_VERSION, vec![], vec![], 0, subnetwork_id, 0, vec![])
     }
 
+    /// **A node's own reserved funding outpoints are answerable, and de-duplicated** (audit3 H12).
+    ///
+    /// Found in production, not by reading: `wallet send` from the producer's pay address selected
+    /// the panel's `--palw-fee-outpoint` and was rejected only because the panel's own carrier had
+    /// already spent it in the mempool that second. Had the timing differed the send would have
+    /// succeeded and taken the panel's funding — and a panel that cannot carry a lifecycle object
+    /// is the failure the M2-10 startup gate exists to prevent: "not a lost dispute, it is a
+    /// slashed bond". H3 taught the wallet about consensus-locked collateral; this is the second
+    /// reserved outpoint, and it is node-local so consensus cannot answer for it.
+    #[test]
+    fn reserved_outpoints_are_declared_once_and_come_back_sorted() {
+        use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
+        let reserved = ReservedOutpoints::default();
+        assert!(reserved.all().is_empty(), "a node reserves nothing until its panel says so");
+
+        let configured = TransactionOutpoint { transaction_id: TransactionId::from_u64_word(0xBB), index: 41 };
+        let rolling = TransactionOutpoint { transaction_id: TransactionId::from_u64_word(0xAA), index: 0 };
+        reserved.reserve(configured);
+        reserved.reserve(rolling);
+        reserved.reserve(configured); // the panel re-declares on every tick
+
+        let all = reserved.all();
+        assert_eq!(all.len(), 2, "re-declaring is idempotent; both the configured and the rolling outpoint are held");
+        assert_eq!(all[0], rolling, "and the answer is ordered, so two readers of this RPC agree");
+        assert_eq!(all[1], configured);
+
+        // The property the wallet actually depends on: the panel's fee outpoint is in the set the
+        // node hands out, so the input selector can skip it.
+        assert!(all.contains(&configured), "the configured --palw-fee-outpoint must be answerable");
+    }
+
     /// **One peer's `found: false` must not end a node's life** (audit3 H2/H9).
     ///
     /// The server holds exactly one pruning-point snapshot and serves it only on an exact match, so
@@ -368,6 +399,19 @@ pub struct FlowContextInner {
     /// Consecutive post-commit IBDs that failed ONLY because a peer could not serve a
     /// pruning-point sidecar (audit3 H2/H9). Reset by any IBD that gets past them.
     sidecar_shortfalls: Arc<std::sync::atomic::AtomicU32>,
+    /// **Outpoints this NODE has reserved and no wallet may spend** (audit3 H12).
+    ///
+    /// The PALW panel funds every lifecycle object it carries — a court disclosure, a verdict, a
+    /// quorum — from `--palw-fee-outpoint` or the rolling outpoint it persists from one. That
+    /// output sits at the producer's own pay address, which is also where its mining rewards land,
+    /// so it is exactly what an operator's `wallet send` selects. Nothing told the wallet, and the
+    /// consequence is the one the M2-10 startup gate exists to prevent: a node that can open claims
+    /// and cannot answer for them, which on a clocked ladder "is not a lost dispute, it is a
+    /// slashed bond".
+    ///
+    /// Node-local rather than chain state, which is why it lives here and not in consensus: the
+    /// chain has no opinion about which of a producer's outputs its own panel intends to spend.
+    palw_reserved_outpoints: Arc<ReservedOutpoints>,
     pub address_manager: Arc<Mutex<AddressManager>>,
     connection_manager: RwLock<Option<Arc<ConnectionManager>>>,
     mining_manager: MiningManagerProxy,
@@ -410,6 +454,28 @@ impl Drop for IbdRunningGuard {
 
 /// Render a peer's handshake fingerprint for an error message, distinguishing "an older build that
 /// does not send this" from "a different value", since the operator response differs.
+/// **The outpoints this node has reserved for its own use** (audit3 H12).
+///
+/// Its own type rather than a bare set behind a lock, so the behaviour a wallet depends on —
+/// declaring twice is idempotent, and the answer is ordered so two readers agree — is stated and
+/// testable instead of being three lines inside `FlowContext`.
+#[derive(Default)]
+pub struct ReservedOutpoints {
+    inner: RwLock<std::collections::HashSet<kaspa_consensus_core::tx::TransactionOutpoint>>,
+}
+
+impl ReservedOutpoints {
+    pub fn reserve(&self, outpoint: kaspa_consensus_core::tx::TransactionOutpoint) {
+        self.inner.write().insert(outpoint);
+    }
+
+    pub fn all(&self) -> Vec<kaspa_consensus_core::tx::TransactionOutpoint> {
+        let mut out: Vec<_> = self.inner.read().iter().copied().collect();
+        out.sort_by(|a, b| (a.transaction_id, a.index).cmp(&(b.transaction_id, b.index)));
+        out
+    }
+}
+
 /// **Does a post-commit IBD failure mean this node can no longer vouch for what it is running?**
 ///
 /// Split out as a pure rule so it can be stated and tested rather than inferred from a field, an
@@ -544,6 +610,7 @@ impl FlowContext {
                 handoff_tx: broadcast::channel(CHALLENGER_NOMINATION_BACKLOG).0,
                 active_consensus_replaced: Default::default(),
                 sidecar_shortfalls: Default::default(),
+                palw_reserved_outpoints: Default::default(),
                 hub,
                 address_manager,
                 connection_manager: Default::default(),
@@ -1203,6 +1270,18 @@ impl FlowContext {
             self.chain_participation().release_after_noop_ibd(lease);
         }
         replaced
+    }
+
+    /// Declare an outpoint this node's own PALW panel intends to spend, so a wallet asking the
+    /// node which of its outputs are untouchable is told about it (audit3 H12). Idempotent; both
+    /// the configured `--palw-fee-outpoint` and every rolling successor are declared.
+    pub fn palw_reserve_outpoint(&self, outpoint: kaspa_consensus_core::tx::TransactionOutpoint) {
+        self.palw_reserved_outpoints.reserve(outpoint);
+    }
+
+    /// Everything this node has reserved, for the wallet-facing RPC.
+    pub fn palw_reserved_outpoints(&self) -> Vec<kaspa_consensus_core::tx::TransactionOutpoint> {
+        self.palw_reserved_outpoints.all()
     }
 
     /// An IBD got past the sidecars, so the run of shortfalls is over.

@@ -192,7 +192,7 @@ async fn locked_bond_outpoints(nv: &NodeView) -> Result<std::collections::HashSe
             CliError::new(
                 exit::GENERIC,
                 format!(
-                    "getPalwProducerFacts: {e} — refusing to select inputs without knowing which outputs are PALW bond                      collateral (spending one disqualifies the carrying block, and the send never lands)"
+                    "getPalwProducerFacts: {e} — refusing to select inputs without knowing which outputs this node has reserved: PALW bond collateral (spending it disqualifies the carrying block) and the panel's own fee outpoint (spending it leaves the node unable to answer a court, which costs the bond)"
                 ),
             )
         })?;
