@@ -162,6 +162,10 @@ use std::collections::{BTreeMap, BTreeSet};
 ///   -work path makes — instead of a hand-picked subset of it. Merged blocks the chain refuses for
 ///   epoch budget or exposure are no longer paid, and a merged receipt spend is no longer denied.
 ///   Different blocks are paid, so different coinbases are valid.
+/// * H4: an unanswered OPENING rung now charges neither side. It charged the challenger, so on the
+///   two genesis classes with no court responder — where the responder's silence is a certainty —
+///   accusing was a guaranteed loss and fraud was unpunishable. A bond's `slashed` is state, so
+///   two builds disagree about the state root of any block that sweeps such a session.
 ///
 /// Both are `apply_palw_transition`/coinbase semantics with an unchanged root schema, so nothing
 /// but this number tells two builds they disagree. It is hashed into the params fingerprint, so
@@ -3547,6 +3551,44 @@ fn rearm_after_challenger_side_close(
     // registrant could make challenging its own class ruinous and buy itself immunity from the
     // court. The floor is the registry's own.
     builder.slash_seat(challenger_bond, claim.reserved, builder.params.min_collateral_sompi())?;
+    rearm_claim_after_court_close(builder, ctx, claim_id, claim)
+}
+
+/// The same re-arm, charging NOBODY.
+///
+/// **A responder's silence must not cost the accuser** (audit3 H4). Audit M2-5 established that a
+/// silence at the OPENING rung is not a conviction — a responder that has not shown it can play at
+/// all has not defaulted on anything — and routed round 0 to the challenger-side close. But that
+/// close SLASHES the challenger, so the rule became: if the accused says nothing, the accuser pays.
+/// On the two genesis classes that have no `bisect_prefix_state` in this tree — 40 % of cadence
+/// between them — the responder's silence is not a possibility but a certainty, so accusing them
+/// was a guaranteed loss and there was no sequence of moves by which an honest detector could ever
+/// win. Arithmetic fraud there was unpunishable AND reporting it was punished.
+///
+/// Neither side is charged here. The accused is not convicted, which is M2-5's property; the
+/// accuser is not fined for the accused's silence, which is this one. The accusation still costs
+/// its transaction fees and the use of its own collateral for the rung window, which is the right
+/// price for a case that produced no exchange — and it does not re-open the griefing M2-5's charge
+/// exists to stop, because a responder that CAN move answers and never reaches this arm, while a
+/// challenger that goes quiet is a different party at a later rung and still pays.
+fn rearm_after_unanswered_opening(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    claim_id: Hash64,
+    claim: &PalwClaimStateV2,
+) -> Result<(), PalwStateV2Error> {
+    rearm_claim_after_court_close(builder, ctx, claim_id, claim)
+}
+
+/// Re-arm a claim's path to `Final` after its last open session ends: never earlier than the
+/// licensed floor, never in this block's past. Shared so the charging and non-charging closes
+/// cannot drift apart about what "the session ended" does to the claim.
+fn rearm_claim_after_court_close(
+    builder: &mut TransitionBuilder<'_>,
+    ctx: &PalwBlockContextV2,
+    claim_id: Hash64,
+    claim: &PalwClaimStateV2,
+) -> Result<(), PalwStateV2Error> {
     if !builder.state.open_courts_by_claim.contains_key(&claim_id)
         && let PalwClaimPhaseV2::ReceiptLicensed { licensed_daa } = claim.phase
     {
@@ -3659,7 +3701,11 @@ fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCon
                     // supported by an exchange. A responder that has answered once and then goes
                     // silent still loses at the next rung, which is the case the ladder is for.
                     crate::palw_bisect::PalwBisectPartyV1::Responder if session.ladder.round() == 0 => {
-                        rearm_after_challenger_side_close(builder, ctx, session.claim, &claim, session.challenger_bond)?;
+                        // Ends the session, convicts nobody, and FINES nobody — see
+                        // `rearm_after_unanswered_opening` (audit3 H4). Routing this to the
+                        // challenger-side close made the accuser pay for the accused's silence,
+                        // which on a class with no responder is a certainty rather than a risk.
+                        rearm_after_unanswered_opening(builder, ctx, session.claim, &claim)?;
                     }
                     crate::palw_bisect::PalwBisectPartyV1::Responder => {
                         // Same treatment a proven fault gets, and for the same reason: an
@@ -7609,6 +7655,70 @@ pub(crate) mod tests {
             "the claim survives an accusation nobody supported — two of three genesis classes cannot answer a \
              rung at all, so convicting on opening-rung silence is a machine for voiding honest claims"
         );
+    }
+
+    /// **An unanswered opening fines NOBODY — including the accuser** (audit3 H4).
+    ///
+    /// The test above proves the accused is not convicted, and says in its own comment that its
+    /// fixture cannot tell the charge apart: challenger and executor are one bond there. With two
+    /// bonds the second half of the rule becomes visible, and it was wrong. Round 0 was routed to
+    /// `rearm_after_challenger_side_close`, whose FIRST line slashes the challenger — so on the two
+    /// genesis classes that have no `bisect_prefix_state` in this tree, where the responder's
+    /// silence is a certainty rather than a risk, accusing was a guaranteed loss. There was no
+    /// sequence of moves by which an honest detector could win: arithmetic fraud across 40 % of
+    /// cadence was unpunishable, and reporting it was the only punishable act.
+    #[test]
+    fn an_unanswered_opening_rung_charges_neither_side() {
+        let p = params_with_ladder();
+        // Two bonds, so "who paid" is answerable at all.
+        let mut objects = register_class_and_bond();
+        objects.push(PalwConsensusObjectV2::BondRegistered {
+            bond: bond_key(2),
+            pubkey: vec![8; 4],
+            operator_pubkey: op_key(22),
+            collateral: 1_000,
+            payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A22),
+            signature: Vec::new(),
+        });
+        let genesis = PalwChainStateV2::genesis();
+        let (s1, _) = apply(&genesis, &p, &ctx(1, 100, 1), &objects, None);
+        let env = attempt(40, 1);
+        let claim_id = attempt_id_v2(&env.attempt);
+        let (s2, _) = apply(&s1, &p, &ctx(2, 101, 2), &[], Some(&env));
+        let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: op_id(21) }];
+        let (s3, _) =
+            apply(&s2, &p, &ctx(3, 102, 3), &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }], None);
+        let (s4, _) = apply(
+            &s3,
+            &p,
+            &ctx(4, 103, 4),
+            &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: seat_says(true) }],
+            None,
+        );
+        // Executor is bond 1 (it produced the attempt); the CHALLENGER is bond 2.
+        let (s5, _) = apply(&s4, &p, &ctx(5, 104, 5), &[court_open(claim_id, h64(31), bond_key(1), bond_key(2))], None);
+        let sid = court_session_of(claim_id, h64(31), bond_key(1), bond_key(2));
+        assert!(s5.court_session(&sid).is_some(), "the court opened");
+        assert_eq!(s5.bond(&bond_key(2)).unwrap().slashed, 0, "nothing charged yet");
+
+        // The responder never moves, and the opening rung runs out.
+        let (s6, _) = apply(&s5, &p, &ctx(6, 120, 6), &[], None);
+        let (s7, _) = apply(&s6, &p, &ctx(7, 125, 7), &[], None);
+        assert!(s7.court_session(&sid).is_none(), "the session is decided and gone");
+
+        // Neither side pays. The accused is not convicted — that is M2-5's half, above — and the
+        // ACCUSER is not fined for the accused's silence, which is this one.
+        assert!(
+            !matches!(s7.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Voided { .. }),
+            "an accusation that produced no exchange must not convict the producer"
+        );
+        assert_eq!(
+            s7.bond(&bond_key(2)).unwrap().slashed,
+            0,
+            "and the challenger must not be fined for a silence it did not cause — on a class with no responder that \
+             makes accusing a guaranteed loss, and fraud there unpunishable"
+        );
+        assert_eq!(s7.bond(&bond_key(1)).unwrap().slashed, 0, "nor is the accused charged at the opening rung");
     }
 
     /// The other half of the same rule, and the one that survived the opening rung's re-clocking

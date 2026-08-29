@@ -146,6 +146,11 @@ impl PalwExecutionBackendV1 for Base0Backend {
         })
     }
 
+    /// BASE-0 is the family that can take a court's turn: both methods below are real (audit3 H4).
+    fn supports_court(&self) -> bool {
+        true
+    }
+
     fn bisect_prefix_state(&self, material: &[u8], index: u64) -> Option<kaspa_hashes::Hash64> {
         let (binding, tiles, _, _, _) = base0_material_decode_v1(material).ok()?;
         let leaves = leaves_by_position(&binding, &tiles);

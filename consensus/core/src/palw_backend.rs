@@ -129,6 +129,23 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         None
     }
 
+    /// **Can this backend take a court's turn at all?**
+    ///
+    /// `false` by default, because the two methods above are defaulted: a family that has not
+    /// implemented them cannot disclose at a rung and cannot assemble a close, so a dispute about
+    /// one of its claims can never leave round 0 whichever party is honest (audit3 H4). That was
+    /// invisible — it read as an ordinary silence — and it decided real money: the chain charged
+    /// the ACCUSER for it, so accusing such a class was a guaranteed loss and its arithmetic was
+    /// unpunishable.
+    ///
+    /// The charge is gone (`rearm_after_unanswered_opening`), but the underlying fact is not, and
+    /// a node should say it out loud at startup rather than let an operator discover it from a
+    /// court that never resolves. Declared rather than probed, because probing would need a
+    /// capture and there is none at boot.
+    fn supports_court(&self) -> bool {
+        false
+    }
+
     /// **The terminal move's evidence: everything the court needs to recompute step `index`.**
     ///
     /// Returned by BOTH sides, and deliberately the same call for both: an honest executor closing

@@ -820,7 +820,50 @@ impl Params {
         let mut normalized = self.clone();
         // Active at genesis stays distinguishable; anything else is "not yet".
         normalized.for_each_fence(&mut |score| *score = if *score == 0 { 0 } else { u64::MAX });
+        normalized.normalize_values_a_scheduled_fence_drags_with_it();
         normalized.consensus_params_id()
+    }
+
+    /// **A value that only takes effect AT a fence must leave the identity with it** (audit3 H1).
+    ///
+    /// Normalising the fences is not enough on its own, because some fences cannot be armed alone.
+    /// `with_registered_models` — which wraps BOTH `From<NetworkType>` and `From<NetworkId>`, so it
+    /// is what every node actually runs — installs `ModelCostTable::palw_metal_registered()` the
+    /// moment `vlt_shadow_activation_daa_score` stops being `u64::MAX`, and
+    /// `shipped_presets_are_either_dormant_or_fully_forkable` fails the BUILD on a preset that
+    /// schedules the fence over an empty table. `consensus_params_id` hashes `DnsParams` as one
+    /// borsh blob, so the table is inside the identity — and the fence was normalised out of it
+    /// while the four `ModelCostEntry`s it drags along were not.
+    ///
+    /// The consequence is precisely the one M1-6 exists to remove, on the one upgrade this file
+    /// documents as the next mainnet fork: operator A schedules the VLT shadow fork at a FUTURE
+    /// height H, its identity differs from every un-upgraded peer's, and `flow_context` refuses the
+    /// connection outright. The mesh splits into two disjoint sets that agree about every block
+    /// either can produce today — H is still in the future — until the last operator crosses over.
+    ///
+    /// The R-2 regression test misses it because it builds its VLT case from the raw const, so
+    /// `with_registered_models` never runs and both sides keep the empty table. That is the trap
+    /// `shipped_presets_have_pinned_fingerprints` records two hundred lines below it: pin the
+    /// MATERIALIZED value, because the const is a number no node ever reports.
+    ///
+    /// The same shape applies to `TokenParams`: its fences cannot be armed without also freezing
+    /// the emission constants that are `TBD` while it is inert, and those are not fences either.
+    fn normalize_values_a_scheduled_fence_drags_with_it(&mut self) {
+        let Some(dns) = self.dns_params.as_mut() else {
+            return;
+        };
+        // Read AFTER `for_each_fence`, so `u64::MAX` here means "not active at genesis" — which is
+        // exactly the condition under which the table is a consequence of a schedule rather than a
+        // rule in force.
+        if dns.vlt.vlt_shadow_activation_daa_score == u64::MAX && dns.vlt.vlt_activation_daa_score == u64::MAX {
+            dns.vlt.model_cost_table = crate::vlt::ModelCostTable::EMPTY;
+        }
+        if dns.tkn.tkn_shadow_activation_daa_score == u64::MAX
+            && dns.tkn.tkn_activation_daa_score == u64::MAX
+            && dns.tkn.emission_activation_epoch == u64::MAX
+        {
+            dns.tkn = crate::token::TokenParams::INERT;
+        }
     }
 
     /// **The activation schedule alone**, so a mismatch can be REPORTED precisely rather than only
@@ -5173,6 +5216,69 @@ mod consensus_params_id_tests {
     /// `TESTNET_VLT_SHADOW_FORK_DAA_SCORE` exists for, and the one this file documents as the next
     /// mainnet fork — still partitioned the network at deploy time. That is the exact defect the
     /// identity split was written to remove.
+    /// **The identity must survive the MATERIALIZED release cut, not the const one** (audit3 H1).
+    ///
+    /// `scheduling_any_fence_leaves_the_identity_alone` below builds its VLT case from the raw
+    /// const, so `with_registered_models` never runs, both sides keep an empty model table, and the
+    /// assertion passes on a preset no node would ever report. What a node runs is the value that
+    /// went through `From<NetworkId>` — and there the table is installed the moment the fence stops
+    /// being `u64::MAX`, because the build gate refuses a scheduled fence over an empty table. The
+    /// four `ModelCostEntry`s are inside `DnsParams`, `consensus_params_id` hashes that as one
+    /// borsh blob, and the fence was normalised out of the identity while the entries it drags
+    /// along were not.
+    ///
+    /// That is a deploy-time partition on the one upgrade this file documents as the next mainnet
+    /// fork: `flow_context` refuses on an identity mismatch, so the first operator to cut the
+    /// release cannot connect to a single un-upgraded peer, about a height that is still in the
+    /// future and about which the two agree completely.
+    ///
+    /// This is the same trap `shipped_presets_have_pinned_fingerprints` records: pin what is
+    /// MATERIALIZED, because the const is a number no node ever reports.
+    #[test]
+    fn a_materialized_release_cut_keeps_the_identity_it_had() {
+        const H: u64 = 9_000_000;
+        let dormant = with_registered_models(MAINNET_PARAMS);
+        assert_eq!(dormant.dns_params.unwrap().vlt.model_cost_table.len, 0, "the shipped preset is dormant and carries no table");
+
+        let mut scheduled = MAINNET_PARAMS;
+        scheduled.dns_params.as_mut().unwrap().vlt.vlt_shadow_activation_daa_score = H;
+        let scheduled = with_registered_models(scheduled);
+        assert_eq!(
+            scheduled.dns_params.unwrap().vlt.model_cost_table.len,
+            4,
+            "materializing a scheduled shadow fence installs the registered models — that is the whole point of the function"
+        );
+
+        let dormant = with_registered_models(MAINNET_PARAMS);
+        let scheduled = {
+            let mut p = MAINNET_PARAMS;
+            p.dns_params.as_mut().unwrap().vlt.vlt_shadow_activation_daa_score = H;
+            with_registered_models(p)
+        };
+        assert_ne!(
+            dormant.consensus_params_id(),
+            scheduled.consensus_params_id(),
+            "an old peer must still be able to SEE that the schedule changed"
+        );
+        assert_eq!(
+            dormant.consensus_identity_id(),
+            scheduled.consensus_identity_id(),
+            "…and must still peer with it, because the two agree about every block either can produce today"
+        );
+
+        // The same for the token lane, whose fences cannot be armed without freezing the emission
+        // constants that are TBD while it is inert.
+        let mut tkn = MAINNET_PARAMS;
+        {
+            let d = tkn.dns_params.as_mut().unwrap();
+            d.tkn.tkn_shadow_activation_daa_score = H;
+            d.tkn.emission_epoch_budget_r0_atomic = 123_456_789;
+        }
+        let tkn = with_registered_models(tkn);
+        assert_ne!(dormant.consensus_params_id(), tkn.consensus_params_id(), "the schedule is visible");
+        assert_eq!(dormant.consensus_identity_id(), tkn.consensus_identity_id(), "and it is not a partition");
+    }
+
     #[test]
     fn scheduling_any_fence_leaves_the_identity_alone() {
         let today = MAINNET_PARAMS;

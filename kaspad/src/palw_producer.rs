@@ -244,6 +244,21 @@ impl PalwProducerService {
     /// The classes this node can serve, from its configuration. Rebuilt per call rather than
     /// cached: it is a handful of clones, and a cache would be a second place the operator's
     /// configuration lives.
+    /// One line per class, not one per template: this is a standing property of the family, and a
+    /// warning repeated every block is a warning nobody reads (audit3 H4).
+    fn warn_once_no_court(&self, class_id: kaspa_consensus_core::Hash64) {
+        use std::sync::OnceLock;
+        static WARNED: OnceLock<std::sync::Mutex<std::collections::HashSet<kaspa_consensus_core::Hash64>>> = OnceLock::new();
+        let warned = WARNED.get_or_init(Default::default);
+        if warned.lock().map(|mut w| w.insert(class_id)).unwrap_or(false) {
+            warn!(
+                "[palw-producer] class {class_id} has NO court responder in this build: neither party can make a move at any \
+                 rung, so a dispute about its claims can never be decided. Its arithmetic is unpoliceable — nothing here can \
+                 convict a fraudulent producer of this class, and nothing can clear an honest one."
+            );
+        }
+    }
+
     fn backends(&self) -> crate::palw_backends::PalwBackendRegistry {
         crate::palw_backends::PalwBackendRegistry::new(
             self.config.court,
@@ -469,6 +484,15 @@ impl PalwProducerService {
             .backends()
             .resolve(facts.class_id, facts.artifact_root)
             .map_err(|e| format!("this node cannot produce for the registered class: {e}"))?;
+        // **Say out loud that this class cannot be defended in court** (audit3 H4). A family that
+        // takes the trait defaults for `bisect_prefix_state`/`refutation_for_index` cannot make a
+        // move at any rung, so a dispute about one of its claims can never leave round 0 whichever
+        // party is honest. The chain no longer charges anybody for that silence, but the producer
+        // should know that its claims are, in practice, unpoliceable — and so should whoever reads
+        // its logs before trusting the class.
+        if !backend.supports_court() {
+            self.warn_once_no_court(facts.class_id);
+        }
         // **Through the seam.** The backend is the class's execution path; this
         // function no longer knows which family it is producing for, which is what lets a second
         // one exist. Which backend it is, is the CHAIN's answer (`facts.terms.family`).

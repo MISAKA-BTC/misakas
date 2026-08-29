@@ -1741,7 +1741,18 @@ impl PalwPanelService {
                             continue;
                         };
                         let Some(mid_state) = backend.bisect_prefix_state(capture, midpoint) else {
-                            *court_stalls.entry("the backend cannot state its prefix at the midpoint").or_default() += 1;
+                            // Two different facts wearing one message (audit3 H4). "This capture
+                            // has no state at that index" is a bad capture; "this FAMILY has no
+                            // rung move at all" is a class whose disputes can never be decided by
+                            // anybody, and an operator reading a stalled court needs to know which
+                            // one it is looking at.
+                            *court_stalls
+                                .entry(if backend.supports_court() {
+                                    "the backend cannot state its prefix at the midpoint"
+                                } else {
+                                    "this class has NO court responder in this build — no party can move, and the dispute cannot be decided"
+                                })
+                                .or_default() += 1;
                             continue;
                         };
                         let disclosure = PalwBisectDisclosureV1 {

@@ -445,6 +445,9 @@ mod tests {
         let a = backend();
         assert_eq!(a.bisect_prefix_state(b"anything", 0), None);
         assert!(a.refutation_for_index(b"anything", 0).is_err());
+        // …and it SAYS so, so a node can report it at startup instead of an operator discovering
+        // it from a court that never resolves (audit3 H4).
+        assert!(!a.supports_court(), "a family with no rung move must not claim it can take a turn");
         assert!(a.execute_with_injected_fault(&a.job_for_anchor(Hash64::default()).expect("a job").0, &[1], 0).is_err());
         // And the family is the one whose disputes CAN end in a conviction, because the arithmetic
         // is deterministic-integer — what is missing is the step space, not the premise.
