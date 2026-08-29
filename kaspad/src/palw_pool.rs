@@ -89,6 +89,42 @@ impl PalwPoolService {
             "[{PALW_POOL}] listening on {} for class {} (up to {} miners; each needs its own registered bond)",
             self.config.listen, self.config.class_id, self.config.max_miners
         );
+
+        // **A pool holds captures, so a pool has to answer for them.**
+        //
+        // Since the pull transport a seat that needs a claim's material ASKS for it, and only a
+        // node with a registered resolver answers — the panel registers one because it owns a
+        // retention directory. A pool owns one too: its miners upload the material they cannot
+        // serve themselves, and it is written here. Without this line a pool-only node keeps
+        // every miner's bytes on disk and is silent when asked for them, so the claim gathers no
+        // quorum, voids at its receipt deadline, and the miner is never paid for work it really
+        // did. The panel registers the same closure over the same directory, so a node running
+        // both is unaffected by whichever registers last.
+        self.flow_context
+            .palw_gossip()
+            .set_material_resolver(crate::palw_producer::palw_material_resolver_v1(self.config.retention_dir.clone()));
+        info!("[{PALW_POOL}] answering material pulls from {}", self.config.retention_dir.display());
+
+        // **And a pool that writes into a retention directory has to sweep it** (audit M2-22).
+        // Retention grew monotonically on the consensus volume until the producer learned to
+        // prune; a pool-only node has no producer loop, so this is where that sweep lives for it.
+        let pruner = {
+            let retention = self.config.retention_dir.clone();
+            let mut shutdown = self.shutdown.subscribe();
+            tokio::spawn(async move {
+                loop {
+                    tokio::select! {
+                        _ = tokio::time::sleep(std::time::Duration::from_secs(60)) => {}
+                        _ = shutdown.changed() => break,
+                    }
+                    let removed = crate::palw_producer::palw_prune_retained_v1(&retention);
+                    if removed > 0 {
+                        info!("[{PALW_POOL}] pruned {removed} retained material file(s) past the lattice horizon");
+                    }
+                }
+            })
+        };
+
         let state = Arc::new(tokio::sync::Mutex::new(PoolStateV1::new()));
         misaka_palw_pool::server::serve_v1(
             self.clone() as Arc<dyn PoolChainV1>,
@@ -98,6 +134,7 @@ impl PalwPoolService {
             self.shutdown.subscribe(),
         )
         .await;
+        pruner.abort();
     }
 
     /// The retained-material path, shared with the producer so the two cannot disagree about

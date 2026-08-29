@@ -102,3 +102,6 @@ evm = ["kaspa-consensus/evm", "kaspa-mining/evm", "kaspa-p2p-flows/evm", "dep:ka
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+libc.workspace = true

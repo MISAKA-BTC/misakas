@@ -155,6 +155,66 @@ pub(crate) fn palw_retained_material_path(dir: &std::path::Path, claim: &Hash64)
     dir.join(format!("{claim}{PALW_RETAINED_MATERIAL_SUFFIX}"))
 }
 
+/// **How a node answers a material pull, from whichever retention directory it owns.**
+///
+/// Registered with the gossip layer by every service that HOLDS captures — the panel for its own
+/// and its peers', and the pool for the ones its miners uploaded. One function because the two
+/// register the same behaviour over the same directory: a pool-only node that built its own
+/// resolver would be a second spelling of this lookup, free to drift from the panel's, and the
+/// failure mode of that drift is a claim nobody can license.
+///
+/// Both shapes are tried: `<claim>.material` for a capture this node produced or was handed, and
+/// `foreign/<claim>.material` for one it persisted from a peer.
+pub(crate) fn palw_material_resolver_v1(
+    retention_dir: std::path::PathBuf,
+) -> std::sync::Arc<dyn Fn(Hash64) -> Option<Vec<u8>> + Send + Sync> {
+    std::sync::Arc::new(move |claim| {
+        std::fs::read(palw_retained_material_path(&retention_dir, &claim))
+            .ok()
+            .or_else(|| std::fs::read(retention_dir.join("foreign").join(format!("{claim}.material"))).ok())
+    })
+}
+
+/// **Delete retained material past the lattice's horizon** (audit M2-22).
+///
+/// Retention grew monotonically on the consensus volume — the same volume RocksDB is on — because
+/// nothing ever removed a file. The obligation ends with the lattice: a claim older than the bind
+/// plus receipt windows can no longer be licensed or disputed, so its bytes serve nobody. Every
+/// service that WRITES into a retention directory has to sweep it, or it is the one that
+/// re-introduces the unbounded growth.
+///
+/// Returns how many files it removed, so a caller can log a sweep that actually did something.
+pub(crate) fn palw_prune_retained_v1(retention_dir: &std::path::Path) -> usize {
+    // The bind + receipt windows at the frozen 120 s cadence are ~40 h; two days of retention
+    // covers every claim that can still be licensed, and stops for the rest.
+    const HORIZON: std::time::Duration = std::time::Duration::from_secs(48 * 3600);
+    let Ok(entries) = std::fs::read_dir(retention_dir) else { return 0 };
+    let now = std::time::SystemTime::now();
+    let mut pruned = 0usize;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(name) = path.file_name().and_then(|n| n.to_str()) else { continue };
+        if !name.ends_with(PALW_RETAINED_MATERIAL_SUFFIX) {
+            continue;
+        }
+        let fresh = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| now.duration_since(t).ok())
+            .map(|age| age < HORIZON)
+            .unwrap_or(false);
+        if fresh {
+            continue;
+        }
+        match std::fs::remove_file(&path) {
+            Ok(()) => pruned += 1,
+            Err(e) => trace!("cannot prune retained material {}: {e}", path.display()),
+        }
+    }
+    pruned
+}
+
 impl PalwProducerService {
     pub fn new(
         config: PalwProducerConfig,
@@ -277,39 +337,15 @@ impl PalwProducerService {
     /// hear it. Peers deduplicate by digest, so a re-broadcast they have seen costs one message
     /// and no relay.
     async fn rebroadcast_retained(&self) {
-        let Ok(entries) = std::fs::read_dir(&self.config.retention_dir) else { return };
-        let now = std::time::SystemTime::now();
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let Some(name) = path.file_name().and_then(|n| n.to_str()) else { continue };
-            let Some(stem) = name.strip_suffix(PALW_RETAINED_MATERIAL_SUFFIX) else { continue };
-            let Ok(claim) = stem.parse::<Hash64>() else { continue };
-            // The bind + receipt windows at the frozen 120 s cadence are ~40 h; two days of
-            // re-serving covers every claim that can still be licensed, and stops for the rest.
-            let fresh = entry
-                .metadata()
-                .and_then(|m| m.modified())
-                .ok()
-                .and_then(|t| now.duration_since(t).ok())
-                .map(|age| age < std::time::Duration::from_secs(48 * 3600))
-                .unwrap_or(false);
-            if !fresh {
-                // **Past the horizon it is not just un-broadcast, it is deleted** (audit M2-22).
-                // Retention grew monotonically on the consensus volume — the same volume RocksDB
-                // is on — because nothing ever removed a file. The obligation ends with the
-                // lattice: a claim older than this can no longer be licensed or disputed, so the
-                // bytes serve nobody.
-                if let Err(e) = std::fs::remove_file(&path) {
-                    trace!("[{PALW_PRODUCER}] cannot prune retained material {}: {e}", path.display());
-                }
-                continue;
-            }
-            // **Announced, not pushed** (audit M2-22). This re-broadcast every retained material to
-            // every peer once a minute — 291 MB per peer per minute for a QWEN25-A16 producer, of
-            // bytes those peers have already deduplicated and dropped. Since protocol 104 a seat
-            // that needs a claim's material ASKS for it, and the serve answers that asker directly;
-            // the producer's job here is to keep the bytes, and to be reachable.
-            let _ = claim;
+        // **Announced, not pushed** (audit M2-22). This re-broadcast every retained material to
+        // every peer once a minute — 291 MB per peer per minute for a QWEN25-A16 producer, of
+        // bytes those peers have already deduplicated and dropped. Since protocol 104 a seat that
+        // needs a claim's material ASKS for it, and the serve answers that asker directly; the
+        // producer's job here is to keep the bytes, to be reachable, and to stop keeping the ones
+        // the lattice can no longer use.
+        let pruned = crate::palw_producer::palw_prune_retained_v1(&self.config.retention_dir);
+        if pruned > 0 {
+            trace!("[{PALW_PRODUCER}] pruned {pruned} retained material file(s) past the lattice horizon");
         }
     }
 
@@ -326,8 +362,10 @@ impl PalwProducerService {
             info!("[{PALW_PRODUCER}] not producing (no signing key)");
             return;
         }
-        let network_domain =
-            kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(self.config.network_id.as_bytes(), Some(self.config.genesis_hash));
+        let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+            self.config.network_id.as_bytes(),
+            Some(self.config.genesis_hash),
+        );
         info!("[{PALW_PRODUCER}] starting (bond={bond}, key={})", self.config.key_path);
 
         let mut produced = 0u64;
@@ -610,5 +648,73 @@ impl AsyncService for PalwProducerService {
             trace!("{} stopped", PALW_PRODUCER);
             Ok(())
         })
+    }
+}
+
+#[cfg(test)]
+mod retention_tests {
+    use super::*;
+
+    /// **The horizon really is a horizon.** Retention grew without bound on the consensus volume
+    /// until something deleted past it (audit M2-22), and the pool re-introduced that growth by
+    /// writing into a directory it never swept. This is the sweep, and it keeps what the lattice
+    /// can still use.
+    #[test]
+    fn the_prune_removes_only_material_past_the_horizon() {
+        let dir = std::env::temp_dir().join(format!("palw-retention-prune-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+
+        let fresh = palw_retained_material_path(&dir, &Hash64::from_u64_word(1));
+        let stale = palw_retained_material_path(&dir, &Hash64::from_u64_word(2));
+        std::fs::write(&fresh, b"fresh").expect("write");
+        std::fs::write(&stale, b"stale").expect("write");
+        // A file that is not retained material at all — the sweep must not touch it.
+        let bystander = dir.join("notes.txt");
+        std::fs::write(&bystander, b"not material").expect("write");
+
+        // Age the stale one past the 48 h horizon.
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(72 * 3600);
+        filetime_set(&stale, old);
+
+        let pruned = palw_prune_retained_v1(&dir);
+        assert_eq!(pruned, 1, "exactly the one past the horizon");
+        assert!(fresh.exists(), "a claim that can still be licensed keeps its bytes");
+        assert!(!stale.exists(), "one that cannot is deleted");
+        assert!(bystander.exists(), "the sweep only owns files it wrote");
+
+        // A directory that does not exist is zero, not a panic — a pool prunes before its first
+        // miner has ever uploaded anything.
+        assert_eq!(palw_prune_retained_v1(&dir.join("nope")), 0);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The resolver finds a capture under either shape, and answers `None` rather than panicking
+    /// for a claim this node never held.
+    #[test]
+    fn the_resolver_finds_both_shapes_and_is_silent_otherwise() {
+        let dir = std::env::temp_dir().join(format!("palw-retention-resolve-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("foreign")).expect("mkdir");
+
+        let mine = Hash64::from_u64_word(11);
+        let theirs = Hash64::from_u64_word(22);
+        std::fs::write(palw_retained_material_path(&dir, &mine), b"my capture").expect("write");
+        std::fs::write(dir.join("foreign").join(format!("{theirs}.material")), b"a peer's").expect("write");
+
+        let resolve = palw_material_resolver_v1(dir.clone());
+        assert_eq!(resolve(mine).as_deref(), Some(&b"my capture"[..]), "a capture this node holds");
+        assert_eq!(resolve(theirs).as_deref(), Some(&b"a peer's"[..]), "one it persisted from a peer");
+        assert_eq!(resolve(Hash64::from_u64_word(99)), None, "and silence for one it never had");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// `SystemTime` has no portable setter in std; this is the two-line libc call the test needs.
+    fn filetime_set(path: &std::path::Path, when: std::time::SystemTime) {
+        let secs = when.duration_since(std::time::UNIX_EPOCH).expect("after the epoch").as_secs() as i64;
+        let times = [libc::timespec { tv_sec: secs, tv_nsec: 0 }, libc::timespec { tv_sec: secs, tv_nsec: 0 }];
+        let c_path = std::ffi::CString::new(path.to_string_lossy().as_bytes()).expect("a path with no NUL");
+        // SAFETY: `c_path` is a valid NUL-terminated string and `times` is a two-element array,
+        // which is exactly what `utimensat` documents for these arguments.
+        let rc = unsafe { libc::utimensat(libc::AT_FDCWD, c_path.as_ptr(), times.as_ptr(), 0) };
+        assert_eq!(rc, 0, "could not age the fixture file");
     }
 }

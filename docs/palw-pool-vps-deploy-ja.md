@@ -215,6 +215,40 @@ coinbase はマイナー自身のアドレスに直接支払われるので、**
 
 ---
 
+## 7b. プールが負う data-availability 義務（設計上の要点）
+
+PALW の claim は、シートがその実行の material を**取り寄せて**検証できて初めて license されます
+（protocol 104 以降の pull 方式・監査 M2-22）。material を持たない主体は court に応答できません。
+
+**この設計ではプールが持ちます。** マイナーは自分に P2P の口が無いので、solution と一緒に
+material をプールへアップロードし、プールは **ブロック投函より先に** それを retention
+ディレクトリへ保存してから gossip します。順序は義務が先・約束が後です。
+
+プールノードは起動時に 2 つを行います:
+
+* **material pull への応答登録** — `set_material_resolver` を retention ディレクトリに対して登録。
+  これが無いとプールは「バイトはディスクにあるのに、訊かれても黙っている」状態になり、
+  claim は quorum を得られず receipt 期限で void し、**マイナーは本当にやった仕事の対価を
+  受け取れません**。panel も同じディレクトリに同じクロージャを登録するので、両方動かしても
+  影響はありません。
+* **retention の剪定**（監査 M2-22）— lattice の地平（bind + receipt ≒ 48h）を過ぎた material は
+  削除します。これが無いと consensus ボリューム（RocksDB と同じボリューム）上で
+  単調増加します。
+
+どちらも `misaka-palw-pool` 側ではなく **kaspad のプールサービス**の仕事です
+（P2P の口を持つのはノードだからです）。ログで確認できます:
+
+```
+[palw-pool] answering material pulls from /var/lib/misaka/t11/palw-retention
+[palw-pool] pruned 3 retained material file(s) past the lattice horizon
+```
+
+**ボンドをプールに持たせない理由もここにあります。** プールがボンドを持ち採掘者が別マシンで
+推論する形にすると、プールは自分が計算していない実行について court に応答することになり、
+material の授受を誤ると自分のボンドがスラッシュされます。ボンドをマイナー側に置くと、
+claim もスラッシュ責任も実際に計算した主体に残り、プールが負うのは
+「預かったバイトを配る」——失敗しても void で済み、conviction にはならない義務だけになります。
+
 ## 8. 困ったときに読む順番
 
 | 症状 | 見るところ |
@@ -226,6 +260,7 @@ coinbase はマイナー自身のアドレスに直接支払われるので、**
 | `standby (this node is still syncing)` | 正常。プールの同期待ち（§4） |
 | プールに繋がらない | ファイアウォール（§3）と `ss -ltn | grep 26350` |
 | fingerprint が違う | ビルドが古い。`git pull && cargo build --release` |
+| ブロックは通るのにマイナーが支払われない | プールの `answering material pulls from …` 行があるか確認（§7b）。無ければ material が配られていません |
 | `Genesis mismatch … local: d25a80b9…` | 退役済みチェーンの appdir。appdir を消して再同期 |
 
 ## 9. この文書が保証していないこと

@@ -5270,6 +5270,7 @@ dependencies = [
  "kaspa-utils-tower",
  "kaspa-utxoindex",
  "kaspa-wrpc-server",
+ "libc",
  "libcrux-ml-dsa",
  "log",
  "misaka-endpoints",

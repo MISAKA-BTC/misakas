@@ -532,8 +532,10 @@ impl PalwPanelService {
         // registering its own bond, and the only one it can make without a second key to name.
         let pubkey = kp.verification_key.as_ref().to_vec();
         let bond = PalwBondKeyV2(TransactionOutpoint::new(kaspa_consensus_core::tx::TransactionId::default(), 0));
-        let network_domain =
-            kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(self.consensus_config.params.net.to_string().as_bytes(), Some(self.consensus_config.genesis.hash));
+        let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+            self.consensus_config.params.net.to_string().as_bytes(),
+            Some(self.consensus_config.genesis.hash),
+        );
         let message = kaspa_consensus_core::palw_state_v2::palw_bond_registration_message_v2(
             network_domain,
             &kaspa_consensus_core::palw_lifecycle_objects_v2::palw_bond_registration_signed_key_v2(&bond),
@@ -587,7 +589,10 @@ impl PalwPanelService {
     ) -> Result<PalwConsensusObjectV2, String> {
         let bond = self.bond.ok_or("no --palw-producer-bond to register under")?;
         let bond_key = PalwBondKeyV2(bond);
-        info!("[{PALW_PANEL}] attempting the class registration (filter: {})", self.config.register_class.as_deref().unwrap_or("<unset>"));
+        info!(
+            "[{PALW_PANEL}] attempting the class registration (filter: {})",
+            self.config.register_class.as_deref().unwrap_or("<unset>")
+        );
         let terms = session.palw_v2_registration_terms().ok_or("this chain has no V2 bundle, or does not hold its base class yet")?;
 
         // The class of the artifact this node carries — matched by SHAPE against the build's own
@@ -714,7 +719,10 @@ impl PalwPanelService {
         // said "signing anything assembled beside the object would sign a class that is not the one
         // being registered", and this is that comment made true.
         let message = kaspa_consensus_core::palw_state_v2::palw_class_registration_message_v2(
-            kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(self.consensus_config.params.net.to_string().as_bytes(), Some(self.consensus_config.genesis.hash)),
+            kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                self.consensus_config.params.net.to_string().as_bytes(),
+                Some(self.consensus_config.genesis.hash),
+            ),
             *class_id,
             terms.min_grantable_share_permille,
             *activation_daa,
@@ -1208,8 +1216,10 @@ impl PalwPanelService {
             warn!("[{PALW_PANEL}] the gossip inbox was already taken — panel service disabled");
             return;
         };
-        let network_domain =
-            kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(self.consensus_config.params.net.to_string().as_bytes(), Some(self.consensus_config.genesis.hash));
+        let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+            self.consensus_config.params.net.to_string().as_bytes(),
+            Some(self.consensus_config.genesis.hash),
+        );
         info!(
             "[{PALW_PANEL}] starting (bond={bond}, submitter={}, register={})",
             if self.config.fee_outpoint.is_some() { "funded" } else { "off — receipts only" },
@@ -1229,11 +1239,7 @@ impl PalwPanelService {
         // silent, which is the resolver's None.
         {
             let retention = self.config.retention_dir.clone();
-            self.flow_context.palw_gossip().set_material_resolver(std::sync::Arc::new(move |claim| {
-                std::fs::read(crate::palw_producer::palw_retained_material_path(&retention, &claim))
-                    .ok()
-                    .or_else(|| std::fs::read(retention.join("foreign").join(format!("{claim}.material"))).ok())
-            }));
+            self.flow_context.palw_gossip().set_material_resolver(crate::palw_producer::palw_material_resolver_v1(retention));
         }
 
         let mut materials: HashMap<Hash64, Vec<Vec<u8>>> = HashMap::new();
