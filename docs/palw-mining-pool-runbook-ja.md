@@ -108,6 +108,10 @@ floor クラスの artifact は起動時にメモリ上で導出され、チェ�
 
 ## 3. プールを走らせる（運用者向け）
 
+> **VPS に立てるなら** [palw-pool-vps-deploy-ja.md](palw-pool-vps-deploy-ja.md) に
+> 起動スクリプト・systemd ユニット・ファイアウォール・同期待ちまで含めた手順があります。
+
+
 プールは **kaspad のサービス**です。別デーモンではありません — material の gossip
 (`broadcast_palw_material`) にも、テンプレートを事実と同じ chain point で作ることにも
 ノード内部が要るからです。

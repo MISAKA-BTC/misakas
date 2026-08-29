@@ -347,6 +347,7 @@ pub async fn serve_v1(
     mut shutdown: tokio::sync::watch::Receiver<bool>,
 ) {
     let mut next_id = 0u64;
+    let refusals = std::sync::Arc::new(RefusalLogV1::default());
     loop {
         let accepted = tokio::select! {
             r = listener.accept() => r,
@@ -368,12 +369,40 @@ pub async fn serve_v1(
         }
         next_id += 1;
         let (id, chain, state, shutdown) = (next_id, chain.clone(), state.clone(), shutdown.clone());
+        let refusals = refusals.clone();
         tokio::spawn(async move {
-            if let Err(e) = session_loop_v1(id, chain, stream, peer, state.clone(), shutdown).await {
+            if let Err(e) = session_loop_v1(id, chain, stream, peer, state.clone(), shutdown, refusals).await {
                 kaspa_core::debug!("[palw-pool] session {id} ({peer}) ended: {e}");
             }
             state.lock().await.drop_session(id);
         });
+    }
+}
+
+/// **Refusals that repeat are logged once, not once per reconnect.**
+///
+/// A miner whose bond is not registered reconnects on a timer, and each attempt is the same
+/// sentence. `palw_producer.rs` carries the same guard for the same reason — a live node wrote
+/// 5,281 identical warnings while producing nothing, and the line that would have explained it was
+/// buried. Keyed by the miner's IP (not its port, which changes every reconnect) plus the reason,
+/// so a DIFFERENT problem from the same host still prints.
+#[derive(Default)]
+struct RefusalLogV1 {
+    seen: std::sync::Mutex<HashMap<std::net::IpAddr, (String, std::time::Instant)>>,
+}
+
+impl RefusalLogV1 {
+    /// Should this refusal be printed? True the first time, and again once the window is up.
+    fn should_log(&self, peer: std::net::IpAddr, reason: &str) -> bool {
+        const REPEAT_AFTER: std::time::Duration = std::time::Duration::from_secs(300);
+        let mut seen = self.seen.lock().expect("the refusal log is never poisoned");
+        match seen.get(&peer) {
+            Some((last, at)) if last == reason && at.elapsed() < REPEAT_AFTER => false,
+            _ => {
+                seen.insert(peer, (reason.to_string(), std::time::Instant::now()));
+                true
+            }
+        }
     }
 }
 
@@ -393,6 +422,7 @@ async fn session_loop_v1(
     peer: std::net::SocketAddr,
     state: std::sync::Arc<tokio::sync::Mutex<PoolStateV1>>,
     mut shutdown: tokio::sync::watch::Receiver<bool>,
+    refusals: std::sync::Arc<RefusalLogV1>,
 ) -> Result<(), String> {
     use tokio::io::{AsyncBufReadExt, BufReader};
 
@@ -436,7 +466,9 @@ async fn session_loop_v1(
                 };
                 match outcome {
                     Err(refusal) => {
-                        kaspa_core::info!("[palw-pool] {peer} refused: {refusal}");
+                        if refusals.should_log(peer.ip(), &refusal.to_string()) {
+                            kaspa_core::info!("[palw-pool] {peer} refused: {refusal}");
+                        }
                         send_line(rejection(&refusal), &mut write_half).await?;
                         return Ok(());
                     }
@@ -452,7 +484,9 @@ async fn session_loop_v1(
                             }
                             Ok(_) => {
                                 let refusal = GateRefusalV1::BondUnknown { bond: bond.clone() };
-                                kaspa_core::info!("[palw-pool] {peer} refused: {refusal}");
+                                if refusals.should_log(peer.ip(), &refusal.to_string()) {
+                                    kaspa_core::info!("[palw-pool] {peer} refused: {refusal}");
+                                }
                                 send_line(rejection(&refusal), &mut write_half).await?;
                                 return Ok(());
                             }
@@ -492,7 +526,9 @@ async fn session_loop_v1(
                 };
                 match admitted {
                     Err(refusal) => {
-                        kaspa_core::info!("[palw-pool] {peer} refused at auth: {refusal}");
+                        if refusals.should_log(peer.ip(), &refusal.to_string()) {
+                            kaspa_core::info!("[palw-pool] {peer} refused at auth: {refusal}");
+                        }
                         send_line(rejection(&refusal), &mut write_half).await?;
                         return Ok(());
                     }
@@ -776,6 +812,25 @@ mod tests {
         attempt.executor_pubkey = vec![9u8; 2592];
         let solution = SolutionV1 { job_id: job.job_id.clone(), nonce: 7, envelope: wire(&attempt), material: String::new() };
         assert_eq!(pool.mount(1, &solution, &standing.registered_pubkey).err(), Some(MountRefusalV1::NotThisKey));
+    }
+
+    /// **One refusal is logged once**, however many times the miner reconnects — and a different
+    /// problem from the same host still prints. A pool whose log is one repeated sentence is a
+    /// pool whose log nobody reads.
+    #[test]
+    fn a_repeated_refusal_is_logged_once_and_a_new_one_still_prints() {
+        let log = RefusalLogV1::default();
+        let miner: std::net::IpAddr = "203.0.113.9".parse().expect("an address");
+        let other: std::net::IpAddr = "203.0.113.10".parse().expect("an address");
+
+        assert!(log.should_log(miner, "no bond"), "the first time is always printed");
+        assert!(!log.should_log(miner, "no bond"), "and the reconnect after it is not");
+        assert!(!log.should_log(miner, "no bond"));
+        // A DIFFERENT reason from the same host is a different thing to fix.
+        assert!(log.should_log(miner, "the signature did not verify"));
+        assert!(!log.should_log(miner, "the signature did not verify"));
+        // And another host's identical problem is that operator's, printed for them.
+        assert!(log.should_log(other, "the signature did not verify"));
     }
 
     /// Stale jobs, out-of-range nonces and undecodable envelopes are refused cheaply and by name.

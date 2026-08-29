@@ -74,12 +74,48 @@ async fn main() {
     println!("  key         {key_path} (the seed never leaves this process)");
 
     let config = MinerConfigV1 { pool, bond_text, pay_address, agent, reconnect_after: std::time::Duration::from_secs(5) };
+    // **A refusal and a dropped socket are not the same wait.** A pool that says "this chain holds
+    // no bond at …" will say it again in five seconds and in five minutes — the fix is a
+    // registration, not a retry — so hammering it only fills the pool operator's disk with one
+    // repeated line. A socket that died is the opposite: usually transient, and worth retrying
+    // promptly. `palw_producer.rs` records the same lesson from a live node ("this loop wrote
+    // 5,281 identical warnings"), which is where this rule comes from.
+    let refused_backoff = std::time::Duration::from_secs(60);
+    let mut last_refusal: Option<String> = None;
     loop {
-        if let Err(e) = one_connection(&config, &keypair, &pubkey, &my_script, bond).await {
-            eprintln!("[miner] {e}");
-        }
-        eprintln!("[miner] reconnecting in {:?}", config.reconnect_after);
-        tokio::time::sleep(config.reconnect_after).await;
+        let wait = match one_connection(&config, &keypair, &pubkey, &my_script, bond).await {
+            Ok(()) => config.reconnect_after,
+            Err(MinerExit::Transport(e)) => {
+                eprintln!("[miner] {e}");
+                last_refusal = None;
+                config.reconnect_after
+            }
+            Err(MinerExit::Refused(reason)) => {
+                // Printed once per DISTINCT reason. A miner waiting for its bond to confirm sees
+                // the sentence it needs and then silence, rather than the same line every 5 s.
+                if last_refusal.as_deref() != Some(reason.as_str()) {
+                    eprintln!("[miner] the pool refused this miner: {reason}");
+                    eprintln!("[miner] this will not fix itself by retrying — retrying every {refused_backoff:?} in case it is fixed");
+                    last_refusal = Some(reason);
+                }
+                refused_backoff
+            }
+        };
+        tokio::time::sleep(wait).await;
+    }
+}
+
+/// Why a connection ended, and therefore how long to wait before the next one.
+enum MinerExit {
+    /// The pool refused this miner and said why. Retrying changes nothing until an operator does.
+    Refused(String),
+    /// The socket, the protocol, or the local state. Usually transient.
+    Transport(String),
+}
+
+impl From<String> for MinerExit {
+    fn from(e: String) -> Self {
+        MinerExit::Transport(e)
     }
 }
 
@@ -90,7 +126,7 @@ async fn one_connection(
     pubkey: &[u8],
     my_script: &kaspa_consensus_core::tx::ScriptPublicKey,
     bond: kaspa_consensus_core::tx::TransactionOutpoint,
-) -> Result<(), String> {
+) -> Result<(), MinerExit> {
     let stream = tokio::net::TcpStream::connect(&config.pool).await.map_err(|e| format!("connecting to {}: {e}", config.pool))?;
     let (read_half, mut out) = stream.into_split();
     let mut lines = BufReader::new(read_half).lines();
@@ -116,13 +152,13 @@ async fn one_connection(
 
     loop {
         let Some(line) = lines.next_line().await.map_err(|e| format!("read: {e}"))? else {
-            return Err("the pool closed the connection".into());
+            return Err(MinerExit::Transport("the pool closed the connection".into()));
         };
         if line.trim().is_empty() {
             continue;
         }
         match parse_line::<PoolMessageV1>(line.trim())? {
-            PoolMessageV1::Rejected { reason } => return Err(format!("the pool refused this miner: {reason}")),
+            PoolMessageV1::Rejected { reason } => return Err(MinerExit::Refused(reason)),
             PoolMessageV1::Standby { reason, retry_after_ms } => {
                 eprintln!("[miner] the pool has no work right now ({reason}); asking again in {retry_after_ms} ms");
                 tokio::time::sleep(std::time::Duration::from_millis(retry_after_ms)).await;
@@ -157,7 +193,7 @@ async fn one_connection(
             }
             PoolMessageV1::Job(job) => {
                 let Some(backend) = backend.as_deref() else {
-                    return Err("the pool sent a job before a welcome".into());
+                    return Err(MinerExit::Transport("the pool sent a job before a welcome".into()));
                 };
                 let decoded = decode_job_v1(&job)?;
                 let job_id = decoded.job_id.clone();

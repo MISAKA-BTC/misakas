@@ -1,0 +1,57 @@
+# PALW miner pool on a VPS, as a service. Install:
+#
+#   sudo useradd -r -m -d /var/lib/misaka -s /usr/sbin/nologin misaka
+#   sudo install -m755 target/release/kaspad /usr/local/bin/kaspad
+#   sudo install -m644 scripts/misaka-palw-pool.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now misaka-palw-pool
+#
+# The pool holds NO key, NO bond and NO pay address — each miner's template pays that miner — so
+# this unit runs as an unprivileged user with no secrets to protect. That is a property of the
+# design, not a hardening trick: there is nothing here for a compromise to steal.
+[Unit]
+Description=MISAKA PALW miner pool (testnet-11) — serves bonded miners that run no node
+Documentation=https://github.com/MISAKA-BTC/misakas/blob/main/docs/palw-mining-pool-runbook-ja.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=misaka
+Group=misaka
+# RPC stays on loopback: --unsaferpc on a public interface is an unauthenticated door into a node.
+# The pool port is the only one miners need, and the bond handshake authenticates it.
+ExecStart=/usr/local/bin/kaspad \
+    --testnet --netsuffix=11 \
+    --appdir=/var/lib/misaka/t11 \
+    --listen=0.0.0.0:26311 \
+    --rpclisten=127.0.0.1:26312 \
+    --utxoindex \
+    --palw-pool-listen=0.0.0.0:26350 \
+    --palw-pool-max-miners=256
+Restart=always
+RestartSec=15
+# A pool that dies mid-epoch and restarts into a crash loop should back off rather than thrash the
+# chain it is syncing from.
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+# The chain state and the retention directory. Nothing else on the filesystem is writable.
+StateDirectory=misaka
+ReadWritePaths=/var/lib/misaka
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=false
+
+# A syncing node opens a file per store plus one per peer.
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

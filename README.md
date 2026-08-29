@@ -91,6 +91,7 @@ If DNS is blocked where you run, add the public entry nodes by hand:
 | produce or verify with the LLM classes | [docs/palw-public-testnet-classes-runbook.md](docs/palw-public-testnet-classes-runbook.md) |
 | convert an LM Studio download (GGUF) into the dense class | [docs/palw-lmstudio-qwen25-a16-runbook-ja.md](docs/palw-lmstudio-qwen25-a16-runbook-ja.md) |
 | mine the floor class **without running a node** (pool) | [docs/palw-mining-pool-runbook-ja.md](docs/palw-mining-pool-runbook-ja.md) |
+| stand a pool up on a VPS for testnet-11 | [docs/palw-pool-vps-deploy-ja.md](docs/palw-pool-vps-deploy-ja.md) |
 
 ## What's different from Kaspa
 

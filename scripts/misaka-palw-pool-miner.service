@@ -1,0 +1,55 @@
+# A PALW pool miner, as a service. This is the NODELESS side: no chain, no open port, no model
+# file. It needs exactly three things — a pool to dial, a bond the chain already holds, and the
+# ML-DSA-87 seed whose verification key that bond registered.
+#
+#   sudo useradd -r -m -d /var/lib/misaka-miner -s /usr/sbin/nologin misaka-miner
+#   sudo install -m755 target/release/misaka-palw-pool-miner /usr/local/bin/
+#   sudo install -m600 -o misaka-miner miner-seed.hex /var/lib/misaka-miner/seed.hex
+#   sudo install -m644 scripts/misaka-palw-pool-miner.service /etc/systemd/system/
+#   sudo systemctl edit misaka-palw-pool-miner     # set POOL, BOND and PAY_ADDRESS below
+#   sudo systemctl daemon-reload && sudo systemctl enable --now misaka-palw-pool-miner
+#
+# **The seed is the only secret on this host, and it never leaves the process.** It signs exactly
+# two things: the pool's session challenge (under the pool-auth context) and each won block (under
+# the attempt context). Those contexts differ, so a pool cannot obtain the second by asking for the
+# first. The loader refuses a group- or world-readable file, so 0600 is not advice.
+[Unit]
+Description=MISAKA PALW pool miner — produces PALW blocks with no node of its own
+Documentation=https://github.com/MISAKA-BTC/misakas/blob/main/docs/palw-mining-pool-runbook-ja.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=misaka-miner
+Group=misaka-miner
+# Override these three with `systemctl edit misaka-palw-pool-miner`.
+Environment=POOL=pool.example.com:26350
+Environment=BOND=REPLACE_WITH_TXID:INDEX
+Environment=PAY_ADDRESS=REPLACE_WITH_misakatest_ADDRESS
+ExecStart=/usr/local/bin/misaka-palw-pool-miner \
+    --pool ${POOL} \
+    --bond ${BOND} \
+    --key /var/lib/misaka-miner/seed.hex \
+    --pay-address ${PAY_ADDRESS} \
+    --agent misaka-palw-pool-miner/systemd
+Restart=always
+RestartSec=10
+
+# The inference and the nonce grind are the whole job; give them the box but not priority over it.
+Nice=5
+StateDirectory=misaka-miner
+ReadWritePaths=/var/lib/misaka-miner
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target
