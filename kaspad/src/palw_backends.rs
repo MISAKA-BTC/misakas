@@ -1,54 +1,44 @@
-//! **One place a node turns "the chain says class X" into "run it"** (ADR-0053).
+//! **One place a node turns "the chain says class X" into "run it"** (ADR-0053) — now the SDK's
+//! door inside kaspad.
 //!
-//! The producer and the panel both need a backend for a class the chain named, and both used to
-//! construct `Base0Backend` directly. The dispatch lives here, once, keyed on the **class id the
-//! chain named** — not on what the node happens to hold, not on a flag, and not on a guess from
-//! the graph's shape.
+//! The dispatch itself lives in `misaka_palw_sdk`: the SDK holds one lineage list (the dense
+//! container and the Qwen3.6 mmap tier today), and resolving a chain-named `(class_id,
+//! artifact_root)` walks it — each lineage serves its class, refuses it by name, or passes. This
+//! module keeps the node-side shape both services construct per duty, and nothing else: a new
+//! lineage lands in the SDK and this file does not move, which is the property the old
+//! three-armed dispatch could not have.
 //!
-//! # What this used to be, and what removing a family removed
-//!
-//! Under ADR-0051 this was a family dispatch: a `match terms.family` sending a Metal/GGUF claim to
-//! a black-box worker and everything else to the integer floor, because resolving one family's
-//! claim through the other's backend would judge material by rules it was never committed under.
-//! ADR-0053 withdrew that family, so the match is gone and with it the failure mode: there is one
-//! way to execute a registered class, and a node either holds that class's artifact or it does
-//! not. `resolve` still refuses rather than substitutes — the floor is DERIVED, so a node with
-//! nothing installed can always serve it, and a converted class that this node lacks the artifact
-//! for is an error and never a fallback to some class it does have.
+//! `resolve` still refuses rather than substitutes — the floor is DERIVED, so a node with nothing
+//! installed can always serve it, and a converted class this node lacks the artifact for is an
+//! error and never a fallback to some class it does have.
 
 use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
 use kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2;
 use kaspa_hashes::Hash64;
+use misaka_palw_sdk::{PalwClassSdk, PalwLoadedArtifactV1};
 
-/// What a node holds that lets it act for some class.
+/// What a node holds that lets it act for some class: the SDK (which classes exist, how they
+/// load, pair, and execute) plus this node's loaded holdings. Rebuilt per duty and per pooled
+/// payload; the holdings are `Arc`-backed inside, so the rebuild is pointer clones, not gigabytes
+/// (audit M2-14).
 pub struct PalwBackendRegistry {
-    court: PalwCourtParamsV2,
-    /// Converted artifacts for classes whose weights are not derivable. The floor needs none.
-    /// `Arc`, for the same reason the mapped tier is: the registry is rebuilt per duty and per
-    /// pooled payload, and a dense artifact is ~1.65 GiB. Cloning them per call copied gigabytes
-    /// inside the panel's async tick (audit M2-14).
-    class_artifacts: Vec<std::sync::Arc<misaka_palw_base0::artifact::Base0ArtifactV1>>,
-    /// **Memory-mapped Qwen3.6 artifacts: the root this node computed, and the mapping.**
-    ///
-    /// `Arc`, because the registry is rebuilt per block while the artifact is a 33 GiB mapping
-    /// whose root took a pass over the file to compute — both happen once, at load, and the
-    /// per-block resolve is a pointer clone. The ROOT is this node's own computation over the
-    /// bytes it holds (`Qwen36ArtifactV1::artifact_root`), matched below against what the CHAIN
-    /// registered: derive, never declare, the same rule `resolve_class_v1` applies to the dense
-    /// tier.
-    qwen36_artifacts: Vec<(Hash64, std::sync::Arc<misaka_palw_base0::qwen36::Qwen36ArtifactV1>)>,
-    /// The network this node runs, for the job contexts the Qwen3.6 backend builds.
-    network_id: Vec<u8>,
+    sdk: PalwClassSdk,
+    holdings: Vec<PalwLoadedArtifactV1>,
 }
 
 impl PalwBackendRegistry {
-    pub fn new(
-        court: PalwCourtParamsV2,
-        class_artifacts: Vec<std::sync::Arc<misaka_palw_base0::artifact::Base0ArtifactV1>>,
-        qwen36_artifacts: Vec<(Hash64, std::sync::Arc<misaka_palw_base0::qwen36::Qwen36ArtifactV1>)>,
-        network_id: Vec<u8>,
-    ) -> Self {
-        Self { court, class_artifacts, qwen36_artifacts, network_id }
+    pub fn new(court: PalwCourtParamsV2, holdings: Vec<PalwLoadedArtifactV1>, network_id: Vec<u8>) -> Self {
+        Self { sdk: PalwClassSdk::builtin_v1(court, network_id), holdings }
+    }
+
+    /// The SDK this registry dispatches through — the panel's registration builder asks it for
+    /// candidates and admission preflight, against the same holdings `resolve` serves.
+    pub fn sdk(&self) -> &PalwClassSdk {
+        &self.sdk
+    }
+
+    pub fn holdings(&self) -> &[PalwLoadedArtifactV1] {
+        &self.holdings
     }
 
     /// **Resolve the class the chain named into something that can run it.**
@@ -57,93 +47,8 @@ impl PalwBackendRegistry {
     /// A node that cannot serve that class says so — it does not fall back to one it can, because
     /// producing or judging under a class the chain did not name is worse than not participating.
     pub fn resolve(&self, class_id: Hash64, artifact_root: Hash64) -> Result<Box<dyn PalwExecutionBackendV1>, String> {
-        let dense: Vec<misaka_palw_base0::artifact::Base0ArtifactV1> =
-            self.class_artifacts.iter().map(|a| (**a).clone()).collect();
-        if let Ok(resolved) = misaka_palw_base0::classes::resolve_class_v1(&self.court, class_id, artifact_root, &dense)
-        {
-            return Ok(Box::new(misaka_palw_base0::backend::Base0Backend::new(resolved)));
-        }
-        // The hybrid class. Its id is the court profile's — the same derivation the registration
-        // used — so a chain that named it and a node that holds its artifact meet on two facts,
-        // and a mismatch on either is a refusal that says which.
-        // **The A16 dense class.** Its artifact rides the same container as the floor's, so it is
-        // found in the same list — by its DIGEST, which is what the chain registered. Tried before
-        // the hybrid because both are dense-file classes and only the id separates them.
-        if let Some(entry) = misaka_palw_base0::classes::canonical_classes_v1(&self.court)
-            .into_iter()
-            .filter(|c| matches!(c.source, misaka_palw_base0::classes::ArtifactSourceV1::ConvertedA16))
-            .find(|c| c.class_id() == class_id)
-        {
-            if let Some(artifact) = self.class_artifacts.iter().find(|a| a.artifact_digest() == artifact_root) {
-                return Ok(Box::new(misaka_palw_base0::qwen25_a16_backend::Qwen25A16Backend::new(
-                    artifact.clone(),
-                    self.network_id.clone(),
-                    class_id,
-                    entry.canonical_job,
-                )));
-            }
-            return Err(format!(
-                "the chain names the {} class and this node holds no artifact whose digest is {artifact_root} \
-                 (pass the converted .palwart with --palw-class-artifact)",
-                entry.model_id
-            ));
-        }
-        if let Some(entry) = misaka_palw_base0::classes::qwen36_canonical_classes_v1()
-            .into_iter()
-            .find(|c| c.class_id() == Some(class_id))
-        {
-            if let Some((_, artifact)) = self.qwen36_artifacts.iter().find(|(root, _)| *root == artifact_root) {
-                return Ok(Box::new(misaka_palw_base0::qwen36_backend::Qwen36Backend::new(
-                    artifact.clone(),
-                    entry.model_id,
-                    entry.canonical_job,
-                    class_id,
-                    self.network_id.clone(),
-                )));
-            }
-            return Err(format!(
-                "the chain names the {} class and this node holds no artifact whose computed root is {artifact_root} \
-                 (pass the converted .palwq36 with --palw-class-artifact)",
-                entry.model_id
-            ));
-        }
-        Err(format!("this node cannot serve the registered class {class_id} (artifact root {artifact_root})"))
+        self.sdk.resolve(class_id, artifact_root, &self.holdings)
     }
-}
-
-/// **Load one `--palw-class-artifact` path, dispatched by the file's own magic.**
-///
-/// One flag serves both artifact kinds: the dense tier's file decodes whole (it is a few GiB at
-/// most and digest-checked by its decoder), while a `.palwq36` is memory-mapped and its root is
-/// COMPUTED — one pass over the file, ~2 minutes cold for the 33 GiB class — because the root is
-/// this node's proof that it holds what the chain registered, and a root read from a sidecar
-/// would be a declaration. Returns whichever side matched, or the error from the side the magic
-/// named (never both errors: a file IS one kind, and the other side's complaint is noise).
-pub enum LoadedClassArtifact {
-    Dense(Box<misaka_palw_base0::artifact::Base0ArtifactV1>),
-    Qwen36 { computed_root: Hash64, artifact: std::sync::Arc<misaka_palw_base0::qwen36::Qwen36ArtifactV1> },
-}
-
-pub fn load_class_artifact(path: &std::path::Path) -> Result<LoadedClassArtifact, String> {
-    // The magic decides, from the first bytes, without reading the body.
-    let mut head = [0u8; 8];
-    {
-        use std::io::Read;
-        let mut f = std::fs::File::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        let n = f.read(&mut head).map_err(|e| format!("{}: {e}", path.display()))?;
-        if n < 8 {
-            return Err(format!("{}: shorter than any artifact magic", path.display()));
-        }
-    }
-    if head == *misaka_palw_base0::qwen36::QWEN36_FILE_MAGIC {
-        let artifact = misaka_palw_base0::qwen36::open_artifact(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        let computed_root = artifact.artifact_root();
-        return Ok(LoadedClassArtifact::Qwen36 { computed_root, artifact: std::sync::Arc::new(artifact) });
-    }
-    let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    misaka_palw_base0::artifact::decode_artifact_file_v1(&bytes)
-        .map(|a| LoadedClassArtifact::Dense(Box::new(a)))
-        .map_err(|e| format!("{}: {e}", path.display()))
 }
 
 /// The hybrid class's chain id, derived once per call from the registered geometry — the same
@@ -164,7 +69,7 @@ mod tests {
     }
 
     fn registry() -> PalwBackendRegistry {
-        PalwBackendRegistry::new(court(), Vec::new(), Vec::new(), b"misaka-palw-rc".to_vec())
+        PalwBackendRegistry::new(court(), Vec::new(), b"misaka-palw-rc".to_vec())
     }
 
     /// **The PUBLIC network's own class set, resolved against a node's holdings.**
@@ -201,7 +106,7 @@ mod tests {
             + usize::from(kaspa_consensus_core::config::params::palw_rc_qwen25_a16_is_registered());
         assert_eq!(classes.len(), expected, "the shipped network registers exactly the classes its pins describe");
 
-        let bare = PalwBackendRegistry::new(bundle.court, Vec::new(), Vec::new(), params.net.to_string().into_bytes());
+        let bare = PalwBackendRegistry::new(bundle.court, Vec::new(), params.net.to_string().into_bytes());
         let (floor_id, floor_root) = classes[0];
         assert_eq!(floor_id, bundle.base_class_id, "the floor is registered first");
         let floor = bare.resolve(floor_id, floor_root).expect("the derived floor resolves on a node holding nothing");
@@ -245,12 +150,15 @@ mod tests {
                 kaspa_consensus_core::config::params::PALW_RC_GENESIS_QWEN36_ARTIFACT_ROOT,
                 "the network's artifact root is the pinned one"
             );
-            // And an artifact whose computed root is not the chain's is refused too — the file's
-            // NAME is never the answer.
+            // And an artifact whose COMPUTED root is not the chain's is refused too — the file's
+            // name is never the answer, and neither is a declared root: the holding derives its
+            // root from the fixture's own bytes, and that root is not the registered class's.
             let alien = PalwBackendRegistry::new(
                 bundle.court,
-                Vec::new(),
-                vec![(Hash64::from_u64_word(0xA11E), std::sync::Arc::new(misaka_palw_base0::qwen36::qwen36_dev_fixture(1, 8)))],
+                vec![misaka_palw_sdk::lineages::qwen36::holding_from_artifact(
+                    std::sync::Arc::new(misaka_palw_base0::qwen36::qwen36_dev_fixture(1, 8)),
+                    None,
+                )],
                 params.net.to_string().into_bytes(),
             );
             assert!(matches!(alien.resolve(qwen_id, qwen_root), Err(_)), "a file with the wrong root is not this class");
