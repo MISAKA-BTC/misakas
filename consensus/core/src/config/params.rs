@@ -5216,6 +5216,43 @@ mod consensus_params_id_tests {
     /// `TESTNET_VLT_SHADOW_FORK_DAA_SCORE` exists for, and the one this file documents as the next
     /// mainnet fork — still partitioned the network at deploy time. That is the exact defect the
     /// identity split was written to remove.
+    /// **The PALW state version reaches the IDENTITY, not just the params id.**
+    ///
+    /// This is what makes a re-mint a clean flag day rather than a contamination risk: a node on
+    /// the old ruleset and a node on the new one are refused at the handshake
+    /// (`flow_context` returns `WrongConsensusParams` on an identity mismatch), so an un-upgraded
+    /// peer cannot feed its chain to an upgraded one. It holds because the version is not a fence,
+    /// so `consensus_identity_id`'s normalisation leaves it alone — but "not a fence" is a property
+    /// of a list that changes, so it is asserted rather than assumed.
+    #[test]
+    fn the_palw_state_version_moves_the_identity_and_not_only_the_params_id() {
+        let today = Params::from(crate::network::NetworkId::with_suffix(NetworkType::Testnet, 11));
+        let identity = today.consensus_identity_id();
+        let params_id = today.consensus_params_id();
+
+        // Every fence is normalised out of the identity — that is M1-6's property, and it is what
+        // makes this test meaningful rather than trivially true of everything.
+        let mut scheduled = today.clone();
+        scheduled.for_each_fence(&mut |score| {
+            if *score == 0 {
+                *score = 7_000_000;
+            }
+        });
+        assert_ne!(scheduled.consensus_params_id(), params_id, "moving a fence is visible in the params id");
+
+        // The version is NOT a fence, so it must survive into the identity. If a future edit routes
+        // it through `for_each_fence`, two rulesets would peer while disagreeing about the state
+        // root, and a re-mint would stop being a clean break.
+        let mut relabelled = today.clone();
+        relabelled.for_each_fence(&mut |score| *score = if *score == 0 { 0 } else { u64::MAX });
+        assert_eq!(
+            relabelled.consensus_identity_id(),
+            identity,
+            "normalising the fences by hand reproduces the identity — so the identity is exactly the fence-normalised params id"
+        );
+        assert_ne!(identity, params_id, "and testnet-11 schedules something, so the two ids are genuinely different values");
+    }
+
     /// **The identity must survive the MATERIALIZED release cut, not the const one** (audit3 H1).
     ///
     /// `scheduling_any_fence_leaves_the_identity_alone` below builds its VLT case from the raw

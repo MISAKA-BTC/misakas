@@ -43,14 +43,27 @@ at the handshake instead of at consensus.
 Plus community nodes, seen as inbound peers at the producer: `113.155.23.105`, `133.18.141.168`,
 `183.176.36.141`, `207.180.230.3`, `217.178.131.170`, `60.114.127.4`.
 
-**A partial wipe is worse than no wipe.** An un-wiped peer re-supplies the old chain by IBD to every
-host that was wiped, and the fee-outpoint damage that follows is not self-healing. Every host stops
-before any host is wiped.
+**Correction to an earlier draft of this file.** It said a partial wipe is worse than none, because
+an un-wiped peer re-supplies the old chain by IBD to every host that was wiped. That is the rule for
+a re-mint at an UNCHANGED fingerprint, and it does not apply here.
 
-## Preconditions that are NOT met yet
+`PALW_STATE_V2_VERSION` is not a fence, so it survives `consensus_identity_id`'s normalisation and
+the two rulesets carry different identities — asserted by
+`the_palw_state_version_moves_the_identity_and_not_only_the_params_id`. `flow_context` returns
+`WrongConsensusParams` on an identity mismatch, so an un-upgraded node and an upgraded one never
+complete a handshake. **An un-wiped peer cannot feed the new chain.** Ordering is therefore an
+operational preference, not a safety constraint, and a host that cannot be reached today does not
+have to hold up the ones that can.
 
-1. **C and .114 cannot be driven from this session.** Someone with credentials for them must run
-   the same stop/wipe/deploy, in the same window.
+What it does mean is that every un-upgraded node keeps running the OLD chain among themselves —
+a fork that persists until each operator upgrades. That is a communications problem, not a
+contamination one, and it is why the announcement matters.
+
+## Preconditions
+
+1. **C and .114 cannot be driven from this session.** Someone with credentials must upgrade them.
+   Not a blocker for the others — see the correction above — but until they do, they stay on the
+   old chain and are refused by every upgraded node.
 2. **Community participants must be told**, and must wipe their own datadir. Without that they hit
    the startup genesis-mismatch guard — or, worse, keep a fork alive that new nodes can still reach.
 3. **ibm's root disk is at 96%** (13 GB free on 290 GB). A fresh datadir plus the retained build
