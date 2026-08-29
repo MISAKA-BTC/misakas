@@ -67,7 +67,14 @@ before any host is wiped.
 # 1. stage the candidate on every host (non-destructive, do it first and verify)
 /root/host-build-from-branch.sh palw-audit3-2026-08-29
 grep -E '^HEAD=|^EXIT=|^STAGED' /root/deploy-build.log
-/root/t11/kaspad.candidate --testnet --netsuffix=11 --version   # must announce 95265934…
+# `--version` prints only "kaspad 1.1.0". The fingerprint is a STARTUP line, so ask the binary the
+# only way it answers: boot it against a throwaway appdir, read the line, stop it. kaspad ignores
+# SIGTERM and handles SIGINT.
+rm -rf /tmp/fpcheck && /root/t11/kaspad.candidate --testnet --netsuffix=11 --appdir=/tmp/fpcheck \
+    --nodnsseed --disable-upnp --listen=127.0.0.1:39311 --rpclisten=127.0.0.1:39312 \
+    > /tmp/fpcheck.log 2>&1 &
+sleep 20; grep -a 'Consensus params fingerprint' /tmp/fpcheck.log; pkill -INT -f 'appdir=/tmp/fpcheck'
+# must read: 95265934e8965e91f3c22281af735bcd38527b5ee89fa09a05290db566d444a3 (network testnet-11)
 
 # 2. STOP EVERY HOST FIRST. kaspad ignores SIGTERM and handles SIGINT.
 systemctl kill -s INT misaka-t11-node0 misaka-t11-node1     # ibm
