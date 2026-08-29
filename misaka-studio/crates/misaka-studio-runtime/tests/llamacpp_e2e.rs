@@ -24,7 +24,7 @@
 
 use futures_util::StreamExt;
 use misaka_studio_core::provenance::SamplingCommitment;
-use misaka_studio_core::settings::{BackendKind, Settings};
+use misaka_studio_core::settings::{BackendKind, BackendSettings, FlashAttention, GenerationDefaults, Settings};
 use misaka_studio_runtime::AppState;
 use misaka_studio_runtime::backend::StreamEvent;
 use std::path::PathBuf;
@@ -51,18 +51,22 @@ fn environment() -> Option<(PathBuf, PathBuf)> {
 
 async fn studio(engine: PathBuf, models: PathBuf) -> (std::sync::Arc<AppState>, tempfile::TempDir) {
     let data = tempfile::tempdir().expect("tempdir");
-    let mut settings = Settings::default();
-    settings.models_dir = models;
-    settings.backend.kind = BackendKind::LlamaCpp;
-    settings.backend.llama_server_path = Some(engine);
-    // The fixture is tiny; a long wait would only hide a hang.
-    settings.backend.startup_timeout_secs = 90;
-    // Left at Auto — which is the default, and which passes no flag. An earlier version of this
-    // test set it to off explicitly, and that is exactly why it did not catch the bare `-fa` flag
-    // failing on a current engine.
-    settings.backend.flash_attention = misaka_studio_core::settings::FlashAttention::Auto;
-    settings.generation.context_size = Some(512);
-    settings.generation.max_tokens = 16;
+    let settings = Settings {
+        models_dir: models,
+        backend: BackendSettings {
+            kind: BackendKind::LlamaCpp,
+            llama_server_path: Some(engine),
+            // The fixture is tiny; a long wait would only hide a hang.
+            startup_timeout_secs: 90,
+            // Left at Auto — the default, which passes no flag at all. An earlier version of this
+            // test set flash attention off explicitly, and that is exactly why it did not catch
+            // the bare `-fa` flag failing on a current engine.
+            flash_attention: FlashAttention::Auto,
+            ..Default::default()
+        },
+        generation: GenerationDefaults { context_size: Some(512), max_tokens: 16, ..Default::default() },
+        ..Default::default()
+    };
 
     let state = AppState::new(settings, data.path().join("settings.json"), data.path().to_path_buf()).await;
     (state, data)
