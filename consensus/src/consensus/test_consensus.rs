@@ -230,10 +230,12 @@ impl TestConsensus {
             PALW_FP_V3_MLDSA87_SPEND_CONTEXT, PALW_FP_V3_VERSION, PalwReceiptSpendEnvelopeV3, PalwReceiptSpendUnsignedV3,
             fp_spend_id_v3, spend_challenge_v3,
         };
-        use kaspa_consensus_core::palw_mode_v2::palw_network_domain_v2;
+        use kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for;
         use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
         let network_id = self.params.net.to_string();
-        let network_domain = palw_network_domain_v2(network_id.as_bytes());
+        // The genesis-bound domain (audit M2-18) — the harness must sign under exactly what the
+        // header processor and the virtual processor verify under, or it proves nothing.
+        let network_domain = palw_network_domain_v2_for(network_id.as_bytes(), Some(self.params.genesis.hash));
         let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(header);
         let claim_id = kaspa_hashes::Hash64::from_u64_word(0xFC);
         let quantum_index = 0u32;
@@ -263,11 +265,11 @@ impl TestConsensus {
 
     pub(crate) fn palw_v2_test_carriage(&self, header: &Header) -> Vec<u8> {
         use kaspa_consensus_core::palw_attempt_v2::{
-            PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, challenge_v2, palw_network_domain_v2,
+            PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, challenge_v2, palw_network_domain_v2_for,
         };
         use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
         let network_id = self.params.net.to_string();
-        let network_domain = palw_network_domain_v2(network_id.as_bytes());
+        let network_domain = palw_network_domain_v2_for(network_id.as_bytes(), Some(self.params.genesis.hash));
         let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(header);
         let (class_id, class_target, pwu_per_inference) = match &self.params.palw_consensus_mode {
             kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => {

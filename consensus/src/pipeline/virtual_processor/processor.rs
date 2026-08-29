@@ -30,6 +30,7 @@ use crate::{
             },
             ghostdag::{DbGhostdagStore, GhostdagData, GhostdagStoreReader},
             headers::{DbHeadersStore, HeaderStoreReader},
+            headers_selected_tip::{DbHeadersSelectedTipStore, HeadersSelectedTipStoreReader},
             palw_carriage::DbPalwCarriageStore,
             past_pruning_points::DbPastPruningPointsStore,
             pruning::{DbPruningStore, PruningStoreReader},
@@ -327,6 +328,10 @@ pub struct VirtualStateProcessor {
     pub(super) depth_store: Arc<DbDepthStore>,
     pub(super) selected_chain_store: Arc<RwLock<DbSelectedChainStore>>,
     pub(super) pruning_samples_store: Arc<DbPruningSamplesStore>,
+    /// The HEADER DAG's selected tip. Read only by `pruning_point_witness_child`, which needs an
+    /// anchor an attacker cannot grind — see re-audit R-3. Headers are synced before the utxoset
+    /// sidecars in every IBD path, so this is populated by the time that runs.
+    pub(super) headers_selected_tip_store: Arc<RwLock<DbHeadersSelectedTipStore>>,
 
     // kaspa-pq Phase 10 (ADR-0009): DNS finality overlay. `dns_params` is the
     // dormancy guard — `None` on every current network, so the bond-population
@@ -665,6 +670,7 @@ impl VirtualStateProcessor {
             depth_store: storage.depth_store.clone(),
             selected_chain_store: storage.selected_chain_store.clone(),
             pruning_samples_store: storage.pruning_samples_store.clone(),
+            headers_selected_tip_store: storage.headers_selected_tip_store.clone(),
             stake_bonds_store: storage.stake_bonds_store.clone(),
             compute_capability_store: storage.compute_capability_store.clone(),
             palw_carriage_store: storage.palw_carriage_store.clone(),
@@ -10682,16 +10688,37 @@ impl VirtualStateProcessor {
     /// It cannot be "any child that agrees" either: a peer supplying both the snapshot and a child
     /// header that agrees with it would then verify its own forgery.
     ///
-    /// Blue work is the discriminator that is neither peer-chosen nor grindable: to make the
-    /// heaviest child of the pruning point, an attacker must out-work the honest chain, which is
-    /// the assumption the whole ledger already rests on. Ties break on the hash so the choice is
-    /// deterministic across nodes. A child the local consensus has already disqualified witnesses
-    /// nothing, and is skipped before the comparison.
+    /// **And it cannot be the heaviest child** (re-audit R-3), which is what this did first. A
+    /// block's blue work is `selected_parent.blue_work + Σ work(mergeset blues)`, so an attacker
+    /// whose block takes the pruning point as its selected parent can merge the very same public
+    /// blocks the honest child merges and TIE it — or merge one more and exceed it. On a tie the
+    /// old rule broke to the larger hash, which a miner producing a block anyway can grind for a
+    /// few extra attempts. One cheap block still chose the examiner. The disqualification filter
+    /// did not help either: this runs during a headers-first IBD, where the pruning point's
+    /// children are `HeaderOnly` and nothing has been disqualified yet.
+    ///
+    /// The discriminator that is actually out of an attacker's reach is the **selected chain**: the
+    /// honest child of the pruning point is a chain ancestor of the header DAG's selected tip, and
+    /// the side block is not. To make its block the one on that chain the attacker must out-work
+    /// the honest chain all the way to the tip, which is the assumption the whole ledger already
+    /// rests on. The tip comes from this node's own header store — the syncer's claimed sink,
+    /// already received under PoW and the headers proof — not from the peer's answer, and headers
+    /// are synced before the utxoset sidecars in every IBD path.
+    ///
+    /// Exactly one child can satisfy that. If none does — the tip is not yet known, or the pruning
+    /// point is not on the chain to it — this returns `None` and both callers REFUSE rather than
+    /// write on trust, which is the same posture they already took when no child header was in
+    /// hand: an unverifiable carriage is exactly the one an attacker supplies, and the IBD can be
+    /// retried.
     fn pruning_point_witness_child(&self, pruning_point: BlockHash) -> Option<BlockHash> {
+        let Ok(tip) = self.headers_selected_tip_store.read().get() else {
+            warn!("no header selected tip yet: refusing to pick a pruning-point witness on anything an attacker can grind");
+            return None;
+        };
         let children: Vec<BlockHash> = RelationsStoreReader::get_children(&self.relations_service, pruning_point)
             .map(|c| c.read().iter().copied().collect())
             .unwrap_or_default();
-        let mut best: Option<(BlueWorkType, BlockHash)> = None;
+        let mut witness = None;
         for child in children {
             if self.headers_store.get_header(child).is_err() {
                 continue;
@@ -10702,12 +10729,22 @@ impl VirtualStateProcessor {
             if self.statuses_store.read().get(child).ok() == Some(StatusDisqualifiedFromChain) {
                 continue; // the local consensus already refused this block; it witnesses nothing
             }
-            let Ok(work) = self.ghostdag_store.get_blue_work(child) else { continue };
-            if best.is_none_or(|(seen_work, seen_hash)| (work, child) > (seen_work, seen_hash)) {
-                best = Some((work, child));
+            // On the selected chain to the tip. `is_chain_ancestor_of` is inclusive, so a child
+            // that IS the tip qualifies.
+            if !self.reachability_service.try_is_chain_ancestor_of(child, tip.hash).unwrap_or(false) {
+                continue;
+            }
+            match witness {
+                None => witness = Some(child),
+                Some(seen) => {
+                    // Two children of one block cannot both be on one selected chain. If the stores
+                    // ever say otherwise, that is corruption, not a choice to make quietly.
+                    warn!("pruning point {pruning_point} has two selected-chain children ({seen}, {child}); refusing to witness");
+                    return None;
+                }
             }
         }
-        best.map(|(_, hash)| hash)
+        witness
     }
 
     pub fn import_pruning_point_overlay_snapshot(

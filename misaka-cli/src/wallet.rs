@@ -36,7 +36,8 @@ struct Funding {
     entry: UtxoEntry,
     mature: bool,
     amount: u64,
-    /// This outpoint is a validator StakeBond's locked collateral, as the NODE reports it.
+    /// This outpoint is a validator StakeBond whose collateral consensus still LOCKS, as the NODE
+    /// reports it. A bond past its unbonding period is not marked — see `locked_bond_outpoints`.
     ///
     /// Spending it is never what an operator meant: the block carrying the spend is disqualified
     /// from the chain, and where the mergeset spend gate is not armed it is accepted anyway and the
@@ -100,13 +101,27 @@ async fn connect(ctx: &Ctx) -> Result<NodeView, CliError> {
 
 /// Page the ENTIRE UTXO set of `address` (op 160, ≤1000/page) — never the
 /// unbounded get_utxos_by_addresses (that is what blows up on a 951k-UTXO addr).
-/// Every outpoint the node reports as a StakeBond's locked collateral, at any status and any owner.
+/// Every outpoint the node reports as a StakeBond whose collateral consensus still LOCKS, at any
+/// owner.
 ///
 /// Deliberately unfiltered by owner: the wallet may hold a key that is not the bond's declared
-/// owner, and an outpoint that is a bond at all must not be selected. A failure here is surfaced
-/// rather than swallowed — a wallet that cannot ask which of its outputs are locked must not guess,
-/// because the guess it made before this existed was "none of them".
-async fn bonded_outpoints(nv: &NodeView) -> Result<std::collections::HashSet<TransactionOutpoint>, CliError> {
+/// owner, and a still-locked outpoint must not be selected. A failure here is surfaced rather than
+/// swallowed — a wallet that cannot ask which of its outputs are locked must not guess, because the
+/// guess it made before this existed was "none of them".
+///
+/// **It is the LOCK that is mirrored here, not the existence of a bond** (re-audit R-4). Excluding
+/// every bond at every status was too strong in the one direction that costs an honest operator
+/// everything: `BondStatus` has no terminal "withdrawn" state (`dns_finality.rs:344-358`), so a
+/// bond that has completed its unbonding period keeps its record and keeps being returned here —
+/// while consensus positively ALLOWS the spend (`PalwSpendLocks::locks`,
+/// `utxo_validation.rs:238-250`, is false exactly when the bond is `Unbonding` and past its release
+/// height). The sidecar's `unbond` only files the request and explicitly refuses to touch output-0,
+/// so `wallet send` is the only shipped way to reclaim it. Excluding it unconditionally stranded a
+/// mainnet validator's 20M KAS behind a hand-built transaction.
+///
+/// So the predicate below is `locks`, read back: skip a bond that is releasable at the node's
+/// current DAA, exclude every other one.
+async fn locked_bond_outpoints(nv: &NodeView) -> Result<std::collections::HashSet<TransactionOutpoint>, CliError> {
     let mut out = std::collections::HashSet::new();
     let mut cursor: Option<String> = None;
     loop {
@@ -117,6 +132,9 @@ async fn bonded_outpoints(nv: &NodeView) -> Result<std::collections::HashSet<Tra
                 status_in: None,
                 cursor: cursor.clone(),
                 limit: 1000,
+                // `None` = the sink, which is what `effective_status` below is resolved against and
+                // what `virtual_daa` is compared to. Asking at one height and judging at another is
+                // how a released bond would read as locked again.
                 pov_daa_score: None,
             })
             .await
@@ -130,9 +148,23 @@ async fn bonded_outpoints(nv: &NodeView) -> Result<std::collections::HashSet<Tra
                 )
             })?;
         for b in resp.bonds {
-            if let Some(op) = parse_outpoint_str(&b.bond_outpoint) {
-                out.insert(op);
+            // **A shape this wallet does not understand is an error, not a silent pass** (re-audit
+            // R-5). Dropping an unparseable entry left exactly the outpoint this function exists to
+            // exclude selectable, which is the opposite of the fail-closed contract above.
+            let outpoint = parse_outpoint_str(&b.bond_outpoint).ok_or_else(|| {
+                CliError::new(
+                    exit::GENERIC,
+                    format!(
+                        "getStakeBonds returned bond outpoint '{}', which is not 'txid_hex:index' — refusing to select \
+                         inputs against a bond set this wallet cannot read",
+                        b.bond_outpoint
+                    ),
+                )
+            })?;
+            if bond_is_releasable(&b, nv.virtual_daa) {
+                continue;
             }
+            out.insert(outpoint);
         }
         match resp.next_cursor {
             Some(next) if !next.is_empty() => cursor = Some(next),
@@ -142,6 +174,20 @@ async fn bonded_outpoints(nv: &NodeView) -> Result<std::collections::HashSet<Tra
     Ok(out)
 }
 
+/// `PalwSpendLocks::locks` read back: the collateral is free exactly when the bond is effectively
+/// `Unbonding` and the chain has passed `unbond_request_daa_score + unbonding_period_blocks`.
+///
+/// An `Unbonding` bond with no recorded request height is NOT releasable — the release height is
+/// unknown, and "unknown" must read as locked.
+fn bond_is_releasable(bond: &kaspa_rpc_core::RpcStakeBondEntry, virtual_daa: u64) -> bool {
+    if bond.effective_status != "unbonding" {
+        return false;
+    }
+    bond.unbond_request_daa_score
+        .and_then(|requested| requested.checked_add(bond.unbonding_period_blocks))
+        .is_some_and(|release| virtual_daa >= release)
+}
+
 /// "txid_hex:index", the shape every overlay RPC uses for an outpoint.
 fn parse_outpoint_str(s: &str) -> Option<TransactionOutpoint> {
     let (tx, ix) = s.rsplit_once(':')?;
@@ -149,7 +195,7 @@ fn parse_outpoint_str(s: &str) -> Option<TransactionOutpoint> {
 }
 
 async fn page_all(nv: &NodeView, address: &Address) -> Result<Vec<Funding>, CliError> {
-    let bonds = bonded_outpoints(nv).await?;
+    let bonds = locked_bond_outpoints(nv).await?;
     let mut out = Vec::new();
     let mut cursor = String::new();
     loop {
@@ -498,5 +544,55 @@ fn resolve_address(ctx: &Ctx, address: Option<&str>, ks: &KeySource, nv: &NodeVi
             let _ = ctx;
             Ok(ks.load_key()?.funding_address(nv.params.prefix()))
         }
+    }
+}
+
+#[cfg(test)]
+mod bond_lock_tests {
+    //! The wallet's exclusion must mirror consensus's LOCK, not the existence of a bond
+    //! (re-audit R-4). Getting this backwards in either direction is expensive: too weak and
+    //! `send` spends a validator's collateral out from under an Active bond (audit M1-3); too
+    //! strong and an honest validator that has served its unbonding period cannot reclaim 20M KAS
+    //! with any shipped command.
+    use super::bond_is_releasable;
+    use kaspa_rpc_core::RpcStakeBondEntry;
+
+    fn bond(effective_status: &str, requested: Option<u64>, period: u64) -> RpcStakeBondEntry {
+        RpcStakeBondEntry {
+            bond_outpoint: "00".repeat(64) + ":0",
+            owner_pubkey_hash: "00".repeat(64),
+            validator_id: "00".repeat(64),
+            amount: 20_000_000,
+            activation_daa_score: 0,
+            unbonding_period_blocks: period,
+            unbond_request_daa_score: requested,
+            stored_status: effective_status.to_string(),
+            effective_status: effective_status.to_string(),
+        }
+    }
+
+    #[test]
+    fn an_active_bond_is_never_releasable() {
+        assert!(!bond_is_releasable(&bond("active", None, 100), u64::MAX));
+        assert!(!bond_is_releasable(&bond("pending", None, 100), u64::MAX));
+        // A slashed bond's output-0 is removed by the slashing side-effect; it is not the wallet's
+        // to offer either.
+        assert!(!bond_is_releasable(&bond("slashed", Some(0), 100), u64::MAX));
+    }
+
+    #[test]
+    fn unbonding_is_releasable_only_past_the_release_height() {
+        let b = bond("unbonding", Some(1_000), 100);
+        assert!(!bond_is_releasable(&b, 1_099), "one block short of release is still locked");
+        assert!(bond_is_releasable(&b, 1_100), "at the release height the collateral is spendable");
+        assert!(bond_is_releasable(&b, 5_000));
+    }
+
+    #[test]
+    fn an_unbonding_bond_with_no_request_height_reads_as_locked() {
+        // The release height is unknown, and unknown must fail closed.
+        assert!(!bond_is_releasable(&bond("unbonding", None, 100), u64::MAX));
+        // And an overflowing period cannot wrap into "releasable".
+        assert!(!bond_is_releasable(&bond("unbonding", Some(u64::MAX), 1), u64::MAX));
     }
 }

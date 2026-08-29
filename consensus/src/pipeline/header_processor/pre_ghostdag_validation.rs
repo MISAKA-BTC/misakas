@@ -144,7 +144,17 @@ impl HeaderProcessor {
     /// again beside the bond — the two answer different questions and neither replaces the other.
     fn check_palw_carriage_stateless(&self, header: &Header) -> BlockProcessResult<()> {
         use kaspa_consensus_core::pow_layer0::{POW_ALGO_ID_PALW_COMMITTED_V2, POW_ALGO_ID_PALW_RECEIPT_V3};
-        let network_domain = kaspa_consensus_core::palw_mode_v2::palw_network_domain_v2(&self.network_id);
+        // **The SAME domain the acceptance layer verifies under** (re-audit R-8).
+        //
+        // Audit M2-18 bound the network domain to the genesis so a class-registration signature
+        // names one incarnation, and moved every site in the virtual processor to
+        // `palw_network_domain_v2_for(.., Some(genesis))` — and the producer signs with it. This
+        // site, the STATELESS relay-path check, was missed and kept deriving the domain from the
+        // network name alone. The two verifiers then answered different questions about the same
+        // bytes: an attempt signed by the shipped producer failed here, so no PALW block ever
+        // reached `StatusUTXOValid`. The header processor already holds the genesis it needs.
+        let network_domain =
+            kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(&self.network_id, Some(self.genesis.hash));
         let pre_pow_hash = kaspa_consensus_core::hashing::header::pre_pow_hash_64(header);
         let reason = match header.pow_algo_id {
             POW_ALGO_ID_PALW_COMMITTED_V2 => {

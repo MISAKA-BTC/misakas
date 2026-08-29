@@ -1498,10 +1498,21 @@ impl ValidatorService {
             // would act on it again. The standalone sidecar has always fallen through
             // (`Allow | AllowRebroadcast => {}`) and rebuilt; this is that behaviour.
             //
-            // Safe because the outcome's own meaning is "the SAME target was signed", and signing is
-            // deterministic here (the ML-DSA call takes a fixed [0u8; 32]), so the rebuild produces
-            // the identical signature and the identical transaction. Nothing new is signed and the
-            // equivocation guard is untouched — only `Block` refuses, and it still does.
+            // **Why it is safe, corrected** (re-audit R-6). It is NOT because signing is
+            // deterministic: `sign_with_context` draws fresh `randomness` from `thread_rng`
+            // (`kaspa-pq-validator-core/src/lib.rs:230-232`) — ML-DSA-87 is hedged — so a rebuild
+            // produces a DIFFERENT signature, and `select_funding` may pick a different funding
+            // UTXO, so the transaction differs too. The earlier claim of an "identical signature and
+            // identical transaction" was simply false, and a false invariant on a slashing-adjacent
+            // path is how the next edit goes wrong.
+            //
+            // It is safe because equivocation is decided on `(target_hash, target_daa_score)` and
+            // NOTHING else: `dns_finality.rs:2127-2129` and `:2437-2444` state that the signature
+            // fingerprint is deliberately outside the predicate, for exactly this reason ("two valid
+            // signatures over the same message differ on the `rnd` parameter, so bit-equality would
+            // be too strict"). `AllowRebroadcast` means the SAME target was signed, so re-signing it
+            // is not a second attestation — it is the same vote, carried again. Only `Block`, which
+            // is a DIFFERENT target for a signed epoch, is a refusal, and it still refuses.
             outcome @ (SignedEpochCheckOutcome::Allow | SignedEpochCheckOutcome::AllowRebroadcast) => {
                 let already_recorded = matches!(outcome, SignedEpochCheckOutcome::AllowRebroadcast);
                 if already_recorded {
@@ -1541,12 +1552,28 @@ impl ValidatorService {
                     }
                 };
                 // Persist BEFORE submission. If the flush fails, do not advance — retrying
-                // next tick is safe, but submitting without a durable record is not. On a rebuild
-                // the record is already durable and identical (deterministic signature), so there is
-                // nothing to write.
-                if !already_recorded {
-                    let record = SignedEpochRecord { signature_fingerprint: signature_fingerprint(&signature), ..candidate };
-                    if let Err(e) = store.record_and_flush(record) {
+                // next tick is safe, but submitting without a durable record is not.
+                //
+                // **The rebuild rewrites it too** (re-audit R-6). The record is not "already durable
+                // and identical": the fingerprint is of the signature, the signature is hedged, and
+                // the one thing the fingerprint is FOR is recognising a re-broadcast of the
+                // in-flight attestation across a restart. Leaving the old value there points that
+                // recognition at a signature this node never put on the wire. The target fields are
+                // unchanged, so this rewrite cannot move the equivocation guard.
+                //
+                // A flush failure is fatal only for a first signature. On a rebuild a durable record
+                // for this exact target already exists — the guard is intact either way — so a
+                // failure to refresh the fingerprint must not suppress the rebroadcast the whole
+                // arm exists to perform.
+                let record = SignedEpochRecord { signature_fingerprint: signature_fingerprint(&signature), ..candidate };
+                if let Err(e) = store.record_and_flush(record) {
+                    if already_recorded {
+                        warn!(
+                            "[{VALIDATOR}] could not refresh the signed-epoch fingerprint for epoch {} ({e}); \
+                             rebroadcasting anyway — the target record is already durable",
+                            target.epoch
+                        );
+                    } else {
                         warn!("[{VALIDATOR}] failed to persist signed-epoch record (not advancing): {e}");
                         return None;
                     }

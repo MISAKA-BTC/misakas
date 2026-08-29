@@ -743,7 +743,10 @@ async fn a_duplicate_lifecycle_object_is_dropped_and_the_block_stands() {
         state.claims_iter().find(|(_, c)| matches!(c.phase, PalwClaimPhaseV2::PanelBound { .. })).expect("a bound claim");
     let claim_id = *claim_id;
     let panel = state.panel(&claim_id).expect("a bound claim has a panel");
-    let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2(config.params.net.to_string().as_bytes());
+    let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+        config.params.net.to_string().as_bytes(),
+        Some(config.params.genesis.hash),
+    );
     let signed_daa = ctx.consensus.get_virtual_daa_score();
 
     let receipts: Vec<PalwSeatReceiptV2> = panel
@@ -1368,7 +1371,7 @@ async fn palw_rc_a_real_execution_produces_a_block_the_chain_accepts() {
     use kaspa_consensus_core::api::ConsensusApi;
     use kaspa_consensus_core::palw_attempt_v2::{
         PALW_ATTEMPT_V2_MLDSA87_CONTEXT, PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, attempt_id_v2,
-        challenge_v2, class_ticket_v2, palw_network_domain_v2,
+        challenge_v2, class_ticket_v2, palw_network_domain_v2_for,
     };
     use kaspa_consensus_core::palw_base0_profile::{PALW_RC_BASE0_CANONICAL, PALW_RC_BASE0_GEOMETRY, base0_profile_v1};
     use misaka_palw_base0::produce::{base0_execute_for_attempt_v1, base0_rc_job_anchor_v1, base0_rc_job_v1};
@@ -1433,7 +1436,7 @@ async fn palw_rc_a_real_execution_produces_a_block_the_chain_accepts() {
         kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2,
         "a ConsensusV2 network declares the attempt lane"
     );
-    let network_domain = palw_network_domain_v2(config.params.net.to_string().as_bytes());
+    let network_domain = palw_network_domain_v2_for(config.params.net.to_string().as_bytes(), Some(config.params.genesis.hash));
     let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(&block.header);
     let anchor = base0_rc_job_anchor_v1(network_domain, pre_pow, facts.class_id, &bond_key.0);
 
@@ -1519,7 +1522,7 @@ async fn palw_rc_the_real_qwen25_a16_model_produces_a_block() {
     use kaspa_consensus_core::api::ConsensusApi;
     use kaspa_consensus_core::palw_attempt_v2::{
         PALW_ATTEMPT_V2_MLDSA87_CONTEXT, PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, attempt_id_v2,
-        challenge_v2, class_ticket_v2, palw_network_domain_v2,
+        challenge_v2, class_ticket_v2, palw_network_domain_v2_for,
     };
     use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
     use kaspa_consensus_core::palw_qwen25_profile::{QWEN25_A16_CANONICAL, qwen25_a16_class_id_v1};
@@ -1582,7 +1585,7 @@ async fn palw_rc_the_real_qwen25_a16_model_produces_a_block() {
 
     let mut block = ctx.build_block_template_keeping_time(0).block;
     let timestamp = block.header.timestamp;
-    let network_domain = palw_network_domain_v2(config.params.net.to_string().as_bytes());
+    let network_domain = palw_network_domain_v2_for(config.params.net.to_string().as_bytes(), Some(config.params.genesis.hash));
     let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(&block.header);
     let anchor = base0_rc_job_anchor_v1(network_domain, pre_pow, dense_class_id, &bond_key.0);
 
@@ -1708,7 +1711,7 @@ async fn qwen36_block_e2e(artifact: misaka_palw_base0::qwen36::Qwen36ArtifactV1,
     use kaspa_consensus_core::api::ConsensusApi;
     use kaspa_consensus_core::palw_attempt_v2::{
         PALW_ATTEMPT_V2_MLDSA87_CONTEXT, PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, attempt_id_v2,
-        challenge_v2, class_ticket_v2, palw_network_domain_v2,
+        challenge_v2, class_ticket_v2, palw_network_domain_v2_for,
     };
     use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
     use kaspa_consensus_core::palw_qwen36_profile::{QWEN36_35B_A3B, QWEN36_RC_CANONICAL, qwen36_profile_v1};
@@ -1767,7 +1770,7 @@ async fn qwen36_block_e2e(artifact: misaka_palw_base0::qwen36::Qwen36ArtifactV1,
     // The template anchors the job; the REAL engine runs it.
     let mut block = ctx.build_block_template_keeping_time(0).block;
     let timestamp = block.header.timestamp;
-    let network_domain = palw_network_domain_v2(config.params.net.to_string().as_bytes());
+    let network_domain = palw_network_domain_v2_for(config.params.net.to_string().as_bytes(), Some(config.params.genesis.hash));
     let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(&block.header);
     let anchor = base0_rc_job_anchor_v1(network_domain, pre_pow, qwen36_class_id, &bond_key.0);
 
@@ -1893,7 +1896,10 @@ async fn palw_v2_a_stranger_can_register_their_own_bond() {
     let pubkey = keypair.verification_key.as_ref().to_vec();
     let payout_payload = kaspa_hashes::Hash64::from_bytes([0x5Au8; 64]);
     let collateral = bundle.state.min_collateral_sompi();
-    let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2(config.params.net.to_string().as_bytes());
+    let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+        config.params.net.to_string().as_bytes(),
+        Some(config.params.genesis.hash),
+    );
 
     // What a registrant can compute at signing time: "the output at index 0 of whatever carries me".
     let declared = PalwBondKeyV2(TransactionOutpoint::new(TransactionId::default(), 0));
@@ -2012,7 +2018,10 @@ async fn palw_v2_a_class_registration_needs_a_bond_that_signed_for_it() {
         kaspa_consensus_core::tx::TransactionId::from_u64_word(0xB0),
         0,
     ));
-    let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2(config.params.net.to_string().as_bytes());
+    let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+        config.params.net.to_string().as_bytes(),
+        Some(config.params.genesis.hash),
+    );
     // The signed preimage is the whole object (audit M2-6), so the fixture states the same values
     // the `make` closure below builds it with — a mismatch here is the attack the fix closes.
     let signed_artifact_root = kaspa_hashes::Hash64::from_u64_word(0xA7);
@@ -2158,7 +2167,10 @@ async fn palw_v2_a_signed_quorum_licenses_a_claim() {
             crate::consensus::test_consensus::TestConsensus::palw_v2_registry_keypair(index)
         }
     };
-    let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2(config.params.net.to_string().as_bytes());
+    let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+        config.params.net.to_string().as_bytes(),
+        Some(config.params.genesis.hash),
+    );
     let signed_daa = ctx.consensus.get_virtual_daa_score();
     let receipts: Vec<PalwSeatReceiptV2> = panel
         .seats
@@ -2579,7 +2591,10 @@ async fn palw_v2_a_gossiped_receipt_pool_assembles_the_object_a_block_accepts() 
         .expect("an early claim's panel has bound by now");
     let claim_id = *claim_id;
     let panel = state.panel(&claim_id).expect("a bound claim has a panel");
-    let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2(config.params.net.to_string().as_bytes());
+    let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+        config.params.net.to_string().as_bytes(),
+        Some(config.params.genesis.hash),
+    );
     let signed_daa = ctx.consensus.get_virtual_daa_score();
 
     // Sign with the registry keys, resolved the way a seat resolves its own: by matching the
@@ -7775,7 +7790,7 @@ async fn palw_rc_qwen36_per_epoch_expected_observed_target() {
     use kaspa_consensus_core::api::ConsensusApi;
     use kaspa_consensus_core::palw_attempt_v2::{
         PALW_ATTEMPT_V2_MLDSA87_CONTEXT, PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, attempt_id_v2,
-        challenge_v2, class_ticket_v2, palw_network_domain_v2,
+        challenge_v2, class_ticket_v2, palw_network_domain_v2_for,
     };
     use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
     use kaspa_consensus_core::palw_base0_profile::{PALW_RC_BASE0_CANONICAL, PALW_RC_BASE0_GEOMETRY, base0_profile_v1};
@@ -7825,7 +7840,7 @@ async fn palw_rc_qwen36_per_epoch_expected_observed_target() {
             }
         })
         .build();
-    let network_domain = palw_network_domain_v2(config.params.net.to_string().as_bytes());
+    let network_domain = palw_network_domain_v2_for(config.params.net.to_string().as_bytes(), Some(config.params.genesis.hash));
     let mut ctx = TestContext::new(TestConsensus::new(&config));
 
     // One execution per class; the nonce does the rest.
@@ -8014,7 +8029,7 @@ async fn palw_rc_qwen36_earns_share_through_real_blocks() {
     use kaspa_consensus_core::api::ConsensusApi;
     use kaspa_consensus_core::palw_attempt_v2::{
         PALW_ATTEMPT_V2_MLDSA87_CONTEXT, PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, attempt_id_v2,
-        challenge_v2, class_ticket_v2, palw_network_domain_v2,
+        challenge_v2, class_ticket_v2, palw_network_domain_v2_for,
     };
     use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
     use kaspa_consensus_core::palw_base0_profile::{PALW_RC_BASE0_CANONICAL, PALW_RC_BASE0_GEOMETRY, base0_profile_v1};
@@ -8059,7 +8074,7 @@ async fn palw_rc_qwen36_earns_share_through_real_blocks() {
             }
         })
         .build();
-    let network_domain = palw_network_domain_v2(config.params.net.to_string().as_bytes());
+    let network_domain = palw_network_domain_v2_for(config.params.net.to_string().as_bytes(), Some(config.params.genesis.hash));
     let mut ctx = TestContext::new(TestConsensus::new(&config));
 
     // One execution per class; the nonce moves the challenge, which is what the ticket reads.
@@ -8204,7 +8219,7 @@ async fn palw_rc_qwen36_counts_merged_work() {
     use kaspa_consensus_core::api::ConsensusApi;
     use kaspa_consensus_core::palw_attempt_v2::{
         PALW_ATTEMPT_V2_MLDSA87_CONTEXT, PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, attempt_id_v2,
-        challenge_v2, class_ticket_v2, palw_network_domain_v2,
+        challenge_v2, class_ticket_v2, palw_network_domain_v2_for,
     };
     use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
     use kaspa_consensus_core::palw_base0_profile::{PALW_RC_BASE0_CANONICAL, PALW_RC_BASE0_GEOMETRY, base0_profile_v1};
@@ -8249,7 +8264,7 @@ async fn palw_rc_qwen36_counts_merged_work() {
             }
         })
         .build();
-    let network_domain = palw_network_domain_v2(config.params.net.to_string().as_bytes());
+    let network_domain = palw_network_domain_v2_for(config.params.net.to_string().as_bytes(), Some(config.params.genesis.hash));
     let ctx = TestContext::new(TestConsensus::new(&config));
 
     let base_profile = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("expressible");

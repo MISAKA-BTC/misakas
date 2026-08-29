@@ -3078,6 +3078,26 @@ impl<'a> TransitionBuilder<'a> {
     ///
     /// Kept as a named no-op rather than deleted so the call sites still say where the duty was
     /// meant to be enforced, and so re-introducing it requires deciding what proves silence.
+    ///
+    /// **What this leaves standing, said plainly** (re-audit R-7). Removing the charge was right,
+    /// and the charge for being WRONG is intact and symmetric — `slash_dissenting_seats` takes the
+    /// `reserved` from a `Withheld` seat when the quorum licenses, and from a `Valid` seat when the
+    /// quorum defaults the producer. What is missing is the other side of the ledger: **nothing in
+    /// this transition ever PAYS a `PalwPanelSeatV2`.** ADR-0033's `PalwPaidAttesterV1` pays the
+    /// V1 credit lane's attesters, `palw_credit` is `None` on every shipped preset, and the block's
+    /// escrowed carve is released to the worker, not to the panel. So answering carries a downside
+    /// and no upside, and the seat that maximises its own outcome files nothing — after which the
+    /// claim voids at `ReceiptTimeout` (`apply_palw_transition_v4`) and the whole loss lands on an
+    /// honest producer.
+    ///
+    /// That is an economics gap, not a missing slash, and it is deliberately NOT repaired by
+    /// inventing a payment rule inside an audit-remediation pass. The two candidate designs, so the
+    /// decision is made rather than drifted into: (a) carve a fixed permille of the claim's released
+    /// escrow to the seats that formed the concluding quorum; or (b) make silence ineffective
+    /// instead of profitable by re-binding a fresh panel once on `ReceiptTimeout` before voiding —
+    /// which costs one more `window_bind + window_receipt` in the lattice `validate_palw_v2` now
+    /// bounds against the pruning horizon. `a_v2_panel_seat_is_never_paid` pins the current state so
+    /// this cannot be half-closed silently.
     fn slash_silent_seats(
         &mut self,
         _claim_id: &Hash64,
@@ -6918,6 +6938,59 @@ pub(crate) mod tests {
             apply(&s2, p, &ctx(3, 102, 3), &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }], None);
         (s3, claim_id)
     }
+    /// **Nothing in this transition ever pays a panel seat** (re-audit R-7).
+    ///
+    /// The companion to `palw_v2_a_seat_is_not_charged_for_unprovable_silence`. That test pins the
+    /// half of the ledger this project fixed — a seat is not charged for silence the chain cannot
+    /// observe. This pins the half it has NOT: a seat is not paid for answering either, so filing a
+    /// receipt is pure downside and the rational seat is silent. `slash_silent_seats`'s doc block
+    /// carries the two candidate repairs.
+    ///
+    /// It is written against the escrow/verdict surface rather than a preset so that it fails the
+    /// moment a payment is introduced — at which point the doc block, and the re-audit's R-7 entry,
+    /// must be updated rather than quietly left stale.
+    #[test]
+    fn a_v2_panel_seat_is_never_paid() {
+        let p = params();
+        let mut objects = register_class_and_bond();
+        objects.push(PalwConsensusObjectV2::BondRegistered {
+            bond: bond_key(9),
+            pubkey: vec![9; 4],
+            operator_pubkey: op_key(0x99),
+            collateral: 1_000,
+            payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+            signature: Vec::new(),
+        });
+        let (base, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None);
+
+        let env = attempt(40, 1);
+        let claim_id = attempt_id_v2(&env.attempt);
+        let (s2, _) = apply(&base, &p, &ctx(2, 101, 2), &[], Some(&env));
+        let seats = vec![PalwPanelSeatV2 { bond: bond_key(9), operator_id: h64(0x99) }];
+        let (s3, _) =
+            apply(&s2, &p, &ctx(3, 102, 3), &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }], None);
+        let before = s3.bond(&bond_key(9)).unwrap().clone();
+
+        // The seat answers WITH the quorum — the best possible outcome for it.
+        let agreeing = vec![seat_receipt(bond_key(9), true)];
+        let (licensed, _) = apply(
+            &s3,
+            &p,
+            &ctx(4, 103, 4),
+            &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: agreeing }],
+            None,
+        );
+        let after = licensed.bond(&bond_key(9)).unwrap().clone();
+
+        assert_eq!(after.slashed, before.slashed, "a seat on the winning side is not charged — that part works");
+        assert_eq!(
+            after.collateral, before.collateral,
+            "and it is not PAID either: answering correctly leaves a seat exactly where it started, so the only \
+             thing a receipt can do to a seat is cost it. If this assertion starts failing because seats are now \
+             paid, that is the R-7 repair landing — update `slash_silent_seats`'s doc block and the re-audit."
+        );
+    }
+
 
     /// **The inverse of P0-7's named red test, and the reason it inverted** (audit M2-7).
     ///

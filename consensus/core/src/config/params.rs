@@ -791,31 +791,35 @@ impl Params {
     /// is what made the standing "no re-genesis, ship as an activation" policy unusable on a
     /// value-bearing network.
     ///
-    /// Implemented by normalising every fence to a single sentinel and re-using the same writer, so
-    /// there is exactly one description of what the fingerprint covers. Peers still diverge at H —
-    /// that is a consensus question and fork choice answers it — but they stay peers until then,
-    /// which is the only way a scheduled upgrade can propagate at all.
+    /// Implemented by normalising the fences and re-using the same writer, so there is exactly one
+    /// description of what the fingerprint covers. Peers still diverge at H — that is a consensus
+    /// question and fork choice answers it — but they stay peers until then, which is the only way
+    /// a scheduled upgrade can propagate at all.
+    ///
+    /// **What "normalised" means, and why it is not a single sentinel** (re-audit R-1). Collapsing
+    /// every fence to `never` erased the difference between *scheduled* and *already in force*, and
+    /// those are not the same fact. Two builds that disagree about a FUTURE height agree about every
+    /// block either can produce today. Two builds that disagree about a fence that is active NOW
+    /// disagree about blocks right now — and that is not hypothetical, it is exactly what audit
+    /// M1-1 did: it moved `bond_spend_gate_mergeset_activation_daa_score` from `u64::MAX` to `0`,
+    /// both of which used to normalise to the same value. A node on the old build and a node on the
+    /// new one produced the SAME identity, so the handshake kept them — and they disagree from
+    /// block 1 about whether a merge-blue bond spend is valid. A refusal became a silent fork.
+    ///
+    /// So the identity preserves the one thing a peer can check without a shared clock: whether a
+    /// fence is **active at genesis**. `0` stays `0`; every other height, `u64::MAX` included,
+    /// collapses to `never`. Genesis is the only reference point two nodes agree on regardless of
+    /// how far either has synced, which is what makes this comparable at handshake time — a
+    /// tip-relative predicate would refuse every node that is still doing an IBD.
+    ///
+    /// The residual, stated rather than hidden: two builds that both schedule a fence in the past,
+    /// at DIFFERENT non-zero heights, still produce one identity and can disagree about history
+    /// between those heights. Closing that needs a shared height in the handshake, which this
+    /// message does not carry.
     pub fn consensus_identity_id(&self) -> Hash {
         let mut normalized = self.clone();
-        let sentinel = ForkActivation::never();
-        normalized.crescendo_activation = sentinel;
-        normalized.pow_blake2b_sha3_activation = sentinel;
-        normalized.pow_palw_activation = sentinel;
-        normalized.pow_palw_ollama_activation = sentinel;
-        normalized.pq_activation_daa_score = u64::MAX;
-        normalized.evm_activation_daa_score = u64::MAX;
-        normalized.evm_gas_pool_v2_activation_daa_score = u64::MAX;
-        normalized.evm_f002_withdraw_cap_activation_daa_score = u64::MAX;
-        normalized.evm_f003_mldsa_verify_activation_daa_score = u64::MAX;
-        normalized.evm_typed_receipt_root_activation_daa_score = u64::MAX;
-        if let Some(dns) = normalized.dns_params.as_mut() {
-            dns.dns_activation_daa_score = u64::MAX;
-            dns.pos_v2_activation_daa_score = u64::MAX;
-            dns.finality_fee_activation_daa_score = u64::MAX;
-            dns.bond_spend_gate_mergeset_activation_daa_score = u64::MAX;
-            dns.coinbase_settlement_consensus_activation_daa_score = u64::MAX;
-            dns.unbond_authz_mergeset_activation_daa_score = u64::MAX;
-        }
+        // Active at genesis stays distinguishable; anything else is "not yet".
+        normalized.for_each_fence(&mut |score| *score = if *score == 0 { 0 } else { u64::MAX });
         normalized.consensus_params_id()
     }
 
@@ -826,36 +830,215 @@ impl Params {
         let mut h = ConsensusParamsId::new();
         h.write(CONSENSUS_FINGERPRINT_DOMAIN_V1);
         h.write(b"schedule");
-        for score in [
-            self.crescendo_activation.daa_score(),
-            self.pow_blake2b_sha3_activation.daa_score(),
-            self.pow_palw_activation.daa_score(),
-            self.pow_palw_ollama_activation.daa_score(),
-            self.pq_activation_daa_score,
-            self.evm_activation_daa_score,
-            self.evm_gas_pool_v2_activation_daa_score,
-            self.evm_f002_withdraw_cap_activation_daa_score,
-            self.evm_f003_mldsa_verify_activation_daa_score,
-            self.evm_typed_receipt_root_activation_daa_score,
-        ] {
-            h.write(score.to_le_bytes());
-        }
-        match self.dns_params.as_ref() {
-            Some(dns) => {
-                for score in [
-                    dns.dns_activation_daa_score,
-                    dns.pos_v2_activation_daa_score,
-                    dns.finality_fee_activation_daa_score,
-                    dns.bond_spend_gate_mergeset_activation_daa_score,
-                    dns.coinbase_settlement_consensus_activation_daa_score,
-                    dns.unbond_authz_mergeset_activation_daa_score,
-                ] {
-                    h.write(score.to_le_bytes());
-                }
-            }
-            None => h.write(u64::MAX.to_le_bytes()),
-        }
+        let mut scores = self.clone();
+        scores.for_each_fence(&mut |score| h.write(score.to_le_bytes()));
         h.finalize()
+    }
+
+    /// **Every activation fence this build carries, in ONE exhaustive description.**
+    ///
+    /// Both `consensus_identity_id` and `consensus_schedule_id` are derived from this and nothing
+    /// else, so the two can never drift, and — the part that matters (re-audit R-2) — every
+    /// destructure below is **exhaustive**. A fence added to `Params`, `DnsParams`, `VltParams` or
+    /// `TokenParams` later will not compile until someone classifies it here. The previous version
+    /// was a hand-written list of assignments, and it had already fallen behind: `dns.vlt.*`,
+    /// `dns.tkn.*`, `full_reward_split_daa_score` and `mandatory_attestation_inclusion_daa_score`
+    /// were all in the fingerprint and none were normalised, so scheduling the VLT shadow fork —
+    /// the very upgrade `TESTNET_VLT_SHADOW_FORK_DAA_SCORE` exists for, and the one this file
+    /// documents as the next mainnet fork — still partitioned the network at deploy time.
+    ///
+    /// Order is the declaration order of each struct and must stay stable: the schedule id hashes
+    /// these in sequence.
+    ///
+    /// **Not covered, deliberately:** the fences inside a `ConsensusV2` bundle. Those live under
+    /// `palw_ruleset_id_v2`, which is one atomic commitment to the whole bundle by ADR-0042
+    /// Decision 11, and a V2 network's own doctrine is to re-mint rather than schedule. Normalising
+    /// into it would mean reaching through a hash that is deliberately opaque here.
+    fn for_each_fence(&mut self, visit: &mut impl FnMut(&mut u64)) {
+        // A `ForkActivation` is a fence wearing a different type; round-trip it through its score
+        // so the visitor sees one shape for all of them.
+        fn fork(activation: &mut ForkActivation, visit: &mut dyn FnMut(&mut u64)) {
+            let mut score = activation.daa_score();
+            visit(&mut score);
+            *activation = if score == u64::MAX { ForkActivation::never() } else { ForkActivation::new(score) };
+        }
+        // Stands in for an absent Some-only fence, so absence cannot alias a present value. Re-set
+        // at each use because `visit` is free to write through it.
+        let mut absent;
+        // Exhaustive on purpose — see the doc block. Non-fence fields are bound and ignored.
+        let Params {
+            dns_seeders: _,
+            net: _,
+            genesis: _,
+            timestamp_deviation_tolerance: _,
+            max_difficulty_target: _,
+            max_difficulty_target_f64: _,
+            past_median_time_window_size: _,
+            difficulty_window_size: _,
+            min_difficulty_window_size: _,
+            coinbase_payload_script_public_key_max_len: _,
+            max_coinbase_payload_len: _,
+            max_tx_inputs: _,
+            max_tx_outputs: _,
+            max_signature_script_len: _,
+            max_script_public_key_len: _,
+            mass_per_tx_byte: _,
+            mass_per_script_pub_key_byte: _,
+            mass_per_sig_op: _,
+            max_block_mass: _,
+            storage_mass_parameter: _,
+            deflationary_phase_daa_score: _,
+            pre_deflationary_phase_base_subsidy: _,
+            skip_proof_of_work: _,
+            max_block_level: _,
+            pruning_proof_m: _,
+            blockrate: _,
+            pre_crescendo_target_time_per_block: _,
+            crescendo_activation,
+            dns_params,
+            palw_credit,
+            palw_fork_choice: _,
+            palw_schedule: _,
+            palw_ramp: _,
+            palw_block_commitment,
+            // The V2 bundle's fences are inside `palw_ruleset_id_v2` — see the doc block.
+            palw_consensus_mode: _,
+            pow_blake2b_sha3_activation,
+            pow_palw_activation,
+            pow_palw_ollama_activation,
+            pq_enforcement: _,
+            pq_activation_daa_score,
+            evm_activation_daa_score,
+            evm_gas_pool_v2_activation_daa_score,
+            evm_f002_withdraw_cap_activation_daa_score,
+            evm_f003_mldsa_verify_activation_daa_score,
+            evm_typed_receipt_root_activation_daa_score,
+        } = self;
+
+        fork(crescendo_activation, visit);
+        fork(pow_blake2b_sha3_activation, visit);
+        fork(pow_palw_activation, visit);
+        fork(pow_palw_ollama_activation, visit);
+        visit(pq_activation_daa_score);
+        visit(evm_activation_daa_score);
+        visit(evm_gas_pool_v2_activation_daa_score);
+        visit(evm_f002_withdraw_cap_activation_daa_score);
+        visit(evm_f003_mldsa_verify_activation_daa_score);
+        visit(evm_typed_receipt_root_activation_daa_score);
+
+        // Some-only fences, so a network that installs neither still hashes as it did before the
+        // fields existed. A sentinel stands in for `None` so absence cannot alias a present value.
+        match palw_credit.as_mut() {
+            Some(credit) => visit(&mut credit.activation_daa),
+            None => {
+                absent = u64::MAX;
+                visit(&mut absent);
+            }
+        }
+        match palw_block_commitment.as_mut() {
+            Some(commitment) => visit(&mut commitment.activation_daa_score),
+            None => {
+                absent = u64::MAX;
+                visit(&mut absent);
+            }
+        }
+
+        let Some(dns) = dns_params.as_mut() else {
+            absent = u64::MAX;
+            visit(&mut absent);
+            return;
+        };
+        let crate::dns_finality::DnsParams {
+            dns_activation_daa_score,
+            min_active_stake_sompi: _,
+            min_active_validators: _,
+            min_bond_amount_sompi: _,
+            epoch_length_blocks: _,
+            required_work_depth: _,
+            required_stake_depth: _,
+            emergency_work_margin: _,
+            emergency_stake_margin: _,
+            max_reorg_horizon_blocks: _,
+            evidence_window_blocks: _,
+            unbonding_period_blocks: _,
+            max_attestations_per_block: _,
+            max_attestation_shard_mass: _,
+            reward_uniqueness_window_blocks: _,
+            stake_event_quality_floor_bps: _,
+            degraded_stake_quality_epochs: _,
+            stake_censorship_floor_bps: _,
+            reward_params: _,
+            reorg_mode: _,
+            full_reward_split_daa_score,
+            pos_v2_activation_daa_score,
+            attestation_epoch_length_blue_score: _,
+            attestation_lag_blue_score: _,
+            attestation_anchor_backoff_blue_score: _,
+            stake_score_window_blue_score: _,
+            finality_fee_activation_daa_score,
+            bond_spend_gate_mergeset_activation_daa_score,
+            mandatory_attestation_inclusion_daa_score,
+            // A staleness BOUND, not a fence: it does not turn a rule on at a height.
+            bridge_finality_max_staleness_daa_score: _,
+            emergency_work_override_multiplier: _,
+            stake_preference_max_work_deficit_multiplier: _,
+            // A maturity LENGTH, not a fence.
+            coinbase_settlement_long_maturity_daa: _,
+            coinbase_settlement_consensus_activation_daa_score,
+            vlt,
+            tkn,
+            vlt_credit_window_blue_score: _,
+            dns_gate_horizon_blocks: _,
+            dns_veto_ttl_daa_score: _,
+            min_anchor_attesters: _,
+            unbond_authz_mergeset_activation_daa_score,
+        } = dns;
+
+        visit(dns_activation_daa_score);
+        visit(full_reward_split_daa_score);
+        visit(pos_v2_activation_daa_score);
+        visit(finality_fee_activation_daa_score);
+        visit(bond_spend_gate_mergeset_activation_daa_score);
+        visit(mandatory_attestation_inclusion_daa_score);
+        visit(coinbase_settlement_consensus_activation_daa_score);
+        visit(unbond_authz_mergeset_activation_daa_score);
+
+        let crate::vlt::VltParams {
+            vlt_shadow_activation_daa_score,
+            vlt_activation_daa_score,
+            credit_window_epochs: _,
+            credit_decay_bps: _,
+            credit_delay_epochs: _,
+            lambda_vlt_per_kas: _,
+            prefill_cost_micro: _,
+            decode_cost_micro: _,
+            challenge_window_blocks: _,
+            verifier_committee_size: _,
+            min_verifier_confirmations: _,
+            min_verifier_refutations: _,
+            max_commitment_age_blocks: _,
+            max_capability_validity_blocks: _,
+            min_network_compute: _,
+            min_active_validators: _,
+            audit_fee_sompi: _,
+            model_cost_table: _,
+        } = vlt;
+        visit(vlt_shadow_activation_daa_score);
+        visit(vlt_activation_daa_score);
+
+        let crate::token::TokenParams {
+            tkn_shadow_activation_daa_score,
+            tkn_activation_daa_score,
+            // An EPOCH rather than a DAA score, but the same kind of fence: `0` is genesis-active.
+            emission_activation_epoch,
+            emission_epoch_budget_r0_atomic: _,
+            emission_halving_epochs: _,
+            settlement_delay_epochs: _,
+            emission_min_network_compute: _,
+        } = tkn;
+        visit(tkn_shadow_activation_daa_score);
+        visit(tkn_activation_daa_score);
+        visit(emission_activation_epoch);
     }
 
     /// A fingerprint of the consensus rules this node runs, for the P2P handshake.
@@ -1756,6 +1939,25 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
     // field with `TESTNET_VLT_SHADOW_FORK_DAA_SCORE`, so a live testnet's fingerprint — and
     // therefore its handshake — is untouched; scheduling the fence on a network with history is
     // still that network's problem, and M1-6 is why it cannot be rolled out gradually today.
+    //
+    // ────────────────────────────────────────────────────────────────────────────────────────
+    // **PRECONDITION, and it is not a fact this repository carries** (re-audit A-1).
+    //
+    // Both this `0` and the re-pinned mainnet entry in `shipped_presets_have_pinned_fingerprints`
+    // are legal ONLY IF mainnet has not launched. The whole justification above — "a network that
+    // has not launched has no history to fork" — rests on it, and the only written statement of it
+    // anywhere in this tree is one sentence in `docs/palw-mainnet-audit-2026-08-28.md`. Two nearby
+    // signals point the other way and are worth reading before trusting it: `genesis.rs` records
+    // that this genesis differs from "the prior Argon2id-era mainnet genesis", and the 9B custody
+    // ceremony is described there as complete.
+    //
+    // If mainnet IS live, this line is a hard fork of a value-bearing chain and must instead be a
+    // scheduled fence — which needs `consensus_identity_id`'s genesis-active rule (re-audit R-1) to
+    // be understood exactly: a fence moved from `u64::MAX` to a FUTURE height keeps the identity and
+    // rolls out; moved to `0` it does not, and cannot.
+    //
+    // CONFIRM OUT OF BAND BEFORE CUTTING A RELEASE, and record the answer here.
+    // ────────────────────────────────────────────────────────────────────────────────────────
     bond_spend_gate_mergeset_activation_daa_score: 0,
     // kaspa-pq liveness-first DNS finality: keep attestation below the base-chain validity layer.
     // Missing or below-floor shards degrade StakeScore / DNS health and pause finality-dependent
@@ -4933,6 +5135,144 @@ mod consensus_params_id_tests {
         );
     }
 
+    /// **A fence that is ACTIVE AT GENESIS is a rule, not a schedule** (re-audit R-1).
+    ///
+    /// This is the pair a mainnet rollout of audit M1-1 actually produces: one node on the build
+    /// that ships `bond_spend_gate_mergeset_activation_daa_score: 0`, one still on the build that
+    /// ships `u64::MAX`. They agree on genesis and on the network name, so nothing else separates
+    /// them — and they disagree from block 1 about whether a merge-blue bond spend is valid. The
+    /// first version of the identity split normalised BOTH values to the same sentinel, so the
+    /// handshake kept the peer and the two built different chains in silence. If this assertion
+    /// ever flips back to equal, that silent fork is back.
+    #[test]
+    fn a_genesis_active_fence_is_not_normalised_away() {
+        let shipped = MAINNET_PARAMS;
+        let mut pre_m1_1 = MAINNET_PARAMS;
+        pre_m1_1.dns_params.as_mut().unwrap().bond_spend_gate_mergeset_activation_daa_score = u64::MAX;
+
+        assert_eq!(shipped.genesis.hash, pre_m1_1.genesis.hash, "the fixture must differ ONLY in the fence");
+        assert_ne!(
+            shipped.consensus_identity_id(),
+            pre_m1_1.consensus_identity_id(),
+            "a fence that is in force at genesis on one side and never on the other is a RULE difference: \
+             the handshake must refuse it, not keep the peer with a warning"
+        );
+
+        // The other direction of the same rule: an overlay that is live from block 1 and one that
+        // is off are not the same chain either.
+        let mut overlay_off = MAINNET_PARAMS;
+        overlay_off.dns_params.as_mut().unwrap().dns_activation_daa_score = u64::MAX;
+        assert_ne!(shipped.consensus_identity_id(), overlay_off.consensus_identity_id());
+    }
+
+    /// **Every fence in the fingerprint is normalised, including the nested ones** (re-audit R-2).
+    ///
+    /// `dns_params` enters `consensus_params_id` as one borsh blob, so `dns.vlt.*` and `dns.tkn.*`
+    /// are in the fingerprint just as much as the top-level scores are. The hand-written
+    /// normalisation list missed them, which meant scheduling the VLT shadow fork — the upgrade
+    /// `TESTNET_VLT_SHADOW_FORK_DAA_SCORE` exists for, and the one this file documents as the next
+    /// mainnet fork — still partitioned the network at deploy time. That is the exact defect the
+    /// identity split was written to remove.
+    #[test]
+    fn scheduling_any_fence_leaves_the_identity_alone() {
+        let today = MAINNET_PARAMS;
+        const H: u64 = 9_000_000;
+
+        // One case per fence that a release cut can realistically arm. Each must move the params id
+        // (old peers still notice) and leave the identity alone (new peers stay peers).
+        let mut cases: Vec<(&str, Params)> = Vec::new();
+        let mut p = MAINNET_PARAMS;
+        p.dns_params.as_mut().unwrap().vlt.vlt_shadow_activation_daa_score = H;
+        cases.push(("vlt shadow (ADR-0024 step 3)", p));
+        let mut p = MAINNET_PARAMS;
+        p.dns_params.as_mut().unwrap().vlt.vlt_activation_daa_score = H;
+        cases.push(("vlt weight (step 4)", p));
+        let mut p = MAINNET_PARAMS;
+        p.dns_params.as_mut().unwrap().tkn.tkn_activation_daa_score = H;
+        cases.push(("tkn", p));
+        let mut p = MAINNET_PARAMS;
+        p.dns_params.as_mut().unwrap().tkn.emission_activation_epoch = 42;
+        cases.push(("tkn emission epoch", p));
+        let mut p = MAINNET_PARAMS;
+        p.dns_params.as_mut().unwrap().mandatory_attestation_inclusion_daa_score = H;
+        cases.push(("mandatory attestation inclusion", p));
+        let mut p = MAINNET_PARAMS;
+        p.dns_params.as_mut().unwrap().coinbase_settlement_consensus_activation_daa_score = H;
+        cases.push(("coinbase settlement consensus", p));
+        let mut p = MAINNET_PARAMS;
+        p.evm_activation_daa_score = H;
+        cases.push(("evm", p));
+        let mut p = MAINNET_PARAMS;
+        p.crescendo_activation = ForkActivation::new(H);
+        cases.push(("crescendo", p));
+
+        for (name, scheduled) in cases {
+            assert_ne!(today.consensus_params_id(), scheduled.consensus_params_id(), "{name}: the legacy fingerprint must move");
+            assert_eq!(
+                today.consensus_identity_id(),
+                scheduled.consensus_identity_id(),
+                "{name}: scheduling this fence moved the IDENTITY, so rolling it out would disconnect every \
+                 upgrading node from every un-upgraded one for the whole rollout — the defect M1-6 exists to remove"
+            );
+            assert_ne!(today.consensus_schedule_id(), scheduled.consensus_schedule_id(), "{name}: the operator log must name it");
+        }
+    }
+
+    /// The scheduling cases above only mean anything if the fences they arm are NOT already
+    /// genesis-active on this preset — arming a genesis-active fence somewhere else is a rule
+    /// change and SHOULD move the identity, which is the assertion in
+    /// `a_genesis_active_fence_is_not_normalised_away`. Pin which side of that line each fixture is
+    /// on, so a preset edit cannot quietly turn one test vacuous and the other wrong.
+    #[test]
+    fn the_scheduling_fixtures_are_on_the_side_of_the_line_they_claim() {
+        let dns = MAINNET_PARAMS.dns_params.clone().unwrap();
+        for (name, score) in [
+            ("vlt shadow", dns.vlt.vlt_shadow_activation_daa_score),
+            ("vlt weight", dns.vlt.vlt_activation_daa_score),
+            ("tkn", dns.tkn.tkn_activation_daa_score),
+            ("tkn emission epoch", dns.tkn.emission_activation_epoch),
+            ("mandatory attestation inclusion", dns.mandatory_attestation_inclusion_daa_score),
+            ("coinbase settlement consensus", dns.coinbase_settlement_consensus_activation_daa_score),
+            ("evm", MAINNET_PARAMS.evm_activation_daa_score),
+            ("crescendo", MAINNET_PARAMS.crescendo_activation.daa_score()),
+        ] {
+            assert_ne!(score, 0, "{name} is genesis-active on mainnet, so the scheduling case for it is wrong");
+            assert_ne!(score, 9_000_000, "{name}: the fixture height must differ from the shipped value");
+        }
+        // ...and the ones the identity MUST separate really are in force from block 1.
+        for (name, score) in [
+            ("dns overlay", dns.dns_activation_daa_score),
+            ("bond spend gate (audit M1-1)", dns.bond_spend_gate_mergeset_activation_daa_score),
+            ("full reward split", dns.full_reward_split_daa_score),
+            ("pos v2", dns.pos_v2_activation_daa_score),
+        ] {
+            assert_eq!(score, 0, "{name} is expected to be genesis-active on mainnet");
+        }
+    }
+
+    /// Every genesis-active fence on the shipped mainnet preset is a RULE: turning any one of them
+    /// off must be refused at the handshake, not waved through as a schedule difference (re-audit
+    /// R-1). `a_genesis_active_fence_is_not_normalised_away` proves it for the two that audit M1-1
+    /// moved; this is the same property for the rest of them.
+    #[test]
+    fn turning_off_any_genesis_active_fence_moves_the_identity() {
+        let today = MAINNET_PARAMS;
+        let off = |mutate: fn(&mut crate::dns_finality::DnsParams)| {
+            let mut p = MAINNET_PARAMS;
+            mutate(p.dns_params.as_mut().unwrap());
+            p.consensus_identity_id()
+        };
+        for (name, id) in [
+            ("dns overlay", off(|d| d.dns_activation_daa_score = u64::MAX)),
+            ("full reward split", off(|d| d.full_reward_split_daa_score = u64::MAX)),
+            ("pos v2", off(|d| d.pos_v2_activation_daa_score = u64::MAX)),
+            ("finality fee", off(|d| d.finality_fee_activation_daa_score = u64::MAX)),
+            ("unbond authz mergeset", off(|d| d.unbond_authz_mergeset_activation_daa_score = u64::MAX)),
+        ] {
+            assert_ne!(today.consensus_identity_id(), id, "{name}: in force on one side and never on the other is a rule difference");
+        }
+    }
+
     #[test]
     fn shipped_presets_have_pinned_fingerprints() {
         // Golden vectors. Any change to what goes into the fingerprint, or to how it is encoded,
@@ -5546,3 +5886,4 @@ mod fingerprint_probe {
         );
     }
 }
+

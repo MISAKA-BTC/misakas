@@ -1394,6 +1394,13 @@ impl ConnectionInitializer for FlowContext {
         // produce today, and refusing it there partitions the network for the whole rollout —
         // which is what made "ship consensus changes as an activation, never a re-genesis"
         // impossible to obey. They diverge at H, where fork choice is the right instrument.
+        //
+        // **"Scheduled" is not "already in force"** (re-audit R-1). `consensus_identity_id` keeps a
+        // fence that is active at GENESIS distinguishable, because two builds that disagree about
+        // one of those disagree about block 1 — they are not on the same chain, and letting them
+        // peer turns a handshake refusal into a silent fork. The residual, which this warning must
+        // not overstate: two builds that both arm a fence in the past at DIFFERENT non-zero heights
+        // still land here, and they can disagree about history between those heights.
         let local_params_id = self.config.params.consensus_params_id();
         if peer_version.consensus_params_id != local_params_id.as_bytes().to_vec() {
             let local_identity = self.config.params.consensus_identity_id();
@@ -1407,9 +1414,10 @@ impl ConnectionInitializer for FlowContext {
                 ));
             }
             warn!(
-                "peer {} runs the same consensus rules on a DIFFERENT activation schedule (local {}, peer {}); \
-                 keeping the peer — the two builds agree on every block until the earliest fence they disagree \
-                 about, and diverge there",
+                "peer {} agrees on every rule in force now and schedules a FUTURE fence differently (local {}, \
+                 peer {}); keeping the peer — the two builds agree on every block either can produce today and \
+                 diverge at the earliest height they disagree about. If that height is already behind this chain, \
+                 they are diverging NOW: compare the two builds' fence values before trusting this peer's tip",
                 peer_version.id,
                 self.config.params.consensus_schedule_id(),
                 describe_fingerprint(&peer_version.consensus_schedule_id),

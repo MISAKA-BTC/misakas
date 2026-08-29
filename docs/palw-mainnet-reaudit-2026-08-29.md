@@ -18,12 +18,20 @@ therefore single-threaded and is a sampling method, not a sweep.** M1 was read c
 adjudication and transport surfaces were read at the two points the original audit called
 deciding, and not exhaustively.
 
-**Tree state.** Build clean. `kaspa-consensus-core` 1342 passed / 9 ignored, `misaka-palw-base0`
-163 passed / 2 ignored, `kaspa-pq-validator-core` 36 passed. Both fingerprint pins match the code.
+**Tree state as audited.** Build clean. `kaspa-consensus-core` 1342 passed / 9 ignored,
+`misaka-palw-base0` 163 passed / 2 ignored, `kaspa-pq-validator-core` 36 passed. Both fingerprint
+pins match the code. **And one suite was never run, by either pass, until the remediation: `kaspa-consensus --lib` was
+224 passed / 26 FAILED on this branch — see R-8.** After the remediation: consensus-core 1347,
+consensus **250**, base0 163, validator-core 36, `misaka-cli` 35 — all green, pins unchanged (the
+repair does not move the fingerprint).
 
 ---
 
 ## Verdict
+
+> **Post-remediation note.** Every finding below is now fixed in the tree (see *Remediation status*
+> above), so the verdict here is the one this audit reached BEFORE its own fixes landed. It is kept
+> as written, because a verdict rewritten after the fact is not a verdict.
 
 **M1 — mainnet as it would ship today: still NO-GO.** Not for the reasons of 2026-08-28 — M1-1's
 economic hole is genuinely closed, and the destructive half of M1-2 is genuinely closed. The new
@@ -31,11 +39,64 @@ deciding facts are that **two of the fixes compose into a silent chain split** (
 one they compose through is the fix meant to make scheduled upgrades safe (R-2). A refusal that
 used to be loud is now a warning line.
 
-**M2 — unchanged: NO-GO.** M2-4's mechanism does look repaired: the challenger now bisects its own
+**M2 — NO-GO, and for a harder reason than 2026-08-28's.** The deciding fact is now R-8: with the
+changeset as audited, **the network does not run at all** — the header verifier and the producer
+disagree about the signing domain, so no PALW block reaches `StatusUTXOValid`. That is not a
+subtle economic hole; it is 26 red tests in a suite neither pass had run. Beyond it, M2-4's
+mechanism does look repaired: the challenger now bisects its own
 execution, so the ladder can diverge. But the original audit's acceptance condition — a live
 round trip that convicts a real fault *and* acquits a real innocent — is still unmet, and nothing
-in the tree tests it. Separately, M2-7's (correct) removal of the silence charge leaves the
-accountability layer with no participation incentive of any kind (R-7).
+in the tree tests it. Separately, M2-7's (correct) removal of the silence charge leaves the panel
+with no reason to answer at all: being wrong is charged, being right pays nothing, so the rational
+seat is silent and the honest producer absorbs the void (R-7 — this sentence is the corrected
+claim; the first draft of the verdict overstated it as "no participation incentive of any kind",
+which was wrong about the charge, not about the reward).
+
+---
+
+## Remediation status (2026-08-29, same day)
+
+**All eight findings are addressed in the tree, and A-1 is recorded in it.** R-8 was found while
+verifying the repairs for the other seven, and it is a `critical` the audit pass itself had missed. The sections below are
+left as they were WRITTEN — except R-7, whose *finding* was over-claimed and is corrected in place
+and marked as such, because leaving a wrong finding standing is worse than leaving a fixed one.
+
+| # | state | what changed |
+|---|---|---|
+| R-8 | fixed | `pre_ghostdag_validation` verifies under the genesis-bound domain the producer signs with; the harness's two signers, eleven test fixtures and `palw-jobs-export` move with it. `kaspa-consensus --lib` goes 224/26-failed → **250/0** |
+| R-1 | fixed | the identity keeps a **genesis-active** fence distinguishable: `0` stays `0`, every other height collapses to `never`. Genesis is the only reference height two peers agree on regardless of sync state, so this is comparable at handshake time where a tip-relative predicate would refuse every node mid-IBD |
+| R-2 | fixed | one exhaustive `for_each_fence` drives BOTH ids. `Params`, `DnsParams`, `VltParams` and `TokenParams` are destructured field-by-field, so a new fence does not compile until it is classified. `dns.vlt.*`, `dns.tkn.*`, `full_reward_split`, `mandatory_attestation_inclusion` and the Some-only credit/commitment fences are now covered |
+| R-3 | fixed | the witness is the child on the **selected chain** to the header DAG's selected tip, not the heaviest child. Blue-work ties and the grindable hash tiebreak are gone; no child on that chain ⇒ refuse, which is the posture both callers already took |
+| R-4 | fixed | the wallet mirrors `PalwSpendLocks::locks` instead of the set of all bonds: a bond that is `Unbonding` past `unbond_request + unbonding_period` is spendable again |
+| R-5 | fixed | an unparseable bond outpoint is now an error, not a `continue` — the fail-closed contract the function documents |
+| R-6 | fixed | the false determinism claim is replaced with the real reason (equivocation is `(target_hash, target_daa_score)` only), and a rebuild now refreshes the fingerprint it broadcasts, non-fatally |
+| R-7 | corrected + pinned | the finding was over-claimed and is rewritten. The residual — no reward for a `PalwPanelSeatV2` — is deliberately **not** repaired by inventing a payment rule here; it is named in `slash_silent_seats`'s doc with the two candidate designs and pinned by `a_v2_panel_seat_is_never_paid` |
+| A-1 | recorded | the launch-state precondition is written where the fence lives, with what must be confirmed out of band before a release is cut |
+
+**The consensus fingerprint does not move.** `consensus_params_id` is untouched, so both pinned
+preset fingerprints are byte-identical and `shipped_presets_have_pinned_fingerprints` passes
+unchanged — this remediation is deployable without a re-mint, unlike the changeset it audits.
+
+New regression tests: `a_genesis_active_fence_is_not_normalised_away`,
+`scheduling_any_fence_leaves_the_identity_alone`,
+`the_scheduling_fixtures_are_on_the_side_of_the_line_they_claim`,
+`turning_off_any_genesis_active_fence_moves_the_identity`, `a_v2_panel_seat_is_never_paid`, and the
+`bond_lock_tests` module in `misaka-cli`.
+
+**R-7 is the one item deliberately left open**, and it is an economics decision rather than a
+repair: paying the panel needs a source (a permille of the claim's released escrow) or a different
+mechanism entirely (re-bind once on `ReceiptTimeout` so silence delays rather than destroys, which
+costs one more `window_bind + window_receipt` against the pruning horizon `validate_palw_v2` now
+bounds). Either changes the ruleset id and belongs to the M2 phase, not to this pass.
+
+**What the remediation is NOT backed by.** R-3's fix is verified by reading and by compilation, not
+by a test: there is no test anywhere in the tree for `import_pruning_point_overlay_snapshot` or its
+PALW twin, which is why both the one-block poisoning and the grindable tiebreak survived two audits.
+The acceptance test the 2026-08-28 audit asked for — a two-node IBD where a side block at the
+pruning point carries a garbage `overlay_commitment_root` and the joiner still completes with its
+utxoset intact — is still the right one, and it would now also have to assert that the joiner picks
+the selected-chain child rather than the heaviest. That test is the highest-value piece of work left
+on the M1 list.
 
 ---
 
@@ -43,16 +104,64 @@ accountability layer with no participation incentive of any kind (R-7).
 
 | # | sev | scenario | one line | file:line |
 |---|---|---|---|---|
+| R-8 | critical | M2 | M2-18's genesis-bound signing domain reached the producer and the virtual processor but NOT the stateless header verifier, so no PALW block could ever become UTXO-valid — 26 consensus tests were red on the branch and nobody had run them | `consensus/src/pipeline/header_processor/pre_ghostdag_validation.rs:147` |
 | R-1 | critical | M1 | the identity split re-admits the exact fork M1-1 creates: pre- and post-fence mainnet builds now peer and diverge silently | `protocol/flows/src/flow_context.rs:1398` |
 | R-2 | high | M1 | the fence-normalisation list is incomplete and unguarded — the VLT/TKN fences this repo documents as the next fork still partition at deploy | `consensus/core/src/config/params.rs:798` |
 | R-3 | high | M1 | the pruning witness is still selectable by one cheap block: blue-work ties are normal and the hash tiebreak is grindable | `consensus/src/pipeline/virtual_processor/processor.rs:10706` |
 | R-4 | high | M1 | the wallet's bond exclusion is unconditional, so a legitimately released bond cannot be reclaimed with the shipped tooling | `misaka-cli/src/wallet.rs:109` |
-| R-7 | high | M2 | with the silence charge gone and `Unavailable` still free, no form of seat non-participation costs anything; the producer pays for it | `consensus/core/src/palw_state_v2.rs:3058` |
+| R-7 | medium | M2 | answering is all downside — being wrong is charged in both directions but nothing ever PAYS a panel seat, so the rational seat is silent and the producer bears the void (severity corrected down from `high`; see the finding) | `consensus/core/src/palw_state_v2.rs:3058` |
 | R-5 | low | M1 | the wallet's "surfaced, not swallowed" invariant has a fail-open hole: an unparseable bond outpoint is silently not excluded | `misaka-cli/src/wallet.rs:146` |
 | R-6 | low | both | M1-4's safety argument is false (signing is hedged, not deterministic); the conclusion happens to hold, the stated invariant does not | `kaspad/src/validator_service.rs:1503` |
 
 Plus one assumption risk, A-1, which is not a code defect but decides whether R-1 is a
 deployment nuisance or a catastrophe.
+
+R-8 is listed first because it is the only finding here that stops the chain rather than corrupting
+it, and because of how it was found: by running a test suite, after the reading-based pass had
+already declared itself finished.
+
+---
+
+### R-8 `[critical]` `[M2]` One signer moved, one verifier did not — and the suite that proves it was never run
+
+**Found by execution, after the findings above were written and while verifying their repairs.**
+It is the most serious thing in this document.
+
+Audit M2-18 bound the ML-DSA signing domain to the genesis so a signature names one incarnation.
+The change reached the producer (`kaspad/src/palw_producer.rs:330`), the panel, and all seven sites
+in the virtual processor — every one of them now calls
+`palw_network_domain_v2_for(.., Some(genesis))`. It did **not** reach
+`pre_ghostdag_validation.rs:147`, the stateless relay-path check, which kept deriving the domain
+from the network name alone.
+
+So the two verifiers of the same bytes answered different questions. An attempt signed by the
+shipped producer verifies in the virtual processor and **fails at the header**, which is the first
+gate every block passes through. On a live ConsensusV2 network the result is total: no PALW block
+becomes `StatusUTXOValid`, ever. The chain does not fork — it stops.
+
+**How it was found, which is the part worth keeping.** `cargo test -p kaspa-consensus --lib` was
+red on the branch: **26 failed, 224 passed**. Every failure was a PALW virtual-processor test
+tripping the same fixture assertion, `assert_valid_utxo_tip` — "no tip is UTXO-valid". The same
+test passes at `main` (`8e982b7`) and fails at the branch tip (`0493a1f`), which places the
+regression squarely in the 34-fix changeset and not in this remediation.
+
+The reason nobody saw it: the 2026-08-28 remediation reported "3 suites all green" — 
+`kaspa-consensus-core`, `misaka-palw-base0`, `kaspa-pq-validator-core`. That was true. **It never
+ran `kaspa-consensus`**, which is the only suite that drives a block through the real pipeline. A
+green report over the wrong suites is worse than no report, because it is spent as evidence.
+
+**Repair.** `pre_ghostdag_validation` uses the genesis-bound domain (the header processor already
+holds `genesis`). The test harness's two signers in `test_consensus.rs` and eleven fixtures in
+`virtual_processor/tests.rs` were signing under the old domain and are moved with it, and
+`tools/palw-jobs-export` — which re-derives job anchors offline for the explorer, and would have
+printed a plausible-looking wrong prompt for every block — now resolves the genesis from the
+network's own shipped params. After the repair: **250 passed, 0 failed.**
+
+The general lesson is the one this project keeps re-learning: a correspondence with two halves
+needs a test that compares the halves. The re-audit above listed "whether
+`palw_network_domain_v2_for` reached *every* signer and verifier — a single missed site is a
+network-wide signature mismatch" under *what this audit did NOT cover*. It was the right worry and
+it was correct; it was found by running the suite, not by reading.
 
 ---
 
@@ -253,30 +362,32 @@ Worth correcting because the next author will read the comment as the invariant.
 
 ---
 
-### R-7 `[high]` `[M2]` Nothing costs a seat anything any more, and the producer pays
+### R-7 `[medium]` `[M2]` Answering is all downside, so the rational seat is silent
 
-M2-7's repair is right on its own terms: the chain was charging seats for silence it could not
-observe, and both call sites were unable to supply the evidence (`palw_state_v2.rs:3058-3078`).
-Removing the charge removes a slash that fired on honest nodes.
+**Corrected 2026-08-29, during remediation.** The first version of this finding said "no form of
+seat non-participation costs anything" and called `Unavailable` free to win. That over-claimed on
+both halves, and the corrected statement is narrower — severity dropped `high` → `medium`:
 
-What it leaves is a layer with no participation incentive in either direction:
+* **Being wrong is charged, symmetrically, in both directions.** `ReceiptLicensed` slashes every
+  `Withheld` seat when the quorum says the data was served; `ProducerDefaulted` slashes every
+  `Valid` seat when the quorum says it was withheld, *and* takes the producer's stake
+  (`slash_dissenting_seats`, `palw_state_v2.rs:3023-3043`, called from both arms). An
+  `Unavailable` receipt against a licensing quorum is refuted and pays.
+* **A winning quorum is free**, but that is ordinary committee design resting on an honest-majority
+  assumption the panel draw already makes (`2·quorum > seat_count`), not a defect of this changeset.
 
-* a seat that files a receipt and is **refuted** pays (`bond(2).slashed > 0` in the rewritten test);
-* a seat that files **nothing** pays nothing (this fix);
-* a seat that files **`Unavailable`** pays nothing and needs no execution — M2-19, still open, is
-  that `Unavailable` is self-asserted and free;
-* no seat *reward* for answering appears anywhere in the transition.
+What is real, and what M2-7's repair leaves standing, is the **other side of the ledger**: nothing
+in the transition ever *pays* a `PalwPanelSeatV2`. ADR-0033's `PalwPaidAttesterV1` pays the V1
+credit lane's attesters and is referenced nowhere outside `palw_credit.rs`; `palw_credit` is `None`
+on every shipped preset including the ConsensusV2 RC one; and the block's escrowed carve is
+released to the worker, not the panel.
 
-The dominant strategy is therefore to never file a substantive receipt. When enough seats do that
-the claim voids on `ReceiptTimeout` (`palw_state_v2.rs:4335`) and the entire loss falls on the
-honest producer, whose work is discarded.
+So filing a receipt has a downside and no upside, and the seat that maximises its own outcome files
+nothing. Silence is (correctly, after M2-7) unobservable and therefore uncharged, the claim then
+voids at `ReceiptTimeout` (`palw_state_v2.rs:4335`), and the loss lands entirely on an honest
+producer whose work is discarded.
 
-This is not an argument for restoring the old charge — that charge was unprovable, which is why it
-had to go. It is that the remediation table records M2-7 as `fixed` and only M2-19 as `partial`,
-which understates it: **after this changeset the accountability layer has no working incentive at
-all**, and closing it needs the piece M2-19 defers (a price for `Unavailable`, or a reward for
-answering, or both). That is a design decision and it is now on the critical path for M2, not
-beside it.
+That is an economics gap, not a missing slash — which is why the repair below does not invent one.
 
 ---
 

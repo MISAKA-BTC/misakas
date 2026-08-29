@@ -15,10 +15,11 @@
 use kaspa_consensus_core::hashing::header::{hash as header_hash, pre_pow_hash_64};
 use kaspa_consensus_core::header::Header;
 use kaspa_consensus_core::palw_attempt_v2::{
-    PalwAttemptEnvelopeV2, attempt_id_v2, palw_job_anchor_v1, palw_network_domain_v2,
+    PalwAttemptEnvelopeV2, attempt_id_v2, palw_job_anchor_v1, palw_network_domain_v2_for,
 };
 use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
 use kaspa_hashes::Hash64;
+use std::str::FromStr;
 use misaka_palw_base0::qwen25_a16_backend::{qwen25_a16_material_decode_v1, qwen25_a16_prompt_for_anchor};
 use misaka_palw_base0::qwen36_backend::{qwen36_material_decode_v1, qwen36_prompt_for_anchor};
 use serde_json::{Value, json};
@@ -116,7 +117,15 @@ fn main() {
     let dump: Value = serde_json::from_slice(&std::fs::read(&blocks_path).unwrap_or_else(|e| die(format!("{blocks_path}: {e}"))))
         .unwrap_or_else(|e| die(format!("{blocks_path}: {e}")));
     let blocks = dump.get("blocks").and_then(|b| b.as_array()).unwrap_or_else(|| die("dump has no blocks[]".into()));
-    let domain = palw_network_domain_v2(network.as_bytes());
+    // **The genesis-bound domain the chain actually uses** (audit M2-18, re-audit R-8). Deriving it
+    // from the network name alone — which this did — reproduces a domain no verifier uses, so every
+    // anchor below, and therefore every prompt this tool prints, would be wrong while looking
+    // plausible. The genesis comes from the network's own shipped params, the same place consensus
+    // reads it.
+    let genesis = kaspa_consensus_core::network::NetworkId::from_str(&network)
+        .map(|net| kaspa_consensus_core::config::params::Params::from(net).genesis.hash)
+        .unwrap_or_else(|e| die(format!("--network {network}: {e}")));
+    let domain = palw_network_domain_v2_for(network.as_bytes(), Some(genesis));
 
     let mut rows = Vec::new();
     let mut hash_mismatch = 0usize;
