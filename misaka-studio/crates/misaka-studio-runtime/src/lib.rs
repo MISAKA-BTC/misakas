@@ -28,6 +28,7 @@ pub mod catalog;
 pub mod download;
 pub mod error;
 pub mod metrics;
+pub mod node;
 pub mod records;
 pub mod state;
 pub mod store;

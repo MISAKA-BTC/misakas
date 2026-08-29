@@ -11,6 +11,7 @@ import { useStudio } from './store/studio'
 import { ChatView } from './components/ChatView'
 import { ModelsView } from './components/ModelsView'
 import { MonitorView } from './components/MonitorView'
+import { NetworkView } from './components/NetworkView'
 import { SettingsView } from './components/SettingsView'
 import { Sidebar } from './components/Sidebar'
 import { Icon } from './components/common'
@@ -61,6 +62,7 @@ export default function App() {
       <main className="min-w-0 flex-1">
         {view === 'chat' && <ChatView />}
         {view === 'models' && <ModelsView />}
+        {view === 'network' && <NetworkView />}
         {view === 'monitor' && <MonitorView />}
         {view === 'settings' && <SettingsView />}
       </main>

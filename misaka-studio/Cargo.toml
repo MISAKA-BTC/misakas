@@ -47,6 +47,8 @@ thiserror = "2"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "io-util", "process", "signal", "sync", "time"] }
 tokio-stream = { version = "0.1", features = ["sync"] }
 tokio-util = { version = "0.7", features = ["io"] }
+# Plain ws:// to a loopback node; no TLS feature on purpose.
+tokio-tungstenite = "0.23"
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

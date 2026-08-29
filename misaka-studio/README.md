@@ -27,9 +27,12 @@ applications use is the API this app uses, and it cannot rot without the app bre
 **v0.1 — working MVP.** Model management, the runtime, chat, the performance monitor and the API
 are implemented and tested. The llama.cpp backend has been run end to end against a real
 `llama-server` — load, streaming, token counts, runtime identity — and the desktop shell opens,
-spawns its runtime and takes it down again. Not yet done: MLX is wired but has never run on a Mac,
-no CUDA or Metal machine has executed a model here, and the MISAKA network path is an interface
-with no chain client behind it (deliberately — see *Provenance* below).
+spawns its runtime and takes it down again. The Network tab joins the MISAKA network: it has
+**mined real PALW blocks** — a Studio-supervised bonded producer on a locally minted
+`ConsensusV2` chain, with a second bonded node verifying and filing receipts (see
+*Joining the MISAKA network*). Not yet done: MLX is wired but has never run on a Mac, no CUDA or
+Metal machine has executed a model here, and the public-testnet join is unexercised from the
+build environment (no P2P egress).
 
 ## Quick start
 
@@ -111,6 +114,42 @@ Studio.
 **GPU offload is planned, not guessed.** "Auto" computes how many layers fit after the KV cache and
 scratch buffers are accounted for, and says so in the UI: `23/33 on GPU`.
 
+## Joining the MISAKA network
+
+The Network tab is the participation ladder, and every rung is the same node with more at stake —
+on this network there is no separate miner program: **the thing that runs the model is the thing
+that makes the block.**
+
+* **Mining classes, as a list you can act on.** A block on MISAKA is won by verified LLM
+  inference in one of the chain-registered classes — `PALW-BASE-0` (the deterministic floor,
+  600‰, needs nothing), `PALW-QWEN25-A16` (200‰, converted locally from public Qwen2.5 weights),
+  `QWEN36` (200‰, a 34 GiB Qwen3.6-35B artifact, downloadable and digest-pinned). Each card
+  shows its share, its artifact requirement, this machine's readiness — including an honest
+  "this machine cannot run this class" when the artifact exceeds RAM — and, when a node is
+  running, the class's **live on-chain status** from the node's own `--palw-dump-classes` table.
+  The artifact download reuses the model download pipeline, verified against the chain-pinned
+  SHA-256.
+* **Observer** — point the tab at any reachable node RPC and read the chain.
+* **Verifier** — run a full node; on this chain syncing *is* verifying, no bond required. With a
+  bonded key the same node takes panel duty and files receipts on producers' claims.
+* **Producer (miner)** — a bonded ML-DSA-87 key, a bond outpoint, a pay address. The Studio
+  launches and supervises the node (`--palw-produce --palw-panel …`), streams its
+  `[palw-producer]`/`[palw-panel]` lines into the activity feed, and — because a person putting
+  a bonded key on the line must be able to audit what ran — always displays the **exact command
+  line**, reproducible without the Studio. First run without a bond registers one
+  (`--palw-register-bond`); the printed outpoint goes into settings and then mines.
+
+The node is driven over its JSON workflow-RPC (`--rpclisten-json`, loopback only), supervised as
+a child process the same way engines are, and stopped with SIGTERM first so RocksDB closes clean.
+`/api/v1/network` carries all of it, so any client — not just this UI — can see the ladder.
+
+This has been demonstrated end to end: a Studio-configured producer mined hundreds of accepted
+PALW-BASE-0 blocks on a locally minted testnet-11-preset chain (the same genesis ceremony that
+launched the public network), while an independent bonded seat filed 270 `Valid` receipts on its
+claims. What that run did and did not prove — and how to reproduce it — is recorded in
+[`docs/misaka-studio-palw-demo.md`](../docs/misaka-studio-palw-demo.md) in the misakas
+repository.
+
 ## Provenance — the part that is MISAKA's
 
 The long path is `Inference → Deterministic Execution → Inference Hash → Verification → Compute
@@ -151,9 +190,11 @@ choose.
 ```
 misaka-studio/
   crates/misaka-studio-core/      GGUF reader, quantization table, hardware probe, fit
-                                  arithmetic, settings, provenance derivations
+                                  arithmetic, settings, provenance derivations, the PALW
+                                  mining-class catalog
   crates/misaka-studio-runtime/   backends, model store, Hugging Face catalog, downloads,
-                                  metrics, record log, the HTTP API, `misaka-studiod`
+                                  metrics, record log, node supervisor + wRPC client,
+                                  the HTTP API, `misaka-studiod`
   ui/                             React + Vite + Tailwind; one bundle, served or loaded from disk
   desktop/src-tauri/              the Tauri v2 shell
   NOTICE                          attribution — Jan (Apache-2.0), llama.cpp, MLX

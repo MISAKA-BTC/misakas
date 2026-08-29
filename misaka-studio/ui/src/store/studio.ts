@@ -14,7 +14,7 @@ import { persist } from 'zustand/middleware'
 import { api, streamChat } from '../lib/api'
 import type { ChatMessage, Conversation, DownloadProgress, ModelView, RuntimeSample, RuntimeStatus, Settings, SystemInfo } from '../lib/types'
 
-export type View = 'chat' | 'models' | 'monitor' | 'settings'
+export type View = 'chat' | 'models' | 'network' | 'monitor' | 'settings'
 
 /** A message shown to the user about something that just happened. */
 export type Toast = { id: string; kind: 'info' | 'error' | 'success'; text: string }

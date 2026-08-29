@@ -194,6 +194,70 @@ impl Default for HuggingFaceSettings {
     }
 }
 
+/// Which MISAKA network a supervised or attached node is on.
+///
+/// `Testnet11` is the live public network; `Devnet` and `Simnet` are the local, permissionless
+/// presets — the ones a sandboxed machine (or anyone who just wants to see PALW produce blocks)
+/// can run without reaching the internet at all.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NodeNetwork {
+    #[default]
+    Testnet11,
+    Devnet,
+    Simnet,
+}
+
+/// How this machine participates in the MISAKA network.
+///
+/// The ladder is honest about what each rung requires. Observing needs a reachable node's RPC.
+/// Verifying needs a full node — syncing and re-deriving claims is what a node does by being a
+/// node. Producing additionally needs a bonded seat on-chain and, for a model class, that class's
+/// artifact on disk; the Studio can launch the node and check the prerequisites, but a bond is an
+/// on-chain fact it cannot conjure.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NetworkRole {
+    #[default]
+    Observer,
+    Verifier,
+    Producer,
+}
+
+/// The MISAKA node this Studio watches or supervises.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NodeSettings {
+    /// Path to the `kaspad` binary (the misakas node keeps upstream's binary name). `None` means
+    /// look beside the Studio's executable and on PATH, same as the engine resolution.
+    pub kaspad_path: Option<PathBuf>,
+    /// Attach to an already-running node's wRPC endpoint instead of launching one. Takes
+    /// precedence over launching: two nodes sharing one appdir is a corrupted database.
+    pub rpc_url: Option<String>,
+    pub network: NodeNetwork,
+    pub role: NetworkRole,
+    /// Coinbase payout address for producing. An address, not a key — the Studio never holds
+    /// wallet key material.
+    pub mining_address: Option<String>,
+    /// Path to the producer's 32-byte ML-DSA-87 seed file (`misaka key gen`). A path the node
+    /// reads — the Studio passes it on the command line and never opens the file.
+    pub producer_key_path: Option<PathBuf>,
+    /// The bond outpoint (`<txid>:<index>`) printed once by the registration run. Absent means
+    /// the next producer start registers a bond instead of mining with one.
+    pub producer_bond: Option<String>,
+    /// The fee outpoint that funds the panel submitter (usually the bond carrier's change,
+    /// `<txid>:1`). Absent runs the panel receipts-only, which the node states at startup.
+    pub fee_outpoint: Option<String>,
+    /// Class id to produce in (128 hex). Absent mines the floor — BASE-0, no artifact.
+    pub producer_class: Option<String>,
+    /// The class artifact file, for a model class.
+    pub class_artifact: Option<PathBuf>,
+    /// The node's data directory. `None` uses the node's own default.
+    pub appdir: Option<PathBuf>,
+    /// Extra arguments appended verbatim to the node's command line.
+    pub extra_args: Vec<String>,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Theme {
@@ -295,6 +359,7 @@ pub struct Settings {
     pub models_dir: PathBuf,
     pub server: ServerSettings,
     pub backend: BackendSettings,
+    pub node: NodeSettings,
     pub generation: GenerationDefaults,
     pub huggingface: HuggingFaceSettings,
     pub ui: UiSettings,
@@ -307,6 +372,7 @@ impl Default for Settings {
             models_dir: default_models_dir(),
             server: ServerSettings::default(),
             backend: BackendSettings::default(),
+            node: NodeSettings::default(),
             generation: GenerationDefaults::default(),
             huggingface: HuggingFaceSettings::default(),
             ui: UiSettings::default(),

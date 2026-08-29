@@ -7,6 +7,9 @@
 
 import type {
   BackendInfo,
+  NetworkOverview,
+  NodeView,
+  PalwClassStatus,
   CatalogEntry,
   CatalogRepo,
   DownloadProgress,
@@ -93,6 +96,15 @@ export const api = {
 
   settings: () => request<Settings>('/api/v1/settings'),
   saveSettings: (settings: Settings) => request<Settings>('/api/v1/settings', { method: 'PUT', body: JSON.stringify(settings) }),
+
+  network: () => request<NetworkOverview>('/api/v1/network'),
+  networkClasses: () => request<PalwClassStatus[]>('/api/v1/network/classes'),
+  downloadClassArtifact: (name: string) =>
+    request<DownloadProgress>(`/api/v1/network/classes/${encodeURIComponent(name)}/download`, { method: 'POST' }),
+  startNode: (role?: 'observer' | 'verifier' | 'producer') =>
+    request<NodeView>('/api/v1/network/node/start', { method: 'POST', body: JSON.stringify({ role: role ?? null }) }),
+  stopNode: () => request<{ stopped: boolean }>('/api/v1/network/node/stop', { method: 'POST' }),
+  nodeLog: (limit = 200) => request<string[]>(`/api/v1/network/node/log?limit=${limit}`),
 
   records: (limit = 50) => request<InferenceRecord[]>(`/api/v1/records?limit=${limit}`),
 }

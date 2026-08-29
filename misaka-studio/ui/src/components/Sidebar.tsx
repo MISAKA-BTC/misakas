@@ -11,6 +11,7 @@ import { Icon, type IconName } from './common'
 const NAV: { view: View; label: string; icon: IconName }[] = [
   { view: 'chat', label: 'Chat', icon: 'chat' },
   { view: 'models', label: 'Models', icon: 'cube' },
+  { view: 'network', label: 'Network', icon: 'globe' },
   { view: 'monitor', label: 'Monitor', icon: 'gauge' },
   { view: 'settings', label: 'Settings', icon: 'settings' },
 ]

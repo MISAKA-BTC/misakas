@@ -30,6 +30,10 @@ pub enum Error {
     #[error("the model catalog could not be reached: {message}")]
     Catalog { message: String },
 
+    /// The MISAKA node: unreachable, refused to start, or answered with an error.
+    #[error("node: {message}")]
+    Node { message: String },
+
     #[error("download failed: {message}")]
     Download { message: String },
 
@@ -74,6 +78,7 @@ impl Error {
             Error::ModelNotFound { .. } => StatusCode::NOT_FOUND,
             Error::BadRequest { .. } => StatusCode::BAD_REQUEST,
             Error::Catalog { .. } => StatusCode::BAD_GATEWAY,
+            Error::Node { .. } => StatusCode::BAD_GATEWAY,
             Error::Cancelled => StatusCode::from_u16(499).unwrap_or(StatusCode::BAD_REQUEST),
             Error::Engine { .. } | Error::Download { .. } | Error::Io { .. } | Error::Core(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }

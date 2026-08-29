@@ -63,12 +63,14 @@ the same GPU twice.
 | `…/hardware.rs` | CPU, RAM, and accelerators via `nvidia-smi` / `rocm-smi` / `sysctl`. Unified memory is a first-class case, not a zero-VRAM GPU. |
 | `…/model.rs` | The memory bill (weights + KV cache at a given context + overhead) and the fit verdict. |
 | `…/provenance.rs` | The consensus derivations and the inference record. §4. |
-| `…/settings.rs` | Schema, per-platform paths, atomic save. |
+| `…/settings.rs` | Schema, per-platform paths, atomic save. Includes `NodeSettings`: network, role, bonded-producer fields. |
+| `…/palw.rs` | The PALW mining-class catalog: the chain-registered classes (BASE-0, QWEN25-A16, QWEN36) with share, artifact provenance (seed-derived / pinned download / local conversion), and per-machine readiness assessment. |
 | `crates/misaka-studio-runtime/src/backend/` | `InferenceBackend`, the shared child-process engine driver, llama.cpp, MLX, mock. |
 | `…/store.rs` | Model scan, sidecars, cached digests, deletion. |
 | `…/catalog.rs`, `…/download.rs` | Hugging Face search and file listing; resumable, verified downloads. |
 | `…/metrics.rs`, `…/records.rs` | Hardware + throughput sampling; the JSONL inference log. |
-| `…/api/` | `/v1` (OpenAI) and `/api/v1` (Studio), SSE, static UI, auth. |
+| `…/node.rs` | The MISAKA node as a supervised child: builds the runbook's exact flag set from `NodeSettings` (producer prerequisites checked with remedy-carrying errors), one-shot wRPC (workflow-RPC over websocket) status queries, `[palw-*]` activity and `--palw-dump-classes` parsing, SIGTERM-first shutdown. |
+| `…/api/` | `/v1` (OpenAI) and `/api/v1` (Studio), SSE, static UI, auth. `/api/v1/network`: the ladder — overview, classes with readiness + live chain rows, artifact download, node start/stop/log. |
 | `ui/` | React 19 + Vite + Tailwind 4. One bundle, three ways of being loaded. |
 | `desktop/src-tauri/` | The shell. |
 
@@ -255,6 +257,17 @@ Three of the bugs above were found this way and by no other means: the version b
 current shape, the bare `-fa` flag, and a `400 unordered_map::at` from a model with no chat
 template.
 
+* **PALW mining, end to end** — a bonded producer configured and launched through the Studio
+  mined hundreds of accepted PALW-BASE-0 blocks (418 sampled at shutdown, difficulty
+  retargeting from 550 to ~197k) on a locally minted testnet-11-preset chain — minted with the
+  public launch runbook's own ceremony because the sandbox has no P2P route to the public
+  network — while a second, independently bonded node accepted the blocks via relay and its
+  panel service filed 270 `Valid` receipts on the producer's claims. The chain's
+  `--palw-dump-classes` table appeared in the Network tab with the QWEN36 class id matching
+  the catalog byte for byte. The full record, including what was deliberately **not**
+  demonstrated (public-net join, the 5-seat/40-hour licensing pipeline), is
+  `docs/misaka-studio-palw-demo.md`.
+
 ## 6. Platforms
 
 | Platform | Engine | Status |
@@ -302,4 +315,11 @@ processes, not bundled. No closed-source application was used, copied, or revers
 * **No embeddings endpoint** (`/v1/embeddings`), no tool calling, no MCP.
 * **One model at a time.** The backend holds a single engine; serving two models concurrently needs
   a pool, and the memory arithmetic to decide whether that is even possible.
+* **The public-testnet join is unexercised.** The producer flags the Studio builds are the join
+  runbook's flags unchanged and they mined a locally minted chain (§5a), but no session from this
+  environment has connected to the live testnet-11 — the sandbox has no P2P egress. First run on
+  a machine with an open network is the remaining step, and it is a configuration change, not code.
+* **The licensing pipeline is not driven.** Claims open and receipts file (§5a), but quorum needs
+  five live seats and licensing ~40 hours of chain time; the Studio shows `weight=0 unresolved=N`
+  honestly rather than simulating the rest.
 * **Nothing publishes records.** By design, for this version.

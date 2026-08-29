@@ -213,6 +213,20 @@ export type Settings = {
     max_tokens: number
     seed: number | null
   }
+  node: {
+    kaspad_path: string | null
+    rpc_url: string | null
+    network: 'testnet11' | 'devnet' | 'simnet'
+    role: 'observer' | 'verifier' | 'producer'
+    mining_address: string | null
+    producer_key_path: string | null
+    producer_bond: string | null
+    fee_outpoint: string | null
+    producer_class: string | null
+    class_artifact: string | null
+    appdir: string | null
+    extra_args: string[]
+  }
   huggingface: { endpoint: string; token: string | null; max_concurrent_downloads: number }
   ui: { theme: 'system' | 'light' | 'dark'; show_provenance: boolean; show_performance: boolean }
   provenance: { record_inferences: boolean; keep_transcripts: boolean; max_records: number }
@@ -273,4 +287,74 @@ export type Conversation = {
   updatedAt: number
   modelId: string | null
   messages: ChatMessage[]
+}
+
+// --- the Network tab -------------------------------------------------------
+
+export type PalwArtifactSource =
+  | { kind: 'derived_from_seed' }
+  | { kind: 'download'; filename: string; sha256: string; size_bytes: number; hf_repo: string; convert_command: string }
+  | { kind: 'convert_locally'; extension: string; approx_size_bytes: number; source_repo: string; convert_command: string }
+
+export type PalwClassReadiness =
+  | { state: 'ready_built_in' }
+  | { state: 'artifact_present'; path: string; size_bytes: number; verified: boolean }
+  | { state: 'artifact_missing'; downloadable: boolean }
+  | { state: 'artifact_mismatch'; path: string; size_bytes: number; expected_bytes: number }
+
+export type PalwClassStatus = {
+  spec: {
+    name: string
+    description: string
+    share_permille: number
+    class_id_hex: string
+    class_id_complete: boolean
+    artifact_root_hex: string
+    artifact: PalwArtifactSource
+    is_base: boolean
+  }
+  readiness: PalwClassReadiness
+  memory_note: string | null
+}
+
+export type NodeStatus = {
+  reachable: boolean
+  rpc_url: string
+  source: string
+  server_version: string | null
+  network: string | null
+  is_synced: boolean | null
+  virtual_daa_score: number | null
+  block_count: number | null
+  header_count: number | null
+  difficulty: number | null
+  peer_count: number | null
+  mempool_size: number | null
+  sink: string | null
+  error: string | null
+}
+
+export type NodeClassRow = {
+  class_id: string
+  base: boolean
+  status: string
+  share_permille: number | null
+  budget_blocks: number | null
+}
+
+export type NodeView = {
+  status: NodeStatus
+  role: 'observer' | 'verifier' | 'producer'
+  command_line: string[] | null
+  classes_from_node: NodeClassRow[]
+  activity: string[]
+}
+
+export type NetworkOverview = {
+  role: 'observer' | 'verifier' | 'producer'
+  network: 'testnet11' | 'devnet' | 'simnet'
+  node: NodeView
+  classes: PalwClassStatus[]
+  kaspad_found: boolean
+  kaspad_path: string
 }

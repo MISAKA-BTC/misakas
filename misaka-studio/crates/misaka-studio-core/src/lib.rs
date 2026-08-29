@@ -32,6 +32,7 @@
 pub mod gguf;
 pub mod hardware;
 pub mod model;
+pub mod palw;
 pub mod provenance;
 pub mod quant;
 pub mod settings;
