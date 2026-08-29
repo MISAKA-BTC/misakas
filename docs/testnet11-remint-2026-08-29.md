@@ -121,3 +121,47 @@ Everything in `docs/palw-mainnet-audit3-2026-08-29.md`: four criticals, eleven h
 producer gate, and the R-3 acceptance test made deterministic. Two items are explicitly recorded as
 fixed-but-untested, in the source rather than in a table — S-04's refusing half (needs a two-bond
 harness) and S-01's court round trip (needs a two-node one).
+
+
+---
+
+## Outcome (2026-08-29, same day)
+
+**Migrated to `95265934…`:** `169.58.39.220` node0 (producer), `160.16.131.119` (A, producing),
+`169.58.232.113` (node + explorer + seeder + MTP), `5.104.81.23` (C, seat2).
+
+**Withdrawn from the network:** `169.58.232.114` — stopped, `systemctl disable`d and its datadir
+removed at the operator's instruction. It is a games host and no longer participates. No DNS name
+resolved to it, so nothing needed changing there; the join doc's fallback-entry list did name it and
+has been corrected.
+
+**Reachability, corrected.** The earlier table said C and `.114` were unreachable. That was an
+artefact of driving them *from ibm with ibm's key*; both answer directly to `~/.ssh/claude_key`.
+The right lesson is to try the key you have from where you are before recording a host as
+unreachable.
+
+**Second nodes stopped, one per host.** `misaka-t11-node1` on ibm and seats 3/4 on C each map the
+34 GiB Qwen3.6 artifact; two of those on a 23-24 GB host is an OOM loop, and on ibm it was killing
+the *producer* (node0 restarted 3x, node1 4x). Stopping node1 took ibm from 20.0 GB used to 9.9 GB
+with 14 GB available. This is reversible (`systemctl enable --now`) and is a capacity fact, not a
+consensus decision: the host cannot hold both.
+
+**Disk.**
+
+| host | before | after | what was freed |
+|---|---|---|---|
+| ibm `169.58.39.220` | 97% (12 GB) | 80% (59 GB) | 6 superseded datadir backups, journal + rotated syslog, `/tmp` algo-4 GGUFs, 3 rebuildable `target/` dirs |
+| C `5.104.81.23` | 99% (5.7 GB) | 42% (227 GB) | `/home/Azaraseal/.rusty-kaspa/misaka-testnet-10` — 215 GB, last written 2026-07-30, no unit referencing it, no open files — plus the old-fingerprint t11 datadirs |
+| A `160.16.131.119` | 20% | 17% | two closed June logs (15 GB + 1.3 GB) |
+| `.113` | 4% | 4% | nothing needed |
+| `.114` | 10% | 9% | its t11 datadir, on withdrawal |
+
+No model artifact was deleted on any host.
+
+**DNS.** `seeder1.misakascan.com` → `169.58.39.220`, `169.58.232.113`; `seeder3.misakascan.com` →
+`5.104.81.23`, `169.58.39.220`. All four are on the new fingerprint, so the seed names hand out only
+nodes a joiner can actually reach. `seeder2`/`seeder4.misakascan.com` and `seeder1.misakastake.com`
+do not answer, and `seeder{1,2,3}.misakachain.com` all resolve to `85.131.213.182`, a registrar
+wildcard rather than a seeder — both pre-existing and both a registrar-side fix. Note that
+testnet-11 ships `dns_seeders: &[]`, so none of this is on the joining path for t11 today; the
+fleet uses `--addpeer`.

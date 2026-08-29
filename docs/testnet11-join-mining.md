@@ -40,14 +40,17 @@ that changed.
 | a model | **no.** The default class is the integer floor; see §5 |
 
 `--netsuffix=11`, P2P **26311**, RPC **26312**. DNS seeding is live, so no `--addpeer` is needed
-(fallback entry nodes: `169.58.232.113:26311`, `169.58.232.114:26311`, `169.58.39.220:26311`).
+(fallback entry nodes: `169.58.232.113:26311`, `169.58.39.220:26311`, `5.104.81.23:26311`.
+`169.58.232.114` was withdrawn from the network on 2026-08-29 and no longer answers.)
 A node on the right chain logs
 
 ```
-Consensus params fingerprint: 15bab795442ec3efc3a58e02dd9c7a6f3015ff0634bc4a50a7af589338857ad0 (network testnet-11)
+Consensus params fingerprint: 95265934e8965e91f3c22281af735bcd38527b5ee89fa09a05290db566d444a3 (network testnet-11)
 ```
 
-(Identity as of the 2026-08-27 re-mint for ADR-0058. If you joined an earlier testnet-11, wipe the
+(Identity as of the **2026-08-29 re-mint** for the audit3 remediation — `PALW_STATE_V2_VERSION` 12.
+The previous value was `15bab795…`; a node still announcing it is on the old chain and every
+upgraded node will refuse it at the handshake. If you joined an earlier testnet-11, wipe the
 appdir; the old chain is archived, not continued.)
 
 A different fingerprint means a different ruleset, and the two will refuse each other at handshake.

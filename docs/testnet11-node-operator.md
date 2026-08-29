@@ -8,7 +8,7 @@ deterministic LLM inference**, not a hash. There is no hash lane to fall back to
 point, and it is what makes the rest of this document necessary.
 
 > **Current identity (2026-08-27 re-mint, ADR-0058) — wipe your datadir if you joined earlier.**
-> The live chain's consensus fingerprint is **`15bab795442ec3efc3a58e02dd9c7a6f3015ff0634bc4a50a7af589338857ad0`**,
+> The live chain's consensus fingerprint is **`95265934e8965e91f3c22281af735bcd38527b5ee89fa09a05290db566d444a3`**,
 > genesis **`c664a224…`** (three execution classes + the 347M MSK community allocation baked in).
 > A node holding any earlier testnet-11 state does not resume on this chain — it is refused at
 > handshake by fingerprint, which is the intended behaviour; `rm -rf` the appdir (or use a new
