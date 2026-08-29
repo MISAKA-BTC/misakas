@@ -149,9 +149,16 @@ use std::collections::{BTreeMap, BTreeSet};
 /// fingerprint directly (see `Params` — every earlier bump moved the handshake only because it
 /// happened to ride a bundle-shape change).
 ///
-/// **Version 11: the audit3 remediation.** Two rules changed about which blocks are valid and what
-/// the state may hold, and neither changes a schema — which is precisely the case this constant
-/// exists for, and precisely the case that forks a network silently when it is not declared.
+/// **Version 12: the audit3 remediation.** Three rules changed about which blocks are valid and what
+/// the state may hold, and none changes a schema — which is precisely the case this constant exists
+/// for, and precisely the case that forks a network silently when it is not declared.
+///
+/// **Why 12 and not 11.** 11 was assigned when S-03 and S-04 landed, and H4 changed a rule
+/// afterwards on the same branch — so two intermediate builds would both have reported the
+/// fingerprint 11 produced while disagreeing about what a swept court does to a bond. Nothing
+/// shipped from either, but "no two builds report one fingerprint with different rules" is the
+/// property this constant is for, and keeping 11 would have relied on nobody having built the
+/// middle commit. 11 is burned deliberately.
 ///
 /// * S-03: a class awaiting activation no longer has its pending permille written into the live
 ///   share table. Registrations that used to be accepted are now refused
@@ -171,7 +178,7 @@ use std::collections::{BTreeMap, BTreeSet};
 /// but this number tells two builds they disagree. It is hashed into the params fingerprint, so
 /// moving it is a coordinated upgrade — which for testnet-11 means the re-mint the audit already
 /// called for.
-pub const PALW_STATE_V2_VERSION: u16 = 11;
+pub const PALW_STATE_V2_VERSION: u16 = 12;
 
 pub const PALW_STATE_V2_DOMAIN_OPERATOR_ID: &[u8] = b"misaka-palw/state-v2/operator-id/v1";
 
@@ -10014,7 +10021,7 @@ pub(crate) mod tests {
             })
         }
         spec_hash(b"misaka-palw/state-v2/state-root/v1", |s| {
-            s.update(&11u16.to_le_bytes()); // version_le(2) = 11, restated from the ADR (audit3: S-03 + S-04)
+            s.update(&12u16.to_le_bytes()); // version_le(2) = 12, restated from the ADR (audit3: S-03 + S-04 + H4)
             s.update(spec_collection_root(b"bonds", &c.bonds).as_byte_slice());
             s.update(spec_collection_root(b"reserved_exposure", &c.reserved_exposure).as_byte_slice());
             s.update(spec_collection_root(b"classes", &c.classes).as_byte_slice());
@@ -10307,21 +10314,21 @@ pub(crate) mod tests {
     /// moves one of these constants, which is the visible flag ADR-0043's change rule demands.
     /// Update them ONLY together with a version bump and an ADR-0043 amendment.
     ///
-    /// A third time, for the audit3 remediation: `PALW_STATE_V2_VERSION` 10 → 11 because S-03 and
-    /// S-04 changed which blocks and which registrations are valid without changing a schema. The
+    /// A third time, for the audit3 remediation: `PALW_STATE_V2_VERSION` 10 → 12 because S-03, S-04
+    /// and H4 changed which blocks, registrations and slashes are valid without changing a schema. The
     /// version is the only carrier for a semantics-only change, so these constants moved with it —
     /// which is the rule working, not a nuisance.
     #[test]
-    fn the_version_11_state_root_golden_vectors() {
+    fn the_version_12_state_root_golden_vectors() {
         assert_eq!(
             PalwChainStateV2::genesis().state_root().to_string(),
-            "e4b628fd20edc2dd270ac6cb95ca41ac908c639fd7debeed04469b97a707954f3ae41599a538763144f57a9c4b0f552ea33bd7518f9b91289f1c8e256087981e",
-            "the empty state's version-11 root moved"
+            "e6e982b20f08e8102d0faddc9707c8ef1ef04f0dacd298bdf67b7373b1156134d011ff36d2794538c5326925ef6f94427f0b147813773a6ee7f1ce604d136d9b",
+            "the empty state's version-12 root moved"
         );
         assert_eq!(
             m02_populated_state().state_root().to_string(),
-            "6b0836322382301a15a62f508413b8fd2aebbfd533208fa212e8ba220d3f1be21d2a9edecc0461932c708388e2bf6781df84bdc09309b81162531485cf25a1d8",
-            "the inhabited state's version-11 root moved"
+            "ec9a46f0a8df0390a2c6010f728169b90395fa36903015098ae0df2f4201ac38cad27d5cebe7679b86802990d0cf50112dff41a00d13e159ae25285a1f444e30",
+            "the inhabited state's version-12 root moved"
         );
     }
 }

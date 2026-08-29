@@ -5596,7 +5596,7 @@ mod consensus_params_id_tests {
             // own lesson is that a rule change not declared by a version bump forks the network
             // silently. testnet-11 must be re-minted onto this build; mainnet has not launched.
             //
-            // **Re-pinned 2026-08-29 for the audit3 remediation.** `PALW_STATE_V2_VERSION` 10 → 11,
+            // **Re-pinned 2026-08-29 for the audit3 remediation.** `PALW_STATE_V2_VERSION` 10 → 12,
             // which is hashed here directly. Two rules moved and neither changes a schema, so this
             // number is the ONLY thing that tells two builds they disagree: S-03 stops a class
             // awaiting activation from holding a live share (registrations that used to be
@@ -5604,11 +5604,13 @@ mod consensus_params_id_tests {
             // outright), and S-04 makes the coinbase's entitlement filter ask the full admission
             // rather than a subset of it (merged blocks the chain refuses for epoch budget or
             // exposure are no longer paid; a merged receipt spend is no longer denied). Different
-            // blocks are valid and different coinbases are valid, so the fingerprint moves — and
+            // blocks are valid and different coinbases are valid; H4 additionally stops an
+            // unanswered opening rung from slashing the accuser, and a bond's `slashed` is state.
+            // So the fingerprint moves — and
             // only this preset moves, because only this preset carries a PALW V2 bundle. The
             // re-mint the paragraph above already called for is the one that carries this too;
             // doing it on `404f8715…` would have bought a network needing a second one at once.
-            "53be4b21650fd443ec1cf666bbeb577423ad277b1dc7e78fdc2b929032c97c3c"),
+            "95265934e8965e91f3c22281af735bcd38527b5ee89fa09a05290db566d444a3"),
             ("simnet", SIMNET_PARAMS, "dae24a4cddc3bd324d7e99dc61c9e14269b9a4619fecb639836b8286e144664f"),
             ("devnet", DEVNET_PARAMS, "f8981a530bf6070e4c27696d2666673ee36a1d9f1f5b4b315c4c7400b84136c0"),
         ]
