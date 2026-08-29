@@ -1,0 +1,39 @@
+[package]
+name = "misaka-palw-pool"
+description = "MISAKA PALW mining pool: a bonded relay that lets a miner produce PALW blocks for the BASE-0 LLM floor class without running a node — the pool holds the chain and the retention obligation, the miner holds its own bond, key and payout"
+publish = false
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "misaka-palw-pool-miner"
+path = "src/bin/miner.rs"
+
+[dependencies]
+kaspa-consensus-core.workspace = true
+kaspa-hashes.workspace = true
+kaspa-pow.workspace = true
+kaspa-addresses.workspace = true
+kaspa-txscript.workspace = true
+kaspa-core.workspace = true
+kaspa-pq-validator-core.workspace = true
+misaka-palw-base0.workspace = true
+
+async-trait.workspace = true
+blake2b_simd.workspace = true
+borsh.workspace = true
+faster-hex.workspace = true
+libcrux-ml-dsa.workspace = true
+log.workspace = true
+rand.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["full"] }
+
+[lints]
+workspace = true

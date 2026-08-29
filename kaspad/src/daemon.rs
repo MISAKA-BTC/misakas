@@ -1297,6 +1297,52 @@ Do you confirm? (y/n)";
         None
     };
 
+    // ADR-0042 / `misaka-palw-pool`: the mining pool, which is the producer's loop cut in half —
+    // this node keeps the chain-shaped work (facts, templates, material retention and gossip,
+    // submission) and remote miners keep the key-shaped work (the inference, the grind, the
+    // signature). It needs no key, no bond and no pay address of its own, which is exactly the
+    // difference between running a pool and running a producer.
+    let palw_pool_service = match (&args.palw_pool_listen, &config.params.palw_consensus_mode) {
+        (Some(listen), kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle)) => {
+            // The floor by default, for the reason the floor exists: its weights are derived from
+            // a pinned seed, so a pool miner needs no download to serve it. `--palw-producer-class`
+            // moves the pool too, because an operator running both means one class.
+            let class_id = match &args.palw_producer_class {
+                Some(hex) => hex.parse::<kaspa_consensus_core::Hash64>().unwrap_or_else(|e| {
+                    panic!("--palw-producer-class {hex} is not a 128-hex class id: {e}");
+                }),
+                None => bundle.base_class_id,
+            };
+            Some(Arc::new(crate::palw_pool::PalwPoolService::new(
+                crate::palw_pool::PalwPoolConfig {
+                    listen: listen.clone(),
+                    class_id,
+                    court: bundle.court,
+                    network_id: config.params.net.to_string(),
+                    address_prefix: config.prefix(),
+                    // The SAME directory the producer retains into, and deliberately: a node that
+                    // both produces and pools has one retention obligation and one re-broadcast
+                    // sweep over it, not two that each know half the claims.
+                    retention_dir: app_dir.join(network.to_prefixed()).join("palw-retention"),
+                    max_miners: args.palw_pool_max_miners,
+                    enable_unsynced_mining: args.enable_unsynced_mining,
+                },
+                consensus_manager.clone(),
+                mining_manager.clone(),
+                flow_context.clone(),
+            )))
+        }
+        (Some(_), _) => {
+            warn!(
+                "--palw-pool-listen was given but {} declares no ConsensusV2 ruleset — there are no PALW classes to pool for, \
+                 pool not started",
+                config.params.net
+            );
+            None
+        }
+        (None, _) => None,
+    };
+
     let validator_status_provider: Option<Arc<dyn ValidatorStatusProvider>> = match &validator_service {
         Some(v) => Some(v.clone()),
         None => None,
@@ -1446,6 +1492,9 @@ Do you confirm? (y/n)";
     }
     if let Some(palw_producer_service) = palw_producer_service {
         async_runtime.register(palw_producer_service)
+    };
+    if let Some(palw_pool_service) = palw_pool_service {
+        async_runtime.register(palw_pool_service)
     };
     // kaspa-pq EVM Lane (ADR-0020 §16): the Ethereum JSON-RPC adapter, enabled by
     // `--evm-rpc-listen` (evm builds only; the default node never links it).

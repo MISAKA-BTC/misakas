@@ -212,6 +212,20 @@ pub struct Args {
     /// then matched against what the CHAIN says the class is; a file matching neither the
     /// registered graph nor the registered weights is not used.
     pub palw_class_artifact: Vec<String>,
+    /// **Run a mining pool for miners that have no node** (`misaka-palw-pool`).
+    ///
+    /// `HOST:PORT` to listen on. The pool hands out per-miner templates and the chain facts an
+    /// attempt is checked against, and takes back signed attempts plus their execution material,
+    /// which it retains and gossips on the miner's behalf. Every miner needs its OWN registered
+    /// bond — a bond is what an anchor is derived from, so two miners under one bond would grind
+    /// one search space rather than two, and the pool refuses the second.
+    ///
+    /// The pool holds no key and takes no cut: each miner's template pays that miner's own
+    /// address. Only a ConsensusV2 network can run one. Default off.
+    pub palw_pool_listen: Option<String>,
+    /// How many miners this pool serves at once. Each is one template per job and one block
+    /// submission per win, so the ceiling is about the node's own capacity rather than the wire.
+    pub palw_pool_max_miners: usize,
     /// **Register the class of this node's converted artifact on the running chain, once.**
     ///
     /// A network is born with the classes its ruleset id commits to; every later one arrives as a
@@ -374,6 +388,8 @@ impl Default for Args {
             palw_producer_key: None,
             palw_producer_bond: None,
             palw_class_artifact: Vec::new(),
+            palw_pool_listen: None,
+            palw_pool_max_miners: 256,
             palw_register_class: None,
             palw_register_bond: false,
             palw_dump_classes: false,
@@ -944,6 +960,27 @@ pub fn cli() -> Command {
                 ),
         )
         .arg(
+            Arg::new("palw-pool-listen")
+                .long("palw-pool-listen")
+                .env("KASPAD_PALW_POOL_LISTEN")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(String))
+                .help(
+                    "PALW: run a mining pool on HOST:PORT for miners that have no node. The pool serves per-miner \
+                     templates and chain facts, and retains and gossips the material its miners produce. Every miner \
+                     must have its OWN registered bond (the job is derived from the bond that signs it), and each \
+                     miner's template pays that miner's own address — this node holds no key and takes no cut.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-pool-max-miners")
+                .long("palw-pool-max-miners")
+                .env("KASPAD_PALW_POOL_MAX_MINERS")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(usize))
+                .help("PALW: how many pool miners this node serves at once (default 256)."),
+        )
+        .arg(
             Arg::new("palw-producer-pay-address")
                 .long("palw-producer-pay-address")
                 .env("KASPAD_PALW_PRODUCER_PAY_ADDRESS")
@@ -1426,6 +1463,8 @@ impl Args {
                 .get_many::<String>("palw-class-artifact")
                 .map(|v| v.cloned().collect())
                 .unwrap_or(defaults.palw_class_artifact),
+            palw_pool_listen: m.get_one::<String>("palw-pool-listen").cloned().or(defaults.palw_pool_listen),
+            palw_pool_max_miners: m.get_one::<usize>("palw-pool-max-miners").copied().unwrap_or(defaults.palw_pool_max_miners),
             palw_register_class: m.get_one::<String>("palw-register-class").cloned().or(defaults.palw_register_class.clone()),
             palw_register_bond: arg_match_unwrap_or::<bool>(&m, "palw-register-bond", defaults.palw_register_bond),
             palw_dump_classes: arg_match_unwrap_or::<bool>(&m, "palw-dump-classes", defaults.palw_dump_classes),

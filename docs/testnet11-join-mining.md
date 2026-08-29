@@ -302,6 +302,12 @@ kaspad --testnet --netsuffix=11 \
   ... (bond, key, pay-address and fee-outpoint flags exactly as in §4)
 ```
 
+**No node? Join a pool instead.** `--palw-pool-listen` turns any node into a bonded relay pool:
+miners connect over TCP, get per-miner templates and the chain facts, run the inference and the
+nonce grind locally, and sign with their own bond — which they still need, because the job is
+derived from the bond that signs it. The pool holds no key and takes no cut, and the coinbase pays
+the miner directly. See [palw-mining-pool-runbook-ja.md](palw-mining-pool-runbook-ja.md).
+
 Conversion recipes, per-class hardware requirements, and how a panel seat serves an LLM class are
 in [palw-public-testnet-classes-runbook.md](palw-public-testnet-classes-runbook.md). The floor
 remains the zero-download path and the liveness guarantee; the LLM classes are where the share
