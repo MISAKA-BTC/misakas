@@ -2319,6 +2319,166 @@ async fn palw_v2_the_pruning_point_import_verifies_the_root_before_it_writes() {
     assert_eq!(imported.state_root(), state.state_root(), "and it is the same state, root for root");
 }
 
+/// **The pruning-point witness is the selected-chain child — a side block can neither poison the
+/// import nor choose the examiner.** (audit M1-2, re-audit R-3)
+///
+/// The acceptance test both audits asked for and neither had. `import_pruning_point_palw_state` and
+/// `import_pruning_point_overlay_snapshot` are the two places a joining node writes peer-supplied
+/// state — bonds, which are block-production rights, and a reserve balance, which is mintable coin —
+/// and both verify the payload against a header committed by a CHILD of the pruning point. Which
+/// child is therefore the whole security of the gate, and it went wrong twice:
+///
+/// * requiring **every** child to agree (before M1-2) let one cheap side block with a garbage root
+///   veto the pruning point permanently: the disagreement is a fact of the DAG, so no retry and no
+///   other peer could clear it;
+/// * taking the **heaviest** child (M1-2's repair) still let the peer choose, because blue-work ties
+///   between siblings are the normal case and the tiebreak was the block hash — which is grindable.
+///
+/// The witness is now the child on the selected chain to the header DAG's selected tip, of which
+/// there is at most one by construction. The shape below is what separates the three rules: one
+/// pruning point, one honest chain child, and three siblings committing garbage roots. Under the
+/// first rule assertion (1) fails; under the second, assertion (2) fails whenever a sibling hash
+/// wins the tiebreak — i.e. the old rule makes this test flaky rather than red, which is its own
+/// argument for pinning the choice.
+#[tokio::test]
+async fn the_pruning_point_witness_is_the_selected_chain_child_not_a_side_block() {
+    use crate::model::stores::ghostdag::GhostdagStoreReader;
+    use crate::model::stores::headers::HeaderStoreReader;
+    use crate::model::stores::relations::RelationsStoreReader;
+    use kaspa_consensus_core::errors::pruning::PruningImportError;
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    use kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2;
+
+    let catalog = palw_v2_test_catalog();
+    let bundle = palw_v2_test_bundle_funded_for(&catalog, 8);
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    for _ in 0..2 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+
+    // `point` is the block whose state a joining node will import. It is about to acquire one
+    // honest chain child and three lying siblings.
+    let point = ctx.consensus.get_sink();
+
+    // ---- The attacker's blocks, BUILT NOW so their only parent is `point`, and held back. They are
+    //      well-formed blocks committing a garbage state root — an attacker can always publish one,
+    //      which is the premise of the whole gate.
+    let mut siblings = Vec::new();
+    let mut side_roots = Vec::new();
+    for i in 0..3u64 {
+        let garbage = kaspa_hashes::Hash64::from_u64_word(0xBAD0 + i);
+        let mut side = ctx.build_block_template(0x51D0 + i, ctx.simulated_time + 1).block;
+        assert_eq!(side.header.direct_parents(), &[point], "the sibling hangs off the point being imported");
+        side.header.palw_state_root = garbage;
+        side.header.palw_commitment = ctx.consensus.palw_v2_test_carriage(&side.header);
+        side.header.finalize();
+        siblings.push(side);
+        side_roots.push(garbage);
+    }
+
+    // ---- The honest chain continues from `point` and outruns them. Three blocks is enough that no
+    //      sibling can win a blue-work tie at the header selected tip: to move the selected chain
+    //      off `point`'s honest child an attacker would have to out-work the chain from the pruning
+    //      point forward, which is the security level this gate is supposed to have.
+    for _ in 0..3 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+    let tip = ctx.consensus.get_sink();
+
+    // ---- Now the siblings arrive, as they would from any peer.
+    for side in siblings {
+        let hash = side.header.hash;
+        ctx.validate_and_insert_block(side.to_immutable()).await;
+        assert_eq!(
+            ctx.consensus.virtual_processor().ghostdag_store.get_selected_parent(hash).expect("the sibling is in the DAG"),
+            point,
+            "the sibling is a child of the point being imported — that is the whole premise"
+        );
+    }
+    assert_eq!(ctx.consensus.get_sink(), tip, "and no sibling became the chain");
+
+    let vp = ctx.consensus.virtual_processor();
+    let chain_child = vp.ghostdag_store.get_selected_parent(tip).expect("the tip has a selected parent");
+    let chain_child = {
+        // Walk back to the child OF `point` on the selected chain — the one witness the gate may use.
+        let mut c = chain_child;
+        let mut prev = tip;
+        while c != point {
+            prev = c;
+            c = vp.ghostdag_store.get_selected_parent(c).expect("selected parent");
+        }
+        prev
+    };
+    let honest_root = vp.headers_store.get_header(chain_child).expect("the chain child's header").palw_state_root;
+    assert_ne!(honest_root, kaspa_hashes::ZERO_HASH64, "the chain child commits a real root");
+
+    // The point really does have four children, and only one of them is the chain's.
+    let children: Vec<_> = RelationsStoreReader::get_children(&vp.relations_service, point)
+        .map(|c| c.read().iter().copied().collect())
+        .unwrap_or_default();
+    assert_eq!(children.len(), 4, "one honest chain child and three siblings");
+
+    // The state AT `point`, rebuilt the way the chain walk rebuilds it: revert the selected chain's
+    // deltas from the tip back down.
+    let state = {
+        let store = vp.palw_state_v2_store.read();
+        let (_, mut st) = store.load_tip(&bundle.state).unwrap().expect("the tip loads");
+        let mut cur = tip;
+        while cur != point {
+            let (_, delta) = store.delta_of(cur).expect("every chain block has a delta");
+            st = kaspa_consensus_core::palw_state_v2::revert_delta_v2(&st, &delta, &bundle.state).expect("reverting walks back one block");
+            cur = vp.ghostdag_store.get_selected_parent(cur).expect("selected parent");
+        }
+        st
+    };
+    let honest = PalwStateCarriageV2::from_state(&state);
+
+    // Empty the store the way a pruned join leaves it, then import.
+    {
+        let mut store = vp.palw_state_v2_store.write();
+        store.delete_tip_for_tests().expect("empty the store");
+    }
+
+    // **(1) The siblings did not poison the pruning point.** Under the pre-M1-2 unanimity rule this
+    // is the assertion that failed, and no retry against any peer could have cleared it.
+    vp.import_pruning_point_palw_state(point, honest.clone()).expect("the honest carriage installs despite three lying siblings");
+    let (imported_block, imported) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("installed");
+    assert_eq!(imported_block, point);
+    assert_eq!(imported.state_root(), state.state_root(), "and it is the state the chain had, root for root");
+
+    // **(2) The examiner was the chain child, not a sibling.** A forged carriage is refused and the
+    // error names the root the gate demanded, which must be the chain child's. This is what
+    // separates "heaviest child" from "selected-chain child": under the old rule the demanded root
+    // would be one of the planted `0xBAD*` values whenever that sibling won the blue-work tiebreak,
+    // and the carriage the attacker also supplied would then be the one that installs.
+    {
+        let mut store = vp.palw_state_v2_store.write();
+        store.delete_tip_for_tests().expect("empty the store again");
+    }
+    let mut forged = honest.clone();
+    forged.class_shares.insert(kaspa_hashes::Hash64::from_u64_word(0x5EED), 1);
+    let err = vp.import_pruning_point_palw_state(point, forged).expect_err("a forged carriage must not install");
+    let demanded = match &err {
+        PruningImportError::ImportedPalwStateInvalid(_, root, _) => *root,
+        other => panic!("expected the root-mismatch refusal, got {other:?}"),
+    };
+    assert_eq!(demanded, honest_root, "the gate examined the selected-chain child");
+    for garbage in &side_roots {
+        assert_ne!(demanded, *garbage, "and never a sibling's planted root");
+    }
+    assert!(
+        vp.palw_state_v2_store.read().tip_record().unwrap().is_none(),
+        "the refusal happens BEFORE the write — detection afterwards would be no defence"
+    );
+}
+
 /// **A ConsensusV2 node with no PALW state refuses to run** (launch blockers §1)./// **A ConsensusV2 node with no PALW state refuses to run** (launch blockers §1).
 ///
 /// Absent state was read as "no policy", and every PALW authority then failed OPEN: the state root

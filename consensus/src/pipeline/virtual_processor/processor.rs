@@ -10605,24 +10605,21 @@ impl VirtualStateProcessor {
         //
         // Headers are synced before the utxoset sidecars in every IBD path, so such a child
         // normally exists by now, and it arrived under PoW plus the headers proof.
-        // **Every qualifying child must agree, and disagreement is proof of injection.**
+        // **One witness, the child on the selected chain** — see `pruning_point_witness_child`.
         //
-        // This used to `break` on the FIRST qualifying child, under a doc line — three lines above,
-        // and false — saying the root "comes from the pruning point's OWN header, never from the
-        // peer's message". Every header in a joining node's store at this moment arrived from the
-        // IBD peer, `palw_state_root` is not checked at header validation (the only check is in the
+        // Which child is the whole security of this gate, and it took three tries. Taking the FIRST
+        // qualifying child let the peer pick: every header here arrived from the IBD peer,
+        // `palw_state_root` is not checked at header validation (the only check is in the
         // selected-chain walk, long after this import), and `get_children` returns a hash set whose
-        // iteration order is a function of the hashes — i.e. grindable. So the peer chose which
-        // root this node would demand, and could then satisfy it with the carriage it also supplied.
+        // iteration order is a function of the hashes — grindable. Requiring UNANIMITY closed that
+        // and opened the mirror image: the same one-block poisoning audit M1-2 found on the overlay
+        // twin applied verbatim, since one side block committing a garbage root made every
+        // child-disagreement fatal, and the disagreement is a fact of the DAG no retry and no other
+        // peer can remove. The HEAVIEST child (M1-2's repair) still let the peer pick, because
+        // siblings tie on blue work as a matter of course and the tiebreak was the block hash.
         //
-        // The honest set is unanimous by construction: every child whose selected parent is the
-        // pruning point commits the same parent state. So requiring unanimity costs an honest peer
-        // nothing and denies the attacker the choice, without needing a selected-chain successor
-        // that may not be resolvable yet at this point in the IBD.
-        // **One witness, chosen by blue work** — see `pruning_point_witness_child`. The same
-        // one-block poisoning that audit M1-2 found on the overlay twin applied verbatim here: a
-        // side block committing a garbage `palw_state_root` made every child-disagreement fatal,
-        // and the disagreement is a fact of the DAG that no retry and no other peer can remove.
+        // The selected-chain child is at most one by construction, and displacing it costs a chain
+        // that out-works the pruning point forward.
         let expected_root =
             self.pruning_point_witness_child(pruning_point).and_then(|child| self.headers_store.get_header(child).ok()).map(|h| h.palw_state_root);
         // No child header to check against yet: REFUSE rather than write on trust. An unverifiable
@@ -10771,10 +10768,15 @@ impl VirtualStateProcessor {
         // value. Headers are synced before the utxoset sidecars in every IBD path, so such a
         // child normally exists by now, and it arrived under PoW + the headers proof.
         let got = snapshot.commitment_root();
-        // **One witness, chosen by blue work** — see `pruning_point_witness_child`. Checking every
-        // child and aborting on any disagreement (what this did until audit M1-2) let one cheap
-        // side block poison a pruning point permanently; checking the first child the hash set
-        // yielded let the peer choose its own examiner. The heaviest child is neither.
+        // **One witness, the child on the selected chain** — see `pruning_point_witness_child`.
+        // Checking every child and aborting on any disagreement (what this did until audit M1-2) let
+        // one cheap side block poison a pruning point permanently; checking the first child the hash
+        // set yielded let the peer choose its own examiner. So did the HEAVIEST child (M1-2's own
+        // repair, corrected by re-audit R-3): siblings tie on blue work as a matter of course and
+        // the tiebreak was the block hash, which is grindable. Moving the selected chain off the
+        // honest child instead costs an attacker a chain that out-works the pruning point forward.
+        // Pinned by `the_pruning_point_witness_is_the_selected_chain_child_not_a_side_block`, which
+        // fails against the heaviest-child rule with the attacker's planted root demanded.
         let verified_against = self.pruning_point_witness_child(pruning_point);
         if let Some(child) = verified_against {
             let committed = self.headers_store.get_header(child).map(|h| h.overlay_commitment_root).unwrap_or_default();

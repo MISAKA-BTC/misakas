@@ -22,7 +22,7 @@ deciding, and not exhaustively.
 `misaka-palw-base0` 163 passed / 2 ignored, `kaspa-pq-validator-core` 36 passed. Both fingerprint
 pins match the code. **And one suite was never run, by either pass, until the remediation: `kaspa-consensus --lib` was
 224 passed / 26 FAILED on this branch — see R-8.** After the remediation: consensus-core 1347,
-consensus **250**, base0 163, validator-core 36, `misaka-cli` 35 — all green, pins unchanged (the
+consensus **251**, base0 163, validator-core 36, `misaka-cli` 35 — all green, pins unchanged (the
 repair does not move the fingerprint).
 
 ---
@@ -63,7 +63,7 @@ and marked as such, because leaving a wrong finding standing is worse than leavi
 
 | # | state | what changed |
 |---|---|---|
-| R-8 | fixed | `pre_ghostdag_validation` verifies under the genesis-bound domain the producer signs with; the harness's two signers, eleven test fixtures and `palw-jobs-export` move with it. `kaspa-consensus --lib` goes 224/26-failed → **250/0** |
+| R-8 | fixed | `pre_ghostdag_validation` verifies under the genesis-bound domain the producer signs with; the harness's two signers, eleven test fixtures and `palw-jobs-export` move with it. `kaspa-consensus --lib` goes 224/26-failed → **250/0** (251 with R-3's new test) |
 | R-1 | fixed | the identity keeps a **genesis-active** fence distinguishable: `0` stays `0`, every other height collapses to `never`. Genesis is the only reference height two peers agree on regardless of sync state, so this is comparable at handshake time where a tip-relative predicate would refuse every node mid-IBD |
 | R-2 | fixed | one exhaustive `for_each_fence` drives BOTH ids. `Params`, `DnsParams`, `VltParams` and `TokenParams` are destructured field-by-field, so a new fence does not compile until it is classified. `dns.vlt.*`, `dns.tkn.*`, `full_reward_split`, `mandatory_attestation_inclusion` and the Some-only credit/commitment fences are now covered |
 | R-3 | fixed | the witness is the child on the **selected chain** to the header DAG's selected tip, not the heaviest child. Blue-work ties and the grindable hash tiebreak are gone; no child on that chain ⇒ refuse, which is the posture both callers already took |
@@ -73,6 +73,9 @@ and marked as such, because leaving a wrong finding standing is worse than leavi
 | R-7 | corrected + pinned | the finding was over-claimed and is rewritten. The residual — no reward for a `PalwPanelSeatV2` — is deliberately **not** repaired by inventing a payment rule here; it is named in `slash_silent_seats`'s doc with the two candidate designs and pinned by `a_v2_panel_seat_is_never_paid` |
 | A-1 | recorded | the launch-state precondition is written where the fence lives, with what must be confirmed out of band before a release is cut |
 
+R-3 additionally gained the acceptance test both audits had asked for, and it is verified to fail
+against the rule it replaced — see *R-3 now has the acceptance test* below.
+
 **The consensus fingerprint does not move.** `consensus_params_id` is untouched, so both pinned
 preset fingerprints are byte-identical and `shipped_presets_have_pinned_fingerprints` passes
 unchanged — this remediation is deployable without a re-mint, unlike the changeset it audits.
@@ -80,8 +83,9 @@ unchanged — this remediation is deployable without a re-mint, unlike the chang
 New regression tests: `a_genesis_active_fence_is_not_normalised_away`,
 `scheduling_any_fence_leaves_the_identity_alone`,
 `the_scheduling_fixtures_are_on_the_side_of_the_line_they_claim`,
-`turning_off_any_genesis_active_fence_moves_the_identity`, `a_v2_panel_seat_is_never_paid`, and the
-`bond_lock_tests` module in `misaka-cli`.
+`turning_off_any_genesis_active_fence_moves_the_identity`, `a_v2_panel_seat_is_never_paid`,
+`the_pruning_point_witness_is_the_selected_chain_child_not_a_side_block`, and the `bond_lock_tests`
+module in `misaka-cli`.
 
 **R-7 is the one item deliberately left open**, and it is an economics decision rather than a
 repair: paying the panel needs a source (a permille of the claim's released escrow) or a different
@@ -89,14 +93,42 @@ mechanism entirely (re-bind once on `ReceiptTimeout` so silence delays rather th
 costs one more `window_bind + window_receipt` against the pruning horizon `validate_palw_v2` now
 bounds). Either changes the ruleset id and belongs to the M2 phase, not to this pass.
 
-**What the remediation is NOT backed by.** R-3's fix is verified by reading and by compilation, not
-by a test: there is no test anywhere in the tree for `import_pruning_point_overlay_snapshot` or its
-PALW twin, which is why both the one-block poisoning and the grindable tiebreak survived two audits.
-The acceptance test the 2026-08-28 audit asked for — a two-node IBD where a side block at the
-pruning point carries a garbage `overlay_commitment_root` and the joiner still completes with its
-utxoset intact — is still the right one, and it would now also have to assert that the joiner picks
-the selected-chain child rather than the heaviest. That test is the highest-value piece of work left
-on the M1 list.
+### R-3 now has the acceptance test — and it bites
+
+**Correction first.** An earlier draft of this section said "there is no test anywhere in the tree
+for `import_pruning_point_overlay_snapshot` or its PALW twin". That was wrong about the twin:
+`palw_v2_the_pruning_point_import_verifies_the_root_before_it_writes` has covered
+`import_pruning_point_palw_state` all along. What it does not cover — and what let the grindable
+tiebreak through — is **witness selection**: it builds a pruning point with exactly one child, so
+every rule ever written passes it.
+
+`the_pruning_point_witness_is_the_selected_chain_child_not_a_side_block` builds the shape that
+separates them: one pruning point, one honest chain child, and three well-formed siblings each
+committing a garbage `palw_state_root`. The siblings are built while the point is still the tip (so
+their only parent is the point), held back, and released after the honest chain has run three blocks
+past them — so no sibling can win a blue-work tie at the header selected tip, and displacing the
+honest child would cost an attacker a chain that out-works the pruning point forward.
+
+It asserts (1) the honest carriage still installs — the pre-M1-2 unanimity rule fails here, and no
+retry against any peer could have cleared it — and (2) the root the gate demanded is the chain
+child's, never a planted one.
+
+**Verified to bite.** Reverting `pruning_point_witness_child` to M1-2's heaviest-child rule and
+re-running: the test fails, and it fails for exactly the right reason — the demanded root comes back
+as `…d2ba…`, which is the planted `0xBAD2`. The attacker's sibling was chosen as the examiner, and
+the honest carriage was refused. A test that passed under both rules would have been worth nothing;
+this one is the difference between them.
+
+`kaspa-consensus --lib`: **251 passed, 0 failed.**
+
+**What is still NOT backed by a test.** The overlay half — `import_pruning_point_overlay_snapshot`,
+which writes peer-supplied bonds and a reserve balance — shares `pruning_point_witness_child` with
+the PALW twin, so the selection above covers the part that was broken; its own write path has no
+test. And neither half is exercised through a real two-node IBD, which is what the 2026-08-28 audit
+asked for and remains the honest acceptance bar: the harness's `build_block_template_with_parents`
+cannot build on arbitrary parents under a ConsensusV2 preset (it passes `finality_point = ORIGIN`
+and the sink search walks off the end of the DAG), so a side block can only be planted through the
+template path used here. That is the highest-value piece of work left on the M1 list.
 
 ---
 
@@ -155,7 +187,7 @@ holds `genesis`). The test harness's two signers in `test_consensus.rs` and elev
 `virtual_processor/tests.rs` were signing under the old domain and are moved with it, and
 `tools/palw-jobs-export` — which re-derives job anchors offline for the explorer, and would have
 printed a plausible-looking wrong prompt for every block — now resolves the genesis from the
-network's own shipped params. After the repair: **250 passed, 0 failed.**
+network's own shipped params. After the repair: **250 passed, 0 failed** (251 once R-3's acceptance test lands).
 
 The general lesson is the one this project keeps re-learning: a correspondence with two halves
 needs a test that compares the halves. The re-audit above listed "whether
