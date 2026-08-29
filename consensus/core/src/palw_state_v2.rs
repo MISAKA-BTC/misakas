@@ -148,7 +148,26 @@ use std::collections::{BTreeMap, BTreeSet};
 /// the case a version constant exists for. This bump is also the first hashed into the params
 /// fingerprint directly (see `Params` — every earlier bump moved the handshake only because it
 /// happened to ride a bundle-shape change).
-pub const PALW_STATE_V2_VERSION: u16 = 10;
+///
+/// **Version 11: the audit3 remediation.** Two rules changed about which blocks are valid and what
+/// the state may hold, and neither changes a schema — which is precisely the case this constant
+/// exists for, and precisely the case that forks a network silently when it is not declared.
+///
+/// * S-03: a class awaiting activation no longer has its pending permille written into the live
+///   share table. Registrations that used to be accepted are now refused
+///   (`PendingSharesExceedTable`), and a state a node used to commit is one it will no longer
+///   produce — the old path wrote a share for a `Registered` class, which broke
+///   `assert_internal_consistency` permanently and could panic `granted_share_table_v2` outright.
+/// * S-04: the coinbase's entitlement filter asks the FULL admission — the same call the merged
+///   -work path makes — instead of a hand-picked subset of it. Merged blocks the chain refuses for
+///   epoch budget or exposure are no longer paid, and a merged receipt spend is no longer denied.
+///   Different blocks are paid, so different coinbases are valid.
+///
+/// Both are `apply_palw_transition`/coinbase semantics with an unchanged root schema, so nothing
+/// but this number tells two builds they disagree. It is hashed into the params fingerprint, so
+/// moving it is a coordinated upgrade — which for testnet-11 means the re-mint the audit already
+/// called for.
+pub const PALW_STATE_V2_VERSION: u16 = 11;
 
 pub const PALW_STATE_V2_DOMAIN_OPERATOR_ID: &[u8] = b"misaka-palw/state-v2/operator-id/v1";
 
@@ -1835,6 +1854,10 @@ pub enum PalwStateV2Error {
     FirstShareMustBeWhole { got: u16 },
     #[error("share {got}‰ is outside the table's denominator")]
     ShareOutOfRange { got: u16 },
+    #[error(
+        "{outstanding}‰ is already promised to classes awaiting activation and this grant asks for {requested}‰ more — together they exceed the denominator, so the registration is refused rather than minted against capacity the table does not have (audit3 S-03)"
+    )]
+    PendingSharesExceedTable { outstanding: u32, requested: u16 },
     #[error(
         "class {class_id} was granted {share}‰, below the grant floor {floor}‰ — a share whose worst-case epoch budget is zero blocks is a class that cannot exist (ADR-0045 Decision 2)"
     )]
@@ -4602,15 +4625,65 @@ fn apply_object(
                     }
                 }
             }
-            let mut share_view = builder.state.class_shares.clone();
-            for (id, record) in builder.state.classes.iter() {
-                if let PalwClassStatusV2::Registered { pending_share_permille, .. } = record.status
-                    && !share_view.contains_key(id)
-                {
-                    share_view.insert(*id, pending_share_permille);
+            // **Outstanding grants are CHECKED against the table, never written into it**
+            // (audit3 S-03). M2-8's remediation built a merged live+pending view and handed the
+            // whole result to the live writer. Two things went wrong with that, and both are
+            // unrecoverable once they land:
+            //
+            // * a class still `Registered` ended up holding a live cadence permille, which is
+            //   exactly what `assert_internal_consistency` forbids — `share_bearing` excludes
+            //   `Registered`/`Dormant`, so the class set and the share table disagree from that
+            //   block on. Nothing on the block path asserts it, so every node commits the corrupt
+            //   state deterministically and only the pruning-point IBD refuses — forever, against
+            //   every peer, because every peer serves the same chain-committed state; and
+            // * the merged view sums to `1000 + Σ pending`, and `granted_share_table_v2` is
+            //   written for a `current` that sums to 1000. Its `let deficit = keep - distributed;`
+            //   underflows once the excess outgrows what integer division absorbs — a panic under
+            //   `overflow-checks`, i.e. a chain halt rather than a wrong number. Then at the
+            //   activation edge the entrant is granted against a table that already contains it,
+            //   the final `insert` overwrites its scaled value, and the denominator settles at
+            //   999‰ permanently.
+            //
+            // The property M2-8 wanted is that a pending grant occupies capacity, so registrations
+            // cannot be minted for free against a table that cannot afford them. That is a
+            // QUESTION about the live table, not a mutation of it: ask whether the live classes
+            // could still honour every outstanding promise plus this one, by pricing them as a
+            // single aggregate grant. Conservative (the aggregate dilutes at least as hard as the
+            // promises would one at a time), 1000-conserving by construction, and it leaves the
+            // live table alone until a class actually activates — which is where ADR-0045
+            // Decision 3 says the second and last mutation belongs.
+            let outstanding: u32 = builder
+                .state
+                .classes
+                .iter()
+                .filter(|(id, _)| *id != class_id && !builder.state.class_shares.contains_key(*id))
+                .filter_map(|(_, record)| match record.status {
+                    PalwClassStatusV2::Registered { pending_share_permille, .. } => Some(pending_share_permille as u32),
+                    _ => None,
+                })
+                .sum();
+            // The write. Priced against the LIVE table alone, so it conserves 1000‰ over the
+            // classes that actually bear weight. Computed FIRST so that a grant which is simply
+            // out of range is reported as `ShareOutOfRange` by the arithmetic that owns that
+            // question, rather than being swallowed by the capacity check below.
+            let table = granted_share_table_v2(builder.params, &builder.state.class_shares, *class_id, *share_permille)?;
+            // The capacity check. Its table is discarded; only its refusals matter, and it is
+            // asked only when something is actually outstanding — with nothing pending it would
+            // re-ask the question the line above already answered.
+            if outstanding > 0 {
+                let committed = outstanding
+                    .checked_add(*share_permille as u32)
+                    .ok_or(PalwStateV2Error::Overflow("outstanding pending shares"))?;
+                if committed > 1000 {
+                    return Err(PalwStateV2Error::PendingSharesExceedTable { outstanding, requested: *share_permille });
                 }
+                granted_share_table_v2(
+                    builder.params,
+                    &builder.state.class_shares,
+                    *class_id,
+                    u16::try_from(committed).expect("committed is bounded by 1000 above"),
+                )?;
             }
-            let table = granted_share_table_v2(builder.params, &share_view, *class_id, *share_permille)?;
             let weightless = *activation_daa > ctx.daa_score;
             if !weightless {
                 // ADR-0045 Decision 3: the share table mutates HERE and at the activation edge,
@@ -6816,6 +6889,149 @@ pub(crate) mod tests {
                     Err(crate::palw_admission_v2::PalwAdmissionV2Error::ClassNotYetActive { .. })
                 ),
             "after activation the class is no longer refused FOR BEING INACTIVE"
+        );
+    }
+
+    /// **A class awaiting activation occupies capacity, and holds no permille** (audit3 S-03).
+    ///
+    /// M2-8 asked that a pending grant count against the share table, so registrations could not
+    /// be minted for free against capacity the table does not have. The remediation implemented it
+    /// by merging pending shares into a view and handing the whole resulting table to the LIVE
+    /// writer — which wrote a cadence permille for a class whose status is still `Registered`.
+    ///
+    /// Everything after that is unrecoverable. `share_bearing` excludes `Registered`, so the class
+    /// set and the share table disagree and `assert_internal_consistency` fails from that block
+    /// on. Nothing on the block path asserts it, so every node commits the same corrupt state (no
+    /// fork — worse, agreement on a broken state); the failure surfaces only where the invariant
+    /// IS checked, `PalwStateCarriageV2::into_state`, which is the pruning-point import. Every
+    /// joining node's IBD is then refused against every peer, forever, because every peer serves
+    /// the same chain-committed state. And at the entrant's activation edge the grant runs against
+    /// a table that already contains it, the final insert overwrites its scaled value, and the
+    /// denominator settles at 999‰ for good.
+    ///
+    /// The capacity property is a QUESTION about the live table, not a mutation of it. This pins
+    /// both halves: the question is still asked, and the table is left alone.
+    ///
+    /// **Measured against the code it replaces.** Restoring the merged-view write does not make
+    /// this test fail on an assertion — it makes it PANIC at `granted_share_table_v2`'s
+    /// `let deficit = keep - distributed;` with "attempt to subtract with overflow". That function
+    /// is written for a `current` that sums to 1000, and the merged view sums to `1000 + Σ pending`;
+    /// once the excess outgrows what the integer division absorbs, the subtraction goes negative.
+    /// `[profile.release] overflow-checks = true`, so on a shipped node that is a chain halt, not a
+    /// wrong number — which is worse than the corrupt table it was found for.
+    #[test]
+    fn palw_v2_a_pending_class_is_charged_against_the_table_but_holds_no_share() {
+        let p = params();
+        let pending = h64(0x9E2);
+        let immediate = h64(0x9E3);
+
+        // Genesis floor at the whole table, plus a class that activates later.
+        let mut objects = register_class_and_bond();
+        objects.push(PalwConsensusObjectV2::ClassRegistered {
+            class_id: pending,
+            artifact_root: h64(0xA8),
+            slash_value_per_pwu: 5,
+            pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
+            initial_target: u128::MAX / 2,
+            share_permille: 100,
+            activation_daa: 500,
+            admission: None,
+        });
+        let (s1, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None);
+        assert_eq!(s1.class_share_permille(&pending), None, "a weightless registration takes nothing");
+
+        // Now a SECOND class that is active immediately. This is the block that used to write the
+        // pending class's permille into the live table as a side effect of its own grant.
+        let (s2, _) = apply(
+            &s1,
+            &p,
+            &ctx(2, 101, 2),
+            &[PalwConsensusObjectV2::ClassRegistered {
+                class_id: immediate,
+                artifact_root: h64(0xA9),
+                slash_value_per_pwu: 5,
+                pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
+                initial_target: u128::MAX / 2,
+                share_permille: 100,
+                activation_daa: 0,
+                admission: None,
+            }],
+            None,
+        );
+
+        assert_eq!(s2.class(&pending).unwrap().status, PalwClassStatusV2::Registered { activation_daa: 500, pending_share_permille: 100 });
+        assert_eq!(s2.class_share_permille(&pending), None, "a class that is still `Registered` holds NO live share");
+        assert_eq!(s2.class_share_permille(&immediate), Some(100), "the class that is active does");
+        assert_eq!(s2.class_share_permille(&h64(1)), Some(900), "funded by the incumbent, not by the pending class");
+
+        // The two invariants the old code broke, asked directly rather than inferred.
+        s2.assert_internal_consistency(&p).expect("the class set and the share table agree");
+        let live: u32 = [h64(1), pending, immediate].iter().filter_map(|id| s2.class_share_permille(id)).map(|s| s as u32).sum();
+        assert_eq!(live, 1000, "the denominator is conserved over the classes that bear weight");
+
+        // And the edge still works: the pending class takes its promised share by clock, funded by
+        // donation, and the table is still exactly 1000 afterwards.
+        let (s3, _) = apply(&s2, &p, &ctx(3, 500, 3), &[], None);
+        assert_eq!(s3.class(&pending).unwrap().status, PalwClassStatusV2::Active);
+        assert_eq!(s3.class_share_permille(&pending), Some(100), "the promise is kept at the edge");
+        s3.assert_internal_consistency(&p).expect("and the state is still consistent after the grant");
+        let after: u32 = [h64(1), pending, immediate].iter().filter_map(|id| s3.class_share_permille(id)).map(|s| s as u32).sum();
+        assert_eq!(after, 1000, "1000‰, not the 999‰ the double-grant left behind");
+    }
+
+    /// **The capacity check survives, and it is the pending shares that make it bite** (audit3 S-03).
+    ///
+    /// Dropping the merged view could have thrown out M2-8's property with the defect. It does not:
+    /// outstanding promises are priced as one aggregate grant against the live table, so a
+    /// registration that the table could not honour alongside them is refused — and the refusal
+    /// names the outstanding permille rather than appearing as a floor break with no cause.
+    #[test]
+    fn palw_v2_outstanding_promises_refuse_a_registration_the_table_cannot_honour() {
+        let p = params();
+        let mut objects = register_class_and_bond();
+        // Promise almost the whole table to a class that has not activated yet.
+        objects.push(PalwConsensusObjectV2::ClassRegistered {
+            class_id: h64(0x9E4),
+            artifact_root: h64(0xAA),
+            slash_value_per_pwu: 5,
+            pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
+            initial_target: u128::MAX / 2,
+            share_permille: 900,
+            activation_daa: 3_000,
+            admission: None,
+        });
+        let (s1, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None);
+        assert_eq!(s1.class_share_permille(&h64(1)), Some(1000), "still the floor's whole table");
+
+        // A second grant that the live table alone could afford, but that the outstanding promise
+        // cannot be honoured alongside.
+        let err = apply_palw_transition_v2(
+            &s1,
+            &p,
+            &ctx(2, 101, 2),
+            &[PalwConsensusObjectV2::ClassRegistered {
+                class_id: h64(0x9E5),
+                artifact_root: h64(0xAB),
+                slash_value_per_pwu: 5,
+                pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
+                initial_target: u128::MAX / 2,
+                share_permille: 200,
+                activation_daa: 0,
+                admission: None,
+            }],
+            None,
+        )
+        .expect_err("the registration is refused, not minted");
+        assert!(
+            matches!(err, PalwStateV2Error::PendingSharesExceedTable { outstanding: 900, requested: 200 }),
+            "and the refusal names the outstanding promise rather than reading as a bare floor break: {err:?}"
+        );
+
+        // The live table alone WOULD have afforded it — which is what makes the refusal the
+        // capacity property and not an unrelated limit.
+        assert!(
+            granted_share_table_v2(&p, &s1.class_shares, h64(0x9E5), 200).is_ok(),
+            "200‰ against a 1000‰ floor is affordable on its own"
         );
     }
 
@@ -9688,7 +9904,7 @@ pub(crate) mod tests {
             })
         }
         spec_hash(b"misaka-palw/state-v2/state-root/v1", |s| {
-            s.update(&10u16.to_le_bytes()); // version_le(2) = 10, restated from the ADR (0058: merged work)
+            s.update(&11u16.to_le_bytes()); // version_le(2) = 11, restated from the ADR (audit3: S-03 + S-04)
             s.update(spec_collection_root(b"bonds", &c.bonds).as_byte_slice());
             s.update(spec_collection_root(b"reserved_exposure", &c.reserved_exposure).as_byte_slice());
             s.update(spec_collection_root(b"classes", &c.classes).as_byte_slice());
@@ -9980,17 +10196,22 @@ pub(crate) mod tests {
     /// change to the preimage — field, order, tag, domain, version, or any record's Borsh shape —
     /// moves one of these constants, which is the visible flag ADR-0043's change rule demands.
     /// Update them ONLY together with a version bump and an ADR-0043 amendment.
+    ///
+    /// A third time, for the audit3 remediation: `PALW_STATE_V2_VERSION` 10 → 11 because S-03 and
+    /// S-04 changed which blocks and which registrations are valid without changing a schema. The
+    /// version is the only carrier for a semantics-only change, so these constants moved with it —
+    /// which is the rule working, not a nuisance.
     #[test]
-    fn the_version_10_state_root_golden_vectors() {
+    fn the_version_11_state_root_golden_vectors() {
         assert_eq!(
             PalwChainStateV2::genesis().state_root().to_string(),
-            "bd833c0049e199effe7f976f3c6c187b863e65e4e62749cc5a2aed2732c2cfac7cc8a55f2942bcfc3cf7a080b7db3623ceb2fcf7b26cb585feb349b2c3835455",
-            "the empty state's version-10 root moved"
+            "e4b628fd20edc2dd270ac6cb95ca41ac908c639fd7debeed04469b97a707954f3ae41599a538763144f57a9c4b0f552ea33bd7518f9b91289f1c8e256087981e",
+            "the empty state's version-11 root moved"
         );
         assert_eq!(
             m02_populated_state().state_root().to_string(),
-            "71f4946fa68aaf71e2d5419a867eabd45fdab9ba9ab33bdffb4274a5ed60b277d90c76c2c8c1df91690a3e0062327f5cf3dfd652d17203dbae30f8bc3e4720ce",
-            "the inhabited state's version-10 root moved"
+            "6b0836322382301a15a62f508413b8fd2aebbfd533208fa212e8ba220d3f1be21d2a9edecc0461932c708388e2bf6781df84bdc09309b81162531485cf25a1d8",
+            "the inhabited state's version-11 root moved"
         );
     }
 }

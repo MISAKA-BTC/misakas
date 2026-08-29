@@ -886,9 +886,19 @@ async fn palw_v2_an_unbonded_merged_blue_is_not_paid() {
         kaspa_consensus_core::palw_state_v2::revert_delta_v2(&tip_state, &delta, &bundle.state).expect("the sink's delta reverts")
     };
 
+    // The sink's own evaluation point — the one its transition ran at, and therefore the one the
+    // payment gate must ask the admission at (audit3 S-04).
+    let sink_header = vp.headers_store.get_header(sink).expect("the sink's header");
+    let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+        block: sink,
+        daa_score: sink_header.daa_score,
+        blue_score: sink_header.blue_score,
+        subsidy: vp.coinbase_manager.calc_block_subsidy(sink_header.daa_score),
+    };
+
     // Honest chain: nothing is withheld. A filter that dropped an honest miner's subsidy would be
     // a worse bug than the one it closes.
-    let unentitled = vp.palw_v2_unentitled_blues(&parent_state, &ghostdag_data, &non_daa);
+    let unentitled = vp.palw_v2_unentitled_blues(&parent_state, &ghostdag_data, &non_daa, &point);
     assert!(unentitled.is_empty(), "every blue of an honest V2 chain is bonded and paid, got {unentitled:?}");
 
     // And the predicate really separates: the same attempt, naming a bond this chain does not hold.

@@ -576,7 +576,7 @@ impl kaspa_consensus_core::palw_facts::PalwClassFactsViewV1 for PalwOneClassView
 /// ADR-0058: one mergeset blue's admitted PALW work, held by value between assembly (against
 /// the walk state) and the transition call (which borrows it). Two arms because a header
 /// declares exactly one lane by its algorithm id.
-enum PalwMergedOwnedWorkV1 {
+pub(super) enum PalwMergedOwnedWorkV1 {
     Attempt(BlockHash, kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2),
     Spend(BlockHash, kaspa_consensus_core::palw_freeprompt_v3::PalwReceiptSpendEnvelopeV3),
 }
@@ -1213,7 +1213,16 @@ impl VirtualStateProcessor {
                                 .daa_excluded_store
                                 .get_mergeset_non_daa(current)
                                 .expect("the DAA window is written before the UTXO walk reaches this block");
-                            self.palw_v2_unentitled_blues(s, &ctx.ghostdag_data, &non_daa)
+                            // The SAME evaluation point the transition builds below, so the
+                            // admission this asks and the admission that accepts are asked at one
+                            // place on the chain (audit3 S-04).
+                            let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+                                block: current,
+                                daa_score: header.daa_score,
+                                blue_score: header.blue_score,
+                                subsidy: self.coinbase_manager.calc_block_subsidy(header.daa_score),
+                            };
+                            self.palw_v2_unentitled_blues(s, &ctx.ghostdag_data, &non_daa, &point)
                         })
                         .unwrap_or_default();
                     // Audit C-08 part three: and what a released bond's spend must destroy.
@@ -4037,17 +4046,35 @@ impl VirtualStateProcessor {
     /// Evaluated against `state`, which is the state AT THE SELECTED PARENT — the same state the
     /// escrow and the payouts are read from, so a node building a template and a node validating
     /// it ask the identical question. Empty on every network without a V2 bundle.
+    /// **The evaluation point a TEMPLATE is built at.** The block does not exist yet, so it stands
+    /// in as virtual's own selected parent and virtual's scores — which is the point the block this
+    /// template becomes will actually be validated at. One definition, because the construction
+    /// side and the validation side computing this differently is how a node mines coinbases its
+    /// own validator then refuses (audit3 S-04).
+    fn palw_v2_template_point(
+        &self,
+        virtual_state: &crate::model::stores::virtual_state::VirtualState,
+    ) -> kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+        kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+            block: virtual_state.ghostdag_data.selected_parent,
+            daa_score: virtual_state.daa_score,
+            blue_score: virtual_state.ghostdag_data.blue_score,
+            subsidy: self.coinbase_manager.calc_block_subsidy(virtual_state.daa_score),
+        }
+    }
+
     pub(super) fn palw_v2_unentitled_blues(
         &self,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         ghostdag_data: &GhostdagData,
         mergeset_non_daa: &BlockHashSet,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
     ) -> BlockHashSet {
-        use kaspa_consensus_core::palw_attempt_v2::{PalwAttemptEnvelopeV2, attempt_id_v2, class_ticket_v2};
+        use kaspa_consensus_core::palw_attempt_v2::attempt_id_v2;
         let mut unentitled = BlockHashSet::default();
-        if self.palw_state_params_v2.is_none() {
+        let Some(state_params) = self.palw_state_params_v2.as_ref() else {
             return unentitled;
-        }
+        };
         // Identities already paid or claimed in THIS mergeset. The state answers for identities
         // the chain has already seen; nothing but this answers for two siblings carrying one.
         let mut seen_here: std::collections::HashSet<kaspa_consensus_core::Hash64> = Default::default();
@@ -4079,81 +4106,68 @@ impl VirtualStateProcessor {
                 unentitled.insert(*blue);
                 continue;
             };
-            // A non-attempt-lane block on a V2 network is not a block this chain accepted work
-            // from. The header gate already refuses the algorithm, so this is the same fact read
-            // a second time rather than a new rule.
-            if header.pow_algo_id != kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2 {
-                unentitled.insert(*blue);
-                continue;
-            }
-            match PalwAttemptEnvelopeV2::decode_wire(&header.palw_commitment) {
-                Ok(envelope) => {
-                    if let Err(e) =
-                        kaspa_consensus_core::palw_admission_v2::check_palw_producer_entitlement_v2(state, &envelope.attempt)
-                    {
-                        debug!("merged blue {blue} is not paid a worker share: {e}");
+            // **Payment asks the acceptance question, it does not re-derive an answer to it**
+            // (audit3 S-04).
+            //
+            // This site used to run a hand-picked subset — entitlement items 1-5, the class
+            // lottery, one-identity-one-claim, and (after M2-3) the pwu equality — and said so:
+            // "The epoch budget and the exposure ceiling are sequential ... and belong with the
+            // wider fix noted in the audit, not here." M2-3 was then recorded `fixed` on the pwu
+            // leg alone, and the two it named stayed open. A merged block that the transition
+            // refuses with `EpochBudgetExceeded` or `ExposureCeilingExceeded` was paid its whole
+            // worker carve while creating no claim, reserving no exposure, incurring no panel duty
+            // and entering no epoch counter — so a class at the 1‰ grant floor spends its one
+            // budgeted block honestly and then mints unboundedly many unbudgeted ones, none of
+            // which anybody can ever examine because no claim exists to dispute.
+            //
+            // Two parallel lists of predicates is the defect class itself, so this now asks the
+            // SAME function `palw_v2_merged_works` asks — the full admission, against the same
+            // parent state and the same block context. Entitlement and acceptance agree by
+            // construction rather than by two people keeping two lists in step. It also repairs
+            // the receipt lane in passing: an algo-7 free-prompt receipt spend was denied its
+            // entire coinbase because this site only ever recognised the attempt lane, while the
+            // chain folded its work and minted weight for it.
+            //
+            // **NOT YET COVERED BY A TEST, and said here rather than in a report.** The honest
+            // half is: `palw_v2_an_unbonded_merged_blue_is_not_paid` proves this set stays empty on
+            // a clean V2 chain, so the tightening does not deny honest miners. The refusing half —
+            // a chain that keeps going while one merged block is refused for budget or exposure —
+            // has no fixture, because the harness mines every block under ONE bond: exhausting
+            // that bond's exposure disqualifies the chain blocks too, and the chain stops instead
+            // of carrying a refused sibling. A two-bond harness is what this needs, and until it
+            // exists this leg is verified by reading. That is exactly the standing M2-3 was
+            // recorded `fixed` at, so it is written down instead of claimed.
+            //
+            // **The residual, stated rather than hidden.** Step 4b of `apply_palw_transition_v4`
+            // re-runs admission against the live fold state, so it can still refuse a second block
+            // that this parent-state view accepts — two merged siblings racing for one class's
+            // last budgeted block of the epoch. That is bounded by one mergeset and needs the
+            // attacker to land several blocks in one, where the open version needed only one
+            // earlier block of its own; closing it needs the payment set to come from the
+            // transition's `merged_skips`, which is computed after this set is consumed.
+            match self.palw_v2_check_attempt_admission(&header, state, state_params, point) {
+                Ok(Some(envelope)) => {
+                    // The one question the parent state cannot answer: two siblings in THIS
+                    // mergeset carrying one identity. The state answers for identities the chain
+                    // has already seen; nothing but this answers for a pair arriving together.
+                    if !seen_here.insert(attempt_id_v2(&envelope.attempt)) {
+                        debug!("merged block {blue} carries an attempt identity already paid in this mergeset");
                         unentitled.insert(*blue);
-                        continue;
-                    }
-                    // **Entitlement says WHO may be paid. It does not say how MUCH work exists.**
-                    //
-                    // The items that meter issuance — the class lottery, the epoch budget, the
-                    // exposure ceiling, one-identity-one-claim — all live in
-                    // `check_palw_attempt_admission_v2`, which only ever runs on the selected
-                    // chain. A merged blue was therefore paid the full worker carve for a block
-                    // that satisfied none of them. Worse, the attempt's signature is outside both
-                    // `attempt_id` and the PoW digest, so ONE solved attempt re-signed with
-                    // different hedging randomness yields arbitrarily many distinct valid block
-                    // ids — each of them a separate payment for the same work. A rational
-                    // producer emits K blocks per ticket and ignores the class lottery entirely,
-                    // diluting honest miners K-fold and leaving the per-class retarget measuring
-                    // a census the paid blocks are not in.
-                    //
-                    // These two are the ones this site can decide from the parent state alone,
-                    // and they are the two the exploit turns on: the lottery is what makes a
-                    // ticket cost something, and the identity is what makes it cost something
-                    // ONCE. The epoch budget and the exposure ceiling are sequential — they
-                    // depend on what the same walk has already accepted — and belong with the
-                    // wider fix noted in the audit, not here.
-                    let attempt_id = attempt_id_v2(&envelope.attempt);
-                    if state.claim(&attempt_id).is_some() || !seen_here.insert(attempt_id) {
-                        debug!("merged blue {blue} carries an attempt identity already paid on this chain");
-                        unentitled.insert(*blue);
-                        continue;
-                    }
-                    match state.class_target(&envelope.attempt.class_id) {
-                        Some(target) if class_ticket_v2(&envelope.attempt) <= target.target => {
-                            // **And the price, which is what the payment used to take on trust**
-                            // (audit M2-3). ADR-0045 Decision 1 makes pwu a chain fact — the
-                            // class's target times its registered per-inference cost — and the
-                            // transition refuses any other value with `PwuClaimNotDerived`. But a
-                            // refused merged work SKIPS (the accepting block stands), while this
-                            // site decided payment on three weaker questions, so an attempt with an
-                            // arbitrary pwu was PAID its full worker carve and created no claim, no
-                            // panel duty and no reserved exposure — and the anti-replay keys on the
-                            // claim that was never created, so it never engaged. The stateless
-                            // header rule is only `pwu >= 1`, so nothing else caught it.
-                            //
-                            // Derived from the same two chain facts the transition uses, at the
-                            // same parent state, so the two predicates agree by construction.
-                            let derived = match state.class(&envelope.attempt.class_id).map(|c| c.pwu_rule) {
-                                Some(kaspa_consensus_core::palw_state_v2::PalwPwuRuleV2::DerivedV1 { pwu_per_inference }) => {
-                                    Some(kaspa_consensus_core::palw_pwu::palw_pwu_v1(target.target, pwu_per_inference))
-                                }
-                                _ => None,
-                            };
-                            if derived.is_some_and(|derived| envelope.attempt.pwu != derived) {
-                                debug!("merged blue {blue} claims a pwu the chain does not derive; not entitled");
-                                unentitled.insert(*blue);
-                            }
-                        }
-                        _ => {
-                            debug!("merged blue {blue} did not win its class lottery");
-                            unentitled.insert(*blue);
-                        }
                     }
                 }
-                Err(_) => {
+                Ok(None) => match self.palw_v2_check_receipt_spend(&header, state, state_params, point) {
+                    Ok(Some(_)) => {}
+                    Ok(None) => {
+                        debug!("merged block {blue} carries no work this chain accepted");
+                        unentitled.insert(*blue);
+                    }
+                    Err(why) => {
+                        debug!("merged block {blue} carries a receipt spend this chain refuses: {why}");
+                        unentitled.insert(*blue);
+                    }
+                },
+                Err(why) => {
+                    debug!("merged block {blue} is not paid a worker share: {why}");
                     unentitled.insert(*blue);
                 }
             }
@@ -4914,7 +4928,7 @@ impl VirtualStateProcessor {
     /// then re-runs the stateful half against its live fold state. A merged block that fails is
     /// returned with its reason and skipped: nothing about its anticone may disqualify the
     /// accepting block.
-    fn palw_v2_merged_works(
+    pub(super) fn palw_v2_merged_works(
         &self,
         current: BlockHash,
         ghostdag_data: &GhostdagData,
@@ -10010,7 +10024,14 @@ impl VirtualStateProcessor {
                 .palw_state_params_v2
                 .as_ref()
                 .and_then(|params| self.palw_state_v2_store.read().load_tip(params).ok().flatten())
-                .map(|(_, state)| self.palw_v2_unentitled_blues(&state, &virtual_state.ghostdag_data, &virtual_state.mergeset_non_daa))
+                .map(|(_, state)| {
+                    self.palw_v2_unentitled_blues(
+                        &state,
+                        &virtual_state.ghostdag_data,
+                        &virtual_state.mergeset_non_daa,
+                        &self.palw_v2_template_point(&virtual_state),
+                    )
+                })
                 .unwrap_or_default();
             self.coinbase_manager.coinbase_validator_pool(
                 &virtual_state.ghostdag_data,
@@ -10099,7 +10120,14 @@ impl VirtualStateProcessor {
             .as_ref()
             .and_then(|params| self.palw_state_v2_store.read().load_tip(params).ok().flatten())
             .filter(|(block, _)| *block == virtual_state.ghostdag_data.selected_parent)
-            .map(|(_, state)| self.palw_v2_unentitled_blues(&state, &virtual_state.ghostdag_data, &virtual_state.mergeset_non_daa))
+            .map(|(_, state)| {
+                self.palw_v2_unentitled_blues(
+                    &state,
+                    &virtual_state.ghostdag_data,
+                    &virtual_state.mergeset_non_daa,
+                    &self.palw_v2_template_point(&virtual_state),
+                )
+            })
             .unwrap_or_default();
         let coinbase = self
             .coinbase_manager

@@ -285,6 +285,14 @@ pub fn get_app_dir_from_args(args: &Args) -> PathBuf {
     if app_dir.is_empty() { get_app_dir() } else { PathBuf::from(app_dir) }
 }
 
+/// **Where the PALW panel keeps its state.** One definition, because the startup gate that refuses
+/// a producer with no way to carry a lifecycle object has to ask the same question the panel
+/// answers — and when it built the path itself it got both halves wrong and refused every default
+/// configuration (audit3 S-21).
+pub fn palw_panel_state_dir(app_dir: &std::path::Path, network: kaspa_consensus_core::network::NetworkId) -> PathBuf {
+    app_dir.join(network.to_prefixed()).join("palw-panel")
+}
+
 /// Get the log directory from the supplied [`Args`].
 pub fn get_log_dir(args: &Args) -> Option<String> {
     let network = args.network();
@@ -1205,13 +1213,22 @@ Do you confirm? (y/n)";
         // Refused at startup rather than warned about, the way this file already refuses a
         // non-EVM build on an EVM-active network: the failure it prevents is unrecoverable and its
         // cause is invisible from the logs of the node that suffers it.
+        //
+        // **The persisted-outpoint check must ask the panel where it keeps its state, not rebuild
+        // the path** (audit3 S-21). It was assembled from `args.appdir.unwrap_or_default()` joined
+        // with `net.to_string()`, and both halves were wrong: `appdir` defaults to `None`, so
+        // `unwrap_or_default()` yielded `""` and the whole thing resolved RELATIVE to the process
+        // CWD instead of the resolved app dir; and the directory on disk carries the `misaka-`
+        // prefix that `to_prefixed()` adds. `.exists()` was therefore false on every default
+        // configuration, including one with the outpoint sitting right there — measured on the
+        // testnet-11 producer, where `/root/.t11/misaka-testnet-11/palw-panel/palw-fee-outpoint`
+        // exists and the path this checked (`/root/.t11/testnet-11/…`) does not. The branch is a
+        // `panic!`, so the gate denied startup to exactly the configuration its own comment above
+        // calls permitted. One expression now, shared with the service that owns the directory.
+        let persisted_fee_outpoint = palw_panel_state_dir(&app_dir, network).join("palw-fee-outpoint");
         if matches!(config.params.palw_consensus_mode, kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(_))
             && args.palw_fee_outpoint.is_none()
-            && !std::path::Path::new(&args.appdir.clone().unwrap_or_default())
-                .join(config.params.net.to_string())
-                .join("palw-panel")
-                .join("palw-fee-outpoint")
-                .exists()
+            && !persisted_fee_outpoint.exists()
         {
             panic!(
                 "--palw-produce on a ConsensusV2 network needs a way to carry lifecycle objects: pass --palw-fee-outpoint \
@@ -1423,7 +1440,7 @@ Do you confirm? (y/n)";
                         key_path: key_path.clone(),
                         bond: bond.clone().unwrap_or_default(),
                         fee_outpoint: args.palw_fee_outpoint.clone(),
-                        state_dir: app_dir.join(network.to_prefixed()).join("palw-panel"),
+                        state_dir: palw_panel_state_dir(&app_dir, network),
                         court: panel_court.expect("v2 is true exactly when this is Some"),
                         class_artifacts: args.palw_class_artifact.iter().map(std::path::PathBuf::from).collect(),
                         challenge: args.palw_challenge || args.palw_drill_challenge_all,
@@ -1617,6 +1634,39 @@ mod tests {
         let mut argv = vec!["kaspad"];
         argv.extend_from_slice(extra);
         Args::parse(argv).expect("args parse")
+    }
+
+    /// **The producer gate looks where the panel actually writes** (audit3 S-21).
+    ///
+    /// The gate that refuses `--palw-produce` without a way to carry a lifecycle object accepts a
+    /// persisted rolling outpoint as the alternative. It used to rebuild that path by hand from
+    /// `args.appdir.unwrap_or_default()` and `net.to_string()`, and got both halves wrong: the
+    /// default `appdir` is `None`, so the path resolved relative to the process CWD, and the
+    /// directory on disk carries the `misaka-` prefix. `.exists()` was false on every default
+    /// configuration, and the branch is a `panic!` — so a producer restarted onto its own persisted
+    /// outpoint died at startup. Measured on the testnet-11 producer:
+    /// `/root/.t11/misaka-testnet-11/palw-panel/palw-fee-outpoint` exists, and the path the gate
+    /// checked did not.
+    ///
+    /// Both sites now call one function, so this pins the two properties that were wrong.
+    #[test]
+    fn the_panel_state_dir_is_prefixed_and_rooted_at_the_resolved_app_dir() {
+        let network: kaspa_consensus_core::network::NetworkId = parse(&["--testnet", "--netsuffix=11"]).network().into();
+        let dir = palw_panel_state_dir(std::path::Path::new("/root/.t11"), network);
+        assert_eq!(
+            dir,
+            std::path::Path::new("/root/.t11/misaka-testnet-11/palw-panel"),
+            "the `misaka-` prefix is part of the directory name, and the app dir is the resolved one"
+        );
+
+        // And the resolver never yields a relative root, which is the half that made the old
+        // expression resolve off the process CWD.
+        let resolved = get_app_dir_from_args(&parse(&["--testnet", "--netsuffix=11"]));
+        assert!(resolved.is_absolute(), "an absent --appdir resolves to the home app dir, never to \"\"");
+        assert!(
+            palw_panel_state_dir(&resolved, network).is_absolute(),
+            "so the gate's existence check is asked about an absolute path"
+        );
     }
 
     #[test]

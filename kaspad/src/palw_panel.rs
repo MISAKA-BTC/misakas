@@ -102,6 +102,26 @@ const SUBMIT_ATTEMPTS: u32 = 3;
 /// still license is still live), and finite, which is the whole point.
 const PANEL_POOL_RETENTION_DAA: u64 = 4_000;
 
+/// **A ceiling on the WHOLE material pool, not just on one claim's slice** (audit3 S-02).
+///
+/// `MATERIALS_PER_CLAIM` and `PALW_MATERIAL_MAX_BYTES` bound one claim and one payload; nothing
+/// bounded the number of claim keys, and the claim id is 64 raw bytes off the wire that nobody has
+/// authenticated. So a single unauthenticated connection naming a fresh claim per message grew the
+/// pool without limit — 4 x 16 MiB per invented id, held for `PANEL_POOL_RETENTION_DAA` — and the
+/// age sweep cannot help, because the sweep runs on a pool that is already too big. At 1 Gbps a
+/// 32 GiB host is gone in about four minutes, for the cost of one TCP connection: no bond, no
+/// block, no transaction. Every seat on the network can be killed at once, and with the seats dead
+/// no claim reaches a quorum, so every producer's escrowed carve is destroyed at its deadline.
+///
+/// The bound has to be on the total, and it has to be enforced where the growth happens rather
+/// than on the next tick. Eviction is oldest-arrival-first over whole claims: a chain-real claim
+/// that is evicted is re-fetched by the pull, which is what the pull is for, while an invented one
+/// simply never comes back.
+const PANEL_POOL_MAX_CLAIMS: usize = 512;
+/// Sized so the pool cannot outgrow what a seat needs: `PANEL_POOL_MAX_CLAIMS` live claims at one
+/// 16 MiB material each is far past any real duty backlog, and this cuts in first.
+const PANEL_POOL_MAX_BYTES: usize = 192 * 1024 * 1024;
+
 pub struct PalwPanelConfig {
     /// Path to the 32-byte hex ML-DSA-87 seed of the bond that holds this node's seats.
     pub key_path: String,
@@ -1237,6 +1257,13 @@ impl PalwPanelService {
         }
 
         let mut materials: HashMap<Hash64, Vec<Vec<u8>>> = HashMap::new();
+        // Total pooled bytes and per-claim arrival order, maintained with `materials` so the
+        // ceiling above is enforced at insertion rather than recomputed by walking the pool
+        // (audit3 S-02). The sequence is a plain counter: it only has to order arrivals, and a DAA
+        // score is not available inside the drain.
+        let mut pool_bytes: usize = 0;
+        let mut pool_arrival: HashMap<Hash64, u64> = HashMap::new();
+        let mut pool_arrival_seq: u64 = 0;
         // **What THIS node computed for a claim it disputes** — kept apart from `materials`, which
         // holds what the network says about a claim (audit M2-4). A challenger that bisects the
         // accused's own capture can never find a fault: both sides read the same bytes through the
@@ -1322,9 +1349,34 @@ impl PalwPanelService {
                         // the pull exists to fetch the real one — dropping the answer because the
                         // garbage arrived first was the whole failure. Oldest out.
                         if pool.len() >= MATERIALS_PER_CLAIM {
-                            pool.remove(0);
+                            pool_bytes = pool_bytes.saturating_sub(pool.remove(0).len());
                         }
+                        pool_bytes = pool_bytes.saturating_add(bytes.len());
                         pool.push(bytes);
+                        // And the whole-pool ceiling, enforced HERE — a bound checked on the next
+                        // tick is a bound the sender outruns (audit3 S-02).
+                        pool_arrival.entry(claim).or_insert_with(|| {
+                            pool_arrival_seq += 1;
+                            pool_arrival_seq
+                        });
+                        while materials.len() > PANEL_POOL_MAX_CLAIMS || pool_bytes > PANEL_POOL_MAX_BYTES {
+                            // Never evict the claim that just arrived: that would make the pool
+                            // drop exactly the payload it was asked to hold, which is the M2-1
+                            // failure in a different costume.
+                            let Some(oldest) = pool_arrival
+                                .iter()
+                                .filter(|(id, _)| **id != claim)
+                                .min_by_key(|(_, seq)| **seq)
+                                .map(|(id, _)| *id)
+                            else {
+                                break;
+                            };
+                            if let Some(evicted) = materials.remove(&oldest) {
+                                pool_bytes = pool_bytes.saturating_sub(evicted.iter().map(|b| b.len()).sum::<usize>());
+                            }
+                            pool_arrival.remove(&oldest);
+                            first_seen.remove(&oldest);
+                        }
                     }
                     PalwGossipEvent::Receipt { bytes } => {
                         if let Ok(receipt) = borsh::from_slice::<PalwSeatReceiptV2>(&bytes) {
