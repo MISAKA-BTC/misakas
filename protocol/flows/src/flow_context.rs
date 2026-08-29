@@ -263,6 +263,57 @@ mod tests {
         Transaction::new(TX_VERSION, vec![], vec![], 0, subnetwork_id, 0, vec![])
     }
 
+    /// **One peer's `found: false` must not end a node's life** (audit3 H2/H9).
+    ///
+    /// The server holds exactly one pruning-point snapshot and serves it only on an exact match, so
+    /// `found: false` is what any peer answers once its own pruning point has advanced — which it
+    /// does routinely during a multi-minute header sync. That answer used to reach
+    /// `chain_participation().quarantine()`, whose only exit is an operator restarting with
+    /// `--clear-quarantine`: the node stopped mining, stopped attesting, and reported
+    /// `is_synced=false` across restarts, for a chain it had committed correctly.
+    #[test]
+    fn a_sidecar_shortfall_is_retried_and_a_chain_failure_is_not() {
+        // A chain that did not finish syncing is the case quarantine exists for — unchanged, and
+        // it does not wait for a count.
+        assert!(post_commit_failure_should_quarantine(false, 0));
+        assert!(post_commit_failure_should_quarantine(false, 1));
+
+        // A sidecar shortfall is survivable while there is another peer to ask…
+        assert!(!post_commit_failure_should_quarantine(true, 1), "the FIRST refusal must not be fatal");
+        for seen in 1..FlowContext::SIDECAR_SHORTFALL_TOLERANCE {
+            assert!(!post_commit_failure_should_quarantine(true, seen), "shortfall {seen} is still retryable");
+        }
+        // …and finite, because a node that can get its sidecars from nobody really is running a
+        // chain it cannot vouch for.
+        assert!(post_commit_failure_should_quarantine(true, FlowContext::SIDECAR_SHORTFALL_TOLERANCE));
+        assert!(post_commit_failure_should_quarantine(true, FlowContext::SIDECAR_SHORTFALL_TOLERANCE + 5));
+        assert!(FlowContext::SIDECAR_SHORTFALL_TOLERANCE > 1, "a tolerance of one is the old behaviour wearing a counter");
+    }
+
+    /// **A log formatter fed by an unauthenticated peer cannot be an amplifier** (audit3 H11).
+    ///
+    /// `describe_fingerprint` is called on three peer-controlled `bytes` fields inside
+    /// `initialize_connection`, before the peer is registered in the hub or given a flow. It used
+    /// to be one heap allocation per input byte and two output bytes per input byte, with the
+    /// transport accepting messages up to 1 GB and the proto declaring the fields as plain `bytes`
+    /// with no cap: one connection, one upload, ~10^9 allocations and a ~2 GiB String.
+    #[test]
+    fn describe_fingerprint_is_bounded_by_the_field_width_not_by_the_peer() {
+        let cap = kaspa_p2p_lib::convert::messages::MAX_HANDSHAKE_FINGERPRINT_BYTES;
+        assert_eq!(describe_fingerprint(&[]), "absent (peer predates this field)");
+        assert_eq!(describe_fingerprint(&[0xab, 0xcd]), "abcd");
+
+        // A full-width fingerprint renders whole — the diagnostic still does its job.
+        let full = vec![0x5au8; cap];
+        assert_eq!(describe_fingerprint(&full).len(), cap * 2, "a real fingerprint is shown in full");
+
+        // And an absurd one renders SHORT, and says so.
+        let absurd = vec![0u8; 8 << 20];
+        let rendered = describe_fingerprint(&absurd);
+        assert!(rendered.len() < cap * 2 + 64, "the rendering is bounded, got {} chars", rendered.len());
+        assert!(rendered.contains("oversized"), "and it names what happened: {rendered}");
+    }
+
     #[test]
     fn rpc_priority_is_high_only_for_attestation_shards() {
         assert_eq!(rpc_transaction_priority(&tx(SUBNETWORK_ID_STAKE_ATTESTATION_SHARD)), Priority::High);
@@ -314,6 +365,9 @@ pub struct FlowContextInner {
     /// Set once `staging.commit()` has swapped in a new active consensus during the running IBD.
     /// A failure after this point is not a no-op — see `finish_ibd_after_failure`.
     active_consensus_replaced: Arc<AtomicBool>,
+    /// Consecutive post-commit IBDs that failed ONLY because a peer could not serve a
+    /// pruning-point sidecar (audit3 H2/H9). Reset by any IBD that gets past them.
+    sidecar_shortfalls: Arc<std::sync::atomic::AtomicU32>,
     pub address_manager: Arc<Mutex<AddressManager>>,
     connection_manager: RwLock<Option<Arc<ConnectionManager>>>,
     mining_manager: MiningManagerProxy,
@@ -356,8 +410,42 @@ impl Drop for IbdRunningGuard {
 
 /// Render a peer's handshake fingerprint for an error message, distinguishing "an older build that
 /// does not send this" from "a different value", since the operator response differs.
+/// **Does a post-commit IBD failure mean this node can no longer vouch for what it is running?**
+///
+/// Split out as a pure rule so it can be stated and tested rather than inferred from a field, an
+/// atomic and three branches (audit3 H2/H9). `seen` is how many consecutive post-commit failures
+/// have been sidecar-only, counting this one.
+fn post_commit_failure_should_quarantine(sidecar_shortfall: bool, seen: u32) -> bool {
+    if !sidecar_shortfall {
+        // The chain itself did not finish syncing. This is the case `quarantine` was written for.
+        return true;
+    }
+    seen >= FlowContext::SIDECAR_SHORTFALL_TOLERANCE
+}
+
+/// **Bounded, because the input is an unauthenticated peer's** (audit3 H11). The conversion at
+/// `TryFrom<protowire::VersionMessage>` already refuses anything wider than a fingerprint, so this
+/// cap is the second of two — but it is the one that makes the function safe to call on ANY byte
+/// string, which is what a log-formatting helper has to be. It used to be
+/// `bytes.iter().map(|b| format!("{b:02x}")).collect()`: one heap allocation per input byte and two
+/// output bytes per input byte, called on three peer-controlled fields inside
+/// `initialize_connection` before the peer is registered in the hub or given a flow. With the
+/// transport's 1 GB message ceiling that was ~10^9 allocations and a ~2 GiB String per connection,
+/// for the cost of one upload.
 fn describe_fingerprint(bytes: &[u8]) -> String {
-    if bytes.is_empty() { "absent (peer predates this field)".to_owned() } else { bytes.iter().map(|b| format!("{b:02x}")).collect() }
+    use std::fmt::Write;
+    if bytes.is_empty() {
+        return "absent (peer predates this field)".to_owned();
+    }
+    let shown = bytes.len().min(kaspa_p2p_lib::convert::messages::MAX_HANDSHAKE_FINGERPRINT_BYTES);
+    let mut out = String::with_capacity(shown * 2 + 24);
+    for b in &bytes[..shown] {
+        let _ = write!(out, "{b:02x}");
+    }
+    if bytes.len() > shown {
+        let _ = write!(out, "… ({} bytes, oversized)", bytes.len());
+    }
+    out
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -455,6 +543,7 @@ impl FlowContext {
                 preferred_ibd_candidate: Default::default(),
                 handoff_tx: broadcast::channel(CHALLENGER_NOMINATION_BACKLOG).0,
                 active_consensus_replaced: Default::default(),
+                sidecar_shortfalls: Default::default(),
                 hub,
                 address_manager,
                 connection_manager: Default::default(),
@@ -1077,13 +1166,48 @@ impl FlowContext {
     /// guessing means signing on it. If nothing was replaced, the failure changed nothing and the
     /// node goes back to whatever it was doing.
     pub fn finish_ibd_after_failure(&self) -> bool {
+        self.finish_ibd_after_failure_kind(false)
+    }
+
+    /// How many consecutive post-commit IBDs may fail on a sidecar alone before the node gives up
+    /// and fails closed. Above one, because a peer answering `found: false` is ordinary: it holds a
+    /// single snapshot keyed to its own pruning point, so any peer whose pruning point advanced
+    /// during a multi-minute header sync answers that to a perfectly honest request. Finite,
+    /// because a node that cannot complete its sidecars from anybody really is running a chain it
+    /// cannot vouch for (audit3 H2/H9).
+    pub const SIDECAR_SHORTFALL_TOLERANCE: u32 = 3;
+
+    /// Settle the gate after an IBD that failed, saying whether the failure was ONLY a peer being
+    /// unable to serve a pruning-point sidecar.
+    ///
+    /// **A sidecar shortfall is not "cannot fix by itself"** (audit3 H2/H9), which is the bar
+    /// `quarantine`'s own doc sets. The chain is committed and correct; one auxiliary snapshot did
+    /// not arrive from THIS peer, and the fix is to ask a different one — which the node never did,
+    /// because the first refusal latched a state whose only exit is an operator restarting with
+    /// `--clear-quarantine`. A node that hits it stops mining, stops attesting and reports
+    /// `is_synced=false` across restarts, and enough of them at once stall DNS finality. So the
+    /// shortfall is counted rather than latched, and only a node that cannot get its sidecars from
+    /// anybody, repeatedly, is treated as unable to vouch for what it is running.
+    pub fn finish_ibd_after_failure_kind(&self, sidecar_shortfall: bool) -> bool {
         let replaced = self.active_consensus_replaced.swap(false, Ordering::SeqCst);
         if replaced {
+            let seen = if sidecar_shortfall { self.sidecar_shortfalls.fetch_add(1, Ordering::SeqCst) + 1 } else { 0 };
+            if !post_commit_failure_should_quarantine(sidecar_shortfall, seen) {
+                // Not Ready — the node still holds a chain it cannot advance past the pruning point
+                // without the sidecar, and `is_synced` stays false. It is simply free to try
+                // another peer, which is the whole difference.
+                return false;
+            }
             self.chain_participation().quarantine();
         } else if let Some(lease) = self.ibd_lease.write().take() {
             self.chain_participation().release_after_noop_ibd(lease);
         }
         replaced
+    }
+
+    /// An IBD got past the sidecars, so the run of shortfalls is over.
+    pub fn clear_sidecar_shortfalls(&self) {
+        self.sidecar_shortfalls.store(0, Ordering::SeqCst);
     }
 
     /// Settle the gate after an IBD that succeeded, holding the node for at least `min_review`.

@@ -30,6 +30,7 @@ use std::hash::{BuildHasher, Hash, Hasher, RandomState};
 use std::sync::Mutex;
 
 use kaspa_hashes::Hash64;
+use kaspa_p2p_lib::PeerKey;
 use tokio::sync::mpsc;
 
 /// Hard cap on one material broadcast.
@@ -117,24 +118,58 @@ pub struct PalwGossipCenter {
 struct ServeBudget {
     window_started: std::time::Instant,
     bytes_served: u64,
+    /// **Per requesting peer** (audit3 H5/H10). A budget keyed on nothing is a budget one peer
+    /// spends: at the shipped 9.7 MB material the node-wide 64 MiB/60 s allowed 6.9 serves per
+    /// MINUTE for the whole node, so seven ~80-byte requests a minute — 560 bytes — silenced every
+    /// honest seat's pull for the remaining 59 seconds of every window. The seats then cannot
+    /// obtain material, sign `Unavailable`, and three of five slash the honest producer's bond.
+    /// Cleared with the window; peers are bounded by the connection count.
+    per_peer: HashMap<PeerKey, u64>,
 }
 
-/// The window and ceiling for answering pulls. 64 MiB a minute is ~8 of the largest registered
-/// class's materials — enough to unstick a neighbourhood, far below what a request loop can
-/// otherwise conjure (measured attack: 8 GiB enqueued from 4.5 KB of requests).
+/// The window and ceilings for answering pulls.
+///
+/// **Two of them, because one is not a bound** (audit3 H5/H10). The node-wide figure alone was
+/// spendable by any single peer, and it was also too small to be honest: five seats pulling one
+/// 9.7 MB claim consume 48.5 MB, so two claims pulled in the same minute exceeded the node's whole
+/// allowance with no attacker present at all. The per-peer share is what actually bounds an
+/// attacker — it controls its own connections, not the node's other peers — and the node-wide
+/// figure is the operator's egress backstop behind it, sized so an ordinary fan-out fits.
 const SERVE_BUDGET_WINDOW: std::time::Duration = std::time::Duration::from_secs(60);
-const SERVE_BUDGET_BYTES_PER_WINDOW: u64 = 64 << 20;
+const SERVE_BUDGET_BYTES_PER_WINDOW: u64 = 256 << 20;
+/// One peer's share: three of the largest registered class's materials per minute. A seat re-pulls
+/// on a 25-DAA throttle (~50 minutes at the frozen cadence), so this is far above any honest need
+/// and far below what a request loop can conjure.
+const SERVE_BUDGET_BYTES_PER_PEER: u64 = 48 << 20;
+/// How long one claim stays un-servable after a serve is ATTEMPTED for it.
+const SERVE_THROTTLE: std::time::Duration = std::time::Duration::from_secs(10);
 /// A pull's answer is exempt from the per-claim budget for this long after asking.
 const PULL_SOLICITED_TTL: std::time::Duration = std::time::Duration::from_secs(120);
 /// Never track more outstanding pulls than a panel could plausibly have open at once.
 const OUTSTANDING_PULL_CAP: usize = 512;
+/// **A ceiling on the solicited exemption, and a floor of slots one peer cannot take** (audit3 H7).
+///
+/// The exemption existed so four cheap payloads from a stranger could not make the honest answer
+/// `Duplicate` network-wide. But it was a total bypass: for the 120 s TTL an UNBOUNDED number of
+/// distinct payloads for that claim were `Fresh`, each relayed to every peer and copied into the
+/// inbox, and the panel pool evicts its oldest — so "whoever is first must not lock out whoever is
+/// right" became "whoever is LAST decides", which the attacker always is. Two bounds now: the
+/// exemption has a ceiling, and no single peer may take more than a couple of a claim's slots, so
+/// there is always room for somebody else's answer.
+/// **Residual, stated rather than hidden.** These bound what ONE peer may occupy. An attacker with
+/// several distinct peer keys — several IPs — still gets its couple of slots per key, so the
+/// per-claim ceiling is what stops it there; the connection manager's peer limit is the outer
+/// bound. What is closed is the cheap version, where one connection sending continuously was always
+/// the LAST voice and the panel pool evicts its oldest.
+const PALW_SOLICITED_MATERIALS_PER_CLAIM: usize = 16;
+const PALW_MATERIALS_PER_PEER_PER_CLAIM: usize = 2;
 
 struct GossipState {
     seen: HashSet<u64>,
-    /// Each remembered digest, with the claim its per-claim count was charged to. The claim
-    /// travels WITH the digest so that evicting one decrements the other — see
-    /// `materials_per_claim`.
-    seen_order: VecDeque<(u64, Option<Hash64>)>,
+    /// Each remembered digest, with the claim AND the peer its counts were charged to. Both travel
+    /// WITH the digest so that evicting one decrements the others — see `materials_per_claim` and
+    /// `materials_per_peer_claim`.
+    seen_order: VecDeque<(u64, Option<(PeerKey, Hash64)>)>,
     /// Per-claim material counts, and **a derived index of `seen_order`, not a map of its own.**
     ///
     /// It used to gain an entry per claim id and never lose one. Claim ids are 64-byte values
@@ -143,13 +178,21 @@ struct GossipState {
     /// node died, without holding a bond or landing a single block. Keying eviction to the
     /// digest FIFO bounds it at `SEEN_CAP` claims by construction.
     materials_per_claim: HashMap<Hash64, usize>,
+    /// How many of a claim's admitted payloads came from one peer (audit3 H7). Same FIFO-derived
+    /// lifetime as `materials_per_claim`, so it cannot outlive the digests that fed it.
+    materials_per_peer_claim: HashMap<(PeerKey, Hash64), usize>,
 }
 
 impl Default for PalwGossipCenter {
     fn default() -> Self {
         let (inbox_tx, inbox_rx) = mpsc::channel(INBOX_CAP);
         Self {
-            state: Mutex::new(GossipState { seen: HashSet::new(), seen_order: VecDeque::new(), materials_per_claim: HashMap::new() }),
+            state: Mutex::new(GossipState {
+                seen: HashSet::new(),
+                seen_order: VecDeque::new(),
+                materials_per_claim: HashMap::new(),
+                materials_per_peer_claim: HashMap::new(),
+            }),
             inbox_tx,
             inbox_rx: Mutex::new(Some(inbox_rx)),
             inbox_taken: std::sync::atomic::AtomicBool::new(false),
@@ -157,7 +200,11 @@ impl Default for PalwGossipCenter {
             material_resolver: Mutex::new(None),
             served_recently: Mutex::new(HashMap::new()),
             outstanding_pulls: Mutex::new(HashMap::new()),
-            serve_budget: Mutex::new(ServeBudget { window_started: std::time::Instant::now(), bytes_served: 0 }),
+            serve_budget: Mutex::new(ServeBudget {
+                window_started: std::time::Instant::now(),
+                bytes_served: 0,
+                per_peer: HashMap::new(),
+            }),
         }
     }
 }
@@ -170,48 +217,98 @@ impl PalwGossipCenter {
         *self.material_resolver.lock().unwrap() = Some(resolver);
     }
 
-    /// The material behind `claim`, if this node holds it and has not just served it.
+    /// Reserve `bytes` of this window's serve allowance for `peer`. `false` means refuse.
     ///
-    /// `None` is "stay silent" — no resolver registered (not a panel), nothing on disk, or served
-    /// within the throttle window. The 10-second window is per claim: the serve is a broadcast,
-    /// so one answer refills every peer at once and an immediate repeat can only be a replay or a
-    /// flood.
-    pub fn resolve_material_for_serve(&self, claim: Hash64) -> Option<Vec<u8>> {
+    /// Reserved BEFORE the disk read and refunded afterwards (audit3 H6): the read is the expensive
+    /// step and the budget used to sit behind it, so the ceiling bounded egress while bounding
+    /// neither disk I/O nor the worker the read blocks.
+    fn reserve_serve_budget(&self, peer: PeerKey, bytes: u64) -> bool {
+        let mut budget = self.serve_budget.lock().unwrap();
+        let now = std::time::Instant::now();
+        if now.duration_since(budget.window_started) >= SERVE_BUDGET_WINDOW {
+            budget.window_started = now;
+            budget.bytes_served = 0;
+            budget.per_peer.clear();
+        }
+        let peer_used = budget.per_peer.get(&peer).copied().unwrap_or(0);
+        if peer_used.saturating_add(bytes) > SERVE_BUDGET_BYTES_PER_PEER {
+            return false;
+        }
+        if budget.bytes_served.saturating_add(bytes) > SERVE_BUDGET_BYTES_PER_WINDOW {
+            return false;
+        }
+        budget.per_peer.insert(peer, peer_used + bytes);
+        budget.bytes_served += bytes;
+        true
+    }
+
+    /// Give back the part of a reservation that was not sent.
+    fn refund_serve_budget(&self, peer: PeerKey, bytes: u64) {
+        if bytes == 0 {
+            return;
+        }
+        let mut budget = self.serve_budget.lock().unwrap();
+        budget.bytes_served = budget.bytes_served.saturating_sub(bytes);
+        if let Some(used) = budget.per_peer.get_mut(&peer) {
+            *used = used.saturating_sub(bytes);
+        }
+    }
+
+    /// The material behind `claim`, if this node holds it, has allowance for `peer`, and has not
+    /// just been asked for it.
+    ///
+    /// `None` is "stay silent" — no resolver registered (not a panel), nothing on disk, out of
+    /// allowance, or asked for within the throttle window.
+    ///
+    /// **The order of the three gates is the whole point** (audit3 H6). It used to be: throttle,
+    /// read, size, budget, record-the-throttle. So the cheapest gate ran last and the most
+    /// expensive step ran second — an 80-byte request bought a full synchronous `std::fs::read` of
+    /// up to 16 MiB even when the budget was spent and nothing would be emitted. Worse, the
+    /// throttle was recorded only on SUCCESS, so a request the budget refused was never marked and
+    /// the identical request could be repeated immediately and forever, with zero outbound traffic
+    /// to make it visible. Now the throttle is charged on the ATTEMPT, the allowance is reserved
+    /// before the read, and the read itself runs on a blocking thread instead of the shared
+    /// runtime that also carries block relay, IBD and RPC — which is what audit M2-2 prescribed
+    /// and did not land.
+    pub async fn resolve_material_for_serve(&self, peer: PeerKey, claim: Hash64) -> Option<Vec<u8>> {
         {
             let mut served = self.served_recently.lock().unwrap();
             let now = std::time::Instant::now();
             served.retain(|_, at| now.duration_since(*at) < std::time::Duration::from_secs(60));
             if let Some(at) = served.get(&claim)
-                && now.duration_since(*at) < std::time::Duration::from_secs(10)
+                && now.duration_since(*at) < SERVE_THROTTLE
             {
                 return None;
             }
+            // Charged here, on the attempt. A refusal below must cost the asker its window too, or
+            // the refusal is free and repeatable.
+            served.insert(claim, now);
         }
-        // **The disk read happens with NO lock held.** The closure reads up to 16 MiB
-        // synchronously; holding the global resolver mutex across it (as this did until audit
-        // M2-2) serialises every serve on the slowest one and contradicts the field's own doc.
-        let resolver = { self.material_resolver.lock().unwrap().clone() }?;
-        let bytes = resolver(claim)?;
+        // Reserve the worst case; the difference comes back once the real size is known.
+        let reservation = PALW_MATERIAL_MAX_BYTES as u64;
+        if !self.reserve_serve_budget(peer, reservation) {
+            return None;
+        }
+        // **The disk read happens with NO lock held and NOT on an async worker.** The closure reads
+        // up to 16 MiB synchronously; holding the global resolver mutex across it (as this did
+        // until audit M2-2) serialises every serve on the slowest one, and running it inline on the
+        // shared tokio runtime (as it did until audit3 H6) lets an 80-byte request pin a reactor
+        // thread.
+        let resolver = { self.material_resolver.lock().unwrap().clone() };
+        let Some(resolver) = resolver else {
+            self.refund_serve_budget(peer, reservation);
+            return None;
+        };
+        let read = tokio::task::spawn_blocking(move || resolver(claim)).await;
+        let Some(bytes) = read.ok().flatten() else {
+            self.refund_serve_budget(peer, reservation);
+            return None;
+        };
         if bytes.len() > PALW_MATERIAL_MAX_BYTES {
-            return None; // never serve what the transport would refuse
+            self.refund_serve_budget(peer, reservation); // never serve what the transport would refuse
+            return None;
         }
-        // **A global budget, because the per-claim throttle is not one** (audit M2-2). The
-        // requester picks the claim, so a per-claim window bounds repetition and nothing else: K
-        // planted claim ids cycled past it produce K serves back to back. This caps what the node
-        // will emit in answer to pulls at all, whatever mix of claims is asked for.
-        {
-            let mut budget = self.serve_budget.lock().unwrap();
-            let now = std::time::Instant::now();
-            if now.duration_since(budget.window_started) >= SERVE_BUDGET_WINDOW {
-                budget.window_started = now;
-                budget.bytes_served = 0;
-            }
-            if budget.bytes_served.saturating_add(bytes.len() as u64) > SERVE_BUDGET_BYTES_PER_WINDOW {
-                return None;
-            }
-            budget.bytes_served += bytes.len() as u64;
-        }
-        self.served_recently.lock().unwrap().insert(claim, std::time::Instant::now());
+        self.refund_serve_budget(peer, reservation.saturating_sub(bytes.len() as u64));
         Some(bytes)
     }
 
@@ -260,12 +357,19 @@ impl PalwGossipCenter {
         pulls.get(&claim).is_some_and(|at| std::time::Instant::now().duration_since(*at) < PULL_SOLICITED_TTL)
     }
 
-    fn admit_digest(&self, digest: u64, material_claim: Option<Hash64>, solicited: bool) -> PalwGossipAdmit {
+    fn admit_digest(&self, digest: u64, material: Option<(PeerKey, Hash64)>, solicited: bool) -> PalwGossipAdmit {
         let mut state = self.state.lock().unwrap();
         if state.seen.contains(&digest) {
             return PalwGossipAdmit::Duplicate;
         }
-        if let Some(claim) = material_claim {
+        if let Some((peer, claim)) = material {
+            // **No single peer may take more than a couple of a claim's slots** (audit3 H7). This
+            // is the bound that keeps room for the honest answer: with four slots and a per-peer
+            // ceiling of two, a flooder cannot be the only voice for a claim however fast it sends.
+            let from_peer = state.materials_per_peer_claim.get(&(peer, claim)).copied().unwrap_or(0);
+            if from_peer >= PALW_MATERIALS_PER_PEER_PER_CLAIM {
+                return PalwGossipAdmit::Duplicate;
+            }
             let count = state.materials_per_claim.entry(claim).or_insert(0);
             // **The budget does not apply to an answer this node asked for** (audit M2-1). The
             // counter is charged before anything knows who sent the bytes or whether they verify,
@@ -273,25 +377,37 @@ impl PalwGossipCenter {
             // network-wide — the seat then never sees it, signs `Unavailable`, and an honest
             // producer's bond is slashed for ~280 bytes of attacker traffic. A solicited answer is
             // still digest-deduplicated and still size-capped; it just cannot be crowded out.
-            if *count >= PALW_MATERIALS_PER_CLAIM && !solicited {
+            //
+            // **But the exemption has a ceiling** (audit3 H7). Unbounded, it meant that for the
+            // 120 s TTL every distinct payload for that claim was relayed to every peer — an
+            // amplifier switched on by the very pull that exists to recover from a flood.
+            let cap = if solicited { PALW_SOLICITED_MATERIALS_PER_CLAIM } else { PALW_MATERIALS_PER_CLAIM };
+            if *count >= cap {
                 return PalwGossipAdmit::Duplicate;
             }
             *count += 1;
+            *state.materials_per_peer_claim.entry((peer, claim)).or_insert(0) += 1;
         }
         state.seen.insert(digest);
-        state.seen_order.push_back((digest, material_claim));
+        state.seen_order.push_back((digest, material));
         if state.seen_order.len() > SEEN_CAP
-            && let Some((old, claim)) = state.seen_order.pop_front()
+            && let Some((old, material)) = state.seen_order.pop_front()
         {
             state.seen.remove(&old);
-            // Give the count back with the digest that took it, so the map cannot outlive the
+            // Give the counts back with the digest that took them, so neither map can outlive the
             // FIFO that feeds it.
-            if let Some(claim) = claim
-                && let Some(count) = state.materials_per_claim.get_mut(&claim)
-            {
-                *count = count.saturating_sub(1);
-                if *count == 0 {
-                    state.materials_per_claim.remove(&claim);
+            if let Some((peer, claim)) = material {
+                if let Some(count) = state.materials_per_claim.get_mut(&claim) {
+                    *count = count.saturating_sub(1);
+                    if *count == 0 {
+                        state.materials_per_claim.remove(&claim);
+                    }
+                }
+                if let Some(count) = state.materials_per_peer_claim.get_mut(&(peer, claim)) {
+                    *count = count.saturating_sub(1);
+                    if *count == 0 {
+                        state.materials_per_peer_claim.remove(&(peer, claim));
+                    }
                 }
             }
         }
@@ -300,11 +416,11 @@ impl PalwGossipCenter {
 
     /// Admit a material broadcast. `Fresh` means: push [`PalwGossipEvent::Material`] to the inbox
     /// (done here) and the caller should relay the message to its other peers.
-    pub fn admit_material(&self, claim: Hash64, bytes: &[u8]) -> PalwGossipAdmit {
+    pub fn admit_material(&self, peer: PeerKey, claim: Hash64, bytes: &[u8]) -> PalwGossipAdmit {
         if bytes.len() > PALW_MATERIAL_MAX_BYTES {
             return PalwGossipAdmit::TooBig;
         }
-        let verdict = self.admit_digest(self.digest(1, Some(&claim), bytes), Some(claim), self.is_solicited(claim));
+        let verdict = self.admit_digest(self.digest(1, Some(&claim), bytes), Some((peer, claim)), self.is_solicited(claim));
         // Drop-on-full: a node with no consumer is not obliged to remember.
         if verdict == PalwGossipAdmit::Fresh && self.has_consumer() {
             let _ = self.inbox_tx.try_send(PalwGossipEvent::Material { claim, bytes: bytes.to_vec() });
@@ -334,7 +450,10 @@ impl PalwGossipCenter {
     /// service had nothing to answer with, and the session ran out. Everyone else gets these bytes
     /// over the wire, so the executor being the one node without them was the wrong asymmetry.
     pub fn mark_own_material(&self, claim: Hash64, bytes: &[u8]) {
-        let _ = self.admit_digest(self.digest(1, Some(&claim), bytes), Some(claim), true);
+        // Charged to NO peer and to no claim slot: this node is not a remote flooder of its own
+        // claim, and the counters exist to bound what remote peers may occupy (audit3 H7). The
+        // digest is still recorded, which is what stops the echo being re-admitted.
+        let _ = self.admit_digest(self.digest(1, Some(&claim), bytes), None, true);
         if self.has_consumer() {
             let _ = self.inbox_tx.try_send(PalwGossipEvent::Material { claim, bytes: bytes.to_vec() });
         }
@@ -359,8 +478,8 @@ mod tests {
     fn a_node_with_no_consumer_relays_without_buffering() {
         let center = PalwGossipCenter::default();
         let claim = Hash64::from_u64_word(7);
-        assert_eq!(center.admit_material(claim, b"first"), PalwGossipAdmit::Fresh, "relay is not gated on having a consumer");
-        assert_eq!(center.admit_material(claim, b"first"), PalwGossipAdmit::Duplicate, "and dedup still works");
+        assert_eq!(center.admit_material(peer(1), claim, b"first"), PalwGossipAdmit::Fresh, "relay is not gated on having a consumer");
+        assert_eq!(center.admit_material(peer(1), claim, b"first"), PalwGossipAdmit::Duplicate, "and dedup still works");
         assert!(!center.has_consumer());
 
         // Nothing was queued, so the receiver a late-starting service takes is empty rather than
@@ -369,7 +488,7 @@ mod tests {
         assert!(rx.try_recv().is_err(), "a bystander must not have accumulated payloads");
 
         // ...and once somebody IS reading, the same call queues.
-        assert_eq!(center.admit_material(Hash64::from_u64_word(8), b"second"), PalwGossipAdmit::Fresh);
+        assert_eq!(center.admit_material(peer(1), Hash64::from_u64_word(8), b"second"), PalwGossipAdmit::Fresh);
         assert!(rx.try_recv().is_ok(), "with a consumer present the event is delivered");
     }
     use super::*;
@@ -385,7 +504,7 @@ mod tests {
         for n in 0..(SEEN_CAP as u64 * 3) {
             let claim = Hash64::from_u64_word(n);
             let digest = center.digest(1, Some(&claim), &n.to_le_bytes());
-            let _ = center.admit_digest(digest, Some(claim), false);
+            let _ = center.admit_digest(digest, Some((peer(1), claim)), false);
         }
         let state = center.state.lock().unwrap();
         assert!(
@@ -398,6 +517,135 @@ mod tests {
 
     fn h64(v: u64) -> Hash64 {
         Hash64::from_u64_word(v)
+    }
+
+    /// Distinct requesting peers, so the per-peer bounds can be exercised.
+    fn peer(n: u128) -> PeerKey {
+        PeerKey::new(
+            kaspa_utils::networking::PeerId::new(uuid::Uuid::from_u128(n)),
+            std::net::IpAddr::from([10, 0, 0, (n % 250) as u8 + 1]).into(),
+        )
+    }
+
+    /// **One peer cannot spend the node's whole serve allowance** (audit3 H5/H10).
+    ///
+    /// The budget was global and keyed on nothing, so the requester picked the claims and paid
+    /// nothing: at the shipped 9.7 MB material, 64 MiB/60 s was 6.9 serves per MINUTE for the whole
+    /// node, and seven ~80-byte requests — 560 bytes — silenced every honest seat's pull for the
+    /// rest of every window. The seats then sign `Unavailable` and three of five slash the honest
+    /// producer's bond. A per-peer share is the bound that matters, because an attacker controls
+    /// its own connections and not the node's other peers.
+    #[test]
+    fn one_peer_cannot_spend_the_whole_serve_budget() {
+        let center = PalwGossipCenter::default();
+        let flooder = peer(1);
+        let honest = peer(2);
+
+        // Drain the flooder's own share, one worst-case reservation at a time.
+        let per_peer_reservations = SERVE_BUDGET_BYTES_PER_PEER / PALW_MATERIAL_MAX_BYTES as u64;
+        for i in 0..per_peer_reservations {
+            assert!(center.reserve_serve_budget(flooder, PALW_MATERIAL_MAX_BYTES as u64), "reservation {i} is within the peer's share");
+        }
+        assert!(
+            !center.reserve_serve_budget(flooder, PALW_MATERIAL_MAX_BYTES as u64),
+            "the flooder is out of allowance once its own share is spent"
+        );
+        // …and the node still answers everybody else. This is the assertion that fails against a
+        // single global counter.
+        assert!(
+            center.reserve_serve_budget(honest, PALW_MATERIAL_MAX_BYTES as u64),
+            "an honest peer's pull is unaffected by what another peer spent"
+        );
+
+        // The node-wide figure is still a backstop behind the per-peer share.
+        assert!(SERVE_BUDGET_BYTES_PER_WINDOW > SERVE_BUDGET_BYTES_PER_PEER, "the backstop must be larger than one peer's share");
+    }
+
+    /// **A refused serve still costs the asker its throttle window** (audit3 H6).
+    ///
+    /// `served_recently` was written only after a SUCCESSFUL serve, so a request the budget refused
+    /// was never recorded — and the identical request could be repeated immediately and forever,
+    /// each repeat buying a full synchronous read of up to 16 MiB with zero outbound traffic to
+    /// make it visible. Charging the throttle on the attempt is what bounds the read rate.
+    #[tokio::test]
+    async fn a_serve_that_is_refused_still_charges_the_throttle() {
+        let center = PalwGossipCenter::default();
+        let claim = h64(11);
+        let reads = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = reads.clone();
+        // A resolver that counts how many times the "disk" was touched.
+        center.set_material_resolver(std::sync::Arc::new(move |_| {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Some(vec![0u8; 1024])
+        }));
+
+        assert!(center.resolve_material_for_serve(peer(1), claim).await.is_some(), "the first ask is answered");
+        assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 1);
+        // Immediately again — and from a DIFFERENT peer, so this is the claim throttle rather than
+        // the per-peer budget doing the work.
+        assert!(center.resolve_material_for_serve(peer(2), claim).await.is_none(), "the claim is inside its throttle window");
+        assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 1, "and the refusal did NOT touch the disk");
+
+        // **The budget refusal, which is where both halves of the old ordering showed.** Exhaust a
+        // peer's allowance and ask it for a claim nothing has touched yet.
+        let other = h64(12);
+        while center.reserve_serve_budget(peer(3), PALW_MATERIAL_MAX_BYTES as u64) {}
+        assert!(center.resolve_material_for_serve(peer(3), other).await.is_none(), "no allowance, no serve");
+
+        // (a) The disk was never touched. The old order was read-then-budget, so an 80-byte request
+        //     bought a full synchronous read of up to 16 MiB that produced no bytes at all.
+        assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 1, "the allowance is consulted BEFORE the disk");
+        // (b) And the refusal was RECORDED. The old code wrote `served_recently` only on success,
+        //     so a refused claim was never throttled and the identical request could be repeated
+        //     immediately and indefinitely, with zero outbound traffic to make it visible.
+        assert!(
+            center.served_recently.lock().unwrap().contains_key(&other),
+            "a refused serve still costs the asker its throttle window, or the refusal is free and repeatable"
+        );
+    }
+
+    /// **The solicited exemption is bounded** (audit3 H7).
+    ///
+    /// It existed so four cheap payloads from a stranger could not make the honest answer
+    /// `Duplicate` network-wide, and it was written as a total bypass: for the 120 s TTL every
+    /// distinct payload for that claim was `Fresh` and relayed to every peer. That is an amplifier
+    /// switched on by the very pull that exists to recover from a flood. It still lets the honest
+    /// answer through after the ordinary budget is spent — that is the property M2-1 bought — but
+    /// it now stops.
+    #[test]
+    fn the_solicited_exemption_lets_the_answer_through_and_still_stops() {
+        let center = PalwGossipCenter::default();
+        let claim = h64(21);
+        // Fill the ordinary per-claim budget from two peers, two each.
+        for (n, p) in [(1u128, 1usize), (2, 2)] {
+            for i in 0..PALW_MATERIALS_PER_PEER_PER_CLAIM {
+                assert_eq!(
+                    center.admit_material(peer(n), claim, format!("junk-{p}-{i}").as_bytes()),
+                    PalwGossipAdmit::Fresh
+                );
+            }
+        }
+        assert_eq!(center.admit_material(peer(3), claim, b"honest"), PalwGossipAdmit::Duplicate, "the ordinary budget is spent");
+
+        // This node asks for it, and now the answer gets in — M2-1's property, preserved.
+        center.note_pull_request(claim);
+        assert_eq!(center.admit_material(peer(3), claim, b"honest"), PalwGossipAdmit::Fresh, "a solicited answer is not crowded out");
+
+        // But the exemption is not a blank cheque: distinct peers keep feeding it and it stops.
+        let mut admitted = 0usize;
+        for n in 4..64u128 {
+            for i in 0..PALW_MATERIALS_PER_PEER_PER_CLAIM {
+                if center.admit_material(peer(n), claim, format!("flood-{n}-{i}").as_bytes()) == PalwGossipAdmit::Fresh {
+                    admitted += 1;
+                }
+            }
+        }
+        assert!(admitted > 0, "the exemption is real while it lasts");
+        let total = center.state.lock().unwrap().materials_per_claim.get(&claim).copied().unwrap_or(0);
+        assert_eq!(
+            total, PALW_SOLICITED_MATERIALS_PER_CLAIM,
+            "the solicited exemption has a ceiling — unbounded, it relays 16 MiB per payload to every peer"
+        );
     }
 
     /// Relay-once, per-claim material budget, size caps, and the own-echo suppression — the whole
@@ -413,19 +661,26 @@ mod tests {
         assert!(center.take_inbox().is_none(), "one consumer, once");
         let claim = h64(7);
 
-        assert_eq!(center.admit_material(claim, b"honest"), PalwGossipAdmit::Fresh);
-        assert_eq!(center.admit_material(claim, b"honest"), PalwGossipAdmit::Duplicate, "relay-once");
-        assert_eq!(center.admit_material(claim, b"garbage-1"), PalwGossipAdmit::Fresh);
-        assert_eq!(center.admit_material(claim, b"garbage-2"), PalwGossipAdmit::Fresh);
-        assert_eq!(center.admit_material(claim, b"garbage-3"), PalwGossipAdmit::Fresh);
+        assert_eq!(center.admit_material(peer(1), claim, b"honest"), PalwGossipAdmit::Fresh);
+        assert_eq!(center.admit_material(peer(1), claim, b"honest"), PalwGossipAdmit::Duplicate, "relay-once");
+        assert_eq!(center.admit_material(peer(1), claim, b"garbage-1"), PalwGossipAdmit::Fresh);
+        // **One peer cannot take more than its couple of slots** (audit3 H7). This is the bound
+        // that leaves room for somebody else's answer however fast a flooder sends.
         assert_eq!(
-            center.admit_material(claim, b"garbage-4"),
+            center.admit_material(peer(1), claim, b"garbage-2"),
+            PalwGossipAdmit::Duplicate,
+            "a third payload for one claim from ONE peer is refused"
+        );
+        assert_eq!(center.admit_material(peer(2), claim, b"garbage-2"), PalwGossipAdmit::Fresh, "a different peer has its own slots");
+        assert_eq!(center.admit_material(peer(2), claim, b"garbage-3"), PalwGossipAdmit::Fresh);
+        assert_eq!(
+            center.admit_material(peer(3), claim, b"garbage-4"),
             PalwGossipAdmit::Duplicate,
             "the per-claim budget is spent — an attacker cannot make a node relay unboundedly for one claim"
         );
-        assert_eq!(center.admit_material(h64(8), b"other-claim"), PalwGossipAdmit::Fresh, "another claim has its own budget");
+        assert_eq!(center.admit_material(peer(1), h64(8), b"other-claim"), PalwGossipAdmit::Fresh, "another claim has its own budget");
 
-        assert_eq!(center.admit_material(h64(9), &vec![0u8; PALW_MATERIAL_MAX_BYTES + 1]), PalwGossipAdmit::TooBig);
+        assert_eq!(center.admit_material(peer(1), h64(9), &vec![0u8; PALW_MATERIAL_MAX_BYTES + 1]), PalwGossipAdmit::TooBig);
         assert_eq!(center.admit_receipt(&vec![0u8; PALW_RECEIPT_MAX_BYTES + 1]), PalwGossipAdmit::TooBig);
 
         assert_eq!(center.admit_receipt(b"receipt"), PalwGossipAdmit::Fresh);

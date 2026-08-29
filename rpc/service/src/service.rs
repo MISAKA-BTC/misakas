@@ -750,6 +750,23 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         // default response, whose `available: false` this struct documents as "not a ConsensusV2
         // network" — so a caller who fat-fingered a class id was told the chain was something it is
         // not. Three different failures shared one indistinguishable reply.
+        //
+        // **An EMPTY class id is a legal request, and it asks only for the locked-bond set**
+        // (audit3 H3). A wallet has to know which of its outputs are bonded collateral before it
+        // selects inputs, and it has no class id to offer — `get_stake_bonds` reads the DNS overlay
+        // store only, so a PALW producer's collateral was invisible to the very selector that
+        // exists to skip it. Anything else non-empty and unparseable is still an error, because a
+        // fat-fingered class id must not read as "this chain does not have that class".
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let locked_bond_outpoints: Vec<String> =
+            session.palw_locked_bond_outpoints_v2().into_iter().map(|o| format!("{}:{}", o.transaction_id, o.index)).collect();
+        if request.class_id.is_empty() {
+            return Ok(GetPalwProducerFactsResponse {
+                available: !locked_bond_outpoints.is_empty(),
+                locked_bond_outpoints,
+                ..Default::default()
+            });
+        }
         let class_id = request
             .class_id
             .parse::<kaspa_hashes::Hash64>()
@@ -762,7 +779,6 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         } else {
             None
         };
-        let session = self.consensus_manager.consensus().unguarded_session();
         let Some(facts) = session.palw_producer_facts_v2(class_id, bond) else {
             return Ok(GetPalwProducerFactsResponse::default());
         };
@@ -779,6 +795,7 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             epoch_index: facts.epoch_index,
             epoch_budget_blocks: facts.epoch_budget_blocks,
             epoch_produced_blocks: facts.epoch_produced_blocks,
+            locked_bond_outpoints,
             ..Default::default()
         };
         if let Some(bond_facts) = facts.bond.as_ref() {

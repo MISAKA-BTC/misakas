@@ -12,6 +12,14 @@ pub enum ConversionError {
     #[error("IP has illegal length {0}")]
     IllegalIPLength(usize),
 
+    /// **A handshake fingerprint field is a fixed-width hash, and an unauthenticated peer supplies
+    /// it** (audit3 H11). The transport accepts messages up to 1 GB, the proto declares these as
+    /// plain `bytes` with no cap, and nothing between the wire and the comparison bounded them —
+    /// so a single connection could hand the node a gigabyte to hex-render into a log line before
+    /// it was registered anywhere. Refused at the boundary, where the field's real width is known.
+    #[error("handshake fingerprint field `{0}` is {1} bytes, over the {2}-byte maximum")]
+    OversizedFingerprint(&'static str, usize, usize),
+
     #[error("Bytes size mismatch error {0}")]
     ArrayBytesSizeError(#[from] std::array::TryFromSliceError),
 

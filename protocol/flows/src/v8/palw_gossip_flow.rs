@@ -49,7 +49,7 @@ impl PalwGossipFlow {
                     let Some(claim) = inner.claim_id.clone().and_then(|h| Hash64::try_from(h).ok()) else {
                         continue; // a material for no claim is addressed to nobody
                     };
-                    if self.ctx.palw_gossip().admit_material(claim, &inner.material) == PalwGossipAdmit::Fresh {
+                    if self.ctx.palw_gossip().admit_material(self.router.key(), claim, &inner.material) == PalwGossipAdmit::Fresh {
                         let relay = make_message!(Payload::PalwTraceMaterialBroadcast, inner);
                         self.ctx.hub().broadcast(relay, Some(self.router.key())).await;
                     }
@@ -70,7 +70,10 @@ impl PalwGossipFlow {
                     // enqueued gigabytes of message clones, and the queue is deep enough
                     // (131,328) that back-pressure never arrives. The asker gets what it asked
                     // for; anyone else who needs it can ask, which is what the pull is for.
-                    if let Some(bytes) = self.ctx.palw_gossip().resolve_material_for_serve(claim) {
+                    // The ASKER is charged for what it asks for (audit3 H5/H10): the serve budget
+                    // is per peer, so one request loop can no longer silence every honest seat's
+                    // pull for the rest of the window.
+                    if let Some(bytes) = self.ctx.palw_gossip().resolve_material_for_serve(self.router.key(), claim).await {
                         let msg = make_message!(
                             Payload::PalwTraceMaterialBroadcast,
                             kaspa_p2p_lib::pb::PalwTraceMaterialBroadcastMessage { claim_id: Some(claim.into()), material: bytes }

@@ -1348,6 +1348,10 @@ message GetPalwProducerFactsResponseMessage {
   string bondClaimExposure = 19;
   // Empty when this bond may produce now; otherwise why it may not.
   string notReadyReason = 20;
+  // Every PALW bond outpoint whose collateral may not be spent right now, "txid:index".
+  // Answered on any ConsensusV2 network, including for a request that names no class — a wallet
+  // needs this and has no class id to offer (audit3 H3).
+  repeated string lockedBondOutpoints = 21;
   RPCError error = 1000;
 }
 

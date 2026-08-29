@@ -3986,6 +3986,24 @@ impl VirtualStateProcessor {
             .collect()
     }
 
+    /// The locked-collateral set at the node's own virtual DAA, for the wallet's input selector
+    /// (audit3 H3). Reads the materialized tip, so it answers the same question
+    /// `palw_v2_locked_bond_outpoints` answers on the block path — one predicate, two callers.
+    pub fn palw_locked_bond_outpoints_v2_impl(&self) -> Vec<TransactionOutpoint> {
+        let Some(state_params) = self.palw_state_params_v2.as_ref() else {
+            return Vec::new();
+        };
+        let Ok(Some((_, state))) = self.palw_state_v2_store.read().load_tip(state_params) else {
+            return Vec::new();
+        };
+        let now_daa = self.lkg_virtual_state.load().daa_score;
+        let mut out: Vec<TransactionOutpoint> = self.palw_v2_locked_bond_outpoints(&state, now_daa).into_iter().collect();
+        // Deterministic order, so two nodes answering the same question give the same answer and a
+        // paging caller cannot be handed a shuffled set.
+        out.sort_by(|a, b| (a.transaction_id, a.index).cmp(&(b.transaction_id, b.index)));
+        out
+    }
+
     pub(super) fn palw_v2_locked_bond_outpoints(
         &self,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,

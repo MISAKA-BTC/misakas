@@ -177,6 +177,17 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// **Every PALW V2 bond outpoint whose collateral may not be spent right now.**
+    ///
+    /// The wallet has to know this and had no way to ask (audit3 H3): `get_stake_bonds` reads the
+    /// DNS overlay store only, so a PALW producer's collateral was invisible to the input selector
+    /// that exists to skip it — and the collateral sits at the producer's own pay address by
+    /// construction, usually as the largest output there, so largest-first selection put it at
+    /// input 0 of the next `wallet send`. Empty on every network that is not `ConsensusV2`.
+    fn palw_locked_bond_outpoints_v2(&self) -> Vec<crate::tx::TransactionOutpoint> {
+        Vec::new()
+    }
+
     fn get_virtual_bits(&self) -> u32 {
         unimplemented!()
     }

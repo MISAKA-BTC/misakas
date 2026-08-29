@@ -2296,11 +2296,22 @@ pub struct GetPalwProducerFactsResponse {
     /// Empty when this bond may produce now; otherwise the reason it may not, which is exactly
     /// what `PalwProducerFactsV2::ready_to_produce` says — one answer, not two.
     pub not_ready_reason: String,
+    /// **Every PALW bond outpoint whose collateral may not be spent right now**, `txid:index` with
+    /// a 128-hex transaction id (audit3 H3).
+    ///
+    /// Answered whenever this is a `ConsensusV2` network, INCLUDING for a request that names no
+    /// class — a wallet needs this and has no class id to offer. `get_stake_bonds` reads the DNS
+    /// overlay store only, so before this a PALW producer's collateral was invisible to the very
+    /// input selector that exists to skip it, and it sits at the producer's own pay address by
+    /// construction, usually as the largest output there.
+    pub locked_bond_outpoints: Vec<String>,
 }
 
 impl Serializer for GetPalwProducerFactsResponse {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        store!(u16, &1, writer)?;
+        // Version 2: `locked_bond_outpoints` (audit3 H3). A version-1 reader stops before it, and
+        // this reader tolerates a version-1 writer by leaving it empty — the field is additive.
+        store!(u16, &2, writer)?;
         store!(bool, &self.available, writer)?;
         store!(String, &self.chain_point, writer)?;
         store!(u64, &self.daa_score, writer)?;
@@ -2321,13 +2332,14 @@ impl Serializer for GetPalwProducerFactsResponse {
         store!(String, &self.bond_exposure_ceiling, writer)?;
         store!(String, &self.bond_claim_exposure, writer)?;
         store!(String, &self.not_ready_reason, writer)?;
+        store!(Vec<String>, &self.locked_bond_outpoints, writer)?;
         Ok(())
     }
 }
 
 impl Deserializer for GetPalwProducerFactsResponse {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
-        let _version = load!(u16, reader)?;
+        let version = load!(u16, reader)?;
         let available = load!(bool, reader)?;
         let chain_point = load!(String, reader)?;
         let daa_score = load!(u64, reader)?;
@@ -2348,6 +2360,7 @@ impl Deserializer for GetPalwProducerFactsResponse {
         let bond_exposure_ceiling = load!(String, reader)?;
         let bond_claim_exposure = load!(String, reader)?;
         let not_ready_reason = load!(String, reader)?;
+        let locked_bond_outpoints = if version >= 2 { load!(Vec<String>, reader)? } else { Vec::new() };
         Ok(Self {
             available,
             chain_point,
@@ -2369,6 +2382,7 @@ impl Deserializer for GetPalwProducerFactsResponse {
             bond_exposure_ceiling,
             bond_claim_exposure,
             not_ready_reason,
+            locked_bond_outpoints,
         })
     }
 }

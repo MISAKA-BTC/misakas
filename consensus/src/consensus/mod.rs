@@ -1215,6 +1215,10 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_producer_facts_v2_impl(class_id, bond)
     }
 
+    fn palw_locked_bond_outpoints_v2(&self) -> Vec<kaspa_consensus_core::tx::TransactionOutpoint> {
+        self.virtual_processor.palw_locked_bond_outpoints_v2_impl()
+    }
+
     fn get_virtual_bits(&self) -> u32 {
         self.lkg_virtual_state.load().bits
     }

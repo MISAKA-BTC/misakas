@@ -171,6 +171,45 @@ async fn locked_bond_outpoints(nv: &NodeView) -> Result<std::collections::HashSe
             _ => break,
         }
     }
+
+    // **And the PALW half, which this function did not have** (audit3 H3).
+    //
+    // `getStakeBonds` reads the DNS overlay store and nothing else, so on a ConsensusV2 network —
+    // testnet-11 is one — a producer's bond collateral was structurally invisible here. The
+    // consensus `locks` predicate has two branches and this mirrored one of them. That collateral
+    // sits at the producer's own pay address by construction (the registration carrier requires
+    // output 0 to pay the producer's payout payload), it is usually the LARGEST output there, and
+    // the selector below sorts largest-first — so it went in at input 0 of the next `wallet send`,
+    // the block carrying it is disqualified, and the operator's send silently never lands.
+    //
+    // An empty class id asks only this question, which is what a wallet can answer with: it has no
+    // class id to offer.
+    let palw = nv
+        .client
+        .get_palw_producer_facts(String::new(), String::new(), 0, false)
+        .await
+        .map_err(|e| {
+            CliError::new(
+                exit::GENERIC,
+                format!(
+                    "getPalwProducerFacts: {e} — refusing to select inputs without knowing which outputs are PALW bond                      collateral (spending one disqualifies the carrying block, and the send never lands)"
+                ),
+            )
+        })?;
+    for outpoint in &palw.locked_bond_outpoints {
+        // Same fail-closed contract as the DNS half above: a shape this wallet cannot read is an
+        // error, never a silent pass.
+        let parsed = parse_outpoint_str(outpoint).ok_or_else(|| {
+            CliError::new(
+                exit::GENERIC,
+                format!(
+                    "getPalwProducerFacts returned locked bond outpoint '{outpoint}', which is not 'txid_hex:index' — \
+                     refusing to select inputs against a bond set this wallet cannot read"
+                ),
+            )
+        })?;
+        out.insert(parsed);
+    }
     Ok(out)
 }
 
@@ -276,8 +315,21 @@ pub async fn utxo_list(ctx: &Ctx, address: Option<&str>, ks: &KeySource) -> CliR
     let addr = resolve_address(ctx, address, ks, &nv)?;
     let utxos = page_all(&nv, &addr).await?;
     let (mut mature_n, mut mature_sum, mut imm_n, mut imm_sum) = (0u64, 0u64, 0u64, 0u64);
+    // **Bonded collateral is reported as bonded, not as spendable** (audit3, the wallet's low).
+    //
+    // `page_all` computes `bonded` for every entry and this loop was the only place that had it and
+    // discarded it, while BOTH spenders drop those outputs (`u.mature && !u.bonded`). So the
+    // command operators are told to use for a balance printed 20,000 MSK for an address whose only
+    // output is locked collateral, and `wallet send` on the same address answered "have
+    // 0.00000000 MSK across 0 UTXO(s)". Two shipped commands, one node, one address, two answers,
+    // and no line anywhere saying the gap is a bond.
+    let mut bonded_n = 0usize;
+    let mut bonded_sum = 0u64;
     for u in &utxos {
-        if u.mature {
+        if u.bonded {
+            bonded_n += 1;
+            bonded_sum += u.amount;
+        } else if u.mature {
             mature_n += 1;
             mature_sum += u.amount;
         } else {
@@ -290,7 +342,8 @@ pub async fn utxo_list(ctx: &Ctx, address: Option<&str>, ks: &KeySource) -> CliR
             "{}",
             json!({ "ok": true, "address": addr.to_string(), "total": utxos.len(),
                     "mature": { "count": mature_n, "sompi": mature_sum },
-                    "immature": { "count": imm_n, "sompi": imm_sum } })
+                    "immature": { "count": imm_n, "sompi": imm_sum },
+                    "bonded": { "count": bonded_n, "sompi": bonded_sum } })
         ),
         OutputFormat::Human => {
             println!("Address      : {addr}");
@@ -303,6 +356,12 @@ pub async fn utxo_list(ctx: &Ctx, address: Option<&str>, ks: &KeySource) -> CliR
                 nv.coinbase_maturity,
                 nv.settlement_long_maturity_daa
             );
+            if bonded_n > 0 {
+                println!(
+                    "  bonded     : {bonded_n}  ({} MSK)  [locked bond collateral — NOT spendable; `wallet send` will not select it]",
+                    sompi_to_msk(bonded_sum)
+                );
+            }
             if utxos.len() > MAX_INPUTS_PER_TX {
                 println!();
                 println!(

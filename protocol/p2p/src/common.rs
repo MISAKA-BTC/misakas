@@ -33,6 +33,16 @@ pub enum ProtocolError {
     )]
     WrongConsensusParams(String, String, String),
 
+    /// **This peer could not serve a pruning-point sidecar — which is not a statement about the
+    /// chain** (audit3 H2/H9). Kept distinct from `Other` so the IBD can tell "the chain I just
+    /// committed is unusable" from "one auxiliary snapshot did not arrive from THIS peer", because
+    /// the first is a reason to fail closed forever and the second is a reason to ask somebody
+    /// else. The server answers `found: false` as a matter of course: it holds exactly one snapshot
+    /// and serves it only on an exact pruning-point match, so a peer whose pruning point advanced
+    /// mid-sync answers this to an entirely honest request.
+    #[error("peer cannot serve the {0} snapshot for pruning point {1}; another peer may still have it")]
+    PruningSidecarUnavailable(&'static str, String),
+
     #[error("expected message type/s {0} but got {1:?}")]
     UnexpectedMessage(&'static str, Option<KaspadMessagePayloadType>),
 

@@ -292,6 +292,12 @@ impl ConsensusSessionOwned {
         self.consensus.get_virtual_utxo_entry(outpoint)
     }
 
+    /// **Which PALW bond outpoints hold collateral that may not be spent right now** (audit3 H3).
+    /// Same store-tip read profile as `palw_producer_facts_v2` below. Empty off ConsensusV2.
+    pub fn palw_locked_bond_outpoints_v2(&self) -> Vec<kaspa_consensus_core::tx::TransactionOutpoint> {
+        self.consensus.palw_locked_bond_outpoints_v2()
+    }
+
     /// The PALW-RC producer contract (ADR-0042). Reads the state store's tip, which is a lock-free
     /// snapshot read like the virtual fields above.
     pub fn palw_producer_facts_v2(

@@ -324,6 +324,9 @@ impl IbdFlow {
                     Ok(_) => {
                         info!("IBD with peer {} completed successfully", self.router);
 
+                        // The run of sidecar shortfalls, if any, is over: this IBD got past them
+                        // (audit3 H2/H9).
+                        self.ctx.clear_sidecar_shortfalls();
                         self.report_unresolved_candidates();
                         self.ctx.finish_ibd_after_success(POST_IBD_CANDIDATE_REVIEW);
                         record_stage(
@@ -340,11 +343,30 @@ impl IbdFlow {
                         // `staging.commit()` runs partway through `ibd()`, so a failure here does not
                         // mean nothing happened — the active consensus may already have been replaced
                         // with a chain whose sync then failed.
-                        if self.ctx.finish_ibd_after_failure() {
+                        //
+                        // **But "this peer could not serve a sidecar" is not that** (audit3 H2/H9).
+                        // The chain is committed and correct; one auxiliary snapshot did not arrive
+                        // from THIS peer, and another peer may well have it. Latching the quarantine
+                        // on the first such answer took a node offline permanently for something
+                        // the server returns as a matter of course — it holds one snapshot, keyed
+                        // to its own pruning point, so any peer whose pruning point advanced during
+                        // a multi-minute header sync answers `found: false` to an honest request.
+                        let sidecar_shortfall = matches!(e, ProtocolError::PruningSidecarUnavailable(..));
+                        if self.ctx.finish_ibd_after_failure_kind(sidecar_shortfall) {
                             warn!(
                                 "IBD with {} failed AFTER the active consensus had already been replaced. This node is now on a \
                                  chain whose sync never completed; participation is QUARANTINED until an operator intervenes.",
                                 self.router
+                            );
+                            return Err(e);
+                        }
+                        if sidecar_shortfall {
+                            warn!(
+                                "IBD with {} committed a chain but {} — this node cannot advance past its pruning point until a \
+                                 peer serves it. Retrying against other peers; after {} consecutive failures it will quarantine.",
+                                self.router,
+                                e,
+                                FlowContext::SIDECAR_SHORTFALL_TOLERANCE
                             );
                             return Err(e);
                         }
@@ -1515,7 +1537,7 @@ impl IbdFlow {
                 drop(session); // Avoid holding the previous consensus throughout the staging IBD
                 let staging = self.ctx.consensus_manager.new_staging_consensus();
                 match self.ibd_with_headers_proof(&staging, negotiation_output.syncer_virtual_selected_parent, &relay_header).await {
-                    Ok(()) => {
+                    Ok(proof_pruning_point) => {
                         // The commit barrier. Everything above this line is reversible by
                         // cancelling staging; nothing below it is.
                         if let Err(e) = self.authorize_commit(&staging.session().await).await {
@@ -1596,7 +1618,18 @@ impl IbdFlow {
                         // atomically before marking the utxoset stable — see sync_new_utxo_set. Without the
                         // sidecars the first post-pruning block re-executes EVM from an empty genesis state /
                         // recomputes overlay rewards from empty state and is disqualified (with all descendants).
-                        self.sync_new_utxo_set(&session, negotiation_output.syncer_pruning_point).await?;
+                        // **The pruning point from the VALIDATED PROOF, not the peer's locator
+                        // tail** (audit3 H2). `negotiation_output.syncer_pruning_point` is simply
+                        // `*locator_hashes.last().unwrap()` (negotiate.rs:40), and
+                        // `get_syncer_chain_block_locator` validates nothing about its contents —
+                        // so this asked the peer for the sidecars of a block the peer chose and
+                        // this node had never seen. A syncer that serves an entirely honest chain
+                        // but substitutes its last locator hash makes every sidecar request miss:
+                        // the server keys its single snapshot to the real pruning point, answers
+                        // `found: false`, and the joiner is quarantined below for what looks like
+                        // its own failure. `proof_pruning_point` is the one this node validated,
+                        // installed, and built its whole staged chain on.
+                        self.sync_new_utxo_set(&session, proof_pruning_point).await?;
                     }
                     Err(e) => {
                         warn!("IBD with headers proof from {} was unsuccessful ({})", self.router, e);
@@ -1804,12 +1837,15 @@ impl IbdFlow {
         Ok(())
     }
 
+    /// Returns the pruning point taken from the VALIDATED proof — which is the only pruning point
+    /// this node has any reason to believe in, and the one the sidecars must be fetched for
+    /// (audit3 H2).
     async fn ibd_with_headers_proof(
         &mut self,
         staging: &StagingConsensus,
         syncer_virtual_selected_parent: BlockHash,
         relay_header: &Arc<Header>,
-    ) -> Result<(), ProtocolError> {
+    ) -> Result<BlockHash, ProtocolError> {
         info!("Starting IBD with headers proof with peer {}", self.router);
 
         let staging_session = staging.session().await;
@@ -1838,7 +1874,7 @@ impl IbdFlow {
             self.import_pruning_point_palw_state(&staging_session, pruning_point, carriage).await?;
         }
         self.validate_staging_palw_order(&self.ctx.consensus().session().await, &staging_session).await?;
-        Ok(())
+        Ok(pruning_point)
     }
 
     /// **Unit D, site 2: on a V2 network the staging commit is the one comparator, and nothing
@@ -2323,9 +2359,10 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
         let msg = dequeue_with_timeout!(self.incoming_route, Payload::PruningPointEvmState, Duration::from_secs(600))?;
         if !msg.found {
             if evm_active {
-                return Err(ProtocolError::Other(
-                    "peer cannot serve the pruning point EVM state required for pruned IBD on this network",
-                ));
+                // Named, not `Other` (audit3 H2/H9): a peer that cannot serve a sidecar is not a
+                // statement about the chain this node just committed, and the caller must be able
+                // to tell those apart before it decides to fail closed forever.
+                return Err(ProtocolError::PruningSidecarUnavailable("EVM state", pruning_point.to_string()));
             }
             return Ok(()); // EVM-inactive network — no EVM state to import.
         }
@@ -2368,9 +2405,10 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
         let msg = dequeue_with_timeout!(self.incoming_route, Payload::PruningPointOverlaySnapshot, Duration::from_secs(600))?;
         if !msg.found {
             if overlay_active {
-                return Err(ProtocolError::Other(
-                    "peer cannot serve the pruning point overlay snapshot required for pruned IBD on this network",
-                ));
+                // Named, not `Other` (audit3 H2/H9): a peer that cannot serve a sidecar is not a
+                // statement about the chain this node just committed, and the caller must be able
+                // to tell those apart before it decides to fail closed forever.
+                return Err(ProtocolError::PruningSidecarUnavailable("overlay", pruning_point.to_string()));
             }
             return Ok(()); // overlay dormant — nothing to import.
         }
@@ -2440,9 +2478,7 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
             .await?;
         let msg = dequeue_with_timeout!(self.incoming_route, Payload::PruningPointPalwState, Duration::from_secs(600))?;
         if !msg.found {
-            return Err(ProtocolError::Other(
-                "peer cannot serve the pruning point PALW state required for pruned IBD on this network",
-            ));
+            return Err(ProtocolError::PruningSidecarUnavailable("PALW state", pruning_point.to_string()));
         }
         // Bounded before deserializing, like the overlay beside it: the carriage is bonds, classes
         // and claims, far smaller than the EVM state.

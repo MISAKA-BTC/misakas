@@ -47,6 +47,18 @@ impl From<Version> for protowire::VersionMessage {
 // protowire to consensus_core
 // ----------------------------------------------------------------------------
 
+/// The widest handshake fingerprint any shipped build sends: a `Hash64` genesis hash. The
+/// consensus ids are 32-byte values, so this bounds every one of them with room to spare — and it
+/// is a bound, not a guess: a field wider than this is not a fingerprint this build understands.
+pub const MAX_HANDSHAKE_FINGERPRINT_BYTES: usize = 64;
+
+fn bounded_fingerprint(name: &'static str, bytes: Vec<u8>) -> Result<Vec<u8>, ConversionError> {
+    if bytes.len() > MAX_HANDSHAKE_FINGERPRINT_BYTES {
+        return Err(ConversionError::OversizedFingerprint(name, bytes.len(), MAX_HANDSHAKE_FINGERPRINT_BYTES));
+    }
+    Ok(bytes)
+}
+
 impl TryFrom<protowire::VersionMessage> for Version {
     type Error = ConversionError;
     fn try_from(msg: protowire::VersionMessage) -> Result<Self, Self::Error> {
@@ -60,10 +72,11 @@ impl TryFrom<protowire::VersionMessage> for Version {
             disable_relay_tx: msg.disable_relay_tx,
             subnetwork_id: msg.subnetwork_id.map(TryInto::try_into).transpose()?,
             network: msg.network.clone(),
-            genesis_hash: msg.genesis_hash,
-            consensus_params_id: msg.consensus_params_id,
-            consensus_identity_id: msg.consensus_identity_id,
-            consensus_schedule_id: msg.consensus_schedule_id,
+            // **Bounded here, before anything renders or compares them** (audit3 H11).
+            genesis_hash: bounded_fingerprint("genesisHash", msg.genesis_hash)?,
+            consensus_params_id: bounded_fingerprint("consensusParamsId", msg.consensus_params_id)?,
+            consensus_identity_id: bounded_fingerprint("consensusIdentityId", msg.consensus_identity_id)?,
+            consensus_schedule_id: bounded_fingerprint("consensusScheduleId", msg.consensus_schedule_id)?,
         })
     }
 }
@@ -257,5 +270,58 @@ impl TryFrom<protowire::RequestAntipastMessage> for (BlockHash, BlockHash) {
     type Error = ConversionError;
     fn try_from(msg: protowire::RequestAntipastMessage) -> Result<Self, Self::Error> {
         Ok((msg.block_hash.try_into_ex()?, msg.context_hash.try_into_ex()?))
+    }
+}
+
+#[cfg(test)]
+mod fingerprint_bound_tests {
+    use super::*;
+
+    /// **The handshake's fingerprint fields are bounded at the boundary** (audit3 H11).
+    ///
+    /// The transport accepts messages up to `P2P_MAX_MESSAGE_SIZE` (1 GB) and the proto declares
+    /// these as plain `bytes` with no cap, so before this every one of them arrived unbounded and
+    /// was rendered into a log line by an unauthenticated peer's choosing. A field wider than a
+    /// `Hash64` is not a fingerprint this build understands, so refusing it is not a heuristic.
+    #[test]
+    fn an_oversized_fingerprint_is_refused_before_it_is_compared_or_rendered() {
+        let base = protowire::VersionMessage {
+            protocol_version: 5,
+            services: 0,
+            timestamp: 0,
+            address: None,
+            id: vec![0u8; 16],
+            user_agent: String::new(),
+            disable_relay_tx: false,
+            subnetwork_id: None,
+            network: "misaka-testnet-11".to_owned(),
+            genesis_hash: vec![0u8; MAX_HANDSHAKE_FINGERPRINT_BYTES],
+            consensus_params_id: vec![],
+            consensus_identity_id: vec![],
+            consensus_schedule_id: vec![],
+        };
+        assert!(Version::try_from(base.clone()).is_ok(), "a full-width genesis hash is exactly what a peer sends");
+
+        for (name, mut msg) in [
+            ("genesisHash", base.clone()),
+            ("consensusParamsId", base.clone()),
+            ("consensusIdentityId", base.clone()),
+            ("consensusScheduleId", base.clone()),
+        ] {
+            let oversized = vec![0u8; MAX_HANDSHAKE_FINGERPRINT_BYTES + 1];
+            match name {
+                "genesisHash" => msg.genesis_hash = oversized,
+                "consensusParamsId" => msg.consensus_params_id = oversized,
+                "consensusIdentityId" => msg.consensus_identity_id = oversized,
+                _ => msg.consensus_schedule_id = oversized,
+            }
+            let Err(err) = Version::try_from(msg) else {
+                panic!("{name} must be refused when oversized");
+            };
+            assert!(
+                matches!(err, ConversionError::OversizedFingerprint(field, _, _) if field == name),
+                "{name}: the refusal names the field it refused, got {err:?}"
+            );
+        }
     }
 }

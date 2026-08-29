@@ -404,6 +404,7 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwProducerFactsResponse>, protowire:
         bond_exposure_ceiling: item.bond_exposure_ceiling.clone(),
         bond_claim_exposure: item.bond_claim_exposure.clone(),
         not_ready_reason: item.not_ready_reason.clone(),
+        locked_bond_outpoints: item.locked_bond_outpoints.clone(),
         error: None,
     }
 });
@@ -1107,6 +1108,7 @@ try_from!(item: &protowire::GetPalwProducerFactsResponseMessage, RpcResult<kaspa
         bond_exposure_ceiling: item.bond_exposure_ceiling.clone(),
         bond_claim_exposure: item.bond_claim_exposure.clone(),
         not_ready_reason: item.not_ready_reason.clone(),
+        locked_bond_outpoints: item.locked_bond_outpoints.clone(),
     }
 });
 try_from!(item: &protowire::GetTokenSupplyRequestMessage, kaspa_rpc_core::GetTokenSupplyRequest, { Self { asset_id: item.asset_id } });
@@ -1502,6 +1504,8 @@ mod palw_producer_facts_tests {
             bond_exposure_ceiling: "200000".to_string(),
             bond_claim_exposure: "94800".to_string(),
             not_ready_reason: "the bond's exposure ceiling leaves no room for another claim".to_string(),
+            // audit3 H3: the set a wallet must have before it selects inputs.
+            locked_bond_outpoints: vec![format!("{}:0", "aa".repeat(64)), format!("{}:7", "bb".repeat(64))],
         };
         let wire: crate::protowire::GetPalwProducerFactsResponseMessage = RpcResult::Ok(&response).into();
         let back: GetPalwProducerFactsResponse = GetPalwProducerFactsResponse::try_from(&wire).unwrap();
@@ -1525,6 +1529,10 @@ mod palw_producer_facts_tests {
         assert_eq!(back.bond_exposure_ceiling, response.bond_exposure_ceiling);
         assert_eq!(back.bond_claim_exposure, response.bond_claim_exposure);
         assert_eq!(back.not_ready_reason, response.not_ready_reason);
+        assert_eq!(
+            back.locked_bond_outpoints, response.locked_bond_outpoints,
+            "the locked-collateral set must survive the wire — a wallet that loses it selects a bonded input"
+        );
     }
 }
 
