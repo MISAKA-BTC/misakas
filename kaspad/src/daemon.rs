@@ -1193,6 +1193,32 @@ Do you confirm? (y/n)";
     // reward goes. A missing one is a startup refusal rather than a producer that runs and cannot
     // publish; a hash-only network is a refusal for a different reason, and both say which.
     let palw_producer_service = if args.palw_produce {
+        // **A producer with no way to carry a lifecycle object must not start** (audit M2-10).
+        //
+        // Producing opens claims; answering for them — a court disclosure, a verdict, a quorum —
+        // costs a funded 0x4b carrier, and the panel's only funding source is
+        // `--palw-fee-outpoint` or the rolling outpoint it persists from one. A node started
+        // without either mines happily and then cannot make a single move in its own defence, and
+        // on a clocked ladder that is not a lost dispute, it is a slashed bond. The documented
+        // join recipe omitted the flag, so this is the configuration operators actually ran.
+        //
+        // Refused at startup rather than warned about, the way this file already refuses a
+        // non-EVM build on an EVM-active network: the failure it prevents is unrecoverable and its
+        // cause is invisible from the logs of the node that suffers it.
+        if matches!(config.params.palw_consensus_mode, kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(_))
+            && args.palw_fee_outpoint.is_none()
+            && !std::path::Path::new(&args.appdir.clone().unwrap_or_default())
+                .join(config.params.net.to_string())
+                .join("palw-panel")
+                .join("palw-fee-outpoint")
+                .exists()
+        {
+            panic!(
+                "--palw-produce on a ConsensusV2 network needs a way to carry lifecycle objects: pass --palw-fee-outpoint \
+                 (a funded, spendable outpoint at the producer's pay address). Without it this node can open claims but \
+                 cannot answer for them, and an unanswered court costs the bond."
+            );
+        }
         // Both facts come from the SAME bundle read: the class the floor is, and the court that
         // decides what geometry any class is admissible at. Reading them separately would let a
         // producer resolve against a court the chain does not have.
@@ -1241,6 +1267,7 @@ Do you confirm? (y/n)";
                         pay_address: pay_address.clone(),
                         address_prefix: config.prefix(),
                         network_id: config.params.net.to_string(),
+                        genesis_hash: config.genesis.hash,
                         // Beside the per-network data dir: the material behind a published attempt
                         // is a data-availability obligation for `trace_retention_daa`, so it has to
                         // outlive a restart the way the chain it answers to does.

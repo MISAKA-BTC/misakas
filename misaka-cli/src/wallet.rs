@@ -36,6 +36,16 @@ struct Funding {
     entry: UtxoEntry,
     mature: bool,
     amount: u64,
+    /// This outpoint is a validator StakeBond's locked collateral, as the NODE reports it.
+    ///
+    /// Spending it is never what an operator meant: the block carrying the spend is disqualified
+    /// from the chain, and where the mergeset spend gate is not armed it is accepted anyway and the
+    /// bond record survives with no backing (audit M1-1). Every other spender in this tree already
+    /// excludes it — `validator_service.rs` calls it "a validator self-wedge", and the sidecar
+    /// threads an exclusion through bond, unbond and equivocate. The wallet, which wraps the SAME
+    /// signing path a validator bonds with, did not (audit M1-3): the bond is typically the largest
+    /// UTXO at that address, and selection is largest-first.
+    bonded: bool,
 }
 
 /// One connect + getServerInfo, shared by all wallet commands.
@@ -90,7 +100,56 @@ async fn connect(ctx: &Ctx) -> Result<NodeView, CliError> {
 
 /// Page the ENTIRE UTXO set of `address` (op 160, ≤1000/page) — never the
 /// unbounded get_utxos_by_addresses (that is what blows up on a 951k-UTXO addr).
+/// Every outpoint the node reports as a StakeBond's locked collateral, at any status and any owner.
+///
+/// Deliberately unfiltered by owner: the wallet may hold a key that is not the bond's declared
+/// owner, and an outpoint that is a bond at all must not be selected. A failure here is surfaced
+/// rather than swallowed — a wallet that cannot ask which of its outputs are locked must not guess,
+/// because the guess it made before this existed was "none of them".
+async fn bonded_outpoints(nv: &NodeView) -> Result<std::collections::HashSet<TransactionOutpoint>, CliError> {
+    let mut out = std::collections::HashSet::new();
+    let mut cursor: Option<String> = None;
+    loop {
+        let resp = nv
+            .client
+            .get_stake_bonds(kaspa_rpc_core::GetStakeBondsRequest {
+                owner_pubkey_hash: None,
+                status_in: None,
+                cursor: cursor.clone(),
+                limit: 1000,
+                pov_daa_score: None,
+            })
+            .await
+            .map_err(|e| {
+                CliError::new(
+                    exit::GENERIC,
+                    format!(
+                        "getStakeBonds: {e} — refusing to select inputs without knowing which outputs are bonded collateral \
+                         (spending a bond disqualifies the carrying block and can leave the bond record unbacked)"
+                    ),
+                )
+            })?;
+        for b in resp.bonds {
+            if let Some(op) = parse_outpoint_str(&b.bond_outpoint) {
+                out.insert(op);
+            }
+        }
+        match resp.next_cursor {
+            Some(next) if !next.is_empty() => cursor = Some(next),
+            _ => break,
+        }
+    }
+    Ok(out)
+}
+
+/// "txid_hex:index", the shape every overlay RPC uses for an outpoint.
+fn parse_outpoint_str(s: &str) -> Option<TransactionOutpoint> {
+    let (tx, ix) = s.rsplit_once(':')?;
+    Some(TransactionOutpoint::new(tx.parse().ok()?, ix.parse().ok()?))
+}
+
 async fn page_all(nv: &NodeView, address: &Address) -> Result<Vec<Funding>, CliError> {
+    let bonds = bonded_outpoints(nv).await?;
     let mut out = Vec::new();
     let mut cursor = String::new();
     loop {
@@ -113,7 +172,9 @@ async fn page_all(nv: &NodeView, address: &Address) -> Result<Vec<Funding>, CliE
                 nv.settlement_long_maturity_daa,
                 None,
             );
-            out.push(Funding { outpoint: e.outpoint.into(), entry: e.utxo_entry.into(), mature, amount });
+            let outpoint: TransactionOutpoint = e.outpoint.into();
+            let bonded = bonds.contains(&outpoint);
+            out.push(Funding { outpoint, entry: e.utxo_entry.into(), mature, amount, bonded });
         }
         if resp.next_cursor.is_empty() {
             break;
@@ -233,7 +294,8 @@ pub async fn consolidate(
     let addr = key.funding_address(nv.params.prefix());
     let max_inputs = max_inputs.clamp(2, MAX_INPUTS_PER_TX);
 
-    let mut mature: Vec<Funding> = page_all(&nv, &addr).await?.into_iter().filter(|u| u.mature).collect();
+    // `!bonded`: never consolidate a validator's locked collateral into a change output (M1-3).
+    let mut mature: Vec<Funding> = page_all(&nv, &addr).await?.into_iter().filter(|u| u.mature && !u.bonded).collect();
     if mature.len() < 2 {
         return Err(CliError::new(exit::GENERIC, format!("nothing to consolidate: {} mature UTXO(s) at {addr}", mature.len())));
     }
@@ -353,7 +415,9 @@ pub async fn send(ctx: &Ctx, ks: &KeySource, to: &str, amount_sompi: u64, dry_ru
     let recipient_spk = pay_to_address_script(&to_addr);
 
     // Largest-first greedy select over MATURE self-UTXOs, re-estimating the fee as inputs are added.
-    let mut mature: Vec<Funding> = page_all(&nv, &from_addr).await?.into_iter().filter(|u| u.mature).collect();
+    // `!bonded`: the bond is usually the LARGEST output at a validator's address, and selection
+    // below is largest-first, so without this the default `wallet send` reaches for it first (M1-3).
+    let mut mature: Vec<Funding> = page_all(&nv, &from_addr).await?.into_iter().filter(|u| u.mature && !u.bonded).collect();
     mature.sort_by(|a, b| b.amount.cmp(&a.amount));
     let mut selected: Vec<&Funding> = Vec::new();
     let mut sum = 0u64;

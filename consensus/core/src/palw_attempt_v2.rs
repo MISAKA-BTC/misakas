@@ -139,9 +139,26 @@ pub const PALW_ATTEMPT_V2_ALL_DOMAINS: &[&[u8]] = &[
 /// the finalizer's bytes is the point: the PoW digest and the challenge then separate networks by
 /// the SAME name, and no configuration can point them at different ones.
 pub fn palw_network_domain_v2(network_id: &[u8]) -> Hash64 {
+    palw_network_domain_v2_for(network_id, None)
+}
+
+/// **The network domain, bound to the chain's INCARNATION when one is given** (audit M2-18).
+///
+/// A network id is a name — "testnet-11" — and a name outlives a re-mint. Every V2 signature is
+/// domain-separated by this value, so with the name alone a signature published on one incarnation
+/// of a network is valid on the next: this repo has re-minted testnet-11 repeatedly, and a bond
+/// registration, a receipt or a class registration lifted from the old chain would verify on the
+/// new one. Mixing the genesis hash in makes a signature a statement about one chain.
+///
+/// `None` reproduces the name-only domain and exists for the callers that genuinely have no chain
+/// in hand (offline tools reading a network by name); every consensus path passes the genesis.
+pub fn palw_network_domain_v2_for(network_id: &[u8], genesis: Option<Hash64>) -> Hash64 {
     let mut state = keyed(PALW_ATTEMPT_V2_DOMAIN_NETWORK);
     state.update(&(network_id.len() as u64).to_le_bytes());
     state.update(network_id);
+    if let Some(genesis) = genesis {
+        state.update(genesis.as_byte_slice());
+    }
     finish(state)
 }
 

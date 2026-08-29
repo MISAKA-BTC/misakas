@@ -168,13 +168,16 @@ pub struct PalwPanelService {
     config: PalwPanelConfig,
     /// Decoded once. Same contract as the producer's: digest-checked here, matched against the
     /// CHAIN per duty.
-    class_artifacts: Vec<misaka_palw_base0::artifact::Base0ArtifactV1>,
+    class_artifacts: Vec<std::sync::Arc<misaka_palw_base0::artifact::Base0ArtifactV1>>,
     qwen36_artifacts: Vec<(kaspa_hashes::Hash64, std::sync::Arc<misaka_palw_base0::qwen36::Qwen36ArtifactV1>)>,
     consensus_manager: Arc<ConsensusManager>,
     flow_context: Arc<FlowContext>,
     consensus_config: Arc<Config>,
     keypair: Option<Box<libcrux_ml_dsa::ml_dsa_87::MLDSA87KeyPair>>,
     bond: Option<TransactionOutpoint>,
+    /// When `retention/foreign/` was last swept. The sweep is a full directory walk, so it runs on
+    /// a cadence rather than inside every write (audit M2-2).
+    foreign_prune_at: std::sync::Mutex<std::time::Instant>,
     /// Fired by `signal_exit` so this service's `start` future can finish. Both panel loops are
     /// `loop { sleep; work }` with nothing else that a shutdown could cancel, so without it the
     /// AsyncRuntime's shutdown join waits on a future that never completes. Measured on
@@ -233,7 +236,7 @@ impl PalwPanelService {
             match crate::palw_backends::load_class_artifact(path) {
                 Ok(crate::palw_backends::LoadedClassArtifact::Dense(artifact)) => {
                     info!("[{PALW_PANEL}] loaded class artifact {}", path.display());
-                    class_artifacts.push(*artifact);
+                    class_artifacts.push(std::sync::Arc::new(*artifact));
                 }
                 Ok(crate::palw_backends::LoadedClassArtifact::Qwen36 { computed_root, artifact }) => {
                     info!("[{PALW_PANEL}] mapped Qwen3.6 artifact {} (computed root {computed_root})", path.display());
@@ -251,6 +254,7 @@ impl PalwPanelService {
             bond,
             class_artifacts,
             qwen36_artifacts,
+            foreign_prune_at: std::sync::Mutex::new(std::time::Instant::now()),
             shutdown: SingleTrigger::default(),
         }
     }
@@ -351,6 +355,15 @@ impl PalwPanelService {
             let mut found = None;
             for (outpoint, entry) in chunk {
                 if entry.script_public_key != script || entry.is_coinbase {
+                    continue;
+                }
+                // **Never the bond's own output-0** (audit M2-13). The recovery scan looks for any
+                // spendable output under this node's payout script, and on a node whose only such
+                // output IS its collateral it selected exactly that: the carrier is then refused by
+                // the spend gate as a chain block, or — where the mergeset fence is not armed —
+                // accepted through a merged block and the collateral simply leaves. Every other
+                // funding path in this tree carries this exclusion by name.
+                if self.bond.is_some_and(|bond| bond == outpoint) {
                     continue;
                 }
                 under_script += 1;
@@ -520,7 +533,7 @@ impl PalwPanelService {
         let pubkey = kp.verification_key.as_ref().to_vec();
         let bond = PalwBondKeyV2(TransactionOutpoint::new(kaspa_consensus_core::tx::TransactionId::default(), 0));
         let network_domain =
-            kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2(self.consensus_config.params.net.to_string().as_bytes());
+            kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(self.consensus_config.params.net.to_string().as_bytes(), Some(self.consensus_config.genesis.hash));
         let message = kaspa_consensus_core::palw_state_v2::palw_bond_registration_message_v2(
             network_domain,
             &kaspa_consensus_core::palw_lifecycle_objects_v2::palw_bond_registration_signed_key_v2(&bond),
@@ -685,15 +698,32 @@ impl PalwPanelService {
             .map_err(|e| format!("this node cannot build a registration for {}: {e}", entry.model_id))
         };
         let unsigned = build(Vec::new())?;
-        let PalwConsensusObjectV2::ClassRegistered { class_id, activation_daa, .. } = &unsigned else {
+        let PalwConsensusObjectV2::ClassRegistered {
+            class_id,
+            activation_daa,
+            artifact_root: signed_root,
+            slash_value_per_pwu: signed_slash,
+            initial_target: signed_target,
+            pwu_rule: signed_rule,
+            ..
+        } = &unsigned
+        else {
             return Err("the builder did not build a registration".to_string());
         };
+        // The whole object, not five of its fields (audit M2-6) — the signer's own comment already
+        // said "signing anything assembled beside the object would sign a class that is not the one
+        // being registered", and this is that comment made true.
         let message = kaspa_consensus_core::palw_state_v2::palw_class_registration_message_v2(
-            kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2(self.consensus_config.params.net.to_string().as_bytes()),
+            kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(self.consensus_config.params.net.to_string().as_bytes(), Some(self.consensus_config.genesis.hash)),
             *class_id,
             terms.min_grantable_share_permille,
             *activation_daa,
             &bond_key,
+            *signed_root,
+            *signed_slash,
+            *signed_target,
+            signed_rule,
+            &canonical,
         );
         let signature = self
             .sign(message.as_byte_slice(), kaspa_consensus_core::palw_state_v2::PALW_CLASS_REGISTRATION_V2_MLDSA87_CONTEXT)
@@ -969,16 +999,53 @@ impl PalwPanelService {
         if path.exists() {
             return;
         }
-        let _ = std::fs::create_dir_all(&dir);
-        let _ = std::fs::write(&path, bytes);
-        if let Ok(entries) = std::fs::read_dir(&dir) {
-            let cutoff = std::time::SystemTime::now() - std::time::Duration::from_secs(72 * 3600);
-            for entry in entries.flatten() {
-                if let Ok(meta) = entry.metadata()
-                    && meta.modified().map(|m| m < cutoff).unwrap_or(false)
-                {
-                    let _ = std::fs::remove_file(entry.path());
-                }
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            warn!("[{PALW_PANEL}] cannot create the foreign retention directory {}: {e}", dir.display());
+            return;
+        }
+        // **A write failure is reported.** Swallowing it (`let _ =`) left the panel believing it
+        // was retaining while a full volume dropped every byte — the node then answers no pull and
+        // is charged for the silence (audit M2-2).
+        if let Err(e) = std::fs::write(&path, bytes) {
+            warn!("[{PALW_PANEL}] cannot retain material for claim {claim}: {e}");
+            return;
+        }
+        self.prune_foreign_retention(&dir);
+    }
+
+    /// Bound `retention/foreign/` by BOTH age and count, oldest first.
+    ///
+    /// The age sweep alone was not a bound (audit M2-2): 72 hours of anything is unbounded when an
+    /// attacker chooses the arrival rate, and the sweep ran inside the write path, so the N-th
+    /// write cost N `metadata()` syscalls in the panel's async tick. It runs on a cadence now, and
+    /// the count cap is what actually holds the directory down.
+    fn prune_foreign_retention(&self, dir: &std::path::Path) {
+        const FOREIGN_RETENTION_MAX_FILES: usize = 4_096;
+        const PRUNE_EVERY: std::time::Duration = std::time::Duration::from_secs(300);
+        {
+            let mut last = self.foreign_prune_at.lock().unwrap();
+            let now = std::time::Instant::now();
+            if now.duration_since(*last) < PRUNE_EVERY {
+                return;
+            }
+            *last = now;
+        }
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        let cutoff = std::time::SystemTime::now() - std::time::Duration::from_secs(72 * 3600);
+        let mut kept: Vec<(std::time::SystemTime, std::path::PathBuf)> = Vec::new();
+        for entry in entries.flatten() {
+            let Ok(meta) = entry.metadata() else { continue };
+            let modified = meta.modified().unwrap_or(std::time::UNIX_EPOCH);
+            if modified < cutoff {
+                let _ = std::fs::remove_file(entry.path());
+                continue;
+            }
+            kept.push((modified, entry.path()));
+        }
+        if kept.len() > FOREIGN_RETENTION_MAX_FILES {
+            kept.sort_by_key(|(at, _)| *at);
+            for (_, path) in kept.iter().take(kept.len() - FOREIGN_RETENTION_MAX_FILES) {
+                let _ = std::fs::remove_file(path);
             }
         }
     }
@@ -1142,7 +1209,7 @@ impl PalwPanelService {
             return;
         };
         let network_domain =
-            kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2(self.consensus_config.params.net.to_string().as_bytes());
+            kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(self.consensus_config.params.net.to_string().as_bytes(), Some(self.consensus_config.genesis.hash));
         info!(
             "[{PALW_PANEL}] starting (bond={bond}, submitter={}, register={})",
             if self.config.fee_outpoint.is_some() { "funded" } else { "off — receipts only" },
@@ -1162,7 +1229,7 @@ impl PalwPanelService {
         // silent, which is the resolver's None.
         {
             let retention = self.config.retention_dir.clone();
-            self.flow_context.palw_gossip().set_material_resolver(Box::new(move |claim| {
+            self.flow_context.palw_gossip().set_material_resolver(std::sync::Arc::new(move |claim| {
                 std::fs::read(crate::palw_producer::palw_retained_material_path(&retention, &claim))
                     .ok()
                     .or_else(|| std::fs::read(retention.join("foreign").join(format!("{claim}.material"))).ok())
@@ -1170,6 +1237,12 @@ impl PalwPanelService {
         }
 
         let mut materials: HashMap<Hash64, Vec<Vec<u8>>> = HashMap::new();
+        // **What THIS node computed for a claim it disputes** — kept apart from `materials`, which
+        // holds what the network says about a claim (audit M2-4). A challenger that bisects the
+        // accused's own capture can never find a fault: both sides read the same bytes through the
+        // same pure function, every rung `agree`s, and the ladder walks to an index no real job
+        // opens. The dispute is only a dispute if the two sides speak from two executions.
+        let mut own_executions: HashMap<Hash64, Vec<u8>> = HashMap::new();
         let mut receipts: HashMap<Hash64, Vec<PalwSeatReceiptV2>> = HashMap::new();
         let mut answered: HashSet<Hash64> = HashSet::new();
         let mut first_seen: HashMap<Hash64, u64> = HashMap::new();
@@ -1237,16 +1310,40 @@ impl PalwPanelService {
                         // their nodes on 2026-08-28 and every in-flight claim of theirs defaulted,
                         // because the only durable copies were the producers' own. One surviving
                         // copy anywhere in the fleet now serves the whole network via the pull.
-                        self.persist_foreign_material(&claim, &bytes);
+                        // **Nothing is written to disk here** (audit M2-2). This ran for EVERY
+                        // gossiped material — no check that the claim exists on chain, that this
+                        // node is seated on it, that the bytes verify, or that a bonded party sent
+                        // them — with a 72-hour mtime sweep as the only bound, on the same volume
+                        // as the consensus database. Retention now happens where the bytes have
+                        // been proven to be the claim's, in the duty loop below.
                         let pool = materials.entry(claim).or_default();
-                        if pool.len() < MATERIALS_PER_CLAIM {
-                            pool.push(bytes);
+                        // **A full pool must not lock out the payload that verifies** (audit
+                        // M2-1). Four unverifiable byte-strings cost an attacker ~280 bytes, and
+                        // the pull exists to fetch the real one — dropping the answer because the
+                        // garbage arrived first was the whole failure. Oldest out.
+                        if pool.len() >= MATERIALS_PER_CLAIM {
+                            pool.remove(0);
                         }
+                        pool.push(bytes);
                     }
                     PalwGossipEvent::Receipt { bytes } => {
                         if let Ok(receipt) = borsh::from_slice::<PalwSeatReceiptV2>(&bytes) {
+                            // **A receipt with no signature is not a receipt.** The pool is
+                            // unauthenticated and capped, so sixteen well-formed junk receipts
+                            // naming a live claim used to fill it before any real one arrived —
+                            // every honest receipt was then dropped at the door and no quorum
+                            // assembled (audit M2-7, failure path 3). Consensus re-verifies every
+                            // signature at acceptance; this is the door check that keeps the pool
+                            // from being a free denial of service.
+                            let plausible = !receipt.signature.is_empty();
                             let pool = receipts.entry(receipt.claim).or_default();
-                            if pool.len() < RECEIPTS_PER_CLAIM && !pool.contains(&receipt) {
+                            if plausible && !pool.contains(&receipt) {
+                                // Oldest out rather than newest refused, for the same reason the
+                                // material pool evicts: whoever is first must not be able to lock
+                                // out whoever is right.
+                                if pool.len() >= RECEIPTS_PER_CLAIM {
+                                    pool.remove(0);
+                                }
                                 pool.push(receipt);
                             }
                         }
@@ -1259,6 +1356,12 @@ impl PalwPanelService {
                 continue;
             }
             let current_daa = session.get_virtual_daa_score();
+            // Every claim now in the pool has an arrival stamp, whether or not this seat holds a
+            // duty on it — that is what makes the retention bound below apply to foreign claims
+            // (audit M2-2).
+            for claim in materials.keys() {
+                first_seen.entry(*claim).or_insert(current_daa);
+            }
 
             // **Build the class registration FIRST — the comment always said "ahead of
             // everything else", the code had it BEHIND the duty sweep.** On a healthy tick that
@@ -1344,6 +1447,9 @@ impl PalwPanelService {
                             target.claim_id
                         );
                     } else {
+                        // Ours, for the ladder: the challenger answers every rung from THIS, and
+                        // the responder from the claim's own capture.
+                        own_executions.insert(target.claim_id, mine_run.material.clone());
                         warn!(
                             "[{PALW_PANEL}] claim {} committed an execution this node does not reproduce — opening a court",
                             target.claim_id
@@ -1406,6 +1512,18 @@ impl PalwPanelService {
                 if let Some(sent_daa) = court_moved.get(&(duty.session_id, duty.round, duty.i_am_responder))
                     && current_daa < sent_daa.saturating_add(COURT_MOVE_REPLAN_DAA)
                 {
+                    continue;
+                }
+                // **Already queued, from a tick that could not fund it** (audit M2-15). Moves that
+                // do not fit the in-flight budget are carried over to the next tick, and this loop
+                // rebuilt the same move every 2 seconds and pushed a duplicate — so the queue grew
+                // by a copy per tick, `submitted_this_tick` spent the budget on the oldest copies,
+                // and later sessions' moves were dropped unsent. A rung is clocked, so the moves
+                // crowded out are exactly the ones whose lapse convicts the responder. The
+                // opening-court branch has always had this guard; the responder branch did not.
+                if court_pending.iter().any(|(sid, round, responder, _)| {
+                    *sid == duty.session_id && *round == duty.round && *responder == duty.i_am_responder
+                }) {
                     continue;
                 }
                 // The capture, and the family's backend for it. A party with no material — or a
@@ -1478,10 +1596,49 @@ impl PalwPanelService {
                         pool.push(bytes);
                     }
                 }
-                let Some(capture) = materials
-                    .get(&duty.claim_id)
-                    .and_then(|pool| pool.iter().find(|b| backend.verify_material(b, roots) == PalwMaterialVerdictV1::Matches))
-                else {
+                // **The capture is chosen by ROLE** (audit M2-4).
+                //
+                // The responder speaks for the accused execution, so it answers from the capture
+                // that reproduces the claim's committed roots. The CHALLENGER speaks for its own
+                // — the execution whose roots differed, which is the entire content of its
+                // accusation — so it answers from that. Feeding one capture to both sides made
+                // `agree` true at every rung by construction (`bisect_prefix_state` is a pure
+                // function of the bytes and the index), the interval walked to the last leaf of a
+                // 2^22 space, and no close could be assembled by anyone: fraud escaped, and an
+                // attacker who merely agreed 22 times had the honest producer convicted by the
+                // backstop for 23 transaction fees.
+                //
+                // A challenger that has lost its own execution (a restart) re-runs the job here
+                // rather than borrowing the accused's — silence costs it the dispute, which is the
+                // right price for an accusation it can no longer support.
+                if !duty.i_am_responder && !own_executions.contains_key(&duty.claim_id) {
+                    let rerun = self
+                        .job_anchor_for_claim(
+                            &session,
+                            backend.as_ref(),
+                            network_domain,
+                            duty.accepted_block,
+                            duty.class_id,
+                            &duty.executor_bond,
+                        )
+                        .and_then(|anchor| backend.job_for_anchor(anchor).ok())
+                        .and_then(|(job, prompt)| backend.execute(&job, &prompt).ok());
+                    match rerun {
+                        Some(outcome) => {
+                            own_executions.insert(duty.claim_id, outcome.material);
+                        }
+                        None => {
+                            *court_stalls.entry("the challenger cannot re-execute its own accusation").or_default() += 1;
+                            continue;
+                        }
+                    }
+                }
+                let capture_from_own = (!duty.i_am_responder).then(|| own_executions.get(&duty.claim_id)).flatten();
+                let Some(capture) = capture_from_own.or_else(|| {
+                    materials
+                        .get(&duty.claim_id)
+                        .and_then(|pool| pool.iter().find(|b| backend.verify_material(b, roots) == PalwMaterialVerdictV1::Matches))
+                }) else {
                     *court_stalls
                         .entry(if materials.contains_key(&duty.claim_id) {
                             // Held material, and none of it reproduces the claim's roots — a
@@ -1662,17 +1819,54 @@ impl PalwPanelService {
                             PalwClaimRootsV1 { execution_root: duty.execution_root, trace_root: duty.trace_root, anchor },
                         ) == PalwMaterialVerdictV1::Matches
                         {
+                            // **Retained here, and only here**: the chain carries this claim, this
+                            // seat is on its panel, and these exact bytes reproduce its committed
+                            // roots. Everything weaker was what let a stranger fill the disk
+                            // (audit M2-2).
+                            self.persist_foreign_material(&duty.claim_id, bytes);
                             break 'verdict Some(PalwReceiptVerdictV2::Valid);
                         }
                     }
-                    // No verifying material yet. Ask the network before accusing: the
-                    // producer may be gone, but any peer that ever heard the broadcast can
-                    // re-serve it (and does, to everybody). Throttled per claim; the serve side
-                    // throttles too, so the worst case is one small request per claim per 25 DAA.
-                    if materials.get(&duty.claim_id).map(|pool| pool.is_empty()).unwrap_or(true)
-                        && requested.get(&duty.claim_id).is_none_or(|at| current_daa >= at.saturating_add(25))
+                    // **This node's own disk, before the network and before any accusation**
+                    // (audit M2-21). A seat that restarts loses its pool but keeps its retention,
+                    // and the court arm already reads it — the verdict arm did not, so a restarted
+                    // seat signed `Unavailable` against a producer whose material was sitting in
+                    // its own directory. Verified like anything else: a file is evidence only if it
+                    // reproduces the roots the claim committed to.
+                    if let Some(bytes) = self.retained_capture(&duty.claim_id).or_else(|| {
+                        std::fs::read(self.config.retention_dir.join("foreign").join(format!("{}.material", duty.claim_id))).ok()
+                    }) && let Ok(backend) = self.backends().resolve(duty.class_id, duty.artifact_root)
+                        && let Some(anchor) = self.job_anchor_for_claim(
+                            &session,
+                            backend.as_ref(),
+                            network_domain,
+                            duty.accepted_block,
+                            duty.class_id,
+                            &duty.executor_bond,
+                        )
+                        && backend.verify_material(
+                            &bytes,
+                            PalwClaimRootsV1 { execution_root: duty.execution_root, trace_root: duty.trace_root, anchor },
+                        ) == PalwMaterialVerdictV1::Matches
                     {
+                        materials.entry(duty.claim_id).or_default().push(bytes);
+                        break 'verdict Some(PalwReceiptVerdictV2::Valid);
+                    }
+                    // No verifying material yet. Ask the network before accusing: the producer may
+                    // be gone, but any peer that heard the broadcast can re-serve it.
+                    //
+                    // **The condition is "nothing VERIFIED", which is what the loop above just
+                    // established — not "the pool is empty"** (audit M2-1). Gating on emptiness
+                    // meant one unverifiable byte-string suppressed the pull permanently: an
+                    // attacker sends four ~70-byte payloads for a claim id it reads off the header,
+                    // the pool is non-empty and matches nothing, the seat never asks, and at half
+                    // the window it signs `Unavailable` against an honest producer. Reaching this
+                    // line already means every pooled payload failed to verify.
+                    if requested.get(&duty.claim_id).is_none_or(|at| current_daa >= at.saturating_add(25)) {
                         requested.insert(duty.claim_id, current_daa);
+                        // Registered with the gossip center first: the answer must be exempt from
+                        // the per-claim relay budget an attacker may already have spent.
+                        self.flow_context.palw_gossip().note_pull_request(duty.claim_id);
                         self.flow_context.request_palw_material(duty.claim_id).await;
                     }
                     // Wait out half the window before accusing — gossip is not instant and an
@@ -1896,7 +2090,6 @@ impl PalwPanelService {
                     }
                     let pool = receipts.get(&claim).cloned().unwrap_or_default();
                     let Some(object) = session.palw_v2_receipt_quorum_assemble(claim, pool) else { continue };
-                    *submit_attempts.entry(claim).or_insert(0) += 1;
                     match self.build_lifecycle_tx(&object, funding_outpoint, &funding_entry) {
                         Ok(tx) => {
                             let txid = tx.id();
@@ -1929,7 +2122,16 @@ impl PalwPanelService {
                                 }
                             }
                         }
-                        Err(e) => warn!("[{PALW_PANEL}] cannot build the carrier for claim {claim}: {e}"),
+                        // **Counted only for a failure THIS claim's object caused** (audit M2-25).
+                        // The attempt was charged before the build, so one panel-wide condition —
+                        // an unfunded fee outpoint, a mempool refusal, a storage-mass ceiling —
+                        // spent an attempt for every pooled claim in the same tick, and three such
+                        // ticks retired every quorum the node held. A build that fails on this
+                        // object's own shape is a real attempt; anything else is the node's weather.
+                        Err(e) => {
+                            *submit_attempts.entry(claim).or_insert(0) += 1;
+                            warn!("[{PALW_PANEL}] cannot build the carrier for claim {claim}: {e}");
+                        }
                     }
                 }
                 // What the next tick continues from. `None` here means a refusal cleared it, and
@@ -1993,14 +2195,23 @@ impl PalwPanelService {
             // is one no duty, no dispute and no license will ever ask about again — and the
             // court's own path does not depend on this pool anyway: it re-reads the capture from
             // `retained_capture` on disk, which is what the retention obligation is for.
-            let stale =
-                |claim: &Hash64| first_seen.get(claim).is_some_and(|seen| current_daa > seen.saturating_add(PANEL_POOL_RETENTION_DAA));
+            // **A claim with no recorded arrival is STALE, not immortal** (audit M2-2). `is_some_and`
+            // returned false for exactly the entries that dominate the pool — the ones this seat
+            // has no duty on (a seat is drawn on ~5/N of claims) — so the retention bound applied
+            // only to claims that were already bounded by their duty, and every foreign claim was
+            // kept for the life of the process. Arrivals are stamped at pool insert now, so `None`
+            // here means an entry older than any bookkeeping this process still holds.
+            let stale = |claim: &Hash64| {
+                first_seen.get(claim).map(|seen| current_daa > seen.saturating_add(PANEL_POOL_RETENTION_DAA)).unwrap_or(true)
+            };
             materials.retain(|claim, _| live.contains(claim) || (!submitted.contains_key(claim) && !stale(claim)));
             receipts.retain(|claim, _| live.contains(claim) || (!submitted.contains_key(claim) && !stale(claim)));
             // The bookkeeping keyed on those claims goes with them, or the maps that decide what to
             // keep become the thing that grows.
             first_seen.retain(|claim, _| materials.contains_key(claim) || receipts.contains_key(claim) || live.contains(claim));
             requested.retain(|claim, _| first_seen.contains_key(claim) || live.contains(claim));
+            // Our own executions are only needed while the dispute they support is open.
+            own_executions.retain(|claim, _| live.contains(claim));
             submit_attempts.retain(|claim, _| receipts.contains_key(claim));
             submitted.retain(|_claim, at| current_daa <= at.saturating_add(PANEL_POOL_RETENTION_DAA));
             trace!("[{PALW_PANEL}] tick: {} duties, {} claims pooled", duties.len(), receipts.len());

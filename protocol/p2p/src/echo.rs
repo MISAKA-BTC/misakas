@@ -104,6 +104,8 @@ fn build_dummy_version_message() -> VersionMessage {
         // Echo is a protocol test harness, not a node: it has no consensus to fingerprint.
         genesis_hash: Vec::new(),
         consensus_params_id: Vec::new(),
+        consensus_identity_id: Vec::new(),
+        consensus_schedule_id: Vec::new(),
     }
 }
 

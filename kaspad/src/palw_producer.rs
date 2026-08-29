@@ -42,7 +42,7 @@ use std::sync::Arc;
 use kaspa_consensus_core::coinbase::MinerData;
 use kaspa_consensus_core::palw_attempt_v2::{
     PALW_ATTEMPT_V2_MLDSA87_CONTEXT, PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, attempt_id_v2,
-    challenge_v2, class_ticket_v2, palw_network_domain_v2,
+    challenge_v2, class_ticket_v2,
 };
 use kaspa_consensus_core::palw_producer_v2::PalwProducerFactsV2;
 use kaspa_consensus_core::tx::TransactionOutpoint;
@@ -74,6 +74,9 @@ pub struct PalwProducerConfig {
     pub address_prefix: kaspa_addresses::Prefix,
     /// The network's own domain, derived from its `NetworkId` string exactly as consensus does.
     pub network_id: String,
+    /// The chain this producer signs for. Bound into the network domain so a signature is a
+    /// statement about one incarnation of a network, not about its NAME (audit M2-18).
+    pub genesis_hash: kaspa_hashes::Hash64,
     /// Where the execution material behind each published attempt is kept for as long as its
     /// `trace_retention_daa` promises. See `retain_execution` for why this is not optional.
     pub retention_dir: std::path::PathBuf,
@@ -115,7 +118,7 @@ pub struct PalwProducerService {
     /// Decoded once at construction. Digest-checked by the decoder, so anything in here is an
     /// artifact that hashes to what its own file claims; whether it is the artifact the CHAIN
     /// registered is decided per block, against the producer facts.
-    class_artifacts: Vec<misaka_palw_base0::artifact::Base0ArtifactV1>,
+    class_artifacts: Vec<std::sync::Arc<misaka_palw_base0::artifact::Base0ArtifactV1>>,
     /// Memory-mapped Qwen3.6 artifacts, opened and rooted once at startup.
     qwen36_artifacts: Vec<(kaspa_hashes::Hash64, std::sync::Arc<misaka_palw_base0::qwen36::Qwen36ArtifactV1>)>,
     consensus_manager: Arc<ConsensusManager>,
@@ -210,7 +213,7 @@ impl PalwProducerService {
                         artifact.shape.vocab,
                         artifact.shape.eps_q
                     );
-                    class_artifacts.push(*artifact);
+                    class_artifacts.push(std::sync::Arc::new(*artifact));
                 }
                 Ok(crate::palw_backends::LoadedClassArtifact::Qwen36 { computed_root, artifact }) => {
                     info!(
@@ -291,11 +294,22 @@ impl PalwProducerService {
                 .map(|age| age < std::time::Duration::from_secs(48 * 3600))
                 .unwrap_or(false);
             if !fresh {
+                // **Past the horizon it is not just un-broadcast, it is deleted** (audit M2-22).
+                // Retention grew monotonically on the consensus volume — the same volume RocksDB
+                // is on — because nothing ever removed a file. The obligation ends with the
+                // lattice: a claim older than this can no longer be licensed or disputed, so the
+                // bytes serve nobody.
+                if let Err(e) = std::fs::remove_file(&path) {
+                    trace!("[{PALW_PRODUCER}] cannot prune retained material {}: {e}", path.display());
+                }
                 continue;
             }
-            if let Ok(bytes) = std::fs::read(&path) {
-                self.flow_context.broadcast_palw_material(claim, bytes).await;
-            }
+            // **Announced, not pushed** (audit M2-22). This re-broadcast every retained material to
+            // every peer once a minute — 291 MB per peer per minute for a QWEN25-A16 producer, of
+            // bytes those peers have already deduplicated and dropped. Since protocol 104 a seat
+            // that needs a claim's material ASKS for it, and the serve answers that asker directly;
+            // the producer's job here is to keep the bytes, and to be reachable.
+            let _ = claim;
         }
     }
 
@@ -312,7 +326,8 @@ impl PalwProducerService {
             info!("[{PALW_PRODUCER}] not producing (no signing key)");
             return;
         }
-        let network_domain = palw_network_domain_v2(self.config.network_id.as_bytes());
+        let network_domain =
+            kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(self.config.network_id.as_bytes(), Some(self.config.genesis_hash));
         info!("[{PALW_PRODUCER}] starting (bond={bond}, key={})", self.config.key_path);
 
         let mut produced = 0u64;

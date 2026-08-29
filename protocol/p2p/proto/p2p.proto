@@ -195,6 +195,17 @@ message VersionMessage{
   // is ever interpreted — only compared.
   bytes genesisHash = 11;
   bytes consensusParamsId = 12;
+  // The same fingerprint split in two, so a SCHEDULED rule change stops partitioning the network
+  // at deploy time (audit M1-6). `consensusParamsId` above covers the activation heights too, so
+  // publishing a build that arms a fence at a future H disconnects every upgrading node from every
+  // un-upgraded one immediately — for the whole rollout, with nothing about H involved.
+  //
+  // `consensusIdentityId` is that fingerprint with every fence normalised away: it changes only
+  // when a rule that decides the validity of blocks ALREADY on the chain changes, and it is what
+  // the handshake refuses on. `consensusScheduleId` is the fences alone, compared only to say what
+  // differs. Empty from peers predating these fields, which then fall back to the exact comparison.
+  bytes consensusIdentityId = 13;
+  bytes consensusScheduleId = 14;
 }
 
 // A peer's answer to "which chain are you on?", asked during an IBD so that the chain a

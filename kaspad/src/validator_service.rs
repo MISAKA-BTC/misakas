@@ -757,6 +757,18 @@ impl ValidatorService {
             select_funding(&chain.pending_change, &chain.inflight_spent, candidates, fee, virtual_daa, self.coinbase_maturity).ok()
         };
 
+        // **A non-Active mode signs nothing.** `guarded_build_funded` flushes the signed-epoch
+        // record before it returns, and the heartbeat's cursor is that log — so a node started
+        // Passive used to consume every epoch it observed, permanently, while never submitting
+        // anything (audit M1-4). The operator signal that mode is what is holding the node back is
+        // kept; the state change is not.
+        if self.config.mode != ValidatorMode::Active {
+            info!(
+                "[{VALIDATOR}] eligible for epoch {} but mode={} — not signing (Active is required to attest)",
+                target.epoch, self.config.mode
+            );
+            return;
+        }
         let Some(tx) = self.guarded_build_funded(target, key, bond_outpoint, funding.clone(), fee) else {
             return;
         };
@@ -1479,11 +1491,22 @@ impl ValidatorService {
                 );
                 None
             }
-            SignedEpochCheckOutcome::AllowRebroadcast => {
-                info!("[{VALIDATOR}] epoch {} already signed this target; rebroadcast-safe, not re-signing", target.epoch);
-                None
-            }
-            SignedEpochCheckOutcome::Allow => {
+            // **`AllowRebroadcast` REBUILDS.** It used to return `None`, and that is what made any
+            // submit failure permanent (audit M1-4): the record is flushed before submission and the
+            // next heartbeat picks its targets from the SIGNED log, so an epoch whose submit failed —
+            // full mempool, orphaned parent, storage-mass refusal — was never offered to a path that
+            // would act on it again. The standalone sidecar has always fallen through
+            // (`Allow | AllowRebroadcast => {}`) and rebuilt; this is that behaviour.
+            //
+            // Safe because the outcome's own meaning is "the SAME target was signed", and signing is
+            // deterministic here (the ML-DSA call takes a fixed [0u8; 32]), so the rebuild produces
+            // the identical signature and the identical transaction. Nothing new is signed and the
+            // equivocation guard is untouched — only `Block` refuses, and it still does.
+            outcome @ (SignedEpochCheckOutcome::Allow | SignedEpochCheckOutcome::AllowRebroadcast) => {
+                let already_recorded = matches!(outcome, SignedEpochCheckOutcome::AllowRebroadcast);
+                if already_recorded {
+                    info!("[{VALIDATOR}] epoch {} was signed before; rebuilding the same shard tx to rebroadcast", target.epoch);
+                }
                 let Some((funding_outpoint, funding_entry)) = funding else {
                     info!(
                         "[{VALIDATOR}] eligible for epoch {} but no funding UTXO at the validator address; skipping (send funds to enable submission)",
@@ -1518,11 +1541,15 @@ impl ValidatorService {
                     }
                 };
                 // Persist BEFORE submission. If the flush fails, do not advance — retrying
-                // next tick is safe, but submitting without a durable record is not.
-                let record = SignedEpochRecord { signature_fingerprint: signature_fingerprint(&signature), ..candidate };
-                if let Err(e) = store.record_and_flush(record) {
-                    warn!("[{VALIDATOR}] failed to persist signed-epoch record (not advancing): {e}");
-                    return None;
+                // next tick is safe, but submitting without a durable record is not. On a rebuild
+                // the record is already durable and identical (deterministic signature), so there is
+                // nothing to write.
+                if !already_recorded {
+                    let record = SignedEpochRecord { signature_fingerprint: signature_fingerprint(&signature), ..candidate };
+                    if let Err(e) = store.record_and_flush(record) {
+                        warn!("[{VALIDATOR}] failed to persist signed-epoch record (not advancing): {e}");
+                        return None;
+                    }
                 }
                 Some(tx)
             }

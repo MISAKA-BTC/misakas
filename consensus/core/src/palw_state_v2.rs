@@ -1357,6 +1357,13 @@ pub struct PalwClassAdmissionCarriageV2 {
 pub const PALW_CLASS_REGISTRATION_V2_MLDSA87_CONTEXT: &[u8] = b"misaka-palw/class-registration-v2/mldsa87/v1";
 pub const PALW_CLASS_REGISTRATION_V2_DOMAIN: &[u8] = b"misaka-palw/class-registration-v2/message/v1";
 
+/// How far ahead of the carrying block a class may schedule its own activation (audit M2-8).
+///
+/// A registration that never activates is a permanent row nothing sweeps, so the window is what
+/// makes the registry's price real: whatever a registrant pays, it pays for a class that will
+/// either start producing within ~5.5 days at the frozen 120 s cadence or be refused here.
+pub const PALW_CLASS_ACTIVATION_MAX_LOOKAHEAD_DAA: u64 = 4_000;
+
 pub const PALW_BOND_REGISTRATION_V2_MLDSA87_CONTEXT: &[u8] = b"misaka-palw/bond-registration-v2/mldsa87/v1";
 pub const PALW_BOND_REGISTRATION_V2_DOMAIN: &[u8] = b"misaka-palw/bond-registration-v2/message/v1";
 
@@ -1434,12 +1441,34 @@ pub struct PalwRegistrationTermsV2 {
     pub registered_artifact_roots: Vec<Hash64>,
 }
 
+/// **The preimage covers the WHOLE registration, not the five fields it used to.**
+///
+/// It signed `(network, class_id, share, activation, bond)` and left `artifact_root`,
+/// `slash_value_per_pwu`, `initial_target`, `pwu_rule` and the carriage's `canonical` job
+/// unauthenticated — while the acceptance layer copied `artifact_root` through verbatim and derived
+/// `pwu_per_inference` from that unsigned canonical (audit M2-6). Any observer could lift an honest
+/// registration off the mempool, keep the five signed values and the signature, swap in a root over
+/// weights it holds and a longer canonical job, fee-bump, and land first: the class is then pinned
+/// to the attacker's artifact (so every attempt from the operator that actually holds the model is
+/// refused), the honest registration is refused `DuplicateClass` forever, the victim's bond is
+/// written as the registrant and charged the registry price, and the inflated canonical multiplies
+/// the fork-choice weight of every block ever mined in that class. Post-genesis registration is the
+/// only way to add a class without a re-genesis, so every one of them was hijackable for a fee.
+///
+/// The canonical job enters as a digest rather than field-by-field so that adding a field to
+/// `PalwJobContextV2` cannot silently fall out of the signature.
+#[allow(clippy::too_many_arguments)]
 pub fn palw_class_registration_message_v2(
     network_domain: Hash64,
     class_id: Hash64,
     share_permille: u16,
     activation_daa: u64,
     registrant_bond: &PalwBondKeyV2,
+    artifact_root: Hash64,
+    slash_value_per_pwu: u64,
+    initial_target: u128,
+    pwu_rule: &PalwPwuRuleV2,
+    canonical: &crate::palw_v2::PalwJobContextV2,
 ) -> Hash64 {
     let mut state = keyed(PALW_CLASS_REGISTRATION_V2_DOMAIN);
     state.update(network_domain.as_byte_slice());
@@ -1447,6 +1476,11 @@ pub fn palw_class_registration_message_v2(
     state.update(&share_permille.to_le_bytes());
     state.update(&activation_daa.to_le_bytes());
     state.update(&borsh::to_vec(registrant_bond).expect("a bond key is borsh-serializable"));
+    state.update(artifact_root.as_byte_slice());
+    state.update(&slash_value_per_pwu.to_le_bytes());
+    state.update(&initial_target.to_le_bytes());
+    state.update(&borsh::to_vec(pwu_rule).expect("a pwu rule is borsh-serializable"));
+    state.update(&borsh::to_vec(canonical).expect("a job context is borsh-serializable"));
     finish(state)
 }
 
@@ -1767,6 +1801,21 @@ pub enum PalwStateV2Error {
     )]
     ZeroSlashValue(Hash64),
     #[error(
+        "class {class} schedules its activation at {activation_daa}, {} beyond this block's {now} — a registration that never activates is a permanent row nothing sweeps (max {max_lookahead})",
+        activation_daa.saturating_sub(*now)
+    )]
+    ClassActivationTooFarAhead { class: Hash64, activation_daa: u64, now: u64, max_lookahead: u64 },
+    #[error("bond {0:?} is not Active — opening a court risks collateral, and collateral that is leaving risks nothing")]
+    BondNotActive(PalwBondKeyV2),
+    #[error("bond {bond:?} holds {collateral} sompi against a floor of {floor} — too little to stand behind an accusation")]
+    BondBelowFloor { bond: PalwBondKeyV2, collateral: u64, floor: u64 },
+    #[error(
+        "class {class} cannot be registered: its registrant already holds {already} sompi of exposure and this registration costs {price}, against {collateral} of collateral"
+    )]
+    RegistrationExposureUnaffordable { class: Hash64, already: u128, price: u128, collateral: u64 },
+    #[error("bond {0:?} registers a key this chain already holds a bond for — one key, one bond, or seats can be manufactured by splitting collateral")]
+    DuplicateBondKey(PalwBondKeyV2),
+    #[error(
         "class {class} declares {got} sompi per work unit but this network's unit is {want} — weight per sompi at risk is not a class's to choose"
     )]
     SlashValueNotTheNetworks { class: Hash64, got: u64, want: u64 },
@@ -1953,10 +2002,21 @@ impl PalwChainStateV2 {
         self.classes.keys().copied().collect()
     }
 
-    /// Every registered class's pinned artifact root — the companion of [`Self::class_ids`],
-    /// for the registration builder's known-weights filter.
+    /// Every LIVE registration's pinned artifact root — the companion of [`Self::class_ids`], for
+    /// the registration builder's known-weights filter.
+    ///
+    /// Filtered to `Active` and `Registered` (audit M2-17). A class reclaimed to `Dormant` keeps
+    /// its row, and ADR-0056 Decision 5 makes that row's id the one path back — "a fresh
+    /// signature, a fresh exposure reservation, a fresh soak, and the grant floor again". With
+    /// reclaimed roots in this list the shipped node refused to re-register the very weights that
+    /// re-entry is for, and the only alternative — a changed profile — is a different class and
+    /// another permanent registry row.
     pub fn class_artifact_roots(&self) -> Vec<Hash64> {
-        self.classes.values().map(|record| record.artifact_root).collect()
+        self.classes
+            .values()
+            .filter(|record| matches!(record.status, PalwClassStatusV2::Active | PalwClassStatusV2::Registered { .. }))
+            .map(|record| record.artifact_root)
+            .collect()
     }
 
     pub fn class(&self, id: &Hash64) -> Option<&PalwClassStateV2> {
@@ -2995,23 +3055,35 @@ impl<'a> TransitionBuilder<'a> {
     ///
     /// It charges the same `reserved` a dissent costs — an unanswered seat and a refuted one both
     /// failed the same duty, and pricing silence below a lie would make silence the better play.
+    /// **A seat is not charged for silence, because this chain cannot observe silence** (audit M2-7).
+    ///
+    /// This used to charge every seat absent from `answered`. Neither call site could supply a
+    /// truthful `answered`:
+    ///
+    /// * the `ReceiptTimeout` arm passed `&[]` — no receipts at all — so it charged the WHOLE panel
+    ///   whenever a quorum object failed to land, including when three of five seats had honestly
+    ///   pleaded `Incapable` and made both quorums unreachable, which is precisely the situation
+    ///   that verdict exists for and whose doc promises "it is never charged";
+    /// * the licensing arms passed the verdicts the CARRIED OBJECT happened to hold, and that
+    ///   object is one node's RAM at one two-second tick, not the set of seats that answered. Five
+    ///   honest seats filing on time, with the collector holding three when its tick fires, charged
+    ///   the other two — 2 of 5 seat-duties slashed on every licensed claim of a perfectly honest
+    ///   network. A funded submitter could also simply omit two competitors, permanently, for free.
+    ///
+    /// Consensus cannot repair either: no acceptance rule can know what receipts existed off-chain.
+    /// Seat accountability needs receipts that ride the chain independently of a concluding object
+    /// (or a concluding object that must carry the whole panel); until one of those exists, the
+    /// honest answer is to charge nobody. Bonds are still slashed for things the chain CAN prove —
+    /// a producer that cannot show its material, a seat convicted in court.
+    ///
+    /// Kept as a named no-op rather than deleted so the call sites still say where the duty was
+    /// meant to be enforced, and so re-introducing it requires deciding what proves silence.
     fn slash_silent_seats(
         &mut self,
-        claim_id: &Hash64,
-        claim: &PalwClaimStateV2,
-        answered: &[PalwSeatVerdictV2],
+        _claim_id: &Hash64,
+        _claim: &PalwClaimStateV2,
+        _answered: &[PalwSeatVerdictV2],
     ) -> Result<(), PalwStateV2Error> {
-        let Some(panel) = self.state.panels.get(claim_id).cloned() else {
-            // No panel: nothing was assigned, so nobody owed an answer. A claim voided before it
-            // ever bound is the `BindTimeout` case, and that is the producer's failure alone.
-            return Ok(());
-        };
-        let seat_cap = self.params.min_collateral_sompi();
-        for seat in &panel.seats {
-            if !answered.iter().any(|r| r.seat_bond == seat.bond) {
-                self.slash_seat(seat.bond, claim.reserved, seat_cap)?;
-            }
-        }
         Ok(())
     }
 
@@ -3377,6 +3449,14 @@ pub fn apply_palw_transition_v4(
         && claim.accepted_blue_score > old_frontier.0
     {
         builder.state.safe_frontier_blue_score = claim.accepted_blue_score;
+        // **This hash is the claim's CARRYING block, which since ADR-0058 need not be on the
+        // selected chain** (audit M2-27). For a merged work it is the merged block — at
+        // `ghostdag_k = 1` typically a RED. The pair is still coherent (both halves describe that
+        // same block), and every consumer today reads only the blue score, which is what fork
+        // choice compares. What is NOT true any more is the old sentence "the deepest block on this
+        // chain": a consumer that resolves this hash must not assume chain membership, and the
+        // field's own definition is corrected to say so rather than the value being changed —
+        // the carrying block is what the job anchor is derived from, so it is load-bearing here.
         builder.state.safe_frontier = claim.accepted_block;
     }
     let new_frontier = (builder.state.safe_frontier_blue_score, builder.state.safe_frontier);
@@ -3497,12 +3577,47 @@ fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCon
         // silently invert the outcome: the backstop closes challenger-side, a first-rung silence
         // closes against the responder. So a network without a tighter rung window keeps exactly
         // the pre-ladder behavior, and one with a real ladder gets the rung verdict it configured.
-        let rung_fired =
-            session.ladder.last_deadline_daa() < ctx.daa_score && session.ladder.last_deadline_daa() < session.deadline_daa;
+        //
+        // **And the rung clock does not run at `Terminal`** (audit M2-4). `court_next_deadline_v2`
+        // already excludes that turn — "`Terminal` has no move the responder can make … the
+        // backstop still ends it, on the challenger's side, which is what an unproven accusation
+        // deserves" — but that function only decides WHEN a session is visited. WHO is charged was
+        // re-derived here from two raw numbers with no reference to the turn, and at `Terminal` the
+        // last completed rung's deadline is below both, so `rung_fired` was true, `declare_no_show`
+        // returned `Responder`, and the sweep convicted the accused for a close the challenger
+        // never filed. On the RC ruleset (rungs 60 DAA apart, backstop 2,400) that was every
+        // terminal session. The two comments stated opposite rules; this makes the arithmetic obey
+        // the one that is documented.
+        let turn_can_still_move = !matches!(
+            session.ladder.turn(),
+            crate::palw_bisect::PalwBisectTurnV1::Terminal | crate::palw_bisect::PalwBisectTurnV1::Abandoned
+        );
+        let rung_fired = turn_can_still_move
+            && session.ladder.last_deadline_daa() < ctx.daa_score
+            && session.ladder.last_deadline_daa() < session.deadline_daa;
         if rung_fired {
             if let Ok(no_show) = session.ladder.declare_no_show(ctx.daa_score) {
                 builder.write_court(session_id, None);
                 match no_show.silent_party {
+                    // **A silence at the OPENING rung is not a conviction** (audit M2-5).
+                    //
+                    // The rung clock convicts a responder that will not stand behind its own root
+                    // at the index it was asked about. That is only a meaningful accusation once
+                    // the responder has shown it can play at all: two of this chain's three genesis
+                    // classes (40 % of cadence between them) have no `bisect_prefix_state` in this
+                    // tree, so their honest producers CANNOT make the first move — and an attacker
+                    // holding any minimum bond could open one court per licensed claim and take the
+                    // producer's reservation 60 DAA later, recovering its own stake in full. The
+                    // 2026-08-22 audit closed exactly this and it was re-opened on the strength of a
+                    // responder that exists for one family out of three.
+                    //
+                    // Round 0 therefore falls through to the session backstop, which closes on the
+                    // challenger's side — the right answer for an accusation that was never
+                    // supported by an exchange. A responder that has answered once and then goes
+                    // silent still loses at the next rung, which is the case the ladder is for.
+                    crate::palw_bisect::PalwBisectPartyV1::Responder if session.ladder.round() == 0 => {
+                        rearm_after_challenger_side_close(builder, ctx, session.claim, &claim, session.challenger_bond)?;
+                    }
                     crate::palw_bisect::PalwBisectPartyV1::Responder => {
                         // Same treatment a proven fault gets, and for the same reason: an
                         // executor that will not stand behind its own announced root at the
@@ -4297,6 +4412,15 @@ fn apply_object(
             // matured would be minted straight into an unspendable output, and the producer would
             // find out block by block. Registration is where that is knowable, so it is where it
             // is refused.
+            // **One key, one bond — the rule this codebase states everywhere and enforced nowhere**
+            // (audit M2-19). Panel sortition already refuses a seat sharing the executor's `pubkey`
+            // or `operator_id`, which is only meaningful if a key cannot hold several bonds: with
+            // no uniqueness check, splitting collateral across N registrations of the SAME key
+            // manufactured N independent seat tickets, and a 3-of-5 panel is a permanent quorum for
+            // whoever holds three of them.
+            if builder.state.bonds.values().any(|existing| existing.pubkey == *pubkey) {
+                return Err(PalwStateV2Error::DuplicateBondKey(*bond));
+            }
             if *payout_payload == Hash64::default() {
                 return Err(PalwStateV2Error::EmptyPayoutPayload(*bond));
             }
@@ -4405,7 +4529,68 @@ fn apply_object(
             // The share table is validated here either way — a registration whose share could
             // never be granted must fail at registration, not silently at the activation edge
             // where nobody is watching — but it is only WRITTEN when the class becomes active.
-            let table = granted_share_table_v2(builder.params, &builder.state.class_shares, *class_id, *share_permille)?;
+            // **A registration must activate soon, and a pending one already costs share**
+            // (audit M2-8).
+            //
+            // A weightless registration wrote no permille, so `class_shares` never moved and the
+            // NEXT weightless registration was checked against the identical table — the check
+            // never accumulated and therefore never refused. Nothing removes a `Registered` row
+            // either: activation only touches rows whose height has come, and reclamation walks
+            // share holders, which a pending class is not. One Active bond at the minimum could
+            // therefore write unbounded permanent rows into `classes`, `class_targets` and
+            // `receipt_targets` — every one of them re-hashed into the state root on every block —
+            // for a transaction fee each, with a re-genesis as the only remedy.
+            //
+            // Two bounds, both cheap: the activation height must be within a window of this block,
+            // so a registration cannot park forever; and the pending grants of classes that have
+            // not activated yet are counted alongside the live table, so N of them accumulate and
+            // the (N+1)-th is refused by the same arithmetic that refuses an over-grant today.
+            if activation_daa.saturating_sub(ctx.daa_score) > PALW_CLASS_ACTIVATION_MAX_LOOKAHEAD_DAA {
+                return Err(PalwStateV2Error::ClassActivationTooFarAhead {
+                    class: *class_id,
+                    activation_daa: *activation_daa,
+                    now: ctx.daa_score,
+                    max_lookahead: PALW_CLASS_ACTIVATION_MAX_LOOKAHEAD_DAA,
+                });
+            }
+            // **The registry's price must actually be affordable** (audit M2-16). The reservation
+            // is TAKEN at :move_registration_exposure and never checked against anything, so a bond
+            // at the minimum could register unbounded classes while its ledger recorded exposure
+            // far past its collateral. The attempt path's full ceiling (collateral x ratio) needs
+            // the admission params, which the transition does not hold; the weaker invariant that
+            // IS reachable here — total exposure may not exceed the collateral itself — is the one
+            // that makes the price real, and it is strictly implied by the ratio ceiling.
+            if let Some(carriage) = admission.as_ref() {
+                let carriage_bond = carriage.registrant_bond;
+                // Whether the bond EXISTS is `move_registration_exposure`'s question, asked below
+                // and with its own error; this check is about affordability and says nothing when
+                // there is no bond to ask about.
+                if let Some(collateral) = builder.state.bonds.get(&carriage_bond).map(|b| b.collateral) {
+                    let already = builder
+                        .state
+                        .reserved_exposure(&carriage_bond)
+                        .checked_add(builder.state.registration_exposure(&carriage_bond))
+                        .ok_or(PalwStateV2Error::Overflow("total exposure"))?;
+                    let price = builder.params.registration_exposure_sompi() as u128;
+                    if already.saturating_add(price) > collateral as u128 {
+                        return Err(PalwStateV2Error::RegistrationExposureUnaffordable {
+                            class: *class_id,
+                            already,
+                            price,
+                            collateral,
+                        });
+                    }
+                }
+            }
+            let mut share_view = builder.state.class_shares.clone();
+            for (id, record) in builder.state.classes.iter() {
+                if let PalwClassStatusV2::Registered { pending_share_permille, .. } = record.status
+                    && !share_view.contains_key(id)
+                {
+                    share_view.insert(*id, pending_share_permille);
+                }
+            }
+            let table = granted_share_table_v2(builder.params, &share_view, *class_id, *share_permille)?;
             let weightless = *activation_daa > ctx.daa_score;
             if !weightless {
                 // ADR-0045 Decision 3: the share table mutates HERE and at the activation edge,
@@ -4533,7 +4718,23 @@ fn apply_object(
             if claim.phase.is_terminal() {
                 return Err(PalwStateV2Error::WrongPhase { claim: *claim_id, edge: "CourtOpened" });
             }
-            builder.state.bonds.get(challenger_bond).ok_or(PalwStateV2Error::MissingBond(*challenger_bond))?;
+            // **Opening a court is a bonded act, and this only checked that the bond EXISTS**
+            // (audit M2-11). A retiring or under-funded bond could open unlimited sessions — each
+            // one freezing an honest claim for a whole window and reserving that claim's stake
+            // against collateral that may already be leaving. The attempt path demands Active and
+            // the registry floor before it will let a bond risk anything; the court is the same
+            // question and now asks it the same way.
+            let challenger = builder.state.bonds.get(challenger_bond).ok_or(PalwStateV2Error::MissingBond(*challenger_bond))?;
+            if !matches!(challenger.status, PalwBondStatusV2::Active) {
+                return Err(PalwStateV2Error::BondNotActive(*challenger_bond));
+            }
+            if challenger.collateral < builder.params.min_collateral_sompi() {
+                return Err(PalwStateV2Error::BondBelowFloor {
+                    bond: *challenger_bond,
+                    collateral: challenger.collateral,
+                    floor: builder.params.min_collateral_sompi(),
+                });
+            }
             let deadline_daa =
                 ctx.daa_score.checked_add(builder.params.window_court).ok_or(PalwStateV2Error::Overflow("court deadline"))?;
             // **The opening rung is clocked like every other rung — because a responder now ships.**
@@ -5139,6 +5340,14 @@ pub struct PalwStateCarriageV2 {
     pub retired_safe_weight: u128,
     pub bounded_immature: u128,
     pub safe_frontier_blue_score: u64,
+    /// The block that carried the deepest `Final` work, and its blue score above.
+    ///
+    /// **Not necessarily on the selected chain** (audit M2-27): since ADR-0058 a claim's
+    /// `accepted_block` is its CARRYING block, and a merged work's carrying block is the merged
+    /// one — a red at `ghostdag_k = 1`. Fork choice compares the blue score, which is well defined
+    /// either way; a future consumer that resolves this hash must handle a non-chain block rather
+    /// than assume the old "deepest block on this chain" reading, which stopped being true when
+    /// merged work started creating claims.
     pub safe_frontier: BlockHash,
     pub last_point: Option<PalwBlockContextV2>,
 }
@@ -6687,7 +6896,9 @@ pub(crate) mod tests {
         for n in 2..=3u64 {
             objects.push(PalwConsensusObjectV2::BondRegistered {
                 bond: bond_key(n),
-                pubkey: vec![7; 4],
+                // A key per seat: one key can hold one bond (audit M2-19), and the whole point of
+                // three seats is that they are three parties.
+                pubkey: vec![7, n as u8],
                 operator_pubkey: op_key(20 + n),
                 collateral: 1_000,
                 payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
@@ -6708,19 +6919,29 @@ pub(crate) mod tests {
         (s3, claim_id)
     }
 
-    /// **P0-7's named red test.** An assigned seat past its deadline loses collateral.
+    /// **The inverse of P0-7's named red test, and the reason it inverted** (audit M2-7).
     ///
-    /// Three paths reach the end of a panel's duty, and silence had to be free on all three
-    /// before this: the panel licenses without you, the panel defaults the producer without you,
-    /// or the window simply closes. A bond could take seats forever, file nothing, and pay
-    /// nothing — so the exposure a seat is supposed to put behind its verdict was only ever at
-    /// risk if it chose to speak.
+    /// The rule used to be "an assigned seat past its deadline loses collateral", and the three
+    /// paths it covered were all unprovable:
+    ///
+    /// * the timeout arm passed NO receipts at all, so it charged the whole panel whenever a
+    ///   concluding object failed to land — including when the seats had honestly pleaded
+    ///   `Incapable` and made both quorums unreachable, which is the one situation that verdict
+    ///   exists for;
+    /// * the licensing arms charged every seat missing from the CARRIED object, and that object is
+    ///   one node's RAM at one two-second tick. Five honest seats filing on time, with the
+    ///   collector holding three when its tick fires, charged the other two — on every licensed
+    ///   claim of a perfectly honest network. A funded submitter could omit two competitors for
+    ///   free, permanently.
+    ///
+    /// No acceptance rule can repair either, because consensus cannot see what receipts existed
+    /// off-chain. So the charge is gone, and this test is what keeps it gone: a seat pays for what
+    /// the chain can PROVE — a refuted verdict, a court conviction — and never for silence.
     #[test]
-    fn palw_v2_panel_noshow_is_slashed() {
+    fn palw_v2_a_seat_is_not_charged_for_unprovable_silence() {
         let p = params();
 
-        // (1) The panel licenses. Seat 1 says served, seat 2 says withheld and is refuted, seat 3
-        //     says nothing at all — and all three now cost something.
+        // (1) The panel licenses with a quorum that does not mention seat 3.
         let (bound, claim_id) = panel_bound_with_three_seats(&p);
         let reserved = bound.claim(&claim_id).unwrap().reserved;
         assert!(reserved > 0, "the fixture must risk something or nothing below is measurable");
@@ -6735,15 +6956,18 @@ pub(crate) mod tests {
             None,
         );
         assert_eq!(licensed.bond(&bond_key(1)).unwrap().slashed, 0, "the seat that answered with the quorum keeps its stake");
-        assert!(licensed.bond(&bond_key(2)).unwrap().slashed > 0, "the refuted seat pays — that part already worked");
-        assert!(licensed.bond(&bond_key(3)).unwrap().slashed > 0, "and the seat that never answered pays too — this is what was free");
+        assert!(
+            licensed.bond(&bond_key(2)).unwrap().slashed > 0,
+            "a REFUTED verdict is proven wrong by the quorum it lost, and still pays"
+        );
         assert_eq!(
             licensed.bond(&bond_key(3)).unwrap().slashed,
-            licensed.bond(&bond_key(2)).unwrap().slashed,
-            "silence costs exactly what a refuted answer costs; pricing it lower makes silence the better play"
+            0,
+            "seat 3 is merely absent from one node's pool — that is not evidence of anything, and charging it \
+             slashed two of five honest seats on every licensed claim"
         );
 
-        // (2) The panel defaults the producer. Same rule, other direction.
+        // (2) The default path, same rule.
         let (bound, claim_id) = panel_bound_with_three_seats(&p);
         let (defaulted, _) = apply(
             &bound,
@@ -6755,13 +6979,11 @@ pub(crate) mod tests {
             }],
             None,
         );
-        // Bond 1 is the executor here as well as a seat, and `ProducerDefaulted` charges the
-        // producer by construction — so the seat that proves the rule is bond 2: it answered with
-        // the quorum, it is not the producer, and it keeps its stake.
         assert_eq!(defaulted.bond(&bond_key(2)).unwrap().slashed, 0, "a seat that answered with the quorum keeps its stake");
-        assert!(defaulted.bond(&bond_key(3)).unwrap().slashed > 0, "the absent seat pays on the default path too");
+        assert_eq!(defaulted.bond(&bond_key(3)).unwrap().slashed, 0, "and an absent seat is not charged on the default path either");
 
-        // (3) Nobody concludes anything and the window closes: every seat was silent.
+        // (3) The window closes with nothing concluded. The claim still voids — that part is a
+        //     fact of the lattice — and no seat is charged for it.
         let (bound, claim_id) = panel_bound_with_three_seats(&p);
         let (swept, _) = apply(&bound, &p, &ctx(4, 113, 4), &[], None);
         assert!(
@@ -6769,12 +6991,13 @@ pub(crate) mod tests {
             "the receipt window closed"
         );
         for n in 1..=3u64 {
-            assert!(swept.bond(&bond_key(n)).unwrap().slashed > 0, "seat {n} was assigned, answered nothing, and pays");
+            assert_eq!(
+                swept.bond(&bond_key(n)).unwrap().slashed,
+                0,
+                "seat {n} pays nothing for a quorum nobody submitted — the chain cannot tell a silent seat from an \
+                 unsubmitted quorum, and guessing charged every honest seat on the network"
+            );
         }
-        // The PRODUCER is not charged by a timeout — that blame belongs to `ProducerDefaulted`,
-        // which requires a panel that actually answered. Here bond 1 is both, so the check is
-        // that its charge is the SEAT's one and not two.
-        assert_eq!(swept.bond(&bond_key(1)).unwrap().slashed, swept.bond(&bond_key(3)).unwrap().slashed);
     }
 
     /// A claim voided before it ever bound a panel charges nobody: nothing was assigned, so
@@ -7058,35 +7281,45 @@ pub(crate) mod tests {
         );
     }
 
-    /// **A silent responder loses the opening rung — now that answering it is possible.**
+    /// **The opening rung does NOT convict on silence** (audit M2-5).
     ///
-    /// This rung used to run on the session budget instead of the rung clock, because a rung clock
-    /// convicts on silence and nothing in this tree could break that silence: `CourtDisclosed` was
-    /// constructed nowhere. Clocking it tightly would have let anyone holding one bond convict any
-    /// producer by opening a court and waiting.
+    /// This rung was re-clocked onto the tight rung window on the strength of a responder the
+    /// panel service had just gained — but only `Base0Backend` implements `bisect_prefix_state`.
+    /// Both Qwen families take the trait default `None`, and between them they hold 40 % of genesis
+    /// cadence, so their honest producers cannot make the first move at all. Anyone holding one
+    /// minimum bond could open a court against a licensed claim of theirs and take the producer's
+    /// reservation 60 DAA later while recovering its own stake in full — one court per claim, for a
+    /// transaction fee each.
     ///
-    /// The panel service emits `CourtDisclosed` now, and its close carries the operand openings the
-    /// court has to read — so a producer that answers can be adjudicated end to end, and one that
-    /// does not has chosen not to. The backstop is therefore the wrong default: it made silence the
-    /// winning move for a guilty producer, which is the one outcome a fraud court may not have.
+    /// So round 0 falls through to the session backstop, which closes on the challenger's side:
+    /// an accusation never supported by a single exchange convicts nobody. A responder that HAS
+    /// answered once has demonstrably got software that can move, and silence at a later rung still
+    /// decides against it — that is `palw_v2_a_silent_responder_loses_the_dispute`, directly below,
+    /// and it is the case the ladder exists for.
     #[test]
-    fn a_silent_responder_now_loses_the_opening_rung() {
+    fn the_opening_rung_does_not_convict_a_responder_that_never_moved() {
         let p = params_with_ladder();
         let (s5, claim_id, sid) = licensed_with_court(&p);
-        // Inside the rung window, nothing has happened yet: the clock is a deadline, not a hair
-        // trigger, and a responder that answers in time is never charged.
+        // Inside the rung window, nothing has happened yet.
         let (s6, _) = apply(&s5, &p, &ctx(6, 120, 6), &[], None);
         assert!(s6.court_session(&sid).is_some(), "the rung has not run out at 120");
         assert_eq!(s6.bond(&bond_key(1)).unwrap().slashed, 0, "and nothing has been charged");
 
-        // Past it, with no disclosure: the executor defaulted on the only defence it had.
+        // Past it, with no disclosure and no exchange ever having happened.
         let (s7, _) = apply(&s6, &p, &ctx(7, 125, 7), &[], None);
         assert!(s7.court_session(&sid).is_none(), "the session is decided and gone");
         assert!(
-            matches!(s7.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }),
-            "a responder that would not stand behind its own root at the index it was asked about loses the claim"
+            !matches!(s7.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }),
+            "an accusation that produced no exchange must not convict the producer of fraud"
         );
-        assert!(s7.bond(&bond_key(1)).unwrap().slashed > 0, "and it costs the executor its stake");
+        // The fixture's challenger and executor are one bond, so the charge cannot be told apart by
+        // amount — what distinguishes the two outcomes is the REASON the claim carries and whether
+        // it survives. A challenger-side close re-arms the claim; a fraud conviction voids it.
+        assert!(
+            !matches!(s7.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Voided { .. }),
+            "the claim survives an accusation nobody supported — two of three genesis classes cannot answer a \
+             rung at all, so convicting on opening-rung silence is a machine for voiding honest claims"
+        );
     }
 
     /// The other half of the same rule, and the one that survived the opening rung's re-clocking

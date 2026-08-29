@@ -4116,7 +4116,31 @@ impl VirtualStateProcessor {
                         continue;
                     }
                     match state.class_target(&envelope.attempt.class_id) {
-                        Some(target) if class_ticket_v2(&envelope.attempt) <= target.target => {}
+                        Some(target) if class_ticket_v2(&envelope.attempt) <= target.target => {
+                            // **And the price, which is what the payment used to take on trust**
+                            // (audit M2-3). ADR-0045 Decision 1 makes pwu a chain fact — the
+                            // class's target times its registered per-inference cost — and the
+                            // transition refuses any other value with `PwuClaimNotDerived`. But a
+                            // refused merged work SKIPS (the accepting block stands), while this
+                            // site decided payment on three weaker questions, so an attempt with an
+                            // arbitrary pwu was PAID its full worker carve and created no claim, no
+                            // panel duty and no reserved exposure — and the anti-replay keys on the
+                            // claim that was never created, so it never engaged. The stateless
+                            // header rule is only `pwu >= 1`, so nothing else caught it.
+                            //
+                            // Derived from the same two chain facts the transition uses, at the
+                            // same parent state, so the two predicates agree by construction.
+                            let derived = match state.class(&envelope.attempt.class_id).map(|c| c.pwu_rule) {
+                                Some(kaspa_consensus_core::palw_state_v2::PalwPwuRuleV2::DerivedV1 { pwu_per_inference }) => {
+                                    Some(kaspa_consensus_core::palw_pwu::palw_pwu_v1(target.target, pwu_per_inference))
+                                }
+                                _ => None,
+                            };
+                            if derived.is_some_and(|derived| envelope.attempt.pwu != derived) {
+                                debug!("merged blue {blue} claims a pwu the chain does not derive; not entitled");
+                                unentitled.insert(*blue);
+                            }
+                        }
                         _ => {
                             debug!("merged blue {blue} did not win its class lottery");
                             unentitled.insert(*blue);
@@ -4342,7 +4366,7 @@ impl VirtualStateProcessor {
             blue_score: virtual_state.ghostdag_data.blue_score,
             subsidy: 0,
         };
-        let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2(self.network_id_bytes.as_slice());
+        let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(self.network_id_bytes.as_slice(), Some(self.genesis.hash));
         let verify = |key: &[u8], message: &[u8], sig: &[u8], context: &[u8]| {
             Self::verify_mldsa87_with_context_bool(key, message, sig, context)
         };
@@ -4492,7 +4516,16 @@ impl VirtualStateProcessor {
                         return Err(format!("court {session_id} declares {verdict:?}; its own proof adjudicates {derived:?}"));
                     }
                 }
-                Obj::ClassRegistered { class_id, share_permille, admission, activation_daa, .. } => {
+                Obj::ClassRegistered {
+                    class_id,
+                    share_permille,
+                    admission,
+                    activation_daa,
+                    artifact_root,
+                    slash_value_per_pwu,
+                    initial_target,
+                    pwu_rule,
+                } => {
                     // **ADR-0049 Decision H: the gate, where the refusal used to be.**
                     //
                     // A class registration is the one object whose validity is an arithmetic fact
@@ -4520,6 +4553,20 @@ impl VirtualStateProcessor {
                     // no more. A registrant that could name its own permille would be donating
                     // itself an arbitrary slice of every incumbent's cadence, which is the share
                     // table's own conservation rule read backwards.
+                    // **The entrant's difficulty is the chain's, not the registrant's** (audit
+                    // M2-12). `initial_target` seeds the class's own retarget, so a registrant
+                    // naming a huge one mines its class for free until the first retarget catches
+                    // up — and naming a tiny one makes the class unminable, which is a way to park
+                    // a share nobody can use. The base class's live target is what a registration
+                    // is offered (`palw_v2_registration_terms`), and it is what must arrive.
+                    if let Some(base_target) = state.class_target(&bundle.base_class_id)
+                        && *initial_target != base_target.target
+                    {
+                        return Err(format!(
+                            "class {class_id} registers at target {initial_target}; a post-genesis entrant starts at the                              chain's own ({}) — difficulty is not a registrant's to choose",
+                            base_target.target
+                        ));
+                    }
                     let floor = state_params.min_grantable_share_permille();
                     if *share_permille != floor {
                         return Err(format!(
@@ -4544,11 +4591,18 @@ impl VirtualStateProcessor {
                         return Err(format!("class {class_id} is registered under a bond that is not Active"));
                     }
                     let message = kaspa_consensus_core::palw_state_v2::palw_class_registration_message_v2(
-                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2(self.network_id_bytes.as_slice()),
+                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(self.network_id_bytes.as_slice(), Some(self.genesis.hash)),
                         *class_id,
                         *share_permille,
                         *activation_daa,
                         &carriage.registrant_bond,
+                        // The four fields the signature used to leave open, and the canonical job
+                        // the pwu rule is derived from (audit M2-6).
+                        *artifact_root,
+                        *slash_value_per_pwu,
+                        *initial_target,
+                        pwu_rule,
+                        &carriage.canonical,
                     );
                     if !Self::verify_mldsa87_with_context_bool(
                         &registrant.pubkey,
@@ -4586,7 +4640,7 @@ impl VirtualStateProcessor {
                         panel_params,
                         state_params,
                         point,
-                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2(self.network_id_bytes.as_slice()),
+                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(self.network_id_bytes.as_slice(), Some(self.genesis.hash)),
                         claim,
                         receipts,
                         Self::verify_mldsa87_with_context_bool,
@@ -4651,7 +4705,7 @@ impl VirtualStateProcessor {
                         return Err(format!("bond {bond:?} is already retiring"));
                     }
                     let message = kaspa_consensus_core::palw_state_v2::palw_bond_retirement_message_v2(
-                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2(self.network_id_bytes.as_slice()),
+                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(self.network_id_bytes.as_slice(), Some(self.genesis.hash)),
                         bond,
                     );
                     if !Self::verify_mldsa87_with_context_bool(
@@ -4689,7 +4743,7 @@ impl VirtualStateProcessor {
                     // the substituted key would reject every honest registration.
                     let signed_bond = kaspa_consensus_core::palw_lifecycle_objects_v2::palw_bond_registration_signed_key_v2(bond);
                     let message = kaspa_consensus_core::palw_state_v2::palw_bond_registration_message_v2(
-                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2(self.network_id_bytes.as_slice()),
+                        kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(self.network_id_bytes.as_slice(), Some(self.genesis.hash)),
                         &signed_bond,
                         pubkey,
                         operator_pubkey,
@@ -4811,7 +4865,7 @@ impl VirtualStateProcessor {
         // and mint another distinct, valid block from one solved PoW. 3c's deferral rested on
         // "only the bond holder can mint valid-signature siblings", which is a statement about a
         // signature somebody checks.
-        let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2(self.network_id_bytes.as_slice());
+        let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(self.network_id_bytes.as_slice(), Some(self.genesis.hash));
         let pre_pow_hash = kaspa_consensus_core::hashing::header::pre_pow_hash_64(header);
         kaspa_consensus_core::palw_admission_v2::check_palw_attempt_admission_full_v2(
             state,
@@ -4931,7 +4985,7 @@ impl VirtualStateProcessor {
             .get_selected_parent(header.hash)
             .map_err(|e| format!("the candidate's own ghostdag data is unreadable: {e}"))?;
         let beacon = self.palw_beacon_fact_of_candidate(selected_parent, slot).map_err(|e| e.to_string())?;
-        let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2(self.network_id_bytes.as_slice());
+        let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(self.network_id_bytes.as_slice(), Some(self.genesis.hash));
         // **The composed admission, which is what this site was always missing.**
         //
         // `network_domain` was computed here and thrown away by the `let _` below — the input the
@@ -5075,7 +5129,7 @@ impl VirtualStateProcessor {
             return Vec::new();
         };
         let txs = self.accepted_txs_from_acceptance_data(acceptance);
-        let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2(self.network_id_bytes.as_slice());
+        let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(self.network_id_bytes.as_slice(), Some(self.genesis.hash));
         let extraction = kaspa_consensus_core::palw_fp_objects_v3::palw_fp_objects_from_accepted_txs_v3(
             &txs,
             network_domain,
@@ -10559,32 +10613,12 @@ impl VirtualStateProcessor {
         // pruning point commits the same parent state. So requiring unanimity costs an honest peer
         // nothing and denies the attacker the choice, without needing a selected-chain successor
         // that may not be resolvable yet at this point in the IBD.
-        let children: Vec<BlockHash> = RelationsStoreReader::get_children(&self.relations_service, pruning_point)
-            .map(|c| c.read().iter().copied().collect())
-            .unwrap_or_default();
-        let mut expected_root = None;
-        for child in children {
-            let Ok(header) = self.headers_store.get_header(child) else { continue };
-            if self.ghostdag_store.get_selected_parent(child).ok() != Some(pruning_point) {
-                continue; // commits a different parent's state — not this one
-            }
-            match expected_root {
-                None => expected_root = Some(header.palw_state_root),
-                Some(seen) if seen == header.palw_state_root => {}
-                Some(seen) => {
-                    return Err(PruningImportError::ImportedPalwStateInvalid(
-                        pruning_point,
-                        seen,
-                        format!(
-                            "its children disagree about its state root ({seen} vs {}) — every child whose selected parent \
-                             is this block commits the same parent state, so a disagreement is a header this chain did not \
-                             produce",
-                            header.palw_state_root
-                        ),
-                    ));
-                }
-            }
-        }
+        // **One witness, chosen by blue work** — see `pruning_point_witness_child`. The same
+        // one-block poisoning that audit M1-2 found on the overlay twin applied verbatim here: a
+        // side block committing a garbage `palw_state_root` made every child-disagreement fatal,
+        // and the disagreement is a fact of the DAG that no retry and no other peer can remove.
+        let expected_root =
+            self.pruning_point_witness_child(pruning_point).and_then(|child| self.headers_store.get_header(child).ok()).map(|h| h.palw_state_root);
         // No child header to check against yet: REFUSE rather than write on trust. An unverifiable
         // carriage is exactly the one an attacker supplies, and the IBD can be retried once the
         // child header is in hand.
@@ -10630,6 +10664,52 @@ impl VirtualStateProcessor {
         (block == pruning_point).then(|| kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2::from_state(&state))
     }
 
+    /// **The child of `pruning_point` whose header is allowed to witness the pruning point's own
+    /// sidecar state — chosen by BLUE WORK, never by hash-set order.**
+    ///
+    /// Both sidecar imports (the DNS overlay snapshot and the PALW state carriage) verify the
+    /// peer's bytes against a child header, because a child's commitment is a commitment to its
+    /// SELECTED PARENT's state, which is exactly this pruning point's. The question is which child.
+    ///
+    /// It used to be "all of them, and any disagreement is fatal". That is a one-block, permanent
+    /// denial of service (audit M1-2): a pruning sample is deterministic, so an attacker mines ONE
+    /// valid block whose sole parent is the block about to become the pruning point, carrying a
+    /// garbage root. The block is never a chain candidate — `verify_expected_utxo_state` is the only
+    /// place either root is checked, and it runs only for UTXO-valid chain blocks — but its header
+    /// is a fact of the DAG that every node stores and serves, so every joining node aborts its
+    /// import against it, forever, against every peer.
+    ///
+    /// It cannot be "any child that agrees" either: a peer supplying both the snapshot and a child
+    /// header that agrees with it would then verify its own forgery.
+    ///
+    /// Blue work is the discriminator that is neither peer-chosen nor grindable: to make the
+    /// heaviest child of the pruning point, an attacker must out-work the honest chain, which is
+    /// the assumption the whole ledger already rests on. Ties break on the hash so the choice is
+    /// deterministic across nodes. A child the local consensus has already disqualified witnesses
+    /// nothing, and is skipped before the comparison.
+    fn pruning_point_witness_child(&self, pruning_point: BlockHash) -> Option<BlockHash> {
+        let children: Vec<BlockHash> = RelationsStoreReader::get_children(&self.relations_service, pruning_point)
+            .map(|c| c.read().iter().copied().collect())
+            .unwrap_or_default();
+        let mut best: Option<(BlueWorkType, BlockHash)> = None;
+        for child in children {
+            if self.headers_store.get_header(child).is_err() {
+                continue;
+            }
+            if self.ghostdag_store.get_selected_parent(child).ok() != Some(pruning_point) {
+                continue; // commits a different parent's state — not this one
+            }
+            if self.statuses_store.read().get(child).ok() == Some(StatusDisqualifiedFromChain) {
+                continue; // the local consensus already refused this block; it witnesses nothing
+            }
+            let Ok(work) = self.ghostdag_store.get_blue_work(child) else { continue };
+            if best.is_none_or(|(seen_work, seen_hash)| (work, child) > (seen_work, seen_hash)) {
+                best = Some((work, child));
+            }
+        }
+        best.map(|(_, hash)| hash)
+    }
+
     pub fn import_pruning_point_overlay_snapshot(
         &self,
         pruning_point: BlockHash,
@@ -10654,31 +10734,15 @@ impl VirtualStateProcessor {
         // value. Headers are synced before the utxoset sidecars in every IBD path, so such a
         // child normally exists by now, and it arrived under PoW + the headers proof.
         let got = snapshot.commitment_root();
-        let mut verified_against = None;
-        let children: Vec<BlockHash> = RelationsStoreReader::get_children(&self.relations_service, pruning_point)
-            .map(|c| c.read().iter().copied().collect())
-            .unwrap_or_default();
-        {
-            for child in children {
-                let Ok(header) = self.headers_store.get_header(child) else { continue };
-                if self.ghostdag_store.get_selected_parent(child).ok() != Some(pruning_point) {
-                    continue; // commits to a different parent's snapshot — not this one
-                }
-                if header.overlay_commitment_root != got {
-                    return Err(PruningImportError::ImportedOverlayCommitmentMismatch(
-                        pruning_point,
-                        got,
-                        header.overlay_commitment_root,
-                    ));
-                }
-                // **No `break`: every qualifying child is checked, not the first one the hash
-                // order happens to yield.** The comparison above was already right; stopping at
-                // the first child was what let the peer choose which comparison ran. `get_children`
-                // iterates a hash set, so the order is grindable, and a peer that supplies both the
-                // snapshot and a child header agreeing with it wins against an honest majority that
-                // does not. The honest children are unanimous by construction, so continuing costs
-                // nothing and removes the choice.
-                verified_against = Some(child);
+        // **One witness, chosen by blue work** — see `pruning_point_witness_child`. Checking every
+        // child and aborting on any disagreement (what this did until audit M1-2) let one cheap
+        // side block poison a pruning point permanently; checking the first child the hash set
+        // yielded let the peer choose its own examiner. The heaviest child is neither.
+        let verified_against = self.pruning_point_witness_child(pruning_point);
+        if let Some(child) = verified_against {
+            let committed = self.headers_store.get_header(child).map(|h| h.overlay_commitment_root).unwrap_or_default();
+            if committed != got {
+                return Err(PruningImportError::ImportedOverlayCommitmentMismatch(pruning_point, got, committed));
             }
         }
         if verified_against.is_none() {

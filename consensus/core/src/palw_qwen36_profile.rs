@@ -465,7 +465,30 @@ const QWEN36_MATMUL_OPENING_BUDGET: usize = 24 * 1024;
 ///
 /// For a hybrid geometry every seed is empty and the function is the identity, so the shipped
 /// class's profile — and therefore its id — cannot move.
-fn strip_absent_subgraphs(ir: &[Ir], seeds: &[&str]) -> Vec<Ir> {
+/// One IR node with its input list OWNED — what the stripper produces and what `project` reads.
+///
+/// The const tables are `&'static [I]` because they are consts; a STRIPPED table's input lists are
+/// computed, and the first version of this leaked them (`Box::leak`) so they would fit the same
+/// type. Class ids are re-derived on every backend lookup, so that leaked ~600 bytes per resolve —
+/// per block attempt and repeatedly inside the panel's sweep (audit M2-26). Owning them here costs
+/// one allocation that is freed when the projection finishes.
+#[derive(Clone)]
+struct ProjIr {
+    op: PalwStepOpKindV1,
+    role: PalwStepNodeRoleV1,
+    kernel: &'static str,
+    weight: &'static str,
+    out: W,
+    inputs: Vec<I>,
+}
+
+impl From<&Ir> for ProjIr {
+    fn from(n: &Ir) -> Self {
+        ProjIr { op: n.op, role: n.role, kernel: n.kernel, weight: n.weight, out: n.out, inputs: n.inputs.to_vec() }
+    }
+}
+
+fn strip_absent_subgraphs(ir: &[Ir], seeds: &[&str]) -> Vec<ProjIr> {
     let mut dropped = vec![false; ir.len()];
     for (i, node) in ir.iter().enumerate() {
         if seeds.iter().any(|prefix| node.weight.contains(prefix)) {
@@ -536,7 +559,7 @@ fn strip_absent_subgraphs(ir: &[Ir], seeds: &[&str]) -> Vec<Ir> {
                 other => *other,
             })
             .collect();
-        out.push(Ir { inputs: Box::leak(inputs.into_boxed_slice()), ..*node });
+        out.push(ProjIr { inputs, ..ProjIr::from(node) });
     }
     out
 }
@@ -555,20 +578,28 @@ fn project(ir: &[Ir], g: &PalwQwen36GeometryV1, layer_span: usize) -> Vec<PalwSt
         seeds.push("ffn_shared");
     }
     if g.attn_output_gate == 0 {
-        // `attn_gate.weight` (the fused projection's gate half) and the gated multiply's own
-        // narrowing scale; the sigmoid between them falls to the closure.
+        // **Seed ONLY the gate's own projection.** The sigmoid falls to the closure and the gated
+        // multiply falls to the FOLD, which forwards it to the attention values — that is the
+        // whole reason rule 3 exists.
+        //
+        // Seeding `attn_gated.a16` as well (as this did until 2026-08-29) looked equivalent and
+        // was not: the fold loop skips a node the seed pass already dropped, so the multiply got
+        // no forwarding entry, and the closure then cascaded off it — `attn_o.weight`, whose only
+        // input is that multiply, was deleted from every layer, and the residual `AddElem` left
+        // with one input folded away to the layer input. The declared graph computed attention and
+        // threw it away while the engine (`qwen36.rs`, `project("attn_o.weight")`, unconditional)
+        // projected it, so the class the chain stored was not the class the node ran: pwu, court
+        // cost and the ladder were all priced on a graph missing a [hidden x q_dim] matmul in each
+        // of 48 layers, and fraud in that matmul was structurally unrefutable. Audit M2-9.
         seeds.push("attn_gate.weight");
-        seeds.push("attn_gated.a16");
     }
-    let stripped;
-    let ir = if seeds.is_empty() {
-        ir
-    } else {
-        stripped = strip_absent_subgraphs(ir, &seeds);
-        &stripped[..]
-    };
+    // One owned table either way: the identity conversion for a hybrid geometry (no seeds) and the
+    // stripped one otherwise. Same nodes in the same order — the shipped class's id cannot move.
+    let table: Vec<ProjIr> =
+        if seeds.is_empty() { ir.iter().map(ProjIr::from).collect() } else { strip_absent_subgraphs(ir, &seeds) };
+    let ir = &table[..];
     // A matmul's reduction width, from the IR's own wiring — the first input's row.
-    let in_width = |node: &Ir| -> usize {
+    let in_width = |node: &ProjIr| -> usize {
         node.inputs
             .first()
             .and_then(|i| match i {
@@ -668,6 +699,63 @@ fn layer_spans(g: &PalwQwen36GeometryV1) -> (usize, usize) {
 #[cfg(test)]
 mod qwen3moe_family {
     use super::*;
+    /// **The stripped graph is the hybrid's minus exactly the absent subgraphs — nothing else.**
+    ///
+    /// The regression this pins (audit M2-9): seeding the stripper with the gated multiply as well
+    /// as the gate projection cascaded into `attn_o.weight`, so the qwen3moe graph computed
+    /// attention and discarded it while the engine projected it — the chain stored a class the
+    /// node did not run. Named tensors are compared as SETS so the test states the rule ("these
+    /// four names disappear, everything else survives") rather than an index that any IR edit
+    /// would have to re-baseline.
+    #[test]
+    fn stripping_removes_the_absent_subgraphs_and_nothing_else() {
+        let names = |g: PalwQwen36GeometryV1| -> std::collections::BTreeSet<String> {
+            let p = qwen36_profile_v1(g).expect("projects");
+            [&p.pre_nodes, &p.gdn_nodes, &p.attn_nodes, &p.post_nodes]
+                .into_iter()
+                .flatten()
+                .map(|n| n.weight_name.clone())
+                .filter(|w| !w.is_empty())
+                .collect()
+        };
+        let hybrid = names(QWEN36_35B_A3B);
+        let moe = names(QWEN3_CODER_30B_A3B);
+
+        // The output projection and the attention residual are NOT part of the gate.
+        for kept in ["blk.{layer}.attn_o.weight", "blk.{layer}.attn_q.weight", "blk.{layer}.attn_residual.a16"] {
+            assert!(moe.contains(kept), "the qwen3moe graph lost {kept} — it is not part of an absent subgraph");
+        }
+        // The residual ADD survives too (a name-less node, so checked by op).
+        let moe_profile = qwen36_profile_v1(QWEN3_CODER_30B_A3B).expect("projects");
+        assert_eq!(
+            moe_profile.attn_nodes.iter().filter(|n| n.op_kind == crate::palw_step::PalwStepOpKindV1::AddElem).count(),
+            2,
+            "the attention residual add and the mixture add must both survive"
+        );
+
+        // And what DID disappear belongs to an absent subgraph — stated as the RULE, because the
+        // three absences have different causes: the recurrence is absent because the member has no
+        // GDN layers at all (an empty node table, not a strip), while the shared expert and the
+        // attention gate are stripped out of a table that is otherwise shared with the hybrid.
+        for gone in hybrid.difference(&moe) {
+            let recurrence = gone.contains(".linear_");
+            let shared_expert = gone.contains("ffn_shared");
+            let attention_gate = gone.ends_with("attn_gate.weight") || gone.ends_with("attn_gated.a16");
+            assert!(
+                recurrence || shared_expert || attention_gate,
+                "{gone} is not part of an absent subgraph, and the stripper deleted it anyway"
+            );
+        }
+        assert!(moe.difference(&hybrid).next().is_none(), "stripping must never ADD a tensor");
+
+        // The hybrid's own id is a live chain fact and must be untouched by any stripper change.
+        assert_eq!(
+            qwen36_profile_v1(QWEN36_35B_A3B).expect("projects").shape_profile_id().to_string(),
+            "ec7bbcbffe13f36f1c2c418c65bdab840dd40b2bc22b217522dae836153078ddb77a92fb0645d34f98e9e3a1302e4543448a3924b3cd152fc74774ad3f02fb3f",
+            "the shipped hybrid class id moved — every registered QWEN36 claim is now unreachable"
+        );
+    }
+
     /// **The qwen3moe (full-attention-only MoE) members are expressible and admissible.**
     ///
     /// Qwen3-Coder-30B-A3B's geometry — every layer attention (`full_attention_interval` 1, so
@@ -723,6 +811,21 @@ mod qwen3moe_family {
 }
 pub fn qwen36_profile_v1(g: PalwQwen36GeometryV1) -> Result<PalwShapeProfileV3, PalwStepError> {
     let (gdn_span, attn_span) = layer_spans(&g);
+    // **The gate is STORED here and DERIVED in the engine, so they must be checked against each
+    // other exactly once — here, before anything projects.**
+    //
+    // `Qwen36ShapeV1::attn_output_gate()` (the artifact side) answers `!is_full_attention_only()`,
+    // because the artifact format has no field for it; this geometry answers with a field. The two
+    // shipped members agree, and no remote input can make them disagree — but a future geometry
+    // could, and then the producer would run a gated arm while the court re-derived a gateless
+    // graph (or the reverse), which convicts an honest execution. Refusing the geometry is the
+    // only place the two spellings can be reconciled without changing the artifact format.
+    if (gdn_span == 0) != (g.attn_output_gate == 0) {
+        return Err(PalwStepError::ProfileNotCanonical(
+            "attn_output_gate disagrees with the layer stack: the engine derives the gate from \
+             all-attention-ness, so a hybrid must gate and a full-attention-only member must not",
+        ));
+    }
     let profile = PalwShapeProfileV3 {
         version: PALW_STEP_OBJECT_VERSION_V1,
         lane: PalwStepLaneV1::Int32,

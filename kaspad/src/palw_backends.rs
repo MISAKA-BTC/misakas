@@ -24,7 +24,10 @@ use kaspa_hashes::Hash64;
 pub struct PalwBackendRegistry {
     court: PalwCourtParamsV2,
     /// Converted artifacts for classes whose weights are not derivable. The floor needs none.
-    class_artifacts: Vec<misaka_palw_base0::artifact::Base0ArtifactV1>,
+    /// `Arc`, for the same reason the mapped tier is: the registry is rebuilt per duty and per
+    /// pooled payload, and a dense artifact is ~1.65 GiB. Cloning them per call copied gigabytes
+    /// inside the panel's async tick (audit M2-14).
+    class_artifacts: Vec<std::sync::Arc<misaka_palw_base0::artifact::Base0ArtifactV1>>,
     /// **Memory-mapped Qwen3.6 artifacts: the root this node computed, and the mapping.**
     ///
     /// `Arc`, because the registry is rebuilt per block while the artifact is a 33 GiB mapping
@@ -41,7 +44,7 @@ pub struct PalwBackendRegistry {
 impl PalwBackendRegistry {
     pub fn new(
         court: PalwCourtParamsV2,
-        class_artifacts: Vec<misaka_palw_base0::artifact::Base0ArtifactV1>,
+        class_artifacts: Vec<std::sync::Arc<misaka_palw_base0::artifact::Base0ArtifactV1>>,
         qwen36_artifacts: Vec<(Hash64, std::sync::Arc<misaka_palw_base0::qwen36::Qwen36ArtifactV1>)>,
         network_id: Vec<u8>,
     ) -> Self {
@@ -54,7 +57,9 @@ impl PalwBackendRegistry {
     /// A node that cannot serve that class says so — it does not fall back to one it can, because
     /// producing or judging under a class the chain did not name is worse than not participating.
     pub fn resolve(&self, class_id: Hash64, artifact_root: Hash64) -> Result<Box<dyn PalwExecutionBackendV1>, String> {
-        if let Ok(resolved) = misaka_palw_base0::classes::resolve_class_v1(&self.court, class_id, artifact_root, &self.class_artifacts)
+        let dense: Vec<misaka_palw_base0::artifact::Base0ArtifactV1> =
+            self.class_artifacts.iter().map(|a| (**a).clone()).collect();
+        if let Ok(resolved) = misaka_palw_base0::classes::resolve_class_v1(&self.court, class_id, artifact_root, &dense)
         {
             return Ok(Box::new(misaka_palw_base0::backend::Base0Backend::new(resolved)));
         }
@@ -71,7 +76,7 @@ impl PalwBackendRegistry {
         {
             if let Some(artifact) = self.class_artifacts.iter().find(|a| a.artifact_digest() == artifact_root) {
                 return Ok(Box::new(misaka_palw_base0::qwen25_a16_backend::Qwen25A16Backend::new(
-                    std::sync::Arc::new(artifact.clone()),
+                    artifact.clone(),
                     self.network_id.clone(),
                     class_id,
                     entry.canonical_job,
