@@ -476,10 +476,14 @@ where
 /// `false` — every shipped preset — is byte-identical to the tally before the parameter existed.
 ///
 /// **What changes past the fence, and what deliberately does not.** An `Unavailable` receipt is
-/// still a well-formed answer: it is still signed, still checked against the panel and the window,
-/// still has to name an obligation the producer actually had, and the seat that files it is still
-/// on the record rather than a no-show. It simply decides nothing — the treatment `Incapable`
-/// already gets. So a panel that cannot be fed reaches no quorum, the claim redraws once
+/// still a well-formed answer: still signed, still checked against the panel and the receipt
+/// window, and the seat that files it is still on the record rather than a no-show. It simply
+/// decides nothing — the treatment `Incapable` already gets.
+///
+/// What it is NO LONGER checked against is the obligation it names. That gate exists because a
+/// quorum of `Unavailable` voided an honest producer's claim; with no such quorum reachable it
+/// guards nothing, and keeping it would let one seat's malformed abstention refuse a whole receipt
+/// set and kill a claim three other seats verified. So a panel that cannot be fed reaches no quorum, the claim redraws once
 /// (`rebound_daa`) and then voids at `ReceiptTimeout`, which destroys the escrow and slashes
 /// nobody, rather than at `ProducerDefaulted`, which takes `claim.reserved` from the bond of the
 /// producer that served correctly.

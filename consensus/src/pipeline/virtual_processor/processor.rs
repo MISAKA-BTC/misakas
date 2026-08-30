@@ -4442,7 +4442,7 @@ impl VirtualStateProcessor {
         claim: kaspa_hashes::Hash64,
         candidates: &[kaspa_consensus_core::palw_panel_v2::PalwSeatReceiptV2],
     ) -> Option<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
-        use kaspa_consensus_core::palw_panel_v2::{PalwReceiptQuorumV2 as Q, validate_receipt_quorum_v2};
+        use kaspa_consensus_core::palw_panel_v2::PalwReceiptQuorumV2 as Q;
         let state_params = self.palw_state_params_v2.as_ref()?;
         let panel_params = self.palw_panel_params_v2.as_ref()?;
         let (tip_block, state) = self.palw_state_v2_store.read().load_tip(state_params).ok().flatten()?;

@@ -536,9 +536,19 @@ pub struct Params {
     /// **The window is a DURATION and is therefore NEVER visited by `for_each_fence`** — see
     /// `inactivity_leak_daa`, which carries the same warning. `consensus_identity_id` normalises
     /// every visited value to `0` or `u64::MAX`, so a visited duration would make two builds
-    /// shipping different windows fingerprint identically, peer, and disagree about which bonds may
-    /// be seated. It is hashed raw into `consensus_params_id` instead, and only the `activation`
-    /// beside it is a fence.
+    /// shipping different windows fingerprint identically at EVERY height. It is hashed raw into
+    /// `consensus_params_id` instead, and only the `activation` beside it is a fence.
+    ///
+    /// **What that does NOT buy, and it is a deployment hazard worth knowing about.** While the
+    /// fence is merely scheduled, `consensus_identity_id` rewrites its height to `never()` and
+    /// `normalize_values_a_scheduled_fence_drags_with_it` then collapses the whole option — so two
+    /// builds scheduling D1 at one height with DIFFERENT windows share an identity, peer with only
+    /// the params-id warning, and seat different panels the moment it fires. That is this file's
+    /// standing rule for a value inert until its fence fires (audit3 H1) and the VLT cost table has
+    /// the same property; it is not special to this field. It does mean **arming this fence is a
+    /// coordinated change**, and the warning in `flow_context` is the whole of the defence.
+    /// `the_bond_maturity_window_is_in_the_fingerprint_and_not_in_the_fence_visitor` pins both
+    /// halves so neither can move by accident.
     pub palw_bond_maturity: Option<PalwBondMaturityV1>,
 
     /// ADR-0042 Decision 1 (PR-10): the ONE PALW switch on the V2 lineage. `Disabled` on every
@@ -6269,17 +6279,34 @@ mod consensus_params_id_tests {
         assert_eq!(shipped.consensus_identity_id(), armed.consensus_identity_id(), "scheduled, not in force: same network");
         assert_ne!(shipped.consensus_params_id(), armed.consensus_params_id(), "…and still a visible commitment");
 
-        // **The one that matters.** Two builds scheduling the same fence with DIFFERENT windows
-        // would seat different panels the moment it fires. If the window ever reaches the identity
-        // visitor it is normalised to a sentinel, these two collapse to one identity, and the pair
-        // peers happily until the first panel disagrees — which is `inactivity_leak_daa`'s recorded
-        // failure, reproduced.
+        // **The window is in the FINGERPRINT — and, deliberately, not in the identity.** Say both
+        // halves out loud, because the second is a live deployment hazard and an assertion that
+        // only checked the first would read as though it were covered.
         let mut wider = MAINNET_PARAMS;
         wider.palw_bond_maturity = Some(PalwBondMaturityV1 { activation: ForkActivation::new(9_000_000), window_daa: 5_000 });
         assert_ne!(
             armed.consensus_params_id(),
             wider.consensus_params_id(),
             "a different maturity window is a different rule and must be in the fingerprint"
+        );
+        // …and the two are nevertheless ONE identity while the fence is only scheduled, because
+        // `consensus_identity_id` rewrites the armed height to `never()` and the collapse then
+        // takes the whole option with it. That is this file's own rule for a value that is inert
+        // until its fence fires (see `normalize_values_a_scheduled_fence_drags_with_it`, audit3
+        // H1) and it is what the VLT cost table already does — two builds scheduling different
+        // tables at one height are the same network today.
+        //
+        // **The hazard it buys, stated so nobody has to rediscover it:** two operators who schedule
+        // D1 at the same height with DIFFERENT windows peer normally, are told only by the
+        // params-id warning in `flow_context`, and seat different panels the moment the fence
+        // fires. The warning is the whole of the defence, so arming this fence is a coordinated
+        // change even though the handshake permits a rolling one. If this assertion ever flips to
+        // `assert_ne!`, arming D1 becomes a flag day instead — which is a defensible choice, but it
+        // must be a chosen one.
+        assert_eq!(
+            armed.consensus_identity_id(),
+            wider.consensus_identity_id(),
+            "a scheduled fence's payload leaves the identity with it — deliberate, and the reason the params id must differ"
         );
 
         let mut at_genesis = MAINNET_PARAMS;

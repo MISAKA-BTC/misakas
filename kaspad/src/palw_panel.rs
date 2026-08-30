@@ -1193,7 +1193,14 @@ impl PalwPanelService {
         // opens. The dispute is only a dispute if the two sides speak from two executions.
         let mut own_executions: HashMap<Hash64, Vec<u8>> = HashMap::new();
         let mut receipts: HashMap<Hash64, Vec<PalwSeatReceiptV2>> = HashMap::new();
-        let mut answered: HashSet<Hash64> = HashSet::new();
+        // **Keyed by the PANEL, not by the claim** (ADR-0060's redraw, found while landing
+        // ADR-0065 D4). A claim whose panel concludes nothing is revived once and binds a SECOND
+        // panel anchored on the sweep, which is the mechanism D4 leans on when a seat cannot be
+        // fed. Keyed by claim id alone this set said "already answered" to that second panel and
+        // the seat filed nothing — so the redraw dealt new seats and then silenced any of them
+        // that had sat on the first panel. `bound_daa` is what distinguishes the two: the redraw
+        // re-binds at the sweep's own score.
+        let mut answered: HashSet<(Hash64, u64)> = HashSet::new();
         let mut first_seen: HashMap<Hash64, u64> = HashMap::new();
         // When this seat last pulled for a claim it holds no material for, so a slow answer is
         // not re-asked every 2-second tick.
@@ -1822,7 +1829,7 @@ impl PalwPanelService {
             // --- the seat's half: answer every duty exactly once ---
             let duties = session.palw_seat_duties_v2(vec![bond_key]);
             for duty in &duties {
-                if answered.contains(&duty.claim_id) || current_daa > duty.receipt_deadline {
+                if answered.contains(&(duty.claim_id, duty.bound_daa)) || current_daa > duty.receipt_deadline {
                     continue;
                 }
                 first_seen.entry(duty.claim_id).or_insert(current_daa.max(duty.bound_daa));
@@ -1928,7 +1935,12 @@ impl PalwPanelService {
                     if current_daa >= duty.bound_daa.saturating_add(window / 2) {
                         break 'verdict Some(PalwReceiptVerdictV2::Unavailable {
                             chunk_index: 0,
-                            requested_daa: first_seen[&duty.claim_id],
+                            // Floored at THIS panel's `bound_daa`: `first_seen` dates the claim,
+                            // not the panel, and a redrawn claim's second panel was inheriting a
+                            // timestamp from before it existed — which the acceptance layer
+                            // refuses as "the request predates the panel that was owed the data",
+                            // taking the whole receipt set with it.
+                            requested_daa: first_seen[&duty.claim_id].max(duty.bound_daa),
                         });
                     }
                     None
@@ -1953,7 +1965,7 @@ impl PalwPanelService {
                 let bytes = borsh::to_vec(&receipt).expect("a receipt serializes");
                 info!("[{PALW_PANEL}] filed a {:?} receipt for claim {}", verdict_name(&verdict), duty.claim_id);
                 receipts.entry(duty.claim_id).or_default().push(receipt);
-                answered.insert(duty.claim_id);
+                answered.insert((duty.claim_id, duty.bound_daa));
                 self.flow_context.broadcast_palw_seat_receipt(bytes).await;
             }
 
