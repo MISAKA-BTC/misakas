@@ -300,6 +300,8 @@ pub struct VirtualStateProcessor {
     pub(super) genesis: GenesisBlock,
     pub(super) max_block_parents: u8,
     pub(super) mergeset_size_limit: u64,
+    /// The deepest reorg the sink search will ever offer — ADR-0065 D2's ancestor horizon.
+    pub(super) finality_depth: u64,
     pub(super) max_block_mass: u64,
     /// kaspa-pq Phase 3 PoW (ADR-0007): BLAKE2b-512 ∥ SHA3-512 (`algo_id = 3`) activation — sets the
     /// block template's `pow_algo_id` so miners produce the network-correct Layer-1 algorithm.
@@ -402,6 +404,9 @@ pub struct VirtualStateProcessor {
     /// ADR-0065 D1's fence and window, `None` on every shipped preset. See
     /// [`Self::palw_bond_maturity_at`], which is the ONE place this is resolved.
     pub(super) palw_bond_maturity: Option<kaspa_consensus_core::config::params::PalwBondMaturityV1>,
+    /// ADR-0065 D2's fence, `None` on every shipped preset. See
+    /// [`Self::palw_frontier_provenance_outcome`].
+    pub(super) palw_frontier_provenance: Option<kaspa_consensus_core::config::params::ForkActivation>,
 
     /// ADR-0033 (B14): the PALW credit gate's fence — `None` (every shipped network) keeps
     /// the whole gate dormant; `Some` makes crossing commitments mintable in the coinbase
@@ -754,6 +759,8 @@ impl VirtualStateProcessor {
             palw_bootstrap_activation: params.palw_bootstrap_activation,
             palw_unavailable_abstains: params.palw_unavailable_abstains,
             palw_bond_maturity: params.palw_bond_maturity,
+            palw_frontier_provenance: params.palw_frontier_provenance,
+            finality_depth: params.blockrate.finality_depth,
             palw_credit_params: params.palw_credit.clone(),
             palw_schedule: params.palw_schedule,
             palw_ramp: params.palw_ramp,
@@ -3753,6 +3760,129 @@ impl VirtualStateProcessor {
         &self,
         candidate: BlockHash,
     ) -> Option<kaspa_consensus_core::palw_fork_choice::PalwCandidateOrderV1> {
+        let state = self.palw_candidate_state_v2(candidate)?;
+        let (frontier_blue_score, _) = state.safe_frontier();
+        Some(kaspa_consensus_core::palw_fork_choice::PalwCandidateOrderV1::new(
+            frontier_blue_score,
+            state.safe_weight(),
+            state.bounded_immature(),
+            candidate,
+        ))
+    }
+
+    /// **ADR-0065 D2 — a deep reorg may not rest on bonds the fork minted for itself.**
+    ///
+    /// `palw_fork_choice` orders matured work ahead of everything else on a stated invariant: *a
+    /// fork nobody could see collects no receipts, so it has no frontier however much unproven work
+    /// it piles up.* That was false. A holder of one cheap bond could fork, fold sybil
+    /// `BondRegistered` objects into its own blocks, seat panels from them, self-license, and grow
+    /// `safe_frontier` in private — the frontier is a per-branch fold, and the branch supplies both
+    /// the bonds and the receipts.
+    ///
+    /// D2 was first written as a rule about the frontier ADVANCE, which is unimplementable: the
+    /// advance happens inside a pure single-chain fold whose result is hashed into `state_root`, so
+    /// a value that depended on a fork point would depend on which competing branch a node holds,
+    /// and two nodes would compute different roots for one block. It belongs at the COMPARISON,
+    /// which is this function — the one site holding both tips inside one consensus instance.
+    ///
+    /// **Provenance needs no new state, because the registry is append-only.** `write_bond`'s
+    /// `None` branch has no callers (ADR-0065 D5 makes that a decision), so bonds only ever
+    /// accumulate along a chain, and therefore
+    ///
+    /// > *registered after the fork point* ⟺ *in the challenger's registry and not in the
+    /// > ancestor's*
+    ///
+    /// — a set difference between two states this node materializes from its own stores. No
+    /// `registered_daa` is read, so the blue-score-versus-DAA unit mismatch that blocked the
+    /// earlier design never arises.
+    ///
+    /// **Everything here is node-local.** Both states come from this node's root-verified tip and
+    /// its own reachability walk; the peer proposing the reorg supplies none of it.
+    fn palw_frontier_provenance_outcome(&self, candidate: BlockHash, prev_sink: BlockHash) -> DnsReorgOutcome {
+        use kaspa_consensus_core::palw_state_v2::PalwDeltaEntryV2;
+
+        // Read at the INCUMBENT's DAA: a candidate's own score is attacker-chosen, and this is the
+        // same one-sided clock the confirmed-anchor TTL uses a few hundred lines below.
+        let incumbent_daa = self.headers_store.get_daa_score(prev_sink).unwrap_or(0);
+        if !self.palw_frontier_provenance.is_some_and(|fence| fence.is_active(incumbent_daa)) {
+            return DnsReorgOutcome::GateInactive;
+        }
+        let Some(panel_params) = self.palw_panel_params_v2.as_ref() else { return DnsReorgOutcome::GateInactive };
+
+        // **A veto that cannot name a fork point abstains.** The horizon is `finality_depth`, which
+        // is exactly the deepest reorg the sink search will ever offer, and it is canonical-side —
+        // it bounds how far THIS node would rewind, not how long the challenger's branch is, which
+        // is the right metric for an attack whose private branch may be thousands of blocks while
+        // the canonical-side fork depth is one. Refusing on a missing ancestor would be the
+        // permanent-partition shape this file already learned to escape.
+        let horizon = self.finality_depth;
+        let Some(ancestor) = self.chain_common_ancestor_within(candidate, prev_sink, horizon) else {
+            warn!("PALW frontier provenance abstains: no common ancestor for {candidate} and {prev_sink} within {horizon}");
+            return DnsReorgOutcome::GateInactive;
+        };
+        let (Some(challenger_state), Some(ancestor_state)) =
+            (self.palw_candidate_state_v2(candidate), self.palw_candidate_state_v2(ancestor))
+        else {
+            warn!("PALW frontier provenance abstains: this node cannot materialize both sides of the fork at {ancestor}");
+            return DnsReorgOutcome::GateInactive;
+        };
+
+        let minted: std::collections::BTreeSet<_> =
+            challenger_state.bonds_iter().map(|(k, _)| *k).filter(|k| ancestor_state.bond(k).is_none()).collect();
+        if minted.is_empty() {
+            return DnsReorgOutcome::GateInactive;
+        }
+
+        // **The fast path is exact, not an approximation.** `PalwPanelParamsV2::new` enforces
+        // `2*quorum > seat_count`, so a panel cannot reach quorum out of newly-minted seats unless
+        // more than `seat_count - quorum` of them exist. Below that threshold no scan can find a
+        // violation, so not scanning is a proof rather than a shortcut. On the shipped (5, 3) that
+        // is 2, so a static registry never pays for the walk.
+        if !kaspa_consensus_core::palw_panel_v2::palw_minted_seats_can_reach_quorum_v1(minted.len(), panel_params) {
+            return DnsReorgOutcome::GateInactive;
+        }
+
+        // Past it, the panels themselves. Read off the DELTAS rather than the challenger's tip
+        // state: `retire_claim` deletes a claim and its panel while `safe_frontier` never retreats,
+        // so the frontier can stand on a panel the tip no longer holds. The deltas record every
+        // panel this branch ever bound, verbatim.
+        let path = self.dag_traversal_manager.calculate_chain_path(ancestor, candidate, None);
+        let store = self.palw_state_v2_store.read();
+        for block in path.added.iter() {
+            let Ok((_, delta)) = store.delta_of(*block) else {
+                drop(store);
+                warn!("PALW frontier provenance abstains: delta for {block} is unavailable");
+                return DnsReorgOutcome::GateInactive;
+            };
+            for entry in delta.entries.iter() {
+                let PalwDeltaEntryV2::Panel { new: Some(panel), .. } = entry else { continue };
+                let seated_new = panel.seats.iter().filter(|seat| minted.contains(&seat.bond)).count();
+                if seated_new >= panel_params.quorum() as usize {
+                    drop(store);
+                    warn!(
+                        "deep reorg refused (ADR-0065 D2): candidate {candidate} seated {seated_new} of {} panel seats \
+                         from bonds registered after the fork point {ancestor} — its matured work is its own",
+                        panel.seats.len()
+                    );
+                    return DnsReorgOutcome::FrontierProvenanceViolation;
+                }
+            }
+        }
+        DnsReorgOutcome::GateInactive
+    }
+
+    /// **The PALW state AT a chain block**, materialized from this node's own stores.
+    ///
+    /// Split out of [`Self::palw_candidate_order_v2`], which built a whole `PalwChainStateV2` and
+    /// then kept three numbers out of it. ADR-0065 D2 needs the rest — specifically the bond
+    /// registry — and materializing it twice would be two walks where the walk is the cost.
+    ///
+    /// Node-local throughout: the tip is this node's root-verified store row and the path is its
+    /// own reachability, so nothing here is supplied by the peer proposing the reorg.
+    pub(crate) fn palw_candidate_state_v2(
+        &self,
+        candidate: BlockHash,
+    ) -> Option<kaspa_consensus_core::palw_state_v2::PalwChainStateV2> {
         let state_params = self.palw_state_params_v2.as_ref()?;
         let store = self.palw_state_v2_store.read();
         let (tip_block, tip_state) = store.load_tip(state_params).ok().flatten()?;
@@ -3764,14 +3894,7 @@ impl VirtualStateProcessor {
         let added: Vec<BlockHash> = path.added.to_vec();
         drop(store);
         let store = self.palw_state_v2_store.read();
-        let state = crate::processes::palw_state_walk::walk_chain_path(&store, state_params, tip_state, &removed, &added).ok()?;
-        let (frontier_blue_score, _) = state.safe_frontier();
-        Some(kaspa_consensus_core::palw_fork_choice::PalwCandidateOrderV1::new(
-            frontier_blue_score,
-            state.safe_weight(),
-            state.bounded_immature(),
-            candidate,
-        ))
+        crate::processes::palw_state_walk::walk_chain_path(&store, state_params, tip_state, &removed, &added).ok()
     }
 
     /// Unit D, site 3: whether a proposed pruning point respects the safe frontier.
@@ -8786,7 +8909,9 @@ impl VirtualStateProcessor {
             return match (self.palw_candidate_order_v2(prev_sink), self.palw_candidate_order_v2(candidate)) {
                 (Some(incumbent), Some(challenger)) => {
                     match kaspa_consensus_core::palw_fork_authority_v2::decide_deep_reorg_v2(&incumbent, &challenger) {
-                        kaspa_consensus_core::palw_fork_authority_v2::PalwDeepReorgV2::Allow => DnsReorgOutcome::GateInactive,
+                        kaspa_consensus_core::palw_fork_authority_v2::PalwDeepReorgV2::Allow => {
+                            self.palw_frontier_provenance_outcome(candidate, prev_sink)
+                        }
                         kaspa_consensus_core::palw_fork_authority_v2::PalwDeepReorgV2::Refuse => DnsReorgOutcome::DominanceViolation,
                     }
                 }

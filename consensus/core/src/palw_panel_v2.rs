@@ -176,6 +176,29 @@ pub struct PalwAnchorFactV2 {
     pub predecessor_daa: u64,
 }
 
+/// **ADR-0065 D2's fast path, and it is a proof rather than a shortcut.**
+///
+/// `true` when `minted` newly-registered bonds COULD form a quorum on some panel, so the
+/// deep-reorg gate must go and look. `false` means no panel can be majority-new and the scan is
+/// provably unnecessary.
+///
+/// A panel seats distinct bonds, so it can hold at most `minted` new ones, and reaching quorum out
+/// of them needs `minted >= quorum`. That is the exact condition. The threshold used here —
+/// `seat_count - quorum` — is strictly smaller, because [`PalwPanelParamsV2::new`] enforces
+/// `2 * quorum > seat_count` (the invariant that stops `Valid` and `Unavailable` both reaching
+/// quorum), which rearranges to `seat_count - quorum < quorum`.
+///
+/// Deliberately the smaller one: it means the gate sometimes scans when it need not, and **never
+/// skips when it must**. `the_provenance_fast_path_never_skips_a_reachable_quorum` checks that
+/// direction exhaustively over every legal panel shape, because it is the one that matters — a
+/// `false` that should have been `true` is a rule that silently does not apply.
+///
+/// On the shipped `(5, 3)` the threshold is 2: a branch that registered at most two bonds since
+/// the fork cannot have seated a majority-new panel, so a static registry never pays for the walk.
+pub fn palw_minted_seats_can_reach_quorum_v1(minted: usize, params: &PalwPanelParamsV2) -> bool {
+    minted > params.seat_count().saturating_sub(params.quorum()) as usize
+}
+
 /// **ADR-0065 D1's floor, computed in one place.** `Some(anchor_daa - window)`, saturating, or
 /// `None` when the rule is off.
 ///
@@ -722,6 +745,43 @@ mod tests {
         let claim_id = attempt_id_v2(&env.attempt);
         let (s2, _) = apply_palw_transition_v2(&s1, &state_params(), &ctx(2, 101, 2), &[], Some(&env)).unwrap();
         (s2, claim_id)
+    }
+
+    /// **D2's fast path must never skip a panel that could be majority-new.**
+    ///
+    /// The gate scans deltas only when this says so, so a `false` that should have been `true` is a
+    /// rule that silently does not apply. Checked exhaustively over every legal `(seat_count,
+    /// quorum)` this ruleset admits, against the definition it is a shortcut for: "some panel could
+    /// seat `quorum` bonds that are all new".
+    #[test]
+    fn the_provenance_fast_path_never_skips_a_reachable_quorum() {
+        for seats in 1u16..=16 {
+            for quorum in 1u16..=seats {
+                let Ok(params) = PalwPanelParamsV2::new(seats, quorum, 4) else { continue };
+                for minted in 0usize..=(seats as usize + 2) {
+                    // The thing the scan looks for: a panel of `seats` seats holding `quorum` or
+                    // more bonds drawn from the `minted` new ones. It is reachable exactly when
+                    // there are at least `quorum` of them.
+                    let reachable = minted >= quorum as usize;
+                    let scans = palw_minted_seats_can_reach_quorum_v1(minted, &params);
+                    assert!(
+                        !reachable || scans,
+                        "seats {seats} quorum {quorum} minted {minted}: a quorum of new seats is reachable and the gate would not look"
+                    );
+                }
+            }
+        }
+    }
+
+    /// And on the shipped shape it is the number the design names, so a change to either half of
+    /// the panel is visible here rather than only in a comment.
+    #[test]
+    fn the_shipped_panel_tolerates_two_minted_bonds_without_scanning() {
+        let shipped =
+            PalwPanelParamsV2::new(crate::palw_fp_devnet_v3::PALW_V2_PANEL_SEATS, crate::palw_fp_devnet_v3::PALW_V2_PANEL_QUORUM, 4)
+                .expect("the shipped panel shape is legal");
+        assert!(!palw_minted_seats_can_reach_quorum_v1(2, &shipped), "two new bonds cannot be a majority of five seats");
+        assert!(palw_minted_seats_can_reach_quorum_v1(3, &shipped), "three can, so the gate looks");
     }
 
     #[test]

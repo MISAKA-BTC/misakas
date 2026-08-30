@@ -4217,6 +4217,17 @@ pub enum DnsReorgOutcome {
     /// [`Self::WorkDominanceOverride`] this is an operationally significant release and belongs in
     /// the log.
     ConfirmedAnchorStale,
+    /// **ADR-0065 D2 — the challenger's matured work rests on bonds it minted for itself.**
+    ///
+    /// A reorg refused because a QUORUM-sized majority of some panel that advanced the
+    /// challenger's `safe_frontier` was drawn from bonds registered after the common ancestor —
+    /// i.e. bonds nobody on the incumbent chain could see when the branches parted.
+    /// `palw_fork_choice`'s ordering puts matured work first on the grounds that "a fork nobody
+    /// could see collects no receipts, so it has no frontier", and this is the rule that makes
+    /// that true instead of merely asserted.
+    ///
+    /// Deliberately absent from [`Self::is_accept`]: it is a refusal, not a release.
+    FrontierProvenanceViolation,
 }
 
 impl DnsReorgOutcome {

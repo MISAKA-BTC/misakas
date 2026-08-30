@@ -560,6 +560,24 @@ pub struct Params {
     /// halves so neither can move by accident.
     pub palw_bond_maturity: Option<PalwBondMaturityV1>,
 
+    /// **ADR-0065 D2 — a deep reorg may not rest on bonds the fork minted for itself.** `None` on
+    /// every shipped preset, so the behaviour is byte-identical to not having the field.
+    ///
+    /// D2 was restated as unimplementable inside the state fold: `safe_frontier` is written by a
+    /// pure single-chain transition whose result is hashed into `state_root`, so a value that
+    /// depended on a fork point would depend on which competing branch a node holds, and two nodes
+    /// would compute different roots for one block. It lives at the COMPARISON instead — the
+    /// deep-reorg gate, the one site holding both tips inside one consensus instance.
+    ///
+    /// **A bare fence with no companion value, deliberately.** The threshold is derived from the
+    /// panel's own `seat_count`/`quorum` rather than configured, because a value that sits beside a
+    /// fence but is not itself a fence is normalised out of [`Self::consensus_identity_id`] — two
+    /// builds scheduling the rule at one height with different thresholds would share an identity,
+    /// peer, and disagree the moment it fires. `palw_bond_maturity` carries exactly that hazard and
+    /// its doc records that arming it is therefore a coordinated change; this has nothing to
+    /// coordinate.
+    pub palw_frontier_provenance: Option<ForkActivation>,
+
     /// ADR-0042 Decision 1 (PR-10): the ONE PALW switch on the V2 lineage. `Disabled` on every
     /// shipped preset. A network is in exactly one mode; `ConsensusV2` carries the whole atomic
     /// ruleset and is validated at construction ([`Params::validate_palw_v2`]) — including the
@@ -1015,6 +1033,10 @@ impl Params {
         if self.palw_bond_maturity.is_some_and(|m| m.activation == ForkActivation::never()) {
             self.palw_bond_maturity = None;
         }
+        // ADR-0065 D2, a bare fence: same collapse, same reason.
+        if self.palw_frontier_provenance == Some(ForkActivation::never()) {
+            self.palw_frontier_provenance = None;
+        }
         let Some(dns) = self.dns_params.as_mut() else {
             return;
         };
@@ -1129,6 +1151,7 @@ impl Params {
             palw_bootstrap_activation,
             palw_unavailable_abstains,
             palw_bond_maturity,
+            palw_frontier_provenance,
             // The V2 bundle's fences are inside `palw_ruleset_id_v2` — see the doc block.
             palw_consensus_mode: _,
             pow_blake2b_sha3_activation,
@@ -1198,6 +1221,14 @@ impl Params {
         // reaches `consensus_params_id` raw instead.
         match palw_bond_maturity.as_mut() {
             Some(maturity) => fork(&mut maturity.activation, visit),
+            None => {
+                absent = u64::MAX;
+                visit(&mut absent);
+            }
+        }
+        // ADR-0065 D2. A pure fence with no payload, so visiting it is safe.
+        match palw_frontier_provenance.as_mut() {
+            Some(activation) => fork(activation, visit),
             None => {
                 absent = u64::MAX;
                 visit(&mut absent);
@@ -1382,6 +1413,7 @@ impl Params {
             palw_bootstrap_activation,
             palw_unavailable_abstains,
             palw_bond_maturity,
+            palw_frontier_provenance,
             palw_consensus_mode,
             pow_blake2b_sha3_activation,
             pow_palw_activation,
@@ -1517,6 +1549,11 @@ impl Params {
             h.write(b"palw_bond_maturity");
             h.write(maturity.activation.daa_score().to_le_bytes());
             h.write(maturity.window_daa.to_le_bytes());
+        }
+        // ADR-0065 D2, Some-only like its siblings.
+        if let Some(activation) = palw_frontier_provenance {
+            h.write(b"palw_frontier_provenance");
+            h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0042 Decisions 1 + 11: the V2 mode decides block validity wholesale, so it is in
         // the fingerprint — through the RULESET ID, one hash for the whole atomic bundle, which
@@ -1793,6 +1830,7 @@ impl Params {
             palw_bootstrap_activation: self.palw_bootstrap_activation,
             palw_unavailable_abstains: self.palw_unavailable_abstains,
             palw_bond_maturity: self.palw_bond_maturity,
+            palw_frontier_provenance: self.palw_frontier_provenance,
             palw_consensus_mode: self.palw_consensus_mode.clone(),
             // kaspa-pq PoW algo activation is consensus-fixed, never runtime-overridable.
             pow_blake2b_sha3_activation: self.pow_blake2b_sha3_activation,
@@ -2694,6 +2732,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_bootstrap_activation: None,
     palw_unavailable_abstains: None,
     palw_bond_maturity: None,
+    palw_frontier_provenance: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: inert on mainnet until its own fork ADR schedules it.
@@ -2822,6 +2861,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_bootstrap_activation: None,
     palw_unavailable_abstains: None,
     palw_bond_maturity: None,
+    palw_frontier_provenance: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: DISABLED on the public preset (2026-08-12). The Ollama flavor (algo_id = 5)
@@ -2932,6 +2972,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_bootstrap_activation: None,
     palw_unavailable_abstains: None,
     palw_bond_maturity: None,
+    palw_frontier_provenance: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // PALW LLM PoW: simnet keeps instant local kHeavyHash (simulation/tests must not need a model).
@@ -5474,6 +5515,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_bootstrap_activation: None,
     palw_unavailable_abstains: None,
     palw_bond_maturity: None,
+    palw_frontier_provenance: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // PALW LLM PoW from genesis: devnet IS the 0.1-bps LLM-PoW network on this branch. Every
