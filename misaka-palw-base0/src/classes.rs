@@ -167,9 +167,32 @@ pub fn canonical_classes_v1(court: &PalwCourtParamsV2) -> Vec<CanonicalClassV1> 
     // That class stays on chain — nothing produces for it, panels answer Incapable, and the
     // reclaim path is welcome to it — but this ledger must never derive it again, so the Coder
     // takes the next rung.
-    for (model_id, n_ctx) in [("Qwen/Qwen2.5-1.5B", 16u32), ("Qwen/Qwen2.5-Coder-1.5B-Instruct", 18)] {
+    // **The corrected A16 graph rides here too, as a class of its own.**
+    //
+    // The v1 rows carry `qwen25_a16_profile_v1`, which two measurements show does not describe the
+    // engine it runs (`docs/palw-fp-on-registered-classes.md`): its pre table omits the embed-lift
+    // requant the engine performs, and its state chunk map is one byte per element over an `i32`
+    // cache. Either defect alone makes a step leg uncommittable, so no v1 class can serve the
+    // free-prompt lane.
+    //
+    // `qwen25_a16_profile_v2` fixes both, and because a class IS its graph that is a DIFFERENT id —
+    // which is why this is a row rather than an edit. The v1 rows stay exactly as they are:
+    // testnet-11 registered one of them, and a build that changed it would be a different network
+    // wearing the same name. The new row is what `--palw-register-class` can put on a running chain
+    // when somebody decides to.
+    //
+    // It answers to its own name rather than sharing "Qwen/Qwen2.5-1.5B": the flag disambiguates by
+    // model id when an artifact's shape matches more than one class, and two rows answering to one
+    // name would leave it unable to say which.
+    for (model_id, n_ctx, graph_v2) in [
+        ("Qwen/Qwen2.5-1.5B", 16u32, false),
+        ("Qwen/Qwen2.5-Coder-1.5B-Instruct", 18, false),
+        ("Qwen/Qwen2.5-1.5B/graph-v2", 16, true),
+    ] {
         let g = PalwQwen25GeometryV1 { n_ctx, ..QWEN25_1_5B };
-        let Ok(profile) = qwen25_a16_profile_v1(g) else { continue };
+        let profile =
+            if graph_v2 { kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_profile_v2(g) } else { qwen25_a16_profile_v1(g) };
+        let Ok(profile) = profile else { continue };
         out.push(CanonicalClassV1 {
             model_id,
             profile,
@@ -438,6 +461,31 @@ pub fn resolve_class_v1(
 
 #[cfg(test)]
 mod tests {
+
+    /// **The corrected A16 graph is in the catalog, registrable, and is not the class testnet-11
+    /// carries.**
+    ///
+    /// Both halves matter. Registrable, because `--palw-register-class` derives what it files from
+    /// this catalog and a class it does not know cannot be put on a running chain. Not the same id,
+    /// because the two profiles differ in what the court recomputes — and if these ever collided, a
+    /// build could change a live network's class without changing what it calls itself.
+    #[test]
+    fn the_corrected_a16_graph_is_a_registrable_class_of_its_own() {
+        let court = PalwCourtParamsV2::new(kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES, 4, 2).expect("shipped court");
+        let classes = canonical_classes_v1(&court);
+        let v1 = classes.iter().find(|c| c.model_id == "Qwen/Qwen2.5-1.5B").expect("the registered A16 class");
+        let v2 = classes.iter().find(|c| c.model_id == "Qwen/Qwen2.5-1.5B/graph-v2").expect("the corrected A16 class");
+
+        assert_ne!(v1.class_id(), v2.class_id(), "a corrected graph is a different class");
+        assert_eq!(v1.profile.pre_nodes.len() + 1, v2.profile.pre_nodes.len(), "and the difference is the narrowing it names");
+        assert_eq!(
+            v2.profile.state_chunk_map_id,
+            kaspa_consensus_core::palw_state_chunk_map::integer_kv_state_chunk_map_id_v2(),
+            "with the state map its cache actually has"
+        );
+        // One name, one row: the register flag disambiguates by model id.
+        assert_eq!(classes.iter().filter(|c| c.model_id == v2.model_id).count(), 1);
+    }
     use super::*;
 
     fn court() -> PalwCourtParamsV2 {
