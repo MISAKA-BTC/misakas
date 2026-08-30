@@ -148,3 +148,29 @@ So the remaining work for "a meaningful answer that is also work" is:
 3. `disclose` and `bisect_prefix_state`, without which `supports_court` must stay false.
 
 Step 1 is not code. It is the one that has to be made first, and by whoever owns the class set.
+
+
+## Checked exhaustively: no registered class can carry a meaningful free-prompt claim
+
+The A16 finding above is not one class's accident. testnet-11 registers three, and the property
+the free-prompt lane needs — runs a language model AND is adjudicable — belongs to none of them:
+
+| class | language model | `state_chunk_map_id` | `supports_court` |
+|---|---|---|---|
+| `PALW-BASE-0` | no (integer floor, no tokenizer) | v1 (`i8`), correct for its `i8` cache | **true** |
+| `PALW-QWEN25-A16` | yes | v1 (`i8`) declared over an `i32` cache | false |
+| `QWEN36` | yes (34 GiB) | `Hash64::default()` — the unregistered sentinel | false |
+
+BASE-0 can make an adjudicable free-prompt claim today; FP-R1's round-trip test proves it. Its
+answers are token ids from a model that is not a model, which is the honest reason a person would
+not call that "mining with a prompt".
+
+QWEN36 does not even declare a map: the sentinel is the honest value while no layout exists, and
+`verify_binding` refuses a binding that files one the class does not register. So it is in the
+same position as A16 and one step further back.
+
+**That is the whole remaining distance.** Not a bug to fix in an executor: the chain does not
+currently register a class that is both a language model and disputable. Closing it means
+registering one — with a state map that describes its cache (`integer_kv_state_chunk_map_id_v2`
+exists for that), the checkpoint capture against it, and `disclose`/`bisect_prefix_state` so
+`supports_court` can be true without lying. Everything up to that point is landed and tested.
