@@ -1,4 +1,8 @@
-# ADR-0065 — A bond must be earned, and a seat must be someone else
+# ADR-0065 — A bond must be earned, and a failure is not a verdict
+
+*(Titled "…and a seat must be someone else" when drafted. D3 was withdrawn against the code — the
+seat draw already dedups by operator, and "someone else" turned out to be uncheckable. The title now
+names what survived.)*
 
 Status: **Proposed** (2026-08-30). Closes the CRITICAL recorded in the two addenda to
 `docs/palw-mainnet-audit-2026-08-30.md`. **Mainnet blocker.** Consensus-affecting: fingerprint move
@@ -51,9 +55,28 @@ exists, so it adds no state.
 from bonds mature **relative to the fork point**, not merely relative to the branch's own tip.
 Without this, D1 is defeated by rooting the fork later.
 
-**D3 — A seat is a distinct operator.** `derive_panel_v2` draws over distinct owner identities, not
-over bonds. One operator contributes at most one seat to a panel. This is `min_active_validators`'s
-dedup applied where it was always needed.
+**D3 — ~~A seat is a distinct operator.~~ WITHDRAWN: already implemented, and it does not deliver what
+the title claims.** Correcting this ADR against the code before implementing it:
+
+* `derive_panel_v2` **already draws one seat per operator** — `palw_panel_v2.rs:216-228` tickets every
+  eligible bond, sorts, and skips any bond whose `operator_id` is already seated.
+* Registration **already enforces one key, one bond** — `palw_state_v2.rs:4632` refuses a
+  `DuplicateBondKey`, and its comment (audit M2-19) names this exact attack: *"splitting collateral
+  across N registrations of the SAME key manufactured N independent seat tickets, and a 3-of-5 panel
+  is a permanent quorum for whoever holds three of them."*
+
+So the dedup this ADR asked for is not missing. **The property it wanted is not obtainable by dedup at
+all**, and that is the finding: `operator_id` is `palw_operator_id_v2(operator_pubkey)`
+(`palw_state_v2.rs:4642`) over a key the registrant chooses freely and separately from the bond key.
+One party mints as many operator identities as it wants. Host C demonstrates it — three seats, three
+bonds, three operator keys, one machine, all perfectly within the rules.
+
+**"Distinct operator" is not a checkable predicate**, for the same reason silence is not one
+(ADR-0064 Fact A): nothing on-chain distinguishes two identities from two people. Deduping harder
+cannot fix a namespace that is free to enter. The only real levers are the ones that cost something
+(D1, and the collateral floor) and the one that stops a failure being read as guilt (D4). An ADR that
+demands an uncheckable property produces exactly the kind of gate that looks like a defence and
+enforces nothing — which is the failure this whole audit line keeps finding.
 
 **D4 — `Unavailable` must be evidence of a refusal, not of a failure.** A seat that cannot evaluate
 a claim for reasons on its own side (no artifact for the class, no fetch) must **abstain**, not
