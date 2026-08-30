@@ -353,6 +353,28 @@ pub const fn palw_v2_min_genesis_bonds_v1() -> usize {
     PALW_V2_PANEL_SEATS as usize + 1
 }
 
+/// **How many a registry needs before ADR-0065 D1's maturity fence may be ARMED** — which is a
+/// different and larger question than how many it needs to seat a panel at all.
+///
+/// [`palw_v2_min_genesis_bonds_v1`] is the minimum to seat ONE panel with nothing to spare. D1
+/// refuses a seat to any bond registered later than `anchor_daa - bond_maturity_daa`, and the draw
+/// is fail-closed: too few eligible bonds is not a smaller panel, it is `InsufficientEligibleBonds`
+/// — no panel, so the claim voids at `BindTimeout` and the frontier stops. On a registry with no
+/// spare, arming D1 turns any single departure into an outage for a whole maturity window:
+///
+/// * `SEATS + 1` — the executor is excluded from its own panel, so this is the floor to seat at all;
+/// * `+ 1` — one bond may LEAVE eligibility (its holder retires it, or the escrow slash drives its
+///   collateral under `min_collateral_sompi`) and panels must still bind;
+/// * `+ 1` — and its replacement is unseatable for a full `bond_maturity_daa` after it registers,
+///   so the spare has to cover the replacement's own maturity, not just the gap.
+///
+/// Hence `SEATS + 3`. `Params::validate_palw_v2` refuses to arm the fence on a genesis that
+/// registers fewer, so "do not arm D1 on a network running at `seat_count + 1`" is a rule the node
+/// enforces rather than a sentence in an ADR somebody has to remember.
+pub const fn palw_v2_maturity_armable_bonds_v1() -> usize {
+    PALW_V2_PANEL_SEATS as usize + 3
+}
+
 /// A seatable registry from one deterministic seed — the fixture shape every caller needs now that
 /// a registry too small to seat a panel is refused. Each row gets its own outpoint, key AND
 /// operator, because a registry of clones is one operator however long it is.

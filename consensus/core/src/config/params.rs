@@ -708,6 +708,29 @@ impl Params {
                     "palw_bond_maturity is armed before its own window has elapsed since genesis — every genesis bond                      would be immature at once and no panel could be drawn",
                 ));
             }
+            // **And the registry has to have somewhere to fall back to.** The guard above proves
+            // the genesis bonds are mature when the fence fires; it can say nothing about a
+            // REPLACEMENT. On a registry with no spare, one bond leaving eligibility — retired, or
+            // slashed under `min_collateral_sompi` — makes every panel undrawable for a whole
+            // maturity window, because the replacement is itself immature. A short draw is not a
+            // smaller panel, it is no panel, so that is an outage and not a degradation.
+            //
+            // ADR-0065 records this as "do not arm D1 on a network running at `seat_count + 1`
+            // bonds". A sentence in an ADR is not a gate, so this is the gate.
+            if armed != u64::MAX {
+                let registered = bundle
+                    .genesis_objects
+                    .iter()
+                    .filter(|o| matches!(o, crate::palw_state_v2::PalwConsensusObjectV2::BondRegistered { .. }))
+                    .count();
+                if registered < crate::palw_fp_devnet_v3::palw_v2_maturity_armable_bonds_v1() {
+                    return Err(PalwModeV2Error::Invalid(
+                        "palw_bond_maturity is armed on a genesis whose bond registry has no spare seat: D1 makes a \
+                         replacement bond unseatable for a full window, so one departure would leave every claim unable \
+                         to bind. Grow the registry to PALW_V2_PANEL_SEATS + 3 before arming it.",
+                    ));
+                }
+            }
         }
         if self.pow_palw_activation.is_active(u64::MAX - 1) || self.pow_palw_ollama_activation.is_active(u64::MAX - 1) {
             return Err(PalwModeV2Error::Invalid("a ConsensusV2 network may not activate any V1 PALW proof-of-work"));
@@ -6296,15 +6319,17 @@ mod consensus_params_id_tests {
         too_early.palw_bond_maturity = Some(PalwBondMaturityV1 { activation: ForkActivation::new(500), window_daa: 1_000 });
         assert!(too_early.validate_palw_v2().is_err(), "a fence that starves its own draw must not be runnable");
 
-        // Armed past the window: legal, and it is the same configuration an operator would
-        // actually ship.
-        let mut sound = palw_rc_shipped_params();
+        // Armed past the window: legal — on a registry that can carry the fence at all. It is
+        // grown here so this test keeps asserting the WINDOW rule and not the registry rule beside
+        // it (`arming_bond_maturity_needs_a_registry_with_a_spare_seat` owns that one); on the
+        // shipped six-bond registry the same params are refused, for the other reason.
+        let mut sound = rc_params_with_a_spare_seat();
         sound.palw_bond_maturity = Some(PalwBondMaturityV1 { activation: ForkActivation::new(1_000), window_daa: 1_000 });
         assert!(sound.validate_palw_v2().is_ok(), "armed at or past its own window, the genesis registry is mature");
 
         // A zero window is the rule switched off while claiming to be on — refused, because a
         // gate that cannot refuse anything is the failure mode this ADR line keeps finding.
-        let mut zero = palw_rc_shipped_params();
+        let mut zero = rc_params_with_a_spare_seat();
         zero.palw_bond_maturity = Some(PalwBondMaturityV1 { activation: ForkActivation::new(1_000), window_daa: 0 });
         assert!(zero.validate_palw_v2().is_err(), "a zero window is a fence with nothing behind it");
 
@@ -6312,6 +6337,74 @@ mod consensus_params_id_tests {
         let mut never = palw_rc_shipped_params();
         never.palw_bond_maturity = Some(PalwBondMaturityV1 { activation: ForkActivation::never(), window_daa: 1_000 });
         assert!(never.validate_palw_v2().is_ok(), "an unarmed fence starves nothing");
+    }
+
+    /// The shipped RC params with the bond registry grown to what arming D1 requires.
+    ///
+    /// Built by cloning a real registration and moving its bond key, so the extra rows are real
+    /// registry entries rather than a bumped count — the gate reads the objects, so a fixture that
+    /// faked the number would not exercise it.
+    #[cfg(test)]
+    fn rc_params_with_a_spare_seat() -> Params {
+        use crate::palw_state_v2::PalwConsensusObjectV2;
+        let mut grown = palw_rc_shipped_params();
+        if let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) = &mut grown.palw_consensus_mode {
+            let template = b
+                .genesis_objects
+                .iter()
+                .find(|o| matches!(o, PalwConsensusObjectV2::BondRegistered { .. }))
+                .expect("the shipped genesis registers bonds")
+                .clone();
+            let extra = crate::palw_fp_devnet_v3::palw_v2_maturity_armable_bonds_v1()
+                - crate::palw_fp_devnet_v3::palw_v2_min_genesis_bonds_v1();
+            for i in 0..extra {
+                let mut row = template.clone();
+                if let PalwConsensusObjectV2::BondRegistered { bond, .. } = &mut row {
+                    bond.0.index = 900 + i as u32;
+                }
+                b.genesis_objects.push(row);
+            }
+        }
+        grown
+    }
+
+    /// **D1 may not be armed on a registry with no spare seat**, which is the shipped one.
+    ///
+    /// The arming guard beside this one proves the GENESIS bonds are mature when the fence fires.
+    /// It can say nothing about a replacement, and that is the case that bites: one bond leaving
+    /// eligibility — retired, or slashed under `min_collateral_sompi` — makes every panel
+    /// undrawable for a full maturity window, because the replacement is itself immature. A short
+    /// draw is `InsufficientEligibleBonds`: no panel, so the claim voids at `BindTimeout`.
+    ///
+    /// ADR-0065 recorded this as an instruction ("do not arm D1 on a network running at
+    /// `seat_count + 1`"). This asserts it is a rule instead. Both positions on one preset, because
+    /// a gate that refused everything would also pass the first half.
+    #[test]
+    fn arming_bond_maturity_needs_a_registry_with_a_spare_seat() {
+        use crate::palw_fp_devnet_v3::{palw_v2_maturity_armable_bonds_v1, palw_v2_min_genesis_bonds_v1};
+        use crate::palw_state_v2::PalwConsensusObjectV2;
+
+        // The shipped registry is the bare minimum to seat one panel, and that is not enough.
+        let shipped = palw_rc_shipped_params();
+        let bonds = |p: &Params| match &p.palw_consensus_mode {
+            crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) => {
+                b.genesis_objects.iter().filter(|o| matches!(o, PalwConsensusObjectV2::BondRegistered { .. })).count()
+            }
+            _ => 0,
+        };
+        assert_eq!(bonds(&shipped), palw_v2_min_genesis_bonds_v1(), "the shipped genesis seats a panel with nothing to spare");
+        assert!(bonds(&shipped) < palw_v2_maturity_armable_bonds_v1(), "…which is below what arming D1 requires");
+
+        let mut armed = palw_rc_shipped_params();
+        armed.palw_bond_maturity = Some(PalwBondMaturityV1 { activation: ForkActivation::new(1_000), window_daa: 1_000 });
+        let err = armed.validate_palw_v2().expect_err("arming D1 on a spare-less registry must be refused");
+        assert!(format!("{err}").contains("no spare seat"), "refused for the registry, not for something else: {err}");
+
+        // Grow the registry past the bar and the same fence is legal.
+        let mut grown = rc_params_with_a_spare_seat();
+        assert_eq!(bonds(&grown), palw_v2_maturity_armable_bonds_v1());
+        grown.palw_bond_maturity = Some(PalwBondMaturityV1 { activation: ForkActivation::new(1_000), window_daa: 1_000 });
+        assert!(grown.validate_palw_v2().is_ok(), "with a spare seat the same fence is legal");
     }
 
     /// ADR-0065 D1's fence, in the four identity positions — and the DURATION beside it, which is
