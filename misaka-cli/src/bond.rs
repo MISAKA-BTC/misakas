@@ -298,8 +298,28 @@ pub async fn retire(
     //
     // Checking here rather than at submission also means `--dry-run` tells the truth: a dry run that
     // "succeeds" for a key that cannot possibly retire this bond is a rehearsal of the wrong play.
+    //
+    // **And an ABSENT answer is not a pass.** This guard used to skip itself when the node
+    // returned an empty `bond_registered_pubkey` — a fail-open on a field this CLI does not
+    // compute and cannot vouch for. Consensus makes an empty registered key unreachable on a real
+    // chain (the acceptance layer verifies the registration signature against it, and
+    // `verify_mldsa87_with_context` refuses any key that is not `MLDSA87_PK_LEN`), so the skip was
+    // guarding a condition that cannot arise HERE — which is exactly why it was wrong to write it
+    // that way: the value arrives over RPC from a node this CLI does not control, and "the field
+    // was blank" is the one answer that must never be read as "the key matches".
     let ours = faster_hex::hex_string(key.public_key());
-    if !facts.bond_registered_pubkey.is_empty() && !ours.eq_ignore_ascii_case(&facts.bond_registered_pubkey) {
+    if facts.bond_registered_pubkey.is_empty() {
+        return Err(CliError::new(
+            exit::GENERIC,
+            format!(
+                "the node reported bond {}:{} as registered but returned no registered public key, so this CLI cannot tell whether \
+                 the key you supplied owns it. Refusing rather than signing a release it cannot check — update the node, or query \
+                 one that answers `getPalwProducerFacts` in full.",
+                bond_outpoint.transaction_id, bond_outpoint.index
+            ),
+        ));
+    }
+    if !ours.eq_ignore_ascii_case(&facts.bond_registered_pubkey) {
         return Err(CliError::new(
             exit::GENERIC,
             format!(
