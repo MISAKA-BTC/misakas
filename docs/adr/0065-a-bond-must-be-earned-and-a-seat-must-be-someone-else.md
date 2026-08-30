@@ -132,6 +132,15 @@ supposed to impose, and it does impose it.
 Note also that `PalwCandidateOrderV1` is four scalars (`palw_fork_choice.rs:38-53`), so any
 provenance a comparison-site rule wants has to widen that seam or be computed beside it.
 
+**And with D1 armed, most of what D2 was reaching for is already paid for.** A fork that mints its
+own sybil bonds cannot seat them until the fork itself has advanced `bond_maturity_daa` — that is
+the cost, and it is imposed by a single-chain rule with no fork point in it. What D2 leaves over is
+the bond **pre-registered on the honest chain** and held as a standing, retroactive option: it is
+mature at the fork point, so it is mature relative to it, and D2 *as written* would not have caught
+it either. That residual is a **pricing** question (D6 and the collateral floor), not a provenance
+one — which is worth saying plainly, because the two were run together in the original draft and
+the provenance half is the expensive one.
+
 **D3 — ~~A seat is a distinct operator.~~ WITHDRAWN: already implemented, and it does not deliver what
 the title claims.** Correcting this ADR against the code before implementing it:
 
