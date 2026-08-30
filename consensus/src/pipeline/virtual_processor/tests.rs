@@ -8924,10 +8924,10 @@ async fn a_callers_prompt_runs_and_no_registered_class_can_earn_a_draw_with_it()
 
     // Signed over the claim id, which is what the extraction verifies — the bond answering for the
     // work, not a fixture asserting that somebody would have.
-    let claim_id = fp_claim_id_v3(&commitment);
+    let claim_id_signed = fp_claim_id_v3(&commitment);
     let signature = libcrux_ml_dsa::ml_dsa_87::sign(
         &keypair.signing_key,
-        claim_id.as_byte_slice(),
+        claim_id_signed.as_byte_slice(),
         PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT,
         [0u8; 32],
     )
@@ -8943,6 +8943,47 @@ async fn a_callers_prompt_runs_and_no_registered_class_can_earn_a_draw_with_it()
     })
     .expect("the commitment payload serializes");
     let tx = Transaction::new(0, vec![], vec![], 0, SUBNETWORK_ID_PALW_FP_COMMITMENT.clone(), 0, payload);
+
+    let weights = bundle.freeprompt.cu_weights();
+    let best_here = kaspa_consensus_core::palw_freeprompt_v3::fp_cu_v3(1, ctx_max as u32 - 1, weights);
+
+    // **The same commitment under a quantum the classes can actually reach.**
+    //
+    // Everything above is the shipped pricing, and it refuses. This rebuilds the free-prompt
+    // params with one number changed — a quantum sized to the contexts that exist rather than to a
+    // 256-token chat — and nothing else, to show the refusal is the pricing and not the work. The
+    // shipped bundle is untouched: `palw_fp_devnet_bundle_v3` is what testnet-11's own params are
+    // built from, so its `QUANTUM_CU` is a consensus value and moving it would move that network's
+    // ruleset id.
+    let reachable = kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptParamsV3::new(
+        bundle.freeprompt.receipt_algorithm_id(),
+        best_here / 2,
+        bundle.freeprompt.pwu_per_quantum(),
+        *weights,
+        bundle.freeprompt.max_quanta_per_receipt(),
+        bundle.freeprompt.max_prompt_tokens(),
+        bundle.freeprompt.max_decode_tokens(),
+        bundle.freeprompt.receipt_maturity_daa(),
+        bundle.freeprompt.receipt_use_window_daa(),
+        bundle.freeprompt.max_beacon_gap_daa(),
+    )
+    .expect("a smaller quantum is still a valid parameter set");
+    let priced = kaspa_consensus_core::palw_fp_objects_v3::palw_fp_objects_from_accepted_txs_v3(
+        std::slice::from_ref(&tx),
+        job.network_domain,
+        &reachable,
+        kaspa_consensus_core::BlockHash::default(),
+        |pubkey: &[u8], message: &[u8], context: &[u8], signature: &[u8]| {
+            kaspa_txscript::verify_mldsa87_with_context(pubkey, message, context, signature).unwrap_or(false)
+        },
+    );
+    assert!(priced.skipped.is_empty(), "the same work, priced within reach, is taken: {:?}", priced.skipped);
+    let [carried] = &priced.objects[..] else { panic!("exactly one object rides a commitment") };
+    let Obj::FreePromptCommitted { claim, class_id, .. } = &carried.object else {
+        panic!("and it commits a free-prompt claim: {:?}", carried.object)
+    };
+    assert_eq!(*claim, claim_id_signed, "the claim the chain opened is the one the executor signed");
+    assert_eq!(*class_id, entry.class_id(), "under the class that ran it");
 
     let extraction = kaspa_consensus_core::palw_fp_objects_v3::palw_fp_objects_from_accepted_txs_v3(
         std::slice::from_ref(&tx),
@@ -8960,8 +9001,6 @@ async fn a_callers_prompt_runs_and_no_registered_class_can_earn_a_draw_with_it()
     assert_eq!(*why, "job earns no quanta");
 
     // And it is not this job's fault: the class's own ceiling cannot reach the bundle's quantum.
-    let weights = bundle.freeprompt.cu_weights();
-    let best_here = kaspa_consensus_core::palw_freeprompt_v3::fp_cu_v3(1, ctx_max as u32 - 1, weights);
     assert!(
         best_here < bundle.freeprompt.quantum_cu(),
         "the widest job this class can hold prices at {best_here}, under the {}-CU quantum",
