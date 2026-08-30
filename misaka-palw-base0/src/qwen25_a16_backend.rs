@@ -111,7 +111,7 @@ pub fn qwen25_a16_material_encode_v1(run: &Qwen25A16RunV1) -> Vec<u8> {
 
 pub fn qwen25_a16_material_decode_v1(bytes: &[u8]) -> Option<Qwen25A16RunV1> {
     let mut i = 0usize;
-    let mut u64_at = |i: &mut usize| -> Option<u64> {
+    let u64_at = |i: &mut usize| -> Option<u64> {
         let end = i.checked_add(8)?;
         if end > bytes.len() {
             return None;

@@ -197,8 +197,7 @@ unsafe fn dot_i8_a16_avx2(w: &[i8], x: &[i16]) -> i64 {
     let mut base = 0usize;
     while base < n {
         let end = (base + CHUNK).min(n);
-        // SAFETY: register-only.
-        let mut acc = unsafe { _mm256_setzero_si256() };
+        let mut acc = _mm256_setzero_si256();
         let mut i = base;
         while i + 16 <= end {
             // SAFETY: 16 elements remain in both slices from `i` — 16 bytes of `w`, 32 bytes
@@ -242,7 +241,17 @@ const _: () = assert!(
 /// 1,536 channels on Qwen2.5's down-projection — which is most of what the fast path saves.
 pub struct A16Operand {
     codes: Vec<i16>,
+    /// **Read from inline assembly, and only on aarch64.** `dot_i8_a16_dotprod` takes
+    /// `x.hi.as_ptr()` / `x.lo.as_ptr()` straight into `asm!` operands, which is a read the
+    /// compiler cannot see and which does not exist at all on another architecture — so on
+    /// x86_64 these are genuinely never read and `-D warnings` fails the build there.
+    ///
+    /// Allowed exactly where that is true, rather than deleted: deleting them to satisfy a lint
+    /// on the CI runner's architecture would remove the operands the ARM fast path loads, on
+    /// every ARM host, to fix a warning on x86. The split itself is the point — see the doc above.
+    #[cfg_attr(not(target_arch = "aarch64"), allow(dead_code))]
     hi: Vec<i8>,
+    #[cfg_attr(not(target_arch = "aarch64"), allow(dead_code))]
     lo: Vec<u8>,
 }
 
