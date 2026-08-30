@@ -982,8 +982,8 @@ async fn a_duplicate_lifecycle_object_is_dropped_and_the_block_stands() {
 async fn palw_v2_the_bootstrap_registry_is_the_state_the_transition_will_hold() {
     use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
     use kaspa_consensus_core::palw_state_v2::{
-        PALW_BOND_REGISTRATION_V2_MLDSA87_CONTEXT, PALW_BOND_RETIREMENT_V2_MLDSA87_CONTEXT, PalwBondKeyV2,
-        PalwBondStatusV2, PalwConsensusObjectV2, palw_bond_registration_message_v2, palw_bond_retirement_message_v2,
+        PALW_BOND_REGISTRATION_V2_MLDSA87_CONTEXT, PALW_BOND_RETIREMENT_V2_MLDSA87_CONTEXT, PalwBondKeyV2, PalwBondStatusV2,
+        PalwConsensusObjectV2, palw_bond_registration_message_v2, palw_bond_retirement_message_v2,
     };
     use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
 
@@ -1017,10 +1017,7 @@ async fn palw_v2_the_bootstrap_registry_is_the_state_the_transition_will_hold() 
     let collateral = bundle.bond.min_collateral_sompi();
     let payout_payload = kaspa_hashes::Hash64::from_u64_word(0x9A11);
     let sign = |message: kaspa_hashes::Hash64, context: &[u8]| {
-        libcrux_ml_dsa::ml_dsa_87::sign(&kp.signing_key, message.as_byte_slice(), context, [0u8; 32])
-            .expect("sign")
-            .as_ref()
-            .to_vec()
+        libcrux_ml_dsa::ml_dsa_87::sign(&kp.signing_key, message.as_byte_slice(), context, [0u8; 32]).expect("sign").as_ref().to_vec()
     };
     let registered = PalwConsensusObjectV2::BondRegistered {
         bond,

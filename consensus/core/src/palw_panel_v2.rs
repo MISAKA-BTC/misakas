@@ -850,8 +850,7 @@ mod tests {
     fn adr_0065_d1_a_fresh_bond_may_not_take_a_seat_until_it_has_stood() {
         let (state, claim_id) = populated_state();
         // The whole registry stands at DAA 100; one newcomer registers a century later.
-        let (late, _) =
-            apply_palw_transition_v2(&state, &state_params(), &ctx(3, 200, 3), &[register(7, 13, 0x27)], None).unwrap();
+        let (late, _) = apply_palw_transition_v2(&state, &state_params(), &ctx(3, 200, 3), &[register(7, 13, 0x27)], None).unwrap();
         let anchor = BlockHash::from_u64_word(0xA1);
         let four = PalwPanelParamsV2::new(4, 3, 4).unwrap();
 

@@ -187,10 +187,7 @@ pub fn check_palw_producer_entitlement_v2_with_bootstrap(
 ) -> Result<(), PalwAdmissionV2Error> {
     // 1 + 9. The bond, at the candidate point, in one status read.
     let bond_key = PalwBondKeyV2(attempt.executor_bond);
-    let bond = state
-        .bond(&bond_key)
-        .or(bootstrap_bond)
-        .ok_or(PalwAdmissionV2Error::BondMissing(bond_key))?;
+    let bond = state.bond(&bond_key).or(bootstrap_bond).ok_or(PalwAdmissionV2Error::BondMissing(bond_key))?;
     if let PalwBondStatusV2::Retiring { .. } = bond.status {
         return Err(PalwAdmissionV2Error::BondRetiring(bond_key));
     }
@@ -759,8 +756,7 @@ mod tests {
             activation_daa: 0,
             admission: None,
         }];
-        let (classes_only, _) =
-            apply_palw_transition_v2(&PalwChainStateV2::genesis(), &sp, &ctx(1, 100, 1), &objects, None).unwrap();
+        let (classes_only, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &sp, &ctx(1, 100, 1), &objects, None).unwrap();
 
         let env = attempt(10, 1);
         let bond_key = PalwBondKeyV2(env.attempt.executor_bond);
@@ -791,10 +787,9 @@ mod tests {
         // does not have, and admission still refuses — on the CLASS, not the bond.
         let mut wrong_class = attempt(10, 1);
         wrong_class.attempt.class_id = h64(999);
-        wrong_class.attempt.challenge =
-            challenge_v2(h64(NET), h64(PPH), TS, 1, h64(999), &wrong_class.attempt.executor_bond);
-        let err = check_palw_attempt_admission_v2_with_bootstrap(&classes_only, &sp, &ap, &c, &wrong_class, Some(&declared))
-            .unwrap_err();
+        wrong_class.attempt.challenge = challenge_v2(h64(NET), h64(PPH), TS, 1, h64(999), &wrong_class.attempt.executor_bond);
+        let err =
+            check_palw_attempt_admission_v2_with_bootstrap(&classes_only, &sp, &ap, &c, &wrong_class, Some(&declared)).unwrap_err();
         assert!(
             matches!(err, PalwAdmissionV2Error::ClassMissing(_)),
             "only the BOND lookup moves; everything else still reads the parent state: {err:?}"
@@ -809,8 +804,7 @@ mod tests {
             kaspa_hashes::Hash64::from_u64_word(0x9A11),
             101,
         );
-        let err = check_palw_attempt_admission_v2_with_bootstrap(&classes_only, &sp, &ap, &c, &env, Some(&impostor))
-            .unwrap_err();
+        let err = check_palw_attempt_admission_v2_with_bootstrap(&classes_only, &sp, &ap, &c, &env, Some(&impostor)).unwrap_err();
         assert!(
             matches!(err, PalwAdmissionV2Error::BondKeyMismatch),
             "a mergeset-declared bond is still the bond it says it is: {err:?}"
