@@ -84,6 +84,39 @@ pub fn generate(path: &str, prefix: Prefix) -> Result<(Address, [u8; VALIDATOR_S
     Ok((addr, seed))
 }
 
+/// `misaka key import`: write an EXISTING 32-byte ML-DSA-87 seed to the 0600 file the rest of the
+/// CLI consumes (ADR-0063 D1).
+///
+/// A key this tree cannot import is a key this tree cannot spend, so every backup, air-gapped
+/// host and second machine was unreachable — `key gen` and `key address` were the whole surface.
+///
+/// **The secret arrives on stdin, never as an argument**, which is the promise `misaka key`'s own
+/// help already makes and this is the verb most likely to break it: an argument lands in the shell
+/// history, the process table and every `ps` on the box. Same `O_EXCL` + 0600 write as `generate`,
+/// so an import can no more clobber an existing key than a generate can.
+///
+/// BIP39 is deliberately absent. The web wallet carries a bip39 implementation and this tree
+/// carries none, so the two have no agreed derivation to this seed — an import that guessed one
+/// would hand back a different address in silence, which is worse than refusing. Specifying that
+/// derivation is a prerequisite of importing a mnemonic, not part of this command.
+pub fn import(path: &str, prefix: Prefix, seed_hex: &str) -> Result<Address, CliError> {
+    let seed = decode_seed_hex(seed_hex.trim())?;
+    let mut hex = vec![0u8; VALIDATOR_SEED_LEN * 2];
+    faster_hex::hex_encode(&seed, &mut hex).expect("hex encode");
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt as _;
+        opts.mode(0o600);
+    }
+    let mut f = opts
+        .open(path)
+        .map_err(|e| CliError::new(exit::GENERIC, format!("create {path}: {e} (refusing to overwrite an existing key file)")))?;
+    f.write_all(&hex).map_err(|e| CliError::new(exit::GENERIC, format!("write {path}: {e}")))?;
+    Ok(ValidatorKey::from_seed(seed).funding_address(prefix))
+}
+
 /// Dependency-free CSPRNG: 32 bytes from the OS.
 fn fill_random(buf: &mut [u8]) -> Result<(), CliError> {
     std::fs::File::open("/dev/urandom")

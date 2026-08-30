@@ -31,11 +31,11 @@ use crate::node::Ctx;
 use crate::{CliError, CliResult, OutputFormat, exit};
 
 /// A self funding UTXO already converted to consensus types + its maturity.
-struct Funding {
-    outpoint: TransactionOutpoint,
-    entry: UtxoEntry,
-    mature: bool,
-    amount: u64,
+pub(crate) struct Funding {
+    pub(crate) outpoint: TransactionOutpoint,
+    pub(crate) entry: UtxoEntry,
+    pub(crate) mature: bool,
+    pub(crate) amount: u64,
     /// This outpoint is a validator StakeBond whose collateral consensus still LOCKS, as the NODE
     /// reports it. A bond past its unbonding period is not marked — see `locked_bond_outpoints`.
     ///
@@ -46,13 +46,13 @@ struct Funding {
     /// threads an exclusion through bond, unbond and equivocate. The wallet, which wraps the SAME
     /// signing path a validator bonds with, did not (audit M1-3): the bond is typically the largest
     /// UTXO at that address, and selection is largest-first.
-    bonded: bool,
+    pub(crate) bonded: bool,
 }
 
 /// One connect + getServerInfo, shared by all wallet commands.
-struct NodeView {
-    client: KaspaRpcClient,
-    params: Params,
+pub(crate) struct NodeView {
+    pub(crate) client: KaspaRpcClient,
+    pub(crate) params: Params,
     virtual_daa: u64,
     coinbase_maturity: u64,
     /// **The second gate on a coinbase spend** (ADR-0018), which the maturity floor is not.
@@ -63,7 +63,7 @@ struct NodeView {
     settlement_long_maturity_daa: u64,
 }
 
-async fn connect(ctx: &Ctx) -> Result<NodeView, CliError> {
+pub(crate) async fn connect(ctx: &Ctx) -> Result<NodeView, CliError> {
     // Derive the Borsh endpoint: explicit --rpc wins, else the local endpoint registry,
     // else this network's default loopback port.
     let net = NetworkId::from_str(&ctx.network)
@@ -233,7 +233,7 @@ fn parse_outpoint_str(s: &str) -> Option<TransactionOutpoint> {
     Some(TransactionOutpoint::new(tx.parse().ok()?, ix.parse().ok()?))
 }
 
-async fn page_all(nv: &NodeView, address: &Address) -> Result<Vec<Funding>, CliError> {
+pub(crate) async fn page_all(nv: &NodeView, address: &Address) -> Result<Vec<Funding>, CliError> {
     let bonds = locked_bond_outpoints(nv).await?;
     let mut out = Vec::new();
     let mut cursor = String::new();
@@ -275,7 +275,7 @@ fn mass_calc(p: &Params) -> MassCalculator {
 
 /// Mass-based fee for an `n`-input native tx of the given kind (send vs
 /// consolidate), built from dummy self-UTXOs (field SIZES drive the mass).
-fn estimate_fee(key: &ValidatorKey, p: &Params, n_inputs: usize, consolidate: bool) -> u64 {
+pub(crate) fn estimate_fee(key: &ValidatorKey, p: &Params, n_inputs: usize, consolidate: bool) -> u64 {
     let spk = pay_to_address_script(&key.funding_address(p.prefix()));
     let n = n_inputs.max(1);
     let per = u64::MAX / (2 * n as u64);
@@ -302,7 +302,7 @@ fn estimate_fee(key: &ValidatorKey, p: &Params, n_inputs: usize, consolidate: bo
 const MAX_INPUTS_PER_TX: usize = 20; // each ML-DSA-87 input ≈ 7 KB; keep the tx within block mass
 const MAX_TXS_PER_RUN_HARD_CAP: usize = 200;
 
-fn sompi_to_msk(s: u64) -> String {
+pub(crate) fn sompi_to_msk(s: u64) -> String {
     format!("{}.{:08}", s / 100_000_000, s % 100_000_000)
 }
 

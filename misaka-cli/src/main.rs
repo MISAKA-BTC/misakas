@@ -19,6 +19,7 @@
 //! `exit`) so systemd / shell / monitors can branch on them.
 
 mod ask;
+mod bond;
 mod bootstrap;
 mod config;
 mod eth;
@@ -128,9 +129,12 @@ enum Command {
     /// PQ wallet operations (UTXO list / consolidate / send).
     #[command(subcommand)]
     Wallet(WalletCmd),
-    /// Key management (generate / show address). The secret is never a CLI arg.
+    /// Key management (generate / import / show address). The secret is never a CLI arg.
     #[command(subcommand)]
     Key(KeyCmd),
+    /// PALW bond operations — see the collateral this key holds, and retire it (ADR-0063).
+    #[command(subcommand)]
+    Bond(BondCmd),
     /// Operator config (`~/.misaka/config.toml`): write a scaffold / show effective values.
     #[command(subcommand)]
     Config(ConfigCmd),
@@ -353,6 +357,49 @@ enum KeyCmd {
         #[command(flatten)]
         key: KeyArgs,
     },
+    /// Import an EXISTING 32-byte ML-DSA-87 seed, read as hex from stdin, into a 0600 file.
+    ///
+    /// The secret is never a CLI argument: pipe it in (`cat seed.hex | misaka key import --out
+    /// /etc/misaka/bond.key`). A BIP39 mnemonic is NOT accepted — this tree and the web wallet
+    /// have no agreed derivation to an ML-DSA-87 seed, and guessing one would silently produce a
+    /// different address.
+    Import {
+        /// Output seed file path (refuses to overwrite).
+        #[arg(long)]
+        out: String,
+        /// Read the 64-hex-character seed from stdin. Required, and the only accepted source.
+        #[arg(long)]
+        hex_stdin: bool,
+    },
+}
+
+/// ADR-0063 D2/D3: the operator's half of the PALW bond lifecycle.
+#[derive(Subcommand, Debug)]
+enum BondCmd {
+    /// Show the bond outpoint(s) this key holds, from the chain — the outpoint
+    /// `--palw-producer-bond` needs, which the node prints once at registration and stores nowhere.
+    Status {
+        #[command(flatten)]
+        key: KeyArgs,
+    },
+    /// Request retirement of a bond: sign the release the consensus rule already accepts.
+    ///
+    /// The collateral is released after the withdrawal delay, not immediately. Refuses while the
+    /// bond has unresolved claims, because retiring then would pull the collateral out from under
+    /// a live dispute.
+    Retire {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// Which bond, as `<txid>:<index>`. Optional when this key holds exactly one.
+        #[arg(long)]
+        bond: Option<String>,
+        /// Build and price the carrier, print it, submit nothing.
+        #[arg(long)]
+        dry_run: bool,
+        /// Submit. Without it the command stops after printing what it would do.
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 /// Parse a decimal MSK string (e.g. "10.5") into sompi (1 MSK = 1e8 sompi).
@@ -389,6 +436,31 @@ fn key_gen(ctx: &node::Ctx, out: &str) -> CliResult {
     match ctx.output {
         OutputFormat::Human => {
             println!("Wrote a new ML-DSA-87 seed to {out} (mode 0600). BACK IT UP — it cannot be recovered.");
+            println!("Address: {addr}");
+        }
+        OutputFormat::Json => println!("{}", serde_json::json!({ "ok": true, "file": out, "address": addr.to_string() })),
+    }
+    Ok(())
+}
+
+/// `misaka key import` (ADR-0063 D1). Stdin only — see `keys::import` for why an argument is
+/// refused even though it would be more convenient exactly once.
+fn key_import(ctx: &node::Ctx, out: &str, hex_stdin: bool) -> CliResult {
+    if !hex_stdin {
+        return Err(CliError::new(
+            exit::GENERIC,
+            "pass --hex-stdin and pipe the 64-hex-character ML-DSA-87 seed in. A mnemonic is not accepted: this tree and the web wallet have no agreed BIP39 derivation to an ML-DSA-87 seed, so an import that guessed one would return a different address without saying so."
+                .to_string(),
+        ));
+    }
+    let mut buf = String::new();
+    std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)
+        .map_err(|e| CliError::new(exit::GENERIC, format!("read the seed from stdin: {e}")))?;
+    let prefix = prefix_of(&ctx.network)?;
+    let addr = keys::import(out, prefix, &buf)?;
+    match ctx.output {
+        OutputFormat::Human => {
+            println!("Imported an ML-DSA-87 seed to {out} (mode 0600).");
             println!("Address: {addr}");
         }
         OutputFormat::Json => println!("{}", serde_json::json!({ "ok": true, "file": out, "address": addr.to_string() })),
@@ -665,6 +737,11 @@ async fn main() -> std::process::ExitCode {
         },
         Command::Key(KeyCmd::Gen { out }) => key_gen(&ctx, &out),
         Command::Key(KeyCmd::Address { key }) => key_address(&ctx, &key.source()),
+        Command::Key(KeyCmd::Import { out, hex_stdin }) => key_import(&ctx, &out, hex_stdin),
+        Command::Bond(BondCmd::Status { key }) => bond::status(&ctx, &key.source()).await,
+        Command::Bond(BondCmd::Retire { key, bond, dry_run, yes }) => {
+            bond::retire(&ctx, &key.source(), bond.as_deref(), dry_run, yes).await
+        }
         Command::Config(ConfigCmd::Init { force }) => config::init(&ctx.network, force),
         Command::Config(ConfigCmd::Show) => {
             config::show(ctx.output, &ctx.network, &ctx.rpc, &cli.node_grpc, &cfg.node.grpc, &ctx.evm_rpc)

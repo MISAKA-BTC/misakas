@@ -98,9 +98,32 @@ pub fn validator(ctx: &Ctx, args: &[String]) -> CliResult {
 }
 
 /// `misaka miner …` → `kaspa-pq-miner [--network-id …] …`.
+/// **`misaka miner` no longer forwards** (ADR-0063 D4).
+///
+/// It forwarded to `kaspa-pq-miner`, which is not installed on the fleet hosts this was measured
+/// on — and on a `ConsensusV2` network it could not have worked if it were: every block's proof of
+/// work is a deterministic LLM inference under a registered bond, so a hash miner has no lane to
+/// mine. A command that exists and cannot run teaches an operator that the tool is unreliable, in
+/// the one place they most need to trust it, so it says what to run instead.
+///
+/// `MISAKA_MINER_BIN` still forces the old behaviour for the hash-only networks where a hash miner
+/// is the real thing: the refusal is about the default, not about the capability.
 pub fn miner(ctx: &Ctx, args: &[String]) -> CliResult {
-    let injected = miner_injection(&ctx.network, &ctx.node_grpc, args);
-    exec("kaspa-pq-miner", "MISAKA_MINER_BIN", &[], &injected, args)
+    if std::env::var_os("MISAKA_MINER_BIN").is_some() {
+        let injected = miner_injection(&ctx.network, &ctx.node_grpc, args);
+        return exec("kaspa-pq-miner", "MISAKA_MINER_BIN", &[], &injected, args);
+    }
+    Err(CliError::new(
+        exit::GENERIC,
+        format!(
+            "there is no hash miner for {}: on a PALW network every block's proof of work is a deterministic LLM inference made under a registered bond, so mining means running a producer, not a miner.\n\n  \
+             1. `misaka key gen --out /etc/misaka/bond.key`   (or `key import` for an existing seed)\n  \
+             2. fund that address, then register a bond with `kaspad --palw-register-bond`\n  \
+             3. run the node with `--palw-produce` (see docs/testnet11-join-mining.md)\n\n\
+             `misaka bond status` shows the bond once it is registered. If you do have a hash miner binary for a hash-only network, set MISAKA_MINER_BIN to its path and this command forwards to it as before.",
+            ctx.network
+        ),
+    ))
 }
 
 /// Map a network-id to kaspad's network-selection flags. Port-free: kaspad derives every
