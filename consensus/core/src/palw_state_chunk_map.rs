@@ -51,6 +51,52 @@ use crate::palw_v2::PalwJobContextV2;
 pub const PALW_INTEGER_KV_STATE_CHUNK_MAP_NAME_V1: &str = "palw-integer-kv/i8/kind-major(k,v)/layer-asc/position-asc/row=attn_kv_heads*attn_head_dim/\
      chunk=floor(1048576/row)/v1";
 
+/// **The same map at the width an `i32` cache actually has (v2).**
+///
+/// The v1 name says `i8`, and it is exact for a class whose KV cache is `Vec<Vec<Vec<i8>>>` —
+/// BASE-0's is. `A16Cache` holds `Vec<Vec<Vec<i32>>>`, and a class that declares v1 over that
+/// state declares a layout it does not hold: `row_bytes` and the element COUNT come out equal, so
+/// the length guard in a serializer passes and every value outside `i8` is lost. The producer
+/// signs a checkpoint that opens to a state it never had.
+///
+/// This is additive. v1 is untouched, its id is unchanged, and no shipped class moves — because
+/// `state_chunk_map_id` is a field of `PalwShapeProfileV3` and the shape profile id IS the class
+/// id, so a class adopting v2 is a DIFFERENT class from the one testnet-11 carries. That is the
+/// decision this constant exists to make available, not one it makes.
+///
+/// The alternative was narrowing the cache to `i8`, which changes what the model computes and
+/// therefore every answer it gives. Describing the state correctly changes nothing but the
+/// description.
+pub const PALW_INTEGER_KV_STATE_CHUNK_MAP_NAME_V2: &str = "palw-integer-kv/i32-le/kind-major(k,v)/layer-asc/position-asc/row=attn_kv_heads*attn_head_dim*4/\
+     chunk=floor(1048576/row)/v2";
+
+/// `state_chunk_map_id` for an integer class whose KV elements are 32-bit.
+pub fn integer_kv_state_chunk_map_id_v2() -> Hash64 {
+    state_chunk_map_id_v1(PALW_INTEGER_KV_STATE_CHUNK_MAP_NAME_V2)
+}
+
+/// The v2 geometry: identical to v1 in every rule except the row width, which is four bytes per
+/// element rather than one. Chunking still derives from the width, so a wider row simply covers
+/// fewer positions per chunk.
+pub fn integer_kv_state_geometry_v2(
+    profile: &PalwShapeProfileV3,
+    positions: u32,
+) -> Result<PalwStateChunkGeometryV1, PalwStateChunkMapError> {
+    let mut geometry = integer_kv_state_geometry_v1(profile, positions)?;
+    let row_bytes = (profile.attn_kv_heads as u64).saturating_mul(profile.attn_head_dim as u64).saturating_mul(4);
+    if row_bytes > PALW_STEP_LEG_MAX_STATE_CHUNK_BYTES as u64 {
+        return Err(PalwStateChunkMapError::RowExceedsChunk { row_bytes, max: PALW_STEP_LEG_MAX_STATE_CHUNK_BYTES });
+    }
+    // Rebuilt rather than patched: `positions_per_chunk` and the chunk count are FUNCTIONS of the
+    // width, and widening the row while leaving them at v1's values would describe chunks four
+    // times larger than the cap this leg enforces.
+    let positions_per_chunk = (PALW_STEP_LEG_MAX_STATE_CHUNK_BYTES as u64 / row_bytes).min(positions as u64) as u32;
+    geometry.row_bytes = row_bytes as u32;
+    geometry.positions_per_chunk = positions_per_chunk;
+    geometry.chunks_per_slice = positions.div_ceil(positions_per_chunk);
+    Ok(geometry)
+}
+
 /// The registration preimage of the integer family's `state_layout_id`.
 ///
 /// The map's companion. `PalwCheckpointProfileV1` carries a `state_layout_id` inside its
@@ -306,6 +352,33 @@ mod tests {
 
     fn rc_profile() -> PalwShapeProfileV3 {
         base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("the RC geometry is a valid profile")
+    }
+
+    /// **v2 is four bytes per element, and it is a different map — both halves matter.**
+    ///
+    /// Four bytes because that is what an `i32` cache holds; a different id because
+    /// `state_chunk_map_id` is inside the shape profile id, so a class that adopts v2 is a
+    /// different class. If these two ever collided, a class could change the width of the state it
+    /// commits to without changing its identity, and two nodes would open the same checkpoint to
+    /// different states while agreeing they were the same class.
+    #[test]
+    fn the_v2_map_is_four_bytes_per_element_and_a_distinct_identity() {
+        let profile = rc_profile();
+        let v1 = integer_kv_state_geometry_v1(&profile, 64).expect("v1 geometry");
+        let v2 = integer_kv_state_geometry_v2(&profile, 64).expect("v2 geometry");
+
+        assert_eq!(v2.row_bytes as u64, v1.row_bytes as u64 * 4);
+        assert_eq!(v2.row_bytes as u64, profile.attn_kv_heads as u64 * profile.attn_head_dim as u64 * 4);
+        assert_ne!(integer_kv_state_chunk_map_id_v2(), integer_kv_state_chunk_map_id_v1());
+
+        // The chunking is a function of the width, not a constant carried over: a wider row must
+        // cover fewer positions per chunk, or the leg's per-chunk cap is exceeded by four times.
+        assert!(v2.positions_per_chunk <= v1.positions_per_chunk);
+        assert!(
+            v2.positions_per_chunk as u64 * v2.row_bytes as u64 <= PALW_STEP_LEG_MAX_STATE_CHUNK_BYTES as u64,
+            "a v2 chunk still fits the cap"
+        );
+        assert!(v2.chunks_per_slice >= v1.chunks_per_slice, "and the same positions need at least as many chunks");
     }
 
     /// The id is a consensus identity: it may move only when the descriptor moves, and a reader
