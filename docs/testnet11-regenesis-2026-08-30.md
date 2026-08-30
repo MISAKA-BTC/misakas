@@ -96,3 +96,30 @@ ssh ubuntu@160.16.131.119 'rm -rf /home/ubuntu/.t11/misaka-testnet-11'
   first-epoch budget on 2026-08-30 and the chain stopped at DAA 360 with nothing producing the
   floor. With the heartbeat lane off, that failure mode is still live.
 * Announce the new fingerprint and genesis hash to participants.
+
+## Checklist for the NEXT re-mint (added 2026-08-31)
+
+Lessons the first post-regenesis day taught, to be picked up by whichever branch carries the next
+identity move:
+
+1. **The faucet float ships in genesis** (`genesis/t11-faucet-float`:
+   `TESTNET11_FAUCET_FLOAT_SOMPI`, 5,000 MSK at `misaka-premine:47`, paying the faucet key).
+   Why: after THIS regenesis the whole network had zero spendable liquidity for ~1,238 DAA
+   (7+ hours). Every coinbase waits out the 600-DAA settlement floor past the FIRST floor block
+   (daa 638 that day); the faucet's balance was a normal transfer on the old chain and died with
+   it; the pool slots' bonds died too; and the only mature outputs anywhere were the six panel
+   floats — which are exactly the outputs nothing should ever spend. Newcomers, the faucet and
+   the operator were all blocked on the same first-coinbase-maturity event. A genesis carve-out
+   is `is_coinbase: false`, so the float is spendable in block 1.
+2. **Re-fund the faucet as a STEP of the regenesis**, not as a discovery hours later: its
+   balance is chain state, and the runbook's downstream list (explorer DB, MTP ledger, seeder)
+   should include "faucet balance" for the same reason.
+3. **One pay address per node** (see `docs/testnet11-join-mining.md` §4): a panel's carrier
+   change goes to the node's CONFIGURED pay address, so two nodes sharing one address braid
+   their float chains into one wallet where no single node's RPC can vouch for both
+   reservations. A-host's `b-node.sh` reused node0's pay address and its float chain migrated
+   into node0's wallet within a day. Give every producer its bond's own payout address before
+   the next identity move, while restarts are already scheduled.
+4. **The pool slots re-register like any newcomer** — budget for their re-funding out of the
+   faucet float (or fund them in the same genesis pass) so hosted mining resumes without
+   waiting out the settlement floor.

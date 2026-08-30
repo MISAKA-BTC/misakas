@@ -285,6 +285,28 @@ pub fn testnet11_community_utxos() -> UtxoCollection {
 /// sompi each); the bonds need one working submitter, not an endowment.
 pub const PALW_RC_BOND_FEE_FLOAT_SOMPI: u64 = 100 * SOMPI_PER_KASPA;
 
+/// **The public faucet's float — genesis-day liquidity for everyone who is not a genesis bond.**
+///
+/// The bond floats above open the lifecycle loop for the SEATS; nothing opened it for a
+/// newcomer. Measured after the 2026-08-30 re-genesis: the faucet's balance died with the old
+/// chain (a normal transfer, not a carve-out), every coinbase waits out the ADR-0018 settlement
+/// floor (600 DAA past the first floor block, which landed at daa 638), and the only mature
+/// outputs anywhere were the six reserved panel floats. For the first ~1,238 DAA — seven-plus
+/// hours — the network had zero spendable liquidity: no faucet grant, no newcomer bond, no pool
+/// slot could fund itself, and the operator could not even refill the faucet without reaching
+/// for a panel's float. A genesis output is `is_coinbase: false`, so THIS one is spendable in
+/// block 1.
+///
+/// 5,000 MSK is a few hundred grants at the faucet's 12 MSK rate — a season of newcomers, not
+/// an endowment; the faucet key (held beside the faucet service, never a producer's signing
+/// key) can always be topped up by a normal transfer once mining income matures.
+pub const TESTNET11_FAUCET_FLOAT_SOMPI: u64 = 5_000 * SOMPI_PER_KASPA;
+
+/// The public faucet's pay address (the key lives with the faucet service on the faucet host —
+/// deliberately NOT a producer signing key, so a compromised faucet never signs a block).
+const TESTNET11_FAUCET_ADDRESS: &str =
+    "misakatest:qgklfukcp0ajdzhg0cs7dp8260h3kdvyl8n5af6wua48xhacjmgm8ve2237hk5ehckyxqd9lmw7yy22ddg9lc40wus7mh3j4ggvnmz7wjn64y9c9";
+
 /// The FULL genesis UTXO set for one network id, and **the only place the 10B cap is spent**.
 ///
 /// Keyed by [`NetworkId`] rather than [`NetworkType`] because t10 and t11 share a type and must
@@ -332,6 +354,12 @@ fn testnet11_genesis_utxos(net: NetworkId) -> UtxoCollection {
         utxos.push((premine_outpoint(MAIN_PREMINE_INDEX + 1 + i as u32), premine_entry(PALW_RC_BOND_FEE_FLOAT_SOMPI, script_public_key)));
         carved = carved.checked_add(PALW_RC_BOND_FEE_FLOAT_SOMPI).expect("floats cannot overflow");
     }
+
+    // The public faucet's float, one index past the bond floats — the newcomer economy's
+    // genesis-day liquidity (see [`TESTNET11_FAUCET_FLOAT_SOMPI`] for the drought it closes).
+    let faucet_spk = crate::dns_finality::p2pkh_mldsa87_spk(&owner_payload(TESTNET11_FAUCET_ADDRESS));
+    utxos.push((premine_outpoint(MAIN_PREMINE_INDEX + 1 + cards.len() as u32), premine_entry(TESTNET11_FAUCET_FLOAT_SOMPI, faucet_spk)));
+    carved = carved.checked_add(TESTNET11_FAUCET_FLOAT_SOMPI).expect("the faucet float cannot overflow");
 
     // The community allocation, on its own sentinel txid.
     for (outpoint, entry) in testnet11_community_utxos() {
@@ -433,9 +461,21 @@ mod tests {
         assert!(!cards.is_empty(), "the shipped RC card must be set for this network to fund anything");
         assert_eq!(
             set.len(),
-            2 * cards.len() + 1 + TESTNET11_COMMUNITY_ALLOCATIONS.len(),
-            "one collateral + one float per bond, the main wallet, and t11's community entries"
+            2 * cards.len() + 2 + TESTNET11_COMMUNITY_ALLOCATIONS.len(),
+            "one collateral + one float per bond, the main wallet, the faucet float, and t11's community entries"
         );
+
+        // The faucet float: one index past the bond floats, at the faucet's own key, spendable in
+        // block 1 — the 2026-08-30 re-genesis proved a chain without one has NO liquidity at all
+        // until the first coinbase settles (daa 1238 that day, seven-plus hours).
+        let faucet = &set[&premine_outpoint(MAIN_PREMINE_INDEX + 1 + cards.len() as u32)];
+        assert_eq!(faucet.amount, TESTNET11_FAUCET_FLOAT_SOMPI, "the faucet float is its declared size");
+        assert_eq!(
+            faucet.script_public_key,
+            crate::dns_finality::p2pkh_mldsa87_spk(&owner_payload(TESTNET11_FAUCET_ADDRESS)),
+            "the faucet float pays the faucet key, not a producer"
+        );
+        assert!(!faucet.is_coinbase, "a genesis carve-out must be spendable without settlement");
 
         let main_spk = set[&premine_outpoint(MAIN_PREMINE_INDEX)].script_public_key.clone();
         for (i, card) in cards.iter().enumerate() {
@@ -475,7 +515,9 @@ mod tests {
         let cards = crate::config::params::PALW_RC_GENESIS_BONDS;
         let t11_main = main_of(NetworkId::with_suffix(NetworkType::Testnet, 11));
         assert_eq!(t11_main.script_public_key, public_spk, "testnet-11 pays the operator address");
-        let carved = (GENESIS_BOND_COLLATERAL_SOMPI + PALW_RC_BOND_FEE_FLOAT_SOMPI) * cards.len() as u64 + TESTNET11_COMMUNITY_SOMPI;
+        let carved = (GENESIS_BOND_COLLATERAL_SOMPI + PALW_RC_BOND_FEE_FLOAT_SOMPI) * cards.len() as u64
+            + TESTNET11_FAUCET_FLOAT_SOMPI
+            + TESTNET11_COMMUNITY_SOMPI;
         assert_eq!(t11_main.amount, MISAKA_PREMINE_CAP_SOMPI - carved, "testnet-11 main wallet is the cap less its carve-outs");
 
         // testnet-10 and the suffix-less test networks keep the Claude-managed wallet.
@@ -582,8 +624,8 @@ mod tests {
         let t11 = genesis_premine_utxos_for(NetworkId::with_suffix(NetworkType::Testnet, 11));
         assert_eq!(
             t11.len(),
-            2 * crate::config::params::PALW_RC_GENESIS_BONDS.len() + 1 + TESTNET11_COMMUNITY_ALLOCATIONS.len(),
-            "t11 = collateral + float per RC bond, the main wallet, and one per community entrant"
+            2 * crate::config::params::PALW_RC_GENESIS_BONDS.len() + 2 + TESTNET11_COMMUNITY_ALLOCATIONS.len(),
+            "t11 = collateral + float per RC bond, the main wallet, the faucet float, and one per community entrant"
         );
         let t10 = genesis_premine_utxos_for(NetworkId::with_suffix(NetworkType::Testnet, 10));
         assert_eq!(t10.len(), 1, "t10 carries the main wallet alone");
