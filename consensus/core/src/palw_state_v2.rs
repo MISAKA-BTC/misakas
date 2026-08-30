@@ -1910,6 +1910,14 @@ pub enum PalwStateV2Error {
     MissingClaim(Hash64),
     #[error("claim {0} already exists (one attempt id, one claim)")]
     DuplicateClaim(Hash64),
+    /// ADR-0065 D4. Named for what it is, because "wrong phase" would have said the claim was the
+    /// problem — and an operator reading a refused object needs to know the RULE moved, not go
+    /// looking at a claim that is in exactly the phase it should be.
+    #[error(
+        "claim {0} cannot be defaulted: past ADR-0065 D4 an Unavailable quorum licenses nothing, \
+         because a seat cannot distinguish a producer that withheld from a fetch that was lost"
+    )]
+    ProducerDefaultRetired(Hash64),
     #[error("claim {claim} is in the wrong phase for {edge}")]
     WrongPhase { claim: Hash64, edge: &'static str },
     #[error("court session {0} does not exist at this chain point")]
@@ -5203,7 +5211,7 @@ fn apply_object(
             // `void_and_slash`. Refusing rather than trusting the filter is the difference between
             // a rule and a convention.
             if builder.unavailable_abstains {
-                return Err(PalwStateV2Error::WrongPhase { claim: *claim_id, edge: "ProducerDefaulted" });
+                return Err(PalwStateV2Error::ProducerDefaultRetired(*claim_id));
             }
             let verdicts = palw_seat_verdicts_of_v2(receipts);
             builder.slash_dissenting_seats(&claim, &verdicts, false)?;
@@ -6946,7 +6954,10 @@ pub(crate) mod tests {
             true,
         )
         .expect_err("past the fence nothing may convict a producer of a failure the chain cannot observe");
-        assert!(matches!(err, PalwStateV2Error::WrongPhase { edge: "ProducerDefaulted", .. }), "refused as an edge, got {err:?}");
+        assert!(
+            matches!(err, PalwStateV2Error::ProducerDefaultRetired(c) if c == claim_id),
+            "refused by its own name — 'wrong phase' would blame a claim that is in exactly the right one: {err:?}"
+        );
         assert_eq!(
             before.bond(&bond_key(1)).expect("registered").collateral,
             staked,
