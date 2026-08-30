@@ -7,6 +7,7 @@ pub mod eth_rpc;
 pub mod palw_agent;
 pub mod palw_backends;
 pub mod palw_dump;
+pub mod palw_heartbeat_miner;
 pub mod palw_panel;
 pub mod palw_producer;
 pub mod validator_service;

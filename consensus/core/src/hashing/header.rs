@@ -89,14 +89,21 @@ fn write_header_preimage<H: HasherBase>(
 
     // ADR-0042 Unit C step 5: the PALW V2 state root. Double-gated on the `palw_commitment`
     // pattern and for its reasons:
-    //   * by ALGO — only V2-lineage headers (`pow_algo_id` 6/7) hash it, and the id is already in
-    //     the preimage above, so inclusion is deterministic from committed bytes;
+    //   * by ALGO — V2-lineage headers (`pow_algo_id` 6/7) hash it, and — since ADR-0060 — so
+    //     does the heartbeat lane (algo-3): a heartbeat chain block on a V2 network commits the
+    //     parent state root like any other chain block (the doctrine's own regime is days of
+    //     heartbeat-only chain, which must not be days of uncommitted state). The id is already
+    //     in the preimage above, so inclusion is deterministic from committed bytes — and every
+    //     historical algo-3 header carries the zero root, so no existing identity moves.
     //   * by ZERO — a default root contributes NOTHING, so a network that does not keep V2 state
     //     has a preimage byte-identical to the pre-field protocol. No genesis hash moves.
     // Unlike `palw_commitment` this is PRE-PoW: the root is a function of the parent state, the
     // block's accepted transactions and its (daa_score, blue_score), all fixed before the grind,
     // so a miner cannot change it after solving. Frozen byte position (last).
-    if crate::pow_layer0::is_palw_v2_algo_id(header.pow_algo_id) && header.palw_state_root != kaspa_hashes::ZERO_HASH64 {
+    if (crate::pow_layer0::is_palw_v2_algo_id(header.pow_algo_id)
+        || header.pow_algo_id == crate::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID)
+        && header.palw_state_root != kaspa_hashes::ZERO_HASH64
+    {
         hasher.update(header.palw_state_root);
     }
 

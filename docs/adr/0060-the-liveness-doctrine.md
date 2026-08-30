@@ -1,7 +1,8 @@
 # ADR-0060: The liveness doctrine — time is permissionless, weight is bonded, finality is an overlay
 
-- Status: Accepted (doctrine); implementation staged — see §9. The one operator-tunable decision
-  is the finality leak's time constant (§6).
+- Status: Accepted; **implemented 2026-08-30** (`palw-genesis-10b-cap` branch, same re-mint
+  train as ADR-0059) — see §11 for what landed and where the implementation amended this text.
+  The one operator-tunable decision is the finality leak's time constant (§6).
 - Date: 2026-08-30
 - Depends on: ADR-0038 (PALW is consensus work), ADR-0045/0046 (class economy; carriage),
   ADR-0054 (share follows production; permissionless admission), ADR-0056 (share economy),
@@ -59,10 +60,13 @@ A bondless hash lane, re-enabling the existing BLAKE2b-512 ∥ SHA3-512 Layer-1 
    PALW block; among heartbeat-only branches (total collapse), `ε × n` still orders longer
    chains first. An ASIC farm pointed at this lane buys cadence-capped, weightless blocks —
    i.e. nothing.
-3. **Cadence-capped.** Nominal share 33‰ of cadence (one block per hour at the 120 s
-   cadence, ≈ 24/day), held in the on-chain share table like any class and counted through
-   the mergeset per ADR-0058 (the machinery built for slow classes is exactly what a 1/hour
-   lane needs).
+3. **Cadence-capped.** Nominal 33‰ of cadence (one block per hour at the 120 s cadence,
+   ≈ 24/day). *Amended at implementation:* the cap is NOT a share-table entry — the share
+   table is class-granted chain state and the heartbeat is deliberately not a class — but a
+   **slot rule** (at most one heartbeat per interval, measured against the POV's youngest
+   heartbeat in chain order) plus the lane's **own windowed retarget** toward one block per
+   interval, floored at ~2²⁴ hashes so sibling spam is never free. The slot rule is the hard
+   cap; the retarget is the price.
 4. **Fee-only.** No subsidy, no worker/escrow split (there is no claim to escrow against).
    The 25B supply of ADR-0059 is untouched to the sompi. Running a heartbeat miner costs one
    CPU thread; it is a public good in calm weather and self-rewarding in a crisis, when every
@@ -71,6 +75,25 @@ A bondless hash lane, re-enabling the existing BLAKE2b-512 ∥ SHA3-512 Layer-1 
 Heartbeat blocks are otherwise ordinary blocks: they carry transactions — which is the entire
 point, because bond registration, unbond, collateral funding and lifecycle transactions are
 what ride them when no bonded lane is alive.
+
+### What implementation added to Decision 1
+
+* **A heartbeat chain block commits the parent PALW state root** like the bonded lanes
+  (`palw_state_root` hash-visible on algo-3; every historical algo-3 header carries the zero
+  root, so no identity moved): the doctrine's own regime is days of heartbeat-only chain,
+  which must not be days of uncommitted state. Closing that surfaced a pre-existing gap —
+  nothing refused a stuffed `palw_state_root` on any non-committing lane (hash-invisible
+  bytes = block-identity malleability, the `NonPalwHeaderCarriesPalwCommitment` class through
+  the sibling field) — now refused at the door (`UncommittedPalwStateRoot`).
+* **The evidence source is a chain-order walk, not the difficulty window.** The integration
+  test caught the slot rule waving a second heartbeat through: the difficulty window is
+  SAMPLED, so the newest blocks — exactly what the slot rule is about — can be absent from
+  it. The rules read a bounded selected-parent-chain walk (`processes::heartbeat_evidence`),
+  which also makes back-dating a heartbeat useless: the youngest heartbeat is the nearest by
+  chain distance, whatever timestamp it stamped.
+* **The miner is one flag**: `kaspad --palw-heartbeat-miner-address=<ML-DSA-87 addr>` runs
+  the bondless in-node miner (template → `heartbeat_adapt_block_template` → slot wait →
+  one-thread grind → submit). Fee-only, gated to ConsensusV2 networks.
 
 ## 4. Decision 2 — the emergency ramp (new)
 
@@ -140,6 +163,16 @@ never lets a present minority finalize *now*.
 VLT is currently dormant on testnet-11, so this decision creates no re-mint pressure; it
 binds the overlay whenever and wherever it is next enabled.
 
+*As implemented:* `DnsParams.inactivity_leak_daa` (in every preset's fingerprint) drives
+`InactivityLeakViewV1`, which filters BOTH quorum denominators
+(`total_active_stake_by_epoch`, `total_voting_weight_by_epoch`), wired through every tally
+site (live, shadow, precommit duty, branch score). The leak's evidence is the same
+signature-verified contribution set the numerator aggregates — "counted as present" and
+"counted as voting" are one fact — and the baseline is the later of the last attestation and
+each bond's activation, so a freshly bonded validator is in grace, never leaked on arrival.
+Shipped values: testnet lineage 5,040 DAA (~7 days at 120 s), mainnet 6,048,000 (~7 days at
+10 bps), devnet/simnet `u64::MAX` (off — drills assume a frozen set).
+
 ## 7. Decision 5 — refusal gates decay (partially landed)
 
 Two kinds of refusal exist, and the doctrine treats them oppositely:
@@ -154,12 +187,12 @@ Two kinds of refusal exist, and the doctrine treats them oppositely:
 
 Inventory at drafting time:
 
-| gate | status |
+| gate | status (verified 2026-08-30) |
 |---|---|
 | DNS reorg veto | TTL landed (`dns_veto_ttl_daa_score`; the t10 wedge-release retrofit) |
-| chain-participation switch counter | **runaway measured, reset path absent; fix branch exists (`fix/chain-switch-counter-runaway`) — must be verified closed; as it stands it violates this doctrine** |
-| pruned-IBD panic → quarantine | verify against doctrine (newcomer-path fixes landed) |
-| producer hold (sweep cursor) | verify against doctrine |
+| chain-participation switch counter | **root cause closed** (`e05a8699`, in this branch's ancestry: a refused switch no longer feeds the counter that refused it) and the `--clear-quarantine` operator override works. Residual: no automatic decay — a documented exception, not a gap: post-fix the counter counts only REAL adopted switches, auto-release would re-admit genuine flapping, and the override is the deliberate escape. |
+| pruned-IBD panic → quarantine | newcomer-path fixes in ancestry (`fix/newcomer-join-panic`, `fix/newcomer-bond-path` merges) |
+| producer hold (sweep cursor) | hold reasons are logged with their diagnosing numbers (throttled, never silent); the holds are economic states that decay on chain progress — which Decision 1 makes unconditional |
 | peer/mempool bans | already TTL'd (upstream behaviour) |
 
 New gates inherit the rule at review time: *state refusal ⇒ decay + reason, or it does not
@@ -190,6 +223,29 @@ merge.*
 
 Each stage declares itself by version bump — this project's own law: a rule change not
 declared by a version bump forks the network silently.
+
+## 11. Implementation record (2026-08-30)
+
+All three stages landed together on the ADR-0059 re-mint train rather than serially — the
+fingerprint was moving anyway, and one coordinated wipe is cheaper than three:
+
+* **D1 + D2**: `palw_heartbeat_v1` (the pure rules), `processes::heartbeat_evidence` (the
+  chain-order walk), acceptance via `accepts_algo_id`, the lane's bits + slot in header
+  validation, ε in GHOSTDAG at every proof level, zero-subsidy enforcement in the body rule
+  AND the expected-coinbase (`own_subsidy` threaded through `expected_coinbase_transaction`),
+  `heartbeat_adapt_block_template` (consensus API + session delegate) and the
+  `--palw-heartbeat-miner-address` in-node miner. Declared by `PALW_STATE_V2_VERSION`
+  12 → 13.
+* **D4**: `DnsParams.inactivity_leak_daa` + `InactivityLeakViewV1` as described in §6.
+* **D5**: inventory verified (§7 table); the `palw_state_root` malleability gap found and
+  closed in passing.
+* **Tests**: unit (ladder, slot, retarget, floor, ε, leak denominators, evidence builder) and
+  a pipeline integration test (`palw_heartbeat_blocks_tick_the_clock_and_weigh_epsilon`) that
+  mints, folds, weighs (ε exactly), slot-refuses, ramp-admits and subsidy-refuses heartbeat
+  blocks through the real block pipeline — the test that caught the sampled-window defect
+  before it shipped.
+* All five preset fingerprints re-pinned (t11: `4486d9b1…`); golden state-root vectors moved
+  to version 13.
 
 ## 10. The degradation ladder
 

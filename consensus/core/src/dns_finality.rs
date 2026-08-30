@@ -1354,6 +1354,18 @@ pub struct DnsParams {
     ///   [`revert_bond_stamp`] — the single stamp state machine both the in-memory view and the
     ///   persisted store go through, so the two directions cannot drift apart.
     pub unbond_authz_mergeset_activation_daa_score: u64,
+
+    /// **ADR-0060 Decision 4: the finality inactivity leak's time constant, in DAA.**
+    ///
+    /// A validator silent (no signature-verified attestation, no fresh bond) for longer than
+    /// this leaves the quorum DENOMINATOR — weight excluded, bond untouched, re-entry by
+    /// attesting or re-bonding — so finality self-heals after validator loss instead of halting
+    /// until manual intervention. See [`InactivityLeakViewV1`] for the mechanism and the
+    /// long-partition trade-off it deliberately accepts.
+    ///
+    /// `u64::MAX` disables the leak (the devnet/simnet posture: drills assume a frozen set).
+    /// Shipped live values are the DAA-equivalent of ~7 days at the network's cadence.
+    pub inactivity_leak_daa: u64,
 }
 
 /// kaspa-pq DNS v3 — the canonical, lagged, blue_score-coordinated epoch anchor that the
@@ -6048,22 +6060,112 @@ pub fn advance_dns_confirmation(
     }
 }
 
+/// **The finality inactivity leak (ADR-0060 Decision 4).**
+///
+/// A validator that has fallen silent for longer than `leak_after_daa` leaves the QUORUM
+/// DENOMINATOR — its bond is not burned, its records do not move; the remaining active set
+/// simply stops being measured against weight that will never vote, so finality re-forms on its
+/// own instead of halting until an operator re-bonds by hand.
+///
+/// The baseline a validator is measured from is the LATER of its last attestation and each
+/// bond's own activation: a freshly bonded validator that has never attested is inside its
+/// grace window, not leaked — the leak punishes going silent, never arriving. Re-entry is
+/// therefore either attesting again or bonding again, both ordinary chain acts.
+///
+/// **The trade-off this buys, stated where the code is:** a partition longer than
+/// `leak_after_daa` can let BOTH sides re-form local quorums and finalize conflicting
+/// histories (each leaks the other side's validators). That is the accepted price — the same
+/// one Ethereum's inactivity leak pays — chosen over indefinite finality halt; equivocation
+/// slashing still burns any validator that signs both sides, and the time constant is long
+/// enough (days) that uniqueness is only at risk in a partition nobody could have missed.
+///
+/// `leak_after_daa == u64::MAX` disables the leak (no silence can exceed it); that is the
+/// shipped devnet/simnet posture, where drills assume a frozen validator set.
+#[derive(Copy, Clone, Debug)]
+pub struct InactivityLeakViewV1<'a> {
+    /// Youngest attestation anchor DAA per validator, from the SAME contribution set the
+    /// numerator is built from ([`last_attestation_daa_by_validator`]). A validator absent
+    /// here has not attested within the walked window at all.
+    pub last_attestation_daa: &'a BTreeMap<Hash64, u64>,
+    /// The T_leak of ADR-0060 Decision 4, in DAA units.
+    pub leak_after_daa: u64,
+}
+
+impl<'a> InactivityLeakViewV1<'a> {
+    /// A view that never leaks anyone — byte-identical denominators to the pre-leak protocol.
+    pub fn disabled(empty: &'a BTreeMap<Hash64, u64>) -> Self {
+        Self { last_attestation_daa: empty, leak_after_daa: u64::MAX }
+    }
+
+    /// [`Self::disabled`] without a borrow to thread — for fixtures and for callers that have
+    /// no attestation walk at hand.
+    pub fn none() -> InactivityLeakViewV1<'static> {
+        static EMPTY: std::sync::OnceLock<BTreeMap<Hash64, u64>> = std::sync::OnceLock::new();
+        InactivityLeakViewV1::disabled(EMPTY.get_or_init(BTreeMap::new))
+    }
+
+    /// Does `validator` still count toward the denominator at `anchor_daa`, given the freshest
+    /// of its attestations and bond activations?
+    pub fn retains(&self, validator: &Hash64, freshest_bond_activation_daa: u64, anchor_daa: u64) -> bool {
+        let baseline = self.last_attestation_daa.get(validator).copied().unwrap_or(0).max(freshest_bond_activation_daa);
+        anchor_daa.saturating_sub(baseline) <= self.leak_after_daa
+    }
+}
+
+/// The leak's evidence: for each validator, the youngest epoch-anchor DAA it contributed a
+/// (signature-verified, bond-active) attestation to. Built from the same
+/// [`AttestationContribution`] slice the numerator aggregation consumes, so "counted as present"
+/// and "counted as voting" can never drift apart.
+pub fn last_attestation_daa_by_validator(
+    contributions: &[AttestationContribution],
+    epoch_anchor_daa: &BTreeMap<u64, u64>,
+) -> BTreeMap<Hash64, u64> {
+    let mut last: BTreeMap<Hash64, u64> = BTreeMap::new();
+    for c in contributions {
+        let Some(&anchor) = epoch_anchor_daa.get(&c.epoch) else { continue };
+        let entry = last.entry(c.validator_id).or_insert(0);
+        *entry = (*entry).max(anchor);
+    }
+    last
+}
+
+/// The freshest activation DAA among `validator`'s bonds active at `anchor_daa` — the grace
+/// half of the leak baseline (see [`InactivityLeakViewV1::retains`]).
+fn freshest_active_bond_activation(bonds: &[StakeBondRecord], validator: &Hash64, anchor_daa: u64) -> u64 {
+    bonds
+        .iter()
+        .filter(|b| b.validator_pubkey_hash == *validator && is_bond_active_at(b, anchor_daa))
+        .map(|b| b.activation_daa_score)
+        .max()
+        .unwrap_or(0)
+}
+
 /// Per-epoch normalisation denominator for StakeScore: for each epoch in
 /// `epoch_anchor_daa` (epoch → that epoch's selected-chain anchor DAA
 /// score), the total stake of bonds that are `Active` at that anchor's DAA
-/// score (ADR-0009 §"StakeScore mechanics" / Addendum A.5).
+/// score (ADR-0009 §"StakeScore mechanics" / Addendum A.5) — minus, since
+/// ADR-0060 Decision 4, the validators the inactivity `leak` has excluded.
 ///
 /// Pure: the caller supplies the bonds in the (bounded) window and each
 /// epoch's anchor DAA score; activation / slash / unbond are evaluated via
 /// [`is_bond_active_at`] (DAA-stamped, so this is reorg-safe with no
 /// incremental state). Pairs with [`aggregate_epoch_tallies`] to feed
 /// [`compute_stake_score`].
-pub fn total_active_stake_by_epoch(bonds: &[StakeBondRecord], epoch_anchor_daa: &BTreeMap<u64, u64>) -> BTreeMap<u64, u128> {
+pub fn total_active_stake_by_epoch(
+    bonds: &[StakeBondRecord],
+    epoch_anchor_daa: &BTreeMap<u64, u64>,
+    leak: InactivityLeakViewV1<'_>,
+) -> BTreeMap<u64, u128> {
     epoch_anchor_daa
         .iter()
         .map(|(&epoch, &anchor_daa)| {
-            let total =
-                bonds.iter().filter(|b| is_bond_active_at(b, anchor_daa)).fold(0u128, |acc, b| acc.saturating_add(b.amount as u128));
+            let total = bonds
+                .iter()
+                .filter(|b| is_bond_active_at(b, anchor_daa))
+                .filter(|b| {
+                    leak.retains(&b.validator_pubkey_hash, freshest_active_bond_activation(bonds, &b.validator_pubkey_hash, anchor_daa), anchor_daa)
+                })
+                .fold(0u128, |acc, b| acc.saturating_add(b.amount as u128));
             (epoch, total)
         })
         .collect()
@@ -6087,6 +6189,7 @@ pub fn total_voting_weight_by_epoch(
     epoch_anchor_daa: &BTreeMap<u64, u64>,
     snapshot: &VltEpochSnapshot,
     vlt: &VltParams,
+    leak: InactivityLeakViewV1<'_>,
 ) -> BTreeMap<u64, u128> {
     epoch_anchor_daa
         .iter()
@@ -6098,6 +6201,11 @@ pub fn total_voting_weight_by_epoch(
                 .iter()
                 .filter(|b| is_bond_active_at(b, anchor_daa))
                 .filter(|b| seen.insert(b.validator_pubkey_hash))
+                // ADR-0060 Decision 4: a validator the leak has excluded contributes nothing to
+                // W(E) — the same per-validator granularity as the weight itself.
+                .filter(|b| {
+                    leak.retains(&b.validator_pubkey_hash, freshest_active_bond_activation(bonds, &b.validator_pubkey_hash, anchor_daa), anchor_daa)
+                })
                 .fold(0u128, |acc, b| {
                     let bonded = active_bond_total_sompi(bonds, &b.validator_pubkey_hash, anchor_daa, snapshot.pin_daa_score());
                     acc.saturating_add(validator_voting_weight(&b.validator_pubkey_hash, bonded, epoch, snapshot, vlt))
@@ -8653,7 +8761,7 @@ mod tests {
         assert_eq!(w1, 1_000 * crate::vlt::VLT_MICRO, "compute at epoch 9 weights epoch 10 undecayed");
         assert_eq!(w3, 0, "a fully-bonded validator with no verified compute has NO voting power");
 
-        let totals = total_voting_weight_by_epoch(&bonds, &BTreeMap::from([(10u64, 0u64)]), &credits, &vlt);
+        let totals = total_voting_weight_by_epoch(&bonds, &BTreeMap::from([(10u64, 0u64)]), &credits, &vlt, InactivityLeakViewV1::none());
         assert_eq!(totals[&10], w1 * 2, "W(E) counts only validators with compute");
     }
 
@@ -8689,8 +8797,8 @@ mod tests {
         ];
         assert_eq!(split[0].validator_pubkey_hash, split[1].validator_pubkey_hash, "the fixture must model ONE identity");
 
-        let w_whole = total_voting_weight_by_epoch(&whole, &epochs, &credits, &vlt);
-        let w_split = total_voting_weight_by_epoch(&split, &epochs, &credits, &vlt);
+        let w_whole = total_voting_weight_by_epoch(&whole, &epochs, &credits, &vlt, InactivityLeakViewV1::none());
+        let w_split = total_voting_weight_by_epoch(&split, &epochs, &credits, &vlt, InactivityLeakViewV1::none());
         assert_eq!(w_split[&10], w_whole[&10], "the live denominator must not grow when a bond is split");
         assert_eq!(w_split[&10], compute, "and it is C_i — the cap does not bind here");
 
@@ -8751,7 +8859,7 @@ mod tests {
             assert_eq!(row.effective_weight, validator_voting_weight_of_bond(bond, &bonds, u64::MAX, 10, &credits, &vlt));
             assert_eq!(row.effective_weight, row.raw_recent_compute.min(row.bond_cap));
         }
-        let totals = total_voting_weight_by_epoch(&bonds, &BTreeMap::from([(10u64, 0u64)]), &credits, &vlt);
+        let totals = total_voting_weight_by_epoch(&bonds, &BTreeMap::from([(10u64, 0u64)]), &credits, &vlt, InactivityLeakViewV1::none());
         assert_eq!(snap.total_weight, totals[&10], "the frozen total IS the live quorum denominator");
         assert_eq!(snap.quorum_weight, crate::vlt::bft_quorum(snap.total_weight));
         assert!(snap.validators.windows(2).all(|w| w[0].validator_id < w[1].validator_id), "consensus order");
@@ -8823,7 +8931,7 @@ mod tests {
         // All three earned identical compute in the epochs feeding epochs 10 and 11.
         let credits = credits_for(&[(1, &[9, 10], x), (2, &[9, 10], x), (3, &[9, 10], x)]);
         let epoch_anchor_daa = BTreeMap::from([(10u64, 0u64), (11u64, 0u64)]);
-        let totals = total_voting_weight_by_epoch(&bonds, &epoch_anchor_daa, &credits, &vlt);
+        let totals = total_voting_weight_by_epoch(&bonds, &epoch_anchor_daa, &credits, &vlt, InactivityLeakViewV1::none());
 
         let contrib = |b: &StakeBondRecord, epoch: u64| AttestationContribution {
             epoch,
@@ -8887,12 +8995,12 @@ mod tests {
                     signed_weight: validator_voting_weight_of_bond(b, &bonds, u64::MAX, 10, snapshot, &vlt),
                 })
                 .collect();
-            let totals = total_voting_weight_by_epoch(&bonds, &epoch_anchor_daa, snapshot, &vlt);
+            let totals = total_voting_weight_by_epoch(&bonds, &epoch_anchor_daa, snapshot, &vlt, InactivityLeakViewV1::none());
             compute_stake_score(&aggregate_epoch_tallies(&contributions, &totals), rule)
         };
 
         assert_eq!(
-            total_voting_weight_by_epoch(&bonds, &epoch_anchor_daa, &fork_local, &vlt)[&10],
+            total_voting_weight_by_epoch(&bonds, &epoch_anchor_daa, &fork_local, &vlt, InactivityLeakViewV1::none())[&10],
             2 * x,
             "a self-derived table is two thirds the size, so the bar it sets is two thirds as high"
         );
@@ -8937,7 +9045,7 @@ mod tests {
 
         // And the denominator says the same thing, so a branch cannot shrink `W(E)` by withholding
         // the other side's recent bonds either.
-        let totals = total_voting_weight_by_epoch(&[post_fork], &BTreeMap::from([(10u64, 600u64)]), &snapshot, &vlt);
+        let totals = total_voting_weight_by_epoch(&[post_fork], &BTreeMap::from([(10u64, 600u64)]), &snapshot, &vlt, InactivityLeakViewV1::none());
         assert_eq!(totals[&10], 0, "Active at the epoch anchor, but not at the pin — not in W(E)");
     }
 
@@ -8951,7 +9059,7 @@ mod tests {
         let inert = VltEpochSnapshot::inert();
         assert!(inert.is_empty());
         assert_eq!(validator_voting_weight_of_bond(&bond, std::slice::from_ref(&bond), u64::MAX, 10, &inert, &vlt), 0);
-        assert_eq!(total_voting_weight_by_epoch(&[bond], &BTreeMap::from([(10u64, 0u64)]), &inert, &vlt)[&10], 0);
+        assert_eq!(total_voting_weight_by_epoch(&[bond], &BTreeMap::from([(10u64, 0u64)]), &inert, &vlt, InactivityLeakViewV1::none())[&10], 0);
     }
 
     // ---- MISAKA §5 round 2: prevote / precommit ----
@@ -11613,11 +11721,84 @@ mod tests {
         let bonds = vec![a, b, c];
 
         let epochs = BTreeMap::from([(1u64, 50u64), (2, 200), (3, 400), (4, 600)]);
-        let totals = total_active_stake_by_epoch(&bonds, &epochs);
+        let totals = total_active_stake_by_epoch(&bonds, &epochs, InactivityLeakViewV1::none());
         assert_eq!(totals.get(&1), Some(&0)); // daa 50: all activate >= 100 -> Pending
         assert_eq!(totals.get(&2), Some(&80)); // daa 200: A(30) + C(50) active
         assert_eq!(totals.get(&3), Some(&30)); // daa 400: A(30); C slashed @300; B not yet
         assert_eq!(totals.get(&4), Some(&50)); // daa 600: A(30) + B(20); C slashed
+    }
+
+    /// **ADR-0060 Decision 4, executable.** A validator silent past T_leak leaves the quorum
+    /// denominator; an attesting one stays; a freshly bonded one is inside its activation grace;
+    /// and with the survivors alone in the denominator, one live validator's signature is a
+    /// quorum again — finality self-heals instead of waiting for an operator.
+    #[test]
+    fn the_inactivity_leak_shrinks_the_denominator_until_quorum_reforms() {
+        // Three validators, equal stake 100, all activated at DAA 100.
+        let mut a = stake_bond_record_from_payload(&fixture_bond(), fixture_outpoint());
+        a.amount = 100;
+        a.activation_daa_score = 100;
+        a.validator_pubkey_hash = Hash64::from_u64_word(0xA);
+        let mut b = a.clone();
+        b.validator_pubkey_hash = Hash64::from_u64_word(0xB);
+        let mut c = a.clone();
+        c.validator_pubkey_hash = Hash64::from_u64_word(0xC);
+        let bonds = vec![a, b, c];
+        let epochs = BTreeMap::from([(9u64, 20_000u64)]);
+        let t_leak = 5_040u64;
+
+        // A attested recently; B and C have been silent since just after activation.
+        let last = BTreeMap::from([
+            (Hash64::from_u64_word(0xA), 19_000u64),
+            (Hash64::from_u64_word(0xB), 200u64),
+            (Hash64::from_u64_word(0xC), 300u64),
+        ]);
+        let leak = InactivityLeakViewV1 { last_attestation_daa: &last, leak_after_daa: t_leak };
+        let totals = total_active_stake_by_epoch(&bonds, &epochs, leak);
+        // B and C are 19_700+ DAA silent > 5_040: leaked. Only A's 100 remains.
+        assert_eq!(totals.get(&9), Some(&100), "the silent two thirds leave the denominator");
+        // …and A alone now clears the 2/3 quorum of what remains — the self-heal.
+        assert!(crate::vlt::meets_bft_quorum(100, 100, 0), "the survivor is a quorum of the leaked denominator");
+        assert!(!crate::vlt::meets_bft_quorum(100, 300, 0), "against the un-leaked denominator it never was");
+
+        // The disabled view is byte-identical to the pre-leak protocol.
+        let all = total_active_stake_by_epoch(&bonds, &epochs, InactivityLeakViewV1::none());
+        assert_eq!(all.get(&9), Some(&300), "leak off: everyone counts");
+
+        // A validator with NO attestation on record but a FRESH bond is in its grace window —
+        // the leak punishes going silent, never arriving. Re-bonding is therefore re-entry.
+        let mut d = bonds[0].clone();
+        d.validator_pubkey_hash = Hash64::from_u64_word(0xD);
+        d.activation_daa_score = 19_500; // bonded 500 DAA ago, never attested
+        let with_fresh = vec![bonds[0].clone(), bonds[1].clone(), bonds[2].clone(), d];
+        let totals = total_active_stake_by_epoch(&with_fresh, &epochs, leak);
+        assert_eq!(totals.get(&9), Some(&200), "the fresh bond counts beside the attester");
+
+        // Exactly at the boundary is still retained; one past it is not.
+        let edge = BTreeMap::from([(Hash64::from_u64_word(0xA), 20_000u64 - t_leak)]);
+        let leak_edge = InactivityLeakViewV1 { last_attestation_daa: &edge, leak_after_daa: t_leak };
+        assert!(leak_edge.retains(&Hash64::from_u64_word(0xA), 0, 20_000));
+        assert!(!leak_edge.retains(&Hash64::from_u64_word(0xA), 0, 20_001));
+    }
+
+    /// The leak's evidence builder keeps the YOUNGEST anchor per validator, ignores epochs
+    /// outside the anchor map, and shares the numerator's contribution type — so "present" and
+    /// "voting" are one fact.
+    #[test]
+    fn last_attestation_evidence_is_the_youngest_anchor_per_validator() {
+        let v = |x: u64| Hash64::from_u64_word(x);
+        let contribs = vec![
+            AttestationContribution { epoch: 1, validator_id: v(1), bond_outpoint: fixture_outpoint(), signed_weight: 1 },
+            AttestationContribution { epoch: 3, validator_id: v(1), bond_outpoint: fixture_outpoint(), signed_weight: 1 },
+            AttestationContribution { epoch: 2, validator_id: v(2), bond_outpoint: fixture_outpoint(), signed_weight: 1 },
+            // epoch 9 has no anchor: ignored rather than invented.
+            AttestationContribution { epoch: 9, validator_id: v(3), bond_outpoint: fixture_outpoint(), signed_weight: 1 },
+        ];
+        let anchors = BTreeMap::from([(1u64, 1_000u64), (2, 2_000), (3, 3_000)]);
+        let last = last_attestation_daa_by_validator(&contribs, &anchors);
+        assert_eq!(last.get(&v(1)), Some(&3_000), "the youngest of its two epochs");
+        assert_eq!(last.get(&v(2)), Some(&2_000));
+        assert_eq!(last.get(&v(3)), None, "an unanchored epoch is no evidence");
     }
 
     #[test]
@@ -11670,6 +11851,7 @@ mod tests {
     fn dns_params_borsh_roundtrip() {
         let params = DnsParams {
             dns_activation_daa_score: 1_000_000,
+            inactivity_leak_daa: 5_040,
             min_active_stake_sompi: 10_000_000_000_000,
             min_active_validators: 32,
             min_bond_amount_sompi: 2_000_000_000_000,

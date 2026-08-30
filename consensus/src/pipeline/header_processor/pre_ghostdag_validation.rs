@@ -119,6 +119,18 @@ impl HeaderProcessor {
         let commitment_bound = self.palw_block_commitment.is_some_and(|fence| fence.is_bound(header.daa_score));
         kaspa_consensus_core::pow_layer0::check_palw_commitment_shape(header.pow_algo_id, &header.palw_commitment, commitment_bound)
             .map_err(|e| RuleError::BadPalwCommitmentShape(e.to_string()))?;
+        // The `palw_state_root` shape rule, on the `palw_commitment` pattern: the field is
+        // hash-visible exactly on the lanes that commit state — the V2 lineage (6/7), and, since
+        // ADR-0060, a heartbeat (algo-3) header on a `ConsensusV2` network. Everywhere else it is
+        // hash-INVISIBLE, so a non-zero value there is block-hash malleability (two serialized
+        // headers, one identity) and is refused at the door. This also closes the pre-ADR-0060
+        // gap: nothing previously refused a stuffed root on an algo-1..5 header at all.
+        let root_committing_lane = kaspa_consensus_core::pow_layer0::is_palw_v2_algo_id(header.pow_algo_id)
+            || (header.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID
+                && matches!(self.palw_consensus_mode, kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)));
+        if !root_committing_lane && header.palw_state_root != kaspa_hashes::ZERO_HASH64 {
+            return Err(RuleError::UncommittedPalwStateRoot(header.pow_algo_id));
+        }
         self.check_palw_carriage_stateless(header)
     }
 

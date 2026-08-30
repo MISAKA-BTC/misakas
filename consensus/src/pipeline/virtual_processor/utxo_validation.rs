@@ -921,9 +921,19 @@ impl VirtualStateProcessor {
         validator_reward_outputs.extend(ctx.palw_v2_payout_outputs.iter().cloned());
 
         // Verify coinbase transaction (incl. the §F carve + §E fan-out + §D bounty).
+        // ADR-0060 Decision 1.4: a heartbeat block's own payload declares ZERO subsidy — the
+        // expected coinbase must expect the same bytes the body rule already enforced.
+        let own_subsidy = if self.palw_state_params_v2.is_some()
+            && header.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID
+        {
+            0
+        } else {
+            self.coinbase_manager.calc_block_subsidy(header.daa_score)
+        };
         self.verify_coinbase_transaction(
             &txs[0],
             header.daa_score,
+            own_subsidy,
             &ctx.ghostdag_data,
             &ctx.mergeset_rewards,
             &mergeset_non_daa,
@@ -970,6 +980,10 @@ impl VirtualStateProcessor {
         &self,
         coinbase: &Transaction,
         daa_score: u64,
+        // ADR-0060 Decision 1.4: the subsidy this block's own payload must declare — zero on a
+        // heartbeat, `calc_block_subsidy(daa_score)` everywhere else. Computed by the caller,
+        // which holds the header this function deliberately does not.
+        own_subsidy: u64,
         ghostdag_data: &GhostdagData,
         mergeset_rewards: &BlockHashMap<BlockRewardData>,
         mergeset_non_daa: &BlockHashSet,
@@ -994,6 +1008,7 @@ impl VirtualStateProcessor {
             .coinbase_manager
             .expected_coinbase_transaction(
                 daa_score,
+                own_subsidy,
                 miner_data,
                 ghostdag_data,
                 mergeset_rewards,

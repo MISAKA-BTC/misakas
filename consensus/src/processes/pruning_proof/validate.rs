@@ -206,6 +206,8 @@ impl ProofContext {
                     reachability_services[level].clone(),
                     level as BlockLevel,
                     ppm.max_block_level,
+                    // ADR-0060: ε work for heartbeat blocks in proof validation as in building.
+                    matches!(ppm.palw_consensus_mode, kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)),
                 )
             })
             .collect_vec();

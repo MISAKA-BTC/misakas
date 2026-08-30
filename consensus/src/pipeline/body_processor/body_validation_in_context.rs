@@ -68,7 +68,17 @@ impl BlockBodyProcessor {
                     return Err(RuleError::BadCoinbasePayloadBlueScore(data.blue_score, block.header.blue_score));
                 }
 
-                let expected_subsidy = self.coinbase_manager.calc_block_subsidy(block.header.daa_score);
+                // ADR-0060 Decision 1.4: the heartbeat lane is FEE-ONLY. A heartbeat block's
+                // declared subsidy is zero — descendant coinbases read this declaration into the
+                // reward fan-out, so zero here is what makes the lane mint nothing (the 25B supply
+                // of ADR-0059 is untouched by however many heartbeats a crisis runs).
+                let expected_subsidy = if self.palw_heartbeat_fee_only
+                    && block.header.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID
+                {
+                    0
+                } else {
+                    self.coinbase_manager.calc_block_subsidy(block.header.daa_score)
+                };
 
                 if data.subsidy != expected_subsidy {
                     return Err(RuleError::WrongSubsidy(expected_subsidy, data.subsidy));

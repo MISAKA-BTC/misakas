@@ -308,6 +308,16 @@ impl ConsensusSessionOwned {
         self.consensus.palw_producer_facts_v2(class_id, bond)
     }
 
+    /// ADR-0060 Decision 1: re-shape a standard template into the bondless heartbeat lane.
+    /// Reads the virtual state and walks a bounded chain suffix — the same order of work as a
+    /// template build, so it shares that call profile.
+    pub fn heartbeat_adapt_block_template(
+        &self,
+        template: kaspa_consensus_core::block::BlockTemplate,
+    ) -> Result<(kaspa_consensus_core::block::BlockTemplate, u64), kaspa_consensus_core::errors::block::RuleError> {
+        self.consensus.heartbeat_adapt_block_template(template)
+    }
+
     pub fn get_virtual_bits(&self) -> u32 {
         // Accessing cached virtual fields is lock-free and does not require spawn_blocking
         self.consensus.get_virtual_bits()

@@ -705,13 +705,18 @@ impl PalwConsensusParamsV2 {
         Ok(())
     }
 
-    /// Does this bundle accept the given header algorithm? A V2+FP network runs exactly two
-    /// block kinds: the attempt id and the receipt id (ADR-0044 Decision 1). This is the
-    /// two-id acceptance the FP-08 seam swap wires into the header/pruning gates; until then
-    /// the wired seam still demands the attempt id exclusively, and no live network carries a
-    /// bundle at all.
+    /// Does this bundle accept the given header algorithm? A V2+FP network runs **three**
+    /// block kinds: the attempt id, the receipt id (ADR-0044 Decision 1) — and, since
+    /// ADR-0060 Decision 1, the bondless heartbeat lane
+    /// ([`crate::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID`]): the self-verifying hash lane
+    /// that supplies the network's clock, cadence-capped by the slot rule and priced by its
+    /// own retarget, worth a fixed ε in fork choice, fee-only in the coinbase. Declared by the
+    /// `PALW_STATE_V2_VERSION` bump that landed with it — a V2 build without the lane and one
+    /// with it are different networks and refuse each other at the handshake.
     pub fn accepts_algo_id(&self, algo_id: u8) -> bool {
-        algo_id == self.algorithm_id || algo_id == self.freeprompt.receipt_algorithm_id()
+        algo_id == self.algorithm_id
+            || algo_id == self.freeprompt.receipt_algorithm_id()
+            || algo_id == crate::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID
     }
 }
 
@@ -1099,11 +1104,13 @@ pub(crate) mod tests {
         bundle.validate_ruleset_shape().expect("the fixture bundle holds every startup invariant");
         let id = palw_ruleset_id_v2(&bundle);
         assert_eq!(id, palw_ruleset_id_v2(&bundle.clone()), "the fingerprint is a pure function of the bundle");
-        // The bundle accepts exactly its two block kinds (ADR-0044 Decision 1) — and nothing else.
+        // The bundle accepts exactly its three block kinds — the two bonded lanes (ADR-0044
+        // Decision 1) and the bondless heartbeat (ADR-0060 Decision 1) — and nothing else.
         assert!(bundle.accepts_algo_id(crate::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2));
         assert!(bundle.accepts_algo_id(crate::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3));
-        for other in [0u8, 1, 2, 3, 4, 5, 8, 0xff] {
-            assert!(!bundle.accepts_algo_id(other), "algo {other} is neither lane");
+        assert!(bundle.accepts_algo_id(crate::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID));
+        for other in [0u8, 1, 2, 4, 5, 8, 0xff] {
+            assert!(!bundle.accepts_algo_id(other), "algo {other} is no lane of this network");
         }
         assert_eq!(PalwConsensusMode::ConsensusV2(bundle).required_algo_id(), Some(crate::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2));
         assert_eq!(PalwConsensusMode::Disabled.required_algo_id(), None);

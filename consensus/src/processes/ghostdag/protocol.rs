@@ -36,8 +36,14 @@ pub struct GhostdagManager<T: GhostdagStoreReader, S: RelationsStoreReader, U: R
     /// for the work calculated from header bits (which depends on current difficulty).
     /// For instance, assuming level 80 (i.e., pow hash has at least 80 zeros) is always
     /// above the difficulty target, all blocks in it should represent the same amount of
-    /// work regardless of whether current difficulty requires 20 zeros or 25 zeros.  
+    /// work regardless of whether current difficulty requires 20 zeros or 25 zeros.
     level_work: BlueWorkType,
+
+    /// ADR-0060 Decision 1.2: on a `ConsensusV2` network a heartbeat (algo-3) block's blue work
+    /// is the fixed ε — at EVERY level, unmaxed with `level_work`, or an ASIC pointed at the
+    /// lane would buy pruning-proof weight instead of chain weight. False on every non-V2
+    /// network, where algo-3 is the real production lane and its bits are the real price.
+    heartbeat_epsilon_work: bool,
 }
 
 impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V: HeaderStoreReader> GhostdagManager<T, S, U, V> {
@@ -48,9 +54,20 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
         relations_store: S,
         headers_store: Arc<V>,
         reachability_service: U,
+        // ADR-0060: true exactly on `ConsensusV2` networks — heartbeat blocks then weigh ε.
+        heartbeat_epsilon_work: bool,
     ) -> Self {
         // For ordinary GD, always keep level_work=0 so the lower bound is ineffective
-        Self { genesis_hash, k, ghostdag_store, relations_store, reachability_service, headers_store, level_work: 0.into() }
+        Self {
+            genesis_hash,
+            k,
+            ghostdag_store,
+            relations_store,
+            reachability_service,
+            headers_store,
+            level_work: 0.into(),
+            heartbeat_epsilon_work,
+        }
     }
 
     pub fn with_level(
@@ -62,6 +79,8 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
         reachability_service: U,
         level: BlockLevel,
         max_block_level: BlockLevel,
+        // ADR-0060: the ε rule holds at every level — see `heartbeat_epsilon_work` on the struct.
+        heartbeat_epsilon_work: bool,
     ) -> Self {
         Self {
             genesis_hash,
@@ -71,6 +90,7 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
             reachability_service,
             headers_store,
             level_work: level_work(level, max_block_level),
+            heartbeat_epsilon_work,
         }
     }
 
@@ -175,6 +195,20 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
                 // comes from the attempt lane, whose digests are inference-priced.
                 if kaspa_consensus_core::pow_layer0::algo_id_carries_no_chain_position(header.pow_algo_id) {
                     return BlueWorkType::from(0u64);
+                }
+                // **A heartbeat block's work is ε** (ADR-0060 Decision 1.2) — the lane sells
+                // time, not weight. Fixed and independent of the lane's own difficulty, so an
+                // ASIC pointed at it buys cadence-capped, near-weightless blocks; and deliberately
+                // NOT `.max(self.level_work)`: a heartbeat digest with many leading zeros earns a
+                // hierarchy position (levels are about pruning-proof structure), but at no level
+                // may it earn level-sized weight, or the proof comparison would price hash again.
+                // One, not zero (the receipt lane's figure above): among heartbeat-only branches —
+                // total bonded collapse, the regime the lane exists for — ε × n still orders the
+                // longer chain first.
+                if self.heartbeat_epsilon_work
+                    && header.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID
+                {
+                    return BlueWorkType::from(kaspa_consensus_core::palw_heartbeat_v1::HEARTBEAT_BLUE_WORK_EPSILON);
                 }
                 calc_work(header.bits).max(self.level_work)
             })

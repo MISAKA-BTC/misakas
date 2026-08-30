@@ -1601,14 +1601,14 @@ mod two_lane_gate_tests {
         let mode = PalwConsensusMode::ConsensusV2(bundle.clone());
         let required = mode.required_algo_id();
 
-        for id in [POW_ALGO_ID_PALW_COMMITTED_V2, POW_ALGO_ID_PALW_RECEIPT_V3] {
+        // Three lanes since ADR-0060: the two bonded PALW lanes, and the bondless heartbeat
+        // (algo-3 — the Phase-3 hash lane, re-admitted as the network's clock).
+        for id in [POW_ALGO_ID_PALW_COMMITTED_V2, POW_ALGO_ID_PALW_RECEIPT_V3, POW_ALGO_ID_BLAKE2B_SHA3] {
             check_algo_id_for_mode_accepting(id, required, mode.accepts_algo_id(id), false, false, false)
                 .unwrap_or_else(|e| panic!("a V2 network must accept its own lane {id}: {e:?}"));
         }
-        // The hash floor and the pre-V2 inference lanes are not this network's.
-        for id in
-            [POW_ALGO_ID_KHEAVYHASH, POW_ALGO_ID_ARGON2ID, POW_ALGO_ID_BLAKE2B_SHA3, POW_ALGO_ID_PALW_LLM, POW_ALGO_ID_PALW_OLLAMA]
-        {
+        // The pre-V2 inference lanes and the Phase-1/2 algos are not this network's.
+        for id in [POW_ALGO_ID_KHEAVYHASH, POW_ALGO_ID_ARGON2ID, POW_ALGO_ID_PALW_LLM, POW_ALGO_ID_PALW_OLLAMA] {
             assert!(
                 check_algo_id_for_mode_accepting(id, required, mode.accepts_algo_id(id), true, true, true).is_err(),
                 "a V2 network must not accept {id} — its lanes are exclusive"

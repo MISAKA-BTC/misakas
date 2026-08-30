@@ -178,7 +178,13 @@ use std::collections::{BTreeMap, BTreeSet};
 /// but this number tells two builds they disagree. It is hashed into the params fingerprint, so
 /// moving it is a coordinated upgrade — which for testnet-11 means the re-mint the audit already
 /// called for.
-pub const PALW_STATE_V2_VERSION: u16 = 12;
+///
+/// **12 → 13 (ADR-0060, the liveness doctrine): the heartbeat lane.** A V2 network now accepts
+/// bondless algo-3 heartbeat blocks (`palw_heartbeat_v1`) — new block validity (slot rule, lane
+/// retarget, zero-subsidy coinbase), new fork-choice arithmetic (ε work) — so a build without
+/// the lane and one with it disagree about which blocks and which coinbases are valid. Rides
+/// the ADR-0059 10B-cap re-mint.
+pub const PALW_STATE_V2_VERSION: u16 = 13;
 
 pub const PALW_STATE_V2_DOMAIN_OPERATOR_ID: &[u8] = b"misaka-palw/state-v2/operator-id/v1";
 
@@ -10021,7 +10027,7 @@ pub(crate) mod tests {
             })
         }
         spec_hash(b"misaka-palw/state-v2/state-root/v1", |s| {
-            s.update(&12u16.to_le_bytes()); // version_le(2) = 12, restated from the ADR (audit3: S-03 + S-04 + H4)
+            s.update(&13u16.to_le_bytes()); // version_le(2) = 13, restated from the ADR (ADR-0060: the heartbeat lane)
             s.update(spec_collection_root(b"bonds", &c.bonds).as_byte_slice());
             s.update(spec_collection_root(b"reserved_exposure", &c.reserved_exposure).as_byte_slice());
             s.update(spec_collection_root(b"classes", &c.classes).as_byte_slice());
@@ -10318,17 +10324,21 @@ pub(crate) mod tests {
     /// and H4 changed which blocks, registrations and slashes are valid without changing a schema. The
     /// version is the only carrier for a semantics-only change, so these constants moved with it —
     /// which is the rule working, not a nuisance.
+    ///
+    /// A fourth time for ADR-0060 (12 → 13): the heartbeat lane changes which blocks and which
+    /// coinbases are valid — new lane, new slot/difficulty rules, ε fork-choice work — with an
+    /// unchanged root schema. Same rule, same carrier.
     #[test]
-    fn the_version_12_state_root_golden_vectors() {
+    fn the_version_13_state_root_golden_vectors() {
         assert_eq!(
             PalwChainStateV2::genesis().state_root().to_string(),
-            "e6e982b20f08e8102d0faddc9707c8ef1ef04f0dacd298bdf67b7373b1156134d011ff36d2794538c5326925ef6f94427f0b147813773a6ee7f1ce604d136d9b",
-            "the empty state's version-12 root moved"
+            "935b81ba3a3f319f5c554a62c395ec00068fa813f7714c35670f94ef39953c85d8b3011cdfee1c11b8fc42af392f9a52c387b94e6ff96c77b29b81edc1e057e7",
+            "the empty state's version-13 root moved"
         );
         assert_eq!(
             m02_populated_state().state_root().to_string(),
-            "ec9a46f0a8df0390a2c6010f728169b90395fa36903015098ae0df2f4201ac38cad27d5cebe7679b86802990d0cf50112dff41a00d13e159ae25285a1f444e30",
-            "the inhabited state's version-12 root moved"
+            "f3b0528585cd07b85ba63760caf0baa379684a35607aea264c06421bf2bcb7a1fbaa47fc1e67bf63e181589981779c7489fe704d425f868472fd9c04afbfc88a",
+            "the inhabited state's version-13 root moved"
         );
     }
 }

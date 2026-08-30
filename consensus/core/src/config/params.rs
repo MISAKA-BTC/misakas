@@ -1035,6 +1035,7 @@ impl Params {
             dns_veto_ttl_daa_score: _,
             min_anchor_attesters: _,
             unbond_authz_mergeset_activation_daa_score,
+            inactivity_leak_daa,
         } = dns;
 
         visit(dns_activation_daa_score);
@@ -1045,6 +1046,7 @@ impl Params {
         visit(mandatory_attestation_inclusion_daa_score);
         visit(coinbase_settlement_consensus_activation_daa_score);
         visit(unbond_authz_mergeset_activation_daa_score);
+        visit(inactivity_leak_daa);
 
         let crate::vlt::VltParams {
             vlt_shadow_activation_daa_score,
@@ -1800,6 +1802,10 @@ pub const GENESIS_ACTIVE_DNS_PARAMS: DnsParams = DnsParams {
     // Genesis-active was chosen deliberately over a fence: the fence only papers over that single
     // historical stamp, at the cost of every future net inheriting a magic number.
     unbond_authz_mergeset_activation_daa_score: 0,
+    // ADR-0060 Decision 4: leak OFF on devnet/simnet — harnesses and drills assume a frozen
+    // validator set, and a drill that idles past a leak boundary should not watch its quorum
+    // denominator move under it.
+    inactivity_leak_daa: u64::MAX,
     // MISAKA Verified LLM Token-Weighted BFT: dormant. Devnet/simnet keep bonded-stake weight, so
     // the existing fast-finality test fixtures are unaffected. See `vlt::VltParams::INERT`.
     vlt: VltParams::INERT,
@@ -2039,6 +2045,10 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
     // Genesis-active was chosen deliberately over a fence: the fence only papers over that single
     // historical stamp, at the cost of every future net inheriting a magic number.
     unbond_authz_mergeset_activation_daa_score: 0,
+    // ADR-0060 Decision 4: ~7 days at the 10 bps cadence (864_000 DAA/day). Long enough that
+    // finality uniqueness is only at risk in a partition nobody could miss; short enough that a
+    // lost validator set stops being a permanent halt.
+    inactivity_leak_daa: 6_048_000,
     // MISAKA Verified LLM Token-Weighted BFT (`vlt::VltParams`): the replacement of bonded capital
     // by verified useful compute as the source of voting power. Shipped DORMANT
     // (`vlt_activation_daa_score: u64::MAX`) on mainnet + testnet: activating it is a coordinated
@@ -2191,6 +2201,9 @@ pub const TESTNET_DNS_PARAMS: DnsParams = DnsParams {
     required_work_depth: Uint576([100, 0, 0, 0, 0, 0, 0, 0, 0]),
     min_bond_amount_sompi: 10 * SOMPI_PER_KASPA,
     min_active_stake_sompi: 10 * SOMPI_PER_KASPA,
+    // ADR-0060 Decision 4: ~7 days at the frozen 120 s cadence (720 DAA/day). The inherited
+    // PRODUCTION figure is denominated at 10 bps and would be ~23 years here.
+    inactivity_leak_daa: 5_040,
     // Experimental single-operator testnet mesh: pin the validator-count floor to 1 (mainnet's
     // PRODUCTION floor is 3, audit H-11). This is the live testnet's intended config; do NOT raise
     // it here without re-provisioning multiple testnet validators.
@@ -5467,7 +5480,11 @@ mod consensus_params_id_tests {
             // community carved from it (Relaunch 3, coinbase marker 11,3). Operationally this is
             // a full re-mint for testnet-11 — stop the whole fleet first, wipe, redeploy; un-wiped
             // peers are refused at the handshake. Mainnet/devnet/simnet have no live chain.
-            ("mainnet", MAINNET_PARAMS, "be10e93919cb1bd948e1447c03695c53f8dc5426835714475b8df0d4676e4033"),
+            // **ALL FIVE moved again by ADR-0060 Decision 4: `DnsParams.inactivity_leak_daa`.**
+            // The finality inactivity leak's time constant enters every preset's params (~7 days
+            // at each live network's cadence; u64::MAX on devnet/simnet where drills assume a
+            // frozen set). Same re-mint train as the heartbeat lane and the 10B cap.
+            ("mainnet", MAINNET_PARAMS, "d46bbcca1c24b0c76c2451560315347af6cff68f048c9f91c0d8d156c9ce9276"),
             // Moved by the bps01⊕iso unification (2026-08-16): the CPU pins are now the UNION of
             // the two facts the branches discovered separately — `single-variant` (bps01, by
             // disassembly) ∧ `no-openmp` (iso, by the Linux link error) in `CPU_BUILD_PROFILE`,
@@ -5485,7 +5502,7 @@ mod consensus_params_id_tests {
             // see docs/testnet10-palw-rollout-runbook.md — and pinned MATERIALIZED (below) per
             // the 8208cd6 lesson, so the pre-merge values (`32cbf80f…` re-genesis-const /
             // `d07cb673…` shadow-materialized) were both superseded by that merge.
-            ("testnet", TESTNET_PARAMS, "60ec6ad310ffcf092733edca6df20c4df53d1aa44cd76bd483cacf64999ca46b"),
+            ("testnet", TESTNET_PARAMS, "3fac24a134d6ba703833d3b8a88a359941e94e8fe4c5ce5dbcd3fbcefd197fd7"),
             // The PALW staging net (gate-4 soak): differs from "testnet" in exactly the three
             // activation flips (hash lane off, PALW-4 on, Ollama off) + the TN11 genesis. Its own
             // pin proves the t10 row above did NOT move when this preset was added.
@@ -5657,9 +5674,15 @@ mod consensus_params_id_tests {
             // only this preset moves, because only this preset carries a PALW V2 bundle. The
             // re-mint the paragraph above already called for is the one that carries this too;
             // doing it on `404f8715…` would have bought a network needing a second one at once.
-            "b6ecc36298692c83f87b9aa070a681ba63f2daf713c0b86ddefc34ec376d61ad"),
-            ("simnet", SIMNET_PARAMS, "48f75cc83cacaaa5eb2056fa6a6207a2a018a04f8b6298b23994bc542781391d"),
-            ("devnet", DEVNET_PARAMS, "66928b8a8fe9a8d8c00e3c23845d1217412e6ae090543e7be623deb722aa45ba"),
+            //
+            // **Moved again by ADR-0060 (the liveness doctrine): `PALW_STATE_V2_VERSION` 12 → 13,
+            // the heartbeat lane.** A V2 network now accepts bondless algo-3 heartbeat blocks —
+            // new block validity (slot rule, lane retarget, fee-only coinbase) and new fork-choice
+            // arithmetic (ε work) — so the version is the carrier again, and only this preset
+            // moves. Rides the ADR-0059 10B-cap re-mint (the same coordinated wipe).
+            "4486d9b1c056bc8e534d633100dff43a5eec546d885be852bf729fde1247e3e5"),
+            ("simnet", SIMNET_PARAMS, "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd"),
+            ("devnet", DEVNET_PARAMS, "6b12b8e9c755c0117057989406dbc36214fc8b7be97108beca4ae2099ab86a69"),
         ]
         .into_iter()
         .filter_map(|(name, params, expected)| {

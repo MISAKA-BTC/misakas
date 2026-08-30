@@ -202,6 +202,9 @@ pub struct Args {
     /// ADR-0042: run the in-process PALW-RC block producer. Only a `ConsensusV2` network has
     /// anything for it to do, and it says so and stops otherwise.
     pub palw_produce: bool,
+    /// ADR-0060 Decision 1: run the bondless heartbeat miner, paying the lane's fees to this
+    /// ML-DSA-87 address. One CPU thread, fee-only, only meaningful on a ConsensusV2 network.
+    pub palw_heartbeat_miner_address: Option<String>,
     pub palw_producer_key: Option<String>,
     pub palw_producer_bond: Option<String>,
     /// **Artifact files for classes whose weights cannot be derived** (repeatable).
@@ -371,6 +374,7 @@ impl Default for Args {
             enable_validator: false,
             validator_key: None,
             palw_produce: false,
+            palw_heartbeat_miner_address: None,
             palw_producer_key: None,
             palw_producer_bond: None,
             palw_class_artifact: Vec::new(),
@@ -952,6 +956,14 @@ pub fn cli() -> Command {
                 .help("PALW: where produced blocks pay their reward. Must be an ML-DSA-87 P2PKH address — PQ-only consensus rejects anything else, and the block would be dead on arrival."),
         )
         .arg(
+            Arg::new("palw-heartbeat-miner-address")
+                .long("palw-heartbeat-miner-address")
+                .env("KASPAD_PALW_HEARTBEAT_MINER_ADDRESS")
+                .require_equals(true)
+                .value_parser(clap::value_parser!(String))
+                .help("ADR-0060: run the bondless heartbeat miner (algo-3, one CPU thread, fee-only — the lane that keeps the chain's clock alive when every bonded lane is silent), paying its fees to this ML-DSA-87 P2PKH address. Only a ConsensusV2 network has the lane. Default off."),
+        )
+        .arg(
             arg!(--"palw-panel" "PALW ADR-0042 Decision 7: run the in-process panel service — verify gossiped claim material against the claims this node's bond is seated on, sign and broadcast receipts, and (when --palw-fee-outpoint is set) submit the assembled quorum to the chain. Uses --palw-producer-key and --palw-producer-bond for the seat identity; --palw-produce is NOT required. Only a ConsensusV2 network can use it. Default off.")
                 .env("KASPAD_PALW_PANEL"),
         )
@@ -1441,6 +1453,10 @@ impl Args {
                 .get_one::<String>("palw-producer-pay-address")
                 .cloned()
                 .or(defaults.palw_producer_pay_address),
+            palw_heartbeat_miner_address: m
+                .get_one::<String>("palw-heartbeat-miner-address")
+                .cloned()
+                .or(defaults.palw_heartbeat_miner_address),
             evm_fee_recipient: m.get_one::<String>("evm-fee-recipient").cloned().or(defaults.evm_fee_recipient),
             stake_bond: m.get_one::<String>("stake-bond").cloned().or(defaults.stake_bond),
             validator_mode: m.get_one::<String>("validator-mode").cloned().or(defaults.validator_mode),

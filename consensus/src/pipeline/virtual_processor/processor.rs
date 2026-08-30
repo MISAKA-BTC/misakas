@@ -5467,7 +5467,16 @@ impl VirtualStateProcessor {
         let (contributions, epoch_anchor_daa) =
             self.collect_stake_contributions_v2(sink, None, &bonds, net_id.as_byte_slice(), dns_params, weight);
 
-        let totals = self.total_weight_by_epoch(sink, &bonds, net_id.as_byte_slice(), dns_params, &epoch_anchor_daa, weight);
+        // ADR-0060 Decision 4: the leak's evidence comes from the SAME verified contribution set
+        // the numerator is aggregated from, so "counted as present" and "counted as voting" are
+        // one fact. A validator with no contribution in the walked window and no fresh bond is
+        // past the leak's grace exactly when the window itself says so.
+        let last_attestation = kaspa_consensus_core::dns_finality::last_attestation_daa_by_validator(&contributions, &epoch_anchor_daa);
+        let leak = kaspa_consensus_core::dns_finality::InactivityLeakViewV1 {
+            last_attestation_daa: &last_attestation,
+            leak_after_daa: dns_params.inactivity_leak_daa,
+        };
+        let totals = self.total_weight_by_epoch(sink, &bonds, net_id.as_byte_slice(), dns_params, &epoch_anchor_daa, weight, leak);
         let per_epoch = aggregate_epoch_tallies(&contributions, &totals);
         let stake_depth = compute_stake_score(&per_epoch, credit_rule);
 
@@ -5507,8 +5516,21 @@ impl VirtualStateProcessor {
                 let shadow_weight = ContributionWeight::Vlt { snapshot: &snapshot, vlt: &dns_params.vlt };
                 let (shadow_contribs, shadow_anchor_daa) =
                     self.collect_stake_contributions_v2(sink, None, &bonds, net_id.as_byte_slice(), dns_params, shadow_weight);
-                let shadow_totals =
-                    self.total_weight_by_epoch(sink, &bonds, net_id.as_byte_slice(), dns_params, &shadow_anchor_daa, shadow_weight);
+                let shadow_last =
+                    kaspa_consensus_core::dns_finality::last_attestation_daa_by_validator(&shadow_contribs, &shadow_anchor_daa);
+                let shadow_leak = kaspa_consensus_core::dns_finality::InactivityLeakViewV1 {
+                    last_attestation_daa: &shadow_last,
+                    leak_after_daa: dns_params.inactivity_leak_daa,
+                };
+                let shadow_totals = self.total_weight_by_epoch(
+                    sink,
+                    &bonds,
+                    net_id.as_byte_slice(),
+                    dns_params,
+                    &shadow_anchor_daa,
+                    shadow_weight,
+                    shadow_leak,
+                );
                 aggregate_epoch_tallies(&shadow_contribs, &shadow_totals)
             } else {
                 Vec::new()
@@ -6265,7 +6287,12 @@ impl VirtualStateProcessor {
             self.vlt_epoch_snapshot(tip, sink_daa, bonds, net_id, dns_params, dns_params.vlt_shadow_active_at(sink_daa), false);
         let weight = ContributionWeight::Vlt { snapshot: &snapshot, vlt: &dns_params.vlt };
         let (contributions, epoch_anchor_daa) = self.collect_stake_contributions_v2(tip, None, bonds, net_id, dns_params, weight);
-        let totals = self.total_weight_by_epoch(tip, bonds, net_id, dns_params, &epoch_anchor_daa, weight);
+        let last_attestation = kaspa_consensus_core::dns_finality::last_attestation_daa_by_validator(&contributions, &epoch_anchor_daa);
+        let leak = kaspa_consensus_core::dns_finality::InactivityLeakViewV1 {
+            last_attestation_daa: &last_attestation,
+            leak_after_daa: dns_params.inactivity_leak_daa,
+        };
+        let totals = self.total_weight_by_epoch(tip, bonds, net_id, dns_params, &epoch_anchor_daa, weight, leak);
         let prevoted = quorum_epochs(&aggregate_epoch_tallies(&contributions, &totals), dns_params.vlt.min_network_compute);
 
         let records = self.collect_precommits(tip, bonds, net_id, dns_params, weight, &prevoted);
@@ -6328,7 +6355,12 @@ impl VirtualStateProcessor {
         };
         let (contributions, epoch_anchor_daa) =
             self.collect_stake_contributions_v2(tip, Some(ancestor), bonds, net_id, dns_params, weight);
-        let totals = self.total_weight_by_epoch(tip, bonds, net_id, dns_params, &epoch_anchor_daa, weight);
+        let last_attestation = kaspa_consensus_core::dns_finality::last_attestation_daa_by_validator(&contributions, &epoch_anchor_daa);
+        let leak = kaspa_consensus_core::dns_finality::InactivityLeakViewV1 {
+            last_attestation_daa: &last_attestation,
+            leak_after_daa: dns_params.inactivity_leak_daa,
+        };
+        let totals = self.total_weight_by_epoch(tip, bonds, net_id, dns_params, &epoch_anchor_daa, weight, leak);
         let per_epoch = aggregate_epoch_tallies(&contributions, &totals);
         compute_stake_score(&per_epoch, dns_params.epoch_credit_rule(pov_daa_score))
     }
@@ -6350,10 +6382,13 @@ impl VirtualStateProcessor {
         dns_params: &DnsParams,
         epoch_anchor_daa: &BTreeMap<u64, u64>,
         weight: ContributionWeight<'_>,
+        // ADR-0060 Decision 4: the inactivity leak's evidence — built by the caller from the
+        // SAME contribution set the numerator aggregates, so presence and voting cannot drift.
+        leak: kaspa_consensus_core::dns_finality::InactivityLeakViewV1<'_>,
     ) -> BTreeMap<u64, u128> {
         let base = match weight {
-            ContributionWeight::BondedStake => total_active_stake_by_epoch(bonds, epoch_anchor_daa),
-            ContributionWeight::Vlt { snapshot, vlt } => total_voting_weight_by_epoch(bonds, epoch_anchor_daa, snapshot, vlt),
+            ContributionWeight::BondedStake => total_active_stake_by_epoch(bonds, epoch_anchor_daa, leak),
+            ContributionWeight::Vlt { snapshot, vlt } => total_voting_weight_by_epoch(bonds, epoch_anchor_daa, snapshot, vlt, leak),
         };
         let pov_daa = self.headers_store.get_daa_score(tip).unwrap_or(0);
         if !dns_params.vlt_weighting_active_at(pov_daa) || matches!(weight, ContributionWeight::BondedStake) {
@@ -9693,6 +9728,57 @@ impl VirtualStateProcessor {
         })
     }
 
+    /// **ADR-0060 Decision 1: adapt a standard template into the heartbeat lane's shape.**
+    ///
+    /// The mining manager's template is the bonded attempt lane's — algo-6, the global bits, a
+    /// full-subsidy coinbase, a `palw_commitment` the caller was going to fill. A heartbeat
+    /// block differs in exactly the lane facts, and in nothing else: the algo id, the lane's own
+    /// bits (the same window arithmetic validation runs), an EMPTY commitment (there is no
+    /// attempt — that is the lane), and a coinbase payload declaring ZERO subsidy (Decision 1.4;
+    /// the merkle root moves with it). The transactions, parents, pruning point, reward
+    /// outputs, EVM fields and the committed parent state root all stand — a heartbeat block is
+    /// an ordinary block in every other respect, which is the point: bond registrations ride it.
+    ///
+    /// Returns the template plus the EARLIEST timestamp (ms) the slot rule admits. When that is
+    /// in the future the caller must wait and rebuild — a block ground early is refused with
+    /// `HeartbeatTooEarly` by every validating node. The lane facts are computed from the
+    /// CURRENT virtual POV; if the virtual moves between this call and submission the block is
+    /// refused and the caller simply rebuilds, the same staleness contract every template has.
+    pub fn heartbeat_adapt_block_template(&self, mut template: BlockTemplate) -> Result<(BlockTemplate, u64), RuleError> {
+        use kaspa_consensus_core::palw_heartbeat_v1 as hb;
+        let virtual_state = self.virtual_stores.read().state.get().unwrap();
+        // The SAME chain-order evidence validation walks (see `processes::heartbeat_evidence`);
+        // construction and validation must read one answer or the template refuses itself.
+        let rows = crate::processes::heartbeat_evidence::collect_heartbeat_evidence(
+            self.ghostdag_store.as_ref(),
+            self.headers_store.as_ref(),
+            virtual_state.ghostdag_data.selected_parent,
+            self.genesis.hash,
+        );
+        // The slot: at or after the window's youngest heartbeat plus the current interval. The
+        // reported boundary is evaluated at the candidate timestamp; the ladder only tightens as
+        // silence grows, so waiting to the boundary can never make the slot stricter.
+        let earliest = match hb::check_heartbeat_slot(&rows, template.block.header.timestamp) {
+            Ok(()) => template.block.header.timestamp,
+            Err(early) => early.last_heartbeat_timestamp.saturating_add(early.interval_ms),
+        };
+        template.block.header.timestamp = template.block.header.timestamp.max(earliest);
+        template.block.header.pow_algo_id = hb::PALW_HEARTBEAT_ALGO_ID;
+        template.block.header.palw_commitment = vec![];
+        template.block.header.bits = hb::heartbeat_expected_bits(&rows, template.block.header.timestamp);
+        // Decision 1.4: the declared subsidy is what descendants read into the reward fan-out —
+        // zero is what makes the lane fee-only and the ADR-0059 supply exact.
+        let blue_score = template.block.header.blue_score;
+        let coinbase = &mut template.block.transactions[0];
+        let zeroed = kaspa_consensus_core::coinbase::CoinbaseData { blue_score, subsidy: 0, miner_data: template.miner_data.clone() };
+        coinbase.payload =
+            self.coinbase_manager.serialize_coinbase_payload(&zeroed).expect("a payload the manager just built reserializes");
+        coinbase.finalize();
+        template.block.header.hash_merkle_root = calc_hash_merkle_root(template.block.transactions.iter());
+        template.block.header.finalize();
+        Ok((template, earliest))
+    }
+
     fn build_block_template_with_selector_provider<F>(
         &self,
         miner_data: MinerData,
@@ -10151,6 +10237,10 @@ impl VirtualStateProcessor {
             .coinbase_manager
             .expected_coinbase_transaction(
                 virtual_state.daa_score,
+                // The template path always builds the bonded lanes' coinbase; a heartbeat
+                // template is derived from it by `heartbeat_adapt_block_template`, which
+                // re-declares the subsidy as zero (ADR-0060 Decision 1.4).
+                self.coinbase_manager.calc_block_subsidy(virtual_state.daa_score),
                 miner_data.clone(),
                 &virtual_state.ghostdag_data,
                 &virtual_state.mergeset_rewards,

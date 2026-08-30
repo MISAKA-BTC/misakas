@@ -115,6 +115,11 @@ impl CoinbaseManager {
     pub fn expected_coinbase_transaction<T: AsRef<[u8]>>(
         &self,
         daa_score: u64,
+        // **The subsidy this block's own payload declares** (ADR-0060 Decision 1.4). Almost
+        // always `calc_block_subsidy(daa_score)` — but a heartbeat (algo-3 on a ConsensusV2
+        // network) declares ZERO, and the validation path must expect the same payload the body
+        // rule enforced, or every heartbeat chain block dies here as "not built as expected".
+        own_subsidy: u64,
         miner_data: MinerData<T>,
         ghostdag_data: &GhostdagData,
         mergeset_rewards: &BlockHashMap<BlockRewardData>,
@@ -336,9 +341,10 @@ impl CoinbaseManager {
             }
         }
 
-        // Build the current block's payload
-        let subsidy = self.calc_block_subsidy(daa_score);
-        let payload = self.serialize_coinbase_payload(&CoinbaseData { blue_score: ghostdag_data.blue_score, subsidy, miner_data })?;
+        // Build the current block's payload. `own_subsidy` is the caller's per-lane answer —
+        // see the parameter; `daa_score` still prices every MERGED block's reward above.
+        let payload =
+            self.serialize_coinbase_payload(&CoinbaseData { blue_score: ghostdag_data.blue_score, subsidy: own_subsidy, miner_data })?;
 
         Ok(CoinbaseTransactionTemplate {
             tx: Transaction::new(constants::TX_VERSION, vec![], outputs, 0, subnets::SUBNETWORK_ID_COINBASE, 0, payload),
