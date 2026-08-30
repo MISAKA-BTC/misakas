@@ -6220,7 +6220,11 @@ mod consensus_params_id_tests {
     ///
     /// The ADR names this and offers "ship dormant behind a fence armed after the network has
     /// bonds to spare", which is a thing an operator has to remember. `validate_palw_v2` refuses
-    /// the configuration instead, which is a thing nobody has to remember.
+    /// the configuration instead, which is a thing nobody has to remember — and it is reachable:
+    /// `ConfigBuilder::build` (`config/mod.rs:287`) panics on a failing `validate_palw_v2` before
+    /// a peer is dialed, the same fail-loud stance the V1 fence already has. A guard that only
+    /// ever ran from its own unit test would be the gate-that-never-fires this ADR line keeps
+    /// finding.
     #[test]
     fn a_bond_maturity_fence_armed_inside_its_own_window_is_refused() {
         let v2 = palw_rc_shipped_params();
