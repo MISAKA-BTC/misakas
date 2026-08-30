@@ -290,3 +290,46 @@ fraud signal, until availability and the seat-diversity rule are fixed.
 Remedies belong with ADR-0065: draw seats from distinct operators (the bond-maturity work has to
 touch the same draw), and either make `Unavailable` require positive proof of a refusal rather than
 a failed fetch, or require the seats reporting it to be provably distinct from one another.
+
+### Correction to the second addendum — the artifact gap was real, and it was not the cause
+
+The addendum above named the cause as a seat-side configuration gap: the producer loaded three class
+artifacts and host C's three seats loaded two. That gap was real and has been closed — the missing
+`qwen25-coder-a16.palwart` was deployed to C, all three seat units now load the same three artifacts
+the producer does, and the load is confirmed in each seat's log.
+
+**It did not fix the convictions.** Measured on a clean window with all three seats up and fully
+configured:
+
+| panel | Valid | Unavailable |
+|---|---|---|
+| ibm (co-located with the producer) | 3 | **0** |
+| C seat2 | 28 | 16 |
+| C seat3 | 156 | 64 |
+| C seat4 | 108 | 57 |
+
+Still ~30 % `Unavailable` from every remote seat, and the chain still recorded 3 `ProducerDefaulted`
+against 5 `ReceiptLicensed`. So the fleet fix stands on its own merits and the diagnosis it was based
+on was wrong.
+
+**The real cause is the material transport.** A seat verifies a claim from *material* it holds; when
+it holds none it issues a gossip **pull** (`request_palw_material`, rate-limited to one attempt per
+25 DAA), waits out half the receipt window, and then signs `Unavailable`. The producer's own panel
+never needs the pull, which is exactly why it is at 0 %. Roughly a third of pulls evidently never
+deliver, and **neither side logs a request, a hit, or a miss** — grepping host C for any
+gossip/material/pull line over the whole post-restart window returns nothing.
+
+So the conviction rate is a measurement of relay loss, wearing a fraud verdict's clothes.
+
+**This strengthens ADR-0065 D4 rather than replacing it.** The remedy is not "ship the artifacts" —
+that is now done and the convictions continue. It is that `Unavailable` must require positive
+evidence of a refusal, because the seat cannot distinguish *the producer withheld* from *the network
+did not deliver*, and under the current rule the second is punished as the first. Two additions the
+measurement earns:
+
+* **The transport must be observable before it can be trusted.** A pull that is neither logged when
+  sent, when answered, nor when it times out cannot be operated, and its loss rate can only be
+  inferred from convictions — which is how a third of the chain's claims were lost unnoticed.
+* **Half the receipt window is one rate-limited retry.** With one pull per 25 DAA, a seat gets very
+  few attempts before it must accuse. That is a tuning question only after the transport is
+  observable; until then the retry budget is being spent blind.
