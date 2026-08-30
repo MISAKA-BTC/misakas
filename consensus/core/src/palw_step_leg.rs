@@ -393,7 +393,7 @@ pub fn step_range_sibling_count_v1(leaf_count: u64, first: u64, k: u64) -> u64 {
         if !a.is_multiple_of(2) {
             n += 1;
         }
-        if !b.is_multiple_of(2) && !(b == width && !width.is_multiple_of(2)) {
+        if !b.is_multiple_of(2) && (b != width || width.is_multiple_of(2)) {
             n += 1;
         }
         a /= 2;

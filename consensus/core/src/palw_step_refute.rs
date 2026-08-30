@@ -1097,7 +1097,7 @@ fn qwen36_row(
                     // Block-aligned geometry means no two ranges share a covering tile (the
                     // expert width is a multiple of the producer's tile — checked, not assumed),
                     // so the opened row is the ranges' covering runs, in order, disjoint.
-                    if ranges.iter().any(|&(rs, _)| !(rs % out_w.max(1) == ranges[0].0 % out_w.max(1))) || out_w % st != 0 {
+                    if ranges.iter().any(|&(rs, _)| rs % out_w.max(1) != ranges[0].0 % out_w.max(1)) || !out_w.is_multiple_of(st) {
                         return Err(PalwStepRefuteError::Unadjudicable);
                     }
                     let opened = &inputs[0];
@@ -2621,10 +2621,10 @@ fn canonical_input_leaves_anchored(
         for (ordinal, &r) in node.input_refs.iter().enumerate() {
             // The conv opens ONE ref per position; the others contribute no lanes to the
             // challenged channels and are not opened at all.
-            if let Some((slice_ref, _, _, _)) = conv_slice {
-                if ordinal != slice_ref {
-                    continue;
-                }
+            if let Some((slice_ref, _, _, _)) = conv_slice
+                && ordinal != slice_ref
+            {
+                continue;
             }
             let in_slot = if r >= PALW_STEP_INPUT_SENTINEL_MIN {
                 match r {
@@ -2920,7 +2920,6 @@ pub fn check_execution_step_refutation_v1(
     // 3) Recompute the node's full output row(s) for the challenged position: concatenate
     //    each logical input row's tiles back into one row.
     let mut inputs: Vec<Vec<u32>> = Vec::with_capacity(required.len());
-    let mut cursor = 0usize;
     // Which logical rows are the KV refs, in the order `canonical_input_leaves` emits them — the
     // anchor's history is prepended to exactly those, and to nothing else.
     // `canonical_input_leaves`' KV branch emits exactly one required row per `input_refs` entry, in
@@ -2965,10 +2964,9 @@ pub fn check_execution_step_refutation_v1(
             _ => Vec::new(),
         };
         let _ = row_tiles;
-        for preimage in &refutation.inputs[cursor].preimages {
+        for preimage in &refutation.inputs[row_index].preimages {
             row.extend(preimage.values_le.chunks_exact(4).map(|q| u32::from_le_bytes([q[0], q[1], q[2], q[3]])));
         }
-        cursor += 1;
         inputs.push(row);
     }
     // The TRUE kv length of the challenged position — never the padded cache length (ADR-0030
