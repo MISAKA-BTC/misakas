@@ -563,10 +563,21 @@ fn main() {
                 respond(
                     &mut stream,
                     "200 OK",
+                    // The identity, not just the runtime. A client cannot otherwise tell whether the
+                    // gateway it is talking to is accountable to anything: the class id is what a
+                    // chain registers and a court adjudicates, and the bond outpoint is who pays if
+                    // the answer was a lie. All three are public on-chain facts — a `/health` that
+                    // withheld them would only be hiding them from the person deciding to trust
+                    // this endpoint. The commitment carries the same values, so a caller can check
+                    // that the job it got back came from the identity advertised here.
                     &serde_json::json!({
                         "status": "ok",
                         "runtime_manifest_hash": hex(worker_id.runtime_manifest_hash),
                         "template_id": TEMPLATE_ID_V1,
+                        "class_id": hex(identity.class_id),
+                        "network_domain": hex(identity.network_domain),
+                        "operator_id": hex(identity.operator_id),
+                        "bond": format!("{}:{}", identity.executor_bond.transaction_id, identity.executor_bond.index),
                     }),
                 );
             }
