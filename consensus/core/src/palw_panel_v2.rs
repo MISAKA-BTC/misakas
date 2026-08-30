@@ -562,6 +562,16 @@ where
                     });
                 }
             }
+            // **ADR-0065 D4: past the fence this verdict accuses nobody, so it is not checked as an
+            // accusation.** The obligation gate below exists because a quorum of `Unavailable`
+            // voided an honest producer's claim; with no such quorum reachable it guards nothing,
+            // and keeping it would let one seat's malformed abstention refuse a whole receipt set
+            // — killing an otherwise licensable claim on a field the rule no longer reads.
+            // Nothing downstream reads these fields either: the charge that used to is the one D4
+            // removes.
+            PalwReceiptVerdictV2::Unavailable { .. } if unavailable_abstains => {
+                unavailable += 1;
+            }
             PalwReceiptVerdictV2::Unavailable { chunk_index, requested_daa } => {
                 // An accusation has to name an obligation the producer ACTUALLY HAD. None of
                 // this proves a byte went unsent — nothing on-chain can — but it removes the
@@ -1028,6 +1038,26 @@ mod tests {
         assert_eq!(
             validate_receipt_quorum_v2_with_policy(&bound, &p, &sp, &here, net, &claim_id, &served, verify, true),
             Ok(PalwReceiptQuorumV2::Licensed { valid: 2 })
+        );
+
+        // **A malformed abstention must not kill a licensable set.** The obligation gate refuses
+        // an `Unavailable` naming a chunk the attempt never committed to, and refuses the WHOLE
+        // receipt set with it — which is right while the verdict is an accusation and wrong once
+        // it is not: one seat's bad field would otherwise void a claim three seats verified.
+        let bad_chunk = PalwReceiptVerdictV2::Unavailable { chunk_index: u32::MAX, requested_daa: SIGNED_DAA };
+        let mixed = vec![
+            sign_as(&seats[0], PalwReceiptVerdictV2::Valid),
+            sign_as(&seats[1], PalwReceiptVerdictV2::Valid),
+            sign_as(&seats[2], bad_chunk),
+        ];
+        assert!(
+            matches!(check(&bound, &mixed), Err(PalwPanelV2Error::UnmetObligationNotProven { .. })),
+            "with the fence off it is an accusation, and a contentless one poisons the set"
+        );
+        assert_eq!(
+            validate_receipt_quorum_v2_with_policy(&bound, &p, &sp, &here, net, &claim_id, &mixed, verify, true),
+            Ok(PalwReceiptQuorumV2::Licensed { valid: 2 }),
+            "past the fence it accuses nobody, so it is not checked as an accusation and the claim licenses"
         );
 
         // A split (1 Valid, 1 Unavailable) is no quorum for either transition.
