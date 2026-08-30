@@ -254,6 +254,38 @@ option. Re-price if desired, but never in place of D1–D4.
 * **D4 is the one that stops present harm**, and unlike D1 and D2 it is not defeated by a free
   identity namespace. It should ship first.
 
+### What an adversarial review of the landed code established, and none of it is fixable by editing D4
+
+* **Past the fence, seat accountability is gone entirely.** `slash_dissenting_seats` has two call
+  sites; the `ProducerDefaulted` one becomes unreachable and the licensing one skips `Withheld`, and
+  `slash_silent_seats` was already a no-op. So no seat's receipt behaviour is punishable by
+  anything. That is the honest position — this chain cannot observe silence, and it cannot tell a
+  lost fetch from a refusal — but it should be stated rather than discovered: **a seat that files
+  nothing, files `Unavailable` forever, or lies `Valid` pays the same, which is zero.** Seat
+  accountability needs receipts that ride the chain independently of a concluding object; until one
+  exists there is nothing to charge on.
+* **The redraw is weaker than D4's fallback assumes, for a reason D4 cannot reach.** Two defects,
+  one fixed here and one structural. Fixed: the seat service keyed its "already answered" set by
+  CLAIM, so every seat that answered a first panel silently skipped the second — the redraw dealt
+  new seats and then muted any that had sat before. Structural: `derive_panel_v2` re-randomises only
+  the ticket ORDER (by `anchor_block`), so on a registry holding exactly `seat_count + 1` bonds —
+  the shipped genesis — the second panel is the identical seat SET. **A redraw only helps a network
+  with spare bonds.** With none, D4's fallback is simply the timeout, which is still the right
+  outcome (escrow void, nobody slashed) but is not the second opinion the redraw was built for.
+* **D1's arming guard is a genesis-only check and cannot see the live registry.** It proves the
+  bonds that exist at genesis are mature when the fence fires; it cannot prove the same of a
+  REPLACEMENT. On the zero-slack shipped registry, if one non-executor bond leaves eligibility — the
+  operator retires it, or the escrow slash drives it under `min_collateral_sompi` — the replacement
+  is unseatable for a whole `bond_maturity_daa`, and a short draw is no panel: every claim voids at
+  `BindTimeout` and the frontier stops for the window's duration. Without D1 the same replacement
+  restores panels in the next block. **So D1 must not be armed on a network running at
+  `seat_count + 1` bonds**, and that is an operational precondition the config check cannot enforce
+  — unlike the genesis case, which it does.
+* **Arming D1 is a coordinated change, even though the handshake permits a rolling one.** Two
+  operators who schedule it at the same height with different windows keep one
+  `consensus_identity_id` and are told only by a warning. Deliberate — it is the standing rule for a
+  value inert until its fence fires — but it means the window has to be agreed out of band.
+
 ## Two operational rules that fall out, worth keeping even after the code is fixed
 
 1. **A conviction verdict must log its reason.** The panel files `Unavailable` with the claim id and
