@@ -321,6 +321,11 @@ pub fn qwen36_canonical_classes_v1() -> Vec<Qwen36CanonicalClassV1> {
             geometry: kaspa_consensus_core::palw_qwen36_profile::QWEN3_CODER_30B_A3B,
             canonical_job: kaspa_consensus_core::palw_qwen36_profile::QWEN36_RC_CANONICAL,
         },
+        Qwen36CanonicalClassV1 {
+            model_id: "Qwen/Qwen3.5-2B",
+            geometry: kaspa_consensus_core::palw_qwen36_profile::QWEN35_2B,
+            canonical_job: kaspa_consensus_core::palw_qwen36_profile::QWEN36_RC_CANONICAL,
+        },
     ]
 }
 

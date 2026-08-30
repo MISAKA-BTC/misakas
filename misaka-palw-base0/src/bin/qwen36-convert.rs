@@ -242,10 +242,14 @@ fn main() {
         .and_then(|v| v.as_str())
         .unwrap_or_else(|| die("the checkpoint declares no architecture".into()))
         .to_string();
-    if arch != "qwen35moe" && arch != "qwen3moe" {
-        die(format!("this converter reads qwen35moe or qwen3moe checkpoints, not {arch}"));
+    if arch != "qwen35moe" && arch != "qwen3moe" && arch != "qwen35" {
+        die(format!("this converter reads qwen35moe, qwen3moe or qwen35 checkpoints, not {arch}"));
     }
-    let hybrid = arch == "qwen35moe";
+    // qwen35 (the dense 2B) is the hybrid's layer stack — same GDN recurrence, same fused
+    // q/gate attention — with the mixture degenerated to one always-chosen expert: a dense
+    // SwiGLU FFN expressed in the family's graph (router softmax over one logit is exactly 1).
+    let hybrid = arch == "qwen35moe" || arch == "qwen35";
+    let dense_mixture = arch == "qwen35";
     let meta = |k: &str| -> u64 {
         dir.metadata.get(&format!("{arch}.{k}")).and_then(|v| v.as_u64()).unwrap_or_else(|| die(format!("no metadata {arch}.{k}")))
     };
@@ -262,11 +266,11 @@ fn main() {
     let linear_k_heads = if hybrid { meta("ssm.group_count") as usize } else { 0 };
     let linear_v_heads = if hybrid { meta("ssm.time_step_rank") as usize } else { 0 };
     let conv_kernel = if hybrid { meta("ssm.conv_kernel") as usize } else { 0 };
-    let n_experts = meta("expert_count") as usize;
-    let experts_per_token = meta("expert_used_count") as usize;
-    let moe_dim = meta("expert_feed_forward_length") as usize;
-    let shared_dim = meta("expert_shared_feed_forward_length") as usize;
-    if hybrid && shared_dim == 0 {
+    let n_experts = if dense_mixture { 1 } else { meta("expert_count") as usize };
+    let experts_per_token = if dense_mixture { 1 } else { meta("expert_used_count") as usize };
+    let moe_dim = if dense_mixture { meta("feed_forward_length") as usize } else { meta("expert_feed_forward_length") as usize };
+    let shared_dim = if dense_mixture { 0 } else { meta("expert_shared_feed_forward_length") as usize };
+    if hybrid && !dense_mixture && shared_dim == 0 {
         die("a qwen35moe checkpoint without a shared expert is not a shape this pipeline has measured".into());
     }
     if !hybrid && shared_dim != 0 {
@@ -565,7 +569,11 @@ fn main() {
                 let out = reader.get(&g("ssm_out.weight"));
                 push(&mut writer, &mut scales, &g("linear_o.weight"), &out, d);
                 let ssm_a = reader.get(&g("ssm_a"));
-                let ssm_dt = reader.get(&g("ssm_dt"));
+                // The 35B checkpoint names the dt bias `ssm_dt`; the 2B names it `ssm_dt.bias`.
+                let ssm_dt = {
+                    let bias_name = g("ssm_dt.bias");
+                    if reader.dir.tensors.contains_key(&bias_name) { reader.get(&bias_name) } else { reader.get(&g("ssm_dt")) }
+                };
                 let ssm_norm = reader.get(&g("ssm_norm.weight"));
 
                 let w = reference::LinearWeights {
@@ -848,15 +856,18 @@ fn main() {
         }
 
         // ---- the mixture ------------------------------------------------------------------
-        let router = reader.get(&g("ffn_gate_inp.weight"));
+        // The dense member has no router tensor: its single expert is always chosen, and a
+        // zero row leaves the softmax-over-one at exactly 1.0 (`quantize_rows` gives an
+        // all-zero row scale 1.0, so nothing divides by zero downstream).
+        let router = if dense_mixture { vec![0f32; n_experts * d] } else { reader.get(&g("ffn_gate_inp.weight")) };
         push(&mut writer, &mut scales, &g("ffn_router.weight"), &router, n_experts);
         let shared_router = if shared_dim > 0 { reader.get(&g("ffn_gate_inp_shexp.weight")) } else { Vec::new() };
         if shared_dim > 0 {
             push(&mut writer, &mut scales, &g("ffn_shared_gate.weight"), &shared_router, 1);
         }
-        let gate_exps = reader.get(&g("ffn_gate_exps.weight"));
-        let up_exps = reader.get(&g("ffn_up_exps.weight"));
-        let down_exps = reader.get(&g("ffn_down_exps.weight"));
+        let gate_exps = reader.get(&g(if dense_mixture { "ffn_gate.weight" } else { "ffn_gate_exps.weight" }));
+        let up_exps = reader.get(&g(if dense_mixture { "ffn_up.weight" } else { "ffn_up_exps.weight" }));
+        let down_exps = reader.get(&g(if dense_mixture { "ffn_down.weight" } else { "ffn_down_exps.weight" }));
         let per_up = moe_dim * d;
         let per_down = d * moe_dim;
         for e in 0..n_experts {
@@ -967,7 +978,10 @@ fn main() {
 
     // ---- the head --------------------------------------------------------------------------
     let output_norm = reader.get("output_norm.weight");
-    let output = reader.get("output.weight");
+    // Tied embeddings: the 2B carries no `output.weight` and reads its logits off the embedding
+    // matrix, so the head IS `token_embd.weight` — same bytes, quantized as a projection here.
+    let output =
+        if dir.tensors.contains_key("output.weight") { reader.get("output.weight") } else { reader.get("token_embd.weight") };
     let (codes, out_exps, out_scales) = quantize_rows_grouped(&output, vocab);
     if !reference_only {
         writer.push("output.weight", &codes).unwrap_or_else(|e| die(format!("output.weight: {e}")));

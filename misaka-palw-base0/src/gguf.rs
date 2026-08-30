@@ -25,7 +25,9 @@ use std::collections::BTreeMap;
 pub enum GgufType {
     F32,
     F16,
+    Q8_0,
     Q4K,
+    Q5K,
     Q6K,
 }
 
@@ -34,19 +36,23 @@ impl GgufType {
         match tag {
             0 => Some(Self::F32),
             1 => Some(Self::F16),
+            8 => Some(Self::Q8_0),
             12 => Some(Self::Q4K),
+            13 => Some(Self::Q5K),
             14 => Some(Self::Q6K),
             _ => None,
         }
     }
 
     /// Bytes for `n` values. The k-quants are super-blocks of 256, so `n` must be a whole number
-    /// of them — llama.cpp guarantees that for every tensor it writes.
+    /// of them — llama.cpp guarantees that for every tensor it writes. `Q8_0` blocks are 32.
     pub fn bytes_for(&self, n: usize) -> Option<usize> {
         match self {
             Self::F32 => Some(n * 4),
             Self::F16 => Some(n * 2),
+            Self::Q8_0 => n.is_multiple_of(32).then(|| n / 32 * 34),
             Self::Q4K => n.is_multiple_of(256).then(|| n / 256 * 144),
+            Self::Q5K => n.is_multiple_of(256).then(|| n / 256 * 176),
             Self::Q6K => n.is_multiple_of(256).then(|| n / 256 * 210),
         }
     }
@@ -362,6 +368,63 @@ pub fn dequantize_q4k(data: &[u8], elements: usize) -> Result<Vec<f32>, GgufErro
     Ok(out)
 }
 
+/// Dequantize `Q5_K`: 256 values per 176-byte super-block — the `Q4_K` layout (eight sub-blocks
+/// of 32 with six-bit scale/min pairs) plus one high bit per value in a 32-byte plane, so the
+/// quant runs 0..31 instead of 0..15. Transcribed from llama.cpp's `dequantize_row_q5_K`: the
+/// high-bit plane is addressed by a mask that shifts two positions per 64-value pair, exactly as
+/// the low nibbles alternate.
+pub fn dequantize_q5k(data: &[u8], elements: usize) -> Result<Vec<f32>, GgufError> {
+    let blocks = elements / 256;
+    if !elements.is_multiple_of(256) || data.len() < blocks * 176 {
+        return Err(GgufError::ShortData { tensor: "<q5_k>".into(), want: blocks * 176, got: data.len() });
+    }
+    let mut out = Vec::with_capacity(elements);
+    for b in 0..blocks {
+        let block = &data[b * 176..(b + 1) * 176];
+        let d = f16(u16::from_le_bytes([block[0], block[1]]));
+        let dmin = f16(u16::from_le_bytes([block[2], block[3]]));
+        let scales: [u8; 12] = block[4..16].try_into().expect("12");
+        let qh = &block[16..48];
+        let ql = &block[48..176];
+        let (mut u1, mut u2) = (1u8, 2u8);
+        for pair in 0..4 {
+            let (sc1, m1) = q4k_scale_min(&scales, 2 * pair);
+            let (sc2, m2) = q4k_scale_min(&scales, 2 * pair + 1);
+            let (d1, min1) = (d * sc1 as f32, dmin * m1 as f32);
+            let (d2, min2) = (d * sc2 as f32, dmin * m2 as f32);
+            let low = &ql[pair * 32..pair * 32 + 32];
+            for l in 0..32 {
+                let q = (low[l] & 0xF) as f32 + if qh[l] & u1 != 0 { 16.0 } else { 0.0 };
+                out.push(d1 * q - min1);
+            }
+            for l in 0..32 {
+                let q = (low[l] >> 4) as f32 + if qh[l] & u2 != 0 { 16.0 } else { 0.0 };
+                out.push(d2 * q - min2);
+            }
+            u1 <<= 2;
+            u2 <<= 2;
+        }
+    }
+    Ok(out)
+}
+
+/// Dequantize `Q8_0`: 32 values per 34-byte block — an `f16` scale and 32 signed bytes.
+pub fn dequantize_q8_0(data: &[u8], elements: usize) -> Result<Vec<f32>, GgufError> {
+    let blocks = elements / 32;
+    if !elements.is_multiple_of(32) || data.len() < blocks * 34 {
+        return Err(GgufError::ShortData { tensor: "<q8_0>".into(), want: blocks * 34, got: data.len() });
+    }
+    let mut out = Vec::with_capacity(elements);
+    for b in 0..blocks {
+        let block = &data[b * 34..(b + 1) * 34];
+        let d = f16(u16::from_le_bytes([block[0], block[1]]));
+        for l in 0..32 {
+            out.push(d * block[2 + l] as i8 as f32);
+        }
+    }
+    Ok(out)
+}
+
 /// Dequantize `Q6_K`: 256 values per 210-byte super-block, sixteen sub-blocks of 16 with an
 /// eight-bit signed scale, and six-bit quants split across a low nibble and a high pair.
 pub fn dequantize_q6k(data: &[u8], elements: usize) -> Result<Vec<f32>, GgufError> {
@@ -409,7 +472,9 @@ pub fn dequantize(tensor: &GgufTensor, data: &[u8]) -> Result<Vec<f32>, GgufErro
     match tensor.kind {
         GgufType::F32 => Ok(data[..n * 4].chunks_exact(4).map(|c| f32::from_le_bytes(c.try_into().expect("4"))).collect()),
         GgufType::F16 => Ok(data[..n * 2].chunks_exact(2).map(|c| f16(u16::from_le_bytes(c.try_into().expect("2")))).collect()),
+        GgufType::Q8_0 => dequantize_q8_0(data, n),
         GgufType::Q4K => dequantize_q4k(data, n),
+        GgufType::Q5K => dequantize_q5k(data, n),
         GgufType::Q6K => dequantize_q6k(data, n),
     }
 }

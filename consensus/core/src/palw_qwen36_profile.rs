@@ -168,6 +168,43 @@ pub const QWEN3_CODER_30B_A3B: PalwQwen36GeometryV1 = PalwQwen36GeometryV1 {
     tile_len: 512,
 };
 
+/// **`Qwen3.5-2B`** — the pinned `Qwen3.5-2B-Q4_K_M.gguf` (`.palw-gguf-sha.json`, sha
+/// `aaf42c8b…`, 1,280,835,840 bytes), read 2026-08-30. The first DENSE-mixture member of the
+/// hybrid family: the same GatedDeltaNet recurrence and fused q/gate attention as the 35B —
+/// identical `head_dim` 256, GDN head 128, conv 4, rotary 64 at the same 1e7 base, and the
+/// same 248,320-token vocabulary — with the mixture degenerated to a single always-chosen
+/// expert (`n_experts` 1: the router's softmax over one logit is exactly 1.0, so the routed
+/// path IS the checkpoint's dense SwiGLU FFN) and no shared expert. 24 layers at the family's
+/// 1-in-4 attention interval; GDN value heads 16 (`ssm.time_step_rank`) against the 35B's 32.
+pub const QWEN35_2B: PalwQwen36GeometryV1 = PalwQwen36GeometryV1 {
+    layer_count: 24,
+    full_attention_interval: 4,
+    hidden_dim: 2048,
+    attn_heads: 8,
+    attn_kv_heads: 2,
+    attn_head_dim: 256,
+    rope_dims: 64,
+    // 1e7 as f32 — the family base.
+    rope_freq_base_bits: 0x4B18_9680,
+    gdn_k_heads: 16,
+    gdn_v_heads: 16,
+    gdn_head_dim: 128,
+    gdn_conv_kernel: 4,
+    n_experts: 1,
+    experts_per_token: 1,
+    moe_dim: 6_144,
+    shared_dim: 0,
+    attn_output_gate: 1,
+    vocab_size: 248_320,
+    // 8, inherited from the hybrid's whole-close derivation: this class runs the same
+    // 128-dim recurrence heads as the 35B, so the recurrence's per-position replay evidence
+    // prices the context the same way and 8 is what the 80 KiB carrier admits.
+    n_ctx: 8,
+    n_threads: 1,
+    rms_eps_q: 17,
+    tile_len: 512,
+};
+
 /// A step's output width, named the way the engine names it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum W {
