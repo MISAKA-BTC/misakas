@@ -50,8 +50,8 @@ struct Funding {
 }
 
 /// One connect + getServerInfo, shared by all wallet commands.
-struct NodeView {
-    client: KaspaRpcClient,
+pub(crate) struct NodeView {
+    pub(crate) client: KaspaRpcClient,
     params: Params,
     virtual_daa: u64,
     coinbase_maturity: u64,
@@ -63,7 +63,7 @@ struct NodeView {
     settlement_long_maturity_daa: u64,
 }
 
-async fn connect(ctx: &Ctx) -> Result<NodeView, CliError> {
+pub(crate) async fn connect(ctx: &Ctx) -> Result<NodeView, CliError> {
     // Derive the Borsh endpoint: explicit --rpc wins, else the local endpoint registry,
     // else this network's default loopback port.
     let net = NetworkId::from_str(&ctx.network)

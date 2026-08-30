@@ -27,6 +27,7 @@ mod evm_send;
 mod forward;
 mod keys;
 mod node;
+mod palw_fp;
 #[cfg(feature = "evm-send")]
 mod prea;
 mod setup;
@@ -128,6 +129,9 @@ enum Command {
     /// PQ wallet operations (UTXO list / consolidate / send).
     #[command(subcommand)]
     Wallet(WalletCmd),
+    /// PALW free-prompt lane (ADR-0044): put a signed commitment on the chain.
+    #[command(subcommand)]
+    Palw(PalwCmd),
     /// Key management (generate / show address). The secret is never a CLI arg.
     #[command(subcommand)]
     Key(KeyCmd),
@@ -308,6 +312,19 @@ enum WalletCmd {
         yes: bool,
         #[command(flatten)]
         key: KeyArgs,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum PalwCmd {
+    /// Submit a free-prompt commitment built by `misaka-palw-fp-rail` (dry-run unless --yes).
+    FpSubmit {
+        /// The rail's `*.commitment-tx.borsh`.
+        #[arg(long)]
+        tx: std::path::PathBuf,
+        /// Actually broadcast (otherwise a dry-run preview).
+        #[arg(long)]
+        yes: bool,
     },
 }
 
@@ -653,6 +670,7 @@ async fn main() -> std::process::ExitCode {
         }
         Command::Evm(EvmCmd::Tx(EvmTxCmd::Status { hash })) => eth::tx_status(&ctx, &hash),
         Command::Evm(EvmCmd::Tx(EvmTxCmd::Wait { hash, timeout, poll })) => eth::tx_wait(&ctx, &hash, timeout, poll),
+        Command::Palw(PalwCmd::FpSubmit { tx, yes }) => palw_fp::submit(&ctx, &tx, yes).await,
         Command::Wallet(WalletCmd::Utxo(UtxoCmd::List { address, key })) => {
             wallet::utxo_list(&ctx, address.as_deref(), &key.source()).await
         }
