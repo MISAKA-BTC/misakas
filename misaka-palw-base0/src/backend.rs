@@ -781,3 +781,175 @@ mod tests {
         assert_eq!(a.declared_prefill_tokens, b.declared_prefill_tokens, "the SHAPE is the class's, not the anchor's");
     }
 }
+
+/// **The whole lane, end to end, with a real execution in it.**
+///
+/// Every other test in this tree exercises one link. This one runs the chain: a caller's prompt is
+/// executed by the floor, the commitment is derived from what the run measured, the chain's state
+/// machine opens a claim from it, the claim is walked to `Final` through the same transitions the
+/// pipeline applies, and `check_palw_receipt_spend_admission_v3` — the eight items that decide
+/// whether a receipt block may be mined — admits a spend of its first quantum.
+///
+/// The synthetic fixture in `palw_fp_admission_v3` proves the admission logic. This proves the
+/// thing that fixture cannot: that a REAL free-prompt run produces a claim the admission accepts.
+/// Its roots, its class, its bond and its CU all come from the execution rather than from
+/// constants, so a change that made real runs inadmissible would fail here and pass there.
+#[cfg(test)]
+mod end_to_end_tests {
+    use super::*;
+    use crate::classes::{canonical_class_by_model_id_v1, resolve_class_v1};
+    use kaspa_consensus_core::palw_fp_admission_v3::check_palw_receipt_spend_admission_v3;
+    use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, palw_fp_commitment_v3};
+    use kaspa_consensus_core::palw_freeprompt_v3::{
+        PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_V3_VERSION, PalwBeaconFactV3, PalwFpCuWeightsV3, PalwFreePromptJobV3,
+        PalwReceiptSpendEnvelopeV3, PalwReceiptSpendUnsignedV3, fp_claim_id_v3, fp_quanta_v3, spend_challenge_v3,
+    };
+    use kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2;
+    use kaspa_consensus_core::palw_state_v2::{
+        PalwBlockContextV2, PalwBondKeyV2, PalwChainStateV2, PalwClaimPhaseV2, PalwConsensusObjectV2 as Obj, PalwPanelSeatV2,
+        PalwPwuRuleV2, PalwStateParamsV2, apply_palw_transition_v2,
+    };
+    use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
+
+    const MATURITY: u64 = 5;
+    const USE_WINDOW: u64 = 50;
+    const NETWORK: &[u8] = b"misaka-palw-rc";
+    /// Small enough that the floor's own context can price above it. The shipped bundle's quantum
+    /// is 1,000 and no registered class can reach it — recorded in
+    /// `docs/palw-fp-on-registered-classes.md`; that is a pricing decision, and this test is about
+    /// the mechanism, so it prices where the mechanism can run.
+    const QUANTUM_CU: u128 = 128;
+
+    fn h(v: u64) -> Hash64 {
+        Hash64::from_u64_word(v)
+    }
+
+    #[test]
+    fn a_real_prompts_execution_certifies_and_the_chain_admits_a_receipt_block_for_it() {
+        // ---- the run: a caller's tokens on the registered floor -------------------------------
+        let court = PalwCourtParamsV2::new(kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES, 4, 2).expect("shipped court");
+        let entry = canonical_class_by_model_id_v1(&court, "PALW-BASE-0/rc").expect("the floor is registered");
+        let root = crate::rc::palw_rc_base0_artifact_root_v1().expect("the floor's pinned root");
+        let backend = Base0Backend::new(resolve_class_v1(&court, entry.class_id(), root, &[]).expect("the floor resolves"));
+
+        let bond_outpoint = TransactionOutpoint { transaction_id: TransactionId::from_u64_word(1), index: 0 };
+        let pubkey = vec![7u8; 4];
+        let ctx_max = backend.profile().n_ctx as usize;
+        let prompt: Vec<usize> = vec![11];
+        let decode = (ctx_max - prompt.len()) as u32;
+        let job = PalwFreePromptJobV3 {
+            version: PALW_FP_V3_VERSION,
+            network_domain: h(999),
+            class_id: entry.class_id(),
+            executor_bond: bond_outpoint,
+            executor_pubkey: pubkey.clone(),
+            operator_id: h(90),
+            anchor_block: h(0xA0),
+            anchor_daa: 100,
+            job_nonce: [0x5A; 32],
+            tokenizer_id: Hash64::default(),
+            prompt_token_ids_hash: kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(
+                &prompt.iter().map(|t| *t as u32).collect::<Vec<_>>(),
+            ),
+            prompt_tokens: prompt.len() as u32,
+            decode_token_limit: decode,
+            max_context_tokens: backend.profile().n_ctx,
+            privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
+        };
+        let run = backend.execute_free_prompt(&job, &prompt).expect("the floor runs a caller's prompt");
+        let class = PalwFpClassFactsV3 {
+            model_profile_id: Hash64::default(),
+            runtime_manifest_hash: Hash64::default(),
+            runtime_class_id: Hash64::default(),
+            shape_profile_id: backend.profile().shape_profile_id(),
+            cu_ruleset_id: Hash64::default(),
+        };
+        let weights = PalwFpCuWeightsV3 { prefill_weight: 1, decode_weight: 64 };
+        let commitment = palw_fp_commitment_v3(&job, &class, &run, NETWORK, &weights, 999_999).expect("a finished run commits");
+        let claim_id = fp_claim_id_v3(&commitment);
+        let quanta = fp_quanta_v3(commitment.cu, QUANTUM_CU, 16);
+        assert!(quanta >= 1, "this job must earn at least one draw to be worth certifying, got {quanta} at cu {}", commitment.cu);
+
+        // ---- the chain: register, commit, bind, license, finalise ------------------------------
+        // The base class is the floor's REAL id — the state machine refuses a first registration
+        // that is not the declared base, and the whole point here is that this is the floor.
+        let params = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, entry.class_id(), 4, 1000, 100, 800, 0).unwrap();
+        let at =
+            |block: u64, daa: u64, blue: u64| PalwBlockContextV2 { block: h(block), daa_score: daa, blue_score: blue, subsidy: 0 };
+        let registrations = vec![
+            Obj::ClassRegistered {
+                class_id: entry.class_id(),
+                artifact_root: root,
+                slash_value_per_pwu: 5,
+                pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
+                // Every ticket admits: the lottery is tested where it lives, and a target that
+                // refused here would make this test about luck.
+                initial_target: u128::MAX,
+                share_permille: 1000,
+                activation_daa: 0,
+                admission: None,
+            },
+            Obj::BondRegistered {
+                bond: PalwBondKeyV2(bond_outpoint),
+                pubkey: pubkey.clone(),
+                operator_pubkey: vec![21; 8],
+                collateral: 1_000,
+                payout_payload: h(0x9A11),
+                signature: Vec::new(),
+            },
+        ];
+        let (s1, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &params, &at(1, 100, 1), &registrations, None).unwrap();
+
+        // **The claim, from the run.** Every field here is the execution's, not a constant.
+        let committed = Obj::FreePromptCommitted {
+            claim: claim_id,
+            class_id: entry.class_id(),
+            bond: PalwBondKeyV2(bond_outpoint),
+            executor_pubkey: pubkey.clone(),
+            pwu: quanta as u64 * 100,
+            quanta,
+            trace_root: commitment.trace_root,
+            output_root: commitment.output_root,
+            execution_root: commitment.execution_root,
+            trace_chunk_count: commitment.trace_chunk_count,
+            trace_retention_daa: commitment.trace_retention_daa,
+        };
+        let (s2, _) = apply_palw_transition_v2(&s1, &params, &at(2, 101, 2), &[committed], None).unwrap();
+        let seats = vec![PalwPanelSeatV2 { bond: PalwBondKeyV2(bond_outpoint), operator_id: h(90) }];
+        let (s3, _) =
+            apply_palw_transition_v2(&s2, &params, &at(3, 102, 3), &[Obj::PanelBound { claim: claim_id, anchor: h(77), seats }], None)
+                .unwrap();
+        let (s4, _) = apply_palw_transition_v2(
+            &s3,
+            &params,
+            &at(4, 103, 4),
+            &[Obj::ReceiptLicensed { claim: claim_id, receipts: Vec::new() }],
+            None,
+        )
+        .unwrap();
+        let (state, _) = apply_palw_transition_v2(&s4, &params, &at(5, 124, 5), &[], None).unwrap();
+        assert!(matches!(state.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }), "the prompt's claim certifies");
+
+        // ---- the block: does the chain admit a receipt spending this work? --------------------
+        let beacon = PalwBeaconFactV3 { beacon_block: h(0xBEAC), beacon_daa: 130, prev_attempt_daa: 120 };
+        let (pph, ts, nonce) = (h(0xB0), 1_700u64, 9u64);
+        let envelope = PalwReceiptSpendEnvelopeV3 {
+            spend: PalwReceiptSpendUnsignedV3 {
+                version: PALW_FP_V3_VERSION,
+                network_domain: h(999),
+                challenge: spend_challenge_v3(h(999), pph, ts, nonce, claim_id, 0, &bond_outpoint),
+                claim_id,
+                quantum_index: 0,
+                beacon_block: h(0xBEAC),
+                producer_bond: bond_outpoint,
+                producer_pubkey: pubkey,
+            },
+            signature: vec![0x5A; kaspa_consensus_core::dns_finality::STAKE_ATTESTATION_SIG_LEN],
+        };
+        let admitted = check_palw_receipt_spend_admission_v3(&state, &at(6, 131, 6), MATURITY, USE_WINDOW, &beacon, &envelope)
+            .expect("the chain admits a receipt block for a certified free-prompt claim");
+        assert_ne!(admitted, Hash64::default(), "and it returns the spend id the block is identified by");
+
+        // Double-spend of a quantum is `QuantumAlreadySpent`, tested where that transition lives.
+    }
+}
