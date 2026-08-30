@@ -814,11 +814,12 @@ mod end_to_end_tests {
     const MATURITY: u64 = 5;
     const USE_WINDOW: u64 = 50;
     const NETWORK: &[u8] = b"misaka-palw-rc";
-    /// Small enough that the floor's own context can price above it. The shipped bundle's quantum
-    /// is 1,000 and no registered class can reach it — recorded in
-    /// `docs/palw-fp-on-registered-classes.md`; that is a pricing decision, and this test is about
-    /// the mechanism, so it prices where the mechanism can run.
-    const QUANTUM_CU: u128 = 128;
+    /// **The shipped devnet quantum.** It was 1,000, which no registered class could reach; it is
+    /// now 100 (lowered with `pwu_per_quantum`, weight-per-CU held constant — see the constant's
+    /// comment in `palw_fp_devnet_v3`), and the floor's widest job (705 CU) clears it. This test
+    /// asserts on the shipped value so it fails if that pricing regresses, rather than pinning its
+    /// own.
+    const QUANTUM_CU: u128 = 100;
 
     fn h(v: u64) -> Hash64 {
         Hash64::from_u64_word(v)

@@ -149,12 +149,22 @@ const COURT_MAX_OPERAND_COUNT: u32 = crate::palw_class_admission_v2::PALW_RC_COU
 const CU_PREFILL_WEIGHT: u32 = 1;
 const CU_DECODE_WEIGHT: u32 = 64;
 
-/// One quantum of certified work. At 1:64 pricing a ~100-token prompt with a 256-token answer is
-/// ~16.5k CU ≈ 16 quanta, so an ordinary chat job earns a handful of draws rather than one
-/// all-or-nothing ticket — which is the variance the quantization exists to smooth.
-const QUANTUM_CU: u128 = 1_000;
-/// Chain weight one spent quantum contributes.
-const PWU_PER_QUANTUM: u64 = 100;
+/// One quantum of certified work, sized to the CONTEXTS that exist rather than to a hypothetical
+/// long chat. At 1:64 pricing the widest job a registered class can hold is bounded by its
+/// `n_ctx`: BASE-0 (n_ctx 12) tops out at `1 + 11·64 = 705` CU and QWEN25-A16 (n_ctx 16) at
+/// `1 + 15·64 = 961`. A 1,000-CU quantum floored EVERY such job to zero draws — the lane was
+/// unreachable on every class the chain registers (measured in
+/// `docs/palw-fp-on-registered-classes.md`). At 100 those become 7 and 9 quanta: a handful of
+/// draws, which is the variance the quantization exists to smooth, now actually reachable.
+///
+/// It moved WITH `PWU_PER_QUANTUM` (both ÷10), so a given CU total contributes exactly the chain
+/// weight it did before: `weight = ⌊cu / quantum⌋ · pwu_per_quantum`, and `10/100 == 100/1000`.
+/// Only the granularity changed, not the economics — a receipt lane priced against real contexts,
+/// not a re-weighting of the receipt lane against the attempt lane.
+const QUANTUM_CU: u128 = 100;
+/// Chain weight one spent quantum contributes. Lowered with `QUANTUM_CU` to hold weight-per-CU
+/// constant (see above).
+const PWU_PER_QUANTUM: u64 = 10;
 /// Per-receipt jackpot bound: a single enormous job cannot buy unbounded consecutive blocks.
 const MAX_QUANTA_PER_RECEIPT: u32 = 64;
 
@@ -754,17 +764,30 @@ mod tests {
     /// several draws (variance smoothing), a tiny job earns none but still certifies, and the
     /// per-receipt cap bounds a huge one.
     #[test]
-    fn the_pricing_lands_where_the_comments_claim() {
+    fn the_pricing_is_reachable_on_registered_classes() {
         use crate::palw_freeprompt_v3::{fp_cu_v3, fp_quanta_v3};
         let b = bundle();
         let w = b.freeprompt.cu_weights();
 
+        // A long chat that exceeds any registered context: at quantum 100 it is far past the
+        // per-receipt cap, which is the cap's whole job — one enormous job cannot buy unbounded
+        // blocks.
         let chat = fp_cu_v3(100, 256, w);
         let chat_quanta = fp_quanta_v3(chat, b.freeprompt.quantum_cu(), b.freeprompt.max_quanta_per_receipt());
         assert_eq!(chat, 100 + 256 * 64);
-        assert!((8..=32).contains(&chat_quanta), "an ordinary chat job earns a handful of draws, got {chat_quanta}");
+        assert_eq!(chat_quanta, b.freeprompt.max_quanta_per_receipt(), "a job larger than any real context is capped");
 
-        let tiny = fp_cu_v3(8, 4, w);
+        // **The point of lowering the quantum: the widest job each REGISTERED class can hold now
+        // earns draws, where at quantum 1,000 every one of them floored to zero.** The bound is the
+        // class's `n_ctx` — one prefill token and the rest decode maximises CU under 1:64.
+        for (name, n_ctx) in [("BASE-0", 12u32), ("QWEN25-A16", 16)] {
+            let widest = fp_cu_v3(1, n_ctx - 1, w);
+            let quanta = fp_quanta_v3(widest, b.freeprompt.quantum_cu(), b.freeprompt.max_quanta_per_receipt());
+            assert!(quanta >= 1, "{name} (n_ctx {n_ctx}) earns {quanta} quanta at {widest} CU — the lane must be reachable on it");
+        }
+
+        // Sub-quantum still draws nothing: a job under one quantum of CU is not certifiable work.
+        let tiny = fp_cu_v3(30, 1, w); // 30 + 64 = 94 CU, below the 100-CU quantum
         assert_eq!(
             fp_quanta_v3(tiny, b.freeprompt.quantum_cu(), b.freeprompt.max_quanta_per_receipt()),
             0,

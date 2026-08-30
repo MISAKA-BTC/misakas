@@ -7,6 +7,12 @@ testnet-11 is the public PALW network. Every post-genesis block's proof-of-work 
 deterministic LLM inference**, not a hash. There is no hash lane to fall back to — that is the
 point, and it is what makes the rest of this document necessary.
 
+> **Pending change (not yet deployed):** the free-prompt receipt quantum was lowered from 1,000
+> to 100 (branch `palw-fp-gateway-identity`), which moves this network's fingerprint to
+> `d29e5667ed1ea7a45841226927b8980e59e608fc6443737620aeaa93fdb37805`. Until that is deployed the
+> live chain is still the value below; when it is, this whole block is re-minted and every node
+> wipes again. The value here is what is running NOW, not what the branch builds.
+>
 > **Current identity (2026-08-30 re-mint, ADR-0059 "Relaunch 3", the 10B premine cap) — wipe
 > your datadir if you joined earlier.**
 > The live chain's consensus fingerprint is **`f3bf86b4e9327f8b02ab2ad1d121d62ecd11bd78cca1455d8bcd7372595153d8`**,

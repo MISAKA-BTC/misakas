@@ -271,3 +271,32 @@ The admission logic that decides sink adoption is proven where it is pure and to
 `misaka_palw_base0::backend::end_to_end_tests`). What is not shown in a test is the wait itself —
 which is the same wait a real network takes in wall-clock, and the reason the goal's final step is
 operational rather than a matter of more code.
+
+
+## Resolved: the quantum is lowered to what registered classes actually reach
+
+The pricing blocker above — no registered class earning a single draw at `QUANTUM_CU = 1,000` — is
+closed. The quantum is now **100**, and `PWU_PER_QUANTUM` moved with it (100 → 10) so that a given
+CU total contributes exactly the chain weight it did before: `weight = ⌊cu/quantum⌋ · pwu_per_quantum`,
+and `10/100 == 100/1000`. Only the granularity changed; the economics did not, and the receipt
+lane was not re-weighted against the attempt lane.
+
+The consequence, measured:
+
+| class | n_ctx | widest CU | quanta at 1,000 | quanta at 100 |
+|---|---|---|---|---|
+| BASE-0 | 12 | 705 | 0 | 7 |
+| QWEN25-A16 | 16 | 961 | 0 | 9 |
+
+`the_pricing_is_reachable_on_registered_classes` pins that both registered classes now earn ≥ 1
+quantum at the widest job their context holds, and `a_callers_prompt_on_a_registered_class_opens_a_
+claim_at_the_shipped_quantum` drives the whole chain path — execute, commit, extract — on the
+SHIPPED bundle rather than a rebuilt one, and the claim opens.
+
+This is still a consensus value: `palw_fp_devnet_bundle_v3` is what testnet-11's own params are
+built from, so lowering `QUANTUM_CU` moves that network's ruleset id. A network carrying the old
+value and one carrying the new are different networks and will not share a chain — which is the
+regenesis (or a fresh devnet) the change implies, and the one operational step this cannot perform
+for itself. What is no longer outstanding is the DECISION: the value is chosen, measured against
+the classes that exist, and it holds weight-per-CU constant so it is not also an economic change
+smuggled in beside a pricing one.

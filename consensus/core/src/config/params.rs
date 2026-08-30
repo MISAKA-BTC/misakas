@@ -5817,8 +5817,15 @@ mod consensus_params_id_tests {
                 // declared collateral is the DERIVED 3,223.07 MSK, so `palw_ruleset_id` is untouched)
                 // and the zero-seat genesis gate change moves no bytes on a seated network.
                 //
-                // **This value is the union re-pin at the 2026-08-30 merge** — see the mainnet row.
-                "f3bf86b4e9327f8b02ab2ad1d121d62ecd11bd78cca1455d8bcd7372595153d8",
+                // **Re-pinned 2026-08-31 when the free-prompt quantum dropped 1,000 → 100** (and
+                // `pwu_per_quantum` 100 → 10 with it, holding weight-per-CU constant). The quantum
+                // is inside the ConsensusV2 free-prompt bundle, which is inside `consensus_params_id`,
+                // so lowering it is a ruleset change: testnet-11 is a different network from the one
+                // that carried `f3bf86b4…`, and a node on the old value will not share a chain with
+                // one on this. That is the regenesis the pricing fix implies. Only testnet-11 moved
+                // — the other presets do not install a free-prompt bundle — which is the blast
+                // radius being exactly the network the change was for.
+                "d29e5667ed1ea7a45841226927b8980e59e608fc6443737620aeaa93fdb37805",
             ),
             ("simnet", SIMNET_PARAMS, "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd"),
             ("devnet", DEVNET_PARAMS, "6b12b8e9c755c0117057989406dbc36214fc8b7be97108beca4ae2099ab86a69"),

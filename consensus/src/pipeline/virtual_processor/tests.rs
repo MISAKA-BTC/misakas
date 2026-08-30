@@ -8829,35 +8829,20 @@ async fn palw_rc_qwen36_counts_merged_work() {
     assert_eq!(qwen_share + base_share, 1000, "and the denominator is conserved");
 }
 
-/// **A caller's prompt reaches the chain — and no registered class can earn a draw with it.**
+/// **A caller's prompt, run on a registered class, opens a claim at the SHIPPED quantum.**
 ///
-/// This was written to walk the first half of the end-to-end spend path, which the note on
-/// `the_beacon_fact_comes_from_the_chain_not_from_the_block` says "needs a certified free-prompt
-/// claim on chain, which needs the FP worker's legs capture". The capture exists now
-/// (`PalwExecutionBackendV1::execute_free_prompt`), so the walk runs: a real BASE-0 execution over
-/// tokens the CALLER chose, the commitment derived from what the run measured, signed by the bond
-/// that answers for it, carried on subnetwork 0x4a, and handed to the same extraction the virtual
-/// processor calls on every accepted block.
+/// This test used to assert the opposite — that no registered class could earn a single draw —
+/// because the shipped quantum was 1,000 and the widest job a class could hold (BASE-0's n_ctx 12
+/// → 705 CU) floored to zero. Lowering the quantum to 100, with `pwu_per_quantum` lowered in step
+/// so a given CU total keeps the exact chain weight it had, is what changed: the floor's own
+/// maximum job now earns real quanta, and its commitment is taken by the same extraction the
+/// virtual processor runs on every accepted block — the shipped parameters, not a rebuilt set.
 ///
-/// It stops one step earlier than expected, on arithmetic:
-///
-///     cu = prompt·prefill_weight + decode·decode_weight   =  prompt·1 + decode·64
-///     BASE-0      n_ctx 12  →  best cu = 1 + 11·64 =  705
-///     QWEN25-A16  n_ctx 16  →  best cu = 1 + 15·64 =  961
-///     quantum_cu                                     = 1000
-///
-/// `fp_quanta_v3` floors, so both are ZERO quanta, and the extraction refuses with "job earns no
-/// quanta" — correctly: a claim that draws nothing certifies nothing the chain can act on. The
-/// context ceilings are the court's (12 and 16 are what the carrier's worst close allows); the
-/// quantum is the bundle's. Neither is wrong on its own and together they leave no job that both
-/// fits a registered class and earns a ticket.
-///
-/// So this test asserts the state as measured: the execution and the carriage work, and the
-/// pricing makes the lane unreachable on the classes that exist. Closing it is a consensus
-/// decision — a smaller quantum, wider class contexts, or different weights — and each moves
-/// either the ruleset id or a class id.
+/// The comment above `QUANTUM_CU` records the arithmetic; this is its consequence on the chain
+/// path: a person's prompt, executed on the class the chain registered, becomes a claim the chain
+/// opens.
 #[tokio::test]
-async fn a_callers_prompt_runs_and_no_registered_class_can_earn_a_draw_with_it() {
+async fn a_callers_prompt_on_a_registered_class_opens_a_claim_at_the_shipped_quantum() {
     use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
     use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, palw_fp_commitment_v3};
     use kaspa_consensus_core::palw_freeprompt_v3::{
@@ -8946,47 +8931,8 @@ async fn a_callers_prompt_runs_and_no_registered_class_can_earn_a_draw_with_it()
     .expect("the commitment payload serializes");
     let tx = Transaction::new(0, vec![], vec![], 0, SUBNETWORK_ID_PALW_FP_COMMITMENT.clone(), 0, payload);
 
-    let weights = bundle.freeprompt.cu_weights();
-    let best_here = kaspa_consensus_core::palw_freeprompt_v3::fp_cu_v3(1, ctx_max as u32 - 1, weights);
-
-    // **The same commitment under a quantum the classes can actually reach.**
-    //
-    // Everything above is the shipped pricing, and it refuses. This rebuilds the free-prompt
-    // params with one number changed — a quantum sized to the contexts that exist rather than to a
-    // 256-token chat — and nothing else, to show the refusal is the pricing and not the work. The
-    // shipped bundle is untouched: `palw_fp_devnet_bundle_v3` is what testnet-11's own params are
-    // built from, so its `QUANTUM_CU` is a consensus value and moving it would move that network's
-    // ruleset id.
-    let reachable = kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptParamsV3::new(
-        bundle.freeprompt.receipt_algorithm_id(),
-        best_here / 2,
-        bundle.freeprompt.pwu_per_quantum(),
-        *weights,
-        bundle.freeprompt.max_quanta_per_receipt(),
-        bundle.freeprompt.max_prompt_tokens(),
-        bundle.freeprompt.max_decode_tokens(),
-        bundle.freeprompt.receipt_maturity_daa(),
-        bundle.freeprompt.receipt_use_window_daa(),
-        bundle.freeprompt.max_beacon_gap_daa(),
-    )
-    .expect("a smaller quantum is still a valid parameter set");
-    let priced = kaspa_consensus_core::palw_fp_objects_v3::palw_fp_objects_from_accepted_txs_v3(
-        std::slice::from_ref(&tx),
-        job.network_domain,
-        &reachable,
-        kaspa_consensus_core::BlockHash::default(),
-        |pubkey: &[u8], message: &[u8], context: &[u8], signature: &[u8]| {
-            kaspa_txscript::verify_mldsa87_with_context(pubkey, message, context, signature).unwrap_or(false)
-        },
-    );
-    assert!(priced.skipped.is_empty(), "the same work, priced within reach, is taken: {:?}", priced.skipped);
-    let [carried] = &priced.objects[..] else { panic!("exactly one object rides a commitment") };
-    let Obj::FreePromptCommitted { claim, class_id, .. } = &carried.object else {
-        panic!("and it commits a free-prompt claim: {:?}", carried.object)
-    };
-    assert_eq!(*claim, claim_id_signed, "the claim the chain opened is the one the executor signed");
-    assert_eq!(*class_id, entry.class_id(), "under the class that ran it");
-
+    // **The shipped extraction, on the shipped bundle.** No parameters rebuilt: this is the
+    // function the virtual processor calls, with the quantum the network actually ships.
     let extraction = kaspa_consensus_core::palw_fp_objects_v3::palw_fp_objects_from_accepted_txs_v3(
         std::slice::from_ref(&tx),
         job.network_domain,
@@ -8996,21 +8942,22 @@ async fn a_callers_prompt_runs_and_no_registered_class_can_earn_a_draw_with_it()
             kaspa_txscript::verify_mldsa87_with_context(pubkey, message, context, signature).unwrap_or(false)
         },
     );
-    // **The refusal, and the arithmetic behind it.** Not "the commitment was malformed" — it was
-    // built by the same functions a producer uses — but "this job draws nothing".
-    assert!(extraction.objects.is_empty(), "a job that earns no quanta opens no claim");
-    let [(_, why)] = &extraction.skipped[..] else { panic!("exactly one refusal: {:?}", extraction.skipped) };
-    assert_eq!(*why, "job earns no quanta");
 
-    // And it is not this job's fault: the class's own ceiling cannot reach the bundle's quantum.
+    // The floor's widest job clears the quantum now, so its commitment opens a claim.
+    let ctx_max = backend.profile().n_ctx as u32;
+    let best_here = kaspa_consensus_core::palw_freeprompt_v3::fp_cu_v3(1, ctx_max - 1, bundle.freeprompt.cu_weights());
     assert!(
-        best_here < bundle.freeprompt.quantum_cu(),
-        "the widest job this class can hold prices at {best_here}, under the {}-CU quantum",
+        best_here >= bundle.freeprompt.quantum_cu(),
+        "the widest job this class can hold ({best_here} CU) now reaches the {}-CU quantum",
         bundle.freeprompt.quantum_cu()
     );
-    // The dense class is no better: 16 positions against the same weights.
-    let best_dense = kaspa_consensus_core::palw_freeprompt_v3::fp_cu_v3(1, 15, weights);
-    assert!(best_dense < bundle.freeprompt.quantum_cu(), "and neither can the A16 class at {best_dense}");
+    assert!(extraction.skipped.is_empty(), "a job that earns a draw is not skipped: {:?}", extraction.skipped);
+    let [carried] = &extraction.objects[..] else { panic!("exactly one object rides a commitment") };
+    let Obj::FreePromptCommitted { claim, class_id, .. } = &carried.object else {
+        panic!("and it commits a free-prompt claim: {:?}", carried.object)
+    };
+    assert_eq!(*claim, claim_id_signed, "the claim the chain opened is the one the executor signed");
+    assert_eq!(*class_id, entry.class_id(), "under the class that ran it");
 }
 
 /// **A receipt block carrying a real certified claim passes the header admission gate.**
