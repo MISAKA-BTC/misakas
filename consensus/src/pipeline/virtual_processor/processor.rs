@@ -399,6 +399,9 @@ pub struct VirtualStateProcessor {
     /// decides neither quorum and is never charged as a dissent — see
     /// [`Self::palw_unavailable_abstains_at`], which is the ONE place this is resolved.
     pub(super) palw_unavailable_abstains: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// ADR-0065 D1's fence and window, `None` on every shipped preset. See
+    /// [`Self::palw_bond_maturity_at`], which is the ONE place this is resolved.
+    pub(super) palw_bond_maturity: Option<kaspa_consensus_core::config::params::PalwBondMaturityV1>,
 
     /// ADR-0033 (B14): the PALW credit gate's fence — `None` (every shipped network) keeps
     /// the whole gate dormant; `Some` makes crossing commitments mintable in the coinbase
@@ -750,6 +753,7 @@ impl VirtualStateProcessor {
             palw_block_commitment: params.palw_block_commitment,
             palw_bootstrap_activation: params.palw_bootstrap_activation,
             palw_unavailable_abstains: params.palw_unavailable_abstains,
+            palw_bond_maturity: params.palw_bond_maturity,
             palw_credit_params: params.palw_credit.clone(),
             palw_schedule: params.palw_schedule,
             palw_ramp: params.palw_ramp,
@@ -4520,7 +4524,13 @@ impl VirtualStateProcessor {
                         // `bind_base_daa()`), and every revived claim fails `AnchorMismatch`.
                         .palw_v2_anchor_fact_of_candidate(point.block, claim_record.bind_base_daa(), panel_params)
                         .ok_or_else(|| format!("no anchor exists yet for claim {claim} on this chain"))?;
-                    kaspa_consensus_core::palw_panel_v2::validate_panel_bound_v2(
+                    // ADR-0065 D1. The fence is read at the ANCHOR's DAA, not at this block's,
+                    // and the sibling assembler does the same: the panel is a pure function of the
+                    // claim, so the rule that decides it has to be one too. Resolving at
+                    // `point.daa_score` would make the derived panel change from block to block
+                    // around the fence height, and a `PanelBound` that missed the block it was
+                    // built for would be refused as a mismatch rather than accepted late.
+                    kaspa_consensus_core::palw_panel_v2::validate_panel_bound_v2_with_maturity(
                         state,
                         panel_params,
                         state_params,
@@ -4529,6 +4539,7 @@ impl VirtualStateProcessor {
                         &anchor_fact,
                         *anchor,
                         seats,
+                        self.palw_bond_maturity_at(anchor_fact.anchor_daa),
                     )
                     .map_err(|e| e.to_string())?;
                 }
@@ -4924,6 +4935,16 @@ impl VirtualStateProcessor {
         self.palw_unavailable_abstains.is_some_and(|fence| fence.is_active(daa_score))
     }
 
+    /// **ADR-0065 D1, resolved in exactly one place.** The window, or `None` when the rule is off.
+    ///
+    /// Both consumers — the acceptance layer that validates a proposed `PanelBound` and the node
+    /// that assembles one — must get the same answer, because a panel is accepted only if it
+    /// equals the derived one exactly: a node that resolved the window differently would propose
+    /// panels its own peers refuse, and blame the claim.
+    fn palw_bond_maturity_at(&self, daa_score: u64) -> Option<u64> {
+        self.palw_bond_maturity.filter(|m| m.activation.is_active(daa_score)).map(|m| m.window_daa)
+    }
+
     /// **ADR-0042 Decision 6's consumer: an attempt-lane (algo-6) block's stateful admission.**
     ///
     /// Closes P0-2 and P0-10 at the point they bite. The stateless half — shape, and the challenge
@@ -5231,12 +5252,18 @@ impl VirtualStateProcessor {
             };
             // A registry too small to seat a panel yields nothing rather than a short one: a
             // partial jury is `derive_panel_v2`'s fail-closed refusal, and it stays that.
-            let Ok(seats) = kaspa_consensus_core::palw_panel_v2::derive_panel_v2(
+            let Ok(seats) = kaspa_consensus_core::palw_panel_v2::derive_panel_v2_with_maturity(
                 state,
                 panel_params,
                 claim_id,
                 anchor.anchor_block,
                 min_collateral,
+                // ADR-0065 D1, from the claim's own anchor — the same input the acceptance layer
+                // uses, through the same one-place subtraction.
+                kaspa_consensus_core::palw_panel_v2::palw_seat_maturity_floor_v1(
+                    anchor.anchor_daa,
+                    self.palw_bond_maturity_at(anchor.anchor_daa),
+                ),
             ) else {
                 continue;
             };

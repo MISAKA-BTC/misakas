@@ -176,6 +176,17 @@ pub struct PalwAnchorFactV2 {
     pub predecessor_daa: u64,
 }
 
+/// **ADR-0065 D1's floor, computed in one place.** `Some(anchor_daa - window)`, saturating, or
+/// `None` when the rule is off.
+///
+/// It is a function rather than an inline subtraction because two callers need it — the acceptance
+/// layer that validates a proposed `PanelBound` and the node that assembles one — and a panel is
+/// accepted only if it equals the derived one exactly. Two subtractions that could disagree by one
+/// would be a node proposing a panel its own peers refuse.
+pub fn palw_seat_maturity_floor_v1(anchor_daa: u64, bond_maturity_daa: Option<u64>) -> Option<u64> {
+    bond_maturity_daa.map(|window| anchor_daa.saturating_sub(window))
+}
+
 /// The deterministic sortition. Reads ONLY the candidate-scoped bond registry; returns seats in
 /// ticket order (the canonical panel order — validation compares exactly).
 pub fn derive_panel_v2(
@@ -184,6 +195,43 @@ pub fn derive_panel_v2(
     claim_id: &Hash64,
     anchor_block: BlockHash,
     min_collateral_sompi: u64,
+) -> Result<Vec<PalwPanelSeatV2>, PalwPanelV2Error> {
+    derive_panel_v2_with_maturity(state, params, claim_id, anchor_block, min_collateral_sompi, None)
+}
+
+/// [`derive_panel_v2`] with ADR-0065 D1's seat maturity.
+///
+/// `registered_by_daa` is `Some(anchor_daa - bond_maturity_daa)` past the fence, and a bond may
+/// take a seat only if its `registered_daa` is at or before it. `None` — every shipped preset —
+/// is byte-identical to the draw before the parameter existed.
+///
+/// **Measured against the ANCHOR, not against the binding block.** The panel is a pure function of
+/// the claim (`validate_panel_bound_v2` recomputes it and demands exact equality), and the anchor
+/// is the claim's own — so maturity computed from `anchor_daa` keeps that property, while
+/// computing it from `ctx.daa_score` would make the derived panel change block by block and refuse
+/// any `PanelBound` that missed the block it was assembled for.
+///
+/// **What it is for.** `registered_daa` is written from `ctx.daa_score` at the fold
+/// (`palw_state_v2.rs`'s `BondRegistered` arm) and is not registrant-chosen, so there is no
+/// grinding surface. What the window buys is that a bond cannot be minted and used in the same
+/// breath: on a private fork, sybil bonds folded into the fork's own blocks are unusable until the
+/// fork itself has advanced `bond_maturity_daa`, which is work the fork has to actually do.
+///
+/// **The liveness trap this must not walk into.** A short draw is not a smaller panel — it is
+/// `InsufficientEligibleBonds`, so the claim never binds and voids at `BindTimeout`. The shipped
+/// genesis registers exactly `PALW_V2_PANEL_SEATS + 1` bonds and the draw excludes the executor,
+/// so there is ZERO slack: if a maturity window made even one genesis bond ineligible, every claim
+/// on a fresh network would void, `safe_frontier` would stay at 0 and pruning would never start.
+/// Genesis bonds carry `registered_daa = genesis.daa_score = 0`, so what keeps them eligible is
+/// the fence's own arming height, and `Params::validate_palw_v2` refuses a fence armed before its
+/// own window has elapsed — the trap is closed by construction rather than by a deployment note.
+pub fn derive_panel_v2_with_maturity(
+    state: &PalwChainStateV2,
+    params: &PalwPanelParamsV2,
+    claim_id: &Hash64,
+    anchor_block: BlockHash,
+    min_collateral_sompi: u64,
+    registered_by_daa: Option<u64>,
 ) -> Result<Vec<PalwPanelSeatV2>, PalwPanelV2Error> {
     let claim = state.claim(claim_id).ok_or(PalwPanelV2Error::MissingClaim(*claim_id))?;
     let executor_bond = claim.bond;
@@ -200,6 +248,10 @@ pub fn derive_panel_v2(
         // predicate, so the RPC that reports eligibility and the sortition that decides it cannot
         // answer differently.
         if !crate::palw_state_v2::palw_bond_may_take_work_v2(bond, min_collateral_sompi) {
+            continue;
+        }
+        // ADR-0065 D1: a bond has to have been standing for a while before it may judge.
+        if registered_by_daa.is_some_and(|by| bond.registered_daa > by) {
             continue;
         }
         if *bond_key == executor_bond || bond.operator_id == executor_operator || bond.pubkey == executor_key {
@@ -245,6 +297,26 @@ pub fn validate_panel_bound_v2(
     proposed_anchor: Hash64,
     proposed_seats: &[PalwPanelSeatV2],
 ) -> Result<(), PalwPanelV2Error> {
+    validate_panel_bound_v2_with_maturity(state, params, state_params, ctx, claim_id, anchor, proposed_anchor, proposed_seats, None)
+}
+
+/// [`validate_panel_bound_v2`] with ADR-0065 D1's seat maturity.
+///
+/// `bond_maturity_daa` is `Params::palw_bond_maturity`'s window resolved at this block, and the
+/// floor it implies is derived HERE from the claim's own anchor rather than by the caller — the
+/// acceptance layer and the assembler must not be able to subtract differently.
+#[allow(clippy::too_many_arguments)]
+pub fn validate_panel_bound_v2_with_maturity(
+    state: &PalwChainStateV2,
+    params: &PalwPanelParamsV2,
+    state_params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
+    claim_id: &Hash64,
+    anchor: &PalwAnchorFactV2,
+    proposed_anchor: Hash64,
+    proposed_seats: &[PalwPanelSeatV2],
+    bond_maturity_daa: Option<u64>,
+) -> Result<(), PalwPanelV2Error> {
     let claim = state.claim(claim_id).ok_or(PalwPanelV2Error::MissingClaim(*claim_id))?;
     if !matches!(claim.phase, PalwClaimPhaseV2::Provisional) {
         return Err(PalwPanelV2Error::WrongPhase { claim: *claim_id, edge: "PanelBound" });
@@ -285,7 +357,14 @@ pub fn validate_panel_bound_v2(
         return Err(PalwPanelV2Error::BindOutsideWindow("the bind window has already lapsed"));
     }
 
-    let derived = derive_panel_v2(state, params, claim_id, anchor.anchor_block, state_params.min_collateral_sompi())?;
+    let derived = derive_panel_v2_with_maturity(
+        state,
+        params,
+        claim_id,
+        anchor.anchor_block,
+        state_params.min_collateral_sompi(),
+        palw_seat_maturity_floor_v1(anchor.anchor_daa, bond_maturity_daa),
+    )?;
     if derived != proposed_seats {
         return Err(PalwPanelV2Error::PanelMismatch);
     }
@@ -742,6 +821,64 @@ mod tests {
         // Eligible after exclusions: bonds 2, 3, and ONE of {4, 5} — exactly 3. Which of 4/5 seats
         // is the ticket order's business; that it is exactly one of them is the dedup working.
         assert!(seats.iter().any(|s| s.operator_id == op_id(0x24)), "the shared operator got exactly one of its two bonds seated");
+    }
+
+    /// **ADR-0065 D1 — a bond may not be minted and used in the same breath.**
+    ///
+    /// The safety claim it serves: a holder of one bond could fork from any point, fold sybil
+    /// `BondRegistered` objects into the fork's OWN blocks, seat panels from them immediately and
+    /// grow a private `safe_frontier`. `palw_fork_choice`'s stated invariant — *a fork nobody could
+    /// see collects no receipts, so it has no frontier* — was false, because the fork could mint
+    /// its own jurors. With a window, seating them costs the fork the DAA it has to actually
+    /// advance.
+    ///
+    /// Both positions on ONE registry, because the rule is only visible as a difference. And the
+    /// third assertion is the one that matters for liveness: the same floor that excludes the
+    /// newcomer leaves every older bond exactly where it was — a floor that quietly thinned the
+    /// existing registry would stop a live chain, since a short draw is no panel at all.
+    #[test]
+    fn adr_0065_d1_a_fresh_bond_may_not_take_a_seat_until_it_has_stood() {
+        let (state, claim_id) = populated_state();
+        // The whole registry stands at DAA 100; one newcomer registers a century later.
+        let (late, _) =
+            apply_palw_transition_v2(&state, &state_params(), &ctx(3, 200, 3), &[register(7, 13, 0x27)], None).unwrap();
+        let anchor = BlockHash::from_u64_word(0xA1);
+        let four = PalwPanelParamsV2::new(4, 3, 4).unwrap();
+
+        // FENCE OFF — today's rule. The newcomer is seatable the instant it is registered, which
+        // is exactly the property that makes a private fork's own bonds usable on that fork.
+        let seats = derive_panel_v2(&late, &four, &claim_id, anchor, 0).expect("four eligible once the newcomer exists");
+        assert!(
+            seats.iter().any(|s| s.bond == PalwBondKeyV2(bond_outpoint(7))),
+            "without the rule a bond registered a moment ago judges a claim"
+        );
+
+        // FENCE ON. Anchor at 250, window 100 ⇒ a seat's bond must date from 150 or earlier.
+        let floor = palw_seat_maturity_floor_v1(250, Some(100));
+        assert_eq!(floor, Some(150), "the floor is the anchor minus the window, computed in one place");
+        assert!(
+            matches!(
+                derive_panel_v2_with_maturity(&late, &four, &claim_id, anchor, 0, floor),
+                Err(PalwPanelV2Error::InsufficientEligibleBonds { needed: 4, available: 3 })
+            ),
+            "the newcomer is not eligible yet, and a short draw is no panel — never a smaller one"
+        );
+
+        // …and the rule takes nothing away from the bonds that were already standing.
+        let unchanged =
+            derive_panel_v2_with_maturity(&late, &panel_params(), &claim_id, anchor, 0, floor).expect("the older bonds still seat");
+        assert_eq!(unchanged, derive_panel_v2(&late, &panel_params(), &claim_id, anchor, 0).unwrap(), "same seats, same order");
+
+        // Once the window has actually elapsed the newcomer joins on its own merits.
+        let matured = palw_seat_maturity_floor_v1(400, Some(100));
+        assert_eq!(matured, Some(300));
+        let seats = derive_panel_v2_with_maturity(&late, &four, &claim_id, anchor, 0, matured).expect("the newcomer has now stood");
+        assert!(seats.iter().any(|s| s.bond == PalwBondKeyV2(bond_outpoint(7))), "maturity is a delay, not an exclusion");
+
+        // `None` is the rule off, and a window longer than the chain saturates to zero rather than
+        // wrapping to `u64::MAX` — which would admit every bond and read as the rule working.
+        assert_eq!(palw_seat_maturity_floor_v1(250, None), None);
+        assert_eq!(palw_seat_maturity_floor_v1(10, Some(1_000)), Some(0));
     }
 
     #[test]

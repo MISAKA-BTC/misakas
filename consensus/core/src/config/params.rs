@@ -356,6 +356,18 @@ pub enum PqEnforcementMode {
     Consensus,
 }
 
+/// **ADR-0065 D1's parameter: a fence and the window it turns on.**
+///
+/// Two fields rather than a bare `ForkActivation` because the rule needs a duration, and a
+/// duration must not travel through the fence visitor (see the field's doc on [`Params`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwBondMaturityV1 {
+    /// When the rule comes into force.
+    pub activation: ForkActivation,
+    /// How long a bond must have been registered before it may be drawn for a seat, in DAA.
+    pub window_daa: u64,
+}
+
 /// Consensus parameters. Contains settings and configurations which are consensus-sensitive.
 /// Changing one of these on a network node would exclude and prevent it from reaching consensus
 /// with the other unmodified nodes.
@@ -513,6 +525,22 @@ pub struct Params {
     /// pair would fail the handshake outright instead of peering with a warning.
     pub palw_unavailable_abstains: Option<ForkActivation>,
 
+    /// **ADR-0065 D1 — a bond must be earned before it may judge.** `None` on every shipped
+    /// preset, so the behaviour is byte-identical to not having the field at all.
+    ///
+    /// Past `activation`, `derive_panel_v2` draws a seat only from a bond registered at or before
+    /// `anchor_daa - window_daa`. `registered_daa` has been written by the fold since the ruleset
+    /// existed and read by no gate; this is the rule it was evidently recorded for, so it adds no
+    /// state.
+    ///
+    /// **The window is a DURATION and is therefore NEVER visited by `for_each_fence`** — see
+    /// `inactivity_leak_daa`, which carries the same warning. `consensus_identity_id` normalises
+    /// every visited value to `0` or `u64::MAX`, so a visited duration would make two builds
+    /// shipping different windows fingerprint identically, peer, and disagree about which bonds may
+    /// be seated. It is hashed raw into `consensus_params_id` instead, and only the `activation`
+    /// beside it is a fence.
+    pub palw_bond_maturity: Option<PalwBondMaturityV1>,
+
     /// ADR-0042 Decision 1 (PR-10): the ONE PALW switch on the V2 lineage. `Disabled` on every
     /// shipped preset. A network is in exactly one mode; `ConsensusV2` carries the whole atomic
     /// ruleset and is validated at construction ([`Params::validate_palw_v2`]) — including the
@@ -642,6 +670,25 @@ impl Params {
             || self.palw_block_commitment.is_some()
         {
             return Err(PalwModeV2Error::Invalid("a ConsensusV2 network may not set any V1 PALW fence"));
+        }
+        // **ADR-0065 D1: the arming height must be past its own window.** The draw is fail-closed
+        // — a short panel is `InsufficientEligibleBonds`, so the claim never binds and voids at
+        // `BindTimeout` — and the genesis registers exactly `seat_count + 1` bonds while the draw
+        // excludes the executor, leaving zero slack. Genesis bonds carry `registered_daa =
+        // genesis.daa_score`, so a fence armed at a height below the window would make every one of
+        // them immature at once: no claim could bind, `safe_frontier` would never leave 0, and
+        // pruning would never start. Refusing the configuration is the only way this is a rule
+        // rather than a note in a runbook somebody has to remember.
+        if let Some(maturity) = self.palw_bond_maturity {
+            if maturity.window_daa == 0 {
+                return Err(PalwModeV2Error::Invalid("a zero bond maturity window is the rule switched off wearing a fence"));
+            }
+            let armed = maturity.activation.daa_score();
+            if armed != u64::MAX && armed < self.genesis.daa_score.saturating_add(maturity.window_daa) {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_bond_maturity is armed before its own window has elapsed since genesis — every genesis bond                      would be immature at once and no panel could be drawn",
+                ));
+            }
         }
         if self.pow_palw_activation.is_active(u64::MAX - 1) || self.pow_palw_ollama_activation.is_active(u64::MAX - 1) {
             return Err(PalwModeV2Error::Invalid("a ConsensusV2 network may not activate any V1 PALW proof-of-work"));
@@ -920,6 +967,12 @@ impl Params {
         if self.palw_unavailable_abstains == Some(ForkActivation::never()) {
             self.palw_unavailable_abstains = None;
         }
+        // ADR-0065 D1. The WHOLE option collapses, not just its fence: leaving `Some` behind with
+        // a normalised height would carry the window's bytes into `consensus_params_id` that an
+        // unset build never writes, which is the partition the top-level placement exists to avoid.
+        if self.palw_bond_maturity.is_some_and(|m| m.activation == ForkActivation::never()) {
+            self.palw_bond_maturity = None;
+        }
         let Some(dns) = self.dns_params.as_mut() else {
             return;
         };
@@ -1017,6 +1070,7 @@ impl Params {
             palw_block_commitment,
             palw_bootstrap_activation,
             palw_unavailable_abstains,
+            palw_bond_maturity,
             // The V2 bundle's fences are inside `palw_ruleset_id_v2` — see the doc block.
             palw_consensus_mode: _,
             pow_blake2b_sha3_activation,
@@ -1075,6 +1129,17 @@ impl Params {
         // builds shipping different windows fingerprint identically and fork silently.)
         match palw_unavailable_abstains.as_mut() {
             Some(activation) => fork(activation, visit),
+            None => {
+                absent = u64::MAX;
+                visit(&mut absent);
+            }
+        }
+        // ADR-0065 D1. ONLY the activation is visited; `window_daa` beside it is a duration and is
+        // deliberately not — normalising it to `0`/`u64::MAX` would let two builds shipping
+        // different windows fingerprint identically, peer, and then seat different panels. It
+        // reaches `consensus_params_id` raw instead.
+        match palw_bond_maturity.as_mut() {
+            Some(maturity) => fork(&mut maturity.activation, visit),
             None => {
                 absent = u64::MAX;
                 visit(&mut absent);
@@ -1258,6 +1323,7 @@ impl Params {
             palw_block_commitment,
             palw_bootstrap_activation,
             palw_unavailable_abstains,
+            palw_bond_maturity,
             palw_consensus_mode,
             pow_blake2b_sha3_activation,
             pow_palw_activation,
@@ -1385,6 +1451,14 @@ impl Params {
         if let Some(activation) = palw_unavailable_abstains {
             h.write(b"palw_unavailable_abstains");
             h.write(activation.daa_score().to_le_bytes());
+        }
+        // ADR-0065 D1. BOTH halves, because the window decides which bonds may be seated and a
+        // commitment that omitted it would let two builds claim the same rules and enforce
+        // different ones. Some-only, so an unset field writes nothing.
+        if let Some(maturity) = palw_bond_maturity {
+            h.write(b"palw_bond_maturity");
+            h.write(maturity.activation.daa_score().to_le_bytes());
+            h.write(maturity.window_daa.to_le_bytes());
         }
         // ADR-0042 Decisions 1 + 11: the V2 mode decides block validity wholesale, so it is in
         // the fingerprint — through the RULESET ID, one hash for the whole atomic bundle, which
@@ -1660,6 +1734,7 @@ impl Params {
             palw_block_commitment: self.palw_block_commitment,
             palw_bootstrap_activation: self.palw_bootstrap_activation,
             palw_unavailable_abstains: self.palw_unavailable_abstains,
+            palw_bond_maturity: self.palw_bond_maturity,
             palw_consensus_mode: self.palw_consensus_mode.clone(),
             // kaspa-pq PoW algo activation is consensus-fixed, never runtime-overridable.
             pow_blake2b_sha3_activation: self.pow_blake2b_sha3_activation,
@@ -2551,6 +2626,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_block_commitment: None,
     palw_bootstrap_activation: None,
     palw_unavailable_abstains: None,
+    palw_bond_maturity: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: inert on mainnet until its own fork ADR schedules it.
@@ -2678,6 +2754,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_block_commitment: None,
     palw_bootstrap_activation: None,
     palw_unavailable_abstains: None,
+    palw_bond_maturity: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: DISABLED on the public preset (2026-08-12). The Ollama flavor (algo_id = 5)
@@ -2787,6 +2864,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_block_commitment: None,
     palw_bootstrap_activation: None,
     palw_unavailable_abstains: None,
+    palw_bond_maturity: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // PALW LLM PoW: simnet keeps instant local kHeavyHash (simulation/tests must not need a model).
@@ -5196,6 +5274,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_block_commitment: None,
     palw_bootstrap_activation: None,
     palw_unavailable_abstains: None,
+    palw_bond_maturity: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // PALW LLM PoW from genesis: devnet IS the 0.1-bps LLM-PoW network on this branch. Every
@@ -6128,6 +6207,88 @@ mod consensus_params_id_tests {
             class_daa: crate::palw_class_daa::PalwClassDaaParamsV1::stage1_defaults(),
         });
         assert!(broken.validate_palw_v1().is_err(), "an invalid registration must be refused, not run");
+    }
+
+    /// **ADR-0065 D1's liveness trap, closed as a rule rather than as a runbook note.**
+    ///
+    /// The draw is fail-closed — a short panel is `InsufficientEligibleBonds`, so the claim never
+    /// binds and voids at `BindTimeout` — and the shipped genesis registers exactly
+    /// `seat_count + 1` bonds while the draw excludes the executor. Zero slack. Every genesis bond
+    /// carries `registered_daa = genesis.daa_score`, so a maturity fence armed before its own
+    /// window has elapsed makes ALL of them immature at once: no panel can be drawn on the whole
+    /// network, `safe_frontier` never leaves 0, and pruning never starts.
+    ///
+    /// The ADR names this and offers "ship dormant behind a fence armed after the network has
+    /// bonds to spare", which is a thing an operator has to remember. `validate_palw_v2` refuses
+    /// the configuration instead, which is a thing nobody has to remember.
+    #[test]
+    fn a_bond_maturity_fence_armed_inside_its_own_window_is_refused() {
+        let v2 = palw_rc_shipped_params();
+        assert!(matches!(v2.palw_consensus_mode, crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)), "the fixture must be V2");
+        assert!(v2.palw_bond_maturity.is_none(), "every shipped preset leaves ADR-0065 D1 dormant");
+        assert!(v2.validate_palw_v2().is_ok(), "the shipped preset validates");
+
+        // Armed at 500 with a 1,000-DAA window, on a genesis at DAA 0: at the moment the rule
+        // comes into force, no bond in existence is old enough for it.
+        let mut too_early = palw_rc_shipped_params();
+        too_early.palw_bond_maturity =
+            Some(PalwBondMaturityV1 { activation: ForkActivation::new(500), window_daa: 1_000 });
+        assert!(too_early.validate_palw_v2().is_err(), "a fence that starves its own draw must not be runnable");
+
+        // Armed past the window: legal, and it is the same configuration an operator would
+        // actually ship.
+        let mut sound = palw_rc_shipped_params();
+        sound.palw_bond_maturity = Some(PalwBondMaturityV1 { activation: ForkActivation::new(1_000), window_daa: 1_000 });
+        assert!(sound.validate_palw_v2().is_ok(), "armed at or past its own window, the genesis registry is mature");
+
+        // A zero window is the rule switched off while claiming to be on — refused, because a
+        // gate that cannot refuse anything is the failure mode this ADR line keeps finding.
+        let mut zero = palw_rc_shipped_params();
+        zero.palw_bond_maturity = Some(PalwBondMaturityV1 { activation: ForkActivation::new(1_000), window_daa: 0 });
+        assert!(zero.validate_palw_v2().is_err(), "a zero window is a fence with nothing behind it");
+
+        // `never()` is not armed at all, so its window is nobody's business.
+        let mut never = palw_rc_shipped_params();
+        never.palw_bond_maturity = Some(PalwBondMaturityV1 { activation: ForkActivation::never(), window_daa: 1_000 });
+        assert!(never.validate_palw_v2().is_ok(), "an unarmed fence starves nothing");
+    }
+
+    /// ADR-0065 D1's fence, in the four identity positions — and the DURATION beside it, which is
+    /// the part that could have gone wrong silently.
+    #[test]
+    fn the_bond_maturity_window_is_in_the_fingerprint_and_not_in_the_fence_visitor() {
+        let shipped = MAINNET_PARAMS;
+        assert!(shipped.palw_bond_maturity.is_none());
+
+        let mut armed = MAINNET_PARAMS;
+        armed.palw_bond_maturity = Some(PalwBondMaturityV1 { activation: ForkActivation::new(9_000_000), window_daa: 1_000 });
+        assert_eq!(shipped.consensus_identity_id(), armed.consensus_identity_id(), "scheduled, not in force: same network");
+        assert_ne!(shipped.consensus_params_id(), armed.consensus_params_id(), "…and still a visible commitment");
+
+        // **The one that matters.** Two builds scheduling the same fence with DIFFERENT windows
+        // would seat different panels the moment it fires. If the window ever reaches the identity
+        // visitor it is normalised to a sentinel, these two collapse to one identity, and the pair
+        // peers happily until the first panel disagrees — which is `inactivity_leak_daa`'s recorded
+        // failure, reproduced.
+        let mut wider = MAINNET_PARAMS;
+        wider.palw_bond_maturity = Some(PalwBondMaturityV1 { activation: ForkActivation::new(9_000_000), window_daa: 5_000 });
+        assert_ne!(
+            armed.consensus_params_id(),
+            wider.consensus_params_id(),
+            "a different maturity window is a different rule and must be in the fingerprint"
+        );
+
+        let mut at_genesis = MAINNET_PARAMS;
+        at_genesis.palw_bond_maturity = Some(PalwBondMaturityV1 { activation: ForkActivation::always(), window_daa: 1_000 });
+        assert_ne!(shipped.consensus_identity_id(), at_genesis.consensus_identity_id(), "in force at genesis is a rule difference");
+
+        let mut never = MAINNET_PARAMS;
+        never.palw_bond_maturity = Some(PalwBondMaturityV1 { activation: ForkActivation::never(), window_daa: 1_000 });
+        assert_eq!(
+            shipped.consensus_identity_id(),
+            never.consensus_identity_id(),
+            "never() is absence — the WHOLE option collapses, or the window's bytes survive into the identity"
+        );
     }
 
     /// ADR-0039 W4′ fence: OFF must be indistinguishable from the field not existing.
