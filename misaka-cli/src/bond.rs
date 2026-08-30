@@ -74,15 +74,27 @@ pub async fn status(ctx: &Ctx, ks: &KeySource, class_id: Option<&str>) -> CliRes
     // reason `retire` does — the facts RPC will not read a bond without one — so it is offered
     // rather than required, and its absence is stated instead of being silently a "none".
     let mut owned: Vec<(TransactionOutpoint, String)> = Vec::new();
+    // **How many outpoints this scan could not ASK about** — kept because an empty `owned` has two
+    // very different causes and one line of output was reporting both as the first: "the registry
+    // has none registered to this key" is a claim about the world, and a failed lookup is a claim
+    // about the question. A mistyped `--class-id` makes every call return an error, so a key
+    // holding a live bond was told, positively, that it holds none. This is the same sin the
+    // retire path already refuses to commit; status swallowed it because it has something else to
+    // print and no reason to stop.
+    let mut unanswered = 0usize;
     if let Some(class_id) = class_id {
         let ours = faster_hex::hex_string(key.public_key());
         for spec in &facts.locked_bond_outpoints {
-            let Ok(op) = parse_outpoint(spec) else { continue };
+            let Ok(op) = parse_outpoint(spec) else {
+                unanswered += 1;
+                continue;
+            };
             let Ok(f) = nv
                 .client
                 .get_palw_producer_facts(class_id.to_string(), op.transaction_id.to_string(), op.index, true)
                 .await
             else {
+                unanswered += 1;
                 continue;
             };
             if f.bond_known && f.bond_registered_pubkey.eq_ignore_ascii_case(&ours) {
@@ -106,6 +118,13 @@ pub async fn status(ctx: &Ctx, ks: &KeySource, class_id: Option<&str>) -> CliRes
                     println!("         (a bond's collateral often sits at another address, so the scan below can say");
                     println!("          \"none\" for a key that holds a live bond)");
                 }
+                // An absence the scan could not establish is not an absence.
+                Some(_) if owned.is_empty() && unanswered > 0 => {
+                    println!("bonds:   UNKNOWN — the node could not answer for {unanswered} of the");
+                    println!("         {} locked outpoint(s), so this is not a \"none\".", facts.locked_bond_outpoints.len());
+                    println!("         The usual cause is a --class-id this chain has not registered:");
+                    println!("         the facts RPC refuses the whole lookup and every outpoint fails.");
+                }
                 Some(_) if owned.is_empty() => {
                     println!("bonds:   the registry has none registered to this key");
                 }
@@ -113,6 +132,9 @@ pub async fn status(ctx: &Ctx, ks: &KeySource, class_id: Option<&str>) -> CliRes
                     println!("bonds:   {} registered to THIS key — pass one to --palw-producer-bond", owned.len());
                     for (op, collateral) in &owned {
                         println!("  {}:{}  collateral {} sompi", op.transaction_id, op.index, collateral);
+                    }
+                    if unanswered > 0 {
+                        println!("         ({unanswered} further outpoint(s) could not be checked — the list may be short)");
                     }
                 }
             }
@@ -169,6 +191,9 @@ pub async fn status(ctx: &Ctx, ks: &KeySource, class_id: Option<&str>) -> CliRes
                         }))
                         .collect::<Vec<_>>(),
                     "bonds_checked": class_id.is_some(),
+                    // A consumer must be able to tell "none" from "could not ask" — the human
+                    // branch says so in words, and JSON is the reading that gets automated.
+                    "bonds_unanswered": unanswered,
                     "locked_outpoints": locked_json,
                     "spendable_sompi": spendable,
                     "node_locked_outpoints": facts.locked_bond_outpoints,

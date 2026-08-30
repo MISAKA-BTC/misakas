@@ -119,13 +119,27 @@ pub fn validator(ctx: &Ctx, args: &[String]) -> CliResult {
 /// assuming the answer: only a `ConsensusV2` network has no hash lane.
 /// Does THIS network's consensus make blocks out of inference rather than hashes?
 ///
-/// A network id this tree cannot parse is not one we can make a claim about, so it answers `false`
-/// and the caller forwards — refusing on a parse failure would turn a typo into "your consensus has
-/// no miner".
+/// A network id this tree cannot DESCRIBE is not one we can make a claim about, so it answers
+/// `false` and the caller forwards — refusing on an id we cannot resolve would turn a typo into
+/// "your consensus has no miner".
+///
+/// **"Cannot describe" is two conditions, not one, and the second is a panic.** `NetworkId::from_str`
+/// parses `testnet-12` and `testnet-99` perfectly happily; it is `Params::from` that aborts the
+/// process on them (`panic!("testnet-12 was consolidated into testnet-11")`, and
+/// `panic!("Testnet suffix {} is not supported")` for the rest). A `.unwrap_or(false)` around the
+/// parse catches neither. So the convertible set is enumerated here before the conversion is
+/// attempted: this predicate must never be the reason `misaka miner` dies, and a subcommand that
+/// used to touch only strings should not gain an abort surface because it learned to ask about
+/// consensus.
 fn palw_is_the_consensus(network: &str) -> bool {
-    NetworkId::from_str(network)
-        .map(|nid| matches!(Params::from(nid).palw_consensus_mode, PalwConsensusMode::ConsensusV2(_)))
-        .unwrap_or(false)
+    let Ok(nid) = NetworkId::from_str(network) else { return false };
+    let describable = match nid.network_type {
+        // The only arm `Params::from` can panic on. Kept as an explicit list rather than a
+        // `catch_unwind`, so adding a network to this build is what adds it here.
+        NetworkType::Testnet => matches!(nid.suffix, Some(10) | Some(11)),
+        NetworkType::Mainnet | NetworkType::Devnet | NetworkType::Simnet => true,
+    };
+    describable && matches!(Params::from(nid).palw_consensus_mode, PalwConsensusMode::ConsensusV2(_))
 }
 
 pub fn miner(ctx: &Ctx, args: &[String]) -> CliResult {
@@ -348,5 +362,19 @@ mod miner_refusal_tests {
         assert!(!palw_is_the_consensus("testnet-10"), "a hash-only testnet forwards too");
         assert!(palw_is_the_consensus("testnet-11"), "testnet-11 IS a ConsensusV2 network, and there the refusal is the truth");
         assert!(!palw_is_the_consensus("not-a-network"), "an unparsable id is not a claim about consensus — forward, do not lecture");
+    }
+
+    /// **This predicate must never be the reason `misaka miner` dies.**
+    ///
+    /// `NetworkId::from_str` parses these; `Params::from` PANICS on them — `testnet-12` with the
+    /// consolidation message, the rest with "suffix is not supported". The first version of this
+    /// predicate wrapped only the parse, so `misaka miner --network testnet-12` aborted with exit
+    /// 101 instead of a CLI error, on a subcommand that until then had touched only strings. Each
+    /// of these is a real panic if the enumeration above is ever dropped.
+    #[test]
+    fn an_undescribable_network_forwards_instead_of_aborting() {
+        for id in ["testnet-12", "testnet-13", "testnet-99"] {
+            assert!(!palw_is_the_consensus(id), "{id}: must answer, not abort");
+        }
     }
 }
