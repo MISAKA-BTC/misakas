@@ -88,7 +88,7 @@ impl PalwExecutionBackendV1 for Base0Backend {
         &self,
         job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
         prompt_tokens: &[usize],
-    ) -> Result<(PalwExecutionOutcomeV1, kaspa_consensus_core::palw_fp_execution_v3::PalwFpRunFactsV3), String> {
+    ) -> Result<kaspa_consensus_core::palw_backend::PalwFpRunV1, String> {
         use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, PalwFpRunFactsV3, palw_fp_job_context_v3};
         use kaspa_consensus_core::palw_freeprompt_v3::PalwFpStopReasonV3;
 
@@ -150,8 +150,8 @@ impl PalwExecutionBackendV1 for Base0Backend {
             ..shape
         };
         let material = base0_material_encode_v1(&run).map_err(|e| e.to_string())?;
-        Ok((
-            PalwExecutionOutcomeV1 {
+        Ok(kaspa_consensus_core::palw_backend::PalwFpRunV1 {
+            outcome: PalwExecutionOutcomeV1 {
                 trace_root: run.trace_root,
                 output_root: run.output_root,
                 execution_root: run.execution_root,
@@ -160,7 +160,8 @@ impl PalwExecutionBackendV1 for Base0Backend {
                 material,
             },
             facts,
-        ))
+            output_token_ids: run.generated_token_ids,
+        })
     }
 
     fn verify_material(&self, material: &[u8], claim: PalwClaimRootsV1) -> PalwMaterialVerdictV1 {
@@ -336,6 +337,44 @@ mod tests {
         Base0Backend::new(resolve_class_v1(&court, entry.class_id(), root, &[]).expect("the floor resolves from nothing"))
     }
 
+    /// The class facts the integer family answers for. `rc_job_context` leaves the model and
+    /// runtime identities at their defaults on the attempt lane — the graph IS the identity here —
+    /// and inventing values for the free-prompt lane would file facts no court recomputes.
+    fn floor_class_facts(backend: &Base0Backend) -> kaspa_consensus_core::palw_fp_execution_v3::PalwFpClassFactsV3 {
+        kaspa_consensus_core::palw_fp_execution_v3::PalwFpClassFactsV3 {
+            model_profile_id: Hash64::default(),
+            runtime_manifest_hash: Hash64::default(),
+            runtime_class_id: Hash64::default(),
+            shape_profile_id: backend.profile().shape_profile_id(),
+            cu_ruleset_id: Hash64::default(),
+        }
+    }
+
+    fn free_prompt_job(
+        backend: &Base0Backend,
+        prompt_tokens: u32,
+        decode_token_limit: u32,
+    ) -> kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3 {
+        use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
+        kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3 {
+            version: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V3_VERSION,
+            network_domain: Hash64::from_u64_word(0xD0),
+            class_id: backend.profile().shape_profile_id(),
+            executor_bond: TransactionOutpoint::new(TransactionId::from_u64_word(0xB0), 0),
+            executor_pubkey: vec![0x11; 32],
+            operator_id: Hash64::from_u64_word(0x0B),
+            anchor_block: Hash64::from_u64_word(0xA0),
+            anchor_daa: 1234,
+            job_nonce: [0x5A; 32],
+            tokenizer_id: Hash64::default(),
+            prompt_token_ids_hash: Hash64::from_u64_word(0x71),
+            prompt_tokens,
+            decode_token_limit,
+            max_context_tokens: backend.profile().n_ctx,
+            privacy_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PRIVACY_PUBLIC_DA,
+        }
+    }
+
     /// **The free-prompt run commits a root the court will recompute — the round trip.**
     ///
     /// This is the only property that decides whether this family can serve the free-prompt lane
@@ -349,49 +388,23 @@ mod tests {
     /// non-zero. A one-way check would pass with both sides wrong in the same way.
     #[test]
     fn a_free_prompt_run_commits_the_root_the_derivation_recomputes() {
-        use kaspa_consensus_core::palw_fp_execution_v3::{
-            PalwFpClassFactsV3, PalwFpRunFactsV3, palw_fp_execution_root_v3, palw_fp_job_context_v3,
-        };
-        use kaspa_consensus_core::palw_freeprompt_v3::{PALW_FP_V3_VERSION, PalwFpStopReasonV3, PalwFreePromptJobV3};
-        use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
+        use kaspa_consensus_core::palw_fp_execution_v3::{palw_fp_execution_root_v3, palw_fp_job_context_v3};
+        use kaspa_consensus_core::palw_freeprompt_v3::PalwFpStopReasonV3;
 
         let backend = floor_backend();
         // The caller's tokens — the whole point of the lane. Any ids inside the vocabulary do:
         // this asserts a binding, not an answer.
         let prompt: Vec<usize> = vec![7, 11, 13, 17];
-        let job = PalwFreePromptJobV3 {
-            version: PALW_FP_V3_VERSION,
-            network_domain: Hash64::from_u64_word(0xD0),
-            class_id: backend.profile().shape_profile_id(),
-            executor_bond: TransactionOutpoint::new(TransactionId::from_u64_word(0xB0), 0),
-            executor_pubkey: vec![0x11; 32],
-            operator_id: Hash64::from_u64_word(0x0B),
-            anchor_block: Hash64::from_u64_word(0xA0),
-            anchor_daa: 1234,
-            job_nonce: [0x5A; 32],
-            tokenizer_id: Hash64::default(),
-            prompt_token_ids_hash: Hash64::from_u64_word(0x71),
-            prompt_tokens: prompt.len() as u32,
-            decode_token_limit: 2,
-            max_context_tokens: backend.profile().n_ctx,
-            // Public data availability: the prompt and answer are disclosable, which is what a
-            // court needs to check this run and what a person mining their own question expects.
-            privacy_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PRIVACY_PUBLIC_DA,
-        };
+        let job = free_prompt_job(&backend, prompt.len() as u32, 2);
 
-        let (outcome, facts) = backend.execute_free_prompt(&job, &prompt).expect("the floor runs a caller's prompt");
+        let run = backend.execute_free_prompt(&job, &prompt).expect("the floor runs a caller's prompt");
+        let (outcome, facts) = (&run.outcome, &run.facts);
 
         // Recompute the way a verifier does: from the job and the facts, with no access to the run.
-        let class = PalwFpClassFactsV3 {
-            model_profile_id: Hash64::default(),
-            runtime_manifest_hash: Hash64::default(),
-            runtime_class_id: Hash64::default(),
-            shape_profile_id: backend.profile().shape_profile_id(),
-            cu_ruleset_id: Hash64::default(),
-        };
-        let context = palw_fp_job_context_v3(&job, &class, &facts, RC_NETWORK_ID).expect("the finished run implies a context");
+        let class = floor_class_facts(&backend);
+        let context = palw_fp_job_context_v3(&job, &class, facts, RC_NETWORK_ID).expect("the finished run implies a context");
         assert_eq!(
-            palw_fp_execution_root_v3(&context, &facts),
+            palw_fp_execution_root_v3(&context, facts),
             outcome.execution_root,
             "the derivation and the run must agree, or the court convicts the honest"
         );
@@ -402,6 +415,57 @@ mod tests {
         assert_ne!(facts.step_leg_root, Hash64::default());
         assert_eq!(facts.decode_tokens_executed, job.decode_token_limit);
         assert_eq!(facts.stop_reason, PalwFpStopReasonV3::ExactBudgetReached);
+        // The answer, which is the other half of the one inference and the reason anyone ran it.
+        assert_eq!(run.output_token_ids.len(), job.decode_token_limit as usize);
+    }
+
+    /// **FP-R2: the run becomes a commitment, and every priced field is derived.**
+    ///
+    /// The assembly is where a producer would cheat if it could — a chosen CU, a chosen schedule,
+    /// a chosen execution root — so this asserts each against its own derivation rather than
+    /// against a literal. The CU especially: invariant F7 puts pricing at assembly and not at the
+    /// worker, and a commitment carrying a price the weights do not produce is refused by
+    /// `validate_stateless_v3` on the way in.
+    #[test]
+    fn a_free_prompt_run_assembles_a_commitment_whose_fields_are_all_derived() {
+        use kaspa_consensus_core::palw_fp_execution_v3::{palw_fp_commitment_v3, palw_fp_job_context_v3};
+        use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpCuWeightsV3, fp_cu_v3};
+
+        let backend = floor_backend();
+        let prompt: Vec<usize> = vec![3, 5, 8, 13, 21];
+        let job = free_prompt_job(&backend, prompt.len() as u32, 2);
+        let run = backend.execute_free_prompt(&job, &prompt).expect("the floor runs a caller's prompt");
+
+        let class = floor_class_facts(&backend);
+        let weights = PalwFpCuWeightsV3 { prefill_weight: 1, decode_weight: 4 };
+        let retention = 4_096;
+        let commitment =
+            palw_fp_commitment_v3(&job, &class, &run, RC_NETWORK_ID, &weights, retention).expect("a finished run commits");
+
+        // Priced by the assembly, from counts and weights — never carried up from the executor.
+        assert_eq!(commitment.cu, fp_cu_v3(job.prompt_tokens, run.facts.decode_tokens_executed, &weights));
+        assert_eq!(commitment.cu, 5 * 1 + 2 * 4, "the weights are applied to the counts, not to the ceiling");
+
+        // The schedule is a function of the context and the counts. Recomputing it the way a
+        // verifier does must land on the same value.
+        let context = palw_fp_job_context_v3(&job, &class, &run.facts, RC_NETWORK_ID).expect("the run implies a context");
+        let (schedule, _) = kaspa_consensus_core::palw_v2::expected_schedule_commitment_v2(
+            &context.context_hash(),
+            job.prompt_tokens,
+            run.facts.decode_tokens_executed,
+        );
+        assert_eq!(commitment.schedule_root, schedule);
+
+        // Adjudicable, which is the property a null root destroys: `apply_palw_transition_v3`
+        // refuses a commitment whose execution root is the default, and the lane was fail-closed
+        // on exactly that before the derivation existed.
+        assert_ne!(commitment.execution_root, Hash64::default());
+        assert_eq!(commitment.execution_root, run.outcome.execution_root);
+
+        // The retention promise is the caller's, and it is carried verbatim: a producer that
+        // shortened it here would be promising the panel less than the operator said.
+        assert_eq!(commitment.trace_retention_daa, retention);
+        assert_eq!(commitment.trace_chunk_count, run.outcome.trace_chunk_count);
     }
 
     /// **The seam produces what the header needs, end to end** — and the floor still runs through

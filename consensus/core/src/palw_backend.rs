@@ -92,6 +92,22 @@ pub enum PalwMaterialVerdictV1 {
     Unverifiable,
 }
 
+/// **One free-prompt run, as the lane's callers need it.**
+///
+/// Three values rather than a tuple because they answer three different questions and only one of
+/// them is the chain's: `outcome` is what a panel serves and a court reads, `facts` is what
+/// `palw_fp_job_context_v3` derives a binding from, and `output_token_ids` is **the answer** — the
+/// reason a person ran this at all. An execution path that returned only the first two would price
+/// the work and lose the product, which is the failure the free-prompt lane exists to avoid: one
+/// inference, both halves.
+pub struct PalwFpRunV1 {
+    pub outcome: PalwExecutionOutcomeV1,
+    pub facts: crate::palw_fp_execution_v3::PalwFpRunFactsV3,
+    /// What the model produced, in token ids. Ids and not text: a family without a tokenizer has
+    /// no rendering to give, and ids are the execution identity in either case (v2 design §10.7).
+    pub output_token_ids: Vec<u32>,
+}
+
 /// The execution path, as a node uses it.
 ///
 /// Implementor: `misaka_palw_base0::backend::Base0Backend`. The trait stays a trait because the
@@ -126,9 +142,8 @@ pub trait PalwExecutionBackendV1: Send + Sync {
     /// was reachable from the attempt path would be exactly the hole the rule closes, so the
     /// attempt path keeps a verb whose prompt it cannot supply.
     ///
-    /// Returns the outcome a panel and a court already consume, and the run facts
-    /// `palw_fp_job_context_v3` needs, as two values: merging them would hand each caller a field
-    /// it must ignore.
+    /// Returns [`PalwFpRunV1`]: the outcome a panel and a court consume, the facts the derivation
+    /// needs, and the answer itself.
     ///
     /// **The run must be performed under the context the derivation produces**, not under a
     /// convenience context that resembles it. `palw_fp_execution_root_v3` recomputes the root the
@@ -141,7 +156,7 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         &self,
         _job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
         _prompt_tokens: &[usize],
-    ) -> Result<(PalwExecutionOutcomeV1, crate::palw_fp_execution_v3::PalwFpRunFactsV3), String> {
+    ) -> Result<PalwFpRunV1, String> {
         Err("this backend has no free-prompt path".to_string())
     }
 

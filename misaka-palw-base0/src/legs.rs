@@ -568,8 +568,7 @@ pub fn base0_binding_from_capture_v1(
     activation_leg_root: Hash64,
 ) -> Result<kaspa_consensus_core::palw_step_leg::PalwStepBindingV2, LegError> {
     use kaspa_consensus_core::palw_step_leg::{
-        PALW_STEP_LEG_OBJECT_VERSION_V1, PalwStepBindingV2, checkpoint_empty_root_v2, checkpoint_leg_root_v2,
-        execution_commitment_root_v2, step_leg_root_v1,
+        PALW_STEP_LEG_OBJECT_VERSION_V1, PalwStepBindingV2, checkpoint_empty_root_v2, execution_commitment_root_v2,
     };
     let context_hash = ctx.context_hash();
     let profile_hash = profile.shape_profile_id();
