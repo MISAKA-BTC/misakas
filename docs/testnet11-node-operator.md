@@ -9,7 +9,7 @@ point, and it is what makes the rest of this document necessary.
 
 > **Current identity (2026-08-30 re-mint, ADR-0059 "Relaunch 3", the 10B premine cap) — wipe
 > your datadir if you joined earlier.**
-> The live chain's consensus fingerprint is **`17bdff18b08ed26c1ad8051a2a20e5d6d3e2022fa8204ff6cadee94a20bb39c5`**,
+> The live chain's consensus fingerprint is **`f3bf86b4e9327f8b02ab2ad1d121d62ecd11bd78cca1455d8bcd7372595153d8`**,
 > genesis **`d2789338…`** (coinbase marker `11,3`; three execution classes + the 547M MSK
 > community allocation, now carved out of the single 10B main wallet — the 40-vault block is
 > gone and every network's genesis mints exactly 10B).

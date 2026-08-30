@@ -45,7 +45,7 @@ that changed.
 A node on the right chain logs
 
 ```
-Consensus params fingerprint: 17bdff18b08ed26c1ad8051a2a20e5d6d3e2022fa8204ff6cadee94a20bb39c5 (network testnet-11)
+Consensus params fingerprint: f3bf86b4e9327f8b02ab2ad1d121d62ecd11bd78cca1455d8bcd7372595153d8 (network testnet-11)
 ```
 
 (Identity as of the **2026-08-30 re-mint** for the 10B premine cap, ADR-0059 — genesis

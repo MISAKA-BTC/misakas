@@ -2,7 +2,7 @@
 
 > **SUPERSEDED 2026-08-30** by the 10B-premine-cap re-mint
 > ([ADR-0059](adr/0059-the-10b-premine-cap.md), "Relaunch 3"): fingerprint
-> `95265934…` → `17bdff18b08ed26c1ad8051a2a20e5d6d3e2022fa8204ff6cadee94a20bb39c5`, genesis
+> `95265934…` → `f3bf86b4e9327f8b02ab2ad1d121d62ecd11bd78cca1455d8bcd7372595153d8`, genesis
 > `c664a224…` → `d2789338…` (marker `11,3`). Unlike this re-mint, THAT one moves the genesis:
 > the vault block is deleted, the premine is exactly 10B on every network, and the community
 > allocation (11 addresses, 547M — this document's "nine addresses / 347M" was already stale
