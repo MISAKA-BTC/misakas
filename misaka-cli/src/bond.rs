@@ -52,7 +52,7 @@ fn network_domain(nv: &NodeView) -> kaspa_consensus_core::Hash64 {
 /// that line has a funded, working bond they cannot name — and `--palw-producer-bond` takes the
 /// outpoint. `getPalwProducerFacts` already returns the locked set (the wallet calls it to avoid
 /// spending collateral), so this is a read the node has been able to answer all along.
-pub async fn status(ctx: &Ctx, ks: &KeySource) -> CliResult {
+pub async fn status(ctx: &Ctx, ks: &KeySource, class_id: Option<&str>) -> CliResult {
     let nv = connect(ctx).await?;
     let key = ks.load_key()?;
     let addr = key.funding_address(nv.params.prefix());
@@ -63,6 +63,34 @@ pub async fn status(ctx: &Ctx, ks: &KeySource) -> CliResult {
         .await
         .map_err(|e| CliError::new(exit::GENERIC, format!("getPalwProducerFacts: {e}")))?;
 
+    // **The bond this key OWNS need not sit at this key's address.** A genesis bond's collateral is
+    // posted by the main wallet while the bond is registered to the operator's key (ADR-0059), and
+    // a sponsored registration does the same — so the address scan below reports "none" for a key
+    // that holds a live, working bond. That is precisely the operator D3 exists for, and scanning
+    // UTXOs could never find them.
+    //
+    // Ownership is a property of the REGISTRY, so ask the registry: walk the network's locked set
+    // and keep the outpoints whose registered pubkey is this key's. Needs a class id for the same
+    // reason `retire` does — the facts RPC will not read a bond without one — so it is offered
+    // rather than required, and its absence is stated instead of being silently a "none".
+    let mut owned: Vec<(TransactionOutpoint, String)> = Vec::new();
+    if let Some(class_id) = class_id {
+        let ours = faster_hex::hex_string(key.public_key());
+        for spec in &facts.locked_bond_outpoints {
+            let Ok(op) = parse_outpoint(spec) else { continue };
+            let Ok(f) = nv
+                .client
+                .get_palw_producer_facts(class_id.to_string(), op.transaction_id.to_string(), op.index, true)
+                .await
+            else {
+                continue;
+            };
+            if f.bond_known && f.bond_registered_pubkey.eq_ignore_ascii_case(&ours) {
+                owned.push((op, f.bond_collateral.to_string()));
+            }
+        }
+    }
+
     // Every UTXO at this address, with the node's own view of which are consensus-locked. The
     // intersection is this key's bonds; the rest is spendable.
     let all = page_all(&nv, &addr).await?;
@@ -72,6 +100,23 @@ pub async fn status(ctx: &Ctx, ks: &KeySource) -> CliResult {
     match ctx.output {
         OutputFormat::Human => {
             println!("address: {addr}");
+            match class_id {
+                None => {
+                    println!("bonds:   not checked — pass --class-id to ask the registry which bonds this KEY owns");
+                    println!("         (a bond's collateral often sits at another address, so the scan below can say");
+                    println!("          \"none\" for a key that holds a live bond)");
+                }
+                Some(_) if owned.is_empty() => {
+                    println!("bonds:   the registry has none registered to this key");
+                }
+                Some(_) => {
+                    println!("bonds:   {} registered to THIS key — pass one to --palw-producer-bond", owned.len());
+                    for (op, collateral) in &owned {
+                        println!("  {}:{}  collateral {} sompi", op.transaction_id, op.index, collateral);
+                    }
+                }
+            }
+            println!();
             if locked.is_empty() {
                 println!("locked:  none at this address");
                 println!();
@@ -116,6 +161,14 @@ pub async fn status(ctx: &Ctx, ks: &KeySource) -> CliResult {
                 serde_json::json!({
                     "ok": true,
                     "address": addr.to_string(),
+                    "bonds_registered_to_this_key": owned
+                        .iter()
+                        .map(|(op, c)| serde_json::json!({
+                            "outpoint": format!("{}:{}", op.transaction_id, op.index),
+                            "collateral_sompi": c,
+                        }))
+                        .collect::<Vec<_>>(),
+                    "bonds_checked": class_id.is_some(),
                     "locked_outpoints": locked_json,
                     "spendable_sompi": spendable,
                     "node_locked_outpoints": facts.locked_bond_outpoints,

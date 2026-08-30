@@ -128,6 +128,30 @@ An operator who loses the line has a funded, working bond they cannot name — a
 takes the outpoint. `getPalwProducerFacts` already returns the locked bond outpoint (the wallet
 calls it to avoid spending collateral), so this is a formatting job over an RPC that exists.
 
+**Correction, from running it on testnet-11 (2026-08-30). It is not a formatting job, and the first
+implementation answered the wrong question twice.**
+
+1. **The locked set is not a bond set.** `rpc/service/src/service.rs:763` unions consensus-locked
+   collateral with *this node's own reserved PALW funding outpoints*, so a running producer's panel
+   fee outpoint is reported as locked and read as collateral. On ibm it did exactly that, and the
+   outpoint it offered would have named a bond the registry has never heard of. The CLI cannot
+   separate the two from that call, so it no longer claims to: the heading is `locked:`, the JSON
+   field is `locked_outpoints`, and the output says how to settle which is which.
+2. **A key's bond need not sit at the key's address.** A genesis bond's collateral is posted by the
+   main wallet while the bond is registered to the operator's key (ADR-0059); a sponsored
+   registration is the same shape. Scanning UTXOs at the key's own address therefore reports **none**
+   for a key that holds a live, working bond — which is precisely the operator this decision exists
+   for. Measured: seat 2's key owns genesis bond `…:2` and the address scan found nothing.
+
+**Ownership is a property of the registry, so ask the registry.** `bond status` now takes
+`--class-id` and, with it, walks the network's locked set and keeps the outpoints whose
+`bond_registered_pubkey` is this key's. Without it the command says the check was not run rather than
+printing a "none" it cannot stand behind.
+
+The lesson worth more than the fix: **an absence produced by looking in the wrong place is
+indistinguishable from an absence in the world**, and this command's whole job is to tell an operator
+that difference.
+
 ### D4. `misaka miner` must not forward to a binary that is not there
 
 `misaka miner` forwards to `kaspa-pq-miner`, which is not installed on the fleet host this was

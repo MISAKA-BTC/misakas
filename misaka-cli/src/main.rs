@@ -381,6 +381,11 @@ enum BondCmd {
     Status {
         #[command(flatten)]
         key: KeyArgs,
+        /// A class id (128-hex) the chain knows. With it, the chain is asked which bonds THIS KEY
+        /// registered — the only reliable answer, because a bond's collateral often sits at another
+        /// address (a genesis or sponsored registration) where no address scan will find it.
+        #[arg(long)]
+        class_id: Option<String>,
     },
     /// Request retirement of a bond: sign the release the consensus rule already accepts.
     ///
@@ -743,7 +748,7 @@ async fn main() -> std::process::ExitCode {
         Command::Key(KeyCmd::Gen { out }) => key_gen(&ctx, &out),
         Command::Key(KeyCmd::Address { key }) => key_address(&ctx, &key.source()),
         Command::Key(KeyCmd::Import { out, hex_stdin }) => key_import(&ctx, &out, hex_stdin),
-        Command::Bond(BondCmd::Status { key }) => bond::status(&ctx, &key.source()).await,
+        Command::Bond(BondCmd::Status { key, class_id }) => bond::status(&ctx, &key.source(), class_id.as_deref()).await,
         Command::Bond(BondCmd::Retire { key, bond, class_id, dry_run, yes }) => {
             bond::retire(&ctx, &key.source(), bond.as_deref(), class_id.as_deref(), dry_run, yes).await
         }
