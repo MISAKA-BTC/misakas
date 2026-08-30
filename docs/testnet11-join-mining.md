@@ -72,6 +72,11 @@ the second command is only for looking it up again later.)
 The address is ML-DSA-87 P2PKH (`misakatest:…`). It is where rewards are paid, and where the
 collateral returns if the bond is ever retired — the registration names one payee for both.
 
+The easiest way to get that first transfer is the public faucet on the explorer:
+<https://misakascan.com/#/faucet> pays 0.5 tMSK per address (once, ever) as a regular
+transaction — exactly the non-coinbase output the bond path needs, and over a hundred times
+the 0.004 MSK collateral floor.
+
 **Fund it with a normal transfer, not with mining rewards.** Two separate rules bite a coinbase
 output: `coinbase_maturity`, and the ADR-0018 DNS settlement floor
 (`coinbase_settlement_long_maturity_daa` = 600 on testnet-11). On top of that the node's funding
