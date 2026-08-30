@@ -15,6 +15,7 @@ use crate::node::Ctx;
 use crate::{CliError, CliResult, exit};
 use kaspa_consensus_core::config::params::Params;
 use kaspa_consensus_core::network::{NetworkId, NetworkType};
+use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
 use std::path::PathBuf;
 use std::str::FromStr;
 
@@ -106,21 +107,44 @@ pub fn validator(ctx: &Ctx, args: &[String]) -> CliResult {
 /// mine. A command that exists and cannot run teaches an operator that the tool is unreliable, in
 /// the one place they most need to trust it, so it says what to run instead.
 ///
-/// `MISAKA_MINER_BIN` still forces the old behaviour for the hash-only networks where a hash miner
-/// is the real thing: the refusal is about the default, not about the capability.
+/// `MISAKA_MINER_BIN` still forces the old behaviour, and so does **any network that is not a PALW
+/// network** — which is the important half, because it includes MAINNET.
+///
+/// The refusal is about the CONSENSUS, not about the command. Mainnet ships
+/// `PalwConsensusMode::Disabled` and `pow_palw_activation: never()`: it is hash-only proof of work,
+/// a hash miner is exactly the right tool, and the first version of this refusal told every mainnet
+/// operator the opposite — that their blocks are LLM inferences and they should go register a bond.
+/// Wrong advice in the one place an operator most needs the tool to be right, which is the same
+/// sentence this doc uses to justify refusing at all. So ask the network the question instead of
+/// assuming the answer: only a `ConsensusV2` network has no hash lane.
+/// Does THIS network's consensus make blocks out of inference rather than hashes?
+///
+/// A network id this tree cannot parse is not one we can make a claim about, so it answers `false`
+/// and the caller forwards — refusing on a parse failure would turn a typo into "your consensus has
+/// no miner".
+fn palw_is_the_consensus(network: &str) -> bool {
+    NetworkId::from_str(network)
+        .map(|nid| matches!(Params::from(nid).palw_consensus_mode, PalwConsensusMode::ConsensusV2(_)))
+        .unwrap_or(false)
+}
+
 pub fn miner(ctx: &Ctx, args: &[String]) -> CliResult {
     if std::env::var_os("MISAKA_MINER_BIN").is_some() {
+        let injected = miner_injection(&ctx.network, &ctx.node_grpc, args);
+        return exec("kaspa-pq-miner", "MISAKA_MINER_BIN", &[], &injected, args);
+    }
+    if !palw_is_the_consensus(&ctx.network) {
         let injected = miner_injection(&ctx.network, &ctx.node_grpc, args);
         return exec("kaspa-pq-miner", "MISAKA_MINER_BIN", &[], &injected, args);
     }
     Err(CliError::new(
         exit::GENERIC,
         format!(
-            "there is no hash miner for {}: on a PALW network every block's proof of work is a deterministic LLM inference made under a registered bond, so mining means running a producer, not a miner.\n\n  \
+            "there is no hash miner for {}: on this network every block's proof of work is a deterministic LLM inference made under a registered bond, so mining means running a producer, not a miner.\n\n  \
              1. `misaka key gen --out /etc/misaka/bond.key`   (or `key import` for an existing seed)\n  \
              2. fund that address, then register a bond with `kaspad --palw-register-bond`\n  \
              3. run the node with `--palw-produce` (see docs/testnet11-join-mining.md)\n\n\
-             `misaka bond status` shows the bond once it is registered. If you do have a hash miner binary for a hash-only network, set MISAKA_MINER_BIN to its path and this command forwards to it as before.",
+             `misaka bond status` shows the bond once it is registered. If you do have a hash miner binary you want used anyway, set MISAKA_MINER_BIN to its path and this command forwards to it.",
             ctx.network
         ),
     ))
@@ -304,5 +328,25 @@ mod tests {
             .unwrap()
             .is_empty()
         );
+    }
+}
+
+#[cfg(test)]
+mod miner_refusal_tests {
+    use super::palw_is_the_consensus;
+
+    /// **`misaka miner` must not tell a mainnet operator their blocks are LLM inferences.**
+    ///
+    /// The refusal shipped unconditional, so every network got the PALW answer — including the
+    /// hash-only ones, where a hash miner is exactly the right tool and the instructions it printed
+    /// (generate a key, register a bond, run a producer) do not apply. Both positions, because a
+    /// predicate that answered `true` everywhere would also pass an assertion that only checked the
+    /// networks it is right about.
+    #[test]
+    fn only_a_palw_network_has_no_hash_miner() {
+        assert!(!palw_is_the_consensus("mainnet"), "mainnet is hash-only PoW — the miner must still forward");
+        assert!(!palw_is_the_consensus("testnet-10"), "a hash-only testnet forwards too");
+        assert!(palw_is_the_consensus("testnet-11"), "testnet-11 IS a ConsensusV2 network, and there the refusal is the truth");
+        assert!(!palw_is_the_consensus("not-a-network"), "an unparsable id is not a claim about consensus — forward, do not lecture");
     }
 }
