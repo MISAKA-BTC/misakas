@@ -1643,7 +1643,6 @@ fn fill_fixture(mut artifact: Qwen36ArtifactV1, shape: Qwen36ShapeV1) -> Qwen36A
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::artifact::LN_THETA_10000_GEN_Q;
 
     /// A Qwen3.6-SHAPED artifact at a size a test can run: the same layer alternation, the same
     /// two arms, a real router over a real expert count, and everything else cut down.

@@ -450,6 +450,12 @@ mod tests {
     /// what a close costs to carry, and one 128,256-lane logits row is four times a standard
     /// transaction), so the registry has no Qwen row and the tests that describe one have to say
     /// which court they are describing.
+    ///
+    /// **No caller today.** The tests that described a Qwen court were removed with the row, and
+    /// this is kept rather than deleted because the constraint it encodes is still true and still
+    /// the reason the registry has no Qwen entry — a fixture is the cheapest place for that to
+    /// stay checkable. Allowed rather than silently dead so `-D warnings` stays usable.
+    #[allow(dead_code)]
     fn ladder_only_court() -> PalwCourtParamsV2 {
         PalwCourtParamsV2::with_cost_ceilings(
             kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES,

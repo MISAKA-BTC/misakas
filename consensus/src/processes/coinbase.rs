@@ -114,7 +114,7 @@ impl CoinbaseManager {
     #[allow(clippy::too_many_arguments)]
     pub fn expected_coinbase_transaction<T: AsRef<[u8]>>(
         &self,
-        daa_score: u64,
+        _daa_score: u64,
         // **The subsidy this block's own payload declares** (ADR-0060 Decision 1.4). Almost
         // always `calc_block_subsidy(daa_score)` — but a heartbeat (algo-3 on a ConsensusV2
         // network) declares ZERO, and the validation path must expect the same payload the body

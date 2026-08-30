@@ -181,7 +181,7 @@ fn run(scenario: &Scenario, epochs: u64) {
                 base
             };
             chain.step(Some(class), &[]);
-            if (chain.daa + 1) % EPOCH_LENGTH == 0 {
+            if (chain.daa + 1).is_multiple_of(EPOCH_LENGTH) {
                 break;
             }
         }
@@ -324,7 +324,7 @@ fn per_epoch_series_for_the_real_qwen36_class() {
                 base
             };
             chain.step(Some(class), &[]);
-            if (chain.daa + 1) % epoch_length == 0 {
+            if (chain.daa + 1).is_multiple_of(epoch_length) {
                 break;
             }
         }
@@ -434,7 +434,7 @@ fn the_real_qwen36_class_earns_share_by_producing() {
                 base
             };
             chain.step(Some(class), &[]);
-            if (chain.daa + 1) % epoch_length == 0 {
+            if (chain.daa + 1).is_multiple_of(epoch_length) {
                 break;
             }
         }
@@ -611,7 +611,7 @@ fn the_shipped_three_class_card_grows_both_entrants() {
                 None => base,
             };
             chain.step(Some(class), &[]);
-            if (chain.daa + 1) % epoch_length == 0 {
+            if (chain.daa + 1).is_multiple_of(epoch_length) {
                 break;
             }
         }

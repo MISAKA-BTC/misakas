@@ -8328,7 +8328,7 @@ async fn palw_rc_qwen36_per_epoch_expected_observed_target() {
         })
         .build();
     let network_domain = palw_network_domain_v2_for(config.params.net.to_string().as_bytes(), Some(config.params.genesis.hash));
-    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    let ctx = TestContext::new(TestConsensus::new(&config));
 
     // One execution per class; the nonce does the rest.
     let base_profile = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("expressible");
@@ -8562,7 +8562,7 @@ async fn palw_rc_qwen36_earns_share_through_real_blocks() {
         })
         .build();
     let network_domain = palw_network_domain_v2_for(config.params.net.to_string().as_bytes(), Some(config.params.genesis.hash));
-    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    let ctx = TestContext::new(TestConsensus::new(&config));
 
     // One execution per class; the nonce moves the challenge, which is what the ticket reads.
     let base_profile = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("expressible");
