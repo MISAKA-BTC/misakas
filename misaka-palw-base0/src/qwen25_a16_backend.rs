@@ -346,7 +346,12 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         // Call 0 — prefill. Logits leaves exist only at its LAST position; the earlier rows predict
         // tokens the prompt already contains, and pushing them would place steps this class's step
         // space does not have.
-        let mut last_logits = Vec::new();
+        // **This family keeps a logits row per PREFILL position, not only the last one.**
+        // `qwen25_a16_roots_v1` indexes `prefill - 1 + i` to check that every committed token is
+        // its own row's argmax, so a vector built the floor's way — last prefill row, then the
+        // decodes — makes that check read the wrong rows. The capture still drops the Post rows at
+        // every position but the last, because those are steps this class's step space does not
+        // have; the two conventions are about different objects and both are followed here.
         for (position, token) in prompt_tokens.iter().enumerate() {
             let (logits, trace) =
                 engine.forward_token_traced(&mut cache, *token, position).map_err(|e| format!("prefill at {position}: {e:?}"))?;
@@ -355,11 +360,11 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
                 rows.retain(|r| r.table != kaspa_consensus_core::palw_step::PalwStepTableV1::Post);
             }
             capture.push_call(&self.profile, &ctx, 0, position as u32, &rows).map_err(|e| format!("{e:?}"))?;
-            last_logits = logits;
+            logits_rows.push(logits);
         }
-        let mut next = kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(&last_logits) as u32;
+        let last = logits_rows.last().ok_or_else(|| "an empty prefill".to_string())?;
+        let mut next = kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(last) as u32;
         generated.push(next);
-        logits_rows.push(last_logits);
 
         for call in 1..job.decode_token_limit as usize {
             let cache_position = prefill + call - 1;
@@ -398,15 +403,17 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         let decode_calls = ctx.exact_decode_tokens.saturating_sub(1);
         let checkpoints = checkpoints.finish(decode_calls / checkpoint_profile.checkpoint_interval).map_err(|e| format!("{e:?}"))?;
         let tiles = capture.finish().map_err(|e| format!("{e:?}"))?;
-        let trace_root = kaspa_consensus_core::palw_step_refute::base0_logits_trace_root_v1(&ctx, &logits_rows, &generated);
+        // **This class's own trace scheme, not the floor's.** Its `trace_scheme_id` is the tiled
+        // logits one; committing `base0_logits_trace_root_v1` here would file a root under a scheme
+        // the class does not declare, and the court dispatches on the registered lane.
+        let run = Qwen25A16RunV1 { logits_rows, generated: generated.clone() };
+        let (trace_root, output_root, _, trace_manifest_root) = qwen25_a16_roots_v1(&ctx, self.shape_id, &run);
         let activation_leg_root = crate::produce::base0_activation_leg_root_v1(&ctx);
         let binding =
             crate::legs::base0_binding_from_capture_v1(&self.profile, &ctx, &tiles, &checkpoints, trace_root, activation_leg_root)
                 .map_err(|e| format!("{e:?}"))?;
         let (checkpoint_leg_root, step_leg_root) = crate::legs::base0_leg_roots_from_binding_v1(&binding);
 
-        let run = Qwen25A16RunV1 { logits_rows, generated: generated.clone() };
-        let (_, output_root, _, trace_manifest_root) = qwen25_a16_roots_v1(&ctx, self.shape_id, &run);
         Ok(kaspa_consensus_core::palw_backend::PalwFpRunV1 {
             outcome: PalwExecutionOutcomeV1 {
                 trace_root,
@@ -459,7 +466,7 @@ mod free_prompt_tests {
     use kaspa_consensus_core::palw_freeprompt_v3::{
         PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_V3_VERSION, PalwFpStopReasonV3, PalwFreePromptJobV3,
     };
-    use kaspa_consensus_core::palw_qwen25_profile::{PalwQwen25GeometryV1, qwen25_a16_profile_v1};
+    use kaspa_consensus_core::palw_qwen25_profile::{PalwQwen25GeometryV1, qwen25_a16_profile_v1, qwen25_a16_profile_v2};
     use kaspa_consensus_core::palw_state_chunk_map as map;
     use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
 
@@ -468,6 +475,12 @@ mod free_prompt_tests {
     /// A class small enough to run in a unit test, built from ONE geometry so the artifact and the
     /// profile cannot describe different models — which is the failure a hand-written pair invites.
     fn class(map_id: Hash64) -> (std::sync::Arc<Base0ArtifactV1>, PalwShapeProfileV3) {
+        class_from(map_id, false)
+    }
+
+    /// `corrected` builds the class `qwen25_a16_profile_v2` describes: the pre table names the
+    /// embed-lift requant and the state map is the four-byte one.
+    fn class_from(map_id: Hash64, corrected: bool) -> (std::sync::Arc<Base0ArtifactV1>, PalwShapeProfileV3) {
         let geometry = PalwQwen25GeometryV1 {
             layer_count: 2,
             hidden_dim: 8,
@@ -481,8 +494,14 @@ mod free_prompt_tests {
             rms_eps_q: 1,
             tile_len: 4,
         };
-        let mut profile = qwen25_a16_profile_v1(geometry).expect("a valid A16 profile");
-        profile.state_chunk_map_id = map_id;
+        let mut profile = if corrected {
+            qwen25_a16_profile_v2(geometry).expect("a valid corrected A16 profile")
+        } else {
+            qwen25_a16_profile_v1(geometry).expect("a valid A16 profile")
+        };
+        if !corrected {
+            profile.state_chunk_map_id = map_id;
+        }
         let shape = Base0ShapeV1 {
             n_layers: geometry.layer_count as usize,
             n_heads: geometry.attn_heads as usize,
@@ -519,6 +538,50 @@ mod free_prompt_tests {
             max_context_tokens: profile.n_ctx,
             privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
         }
+    }
+
+    /// **The corrected class runs a caller's prompt and commits a root the derivation recomputes.**
+    ///
+    /// This is the property everything else was for: a language model's own execution, under a
+    /// class whose graph names what the engine does and whose state map is the width the cache
+    /// holds, producing a free-prompt commitment a court could recompute. The two defects that
+    /// stopped it were measured, not guessed, and correcting either one moves the class id — so
+    /// this is a class to register, and the test is what says it would work once registered.
+    #[test]
+    fn the_corrected_a16_class_commits_the_root_the_derivation_recomputes() {
+        let (artifact, profile) = class_from(map::integer_kv_state_chunk_map_id_v2(), true);
+        let digest = artifact.artifact_digest();
+        let backend = Qwen25A16Backend::new(artifact, NETWORK.to_vec(), profile.clone(), (4, 2));
+        let prompt: Vec<usize> = vec![3, 9, 17, 33];
+        let job = job(&profile, prompt.len() as u32, 3);
+
+        let run = backend.execute_free_prompt(&job, &prompt).expect("the corrected class runs a caller's prompt");
+
+        let class_facts = PalwFpClassFactsV3 {
+            model_profile_id: digest,
+            runtime_manifest_hash: Hash64::default(),
+            runtime_class_id: digest,
+            shape_profile_id: profile.shape_profile_id(),
+            cu_ruleset_id: Hash64::default(),
+        };
+        let ctx = palw_fp_job_context_v3(&job, &class_facts, &run.facts, NETWORK).expect("the finished run implies a context");
+        assert_eq!(
+            palw_fp_execution_root_v3(&ctx, &run.facts),
+            run.outcome.execution_root,
+            "the derivation and the run must agree, or the court convicts the honest"
+        );
+
+        // All four legs measured — four zero roots would satisfy the equality above and mean
+        // nothing — and the answer, which is the other half of the one inference.
+        assert_ne!(run.facts.full_logits_trace_root, Hash64::default());
+        assert_ne!(run.facts.step_leg_root, Hash64::default());
+        assert_ne!(run.facts.checkpoint_leg_root, Hash64::default());
+        assert_eq!(run.facts.stop_reason, PalwFpStopReasonV3::ExactBudgetReached);
+        assert_eq!(run.output_token_ids.len(), job.decode_token_limit as usize);
+
+        // And it is a different class from the one testnet-11 carries, which is the cost.
+        let (_, registered) = class_from(map::integer_kv_state_chunk_map_id_v1(), false);
+        assert_ne!(profile.shape_profile_id(), registered.shape_profile_id());
     }
 
     /// **A16 refuses the free-prompt path, and the refusal names why — under either map.**
