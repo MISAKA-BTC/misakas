@@ -77,6 +77,8 @@ struct Args {
     /// Benchmark mode: measure the raw BLAKE2b-512 ∥ SHA3-512 Layer-1 hash-rate (H/s) across all
     /// cores for this many seconds, print it, and exit (no node connection). Used to calibrate the
     /// genesis difficulty — at equilibrium the DAA settles difficulty ≈ aggregate-H/s ÷ target-BPS.
+    /// HASH LANES ONLY (algo 3): the figure says nothing about a network mining a PALW inference
+    /// lane (algo ≥ 4), which this miner cannot search at any hash-rate.
     #[arg(long)]
     bench_secs: Option<u64>,
     /// F3 (t10): mine even when the node reports `is_synced=false` on the template. By default the
@@ -99,6 +101,32 @@ fn unsafe_cli_secrets_allowed() -> bool {
 
 fn is_mandatory_attestation_wait_error(message: &str) -> bool {
     message.contains("missing mandatory stake attestations") || message.contains("MissingMandatoryAttestationInBlock")
+}
+
+/// The refusal for a template whose algo this miner's hash scan cannot search, or `None` for the
+/// hash lanes (1/2/3) it can.
+///
+/// `>=` rather than an id list (issue #84): `misaminer` learned in a28ee300 that an algo it does
+/// not implement must refuse by name, and this binary kept matching 4|5 exactly — so an algo-6
+/// template fell through to the hash scan, a target no algo-6 header is graded by, searched
+/// forever while the loop looked healthy. Measured in the field on testnet-11: 1580% CPU, no
+/// output, no block. Anything at or above the PALW ids — including ids this build has never heard
+/// of — is an inference lane to this loop, and the only honest answer is who does mine it.
+fn inference_lane_refusal(algo_id: u8) -> Option<String> {
+    use kaspa_consensus_core::pow_layer0::{POW_ALGO_ID_PALW_LLM, POW_ALGO_ID_PALW_OLLAMA};
+    if algo_id < POW_ALGO_ID_PALW_LLM {
+        return None;
+    }
+    let what_mines_it = if matches!(algo_id, POW_ALGO_ID_PALW_LLM | POW_ALGO_ID_PALW_OLLAMA) {
+        "Use `misaminer` instead: it mines PALW sequentially (one inference per nonce)."
+    } else {
+        "Blocks on such a network are produced by `kaspad --palw-produce` with a bonded producer key; \
+         there is no external-miner client for it."
+    };
+    Some(format!(
+        "this network mines PoW algo {algo_id} — an inference lane pq-miner cannot search. \
+         Stopping rather than searching a hash target no header of this algo is graded by.\n{what_mines_it}"
+    ))
 }
 
 #[tokio::main]
@@ -176,6 +204,10 @@ async fn main() {
             elapsed,
             nthreads
         );
+        // A hash-rate figure on an inference network reads as a green light, and it is not one
+        // (issue #84): the operator who benched here went on to point the miner at a network
+        // grading nothing by this algo. Say the scope in the output itself.
+        println!("(hash lanes only — a network mining a PALW inference lane, algo ≥ 4, is not minable by pq-miner at any hash-rate)");
         return;
     }
 
@@ -339,21 +371,13 @@ async fn main() {
             }
         };
 
-        // PALW (algo_id 4/5) is NOT minable through this loop: one attempt is a full LLM
-        // inference, and the all-nonce rayon scan below would queue every core behind the
-        // runtime's serialization gate and never come back to refetch the template — the miner
-        // would grind a stale header forever. `misaminer` implements the sequential PALW path
-        // (one inference per nonce, clock-derived start, template refresh); point there rather
-        // than duplicating it here, and fail loudly instead of thrashing.
-        if matches!(
-            header.pow_algo_id,
-            kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_LLM | kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_OLLAMA
-        ) {
-            eprintln!(
-                "this network mines PALW LLM proof-of-work (algo_id = {}), which pq-miner does not implement.\n\
-                 Use `misaminer` instead: it mines PALW sequentially (one inference per nonce).",
-                header.pow_algo_id
-            );
+        // **Every algo at or above the PALW ids is a refusal, not a fallback** (issue #84) — the
+        // scan below is the Layer-0 HASH grind and can search algos 1/2/3 only. Why 4/5 cannot go
+        // through it: one attempt is a full LLM inference, and the all-nonce rayon scan would
+        // queue every core behind the runtime's serialization gate and never come back to refetch
+        // the template. Why 6/7 cannot go through anything here: see `inference_lane_refusal`.
+        if let Some(refusal) = inference_lane_refusal(header.pow_algo_id) {
+            eprintln!("{refusal}");
             std::process::exit(1);
         }
 
@@ -392,7 +416,31 @@ async fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_mandatory_attestation_wait_error, unsafe_cli_secrets_allowed};
+    use super::{inference_lane_refusal, is_mandatory_attestation_wait_error, unsafe_cli_secrets_allowed};
+
+    /// Issue #84: algo 6 fell through the exact 4|5 match to the hash scan and spun forever. The
+    /// rule is now a boundary, not a list — everything at/above the PALW ids refuses, naming what
+    /// does mine it; the hash lanes still mine.
+    #[test]
+    fn every_algo_at_or_above_palw_refuses_and_names_what_mines_it() {
+        for hash_algo in [1u8, 2, 3] {
+            assert!(inference_lane_refusal(hash_algo).is_none(), "algo {hash_algo} is a hash lane this miner searches");
+        }
+        for palw_algo in [4u8, 5] {
+            let refusal = inference_lane_refusal(palw_algo).expect("PALW algos are not minable here");
+            assert!(refusal.contains("misaminer"), "4/5 must point at the client that does implement them");
+        }
+        // 6/7 are the ConsensusV2 lanes today; 200 stands for any id this build has never heard
+        // of — a future lane must be a refusal too, or it silently hash-scans like algo 6 did.
+        for v2_or_future in [6u8, 7, 200] {
+            let refusal = inference_lane_refusal(v2_or_future).expect("no generic client mines a ConsensusV2 lane");
+            assert!(refusal.contains("kaspad --palw-produce"), "the refusal must say what does mine algo {v2_or_future}");
+            assert!(
+                !refusal.contains("misaminer"),
+                "misaminer does not mine algo {v2_or_future}; pointing there re-creates the bug one binary over"
+            );
+        }
+    }
 
     #[test]
     fn detects_mandatory_attestation_wait_errors() {
