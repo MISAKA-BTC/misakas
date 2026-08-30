@@ -157,9 +157,20 @@ pub async fn retire(ctx: &Ctx, ks: &KeySource, bond_arg: Option<&str>, dry_run: 
     // **Refuse while the bond still owes a court** (ADR-0063 D2). A retirement that outran a
     // claim's data obligation would take the collateral out from under a dispute, and the operator
     // deserves to be told WHICH claims rather than a generic refusal.
+    // The request takes the bond as THREE fields — a bare 128-hex txid, the index, and `with_bond`
+    // — not as the `<txid>:<index>` string every flag spells it with. Passing the joined form (and
+    // `with_bond: false`, which tells the node not to read the bond at all) left `bond_known`
+    // permanently false, so the refusal below could never fire. Verified against the live chain:
+    // it is the guard that has to be asked correctly, because a guard that never fires reads
+    // exactly like a bond that owes nothing.
     let facts = nv
         .client
-        .get_palw_producer_facts(String::new(), format!("{}:{}", bond_outpoint.transaction_id, bond_outpoint.index), 0, false)
+        .get_palw_producer_facts(
+            String::new(),
+            bond_outpoint.transaction_id.to_string(),
+            bond_outpoint.index,
+            true,
+        )
         .await
         .map_err(|e| CliError::new(exit::GENERIC, format!("getPalwProducerFacts: {e}")))?;
     // **Reserved exposure IS the live-claim count, in the unit that matters.** A claim reserves
@@ -167,8 +178,22 @@ pub async fn retire(ctx: &Ctx, ks: &KeySource, bond_arg: Option<&str>, dry_run: 
     // least one claim can still be disputed — and retiring under it would pull the collateral out
     // from under a court. Reading the reservation rather than a claim tally also means the CLI and
     // consensus agree by construction: it is the same number admission checks against the ceiling.
+    //
+    // **A bond the chain does not know is not a bond that owes nothing** — it is a question this
+    // command cannot answer, so it refuses rather than signing a release for an outpoint no
+    // registry entry backs. Before the request above was fixed this arm was unreachable, which is
+    // why it must be an error and not a shrug.
+    if !facts.bond_known {
+        return Err(CliError::new(
+            exit::GENERIC,
+            format!(
+                "the chain has no bond registered at {}:{}. Check the outpoint with `misaka bond status` — retiring is only meaningful for a bond the registry knows.",
+                bond_outpoint.transaction_id, bond_outpoint.index
+            ),
+        ));
+    }
     let reserved = facts.bond_reserved_exposure.trim();
-    let still_owing = facts.bond_known && !reserved.is_empty() && reserved != "0";
+    let still_owing = !reserved.is_empty() && reserved != "0";
     if still_owing {
         return Err(CliError::new(
             exit::GENERIC,
