@@ -655,7 +655,9 @@ async fn the_beacon_fact_comes_from_the_chain_not_from_the_block() {
 
     let vp = ctx.consensus.virtual_processor();
     let sink = ctx.consensus.get_sink();
-    let sink_daa = vp.headers_store.get_header(sink).unwrap().daa_score;
+    let sink_header = vp.headers_store.get_header(sink).unwrap();
+    let sink_daa = sink_header.daa_score;
+    let sink_blue = sink_header.blue_score;
 
     // Every block this harness mines is attempt-class (algo 6), so every DAA at or below the sink
     // has a beacon and the fact's own witness must sit strictly below the slot.
@@ -9009,4 +9011,76 @@ async fn a_callers_prompt_runs_and_no_registered_class_can_earn_a_draw_with_it()
     // The dense class is no better: 16 positions against the same weights.
     let best_dense = kaspa_consensus_core::palw_freeprompt_v3::fp_cu_v3(1, 15, weights);
     assert!(best_dense < bundle.freeprompt.quantum_cu(), "and neither can the A16 class at {best_dense}");
+}
+
+/// **A receipt block carrying a real certified claim passes the header admission gate.**
+///
+/// The end-to-end admission — a real execution's claim, certified, its quantum spend accepted by
+/// `check_palw_receipt_spend_admission_full_v3` — is proven in
+/// `misaka_palw_base0::backend::end_to_end_tests`. This adds the piece that lives in the pipeline:
+/// the receipt carriage a producer builds, on a real header, gets past the HEADER stage's
+/// signature gate — the check `validate_and_insert_block` runs before a block is a block at all.
+///
+/// It stops there deliberately. Whether the block then becomes the SINK is a stateful question the
+/// virtual processor answers on the chain candidate, and reaching it honestly needs the claim
+/// certified ON the mined chain — windows of DAA (bind 600, challenge 1,200) the frozen cadence
+/// makes into hours and this harness cannot cheaply advance without tripping the epoch-budget and
+/// DAA-progress rules that govern a real chain. The admission logic is proven where it is pure;
+/// this proves the header gate accepts the producer's carriage, and names what it does not cover.
+#[tokio::test]
+async fn a_receipt_carriage_passes_the_header_signature_gate() {
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
+
+    let catalog = palw_v2_test_catalog();
+    let bundle = palw_v2_test_bundle_funded_for(&catalog, 64);
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+
+    // A claim id and bond a producer would name — the harness bond is genesis row 0, whose REAL
+    // key the signature verifies against. The claim need not be on chain for the HEADER gate: that
+    // gate checks the signature over the header position, and the stateful "is this claim Final"
+    // question is asked later, on the candidate (measured in the receipt-gate test above).
+    let bond = TransactionOutpoint::new(TransactionId::from_u64_word(0xB0), 0);
+    let claim_id = kaspa_hashes::Hash64::from_u64_word(0xFEED);
+    let beacon_block = kaspa_hashes::Hash64::from_u64_word(0xBEAC);
+
+    let honest = ctx.build_block_template(9, ctx.simulated_time + 1);
+
+    // Junk signature — the stateless gate must refuse it, naming the signature.
+    let mut forged = honest.block.clone();
+    forged.header.pow_algo_id = kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3;
+    forged.header.palw_commitment =
+        ctx.consensus.palw_v3_test_receipt_carriage_for(&forged.header, false, claim_id, 0, bond, beacon_block);
+    forged.header.finalize();
+    match ctx.consensus.validate_and_insert_block(forged.to_immutable()).virtual_state_task.await {
+        Err(kaspa_consensus_core::errors::block::RuleError::BadPalwCarriageAdmission { algo_id: 7, reason }) => {
+            assert!(reason.to_lowercase().contains("signature"), "the refusal names the signature: {reason}");
+        }
+        other => panic!("a junk-signature receipt carriage must be refused at the header stage, got {other:?}"),
+    }
+
+    // Real signature over the same spend — the producer's carriage — must get PAST the signature
+    // gate. It is refused later on the stateful facts (no such Final claim on this chain), which is
+    // a different complaint and deliberately not asserted here.
+    let mut signed = honest.block.clone();
+    signed.header.pow_algo_id = kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3;
+    signed.header.palw_commitment =
+        ctx.consensus.palw_v3_test_receipt_carriage_for(&signed.header, true, claim_id, 0, bond, beacon_block);
+    signed.header.finalize();
+    if let Err(kaspa_consensus_core::errors::block::RuleError::BadPalwCarriageAdmission { algo_id: 7, reason }) =
+        ctx.consensus.validate_and_insert_block(signed.to_immutable()).virtual_state_task.await
+    {
+        assert!(
+            !reason.to_lowercase().contains("signature"),
+            "a correctly signed spend must not be refused for its signature: {reason}"
+        );
+    }
 }
