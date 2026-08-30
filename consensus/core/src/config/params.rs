@@ -6270,8 +6270,7 @@ mod consensus_params_id_tests {
         // Armed at 500 with a 1,000-DAA window, on a genesis at DAA 0: at the moment the rule
         // comes into force, no bond in existence is old enough for it.
         let mut too_early = palw_rc_shipped_params();
-        too_early.palw_bond_maturity =
-            Some(PalwBondMaturityV1 { activation: ForkActivation::new(500), window_daa: 1_000 });
+        too_early.palw_bond_maturity = Some(PalwBondMaturityV1 { activation: ForkActivation::new(500), window_daa: 1_000 });
         assert!(too_early.validate_palw_v2().is_err(), "a fence that starves its own draw must not be runnable");
 
         // Armed past the window: legal, and it is the same configuration an operator would

@@ -6909,16 +6909,21 @@ pub(crate) mod tests {
         let p = params();
         let genesis = PalwChainStateV2::genesis();
         let staged = |abstains: bool| {
-            let (s1, _) =
-                apply_palw_transition_v2_with_verdict_policy(&genesis, &p, &ctx(1, 100, 1), &register_class_and_bond(), None, abstains)
-                    .expect("registrations apply");
+            let (s1, _) = apply_palw_transition_v2_with_verdict_policy(
+                &genesis,
+                &p,
+                &ctx(1, 100, 1),
+                &register_class_and_bond(),
+                None,
+                abstains,
+            )
+            .expect("registrations apply");
             let env = attempt(40, 1);
             let (s2, _) = apply_palw_transition_v2_with_verdict_policy(&s1, &p, &ctx(2, 101, 2), &[], Some(&env), abstains)
                 .expect("the attempt applies");
             (s2, attempt_id_v2(&env.attempt))
         };
-        let default_object =
-            |claim_id| PalwConsensusObjectV2::ProducerDefaulted { claim: claim_id, receipts: seat_says(false) };
+        let default_object = |claim_id| PalwConsensusObjectV2::ProducerDefaulted { claim: claim_id, receipts: seat_says(false) };
 
         // FENCE OFF — the live rule. The stake goes.
         let (before, claim_id) = staged(false);
@@ -6945,24 +6950,13 @@ pub(crate) mod tests {
         // FENCE ON — the same object, refused. No quorum can license it any more.
         let (before, claim_id) = staged(true);
         let staked = before.bond(&bond_key(1)).expect("registered").collateral;
-        let err = apply_palw_transition_v2_with_verdict_policy(
-            &before,
-            &p,
-            &ctx(3, 102, 3),
-            &[default_object(claim_id)],
-            None,
-            true,
-        )
-        .expect_err("past the fence nothing may convict a producer of a failure the chain cannot observe");
+        let err = apply_palw_transition_v2_with_verdict_policy(&before, &p, &ctx(3, 102, 3), &[default_object(claim_id)], None, true)
+            .expect_err("past the fence nothing may convict a producer of a failure the chain cannot observe");
         assert!(
             matches!(err, PalwStateV2Error::ProducerDefaultRetired(c) if c == claim_id),
             "refused by its own name — 'wrong phase' would blame a claim that is in exactly the right one: {err:?}"
         );
-        assert_eq!(
-            before.bond(&bond_key(1)).expect("registered").collateral,
-            staked,
-            "and the producer's stake is where it was"
-        );
+        assert_eq!(before.bond(&bond_key(1)).expect("registered").collateral, staked, "and the producer's stake is where it was");
     }
 
     /// **ADR-0065 D4, the other half: the un-fed seat stops paying for the network's failure.**
@@ -6980,9 +6974,15 @@ pub(crate) mod tests {
         let p = params();
         let genesis = PalwChainStateV2::genesis();
         let charged = |abstains: bool| {
-            let (s1, _) =
-                apply_palw_transition_v2_with_verdict_policy(&genesis, &p, &ctx(1, 100, 1), &register_class_and_bond(), None, abstains)
-                    .expect("registrations apply");
+            let (s1, _) = apply_palw_transition_v2_with_verdict_policy(
+                &genesis,
+                &p,
+                &ctx(1, 100, 1),
+                &register_class_and_bond(),
+                None,
+                abstains,
+            )
+            .expect("registrations apply");
             let env = attempt(40, 1);
             let claim_id = attempt_id_v2(&env.attempt);
             let (s2, _) = apply_palw_transition_v2_with_verdict_policy(&s1, &p, &ctx(2, 101, 2), &[], Some(&env), abstains)

@@ -1363,15 +1363,19 @@ impl VirtualStateProcessor {
                                 // block. See ADR-0064's correction.
                                 let bootstrap =
                                     self.palw_bootstrap_activation.filter(|fence| fence.is_active(point.daa_score)).map(|_| &folded);
-                                let attempt = match self.palw_v2_check_attempt_admission(&header, state, state_params, &point, bootstrap) {
-                                    Ok(attempt) => attempt,
-                                    Err(adm_error) => {
-                                        info!("Block {} is disqualified from virtual chain (PALW admission): {}", current, adm_error);
-                                        self.statuses_store.write().set(current, StatusDisqualifiedFromChain).unwrap();
-                                        chain_disqualified_counter += 1;
-                                        continue;
-                                    }
-                                };
+                                let attempt =
+                                    match self.palw_v2_check_attempt_admission(&header, state, state_params, &point, bootstrap) {
+                                        Ok(attempt) => attempt,
+                                        Err(adm_error) => {
+                                            info!(
+                                                "Block {} is disqualified from virtual chain (PALW admission): {}",
+                                                current, adm_error
+                                            );
+                                            self.statuses_store.write().set(current, StatusDisqualifiedFromChain).unwrap();
+                                            chain_disqualified_counter += 1;
+                                            continue;
+                                        }
+                                    };
                                 let receipt_spend = match self.palw_v2_check_receipt_spend(&header, state, state_params, &point) {
                                     Ok(spend) => spend,
                                     Err(fp_error) => {
@@ -4321,8 +4325,7 @@ impl VirtualStateProcessor {
         point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
         objects: Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
         block: BlockHash,
-    ) -> (Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>, kaspa_consensus_core::palw_state_v2::PalwChainStateV2)
-    {
+    ) -> (Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>, kaspa_consensus_core::palw_state_v2::PalwChainStateV2) {
         self.palw_v2_accepted_objects(state, state_params, point, objects, block)
     }
 
@@ -4333,8 +4336,7 @@ impl VirtualStateProcessor {
         point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
         objects: Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
         block: BlockHash,
-    ) -> (Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>, kaspa_consensus_core::palw_state_v2::PalwChainStateV2)
-    {
+    ) -> (Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>, kaspa_consensus_core::palw_state_v2::PalwChainStateV2) {
         // **Filtered SEQUENTIALLY, against the state each accepted object leaves behind.**
         //
         // Validating every object against the parent state alone is wrong in exactly the way the

@@ -13,8 +13,8 @@
 
 use crate::keys::KeySource;
 use crate::node::Ctx;
-use crate::{CliError, CliResult, OutputFormat, exit};
 use crate::wallet::{NodeView, connect, estimate_fee, page_all, sompi_to_msk};
+use crate::{CliError, CliResult, OutputFormat, exit};
 use kaspa_consensus_core::palw_state_v2::{
     PALW_BOND_RETIREMENT_V2_MLDSA87_CONTEXT, PalwBondKeyV2, PalwConsensusObjectV2, palw_bond_retirement_message_v2,
 };
@@ -25,13 +25,10 @@ use std::str::FromStr;
 /// `<txid>:<index>` — the spelling every other PALW flag uses (`--palw-producer-bond`,
 /// `--palw-fee-outpoint`), so an operator can paste between them without translating.
 pub(crate) fn parse_outpoint(s: &str) -> Result<TransactionOutpoint, CliError> {
-    let (txid, index) = s
-        .split_once(':')
-        .ok_or_else(|| CliError::new(exit::GENERIC, format!("'{s}' is not <txid>:<index>")))?;
-    let transaction_id = TransactionId::from_str(txid)
-        .map_err(|e| CliError::new(exit::GENERIC, format!("'{txid}' is not a transaction id: {e}")))?;
-    let index: u32 =
-        index.parse().map_err(|_| CliError::new(exit::GENERIC, format!("'{index}' is not an output index")))?;
+    let (txid, index) = s.split_once(':').ok_or_else(|| CliError::new(exit::GENERIC, format!("'{s}' is not <txid>:<index>")))?;
+    let transaction_id =
+        TransactionId::from_str(txid).map_err(|e| CliError::new(exit::GENERIC, format!("'{txid}' is not a transaction id: {e}")))?;
+    let index: u32 = index.parse().map_err(|_| CliError::new(exit::GENERIC, format!("'{index}' is not an output index")))?;
     Ok(TransactionOutpoint { transaction_id, index })
 }
 
@@ -89,10 +86,7 @@ pub async fn status(ctx: &Ctx, ks: &KeySource, class_id: Option<&str>) -> CliRes
                 unanswered += 1;
                 continue;
             };
-            let Ok(f) = nv
-                .client
-                .get_palw_producer_facts(class_id.to_string(), op.transaction_id.to_string(), op.index, true)
-                .await
+            let Ok(f) = nv.client.get_palw_producer_facts(class_id.to_string(), op.transaction_id.to_string(), op.index, true).await
             else {
                 unanswered += 1;
                 continue;
@@ -214,14 +208,7 @@ pub async fn status(ctx: &Ctx, ks: &KeySource, class_id: Option<&str>) -> CliRes
 /// This moves the bond to `Retiring`; the collateral is released after the withdrawal delay, which
 /// is why the delay must outlast the whole claim lattice (a bond that could leave sooner could
 /// commit fraud and withdraw before it was provable).
-pub async fn retire(
-    ctx: &Ctx,
-    ks: &KeySource,
-    bond_arg: Option<&str>,
-    class_id: Option<&str>,
-    dry_run: bool,
-    yes: bool,
-) -> CliResult {
+pub async fn retire(ctx: &Ctx, ks: &KeySource, bond_arg: Option<&str>, class_id: Option<&str>, dry_run: bool, yes: bool) -> CliResult {
     let nv = connect(ctx).await?;
     let key = ks.load_key()?;
     let addr = key.funding_address(nv.params.prefix());
@@ -438,10 +425,7 @@ pub async fn retire(
     }
 
     let rpc_tx: kaspa_rpc_core::RpcTransaction = (&tx).into();
-    nv.client
-        .submit_transaction(rpc_tx, false)
-        .await
-        .map_err(|e| CliError::new(exit::GENERIC, format!("submitTransaction: {e}")))?;
+    nv.client.submit_transaction(rpc_tx, false).await.map_err(|e| CliError::new(exit::GENERIC, format!("submitTransaction: {e}")))?;
     match ctx.output {
         OutputFormat::Human => {
             println!("submitted {txid}");
