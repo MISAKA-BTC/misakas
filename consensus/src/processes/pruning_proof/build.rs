@@ -593,7 +593,7 @@ impl PruningProofManager {
             level,
             self.max_block_level,
             // ADR-0060: ε work for heartbeat blocks at every proof level too.
-            matches!(self.palw_consensus_mode, kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)),
+            self.palw_heartbeat_lane,
         );
 
         // No need to initialize origin since we have a single root

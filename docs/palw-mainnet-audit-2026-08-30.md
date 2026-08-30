@@ -26,7 +26,15 @@ workaround for it.
 
 ## The two that ship OFF
 
-### The heartbeat lane (ADR-0060 D1/D2) — `PALW_HEARTBEAT_LANE_ENABLED = false`
+### The heartbeat lane (ADR-0060 D1/D2) — withdrawn here, redesigned by ADR-0066
+
+> **Update 2026-08-31.** The switch this heading names no longer exists. ADR-0066 landed the
+> redesign: the lane has its own algorithm id (8), its price is a network constant substituted in
+> `StateLayer0::new` rather than `header.bits`, the evidence walk is deleted, and the lane is armed
+> by `Params::palw_heartbeat` — a top-level fence, not a `const bool`. **F1 and F3b (below) are
+> closed as arithmetic; F4 is closed by deletion. F3a is open and F2 is staged as ADR-0066
+> Decision 3.** The findings below stand as the record of why.
+
 
 Four structural defects, any one of which is disqualifying:
 
@@ -64,7 +72,14 @@ chain walk for two hashes — now an O(1) floor gate runs first, and the caps ar
 32/30,000), and nothing refused a stuffed `palw_state_root` on a lane that does not commit one
 (hash-invisible bytes = block-identity malleability; now `UncommittedPalwStateRoot` at the door).
 
-### The finality inactivity leak (ADR-0060 D4) — `inactivity_leak_daa: u64::MAX` on every preset
+### The finality inactivity leak (ADR-0060 D4) — withdrawn here, re-fenced by ADR-0066
+
+> **Update 2026-08-31.** The leak is armed by `Params::palw_inactivity_leak`, a top-level fence
+> carrying `t_leak_daa`. `DnsParams.inactivity_leak_daa` is retired at `u64::MAX` permanently and
+> pinned there by a test — the CRITICAL below is closed at its cause rather than by a warning.
+> The committed per-validator table (ADR-0066 Decision 4's other half) is NOT landed; the leak
+> ships dormant, so nothing depends on it.
+
 
 **The implemented rule is not the intended one, by four orders of magnitude.**
 `last_attestation_daa_by_validator` can only report anchors drawn from `epoch_anchor_daa`, and

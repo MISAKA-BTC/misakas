@@ -1,10 +1,15 @@
 # ADR-0060: The liveness doctrine — time is permissionless, weight is bonded, finality is an overlay
 
-- Status: Accepted as doctrine; **implemented 2026-08-30 and then SHIPPED OFF the same day** —
-  the mainnet audit (`docs/palw-mainnet-audit-2026-08-30.md`) found four structural defects in
-  Decisions 1–2 and one in Decision 4. `PALW_HEARTBEAT_LANE_ENABLED = false`,
-  `inactivity_leak_daa: u64::MAX` on every preset. §12 records what must change before either
-  turns on. Decisions 3 and 5 are unaffected and live. Originally: **implemented 2026-08-30** (`palw-genesis-10b-cap` branch, same re-mint
+- Status: Accepted as doctrine; **implemented 2026-08-30, SHIPPED OFF the same day, and
+  RE-IMPLEMENTED 2026-08-31 per ADR-0066** — the mainnet audit
+  (`docs/palw-mainnet-audit-2026-08-30.md`) found four structural defects in Decisions 1–2 and one
+  in Decision 4. ADR-0066 closes F1, F3b and F4 (the lane's price left `header.bits`; the evidence
+  walk is deleted) and records F3a as open and F2 as staged. **Both features still ship OFF, but
+  they are now `Params::palw_heartbeat` and `Params::palw_inactivity_leak` — top-level fences an
+  operator can arm on a running network, not constants that need a rebuild.** The switches this
+  status line used to name are gone: `PALW_HEARTBEAT_LANE_ENABLED` no longer exists and
+  `DnsParams.inactivity_leak_daa` is retired at `u64::MAX` permanently. §12 records what must
+  change before either turns on; ADR-0066's "What landed" section supersedes it for D1/D2. Decisions 3 and 5 are unaffected and live. Originally: **implemented 2026-08-30** (`palw-genesis-10b-cap` branch, same re-mint
   train as ADR-0059) — see §11 for what landed and where the implementation amended this text.
   The one operator-tunable decision is the finality leak's time constant (§6).
 - Date: 2026-08-30
@@ -168,7 +173,9 @@ never lets a present minority finalize *now*.
 VLT is currently dormant on testnet-11, so this decision creates no re-mint pressure; it
 binds the overlay whenever and wherever it is next enabled.
 
-*As implemented:* `DnsParams.inactivity_leak_daa` (in every preset's fingerprint) drives
+*As implemented (superseded by ADR-0066: the grace now comes from the top-level
+`Params::palw_inactivity_leak` fence, and the `DnsParams` field is retired at `u64::MAX`):*
+`DnsParams.inactivity_leak_daa` (in every preset's fingerprint) drives
 `InactivityLeakViewV1`, which filters BOTH quorum denominators
 (`total_active_stake_by_epoch`, `total_voting_weight_by_epoch`), wired through every tally
 site (live, shadow, precommit duty, branch score). The leak's evidence is the same
@@ -238,7 +245,11 @@ fingerprint was moving anyway, and one coordinated wipe is cheaper than three:
   `heartbeat_adapt_block_template` (consensus API + session delegate) and the
   `--palw-heartbeat-miner-address` in-node miner. Declared by `PALW_STATE_V2_VERSION`
   12 → 13.
-* **D4**: `DnsParams.inactivity_leak_daa` + `InactivityLeakViewV1` as described in §6.
+* **D4**: `InactivityLeakViewV1` as described in §6, with its grace supplied by
+  `Params::palw_inactivity_leak` since ADR-0066. `DnsParams.inactivity_leak_daa` is retired at
+  `u64::MAX` — it could never be armed, because `DnsParams` reaches `consensus_params_id` as one
+  raw borsh blob that `for_each_fence` does not visit, so editing it split the network at the
+  handshake on deploy day.
 * **D5**: inventory verified (§7 table); the `palw_state_root` malleability gap found and
   closed in passing.
 * **Tests**: unit (ladder, slot, retarget, floor, ε, leak denominators, evidence builder) and

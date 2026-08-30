@@ -1,187 +1,118 @@
-//! **The heartbeat lane** — ADR-0060 Decisions 1 and 2: time is permissionless.
+//! **The heartbeat lane** — ADR-0060 Decisions 1 and 2 as ADR-0066 redesigned them: time is
+//! permissionless, and the price of time never touches `header.bits`.
 //!
-//! A `ConsensusV2` network accepts, beside its two bonded PALW lanes, the self-verifying
-//! BLAKE2b-512 ∥ SHA3-512 hash lane (`algo_id = 3`) as a **bondless, claimless, near-weightless
-//! clock**. A heartbeat block advances the DAA (so every PALW timeout — bind, receipt,
-//! challenge, court, withdrawal — sweeps on a clock no bond can stop), carries ordinary
-//! transactions (so bond registration and funding can ride it when no bonded lane is alive),
-//! and contributes a fixed [`HEARTBEAT_BLUE_WORK_EPSILON`] to fork choice (so no amount of hash
-//! power buys chain weight).
+//! A `ConsensusV2` network whose `palw_heartbeat` fence is in force accepts, beside its two bonded
+//! PALW lanes, a **bondless, claimless, near-weightless clock** on its own algorithm id
+//! ([`crate::pow_layer0::POW_ALGO_ID_HEARTBEAT_V1`]). A heartbeat block advances the DAA (so every
+//! PALW timeout — bind, receipt, challenge, court, withdrawal — sweeps on a clock no bond can
+//! stop), carries ordinary transactions (so bond registration and funding can ride it when no
+//! bonded lane is alive), and contributes a fixed [`HEARTBEAT_BLUE_WORK_EPSILON`] to fork choice.
 //!
-//! Every rule here is a pure function of DAA-window data — timestamps, bits and algo ids of the
-//! blocks the POV already orders — so header validation can enforce the lane without new state.
+//! ## The two rules, and where each one lives
 //!
-//! ## The two rules
+//! * **The price is a network constant** ([`crate::pow_layer0::PALW_HEARTBEAT_WORK_LOG2`]),
+//!   substituted for `header.bits` inside `StateLayer0::new`. A heartbeat header's `bits` are the
+//!   GLOBAL expected bits, like every other lane's, so heartbeat rows enter the difficulty window
+//!   as ordinary rows.
+//! * **The slot rule** ([`check_heartbeat_slot`]) is one block deep: a heartbeat must sit at least
+//!   one interval after its SELECTED PARENT's timestamp. No walk, no window, no ancestor evidence.
 //!
-//! * **The slot rule** ([`check_heartbeat_slot`]): at most one heartbeat block per
-//!   [`heartbeat_interval_ms`] of chain time, measured against the youngest heartbeat block in
-//!   the POV's DAA window. This is the hard cadence cap.
-//! * **The difficulty rule** ([`heartbeat_expected_bits`]): a heartbeat header's `bits` must be
-//!   the lane's own retarget — a windowed adjustment over the window's heartbeat blocks toward
-//!   one block per interval, floored at [`heartbeat_easiest_target`] (≈ 2²⁴ hashes) so a flood
-//!   of sibling heartbeats is never free. This prices spam; the slot rule bounds rate.
+//! ## Why both of those are different from the first implementation
 //!
-//! ## The ramp (ADR-0060 Decision 2)
+//! The 2026-08-30 audit recorded four structural findings and ADR-0066 sorted them by mechanism.
+//! Two were `bits`:
 //!
-//! The interval is a step function of **bonded-lane silence** — `header.timestamp` minus the
-//! youngest bonded-lane (algo-6/7) timestamp in the window: nominal one block per hour; above
-//! one hour of silence, one per ten minutes; above six hours, the full 120 s cadence. Keyed on
-//! timestamps, not epochs, because when only the heartbeat is alive an epoch retarget is weeks
-//! away — the exact regime the ramp exists for. When a bonded lane produces again the silence
-//! resets and the interval steps back up the same ladder.
+//! 1. **The lane could price the bonded lane off its own chain, permanently.** Heartbeat headers
+//!    carried the lane's own 2²⁴-hard `bits`, and those rows sat in the GLOBAL difficulty window.
+//!    A V2 network's ambient target is `MAX_DIFFICULTY_TARGET` — work 2 — because the class
+//!    lottery, not the hash target, is its throttle. Measured over the shipped 264-row window:
+//!    255 bonded + 9 heartbeat rows still demanded work 2, but **0 bonded + 263 heartbeat rows
+//!    demanded 33,554,432**. After a bonded outage longer than the window a returning producer
+//!    needed ~33 M inferences for one block, so no bonded block could re-enter the window, so the
+//!    average never re-mixed: a heartbeat-only chain recoverable only by re-mint, which is the
+//!    self-feeding refusal ADR-0060 exists to abolish, reintroduced by its own remedy.
+//! 3b. **The retarget could never rise above its floor**, because the slot rule guaranteed
+//!    `measured ≥ expected` and the clamp turned that back into the floor.
+//!
+//! A fixed target removes the quantity that fed back on itself, so 1 and 3b are gone as arithmetic
+//! rather than as tuning. The retarget is deleted, not bounded.
+//!
+//! One was node-local:
+//!
+//! 4. **The evidence walk terminated on `Err(get_header) => break`** — a fact about THIS node.
+//!    An archival node never hit it; a pruned node hit it at its own pruning point. Two honest
+//!    nodes computed different verdicts for one header: a partition along the `--archival` flag.
+//!    A retarget is what needed ancestor evidence, and there is no retarget, so the walk is gone
+//!    and the slot rule reads the selected parent alone.
+//!
+//! And one is **still open, recorded rather than closed**:
+//!
+//! 3a. **Sibling width.** The slot rule bounds the chain, not the DAG: sibling heartbeats share
+//!    one selected parent, so they share one admissible timestamp, and nothing here bounds how
+//!    many of them exist. What bounds width is the price, which is now a fixed 2²⁴ per block
+//!    rather than a floor a retarget could never leave. ADR-0066 records 3a as open.
+//!
+//! 2. **ε against a V2 block's work** is independent of all of the above and survives untouched —
+//!    on a V2 preset `calc_work(0x207fffff) = 2`, so a heartbeat is worth half a bonded block.
+//!    ADR-0066 Decision 3 is the fix (a V2 attempt block's blue work should reflect the inference
+//!    it carries, not the hash target it did not need); it moves `header.blue_work` on every V2
+//!    block and is deliberately staged after this.
+//!
+//! ## The ramp, and why it has two steps instead of three
+//!
+//! The interval is a step function of the SELECTED PARENT's lane: after a bonded block the chain
+//! was alive one block ago, so the lane waits the full nominal hour; after a heartbeat the chain
+//! is already running on the clock, so the lane runs at the recovery cadence.
+//!
+//! The old middle step ("above one hour of bonded silence, one per ten minutes") is gone because
+//! it asked *how long has the bonded lane been silent*, and that is ancestor evidence — finding 4
+//! in one question. One block deep admits exactly two states, and they are the two that matter:
+//! the chain is producing, or it is not.
 //!
 //! ## What is deliberately NOT here
 //!
-//! No bond, no claim, no escrow, no court: a hash proof is self-verifying, so there is nothing
-//! to slash and nobody to license. The coinbase rule (a heartbeat block's declared subsidy is
-//! zero — fees only) lives with the other coinbase validation in the body processor; the ε
-//! fork-choice rule lives in the GHOSTDAG protocol beside the receipt lane's zero. Both cite
-//! this module.
+//! No bond, no claim, no escrow, no court: a hash proof is self-verifying, so there is nothing to
+//! slash and nobody to license. The coinbase rule (a heartbeat block's declared subsidy is zero —
+//! fees only) lives with the other coinbase validation in the body processor; the ε fork-choice
+//! rule lives in the GHOSTDAG protocol beside the receipt lane's zero. Both cite this module.
 
-use crate::pow_layer0::{POW_ALGO_ID_BLAKE2B_SHA3, is_palw_v2_algo_id};
-use kaspa_math::{Uint256, Uint320};
+use crate::pow_layer0::{POW_ALGO_ID_HEARTBEAT_V1, is_palw_v2_algo_id};
 
-/// The heartbeat lane IS the Phase-3 hash lane: same finalizer arm, same L1 tag, re-admitted
-/// under the ADR-0060 bounds. A new id would need a new finalizer arm for identical bytes.
-pub const PALW_HEARTBEAT_ALGO_ID: u8 = POW_ALGO_ID_BLAKE2B_SHA3;
+/// The heartbeat lane's algorithm id. See [`POW_ALGO_ID_HEARTBEAT_V1`] for why it is its own id
+/// and no longer `POW_ALGO_ID_BLAKE2B_SHA3`.
+pub const PALW_HEARTBEAT_ALGO_ID: u8 = POW_ALGO_ID_HEARTBEAT_V1;
 
-/// **The lane ships OFF (audit 2026-08-30), and this is the switch.**
-///
-/// The doctrine in ADR-0060 §2 stands; this implementation of Decisions 1–2 does not, and four
-/// findings are structural rather than tuning:
-///
-/// 1. **It can price the bonded lane off its own chain, permanently.** Heartbeat headers carry
-///    the lane's own (2²⁴-hard) `bits`, and those rows sit in the GLOBAL difficulty window. A V2
-///    network's ambient target is `MAX_DIFFICULTY_TARGET` — work 2 — because the class lottery,
-///    not the hash target, is its throttle. Measured over the shipped 264-row window: 255 bonded
-///    + 9 heartbeat rows still demands work 2, but **0 bonded + 263 heartbeat rows demands
-///    33,554,432**. After a bonded outage longer than the window (~14 h at the ramped cadence)
-///    a returning attempt-lane producer would need ~33 M inferences for one block, so no bonded
-///    block can re-enter the window, so the average never re-mixes. The fixed point is a
-///    heartbeat-only chain recoverable only by re-mint — the self-feeding refusal this very ADR
-///    was written to abolish, reintroduced by its own remedy, and firing exactly in the regime
-///    §4 designs for.
-/// 2. **ε is not small against a V2 block.** Decision 1.2 argues a bonded block (~10⁶ work)
-///    dwarfs ε = 1. On a V2 preset `calc_work(0x207fffff) = 2`, so a heartbeat is worth HALF a
-///    bonded block. With `ghostdag_k = 1` a bondless attacker mining two siblings per layer
-///    accrues 2 units per 120 s against the honest chain's 2 — parity, for ~280 kH/s.
-/// 3. **The slot rule bounds the chain, not the DAG.** Sibling heartbeats share one POV, so they
-///    share one admissible timestamp and one `expected_bits`; nothing bounds their width. And the
-///    retarget can never rise above the floor, because the slot rule guarantees
-///    `measured ≥ expected`, which the clamp turns back into the floor. Unbounded valid blocks at
-///    a permanently fixed ~16.7 M-hash price.
-/// 4. **The evidence walk reads past the pruning horizon** (cap 2,000 against a `pruning_depth`
-///    of 6,600 is fine, but the walk terminates on row COUNT, not on depth), so an archival node
-///    and a pruned node can compute different `expected_bits` for the same block and reject each
-///    other's — a partition along the `--archival` flag.
-///
-/// Fixing 1 needs the lane's price to leave `header.bits` (the way the receipt lane's ticket
-/// already does); 2 needs a work basis that is not the shared blue-work scale; 3 needs DAG-wide
-/// evidence; 4 needs a depth bound tied to `pruning_depth`. That is a redesign, not a constant,
-/// and it must not ride a re-mint as a surprise. Everything else the doctrine landed — the
-/// timeout sweeps, the zero-seat gate, the leak's mechanism — is unaffected by this switch.
-///
-/// The code, its rules and its tests stay in the tree so the redesign starts from something
-/// measured rather than from a blank page.
-pub const PALW_HEARTBEAT_LANE_ENABLED: bool = false;
-
-/// Nominal cadence: one heartbeat per hour (≈ 24/day ≈ 33‰ of the 120 s cadence).
+/// Nominal cadence: one heartbeat per hour (≈ 24/day ≈ 33‰ of the 120 s cadence) — the interval
+/// that applies when the selected parent is a bonded block, i.e. the chain is producing.
 pub const HEARTBEAT_NOMINAL_INTERVAL_MS: u64 = 3_600_000;
-/// Above one hour of bonded-lane silence: one per ten minutes.
-pub const HEARTBEAT_RAMP1_SILENCE_MS: u64 = 3_600_000;
-pub const HEARTBEAT_RAMP1_INTERVAL_MS: u64 = 600_000;
-/// Above six hours of bonded-lane silence: the full 120 s cadence — timeout sweeping at normal
-/// speed with every bonded lane dead.
-pub const HEARTBEAT_RAMP2_SILENCE_MS: u64 = 21_600_000;
-pub const HEARTBEAT_RAMP2_INTERVAL_MS: u64 = 120_000;
 
-/// **ε: the whole fork-choice weight of a heartbeat block** — the named exception to
-/// ADR-0045's DerivedV1 work equality that ADR-0060 Decision 1.2 is. One unit: any bonded PALW
-/// block (≈ 10⁶ work) outweighs a million heartbeats, while among heartbeat-only branches
-/// (total collapse) `ε × n` still orders the longer chain first — which zero (the receipt
-/// lane's figure) would not.
+/// The recovery cadence: the full 120 s block time, applied when the selected parent is itself a
+/// heartbeat — timeout sweeping at normal speed with every bonded lane dead.
+pub const HEARTBEAT_RECOVERY_INTERVAL_MS: u64 = 120_000;
+
+/// **ε: the whole fork-choice weight of a heartbeat block** — the named exception to ADR-0045's
+/// DerivedV1 work equality that ADR-0060 Decision 1.2 is. One unit: any bonded PALW block
+/// (≈ 10⁶ work) outweighs a million heartbeats, while among heartbeat-only branches (total
+/// collapse) `ε × n` still orders the longer chain first — which zero (the receipt lane's figure)
+/// would not.
+///
+/// **This value is known to be too large against a V2 block and is not the fix.** See finding 2 in
+/// the module header: ADR-0066 Decision 3 moves the OTHER side of the comparison.
 pub const HEARTBEAT_BLUE_WORK_EPSILON: u64 = 1;
 
-/// How many recent heartbeats the lane retarget measures its span over, and how deep the
-/// evidence walk may go hunting for them (and for the youngest bonded block) before giving up.
-/// The walk is chain-order over the POV's selected-parent chain — see
-/// `processes::heartbeat_evidence` in the consensus crate for why the sampled difficulty
-/// window cannot serve this.
+/// The interval a heartbeat is held to, given the lane of its selected parent.
 ///
-/// **Both numbers are a COST bound, and that is why they are small.** The walk runs per
-/// heartbeat header validated, so every row is a header-store read a peer can ask this node to
-/// perform. At the nominal 1/hour slot against a 120 s cadence a heartbeat sits every ~30
-/// blocks, so 8 rows is ~240 blocks of walking — roughly eight hours of lane history, enough
-/// for a retarget to mean something — and the 2,000-block cap is ~2.8 days, past which "no
-/// bonded block found" is the honest answer anyway (the ramp then reads full silence, which is
-/// what a chain that quiet actually needs). The first cut of this pair was 32/30,000; nothing
-/// needed the extra span and it multiplied the per-header cost by 125.
-pub const HEARTBEAT_RETARGET_ROWS: usize = 8;
-pub const HEARTBEAT_EVIDENCE_MAX_BLOCKS: usize = 2_000;
-
-/// The floor on heartbeat difficulty, as work: the easiest admissible target demands ~2²⁴
-/// hash evaluations (~seconds of one CPU). A legitimate miner pays it once per interval; a
-/// sibling-flooder pays it per block, which is the point — with the trivial global bits a V2
-/// network otherwise runs at, a heartbeat header would cost ~20 hashes and relay spam would be
-/// free.
-pub const HEARTBEAT_MIN_WORK_LOG2: u32 = 24;
-
-/// The easiest target a heartbeat header may declare (see [`HEARTBEAT_MIN_WORK_LOG2`]).
-pub fn heartbeat_easiest_target() -> Uint256 {
-    Uint256::MAX >> HEARTBEAT_MIN_WORK_LOG2
-}
-
-/// **The O(1) gate that must run BEFORE the evidence walk.**
-///
-/// PoW is verified against the header's OWN declared `bits` (`check_pow_and_calc_block_level`),
-/// and the rule that those bits are the RIGHT ones runs afterwards — so without this a peer
-/// could declare a trivial target, solve it in a couple of hashes, and make every node walk its
-/// chain for the retarget before the answer came back "wrong bits". That is a few hashes of
-/// attacker work against hundreds of header-store reads of everyone else's, per message.
-///
-/// The floor is the same one the retarget clamps to, so this can never refuse a header the
-/// retarget would have accepted: every admissible `bits` is at least this hard. What it does
-/// refuse — in constant time, before any store read — is the class of header that was never
-/// going to be admissible, and that is exactly the class an attacker mints cheaply.
-pub fn heartbeat_bits_meet_the_floor(bits: u32) -> bool {
-    Uint256::from_compact_target_bits(bits) <= heartbeat_easiest_target()
-}
-
-/// The interval the lane is currently held to, from bonded-lane silence (ADR-0060 Decision 2).
-pub fn heartbeat_interval_ms(bonded_silence_ms: u64) -> u64 {
-    if bonded_silence_ms > HEARTBEAT_RAMP2_SILENCE_MS {
-        HEARTBEAT_RAMP2_INTERVAL_MS
-    } else if bonded_silence_ms > HEARTBEAT_RAMP1_SILENCE_MS {
-        HEARTBEAT_RAMP1_INTERVAL_MS
-    } else {
+/// One block deep by construction — the argument is the parent's algo id and nothing else, so
+/// there is no walk to bound, no window to sample and no node-local fact to terminate on.
+pub fn heartbeat_interval_ms(selected_parent_algo_id: u8) -> u64 {
+    if is_palw_v2_algo_id(selected_parent_algo_id) {
+        // A bonded block one block ago: the chain is producing and the lane stays out of the way.
         HEARTBEAT_NOMINAL_INTERVAL_MS
+    } else {
+        // The parent is a heartbeat (or anything else this network admits): the chain is running
+        // on the clock, so the clock runs at cadence.
+        HEARTBEAT_RECOVERY_INTERVAL_MS
     }
-}
-
-/// One DAA-window row, as the heartbeat rules read it. The caller (header validation) builds
-/// these from the same window it already fetched for the difficulty check.
-#[derive(Clone, Copy, Debug)]
-pub struct HeartbeatWindowBlock {
-    /// Header timestamp, milliseconds.
-    pub timestamp: u64,
-    /// Header bits (meaningful for the retarget only on heartbeat rows).
-    pub bits: u32,
-    /// The header's declared Layer-1 algo id.
-    pub algo_id: u8,
-}
-
-/// Bonded-lane silence at `header_timestamp`: the time since the youngest bonded-lane
-/// (algo-6/7) block in the window. `u64::MAX` when the window holds none — with every bonded
-/// lane silent for longer than the window remembers, the ramp's fastest step is the right
-/// answer, and saturating at MAX selects it without a sentinel.
-pub fn bonded_silence_ms(window: &[HeartbeatWindowBlock], header_timestamp: u64) -> u64 {
-    window
-        .iter()
-        .filter(|b| is_palw_v2_algo_id(b.algo_id))
-        .map(|b| b.timestamp)
-        .max()
-        .map(|last| header_timestamp.saturating_sub(last))
-        .unwrap_or(u64::MAX)
 }
 
 /// Why a heartbeat header was refused by the slot rule.
@@ -191,185 +122,139 @@ pub struct HeartbeatTooEarly {
     pub interval_ms: u64,
 }
 
-/// **The slot rule**: a heartbeat header must sit at least one interval after the youngest
-/// heartbeat block its POV window holds. A window with no heartbeat block admits one freely —
-/// that is the lane (re)starting, and the difficulty floor still prices it.
-pub fn check_heartbeat_slot(window: &[HeartbeatWindowBlock], header_timestamp: u64) -> Result<(), HeartbeatTooEarly> {
-    let Some(last) = window.iter().filter(|b| b.algo_id == PALW_HEARTBEAT_ALGO_ID).map(|b| b.timestamp).max() else {
-        return Ok(());
-    };
-    let interval_ms = heartbeat_interval_ms(bonded_silence_ms(window, header_timestamp));
-    if header_timestamp < last.saturating_add(interval_ms) {
-        return Err(HeartbeatTooEarly { last_heartbeat_timestamp: last, interval_ms });
-    }
-    Ok(())
-}
-
-/// **The difficulty rule**: the `bits` a heartbeat header at `header_timestamp` must declare.
+/// **The slot rule**: a heartbeat header must sit at least one [`heartbeat_interval_ms`] after its
+/// SELECTED PARENT's timestamp.
 ///
-/// A windowed retarget over the window's OWN heartbeat rows, toward one block per
-/// [`heartbeat_interval_ms`]: `new_target = avg_target × measured_span / expected_span`, the
-/// same arithmetic as the global difficulty manager, restricted to the lane. With fewer than
-/// two heartbeat rows there is no span to measure and the easiest admissible target is the
-/// answer — the lane starting (or restarting after an outage long enough to outlive the
-/// window) begins at the floor and walks to the ambient hash rate from there.
+/// The old rule measured against the youngest heartbeat in the POV's DAA window, which needed a
+/// chain-order walk — and that walk terminated on a node-local fact (finding 4). This asks one
+/// question of one header the caller already holds.
 ///
-/// The result is clamped to [`heartbeat_easiest_target`]: the retarget may make the lane
-/// arbitrarily hard (that is just hash rate arriving), never cheaper than the spam floor.
-pub fn heartbeat_expected_bits(window: &[HeartbeatWindowBlock], header_timestamp: u64) -> u32 {
-    let easiest = heartbeat_easiest_target();
-    let heartbeats: Vec<&HeartbeatWindowBlock> = window.iter().filter(|b| b.algo_id == PALW_HEARTBEAT_ALGO_ID).collect();
-    if heartbeats.len() < 2 {
-        return easiest.compact_target_bits();
+/// It bounds the CHAIN, not the DAG: siblings share a selected parent and therefore share one
+/// admissible timestamp. That is finding 3a and it is open; the fixed price is what bounds width.
+pub fn check_heartbeat_slot(
+    selected_parent_timestamp: u64,
+    selected_parent_algo_id: u8,
+    header_timestamp: u64,
+) -> Result<(), HeartbeatTooEarly> {
+    let interval_ms = heartbeat_interval_ms(selected_parent_algo_id);
+    // **`checked_add`, not `saturating_add`.** Saturating clamps the earliest admissible time DOWN
+    // to `u64::MAX`, so a parent near the top of the range would admit a header at zero distance —
+    // the arithmetic failing OPEN, on the one rule whose whole job is to refuse. Overflow here is
+    // not reachable through the timestamp rules, which is exactly the reasoning that leaves a
+    // fail-open path in place; the closed direction costs nothing.
+    match selected_parent_timestamp.checked_add(interval_ms) {
+        Some(earliest) if header_timestamp >= earliest => Ok(()),
+        _ => Err(HeartbeatTooEarly { last_heartbeat_timestamp: selected_parent_timestamp, interval_ms }),
     }
-    let interval_ms = heartbeat_interval_ms(bonded_silence_ms(window, header_timestamp));
-    let (min_ts, max_ts) = heartbeats.iter().fold((u64::MAX, 0u64), |(lo, hi), b| (lo.min(b.timestamp), hi.max(b.timestamp)));
-    let measured_ms = (max_ts - min_ts).max(1);
-    // n rows span n-1 intervals.
-    let expected_ms = interval_ms.saturating_mul(heartbeats.len() as u64 - 1).max(1);
-    // Uint320 for the same reason the difficulty manager uses it: summing Uint256 targets and
-    // multiplying by a span must not overflow.
-    let targets_sum: Uint320 = heartbeats.iter().map(|b| Uint320::from(Uint256::from_compact_target_bits(b.bits))).sum();
-    let average_target = targets_sum / (heartbeats.len() as u64);
-    let new_target = average_target * measured_ms / expected_ms;
-    let clamped = new_target.min(Uint320::from(easiest));
-    Uint256::try_from(clamped).expect("clamped to a Uint256 ceiling").compact_target_bits()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pow_layer0::{POW_ALGO_ID_PALW_COMMITTED_V2, POW_ALGO_ID_PALW_RECEIPT_V3};
+    use crate::pow_layer0::{PALW_HEARTBEAT_WORK_LOG2, POW_ALGO_ID_PALW_COMMITTED_V2, POW_ALGO_ID_PALW_RECEIPT_V3};
 
-    fn hb(ts: u64, bits: u32) -> HeartbeatWindowBlock {
-        HeartbeatWindowBlock { timestamp: ts, bits, algo_id: PALW_HEARTBEAT_ALGO_ID }
-    }
-    fn bonded(ts: u64) -> HeartbeatWindowBlock {
-        HeartbeatWindowBlock { timestamp: ts, bits: 0x200ccccc, algo_id: POW_ALGO_ID_PALW_COMMITTED_V2 }
-    }
-
-    /// The ladder is the ADR's, exactly: nominal below one hour of silence, 1/10 min above it,
-    /// full cadence above six hours — boundaries exclusive, so "exactly one hour" is still calm.
-    #[test]
-    fn the_ramp_ladder_is_the_adr() {
-        assert_eq!(heartbeat_interval_ms(0), HEARTBEAT_NOMINAL_INTERVAL_MS);
-        assert_eq!(heartbeat_interval_ms(HEARTBEAT_RAMP1_SILENCE_MS), HEARTBEAT_NOMINAL_INTERVAL_MS);
-        assert_eq!(heartbeat_interval_ms(HEARTBEAT_RAMP1_SILENCE_MS + 1), HEARTBEAT_RAMP1_INTERVAL_MS);
-        assert_eq!(heartbeat_interval_ms(HEARTBEAT_RAMP2_SILENCE_MS), HEARTBEAT_RAMP1_INTERVAL_MS);
-        assert_eq!(heartbeat_interval_ms(HEARTBEAT_RAMP2_SILENCE_MS + 1), HEARTBEAT_RAMP2_INTERVAL_MS);
-        assert_eq!(heartbeat_interval_ms(u64::MAX), HEARTBEAT_RAMP2_INTERVAL_MS);
-    }
-
-    /// A window with no bonded-lane block reads as infinite silence — the fastest ramp step —
-    /// and a receipt (algo-7) block is a bonded block for this purpose: both lanes are bonded
-    /// production, and either one resets the ramp.
-    #[test]
-    fn silence_is_measured_against_either_bonded_lane() {
-        let now = 10_000_000_000;
-        assert_eq!(bonded_silence_ms(&[], now), u64::MAX);
-        assert_eq!(bonded_silence_ms(&[hb(now - 50, 0x1d00ffff)], now), u64::MAX, "a heartbeat is not bonded production");
-        let receipt = HeartbeatWindowBlock { timestamp: now - 7_000, bits: 0, algo_id: POW_ALGO_ID_PALW_RECEIPT_V3 };
-        assert_eq!(bonded_silence_ms(&[bonded(now - 9_000), receipt], now), 7_000);
-    }
-
-    /// The slot rule: one heartbeat per interval, and the interval tightens as the ramp fires.
-    #[test]
-    fn the_slot_rule_caps_cadence_and_the_ramp_loosens_it() {
-        let t0 = 1_000_000_000_000u64;
-        // Calm network (bonded block just now): interval is the nominal hour.
-        let calm = [bonded(t0), hb(t0, 0x1d00ffff)];
-        assert!(check_heartbeat_slot(&calm, t0 + HEARTBEAT_NOMINAL_INTERVAL_MS - 1).is_err(), "an hour has not passed");
-        assert!(check_heartbeat_slot(&calm, t0 + HEARTBEAT_NOMINAL_INTERVAL_MS).is_ok());
-        // Dead network (no bonded block in the window): full cadence.
-        let dead = [hb(t0, 0x1d00ffff)];
-        assert!(check_heartbeat_slot(&dead, t0 + HEARTBEAT_RAMP2_INTERVAL_MS - 1).is_err());
-        assert!(check_heartbeat_slot(&dead, t0 + HEARTBEAT_RAMP2_INTERVAL_MS).is_ok());
-        // No heartbeat in the window at all: the lane may (re)start freely.
-        assert!(check_heartbeat_slot(&[bonded(t0)], t0 + 1).is_ok());
-        assert!(check_heartbeat_slot(&[], t0).is_ok());
-    }
-
-    /// Fewer than two heartbeat rows: the floor. The floor is a real price (2²⁴), not free.
-    #[test]
-    fn the_retarget_starts_at_the_spam_floor() {
-        let bits = heartbeat_expected_bits(&[], 0);
-        assert_eq!(bits, heartbeat_easiest_target().compact_target_bits());
-        let one = [hb(1_000, 0x1d00ffff)];
-        assert_eq!(heartbeat_expected_bits(&one, 2_000), heartbeat_easiest_target().compact_target_bits());
-        // The floor demands ~2^24 work: target is MAX >> 24.
-        assert_eq!(heartbeat_easiest_target(), Uint256::MAX >> 24u32);
-    }
-
-    /// The retarget walks toward one block per interval: blocks arriving too fast tighten the
-    /// target (harder), too slow ease it (easier), and the easiest it can ever get is the floor.
-    #[test]
-    fn the_retarget_tracks_the_interval() {
-        let t0 = 2_000_000_000_000u64;
-        let start_bits = heartbeat_easiest_target().compact_target_bits();
-        // Two heartbeats one MINUTE apart on a calm network (expected: one HOUR apart) → the
-        // lane is 60× too fast → the new target is ~60× harder than the average.
-        let fast = [bonded(t0 + 60_000), hb(t0, start_bits), hb(t0 + 60_000, start_bits)];
-        let fast_bits = heartbeat_expected_bits(&fast, t0 + 120_000);
-        let fast_target = Uint256::from_compact_target_bits(fast_bits);
-        let floor = heartbeat_easiest_target();
-        assert!(fast_target < floor, "faster than schedule must tighten below the floor");
-        assert!(fast_target > floor >> 8, "one adjustment is bounded (≈60×, well under 256×)");
-        // Two heartbeats two hours apart (expected one) → easier — but the floor clamps it.
-        let slow = [bonded(t0 + 7_200_000), hb(t0, fast_bits), hb(t0 + 7_200_000, fast_bits)];
-        let slow_bits = heartbeat_expected_bits(&slow, t0 + 7_260_000);
-        assert!(Uint256::from_compact_target_bits(slow_bits) > fast_target, "slower than schedule must ease");
-        let very_slow = [bonded(t0 + 7_200_000), hb(t0, start_bits), hb(t0 + 7_200_000, start_bits)];
-        assert_eq!(heartbeat_expected_bits(&very_slow, t0 + 7_260_000), start_bits, "easing from the floor clamps at the floor");
-    }
-
-    /// The O(1) floor gate refuses the cheap-to-mint header before any walk, and never refuses
-    /// one the retarget would admit.
-    #[test]
-    fn the_floor_gate_is_cheap_and_never_over_refuses() {
-        // The easiest admissible target passes; anything easier does not.
-        assert!(heartbeat_bits_meet_the_floor(heartbeat_easiest_target().compact_target_bits()));
-        assert!(!heartbeat_bits_meet_the_floor(0x207fffffu32), "the trivial genesis-grade target is refused in O(1)");
-        // Harder than the floor always passes.
-        assert!(heartbeat_bits_meet_the_floor((heartbeat_easiest_target() >> 8u32).compact_target_bits()));
-        // And every value the retarget can produce passes it — the gate cannot over-refuse.
-        let t0 = 3_000_000_000_000u64;
-        let start = heartbeat_easiest_target().compact_target_bits();
-        for span in [60_000u64, 600_000, 3_600_000, 7_200_000] {
-            let rows = [bonded(t0 + span), hb(t0, start), hb(t0 + span, start)];
-            let bits = heartbeat_expected_bits(&rows, t0 + span + 1_000);
-            assert!(heartbeat_bits_meet_the_floor(bits), "retarget produced bits the floor gate refuses (span {span})");
-        }
-    }
-
-    /// **The evidence cap must outlast the slot interval, or the slot rule stops capping.**
+    /// **The ramp has exactly two steps, and which one applies is a question about ONE header.**
     ///
-    /// The walk is the only thing that finds the youngest heartbeat. If the cap is shorter than
-    /// one nominal interval's worth of blocks, that heartbeat falls outside it, the slot rule
-    /// sees an empty lane and admits another block immediately — the lane's rate cap silently
-    /// evaporates. The two constants were unrelated by anything but a comment; this relates
-    /// them, at the cadence the shipped V2 presets actually run.
+    /// The old ladder had three, keyed on "how long has the bonded lane been silent" — which is
+    /// ancestor evidence, and the walk that answered it terminated on a node-local fact (finding
+    /// 4: an archival node never hit `Err(get_header)`, a pruned node hit it at its own pruning
+    /// point, and the two computed different verdicts for one header). One block deep admits two
+    /// states because that is how many a single parent can distinguish.
     #[test]
-    fn the_evidence_cap_outlasts_the_slot_interval() {
-        // The shipped ConsensusV2 cadence: `PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS`.
-        let cadence_ms = crate::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
-        let blocks_per_nominal_interval = HEARTBEAT_NOMINAL_INTERVAL_MS / cadence_ms;
-        assert!(
-            (HEARTBEAT_EVIDENCE_MAX_BLOCKS as u64) > blocks_per_nominal_interval,
-            "the walk must reach back past one interval ({blocks_per_nominal_interval} blocks) or the slot rule cannot see \
-             the heartbeat it is supposed to measure against"
-        );
-        // And far enough to collect the retarget's rows at that spacing, or the lane never
-        // leaves its floor.
-        assert!(
-            (HEARTBEAT_EVIDENCE_MAX_BLOCKS as u64) >= blocks_per_nominal_interval * HEARTBEAT_RETARGET_ROWS as u64,
-            "the walk must reach the {HEARTBEAT_RETARGET_ROWS} rows the retarget measures over"
-        );
+    fn the_interval_is_a_function_of_the_parents_lane_and_nothing_else() {
+        // A bonded parent means the chain was producing one block ago: stay out of the way.
+        assert_eq!(heartbeat_interval_ms(POW_ALGO_ID_PALW_COMMITTED_V2), HEARTBEAT_NOMINAL_INTERVAL_MS);
+        assert_eq!(heartbeat_interval_ms(POW_ALGO_ID_PALW_RECEIPT_V3), HEARTBEAT_NOMINAL_INTERVAL_MS);
+        // A heartbeat parent means the chain is already running on the clock: run at cadence.
+        assert_eq!(heartbeat_interval_ms(PALW_HEARTBEAT_ALGO_ID), HEARTBEAT_RECOVERY_INTERVAL_MS);
+        // The recovery step is the real cadence, not a compromise between the two.
+        assert!(HEARTBEAT_RECOVERY_INTERVAL_MS < HEARTBEAT_NOMINAL_INTERVAL_MS);
     }
 
-    /// ε is one, and one is not zero: heartbeat-only branches order by length, while any real
-    /// PALW block's work (≥ ~10⁶ at the shipped trivial bits) dwarfs any plausible run of them.
+    /// **The slot rule, both sides, against a bonded parent.**
     #[test]
-    fn epsilon_is_one_unit_of_work() {
-        assert_eq!(HEARTBEAT_BLUE_WORK_EPSILON, 1);
+    fn a_heartbeat_waits_a_full_hour_behind_a_producing_chain() {
+        let parent_ts = 1_700_000_000_000;
+        let too_soon = parent_ts + HEARTBEAT_NOMINAL_INTERVAL_MS - 1;
+        assert_eq!(
+            check_heartbeat_slot(parent_ts, POW_ALGO_ID_PALW_COMMITTED_V2, too_soon),
+            Err(HeartbeatTooEarly { last_heartbeat_timestamp: parent_ts, interval_ms: HEARTBEAT_NOMINAL_INTERVAL_MS })
+        );
+        // Exactly on the boundary is admitted — the rule is "at least", and an off-by-one here
+        // would silently double the effective interval.
+        assert!(check_heartbeat_slot(parent_ts, POW_ALGO_ID_PALW_COMMITTED_V2, parent_ts + HEARTBEAT_NOMINAL_INTERVAL_MS).is_ok());
+    }
+
+    /// **…and against a heartbeat parent, where the whole point is that it is faster.**
+    ///
+    /// Asserted as a DIFFERENCE at one timestamp: the same instant that is too early behind a
+    /// bonded parent is admissible behind a heartbeat one. A test that only checked each side
+    /// separately would pass on a ramp that had collapsed to a single interval.
+    #[test]
+    fn the_recovery_cadence_is_what_makes_a_stopped_chain_recoverable() {
+        let parent_ts = 1_700_000_000_000;
+        let one_cadence = parent_ts + HEARTBEAT_RECOVERY_INTERVAL_MS;
+        assert!(check_heartbeat_slot(parent_ts, PALW_HEARTBEAT_ALGO_ID, one_cadence).is_ok());
+        assert!(
+            check_heartbeat_slot(parent_ts, POW_ALGO_ID_PALW_COMMITTED_V2, one_cadence).is_err(),
+            "the same instant behind a producing chain is far too early — the ramp is the difference"
+        );
+        assert!(check_heartbeat_slot(parent_ts, PALW_HEARTBEAT_ALGO_ID, one_cadence - 1).is_err());
+    }
+
+    /// A parent timestamp near `u64::MAX` must refuse, never wrap into admitting everything.
+    #[test]
+    fn the_slot_rule_saturates_rather_than_wrapping() {
+        assert!(check_heartbeat_slot(u64::MAX, PALW_HEARTBEAT_ALGO_ID, u64::MAX).is_err());
+        assert!(check_heartbeat_slot(u64::MAX - 1, POW_ALGO_ID_PALW_COMMITTED_V2, u64::MAX).is_err());
+    }
+
+    /// **The lane has its own id, and it is not the hash lane's.**
+    ///
+    /// Sharing `POW_ALGO_ID_BLAKE2B_SHA3` was what forced the triple gate, and it meant a solved
+    /// header from a hash network was a heartbeat's bytes. The Layer-0 digest binds `pow_algo_id`,
+    /// so distinct ids make the two lanes' solutions non-interchangeable by construction.
+    #[test]
+    fn the_heartbeat_id_is_its_own_and_is_known_to_this_binary() {
+        assert_ne!(PALW_HEARTBEAT_ALGO_ID, crate::pow_layer0::POW_ALGO_ID_BLAKE2B_SHA3);
+        assert!(!is_palw_v2_algo_id(PALW_HEARTBEAT_ALGO_ID), "it is bondless — not a V2 lineage lane");
+        crate::pow_layer0::check_algo_id_known(PALW_HEARTBEAT_ALGO_ID).expect("this binary can derive the heartbeat tag");
+    }
+
+    /// **A fixed-price lane must not be able to buy pruning-proof hierarchy.**
+    ///
+    /// With a constant target a lucky solve lands as far under it as under a hard one, so a level
+    /// derived from the digest would be luck sold as structure — at 2²⁴ hashes a go. The receipt
+    /// lane answers no for the neighbouring reason (a free digest), and both go through the one
+    /// predicate so neither can be exempted by editing the other.
+    /// **The heartbeat buys no LEVEL and yet weighs ε — two answers, so two predicates.**
+    ///
+    /// Reading the shared `algo_id_carries_no_chain_position` for both is a mistake with a silent
+    /// failure mode: the ghostdag zero-arm runs before the ε-arm, so the lane would weigh nothing
+    /// and a fully collapsed chain could not order its own branches — the exact regime the lane
+    /// exists for. This pins the difference.
+    #[test]
+    fn the_heartbeat_buys_no_hierarchy_but_still_weighs_epsilon() {
+        assert!(crate::pow_layer0::algo_id_derives_no_block_level(PALW_HEARTBEAT_ALGO_ID), "a fixed target buys no level");
+        assert!(
+            !crate::pow_layer0::algo_id_carries_no_chain_position(PALW_HEARTBEAT_ALGO_ID),
+            "…but it is not weightless: ε is what orders heartbeat-only branches"
+        );
+        // The receipt lane answers no to BOTH, which is why one predicate was enough until now.
+        assert!(crate::pow_layer0::algo_id_derives_no_block_level(POW_ALGO_ID_PALW_RECEIPT_V3));
+        assert!(crate::pow_layer0::algo_id_carries_no_chain_position(POW_ALGO_ID_PALW_RECEIPT_V3));
+        // And the attempt lane IS the hierarchy — its digests are inference-priced.
+        assert!(!crate::pow_layer0::algo_id_derives_no_block_level(POW_ALGO_ID_PALW_COMMITTED_V2));
+        assert!(!crate::pow_layer0::algo_id_carries_no_chain_position(POW_ALGO_ID_PALW_COMMITTED_V2));
+    }
+
+    /// The price is a constant this crate states once, and it is the spam floor the withdrawn
+    /// design tried to hold with a retarget clamp.
+    #[test]
+    fn the_price_is_a_constant_and_a_real_one() {
+        assert_eq!(PALW_HEARTBEAT_WORK_LOG2, 24, "≈2²⁴ hashes: seconds of one CPU per interval, per BLOCK for a flooder");
+        // A price of zero would make sibling flooding free, which is the only thing standing
+        // between finding 3a (open) and an unbounded DAG.
+        assert!(PALW_HEARTBEAT_WORK_LOG2 > 0);
     }
 }

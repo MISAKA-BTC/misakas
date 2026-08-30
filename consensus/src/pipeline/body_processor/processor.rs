@@ -61,7 +61,8 @@ pub struct BlockBodyProcessor {
     pub(super) _ghostdag_k: KType,
     /// ADR-0060 Decision 1.4: true exactly on `ConsensusV2` networks — a heartbeat (algo-3)
     /// block's coinbase payload must then declare a subsidy of ZERO (the lane is fee-only).
-    pub(super) palw_heartbeat_fee_only: bool,
+    /// ADR-0066: the heartbeat lane's fence, mode folded in.
+    pub(super) palw_heartbeat_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
 
     // Stores
     pub(super) statuses_store: Arc<RwLock<DbStatusesStore>>,
@@ -124,10 +125,7 @@ impl BlockBodyProcessor {
             max_block_mass: params.max_block_mass,
             genesis: params.genesis.clone(),
             _ghostdag_k: params.ghostdag_k(),
-            palw_heartbeat_fee_only: matches!(
-                params.palw_consensus_mode,
-                kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)
-            ),
+            palw_heartbeat_lane: params.palw_heartbeat_lane_fence(),
 
             statuses_store: storage.statuses_store.clone(),
             _ghostdag_store: storage.ghostdag_store.clone(),

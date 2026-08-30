@@ -1,6 +1,7 @@
 use super::*;
 use crate::errors::{BlockProcessResult, RuleError};
 use crate::model::services::reachability::ReachabilityService;
+use crate::model::stores::headers::HeaderStoreReader;
 use crate::processes::window::WindowManager;
 use kaspa_consensus_core::header::Header;
 
@@ -31,42 +32,32 @@ impl HeaderProcessor {
             return Err(RuleError::UnexpectedHeaderDaaScore(daa_window.daa_score, header.daa_score));
         }
 
-        // ADR-0060 Decision 1: on a `ConsensusV2` network a heartbeat (algo-3) header's `bits`
-        // are the LANE's own retarget, not the global one — the global bits on a V2 network sit
-        // near the trivial genesis value (the class lottery is the real throttle there), and a
-        // hash lane priced at them would cost ~nothing per block. The lane's difficulty and its
-        // slot rule are pure functions of chain-order evidence walked from this POV.
+        // **ADR-0066 Decision 1: a heartbeat header's `bits` are the GLOBAL expected bits, like
+        // every other lane's.** There is no lane retarget any more, and that is the fix rather
+        // than a simplification of it.
         //
-        // The global calculation below deliberately still sees heartbeat rows (their harder bits
-        // pull the average ≤ its cadence share, ~3.3‰..33‰): a filtered average would need the
-        // algo id in the compact-header store, and the pollution is bounded and self-correcting
-        // — during a ramp there is no bonded miner to burden, and afterwards the window re-mixes.
-        let expected_bits = if kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_LANE_ENABLED
-            && header.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID
-            && matches!(self.palw_consensus_mode, kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(_))
+        // The withdrawn design gave heartbeat headers the lane's own 2²⁴-hard `bits`, and those
+        // rows sat in the global difficulty window. A V2 network's ambient target is
+        // `MAX_DIFFICULTY_TARGET` because the class lottery is its throttle, so a window that
+        // filled with heartbeat rows demanded work 33,554,432 and no bonded block could re-enter
+        // it — the average never re-mixed and the chain was heartbeat-only for good. The lane's
+        // price now lives in `StateLayer0::new` as a network constant, where nothing averages it.
+        //
+        // What remains here is the slot rule, and it reads the SELECTED PARENT alone. The old one
+        // walked chain-order evidence and terminated on `Err(get_header)` — a node-local fact, so
+        // an archival node and a pruned node computed different verdicts for the same header and
+        // rejected each other along the `--archival` flag.
+        let expected_bits = self.window_manager.calculate_difficulty_bits(ghostdag_data, &daa_window);
+        if header.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID
+            && self.palw_heartbeat_lane.is_some_and(|fence| fence.is_active(header.daa_score))
         {
-            // **O(1) before O(walk).** PoW was verified against this header's DECLARED bits, and
-            // whether those bits are the right ones is what the retarget below decides — so a
-            // peer who declares a trivial target solves it in a couple of hashes and would
-            // otherwise buy a full chain walk with it, per message. The floor gate is the same
-            // clamp the retarget applies, so it can only refuse headers the retarget was never
-            // going to admit.
-            if !kaspa_consensus_core::palw_heartbeat_v1::heartbeat_bits_meet_the_floor(header.bits) {
-                return Err(RuleError::UnexpectedDifficulty(
-                    header.hash,
-                    header.bits,
-                    kaspa_consensus_core::palw_heartbeat_v1::heartbeat_easiest_target().compact_target_bits(),
-                ));
-            }
-            // Chain-order evidence, NOT the (sampled) difficulty window: the sampled window can
-            // miss the newest blocks entirely, and the slot rule is about exactly those.
-            let rows = crate::processes::heartbeat_evidence::collect_heartbeat_evidence(
-                self.ghostdag_store.as_ref(),
-                self.headers_store.as_ref(),
-                ghostdag_data.selected_parent,
-                self.genesis.hash,
-            );
-            if let Err(early) = kaspa_consensus_core::palw_heartbeat_v1::check_heartbeat_slot(&rows, header.timestamp) {
+            let parent = self
+                .headers_store
+                .get_header(ghostdag_data.selected_parent)
+                .map_err(|_| RuleError::MissingParents(vec![ghostdag_data.selected_parent]))?;
+            if let Err(early) =
+                kaspa_consensus_core::palw_heartbeat_v1::check_heartbeat_slot(parent.timestamp, parent.pow_algo_id, header.timestamp)
+            {
                 return Err(RuleError::HeartbeatTooEarly(
                     header.hash,
                     header.timestamp,
@@ -74,10 +65,7 @@ impl HeaderProcessor {
                     early.interval_ms,
                 ));
             }
-            kaspa_consensus_core::palw_heartbeat_v1::heartbeat_expected_bits(&rows, header.timestamp)
-        } else {
-            self.window_manager.calculate_difficulty_bits(ghostdag_data, &daa_window)
-        };
+        }
         ctx.mergeset_non_daa = Some(daa_window.mergeset_non_daa);
 
         if header.bits != expected_bits {

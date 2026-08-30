@@ -137,6 +137,8 @@ pub struct PruningProofManager {
     /// names one. The proof gate must agree with the main pipeline or a node that joined by a
     /// pruned sync would refuse headers the chain it is joining considers valid.
     palw_consensus_mode: kaspa_consensus_core::palw_mode_v2::PalwConsensusMode,
+    /// ADR-0066: the heartbeat lane's fence, mode folded in.
+    palw_heartbeat_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
 
     is_consensus_exiting: Arc<AtomicBool>,
 }
@@ -164,6 +166,7 @@ impl PruningProofManager {
         pow_palw_ollama_activation: kaspa_consensus_core::config::params::ForkActivation,
         palw_required_algo_id: Option<u8>,
         palw_consensus_mode: kaspa_consensus_core::palw_mode_v2::PalwConsensusMode,
+        palw_heartbeat_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
         is_consensus_exiting: Arc<AtomicBool>,
     ) -> Self {
         Self {
@@ -205,6 +208,7 @@ impl PruningProofManager {
             pow_palw_ollama_activation,
             palw_required_algo_id,
             palw_consensus_mode,
+            palw_heartbeat_lane,
 
             is_consensus_exiting,
         }
@@ -240,7 +244,12 @@ impl PruningProofManager {
             kaspa_consensus_core::pow_layer0::check_algo_id_for_mode_accepting(
                 header.pow_algo_id,
                 self.palw_required_algo_id,
-                self.palw_consensus_mode.accepts_algo_id(header.pow_algo_id),
+                // ADR-0066: the heartbeat lane is a top-level fence the bundle cannot see, so a
+                // proof header on that lane is admitted here and nowhere else.
+                self.palw_consensus_mode.accepts_algo_id(header.pow_algo_id).map(|a| {
+                    a || (header.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID
+                        && self.palw_heartbeat_lane.is_some_and(|fence| fence.is_active(header.daa_score)))
+                }),
                 palw_ollama_active,
                 palw_active,
                 blake2b_sha3_active,

@@ -1489,6 +1489,113 @@ mod tests {
             .expect("no escrow, no requirement");
     }
 
+    /// The pwu the shipped floor class derives for one inference. Pinned here rather than
+    /// computed so that a change to the derivation fails this test with both numbers in the
+    /// message, instead of silently re-deriving whatever the code now says.
+    const PALW_RC_FLOOR_DERIVED_PWU: u64 = 15_416;
+
+    /// **The economic deterrent is armable on the network this build ships — that is the claim,
+    /// and it is not the same as the rule being correct.**
+    ///
+    /// Every test above runs on the synthetic `state_params()` fixture. They establish that the
+    /// inequality prices entrants and exempts the floor. What they cannot establish is the thing
+    /// that actually blocked this parameter for its whole life: on a `ConsensusV2` network the
+    /// attempt lane is the ONLY block type, so a refusal on the chain block's own header is
+    /// `StatusDisqualifiedFromChain` — no block, no DAA, no clock. A backing that refused the
+    /// floor would not cost a producer a reward, it would stop the chain, and no fixture built out
+    /// of hand-made params can show that it does not.
+    ///
+    /// So this arms the maximum backing on the SHIPPED bundle, boots the shipped genesis through
+    /// the real transition, and produces under the floor class with a real subsidy behind it. The
+    /// backing lives in `PalwStateParamsV2`, inside the bundle, so arming it is a mint-time choice
+    /// rather than a fence — which makes "can a network be minted with it on" exactly the question.
+    #[test]
+    fn the_escrow_backing_can_be_raised_from_zero_on_the_shipped_network() {
+        use crate::config::params::palw_rc_shipped_params;
+        use crate::palw_mode_v2::PalwConsensusMode;
+        use crate::palw_state_v2::PalwChainStateV2;
+
+        let mut params = palw_rc_shipped_params();
+        let PalwConsensusMode::ConsensusV2(bundle) = &mut params.palw_consensus_mode else {
+            panic!("the shipped RC preset carries a V2 bundle");
+        };
+        assert_eq!(bundle.state.min_slash_permille_of_escrow(), 0, "it ships off, and that was not a choice");
+
+        // 1000‰ — the whole escrow, the largest value the constructor admits. If any setting can
+        // halt the floor this one does, so a pass here covers every smaller arming.
+        bundle.state = bundle.state.clone().with_min_slash_permille_of_escrow(1000).expect("1000 permille is legal");
+        params.validate_palw_v2().expect("a network may be minted with the backing fully armed");
+
+        let PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else { unreachable!() };
+        let sp = bundle.state.clone();
+        let genesis_ctx =
+            PalwBlockContextV2 { block: params.genesis.hash, daa_score: params.genesis.daa_score, blue_score: 0, subsidy: 0 };
+        let (booted, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &sp, &genesis_ctx, &bundle.genesis_objects, None)
+            .expect("the shipped genesis applies");
+
+        let (bond, pubkey, operator_pubkey) = bundle
+            .genesis_objects
+            .iter()
+            .find_map(|o| match o {
+                PalwConsensusObjectV2::BondRegistered { bond, pubkey, operator_pubkey, .. } => {
+                    Some((*bond, pubkey.clone(), operator_pubkey.clone()))
+                }
+                _ => None,
+            })
+            .expect("the shipped genesis registers bonds");
+        let class_id = sp.base_class_id();
+        let artifact_root = bundle
+            .genesis_objects
+            .iter()
+            .find_map(|o| match o {
+                PalwConsensusObjectV2::ClassRegistered { class_id: c, artifact_root, .. } if *c == class_id => Some(*artifact_root),
+                _ => None,
+            })
+            .expect("the floor class is registered at genesis");
+
+        // A block with a real subsidy behind it, so the escrow is large and the requirement at
+        // 1000‰ is the whole of it — the case that would refuse the floor if it were not exempt.
+        let context =
+            PalwBlockContextV2 { block: h64(0xB1), daa_score: params.genesis.daa_score + 1, blue_score: 1, subsidy: 50_000_000_000 };
+        let floor = PalwAttemptEnvelopeV2 {
+            attempt: PalwAttemptUnsignedV2 {
+                version: PALW_ATTEMPT_V2_VERSION,
+                network_domain: h64(0xD0),
+                challenge: challenge_v2(h64(0xD0), h64(PPH), TS, 1, class_id, &bond.0),
+                class_id,
+                executor_bond: bond.0,
+                executor_pubkey: pubkey,
+                operator_id: crate::palw_state_v2::palw_operator_id_v2(&operator_pubkey),
+                artifact_root,
+                trace_root: h64(31),
+                output_root: h64(32),
+                // The floor pins its pwu with `DerivedV1`, so this is the only value it accepts —
+                // and it is why `claim_exposure` is chain-fixed and the backing cannot be met by
+                // a producer choosing to risk more. Item 9's whole problem in one field.
+                pwu: PALW_RC_FLOOR_DERIVED_PWU,
+                trace_manifest_root: h64(33),
+                trace_chunk_count: 4,
+                trace_retention_daa: 999_999,
+                execution_root: h64(41),
+            },
+            signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
+        };
+        check_palw_attempt_admission_v2(&booted, &sp, &bundle.admission, &context, &floor)
+            .expect("the liveness floor produces with the backing fully armed, or the network has no clock");
+
+        // And the exemption is doing that, not a zero escrow: at these numbers the requirement is
+        // the entire worker carve and the claim reserves a small fraction of it, so the same
+        // attempt on any class that is NOT the floor is refused. `a_claim_that_earns_far_more_than_
+        // it_risks_is_refused` shows that refusal end-to-end on a two-class fixture; here it is
+        // enough to record that the escrow this block funds is real.
+        let carve = crate::palw_reward_v2::palw_reward_carve_v2(
+            context.subsidy,
+            &crate::palw_reward_v2::PalwRewardParamsV2::new(sp.worker_carve_permille()).unwrap(),
+        )
+        .worker;
+        assert!(carve > 0, "the block funds a real escrow, so the exemption is what admitted the floor");
+    }
+
     #[test]
     fn a_backing_above_the_whole_escrow_is_refused_at_construction() {
         assert!(state_params().with_min_slash_permille_of_escrow(1001).is_err(), "a claim cannot risk more than it can earn");

@@ -124,7 +124,7 @@ pub fn calc_block_level_check_pow_layer0(header: &Header, network_id: &[u8], max
         // price of one signature. Receipt blocks sit at the base level; the level hierarchy is
         // built by the attempt lane, whose digests are inference-priced. (This is the same
         // reasoning as the `passed` arm above, applied to the other thing a digest buys.)
-        Ok((passed, _)) if kaspa_consensus_core::pow_layer0::algo_id_carries_no_chain_position(header.pow_algo_id) => (0, passed),
+        Ok((passed, _)) if kaspa_consensus_core::pow_layer0::algo_id_derives_no_block_level(header.pow_algo_id) => (0, passed),
         Ok((passed, pow_512)) => (calc_level_from_pow_512(pow_512, max_block_level), passed),
         // `PalwWorkerFailed` is a statement about THIS node: it has a registered model runtime
         // and the runtime broke, persistently — the driver's bounded retries absorb the transient
@@ -252,7 +252,23 @@ impl StateLayer0 {
     #[inline]
     pub fn new(header: &Header, network_id: &[u8]) -> Self {
         let pre_pow_hash_64 = hashing::header::pre_pow_hash_64(header);
-        let target_512 = Uint512::from_compact_target_bits_512(header.bits);
+        // **ADR-0066 Decision 1: the heartbeat lane is priced by a network constant, and its
+        // `bits` are the GLOBAL expected bits like every other lane's.**
+        //
+        // Reading the price out of `bits` is what made the first implementation fatal: `bits` is
+        // the field the difficulty window averages, so a window of heartbeat rows raised the
+        // global demand to the lane's own price and no bonded block could re-enter the chain. A
+        // fixed target has no feedback path — heartbeat rows enter the window as ordinary rows
+        // carrying ordinary bits, and F1 and F3b are gone as quantities rather than as tunings.
+        //
+        // The substitution lives HERE, in the one place every PoW path goes through (ordinary
+        // validation, the pruning proof, trusted import), so no caller can price the lane by
+        // forgetting to.
+        let target_512 = if header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_HEARTBEAT_V1 {
+            Uint512::MAX >> kaspa_consensus_core::pow_layer0::PALW_HEARTBEAT_WORK_LOG2
+        } else {
+            Uint512::from_compact_target_bits_512(header.bits)
+        };
         // Only the kHeavyHash L1 tag (algo_id = 1) consumes the PowHash + Matrix.
         // algo_id 2 (Argon2id) / 3 (BLAKE2b-SHA3) compute their tag directly from
         // (pre_pow_hash, nonce), so skip the expensive `Matrix::generate` for them
@@ -402,8 +418,14 @@ impl StateLayer0 {
                 buf[..tag.len()].copy_from_slice(&tag);
                 Ok(tag.len())
             }
-            // Phase 3 (algo_id = 3): compute-only BLAKE2b-512 ∥ SHA3-512 over (pre_pow_hash, nonce). 128 bytes.
-            POW_ALGO_ID_BLAKE2B_SHA3 => {
+            // ADR-0066 Decision 1 (algo_id = 8): the heartbeat lane. Its tag IS algo-3's — the lane
+            // is a self-verifying hash lane and wants exactly that function — and the two cannot
+            // borrow each other's solutions anyway, because the Layer-0 finalizer binds
+            // `pow_algo_id` into the digest. What differs is the TARGET (a network constant, set
+            // in `new()`) and the acceptance (`Params::palw_heartbeat`), neither of which belongs
+            // in a tag. Sharing the arm rather than copying it means the hash lane and the
+            // heartbeat lane cannot drift into computing different things under one name.
+            POW_ALGO_ID_BLAKE2B_SHA3 | kaspa_consensus_core::pow_layer0::POW_ALGO_ID_HEARTBEAT_V1 => {
                 buf[..POW_L1_BLAKE2B_SHA3_OUT_BYTES].copy_from_slice(&blake2b_sha3_l1_tag_v1(
                     self.pre_pow_hash_64,
                     nonce,
@@ -522,6 +544,41 @@ mod tests_pq {
         )
     }
 
+    /// **ADR-0066 Decision 1, at the one place that decides it: a heartbeat's target is the
+    /// network constant and `header.bits` does not move it.**
+    ///
+    /// The integration test in the consensus crate runs with `skip_proof_of_work()`, so it can
+    /// show that a heartbeat CARRIES the global bits but not that those bits are ignored when the
+    /// work is checked. That is the half the withdrawn design got wrong — the price lived in the
+    /// field the difficulty window averages — so it is asserted here directly.
+    ///
+    /// Two headers, identical but for `bits`: a trivially easy one and the hardest the compact
+    /// encoding can state. Both must produce the SAME target, and it must be the constant.
+    #[test]
+    fn a_heartbeat_target_is_the_network_constant_whatever_bits_it_declares() {
+        use kaspa_consensus_core::pow_layer0::{PALW_HEARTBEAT_WORK_LOG2, POW_ALGO_ID_HEARTBEAT_V1};
+
+        let expected = Uint512::MAX >> PALW_HEARTBEAT_WORK_LOG2;
+        let easy = dummy_header_algo(0x207fffff, 0, 1_700_000_000, POW_ALGO_ID_HEARTBEAT_V1);
+        let hard = dummy_header_algo(0x01010101, 0, 1_700_000_000, POW_ALGO_ID_HEARTBEAT_V1);
+        assert_eq!(StateLayer0::new(&easy, b"testnet-10").target_512, expected, "trivial bits do not make the lane cheap");
+        assert_eq!(StateLayer0::new(&hard, b"testnet-10").target_512, expected, "hard bits do not make it expensive either");
+
+        // The neighbouring lane still reads its bits, so this is a substitution for ONE id and not
+        // a change to how targets work.
+        let sha3 = dummy_header_algo(0x207fffff, 0, 1_700_000_000, POW_ALGO_ID_BLAKE2B_SHA3);
+        assert_eq!(
+            StateLayer0::new(&sha3, b"testnet-10").target_512,
+            Uint512::from_compact_target_bits_512(0x207fffff),
+            "every other lane is still priced by its own declared bits"
+        );
+        assert_ne!(StateLayer0::new(&sha3, b"testnet-10").target_512, expected);
+
+        // And the price is real: the constant target is far harder than the trivial bits a V2
+        // network runs at, which is what makes sibling flooding cost something.
+        assert!(expected < Uint512::from_compact_target_bits_512(0x207fffff), "the lane is harder than the ambient target");
+    }
+
     /// A peer-supplied header carrying an algo id this finalizer does not implement must be a
     /// REJECTED header, not a dead node.
     ///
@@ -541,10 +598,11 @@ mod tests_pq {
         //
         // The list is smaller than on the hash-only lineage this test came from, and deliberately:
         // ids 4, 5, 6 and 7 ARE implemented here (PALW LLM, Ollama, committed-V2, receipt-V3), so
-        // asserting they are unknown would assert the opposite of what this build does. What the
-        // test is FOR is unchanged — the tag function must be total on a peer-controlled id — and
-        // the ids below are the ones that reach the unknown arm on this lineage.
-        for algo_id in [0u8, 8, 9, 42, 200, u8::MAX] {
+        // asserting they are unknown would assert the opposite of what this build does. **8 left
+        // the list with ADR-0066 Decision 1** for the same reason — it is the heartbeat lane and
+        // its tag arm is algo-3's. What the test is FOR is unchanged: the tag function must be
+        // total on a peer-controlled id, and the ids below are the ones that reach the unknown arm.
+        for algo_id in [0u8, 9, 10, 42, 200, u8::MAX] {
             let header = dummy_header_algo(0x207fffff, 1, 1_000_000, algo_id);
 
             let (level, passes) = calc_block_level_check_pow_layer0(&header, b"mainnet", 255);
@@ -778,13 +836,14 @@ mod tests_pq {
         // 0 and everything outside the implemented set is unknown; include the type extremes.
         //
         // 6 and 7 LEFT this list when Units A/B landed their tag arms (ADR-0042 Decision 3a,
-        // ADR-0044 Decision 6). An algo-6 header without an envelope is the NAMED error
+        // ADR-0044 Decision 6), and **8 left it with ADR-0066 Decision 1** (the heartbeat lane,
+        // whose tag arm is algo-3's). An algo-6 header without an envelope is the NAMED error
         // `PalwV2AttemptMissing` (covered by `palw_v2_commitment_mutation_invalidates_pow`), and
         // both lanes are covered below by
         // `a_v2_lineage_header_without_its_carriage_is_a_failed_pow_not_a_panic`, which pins the
         // property this test actually exists for: a peer-controlled header must never panic the
         // finalizer, whatever it declares.
-        for bad in [0u8, 8, 42, 128, 200, 255] {
+        for bad in [0u8, 9, 42, 128, 200, 255] {
             let h = dummy_header_algo(0x207fffff, 0, 1_700_000_000, bad);
             // Build the verifier on a hash-only network to prove no PALW machinery is needed to
             // trigger (or to survive) the crash.

@@ -407,6 +407,10 @@ pub struct VirtualStateProcessor {
     /// ADR-0065 D2's fence, `None` on every shipped preset. See
     /// [`Self::palw_frontier_provenance_outcome`].
     pub(super) palw_frontier_provenance: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// ADR-0066: the heartbeat lane's fence, mode folded in.
+    pub(super) palw_heartbeat_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// ADR-0066 Decision 4: the inactivity leak's fence and its duration.
+    pub(super) palw_inactivity_leak: Option<kaspa_consensus_core::config::params::PalwInactivityLeakV1>,
 
     /// ADR-0033 (B14): the PALW credit gate's fence — `None` (every shipped network) keeps
     /// the whole gate dormant; `Some` makes crossing commitments mintable in the coinbase
@@ -670,6 +674,8 @@ impl VirtualStateProcessor {
             palw_tip_order: params.palw_tip_order_v1(),
             pow_palw_ollama_activation: params.pow_palw_ollama_activation,
             palw_required_algo_id: params.palw_consensus_mode.required_algo_id(),
+            palw_heartbeat_lane: params.palw_heartbeat_lane_fence(),
+            palw_inactivity_leak: params.palw_inactivity_leak,
             max_block_parents: params.max_block_parents(),
             mergeset_size_limit: params.mergeset_size_limit(),
             max_block_mass: params.max_block_mass,
@@ -3793,6 +3799,27 @@ impl VirtualStateProcessor {
     ///
     /// **Everything here is node-local.** Both states come from this node's root-verified tip and
     /// its own reachability walk; the peer proposing the reorg supplies none of it.
+    /// **The inactivity leak's grace, resolved at `daa_score`** (ADR-0066 Decision 4).
+    ///
+    /// `u64::MAX` means no validator ever leaks, which is what every shipped preset says and what
+    /// an unarmed fence returns. Below the fence this is byte-identical to the old behaviour: the
+    /// three call sites read `DnsParams.inactivity_leak_daa`, which is `u64::MAX` on every preset.
+    ///
+    /// The move off that field is the point. `inactivity_leak_daa` lives inside `DnsParams`, which
+    /// `consensus_params_id` hashes as one raw borsh blob while `for_each_fence` deliberately does
+    /// not visit — both correct alone, and together meaning that changing the constant from
+    /// `u64::MAX` to a live value moved `consensus_identity_id` and disconnected the first
+    /// upgrading operator from every un-upgraded peer *immediately*. The leak was a rule that could
+    /// only be turned on by a flag day, which for a mechanism whose entire purpose is to let
+    /// finality self-heal after validator loss is the wrong shape: the moment you need it is the
+    /// moment you cannot coordinate one.
+    fn palw_inactivity_leak_after(&self, daa_score: u64) -> u64 {
+        match self.palw_inactivity_leak {
+            Some(leak) if leak.activation.is_active(daa_score) => leak.t_leak_daa,
+            _ => u64::MAX,
+        }
+    }
+
     fn palw_frontier_provenance_outcome(&self, candidate: BlockHash, prev_sink: BlockHash) -> DnsReorgOutcome {
         use kaspa_consensus_core::palw_state_v2::PalwDeltaEntryV2;
 
@@ -5751,7 +5778,7 @@ impl VirtualStateProcessor {
             kaspa_consensus_core::dns_finality::last_attestation_daa_by_validator(&contributions, &epoch_anchor_daa);
         let leak = kaspa_consensus_core::dns_finality::InactivityLeakViewV1 {
             last_attestation_daa: &last_attestation,
-            leak_after_daa: dns_params.inactivity_leak_daa,
+            leak_after_daa: self.palw_inactivity_leak_after(sink_daa),
         };
         let totals = self.total_weight_by_epoch(sink, &bonds, net_id.as_byte_slice(), dns_params, &epoch_anchor_daa, weight, leak);
         let per_epoch = aggregate_epoch_tallies(&contributions, &totals);
@@ -5797,7 +5824,7 @@ impl VirtualStateProcessor {
                     kaspa_consensus_core::dns_finality::last_attestation_daa_by_validator(&shadow_contribs, &shadow_anchor_daa);
                 let shadow_leak = kaspa_consensus_core::dns_finality::InactivityLeakViewV1 {
                     last_attestation_daa: &shadow_last,
-                    leak_after_daa: dns_params.inactivity_leak_daa,
+                    leak_after_daa: self.palw_inactivity_leak_after(sink_daa),
                 };
                 let shadow_totals = self.total_weight_by_epoch(
                     sink,
@@ -6568,7 +6595,7 @@ impl VirtualStateProcessor {
             kaspa_consensus_core::dns_finality::last_attestation_daa_by_validator(&contributions, &epoch_anchor_daa);
         let leak = kaspa_consensus_core::dns_finality::InactivityLeakViewV1 {
             last_attestation_daa: &last_attestation,
-            leak_after_daa: dns_params.inactivity_leak_daa,
+            leak_after_daa: self.palw_inactivity_leak_after(sink_daa),
         };
         let totals = self.total_weight_by_epoch(tip, bonds, net_id, dns_params, &epoch_anchor_daa, weight, leak);
         let prevoted = quorum_epochs(&aggregate_epoch_tallies(&contributions, &totals), dns_params.vlt.min_network_compute);
@@ -10043,25 +10070,38 @@ impl VirtualStateProcessor {
     pub fn heartbeat_adapt_block_template(&self, mut template: BlockTemplate) -> Result<(BlockTemplate, u64), RuleError> {
         use kaspa_consensus_core::palw_heartbeat_v1 as hb;
         let virtual_state = self.virtual_stores.read().state.get().unwrap();
-        // The SAME chain-order evidence validation walks (see `processes::heartbeat_evidence`);
-        // construction and validation must read one answer or the template refuses itself.
-        let rows = crate::processes::heartbeat_evidence::collect_heartbeat_evidence(
-            self.ghostdag_store.as_ref(),
-            self.headers_store.as_ref(),
-            virtual_state.ghostdag_data.selected_parent,
-            self.genesis.hash,
-        );
-        // The slot: at or after the window's youngest heartbeat plus the current interval. The
-        // reported boundary is evaluated at the candidate timestamp; the ladder only tightens as
-        // silence grows, so waiting to the boundary can never make the slot stricter.
-        let earliest = match hb::check_heartbeat_slot(&rows, template.block.header.timestamp) {
+        // **Refuse when the lane is not open, rather than hand back a block every peer rejects.**
+        //
+        // This is a public API. The daemon gates the miner on the same fence, but a caller that
+        // did not would otherwise get a well-formed algo-8 template, grind it, submit it, and be
+        // told `UnknownPowAlgoId` — work burned against a rule this node could answer before the
+        // first hash. Answering with the validator's own error keeps the two sides saying one
+        // thing.
+        if !self.palw_heartbeat_lane.is_some_and(|fence| fence.is_active(virtual_state.daa_score)) {
+            return Err(RuleError::UnknownPowAlgoId(hb::PALW_HEARTBEAT_ALGO_ID));
+        }
+        // **The SAME one-block-deep question validation asks** (ADR-0066 Decision 2): the selected
+        // parent's timestamp and lane, and nothing else. Construction and validation must read one
+        // answer or the template refuses itself — and the old shared answer was a chain walk that
+        // terminated on a node-local fact, so a pruned node and an archival one built templates
+        // the other rejected.
+        let parent = self
+            .headers_store
+            .get_header(virtual_state.ghostdag_data.selected_parent)
+            .map_err(|_| RuleError::MissingParents(vec![virtual_state.ghostdag_data.selected_parent]))?;
+        // The slot: at or after the selected parent's timestamp plus the interval its lane sets.
+        let earliest = match hb::check_heartbeat_slot(parent.timestamp, parent.pow_algo_id, template.block.header.timestamp) {
             Ok(()) => template.block.header.timestamp,
             Err(early) => early.last_heartbeat_timestamp.saturating_add(early.interval_ms),
         };
         template.block.header.timestamp = template.block.header.timestamp.max(earliest);
         template.block.header.pow_algo_id = hb::PALW_HEARTBEAT_ALGO_ID;
         template.block.header.palw_commitment = vec![];
-        template.block.header.bits = hb::heartbeat_expected_bits(&rows, template.block.header.timestamp);
+        // **`bits` are left exactly as the global calculation set them** (ADR-0066 Decision 1).
+        // This line used to overwrite them with the lane's own retarget, which is the write that
+        // fed the lane's price into the global difficulty window and made a heartbeat-only chain
+        // unrecoverable. The lane's price is a constant in `StateLayer0::new` now, and the header
+        // this template produces is an ordinary difficulty row.
         // Decision 1.4: the declared subsidy is what descendants read into the reward fan-out —
         // zero is what makes the lane fee-only and the ADR-0059 supply exact.
         let blue_score = template.block.header.blue_score;

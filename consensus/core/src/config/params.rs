@@ -368,6 +368,42 @@ pub struct PalwBondMaturityV1 {
     pub window_daa: u64,
 }
 
+/// **ADR-0066 Decision 1's parameter: the heartbeat lane, and the fixed price it is held to.**
+///
+/// The price is a network CONSTANT and never `header.bits`. That is the whole decision: the first
+/// implementation put the lane's difficulty in the field the global difficulty window averages, so
+/// a window of heartbeat rows demanded work 33,554,432 and no bonded block could re-enter it — a
+/// heartbeat-only chain recoverable only by re-mint, which is the self-feeding refusal ADR-0060
+/// exists to abolish, reintroduced by its own remedy.
+///
+/// `work_log2` sits beside the fence for the same reason `PalwBondMaturityV1::window_daa` does, and
+/// carries the same hazard: the fence visitor must not see it, so two builds scheduling the lane at
+/// one height with different prices share an identity. Arming it is a coordinated change.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwHeartbeatV1 {
+    /// When the lane opens.
+    pub activation: ForkActivation,
+    /// The lane's price as a work exponent: a heartbeat header must satisfy
+    /// `Uint256::MAX >> work_log2`, independent of the `bits` it carries.
+    pub work_log2: u32,
+}
+
+/// **ADR-0066 Decision 4's parameter: the inactivity leak, and how long silence must last.**
+///
+/// This replaces `DnsParams.inactivity_leak_daa`, which could not be armed at all. That field is
+/// inside `DnsParams`, which `consensus_params_id` hashes as one raw borsh blob while
+/// `for_each_fence` deliberately does not visit it — both halves individually correct, and together
+/// meaning that moving the constant off `u64::MAX` moves `consensus_identity_id` and disconnects
+/// the first upgrading operator from every un-upgraded peer immediately. The leak could only ever
+/// be turned on by a flag day. Here it is a fence like any other.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwInactivityLeakV1 {
+    /// When the leak comes into force.
+    pub activation: ForkActivation,
+    /// How long a validator must have been silent before its weight begins to leak, in DAA.
+    pub t_leak_daa: u64,
+}
+
 /// Consensus parameters. Contains settings and configurations which are consensus-sensitive.
 /// Changing one of these on a network node would exclude and prevent it from reaching consensus
 /// with the other unmodified nodes.
@@ -578,6 +614,21 @@ pub struct Params {
     /// coordinate.
     pub palw_frontier_provenance: Option<ForkActivation>,
 
+    /// **ADR-0066 Decision 1 — the heartbeat lane.** `None` on every shipped preset.
+    ///
+    /// Replaces `palw_heartbeat_v1::PALW_HEARTBEAT_LANE_ENABLED`, a `const bool` that changed block
+    /// validity and moved no fingerprint: code-only masquerading as a rule, which is a silent fork.
+    /// Two builds compiled from the same tree with different values of that constant were peers
+    /// that disagreed about which blocks are valid, and nothing in the handshake could say so.
+    pub palw_heartbeat: Option<PalwHeartbeatV1>,
+
+    /// **ADR-0066 Decision 4 — the inactivity leak.** `None` on every shipped preset.
+    ///
+    /// Replaces `DnsParams.inactivity_leak_daa`, which is retired at `u64::MAX` permanently rather
+    /// than reused: see [`PalwInactivityLeakV1`] for why editing that constant could not be an
+    /// activation.
+    pub palw_inactivity_leak: Option<PalwInactivityLeakV1>,
+
     /// ADR-0042 Decision 1 (PR-10): the ONE PALW switch on the V2 lineage. `Disabled` on every
     /// shipped preset. A network is in exactly one mode; `ConsensusV2` carries the whole atomic
     /// ruleset and is validated at construction ([`Params::validate_palw_v2`]) — including the
@@ -716,6 +767,23 @@ impl Params {
         // them immature at once: no claim could bind, `safe_frontier` would never leave 0, and
         // pruning would never start. Refusing the configuration is the only way this is a rule
         // rather than a note in a runbook somebody has to remember.
+        // **ADR-0066 Decision 1: the fence may only declare a price this binary can compute.**
+        //
+        // `work_log2` is in `consensus_params_id`, so it is what operators coordinate on; the
+        // target actually applied lives in `StateLayer0::new` as a constant, because the PoW path
+        // has no params. Two sources for one number is exactly how a value gets announced rather
+        // than enforced, so they are compared here and a mismatch refuses to start — the same
+        // stance `check_algo_id_known` takes for an algorithm the binary cannot derive.
+        if let Some(heartbeat) = self.palw_heartbeat
+            && heartbeat.activation != ForkActivation::never()
+            && heartbeat.work_log2 != crate::pow_layer0::PALW_HEARTBEAT_WORK_LOG2
+        {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_heartbeat declares a work_log2 this binary does not implement: the lane's target is a \
+                 network constant and the fence must name the same one",
+            ));
+        }
+
         if let Some(maturity) = self.palw_bond_maturity {
             if maturity.window_daa == 0 {
                 return Err(PalwModeV2Error::Invalid("a zero bond maturity window is the rule switched off wearing a fence"));
@@ -1037,6 +1105,14 @@ impl Params {
         if self.palw_frontier_provenance == Some(ForkActivation::never()) {
             self.palw_frontier_provenance = None;
         }
+        // ADR-0066 Decisions 1 and 4. Both carry a value beside the fence, so both take the whole
+        // option — the D1 rule, for the D1 reason.
+        if self.palw_heartbeat.is_some_and(|h| h.activation == ForkActivation::never()) {
+            self.palw_heartbeat = None;
+        }
+        if self.palw_inactivity_leak.is_some_and(|l| l.activation == ForkActivation::never()) {
+            self.palw_inactivity_leak = None;
+        }
         let Some(dns) = self.dns_params.as_mut() else {
             return;
         };
@@ -1051,6 +1127,36 @@ impl Params {
             && dns.tkn.emission_activation_epoch == u64::MAX
         {
             dns.tkn = crate::token::TokenParams::INERT;
+        }
+    }
+
+    /// **Is the heartbeat lane open at `daa_score`?** (ADR-0066 Decision 1.)
+    ///
+    /// Two conditions, both necessary. The fence must be in force — the lane changes block
+    /// validity, so it is an activation like any other. And the network must be `ConsensusV2`:
+    /// the lane exists to keep a PALW network's clock running when its bonded producers have
+    /// stopped, and on a hash network there is nothing for it to rescue and `algo_id = 8` is
+    /// simply an id nobody mines.
+    ///
+    /// One question, one answer, one call site per rule — replacing the triple gate
+    /// (`id == 3 && ConsensusV2 && const`) that made a rule reachable by two of its three
+    /// conditions.
+    pub fn palw_heartbeat_lane_open_at(&self, daa_score: u64) -> bool {
+        self.palw_heartbeat_lane_fence().is_some_and(|f| f.is_active(daa_score))
+    }
+
+    /// The heartbeat lane's fence **with the mode condition already folded in** — `Some` only on a
+    /// `ConsensusV2` network that has armed it.
+    ///
+    /// This is what the processors store. They see one `Option<ForkActivation>` and ask it
+    /// `is_active(daa_score)`, so the mode half cannot be forgotten at one of the five sites that
+    /// need it — which is precisely how the old triple gate went wrong: `pre_ghostdag_validation`
+    /// checked all three conditions, `utxo_validation` checked `palw_state_params_v2.is_some()`,
+    /// and the body processor checked a bool named for the mode. Three spellings of one question.
+    pub fn palw_heartbeat_lane_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_heartbeat) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(h)) => Some(h.activation),
+            _ => None,
         }
     }
 
@@ -1152,6 +1258,8 @@ impl Params {
             palw_unavailable_abstains,
             palw_bond_maturity,
             palw_frontier_provenance,
+            palw_heartbeat,
+            palw_inactivity_leak,
             // The V2 bundle's fences are inside `palw_ruleset_id_v2` — see the doc block.
             palw_consensus_mode: _,
             pow_blake2b_sha3_activation,
@@ -1229,6 +1337,24 @@ impl Params {
         // ADR-0065 D2. A pure fence with no payload, so visiting it is safe.
         match palw_frontier_provenance.as_mut() {
             Some(activation) => fork(activation, visit),
+            None => {
+                absent = u64::MAX;
+                visit(&mut absent);
+            }
+        }
+        // ADR-0066 Decisions 1 and 4. **Only the activation is visited.** `work_log2` and
+        // `t_leak_daa` are a price and a duration; normalising either to `0`/`u64::MAX` would make
+        // two builds shipping different values fingerprint identically at every height, which is
+        // the `inactivity_leak_daa` trap this pair exists to escape.
+        match palw_heartbeat.as_mut() {
+            Some(heartbeat) => fork(&mut heartbeat.activation, visit),
+            None => {
+                absent = u64::MAX;
+                visit(&mut absent);
+            }
+        }
+        match palw_inactivity_leak.as_mut() {
+            Some(leak) => fork(&mut leak.activation, visit),
             None => {
                 absent = u64::MAX;
                 visit(&mut absent);
@@ -1414,6 +1540,8 @@ impl Params {
             palw_unavailable_abstains,
             palw_bond_maturity,
             palw_frontier_provenance,
+            palw_heartbeat,
+            palw_inactivity_leak,
             palw_consensus_mode,
             pow_blake2b_sha3_activation,
             pow_palw_activation,
@@ -1554,6 +1682,18 @@ impl Params {
         if let Some(activation) = palw_frontier_provenance {
             h.write(b"palw_frontier_provenance");
             h.write(activation.daa_score().to_le_bytes());
+        }
+        // ADR-0066 Decisions 1 and 4: Some-only, so every preset that leaves them unset
+        // fingerprints byte-identically to a build without the fields at all.
+        if let Some(heartbeat) = palw_heartbeat {
+            h.write(b"palw_heartbeat");
+            h.write(heartbeat.activation.daa_score().to_le_bytes());
+            h.write(heartbeat.work_log2.to_le_bytes());
+        }
+        if let Some(leak) = palw_inactivity_leak {
+            h.write(b"palw_inactivity_leak");
+            h.write(leak.activation.daa_score().to_le_bytes());
+            h.write(leak.t_leak_daa.to_le_bytes());
         }
         // ADR-0042 Decisions 1 + 11: the V2 mode decides block validity wholesale, so it is in
         // the fingerprint — through the RULESET ID, one hash for the whole atomic bundle, which
@@ -1831,6 +1971,8 @@ impl Params {
             palw_unavailable_abstains: self.palw_unavailable_abstains,
             palw_bond_maturity: self.palw_bond_maturity,
             palw_frontier_provenance: self.palw_frontier_provenance,
+            palw_heartbeat: self.palw_heartbeat,
+            palw_inactivity_leak: self.palw_inactivity_leak,
             palw_consensus_mode: self.palw_consensus_mode.clone(),
             // kaspa-pq PoW algo activation is consensus-fixed, never runtime-overridable.
             pow_blake2b_sha3_activation: self.pow_blake2b_sha3_activation,
@@ -2733,6 +2875,8 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_unavailable_abstains: None,
     palw_bond_maturity: None,
     palw_frontier_provenance: None,
+    palw_heartbeat: None,
+    palw_inactivity_leak: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: inert on mainnet until its own fork ADR schedules it.
@@ -2862,6 +3006,8 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_unavailable_abstains: None,
     palw_bond_maturity: None,
     palw_frontier_provenance: None,
+    palw_heartbeat: None,
+    palw_inactivity_leak: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: DISABLED on the public preset (2026-08-12). The Ollama flavor (algo_id = 5)
@@ -2973,6 +3119,8 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_unavailable_abstains: None,
     palw_bond_maturity: None,
     palw_frontier_provenance: None,
+    palw_heartbeat: None,
+    palw_inactivity_leak: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // PALW LLM PoW: simnet keeps instant local kHeavyHash (simulation/tests must not need a model).
@@ -6062,6 +6210,8 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_unavailable_abstains: None,
     palw_bond_maturity: None,
     palw_frontier_provenance: None,
+    palw_heartbeat: None,
+    palw_inactivity_leak: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // PALW LLM PoW from genesis: devnet IS the 0.1-bps LLM-PoW network on this branch. Every
@@ -6370,6 +6520,242 @@ mod consensus_params_id_tests {
             never_armed.consensus_identity_id(),
             "Some(never()) and None say the same thing about the rules and must hash the same"
         );
+    }
+
+    /// **ADR-0066 Decision 1's fence: the heartbeat lane, armable on a running network.**
+    ///
+    /// The lane used to be `PALW_HEARTBEAT_LANE_ENABLED`, a `const bool`. That is not a fence, it
+    /// is a rebuild — and worse, a rebuild that moved no fingerprint, so two builds from the same
+    /// tree disagreed about which blocks are valid while presenting identical identities to each
+    /// other at the handshake. A silent fork with no observable.
+    ///
+    /// Both halves are asserted: the fence behaves like every other fence in the identity, AND it
+    /// can actually be armed on the shipped V2 preset — which is the property `PALW_HEARTBEAT_LANE_ENABLED`
+    /// could never have, since the only way to turn it on was to ship a different binary.
+    #[test]
+    fn the_heartbeat_fence_is_armable_and_is_not_a_rebuild() {
+        let shipped = MAINNET_PARAMS;
+        assert!(shipped.palw_heartbeat.is_none(), "every shipped preset leaves the lane closed");
+        assert!(!shipped.palw_heartbeat_lane_open_at(0));
+
+        let armed = |activation: ForkActivation| {
+            let mut p = MAINNET_PARAMS;
+            p.palw_heartbeat = Some(PalwHeartbeatV1 { activation, work_log2: crate::pow_layer0::PALW_HEARTBEAT_WORK_LOG2 });
+            p
+        };
+        assert_eq!(
+            shipped.consensus_identity_id(),
+            armed(ForkActivation::new(9_000_000)).consensus_identity_id(),
+            "scheduled ahead: old and new builds stay peers, which is the whole reason it is a fence"
+        );
+        assert_ne!(
+            shipped.consensus_params_id(),
+            armed(ForkActivation::new(9_000_000)).consensus_params_id(),
+            "…and visible, which is the whole reason it is not a const"
+        );
+        assert_ne!(
+            shipped.consensus_identity_id(),
+            armed(ForkActivation::always()).consensus_identity_id(),
+            "in force on one side is a block-validity difference and must split the network"
+        );
+        assert_eq!(
+            shipped.consensus_identity_id(),
+            armed(ForkActivation::never()).consensus_identity_id(),
+            "Some(never()) is absence, or the collapse is gone"
+        );
+
+        // **The PRICE is in the fingerprint and not in the fence visitor** — the `inactivity_leak_daa`
+        // lesson applied ahead of time. Normalising it would make two builds arming different
+        // prices fingerprint identically at every height, and they would then disagree about
+        // whether a solved header is valid the moment the lane opened.
+        let mut cheap = armed(ForkActivation::new(9_000_000));
+        let Some(h) = cheap.palw_heartbeat.as_mut() else { unreachable!() };
+        h.work_log2 = crate::pow_layer0::PALW_HEARTBEAT_WORK_LOG2 + 1;
+        assert_ne!(
+            armed(ForkActivation::new(9_000_000)).consensus_params_id(),
+            cheap.consensus_params_id(),
+            "a different lane price is a different rule and must be in the fingerprint"
+        );
+
+        // **Armable on the preset that actually runs the lane**, at any height — no rebuild.
+        for height in [ForkActivation::always(), ForkActivation::new(1), ForkActivation::new(9_000_000)] {
+            let mut rc = palw_rc_shipped_params();
+            rc.palw_heartbeat = Some(PalwHeartbeatV1 { activation: height, work_log2: crate::pow_layer0::PALW_HEARTBEAT_WORK_LOG2 });
+            rc.validate_palw_v2().expect("the shipped V2 preset may open its clock lane by configuration");
+            assert!(rc.palw_heartbeat_lane_open_at(9_000_001));
+        }
+
+        // And a price this binary cannot compute is refused at boot rather than at block one:
+        // the fence names the number operators coordinate on, `StateLayer0` applies it, and two
+        // sources for one value is how a rule gets announced instead of enforced.
+        let mut wrong_price = palw_rc_shipped_params();
+        wrong_price.palw_heartbeat =
+            Some(PalwHeartbeatV1 { activation: ForkActivation::always(), work_log2: crate::pow_layer0::PALW_HEARTBEAT_WORK_LOG2 + 1 });
+        assert!(wrong_price.validate_palw_v2().is_err(), "a lane price the binary does not implement must not start");
+
+        // A hash network never opens the lane however the fence is set — there is no PALW clock to
+        // rescue there, and the mode half is folded into one predicate so no call site can forget it.
+        let mut hash_net = MAINNET_PARAMS;
+        hash_net.palw_heartbeat =
+            Some(PalwHeartbeatV1 { activation: ForkActivation::always(), work_log2: crate::pow_layer0::PALW_HEARTBEAT_WORK_LOG2 });
+        assert!(!hash_net.palw_heartbeat_lane_open_at(0), "the lane is a V2 rule");
+        assert!(hash_net.palw_heartbeat_lane_fence().is_none());
+    }
+
+    /// **ADR-0066 Decision 4's fence: the inactivity leak, off the constant that could not be armed.**
+    ///
+    /// `DnsParams.inactivity_leak_daa` is hashed into `consensus_params_id` as part of one raw
+    /// borsh blob, and `for_each_fence` deliberately does not descend into it. Individually right;
+    /// together they made moving that constant off `u64::MAX` an immediate identity change — the
+    /// first operator to deploy it was disconnected from every un-upgraded peer at the handshake.
+    /// For a mechanism whose purpose is to let finality self-heal after validator loss, "arm by
+    /// flag day" is the wrong shape: the moment you need it is the moment you cannot coordinate.
+    #[test]
+    fn the_inactivity_leak_fence_replaces_a_constant_that_could_only_be_armed_by_flag_day() {
+        // 1. The constant stays retired on every shipped preset — the thing that must not drift.
+        for (name, p) in
+            [("mainnet", MAINNET_PARAMS), ("testnet", TESTNET_PARAMS), ("simnet", SIMNET_PARAMS), ("devnet", DEVNET_PARAMS)]
+        {
+            if let Some(dns) = p.dns_params.as_ref() {
+                assert_eq!(
+                    dns.inactivity_leak_daa,
+                    u64::MAX,
+                    "{name}: the leak is armed by `palw_inactivity_leak`; giving this constant a live value is the \
+                     deploy-day partition ADR-0066 moved it away from"
+                );
+            }
+        }
+
+        // 2. The old path really did move the identity — stated as a measurement, because it is
+        //    the reason the fence exists and a comment alone would be a claim.
+        let mut old_way = MAINNET_PARAMS;
+        if let Some(dns) = old_way.dns_params.as_mut() {
+            dns.inactivity_leak_daa = 5_040;
+        }
+        assert_ne!(
+            MAINNET_PARAMS.consensus_identity_id(),
+            old_way.consensus_identity_id(),
+            "editing the constant splits the network at the handshake — that is what made it unarmable"
+        );
+
+        // 3. The fence does not, until it fires.
+        let armed = |activation: ForkActivation| {
+            let mut p = MAINNET_PARAMS;
+            p.palw_inactivity_leak = Some(PalwInactivityLeakV1 { activation, t_leak_daa: 5_040 });
+            p
+        };
+        assert_eq!(
+            MAINNET_PARAMS.consensus_identity_id(),
+            armed(ForkActivation::new(9_000_000)).consensus_identity_id(),
+            "scheduling the leak keeps old and new builds peers — a rolling deploy, which is the point"
+        );
+        assert_ne!(
+            MAINNET_PARAMS.consensus_params_id(),
+            armed(ForkActivation::new(9_000_000)).consensus_params_id(),
+            "…and is still a visible commitment"
+        );
+        assert_ne!(
+            MAINNET_PARAMS.consensus_identity_id(),
+            armed(ForkActivation::always()).consensus_identity_id(),
+            "in force on one side is a real rule difference"
+        );
+        assert_eq!(MAINNET_PARAMS.consensus_identity_id(), armed(ForkActivation::never()).consensus_identity_id());
+
+        // 4. The DURATION is in the fingerprint and out of the fence visitor — D1's rule, and the
+        //    hazard that comes with it: two operators arming at one height with different graces
+        //    share an identity and leak different validators. Coordinated change, warned by the
+        //    params-id line in `flow_context`.
+        let mut longer = armed(ForkActivation::new(9_000_000));
+        let Some(l) = longer.palw_inactivity_leak.as_mut() else { unreachable!() };
+        l.t_leak_daa = 10_080;
+        assert_ne!(armed(ForkActivation::new(9_000_000)).consensus_params_id(), longer.consensus_params_id());
+        assert_eq!(
+            armed(ForkActivation::new(9_000_000)).consensus_identity_id(),
+            longer.consensus_identity_id(),
+            "…and the identity does NOT separate them while it is only scheduled — the standing rule for a \
+             value inert until its fence fires, recorded here because it is a live deployment hazard"
+        );
+
+        // 5. Armable on every shipped preset, at any height.
+        for (name, base) in
+            [("mainnet", MAINNET_PARAMS), ("testnet", TESTNET_PARAMS), ("simnet", SIMNET_PARAMS), ("devnet", DEVNET_PARAMS)]
+        {
+            for height in [ForkActivation::always(), ForkActivation::new(9_000_000)] {
+                let mut p = base.clone();
+                p.palw_inactivity_leak = Some(PalwInactivityLeakV1 { activation: height, t_leak_daa: 5_040 });
+                p.validate_palw_v2().unwrap_or_else(|e| panic!("{name}: the leak must be armable: {e}"));
+            }
+        }
+    }
+
+    /// **ADR-0065 D2's fence — the comparison-site rule — in the same four positions, plus the
+    /// one property the other two fences do not have to prove: it can be armed unconditionally.**
+    ///
+    /// D1 carries a precondition (`palw_bond_maturity` needs a registry with a spare seat) and is
+    /// therefore refusable at boot. D2 has none: it changes which SITE two branches are compared
+    /// at — the fork point rather than each branch's own tip — and that is a pure rule change with
+    /// no registry, no duration and no quantity behind it. So "armable" here means exactly that
+    /// `validate_palw_v2` accepts it on every shipped preset, at any height, which is worth
+    /// asserting precisely because there is no guard that could refuse it: a fence with no
+    /// precondition is one whose only failure mode is being wired wrong, and this is the wiring.
+    #[test]
+    fn the_frontier_provenance_fence_separates_networks_only_when_it_is_in_force() {
+        let shipped = MAINNET_PARAMS;
+        assert!(shipped.palw_frontier_provenance.is_none(), "every shipped preset must leave ADR-0065 D2 dormant");
+
+        let mut scheduled = MAINNET_PARAMS;
+        scheduled.palw_frontier_provenance = Some(ForkActivation::new(9_000_000));
+        assert_eq!(
+            shipped.consensus_identity_id(),
+            scheduled.consensus_identity_id(),
+            "scheduling D2 ahead must keep old and new builds peers — it is a reorg rule and it has to reach a \
+             running network by rolling deploy"
+        );
+        assert_ne!(
+            shipped.consensus_params_id(),
+            scheduled.consensus_params_id(),
+            "…and still be visible in the fingerprint, or two builds compare branches at different sites in silence"
+        );
+
+        let mut at_genesis = MAINNET_PARAMS;
+        at_genesis.palw_frontier_provenance = Some(ForkActivation::always());
+        assert_ne!(
+            shipped.consensus_identity_id(),
+            at_genesis.consensus_identity_id(),
+            "in force from block 1 on one side is a rule difference — the two disagree about which minted seats \
+             a candidate branch may count"
+        );
+
+        let mut never_armed = MAINNET_PARAMS;
+        never_armed.palw_frontier_provenance = Some(ForkActivation::never());
+        assert_eq!(
+            shipped.consensus_identity_id(),
+            never_armed.consensus_identity_id(),
+            "Some(never()) is absence, or the collapse is gone"
+        );
+
+        // Independent of the fences beside it — arming one must never read as arming another.
+        let mut d2_and_d4 = MAINNET_PARAMS;
+        d2_and_d4.palw_frontier_provenance = Some(ForkActivation::always());
+        d2_and_d4.palw_unavailable_abstains = Some(ForkActivation::always());
+        assert_ne!(d2_and_d4.consensus_identity_id(), at_genesis.consensus_identity_id(), "two fences, two identities");
+
+        // **Armable on every shipped preset, at any height, with no precondition to satisfy.**
+        // This is the half the D1 work showed can be missing while everything else looks right:
+        // a rule can be wired, fingerprinted and enforced and still be one no shipped network can
+        // turn on. For D2 there is nothing to satisfy, and that is the assertion.
+        for (name, base) in
+            [("mainnet", MAINNET_PARAMS), ("testnet", TESTNET_PARAMS), ("simnet", SIMNET_PARAMS), ("devnet", DEVNET_PARAMS)]
+        {
+            for height in [ForkActivation::always(), ForkActivation::new(1), ForkActivation::new(9_000_000)] {
+                let mut armed = base.clone();
+                armed.palw_frontier_provenance = Some(height);
+                armed.validate_palw_v2().unwrap_or_else(|e| panic!("{name}: D2 must be armable at any height: {e}"));
+            }
+        }
+        let mut armed_rc = palw_rc_shipped_params();
+        armed_rc.palw_frontier_provenance = Some(ForkActivation::always());
+        armed_rc.validate_palw_v2().expect("and on the V2 preset that actually runs the rule");
     }
 
     /// **ADR-0065 D4's fence, in the same four positions.**
@@ -7488,10 +7874,17 @@ mod consensus_params_id_tests {
         // The clock lane follows its switch. While it is OFF a zero-seat network is a valid
         // GENESIS that cannot make its first block — the bootstrap half of ADR-0061 waits on the
         // heartbeat redesign, and saying so here keeps the two facts from being confused.
-        assert_eq!(
-            bundle.accepts_algo_id(crate::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID),
-            crate::palw_heartbeat_v1::PALW_HEARTBEAT_LANE_ENABLED
-        );
+        // The clock lane is not a BUNDLE lane at all since ADR-0066 — it is `palw_heartbeat`, a
+        // top-level fence, so a zero-seat network's bootstrap depends on arming that fence rather
+        // than on rebuilding with a different constant. While the fence is unset, a zero-seat
+        // network is a valid GENESIS that cannot make its first block; saying so here keeps the
+        // two facts from being confused.
+        assert!(!bundle.accepts_algo_id(crate::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID));
+        assert!(!zero_seat.palw_heartbeat_lane_open_at(0), "and the fence ships unset");
+        let mut clocked = zero_seat.clone();
+        clocked.palw_heartbeat =
+            Some(PalwHeartbeatV1 { activation: ForkActivation::always(), work_log2: crate::pow_layer0::PALW_HEARTBEAT_WORK_LOG2 });
+        assert!(clocked.palw_heartbeat_lane_open_at(0), "arming the fence opens it, with no rebuild");
         // Only an unset artifact root drops the bundle, because only that is unmintable by code.
         assert_ne!(PALW_RC_GENESIS_ARTIFACT_ROOT, crate::Hash64::from_bytes([0u8; 64]));
     }

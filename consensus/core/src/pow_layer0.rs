@@ -242,9 +242,37 @@ pub const POW_ALGO_ID_PALW_RECEIPT_V3: u8 = 7;
 /// derived from the candidate's own chain — so it can only run on a chain candidate and cannot gate
 /// DAG entry at all. A merged-but-never-candidate receipt block never faces it, which is why the
 /// answer here may not be "the ticket handles it".
+///
+/// **The heartbeat lane is deliberately NOT here, and the distinction is load-bearing.** It answers
+/// no to one of the two purchases and yes to the other, so it needs its own predicate — see
+/// [`algo_id_derives_no_block_level`].
 #[inline]
 pub fn algo_id_carries_no_chain_position(algo_id: u8) -> bool {
     algo_id == POW_ALGO_ID_PALW_RECEIPT_V3
+}
+
+/// **Block LEVEL only** — the pruning-proof hierarchy, without the fork-choice half.
+///
+/// [`algo_id_carries_no_chain_position`] answers both questions at once because for the receipt
+/// lane both answers are the same. For the heartbeat lane they are NOT, and reading one predicate
+/// for both is a bug I made and this comment exists to stop:
+///
+/// * **Level: zero.** A heartbeat's target is a network constant, so its digest is not priced by
+///   anything that scales — a lucky solve lands far under a FIXED target as often as under a hard
+///   one, and `calc_level_from_pow_512` would read that luck as hierarchy. A lane meant to keep a
+///   stopped chain ticking must not also buy pruning-proof structure at 2²⁴ hashes a go.
+/// * **Blue work: ε, not zero.** Zero is right for the receipt lane because all chain weight comes
+///   from the attempt lane. It is WRONG here: the regime this lane exists for is total bonded
+///   collapse, where every block is a heartbeat, and with zero work every such branch ties at the
+///   selected parent's weight and nothing orders them. `ε × n` orders the longer chain first,
+///   which is the whole of ADR-0060 Decision 1.2.
+///
+/// Folding the heartbeat into the shared predicate makes the ghostdag arm return 0 before the ε
+/// arm is ever reached — the two arms are in that order — so the lane silently stops weighing
+/// anything and a collapsed chain cannot pick a tip.
+#[inline]
+pub fn algo_id_derives_no_block_level(algo_id: u8) -> bool {
+    algo_id_carries_no_chain_position(algo_id) || algo_id == POW_ALGO_ID_HEARTBEAT_V1
 }
 
 /// Output width of the `algo_id = 5` tag:
@@ -360,6 +388,37 @@ pub const POW_L1_PALW_OLLAMA_MODEL_SIZE_V1: u64 = 3_775_709_366;
 /// the two-dimensional (PoW × stake) DNS finality overlay (ADR-0009) rather than PoW egalitarianism.
 /// The Layer-0 BLAKE2b-512 finalizer is unchanged; only the Layer-1 tag differs.
 pub const POW_ALGO_ID_BLAKE2B_SHA3: u8 = 3;
+
+/// **ADR-0066 Decision 1: the heartbeat lane's own algorithm id.**
+///
+/// The lane used to share `POW_ALGO_ID_BLAKE2B_SHA3` (3) and be told apart by a triple gate —
+/// `id == 3 && ConsensusV2 && PALW_HEARTBEAT_LANE_ENABLED`. Three things had to agree for a rule to
+/// apply, so a rule could be reached by two of them and missed by the third. Its own id collapses
+/// all three into one observable, and buys two more properties outright:
+///
+/// * a solved algo-3 header from a HASH network can never be replayed as a heartbeat, because the
+///   Layer-0 digest binds `pow_algo_id`; and
+/// * the id becomes the fence's own observable — `Params::palw_heartbeat` decides whether this id
+///   is accepted at all, so "is the lane open" is a params question rather than a `const bool` a
+///   rebuild could change without moving any fingerprint.
+///
+/// **Its Layer-1 tag is algo-3's**, deliberately: the lane is a self-verifying hash lane and wants
+/// exactly that tag. Only the id and the target differ, and the id is inside the digest, so the two
+/// lanes cannot borrow each other's solutions.
+pub const POW_ALGO_ID_HEARTBEAT_V1: u8 = 8;
+
+/// **The heartbeat lane's price, as a work exponent — a network CONSTANT, never `header.bits`.**
+///
+/// This is the whole of ADR-0066 Decision 1. The first implementation retargeted the lane inside
+/// `header.bits`, which is the field the global difficulty window averages: a window of heartbeat
+/// rows demanded work 33,554,432, no bonded block could re-enter it, and the chain became
+/// heartbeat-only and recoverable only by re-mint. A fixed target cannot feed back on itself.
+///
+/// 2²⁴ hash evaluations is a couple of seconds of one CPU: a legitimate miner pays it once per
+/// interval, a sibling-flooder pays it per block. `Params::palw_heartbeat`'s `work_log2` must equal
+/// this or `validate_palw_v2` refuses to start — the fence declares the price it believes it is
+/// arming, and a binary that cannot compute that price says so at boot rather than at block one.
+pub const PALW_HEARTBEAT_WORK_LOG2: u32 = 24;
 
 /// Output width of the algo_id = 3 Layer-1 tag: BLAKE2b-512 (64) ∥ SHA3-512 (64) = 128 bytes. Within
 /// [`POW_L1_TAG_MAX_BYTES`] (256), so the Layer-0 finalizer accepts it.
@@ -742,6 +801,11 @@ pub fn check_algo_id_known(algo_id: u8) -> Result<(), PowLayer0Error> {
         // needs the distinction — a proof header whose tag we cannot derive must be refused, and
         // one whose tag we CAN derive must not be.
         || algo_id == POW_ALGO_ID_PALW_RECEIPT_V3
+        // ADR-0066 Decision 1: the heartbeat lane. Known unconditionally — "this binary can derive
+        // the tag" is a statement about the binary, not about whether any network accepts the id.
+        // Whether a header carrying it is VALID is `Params::palw_heartbeat`'s question, asked in
+        // `check_pow_algo_id`; conflating the two is what the triple gate did.
+        || algo_id == POW_ALGO_ID_HEARTBEAT_V1
     {
         Ok(())
     } else {
@@ -1151,7 +1215,8 @@ mod tests {
 
     /// `check_algo_id_known` (pruning-proof path) accepts every algo this binary can FINALIZE —
     /// kHeavyHash (1), the superseded Argon2id (2), BLAKE2b-SHA3 (3), PALW LLM (4), PALW-Ollama
-    /// (5) and the committed-V2 id (6) — and rejects the rest.
+    /// (5), the committed-V2 id (6), the receipt id (7) and the heartbeat id (8) — and rejects the
+    /// rest.
     #[test]
     fn check_algo_id_known_accepts_all_verifiable_algos() {
         for ok in [
@@ -1164,10 +1229,16 @@ mod tests {
             // 7 joined when its finalizer arm landed (ADR-0044 Unit B): this set means "this
             // binary can derive the tag", and it now can.
             POW_ALGO_ID_PALW_RECEIPT_V3,
+            // 8 joined with ADR-0066 Decision 1's heartbeat lane. Its tag arm is algo-3's, shared
+            // rather than copied, so "this binary can derive the tag" was true the moment the id
+            // existed — and it is listed in the same commit that added the arm, which is the rule
+            // the algo-6 delisting below established. Note that KNOWN is not ACCEPTED: whether a
+            // network admits an algo-8 header is `Params::palw_heartbeat`'s question, one level up.
+            POW_ALGO_ID_HEARTBEAT_V1,
         ] {
             assert!(check_algo_id_known(ok).is_ok(), "algo_id {ok} must be known");
         }
-        for bad in [0u8, 8, 9, 0xff] {
+        for bad in [0u8, 9, 10, 0xff] {
             assert_eq!(check_algo_id_known(bad), Err(PowLayer0Error::UnknownAlgoId(bad)));
         }
 
@@ -1601,18 +1672,19 @@ mod two_lane_gate_tests {
         let mode = PalwConsensusMode::ConsensusV2(bundle.clone());
         let required = mode.required_algo_id();
 
-        // The two bonded PALW lanes, always — plus the bondless heartbeat when its switch is on
-        // (`PALW_HEARTBEAT_LANE_ENABLED`; OFF since the 2026-08-30 audit, so this asserts the
-        // two-lane acceptance the network had before ADR-0060).
+        // The two bonded PALW lanes, always. The heartbeat is NOT one of them since ADR-0066: it
+        // has its own id (8) and its own top-level fence, and the bundle deliberately cannot see
+        // that fence — `Params::palw_heartbeat_lane_open_at` is the one place that decides.
         for id in [POW_ALGO_ID_PALW_COMMITTED_V2, POW_ALGO_ID_PALW_RECEIPT_V3] {
             check_algo_id_for_mode_accepting(id, required, mode.accepts_algo_id(id), false, false, false)
                 .unwrap_or_else(|e| panic!("a V2 network must accept its own lane {id}: {e:?}"));
         }
         assert_eq!(
-            mode.accepts_algo_id(POW_ALGO_ID_BLAKE2B_SHA3),
-            Some(crate::palw_heartbeat_v1::PALW_HEARTBEAT_LANE_ENABLED),
-            "the heartbeat lane is admitted exactly when its switch says so"
+            mode.accepts_algo_id(POW_ALGO_ID_HEARTBEAT_V1),
+            Some(false),
+            "the bundle never admits the heartbeat id — the fence does, one level up"
         );
+        assert_eq!(mode.accepts_algo_id(POW_ALGO_ID_BLAKE2B_SHA3), Some(false), "and the hash lane is not this network's");
         // The pre-V2 inference lanes and the Phase-1/2 algos are not this network's.
         for id in [POW_ALGO_ID_KHEAVYHASH, POW_ALGO_ID_ARGON2ID, POW_ALGO_ID_PALW_LLM, POW_ALGO_ID_PALW_OLLAMA] {
             assert!(

@@ -119,8 +119,9 @@ impl ConsensusServices {
             relations_service.clone(),
             storage.headers_store.clone(),
             reachability_service.clone(),
-            // ADR-0060: heartbeat blocks weigh ε exactly where the mode is ConsensusV2.
-            matches!(params.palw_consensus_mode, kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)),
+            // ADR-0060 as ADR-0066 fenced it: heartbeat blocks weigh ε exactly where the lane is
+            // open, which is a `ConsensusV2` network whose `palw_heartbeat` fence is in force.
+            params.palw_heartbeat_lane_fence(),
         );
 
         let coinbase_manager = CoinbaseManager::new(
@@ -194,6 +195,7 @@ impl ConsensusServices {
             params.pow_palw_ollama_activation,
             params.palw_consensus_mode.required_algo_id(),
             params.palw_consensus_mode.clone(),
+            params.palw_heartbeat_lane_fence(),
             is_consensus_exiting,
         ));
 

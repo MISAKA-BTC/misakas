@@ -1,9 +1,10 @@
 # ADR-0066 — The heartbeat lane out of `header.bits`, and the inactivity leak out of node memory
 
-Status: **Proposed** (2026-08-30). Supersedes the *implementation* of ADR-0060 Decisions 1–2 and
-Decision 4; the doctrine those decisions state is unaffected. Both features ship OFF today
-(`PALW_HEARTBEAT_LANE_ENABLED = false`, `inactivity_leak_daa = u64::MAX` on every preset), withdrawn
-by the 2026-08-30 audit. This is the redesign that withdrawal asked for.
+Status: **Decisions 1, 2 and 4's fence LANDED (2026-08-31), both dormant. Decision 3 and Decision
+4's committed table remain PROPOSED.** Supersedes the *implementation* of ADR-0060 Decisions 1–2
+and Decision 4; the doctrine those decisions state is unaffected. Both features still ship OFF —
+but they ship off behind **fences that can be armed**, which is the difference this ADR was written
+to make. See "What landed" at the foot of this document for exactly what is and is not in the tree.
 
 **Neither part is a re-mint. Both must be activations, and both must be fenced at TOP LEVEL.**
 
@@ -142,3 +143,89 @@ the failure that produced them.
 * The heartbeat lane remains the only known answer to trustless recovery from a total producer
   stop — ADR-0064's correction establishes that its own remedy does not close that, so this ADR is
   on the critical path for a property the chain currently does not have.
+
+
+## What landed, 2026-08-31 — and what did not
+
+**Landed. Decisions 1 and 2, in full, plus a fence for Decision 4.**
+
+*The lane's price left `header.bits`.* `POW_ALGO_ID_HEARTBEAT_V1 = 8` exists, `check_algo_id_known`
+admits it, and `StateLayer0::new` substitutes `Uint512::MAX >> PALW_HEARTBEAT_WORK_LOG2` for the
+target on that id. A heartbeat header carries the GLOBAL expected bits like every other lane's, so
+heartbeat rows enter the difficulty window as ordinary rows. F1 and F3b are gone as arithmetic. The
+substitution is in the one place every PoW path shares — ordinary validation, the pruning proof,
+trusted import — so no caller can price the lane by forgetting to. The tag arm is algo-3's, shared
+rather than copied, and the two lanes cannot borrow each other's solutions because the Layer-0
+digest binds `pow_algo_id`.
+
+*The evidence walk is deleted.* `consensus/src/processes/heartbeat_evidence.rs` is gone, both call
+sites with it. `check_heartbeat_slot` now takes `(selected_parent_timestamp, selected_parent_algo_id,
+header_timestamp)` — one header the caller already holds. F4, the `--archival` partition, cannot
+recur because there is nothing left to walk.
+
+*The ramp has two steps, not three.* The middle step asked "how long has the bonded lane been
+silent", which is ancestor evidence — F4 in one question. One block deep distinguishes exactly two
+states and they are the two that matter: the chain is producing (nominal hour) or it is not
+(recovery cadence).
+
+*Both features became fences.* `Params::palw_heartbeat: Option<PalwHeartbeatV1 { activation,
+work_log2 }>` replaces the `const bool`; `Params::palw_inactivity_leak: Option<PalwInactivityLeakV1
+{ activation, t_leak_daa }>` replaces `DnsParams.inactivity_leak_daa`, which is now retired at
+`u64::MAX` permanently and pinned there by a test. Both are wired at all seven identity sites and
+are `None` on every preset, so **no shipped fingerprint moved**.
+
+*One defect found while landing it, recorded because the shape recurs.* `algo_id_carries_no_chain_position`
+answers two questions at once — block LEVEL and blue WORK — because for the receipt lane both
+answers are the same. For the heartbeat they are NOT: level must be zero (a constant target makes a
+lucky solve indistinguishable from a hard one, so `calc_level_from_pow_512` would read luck as
+hierarchy) but blue work must be ε, not zero (the regime the lane exists for is total collapse,
+where every block is a heartbeat and zero-work branches all tie). Folding the heartbeat into the
+shared predicate made the ghostdag zero-arm return before the ε-arm was reached, so the lane weighed
+nothing and a collapsed chain could not order its own branches. Split into
+`algo_id_derives_no_block_level`, and pinned by a test that asserts the two predicates DISAGREE for
+this id.
+
+*The integration test runs now.* `palw_heartbeat_blocks_tick_the_clock_and_weigh_epsilon` used to
+`return` early because the lane was a `const bool` set to false — a test that could only be run by
+rebuilding the binary, which was also the only way to run the feature. It arms the fence and
+executes: the adapter, the ε credit, both slot intervals, the fee-only coinbase, and the assertion
+that carries this ADR — **the heartbeat's `bits` equal the bits the ordinary template already had**.
+
+**Not landed, and not started.**
+
+*Decision 3 (ε against a V2 block's work).* Unchanged and still correct: on a V2 preset
+`calc_work(0x207fffff) = 2`, so a heartbeat is worth half a bonded block and `ghostdag_k = 1` makes
+that parity. The fix moves `header.blue_work` on every V2 block and needs its own soak, its own
+golden vectors and a re-derivation of the pruning proof's level argument. Deliberately staged.
+
+*Decision 4's committed per-validator table.* The FENCE landed; the TABLE did not. And one
+correction to this ADR's own text, made after reading the code rather than the design: it says the
+per-validator state "lives in node memory (`last_attestation_daa_by_validator`), which cannot be
+right: a value that decides block validity and is not committed is a value two nodes can disagree
+about with no way to notice." The premise is wrong. The table is built by
+`last_attestation_daa_by_validator(&contributions, &epoch_anchor_daa)` from the contributions
+`collect_stake_contributions_v2` gathers on a walk from the tip, bounded by
+`dns_params.stake_score_window_blue_score` — a CONSENSUS parameter, identical on every node. So it
+is already a pure function of (tip, params), reorg-safe by the same argument `recompute_epoch_tallies`
+uses, and two nodes holding the same tip compute the same table. The "node memory" this ADR feared
+is not there.
+
+What IS still worth committing is narrower, and it is the half this ADR got right: a node that
+starts from a pruning point has no window to walk. `PruningPointOverlaySnapshot` is how the other
+overlay components cross that boundary, and the leak table has no equivalent — so a pruned-IBD node
+cannot reconstruct it, and if the leak were armed it would judge liveness from an empty table.
+Closing that still needs the fourth snapshot component, the capture-time filter for validators with
+no surviving bond, and the pruned-IBD import tests; it no longer needs the apply/revert pair this
+ADR budgeted for, because there is no incremental state to revert. Because the leak ships dormant,
+nothing depends on it today.
+
+*F3a (sibling width).* Still open, as this ADR recorded. The slot rule bounds the chain, not the
+DAG. What bounds width is the price, which is now a fixed 2²⁴ per block rather than a floor a
+retarget could never leave — better, but not a bound.
+
+**The standing warning is unchanged and now enforceable rather than advisory.** Arming either fence
+is a coordinated change: `work_log2` and `t_leak_daa` reach `consensus_params_id` but not the fence
+visitor, so two operators scheduling one height with different values share an identity, peer, and
+disagree the moment the fence fires. For the heartbeat price there is a second lock — the binary
+refuses to start if the fence names a `work_log2` it does not implement — because that value has a
+second source in `StateLayer0`. `t_leak_daa` has no second source and therefore no such lock.

@@ -100,12 +100,16 @@ impl HeaderProcessor {
         let palw_ollama_active = self.pow_palw_ollama_activation.is_active(header.daa_score);
         let palw_active = self.pow_palw_activation.is_active(header.daa_score);
         let blake2b_sha3_active = self.pow_blake2b_sha3_activation.is_active(header.daa_score);
+        let heartbeat_open = header.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID
+            && self.palw_heartbeat_lane.is_some_and(|fence| fence.is_active(header.daa_score));
         // Accepts, not demands: a V2 network admits its receipt lane as well as its attempt
         // lane, and asking only for the demanded id refused every block on the first one.
         kaspa_consensus_core::pow_layer0::check_algo_id_for_mode_accepting(
             header.pow_algo_id,
             self.palw_required_algo_id,
-            self.palw_consensus_mode.accepts_algo_id(header.pow_algo_id),
+            // ADR-0066: the bundle answers for its own two lanes; the heartbeat is a TOP-LEVEL
+            // fence, so it is ORed in here rather than inside a bundle that cannot see it.
+            self.palw_consensus_mode.accepts_algo_id(header.pow_algo_id).map(|a| a || heartbeat_open),
             palw_ollama_active,
             palw_active,
             blake2b_sha3_active,
@@ -125,10 +129,7 @@ impl HeaderProcessor {
         // hash-INVISIBLE, so a non-zero value there is block-hash malleability (two serialized
         // headers, one identity) and is refused at the door. This also closes the pre-ADR-0060
         // gap: nothing previously refused a stuffed root on an algo-1..5 header at all.
-        let root_committing_lane = kaspa_consensus_core::pow_layer0::is_palw_v2_algo_id(header.pow_algo_id)
-            || (kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_LANE_ENABLED
-                && header.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID
-                && matches!(self.palw_consensus_mode, kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)));
+        let root_committing_lane = kaspa_consensus_core::pow_layer0::is_palw_v2_algo_id(header.pow_algo_id) || heartbeat_open;
         if !root_committing_lane && header.palw_state_root != kaspa_hashes::ZERO_HASH64 {
             return Err(RuleError::UncommittedPalwStateRoot(header.pow_algo_id));
         }

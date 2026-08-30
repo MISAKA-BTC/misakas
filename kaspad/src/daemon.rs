@@ -1341,12 +1341,25 @@ Do you confirm? (y/n)";
         None
     };
 
-    // ADR-0060 Decision 1: the bondless heartbeat miner — the lane that keeps the chain's clock
-    // (and every PALW timeout sweep) alive when every bonded lane is silent. Gated on the network
-    // actually carrying a ConsensusV2 lane, like the producer: on a hash-only chain algo-3 is the
-    // REQUIRED lane already and this service would just be a worse pq-miner.
-    let palw_heartbeat_miner_service = match (&args.palw_heartbeat_miner_address, &config.params.palw_consensus_mode) {
-        (Some(pay_address), kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)) => {
+    // ADR-0060 Decision 1, fenced by ADR-0066: the bondless heartbeat miner — the lane that keeps
+    // the chain's clock (and every PALW timeout sweep) alive when every bonded lane is silent.
+    //
+    // **Gated on the FENCE, not just on the mode.** `palw_heartbeat_lane_fence()` folds in the
+    // ConsensusV2 condition (on a hash-only chain there is no PALW clock to rescue), and adds the
+    // one the mode alone cannot express: whether this network admits algo-8 at all. Without it an
+    // operator who passes the flag on a V2 network with the lane closed gets a miner that grinds,
+    // submits, and has every block refused as `UnknownPowAlgoId` — work burned against a rule the
+    // node itself could have read at startup.
+    let heartbeat_fence = config.params.palw_heartbeat_lane_fence();
+    let palw_heartbeat_miner_service = match (&args.palw_heartbeat_miner_address, heartbeat_fence) {
+        (Some(pay_address), Some(fence)) => {
+            if !fence.is_active(0) {
+                info!(
+                    "the heartbeat lane is scheduled but not yet in force on {}; the miner starts and its blocks are \
+                     refused until the fence fires",
+                    config.params.net
+                );
+            }
             Some(Arc::new(crate::palw_heartbeat_miner::PalwHeartbeatMinerService::new(
                 crate::palw_heartbeat_miner::PalwHeartbeatMinerConfig {
                     pay_address: pay_address.clone(),
@@ -1359,9 +1372,11 @@ Do you confirm? (y/n)";
                 flow_context.clone(),
             )))
         }
-        (Some(_), _) => {
+        (Some(_), None) => {
             warn!(
-                "--palw-heartbeat-miner-address was given but {} declares no ConsensusV2 ruleset — the heartbeat lane does not exist there, miner not started",
+                "--palw-heartbeat-miner-address was given but the heartbeat lane is not open on {}: either the network \
+                 declares no ConsensusV2 ruleset, or `palw_heartbeat` is unset. The lane does not exist there, so the \
+                 miner is not started rather than mining blocks every peer would reject",
                 config.params.net
             );
             None

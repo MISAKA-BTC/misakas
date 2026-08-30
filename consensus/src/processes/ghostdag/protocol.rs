@@ -43,7 +43,8 @@ pub struct GhostdagManager<T: GhostdagStoreReader, S: RelationsStoreReader, U: R
     /// is the fixed ε — at EVERY level, unmaxed with `level_work`, or an ASIC pointed at the
     /// lane would buy pruning-proof weight instead of chain weight. False on every non-V2
     /// network, where algo-3 is the real production lane and its bits are the real price.
-    heartbeat_epsilon_work: bool,
+    /// ADR-0066: the heartbeat lane's fence, mode folded in (`Params::palw_heartbeat_lane_fence`).
+    heartbeat_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
 }
 
 impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V: HeaderStoreReader> GhostdagManager<T, S, U, V> {
@@ -55,7 +56,7 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
         headers_store: Arc<V>,
         reachability_service: U,
         // ADR-0060: true exactly on `ConsensusV2` networks — heartbeat blocks then weigh ε.
-        heartbeat_epsilon_work: bool,
+        heartbeat_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
     ) -> Self {
         // For ordinary GD, always keep level_work=0 so the lower bound is ineffective
         Self {
@@ -66,7 +67,7 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
             reachability_service,
             headers_store,
             level_work: 0.into(),
-            heartbeat_epsilon_work,
+            heartbeat_lane,
         }
     }
 
@@ -79,8 +80,8 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
         reachability_service: U,
         level: BlockLevel,
         max_block_level: BlockLevel,
-        // ADR-0060: the ε rule holds at every level — see `heartbeat_epsilon_work` on the struct.
-        heartbeat_epsilon_work: bool,
+        // ADR-0060: the ε rule holds at every level — see `heartbeat_lane` on the struct.
+        heartbeat_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
     ) -> Self {
         Self {
             genesis_hash,
@@ -90,7 +91,7 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
             reachability_service,
             headers_store,
             level_work: level_work(level, max_block_level),
-            heartbeat_epsilon_work,
+            heartbeat_lane,
         }
     }
 
@@ -205,9 +206,8 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
                 // One, not zero (the receipt lane's figure above): among heartbeat-only branches —
                 // total bonded collapse, the regime the lane exists for — ε × n still orders the
                 // longer chain first.
-                if kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_LANE_ENABLED
-                    && self.heartbeat_epsilon_work
-                    && header.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID
+                if header.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID
+                    && self.heartbeat_lane.is_some_and(|fence| fence.is_active(header.daa_score))
                 {
                     return BlueWorkType::from(kaspa_consensus_core::palw_heartbeat_v1::HEARTBEAT_BLUE_WORK_EPSILON);
                 }

@@ -374,16 +374,12 @@ async fn palw_heartbeat_blocks_tick_the_clock_and_weigh_epsilon() {
     use kaspa_consensus_core::palw_heartbeat_v1 as hb;
     use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
 
-    // **The lane ships OFF** (`PALW_HEARTBEAT_LANE_ENABLED`, audit 2026-08-30 — four structural
-    // findings, listed on the constant). This test is the redesign's starting point: it proves the
-    // mechanism end-to-end and must go green again the day the switch flips, so it stays in the
-    // tree and skips rather than being deleted. Skipping is stated out loud; a silently-passing
-    // test for a disabled feature is how a feature comes back wrong.
-    if !hb::PALW_HEARTBEAT_LANE_ENABLED {
-        kaspa_core::info!("SKIPPED: the heartbeat lane is disabled (PALW_HEARTBEAT_LANE_ENABLED = false)");
-        return;
-    }
-
+    // **The lane RUNS here, because ADR-0066 gave it a fence that can be armed.**
+    //
+    // This test used to skip: the lane was a `const bool` set to false, so the only way to run it
+    // was to rebuild the binary — which is also the only way an operator could have turned the
+    // lane on, and that was the defect. Arming `Params::palw_heartbeat` is a config change, so
+    // the test arms it, and the thing under test is the thing an operator would deploy.
     kaspa_core::log::try_init_logger("info");
     let catalog = palw_v2_test_catalog();
     let config = ConfigBuilder::new(MAINNET_PARAMS)
@@ -391,31 +387,47 @@ async fn palw_heartbeat_blocks_tick_the_clock_and_weigh_epsilon() {
         .edit_consensus_params(|p| {
             p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
             p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(palw_v2_test_bundle(&catalog));
+            p.palw_heartbeat = Some(kaspa_consensus_core::config::params::PalwHeartbeatV1 {
+                activation: kaspa_consensus_core::config::params::ForkActivation::always(),
+                work_log2: kaspa_consensus_core::pow_layer0::PALW_HEARTBEAT_WORK_LOG2,
+            });
         })
         .build();
     config.params.validate_palw_v2().expect("the fixture bundle is a runnable ruleset");
+    assert!(config.params.palw_heartbeat_lane_open_at(0), "the fence is armed, so the lane is open");
     let mut ctx = TestContext::new(TestConsensus::new(&config));
 
-    // Two bonded (algo-6) blocks so the window holds real bonded production.
+    // Two bonded (algo-6) blocks so the chain has real bonded production behind it.
     for _ in 0..2 {
         ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
     }
 
-    // 1) Adapt an ordinary template into the lane. An empty lane has a free slot and starts at
-    //    the spam floor; the carriage is emptied and the declared subsidy is zero.
+    // 1) Adapt an ordinary template into the lane. The carriage is emptied, the declared subsidy
+    //    is zero — and the `bits` are the ones the template already had.
     ctx.simulated_time += 120_000;
     let template = ctx.build_block_template(7, ctx.simulated_time);
+    let global_bits = template.block.header.bits;
     let (hb_template, earliest) =
         ctx.consensus.virtual_processor().heartbeat_adapt_block_template(template).expect("the lane adapts a template");
     let hb_header = hb_template.block.header.clone();
     assert_eq!(hb_header.pow_algo_id, hb::PALW_HEARTBEAT_ALGO_ID);
     assert!(hb_header.palw_commitment.is_empty(), "a heartbeat carries no attempt — that is the lane");
+
+    // **ADR-0066 Decision 1, as an assertion: the lane's price is NOT in `header.bits`.**
+    //
+    // This is the fix for the finding that withdrew the first implementation. The old adapter
+    // overwrote `bits` with the lane's own 2²⁴-hard retarget, and those rows then sat in the
+    // GLOBAL difficulty window — a window that filled with them demanded work 33,554,432, no
+    // bonded block could re-enter it, and the chain was heartbeat-only for good. A heartbeat now
+    // carries the same `bits` any other block at this position carries, so it is an ordinary
+    // difficulty row and the average has nothing to run away from.
     assert_eq!(
-        hb_header.bits,
-        hb::heartbeat_easiest_target().compact_target_bits(),
-        "no heartbeat in the window: the lane starts at the spam floor"
+        hb_header.bits, global_bits,
+        "a heartbeat header carries the GLOBAL expected bits — the lane's own price lives in \
+         StateLayer0, where nothing averages it"
     );
-    assert!(earliest <= hb_header.timestamp, "an empty lane has a free slot");
+
+    assert!(earliest <= hb_header.timestamp, "the first heartbeat after a full hour has its slot");
     let payload = &hb_template.block.transactions[0].payload;
     assert_eq!(u64::from_le_bytes(payload[8..16].try_into().unwrap()), 0, "Decision 1.4: the declared subsidy is zero");
     assert_ne!(hb_header.palw_state_root, Default::default(), "a heartbeat chain block commits the parent state root");
@@ -423,6 +435,9 @@ async fn palw_heartbeat_blocks_tick_the_clock_and_weigh_epsilon() {
     // 2) The pipeline accepts it and the V2 walk folds it (work = None) — the sink moves.
     let hb_hash = hb_header.hash;
     ctx.validate_and_insert_block(hb_template.block.clone().to_immutable()).await.assert_valid_utxo_tip();
+    // The slot rule pushed the heartbeat a full interval past its parent, so the simulated clock
+    // has to follow it or every later template is `TimeTooOld` against its own ancestor.
+    ctx.simulated_time = ctx.simulated_time.max(hb_header.timestamp);
 
     // 3) ε: the bonded child credits the heartbeat exactly one unit of blue work — a bonded
     //    block is ~10⁶ at these bits, so the lane is byte-for-byte "near-weightless".
@@ -435,43 +450,82 @@ async fn palw_heartbeat_blocks_tick_the_clock_and_weigh_epsilon() {
         "the heartbeat's whole fork-choice contribution is ε"
     );
     ctx.validate_and_insert_block(child.block.clone().to_immutable()).await.assert_valid_utxo_tip();
-    let child_hash = child.block.header.hash;
+    let child_ts = child.block.header.timestamp;
 
-    // 4) The slot rule refuses a second heartbeat inside the interval. Bonded production is
-    //    recent, so the interval is the nominal hour.
+    // 4) **The slot rule, one block deep.** The selected parent is now the bonded child, so the
+    //    interval is the nominal hour, measured from THAT header — not from a walk over the
+    //    window. A heartbeat inside it is refused.
     ctx.simulated_time += 1_000;
     let template = ctx.build_block_template(9, ctx.simulated_time);
     let (early_hb, earliest) =
         ctx.consensus.virtual_processor().heartbeat_adapt_block_template(template).expect("adapt reports the slot");
-    assert_eq!(earliest, hb_header.timestamp + hb::HEARTBEAT_NOMINAL_INTERVAL_MS, "calm network: one per hour");
+    assert_eq!(earliest, child_ts + hb::HEARTBEAT_NOMINAL_INTERVAL_MS, "a producing chain: one heartbeat per hour");
     let mut too_early = early_hb.block.clone();
-    too_early.header.timestamp = hb_header.timestamp + 1_000;
+    too_early.header.timestamp = child_ts + 1_000;
     too_early.header.finalize();
     match ctx.consensus.validate_and_insert_block(too_early.to_immutable()).virtual_state_task.await {
         Err(kaspa_consensus_core::errors::block::RuleError::HeartbeatTooEarly(_, _, last, interval)) => {
-            assert_eq!(last, hb_header.timestamp);
+            assert_eq!(last, child_ts, "the boundary is the SELECTED PARENT's timestamp");
             assert_eq!(interval, hb::HEARTBEAT_NOMINAL_INTERVAL_MS);
         }
         other => panic!("a heartbeat inside the slot must be HeartbeatTooEarly, got {other:?}"),
     }
 
-    // 5) The ramp's fast arm: silence past six hours puts the lane at full cadence, and a
-    //    heartbeat that far out IS admitted — the clock the doctrine promises a dead network.
-    let child_ts = child.block.header.timestamp;
-    ctx.simulated_time = child_ts + hb::HEARTBEAT_RAMP2_SILENCE_MS + 60_000;
+    // 5) Past the interval it is admitted — the clock the doctrine promises a stalled network.
+    ctx.simulated_time = child_ts + hb::HEARTBEAT_NOMINAL_INTERVAL_MS + 60_000;
     let template = ctx.build_block_template(10, ctx.simulated_time);
     let (ramped, earliest) = ctx.consensus.virtual_processor().heartbeat_adapt_block_template(template).unwrap();
-    assert!(earliest <= ramped.block.header.timestamp, "past the ladder's last step the slot is open");
-    let ramped_hash = ramped.block.header.hash;
+    assert!(earliest <= ramped.block.header.timestamp, "past the interval the slot is open");
+    let ramped_ts = ramped.block.header.timestamp;
     ctx.validate_and_insert_block(ramped.block.clone().to_immutable()).await.assert_valid_utxo_tip();
-    assert_ne!(ramped_hash, child_hash);
+    ctx.simulated_time = ctx.simulated_time.max(ramped_ts);
 
-    // 6) Decision 1.4 is enforced, not advisory: the same heartbeat with its subsidy declared
+    // 6) **And now the recovery cadence, which is what makes a stopped chain recoverable.** The
+    //    selected parent is a heartbeat, so the interval drops from an hour to one block time —
+    //    asserted as a DIFFERENCE against step 4, where the same call returned the hour.
+    ctx.simulated_time = ramped_ts + hb::HEARTBEAT_RECOVERY_INTERVAL_MS;
+    let template = ctx.build_block_template(11, ctx.simulated_time);
+    let (recovering, earliest) = ctx.consensus.virtual_processor().heartbeat_adapt_block_template(template).unwrap();
+    assert_eq!(
+        earliest,
+        ramped_ts + hb::HEARTBEAT_RECOVERY_INTERVAL_MS,
+        "behind a heartbeat the lane runs at cadence, not at the calm-network hour"
+    );
+    assert!(hb::HEARTBEAT_RECOVERY_INTERVAL_MS < hb::HEARTBEAT_NOMINAL_INTERVAL_MS);
+    ctx.validate_and_insert_block(recovering.block.clone().to_immutable()).await.assert_valid_utxo_tip();
+    let recovering_ts = recovering.block.header.timestamp;
+    ctx.simulated_time = ctx.simulated_time.max(recovering_ts);
+
+    // 6b) **With the fence closed the adapter refuses, instead of handing back a block every
+    //     peer would reject.** Built as a separate consensus because the fence is a params value:
+    //     same bundle, same everything, `palw_heartbeat` unset.
+    {
+        let closed = ConfigBuilder::new(MAINNET_PARAMS)
+            .skip_proof_of_work()
+            .edit_consensus_params(|p| {
+                p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
+                p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(palw_v2_test_bundle(&catalog));
+            })
+            .build();
+        assert!(closed.params.palw_heartbeat.is_none());
+        let mut shut = TestContext::new(TestConsensus::new(&closed));
+        shut.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+        shut.simulated_time += 120_000;
+        let t = shut.build_block_template(20, shut.simulated_time);
+        match shut.consensus.virtual_processor().heartbeat_adapt_block_template(t) {
+            Err(kaspa_consensus_core::errors::block::RuleError::UnknownPowAlgoId(id)) => {
+                assert_eq!(id, hb::PALW_HEARTBEAT_ALGO_ID, "refused with the validator's own answer");
+            }
+            other => panic!("a closed lane must refuse to build, got {other:?}"),
+        }
+    }
+
+    // 7) Decision 1.4 is enforced, not advisory: the same heartbeat with its subsidy declared
     //    back at the full figure is refused as WrongSubsidy.
-    ctx.simulated_time += 240_000;
-    let donor = ctx.build_block_template(11, ctx.simulated_time); // algo-6: full-subsidy coinbase
+    ctx.simulated_time = recovering_ts + 240_000;
+    let donor = ctx.build_block_template(12, ctx.simulated_time); // algo-6: full-subsidy coinbase
     let full_coinbase = donor.block.transactions[0].clone();
-    let template = ctx.build_block_template(12, ctx.simulated_time + 1_000);
+    let template = ctx.build_block_template(13, ctx.simulated_time + 1_000);
     let (greedy, _) = ctx.consensus.virtual_processor().heartbeat_adapt_block_template(template).unwrap();
     let mut greedy = greedy.block.clone();
     greedy.transactions[0] = full_coinbase;

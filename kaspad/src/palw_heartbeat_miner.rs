@@ -3,7 +3,8 @@
 //! A bondless, one-thread hash miner for the heartbeat lane: it asks the mining manager for an
 //! ordinary template (so the mempool's transactions — bond registrations included — ride the
 //! block), lets consensus re-shape it into the lane
-//! (`ConsensusApi::heartbeat_adapt_block_template`: algo-3, the lane's own bits and slot, an
+//! (`ConsensusApi::heartbeat_adapt_block_template`: algo-8, the global bits with the lane's own
+//! fixed target and its one-block-deep slot rule (ADR-0066 Decisions 1-2), an
 //! empty carriage, a zero-subsidy coinbase), waits for the slot, grinds BLAKE2b-512 ∥ SHA3-512
 //! nonces, and submits.
 //!

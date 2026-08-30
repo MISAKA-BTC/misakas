@@ -726,14 +726,19 @@ impl PalwConsensusParamsV2 {
     /// own retarget, worth a fixed ε in fork choice, fee-only in the coinbase. Declared by the
     /// `PALW_STATE_V2_VERSION` bump that landed with it — a V2 build without the lane and one
     /// with it are different networks and refuse each other at the handshake.
+    /// **The BUNDLE's two lanes, and only those.**
+    ///
+    /// The heartbeat lane is deliberately not here (ADR-0066). It is fenced at TOP LEVEL —
+    /// `Params::palw_heartbeat` — because the bundle's own fences live under `palw_ruleset_id_v2`
+    /// and a V2 network's doctrine is to re-mint rather than schedule, while the heartbeat has to
+    /// be armable on a network that is already running (it exists for the case where that network
+    /// has stopped). A bundle cannot see a top-level field, so the caller ORs it in:
+    /// `Params::palw_heartbeat_lane_open_at`.
+    ///
+    /// This used to read `PALW_HEARTBEAT_LANE_ENABLED`, a `const bool` — so two builds from the
+    /// same tree disagreed about block validity while sharing every fingerprint.
     pub fn accepts_algo_id(&self, algo_id: u8) -> bool {
-        algo_id == self.algorithm_id
-            || algo_id == self.freeprompt.receipt_algorithm_id()
-            // OFF since the 2026-08-30 audit — see `PALW_HEARTBEAT_LANE_ENABLED` for the four
-            // structural findings. With the switch false this is the two-lane acceptance the
-            // network had before ADR-0060, byte for byte.
-            || (crate::palw_heartbeat_v1::PALW_HEARTBEAT_LANE_ENABLED
-                && algo_id == crate::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID)
+        algo_id == self.algorithm_id || algo_id == self.freeprompt.receipt_algorithm_id()
     }
 }
 
@@ -1125,10 +1130,10 @@ pub(crate) mod tests {
         // Decision 1) and the bondless heartbeat (ADR-0060 Decision 1) — and nothing else.
         assert!(bundle.accepts_algo_id(crate::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2));
         assert!(bundle.accepts_algo_id(crate::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3));
-        assert_eq!(
-            bundle.accepts_algo_id(crate::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID),
-            crate::palw_heartbeat_v1::PALW_HEARTBEAT_LANE_ENABLED,
-            "the heartbeat lane follows its switch (OFF since the 2026-08-30 audit)"
+        assert!(
+            !bundle.accepts_algo_id(crate::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID),
+            "the heartbeat lane is NOT a bundle lane — it is fenced at top level (ADR-0066), and a \
+             bundle that admitted it would be one no fence could close"
         );
         for other in [0u8, 1, 2, 4, 5, 8, 0xff] {
             assert!(!bundle.accepts_algo_id(other), "algo {other} is no lane of this network");

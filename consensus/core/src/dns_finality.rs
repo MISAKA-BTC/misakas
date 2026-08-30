@@ -1363,8 +1363,20 @@ pub struct DnsParams {
     /// until manual intervention. See [`InactivityLeakViewV1`] for the mechanism and the
     /// long-partition trade-off it deliberately accepts.
     ///
-    /// `u64::MAX` disables the leak (the devnet/simnet posture: drills assume a frozen set).
-    /// Shipped live values are the DAA-equivalent of ~7 days at the network's cadence.
+    /// **RETIRED at `u64::MAX` (ADR-0066 Decision 4). Do not give this a live value.**
+    ///
+    /// The leak is armed by `Params::palw_inactivity_leak`, a top-level fence. This field stays
+    /// so that the preset shape and its borsh encoding are unchanged, and it is pinned at
+    /// `u64::MAX` on every preset by `the_inactivity_leak_constant_stays_retired`.
+    ///
+    /// Why it could not be the switch: `DnsParams` is hashed into `consensus_params_id` as one raw
+    /// borsh blob, and `for_each_fence` deliberately does not visit inside it. Both halves are
+    /// individually right. Together they mean that moving this constant off `u64::MAX` moves
+    /// `consensus_identity_id`, so the first operator to deploy the change is disconnected from
+    /// every un-upgraded peer at the handshake — the deploy-day partition the identity split
+    /// exists to prevent. A rule whose only activation path is a flag day is the wrong shape for
+    /// one that exists to rescue finality after validator loss: the moment you need it is the
+    /// moment nobody can coordinate.
     pub inactivity_leak_daa: u64,
 }
 
@@ -9810,6 +9822,16 @@ mod tests {
             // 50M costs, live in `the_active_stake_gate_is_the_product_of_the_two_floors` and on
             // `PRODUCTION_DNS_PARAMS.min_bond_amount_sompi`.
             if name != "genesis-active" && name != "testnet" {
+                // **Tied to the PALW constant, not repeated as a literal.** The comment above has
+                // claimed these are "the same figure" since ADR-0061 while the assertion compared
+                // against a hand-written number, so either side could have moved and left the
+                // claim standing — the announce-don't-verify shape this file keeps finding. One
+                // of them is the definition and the other must equal it.
+                assert_eq!(
+                    p.min_bond_amount_sompi,
+                    crate::config::premine::GENESIS_BOND_COLLATERAL_SOMPI,
+                    "{name}: a validator bond and a PALW genesis seat post the same collateral"
+                );
                 assert_eq!(p.min_bond_amount_sompi, 10_000 * crate::constants::SOMPI_PER_KASPA, "{name}");
                 assert_eq!(p.min_active_validators, 12, "{name}");
                 assert_eq!(
