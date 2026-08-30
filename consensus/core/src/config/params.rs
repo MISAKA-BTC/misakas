@@ -2081,13 +2081,11 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
     dns_activation_daa_score: 0,
     // Production: the overlay reaches the Active stage once this much stake is bonded.
     //
-    // **20M -> 600M (2026-08-30), which is `min_active_validators x min_bond_amount_sompi`.** The
-    // two gates are ANDed, so at 12 validators of 50M each the stake gate was already implied and
-    // 20M could never bind — a dead constant reading as a second, weaker floor. Stating the
-    // product makes the AND visible and keeps the two from drifting apart: raise either half and
-    // this must move with it, which `the_active_stake_gate_is_the_product_of_the_two_floors`
-    // holds.
-    min_active_stake_sompi: 600_000_000 * SOMPI_PER_KASPA,
+    // **20M -> 600M (2026-08-30), then -> 120,000 with the bond floor below.** The two gates are
+    // ANDed, so the stake gate must state their product or it is a dead constant reading as a
+    // second, weaker floor. It moves whenever either half does, which
+    // `the_active_stake_gate_is_the_product_of_the_two_floors` holds: 12 x 10,000 MSK.
+    min_active_stake_sompi: 120_000 * SOMPI_PER_KASPA,
     // audit H-11 (Kaspa-diff): the DNS Active stage must NOT be drivable by a single key. A
     // multi-operator floor is the mainnet default so finality does not hinge on one operator's
     // key/availability/honesty (the safety floor is BOTH the `min_active_stake_sompi` AND this
@@ -2104,14 +2102,25 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
     // prevent. 24 is the next step once that many distinct operators are actually seated; going
     // there before they exist would stall the overlay at `Bootstrapping` instead of securing it.
     min_active_validators: 12,
-    // Production: every individual validator must bond >= 50M MSK; a smaller StakeBond is
+    // Production: every individual validator must bond >= 10,000 MSK; a smaller StakeBond is
     // rejected at acceptance and can never attest.
     //
-    // **20M -> 50M (2026-08-30).** The bond is the slashable collateral behind a finality vote,
-    // so its job is to make an equivocation cost more than the settlement it could reverse. It is
-    // raised WITH `min_active_validators` rather than instead of it, because the two multiply:
-    // the quorum-corruption cost is the product, and this half is the one an operator pays.
-    min_bond_amount_sompi: 50_000_000 * SOMPI_PER_KASPA,
+    // **50M -> 10,000 MSK (2026-08-30, operator decision): ONE floor for what it costs to be a
+    // bonded participant on this network.** A PALW genesis seat posts 10,000 MSK (ADR-0061) and a
+    // DNS validator posted 50M, so the same word — "bond" — named two collaterals five thousand
+    // apart, and an operator reading either number had no way to know which one applied to them.
+    // The registration registry now has a single floor, and the two registries agree.
+    //
+    // **What it costs, stated rather than buried.** The quorum-corruption cost is
+    // `ceil(2n/3) x min_bond`; at 12 seats that is 8 bonds, so it falls from 400M MSK to
+    // 80,000 MSK. The count, not the per-bond amount, is now the whole of that floor — which is
+    // what `min_active_validators`' own note already argued is the term that carries it, but the
+    // note argued that while the bond was 5,000x larger, so the conclusion is doing more work now
+    // than it was asked to. **Before mainnet launches, this figure should be re-derived against
+    // the settlement value a finality vote can reverse**; ADR-0061's 10,000 was sized for a PALW
+    // seat's slashable exposure, not for reversing a confirmed anchor, and the two are different
+    // questions that now share an answer.
+    min_bond_amount_sompi: 10_000 * SOMPI_PER_KASPA,
     epoch_length_blocks: 100,
     // audit H-02 (true WorkDepth, Option A): a DNS-confirmed anchor must be buried by at least this
     // much ACCUMULATED blue work SINCE it became the canonical lagged anchor (anchor-relative
@@ -5334,7 +5343,11 @@ mod consensus_params_id_tests {
     #[test]
     fn the_active_stake_gate_is_the_product_of_the_two_floors() {
         let dns = PRODUCTION_DNS_PARAMS;
-        assert_eq!(dns.min_bond_amount_sompi, 50_000_000 * SOMPI_PER_KASPA, "per-validator collateral");
+        assert_eq!(
+            dns.min_bond_amount_sompi,
+            10_000 * SOMPI_PER_KASPA,
+            "per-validator collateral — the same floor a PALW genesis seat posts"
+        );
         assert_eq!(dns.min_active_validators, 12, "the count is the term that carries this floor");
         // The two gates are ANDed, so the stake gate must state their product or it is dead
         // weight that reads as a second, weaker floor.
@@ -5946,7 +5959,17 @@ mod consensus_params_id_tests {
             // lattice's redraw is now counted by the bond-withdrawal invariant and by
             // `MAX_CLAIM_EXPOSURE_DAA`, and a genesis bond declares the collateral its outpoint
             // actually holds. Derived once from the fixed tree, as always.
-            ("mainnet", MAINNET_PARAMS, "3952b6920801fac4a9d0bf6f8f42abbfa56ff2b23eb8e8671b59ec0d67551854"),
+            // **Re-pinned 2026-08-30, MAINNET ONLY, for the single-bond-floor decision.**
+            // `min_bond_amount_sompi` 50M -> 10,000 MSK and the derived `min_active_stake_sompi`
+            // 600M -> 120,000, so that one number says what a bond costs on this network and it is
+            // the one a PALW genesis seat already posts (ADR-0061). `dns_params` is hashed as one
+            // borsh blob, so mainnet's fingerprint moves and nothing else does — testnet keeps
+            // `TESTNET_DNS_PARAMS` and devnet/simnet keep `GENESIS_ACTIVE_DNS_PARAMS`, and their
+            // pins below are unchanged, which is the check that this touched only what it meant to.
+            // Legal exactly because MAINNET HAS NOT LAUNCHED: no live node holds the old value, so
+            // there is nothing to re-mint and no partition to cause. The same edit after launch
+            // would need an activation fence rather than a bare constant (audit M1-6).
+            ("mainnet", MAINNET_PARAMS, "badaa8e90f14ef0074048d6b18660864855be8ab854d0ecb01dfbb62171538e1"),
             // Moved by the bps01⊕iso unification (2026-08-16): the CPU pins are now the UNION of
             // the two facts the branches discovered separately — `single-variant` (bps01, by
             // disassembly) ∧ `no-openmp` (iso, by the Linux link error) in `CPU_BUILD_PROFILE`,

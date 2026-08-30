@@ -9778,12 +9778,13 @@ mod tests {
             );
             // The bond requirement is untouched by the VLT work — VLT changes what a bond BUYS
             // (weight capped at `lambda x collateral`), never what it costs to hold one. The
-            // amounts themselves are the 2026-08-30 bond-economics pass: 50M per validator over
-            // a floor of 12, whose product is the active-stake gate. Their derivation and the
-            // reason the count carries this floor live in
-            // `the_active_stake_gate_is_the_product_of_the_two_floors`.
+            // amounts are 10,000 MSK per validator over a floor of 12, whose product is the
+            // active-stake gate: ONE floor for what a bond costs on this network, the same figure
+            // a PALW genesis seat posts (ADR-0061). Their derivation, and what the reduction from
+            // 50M costs, live in `the_active_stake_gate_is_the_product_of_the_two_floors` and on
+            // `PRODUCTION_DNS_PARAMS.min_bond_amount_sompi`.
             if name != "genesis-active" && name != "testnet" {
-                assert_eq!(p.min_bond_amount_sompi, 50_000_000 * crate::constants::SOMPI_PER_KASPA, "{name}");
+                assert_eq!(p.min_bond_amount_sompi, 10_000 * crate::constants::SOMPI_PER_KASPA, "{name}");
                 assert_eq!(p.min_active_validators, 12, "{name}");
                 assert_eq!(
                     p.min_active_stake_sompi,
