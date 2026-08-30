@@ -646,8 +646,10 @@ mod tests {
     fn the_shipped_rc_card_is_unset_and_says_so_by_being_bundle_free() {
         use crate::config::params::{PALW_RC_GENESIS_ARTIFACT_ROOT, palw_rc_genesis_card_is_set, palw_rc_shipped_params};
 
-        // **The card is SET as of 2026-08-22** — six bonds over vault premine 0..=5, each key
-        // generated on the host that holds it. This test asserted the unset state, which was the
+        // **The card is SET as of 2026-08-22, and grown to eight on 2026-08-31** — vault premine
+        // 0..=7, each key generated on the host that holds it. The last two exist so ADR-0065 D1
+        // is armable without a re-mint (`palw_v2_maturity_armable_bonds_v1`); before them the
+        // registry sat at the bare `seat_count + 1` and the fence could not be turned on at all. This test asserted the unset state, which was the
         // right thing to pin while nothing shipped: the property is "the two agree", not "the card
         // is empty", so it is written as the equivalence and stays true on both sides of minting.
         let shipped = palw_rc_shipped_params();

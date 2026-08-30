@@ -108,13 +108,33 @@ The half that really cannot be minted is the **bond**:
 > `PALW_RC_GENESIS_BONDS` is a **list**, and the genesis gate refuses a list that cannot run a
 > chain. Two properties, both checked at assembly rather than discovered at block three:
 >
-> * **`seat_count + 1` distinct operators.** A panel seats one bond per OPERATOR and never the
->   claim's own executor, so a 5-seat panel needs six. Below that no claim is ever licensed: every
->   one voids at `BindTimeout`, `safe_weight` stays zero forever, and each block's escrowed worker
->   carve is burned. `BondRegistered` may not ride a transaction, so there is no later repair — the
->   registry you ship is the registry the network has for its whole life.
+> * **`seat_count + 3` distinct operators — `seat_count + 1` is the floor, not the target.**
+>   A panel seats one bond per OPERATOR and never the claim's own executor, so a 5-seat panel needs
+>   six *to draw at all*. Below six no claim is ever licensed: every one voids at `BindTimeout`,
+>   `safe_weight` stays zero forever, and each block's escrowed worker carve is burned.
+>   **Ship eight.** At exactly six, one seat leaving eligibility — a retirement, or a slash under
+>   `min_collateral_sompi` — halts every panel, and ADR-0065 D1 (seat maturity) cannot be armed at
+>   all: `validate_palw_v2` refuses an armed maturity fence on a registry with no spare seat, so the
+>   node will not boot. `palw-rc-genesis` prints both numbers and says which is which.
 >   **A registry of clones is one operator however long it is**: each row needs its own
 >   `--operator-seed`.
+>
+>   **And every row you ship has to be STAFFED.** The draw is liveness-blind: an offline bond still
+>   takes a seat, and a panel reaches quorum by presence alone. With `seat_count = 5, quorum = 3`,
+>   at most `seat_count - quorum = 2` registered bonds may be unattended before panels start
+>   failing on absence. At eight registered that means **six hosts actually running the seat
+>   service** — growing the registry past what the fleet can staff makes panels fail MORE often,
+>   not less. Assign the two seats added on 2026-08-31 before the relaunch, or the network runs at
+>   exactly zero quorum margin.
+>
+>   *(Corrected 2026-08-31: this used to say "`BondRegistered` may not ride a transaction, so there
+>   is no later repair — the registry you ship is the registry the network has for its whole life."
+>   That is false in this build. A `BondRegistered` carrier IS admitted on a live chain once it
+>   locks the collateral it declares — `virtual_processor/processor.rs:4922` — so a thin registry
+>   can be grown later. Two things the repair does NOT fix, which is why the genesis size still
+>   matters: a chain that is already halted produces no blocks, so no carrier can land, and D1's
+>   arming guard reads the GENESIS registry, so a network that grew post-genesis still cannot arm
+>   the fence.)*
 > * **Collateral that outlasts the bind window.** A claim holds its reservation for `window_bind`
 >   (600 DAA) and DAA advances only when blocks are produced, so a ceiling admitting fewer
 >   concurrent claims than the window is long is a deadlock with no timeout. The requirement is

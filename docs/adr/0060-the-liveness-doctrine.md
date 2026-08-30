@@ -32,7 +32,8 @@ Every liveness failure this project has actually had is one defect wearing four 
 
 And the bootstrap variant: bonds are required to produce, bond registration rides a
 transaction, a transaction needs a produced block — so a chain born with zero bonds can never
-produce block 1 (this is why ADR-0059 still ships six genesis seats).
+produce block 1 (this is why ADR-0059 still ships genesis seats — six then, eight since
+2026-08-31, so that ADR-0065 D1 can be armed).
 
 The shared root: **the chain's clock — DAA advancement, timeout sweeping, gate expiry — was a
 hostage of the very actors that were stuck.** Bonds can die (slashing, exhaustion, exit,

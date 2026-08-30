@@ -4,12 +4,14 @@
 seat draw already dedups by operator, and "someone else" turned out to be uncheckable. The title now
 names what survived.)*
 
-Status: **D1, D2 and D4 LANDED (all dormant); D3 and D5 decided** (2026-08-30). Closes the
-CRITICAL recorded in the two addenda to `docs/palw-mainnet-audit-2026-08-30.md`. **Mainnet
-blocker.** Consensus-affecting, but **no re-mint**: both landed rules sit behind top-level
-`ForkActivation` fences, `None` on every preset, so no shipped fingerprint moves and either can be
-armed by rolling deploy. The earlier "fingerprint move and a re-mint on every network" in
-§Consequences was written before the placement was worked out and is corrected there.
+Status: **D1, D2 and D4 LANDED (all dormant); D3 and D5 decided** (2026-08-30). **D1 made
+ARMABLE 2026-08-31** — see the correction below. Closes the CRITICAL recorded in the two addenda to
+`docs/palw-mainnet-audit-2026-08-30.md`. **Mainnet blocker.** Consensus-affecting, but **no
+re-mint for the RULES**: both landed rules sit behind top-level `ForkActivation` fences, `None` on
+every preset, so no shipped fingerprint moves and either can be armed by rolling deploy. The earlier
+"fingerprint move and a re-mint on every network" in §Consequences was written before the placement
+was worked out and is corrected there. **Growing the registry so D1 can be armed at all is a
+separate change and it IS a re-mint** — testnet-11 Relaunch 4, below.
 
 ## The single root
 
@@ -299,8 +301,8 @@ option. Re-price if desired, but never in place of D1–D4.
   is unseatable for a whole `bond_maturity_daa`, and a short draw is no panel: every claim voids at
   `BindTimeout` and the frontier stops for the window's duration. Without D1 the same replacement
   restores panels in the next block. **So D1 must not be armed on a network running at
-  `seat_count + 1` bonds**, and that is an operational precondition the config check cannot enforce
-  — unlike the genesis case, which it does.
+  `seat_count + 1` bonds.** This was written as an operational precondition the config check cannot
+  enforce. It is now BOTH enforced and satisfied — see the correction below.
 * **Arming D1 is a coordinated change, even though the handshake permits a rolling one.** Two
   operators who schedule it at the same height with different windows keep one
   `consensus_identity_id` and are told only by a warning. Deliberate — it is the standing rule for a
@@ -312,3 +314,72 @@ option. Re-price if desired, but never in place of D1–D4.
    nothing else, which is why a third of the chain's claims were being convicted unnoticed. A verdict
    against another party should never be cheaper to emit than to explain.
 2. **No single host may hold quorum-many seats**, independent of any rule change.
+
+
+## Correction, 2026-08-31 — the rule was enforceable and unarmable at the same time
+
+The caveat above says D1 "must not be armed on a network running at `seat_count + 1` bonds" and
+files that under things a config check cannot enforce. Both halves were wrong in the same direction.
+
+**It IS enforceable.** `validate_palw_v2` reads the genesis registry — the objects are in `Params`
+— so the count is knowable at boot, before a peer is dialed. The guard now refuses an armed
+`palw_bond_maturity` on a bundle registering fewer than
+`palw_fp_devnet_v3::palw_v2_maturity_armable_bonds_v1()` bonds, and `ConfigBuilder::build` panics on
+a failing validate. An operator cannot arm the halt by remembering wrong.
+
+**And enforcing it exposed the real defect: nothing this build shipped could satisfy it.**
+`PALW_RC_GENESIS_BONDS` held exactly `seat_count + 1 = 6` cards, so the guard refused every shipped
+preset. D1 was a rule that could only be obeyed by minting a new genesis — enforcement existed and
+arming did not, which is the "gate that never fires" shape this ADR line keeps finding, wearing the
+opposite mask: a gate that fires on everything.
+
+**The bar, derived rather than chosen.** `seat_count + 3`:
+
+| term | why |
+|---|---|
+| `seat_count` | the panel itself |
+| `+1` | the executor, excluded by bond, operator and key |
+| `+1` | one seat departing — the case D1's window makes expensive, since the replacement is immature for a whole window |
+| `+1` | margin, so the first departure does not leave the network one retirement from a halt |
+
+The strict minimum is `seat_count + 2`; the third is slack, and it is named as slack in the code. An
+earlier derivation reached the same number by counting "the replacement's own immaturity" as a
+fourth term, which double-counts: the replacement's immaturity *is* the departure's gap.
+
+**What changed.** `PALW_RC_GENESIS_BONDS` grew from six cards to eight, with two real ML-DSA-87
+key pairs generated for the purpose. This is a genesis change — two collateral outputs and two fee
+floats enter the premine, two `BondRegistered` objects enter `genesis_objects` — so the premine
+commitment, both genesis hashes and the testnet-11 `consensus_params_id` all move together:
+
+* testnet-11 genesis `d2789338…` → `572f80c0…`, `utxo_commitment` `670b1125…` → `7f3142f2…`
+* `consensus_params_id` `f3bf86b4…` → `4f89ec82…`
+* payload marker `11,3` → `11,4` ("Relaunch 4")
+
+**testnet-11 must be re-minted and every host must wipe its datadir.** Nothing in this build accepts
+the Relaunch-3 chain; an un-wiped node hits the startup genesis-mismatch guard rather than silently
+resuming, which is the intended behaviour and the reason the marker is bumped.
+
+**Two tests hold the claim**, because "armable" has two halves and the first alone is the failure
+mode this ADR keeps cataloguing:
+
+* `arming_bond_maturity_needs_a_registry_with_a_spare_seat` — the config gate accepts the fence on
+  the shipped preset, refuses it on the same preset trimmed to `seat_count + 1`, and still refuses
+  it one card short of the bar.
+* `the_shipped_registry_draws_under_an_armed_maturity_fence_even_after_a_seat_leaves` — the shipped
+  genesis objects are applied through the real transition, a claim is bound under a real card, and
+  the panel draws with the floor on; then a `BondRetireRequested` removes a seat and it still draws.
+  The same departure on a `seat_count + 1` registry returns `InsufficientEligibleBonds`. A fence
+  that validates and then starves every draw would pass the first test and fail this one.
+
+**What is still not enforced, stated plainly.** The guard reads the GENESIS registry, and that is
+a real limitation rather than a theoretical one: a `BondRegistered` carrier IS admitted on a live
+V2 chain once it locks the collateral it declares (`virtual_processor/processor.rs:4922`), so live
+registries genuinely do grow. A network that grew past the bar post-genesis still cannot arm D1 if
+its genesis was small; a network whose genesis was large can arm it after the live registry has
+shrunk below the bar. `validate_palw_v2` has no chain access, so this is the limit of a config-time
+check, not an oversight — but it means the guard is conservative in one direction and stale in the
+other. Both failures land on the same runtime behaviour, which fails closed: a short draw is
+`InsufficientEligibleBonds`, no panel, and the claim voids at `BindTimeout`. **The reason to ship
+the registry at `seat_count + 3` anyway is that the genesis size is the only one the config gate
+can see, and a halted chain produces no blocks — so no repair carrier can land on the network that
+most needs one.**

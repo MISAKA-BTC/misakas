@@ -954,6 +954,181 @@ mod tests {
         assert_eq!(palw_seat_maturity_floor_v1(10, Some(1_000)), Some(0));
     }
 
+    /// **ADR-0065 D1 is armable on the genesis this build actually ships.**
+    ///
+    /// `arming_bond_maturity_needs_a_registry_with_a_spare_seat` (params.rs) proves the CONFIG
+    /// gate accepts the fence on the shipped preset. That is a boot check; it says nothing about
+    /// whether panels still draw once the rule is in force, and a fence that validates and then
+    /// starves every draw is the same halt with a friendlier error site.
+    ///
+    /// So this runs the shipped registry: apply the genesis objects exactly as a booting node
+    /// does, bind a claim under one of the real cards, and draw with the maturity floor on.
+    ///
+    /// The third position is the one the registry grew for. D1's guard exists because a seat
+    /// LEAVING is what makes a matured registry thin: the replacement is itself immature for a
+    /// whole window, so for that window the chain runs one bond short. At `seat_count + 1` the
+    /// departure alone is fatal — the remaining bonds cannot fill the panel once the executor is
+    /// excluded. At `seat_count + 3` it is absorbed twice over. Both are asserted here, on one
+    /// registry, because the margin is only visible as a difference.
+    #[test]
+    fn the_shipped_registry_draws_under_an_armed_maturity_fence_even_after_a_seat_leaves() {
+        use crate::config::params::palw_rc_shipped_params;
+        use crate::palw_mode_v2::PalwConsensusMode;
+
+        let params = palw_rc_shipped_params();
+        let PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
+            panic!("the shipped RC preset carries a V2 bundle");
+        };
+        let sp = bundle.state.clone();
+
+        // 1. Boot the genesis registry the way a node does — through the transition, not by
+        //    reading the card. A registry that parses and does not apply is the failure this
+        //    whole gate line keeps finding.
+        let genesis_ctx =
+            PalwBlockContextV2 { block: params.genesis.hash, daa_score: params.genesis.daa_score, blue_score: 0, subsidy: 0 };
+        let (booted, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &sp, &genesis_ctx, &bundle.genesis_objects, None)
+            .expect("the shipped genesis registrations apply");
+
+        let cards: Vec<_> = bundle
+            .genesis_objects
+            .iter()
+            .filter_map(|o| match o {
+                PalwConsensusObjectV2::BondRegistered { bond, pubkey, operator_pubkey, .. } => {
+                    Some((*bond, pubkey.clone(), operator_pubkey.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            cards.len(),
+            crate::palw_fp_devnet_v3::palw_v2_maturity_armable_bonds_v1(),
+            "the shipped registry is the size that can carry the fence"
+        );
+
+        // 2. A claim under the FIRST shipped card, so the draw has a real executor to exclude by
+        //    bond, operator and key — the three exclusions are what turn `seat_count` seats into
+        //    a `seat_count + 1` requirement.
+        let (exec_bond, exec_pubkey, exec_operator) = cards[0].clone();
+        let class_id = sp.base_class_id();
+        let artifact_root = bundle
+            .genesis_objects
+            .iter()
+            .find_map(|o| match o {
+                PalwConsensusObjectV2::ClassRegistered { class_id: c, artifact_root, .. } if *c == class_id => Some(*artifact_root),
+                _ => None,
+            })
+            .expect("the floor class is registered at genesis");
+        let env = PalwAttemptEnvelopeV2 {
+            attempt: PalwAttemptUnsignedV2 {
+                version: PALW_ATTEMPT_V2_VERSION,
+                network_domain: h64(0xD0),
+                challenge: challenge_v2(h64(0xD0), h64(5), 1_700, 1, class_id, &exec_bond.0),
+                class_id,
+                executor_bond: exec_bond.0,
+                executor_pubkey: exec_pubkey,
+                operator_id: crate::palw_state_v2::palw_operator_id_v2(&exec_operator),
+                artifact_root,
+                trace_root: h64(31),
+                output_root: h64(32),
+                pwu: 1,
+                trace_manifest_root: h64(33),
+                trace_chunk_count: 4,
+                trace_retention_daa: 999_999,
+                execution_root: h64(41),
+            },
+            signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
+        };
+        let claim_id = attempt_id_v2(&env.attempt);
+        let bound_daa = params.genesis.daa_score + 1;
+        let (live, _) = apply_palw_transition_v2(
+            &booted,
+            &sp,
+            &PalwBlockContextV2 { block: BlockHash::from_u64_word(0xB1), daa_score: bound_daa, blue_score: 1, subsidy: 0 },
+            &[],
+            Some(&env),
+        )
+        .expect("a claim binds under a shipped bond");
+
+        // 3. The fence in force, a full window after the genesis registrations. Every shipped card
+        //    is mature, so the floor takes nothing away and the panel is the one the rule-off draw
+        //    would have produced.
+        let anchor = BlockHash::from_u64_word(0xA1);
+        let window = 1_000;
+        let matured = palw_seat_maturity_floor_v1(params.genesis.daa_score + window + 1, Some(window));
+        let armed = derive_panel_v2_with_maturity(&live, &bundle.panel, &claim_id, anchor, 0, matured)
+            .expect("the shipped registry seats a panel with the maturity fence armed");
+        assert_eq!(armed.len(), bundle.panel.seat_count() as usize, "a full panel, not a short one");
+        assert_eq!(
+            armed,
+            derive_panel_v2(&live, &bundle.panel, &claim_id, anchor, 0).expect("and the same panel with the rule off"),
+            "on a matured registry the floor changes no seat"
+        );
+
+        // 4. **A seat leaves.** Retire one card that is not the executor's and draw again: the
+        //    registry absorbs it. This is the property `seat_count + 3` buys.
+        let departing = cards[1].0;
+        let (after, _) = apply_palw_transition_v2(
+            &live,
+            &sp,
+            &PalwBlockContextV2 { block: BlockHash::from_u64_word(0xB2), daa_score: bound_daa + 1, blue_score: 2, subsidy: 0 },
+            &[PalwConsensusObjectV2::BondRetireRequested { bond: departing, signature: Vec::new() }],
+            None,
+        )
+        .expect("a retire request applies");
+        let seats = derive_panel_v2_with_maturity(&after, &bundle.panel, &claim_id, anchor, 0, matured)
+            .expect("one seat leaving does not stop the draw");
+        assert_eq!(seats.len(), bundle.panel.seat_count() as usize);
+        assert!(seats.iter().all(|s| s.bond != departing), "and the departed bond is not on it");
+
+        // 5. The counterfactual, on the same machinery: at the bare `seat_count + 1` the SAME
+        //    departure empties the panel. Without this the assertion above would pass on a
+        //    registry of any size and prove nothing about the margin.
+        let bare = crate::palw_fp_devnet_v3::palw_v2_min_genesis_bonds_v1();
+        let trimmed: Vec<_> = bundle
+            .genesis_objects
+            .iter()
+            .filter({
+                let mut kept = 0usize;
+                move |o| {
+                    if matches!(o, PalwConsensusObjectV2::BondRegistered { .. }) {
+                        kept += 1;
+                        kept <= bare
+                    } else {
+                        true
+                    }
+                }
+            })
+            .cloned()
+            .collect();
+        let (small, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &sp, &genesis_ctx, &trimmed, None)
+            .expect("the trimmed registry applies too");
+        let (small_live, _) = apply_palw_transition_v2(
+            &small,
+            &sp,
+            &PalwBlockContextV2 { block: BlockHash::from_u64_word(0xB1), daa_score: bound_daa, blue_score: 1, subsidy: 0 },
+            &[],
+            Some(&env),
+        )
+        .unwrap();
+        derive_panel_v2_with_maturity(&small_live, &bundle.panel, &claim_id, anchor, 0, matured)
+            .expect("at seat_count + 1 the panel still draws while nobody has left");
+        let (small_after, _) = apply_palw_transition_v2(
+            &small_live,
+            &sp,
+            &PalwBlockContextV2 { block: BlockHash::from_u64_word(0xB2), daa_score: bound_daa + 1, blue_score: 2, subsidy: 0 },
+            &[PalwConsensusObjectV2::BondRetireRequested { bond: departing, signature: Vec::new() }],
+            None,
+        )
+        .unwrap();
+        assert!(
+            matches!(
+                derive_panel_v2_with_maturity(&small_after, &bundle.panel, &claim_id, anchor, 0, matured),
+                Err(PalwPanelV2Error::InsufficientEligibleBonds { .. })
+            ),
+            "at seat_count + 1 the same departure is a halt — which is why the genesis grew"
+        );
+    }
+
     #[test]
     fn the_draw_is_a_function_of_the_anchor_and_fails_closed_when_thin() {
         let (state, claim_id) = populated_state();

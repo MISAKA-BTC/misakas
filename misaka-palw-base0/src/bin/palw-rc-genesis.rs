@@ -290,8 +290,13 @@ fn main() {
         )
     );
     println!();
-    println!("Collect {} such rows (one per operator, all different) into a file and run:", min_bonds());
+    println!("Collect at least {} such rows (one per operator, all different) into a file and run:", min_bonds());
     println!("  palw-rc-genesis --rows <file>");
+    println!();
+    println!("{} rows is the floor: it seats one panel with nothing to spare, so ADR-0065 D1", min_bonds());
+    println!("(bond maturity) cannot be armed on the result — one seat retiring makes every panel");
+    println!("undrawable for a whole maturity window. Collect {} to ship a genesis that can arm it", armable_bonds());
+    println!("later as a config change instead of a re-mint.");
     if !has_flag("--emit-row") {
         println!();
         println!("(--emit-row is the name for what just happened; a single row cannot become a card.)");
@@ -300,6 +305,11 @@ fn main() {
 
 fn min_bonds() -> usize {
     kaspa_consensus_core::palw_fp_devnet_v3::palw_v2_min_genesis_bonds_v1()
+}
+
+/// The registry size at which ADR-0065 D1 may be armed — the count worth collecting.
+fn armable_bonds() -> usize {
+    kaspa_consensus_core::palw_fp_devnet_v3::palw_v2_maturity_armable_bonds_v1()
 }
 
 fn hex_of(bytes: &[u8]) -> String {
