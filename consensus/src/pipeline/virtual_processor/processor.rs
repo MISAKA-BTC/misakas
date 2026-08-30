@@ -391,6 +391,10 @@ pub struct VirtualStateProcessor {
     pub(super) dns_params: Option<DnsParams>,
     /// ADR-0038 Decision A: the network's PALW commitment fence. `None` on every shipped preset.
     pub(super) palw_block_commitment: Option<kaspa_consensus_core::palw_block_commitment::PalwBlockCommitmentParamsV1>,
+    /// ADR-0064's fence, `None` on every shipped preset. See
+    /// [`Self::palw_v2_check_attempt_admission`] for what it admits and, more to the point, for
+    /// what it deliberately does not.
+    pub(super) palw_bootstrap_activation: Option<kaspa_consensus_core::config::params::ForkActivation>,
 
     /// ADR-0033 (B14): the PALW credit gate's fence — `None` (every shipped network) keeps
     /// the whole gate dormant; `Some` makes crossing commitments mintable in the coinbase
@@ -740,6 +744,7 @@ impl VirtualStateProcessor {
             evm_lane_kpi: EvmLaneKpi::default(),
             dns_params: params.dns_params.clone(),
             palw_block_commitment: params.palw_block_commitment,
+            palw_bootstrap_activation: params.palw_bootstrap_activation,
             palw_credit_params: params.palw_credit.clone(),
             palw_schedule: params.palw_schedule,
             palw_ramp: params.palw_ramp,
@@ -1331,13 +1336,21 @@ impl VirtualStateProcessor {
                                 // (state, params, point, object), so every node drops the same
                                 // ones. A dropped object simply does not fold, which is what "the
                                 // transaction was invalid" ought to mean.
-                                let objects = self.palw_v2_accepted_objects(state, state_params, &point, objects, current);
+                                let (objects, folded) = self.palw_v2_accepted_objects(state, state_params, &point, objects, current);
                                 // Unit C step 4: a receipt-lane block spends a quantum, and its
                                 // right to do so is a DRAW — so the beacon it draws against is
                                 // derived from this candidate's own chain, never read off the
                                 // spending block. A block that supplied its own beacon would be
                                 // choosing the randomness that decides whether it wins.
-                                let attempt = match self.palw_v2_check_attempt_admission(&header, state, state_params, &point) {
+                                // **ADR-0064, and it is off unless a fence says otherwise.** With
+                                // `palw_bootstrap_activation` unset — every shipped preset — this
+                                // is `None` and the behaviour is byte-identical to before the
+                                // field existed. Armed, the block's own attempt may name a bond
+                                // this block's own accepted objects register, which is how a chain
+                                // whose producers have all stopped restarts without an operator.
+                                let bootstrap =
+                                    self.palw_bootstrap_activation.filter(|fence| fence.is_active(point.daa_score)).map(|_| &folded);
+                                let attempt = match self.palw_v2_check_attempt_admission(&header, state, state_params, &point, bootstrap) {
                                     Ok(attempt) => attempt,
                                     Err(adm_error) => {
                                         info!("Block {} is disqualified from virtual chain (PALW admission): {}", current, adm_error);
@@ -4163,7 +4176,7 @@ impl VirtualStateProcessor {
             // attacker to land several blocks in one, where the open version needed only one
             // earlier block of its own; closing it needs the payment set to come from the
             // transition's `merged_skips`, which is computed after this set is consumed.
-            match self.palw_v2_check_attempt_admission(&header, state, state_params, point) {
+            match self.palw_v2_check_attempt_admission(&header, state, state_params, point, None) {
                 Ok(Some(envelope)) => {
                     // The one question the parent state cannot answer: two siblings in THIS
                     // mergeset carrying one identity. The state answers for identities the chain
@@ -4278,6 +4291,24 @@ impl VirtualStateProcessor {
         objects: Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
         block: BlockHash,
     ) -> Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
+        self.palw_v2_accepted_objects(state, state_params, point, objects, block).0
+    }
+
+    /// The same filter, with the state it folded to — ADR-0064's half. The bootstrap lookup reads
+    /// bonds out of THIS, so a test that only saw the accepted objects could not tell the fixed
+    /// behaviour ("the registry the transition will have") from the one it replaced ("the first
+    /// `BondRegistered` in the list"), which differ exactly when a block registers and then
+    /// touches the same bond.
+    #[cfg(test)]
+    pub(super) fn palw_v2_accepted_objects_and_state_for_tests(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        objects: Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
+        block: BlockHash,
+    ) -> (Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>, kaspa_consensus_core::palw_state_v2::PalwChainStateV2)
+    {
         self.palw_v2_accepted_objects(state, state_params, point, objects, block)
     }
 
@@ -4288,7 +4319,8 @@ impl VirtualStateProcessor {
         point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
         objects: Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
         block: BlockHash,
-    ) -> Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
+    ) -> (Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>, kaspa_consensus_core::palw_state_v2::PalwChainStateV2)
+    {
         // **Filtered SEQUENTIALLY, against the state each accepted object leaves behind.**
         //
         // Validating every object against the parent state alone is wrong in exactly the way the
@@ -4361,7 +4393,14 @@ impl VirtualStateProcessor {
                 kinds.iter().map(|(k, n)| format!("{n}× {k}")).collect::<Vec<_>>().join(", ")
             );
         }
-        accepted
+        // **The rehearsal's end state, handed back rather than recomputed.** ADR-0064 has to ask
+        // "what does the bond registry look like once this block's own objects are applied", and
+        // the only honest answer is the one this loop just built. Recomputing it beside this
+        // function would be a second fold obliged to agree with the first, which is the shape of
+        // defect ADR-0064 exists to remove. Only bond records are read out of it: every field of
+        // one is a function of the objects and `daa_score`, never of the synthetic blue score the
+        // rehearsal advances.
+        (accepted, folded)
     }
 
     /// **Assemble the largest lifecycle object this node's receipt pool supports** (launch
@@ -4875,12 +4914,25 @@ impl VirtualStateProcessor {
     /// then fold a transition that had never heard of it. No claim was created, so nothing could
     /// be bound, licensed, challenged or finalized, and `safe_weight` never left zero. Handing the
     /// envelope back is what makes the check and the fold speak about the same object.
+    /// `bootstrap_state` is ADR-0064's mergeset bond view, and it is `Some` for exactly one
+    /// caller: the CHAIN BLOCK's own attempt, past `palw_bootstrap_activation`. The merged-work
+    /// callers pass `None` — a block merged from a sibling is not "this block's own attempt", and
+    /// letting it self-bond would let one block license work for bonds nobody's chain had accepted.
+    ///
+    /// What is handed in is the state the ACCEPTED objects fold to — the same set
+    /// `apply_palw_transition_v4` applies at step 3 before it applies own work at step 4 — so the
+    /// bond resolves against exactly the registry the transition is about to have. Reading the
+    /// first matching `BondRegistered` off the object list instead would answer a subtly different
+    /// question: a block that registers a bond and then retires it in the same mergeset would be
+    /// told the bond is Active while the transition holds it Retiring. The disagreement ADR-0064
+    /// removes is closed by construction, not by two readings agreeing to agree.
     fn palw_v2_check_attempt_admission(
         &self,
         header: &Header,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
         point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        bootstrap_state: Option<&kaspa_consensus_core::palw_state_v2::PalwChainStateV2>,
     ) -> Result<Option<kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2>, String> {
         use kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2;
         if header.pow_algo_id != kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2 {
@@ -4908,7 +4960,12 @@ impl VirtualStateProcessor {
         // signature somebody checks.
         let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(self.network_id_bytes.as_slice(), Some(self.genesis.hash));
         let pre_pow_hash = kaspa_consensus_core::hashing::header::pre_pow_hash_64(header);
-        kaspa_consensus_core::palw_admission_v2::check_palw_attempt_admission_full_v2(
+        // ADR-0064: the record for THIS attempt's bond as this block's own mergeset leaves it.
+        // Read out of the rehearsal's end state, so it is the transition's own answer rather than
+        // a second opinion about what a fresh bond is.
+        let wanted = kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(envelope.attempt.executor_bond);
+        let bootstrap_bond = bootstrap_state.and_then(|folded| folded.bond(&wanted)).cloned();
+        kaspa_consensus_core::palw_admission_v2::check_palw_attempt_admission_full_v2_with_bootstrap(
             state,
             state_params,
             admission,
@@ -4919,6 +4976,7 @@ impl VirtualStateProcessor {
             header.nonce,
             &envelope,
             |key, message, sig, context| verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false),
+            bootstrap_bond.as_ref(),
         )
         .map_err(|e| e.to_string())?;
         Ok(Some(envelope))
@@ -4977,7 +5035,7 @@ impl VirtualStateProcessor {
                     continue;
                 }
             };
-            match self.palw_v2_check_attempt_admission(&header, state, state_params, point) {
+            match self.palw_v2_check_attempt_admission(&header, state, state_params, point, None) {
                 Ok(Some(envelope)) => works.push(PalwMergedOwnedWorkV1::Attempt(*blue, envelope)),
                 Ok(None) => match self.palw_v2_check_receipt_spend(&header, state, state_params, point) {
                     Ok(Some(envelope)) => works.push(PalwMergedOwnedWorkV1::Spend(*blue, envelope)),

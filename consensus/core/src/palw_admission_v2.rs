@@ -455,9 +455,46 @@ pub fn check_palw_attempt_admission_full_v2<V>(
 where
     V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
 {
+    check_palw_attempt_admission_full_v2_with_bootstrap(
+        state,
+        state_params,
+        admission,
+        ctx,
+        network_domain,
+        pre_pow_hash,
+        timestamp,
+        nonce,
+        envelope,
+        verify_mldsa87,
+        None,
+    )
+}
+
+/// [`check_palw_attempt_admission_full_v2`] with ADR-0064's mergeset bond view.
+///
+/// The stateless binding and the SIGNATURE run first and are untouched by the fence: a
+/// mergeset-declared bond still has to be named by an attempt its own key signed. The bootstrap
+/// record answers "is this bond registered", never "did its holder authorise this".
+#[allow(clippy::too_many_arguments)]
+pub fn check_palw_attempt_admission_full_v2_with_bootstrap<V>(
+    state: &PalwChainStateV2,
+    state_params: &PalwStateParamsV2,
+    admission: &PalwAdmissionParamsV2,
+    ctx: &PalwBlockContextV2,
+    network_domain: Hash64,
+    pre_pow_hash: Hash64,
+    timestamp: u64,
+    nonce: u64,
+    envelope: &PalwAttemptEnvelopeV2,
+    verify_mldsa87: V,
+    bootstrap_bond: Option<&crate::palw_state_v2::PalwBondStateV2>,
+) -> Result<Hash64, PalwAdmissionV2Error>
+where
+    V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
+{
     envelope.validate_stateless_v2(network_domain, pre_pow_hash, timestamp, nonce)?;
     envelope.validate_signature_v2(verify_mldsa87)?;
-    check_palw_attempt_admission_v2(state, state_params, admission, ctx, envelope)
+    check_palw_attempt_admission_v2_with_bootstrap(state, state_params, admission, ctx, envelope, bootstrap_bond)
 }
 
 #[cfg(test)]

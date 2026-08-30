@@ -960,6 +960,155 @@ async fn a_duplicate_lifecycle_object_is_dropped_and_the_block_stands() {
         .expect("and the whole accepted set applies in one block");
 }
 
+/// **ADR-0064 — the bootstrap registry is the one the transition will have, not the one the
+/// object list looks like.**
+///
+/// The recovery rule lets a chain block's own attempt name a bond that this same block's objects
+/// register, which is how a chain whose producers have all stopped restarts without an operator.
+/// The bond it resolves against therefore has to be the registry the transition will hold after it
+/// folds this block's accepted objects — and the cheap way to write that lookup, scanning the
+/// object list for the first matching `BondRegistered`, is a DIFFERENT question with a different
+/// answer.
+///
+/// It differs exactly when the block touches the bond again. A mergeset carrying a registration
+/// and then a retirement for the same bond leaves it `Retiring`; the first-object reading says
+/// `Active`, and admission item 1 refuses `Retiring`. One reading admits the block, the other
+/// refuses it, and the whole of ADR-0064 is the removal of a disagreement of precisely that shape.
+///
+/// Both readings are exercised: the registration alone (where they agree, so a broken lookup still
+/// passes) and the registration followed by a retirement (where they cannot).
+#[tokio::test]
+async fn palw_v2_the_bootstrap_registry_is_the_state_the_transition_will_hold() {
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    use kaspa_consensus_core::palw_state_v2::{
+        PALW_BOND_REGISTRATION_V2_MLDSA87_CONTEXT, PALW_BOND_RETIREMENT_V2_MLDSA87_CONTEXT, PalwBondKeyV2,
+        PalwBondStatusV2, PalwConsensusObjectV2, palw_bond_registration_message_v2, palw_bond_retirement_message_v2,
+    };
+    use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
+
+    let catalog = palw_v2_test_catalog();
+    let bundle = palw_v2_test_bundle_funded_for(&catalog, 64);
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    for _ in 0..4 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+
+    let vp = ctx.consensus.virtual_processor();
+    let (_, state) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("the tip loads");
+    let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+        config.params.net.to_string().as_bytes(),
+        Some(config.params.genesis.hash),
+    );
+
+    // A newcomer: an ML-DSA-87 identity past the genesis registry's rows, and a registration
+    // outpoint the chain has never accepted. This is the party ADR-0064 exists for.
+    let kp = TestConsensus::palw_v2_registry_keypair(40);
+    let pubkey = kp.verification_key.as_ref().to_vec();
+    let operator_pubkey = vec![0x64u8; 8];
+    let bond = PalwBondKeyV2(TransactionOutpoint::new(TransactionId::default(), 640));
+    let collateral = bundle.bond.min_collateral_sompi();
+    let payout_payload = kaspa_hashes::Hash64::from_u64_word(0x9A11);
+    let sign = |message: kaspa_hashes::Hash64, context: &[u8]| {
+        libcrux_ml_dsa::ml_dsa_87::sign(&kp.signing_key, message.as_byte_slice(), context, [0u8; 32])
+            .expect("sign")
+            .as_ref()
+            .to_vec()
+    };
+    let registered = PalwConsensusObjectV2::BondRegistered {
+        bond,
+        pubkey: pubkey.clone(),
+        operator_pubkey: operator_pubkey.clone(),
+        collateral,
+        payout_payload,
+        signature: sign(
+            palw_bond_registration_message_v2(network_domain, &bond, &pubkey, &operator_pubkey, collateral, &payout_payload),
+            PALW_BOND_REGISTRATION_V2_MLDSA87_CONTEXT,
+        ),
+    };
+
+    let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+        block: ctx.consensus.get_sink(),
+        daa_score: ctx.consensus.get_virtual_daa_score(),
+        blue_score: 5,
+        subsidy: 0,
+    };
+    assert!(state.bond(&bond).is_none(), "the parent chain has never seen this bond — that IS the deadlock");
+
+    // The registration alone. Both readings agree here, which is why this case cannot be the whole
+    // test: it is the one a first-object lookup also passes.
+    let (accepted, folded) = vp.palw_v2_accepted_objects_and_state_for_tests(
+        &state,
+        &bundle.state,
+        &point,
+        vec![registered.clone()],
+        ctx.consensus.get_sink(),
+    );
+    assert_eq!(accepted.len(), 1, "an honest registration is accepted: {accepted:?}");
+    let fresh = folded.bond(&bond).expect("ADR-0064's whole point: the block's own mergeset registers it");
+    assert_eq!(fresh.status, PalwBondStatusV2::Active);
+    assert_eq!(fresh.pubkey, pubkey, "and it is the newcomer's key, so item 2 still has something to compare");
+    assert_eq!(fresh.registered_daa, point.daa_score, "registered AT this block, which is what a maturity rule would measure from");
+
+    // Registration then retirement, one mergeset. The transition leaves the bond `Retiring`; the
+    // reading this test exists to forbid would have answered `Active`.
+    let retired = PalwConsensusObjectV2::BondRetireRequested {
+        bond,
+        signature: sign(palw_bond_retirement_message_v2(network_domain, &bond), PALW_BOND_RETIREMENT_V2_MLDSA87_CONTEXT),
+    };
+    let (accepted, folded) = vp.palw_v2_accepted_objects_and_state_for_tests(
+        &state,
+        &bundle.state,
+        &point,
+        vec![registered, retired],
+        ctx.consensus.get_sink(),
+    );
+    assert_eq!(accepted.len(), 2, "both objects are valid in sequence — neither is dropped: {accepted:?}");
+    let after = folded.bond(&bond).expect("still registered, just on its way out");
+    assert!(
+        matches!(after.status, PalwBondStatusV2::Retiring { .. }),
+        "the registry the transition will hold says Retiring; reading the first BondRegistered off the \
+         list would have said Active, and admission treats those two answers oppositely: {:?}",
+        after.status
+    );
+
+    // And that difference is load-bearing: item 1 refuses a retiring bond, so the two readings
+    // disagree about whether this block may produce at all.
+    let attempt = kaspa_consensus_core::palw_attempt_v2::PalwAttemptUnsignedV2 {
+        version: 1,
+        network_domain,
+        challenge: kaspa_hashes::Hash64::from_u64_word(0),
+        class_id: kaspa_hashes::Hash64::from_u64_word(0),
+        executor_bond: bond.0,
+        executor_pubkey: pubkey,
+        operator_id: kaspa_consensus_core::palw_state_v2::palw_operator_id_v2(&operator_pubkey),
+        artifact_root: kaspa_hashes::Hash64::from_u64_word(0),
+        trace_root: kaspa_hashes::Hash64::from_u64_word(0),
+        output_root: kaspa_hashes::Hash64::from_u64_word(0),
+        pwu: 1,
+        trace_manifest_root: kaspa_hashes::Hash64::from_u64_word(0),
+        trace_chunk_count: 1,
+        trace_retention_daa: 0,
+        execution_root: kaspa_hashes::Hash64::from_u64_word(0),
+    };
+    let err = kaspa_consensus_core::palw_admission_v2::check_palw_producer_entitlement_v2_with_bootstrap(
+        &state,
+        &attempt,
+        folded.bond(&bond),
+    )
+    .expect_err("a bond this block itself put into retirement may not also produce under it");
+    assert!(
+        matches!(err, kaspa_consensus_core::palw_admission_v2::PalwAdmissionV2Error::BondRetiring(k) if k == bond),
+        "refused for the retirement, which is the fact the folded registry carries and the object list does not: {err:?}"
+    );
+}
+
 /// **A merged blue is paid only if this chain can show its producer is bonded** (launch blockers
 /// §8, first bullet).
 ///
