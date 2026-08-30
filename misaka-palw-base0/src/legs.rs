@@ -106,10 +106,20 @@ pub fn base0_captured_rows_v1(probe: &crate::engine::ForwardProbe) -> Vec<Base0C
 
 /// **The same rows, from the A16 engine's trace.**
 ///
-/// `A16Engine::forward_token_traced` records every committed node in the shape profile's own
-/// numbering — `pre` and `post` as step SEQUENCES at layer 0, `attn` as one list per layer — which
-/// is exactly the coordinate system [`Base0CapturedRowV1`] carries, so this is a flattening and
-/// not a translation. Written as its own function rather than a generic over the two probe types
+/// `A16Engine::forward_token_traced` records `pre` and `post` as step SEQUENCES at layer 0 and
+/// `attn` as one list per layer, which is the coordinate system [`Base0CapturedRowV1`] carries —
+/// so this is a flattening of the TRACE's own numbering.
+///
+/// **On today's A16 class it is ALMOST the profile's numbering, and the exception is the point.**
+/// Measured: the per-layer and post tables agree exactly, and the pre table does not — the engine
+/// records the embedding gather and the requant that lifts it onto the A16 stream, while the
+/// profile declares only the gather. A requant is a narrowing, and ADR-0049 Decision F requires a
+/// class to name every narrowing its engine performs; `A16Engine` has no `plan()` and there is no
+/// counterpart to `base0_check_graph_v1` to enforce it.
+///
+/// So `Qwen25A16Backend::execute_free_prompt` checks the correspondence and refuses rather than
+/// dropping a row it cannot prove is undeclared-on-purpose. This flattening is the right shape for
+/// the class that declares that node; it is not a capture path for the one that does not. Written as its own function rather than a generic over the two probe types
 /// because the two engines' traces are different structs for good reasons, and a trait to unify
 /// them would be three lines of abstraction over eleven lines of loop.
 ///

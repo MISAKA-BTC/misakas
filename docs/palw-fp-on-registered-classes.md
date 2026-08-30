@@ -174,3 +174,41 @@ currently register a class that is both a language model and disputable. Closing
 registering one — with a state map that describes its cache (`integer_kv_state_chunk_map_id_v2`
 exists for that), the checkpoint capture against it, and `disclose`/`bisect_prefix_state` so
 `supports_court` can be true without lying. Everything up to that point is landed and tested.
+
+
+## The second A16 defect: its registered graph omits a narrowing
+
+Implementing the capture found a defect the map problem was hiding, and this one is smaller and
+sharper. ADR-0049 Decision F:
+
+> No worker may commit a step leg for a class whose profile does not name every narrowing the
+> engine performs.
+
+`Base0Engine` exposes `plan()` and `base0_check_graph_v1` enforces exactly that, per token, before
+the first leaf. **`A16Engine` has no plan and there is no A16 counterpart**, so nothing checks it
+for this family — and measuring shows it does not hold:
+
+| table | profile declares | engine records |
+|---|---|---|
+| pre | 1 (`EmbedLookup`) | 2 — the gather, **and the requant that lifts it onto the A16 stream** |
+| per-layer | 27 | 27 |
+| post | 3 | 3 |
+
+The per-layer and post tables agree exactly. The pre table is short by one node, and the missing
+one is `a16_requant(&embed_row, &tile(self.embed_lift, d))` — a requant, which is the kind of
+operation Decision F exists for. Decision F also states the consequence: a producer that ran anyway
+"would commit to arithmetic the court recomputes differently and be convicted for performing it
+correctly".
+
+`Qwen25A16Backend::execute_free_prompt` therefore checks the correspondence and refuses, naming the
+node. It does not drop the undeclared row: dropping would be guessing that the omission was
+deliberate, and the guess is unfalsifiable from here.
+
+So the corrected A16 class needs TWO changes to its profile, both of which move the shape profile
+id and therefore register a different class:
+
+1. `state_chunk_map_id: integer_kv_state_chunk_map_id_v2()` — the width its cache actually has;
+2. the pre table naming the embed-lift requant.
+
+Neither is speculative now: the first is measured against the cache's element type, the second
+against the engine's own trace. Everything else on the executor side is built and tested.
