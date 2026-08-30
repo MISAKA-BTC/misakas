@@ -4,7 +4,7 @@
 seat draw already dedups by operator, and "someone else" turned out to be uncheckable. The title now
 names what survived.)*
 
-Status: **D1 and D4 LANDED (dormant); D2 restated; D3 and D5 decided** (2026-08-30). Closes the
+Status: **D1, D2 and D4 LANDED (all dormant); D3 and D5 decided** (2026-08-30). Closes the
 CRITICAL recorded in the two addenda to `docs/palw-mainnet-audit-2026-08-30.md`. **Mainnet
 blocker.** Consensus-affecting, but **no re-mint**: both landed rules sit behind top-level
 `ForkActivation` fences, `None` on every preset, so no shipped fingerprint moves and either can be
@@ -88,7 +88,8 @@ Three things the implementation had to decide, none of which this ADR anticipate
   `consensus_params_id` instead.
 * **The liveness trap below is now refused, not documented.** See the Consequences entry.
 
-**D2 — ~~Frontier provenance.~~ UNIMPLEMENTABLE AS WRITTEN. Restated below.**
+**D2 — ~~Frontier provenance.~~ Unimplementable as written; RESTATED AND LANDED as a
+comparison-site rule (dormant).**
 
 The sentence was: *a `safe_frontier` advance requires receipts whose panels were drawn from bonds
 mature relative to the fork point, not merely relative to the branch's own tip; without this, D1 is
@@ -120,14 +121,33 @@ supposed to impose, and it does impose it.
   (`protocol/flows/src/ibd/flow.rs:1912-1913`) with no shared reachability, so there is no ancestor
   to compute. Say so in whatever ships it; a gate that silently covers one of two entry points is
   worse than one that admits its scope.
-* **D2b — a single-chain anchor that is not the DAA.** The property D2 actually wanted is *the bond
-  was visible before this branch diverged*, and the only branch-local quantity an attacker cannot
-  advance privately is the frontier itself. "A bond may be seated only if it was registered at or
-  before the branch's own safe frontier" is that property, inside the pure fold. It is **not
-  implementable without new state**: `safe_frontier_blue_score` is a blue score and `registered_daa`
-  is a DAA score, and comparing them is unsound. Recording either a registration blue score on the
-  bond or a DAA on the frontier changes the state root, which is the re-mint D1 and D4 were
-  deliberately shaped to avoid. **Left open with the cost stated rather than half-built.**
+* **D2b — ~~a single-chain anchor that is not the DAA.~~ Withdrawn: D2a needs no anchor.** The
+  worry was that "registered after the fork point" required comparing a blue score to a DAA score,
+  which is unsound, and that fixing it meant new state and a re-mint. **It requires neither.** The
+  bond registry is append-only (D5), so along any chain bonds only accumulate, and therefore
+  *registered after the fork point* is exactly *present in the challenger's registry and absent
+  from the ancestor's* — a set difference between two materialized states. No units are compared,
+  `registered_daa` is never read, and no state changes. That is what D2a implements.
+
+**What landed for D2a**, behind a top-level bare `Option<ForkActivation>` (`None` on every preset):
+at the deep-reorg gate, when the challenger's registry holds bonds the ancestor's does not and a
+panel that bound on the challenger's branch seated a quorum of them, the reorg is refused
+(`FrontierProvenanceViolation`). Panels are read off the DELTAS rather than the challenger's tip,
+because `retire_claim` deletes a claim and its panel while `safe_frontier` never retreats — so the
+frontier can stand on a panel the tip no longer holds.
+
+The fast path is a proof rather than a shortcut: a panel holds at most `minted` new seats, so a
+quorum of them needs `minted >= quorum`, and the threshold used is the strictly smaller
+`seat_count - quorum` that the majority invariant implies. It therefore scans sometimes when it
+need not and never skips when it must, checked exhaustively over every legal panel shape.
+
+**Three abstentions, deliberate.** No fork point within the horizon, a state this node cannot
+materialize, or a missing delta all pass with a warning rather than refusing. A veto that cannot
+name a fork point is the permanent-partition shape the gate beside it already learned to escape.
+
+**And the threshold is derived, not configured.** A value that sits beside a fence is normalised
+out of `consensus_identity_id`, so two builds scheduling one height with different thresholds would
+peer and then disagree — the hazard D1 carries permanently. A bare fence has nothing to coordinate.
 
 Note also that `PalwCandidateOrderV1` is four scalars (`palw_fork_choice.rs:38-53`), so any
 provenance a comparison-site rule wants has to widen that seam or be computed beside it.
