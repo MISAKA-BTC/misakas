@@ -846,6 +846,49 @@ impl ValidatorKey {
         self.build_funded_overlay_tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, bytes, funding_outpoint, funding, fee, false)
     }
 
+    /// **The receipt lane's carriage: a signed spend of one certified quantum (FP-R5).**
+    ///
+    /// The mirror of [`Self::build_fp_commitment_tx`], for the other end of the claim's life: that
+    /// one opens a claim, this one spends a quantum of a certified claim into a receipt BLOCK. It
+    /// returns the envelope rather than a transaction because a receipt block's carriage rides the
+    /// HEADER (`palw_commitment`, algo 7), not the transaction lane — the producer sets
+    /// `pow_algo_id` and attaches these bytes.
+    ///
+    /// Nothing here is chosen. The challenge binds the header's own position (`pre_pow_hash`,
+    /// `timestamp`, `nonce`) so the envelope cannot be replayed onto another block; the ticket the
+    /// admission prices is a pure function of (domain, beacon, claim, quantum) that no field here
+    /// influences — grinding this signature buys nothing, which is the lane's design.
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_fp_receipt_spend_envelope(
+        &self,
+        network_domain: Hash64,
+        pre_pow_hash: Hash64,
+        timestamp: u64,
+        nonce: u64,
+        claim_id: Hash64,
+        quantum_index: u32,
+        producer_bond: TransactionOutpoint,
+        beacon_block: Hash64,
+    ) -> kaspa_consensus_core::palw_freeprompt_v3::PalwReceiptSpendEnvelopeV3 {
+        use kaspa_consensus_core::palw_freeprompt_v3::{
+            PALW_FP_V3_MLDSA87_SPEND_CONTEXT, PALW_FP_V3_VERSION, PalwReceiptSpendEnvelopeV3, PalwReceiptSpendUnsignedV3,
+            fp_spend_id_v3, spend_challenge_v3,
+        };
+        let spend = PalwReceiptSpendUnsignedV3 {
+            version: PALW_FP_V3_VERSION,
+            network_domain,
+            challenge: spend_challenge_v3(network_domain, pre_pow_hash, timestamp, nonce, claim_id, quantum_index, &producer_bond),
+            claim_id,
+            quantum_index,
+            beacon_block,
+            producer_bond,
+            producer_pubkey: self.public_key().to_vec(),
+        };
+        let signature =
+            self.sign_with_context(fp_spend_id_v3(&spend).as_bytes().as_slice(), PALW_FP_V3_MLDSA87_SPEND_CONTEXT).to_vec();
+        PalwReceiptSpendEnvelopeV3 { spend, signature }
+    }
+
     /// Sign this validator's **verifier verdict** over a peer's receipt.
     ///
     /// `replay_receipt_hash` MUST be what this node's own independent re-execution produced. The

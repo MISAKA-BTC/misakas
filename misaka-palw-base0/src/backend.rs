@@ -801,8 +801,8 @@ mod end_to_end_tests {
     use kaspa_consensus_core::palw_fp_admission_v3::check_palw_receipt_spend_admission_v3;
     use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, palw_fp_commitment_v3};
     use kaspa_consensus_core::palw_freeprompt_v3::{
-        PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_V3_VERSION, PalwBeaconFactV3, PalwFpCuWeightsV3, PalwFreePromptJobV3,
-        PalwReceiptSpendEnvelopeV3, PalwReceiptSpendUnsignedV3, fp_claim_id_v3, fp_quanta_v3, spend_challenge_v3,
+        PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_V3_VERSION, PalwBeaconFactV3, PalwFpCuWeightsV3, PalwFreePromptJobV3, fp_claim_id_v3,
+        fp_quanta_v3,
     };
     use kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2;
     use kaspa_consensus_core::palw_state_v2::{
@@ -833,7 +833,11 @@ mod end_to_end_tests {
         let backend = Base0Backend::new(resolve_class_v1(&court, entry.class_id(), root, &[]).expect("the floor resolves"));
 
         let bond_outpoint = TransactionOutpoint { transaction_id: TransactionId::from_u64_word(1), index: 0 };
-        let pubkey = vec![7u8; 4];
+        // A REAL ML-DSA-87 identity, because the point of this test is the full admission — the
+        // stateless signature check included. A fixture pubkey passes the stateful items and would
+        // leave `validate_signature_v3` unexercised on the only end-to-end path in the tree.
+        let key = kaspa_pq_validator_core::ValidatorKey::from_seed([0x42u8; kaspa_pq_validator_core::VALIDATOR_SEED_LEN]);
+        let pubkey = key.public_key().to_vec();
         let ctx_max = backend.profile().n_ctx as usize;
         let prompt: Vec<usize> = vec![11];
         let decode = (ctx_max - prompt.len()) as u32;
@@ -932,23 +936,48 @@ mod end_to_end_tests {
 
         // ---- the block: does the chain admit a receipt spending this work? --------------------
         let beacon = PalwBeaconFactV3 { beacon_block: h(0xBEAC), beacon_daa: 130, prev_attempt_daa: 120 };
+        // **The envelope the PRODUCER builds** — `build_fp_receipt_spend_envelope`, signing with
+        // the bond's real key — admitted by the FULL check: stateless shape, the ML-DSA-87
+        // signature, and all eight stateful items. This is the carriage a receipt block's header
+        // carries under algo 7, produced by the same function a mining node calls.
         let (pph, ts, nonce) = (h(0xB0), 1_700u64, 9u64);
-        let envelope = PalwReceiptSpendEnvelopeV3 {
-            spend: PalwReceiptSpendUnsignedV3 {
-                version: PALW_FP_V3_VERSION,
-                network_domain: h(999),
-                challenge: spend_challenge_v3(h(999), pph, ts, nonce, claim_id, 0, &bond_outpoint),
-                claim_id,
-                quantum_index: 0,
-                beacon_block: h(0xBEAC),
-                producer_bond: bond_outpoint,
-                producer_pubkey: pubkey,
-            },
-            signature: vec![0x5A; kaspa_consensus_core::dns_finality::STAKE_ATTESTATION_SIG_LEN],
-        };
-        let admitted = check_palw_receipt_spend_admission_v3(&state, &at(6, 131, 6), MATURITY, USE_WINDOW, &beacon, &envelope)
-            .expect("the chain admits a receipt block for a certified free-prompt claim");
+        let envelope = key.build_fp_receipt_spend_envelope(h(999), pph, ts, nonce, claim_id, 0, bond_outpoint, h(0xBEAC));
+        let admitted = kaspa_consensus_core::palw_fp_admission_v3::check_palw_receipt_spend_admission_full_v3(
+            &state,
+            &at(6, 131, 6),
+            h(999),
+            pph,
+            ts,
+            nonce,
+            MATURITY,
+            USE_WINDOW,
+            &beacon,
+            &envelope,
+            |pk: &[u8], m: &[u8], c: &[u8], sig: &[u8]| kaspa_txscript::verify_mldsa87_with_context(pk, m, c, sig).unwrap_or(false),
+        )
+        .expect("the chain admits a receipt block for a certified free-prompt claim, signature and all");
         assert_ne!(admitted, Hash64::default(), "and it returns the spend id the block is identified by");
+
+        // **The producer's envelope builder is the one the admission accepts.** `produce_receipt`
+        // builds the receipt carriage this way — header position, bond key — so admitting a
+        // hand-built envelope proves the check, and admitting the producer's proves the seam a
+        // mining node actually uses.
+        let producer_envelope = key.build_fp_receipt_spend_envelope(h(999), pph, ts, nonce, claim_id, 0, bond_outpoint, h(0xBEAC));
+        let via_producer = kaspa_consensus_core::palw_fp_admission_v3::check_palw_receipt_spend_admission_full_v3(
+            &state,
+            &at(6, 131, 6),
+            h(999),
+            pph,
+            ts,
+            nonce,
+            MATURITY,
+            USE_WINDOW,
+            &beacon,
+            &producer_envelope,
+            |pk: &[u8], m: &[u8], c: &[u8], sig: &[u8]| kaspa_txscript::verify_mldsa87_with_context(pk, m, c, sig).unwrap_or(false),
+        )
+        .expect("the producer-built envelope is admitted just as the hand-built one was");
+        assert_eq!(via_producer, admitted, "and it identifies the same spend");
 
         // Double-spend of a quantum is `QuantumAlreadySpent`, tested where that transition lives.
     }

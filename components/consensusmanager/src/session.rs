@@ -293,6 +293,16 @@ impl ConsensusSessionOwned {
     }
 
     /// **Which PALW bond outpoints hold collateral that may not be spent right now** (audit3 H3).
+    /// The certified free-prompt quanta `bond` may spend into receipt blocks (FP-R5). Empty off
+    /// ConsensusV2 and for a bond with no `Final` free-prompt claims — same read profile as
+    /// `palw_producer_facts_v2` below.
+    pub fn palw_fp_spendable_v3(
+        &self,
+        bond: kaspa_consensus_core::tx::TransactionOutpoint,
+    ) -> Vec<kaspa_consensus_core::palw_freeprompt_v3::PalwFpSpendableQuantumV3> {
+        self.consensus.palw_fp_spendable_v3(bond)
+    }
+
     /// Same store-tip read profile as `palw_producer_facts_v2` below. Empty off ConsensusV2.
     pub fn palw_locked_bond_outpoints_v2(&self) -> Vec<kaspa_consensus_core::tx::TransactionOutpoint> {
         self.consensus.palw_locked_bond_outpoints_v2()

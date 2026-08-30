@@ -126,6 +126,10 @@ pub struct PalwProducerService {
     /// `None` disables production and says why at startup — a producer that cannot sign is not a
     /// producer, and finding that out at the first template is finding it out too late.
     keypair: Option<Box<libcrux_ml_dsa::ml_dsa_87::MLDSA87KeyPair>>,
+    /// The same seed, kept so the receipt lane can build a `ValidatorKey` — its signer API is
+    /// what `build_fp_receipt_spend_envelope` takes, and generating the keypair twice from one
+    /// seed is the derivation being deterministic, not two identities.
+    key_seed: Option<[u8; kaspa_pq_validator_core::VALIDATOR_SEED_LEN]>,
     bond: Option<TransactionOutpoint>,
     miner_data: Option<MinerData>,
 }
@@ -161,11 +165,11 @@ impl PalwProducerService {
         mining_manager: MiningManagerProxy,
         flow_context: Arc<FlowContext>,
     ) -> Self {
-        let keypair = match kaspa_pq_validator_core::load_validator_seed(&config.key_path) {
-            Ok(seed) => Some(Box::new(libcrux_ml_dsa::ml_dsa_87::generate_key_pair(seed))),
+        let (keypair, key_seed) = match kaspa_pq_validator_core::load_validator_seed(&config.key_path) {
+            Ok(seed) => (Some(Box::new(libcrux_ml_dsa::ml_dsa_87::generate_key_pair(seed))), Some(seed)),
             Err(err) => {
                 warn!("[{PALW_PRODUCER}] {err} — production disabled");
-                None
+                (None, None)
             }
         };
         let bond = match parse_outpoint(&config.bond) {
@@ -212,7 +216,7 @@ impl PalwProducerService {
                 Err(err) => warn!("[{PALW_PRODUCER}] class artifact {} is unusable: {err}", path.display()),
             }
         }
-        Self { config, consensus_manager, mining_manager, flow_context, keypair, bond, miner_data, class_holdings }
+        Self { config, consensus_manager, mining_manager, flow_context, keypair, key_seed, bond, miner_data, class_holdings }
     }
 
     /// **Keep what the attempt promises to keep.**
@@ -325,8 +329,10 @@ impl PalwProducerService {
             info!("[{PALW_PRODUCER}] not producing (no signing key)");
             return;
         }
-        let network_domain =
-            kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(self.config.network_id.as_bytes(), Some(self.config.genesis_hash));
+        let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+            self.config.network_id.as_bytes(),
+            Some(self.config.genesis_hash),
+        );
         info!("[{PALW_PRODUCER}] starting (bond={bond}, key={})", self.config.key_path);
 
         let mut produced = 0u64;
@@ -408,6 +414,20 @@ impl PalwProducerService {
             // suppressed as a repeat of one the node has since recovered from.
             last_hold = None;
             last_hold_at = None;
+            // **The receipt lane, first.** A certified free-prompt claim whose quantum wins its
+            // draw is a receipt block waiting to be mined, and it needs no nonce search — the
+            // quantum ticket is the lottery, already decided at the claim's beacon. So it is
+            // cheaper than an attempt and, unlike one, it turns a claim over into weight. Tried
+            // before the attempt for both reasons.
+            match self.produce_receipt(&session, network_domain, bond, miner_data.clone()).await {
+                Ok(Some(hash)) => {
+                    produced += 1;
+                    info!("[{PALW_PRODUCER}] produced RECEIPT block #{produced} {hash} (a certified free-prompt claim, mined)");
+                    continue;
+                }
+                Ok(None) => {} // No winning quantum right now; fall through to an attempt.
+                Err(err) => warn!("[{PALW_PRODUCER}] receipt: {err}"),
+            }
             match self.produce_one(&session, &facts, network_domain, bond, miner_data.clone()).await {
                 Ok(Some(hash)) => {
                     produced += 1;
@@ -429,6 +449,63 @@ impl PalwProducerService {
                 Err(err) => warn!("[{PALW_PRODUCER}] {err}"),
             }
         }
+    }
+
+    /// **One receipt block, if a quantum wins right now.**
+    ///
+    /// Asks the chain for this bond's spendable quanta (`palw_fp_spendable_v3` — each row carries
+    /// the beacon and the ticket-vs-target verdict as read at virtual), takes the first winner, and
+    /// builds a header on a fresh template with `pow_algo_id = 7` and the signed spend envelope in
+    /// `palw_commitment`. No nonce search: a receipt block's lottery is the quantum ticket, decided
+    /// at the claim's beacon, so a winning row is already a valid block modulo signing.
+    ///
+    /// `Ok(None)` means no quantum wins yet — the ordinary state, and not an error. It is the same
+    /// answer whether there are no certified claims or their tickets simply lost this draw; the
+    /// operator-facing distinction lives in the log line `produce_one` already prints.
+    async fn produce_receipt(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        network_domain: Hash64,
+        bond: TransactionOutpoint,
+        miner_data: MinerData,
+    ) -> Result<Option<kaspa_consensus_core::BlockHash>, String> {
+        let seed = self.key_seed.ok_or("no signing key")?;
+        let spendable = session.palw_fp_spendable_v3(bond);
+        let Some(win) = spendable.into_iter().find(|q| q.wins) else {
+            return Ok(None);
+        };
+
+        let mut template = self
+            .mining_manager
+            .clone()
+            .get_block_template(session, miner_data)
+            .await
+            .map_err(|e| format!("no block template: {e}"))?;
+
+        // The header the spend binds is THIS one — its pre-pow hash, timestamp and nonce — so the
+        // envelope is built after the template exists and re-bound if the template's fields change.
+        template.block.header.pow_algo_id = kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3;
+        let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(&template.block.header);
+        let key = kaspa_pq_validator_core::ValidatorKey::from_seed(seed);
+        let envelope = key.build_fp_receipt_spend_envelope(
+            network_domain,
+            pre_pow,
+            template.block.header.timestamp,
+            template.block.header.nonce,
+            win.claim_id,
+            win.quantum_index,
+            bond,
+            win.beacon.beacon_block,
+        );
+        template.block.header.palw_commitment = envelope.encode();
+        template.block.header.finalize();
+        let block: kaspa_consensus_core::block::Block = template.block.clone().to_immutable();
+        let hash = block.hash();
+        self.flow_context
+            .submit_rpc_block(session, block)
+            .await
+            .map_err(|e| format!("the chain refused a receipt block this node produced: {e}"))?;
+        Ok(Some(hash))
     }
 
     /// One template, one inference, one bounded nonce search.

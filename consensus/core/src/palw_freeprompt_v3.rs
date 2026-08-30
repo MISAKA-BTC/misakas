@@ -317,6 +317,26 @@ pub fn fp_quanta_v3(cu: u128, quantum_cu: u128, max_quanta_per_receipt: u32) -> 
 /// `beacon_block` exists, and the beacon is an attempt-class block whose every alternative sample
 /// costs one inference (Decision 4). Compare against the class's receipt target with
 /// [`crate::palw_pwu::palw_ticket_admits_v1`] — one ticket space, two lanes.
+/// **One spendable quantum of a certified free-prompt claim, as a producer needs it (FP-R5).**
+///
+/// A row exists only for a quantum whose whole story already holds on this chain: the claim is
+/// `Final`, the quantum is unspent, the beacon fact derived, and the ticket compared against the
+/// class's receipt target AT THE POINT the facts were read. `wins` is that comparison — carried,
+/// with its inputs, so a producer never re-derives the lottery it cannot influence and never
+/// builds a block the admission is known to refuse.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwFpSpendableQuantumV3 {
+    pub claim_id: Hash64,
+    pub class_id: Hash64,
+    pub quantum_index: u32,
+    pub beacon: PalwBeaconFactV3,
+    pub receipt_target: u128,
+    pub ticket: u128,
+    pub wins: bool,
+    /// The last DAA a spending block may carry (invariant F14's window end).
+    pub spend_deadline_daa: u64,
+}
+
 pub fn fp_quantum_ticket_v3(network_domain: Hash64, beacon_block: Hash64, claim_id: Hash64, quantum_index: u32) -> u128 {
     let mut state = keyed(PALW_FP_V3_DOMAIN_QUANTUM_TICKET);
     state.update(network_domain.as_byte_slice());
