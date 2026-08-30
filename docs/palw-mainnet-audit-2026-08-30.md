@@ -204,7 +204,7 @@ cannot be manufactured privately, and it is the input the deep-reorg comparator 
 permanent*: one 0.004 MSK registration made at any time in the network's life is a standing option
 to run this at any later date, and nothing expires it.
 
-### What closing it needs (drafted as ADR-0065, not written yet)
+### What closing it needs (written as ADR-0065; two of the four have landed — see the note after)
 
 * **Seat maturity.** A bond may be drawn for a panel only if `daa - registered_daa ≥ maturity`.
   This is the rule `registered_daa` was evidently recorded for; the field already exists, so this
@@ -219,8 +219,33 @@ to run this at any later date, and nothing expires it.
   alone does **not** close the attack — points 2 and 3 are what make one purchase permanent and
   retroactive.
 
-Consensus-affecting, so it is a fingerprint move and a re-mint. It is a **mainnet blocker** and it
-is live on testnet-11 now.
+It is a **mainnet blocker** and it is live on testnet-11 now.
+
+> **Where these four ended up, and two of them did not survive contact with the code.**
+>
+> * **Seat maturity — LANDED, dormant** (ADR-0065 D1), behind a top-level fence. Measured from the
+>   claim's own anchor rather than the binding block, so the panel stays a pure function of the
+>   claim, and `validate_palw_v2` refuses a fence armed before its own window has elapsed — the
+>   shipped genesis has exactly `seat_count + 1` bonds and the draw excludes the executor, so
+>   arming it early would have starved every panel on the network at once.
+> * **Frontier provenance — UNIMPLEMENTABLE as stated.** `safe_frontier` is written in a pure
+>   single-chain fold whose result is hashed into `state_root`; a value depending on a fork point
+>   would depend on which competing branch a node holds, so two nodes would compute different roots
+>   for the same block. And the "otherwise the attacker simply roots the fork later" above is
+>   wrong: `registered_daa` and the comparison DAA are both branch-local, so the attacker's cost is
+>   to EXTEND the fork by the window — which is exactly the cost maturity was meant to impose, and
+>   does. ADR-0065 D2 restates it as a comparison-site rule (which cannot cover IBD) plus an anchor
+>   that needs new state.
+> * **Bond removal — DECIDED: append-only, deliberately.** A retirement is a status transition, and
+>   the record is the only thing that proves the withdrawal delay elapsed. A `Retiring` bond already
+>   takes no seats, so "permanent" means the registration is, not the powers.
+> * **Re-pricing — unchanged**, and now the only lever left on the one residual D2 named: a bond
+>   pre-registered on the honest chain and held as a standing option is mature at the fork point,
+>   so no provenance rule catches it.
+>
+> **Not a re-mint.** Both landed rules are top-level fences left `None` on every preset, so no
+> shipped fingerprint moves and either can be armed by rolling deploy. The bundle placement this
+> section assumed is the thing that would have partitioned testnet-11 on deploy day.
 
 ---
 
