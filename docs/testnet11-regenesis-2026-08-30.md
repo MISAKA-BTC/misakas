@@ -82,6 +82,15 @@ ssh ubuntu@160.16.131.119 'rm -rf /home/ubuntu/.t11/misaka-testnet-11'
 * **Downstream state on `.113` references the old chain**: the explorer DB filler, the REST API,
   the DNS seeder and the MTP ledger. Reset the explorer DB and the MTP ledger or they will serve
   rows for a chain that no longer exists.
+* **The LLM-jobs pipeline on ibm is downstream too** (`/root/llm-jobs-publish.sh`, cron */2).
+  Three ways this regenesis silently froze it, found on 2026-08-30: the redeploy emptied
+  `/root/misakas-t11r/target/release/` so `misaka-palw-jobs-export` did not exist; the script's
+  `2>/dev/null` on that step hid the failure while the cron exit stayed green through the pipe;
+  and once rebuilt from main, the tool refused its own default `--network misaka-testnet-11` —
+  the domain is genesis-bound since audit M2-18 and derives from the NetworkId identity
+  (`testnet-11`), which the display prefix does not parse as. The script now passes
+  `--network testnet-11` explicitly. Symptom in all three cases: misakascan's `/llm-jobs.json`
+  `Last-Modified` stops moving while the page keeps rendering the previous chain's rows.
 * **The floor producer must be running.** `ibm-node0.sh` deliberately omits
   `--palw-producer-class` so node0 produces the FLOOR class; both model classes spent their
   first-epoch budget on 2026-08-30 and the chain stopped at DAA 360 with nothing producing the
