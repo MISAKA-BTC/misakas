@@ -430,10 +430,28 @@ impl Base0CheckpointCaptureV1 {
     }
 
     /// The map this capture's NEXT checkpoint is taken under.
+    /// **The geometry the CLASS declares, not the one this file happens to know first.**
+    ///
+    /// This used to call `integer_kv_state_geometry_v1` unconditionally while
+    /// `profile.state_chunk_map_id` sat unread beside it. For every class in the tree that was the
+    /// same answer, so nothing broke — and it made the declaration decorative: a class that
+    /// declared the four-byte map would have had its state chunked at one byte per element, which
+    /// is the failure the map id exists to prevent.
+    ///
+    /// A map this family does not implement is an error rather than a fallback. Falling back to v1
+    /// would chunk an unknown class's state at a width nobody chose.
     pub fn next_geometry(&self) -> Result<kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkGeometryV1, LegError> {
         use kaspa_consensus_core::palw_state_chunk_map as map;
         let positions = map::integer_kv_positions_at_v1(&self.ctx, self.next_covered_decode_call());
-        map::integer_kv_state_geometry_v1(&self.profile, positions).map_err(LegError::CheckpointStateMap)
+        let declared = self.profile.state_chunk_map_id;
+        let geometry = if declared == map::integer_kv_state_chunk_map_id_v1() {
+            map::integer_kv_state_geometry_v1(&self.profile, positions)
+        } else if declared == map::integer_kv_state_chunk_map_id_v2() {
+            map::integer_kv_state_geometry_v2(&self.profile, positions)
+        } else {
+            return Err(LegError::CheckpointStateUnavailable { chunk_index: 0 });
+        };
+        geometry.map_err(LegError::CheckpointStateMap)
     }
 
     /// **The leaf rule, in one place.** Serializing a cache and re-deriving from served bytes must
@@ -880,6 +898,37 @@ mod a16_row_tests {
 
         // A width that is neither belongs to some other class's map.
         assert!(cache.state_chunk_bytes_v1(&entry((row_len * 2) as u32)).is_none());
+    }
+
+    /// **The capture chunks at the width the class DECLARES, and refuses a map it does not know.**
+    ///
+    /// `next_geometry` read `state_chunk_map_id` for the first time in this commit; before it, the
+    /// field was decorative and a class declaring the four-byte map would have had its state
+    /// chunked at one byte per element — the exact failure the id exists to prevent, arriving
+    /// through the code that is supposed to honour it.
+    #[test]
+    fn the_checkpoint_capture_follows_the_declared_state_map() {
+        use kaspa_consensus_core::palw_base0_profile::{PALW_RC_BASE0_GEOMETRY, base0_profile_v1, rc_job_context};
+        use kaspa_consensus_core::palw_state_chunk_map as map;
+
+        let base = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("the RC geometry is a profile");
+        let ctx = rc_job_context(&base, 4, 4);
+        let checkpoint_profile = map::integer_kv_checkpoint_profile_v1(map::PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1);
+
+        let width_for = |map_id| {
+            let mut profile = base.clone();
+            profile.state_chunk_map_id = map_id;
+            Base0CheckpointCaptureV1::new(&ctx, &profile, &checkpoint_profile).next_geometry().map(|g| g.row_bytes)
+        };
+
+        let v1 = width_for(map::integer_kv_state_chunk_map_id_v1()).expect("v1 is implemented here");
+        let v2 = width_for(map::integer_kv_state_chunk_map_id_v2()).expect("v2 is implemented here");
+        assert_eq!(v2, v1 * 4, "the declared map decides the width, and v2 is four bytes per element");
+
+        // An unregistered or foreign map is refused rather than approximated: falling back to v1
+        // would chunk an unknown class's state at a width nobody chose.
+        assert!(width_for(Hash64::default()).is_err(), "the unregistered sentinel is not a map");
+        assert!(width_for(Hash64::from_u64_word(0xDEAD)).is_err(), "nor is a map this family does not implement");
     }
 
     /// **The A16 class registers a checkpoint map that cannot describe its own state.**
