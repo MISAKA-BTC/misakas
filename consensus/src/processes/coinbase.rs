@@ -516,8 +516,8 @@ impl CoinbaseManager {
     kaspa-pq additional-issuance emission table.
 
     Tokenomics: 15B KAS of additional issuance over 20 years, decaying at a
-    5%/year exponential rate (q = 0.95), on top of a 13B genesis premine for a
-    28B final supply. The schedule steps once per year (12 identical months),
+    5%/year exponential rate (q = 0.95), on top of a 10B genesis premine for a
+    25B final supply. The schedule steps once per year (12 identical months),
     so the table holds 20 yearly rates × 12 months = 240 entries followed by a
     terminal 0 (issuance ends after year 20).
 
@@ -629,7 +629,7 @@ mod tests {
         // Per-network totals differ from the 1 BPS reference only by the per-month
         // div_ceil rounding surplus: at most (bps-1) sompi/month * SECONDS_PER_MONTH *
         // 240 months ≈ 57 KAS at 10 BPS (cf. the upstream "+51 KAS" note). Negligible
-        // against the 28B supply (1 part in ~5e8) and far below the MAX_SOMPI cap.
+        // against the 25B supply (1 part in ~4e8) and far below the MAX_SOMPI cap.
         // Sub-1-bps networks (devnet: 10_000 ms/block) have an EXACT per-block product
         // (×10) and therefore a surplus of exactly 0.
         for network_id in NetworkId::iter() {

@@ -45,13 +45,14 @@ that changed.
 A node on the right chain logs
 
 ```
-Consensus params fingerprint: 95265934e8965e91f3c22281af735bcd38527b5ee89fa09a05290db566d444a3 (network testnet-11)
+Consensus params fingerprint: b6ecc36298692c83f87b9aa070a681ba63f2daf713c0b86ddefc34ec376d61ad (network testnet-11)
 ```
 
-(Identity as of the **2026-08-29 re-mint** for the audit3 remediation — `PALW_STATE_V2_VERSION` 12.
-The previous value was `15bab795…`; a node still announcing it is on the old chain and every
-upgraded node will refuse it at the handshake. If you joined an earlier testnet-11, wipe the
-appdir; the old chain is archived, not continued.)
+(Identity as of the **2026-08-30 re-mint** for the 10B premine cap, ADR-0059 — genesis
+`0f7e05d5…`, coinbase marker `11,3`. The previous value was `95265934…` (2026-08-29), and
+`15bab795…` before that; a node still announcing either is on an old chain and every upgraded
+node will refuse it at the handshake. If you joined an earlier testnet-11, wipe the appdir;
+the old chain is archived, not continued.)
 
 A different fingerprint means a different ruleset, and the two will refuse each other at handshake.
 Do not treat that as a connectivity problem.

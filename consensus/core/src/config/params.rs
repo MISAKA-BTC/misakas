@@ -3056,7 +3056,9 @@ pub fn palw_rc_qwen36_is_registered() -> bool {
 /// would stay zero, and each block's escrowed worker carve would be burned. `verify_palw_genesis_v2`
 /// now refuses such a registry outright, which is why this is a list.
 pub struct PalwRcGenesisBondCard {
-    /// Which premine output backs this bond (0..=40). It is LOCKED while the bond is not retired.
+    /// Which premine output backs this bond — its collateral outpoint, at `premine_outpoint`
+    /// index `0..cards` (a collateral output carved from the main wallet since the 10B-cap
+    /// re-genesis 2026-08-30). It is LOCKED while the bond is not retired.
     pub premine_index: u32,
     /// The ML-DSA-87 verification key that signs attempts under this bond.
     pub bond_pubkey: &'static [u8],
@@ -3067,8 +3069,9 @@ pub struct PalwRcGenesisBondCard {
     pub payout_payload: [u8; 64],
 }
 
-// **The testnet-12 genesis registry, minted 2026-08-22.** Six bonds over vault premine outputs
-// 0..=5, each with a DISTINCT operator key: `derive_panel_v2` excludes a claim's own executor by
+// **The testnet-12 genesis registry, minted 2026-08-22.** Six bonds over premine collateral
+// outputs 0..=5 (carved from the main wallet since the 10B-cap re-genesis 2026-08-30), each
+// with a DISTINCT operator key: `derive_panel_v2` excludes a claim's own executor by
 // bond, by operator and by key and seats one bond per operator, so a 5-seat panel needs six.
 // `BondRegistered` may not ride a transaction, so a registry too small has no later repair.
 //
@@ -5457,7 +5460,14 @@ mod consensus_params_id_tests {
             // no live node holds the old value, and the same change on a network WITH history
             // would be a partition (which is what M1-6 is about). Testnet's pin is unchanged in
             // the same edit, which is the check that this touched only the unlaunched preset.
-            ("mainnet", MAINNET_PARAMS, "b824da1c83b50ca43285945a4b3aa3dcfe1b2271827a3b4275ff32e90ed5039d"),
+            //
+            // **ALL FIVE pins moved 2026-08-30 by the 10B premine cap (ADR-0059).** The genesis
+            // is inside `Params`, and every network's genesis identity moved together: the vault
+            // block deleted, one 10B main wallet everywhere, testnet-11's collateral/floats/
+            // community carved from it (Relaunch 3, coinbase marker 11,3). Operationally this is
+            // a full re-mint for testnet-11 — stop the whole fleet first, wipe, redeploy; un-wiped
+            // peers are refused at the handshake. Mainnet/devnet/simnet have no live chain.
+            ("mainnet", MAINNET_PARAMS, "be10e93919cb1bd948e1447c03695c53f8dc5426835714475b8df0d4676e4033"),
             // Moved by the bps01⊕iso unification (2026-08-16): the CPU pins are now the UNION of
             // the two facts the branches discovered separately — `single-variant` (bps01, by
             // disassembly) ∧ `no-openmp` (iso, by the Linux link error) in `CPU_BUILD_PROFILE`,
@@ -5475,7 +5485,7 @@ mod consensus_params_id_tests {
             // see docs/testnet10-palw-rollout-runbook.md — and pinned MATERIALIZED (below) per
             // the 8208cd6 lesson, so the pre-merge values (`32cbf80f…` re-genesis-const /
             // `d07cb673…` shadow-materialized) were both superseded by that merge.
-            ("testnet", TESTNET_PARAMS, "41de4731dca9fa11be4b1a7a415dfb739781c1875e3f6c78af8fa4f3bf780ce0"),
+            ("testnet", TESTNET_PARAMS, "60ec6ad310ffcf092733edca6df20c4df53d1aa44cd76bd483cacf64999ca46b"),
             // The PALW staging net (gate-4 soak): differs from "testnet" in exactly the three
             // activation flips (hash lane off, PALW-4 on, Ollama off) + the TN11 genesis. Its own
             // pin proves the t10 row above did NOT move when this preset was added.
@@ -5647,9 +5657,9 @@ mod consensus_params_id_tests {
             // only this preset moves, because only this preset carries a PALW V2 bundle. The
             // re-mint the paragraph above already called for is the one that carries this too;
             // doing it on `404f8715…` would have bought a network needing a second one at once.
-            "95265934e8965e91f3c22281af735bcd38527b5ee89fa09a05290db566d444a3"),
-            ("simnet", SIMNET_PARAMS, "dae24a4cddc3bd324d7e99dc61c9e14269b9a4619fecb639836b8286e144664f"),
-            ("devnet", DEVNET_PARAMS, "f8981a530bf6070e4c27696d2666673ee36a1d9f1f5b4b315c4c7400b84136c0"),
+            "b6ecc36298692c83f87b9aa070a681ba63f2daf713c0b86ddefc34ec376d61ad"),
+            ("simnet", SIMNET_PARAMS, "48f75cc83cacaaa5eb2056fa6a6207a2a018a04f8b6298b23994bc542781391d"),
+            ("devnet", DEVNET_PARAMS, "66928b8a8fe9a8d8c00e3c23845d1217412e6ae090543e7be623deb722aa45ba"),
         ]
         .into_iter()
         .filter_map(|(name, params, expected)| {

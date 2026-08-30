@@ -36,12 +36,13 @@ pub const TRANSIENT_BYTE_TO_MASS_FACTOR: u64 = 4;
 
 /// MaxSompi is the maximum transaction amount allowed in sompi.
 ///
-/// kaspa-pq tokenomics (see docs): final supply is capped at 28B KAS =
-/// 13B genesis premine (re-genesis 2026-06-17: 40 vaults × 0.1B + 1 main × 9B)
+/// kaspa-pq tokenomics (see docs): final supply is capped at 25B KAS =
+/// 10B genesis premine (re-genesis 2026-08-30: the 10B cap, one main wallet,
+/// every network — `config::premine::MISAKA_PREMINE_CAP_SOMPI`)
 /// + 15B additional issuance over 20 years (5%/yr exponential decay; the mined
 /// half is unchanged). This is the per-amount sanity cap used by tx validation
 /// and reported by `GetCoinSupply` as the max supply.
-pub const MAX_SOMPI: u64 = 28_000_000_000 * SOMPI_PER_KASPA;
+pub const MAX_SOMPI: u64 = 25_000_000_000 * SOMPI_PER_KASPA;
 
 // MAX_TX_IN_SEQUENCE_NUM is the maximum sequence number the sequence field
 // of a transaction input can be.

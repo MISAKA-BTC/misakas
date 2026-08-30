@@ -7,16 +7,21 @@ testnet-11 is the public PALW network. Every post-genesis block's proof-of-work 
 deterministic LLM inference**, not a hash. There is no hash lane to fall back to — that is the
 point, and it is what makes the rest of this document necessary.
 
-> **Current identity (2026-08-27 re-mint, ADR-0058) — wipe your datadir if you joined earlier.**
-> The live chain's consensus fingerprint is **`95265934e8965e91f3c22281af735bcd38527b5ee89fa09a05290db566d444a3`**,
-> genesis **`c664a224…`** (three execution classes + the 347M MSK community allocation baked in).
+> **Current identity (2026-08-30 re-mint, ADR-0059 "Relaunch 3", the 10B premine cap) — wipe
+> your datadir if you joined earlier.**
+> The live chain's consensus fingerprint is **`b6ecc36298692c83f87b9aa070a681ba63f2daf713c0b86ddefc34ec376d61ad`**,
+> genesis **`0f7e05d5…`** (coinbase marker `11,3`; three execution classes + the 547M MSK
+> community allocation, now carved out of the single 10B main wallet — the 40-vault block is
+> gone and every network's genesis mints exactly 10B).
 > A node holding any earlier testnet-11 state does not resume on this chain — it is refused at
 > handshake by fingerprint, which is the intended behaviour; `rm -rf` the appdir (or use a new
-> one). Earlier identities, all dead: `49ff9628…` (Relaunch 2, 2026-08-20, genesis `3564ea39…`),
-> `048e6902…`, `25a74c81…`, `bb3e06b4…`, and `bb0a3ad3…` (the 2026-08-27 morning root re-pin,
-> superseded the same day). See [testnet11-relaunch2-genesis.md](testnet11-relaunch2-genesis.md)
-> for how the allocation constants derive, and ADR-0058 for what the re-mint changed. DNS seeding
-> is live (`seeder1.misakascan.com`): a fresh node needs no `--addpeer`.
+> one). Earlier identities, all dead: `95265934…` (2026-08-29 audit3 re-mint, genesis
+> `c664a224…`), `15bab795…`, `49ff9628…` (Relaunch 2, 2026-08-20, genesis `3564ea39…`),
+> `048e6902…`, `25a74c81…`, `bb3e06b4…`, and `bb0a3ad3…`. See
+> [adr/0059-the-10b-premine-cap.md](adr/0059-the-10b-premine-cap.md) for what this re-mint
+> changed and [testnet11-relaunch2-genesis.md](testnet11-relaunch2-genesis.md) for how the
+> allocation constants derive. DNS seeding is live (`seeder1.misakascan.com`): a fresh node
+> needs no `--addpeer`.
 
 Read §2 before you build anything. A node outside the determinism class does not sync slowly or
 mine badly; it computes different tags, rejects every honest block, and has its own rejected. It

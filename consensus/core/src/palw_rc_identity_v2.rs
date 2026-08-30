@@ -588,7 +588,7 @@ mod tests {
         let mut objects = overstated_bundle.genesis_objects.clone();
         for object in objects.iter_mut() {
             if let PalwConsensusObjectV2::BondRegistered { collateral, .. } = object {
-                *collateral = crate::config::premine::MISAKA_PREMINE_SOMPI;
+                *collateral = crate::config::premine::MISAKA_PREMINE_CAP_SOMPI;
             }
         }
         let err =

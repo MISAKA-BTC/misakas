@@ -1,5 +1,11 @@
 # testnet-11 Relaunch 2 — the public re-genesis and its community allocation
 
+> **Historical (superseded 2026-08-30 by Relaunch 3, the 10B premine cap —
+> [ADR-0059](adr/0059-the-10b-premine-cap.md)).** The community table itself lives on (11
+> entrants / 547M as of the cap re-genesis), but it is now carved OUT of the single 10B main
+> wallet; the 40-vault premine this document assumes is deleted, and every network's genesis
+> mints exactly 10B.
+
 - **Cut:** 2026-08-20
 - **Why:** the PALW public testnet opens with the collected community allocation baked into
   genesis, so participants hold spendable MSK at block 0 rather than waiting on a faucet.
