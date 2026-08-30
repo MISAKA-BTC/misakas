@@ -252,8 +252,10 @@ pub fn validate_panel_bound_v2(
 
     // The anchor slot: first chain block at or past accepted + delay. "First" is the predecessor
     // still being short of the slot.
+    // `bind_base_daa`, not `accepted_daa`: a claim revived by a receipt timeout anchors its
+    // second panel on the sweep, which is the whole reason the redraw deals different seats.
     let slot = claim
-        .accepted_daa
+        .bind_base_daa()
         .checked_add(params.anchor_delay)
         .ok_or(PalwPanelV2Error::AnchorMismatch("anchor slot overflows the DAA score"))?;
     if anchor.anchor_daa < slot {

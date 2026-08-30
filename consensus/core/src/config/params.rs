@@ -607,8 +607,10 @@ impl Params {
         // level down: it was silently clamped to `pruning_depth` under a comment about test
         // networks. Both are asserted at construction, so a preset that violates either cannot be
         // built rather than failing days into a dispute.
-        let lattice = bundle.state.window_bind()
-            + bundle.state.window_receipt()
+        // TWO bind+receipt pairs: a claim whose first panel concludes nothing is revived once and
+        // binds a second (`sweep_deadlines`' `PanelBound` arm), so the longest path a judgement
+        // can be anchored on is the redrawn one — and it is the length the horizon has to cover.
+        let lattice = 2 * (bundle.state.window_bind() + bundle.state.window_receipt())
             + bundle.state.window_challenge()
             + bundle.state.window_court();
         if lattice > self.blockrate.pruning_depth {
@@ -617,7 +619,8 @@ impl Params {
             ));
         }
         let k = self.blockrate.ghostdag_k as u64;
-        let anticone_bound = self.blockrate.finality_depth + self.blockrate.merge_depth + 4 * self.blockrate.mergeset_size_limit * k + 2 * k + 2;
+        let anticone_bound =
+            self.blockrate.finality_depth + self.blockrate.merge_depth + 4 * self.blockrate.mergeset_size_limit * k + 2 * k + 2;
         if anticone_bound > self.blockrate.pruning_depth {
             return Err(PalwModeV2Error::Invalid(
                 "anticone finalization depth exceeds the pruning depth — the clamp that hides this is for test networks",
@@ -1842,19 +1845,39 @@ pub const FOURTEEN_DAYS_BLOCKS_10BPS: u64 = 14 * 86_400 * 10; // 12_096_000
 /// `dns_params` is NOT a genesis-block input, so adopting this leaves genesis hashes unchanged.
 pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
     dns_activation_daa_score: 0,
-    // Production: the overlay reaches the Active stage once >= 20M KAS of stake is bonded.
-    min_active_stake_sompi: 20_000_000 * SOMPI_PER_KASPA,
+    // Production: the overlay reaches the Active stage once this much stake is bonded.
+    //
+    // **20M -> 600M (2026-08-30), which is `min_active_validators x min_bond_amount_sompi`.** The
+    // two gates are ANDed, so at 12 validators of 50M each the stake gate was already implied and
+    // 20M could never bind — a dead constant reading as a second, weaker floor. Stating the
+    // product makes the AND visible and keeps the two from drifting apart: raise either half and
+    // this must move with it, which `the_active_stake_gate_is_the_product_of_the_two_floors`
+    // holds.
+    min_active_stake_sompi: 600_000_000 * SOMPI_PER_KASPA,
     // audit H-11 (Kaspa-diff): the DNS Active stage must NOT be drivable by a single key. A
-    // multi-operator floor (3) is the mainnet default so finality does not hinge on one operator's
-    // key/availability/honesty (the safety floor is BOTH the 20M-KAS `min_active_stake_sompi` AND
-    // this validator COUNT). The FINAL value (3-5+), stake-concentration caps, and the
-    // `required_work_depth` calibration to live difficulty are a mainnet-launch governance gate —
-    // see the mainnet launch checklist; mainnet is not yet launched. (Testnet pins this back to 1
-    // in TESTNET_DNS_PARAMS for the single-operator experimental mesh.)
-    min_active_validators: 3,
-    // Production: every individual validator must bond >= 20M KAS; a smaller StakeBond is
-    // rejected at acceptance and can never attest (user decision 2026-06-01).
-    min_bond_amount_sompi: 20_000_000 * SOMPI_PER_KASPA,
+    // multi-operator floor is the mainnet default so finality does not hinge on one operator's
+    // key/availability/honesty (the safety floor is BOTH the `min_active_stake_sompi` AND this
+    // validator COUNT). (Testnet pins this back to 1 in TESTNET_DNS_PARAMS for the
+    // single-operator experimental mesh.)
+    //
+    // **3 -> 12 (2026-08-30 bond-economics pass).** Priced at the market rate the token actually
+    // trades at, the count is the term that carries this floor and the stake is not. Corrupting a
+    // 2/3 quorum costs `ceil(2n/3) x min_bond`, and at 3 seats that is two bonds — 100M MSK,
+    // which is 0.8 % of the supply's value. The same 50M bond over 12 seats needs eight, 400M
+    // MSK, 3.1 %: a 4x improvement bought with no extra capital per validator, only more of them.
+    // Raising the bond alone cannot reach the same place — 4x the bond over 3 seats prices out
+    // every operator who is not the treasury, and concentration is the risk this floor exists to
+    // prevent. 24 is the next step once that many distinct operators are actually seated; going
+    // there before they exist would stall the overlay at `Bootstrapping` instead of securing it.
+    min_active_validators: 12,
+    // Production: every individual validator must bond >= 50M MSK; a smaller StakeBond is
+    // rejected at acceptance and can never attest.
+    //
+    // **20M -> 50M (2026-08-30).** The bond is the slashable collateral behind a finality vote,
+    // so its job is to make an equivocation cost more than the settlement it could reverse. It is
+    // raised WITH `min_active_validators` rather than instead of it, because the two multiply:
+    // the quorum-corruption cost is the product, and this half is the one an operator pays.
+    min_bond_amount_sompi: 50_000_000 * SOMPI_PER_KASPA,
     epoch_length_blocks: 100,
     // audit H-02 (true WorkDepth, Option A): a DNS-confirmed anchor must be buried by at least this
     // much ACCUMULATED blue work SINCE it became the canonical lagged anchor (anchor-relative
@@ -4890,8 +4913,10 @@ pub fn palw_rc_params(
             + 4 * params.blockrate.mergeset_size_limit * k
             + 2 * k
             + 2;
-        let lattice = bundle.state.window_bind()
-            + bundle.state.window_receipt()
+        // TWO bind+receipt pairs: a claim whose first panel concludes nothing is revived once and
+        // binds a second (`sweep_deadlines`' `PanelBound` arm), so the longest path a judgement
+        // can be anchored on is the redrawn one — and it is the length the horizon has to cover.
+        let lattice = 2 * (bundle.state.window_bind() + bundle.state.window_receipt())
             + bundle.state.window_challenge()
             + bundle.state.window_court();
         params.blockrate.pruning_depth = params.blockrate.pruning_depth.max(lower_bound).max(lattice);
@@ -5018,6 +5043,55 @@ pub const DEVNET_PARAMS: Params = Params {
 #[cfg(test)]
 mod consensus_params_id_tests {
     use super::*;
+
+    /// **The bond economics of finality, pinned (2026-08-30).**
+    ///
+    /// Priced at the rate the token actually trades at, the quorum-corruption cost is
+    /// `ceil(2n/3) x min_bond` — a PRODUCT, and the count is the cheap half. These three
+    /// constants were re-derived together and mean nothing apart, so they are asserted together:
+    /// changing one without the others is the mistake this test exists to catch.
+    #[test]
+    fn the_active_stake_gate_is_the_product_of_the_two_floors() {
+        let dns = PRODUCTION_DNS_PARAMS;
+        assert_eq!(dns.min_bond_amount_sompi, 50_000_000 * SOMPI_PER_KASPA, "per-validator collateral");
+        assert_eq!(dns.min_active_validators, 12, "the count is the term that carries this floor");
+        // The two gates are ANDed, so the stake gate must state their product or it is dead
+        // weight that reads as a second, weaker floor.
+        assert_eq!(
+            dns.min_active_stake_sompi,
+            dns.min_active_validators as u64 * dns.min_bond_amount_sompi,
+            "the stake gate is the product; raise either floor and this must move with it"
+        );
+    }
+
+    /// **A bond may not leave before the history it voted on is beyond dispute.**
+    ///
+    /// The rule the codebase enforces is `U >= R + E` (reorg horizon + evidence window), and the
+    /// evidence window dominates it. What that buys, and what nothing stated, is the property an
+    /// operator actually needs: an equivocation is provable for many finality windows after the
+    /// vote, so unbonding can never outrun the dispute it would escape.
+    ///
+    /// Asserted as a RATIO rather than a block count, because both sides are re-derived whenever
+    /// the cadence changes — the 120 s testnet re-sized every window in this file by hand, and a
+    /// future re-sizing that halved the unbond would satisfy `U >= R + E` while quietly taking
+    /// this away.
+    #[test]
+    fn unbonding_outlasts_many_finality_windows() {
+        for (label, dns, blockrate) in [
+            ("mainnet", PRODUCTION_DNS_PARAMS, MAINNET_PARAMS.blockrate),
+            ("testnet-11", TESTNET_DNS_PARAMS, TESTNET_PARAMS.blockrate),
+        ] {
+            let finality = blockrate.finality_depth;
+            assert!(
+                dns.unbonding_period_blocks >= 2 * finality,
+                "{label}: unbonding {} must outlast two finality windows ({finality} blocks each)",
+                dns.unbonding_period_blocks
+            );
+            // The rule the code enforces, restated where the ratio is asserted so the two cannot
+            // be satisfied separately.
+            assert!(dns.unbonding_period_blocks >= dns.max_reorg_horizon_blocks + dns.evidence_window_blocks, "{label}: U >= R + E");
+        }
+    }
 
     /// The 120 s/block constants the PUBLIC TESTNET runs must match the same formulas `Bps<BPS>`
     /// encodes, evaluated at λ = 1/120, and the ghostdag k passed to the shared constructor must
@@ -5420,7 +5494,17 @@ mod consensus_params_id_tests {
             // no live node holds the old value, and the same change on a network WITH history
             // would be a partition (which is what M1-6 is about). Testnet's pin is unchanged in
             // the same edit, which is the check that this touched only the unlaunched preset.
-            ("mainnet", MAINNET_PARAMS, "b824da1c83b50ca43285945a4b3aa3dcfe1b2271827a3b4275ff32e90ed5039d"),
+            // **Re-pinned 2026-08-30 for the bond-economics pass.** `min_bond_amount_sompi`
+            // 20M → 50M, `min_active_validators` 3 → 12, and `min_active_stake_sompi` restated as
+            // their product. All three are overlay ADMISSION rules — they decide which StakeBond
+            // enters the registry, and therefore which validator set exists, which StakeScore an
+            // epoch has, and which anchors confirm. Two builds that disagree would accept
+            // different bond sets and finalise different history, so the fingerprint moving is
+            // the correct and necessary outcome: they refuse each other at the handshake instead
+            // of at consensus. Mainnet has not launched, so nothing needs re-minting; the same
+            // edit after launch would need an activation fence rather than a bare constant.
+            // Only this preset moves — testnet-11 overrides all three in `TESTNET_DNS_PARAMS`.
+            ("mainnet", MAINNET_PARAMS, "1b3a4bba8632f3a56dd5a59c1b77a6df390b66090cae0c7eadd3da64129c2678"),
             // Moved by the bps01⊕iso unification (2026-08-16): the CPU pins are now the UNION of
             // the two facts the branches discovered separately — `single-variant` (bps01, by
             // disassembly) ∧ `no-openmp` (iso, by the Linux link error) in `CPU_BUILD_PROFILE`,
@@ -5589,28 +5673,48 @@ mod consensus_params_id_tests {
             // class anyone can rebuild from the public GGUF must not wear one name.
             // ADR-0058 (merged work is counted): PALW_STATE_V2_VERSION 9 → 10 entered the
             // fingerprint, deliberately — deploying this build is a re-mint.
-            ("testnet-11", TESTNET11_PARAMS, // Re-pinned 2026-08-28 with the audit fixes: the ruleset id now commits to every ML-DSA
-            // context the acceptance layer verifies under (M2-23), and the transition's rules
-            // changed in ways that alter which blocks are valid (M2-3, M2-5, M2-7, M2-8, M2-11,
-            // M2-12, M2-16). A moved fingerprint is the CORRECT outcome of that — this project's
-            // own lesson is that a rule change not declared by a version bump forks the network
-            // silently. testnet-11 must be re-minted onto this build; mainnet has not launched.
-            //
-            // **Re-pinned 2026-08-29 for the audit3 remediation.** `PALW_STATE_V2_VERSION` 10 → 12,
-            // which is hashed here directly. Two rules moved and neither changes a schema, so this
-            // number is the ONLY thing that tells two builds they disagree: S-03 stops a class
-            // awaiting activation from holding a live share (registrations that used to be
-            // accepted are now refused, and the old path could panic `granted_share_table_v2`
-            // outright), and S-04 makes the coinbase's entitlement filter ask the full admission
-            // rather than a subset of it (merged blocks the chain refuses for epoch budget or
-            // exposure are no longer paid; a merged receipt spend is no longer denied). Different
-            // blocks are valid and different coinbases are valid; H4 additionally stops an
-            // unanswered opening rung from slashing the accuser, and a bond's `slashed` is state.
-            // So the fingerprint moves — and
-            // only this preset moves, because only this preset carries a PALW V2 bundle. The
-            // re-mint the paragraph above already called for is the one that carries this too;
-            // doing it on `404f8715…` would have bought a network needing a second one at once.
-            "95265934e8965e91f3c22281af735bcd38527b5ee89fa09a05290db566d444a3"),
+            (
+                "testnet-11",
+                TESTNET11_PARAMS, // Re-pinned 2026-08-28 with the audit fixes: the ruleset id now commits to every ML-DSA
+                // context the acceptance layer verifies under (M2-23), and the transition's rules
+                // changed in ways that alter which blocks are valid (M2-3, M2-5, M2-7, M2-8, M2-11,
+                // M2-12, M2-16). A moved fingerprint is the CORRECT outcome of that — this project's
+                // own lesson is that a rule change not declared by a version bump forks the network
+                // silently. testnet-11 must be re-minted onto this build; mainnet has not launched.
+                //
+                // **Re-pinned 2026-08-29 for the audit3 remediation.** `PALW_STATE_V2_VERSION` 10 → 12,
+                // which is hashed here directly. Two rules moved and neither changes a schema, so this
+                // number is the ONLY thing that tells two builds they disagree: S-03 stops a class
+                // awaiting activation from holding a live share (registrations that used to be
+                // accepted are now refused, and the old path could panic `granted_share_table_v2`
+                // outright), and S-04 makes the coinbase's entitlement filter ask the full admission
+                // rather than a subset of it (merged blocks the chain refuses for epoch budget or
+                // exposure are no longer paid; a merged receipt spend is no longer denied). Different
+                // blocks are valid and different coinbases are valid; H4 additionally stops an
+                // unanswered opening rung from slashing the accuser, and a bond's `slashed` is state.
+                // So the fingerprint moves — and
+                // only this preset moves, because only this preset carries a PALW V2 bundle. The
+                // re-mint the paragraph above already called for is the one that carries this too;
+                // doing it on `404f8715…` would have bought a network needing a second one at once.
+                //
+                // **Re-pinned 2026-08-30 for the bond-economics pass.** `PalwStateParamsV2` gains
+                // `min_slash_permille_of_escrow`, the rule that a claim's collateral must be a
+                // fraction of the reward it escrows. It ships DORMANT (zero) — testnet-11's own slash
+                // value cannot satisfy any non-zero value, so switching it on is a mint-time decision
+                // and not a deployment — yet the field is hashed, so the fingerprint moves exactly as
+                // `registration_exposure_sompi` did. That is the intended shape here: the number
+                // announces which rules a build carries, whether or not this chain has turned them on.
+                // The re-mint the paragraphs above already call for is the one that carries this.
+                //
+                // The same pass then moved `PALW_STATE_V2_VERSION` 12 → 13, which is hashed here
+                // directly: a claim whose panel concludes nothing is REDRAWN once rather than voided
+                // against its producer, and `PalwClaimStateV2` gained the `rebound_daa` that dates the
+                // second panel's anchor. Claims that used to end at `ReceiptTimeout` now live another
+                // bind window, so two builds disagree about the state root of any block that sweeps
+                // one — and about whether that claim's escrow was destroyed. Unlike 12 this is not
+                // root-schema-neutral, so an old build cannot even decode the state.
+                "0d14de9c9d7a5dedafce20b955e29003dd1f4134c85089984fe7d373abf781f8",
+            ),
             ("simnet", SIMNET_PARAMS, "dae24a4cddc3bd324d7e99dc61c9e14269b9a4619fecb639836b8286e144664f"),
             ("devnet", DEVNET_PARAMS, "f8981a530bf6070e4c27696d2666673ee36a1d9f1f5b4b315c4c7400b84136c0"),
         ]
@@ -6007,4 +6111,3 @@ mod fingerprint_probe {
         );
     }
 }
-

@@ -115,6 +115,12 @@ pub enum PalwAdmissionV2Error {
          (collateral {collateral} × {ratio_permille}‰)"
     )]
     ExposureCeilingExceeded { reserved: u128, claim: u128, ceiling: u128, collateral: u64, ratio_permille: u32 },
+    #[error(
+        "this claim would escrow {escrow} sompi of reward against {reserved} of collateral, and the network \
+         requires at least {required} ({backing_permille}‰ of the escrow) — the class's registered slash value \
+         is too low for the reward its work draws"
+    )]
+    EscrowExceedsCollateralBacking { escrow: u64, reserved: u128, required: u128, backing_permille: u32 },
     #[error("attempt {0} already has a claim on this chain — one identity, one claim")]
     DuplicateAttempt(Hash64),
     #[error("arithmetic overflow in {0}")]
@@ -332,6 +338,47 @@ pub fn check_palw_attempt_admission_v2(
             ceiling,
             collateral: bond.collateral,
             ratio_permille: admission.max_exposure_ratio_permille,
+        });
+    }
+
+    // 9. **A claim may not escrow more reward than the collateral it puts at risk backs.**
+    //
+    //    `claim_exposure` above is the whole downside of producing: default on the data
+    //    obligation, lose a court, and this is what burns. The upside is `escrow` — the block's
+    //    worker carve, withheld at acceptance and released at `Final`. Nothing related the two,
+    //    and priced against the market the token actually trades at they were four orders of
+    //    magnitude apart: a live claim on testnet-11 escrowed 2,756 MSK while reserving 0.0015.
+    //
+    //    That gap is not a small fee, it is the sign flipping on the whole lattice. A producer
+    //    that opens claims and vanishes costs the panel real work — five seats verify, the
+    //    material is served and retained — and pays 0.00005 % of what the claim was worth. The
+    //    exposure CEILING bounds how many such claims one bond may hold at once; it says nothing
+    //    about whether holding one is worth anything, and a ceiling over a zero is still a zero.
+    //
+    //    So the ratio is a network constant, and the class's registered `slash_value_per_pwu` is
+    //    what has to satisfy it — the same value every class must share with the floor
+    //    (`SlashValueNotTheNetworks`), so this is one inequality for the whole chain rather than
+    //    a per-class knob a registrant could set against its own claims.
+    //
+    //    Refused here, not at registration: the escrow is a function of THIS block's subsidy,
+    //    which a registration cannot know and which the emission schedule moves. Refusing an
+    //    attempt is the established shape for "the chain will not back this work" (items 7 and 8
+    //    both do it) — the block stays valid and simply carries no claim, so a misconfigured
+    //    slash value costs its own producer the reward instead of stalling the chain.
+    let escrow = crate::palw_reward_v2::palw_reward_carve_v2(
+        ctx.subsidy,
+        &crate::palw_reward_v2::PalwRewardParamsV2::new(state_params.worker_carve_permille())
+            .map_err(|_| PalwAdmissionV2Error::InvalidParams("the worker carve is not a legal permille"))?,
+    )
+    .worker as u128;
+    let backing_permille = state_params.min_slash_permille_of_escrow() as u128;
+    let required = escrow.checked_mul(backing_permille).ok_or(PalwAdmissionV2Error::Overflow("escrow backing"))? / 1000;
+    if claim_exposure < required {
+        return Err(PalwAdmissionV2Error::EscrowExceedsCollateralBacking {
+            escrow: escrow as u64,
+            reserved: claim_exposure,
+            required,
+            backing_permille: backing_permille as u32,
         });
     }
 
@@ -1155,5 +1202,66 @@ mod tests {
         )
         .expect_err("a mispositioned attempt fails statelessly");
         assert!(matches!(err, PalwAdmissionV2Error::Stateless(PalwAttemptV2Error::ChallengeMismatch)));
+    }
+
+    /// The rule ships OFF, and that is load-bearing rather than timid: testnet-11's registered
+    /// slash value cannot satisfy any non-zero backing, so a default that switched it on would
+    /// refuse every attempt the live chain has ever accepted.
+    #[test]
+    fn a_dormant_backing_admits_what_it_always_admitted() {
+        let params = state_params();
+        assert_eq!(params.min_slash_permille_of_escrow(), 0, "the default is off");
+        // A block with a real subsidy, so the escrow is non-zero and only the dormant rule can
+        // be what lets this through.
+        let mut context = ctx(2, 101, 2);
+        context.subsidy = 1_000_000_000;
+        check_palw_attempt_admission_v2(&base_state(), &params, &admission_params(), &context, &attempt(10, 1))
+            .expect("a dormant rule refuses nothing");
+    }
+
+    /// **The live network's own ratio, refused.** Class 1 reserves 5 sompi per pwu, so a 10-pwu
+    /// attempt risks 50 against a carve of 620 sompi — the same shape as testnet-11's 0.0015 MSK
+    /// against 2,756, and the reason this rule exists.
+    #[test]
+    fn a_claim_that_earns_far_more_than_it_risks_is_refused() {
+        let params = state_params().with_worker_carve_permille(620).unwrap().with_min_slash_permille_of_escrow(100).unwrap();
+        let mut context = ctx(2, 101, 2);
+        context.subsidy = 1_000; // carve = 620; 100‰ of it is 62, and the claim reserves 50.
+        let err = check_palw_attempt_admission_v2(&base_state(), &params, &admission_params(), &context, &attempt(10, 1))
+            .expect_err("50 does not back 620");
+        match err {
+            PalwAdmissionV2Error::EscrowExceedsCollateralBacking { escrow, reserved, required, backing_permille } => {
+                assert_eq!((escrow, reserved, required, backing_permille), (620, 50, 62, 100));
+            }
+            other => panic!("expected the backing refusal, got {other:?}"),
+        }
+    }
+
+    /// Enough collateral behind the same reward, and it admits. The producer's own `pwu` is what
+    /// moves here — the class's slash value is the network's and no attempt may vary it — so the
+    /// rule prices WORK against reward rather than gating who may produce.
+    #[test]
+    fn the_same_reward_is_admitted_once_the_work_backs_it() {
+        let params = state_params().with_worker_carve_permille(620).unwrap().with_min_slash_permille_of_escrow(100).unwrap();
+        let mut context = ctx(2, 101, 2);
+        context.subsidy = 1_000;
+        // 13 pwu x 5 = 65 >= 62.
+        check_palw_attempt_admission_v2(&base_state(), &params, &admission_params(), &context, &attempt(13, 1))
+            .expect("65 backs 620 at 100‰");
+    }
+
+    /// A block that funds no escrow has nothing to back, whatever the backing is set to — the
+    /// inequality must not become a floor on producing out of a zero-subsidy block.
+    #[test]
+    fn a_block_with_no_subsidy_needs_no_backing() {
+        let params = state_params().with_worker_carve_permille(620).unwrap().with_min_slash_permille_of_escrow(1000).unwrap();
+        check_palw_attempt_admission_v2(&base_state(), &params, &admission_params(), &ctx(2, 101, 2), &attempt(1, 1))
+            .expect("no escrow, no requirement");
+    }
+
+    #[test]
+    fn a_backing_above_the_whole_escrow_is_refused_at_construction() {
+        assert!(state_params().with_min_slash_permille_of_escrow(1001).is_err(), "a claim cannot risk more than it can earn");
+        assert!(state_params().with_min_slash_permille_of_escrow(1000).is_ok(), "risking exactly the reward is legal");
     }
 }

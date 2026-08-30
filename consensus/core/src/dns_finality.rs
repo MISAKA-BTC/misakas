@@ -9668,10 +9668,20 @@ mod tests {
                 matches!(p.epoch_credit_rule(u64::MAX - 1), EpochCreditRule::QualityFloor { quality_floor_bps } if quality_floor_bps == p.stake_event_quality_floor_bps),
                 "{name} must stay on the graded φS rule below the fence"
             );
-            // The 20M-KAS bond requirement is untouched by the VLT work.
+            // The bond requirement is untouched by the VLT work — VLT changes what a bond BUYS
+            // (weight capped at `lambda x collateral`), never what it costs to hold one. The
+            // amounts themselves are the 2026-08-30 bond-economics pass: 50M per validator over
+            // a floor of 12, whose product is the active-stake gate. Their derivation and the
+            // reason the count carries this floor live in
+            // `the_active_stake_gate_is_the_product_of_the_two_floors`.
             if name != "genesis-active" && name != "testnet" {
-                assert_eq!(p.min_bond_amount_sompi, 20_000_000 * crate::constants::SOMPI_PER_KASPA, "{name}");
-                assert_eq!(p.min_active_stake_sompi, 20_000_000 * crate::constants::SOMPI_PER_KASPA, "{name}");
+                assert_eq!(p.min_bond_amount_sompi, 50_000_000 * crate::constants::SOMPI_PER_KASPA, "{name}");
+                assert_eq!(p.min_active_validators, 12, "{name}");
+                assert_eq!(
+                    p.min_active_stake_sompi,
+                    p.min_active_validators as u64 * p.min_bond_amount_sompi,
+                    "{name}: the stake gate is the product of the two floors"
+                );
             }
             // Inert presets pass the consistency gate trivially; a moved fence must still hold.
             assert!(p.vlt_params_consistent(), "{name}");

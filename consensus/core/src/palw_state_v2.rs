@@ -178,7 +178,22 @@ use std::collections::{BTreeMap, BTreeSet};
 /// but this number tells two builds they disagree. It is hashed into the params fingerprint, so
 /// moving it is a coordinated upgrade — which for testnet-11 means the re-mint the audit already
 /// called for.
-pub const PALW_STATE_V2_VERSION: u16 = 12;
+///
+/// **Version 13 (2026-08-30, bond economics).** Two rules moved, and this time the CLAIM schema
+/// moved with them:
+///
+/// * A claim whose panel concludes nothing is revived once and binds a second panel anchored on
+///   the sweep (`rebound_daa`), instead of voiding against a producer no seat accused. Claims that
+///   used to be `Voided { ReceiptTimeout }` are now live for another bind window, so two builds
+///   disagree about the state root of any block that sweeps one — and about whether the escrow it
+///   held was destroyed.
+/// * Admission refuses an attempt whose collateral does not back the reward it would escrow
+///   (`min_slash_permille_of_escrow`). Different attempts are admitted, so different blocks carry
+///   claims and different coinbases are valid. It ships dormant, but the parameter is hashed.
+///
+/// The claim record gains a field, so unlike 12 this is not root-schema-neutral: an old build
+/// cannot decode this state at all, which is the honest failure and the reason the number moves.
+pub const PALW_STATE_V2_VERSION: u16 = 13;
 
 pub const PALW_STATE_V2_DOMAIN_OPERATOR_ID: &[u8] = b"misaka-palw/state-v2/operator-id/v1";
 
@@ -376,6 +391,14 @@ pub struct PalwStateParamsV2 {
     /// carries value sets it through [`PalwStateParamsV2::with_worker_carve_permille`], and
     /// Decision 1's startup gate is where a live network's non-zero requirement belongs.
     worker_carve_permille: u16,
+    /// **The collateral a claim must reserve, as a permille of the reward it escrows.**
+    ///
+    /// Zero is OFF and is the default, because it is what every network did before this rule and
+    /// because the rule cannot be retrofitted onto a running chain: testnet-11's registered slash
+    /// value reserves 0.0015 MSK against a 2,756 MSK escrow, so any non-zero value here refuses
+    /// every attempt it has ever accepted. A chain adopts this at a mint, with a slash value
+    /// chosen to satisfy it — see `with_min_slash_permille_of_escrow`.
+    min_slash_permille_of_escrow: u16,
     /// **ADR-0056 Decision 3: what a live registration reserves against its registrant's bond.**
     ///
     /// Sompi held for as long as the class it registered is `Registered` or `Active`, released at
@@ -496,6 +519,9 @@ impl PalwStateParamsV2 {
             // predating the reward wiring meant and still means. See
             // `with_worker_carve_permille`.
             worker_carve_permille: 0,
+            // OFF, for the reason on the field: a non-zero value is a rule about what a class's
+            // registered slash value must be, and no existing preset's satisfies one.
+            min_slash_permille_of_escrow: 0,
             // ADR-0056 Decisions 3 and 5 are OFF unless a network decides them: an all-zero economy is
             // exactly the behaviour every preset had before this ADR, so adding the fields moves
             // the fingerprint and moves nothing else.
@@ -595,6 +621,34 @@ impl PalwStateParamsV2 {
 
     pub fn worker_carve_permille(&self) -> u16 {
         self.worker_carve_permille
+    }
+
+    /// **Require a claim's collateral to be a fraction of the reward it escrows** (2026-08-30).
+    ///
+    /// The downside of producing is `pwu x slash_value_per_pwu`; the upside is the block's worker
+    /// carve. Nothing tied them together, and on the live network they sat four orders of
+    /// magnitude apart — so abandoning a claim, which costs the panel five seats' verification and
+    /// destroys the escrow, cost its producer 0.00005 % of what the claim was worth. This is the
+    /// inequality that makes the two one economy.
+    ///
+    /// It binds the CLASS's registered slash value, not the producer: every class must already
+    /// carry the floor's `slash_value_per_pwu` (`SlashValueNotTheNetworks`), so this is a single
+    /// chain-wide statement about what that number has to be worth. Attempts that fail it are
+    /// refused by admission — the block stays valid and carries no claim, so a slash value chosen
+    /// too low costs its own producer rather than stopping the chain.
+    ///
+    /// 1000‰ would mean a claim risks exactly what it can earn. The derivation that produced the
+    /// 100‰ this network mints with is in `docs/palw-bond-economics-2026-08-30.md`.
+    pub fn with_min_slash_permille_of_escrow(mut self, permille: u16) -> Result<Self, PalwStateV2Error> {
+        if permille > 1000 {
+            return Err(PalwStateV2Error::InvalidParams("a claim cannot be required to risk more than it can earn"));
+        }
+        self.min_slash_permille_of_escrow = permille;
+        Ok(self)
+    }
+
+    pub fn min_slash_permille_of_escrow(&self) -> u16 {
+        self.min_slash_permille_of_escrow
     }
 
     /// **Turn on the share-raise path** (ADR-0054): the per-epoch growth step, in permille of a
@@ -1156,6 +1210,18 @@ pub struct PalwClaimStateV2 {
     pub bond: PalwBondKeyV2,
     pub pwu: u64,
     pub accepted_daa: u64,
+    /// **The DAA a receipt timeout returned this claim to `Provisional`, if one ever did.**
+    ///
+    /// A panel is drawn from `H(anchor ‖ claim ‖ bond)` where the anchor is the first block at
+    /// `bind_base + anchor_delay` — a pure function of the claim. So a redraw that kept
+    /// `accepted_daa` as its base would deal the SAME seats, and "bind a fresh panel" would be a
+    /// no-op dressed as a remedy. Basing the second anchor on the sweep's own DAA is what makes
+    /// the second panel a different one, and it is equally ungrindable: the timeout block exists
+    /// only after the attempt was fixed AND after the first panel had its whole window.
+    ///
+    /// `Some` therefore means two things at once, deliberately: where the second anchor starts,
+    /// and that the one redraw this claim is allowed has been spent.
+    pub rebound_daa: Option<u64>,
     pub accepted_blue_score: u64,
     /// The chain block that carried the attempt.
     pub accepted_block: BlockHash,
@@ -1192,6 +1258,19 @@ pub struct PalwClaimStateV2 {
     /// that existed when the work was accepted, so no later block's subsidy can be drawn twice.
     pub escrowed_reward: u64,
     pub phase: PalwClaimPhaseV2,
+}
+
+impl PalwClaimStateV2 {
+    /// **What the bind window and the panel anchor are measured from.**
+    ///
+    /// The claim's acceptance normally, and the redraw's sweep once a receipt timeout has spent
+    /// the one redraw. Every site that dates the bind phase goes through here, because the two
+    /// that did it inline — the deadline index and the anchor slot — must agree or a re-bound
+    /// claim either times out the instant it is revived or binds a panel the chain will not
+    /// accept.
+    pub fn bind_base_daa(&self) -> u64 {
+        self.rebound_daa.unwrap_or(self.accepted_daa)
+    }
 }
 
 /// One seat's answer, as the state machine sees it: who said it, and which way.
@@ -1843,7 +1922,9 @@ pub enum PalwStateV2Error {
         "class {class} cannot be registered: its registrant already holds {already} sompi of exposure and this registration costs {price}, against {collateral} of collateral"
     )]
     RegistrationExposureUnaffordable { class: Hash64, already: u128, price: u128, collateral: u64 },
-    #[error("bond {0:?} registers a key this chain already holds a bond for — one key, one bond, or seats can be manufactured by splitting collateral")]
+    #[error(
+        "bond {0:?} registers a key this chain already holds a bond for — one key, one bond, or seats can be manufactured by splitting collateral"
+    )]
     DuplicateBondKey(PalwBondKeyV2),
     #[error(
         "class {class} declares {got} sompi per work unit but this network's unit is {want} — weight per sompi at risk is not a class's to choose"
@@ -2446,7 +2527,7 @@ impl PalwChainStateV2 {
             match claim.phase {
                 PalwClaimPhaseV2::Provisional => {
                     expected.insert((
-                        claim.accepted_daa.checked_add(params.window_bind).ok_or(PalwStateV2Error::Overflow("bind deadline"))?,
+                        claim.bind_base_daa().checked_add(params.window_bind).ok_or(PalwStateV2Error::Overflow("bind deadline"))?,
                         *id,
                     ));
                 }
@@ -2501,7 +2582,7 @@ impl PalwChainStateV2 {
 /// claim, in this phase with this many open courts, owe the index a deadline entry at all?
 fn expected_deadline(claim: &PalwClaimStateV2, open_courts: u32) -> Option<u64> {
     match claim.phase {
-        PalwClaimPhaseV2::Provisional => Some(claim.accepted_daa),
+        PalwClaimPhaseV2::Provisional => Some(claim.bind_base_daa()),
         PalwClaimPhaseV2::PanelBound { bound_daa } => Some(bound_daa),
         PalwClaimPhaseV2::ReceiptLicensed { .. } if open_courts > 0 => None,
         PalwClaimPhaseV2::ReceiptLicensed { licensed_daa } => Some(licensed_daa),
@@ -3424,8 +3505,7 @@ pub fn apply_palw_transition_v4(
             PalwBlockWorkV3::Attempt(envelope) => match admission {
                 None => Some("a merged attempt on a caller that supplied no admission params".to_string()),
                 Some(admission) => {
-                    match crate::palw_admission_v2::check_palw_attempt_admission_v2(&builder.state, params, admission, ctx, envelope)
-                    {
+                    match crate::palw_admission_v2::check_palw_attempt_admission_v2(&builder.state, params, admission, ctx, envelope) {
                         Err(refused) => Some(refused.to_string()),
                         Ok(_) => {
                             let checkpoint = builder.checkpoint();
@@ -4418,17 +4498,44 @@ fn sweep_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockContextV2
                 builder.void_claim(claim_id, &claim, ctx.daa_score, PalwVoidReasonV2::BindTimeout)?;
             }
             PalwClaimPhaseV2::PanelBound { .. } => {
-                // P0-7's sharpest case: the window closed with NO concluding object at all, so
-                // every seat on the panel is a no-show. The producer is not charged here — the
-                // two timeouts void a claim nobody was in a position to blame the producer for
-                // (the `ProducerDefaulted` arm is where that blame is proven) — but the panel is,
-                // because producing an answer within the window is the whole duty a seat holds.
+                // The receipt window closed with no concluding object. Nothing here can tell WHY:
+                // the chain cannot observe silence (`slash_silent_seats`), and `Incapable` is a
+                // legitimate answer that is never charged and counts toward neither quorum. So a
+                // panel that says nothing and a panel that honestly cannot judge are the same
+                // event from the transition's side, and charging on that ambiguity is what the
+                // no-show slash was removed for.
                 //
-                // A single honest seat cannot license alone, which is why the charge is on
-                // silence rather than on failing to reach quorum: filing is always available to
-                // it, and a filed answer is never a no-show.
-                builder.slash_silent_seats(&claim_id, &claim, &[])?;
-                builder.void_claim(claim_id, &claim, ctx.daa_score, PalwVoidReasonV2::ReceiptTimeout)?;
+                // **But voiding is not neutral either — it lands the whole loss on the producer**,
+                // who did the work, served the material and was assigned this panel by sortition.
+                // That made silence the seats' best play and left an attacker a free move: take
+                // enough seats to deny every quorum, say nothing, and burn other people's escrow
+                // at no cost. Neither slashing nor voiding answers it, because both pick a side
+                // of a question the chain cannot decide.
+                //
+                // A REDRAW does not have to decide it. The claim returns to `Provisional` and
+                // binds a second panel anchored on this sweep, so the seats are different ones
+                // (see `rebound_daa`): honest incapacity gets a panel that can judge, and silence
+                // stops being effective because it no longer decides anything. It costs one more
+                // `window_bind + window_receipt`, which `palw_v2_lattice_fits_pruning_horizon`
+                // now holds against the pruning horizon.
+                //
+                // Once. A claim that times out again has had two independent panels fail to
+                // conclude, and a rule that redrew forever would be a claim that never resolves —
+                // the reservation held, the escrow neither paid nor burned, indefinitely.
+                if claim.rebound_daa.is_none() {
+                    let mut revived = claim.clone();
+                    revived.phase = PalwClaimPhaseV2::Provisional;
+                    revived.rebound_daa = Some(ctx.daa_score);
+                    let deadline = revived
+                        .bind_base_daa()
+                        .checked_add(builder.params.window_bind)
+                        .ok_or(PalwStateV2Error::Overflow("redraw bind deadline"))?;
+                    builder.write_claim(claim_id, Some(revived));
+                    builder.arm_deadline(deadline, claim_id);
+                } else {
+                    builder.slash_silent_seats(&claim_id, &claim, &[])?;
+                    builder.void_claim(claim_id, &claim, ctx.daa_score, PalwVoidReasonV2::ReceiptTimeout)?;
+                }
             }
             PalwClaimPhaseV2::ReceiptLicensed { .. } => {
                 debug_assert!(
@@ -4724,9 +4831,8 @@ fn apply_object(
             // asked only when something is actually outstanding — with nothing pending it would
             // re-ask the question the line above already answered.
             if outstanding > 0 {
-                let committed = outstanding
-                    .checked_add(*share_permille as u32)
-                    .ok_or(PalwStateV2Error::Overflow("outstanding pending shares"))?;
+                let committed =
+                    outstanding.checked_add(*share_permille as u32).ok_or(PalwStateV2Error::Overflow("outstanding pending shares"))?;
                 if committed > 1000 {
                     return Err(PalwStateV2Error::PendingSharesExceedTable { outstanding, requested: *share_permille });
                 }
@@ -5085,6 +5191,7 @@ fn apply_object(
                 bond: *bond,
                 pwu: *pwu,
                 accepted_daa: ctx.daa_score,
+                rebound_daa: None,
                 accepted_blue_score: ctx.blue_score,
                 accepted_block: ctx.block,
                 trace_root: *trace_root,
@@ -5215,6 +5322,7 @@ fn apply_attempt(
         bond: bond_key,
         pwu: attempt.pwu,
         accepted_daa: ctx.daa_score,
+        rebound_daa: None,
         accepted_blue_score: ctx.blue_score,
         // ADR-0058 Decision 4: the CARRYING block — for the chain block's own work that is
         // `ctx.block`, for a merged blue it is the blue itself, which is where the panel's job
@@ -6613,8 +6721,14 @@ pub(crate) mod tests {
         assert_eq!(palw_escrow_destroyed_by_delta_v2(&after), 0, "a burn is counted at the block that burns it");
     }
 
+    /// **A panel that concludes nothing costs the producer a redraw, not the claim.**
+    ///
+    /// The first receipt timeout revives the claim instead of voiding it: nothing at that moment
+    /// distinguishes seats staying silent from seats that honestly cannot judge, and voiding
+    /// picks the producer to lose a question the chain cannot decide. The second timeout, with a
+    /// second independent panel having failed too, is where the claim ends.
     #[test]
-    fn a_panel_that_never_receipts_voids_at_the_receipt_deadline() {
+    fn a_panel_that_never_receipts_is_redrawn_once_then_voids() {
         let p = params();
         let genesis = PalwChainStateV2::genesis();
         let (s1, _) = apply(&genesis, &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
@@ -6624,10 +6738,47 @@ pub(crate) mod tests {
         let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: h64(90) }];
         let (s3, _) =
             apply(&s2, &p, &ctx(3, 105, 3), &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }], None);
+
+        // First receipt deadline: revived, not voided, and dated by the sweep.
         let (s4, _) = apply(&s3, &p, &ctx(4, 116, 4), &[], None);
-        match s4.claim(&claim_id).unwrap().phase {
+        let revived = s4.claim(&claim_id).unwrap();
+        assert!(matches!(revived.phase, PalwClaimPhaseV2::Provisional), "the first timeout redraws: {:?}", revived.phase);
+        assert_eq!(revived.rebound_daa, Some(116), "the second panel anchors on the sweep, not on acceptance");
+        assert_eq!(revived.bind_base_daa(), 116, "and the bind window restarts from there");
+
+        // Left alone, the redraw's own bind window closes and the claim ends at BindTimeout —
+        // still not blamed on the panel, because still nothing proves who was silent.
+        let (s5, _) = apply(&s4, &p, &ctx(5, 140, 5), &[], None);
+        match s5.claim(&claim_id).unwrap().phase {
+            PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::BindTimeout, .. } => {}
+            ref other => panic!("expected the redraw's bind timeout, got {other:?}"),
+        }
+    }
+
+    /// The other half: a claim that DOES bind a second panel and is met with silence again is
+    /// voided at `ReceiptTimeout`. One redraw, not an unbounded supply of them — a claim that
+    /// never resolves holds its reservation and its escrow forever.
+    #[test]
+    fn the_second_silent_panel_voids_the_claim() {
+        let p = params();
+        let genesis = PalwChainStateV2::genesis();
+        let (s1, _) = apply(&genesis, &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+        let env = attempt(40, 1);
+        let claim_id = attempt_id_v2(&env.attempt);
+        let (s2, _) = apply(&s1, &p, &ctx(2, 101, 2), &[], Some(&env));
+        let seats = || vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: h64(90) }];
+        let bind = |anchor| PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor, seats: seats() };
+        let (s3, _) = apply(&s2, &p, &ctx(3, 105, 3), &[bind(h64(77))], None);
+        let (s4, _) = apply(&s3, &p, &ctx(4, 116, 4), &[], None);
+        assert!(matches!(s4.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Provisional), "redrawn");
+
+        // The second panel binds against the redraw's own anchor slot.
+        let (s5, _) = apply(&s4, &p, &ctx(5, 120, 5), &[bind(h64(78))], None);
+        assert!(matches!(s5.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::PanelBound { .. }), "second panel bound");
+        let (s6, _) = apply(&s5, &p, &ctx(6, 131, 6), &[], None);
+        match s6.claim(&claim_id).unwrap().phase {
             PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::ReceiptTimeout, .. } => {}
-            ref other => panic!("expected ReceiptTimeout void, got {other:?}"),
+            ref other => panic!("expected the second panel's receipt timeout to void, got {other:?}"),
         }
     }
 
@@ -7012,7 +7163,10 @@ pub(crate) mod tests {
             None,
         );
 
-        assert_eq!(s2.class(&pending).unwrap().status, PalwClassStatusV2::Registered { activation_daa: 500, pending_share_permille: 100 });
+        assert_eq!(
+            s2.class(&pending).unwrap().status,
+            PalwClassStatusV2::Registered { activation_daa: 500, pending_share_permille: 100 }
+        );
         assert_eq!(s2.class_share_permille(&pending), None, "a class that is still `Registered` holds NO live share");
         assert_eq!(s2.class_share_permille(&immediate), Some(100), "the class that is active does");
         assert_eq!(s2.class_share_permille(&h64(1)), Some(900), "funded by the incumbent, not by the pending class");
@@ -7242,13 +7396,8 @@ pub(crate) mod tests {
 
         // The seat answers WITH the quorum — the best possible outcome for it.
         let agreeing = vec![seat_receipt(bond_key(9), true)];
-        let (licensed, _) = apply(
-            &s3,
-            &p,
-            &ctx(4, 103, 4),
-            &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: agreeing }],
-            None,
-        );
+        let (licensed, _) =
+            apply(&s3, &p, &ctx(4, 103, 4), &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: agreeing }], None);
         let after = licensed.bond(&bond_key(9)).unwrap().clone();
 
         assert_eq!(after.slashed, before.slashed, "a seat on the winning side is not charged — that part works");
@@ -7259,7 +7408,6 @@ pub(crate) mod tests {
              paid, that is the R-7 repair landing — update `slash_silent_seats`'s doc block and the re-audit."
         );
     }
-
 
     /// **The inverse of P0-7's named red test, and the reason it inverted** (audit M2-7).
     ///
@@ -7324,13 +7472,16 @@ pub(crate) mod tests {
         assert_eq!(defaulted.bond(&bond_key(2)).unwrap().slashed, 0, "a seat that answered with the quorum keeps its stake");
         assert_eq!(defaulted.bond(&bond_key(3)).unwrap().slashed, 0, "and an absent seat is not charged on the default path either");
 
-        // (3) The window closes with nothing concluded. The claim still voids — that part is a
-        //     fact of the lattice — and no seat is charged for it.
+        // (3) The window closes with nothing concluded. No seat is charged for it — and since the
+        //     bond-economics pass the claim is not destroyed for it either: the first such
+        //     timeout redraws the panel, because the chain cannot tell a silent seat from one
+        //     that honestly cannot judge, and voiding resolves that ambiguity against the only
+        //     party nobody accused.
         let (bound, claim_id) = panel_bound_with_three_seats(&p);
         let (swept, _) = apply(&bound, &p, &ctx(4, 113, 4), &[], None);
         assert!(
-            matches!(swept.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::ReceiptTimeout, .. }),
-            "the receipt window closed"
+            matches!(swept.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Provisional),
+            "the receipt window closed onto a redraw"
         );
         for n in 1..=3u64 {
             assert_eq!(
@@ -10021,7 +10172,7 @@ pub(crate) mod tests {
             })
         }
         spec_hash(b"misaka-palw/state-v2/state-root/v1", |s| {
-            s.update(&12u16.to_le_bytes()); // version_le(2) = 12, restated from the ADR (audit3: S-03 + S-04 + H4)
+            s.update(&13u16.to_le_bytes()); // version_le(2) = 13, restated from the ADR (bond economics: redraw + escrow backing)
             s.update(spec_collection_root(b"bonds", &c.bonds).as_byte_slice());
             s.update(spec_collection_root(b"reserved_exposure", &c.reserved_exposure).as_byte_slice());
             s.update(spec_collection_root(b"classes", &c.classes).as_byte_slice());
@@ -10129,6 +10280,7 @@ pub(crate) mod tests {
                 bond: bond_key(1),
                 pwu: 15_800,
                 accepted_daa: 10,
+                rebound_daa: None,
                 accepted_blue_score: 10,
                 accepted_block: block(0xB1),
                 trace_root: h64(0x71),
@@ -10150,6 +10302,7 @@ pub(crate) mod tests {
                 bond: bond_key(2),
                 pwu: 31_600,
                 accepted_daa: 11,
+                rebound_daa: None,
                 accepted_blue_score: 11,
                 accepted_block: block(0xB2),
                 trace_root: h64(0x74),
@@ -10318,17 +10471,22 @@ pub(crate) mod tests {
     /// and H4 changed which blocks, registrations and slashes are valid without changing a schema. The
     /// version is the only carrier for a semantics-only change, so these constants moved with it —
     /// which is the rule working, not a nuisance.
+    ///
+    /// A fourth, for the bond-economics pass: 12 → 13, and this one DID change the schema —
+    /// `PalwClaimStateV2` gained `rebound_daa`, so the inhabited root moves for the record shape as
+    /// well as for the version. The empty root moves for the version alone, which is exactly the
+    /// pair of signals these two constants exist to separate.
     #[test]
-    fn the_version_12_state_root_golden_vectors() {
+    fn the_version_13_state_root_golden_vectors() {
         assert_eq!(
             PalwChainStateV2::genesis().state_root().to_string(),
-            "e6e982b20f08e8102d0faddc9707c8ef1ef04f0dacd298bdf67b7373b1156134d011ff36d2794538c5326925ef6f94427f0b147813773a6ee7f1ce604d136d9b",
-            "the empty state's version-12 root moved"
+            "935b81ba3a3f319f5c554a62c395ec00068fa813f7714c35670f94ef39953c85d8b3011cdfee1c11b8fc42af392f9a52c387b94e6ff96c77b29b81edc1e057e7",
+            "the empty state's version-13 root moved"
         );
         assert_eq!(
             m02_populated_state().state_root().to_string(),
-            "ec9a46f0a8df0390a2c6010f728169b90395fa36903015098ae0df2f4201ac38cad27d5cebe7679b86802990d0cf50112dff41a00d13e159ae25285a1f444e30",
-            "the inhabited state's version-12 root moved"
+            "cf5ba494e938c44c14756aff651ea65971a46577db848ffb7595103f6e707fd0e3fee0f63d4671af7c7d80d99050becb5f0f55621f3f3f09713204c9ab34ab63",
+            "the inhabited state's version-13 root moved"
         );
     }
 }
