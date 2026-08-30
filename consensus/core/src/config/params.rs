@@ -513,11 +513,20 @@ pub struct Params {
     /// **Why the verdict cannot be repaired instead.** A conviction ought to require proof the
     /// producer was reached and refused, and no such proof is constructible here: the material pull
     /// carries no seat identity, nonce or signature, the serve carries no producer signature, and
-    /// neither side records anything. The obligation-naming gate the last audit added
-    /// (`palw_panel_v2`'s `chunk_index` / `requested_daa` checks) is satisfied by two constants in
-    /// the only implementation that files the verdict. So the seat cannot tell *the producer
-    /// withheld* from *the network did not deliver*, and on testnet-11 roughly a third of every
-    /// remote seat's verdicts were the second wearing the first's clothes.
+    /// neither side records anything. So the seat cannot tell *the producer withheld* from *the
+    /// network did not deliver*, and on testnet-11 roughly a third of every remote seat's verdicts
+    /// were the second wearing the first's clothes.
+    ///
+    /// **What the obligation-naming gate is and is not.** An earlier version of this note said that
+    /// gate — `palw_panel_v2`'s `chunk_index` / `requested_daa` checks — "is satisfied by two
+    /// constants", and that is false. Only `chunk_index` is a constant (`0`); `requested_daa` is a
+    /// computed timestamp, and it had teeth: it was refusing every redrawn panel's abstention,
+    /// which is why the seat service needed fixing to floor that timestamp at the CURRENT panel's
+    /// `bound_daa`. The gate was working and its producer was wrong. The gate is dropped past this
+    /// fence for a different and narrower reason — an abstention accuses nobody, so refusing a
+    /// whole receipt set over one seat's malformed accusation kills claims that three other seats
+    /// verified — and anyone weighing whether to re-tighten it should weigh that, not a claim that
+    /// it never checked anything.
     ///
     /// **TOP LEVEL for the reason on `palw_bootstrap_activation`**, and here it is load-bearing
     /// rather than tidy: this rule must reach a LIVE network, and a fence inside the V2 bundle

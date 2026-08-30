@@ -188,12 +188,26 @@ last word on it.
   goes through `palw_ruleset_id_v2`, which is not normalised, and would be a deploy-day partition.
 * **Ships dormant.** With the fence unset the pipeline passes `None` and behaviour is byte-identical
   to today: no fingerprint move, no re-mint.
-* **Tests, in the real pipeline:** (1) fence armed — a self-bonded block validates and its successor
-  is ordinary; (2) fence **off**, same DAG — the block is disqualified. A `const false` switch no
-  fixture exercises is how all four heartbeat findings survived to the audit, so the switch is
-  exercised in both positions; (3) an epoch-boundary block on a multi-class chain still validates
-  (the §narrowing regression); (4) a self-bonded block merged into a *sibling's* chain is skipped
-  and unpaid, deterministically.
+* **Tests. What EXISTS, and what this list used to claim.** This section previously read as though
+  four pipeline fixtures were in place. **None of them is.** What exists is:
+  * `a_bond_registered_in_this_blocks_own_mergeset_admits_this_blocks_own_attempt` — a pure-function
+    unit test of `check_palw_producer_entitlement_v2_with_bootstrap`, both fence positions, plus the
+    two narrowings (a mergeset bond for an unknown class still fails on the CLASS; a mismatched key
+    still fails item 2);
+  * `palw_v2_the_bootstrap_registry_is_the_state_the_transition_will_hold` — a pipeline test that the
+    bootstrap record is read from the state the accepted objects fold to, verified to fail when the
+    filter returns the parent state instead.
+
+  **Still outstanding, and they are the deploy precondition:** (1) fence ARMED in a real
+  `ConfigBuilder` — a bonded-in-mergeset block validates and its successor is ordinary; (2) fence
+  off, same DAG — disqualified; (3) an epoch-boundary block on a multi-class chain still validates
+  (the §narrowing regression — the existing admission test asserts only `ClassMissing`, which is not
+  that); (4) a self-bonded block merged into a *sibling's* chain is skipped and unpaid.
+
+  Until those exist, `palw_bootstrap_activation` has **never been executed in the `Some` position by
+  any test at the pipeline level** — nor have D1's or D4's fences. That is precisely the condition
+  this section quotes about the heartbeat lane, so it must be read as a blocker on arming, not as a
+  nicety.
 * **Before switching it on:** the fence is armed at a future, *reachable* score while the network is
   still alive (a recovery rule fenced behind a score a dead chain cannot reach is withdrawn-finding
   1 in new clothes); and the bootstrap tool has been **run on a real fleet**, not reasoned about.

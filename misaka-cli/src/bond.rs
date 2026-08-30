@@ -356,7 +356,24 @@ pub async fn retire(
     }
 
     let reserved = facts.bond_reserved_exposure.trim();
-    let still_owing = !reserved.is_empty() && reserved != "0";
+    // **The same shape as the ownership guard above, and it was left with the same hole.** An empty
+    // `bond_reserved_exposure` was read as "this bond owes nothing" — the one answer that must not
+    // be read as a zero, for the same reason a blank public key must not be read as a match: the
+    // string arrives over RPC from a node this CLI does not control. Note the asymmetry that made
+    // it easy to miss: every OTHER malformed value ("00", "0x0", garbage) already fails closed,
+    // because the test is `!= "0"`. Only the empty string opened the gate.
+    if reserved.is_empty() {
+        return Err(CliError::new(
+            exit::GENERIC,
+            format!(
+                "the node returned no reserved-exposure figure for bond {}:{}, so this CLI cannot tell whether a claim against \
+                 it can still be disputed. Refusing rather than releasing collateral it cannot account for — retiring under a \
+                 live claim takes the stake out from under a court.",
+                bond_outpoint.transaction_id, bond_outpoint.index
+            ),
+        ));
+    }
+    let still_owing = reserved != "0";
     if still_owing {
         return Err(CliError::new(
             exit::GENERIC,
