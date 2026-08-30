@@ -364,13 +364,31 @@ pub const fn palw_v2_min_genesis_bonds_v1() -> usize {
 ///
 /// * `SEATS + 1` — the executor is excluded from its own panel, so this is the floor to seat at all;
 /// * `+ 1` — one bond may LEAVE eligibility (its holder retires it, or the escrow slash drives its
-///   collateral under `min_collateral_sompi`) and panels must still bind;
-/// * `+ 1` — and its replacement is unseatable for a full `bond_maturity_daa` after it registers,
-///   so the spare has to cover the replacement's own maturity, not just the gap.
+///   collateral under `min_collateral_sompi`) and panels must still bind. The registry is
+///   append-only, so after a departure and an immediate replacement it holds `N + 1` rows of which
+///   one is `Retiring` and one is immature: `available = N - 2`. Requiring `>= SEATS` gives
+///   `N >= SEATS + 2`, which is the STRICT minimum.
+/// * `+ 1` more — margin for a second concurrent departure inside one window.
 ///
-/// Hence `SEATS + 3`. `Params::validate_palw_v2` refuses to arm the fence on a genesis that
-/// registers fewer, so "do not arm D1 on a network running at `seat_count + 1`" is a rule the node
-/// enforces rather than a sentence in an ADR somebody has to remember.
+/// **The `+1` for margin is the honest reading; an earlier version of this note justified it as
+/// "the replacement's own maturity" and that double-counted.** The replacement's immaturity IS the
+/// departing bond's gap — the same missing seat, not a second one. The number is unchanged because
+/// `SEATS + 3` is what one would ship anyway; the reason for it is not.
+///
+/// Two things bound it from the other side, and both argue against reaching for more:
+/// * **Operator uniqueness is not enforced at registration.** `DuplicateBondKey` refuses a second
+///   bond for one KEY, but nothing refuses a second bond for one `operator_id`, and the draw seats
+///   one bond per operator — so a replacement registered under an existing operator's key adds a
+///   row and restores no seat. Every added card needs a fresh operator key as well as a fresh bond.
+/// * **Slack nobody staffs is a liveness regression, not insurance.** The draw is liveness-blind:
+///   an offline bond still takes a seat, so a panel reaches quorum by presence only while unstaffed
+///   bonds are at most `SEATS - QUORUM`. At `SEATS + 3` that means at least six staffed hosts;
+///   growing the registry past what the fleet can actually run makes panels fail more often, not
+///   less.
+///
+/// `Params::validate_palw_v2` refuses to arm the fence on a genesis that registers fewer, so "do
+/// not arm D1 on a network running at `seat_count + 1`" is a rule the node enforces rather than a
+/// sentence in an ADR somebody has to remember.
 pub const fn palw_v2_maturity_armable_bonds_v1() -> usize {
     PALW_V2_PANEL_SEATS as usize + 3
 }

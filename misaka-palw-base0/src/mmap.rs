@@ -15,7 +15,17 @@
 //! Three calls: `mmap`, `munmap`, `madvise`. A wrapper crate would add a dependency to a workspace
 //! that audits them, in exchange for wrapping thirty lines.
 
+//! # Portability
+//!
+//! The three calls are POSIX and there is no Windows equivalent in this file. Rather than let an
+//! ungated `std::os::unix` break the whole workspace on `x86_64-pc-windows-msvc` — which is what it
+//! did, and which is a defect this repository has recorded before — the mapping is `cfg`-gated and
+//! [`ReadOnlyMap::open`] refuses on any other platform. A node there still validates the chain and
+//! still produces for the liveness floor, which needs no mapped artifact; it cannot produce for a
+//! class whose weights only a mapping can reach, and it is told so at the moment it tries.
+
 use std::fs::File;
+#[cfg(unix)]
 use std::os::unix::io::AsRawFd;
 
 /// A file mapped read-only into the address space, unmapped on drop.
@@ -24,6 +34,11 @@ pub struct ReadOnlyMap {
     len: usize,
     /// Kept open so [`Self::read_at`] exists. `mmap` does not need the descriptor after the map
     /// is made; the streaming path does, and one open fd is the whole cost.
+    ///
+    /// Off POSIX nothing reads it — `open` refuses before one exists — and an unused field is a
+    /// warning, which a `-D warnings` check turns into the same red build this gating was written
+    /// to fix. Allowed there and only there, so the field stays live where it is used.
+    #[cfg_attr(not(unix), allow(dead_code))]
     file: File,
 }
 
@@ -35,6 +50,7 @@ unsafe impl Sync for ReadOnlyMap {}
 impl ReadOnlyMap {
     /// Map the whole file. An empty file maps to an empty slice rather than failing: it is a
     /// legitimate artifact with no tensor data, and `mmap` refuses a zero length.
+    #[cfg(unix)]
     pub fn open(path: &std::path::Path) -> std::io::Result<Self> {
         let file = File::open(path)?;
         let len = file.metadata()?.len() as usize;
@@ -49,6 +65,22 @@ impl ReadOnlyMap {
         Ok(Self { ptr: ptr as *const u8, len, file })
     }
 
+    /// The non-POSIX arm: refuse, with the reason, rather than pretend.
+    ///
+    /// Reading the artifact into memory instead is not a fallback — Qwen3.6 is 33.5 GiB and the
+    /// whole point of the mapping is that 97 % of it is untouched per token. An `Unsupported`
+    /// error at the one call that needs the mapping keeps the crate building everywhere and keeps
+    /// the failure at the place a person can act on it.
+    #[cfg(not(unix))]
+    pub fn open(path: &std::path::Path) -> std::io::Result<Self> {
+        let _ = path;
+        Err(std::io::Error::new(
+            std::io::ErrorKind::Unsupported,
+            "memory-mapped artifacts are implemented for POSIX only; this platform can validate the chain and \
+             produce for the liveness floor, but not for a class whose weights are read through a mapping",
+        ))
+    }
+
     /// Read a range through the file descriptor rather than the mapping — the same inode, the
     /// same page cache, the same bytes; only the syscall that touches a cold page differs.
     ///
@@ -59,9 +91,24 @@ impl ReadOnlyMap {
     /// 68 MB/s through a default `read()`, 1.3 GB/s through reads this size. A whole-file pass
     /// belongs on this path; per-token expert access stays on the map, whose resident-set
     /// behavior is the reason the map exists.
+    #[cfg(unix)]
     pub fn read_exact_at(&self, offset: u64, buf: &mut [u8]) -> std::io::Result<()> {
         use std::os::unix::fs::FileExt;
         self.file.read_exact_at(buf, offset)
+    }
+
+    /// **Unreachable off POSIX, and deliberately not implemented there.**
+    ///
+    /// `open` refuses on any non-POSIX platform, so no `ReadOnlyMap` exists for this to be called
+    /// on. A Windows positional read (`seek_read`) would be a few lines — and they would be lines
+    /// no CI on this workspace compiles, because the cfg-inversion check that guards this file
+    /// exercises the `not(windows)` arm on a POSIX host. Shipping an unreachable branch that
+    /// nothing builds is how the ungated `std::os::unix` got here in the first place, so this
+    /// stays a refusal until a platform that can compile it needs it.
+    #[cfg(not(unix))]
+    pub fn read_exact_at(&self, offset: u64, buf: &mut [u8]) -> std::io::Result<()> {
+        let _ = (offset, buf);
+        Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "positional reads need the POSIX mapping path"))
     }
 
     /// Tell the kernel the access pattern is random, which is what a router that picks eight of
@@ -71,6 +118,9 @@ impl ReadOnlyMap {
         if self.len == 0 {
             return;
         }
+        #[cfg(not(unix))]
+        return;
+        #[cfg(unix)]
         // SAFETY: the mapping is live and the length is its own.
         unsafe {
             libc::madvise(self.ptr as *mut libc::c_void, self.len, libc::MADV_RANDOM);
@@ -87,7 +137,10 @@ impl ReadOnlyMap {
     /// Rounded outward to page boundaries, because `madvise` requires an aligned start and a range
     /// that stops mid-page leaves the tail unread.
     pub fn will_need(&self, offset: usize, len: usize) {
+        #[cfg(unix)]
         self.advise(offset, len, libc::MADV_WILLNEED);
+        #[cfg(not(unix))]
+        self.advise(offset, len, 0);
     }
 
     /// **Give a range back** (`MADV_DONTNEED`).
@@ -97,9 +150,19 @@ impl ReadOnlyMap {
     /// EVICTS: without it the page cache keeps every expert it has ever seen and pays for that by
     /// evicting the weights every token needs.
     pub fn dont_need(&self, offset: usize, len: usize) {
+        #[cfg(unix)]
         self.advise(offset, len, libc::MADV_DONTNEED);
+        #[cfg(not(unix))]
+        self.advise(offset, len, 0);
     }
 
+    #[cfg(not(unix))]
+    fn advise(&self, offset: usize, len: usize, advice: i32) {
+        // Advice is a hint the mapping is correct without; off POSIX there is no mapping at all.
+        let _ = (offset, len, advice);
+    }
+
+    #[cfg(unix)]
     fn advise(&self, offset: usize, len: usize, advice: i32) {
         if self.len == 0 || len == 0 || offset >= self.len {
             return;
@@ -154,6 +217,10 @@ impl Drop for ReadOnlyMap {
         if self.len == 0 {
             return;
         }
+        // Off POSIX nothing was ever mapped: `open` refuses, so `len` is only non-zero here on unix.
+        #[cfg(not(unix))]
+        return;
+        #[cfg(unix)]
         // SAFETY: unmapping exactly what was mapped, once.
         unsafe {
             libc::munmap(self.ptr as *mut libc::c_void, self.len);
