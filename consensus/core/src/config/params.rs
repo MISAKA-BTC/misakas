@@ -1864,7 +1864,7 @@ impl From<NetworkType> for Params {
 impl From<NetworkId> for Params {
     fn from(value: NetworkId) -> Self {
         with_registered_models(match value.network_type {
-            NetworkType::Mainnet => MAINNET_PARAMS,
+            NetworkType::Mainnet => mainnet_shipped_params(),
             NetworkType::Testnet => match value.suffix {
                 Some(10) => TESTNET_PARAMS,
                 // **The PALW-RC network** (was suffix 12; see `palw_rc_base_params`). The old
@@ -3023,11 +3023,44 @@ pub fn palw_rc_params_from_artifacts(
     base0_artifact_root: crate::Hash64,
     genesis_bonds: Vec<crate::palw_fp_devnet_v3::PalwGenesisBondSpecV1>,
 ) -> Result<Params, crate::palw_mode_v2::PalwModeV2Error> {
+    palw_v2_params_from_artifacts_on_base(palw_rc_base_params(), base0_artifact_root, genesis_bonds)
+}
+
+/// **[`palw_rc_params_from_artifacts`] over an arbitrary base identity.**
+///
+/// The whole point of routing every network through one function is that the genesis GATE runs on
+/// each of them. `verify_palw_genesis_v2` needs the catalog PREIMAGE, which only this entry point
+/// derives, and it resolves each bond's collateral against `genesis_premine_utxos_for(params.net)`
+/// — THIS network's own premine. So a base whose genesis does not actually hold the collateral its
+/// cards declare is refused here, at assembly, rather than by the first node to boot it.
+pub fn palw_v2_params_from_artifacts_on_base(
+    base: Params,
+    base0_artifact_root: crate::Hash64,
+    genesis_bonds: Vec<crate::palw_fp_devnet_v3::PalwGenesisBondSpecV1>,
+) -> Result<Params, crate::palw_mode_v2::PalwModeV2Error> {
+    let genesis_utxos = crate::config::premine::genesis_premine_utxos_for(base.net);
+    palw_v2_params_from_artifacts_on_base_with_utxos(base, base0_artifact_root, genesis_bonds, genesis_utxos)
+}
+
+/// [`palw_v2_params_from_artifacts_on_base`] against a SUPPLIED genesis UTXO set.
+///
+/// The genesis gate resolves each bond's declared collateral against the network's own premine, so
+/// on every shipped path that set is `genesis_premine_utxos_for(net)` and this seam is invisible.
+/// It exists so a network whose premine does not carry bond collateral YET — mainnet, whose card
+/// list is empty — can still be assembled and gated in a test, against a premine built the way its
+/// real one would be. Without that, the mainnet wiring could only be checked by shipping it.
+pub fn palw_v2_params_from_artifacts_on_base_with_utxos(
+    base: Params,
+    base0_artifact_root: crate::Hash64,
+    genesis_bonds: Vec<crate::palw_fp_devnet_v3::PalwGenesisBondSpecV1>,
+    genesis_utxos: crate::utxo::utxo_collection::UtxoCollection,
+) -> Result<Params, crate::palw_mode_v2::PalwModeV2Error> {
     let (profile, catalog) = crate::palw_base0_profile::palw_rc_base0_registration_v1(base0_artifact_root)
         .map_err(|_| crate::palw_mode_v2::PalwModeV2Error::Invalid("BASE-0's registration does not derive"))?;
     let class_id = profile.shape_profile_id();
     let entry = catalog.entries().first().expect("the RC catalog has its one class");
-    let params = palw_rc_params(
+    let params = palw_v2_params_on_base(
+        base,
         class_id,
         catalog.root(),
         crate::palw_catalog_coverage::palw_court_catalog_root_v1(),
@@ -3047,9 +3080,8 @@ pub fn palw_rc_params_from_artifacts(
     // The outpoint resolver is THIS network's genesis set, so "the bond holds its collateral" is
     // a statement about the same UTXO commitment the genesis block carries, not about a set
     // supplied alongside it.
-    let genesis_utxos = crate::config::premine::genesis_premine_utxos_for(params.net);
     let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
-        unreachable!("palw_rc_params installs a ConsensusV2 bundle or returns Err");
+        unreachable!("palw_v2_params_on_base installs a ConsensusV2 bundle or returns Err");
     };
     crate::palw_genesis_v2::verify_palw_genesis_v2(bundle, &catalog, &bundle.genesis_objects, |outpoint| {
         genesis_utxos.get(outpoint).map(|entry| entry.amount)
@@ -3406,6 +3438,29 @@ pub struct PalwRcGenesisBondCard {
 //
 // Every node must ship this table byte-for-byte: it is inside `consensus_params_id`, so a node
 // that ships a different one is refused at the handshake rather than forking.
+/// **Mainnet's PALW genesis bond registry — empty until it is real.**
+///
+/// The switch that turns PALW on for mainnet is this list plus
+/// [`PALW_MAINNET_GENESIS_ARTIFACT_ROOT`]. While it is empty, `genesis_premine_utxos_for` carves
+/// nothing, `mainnet_shipped_params` returns `MAINNET_PARAMS` unchanged, and mainnet is the
+/// hash-only network it is today — byte-identical, fingerprint included.
+///
+/// **Why it is empty rather than filled with placeholders.** Every card carries an ML-DSA-87 key
+/// generated on the host that will hold it; only the public row travels. A fabricated key is a
+/// seat nobody can ever sign a receipt for — a permanently silent juror on a registry that,
+/// today, has no spare seat to absorb one. So this cannot be populated from inside the tree: it
+/// needs operators, and populating it re-mints mainnet's genesis (the collateral outputs are part
+/// of the premine, so the genesis UTXO commitment moves with them).
+///
+/// It must hold at least [`crate::palw_fp_devnet_v3::palw_v2_maturity_armable_bonds_v1`] rows if
+/// ADR-0065 D1 is ever to be armed here — `validate_palw_v2` refuses a smaller one — and never
+/// fewer than `palw_v2_min_genesis_bonds_v1`, which `verify_palw_genesis_v2` refuses.
+pub const PALW_MAINNET_GENESIS_BONDS: &[PalwRcGenesisBondCard] = &[];
+
+/// Mainnet's BASE-0 artifact root. Zero means "no ruleset to assemble", exactly as it does for the
+/// RC card, and `mainnet_shipped_params` falls back to the hash-only `MAINNET_PARAMS`.
+pub const PALW_MAINNET_GENESIS_ARTIFACT_ROOT: crate::Hash64 = crate::Hash64::from_bytes([0u8; 64]);
+
 pub const PALW_RC_GENESIS_BONDS: &[PalwRcGenesisBondCard] = &[
     PalwRcGenesisBondCard {
         premine_index: 0,
@@ -5068,6 +5123,37 @@ pub fn palw_rc_genesis_card_is_set() -> bool {
 /// ADR-0042 Decision 11's promise ("it reads the RC's canonical ruleset bytes rather than a human
 /// re-typing parameters"). A per-node config file would make every operator's ruleset a local
 /// decision, and the handshake would be the first place anyone found out.
+/// **Mainnet as it ships: hash-only today, `ConsensusV2` the moment its genesis card is set.**
+///
+/// The same shape `palw_rc_shipped_params` has, and for the same reason — a node's ruleset is a
+/// property of its BINARY, not of a file it was pointed at. With
+/// [`PALW_MAINNET_GENESIS_ARTIFACT_ROOT`] zero this returns `MAINNET_PARAMS` untouched, so mainnet
+/// is byte-identical to before this function existed, fingerprint included.
+///
+/// Turning PALW on for mainnet is therefore two constants and a re-mint: the artifact root, and a
+/// [`PALW_MAINNET_GENESIS_BONDS`] registry of real operator keys — whose collateral outputs become
+/// part of the premine, which is why it moves the genesis. Everything between those constants and
+/// a running V2 mainnet is the code below, and it is exercised by
+/// `a_mainnet_equivalent_genesis_actually_enables_palw`.
+pub fn mainnet_shipped_params() -> Params {
+    if PALW_MAINNET_GENESIS_ARTIFACT_ROOT == crate::Hash64::from_bytes([0u8; 64]) {
+        return MAINNET_PARAMS;
+    }
+    let bonds: Vec<_> = PALW_MAINNET_GENESIS_BONDS
+        .iter()
+        .map(|c| crate::palw_fp_devnet_v3::PalwGenesisBondSpecV1 {
+            bond: crate::palw_state_v2::PalwBondKeyV2(crate::config::premine::premine_outpoint(c.premine_index)),
+            pubkey: c.bond_pubkey.to_vec(),
+            operator_pubkey: c.operator_pubkey.to_vec(),
+            payout_payload: crate::Hash64::from_bytes(c.payout_payload),
+        })
+        .collect();
+    // A card that is set and does not assemble is a binary that would boot a network its own
+    // genesis gate refuses; failing at startup with the gate's own message is the honest outcome.
+    palw_v2_params_from_artifacts_on_base(MAINNET_PARAMS, PALW_MAINNET_GENESIS_ARTIFACT_ROOT, bonds)
+        .unwrap_or_else(|e| panic!("the pinned mainnet PALW genesis card does not assemble: {e}"))
+}
+
 pub fn palw_rc_shipped_params() -> Params {
     // The artifact root is the one thing code cannot mint. Without it there is no class to
     // register and therefore no ruleset to assemble — that, and only that, is what falls back to
@@ -5187,6 +5273,40 @@ pub fn palw_rc_params(
     genesis_artifact_root: crate::Hash64,
     genesis_bonds: Vec<crate::palw_fp_devnet_v3::PalwGenesisBondSpecV1>,
 ) -> Result<Params, crate::palw_mode_v2::PalwModeV2Error> {
+    palw_v2_params_on_base(
+        palw_rc_base_params(),
+        base_class_id,
+        class_catalog_root,
+        court_catalog_root,
+        genesis_pwu_per_inference,
+        genesis_artifact_root,
+        genesis_bonds,
+    )
+}
+
+/// **[`palw_rc_params`] over an arbitrary base identity** — the same assembly, for a network that
+/// is not the RC.
+///
+/// Everything `palw_rc_params` did after choosing its base was already generic: the finality depth
+/// is derived from the BUNDLE's challenge window, the pruning depth from that finality depth and
+/// the claim lattice, and `validate_palw_v2` judges the result. Only the base was hard-coded. So
+/// enabling PALW on another network is choosing a different `base`, not writing a second assembly
+/// — which matters because a second assembly is a second set of derived depths, and those are
+/// exactly the numbers whose drift audit M2-20 was about.
+///
+/// The base supplies the identity (net, genesis, cadence, the DNS overlay, every activation
+/// score); this supplies the ruleset. A caller that passed a base whose PALW fences disagree with
+/// a V2 mode gets the refusal from `validate_palw_v2` at the bottom rather than a running node.
+#[allow(clippy::too_many_arguments)]
+pub fn palw_v2_params_on_base(
+    base: Params,
+    base_class_id: crate::Hash64,
+    class_catalog_root: crate::Hash64,
+    court_catalog_root: crate::Hash64,
+    genesis_pwu_per_inference: u64,
+    genesis_artifact_root: crate::Hash64,
+    genesis_bonds: Vec<crate::palw_fp_devnet_v3::PalwGenesisBondSpecV1>,
+) -> Result<Params, crate::palw_mode_v2::PalwModeV2Error> {
     let bundle = crate::palw_fp_devnet_v3::palw_fp_devnet_bundle_v3(
         base_class_id,
         class_catalog_root,
@@ -5199,7 +5319,19 @@ pub fn palw_rc_params(
     // able to disagree about which genesis, cadence or activation set the RC network has — a
     // node whose bundled and bundle-less forms differ in anything but the bundle would be two
     // networks wearing one name.
-    let mut params = palw_rc_base_params();
+    let mut params = base;
+    // **The frozen cadence is part of the RULESET, so the assembly imposes it rather than hoping
+    // the base already had it** (ADR-0038 Decision H). Every window inside the bundle is
+    // DAA-denominated and the cadence is not in `palw_ruleset_id_v2`, so two networks could share
+    // a ruleset id and run different rules in wall-clock terms; `validate_palw_v2` refuses that at
+    // the bottom of this function. The RC base already carries this value, so this is a no-op
+    // there — it exists for every OTHER base, where forgetting it is a startup panic rather than a
+    // wrong number.
+    //
+    // For mainnet it is not a small change and should not read as one: mainnet runs 10 bps, and a
+    // V2 network runs one block per 120 s. Enabling PALW on mainnet slows its cadence by that
+    // factor, which is a consequence of the consensus and not a knob beside it.
+    params.blockrate.target_time_per_block = crate::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
     // Sized against the bundle's own challenge window, which is what the schedule rule compares:
     // `finality_depth < w_challenge`. Half the window, so the inequality holds with margin rather
     // than by one.
@@ -6366,6 +6498,83 @@ mod consensus_params_id_tests {
             }
         }
         grown
+    }
+
+    /// **PALW, actually on, over mainnet's own identity — the wiring exercised rather than argued.**
+    ///
+    /// Mainnet ships hash-only, and the honest reason is that a genesis bond registry needs real
+    /// operator keys and a premine that carries their collateral. Neither can be minted from
+    /// inside this tree. What CAN be checked from inside the tree is everything between those two
+    /// constants and a running V2 mainnet, and if that is never exercised then "mainnet is wired
+    /// for PALW" is a claim about code nobody has run — the shape this audit line keeps finding.
+    ///
+    /// So this assembles a mainnet-EQUIVALENT: mainnet's own base identity (net, genesis, cadence,
+    /// the production DNS overlay and its economics), a bond registry sized so ADR-0065 D1 is
+    /// armable, and a premine built exactly the way mainnet's real one would be — then runs the
+    /// same assembly and the same genesis gate a booting node runs.
+    ///
+    /// Both positions, because the dormant half is the one that ships: mainnet as it stands is
+    /// asserted byte-identical first, so this cannot pass by having quietly turned PALW on.
+    #[test]
+    fn a_mainnet_equivalent_genesis_actually_enables_palw() {
+        use crate::config::premine::{MISAKA_PREMINE_CAP_SOMPI, bonded_genesis_utxos, premine_outpoint};
+        use crate::palw_fp_devnet_v3::{palw_devnet_bond_registry_v1, palw_v2_maturity_armable_bonds_v1};
+        use crate::palw_mode_v2::PalwConsensusMode;
+
+        // 1. As shipped: hash-only, and the empty card list is why.
+        assert!(matches!(MAINNET_PARAMS.palw_consensus_mode, PalwConsensusMode::Disabled), "mainnet ships PALW off");
+        assert!(PALW_MAINNET_GENESIS_BONDS.is_empty(), "…because it has no genesis registry yet");
+        assert_eq!(
+            mainnet_shipped_params().consensus_params_id(),
+            MAINNET_PARAMS.consensus_params_id(),
+            "and routing mainnet through the assembly must not move one byte while the card is unset"
+        );
+
+        // 2. A registry over mainnet's OWN premine indices, sized so D1 is armable on it.
+        let n = palw_v2_maturity_armable_bonds_v1();
+        let specs: Vec<_> = palw_devnet_bond_registry_v1(n)
+            .into_iter()
+            .enumerate()
+            .map(|(i, mut spec)| {
+                // The outpoint IS the bond's identity, so it has to be the premine output that
+                // actually holds the collateral — otherwise the genesis gate cannot resolve it.
+                spec.bond = crate::palw_state_v2::PalwBondKeyV2(premine_outpoint(i as u32));
+                spec
+            })
+            .collect();
+        let money: Vec<(u32, [u8; 64])> =
+            specs.iter().enumerate().map(|(i, spec)| (i as u32, *spec.payout_payload.as_byte_slice())).collect();
+        let utxos = bonded_genesis_utxos(MAINNET_PARAMS.net, &money, std::iter::empty());
+
+        // The cap is the one invariant a new carve can silently break, so check it here too.
+        let total: u64 = utxos.values().map(|e| e.amount).sum();
+        assert_eq!(total, MISAKA_PREMINE_CAP_SOMPI, "a bonded mainnet genesis still mints exactly 10B");
+
+        // 3. The real assembly and the real genesis gate, on mainnet's base.
+        let params = palw_v2_params_from_artifacts_on_base_with_utxos(MAINNET_PARAMS, PALW_RC_GENESIS_ARTIFACT_ROOT, specs, utxos)
+            .expect("a mainnet-equivalent genesis assembles and passes verify_palw_genesis_v2");
+
+        // 4. PALW is genuinely on, and it is still mainnet underneath.
+        assert!(matches!(params.palw_consensus_mode, PalwConsensusMode::ConsensusV2(_)), "the mode is V2");
+        assert_eq!(params.net, MAINNET_PARAMS.net, "…on mainnet's own identity");
+        assert_eq!(params.genesis.hash, MAINNET_PARAMS.genesis.hash, "…and mainnet's genesis block");
+        params.validate_palw_v2().expect("the startup gate a node runs accepts it");
+        assert_eq!(
+            params.palw_consensus_mode.accepts_algo_id(crate::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2),
+            Some(true),
+            "the attempt lane is open, which is what 'PALW is enabled' means at block validity"
+        );
+        // The mainnet economics came along rather than being replaced by the RC's.
+        assert_eq!(
+            params.dns_params.as_ref().expect("mainnet carries the overlay").min_bond_amount_sompi,
+            10_000 * SOMPI_PER_KASPA,
+            "the production DNS overlay and its bond floor survive the assembly"
+        );
+
+        // 5. And D1 is armable here — the property the shipped six-bond registry refuses.
+        let mut armed = params.clone();
+        armed.palw_bond_maturity = Some(PalwBondMaturityV1 { activation: ForkActivation::new(1_000), window_daa: 1_000 });
+        armed.validate_palw_v2().expect("a registry with spare seats may arm the maturity fence");
     }
 
     /// **D1 may not be armed on a registry with no spare seat**, which is the shipped one.

@@ -297,9 +297,23 @@ pub const PALW_RC_BOND_FEE_FLOAT_SOMPI: u64 = 100 * SOMPI_PER_KASPA;
 ///   one fee float per bond (at `MAIN_PREMINE_INDEX + 1 + i`, owned by that bond's payout key),
 ///   and the community allocation (its own txid). The main wallet holds the remainder.
 /// * **every other network** — one main-wallet UTXO of the whole cap.
+/// The money half of a genesis bond card: where its collateral sits, and where its float pays.
+fn bond_money_rows(cards: &[crate::config::params::PalwRcGenesisBondCard]) -> Vec<(u32, [u8; 64])> {
+    cards.iter().map(|c| (c.premine_index, c.payout_payload)).collect()
+}
+
 pub fn genesis_premine_utxos_for(net: NetworkId) -> UtxoCollection {
     if net.network_type == NetworkType::Testnet && net.suffix == Some(11) {
-        return testnet11_genesis_utxos(net);
+        return bonded_genesis_utxos(net, &bond_money_rows(crate::config::params::PALW_RC_GENESIS_BONDS), testnet11_community_utxos());
+    }
+    // **Mainnet takes the same shape the moment it has cards, and not before.** The list is empty
+    // until a genesis registry exists (real keys, held by the operators who will run those seats),
+    // so today this falls through and mainnet's premine is one main-wallet UTXO exactly as it was.
+    // What the branch buys is that enabling PALW on mainnet is *populating a list*, not writing a
+    // second premine builder — and a second builder is a second place for the 10B cap arithmetic
+    // to be got wrong, which is the mistake this function's own history records.
+    if net.network_type == NetworkType::Mainnet && !crate::config::params::PALW_MAINNET_GENESIS_BONDS.is_empty() {
+        return bonded_genesis_utxos(net, &bond_money_rows(crate::config::params::PALW_MAINNET_GENESIS_BONDS), std::iter::empty());
     }
     misaka_premine_utxos_for(net)
 }
@@ -309,32 +323,45 @@ pub fn genesis_premine_utxos_for(net: NetworkId) -> UtxoCollection {
 /// inserted the main wallet twice (once at 6B, then overwritten at 9B−floats via `HashMap`
 /// extend), which is exactly how the genesis quietly totalled 13.547B against a 10B decision —
 /// a single construction path is the fix, not a smaller patch.
-fn testnet11_genesis_utxos(net: NetworkId) -> UtxoCollection {
-    let cards = crate::config::params::PALW_RC_GENESIS_BONDS;
+/// **The genesis set for a network whose genesis REGISTERS PALW bonds.**
+///
+/// Takes `(premine_index, payout_payload)` rather than the card struct, because those are the only
+/// two fields a UTXO set can be built from — the keys belong to the registration objects, not to
+/// the money. Narrowing it is what lets a mainnet-equivalent be assembled in a test without
+/// fabricating `&'static` ML-DSA-87 keys, so the mainnet wiring can be exercised end to end before
+/// any real operator key exists.
+pub(crate) fn bonded_genesis_utxos(
+    net: NetworkId,
+    cards: &[(u32, [u8; 64])],
+    community: impl IntoIterator<Item = (TransactionOutpoint, UtxoEntry)>,
+) -> UtxoCollection {
     let main_spk = crate::dns_finality::p2pkh_mldsa87_spk(&owner_payload(main_address_for(net)));
 
-    let mut utxos: Vec<(TransactionOutpoint, UtxoEntry)> = Vec::with_capacity(2 * cards.len() + TESTNET11_COMMUNITY_ALLOCATIONS.len() + 1);
+    let mut utxos: Vec<(TransactionOutpoint, UtxoEntry)> = Vec::with_capacity(2 * cards.len() + 1);
     let mut carved: u64 = 0;
 
     // Genesis-bond collateral, at each card's DECLARED index (the outpoint IS the bond's
     // identity — `PalwBondKeyV2(premine_outpoint(card.premine_index))` — so the collateral goes
     // where the bond points, not where the card happens to sit in the list), owned by the main
     // wallet's key: "the main wallet bonds", there is no custody block.
-    for card in cards {
-        assert!(card.premine_index < MAIN_PREMINE_INDEX, "a genesis bond may not stake the main wallet itself or a float index");
-        utxos.push((premine_outpoint(card.premine_index), premine_entry(GENESIS_BOND_COLLATERAL_SOMPI, main_spk.clone())));
+    for (premine_index, _) in cards {
+        assert!(*premine_index < MAIN_PREMINE_INDEX, "a genesis bond may not stake the main wallet itself or a float index");
+        utxos.push((premine_outpoint(*premine_index), premine_entry(GENESIS_BOND_COLLATERAL_SOMPI, main_spk.clone())));
         carved = carved.checked_add(GENESIS_BOND_COLLATERAL_SOMPI).expect("collateral cannot overflow");
     }
 
     // Per-bond fee floats, after the main wallet's index, at each bond's own payout key.
-    for (i, card) in cards.iter().enumerate() {
-        let script_public_key = crate::dns_finality::p2pkh_mldsa87_spk(&card.payout_payload);
-        utxos.push((premine_outpoint(MAIN_PREMINE_INDEX + 1 + i as u32), premine_entry(PALW_RC_BOND_FEE_FLOAT_SOMPI, script_public_key)));
+    for (i, (_, payout_payload)) in cards.iter().enumerate() {
+        let script_public_key = crate::dns_finality::p2pkh_mldsa87_spk(payout_payload);
+        utxos.push((
+            premine_outpoint(MAIN_PREMINE_INDEX + 1 + i as u32),
+            premine_entry(PALW_RC_BOND_FEE_FLOAT_SOMPI, script_public_key),
+        ));
         carved = carved.checked_add(PALW_RC_BOND_FEE_FLOAT_SOMPI).expect("floats cannot overflow");
     }
 
     // The community allocation, on its own sentinel txid.
-    for (outpoint, entry) in testnet11_community_utxos() {
+    for (outpoint, entry) in community {
         carved = carved.checked_add(entry.amount).expect("community cannot overflow");
         utxos.push((outpoint, entry));
     }
