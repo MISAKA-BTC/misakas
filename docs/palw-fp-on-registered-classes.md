@@ -248,3 +248,26 @@ Closing it is a consensus decision, and every option moves an id:
 
 `a_callers_prompt_runs_and_no_registered_class_can_earn_a_draw_with_it` pins the arithmetic and the
 refusal, so a change to either number has to face this test.
+
+
+## Why sink adoption is not shown in-harness: DAA does not advance with block count
+
+Measured, not assumed. A `TestConsensus` V2 chain extended by 2,000 sequential blocks reaches a
+sink DAA of **63** — `build_block_template_row`'s blocks raise the GHOSTDAG blue score every block
+but the DAA score barely moves, because DAA is `block_daa_window(ghostdag).daa_score` and a single
+linear chain of same-timestamp blocks does not grow the DAA window the way a real network's mergeset
+width does. 2,000 blocks took 264 s.
+
+A free-prompt claim's draw slot is `final_daa + receipt_maturity` — and `final_daa` is itself a
+challenge window (1,200) past its license. So the beacon a receipt block needs sits ~1,600 DAA
+above the sink, which at ~30 DAA per 2,000 blocks is on the order of a hundred thousand blocks and
+hours of test time. That is why `a_receipt_carriage_passes_the_header_signature_gate` proves the
+header gate and names sink adoption as uncovered rather than driving it: the harness cannot cheaply
+manufacture the DAA a real network accrues over the certification windows, and faking the DAA
+directly would be testing a chain state no real chain reaches.
+
+The admission logic that decides sink adoption is proven where it is pure and total
+(`check_palw_receipt_spend_admission_full_v3` over a real certified claim, in
+`misaka_palw_base0::backend::end_to_end_tests`). What is not shown in a test is the wait itself —
+which is the same wait a real network takes in wall-clock, and the reason the goal's final step is
+operational rather than a matter of more code.
