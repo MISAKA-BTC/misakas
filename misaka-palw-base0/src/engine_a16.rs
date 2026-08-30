@@ -158,6 +158,14 @@ impl A16Cache {
     pub fn new(layers: usize) -> Self {
         Self { keys: vec![Vec::new(); layers], values: vec![Vec::new(); layers] }
     }
+    /// The key rows this cache holds, for tests that need to measure the STATE rather than reason
+    /// about its type — `a16_kv_state_does_not_fit_the_one_byte_map_its_class_declares` is the
+    /// caller, and what it measures decides whether a checkpoint map is sound for this family.
+    #[cfg(test)]
+    pub(crate) fn key_rows_for_test(&self) -> Vec<Vec<i32>> {
+        self.keys.iter().flatten().cloned().collect()
+    }
+
     pub fn len(&self) -> usize {
         self.keys.first().map_or(0, |k| k.len())
     }

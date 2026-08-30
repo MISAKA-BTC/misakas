@@ -114,3 +114,37 @@ Any interface built on this lane has to show that honestly: the answer is immedi
 right is not. MISAKA Studio's panel states the current stage by name for exactly this reason, and
 should keep doing so after FP-R4 — `submitted`, `bound`, `certified`, `spent` — rather than
 collapsing them into a word like "mining" that would be true only at the end.
+
+
+## The A16 finding, which changes the shape of the remaining work
+
+FP-R1 was implemented on BASE-0 and works. Extending it to `PALW-QWEN25-A16` — the class that can
+actually hold a conversation — ran into something that is not an engineering gap:
+
+**The class registers a checkpoint state map that cannot describe its own KV cache.**
+
+`integer_kv_state_geometry_v1` derives `row_bytes = attn_kv_heads × attn_head_dim`, one byte per
+element. That is exact for BASE-0, whose cache is `Vec<Vec<Vec<i8>>>`. `A16Cache` is
+`Vec<Vec<Vec<i32>>>`, and `palw_qwen25_profile` declares
+`state_chunk_map_id: integer_kv_state_chunk_map_id_v1()` anyway.
+
+What makes it worth writing down rather than fixing in passing is how it fails. `state_chunk_bytes`
+guards by comparing the engine's row LENGTH to the map's `row_bytes`, and for this class those are
+the same number — 256 elements, 256 declared bytes — so the guard passes and every value outside
+`i8` is truncated. The result is a committed checkpoint that opens to a state the producer never
+had: worse than no checkpoint leg, because the producer has signed for it.
+`a16_kv_state_does_not_fit_the_one_byte_map_its_class_declares` measures the state rather than
+arguing from the type, and the values do exceed a byte.
+
+The consequence is consensus-visible. A sound checkpoint leg for this family needs either a
+4-byte state map or a narrowed cache; `state_chunk_map_id` is part of `PalwShapeProfileV3`, the
+shape profile id is the class id, so either fix REGISTERS A DIFFERENT CLASS. It cannot be shipped
+as a patch to the class testnet-11 already carries.
+
+So the remaining work for "a meaningful answer that is also work" is:
+
+1. this decision — narrow the cache, or register a class whose map has 4-byte elements;
+2. the checkpoint capture against whichever map that is (`push_chunks` + `next_geometry`);
+3. `disclose` and `bisect_prefix_state`, without which `supports_court` must stay false.
+
+Step 1 is not code. It is the one that has to be made first, and by whoever owns the class set.

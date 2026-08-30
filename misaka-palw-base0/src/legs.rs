@@ -841,6 +841,41 @@ mod a16_row_tests {
             .expect("the derived store is sorted and unique")
     }
 
+    /// **The A16 class registers a checkpoint map that cannot describe its own state.**
+    ///
+    /// `integer_kv_state_geometry_v1` derives `row_bytes = attn_kv_heads × attn_head_dim` — ONE
+    /// byte per KV element — which is exact for BASE-0, whose cache is `Vec<Vec<Vec<i8>>>`.
+    /// `Qwen25A16Backend`'s cache is `Vec<Vec<Vec<i32>>>`, and `palw_qwen25_profile` nevertheless
+    /// declares `integer_kv_state_chunk_map_id_v1()`.
+    ///
+    /// The hazard is not that this fails loudly. `KvCache::state_chunk_bytes` guards by comparing
+    /// the engine's row LENGTH against the map's `row_bytes` — and for A16 those are the same
+    /// number, because 256 i32 elements and 256 declared bytes coincide. A checkpoint written
+    /// through that path would pass every check and lose every value outside `i8`, producing a
+    /// checkpoint nobody can resume from: worse than no checkpoint, because the producer would
+    /// have committed to it.
+    ///
+    /// So this test measures the state rather than trusting the type: it runs the A16 engine and
+    /// asserts real KV values fall outside `i8`. If a future change narrows the cache to `i8`, or
+    /// gives the class a 4-byte map, this test is the one that should be revisited — with the
+    /// class id, which `state_chunk_map_id` is part of.
+    #[test]
+    fn a16_kv_state_does_not_fit_the_one_byte_map_its_class_declares() {
+        let artifact = artifact();
+        let engine = A16Engine::new(&artifact).expect("an A16 class");
+        let mut cache = A16Cache::new(artifact.shape.n_layers);
+        for position in 0..4 {
+            engine.forward_token_traced(&mut cache, (position * 7 + 3) % artifact.shape.vocab, position).expect("runs");
+        }
+        let rows = cache.key_rows_for_test();
+        assert!(!rows.is_empty(), "the cache holds the positions that were run");
+        let widest = rows.iter().flatten().copied().map(i32::abs).max().expect("a value");
+        assert!(
+            widest > i8::MAX as i32,
+            "a KV value of {widest} fits in a byte, so this test's premise needs re-measuring rather than assuming"
+        );
+    }
+
     /// **The converter must preserve the trace's own coordinates, not invent an ordering.**
     ///
     /// A step leaf is addressed by (table, layer, index), and the court recomputes the row at that
