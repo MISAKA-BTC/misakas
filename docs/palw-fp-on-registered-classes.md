@@ -212,3 +212,39 @@ id and therefore register a different class:
 
 Neither is speculative now: the first is measured against the cache's element type, the second
 against the engine's own trace. Everything else on the executor side is built and tested.
+
+
+## The blocker that outranks all of the above: no registered class can earn a draw
+
+Walking the path end to end — a real execution, a real commitment, the real extraction the virtual
+processor calls — stops one step before a claim, on arithmetic that has nothing to do with any of
+the defects above:
+
+    cu = prompt·prefill_weight + decode·decode_weight  =  prompt·1 + decode·64
+    BASE-0      n_ctx 12  →  best cu = 1 + 11·64 =  705
+    QWEN25-A16  n_ctx 16  →  best cu = 1 + 15·64 =  961
+    quantum_cu                                     = 1000
+
+`fp_quanta_v3` floors, so the widest job either class can hold earns ZERO quanta and the extraction
+refuses it with "job earns no quanta" — correctly, because a claim that draws nothing certifies
+nothing the chain can act on.
+
+Neither number is wrong by itself. The context ceilings are the court's: 12 and 16 are what the
+carrier's worst close allows, and `palw_qwen25_profile` documents the reasoning ("n_ctx 16 is the
+widest context whose worst close stays inside the carrier"). The quantum is the bundle's, sized so
+an ordinary chat job earns a handful of draws — for a chat job of 100 prompt and 256 decode
+tokens, which is 40× more context than any registered class has.
+
+**The two were sized against different pictures of the same lane**, and together they leave no job
+that both fits a registered class and earns a ticket. That is why nothing has ever mined here, and
+it is upstream of the legs capture, the state map and the graph correspondence: fixing all three
+still leaves every free-prompt job worth zero.
+
+Closing it is a consensus decision, and every option moves an id:
+
+* a smaller `quantum_cu` (or lighter weights) — the bundle's, so the ruleset id;
+* wider class contexts — the profile's, so the class id, and the court's carrier ceiling is what
+  set them, so it is a court-capacity question rather than a free parameter.
+
+`a_callers_prompt_runs_and_no_registered_class_can_earn_a_draw_with_it` pins the arithmetic and the
+refusal, so a change to either number has to face this test.

@@ -1724,7 +1724,13 @@ async fn palw_rc_the_real_qwen25_a16_model_produces_a_block() {
     let backend = Qwen25A16Backend::new(
         std::sync::Arc::new(artifact),
         config.params.net.to_string().into_bytes(),
-        dense_class_id,
+        // The class's graph, not only its id — the backend needs it for the step space and the
+        // state map, and `shape_profile_id()` of this profile IS `dense_class_id`.
+        kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_profile_v1(
+            kaspa_consensus_core::palw_qwen25_profile::qwen25_canonical_geometry_v1("Qwen/Qwen2.5-1.5B-Instruct")
+                .expect("the canonical A16 geometry"),
+        )
+        .expect("a valid A16 profile"),
         QWEN25_A16_CANONICAL,
     );
     let (job, prompt) = backend.job_for_anchor(anchor).expect("the anchor implies a job inside the artifact's table");
@@ -8819,4 +8825,149 @@ async fn palw_rc_qwen36_counts_merged_work() {
     let step = (u32::from(opening_share) * 250 / 1000).max(1) as u16;
     assert_eq!(qwen_share, opening_share + step, "it filled its budget from the anticone, so it took a step from the floor");
     assert_eq!(qwen_share + base_share, 1000, "and the denominator is conserved");
+}
+
+/// **A caller's prompt reaches the chain — and no registered class can earn a draw with it.**
+///
+/// This was written to walk the first half of the end-to-end spend path, which the note on
+/// `the_beacon_fact_comes_from_the_chain_not_from_the_block` says "needs a certified free-prompt
+/// claim on chain, which needs the FP worker's legs capture". The capture exists now
+/// (`PalwExecutionBackendV1::execute_free_prompt`), so the walk runs: a real BASE-0 execution over
+/// tokens the CALLER chose, the commitment derived from what the run measured, signed by the bond
+/// that answers for it, carried on subnetwork 0x4a, and handed to the same extraction the virtual
+/// processor calls on every accepted block.
+///
+/// It stops one step earlier than expected, on arithmetic:
+///
+///     cu = prompt·prefill_weight + decode·decode_weight   =  prompt·1 + decode·64
+///     BASE-0      n_ctx 12  →  best cu = 1 + 11·64 =  705
+///     QWEN25-A16  n_ctx 16  →  best cu = 1 + 15·64 =  961
+///     quantum_cu                                     = 1000
+///
+/// `fp_quanta_v3` floors, so both are ZERO quanta, and the extraction refuses with "job earns no
+/// quanta" — correctly: a claim that draws nothing certifies nothing the chain can act on. The
+/// context ceilings are the court's (12 and 16 are what the carrier's worst close allows); the
+/// quantum is the bundle's. Neither is wrong on its own and together they leave no job that both
+/// fits a registered class and earns a ticket.
+///
+/// So this test asserts the state as measured: the execution and the carriage work, and the
+/// pricing makes the lane unreachable on the classes that exist. Closing it is a consensus
+/// decision — a smaller quantum, wider class contexts, or different weights — and each moves
+/// either the ruleset id or a class id.
+#[tokio::test]
+async fn a_callers_prompt_runs_and_no_registered_class_can_earn_a_draw_with_it() {
+    use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
+    use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, palw_fp_commitment_v3};
+    use kaspa_consensus_core::palw_freeprompt_v3::{
+        PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT, PALW_FP_V3_VERSION, PalwFpCommitmentTxPayloadV3,
+        PalwFreePromptJobV3, fp_claim_id_v3,
+    };
+    use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2 as Obj;
+    use kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT;
+    use kaspa_consensus_core::tx::{Transaction, TransactionId, TransactionOutpoint};
+    use kaspa_hashes::Hash64;
+    use misaka_palw_base0::backend::Base0Backend;
+    use misaka_palw_base0::classes::{canonical_class_by_model_id_v1, resolve_class_v1};
+
+    let catalog = palw_v2_test_catalog();
+    let bundle = palw_v2_test_bundle_funded_for(&catalog, 64);
+
+    // The floor, resolved the way a node resolves it: from nothing but its registered root.
+    let court = bundle.court.clone();
+    let entry = canonical_class_by_model_id_v1(&court, "PALW-BASE-0/rc").expect("the floor is a canonical class");
+    let root = misaka_palw_base0::rc::palw_rc_base0_artifact_root_v1().expect("the floor's pinned root");
+    let backend = Base0Backend::new(resolve_class_v1(&court, entry.class_id(), root, &[]).expect("the floor resolves"));
+
+    // **The caller's tokens.** Not derived from an anchor — that is the attempt lane's rule, and
+    // the whole point of this lane is that a person chooses the input.
+    // The largest job this class can hold: one prefill token and the rest decode, which is what
+    // maximises `cu` under these weights. It is still short of a quantum, and the assertions below
+    // are about that rather than about this particular prompt.
+    let ctx_max = backend.profile().n_ctx as usize;
+    let prompt: Vec<usize> = vec![11];
+    let decode = (ctx_max - prompt.len()) as u32;
+    let bond = TransactionOutpoint::new(TransactionId::from_u64_word(0xB0), 0);
+    let keypair = crate::consensus::test_consensus::TestConsensus::palw_v2_harness_keypair();
+    let job = PalwFreePromptJobV3 {
+        version: PALW_FP_V3_VERSION,
+        network_domain: kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+            MAINNET_PARAMS.net.to_string().as_bytes(),
+            Some(MAINNET_PARAMS.genesis.hash),
+        ),
+        class_id: entry.class_id(),
+        executor_bond: bond,
+        executor_pubkey: crate::consensus::test_consensus::TestConsensus::palw_v2_harness_pubkey(),
+        operator_id: Hash64::from_u64_word(0x0B),
+        anchor_block: MAINNET_PARAMS.genesis.hash,
+        anchor_daa: 1,
+        job_nonce: [0x5A; 32],
+        tokenizer_id: Hash64::default(),
+        prompt_token_ids_hash: kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(
+            &prompt.iter().map(|t| *t as u32).collect::<Vec<_>>(),
+        ),
+        prompt_tokens: prompt.len() as u32,
+        decode_token_limit: decode,
+        max_context_tokens: backend.profile().n_ctx,
+        privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
+    };
+
+    let run = backend.execute_free_prompt(&job, &prompt).expect("the floor runs a caller's prompt");
+    let class = PalwFpClassFactsV3 {
+        model_profile_id: Hash64::default(),
+        runtime_manifest_hash: Hash64::default(),
+        runtime_class_id: Hash64::default(),
+        shape_profile_id: backend.profile().shape_profile_id(),
+        cu_ruleset_id: Hash64::default(),
+    };
+    let commitment = palw_fp_commitment_v3(&job, &class, &run, b"misaka-palw-rc", bundle.freeprompt.cu_weights(), 4_096)
+        .expect("a finished run assembles a commitment");
+
+    // Signed over the claim id, which is what the extraction verifies — the bond answering for the
+    // work, not a fixture asserting that somebody would have.
+    let claim_id = fp_claim_id_v3(&commitment);
+    let signature = libcrux_ml_dsa::ml_dsa_87::sign(
+        &keypair.signing_key,
+        claim_id.as_byte_slice(),
+        PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT,
+        [0u8; 32],
+    )
+    .expect("the harness signs")
+    .as_ref()
+    .to_vec();
+
+    let payload = borsh::to_vec(&PalwFpCommitmentTxPayloadV3 {
+        version: PALW_FP_V3_VERSION,
+        commitment,
+        prompt_token_ids: prompt.iter().map(|t| *t as u32).collect(),
+        signature,
+    })
+    .expect("the commitment payload serializes");
+    let tx = Transaction::new(0, vec![], vec![], 0, SUBNETWORK_ID_PALW_FP_COMMITMENT.clone(), 0, payload);
+
+    let extraction = kaspa_consensus_core::palw_fp_objects_v3::palw_fp_objects_from_accepted_txs_v3(
+        std::slice::from_ref(&tx),
+        job.network_domain,
+        &bundle.freeprompt,
+        kaspa_consensus_core::BlockHash::default(),
+        |pubkey: &[u8], message: &[u8], context: &[u8], signature: &[u8]| {
+            kaspa_txscript::verify_mldsa87_with_context(pubkey, message, context, signature).unwrap_or(false)
+        },
+    );
+    // **The refusal, and the arithmetic behind it.** Not "the commitment was malformed" — it was
+    // built by the same functions a producer uses — but "this job draws nothing".
+    assert!(extraction.objects.is_empty(), "a job that earns no quanta opens no claim");
+    let [(_, why)] = &extraction.skipped[..] else { panic!("exactly one refusal: {:?}", extraction.skipped) };
+    assert_eq!(*why, "job earns no quanta");
+
+    // And it is not this job's fault: the class's own ceiling cannot reach the bundle's quantum.
+    let weights = bundle.freeprompt.cu_weights();
+    let best_here = kaspa_consensus_core::palw_freeprompt_v3::fp_cu_v3(1, ctx_max as u32 - 1, weights);
+    assert!(
+        best_here < bundle.freeprompt.quantum_cu(),
+        "the widest job this class can hold prices at {best_here}, under the {}-CU quantum",
+        bundle.freeprompt.quantum_cu()
+    );
+    // The dense class is no better: 16 positions against the same weights.
+    let best_dense = kaspa_consensus_core::palw_freeprompt_v3::fp_cu_v3(1, 15, weights);
+    assert!(best_dense < bundle.freeprompt.quantum_cu(), "and neither can the A16 class at {best_dense}");
 }
