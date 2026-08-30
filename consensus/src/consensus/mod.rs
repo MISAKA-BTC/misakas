@@ -1122,6 +1122,10 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.build_block_template(miner_data, tx_selector, build_mode, evm_template_data)
     }
 
+    fn heartbeat_adapt_block_template(&self, template: BlockTemplate) -> Result<(BlockTemplate, u64), RuleError> {
+        self.virtual_processor.heartbeat_adapt_block_template(template)
+    }
+
     fn build_block_template_with_selector_factory(
         &self,
         miner_data: MinerData,

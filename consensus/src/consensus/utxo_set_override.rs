@@ -12,17 +12,19 @@ use kaspa_muhash::MuHash;
 
 use crate::consensus::Consensus;
 
-/// The genesis UTXO set imported at consensus initialization: the canonical
-/// kaspa-pq (misaka) premine — 40 vault UTXOs of 0.1B KAS + one 9B main UTXO = 13B
-/// KAS, each a single-key ML-DSA-87 P2PKH (see `kaspa_consensus_core::config::premine`;
-/// the 9B main wallet is the operator custody address on mainnet, the Claude-managed
-/// test key on testnet/devnet/simnet) — plus, when the `devnet-prealloc` feature is
-/// enabled, any CLI-preallocated UTXOs from `config.initial_utxo_set`.
+/// The genesis UTXO set imported at consensus initialization: the canonical kaspa-pq (misaka)
+/// premine — **exactly the 10B cap on every network** (see
+/// `kaspa_consensus_core::config::premine`): one main-wallet UTXO, from which testnet-11
+/// additionally carves its genesis-bond collateral, per-bond fee floats and the community
+/// allocation — plus, when the `devnet-prealloc` feature is enabled, any CLI-preallocated
+/// UTXOs from `config.initial_utxo_set`. Each UTXO is a single-key ML-DSA-87 P2PKH; the main
+/// wallet is the operator custody address on mainnet, the operator's public PALW address on
+/// testnet-11, and the Claude-managed test key elsewhere.
 fn genesis_initial_utxo_set(config: &Config) -> Vec<(TransactionOutpoint, UtxoEntry)> {
     // `mut` is only exercised under `devnet-prealloc` (the extend below).
     #[cfg_attr(not(feature = "devnet-prealloc"), allow(unused_mut))]
-    // Keyed by the full NetworkId: testnet-11 additionally carries the 347M MSK community
-    // allocation; testnet-10 (a running chain) and every other network carry the premine alone.
+    // Keyed by the full NetworkId: testnet-11 carries the carved-out extras; every other
+    // network carries the main wallet alone.
     let mut set: Vec<(TransactionOutpoint, UtxoEntry)> = genesis_premine_utxos_for(config.params.net).into_iter().collect();
     #[cfg(feature = "devnet-prealloc")]
     set.extend(config.initial_utxo_set.iter().map(|(op, entry)| (*op, entry.clone())));
@@ -130,18 +132,14 @@ mod tests {
 
     #[test]
     fn premine_is_the_expected_split() {
-        // Re-genesis 2026-08-26: the main wallet is per network — mainnet keeps 9B (13B total),
-        // the re-minted networks hold 6B (10B total). This fixture is simnet, so it is the 10B
-        // side; `config::premine::tests::premine_is_the_expected_split_on_every_network` is the
-        // one that asserts both, against the constants the builder itself reads.
+        // Re-genesis 2026-08-30: one main-wallet UTXO of exactly the 10B cap, on EVERY network
+        // (the vault block is gone; testnet-11's extras are carved from the main wallet).
+        // `config::premine::tests::every_network_genesis_mints_exactly_the_10b_cap` asserts the
+        // cap across all networks; this fixture is simnet.
         let utxos = misaka_premine_utxos(NetworkType::Simnet);
-        assert_eq!(utxos.len(), 41, "premine is 40 vaults + 1 main = 41 UTXOs");
+        assert_eq!(utxos.len(), 1, "the premine is one main-wallet UTXO");
         let total: u64 = utxos.values().map(|e| e.amount).sum();
-        assert_eq!(total, 10_000_000_000 * SOMPI_PER_KASPA, "10B KAS on a re-minted network");
-        let vaults = utxos.values().filter(|e| e.amount == 100_000_000 * SOMPI_PER_KASPA).count();
-        let mains = utxos.values().filter(|e| e.amount == 6_000_000_000 * SOMPI_PER_KASPA).count();
-        assert_eq!(vaults, 40, "40 vault UTXOs of 0.1B");
-        assert_eq!(mains, 1, "1 main UTXO of 6B");
+        assert_eq!(total, 10_000_000_000 * SOMPI_PER_KASPA, "the 10B cap");
         for entry in utxos.values() {
             assert!(!entry.is_coinbase, "premine must be non-coinbase (spendable from block 0)");
             assert_eq!(entry.block_daa_score, 0);

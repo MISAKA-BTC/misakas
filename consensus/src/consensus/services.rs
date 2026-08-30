@@ -119,6 +119,8 @@ impl ConsensusServices {
             relations_service.clone(),
             storage.headers_store.clone(),
             reachability_service.clone(),
+            // ADR-0060: heartbeat blocks weigh ε exactly where the mode is ConsensusV2.
+            matches!(params.palw_consensus_mode, kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)),
         );
 
         let coinbase_manager = CoinbaseManager::new(

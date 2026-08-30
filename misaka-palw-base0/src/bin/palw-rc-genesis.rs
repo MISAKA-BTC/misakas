@@ -8,10 +8,12 @@
 //! rather than re-typing parameters — ADR-0042 Decision 11's own requirement.
 //!
 //! **A card is a REGISTRY, not a bond.** `derive_panel_v2` excludes a claim's own executor by
-//! bond, by operator and by key and seats one bond per operator, so a 5-seat panel needs **6
-//! distinct operators** — and `BondRegistered` may not ride a transaction, so a registry too small
-//! has no later repair. A one-row card is refused by the genesis gate (`PanelCannotBeSeated`), which
-//! is why this tool assembles many rows.
+//! bond, by operator and by key and seats one bond per operator, so LICENSING needs **6
+//! distinct operators**. Since ADR-0061 a smaller registry — down to ZERO rows — is a valid
+//! genesis: bonds now ride ordinary transactions and ADR-0060's heartbeat lane produces the
+//! blocks they ride, so an under-seated network is a bootstrap phase (claims void loudly until
+//! the sixth operator registers), not a dead one. Ship six when you have six; ship zero when
+//! the operators will arrive on the chain itself.
 //!
 //! Two commands, split exactly along the secrecy line: **rows are emitted where the secrets live,
 //! and assembled where they do not.**
@@ -242,7 +244,10 @@ fn main() {
         println!("Two commands, and which one you want depends on where the secrets are:");
         println!();
         println!("  --emit-row   ON the host holding the seeds. Prints ONE public row.");
-        println!("      --bond-index      which premine output backs this bond (0..=40)");
+        println!("      --bond-index      this bond's collateral outpoint index (0..40, below the main");
+        println!("                        wallet at 40; the genesis carves a 10,000 MSK collateral output");
+        println!("                        there (ADR-0061; ~3.1x the derived claim-lifetime requirement),");
+        println!("                        owned by the main wallet — ADR-0059)");
         println!("      --bond-seed       path to the bond key's seed (or --bond-pubkey <hex>)");
         println!("      --operator-seed   path to the operator key's seed (or --operator-pubkey <hex>)");
         println!("      --payout-address  where matured rewards are paid — DEFAULTS to the bond key's");
@@ -257,7 +262,12 @@ fn main() {
         println!("DERIVE public values and prints nothing secret. It mints no key: the whole point of");
         println!("a bond is that somebody holds one.");
         println!();
-        println!("A registry needs {} DISTINCT operators — a 5-seat panel plus the executor it excludes.", min_bonds());
+        println!(
+            "LICENSING needs {} DISTINCT operators (a 5-seat panel plus the executor it excludes); a smaller",
+            min_bonds()
+        );
+        println!("— even empty — registry is a valid genesis since ADR-0061: bonds register on the chain,");
+        println!("riding the heartbeat lane, and licensing starts when the sixth operator arrives.");
         return;
     };
 
@@ -356,8 +366,8 @@ fn assemble(path: &str, artifact_root: Hash64) {
             println!("REFUSED: {e}");
             println!();
             println!("This is the genesis gate answering, not a tool failure. The two commonest causes:");
-            println!("  * fewer than {} DISTINCT operators (a 5-seat panel excludes its own executor);", min_bonds());
-            println!("  * a bond index whose premine output does not cover the bundle's collateral floor.");
+            println!("  * a bond index whose premine output does not cover the bundle's collateral floor");
+            println!("    (registry SIZE no longer refuses: since ADR-0061 even zero rows assemble).");
             std::process::exit(1);
         }
         Ok(params) => {

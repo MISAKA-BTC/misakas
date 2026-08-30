@@ -115,6 +115,11 @@ impl CoinbaseManager {
     pub fn expected_coinbase_transaction<T: AsRef<[u8]>>(
         &self,
         daa_score: u64,
+        // **The subsidy this block's own payload declares** (ADR-0060 Decision 1.4). Almost
+        // always `calc_block_subsidy(daa_score)` — but a heartbeat (algo-3 on a ConsensusV2
+        // network) declares ZERO, and the validation path must expect the same payload the body
+        // rule enforced, or every heartbeat chain block dies here as "not built as expected".
+        own_subsidy: u64,
         miner_data: MinerData<T>,
         ghostdag_data: &GhostdagData,
         mergeset_rewards: &BlockHashMap<BlockRewardData>,
@@ -336,9 +341,10 @@ impl CoinbaseManager {
             }
         }
 
-        // Build the current block's payload
-        let subsidy = self.calc_block_subsidy(daa_score);
-        let payload = self.serialize_coinbase_payload(&CoinbaseData { blue_score: ghostdag_data.blue_score, subsidy, miner_data })?;
+        // Build the current block's payload. `own_subsidy` is the caller's per-lane answer —
+        // see the parameter; `daa_score` still prices every MERGED block's reward above.
+        let payload =
+            self.serialize_coinbase_payload(&CoinbaseData { blue_score: ghostdag_data.blue_score, subsidy: own_subsidy, miner_data })?;
 
         Ok(CoinbaseTransactionTemplate {
             tx: Transaction::new(constants::TX_VERSION, vec![], outputs, 0, subnets::SUBNETWORK_ID_COINBASE, 0, payload),
@@ -516,8 +522,8 @@ impl CoinbaseManager {
     kaspa-pq additional-issuance emission table.
 
     Tokenomics: 15B KAS of additional issuance over 20 years, decaying at a
-    5%/year exponential rate (q = 0.95), on top of a 13B genesis premine for a
-    28B final supply. The schedule steps once per year (12 identical months),
+    5%/year exponential rate (q = 0.95), on top of a 10B genesis premine for a
+    25B final supply. The schedule steps once per year (12 identical months),
     so the table holds 20 yearly rates × 12 months = 240 entries followed by a
     terminal 0 (issuance ends after year 20).
 
@@ -629,7 +635,7 @@ mod tests {
         // Per-network totals differ from the 1 BPS reference only by the per-month
         // div_ceil rounding surplus: at most (bps-1) sompi/month * SECONDS_PER_MONTH *
         // 240 months ≈ 57 KAS at 10 BPS (cf. the upstream "+51 KAS" note). Negligible
-        // against the 28B supply (1 part in ~5e8) and far below the MAX_SOMPI cap.
+        // against the 25B supply (1 part in ~4e8) and far below the MAX_SOMPI cap.
         // Sub-1-bps networks (devnet: 10_000 ms/block) have an EXACT per-block product
         // (×10) and therefore a surplus of exactly 0.
         for network_id in NetworkId::iter() {

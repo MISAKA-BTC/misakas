@@ -5,6 +5,7 @@ pub mod difficulty;
 // executor seam. Re-exports the executor only under the `evm` feature.
 pub mod evm;
 pub mod ghostdag;
+pub mod heartbeat_evidence;
 pub mod palw_state_v2_sync;
 pub mod palw_state_walk;
 pub mod parents_builder;

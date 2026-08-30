@@ -1,4 +1,10 @@
-# ADR-0059 — The data-availability court: stop a vote from taking a bond
+# ADR-0062 — The data-availability court: stop a vote from taking a bond
+
+> Renumbered 0059 → 0062 at the 2026-08-30 branch merge: 0059 was taken the same day by the
+> 10B premine cap on the parallel line (0060 the liveness doctrine, 0061 zero-seat genesis),
+> and this document was the cheaper of the two to move — one file, no code references. The
+> original branch commit (`554ca77c`) carries the old number in its message; this file is the
+> authority.
 
 Status: **Proposed** (2026-08-30). Supersedes nothing; completes ADR-0042 Decision 7.
 

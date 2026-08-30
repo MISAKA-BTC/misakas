@@ -186,10 +186,9 @@ pub struct PalwPanelConfig {
 
 pub struct PalwPanelService {
     config: PalwPanelConfig,
-    /// Decoded once. Same contract as the producer's: digest-checked here, matched against the
-    /// CHAIN per duty.
-    class_artifacts: Vec<std::sync::Arc<misaka_palw_base0::artifact::Base0ArtifactV1>>,
-    qwen36_artifacts: Vec<(kaspa_hashes::Hash64, std::sync::Arc<misaka_palw_base0::qwen36::Qwen36ArtifactV1>)>,
+    /// Loaded once, through the SDK — whichever lineage's container each file is. Same contract
+    /// as the producer's: container-checked at load, matched against the CHAIN per duty.
+    class_holdings: Vec<misaka_palw_sdk::PalwLoadedArtifactV1>,
     consensus_manager: Arc<ConsensusManager>,
     flow_context: Arc<FlowContext>,
     consensus_config: Arc<Config>,
@@ -214,8 +213,7 @@ impl PalwPanelService {
     fn backends(&self) -> crate::palw_backends::PalwBackendRegistry {
         crate::palw_backends::PalwBackendRegistry::new(
             self.config.court,
-            self.class_artifacts.clone(),
-            self.qwen36_artifacts.clone(),
+            self.class_holdings.clone(),
             self.consensus_config.params.net.to_string().into_bytes(),
         )
     }
@@ -247,20 +245,17 @@ impl PalwPanelService {
                 None
             }
         };
-        // Same loader as the producer's, and the same rule: a file that will not load is warned
-        // about rather than skipped, because a seat silently unable to judge a class looks exactly
-        // like a seat whose material never arrived.
-        let mut class_artifacts = Vec::new();
-        let mut qwen36_artifacts = Vec::new();
+        // Same loader as the producer's — the SDK's, dispatched by each file's own magic — and
+        // the same rule: a file that will not load is warned about rather than skipped, because a
+        // seat silently unable to judge a class looks exactly like a seat whose material never
+        // arrived.
+        let sdk = misaka_palw_sdk::PalwClassSdk::builtin_v1(config.court, consensus_config.params.net.to_string().into_bytes());
+        let mut class_holdings = Vec::new();
         for path in &config.class_artifacts {
-            match crate::palw_backends::load_class_artifact(path) {
-                Ok(crate::palw_backends::LoadedClassArtifact::Dense(artifact)) => {
-                    info!("[{PALW_PANEL}] loaded class artifact {}", path.display());
-                    class_artifacts.push(std::sync::Arc::new(*artifact));
-                }
-                Ok(crate::palw_backends::LoadedClassArtifact::Qwen36 { computed_root, artifact }) => {
-                    info!("[{PALW_PANEL}] mapped Qwen3.6 artifact {} (computed root {computed_root})", path.display());
-                    qwen36_artifacts.push((computed_root, artifact));
+            match sdk.load_artifact(path) {
+                Ok(holding) => {
+                    info!("[{PALW_PANEL}] {}", holding.summary);
+                    class_holdings.push(holding);
                 }
                 Err(err) => warn!("[{PALW_PANEL}] class artifact {} is unusable: {err}", path.display()),
             }
@@ -272,8 +267,7 @@ impl PalwPanelService {
             consensus_config,
             keypair,
             bond,
-            class_artifacts,
-            qwen36_artifacts,
+            class_holdings,
             foreign_prune_at: std::sync::Mutex::new(std::time::Instant::now()),
             shutdown: SingleTrigger::default(),
         }
@@ -337,6 +331,10 @@ impl PalwPanelService {
             && let Ok(outpoint) = crate::palw_producer::parse_outpoint(configured)
         {
             candidates.push(outpoint);
+        }
+        // Every candidate is off-limits to a wallet, whether or not this tick picks it (audit3 H12).
+        for outpoint in candidates.iter() {
+            self.flow_context.palw_reserve_outpoint(*outpoint);
         }
         for outpoint in candidates.iter().filter(|o| is_free(o)) {
             if let Some(entry) = session.get_virtual_utxo_entry(*outpoint) {
@@ -610,113 +608,31 @@ impl PalwPanelService {
         info!("[{PALW_PANEL}] attempting the class registration (filter: {})", self.config.register_class.as_deref().unwrap_or("<unset>"));
         let terms = session.palw_v2_registration_terms().ok_or("this chain has no V2 bundle, or does not hold its base class yet")?;
 
-        // The class of the artifact this node carries — matched by SHAPE against the build's own
-        // registry, so a file that is not any class this build knows is refused here rather than
-        // registered as a class nobody can execute. Shape alone cannot finish the job: sibling
-        // models of one family share a converted shape (the A16 tier's file says nothing about
-        // WHICH weights it holds), so the already-registered ids are dropped — submitting one is
-        // a guaranteed `DuplicateClass` refusal — and if more than one candidate is still
-        // standing, the operator's `--palw-register-class <model-id>` is what picks.
-        // One candidate shape regardless of lineage: what a registration needs is the model id
-        // (for the operator), the profile (the class), the canonical job (what it is paid per)
-        // and the root its artifact pins.
-        struct RegistrationCandidateV1 {
-            model_id: &'static str,
-            profile: kaspa_consensus_core::palw_step::PalwShapeProfileV3,
-            canonical_job: (u32, u32),
-            artifact_root: Hash64,
-        }
-        let mut candidates: Vec<RegistrationCandidateV1> = Vec::new();
-        for artifact in &self.class_artifacts {
-            // **A file whose digest the chain already pinned is not a candidate for a NEW class.**
-            // Re-registering known weights under a fresh id is never meaningful — and with two
-            // same-shape artifacts loaded it is exactly how the first file used to fill every
-            // sibling ledger entry before the second file's turn came (2026-08-28: the genesis
-            // 1.5B digest landed under the Coder class id). Known weights serve their own class;
-            // only unknown weights are looking for one.
-            if terms.registered_artifact_roots.contains(&artifact.artifact_digest()) {
-                continue;
-            }
-            for c in misaka_palw_base0::classes::canonical_classes_v1(&self.config.court) {
-                if c.shape_matches(artifact).is_ok()
-                    && let Ok(root) = c.artifact_root(artifact)
-                    && !candidates.iter().any(|seen| seen.profile.shape_profile_id() == c.class_id())
-                {
-                    candidates.push(RegistrationCandidateV1 {
-                        model_id: c.model_id,
-                        profile: c.profile.clone(),
-                        canonical_job: c.canonical_job,
-                        artifact_root: root,
-                    });
-                }
-            }
-        }
-        for (computed_root, artifact) in &self.qwen36_artifacts {
-            if terms.registered_artifact_roots.contains(computed_root) {
-                continue;
-            }
-            for c in misaka_palw_base0::classes::qwen36_canonical_classes_v1() {
-                if c.shape_matches(&artifact.shape).is_ok()
-                    && let Ok(profile) = c.profile()
-                    && !candidates.iter().any(|seen| seen.profile.shape_profile_id() == profile.shape_profile_id())
-                {
-                    candidates.push(RegistrationCandidateV1 {
-                        model_id: c.model_id,
-                        profile,
-                        canonical_job: c.canonical_job,
-                        artifact_root: *computed_root,
-                    });
-                }
-            }
-        }
-        if candidates.is_empty() {
-            return Err("no --palw-class-artifact matches a class this build knows, so there is nothing to register".to_string());
-        }
-        candidates.retain(|c| !terms.registered_class_ids.contains(&c.profile.shape_profile_id()));
-        if candidates.is_empty() {
-            return Err("every class this node's artifacts match is already registered on this chain".to_string());
-        }
-        let wanted = self.config.register_class.as_deref().unwrap_or("");
-        if !wanted.is_empty() {
-            candidates.retain(|c| c.model_id == wanted);
-            if candidates.is_empty() {
-                return Err(format!(
-                    "--palw-register-class {wanted} names no unregistered class this node's artifacts match — \
-                     check the model id against the build's ledger and the artifact against the model"
-                ));
-            }
-        }
-        if candidates.len() > 1 {
-            let names: Vec<&str> = candidates.iter().map(|c| c.model_id).collect();
-            return Err(format!(
-                "this node's artifacts match {} unregistered classes ({}) — name one with --palw-register-class <model-id>",
-                names.len(),
-                names.join(", ")
-            ));
-        }
-        let entry = candidates.pop().expect("length checked above");
-        let artifact_root = entry.artifact_root;
+        // The whole selection — shape matching against every lineage's ledger, the known-weights
+        // rule (the 2026-08-28 mispairing that put the genesis 1.5B digest under the Coder class
+        // id), sibling dedupe, the registered-class filter, the operator's
+        // `--palw-register-class` pick and the ambiguity refusal — is the SDK's
+        // `registration_candidate`: one path, shared with every other consumer of the ledger, so
+        // a new lineage registers here without this function learning it exists.
+        let registry = self.backends();
+        let candidate = registry
+            .sdk()
+            .registration_candidate(registry.holdings(), &terms, self.config.register_class.as_deref())
+            .map_err(|e| e.to_string())?;
+        let canonical = candidate.entry.canonical_context();
 
-        let canonical =
-            kaspa_consensus_core::palw_base0_profile::rc_job_context(&entry.profile, entry.canonical_job.0, entry.canonical_job.1);
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) =
+            &self.consensus_config.params.palw_consensus_mode
+        else {
+            return Err("this chain has no V2 bundle, so there is nothing to register a class into".to_string());
+        };
 
         // Built twice on purpose: once to learn the class id the profile derives, and once with
         // the signature over it. Signing anything assembled beside the object would sign a class
-        // that is not the one being registered.
-        let build = |signature: Vec<u8>| {
-            kaspa_consensus_core::palw_class_admission_v2::palw_post_genesis_registration_v1(
-                entry.profile.clone(),
-                canonical.clone(),
-                artifact_root,
-                terms.min_grantable_share_permille,
-                terms.initial_target,
-                terms.slash_value_per_pwu,
-                0,
-                bond_key,
-                signature,
-            )
-            .map_err(|e| format!("this node cannot build a registration for {}: {e}", entry.model_id))
-        };
+        // that is not the one being registered. Both builds run the SDK's admission preflight
+        // against this network's own bundle, so a class the gate would refuse never reaches the
+        // signer, the mempool, or the fee.
+        let build = |signature: Vec<u8>| registry.sdk().build_post_genesis_registration(bundle, &candidate, &terms, 0, bond_key, signature);
         let unsigned = build(Vec::new())?;
         let PalwConsensusObjectV2::ClassRegistered {
             class_id,
@@ -752,6 +668,12 @@ impl PalwPanelService {
     }
 
     fn persist_fee_outpoint(&self, outpoint: TransactionOutpoint) {
+        // **Tell the wallet before telling the disk** (audit3 H12). This output funds every
+        // lifecycle object this node carries, it sits at the producer's own pay address next to
+        // its mining rewards, and nothing else stops `wallet send` selecting it. Proven live on
+        // 2026-08-29: a send from the producer's address chose the panel's fee outpoint and was
+        // rejected only because the panel's own carrier had already spent it in the mempool.
+        self.flow_context.palw_reserve_outpoint(outpoint);
         let _ = std::fs::create_dir_all(&self.config.state_dir);
         if let Err(e) = std::fs::write(self.fee_state_path(), format!("{}:{}", outpoint.transaction_id, outpoint.index)) {
             warn!("[{PALW_PANEL}] cannot persist the rolling fee outpoint: {e} — a restart will fall back to --palw-fee-outpoint");

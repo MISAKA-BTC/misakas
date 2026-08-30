@@ -5,8 +5,7 @@ use futures_util::future::try_join_all;
 use kaspa_addresses::{Address, Prefix, Version};
 use kaspa_consensus::params::SIMNET_GENESIS;
 use kaspa_consensus_core::{
-    config::premine::main_premine_sompi_for,
-    config::premine::{VAULT_COUNT, VAULT_PREMINE_SOMPI},
+    config::premine::MISAKA_PREMINE_CAP_SOMPI,
     constants::MAX_SOMPI,
     header::Header,
     subnets::SubnetworkId,
@@ -530,15 +529,10 @@ async fn sanity_test() {
                 let rpc_client = client.clone();
                 tst!(op, {
                     let response = rpc_client.get_coin_supply_call(None, GetCoinSupplyRequest {}).await.unwrap();
-                    // kaspa-pq: the genesis premine is part of the circulating supply — and it is
-                    // per network since the 2026-08-26 re-genesis (mainnet 13B, the re-minted
-                    // networks 10B), so the expected value is derived from the network this daemon
-                    // runs rather than from the mainnet constant. Pinning the constant made this
-                    // assertion a statement about mainnet inside a simnet test, and it failed the
-                    // moment the two stopped being the same number.
-                    let expected_premine =
-                        (VAULT_COUNT as u64) * VAULT_PREMINE_SOMPI + main_premine_sompi_for(network_id.network_type);
-                    assert_eq!(response.circulating_sompi, expected_premine);
+                    // kaspa-pq: the genesis premine is part of the circulating supply — exactly
+                    // the 10B cap on EVERY network since the 2026-08-30 re-genesis (the cap is
+                    // one number by design; see `config::premine::MISAKA_PREMINE_CAP_SOMPI`).
+                    assert_eq!(response.circulating_sompi, MISAKA_PREMINE_CAP_SOMPI);
                     assert_eq!(response.max_sompi, MAX_SOMPI);
                 })
             }

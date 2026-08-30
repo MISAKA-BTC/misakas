@@ -111,6 +111,14 @@ pub trait ConsensusApi: Send + Sync {
         self.build_block_template_with_evm(miner_data, tx_selector, build_mode, evm_template_data)
     }
 
+    /// ADR-0060 Decision 1: re-shape a standard template into the bondless HEARTBEAT lane —
+    /// algo-3, the lane's own bits and slot, an empty `palw_commitment`, a zero-subsidy
+    /// coinbase. Returns the adapted template and the EARLIEST timestamp (ms) the slot rule
+    /// admits; a caller that grinds before that moment produces a block every node refuses.
+    fn heartbeat_adapt_block_template(&self, template: BlockTemplate) -> Result<(BlockTemplate, u64), RuleError> {
+        unimplemented!()
+    }
+
     fn validate_and_insert_block(&self, block: Block) -> BlockValidationFutures {
         unimplemented!()
     }

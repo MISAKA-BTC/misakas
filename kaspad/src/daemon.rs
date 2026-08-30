@@ -1341,6 +1341,34 @@ Do you confirm? (y/n)";
         None
     };
 
+    // ADR-0060 Decision 1: the bondless heartbeat miner — the lane that keeps the chain's clock
+    // (and every PALW timeout sweep) alive when every bonded lane is silent. Gated on the network
+    // actually carrying a ConsensusV2 lane, like the producer: on a hash-only chain algo-3 is the
+    // REQUIRED lane already and this service would just be a worse pq-miner.
+    let palw_heartbeat_miner_service = match (&args.palw_heartbeat_miner_address, &config.params.palw_consensus_mode) {
+        (Some(pay_address), kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)) => {
+            Some(Arc::new(crate::palw_heartbeat_miner::PalwHeartbeatMinerService::new(
+                crate::palw_heartbeat_miner::PalwHeartbeatMinerConfig {
+                    pay_address: pay_address.clone(),
+                    address_prefix: config.prefix(),
+                    network_id: config.params.net,
+                    enable_unsynced_mining: args.enable_unsynced_mining,
+                },
+                consensus_manager.clone(),
+                mining_manager.clone(),
+                flow_context.clone(),
+            )))
+        }
+        (Some(_), _) => {
+            warn!(
+                "--palw-heartbeat-miner-address was given but {} declares no ConsensusV2 ruleset — the heartbeat lane does not exist there, miner not started",
+                config.params.net
+            );
+            None
+        }
+        (None, _) => None,
+    };
+
     let validator_status_provider: Option<Arc<dyn ValidatorStatusProvider>> = match &validator_service {
         Some(v) => Some(v.clone()),
         None => None,
@@ -1488,6 +1516,9 @@ Do you confirm? (y/n)";
     if let Some(palw_panel_service) = palw_panel_service {
         async_runtime.register(palw_panel_service);
     }
+    if let Some(palw_heartbeat_miner_service) = palw_heartbeat_miner_service {
+        async_runtime.register(palw_heartbeat_miner_service)
+    };
     if let Some(palw_producer_service) = palw_producer_service {
         async_runtime.register(palw_producer_service)
     };

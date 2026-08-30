@@ -1,10 +1,21 @@
-//! kaspa-pq (misaka) genesis premine — 13B split (re-genesis 2026-06-17).
+//! kaspa-pq (misaka) genesis premine — **the 10B cap** (re-genesis 2026-08-30).
 //!
-//! 40 "vault" UTXOs of 0.1B KAS each + one "main" UTXO of 9B KAS = **13B KAS** total,
-//! baked into genesis. This is the genesis portion of the **28B** final supply (the
-//! other 15B is mined over 20 years; see the emission table in
-//! `consensus/src/processes/coinbase.rs`). Premine was reduced 15B → 13B in this
-//! re-genesis (total supply 30B → 28B; the mined half is unchanged).
+//! **Every network's genesis mints exactly 10B MSK** ([`MISAKA_PREMINE_CAP_SOMPI`]; operator
+//! decision 2026-08-30). One main-wallet UTXO holds the whole cap; everything else a genesis
+//! carries — community allocations, genesis-bond collateral, bond fee floats — is **carved OUT
+//! of the main wallet, never minted beside it**. The builder enforces this arithmetically
+//! (`checked_sub` against the cap), so a community table that outgrows the cap fails the build
+//! instead of inflating the genesis.
+//!
+//! History of the cap:
+//! * 2026-06-17 re-genesis: 40 "vault" UTXOs × 0.1B + 9B main = 15B → **13B**.
+//! * 2026-08-26: test networks' main reduced to 6B for a 10B total; mainnet kept 13B.
+//! * **2026-08-30: the vault block is REMOVED and the cap is 10B on every network, mainnet
+//!   included.** The 40 mainnet-custody vault addresses are gone from genesis; the genesis
+//!   bonds' collateral is now carved from the main wallet and held at the main wallet's own
+//!   key (see [`genesis_premine_utxos_for`]). Final supply follows the cap:
+//!   10B genesis + 15B mined over 20 years = **25B** (`constants::MAX_SOMPI`; the emission
+//!   schedule in `consensus/src/processes/coinbase.rs` is unchanged).
 //!
 //! Each UTXO locks to the standard single-key ML-DSA-87 P2PKH `scriptPubKey`
 //! `OP_DUP OP_BLAKE2B_512 OP_DATA_64 <64-byte payload> OP_EQUALVERIFY OP_CHECKSIG_MLDSA87`
@@ -14,139 +25,91 @@
 //!
 //! ## Custody — per-network main wallet (audit H-01)
 //!
-//! * **40 vault addresses + the mainnet main-wallet address** are MAINNET custody
-//!   addresses (ML-DSA-87 keys held offline by the operator). The 64-byte payloads
-//!   are prefix-independent, so the same vault payloads are used on every network;
-//!   on the value-less test networks they simply hold test coins.
-//! * **The 9B main wallet differs per network:** mainnet uses the operator custody
-//!   address ([`MAINNET_MAIN_ADDRESS`]); the test networks use a Claude-managed key
-//!   ([`TESTNET_MAIN_ADDRESS`]) derived from the PUBLIC seed [`tests::TESTNET_MAIN_SEED`]
-//!   (regenerable, value-less) so a validator can be funded / stood up during the
-//!   re-genesis E2E validation. The `testnet_main_key_is_reproducible` test pins this.
+//! * **Mainnet** holds its 10B at the operator custody address ([`MAINNET_MAIN_ADDRESS`],
+//!   ML-DSA-87 key held offline; ceremony complete).
+//! * **testnet-11** (and formerly testnet-12) holds its main wallet at the operator's public
+//!   PALW address ([`PALW_PUBLIC_MAIN_ADDRESS`], supplied 2026-08-20).
+//! * **Every other test network** uses a Claude-managed key ([`TESTNET_MAIN_ADDRESS`]) derived
+//!   from the PUBLIC seed [`tests::TESTNET_MAIN_SEED`] (regenerable, value-less) so a validator
+//!   can be funded / stood up during re-genesis E2E validation. The
+//!   `testnet_main_key_is_reproducible` test pins this.
 //!
 //! Multisig / P2SH is out of launch scope (ADR-0019 §8/§6.5).
 
 use crate::{
     constants::SOMPI_PER_KASPA,
     network::{NetworkId, NetworkType},
-    tx::{TransactionOutpoint, UtxoEntry},
+    tx::{ScriptPublicKey, TransactionOutpoint, UtxoEntry},
     utxo::utxo_collection::UtxoCollection,
 };
 use kaspa_addresses::{Address, Version};
 use kaspa_hashes::Hash64;
 
-/// Per-vault premine amount: 0.1B KAS.
-pub const VAULT_PREMINE_SOMPI: u64 = 100_000_000 * SOMPI_PER_KASPA;
-/// Main-wallet premine amount: 9B KAS.
-pub const MAIN_PREMINE_SOMPI: u64 = 9_000_000_000 * SOMPI_PER_KASPA;
+/// **THE premine cap: 10B MSK, every network, one invariant.** A genesis totals exactly this —
+/// the carve-outs below (collateral, floats, community) are paid for by the main wallet, so
+/// adding to them moves the main wallet's amount and never this number. Raising the cap is a
+/// re-genesis of every network and an explicit operator decision; no code path may derive a
+/// bigger genesis from a longer table.
+pub const MISAKA_PREMINE_CAP_SOMPI: u64 = 10_000_000_000 * SOMPI_PER_KASPA;
 
-/// **The re-minted networks' main wallet: 6B, for a 10B premine** (operator decision, 2026-08-26).
+/// Collateral carved from the main wallet for each genesis bond seat: **10,000 MSK**
+/// (operator decision 2026-08-30, ADR-0061 — down from the 0.1B the seats inherited from the
+/// old vault denomination).
 ///
-/// Scoped to the networks being re-genesised, and NOT to mainnet, because the premine feeds the
-/// genesis `utxo_commitment` and therefore the genesis hash: moving it on mainnet re-genesises a
-/// live chain, which is not what "re-genesis testnet-11" asks for. Mainnet keeps 13B and its
-/// identity does not move.
+/// The C-08 gate demands only that this output COVER the bond's declared collateral, and the
+/// declaration is the DERIVED figure — `palw_v2_collateral_for_claim_lifetime_v1` over the
+/// dearest registered class, measured at 3,223.07 MSK on the shipped three-class card — so
+/// 10,000 is a ~3.1× margin over the structural minimum. The margin is what absorbs DAA
+/// advancing slower than one per block (parallel production against one bond); the derivation
+/// itself already covers the whole claim-lifetime exposure horizon, `+1` included. Because the
+/// declared collateral is unchanged, `palw_ruleset_id` does not move with this re-size — only
+/// the genesis UTXO set (and with it the fingerprint) does.
 ///
-/// The reduction is taken entirely from the main wallet and none of it from the vaults, because the
-/// 40 vault outputs are addressed BY INDEX from outside this file: genesis bond registrations name
-/// `<premine-txid>:<index>` and node units carry fee outpoints at fixed indices. Changing the vault
-/// count or order would silently repoint every one of them; changing the main output's VALUE
-/// repoints nothing. 40 x 0.1B + 6B = 10B.
-pub const TESTNET_MAIN_PREMINE_SOMPI: u64 = 6_000_000_000 * SOMPI_PER_KASPA;
+/// The outputs sit at the bond seats' own outpoint indices (`premine_outpoint(0..cards)`) but
+/// are OWNED by the main wallet's key: the operator stakes the main wallet's money, not a
+/// separate custody block. Consensus locks them while the bond is not retired
+/// (`palw_bond_collateral_is_locked_v2`), and the wallet's input selector excludes them via
+/// `palw_locked_bond_outpoints_v2`.
+pub const GENESIS_BOND_COLLATERAL_SOMPI: u64 = 10_000 * SOMPI_PER_KASPA;
 
-/// The main-wallet amount for `net` — the only place the two answers are chosen between.
-pub const fn main_premine_sompi_for(net: NetworkType) -> u64 {
-    match net {
-        NetworkType::Mainnet => MAIN_PREMINE_SOMPI,
-        _ => TESTNET_MAIN_PREMINE_SOMPI,
-    }
-}
-/// Number of vault UTXOs.
-pub const VAULT_COUNT: usize = 40;
-/// Total genesis premine = 40 × 0.1B + 9B = **13B KAS**.
-pub const MISAKA_PREMINE_SOMPI: u64 = (VAULT_COUNT as u64) * VAULT_PREMINE_SOMPI + MAIN_PREMINE_SOMPI;
+/// The main wallet's outpoint index on [`MISAKA_PREMINE_TXID`].
+///
+/// Historical: the 2026-06-17 layout put 40 vault UTXOs at indices 0–39 and the main wallet at
+/// 40. The vaults are gone (2026-08-30), but the main wallet KEEPS index 40 — and the genesis
+/// bond collateral keeps indices 0..cards, and the fee floats keep 41..(41+cards) — because
+/// these indices are addressed from outside this file: a bond's identity IS its collateral
+/// outpoint (`PalwBondKeyV2(premine_outpoint(i))`, inside `palw_ruleset_id`), and fleet units
+/// name float outpoints in their configs. The gap at 6..40 is deliberate; an outpoint is a
+/// (txid, index) name, not a position in a dense array.
+pub const MAIN_PREMINE_INDEX: u32 = 40;
 
-/// The same total on the re-minted networks: 40 x 0.1B + 6B = 10B.
-pub const MISAKA_TESTNET_PREMINE_SOMPI: u64 = (VAULT_COUNT as u64) * VAULT_PREMINE_SOMPI + TESTNET_MAIN_PREMINE_SOMPI;
-
-/// The 40 mainnet vault custody addresses (single-key ML-DSA-87 P2PKH). The payloads
-/// are network-independent (used on every network); the fixed order feeds the genesis
-/// `utxo_commitment` via the premine outpoint index, so it must never be reordered.
-#[rustfmt::skip]
-const VAULT_ADDRESSES: [&str; VAULT_COUNT] = [
-    "misaka:q2sde8teys5z6302gw9ufz3edr3z330p0gvacpsgnn3hsdqdsat9mx9t6eu257kazeespx0s8628fmf3y7anwstkm7pkmjrahzf5xsmfhed42jdu",
-    "misaka:qtsusn3gy7vqg9ewuhn078g3gwv2eg4vyjq06qe75m4ck7jh4r0j5jgulf3gmkznxwt5xhyancrujyj3vc20gsy8gsprht5g73yt8p0xlpdd3cx9",
-    "misaka:qgd53sv9tvkpeep2at8lpdhs5m8jwced4538vdwxnvhf3j6km95yacjndvfm28unae8f66kvxfz0yq3mgzsy0lugrfputxt8ksnrlp47jpuy979s",
-    "misaka:qf0rth45pqtray6c00sghsx537z5qmaz0ncr3gqanc4grkvvpk67xzrtgy9fycwags2a4cusz6wz2eu4xx87t0gsxg768lehesz6va8scljtf2wx",
-    "misaka:qftzk72qe3fywjfa43en9r7854zw7rkk2jyzf7lzruu7kl0kawc7wcxvfyyswgwpsuq6pmh7fe842fkdy2ull29ky8vzy3z57ve7mr6fl3gad3qv",
-    "misaka:qg7tpvwjrrgdh80pq2et6w29qkd7r7lczrp4u4w0fen2wg7qpe50pcxajphx7n97lppn0cualmzknx8f4ljmjyh49yepdt8xnz7ltgtgfck3pncp",
-    "misaka:q2kl5trhgpaetj3ecp342q55td2ntvk3h9d2srd9x2p638t54zmpkcy4vj303d42ucrydmht0cppk7xf2lsw9ksd4hp9npyc2547ewax6sdetlru",
-    "misaka:qt4n0ce5j3s70rsdewg4kct7jc33w7qxy6dkzhldr5lw429vwgy7j7fqqns9axkykhcfn7h3e78nys9g5p9hhyp4ax66a7pkjy0zh9ypsc59euju",
-    "misaka:q2ut0gvkw2awqwm8cs08we4g7gyyk8fe4eaqwju9avh8tvu2e85z9pwmdxej2tkqudjw2ea4c7snjgsv5tckgm2g4jaffre85zqe9pjvu4juqnme",
-    "misaka:qf78s5y6lz9q47ldmgj5dgvml0gvctgz545r4wdghw54s64dctw0kl3drkz840nxnx6a6qkd3jmlhesrk63uh0ga2fptt039ksvth4384xfzjme7",
-    "misaka:qgvmgrxnmh000lnd8mznenlqqv7rckqmachj4vmldtnr39kck4rjwzar9qmgnaxaa89ttz2rfmja7f52phxrz9tltfy7f4rz9srr0k8799nrm5nv",
-    "misaka:qt5rj4qqkuscxp002y088re6y4s7yy2lkpytatk4m0fgaqx2l87j6d3ry5m2f0deczh6qfuaptynzgj7z7zm2zkzdvjcnjg6jknghlphmttprru6",
-    "misaka:qfa8nsdvdljwmtn5h7avmmgzwr4sr4e4uf5mfjq6cfqdpug8grx6uv73y0q2mgqk7542sl2pfd600w7hrz6zrfhrluu3hr3039zpka8msjzydqnl",
-    "misaka:qt9pl87ukpz68v57s4xeknw3etsns2zquechttwegx9k9mt24ch8mty6tj0py0ufj89c8znkahhwd327a50fvm8lxxhcz0jc6zeaerfnctv7fr04",
-    "misaka:qfqkhpw272twz53pz5zkmfekr7vfsx9k4r3s6fwyzeddk2anr0pnpfsw4ze5va628hu3lw3hnuwzm9qdren2t3zu7x7ljlnhhwp34m3my4tjgvwr",
-    "misaka:q2k5wn53fsf7d0v8eq8hw7n22esq6u084cg2dyd3akyxfn8jqsmh4pama4w4u6jr8y2z08yajezsf0rsjx7rl76sm4d7z33pkk4ay0wgt0csmfy2",
-    "misaka:qf6g4mn4j5hfc4dnh7k7escf8gzrk0e9e3vfycmvg9nnddfy3qskkxd8vsuteakv08zneyghxr0228fvtdnzrdasrf78k2ngndh03zhtl3sllz39",
-    "misaka:qgezw07xtqpvq5dleawnqmc5yyluv2s07pg6zjepld7fl6na70c997g5tt73xdeqqne59m9qpmj8mchngv2ah33jujh6pg4sm6tqa7rfag66xrec",
-    "misaka:qg4d0v9rs8m0rksdup8hv98nqpy53r7mw5hzqsvsf9jlk40ym26qhnyxdsxjs9jrsuumpz9nz85hh5dqjkad2frl3fwahrjywrmte8sewuqww79h",
-    "misaka:qthru0q9737uart0vahnwefnwcd9325qn2cjx03kdr8ekfkh3rk6uvx8rnhpag6hazc5f8jtt42rfwqnjsz9xfwdtzafp9q8weeqplsnwu9mxf7j",
-    "misaka:qt6kfzu97evtyv8xt7qqy4g9k5gh0xk4y8vhpjle69ls6829gvkysa5tma9aw5j5z4v4cv4qxhs4mm0m6n0wq60uy0vhxl9kfnrttaqyqz2p8tls",
-    "misaka:qt6s3qldvvm3p44u2u5wu33gvy3whrjmd0ve6zllaj9zyh9fl26u30jzcxtcqk0y7tzk7hwa536m26afxylj63eum7r5e6rwv6hufkelnrv8hcm3",
-    "misaka:q2cczy4e80cz9cfvmyvxd8tfl80l22k6w7v3vj656jtfajkh97m72pu3j0qtw7c6kdy3psafejkukgp0gl0whhp98qlqc2az4r42zs2frrj44uyp",
-    "misaka:qt340a3r8dhrwmzvwhtlp8sy4p9r6r7xwkjkkj8vvf8zv0y593ceqs7c3vmct5hgxcw6ux9357vy5jjff9ps5wtyznpc7l29d42xlkrunhe5mp6f",
-    "misaka:qfg5zgn4cxkhc4chw77zz8usrwkr07retgf3sgw54ss3ttaratfzq6lcv2t4v035324fr2pylxwgcv4e4jt78z8mq99jcmgmflq07l94ztx5fpn6",
-    "misaka:qf2jprg2eh8uhuvqeaau89p4zzczg0xze44gkep5az8y5qsnpsasv6mpgfts5svqv9n0y84q4zejavmy4yc95u8jgc7y8j2fpuwuneursdapjr0v",
-    "misaka:qff4lfgk4t3e4xp5awsy3adxy7yzrgcq8axkf60463q29m8pdz2ghxmwdv2gvz4amfmhdhlcncgd5tg8saahg3qt9u8sfwkrdp4amx8npzg3zea9",
-    "misaka:q26dkxe8dzhcnwm97eg4ss29wcv3pfpk4eqsyenp8dwr9nc2fhssazuus600ghsgn2c2hucpm579hnvwdx9vghcq2y0wpk0ak6m5sx25evnj9hnf",
-    "misaka:qgyme2jcerl7qch3v6la3gmk90v3225e9q5ysjpdzmk7hgfzm5c8y967msn0raj4q0hjezt542qfcxwq2ghkguarm2mqnqkethpgkdzsqjqexr56",
-    "misaka:qfc0xt9gu4m5d5nn9ca5vfdtm2qs34a6hltglykpauezxwed0gg4z6ej6sfwpxw7s65vqqd208x9u9pczgdn90nvvp2jk7s8uelrmq7rd7nphc54",
-    "misaka:qtgf3558nrlnyt0h03rk8shwuj4q0vfggxw7qjkqyzure9ej5uhawgkpajs46js2e3pa8t0vde09zg26mk6pgm0s646cdp7la4s2styke78zepms",
-    "misaka:qfd2hrwjs8f0thgkjj88cqje2haq4hvwz00z3ze6wmvlph23jaa7v2em6q2lrhwh08c49kuhv6wv20shpe2sy482sm5xmvgjm4gc6uww7vdyc93y",
-    "misaka:qg4w8alw7ztpmxng30xzgz4g2ud8yjjfu827v247dxj97luwswgrcmurwztjewgd5vjhlv2wkwdcdzwe8mkhhw99826t7y5f9p0swsqkgjgnhd0x",
-    "misaka:qg4u70pe2u0hymj7fuvhsgsf2yxftvqm9gd9qqwj3hypqfkxurxcr9f3hvpdsxssgg0ha02jgn36qq0lh86tvcs7s696sed0l7knu00u0s9n5tl0",
-    "misaka:qffn9zwgtz2vg8uprhxvwlxceh2llupevjts07qhsngu2404szr788kpmhn7wtmsvgcn8zu5t5q49cewwg32xyha94tawq4utt3lxxnchv63gkjs",
-    "misaka:q29h7krvngrd06m04cn0d5w649247wm2dv7u8h0txttcdqyyufvyfufrjt60a6a0nurghsawe80t74at8wxnvd3j3wx6y8w0gnjn6tygenf2qquc",
-    "misaka:qtylp2rwewz43zgxhkvx06qxtv7u2n3rhykvsrq7gfcnye9sxahdrv36ahp2qa9tt9f79cjgpqlcr78ljlxqyz537se7zna023x3q2ekre3u2ylx",
-    "misaka:q20rut58ahknmvkarp288saw0l570cfls5qnrpvcfmludv6svfggj0987qz4yjfs0klyh47tr8ch266rx4pczrc7eqnj0h3p25smh8glqq0lwehr",
-    "misaka:qfrc3w55s9ry966czynwgke0fvqfh9twwvwn6mcv9zww9wd5hytddqvrus7vsep2gq9ncgsys387drd4dgm777tla4z3weu20mj4j7ncflmhvctf",
-    "misaka:qf08kurlrnqluqcdtrwpqellpkxcu2n0hreddl07t3fcfmq3a33h9f8mxqe9ktswcshpv0qnfr9d3ly9egf3drhz7ldkg79r7wdv6jsx4rmlm6m0",
-];
-
-/// Mainnet main-wallet (9B) custody address (operator-held ML-DSA-87 key).
+/// Mainnet main-wallet (10B) custody address (operator-held ML-DSA-87 key).
 const MAINNET_MAIN_ADDRESS: &str =
     "misaka:q20f8cwx3uyhwhej6d994h28wxj2k4efd46grtkqpx4vaenaeyr5dsve3m3uzkhm6vx0897py3378qttk0dq0ndh9aqlwg25emf33jsgtcpswdj3";
 
-/// The 9B main wallet for the PUBLIC PALW test nets (testnet-11 and the PALW-RC testnet-12),
+/// The main wallet for the PUBLIC PALW test nets (testnet-11 and the PALW-RC testnet-12),
 /// operator-supplied 2026-08-20.
 ///
-/// It replaces [`TESTNET_MAIN_ADDRESS`] on those two networks and nowhere else: testnet-10 has a
-/// running chain whose `utxo_commitment` must not move, and devnet/simnet keep the regenerable
-/// Claude-managed key their harnesses depend on. The 40 vault UTXOs are unchanged on every
-/// network — this is the main wallet only, which is the ~9B of the 13B premine.
-///
-/// A text address, like every other allocation in this file, so the genesis is auditable by
-/// reading it rather than by decoding a payload.
+/// It replaces [`TESTNET_MAIN_ADDRESS`] on those two networks and nowhere else: devnet/simnet
+/// keep the regenerable Claude-managed key their harnesses depend on. A text address, like every
+/// other allocation in this file, so the genesis is auditable by reading it rather than by
+/// decoding a payload.
 const PALW_PUBLIC_MAIN_ADDRESS: &str =
     "misakatest:qf7hzj76mg0wrch9mm89ag8s8apgrz7qgkk77j5z0ypykngrl2ayd2rnvleafk0fxhaxl70kr29x6fakav79jax9ul6jghrcs42nmlqx0tawqn8x";
 
-/// Testnet/devnet/simnet main-wallet (9B) address — Claude-managed, regenerable from
+/// Testnet/devnet/simnet main-wallet address — Claude-managed, regenerable from
 /// `tests::TESTNET_MAIN_SEED` (value-less). Pinned by `testnet_main_key_is_reproducible`.
 const TESTNET_MAIN_ADDRESS: &str =
     "misakatest:qtpflz03z576h02mtpn2vtwg5npj8fhlau3fgmsjl2a2uw0venj3573l07uahcs4gnsl8eqc7nlq5phakthxy606q2jyuxh2a08weduxa2yqlxuz";
 
-/// audit H-01: the mainnet premine ceremony is **COMPLETE** — the custody addresses
-/// above replace the former all-zero unspendable placeholder, so mainnet is no longer
-/// locked. Guarded by `mainnet_premine_is_spendable_custody`.
+/// audit H-01: the mainnet premine ceremony is **COMPLETE** — the custody address above replaces
+/// the former all-zero unspendable placeholder, so mainnet is no longer locked. Guarded by
+/// `mainnet_premine_is_spendable_custody`.
 pub const MAINNET_PREMINE_CEREMONY_PENDING: bool = false;
 
 /// Deterministic sentinel txid for the premine UTXOs: ASCII "misaka-premine" (14
 /// bytes) zero-padded to the 64-byte `Hash64` width. Each premine UTXO sits at a
-/// distinct index `0..=VAULT_COUNT` on this txid; fixed because it feeds the genesis
-/// `utxo_commitment`.
+/// distinct index on this txid; fixed because it feeds the genesis `utxo_commitment`.
 #[rustfmt::skip]
 const MISAKA_PREMINE_TXID: [u8; 64] = [
     0x6d, 0x69, 0x73, 0x61, 0x6b, 0x61, 0x2d, 0x70, 0x72, 0x65, 0x6d, 0x69, 0x6e, 0x65, // "misaka-premine"
@@ -168,7 +131,7 @@ fn owner_payload(addr: &str) -> [u8; 64] {
     out
 }
 
-/// The 9B main-wallet address for `network_type` (audit H-01): mainnet uses the
+/// The main-wallet address for `network_type` (audit H-01): mainnet uses the
 /// operator custody address; every test network uses the Claude-managed key.
 fn main_address(network_type: NetworkType) -> &'static str {
     match network_type {
@@ -177,15 +140,12 @@ fn main_address(network_type: NetworkType) -> &'static str {
     }
 }
 
-/// The 9B main wallet for a network id — the suffix-aware form.
+/// The main wallet for a network id — the suffix-aware form.
 ///
-/// testnet-11 and the PALW-RC net (testnet-12) hold theirs at
-/// [`PALW_PUBLIC_MAIN_ADDRESS`]; every other network keeps [`main_address`]'s answer. The split
-/// is by NETWORK ID rather than by type because that is the granularity the fact has: t10 is a
-/// chain with history and its commitment must not move, while t11 and t12 are the public PALW
-/// nets whose genesis this operator is setting.
-///
-/// The 40 vault UTXOs are untouched everywhere — this replaces the main wallet only.
+/// testnet-11 and the PALW-RC net (testnet-12) hold theirs at [`PALW_PUBLIC_MAIN_ADDRESS`];
+/// every other network keeps [`main_address`]'s answer. The split is by NETWORK ID rather than
+/// by type because that is the granularity the fact has: t11/t12 are the public PALW nets whose
+/// genesis this operator is setting.
 fn main_address_for(net: NetworkId) -> &'static str {
     if net.network_type == NetworkType::Testnet && matches!(net.suffix, Some(11) | Some(12)) {
         return PALW_PUBLIC_MAIN_ADDRESS;
@@ -193,58 +153,52 @@ fn main_address_for(net: NetworkId) -> &'static str {
     main_address(net.network_type)
 }
 
-/// The canonical kaspa-pq genesis premine UTXO set for `network_type`: 40 vault UTXOs
-/// of 0.1B KAS each (indices `0..VAULT_COUNT`) + one 9B main UTXO (index `VAULT_COUNT`)
-/// = 13B KAS, all single-key ML-DSA-87 P2PKH and spendable from block 0
-/// (`is_coinbase: false`, no maturity delay). The vault payloads are network-independent;
-/// the 9B main wallet is per-network (see [`main_address`]).
-/// The outpoint of premine vault `index` (`0..VAULT_COUNT`), or the 9B main wallet at
-/// `VAULT_COUNT`.
+/// The outpoint of premine output `index` on the premine sentinel txid.
 ///
-/// Every genesis UTXO on every network sits at a distinct index on one fixed txid, so an
-/// outpoint is fully determined by its index — and a caller that needs to NAME one (a PALW-RC
-/// genesis bond locking a vault as its collateral, audit C-08) should not have to rebuild the
-/// whole set and search it, nor re-derive the txid and get it subtly wrong.
+/// Every genesis output on the premine txid sits at a distinct index (bond collateral at
+/// `0..cards`, the main wallet at [`MAIN_PREMINE_INDEX`], fee floats after it), so an outpoint
+/// is fully determined by its index — and a caller that needs to NAME one (a PALW-RC genesis
+/// bond's identity, audit C-08) should not have to rebuild the whole set and search it, nor
+/// re-derive the txid and get it subtly wrong.
 pub fn premine_outpoint(index: u32) -> TransactionOutpoint {
     TransactionOutpoint { transaction_id: Hash64::from_bytes(MISAKA_PREMINE_TXID), index }
 }
 
+fn premine_entry(amount: u64, script_public_key: ScriptPublicKey) -> UtxoEntry {
+    UtxoEntry { amount, script_public_key, block_daa_score: 0, is_coinbase: false }
+}
+
+/// The canonical genesis premine for `network_type`: **one main-wallet UTXO of exactly the 10B
+/// cap** at [`MAIN_PREMINE_INDEX`], single-key ML-DSA-87 P2PKH, spendable from block 0
+/// (`is_coinbase: false`, no maturity delay).
 pub fn misaka_premine_utxos(network_type: NetworkType) -> UtxoCollection {
     // `NetworkId::new` PANICS on a type that requires a suffix (testnet does), and this entry
     // point takes only the type — so the suffix-less answer is expressed directly rather than
     // by constructing an id that cannot exist. Callers who have a suffix use
     // `misaka_premine_utxos_for`, which is the only way to reach the public PALW nets' wallet.
-    misaka_premine_utxos_inner(main_address(network_type), main_premine_sompi_for(network_type))
+    misaka_premine_utxos_inner(main_address(network_type))
 }
 
 /// The same set, chosen by NETWORK ID so the public PALW nets can hold their main wallet at
 /// their own address (see [`main_address_for`]). [`misaka_premine_utxos`] is this with a
 /// suffix-less id, which is what every non-suffixed caller means.
 pub fn misaka_premine_utxos_for(net: NetworkId) -> UtxoCollection {
-    misaka_premine_utxos_inner(main_address_for(net), main_premine_sompi_for(net.network_type))
+    misaka_premine_utxos_inner(main_address_for(net))
 }
 
-fn misaka_premine_utxos_inner(main: &str, main_amount: u64) -> UtxoCollection {
-    let txid = Hash64::from_bytes(MISAKA_PREMINE_TXID);
-    let mut utxos: Vec<(TransactionOutpoint, UtxoEntry)> = Vec::with_capacity(VAULT_COUNT + 1);
-    for (i, addr) in VAULT_ADDRESSES.iter().enumerate() {
-        let script_public_key = crate::dns_finality::p2pkh_mldsa87_spk(&owner_payload(addr));
-        let outpoint = TransactionOutpoint { transaction_id: txid, index: i as u32 };
-        utxos.push((outpoint, UtxoEntry { amount: VAULT_PREMINE_SOMPI, script_public_key, block_daa_score: 0, is_coinbase: false }));
-    }
+fn misaka_premine_utxos_inner(main: &str) -> UtxoCollection {
     let script_public_key = crate::dns_finality::p2pkh_mldsa87_spk(&owner_payload(main));
-    let outpoint = TransactionOutpoint { transaction_id: txid, index: VAULT_COUNT as u32 };
-    utxos.push((outpoint, UtxoEntry { amount: main_amount, script_public_key, block_daa_score: 0, is_coinbase: false }));
-    UtxoCollection::from_iter(utxos)
+    UtxoCollection::from_iter([(premine_outpoint(MAIN_PREMINE_INDEX), premine_entry(MISAKA_PREMINE_CAP_SOMPI, script_public_key))])
 }
 
 /// The PALW public-testnet (testnet-11) COMMUNITY allocation — the operator-collected
-/// address list for the t11 public relaunch (Discord, 2026-08-11 … 2026-08-19), baked into
+/// address list for the t11 public relaunch (Discord, 2026-08-11 … 2026-08-26), baked into
 /// the t11 genesis exactly like the premine: text addresses (auditable), one UTXO each on a
-/// dedicated sentinel txid, committed by `TESTNET11_GENESIS.utxo_commitment`.
+/// dedicated sentinel txid, committed by `TESTNET11_GENESIS.utxo_commitment`. **The whole
+/// allocation is carved out of the main wallet** — see [`genesis_premine_utxos_for`] — so
+/// growing this table moves the main wallet's amount and never the 10B cap.
 ///
-/// **testnet-11 ONLY.** testnet-10's running chain, devnet, simnet and mainnet carry none of
-/// this — their commitments are untouched (see [`genesis_premine_utxos_for`]).
+/// **testnet-11 ONLY.** testnet-10, devnet, simnet and mainnet carry none of this.
 ///
 /// Two entrants CHANGED their address before the cut and the superseded ones are excluded
 /// (recorded here so the audit trail is in the file, not in a chat log):
@@ -309,92 +263,89 @@ pub fn testnet11_community_utxos() -> UtxoCollection {
         let script_public_key = crate::dns_finality::p2pkh_mldsa87_spk(&owner_payload(addr));
         let outpoint = TransactionOutpoint { transaction_id: txid, index: i as u32 };
         let amount = whole_msk.checked_mul(SOMPI_PER_KASPA).expect("a community allocation cannot overflow sompi");
-        utxos.push((outpoint, UtxoEntry { amount, script_public_key, block_daa_score: 0, is_coinbase: false }));
+        utxos.push((outpoint, premine_entry(amount, script_public_key)));
     }
     UtxoCollection::from_iter(utxos)
 }
 
-/// The FULL genesis UTXO set for one network id: the shared premine, plus — on testnet-11 and
-/// only there — the community allocation. Keyed by [`NetworkId`] rather than [`NetworkType`]
-/// because t10 and t11 share a type and must NOT share a UTXO set: t10 is a running chain whose
-/// commitment cannot move.
 /// **The fee float each PALW-RC genesis bond receives, and why a network needs one.**
 ///
 /// A `ConsensusV2` producer earns NOTHING it can spend until one of its claims reaches `Final`:
 /// the shipped split puts 62 % of the subsidy in the worker base and escrows exactly 62 %, so the
-/// coinbase pays the producer `worker_base − escrow = 0` (measured: both are 27,562,844,868 sompi
-/// on a 44,456,201,400 subsidy). The escrow is released by a `ReceiptLicensed` object, which rides
-/// a 0x4b transaction, which needs a funded input. Mining income requires a finalized claim;
-/// finalizing a claim requires mining income. **The loop is closed, and no amount of running the
-/// chain opens it** — testnet-12's first launch produced 600 blocks and could not license one.
+/// coinbase pays the producer `worker_base − escrow = 0`. The escrow is released by a
+/// `ReceiptLicensed` object, which rides a 0x4b transaction, which needs a funded input. Mining
+/// income requires a finalized claim; finalizing a claim requires mining income. **The loop is
+/// closed, and no amount of running the chain opens it** — testnet-12's first launch produced
+/// 600 blocks and could not license one.
 ///
-/// So the genesis opens it, because the genesis is the only place that can. Each registered bond's
-/// PAYOUT address — an address the card already proves an operator holds the key for — receives a
-/// small spendable float, carved OUT of the main premine rather than minted beside it, so the
-/// supply is unchanged. 100 MSK covers roughly thirty thousand lifecycle submissions at the
-/// production relay rate (~300k sompi each); the bonds need one working submitter, not an endowment.
-///
-/// Scoped to networks that actually run a `ConsensusV2` registry. Everything else — testnet-10's
-/// running chain, testnet-11, devnet, simnet, mainnet — is byte-identical to before.
+/// So the genesis opens it, because the genesis is the only place that can. Each registered
+/// bond's PAYOUT address — an address the card already proves an operator holds the key for —
+/// receives a small spendable float, carved out of the main wallet under the 10B cap. 100 MSK
+/// covers roughly thirty thousand lifecycle submissions at the production relay rate (~300k
+/// sompi each); the bonds need one working submitter, not an endowment.
 pub const PALW_RC_BOND_FEE_FLOAT_SOMPI: u64 = 100 * SOMPI_PER_KASPA;
 
-/// The premine for `net`, plus whatever that network's genesis was minted to carry.
+/// The FULL genesis UTXO set for one network id, and **the only place the 10B cap is spent**.
+///
+/// Keyed by [`NetworkId`] rather than [`NetworkType`] because t10 and t11 share a type and must
+/// NOT share a UTXO set. Every network answers with UTXOs summing to EXACTLY
+/// [`MISAKA_PREMINE_CAP_SOMPI`]:
+///
+/// * **testnet-11** — the network with a `ConsensusV2` registry — carves, out of the main
+///   wallet: one collateral output per genesis bond (at the bond's own outpoint index
+///   `0..cards`, owned by the main wallet's key — the operator stakes the main wallet's money),
+///   one fee float per bond (at `MAIN_PREMINE_INDEX + 1 + i`, owned by that bond's payout key),
+///   and the community allocation (its own txid). The main wallet holds the remainder.
+/// * **every other network** — one main-wallet UTXO of the whole cap.
 pub fn genesis_premine_utxos_for(net: NetworkId) -> UtxoCollection {
-    let mut set = misaka_premine_utxos_for(net);
     if net.network_type == NetworkType::Testnet && net.suffix == Some(11) {
-        // testnet-11 carries BOTH: the community allocation it was minted for, and — since the
-        // PALW-RC network moved onto this suffix — the per-bond fee floats. The floats stayed
-        // keyed to 12 through the move, so the RC genesis briefly funded nine community entries
-        // and not one of its own bonds; a registry whose members cannot pay for a lifecycle
-        // transaction is a registry that can license nothing.
-        set.extend(testnet11_community_utxos());
-        set.extend(palw_rc_bond_fee_floats(net));
+        return testnet11_genesis_utxos(net);
     }
-    set
+    misaka_premine_utxos_for(net)
 }
 
-/// The float outputs, one per shipped genesis bond, at indices after the main wallet — and the
-/// main wallet reduced by exactly their total, so `MISAKA_PREMINE_SOMPI` still names the supply.
-///
-/// Empty when the card is unset, which is what keeps a bundle-free testnet-12 identical to the
-/// network it was before any of this.
-fn palw_rc_bond_fee_floats(net: NetworkId) -> UtxoCollection {
+/// The testnet-11 genesis set: main wallet + per-bond collateral and floats + community, built
+/// in ONE pass so the cap arithmetic is visible in one place. The predecessor of this function
+/// inserted the main wallet twice (once at 6B, then overwritten at 9B−floats via `HashMap`
+/// extend), which is exactly how the genesis quietly totalled 13.547B against a 10B decision —
+/// a single construction path is the fix, not a smaller patch.
+fn testnet11_genesis_utxos(net: NetworkId) -> UtxoCollection {
     let cards = crate::config::params::PALW_RC_GENESIS_BONDS;
-    if cards.is_empty() {
-        return UtxoCollection::default();
+    let main_spk = crate::dns_finality::p2pkh_mldsa87_spk(&owner_payload(main_address_for(net)));
+
+    let mut utxos: Vec<(TransactionOutpoint, UtxoEntry)> = Vec::with_capacity(2 * cards.len() + TESTNET11_COMMUNITY_ALLOCATIONS.len() + 1);
+    let mut carved: u64 = 0;
+
+    // Genesis-bond collateral, at each card's DECLARED index (the outpoint IS the bond's
+    // identity — `PalwBondKeyV2(premine_outpoint(card.premine_index))` — so the collateral goes
+    // where the bond points, not where the card happens to sit in the list), owned by the main
+    // wallet's key: "the main wallet bonds", there is no custody block.
+    for card in cards {
+        assert!(card.premine_index < MAIN_PREMINE_INDEX, "a genesis bond may not stake the main wallet itself or a float index");
+        utxos.push((premine_outpoint(card.premine_index), premine_entry(GENESIS_BOND_COLLATERAL_SOMPI, main_spk.clone())));
+        carved = carved.checked_add(GENESIS_BOND_COLLATERAL_SOMPI).expect("collateral cannot overflow");
     }
-    let txid = Hash64::from_bytes(MISAKA_PREMINE_TXID);
-    let mut utxos: Vec<(TransactionOutpoint, UtxoEntry)> = Vec::with_capacity(cards.len() + 1);
+
+    // Per-bond fee floats, after the main wallet's index, at each bond's own payout key.
     for (i, card) in cards.iter().enumerate() {
         let script_public_key = crate::dns_finality::p2pkh_mldsa87_spk(&card.payout_payload);
-        // After the main wallet, so no vault index moves and no bond outpoint is disturbed.
-        let outpoint = TransactionOutpoint { transaction_id: txid, index: (VAULT_COUNT + 1 + i) as u32 };
-        utxos.push((
-            outpoint,
-            UtxoEntry { amount: PALW_RC_BOND_FEE_FLOAT_SOMPI, script_public_key, block_daa_score: 0, is_coinbase: false },
-        ));
+        utxos.push((premine_outpoint(MAIN_PREMINE_INDEX + 1 + i as u32), premine_entry(PALW_RC_BOND_FEE_FLOAT_SOMPI, script_public_key)));
+        carved = carved.checked_add(PALW_RC_BOND_FEE_FLOAT_SOMPI).expect("floats cannot overflow");
     }
-    // The carve: the main wallet pays for every float, so the total premine is unchanged.
-    let total_float =
-        PALW_RC_BOND_FEE_FLOAT_SOMPI.checked_mul(cards.len() as u64).expect("a genesis registry is six rows, not enough to overflow");
-    // **The network being built, not a literal.** This named testnet-12 through the move to
-    // testnet-11, and it happened to be harmless only because `main_address_for` answers with the
-    // same address for both suffixes. That is a coincidence with an expiry date: testnet-12 is now
-    // an identifier `Params::from` PANICS on, so the day suffix 12 leaves that match arm, this
-    // line silently re-owns the 9B main premine — a re-carve of the whole supply, with no
-    // compilation error and no test that names it. Deriving the script from `net` makes the carve
-    // a fact about the network it is carving.
-    let main = crate::dns_finality::p2pkh_mldsa87_spk(&owner_payload(main_address_for(net)));
-    let main_outpoint = TransactionOutpoint { transaction_id: txid, index: VAULT_COUNT as u32 };
-    utxos.push((
-        main_outpoint,
-        UtxoEntry {
-            amount: MAIN_PREMINE_SOMPI.checked_sub(total_float).expect("the floats are a rounding error against 9B"),
-            script_public_key: main,
-            block_daa_score: 0,
-            is_coinbase: false,
-        },
-    ));
+
+    // The community allocation, on its own sentinel txid.
+    for (outpoint, entry) in testnet11_community_utxos() {
+        carved = carved.checked_add(entry.amount).expect("community cannot overflow");
+        utxos.push((outpoint, entry));
+    }
+
+    // The main wallet pays for every carve-out above. `checked_sub` IS the 10B cap enforcement:
+    // a carve list that outgrows the cap fails the build loudly, it never inflates the genesis.
+    let main_amount = MISAKA_PREMINE_CAP_SOMPI
+        .checked_sub(carved)
+        .expect("the 10B premine cap is a hard invariant: collateral + floats + community exceed it — shrink the carve-outs, never raise the cap");
+    utxos.push((premine_outpoint(MAIN_PREMINE_INDEX), premine_entry(main_amount, main_spk)));
+
     UtxoCollection::from_iter(utxos)
 }
 
@@ -404,36 +355,76 @@ mod tests {
     use crate::muhash::MuHashExtensions;
     use kaspa_muhash::MuHash;
 
-    /// PUBLIC seed for the testnet 9B main-wallet key. Claude-managed: the key is
+    /// PUBLIC seed for the testnet main-wallet key. Claude-managed: the key is
     /// regenerable from this string (publicly recoverable, like any test key) and is
     /// for the VALUE-LESS test networks ONLY — used to fund / stand up a validator
     /// during the re-genesis E2E validation. NEVER mainnet.
     pub(super) const TESTNET_MAIN_SEED: &[u8] = b"misaka-testnet-premine-9b-claude-managed";
 
-    /// **A PALW network can fund its own first submitter** — the loop the launch found closed.
+    /// **The operator's law (2026-08-30): every network's genesis mints exactly 10B MSK.**
     ///
-    /// The producer's coinbase pays it `worker_base − escrow`, and the shipped split makes those
-    /// two equal: mining income needs a finalized claim, finalizing needs a funded 0x4b
-    /// transaction, funding needs mining income. The genesis float is the only thing that opens
-    /// it, so this asserts the three properties that make it work at all: the floats exist at the
-    /// registry's own payout addresses, the supply does not move, and no other network is touched.
+    /// Community entries, bond collateral and fee floats are carved out of the main wallet,
+    /// never minted beside it — so however those tables grow, this sum does not move. A future
+    /// change to the cap has to move this test AND the constant, together, as an explicit
+    /// re-genesis decision.
+    #[test]
+    fn every_network_genesis_mints_exactly_the_10b_cap() {
+        let nets = [
+            NetworkId::new(NetworkType::Mainnet),
+            NetworkId::with_suffix(NetworkType::Testnet, 10),
+            NetworkId::with_suffix(NetworkType::Testnet, 11),
+            NetworkId::new(NetworkType::Devnet),
+            NetworkId::new(NetworkType::Simnet),
+        ];
+        for net in nets {
+            let total: u64 = genesis_premine_utxos_for(net).values().map(|e| e.amount).sum();
+            assert_eq!(total, MISAKA_PREMINE_CAP_SOMPI, "{net} genesis must mint exactly the 10B cap");
+            assert_eq!(total, 10_000_000_000 * SOMPI_PER_KASPA);
+        }
+        // The suffix-less type entry points answer the same cap.
+        for net in [NetworkType::Mainnet, NetworkType::Testnet, NetworkType::Devnet, NetworkType::Simnet] {
+            let total: u64 = misaka_premine_utxos(net).values().map(|e| e.amount).sum();
+            assert_eq!(total, MISAKA_PREMINE_CAP_SOMPI, "{net:?} premine total");
+        }
+    }
+
+    /// Every genesis output on every network is a 69-byte single-key ML-DSA-87 P2PKH spendable
+    /// from block 0 — and the non-RC networks are exactly one main-wallet UTXO.
+    #[test]
+    fn premine_is_one_spendable_main_wallet_everywhere_else() {
+        for net in [
+            NetworkId::new(NetworkType::Mainnet),
+            NetworkId::with_suffix(NetworkType::Testnet, 10),
+            NetworkId::new(NetworkType::Devnet),
+            NetworkId::new(NetworkType::Simnet),
+        ] {
+            let utxos = genesis_premine_utxos_for(net);
+            assert_eq!(utxos.len(), 1, "{net} genesis is one main-wallet UTXO");
+            let entry = &utxos[&premine_outpoint(MAIN_PREMINE_INDEX)];
+            assert_eq!(entry.amount, MISAKA_PREMINE_CAP_SOMPI);
+            assert!(!entry.is_coinbase, "premine must be non-coinbase (spendable from block 0)");
+            assert_eq!(entry.block_daa_score, 0);
+            assert_eq!(entry.script_public_key.script().len(), 69, "ML-DSA-87 P2PKH = 69 bytes");
+        }
+        for (_, entry) in genesis_premine_utxos_for(NetworkId::with_suffix(NetworkType::Testnet, 11)) {
+            assert!(!entry.is_coinbase);
+            assert_eq!(entry.block_daa_score, 0);
+            assert_eq!(entry.script_public_key.script().len(), 69);
+        }
+    }
+
+    /// **The RC genesis funds every bond and mints nothing extra.** The registry's collateral
+    /// and floats, and the community allocation, are all inside the 10B cap; every registered
+    /// bond can pay a fee at the address its own card names; and the collateral the genesis
+    /// gate checks (audit C-08) sits at each bond's own outpoint, owned by the main wallet.
     #[test]
     fn the_rc_genesis_funds_every_bond_and_mints_nothing_extra() {
         let t11 = NetworkId::with_suffix(NetworkType::Testnet, 11);
         let set = genesis_premine_utxos_for(t11);
-        let total: u64 = set.values().map(|e| e.amount).sum();
         let cards = crate::config::params::PALW_RC_GENESIS_BONDS;
 
-        // **The RC's premine is the 13B split PLUS testnet-11's community allocation**, now that
-        // the RC network is testnet-11. The bond fee floats are still carved out of the main
-        // wallet rather than minted beside it — that is what this equality is for — and the 347M
-        // is a separate, deliberate, network-keyed set that predates the move
-        // (`TESTNET11_COMMUNITY_ALLOCATIONS`, nine entries burned into t11's genesis).
-        assert_eq!(
-            total,
-            MISAKA_PREMINE_SOMPI + TESTNET11_COMMUNITY_SOMPI,
-            "the floats are carved from the main wallet, never minted beside it — and the t11 community set is the only thing added"
-        );
+        let total: u64 = set.values().map(|e| e.amount).sum();
+        assert_eq!(total, MISAKA_PREMINE_CAP_SOMPI, "collateral, floats and community are carved from the main wallet, never minted");
 
         // NOT `if cards.is_empty() { return }`: that made every assertion below vacuous the moment
         // the card was unset, which is exactly when a reader would most want to know. The shipped
@@ -442,11 +433,18 @@ mod tests {
         assert!(!cards.is_empty(), "the shipped RC card must be set for this network to fund anything");
         assert_eq!(
             set.len(),
-            VAULT_COUNT + 1 + cards.len() + TESTNET11_COMMUNITY_ALLOCATIONS.len(),
-            "40 vaults + the main wallet + one float per bond + t11's community entries"
+            2 * cards.len() + 1 + TESTNET11_COMMUNITY_ALLOCATIONS.len(),
+            "one collateral + one float per bond, the main wallet, and t11's community entries"
         );
-        // Every registered bond can pay a fee, at the address its own card names.
-        for card in cards {
+
+        let main_spk = set[&premine_outpoint(MAIN_PREMINE_INDEX)].script_public_key.clone();
+        for (i, card) in cards.iter().enumerate() {
+            // The collateral the bond's identity names is there, at the bond's declared index,
+            // owned by the main wallet: the operator stakes the main wallet's money.
+            let collateral = &set[&premine_outpoint(card.premine_index)];
+            assert_eq!(collateral.amount, GENESIS_BOND_COLLATERAL_SOMPI, "bond {i} collateral");
+            assert_eq!(collateral.script_public_key, main_spk, "bond {i} collateral is the main wallet bonding");
+            // Every registered bond can pay a fee, at the address its own card names.
             let spk = crate::dns_finality::p2pkh_mldsa87_spk(&card.payout_payload);
             let funded: u64 = set.values().filter(|e| e.script_public_key == spk).map(|e| e.amount).sum();
             assert!(
@@ -455,85 +453,41 @@ mod tests {
                 card.premine_index
             );
         }
-        // And the vault outputs the bonds are staked against are untouched, or the collateral the
-        // genesis gate checked would no longer be there.
-        for i in 0..VAULT_COUNT as u32 {
-            let outpoint = TransactionOutpoint { transaction_id: Hash64::from_bytes(MISAKA_PREMINE_TXID), index: i };
-            assert_eq!(set.get(&outpoint).expect("vault present").amount, VAULT_PREMINE_SOMPI, "vault {i} moved");
-        }
-        // No OTHER network gains a float. testnet-11 is the RC now, so it is the one that has
-        // them; testnet-10 is a chain with history whose commitment must not move.
+
+        // No OTHER network gains collateral or floats.
         let t10 = NetworkId::with_suffix(NetworkType::Testnet, 10);
-        assert_eq!(genesis_premine_utxos_for(t10).len(), VAULT_COUNT + 1, "{t10} must not gain RC floats");
+        assert_eq!(genesis_premine_utxos_for(t10).len(), 1, "{t10} is one main-wallet UTXO");
     }
 
-    /// **The public PALW nets' 9B main wallet is the operator's address, and ONLY on those two.**
+    /// **The public PALW net's main wallet is the operator's address, and ONLY there.**
     ///
-    /// The 2026-08-20 change moves the main wallet on testnet-11 and the PALW-RC net
-    /// (testnet-12) to `PALW_PUBLIC_MAIN_ADDRESS`. Everything else is deliberately untouched:
-    /// testnet-10 has a running chain whose commitment must not move, devnet and simnet keep the
-    /// regenerable Claude-managed key their harnesses depend on, and mainnet's custody address is
-    /// its own. The 40 vault UTXOs are unchanged everywhere — this is the main wallet only.
+    /// devnet and simnet keep the regenerable Claude-managed key their harnesses depend on, and
+    /// mainnet's custody address is its own. On t11 the main wallet holds the cap minus exactly
+    /// its carve-outs.
     #[test]
-    fn the_public_palw_nets_hold_the_main_wallet_at_the_operator_address() {
+    fn the_public_palw_net_holds_the_main_wallet_at_the_operator_address() {
         let public_spk = crate::dns_finality::p2pkh_mldsa87_spk(&owner_payload(PALW_PUBLIC_MAIN_ADDRESS));
         let claude_spk = crate::dns_finality::p2pkh_mldsa87_spk(&owner_payload(TESTNET_MAIN_ADDRESS));
         assert_ne!(public_spk, claude_spk, "the fixture must actually differ or this test proves nothing");
 
-        let main_of = |net: NetworkId| {
-            let txid = Hash64::from_bytes(MISAKA_PREMINE_TXID);
-            let outpoint = TransactionOutpoint { transaction_id: txid, index: VAULT_COUNT as u32 };
-            let set = genesis_premine_utxos_for(net);
-            set.get(&outpoint).expect("the main UTXO sits at index VAULT_COUNT").clone()
-        };
+        let main_of = |net: NetworkId| genesis_premine_utxos_for(net)[&premine_outpoint(MAIN_PREMINE_INDEX)].clone();
 
-        // Only 11 now: the PALW-RC network moved onto it and 12 is refused at `From<NetworkId>`.
-        {
-            let suffix = 11u32;
-            let entry = main_of(NetworkId::with_suffix(NetworkType::Testnet, suffix));
-            assert_eq!(entry.script_public_key, public_spk, "testnet-{suffix} pays the operator address");
-            // testnet-11 carves each genesis bond's fee float OUT of this output (see
-            // `palw_rc_bond_fee_floats`) rather than minting beside it, so the main wallet is the
-            // whole 9B minus exactly those floats — and the SUPPLY is what stays unchanged, which
-            // `the_rc_genesis_funds_every_bond_and_mints_nothing_extra` asserts directly.
-            let carved = if suffix == 11 {
-                PALW_RC_BOND_FEE_FLOAT_SOMPI * crate::config::params::PALW_RC_GENESIS_BONDS.len() as u64
-            } else {
-                0
-            };
-            assert_eq!(entry.amount, MAIN_PREMINE_SOMPI - carved, "testnet-{suffix} main wallet is 9B less its carved floats");
-        }
-        // testnet-10 and the suffix-less testnet answer keep the Claude-managed wallet.
+        let cards = crate::config::params::PALW_RC_GENESIS_BONDS;
+        let t11_main = main_of(NetworkId::with_suffix(NetworkType::Testnet, 11));
+        assert_eq!(t11_main.script_public_key, public_spk, "testnet-11 pays the operator address");
+        let carved = (GENESIS_BOND_COLLATERAL_SOMPI + PALW_RC_BOND_FEE_FLOAT_SOMPI) * cards.len() as u64 + TESTNET11_COMMUNITY_SOMPI;
+        assert_eq!(t11_main.amount, MISAKA_PREMINE_CAP_SOMPI - carved, "testnet-11 main wallet is the cap less its carve-outs");
+
+        // testnet-10 and the suffix-less test networks keep the Claude-managed wallet.
         assert_eq!(main_of(NetworkId::with_suffix(NetworkType::Testnet, 10)).script_public_key, claude_spk);
         for net in [NetworkType::Devnet, NetworkType::Simnet] {
-            let txid = Hash64::from_bytes(MISAKA_PREMINE_TXID);
-            let outpoint = TransactionOutpoint { transaction_id: txid, index: VAULT_COUNT as u32 };
             let set = misaka_premine_utxos(net);
-            assert_eq!(set.get(&outpoint).unwrap().script_public_key, claude_spk, "{net:?} is untouched");
+            assert_eq!(set[&premine_outpoint(MAIN_PREMINE_INDEX)].script_public_key, claude_spk, "{net:?} is untouched");
         }
         // Mainnet keeps its own custody address, which is neither of the above.
-        let txid = Hash64::from_bytes(MISAKA_PREMINE_TXID);
-        let outpoint = TransactionOutpoint { transaction_id: txid, index: VAULT_COUNT as u32 };
-        let mainnet_main = misaka_premine_utxos(NetworkType::Mainnet).get(&outpoint).unwrap().script_public_key.clone();
+        let mainnet_main = main_of(NetworkId::new(NetworkType::Mainnet)).script_public_key;
         assert_ne!(mainnet_main, public_spk);
         assert_ne!(mainnet_main, claude_spk);
-
-        // The vaults did not move on any network: same count, same amount, same scripts as the
-        // mainnet set (their payloads are network-independent).
-        for net in [NetworkType::Mainnet, NetworkType::Devnet, NetworkType::Simnet] {
-            let set = misaka_premine_utxos(net);
-            assert_eq!(set.len(), VAULT_COUNT + 1);
-        }
-        let t11 = genesis_premine_utxos_for(NetworkId::with_suffix(NetworkType::Testnet, 11));
-        assert_eq!(
-            t11.len(),
-            VAULT_COUNT + 1 + TESTNET11_COMMUNITY_ALLOCATIONS.len() + crate::config::params::PALW_RC_GENESIS_BONDS.len(),
-            "testnet-11 is the premine, the community list, and one fee float per RC bond"
-        );
-        for i in 0..VAULT_COUNT as u32 {
-            let outpoint = TransactionOutpoint { transaction_id: txid, index: i };
-            assert_eq!(t11.get(&outpoint).unwrap().amount, VAULT_PREMINE_SOMPI, "vault {i} is untouched");
-        }
     }
 
     /// The community list is exactly what the operator collected: eleven entrants, 547M total, and
@@ -567,43 +521,11 @@ mod tests {
         }
     }
 
-    /// Prints the per-network genesis `utxo_commitment`s to hardcode in `genesis.rs`.
-    /// Run:
-    /// `cargo test -p kaspa-consensus-core --lib config::premine::tests::print_premine_commitment -- --nocapture`
-    #[test]
-    fn print_premine_commitment() {
-        for net in [NetworkType::Mainnet, NetworkType::Testnet, NetworkType::Devnet, NetworkType::Simnet] {
-            let mut ms = MuHash::new();
-            for (outpoint, entry) in misaka_premine_utxos(net) {
-                ms.add_utxo(&outpoint, &entry);
-            }
-            let commitment = ms.finalize();
-            let rust = commitment.as_bytes().iter().map(|b| format!("0x{b:02x}")).collect::<Vec<_>>().join(", ");
-            println!("{net:?}_PREMINE_UTXO_COMMITMENT: Hash64::from_bytes([{rust}])");
-        }
-        // The PALW-RC net (testnet-12): premine with the public main wallet, no community set.
-        let mut ms = MuHash::new();
-        for (outpoint, entry) in genesis_premine_utxos_for(NetworkId::with_suffix(NetworkType::Testnet, 11)) {
-            ms.add_utxo(&outpoint, &entry);
-        }
-        let commitment = ms.finalize();
-        let rust = commitment.as_bytes().iter().map(|b| format!("0x{b:02x}")).collect::<Vec<_>>().join(", ");
-        println!("PALW_RC_UTXO_COMMITMENT: Hash64::from_bytes([{rust}])");
-        // testnet-11: premine ∪ community — the value TESTNET11_GENESIS.utxo_commitment pins.
-        let mut ms = MuHash::new();
-        for (outpoint, entry) in genesis_premine_utxos_for(NetworkId::with_suffix(NetworkType::Testnet, 11)) {
-            ms.add_utxo(&outpoint, &entry);
-        }
-        let commitment = ms.finalize();
-        let rust = commitment.as_bytes().iter().map(|b| format!("0x{b:02x}")).collect::<Vec<_>>().join(", ");
-        println!("TESTNET11_UTXO_COMMITMENT: Hash64::from_bytes([{rust}])");
-    }
-
-    /// The community table is exactly the operator's collected list: 9 UTXOs, 347M MSK, every
-    /// address a well-formed testnet-prefix single-key ML-DSA-87 P2PKH (the bech32 checksum in
-    /// `owner_payload` is what turns any transcription slip into a build failure instead of a
-    /// silently mis-locked allocation), every owner distinct — including distinct from all 41
-    /// premine owners — and the whole set confined to testnet-11.
+    /// The community table is exactly the operator's collected list as a UTXO set: 11 UTXOs,
+    /// 547M MSK, every address a well-formed testnet-prefix single-key ML-DSA-87 P2PKH (the
+    /// bech32 checksum in `owner_payload` is what turns any transcription slip into a build
+    /// failure instead of a silently mis-locked allocation), every owner distinct — including
+    /// distinct from every main wallet — and the whole set confined to testnet-11.
     #[test]
     fn t11_community_allocation_is_the_collected_list() {
         use kaspa_addresses::Prefix;
@@ -645,82 +567,41 @@ mod tests {
             assert_eq!(parsed.prefix, Prefix::Testnet, "{addr} must be a testnet address");
         }
 
-        // Distinct owners, and distinct from every premine owner.
+        // Distinct owners, and distinct from every main wallet.
         let mut owners: Vec<[u8; 64]> = TESTNET11_COMMUNITY_ALLOCATIONS.iter().map(|(a, _)| owner_payload(a)).collect();
-        for vault in VAULT_ADDRESSES {
-            owners.push(owner_payload(vault));
-        }
-        owners.push(owner_payload(main_address(NetworkType::Testnet)));
+        owners.push(owner_payload(MAINNET_MAIN_ADDRESS));
+        owners.push(owner_payload(TESTNET_MAIN_ADDRESS));
+        owners.push(owner_payload(PALW_PUBLIC_MAIN_ADDRESS));
         for i in 0..owners.len() {
             for j in (i + 1)..owners.len() {
                 assert_ne!(owners[i], owners[j], "owner {i} and {j} collide");
             }
         }
 
-        // Confinement: only testnet-11 carries the community set — and, since the PALW-RC network
-        // moved onto that suffix, its per-bond fee floats as well.
+        // Confinement: only testnet-11 carries the community set.
         let t11 = genesis_premine_utxos_for(NetworkId::with_suffix(NetworkType::Testnet, 11));
         assert_eq!(
             t11.len(),
-            VAULT_COUNT + 1 + TESTNET11_COMMUNITY_ALLOCATIONS.len() + crate::config::params::PALW_RC_GENESIS_BONDS.len(),
-            "t11 = 41 premine + one per community entrant + one float per RC bond"
+            2 * crate::config::params::PALW_RC_GENESIS_BONDS.len() + 1 + TESTNET11_COMMUNITY_ALLOCATIONS.len(),
+            "t11 = collateral + float per RC bond, the main wallet, and one per community entrant"
         );
         let t10 = genesis_premine_utxos_for(NetworkId::with_suffix(NetworkType::Testnet, 10));
-        assert_eq!(t10.len(), VAULT_COUNT + 1, "t10 keeps the running chain's exact set");
+        assert_eq!(t10.len(), 1, "t10 carries the main wallet alone");
         for net in [NetworkType::Mainnet, NetworkType::Devnet, NetworkType::Simnet] {
-            assert_eq!(genesis_premine_utxos_for(NetworkId::new(net)).len(), VAULT_COUNT + 1, "{net:?} carries no community set");
+            assert_eq!(genesis_premine_utxos_for(NetworkId::new(net)).len(), 1, "{net:?} carries no community set");
         }
     }
 
-    /// The premine is exactly 41 UTXOs (40 vaults × 0.1B + one main) on every network — 13B on
-    /// mainnet, 10B on the re-minted ones — each a 69-byte ML-DSA-87 P2PKH spendable from block 0.
-    ///
-    /// The two totals are asserted separately AND against the same constants the builder uses, so
-    /// a future change to either amount has to move this test rather than slip past it. The split
-    /// is per network because the premine feeds the genesis commitment: reducing it everywhere
-    /// would have re-genesised a live mainnet, which is not what the reduction was for.
+    /// The three main wallets are pairwise distinct keys, so no network's premine is spendable
+    /// by another custody domain's key.
     #[test]
-    fn premine_is_the_expected_split_on_every_network() {
-        for (net, expected_total, expected_main) in [
-            (NetworkType::Mainnet, 13_000_000_000 * SOMPI_PER_KASPA, MAIN_PREMINE_SOMPI),
-            (NetworkType::Testnet, 10_000_000_000 * SOMPI_PER_KASPA, TESTNET_MAIN_PREMINE_SOMPI),
-            (NetworkType::Devnet, 10_000_000_000 * SOMPI_PER_KASPA, TESTNET_MAIN_PREMINE_SOMPI),
-            (NetworkType::Simnet, 10_000_000_000 * SOMPI_PER_KASPA, TESTNET_MAIN_PREMINE_SOMPI),
-        ] {
-            let utxos = misaka_premine_utxos(net);
-            assert_eq!(utxos.len(), VAULT_COUNT + 1, "premine is 40 vaults + 1 main = 41 UTXOs");
-            let total: u64 = utxos.values().map(|e| e.amount).sum();
-            assert_eq!(total, expected_total, "{net:?} premine total");
-            assert_eq!(
-                total,
-                (VAULT_COUNT as u64) * VAULT_PREMINE_SOMPI + main_premine_sompi_for(net),
-                "the total is the constants the builder itself reads, not a number written twice"
-            );
-            let vaults = utxos.values().filter(|e| e.amount == VAULT_PREMINE_SOMPI).count();
-            let mains = utxos.values().filter(|e| e.amount == expected_main).count();
-            assert_eq!(vaults, VAULT_COUNT, "40 vault UTXOs of 0.1B");
-            assert_eq!(mains, 1, "one main UTXO at this network's amount");
-            for entry in utxos.values() {
-                assert!(!entry.is_coinbase, "premine must be non-coinbase (spendable from block 0)");
-                assert_eq!(entry.block_daa_score, 0);
-                assert_eq!(entry.script_public_key.script().len(), 69, "ML-DSA-87 P2PKH = 69 bytes");
-            }
-        }
-    }
-
-    /// All 41 owner payloads (40 vaults + the network's main wallet) are distinct, so
-    /// no two premine UTXOs collide on the same key.
-    #[test]
-    fn premine_owners_are_distinct() {
-        for net in [NetworkType::Mainnet, NetworkType::Testnet] {
-            let mut payloads: Vec<[u8; 64]> = VAULT_ADDRESSES.iter().map(|a| owner_payload(a)).collect();
-            payloads.push(owner_payload(main_address(net)));
-            for i in 0..payloads.len() {
-                for j in (i + 1)..payloads.len() {
-                    assert_ne!(payloads[i], payloads[j], "{net:?}: premine owner {i} and {j} collide");
-                }
-            }
-        }
+    fn the_three_main_wallets_are_distinct() {
+        let mainnet = owner_payload(MAINNET_MAIN_ADDRESS);
+        let claude = owner_payload(TESTNET_MAIN_ADDRESS);
+        let public = owner_payload(PALW_PUBLIC_MAIN_ADDRESS);
+        assert_ne!(mainnet, claude);
+        assert_ne!(mainnet, public);
+        assert_ne!(claude, public);
     }
 
     /// audit H-01: the mainnet premine must be spendable custody (not the all-zero
@@ -734,7 +615,7 @@ mod tests {
         assert!(!MAINNET_PREMINE_CEREMONY_PENDING, "ceremony is complete (custody addresses installed)");
     }
 
-    /// The testnet 9B main-wallet key is reproducible from [`TESTNET_MAIN_SEED`], so a
+    /// The testnet main-wallet key is reproducible from [`TESTNET_MAIN_SEED`], so a
     /// validator can be funded / stood up during testing by regenerating the key. Pins
     /// [`TESTNET_MAIN_ADDRESS`] to the seed (any drift fails the build).
     #[test]
@@ -754,6 +635,31 @@ mod tests {
             "TESTNET_MAIN_ADDRESS must match the key derived from TESTNET_MAIN_SEED"
         );
     }
+
+    /// Prints the per-network genesis `utxo_commitment`s to hardcode in `genesis.rs`.
+    /// Run:
+    /// `cargo test -p kaspa-consensus-core --lib config::premine::tests::print_premine_commitment -- --nocapture`
+    #[test]
+    fn print_premine_commitment() {
+        for net in [NetworkType::Mainnet, NetworkType::Testnet, NetworkType::Devnet, NetworkType::Simnet] {
+            let mut ms = MuHash::new();
+            for (outpoint, entry) in misaka_premine_utxos(net) {
+                ms.add_utxo(&outpoint, &entry);
+            }
+            let commitment = ms.finalize();
+            let rust = commitment.as_bytes().iter().map(|b| format!("0x{b:02x}")).collect::<Vec<_>>().join(", ");
+            println!("{net:?}_PREMINE_UTXO_COMMITMENT: Hash64::from_bytes([{rust}])");
+        }
+        // testnet-11: premine ∪ collateral ∪ floats ∪ community — the value
+        // TESTNET11_GENESIS.utxo_commitment pins.
+        let mut ms = MuHash::new();
+        for (outpoint, entry) in genesis_premine_utxos_for(NetworkId::with_suffix(NetworkType::Testnet, 11)) {
+            ms.add_utxo(&outpoint, &entry);
+        }
+        let commitment = ms.finalize();
+        let rust = commitment.as_bytes().iter().map(|b| format!("0x{b:02x}")).collect::<Vec<_>>().join(", ");
+        println!("TESTNET11_UTXO_COMMITMENT: Hash64::from_bytes([{rust}])");
+    }
 }
 
 #[cfg(test)]
@@ -765,7 +671,7 @@ mod float_probe {
     fn print_float_addresses() {
         for (i, card) in crate::config::params::PALW_RC_GENESIS_BONDS.iter().enumerate() {
             let addr = Address::new(kaspa_addresses::Prefix::Testnet, Version::PubKeyHashMlDsa87, &card.payout_payload);
-            println!("float {} -> {addr}", VAULT_COUNT + 1 + i);
+            println!("float {} -> {addr}", MAIN_PREMINE_INDEX + 1 + i as u32);
         }
     }
 }

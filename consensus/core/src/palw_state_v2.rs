@@ -179,9 +179,12 @@ use std::collections::{BTreeMap, BTreeSet};
 /// moving it is a coordinated upgrade — which for testnet-11 means the re-mint the audit already
 /// called for.
 ///
-/// **Version 13 (2026-08-30, bond economics).** Two rules moved, and this time the CLAIM schema
-/// moved with them:
+/// **Version 13 (2026-08-30) — ONE coordinated bump carrying two branches' rules.** Both lines
+/// bumped 12 → 13 independently on the same day and neither 13 was ever deployed, so the merge
+/// keeps a single 13 whose meaning is the UNION (the fingerprint is a function of the whole
+/// ruleset, not a sum of diffs — re-derived once at the end of the merge, as always):
 ///
+/// *Bond economics:*
 /// * A claim whose panel concludes nothing is revived once and binds a second panel anchored on
 ///   the sweep (`rebound_daa`), instead of voiding against a producer no seat accused. Claims that
 ///   used to be `Voided { ReceiptTimeout }` are now live for another bind window, so two builds
@@ -190,6 +193,11 @@ use std::collections::{BTreeMap, BTreeSet};
 /// * Admission refuses an attempt whose collateral does not back the reward it would escrow
 ///   (`min_slash_permille_of_escrow`). Different attempts are admitted, so different blocks carry
 ///   claims and different coinbases are valid. It ships dormant, but the parameter is hashed.
+///
+/// *The liveness doctrine (ADR-0060/0061):*
+/// * A V2 network accepts bondless algo-3 heartbeat blocks (`palw_heartbeat_v1`) — new block
+///   validity (slot rule, lane retarget, zero-subsidy coinbase) and new fork-choice arithmetic
+///   (ε work) — and its genesis may seat zero bonds (`PanelCannotBeSeated` retired).
 ///
 /// The claim record gains a field, so unlike 12 this is not root-schema-neutral: an old build
 /// cannot decode this state at all, which is the honest failure and the reason the number moves.
@@ -10172,7 +10180,7 @@ pub(crate) mod tests {
             })
         }
         spec_hash(b"misaka-palw/state-v2/state-root/v1", |s| {
-            s.update(&13u16.to_le_bytes()); // version_le(2) = 13, restated from the ADR (bond economics: redraw + escrow backing)
+            s.update(&13u16.to_le_bytes()); // version_le(2) = 13, restated from the ADR (the union bump: bond economics + ADR-0060/0061)
             s.update(spec_collection_root(b"bonds", &c.bonds).as_byte_slice());
             s.update(spec_collection_root(b"reserved_exposure", &c.reserved_exposure).as_byte_slice());
             s.update(spec_collection_root(b"classes", &c.classes).as_byte_slice());
@@ -10472,10 +10480,12 @@ pub(crate) mod tests {
     /// version is the only carrier for a semantics-only change, so these constants moved with it —
     /// which is the rule working, not a nuisance.
     ///
-    /// A fourth, for the bond-economics pass: 12 → 13, and this one DID change the schema —
-    /// `PalwClaimStateV2` gained `rebound_daa`, so the inhabited root moves for the record shape as
-    /// well as for the version. The empty root moves for the version alone, which is exactly the
-    /// pair of signals these two constants exist to separate.
+    /// A fourth, for the UNION 13 (bond economics + ADR-0060/0061, merged 2026-08-30): the
+    /// bond-economics half DID change the schema — `PalwClaimStateV2` gained `rebound_daa`, so
+    /// the inhabited root moves for the record shape as well as for the version; the liveness
+    /// half (heartbeat lane, zero-seat gate) changes validity rules with an unchanged root
+    /// schema and rides the same number. The empty root moves for the version alone, which is
+    /// exactly the pair of signals these two constants exist to separate.
     #[test]
     fn the_version_13_state_root_golden_vectors() {
         assert_eq!(

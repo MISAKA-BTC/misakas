@@ -758,8 +758,16 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         // exists to skip it. Anything else non-empty and unparseable is still an error, because a
         // fat-fingered class id must not read as "this chain does not have that class".
         let session = self.consensus_manager.consensus().unguarded_session();
-        let locked_bond_outpoints: Vec<String> =
-            session.palw_locked_bond_outpoints_v2().into_iter().map(|o| format!("{}:{}", o.transaction_id, o.index)).collect();
+        // Consensus-locked collateral AND this node's own reserved funding outpoints, in one list
+        // (audit3 H3 + H12). A wallet that reads only the first spends the panel's fee outpoint.
+        let locked_bond_outpoints: Vec<String> = session
+            .palw_locked_bond_outpoints_v2()
+            .into_iter()
+            .chain(self.flow_context.palw_reserved_outpoints())
+            .map(|o| format!("{}:{}", o.transaction_id, o.index))
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
         if request.class_id.is_empty() {
             return Ok(GetPalwProducerFactsResponse {
                 available: !locked_bond_outpoints.is_empty(),

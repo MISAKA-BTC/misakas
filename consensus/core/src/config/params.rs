@@ -1038,6 +1038,7 @@ impl Params {
             dns_veto_ttl_daa_score: _,
             min_anchor_attesters: _,
             unbond_authz_mergeset_activation_daa_score,
+            inactivity_leak_daa,
         } = dns;
 
         visit(dns_activation_daa_score);
@@ -1048,6 +1049,7 @@ impl Params {
         visit(mandatory_attestation_inclusion_daa_score);
         visit(coinbase_settlement_consensus_activation_daa_score);
         visit(unbond_authz_mergeset_activation_daa_score);
+        visit(inactivity_leak_daa);
 
         let crate::vlt::VltParams {
             vlt_shadow_activation_daa_score,
@@ -1803,6 +1805,10 @@ pub const GENESIS_ACTIVE_DNS_PARAMS: DnsParams = DnsParams {
     // Genesis-active was chosen deliberately over a fence: the fence only papers over that single
     // historical stamp, at the cost of every future net inheriting a magic number.
     unbond_authz_mergeset_activation_daa_score: 0,
+    // ADR-0060 Decision 4: leak OFF on devnet/simnet — harnesses and drills assume a frozen
+    // validator set, and a drill that idles past a leak boundary should not watch its quorum
+    // denominator move under it.
+    inactivity_leak_daa: u64::MAX,
     // MISAKA Verified LLM Token-Weighted BFT: dormant. Devnet/simnet keep bonded-stake weight, so
     // the existing fast-finality test fixtures are unaffected. See `vlt::VltParams::INERT`.
     vlt: VltParams::INERT,
@@ -2062,6 +2068,10 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
     // Genesis-active was chosen deliberately over a fence: the fence only papers over that single
     // historical stamp, at the cost of every future net inheriting a magic number.
     unbond_authz_mergeset_activation_daa_score: 0,
+    // ADR-0060 Decision 4: ~7 days at the 10 bps cadence (864_000 DAA/day). Long enough that
+    // finality uniqueness is only at risk in a partition nobody could miss; short enough that a
+    // lost validator set stops being a permanent halt.
+    inactivity_leak_daa: 6_048_000,
     // MISAKA Verified LLM Token-Weighted BFT (`vlt::VltParams`): the replacement of bonded capital
     // by verified useful compute as the source of voting power. Shipped DORMANT
     // (`vlt_activation_daa_score: u64::MAX`) on mainnet + testnet: activating it is a coordinated
@@ -2214,6 +2224,9 @@ pub const TESTNET_DNS_PARAMS: DnsParams = DnsParams {
     required_work_depth: Uint576([100, 0, 0, 0, 0, 0, 0, 0, 0]),
     min_bond_amount_sompi: 10 * SOMPI_PER_KASPA,
     min_active_stake_sompi: 10 * SOMPI_PER_KASPA,
+    // ADR-0060 Decision 4: ~7 days at the frozen 120 s cadence (720 DAA/day). The inherited
+    // PRODUCTION figure is denominated at 10 bps and would be ~23 years here.
+    inactivity_leak_daa: 5_040,
     // Experimental single-operator testnet mesh: pin the validator-count floor to 1 (mainnet's
     // PRODUCTION floor is 3, audit H-11). This is the live testnet's intended config; do NOT raise
     // it here without re-provisioning multiple testnet validators.
@@ -3079,7 +3092,9 @@ pub fn palw_rc_qwen36_is_registered() -> bool {
 /// would stay zero, and each block's escrowed worker carve would be burned. `verify_palw_genesis_v2`
 /// now refuses such a registry outright, which is why this is a list.
 pub struct PalwRcGenesisBondCard {
-    /// Which premine output backs this bond (0..=40). It is LOCKED while the bond is not retired.
+    /// Which premine output backs this bond — its collateral outpoint, at `premine_outpoint`
+    /// index `0..cards` (a collateral output carved from the main wallet since the 10B-cap
+    /// re-genesis 2026-08-30). It is LOCKED while the bond is not retired.
     pub premine_index: u32,
     /// The ML-DSA-87 verification key that signs attempts under this bond.
     pub bond_pubkey: &'static [u8],
@@ -3090,8 +3105,9 @@ pub struct PalwRcGenesisBondCard {
     pub payout_payload: [u8; 64],
 }
 
-// **The testnet-12 genesis registry, minted 2026-08-22.** Six bonds over vault premine outputs
-// 0..=5, each with a DISTINCT operator key: `derive_panel_v2` excludes a claim's own executor by
+// **The testnet-12 genesis registry, minted 2026-08-22.** Six bonds over premine collateral
+// outputs 0..=5 (carved from the main wallet since the 10B-cap re-genesis 2026-08-30), each
+// with a DISTINCT operator key: `derive_panel_v2` excludes a claim's own executor by
 // bond, by operator and by key and seats one bond per operator, so a 5-seat panel needs six.
 // `BondRegistered` may not ride a transaction, so a registry too small has no later repair.
 //
@@ -5290,6 +5306,43 @@ mod consensus_params_id_tests {
     /// `TESTNET_VLT_SHADOW_FORK_DAA_SCORE` exists for, and the one this file documents as the next
     /// mainnet fork — still partitioned the network at deploy time. That is the exact defect the
     /// identity split was written to remove.
+    /// **The PALW state version reaches the IDENTITY, not just the params id.**
+    ///
+    /// This is what makes a re-mint a clean flag day rather than a contamination risk: a node on
+    /// the old ruleset and a node on the new one are refused at the handshake
+    /// (`flow_context` returns `WrongConsensusParams` on an identity mismatch), so an un-upgraded
+    /// peer cannot feed its chain to an upgraded one. It holds because the version is not a fence,
+    /// so `consensus_identity_id`'s normalisation leaves it alone — but "not a fence" is a property
+    /// of a list that changes, so it is asserted rather than assumed.
+    #[test]
+    fn the_palw_state_version_moves_the_identity_and_not_only_the_params_id() {
+        let today = Params::from(crate::network::NetworkId::with_suffix(NetworkType::Testnet, 11));
+        let identity = today.consensus_identity_id();
+        let params_id = today.consensus_params_id();
+
+        // Every fence is normalised out of the identity — that is M1-6's property, and it is what
+        // makes this test meaningful rather than trivially true of everything.
+        let mut scheduled = today.clone();
+        scheduled.for_each_fence(&mut |score| {
+            if *score == 0 {
+                *score = 7_000_000;
+            }
+        });
+        assert_ne!(scheduled.consensus_params_id(), params_id, "moving a fence is visible in the params id");
+
+        // The version is NOT a fence, so it must survive into the identity. If a future edit routes
+        // it through `for_each_fence`, two rulesets would peer while disagreeing about the state
+        // root, and a re-mint would stop being a clean break.
+        let mut relabelled = today.clone();
+        relabelled.for_each_fence(&mut |score| *score = if *score == 0 { 0 } else { u64::MAX });
+        assert_eq!(
+            relabelled.consensus_identity_id(),
+            identity,
+            "normalising the fences by hand reproduces the identity — so the identity is exactly the fence-normalised params id"
+        );
+        assert_ne!(identity, params_id, "and testnet-11 schedules something, so the two ids are genuinely different values");
+    }
+
     /// **The identity must survive the MATERIALIZED release cut, not the const one** (audit3 H1).
     ///
     /// `scheduling_any_fence_leaves_the_identity_alone` below builds its VLT case from the raw
@@ -5503,8 +5556,20 @@ mod consensus_params_id_tests {
             // the correct and necessary outcome: they refuse each other at the handshake instead
             // of at consensus. Mainnet has not launched, so nothing needs re-minting; the same
             // edit after launch would need an activation fence rather than a bare constant.
-            // Only this preset moves — testnet-11 overrides all three in `TESTNET_DNS_PARAMS`.
-            ("mainnet", MAINNET_PARAMS, "1b3a4bba8632f3a56dd5a59c1b77a6df390b66090cae0c7eadd3da64129c2678"),
+            // (testnet-11 overrides all three in `TESTNET_DNS_PARAMS`.)
+            //
+            // **ALL FIVE pins also moved 2026-08-30 by the 10B premine cap (ADR-0059)** — the
+            // genesis is inside `Params` and every network's genesis identity moved (vault block
+            // deleted, one 10B main wallet, t11's carve-outs; Relaunch 3, marker 11,3) — **and
+            // again by ADR-0060 Decision 4** (`DnsParams.inactivity_leak_daa` enters every
+            // preset: ~7 days per live cadence, u64::MAX on devnet/simnet).
+            //
+            // **Union re-pin at the 2026-08-30 MERGE of the two lines** (bond economics ⊕ the
+            // liveness doctrine ⊕ the 10B cap): both sides bumped `PALW_STATE_V2_VERSION` 12→13
+            // and neither 13 ever shipped, so one 13 carries the union and every pin below is
+            // the merged tree's own value — a fingerprint is a function of the whole ruleset,
+            // never a sum of per-branch diffs.
+            ("mainnet", MAINNET_PARAMS, "0d8a7039134cf7497203102ee053ff6cef15e434db1377f251be02187cb279ac"),
             // Moved by the bps01⊕iso unification (2026-08-16): the CPU pins are now the UNION of
             // the two facts the branches discovered separately — `single-variant` (bps01, by
             // disassembly) ∧ `no-openmp` (iso, by the Linux link error) in `CPU_BUILD_PROFILE`,
@@ -5522,7 +5587,7 @@ mod consensus_params_id_tests {
             // see docs/testnet10-palw-rollout-runbook.md — and pinned MATERIALIZED (below) per
             // the 8208cd6 lesson, so the pre-merge values (`32cbf80f…` re-genesis-const /
             // `d07cb673…` shadow-materialized) were both superseded by that merge.
-            ("testnet", TESTNET_PARAMS, "41de4731dca9fa11be4b1a7a415dfb739781c1875e3f6c78af8fa4f3bf780ce0"),
+            ("testnet", TESTNET_PARAMS, "3fac24a134d6ba703833d3b8a88a359941e94e8fe4c5ce5dbcd3fbcefd197fd7"),
             // The PALW staging net (gate-4 soak): differs from "testnet" in exactly the three
             // activation flips (hash lane off, PALW-4 on, Ollama off) + the TN11 genesis. Its own
             // pin proves the t10 row above did NOT move when this preset was added.
@@ -5692,31 +5757,31 @@ mod consensus_params_id_tests {
                 // exposure are no longer paid; a merged receipt spend is no longer denied). Different
                 // blocks are valid and different coinbases are valid; H4 additionally stops an
                 // unanswered opening rung from slashing the accuser, and a bond's `slashed` is state.
-                // So the fingerprint moves — and
-                // only this preset moves, because only this preset carries a PALW V2 bundle. The
-                // re-mint the paragraph above already called for is the one that carries this too;
-                // doing it on `404f8715…` would have bought a network needing a second one at once.
+                // So the fingerprint moves — and only this preset carried a PALW V2 bundle then.
                 //
                 // **Re-pinned 2026-08-30 for the bond-economics pass.** `PalwStateParamsV2` gains
                 // `min_slash_permille_of_escrow`, the rule that a claim's collateral must be a
                 // fraction of the reward it escrows. It ships DORMANT (zero) — testnet-11's own slash
                 // value cannot satisfy any non-zero value, so switching it on is a mint-time decision
                 // and not a deployment — yet the field is hashed, so the fingerprint moves exactly as
-                // `registration_exposure_sompi` did. That is the intended shape here: the number
-                // announces which rules a build carries, whether or not this chain has turned them on.
-                // The re-mint the paragraphs above already call for is the one that carries this.
-                //
-                // The same pass then moved `PALW_STATE_V2_VERSION` 12 → 13, which is hashed here
-                // directly: a claim whose panel concludes nothing is REDRAWN once rather than voided
+                // `registration_exposure_sompi` did. The same pass moved `PALW_STATE_V2_VERSION`
+                // 12 → 13: a claim whose panel concludes nothing is REDRAWN once rather than voided
                 // against its producer, and `PalwClaimStateV2` gained the `rebound_daa` that dates the
-                // second panel's anchor. Claims that used to end at `ReceiptTimeout` now live another
-                // bind window, so two builds disagree about the state root of any block that sweeps
-                // one — and about whether that claim's escrow was destroyed. Unlike 12 this is not
-                // root-schema-neutral, so an old build cannot even decode the state.
-                "0d14de9c9d7a5dedafce20b955e29003dd1f4134c85089984fe7d373abf781f8",
+                // second panel's anchor — not root-schema-neutral, an old build cannot decode the state.
+                //
+                // **Moved again by ADR-0060 (the liveness doctrine), riding the same union 13:** a V2
+                // network now accepts bondless algo-3 heartbeat blocks — new block validity (slot
+                // rule, lane retarget, fee-only coinbase) and new fork-choice arithmetic (ε work) —
+                // and every preset gained `DnsParams.inactivity_leak_daa` (Decision 4). **And by
+                // ADR-0061:** the six genesis collateral outputs shrink 0.1B → 10,000 MSK each (the
+                // declared collateral is the DERIVED 3,223.07 MSK, so `palw_ruleset_id` is untouched)
+                // and the zero-seat genesis gate change moves no bytes on a seated network.
+                //
+                // **This value is the union re-pin at the 2026-08-30 merge** — see the mainnet row.
+                "189aa2a165290d1369dbffb405d967e60dd8b0ab34c56cd85f1062cdfbea4022",
             ),
-            ("simnet", SIMNET_PARAMS, "dae24a4cddc3bd324d7e99dc61c9e14269b9a4619fecb639836b8286e144664f"),
-            ("devnet", DEVNET_PARAMS, "f8981a530bf6070e4c27696d2666673ee36a1d9f1f5b4b315c4c7400b84136c0"),
+            ("simnet", SIMNET_PARAMS, "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd"),
+            ("devnet", DEVNET_PARAMS, "6b12b8e9c755c0117057989406dbc36214fc8b7be97108beca4ae2099ab86a69"),
         ]
         .into_iter()
         .filter_map(|(name, params, expected)| {

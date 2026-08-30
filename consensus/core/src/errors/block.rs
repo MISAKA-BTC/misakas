@@ -130,6 +130,20 @@ pub enum RuleError {
     #[error("block {0} difficulty of {1} is not the expected value of {2}")]
     UnexpectedDifficulty(BlockHash, u32, u32),
 
+    /// ADR-0060 Decision 1: a heartbeat block inside the slot rule's interval — the youngest
+    /// heartbeat this POV's window holds is too recent for another.
+    #[error(
+        "heartbeat block {0} at timestamp {1} is inside the slot interval: the window's youngest heartbeat is at {2} and the current interval is {3} ms (ADR-0060)"
+    )]
+    HeartbeatTooEarly(BlockHash, u64, u64, u64),
+
+    /// A header whose lane does not commit PALW state carries a non-zero `palw_state_root`. The
+    /// field is hash-invisible on such a header (see `hashing::header::write_header_preimage`),
+    /// so non-empty bytes there would be block-hash malleability — the
+    /// `NonPalwHeaderCarriesPalwCommitment` class, reached through the sibling field.
+    #[error("header (algo_id = {0}) carries a non-zero palw_state_root its lane does not commit; must be zero")]
+    UncommittedPalwStateRoot(u8),
+
     #[error("block timestamp of {0} is not after expected {1}")]
     TimeTooOld(u64, u64),
 

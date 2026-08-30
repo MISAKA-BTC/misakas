@@ -115,12 +115,11 @@ pub struct PalwProducerConfig {
 
 pub struct PalwProducerService {
     config: PalwProducerConfig,
-    /// Decoded once at construction. Digest-checked by the decoder, so anything in here is an
-    /// artifact that hashes to what its own file claims; whether it is the artifact the CHAIN
-    /// registered is decided per block, against the producer facts.
-    class_artifacts: Vec<std::sync::Arc<misaka_palw_base0::artifact::Base0ArtifactV1>>,
-    /// Memory-mapped Qwen3.6 artifacts, opened and rooted once at startup.
-    qwen36_artifacts: Vec<(kaspa_hashes::Hash64, std::sync::Arc<misaka_palw_base0::qwen36::Qwen36ArtifactV1>)>,
+    /// Loaded once at construction, through the SDK — each file by its own container's rules
+    /// (digest-checked whole for the dense tier, mapped and rooted for the Qwen3.6 tier); whether
+    /// a holding is the artifact the CHAIN registered is decided per block, against the producer
+    /// facts.
+    class_holdings: Vec<misaka_palw_sdk::PalwLoadedArtifactV1>,
     consensus_manager: Arc<ConsensusManager>,
     mining_manager: MiningManagerProxy,
     flow_context: Arc<FlowContext>,
@@ -197,37 +196,23 @@ impl PalwProducerService {
                 None
             }
         };
-        // Loaded once, and each file is refused loudly rather than skipped quietly: an operator
-        // who passed `--palw-class-artifact` meant this node to produce for that class, and a node
-        // that silently fell back to the floor would look like a working producer that never
-        // touches the class they deployed 1.7 GiB for.
-        let mut class_artifacts = Vec::new();
-        let mut qwen36_artifacts = Vec::new();
+        // Loaded once — through the SDK, each file by its own container's magic — and each file
+        // is refused loudly rather than skipped quietly: an operator who passed
+        // `--palw-class-artifact` meant this node to produce for that class, and a node that
+        // silently fell back to the floor would look like a working producer that never touches
+        // the class they deployed 1.7 GiB for.
+        let sdk = misaka_palw_sdk::PalwClassSdk::builtin_v1(config.court, config.network_id.as_bytes().to_vec());
+        let mut class_holdings = Vec::new();
         for path in &config.class_artifacts {
-            match crate::palw_backends::load_class_artifact(path) {
-                Ok(crate::palw_backends::LoadedClassArtifact::Dense(artifact)) => {
-                    info!(
-                        "[{PALW_PRODUCER}] loaded class artifact {} ({} layers, vocab {}, eps_q {})",
-                        path.display(),
-                        artifact.shape.n_layers,
-                        artifact.shape.vocab,
-                        artifact.shape.eps_q
-                    );
-                    class_artifacts.push(std::sync::Arc::new(*artifact));
-                }
-                Ok(crate::palw_backends::LoadedClassArtifact::Qwen36 { computed_root, artifact }) => {
-                    info!(
-                        "[{PALW_PRODUCER}] mapped Qwen3.6 artifact {} ({} layers, {:.2} GiB, computed root {computed_root})",
-                        path.display(),
-                        artifact.shape.n_layers(),
-                        artifact.weight_bytes() as f64 / (1u64 << 30) as f64,
-                    );
-                    qwen36_artifacts.push((computed_root, artifact));
+            match sdk.load_artifact(path) {
+                Ok(holding) => {
+                    info!("[{PALW_PRODUCER}] {}", holding.summary);
+                    class_holdings.push(holding);
                 }
                 Err(err) => warn!("[{PALW_PRODUCER}] class artifact {} is unusable: {err}", path.display()),
             }
         }
-        Self { config, consensus_manager, mining_manager, flow_context, keypair, bond, miner_data, class_artifacts, qwen36_artifacts }
+        Self { config, consensus_manager, mining_manager, flow_context, keypair, bond, miner_data, class_holdings }
     }
 
     /// **Keep what the attempt promises to keep.**
@@ -262,8 +247,7 @@ impl PalwProducerService {
     fn backends(&self) -> crate::palw_backends::PalwBackendRegistry {
         crate::palw_backends::PalwBackendRegistry::new(
             self.config.court,
-            self.class_artifacts.clone(),
-            self.qwen36_artifacts.clone(),
+            self.class_holdings.clone(),
             self.config.network_id.as_bytes().to_vec(),
         )
     }

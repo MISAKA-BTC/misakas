@@ -1,0 +1,19 @@
+[package]
+name = "misaka-palw-sdk"
+description = "The one interface every PALW model class passes through: lineage contract, class ledger, artifact loading, registration candidates, admission preflight, and backend resolution"
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+kaspa-consensus-core.workspace = true
+kaspa-hashes.workspace = true
+misaka-palw-base0.workspace = true
+
+[[bin]]
+name = "palw-class"
+path = "src/bin/palw-class.rs"

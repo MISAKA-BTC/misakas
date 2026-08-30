@@ -40,15 +40,19 @@ that changed.
 | a model | **no.** The default class is the integer floor; see §5 |
 
 `--netsuffix=11`, P2P **26311**, RPC **26312**. DNS seeding is live, so no `--addpeer` is needed
-(fallback entry nodes: `169.58.232.113:26311`, `169.58.232.114:26311`, `169.58.39.220:26311`).
+(fallback entry nodes: `169.58.232.113:26311`, `169.58.39.220:26311`, `5.104.81.23:26311`.
+`169.58.232.114` was withdrawn from the network on 2026-08-29 and no longer answers.)
 A node on the right chain logs
 
 ```
-Consensus params fingerprint: 15bab795442ec3efc3a58e02dd9c7a6f3015ff0634bc4a50a7af589338857ad0 (network testnet-11)
+Consensus params fingerprint: 17bdff18b08ed26c1ad8051a2a20e5d6d3e2022fa8204ff6cadee94a20bb39c5 (network testnet-11)
 ```
 
-(Identity as of the 2026-08-27 re-mint for ADR-0058. If you joined an earlier testnet-11, wipe the
-appdir; the old chain is archived, not continued.)
+(Identity as of the **2026-08-30 re-mint** for the 10B premine cap, ADR-0059 — genesis
+`d2789338…`, coinbase marker `11,3`. The previous value was `95265934…` (2026-08-29), and
+`15bab795…` before that; a node still announcing either is on an old chain and every upgraded
+node will refuse it at the handshake. If you joined an earlier testnet-11, wipe the appdir;
+the old chain is archived, not continued.)
 
 A different fingerprint means a different ruleset, and the two will refuse each other at handshake.
 Do not treat that as a connectivity problem.
