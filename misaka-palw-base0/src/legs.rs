@@ -841,6 +841,47 @@ mod a16_row_tests {
             .expect("the derived store is sorted and unique")
     }
 
+    /// **The serializer follows the map's declared width, and refuses rather than narrowing.**
+    ///
+    /// Three cases, because the third is the one that decides whether this family can ever commit
+    /// a sound checkpoint: a one-byte map over a row that does not fit must produce NOTHING. The
+    /// tempting implementation — the one `KvCache::state_chunk_bytes` uses correctly for its own
+    /// `i8` cache — would produce bytes here, pass every downstream check, and commit a state the
+    /// producer never held.
+    #[test]
+    fn a16_state_chunks_follow_the_declared_width_and_refuse_what_does_not_fit() {
+        use kaspa_consensus_core::palw_state_chunk_map::{PalwStateChunkEntryV1, PalwStateChunkKindV1};
+
+        let artifact = artifact();
+        let engine = A16Engine::new(&artifact).expect("an A16 class");
+        let mut cache = A16Cache::new(artifact.shape.n_layers);
+        engine.forward_token_traced(&mut cache, 5, 0).expect("one position runs");
+        let row_len = cache.key_rows_for_test()[0].len();
+
+        let entry = |row_bytes: u32| PalwStateChunkEntryV1 {
+            kind: PalwStateChunkKindV1::Key,
+            attn_layer: 0,
+            position_start: 0,
+            position_count: 1,
+            row_bytes,
+        };
+
+        // Four bytes per element: the width this cache actually has.
+        let wide = cache.state_chunk_bytes_v1(&entry((row_len * 4) as u32)).expect("an i32 row encodes at four bytes each");
+        assert_eq!(wide.len(), row_len * 4);
+        let first: i32 = i32::from_le_bytes(wide[..4].try_into().expect("four bytes"));
+        assert_eq!(first, cache.key_rows_for_test()[0][0], "and it round-trips, little-endian");
+
+        // One byte per element — the map this class declares — against a state that does not fit.
+        assert!(
+            cache.state_chunk_bytes_v1(&entry(row_len as u32)).is_none(),
+            "a row with values outside i8 must be refused under a one-byte map, never truncated"
+        );
+
+        // A width that is neither belongs to some other class's map.
+        assert!(cache.state_chunk_bytes_v1(&entry((row_len * 2) as u32)).is_none());
+    }
+
     /// **The A16 class registers a checkpoint map that cannot describe its own state.**
     ///
     /// `integer_kv_state_geometry_v1` derives `row_bytes = attn_kv_heads × attn_head_dim` — ONE
