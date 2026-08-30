@@ -313,7 +313,8 @@ fn testnet11_genesis_utxos(net: NetworkId) -> UtxoCollection {
     let cards = crate::config::params::PALW_RC_GENESIS_BONDS;
     let main_spk = crate::dns_finality::p2pkh_mldsa87_spk(&owner_payload(main_address_for(net)));
 
-    let mut utxos: Vec<(TransactionOutpoint, UtxoEntry)> = Vec::with_capacity(2 * cards.len() + TESTNET11_COMMUNITY_ALLOCATIONS.len() + 1);
+    let mut utxos: Vec<(TransactionOutpoint, UtxoEntry)> =
+        Vec::with_capacity(2 * cards.len() + TESTNET11_COMMUNITY_ALLOCATIONS.len() + 1);
     let mut carved: u64 = 0;
 
     // Genesis-bond collateral, at each card's DECLARED index (the outpoint IS the bond's
@@ -329,7 +330,10 @@ fn testnet11_genesis_utxos(net: NetworkId) -> UtxoCollection {
     // Per-bond fee floats, after the main wallet's index, at each bond's own payout key.
     for (i, card) in cards.iter().enumerate() {
         let script_public_key = crate::dns_finality::p2pkh_mldsa87_spk(&card.payout_payload);
-        utxos.push((premine_outpoint(MAIN_PREMINE_INDEX + 1 + i as u32), premine_entry(PALW_RC_BOND_FEE_FLOAT_SOMPI, script_public_key)));
+        utxos.push((
+            premine_outpoint(MAIN_PREMINE_INDEX + 1 + i as u32),
+            premine_entry(PALW_RC_BOND_FEE_FLOAT_SOMPI, script_public_key),
+        ));
         carved = carved.checked_add(PALW_RC_BOND_FEE_FLOAT_SOMPI).expect("floats cannot overflow");
     }
 

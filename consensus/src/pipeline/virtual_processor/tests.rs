@@ -2612,7 +2612,8 @@ async fn the_pruning_point_witness_is_the_selected_chain_child_not_a_side_block(
         let mut cur = tip;
         while cur != point {
             let (_, delta) = store.delta_of(cur).expect("every chain block has a delta");
-            st = kaspa_consensus_core::palw_state_v2::revert_delta_v2(&st, &delta, &bundle.state).expect("reverting walks back one block");
+            st = kaspa_consensus_core::palw_state_v2::revert_delta_v2(&st, &delta, &bundle.state)
+                .expect("reverting walks back one block");
             cur = vp.ghostdag_store.get_selected_parent(cur).expect("selected parent");
         }
         st
@@ -8812,7 +8813,9 @@ async fn palw_rc_qwen36_counts_merged_work() {
     // 4. The boundary paid: the share stepped up off merged production alone.
     let qwen_share = share_of(&ctx, qwen_class_id).expect("the entrant is in the table");
     let base_share = share_of(&ctx, base_class_id).expect("the floor is in the table");
-    eprintln!("after one epoch of MERGED-ONLY production: QWEN36 {qwen_share} permille (from {opening_share}), BASE-0 {base_share} permille");
+    eprintln!(
+        "after one epoch of MERGED-ONLY production: QWEN36 {qwen_share} permille (from {opening_share}), BASE-0 {base_share} permille"
+    );
     let step = (u32::from(opening_share) * 250 / 1000).max(1) as u16;
     assert_eq!(qwen_share, opening_share + step, "it filled its budget from the anticone, so it took a step from the floor");
     assert_eq!(qwen_share + base_share, 1000, "and the denominator is conserved");

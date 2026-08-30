@@ -262,10 +262,7 @@ fn main() {
         println!("DERIVE public values and prints nothing secret. It mints no key: the whole point of");
         println!("a bond is that somebody holds one.");
         println!();
-        println!(
-            "LICENSING needs {} DISTINCT operators (a 5-seat panel plus the executor it excludes); a smaller",
-            min_bonds()
-        );
+        println!("LICENSING needs {} DISTINCT operators (a 5-seat panel plus the executor it excludes); a smaller", min_bonds());
         println!("— even empty — registry is a valid genesis since ADR-0061: bonds register on the chain,");
         println!("riding the heartbeat lane, and licensing starts when the sixth operator arrives.");
         return;

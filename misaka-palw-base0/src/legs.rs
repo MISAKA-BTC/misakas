@@ -503,6 +503,61 @@ impl Base0CheckpointCaptureV1 {
 /// Everything here is derived from the capture and the job: the step leg's root is the capture's,
 /// the checkpoint leg is the empty one this class's single-call jobs have, and the execution root
 /// is the composition. What a caller supplies is the two roots this module does not own — the
+
+/// **The two derived leg roots, in one place.**
+///
+/// Neither is a value the binding stores: `PalwStepBindingV2` carries the COMPONENTS — the merkle
+/// roots, the counts, the profiles — and `committed_execution_root` is built from the two roots
+/// derived here. A caller that needed them (the free-prompt lane needs both by name) would
+/// otherwise re-derive them from the components, and a re-derivation that drifted by one argument
+/// would produce an execution root the court recomputes differently: an honest producer,
+/// unconvictable and unpayable. So the derivation exists once and both callers take it.
+#[allow(clippy::too_many_arguments)]
+fn leg_roots_v1(
+    context_hash: &Hash64,
+    profile_hash: &Hash64,
+    checkpoint_profile_hash: &Hash64,
+    state_chunk_map_id: &Hash64,
+    decode_calls: u32,
+    checkpoint_count: u32,
+    checkpoint_merkle_root: &Hash64,
+    step_leaf_count: u64,
+    step_merkle_root: &Hash64,
+) -> (Hash64, Hash64) {
+    use kaspa_consensus_core::palw_step_leg::{checkpoint_leg_root_v2, step_leg_root_v1};
+    (
+        checkpoint_leg_root_v2(
+            context_hash,
+            checkpoint_profile_hash,
+            state_chunk_map_id,
+            decode_calls,
+            checkpoint_count,
+            checkpoint_merkle_root,
+        ),
+        step_leg_root_v1(context_hash, profile_hash, step_leaf_count, step_merkle_root),
+    )
+}
+
+/// The same two roots, read back off a finished binding — what the free-prompt lane commits as
+/// `PalwFpRunFactsV3`'s checkpoint and step legs.
+///
+/// `decode_calls` is recovered the way the builder computes it, from the context's own decode
+/// count, so this cannot disagree with the binding it was handed.
+pub fn base0_leg_roots_from_binding_v1(binding: &kaspa_consensus_core::palw_step_leg::PalwStepBindingV2) -> (Hash64, Hash64) {
+    let context_hash = binding.job_context.context_hash();
+    leg_roots_v1(
+        &context_hash,
+        &binding.shape_profile.shape_profile_id(),
+        &binding.checkpoint_profile.profile_hash(),
+        &binding.state_chunk_map_id,
+        binding.job_context.exact_decode_tokens.saturating_sub(1),
+        binding.checkpoint_count,
+        &binding.checkpoint_merkle_root,
+        binding.step_leaf_count,
+        &binding.step_merkle_root,
+    )
+}
+
 /// logits trace and the activation leg.
 pub fn base0_binding_from_capture_v1(
     profile: &PalwShapeProfileV3,
@@ -546,15 +601,17 @@ pub fn base0_binding_from_capture_v1(
     let checkpoint_merkle_root = checkpoints.merkle_root;
     debug_assert_eq!(checkpoint_count == 0, checkpoint_merkle_root == checkpoint_empty_root_v2(&context_hash));
     let checkpoint_profile_hash = checkpoint_profile.profile_hash();
-    let checkpoint_root = checkpoint_leg_root_v2(
+    let (checkpoint_root, step_root) = leg_roots_v1(
         &context_hash,
+        &profile_hash,
         &checkpoint_profile_hash,
         &state_chunk_map_id,
         decode_calls,
         checkpoint_count,
         &checkpoint_merkle_root,
+        step_leaf_count,
+        &step_merkle_root,
     );
-    let step_root = step_leg_root_v1(&context_hash, &profile_hash, step_leaf_count, &step_merkle_root);
     let committed_execution_root =
         execution_commitment_root_v2(&context_hash, &full_logits_trace_root, &activation_leg_root, &checkpoint_root, &step_root);
     Ok(PalwStepBindingV2 {

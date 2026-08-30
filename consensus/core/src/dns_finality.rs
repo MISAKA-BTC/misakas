@@ -6163,7 +6163,11 @@ pub fn total_active_stake_by_epoch(
                 .iter()
                 .filter(|b| is_bond_active_at(b, anchor_daa))
                 .filter(|b| {
-                    leak.retains(&b.validator_pubkey_hash, freshest_active_bond_activation(bonds, &b.validator_pubkey_hash, anchor_daa), anchor_daa)
+                    leak.retains(
+                        &b.validator_pubkey_hash,
+                        freshest_active_bond_activation(bonds, &b.validator_pubkey_hash, anchor_daa),
+                        anchor_daa,
+                    )
                 })
                 .fold(0u128, |acc, b| acc.saturating_add(b.amount as u128));
             (epoch, total)
@@ -8761,7 +8765,8 @@ mod tests {
         assert_eq!(w1, 1_000 * crate::vlt::VLT_MICRO, "compute at epoch 9 weights epoch 10 undecayed");
         assert_eq!(w3, 0, "a fully-bonded validator with no verified compute has NO voting power");
 
-        let totals = total_voting_weight_by_epoch(&bonds, &BTreeMap::from([(10u64, 0u64)]), &credits, &vlt, InactivityLeakViewV1::none());
+        let totals =
+            total_voting_weight_by_epoch(&bonds, &BTreeMap::from([(10u64, 0u64)]), &credits, &vlt, InactivityLeakViewV1::none());
         assert_eq!(totals[&10], w1 * 2, "W(E) counts only validators with compute");
     }
 
@@ -8859,7 +8864,8 @@ mod tests {
             assert_eq!(row.effective_weight, validator_voting_weight_of_bond(bond, &bonds, u64::MAX, 10, &credits, &vlt));
             assert_eq!(row.effective_weight, row.raw_recent_compute.min(row.bond_cap));
         }
-        let totals = total_voting_weight_by_epoch(&bonds, &BTreeMap::from([(10u64, 0u64)]), &credits, &vlt, InactivityLeakViewV1::none());
+        let totals =
+            total_voting_weight_by_epoch(&bonds, &BTreeMap::from([(10u64, 0u64)]), &credits, &vlt, InactivityLeakViewV1::none());
         assert_eq!(snap.total_weight, totals[&10], "the frozen total IS the live quorum denominator");
         assert_eq!(snap.quorum_weight, crate::vlt::bft_quorum(snap.total_weight));
         assert!(snap.validators.windows(2).all(|w| w[0].validator_id < w[1].validator_id), "consensus order");
@@ -9045,7 +9051,13 @@ mod tests {
 
         // And the denominator says the same thing, so a branch cannot shrink `W(E)` by withholding
         // the other side's recent bonds either.
-        let totals = total_voting_weight_by_epoch(&[post_fork], &BTreeMap::from([(10u64, 600u64)]), &snapshot, &vlt, InactivityLeakViewV1::none());
+        let totals = total_voting_weight_by_epoch(
+            &[post_fork],
+            &BTreeMap::from([(10u64, 600u64)]),
+            &snapshot,
+            &vlt,
+            InactivityLeakViewV1::none(),
+        );
         assert_eq!(totals[&10], 0, "Active at the epoch anchor, but not at the pin — not in W(E)");
     }
 
@@ -9059,7 +9071,10 @@ mod tests {
         let inert = VltEpochSnapshot::inert();
         assert!(inert.is_empty());
         assert_eq!(validator_voting_weight_of_bond(&bond, std::slice::from_ref(&bond), u64::MAX, 10, &inert, &vlt), 0);
-        assert_eq!(total_voting_weight_by_epoch(&[bond], &BTreeMap::from([(10u64, 0u64)]), &inert, &vlt, InactivityLeakViewV1::none())[&10], 0);
+        assert_eq!(
+            total_voting_weight_by_epoch(&[bond], &BTreeMap::from([(10u64, 0u64)]), &inert, &vlt, InactivityLeakViewV1::none())[&10],
+            0
+        );
     }
 
     // ---- MISAKA §5 round 2: prevote / precommit ----
@@ -11814,12 +11829,8 @@ mod tests {
         // Anchors on a MATURE chain (DAA well past any T_leak) with a short span — the shape
         // the pipeline really produces once a network has run for a while.
         let anchors = BTreeMap::from([(1u64, 20_000u64), (2, 20_150), (3, 20_300)]);
-        let contribs = vec![AttestationContribution {
-            epoch: 1,
-            validator_id: v(1),
-            bond_outpoint: fixture_outpoint(),
-            signed_weight: 1,
-        }];
+        let contribs =
+            vec![AttestationContribution { epoch: 1, validator_id: v(1), bond_outpoint: fixture_outpoint(), signed_weight: 1 }];
         let last = last_attestation_daa_by_validator(&contribs, &anchors);
         let span = anchors.values().max().unwrap() - anchors.values().min().unwrap();
         let apparent_staleness = anchors.values().max().unwrap() - last[&v(1)];

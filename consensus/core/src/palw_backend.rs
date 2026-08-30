@@ -112,6 +112,39 @@ pub trait PalwExecutionBackendV1: Send + Sync {
     /// the async runtime.
     fn execute(&self, job: &PalwJobContextV2, prompt: &[usize]) -> Result<PalwExecutionOutcomeV1, String>;
 
+    /// **The free-prompt lane's run — the one verb whose tokens the caller chooses.**
+    ///
+    /// `job_for_anchor` states why an executor must not pick the attempt lane's input: a class
+    /// whose executor chooses the prompt is a class where "run the model" and "find an input whose
+    /// output I like" are the same move. That rule is not relaxed here; it is answered by
+    /// different machinery. A free-prompt win is a quantum ticket against the class's receipt
+    /// target (`palw_fp_admission_v3` item 5) — not a property of the output — the claim binds a
+    /// beacon it cannot have chosen (item 3), its use window is fixed (item 4), and nothing pays
+    /// until the claim certifies (item 1). Grinding the prompt buys none of that.
+    ///
+    /// It is a SEPARATE verb for the same reason. An `execute` that accepted arbitrary tokens and
+    /// was reachable from the attempt path would be exactly the hole the rule closes, so the
+    /// attempt path keeps a verb whose prompt it cannot supply.
+    ///
+    /// Returns the outcome a panel and a court already consume, and the run facts
+    /// `palw_fp_job_context_v3` needs, as two values: merging them would hand each caller a field
+    /// it must ignore.
+    ///
+    /// **The run must be performed under the context the derivation produces**, not under a
+    /// convenience context that resembles it. `palw_fp_execution_root_v3` recomputes the root the
+    /// court demands from that context, so an execution carried out under any other one commits a
+    /// root nobody can reproduce — an honest producer, unconvictable and unpayable.
+    ///
+    /// Defaulted to a refusal: a family that has not implemented this has no free-prompt path, and
+    /// saying so is better than a default that silently produces something the court cannot read.
+    fn execute_free_prompt(
+        &self,
+        _job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        _prompt_tokens: &[usize],
+    ) -> Result<(PalwExecutionOutcomeV1, crate::palw_fp_execution_v3::PalwFpRunFactsV3), String> {
+        Err("this backend has no free-prompt path".to_string())
+    }
+
     /// **A seat's check, before it signs.** Never a conviction — a mismatch is the court's to
     /// convict; a seat that disagrees signs nothing on the merits and the claim voids for want of
     /// a quorum.

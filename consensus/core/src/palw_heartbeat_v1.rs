@@ -223,8 +223,7 @@ pub fn heartbeat_expected_bits(window: &[HeartbeatWindowBlock], header_timestamp
         return easiest.compact_target_bits();
     }
     let interval_ms = heartbeat_interval_ms(bonded_silence_ms(window, header_timestamp));
-    let (min_ts, max_ts) =
-        heartbeats.iter().fold((u64::MAX, 0u64), |(lo, hi), b| (lo.min(b.timestamp), hi.max(b.timestamp)));
+    let (min_ts, max_ts) = heartbeats.iter().fold((u64::MAX, 0u64), |(lo, hi), b| (lo.min(b.timestamp), hi.max(b.timestamp)));
     let measured_ms = (max_ts - min_ts).max(1);
     // n rows span n-1 intervals.
     let expected_ms = interval_ms.saturating_mul(heartbeats.len() as u64 - 1).max(1);
@@ -318,16 +317,9 @@ mod tests {
         // Two heartbeats two hours apart (expected one) → easier — but the floor clamps it.
         let slow = [bonded(t0 + 7_200_000), hb(t0, fast_bits), hb(t0 + 7_200_000, fast_bits)];
         let slow_bits = heartbeat_expected_bits(&slow, t0 + 7_260_000);
-        assert!(
-            Uint256::from_compact_target_bits(slow_bits) > fast_target,
-            "slower than schedule must ease"
-        );
+        assert!(Uint256::from_compact_target_bits(slow_bits) > fast_target, "slower than schedule must ease");
         let very_slow = [bonded(t0 + 7_200_000), hb(t0, start_bits), hb(t0 + 7_200_000, start_bits)];
-        assert_eq!(
-            heartbeat_expected_bits(&very_slow, t0 + 7_260_000),
-            start_bits,
-            "easing from the floor clamps at the floor"
-        );
+        assert_eq!(heartbeat_expected_bits(&very_slow, t0 + 7_260_000), start_bits, "easing from the floor clamps at the floor");
     }
 
     /// The O(1) floor gate refuses the cheap-to-mint header before any walk, and never refuses
