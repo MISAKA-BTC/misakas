@@ -165,3 +165,59 @@ in the 10,000 MSK outpoint bought exactly one extra concurrent claim. The declar
 not from exit codes. All four preset fingerprints re-derived once from the fixed tree
 (testnet-11 `f3bf86b4…`); the testnet-11 genesis hash is unchanged at `d2789338…` because none of
 the remediation touched the premine.
+
+---
+
+## Addendum, same day — a CRITICAL this audit did not look for
+
+Found while answering a *design* question (ADR-0064, trustless recovery from a total stop). It is
+not a consequence of that proposal; it is a property of the shipped tree. Every link was read in
+the code, not inferred.
+
+### A bond costs 0.004 MSK, lasts forever, and is enough to seat your own panels on a private fork
+
+`palw_fork_choice` states its safety argument as: *a fork nobody could see collects no receipts, so
+it has no `safe_frontier`.* That argument is false today for anyone who has ever registered one
+bond.
+
+1. **Post-genesis registration gates on the collateral floor and nothing else.**
+   `min_collateral_sompi` is **400,000 sompi = 0.004 MSK**, and the collateral is refundable, so
+   the real price of a permanent bond is a transaction fee.
+2. **A bond never leaves the registry.** `grep -rn "write_bond([^,]*, *None"` returns **nothing** —
+   every writer passes `Some(..)`. Retirement moves the status to `Retiring`; it does not remove
+   the record. The right a bond confers is therefore permanent.
+3. **`registered_daa` has no readers.** It is written at registration and read by **no consensus
+   gate anywhere in the tree**. There is no maturity period, no soak, no "this bond was too young
+   at this DAA" test — so a bond is as usable on a fork rooted before it was funded as on the
+   honest chain.
+4. **`PalwBondStatusV2` is `Active | Retiring`** — Active from the block that registers it.
+5. **Seat tickets are `H(anchor ‖ claim ‖ bond)`** with both the anchor and the claim id
+   influenced by the party constructing the fork.
+
+**The attack.** Fork from any point at or after your bond's registration. Inside your fork's own
+blocks, carry sybil `BondRegistered` objects — they fold at the accepting block under today's rules,
+with no change required. Seat panels drawn from your own bonds, self-license the receipts, and grow
+`safe_frontier` on a branch no honest node ever saw. The frontier is supposed to be the thing that
+cannot be manufactured privately, and it is the input the deep-reorg comparator trusts.
+
+**Why it is worse than a normal sybil bound.** The floor is not merely low, it is *retroactive and
+permanent*: one 0.004 MSK registration made at any time in the network's life is a standing option
+to run this at any later date, and nothing expires it.
+
+### What closing it needs (drafted as ADR-0065, not written yet)
+
+* **Seat maturity.** A bond may be drawn for a panel only if `daa - registered_daa ≥ maturity`.
+  This is the rule `registered_daa` was evidently recorded for; the field already exists, so this
+  costs no new state.
+* **Frontier provenance.** A `safe_frontier` advance should require receipts whose panels were
+  drawn from bonds that were mature **relative to the fork point**, not merely relative to the
+  branch's own tip — otherwise the attacker simply roots the fork later.
+* **Bond removal.** `write_bond(key, None)` having no callers means the registry only grows.
+  Whether that is a leak or a deliberate append-only choice is undocumented; it must be decided,
+  because "permanent" is doing load-bearing work in the attack.
+* **Re-price or rate-limit registration.** 0.004 MSK is not a Sybil cost. Note that raising it
+  alone does **not** close the attack — points 2 and 3 are what make one purchase permanent and
+  retroactive.
+
+Consensus-affecting, so it is a fingerprint move and a re-mint. It is a **mainnet blocker** and it
+is live on testnet-11 now.
