@@ -73,20 +73,36 @@ pub async fn status(ctx: &Ctx, ks: &KeySource) -> CliResult {
         OutputFormat::Human => {
             println!("address: {addr}");
             if locked.is_empty() {
-                println!("bonds:   none at this address");
+                println!("locked:  none at this address");
                 println!();
                 println!("If you registered a bond with a DIFFERENT key, run this with that key.");
                 println!("The node reports {} locked outpoint(s) network-wide.", facts.locked_bond_outpoints.len());
             } else {
-                println!("bonds:   {} locked outpoint(s) — pass one to --palw-producer-bond", locked.len());
+                // **"Locked" is not the same as "bonded", and saying so cost an hour.** The node's
+                // locked set is a UNION (rpc/service/src/service.rs:763): consensus-locked collateral
+                // AND this node's own reserved PALW funding outpoints, so a running producer's panel
+                // fee outpoint appears here and reads as a bond. It is not one — passing it to
+                // `--palw-producer-bond` names a bond the registry has never heard of.
+                //
+                // The CLI cannot separate them from this call alone (the registry lookup needs a
+                // class id), so it does not pretend to: it labels the set honestly and says how to
+                // settle it.
+                println!("locked:  {} outpoint(s) at this address", locked.len());
                 for u in &locked {
                     println!("  {}:{}  {} MSK", u.outpoint.transaction_id, u.outpoint.index, sompi_to_msk(u.amount));
                 }
+                println!();
+                println!("These are consensus-locked collateral AND this node's reserved PALW funding");
+                println!("outpoints — the node reports them as one set. To learn which is a registry bond,");
+                println!("run `misaka bond retire --bond <outpoint> --class-id <id> --dry-run`: it names the");
+                println!("ones the registry does not know, and never submits anything.");
             }
             println!("spendable (mature, unbonded): {} MSK", sompi_to_msk(spendable));
         }
         OutputFormat::Json => {
-            let bonds: Vec<serde_json::Value> = locked
+            // Named `locked`, not `bonds`: see the human branch — this set unions collateral with the
+            // node's reserved funding, and a JSON consumer must not be told otherwise.
+            let locked_json: Vec<serde_json::Value> = locked
                 .iter()
                 .map(|u| {
                     serde_json::json!({
@@ -100,7 +116,7 @@ pub async fn status(ctx: &Ctx, ks: &KeySource) -> CliResult {
                 serde_json::json!({
                     "ok": true,
                     "address": addr.to_string(),
-                    "bonds": bonds,
+                    "locked_outpoints": locked_json,
                     "spendable_sompi": spendable,
                     "node_locked_outpoints": facts.locked_bond_outpoints,
                 })
@@ -221,6 +237,26 @@ pub async fn retire(
             ),
         ));
     }
+    // **This key must be the key the bond registered.** The signature rides the object and is
+    // verified against `bond.pubkey`, so a retirement signed by the wrong key is refused by
+    // consensus — but the CLI would still build it, charge the operator a carrier fee, and submit a
+    // transaction that can never succeed. Caught by running a complete dry-run with a key holding no
+    // bond at all: it signed a release for someone else's collateral without a word.
+    //
+    // Checking here rather than at submission also means `--dry-run` tells the truth: a dry run that
+    // "succeeds" for a key that cannot possibly retire this bond is a rehearsal of the wrong play.
+    let ours = faster_hex::hex_string(key.public_key());
+    if !facts.bond_registered_pubkey.is_empty() && !ours.eq_ignore_ascii_case(&facts.bond_registered_pubkey) {
+        return Err(CliError::new(
+            exit::GENERIC,
+            format!(
+                "bond {}:{} was registered by a different key, so a retirement signed with this one would be refused by consensus.\n\
+                 Run `misaka bond status` with the key that registered it — the chain verifies the signature against the bond's own registered public key, not against whoever pays the carrier.",
+                bond_outpoint.transaction_id, bond_outpoint.index
+            ),
+        ));
+    }
+
     let reserved = facts.bond_reserved_exposure.trim();
     let still_owing = !reserved.is_empty() && reserved != "0";
     if still_owing {
