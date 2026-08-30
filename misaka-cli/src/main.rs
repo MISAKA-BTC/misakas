@@ -306,6 +306,13 @@ enum WalletCmd {
         /// Actually broadcast (otherwise a dry-run preview).
         #[arg(long)]
         yes: bool,
+        /// Spend ONLY settled mining rewards — refuse every non-coinbase input. The default
+        /// already prefers coinbase and warns per non-coinbase input it falls back to; this
+        /// makes the fallback an error instead. Use it on any address a producer or panel
+        /// pays to: the queried node can only exclude its OWN reserved fee outpoints, so a
+        /// float another node's panel runs on looks like ordinary money here.
+        #[arg(long)]
+        coinbase_only: bool,
         #[command(flatten)]
         key: KeyArgs,
     },
@@ -335,6 +342,11 @@ enum UtxoCmd {
         /// Actually broadcast (otherwise a dry-run preview).
         #[arg(long)]
         yes: bool,
+        /// Merge ONLY settled mining rewards — leave every non-coinbase output where it is.
+        /// Consolidation moves outpoints, and a fee float another node's panel runs on dies
+        /// with its outpoint (the reservation lives on that node, invisible here).
+        #[arg(long)]
+        coinbase_only: bool,
         #[command(flatten)]
         key: KeyArgs,
     },
@@ -656,11 +668,11 @@ async fn main() -> std::process::ExitCode {
         Command::Wallet(WalletCmd::Utxo(UtxoCmd::List { address, key })) => {
             wallet::utxo_list(&ctx, address.as_deref(), &key.source()).await
         }
-        Command::Wallet(WalletCmd::Utxo(UtxoCmd::Consolidate { max_inputs, max_txs_per_run, sleep_ms, yes, key })) => {
-            wallet::consolidate(&ctx, &key.source(), max_inputs, !yes, yes, max_txs_per_run, sleep_ms).await
+        Command::Wallet(WalletCmd::Utxo(UtxoCmd::Consolidate { max_inputs, max_txs_per_run, sleep_ms, yes, coinbase_only, key })) => {
+            wallet::consolidate(&ctx, &key.source(), max_inputs, !yes, yes, max_txs_per_run, sleep_ms, coinbase_only).await
         }
-        Command::Wallet(WalletCmd::Send { to, amount, yes, key }) => match parse_msk_to_sompi(&amount) {
-            Ok(sompi) => wallet::send(&ctx, &key.source(), &to, sompi, !yes, yes).await,
+        Command::Wallet(WalletCmd::Send { to, amount, yes, coinbase_only, key }) => match parse_msk_to_sompi(&amount) {
+            Ok(sompi) => wallet::send(&ctx, &key.source(), &to, sompi, !yes, yes, coinbase_only).await,
             Err(e) => Err(e),
         },
         Command::Key(KeyCmd::Gen { out }) => key_gen(&ctx, &out),

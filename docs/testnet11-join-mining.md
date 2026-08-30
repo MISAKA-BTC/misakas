@@ -212,6 +212,20 @@ It will answer and file, but it will not carry anything to the chain. Pass
 `--palw-fee-outpoint=<txid>:1` — the change output of your own bond carrier — to turn the submitter
 on. (Registration is the exception: that job has no outpoint to be given and finds its own funding.)
 
+### One pay address per node
+
+Do not point two nodes' `--palw-producer-pay-address` at the same address. A panel's fee float
+lives at its pay address, and the float's protection is node-local: a node reserves its own fee
+outpoints and tells its own RPC (`locked_bond_outpoints`), but no node can vouch for another
+node's reservations. `misaka wallet send` against a shared address therefore sees the OTHER
+node's float as ordinary spendable money — measured on testnet-11 (2026-08-31), where two
+producers shared one address and a 5 MSK send selected the second node's float chain as its
+single input. Spent, that panel degrades to receipts-only and stops carrying to the chain.
+
+`wallet send` now funds a spend from settled mining rewards first, warns per non-coinbase input
+it has to fall back to, and refuses them outright under `--coinbase-only` — but the shared
+address is the misconfiguration; give every node its own key's address and none of this comes up.
+
 When it holds instead of producing, the reason carries its numbers:
 
 ```

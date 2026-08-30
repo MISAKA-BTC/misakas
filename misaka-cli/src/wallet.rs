@@ -387,6 +387,7 @@ pub async fn consolidate(
     yes: bool,
     max_txs_per_run: usize,
     sleep_ms: u64,
+    coinbase_only: bool,
 ) -> CliResult {
     if max_txs_per_run == 0 {
         return Err(CliError::new(exit::GENERIC, "--max-txs-per-run must be > 0".to_string()));
@@ -400,9 +401,23 @@ pub async fn consolidate(
     let max_inputs = max_inputs.clamp(2, MAX_INPUTS_PER_TX);
 
     // `!bonded`: never consolidate a validator's locked collateral into a change output (M1-3).
-    let mut mature: Vec<Funding> = page_all(&nv, &addr).await?.into_iter().filter(|u| u.mature && !u.bonded).collect();
+    let mut mature: Vec<Funding> =
+        page_all(&nv, &addr).await?.into_iter().filter(|u| u.mature && !u.bonded && (!coinbase_only || u.entry.is_coinbase)).collect();
     if mature.len() < 2 {
         return Err(CliError::new(exit::GENERIC, format!("nothing to consolidate: {} mature UTXO(s) at {addr}", mature.len())));
+    }
+    // Consolidation MOVES every input's outpoint. A fee float another node's panel runs on is
+    // indistinguishable from a normal receipt here (its reservation lives on that node, not the
+    // one this CLI asked — see `send`), and a panel whose configured outpoint vanishes degrades
+    // to receipts-only. So every non-coinbase input is named before anything is signed.
+    for u in mature.iter().filter(|u| !u.entry.is_coinbase) {
+        eprintln!(
+            "warning: consolidating {} ({} MSK), which is not a mining reward — if another node \
+             runs a panel on this address this may be ITS fee float, and merging it breaks that \
+             panel's configured outpoint. Pass --coinbase-only to leave such outputs alone.",
+            u.outpoint,
+            sompi_to_msk(u.amount)
+        );
     }
     // Largest-first is irrelevant for consolidate; keep input order. Chunk it.
     let submit = yes && !dry_run;
@@ -505,7 +520,7 @@ pub async fn consolidate(
 // wallet send — to an arbitrary recipient
 // ---------------------------------------------------------------------------
 
-pub async fn send(ctx: &Ctx, ks: &KeySource, to: &str, amount_sompi: u64, dry_run: bool, yes: bool) -> CliResult {
+pub async fn send(ctx: &Ctx, ks: &KeySource, to: &str, amount_sompi: u64, dry_run: bool, yes: bool, coinbase_only: bool) -> CliResult {
     if amount_sompi == 0 {
         return Err(CliError::new(exit::GENERIC, "--amount must be > 0 (sompi)".to_string()));
     }
@@ -519,35 +534,77 @@ pub async fn send(ctx: &Ctx, ks: &KeySource, to: &str, amount_sompi: u64, dry_ru
     }
     let recipient_spk = pay_to_address_script(&to_addr);
 
-    // Largest-first greedy select over MATURE self-UTXOs, re-estimating the fee as inputs are added.
+    // Greedy select over MATURE self-UTXOs, re-estimating the fee as inputs are added.
     // `!bonded`: the bond is usually the LARGEST output at a validator's address, and selection
-    // below is largest-first, so without this the default `wallet send` reaches for it first (M1-3).
-    let mut mature: Vec<Funding> = page_all(&nv, &from_addr).await?.into_iter().filter(|u| u.mature && !u.bonded).collect();
+    // below prefers large outputs, so without this the default `wallet send` reaches for it
+    // first (M1-3).
+    //
+    // **Coinbase before everything else, and each non-coinbase input named out loud.** `bonded`
+    // is the QUERIED node's `locked_bond_outpoints` — consensus-locked collateral plus that
+    // node's OWN reserved fee outpoints (H12). It cannot cover a fee float another node runs
+    // its panel on: reservations are node-local, so when several producers share one pay
+    // address the foreign float arrives here as just a large, spendable-looking output — and
+    // plain largest-first reached for exactly that one (measured on testnet-11, 2026-08-30: a
+    // 5 MSK send through node0's RPC chose A-host's `misaka-premine…:46` float chain as its
+    // single input; spent, that panel degrades to receipts-only). Mining rewards can never be
+    // anyone's float, so they fund the spend first; a non-coinbase output is touched only when
+    // the rewards cannot cover the amount, and then the preview warns per outpoint so an
+    // operator can recognise a float before passing --yes.
+    let mut mature: Vec<Funding> = page_all(&nv, &from_addr)
+        .await?
+        .into_iter()
+        .filter(|u| u.mature && !u.bonded && (!coinbase_only || u.entry.is_coinbase))
+        .collect();
     mature.sort_by(|a, b| b.amount.cmp(&a.amount));
-    let mut selected: Vec<&Funding> = Vec::new();
-    let mut sum = 0u64;
-    let mut fee = estimate_fee(&key, &nv.params, 1, false);
-    for u in mature.iter() {
-        if selected.len() >= MAX_INPUTS_PER_TX {
-            break;
+    let select = |pool: &[&Funding]| -> (Vec<usize>, u64, u64) {
+        let mut picked = Vec::new();
+        let mut sum = 0u64;
+        let mut fee = estimate_fee(&key, &nv.params, 1, false);
+        for (i, u) in pool.iter().enumerate() {
+            if picked.len() >= MAX_INPUTS_PER_TX {
+                break;
+            }
+            picked.push(i);
+            sum += u.amount;
+            fee = estimate_fee(&key, &nv.params, picked.len(), false);
+            if sum >= amount_sompi.saturating_add(fee) {
+                break;
+            }
         }
-        selected.push(u);
-        sum += u.amount;
-        fee = estimate_fee(&key, &nv.params, selected.len(), false);
-        if sum >= amount_sompi.saturating_add(fee) {
-            break;
-        }
+        (picked, sum, fee)
+    };
+    // Pass 1: mining rewards alone, largest-first. Pass 2 runs only when they cannot cover the
+    // spend — the classic largest-first over everything — and every non-coinbase input it picks
+    // is warned about below, because this is the pass that can reach a foreign float.
+    let coinbase_pool: Vec<&Funding> = mature.iter().filter(|u| u.entry.is_coinbase).collect();
+    let (picked, mut sum, mut fee) = select(&coinbase_pool);
+    let mut selected: Vec<&Funding> = picked.into_iter().map(|i| coinbase_pool[i]).collect();
+    if sum < amount_sompi.saturating_add(fee) && !coinbase_only {
+        let full_pool: Vec<&Funding> = mature.iter().collect();
+        let (picked, s, f) = select(&full_pool);
+        (selected, sum, fee) = (picked.into_iter().map(|i| full_pool[i]).collect(), s, f);
+    }
+    for u in selected.iter().filter(|u| !u.entry.is_coinbase) {
+        eprintln!(
+            "warning: input {} ({} MSK) is not a mining reward. If another node runs a panel on \
+             this address, this may be ITS fee float — the node this CLI asked can only exclude \
+             its OWN reserved outpoints. Spending a foreign float degrades that panel to \
+             receipts-only. Pass --coinbase-only to refuse such inputs outright.",
+            u.outpoint,
+            sompi_to_msk(u.amount)
+        );
     }
     let needed = amount_sompi.saturating_add(fee);
     if selected.is_empty() || sum < needed {
         return Err(CliError::new(
             exit::GENERIC,
             format!(
-                "insufficient mature funds at {from_addr}: have {} MSK across {} UTXO(s) (cap {MAX_INPUTS_PER_TX}), need {} MSK (amount {} + fee {fee}). Consolidate or lower --amount.",
+                "insufficient mature funds at {from_addr}: have {} MSK across {} UTXO(s) (cap {MAX_INPUTS_PER_TX}), need {} MSK (amount {} + fee {fee}).{} Consolidate or lower --amount.",
                 sompi_to_msk(sum),
                 selected.len(),
                 sompi_to_msk(needed),
-                sompi_to_msk(amount_sompi)
+                sompi_to_msk(amount_sompi),
+                if coinbase_only { " (--coinbase-only excluded every non-coinbase output.)" } else { "" }
             ),
         ));
     }
@@ -578,7 +635,13 @@ pub async fn send(ctx: &Ctx, ks: &KeySource, to: &str, amount_sompi: u64, dry_ru
             println!("From    : {from_addr}");
             println!("To      : {to_addr}");
             println!("Amount  : {} MSK", sompi_to_msk(amount_sompi));
-            println!("Fee     : {fee} sompi   Inputs: {}   Change: {} MSK", fundings.len(), sompi_to_msk(change));
+            let cb = selected.iter().filter(|u| u.entry.is_coinbase).count();
+            println!(
+                "Fee     : {fee} sompi   Inputs: {} ({cb} coinbase, {} other)   Change: {} MSK",
+                fundings.len(),
+                fundings.len() - cb,
+                sompi_to_msk(change)
+            );
             println!("Mode    : {}", if submit { "SUBMIT" } else { "dry-run (no submit; pass --yes to broadcast)" });
             if let Some(t) = &txid {
                 println!("Txid    : {t}");
