@@ -99,7 +99,11 @@ fn main() {
     let mut blocks_path = None;
     let mut retention = None;
     let mut out_path = None;
-    let mut network = "misaka-testnet-11".to_string();
+    // The DISPLAY prefix ("misaka-…") is not the consensus identity: the domain is derived from
+    // `NetworkId::to_string()` ("testnet-11") plus the genesis, exactly as every verifier derives
+    // it. The old prefixed default could never parse as a NetworkId, so the tool refused its own
+    // default the moment the domain became genesis-bound (audit M2-18).
+    let mut network = "testnet-11".to_string();
     let mut it = args.iter().skip(1);
     while let Some(a) = it.next() {
         match a.as_str() {
