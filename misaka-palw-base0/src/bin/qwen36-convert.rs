@@ -902,8 +902,7 @@ fn main() {
         // so the aligned stream does not saturate on its way into the addition.
         let e_stream_out_ffn = cal::site_exponent(site(&calibration, &g("ffn_residual")));
         let e_moe_out = e_stream_out_ffn;
-        let e_shared_gated =
-            if shared_dim > 0 { cal::site_exponent(site(&calibration, &g("ffn_shared_gated"))) } else { 0 };
+        let e_shared_gated = if shared_dim > 0 { cal::site_exponent(site(&calibration, &g("ffn_shared_gated"))) } else { 0 };
         let e_shared_out = if shared_dim > 0 { cal::site_exponent(site(&calibration, &g("ffn_shared_out"))) + 15 } else { 0 };
         let e_shared_up = if shared_dim > 0 { cal::site_exponent(site(&calibration, &g("ffn_shared_up"))) } else { 0 };
 
@@ -941,15 +940,19 @@ fn main() {
             );
         }
         if shared_dim > 0 {
-            measured
-                .insert(format!("{sb}_gate.weight.a16"), wire(&cal::to_qk_params(&scales[&format!("{sb}_gate.weight")], e_ffn_normed)));
+            measured.insert(
+                format!("{sb}_gate.weight.a16"),
+                wire(&cal::to_qk_params(&scales[&format!("{sb}_gate.weight")], e_ffn_normed)),
+            );
             measured.insert(
                 format!("{sb}_up.weight.a16"),
                 wire(&cal::projection_params(&scales[&format!("{sb}_up.weight")], e_ffn_normed, e_shared_up)),
             );
             measured.insert(format!("{sb}_silu.a16"), wire(&vec![cal::rescale_params(K as i32, K as i32); shared_dim]));
-            measured
-                .insert(format!("{sb}_gated.a16"), wire(&vec![cal::product_params(K as i32, e_shared_up, e_shared_gated); shared_dim]));
+            measured.insert(
+                format!("{sb}_gated.a16"),
+                wire(&vec![cal::product_params(K as i32, e_shared_up, e_shared_gated); shared_dim]),
+            );
             measured.insert(
                 format!("{sb}_down.weight.a16"),
                 wire(&cal::projection_params(&scales[&format!("{sb}_down.weight")], e_shared_gated, e_shared_out)),

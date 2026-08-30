@@ -550,8 +550,10 @@ impl PalwPanelService {
         // registering its own bond, and the only one it can make without a second key to name.
         let pubkey = kp.verification_key.as_ref().to_vec();
         let bond = PalwBondKeyV2(TransactionOutpoint::new(kaspa_consensus_core::tx::TransactionId::default(), 0));
-        let network_domain =
-            kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(self.consensus_config.params.net.to_string().as_bytes(), Some(self.consensus_config.genesis.hash));
+        let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+            self.consensus_config.params.net.to_string().as_bytes(),
+            Some(self.consensus_config.genesis.hash),
+        );
         let message = kaspa_consensus_core::palw_state_v2::palw_bond_registration_message_v2(
             network_domain,
             &kaspa_consensus_core::palw_lifecycle_objects_v2::palw_bond_registration_signed_key_v2(&bond),
@@ -605,7 +607,10 @@ impl PalwPanelService {
     ) -> Result<PalwConsensusObjectV2, String> {
         let bond = self.bond.ok_or("no --palw-producer-bond to register under")?;
         let bond_key = PalwBondKeyV2(bond);
-        info!("[{PALW_PANEL}] attempting the class registration (filter: {})", self.config.register_class.as_deref().unwrap_or("<unset>"));
+        info!(
+            "[{PALW_PANEL}] attempting the class registration (filter: {})",
+            self.config.register_class.as_deref().unwrap_or("<unset>")
+        );
         let terms = session.palw_v2_registration_terms().ok_or("this chain has no V2 bundle, or does not hold its base class yet")?;
 
         // The whole selection — shape matching against every lineage's ledger, the known-weights
@@ -632,7 +637,8 @@ impl PalwPanelService {
         // that is not the one being registered. Both builds run the SDK's admission preflight
         // against this network's own bundle, so a class the gate would refuse never reaches the
         // signer, the mempool, or the fee.
-        let build = |signature: Vec<u8>| registry.sdk().build_post_genesis_registration(bundle, &candidate, &terms, 0, bond_key, signature);
+        let build =
+            |signature: Vec<u8>| registry.sdk().build_post_genesis_registration(bundle, &candidate, &terms, 0, bond_key, signature);
         let unsigned = build(Vec::new())?;
         let PalwConsensusObjectV2::ClassRegistered {
             class_id,
@@ -650,7 +656,10 @@ impl PalwPanelService {
         // said "signing anything assembled beside the object would sign a class that is not the one
         // being registered", and this is that comment made true.
         let message = kaspa_consensus_core::palw_state_v2::palw_class_registration_message_v2(
-            kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(self.consensus_config.params.net.to_string().as_bytes(), Some(self.consensus_config.genesis.hash)),
+            kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                self.consensus_config.params.net.to_string().as_bytes(),
+                Some(self.consensus_config.genesis.hash),
+            ),
             *class_id,
             terms.min_grantable_share_permille,
             *activation_daa,
@@ -1150,8 +1159,10 @@ impl PalwPanelService {
             warn!("[{PALW_PANEL}] the gossip inbox was already taken — panel service disabled");
             return;
         };
-        let network_domain =
-            kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(self.consensus_config.params.net.to_string().as_bytes(), Some(self.consensus_config.genesis.hash));
+        let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+            self.consensus_config.params.net.to_string().as_bytes(),
+            Some(self.consensus_config.genesis.hash),
+        );
         info!(
             "[{PALW_PANEL}] starting (bond={bond}, submitter={}, register={})",
             if self.config.fee_outpoint.is_some() { "funded" } else { "off — receipts only" },
@@ -1292,11 +1303,8 @@ impl PalwPanelService {
                             // Never evict the claim that just arrived: that would make the pool
                             // drop exactly the payload it was asked to hold, which is the M2-1
                             // failure in a different costume.
-                            let Some(oldest) = pool_arrival
-                                .iter()
-                                .filter(|(id, _)| **id != claim)
-                                .min_by_key(|(_, seq)| **seq)
-                                .map(|(id, _)| *id)
+                            let Some(oldest) =
+                                pool_arrival.iter().filter(|(id, _)| **id != claim).min_by_key(|(_, seq)| **seq).map(|(id, _)| *id)
                             else {
                                 break;
                             };
@@ -1757,8 +1765,9 @@ impl PalwPanelService {
                                 requested.insert(duty.claim_id, current_daa);
                                 pull_for_close.push(duty.claim_id);
                             }
-                            *court_stalls.entry("the close needs the ACCUSED capture and this node holds none — pulling").or_default() +=
-                                1;
+                            *court_stalls
+                                .entry("the close needs the ACCUSED capture and this node holds none — pulling")
+                                .or_default() += 1;
                             trace!(
                                 "[{PALW_PANEL}] session {} has narrowed to a step but this node holds no capture matching the claim's roots",
                                 duty.session_id

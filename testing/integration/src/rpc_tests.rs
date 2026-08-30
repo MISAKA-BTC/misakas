@@ -5,11 +5,7 @@ use futures_util::future::try_join_all;
 use kaspa_addresses::{Address, Prefix, Version};
 use kaspa_consensus::params::SIMNET_GENESIS;
 use kaspa_consensus_core::{
-    config::premine::MISAKA_PREMINE_CAP_SOMPI,
-    constants::MAX_SOMPI,
-    header::Header,
-    subnets::SubnetworkId,
-    tx::Transaction,
+    config::premine::MISAKA_PREMINE_CAP_SOMPI, constants::MAX_SOMPI, header::Header, subnets::SubnetworkId, tx::Transaction,
 };
 use kaspa_core::{assert_match, info};
 use kaspa_grpc_core::ops::KaspadPayloadOps;

@@ -398,9 +398,8 @@ impl Qwen36ArtifactV1 {
                         let take = remaining.min(buf.len());
                         // An IO error mid-pass is the mapped path's SIGBUS with a name on it: the
                         // artifact is unreadable and no root this node could report is true.
-                        map.read_exact_at(at, &mut buf[..take]).unwrap_or_else(|e| {
-                            panic!("the artifact became unreadable at byte {at} while computing its root: {e}")
-                        });
+                        map.read_exact_at(at, &mut buf[..take])
+                            .unwrap_or_else(|e| panic!("the artifact became unreadable at byte {at} while computing its root: {e}"));
                         state.update(&buf[..take]);
                         at += take as u64;
                         remaining -= take;
@@ -1624,11 +1623,8 @@ fn fill_fixture(mut artifact: Qwen36ArtifactV1, shape: Qwen36ShapeV1) -> Qwen36A
                 .with_params(n("ffn_shared_gate.weight.a16"), &[projection(d)])
                 .with_params(n("ffn_shared_gated.a16"), &[A16QuantParams { multiplier: 1, shift: 24, zero: 0 }]);
         }
-        let shared_tail: Vec<(String, usize)> = if shape.has_shared_expert() {
-            vec![(format!("blk.{li}.ffn_shared_expert"), shape.shared_dim)]
-        } else {
-            Vec::new()
-        };
+        let shared_tail: Vec<(String, usize)> =
+            if shape.has_shared_expert() { vec![(format!("blk.{li}.ffn_shared_expert"), shape.shared_dim)] } else { Vec::new() };
         for (base, mid) in (0..shape.n_experts).map(|e| (format!("blk.{li}.ffn_expert.{e}"), shape.moe_dim)).chain(shared_tail) {
             artifact = artifact
                 .with_tensor(format!("{base}_gate.weight"), weights(mid * d))

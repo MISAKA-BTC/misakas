@@ -544,7 +544,10 @@ mod tests {
         // Drain the flooder's own share, one worst-case reservation at a time.
         let per_peer_reservations = SERVE_BUDGET_BYTES_PER_PEER / PALW_MATERIAL_MAX_BYTES as u64;
         for i in 0..per_peer_reservations {
-            assert!(center.reserve_serve_budget(flooder, PALW_MATERIAL_MAX_BYTES as u64), "reservation {i} is within the peer's share");
+            assert!(
+                center.reserve_serve_budget(flooder, PALW_MATERIAL_MAX_BYTES as u64),
+                "reservation {i} is within the peer's share"
+            );
         }
         assert!(
             !center.reserve_serve_budget(flooder, PALW_MATERIAL_MAX_BYTES as u64),
@@ -619,10 +622,7 @@ mod tests {
         // Fill the ordinary per-claim budget from two peers, two each.
         for (n, p) in [(1u128, 1usize), (2, 2)] {
             for i in 0..PALW_MATERIALS_PER_PEER_PER_CLAIM {
-                assert_eq!(
-                    center.admit_material(peer(n), claim, format!("junk-{p}-{i}").as_bytes()),
-                    PalwGossipAdmit::Fresh
-                );
+                assert_eq!(center.admit_material(peer(n), claim, format!("junk-{p}-{i}").as_bytes()), PalwGossipAdmit::Fresh);
             }
         }
         assert_eq!(center.admit_material(peer(3), claim, b"honest"), PalwGossipAdmit::Duplicate, "the ordinary budget is spent");

@@ -595,8 +595,7 @@ fn project(ir: &[Ir], g: &PalwQwen36GeometryV1, layer_span: usize) -> Vec<PalwSt
     }
     // One owned table either way: the identity conversion for a hybrid geometry (no seeds) and the
     // stripped one otherwise. Same nodes in the same order — the shipped class's id cannot move.
-    let table: Vec<ProjIr> =
-        if seeds.is_empty() { ir.iter().map(ProjIr::from).collect() } else { strip_absent_subgraphs(ir, &seeds) };
+    let table: Vec<ProjIr> = if seeds.is_empty() { ir.iter().map(ProjIr::from).collect() } else { strip_absent_subgraphs(ir, &seeds) };
     let ir = &table[..];
     // A matmul's reduction width, from the IR's own wiring — the first input's row.
     let in_width = |node: &ProjIr| -> usize {
@@ -794,12 +793,30 @@ mod qwen3moe_family {
                 rms_eps_q: 17,
                 tile_len: 512,
             };
-            let profile = match qwen36_profile_v1(g) { Ok(pr) => pr, Err(e) => { eprintln!("nctx {nctx}: profile err {e:?}"); continue } };
+            let profile = match qwen36_profile_v1(g) {
+                Ok(pr) => pr,
+                Err(e) => {
+                    eprintln!("nctx {nctx}: profile err {e:?}");
+                    continue;
+                }
+            };
             let canonical = crate::palw_base0_profile::rc_job_context(&profile, (nctx - 1).min(7), 2);
             let reg = match crate::palw_class_admission_v2::palw_post_genesis_registration_v1(
-                profile.clone(), canonical.clone(), kaspa_hashes::Hash64::default(), 1, 1, 5, 0,
-                crate::palw_state_v2::PalwBondKeyV2(crate::tx::TransactionOutpoint::new(kaspa_hashes::Hash64::default(), 0)), vec![]) {
-                Ok(r) => r, Err(e) => { eprintln!("nctx {nctx}: builder err {e}"); continue }
+                profile.clone(),
+                canonical.clone(),
+                kaspa_hashes::Hash64::default(),
+                1,
+                1,
+                5,
+                0,
+                crate::palw_state_v2::PalwBondKeyV2(crate::tx::TransactionOutpoint::new(kaspa_hashes::Hash64::default(), 0)),
+                vec![],
+            ) {
+                Ok(r) => r,
+                Err(e) => {
+                    eprintln!("nctx {nctx}: builder err {e}");
+                    continue;
+                }
             };
             let verdict = crate::palw_class_admission_v2::verify_class_admission_v2(b, &profile, &canonical, &reg);
             match nctx {

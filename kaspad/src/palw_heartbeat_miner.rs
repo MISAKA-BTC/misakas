@@ -47,7 +47,7 @@ pub struct PalwHeartbeatMinerService {
     mining_manager: MiningManagerProxy,
     flow_context: Arc<FlowContext>,
     miner_data: Option<MinerData>,
-    }
+}
 
 impl PalwHeartbeatMinerService {
     pub fn new(

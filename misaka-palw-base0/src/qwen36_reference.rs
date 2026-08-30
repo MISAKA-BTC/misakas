@@ -474,18 +474,18 @@ pub fn reference_moe_layer(
 
         // The shared expert — hybrid members only; a qwen3moe layer's mixture is the whole FFN.
         if shape.has_shared_expert() {
-        let sg = 1.0 / (1.0 + (-matmul(w.shared_router, &normed, 1)[0]).exp());
-        let s_mid = shape.shared_dim;
-        let s_gate = matmul(w.shared_gate, &normed, s_mid);
-        let s_up = matmul(w.shared_up, &normed, s_mid);
-        calibration.observe(&g("ffn_shared_up"), &s_up);
-        let act: Vec<f32> = silu(&s_gate).iter().zip(&s_up).map(|(a, b)| a * b).collect();
-        calibration.observe(&g("ffn_shared_gated"), &act);
-        let shared = matmul(w.shared_down, &act, d);
-        calibration.observe(&g("ffn_shared_out"), &shared);
-        for (slot, v) in out.iter_mut().zip(&shared) {
-            *slot += sg * v;
-        }
+            let sg = 1.0 / (1.0 + (-matmul(w.shared_router, &normed, 1)[0]).exp());
+            let s_mid = shape.shared_dim;
+            let s_gate = matmul(w.shared_gate, &normed, s_mid);
+            let s_up = matmul(w.shared_up, &normed, s_mid);
+            calibration.observe(&g("ffn_shared_up"), &s_up);
+            let act: Vec<f32> = silu(&s_gate).iter().zip(&s_up).map(|(a, b)| a * b).collect();
+            calibration.observe(&g("ffn_shared_gated"), &act);
+            let shared = matmul(w.shared_down, &act, d);
+            calibration.observe(&g("ffn_shared_out"), &shared);
+            for (slot, v) in out.iter_mut().zip(&shared) {
+                *slot += sg * v;
+            }
         }
         calibration.observe(&g("ffn_moe_out"), &out);
         for (a, b) in h.iter_mut().zip(&out) {

@@ -226,11 +226,11 @@ impl TestConsensus {
     /// `validate_stateless_v3` accepts, and for a while it was all any node checked.
     #[allow(dead_code)]
     pub(crate) fn palw_v3_test_receipt_carriage(&self, header: &Header, signed: bool) -> Vec<u8> {
+        use kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for;
         use kaspa_consensus_core::palw_freeprompt_v3::{
             PALW_FP_V3_MLDSA87_SPEND_CONTEXT, PALW_FP_V3_VERSION, PalwReceiptSpendEnvelopeV3, PalwReceiptSpendUnsignedV3,
             fp_spend_id_v3, spend_challenge_v3,
         };
-        use kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for;
         use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
         let network_id = self.params.net.to_string();
         // The genesis-bound domain (audit M2-18) — the harness must sign under exactly what the
