@@ -238,6 +238,31 @@ pub const PALW_V2_MAX_VALIDATOR_PAYOUTS: u64 = 16;
 /// Domain-separated so an operator id can never collide with a class id, a claim id or any other
 /// `Hash64` this ruleset mints, and derived rather than carried so two bonds share an operator
 /// exactly when they name the same key.
+/// **The one place a `BondRegistered` becomes a `PalwBondStateV2`.**
+///
+/// ADR-0064 lets a block's own attempt resolve its bond against the registrations carried in that
+/// block's own mergeset, which means the record has to be built somewhere OTHER than the state
+/// transition as well. Two constructors would be two answers to one question — the failure shape
+/// this codebase keeps meeting, and the one that decides whether a block is admissible — so the
+/// transition calls this too, and there is exactly one definition of what a fresh bond is.
+pub fn palw_bond_state_from_registration_v2(
+    pubkey: &[u8],
+    operator_pubkey: &[u8],
+    collateral: u64,
+    payout_payload: Hash64,
+    registered_daa: u64,
+) -> PalwBondStateV2 {
+    PalwBondStateV2 {
+        pubkey: pubkey.to_vec(),
+        operator_id: palw_operator_id_v2(operator_pubkey),
+        collateral,
+        slashed: 0,
+        status: PalwBondStatusV2::Active,
+        registered_daa,
+        payout_payload,
+    }
+}
+
 pub fn palw_operator_id_v2(operator_pubkey: &[u8]) -> Hash64 {
     let mut state = keyed(PALW_STATE_V2_DOMAIN_OPERATOR_ID);
     state.update(&(operator_pubkey.len() as u64).to_le_bytes());
@@ -4637,15 +4662,7 @@ fn apply_object(
             }
             builder.write_bond(
                 *bond,
-                Some(PalwBondStateV2 {
-                    pubkey: pubkey.clone(),
-                    operator_id: palw_operator_id_v2(operator_pubkey),
-                    collateral: *collateral,
-                    slashed: 0,
-                    status: PalwBondStatusV2::Active,
-                    registered_daa: ctx.daa_score,
-                    payout_payload: *payout_payload,
-                }),
+                Some(palw_bond_state_from_registration_v2(pubkey, operator_pubkey, *collateral, *payout_payload, ctx.daa_score)),
             );
         }
         PalwConsensusObjectV2::BondRetireRequested { bond, .. } => {

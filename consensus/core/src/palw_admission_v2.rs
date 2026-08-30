@@ -154,9 +154,39 @@ pub fn check_palw_producer_entitlement_v2(
     state: &PalwChainStateV2,
     attempt: &crate::palw_attempt_v2::PalwAttemptUnsignedV2,
 ) -> Result<(), PalwAdmissionV2Error> {
+    check_palw_producer_entitlement_v2_with_bootstrap(state, attempt, None)
+}
+
+/// **ADR-0064 — the bond becomes usable in the block that registers it.**
+///
+/// `bootstrap_bond` is the record for THIS attempt's bond as declared by `BondRegistered` in this
+/// block's own mergeset, and it is supplied only past `palw_bootstrap_activation`. With it, a
+/// would-be producer on a stopped chain mines one ordinary algo-6 block that carries their own
+/// registration and makes an attempt under it — which is the whole of the deadlock fix.
+///
+/// This is not a new rule so much as the removal of a disagreement: `apply_palw_transition_v4`
+/// applies accepted objects at step 3 and the block's own work at step 4, so the state machine
+/// ALREADY accepts such a block. Only this pre-check, resolving against the walk state at the
+/// selected parent, refuses — two answers to one question, and this time the answer that stops the
+/// chain.
+///
+/// **Exactly one lookup moves.** The class, the class target, the pwu equality, the epoch budget,
+/// the ticket and the exposure ceiling all keep reading the parent state. Widening this to the
+/// whole admission would make item 6's strict `DerivedV1` equality compare a post-retarget target
+/// against a pwu the producer derived pre-retarget, so on a multi-class chain the first block of
+/// every epoch would be disqualified and the chain would stop every 1000 DAA. testnet-11 runs three
+/// classes.
+pub fn check_palw_producer_entitlement_v2_with_bootstrap(
+    state: &PalwChainStateV2,
+    attempt: &crate::palw_attempt_v2::PalwAttemptUnsignedV2,
+    bootstrap_bond: Option<&crate::palw_state_v2::PalwBondStateV2>,
+) -> Result<(), PalwAdmissionV2Error> {
     // 1 + 9. The bond, at the candidate point, in one status read.
     let bond_key = PalwBondKeyV2(attempt.executor_bond);
-    let bond = state.bond(&bond_key).ok_or(PalwAdmissionV2Error::BondMissing(bond_key))?;
+    let bond = state
+        .bond(&bond_key)
+        .or(bootstrap_bond)
+        .ok_or(PalwAdmissionV2Error::BondMissing(bond_key))?;
     if let PalwBondStatusV2::Retiring { .. } = bond.status {
         return Err(PalwAdmissionV2Error::BondRetiring(bond_key));
     }
@@ -213,12 +243,26 @@ pub fn check_palw_attempt_admission_v2(
     ctx: &PalwBlockContextV2,
     envelope: &PalwAttemptEnvelopeV2,
 ) -> Result<Hash64, PalwAdmissionV2Error> {
+    check_palw_attempt_admission_v2_with_bootstrap(state, state_params, admission, ctx, envelope, None)
+}
+
+/// [`check_palw_attempt_admission_v2`] with ADR-0064's mergeset bond view. See
+/// [`check_palw_producer_entitlement_v2_with_bootstrap`] for what `bootstrap_bond` is and, more
+/// importantly, for what deliberately does NOT read it.
+pub fn check_palw_attempt_admission_v2_with_bootstrap(
+    state: &PalwChainStateV2,
+    state_params: &PalwStateParamsV2,
+    admission: &PalwAdmissionParamsV2,
+    ctx: &PalwBlockContextV2,
+    envelope: &PalwAttemptEnvelopeV2,
+    bootstrap_bond: Option<&crate::palw_state_v2::PalwBondStateV2>,
+) -> Result<Hash64, PalwAdmissionV2Error> {
     let attempt = &envelope.attempt;
 
     // Items 1–5: the producer's entitlement, shared verbatim with the coinbase's question.
-    check_palw_producer_entitlement_v2(state, attempt)?;
+    check_palw_producer_entitlement_v2_with_bootstrap(state, attempt, bootstrap_bond)?;
     let bond_key = PalwBondKeyV2(attempt.executor_bond);
-    let bond = state.bond(&bond_key).expect("entitlement resolved this bond");
+    let bond = state.bond(&bond_key).or(bootstrap_bond).expect("entitlement resolved this bond");
     let class = state.class(&attempt.class_id).expect("entitlement resolved this class");
 
     // 6. The pwu claim against the class rule (pwu ≥ 1 is stateless).
@@ -644,6 +688,92 @@ mod tests {
         )
         .expect_err("a garbage signature must not admit");
         assert!(matches!(err, PalwAdmissionV2Error::Stateless(PalwAttemptV2Error::SignatureInvalid)));
+    }
+
+    /// **ADR-0064 — the deadlock, and the one lookup that closes it.**
+    ///
+    /// A chain whose producers have all stopped cannot restart: producing needs an attempt naming a
+    /// registered bond, and a bond is registered by an object that needs a block. This asserts the
+    /// deadlock is real (a bond the parent state has never seen is refused), that supplying the
+    /// mergeset-declared record admits exactly that block, and — the part that matters — that
+    /// nothing ELSE is relaxed by it.
+    ///
+    /// Both positions, because a switch no fixture exercises in both is how four heartbeat findings
+    /// reached the audit.
+    #[test]
+    fn a_bond_registered_in_this_blocks_own_mergeset_admits_this_blocks_own_attempt() {
+        let sp = state_params();
+        let ap = admission_params();
+        let c = ctx(2, 101, 2);
+
+        // A state that knows the CLASS but has never seen this bond — a chain with no live
+        // producer, and a newcomer holding a registration nobody has yet accepted.
+        let objects = vec![PalwConsensusObjectV2::ClassRegistered {
+            class_id: h64(1),
+            artifact_root: h64(11),
+            slash_value_per_pwu: 5,
+            pwu_rule: PalwPwuRuleV2::MaxPerAttempt(500),
+            initial_target: u128::MAX,
+            share_permille: 1000,
+            activation_daa: 0,
+            admission: None,
+        }];
+        let (classes_only, _) =
+            apply_palw_transition_v2(&PalwChainStateV2::genesis(), &sp, &ctx(1, 100, 1), &objects, None).unwrap();
+
+        let env = attempt(10, 1);
+        let bond_key = PalwBondKeyV2(env.attempt.executor_bond);
+
+        // FENCE OFF: this is the deadlock. Nobody can produce, so nobody can register, so nobody
+        // can produce.
+        let err = check_palw_attempt_admission_v2(&classes_only, &sp, &ap, &c, &env).unwrap_err();
+        assert!(
+            matches!(err, PalwAdmissionV2Error::BondMissing(k) if k == bond_key),
+            "without the fence the chain is wedged shut, which is the state ADR-0064 exists for: {err:?}"
+        );
+
+        // FENCE ON: the record this block's own mergeset declares, built by the SAME constructor the
+        // state transition uses, so the pre-check and the transition cannot disagree about what a
+        // fresh bond is.
+        let declared = crate::palw_state_v2::palw_bond_state_from_registration_v2(
+            &[7u8; 4],
+            &op_key(0x21),
+            1_000,
+            kaspa_hashes::Hash64::from_u64_word(0x9A11),
+            101,
+        );
+        check_palw_attempt_admission_v2_with_bootstrap(&classes_only, &sp, &ap, &c, &env, Some(&declared))
+            .expect("one ordinary block carrying its own registration is how a stopped chain restarts");
+
+        // **The narrowing.** The bootstrap record is not a skeleton key: a bond it declares is still
+        // subject to every other item. Here the same registration is offered for a class the chain
+        // does not have, and admission still refuses — on the CLASS, not the bond.
+        let mut wrong_class = attempt(10, 1);
+        wrong_class.attempt.class_id = h64(999);
+        wrong_class.attempt.challenge =
+            challenge_v2(h64(NET), h64(PPH), TS, 1, h64(999), &wrong_class.attempt.executor_bond);
+        let err = check_palw_attempt_admission_v2_with_bootstrap(&classes_only, &sp, &ap, &c, &wrong_class, Some(&declared))
+            .unwrap_err();
+        assert!(
+            matches!(err, PalwAdmissionV2Error::ClassMissing(_)),
+            "only the BOND lookup moves; everything else still reads the parent state: {err:?}"
+        );
+
+        // And it is not a way to smuggle a mismatched key: item 2 still compares the carried key to
+        // the bond's own, whichever registry answered.
+        let impostor = crate::palw_state_v2::palw_bond_state_from_registration_v2(
+            &[9u8; 4],
+            &op_key(0x21),
+            1_000,
+            kaspa_hashes::Hash64::from_u64_word(0x9A11),
+            101,
+        );
+        let err = check_palw_attempt_admission_v2_with_bootstrap(&classes_only, &sp, &ap, &c, &env, Some(&impostor))
+            .unwrap_err();
+        assert!(
+            matches!(err, PalwAdmissionV2Error::BondKeyMismatch),
+            "a mergeset-declared bond is still the bond it says it is: {err:?}"
+        );
     }
 
     /// **P0-10.** Claims reserve `pwu × slash_value` against `collateral × ratio`; the claim that
