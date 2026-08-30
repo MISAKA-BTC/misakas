@@ -95,6 +95,28 @@ It must refuse while the bond has live claims — a retirement that outran a cla
 would take the collateral out from under a court — and say so with the claim ids rather than a
 generic error.
 
+**Implementation note, from running it against testnet-11 (2026-08-30).** That refusal is harder to
+wire than it reads, and it was wrong twice before it worked:
+
+1. `getPalwProducerFacts` takes the bond as **three** fields — a bare 128-hex txid, the index, and
+   `with_bond` — not the `<txid>:<index>` string every operator flag spells it with. Passing the
+   joined form with `with_bond: false` (the field whose own doc says *"false when
+   `bond_transaction_id` is not to be read at all"*) left `bond_known` permanently false.
+2. Even correctly shaped, an **empty `class_id` returns before the bond is looked at** — a
+   deliberate arm so a wallet can skip collateral without knowing a class. The reserved exposure is
+   therefore unreachable unless a class is named, and **no RPC lists classes**, so the CLI cannot
+   discover one. `bond retire` takes `--class-id`, and without it **refuses**: a guard that steps
+   aside when it cannot see is worth less than no guard, because it still reads like one.
+
+Both arms are now verified against the live chain — with a real class id the command reports the
+producer bond's `53108120` of reserved exposure and refuses. The unit the refusal quotes is
+**reserved exposure**, not a claim count: it is the same number admission checks against the
+ceiling, so the CLI and consensus agree by construction.
+
+The API gap is worth recording on its own: **there is no way to ask this chain about a bond without
+naming a class, and no way to list classes.** The exposure belongs to the bond, not to the class,
+so the coupling is incidental — and it is what made a guard silently unreachable.
+
 ### D3. `misaka bond status` — the outpoint, from the chain
 
 Today the bond outpoint appears exactly once, in a log line the runbook tells operators to keep:
