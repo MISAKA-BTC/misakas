@@ -1009,6 +1009,22 @@ impl Params {
         h.write(b"schedule");
         let mut scores = self.clone();
         scores.for_each_fence(&mut |score| h.write(score.to_le_bytes()));
+        // **ADR-0065 D1's window rides with its fence HERE, and only here.**
+        //
+        // `for_each_fence` must never see this duration — the identity visitor normalises every
+        // value it visits to `0`/`u64::MAX`, which would make two builds shipping different windows
+        // fingerprint identically at every height. But this id is explicitly *not a gate*: it
+        // exists so a mismatch can be REPORTED precisely, and it is what `flow_context` prints when
+        // it keeps a peer whose params id differs.
+        //
+        // Without the window the report was blind to exactly the disagreement it is the only
+        // defence against: two operators scheduling D1 at one height with different windows saw the
+        // warning fire and then read two IDENTICAL schedule ids, which says "these agree" about the
+        // one thing that does not. Some-only, so an unset preset's schedule id is what it was.
+        if let Some(maturity) = self.palw_bond_maturity {
+            h.write(b"palw_bond_maturity_window");
+            h.write(maturity.window_daa.to_le_bytes());
+        }
         h.finalize()
     }
 
@@ -6303,6 +6319,16 @@ mod consensus_params_id_tests {
         // change even though the handshake permits a rolling one. If this assertion ever flips to
         // `assert_ne!`, arming D1 becomes a flag day instead — which is a defensible choice, but it
         // must be a chosen one.
+        //
+        // And the warning has to be able to SAY it: `consensus_schedule_id` is what that log line
+        // prints, so the window is folded in there (and nowhere else). Asserted below, because a
+        // defence that reports two identical ids for the two builds it exists to tell apart is not
+        // a defence.
+        assert_ne!(
+            armed.consensus_schedule_id(),
+            wider.consensus_schedule_id(),
+            "the operator log must be able to name the difference it is the only warning about"
+        );
         assert_eq!(
             armed.consensus_identity_id(),
             wider.consensus_identity_id(),
