@@ -160,9 +160,13 @@ pub fn check_palw_producer_entitlement_v2(
 /// **ADR-0064 — the bond becomes usable in the block that registers it.**
 ///
 /// `bootstrap_bond` is the record for THIS attempt's bond as declared by `BondRegistered` in this
-/// block's own mergeset, and it is supplied only past `palw_bootstrap_activation`. With it, a
-/// would-be producer on a stopped chain mines one ordinary algo-6 block that carries their own
-/// registration and makes an attempt under it — which is the whole of the deadlock fix.
+/// block's own mergeset, and it is supplied only past `palw_bootstrap_activation`. With it, a bond
+/// becomes usable by the block that ACCEPTS its registration rather than by that block's child —
+/// one chain block earlier for a producer joining a live chain.
+///
+/// **Not a recovery mechanism, despite the ADR's original title** (see its correction): a block's
+/// own body is never in its own mergeset, so the newcomer still needs somebody else's block to
+/// carry the registration, and on a chain with no producers there is none.
 ///
 /// This is not a new rule so much as the removal of a disagreement: `apply_palw_transition_v4`
 /// applies accepted objects at step 3 and the block's own work at step 4, so the state machine

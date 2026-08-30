@@ -395,6 +395,10 @@ pub struct VirtualStateProcessor {
     /// [`Self::palw_v2_check_attempt_admission`] for what it admits and, more to the point, for
     /// what it deliberately does not.
     pub(super) palw_bootstrap_activation: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// ADR-0065 D4's fence, `None` on every shipped preset. Past it an `Unavailable` receipt
+    /// decides neither quorum and is never charged as a dissent — see
+    /// [`Self::palw_unavailable_abstains_at`], which is the ONE place this is resolved.
+    pub(super) palw_unavailable_abstains: Option<kaspa_consensus_core::config::params::ForkActivation>,
 
     /// ADR-0033 (B14): the PALW credit gate's fence — `None` (every shipped network) keeps
     /// the whole gate dormant; `Some` makes crossing commitments mintable in the coinbase
@@ -745,6 +749,7 @@ impl VirtualStateProcessor {
             dns_params: params.dns_params.clone(),
             palw_block_commitment: params.palw_block_commitment,
             palw_bootstrap_activation: params.palw_bootstrap_activation,
+            palw_unavailable_abstains: params.palw_unavailable_abstains,
             palw_credit_params: params.palw_credit.clone(),
             palw_schedule: params.palw_schedule,
             palw_ramp: params.palw_ramp,
@@ -1346,8 +1351,12 @@ impl VirtualStateProcessor {
                                 // `palw_bootstrap_activation` unset — every shipped preset — this
                                 // is `None` and the behaviour is byte-identical to before the
                                 // field existed. Armed, the block's own attempt may name a bond
-                                // this block's own accepted objects register, which is how a chain
-                                // whose producers have all stopped restarts without an operator.
+                                // this block's own accepted objects register — one chain block
+                                // earlier than before, for a producer joining a LIVE chain. It
+                                // does NOT restart a stopped one: this block's own body is not in
+                                // this set (a block's transactions are accepted by a later block),
+                                // so the registration still has to arrive in somebody else's
+                                // block. See ADR-0064's correction.
                                 let bootstrap =
                                     self.palw_bootstrap_activation.filter(|fence| fence.is_active(point.daa_score)).map(|_| &folded);
                                 let attempt = match self.palw_v2_check_attempt_admission(&header, state, state_params, &point, bootstrap) {
@@ -1425,7 +1434,7 @@ impl VirtualStateProcessor {
                                         }
                                     })
                                     .collect();
-                                match kaspa_consensus_core::palw_state_v2::apply_palw_transition_v4(
+                                match kaspa_consensus_core::palw_state_v2::apply_palw_transition_v5(
                                     state,
                                     state_params,
                                     self.palw_admission_params_v2.as_ref(),
@@ -1433,6 +1442,7 @@ impl VirtualStateProcessor {
                                     &objects,
                                     work,
                                     &merged_refs,
+                                    self.palw_unavailable_abstains_at(point.daa_score),
                                 ) {
                                     Ok((next, delta, merged_skips)) => {
                                         // A skipped merged work is the block standing while a
@@ -4355,12 +4365,13 @@ impl VirtualStateProcessor {
         for object in objects {
             match self.palw_v2_validate_objects(&folded, state_params, point, std::slice::from_ref(&object)) {
                 Ok(()) => {
-                    match kaspa_consensus_core::palw_state_v2::apply_palw_transition_v2(
+                    match kaspa_consensus_core::palw_state_v2::apply_palw_transition_v2_with_verdict_policy(
                         &folded,
                         state_params,
                         &rehearsal,
                         std::slice::from_ref(&object),
                         None,
+                        self.palw_unavailable_abstains_at(point.daa_score),
                     ) {
                         Ok((next, _)) => {
                             folded = next;
@@ -4453,7 +4464,17 @@ impl VirtualStateProcessor {
         for candidate in candidates {
             let mut attempt = kept.clone();
             attempt.push(candidate.clone());
-            match validate_receipt_quorum_v2(&state, panel_params, state_params, &point, network_domain, &claim, &attempt, verify) {
+            match kaspa_consensus_core::palw_panel_v2::validate_receipt_quorum_v2_with_policy(
+                &state,
+                panel_params,
+                state_params,
+                &point,
+                network_domain,
+                &claim,
+                &attempt,
+                verify,
+                self.palw_unavailable_abstains_at(point.daa_score),
+            ) {
                 Ok(q) => {
                     kept = attempt;
                     verdict = Some(q);
@@ -4715,7 +4736,7 @@ impl VirtualStateProcessor {
                 // two provably disjoint, so exactly one of these objects can ever be acceptable
                 // for a given receipt set.
                 Obj::ReceiptLicensed { claim, receipts } | Obj::ProducerDefaulted { claim, receipts } => {
-                    let quorum = kaspa_consensus_core::palw_panel_v2::validate_receipt_quorum_v2(
+                    let quorum = kaspa_consensus_core::palw_panel_v2::validate_receipt_quorum_v2_with_policy(
                         state,
                         panel_params,
                         state_params,
@@ -4724,6 +4745,7 @@ impl VirtualStateProcessor {
                         claim,
                         receipts,
                         Self::verify_mldsa87_with_context_bool,
+                        self.palw_unavailable_abstains_at(point.daa_score),
                     )
                     .map_err(|e| format!("claim {claim}'s receipt set does not carry a quorum: {e}"))?;
                     use kaspa_consensus_core::palw_panel_v2::PalwReceiptQuorumV2 as Q;
@@ -4892,6 +4914,14 @@ impl VirtualStateProcessor {
         }
         let (anchor_block, anchor_daa) = candidate?;
         Some(kaspa_consensus_core::palw_panel_v2::PalwAnchorFactV2 { anchor_block, anchor_daa, predecessor_daa: 0 })
+    }
+
+    /// **ADR-0065 D4, resolved in exactly one place.** Every consumer — the receipt tally, the
+    /// object-acceptance rehearsal, the assembler and the fold — must get the same answer for the
+    /// same block, because a tally that says "no quorum" beside a fold that still charges the
+    /// dissenting seat is two rules wearing one name.
+    fn palw_unavailable_abstains_at(&self, daa_score: u64) -> bool {
+        self.palw_unavailable_abstains.is_some_and(|fence| fence.is_active(daa_score))
     }
 
     /// **ADR-0042 Decision 6's consumer: an attempt-lane (algo-6) block's stateful admission.**
@@ -10509,12 +10539,13 @@ impl VirtualStateProcessor {
                 // registers — it creates no claim, so there is nothing for a carve to attach to.
                 subsidy: 0,
             };
-            let (genesis_state, delta) = kaspa_consensus_core::palw_state_v2::apply_palw_transition_v2(
+            let (genesis_state, delta) = kaspa_consensus_core::palw_state_v2::apply_palw_transition_v2_with_verdict_policy(
                 &kaspa_consensus_core::palw_state_v2::PalwChainStateV2::genesis(),
                 state_params,
                 &point,
                 &objects,
                 None,
+                self.palw_unavailable_abstains_at(self.genesis.daa_score),
             )
             .expect("the bundle's genesis registrations must apply — `validate_palw_v2` ran them at construction");
             let mut batch = WriteBatch::default();

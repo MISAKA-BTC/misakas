@@ -469,12 +469,18 @@ pub struct Params {
     /// shipped preset, so the behaviour is byte-identical to not having the field at all.
     ///
     /// Past this fence, admission item 1's bond lookup — for the block's OWN attempt only —
-    /// resolves against `bonds(parent state) ∪ {BondRegistered in this block's own mergeset}`,
-    /// which lets a would-be producer mine one ordinary algo-6 block carrying their own
-    /// registration. That is the whole of the fix for a total producer stop: the state machine
-    /// already accepts such a block (`apply_palw_transition_v4` applies objects at step 3 and own
-    /// work at step 4), and only the pipeline pre-check, reading state at the selected parent,
-    /// refuses.
+    /// resolves against `bonds(parent state) ∪ {BondRegistered in this block's own mergeset}`, so a
+    /// bond becomes usable by the block that ACCEPTS its registration instead of by that block's
+    /// child. The state machine already accepts such a block (`apply_palw_transition_v4` applies
+    /// objects at step 3 and own work at step 4); only the pipeline pre-check, reading state at the
+    /// selected parent, refuses. Removing that disagreement is what this fence does.
+    ///
+    /// **It does NOT recover a chain whose producers have all stopped**, and the ADR carries the
+    /// correction: a block's own body is never in its own mergeset (a block's transactions are
+    /// accepted by a later block), and a V2 network accepts only the attempt and receipt lanes,
+    /// both of which require standing the newcomer does not have — so its registration cannot reach
+    /// any block body in the first place. This buys a joining producer one chain block on a LIVE
+    /// chain. Trustless recovery from a total stop remains open.
     ///
     /// **TOP LEVEL on purpose, and it must stay here.** Top-level fences are normalised by
     /// [`Self::consensus_identity_id`], so two builds that disagree only about a future height keep
@@ -482,6 +488,30 @@ pub struct Params {
     /// which is a bare hash over the whole bundle with no normalisation — arming it there would
     /// partition the network on deploy day.
     pub palw_bootstrap_activation: Option<ForkActivation>,
+
+    /// **ADR-0065 D4 — an `Unavailable` receipt stops convicting the producer.** `None` on every
+    /// shipped preset, so the behaviour is byte-identical to not having the field at all.
+    ///
+    /// Past this fence an `Unavailable` verdict counts toward NEITHER quorum and is never charged
+    /// as a dissent — the treatment `Incapable` already gets. A claim whose panel therefore
+    /// concludes nothing falls to the redraw-then-`ReceiptTimeout` path, which voids the escrow and
+    /// slashes nobody, instead of `ProducerDefaulted`, which calls `void_and_slash` and takes
+    /// `claim.reserved` from the producer's bond.
+    ///
+    /// **Why the verdict cannot be repaired instead.** A conviction ought to require proof the
+    /// producer was reached and refused, and no such proof is constructible here: the material pull
+    /// carries no seat identity, nonce or signature, the serve carries no producer signature, and
+    /// neither side records anything. The obligation-naming gate the last audit added
+    /// (`palw_panel_v2`'s `chunk_index` / `requested_daa` checks) is satisfied by two constants in
+    /// the only implementation that files the verdict. So the seat cannot tell *the producer
+    /// withheld* from *the network did not deliver*, and on testnet-11 roughly a third of every
+    /// remote seat's verdicts were the second wearing the first's clothes.
+    ///
+    /// **TOP LEVEL for the reason on `palw_bootstrap_activation`**, and here it is load-bearing
+    /// rather than tidy: this rule must reach a LIVE network, and a fence inside the V2 bundle
+    /// moves `palw_ruleset_id_v2`, which `for_each_fence` never descends into — so every old/new
+    /// pair would fail the handshake outright instead of peering with a warning.
+    pub palw_unavailable_abstains: Option<ForkActivation>,
 
     /// ADR-0042 Decision 1 (PR-10): the ONE PALW switch on the V2 lineage. `Disabled` on every
     /// shipped preset. A network is in exactly one mode; `ConsensusV2` carries the whole atomic
@@ -886,6 +916,10 @@ impl Params {
         if self.palw_bootstrap_activation == Some(ForkActivation::never()) {
             self.palw_bootstrap_activation = None;
         }
+        // ADR-0065 D4, same shape and the same reason.
+        if self.palw_unavailable_abstains == Some(ForkActivation::never()) {
+            self.palw_unavailable_abstains = None;
+        }
         let Some(dns) = self.dns_params.as_mut() else {
             return;
         };
@@ -982,6 +1016,7 @@ impl Params {
             palw_ramp: _,
             palw_block_commitment,
             palw_bootstrap_activation,
+            palw_unavailable_abstains,
             // The V2 bundle's fences are inside `palw_ruleset_id_v2` — see the doc block.
             palw_consensus_mode: _,
             pow_blake2b_sha3_activation,
@@ -1028,6 +1063,17 @@ impl Params {
         // `normalize_values_a_scheduled_fence_drags_with_it`, without which this field would
         // partition the network it was placed at top level to keep together.
         match palw_bootstrap_activation.as_mut() {
+            Some(activation) => fork(activation, visit),
+            None => {
+                absent = u64::MAX;
+                visit(&mut absent);
+            }
+        }
+        // ADR-0065 D4. A pure fence with no duration beside it, so visiting it is safe: the
+        // identity visitor normalises a height, and a height is all this field carries. (Contrast
+        // `inactivity_leak_daa`, deliberately NOT visited — normalising a DURATION would make two
+        // builds shipping different windows fingerprint identically and fork silently.)
+        match palw_unavailable_abstains.as_mut() {
             Some(activation) => fork(activation, visit),
             None => {
                 absent = u64::MAX;
@@ -1211,6 +1257,7 @@ impl Params {
             palw_ramp,
             palw_block_commitment,
             palw_bootstrap_activation,
+            palw_unavailable_abstains,
             palw_consensus_mode,
             pow_blake2b_sha3_activation,
             pow_palw_activation,
@@ -1331,6 +1378,12 @@ impl Params {
         // `normalize_values_a_scheduled_fence_drags_with_it`), so arming it does not cost peering.
         if let Some(activation) = palw_bootstrap_activation {
             h.write(b"palw_bootstrap_activation");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // ADR-0065 D4, Some-only for the same reason: an unset fence writes nothing, so every
+        // shipped preset fingerprints byte-identically to before the field existed.
+        if let Some(activation) = palw_unavailable_abstains {
+            h.write(b"palw_unavailable_abstains");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0042 Decisions 1 + 11: the V2 mode decides block validity wholesale, so it is in
@@ -1606,6 +1659,7 @@ impl Params {
             palw_ramp: self.palw_ramp,
             palw_block_commitment: self.palw_block_commitment,
             palw_bootstrap_activation: self.palw_bootstrap_activation,
+            palw_unavailable_abstains: self.palw_unavailable_abstains,
             palw_consensus_mode: self.palw_consensus_mode.clone(),
             // kaspa-pq PoW algo activation is consensus-fixed, never runtime-overridable.
             pow_blake2b_sha3_activation: self.pow_blake2b_sha3_activation,
@@ -2496,6 +2550,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_ramp: None,
     palw_block_commitment: None,
     palw_bootstrap_activation: None,
+    palw_unavailable_abstains: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: inert on mainnet until its own fork ADR schedules it.
@@ -2622,6 +2677,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_ramp: None,
     palw_block_commitment: None,
     palw_bootstrap_activation: None,
+    palw_unavailable_abstains: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: DISABLED on the public preset (2026-08-12). The Ollama flavor (algo_id = 5)
@@ -2730,6 +2786,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_ramp: None,
     palw_block_commitment: None,
     palw_bootstrap_activation: None,
+    palw_unavailable_abstains: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // PALW LLM PoW: simnet keeps instant local kHeavyHash (simulation/tests must not need a model).
@@ -5138,6 +5195,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_ramp: None,
     palw_block_commitment: None,
     palw_bootstrap_activation: None,
+    palw_unavailable_abstains: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // PALW LLM PoW from genesis: devnet IS the 0.1-bps LLM-PoW network on this branch. Every
@@ -5442,6 +5500,57 @@ mod consensus_params_id_tests {
             never_armed.consensus_identity_id(),
             "Some(never()) and None say the same thing about the rules and must hash the same"
         );
+    }
+
+    /// **ADR-0065 D4's fence, in the same four positions.**
+    ///
+    /// A separate test rather than a loop over the two fences, because the reason this one is at
+    /// top level is different and stronger. ADR-0064's fence enables a capability nobody needs
+    /// until a chain has stopped; D4's REMOVES a rule that is convicting honest producers on a
+    /// live network right now, so it has to reach that network by rolling deploy. A bundle
+    /// placement would move `palw_ruleset_id_v2` — which `for_each_fence` never descends into —
+    /// and every old/new pair would fail the handshake outright instead of peering with a warning,
+    /// which for a fix that must be deployed while the chain runs is the difference between a
+    /// remedy and a second outage.
+    #[test]
+    fn the_unavailable_abstains_fence_separates_networks_only_when_it_is_in_force() {
+        let shipped = MAINNET_PARAMS;
+        assert!(shipped.palw_unavailable_abstains.is_none(), "every shipped preset must leave ADR-0065 D4 dormant");
+
+        let mut armed = MAINNET_PARAMS;
+        armed.palw_unavailable_abstains = Some(ForkActivation::new(9_000_000));
+        assert_eq!(
+            shipped.consensus_identity_id(),
+            armed.consensus_identity_id(),
+            "scheduling D4 for a future height must keep old and new builds peers — this is the whole reason              it is not in the V2 bundle"
+        );
+        assert_ne!(
+            shipped.consensus_params_id(),
+            armed.consensus_params_id(),
+            "…while still being a visible commitment: a rule change nobody can observe in the fingerprint is              how two builds fork in silence"
+        );
+
+        let mut at_genesis = MAINNET_PARAMS;
+        at_genesis.palw_unavailable_abstains = Some(ForkActivation::always());
+        assert_ne!(
+            shipped.consensus_identity_id(),
+            at_genesis.consensus_identity_id(),
+            "in force from block 1 on one side is a rule difference — the two disagree about whether a              quorum of Unavailable takes the producer's stake"
+        );
+
+        let mut never_armed = MAINNET_PARAMS;
+        never_armed.palw_unavailable_abstains = Some(ForkActivation::never());
+        assert_eq!(
+            shipped.consensus_identity_id(),
+            never_armed.consensus_identity_id(),
+            "Some(never()) is absence, or the collapse ahead of the dns_params early return is gone"
+        );
+
+        // The two fences are independent: arming one must not be readable as arming the other.
+        let mut both = MAINNET_PARAMS;
+        both.palw_bootstrap_activation = Some(ForkActivation::always());
+        both.palw_unavailable_abstains = Some(ForkActivation::always());
+        assert_ne!(both.consensus_identity_id(), at_genesis.consensus_identity_id(), "two fences, two identities");
     }
 
     /// **Every fence in the fingerprint is normalised, including the nested ones** (re-audit R-2).

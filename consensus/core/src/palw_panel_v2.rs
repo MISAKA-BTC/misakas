@@ -388,6 +388,41 @@ pub fn validate_receipt_quorum_v2<V>(
 where
     V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
 {
+    validate_receipt_quorum_v2_with_policy(state, params, state_params, ctx, network_domain, claim_id, receipts, verify_mldsa87, false)
+}
+
+/// [`validate_receipt_quorum_v2`] with ADR-0065 D4's verdict policy.
+///
+/// `unavailable_abstains` is `Params::palw_unavailable_abstains` resolved at `ctx.daa_score`.
+/// `false` — every shipped preset — is byte-identical to the tally before the parameter existed.
+///
+/// **What changes past the fence, and what deliberately does not.** An `Unavailable` receipt is
+/// still a well-formed answer: it is still signed, still checked against the panel and the window,
+/// still has to name an obligation the producer actually had, and the seat that files it is still
+/// on the record rather than a no-show. It simply decides nothing — the treatment `Incapable`
+/// already gets. So a panel that cannot be fed reaches no quorum, the claim redraws once
+/// (`rebound_daa`) and then voids at `ReceiptTimeout`, which destroys the escrow and slashes
+/// nobody, rather than at `ProducerDefaulted`, which takes `claim.reserved` from the bond of the
+/// producer that served correctly.
+///
+/// The verdict is kept rather than refused because a seat MUST have a way to say "I got nothing"
+/// — deleting it would push those seats into silence, and silence is the one thing this chain has
+/// established it cannot observe.
+#[allow(clippy::too_many_arguments)]
+pub fn validate_receipt_quorum_v2_with_policy<V>(
+    state: &PalwChainStateV2,
+    params: &PalwPanelParamsV2,
+    state_params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
+    network_domain: Hash64,
+    claim_id: &Hash64,
+    receipts: &[PalwSeatReceiptV2],
+    verify_mldsa87: V,
+    unavailable_abstains: bool,
+) -> Result<PalwReceiptQuorumV2, PalwPanelV2Error>
+where
+    V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
+{
     let claim = state.claim(claim_id).ok_or(PalwPanelV2Error::MissingClaim(*claim_id))?;
     let PalwClaimPhaseV2::PanelBound { bound_daa } = claim.phase else {
         return Err(PalwPanelV2Error::WrongPhase { claim: *claim_id, edge: "ReceiptQuorum" });
@@ -485,7 +520,10 @@ where
     if valid >= params.quorum {
         return Ok(PalwReceiptQuorumV2::Licensed { valid });
     }
-    if unavailable >= params.quorum {
+    // ADR-0065 D4: past the fence there is no second quorum to reach. Reported as `NoQuorum` with
+    // the true tally, so an operator reading the log still sees how many seats said they got
+    // nothing — the number stops being a verdict, it does not stop being visible.
+    if !unavailable_abstains && unavailable >= params.quorum {
         return Ok(PalwReceiptQuorumV2::ProducerUnavailable { unavailable });
     }
     Err(PalwPanelV2Error::NoQuorum { valid, unavailable, needed: params.quorum })
@@ -835,6 +873,25 @@ mod tests {
         // Two Unavailable receipts justify the producer default — the seats answered.
         let receipts = vec![sign_as(&seats[0], unavailable), sign_as(&seats[1], unavailable)];
         assert_eq!(check(&bound, &receipts), Ok(PalwReceiptQuorumV2::ProducerUnavailable { unavailable: 2 }));
+
+        // **ADR-0065 D4, the same receipt set past the fence.** It is still a well-formed answer —
+        // signed, seated, in-window, naming an obligation the producer had — it simply decides
+        // nothing, and the true tally is still reported so an operator can see how many seats got
+        // nothing. Asserted here, beside the position it replaces, because a rule tested only in
+        // its new position cannot show that anything changed.
+        assert!(
+            matches!(
+                validate_receipt_quorum_v2_with_policy(&bound, &p, &sp, &here, net, &claim_id, &receipts, verify, true),
+                Err(PalwPanelV2Error::NoQuorum { valid: 0, unavailable: 2, needed: 2 })
+            ),
+            "past the fence an Unavailable quorum licenses nothing, and the count is still visible"
+        );
+        // And the licensing direction is untouched — D4 removes one verdict's power, not the panel's.
+        let served = vec![sign_as(&seats[0], PalwReceiptVerdictV2::Valid), sign_as(&seats[1], PalwReceiptVerdictV2::Valid)];
+        assert_eq!(
+            validate_receipt_quorum_v2_with_policy(&bound, &p, &sp, &here, net, &claim_id, &served, verify, true),
+            Ok(PalwReceiptQuorumV2::Licensed { valid: 2 })
+        );
 
         // A split (1 Valid, 1 Unavailable) is no quorum for either transition.
         let receipts = vec![sign_as(&seats[0], PalwReceiptVerdictV2::Valid), sign_as(&seats[1], unavailable)];

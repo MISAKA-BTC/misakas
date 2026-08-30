@@ -1,7 +1,11 @@
 # ADR-0064 — Trustless recovery from a total producer stop: the bond becomes usable in the block that registers it
 
-Status: **Proposed** (2026-08-30). Answers the one item ADR-0060 §12 left open after the audit
-withdrew the heartbeat lane.
+Status: **Partially superseded by its own correction** (2026-08-30). It was written to answer the
+one item ADR-0060 §12 left open after the audit withdrew the heartbeat lane. **It does not answer
+it** — see the correction under §Decision, verified against the code and the reason the title is now
+wrong. What it does deliver is landed and dormant: a bond becomes usable one chain block earlier,
+and the pipeline stops disagreeing with the state machine about which state answers *is this bond
+registered*. Facts A and B stand on their own.
 
 ## The question
 
@@ -50,8 +54,46 @@ open: 0 is not available.)
 > epoch budget, class ticket, exposure ceiling, duplicate-attempt — keeps reading the parent state.
 
 Equivalently: **a bond becomes usable by the block that accepts its registration, instead of by
-that block's child.** A would-be producer mines one block that both carries their `BondRegistered`
-and makes an attempt under it. No existing producer is needed, so the deadlock is gone.
+that block's child.**
+
+> ### CORRECTION (2026-08-30, against the implemented code) — this does NOT close the deadlock
+>
+> The sentence that stood here — *"a would-be producer mines one block that both carries their
+> `BondRegistered` and makes an attempt under it; no existing producer is needed, so the deadlock is
+> gone"* — is **false**, and it was false when written. Three facts, each read off the tree:
+>
+> 1. **A block's own body is never in its own mergeset.** `calculate_utxo_state` builds
+>    `mergeset_acceptance_data` from `once(selected_parent) ++
+>    consensus_ordered_mergeset_without_selected_parent` (`utxo_validation.rs:328-331`), which is
+>    `mergeset_blues[1..] ++ mergeset_reds`. A block's transactions are accepted by a *later* block,
+>    never by itself. So "this block's own mergeset" cannot contain a registration the same block
+>    carries — the recovery block described above is unconstructible.
+> 2. **A `ConsensusV2` network accepts exactly two lanes, and both require standing already.**
+>    `accepts_algo_id` (`palw_mode_v2.rs:729-737`) admits the committed-attempt id — which must
+>    decode an envelope naming a registered bond — and the free-prompt receipt id — which must
+>    name a claim already certified at this chain point. The heartbeat lane is `false` since the
+>    2026-08-30 audit.
+> 3. Therefore **a party holding neither a bond nor a certified quantum cannot make any block at
+>    all**, so its `BondRegistered` transaction can never reach a block body, so no later block can
+>    accept it. Moving the lookup earlier does not help: the input it reads is empty for exactly the
+>    party the ADR was written for.
+>
+> **What the change actually buys, and it is real.** On a chain that still has a producer, a bond
+> becomes usable one block sooner — by the block that accepts the registration rather than by that
+> block's child — and the pipeline stops disagreeing with the state machine about which state
+> answers *is this bond registered* (see the next section, which was always the honest description
+> of the change). That defect was real and is now closed. It is a narrowing, not a recovery
+> mechanism.
+>
+> **What a real answer requires, stated so the next attempt does not repeat this one:** a block lane
+> whose validity depends on nothing the chain has previously granted. That is what ADR-0060's
+> heartbeat lane was, and it was withdrawn by the 2026-08-30 audit for four structural findings —
+> so **trustless recovery from a total stop is an OPEN problem**, and this ADR does not solve it.
+> Fact A below is unaffected: it is a theorem about what a chain can check, not about this fix.
+>
+> The staging item that would have caught this is in this document already — *"the bootstrap tool
+> has been run on a real fleet, not reasoned about."* The fixture was never written, and the
+> reasoning was wrong.
 
 ### This is not a new rule; it is the removal of a disagreement
 
@@ -66,16 +108,20 @@ The set is already built and already a consensus input: `palw_v2_bonds_declared_
 `ctx.palw_v2_locked_bonds` on every chain block. The graft is to return the full records rather
 than the outpoints.
 
-### What the recovery block is
+### What the block is
+
+*(Retitled: it is not a "recovery block" — see the correction above.)*
 
 An **ordinary algo-6 block**. It carries a real attempt with a real inference, creates a real claim
 with real escrow and exposure, earns the ordinary subsidy, adds `calc_work(bits)` like every other
 block, and is refutable by a panel and a court. Nothing is relaxed except *when* its bond becomes
-visible.
+visible — and, corrected, that is one chain block earlier for a NEWCOMER JOINING A LIVE CHAIN: the
+block that accepts the registration may attempt under it, instead of that block's child.
 
-**The marginal cost of self-bonding versus pre-bonding is exactly zero** — same collateral, same
-signature, same ticket, same inference, same ceiling. That is why it is not a cheap permissionless
-mint, and it is a stronger argument than any rate limit, because there is no rate to limit.
+**The marginal cost of bonding-then-attempting versus pre-bonding is exactly zero** — same
+collateral, same signature, same ticket, same inference, same ceiling. That is why it is not a cheap
+permissionless mint, and it is a stronger argument than any rate limit, because there is no rate to
+limit.
 
 ### Why it does not reproduce the four withdrawn findings
 

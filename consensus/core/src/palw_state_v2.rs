@@ -2854,11 +2854,16 @@ struct TransitionBuilder<'a> {
     params: &'a PalwStateParamsV2,
     state: PalwChainStateV2,
     entries: Vec<PalwDeltaEntryV2>,
+    /// ADR-0065 D4, resolved by the caller from `Params::palw_unavailable_abstains` at this
+    /// block's DAA. It rides the builder rather than each arm's signature because it is a fact
+    /// about the BLOCK, constant for the whole fold, and threading it through every object arm
+    /// would give a future arm the chance to forget it.
+    unavailable_abstains: bool,
 }
 
 impl<'a> TransitionBuilder<'a> {
-    fn new(parent: &PalwChainStateV2, params: &'a PalwStateParamsV2) -> Self {
-        Self { params, state: parent.clone(), entries: Vec::new() }
+    fn new(parent: &PalwChainStateV2, params: &'a PalwStateParamsV2, unavailable_abstains: bool) -> Self {
+        Self { params, state: parent.clone(), entries: Vec::new(), unavailable_abstains }
     }
 
     // Every write goes through one of these, so the delta cannot miss a change.
@@ -3180,6 +3185,13 @@ impl<'a> TransitionBuilder<'a> {
             // side — it is the seat saying it had no standing to judge — so it is never charged.
             let took = match receipt.answer {
                 PalwSeatAnswerV2::Served => true,
+                // **ADR-0065 D4.** Past the fence `Withheld` is not a side either. A seat files it
+                // when its material never arrived, and it cannot tell a producer that withheld from
+                // a pull that was lost — so charging it for disagreeing with a panel that WAS fed
+                // charges the honest seat for the network's failure. Measured on testnet-11: every
+                // remote seat filed it on ~30% of claims while the producer's co-located seat filed
+                // it on none, which is a property of the transport, not of any seat's honesty.
+                PalwSeatAnswerV2::Withheld if self.unavailable_abstains => continue,
                 PalwSeatAnswerV2::Withheld => false,
                 PalwSeatAnswerV2::Incapable => continue,
             };
@@ -3405,6 +3417,25 @@ pub fn apply_palw_transition_v2(
     apply_palw_transition_v3(parent, params, ctx, accepted_objects, work)
 }
 
+/// [`apply_palw_transition_v2`] with ADR-0065 D4's verdict policy — the face the pipeline's
+/// object-acceptance rehearsal and the state-sync walk use, so neither can hold a different
+/// opinion from the transition they exist to predict.
+pub fn apply_palw_transition_v2_with_verdict_policy(
+    parent: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
+    accepted_objects: &[PalwConsensusObjectV2],
+    current_attempt: Option<&PalwAttemptEnvelopeV2>,
+    unavailable_abstains: bool,
+) -> Result<(PalwChainStateV2, PalwStateDeltaV2), PalwStateV2Error> {
+    let work = match current_attempt {
+        Some(envelope) => PalwBlockWorkV3::Attempt(envelope),
+        None => PalwBlockWorkV3::None,
+    };
+    apply_palw_transition_v5(parent, params, None, ctx, accepted_objects, work, &[], unavailable_abstains)
+        .map(|(state, delta, _)| (state, delta))
+}
+
 /// The merged-work-free face of [`apply_palw_transition_v4`]: byte-identical semantics to the
 /// pre-ADR-0058 transition, kept so every caller and test that predates the mergeset rule reads
 /// exactly as before. An empty mergeset needs no admission params, hence the `None`.
@@ -3439,6 +3470,27 @@ pub fn apply_palw_transition_v4(
     block_work: PalwBlockWorkV3<'_>,
     merged_work: &[PalwMergedWorkV1<'_>],
 ) -> Result<(PalwChainStateV2, PalwStateDeltaV2, Vec<(BlockHash, String)>), PalwStateV2Error> {
+    apply_palw_transition_v5(parent, params, admission, ctx, accepted_objects, block_work, merged_work, false)
+}
+
+/// [`apply_palw_transition_v4`] with ADR-0065 D4's verdict policy.
+///
+/// `unavailable_abstains` is `Params::palw_unavailable_abstains` resolved at `ctx.daa_score`, and
+/// `false` — every shipped preset — is byte-identical to the transition before the parameter
+/// existed. The v2/v3/v4 faces pass `false` and are kept for the tests and fixtures that predate
+/// the rule; **every production caller must reach this one**, because a fold that disagrees with
+/// the acceptance layer about whether a seat took a side computes a different state root.
+#[allow(clippy::too_many_arguments)]
+pub fn apply_palw_transition_v5(
+    parent: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    admission: Option<&crate::palw_admission_v2::PalwAdmissionParamsV2>,
+    ctx: &PalwBlockContextV2,
+    accepted_objects: &[PalwConsensusObjectV2],
+    block_work: PalwBlockWorkV3<'_>,
+    merged_work: &[PalwMergedWorkV1<'_>],
+    unavailable_abstains: bool,
+) -> Result<(PalwChainStateV2, PalwStateDeltaV2, Vec<(BlockHash, String)>), PalwStateV2Error> {
     // 1. Context monotonicity: blue score strictly increases along a chain, DAA never decreases.
     if let Some(last) = &parent.last_point {
         if ctx.blue_score <= last.blue_score {
@@ -3449,7 +3501,7 @@ pub fn apply_palw_transition_v4(
         }
     }
 
-    let mut builder = TransitionBuilder::new(parent, params);
+    let mut builder = TransitionBuilder::new(parent, params, unavailable_abstains);
 
     // 1b. Drain the payout queue THIS block's coinbase paid. It must happen before the sweeps,
     //     because the sweeps are what refill it: a claim finalized by this block is paid by the
@@ -5145,6 +5197,14 @@ fn apply_object(
             // Symmetric to the licensing arm: here the quorum says the producer withheld, so a
             // seat that signed `Valid` is the contradicted one. Punishing only one direction
             // would make the cheap lie obvious.
+            // **ADR-0065 D4: no quorum can license this any more.** The acceptance layer already
+            // refuses the object (the tally cannot return `ProducerUnavailable` past the fence), so
+            // reaching here would mean something bypassed it — and this arm is the one that calls
+            // `void_and_slash`. Refusing rather than trusting the filter is the difference between
+            // a rule and a convention.
+            if builder.unavailable_abstains {
+                return Err(PalwStateV2Error::WrongPhase { claim: *claim_id, edge: "ProducerDefaulted" });
+            }
             let verdicts = palw_seat_verdicts_of_v2(receipts);
             builder.slash_dissenting_seats(&claim, &verdicts, false)?;
             builder.slash_silent_seats(claim_id, &claim, &verdicts)?;
@@ -6815,6 +6875,135 @@ pub(crate) mod tests {
             PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::ReceiptTimeout, .. } => {}
             ref other => panic!("expected the second panel's receipt timeout to void, got {other:?}"),
         }
+    }
+
+    /// **ADR-0065 D4 — an `Unavailable` quorum stops taking the producer's stake.**
+    ///
+    /// The claim it closes was measured, not reasoned about: on testnet-11, 443 of ~1,265 claims
+    /// ended in `ProducerDefaulted` while the producer was serving correctly to the one seat
+    /// co-located with it. The seats that convicted it had simply not received the material, and
+    /// they cannot tell that from a producer withholding it — the pull carries no identity, the
+    /// serve carries no signature, and neither side logs anything.
+    ///
+    /// Two things are asserted per fence position, because the *voiding* was never the problem —
+    /// the *slash* was, and an assertion that only watched the claim's phase would have passed
+    /// either way:
+    ///
+    /// * fence OFF (every shipped preset): the object voids the claim AND debits the producer's
+    ///   bond by `claim.reserved`. This is the live behaviour, and this half of the test is the
+    ///   evidence for the audit correction that the shipped `min_slash_permille_of_escrow = 0`
+    ///   does NOT make a default free — that parameter is admission item 9's and is read nowhere
+    ///   near this path;
+    /// * fence ON: the same object is refused, and the bond is untouched. The claim then falls to
+    ///   the sweep's redraw-then-`ReceiptTimeout`, which voids without a slash.
+    #[test]
+    fn adr_0065_d4_a_default_stops_taking_the_producers_stake() {
+        let p = params();
+        let genesis = PalwChainStateV2::genesis();
+        let staged = |abstains: bool| {
+            let (s1, _) =
+                apply_palw_transition_v2_with_verdict_policy(&genesis, &p, &ctx(1, 100, 1), &register_class_and_bond(), None, abstains)
+                    .expect("registrations apply");
+            let env = attempt(40, 1);
+            let (s2, _) = apply_palw_transition_v2_with_verdict_policy(&s1, &p, &ctx(2, 101, 2), &[], Some(&env), abstains)
+                .expect("the attempt applies");
+            (s2, attempt_id_v2(&env.attempt))
+        };
+        let default_object =
+            |claim_id| PalwConsensusObjectV2::ProducerDefaulted { claim: claim_id, receipts: seat_says(false) };
+
+        // FENCE OFF — the live rule. The stake goes.
+        let (before, claim_id) = staged(false);
+        let staked = before.bond(&bond_key(1)).expect("registered").collateral;
+        let reserved =
+            u64::try_from(before.claim(&claim_id).expect("accepted").reserved).expect("the fixture's reservation fits a bond");
+        assert!(reserved > 0, "the fixture must reserve something, or the slash is invisible");
+        let (after, _) =
+            apply_palw_transition_v2_with_verdict_policy(&before, &p, &ctx(3, 102, 3), &[default_object(claim_id)], None, false)
+                .expect("today a quorum of Unavailable defaults the producer");
+        match after.claim(&claim_id).expect("still present").phase {
+            PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::ProducerWithholding, .. } => {}
+            ref other => panic!("expected ProducerWithholding, got {other:?}"),
+        }
+        let slashed = after.bond(&bond_key(1)).expect("registered");
+        assert_eq!(
+            slashed.collateral,
+            staked - reserved,
+            "`void_and_slash` takes `claim.reserved` from the producer's bond — this is the harm, and it is not gated by \
+             `min_slash_permille_of_escrow`"
+        );
+        assert_eq!(slashed.slashed, reserved, "and it is recorded as a slash, not as a withdrawal");
+
+        // FENCE ON — the same object, refused. No quorum can license it any more.
+        let (before, claim_id) = staged(true);
+        let staked = before.bond(&bond_key(1)).expect("registered").collateral;
+        let err = apply_palw_transition_v2_with_verdict_policy(
+            &before,
+            &p,
+            &ctx(3, 102, 3),
+            &[default_object(claim_id)],
+            None,
+            true,
+        )
+        .expect_err("past the fence nothing may convict a producer of a failure the chain cannot observe");
+        assert!(matches!(err, PalwStateV2Error::WrongPhase { edge: "ProducerDefaulted", .. }), "refused as an edge, got {err:?}");
+        assert_eq!(
+            before.bond(&bond_key(1)).expect("registered").collateral,
+            staked,
+            "and the producer's stake is where it was"
+        );
+    }
+
+    /// **ADR-0065 D4, the other half: the un-fed seat stops paying for the network's failure.**
+    ///
+    /// `slash_dissenting_seats` charges a seat whose verdict its own panel's quorum refuted. When
+    /// a panel IS fed and licenses the claim, the seats whose material never arrived filed
+    /// `Unavailable` — and were charged `claim.reserved` for disagreeing with a fetch that
+    /// happened to work for someone else. Past the fence `Withheld` is not a side, exactly as
+    /// `Incapable` already was not.
+    ///
+    /// Asserted in both positions on the SAME receipt set, so the difference is the rule and
+    /// nothing else.
+    #[test]
+    fn adr_0065_d4_an_unfed_seat_is_not_charged_for_the_quorum_it_missed() {
+        let p = params();
+        let genesis = PalwChainStateV2::genesis();
+        let charged = |abstains: bool| {
+            let (s1, _) =
+                apply_palw_transition_v2_with_verdict_policy(&genesis, &p, &ctx(1, 100, 1), &register_class_and_bond(), None, abstains)
+                    .expect("registrations apply");
+            let env = attempt(40, 1);
+            let claim_id = attempt_id_v2(&env.attempt);
+            let (s2, _) = apply_palw_transition_v2_with_verdict_policy(&s1, &p, &ctx(2, 101, 2), &[], Some(&env), abstains)
+                .expect("the attempt applies");
+            let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: h64(90) }];
+            let (s3, _) = apply_palw_transition_v2_with_verdict_policy(
+                &s2,
+                &p,
+                &ctx(3, 105, 3),
+                &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }],
+                None,
+                abstains,
+            )
+            .expect("the panel binds");
+            let before = s3.bond(&bond_key(1)).expect("registered").collateral;
+            // The quorum licensed; this seat said it got nothing. One receipt set, two rules.
+            let (s4, _) = apply_palw_transition_v2_with_verdict_policy(
+                &s3,
+                &p,
+                &ctx(4, 106, 4),
+                &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: seat_says(false) }],
+                None,
+                abstains,
+            )
+            .expect("licensing applies");
+            (before, s4.bond(&bond_key(1)).expect("registered").collateral)
+        };
+
+        let (before_off, after_off) = charged(false);
+        assert!(after_off < before_off, "today the un-fed seat pays: {before_off} -> {after_off}");
+        let (before_on, after_on) = charged(true);
+        assert_eq!(after_on, before_on, "past the fence it does not — `Withheld` is not a side");
     }
 
     #[test]

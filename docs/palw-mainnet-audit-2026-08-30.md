@@ -273,6 +273,16 @@ the claim hangs until it times out.
    never leave the registry — **quorum is purchasable for roughly a cent.** That is the same root as
    the sybil-frontier finding, reached from the liveness side instead of the safety side.
 
+   > **Wrong as written, and the conclusion survives anyway — see the correction below and ADR-0065
+   > D3 (withdrawn).** `derive_panel_v2` does *not* draw per bond: `palw_panel_v2.rs:216-228` skips
+   > any bond whose `operator_id` is already seated, and `palw_state_v2.rs:4632` refuses a second
+   > bond for a key already bonded. Host C's three seats are three bonds, three operator keys and
+   > three bond keys — legitimate under both rules. The dedup was there the whole time; what it
+   > cannot do is tell two identities from two people, because `operator_id` is a hash of a key the
+   > registrant picks freely. So the sentence to keep is the last one — quorum is purchasable — and
+   > the reason is a free identity namespace, not a missing dedup. Deduping harder was the proposed
+   > remedy and it would have shipped a gate that enforces nothing.
+
 2. **`Unavailable` is trusted as evidence when it is really an absence of evidence.** A seat that
    cannot fetch reports the same verdict as a seat that asked an evasive producer. The court has no
    way to tell "the producer withheld" from "I could not reach it", so unreliable transport is
@@ -286,6 +296,34 @@ does not slash the bond. **The audit's "fix before switching it on" note about a
 has a second, larger reason: turning slashing on over this default rate would slash honest bonds at
 roughly one claim in three.** Do not enable it, and do not treat `ProducerDefaulted` counts as a
 fraud signal, until availability and the seat-diversity rule are fixed.
+
+> **Wrong, and it is the most consequential error in this addendum — the slash is not gated and is
+> happening now.** `min_slash_permille_of_escrow` is read in exactly one place,
+> `palw_admission_v2.rs:418`, where it is admission item 9's *collateral-backs-the-escrow* check.
+> It has nothing to do with what a default costs. The `ProducerDefaulted` arm
+> (`palw_state_v2.rs:5140-5155`) calls `void_and_slash(…, ProducerWithholding)`, and
+> `void_and_slash` (`:3155-3164`) is `void_claim` **followed by
+> `slash_bond(claim.bond, claim.reserved)`** — `claim.reserved` being `pwu × slash_value_per_pwu`,
+> the figure the exposure ceiling is denominated in. The arm's own comment says so: *"this void
+> takes the stake, unlike the two timeouts."*
+>
+> So every one of the 443 defaults debited the producer's bond, on top of voiding the escrow. The
+> contrast that makes it unambiguous is the `ReceiptTimeout` sweep (`:4570`), which calls plain
+> `void_claim` and slashes nobody — the two paths were written to differ in exactly this, and the
+> addendum read the wrong one as the live one.
+>
+> Two things follow. **The harm is larger than recorded**: a relay loss does not merely destroy a
+> claim's escrow, it takes collateral from the producer that served it correctly. And **the honest
+> seats are being charged too** — `slash_dissenting_seats(…, true)` on the licensing arm (`:4975`)
+> takes `claim.reserved` (capped at `min_collateral_sompi`) from every seat that filed
+> `Unavailable` on a claim the panel went on to license, which under transport loss is the
+> un-fed honest seat. `Incapable` is exempt by one `match` arm (`:3182`); `Withheld` is not.
+>
+> **Operational consequence, and it should be measured before anything else:** read the producer
+> bond's `collateral` and `slashed` on testnet-11. The bond is capped-debited per event, so a long
+> enough run of false defaults drives it under `min_collateral_sompi`, at which point
+> `palw_bond_may_take_work_v2` (`:965`) stops it taking work at all — the chain would then be
+> refusing its own only producer for an offence it did not commit.
 
 Remedies belong with ADR-0065: draw seats from distinct operators (the bond-maturity work has to
 touch the same draw), and either make `Unavailable` require positive proof of a refusal rather than

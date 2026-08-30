@@ -963,12 +963,13 @@ async fn a_duplicate_lifecycle_object_is_dropped_and_the_block_stands() {
 /// **ADR-0064 — the bootstrap registry is the one the transition will have, not the one the
 /// object list looks like.**
 ///
-/// The recovery rule lets a chain block's own attempt name a bond that this same block's objects
-/// register, which is how a chain whose producers have all stopped restarts without an operator.
-/// The bond it resolves against therefore has to be the registry the transition will hold after it
-/// folds this block's accepted objects — and the cheap way to write that lookup, scanning the
-/// object list for the first matching `BondRegistered`, is a DIFFERENT question with a different
-/// answer.
+/// The rule lets a chain block's own attempt name a bond that this block's ACCEPTED objects
+/// register — the registration riding a transaction in the selected parent's body or a merged
+/// block's, never in this block's own body, which is why it buys a joining producer one chain
+/// block and does not restart a stopped chain (ADR-0064's correction). The bond it resolves
+/// against therefore has to be the registry the transition will hold after it folds those
+/// objects — and the cheap way to write that lookup, scanning the object list for the first
+/// matching `BondRegistered`, is a DIFFERENT question with a different answer.
 ///
 /// It differs exactly when the block touches the bond again. A mergeset carrying a registration
 /// and then a retirement for the same bond leaves it `Retiring`; the first-object reading says
