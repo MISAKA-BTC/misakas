@@ -120,7 +120,14 @@ pub async fn status(ctx: &Ctx, ks: &KeySource) -> CliResult {
 /// This moves the bond to `Retiring`; the collateral is released after the withdrawal delay, which
 /// is why the delay must outlast the whole claim lattice (a bond that could leave sooner could
 /// commit fraud and withdraw before it was provable).
-pub async fn retire(ctx: &Ctx, ks: &KeySource, bond_arg: Option<&str>, dry_run: bool, yes: bool) -> CliResult {
+pub async fn retire(
+    ctx: &Ctx,
+    ks: &KeySource,
+    bond_arg: Option<&str>,
+    class_id: Option<&str>,
+    dry_run: bool,
+    yes: bool,
+) -> CliResult {
     let nv = connect(ctx).await?;
     let key = ks.load_key()?;
     let addr = key.funding_address(nv.params.prefix());
@@ -160,17 +167,31 @@ pub async fn retire(ctx: &Ctx, ks: &KeySource, bond_arg: Option<&str>, dry_run: 
     // The request takes the bond as THREE fields — a bare 128-hex txid, the index, and `with_bond`
     // — not as the `<txid>:<index>` string every flag spells it with. Passing the joined form (and
     // `with_bond: false`, which tells the node not to read the bond at all) left `bond_known`
-    // permanently false, so the refusal below could never fire. Verified against the live chain:
-    // it is the guard that has to be asked correctly, because a guard that never fires reads
-    // exactly like a bond that owes nothing.
+    // permanently false, so the refusal below could never fire.
+    //
+    // **And an EMPTY class id returns before the bond is ever looked at.** The handler answers an
+    // empty class id with the locked-outpoint set alone — a deliberate arm, added so a wallet can
+    // skip collateral without knowing a class — which means the exposure this guard exists to read
+    // is unreachable without naming a class. There is no RPC that lists classes, so the CLI cannot
+    // discover one; the operator has to supply it.
+    //
+    // So when it is not supplied this command **refuses**. Retiring without the check is the exact
+    // thing the guard is for, and a guard that steps aside when it cannot see is worth less than no
+    // guard at all, because it still reads like one.
+    let Some(class_id) = class_id else {
+        return Err(CliError::new(
+            exit::GENERIC,
+            format!(
+                "cannot check whether {}:{} still owes a court without --class-id.\n\
+                 The node reports a bond's reserved exposure only alongside a class it knows, and no RPC lists classes.\n\
+                 Pass any registered class id (128-hex) — the node logs the one it produces under; the exposure belongs to the bond, not the class.",
+                bond_outpoint.transaction_id, bond_outpoint.index
+            ),
+        ));
+    };
     let facts = nv
         .client
-        .get_palw_producer_facts(
-            String::new(),
-            bond_outpoint.transaction_id.to_string(),
-            bond_outpoint.index,
-            true,
-        )
+        .get_palw_producer_facts(class_id.to_string(), bond_outpoint.transaction_id.to_string(), bond_outpoint.index, true)
         .await
         .map_err(|e| CliError::new(exit::GENERIC, format!("getPalwProducerFacts: {e}")))?;
     // **Reserved exposure IS the live-claim count, in the unit that matters.** A claim reserves
@@ -183,6 +204,14 @@ pub async fn retire(ctx: &Ctx, ks: &KeySource, bond_arg: Option<&str>, dry_run: 
     // command cannot answer, so it refuses rather than signing a release for an outpoint no
     // registry entry backs. Before the request above was fixed this arm was unreachable, which is
     // why it must be an error and not a shrug.
+    if !facts.available {
+        return Err(CliError::new(
+            exit::GENERIC,
+            format!(
+                "this node did not answer for class {class_id} — either it is not a ConsensusV2 network or it does not know that class. Pass a class id this chain has registered."
+            ),
+        ));
+    }
     if !facts.bond_known {
         return Err(CliError::new(
             exit::GENERIC,

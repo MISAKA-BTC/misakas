@@ -393,6 +393,11 @@ enum BondCmd {
         /// Which bond, as `<txid>:<index>`. Optional when this key holds exactly one.
         #[arg(long)]
         bond: Option<String>,
+        /// A class id (128-hex) the chain knows — required, because the only RPC that reports a
+        /// bond's reserved exposure will not answer without one. The node prints the class id it
+        /// produces under; any registered class works, since the exposure belongs to the bond.
+        #[arg(long)]
+        class_id: Option<String>,
         /// Build and price the carrier, print it, submit nothing.
         #[arg(long)]
         dry_run: bool,
@@ -739,8 +744,8 @@ async fn main() -> std::process::ExitCode {
         Command::Key(KeyCmd::Address { key }) => key_address(&ctx, &key.source()),
         Command::Key(KeyCmd::Import { out, hex_stdin }) => key_import(&ctx, &out, hex_stdin),
         Command::Bond(BondCmd::Status { key }) => bond::status(&ctx, &key.source()).await,
-        Command::Bond(BondCmd::Retire { key, bond, dry_run, yes }) => {
-            bond::retire(&ctx, &key.source(), bond.as_deref(), dry_run, yes).await
+        Command::Bond(BondCmd::Retire { key, bond, class_id, dry_run, yes }) => {
+            bond::retire(&ctx, &key.source(), bond.as_deref(), class_id.as_deref(), dry_run, yes).await
         }
         Command::Config(ConfigCmd::Init { force }) => config::init(&ctx.network, force),
         Command::Config(ConfigCmd::Show) => {
