@@ -24,10 +24,13 @@ sybil `BondRegistered` objects into the fork's own blocks, seat panels from them
 grow `safe_frontier` privately. `palw_fork_choice`'s stated invariant — *a fork nobody could see
 collects no receipts, so it has no frontier* — is already false.
 
-**Liveness side, measured on testnet-11.** `derive_panel_v2` draws seats per **bond**, not per
-operator (`min_active_validators` was fixed to dedup by `validator_pubkey_hash`; the panel draw
-never was). The shipped panel is `seat_count = 5, quorum = 3`, and **one host runs three seats** —
-exactly quorum. 443 of ~1,265 claims (35 %) ended in `ProducerDefaulted`, each voiding ≈2,756 MSK.
+**Liveness side, measured on testnet-11.** The shipped panel is `seat_count = 5, quorum = 3`, and
+**one host runs three seats** — exactly quorum. 443 of ~1,265 claims (35 %) ended in
+`ProducerDefaulted`, each voiding ≈2,756 MSK.
+
+That host holds three seats *legitimately*: three bonds, three distinct `operator_id`s, three
+distinct bond keys. The draw is working as designed (see D3). Cheap, permanent, instantly-usable
+bonds plus a free identity namespace mean **quorum is something one party can simply hold**.
 
 ## What the live chain taught that the code review could not
 
@@ -35,11 +38,21 @@ exactly quorum. 443 of ~1,265 claims (35 %) ended in `ProducerDefaulted`, each v
 quorums license OPPOSITE transitions.* A `Valid` quorum licenses `ReceiptLicensed`; an
 `Unavailable` quorum licenses `ProducerDefaulted`.
 
-And availability fails **per claim, not per seat**: when a seat cannot evaluate a claim, every seat
-in the same situation fails on the same claims. On testnet-11 the producer loads three class
-artifacts and four of the five seats hold only two, so a whole class's claims are unevaluable to
-everyone except the producer's co-located panel. The three seats on one host vote `Unavailable`
-together, reach quorum unaided, and convict a producer that is serving correctly.
+And availability fails **per claim, not per seat**: when a seat cannot obtain a claim's material,
+every seat in the same situation fails on the same claims. The three seats on one host vote
+`Unavailable` together, reach quorum unaided, and convict a producer that is serving correctly.
+
+The mechanism was measured, and the first diagnosis was wrong in a way worth keeping. It looked like
+a configuration gap — the producer loaded three class artifacts, host C's seats held two. That gap
+was real and was closed; **the convictions continued** at ~30 % from every remote seat while the
+producer's co-located panel stayed at 0 %. The cause is the **material transport**: a seat with no
+material issues a gossip pull (`request_palw_material`, one per 25 DAA), waits half the receipt
+window, and signs `Unavailable`. The co-located panel never needs the pull, which is exactly why it
+never accuses. Roughly a third of pulls do not deliver, and **neither side logs a send, an answer, or
+a timeout**.
+
+So the conviction rate is a measurement of relay loss wearing a fraud verdict's clothes — and the
+config fix not stopping it is the evidence that this is structural rather than operational.
 
 **The general shape: a verifier's own missing dependency is submitted as evidence against the
 accused.** Correlated failure plus a positive-conviction verdict plus co-located quorum is enough to
@@ -99,9 +112,14 @@ option. Re-price if desired, but never in place of D1–D4.
 * **Do not raise `min_slash_permille_of_escrow` from 0 before D4.** The audit already flagged
   admission item 9; the measured default rate adds the larger reason — enabling slashing over this
   rate would slash honest bonds at roughly one claim in three.
-* D3 raises the operator floor: a panel of 5 distinct operators plus a producer needs 6 real
-  operators, which is what `derive_panel_v2` already refuses to fake. That is a liveness cost paid
-  deliberately, and it is the same cost ADR-0064 names for a recovered chain.
+* **D1 has a liveness price that must be paid deliberately.** `derive_panel_v2` refuses a short draw
+  (`InsufficientEligibleBonds`, `palw_panel_v2.rs:229`), so raising the bar for eligibility can stop
+  every claim binding. On a chain with barely more eligible bonds than `seat_count`, a maturity
+  window means **no panel can be drawn until the window elapses** — and a freshly re-minted network
+  starts with exactly that shortage. D1 must therefore measure maturity from a base the genesis
+  bonds already satisfy, or ship dormant behind a fence armed after the network has bonds to spare.
+* **D4 is the one that stops present harm**, and unlike D1 and D2 it is not defeated by a free
+  identity namespace. It should ship first.
 
 ## Two operational rules that fall out, worth keeping even after the code is fixed
 
