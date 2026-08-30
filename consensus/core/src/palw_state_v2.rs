@@ -5522,7 +5522,17 @@ fn rebuild_deadline_index_v2(state: &mut PalwChainStateV2, params: &PalwStatePar
         match claim.phase {
             PalwClaimPhaseV2::Provisional => {
                 deadlines.insert((
-                    claim.accepted_daa.checked_add(params.window_bind).ok_or(PalwStateV2Error::Overflow("bind deadline"))?,
+                    // `bind_base_daa()`, not `accepted_daa` — the fourth site that dates the bind
+                    // phase, and the one the redraw's own doc listed and did not convert. A
+                    // redrawn claim's deadline computed from `accepted_daa` disagrees with
+                    // `expected_deadline`/`assert_deadline_consistency`, and `into_state` runs
+                    // rebuild-then-assert: the tip stops loading (`CarriageInconsistent`), which
+                    // the virtual processor `.expect`s — a node crash one block after any redraw,
+                    // unfixable by a wipe because re-sync re-derives it. The delta path
+                    // (apply/revert) skips the assert, so it would instead have carried a stale
+                    // deadline and voided the claim at the next sweep while an inline node kept it
+                    // live: the same defect wearing the reorg-divergence costume.
+                    claim.bind_base_daa().checked_add(params.window_bind).ok_or(PalwStateV2Error::Overflow("bind deadline"))?,
                     *id,
                 ));
             }

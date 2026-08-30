@@ -4455,7 +4455,10 @@ impl VirtualStateProcessor {
                 Obj::PanelBound { claim, anchor, seats } => {
                     let claim_record = state.claim(claim).ok_or_else(|| format!("panel names unknown claim {claim}"))?;
                     let anchor_fact = self
-                        .palw_v2_anchor_fact_of_candidate(point.block, claim_record.accepted_daa, panel_params)
+                        // The REDRAW's base, or the second panel's anchor is derived for a slot
+                        // `validate_panel_bound_v2` no longer expects (it moved to
+                        // `bind_base_daa()`), and every revived claim fails `AnchorMismatch`.
+                        .palw_v2_anchor_fact_of_candidate(point.block, claim_record.bind_base_daa(), panel_params)
                         .ok_or_else(|| format!("no anchor exists yet for claim {claim} on this chain"))?;
                     kaspa_consensus_core::palw_panel_v2::validate_panel_bound_v2(
                         state,
@@ -5134,7 +5137,8 @@ impl VirtualStateProcessor {
             // The anchor is the first chain block at or past `accepted_daa + anchor_delay`. Until
             // one exists the claim simply waits — that delay is what stops a producer from
             // mining until it likes its own jury.
-            let Some(anchor) = self.palw_v2_anchor_fact_of_candidate(block, claim.accepted_daa, panel_params) else {
+            // Same base as the validator's, for the same reason — see the sibling call site.
+            let Some(anchor) = self.palw_v2_anchor_fact_of_candidate(block, claim.bind_base_daa(), panel_params) else {
                 continue;
             };
             // A registry too small to seat a panel yields nothing rather than a short one: a
@@ -5396,7 +5400,20 @@ impl VirtualStateProcessor {
         // Current total active stake + validator count at the sink (rollout gating).
         let active_stakes_at_sink: Vec<_> = bonds.iter().filter(|b| is_bond_active_at(b, sink_daa)).map(|b| b.amount).collect();
         let total_active = active_stakes_at_sink.iter().fold(0u64, |acc, amount| acc.saturating_add(*amount));
-        let active_validators = active_stakes_at_sink.len() as u32;
+        // **DISTINCT validators, not bonds** (audit 2026-08-30). Nothing binds a key to a single
+        // bond — `active_bond_total_sompi` says so in its own doc, and every other counter in this
+        // file dedups (`min_anchor_attesters`, the weight folds, `aggregate_epoch_tallies`). This
+        // one did not, so one operator holding N bonds read as N validators: a single key could
+        // register twelve 50M bonds and flip DNS to `Active` alone, holding 100 % of the voting
+        // weight — which is audit H-11's refusal verbatim, and it silently nullified the 3 → 12
+        // re-pricing whose whole argument is that corrupting a 2/3 quorum costs `ceil(2n/3)`
+        // SEPARATE bonds.
+        let active_validators = bonds
+            .iter()
+            .filter(|b| is_bond_active_at(b, sink_daa))
+            .map(|b| b.validator_pubkey_hash)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len() as u32;
         let hard_mandatory_active = sink_daa >= dns_params.mandatory_attestation_inclusion_daa_score;
         let capacity = mandatory_attestation_mass_capacity(
             active_stakes_at_sink.iter().copied(),
@@ -6355,12 +6372,28 @@ impl VirtualStateProcessor {
         };
         let (contributions, epoch_anchor_daa) =
             self.collect_stake_contributions_v2(tip, Some(ancestor), bonds, net_id, dns_params, weight);
-        let last_attestation = kaspa_consensus_core::dns_finality::last_attestation_daa_by_validator(&contributions, &epoch_anchor_daa);
-        let leak = kaspa_consensus_core::dns_finality::InactivityLeakViewV1 {
-            last_attestation_daa: &last_attestation,
-            leak_after_daa: dns_params.inactivity_leak_daa,
-        };
-        let totals = self.total_weight_by_epoch(tip, bonds, net_id, dns_params, &epoch_anchor_daa, weight, leak);
+        // **NO LEAK ON THE BRANCH COMPARISON, ever** (ADR-0060 D4, amended after audit).
+        //
+        // This is `stake_score_since_ancestor`: the evidence is one BRANCH's segment, so a
+        // validator that attested only on the other branch is invisible here. Letting the leak
+        // drop those validators from the denominator would let a candidate branch write its own
+        // denominator — the §8.1 quorum-intersection argument's exact prohibition, and the
+        // property this function's own doc says it exists to keep. Measured consequence if it
+        // were allowed: a 2-of-12 attacker branch scores `f = 1.0` and earns full credit per
+        // epoch, where before the leak it scored 0 and could never satisfy the stake dimension
+        // of the reorg gate.
+        //
+        // The leak's legitimate subject is the LIVE quorum tally at the sink, where the evidence
+        // is the chain everyone shares.
+        let totals = self.total_weight_by_epoch(
+            tip,
+            bonds,
+            net_id,
+            dns_params,
+            &epoch_anchor_daa,
+            weight,
+            kaspa_consensus_core::dns_finality::InactivityLeakViewV1::none(),
+        );
         let per_epoch = aggregate_epoch_tallies(&contributions, &totals);
         compute_stake_score(&per_epoch, dns_params.epoch_credit_rule(pov_daa_score))
     }

@@ -45,6 +45,46 @@ use kaspa_math::{Uint256, Uint320};
 /// under the ADR-0060 bounds. A new id would need a new finalizer arm for identical bytes.
 pub const PALW_HEARTBEAT_ALGO_ID: u8 = POW_ALGO_ID_BLAKE2B_SHA3;
 
+/// **The lane ships OFF (audit 2026-08-30), and this is the switch.**
+///
+/// The doctrine in ADR-0060 §2 stands; this implementation of Decisions 1–2 does not, and four
+/// findings are structural rather than tuning:
+///
+/// 1. **It can price the bonded lane off its own chain, permanently.** Heartbeat headers carry
+///    the lane's own (2²⁴-hard) `bits`, and those rows sit in the GLOBAL difficulty window. A V2
+///    network's ambient target is `MAX_DIFFICULTY_TARGET` — work 2 — because the class lottery,
+///    not the hash target, is its throttle. Measured over the shipped 264-row window: 255 bonded
+///    + 9 heartbeat rows still demands work 2, but **0 bonded + 263 heartbeat rows demands
+///    33,554,432**. After a bonded outage longer than the window (~14 h at the ramped cadence)
+///    a returning attempt-lane producer would need ~33 M inferences for one block, so no bonded
+///    block can re-enter the window, so the average never re-mixes. The fixed point is a
+///    heartbeat-only chain recoverable only by re-mint — the self-feeding refusal this very ADR
+///    was written to abolish, reintroduced by its own remedy, and firing exactly in the regime
+///    §4 designs for.
+/// 2. **ε is not small against a V2 block.** Decision 1.2 argues a bonded block (~10⁶ work)
+///    dwarfs ε = 1. On a V2 preset `calc_work(0x207fffff) = 2`, so a heartbeat is worth HALF a
+///    bonded block. With `ghostdag_k = 1` a bondless attacker mining two siblings per layer
+///    accrues 2 units per 120 s against the honest chain's 2 — parity, for ~280 kH/s.
+/// 3. **The slot rule bounds the chain, not the DAG.** Sibling heartbeats share one POV, so they
+///    share one admissible timestamp and one `expected_bits`; nothing bounds their width. And the
+///    retarget can never rise above the floor, because the slot rule guarantees
+///    `measured ≥ expected`, which the clamp turns back into the floor. Unbounded valid blocks at
+///    a permanently fixed ~16.7 M-hash price.
+/// 4. **The evidence walk reads past the pruning horizon** (cap 2,000 against a `pruning_depth`
+///    of 6,600 is fine, but the walk terminates on row COUNT, not on depth), so an archival node
+///    and a pruned node can compute different `expected_bits` for the same block and reject each
+///    other's — a partition along the `--archival` flag.
+///
+/// Fixing 1 needs the lane's price to leave `header.bits` (the way the receipt lane's ticket
+/// already does); 2 needs a work basis that is not the shared blue-work scale; 3 needs DAG-wide
+/// evidence; 4 needs a depth bound tied to `pruning_depth`. That is a redesign, not a constant,
+/// and it must not ride a re-mint as a surprise. Everything else the doctrine landed — the
+/// timeout sweeps, the zero-seat gate, the leak's mechanism — is unaffected by this switch.
+///
+/// The code, its rules and its tests stay in the tree so the redesign starts from something
+/// measured rather than from a blank page.
+pub const PALW_HEARTBEAT_LANE_ENABLED: bool = false;
+
 /// Nominal cadence: one heartbeat per hour (≈ 24/day ≈ 33‰ of the 120 s cadence).
 pub const HEARTBEAT_NOMINAL_INTERVAL_MS: u64 = 3_600_000;
 /// Above one hour of bonded-lane silence: one per ten minutes.
@@ -67,8 +107,17 @@ pub const HEARTBEAT_BLUE_WORK_EPSILON: u64 = 1;
 /// The walk is chain-order over the POV's selected-parent chain — see
 /// `processes::heartbeat_evidence` in the consensus crate for why the sampled difficulty
 /// window cannot serve this.
-pub const HEARTBEAT_RETARGET_ROWS: usize = 32;
-pub const HEARTBEAT_EVIDENCE_MAX_BLOCKS: usize = 30_000;
+///
+/// **Both numbers are a COST bound, and that is why they are small.** The walk runs per
+/// heartbeat header validated, so every row is a header-store read a peer can ask this node to
+/// perform. At the nominal 1/hour slot against a 120 s cadence a heartbeat sits every ~30
+/// blocks, so 8 rows is ~240 blocks of walking — roughly eight hours of lane history, enough
+/// for a retarget to mean something — and the 2,000-block cap is ~2.8 days, past which "no
+/// bonded block found" is the honest answer anyway (the ramp then reads full silence, which is
+/// what a chain that quiet actually needs). The first cut of this pair was 32/30,000; nothing
+/// needed the extra span and it multiplied the per-header cost by 125.
+pub const HEARTBEAT_RETARGET_ROWS: usize = 8;
+pub const HEARTBEAT_EVIDENCE_MAX_BLOCKS: usize = 2_000;
 
 /// The floor on heartbeat difficulty, as work: the easiest admissible target demands ~2²⁴
 /// hash evaluations (~seconds of one CPU). A legitimate miner pays it once per interval; a
@@ -80,6 +129,22 @@ pub const HEARTBEAT_MIN_WORK_LOG2: u32 = 24;
 /// The easiest target a heartbeat header may declare (see [`HEARTBEAT_MIN_WORK_LOG2`]).
 pub fn heartbeat_easiest_target() -> Uint256 {
     Uint256::MAX >> HEARTBEAT_MIN_WORK_LOG2
+}
+
+/// **The O(1) gate that must run BEFORE the evidence walk.**
+///
+/// PoW is verified against the header's OWN declared `bits` (`check_pow_and_calc_block_level`),
+/// and the rule that those bits are the RIGHT ones runs afterwards — so without this a peer
+/// could declare a trivial target, solve it in a couple of hashes, and make every node walk its
+/// chain for the retarget before the answer came back "wrong bits". That is a few hashes of
+/// attacker work against hundreds of header-store reads of everyone else's, per message.
+///
+/// The floor is the same one the retarget clamps to, so this can never refuse a header the
+/// retarget would have accepted: every admissible `bits` is at least this hard. What it does
+/// refuse — in constant time, before any store read — is the class of header that was never
+/// going to be admissible, and that is exactly the class an attacker mints cheaply.
+pub fn heartbeat_bits_meet_the_floor(bits: u32) -> bool {
+    Uint256::from_compact_target_bits(bits) <= heartbeat_easiest_target()
 }
 
 /// The interval the lane is currently held to, from bonded-lane silence (ADR-0060 Decision 2).
@@ -262,6 +327,50 @@ mod tests {
             heartbeat_expected_bits(&very_slow, t0 + 7_260_000),
             start_bits,
             "easing from the floor clamps at the floor"
+        );
+    }
+
+    /// The O(1) floor gate refuses the cheap-to-mint header before any walk, and never refuses
+    /// one the retarget would admit.
+    #[test]
+    fn the_floor_gate_is_cheap_and_never_over_refuses() {
+        // The easiest admissible target passes; anything easier does not.
+        assert!(heartbeat_bits_meet_the_floor(heartbeat_easiest_target().compact_target_bits()));
+        assert!(!heartbeat_bits_meet_the_floor(0x207fffffu32), "the trivial genesis-grade target is refused in O(1)");
+        // Harder than the floor always passes.
+        assert!(heartbeat_bits_meet_the_floor((heartbeat_easiest_target() >> 8u32).compact_target_bits()));
+        // And every value the retarget can produce passes it — the gate cannot over-refuse.
+        let t0 = 3_000_000_000_000u64;
+        let start = heartbeat_easiest_target().compact_target_bits();
+        for span in [60_000u64, 600_000, 3_600_000, 7_200_000] {
+            let rows = [bonded(t0 + span), hb(t0, start), hb(t0 + span, start)];
+            let bits = heartbeat_expected_bits(&rows, t0 + span + 1_000);
+            assert!(heartbeat_bits_meet_the_floor(bits), "retarget produced bits the floor gate refuses (span {span})");
+        }
+    }
+
+    /// **The evidence cap must outlast the slot interval, or the slot rule stops capping.**
+    ///
+    /// The walk is the only thing that finds the youngest heartbeat. If the cap is shorter than
+    /// one nominal interval's worth of blocks, that heartbeat falls outside it, the slot rule
+    /// sees an empty lane and admits another block immediately — the lane's rate cap silently
+    /// evaporates. The two constants were unrelated by anything but a comment; this relates
+    /// them, at the cadence the shipped V2 presets actually run.
+    #[test]
+    fn the_evidence_cap_outlasts_the_slot_interval() {
+        // The shipped ConsensusV2 cadence: `PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS`.
+        let cadence_ms = crate::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
+        let blocks_per_nominal_interval = HEARTBEAT_NOMINAL_INTERVAL_MS / cadence_ms;
+        assert!(
+            (HEARTBEAT_EVIDENCE_MAX_BLOCKS as u64) > blocks_per_nominal_interval,
+            "the walk must reach back past one interval ({blocks_per_nominal_interval} blocks) or the slot rule cannot see \
+             the heartbeat it is supposed to measure against"
+        );
+        // And far enough to collect the retarget's rows at that spacing, or the lane never
+        // leaves its floor.
+        assert!(
+            (HEARTBEAT_EVIDENCE_MAX_BLOCKS as u64) >= blocks_per_nominal_interval * HEARTBEAT_RETARGET_ROWS as u64,
+            "the walk must reach the {HEARTBEAT_RETARGET_ROWS} rows the retarget measures over"
         );
     }
 

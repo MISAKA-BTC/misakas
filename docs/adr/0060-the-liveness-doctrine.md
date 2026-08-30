@@ -1,6 +1,10 @@
 # ADR-0060: The liveness doctrine — time is permissionless, weight is bonded, finality is an overlay
 
-- Status: Accepted; **implemented 2026-08-30** (`palw-genesis-10b-cap` branch, same re-mint
+- Status: Accepted as doctrine; **implemented 2026-08-30 and then SHIPPED OFF the same day** —
+  the mainnet audit (`docs/palw-mainnet-audit-2026-08-30.md`) found four structural defects in
+  Decisions 1–2 and one in Decision 4. `PALW_HEARTBEAT_LANE_ENABLED = false`,
+  `inactivity_leak_daa: u64::MAX` on every preset. §12 records what must change before either
+  turns on. Decisions 3 and 5 are unaffected and live. Originally: **implemented 2026-08-30** (`palw-genesis-10b-cap` branch, same re-mint
   train as ADR-0059) — see §11 for what landed and where the implementation amended this text.
   The one operator-tunable decision is the finality leak's time constant (§6).
 - Date: 2026-08-30
@@ -257,3 +261,34 @@ The honest ledger of what this costs: up to 33‰ of blocks in calm weather (and
 more in a crisis) are hash work rather than useful inference — the minimal concession that
 buys the property that the network survives its producers, its validators, and its own
 court's mistakes.
+
+
+## 12. What the audit changed (2026-08-30, same day)
+
+The doctrine in §2 stands. This implementation of it does not, and the failures are worth as much
+as the design was:
+
+* **D1/D2 (heartbeat lane) — OFF.** It could price the bonded lane off its own chain permanently
+  (heartbeat `bits` poison the global difficulty window: 0 bonded + 263 heartbeat rows demands
+  33,554,432 work where the ambient V2 target demands 2); ε = 1 is half a bonded block rather than
+  a millionth, because a V2 block's work IS 2; the slot rule bounds the chain but not the DAG, and
+  the retarget structurally cannot rise above its floor; and the evidence walk terminated on row
+  count rather than depth, so archival and pruned nodes could reject each other's blocks. The
+  first of those is the doctrine's own failure mode, reintroduced by the doctrine's own remedy —
+  which is the strongest argument in this file for writing the failure down instead of the intent.
+* **D4 (inactivity leak) — DORMANT.** The evidence cannot express the rule: the attestation walk
+  spans ~150 s on mainnet against a declared 7 days, so absence from a two-minute window read as
+  seven days of silence. Wired into the branch comparison it let a candidate branch write its own
+  denominator — a 2-of-12 branch scoring full credit where it used to score zero. It is now
+  dormant, structurally excluded from the branch comparison, and correctly classified as a
+  duration rather than an activation fence (as a fence its value was normalised away, so two
+  builds disagreeing about the denominator would have peered).
+* **D3, D5 — unaffected.** Producer self-healing and the refusal-decay inventory stand as landed.
+
+**Consequence for ADR-0061.** A zero-seat genesis is still a valid genesis, but its BOOTSTRAP —
+"heartbeat blocks carry the first bond registrations" — waits on the redesign above. Until then a
+zero-seat network can be minted and cannot make its first block.
+
+**What a correct heartbeat lane needs:** its price out of `header.bits` (the receipt lane's ticket
+is the existing pattern), a work basis that is not the shared blue-work scale, DAG-wide slot
+evidence, and a depth bound tied to `pruning_depth`.

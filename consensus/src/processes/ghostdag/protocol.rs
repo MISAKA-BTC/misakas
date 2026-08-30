@@ -205,7 +205,8 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
                 // One, not zero (the receipt lane's figure above): among heartbeat-only branches —
                 // total bonded collapse, the regime the lane exists for — ε × n still orders the
                 // longer chain first.
-                if self.heartbeat_epsilon_work
+                if kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_LANE_ENABLED
+                    && self.heartbeat_epsilon_work
                     && header.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID
                 {
                     return BlueWorkType::from(kaspa_consensus_core::palw_heartbeat_v1::HEARTBEAT_BLUE_WORK_EPSILON);

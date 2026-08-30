@@ -273,8 +273,12 @@ pub fn validate_panel_bound_v2(
     if ctx.daa_score < anchor.anchor_daa {
         return Err(PalwPanelV2Error::BindOutsideWindow("a panel cannot bind before its anchor exists"));
     }
+    // `bind_base_daa()`, matching the anchor slot ten lines up: a redrawn claim's second panel
+    // binds inside the window that starts at the REDRAW. Dating this from `accepted_daa` made
+    // the redraw inert — the second bind is by construction past `accepted_daa + window_bind`
+    // on every shipped bundle, so every revived claim was refused here and voided anyway.
     let deadline = claim
-        .accepted_daa
+        .bind_base_daa()
         .checked_add(state_params.window_bind())
         .ok_or(PalwPanelV2Error::BindOutsideWindow("bind deadline overflows the DAA score"))?;
     if ctx.daa_score > deadline {

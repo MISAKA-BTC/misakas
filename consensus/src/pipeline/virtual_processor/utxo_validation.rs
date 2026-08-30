@@ -923,7 +923,8 @@ impl VirtualStateProcessor {
         // Verify coinbase transaction (incl. the §F carve + §E fan-out + §D bounty).
         // ADR-0060 Decision 1.4: a heartbeat block's own payload declares ZERO subsidy — the
         // expected coinbase must expect the same bytes the body rule already enforced.
-        let own_subsidy = if self.palw_state_params_v2.is_some()
+        let own_subsidy = if kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_LANE_ENABLED
+            && self.palw_state_params_v2.is_some()
             && header.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID
         {
             0

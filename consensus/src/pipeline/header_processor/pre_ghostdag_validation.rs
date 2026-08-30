@@ -126,7 +126,8 @@ impl HeaderProcessor {
         // headers, one identity) and is refused at the door. This also closes the pre-ADR-0060
         // gap: nothing previously refused a stuffed root on an algo-1..5 header at all.
         let root_committing_lane = kaspa_consensus_core::pow_layer0::is_palw_v2_algo_id(header.pow_algo_id)
-            || (header.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID
+            || (kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_LANE_ENABLED
+                && header.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID
                 && matches!(self.palw_consensus_mode, kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)));
         if !root_committing_lane && header.palw_state_root != kaspa_hashes::ZERO_HASH64 {
             return Err(RuleError::UncommittedPalwStateRoot(header.pow_algo_id));

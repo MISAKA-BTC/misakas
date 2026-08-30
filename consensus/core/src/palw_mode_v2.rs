@@ -620,10 +620,23 @@ impl PalwConsensusParamsV2 {
 
         // Withdrawal outlasts the whole liability period plus the reorg margin: a bond cannot
         // commit fraud and leave before it is provable.
+        //
+        // **TWO bind+receipt pairs**, for the same reason `Params::validate_palw_v2`'s pruning
+        // check counts two: a claim whose first panel concludes nothing is REVIVED once and binds
+        // a second panel (`sweep_deadlines`' `PanelBound` arm), so the longest path from
+        // acceptance to a judgement runs through the redrawn lattice. The pruning-horizon check
+        // was updated when the redraw landed and this one was not — and this is the half that
+        // decides money: with the single-pair formula the shipped bundle computes 5,700 against a
+        // 6,000 delay and boots, while the real figure is 6,900. A producer could retire, wait out
+        // the delay, and take its collateral back 901 DAA before a redrawn claim's fraud stopped
+        // being provable. Nothing else blocked it: `BondRetired` refuses only an already-retiring
+        // bond, and `palw_bond_collateral_is_locked_v2` releases on `since_daa + delay` alone,
+        // without asking whether a claim is still open.
         let liability = self
             .state
             .window_bind()
             .checked_add(self.state.window_receipt())
+            .and_then(|pair| pair.checked_mul(2))
             .and_then(|x| x.checked_add(self.state.window_challenge()))
             .and_then(|x| x.checked_add(self.state.window_court()))
             .and_then(|x| x.checked_add(self.reorg_margin_daa))
@@ -716,7 +729,11 @@ impl PalwConsensusParamsV2 {
     pub fn accepts_algo_id(&self, algo_id: u8) -> bool {
         algo_id == self.algorithm_id
             || algo_id == self.freeprompt.receipt_algorithm_id()
-            || algo_id == crate::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID
+            // OFF since the 2026-08-30 audit — see `PALW_HEARTBEAT_LANE_ENABLED` for the four
+            // structural findings. With the switch false this is the two-lane acceptance the
+            // network had before ADR-0060, byte for byte.
+            || (crate::palw_heartbeat_v1::PALW_HEARTBEAT_LANE_ENABLED
+                && algo_id == crate::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID)
     }
 }
 
@@ -1108,7 +1125,11 @@ pub(crate) mod tests {
         // Decision 1) and the bondless heartbeat (ADR-0060 Decision 1) — and nothing else.
         assert!(bundle.accepts_algo_id(crate::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2));
         assert!(bundle.accepts_algo_id(crate::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3));
-        assert!(bundle.accepts_algo_id(crate::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID));
+        assert_eq!(
+            bundle.accepts_algo_id(crate::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID),
+            crate::palw_heartbeat_v1::PALW_HEARTBEAT_LANE_ENABLED,
+            "the heartbeat lane follows its switch (OFF since the 2026-08-30 audit)"
+        );
         for other in [0u8, 1, 2, 4, 5, 8, 0xff] {
             assert!(!bundle.accepts_algo_id(other), "algo {other} is no lane of this network");
         }

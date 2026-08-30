@@ -42,9 +42,23 @@ impl HeaderProcessor {
         // pull the average ≤ its cadence share, ~3.3‰..33‰): a filtered average would need the
         // algo id in the compact-header store, and the pollution is bounded and self-correcting
         // — during a ramp there is no bonded miner to burden, and afterwards the window re-mixes.
-        let expected_bits = if header.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID
+        let expected_bits = if kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_LANE_ENABLED
+            && header.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID
             && matches!(self.palw_consensus_mode, kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(_))
         {
+            // **O(1) before O(walk).** PoW was verified against this header's DECLARED bits, and
+            // whether those bits are the right ones is what the retarget below decides — so a
+            // peer who declares a trivial target solves it in a couple of hashes and would
+            // otherwise buy a full chain walk with it, per message. The floor gate is the same
+            // clamp the retarget applies, so it can only refuse headers the retarget was never
+            // going to admit.
+            if !kaspa_consensus_core::palw_heartbeat_v1::heartbeat_bits_meet_the_floor(header.bits) {
+                return Err(RuleError::UnexpectedDifficulty(
+                    header.hash,
+                    header.bits,
+                    kaspa_consensus_core::palw_heartbeat_v1::heartbeat_easiest_target().compact_target_bits(),
+                ));
+            }
             // Chain-order evidence, NOT the (sampled) difficulty window: the sampled window can
             // miss the newest blocks entirely, and the slot rule is about exactly those.
             let rows = crate::processes::heartbeat_evidence::collect_heartbeat_evidence(

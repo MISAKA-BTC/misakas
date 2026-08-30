@@ -205,7 +205,7 @@ const REGISTRATION_EXPOSURE_SOMPI: u64 = 40_000;
 /// what this rule is about.
 const RECLAIM_EPOCHS: u32 = 12;
 
-const WITHDRAWAL_DELAY: u64 = 6_000;
+const WITHDRAWAL_DELAY: u64 = 7_500;
 
 /// Per-adjustment retarget clamp (ADR-0038 Decision D) and the ADR-0045 Decision 2 epoch-budget
 /// tolerance, in permille of a class's cadence share. Unity is the floor (below it a budget
@@ -276,7 +276,10 @@ const SLASH_VALUE_PER_PWU: u64 = 5;
 /// claim plus `WINDOW_CHALLENGE` away — DAA 1200 at one claim per block. Every claim the chain
 /// was waiting to finalize was itself occupying the room the chain needed to keep producing.
 /// Blocks were produced, receipts were licensed, and nothing ever finalized.
-const MAX_CLAIM_EXPOSURE_DAA: u64 = WINDOW_BIND + WINDOW_RECEIPT + WINDOW_CHALLENGE + WINDOW_COURT + FP_ABANDON_HOLD;
+// TWO bind+receipt pairs — the redraw (`sweep_deadlines`' `PanelBound` arm) revives a claim once
+// and binds a second panel, so a claim's exposure is held across the LONGER path. Sizing this at
+// one pair under-funded the derived collateral by 20 % against the lifetime it actually reserves.
+const MAX_CLAIM_EXPOSURE_DAA: u64 = 2 * (WINDOW_BIND + WINDOW_RECEIPT) + WINDOW_CHALLENGE + WINDOW_COURT + FP_ABANDON_HOLD;
 
 /// One bond in a genesis registry.
 ///
@@ -601,9 +604,28 @@ mod tests {
     /// reachable by honest production again.
     #[test]
     fn the_covered_span_is_every_window_a_live_claim_can_wait_through() {
-        assert_eq!(MAX_CLAIM_EXPOSURE_DAA, WINDOW_BIND + WINDOW_RECEIPT + WINDOW_CHALLENGE + WINDOW_COURT + FP_ABANDON_HOLD);
-        // The one that made the difference: a licensed claim waits out the challenge window
-        // while still holding its reservation, so the bind window alone is not the span.
+        // **Not a restatement of the definition — a WALK of the state machine's own arms.**
+        //
+        // The previous body asserted `MAX_CLAIM_EXPOSURE_DAA == <its own definition>`, which is
+        // true however wrong the definition is: it could not catch a window entering the lattice,
+        // which is exactly what its name promises and exactly what happened when the redraw
+        // landed. This walks the longest path a claim can take instead, in the order
+        // `sweep_deadlines` takes it, and demands the constant cover it.
+        let accepted = 0u64;
+        let first_bind_deadline = accepted + WINDOW_BIND; // PanelBound must arrive by here
+        let receipt_timeout = first_bind_deadline + WINDOW_RECEIPT; // no quorum -> swept here
+        let rebound = receipt_timeout; // the redraw dates the SECOND panel from the sweep
+        let second_bind_deadline = rebound + WINDOW_BIND;
+        let licensed = second_bind_deadline + WINDOW_RECEIPT; // receipts under the second panel
+        let challenge_deadline = licensed + WINDOW_CHALLENGE;
+        let court_terminal = challenge_deadline + WINDOW_COURT; // an opened court runs its window
+        let longest_live_span = court_terminal + FP_ABANDON_HOLD; // and a free-prompt hold after
+        assert!(
+            MAX_CLAIM_EXPOSURE_DAA >= longest_live_span,
+            "a claim can stay live for {longest_live_span} DAA but the exposure span funds only {MAX_CLAIM_EXPOSURE_DAA} —              a bond sized from this admits fewer concurrent claims than it can accumulate, which is the block-600 wedge"
+        );
+        // The one that made the difference originally: a licensed claim waits out the challenge
+        // window while still holding its reservation, so the bind window alone is not the span.
         assert!(MAX_CLAIM_EXPOSURE_DAA > WINDOW_BIND + WINDOW_CHALLENGE);
     }
     use super::*;
@@ -659,7 +681,8 @@ mod tests {
         let worst_case = b.court.worst_case_duration_daa().expect("the court shape has a finite worst case");
         assert!(s.window_court() > worst_case, "an honest prosecution fits its window");
         assert!(b.freeprompt.receipt_maturity_daa() >= b.reorg_margin_daa, "the draw beacon sits past the reorgable fringe");
-        let liability = s.window_bind() + s.window_receipt() + s.window_challenge() + s.window_court() + b.reorg_margin_daa;
+        // The redrawn lattice, matching `validate_ruleset_shape` — see the comment there.
+        let liability = 2 * (s.window_bind() + s.window_receipt()) + s.window_challenge() + s.window_court() + b.reorg_margin_daa;
         assert!(b.bond.withdrawal_delay_daa() > liability, "a bond cannot leave before its fraud is provable");
         // **The genesis/post-genesis asymmetry, and why it stays.**
         //

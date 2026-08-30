@@ -374,6 +374,16 @@ async fn palw_heartbeat_blocks_tick_the_clock_and_weigh_epsilon() {
     use kaspa_consensus_core::palw_heartbeat_v1 as hb;
     use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
 
+    // **The lane ships OFF** (`PALW_HEARTBEAT_LANE_ENABLED`, audit 2026-08-30 — four structural
+    // findings, listed on the constant). This test is the redesign's starting point: it proves the
+    // mechanism end-to-end and must go green again the day the switch flips, so it stays in the
+    // tree and skips rather than being deleted. Skipping is stated out loud; a silently-passing
+    // test for a disabled feature is how a feature comes back wrong.
+    if !hb::PALW_HEARTBEAT_LANE_ENABLED {
+        kaspa_core::info!("SKIPPED: the heartbeat lane is disabled (PALW_HEARTBEAT_LANE_ENABLED = false)");
+        return;
+    }
+
     kaspa_core::log::try_init_logger("info");
     let catalog = palw_v2_test_catalog();
     let config = ConfigBuilder::new(MAINNET_PARAMS)

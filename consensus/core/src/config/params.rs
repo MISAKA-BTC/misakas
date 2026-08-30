@@ -1038,7 +1038,15 @@ impl Params {
             dns_veto_ttl_daa_score: _,
             min_anchor_attesters: _,
             unbond_authz_mergeset_activation_daa_score,
-            inactivity_leak_daa,
+            // **A DURATION, not a fence** — the same classification the two entries above it
+            // carry, and getting it wrong is a silent fork. `consensus_identity_id` normalises
+            // every visited value to `0 or u64::MAX`, which is right for "does this rule turn on
+            // at a height" and meaningless for "how long may a validator be silent": under it
+            // 6_048_000, 5_040 and 1 all collapse to the same identity as `u64::MAX`, so two
+            // builds that disagree about the finality denominator would peer normally and find
+            // out at the first confirmation. It stays inside `consensus_params_id` (the borsh
+            // blob), which is where a value like this belongs.
+            inactivity_leak_daa: _,
         } = dns;
 
         visit(dns_activation_daa_score);
@@ -1049,7 +1057,6 @@ impl Params {
         visit(mandatory_attestation_inclusion_daa_score);
         visit(coinbase_settlement_consensus_activation_daa_score);
         visit(unbond_authz_mergeset_activation_daa_score);
-        visit(inactivity_leak_daa);
 
         let crate::vlt::VltParams {
             vlt_shadow_activation_daa_score,
@@ -2068,10 +2075,17 @@ pub const PRODUCTION_DNS_PARAMS: DnsParams = DnsParams {
     // Genesis-active was chosen deliberately over a fence: the fence only papers over that single
     // historical stamp, at the cost of every future net inheriting a magic number.
     unbond_authz_mergeset_activation_daa_score: 0,
-    // ADR-0060 Decision 4: ~7 days at the 10 bps cadence (864_000 DAA/day). Long enough that
-    // finality uniqueness is only at risk in a partition nobody could miss; short enough that a
-    // lost validator set stops being a permanent halt.
-    inactivity_leak_daa: 6_048_000,
+    // **ADR-0060 Decision 4 ships DORMANT (amended after the 2026-08-30 audit).**
+    //
+    // The intended rule is "silent for ~7 days leaves the quorum denominator". The implemented
+    // evidence cannot express it: `last_attestation_daa_by_validator` can only report anchors
+    // drawn from `epoch_anchor_daa`, and that map spans `stake_score_window_blue_score` (1500
+    // here, ~150 s at 10 bps) — so a validator absent from a two-minute window and holding a
+    // bond older than the constant was leaked immediately, four orders of magnitude early.
+    // Correcting it needs PERSISTED per-validator last-attestation state, not a windowed walk,
+    // and that is a design change rather than a constant. Until it exists the honest value is
+    // the one that runs the pre-leak protocol byte-for-byte.
+    inactivity_leak_daa: u64::MAX,
     // MISAKA Verified LLM Token-Weighted BFT (`vlt::VltParams`): the replacement of bonded capital
     // by verified useful compute as the source of voting power. Shipped DORMANT
     // (`vlt_activation_daa_score: u64::MAX`) on mainnet + testnet: activating it is a coordinated
@@ -2224,9 +2238,10 @@ pub const TESTNET_DNS_PARAMS: DnsParams = DnsParams {
     required_work_depth: Uint576([100, 0, 0, 0, 0, 0, 0, 0, 0]),
     min_bond_amount_sompi: 10 * SOMPI_PER_KASPA,
     min_active_stake_sompi: 10 * SOMPI_PER_KASPA,
-    // ADR-0060 Decision 4: ~7 days at the frozen 120 s cadence (720 DAA/day). The inherited
-    // PRODUCTION figure is denominated at 10 bps and would be ~23 years here.
-    inactivity_leak_daa: 5_040,
+    // Dormant here for the same reason as PRODUCTION — see the comment there. (The testnet
+    // window is 30 blue score, so the implemented rule would have leaked on ~1 h of silence
+    // against a declared 7 days.)
+    inactivity_leak_daa: u64::MAX,
     // Experimental single-operator testnet mesh: pin the validator-count floor to 1 (mainnet's
     // PRODUCTION floor is 3, audit H-11). This is the live testnet's intended config; do NOT raise
     // it here without re-provisioning multiple testnet validators.
@@ -2942,7 +2957,14 @@ pub fn palw_rc_params_with_classes(
         .chain(bundle.genesis_objects.iter().map(genesis_pwu_of))
         .max()
         .unwrap_or(0);
-    let carried_collateral = crate::palw_fp_devnet_v3::palw_v2_collateral_for_claim_lifetime_v1(dearest_pwu_per_inference);
+    // **The declaration is what the runtime ceiling reads, so it must be the money that is
+    // really there** — `max(derived minimum, the genesis output's own amount)`. Declaring only
+    // the derived minimum left ADR-0061's re-sized carve invisible to consensus: the exposure
+    // ceiling is `declared × max_exposure_ratio`, so the surplus sitting in the outpoint bought
+    // exactly one extra concurrent claim, and the ADR's "≈3× margin" existed on paper only. The
+    // held amount is the honest figure and C-08 (`held ≥ declared`) still passes by construction.
+    let carried_collateral = crate::palw_fp_devnet_v3::palw_v2_collateral_for_claim_lifetime_v1(dearest_pwu_per_inference)
+        .max(crate::config::premine::GENESIS_BOND_COLLATERAL_SOMPI);
     for genesis_object in bundle.genesis_objects.iter_mut() {
         if let crate::palw_state_v2::PalwConsensusObjectV2::BondRegistered { collateral, .. } = genesis_object
             && *collateral < carried_collateral
@@ -4763,9 +4785,16 @@ pub const PALW_RC_GENESIS_BONDS: &[PalwRcGenesisBondCard] = &[
     },
 ];
 
-/// Is the genesis card filled in? An empty registry is the shipped state: a `ConsensusV2` network
-/// with no bond boots and then cannot make a block, because admission refuses an attempt naming a
-/// bond the chain does not have.
+/// Is the genesis card filled in?
+///
+/// **This no longer decides whether the network gets its ruleset** (ADR-0061 Decision 1, and the
+/// audit that followed it). It used to: an empty card returned the bundle-free base identity, so
+/// the moment an operator emptied the registry to mint the zero-seat genesis the ADR describes,
+/// `Params::from(testnet-11)` quietly handed back a HASH-ONLY chain — no PALW lanes, no heartbeat
+/// lane, no court, a 10B premine and nothing to spend it on. A whole fleet built from that binary
+/// agrees with itself and peers happily, so the one warning that fires ("peers will refuse the
+/// handshake") is false exactly when it matters. A zero-seat network is a V2 network whose
+/// producers have not arrived yet, which is the ADR's whole sentence.
 pub fn palw_rc_genesis_card_is_set() -> bool {
     !PALW_RC_GENESIS_BONDS.is_empty()
 }
@@ -4778,7 +4807,10 @@ pub fn palw_rc_genesis_card_is_set() -> bool {
 /// re-typing parameters"). A per-node config file would make every operator's ruleset a local
 /// decision, and the handshake would be the first place anyone found out.
 pub fn palw_rc_shipped_params() -> Params {
-    if !palw_rc_genesis_card_is_set() {
+    // The artifact root is the one thing code cannot mint. Without it there is no class to
+    // register and therefore no ruleset to assemble — that, and only that, is what falls back to
+    // the bundle-free base. An empty BOND registry does not: see `palw_rc_genesis_card_is_set`.
+    if PALW_RC_GENESIS_ARTIFACT_ROOT == crate::Hash64::from_bytes([0u8; 64]) {
         return palw_rc_base_params();
     }
     let bonds: Vec<_> = PALW_RC_GENESIS_BONDS
@@ -5569,7 +5601,15 @@ mod consensus_params_id_tests {
             // and neither 13 ever shipped, so one 13 carries the union and every pin below is
             // the merged tree's own value — a fingerprint is a function of the whole ruleset,
             // never a sum of per-branch diffs.
-            ("mainnet", MAINNET_PARAMS, "0d8a7039134cf7497203102ee053ff6cef15e434db1377f251be02187cb279ac"),
+            // **Re-pinned once more at the end of the 2026-08-30 AUDIT.** Four remediations move
+            // these: the heartbeat lane ships off (`PALW_HEARTBEAT_LANE_ENABLED`), the inactivity
+            // leak ships dormant AND stops being misfiled as an activation fence (it is a
+            // duration — under the fence normalisation every value collapsed to one identity, so
+            // two builds disagreeing about the finality denominator would have peered), the claim
+            // lattice's redraw is now counted by the bond-withdrawal invariant and by
+            // `MAX_CLAIM_EXPOSURE_DAA`, and a genesis bond declares the collateral its outpoint
+            // actually holds. Derived once from the fixed tree, as always.
+            ("mainnet", MAINNET_PARAMS, "3952b6920801fac4a9d0bf6f8f42abbfa56ff2b23eb8e8671b59ec0d67551854"),
             // Moved by the bps01⊕iso unification (2026-08-16): the CPU pins are now the UNION of
             // the two facts the branches discovered separately — `single-variant` (bps01, by
             // disassembly) ∧ `no-openmp` (iso, by the Linux link error) in `CPU_BUILD_PROFILE`,
@@ -5587,7 +5627,7 @@ mod consensus_params_id_tests {
             // see docs/testnet10-palw-rollout-runbook.md — and pinned MATERIALIZED (below) per
             // the 8208cd6 lesson, so the pre-merge values (`32cbf80f…` re-genesis-const /
             // `d07cb673…` shadow-materialized) were both superseded by that merge.
-            ("testnet", TESTNET_PARAMS, "3fac24a134d6ba703833d3b8a88a359941e94e8fe4c5ce5dbcd3fbcefd197fd7"),
+            ("testnet", TESTNET_PARAMS, "0d9cf361e02dea6d9e873014ff5e414c2e8e6879e8d705cde6c924a3a3f8dd88"),
             // The PALW staging net (gate-4 soak): differs from "testnet" in exactly the three
             // activation flips (hash lane off, PALW-4 on, Ollama off) + the TN11 genesis. Its own
             // pin proves the t10 row above did NOT move when this preset was added.
@@ -5778,7 +5818,7 @@ mod consensus_params_id_tests {
                 // and the zero-seat genesis gate change moves no bytes on a seated network.
                 //
                 // **This value is the union re-pin at the 2026-08-30 merge** — see the mainnet row.
-                "189aa2a165290d1369dbffb405d967e60dd8b0ab34c56cd85f1062cdfbea4022",
+                "f3bf86b4e9327f8b02ab2ad1d121d62ecd11bd78cca1455d8bcd7372595153d8",
             ),
             ("simnet", SIMNET_PARAMS, "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd"),
             ("devnet", DEVNET_PARAMS, "6b12b8e9c755c0117057989406dbc36214fc8b7be97108beca4ae2099ab86a69"),
@@ -6012,6 +6052,39 @@ mod consensus_params_id_tests {
     /// An interval whose single-boundary memory already reaches the horizon.
     fn bad_daa_interval(blockrate: &crate::config::params::BlockrateParams) -> u64 {
         blockrate.pruning_depth
+    }
+
+    /// **ADR-0061 Decision 1: a zero-seat genesis is still a ConsensusV2 network.**
+    ///
+    /// The gate stopped refusing an empty registry, but the preset assembly still keyed the whole
+    /// ruleset off the bond card — so emptying the card to mint the zero-seat genesis the ADR
+    /// describes handed back a hash-only chain with a 10B premine and no way to spend it, and no
+    /// gate anywhere would have said so (a fleet of identical binaries fingerprints identically
+    /// and peers fine). The assembly now falls back only when the ARTIFACT ROOT is unset, which is
+    /// the one input code cannot mint.
+    #[test]
+    fn an_empty_bond_registry_still_yields_a_consensus_v2_network() {
+        // The shipped card is non-empty, so assemble the zero-seat case explicitly through the
+        // same entry point the preset uses.
+        let zero_seat = palw_rc_params_from_artifacts(PALW_RC_GENESIS_ARTIFACT_ROOT, Vec::new())
+            .expect("a zero-seat registry assembles — the panel gate retired in ADR-0061");
+        assert!(
+            matches!(zero_seat.palw_consensus_mode, crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)),
+            "a network with no bonds yet is a V2 network whose producers have not arrived — not a hash chain"
+        );
+        // And the lanes that make the bootstrap possible are open on it: the heartbeat supplies
+        // the blocks, the attempt lane is what the first registered bond will produce on.
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &zero_seat.palw_consensus_mode else { unreachable!() };
+        assert!(bundle.accepts_algo_id(crate::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2), "the attempt lane must be open");
+        // The clock lane follows its switch. While it is OFF a zero-seat network is a valid
+        // GENESIS that cannot make its first block — the bootstrap half of ADR-0061 waits on the
+        // heartbeat redesign, and saying so here keeps the two facts from being confused.
+        assert_eq!(
+            bundle.accepts_algo_id(crate::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID),
+            crate::palw_heartbeat_v1::PALW_HEARTBEAT_LANE_ENABLED
+        );
+        // Only an unset artifact root drops the bundle, because only that is unmintable by code.
+        assert_ne!(PALW_RC_GENESIS_ARTIFACT_ROOT, crate::Hash64::from_bytes([0u8; 64]));
     }
 
     #[test]

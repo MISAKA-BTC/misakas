@@ -72,7 +72,8 @@ impl BlockBodyProcessor {
                 // declared subsidy is zero — descendant coinbases read this declaration into the
                 // reward fan-out, so zero here is what makes the lane mint nothing (the 25B supply
                 // of ADR-0059 is untouched by however many heartbeats a crisis runs).
-                let expected_subsidy = if self.palw_heartbeat_fee_only
+                let expected_subsidy = if kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_LANE_ENABLED
+                    && self.palw_heartbeat_fee_only
                     && block.header.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID
                 {
                     0

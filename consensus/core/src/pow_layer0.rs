@@ -1601,12 +1601,18 @@ mod two_lane_gate_tests {
         let mode = PalwConsensusMode::ConsensusV2(bundle.clone());
         let required = mode.required_algo_id();
 
-        // Three lanes since ADR-0060: the two bonded PALW lanes, and the bondless heartbeat
-        // (algo-3 — the Phase-3 hash lane, re-admitted as the network's clock).
-        for id in [POW_ALGO_ID_PALW_COMMITTED_V2, POW_ALGO_ID_PALW_RECEIPT_V3, POW_ALGO_ID_BLAKE2B_SHA3] {
+        // The two bonded PALW lanes, always — plus the bondless heartbeat when its switch is on
+        // (`PALW_HEARTBEAT_LANE_ENABLED`; OFF since the 2026-08-30 audit, so this asserts the
+        // two-lane acceptance the network had before ADR-0060).
+        for id in [POW_ALGO_ID_PALW_COMMITTED_V2, POW_ALGO_ID_PALW_RECEIPT_V3] {
             check_algo_id_for_mode_accepting(id, required, mode.accepts_algo_id(id), false, false, false)
                 .unwrap_or_else(|e| panic!("a V2 network must accept its own lane {id}: {e:?}"));
         }
+        assert_eq!(
+            mode.accepts_algo_id(POW_ALGO_ID_BLAKE2B_SHA3),
+            Some(crate::palw_heartbeat_v1::PALW_HEARTBEAT_LANE_ENABLED),
+            "the heartbeat lane is admitted exactly when its switch says so"
+        );
         // The pre-V2 inference lanes and the Phase-1/2 algos are not this network's.
         for id in [POW_ALGO_ID_KHEAVYHASH, POW_ALGO_ID_ARGON2ID, POW_ALGO_ID_PALW_LLM, POW_ALGO_ID_PALW_OLLAMA] {
             assert!(

@@ -11738,10 +11738,17 @@ mod tests {
         assert_eq!(totals.get(&4), Some(&50)); // daa 600: A(30) + B(20); C slashed
     }
 
-    /// **ADR-0060 Decision 4, executable.** A validator silent past T_leak leaves the quorum
-    /// denominator; an attesting one stays; a freshly bonded one is inside its activation grace;
-    /// and with the survivors alone in the denominator, one live validator's signature is a
-    /// quorum again — finality self-heals instead of waiting for an operator.
+    /// **ADR-0060 Decision 4's mechanism — and the reason it ships DORMANT.**
+    ///
+    /// The mechanism below is correct in isolation. What the 2026-08-30 audit showed is that the
+    /// pipeline cannot FEED it the evidence its meaning requires: `last_attestation_daa_by_validator`
+    /// can only report anchors drawn from `epoch_anchor_daa`, and that map spans
+    /// `stake_score_window_blue_score` — ~150 s on mainnet against a declared 7 days. So the rule
+    /// that would actually execute is "absent from a two-minute window", four orders of magnitude
+    /// early, and on the branch-comparison path it let a candidate branch shrink its own
+    /// denominator. `the_leak_cannot_be_fed_the_evidence_its_meaning_needs` pins that constraint,
+    /// every preset ships `u64::MAX`, and the branch comparison passes `none()` structurally.
+    /// Activation waits on PERSISTED per-validator last-attestation state.
     #[test]
     fn the_inactivity_leak_shrinks_the_denominator_until_quorum_reforms() {
         // Three validators, equal stake 100, all activated at DAA 100.
@@ -11789,6 +11796,41 @@ mod tests {
         let leak_edge = InactivityLeakViewV1 { last_attestation_daa: &edge, leak_after_daa: t_leak };
         assert!(leak_edge.retains(&Hash64::from_u64_word(0xA), 0, 20_000));
         assert!(!leak_edge.retains(&Hash64::from_u64_word(0xA), 0, 20_001));
+    }
+
+    /// **The structural reason the leak cannot be switched on as implemented.**
+    ///
+    /// Whatever `leak_after_daa` says, the silence the evidence can EXPRESS is bounded by the
+    /// span of `epoch_anchor_daa` — the builder never writes a value from anywhere else. A
+    /// validator that attested at the oldest anchor in the window therefore looks at most
+    /// `span` stale, so a `leak_after_daa` larger than the span can never fire on an attesting
+    /// validator; and a validator absent from the window looks INFINITELY stale regardless of
+    /// how recently it really attested. Both halves are wrong in the same direction the audit
+    /// measured, and no constant fixes either.
+    #[test]
+    fn the_leak_cannot_be_fed_the_evidence_its_meaning_needs() {
+        let v = |x: u64| Hash64::from_u64_word(x);
+        // A window of three epochs spanning 300 DAA — the shape the pipeline really produces.
+        // Anchors on a MATURE chain (DAA well past any T_leak) with a short span — the shape
+        // the pipeline really produces once a network has run for a while.
+        let anchors = BTreeMap::from([(1u64, 20_000u64), (2, 20_150), (3, 20_300)]);
+        let contribs = vec![AttestationContribution {
+            epoch: 1,
+            validator_id: v(1),
+            bond_outpoint: fixture_outpoint(),
+            signed_weight: 1,
+        }];
+        let last = last_attestation_daa_by_validator(&contribs, &anchors);
+        let span = anchors.values().max().unwrap() - anchors.values().min().unwrap();
+        let apparent_staleness = anchors.values().max().unwrap() - last[&v(1)];
+        assert!(apparent_staleness <= span, "the builder cannot report staleness beyond the window it read");
+        // So a 7-day constant is unreachable through the attestation half…
+        let seven_days_at_120s = 5_040u64;
+        assert!(span < seven_days_at_120s, "the window is orders of magnitude shorter than the intended T_leak");
+        let leak = InactivityLeakViewV1 { last_attestation_daa: &last, leak_after_daa: seven_days_at_120s };
+        assert!(leak.retains(&v(1), 0, 20_300), "an attester can never be leaked, however long it has really been silent");
+        // …while a validator merely ABSENT from the window is leaked at once, with an old bond.
+        assert!(!leak.retains(&v(2), 0, 20_300), "absence reads as infinite staleness — the defect, in one line");
     }
 
     /// The leak's evidence builder keeps the YOUNGEST anchor per validator, ignores epochs

@@ -25,6 +25,14 @@ genesis (0 bonds) → heartbeat blocks (bondless, fee-only)
                   → sixth distinct operator arrives → licensing begins
 ```
 
+**Audit amendment (2026-08-30, same day).** The bootstrap sentence above depends on ADR-0060
+Decision 1, which the mainnet audit shipped OFF (see ADR-0060 §12). The GATE change stands — a
+zero-seat registry is a valid genesis, and `an_empty_bond_registry_still_yields_a_consensus_v2_network`
+pins that it stays a ConsensusV2 network rather than silently degrading to a hash chain, which is
+a defect this ADR introduced and the audit caught. What waits is the first BLOCK: until the
+heartbeat lane is redesigned, a zero-seat network has no permissionless producer, so the
+capability is real and its bootstrap is not yet.
+
 Until the sixth operator, claims void at `BindTimeout` and their escrow burns — LOUDLY (the
 runtime warns per voided block), which is what distinguishes today's bootstrap phase from the
 silent-forever failure the old gate was written against. The gate keeps every other check:
@@ -72,3 +80,16 @@ Both items were listed there as "deliberately not decided", pending exactly the 
 decision this ADR records. With them decided, a genesis is at last only what a genesis must
 be: the supply (one 10B main wallet under ADR-0059), the community's allocations, and — where
 the operator wants a running start — a registry it could equally have grown on-chain.
+
+
+## Audit note on the collateral figure
+
+The 10,000 MSK carve did not, as first written, buy a ≈3× runtime margin: every exposure ceiling
+reads the DECLARED collateral, and that was pinned to the derived structural minimum, so the
+surplus in the outpoint bought exactly one extra concurrent claim. The declaration is now
+`max(derived, held)` and the margin is real. Two consequences follow and are deliberate: the
+derived minimum itself rose (the redraw's extra bind+receipt pair belongs in
+`MAX_CLAIM_EXPOSURE_DAA`), and the carve is now a CEILING on the dearest class a genesis may
+register — 10,000 MSK admits `pwu_per_inference ≤ ~8.3M` against Qwen3.6's 2.69M, a 3.1× headroom,
+and exceeding it aborts every binary inside `Params::from`. Raising the carve is a supply decision
+under ADR-0059's cap.
