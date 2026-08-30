@@ -2275,6 +2275,12 @@ impl PalwPanelService {
             // keep become the thing that grows.
             first_seen.retain(|claim, _| materials.contains_key(claim) || receipts.contains_key(claim) || live.contains(claim));
             requested.retain(|claim, _| first_seen.contains_key(claim) || live.contains(claim));
+            // `answered` was missed by this sweep and grew for the life of the process — one entry
+            // per claim this seat ever filed on, on a node whose RSS history is the reason the rest
+            // of these lines exist. Dropping a non-live entry cannot cause a double-file: a claim
+            // leaves `live` only once no duty names it, and the duty loop refuses anything past
+            // `receipt_deadline` regardless of what this set remembers.
+            answered.retain(|(claim, _)| live.contains(claim));
             // Our own executions are only needed while the dispute they support is open.
             own_executions.retain(|claim, _| live.contains(claim));
             submit_attempts.retain(|claim, _| receipts.contains_key(claim));
