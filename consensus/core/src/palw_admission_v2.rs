@@ -408,23 +408,47 @@ pub fn check_palw_attempt_admission_v2_with_bootstrap(
     //    Refused here, not at registration: the escrow is a function of THIS block's subsidy,
     //    which a registration cannot know and which the emission schedule moves. Refusing an
     //    attempt is the established shape for "the chain will not back this work" (items 7 and 8
-    //    both do it) — the block stays valid and simply carries no claim, so a misconfigured
-    //    slash value costs its own producer the reward instead of stalling the chain.
-    let escrow = crate::palw_reward_v2::palw_reward_carve_v2(
-        ctx.subsidy,
-        &crate::palw_reward_v2::PalwRewardParamsV2::new(state_params.worker_carve_permille())
-            .map_err(|_| PalwAdmissionV2Error::InvalidParams("the worker carve is not a legal permille"))?,
-    )
-    .worker as u128;
-    let backing_permille = state_params.min_slash_permille_of_escrow() as u128;
-    let required = escrow.checked_mul(backing_permille).ok_or(PalwAdmissionV2Error::Overflow("escrow backing"))? / 1000;
-    if claim_exposure < required {
-        return Err(PalwAdmissionV2Error::EscrowExceedsCollateralBacking {
-            escrow: escrow as u64,
-            reserved: claim_exposure,
-            required,
-            backing_permille: backing_permille as u32,
-        });
+    //    both do it).
+    //
+    //    **AND THE LIVENESS FLOOR IS EXEMPT, for the reason item 7 spells out ninety lines above.**
+    //    This block's earlier text said a refusal here "costs its own producer the reward instead
+    //    of stalling the chain". That is false on a `ConsensusV2` network and item 7 already
+    //    explains why: the attempt lane is the only block type, so an attempt refused on the chain
+    //    block's own header is `StatusDisqualifiedFromChain` — no block, so DAA does not advance,
+    //    so nothing that depends on a clock can recover, because the clock IS the blocks.
+    //
+    //    That is not a footnote, it is the whole reason `min_slash_permille_of_escrow` has never
+    //    left 0. `claim_exposure` is `pwu x slash_value_per_pwu` with both factors chain-fixed
+    //    (`DerivedV1` pins the pwu, `SlashValueNotTheNetworks` pins the slash value), so at the
+    //    shipped constants the floor satisfies at most 0.00028 permille — a value of 1 refuses the
+    //    floor's own attempt and halts the chain permanently. An economic gate whose only settable
+    //    value is "off" is not a gate, and this exemption is what makes the parameter raisable at
+    //    all: past it, a non-zero permille refuses the classes that are a producer's choice and
+    //    can never refuse the one class every node must be able to produce.
+    //
+    //    What is still required to arm it is money, not code: 1 permille needs
+    //    `slash_value_per_pwu` about 3,600x today's, which sizes genesis bond collateral at
+    //    roughly 0.83 % of the 10B cap. 100 permille would need 83 % of it and is not shippable.
+    //    Raise the two together or `From<NetworkId>` panics at boot on the genesis gate, and arm
+    //    ADR-0065 D4 first — `void_and_slash` takes `claim.reserved` unconditionally, so a larger
+    //    slash value multiplies the false convictions before it deters a single real one.
+    if attempt.class_id != state_params.base_class_id() {
+        let escrow = crate::palw_reward_v2::palw_reward_carve_v2(
+            ctx.subsidy,
+            &crate::palw_reward_v2::PalwRewardParamsV2::new(state_params.worker_carve_permille())
+                .map_err(|_| PalwAdmissionV2Error::InvalidParams("the worker carve is not a legal permille"))?,
+        )
+        .worker as u128;
+        let backing_permille = state_params.min_slash_permille_of_escrow() as u128;
+        let required = escrow.checked_mul(backing_permille).ok_or(PalwAdmissionV2Error::Overflow("escrow backing"))? / 1000;
+        if claim_exposure < required {
+            return Err(PalwAdmissionV2Error::EscrowExceedsCollateralBacking {
+                escrow: escrow as u64,
+                reserved: claim_exposure,
+                required,
+                backing_permille: backing_permille as u32,
+            });
+        }
     }
 
     // 10. One identity, one claim — the chain-visible face of no-equivocation (see module doc
@@ -1384,15 +1408,21 @@ mod tests {
             .expect("a dormant rule refuses nothing");
     }
 
-    /// **The live network's own ratio, refused.** Class 1 reserves 5 sompi per pwu, so a 10-pwu
+    /// **The live network's own ratio, refused.** Class 2 reserves 5 sompi per pwu, so a 10-pwu
     /// attempt risks 50 against a carve of 620 sompi — the same shape as testnet-11's 0.0015 MSK
     /// against 2,756, and the reason this rule exists.
+    ///
+    /// Over an ENTRANT class, not the floor: the floor is exempt (see
+    /// `the_liveness_floor_is_never_refused_for_its_backing`), so asserting the refusal on it would
+    /// have been asserting the one case this rule must never produce. That is what these tests did
+    /// before the exemption existed, and it is why the rule looked shippable when it was not.
     #[test]
     fn a_claim_that_earns_far_more_than_it_risks_is_refused() {
         let params = state_params().with_worker_carve_permille(620).unwrap().with_min_slash_permille_of_escrow(100).unwrap();
         let mut context = ctx(2, 101, 2);
         context.subsidy = 1_000; // carve = 620; 100‰ of it is 62, and the claim reserves 50.
-        let err = check_palw_attempt_admission_v2(&base_state(), &params, &admission_params(), &context, &attempt(10, 1))
+        let entrant = attempt_for_class(h64(2), 10, 1, bond_outpoint(2), vec![8; 4], op_id(0x22));
+        let err = check_palw_attempt_admission_v2(&two_class_state(), &params, &admission_params(), &context, &entrant)
             .expect_err("50 does not back 620");
         match err {
             PalwAdmissionV2Error::EscrowExceedsCollateralBacking { escrow, reserved, required, backing_permille } => {
@@ -1411,8 +1441,43 @@ mod tests {
         let mut context = ctx(2, 101, 2);
         context.subsidy = 1_000;
         // 13 pwu x 5 = 65 >= 62.
-        check_palw_attempt_admission_v2(&base_state(), &params, &admission_params(), &context, &attempt(13, 1))
+        let entrant = attempt_for_class(h64(2), 13, 1, bond_outpoint(2), vec![8; 4], op_id(0x22));
+        check_palw_attempt_admission_v2(&two_class_state(), &params, &admission_params(), &context, &entrant)
             .expect("65 backs 620 at 100‰");
+    }
+
+    /// **The liveness floor is never refused for its backing, and that is what makes the parameter
+    /// settable at all.**
+    ///
+    /// On a `ConsensusV2` network the attempt lane is the only block type, so an attempt refused on
+    /// the chain block's own header is `StatusDisqualifiedFromChain` — no block, so DAA does not
+    /// advance, so there is no clock to recover on. Item 7 exempts the floor for exactly this and
+    /// says so at length; item 9 did not, and `claim_exposure` is `pwu x slash_value_per_pwu` with
+    /// both factors chain-fixed, so at the shipped constants the floor satisfies at most
+    /// 0.00028 permille. A value of 1 would have halted the chain permanently.
+    ///
+    /// So this asserts the floor is admitted at a backing it CANNOT satisfy — the same numbers the
+    /// entrant is refused for two tests above, which is what makes it a difference in the rule
+    /// rather than in the fixture.
+    #[test]
+    fn the_liveness_floor_is_never_refused_for_its_backing() {
+        let params = state_params().with_worker_carve_permille(620).unwrap().with_min_slash_permille_of_escrow(1000).unwrap();
+        assert_eq!(params.base_class_id(), h64(1), "class 1 is the floor in this fixture");
+        let mut context = ctx(2, 101, 2);
+        context.subsidy = 1_000; // carve 620; at 1000‰ the requirement is 620 and the claim reserves 50.
+        check_palw_attempt_admission_v2(&base_state(), &params, &admission_params(), &context, &attempt(10, 1))
+            .expect("the floor produces whatever the backing is set to, or the chain has no clock");
+
+        // And the same attempt on an entrant class, at the same numbers, is refused — the gate is
+        // exempting the floor, not switched off.
+        let entrant = attempt_for_class(h64(2), 10, 1, bond_outpoint(2), vec![8; 4], op_id(0x22));
+        assert!(
+            matches!(
+                check_palw_attempt_admission_v2(&two_class_state(), &params, &admission_params(), &context, &entrant),
+                Err(PalwAdmissionV2Error::EscrowExceedsCollateralBacking { .. })
+            ),
+            "an entrant class is still priced"
+        );
     }
 
     /// A block that funds no escrow has nothing to back, whatever the backing is set to — the
