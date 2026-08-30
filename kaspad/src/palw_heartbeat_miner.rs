@@ -145,12 +145,7 @@ impl PalwHeartbeatMinerService {
         let network_id = self.config.network_id;
         let found = tokio::task::spawn_blocking(move || {
             let state = kaspa_pow::StateLayer0::new(&header0, network_id.to_string().as_bytes());
-            for nonce in 0..NONCES_PER_TEMPLATE {
-                if state.check_pow_layer0(nonce).map(|(ok, _)| ok).unwrap_or(false) {
-                    return Some(nonce);
-                }
-            }
-            None
+            (0..NONCES_PER_TEMPLATE).find(|&nonce| state.check_pow_layer0(nonce).map(|(ok, _)| ok).unwrap_or(false))
         })
         .await
         .map_err(|e| format!("the nonce search task did not finish: {e}"))?;

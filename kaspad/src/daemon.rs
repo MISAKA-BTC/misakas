@@ -1682,7 +1682,7 @@ mod tests {
     /// Both sites now call one function, so this pins the two properties that were wrong.
     #[test]
     fn the_panel_state_dir_is_prefixed_and_rooted_at_the_resolved_app_dir() {
-        let network: kaspa_consensus_core::network::NetworkId = parse(&["--testnet", "--netsuffix=11"]).network().into();
+        let network: kaspa_consensus_core::network::NetworkId = parse(&["--testnet", "--netsuffix=11"]).network();
         let dir = palw_panel_state_dir(std::path::Path::new("/root/.t11"), network);
         assert_eq!(
             dir,

@@ -2402,7 +2402,7 @@ mod tests {
     fn select_funding_asks_with_both_maturities_issue_81() {
         let virtual_daa = 1_319u64;
         let coinbase = (fop(0xA1, 2), fentry(1_000_000_000, 892, true)); // 38k-MSK-style fragment, age 427
-        let transfer = (fop(0xA2, 0), fentry(1_000_000_000_0 / 10_000, 100, false)); // a 10-MSK-style top-up
+        let transfer = (fop(0xA2, 0), fentry(10_000_000_000 / 10_000, 100, false)); // a 10-MSK-style top-up
 
         // The floor alone (the bug): the big coinbase counts as mature and wins on amount.
         let (wrong, _) =
@@ -2411,6 +2411,10 @@ mod tests {
 
         // The effective maturity (floor 1 ∨ settlement 600): the coinbase is not yet spendable,
         // the mature transfer is chosen, and attestation never latches onto an illegal outpoint.
+        // Written as the max of the two rules rather than as its answer: this test is about the
+        // COMBINATION, and `600` alone would not say which rule produced it or that a floor was
+        // consulted at all. Clippy is right that it folds; folding it is what loses the point.
+        #[allow(clippy::unnecessary_min_or_max)]
         let effective = 1u64.max(600);
         let (sel_op, sel_en) =
             select_funding(&None, &HashSet::new(), vec![coinbase, transfer], SF_FEE, virtual_daa, effective).unwrap();

@@ -161,7 +161,7 @@ mod tests {
                 )],
                 params.net.to_string().into_bytes(),
             );
-            assert!(matches!(alien.resolve(qwen_id, qwen_root), Err(_)), "a file with the wrong root is not this class");
+            assert!(alien.resolve(qwen_id, qwen_root).is_err(), "a file with the wrong root is not this class");
         }
     }
 
