@@ -104,6 +104,36 @@ pub fn base0_captured_rows_v1(probe: &crate::engine::ForwardProbe) -> Vec<Base0C
     rows
 }
 
+/// **The same rows, from the A16 engine's trace.**
+///
+/// `A16Engine::forward_token_traced` records every committed node in the shape profile's own
+/// numbering — `pre` and `post` as step SEQUENCES at layer 0, `attn` as one list per layer — which
+/// is exactly the coordinate system [`Base0CapturedRowV1`] carries, so this is a flattening and
+/// not a translation. Written as its own function rather than a generic over the two probe types
+/// because the two engines' traces are different structs for good reasons, and a trait to unify
+/// them would be three lines of abstraction over eleven lines of loop.
+///
+/// This is the first half of giving the A16 family adjudicable executions. The other two are the
+/// checkpoint leg (its cache is not `engine::KvCache`, so the chunks go in through
+/// `Base0CheckpointCaptureV1::push_chunks` against `next_geometry`) and the court's rung methods
+/// (`disclose` and `bisect_prefix_state`), without which `supports_court` must stay false: a
+/// family that cannot answer at a rung loses every dispute whichever party is honest.
+pub fn a16_captured_rows_v1(trace: &crate::engine_a16::A16TraceV1) -> Vec<Base0CapturedRowV1> {
+    let mut rows = Vec::with_capacity(trace.pre.len() + trace.post.len() + trace.attn.iter().map(Vec::len).sum::<usize>());
+    for (index, row) in trace.pre.iter().enumerate() {
+        rows.push(Base0CapturedRowV1 { table: PalwStepTableV1::Pre, layer: 0, index, row: row.clone() });
+    }
+    for (layer, nodes) in trace.attn.iter().enumerate() {
+        for (index, row) in nodes.iter().enumerate() {
+            rows.push(Base0CapturedRowV1 { table: PalwStepTableV1::Attn, layer: layer as u16, index, row: row.clone() });
+        }
+    }
+    for (index, row) in trace.post.iter().enumerate() {
+        rows.push(Base0CapturedRowV1 { table: PalwStepTableV1::Post, layer: 0, index, row: row.clone() });
+    }
+    rows
+}
+
 /// **A step-leg capture accumulated across a job's CALLS.**
 ///
 /// A job is one prefill call over `P` positions plus `D − 1` decode calls, and the step space
@@ -783,6 +813,76 @@ pub fn base0_refutation_from_capture_v1(
         decode_tokens,
         kv_checkpoint,
     })
+}
+
+#[cfg(test)]
+mod a16_row_tests {
+    use super::*;
+    use crate::artifact::{Base0ArtifactV1, Base0ShapeV1};
+    use crate::engine_a16::{A16Cache, A16Engine, derived_a16_store};
+
+    /// A small deterministic A16 class — the same construction the engine's own tests use, kept
+    /// tiny so the assertion is about coordinates rather than about arithmetic.
+    fn artifact() -> Base0ArtifactV1 {
+        let shape = Base0ShapeV1 {
+            n_layers: 2,
+            n_heads: 2,
+            n_kv_heads: 2,
+            d_head: 4,
+            d_ff: 8,
+            vocab: 64,
+            max_position: 32,
+            ln_theta_gen_q: crate::artifact::LN_THETA_10000_GEN_Q,
+            eps_q: 1,
+        };
+        Base0ArtifactV1::derive_deterministic(shape, 0x5A16)
+            .expect("a valid shape")
+            .with_a16_params(derived_a16_store(&shape))
+            .expect("the derived store is sorted and unique")
+    }
+
+    /// **The converter must preserve the trace's own coordinates, not invent an ordering.**
+    ///
+    /// A step leaf is addressed by (table, layer, index), and the court recomputes the row at that
+    /// address. A converter that renumbered — flattened the layers into one sequence, say — would
+    /// commit rows that are individually correct and collectively unfindable, and the failure
+    /// would appear only when somebody disputed a claim. So this asserts the addresses against the
+    /// trace that produced them, field by field.
+    #[test]
+    fn the_a16_trace_maps_to_leaf_coordinates_one_for_one() {
+        let artifact = artifact();
+        let engine = A16Engine::new(&artifact).expect("an A16 class");
+        let mut cache = A16Cache::new(artifact.shape.n_layers);
+        let (_logits, trace) = engine.forward_token_traced(&mut cache, 7, 0).expect("one position runs");
+
+        let rows = a16_captured_rows_v1(&trace);
+        let attn_total: usize = trace.attn.iter().map(Vec::len).sum();
+        assert_eq!(rows.len(), trace.pre.len() + attn_total + trace.post.len(), "every recorded node becomes exactly one row");
+
+        let pre: Vec<_> = rows.iter().filter(|r| r.table == PalwStepTableV1::Pre).collect();
+        assert_eq!(pre.len(), trace.pre.len());
+        for (i, row) in pre.iter().enumerate() {
+            assert_eq!((row.layer, row.index), (0, i), "pre is a step sequence at layer 0");
+            assert_eq!(row.row, trace.pre[i], "and it carries that step's row");
+        }
+
+        for (layer, nodes) in trace.attn.iter().enumerate() {
+            for (index, expected) in nodes.iter().enumerate() {
+                let found = rows
+                    .iter()
+                    .find(|r| r.table == PalwStepTableV1::Attn && r.layer == layer as u16 && r.index == index)
+                    .expect("every attention node is addressable by its own (layer, index)");
+                assert_eq!(&found.row, expected);
+            }
+        }
+
+        let post: Vec<_> = rows.iter().filter(|r| r.table == PalwStepTableV1::Post).collect();
+        assert_eq!(post.len(), trace.post.len());
+        for (i, row) in post.iter().enumerate() {
+            assert_eq!((row.layer, row.index), (0, i));
+            assert_eq!(row.row, trace.post[i]);
+        }
+    }
 }
 
 #[cfg(test)]
