@@ -321,6 +321,18 @@ impl PalwPanelService {
         if self.config.fee_outpoint.is_none() && !self.config.register_bond {
             return None;
         }
+        // **"Under my script" and "mine to spend" are also different questions** (issue #83). A
+        // validator StakeBond lives under whatever script its owner funds it from, and an operator
+        // who runs both roles from one key puts 2,000,000 MSK of consensus-locked collateral under
+        // the exact script this function reads. Nothing below distinguished it from change: on
+        // testnet-11 the recovery scan picked an active StakeBond as bond-registration funding —
+        // it was the largest spendable-looking thing under the script — and only the carrier
+        // failing to land kept the collateral whole. The wallet's selector already refuses these
+        // by name (audit M1-3/H3); this is the same exclusion for the panel's own spends, applied
+        // to every source alike: the persisted outpoint, the configured one, and the scan. The
+        // configured one on purpose — `--palw-fee-outpoint` aimed at a bond deliberately is the
+        // same double-pledge the scan reaches by accident, and it must not spend either.
+        let locked = self.locked_collateral(session).await;
         let mut candidates: Vec<TransactionOutpoint> = Vec::new();
         if let Ok(persisted) = std::fs::read_to_string(self.fee_state_path())
             && let Ok(outpoint) = crate::palw_producer::parse_outpoint(persisted.trim())
@@ -336,7 +348,22 @@ impl PalwPanelService {
         for outpoint in candidates.iter() {
             self.flow_context.palw_reserve_outpoint(*outpoint);
         }
-        for outpoint in candidates.iter().filter(|o| is_free(o)) {
+        for outpoint in candidates.iter() {
+            if locked.contains(outpoint) {
+                // Loud and per-tick, like the no-resolve warn below: a remembered outpoint that is
+                // bonded collateral usually means the operator pointed --palw-fee-outpoint at a
+                // bond, and silence here would read as "no fee UTXO resolves" with no cause.
+                warn!(
+                    "[{PALW_PANEL}] refusing fee outpoint {}:{} — it is bonded collateral consensus still locks \
+                     (a validator StakeBond or a PALW bond). Spending it would disqualify the carrying block or \
+                     strip the bond's backing; fund the panel from an unbonded output instead",
+                    outpoint.transaction_id, outpoint.index
+                );
+                continue;
+            }
+            if !is_free(outpoint) {
+                continue;
+            }
             if let Some(entry) = session.get_virtual_utxo_entry(*outpoint) {
                 return Some((*outpoint, entry));
             }
@@ -361,8 +388,8 @@ impl PalwPanelService {
         // the path back from having none.
         let script = self.fee_script(session)?;
         let mut cursor: Option<TransactionOutpoint> = None;
-        // What the scan SAW, so a failure can say which of its three reasons it was.
-        let (mut scanned, mut under_script, mut busy) = (0usize, 0usize, 0usize);
+        // What the scan SAW, so a failure can say which of its reasons it was.
+        let (mut scanned, mut under_script, mut busy, mut bonded) = (0usize, 0usize, 0usize, 0usize);
         loop {
             let chunk = session.async_get_virtual_utxos(cursor, 1024, cursor.is_some()).await;
             if chunk.is_empty() {
@@ -385,6 +412,16 @@ impl PalwPanelService {
                     continue;
                 }
                 under_script += 1;
+                // **Never anyone's locked collateral either** (issue #83). The own-bond check
+                // above has a hole exactly when the scan matters most: during initial
+                // --palw-register-bond `self.bond` is None, and a validator StakeBond funded from
+                // the same key is under this script and typically its largest output. The `locked`
+                // set is consensus's own answer (the DNS bond view plus the PALW V2 registry), so
+                // this refuses a StakeBond as funding the same fail-closed way the wallet does.
+                if locked.contains(&outpoint) {
+                    bonded += 1;
+                    continue;
+                }
                 if !is_free(&outpoint) {
                     busy += 1;
                     continue;
@@ -407,7 +444,7 @@ impl PalwPanelService {
         // was a `trace!` behind a disabled level while a seat sat stalled for hours with money it
         // could not see, so it warns: it fires once per tick only on the path that already warns.
         warn!(
-            "[{PALW_PANEL}] no fee UTXO resolves; tried {}; scanned {scanned} outputs, {under_script} under this bond's payout script of which {busy} are spent by our own mempool",
+            "[{PALW_PANEL}] no fee UTXO resolves; tried {}; scanned {scanned} outputs, {under_script} under this bond's payout script of which {bonded} are locked bond collateral and {busy} are spent by our own mempool",
             if candidates.is_empty() {
                 // A node with no remembered outpoint is the normal newcomer case, not an omission
                 // in this line: it says the scan is the whole story so nobody looks for a missing
@@ -418,6 +455,48 @@ impl PalwPanelService {
             }
         );
         None
+    }
+
+    /// Every outpoint that is bonded collateral consensus still LOCKS, at any owner: the DNS
+    /// overlay's validator StakeBonds plus the PALW V2 registry's producer bonds. Funding
+    /// selection refuses all of them (issue #83).
+    ///
+    /// Both halves are consensus's own predicates asked in-process, not a mirror of them: the PALW
+    /// half IS `palw_locked_bond_outpoints_v2` (the block path's question, audit3 H3), and the DNS
+    /// half applies the same releasable test `BondSpendFilter::locks` applies — a bond is free
+    /// exactly when it is effectively `Unbonding` and past its release height, so a completed
+    /// unbond does not read as locked forever (the wallet's re-audit R-4 lesson). Deliberately
+    /// unfiltered by owner: whose collateral it is does not change what spending it does to the
+    /// carrying block.
+    async fn locked_collateral(&self, session: &kaspa_consensusmanager::ConsensusProxy) -> HashSet<TransactionOutpoint> {
+        use kaspa_consensus_core::dns_finality::StakeBondQuery;
+        let mut locked: HashSet<TransactionOutpoint> = session.palw_locked_bond_outpoints_v2().into_iter().collect();
+        let mut cursor: Option<TransactionOutpoint> = None;
+        // Pinned after the first page so a mid-walk status change cannot skip a bond that sorts
+        // before the cursor — the same snapshot rule the RPC pager documents.
+        let mut pov: Option<u64> = None;
+        loop {
+            let page = session
+                .async_get_stake_bonds(StakeBondQuery {
+                    owner_pubkey_hash: None,
+                    status_in: None,
+                    cursor,
+                    limit: 1000,
+                    pov_daa_score: pov,
+                })
+                .await;
+            pov = Some(page.pov_daa_score);
+            for bond in &page.bonds {
+                if stake_bond_is_locked(bond, page.pov_daa_score) {
+                    locked.insert(bond.bond_outpoint);
+                }
+            }
+            match page.next_cursor {
+                Some(next) => cursor = Some(next),
+                None => break,
+            }
+        }
+        locked
     }
 
     /// The script this panel's carriers pay change to.
@@ -2287,6 +2366,22 @@ impl PalwPanelService {
 /// decreasing, which is what makes the binary search below correct, and what makes the mass at
 /// `spendable/2` the verdict on whether ANY split of this funding can be carried.
 ///
+/// Whether consensus still LOCKS this StakeBond's collateral at `pov_daa_score` — the
+/// `BondSpendFilter::locks` releasable test read back, one record at a time (issue #83).
+///
+/// **It is the LOCK that matters, not the existence of a bond**: a bond that has completed its
+/// unbonding period keeps its record forever (`BondStatus` has no terminal "withdrawn"), while
+/// consensus positively allows the spend. Excluding those too would strand exactly the money an
+/// operator is reclaiming — the wallet's re-audit R-4 lesson, applied here from the start. An
+/// `Unbonding` bond with no recorded request height has an unknown release height, and unknown
+/// reads as locked.
+fn stake_bond_is_locked(record: &kaspa_consensus_core::dns_finality::StakeBondRecord, pov_daa_score: u64) -> bool {
+    use kaspa_consensus_core::dns_finality::{BondStatus, bond_release_daa_score, effective_bond_status};
+    let releasable = effective_bond_status(record, pov_daa_score) == BondStatus::Unbonding
+        && bond_release_daa_score(record).is_some_and(|release| pov_daa_score >= release);
+    !releasable
+}
+
 /// `None` means no split works: the funding is too small to carry a bond at all, which is a
 /// different operator action (send more) than "this bond needs more collateral".
 fn min_carryable_collateral(
@@ -2408,6 +2503,47 @@ impl AsyncService for PalwPanelService {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn stake_bond(
+        activation: u64,
+        unbond_request: Option<u64>,
+        slashed_at: Option<u64>,
+    ) -> kaspa_consensus_core::dns_finality::StakeBondRecord {
+        kaspa_consensus_core::dns_finality::StakeBondRecord {
+            version: 1,
+            bond_outpoint: TransactionOutpoint::new(Default::default(), 0),
+            owner_pubkey_hash: Hash64::from_bytes([1u8; 64]),
+            validator_pubkey_hash: Hash64::from_bytes([2u8; 64]),
+            validator_pubkey: Vec::new(),
+            amount: 2_000_000_000_000_000,
+            activation_daa_score: activation,
+            created_daa_score: 0,
+            unbonding_period_blocks: 100,
+            owner_reward_spk_payload: [3u8; 64],
+            unbond_request_daa_score: unbond_request,
+            slashed_at_daa_score: slashed_at,
+            status: kaspa_consensus_core::dns_finality::BondStatus::Active,
+        }
+    }
+
+    /// Issue #83: the exact record the funding scan spent from — an ACTIVE validator StakeBond,
+    /// 2,000,000 MSK, under the same script as the producer's pay address. It must read as locked
+    /// at every point of view, and the R-4 exception (a bond consensus has released) must not.
+    #[test]
+    fn an_active_stake_bond_is_locked_and_a_released_one_is_not() {
+        // Active — the reported case. Locked.
+        assert!(stake_bond_is_locked(&stake_bond(0, None, None), 5_000));
+        // Pending (activation ahead of the pov) — locked; its collateral is already pledged.
+        assert!(stake_bond_is_locked(&stake_bond(9_000, None, None), 5_000));
+        // Unbonding, before release (request 4_000 + period 100 > pov 4_050) — locked.
+        assert!(stake_bond_is_locked(&stake_bond(0, Some(4_000), None), 4_050));
+        // Unbonding, past release — consensus allows this spend, so refusing it would strand the
+        // operator's own reclaim (the wallet's re-audit R-4 lesson). NOT locked.
+        assert!(!stake_bond_is_locked(&stake_bond(0, Some(4_000), None), 4_100));
+        // Slashed — never funding. (If slashing already removed output-0 the scan cannot meet it;
+        // listing it anyway is the harmless superset.)
+        assert!(stake_bond_is_locked(&stake_bond(0, None, Some(4_500)), 5_000));
+    }
 
     /// The two-output bond carrier this node builds: one collateral output to the payee, one
     /// change output back to the funding script, one input.
