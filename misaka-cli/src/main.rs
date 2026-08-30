@@ -314,6 +314,12 @@ enum WalletCmd {
         /// Actually broadcast (otherwise a dry-run preview).
         #[arg(long)]
         yes: bool,
+        /// Select ONLY settled coinbase UTXOs — never a carrier change or fee float. For a
+        /// producer/panel wallet whose reservations another node holds (the RPC this CLI asks
+        /// only knows its OWN node's reserved outpoints), largest-first selection reaches for a
+        /// foreign panel's float; this keeps the spend to mining rewards alone.
+        #[arg(long)]
+        coinbase_only: bool,
         #[command(flatten)]
         key: KeyArgs,
     },
@@ -759,8 +765,8 @@ async fn main() -> std::process::ExitCode {
         Command::Wallet(WalletCmd::Utxo(UtxoCmd::Consolidate { max_inputs, max_txs_per_run, sleep_ms, yes, key })) => {
             wallet::consolidate(&ctx, &key.source(), max_inputs, !yes, yes, max_txs_per_run, sleep_ms).await
         }
-        Command::Wallet(WalletCmd::Send { to, amount, yes, key }) => match parse_msk_to_sompi(&amount) {
-            Ok(sompi) => wallet::send(&ctx, &key.source(), &to, sompi, !yes, yes).await,
+        Command::Wallet(WalletCmd::Send { to, amount, yes, coinbase_only, key }) => match parse_msk_to_sompi(&amount) {
+            Ok(sompi) => wallet::send(&ctx, &key.source(), &to, sompi, !yes, yes, coinbase_only).await,
             Err(e) => Err(e),
         },
         Command::Key(KeyCmd::Gen { out }) => key_gen(&ctx, &out),

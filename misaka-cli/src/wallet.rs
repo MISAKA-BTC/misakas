@@ -325,6 +325,7 @@ pub async fn utxo_list(ctx: &Ctx, address: Option<&str>, ks: &KeySource) -> CliR
     // and no line anywhere saying the gap is a bond.
     let mut bonded_n = 0usize;
     let mut bonded_sum = 0u64;
+    let mut imm_cb_daa: Option<(u64, u64)> = None; // (min, max) block daa of immature coinbase
     for u in &utxos {
         if u.bonded {
             bonded_n += 1;
@@ -335,6 +336,10 @@ pub async fn utxo_list(ctx: &Ctx, address: Option<&str>, ks: &KeySource) -> CliR
         } else {
             imm_n += 1;
             imm_sum += u.amount;
+            if u.entry.is_coinbase {
+                let d = u.entry.block_daa_score;
+                imm_cb_daa = Some(imm_cb_daa.map_or((d, d), |(lo, hi)| (lo.min(d), hi.max(d))));
+            }
         }
     }
     match ctx.output {
@@ -356,6 +361,14 @@ pub async fn utxo_list(ctx: &Ctx, address: Option<&str>, ks: &KeySource) -> CliR
                 nv.coinbase_maturity,
                 nv.settlement_long_maturity_daa
             );
+            if let Some((lo, hi)) = imm_cb_daa {
+                let bound = nv.coinbase_maturity.max(nv.settlement_long_maturity_daa);
+                println!(
+                    "               earliest coinbase daa {lo}, latest {hi}, virtual {} — first matures at daa {}",
+                    nv.virtual_daa,
+                    lo + bound
+                );
+            }
             if bonded_n > 0 {
                 println!(
                     "  bonded     : {bonded_n}  ({} MSK)  [locked bond collateral — NOT spendable; `wallet send` will not select it]",
@@ -505,7 +518,7 @@ pub async fn consolidate(
 // wallet send — to an arbitrary recipient
 // ---------------------------------------------------------------------------
 
-pub async fn send(ctx: &Ctx, ks: &KeySource, to: &str, amount_sompi: u64, dry_run: bool, yes: bool) -> CliResult {
+pub async fn send(ctx: &Ctx, ks: &KeySource, to: &str, amount_sompi: u64, dry_run: bool, yes: bool, coinbase_only: bool) -> CliResult {
     if amount_sompi == 0 {
         return Err(CliError::new(exit::GENERIC, "--amount must be > 0 (sompi)".to_string()));
     }
@@ -522,7 +535,8 @@ pub async fn send(ctx: &Ctx, ks: &KeySource, to: &str, amount_sompi: u64, dry_ru
     // Largest-first greedy select over MATURE self-UTXOs, re-estimating the fee as inputs are added.
     // `!bonded`: the bond is usually the LARGEST output at a validator's address, and selection
     // below is largest-first, so without this the default `wallet send` reaches for it first (M1-3).
-    let mut mature: Vec<Funding> = page_all(&nv, &from_addr).await?.into_iter().filter(|u| u.mature && !u.bonded).collect();
+    let mut mature: Vec<Funding> =
+        page_all(&nv, &from_addr).await?.into_iter().filter(|u| u.mature && !u.bonded && (!coinbase_only || u.entry.is_coinbase)).collect();
     mature.sort_by(|a, b| b.amount.cmp(&a.amount));
     let mut selected: Vec<&Funding> = Vec::new();
     let mut sum = 0u64;
