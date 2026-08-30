@@ -383,3 +383,52 @@ other. Both failures land on the same runtime behaviour, which fails closed: a s
 the registry at `seat_count + 3` anyway is that the genesis size is the only one the config gate
 can see, and a halted chain produces no blocks — so no repair carrier can land on the network that
 most needs one.**
+
+**Mitigated, 2026-08-31: the stall now says what it is.** The gap above cannot be closed by a
+check — `validate_palw_v2` has no chain access, and a runtime refusal would be a consensus rule
+resolved from local state, which is a chain split. What was fixable is that the failure was
+*silent*. When the live registry falls under the bar, `derive_panel_v2_with_maturity` returns
+`InsufficientEligibleBonds`, `palw_v2_derived_panel_bindings` skips the claim with a bare
+`else { continue }`, every claim voids at `BindTimeout` and `safe_frontier` stops — and no line
+anywhere named the maturity fence. From the outside that is indistinguishable from a producer
+outage, which is the wrong thing to go and investigate.
+
+`VirtualStateProcessor::palw_warn_if_maturity_outruns_the_registry` now reports it. **Log only** —
+no refusal, no fence, no return value, no fingerprint movement — with two severities, because the
+two situations need different responses:
+
+* **below `seat_count`** — no claim can seat a panel, whoever its executor is;
+* **at exactly `seat_count`** — every claim from a still-eligible bond fails, and only a claim whose
+  own bond has itself left eligibility can still bind;
+* **below `palw_v2_maturity_armable_bonds_v1()`** — draws still work but the margin is gone, and the
+  next retirement or slash stalls the chain for a full maturity window.
+
+Three bands rather than two, because exactly three are provable and the middle one is where a
+plausible message goes wrong. The draw's three exclusions collapse to one: `pubkey` uniqueness is
+enforced at registration (`palw_state_v2.rs`, the `DuplicateBondKey` arm), so the key clause can
+only match the executor's own bond, which the bond clause already matched. The exclusions therefore
+remove exactly ONE operator when the executor's operator is among the eligible, and ZERO when it is
+not — and it is not whenever the executor's own bond is immature, `Retiring`, or under the
+collateral floor, each of which a claim can enter *after* it was created (claim creation checks
+`Retiring` at admission and never re-checks, and imposes no maturity requirement at all).
+
+So at exactly `seat_count` a panel is still drawable for such a claim, and an earlier draft of this
+warning said "no panel can be drawn" over a state where one demonstrably was.
+`a_claim_whose_own_operator_has_left_can_still_seat_a_panel` measures both edges of that band rather
+than arguing them. The alarm threshold did not move — `seat_count + 1` is still the point where
+claims from healthy bonds start failing — but a diagnostic may not claim more than its count knows.
+
+The count comes from `palw_panel_v2::palw_seatable_operators_v1`, which applies **the same two
+predicates the draw does** (`palw_bond_may_take_work_v2` and the maturity comparison) rather than
+restating them — a diagnostic that could disagree with the rule it describes is the failure this
+ADR line keeps cataloguing, one layer out.
+`the_seatable_counter_agrees_with_the_draw_it_warns_about` holds the two together across every
+maturity floor and panel size, so the counter cannot quietly stop matching. It counts distinct
+OPERATORS, because the draw seats one bond per operator, and it deliberately does not apply the
+draw's executor exclusions: the bar it is compared against already prices the executor as one of
+its four terms, so excluding it twice would fire the warning a seat early.
+
+It is rate-limited to once per `window_bind` — the interval over which a claim actually times out,
+so the operator hears once per cohort of claims the shortfall costs rather than once per block —
+and it returns before touching the header store or the registry whenever the fence is dormant,
+which is every shipped preset.

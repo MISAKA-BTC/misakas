@@ -404,6 +404,16 @@ pub struct VirtualStateProcessor {
     /// ADR-0065 D1's fence and window, `None` on every shipped preset. See
     /// [`Self::palw_bond_maturity_at`], which is the ONE place this is resolved.
     pub(super) palw_bond_maturity: Option<kaspa_consensus_core::config::params::PalwBondMaturityV1>,
+    /// Rate limiter for [`Self::palw_warn_if_maturity_outruns_the_registry`] — the DAA score the
+    /// shortfall was last reported at, or `PALW_SHORTFALL_NEVER_REPORTED`. **Log state only**:
+    /// nothing consensus-visible reads it, so two nodes that report at different moments still
+    /// agree about every block. `AtomicU64` because the warning runs behind `&self`.
+    pub(super) palw_maturity_warn_last_daa: std::sync::atomic::AtomicU64,
+    /// The severity band last reported (0 = margin gone, 1 = healthy claims cannot bind, 2 = no
+    /// claim can bind). Log state only, beside `palw_maturity_warn_last_daa`: a band that has
+    /// WORSENED is reported at once instead of waiting out the interval, and both reset when the
+    /// registry recovers so a later relapse speaks immediately.
+    pub(super) palw_maturity_warn_last_band: std::sync::atomic::AtomicU64,
     /// ADR-0065 D2's fence, `None` on every shipped preset. See
     /// [`Self::palw_frontier_provenance_outcome`].
     pub(super) palw_frontier_provenance: Option<kaspa_consensus_core::config::params::ForkActivation>,
@@ -675,6 +685,10 @@ impl VirtualStateProcessor {
             pow_palw_ollama_activation: params.pow_palw_ollama_activation,
             palw_required_algo_id: params.palw_consensus_mode.required_algo_id(),
             palw_heartbeat_lane: params.palw_heartbeat_lane_fence(),
+            palw_maturity_warn_last_daa: std::sync::atomic::AtomicU64::new(
+                kaspa_consensus_core::palw_panel_v2::PALW_SHORTFALL_NEVER_REPORTED,
+            ),
+            palw_maturity_warn_last_band: std::sync::atomic::AtomicU64::new(0),
             palw_inactivity_leak: params.palw_inactivity_leak,
             max_block_parents: params.max_block_parents(),
             mergeset_size_limit: params.mergeset_size_limit(),
@@ -1336,7 +1350,8 @@ impl VirtualStateProcessor {
                                 // produced rather than from the store — the store row is written
                                 // by the commit below, so reading it here would be reading a fact
                                 // that does not exist yet.
-                                let objects = self.palw_v2_objects_of_block(&ctx.mergeset_acceptance_data, state, current);
+                                let objects =
+                                    self.palw_v2_objects_of_block(&ctx.mergeset_acceptance_data, state, current, header.daa_score);
                                 // Decisions 7/8: every lifecycle object meets its own validator
                                 // before the transition folds it — and an object that FAILS is
                                 // dropped rather than fatal to the block that accepted it.
@@ -5107,6 +5122,134 @@ impl VirtualStateProcessor {
         self.palw_bond_maturity.filter(|m| m.activation.is_active(daa_score)).map(|m| m.window_daa)
     }
 
+    /// **ADR-0065 D1's blind spot, named in the log instead of left for an operator to find.**
+    ///
+    /// `validate_palw_v2` refuses to arm the maturity fence unless the GENESIS registry holds
+    /// `palw_v2_maturity_armable_bonds_v1()` bonds. That check is config-time and can only see
+    /// `bundle.genesis_objects`; the LIVE registry moves in both directions — a `BondRegistered`
+    /// carrier is admitted on a running chain, and bonds leave by retirement or by a slash that
+    /// drives them under `min_collateral_sompi`. So a network can arm D1 legally and drift below
+    /// the bar afterwards, and nothing in `Params` can know.
+    ///
+    /// What that looks like without this: `derive_panel_v2_with_maturity` returns
+    /// `InsufficientEligibleBonds`, the assembler's `else { continue }` skips the claim in
+    /// silence, every claim voids at `BindTimeout`, and `safe_frontier` stops advancing. The
+    /// operator sees a chain that has stopped finalizing and no line anywhere naming the maturity
+    /// fence as the cause — the symptom is indistinguishable from a producer outage.
+    ///
+    /// **This changes nothing.** No refusal, no fence, no return value: a refusal here would be a
+    /// consensus rule that two nodes could resolve differently from local state, which is a chain
+    /// split, and the runtime already fails closed. It is a log line and a rate limiter.
+    fn palw_warn_if_maturity_outruns_the_registry(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        daa: u64,
+        min_collateral_sompi: u64,
+        panel_params: &kaspa_consensus_core::palw_panel_v2::PalwPanelParamsV2,
+    ) {
+        use std::sync::atomic::Ordering;
+
+        // Free on every shipped preset: the fence is `None`, so this returns before walking the
+        // registry. `daa` is the block's own score, threaded from the caller that already read the
+        // header — this runs once per chain block added to the virtual chain, so a store re-read
+        // here would be one avoidable lookup per block, and re-reading could in principle disagree
+        // with the score the rest of the fold used.
+        let Some(window) = self.palw_bond_maturity_at(daa) else { return };
+
+        let floor = kaspa_consensus_core::palw_panel_v2::palw_seat_maturity_floor_v1(daa, Some(window));
+        let seatable = kaspa_consensus_core::palw_panel_v2::palw_seatable_operators_v1(state, min_collateral_sompi, floor);
+        let armable = kaspa_consensus_core::palw_fp_devnet_v3::palw_v2_maturity_armable_bonds_v1();
+        if seatable >= armable {
+            // Recovered. Forget both, so a later relapse is reported at once rather than waiting
+            // out an interval that was started by the previous episode.
+            self.palw_maturity_warn_last_daa
+                .store(kaspa_consensus_core::palw_panel_v2::PALW_SHORTFALL_NEVER_REPORTED, Ordering::Relaxed);
+            self.palw_maturity_warn_last_band.store(0, Ordering::Relaxed);
+            return;
+        }
+        // Both taken from the panel params the caller already resolved — a network that seats a
+        // different number must be described with its own number, not this build's default.
+        // `seat_count` is what a panel holds; `drawable` is what the registry must hold for a
+        // claim whose own executor's operator is among the eligible, which is every healthy claim.
+        let seat_count = panel_params.seat_count() as usize;
+        let drawable = seat_count + 1;
+
+        // Once per bind window: that is how long a claim waits before it voids, so the operator
+        // hears once per cohort of claims the shortfall actually costs, rather than once a block.
+        // The fallback is only reachable on a network with no V2 state params, which has no panels
+        // to fail — it exists so this is total, not because the number matters there.
+        let interval = self.palw_state_params_v2.as_ref().map_or(600, |p| p.window_bind()).max(1);
+        // 0 = margin gone, 1 = healthy claims cannot bind, 2 = nothing can. A band that has
+        // worsened is reported immediately: the interval is a bind window (~20 h live), and the
+        // step from "the margin is gone" to "the chain has stopped binding" is the one an operator
+        // most needs to see when it happens rather than the next morning.
+        let band: u64 = if seatable < seat_count {
+            2
+        } else if seatable < drawable {
+            1
+        } else {
+            0
+        };
+        let worsened = band > self.palw_maturity_warn_last_band.load(Ordering::Relaxed);
+        let last = self.palw_maturity_warn_last_daa.load(Ordering::Relaxed);
+        // Through the shared predicate, which is unit-tested: escalation, cold start, the window
+        // boundary, a reorg to a lower score, and an interval large enough to overflow. Three of
+        // those five arms were wrong while this was inline comparisons.
+        if !kaspa_consensus_core::palw_panel_v2::palw_shortfall_report_is_due_v1(last, daa, interval, worsened) {
+            return;
+        }
+        self.palw_maturity_warn_last_daa.store(daa, Ordering::Relaxed);
+        self.palw_maturity_warn_last_band.store(band, Ordering::Relaxed);
+
+        // **Three bands, because exactly three are provable.**
+        //
+        // The draw's three exclusions — executor bond, executor operator, executor key — collapse
+        // to one. `pubkey` uniqueness is enforced at registration (`palw_state_v2.rs`, the
+        // `DuplicateBondKey` arm), so the key clause can only ever match the executor's own bond,
+        // which the first clause already matched. The exclusions therefore remove EXACTLY ONE
+        // operator when the executor's operator is in the counted set, and ZERO when it is not —
+        // and it is not whenever the executor's own bond is immature, Retiring, or under the
+        // collateral floor, all of which a claim can enter after it was created.
+        //
+        // Hence:
+        //   seatable >= seat_count + 1   every claim draws (the worst case still leaves seat_count)
+        //   seatable == seat_count       a claim whose own bond is still eligible cannot draw; one
+        //                                whose bond has itself left eligibility still can
+        //   seatable <  seat_count       no claim can draw, whatever its executor is
+        //
+        // Collapsing the middle band into the bottom one is what made an earlier draft of this
+        // print "no panel can be drawn" over a state where a panel was demonstrably being drawn
+        // (`a_claim_whose_own_operator_has_left_can_still_seat_a_panel` measures that state).
+        if band == 2 {
+            warn!(
+                "[palw-panel] ADR-0065 D1 (seat maturity) is IN FORCE and NO claim can seat a panel: {seatable} \
+                 distinct operators are mature and eligible, and a panel needs {seat_count}. Every claim voids at \
+                 BindTimeout and safe_frontier stops advancing. It recovers when enough bonds register and mature \
+                 ({window} DAA) under operator keys not already in the registry, or when eligible ones return. The \
+                 fence's arming check only ever saw the GENESIS registry; this is the live one. No rule changed — \
+                 this is a diagnosis, not a refusal."
+            );
+        } else if band == 1 {
+            warn!(
+                "[palw-panel] ADR-0065 D1 (seat maturity) is IN FORCE and panels are failing: {seatable} distinct \
+                 operators are mature and eligible, and a draw needs {seat_count} BESIDES the claim's own \
+                 executor's. Every claim from a still-eligible bond voids at BindTimeout and safe_frontier stops \
+                 advancing; only a claim whose own bond has itself left eligibility can still bind. It recovers \
+                 when a bond registers and matures ({window} DAA) under an operator key not already in the \
+                 registry, or when an eligible one returns. The fence's arming check only ever saw the GENESIS \
+                 registry; this is the live one. No rule changed — this is a diagnosis, not a refusal."
+            );
+        } else {
+            warn!(
+                "[palw-panel] ADR-0065 D1 (seat maturity) is IN FORCE and the live registry has no spare seat: \
+                 {seatable} distinct operators are mature and eligible, {armable} is the margin the fence was armed \
+                 against and {drawable} is the point claims from healthy bonds stop binding. One retirement, or one \
+                 slash under min_collateral, now stops those claims for a full maturity window ({window} DAA) — \
+                 because the replacement is itself immature. No rule changed — this is a diagnosis, not a refusal."
+            );
+        }
+    }
+
     /// **ADR-0042 Decision 6's consumer: an attempt-lane (algo-6) block's stateful admission.**
     ///
     /// Closes P0-2 and P0-10 at the point they bite. The stateless half — shape, and the challenge
@@ -5398,6 +5541,7 @@ impl VirtualStateProcessor {
         &self,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         block: BlockHash,
+        block_daa: u64,
     ) -> Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
         use kaspa_consensus_core::palw_state_v2::PalwClaimPhaseV2;
         let Some(panel_params) = self.palw_panel_params_v2.as_ref() else { return Vec::new() };
@@ -5406,6 +5550,10 @@ impl VirtualStateProcessor {
         let Some(min_collateral) = self.palw_state_params_v2.as_ref().map(|p| p.min_collateral_sompi()) else {
             return Vec::new();
         };
+        // ADR-0065 D1: say so when the live registry has fallen under what the armed fence needs.
+        // Log only, and before the loop so it is reported even on a block that binds no panel —
+        // "no claims advanced" is exactly what a stalled chain looks like from here.
+        self.palw_warn_if_maturity_outruns_the_registry(state, block_daa, min_collateral, panel_params);
         let mut out = Vec::new();
         for (claim_id, claim) in state.claims_iter() {
             if !matches!(claim.phase, PalwClaimPhaseV2::Provisional) {
@@ -5449,6 +5597,7 @@ impl VirtualStateProcessor {
         acceptance: &AcceptanceData,
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         block: BlockHash,
+        block_daa: u64,
     ) -> Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
         let Some(freeprompt) = self.palw_freeprompt_params_v3.as_ref() else {
             return Vec::new();
@@ -5484,7 +5633,7 @@ impl VirtualStateProcessor {
         }
         // The derived bindings go FIRST: a claim bound by this block may then be licensed by an
         // object the same block carries, which is the order a chain that is catching up needs.
-        self.palw_v2_derived_panel_bindings(state, block)
+        self.palw_v2_derived_panel_bindings(state, block, block_daa)
             .into_iter()
             .chain(extraction.objects.into_iter().map(|carried| carried.object))
             .chain(lifecycle.objects.into_iter().map(|carried| carried.object))

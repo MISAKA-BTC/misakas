@@ -176,6 +176,68 @@ pub struct PalwAnchorFactV2 {
     pub predecessor_daa: u64,
 }
 
+/// **How many DISTINCT OPERATORS could take a seat right now** — the live registry measured with
+/// the same two predicates [`derive_panel_v2_with_maturity`] uses to build its ticket list.
+///
+/// This exists so an operator-facing warning cannot drift from the rule it warns about. It is not
+/// a second implementation of the draw: it calls
+/// [`crate::palw_state_v2::palw_bond_may_take_work_v2`] and applies the identical maturity
+/// comparison, and it counts operators rather than bonds because the draw seats one bond per
+/// operator — a registry of ten bonds under two operators seats two.
+///
+/// **The executor exclusions are deliberately NOT applied**, and that is the whole reason the
+/// answer is comparable to `palw_v2_maturity_armable_bonds_v1()`. That bar is derived as
+/// `seat_count` + one for the executor + one for a departure + one of margin, so the executor is
+/// already priced INTO the number being compared against; excluding it here as well would count it
+/// twice and make the warning fire a seat early. A caller asking "can THIS claim seat a panel"
+/// must use the draw itself, which does exclude it.
+///
+/// `registered_by_daa` is [`palw_seat_maturity_floor_v1`]'s output: `None` when ADR-0065 D1 is off,
+/// in which case maturity excludes nobody.
+pub fn palw_seatable_operators_v1(state: &PalwChainStateV2, min_collateral_sompi: u64, registered_by_daa: Option<u64>) -> usize {
+    let mut operators: std::collections::BTreeSet<Hash64> = std::collections::BTreeSet::new();
+    for (_, bond) in state.bonds_iter() {
+        // Status AND balance, through the one predicate — a bond slashed to nothing keeps `Active`
+        // for the rest of the chain's life, and counting it here would report a seat that the
+        // draw will not fill.
+        if !crate::palw_state_v2::palw_bond_may_take_work_v2(bond, min_collateral_sompi) {
+            continue;
+        }
+        // ADR-0065 D1, the same comparison the draw makes.
+        if registered_by_daa.is_some_and(|by| bond.registered_daa > by) {
+            continue;
+        }
+        operators.insert(bond.operator_id);
+    }
+    operators.len()
+}
+
+/// **Is a live-registry shortfall report due at `daa`?** — the rate limiter for the ADR-0065 D1
+/// warning, as a pure function so it can be tested.
+///
+/// `last` is the DAA the shortfall was last reported at, or [`PALW_SHORTFALL_NEVER_REPORTED`].
+/// **Log state only**: no consensus path reads the answer, so two nodes that report at different
+/// moments still agree about every block.
+///
+/// Four arms, and three of them are each a way this went wrong before it was a function:
+/// * `worsened` → the situation got strictly worse since the last report, so say so at once. The
+///   interval is a bind window (~20 h at the live cadence); without this arm an operator who was
+///   told "the margin is gone" would hear nothing for that long while the chain actually stopped
+///   binding claims, which is the transition they most need to see.
+/// * never reported → report now. `last + interval` saturates at `u64::MAX`, so comparing against
+///   it alone would suppress the FIRST report for ever, which is the one that matters most.
+/// * `daa < last` → the virtual moved to a different branch. The caller runs per chain block
+///   ADDED, so a reorg replays lower scores; suppressing on the forward test alone would go quiet
+///   from the reorg until the new branch climbed past the old tip's window — exactly the stretch
+///   an operator is trying to understand.
+/// * otherwise report only once the interval has elapsed.
+pub fn palw_shortfall_report_is_due_v1(last: u64, daa: u64, interval: u64, worsened: bool) -> bool {
+    worsened || last == PALW_SHORTFALL_NEVER_REPORTED || daa < last || daa >= last.saturating_add(interval)
+}
+
+/// The sentinel [`palw_shortfall_report_is_due_v1`] reads as "nothing reported yet".
+pub const PALW_SHORTFALL_NEVER_REPORTED: u64 = u64::MAX;
+
 /// **ADR-0065 D2's fast path, and it is a proof rather than a shortcut.**
 ///
 /// `true` when `minted` newly-registered bonds COULD form a quorum on some panel, so the
@@ -1127,6 +1189,180 @@ mod tests {
             ),
             "at seat_count + 1 the same departure is a halt — which is why the genesis grew"
         );
+    }
+
+    /// **The shortfall counter must agree with the draw, or the warning built on it lies.**
+    ///
+    /// `palw_seatable_operators_v1` exists to let an operator be told that ADR-0065 D1 has outrun
+    /// the live registry. A counter that answered differently from `derive_panel_v2_with_maturity`
+    /// would produce exactly the failure this whole ADR line keeps finding — a diagnostic that
+    /// reports health while the thing it describes is broken, or cries wolf while it is fine.
+    ///
+    /// So this asserts the AGREEMENT, not the count: across every maturity floor that matters,
+    /// "the draw succeeds" and "enough operators remain once the executor's is removed" are the
+    /// same predicate. Sharing `palw_bond_may_take_work_v2` and the maturity comparison is what
+    /// makes that true; this is what stops it from silently stopping being true.
+    #[test]
+    fn the_seatable_counter_agrees_with_the_draw_it_warns_about() {
+        let (state, claim_id) = populated_state();
+        // A newcomer a century after the rest, so some floors admit it and some do not.
+        let (late, _) = apply_palw_transition_v2(&state, &state_params(), &ctx(3, 200, 3), &[register(7, 13, 0x27)], None).unwrap();
+        let anchor = BlockHash::from_u64_word(0xA1);
+
+        // The executor is bond 1 under operator 0x21, and bond 6 shares that operator — so the
+        // draw's three exclusions remove ONE operator from the count, never more.
+        let executor_operator = op_id(0x21);
+
+        for (anchor_daa, window) in [(250u64, None), (250, Some(100)), (400, Some(100)), (150, Some(1_000)), (10_000, Some(1))] {
+            let floor = palw_seat_maturity_floor_v1(anchor_daa, window);
+            let counted = palw_seatable_operators_v1(&late, 0, floor);
+            // What the draw has left after the executor's own operator is excluded.
+            let available = counted.saturating_sub(1);
+            for seats in 1u16..=6 {
+                let Ok(params) = PalwPanelParamsV2::new(seats, 1, 4) else { continue };
+                let drew = derive_panel_v2_with_maturity(&late, &params, &claim_id, anchor, 0, floor);
+                assert_eq!(
+                    drew.is_ok(),
+                    available >= seats as usize,
+                    "floor {floor:?}, {seats} seats: the counter says {counted} operators ({available} after the \
+                     executor) and the draw says {drew:?} — these must never disagree"
+                );
+                if let Ok(panel) = drew {
+                    assert_eq!(panel.len(), seats as usize);
+                    assert!(panel.iter().all(|s| s.operator_id != executor_operator), "the executor's operator never sits");
+                }
+            }
+        }
+    }
+
+    /// **The rate limiter, including the two arms that were wrong before it was a function.**
+    ///
+    /// It gates a WARNING, so being wrong is not a consensus fault — it is the difference between
+    /// an operator hearing why the chain stopped and not hearing it.
+    #[test]
+    fn the_shortfall_limiter_reports_at_the_start_and_survives_a_reorg() {
+        let interval = 600;
+        // **An escalation always speaks**, whatever the interval says. The band only ever worsens
+        // by the registry losing another operator, and the interval is a bind window — roughly 20
+        // hours at the live cadence — so without this the step from "the margin is gone" to "no
+        // claim can bind" would be invisible for most of a day.
+        assert!(palw_shortfall_report_is_due_v1(1_000, 1_001, interval, true));
+        assert!(palw_shortfall_report_is_due_v1(1_000, 1_000, u64::MAX, true));
+
+        // Cold start reports immediately. The saturating add makes `last + interval` equal
+        // `u64::MAX`, so without the sentinel arm no first report would ever be due.
+        assert!(palw_shortfall_report_is_due_v1(PALW_SHORTFALL_NEVER_REPORTED, 0, interval, false));
+        assert!(palw_shortfall_report_is_due_v1(PALW_SHORTFALL_NEVER_REPORTED, u64::MAX, interval, false));
+
+        // Inside the window, going forward: quiet.
+        assert!(!palw_shortfall_report_is_due_v1(1_000, 1_000, interval, false));
+        assert!(!palw_shortfall_report_is_due_v1(1_000, 1_599, interval, false));
+        // At the boundary and past it: due. Exactly at `last + interval` counts, or the effective
+        // interval would silently be one longer than it says.
+        assert!(palw_shortfall_report_is_due_v1(1_000, 1_600, interval, false));
+        assert!(palw_shortfall_report_is_due_v1(1_000, 9_999, interval, false));
+
+        // **A reorg to a lower score re-opens the report.** This is the arm that matters: the
+        // caller runs per chain block added, so a reorg replays scores below the old tip. Without
+        // it the node goes quiet from the reorg until the new branch passes `last + interval`.
+        assert!(palw_shortfall_report_is_due_v1(10_000, 9_000, interval, false));
+        assert!(palw_shortfall_report_is_due_v1(10_000, 9_999, interval, false));
+        assert!(!palw_shortfall_report_is_due_v1(10_000, 10_000, interval, false), "the same score is not a reorg");
+
+        // An interval large enough to overflow must not wrap into "always due".
+        assert!(!palw_shortfall_report_is_due_v1(1_000, 1_001, u64::MAX, false));
+        assert!(palw_shortfall_report_is_due_v1(1_000, 999, u64::MAX, false), "…and a reorg still speaks");
+    }
+
+    /// **The count is the REGISTRY's, and a draw's requirement is claim-relative — so the warning
+    /// built on it must not speak in absolutes.**
+    ///
+    /// `palw_seatable_operators_v1` counts operators with at least one eligible, mature bond. The
+    /// draw then excludes the claim's executor by bond, operator and key. Normally the executor's
+    /// operator IS one of the counted ones, so a draw has `counted - 1` to choose from and needs
+    /// `seat_count + 1` counted overall.
+    ///
+    /// But an executor's bond only has to EXIST for the draw to run, not to be eligible — a
+    /// producer whose bond retires or is slashed under the floor while its claim is still
+    /// Provisional is exactly that case. Its operator is then absent from the count, the draw has
+    /// all `counted` to choose from, and `counted == seat_count` is enough.
+    ///
+    /// Measured here rather than argued: at three eligible operators a three-seat panel DRAWS,
+    /// while the `seat_count + 1` threshold the warning alarms on says four are needed. The
+    /// threshold is still the right alarm — it is the point where claims from healthy bonds start
+    /// failing — but the message may not say "no panel can be drawn", because this is a panel
+    /// being drawn. That is why it says "every claim from a still-eligible bond".
+    #[test]
+    fn a_claim_whose_own_operator_has_left_can_still_seat_a_panel() {
+        let (state, claim_id) = populated_state();
+        // Retire BOTH bonds under the executor's operator (0x21 holds bonds 1 and 6), so the
+        // executor's bond is present-but-ineligible and its operator has nothing seatable.
+        let (retired, _) = apply_palw_transition_v2(
+            &state,
+            &state_params(),
+            &ctx(3, 200, 3),
+            &[
+                PalwConsensusObjectV2::BondRetireRequested { bond: PalwBondKeyV2(bond_outpoint(1)), signature: Vec::new() },
+                PalwConsensusObjectV2::BondRetireRequested { bond: PalwBondKeyV2(bond_outpoint(6)), signature: Vec::new() },
+            ],
+            None,
+        )
+        .unwrap();
+        let counted = palw_seatable_operators_v1(&retired, 0, None);
+        assert_eq!(counted, 3, "operators 0x22, 0x23, 0x24 remain; the executor's 0x21 does not");
+
+        let anchor = BlockHash::from_u64_word(0xA1);
+        let params = PalwPanelParamsV2::new(3, 2, 4).unwrap();
+        let drew = derive_panel_v2_with_maturity(&retired, &params, &claim_id, anchor, 0, None);
+        assert!(drew.is_ok(), "three counted operators fill three seats when none of them is the executor's");
+        assert_eq!(counted, params.seat_count() as usize, "…at exactly seat_count, one BELOW the warning's threshold");
+        assert!(
+            counted < params.seat_count() as usize + 1,
+            "so the alarm fires here, and its wording must be true anyway — see the warning in \
+             `palw_warn_if_maturity_outruns_the_registry`"
+        );
+
+        // **And the band BELOW it is unconditional**, which is what lets the warning say "NO claim
+        // can seat a panel" there without qualification: at fewer than `seat_count` eligible
+        // operators the draw fails even in this most favourable case, where the executor costs
+        // nothing because it is not counted.
+        let bigger = PalwPanelParamsV2::new(4, 3, 4).unwrap();
+        assert!(counted < bigger.seat_count() as usize, "three counted against four seats");
+        assert!(
+            matches!(
+                derive_panel_v2_with_maturity(&retired, &bigger, &claim_id, anchor, 0, None),
+                Err(PalwPanelV2Error::InsufficientEligibleBonds { .. })
+            ),
+            "below seat_count nothing can seat a panel, whoever the executor is — the three bands are \
+             seatable < seat_count (never), == seat_count (only an unseatable executor), > seat_count (always)"
+        );
+    }
+
+    /// The two filters the counter applies, each shown to bite on its own.
+    #[test]
+    fn the_seatable_counter_dedups_operators_and_respects_maturity() {
+        let (state, _) = populated_state();
+        // Six bonds over FOUR operators: 0x21 twice (bonds 1 and 6) and 0x24 twice (bonds 4, 5).
+        assert_eq!(state.bonds_iter().count(), 6, "six bonds…");
+        assert_eq!(palw_seatable_operators_v1(&state, 0, None), 4, "…and four operators, because the draw seats one each");
+
+        // A newcomer under a FRESH operator raises the count once it has matured, and not before.
+        let (late, _) = apply_palw_transition_v2(&state, &state_params(), &ctx(3, 200, 3), &[register(7, 13, 0x27)], None).unwrap();
+        assert_eq!(palw_seatable_operators_v1(&late, 0, None), 5, "the rule off: it counts immediately");
+        assert_eq!(
+            palw_seatable_operators_v1(&late, 0, palw_seat_maturity_floor_v1(250, Some(100))),
+            4,
+            "the rule on and the window unelapsed: the newcomer is not seatable yet"
+        );
+        assert_eq!(
+            palw_seatable_operators_v1(&late, 0, palw_seat_maturity_floor_v1(400, Some(100))),
+            5,
+            "…and once it has stood, it is"
+        );
+
+        // The collateral floor bites too: raise it above what every bond holds and nobody is
+        // seatable, which is the slashed-to-nothing case the shared predicate exists for.
+        assert_eq!(palw_seatable_operators_v1(&late, u64::MAX, None), 0, "a floor nobody meets leaves no seats");
     }
 
     #[test]
