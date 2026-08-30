@@ -80,10 +80,9 @@ pub enum PalwGenesisV2Error {
         window_bind: u64,
         needed_collateral: u128,
     },
-    #[error(
-        "genesis registers {operators} distinct bond operator(s); a {seat_count}-seat panel needs {needed} because a claim's          own executor is excluded from its panel and one seat is one operator. No claim could ever be licensed: every one          would void at `BindTimeout`, `safe_weight` would stay zero, and every block's escrowed worker carve would be burned"
-    )]
-    PanelCannotBeSeated { operators: usize, seat_count: u16, needed: usize },
+    // `PanelCannotBeSeated` retired here (ADR-0061): an under-seated — even EMPTY — registry is
+    // a valid genesis now that bonds ride transactions and the heartbeat produces the blocks
+    // they ride. See the retired Gate 2's comment in `verify_palw_genesis_v2`.
     #[error(
         "genesis bond {bond:?} declares {declared} sompi of collateral, but its outpoint holds no genesis output at all \
          — a bond whose collateral nothing locks is a number, not a stake"
@@ -256,25 +255,18 @@ pub fn verify_palw_genesis_v2(
         }
     }
 
-    // **Gate 2 — the panel.** `derive_panel_v2` excludes a claim's own executor by bond, by
-    // operator and by key, and seats at most one bond per operator. So a `seat_count`-seat panel
-    // needs `seat_count + 1` DISTINCT operators in the registry, and `BondRegistered` may not ride
-    // a transaction (`palw_lifecycle_objects_v2`: "bonds come from genesis") — which makes this a
-    // property of the genesis artifact and of nothing else. Below it, no claim is ever licensed:
-    // every one voids at `BindTimeout`, `safe_weight` stays zero, and the escrowed worker carve of
-    // every block is burned. The chain produces blocks and carries no weight, which is the one
-    // failure mode a weight-bearing network must not be able to ship in.
-    let mut operators: Vec<Hash64> = bonds.iter().map(|(_, _, op)| *op).collect();
-    operators.sort();
-    operators.dedup();
-    let needed = bundle.panel.seat_count() as usize + 1;
-    if operators.len() < needed {
-        return Err(PalwGenesisV2Error::PanelCannotBeSeated {
-            operators: operators.len(),
-            seat_count: bundle.panel.seat_count(),
-            needed,
-        });
-    }
+    // **Gate 2 retired — a genesis may seat zero (ADR-0061).** This used to refuse a registry
+    // with fewer than `seat_count + 1` distinct operators, on the stated ground that
+    // "`BondRegistered` may not ride a transaction … no later repair". Both halves of that
+    // premise are gone: a stranger registers their own bond on the running chain
+    // (`palw_lifecycle_objects_v2` — "BondRegistered may [ride], and the lock is what lets it"),
+    // and ADR-0060's heartbeat lane produces the blocks such a registration rides even on a
+    // chain with no bonded producer at all. An under-seated genesis is therefore a TRANSITIONAL
+    // state, not a dead network: blocks flow on the heartbeat, bonds arrive as transactions, and
+    // licensing begins the moment `seat_count + 1` distinct operators exist. Until then every
+    // claim voids at `BindTimeout` and its escrow burns — a cost the runtime already announces
+    // per block ("voided claims holding N sompi … destroyed, not paid"), which is what turns the
+    // old silent-forever failure into a visible bootstrap phase.
     Ok(())
 }
 
@@ -502,31 +494,32 @@ mod tests {
     ///
     /// `derive_panel_v2` excludes a claim's executor by bond, by operator AND by key, and seats one
     /// bond per operator. So `seat_count` seats need `seat_count + 1` distinct operators, and
-    /// `BondRegistered` may not ride a transaction — the registry is fixed at genesis and there is
-    /// no later repair. Below the bar every claim voids at `BindTimeout`: the chain makes blocks,
-    /// `safe_weight` stays zero, and each block's escrowed worker carve is burned. A network that
-    /// produces blocks and carries no weight is the one failure a weight-bearing chain must not be
-    /// able to ship in — and nothing else in the tree could say so.
+    /// **ADR-0061: a genesis may seat zero.** The refusal this test used to pin rested on
+    /// "`BondRegistered` may not ride a transaction — no later repair", and both halves are
+    /// gone: bonds register on the running chain, and ADR-0060's heartbeat produces the blocks
+    /// the registration rides even with no bonded producer alive. An under-seated registry is a
+    /// bootstrap phase (claims void loudly until `seat_count + 1` operators exist), not a dead
+    /// network — so the gate admits it, all the way down to the empty registry the zero-seat
+    /// genesis ships.
     #[test]
-    fn a_registry_that_cannot_seat_a_panel_is_refused() {
+    fn an_under_seated_registry_loads_and_licensing_waits_for_operators() {
         let catalog = catalog();
         let bundle = bundle(&catalog);
         let seats = bundle.panel.seat_count() as u64;
 
-        // One operator short, every other check satisfied.
+        // ZERO bonds: the zero-seat genesis. Classes are still granted; producers arrive as
+        // transactions on the heartbeat.
+        let empty = vec![registration(h64(1), CANONICAL)];
+        verify_palw_genesis_v2(&bundle, &catalog, &empty, funded).expect("a zero-seat genesis loads");
+
+        // One operator short of a panel: loads — licensing simply waits for the sixth.
         let mut short = vec![registration(h64(1), CANONICAL)];
         short.extend((1..=seats).map(bond_n));
-        assert_eq!(
-            verify_palw_genesis_v2(&bundle, &catalog, &short, funded).unwrap_err(),
-            PalwGenesisV2Error::PanelCannotBeSeated {
-                operators: seats as usize,
-                seat_count: seats as u16,
-                needed: seats as usize + 1
-            }
-        );
+        verify_palw_genesis_v2(&bundle, &catalog, &short, funded).expect("an under-seated registry loads");
 
-        // **Clones do not count.** A registry of N bonds sharing ONE operator seats nobody, which
-        // is the trap an operator bootstrapping alone walks into first.
+        // A registry of clones (one operator, many bonds) also loads; `derive_panel_v2` still
+        // seats at most one bond per operator, so it licenses nothing until real operators join
+        // — the same transitional state, entered with more money locked.
         let mut clones = vec![registration(h64(1), CANONICAL)];
         for n in 1..=(seats + 1) {
             let PalwConsensusObjectV2::BondRegistered { bond, pubkey, collateral, payout_payload, .. } = bond_n(n) else {
@@ -541,15 +534,9 @@ mod tests {
                 signature: Vec::new(),
             });
         }
-        assert!(
-            matches!(
-                verify_palw_genesis_v2(&bundle, &catalog, &clones, funded).unwrap_err(),
-                PalwGenesisV2Error::PanelCannotBeSeated { operators: 1, .. }
-            ),
-            "one operator with many bonds is one operator"
-        );
+        verify_palw_genesis_v2(&bundle, &catalog, &clones, funded).expect("clones load and seat one");
 
-        // And one more operator loads.
+        // And a fully seatable registry still loads, exactly as before.
         let mut enough = vec![registration(h64(1), CANONICAL)];
         enough.extend(a_seatable_registry(&bundle));
         verify_palw_genesis_v2(&bundle, &catalog, &enough, funded).expect("seat_count + 1 operators seats a panel");

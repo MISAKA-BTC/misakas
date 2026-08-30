@@ -5680,7 +5680,14 @@ mod consensus_params_id_tests {
             // new block validity (slot rule, lane retarget, fee-only coinbase) and new fork-choice
             // arithmetic (ε work) — so the version is the carrier again, and only this preset
             // moves. Rides the ADR-0059 10B-cap re-mint (the same coordinated wipe).
-            "4486d9b1c056bc8e534d633100dff43a5eec546d885be852bf729fde1247e3e5"),
+            //
+            // **Moved by ADR-0061 (zero-seat genesis + right-sized collateral): the six genesis
+            // collateral outputs shrink 0.1B → 10,000 MSK each** (the declared collateral is the
+            // DERIVED 3,223.07 MSK, so `palw_ruleset_id` is untouched — only the genesis UTXO set
+            // moves, and ~599.94M MSK returns to the spendable main wallet under the same 10B
+            // cap). The zero-seat gate change itself moves no bytes: a v-old build meeting a
+            // zero-seat network refuses loudly at assembly, which is the safe direction.
+            "17bdff18b08ed26c1ad8051a2a20e5d6d3e2022fa8204ff6cadee94a20bb39c5"),
             ("simnet", SIMNET_PARAMS, "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd"),
             ("devnet", DEVNET_PARAMS, "6b12b8e9c755c0117057989406dbc36214fc8b7be97108beca4ae2099ab86a69"),
         ]

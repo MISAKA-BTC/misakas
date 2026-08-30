@@ -52,15 +52,25 @@ use kaspa_hashes::Hash64;
 /// bigger genesis from a longer table.
 pub const MISAKA_PREMINE_CAP_SOMPI: u64 = 10_000_000_000 * SOMPI_PER_KASPA;
 
-/// Collateral carved from the main wallet for each genesis bond seat: 0.1B MSK, the same value
-/// the seats have staked since the registry was minted (2026-08-22), so the resolved
-/// `BondRegistered` collateral — and with it `palw_ruleset_id` — does not move with the 10B-cap
-/// re-genesis. The collateral outputs sit at the bond seats' own outpoint indices
-/// (`premine_outpoint(0..cards)`) but are OWNED by the main wallet's key: the operator stakes
-/// the main wallet's money, not a separate custody block. Consensus locks them while the bond
-/// is not retired (`palw_bond_collateral_is_locked_v2`), and the wallet's input selector
-/// excludes them via `palw_locked_bond_outpoints_v2`.
-pub const GENESIS_BOND_COLLATERAL_SOMPI: u64 = 100_000_000 * SOMPI_PER_KASPA;
+/// Collateral carved from the main wallet for each genesis bond seat: **10,000 MSK**
+/// (operator decision 2026-08-30, ADR-0061 — down from the 0.1B the seats inherited from the
+/// old vault denomination).
+///
+/// The C-08 gate demands only that this output COVER the bond's declared collateral, and the
+/// declaration is the DERIVED figure — `palw_v2_collateral_for_claim_lifetime_v1` over the
+/// dearest registered class, measured at 3,223.07 MSK on the shipped three-class card — so
+/// 10,000 is a ~3.1× margin over the structural minimum. The margin is what absorbs DAA
+/// advancing slower than one per block (parallel production against one bond); the derivation
+/// itself already covers the whole claim-lifetime exposure horizon, `+1` included. Because the
+/// declared collateral is unchanged, `palw_ruleset_id` does not move with this re-size — only
+/// the genesis UTXO set (and with it the fingerprint) does.
+///
+/// The outputs sit at the bond seats' own outpoint indices (`premine_outpoint(0..cards)`) but
+/// are OWNED by the main wallet's key: the operator stakes the main wallet's money, not a
+/// separate custody block. Consensus locks them while the bond is not retired
+/// (`palw_bond_collateral_is_locked_v2`), and the wallet's input selector excludes them via
+/// `palw_locked_bond_outpoints_v2`.
+pub const GENESIS_BOND_COLLATERAL_SOMPI: u64 = 10_000 * SOMPI_PER_KASPA;
 
 /// The main wallet's outpoint index on [`MISAKA_PREMINE_TXID`].
 ///

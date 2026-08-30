@@ -200,13 +200,10 @@ merge.*
 
 ## 8. What this deliberately does not decide
 
-* **Removing the genesis bond seats.** Decision 1 makes a zero-seat genesis viable for the
-  first time (heartbeat blocks carry the first bond registrations), which would complete
-  ADR-0059's simplification: genesis = main wallet + community, nothing else. That is a
-  follow-up amendment — the boot gate would become "heartbeat lane present OR ≥ 6 seats" —
-  taken separately so this doctrine stays mechanism, not migration.
-* **Right-sizing the genesis collateral outputs** (measured demand 3,223.07 MSK/seat against
-  the 100M/seat currently locked) — separate change, same re-mint window.
+* **Removing the genesis bond seats** and **right-sizing the genesis collateral** — *decided
+  the same day as ADR-0061*: the gate now admits any registry size down to zero (Decision 1's
+  heartbeat carries the first bond registrations), and the collateral outputs are 10,000 MSK
+  per seat against the 3,223.07 MSK derived demand.
 * **Mainnet finality topology** — the leak's parameters for a mainnet validator set are a
   launch-time decision.
 

@@ -50,10 +50,9 @@ lessons are structural now:
   txid. A bond's identity IS its collateral outpoint (`PalwBondKeyV2(premine_outpoint(i))`,
   inside `palw_ruleset_id`), and fleet units name float outpoints in their configs — indices
   are names, not positions, and the gap at 6..39 is deliberate.
-* **The collateral value.** 0.1B per seat, the value the seats have staked since the registry
-  was minted (2026-08-22). The resolved `BondRegistered` collateral is therefore unchanged,
-  and with it `palw_ruleset_id`: this re-genesis moves the genesis block and the UTXO
-  commitment, not the PALW ruleset.
+* **The collateral value.** 0.1B per seat at this ADR's cut — *superseded the same day by
+  ADR-0061*, which re-sizes the outputs to 10,000 MSK per seat (the declared collateral stays
+  the derived figure, so `palw_ruleset_id` still does not move).
 * **The emission schedule.** 15B over 20 years, untouched. Final supply follows the cap:
   10B + 15B = **25B** (`MAX_SOMPI` 28B → 25B, the same follow-the-premine move as the
   30B → 28B re-derivation of 2026-06-17).

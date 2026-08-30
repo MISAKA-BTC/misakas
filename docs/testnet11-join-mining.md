@@ -45,11 +45,11 @@ that changed.
 A node on the right chain logs
 
 ```
-Consensus params fingerprint: 4486d9b1c056bc8e534d633100dff43a5eec546d885be852bf729fde1247e3e5 (network testnet-11)
+Consensus params fingerprint: 17bdff18b08ed26c1ad8051a2a20e5d6d3e2022fa8204ff6cadee94a20bb39c5 (network testnet-11)
 ```
 
 (Identity as of the **2026-08-30 re-mint** for the 10B premine cap, ADR-0059 — genesis
-`0f7e05d5…`, coinbase marker `11,3`. The previous value was `95265934…` (2026-08-29), and
+`d2789338…`, coinbase marker `11,3`. The previous value was `95265934…` (2026-08-29), and
 `15bab795…` before that; a node still announcing either is on an old chain and every upgraded
 node will refuse it at the handshake. If you joined an earlier testnet-11, wipe the appdir;
 the old chain is archived, not continued.)
