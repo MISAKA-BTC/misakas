@@ -221,3 +221,72 @@ to run this at any later date, and nothing expires it.
 
 Consensus-affecting, so it is a fingerprint move and a re-mint. It is a **mainnet blocker** and it
 is live on testnet-11 now.
+
+---
+
+## Second addendum — the live chain is convicting its own honest producer
+
+Measured on testnet-11 at sink ≈ 730, hours after the regenesis. Not a design question: this is
+happening now.
+
+### The numbers
+
+Since the regenesis, the lifecycle objects carried in blocks tally:
+
+| event | count |
+|---|---|
+| `PanelBound` | 7,587 (≈1,265 claims × 6) |
+| `ReceiptLicensed` | 825 |
+| `ProducerDefaulted` | **443** |
+| lifecycle object **dropped** (`receipt set does not carry a quorum`) | **875** |
+
+**35 % of every claim the chain has ever created ended in `ProducerDefaulted`,** and in the last
+hour the rate was 66 defaults against 73 licences — ~47 %. Each default voids the claim: the node
+logs `voided claims holding 275628448680 sompi of escrow`, i.e. **≈2,756 MSK destroyed per event**.
+`final_claims` is 0, which is correct at this height (the lattice needs ≈5,400 DAA), but the claims
+are not maturing toward Final — they are being convicted.
+
+### The mechanism, read from both sides
+
+Panel receipts carry one of two verdicts and **`Unavailable` is not a null vote — it is a positive
+conviction.** From `palw_panel_v2`'s own header: *the two quorums license OPPOSITE transitions* — a
+`Valid` quorum licenses `ReceiptLicensed`, an `Unavailable` quorum licenses `ProducerDefaulted`.
+
+The shipped panel is `seat_count = 5`, `quorum = 3`.
+
+**Host C runs exactly three seats.** And its three seats file `Unavailable` *together*, because
+availability fails **per claim, not per seat**: when the trace for a claim cannot be fetched, every
+remote seat sees the same nothing. In the current window C files 9/40, 8/41 and 10/41 `Unavailable`
+— the same ~22 % of claims — while the producer's co-located panel on ibm files **55 Valid and 0
+Unavailable** over the same window, because it reads the trace off its own disk.
+
+So three seats on one host are **exactly quorum**, they vote as one because their failure is shared,
+and they convict a producer that is serving correctly to itself. The 875 drops are the near misses:
+3 Valid against 2 Unavailable reaches neither quorum, the object is dropped, "the block stands", and
+the claim hangs until it times out.
+
+### Two distinct defects, and neither is an operator error
+
+1. **The panel draws seats, not operators.** `min_active_validators` was fixed to dedup by
+   `validator_pubkey_hash`, but `derive_panel_v2` still draws per *bond*. One operator holding three
+   bonds holds quorum. Combined with the CRITICAL above — bonds cost 0.004 MSK, never expire and
+   never leave the registry — **quorum is purchasable for roughly a cent.** That is the same root as
+   the sybil-frontier finding, reached from the liveness side instead of the safety side.
+
+2. **`Unavailable` is trusted as evidence when it is really an absence of evidence.** A seat that
+   cannot fetch reports the same verdict as a seat that asked an evasive producer. The court has no
+   way to tell "the producer withheld" from "I could not reach it", so unreliable transport is
+   indistinguishable from fraud, and the honest producer pays. Trace serving to remote seats is
+   evidently the weak link — the producer's own panel never files `Unavailable` while remote ones do.
+
+### What this blocks
+
+`min_slash_permille_of_escrow` is 0 on the shipped bundle, so today a default destroys escrow but
+does not slash the bond. **The audit's "fix before switching it on" note about admission item 9 now
+has a second, larger reason: turning slashing on over this default rate would slash honest bonds at
+roughly one claim in three.** Do not enable it, and do not treat `ProducerDefaulted` counts as a
+fraud signal, until availability and the seat-diversity rule are fixed.
+
+Remedies belong with ADR-0065: draw seats from distinct operators (the bond-maturity work has to
+touch the same draw), and either make `Unavailable` require positive proof of a refusal rather than
+a failed fetch, or require the seats reporting it to be provably distinct from one another.
