@@ -4,13 +4,16 @@
 
 The node binary is still named `kaspad` and the crates keep their upstream `kaspa-*` names (this is a fork, not a rename); the **network**, addresses (`misaka…` mainnet / `misakatest…` testnet / `misakadev…` devnet), and project branding are misakas.
 
-> **Status (2026-08-27).** The live public network is **`testnet-11`** — the PALW release candidate.
+> **Status (2026-08-29).** The live public network is **`testnet-11`** — the PALW release candidate.
 > Explorer at **[misakascan.com](https://misakascan.com)**, web wallet at
 > **[wallet.misakascan.com](https://wallet.misakascan.com)**. Current network identity: consensus
-> fingerprint **`15bab795442ec3ef…`**, genesis **`c664a224…`** (three execution classes and the
-> 347M MSK community allocation in genesis). The chain was re-minted 2026-08-27 for ADR-0058
-> (merged work is counted) — a node with older state must wipe its appdir and resync; a node on an
-> older ruleset is refused at handshake by fingerprint, which is the intended behaviour.
+> fingerprint **`95265934e8965e91…`**, genesis **`c664a224…`** (three execution classes and the
+> 347M MSK community allocation in genesis). The chain was re-minted 2026-08-29 for the audit3
+> remediation (`PALW_STATE_V2_VERSION` 12 — see
+> [docs/testnet11-remint-2026-08-29.md](docs/testnet11-remint-2026-08-29.md)); the genesis and every
+> allocation are unchanged. A node with older state must wipe its appdir and resync; a node on an
+> older ruleset (announcing the previous `15bab795…`) is refused at handshake by fingerprint, which
+> is the intended behaviour.
 > `testnet-10` has been **stopped**; its parameter set still exists so historical data can be read,
 > but nothing operates it and its public entry point is closed.
 >
@@ -70,8 +73,12 @@ cargo build --release -p kaspad
 The log must show this fingerprint, or you are on the wrong ruleset:
 
 ```
-Consensus params fingerprint: 15bab795442ec3efc3a58e02dd9c7a6f3015ff0634bc4a50a7af589338857ad0 (network testnet-11)
+Consensus params fingerprint: 95265934e8965e91f3c22281af735bcd38527b5ee89fa09a05290db566d444a3 (network testnet-11)
 ```
+
+A log reading `15bab795…` instead means the binary was built from a checkout that predates the
+2026-08-29 re-mint (or an old binary is still the one your service launches) — rebuild from
+current `main` and check this line again before wiping anything.
 
 and the genesis the network builds on is
 `c664a224acb3f53b…` (the node prints it in any `Genesis mismatch` warning). If your log shows
@@ -82,7 +89,7 @@ forever. Recovery: stop the node, delete the app dir (`~/.kaspa-pq/misaka-testne
 `--appdir`), rebuild from current `main`, and resync — the real chain re-downloads in minutes.
 
 If DNS is blocked where you run, add the public entry nodes by hand:
-`--addpeer=169.58.232.113:26311 --addpeer=169.58.232.114:26311 --addpeer=169.58.39.220:26311`.
+`--addpeer=169.58.232.113:26311 --addpeer=169.58.39.220:26311`.
 
 | I want to… | read |
 |---|---|
