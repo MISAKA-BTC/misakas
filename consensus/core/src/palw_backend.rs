@@ -92,6 +92,22 @@ pub enum PalwMaterialVerdictV1 {
     Unverifiable,
 }
 
+/// **One free-prompt run, as the lane's callers need it.**
+///
+/// Three values rather than a tuple because they answer three different questions and only one of
+/// them is the chain's: `outcome` is what a panel serves and a court reads, `facts` is what
+/// `palw_fp_job_context_v3` derives a binding from, and `output_token_ids` is **the answer** — the
+/// reason a person ran this at all. An execution path that returned only the first two would price
+/// the work and lose the product, which is the failure the free-prompt lane exists to avoid: one
+/// inference, both halves.
+pub struct PalwFpRunV1 {
+    pub outcome: PalwExecutionOutcomeV1,
+    pub facts: crate::palw_fp_execution_v3::PalwFpRunFactsV3,
+    /// What the model produced, in token ids. Ids and not text: a family without a tokenizer has
+    /// no rendering to give, and ids are the execution identity in either case (v2 design §10.7).
+    pub output_token_ids: Vec<u32>,
+}
+
 /// The execution path, as a node uses it.
 ///
 /// Implementor: `misaka_palw_base0::backend::Base0Backend`. The trait stays a trait because the
@@ -111,6 +127,38 @@ pub trait PalwExecutionBackendV1: Send + Sync {
     /// Run the job and commit to it. Pure CPU/GPU work with no chain access: the caller runs it off
     /// the async runtime.
     fn execute(&self, job: &PalwJobContextV2, prompt: &[usize]) -> Result<PalwExecutionOutcomeV1, String>;
+
+    /// **The free-prompt lane's run — the one verb whose tokens the caller chooses.**
+    ///
+    /// `job_for_anchor` states why an executor must not pick the attempt lane's input: a class
+    /// whose executor chooses the prompt is a class where "run the model" and "find an input whose
+    /// output I like" are the same move. That rule is not relaxed here; it is answered by
+    /// different machinery. A free-prompt win is a quantum ticket against the class's receipt
+    /// target (`palw_fp_admission_v3` item 5) — not a property of the output — the claim binds a
+    /// beacon it cannot have chosen (item 3), its use window is fixed (item 4), and nothing pays
+    /// until the claim certifies (item 1). Grinding the prompt buys none of that.
+    ///
+    /// It is a SEPARATE verb for the same reason. An `execute` that accepted arbitrary tokens and
+    /// was reachable from the attempt path would be exactly the hole the rule closes, so the
+    /// attempt path keeps a verb whose prompt it cannot supply.
+    ///
+    /// Returns [`PalwFpRunV1`]: the outcome a panel and a court consume, the facts the derivation
+    /// needs, and the answer itself.
+    ///
+    /// **The run must be performed under the context the derivation produces**, not under a
+    /// convenience context that resembles it. `palw_fp_execution_root_v3` recomputes the root the
+    /// court demands from that context, so an execution carried out under any other one commits a
+    /// root nobody can reproduce — an honest producer, unconvictable and unpayable.
+    ///
+    /// Defaulted to a refusal: a family that has not implemented this has no free-prompt path, and
+    /// saying so is better than a default that silently produces something the court cannot read.
+    fn execute_free_prompt(
+        &self,
+        _job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        _prompt_tokens: &[usize],
+    ) -> Result<PalwFpRunV1, String> {
+        Err("this backend has no free-prompt path".to_string())
+    }
 
     /// **A seat's check, before it signs.** Never a conviction — a mismatch is the court's to
     /// convict; a seat that disagrees signs nothing on the merits and the claim voids for want of

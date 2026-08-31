@@ -709,7 +709,8 @@ async fn the_beacon_fact_comes_from_the_chain_not_from_the_block() {
 
     let vp = ctx.consensus.virtual_processor();
     let sink = ctx.consensus.get_sink();
-    let sink_daa = vp.headers_store.get_header(sink).unwrap().daa_score;
+    let sink_header = vp.headers_store.get_header(sink).unwrap();
+    let sink_daa = sink_header.daa_score;
 
     // Every block this harness mines is attempt-class (algo 6), so every DAA at or below the sink
     // has a beacon and the fact's own witness must sit strictly below the slot.
@@ -1925,7 +1926,13 @@ async fn palw_rc_the_real_qwen25_a16_model_produces_a_block() {
     let backend = Qwen25A16Backend::new(
         std::sync::Arc::new(artifact),
         config.params.net.to_string().into_bytes(),
-        dense_class_id,
+        // The class's graph, not only its id — the backend needs it for the step space and the
+        // state map, and `shape_profile_id()` of this profile IS `dense_class_id`.
+        kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_profile_v1(
+            kaspa_consensus_core::palw_qwen25_profile::qwen25_canonical_geometry_v1("Qwen/Qwen2.5-1.5B-Instruct")
+                .expect("the canonical A16 geometry"),
+        )
+        .expect("a valid A16 profile"),
         QWEN25_A16_CANONICAL,
     );
     let (job, prompt) = backend.job_for_anchor(anchor).expect("the anchor implies a job inside the artifact's table");
@@ -9020,4 +9027,207 @@ async fn palw_rc_qwen36_counts_merged_work() {
     let step = (u32::from(opening_share) * 250 / 1000).max(1) as u16;
     assert_eq!(qwen_share, opening_share + step, "it filled its budget from the anticone, so it took a step from the floor");
     assert_eq!(qwen_share + base_share, 1000, "and the denominator is conserved");
+}
+
+/// **A caller's prompt, run on a registered class, opens a claim at the SHIPPED quantum.**
+///
+/// This test used to assert the opposite — that no registered class could earn a single draw —
+/// because the shipped quantum was 1,000 and the widest job a class could hold (BASE-0's n_ctx 12
+/// → 705 CU) floored to zero. Lowering the quantum to 100, with `pwu_per_quantum` lowered in step
+/// so a given CU total keeps the exact chain weight it had, is what changed: the floor's own
+/// maximum job now earns real quanta, and its commitment is taken by the same extraction the
+/// virtual processor runs on every accepted block — the shipped parameters, not a rebuilt set.
+///
+/// The comment above `QUANTUM_CU` records the arithmetic; this is its consequence on the chain
+/// path: a person's prompt, executed on the class the chain registered, becomes a claim the chain
+/// opens.
+#[tokio::test]
+async fn a_callers_prompt_on_a_registered_class_opens_a_claim_at_the_shipped_quantum() {
+    use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
+    use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, palw_fp_commitment_v3};
+    use kaspa_consensus_core::palw_freeprompt_v3::{
+        PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT, PALW_FP_V3_VERSION, PalwFpCommitmentTxPayloadV3,
+        PalwFreePromptJobV3, fp_claim_id_v3,
+    };
+    use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2 as Obj;
+    use kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT;
+    use kaspa_consensus_core::tx::{Transaction, TransactionId, TransactionOutpoint};
+    use kaspa_hashes::Hash64;
+    use misaka_palw_base0::backend::Base0Backend;
+    use misaka_palw_base0::classes::{canonical_class_by_model_id_v1, resolve_class_v1};
+
+    let catalog = palw_v2_test_catalog();
+    let bundle = palw_v2_test_bundle_funded_for(&catalog, 64);
+
+    // The floor, resolved the way a node resolves it: from nothing but its registered root.
+    let court = bundle.court;
+    let entry = canonical_class_by_model_id_v1(&court, "PALW-BASE-0/rc").expect("the floor is a canonical class");
+    let root = misaka_palw_base0::rc::palw_rc_base0_artifact_root_v1().expect("the floor's pinned root");
+    let backend = Base0Backend::new(resolve_class_v1(&court, entry.class_id(), root, &[]).expect("the floor resolves"));
+
+    // **The caller's tokens.** Not derived from an anchor — that is the attempt lane's rule, and
+    // the whole point of this lane is that a person chooses the input.
+    // The largest job this class can hold: one prefill token and the rest decode, which is what
+    // maximises `cu` under these weights. It is still short of a quantum, and the assertions below
+    // are about that rather than about this particular prompt.
+    let ctx_max = backend.profile().n_ctx as usize;
+    let prompt: Vec<usize> = vec![11];
+    let decode = (ctx_max - prompt.len()) as u32;
+    let bond = TransactionOutpoint::new(TransactionId::from_u64_word(0xB0), 0);
+    let keypair = crate::consensus::test_consensus::TestConsensus::palw_v2_harness_keypair();
+    let job = PalwFreePromptJobV3 {
+        version: PALW_FP_V3_VERSION,
+        network_domain: kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+            MAINNET_PARAMS.net.to_string().as_bytes(),
+            Some(MAINNET_PARAMS.genesis.hash),
+        ),
+        class_id: entry.class_id(),
+        executor_bond: bond,
+        executor_pubkey: crate::consensus::test_consensus::TestConsensus::palw_v2_harness_pubkey(),
+        operator_id: Hash64::from_u64_word(0x0B),
+        anchor_block: MAINNET_PARAMS.genesis.hash,
+        anchor_daa: 1,
+        job_nonce: [0x5A; 32],
+        tokenizer_id: Hash64::default(),
+        prompt_token_ids_hash: kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(
+            &prompt.iter().map(|t| *t as u32).collect::<Vec<_>>(),
+        ),
+        prompt_tokens: prompt.len() as u32,
+        decode_token_limit: decode,
+        max_context_tokens: backend.profile().n_ctx,
+        privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
+    };
+
+    let run = backend.execute_free_prompt(&job, &prompt).expect("the floor runs a caller's prompt");
+    let class = PalwFpClassFactsV3 {
+        model_profile_id: Hash64::default(),
+        runtime_manifest_hash: Hash64::default(),
+        runtime_class_id: Hash64::default(),
+        shape_profile_id: backend.profile().shape_profile_id(),
+        cu_ruleset_id: Hash64::default(),
+    };
+    let commitment = palw_fp_commitment_v3(&job, &class, &run, b"misaka-palw-rc", bundle.freeprompt.cu_weights(), 4_096)
+        .expect("a finished run assembles a commitment");
+
+    // Signed over the claim id, which is what the extraction verifies — the bond answering for the
+    // work, not a fixture asserting that somebody would have.
+    let claim_id_signed = fp_claim_id_v3(&commitment);
+    let signature = libcrux_ml_dsa::ml_dsa_87::sign(
+        &keypair.signing_key,
+        claim_id_signed.as_byte_slice(),
+        PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT,
+        [0u8; 32],
+    )
+    .expect("the harness signs")
+    .as_ref()
+    .to_vec();
+
+    let payload = borsh::to_vec(&PalwFpCommitmentTxPayloadV3 {
+        version: PALW_FP_V3_VERSION,
+        commitment,
+        prompt_token_ids: prompt.iter().map(|t| *t as u32).collect(),
+        signature,
+    })
+    .expect("the commitment payload serializes");
+    let tx = Transaction::new(0, vec![], vec![], 0, SUBNETWORK_ID_PALW_FP_COMMITMENT.clone(), 0, payload);
+
+    // **The shipped extraction, on the shipped bundle.** No parameters rebuilt: this is the
+    // function the virtual processor calls, with the quantum the network actually ships.
+    let extraction = kaspa_consensus_core::palw_fp_objects_v3::palw_fp_objects_from_accepted_txs_v3(
+        std::slice::from_ref(&tx),
+        job.network_domain,
+        &bundle.freeprompt,
+        kaspa_consensus_core::BlockHash::default(),
+        |pubkey: &[u8], message: &[u8], context: &[u8], signature: &[u8]| {
+            kaspa_txscript::verify_mldsa87_with_context(pubkey, message, context, signature).unwrap_or(false)
+        },
+    );
+
+    // The floor's widest job clears the quantum now, so its commitment opens a claim.
+    let ctx_max = backend.profile().n_ctx as u32;
+    let best_here = kaspa_consensus_core::palw_freeprompt_v3::fp_cu_v3(1, ctx_max - 1, bundle.freeprompt.cu_weights());
+    assert!(
+        best_here >= bundle.freeprompt.quantum_cu(),
+        "the widest job this class can hold ({best_here} CU) now reaches the {}-CU quantum",
+        bundle.freeprompt.quantum_cu()
+    );
+    assert!(extraction.skipped.is_empty(), "a job that earns a draw is not skipped: {:?}", extraction.skipped);
+    let [carried] = &extraction.objects[..] else { panic!("exactly one object rides a commitment") };
+    let Obj::FreePromptCommitted { claim, class_id, .. } = &carried.object else {
+        panic!("and it commits a free-prompt claim: {:?}", carried.object)
+    };
+    assert_eq!(*claim, claim_id_signed, "the claim the chain opened is the one the executor signed");
+    assert_eq!(*class_id, entry.class_id(), "under the class that ran it");
+}
+
+/// **A receipt block carrying a real certified claim passes the header admission gate.**
+///
+/// The end-to-end admission — a real execution's claim, certified, its quantum spend accepted by
+/// `check_palw_receipt_spend_admission_full_v3` — is proven in
+/// `misaka_palw_base0::backend::end_to_end_tests`. This adds the piece that lives in the pipeline:
+/// the receipt carriage a producer builds, on a real header, gets past the HEADER stage's
+/// signature gate — the check `validate_and_insert_block` runs before a block is a block at all.
+///
+/// It stops there deliberately. Whether the block then becomes the SINK is a stateful question the
+/// virtual processor answers on the chain candidate, and reaching it honestly needs the claim
+/// certified ON the mined chain — windows of DAA (bind 600, challenge 1,200) the frozen cadence
+/// makes into hours and this harness cannot cheaply advance without tripping the epoch-budget and
+/// DAA-progress rules that govern a real chain. The admission logic is proven where it is pure;
+/// this proves the header gate accepts the producer's carriage, and names what it does not cover.
+#[tokio::test]
+async fn a_receipt_carriage_passes_the_header_signature_gate() {
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
+
+    let catalog = palw_v2_test_catalog();
+    let bundle = palw_v2_test_bundle_funded_for(&catalog, 64);
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+
+    // A claim id and bond a producer would name — the harness bond is genesis row 0, whose REAL
+    // key the signature verifies against. The claim need not be on chain for the HEADER gate: that
+    // gate checks the signature over the header position, and the stateful "is this claim Final"
+    // question is asked later, on the candidate (measured in the receipt-gate test above).
+    let bond = TransactionOutpoint::new(TransactionId::from_u64_word(0xB0), 0);
+    let claim_id = kaspa_hashes::Hash64::from_u64_word(0xFEED);
+    let beacon_block = kaspa_hashes::Hash64::from_u64_word(0xBEAC);
+
+    let honest = ctx.build_block_template(9, ctx.simulated_time + 1);
+
+    // Junk signature — the stateless gate must refuse it, naming the signature.
+    let mut forged = honest.block.clone();
+    forged.header.pow_algo_id = kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3;
+    forged.header.palw_commitment =
+        ctx.consensus.palw_v3_test_receipt_carriage_for(&forged.header, false, claim_id, 0, bond, beacon_block);
+    forged.header.finalize();
+    match ctx.consensus.validate_and_insert_block(forged.to_immutable()).virtual_state_task.await {
+        Err(kaspa_consensus_core::errors::block::RuleError::BadPalwCarriageAdmission { algo_id: 7, reason }) => {
+            assert!(reason.to_lowercase().contains("signature"), "the refusal names the signature: {reason}");
+        }
+        other => panic!("a junk-signature receipt carriage must be refused at the header stage, got {other:?}"),
+    }
+
+    // Real signature over the same spend — the producer's carriage — must get PAST the signature
+    // gate. It is refused later on the stateful facts (no such Final claim on this chain), which is
+    // a different complaint and deliberately not asserted here.
+    let mut signed = honest.block.clone();
+    signed.header.pow_algo_id = kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3;
+    signed.header.palw_commitment =
+        ctx.consensus.palw_v3_test_receipt_carriage_for(&signed.header, true, claim_id, 0, bond, beacon_block);
+    signed.header.finalize();
+    if let Err(kaspa_consensus_core::errors::block::RuleError::BadPalwCarriageAdmission { algo_id: 7, reason }) =
+        ctx.consensus.validate_and_insert_block(signed.to_immutable()).virtual_state_task.await
+    {
+        assert!(
+            !reason.to_lowercase().contains("signature"),
+            "a correctly signed spend must not be refused for its signature: {reason}"
+        );
+    }
 }

@@ -349,8 +349,8 @@ mod tests {
         let out = palw_fp_objects_from_accepted_txs_v3(std::slice::from_ref(&foreign), h64(0x99), &fp, h64(1), |_, _, _, _| true);
         assert_eq!(out.skipped, vec![(foreign.id(), "payload is not stateless-admissible")], "a foreign network's payload");
 
-        // 8 prompt tokens and 4 decode tokens is far under one quantum.
-        let tiny = tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, borsh::to_vec(&payload(8, 4)).unwrap());
+        // 30 prompt tokens and 1 decode token is 30 + 64 = 94 CU, under the 100-CU quantum.
+        let tiny = tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, borsh::to_vec(&payload(30, 1)).unwrap());
         let out = palw_fp_objects_from_accepted_txs_v3(std::slice::from_ref(&tiny), net(), &fp, h64(1), |_, _, _, _| true);
         assert_eq!(out.skipped, vec![(tiny.id(), "job earns no quanta")]);
     }

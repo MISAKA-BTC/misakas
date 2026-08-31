@@ -7308,17 +7308,35 @@ mod consensus_params_id_tests {
                 //
                 // **This value is the union re-pin at the 2026-08-30 merge** — see the mainnet row.
                 //
-                // **Moved once more on 2026-08-31 by growing the genesis bond registry from six
-                // seats to eight** (`PALW_RC_GENESIS_BONDS`, Relaunch 4, marker 11,4). Two real
-                // ML-DSA-87 cards enter `genesis_objects` and two collateral + two fee-float
-                // outputs enter the premine, so the genesis, the premine commitment and the
-                // bundle all move together. The reason is ADR-0065 D1: at `seat_count + 1` the
-                // maturity fence could not be armed on ANY network this build ships, because the
-                // arming guard refuses a registry with no spare seat — enforcement existed and
-                // arming did not. At `seat_count + 3` the fence is a config change on a running
-                // chain rather than a re-mint. **This is a re-genesis for t11 and every host must
-                // wipe its datadir**; nothing else in this build accepts the old chain.
-                "4f89ec821699200a2961192f0b1f7a4c15f601f87b859121535091c212014154",
+                // **Re-pinned again at the 2026-08-31 MERGE of two independent changes**, and it is
+                // neither branch's value: a fingerprint is a function of the whole ruleset, never a
+                // sum of per-branch diffs, so `4f89ec82…` (the registry growth) and `d29e5667…` (the
+                // quantum drop) are both stale the moment the two meet. This is the merged tree's
+                // own value.
+                //
+                // The two causes, because they are separate and each is a re-mint on its own:
+                //
+                // 1. **The genesis bond registry grew from six seats to eight**
+                //    (`PALW_RC_GENESIS_BONDS`, Relaunch 4, marker 11,4). Two real ML-DSA-87 cards
+                //    enter `genesis_objects` and two collateral + two fee-float outputs enter the
+                //    premine, so the genesis, the premine commitment and the bundle all move
+                //    together. The reason is ADR-0065 D1: at `seat_count + 1` the maturity fence
+                //    could not be armed on ANY network this build ships, because the arming guard
+                //    refuses a registry with no spare seat — enforcement existed and arming did
+                //    not. At `seat_count + 3` the fence is a config change rather than a re-mint.
+                //
+                // 2. **The free-prompt quantum dropped 1,000 → 100** (and `pwu_per_quantum` 100 →
+                //    10 with it, holding weight-per-CU constant). The quantum is inside the
+                //    ConsensusV2 free-prompt bundle and therefore inside `palw_ruleset_id_v2`, so
+                //    lowering it is a ruleset change. At 1,000 no registered class could reach a
+                //    single quantum — BASE-0 tops out at 705 CU and QWEN25-A16 at 961 — so the
+                //    lane priced every real prompt at zero draws.
+                //
+                // **Only testnet-11 moved.** The other presets install neither a bond registry nor
+                // a free-prompt bundle, so the blast radius is exactly the network both changes
+                // were for. **This is a re-genesis for t11 and every host must wipe its datadir**;
+                // nothing in this build accepts the old chain.
+                "5ccdd6841c7510b9fa87b2c69aba8018a3d2eb5ec1709d09dbed3a4cb1f67e44",
             ),
             ("simnet", SIMNET_PARAMS, "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd"),
             ("devnet", DEVNET_PARAMS, "6b12b8e9c755c0117057989406dbc36214fc8b7be97108beca4ae2099ab86a69"),

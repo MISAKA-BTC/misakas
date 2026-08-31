@@ -226,20 +226,40 @@ impl TestConsensus {
     /// `validate_stateless_v3` accepts, and for a while it was all any node checked.
     #[allow(dead_code)]
     pub(crate) fn palw_v3_test_receipt_carriage(&self, header: &Header, signed: bool) -> Vec<u8> {
+        self.palw_v3_test_receipt_carriage_for(
+            header,
+            signed,
+            kaspa_hashes::Hash64::from_u64_word(0xFC),
+            0,
+            kaspa_consensus_core::tx::TransactionOutpoint::new(kaspa_consensus_core::tx::TransactionId::from_u64_word(0xB0), 0),
+            kaspa_hashes::Hash64::from_u64_word(0xBEAC),
+        )
+    }
+
+    /// The same carriage, for a claim/quantum/bond/beacon a TEST supplies — so a receipt block can
+    /// name a claim the chain actually holds rather than the fixed `0xFC`. Signs under the harness
+    /// identity, which is genesis-registry row 0 (bond `0xB0`), so the signature verifies for that
+    /// bond and no other.
+    #[allow(dead_code)]
+    pub(crate) fn palw_v3_test_receipt_carriage_for(
+        &self,
+        header: &Header,
+        signed: bool,
+        claim_id: kaspa_hashes::Hash64,
+        quantum_index: u32,
+        bond: kaspa_consensus_core::tx::TransactionOutpoint,
+        beacon_block: kaspa_hashes::Hash64,
+    ) -> Vec<u8> {
         use kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for;
         use kaspa_consensus_core::palw_freeprompt_v3::{
             PALW_FP_V3_MLDSA87_SPEND_CONTEXT, PALW_FP_V3_VERSION, PalwReceiptSpendEnvelopeV3, PalwReceiptSpendUnsignedV3,
             fp_spend_id_v3, spend_challenge_v3,
         };
-        use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
         let network_id = self.params.net.to_string();
         // The genesis-bound domain (audit M2-18) — the harness must sign under exactly what the
         // header processor and the virtual processor verify under, or it proves nothing.
         let network_domain = palw_network_domain_v2_for(network_id.as_bytes(), Some(self.params.genesis.hash));
         let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(header);
-        let claim_id = kaspa_hashes::Hash64::from_u64_word(0xFC);
-        let quantum_index = 0u32;
-        let bond = TransactionOutpoint::new(TransactionId::from_u64_word(0xB0), 0);
         let kp = Self::palw_v2_harness_keypair();
         let spend = PalwReceiptSpendUnsignedV3 {
             version: PALW_FP_V3_VERSION,
@@ -247,7 +267,7 @@ impl TestConsensus {
             challenge: spend_challenge_v3(network_domain, pre_pow, header.timestamp, header.nonce, claim_id, quantum_index, &bond),
             claim_id,
             quantum_index,
-            beacon_block: kaspa_hashes::Hash64::from_u64_word(0xBEAC),
+            beacon_block,
             producer_bond: bond,
             producer_pubkey: Self::palw_v2_harness_pubkey(),
         };

@@ -104,6 +104,46 @@ pub fn base0_captured_rows_v1(probe: &crate::engine::ForwardProbe) -> Vec<Base0C
     rows
 }
 
+/// **The same rows, from the A16 engine's trace.**
+///
+/// `A16Engine::forward_token_traced` records `pre` and `post` as step SEQUENCES at layer 0 and
+/// `attn` as one list per layer, which is the coordinate system [`Base0CapturedRowV1`] carries —
+/// so this is a flattening of the TRACE's own numbering.
+///
+/// **On today's A16 class it is ALMOST the profile's numbering, and the exception is the point.**
+/// Measured: the per-layer and post tables agree exactly, and the pre table does not — the engine
+/// records the embedding gather and the requant that lifts it onto the A16 stream, while the
+/// profile declares only the gather. A requant is a narrowing, and ADR-0049 Decision F requires a
+/// class to name every narrowing its engine performs; `A16Engine` has no `plan()` and there is no
+/// counterpart to `base0_check_graph_v1` to enforce it.
+///
+/// So `Qwen25A16Backend::execute_free_prompt` checks the correspondence and refuses rather than
+/// dropping a row it cannot prove is undeclared-on-purpose. This flattening is the right shape for
+/// the class that declares that node; it is not a capture path for the one that does not. Written as its own function rather than a generic over the two probe types
+/// because the two engines' traces are different structs for good reasons, and a trait to unify
+/// them would be three lines of abstraction over eleven lines of loop.
+///
+/// This is the first half of giving the A16 family adjudicable executions. The other two are the
+/// checkpoint leg (its cache is not `engine::KvCache`, so the chunks go in through
+/// `Base0CheckpointCaptureV1::push_chunks` against `next_geometry`) and the court's rung methods
+/// (`disclose` and `bisect_prefix_state`), without which `supports_court` must stay false: a
+/// family that cannot answer at a rung loses every dispute whichever party is honest.
+pub fn a16_captured_rows_v1(trace: &crate::engine_a16::A16TraceV1) -> Vec<Base0CapturedRowV1> {
+    let mut rows = Vec::with_capacity(trace.pre.len() + trace.post.len() + trace.attn.iter().map(Vec::len).sum::<usize>());
+    for (index, row) in trace.pre.iter().enumerate() {
+        rows.push(Base0CapturedRowV1 { table: PalwStepTableV1::Pre, layer: 0, index, row: row.clone() });
+    }
+    for (layer, nodes) in trace.attn.iter().enumerate() {
+        for (index, row) in nodes.iter().enumerate() {
+            rows.push(Base0CapturedRowV1 { table: PalwStepTableV1::Attn, layer: layer as u16, index, row: row.clone() });
+        }
+    }
+    for (index, row) in trace.post.iter().enumerate() {
+        rows.push(Base0CapturedRowV1 { table: PalwStepTableV1::Post, layer: 0, index, row: row.clone() });
+    }
+    rows
+}
+
 /// **A step-leg capture accumulated across a job's CALLS.**
 ///
 /// A job is one prefill call over `P` positions plus `D − 1` decode calls, and the step space
@@ -400,10 +440,28 @@ impl Base0CheckpointCaptureV1 {
     }
 
     /// The map this capture's NEXT checkpoint is taken under.
+    /// **The geometry the CLASS declares, not the one this file happens to know first.**
+    ///
+    /// This used to call `integer_kv_state_geometry_v1` unconditionally while
+    /// `profile.state_chunk_map_id` sat unread beside it. For every class in the tree that was the
+    /// same answer, so nothing broke — and it made the declaration decorative: a class that
+    /// declared the four-byte map would have had its state chunked at one byte per element, which
+    /// is the failure the map id exists to prevent.
+    ///
+    /// A map this family does not implement is an error rather than a fallback. Falling back to v1
+    /// would chunk an unknown class's state at a width nobody chose.
     pub fn next_geometry(&self) -> Result<kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkGeometryV1, LegError> {
         use kaspa_consensus_core::palw_state_chunk_map as map;
         let positions = map::integer_kv_positions_at_v1(&self.ctx, self.next_covered_decode_call());
-        map::integer_kv_state_geometry_v1(&self.profile, positions).map_err(LegError::CheckpointStateMap)
+        let declared = self.profile.state_chunk_map_id;
+        let geometry = if declared == map::integer_kv_state_chunk_map_id_v1() {
+            map::integer_kv_state_geometry_v1(&self.profile, positions)
+        } else if declared == map::integer_kv_state_chunk_map_id_v2() {
+            map::integer_kv_state_geometry_v2(&self.profile, positions)
+        } else {
+            return Err(LegError::CheckpointStateUnavailable { chunk_index: 0 });
+        };
+        geometry.map_err(LegError::CheckpointStateMap)
     }
 
     /// **The leaf rule, in one place.** Serializing a cache and re-deriving from served bytes must
@@ -492,6 +550,60 @@ impl Base0CheckpointCaptureV1 {
     }
 }
 
+/// **The two derived leg roots, in one place.**
+///
+/// Neither is a value the binding stores: `PalwStepBindingV2` carries the COMPONENTS — the merkle
+/// roots, the counts, the profiles — and `committed_execution_root` is built from the two roots
+/// derived here. A caller that needed them (the free-prompt lane needs both by name) would
+/// otherwise re-derive them from the components, and a re-derivation that drifted by one argument
+/// would produce an execution root the court recomputes differently: an honest producer,
+/// unconvictable and unpayable. So the derivation exists once and both callers take it.
+#[allow(clippy::too_many_arguments)]
+fn leg_roots_v1(
+    context_hash: &Hash64,
+    profile_hash: &Hash64,
+    checkpoint_profile_hash: &Hash64,
+    state_chunk_map_id: &Hash64,
+    decode_calls: u32,
+    checkpoint_count: u32,
+    checkpoint_merkle_root: &Hash64,
+    step_leaf_count: u64,
+    step_merkle_root: &Hash64,
+) -> (Hash64, Hash64) {
+    use kaspa_consensus_core::palw_step_leg::{checkpoint_leg_root_v2, step_leg_root_v1};
+    (
+        checkpoint_leg_root_v2(
+            context_hash,
+            checkpoint_profile_hash,
+            state_chunk_map_id,
+            decode_calls,
+            checkpoint_count,
+            checkpoint_merkle_root,
+        ),
+        step_leg_root_v1(context_hash, profile_hash, step_leaf_count, step_merkle_root),
+    )
+}
+
+/// The same two roots, read back off a finished binding — what the free-prompt lane commits as
+/// `PalwFpRunFactsV3`'s checkpoint and step legs.
+///
+/// `decode_calls` is recovered the way the builder computes it, from the context's own decode
+/// count, so this cannot disagree with the binding it was handed.
+pub fn base0_leg_roots_from_binding_v1(binding: &kaspa_consensus_core::palw_step_leg::PalwStepBindingV2) -> (Hash64, Hash64) {
+    let context_hash = binding.job_context.context_hash();
+    leg_roots_v1(
+        &context_hash,
+        &binding.shape_profile.shape_profile_id(),
+        &binding.checkpoint_profile.profile_hash(),
+        &binding.state_chunk_map_id,
+        binding.job_context.exact_decode_tokens.saturating_sub(1),
+        binding.checkpoint_count,
+        &binding.checkpoint_merkle_root,
+        binding.step_leaf_count,
+        &binding.step_merkle_root,
+    )
+}
+
 /// **The producer's own commitment, from its own capture** (audit C-01).
 ///
 /// A binding is not a bag of hashes a caller fills in: `verify_binding` recomputes
@@ -513,8 +625,7 @@ pub fn base0_binding_from_capture_v1(
     activation_leg_root: Hash64,
 ) -> Result<kaspa_consensus_core::palw_step_leg::PalwStepBindingV2, LegError> {
     use kaspa_consensus_core::palw_step_leg::{
-        PALW_STEP_LEG_OBJECT_VERSION_V1, PalwStepBindingV2, checkpoint_empty_root_v2, checkpoint_leg_root_v2,
-        execution_commitment_root_v2, step_leg_root_v1,
+        PALW_STEP_LEG_OBJECT_VERSION_V1, PalwStepBindingV2, checkpoint_empty_root_v2, execution_commitment_root_v2,
     };
     let context_hash = ctx.context_hash();
     let profile_hash = profile.shape_profile_id();
@@ -546,15 +657,17 @@ pub fn base0_binding_from_capture_v1(
     let checkpoint_merkle_root = checkpoints.merkle_root;
     debug_assert_eq!(checkpoint_count == 0, checkpoint_merkle_root == checkpoint_empty_root_v2(&context_hash));
     let checkpoint_profile_hash = checkpoint_profile.profile_hash();
-    let checkpoint_root = checkpoint_leg_root_v2(
+    let (checkpoint_root, step_root) = leg_roots_v1(
         &context_hash,
+        &profile_hash,
         &checkpoint_profile_hash,
         &state_chunk_map_id,
         decode_calls,
         checkpoint_count,
         &checkpoint_merkle_root,
+        step_leaf_count,
+        &step_merkle_root,
     );
-    let step_root = step_leg_root_v1(&context_hash, &profile_hash, step_leaf_count, &step_merkle_root);
     let committed_execution_root =
         execution_commitment_root_v2(&context_hash, &full_logits_trace_root, &activation_leg_root, &checkpoint_root, &step_root);
     Ok(PalwStepBindingV2 {
@@ -727,6 +840,183 @@ pub fn base0_refutation_from_capture_v1(
         decode_tokens,
         kv_checkpoint,
     })
+}
+
+#[cfg(test)]
+mod a16_row_tests {
+    use super::*;
+    use crate::artifact::{Base0ArtifactV1, Base0ShapeV1};
+    use crate::engine_a16::{A16Cache, A16Engine, derived_a16_store};
+
+    /// A small deterministic A16 class — the same construction the engine's own tests use, kept
+    /// tiny so the assertion is about coordinates rather than about arithmetic.
+    fn artifact() -> Base0ArtifactV1 {
+        let shape = Base0ShapeV1 {
+            n_layers: 2,
+            n_heads: 2,
+            n_kv_heads: 2,
+            d_head: 4,
+            d_ff: 8,
+            vocab: 64,
+            max_position: 32,
+            ln_theta_gen_q: crate::artifact::LN_THETA_10000_GEN_Q,
+            eps_q: 1,
+        };
+        Base0ArtifactV1::derive_deterministic(shape, 0x5A16)
+            .expect("a valid shape")
+            .with_a16_params(derived_a16_store(&shape))
+            .expect("the derived store is sorted and unique")
+    }
+
+    /// **The serializer follows the map's declared width, and refuses rather than narrowing.**
+    ///
+    /// Three cases, because the third is the one that decides whether this family can ever commit
+    /// a sound checkpoint: a one-byte map over a row that does not fit must produce NOTHING. The
+    /// tempting implementation — the one `KvCache::state_chunk_bytes` uses correctly for its own
+    /// `i8` cache — would produce bytes here, pass every downstream check, and commit a state the
+    /// producer never held.
+    #[test]
+    fn a16_state_chunks_follow_the_declared_width_and_refuse_what_does_not_fit() {
+        use kaspa_consensus_core::palw_state_chunk_map::{PalwStateChunkEntryV1, PalwStateChunkKindV1};
+
+        let artifact = artifact();
+        let engine = A16Engine::new(&artifact).expect("an A16 class");
+        let mut cache = A16Cache::new(artifact.shape.n_layers);
+        engine.forward_token_traced(&mut cache, 5, 0).expect("one position runs");
+        let row_len = cache.key_rows_for_test()[0].len();
+
+        let entry = |row_bytes: u32| PalwStateChunkEntryV1 {
+            kind: PalwStateChunkKindV1::Key,
+            attn_layer: 0,
+            position_start: 0,
+            position_count: 1,
+            row_bytes,
+        };
+
+        // Four bytes per element: the width this cache actually has.
+        let wide = cache.state_chunk_bytes_v1(&entry((row_len * 4) as u32)).expect("an i32 row encodes at four bytes each");
+        assert_eq!(wide.len(), row_len * 4);
+        let first: i32 = i32::from_le_bytes(wide[..4].try_into().expect("four bytes"));
+        assert_eq!(first, cache.key_rows_for_test()[0][0], "and it round-trips, little-endian");
+
+        // One byte per element — the map this class declares — against a state that does not fit.
+        assert!(
+            cache.state_chunk_bytes_v1(&entry(row_len as u32)).is_none(),
+            "a row with values outside i8 must be refused under a one-byte map, never truncated"
+        );
+
+        // A width that is neither belongs to some other class's map.
+        assert!(cache.state_chunk_bytes_v1(&entry((row_len * 2) as u32)).is_none());
+    }
+
+    /// **The capture chunks at the width the class DECLARES, and refuses a map it does not know.**
+    ///
+    /// `next_geometry` read `state_chunk_map_id` for the first time in this commit; before it, the
+    /// field was decorative and a class declaring the four-byte map would have had its state
+    /// chunked at one byte per element — the exact failure the id exists to prevent, arriving
+    /// through the code that is supposed to honour it.
+    #[test]
+    fn the_checkpoint_capture_follows_the_declared_state_map() {
+        use kaspa_consensus_core::palw_base0_profile::{PALW_RC_BASE0_GEOMETRY, base0_profile_v1, rc_job_context};
+        use kaspa_consensus_core::palw_state_chunk_map as map;
+
+        let base = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("the RC geometry is a profile");
+        let ctx = rc_job_context(&base, 4, 4);
+        let checkpoint_profile = map::integer_kv_checkpoint_profile_v1(map::PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1);
+
+        let width_for = |map_id| {
+            let mut profile = base.clone();
+            profile.state_chunk_map_id = map_id;
+            Base0CheckpointCaptureV1::new(&ctx, &profile, &checkpoint_profile).next_geometry().map(|g| g.row_bytes)
+        };
+
+        let v1 = width_for(map::integer_kv_state_chunk_map_id_v1()).expect("v1 is implemented here");
+        let v2 = width_for(map::integer_kv_state_chunk_map_id_v2()).expect("v2 is implemented here");
+        assert_eq!(v2, v1 * 4, "the declared map decides the width, and v2 is four bytes per element");
+
+        // An unregistered or foreign map is refused rather than approximated: falling back to v1
+        // would chunk an unknown class's state at a width nobody chose.
+        assert!(width_for(Hash64::default()).is_err(), "the unregistered sentinel is not a map");
+        assert!(width_for(Hash64::from_u64_word(0xDEAD)).is_err(), "nor is a map this family does not implement");
+    }
+
+    /// **The A16 class registers a checkpoint map that cannot describe its own state.**
+    ///
+    /// `integer_kv_state_geometry_v1` derives `row_bytes = attn_kv_heads × attn_head_dim` — ONE
+    /// byte per KV element — which is exact for BASE-0, whose cache is `Vec<Vec<Vec<i8>>>`.
+    /// `Qwen25A16Backend`'s cache is `Vec<Vec<Vec<i32>>>`, and `palw_qwen25_profile` nevertheless
+    /// declares `integer_kv_state_chunk_map_id_v1()`.
+    ///
+    /// The hazard is not that this fails loudly. `KvCache::state_chunk_bytes` guards by comparing
+    /// the engine's row LENGTH against the map's `row_bytes` — and for A16 those are the same
+    /// number, because 256 i32 elements and 256 declared bytes coincide. A checkpoint written
+    /// through that path would pass every check and lose every value outside `i8`, producing a
+    /// checkpoint nobody can resume from: worse than no checkpoint, because the producer would
+    /// have committed to it.
+    ///
+    /// So this test measures the state rather than trusting the type: it runs the A16 engine and
+    /// asserts real KV values fall outside `i8`. If a future change narrows the cache to `i8`, or
+    /// gives the class a 4-byte map, this test is the one that should be revisited — with the
+    /// class id, which `state_chunk_map_id` is part of.
+    #[test]
+    fn a16_kv_state_does_not_fit_the_one_byte_map_its_class_declares() {
+        let artifact = artifact();
+        let engine = A16Engine::new(&artifact).expect("an A16 class");
+        let mut cache = A16Cache::new(artifact.shape.n_layers);
+        for position in 0..4 {
+            engine.forward_token_traced(&mut cache, (position * 7 + 3) % artifact.shape.vocab, position).expect("runs");
+        }
+        let rows = cache.key_rows_for_test();
+        assert!(!rows.is_empty(), "the cache holds the positions that were run");
+        let widest = rows.iter().flatten().copied().map(i32::abs).max().expect("a value");
+        assert!(
+            widest > i8::MAX as i32,
+            "a KV value of {widest} fits in a byte, so this test's premise needs re-measuring rather than assuming"
+        );
+    }
+
+    /// **The converter must preserve the trace's own coordinates, not invent an ordering.**
+    ///
+    /// A step leaf is addressed by (table, layer, index), and the court recomputes the row at that
+    /// address. A converter that renumbered — flattened the layers into one sequence, say — would
+    /// commit rows that are individually correct and collectively unfindable, and the failure
+    /// would appear only when somebody disputed a claim. So this asserts the addresses against the
+    /// trace that produced them, field by field.
+    #[test]
+    fn the_a16_trace_maps_to_leaf_coordinates_one_for_one() {
+        let artifact = artifact();
+        let engine = A16Engine::new(&artifact).expect("an A16 class");
+        let mut cache = A16Cache::new(artifact.shape.n_layers);
+        let (_logits, trace) = engine.forward_token_traced(&mut cache, 7, 0).expect("one position runs");
+
+        let rows = a16_captured_rows_v1(&trace);
+        let attn_total: usize = trace.attn.iter().map(Vec::len).sum();
+        assert_eq!(rows.len(), trace.pre.len() + attn_total + trace.post.len(), "every recorded node becomes exactly one row");
+
+        let pre: Vec<_> = rows.iter().filter(|r| r.table == PalwStepTableV1::Pre).collect();
+        assert_eq!(pre.len(), trace.pre.len());
+        for (i, row) in pre.iter().enumerate() {
+            assert_eq!((row.layer, row.index), (0, i), "pre is a step sequence at layer 0");
+            assert_eq!(row.row, trace.pre[i], "and it carries that step's row");
+        }
+
+        for (layer, nodes) in trace.attn.iter().enumerate() {
+            for (index, expected) in nodes.iter().enumerate() {
+                let found = rows
+                    .iter()
+                    .find(|r| r.table == PalwStepTableV1::Attn && r.layer == layer as u16 && r.index == index)
+                    .expect("every attention node is addressable by its own (layer, index)");
+                assert_eq!(&found.row, expected);
+            }
+        }
+
+        let post: Vec<_> = rows.iter().filter(|r| r.table == PalwStepTableV1::Post).collect();
+        assert_eq!(post.len(), trace.post.len());
+        for (i, row) in post.iter().enumerate() {
+            assert_eq!((row.layer, row.index), (0, i));
+            assert_eq!(row.row, trace.post[i]);
+        }
+    }
 }
 
 #[cfg(test)]

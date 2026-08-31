@@ -25,6 +25,11 @@ use kaspa_hashes::Hash64;
 /// Constructed from what the CHAIN named (`resolve_class_v1` has already refused anything whose
 /// graph or weights disagree with the registration), so by the time a backend exists the question
 /// "is this the right class" is settled and the producer never re-asks it.
+/// The network id `rc_job_context` stamps into every context of this family. Named here because
+/// the free-prompt derivation takes it as an argument and the two must agree byte for byte: a
+/// context built under a different id is a context the court recomputes differently.
+const RC_NETWORK_ID: &[u8] = b"misaka-palw-rc";
+
 pub struct Base0Backend {
     model_id: String,
     profile: PalwShapeProfileV3,
@@ -76,6 +81,86 @@ impl PalwExecutionBackendV1 for Base0Backend {
             trace_manifest_root: run.trace_manifest_root,
             trace_chunk_count: run.trace_chunk_count,
             material,
+        })
+    }
+
+    fn execute_free_prompt(
+        &self,
+        job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        prompt_tokens: &[usize],
+    ) -> Result<kaspa_consensus_core::palw_backend::PalwFpRunV1, String> {
+        use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, PalwFpRunFactsV3, palw_fp_job_context_v3};
+        use kaspa_consensus_core::palw_freeprompt_v3::PalwFpStopReasonV3;
+
+        // The job declares how many tokens it is a job about, and the caller hands the tokens. If
+        // those two disagree the derivation would build a context for a run that did not happen —
+        // caught here, where the caller can still say which one it meant.
+        if job.prompt_tokens as usize != prompt_tokens.len() {
+            return Err(format!("the job declares {} prompt tokens and {} were supplied", job.prompt_tokens, prompt_tokens.len()));
+        }
+
+        // **What this class is, in the terms the derivation asks for.** The integer family's
+        // identity IS its graph: `rc_job_context` leaves `model_profile_id`, the runtime hashes and
+        // the CU ruleset at their defaults on the attempt lane for the same reason, and a value
+        // invented here would be one the court does not recompute.
+        let class = PalwFpClassFactsV3 {
+            model_profile_id: Hash64::default(),
+            runtime_manifest_hash: Hash64::default(),
+            runtime_class_id: Hash64::default(),
+            shape_profile_id: self.profile.shape_profile_id(),
+            cu_ruleset_id: Hash64::default(),
+        };
+
+        // **This family decodes a declared budget, so the count and the stop reason are known
+        // before the run rather than after it.** ADR-0044 Decision 7's early stop is a property of
+        // a sampler that can emit end-of-generation; `base0_execute_for_attempt_v1` runs
+        // `exact_decode_tokens` and returns. `ExactBudgetReached` is therefore the only honest stop
+        // reason here, and the context builder enforces the pairing (`executed == limit`) rather
+        // than trusting this comment.
+        let shape = PalwFpRunFactsV3 {
+            decode_tokens_executed: job.decode_token_limit,
+            stop_reason: PalwFpStopReasonV3::ExactBudgetReached,
+            full_logits_trace_root: Hash64::default(),
+            activation_leg_root: Hash64::default(),
+            checkpoint_leg_root: Hash64::default(),
+            step_leg_root: Hash64::default(),
+        };
+
+        // The context the COURT will recompute against — built first, and then run under. The
+        // roots in `shape` are placeholders and are not read: the context is the job's shape, the
+        // roots belong to the execution root derived from it afterwards.
+        let ctx = palw_fp_job_context_v3(job, &class, &shape, RC_NETWORK_ID).map_err(|e| format!("{e:?}"))?;
+
+        let run = base0_execute_for_attempt_v1(&self.artifact, &self.profile, &ctx, prompt_tokens).map_err(|e| e.to_string())?;
+
+        // The four legs, measured. They exist on every attempt this family makes — it is what makes
+        // its claims adjudicable — and this is the first caller that needed them by name.
+        //
+        // The checkpoint and step legs are the DERIVED roots, not the merkle roots the binding
+        // stores: `committed_execution_root` is built from `checkpoint_leg_root_v2` and
+        // `step_leg_root_v1` over those merkle roots plus their counts and profiles. Committing the
+        // bare merkle roots here type-checks, runs, and produces an execution root the court
+        // recomputes differently — which the round trip below caught.
+        let (checkpoint_leg_root, step_leg_root) = crate::legs::base0_leg_roots_from_binding_v1(&run.binding);
+        let facts = PalwFpRunFactsV3 {
+            full_logits_trace_root: run.binding.full_logits_trace_root,
+            activation_leg_root: run.binding.activation_leg_root,
+            checkpoint_leg_root,
+            step_leg_root,
+            ..shape
+        };
+        let material = base0_material_encode_v1(&run).map_err(|e| e.to_string())?;
+        Ok(kaspa_consensus_core::palw_backend::PalwFpRunV1 {
+            outcome: PalwExecutionOutcomeV1 {
+                trace_root: run.trace_root,
+                output_root: run.output_root,
+                execution_root: run.execution_root,
+                trace_manifest_root: run.trace_manifest_root,
+                trace_chunk_count: run.trace_chunk_count,
+                material,
+            },
+            facts,
+            output_token_ids: run.generated_token_ids,
         })
     }
 
@@ -250,6 +335,142 @@ mod tests {
         let entry = canonical_class_by_model_id_v1(&court, "PALW-BASE-0/rc").expect("the floor is registered");
         let root = crate::rc::palw_rc_base0_artifact_root_v1().expect("the floor's pinned root");
         Base0Backend::new(resolve_class_v1(&court, entry.class_id(), root, &[]).expect("the floor resolves from nothing"))
+    }
+
+    /// The class facts the integer family answers for. `rc_job_context` leaves the model and
+    /// runtime identities at their defaults on the attempt lane — the graph IS the identity here —
+    /// and inventing values for the free-prompt lane would file facts no court recomputes.
+    fn floor_class_facts(backend: &Base0Backend) -> kaspa_consensus_core::palw_fp_execution_v3::PalwFpClassFactsV3 {
+        kaspa_consensus_core::palw_fp_execution_v3::PalwFpClassFactsV3 {
+            model_profile_id: Hash64::default(),
+            runtime_manifest_hash: Hash64::default(),
+            runtime_class_id: Hash64::default(),
+            shape_profile_id: backend.profile().shape_profile_id(),
+            cu_ruleset_id: Hash64::default(),
+        }
+    }
+
+    fn free_prompt_job(
+        backend: &Base0Backend,
+        prompt_tokens: u32,
+        decode_token_limit: u32,
+    ) -> kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3 {
+        use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
+        kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3 {
+            version: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V3_VERSION,
+            network_domain: Hash64::from_u64_word(0xD0),
+            class_id: backend.profile().shape_profile_id(),
+            executor_bond: TransactionOutpoint::new(TransactionId::from_u64_word(0xB0), 0),
+            executor_pubkey: vec![0x11; 32],
+            operator_id: Hash64::from_u64_word(0x0B),
+            anchor_block: Hash64::from_u64_word(0xA0),
+            anchor_daa: 1234,
+            job_nonce: [0x5A; 32],
+            tokenizer_id: Hash64::default(),
+            prompt_token_ids_hash: Hash64::from_u64_word(0x71),
+            prompt_tokens,
+            decode_token_limit,
+            max_context_tokens: backend.profile().n_ctx,
+            privacy_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PRIVACY_PUBLIC_DA,
+        }
+    }
+
+    /// **The free-prompt run commits a root the court will recompute — the round trip.**
+    ///
+    /// This is the only property that decides whether this family can serve the free-prompt lane
+    /// at all. `adjudicate_court_close_v2` binds a refutation against the CLAIM's execution root,
+    /// and `palw_fp_execution_root_v3` is what a verifier recomputes from the claim's context and
+    /// leg roots. If that value and the root the producer actually committed while running were
+    /// two different numbers, an honest producer's every dispute would die at
+    /// `ExecutionRootMismatch` — fail-closed, unconvictable, and unpayable.
+    ///
+    /// So the assertion is equality between the derivation and the run, not that either is
+    /// non-zero. A one-way check would pass with both sides wrong in the same way.
+    #[test]
+    fn a_free_prompt_run_commits_the_root_the_derivation_recomputes() {
+        use kaspa_consensus_core::palw_fp_execution_v3::{palw_fp_execution_root_v3, palw_fp_job_context_v3};
+        use kaspa_consensus_core::palw_freeprompt_v3::PalwFpStopReasonV3;
+
+        let backend = floor_backend();
+        // The caller's tokens — the whole point of the lane. Any ids inside the vocabulary do:
+        // this asserts a binding, not an answer.
+        let prompt: Vec<usize> = vec![7, 11, 13, 17];
+        let job = free_prompt_job(&backend, prompt.len() as u32, 2);
+
+        let run = backend.execute_free_prompt(&job, &prompt).expect("the floor runs a caller's prompt");
+        let (outcome, facts) = (&run.outcome, &run.facts);
+
+        // Recompute the way a verifier does: from the job and the facts, with no access to the run.
+        let class = floor_class_facts(&backend);
+        let context = palw_fp_job_context_v3(&job, &class, facts, RC_NETWORK_ID).expect("the finished run implies a context");
+        assert_eq!(
+            palw_fp_execution_root_v3(&context, facts),
+            outcome.execution_root,
+            "the derivation and the run must agree, or the court convicts the honest"
+        );
+
+        // The facts are measurements, not defaults: a run that reported four zero legs would pass
+        // the equality above and mean nothing.
+        assert_ne!(facts.full_logits_trace_root, Hash64::default());
+        assert_ne!(facts.step_leg_root, Hash64::default());
+        assert_eq!(facts.decode_tokens_executed, job.decode_token_limit);
+        assert_eq!(facts.stop_reason, PalwFpStopReasonV3::ExactBudgetReached);
+        // The answer, which is the other half of the one inference and the reason anyone ran it.
+        assert_eq!(run.output_token_ids.len(), job.decode_token_limit as usize);
+    }
+
+    /// **FP-R2: the run becomes a commitment, and every priced field is derived.**
+    ///
+    /// The assembly is where a producer would cheat if it could — a chosen CU, a chosen schedule,
+    /// a chosen execution root — so this asserts each against its own derivation rather than
+    /// against a literal. The CU especially: invariant F7 puts pricing at assembly and not at the
+    /// worker, and a commitment carrying a price the weights do not produce is refused by
+    /// `validate_stateless_v3` on the way in.
+    #[test]
+    fn a_free_prompt_run_assembles_a_commitment_whose_fields_are_all_derived() {
+        use kaspa_consensus_core::palw_fp_execution_v3::{palw_fp_commitment_v3, palw_fp_job_context_v3};
+        use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpCuWeightsV3, fp_cu_v3};
+
+        let backend = floor_backend();
+        let prompt: Vec<usize> = vec![3, 5, 8, 13, 21];
+        let job = free_prompt_job(&backend, prompt.len() as u32, 2);
+        let run = backend.execute_free_prompt(&job, &prompt).expect("the floor runs a caller's prompt");
+
+        let class = floor_class_facts(&backend);
+        let weights = PalwFpCuWeightsV3 { prefill_weight: 1, decode_weight: 4 };
+        let retention = 4_096;
+        let commitment =
+            palw_fp_commitment_v3(&job, &class, &run, RC_NETWORK_ID, &weights, retention).expect("a finished run commits");
+
+        // Priced by the assembly, from counts and weights — never carried up from the executor.
+        assert_eq!(commitment.cu, fp_cu_v3(job.prompt_tokens, run.facts.decode_tokens_executed, &weights));
+        // `5 * 1` is written out rather than folded: the two products ARE the assertion — five
+        // prompt tokens at prefill_weight 1 plus two decoded at decode_weight 4. Reducing it to
+        // `5 + 8` would state the answer and stop showing which weight met which count.
+        #[allow(clippy::identity_op)]
+        let expected_cu = 5 * 1 + 2 * 4;
+        assert_eq!(commitment.cu, expected_cu, "the weights are applied to the counts, not to the ceiling");
+
+        // The schedule is a function of the context and the counts. Recomputing it the way a
+        // verifier does must land on the same value.
+        let context = palw_fp_job_context_v3(&job, &class, &run.facts, RC_NETWORK_ID).expect("the run implies a context");
+        let (schedule, _) = kaspa_consensus_core::palw_v2::expected_schedule_commitment_v2(
+            &context.context_hash(),
+            job.prompt_tokens,
+            run.facts.decode_tokens_executed,
+        );
+        assert_eq!(commitment.schedule_root, schedule);
+
+        // Adjudicable, which is the property a null root destroys: `apply_palw_transition_v3`
+        // refuses a commitment whose execution root is the default, and the lane was fail-closed
+        // on exactly that before the derivation existed.
+        assert_ne!(commitment.execution_root, Hash64::default());
+        assert_eq!(commitment.execution_root, run.outcome.execution_root);
+
+        // The retention promise is the caller's, and it is carried verbatim: a producer that
+        // shortened it here would be promising the panel less than the operator said.
+        assert_eq!(commitment.trace_retention_daa, retention);
+        assert_eq!(commitment.trace_chunk_count, run.outcome.trace_chunk_count);
     }
 
     /// **The seam produces what the header needs, end to end** — and the floor still runs through
@@ -563,5 +784,206 @@ mod tests {
         assert_ne!(pa, pb, "a different anchor is a different prompt");
         assert_ne!(a.prompt_token_ids_hash, b.prompt_token_ids_hash);
         assert_eq!(a.declared_prefill_tokens, b.declared_prefill_tokens, "the SHAPE is the class's, not the anchor's");
+    }
+}
+
+/// **The whole lane, end to end, with a real execution in it.**
+///
+/// Every other test in this tree exercises one link. This one runs the chain: a caller's prompt is
+/// executed by the floor, the commitment is derived from what the run measured, the chain's state
+/// machine opens a claim from it, the claim is walked to `Final` through the same transitions the
+/// pipeline applies, and `check_palw_receipt_spend_admission_v3` — the eight items that decide
+/// whether a receipt block may be mined — admits a spend of its first quantum.
+///
+/// The synthetic fixture in `palw_fp_admission_v3` proves the admission logic. This proves the
+/// thing that fixture cannot: that a REAL free-prompt run produces a claim the admission accepts.
+/// Its roots, its class, its bond and its CU all come from the execution rather than from
+/// constants, so a change that made real runs inadmissible would fail here and pass there.
+#[cfg(test)]
+mod end_to_end_tests {
+    use super::*;
+    use crate::classes::{canonical_class_by_model_id_v1, resolve_class_v1};
+    use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, palw_fp_commitment_v3};
+    use kaspa_consensus_core::palw_freeprompt_v3::{
+        PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_V3_VERSION, PalwBeaconFactV3, PalwFpCuWeightsV3, PalwFreePromptJobV3, fp_claim_id_v3,
+        fp_quanta_v3,
+    };
+    use kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2;
+    use kaspa_consensus_core::palw_state_v2::{
+        PalwBlockContextV2, PalwBondKeyV2, PalwChainStateV2, PalwClaimPhaseV2, PalwConsensusObjectV2 as Obj, PalwPanelSeatV2,
+        PalwPwuRuleV2, PalwStateParamsV2, apply_palw_transition_v2,
+    };
+    use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
+
+    const MATURITY: u64 = 5;
+    const USE_WINDOW: u64 = 50;
+    const NETWORK: &[u8] = b"misaka-palw-rc";
+    /// **The shipped devnet quantum.** It was 1,000, which no registered class could reach; it is
+    /// now 100 (lowered with `pwu_per_quantum`, weight-per-CU held constant — see the constant's
+    /// comment in `palw_fp_devnet_v3`), and the floor's widest job (705 CU) clears it. This test
+    /// asserts on the shipped value so it fails if that pricing regresses, rather than pinning its
+    /// own.
+    const QUANTUM_CU: u128 = 100;
+
+    fn h(v: u64) -> Hash64 {
+        Hash64::from_u64_word(v)
+    }
+
+    #[test]
+    fn a_real_prompts_execution_certifies_and_the_chain_admits_a_receipt_block_for_it() {
+        // ---- the run: a caller's tokens on the registered floor -------------------------------
+        let court = PalwCourtParamsV2::new(kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES, 4, 2).expect("shipped court");
+        let entry = canonical_class_by_model_id_v1(&court, "PALW-BASE-0/rc").expect("the floor is registered");
+        let root = crate::rc::palw_rc_base0_artifact_root_v1().expect("the floor's pinned root");
+        let backend = Base0Backend::new(resolve_class_v1(&court, entry.class_id(), root, &[]).expect("the floor resolves"));
+
+        let bond_outpoint = TransactionOutpoint { transaction_id: TransactionId::from_u64_word(1), index: 0 };
+        // A REAL ML-DSA-87 identity, because the point of this test is the full admission — the
+        // stateless signature check included. A fixture pubkey passes the stateful items and would
+        // leave `validate_signature_v3` unexercised on the only end-to-end path in the tree.
+        let key = kaspa_pq_validator_core::ValidatorKey::from_seed([0x42u8; kaspa_pq_validator_core::VALIDATOR_SEED_LEN]);
+        let pubkey = key.public_key().to_vec();
+        let ctx_max = backend.profile().n_ctx as usize;
+        let prompt: Vec<usize> = vec![11];
+        let decode = (ctx_max - prompt.len()) as u32;
+        let job = PalwFreePromptJobV3 {
+            version: PALW_FP_V3_VERSION,
+            network_domain: h(999),
+            class_id: entry.class_id(),
+            executor_bond: bond_outpoint,
+            executor_pubkey: pubkey.clone(),
+            operator_id: h(90),
+            anchor_block: h(0xA0),
+            anchor_daa: 100,
+            job_nonce: [0x5A; 32],
+            tokenizer_id: Hash64::default(),
+            prompt_token_ids_hash: kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(
+                &prompt.iter().map(|t| *t as u32).collect::<Vec<_>>(),
+            ),
+            prompt_tokens: prompt.len() as u32,
+            decode_token_limit: decode,
+            max_context_tokens: backend.profile().n_ctx,
+            privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
+        };
+        let run = backend.execute_free_prompt(&job, &prompt).expect("the floor runs a caller's prompt");
+        let class = PalwFpClassFactsV3 {
+            model_profile_id: Hash64::default(),
+            runtime_manifest_hash: Hash64::default(),
+            runtime_class_id: Hash64::default(),
+            shape_profile_id: backend.profile().shape_profile_id(),
+            cu_ruleset_id: Hash64::default(),
+        };
+        let weights = PalwFpCuWeightsV3 { prefill_weight: 1, decode_weight: 64 };
+        let commitment = palw_fp_commitment_v3(&job, &class, &run, NETWORK, &weights, 999_999).expect("a finished run commits");
+        let claim_id = fp_claim_id_v3(&commitment);
+        let quanta = fp_quanta_v3(commitment.cu, QUANTUM_CU, 16);
+        assert!(quanta >= 1, "this job must earn at least one draw to be worth certifying, got {quanta} at cu {}", commitment.cu);
+
+        // ---- the chain: register, commit, bind, license, finalise ------------------------------
+        // The base class is the floor's REAL id — the state machine refuses a first registration
+        // that is not the declared base, and the whole point here is that this is the floor.
+        let params = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, entry.class_id(), 4, 1000, 100, 800, 0).unwrap();
+        let at =
+            |block: u64, daa: u64, blue: u64| PalwBlockContextV2 { block: h(block), daa_score: daa, blue_score: blue, subsidy: 0 };
+        let registrations = vec![
+            Obj::ClassRegistered {
+                class_id: entry.class_id(),
+                artifact_root: root,
+                slash_value_per_pwu: 5,
+                pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
+                // Every ticket admits: the lottery is tested where it lives, and a target that
+                // refused here would make this test about luck.
+                initial_target: u128::MAX,
+                share_permille: 1000,
+                activation_daa: 0,
+                admission: None,
+            },
+            Obj::BondRegistered {
+                bond: PalwBondKeyV2(bond_outpoint),
+                pubkey: pubkey.clone(),
+                operator_pubkey: vec![21; 8],
+                collateral: 1_000,
+                payout_payload: h(0x9A11),
+                signature: Vec::new(),
+            },
+        ];
+        let (s1, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &params, &at(1, 100, 1), &registrations, None).unwrap();
+
+        // **The claim, from the run.** Every field here is the execution's, not a constant.
+        let committed = Obj::FreePromptCommitted {
+            claim: claim_id,
+            class_id: entry.class_id(),
+            bond: PalwBondKeyV2(bond_outpoint),
+            executor_pubkey: pubkey.clone(),
+            pwu: quanta as u64 * 100,
+            quanta,
+            trace_root: commitment.trace_root,
+            output_root: commitment.output_root,
+            execution_root: commitment.execution_root,
+            trace_chunk_count: commitment.trace_chunk_count,
+            trace_retention_daa: commitment.trace_retention_daa,
+        };
+        let (s2, _) = apply_palw_transition_v2(&s1, &params, &at(2, 101, 2), &[committed], None).unwrap();
+        let seats = vec![PalwPanelSeatV2 { bond: PalwBondKeyV2(bond_outpoint), operator_id: h(90) }];
+        let (s3, _) =
+            apply_palw_transition_v2(&s2, &params, &at(3, 102, 3), &[Obj::PanelBound { claim: claim_id, anchor: h(77), seats }], None)
+                .unwrap();
+        let (s4, _) = apply_palw_transition_v2(
+            &s3,
+            &params,
+            &at(4, 103, 4),
+            &[Obj::ReceiptLicensed { claim: claim_id, receipts: Vec::new() }],
+            None,
+        )
+        .unwrap();
+        let (state, _) = apply_palw_transition_v2(&s4, &params, &at(5, 124, 5), &[], None).unwrap();
+        assert!(matches!(state.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }), "the prompt's claim certifies");
+
+        // ---- the block: does the chain admit a receipt spending this work? --------------------
+        let beacon = PalwBeaconFactV3 { beacon_block: h(0xBEAC), beacon_daa: 130, prev_attempt_daa: 120 };
+        // **The envelope the PRODUCER builds** — `build_fp_receipt_spend_envelope`, signing with
+        // the bond's real key — admitted by the FULL check: stateless shape, the ML-DSA-87
+        // signature, and all eight stateful items. This is the carriage a receipt block's header
+        // carries under algo 7, produced by the same function a mining node calls.
+        let (pph, ts, nonce) = (h(0xB0), 1_700u64, 9u64);
+        let envelope = key.build_fp_receipt_spend_envelope(h(999), pph, ts, nonce, claim_id, 0, bond_outpoint, h(0xBEAC));
+        let admitted = kaspa_consensus_core::palw_fp_admission_v3::check_palw_receipt_spend_admission_full_v3(
+            &state,
+            &at(6, 131, 6),
+            h(999),
+            pph,
+            ts,
+            nonce,
+            MATURITY,
+            USE_WINDOW,
+            &beacon,
+            &envelope,
+            |pk: &[u8], m: &[u8], c: &[u8], sig: &[u8]| kaspa_txscript::verify_mldsa87_with_context(pk, m, c, sig).unwrap_or(false),
+        )
+        .expect("the chain admits a receipt block for a certified free-prompt claim, signature and all");
+        assert_ne!(admitted, Hash64::default(), "and it returns the spend id the block is identified by");
+
+        // **The producer's envelope builder is the one the admission accepts.** `produce_receipt`
+        // builds the receipt carriage this way — header position, bond key — so admitting a
+        // hand-built envelope proves the check, and admitting the producer's proves the seam a
+        // mining node actually uses.
+        let producer_envelope = key.build_fp_receipt_spend_envelope(h(999), pph, ts, nonce, claim_id, 0, bond_outpoint, h(0xBEAC));
+        let via_producer = kaspa_consensus_core::palw_fp_admission_v3::check_palw_receipt_spend_admission_full_v3(
+            &state,
+            &at(6, 131, 6),
+            h(999),
+            pph,
+            ts,
+            nonce,
+            MATURITY,
+            USE_WINDOW,
+            &beacon,
+            &producer_envelope,
+            |pk: &[u8], m: &[u8], c: &[u8], sig: &[u8]| kaspa_txscript::verify_mldsa87_with_context(pk, m, c, sig).unwrap_or(false),
+        )
+        .expect("the producer-built envelope is admitted just as the hand-built one was");
+        assert_eq!(via_producer, admitted, "and it identifies the same spend");
+
+        // Double-spend of a quantum is `QuantumAlreadySpent`, tested where that transition lives.
     }
 }

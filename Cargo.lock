@@ -5858,6 +5858,7 @@ dependencies = [
  "alloy-signer-local",
  "alloy-sol-types",
  "blake2b_simd",
+ "borsh",
  "clap 4.5.51",
  "dirs",
  "faster-hex 0.9.0",

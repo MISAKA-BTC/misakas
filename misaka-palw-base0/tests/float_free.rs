@@ -92,6 +92,13 @@ const EXEMPT: &[(&str, &str)] = &[
     ("src/bin/base0-class-sizing.rs", "measurement tool"),
     ("src/bin/palw-rc-genesis.rs", "genesis card generator"),
     ("src/bin/base0-chat.rs", "the runtime's front door: it times itself, and a timer is float"),
+    // Off the path by CATEGORY, not because it holds a float — it holds none today. It drives
+    // `A16Engine` over HTTP and its own module doc is explicit that a run served here is "a real
+    // inference under a registered class and NOT yet" an adjudicable commitment: nothing it
+    // produces is committed, so Decision A does not reach it. Listed rather than scanned so the
+    // reason is on the record; if it ever starts building commitments it belongs in
+    // CONSENSUS_PATH, and that move should be a deliberate edit here.
+    ("src/bin/misaka-palw-serve.rs", "OpenAI-shaped front door for the integer engine: it serves inference, it commits nothing"),
     ("examples/base0-throughput.rs", "measurement tool: it times the engine, it is not the engine"),
     ("examples/gguf-probe.rs", "offline checkpoint inspector"),
     ("examples/class-weight-report.rs", "measurement tool: it reports what a class would be worth, in floats, and executes nothing"),

@@ -152,7 +152,7 @@ impl PalwModelLineageV1 for DenseLineageV1 {
                 return Some(Ok(Box::new(misaka_palw_base0::qwen25_a16_backend::Qwen25A16Backend::new(
                     artifact,
                     network_id.to_vec(),
-                    class_id,
+                    entry.profile.clone(),
                     entry.canonical_job,
                 ))));
             }

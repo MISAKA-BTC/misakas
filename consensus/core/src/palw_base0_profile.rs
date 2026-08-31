@@ -336,6 +336,23 @@ pub const QWEN25_A16_LAYER_IR: &[Base0IrNodeV1] = &[
 /// The A16 tier's pre and post tables — the gather, and the head's three steps.
 pub const QWEN25_A16_PRE_IR: &[Base0IrNodeV1] = &[n(PalwStepOpKindV1::EmbedLookup, KDESC_A16_EMBED, "token_embd.weight", Hidden, &[])];
 
+/// **The pre table with the narrowing the v1 table omits (ADR-0049 Decision F).**
+///
+/// `A16Engine` gathers the embedding row and then requantizes it onto the A16 stream —
+/// `a16_requant(&embed_row, &tile(self.embed_lift, d))`, whose parameters come from
+/// `embed_lift.a16`. That requant is a narrowing, and [`QWEN25_A16_PRE_IR`] does not name it, so a
+/// class built on the v1 table cannot commit a step leg: a producer would commit arithmetic the
+/// court recomputes differently and be convicted for performing it correctly.
+///
+/// Additive, like the v2 state map beside it. The v1 table and every class using it are unchanged,
+/// because a profile that names one more node has a different `shape_profile_id` — and that id is
+/// the class. This constant is what a corrected class would declare; adopting it registers a new
+/// class rather than repairing the one a network already carries.
+pub const QWEN25_A16_PRE_IR_V2: &[Base0IrNodeV1] = &[
+    n(PalwStepOpKindV1::EmbedLookup, KDESC_A16_EMBED, "token_embd.weight", Hidden, &[]),
+    n(PalwStepOpKindV1::MulElem, KDESC_A16_REQUANTIZE, "embed_lift.a16", Hidden, &[Step(0)]),
+];
+
 pub const QWEN25_A16_POST_IR: &[Base0IrNodeV1] = &[
     n(PalwStepOpKindV1::RmsNorm, KDESC_A16_RMS_NORM, "", Hidden, &[LayerIn]),
     n(PalwStepOpKindV1::MulElem, KDESC_A16_REQUANTIZE, "final_norm.a16", Hidden, &[Step(0)]),

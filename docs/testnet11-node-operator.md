@@ -7,6 +7,25 @@ testnet-11 is the public PALW network. Every post-genesis block's proof-of-work 
 deterministic LLM inference**, not a hash. There is no hash lane to fall back to — that is the
 point, and it is what makes the rest of this document necessary.
 
+> **Pending change (not yet deployed).** Two independent re-mints are now merged and waiting:
+>
+> 1. the free-prompt receipt quantum lowered 1,000 → 100 (with `pwu_per_quantum` 100 → 10, holding
+>    weight-per-CU constant) — at 1,000 no registered class could reach a single quantum;
+> 2. the genesis bond registry grown from six seats to eight, so ADR-0065 D1's maturity fence can
+>    be armed by configuration instead of by another re-mint. This one also moves the GENESIS:
+>    `d2789338…` → `572f80c0…`, coinbase marker `11,3` → `11,4` ("Relaunch 4").
+>
+> Together they move this network's fingerprint to
+> `5ccdd6841c7510b9fa87b2c69aba8018a3d2eb5ec1709d09dbed3a4cb1f67e44`. **That is neither change's own
+> value** — a fingerprint is a function of the whole ruleset, not a sum of diffs, so the figures the
+> two branches carried separately (`d29e5667…` and `4f89ec82…`) are both stale now that they are
+> merged. Do not deploy against either.
+>
+> Until this is deployed the live chain is still the value below; when it is, this whole block is
+> re-minted and every node wipes again. The value here is what is running NOW, not what the branch
+> builds — and because the genesis moves too, an un-wiped node is refused at startup by the
+> genesis-mismatch guard rather than silently resuming.
+>
 > **Current identity (2026-08-30 re-mint, ADR-0059 "Relaunch 3", the 10B premine cap) — wipe
 > your datadir if you joined earlier.**
 > The live chain's consensus fingerprint is **`f3bf86b4e9327f8b02ab2ad1d121d62ecd11bd78cca1455d8bcd7372595153d8`**,

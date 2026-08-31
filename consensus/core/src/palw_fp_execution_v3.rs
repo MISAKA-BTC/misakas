@@ -184,6 +184,48 @@ pub const PALW_FP_V3_DOMAIN_EXECUTION_SEED: &[u8] = b"misaka-palw/fp-v3/executio
 /// fixed by the registration or is a block the producer did not mine; admission bounds how old
 /// the anchor may be, so a producer choosing WHEN to anchor is the whole of its freedom here.
 /// `job_nonce` is excluded on purpose (see the call site).
+/// **FP-R2: a finished run becomes the commitment the chain accepts.**
+///
+/// Everything here is derived, and that is the point. The executor reports COUNTS and measured
+/// roots; it never reports a price, a schedule or an execution root, because each of those is a
+/// value a verifier recomputes and a producer that could choose one could choose a favourable one:
+///
+/// * the context, from the job and the run's counts (`palw_fp_job_context_v3`, which applies every
+///   rule the court applies);
+/// * the schedule, from that context and the token counts — a pure function, never a measurement;
+/// * the execution root, from that context and the four legs;
+/// * the CU, from the counts and the bundle's weights (invariant F7: assembly prices, not the
+///   worker).
+///
+/// The retention deadline is the caller's because it is a chain-time promise the executor cannot
+/// make, and the weights are the bundle's for the same reason.
+pub fn palw_fp_commitment_v3(
+    job: &PalwFreePromptJobV3,
+    class: &PalwFpClassFactsV3,
+    run: &crate::palw_backend::PalwFpRunV1,
+    network_id: &[u8],
+    weights: &crate::palw_freeprompt_v3::PalwFpCuWeightsV3,
+    trace_retention_daa: u64,
+) -> Result<crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3, PalwFpExecutionV3Error> {
+    let context = palw_fp_job_context_v3(job, class, &run.facts, network_id)?;
+    let context_hash = context.context_hash();
+    let (schedule_root, _calls) =
+        crate::palw_v2::expected_schedule_commitment_v2(&context_hash, job.prompt_tokens, run.facts.decode_tokens_executed);
+    Ok(crate::palw_freeprompt_v3::PalwFreePromptCommitmentV3 {
+        job: job.clone(),
+        trace_root: run.outcome.trace_root,
+        output_root: run.outcome.output_root,
+        schedule_root,
+        execution_root: palw_fp_execution_root_v3(&context, &run.facts),
+        decode_tokens_executed: run.facts.decode_tokens_executed,
+        stop_reason: run.facts.stop_reason,
+        cu: crate::palw_freeprompt_v3::fp_cu_v3(job.prompt_tokens, run.facts.decode_tokens_executed, weights),
+        trace_manifest_root: run.outcome.trace_manifest_root,
+        trace_chunk_count: run.outcome.trace_chunk_count,
+        trace_retention_daa,
+    })
+}
+
 pub fn palw_fp_execution_seed_v3(job: &PalwFreePromptJobV3) -> [u8; 32] {
     let mut state = blake2b_simd::Params::new().hash_length(64).key(PALW_FP_V3_DOMAIN_EXECUTION_SEED).to_state();
     state.update(job.network_domain.as_byte_slice());

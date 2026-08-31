@@ -318,10 +318,40 @@ pub fn qwen25_tensor_names_v1() -> Vec<&'static str> {
 ///   row is 607,744 bytes against a carrier that holds 81,920;
 /// * budgets its tiles PER NODE from the row each step reduces over, so an opening is bounded by
 ///   what a transaction can carry rather than by one number chosen for the whole graph.
+/// **The A16 class as testnet-11 registers it.** Kept exactly as it was, including the two defects
+/// `qwen25_a16_profile_v2` exists to correct — a class is its id, and repairing this one in place
+/// would silently change what a network is running.
 pub fn qwen25_a16_profile_v1(geometry: PalwQwen25GeometryV1) -> Result<PalwShapeProfileV3, PalwStepError> {
-    use crate::palw_base0_profile::{
-        Base0IrGeometryV1, Base0IrScopeV1, QWEN25_A16_LAYER_IR, QWEN25_A16_POST_IR, QWEN25_A16_PRE_IR, base0_ir_nodes_v1,
-    };
+    qwen25_a16_profile_inner(
+        geometry,
+        crate::palw_base0_profile::QWEN25_A16_PRE_IR,
+        crate::palw_state_chunk_map::integer_kv_state_chunk_map_id_v1(),
+    )
+}
+
+/// **The same class with both measured defects corrected — a DIFFERENT class, deliberately.**
+///
+/// 1. the pre table names the embed-lift requant the engine performs (ADR-0049 Decision F);
+/// 2. `state_chunk_map_id` is the four-byte map, which is the width `A16Cache` actually holds.
+///
+/// Either change moves `shape_profile_id`, and that id IS the class id, so this cannot be shipped
+/// as a repair to a registered class: it is a class to register. What it buys is the thing the v1
+/// class cannot do — a free-prompt run on a real language model whose commitment a court can
+/// recompute.
+pub fn qwen25_a16_profile_v2(geometry: PalwQwen25GeometryV1) -> Result<PalwShapeProfileV3, PalwStepError> {
+    qwen25_a16_profile_inner(
+        geometry,
+        crate::palw_base0_profile::QWEN25_A16_PRE_IR_V2,
+        crate::palw_state_chunk_map::integer_kv_state_chunk_map_id_v2(),
+    )
+}
+
+fn qwen25_a16_profile_inner(
+    geometry: PalwQwen25GeometryV1,
+    pre_ir: &'static [crate::palw_base0_profile::Base0IrNodeV1],
+    state_chunk_map_id: Hash64,
+) -> Result<PalwShapeProfileV3, PalwStepError> {
+    use crate::palw_base0_profile::{Base0IrGeometryV1, Base0IrScopeV1, QWEN25_A16_LAYER_IR, QWEN25_A16_POST_IR, base0_ir_nodes_v1};
 
     let ir_geometry = |tile: u32| Base0IrGeometryV1 {
         vocab_size: geometry.vocab_size,
@@ -375,9 +405,8 @@ pub fn qwen25_a16_profile_v1(geometry: PalwQwen25GeometryV1) -> Result<PalwShape
         }
     };
 
-    let mut pre_nodes =
-        base0_ir_nodes_v1(QWEN25_A16_PRE_IR, ir_geometry(geometry.tile_len), Base0IrScopeV1::Graph, QWEN25_HEAD_TENSOR);
-    budget(&mut pre_nodes, QWEN25_A16_PRE_IR);
+    let mut pre_nodes = base0_ir_nodes_v1(pre_ir, ir_geometry(geometry.tile_len), Base0IrScopeV1::Graph, QWEN25_HEAD_TENSOR);
+    budget(&mut pre_nodes, pre_ir);
     let mut attn_nodes = base0_ir_nodes_v1(QWEN25_A16_LAYER_IR, ir_geometry(geometry.tile_len), Base0IrScopeV1::PerLayer, "");
     budget(&mut attn_nodes, QWEN25_A16_LAYER_IR);
     let mut post_nodes =
@@ -427,10 +456,12 @@ pub fn qwen25_a16_profile_v1(geometry: PalwQwen25GeometryV1) -> Result<PalwShape
         reference_ruleset_id: crate::palw_reference::reference_arithmetic_ruleset_id_v2(),
         transcendental_bindings: Vec::new(),
         contraction_facts: Vec::new(),
-        // The A16 KV cache is `i32` codes, not f16 — the same integer chunk map the W8A8 class
-        // registers, because the map describes the CACHE's element type and both tiers cache codes.
+        // **From the caller, because the two versions of this class differ in exactly this.** The
+        // v1 class declares the one-byte map over an `i32` cache — the comment that used to sit
+        // here reasoned that the map describes the cache's element type, which is right, and then
+        // picked the map for `i8`.
         kv_chunk_calls: 0,
-        state_chunk_map_id: crate::palw_state_chunk_map::integer_kv_state_chunk_map_id_v1(),
+        state_chunk_map_id,
     };
     profile.validate_shape()?;
     Ok(profile)

@@ -352,7 +352,10 @@ floats enter the premine, two `BondRegistered` objects enter `genesis_objects` �
 commitment, both genesis hashes and the testnet-11 `consensus_params_id` all move together:
 
 * testnet-11 genesis `d2789338…` → `572f80c0…`, `utxo_commitment` `670b1125…` → `7f3142f2…`
-* `consensus_params_id` `f3bf86b4…` → `4f89ec82…`
+* `consensus_params_id` `f3bf86b4…` → `4f89ec82…` — and then to `5ccdd684…` when this merged with
+  the free-prompt quantum drop (1,000 → 100) on the same day. Recorded because the intermediate
+  value never shipped: a fingerprint is a function of the whole ruleset, so two re-mints landing
+  together produce a third figure rather than either of theirs.
 * payload marker `11,3` → `11,4` ("Relaunch 4")
 
 **testnet-11 must be re-minted and every host must wipe its datadir.** Nothing in this build accepts

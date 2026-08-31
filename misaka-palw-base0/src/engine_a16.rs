@@ -158,6 +158,60 @@ impl A16Cache {
     pub fn new(layers: usize) -> Self {
         Self { keys: vec![Vec::new(); layers], values: vec![Vec::new(); layers] }
     }
+    /// **This cache's bytes for one state chunk, encoded the way the MAP says — or nothing.**
+    ///
+    /// The A16 analogue of `KvCache::state_chunk_bytes`, and deliberately not a copy of it. That
+    /// one reinterprets each element as a byte, which is exact for a `Vec<i8>` cache and silent
+    /// truncation for this one; its length guard does not catch the difference, because for this
+    /// class the element COUNT and the map's declared byte count are the same number.
+    ///
+    /// So the width is read from the entry rather than assumed, and a row that does not fit the
+    /// declared width is refused instead of narrowed:
+    ///
+    /// * `row_bytes == row.len()` — one byte per element. Encoded only if every value is an `i8`;
+    ///   otherwise `None`, because a checkpoint that opens to a state the producer never held is
+    ///   worse than a missing one, and the producer has signed for it.
+    /// * `row_bytes == 4 × row.len()` — little-endian `i32`, which is what this cache holds.
+    /// * anything else — `None`. A map that describes neither is a map for a different class.
+    ///
+    /// Written this way because the class's map is currently the one-byte one and its state does
+    /// not fit (see `docs/palw-fp-on-registered-classes.md`): whichever way that is resolved —
+    /// narrowing the cache, or registering a class with a four-byte map — this function is already
+    /// correct for it, and refuses in the meantime rather than committing a lie.
+    pub fn state_chunk_bytes_v1(&self, entry: &kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkEntryV1) -> Option<Vec<u8>> {
+        use kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkKindV1;
+        let side = match entry.kind {
+            PalwStateChunkKindV1::Key => &self.keys,
+            PalwStateChunkKindV1::Value => &self.values,
+        };
+        let layer = side.get(entry.attn_layer as usize)?;
+        let mut out = Vec::with_capacity((entry.position_count as usize) * (entry.row_bytes as usize));
+        for p in entry.position_start..entry.position_start + entry.position_count {
+            let row = layer.get(p as usize)?;
+            let declared = entry.row_bytes as usize;
+            if declared == row.len() {
+                for value in row {
+                    out.push(i8::try_from(*value).ok()? as u8);
+                }
+            } else if declared == row.len().checked_mul(4)? {
+                for value in row {
+                    out.extend_from_slice(&value.to_le_bytes());
+                }
+            } else {
+                return None;
+            }
+        }
+        Some(out)
+    }
+
+    /// The key rows this cache holds, for tests that need to measure the STATE rather than reason
+    /// about its type — `a16_kv_state_does_not_fit_the_one_byte_map_its_class_declares` is the
+    /// caller, and what it measures decides whether a checkpoint map is sound for this family.
+    #[cfg(test)]
+    pub(crate) fn key_rows_for_test(&self) -> Vec<Vec<i32>> {
+        self.keys.iter().flatten().cloned().collect()
+    }
+
     pub fn len(&self) -> usize {
         self.keys.first().map_or(0, |k| k.len())
     }

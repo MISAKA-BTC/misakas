@@ -1,9 +1,17 @@
 # The free-prompt gateway — run your own LLM, mine with the same inference (ADR-0044)
 
 Status: FP-06 through FP-09b landed and measured on the pinned model — the gateway, the retained
-trace, and the executor rail that signs a real commitment transaction. Consensus-inert by
-design: nothing submits, because no network accepts the free-prompt subnetwork yet and the
-remaining consensus wiring lands as whole units (`docs/palw-fp-wiring-atomicity.md`).
+trace, and the executor rail that signs a real commitment transaction — plus `misaka palw
+fp-submit`, which puts that transaction on the chain.
+
+**Corrected 2026-08-31.** This line used to say nothing submits "because no network accepts the
+free-prompt subnetwork yet". That is no longer true: `tx_validation_in_isolation` validates
+subnetwork `0x4a`, `calculate_l1_tag` carries the algo-7 arm, and testnet-11 runs the
+`ConsensusV2` bundle. What remains is not consensus wiring but an executor question — this
+gateway's worker is a llama.cpp/GGUF runtime and no chain registers that as a class, so its
+commitments name a class no court can adjudicate. The lane's route to a live chain is
+`docs/palw-fp-on-registered-classes.md`: run it on a class the chain already registers, through
+`PalwExecutionBackendV1::execute_free_prompt`.
 
 ## What this is
 

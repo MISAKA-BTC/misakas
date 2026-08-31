@@ -185,6 +185,16 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// **The certified free-prompt quanta this bond may spend into receipt blocks (FP-R5).**
+    ///
+    /// Empty on every network that is not `ConsensusV2`, on one with no free-prompt bundle, and
+    /// for a bond with no `Final` free-prompt claims — the honest answers, not errors. Each row
+    /// carries the beacon fact and the ticket-vs-target verdict as read at virtual, so a producer
+    /// acts on what the admission will actually check rather than on its own re-derivation.
+    fn palw_fp_spendable_v3(&self, _bond: crate::tx::TransactionOutpoint) -> Vec<crate::palw_freeprompt_v3::PalwFpSpendableQuantumV3> {
+        Vec::new()
+    }
+
     /// **Every PALW V2 bond outpoint whose collateral may not be spent right now.**
     ///
     /// The wallet has to know this and had no way to ask (audit3 H3): `get_stake_bonds` reads the

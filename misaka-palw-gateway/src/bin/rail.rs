@@ -9,11 +9,16 @@
 //!  build_fp_commitment_tx  ──▶  <outbox>/fp-job-<id>.commitment-tx.borsh  + a JSON summary
 //! ```
 //!
-//! **What this binary does not do, deliberately.** It does not submit. Submission needs a funded
-//! UTXO from a live wallet on a network whose consensus accepts subnetwork `0x4a` — and no
-//! network does yet (see `docs/palw-fp-wiring-atomicity.md`). Building and signing is the part
-//! that is fully determined today, so it is the part that ships; a binary that pretended to
-//! submit would be a demo, not a rail.
+//! **What this binary does not do, deliberately.** It does not submit, and it does not choose the
+//! funding: the outpoint and amount are supplied, not discovered. Submission is
+//! `misaka palw fp-submit`, which lives in the CLI because that is where the RPC client, the
+//! endpoint registry and the network identity already are — a second answer to "which node" is a
+//! way for two answers to disagree.
+//!
+//! The reason this comment used to give — "no network accepts subnetwork `0x4a` yet" — was true
+//! when it was written and is not now: `tx_validation_in_isolation` validates that subnetwork,
+//! `calculate_l1_tag` has its algo-7 arm, and testnet-11 runs the `ConsensusV2` bundle. A stale
+//! "it cannot work" is worse than no comment, because it stops the next person looking.
 //!
 //! **The key.** `--bond-key-seed <file>` reads a raw 32-byte ML-DSA-87 keygen seed for drills and
 //! devnets. Production keeps the bond key in `kaspa-pq-signer` and asks it for a
@@ -245,7 +250,7 @@ fn main() {
         "trace_retention_daa": commitment.trace_retention_daa,
         "tx_file": tx_path.display().to_string(),
         "not_done_here": [
-            "submission (no network accepts subnetwork 0x4a yet — docs/palw-fp-wiring-atomicity.md)",
+            "submission (`misaka palw fp-submit --tx <this file> --yes`)",
             "funding selection (the outpoint and amount are supplied, not discovered)",
         ],
     });

@@ -1219,6 +1219,13 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_producer_facts_v2_impl(class_id, bond)
     }
 
+    fn palw_fp_spendable_v3(
+        &self,
+        bond: kaspa_consensus_core::tx::TransactionOutpoint,
+    ) -> Vec<kaspa_consensus_core::palw_freeprompt_v3::PalwFpSpendableQuantumV3> {
+        self.virtual_processor.palw_fp_spendable_v3_impl(bond)
+    }
+
     fn palw_locked_bond_outpoints_v2(&self) -> Vec<kaspa_consensus_core::tx::TransactionOutpoint> {
         self.virtual_processor.palw_locked_bond_outpoints_v2_impl()
     }

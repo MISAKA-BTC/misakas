@@ -4147,6 +4147,72 @@ impl VirtualStateProcessor {
         )
     }
 
+    /// **The certified free-prompt quanta `bond` may spend into receipt blocks (FP-R5).**
+    ///
+    /// Read at virtual, which is where a producer's next template builds. Each returned row has
+    /// its whole story checked here — claim `Final` and free-prompt, quantum unspent, beacon fact
+    /// derived from THIS chain, ticket compared against the class's receipt target — because the
+    /// producer's only move with a row is to build a block, and a row the admission would refuse
+    /// is a template wasted at best and a false "I am mining" at worst.
+    ///
+    /// The lottery needs no nonce: `fp_quantum_ticket_v3` is a function of (domain, beacon, claim,
+    /// quantum), so a quantum either wins at its beacon or it never does. `wins: false` rows are
+    /// returned too — an operator asking "why am I not producing receipt blocks" deserves to see
+    /// the tickets that lost rather than an empty list that also means "no claims".
+    pub fn palw_fp_spendable_v3_impl(
+        &self,
+        bond: kaspa_consensus_core::tx::TransactionOutpoint,
+    ) -> Vec<kaspa_consensus_core::palw_freeprompt_v3::PalwFpSpendableQuantumV3> {
+        use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpSpendableQuantumV3, fp_draw_slot_v3, fp_quantum_ticket_v3};
+        use kaspa_consensus_core::palw_state_v2::{PalwClaimPhaseV2, PalwClaimSourceV2};
+
+        let Some(freeprompt) = self.palw_freeprompt_params_v3.as_ref() else {
+            return Vec::new();
+        };
+        let Some(state_params) = self.palw_state_params_v2.as_ref() else {
+            return Vec::new();
+        };
+        let Ok(Some((chain_point, state))) = self.palw_state_v2_store.read().load_tip(state_params) else {
+            return Vec::new();
+        };
+        let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+            self.network_id_bytes.as_slice(),
+            Some(self.genesis.hash),
+        );
+        let key = kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(bond);
+
+        let mut out = Vec::new();
+        for (claim_id, claim) in state.claims_iter() {
+            if claim.bond != key {
+                continue;
+            }
+            let PalwClaimPhaseV2::Final { final_daa } = claim.phase else { continue };
+            let PalwClaimSourceV2::FreePrompt { quanta, spent } = &claim.source else { continue };
+            let Some(target) = state.receipt_target(&claim.class_id) else { continue };
+            let Some(slot) = fp_draw_slot_v3(final_daa, freeprompt.receipt_maturity_daa()) else { continue };
+            // The beacon is a chain fact; a slot the chain has not reached yet has no beacon and
+            // therefore no rows — "not yet drawable" and "lost" must not look alike.
+            let Ok(beacon) = self.palw_beacon_fact_of_candidate(chain_point, slot) else { continue };
+            for quantum_index in 0..*quanta {
+                if spent.contains(&quantum_index) {
+                    continue;
+                }
+                let ticket = fp_quantum_ticket_v3(network_domain, beacon.beacon_block, *claim_id, quantum_index);
+                out.push(PalwFpSpendableQuantumV3 {
+                    claim_id: *claim_id,
+                    class_id: claim.class_id,
+                    quantum_index,
+                    beacon,
+                    receipt_target: target.target,
+                    ticket,
+                    wins: kaspa_consensus_core::palw_pwu::palw_ticket_admits_v1(ticket, target.target),
+                    spend_deadline_daa: beacon.beacon_daa.saturating_add(freeprompt.receipt_use_window_daa()),
+                });
+            }
+        }
+        out
+    }
+
     /// **The bonds this block's own mergeset declares** — the half the parent state cannot hold.
     ///
     /// A safe superset by construction, and by the same argument the DNS `bond_gate_view` makes:

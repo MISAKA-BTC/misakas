@@ -846,6 +846,49 @@ impl ValidatorKey {
         self.build_funded_overlay_tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, bytes, funding_outpoint, funding, fee, false)
     }
 
+    /// **The receipt lane's carriage: a signed spend of one certified quantum (FP-R5).**
+    ///
+    /// The mirror of [`Self::build_fp_commitment_tx`], for the other end of the claim's life: that
+    /// one opens a claim, this one spends a quantum of a certified claim into a receipt BLOCK. It
+    /// returns the envelope rather than a transaction because a receipt block's carriage rides the
+    /// HEADER (`palw_commitment`, algo 7), not the transaction lane — the producer sets
+    /// `pow_algo_id` and attaches these bytes.
+    ///
+    /// Nothing here is chosen. The challenge binds the header's own position (`pre_pow_hash`,
+    /// `timestamp`, `nonce`) so the envelope cannot be replayed onto another block; the ticket the
+    /// admission prices is a pure function of (domain, beacon, claim, quantum) that no field here
+    /// influences — grinding this signature buys nothing, which is the lane's design.
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_fp_receipt_spend_envelope(
+        &self,
+        network_domain: Hash64,
+        pre_pow_hash: Hash64,
+        timestamp: u64,
+        nonce: u64,
+        claim_id: Hash64,
+        quantum_index: u32,
+        producer_bond: TransactionOutpoint,
+        beacon_block: Hash64,
+    ) -> kaspa_consensus_core::palw_freeprompt_v3::PalwReceiptSpendEnvelopeV3 {
+        use kaspa_consensus_core::palw_freeprompt_v3::{
+            PALW_FP_V3_MLDSA87_SPEND_CONTEXT, PALW_FP_V3_VERSION, PalwReceiptSpendEnvelopeV3, PalwReceiptSpendUnsignedV3,
+            fp_spend_id_v3, spend_challenge_v3,
+        };
+        let spend = PalwReceiptSpendUnsignedV3 {
+            version: PALW_FP_V3_VERSION,
+            network_domain,
+            challenge: spend_challenge_v3(network_domain, pre_pow_hash, timestamp, nonce, claim_id, quantum_index, &producer_bond),
+            claim_id,
+            quantum_index,
+            beacon_block,
+            producer_bond,
+            producer_pubkey: self.public_key().to_vec(),
+        };
+        let signature =
+            self.sign_with_context(fp_spend_id_v3(&spend).as_bytes().as_slice(), PALW_FP_V3_MLDSA87_SPEND_CONTEXT).to_vec();
+        PalwReceiptSpendEnvelopeV3 { spend, signature }
+    }
+
     /// Sign this validator's **verifier verdict** over a peer's receipt.
     ///
     /// `replay_receipt_hash` MUST be what this node's own independent re-execution produced. The
@@ -1975,8 +2018,23 @@ mod tests {
         key: &ValidatorKey,
         weights: &kaspa_consensus_core::palw_freeprompt_v3::PalwFpCuWeightsV3,
     ) -> (PalwFreePromptCommitmentV3, Vec<u32>) {
+        fp_commitment_fixture_with_prompt(network_domain, key, weights, 96)
+    }
+
+    /// The same fixture over a prompt of `prompt_len` tokens.
+    ///
+    /// Parameterised because CU is `prompt·prefill_weight + executed·decode_weight`, so whether a
+    /// job is sub-quantum depends on the PROMPT as much as the decode count — and the decode count
+    /// cannot go below one (`decode_tokens_executed is zero` is refused separately, as a run that
+    /// emitted nothing). A test that wants a genuinely sub-quantum job has to shorten the prompt.
+    fn fp_commitment_fixture_with_prompt(
+        network_domain: Hash64,
+        key: &ValidatorKey,
+        weights: &kaspa_consensus_core::palw_freeprompt_v3::PalwFpCuWeightsV3,
+        prompt_len: u32,
+    ) -> (PalwFreePromptCommitmentV3, Vec<u32>) {
         use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpStopReasonV3, PalwFreePromptJobV3, fp_cu_v3, fp_trace_manifest_v3};
-        let ids: Vec<u32> = (0..96u32).collect();
+        let ids: Vec<u32> = (0..prompt_len).collect();
         let job = PalwFreePromptJobV3 {
             version: PALW_FP_V3_VERSION,
             network_domain,
@@ -2088,14 +2146,31 @@ mod tests {
         assert!(err.contains("not admissible"), "got {err}");
 
         // A sub-quantum job: it certifies nothing the chain can act on, so it never becomes a fee.
-        let mut tiny = commitment;
+        //
+        // **Sized from the quantum, and asserted to be under it, because this rotted once
+        // already.** It used to be the 96-token fixture with ONE decoded token: at
+        // `QUANTUM_CU = 1_000` that is 96 + 64 = 160 CU, comfortably sub-quantum. Lowering the
+        // quantum to 100 made the same job PAYABLE and the test went red — and a version merely
+        // loosened to keep it green would have gone on asserting a refusal that no longer happens.
+        //
+        // The decode count cannot be the lever: zero is refused separately, as a run that emitted
+        // nothing. So the prompt shrinks instead, and the assertion below is what makes the next
+        // quantum change fail loudly here rather than silently exercise the payable path.
+        let quantum = bundle.freeprompt.quantum_cu();
+        let (mut tiny, tiny_ids) = fp_commitment_fixture_with_prompt(network_domain, &key, weights, 8);
         tiny.decode_tokens_executed = 1;
         tiny.cu = kaspa_consensus_core::palw_freeprompt_v3::fp_cu_v3(tiny.job.prompt_tokens, 1, weights);
+        assert!(
+            tiny.cu > 0 && tiny.cu < quantum,
+            "the sub-quantum fixture must actually be sub-quantum: cu {} against quantum {}",
+            tiny.cu,
+            quantum
+        );
         let err = key
             .build_fp_commitment_tx(
                 network_domain,
                 tiny,
-                ids,
+                tiny_ids,
                 weights,
                 &bundle.freeprompt,
                 fop(9, 0),
