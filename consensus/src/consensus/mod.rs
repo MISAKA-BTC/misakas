@@ -2177,6 +2177,13 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_v2_registration_terms_impl()
     }
 
+    fn palw_registered_class_carriage_v1(
+        &self,
+        class_id: kaspa_hashes::Hash64,
+    ) -> Option<(kaspa_consensus_core::palw_step::PalwShapeProfileV3, kaspa_consensus_core::palw_v2::PalwJobContextV2)> {
+        self.virtual_processor.palw_registered_class_carriage_v1_impl(class_id)
+    }
+
     fn palw_disputable_claims_v2(
         &self,
         mine: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,

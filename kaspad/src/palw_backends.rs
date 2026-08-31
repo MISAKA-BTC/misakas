@@ -31,6 +31,13 @@ impl PalwBackendRegistry {
         Self { sdk: PalwClassSdk::builtin_v1(court, network_id), holdings }
     }
 
+    /// **ADR-0067: a registry whose chain-registered arm is armed.** The operator's deliberate
+    /// flag (`--palw-chain-classes`) is the ONLY caller — the fence's SDK half refuses without
+    /// this, and this constructor is the greppable node half.
+    pub fn new_with_chain_classes(court: PalwCourtParamsV2, holdings: Vec<PalwLoadedArtifactV1>, network_id: Vec<u8>) -> Self {
+        Self { sdk: PalwClassSdk::builtin_v1(court, network_id).with_chain_classes_v1(), holdings }
+    }
+
     /// The SDK this registry dispatches through — the panel's registration builder asks it for
     /// candidates and admission preflight, against the same holdings `resolve` serves.
     pub fn sdk(&self) -> &PalwClassSdk {
@@ -48,6 +55,31 @@ impl PalwBackendRegistry {
     /// producing or judging under a class the chain did not name is worse than not participating.
     pub fn resolve(&self, class_id: Hash64, artifact_root: Hash64) -> Result<Box<dyn PalwExecutionBackendV1>, String> {
         self.sdk.resolve(class_id, artifact_root, &self.holdings)
+    }
+
+    /// **Resolve through the tables, then — armed — through the chain's own registration**
+    /// (ADR-0067 Decisions 1–2). `fetch` is the caller's session read
+    /// (`palw_registered_class_carriage_v1`): it runs only when every table has passed, and its
+    /// `None` keeps the table refusal, because "the chain never registered it" must not read
+    /// better than "this build cannot serve it".
+    pub fn resolve_or_chain<F>(
+        &self,
+        class_id: Hash64,
+        artifact_root: Hash64,
+        fetch: F,
+    ) -> Result<Box<dyn PalwExecutionBackendV1>, String>
+    where
+        F: FnOnce(Hash64) -> Option<(kaspa_consensus_core::palw_step::PalwShapeProfileV3, kaspa_consensus_core::palw_v2::PalwJobContextV2)>,
+    {
+        match self.sdk.resolve(class_id, artifact_root, &self.holdings) {
+            Ok(backend) => Ok(backend),
+            Err(table_refusal) => match fetch(class_id) {
+                Some((profile, canonical)) => {
+                    self.sdk.resolve_chain_registered(class_id, artifact_root, &self.holdings, &profile, &canonical)
+                }
+                None => Err(table_refusal),
+            },
+        }
     }
 }
 

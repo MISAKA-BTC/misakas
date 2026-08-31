@@ -386,6 +386,20 @@ pub enum DatabaseStorePrefixes {
     /// (`capture_pruning_point_overlay_snapshot`); PALW simply never grew the sibling.
     PalwPruningPointState = 225,
 
+    // ---- MISAKA ADR-0067: the chain-registered class index ----
+    /// Per-class-id: the registration's admission carriage (profile + canonical job), Borsh
+    /// bytes VERBATIM as accepted. The node-side answer to "what graph did the chain register
+    /// under this id" — consensus state deliberately retains only the class's economic facts, so
+    /// a node that wants to SERVE a chain-registered class (ADR-0067) reads the declaration
+    /// here. Append-only and existence-gated at every read (the class must be in current state),
+    /// so a row from a reorged-out registration is inert rather than wrong.
+    PalwClassCarriages = 226,
+    /// Singleton `u32`: the layout [`Self::PalwClassCarriages`] rows were written under. A row
+    /// the iterator cannot decode reads as ABSENT, and an absent declaration refuses service —
+    /// fail-closed, but a whole store silently absent after a layout change would read as "no
+    /// class was ever registered", so the version forces a re-derivation instead.
+    PalwClassCarriagesSchema = 227,
+
     // ---- Separator ----
     /// Reserved as a separator
     Separator = SEPARATOR,

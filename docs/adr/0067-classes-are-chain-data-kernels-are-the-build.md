@@ -1,7 +1,9 @@
 # ADR-0067 — Classes are chain data; only kernels are the build
 
-Status: **PROPOSED.** Nothing here is implemented. Decisions 1–4 name the work; Decision 5 names
-the fence it ships behind. Builds on ADR-0049 (the adjudication contract — whose admission
+Status: **Decisions 1–3 and 5 LANDED for the dense (A16) container (2026-08-31), fenced and
+dormant; Decision 4 needed no code; Decision 6's validation-artifact tier and cache policy remain
+PROPOSED, as do the mmap (Qwen3.6) interpreter and the operational arming.** See "What landed" at
+the foot of this document. Builds on ADR-0049 (the adjudication contract — whose admission
 carriage is the load-bearing half of this design and is ALREADY LIVE), ADR-0054 (share follows
 production — the economics that make permissionless classes survivable), and ADR-0034 (capability
 declarations — the opt-in that makes them safe to serve). Consistent with the standing doctrine
@@ -236,3 +238,40 @@ choosing, which is one more reason seat payment (R-7) is the next economic ADR t
    rows), and the operator cache bound with declaration-first eviction (Decision 6).
 6. Arm on a testnet re-launch or activation; the mmap (Qwen3.6) container follows the same path
    second, because its interpreter is a larger piece and the dense family proves the seam.
+
+
+## What landed (2026-08-31)
+
+* **The interpreter** (`A16Engine::plan_from_profile` / `forward_token_planned`): execution from
+  the registered declaration, one committed row per declared node, refusals naming the node. The
+  differential against the compiled engine holds logits, every table row and the cache state
+  bit-identical — and CAUGHT A REAL DEFECT before any claim existed: the compiled engine emitted
+  its SwiGLU trace rows out of the declared order, so the free-prompt capture was committing the
+  silu row at the up-projection's slot; a court bisecting there would have convicted an honest
+  producer. The engine now emits in the declared order.
+* **The fence and the arm** (`PalwClassSdk::with_chain_classes_v1` /
+  `resolve_chain_registered`): sealed by default, armed only by the greppable constructor;
+  refusal order — fence, profile-hashes-to-id, canonical-names-the-class, artifact-held
+  (Decision 6's "registration does not obligate possession"), plan-compiles.
+* **The fuzz gate** (`fuzz_a16_profiles_v1`, `palw-a16-profile-fuzz`): seeded, clockless,
+  gate→plan→double-execution under `catch_unwind`. Its first 400 iterations found a
+  gate-and-plan-accepted profile whose rewired refs fed a kv-width row to the q-rope and panicked
+  the head slicing; the fix made the PLAN width-sound (every consumer's input width checked
+  statically), eliminating the class. Saturation: 50,000 iterations, 6,207 executing, zero
+  panics, zero nondeterminism.
+* **The chain-only lattice walk**: a class in NO table — wire-shaped registration with the
+  carriage riding — applied, served through the armed arm, committed, bound (the duty naming the
+  replay lane), licensed, Final, and the producer-built receipt-spend envelope admitted in full.
+* **The registration index** (`PalwClassCarriages`, store prefix 226): consensus state retains a
+  class's economic facts and drops the carriage, so the node keeps what the wire delivered —
+  verbatim bytes, written where the lifecycle filter accepts the object (the path IBD replays),
+  existence-gated against current state at every read. Exposed as
+  `palw_registered_class_carriage_v1` through the consensus API and session.
+* **The node half of the fence** (`--palw-chain-classes`): the panel's every duty resolve and the
+  producer's class resolve route through `resolve_or_chain` — tables first, then (armed) the
+  chain's own registration, and "the chain never registered it" never reads better than "this
+  build cannot serve it".
+
+Not landed, stated so the fence stays honest: the validation-artifact tier and the cache/eviction
+policy (Decision 6's ② and ④), the mmap-container interpreter, and the arming itself — which
+waits, per Decision 5, on nothing now except the operational decision.

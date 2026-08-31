@@ -74,6 +74,8 @@ pub struct PalwProducerConfig {
     pub address_prefix: kaspa_addresses::Prefix,
     /// The network's own domain, derived from its `NetworkId` string exactly as consensus does.
     pub network_id: String,
+    /// ADR-0067: arm the chain-registered-class arm (`--palw-chain-classes`).
+    pub chain_classes: bool,
     /// The chain this producer signs for. Bound into the network domain so a signature is a
     /// statement about one incarnation of a network, not about its NAME (audit M2-18).
     pub genesis_hash: kaspa_hashes::Hash64,
@@ -543,7 +545,9 @@ impl PalwProducerService {
         // has what the chain named rather than asserting it.
         let backend = self
             .backends()
-            .resolve(facts.class_id, facts.artifact_root)
+            .resolve_or_chain(facts.class_id, facts.artifact_root, |id| {
+                if self.config.chain_classes { session.palw_registered_class_carriage_v1(id) } else { None }
+            })
             .map_err(|e| format!("this node cannot produce for the registered class: {e}"))?;
         // **Say out loud that this class cannot be defended in court** (audit3 H4). A family that
         // takes the trait defaults for `bisect_prefix_state`/`refutation_for_index` cannot make a

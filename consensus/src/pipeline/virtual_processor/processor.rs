@@ -348,6 +348,8 @@ pub struct VirtualStateProcessor {
     /// an index — NO consensus rule reads it yet (Stage 2 is the reader).
     pub(super) palw_carriage_store: Arc<RwLock<DbPalwCarriageStore>>,
     pub(super) palw_class_state_store: Arc<RwLock<crate::model::stores::palw_class_state::DbPalwClassStateStore>>,
+    /// ADR-0067: accepted registrations' declarations, for the serve-from-chain arm.
+    pub(super) palw_class_carriage_store: Arc<RwLock<crate::model::stores::palw_class_carriage::DbPalwClassCarriageStore>>,
     /// ADR-0042 Decision 5 / ADR-0044 Unit C: per-chain-block `PalwStateDeltaV2` rows and the
     /// materialized tip. Written in the same `WriteBatch` as the block's UTXO data by the walk in
     /// `calculate_utxo_state_relatively`, so the two can never be half-written relative to each
@@ -711,6 +713,7 @@ impl VirtualStateProcessor {
             compute_capability_store: storage.compute_capability_store.clone(),
             palw_carriage_store: storage.palw_carriage_store.clone(),
             palw_class_state_store: storage.palw_class_state_store.clone(),
+            palw_class_carriage_store: storage.palw_class_carriage_store.clone(),
             palw_state_v2_store: storage.palw_state_v2_store.clone(),
             palw_state_params_v2: match &params.palw_consensus_mode {
                 kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.state.clone()),
@@ -4114,6 +4117,27 @@ impl VirtualStateProcessor {
         })
     }
 
+    /// **ADR-0067: the declaration the chain registered under `class_id`** — the profile and
+    /// canonical job the accepted registration carried — existence-gated against CURRENT state,
+    /// so a row left by a reorged-out registration answers nothing.
+    pub fn palw_registered_class_carriage_v1_impl(
+        &self,
+        class_id: kaspa_hashes::Hash64,
+    ) -> Option<(kaspa_consensus_core::palw_step::PalwShapeProfileV3, kaspa_consensus_core::palw_v2::PalwJobContextV2)> {
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        let (_, state) = self.palw_state_v2_store.read().load_tip(state_params).ok().flatten()?;
+        state.class(&class_id)?;
+        let record = self.palw_class_carriage_store.read().get(class_id)?;
+        let carriage: kaspa_consensus_core::palw_state_v2::PalwClassAdmissionCarriageV2 =
+            borsh::from_slice(&record.carriage).ok()?;
+        // The id IS the profile's hash; a row that fails this was corrupted, and absent (None)
+        // fails closed at every consumer.
+        if carriage.profile.shape_profile_id() != class_id {
+            return None;
+        }
+        Some((carriage.profile, carriage.canonical))
+    }
+
     pub fn palw_seat_duties_v2_impl(
         &self,
         mine: &[kaspa_consensus_core::palw_state_v2::PalwBondKeyV2],
@@ -4608,6 +4632,32 @@ impl VirtualStateProcessor {
                         Ok((next, _)) => {
                             folded = next;
                             rehearsal.blue_score = rehearsal.blue_score.saturating_add(1);
+                            // **ADR-0067: keep the declaration the chain just accepted.** The
+                            // state retains the class's economic facts and drops the carriage;
+                            // a node that will SERVE the class needs the graph, so it is indexed
+                            // here — the accept path IBD replays, which is what makes a syncing
+                            // node's index arrive with its chain.
+                            if let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
+                                class_id,
+                                admission: Some(carriage),
+                                ..
+                            } = &object
+                            {
+                                match borsh::to_vec(carriage.as_ref()) {
+                                    Ok(bytes) => {
+                                        let record = crate::model::stores::palw_class_carriage::PalwClassCarriageRecord {
+                                            registered_daa: point.daa_score,
+                                            carriage: bytes,
+                                        };
+                                        if let Err(err) = self.palw_class_carriage_store.write().insert(*class_id, record) {
+                                            warn!("[palw-class-carriage] could not index class {class_id}: {err}");
+                                        }
+                                    }
+                                    Err(err) => {
+                                        warn!("[palw-class-carriage] class {class_id}'s carriage does not re-serialize: {err}")
+                                    }
+                                }
+                            }
                             accepted.push(object);
                         }
                         Err(why) => {

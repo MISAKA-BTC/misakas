@@ -239,6 +239,13 @@ impl ConsensusSessionOwned {
         self.consensus.palw_v2_registration_terms()
     }
 
+    pub fn palw_registered_class_carriage_v1(
+        &self,
+        class_id: kaspa_consensus_core::Hash64,
+    ) -> Option<(kaspa_consensus_core::palw_step::PalwShapeProfileV3, kaspa_consensus_core::palw_v2::PalwJobContextV2)> {
+        self.consensus.palw_registered_class_carriage_v1(class_id)
+    }
+
     pub fn palw_bond_of_pubkey_v2(&self, pubkey: &[u8]) -> Option<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2> {
         self.consensus.palw_bond_of_pubkey_v2(pubkey)
     }

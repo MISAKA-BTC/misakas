@@ -171,6 +171,8 @@ pub struct PalwPanelConfig {
     /// model id when siblings share a converted shape (the A16 family) and the file alone cannot
     /// say which model it is.
     pub register_class: Option<String>,
+    /// ADR-0067: arm the chain-registered-class arm (`--palw-chain-classes`). Off is the fence.
+    pub chain_classes: bool,
     /// Submit ONE `BondRegistered` for this node's own key and stop. The only PALW identity a
     /// newcomer cannot be handed: until this existed the bonds on a chain were exactly the ones
     /// its genesis registry named, so nobody outside that list could ever produce.
@@ -211,11 +213,26 @@ impl PalwPanelService {
     /// cached, for the same reason the producer's is: a cache would be a second place the
     /// operator's configuration lives.
     fn backends(&self) -> crate::palw_backends::PalwBackendRegistry {
-        crate::palw_backends::PalwBackendRegistry::new(
-            self.config.court,
-            self.class_holdings.clone(),
-            self.consensus_config.params.net.to_string().into_bytes(),
-        )
+        let net = self.consensus_config.params.net.to_string().into_bytes();
+        if self.config.chain_classes {
+            crate::palw_backends::PalwBackendRegistry::new_with_chain_classes(self.config.court, self.class_holdings.clone(), net)
+        } else {
+            crate::palw_backends::PalwBackendRegistry::new(self.config.court, self.class_holdings.clone(), net)
+        }
+    }
+
+    /// The panel's one resolve door: the tables, then — armed — the chain's own registration,
+    /// read from this session (ADR-0067). Every duty path resolves through here so a
+    /// chain-registered class is judged exactly where a tabled one is.
+    fn resolve_backend(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        class_id: Hash64,
+        artifact_root: Hash64,
+    ) -> Result<Box<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1>, String> {
+        self.backends().resolve_or_chain(class_id, artifact_root, |id| {
+            if self.config.chain_classes { session.palw_registered_class_carriage_v1(id) } else { None }
+        })
     }
 
     pub fn new(
@@ -1388,7 +1405,7 @@ impl PalwPanelService {
                     if challenged.contains(&target.claim_id) {
                         continue;
                     }
-                    let Ok(backend) = self.backends().resolve(target.class_id, target.artifact_root) else {
+                    let Ok(backend) = self.resolve_backend(&session, target.class_id, target.artifact_root) else {
                         continue;
                     };
                     // The capture is not read here any more — the anchor comes from the block
@@ -1522,7 +1539,7 @@ impl PalwPanelService {
                 // The capture, and the family's backend for it. A party with no material — or a
                 // family with no court — cannot answer honestly, and answering dishonestly is what
                 // the terminal close exists to punish, so it stays silent and lets the clock decide.
-                let backend = match self.backends().resolve(duty.class_id, duty.artifact_root) {
+                let backend = match self.resolve_backend(&session, duty.class_id, duty.artifact_root) {
                     Ok(backend) => backend,
                     Err(why) => {
                         // Not rate-limited by session: this one is a NODE-level misconfiguration
@@ -1849,7 +1866,7 @@ impl PalwPanelService {
                     // signed accusation of withholding from a seat that could not have judged the
                     // data had it arrived. Zero deliveries and zero capability must answer the
                     // same thing.
-                    if self.backends().resolve(duty.class_id, duty.artifact_root).is_err() {
+                    if self.resolve_backend(&session, duty.class_id, duty.artifact_root).is_err() {
                         break 'verdict Some(PalwReceiptVerdictV2::Incapable);
                     }
                     // **The free-prompt lane: the seat REPLAYS the job** (FP-R6). An attempt
@@ -1885,7 +1902,7 @@ impl PalwPanelService {
                             {
                                 continue;
                             }
-                            let Ok(backend) = self.backends().resolve(duty.class_id, duty.artifact_root) else {
+                            let Ok(backend) = self.resolve_backend(&session, duty.class_id, duty.artifact_root) else {
                                 break 'verdict Some(PalwReceiptVerdictV2::Incapable);
                             };
                             let prompt: Vec<usize> = material.prompt_token_ids.iter().map(|t| *t as usize).collect();
@@ -1931,7 +1948,7 @@ impl PalwPanelService {
                         // toward neither side of the quorum. The chain refuses it for the liveness
                         // floor, where no node can truthfully claim it, so filing it there would
                         // only waste a fee.
-                        let Ok(backend) = self.backends().resolve(duty.class_id, duty.artifact_root) else {
+                        let Ok(backend) = self.resolve_backend(&session, duty.class_id, duty.artifact_root) else {
                             break 'verdict Some(PalwReceiptVerdictV2::Incapable);
                         };
                         let Some(anchor) = self.job_anchor_for_claim(
@@ -1965,7 +1982,7 @@ impl PalwPanelService {
                     // reproduces the roots the claim committed to.
                     if let Some(bytes) = self.retained_capture(&duty.claim_id).or_else(|| {
                         std::fs::read(self.config.retention_dir.join("foreign").join(format!("{}.material", duty.claim_id))).ok()
-                    }) && let Ok(backend) = self.backends().resolve(duty.class_id, duty.artifact_root)
+                    }) && let Ok(backend) = self.resolve_backend(&session, duty.class_id, duty.artifact_root)
                         && let Some(anchor) = self.job_anchor_for_claim(
                             &session,
                             backend.as_ref(),

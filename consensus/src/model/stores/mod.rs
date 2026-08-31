@@ -15,6 +15,7 @@ pub mod ghostdag;
 pub mod headers;
 pub mod headers_selected_tip;
 pub mod palw_carriage;
+pub mod palw_class_carriage;
 pub mod palw_class_state;
 pub mod palw_state_v2;
 pub mod past_pruning_points;

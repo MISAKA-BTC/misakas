@@ -1284,6 +1284,7 @@ Do you confirm? (y/n)";
                         pay_address: pay_address.clone(),
                         address_prefix: config.prefix(),
                         network_id: config.params.net.to_string(),
+                        chain_classes: args.palw_chain_classes,
                         genesis_hash: config.genesis.hash,
                         // Beside the per-network data dir: the material behind a published attempt
                         // is a data-availability obligation for `trace_retention_daa`, so it has to
@@ -1477,6 +1478,7 @@ Do you confirm? (y/n)";
                 Some(Arc::new(crate::palw_panel::PalwPanelService::new(
                     crate::palw_panel::PalwPanelConfig {
                         register_class: args.palw_register_class.clone(),
+                        chain_classes: args.palw_chain_classes,
                         register_bond: args.palw_register_bond,
                         bond_collateral: args.palw_bond_collateral,
                         pay_address: args.palw_producer_pay_address.clone(),

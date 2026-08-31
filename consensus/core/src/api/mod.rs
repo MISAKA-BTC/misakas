@@ -609,6 +609,17 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// ADR-0067: the declaration (profile + canonical job) the chain registered under
+    /// `class_id`, from the node's accepted-registration index. `None` when the class is not in
+    /// current state, the node never indexed it, or the row fails its own hash — every absence
+    /// fails closed into "cannot serve".
+    fn palw_registered_class_carriage_v1(
+        &self,
+        _class_id: kaspa_hashes::Hash64,
+    ) -> Option<(crate::palw_step::PalwShapeProfileV3, crate::palw_v2::PalwJobContextV2)> {
+        None
+    }
+
     /// Claims this node could still dispute.
     fn palw_disputable_claims_v2(
         &self,

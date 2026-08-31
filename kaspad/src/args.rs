@@ -226,6 +226,8 @@ pub struct Args {
     pub palw_register_class: Option<String>,
     pub palw_register_bond: bool,
     pub palw_dump_classes: bool,
+    /// ADR-0067: arm the chain-registered-class arm (the fence's node half).
+    pub palw_chain_classes: bool,
     pub palw_bond_collateral: Option<u64>,
     /// **Produce for this class instead of the network's floor.**
     ///
@@ -381,6 +383,7 @@ impl Default for Args {
             palw_register_class: None,
             palw_register_bond: false,
             palw_dump_classes: false,
+            palw_chain_classes: false,
             palw_bond_collateral: None,
             palw_producer_class: None,
             palw_challenge: false,
@@ -896,6 +899,18 @@ pub fn cli() -> Command {
                      (--palw-producer-bond), its key and a funded --palw-fee-outpoint. Give a model id (e.g. \
                      \"Qwen/Qwen2.5-Coder-1.5B-Instruct\") when the artifact's shape matches more than one class this build \
                      knows — sibling models share a converted shape, so the file alone cannot say which one it is.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-chain-classes")
+                .long("palw-chain-classes")
+                .action(ArgAction::SetTrue)
+                .help(
+                    "MISAKA PALW (ADR-0067): ARM the chain-registered-class arm — serve classes whose declaration \
+                     the chain carries even when this build's tables never heard of them, executing FROM the \
+                     registered profile. Off by default (the fence): arming accepts interpreted execution for \
+                     stranger classes this operator's artifacts can pair with. Registration never obligates \
+                     possession — a class is served only if its artifact is loaded via --palw-class-artifact.",
                 ),
         )
         .arg(
@@ -1441,6 +1456,7 @@ impl Args {
             palw_register_class: m.get_one::<String>("palw-register-class").cloned().or(defaults.palw_register_class.clone()),
             palw_register_bond: arg_match_unwrap_or::<bool>(&m, "palw-register-bond", defaults.palw_register_bond),
             palw_dump_classes: arg_match_unwrap_or::<bool>(&m, "palw-dump-classes", defaults.palw_dump_classes),
+            palw_chain_classes: arg_match_unwrap_or::<bool>(&m, "palw-chain-classes", defaults.palw_chain_classes),
             palw_bond_collateral: m.get_one::<u64>("palw-bond-collateral").copied(),
             palw_producer_class: m.get_one::<String>("palw-producer-class").cloned().or(defaults.palw_producer_class),
             palw_challenge: m.get_one::<bool>("palw-challenge").copied().unwrap_or(defaults.palw_challenge),

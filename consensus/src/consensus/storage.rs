@@ -89,6 +89,8 @@ pub struct ConsensusStorage {
     /// chain-scoped `PalwClassStateView`, never directly — a class fact that depends on where this
     /// node's virtual tip points is the shape of blocker 6(b).
     pub palw_class_state_store: Arc<RwLock<DbPalwClassStateStore>>,
+    /// ADR-0067: accepted class registrations' declarations (profile + canonical), by class id.
+    pub palw_class_carriage_store: Arc<RwLock<crate::model::stores::palw_class_carriage::DbPalwClassCarriageStore>>,
 
     // kaspa-pq Selected-Parent EVM Lane (ADR-0020, design v0.4 §11). All four
     // are inert (never read or written) until `evm_activation_daa_score` is
@@ -364,6 +366,16 @@ impl ConsensusStorage {
             }
             Arc::new(RwLock::new(store))
         };
+        let palw_class_carriage_store = {
+            let mut store = crate::model::stores::palw_class_carriage::DbPalwClassCarriageStore::new(
+                db.clone(),
+                PolicyBuilder::new().max_items(256).untracked().build(),
+            );
+            if let Err(err) = store.reindex_if_stale() {
+                kaspa_core::warn!("[palw-class-carriage] could not check the record layout version: {err}; leaving existing rows");
+            }
+            Arc::new(RwLock::new(store))
+        };
         // Per-block rewarded `(bond, epoch)` keys (Addendum B §B.3(c)), keyed by
         // block hash. NOTE: the value `RewardedEpochKeys` is a `Vec<(outpoint, epoch)>`,
         // which implements `estimate_mem_units` but NOT `estimate_mem_bytes`; it must
@@ -526,6 +538,7 @@ impl ConsensusStorage {
             pruning_overlay_snapshot_store,
             stake_bonds_store,
             palw_class_state_store,
+            palw_class_carriage_store,
             compute_capability_store,
             palw_carriage_store,
             palw_state_v2_store,
