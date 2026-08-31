@@ -59,6 +59,10 @@ const CONSENSUS_PATH: &[&str] = &[
     // The dense A16 tier's producer — same rule, same reason: an execution path may not
     // compute in floats, and this one derives its job, runs the engine and commits four roots.
     "src/qwen25_a16_backend.rs",
+    // The free-prompt worker (ADR-0067): it executes a caller's job and returns the roots a
+    // commitment is assembled from. `misaka-palw-serve` is EXEMPT beside it precisely because it
+    // commits nothing; this one does, which is the whole difference the exemption turns on.
+    "src/bin/palw-a16-fp-worker.rs",
     // ADR-0049 Decision F/G, arrived with the canonical IR: the engine's op sequence is COMPILED
     // from `BASE0_LAYER_IR` and its operands are RESOLVED by name. Both are on the execution path
     // by construction — they decide what the engine performs and which bytes it reads — so
@@ -68,6 +72,11 @@ const CONSENSUS_PATH: &[&str] = &[
     "src/rc.rs",
     "src/rope.rs",
     "src/tokenizer.rs",
+    // ADR-0067 Decision 5's fuzz gate. On the path by the same argument as `plan.rs`: it drives
+    // the interpreter and ASSERTS that two runs of one plan are one bitstream, so a float here
+    // would make the gate's own determinism claim unfalsifiable — the harness would inherit the
+    // nondeterminism it exists to detect.
+    "src/fuzz_a16.rs",
 ];
 
 /// Not executed by consensus, but they *state* the class's arithmetic: the KAT set publishes the
@@ -99,6 +108,14 @@ const EXEMPT: &[(&str, &str)] = &[
     // reason is on the record; if it ever starts building commitments it belongs in
     // CONSENSUS_PATH, and that move should be a deliberate edit here.
     ("src/bin/misaka-palw-serve.rs", "OpenAI-shaped front door for the integer engine: it serves inference, it commits nothing"),
+    // ADR-0067's saturation runner: it prints a tally and an elapsed time (a timer is float). The
+    // arithmetic under test is `fuzz_a16.rs`, which is scanned.
+    ("src/bin/palw-a16-profile-fuzz.rs", "fuzz driver: it times and tallies, the harness it drives is on the path"),
+    // ADR-0067 Decision 6 tier ②. It STATES arithmetic in the KAT sense — a publisher's rows
+    // digest is what a third party conforms to — but it computes that digest by running the
+    // scanned engine and hashing integers, adding none of its own. Listed with the reason rather
+    // than scanned, because what it must not do is invent arithmetic, and it invents none.
+    ("src/bin/palw-slice-kat.rs", "publishes a digest of the scanned engine's own integer rows; computes no arithmetic itself"),
     ("examples/base0-throughput.rs", "measurement tool: it times the engine, it is not the engine"),
     ("examples/gguf-probe.rs", "offline checkpoint inspector"),
     ("examples/class-weight-report.rs", "measurement tool: it reports what a class would be worth, in floats, and executes nothing"),
