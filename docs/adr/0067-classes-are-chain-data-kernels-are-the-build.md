@@ -253,12 +253,29 @@ choosing, which is one more reason seat payment (R-7) is the next economic ADR t
   `resolve_chain_registered`): sealed by default, armed only by the greppable constructor;
   refusal order — fence, profile-hashes-to-id, canonical-names-the-class, artifact-held
   (Decision 6's "registration does not obligate possession"), plan-compiles.
-* **The fuzz gate** (`fuzz_a16_profiles_v1`, `palw-a16-profile-fuzz`): seeded, clockless,
+* **PART of the fuzz gate** (`fuzz_a16_profiles_v1`, `palw-a16-profile-fuzz`): seeded, clockless,
   gate→plan→double-execution under `catch_unwind`. Its first 400 iterations found a
   gate-and-plan-accepted profile whose rewired refs fed a kv-width row to the q-rope and panicked
   the head slicing; the fix made the PLAN width-sound (every consumer's input width checked
   statically), eliminating the class. Saturation: 50,000 iterations, 6,207 executing, zero
   panics, zero nondeterminism.
+
+  **This is one of the three clauses Decision 5 names, and the ADR previously implied it was all
+  of them.** What is NOT built, stated so nobody arms on a gate that has not run:
+  * the harness drives the interpreter and stops there — there is **no court close path in it**,
+    so no gate-accepted profile has ever been driven through a refutation, and the "zero closes
+    over the ceiling" clause has no implementation and no counter;
+  * "zero non-determinism between two architectures" is measured as two runs **in one process on
+    one machine**; the cross-architecture evidence this repo has is the manual arm64/x86-64
+    comparison of ONE real class, not a fuzz property;
+  * the differential covers two synthetic geometries (1×4×12 and 2×8×16 at vocab 64) — **not the
+    classes the build carries**, which is what clause (b) asks for.
+
+  The audit that found this also found an instance of exactly what the missing half would catch:
+  a per-layer operand declared in the pre/post table executed happily under layer 0 and left every
+  dispute unadjudicable. It is fixed and now refused at plan time — but it was found by reading,
+  not by the gate, and a gate that cannot see its own class of defect is not yet the gate
+  Decision 5 describes.
 * **The chain-only lattice walk**: a class in NO table — wire-shaped registration with the
   carriage riding — applied, served through the armed arm, committed, bound (the duty naming the
   replay lane), licensed, Final, and the producer-built receipt-spend envelope admitted in full.
@@ -281,5 +298,38 @@ choosing, which is one more reason seat payment (R-7) is the next economic ADR t
 
 Not landed, stated so the fence stays honest: the cache/eviction policy (Decision 6's ④ — the
 node has no artifact fetcher, so today the policy is the operator's and the declaration-first
-eviction rule is documentation), the mmap-container interpreter, and the arming itself — which
-waits, per Decision 5, on nothing now except the operational decision.
+eviction rule is documentation), the mmap-container interpreter, **the two missing clauses of
+Decision 5's arming gate** (the court-close arm of the fuzzer and the differential over the
+build's real classes), and the arming itself — which therefore waits on the gate, not merely on
+an operational decision. An earlier revision of this section said the opposite; it was wrong, and
+the correction is the point of writing these down.
+
+## What an adversarial audit found afterwards (2026-08-31)
+
+Eight lenses over the implementation, each finding faced by two skeptics whose job was to refute
+it: 28 raised, 10 survived, plus 4 from a completeness critic. What that bought, worst first:
+
+* **A seat certified work it never priced.** The replay arm compared roots and nothing else, while
+  a claim's `pwu` comes from the job shape its payload DECLARES and its `execution_root` rides
+  that payload verbatim — so a producer could declare a hundred-thousand-token job, serve a
+  one-token material whose roots were honestly that material's, and collect the quanta. Block
+  weight in this lane would have been purchasable with recycled collateral instead of inference,
+  which is the one property the lane exists to establish. Fixed: `PalwSeatDutyV2` carries the
+  claim's `pwu`/`quanta` and the seat re-prices what it actually ran.
+* **Every honest free-prompt claim would have defaulted its own producer.** The worker stamped
+  `misaka-palw-rc` into its job context (the FLOOR's baked-in constant) while a seat derives that
+  context under the node's own network name — two different context hashes, so no replay could
+  ever match, and a quorum of `Unavailable` burns the producer's reserve for work performed
+  correctly. Fixed: the network id is the operator's, required, with no default.
+* **A gossiped empty prompt panicked the panel task**, taking down every duty that seat held.
+* **Two gate-accepted profiles reached a panic or the wrong parameters** through the planner.
+* **`--palw-chain-classes` armed the panel and not the producer.**
+* Plus the reorg/status gates on the carriage read, and the honest corrections in this section.
+
+**One finding is recorded rather than fixed**: a node that joins by a PRUNED sync receives the
+class table wholesale and none of the carriage rows, so with the arm armed it refuses to serve
+classes the chain registered — the safe direction, and still a gap, because on a pruned-sync fleet
+only nodes that watched a registration go by can judge its class, and judging decides quorums.
+The store's module doc carries the two ways to close it (carry the carriages in the pruning-point
+sidecar, or serve a row from a peer — self-authenticating, since the profile hashes to the class
+id). Until one is built, `--palw-chain-classes` is for nodes that synced from genesis.

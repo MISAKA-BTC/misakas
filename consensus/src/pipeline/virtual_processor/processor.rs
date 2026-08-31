@@ -4126,12 +4126,29 @@ impl VirtualStateProcessor {
     ) -> Option<(kaspa_consensus_core::palw_step::PalwShapeProfileV3, kaspa_consensus_core::palw_v2::PalwJobContextV2)> {
         let state_params = self.palw_state_params_v2.as_ref()?;
         let (_, state) = self.palw_state_v2_store.read().load_tip(state_params).ok().flatten()?;
-        state.class(&class_id)?;
+        let class = state.class(&class_id)?;
+        // **Frozen means frozen for serving too.** The store's doc promised this read was gated on
+        // the class existing "and not being frozen", and only existence was in the code — so a
+        // node would have gone on producing and judging under a class the chain had STOPPED,
+        // which is the one state an emergency stop exists to prevent.
+        if matches!(class.status, kaspa_consensus_core::palw_state_v2::PalwClassStatusV2::Frozen { .. }) {
+            return None;
+        }
+        let registered_root = class.artifact_root;
         let record = self.palw_class_carriage_store.read().get(class_id)?;
         let carriage: kaspa_consensus_core::palw_state_v2::PalwClassAdmissionCarriageV2 = borsh::from_slice(&record.carriage).ok()?;
         // The id IS the profile's hash; a row that fails this was corrupted, and absent (None)
         // fails closed at every consumer.
         if carriage.profile.shape_profile_id() != class_id {
+            return None;
+        }
+        // **The canonical job is NOT covered by the class id, so the row is re-tied to the class
+        // the chain currently holds.** `class_id` hashes the profile alone; a registration that
+        // lost a reorg and the one that won can share an id while differing in the artifact root
+        // (which weights) and the canonical job (which prices the class). Existence alone let a
+        // losing branch's canonical through — this pins the root, so a row describing another
+        // registration of the same graph is refused rather than served.
+        if record.artifact_root != registered_root {
             return None;
         }
         Some((carriage.profile, carriage.canonical))
@@ -4638,6 +4655,7 @@ impl VirtualStateProcessor {
                             // node's index arrive with its chain.
                             if let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
                                 class_id,
+                                artifact_root,
                                 admission: Some(carriage),
                                 ..
                             } = &object
@@ -4646,6 +4664,7 @@ impl VirtualStateProcessor {
                                     Ok(bytes) => {
                                         let record = crate::model::stores::palw_class_carriage::PalwClassCarriageRecord {
                                             registered_daa: point.daa_score,
+                                            artifact_root: *artifact_root,
                                             carriage: bytes,
                                         };
                                         if let Err(err) = self.palw_class_carriage_store.write().insert(*class_id, record) {

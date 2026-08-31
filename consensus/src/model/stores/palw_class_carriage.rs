@@ -14,12 +14,28 @@
 //! # Why verbatim bytes, and why append-only
 //!
 //! Verbatim for the carriage store's own reason: a reader must decode exactly what admission
-//! validated, never a re-encoding. Append-only because the read side is EXISTENCE-GATED — a
-//! serving node first asks current state whether the class exists (and is not frozen), and only
-//! then reads the declaration here. A row left behind by a reorged-out registration is therefore
-//! inert: the state gate refuses before the row is ever consulted, and a re-registration of the
-//! same class id would carry the same profile (the id IS the profile's hash) so overwriting is
-//! idempotent by construction.
+//! validated, never a re-encoding. Append-only because the read side is GATED on current state —
+//! a serving node asks whether the class exists, is not frozen, and names the artifact root THIS
+//! row was registered under, and only then reads the declaration. The root check is what makes
+//! append-only safe: `class_id` hashes the profile ALONE, so a registration that lost a reorg and
+//! the one that won can share a key while differing in the weights they name and the canonical
+//! job that prices them — and the canonical job is not covered by the id at all.
+//!
+//! # The one place this index is NOT complete, said plainly
+//!
+//! **A node that joins by a pruned sync gets the class state and none of these rows.** The only
+//! writer is the chain-candidate accept path, and a pruning-point IBD never walks the blocks
+//! below the pruning point: `import_pruning_point_palw_state` brings the class table over
+//! wholesale and touches nothing here. Such a node therefore holds classes whose declarations it
+//! does not have, and — with the ADR-0067 arm armed — REFUSES to serve them, which reads as "this
+//! node cannot serve the registered class" rather than as the missing index it is.
+//!
+//! That refusal is the safe direction (it never serves a class it cannot prove), and it is a real
+//! gap: on a pruned-sync fleet only the nodes that watched a registration go by can judge its
+//! class, and judging is what decides quorums. Closing it means either carrying the accepted
+//! carriages in the pruning-point sidecar beside `PalwStateCarriageV2`, or serving a row from a
+//! peer on demand — which needs no trust, because `profile.shape_profile_id() == class_id` makes
+//! the bytes self-authenticating. Neither is built; the ADR records it as open.
 
 use std::sync::Arc;
 
@@ -32,13 +48,19 @@ use serde::{Deserialize, Serialize};
 /// Bump on ANY change to [`PalwClassCarriageRecord`]'s layout — see the registry prefix docs: an
 /// undecodable row reads as absent, and absence refuses service (fail-closed), but a silently
 /// empty store after a layout change would read as "nothing was ever registered".
-pub const PALW_CLASS_CARRIAGE_SCHEMA_VERSION: u32 = 1;
+pub const PALW_CLASS_CARRIAGE_SCHEMA_VERSION: u32 = 2;
 
 /// One accepted registration's declaration, as delivered.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PalwClassCarriageRecord {
     /// The DAA of the chain block whose lifecycle filter accepted the registration.
     pub registered_daa: u64,
+    /// **The artifact root this registration named.** `class_id` hashes the PROFILE only, so two
+    /// registrations of one graph — a reorged-out one and the live one — share a key while
+    /// differing in the weights they name and in the canonical job that prices them. The reader
+    /// pins this against the class the chain currently holds, which is what makes an append-only
+    /// store safe under reorg: a stale row is refused rather than served.
+    pub artifact_root: Hash64,
     /// `PalwClassAdmissionCarriageV2`, Borsh, verbatim.
     pub carriage: Vec<u8>,
 }

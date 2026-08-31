@@ -1008,9 +1008,41 @@ impl<'a> A16Engine<'a> {
         // The eps is an artifact field AND a profile field, and it moves every activation.
         check("rms_eps_q", profile.base0_rms_eps_q as u64, shape.eps_q as u64)?;
 
-        let pre = plan_table(&profile.pre_nodes, "pre", shape)?;
-        let layer = plan_table(&profile.attn_nodes, "layer", shape)?;
-        let post = plan_table(&profile.post_nodes, "post", shape)?;
+        // Each table's terminal width is the next table's input, and both must be the hidden
+        // stream: the residual is what flows pre -> layer -> layer -> post. A declaration whose
+        // table ends on something else is refused HERE rather than mis-executed later.
+        let terminal = |nodes: &[PalwStepNodeV1], table: &'static str| -> Result<u32, A16PlanErrorV1> {
+            match nodes.last().map(|n| n.out_len) {
+                Some(PalwStepOutLenV1::Fixed { elements }) => Ok(elements),
+                _ => Err(A16PlanErrorV1::UnservedNode {
+                    table,
+                    index: nodes.len().saturating_sub(1),
+                    reason: "the table's last node must produce a fixed-width row — it is the stream the next table reads".to_string(),
+                }),
+            }
+        };
+        let hidden = shape.d_model() as u32;
+        let pre = plan_table(&profile.pre_nodes, "pre", shape, None)?;
+        let pre_out = terminal(&profile.pre_nodes, "pre")?;
+        if pre_out != hidden {
+            return Err(A16PlanErrorV1::UnservedNode {
+                table: "pre",
+                index: profile.pre_nodes.len().saturating_sub(1),
+                reason: format!("the pre table ends at width {pre_out}, and a layer reads the hidden stream ({hidden})"),
+            });
+        }
+        let layer = plan_table(&profile.attn_nodes, "layer", shape, Some(hidden))?;
+        let layer_out = terminal(&profile.attn_nodes, "layer")?;
+        if layer_out != hidden {
+            return Err(A16PlanErrorV1::UnservedNode {
+                table: "layer",
+                index: profile.attn_nodes.len().saturating_sub(1),
+                reason: format!(
+                    "the layer table ends at width {layer_out}, and the residual it feeds is the hidden stream ({hidden})"
+                ),
+            });
+        }
+        let post = plan_table(&profile.post_nodes, "post", shape, Some(hidden))?;
         Ok(A16ProfilePlanV1 { pre, layer, post, layer_count: shape.n_layers })
     }
 
@@ -1164,6 +1196,9 @@ impl<'a> A16Engine<'a> {
                 PlanOp::Rope { kv } => {
                     let x = resolve(&node.inputs[0], &rows)?;
                     let heads = if kv { shape.n_kv_heads } else { shape.n_heads };
+                    if x.len() != heads * shape.d_head {
+                        return Err(A16EngineError::OpRefused("a rotation whose input is not its declared width"));
+                    }
                     let mut out = Vec::with_capacity(x.len());
                     for hd in 0..heads {
                         let slice = &x[hd * shape.d_head..(hd + 1) * shape.d_head];
@@ -1247,8 +1282,20 @@ impl<'a> A16Engine<'a> {
 
 /// Compile one declared table. Every refusal names the node and the reason — this function IS
 /// the kernel-set boundary of ADR-0067 Decision 3.
-fn plan_table(nodes: &[PalwStepNodeV1], table: &'static str, shape: &Base0ShapeV1) -> Result<Vec<PlanNode>, A16PlanErrorV1> {
+fn plan_table(
+    nodes: &[PalwStepNodeV1],
+    table: &'static str,
+    shape: &Base0ShapeV1,
+    layer_in: Option<u32>,
+) -> Result<Vec<PlanNode>, A16PlanErrorV1> {
     use kaspa_consensus_core::palw_step::PalwStepOpKindV1 as Op;
+
+    // **Only the layer table has a layer.** A `blk.{layer}.*` operand names a per-layer parameter
+    // row, and `walk_table` resolves the layer as `layer.unwrap_or(0)` — so a pre or post node
+    // carrying one would silently execute under layer 0's parameters. The class would run and
+    // certify; its every dispute would then be unadjudicable, because the court walks the
+    // DECLARED graph and the declaration says nothing about which layer that node meant.
+    let per_layer_ok = table == "layer";
 
     let k_embed = kernel_semantics_id_v1(KDESC_A16_EMBED);
     let k_req = kernel_semantics_id_v1(KDESC_A16_REQUANTIZE);
@@ -1311,7 +1358,12 @@ fn plan_table(nodes: &[PalwStepNodeV1], table: &'static str, shape: &Base0ShapeV
         let width_of = |input: &PlanInput| -> W {
             match input {
                 PlanInput::Row(i) => widths[*i],
-                PlanInput::LayerIn => W::Fixed(d),
+                // NOT an assumption: the caller passes the producing table's terminal width, because
+                // `forward_token_planned` feeds this table whatever the previous table's LAST declared
+                // node produced. Assuming hidden width here let a gate-accepted profile hand a
+                // kv-width residual to a hidden-width consumer, and `PlanOp::Rope` slices by hand —
+                // an out-of-bounds panic where a refusal belonged.
+                PlanInput::LayerIn => layer_in.map(W::Fixed).unwrap_or(W::Series),
                 PlanInput::CachedK | PlanInput::CachedV => W::Series,
             }
         };
@@ -1346,6 +1398,9 @@ fn plan_table(nodes: &[PalwStepNodeV1], table: &'static str, shape: &Base0ShapeV
         };
 
         let name = node.weight_name.as_str();
+        if !per_layer_ok && strip_layer(name).is_some() {
+            return Err(refuse(index, format!("operand {name:?} names a per-layer row, and the {table} table has no layer")));
+        }
         let kid = node.kernel_semantics_id;
         let op = match (node.op_kind, name) {
             (Op::EmbedLookup, "token_embd.weight") if kid == k_embed => {
@@ -1577,6 +1632,43 @@ mod profile_plan_tests {
             }
             assert_eq!(compiled_cache.keys, planned_cache.keys, "the caches must be the same state");
             assert_eq!(compiled_cache.values, planned_cache.values);
+        }
+    }
+
+    /// **The audit's own findings, as tests.** Each of these was a gate-accepted profile that the
+    /// planner let through and the forward then panicked on, or executed under the wrong
+    /// parameters — found by adversarial review of this file (2026-08-31), and each is now a
+    /// named refusal at PLAN time.
+    #[test]
+    fn a_gate_accepted_profile_cannot_reach_a_panic_through_the_plan() {
+        let artifact = artifact(1, 4, 12);
+        let engine = A16Engine::new(&artifact).expect("the store resolves");
+        let good = qwen25_a16_profile_v2(geometry(&artifact)).expect("builds");
+        let hidden = artifact.shape.d_model() as u32;
+        let kv_dim = artifact.shape.kv_dim() as u32;
+
+        // (1) A pre table that ends at a width no layer reads. `forward_token_planned` feeds the
+        // layer table `rows.last()`, so this used to hand a kv-width residual to a hidden-width
+        // consumer — and `PlanOp::Rope` slices by hand, which is an out-of-bounds panic.
+        let mut narrow_pre = good.clone();
+        narrow_pre.pre_nodes[1].out_len = PalwStepOutLenV1::Fixed { elements: kv_dim };
+        assert_ne!(kv_dim, hidden, "the fixture must actually be GQA or this proves nothing");
+        match engine.plan_from_profile(&narrow_pre) {
+            Err(A16PlanErrorV1::UnservedNode { table: "pre", .. }) => {}
+            other => panic!("a pre table that does not end on the hidden stream must be refused, got {other:?}"),
+        }
+
+        // (2) A per-layer operand in a table that HAS no layer. The walk resolves the layer as
+        // `unwrap_or(0)`, so this used to execute silently under layer 0's parameters: a class
+        // that runs and certifies, and whose every dispute is unadjudicable because the court
+        // walks a declaration that never said which layer it meant.
+        let mut per_layer_in_post = good.clone();
+        per_layer_in_post.post_nodes[1].weight_name = "blk.{layer}.attn_norm.a16".into();
+        match engine.plan_from_profile(&per_layer_in_post) {
+            Err(A16PlanErrorV1::UnservedNode { table: "post", reason, .. }) => {
+                assert!(reason.contains("per-layer"), "the refusal names why: {reason}");
+            }
+            other => panic!("a per-layer operand outside the layer table must be refused, got {other:?}"),
         }
     }
 

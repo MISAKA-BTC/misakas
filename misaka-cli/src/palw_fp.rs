@@ -68,30 +68,52 @@ pub async fn submit(ctx: &Ctx, path: &Path, yes: bool, material_out: Option<&Pat
         return Ok(());
     }
 
-    let nv = connect(ctx).await?;
-    let submitted = nv
-        .client
-        .submit_transaction(RpcTransaction::from(&tx), false)
-        .await
-        .map_err(|e| CliError::new(exit::GENERIC, format!("submit {txid}: {e}")))?;
+    // **Everything that can fail about the material is done BEFORE the broadcast.**
+    //
+    // It used to run entirely after, on the reasoning that a material for a claim the chain never
+    // saw would make a panel replay a ghost. That reasoning is right about the FINAL file and
+    // wrong about the work: a decode error or an unwritable directory then surfaced only once the
+    // claim was already on chain, and re-running could not repair it — the second run hits
+    // `submit_transaction` first, which refuses an already-accepted transaction and returns
+    // before the material block. The claim would sit there, certifiable by nobody, with its
+    // producer's bond carrying the exposure.
+    //
+    // So: encode and stage to a `.partial` now (the producer's own retention discipline —
+    // `retain_execution` writes then renames), broadcast, and rename only after acceptance. A
+    // reader never sees a half-written obligation, and a failure that can be caught early is.
+    let staged = match material_out {
+        Some(dir) => {
+            let payload: kaspa_consensus_core::palw_freeprompt_v3::PalwFpCommitmentTxPayloadV3 = borsh::from_slice(&tx.payload)
+                .map_err(|e| {
+                    CliError::new(exit::GENERIC, format!("this payload does not decode, so no material can be written: {e}"))
+                })?;
+            let claim = kaspa_consensus_core::palw_freeprompt_v3::fp_claim_id_v3(&payload.commitment);
+            let bytes = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_material_encode_v1(
+                &payload.commitment.job,
+                &payload.prompt_token_ids,
+            );
+            std::fs::create_dir_all(dir).map_err(|e| CliError::new(exit::GENERIC, format!("{}: {e}", dir.display())))?;
+            let file = dir.join(format!("{claim}.material"));
+            let partial = file.with_extension("material.partial");
+            std::fs::write(&partial, &bytes).map_err(|e| CliError::new(exit::GENERIC, format!("{}: {e}", partial.display())))?;
+            Some((partial, file))
+        }
+        None => None,
+    };
 
-    // The DA half of the submission, discharged where the claim id is known. The payload the
-    // node accepted carries the job and the PublicDA prompt ids; the FPM1 file is those two
-    // fields under the claim's own name, which is exactly what a seat's replay needs and what
-    // the producer's re-broadcast loop serves. Written AFTER the node accepted the transaction:
-    // a material for a claim the chain never saw would make the panel replay a ghost.
+    let nv = connect(ctx).await?;
+    let submitted = nv.client.submit_transaction(RpcTransaction::from(&tx), false).await.map_err(|e| {
+        // The staged file is not a claim's material if the claim never reached the chain.
+        if let Some((partial, _)) = &staged {
+            let _ = std::fs::remove_file(partial);
+        }
+        CliError::new(exit::GENERIC, format!("submit {txid}: {e}"))
+    })?;
+
+    // Accepted: the obligation is real, so the file takes its real name.
     let mut material_note: Option<String> = None;
-    if let Some(dir) = material_out {
-        let payload: kaspa_consensus_core::palw_freeprompt_v3::PalwFpCommitmentTxPayloadV3 =
-            borsh::from_slice(&tx.payload).map_err(|e| {
-                CliError::new(exit::GENERIC, format!("the accepted payload does not decode — not writing a material: {e}"))
-            })?;
-        let claim = kaspa_consensus_core::palw_freeprompt_v3::fp_claim_id_v3(&payload.commitment);
-        let bytes =
-            kaspa_consensus_core::palw_freeprompt_v3::palw_fp_material_encode_v1(&payload.commitment.job, &payload.prompt_token_ids);
-        std::fs::create_dir_all(dir).map_err(|e| CliError::new(exit::GENERIC, format!("{}: {e}", dir.display())))?;
-        let file = dir.join(format!("{claim}.material"));
-        std::fs::write(&file, &bytes).map_err(|e| CliError::new(exit::GENERIC, format!("{}: {e}", file.display())))?;
+    if let Some((partial, file)) = staged {
+        std::fs::rename(&partial, &file).map_err(|e| CliError::new(exit::GENERIC, format!("{}: {e}", file.display())))?;
         material_note = Some(file.display().to_string());
     }
 

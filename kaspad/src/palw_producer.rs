@@ -251,11 +251,17 @@ impl PalwProducerService {
     }
 
     fn backends(&self) -> crate::palw_backends::PalwBackendRegistry {
-        crate::palw_backends::PalwBackendRegistry::new(
-            self.config.court,
-            self.class_holdings.clone(),
-            self.config.network_id.as_bytes().to_vec(),
-        )
+        // **Armed here or the flag is half a flag.** `resolve_or_chain`'s chain arm goes through
+        // the SDK's `resolve_chain_registered`, which refuses unless the SDK ITSELF was armed — so
+        // a registry built unarmed made `--palw-chain-classes` inert on the producer no matter
+        // what the config said, while the panel's half worked. The two halves must agree, and the
+        // agreement is this constructor.
+        let net = self.config.network_id.as_bytes().to_vec();
+        if self.config.chain_classes {
+            crate::palw_backends::PalwBackendRegistry::new_with_chain_classes(self.config.court, self.class_holdings.clone(), net)
+        } else {
+            crate::palw_backends::PalwBackendRegistry::new(self.config.court, self.class_holdings.clone(), net)
+        }
     }
 
     /// Takes the ALREADY-ENCODED material rather than the run: the encoding is the backend's,

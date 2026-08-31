@@ -55,16 +55,60 @@ fn rows_digest(rows: &[Vec<i32>]) -> kaspa_hashes::Hash64 {
     kaspa_hashes::Hash64::from_bytes(out)
 }
 
+/// **The slice runs through the INTERPRETER, on a profile built for the slice's own geometry.**
+///
+/// The first version of this ran `forward_token` — the COMPILED path — and so proved nothing
+/// about the only path a chain-registered class ever executes through. Worse, it was blind by
+/// construction to the divergence class ADR-0067 exists for: two builds whose logits agree can
+/// still commit different step legs, and a logits-only digest cannot tell them apart. So the
+/// digest now covers **every committed row of every table**, produced by walking a plan compiled
+/// from a declaration — which is what a candidate operator actually needs to know will work.
+///
+/// A plan that will not compile is the honest failure: this build cannot serve that graph, and
+/// saying so for megabytes is the whole point of the tier.
 fn run_slice(path: &str) -> (kaspa_hashes::Hash64, kaspa_hashes::Hash64, usize, usize) {
     let bytes = std::fs::read(path).unwrap_or_else(|e| die(format!("{path}: {e}")));
     let artifact = decode_artifact_file_v1(&bytes).unwrap_or_else(|e| die(format!("{path}: {e}")));
     let engine = A16Engine::new(&artifact).unwrap_or_else(|e| die(format!("the slice is not an A16 artifact: {e:?}")));
+
+    // The declaration this slice's geometry implies — the corrected graph, which is the one a
+    // registrable A16 class carries.
+    let g = kaspa_consensus_core::palw_qwen25_profile::PalwQwen25GeometryV1 {
+        layer_count: artifact.shape.n_layers as u16,
+        hidden_dim: artifact.shape.d_model() as u32,
+        ffn_dim: artifact.shape.d_ff as u32,
+        attn_heads: artifact.shape.n_heads as u16,
+        attn_kv_heads: artifact.shape.n_kv_heads as u16,
+        attn_head_dim: artifact.shape.d_head as u32,
+        vocab_size: artifact.shape.vocab as u32,
+        n_ctx: (schedule(artifact.shape.vocab).len() as u32).max(2),
+        n_threads: 1,
+        rms_eps_q: artifact.shape.eps_q,
+        tile_len: 4,
+    };
+    let profile = kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_profile_v2(g)
+        .unwrap_or_else(|e| die(format!("this slice's geometry does not project a profile: {e:?}")));
+    let plan = engine.plan_from_profile(&profile).unwrap_or_else(|e| {
+        die(format!(
+            "this build cannot serve the graph this slice implies: {e:?} — which is exactly what a validation \
+             artifact exists to tell you, for megabytes instead of gigabytes"
+        ))
+    });
+
     let mut cache = A16Cache::new(artifact.shape.n_layers);
     let tokens = schedule(artifact.shape.vocab);
-    let mut rows = Vec::with_capacity(tokens.len());
+    // Every committed row, not just the logits: the step leg is what a court walks, and two
+    // builds can agree on logits while disagreeing on it.
+    let mut rows: Vec<Vec<i32>> = Vec::new();
     for (position, token) in tokens.iter().enumerate() {
-        let row = engine.forward_token(&mut cache, *token, position).unwrap_or_else(|e| die(format!("position {position}: {e:?}")));
-        rows.push(row);
+        let (_, trace) = engine
+            .forward_token_planned(&plan, &mut cache, *token, position)
+            .unwrap_or_else(|e| die(format!("position {position}: {e:?}")));
+        rows.extend(trace.pre);
+        for layer in trace.attn {
+            rows.extend(layer);
+        }
+        rows.extend(trace.post);
     }
     (artifact.artifact_digest(), rows_digest(&rows), artifact.shape.n_layers, artifact.shape.vocab)
 }

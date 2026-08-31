@@ -328,6 +328,15 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         if job.prompt_tokens as usize != prompt_tokens.len() {
             return Err(format!("the job declares {} prompt tokens and {} were supplied", job.prompt_tokens, prompt_tokens.len()));
         }
+        // **An empty prompt is refused HERE, where every other malformed job is.** The graceful
+        // answer used to live at the end (`an empty prefill`, after the whole loop), and the
+        // Decision-F probe below indexes `prompt_tokens[0]` before reaching it — so a zero-token
+        // job PANICKED. That is network-reachable: a free-prompt material is gossiped by anyone,
+        // a seat replays it in-process, and a panicked panel task stops filing receipts for every
+        // claim it holds, not just this one.
+        if prompt_tokens.is_empty() {
+            return Err("a job with no prompt tokens is not a job".to_string());
+        }
         let vocab = self.artifact.shape.vocab;
         if let Some(bad) = prompt_tokens.iter().find(|t| **t >= vocab) {
             return Err(format!("token {bad} is outside this class's vocabulary of {vocab}"));
@@ -381,7 +390,11 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         // shape profile id, and therefore registers a different class.
         if self.plan.is_none() {
             let probe = engine
-                .forward_token_traced(&mut A16Cache::new(self.artifact.shape.n_layers), prompt_tokens[0], 0)
+                .forward_token_traced(
+                    &mut A16Cache::new(self.artifact.shape.n_layers),
+                    *prompt_tokens.first().ok_or("a job with no prompt tokens is not a job")?,
+                    0,
+                )
                 .map_err(|e| format!("probing the graph: {e:?}"))?
                 .1;
             let (declared_pre, recorded_pre) = (self.profile.pre_nodes.len(), probe.pre.len());
