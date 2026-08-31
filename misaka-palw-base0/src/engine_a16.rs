@@ -608,11 +608,18 @@ impl<'a> A16Engine<'a> {
             let unit = push(&mut nodes, a16_rms_norm(&h, shape.eps_q).map_err(refuse("norm2"))?);
             let normed = push(&mut nodes, a16_requant(&unit, &lp.ffn_norm).map_err(refuse("norm2_req"))?);
             let gate_q = push(&mut nodes, a16_matmul_rescale(self.fast, &lw.w_gate, &normed, &lp.gate).map_err(refuse("gate"))?);
+            // **In the DECLARED order: up before the silu chain** (ADR-0067). The step-leg
+            // capture places rows at profile coordinates BY POSITION (`a16_captured_rows_v1`
+            // reorders nothing), so a trace emitted in any other order commits the silu row at
+            // the slot the class declares as the up-projection — and a court bisecting there
+            // recomputes the declaration, convicting an honest producer. Caught by the
+            // interpreter differential before any claim of this class reached a chain; the
+            // dataflow is unchanged, only the emission order conforms to the declaration.
+            let up_params = if sink { &lp.up_sink } else { &lp.up };
+            let up = push(&mut nodes, a16_matmul_requant(self.fast, &lw.w_up, &normed, up_params).map_err(refuse("up"))?);
             let silu_q = push(&mut nodes, silu(&gate_q));
             let s_p = if sink { lp.silu_sink } else { lp.silu_q };
             let s16 = push(&mut nodes, a16_requant(&silu_q, &tile(s_p, shape.d_ff)).map_err(refuse("silu16"))?);
-            let up_params = if sink { &lp.up_sink } else { &lp.up };
-            let up = push(&mut nodes, a16_matmul_requant(self.fast, &lw.w_up, &normed, up_params).map_err(refuse("up"))?);
             let prod = push(&mut nodes, a16_mul_elem(&s16, &up).map_err(refuse("mul"))?);
             let g_p = if sink { lp.gated_sink } else { lp.gated };
             let gated = push(&mut nodes, a16_requant(&prod, &tile(g_p, shape.d_ff)).map_err(refuse("gated"))?);
@@ -846,5 +853,754 @@ mod tests {
         let second = engine.forward_token(&mut cache, 9, 1).expect("decodes");
         assert_ne!(first, second, "a different token at a different position must move the logits");
         assert!(first.iter().any(|v| *v != 0), "an all-zero logit row is a dead pass");
+    }
+}
+
+// =============================================================================================
+// ADR-0067: execution FROM the registered profile
+// =============================================================================================
+//
+// Everything above executes a HARDCODED op sequence that the class's profile merely describes —
+// which is why ADR-0049 Decision F needs a correspondence check at all: two authorities, one
+// arithmetic. This half inverts the authority. A plan is compiled from the `PalwShapeProfileV3`
+// the CHAIN registered: each declared node is bound to a kernel this build serves and to the
+// named operand in the artifact's store, and execution walks the declaration. An engine built
+// from the profile cannot perform a narrowing the profile does not name — Decision F stops being
+// a check and becomes the constructor — and a class whose graph this build cannot serve is
+// refused AT PLAN TIME with the node named, which is ADR-0067 Decision 3's kernel boundary
+// surfacing exactly where it is crossed.
+//
+// The dispatch below is deliberately a closed vocabulary: (op kind, kernel semantics id, operand
+// name shape) triples this build's kernels serve. It is NOT a general dataflow VM — width rules,
+// input arities and the position-0 sink convention are the A16 family's kernel semantics, and a
+// profile is served only where its declaration lands inside them. Anything else is a named
+// refusal, because "almost servable" executed approximately is how an honest producer gets
+// convicted.
+
+use kaspa_consensus_core::palw_step::{
+    PALW_STEP_INPUT_KV_K, PALW_STEP_INPUT_KV_V, PALW_STEP_INPUT_LAYER_IN, PALW_STEP_INPUT_SENTINEL_MIN, PalwShapeProfileV3,
+    PalwStepLaneV1, PalwStepNodeV1, PalwStepOutLenV1, kernel_semantics_id_v1,
+};
+use kaspa_consensus_core::palw_step_refute::{
+    KDESC_A16_ADD_ELEM, KDESC_A16_ATTN_SCORES, KDESC_A16_ATTN_VALUES, KDESC_A16_EMBED, KDESC_A16_MATMUL_REQUANT,
+    KDESC_A16_MATMUL_RESCALE, KDESC_A16_MUL_ELEM, KDESC_A16_REQUANTIZE, KDESC_A16_RMS_NORM, KDESC_A16_ROPE, KDESC_A16_SOFTMAX,
+    KDESC_Q36_SILU,
+};
+
+/// Why a profile could not be compiled to a plan. Every variant names the boundary it found —
+/// a plan error is the kernel-set boundary of ADR-0067 Decision 3 speaking, so it must say
+/// WHICH declaration this build cannot serve, not merely that one exists.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum A16PlanErrorV1 {
+    /// The profile's declared geometry is not this artifact's. The pairing is wrong at the root;
+    /// no node-level answer would mean anything.
+    GeometryMismatch { what: &'static str, profile: u64, artifact: u64 },
+    /// The profile's lane is not the integer lane this family commits.
+    NotAnIntegerLane,
+    /// A declared node is outside this build's served vocabulary. `table` is "pre" / "layer" /
+    /// "post"; the reason names the missing piece (kernel, operand, width, arity or dtype).
+    UnservedNode { table: &'static str, index: usize, reason: String },
+}
+
+/// A node's data input, resolved at plan time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PlanInput {
+    /// An earlier node's committed row in the same table.
+    Row(usize),
+    /// The table's input stream: the pre output for the layer table (and the running residual
+    /// between layers), the last layer's output for the post table.
+    LayerIn,
+    /// The rotated-key series, position-major, full `kv_dim` rows — the court's canonical
+    /// concatenation.
+    CachedK,
+    /// The value series, likewise.
+    CachedV,
+}
+
+/// The per-layer A16 requant table a planned node reads. Slots, not names, because the names
+/// were resolved at plan time — execution must not re-parse strings per token.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReqSlot {
+    EmbedLift,
+    AttnNorm,
+    Probs,
+    AttnAlign,
+    AttnResidual,
+    FfnNorm,
+    SiluQ,
+    Gated,
+    FfnAlign,
+    FfnResidual,
+    FinalNorm,
+}
+
+/// The weight-bearing matmul sites. Each carries both the tensor and the requant/rescale table
+/// the engine's parameter store associates with that site (with the position-0 sink variant
+/// where the store declares one).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MatSlot {
+    Q,
+    K,
+    V,
+    Wo,
+    Gate,
+    Up,
+    Down,
+    Head,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PlanOp {
+    EmbedGather,
+    RmsNorm,
+    Requant(ReqSlot),
+    MatMulRequant(MatSlot),
+    MatMulRescale(MatSlot),
+    Rope { kv: bool },
+    AttnScores,
+    Softmax,
+    AttnValues,
+    AddElem,
+    MulElem,
+    Silu,
+}
+
+#[derive(Clone, Debug)]
+struct PlanNode {
+    op: PlanOp,
+    inputs: Vec<PlanInput>,
+    role: kaspa_consensus_core::palw_step::PalwStepNodeRoleV1,
+}
+
+/// A compiled execution plan: the registered profile, validated against this build's kernel
+/// vocabulary and this artifact's operand store, ready to walk. Holding one is the proof that
+/// every declared node is servable — construction is the admission check.
+#[derive(Clone, Debug)]
+pub struct A16ProfilePlanV1 {
+    pre: Vec<PlanNode>,
+    layer: Vec<PlanNode>,
+    post: Vec<PlanNode>,
+    layer_count: usize,
+}
+
+impl<'a> A16Engine<'a> {
+    /// Compile the registered profile into a plan this engine can walk.
+    ///
+    /// Refusals here are the ADR-0067 kernel boundary: the class declared arithmetic this build
+    /// does not serve, and the error names the node. A `Ok` is a structural Decision-F proof —
+    /// execution will emit exactly one row per declared node, in the declared order, from the
+    /// declared operands, because the declaration is the program.
+    pub fn plan_from_profile(&self, profile: &PalwShapeProfileV3) -> Result<A16ProfilePlanV1, A16PlanErrorV1> {
+        let shape = &self.artifact.shape;
+        let check = |what: &'static str, p: u64, a: u64| -> Result<(), A16PlanErrorV1> {
+            if p != a { Err(A16PlanErrorV1::GeometryMismatch { what, profile: p, artifact: a }) } else { Ok(()) }
+        };
+        if profile.lane != PalwStepLaneV1::Int32 {
+            return Err(A16PlanErrorV1::NotAnIntegerLane);
+        }
+        check("layer_count", profile.layer_count as u64, shape.n_layers as u64)?;
+        check("hidden_dim", profile.hidden_dim as u64, shape.d_model() as u64)?;
+        check("ffn_dim", profile.ffn_dim as u64, shape.d_ff as u64)?;
+        check("attn_heads", profile.attn_heads as u64, shape.n_heads as u64)?;
+        check("attn_kv_heads", profile.attn_kv_heads as u64, shape.n_kv_heads as u64)?;
+        check("attn_head_dim", profile.attn_head_dim as u64, shape.d_head as u64)?;
+        check("vocab_size", profile.vocab_size as u64, shape.vocab as u64)?;
+        // The eps is an artifact field AND a profile field, and it moves every activation.
+        check("rms_eps_q", profile.base0_rms_eps_q as u64, shape.eps_q as u64)?;
+
+        let pre = plan_table(&profile.pre_nodes, "pre", shape)?;
+        let layer = plan_table(&profile.attn_nodes, "layer", shape)?;
+        let post = plan_table(&profile.post_nodes, "post", shape)?;
+        Ok(A16ProfilePlanV1 { pre, layer, post, layer_count: shape.n_layers })
+    }
+
+    /// One position's forward, EXECUTED FROM THE PLAN: one committed row per declared node, in
+    /// the declared order. Bit-compatible with [`Self::forward_token_traced`] whenever the plan
+    /// was compiled from the profile that describes this engine — pinned by
+    /// `the_interpreter_and_the_compiled_engine_agree_bit_for_bit` below — and faithful to the
+    /// DECLARATION where the two differ, which is the point of ADR-0067: the court adjudicates
+    /// what was declared, so an interpreter must execute exactly that.
+    pub fn forward_token_planned(
+        &self,
+        plan: &A16ProfilePlanV1,
+        cache: &mut A16Cache,
+        token_id: usize,
+        position: usize,
+    ) -> Result<(Vec<i32>, A16TraceV1), A16EngineError> {
+        if plan.layer_count != self.artifact.shape.n_layers {
+            return Err(A16EngineError::MalformedParams("plan/artifact layer count"));
+        }
+        let (cos_row, sin_row) = self.artifact.rope.row(position).ok_or(A16EngineError::PositionOutOfRange)?;
+        let sink = position == 0;
+        let mut trace = A16TraceV1::default();
+
+        let mut h: Vec<i32> = Vec::new();
+        // ---- pre --------------------------------------------------------------------------
+        let rows = self.walk_table(&plan.pre, None, token_id, sink, cos_row, sin_row, None)?;
+        if let Some(last) = rows.last() {
+            h = last.clone();
+        }
+        trace.pre = rows;
+
+        // ---- layers -----------------------------------------------------------------------
+        for li in 0..plan.layer_count {
+            let rows = self.walk_table(&plan.layer, Some(&h), token_id, sink, cos_row, sin_row, Some((li, cache)))?;
+            h = rows.last().cloned().ok_or(A16EngineError::MalformedParams("an empty layer table"))?;
+            trace.attn.push(rows);
+        }
+
+        // ---- post -------------------------------------------------------------------------
+        let rows = self.walk_table(&plan.post, Some(&h), token_id, sink, cos_row, sin_row, None)?;
+        let logits = rows.last().cloned().ok_or(A16EngineError::MalformedParams("an empty post table"))?;
+        trace.post = rows;
+        Ok((logits, trace))
+    }
+
+    /// Walk one table of the plan. `layer` is `Some((index, cache))` for the layer table — the
+    /// only table with cache reads and writes — and `layer_in` is the table's input stream.
+    #[allow(clippy::too_many_arguments)]
+    fn walk_table(
+        &self,
+        table: &[PlanNode],
+        layer_in: Option<&Vec<i32>>,
+        token_id: usize,
+        sink: bool,
+        cos_row: &[i32],
+        sin_row: &[i32],
+        mut layer: Option<(usize, &mut A16Cache)>,
+    ) -> Result<Vec<Vec<i32>>, A16EngineError> {
+        let shape = &self.artifact.shape;
+        let d = shape.d_model();
+        let kv_dim = shape.kv_dim();
+        let refuse =
+            |what: &'static str| move |_e: kaspa_consensus_core::palw_base0_a16::PalwA16OpError| A16EngineError::OpRefused(what);
+        let tile = |p: A16QuantParams, n: usize| -> Vec<A16QuantParams> { vec![p; n] };
+
+        let mut rows: Vec<Vec<i32>> = Vec::with_capacity(table.len());
+        for node in table {
+            // Resolve the declared inputs against what this walk holds.
+            let resolve = |input: &PlanInput, rows: &Vec<Vec<i32>>| -> Result<Vec<i32>, A16EngineError> {
+                match input {
+                    PlanInput::Row(i) => rows.get(*i).cloned().ok_or(A16EngineError::MalformedParams("a forward input ref")),
+                    PlanInput::LayerIn => layer_in.cloned().ok_or(A16EngineError::MalformedParams("layer input outside a layer")),
+                    // The series are built at USE, so a read after this position's cache write
+                    // sees the same history the compiled engine hands the kernels.
+                    PlanInput::CachedK | PlanInput::CachedV => {
+                        let Some((li, cache)) = layer.as_ref() else {
+                            return Err(A16EngineError::MalformedParams("a cache read outside a layer"));
+                        };
+                        let series = match input {
+                            PlanInput::CachedK => &cache.keys[*li],
+                            _ => &cache.values[*li],
+                        };
+                        let mut out = Vec::with_capacity(series.len() * kv_dim);
+                        for row in series {
+                            out.extend_from_slice(row);
+                        }
+                        Ok(out)
+                    }
+                }
+            };
+
+            let lp = |li: usize| -> &LayerParams { &self.layers[li] };
+            let out: Vec<i32> = match node.op {
+                PlanOp::EmbedGather => {
+                    self.artifact.embed[token_id * d..(token_id + 1) * d].iter().map(|c| *c as i32).collect()
+                }
+                PlanOp::RmsNorm => {
+                    let x = resolve(&node.inputs[0], &rows)?;
+                    a16_rms_norm(&x, shape.eps_q).map_err(refuse("rms_norm"))?
+                }
+                PlanOp::Requant(slot) => {
+                    let x = resolve(&node.inputs[0], &rows)?;
+                    let li = layer.as_ref().map(|(li, _)| *li).unwrap_or(0);
+                    let params: Vec<A16QuantParams> = match slot {
+                        ReqSlot::EmbedLift => tile(self.embed_lift, d),
+                        ReqSlot::AttnNorm => lp(li).attn_norm.clone(),
+                        ReqSlot::Probs => {
+                            let history = x.len() / shape.n_heads.max(1);
+                            tile(lp(li).probs, shape.n_heads * history)
+                        }
+                        ReqSlot::AttnAlign => tile(if sink { lp(li).attn_align_sink } else { lp(li).attn_align }, d),
+                        ReqSlot::AttnResidual => tile(lp(li).attn_residual, d),
+                        ReqSlot::FfnNorm => lp(li).ffn_norm.clone(),
+                        ReqSlot::SiluQ => tile(if sink { lp(li).silu_sink } else { lp(li).silu_q }, shape.d_ff),
+                        ReqSlot::Gated => tile(if sink { lp(li).gated_sink } else { lp(li).gated }, shape.d_ff),
+                        ReqSlot::FfnAlign => tile(if sink { lp(li).ffn_align_sink } else { lp(li).ffn_align }, d),
+                        ReqSlot::FfnResidual => tile(lp(li).ffn_residual, d),
+                        ReqSlot::FinalNorm => self.final_norm.clone(),
+                    };
+                    a16_requant(&x, &params).map_err(refuse("requant"))?
+                }
+                PlanOp::MatMulRequant(slot) => {
+                    let x = resolve(&node.inputs[0], &rows)?;
+                    let li = layer.as_ref().map(|(li, _)| *li).unwrap_or(0);
+                    let (w, params): (&[i8], Vec<A16QuantParams>) = match slot {
+                        MatSlot::Q => (&self.artifact.layers[li].wq, lp(li).q.clone()),
+                        MatSlot::K => (&self.artifact.layers[li].wk, lp(li).k.clone()),
+                        MatSlot::V => (&self.artifact.layers[li].wv, lp(li).v.clone()),
+                        MatSlot::Wo => {
+                            (&self.artifact.layers[li].wo, if sink { lp(li).wo_sink.clone() } else { lp(li).wo.clone() })
+                        }
+                        MatSlot::Up => {
+                            (&self.artifact.layers[li].w_up, if sink { lp(li).up_sink.clone() } else { lp(li).up.clone() })
+                        }
+                        MatSlot::Down => {
+                            (&self.artifact.layers[li].w_down, if sink { lp(li).down_sink.clone() } else { lp(li).down.clone() })
+                        }
+                        MatSlot::Head => (&self.artifact.unembed, tile(self.logits_out, shape.vocab)),
+                        MatSlot::Gate => return Err(A16EngineError::MalformedParams("gate is a rescale site")),
+                    };
+                    a16_matmul_requant(self.fast, w, &x, &params).map_err(refuse("matmul_requant"))?
+                }
+                PlanOp::MatMulRescale(slot) => {
+                    let x = resolve(&node.inputs[0], &rows)?;
+                    let li = layer.as_ref().map(|(li, _)| *li).unwrap_or(0);
+                    let (w, params) = match slot {
+                        MatSlot::Gate => (&self.artifact.layers[li].w_gate, lp(li).gate.clone()),
+                        _ => return Err(A16EngineError::MalformedParams("a rescale site that is not the gate")),
+                    };
+                    a16_matmul_rescale(self.fast, w, &x, &params).map_err(refuse("matmul_rescale"))?
+                }
+                PlanOp::Rope { kv } => {
+                    let x = resolve(&node.inputs[0], &rows)?;
+                    let heads = if kv { shape.n_kv_heads } else { shape.n_heads };
+                    let mut out = Vec::with_capacity(x.len());
+                    for hd in 0..heads {
+                        let slice = &x[hd * shape.d_head..(hd + 1) * shape.d_head];
+                        out.extend(a16_rope(slice, cos_row, sin_row).map_err(|_| A16EngineError::OpRefused("rope"))?);
+                    }
+                    out
+                }
+                PlanOp::AttnScores => {
+                    let q = resolve(&node.inputs[0], &rows)?;
+                    let k_series = resolve(&node.inputs[1], &rows)?;
+                    let li = layer.as_ref().map(|(li, _)| *li).unwrap_or(0);
+                    let history = k_series.len() / kv_dim.max(1);
+                    a16_attn_scores(
+                        self.fast,
+                        &q,
+                        &k_series,
+                        shape.n_heads,
+                        shape.n_kv_heads,
+                        shape.d_head,
+                        &tile(lp(li).logits, shape.n_heads * history),
+                    )
+                    .map_err(refuse("attn_scores"))?
+                }
+                PlanOp::Softmax => {
+                    let x = resolve(&node.inputs[0], &rows)?;
+                    let li = layer.as_ref().map(|(li, _)| *li).unwrap_or(0);
+                    let history = x.len() / shape.n_heads.max(1);
+                    a16_softmax_rows(&x, history, lp(li).softmax_up).map_err(refuse("softmax"))?
+                }
+                PlanOp::AttnValues => {
+                    let p = resolve(&node.inputs[0], &rows)?;
+                    let v_series = resolve(&node.inputs[1], &rows)?;
+                    let li = layer.as_ref().map(|(li, _)| *li).unwrap_or(0);
+                    a16_attn_values(
+                        self.fast,
+                        &p,
+                        &v_series,
+                        shape.n_heads,
+                        shape.n_kv_heads,
+                        shape.d_head,
+                        &tile(lp(li).values, shape.n_heads * shape.d_head),
+                    )
+                    .map_err(refuse("attn_values"))?
+                }
+                PlanOp::AddElem => {
+                    let a = resolve(&node.inputs[0], &rows)?;
+                    let b = resolve(&node.inputs[1], &rows)?;
+                    a16_add_elem(&a, &b).map_err(refuse("add_elem"))?
+                }
+                PlanOp::MulElem => {
+                    let a = resolve(&node.inputs[0], &rows)?;
+                    let b = resolve(&node.inputs[1], &rows)?;
+                    a16_mul_elem(&a, &b).map_err(refuse("mul_elem"))?
+                }
+                PlanOp::Silu => {
+                    let x = resolve(&node.inputs[0], &rows)?;
+                    silu(&x)
+                }
+            };
+
+            // The declared cache write, honored where declared — the ROTATED key and the raw V
+            // are conventions of the DECLARATION (the IR carries the role on those nodes), so a
+            // profile that declared them elsewhere would cache elsewhere, and its court would
+            // read the same declaration.
+            match node.role {
+                kaspa_consensus_core::palw_step::PalwStepNodeRoleV1::KCacheWrite => {
+                    let (li, cache) = layer.as_mut().ok_or(A16EngineError::MalformedParams("a cache write outside a layer"))?;
+                    cache.keys[*li].push(out.clone());
+                }
+                kaspa_consensus_core::palw_step::PalwStepNodeRoleV1::VCacheWrite => {
+                    let (li, cache) = layer.as_mut().ok_or(A16EngineError::MalformedParams("a cache write outside a layer"))?;
+                    cache.values[*li].push(out.clone());
+                }
+                kaspa_consensus_core::palw_step::PalwStepNodeRoleV1::Plain => {}
+            }
+            rows.push(out);
+        }
+        Ok(rows)
+    }
+}
+
+/// Compile one declared table. Every refusal names the node and the reason — this function IS
+/// the kernel-set boundary of ADR-0067 Decision 3.
+fn plan_table(nodes: &[PalwStepNodeV1], table: &'static str, shape: &Base0ShapeV1) -> Result<Vec<PlanNode>, A16PlanErrorV1> {
+    use kaspa_consensus_core::palw_step::PalwStepOpKindV1 as Op;
+
+    let k_embed = kernel_semantics_id_v1(KDESC_A16_EMBED);
+    let k_req = kernel_semantics_id_v1(KDESC_A16_REQUANTIZE);
+    let k_mm = kernel_semantics_id_v1(KDESC_A16_MATMUL_REQUANT);
+    let k_rs = kernel_semantics_id_v1(KDESC_A16_MATMUL_RESCALE);
+    let k_rms = kernel_semantics_id_v1(KDESC_A16_RMS_NORM);
+    let k_rope = kernel_semantics_id_v1(KDESC_A16_ROPE);
+    let k_scores = kernel_semantics_id_v1(KDESC_A16_ATTN_SCORES);
+    let k_soft = kernel_semantics_id_v1(KDESC_A16_SOFTMAX);
+    let k_vals = kernel_semantics_id_v1(KDESC_A16_ATTN_VALUES);
+    let k_add = kernel_semantics_id_v1(KDESC_A16_ADD_ELEM);
+    let k_mul = kernel_semantics_id_v1(KDESC_A16_MUL_ELEM);
+    let k_silu = kernel_semantics_id_v1(KDESC_Q36_SILU);
+
+    let d = shape.d_model() as u32;
+    let kv_dim = shape.kv_dim() as u32;
+    let ffn = shape.d_ff as u32;
+    let vocab = shape.vocab as u32;
+    let heads = shape.n_heads as u32;
+
+    let refuse = |index: usize, reason: String| A16PlanErrorV1::UnservedNode { table, index, reason };
+
+    let mut out = Vec::with_capacity(nodes.len());
+    for (index, node) in nodes.iter().enumerate() {
+        // The declared inputs, resolved first — every op checks its arity against them.
+        let mut inputs = Vec::with_capacity(node.input_refs.len());
+        for r in &node.input_refs {
+            let input = match *r {
+                PALW_STEP_INPUT_LAYER_IN => PlanInput::LayerIn,
+                PALW_STEP_INPUT_KV_K => PlanInput::CachedK,
+                PALW_STEP_INPUT_KV_V => PlanInput::CachedV,
+                i if i >= PALW_STEP_INPUT_SENTINEL_MIN => {
+                    return Err(refuse(index, format!("input sentinel {i:#x} is not one this family serves")));
+                }
+                i => {
+                    if (i as usize) >= index {
+                        return Err(refuse(index, format!("input ref {i} is not an earlier node of this table")));
+                    }
+                    PlanInput::Row(i as usize)
+                }
+            };
+            inputs.push(input);
+        }
+        let arity = |n: usize| -> Result<(), A16PlanErrorV1> {
+            if inputs.len() != n { Err(refuse(index, format!("arity {} where the kernel takes {n}", inputs.len()))) } else { Ok(()) }
+        };
+        let width = |want: u32, what: &str| -> Result<(), A16PlanErrorV1> {
+            match node.out_len {
+                PalwStepOutLenV1::Fixed { elements } if elements == want => Ok(()),
+                other => Err(refuse(index, format!("out width {other:?} where {what} is {want}"))),
+            }
+        };
+        let kv_scaled = |want_mult: u32| -> Result<(), A16PlanErrorV1> {
+            match node.out_len {
+                PalwStepOutLenV1::KvScaled { multiplier } if multiplier == want_mult => Ok(()),
+                other => Err(refuse(index, format!("out width {other:?} where the kv-scaled multiplier is {want_mult}"))),
+            }
+        };
+        // Weight-bearing nodes must be the integer dtype this family's matmuls read. Dtype IS
+        // arithmetic (the profile's own field doc), so a foreign byte is an unserved node, not a
+        // detail.
+        let dtype_i8 = || -> Result<(), A16PlanErrorV1> {
+            if node.weight_dtypes.iter().all(|b| *b == kaspa_consensus_core::palw_qwen25_profile::QWEN25_WEIGHT_DTYPE_I8) {
+                Ok(())
+            } else {
+                Err(refuse(index, "a weight dtype this family's kernels do not read".to_string()))
+            }
+        };
+
+        let name = node.weight_name.as_str();
+        let kid = node.kernel_semantics_id;
+        let op = match (node.op_kind, name) {
+            (Op::EmbedLookup, "token_embd.weight") if kid == k_embed => {
+                arity(0)?;
+                width(d, "hidden")?;
+                dtype_i8()?;
+                PlanOp::EmbedGather
+            }
+            (Op::RmsNorm, "") if kid == k_rms => {
+                arity(1)?;
+                width(d, "hidden")?;
+                PlanOp::RmsNorm
+            }
+            (Op::MulElem, n) if kid == k_req => {
+                arity(1)?;
+                // Probs is the one requant whose width scales with the kv history; every other
+                // slot is fixed. One arm, two width rules, stated rather than special-cased.
+                let (slot, fixed) = match strip_layer(n) {
+                    Some("attn_norm.a16") => (ReqSlot::AttnNorm, Some(d)),
+                    Some("attn_probs.a16") => (ReqSlot::Probs, None),
+                    Some("attn_align.a16") => (ReqSlot::AttnAlign, Some(d)),
+                    Some("attn_residual.a16") => (ReqSlot::AttnResidual, Some(d)),
+                    Some("ffn_norm.a16") => (ReqSlot::FfnNorm, Some(d)),
+                    Some("ffn_silu.a16") => (ReqSlot::SiluQ, Some(ffn)),
+                    Some("ffn_gated.a16") => (ReqSlot::Gated, Some(ffn)),
+                    Some("ffn_align.a16") => (ReqSlot::FfnAlign, Some(d)),
+                    Some("ffn_residual.a16") => (ReqSlot::FfnResidual, Some(d)),
+                    None if n == "embed_lift.a16" => (ReqSlot::EmbedLift, Some(d)),
+                    None if n == "final_norm.a16" => (ReqSlot::FinalNorm, Some(d)),
+                    _ => return Err(refuse(index, format!("requant operand {n:?} is not one this store names"))),
+                };
+                match fixed {
+                    Some(want) => width(want, "the slot's width")?,
+                    None => kv_scaled(heads)?,
+                }
+                PlanOp::Requant(slot)
+            }
+            (Op::MatMulQuant, n) if kid == k_mm => {
+                arity(1)?;
+                dtype_i8()?;
+                let slot = match strip_layer(n) {
+                    Some("attn_q.weight") => (MatSlot::Q, d),
+                    Some("attn_k.weight") => (MatSlot::K, kv_dim),
+                    Some("attn_v.weight") => (MatSlot::V, kv_dim),
+                    Some("attn_output.weight") => (MatSlot::Wo, d),
+                    Some("ffn_up.weight") => (MatSlot::Up, ffn),
+                    Some("ffn_down.weight") => (MatSlot::Down, d),
+                    None if n == "token_embd.weight" => (MatSlot::Head, vocab),
+                    _ => return Err(refuse(index, format!("matmul operand {n:?} is not one this store names"))),
+                };
+                width(slot.1, "the slot's width")?;
+                PlanOp::MatMulRequant(slot.0)
+            }
+            (Op::MatMulQuant, n) if kid == k_rs => {
+                arity(1)?;
+                dtype_i8()?;
+                match strip_layer(n) {
+                    Some("ffn_gate.weight") => {
+                        width(ffn, "ffn")?;
+                        PlanOp::MatMulRescale(MatSlot::Gate)
+                    }
+                    _ => return Err(refuse(index, format!("rescale operand {n:?} is not one this store names"))),
+                }
+            }
+            (Op::MatMulQuant, n) if kid == k_scores => {
+                arity(2)?;
+                if strip_layer(n) != Some("attn_logits.a16") {
+                    return Err(refuse(index, format!("scores operand {n:?} is not one this store names")));
+                }
+                kv_scaled(heads)?;
+                if inputs.get(1) != Some(&PlanInput::CachedK) {
+                    return Err(refuse(index, "scores read something other than the key series".to_string()));
+                }
+                PlanOp::AttnScores
+            }
+            (Op::SoftMax, n) if kid == k_soft => {
+                arity(1)?;
+                if strip_layer(n) != Some("attn_softmax_up") {
+                    return Err(refuse(index, format!("softmax operand {n:?} is not one this store names")));
+                }
+                kv_scaled(heads)?;
+                PlanOp::Softmax
+            }
+            (Op::MatMulQuant, n) if kid == k_vals => {
+                arity(2)?;
+                if strip_layer(n) != Some("attn_values.a16") {
+                    return Err(refuse(index, format!("values operand {n:?} is not one this store names")));
+                }
+                width(d, "hidden")?;
+                if inputs.get(1) != Some(&PlanInput::CachedV) {
+                    return Err(refuse(index, "values read something other than the value series".to_string()));
+                }
+                PlanOp::AttnValues
+            }
+            (Op::RopeImrope, "rope") if kid == k_rope => {
+                arity(1)?;
+                use kaspa_consensus_core::palw_step::PalwStepNodeRoleV1 as Role;
+                let kv = match (node.role, node.out_len) {
+                    (Role::KCacheWrite, _) => true,
+                    (_, PalwStepOutLenV1::Fixed { elements }) if elements == kv_dim && kv_dim != d => true,
+                    (_, PalwStepOutLenV1::Fixed { elements }) if elements == d => false,
+                    (_, other) => return Err(refuse(index, format!("rope out width {other:?} fits neither q nor k"))),
+                };
+                width(if kv { kv_dim } else { d }, "the rotated width")?;
+                PlanOp::Rope { kv }
+            }
+            (Op::AddElem, "") if kid == k_add => {
+                arity(2)?;
+                width(d, "hidden")?;
+                PlanOp::AddElem
+            }
+            (Op::MulElem, "") if kid == k_mul => {
+                arity(2)?;
+                width(ffn, "ffn")?;
+                PlanOp::MulElem
+            }
+            (Op::Silu, "") if kid == k_silu => {
+                arity(1)?;
+                width(ffn, "ffn")?;
+                PlanOp::Silu
+            }
+            (op, n) => {
+                return Err(refuse(
+                    index,
+                    format!("op {op:?} with kernel {kid} and operand {n:?} is outside this build's served vocabulary"),
+                ));
+            }
+        };
+        out.push(PlanNode { op, inputs, role: node.role });
+    }
+    Ok(out)
+}
+
+/// `blk.{layer}.suffix` → `suffix`. The `{layer}` template survives lowering (the profile's own
+/// field doc: substituted at interpretation time), so the ABI here is the literal template.
+fn strip_layer(name: &str) -> Option<&str> {
+    name.strip_prefix("blk.{layer}.")
+}
+
+#[cfg(test)]
+mod profile_plan_tests {
+    use super::*;
+    use crate::artifact::LN_THETA_10000_GEN_Q;
+    use kaspa_consensus_core::palw_qwen25_profile::{PalwQwen25GeometryV1, qwen25_a16_profile_v1, qwen25_a16_profile_v2};
+
+    fn artifact(n_layers: usize, d_head: usize, d_ff: usize) -> Base0ArtifactV1 {
+        let shape = Base0ShapeV1 {
+            n_layers,
+            n_heads: 4,
+            n_kv_heads: 2,
+            d_head,
+            d_ff,
+            vocab: 64,
+            max_position: 32,
+            ln_theta_gen_q: LN_THETA_10000_GEN_Q,
+            eps_q: 1,
+        };
+        Base0ArtifactV1::derive_deterministic(shape, 0x5A16)
+            .expect("a valid shape")
+            .with_a16_params(derived_a16_store(&shape))
+            .expect("the derived store is sorted and unique")
+    }
+
+    fn geometry(a: &Base0ArtifactV1) -> PalwQwen25GeometryV1 {
+        PalwQwen25GeometryV1 {
+            layer_count: a.shape.n_layers as u16,
+            hidden_dim: a.shape.d_model() as u32,
+            ffn_dim: a.shape.d_ff as u32,
+            attn_heads: a.shape.n_heads as u16,
+            attn_kv_heads: a.shape.n_kv_heads as u16,
+            attn_head_dim: a.shape.d_head as u32,
+            vocab_size: a.shape.vocab as u32,
+            n_ctx: 16,
+            n_threads: 1,
+            rms_eps_q: a.shape.eps_q,
+            tile_len: 4,
+        }
+    }
+
+    /// **ADR-0067's differential gate, in miniature: the compiled rows are the interpreter's
+    /// reference vectors.** The plan is compiled from the CORRECTED profile — the graph that
+    /// names what the engine does — so walking it must land on the compiled engine's exact bits:
+    /// logits, every committed row of every table, and the cache left behind, across positions
+    /// (including position 0, where the sink-variant parameters switch in).
+    #[test]
+    fn the_interpreter_and_the_compiled_engine_agree_bit_for_bit() {
+        for (layers, d_head, d_ff) in [(1usize, 4usize, 12usize), (2, 8, 16)] {
+            let artifact = artifact(layers, d_head, d_ff);
+            let engine = A16Engine::new(&artifact).expect("the store resolves");
+            let profile = qwen25_a16_profile_v2(geometry(&artifact)).expect("the corrected profile builds");
+            let plan = engine.plan_from_profile(&profile).expect("the corrected profile is servable");
+
+            let mut compiled_cache = A16Cache::new(layers);
+            let mut planned_cache = A16Cache::new(layers);
+            for position in 0..6usize {
+                let token = (position * 7 + 3) % artifact.shape.vocab;
+                let (a, ta) = engine.forward_token_traced(&mut compiled_cache, token, position).expect("compiled");
+                let (b, tb) = engine.forward_token_planned(&plan, &mut planned_cache, token, position).expect("planned");
+                assert_eq!(a, b, "logits at position {position}");
+                assert_eq!(ta.pre, tb.pre, "pre rows at position {position}");
+                assert_eq!(ta.attn, tb.attn, "layer rows at position {position}");
+                assert_eq!(ta.post, tb.post, "post rows at position {position}");
+            }
+            assert_eq!(compiled_cache.keys, planned_cache.keys, "the caches must be the same state");
+            assert_eq!(compiled_cache.values, planned_cache.values);
+        }
+    }
+
+    /// **The refusals name the boundary** (ADR-0067 Decision 3). A foreign kernel, a forward
+    /// input reference, a stranger's operand name and a wrong geometry each fail at PLAN time,
+    /// each naming what this build cannot serve — never a mid-forward surprise.
+    #[test]
+    fn an_unservable_profile_is_refused_at_plan_time_by_name() {
+        let artifact = artifact(1, 4, 12);
+        let engine = A16Engine::new(&artifact).expect("the store resolves");
+        let good = qwen25_a16_profile_v2(geometry(&artifact)).expect("builds");
+
+        let mut foreign_kernel = good.clone();
+        foreign_kernel.attn_nodes[0].kernel_semantics_id = kernel_semantics_id_v1("a16/some-future-kernel/v9");
+        match engine.plan_from_profile(&foreign_kernel) {
+            Err(A16PlanErrorV1::UnservedNode { table: "layer", index: 0, .. }) => {}
+            other => panic!("a foreign kernel must be an unserved node, got {other:?}"),
+        }
+
+        let mut forward_ref = good.clone();
+        forward_ref.attn_nodes[0].input_refs = vec![5];
+        match engine.plan_from_profile(&forward_ref) {
+            Err(A16PlanErrorV1::UnservedNode { table: "layer", index: 0, .. }) => {}
+            other => panic!("a forward input ref must be refused, got {other:?}"),
+        }
+
+        let mut stranger = good.clone();
+        stranger.attn_nodes[1].weight_name = "blk.{layer}.someone_elses.a16".into();
+        match engine.plan_from_profile(&stranger) {
+            Err(A16PlanErrorV1::UnservedNode { table: "layer", index: 1, .. }) => {}
+            other => panic!("a stranger's operand must be refused, got {other:?}"),
+        }
+
+        let mut wrong = good;
+        wrong.hidden_dim += 1;
+        match engine.plan_from_profile(&wrong) {
+            Err(A16PlanErrorV1::GeometryMismatch { what: "hidden_dim", .. }) => {}
+            other => panic!("a wrong geometry must be refused at the root, got {other:?}"),
+        }
+    }
+
+    /// **The interpreter executes the DECLARATION, not the family habit.** The v1 profile omits
+    /// the embed-lift requant (the Decision F defect that keeps the v1 class off the free-prompt
+    /// lane). An interpreter serving it must run exactly the declared graph — one pre row, no
+    /// lift — and therefore land on DIFFERENT logits than the compiled engine, which always
+    /// lifts. That difference is the honest outcome: a court adjudicates the declared graph, and
+    /// an interpreter that quietly "fixed" the declaration would commit arithmetic the court
+    /// recomputes differently — the exact conviction Decision F exists to prevent.
+    #[test]
+    fn the_interpreter_executes_the_declared_graph_not_the_family_habit() {
+        // The derived store's embed lift is unity, under which "lift" and "no lift" are the
+        // same arithmetic. A shift would not do either (the first layer node is a
+        // scale-invariant RMS norm), and a small zero offset drowns in the derived store's
+        // saturation. A LARGE zero offset moves the residual stream itself, which nothing
+        // downstream can launder — so that is the narrowing this test declares.
+        let shape = artifact(1, 4, 12).shape;
+        let mut store = derived_a16_store(&shape);
+        for (name, bytes) in store.iter_mut() {
+            if name == "embed_lift.a16" {
+                *bytes = A16QuantParams { multiplier: 1, shift: 0, zero: 20_000 }.to_wire().to_vec();
+            }
+        }
+        let artifact = Base0ArtifactV1::derive_deterministic(shape, 0x5A16)
+            .expect("a valid shape")
+            .with_a16_params(store)
+            .expect("sorted and unique");
+        let engine = A16Engine::new(&artifact).expect("the store resolves");
+        let v1 = qwen25_a16_profile_v1(geometry(&artifact)).expect("the v1 profile builds");
+        let plan = engine.plan_from_profile(&v1).expect("every v1 node is individually servable");
+
+        let mut planned_cache = A16Cache::new(1);
+        let (planned, trace) = engine.forward_token_planned(&plan, &mut planned_cache, 3, 0).expect("the declared graph runs");
+        assert_eq!(trace.pre.len(), 1, "the v1 declaration has ONE pre node, and one row was committed for it");
+
+        let mut compiled_cache = A16Cache::new(1);
+        let (compiled, _) = engine.forward_token_traced(&mut compiled_cache, 3, 0).expect("compiled");
+        assert_ne!(planned, compiled, "the lift the v1 graph does not declare must not be executed for it");
     }
 }
