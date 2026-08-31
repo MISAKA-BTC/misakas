@@ -84,6 +84,15 @@ const MATERIALS_PER_CLAIM: usize = 4;
 /// quorums: a rung has a deadline and a quorum does not.
 const MAX_INFLIGHT_CARRIERS: usize = 8;
 
+/// **The fee float a bond-registration carrier carves for its own panel** (issue #90): 100 MSK,
+/// the genesis bond floats' own size and sizing law — "one working submitter, not an endowment"
+/// (`premine.rs`, `PALW_RC_BOND_FEE_FLOAT_SOMPI`). Laid at output :1, where the join doc, the
+/// registration log line and the persisted fee outpoint already point; the REST of the funding
+/// returns at :2 as ordinary spendable change instead of being swallowed whole by the H12
+/// reservation. The split only happens when the change holds at least twice this, so a
+/// faucet-sized joiner keeps today's two-output shape (their whole change IS a small float).
+const REGISTRATION_FEE_FLOAT_SOMPI: u64 = 10_000_000_000;
+
 /// **How long a submitted court move is assumed to be in flight.**
 ///
 /// Long enough that an accepted carrier normally reaches a block inside it — otherwise the panel
@@ -827,7 +836,23 @@ impl PalwPanelService {
         let storm = self.consensus_config.params.storage_mass_parameter;
         let build = |collateral: u64| -> Result<(u64, Transaction), String> {
             let (object, output) = self.build_bond_registration(collateral)?;
-            let tx = self.build_lifecycle_tx_with_outputs(&object, funding_outpoint, funding, std::slice::from_ref(&output))?;
+            // **Issue #90: the change must not BE the float.** With two outputs, a newcomer's
+            // whole remaining balance rolled into the change, the join doc then named that change
+            // as the panel's fee outpoint, and the H12 reservation rightly locked what the panel
+            // runs on — so an operator who funded with 10,000 MSK held a 1 MSK bond and could not
+            // spend a single sompi of the rest ("insufficient mature funds", pointing at the
+            // wrong thing). When the remainder is large enough for the split to mean anything,
+            // the carrier lays a right-sized float at :1 — the index the doc, the log line and
+            // `persist_fee_outpoint` already point at — and leaves the rest at :2, spendable.
+            // The genesis bond floats are 100 MSK for the same job, and their sizing law is this
+            // one: one working submitter, not an endowment.
+            let mut extras = vec![output];
+            let remaining = funding.amount.saturating_sub(collateral);
+            if remaining >= 2 * REGISTRATION_FEE_FLOAT_SOMPI {
+                let script = extras[0].script_public_key.clone();
+                extras.push(kaspa_consensus_core::tx::TransactionOutput::new(REGISTRATION_FEE_FLOAT_SOMPI, script));
+            }
+            let tx = self.build_lifecycle_tx_with_outputs(&object, funding_outpoint, funding, &extras)?;
             Ok((collateral, tx))
         };
         let storage_mass = |tx: &Transaction| {
@@ -1086,11 +1111,20 @@ impl PalwPanelService {
                 }
             };
             let txid = tx.id();
+            let carved_float = tx.outputs.len() == 3;
+            let free_change = tx.outputs.last().map(|o| o.value).unwrap_or(0);
             match self.flow_context.submit_rpc_transaction(&session, tx, Orphan::Forbidden).await {
                 Ok(()) => {
-                    // The change is last, so the rolling fee outpoint is the final output.
-                    // One extra output (the collateral) ahead of the change, so the change is 1.
+                    // Output :1 is the panel's funding either way — the carved 100 MSK float when
+                    // the carrier split (issue #90), the whole change when it did not — so the
+                    // persisted fee outpoint does not depend on the shape.
                     self.persist_fee_outpoint(TransactionOutpoint::new(txid, 1));
+                    if carved_float {
+                        info!(
+                            "[{PALW_PANEL}] the carrier carved a {REGISTRATION_FEE_FLOAT_SOMPI}-sompi submitter float at {txid}:1 \
+                             (this node reserves it; the wallet will not select it) and left {free_change} sompi spendable at {txid}:2"
+                        );
+                    }
                     // **Submitted is not registered.** `validate_palw_lifecycle_tx` sees only the
                     // payload -- decode, wire version, may-ride table -- so it cannot check the
                     // carrier binding, and a carrier whose object the extractor then drops is an
