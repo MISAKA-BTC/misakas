@@ -276,7 +276,24 @@ use W::{Conv, Experts, GdnHeads, GdnK, GdnV, Hidden, KvDim, KvPerHead, One, QDim
 /// whole table and the two arms are different lengths. Written as a function of it rather than as
 /// two copies, so the two tables cannot drift.
 macro_rules! moe_tail {
+    // The v1 spellings. Seven of these names were measured against a real artifact on 2026-09-01
+    // and found to be wrong in three distinct ways (see `qwen36_profile_v2`); they stay EXACTLY as
+    // they are because the genesis-registered class id is the borsh of this table, and moving it
+    // orphans every registered QWEN36 claim. The named arm below is how a corrected graph says the
+    // same computation with the names the engine actually reads.
     ($first:expr) => {
+        moe_tail!(
+            $first,
+            "blk.{layer}.ffn_router_topk.a16",
+            "blk.{layer}.ffn_shared_gate.weight",
+            "blk.{layer}.ffn_shared_up.weight",
+            "blk.{layer}.ffn_shared_gated.a16",
+            "blk.{layer}.ffn_shared_down.weight",
+            "blk.{layer}.ffn_shared_scalar.weight",
+            "blk.{layer}.ffn_shared_apply.a16"
+        )
+    };
+    ($first:expr, $router:literal, $sh_gate:literal, $sh_up:literal, $sh_gated:literal, $sh_down:literal, $sh_scalar:literal, $sh_apply:literal) => {
         [
             // The stream that reaches the mixture, normalized.
             n(K::RmsNorm, KDESC_A16_RMS_NORM, "", Hidden, &[Step($first - 1)]),
@@ -285,7 +302,7 @@ macro_rules! moe_tail {
             // is defined on what the class commits to.
             n(K::MatMulQuant, KDESC_Q36_MATMUL_GROUPED_WIDE, "blk.{layer}.ffn_router.weight", Experts, &[Step($first + 1)]),
             n(K::MulElem, KDESC_A16_REQUANTIZE, "blk.{layer}.ffn_router.a16", Experts, &[Step($first + 2)]),
-            n(K::SoftMax, KDESC_Q36_ROUTER_TOPK, "blk.{layer}.ffn_router_topk.a16", TopK2, &[Step($first + 3)]),
+            n(K::SoftMax, KDESC_Q36_ROUTER_TOPK, $router, TopK2, &[Step($first + 3)]),
             // The eight chosen experts, as the concatenation the engine builds.
             n(K::MatMulQuant, KDESC_Q36_MATMUL_GROUPED, "blk.{layer}.ffn_gate_exps.routed", RoutedMid, &[Step($first + 1)]),
             n(K::MatMulQuant, KDESC_Q36_MATMUL_GROUPED_WIDE, "blk.{layer}.ffn_up_exps.routed", RoutedMid, &[Step($first + 1)]),
@@ -294,14 +311,14 @@ macro_rules! moe_tail {
             n(K::MatMulQuant, KDESC_Q36_MATMUL_GROUPED_WIDE, "blk.{layer}.ffn_down_exps.routed", RoutedOut, &[Step($first + 8)]),
             n(K::MulElem, KDESC_Q36_MOE_COMBINE, "blk.{layer}.ffn_combine.a16", Hidden, &[Step($first + 9), Step($first + 4)]),
             // The shared expert, always on, behind its own scalar gate.
-            n(K::MatMulQuant, KDESC_Q36_MATMUL_GROUPED, "blk.{layer}.ffn_shared_gate.weight", SharedMid, &[Step($first + 1)]),
-            n(K::MatMulQuant, KDESC_Q36_MATMUL_GROUPED_WIDE, "blk.{layer}.ffn_shared_up.weight", SharedMid, &[Step($first + 1)]),
+            n(K::MatMulQuant, KDESC_Q36_MATMUL_GROUPED, $sh_gate, SharedMid, &[Step($first + 1)]),
+            n(K::MatMulQuant, KDESC_Q36_MATMUL_GROUPED_WIDE, $sh_up, SharedMid, &[Step($first + 1)]),
             n(K::Silu, KDESC_Q36_SILU, "", SharedMid, &[Step($first + 11)]),
-            n(K::MulElem, KDESC_Q36_MUL_WIDE, "blk.{layer}.ffn_shared_gated.a16", SharedMid, &[Step($first + 13), Step($first + 12)]),
-            n(K::MatMulQuant, KDESC_Q36_MATMUL_GROUPED_WIDE, "blk.{layer}.ffn_shared_down.weight", Hidden, &[Step($first + 14)]),
-            n(K::MatMulQuant, KDESC_A16_MATMUL_RESCALE, "blk.{layer}.ffn_shared_scalar.weight", One, &[Step($first + 1)]),
+            n(K::MulElem, KDESC_Q36_MUL_WIDE, $sh_gated, SharedMid, &[Step($first + 13), Step($first + 12)]),
+            n(K::MatMulQuant, KDESC_Q36_MATMUL_GROUPED_WIDE, $sh_down, Hidden, &[Step($first + 14)]),
+            n(K::MatMulQuant, KDESC_A16_MATMUL_RESCALE, $sh_scalar, One, &[Step($first + 1)]),
             n(K::Sigmoid, KDESC_Q36_SIGMOID, "", One, &[Step($first + 16)]),
-            n(K::MulElem, KDESC_Q36_MUL_WIDE, "blk.{layer}.ffn_shared_apply.a16", Hidden, &[Step($first + 15), Step($first + 17)]),
+            n(K::MulElem, KDESC_Q36_MUL_WIDE, $sh_apply, Hidden, &[Step($first + 15), Step($first + 17)]),
             n(K::AddElem, KDESC_A16_ADD_ELEM, "", Hidden, &[Step($first + 10), Step($first + 18)]),
             n(K::MulElem, KDESC_A16_REQUANTIZE, "blk.{layer}.ffn_moe_out.a16", Hidden, &[Step($first + 19)]),
             // The residual. The stream is aligned to the delta's scale, added, and renormalized.
@@ -429,6 +446,121 @@ const QWEN36_ATTN_IR: &[Ir] = &{
     let mut j = 0;
     while j < 24 {
         all[23 + j] = TAIL[j];
+        j += 1;
+    }
+    all
+};
+
+// -------------------------------------------------------------------------------------------------
+// graph-v2 — the corrected tables
+// -------------------------------------------------------------------------------------------------
+//
+// Measured on 2026-09-01 (`misaka-palw-base0/tests/qwen36_profile_conformance.rs`): the v1 tables
+// misdescribe `Qwen36Engine` in three ways, and the fix cannot be an edit because the class id is
+// the borsh of the whole profile and the genesis id is pinned as a live chain fact. So the
+// correction is a SECOND graph — the same computation, described with the names the engine reads —
+// exactly as `Qwen/Qwen2.5-1.5B/graph-v2` shipped for the dense family.
+//
+// The three corrections:
+// 1. The shared expert's names stop colliding. v1 declared `ffn_shared_gate.weight` 512 wide (the
+//    expert's own gate projection) while the engine's tensor of that name is the SCALAR gate — the
+//    engine fixed its side long ago (`Qwen36Engine::expert` names the base `ffn_shared_expert`)
+//    and the IR never moved with it. v2 names the projections `ffn_shared_expert_*` and gives the
+//    scalar node the scalar's real name.
+// 2. The router's top-k names the store it reads. `ffn_router_topk.a16` exists in no artifact;
+//    the widening the engine reads per layer — the value that decides WHICH eight experts run —
+//    is `ffn_router_up.a16`.
+// 3. The phantom V-cache requant is gone. v1 declared a `VCacheWrite` requant node
+//    (`attn_v_cache.a16`) the engine does not perform: `full_arm` pushes the V projection into the
+//    cache RAW. A declared node with no computation behind it is a step-leg slot that can never be
+//    filled — every leg would be short one row. In v2 the `VCacheWrite` role sits where the write
+//    actually happens: on the V projection itself.
+//
+// Also corrected while the row was open, both pure renames to real stores: the rope nodes name
+// `attn_rope.a16` (the rotation's requant — the rope TABLE is a structured artifact field bound by
+// the artifact root, not a named tensor), and the softmax names `attn_softmax_up.a16`.
+
+/// The GDN arm, v2: the arm's own 24 nodes are IDENTICAL to v1's — copied, not transcribed, so
+/// they cannot drift — and only the mixture's seven wrong names change.
+const QWEN36_LINEAR_IR_V2: &[Ir] = &{
+    const TAIL: [Ir; 24] = moe_tail!(
+        24u16,
+        "blk.{layer}.ffn_router_up.a16",
+        "blk.{layer}.ffn_shared_expert_gate.weight",
+        "blk.{layer}.ffn_shared_expert_up.weight",
+        "blk.{layer}.ffn_shared_expert_gated.a16",
+        "blk.{layer}.ffn_shared_expert_down.weight",
+        "blk.{layer}.ffn_shared_gate.weight",
+        "blk.{layer}.ffn_shared_gated.a16"
+    );
+    let mut all = [QWEN36_LINEAR_IR[0]; 48];
+    let mut i = 0;
+    while i < 24 {
+        all[i] = QWEN36_LINEAR_IR[i];
+        i += 1;
+    }
+    let mut j = 0;
+    while j < 24 {
+        all[24 + j] = TAIL[j];
+        j += 1;
+    }
+    all
+};
+
+/// The gated-attention arm, v2: 46 nodes, one fewer than v1 — the phantom is deleted, every later
+/// step reference shifts down by one, and `structural_diff_v1_v2` in the tests holds this table to
+/// v1 node by node so the renumbering is checked rather than trusted.
+const QWEN36_ATTN_IR_V2: &[Ir] = &{
+    const HEAD: [Ir; 20] = [
+        n(K::RmsNorm, KDESC_A16_RMS_NORM, "", Hidden, &[LayerIn]),
+        n(K::MulElem, KDESC_A16_REQUANTIZE, "blk.{layer}.attn_norm.a16", Hidden, &[Step(0)]),
+        n(K::MatMulQuant, KDESC_Q36_MATMUL_GROUPED, "blk.{layer}.attn_q.weight", QDim, &[Step(1)]),
+        n(K::MatMulQuant, KDESC_Q36_MATMUL_GROUPED_WIDE, "blk.{layer}.attn_gate.weight", QDim, &[Step(1)]),
+        n(K::MatMulQuant, KDESC_Q36_MATMUL_GROUPED, "blk.{layer}.attn_k.weight", KvDim, &[Step(1)]),
+        // **The V cache write is the projection.** The engine pushes this row into the cache as
+        // produced — no requant stands between them — so the role sits here, on the computation
+        // that actually happens, instead of on a node nothing executes.
+        c(K::MatMulQuant, PalwStepNodeRoleV1::VCacheWrite, KDESC_Q36_MATMUL_GROUPED, "blk.{layer}.attn_v.weight", KvDim, &[Step(1)]),
+        n(K::RmsNorm, KDESC_Q36_HEAD_RMS_NORM, "", QDim, &[Step(2)]),
+        n(K::MulElem, KDESC_A16_REQUANTIZE, "blk.{layer}.attn_q_norm.a16", QDim, &[Step(6)]),
+        n(K::RmsNorm, KDESC_Q36_HEAD_RMS_NORM, "", KvDim, &[Step(4)]),
+        n(K::MulElem, KDESC_A16_REQUANTIZE, "blk.{layer}.attn_k_norm.a16", KvDim, &[Step(8)]),
+        n(K::RopeImrope, KDESC_Q36_ROPE_PARTIAL, "blk.{layer}.attn_rope.a16", QDim, &[Step(7)]),
+        c(K::RopeImrope, PalwStepNodeRoleV1::KCacheWrite, KDESC_Q36_ROPE_PARTIAL, "blk.{layer}.attn_rope.a16", KvDim, &[Step(9)]),
+        n(K::MatMulQuant, KDESC_A16_ATTN_SCORES, "blk.{layer}.attn_logits.a16", KvPerHead, &[Step(10), CachedK]),
+        n(K::SoftMax, KDESC_A16_SOFTMAX, "blk.{layer}.attn_softmax_up.a16", KvPerHead, &[Step(12)]),
+        n(K::MulElem, KDESC_A16_REQUANTIZE, "blk.{layer}.attn_probs.a16", KvPerHead, &[Step(13)]),
+        n(K::MatMulQuant, KDESC_A16_ATTN_VALUES, "blk.{layer}.attn_values.a16", QDim, &[Step(14), CachedV]),
+        n(K::Sigmoid, KDESC_Q36_SIGMOID, "", QDim, &[Step(3)]),
+        n(K::MulElem, KDESC_Q36_GATE_APPLY, "blk.{layer}.attn_gated.a16", QDim, &[Step(15), Step(16)]),
+        n(K::MatMulQuant, KDESC_Q36_MATMUL_GROUPED, "blk.{layer}.attn_o.weight", Hidden, &[Step(17)]),
+        n(K::MulElem, KDESC_A16_REQUANTIZE, "blk.{layer}.attn_align.a16", Hidden, &[LayerIn]),
+    ];
+    const MID: [Ir; 2] = [
+        n(K::AddElem, KDESC_A16_ADD_ELEM, "", Hidden, &[Step(19), Step(18)]),
+        n(K::MulElem, KDESC_A16_REQUANTIZE, "blk.{layer}.attn_residual.a16", Hidden, &[Step(20)]),
+    ];
+    const TAIL: [Ir; 24] = moe_tail!(
+        22u16,
+        "blk.{layer}.ffn_router_up.a16",
+        "blk.{layer}.ffn_shared_expert_gate.weight",
+        "blk.{layer}.ffn_shared_expert_up.weight",
+        "blk.{layer}.ffn_shared_expert_gated.a16",
+        "blk.{layer}.ffn_shared_expert_down.weight",
+        "blk.{layer}.ffn_shared_gate.weight",
+        "blk.{layer}.ffn_shared_gated.a16"
+    );
+    let mut all = [HEAD[0]; 46];
+    let mut i = 0;
+    while i < 20 {
+        all[i] = HEAD[i];
+        i += 1;
+    }
+    all[20] = MID[0];
+    all[21] = MID[1];
+    let mut j = 0;
+    while j < 24 {
+        all[22 + j] = TAIL[j];
         j += 1;
     }
     all
@@ -792,6 +924,102 @@ mod qwen3moe_family {
         );
     }
 
+    /// **v2 differs from v1 in exactly the measured corrections and nothing else.**
+    ///
+    /// The renumbering after the phantom's deletion is derived by hand, and a hand-derived shift is
+    /// exactly the kind of edit that slips one index and produces a graph that computes something
+    /// adjacent to the truth. So the diff is CHECKED: every v2 attention node must equal its v1
+    /// counterpart — the deleted node skipped, the three renames and the role move excused, and
+    /// every step reference shifted by exactly the deletion.
+    #[test]
+    fn structural_diff_v1_v2() {
+        // The GDN arm: identical except the mixture's seven renamed operands.
+        let renames = [
+            ("ffn_router_topk.a16", "ffn_router_up.a16"),
+            ("ffn_shared_gate.weight", "ffn_shared_expert_gate.weight"),
+            ("ffn_shared_up.weight", "ffn_shared_expert_up.weight"),
+            ("ffn_shared_gated.a16", "ffn_shared_expert_gated.a16"),
+            ("ffn_shared_down.weight", "ffn_shared_expert_down.weight"),
+            ("ffn_shared_scalar.weight", "ffn_shared_gate.weight"),
+            ("ffn_shared_apply.a16", "ffn_shared_gated.a16"),
+            ("rope_table", "attn_rope.a16"),
+            ("attn_softmax.a16", "attn_softmax_up.a16"),
+        ];
+        // Position-sensitive: v1's `ffn_shared_gate.weight` becomes the EXPERT name while v2 reuses
+        // that spelling for the scalar node, so a name map alone would be ambiguous. Compare by
+        // index instead, renaming v1's name and asking v2 to match.
+        let rename = |name: &str| -> String {
+            for (from, to) in renames {
+                if let Some(prefix) = name.strip_suffix(from) {
+                    return format!("{prefix}{to}");
+                }
+            }
+            name.to_string()
+        };
+        assert_eq!(QWEN36_LINEAR_IR.len(), QWEN36_LINEAR_IR_V2.len());
+        for (i, (v1, v2)) in QWEN36_LINEAR_IR.iter().zip(QWEN36_LINEAR_IR_V2.iter()).enumerate() {
+            assert_eq!(v1.op as u8, v2.op as u8, "gdn node {i}");
+            assert_eq!(v1.kernel, v2.kernel, "gdn node {i}");
+            assert_eq!(rename(v1.weight), v2.weight, "gdn node {i}");
+            assert_eq!(v1.inputs, v2.inputs, "gdn node {i}: the GDN arm renumbers nothing");
+        }
+
+        // The attention arm: node 12 (the phantom) is deleted; everything after shifts by one.
+        const PHANTOM: usize = 12;
+        assert_eq!(QWEN36_ATTN_IR.len(), QWEN36_ATTN_IR_V2.len() + 1);
+        assert_eq!(QWEN36_ATTN_IR[PHANTOM].weight, "blk.{layer}.attn_v_cache.a16");
+        for (i2, v2) in QWEN36_ATTN_IR_V2.iter().enumerate() {
+            let i1 = if i2 < PHANTOM { i2 } else { i2 + 1 };
+            let v1 = &QWEN36_ATTN_IR[i1];
+            assert_eq!(v1.op as u8, v2.op as u8, "attn node v1[{i1}] vs v2[{i2}]");
+            assert_eq!(v1.kernel, v2.kernel, "attn node v1[{i1}] vs v2[{i2}]");
+            assert_eq!(rename(v1.weight), v2.weight, "attn node v1[{i1}] vs v2[{i2}]");
+            // The role move: V's projection carries VCacheWrite in v2 and Plain in v1.
+            if v1.weight == "blk.{layer}.attn_v.weight" {
+                assert_eq!(v1.role as u8, PalwStepNodeRoleV1::Plain as u8);
+                assert_eq!(v2.role as u8, PalwStepNodeRoleV1::VCacheWrite as u8);
+            } else {
+                assert_eq!(v1.role as u8, v2.role as u8, "attn node v1[{i1}] vs v2[{i2}]");
+            }
+            // Every step reference at or past the phantom shifts down by exactly one.
+            assert_eq!(v1.inputs.len(), v2.inputs.len());
+            for (a, b) in v1.inputs.iter().zip(v2.inputs.iter()) {
+                match (a, b) {
+                    (I::Step(x), I::Step(y)) => {
+                        let want = if *x > PHANTOM as u16 { x - 1 } else { *x };
+                        assert_eq!(want, *y, "attn node v1[{i1}] vs v2[{i2}]: ref {x} should shift to {want}");
+                    }
+                    _ => assert_eq!(
+                        std::mem::discriminant(a),
+                        std::mem::discriminant(b),
+                        "attn node v1[{i1}] vs v2[{i2}]: non-step ref changed"
+                    ),
+                }
+            }
+        }
+    }
+
+    /// v2 projects, validates, and is a DIFFERENT class than the genesis-registered one.
+    #[test]
+    fn v2_projects_and_moves_the_id() {
+        let p1 = qwen36_profile_v1(QWEN36_35B_A3B).expect("v1 projects");
+        let p2 = qwen36_profile_v2(QWEN36_35B_A3B).expect("v2 projects");
+        assert_eq!(p2.attn_nodes.len(), p1.attn_nodes.len() - 1, "one node fewer: the phantom");
+        assert_ne!(p1.shape_profile_id(), p2.shape_profile_id(), "a corrected graph is a new class");
+        // The qwen3moe stripper still recognizes the renamed shared-expert subgraph.
+        let m2 = qwen36_profile_v2(QWEN3_CODER_30B_A3B).expect("the stripped v2 projects");
+        assert!(m2.validate_shape().is_ok());
+    }
+
+    /// The v2 id, pinned the day the row was authored. Anything that moves it is a NEW class again.
+    #[test]
+    fn v2_shape_profile_id_golden_vector() {
+        assert_eq!(
+            qwen36_profile_v2(QWEN36_35B_A3B).expect("projects").shape_profile_id().to_string(),
+            "069b948273069a4e66255e636562fc33459a482a70218f31cbd466d373d2ef67c45b7790137d3e37d0d451c616ba713789ae26a301c52950dfea5b05b3ec5cc1"
+        );
+    }
+
     /// **The qwen3moe (full-attention-only MoE) members are expressible and admissible.**
     ///
     /// Qwen3-Coder-30B-A3B's geometry — every layer attention (`full_attention_interval` 1, so
@@ -864,6 +1092,26 @@ mod qwen3moe_family {
     }
 }
 pub fn qwen36_profile_v1(g: PalwQwen36GeometryV1) -> Result<PalwShapeProfileV3, PalwStepError> {
+    qwen36_profile_with(g, QWEN36_PRE_IR, QWEN36_LINEAR_IR, QWEN36_ATTN_IR, QWEN36_POST_IR)
+}
+
+/// **graph-v2: the same computation, described with the names the engine reads.**
+///
+/// A different class id by construction — the id is the borsh of the node tables and three of
+/// v1's names were measured wrong (see the table comments above). v1 stays registrable and pinned;
+/// this is the row an interpreter can actually follow, and the mmap interpreter (ADR-0067's
+/// fourth clause) builds against THIS, never against v1.
+pub fn qwen36_profile_v2(g: PalwQwen36GeometryV1) -> Result<PalwShapeProfileV3, PalwStepError> {
+    qwen36_profile_with(g, QWEN36_PRE_IR, QWEN36_LINEAR_IR_V2, QWEN36_ATTN_IR_V2, QWEN36_POST_IR)
+}
+
+fn qwen36_profile_with(
+    g: PalwQwen36GeometryV1,
+    pre: &[Ir],
+    gdn: &[Ir],
+    attn: &[Ir],
+    post: &[Ir],
+) -> Result<PalwShapeProfileV3, PalwStepError> {
     let (gdn_span, attn_span) = layer_spans(&g);
     // **The gate is STORED here and DERIVED in the engine, so they must be checked against each
     // other exactly once — here, before anything projects.**
@@ -919,10 +1167,10 @@ pub fn qwen36_profile_v1(g: PalwQwen36GeometryV1) -> Result<PalwShapeProfileV3, 
         n_ubatch: 1,
         n_seq: 1,
         n_threads: g.n_threads,
-        pre_nodes: project(QWEN36_PRE_IR, &g, 1),
-        gdn_nodes: project(QWEN36_LINEAR_IR, &g, gdn_span),
-        attn_nodes: project(QWEN36_ATTN_IR, &g, attn_span),
-        post_nodes: project(QWEN36_POST_IR, &g, 1),
+        pre_nodes: project(pre, &g, 1),
+        gdn_nodes: project(gdn, &g, gdn_span),
+        attn_nodes: project(attn, &g, attn_span),
+        post_nodes: project(post, &g, 1),
         reference_ruleset_id: crate::palw_reference::reference_arithmetic_ruleset_id_v2(),
         transcendental_bindings: Vec::new(),
         contraction_facts: Vec::new(),

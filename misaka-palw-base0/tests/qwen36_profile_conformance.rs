@@ -360,3 +360,83 @@ fn the_graph_declares_a_v_cache_requant_the_engine_does_not_do() {
         "if this ever fails, the engine grew the requant this node declares and the finding is closed"
     );
 }
+
+// -------------------------------------------------------------------------------------------------
+// graph-v2 — the corrected row, held to the same measurements that convicted v1
+// -------------------------------------------------------------------------------------------------
+
+/// The per-layer operand suffixes graph-v2 declares.
+fn declared_operands_v2() -> BTreeSet<String> {
+    let p = kaspa_consensus_core::palw_qwen36_profile::qwen36_profile_v2(QWEN36_35B_A3B).expect("v2 projects");
+    let mut out = BTreeSet::new();
+    for table in [&p.pre_nodes, &p.gdn_nodes, &p.attn_nodes, &p.post_nodes] {
+        for node in table.iter() {
+            if node.weight_name.is_empty() {
+                continue;
+            }
+            let name = node.weight_name.as_str();
+            let suffix = per_layer(name).unwrap_or_else(|| name.to_string());
+            out.insert(collapse_expert(&suffix));
+        }
+    }
+    out
+}
+
+/// **v2's resolution table is only the structural fusions.** Every v1 entry that existed to paper
+/// over a wrong name is gone, because the name is right now. What remains are nodes that stand for
+/// computations over several stores — the fusion that was always legitimate.
+const RESOLUTION_V2: &[(&str, &[&str])] = &[
+    ("linear_conv.weight", &["linear_conv.weight", "linear_conv.a16"]),
+    ("linear_decay.a16", &["linear_decay_c.a16", "linear_dt_bias.a16"]),
+    ("linear_gdn.a16", &["linear_delta.a16", "linear_gate.a16", "linear_read.a16", "linear_write.a16", "linear_out.a16"]),
+    ("ffn_gate_exps.routed", &["ffn_expert.{e}_gate.weight", "ffn_expert.{e}_gate.weight.a16"]),
+    ("ffn_up_exps.routed", &["ffn_expert.{e}_up.weight", "ffn_expert.{e}_up.weight.a16"]),
+    ("ffn_down_exps.routed", &["ffn_expert.{e}_down.weight", "ffn_expert.{e}_down.weight.a16"]),
+    ("ffn_expert_gated.a16", &["ffn_expert.{e}_gated.a16", "ffn_expert.{e}_silu.a16"]),
+    // The shared expert's silu rescale rides inside its gated multiply, same fusion as the routed.
+    ("ffn_shared_expert_gated.a16", &["ffn_shared_expert_gated.a16", "ffn_shared_expert_silu.a16"]),
+];
+
+/// **The measurement that convicted v1, re-run against v2: the residue is zero, both ways.**
+#[test]
+fn v2_leaves_no_residue() {
+    let declared = declared_operands_v2();
+    let available = artifact_operands();
+    let resolved_from: BTreeSet<String> = RESOLUTION_V2.iter().map(|(d, _)| d.to_string()).collect();
+    let resolved_to: BTreeSet<String> = RESOLUTION_V2.iter().flat_map(|(_, t)| t.iter().map(|s| s.to_string())).collect();
+
+    let rides_with_declared = |name: &str| match name.strip_suffix(".a16") {
+        Some(stem) => declared.contains(stem) || resolved_to.contains(stem),
+        None => false,
+    };
+
+    let undeliverable: Vec<&String> = declared.difference(&available).filter(|n| !resolved_from.contains(*n)).collect();
+    let unreachable: Vec<&String> =
+        available.difference(&declared).filter(|n| !resolved_to.contains(*n) && !rides_with_declared(n)).collect();
+
+    assert!(undeliverable.is_empty(), "v2 declares names no artifact carries: {undeliverable:#?}");
+    assert!(unreachable.is_empty(), "the engine reads operands v2 does not name: {unreachable:#?}");
+}
+
+/// **Each of the three v1 findings, closed in v2 and asserted closed.**
+#[test]
+fn v2_closes_the_three_findings() {
+    let p = kaspa_consensus_core::palw_qwen36_profile::qwen36_profile_v2(QWEN36_35B_A3B).expect("v2 projects");
+    let attn = &p.attn_nodes;
+
+    // Finding 1: the shared gate. The 512-wide projection carries the expert's name; the scalar
+    // node carries the scalar tensor's name, at one output.
+    let scalar = attn.iter().find(|n| n.weight_name.ends_with("ffn_shared_gate.weight")).expect("the scalar gate is declared");
+    assert_eq!(scalar.out_len, kaspa_consensus_core::palw_step::PalwStepOutLenV1::Fixed { elements: 1 });
+    assert!(attn.iter().any(|n| n.weight_name.ends_with("ffn_shared_expert_gate.weight")));
+
+    // Finding 2: the router widening is named.
+    assert!(attn.iter().any(|n| n.weight_name.ends_with("ffn_router_up.a16")));
+    assert!(!attn.iter().any(|n| n.weight_name.ends_with("ffn_router_topk.a16")));
+
+    // Finding 3: the phantom is gone, and the V-cache role sits on the projection that actually
+    // feeds the cache.
+    assert!(!attn.iter().any(|n| n.weight_name.ends_with("attn_v_cache.a16")));
+    let v_proj = attn.iter().find(|n| n.weight_name.ends_with("attn_v.weight")).expect("the V projection is declared");
+    assert_eq!(v_proj.role, kaspa_consensus_core::palw_step::PalwStepNodeRoleV1::VCacheWrite);
+}

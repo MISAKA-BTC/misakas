@@ -244,11 +244,19 @@ pub struct Qwen36CanonicalClassV1 {
     pub model_id: &'static str,
     pub geometry: kaspa_consensus_core::palw_qwen36_profile::PalwQwen36GeometryV1,
     pub canonical_job: (u32, u32),
+    /// Which node-table revision this row describes the geometry with. 1 is the genesis tables;
+    /// 2 is the 2026-09-01 correction (`qwen36_profile_v2`) whose names the engine actually reads.
+    /// A class IS its graph, so the two revisions are two class ids over the same weights — the
+    /// same arrangement the dense family shipped as `Qwen/Qwen2.5-1.5B/graph-v2`.
+    pub graph_version: u8,
 }
 
 impl Qwen36CanonicalClassV1 {
     pub fn profile(&self) -> Result<PalwShapeProfileV3, kaspa_consensus_core::palw_step::PalwStepError> {
-        kaspa_consensus_core::palw_qwen36_profile::qwen36_profile_v1(self.geometry)
+        match self.graph_version {
+            2 => kaspa_consensus_core::palw_qwen36_profile::qwen36_profile_v2(self.geometry),
+            _ => kaspa_consensus_core::palw_qwen36_profile::qwen36_profile_v1(self.geometry),
+        }
     }
 
     /// The class id: its graph's id, same rule as the dense table's.
@@ -315,16 +323,43 @@ pub fn qwen36_canonical_classes_v1() -> Vec<Qwen36CanonicalClassV1> {
             model_id: "Qwen3.6-35B-A3B",
             geometry: kaspa_consensus_core::palw_qwen36_profile::QWEN36_35B_A3B,
             canonical_job: kaspa_consensus_core::palw_qwen36_profile::QWEN36_RC_CANONICAL,
+            graph_version: 1,
         },
         Qwen36CanonicalClassV1 {
             model_id: "huihui-ai/Huihui-Qwen3-Coder-30B-A3B-Instruct-abliterated",
             geometry: kaspa_consensus_core::palw_qwen36_profile::QWEN3_CODER_30B_A3B,
             canonical_job: kaspa_consensus_core::palw_qwen36_profile::QWEN36_RC_CANONICAL,
+            graph_version: 1,
         },
         Qwen36CanonicalClassV1 {
             model_id: "Qwen/Qwen3.5-2B",
             geometry: kaspa_consensus_core::palw_qwen36_profile::QWEN35_2B,
             canonical_job: kaspa_consensus_core::palw_qwen36_profile::QWEN36_RC_CANONICAL,
+            graph_version: 1,
+        },
+        // --- graph-v2: the corrected tables, one row per geometry ---------------------------------
+        // The v1 rows above stay exactly as the chain registered them; these are the SAME weights
+        // under the graph whose names the engine actually reads (three measured defects closed —
+        // the shared-gate collision, the unnamed router widening, the phantom V-cache node). An
+        // interpreter follows these rows; it can never follow the v1 rows, which is the finding
+        // that forced them to exist.
+        Qwen36CanonicalClassV1 {
+            model_id: "Qwen3.6-35B-A3B/graph-v2",
+            geometry: kaspa_consensus_core::palw_qwen36_profile::QWEN36_35B_A3B,
+            canonical_job: kaspa_consensus_core::palw_qwen36_profile::QWEN36_RC_CANONICAL,
+            graph_version: 2,
+        },
+        Qwen36CanonicalClassV1 {
+            model_id: "huihui-ai/Huihui-Qwen3-Coder-30B-A3B-Instruct-abliterated/graph-v2",
+            geometry: kaspa_consensus_core::palw_qwen36_profile::QWEN3_CODER_30B_A3B,
+            canonical_job: kaspa_consensus_core::palw_qwen36_profile::QWEN36_RC_CANONICAL,
+            graph_version: 2,
+        },
+        Qwen36CanonicalClassV1 {
+            model_id: "Qwen/Qwen3.5-2B/graph-v2",
+            geometry: kaspa_consensus_core::palw_qwen36_profile::QWEN35_2B,
+            canonical_job: kaspa_consensus_core::palw_qwen36_profile::QWEN36_RC_CANONICAL,
+            graph_version: 2,
         },
     ]
 }
@@ -630,13 +665,27 @@ mod tests {
     #[test]
     fn the_qwen36_table_separates_its_members() {
         let table = qwen36_canonical_classes_v1();
-        // Three members since the dense tier joined the lineage (Qwen/Qwen3.5-2B expressed as a
-        // one-expert mixture) — the count is pinned so a row added without reading this test is
-        // still a row added on purpose.
-        assert_eq!(table.len(), 3);
+        // Six members: three geometries, each under two graphs — the count is pinned so a row
+        // added without reading this test is still a row added on purpose. The second trio is
+        // graph-v2 (2026-09-01), the corrected node tables over the SAME weights, and the whole
+        // point of the pairing is that each is a different class than its v1 twin.
+        assert_eq!(table.len(), 6);
         let hybrid = &table[0];
         let coder = &table[1];
         let dense = &table[2];
+        // The v2 trio: same geometries, corrected graph, and therefore six pairwise-distinct ids.
+        assert_eq!(table[3].model_id, "Qwen3.6-35B-A3B/graph-v2");
+        assert_eq!(table[4].model_id, "huihui-ai/Huihui-Qwen3-Coder-30B-A3B-Instruct-abliterated/graph-v2");
+        assert_eq!(table[5].model_id, "Qwen/Qwen3.5-2B/graph-v2");
+        let mut ids = Vec::new();
+        for row in &table {
+            ids.push(row.class_id().expect("every row projects"));
+        }
+        for i in 0..ids.len() {
+            for j in (i + 1)..ids.len() {
+                assert_ne!(ids[i], ids[j], "rows {i} and {j} are the same class — a graph revision that did not move the id");
+            }
+        }
         assert_eq!(hybrid.model_id, "Qwen3.6-35B-A3B");
         assert_eq!(coder.model_id, "huihui-ai/Huihui-Qwen3-Coder-30B-A3B-Instruct-abliterated");
         assert_eq!(dense.model_id, "Qwen/Qwen3.5-2B");

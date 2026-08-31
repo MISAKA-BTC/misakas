@@ -2,9 +2,9 @@
 
 Status: **Decisions 1–3 and 5 LANDED for the dense (A16) container (2026-08-31), fenced and
 dormant; Decision 4 needed no code; Decision 6 including its cache bound LANDED (2026-09-01), as did
-the pruning-point sidecar and the cross-architecture clause. The mmap (Qwen3.6) interpreter is
-BLOCKED on a measured defect in that class's registered graph (see below), and the operational
-arming remains PROPOSED.** See "What landed" at
+the pruning-point sidecar and the cross-architecture clause. The mmap (Qwen3.6) interpreter's blocker —
+a measured defect in the class's registered graph — is CLOSED by the corrected `graph-v2` row
+(2026-09-01); the interpreter itself and the operational arming remain PROPOSED.** See "What landed" at
 the foot of this document. Builds on ADR-0049 (the adjudication contract — whose admission
 carriage is the load-bearing half of this design and is ALREADY LIVE), ADR-0054 (share follows
 production — the economics that make permissionless classes survivable), and ADR-0034 (capability
@@ -392,6 +392,21 @@ store in any artifact. K is normed and rotated before its cache write and the gr
 the V path was written as though it were symmetric. This one cannot be closed by renaming: ADR-0030
 gives a step leg one committed row per declared node, so a node with no computation behind it is a
 slot that can never be filled, and every step leg of the class would be short by exactly one row.
+
+**The corrected row now exists (2026-09-01, same day).** `qwen36_profile_v2` builds the corrected
+tables: the shared-expert names the engine reads, the router widening named at the node that reads
+it, the phantom V-cache node deleted with its `VCacheWrite` role moved onto the V projection — the
+computation that actually feeds the cache. The GDN arm's own 24 nodes are COPIED from v1 at compile
+time rather than transcribed, so they cannot drift; the attention arm's renumbering after the
+deletion is hand-derived and machine-checked (`structural_diff_v1_v2` holds v2 to v1 node by node,
+excusing exactly the three corrections and requiring every step reference past the deletion to
+shift by exactly one). Against the same artifact measurement that convicted v1, v2's residue is
+**zero in both directions** with a resolution table reduced to the structural fusions alone, and
+all three findings are asserted closed (`v2_leaves_no_residue`, `v2_closes_the_three_findings`).
+The v2 class id is pinned (`069b9482…`, a different class by construction), and the ledger carries
+`graph-v2` rows for all three lineage members. **Registered on no chain yet** — registration is an
+operator action with a bond and a fee, and it stays one. The interpreter now has a graph it can
+follow; building it is the remaining piece of this clause.
 
 **The fix cannot be an edit.** `shape_profile_id` is the borsh of the whole profile, node tables
 included, and the hybrid's id is pinned in-tree as a live chain fact — "the shipped hybrid class id
