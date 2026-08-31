@@ -335,6 +335,12 @@ enum PalwCmd {
         /// Actually broadcast (otherwise a dry-run preview).
         #[arg(long)]
         yes: bool,
+        /// Also write the claim's data-availability material (`<claim-id>.material`, the FPM1
+        /// job+prompt payload) into this directory. Point it at a producer node's
+        /// `palw-retention/` and that node's re-broadcast loop serves the panel; without the
+        /// material no seat can replay the job, and an Unavailable quorum DEFAULTS the executor.
+        #[arg(long)]
+        material_out: Option<std::path::PathBuf>,
     },
 }
 
@@ -758,7 +764,7 @@ async fn main() -> std::process::ExitCode {
         }
         Command::Evm(EvmCmd::Tx(EvmTxCmd::Status { hash })) => eth::tx_status(&ctx, &hash),
         Command::Evm(EvmCmd::Tx(EvmTxCmd::Wait { hash, timeout, poll })) => eth::tx_wait(&ctx, &hash, timeout, poll),
-        Command::Palw(PalwCmd::FpSubmit { tx, yes }) => palw_fp::submit(&ctx, &tx, yes).await,
+        Command::Palw(PalwCmd::FpSubmit { tx, yes, material_out }) => palw_fp::submit(&ctx, &tx, yes, material_out.as_deref()).await,
         Command::Wallet(WalletCmd::Utxo(UtxoCmd::List { address, key })) => {
             wallet::utxo_list(&ctx, address.as_deref(), &key.source()).await
         }

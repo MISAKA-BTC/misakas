@@ -478,6 +478,16 @@ pub struct PalwSeatDutyV2 {
     pub bound_daa: u64,
     /// The last DAA at which a receipt for this claim still counts.
     pub receipt_deadline: u64,
+    /// **Which lane this claim's material speaks** — and therefore how a seat verifies it.
+    ///
+    /// An attempt claim's material is the run's own rows; the seat re-hashes them under the job
+    /// the ANCHOR implies. A free-prompt claim's job is the CALLER's, underivable from any
+    /// anchor: its material is the job itself ([`crate::palw_freeprompt_v3::PalwFpMaterialV1`])
+    /// and the seat re-executes it — the replay `PublicDa` was named for. A seat that fed one
+    /// lane's material to the other lane's verifier would file `Unavailable` against every
+    /// honest free-prompt executor, and a quorum of those DEFAULTS the producer — the panel
+    /// would convict the lane's every user for using it.
+    pub free_prompt: bool,
 }
 
 /// **Every seat duty this node holds at one chain point** (launch blockers §2).
@@ -656,6 +666,7 @@ pub fn palw_seat_duties_v2(state: &PalwChainStateV2, state_params: &PalwStatePar
                 trace_root: claim.trace_root,
                 bound_daa,
                 receipt_deadline: bound_daa.saturating_add(state_params.window_receipt()),
+                free_prompt: matches!(claim.source, crate::palw_state_v2::PalwClaimSourceV2::FreePrompt { .. }),
             });
         }
     }

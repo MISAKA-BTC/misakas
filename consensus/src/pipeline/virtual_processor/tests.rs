@@ -2491,6 +2491,7 @@ async fn palw_v2_a_signed_quorum_licenses_a_claim() {
     let duty = for_this_claim[0];
     assert_eq!(duty.execution_root, claim.execution_root, "and it carries what the seat must decide against");
     assert_ne!(duty.executor_bond, duty.seat_bond, "a seat never judges its own claim");
+    assert!(!duty.free_prompt, "an attempt claim's duty names the anchor-derived lane — the seat re-hashes, never replays");
 
     // Real signatures, from the harness identity every genesis bond registers.
     // Each seat signs under ITS OWN registered key — the quorum check resolves the seat bond to its

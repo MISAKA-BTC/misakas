@@ -1663,3 +1663,108 @@ mod tests {
         assert_ne!(as_claim, as_spend);
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// The free-prompt DA material (FP-R6): what a seat needs to REPLAY the job
+// ---------------------------------------------------------------------------------------------
+
+/// Wire magic for a free-prompt claim's gossiped material. The retention/gossip plumbing carries
+/// one bag of bytes per claim id for BOTH lanes, and the two lanes' payloads are different
+/// objects: an attempt claim's material is the run's own rows (the seat re-hashes them), a
+/// free-prompt claim's is the JOB — the seat re-executes it, which is what `PublicDa` promised
+/// ("a mode the panel cannot replay must not execute"). Four magic bytes let a reader say "this
+/// is the other lane's payload" instead of feeding one codec's bytes to the other's decoder.
+pub const PALW_FP_MATERIAL_V1_MAGIC: [u8; 4] = *b"FPM1";
+
+/// A free-prompt claim's data-availability payload: the job identity and the canonical prompt
+/// ids it binds. Deliberately NOT the run — the run's own rows cannot reproduce the step and
+/// checkpoint legs the claim's `execution_root` commits (only an instrumented execution can), so
+/// shipping them would invite a verifier that checks less than the claim asserts. A seat holding
+/// this payload and the registered artifact re-executes and compares every root; the payload is
+/// a few hundred bytes where the attempt lane's is megabytes.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwFpMaterialV1 {
+    pub job: PalwFreePromptJobV3,
+    pub prompt_token_ids: Vec<u32>,
+}
+
+/// Encode with the magic prefix. The inverse of [`palw_fp_material_decode_v1`].
+pub fn palw_fp_material_encode_v1(job: &PalwFreePromptJobV3, prompt_token_ids: &[u32]) -> Vec<u8> {
+    let body = borsh::to_vec(&PalwFpMaterialV1 { job: job.clone(), prompt_token_ids: prompt_token_ids.to_vec() })
+        .expect("a material serializes");
+    let mut out = Vec::with_capacity(4 + body.len());
+    out.extend_from_slice(&PALW_FP_MATERIAL_V1_MAGIC);
+    out.extend_from_slice(&body);
+    out
+}
+
+/// Decode and re-check the ONE binding the payload itself can prove: the ids hash to the job's
+/// `prompt_token_ids_hash`. Everything else (the roots) is the caller's to establish by
+/// re-executing — a decoder that "validated" more would be trusting the bytes about facts only
+/// an execution can witness. `None` for foreign magic, junk, or an ids/hash mismatch.
+pub fn palw_fp_material_decode_v1(bytes: &[u8]) -> Option<PalwFpMaterialV1> {
+    let body = bytes.strip_prefix(&PALW_FP_MATERIAL_V1_MAGIC)?;
+    let material: PalwFpMaterialV1 = borsh::from_slice(body).ok()?;
+    if material.job.prompt_token_ids_hash != crate::palw_v2::prompt_token_ids_hash_v2(&material.prompt_token_ids) {
+        return None;
+    }
+    if material.job.prompt_tokens as usize != material.prompt_token_ids.len() {
+        return None;
+    }
+    Some(material)
+}
+
+#[cfg(test)]
+mod fp_material_tests {
+    use super::*;
+
+    fn job(ids: &[u32]) -> PalwFreePromptJobV3 {
+        PalwFreePromptJobV3 {
+            version: PALW_FP_V3_VERSION,
+            network_domain: kaspa_hashes::Hash64::from_u64_word(9),
+            class_id: kaspa_hashes::Hash64::from_u64_word(7),
+            executor_bond: crate::tx::TransactionOutpoint {
+                transaction_id: crate::tx::TransactionId::from_u64_word(1),
+                index: 0,
+            },
+            executor_pubkey: vec![7; 8],
+            operator_id: kaspa_hashes::Hash64::from_u64_word(4),
+            anchor_block: kaspa_hashes::Hash64::from_u64_word(0xA0),
+            anchor_daa: 100,
+            job_nonce: [0x5A; 32],
+            tokenizer_id: kaspa_hashes::Hash64::default(),
+            prompt_token_ids_hash: crate::palw_v2::prompt_token_ids_hash_v2(ids),
+            prompt_tokens: ids.len() as u32,
+            decode_token_limit: 3,
+            max_context_tokens: 16,
+            privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
+        }
+    }
+
+    #[test]
+    fn a_material_round_trips_and_binds_its_ids() {
+        let ids = [3u32, 9, 17];
+        let bytes = palw_fp_material_encode_v1(&job(&ids), &ids);
+        let back = palw_fp_material_decode_v1(&bytes).expect("round trip");
+        assert_eq!(back.prompt_token_ids, ids);
+        assert_eq!(back.job, job(&ids));
+    }
+
+    /// The decoder refuses what it can check, and only that: swapped ids (the hash binding), a
+    /// count that disagrees with the job, and the other lane's bytes.
+    #[test]
+    fn the_decoder_refuses_what_it_can_check() {
+        let ids = [3u32, 9, 17];
+        let mut swapped = palw_fp_material_encode_v1(&job(&ids), &[3, 17, 9]);
+        assert!(palw_fp_material_decode_v1(&swapped).is_none(), "ids that do not hash to the job's binding");
+        swapped.clear();
+        assert!(palw_fp_material_decode_v1(&swapped).is_none(), "empty");
+        assert!(palw_fp_material_decode_v1(b"not a material").is_none(), "foreign bytes");
+        let mut wrong_count = job(&ids);
+        wrong_count.prompt_tokens = 2;
+        let body = borsh::to_vec(&PalwFpMaterialV1 { job: wrong_count, prompt_token_ids: ids.to_vec() }).unwrap();
+        let mut bytes = PALW_FP_MATERIAL_V1_MAGIC.to_vec();
+        bytes.extend_from_slice(&body);
+        assert!(palw_fp_material_decode_v1(&bytes).is_none(), "a count the ids contradict");
+    }
+}

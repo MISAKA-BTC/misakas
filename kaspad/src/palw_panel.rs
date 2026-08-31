@@ -1852,6 +1852,67 @@ impl PalwPanelService {
                     if self.backends().resolve(duty.class_id, duty.artifact_root).is_err() {
                         break 'verdict Some(PalwReceiptVerdictV2::Incapable);
                     }
+                    // **The free-prompt lane: the seat REPLAYS the job** (FP-R6). An attempt
+                    // claim's job is derived from its anchor, so the arm below re-hashes the
+                    // material under that derivation — which for a free-prompt claim derives a
+                    // job the caller never asked, mismatches every honest material, and files
+                    // `Unavailable` into a quorum that DEFAULTS the producer. This lane's
+                    // material is the job itself ([`palw_fp_material_decode_v1`]), and the only
+                    // verifier that checks what the claim asserts is a fresh execution: every
+                    // root the claim committed, recomputed on this seat's own artifact.
+                    //
+                    // The execution is minutes, not milliseconds, and the pool admits at most
+                    // four payloads per claim — so a forged payload costs this seat bounded
+                    // compute and an honest one costs the same run the executor already priced.
+                    // The cheap fields are pre-checked not as security (an attacker copies
+                    // them off the duty) but so the common garbage fails before the expensive
+                    // step.
+                    if duty.free_prompt {
+                        let pooled = materials.get(&duty.claim_id).map(|v| v.to_vec()).unwrap_or_default();
+                        let disk = [
+                            self.config.retention_dir.join(format!("{}{}", duty.claim_id, crate::palw_producer::PALW_RETAINED_MATERIAL_SUFFIX)),
+                            self.config.retention_dir.join("foreign").join(format!("{}.material", duty.claim_id)),
+                        ]
+                        .into_iter()
+                        .filter_map(|path| std::fs::read(path).ok());
+                        for bytes in pooled.into_iter().chain(disk) {
+                            let Some(material) = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_material_decode_v1(&bytes) else {
+                                continue;
+                            };
+                            if material.job.class_id != duty.class_id
+                                || material.job.executor_bond != duty.executor_bond.0
+                                || material.job.privacy_mode != kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PRIVACY_PUBLIC_DA
+                            {
+                                continue;
+                            }
+                            let Ok(backend) = self.backends().resolve(duty.class_id, duty.artifact_root) else {
+                                break 'verdict Some(PalwReceiptVerdictV2::Incapable);
+                            };
+                            let prompt: Vec<usize> = material.prompt_token_ids.iter().map(|t| *t as usize).collect();
+                            let run = match backend.execute_free_prompt(&material.job, &prompt) {
+                                Ok(run) => run,
+                                Err(e) => {
+                                    // An execution the class refuses is not evidence either way —
+                                    // logged so an operator can see WHY a lane stays unverified.
+                                    warn!(
+                                        "[{PALW_PANEL}] free-prompt replay for claim {} refused: {e}",
+                                        duty.claim_id
+                                    );
+                                    continue;
+                                }
+                            };
+                            if run.outcome.execution_root == duty.execution_root
+                                && run.facts.full_logits_trace_root == duty.trace_root
+                            {
+                                self.persist_foreign_material(&duty.claim_id, &bytes);
+                                break 'verdict Some(PalwReceiptVerdictV2::Valid);
+                            }
+                            // A replay that disagrees is the court's business, not a receipt's:
+                            // this seat simply has not verified the claim, and the shared tail
+                            // below (pull, then the half-window accusation) applies unchanged.
+                        }
+                    }
+                    if !duty.free_prompt {
                     for bytes in materials.get(&duty.claim_id).map(|v| v.as_slice()).unwrap_or(&[]) {
                         // Through the backend seam, which recomputes the leg root exactly.
                         // `Mismatch` is deliberately NOT an accusation here: it gathers no quorum
@@ -1920,6 +1981,7 @@ impl PalwPanelService {
                     {
                         materials.entry(duty.claim_id).or_default().push(bytes);
                         break 'verdict Some(PalwReceiptVerdictV2::Valid);
+                    }
                     }
                     // No verifying material yet. Ask the network before accusing: the producer may
                     // be gone, but any peer that heard the broadcast can re-serve it.

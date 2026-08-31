@@ -26,7 +26,7 @@ use kaspa_rpc_core::{RpcTransaction, api::rpc::RpcApi};
 use std::path::Path;
 
 /// Submit the rail's `*.commitment-tx.borsh`.
-pub async fn submit(ctx: &Ctx, path: &Path, yes: bool) -> Result<(), CliError> {
+pub async fn submit(ctx: &Ctx, path: &Path, yes: bool, material_out: Option<&Path>) -> Result<(), CliError> {
     let bytes = std::fs::read(path).map_err(|e| CliError::new(exit::GENERIC, format!("{}: {e}", path.display())))?;
     // Borsh, because that is what the rail wrote. A file that does not decode is named as such
     // rather than passed to a node that would refuse it less clearly.
@@ -75,10 +75,36 @@ pub async fn submit(ctx: &Ctx, path: &Path, yes: bool) -> Result<(), CliError> {
         .await
         .map_err(|e| CliError::new(exit::GENERIC, format!("submit {txid}: {e}")))?;
 
+    // The DA half of the submission, discharged where the claim id is known. The payload the
+    // node accepted carries the job and the PublicDA prompt ids; the FPM1 file is those two
+    // fields under the claim's own name, which is exactly what a seat's replay needs and what
+    // the producer's re-broadcast loop serves. Written AFTER the node accepted the transaction:
+    // a material for a claim the chain never saw would make the panel replay a ghost.
+    let mut material_note: Option<String> = None;
+    if let Some(dir) = material_out {
+        let payload: kaspa_consensus_core::palw_freeprompt_v3::PalwFpCommitmentTxPayloadV3 = borsh::from_slice(&tx.payload)
+            .map_err(|e| CliError::new(exit::GENERIC, format!("the accepted payload does not decode — not writing a material: {e}")))?;
+        let claim = kaspa_consensus_core::palw_freeprompt_v3::fp_claim_id_v3(&payload.commitment);
+        let bytes = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_material_encode_v1(
+            &payload.commitment.job,
+            &payload.prompt_token_ids,
+        );
+        std::fs::create_dir_all(dir).map_err(|e| CliError::new(exit::GENERIC, format!("{}: {e}", dir.display())))?;
+        let file = dir.join(format!("{claim}.material"));
+        std::fs::write(&file, &bytes).map_err(|e| CliError::new(exit::GENERIC, format!("{}: {e}", file.display())))?;
+        material_note = Some(file.display().to_string());
+    }
+
     match ctx.output {
-        OutputFormat::Json => println!("{}", serde_json::json!({ "submitted": true, "txid": submitted.to_string() })),
+        OutputFormat::Json => println!(
+            "{}",
+            serde_json::json!({ "submitted": true, "txid": submitted.to_string(), "material": material_note })
+        ),
         _ => {
             println!("submitted {submitted}");
+            if let Some(file) = &material_note {
+                println!("  DA material written: {file}");
+            }
             // Said here because the next question is always "so am I mining now", and the answer
             // is no — not yet, and not because anything is wrong.
             println!(
