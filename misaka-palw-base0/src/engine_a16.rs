@@ -99,7 +99,7 @@ pub enum A16EngineError {
 
 /// One position's forward, every node's committed row, in the shape profile's numbering: the
 /// replay surface. `pre` and `post` are per node; `attn` is per layer, per node.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct A16TraceV1 {
     pub pre: Vec<Vec<i32>>,
     pub attn: Vec<Vec<Vec<i32>>>,
@@ -1105,6 +1105,9 @@ impl<'a> A16Engine<'a> {
             let lp = |li: usize| -> &LayerParams { &self.layers[li] };
             let out: Vec<i32> = match node.op {
                 PlanOp::EmbedGather => {
+                    if token_id >= self.artifact.shape.vocab {
+                        return Err(A16EngineError::OpRefused("a token outside the vocabulary"));
+                    }
                     self.artifact.embed[token_id * d..(token_id + 1) * d].iter().map(|c| *c as i32).collect()
                 }
                 PlanOp::RmsNorm => {
@@ -1272,6 +1275,19 @@ fn plan_table(nodes: &[PalwStepNodeV1], table: &'static str, shape: &Base0ShapeV
 
     let refuse = |index: usize, reason: String| A16PlanErrorV1::UnservedNode { table, index, reason };
 
+    /// What a node's output IS, statically: a fixed element count, or a kv-scaled row family.
+    /// Tracked so every consumer's input width is checked AT PLAN TIME — the fuzz gate's first
+    /// find was a gate-and-plan-accepted profile whose rewired input refs fed a kv-width row to
+    /// the q-rope, and the head slicing walked off the end mid-forward. A width-sound plan makes
+    /// that whole class of profile unplannable instead of un-panickable.
+    #[derive(Clone, Copy, PartialEq, Eq, Debug)]
+    enum W {
+        Fixed(u32),
+        KvScaled(u32),
+        Series,
+    }
+
+    let mut widths: Vec<W> = Vec::with_capacity(nodes.len());
     let mut out = Vec::with_capacity(nodes.len());
     for (index, node) in nodes.iter().enumerate() {
         // The declared inputs, resolved first — every op checks its arity against them.
@@ -1295,6 +1311,20 @@ fn plan_table(nodes: &[PalwStepNodeV1], table: &'static str, shape: &Base0ShapeV
         }
         let arity = |n: usize| -> Result<(), A16PlanErrorV1> {
             if inputs.len() != n { Err(refuse(index, format!("arity {} where the kernel takes {n}", inputs.len()))) } else { Ok(()) }
+        };
+        let width_of = |input: &PlanInput| -> W {
+            match input {
+                PlanInput::Row(i) => widths[*i],
+                PlanInput::LayerIn => W::Fixed(d),
+                PlanInput::CachedK | PlanInput::CachedV => W::Series,
+            }
+        };
+        let need = |slot: usize, want: W, what: &str| -> Result<(), A16PlanErrorV1> {
+            let got = width_of(&inputs[slot]);
+            if got != want {
+                return Err(refuse(index, format!("input {slot} is {got:?} where {what} takes {want:?}")));
+            }
+            Ok(())
         };
         let width = |want: u32, what: &str| -> Result<(), A16PlanErrorV1> {
             match node.out_len {
@@ -1331,6 +1361,7 @@ fn plan_table(nodes: &[PalwStepNodeV1], table: &'static str, shape: &Base0ShapeV
             (Op::RmsNorm, "") if kid == k_rms => {
                 arity(1)?;
                 width(d, "hidden")?;
+                need(0, W::Fixed(d), "the norm")?;
                 PlanOp::RmsNorm
             }
             (Op::MulElem, n) if kid == k_req => {
@@ -1352,8 +1383,14 @@ fn plan_table(nodes: &[PalwStepNodeV1], table: &'static str, shape: &Base0ShapeV
                     _ => return Err(refuse(index, format!("requant operand {n:?} is not one this store names"))),
                 };
                 match fixed {
-                    Some(want) => width(want, "the slot's width")?,
-                    None => kv_scaled(heads)?,
+                    Some(want) => {
+                        width(want, "the slot's width")?;
+                        need(0, W::Fixed(want), "a width-preserving requant")?;
+                    }
+                    None => {
+                        kv_scaled(heads)?;
+                        need(0, W::KvScaled(heads), "the probs requant")?;
+                    }
                 }
                 PlanOp::Requant(slot)
             }
@@ -1371,6 +1408,11 @@ fn plan_table(nodes: &[PalwStepNodeV1], table: &'static str, shape: &Base0ShapeV
                     _ => return Err(refuse(index, format!("matmul operand {n:?} is not one this store names"))),
                 };
                 width(slot.1, "the slot's width")?;
+                let in_width = match slot.0 {
+                    MatSlot::Down => ffn,
+                    _ => d,
+                };
+                need(0, W::Fixed(in_width), "this matmul's fan-in")?;
                 PlanOp::MatMulRequant(slot.0)
             }
             (Op::MatMulQuant, n) if kid == k_rs => {
@@ -1379,6 +1421,7 @@ fn plan_table(nodes: &[PalwStepNodeV1], table: &'static str, shape: &Base0ShapeV
                 match strip_layer(n) {
                     Some("ffn_gate.weight") => {
                         width(ffn, "ffn")?;
+                        need(0, W::Fixed(d), "the gate's fan-in")?;
                         PlanOp::MatMulRescale(MatSlot::Gate)
                     }
                     _ => return Err(refuse(index, format!("rescale operand {n:?} is not one this store names"))),
@@ -1390,6 +1433,7 @@ fn plan_table(nodes: &[PalwStepNodeV1], table: &'static str, shape: &Base0ShapeV
                     return Err(refuse(index, format!("scores operand {n:?} is not one this store names")));
                 }
                 kv_scaled(heads)?;
+                need(0, W::Fixed(d), "the query")?;
                 if inputs.get(1) != Some(&PlanInput::CachedK) {
                     return Err(refuse(index, "scores read something other than the key series".to_string()));
                 }
@@ -1401,6 +1445,7 @@ fn plan_table(nodes: &[PalwStepNodeV1], table: &'static str, shape: &Base0ShapeV
                     return Err(refuse(index, format!("softmax operand {n:?} is not one this store names")));
                 }
                 kv_scaled(heads)?;
+                need(0, W::KvScaled(heads), "the row softmax")?;
                 PlanOp::Softmax
             }
             (Op::MatMulQuant, n) if kid == k_vals => {
@@ -1409,6 +1454,7 @@ fn plan_table(nodes: &[PalwStepNodeV1], table: &'static str, shape: &Base0ShapeV
                     return Err(refuse(index, format!("values operand {n:?} is not one this store names")));
                 }
                 width(d, "hidden")?;
+                need(0, W::KvScaled(heads), "the probability rows")?;
                 if inputs.get(1) != Some(&PlanInput::CachedV) {
                     return Err(refuse(index, "values read something other than the value series".to_string()));
                 }
@@ -1424,21 +1470,27 @@ fn plan_table(nodes: &[PalwStepNodeV1], table: &'static str, shape: &Base0ShapeV
                     (_, other) => return Err(refuse(index, format!("rope out width {other:?} fits neither q nor k"))),
                 };
                 width(if kv { kv_dim } else { d }, "the rotated width")?;
+                need(0, W::Fixed(if kv { kv_dim } else { d }), "the rotation")?;
                 PlanOp::Rope { kv }
             }
             (Op::AddElem, "") if kid == k_add => {
                 arity(2)?;
                 width(d, "hidden")?;
+                need(0, W::Fixed(d), "the residual add")?;
+                need(1, W::Fixed(d), "the residual add")?;
                 PlanOp::AddElem
             }
             (Op::MulElem, "") if kid == k_mul => {
                 arity(2)?;
                 width(ffn, "ffn")?;
+                need(0, W::Fixed(ffn), "the gated product")?;
+                need(1, W::Fixed(ffn), "the gated product")?;
                 PlanOp::MulElem
             }
             (Op::Silu, "") if kid == k_silu => {
                 arity(1)?;
                 width(ffn, "ffn")?;
+                need(0, W::Fixed(ffn), "the nonlinearity")?;
                 PlanOp::Silu
             }
             (op, n) => {
@@ -1448,6 +1500,10 @@ fn plan_table(nodes: &[PalwStepNodeV1], table: &'static str, shape: &Base0ShapeV
                 ));
             }
         };
+        widths.push(match node.out_len {
+            PalwStepOutLenV1::Fixed { elements } => W::Fixed(elements),
+            PalwStepOutLenV1::KvScaled { multiplier } => W::KvScaled(multiplier),
+        });
         out.push(PlanNode { op, inputs, role: node.role });
     }
     Ok(out)
