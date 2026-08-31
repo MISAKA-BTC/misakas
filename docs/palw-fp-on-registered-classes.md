@@ -300,3 +300,39 @@ regenesis (or a fresh devnet) the change implies, and the one operational step t
 for itself. What is no longer outstanding is the DECISION: the value is chosen, measured against
 the classes that exist, and it holds weight-per-CU constant so it is not also an economic change
 smuggled in beside a pricing one.
+
+## 2026-08-31 — the lane reaches a running network (Relaunch 4)
+
+That operational step happened without this branch having to perform it: testnet-11's Relaunch 4
+(fingerprint `5ccdd684…`, genesis `8d2002cc…`) merged this branch — the quantum at 100, the
+graph-v2 catalog row, the receipt producer — and its operator doc records the reason in this
+document's own words ("at 1,000 no registered class could reach a single quantum"). What remained
+between the code and a mined receipt block was measured and closed today, in the order a model
+gate should run:
+
+1. **Cross-device agreement, before any registration.** The same prompt (`"What is 2+2?"`, 7
+   tokens, decode 9) on the real 1.7 GiB artifact, on this repo's arm64 dev machine and the
+   x86_64 fleet host: identical output ids, all four leg roots, execution root, CU (583),
+   quanta (5) and claim id. The integer family's determinism claim, held across architectures on
+   the real class — not the unit-test geometry.
+
+2. **The gateway had no worker that could commit.** Its only v3-job implementor was the pinned
+   llama.cpp worker, whose v3 path documents its own gap — no step leg, null execution root —
+   and `FreePromptCommitted` refuses exactly that value (`UnadjudicableCommitment`, the C3
+   fail-closed door). So the browser pipeline existed end to end and could never produce an
+   admissible commitment. `palw-a16-fp-worker` is the A16 backend behind the same two-mode
+   contract; the schedule root is derived exactly as `palw_fp_commitment_v3` derives it, so the
+   gateway's `to_commitment` and the canonical assembly agree byte for byte.
+
+3. **Offline, against the live identity.** Gateway + worker under seat-0's real bond, the
+   Relaunch 4 network domain (genesis-bound, ADR-0042) and a fresh anchor from the synced chain:
+   a browser-shaped chat request returned an answer and a commitment that passes every stateless
+   `FreePromptCommitted` condition — non-null execution root included — at 2 quanta.
+
+Two honest limitations, stated rather than hidden: the registered class's `n_ctx` is 16, and the
+gateway's plain-marker template costs ~9 of those tokens, so a browser prompt today is a few
+tokens each way — the pipeline proof, not the product width; a wider A16 row is a later
+registration through this same gate. And the artifact's `tokenizer_commitment` is zero (it
+predates the converter learning to stamp one), which nothing on the chain checks today; the
+job's `tokenizer_id` carries the same zero consistently. Re-converting with the commitment moves
+the artifact digest and is a follow-up, not a blocker.
