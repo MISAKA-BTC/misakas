@@ -37,7 +37,7 @@ looks like a network fault and is not one.
 
 | | |
 |---|---|
-| CPU | **x86-64**. See §2 — Apple Silicon and other arm hosts cannot join this class. |
+| CPU | **x86-64 or arm64 (Apple Silicon)**. The live chain's lanes run the float-free integer runtime, so participation is not scoped by instruction set — see §2. arm64 is not the degraded option here: the fast integer kernels (`dotprod`/`i8mm`) are the aarch64 path, and x86-64 runs the same arithmetic on fallback kernels. |
 | cores | 4 free (the worker pins `CPU_THREADS = 4`). More cores do **not** help; see §6. |
 | RAM | ~1.4 GiB per resident model on top of the node. 8 GiB comfortable. |
 | disk | ~2 GiB for the model + chain data |
@@ -45,10 +45,31 @@ looks like a network fault and is not one.
 
 ---
 
-## 2. The determinism class — check yours before you join
+## 2. Determinism across CPUs — why any ISA can join now
 
-The tag a node computes must be bit-identical to every other node's, so the runtime is pinned, not
-merely recommended.
+**The live lanes are integer, and that is what changed the answer.** Every class this chain runs —
+the BASE-0 floor derivation, `PALW-QWEN25-A16`, `PALW-QWEN36`, and the free-prompt lane — executes
+on the ADR-0040 float-free integer runtime. "Bit-identical across machines" is a construction
+there, not a calibration: the execution path holds no float (`misaka-palw-base0/tests/float_free.rs`
+enumerates and enforces this per file), integer adds and multiplies commute across
+microarchitectures in a way float reductions never did, and the property is measured, not assumed —
+the 33.27 GiB Qwen3.6 artifact root reproduces **byte-identically from conversions on x86-64/Linux
+and on arm64/macOS** (`palw-public-testnet-classes-runbook.md`), and W8A16 jobs replay bit-identical
+across Intel, AMD and Apple M4 Pro hosts. **Apple Silicon joins testnet-11 fully**: verifying,
+panel seats, the floor, and the model classes. On arm64 the engine takes its FAST path
+(`dotprod`/`i8mm` assembly); x86-64 runs the same arithmetic through fallback kernels — the two
+differ in speed, never in bits.
+
+> **What follows below is the LEGACY float lane's record, kept as history.** Earlier revisions of
+> this document said "Apple Silicon cannot join testnet-11 at launch". That was true of the lane it
+> described — the pinned llama.cpp/GGUF worker, whose float GEMM reductions genuinely split by ISA
+> (0 of 61 kernels agreed x86 vs arm; aarch64 was its own determinism class,
+> `palw-aarch64-class-determinism-2026-08-20.md`) — and it is exactly why the integer runtime was
+> built. The pinned-class table is preserved because it documents that lineage and the fixture
+> tooling; it is **not** a joining requirement for today's chain.
+
+The tag a node computes must be bit-identical to every other node's, so the legacy runtime was
+pinned, not merely recommended.
 
 | what | value |
 |---|---|
@@ -61,11 +82,12 @@ merely recommended.
 | worker sha256 (fleet 2026-08-18) | `2bd857f805baa55f…` |
 | runtime class | `misaka-palw-lite-cpu/x86_64/v1` |
 
-**The class is scoped to the instruction set, and that scoping is deliberate.** An arm build is a
-different class (`misaka-palw-lite-cpu/aarch64-dotprod/v1`) and measured out of class against
-x86-64 — 0 of 61 GEMM kernels agreed. Apple Silicon cannot join testnet-11 at launch. That is
-stated rather than hidden; an arm class would arrive as its own pin and ADR addendum, not as a
-silent widening.
+**The legacy class was scoped to the instruction set, and that scoping was deliberate — for a
+float runtime.** An arm build was a different class (`misaka-palw-lite-cpu/aarch64-dotprod/v1`)
+and measured out of class against x86-64 — 0 of 61 GEMM kernels agreed. On the float lane that
+scoping was honest; on the live integer lanes it is unnecessary, because the arithmetic itself is
+ISA-independent (see the top of this section). Apple Silicon participates in testnet-11 through
+the integer runtime.
 
 Two build flags are not optional, and neither is a preference:
 

@@ -106,6 +106,16 @@ At launch, validating/mining testnet-11 requires being in the pinned class:
   agreement). This is stated, not hidden. An arm-class port of the worker (or a
   multi-class committee design) is future work and would arrive as its own pinned
   class + ADR addendum, not as a silent widening.
+
+  > **Addendum 2026-08-31 — this arrived, as promised, and the restriction is over.** Not as an
+  > arm port of the float worker, but as the float-free integer runtime (ADR-0040 arithmetic,
+  > ADR-0049 canonical IR, ADR-0052 Qwen3.6 through it; ADR-0053 made it the one execution
+  > family). Integer execution is ISA-independent by construction and by measurement: the Qwen3.6
+  > artifact root reproduces byte-identically from x86-64/Linux and arm64/macOS conversions, and
+  > W8A16 jobs replay bit-identically across Intel, AMD and Apple M4 Pro. **Apple Silicon joins
+  > testnet-11 fully** — the aarch64 `dotprod`/`i8mm` kernels are the engine's fast path. The 0/61
+  > measurement above remains true of the float lane it was taken on; it no longer scopes who can
+  > join. `testnet11-node-operator.md` §2 carries the operator-facing statement.
 - The audit harness (`scripts/misaka-palw-forgery-audit.py`) doubles as a
   self-service class check: run it, diff the jsonl against the published fleet
   values — the same methodology that produced the pin.
