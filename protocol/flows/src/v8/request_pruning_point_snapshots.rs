@@ -137,13 +137,27 @@ impl RequestPruningPointPalwStateFlow {
             let msg = dequeue!(self.incoming_route, Payload::RequestPruningPointPalwState)?;
             let pp = req_pruning_point(msg.pruning_point_hash)?;
             let session = self.ctx.consensus().unguarded_session();
-            let carriage = session.spawn_blocking(move |c| c.pruning_point_palw_state(pp)).await;
+            // The state AND the declarations its classes were registered under (ADR-0067
+            // Decision 6). A pruned-syncing peer never walks the blocks whose acceptance wrote
+            // those rows, so without this it holds classes it cannot serve. Collected in the same
+            // blocking hop, because two hops could straddle a reorg and hand the peer a state and
+            // a declaration set from different chain points.
+            let (carriage, class_carriages) = session
+                .spawn_blocking(move |c| (c.pruning_point_palw_state(pp), c.palw_class_carriages_for_sync_v1()))
+                .await;
             let reply = match carriage {
                 Some(c) => PruningPointPalwStateMessage {
                     found: true,
                     palw_state: borsh::to_vec(&c).expect("PalwStateCarriageV2 borsh is infallible"),
+                    class_carriages: class_carriages
+                        .into_iter()
+                        .map(|(class_id, carriage)| kaspa_p2p_lib::pb::PalwClassCarriageEntry {
+                            class_id: Some(class_id.into()),
+                            carriage,
+                        })
+                        .collect(),
                 },
-                None => PruningPointPalwStateMessage { found: false, palw_state: vec![] },
+                None => PruningPointPalwStateMessage { found: false, palw_state: vec![], class_carriages: vec![] },
             };
             self.router.enqueue(make_message!(Payload::PruningPointPalwState, reply)).await?;
         }

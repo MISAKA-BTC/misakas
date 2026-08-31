@@ -4154,6 +4154,73 @@ impl VirtualStateProcessor {
         Some((carriage.profile, carriage.canonical))
     }
 
+    /// **ADR-0067 Decision 6, the serving half: every declaration this node can hand a syncing
+    /// peer.** One entry per class in current state that this node has a row for — the rows a
+    /// pruned-syncing peer cannot obtain any other way, since it never walks the blocks whose
+    /// acceptance wrote them. A class this node lacks a row for is simply absent: the peer's
+    /// adoption is checked against its OWN state, so a short list costs it nothing but a fallback
+    /// to `--palw-class-carriage`.
+    pub fn palw_class_carriages_for_sync_v1_impl(&self) -> Vec<(kaspa_hashes::Hash64, Vec<u8>)> {
+        let Some(state_params) = self.palw_state_params_v2.as_ref() else { return Vec::new() };
+        let Some((_, state)) = self.palw_state_v2_store.read().load_tip(state_params).ok().flatten() else {
+            return Vec::new();
+        };
+        let store = self.palw_class_carriage_store.read();
+        state
+            .class_ids()
+            .into_iter()
+            .filter_map(|class_id| store.get(class_id).map(|record| (class_id, record.carriage.clone())))
+            .collect()
+    }
+
+    /// **ADR-0067 Decision 6: adopt a class declaration this node did not watch arrive.**
+    ///
+    /// The index's one incompleteness is a pruned sync: `import_pruning_point_palw_state` brings
+    /// the class table over wholesale and no carriage row with it, so a node that joined that way
+    /// holds classes whose graphs it does not have and refuses to serve them. This is the way in,
+    /// and it needs no trust in whoever supplied the bytes — **a carriage is self-authenticating
+    /// against chain state**:
+    ///
+    /// * the class must be one this chain currently holds (and not frozen — a stopped class is
+    ///   not one to start serving);
+    /// * the profile must hash to that class id, which is what `class_id` MEANS, so a wrong graph
+    ///   cannot be adopted under a right name;
+    /// * the artifact root must be the one the chain registered, which pins the half the id does
+    ///   not cover — the weights, and with them the canonical job that prices the class.
+    ///
+    /// A supplier who satisfies all three has handed over exactly the bytes the accept path would
+    /// have written. Anything else is refused, so the worst a hostile source achieves is wasting
+    /// its own bandwidth.
+    pub fn palw_adopt_class_carriage_v1_impl(&self, class_id: kaspa_hashes::Hash64, carriage_bytes: &[u8]) -> Result<(), String> {
+        let state_params = self.palw_state_params_v2.as_ref().ok_or("this network has no V2 state params")?;
+        let (_, state) = self
+            .palw_state_v2_store
+            .read()
+            .load_tip(state_params)
+            .ok()
+            .flatten()
+            .ok_or("this node holds no V2 state to check a declaration against")?;
+        let class = state.class(&class_id).ok_or_else(|| format!("this chain does not hold class {class_id}"))?;
+        if matches!(class.status, kaspa_consensus_core::palw_state_v2::PalwClassStatusV2::Frozen { .. }) {
+            return Err(format!("class {class_id} is frozen; a stopped class is not one to start serving"));
+        }
+        let carriage: kaspa_consensus_core::palw_state_v2::PalwClassAdmissionCarriageV2 =
+            borsh::from_slice(carriage_bytes).map_err(|e| format!("the supplied carriage does not decode: {e}"))?;
+        let derived = carriage.profile.shape_profile_id();
+        if derived != class_id {
+            return Err(format!("the supplied profile hashes to {derived}, not to {class_id} — it is another class's graph"));
+        }
+        if carriage.canonical.shape_profile_id != class_id {
+            return Err("the supplied canonical job names another class, and it is what prices this one".to_string());
+        }
+        let record = crate::model::stores::palw_class_carriage::PalwClassCarriageRecord {
+            registered_daa: class.registered_daa,
+            artifact_root: class.artifact_root,
+            carriage: carriage_bytes.to_vec(),
+        };
+        self.palw_class_carriage_store.write().insert(class_id, record).map_err(|e| format!("cannot store the declaration: {e}"))
+    }
+
     pub fn palw_seat_duties_v2_impl(
         &self,
         mine: &[kaspa_consensus_core::palw_state_v2::PalwBondKeyV2],

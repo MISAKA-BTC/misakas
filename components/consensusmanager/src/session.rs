@@ -246,6 +246,14 @@ impl ConsensusSessionOwned {
         self.consensus.palw_registered_class_carriage_v1(class_id)
     }
 
+    pub fn palw_adopt_class_carriage_v1(&self, class_id: kaspa_consensus_core::Hash64, carriage: &[u8]) -> Result<(), String> {
+        self.consensus.palw_adopt_class_carriage_v1(class_id, carriage)
+    }
+
+    pub fn palw_class_carriages_for_sync_v1(&self) -> Vec<(kaspa_consensus_core::Hash64, Vec<u8>)> {
+        self.consensus.palw_class_carriages_for_sync_v1()
+    }
+
     pub fn palw_bond_of_pubkey_v2(&self, pubkey: &[u8]) -> Option<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2> {
         self.consensus.palw_bond_of_pubkey_v2(pubkey)
     }

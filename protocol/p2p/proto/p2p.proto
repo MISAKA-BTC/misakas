@@ -456,6 +456,21 @@ message RequestPruningPointPalwStateMessage{
 message PruningPointPalwStateMessage{
   bool found = 1;
   bytes palwState = 2; // borsh(PalwStateCarriageV2)
+  // ADR-0067 Decision 6: the class DECLARATIONS the imported state's classes were registered
+  // under. The state carries a class's economic facts and not its graph, so a node that joins by
+  // a pruned sync would hold classes it cannot serve — it never walks the blocks whose acceptance
+  // wrote the declarations. These ride along, and they need no authentication of their own: a
+  // declaration is checked against the imported state (the class must be there, the profile must
+  // hash to its id, the canonical must name the same class), so a server that sends the wrong
+  // bytes wastes only its own bandwidth. ADDITIVE: a peer that does not send this leaves the
+  // field empty, and the client falls back to --palw-class-carriage.
+  repeated PalwClassCarriageEntry classCarriages = 3;
+}
+
+// One class's declaration, as the accept path would have indexed it.
+message PalwClassCarriageEntry{
+  Hash classId = 1;
+  bytes carriage = 2; // borsh(PalwClassAdmissionCarriageV2)
 }
 
 // ADR-0042 Decision 7 data availability, transport half (launch blockers: "what is still missing").

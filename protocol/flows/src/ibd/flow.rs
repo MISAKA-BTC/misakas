@@ -1870,8 +1870,8 @@ impl IbdFlow {
         // and the only other writer — the pruning-point import — used to run after the commit
         // barrier. So the comparison had nothing to compare and fell through. Import here, into
         // STAGING, and the challenger becomes a real value.
-        if let Some(carriage) = self.request_pruning_point_palw_state(pruning_point).await? {
-            self.import_pruning_point_palw_state(&staging_session, pruning_point, carriage).await?;
+        if let Some((carriage, declarations)) = self.request_pruning_point_palw_state(pruning_point).await? {
+            self.import_pruning_point_palw_state(&staging_session, pruning_point, carriage, declarations).await?;
         }
         self.validate_staging_palw_order(&self.ctx.consensus().session().await, &staging_session).await?;
         Ok(pruning_point)
@@ -2221,8 +2221,8 @@ impl IbdFlow {
         // re-runs the whole import. These two writes are idempotent under that retry.
         if pruning_point != self.ctx.config.genesis.hash {
             self.sync_pruning_point_overlay_snapshot(consensus, pruning_point).await?;
-            if let Some(carriage) = palw_carriage {
-                self.import_pruning_point_palw_state(consensus, pruning_point, carriage).await?;
+            if let Some((carriage, declarations)) = palw_carriage {
+                self.import_pruning_point_palw_state(consensus, pruning_point, carriage, declarations).await?;
             }
         }
         // A better solution could be to create a copy of the old utxo state for some sort of fallback rather than delete it.
@@ -2454,7 +2454,8 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
     async fn request_pruning_point_palw_state(
         &mut self,
         pruning_point: BlockHash,
-    ) -> Result<Option<kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2>, ProtocolError> {
+    ) -> Result<Option<(kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2, Vec<(kaspa_consensus_core::Hash64, Vec<u8>)>)>, ProtocolError>
+    {
         let palw_active = matches!(
             self.ctx.config.params.palw_consensus_mode,
             kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)
@@ -2488,7 +2489,19 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
         }
         let carriage: kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2 = borsh::from_slice(&msg.palw_state)
             .map_err(|_| ProtocolError::Other("invalid PALW state carriage in PruningPointPalwState"))?;
-        Ok(Some(carriage))
+        // ADR-0067 Decision 6: the declarations ride along. Additive, so a peer that does not send
+        // them leaves this empty and the node falls back to `--palw-class-carriage`; and each one
+        // is checked against the IMPORTED state before it is stored, so a hostile list is refused
+        // entry by entry rather than trusted wholesale.
+        let declarations: Vec<(kaspa_consensus_core::Hash64, Vec<u8>)> = msg
+            .class_carriages
+            .into_iter()
+            .filter_map(|entry| {
+                let id: kaspa_consensus_core::Hash64 = entry.class_id?.try_into().ok()?;
+                Some((id, entry.carriage))
+            })
+            .collect();
+        Ok(Some((carriage, declarations)))
     }
 
     /// Install a carriage fetched earlier by [`Self::request_pruning_point_palw_state`].
@@ -2497,9 +2510,33 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
         consensus: &ConsensusProxy,
         pruning_point: BlockHash,
         carriage: kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2,
+        declarations: Vec<(kaspa_consensus_core::Hash64, Vec<u8>)>,
     ) -> Result<(), ProtocolError> {
         consensus.clone().spawn_blocking(move |c| c.import_pruning_point_palw_state(pruning_point, carriage)).await?;
         info!("imported the PALW state of the pruning point {}", pruning_point);
+        // **After the state, because each declaration is checked against it** (ADR-0067
+        // Decision 6). A refusal is per-entry and never fatal: the state is the consensus half and
+        // it is already in; a declaration this node could not verify simply leaves that class
+        // unservable, which is where a pruned sync stood before this existed.
+        if !declarations.is_empty() {
+            let total = declarations.len();
+            let adopted = consensus
+                .clone()
+                .spawn_blocking(move |c| {
+                    declarations
+                        .into_iter()
+                        .filter(|(class_id, bytes)| match c.palw_adopt_class_carriage_v1(*class_id, bytes) {
+                            Ok(()) => true,
+                            Err(why) => {
+                                kaspa_core::debug!("[palw-class-carriage] peer's declaration for {class_id} refused: {why}");
+                                false
+                            }
+                        })
+                        .count()
+                })
+                .await;
+            info!("adopted {adopted} of {total} class declaration(s) offered with the pruning point state");
+        }
         Ok(())
     }
 

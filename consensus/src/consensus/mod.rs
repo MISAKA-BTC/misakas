@@ -2184,6 +2184,14 @@ impl ConsensusApi for Consensus {
         self.virtual_processor.palw_registered_class_carriage_v1_impl(class_id)
     }
 
+    fn palw_adopt_class_carriage_v1(&self, class_id: kaspa_hashes::Hash64, carriage: &[u8]) -> Result<(), String> {
+        self.virtual_processor.palw_adopt_class_carriage_v1_impl(class_id, carriage)
+    }
+
+    fn palw_class_carriages_for_sync_v1(&self) -> Vec<(kaspa_hashes::Hash64, Vec<u8>)> {
+        self.virtual_processor.palw_class_carriages_for_sync_v1_impl()
+    }
+
     fn palw_disputable_claims_v2(
         &self,
         mine: Vec<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2>,

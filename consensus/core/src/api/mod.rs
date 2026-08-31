@@ -620,6 +620,17 @@ pub trait ConsensusApi: Send + Sync {
         None
     }
 
+    /// ADR-0067 Decision 6: adopt a class declaration this node did not watch arrive (the
+    /// pruned-sync path). Self-authenticating against chain state — see the processor's impl.
+    fn palw_adopt_class_carriage_v1(&self, _class_id: kaspa_hashes::Hash64, _carriage: &[u8]) -> Result<(), String> {
+        Err("this consensus does not index class declarations".to_string())
+    }
+
+    /// ADR-0067 Decision 6: the class declarations this node can serve a pruned-syncing peer.
+    fn palw_class_carriages_for_sync_v1(&self) -> Vec<(kaspa_hashes::Hash64, Vec<u8>)> {
+        Vec::new()
+    }
+
     /// Claims this node could still dispute.
     fn palw_disputable_claims_v2(
         &self,
