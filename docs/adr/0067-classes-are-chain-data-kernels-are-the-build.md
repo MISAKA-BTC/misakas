@@ -272,6 +272,14 @@ choosing, which is one more reason seat payment (R-7) is the next economic ADR t
   chain's own registration, and "the chain never registered it" never reads better than "this
   build cannot serve it".
 
-Not landed, stated so the fence stays honest: the validation-artifact tier and the cache/eviction
-policy (Decision 6's ② and ④), the mmap-container interpreter, and the arming itself — which
+* **The validation tier** (`palw-slice-kat emit|verify`): a validation artifact is an ordinary
+  dense artifact converted with `--layers N` (real weights) plus a KAT binding a fixed token
+  schedule to the bit-exact digest of every logits row. `verify` replays it on the candidate's
+  machine and exits non-zero on a mismatch, naming the divergence; the same file carries the full
+  model's identity facts machine-readably. A passing KAT licenses the FETCH, never a capability
+  declaration — the tool says so on every success.
+
+Not landed, stated so the fence stays honest: the cache/eviction policy (Decision 6's ④ — the
+node has no artifact fetcher, so today the policy is the operator's and the declaration-first
+eviction rule is documentation), the mmap-container interpreter, and the arming itself — which
 waits, per Decision 5, on nothing now except the operational decision.
