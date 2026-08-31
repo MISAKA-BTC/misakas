@@ -825,3 +825,174 @@ fn the_qwen36_class_id_is_the_same_through_every_derivation() {
         }
     }
 }
+
+/// **The whole loop, closed: per-model difficulty and cross-model share co-adjust to a stable
+/// equilibrium** — the ADR-0054 share walk and the per-class retarget running TOGETHER, with
+/// production driven by each model's own compute capacity and its CURRENT target, not scripted.
+///
+/// Two entrants join a floor-carried chain at the minimum grantable share with a 10× compute
+/// asymmetry: FAST can run 40 inferences per epoch, HEAVY 4. Each epoch a model wins
+/// `min(budget, ⌊capacity × odds(target)⌋)` blocks — the deterministic expectation of the
+/// lottery a real producer grinds — the floor fills the rest of the cadence, and every boundary
+/// then walks shares (a filled budget takes `share × growth‰` from the floor, ADR-0054) and
+/// retargets difficulty (share of realized production, audit-H1 renormalized over producers).
+///
+/// The equilibrium law this pins, which no single test held before:
+///   1. **share converges to what the model's compute can actually fill.** Both entrants walk
+///      up from the grant floor; each stalls where its capacity stops filling the next budget —
+///      so the 10× compute asymmetry ends as ~10× share asymmetry, decided by realized
+///      production alone (no declared cost anywhere in the signal path);
+///   2. **difficulty absorbs the asymmetry on the way**: the heavy model's target EASES (its
+///      odds rise) so its few inferences keep winning its share-implied frequency — "share
+///      frequency appropriate per model" is the retarget seeing compute cost through the only
+///      unforgeable signal, the blocks themselves;
+///   3. **the floor's reserve is never walked away** (Σ shares = 1000‰ at every boundary, floor
+///      ≥ the reserve, liveness intact);
+///   4. **down-regulation is as automatic as up**: a model that goes silent decays back toward
+///      the grant floor, and its target holds still — a span it sat out says nothing about its
+///      difficulty in either direction.
+#[test]
+fn difficulty_and_share_co_adjust_across_models_to_equilibrium() {
+    let base = h(0xBA5E);
+    let fast = h(0xFA57);
+    let heavy = h(0x4EA1);
+    let p = params(base).with_class_share_growth_v1(250).expect("the ADR-0054 walk, at the shipped 250‰ step");
+    let grant_floor = p.min_grantable_share_permille();
+    let reserve = p.base_class_reserve_permille();
+    let mut chain = Chain { state: PalwChainStateV2::genesis(), params: p, daa: 0, produced: Default::default(), bond: bond_key().0 };
+
+    chain.step(
+        None,
+        &[
+            Obj::BondRegistered {
+                bond: bond_key(),
+                pubkey: vec![7u8; 32],
+                operator_pubkey: vec![21u8; 8],
+                collateral: 1_000_000_000_000_000,
+                payout_payload: h(0x9A4),
+                signature: vec![9u8; 64],
+            },
+            registration(base, 1_000, BASE_PWU_PER_INFERENCE),
+            registration(fast, grant_floor, QWEN_PWU_PER_INFERENCE),
+            registration(heavy, grant_floor, QWEN_PWU_PER_INFERENCE),
+        ],
+    );
+
+    const FAST_CAPACITY: u64 = 40; // inferences per epoch this model's hardware affords
+    const HEAVY_CAPACITY: u64 = 4; // 10× the compute per inference, so a tenth the attempts
+    const EPOCHS: u64 = 22;
+    const SILENCE_FROM: u64 = 18; // the heavy model stops attempting here (down-regulation arm)
+
+    let mut heavy_share_at_silence = 0u16;
+    let mut heavy_target_at_silence = 0u128;
+    let mut heavy_odds_early = 0.0f64;
+
+    println!();
+    println!("=== co-adjustment to equilibrium (fast 40/epoch, heavy 4/epoch, growth 250‰) ===");
+    println!("{:>5} {:>6} {:>6} {:>7} {:>9} {:>10}", "epoch", "class", "share", "budget", "produced", "odds");
+
+    for epoch in 0..EPOCHS {
+        // What each model can WIN this epoch under its current difficulty: its attempt capacity
+        // times its odds, held to its budget exactly the way a real producer holds.
+        let plan: std::collections::BTreeMap<Hash64, u64> = [(fast, FAST_CAPACITY), (heavy, HEAVY_CAPACITY)]
+            .into_iter()
+            .map(|(class, capacity)| {
+                let capacity = if class == heavy && epoch >= SILENCE_FROM { 0 } else { capacity };
+                let target = chain.state.class_target(&class).expect("registered").target;
+                let budget = chain.state.epoch_budgets().and_then(|b| b.budget_blocks.get(&class).copied()).unwrap_or(0);
+                let expected_wins = ((capacity as f64) * odds(target)).floor() as u64;
+                (class, expected_wins.min(budget))
+            })
+            .collect();
+        let mut made: std::collections::BTreeMap<Hash64, u64> = Default::default();
+        loop {
+            // Entrant blocks are spread through the epoch; the floor carries every other slot.
+            let class = [fast, heavy]
+                .into_iter()
+                .find(|c| {
+                    let want = plan.get(c).copied().unwrap_or(0);
+                    let did = made.get(c).copied().unwrap_or(0);
+                    did < want && chain.daa.is_multiple_of(EPOCH_LENGTH / want.clamp(1, EPOCH_LENGTH))
+                })
+                .unwrap_or(base);
+            *made.entry(class).or_default() += 1;
+            chain.step(Some(class), &[]);
+            if (chain.daa + 1).is_multiple_of(EPOCH_LENGTH) {
+                break;
+            }
+        }
+        let closed = chain.daa / EPOCH_LENGTH;
+        let produced: std::collections::BTreeMap<Hash64, u64> = [base, fast, heavy]
+            .iter()
+            .map(|c| (*c, chain.state.epoch_counter(c).filter(|k| k.epoch_index == closed).map(|k| k.produced_blocks).unwrap_or(0)))
+            .collect();
+        // The boundary block: closes the span, walks the shares, retargets both lanes.
+        chain.step(Some(base), &[]);
+
+        let mut total_share = 0u32;
+        for class in [base, fast, heavy] {
+            let share = chain.state.class_share_permille(&class).unwrap_or(0);
+            total_share += share as u32;
+            let target = chain.state.class_target(&class).expect("registered").target;
+            let budget = chain.state.epoch_budgets().and_then(|b| b.budget_blocks.get(&class).copied()).unwrap_or(0);
+            println!(
+                "{:>5} {:>6} {:>5}‰ {:>7} {:>9} {:>10.6}",
+                closed,
+                if class == base {
+                    "BASE"
+                } else if class == fast {
+                    "FAST"
+                } else {
+                    "HEAVY"
+                },
+                share,
+                budget,
+                produced.get(&class).copied().unwrap_or(0),
+                odds(target)
+            );
+        }
+        // (3) The table is conserved and the liveness floor keeps its reserve, at EVERY boundary.
+        assert_eq!(total_share, 1_000, "the share table must stay a partition of the whole");
+        assert!(
+            chain.state.class_share_permille(&base).unwrap_or(0) >= reserve,
+            "the walk must never draw the floor below its reserve"
+        );
+
+        if epoch == 2 {
+            heavy_odds_early = odds(chain.state.class_target(&heavy).unwrap().target);
+        }
+        if closed == SILENCE_FROM {
+            heavy_share_at_silence = chain.state.class_share_permille(&heavy).unwrap_or(0);
+            heavy_target_at_silence = chain.state.class_target(&heavy).unwrap().target;
+        }
+    }
+
+    let fast_share = chain.state.class_share_permille(&fast).unwrap_or(0);
+    let heavy_share = chain.state.class_share_permille(&heavy).unwrap_or(0);
+    let heavy_odds_final = odds(chain.state.class_target(&heavy).unwrap().target);
+
+    // (1) Share followed capacity: the fast model walked far past the heavy one, and each sits
+    // in the band its own compute affords (fast stalls where 40 wins stop filling the next
+    // budget; heavy where 4 do). The 10× compute asymmetry became share asymmetry on its own.
+    assert!((25..=60).contains(&fast_share), "the fast model should stall near its 40-win capacity, got {fast_share}‰");
+    assert!(
+        fast_share >= 5 * heavy_share.max(1),
+        "a 10× capacity gap must open a wide share gap: fast {fast_share}‰ vs heavy {heavy_share}‰"
+    );
+
+    // (2) Difficulty absorbed the asymmetry while the heavy model produced: its odds rose from
+    // the boot value toward certainty so its few inferences kept their share-implied frequency.
+    assert!(
+        heavy_odds_final > heavy_odds_early,
+        "the heavy model's target must EASE while it fills at a tenth the attempt rate ({heavy_odds_early} -> {heavy_odds_final})"
+    );
+
+    // (4) Silence decayed the share back toward the grant floor and did not move the target.
+    assert!(heavy_share < heavy_share_at_silence, "a silent model's share must decay ({heavy_share_at_silence}‰ -> {heavy_share}‰)");
+    assert!(heavy_share >= grant_floor, "decay stops at the grant floor, never below");
+    assert_eq!(
+        chain.state.class_target(&heavy).unwrap().target,
+        heavy_target_at_silence,
+        "a span the model sat out says nothing about its difficulty — the target must hold still"
+    );
+}

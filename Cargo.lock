@@ -6012,6 +6012,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "misaka-palw-job-replay"
+version = "1.1.0"
+dependencies = [
+ "kaspa-consensus-core",
+ "kaspa-hashes",
+ "misaka-palw-base0",
+ "misaka-palw-sdk",
+ "serde_json",
+ "sha2 0.10.8",
+]
+
+[[package]]
 name = "misaka-palw-jobs-export"
 version = "1.1.0"
 dependencies = [
