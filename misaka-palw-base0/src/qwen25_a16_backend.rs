@@ -164,6 +164,12 @@ pub struct Qwen25A16Backend {
     profile: PalwShapeProfileV3,
     class_profile_id: Hash64,
     canonical_job: (u32, u32),
+    /// **ADR-0067: `Some` when this backend executes FROM the registered profile.** The plan is
+    /// compiled at construction — every declared node bound to a served kernel and a named
+    /// operand, or the constructor refuses — and every forward walks it. `None` is the compiled
+    /// engine, kept for the rows this build's own table names (and as the interpreter's
+    /// reference vectors, per the differential test beside the plan).
+    plan: Option<crate::engine_a16::A16ProfilePlanV1>,
 }
 
 impl Qwen25A16Backend {
@@ -175,7 +181,48 @@ impl Qwen25A16Backend {
     ) -> Self {
         let shape_id = artifact.artifact_digest();
         let class_profile_id = profile.shape_profile_id();
-        Self { artifact, model_id: "PALW-QWEN25-A16".to_string(), network_id, shape_id, profile, class_profile_id, canonical_job }
+        Self { artifact, model_id: "PALW-QWEN25-A16".to_string(), network_id, shape_id, profile, class_profile_id, canonical_job, plan: None }
+    }
+
+    /// **ADR-0067 Decision 2's constructor: a backend for a class this build's table never
+    /// heard of.** The profile arrives from chain state (the registration's admission carriage),
+    /// and the plan it compiles to IS the admission decision — a graph outside this build's
+    /// kernel vocabulary is refused here, with the node named, before anything executes.
+    pub fn from_registered_profile(
+        artifact: std::sync::Arc<Base0ArtifactV1>,
+        network_id: Vec<u8>,
+        profile: PalwShapeProfileV3,
+        canonical_job: (u32, u32),
+    ) -> Result<Self, String> {
+        let engine = A16Engine::new(&artifact).map_err(|e| format!("the artifact is not an A16 class: {e:?}"))?;
+        let plan = engine.plan_from_profile(&profile).map_err(|e| format!("this build cannot serve the registered graph: {e:?}"))?;
+        let shape_id = artifact.artifact_digest();
+        let class_profile_id = profile.shape_profile_id();
+        Ok(Self {
+            artifact,
+            model_id: "PALW-A16/chain-registered".to_string(),
+            network_id,
+            shape_id,
+            profile,
+            class_profile_id,
+            canonical_job,
+            plan: Some(plan),
+        })
+    }
+
+    /// One forward, through whichever authority constructed this backend: the registered plan
+    /// where one exists, the compiled engine where the build's own table named the class.
+    fn forward(
+        &self,
+        engine: &A16Engine<'_>,
+        cache: &mut crate::engine_a16::A16Cache,
+        token: usize,
+        position: usize,
+    ) -> Result<(Vec<i32>, crate::engine_a16::A16TraceV1), String> {
+        match &self.plan {
+            Some(plan) => engine.forward_token_planned(plan, cache, token, position).map_err(|e| format!("planned forward: {e:?}")),
+            None => engine.forward_token_traced(cache, token, position).map_err(|e| format!("forward: {e:?}")),
+        }
     }
 
     /// The class's graph, for callers that need it directly — the same reason `Base0Backend`
@@ -190,7 +237,7 @@ impl Qwen25A16Backend {
         let mut logits_rows: Vec<Vec<i32>> = Vec::with_capacity(prompt.len() + job.exact_decode_tokens as usize);
         let mut generated: Vec<u32> = Vec::with_capacity(job.exact_decode_tokens as usize);
         for (position, token) in prompt.iter().enumerate() {
-            let row = engine.forward_token(&mut cache, *token, position).map_err(|e| format!("prefill at {position}: {e:?}"))?;
+            let (row, _) = self.forward(&engine, &mut cache, *token, position).map_err(|e| format!("prefill at {position}: {e}"))?;
             logits_rows.push(row);
         }
         // EXACT, never early: a job whose length depends on what the model said is a job whose cost
@@ -200,7 +247,7 @@ impl Qwen25A16Backend {
             let next = kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(last) as u32;
             generated.push(next);
             let position = prompt.len() + step;
-            let row = engine.forward_token(&mut cache, next as usize, position).map_err(|e| format!("decode at {position}: {e:?}"))?;
+            let (row, _) = self.forward(&engine, &mut cache, next as usize, position).map_err(|e| format!("decode at {position}: {e}"))?;
             logits_rows.push(row);
         }
         Ok(Qwen25A16RunV1 { logits_rows, generated })
@@ -304,6 +351,11 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         let mut cache = A16Cache::new(self.artifact.shape.n_layers);
         // **The correspondence ADR-0049 Decision F requires, checked before a single leaf is filled.**
         //
+        // Under a registered-profile plan (ADR-0067) the check is structural — the engine IS the
+        // profile, so recorded and declared cannot diverge — and the probe below would burn a
+        // forward pass to re-prove a constructor invariant. It runs only on the compiled path,
+        // where the engine and the profile are still two authorities.
+        //
         // "No worker may commit a step leg for a class whose profile does not name every narrowing
         // the engine performs." `Base0Engine` exposes `plan()` and `base0_check_graph_v1` enforces
         // it; `A16Engine` has no plan and there is no A16 counterpart, so nothing establishes the
@@ -317,6 +369,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         // correctly. So this refuses, and names the node rather than surfacing an `UnknownSlot`
         // from three frames down. Closing it means the class declaring that node — which moves the
         // shape profile id, and therefore registers a different class.
+        if self.plan.is_none() {
         let probe = engine
             .forward_token_traced(&mut A16Cache::new(self.artifact.shape.n_layers), prompt_tokens[0], 0)
             .map_err(|e| format!("probing the graph: {e:?}"))?
@@ -332,6 +385,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
                  against {recorded_attn} recorded. Committing a step leg under this profile would commit arithmetic the court \
                  recomputes differently."
             ));
+        }
         }
 
         let leaf_count = kaspa_consensus_core::palw_step::step_leaf_count(&self.profile, &ctx).map_err(|e| format!("{e:?}"))?;
@@ -354,7 +408,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         // have; the two conventions are about different objects and both are followed here.
         for (position, token) in prompt_tokens.iter().enumerate() {
             let (logits, trace) =
-                engine.forward_token_traced(&mut cache, *token, position).map_err(|e| format!("prefill at {position}: {e:?}"))?;
+                self.forward(&engine, &mut cache, *token, position).map_err(|e| format!("prefill at {position}: {e}"))?;
             let mut rows = crate::legs::a16_captured_rows_v1(&trace);
             if position + 1 != prefill {
                 rows.retain(|r| r.table != kaspa_consensus_core::palw_step::PalwStepTableV1::Post);
@@ -368,9 +422,9 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
 
         for call in 1..job.decode_token_limit as usize {
             let cache_position = prefill + call - 1;
-            let (logits, trace) = engine
-                .forward_token_traced(&mut cache, next as usize, cache_position)
-                .map_err(|e| format!("decode at {cache_position}: {e:?}"))?;
+            let (logits, trace) = self
+                .forward(&engine, &mut cache, next as usize, cache_position)
+                .map_err(|e| format!("decode at {cache_position}: {e}"))?;
             let rows = crate::legs::a16_captured_rows_v1(&trace);
             // The COORDINATE's position is 0 in every decode call — each call has one position —
             // while the cache position is absolute. Conflating them lands every decode row on top

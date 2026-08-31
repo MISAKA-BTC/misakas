@@ -67,6 +67,16 @@ pub fn artifact_of(holding: &PalwLoadedArtifactV1) -> Option<Arc<Base0ArtifactV1
 /// the cost the kaspad registry already paid on this path (its holdings were `Arc`ed for the
 /// panel's tick, the resolve still cloned), carried rather than silently "improved" because the
 /// resolve path's allocation behavior is load-bearing for a producer under cadence.
+/// The dense holding whose digest is `root`, as the `Arc` the backend wants — no clone of the
+/// payload, because the chain arm resolves per claim and a 1.7 GiB copy per resolve is the cost
+/// `dense_artifacts` documents, not one to pay twice.
+pub(crate) fn dense_artifact_by_digest(
+    holdings: &[PalwLoadedArtifactV1],
+    root: kaspa_hashes::Hash64,
+) -> Option<std::sync::Arc<Base0ArtifactV1>> {
+    holdings.iter().filter_map(artifact_of).find(|a| a.artifact_digest() == root)
+}
+
 fn dense_artifacts(holdings: &[PalwLoadedArtifactV1]) -> Vec<Base0ArtifactV1> {
     holdings.iter().filter_map(artifact_of).map(|a| (*a).clone()).collect()
 }

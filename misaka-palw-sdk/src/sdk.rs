@@ -79,6 +79,12 @@ pub struct PalwClassSdk {
     lineages: Vec<Arc<dyn PalwModelLineageV1>>,
     court: PalwCourtParamsV2,
     network_id: Vec<u8>,
+    /// **ADR-0067 Decision 5's fence.** `false` (the default) keeps the chain-registered-class
+    /// arm sealed: [`Self::resolve_chain_registered`] refuses with the fence named, and nothing
+    /// this SDK serves can come from a profile the build's tables do not carry. Armed only by
+    /// [`Self::with_chain_classes_v1`], which a node exposes as an operator flag — never a
+    /// default — until the ADR's fuzz gate has run to its stated saturation.
+    chain_classes: bool,
 }
 
 impl PalwClassSdk {
@@ -97,7 +103,7 @@ impl PalwClassSdk {
         assert_eq!(ids.len(), lineages.len(), "two lineages share a lineage id");
         let fallbacks = lineages.iter().filter(|l| l.is_container_fallback()).count();
         assert!(fallbacks <= 1, "{fallbacks} lineages claim the container-fallback slot, and files can only fall back to one");
-        Self { lineages, court, network_id }
+        Self { lineages, court, network_id, chain_classes: false }
     }
 
     /// Add one lineage to an already-built SDK — the composition point for a lineage that lives
@@ -252,6 +258,71 @@ impl PalwClassSdk {
         Err(format!("this node cannot serve the registered class {class_id} (artifact root {artifact_root})"))
     }
 
+    /// Arm the ADR-0067 chain-registered-class arm. A separate constructor step rather than a
+    /// parameter, so every call site that arms it is greppable and deliberate.
+    pub fn with_chain_classes_v1(mut self) -> Self {
+        self.chain_classes = true;
+        self
+    }
+
+    /// **ADR-0067 Decisions 1–2: serve a class this build's tables never heard of, from the
+    /// registration the chain carries.** The caller hands in what the chain holds — the
+    /// admission carriage's profile and canonical job — and gets an execution backend whose
+    /// every forward walks that declaration, or a refusal that names what this build cannot
+    /// serve.
+    ///
+    /// Fenced (Decision 5): with the fence down this refuses unconditionally, naming the fence.
+    /// The checks, in refusal order:
+    ///
+    /// 1. the fence;
+    /// 2. the profile hashes to the class id — the id IS the declaration, so a mismatch is a
+    ///    wrong object, not a wrong opinion;
+    /// 3. the canonical job names the same class, because the pwu this class is paid per was
+    ///    counted from that job (a canonical job for another graph prices another class);
+    /// 4. an artifact whose digest is the registered root is among `holdings` — Decision 6:
+    ///    possession is the operator's chosen act, so its absence is a "fetch it" error, not a
+    ///    protocol fault;
+    /// 5. the plan compiles — every declared node lands inside this build's kernel vocabulary
+    ///    (Decision 3's boundary, surfaced with the node named).
+    pub fn resolve_chain_registered(
+        &self,
+        class_id: Hash64,
+        artifact_root: Hash64,
+        holdings: &[PalwLoadedArtifactV1],
+        profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+        canonical: &kaspa_consensus_core::palw_v2::PalwJobContextV2,
+    ) -> Result<Box<dyn PalwExecutionBackendV1>, String> {
+        if !self.chain_classes {
+            return Err(format!(
+                "class {class_id} is chain-registered and this node's chain-class arm is fenced off (ADR-0067 Decision 5) — \
+                 arm it deliberately once the operator accepts interpreted execution"
+            ));
+        }
+        let declared = profile.shape_profile_id();
+        if declared != class_id {
+            return Err(format!("the supplied profile hashes to {declared}, not to the registered class {class_id}"));
+        }
+        if canonical.shape_profile_id != class_id {
+            return Err(format!(
+                "the canonical job names class {}, not the registered class {class_id} — it prices another graph",
+                canonical.shape_profile_id
+            ));
+        }
+        let Some(artifact) = crate::lineages::dense::dense_artifact_by_digest(holdings, artifact_root) else {
+            return Err(format!(
+                "this node holds no artifact whose digest is the registered root {artifact_root} — fetch the class's \
+                 artifact and load it (--palw-class-artifact); registration does not obligate possession (ADR-0067 Decision 6)"
+            ));
+        };
+        let backend = misaka_palw_base0::qwen25_a16_backend::Qwen25A16Backend::from_registered_profile(
+            artifact,
+            self.network_id.clone(),
+            profile.clone(),
+            (canonical.declared_prefill_tokens, canonical.exact_decode_tokens),
+        )?;
+        Ok(Box::new(backend))
+    }
+
     /// **The admission gate, run BEFORE anything is signed or funded.**
     ///
     /// This builds the exact registration object the chain would judge and asks
@@ -315,5 +386,178 @@ impl PalwClassSdk {
             signature,
         )
         .map_err(|e| format!("this node cannot build a registration for {}: {e}", candidate.entry.model_id))
+    }
+}
+
+#[cfg(test)]
+mod chain_arm_tests {
+    use super::*;
+    use kaspa_consensus_core::palw_base0_profile::rc_job_context;
+    use kaspa_consensus_core::palw_qwen25_profile::{PalwQwen25GeometryV1, qwen25_a16_profile_v2};
+    use misaka_palw_base0::artifact::{Base0ArtifactV1, Base0ShapeV1, LN_THETA_10000_GEN_Q};
+    use misaka_palw_base0::engine_a16::derived_a16_store;
+
+    fn court() -> PalwCourtParamsV2 {
+        PalwCourtParamsV2::new(kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES, 4, 2).expect("shipped court")
+    }
+
+    /// A tiny dense artifact + the CORRECTED profile for its geometry — a class that exists
+    /// nowhere in this build's tables, which is the whole scenario.
+    fn class() -> (std::sync::Arc<Base0ArtifactV1>, kaspa_consensus_core::palw_step::PalwShapeProfileV3) {
+        let shape = Base0ShapeV1 {
+            n_layers: 1,
+            n_heads: 4,
+            n_kv_heads: 2,
+            d_head: 4,
+            d_ff: 12,
+            vocab: 64,
+            max_position: 32,
+            ln_theta_gen_q: LN_THETA_10000_GEN_Q,
+            eps_q: 1,
+        };
+        let artifact = Base0ArtifactV1::derive_deterministic(shape, 0x0067)
+            .expect("a valid shape")
+            .with_a16_params(derived_a16_store(&shape))
+            .expect("sorted and unique");
+        let geometry = PalwQwen25GeometryV1 {
+            layer_count: 1,
+            hidden_dim: 16,
+            ffn_dim: 12,
+            attn_heads: 4,
+            attn_kv_heads: 2,
+            attn_head_dim: 4,
+            vocab_size: 64,
+            n_ctx: 16,
+            n_threads: 1,
+            rms_eps_q: 1,
+            tile_len: 4,
+        };
+        (std::sync::Arc::new(artifact), qwen25_a16_profile_v2(geometry).expect("the corrected profile builds"))
+    }
+
+    fn holding(artifact: std::sync::Arc<Base0ArtifactV1>) -> PalwLoadedArtifactV1 {
+        PalwLoadedArtifactV1::from_parts(
+            crate::lineages::dense::DENSE_LINEAGE_ID,
+            None,
+            "a test holding".into(),
+            artifact,
+        )
+    }
+
+    fn fp_job(
+        class_id: Hash64,
+        n_ctx: u32,
+        prompt: &[u32],
+        decode: u32,
+    ) -> kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3 {
+        kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3 {
+            version: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_V3_VERSION,
+            network_domain: Hash64::from_u64_word(9),
+            class_id,
+            executor_bond: kaspa_consensus_core::tx::TransactionOutpoint {
+                transaction_id: kaspa_consensus_core::tx::TransactionId::from_u64_word(1),
+                index: 0,
+            },
+            executor_pubkey: vec![7; 8],
+            operator_id: Hash64::from_u64_word(4),
+            anchor_block: Hash64::from_u64_word(0xA0),
+            anchor_daa: 100,
+            job_nonce: [0x67; 32],
+            tokenizer_id: Hash64::default(),
+            prompt_token_ids_hash: kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(prompt),
+            prompt_tokens: prompt.len() as u32,
+            decode_token_limit: decode,
+            max_context_tokens: n_ctx,
+            privacy_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PRIVACY_PUBLIC_DA,
+        }
+    }
+
+    /// **The fence holds until armed, and names itself** (ADR-0067 Decision 5). The same call
+    /// that is refused sealed succeeds armed — one flag, no other difference.
+    #[test]
+    fn the_fence_refuses_until_armed_and_the_armed_arm_serves() {
+        let (artifact, profile) = class();
+        let class_id = profile.shape_profile_id();
+        let root = artifact.artifact_digest();
+        let canonical = rc_job_context(&profile, 4, 2);
+        let holdings = vec![holding(artifact)];
+
+        let sealed = PalwClassSdk::builtin_v1(court(), b"misaka-palw-rc".to_vec());
+        let err = sealed.resolve_chain_registered(class_id, root, &holdings, &profile, &canonical).map(drop).unwrap_err();
+        assert!(err.contains("fenced off"), "the refusal names the fence: {err}");
+
+        let armed = PalwClassSdk::builtin_v1(court(), b"misaka-palw-rc".to_vec()).with_chain_classes_v1();
+        let backend = armed
+            .resolve_chain_registered(class_id, root, &holdings, &profile, &canonical)
+            .expect("a servable chain-registered class resolves");
+        assert_eq!(backend.model_id(), "PALW-A16/chain-registered");
+    }
+
+    /// **The interpreted backend and the table-style backend agree on the work itself.** Same
+    /// artifact, same profile, one constructed as the chain arm would and one as the compiled
+    /// table would: a caller's prompt must land on the same execution root and the same answer,
+    /// or the two authorities ADR-0067 merges are still two authorities.
+    #[test]
+    fn the_chain_arm_and_the_table_path_produce_the_same_execution() {
+        let (artifact, profile) = class();
+        let class_id = profile.shape_profile_id();
+        let root = artifact.artifact_digest();
+        let canonical = rc_job_context(&profile, 4, 2);
+        let holdings = vec![holding(artifact.clone())];
+
+        let armed = PalwClassSdk::builtin_v1(court(), b"misaka-palw-rc".to_vec()).with_chain_classes_v1();
+        let interpreted =
+            armed.resolve_chain_registered(class_id, root, &holdings, &profile, &canonical).expect("resolves");
+        let compiled = misaka_palw_base0::qwen25_a16_backend::Qwen25A16Backend::new(
+            artifact,
+            b"misaka-palw-rc".to_vec(),
+            profile.clone(),
+            (4, 2),
+        );
+
+        let prompt_ids: Vec<u32> = vec![3, 9, 17];
+        let prompt: Vec<usize> = prompt_ids.iter().map(|t| *t as usize).collect();
+        let job = fp_job(class_id, profile.n_ctx, &prompt_ids, 3);
+        let a = interpreted.execute_free_prompt(&job, &prompt).expect("the chain arm runs the prompt");
+        let b = compiled.execute_free_prompt(&job, &prompt).expect("the table path runs the prompt");
+        assert_eq!(a.outcome.execution_root, b.outcome.execution_root, "one root, whichever authority built the engine");
+        assert_eq!(a.output_token_ids, b.output_token_ids, "and one answer");
+        assert_eq!(a.facts, b.facts, "and the same measured facts");
+    }
+
+    /// **Each refusal names its boundary**: a root nobody holds points at Decision 6 (fetch it —
+    /// registration does not obligate possession), a profile that hashes elsewhere is a wrong
+    /// object, and a declaration outside the kernel vocabulary is refused with the node named.
+    #[test]
+    fn the_refusals_name_their_boundaries() {
+        let (artifact, profile) = class();
+        let class_id = profile.shape_profile_id();
+        let root = artifact.artifact_digest();
+        let canonical = rc_job_context(&profile, 4, 2);
+        let holdings = vec![holding(artifact)];
+        let armed = PalwClassSdk::builtin_v1(court(), b"misaka-palw-rc".to_vec()).with_chain_classes_v1();
+
+        let missing = armed
+            .resolve_chain_registered(class_id, Hash64::from_u64_word(0xBAD), &holdings, &profile, &canonical)
+            .map(drop)
+            .unwrap_err();
+        assert!(missing.contains("does not obligate possession"), "Decision 6 is the answer: {missing}");
+
+        let wrong_id = armed
+            .resolve_chain_registered(Hash64::from_u64_word(0xFACE), root, &holdings, &profile, &canonical)
+            .map(drop)
+            .unwrap_err();
+        assert!(wrong_id.contains("hashes to"), "a wrong object, said as one: {wrong_id}");
+
+        let mut foreign = profile.clone();
+        foreign.attn_nodes[0].kernel_semantics_id =
+            kaspa_consensus_core::palw_step::kernel_semantics_id_v1("a16/some-future-kernel/v9");
+        let foreign_id = foreign.shape_profile_id();
+        let foreign_canonical = rc_job_context(&foreign, 4, 2);
+        let unserved = armed
+            .resolve_chain_registered(foreign_id, root, &holdings, &foreign, &foreign_canonical)
+            .map(drop)
+            .unwrap_err();
+        assert!(unserved.contains("cannot serve the registered graph"), "the kernel boundary speaks: {unserved}");
     }
 }
