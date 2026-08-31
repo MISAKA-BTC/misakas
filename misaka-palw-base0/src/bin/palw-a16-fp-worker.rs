@@ -17,8 +17,15 @@
 //!   `Qwen/Qwen2.5-1.5B/graph-v2` — the same row the chain-side SDK resolves — so the profile,
 //!   canonical job and class id have one source. A worker that built its own profile would be one
 //!   requant away from committing under a class nobody registered.
-//! * **The network id is the SDK's** (`misaka-palw-rc`): `palw_fp_job_context_v3` stamps it into
-//!   the context, and the court reconstructs the context through the SDK with that same constant.
+//! * **The network id is the OPERATOR'S, and required** (`MISAKA_PALW_NETWORK_ID`).
+//!   `palw_fp_job_context_v3` stamps it into the context and every committed root hangs off that
+//!   hash, so the executor and the seat that replays the claim must use the same bytes. They do
+//!   NOT come from a constant: `Qwen25A16Backend` takes its network id as a parameter, and the
+//!   node passes `params.net.to_string()` — `"testnet-11"` on the live network. This worker used
+//!   to hardcode `misaka-palw-rc` (the FLOOR's constant, which `Base0Backend` bakes in), so its
+//!   context hash was one no seat could reproduce: every honest claim it produced would have
+//!   mismatched at replay, collected an `Unavailable` quorum, and DEFAULTED its own producer for
+//!   work performed correctly. There is no default now, because the wrong default was silent.
 //! * **The schedule root is derived, not measured** — `expected_schedule_commitment_v2` over the
 //!   derived context, exactly what `palw_fp_commitment_v3` does, so the gateway's
 //!   `to_commitment` and the canonical assembly produce byte-identical commitments.
@@ -49,8 +56,9 @@ use std::path::PathBuf;
 /// The catalog row this worker embodies. One name: the corrected A16 graph, the only registered
 /// or registrable class whose free-prompt path reaches an execution root today.
 const MODEL_ID: &str = "Qwen/Qwen2.5-1.5B/graph-v2";
-/// The SDK's network id — the court reconstructs contexts under this same constant.
-const RC_NETWORK_ID: &[u8] = b"misaka-palw-rc";
+/// The environment variable the operator sets to the network this worker produces for — the
+/// same string kaspad prints for `params.net` (e.g. `testnet-11`). No default: see the module doc.
+const NETWORK_ID_ENV: &str = "MISAKA_PALW_NETWORK_ID";
 
 fn die(msg: String) -> ! {
     eprintln!("[palw-a16-fp-worker] fatal: {msg}");
@@ -63,6 +71,9 @@ fn hex(h: Hash64) -> String {
 
 struct Loaded {
     backend: Qwen25A16Backend,
+    /// The bytes this worker stamps into every context. Held so the job-context derivation and
+    /// the backend cannot come to two answers.
+    network_id: Vec<u8>,
     tokenizer: QwenTokenizer,
     digest: Hash64,
     tokenizer_commitment: Hash64,
@@ -76,6 +87,14 @@ struct Loaded {
 /// `artifact_root`), so what must agree is artifact-shape vs catalog-shape, which
 /// `Qwen25A16Backend`'s own probe enforces at execution.
 fn load() -> Loaded {
+    let network_id = std::env::var(NETWORK_ID_ENV).unwrap_or_else(|_| {
+        die(format!(
+            "{NETWORK_ID_ENV} is not set. It must be the network this worker produces for — the same string kaspad \
+             prints for its params.net (e.g. testnet-11) — because every committed root hangs off a context hash that \
+             absorbs it, and a seat replaying this producer's claim derives that hash from the node's own network \
+             name. A guess here is a claim nobody can verify and a producer defaulted for honest work."
+        ))
+    });
     let artifact_path = std::env::var("MISAKA_PALW_ARTIFACT").unwrap_or_else(|_| die("MISAKA_PALW_ARTIFACT is not set".into()));
     let tokenizer_path = std::env::var("MISAKA_PALW_TOKENIZER").unwrap_or_else(|_| die("MISAKA_PALW_TOKENIZER is not set".into()));
 
@@ -96,9 +115,9 @@ fn load() -> Loaded {
 
     let n_ctx = entry.profile.n_ctx;
     let class_id = entry.profile.shape_profile_id();
-    let backend =
-        Qwen25A16Backend::new(std::sync::Arc::new(artifact), RC_NETWORK_ID.to_vec(), entry.profile.clone(), entry.canonical_job);
-    Loaded { backend, tokenizer, digest, tokenizer_commitment, n_ctx, class_id, load_ms }
+    let net = network_id.into_bytes();
+    let backend = Qwen25A16Backend::new(std::sync::Arc::new(artifact), net.clone(), entry.profile.clone(), entry.canonical_job);
+    Loaded { backend, network_id: net, tokenizer, digest, tokenizer_commitment, n_ctx, class_id, load_ms }
 }
 
 /// `--mode v3-manifest`: the identity the gateway pins requests with. The hash values here are
@@ -236,7 +255,7 @@ fn run_job(trace_out: PathBuf) {
         shape_profile_id: loaded.class_id,
         cu_ruleset_id: Hash64::default(),
     };
-    let context = palw_fp_job_context_v3(&job, &class_facts, &run.facts, RC_NETWORK_ID)
+    let context = palw_fp_job_context_v3(&job, &class_facts, &run.facts, &loaded.network_id)
         .unwrap_or_else(|e| die(format!("the finished run implies no context: {e:?}")));
     let (schedule_root, _calls) = kaspa_consensus_core::palw_v2::expected_schedule_commitment_v2(
         &context.context_hash(),
