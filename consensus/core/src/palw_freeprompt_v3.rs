@@ -584,9 +584,19 @@ impl PalwFreePromptParamsV3 {
     }
 
     /// The claim-level derivation the acceptance layer runs before folding a
-    /// `FreePromptCommitted` object: quanta from certified CU, total pwu from quanta. `None`
+    /// `FreePromptCommitted` object: quanta from certified CU, total pwu from CU. `None`
     /// when the job is sub-quantum — such a commitment never enters the state (ADR-0044
     /// Decision 5: it certifies nothing the chain can act on, so it is not carried).
+    ///
+    /// **Weight stays quantum-uniform, and the quantum stays small** (ADR-0066 Decision 3).
+    /// The alternative — pwu exactly CU-linear — was written and reverted: the state machine's
+    /// spend frontier advances by `pwu / quanta` per spent quantum and its carriage invariant
+    /// demands that division be exact (`free-prompt pwu … uniform non-zero quanta`), so a
+    /// CU-linear total would either break the invariant or replace uniform slices with a
+    /// remainder schedule — real arithmetic risk to shave an error the frozen 100-CU quantum
+    /// already bounds at one quantum's weight per receipt (~one decode-token). The rule that
+    /// matters survives intact: the rate `pwu_per_quantum / quantum_cu` is frozen, weight tracks
+    /// CU to within one quantum, and no model's size ever argues the quantum should move.
     pub fn derive_quanta_and_pwu(&self, cu: u128) -> Option<(u32, u64)> {
         let quanta = fp_quanta_v3(cu, self.quantum_cu, self.max_quanta_per_receipt);
         if quanta == 0 {
@@ -594,6 +604,33 @@ impl PalwFreePromptParamsV3 {
         }
         let pwu = (quanta as u64).checked_mul(self.pwu_per_quantum)?;
         Some((quanta, pwu))
+    }
+
+    /// **The largest CU one job of a class confined to `n_ctx` cached positions can certify
+    /// here** — the admission gate's half of ADR-0066 Decision 2.
+    ///
+    /// The step enumeration's footprint is `prefill + decode − 1 ≤ n_ctx` (the same reading
+    /// [`crate::palw_class_admission_v2::verify_class_admission_v2`] checks the canonical job
+    /// against), with at least one prompt token and at least one decode step — a job that
+    /// decodes nothing certifies nothing. Rather than assuming which weight is dearer, both
+    /// extreme assignments are priced and the larger taken, so a future price table cannot make
+    /// this bound quietly under-report and over-refuse. Both token caps of this ruleset bound
+    /// their halves.
+    pub fn max_admissible_cu_for_context(&self, n_ctx: u32) -> u128 {
+        if n_ctx == 0 {
+            return 0;
+        }
+        let decode_heavy = {
+            let decode = n_ctx.min(self.max_decode_tokens);
+            let prompt = (n_ctx - decode + 1).min(self.max_prompt_tokens).max(1);
+            fp_cu_v3(prompt, decode, &self.cu_weights)
+        };
+        let prompt_heavy = {
+            let prompt = n_ctx.min(self.max_prompt_tokens).max(1);
+            let decode = (n_ctx - prompt + 1).min(self.max_decode_tokens).max(1);
+            fp_cu_v3(prompt, decode, &self.cu_weights)
+        };
+        decode_heavy.max(prompt_heavy)
     }
 }
 

@@ -150,13 +150,29 @@ const CU_PREFILL_WEIGHT: u32 = 1;
 const CU_DECODE_WEIGHT: u32 = 64;
 
 /// One quantum of certified work. At 1:64 pricing a ~100-token prompt with a 256-token answer is
-/// ~16.5k CU ≈ 16 quanta, so an ordinary chat job earns a handful of draws rather than one
+/// ~16.6k CU ≈ 166 quanta, so an ordinary chat job earns many draws rather than one
 /// all-or-nothing ticket — which is the variance the quantization exists to smooth.
-const QUANTUM_CU: u128 = 1_000;
-/// Chain weight one spent quantum contributes.
-const PWU_PER_QUANTUM: u64 = 100;
+///
+/// **FROZEN — ADR-0066 Decision 1. Never recalibrate this to fit a model.** The first value
+/// (1,000) was sized to chat-shaped jobs and could not see any court-admissible class: the
+/// close-budget carrier caps a hybrid class's context near 8 positions, whose largest job is
+/// ~513 CU — zero quanta, permanently, for every such class. The one-time fix is this value
+/// (every admissible class ≥ 2 context positions prices to ≥ 1 quantum); the PERMANENT fix is
+/// the admission gate's `PricingUnreachable` check, which refuses a class this quantum cannot
+/// see instead of inviting the quantum to move. `quantum_cu` is inside the ruleset id — moving
+/// it is a re-mint — so "add a model" must never route through this line again. The rate
+/// (`PWU_PER_QUANTUM / QUANTUM_CU` = 0.1 pwu per CU) is unchanged from the first calibration;
+/// only the granularity moved.
+const QUANTUM_CU: u128 = 100;
+/// Chain weight one spent quantum contributes (frozen beside [`QUANTUM_CU`]; weight itself is
+/// CU-linear per ADR-0066 Decision 3 — this is the RATE's numerator, not a step function).
+const PWU_PER_QUANTUM: u64 = 10;
 /// Per-receipt jackpot bound: a single enormous job cannot buy unbounded consecutive blocks.
-const MAX_QUANTA_PER_RECEIPT: u32 = 64;
+/// 640, not the original 64: the bound's ECONOMICS are a CU ceiling (64 × the old 1,000-CU
+/// quantum = 64,000 CU, 6,400 pwu), and the ADR-0066 re-quantization shrank the quantum 10× —
+/// so the count scales 10× to keep the ceiling byte-identical. Draws get smaller and more
+/// numerous under the same cap, which is the direction the variance-smoothing wants anyway.
+const MAX_QUANTA_PER_RECEIPT: u32 = 640;
 
 /// Shape caps, inside the worker's own limits (single-batch prefill 512, trace-event cap 4096).
 const MAX_PROMPT_TOKENS: u32 = 512;
@@ -762,9 +778,18 @@ mod tests {
         let chat = fp_cu_v3(100, 256, w);
         let chat_quanta = fp_quanta_v3(chat, b.freeprompt.quantum_cu(), b.freeprompt.max_quanta_per_receipt());
         assert_eq!(chat, 100 + 256 * 64);
-        assert!((8..=32).contains(&chat_quanta), "an ordinary chat job earns a handful of draws, got {chat_quanta}");
+        assert!((100..=320).contains(&chat_quanta), "an ordinary chat job earns many small draws, got {chat_quanta}");
 
-        let tiny = fp_cu_v3(8, 4, w);
+        // The smallest court-admissible classes must be visible to this pricing — the whole point
+        // of ADR-0066's re-quantization. n_ctx 8 (the hybrid family's close-budget ceiling) prices
+        // its largest job at 1 + 8×64 = 513 CU: five quanta, never zero.
+        let hybrid_max = fp_cu_v3(1, 8, w);
+        assert!(
+            fp_quanta_v3(hybrid_max, b.freeprompt.quantum_cu(), b.freeprompt.max_quanta_per_receipt()) >= 1,
+            "an n_ctx-8 class must price to at least one quantum"
+        );
+
+        let tiny = fp_cu_v3(1, 1, w);
         assert_eq!(
             fp_quanta_v3(tiny, b.freeprompt.quantum_cu(), b.freeprompt.max_quanta_per_receipt()),
             0,

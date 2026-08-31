@@ -511,6 +511,14 @@ pub enum PalwClassAdmissionError {
     /// case the ladder was checked against.
     #[error("the canonical job is deeper than the class's own worst case: {canonical} > {worst}")]
     CanonicalDeeperThanWorstCase { canonical: u64, worst: u64 },
+    /// ADR-0066 Decision 2. The free-prompt pricing (`quantum_cu`, the CU weights) is a FROZEN
+    /// protocol parameter, and a class joins only if that pricing can see it: the largest job
+    /// its declared context admits must certify at least one quantum. The alternative — retuning
+    /// `quantum_cu` to fit each new model — moves the ruleset id, and "add a model" must never
+    /// mean "re-mint the network". A model too small for the frozen quantum is refused here,
+    /// before any fee is spent, not accommodated afterwards.
+    #[error("the pricing cannot see this class: its largest admissible job certifies {max_cu} CU against a quantum of {quantum_cu} — no job of this class ever earns a draw, and the quantum is frozen (ADR-0066)")]
+    PricingUnreachable { max_cu: u128, quantum_cu: u128 },
 }
 
 /// Every kernel a profile's graph can reach, read off the graph.
@@ -638,6 +646,19 @@ pub fn verify_class_admission_v2(
         if got > ceiling {
             return Err(PalwClassAdmissionError::CourtCostExceedsCeiling { what, got, ceiling });
         }
+    }
+
+    // **ADR-0066 Decision 2: the pricing is frozen, so the class proves itself against it.**
+    //
+    // `quantum_cu` and the CU weights sit inside the ruleset id; sizing them to whatever class
+    // is being onboarded — which is how the first calibration happened — makes every new model a
+    // re-mint. This check inverts that: a class whose largest admissible job (its whole declared
+    // context, priced at this ruleset's own table) cannot certify one quantum is refused at
+    // registration, and the quantum never moves again. Placed after coverage and the court
+    // ceilings so an unadjudicable class is still told about the deeper problem first.
+    let max_cu = bundle.freeprompt.max_admissible_cu_for_context(profile.n_ctx);
+    if crate::palw_freeprompt_v3::fp_quanta_v3(max_cu, bundle.freeprompt.quantum_cu(), bundle.freeprompt.max_quanta_per_receipt()) == 0 {
+        return Err(PalwClassAdmissionError::PricingUnreachable { max_cu, quantum_cu: bundle.freeprompt.quantum_cu() });
     }
 
     let counted = step_leaf_count(profile, canonical).map_err(|e| PalwClassAdmissionError::Profile(format!("{e:?}")))?;
@@ -1039,6 +1060,41 @@ mod tests {
         let err = verify_class_admission_v2(&bundle, &big, &canonical, &registration(big.shape_profile_id(), counted))
             .expect_err("the ladder cannot reach it");
         assert!(matches!(err, PalwClassAdmissionError::DeeperThanTheLadder { .. }), "got {err:?}");
+    }
+
+    /// **ADR-0066 Decision 2: the pricing is frozen, and a class the pricing cannot see is
+    /// refused — the quantum is never invited to move.**
+    ///
+    /// The first calibration went the other way: `quantum_cu` was resized to fit the classes of
+    /// the day, and since the value sits inside the ruleset id, "add a model" had become
+    /// "re-mint the network". This test pins the inversion from both sides: a context of one
+    /// position prices its largest job at 65 CU — under any ≥66-CU quantum, forever — and is
+    /// refused at registration with the pricing named; while the smallest context the shipped
+    /// classes actually use (the hybrids' close-budget ceiling of 8) clears the frozen 100-CU
+    /// quantum with room, so no registered class is collateral damage.
+    #[test]
+    fn the_pricing_is_reachable_on_registered_classes_and_frozen_against_the_rest() {
+        let bundle = bundle_with_full_ladder();
+
+        // Every shipped context rung, priced at the frozen quantum: the smallest (8) yields
+        // 1 + 8×64 = 513 CU — five quanta — and larger rungs only grow.
+        for n_ctx in [8u32, 9, 12, 16] {
+            let max_cu = bundle.freeprompt.max_admissible_cu_for_context(n_ctx);
+            assert!(
+                crate::palw_freeprompt_v3::fp_quanta_v3(max_cu, bundle.freeprompt.quantum_cu(), bundle.freeprompt.max_quanta_per_receipt()) >= 1,
+                "an n_ctx-{n_ctx} class must be visible to the frozen pricing, got {max_cu} CU"
+            );
+        }
+
+        // And a class the quantum genuinely cannot see is refused AT THE GATE, before any fee:
+        // n_ctx 1 admits only (1 prompt, 1 decode) = 65 CU.
+        let mut profile = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("expressible");
+        profile.n_ctx = 1;
+        let canonical = context(&profile, 1, 1);
+        let counted = step_leaf_count(&profile, &canonical).expect("counts");
+        let err = verify_class_admission_v2(&bundle, &profile, &canonical, &registration(profile.shape_profile_id(), counted))
+            .expect_err("a sub-quantum class is refused, not accommodated");
+        assert!(matches!(err, PalwClassAdmissionError::PricingUnreachable { max_cu: 65, quantum_cu: 100 }), "got {err:?}");
     }
 
     /// `pwu_per_inference` is a declaration and pwu is a direct multiplier on fork-choice weight,

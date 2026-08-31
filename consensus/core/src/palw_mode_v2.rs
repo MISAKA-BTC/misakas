@@ -1040,10 +1040,14 @@ pub(crate) mod tests {
     pub(crate) fn conforming_freeprompt() -> PalwFreePromptParamsV3 {
         PalwFreePromptParamsV3::new(
             crate::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3,
-            1_000,
+            // The frozen ADR-0066 quantum: the fixture mirrors the shipped granularity so the
+            // admission gate's pricing-reachability check sees here what it sees on a real net
+            // (at the old 1,000 every n_ctx≤15 fixture profile was unpriceable and each
+            // admission test died on `PricingUnreachable` before its own assertion).
+            100,
             10,
             crate::palw_freeprompt_v3::PalwFpCuWeightsV3 { prefill_weight: 1, decode_weight: 64 },
-            64,
+            640,
             4_096,
             512,
             150,
