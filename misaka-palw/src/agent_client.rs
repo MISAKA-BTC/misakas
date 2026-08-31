@@ -212,6 +212,22 @@ mod tests {
             let response = respond(payload);
             stream.set_write_timeout(Some(Duration::from_secs(5))).unwrap();
             std::io::Write::write_all(&mut stream, &response).expect("write response");
+            // **The mock obeys the wire contract, because the real agent has to.**
+            //
+            // `read_framed` requires EOF after the frame and documents how it is delivered: the
+            // sender half-closes. This mock used to just return and let the thread's stack drop
+            // the stream, which sends the FIN eventually — and "eventually" is a scheduler
+            // decision. Under load the client's one-byte EOF probe ran first, blocked for the
+            // whole read timeout and came back `EAGAIN`, so a test asserting `Binding(_)` saw
+            // `Protocol("read after frame failed: …")` after exactly 5.00s. Alone it passed in
+            // 0.00s.
+            //
+            // The fix is not a longer timeout — that makes the race rarer, not absent, and would
+            // leave the mock modelling an agent that does something no real agent may do. The
+            // production agent had the SAME omission and it is fixed in the same change
+            // (`misaka-palw-agent/src/agent.rs`), so this mock is once again a faithful stand-in:
+            // if the real half-close is ever removed, these tests go red rather than slow.
+            let _ = stream.shutdown(std::net::Shutdown::Write);
         });
         (path, handle)
     }

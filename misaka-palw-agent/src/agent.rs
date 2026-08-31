@@ -526,6 +526,23 @@ fn handle_connection(state: &AgentState, mut stream: UnixStream) {
             if let Err(e) = write_framed(&mut stream, &bytes) {
                 eprintln!("[palw-agent] cannot write the response frame: {e}");
             }
+            // **Half-close, because the protocol says the sender does** — `read_framed`'s own doc:
+            // "the SENDER half-closes its write side (`shutdown(SHUT_WR)`) after its frame, so the
+            // receiver's EOF probe returns immediately instead of blocking until a read timeout".
+            // The client already honours it for its request; this side did not honour it for the
+            // response, and relied on `stream` dropping at the end of this function to send the
+            // FIN.
+            //
+            // That drop is not synchronous with the client's next read. `read_framed` finishes the
+            // payload and then probes one byte for EOF; if the FIN has not landed, that probe
+            // blocks for the WHOLE read timeout and comes back `EAGAIN`, which the client reports
+            // as `Protocol("read after frame failed: Resource temporarily unavailable")` — a
+            // completed job thrown away and the timeout burned, on a correct exchange. It shows up
+            // under CPU contention, which is exactly when a node is busy.
+            //
+            // Ignoring the error is right: the response is already written, and a peer that has
+            // gone away is not this side's problem to report.
+            let _ = stream.shutdown(std::net::Shutdown::Write);
         }
         Err(e) => eprintln!("[palw-agent] cannot serialize the response: {e}"),
     }
