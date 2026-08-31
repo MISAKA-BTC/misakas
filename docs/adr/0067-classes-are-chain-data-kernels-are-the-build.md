@@ -447,4 +447,4 @@ is **self-authenticating against chain state** — the chain must currently hold
 the profile must hash to the class id (which is what a class id MEANS), and the canonical job must
 name the same class. A supplier who satisfies all three has handed over exactly the bytes the
 accept path would have written; anything else is refused, so a hostile source wastes only its own
-bandwidth. The sidecar remains the better answer for an unattended fleet and is still unbuilt.
+bandwidth. The sidecar remained the better answer for an unattended fleet, and was still unbuilt when this audit section was written; it has since been built (see "The three remaining clauses" above).
