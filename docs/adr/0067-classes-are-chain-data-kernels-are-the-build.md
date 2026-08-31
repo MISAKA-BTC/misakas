@@ -163,6 +163,49 @@ any code exists to argue with it:
   the wire, served by declared seats, a claim committed, replayed, licensed and finalized, and a
   receipt block minted — with no row for it in any binary.
 
+## Decision 6 — four storage tiers, and node storage is never consensus state
+
+Permissionless registration multiplies MODELS; it must not multiply every node's DISK. The failure
+to refuse is mechanical: N registered classes at tens of GiB each, times a fleet that treats
+"registered" as "must hold", is a fleet whose storage grows with strangers' decisions — and the
+chain never asked for that. The chain's own design already refuses it (the registration carries
+kilobytes and no URL); this decision makes the node side match, as four tiers with different
+obligations:
+
+| tier | holds | size | who must have it |
+|---|---|---|---|
+| ① chain state | class id, profile, canonical job, artifact root, admission facts | KB | every node — it IS consensus |
+| ② validation artifact | a real-weights SLICE of the model plus its expected rows (the converter's `--layers N` shape), enough to prove THIS build's kernels reproduce THIS class's arithmetic bit-for-bit | MB | a node DECIDING whether to serve |
+| ③ full model artifact | the weights the work runs on | GB–tens of GB | only nodes that CHOSE the class |
+| ④ node cache | whichever ③s this operator serves, under an operator-set byte bound with demand eviction | bounded | nobody — it is local policy |
+
+**Registration and possession are different acts, and nothing may couple them.** Registering a
+class obligates no node to fetch anything; a node that never heard of your model validates your
+registration from tier ① alone (the wire-enforced gate needs nothing else). Sortition already
+draws seats only from bonds that DECLARED the class (ADR-0034), so a node that ignores a class is
+never conscripted into judging it. "Every node holds every model" is not a degraded mode this
+design tolerates — it is a bug in an operator's configuration.
+
+Two honest boundaries, stated so the tiers do not over-promise:
+
+* **Tier ② de-risks the fetch; it does not license the declaration.** A seat's duty is a REPLAY of
+  the full job on the full weights, so a capability declaration backed by only the validation
+  slice is the documented Incapable trap: the seat draws, cannot serve, files `Incapable`, and
+  enough such seats make the claim's quorums unreachable — the declaration would kill the very
+  claims it advertised for. Declaration remains "I hold ③ and can serve it"; tier ② is what lets
+  an operator learn, for megabytes, whether fetching gigabytes would even be compatible — the
+  plan compiles, the kernels land on the slice's expected rows — before spending the bandwidth.
+* **Eviction must retract what it invalidates.** A cache that drops ③ while the bond's capability
+  declaration stands re-creates the same trap on a timer. Declarations already carry a liveness
+  window (`is_live_at`); an evicting node stops renewing the class's declaration FIRST and evicts
+  after the window lapses, so sortition stops drawing it before the artifact is gone.
+
+This is also where the economics point back at R-7: model count grows demand for serving and for
+seats, and the supply is a MARKET — operators choosing classes worth their disk and their
+compute — not a protocol obligation. A permissionless registry with conscripted storage would be
+neither permissionless nor operable; a registry where holding is chosen needs holding to be worth
+choosing, which is one more reason seat payment (R-7) is the next economic ADR this one leans on.
+
 ## What this does not do, said plainly
 
 * **It does not remove releases from new arithmetic.** A new architecture still waits on a kernel,
@@ -189,5 +232,7 @@ any code exists to argue with it:
 2. The `resolve` chain-state arm behind the fence, plus the ledger unification of Decision 1.
 3. The fuzz gate of Decision 5, run to its stated saturation.
 4. The devnet lattice walk with a chain-only class.
-5. Arm on a testnet re-launch or activation; the mmap (Qwen3.6) container follows the same path
+5. The validation-artifact format for the dense container (a `--layers N` slice plus expected
+   rows), and the operator cache bound with declaration-first eviction (Decision 6).
+6. Arm on a testnet re-launch or activation; the mmap (Qwen3.6) container follows the same path
    second, because its interpreter is a larger piece and the dense family proves the seam.
