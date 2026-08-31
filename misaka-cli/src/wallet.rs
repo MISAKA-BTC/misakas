@@ -358,7 +358,7 @@ pub async fn utxo_list(ctx: &Ctx, address: Option<&str>, ks: &KeySource) -> CliR
             );
             if bonded_n > 0 {
                 println!(
-                    "  bonded     : {bonded_n}  ({} MSK)  [locked bond collateral — NOT spendable; `wallet send` will not select it]",
+                    "  bonded     : {bonded_n}  ({} MSK)  [locked bond collateral, plus fee floats this node's panel reserves — NOT spendable; `wallet send` will not select them]",
                     sompi_to_msk(bonded_sum)
                 );
             }
@@ -522,7 +522,14 @@ pub async fn send(ctx: &Ctx, ks: &KeySource, to: &str, amount_sompi: u64, dry_ru
     // Largest-first greedy select over MATURE self-UTXOs, re-estimating the fee as inputs are added.
     // `!bonded`: the bond is usually the LARGEST output at a validator's address, and selection
     // below is largest-first, so without this the default `wallet send` reaches for it first (M1-3).
-    let mut mature: Vec<Funding> = page_all(&nv, &from_addr).await?.into_iter().filter(|u| u.mature && !u.bonded).collect();
+    let all = page_all(&nv, &from_addr).await?;
+    // Counted before the spendability filter, so a refusal can NAME the money it is not offering:
+    // "insufficient mature funds ... have 0" at an address visibly holding thousands of MSK reads
+    // as a bug, and issue #90 was filed over exactly that — the missing sentence was that the
+    // balance sits in outpoints this node's own chain state locks (bond collateral) or its own
+    // panel reserves (the fee float the join doc told the operator to configure).
+    let (locked_n, locked_sum) = all.iter().filter(|u| u.bonded).fold((0usize, 0u64), |(n, s), u| (n + 1, s + u.amount));
+    let mut mature: Vec<Funding> = all.into_iter().filter(|u| u.mature && !u.bonded).collect();
     mature.sort_by(|a, b| b.amount.cmp(&a.amount));
     let mut selected: Vec<&Funding> = Vec::new();
     let mut sum = 0u64;
@@ -543,11 +550,20 @@ pub async fn send(ctx: &Ctx, ks: &KeySource, to: &str, amount_sompi: u64, dry_ru
         return Err(CliError::new(
             exit::GENERIC,
             format!(
-                "insufficient mature funds at {from_addr}: have {} MSK across {} UTXO(s) (cap {MAX_INPUTS_PER_TX}), need {} MSK (amount {} + fee {fee}). Consolidate or lower --amount.",
+                "insufficient mature funds at {from_addr}: have {} MSK across {} UTXO(s) (cap {MAX_INPUTS_PER_TX}), need {} MSK (amount {} + fee {fee}).{} Consolidate or lower --amount.",
                 sompi_to_msk(sum),
                 selected.len(),
                 sompi_to_msk(needed),
-                sompi_to_msk(amount_sompi)
+                sompi_to_msk(amount_sompi),
+                if locked_n > 0 {
+                    format!(
+                        " A further {} MSK across {locked_n} outpoint(s) is locked or reserved — bond collateral the chain \
+                         holds, and fee floats this node's panel runs on — and is deliberately not offered; it is not missing.",
+                        sompi_to_msk(locked_sum)
+                    )
+                } else {
+                    String::new()
+                }
             ),
         ));
     }
