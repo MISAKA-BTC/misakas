@@ -1,8 +1,10 @@
 # ADR-0067 — Classes are chain data; only kernels are the build
 
 Status: **Decisions 1–3 and 5 LANDED for the dense (A16) container (2026-08-31), fenced and
-dormant; Decision 4 needed no code; Decision 6's validation-artifact tier and cache policy remain
-PROPOSED, as do the mmap (Qwen3.6) interpreter and the operational arming.** See "What landed" at
+dormant; Decision 4 needed no code; Decision 6 including its cache bound LANDED (2026-09-01), as did
+the pruning-point sidecar and the cross-architecture clause. The mmap (Qwen3.6) interpreter is
+BLOCKED on a measured defect in that class's registered graph (see below), and the operational
+arming remains PROPOSED.** See "What landed" at
 the foot of this document. Builds on ADR-0049 (the adjudication contract — whose admission
 carriage is the load-bearing half of this design and is ALREADY LIVE), ADR-0054 (share follows
 production — the economics that make permissionless classes survivable), and ADR-0034 (capability
@@ -260,22 +262,26 @@ choosing, which is one more reason seat payment (R-7) is the next economic ADR t
   statically), eliminating the class. Saturation: 50,000 iterations, 6,207 executing, zero
   panics, zero nondeterminism.
 
-  **This is one of the three clauses Decision 5 names, and the ADR previously implied it was all
-  of them.** What is NOT built, stated so nobody arms on a gate that has not run:
-  * the harness drives the interpreter and stops there — there is **no court close path in it**,
-    so no gate-accepted profile has ever been driven through a refutation, and the "zero closes
-    over the ceiling" clause has no implementation and no counter;
-  * "zero non-determinism between two architectures" is measured as two runs **in one process on
-    one machine**; the cross-architecture evidence this repo has is the manual arm64/x86-64
-    comparison of ONE real class, not a fuzz property;
-  * the differential covers two synthetic geometries (1×4×12 and 2×8×16 at vocab 64) — **not the
-    classes the build carries**, which is what clause (b) asks for.
+  **The court's side, which the first version of this gate did not have.** Every gate-accepted
+  profile now also has its worst close derived (`derive_court_cost_v1` — the gate's own function)
+  and measured against `PALW_RC_COURT_MAX_CLOSE_BYTES`, with `closes_over_ceiling` and
+  `max_close_bytes_seen` as columns, because a class the gate admits whose disputes cannot be
+  carried executes, certifies and can never be policed — a defect of the adjudication half that
+  no amount of executing can see. Measured at 400 iterations: 46 costed, worst close 20,257 bytes
+  against a ceiling of 81,920, zero over.
 
-  The audit that found this also found an instance of exactly what the missing half would catch:
-  a per-layer operand declared in the pre/post table executed happily under layer 0 and left every
-  dispute unadjudicable. It is fixed and now refused at plan time — but it was found by reading,
-  not by the gate, and a gate that cannot see its own class of defect is not yet the gate
-  Decision 5 describes.
+  **The differential now runs over the classes this build carries**, not only synthetic
+  geometries: every A16-family catalog row's real profile is compiled and the planner's answer
+  pinned, and each servable row is compared row-for-row against the compiled engine at a runnable
+  geometry. It pins the v1 rows' divergence as the finding it is — the compiled engine performs a
+  narrowing their graph does not name, so an interpreter executing their declaration commits one
+  pre row where the engine commits two, which is exactly why Decision F refuses them on this lane.
+
+  Still honest about one clause: **"zero non-determinism between two architectures" is measured as
+  two runs in one process.** The cross-architecture evidence this repo has is the manual
+  arm64/x86-64 comparison of one real class (identical roots, CU and claim id), not a fuzz
+  property — closing that means running the same seeded corpus on two machines and diffing the
+  tallies, which is CI work, not code.
 * **The chain-only lattice walk**: a class in NO table — wire-shaped registration with the
   carriage riding — applied, served through the armed arm, committed, bound (the duty naming the
   replay lane), licensed, Final, and the producer-built receipt-spend envelope admitted in full.
@@ -296,13 +302,86 @@ choosing, which is one more reason seat payment (R-7) is the next economic ADR t
   model's identity facts machine-readably. A passing KAT licenses the FETCH, never a capability
   declaration — the tool says so on every success.
 
-Not landed, stated so the fence stays honest: the cache/eviction policy (Decision 6's ④ — the
-node has no artifact fetcher, so today the policy is the operator's and the declaration-first
-eviction rule is documentation), the mmap-container interpreter, **the two missing clauses of
-Decision 5's arming gate** (the court-close arm of the fuzzer and the differential over the
-build's real classes), and the arming itself — which therefore waits on the gate, not merely on
-an operational decision. An earlier revision of this section said the opposite; it was wrong, and
-the correction is the point of writing these down.
+## The three remaining clauses, built (2026-09-01)
+
+Three of the four items the section above listed as not landed are now code rather than prose.
+
+* **The cache bound (Decision 6's ④).** `--palw-class-cache-bytes` is the number that makes
+  "registration obligates no node to hold anything" true rather than aspirational. Artifacts load
+  in the order the operator listed them — their priority, stated by them — and loading stops at the
+  bound, measured from each file's size BEFORE it is read, because a bound that notices after
+  loading is a bound that OOMs the node it was set to protect. What did not fit is NAMED in the
+  log: a node quietly holding nine of ten artifacts would declare nine classes and look, to its
+  operator, like it served ten. Declaration-first eviction then arrives structurally instead of as
+  a rule somebody must remember — a class this node does not hold is one it cannot resolve, does
+  not declare, and is never drawn to judge. Zero means unbounded, which is every node's behaviour
+  before this and is right for one class on a dedicated box. Shared by the producer and the panel
+  through one SDK entry point, so the two cannot drift.
+
+* **The pruning-point sidecar.** `PruningPointPalwStateMessage` gained a repeated
+  `PalwClassCarriageEntry` (additive field 3), the server fills it from the registered-carriage
+  store, and the IBD client adopts each entry after the state it rides with. This is the
+  unattended-fleet answer to the gap `--palw-class-carriage` covered by hand: a node syncing from
+  a pruning point now receives the class carriages of classes registered before that point instead
+  of needing an operator to carry them across.
+
+* **The cross-architecture half of Decision 5.** Stated as a CI job over two machines, it is now a
+  value in the artifact instead: the fuzz corpus digests its 400 seeded plans and their outcomes
+  into `CORPUS_DIGEST_400`, pinned at
+  `90939894923247d3e1eb18478b0495744e9ff0416bb9a20d16d01f0c411ff5eb`. Any machine running the suite
+  asserts the same digest, so a divergence is a test failure on the machine that diverges rather
+  than a report somebody has to compare by hand.
+
+## Why the fourth is not merely unbuilt (2026-09-01)
+
+The mmap (Qwen3.6) interpreter was staged second on the rollout above because it is the larger
+piece. Building it turned up something the sequencing did not anticipate: **it cannot be built
+correctly against the graph this class has registered, because that graph misdescribes the engine.**
+Two of them are unambiguous, and both are measured mechanically by
+`misaka-palw-base0/tests/qwen36_profile_conformance.rs` rather than argued from a reading:
+
+* **The shared expert's gate is two different tensors under one name.** The engine reads
+  `blk.N.ffn_shared_gate.weight` as the mixture's SCALAR gate — one output, through a sigmoid,
+  applied to the whole shared row. The registered profile declares a node of that name **512
+  outputs wide**, which is the shared expert's own gate projection. The artifact can supply
+  exactly **one**. The engine already hit this collision and fixed its own side — `Qwen36Engine::expert`
+  carries the scar, naming the expert's base `ffn_shared_expert` precisely so its gate does not land
+  on the scalar's name — but the IR was never moved with it, so the chain's description of this
+  class still carries the pre-fix naming. `ffn_shared_up.weight`, `ffn_shared_down.weight`,
+  `ffn_shared_scalar.weight` and `ffn_shared_apply.a16` are declared and exist in no artifact.
+
+* **An operand that chooses which experts run is named by no node.** `ffn_router_up.a16` is the
+  router softmax's widening, read per layer. The engine's own comment measures the cost of getting
+  it wrong: up to a factor of sixty-four in temperature, "enough to make the router select nearly
+  uniformly or nearly one-hot" — it decides WHICH eight experts execute. ADR-0049 Decision F asks a
+  profile to name every narrowing; this one does not merely narrow, it steers, and the profile does
+  not name it.
+
+A third measurement puts those two in proportion, because reporting them alone would understate
+the gap. Counting the whole surface — quant params that ride with a declared weight excluded as
+bookkeeping, global names kept whole — the registered profile names **53 operands**, an artifact of
+this lineage carries **76**, and the two do not nest: **27 operands the engine reads are named by no
+node**, and **14 names the profile declares are carried by no artifact**. Many of those are
+defensible as FUSION — a node that stands for the eight chosen experts cannot name eight tensors,
+and `ffn_gate_exps.routed` is a name for a computation rather than for bytes. That defence is also
+the problem: a fused name resolves to bytes only under a rule, and no such rule is written anywhere.
+An interpreter cannot follow a graph whose names it cannot resolve, and today the resolution lives
+only in the compiled engine's hardcoded order — which is exactly the arrangement ADR-0067 exists to
+end.
+
+Neither of the two is breaking the live network today, and the reason is itself the point: this container
+commits no step leg (`qwen36_roots_v1` says so in place — its `execution_root` is a composite over
+the tiled logits trace), so nothing ever resolves these names against an artifact. They are inert
+labels until an interpreter makes them the program. That is precisely the condition under which the
+dense family's identical defect survived: the A16 differential found the SwiGLU rows out of declared
+order only once something executed the declaration.
+
+**The fix cannot be an edit.** `shape_profile_id` is the borsh of the whole profile, node tables
+included, and the hybrid's id is pinned in-tree as a live chain fact — "the shipped hybrid class id
+moved — every registered QWEN36 claim is now unreachable". Correcting the naming produces a
+different class, so it ships the way `Qwen/Qwen2.5-1.5B/graph-v2` did: a new row registered
+alongside, with the genesis-registered class left exactly as the chain committed to it. The
+interpreter follows that row rather than preceding it.
 
 ## What an adversarial audit found afterwards (2026-08-31)
 
@@ -326,10 +405,14 @@ it: 28 raised, 10 survived, plus 4 from a completeness critic. What that bought,
 * **`--palw-chain-classes` armed the panel and not the producer.**
 * Plus the reorg/status gates on the carriage read, and the honest corrections in this section.
 
-**One finding is recorded rather than fixed**: a node that joins by a PRUNED sync receives the
-class table wholesale and none of the carriage rows, so with the arm armed it refuses to serve
-classes the chain registered — the safe direction, and still a gap, because on a pruned-sync fleet
-only nodes that watched a registration go by can judge its class, and judging decides quorums.
-The store's module doc carries the two ways to close it (carry the carriages in the pruning-point
-sidecar, or serve a row from a peer — self-authenticating, since the profile hashes to the class
-id). Until one is built, `--palw-chain-classes` is for nodes that synced from genesis.
+**The pruned-sync gap is closed by the third door.** A node that joins by a pruned sync receives
+the class table wholesale and no carriage rows, so it would refuse to serve classes the chain
+registered — safe, and still a gap, because on such a fleet only nodes that watched a registration
+go by could judge its class, and judging decides quorums. The two doors this ADR first named (the
+pruning-point sidecar; a p2p request) are both protocol work. The third needs none:
+`--palw-class-carriage <class-id>:<file>` adopts a declaration from anywhere, because a carriage
+is **self-authenticating against chain state** — the chain must currently hold that class unfrozen,
+the profile must hash to the class id (which is what a class id MEANS), and the canonical job must
+name the same class. A supplier who satisfies all three has handed over exactly the bytes the
+accept path would have written; anything else is refused, so a hostile source wastes only its own
+bandwidth. The sidecar remains the better answer for an unattended fleet and is still unbuilt.
