@@ -2123,6 +2123,24 @@ impl PalwPanelService {
                 if self.config.register_class.is_some() && !class_registration_submitted {
                     // Built at the top of the tick (chain reads only); this block owns the SUBMIT
                     // because the fee UTXO lives here.
+                    //
+                    // **Rebuilt HERE, at the moment of submission — not reused from the tick that
+                    // first built it.** The registration gate requires `initial_target` to EQUAL
+                    // the base class's live target, and that target moves at every epoch
+                    // retarget. The first registration this network saw was built at boot,
+                    // submitted twenty-eight minutes later after the receipt backlog, mined two
+                    // minutes after THAT — and dropped at acceptance, because daa 1,000's
+                    // retarget had moved the base target while the object sat in the cache. The
+                    // panel, which marks `submitted` on mempool acceptance, never knew: the
+                    // carrier was mined, the object died inside it, and the block stood. A value
+                    // checked for equality against a moving reference must be read where it is
+                    // used.
+                    if class_registration.is_some() && funding.is_some() {
+                        match self.build_class_registration(&session).await {
+                            Ok(object) => class_registration = Some(object),
+                            Err(e) => warn!("[{PALW_PANEL}] cannot refresh the class registration at submit: {e}"),
+                        }
+                    }
                     if let Some(object) = class_registration.clone()
                         && let Some((funding_outpoint, funding_entry)) = funding.clone()
                     {
