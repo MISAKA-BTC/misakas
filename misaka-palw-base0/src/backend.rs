@@ -934,6 +934,15 @@ mod end_to_end_tests {
         let duties = kaspa_consensus_core::palw_producer_v2::palw_seat_duties_v2(&s3, &params, &[PalwBondKeyV2(bond_outpoint)]);
         let duty = duties.iter().find(|d| d.claim_id == claim_id).expect("the seat sees the prompt's claim");
         assert!(duty.free_prompt, "a free-prompt claim's duty says so, or the seat verifies the wrong lane");
+        // **And it carries what the chain PRICED the claim at.** Roots alone cannot tell a seat
+        // whether the material it was served is the work this claim was paid for: a commitment's
+        // execution_root rides its payload verbatim while its pwu comes from the job shape the
+        // payload DECLARES, so a producer can declare a huge job, serve a trivial material whose
+        // roots are honestly that material's, and a root-only seat certifies it. The seat
+        // re-prices what it actually ran against these two numbers (kaspad's `fp_price_of`), so
+        // they have to be on the duty or the check is unwritable.
+        assert_eq!(duty.pwu, quanta as u64 * 100, "the duty carries the claim's pwu");
+        assert_eq!(duty.quanta, quanta, "and its quanta");
         let (s4, _) = apply_palw_transition_v2(
             &s3,
             &params,

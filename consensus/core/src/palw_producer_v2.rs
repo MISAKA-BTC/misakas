@@ -478,6 +478,20 @@ pub struct PalwSeatDutyV2 {
     pub bound_daa: u64,
     /// The last DAA at which a receipt for this claim still counts.
     pub receipt_deadline: u64,
+    /// **What the chain PRICED this claim at** — the seat's only handle on "is the material I was
+    /// served the work this claim was paid for".
+    ///
+    /// The roots alone cannot answer that. A commitment's `execution_root` is carried verbatim
+    /// from its payload and related to nothing the chain can recompute (the chain has no leg
+    /// roots), while its `cu`/`quanta`/`pwu` are derived from the job shape the payload DECLARES.
+    /// So a producer may declare a hundred-thousand-token job, serve a one-token material whose
+    /// roots are genuinely that material's, and a seat comparing only roots certifies it — block
+    /// work bought with recycled collateral instead of inference, which is the one property this
+    /// lane exists to establish. A seat re-prices what it actually executed and compares against
+    /// these, which is the check the chain cannot make for it.
+    pub pwu: u64,
+    /// Quanta the claim was opened for; `0` on the attempt lane, which has none.
+    pub quanta: u32,
     /// **Which lane this claim's material speaks** — and therefore how a seat verifies it.
     ///
     /// An attempt claim's material is the run's own rows; the seat re-hashes them under the job
@@ -666,6 +680,11 @@ pub fn palw_seat_duties_v2(state: &PalwChainStateV2, state_params: &PalwStatePar
                 trace_root: claim.trace_root,
                 bound_daa,
                 receipt_deadline: bound_daa.saturating_add(state_params.window_receipt()),
+                pwu: claim.pwu,
+                quanta: match claim.source {
+                    crate::palw_state_v2::PalwClaimSourceV2::FreePrompt { quanta, .. } => quanta,
+                    _ => 0,
+                },
                 free_prompt: matches!(claim.source, crate::palw_state_v2::PalwClaimSourceV2::FreePrompt { .. }),
             });
         }

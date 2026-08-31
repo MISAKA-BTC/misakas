@@ -75,6 +75,13 @@ const MATERIALS_PER_CLAIM: usize = 4;
 /// sees hundreds of claims a minute extends it as fast as it can build, far past what the network
 /// confirms, and the excess does not queue politely: a peer that has not seen a parent treats the
 /// child as an orphan and drops it in relay, silently. Measured on the testnet-11 drill: one panel
+/// **How long a class-registration carrier gets before the panel concludes it did not land.**
+///
+/// Generous on purpose: the carrier queues behind up to `MAX_INFLIGHT_CARRIERS` ancestors and a
+/// chain's cadence varies, so a short horizon would rebuild a registration that was merely slow —
+/// and each rebuild spends a fee. Long enough that a retry means the object really was dropped.
+const CLASS_REGISTRATION_RETRY_DAA: u64 = 200;
+
 /// submitted 791 carriers with zero mempool refusals, the producer received 492 and mined 302, and
 /// of 300 `CourtOpened` exactly ONE ever reached a block — while `ReceiptLicensed` kept landing,
 /// because those were the ones near the confirmed end of the chain.
@@ -219,6 +226,39 @@ impl PalwPanelService {
         } else {
             crate::palw_backends::PalwBackendRegistry::new(self.config.court, self.class_holdings.clone(), net)
         }
+    }
+
+    /// The class id `--palw-register-class` names, as this build derives it. `None` when the
+    /// operator named nothing, when no artifact pairs, or when the pick is ambiguous — the same
+    /// answers `registration_candidate` gives, because it IS `registration_candidate`.
+    fn class_registration_id(&self) -> Option<Hash64> {
+        let registry = self.backends();
+        let terms = kaspa_consensus_core::palw_state_v2::PalwRegistrationTermsV2 {
+            min_grantable_share_permille: 1,
+            slash_value_per_pwu: 1,
+            initial_target: u128::MAX,
+            registered_class_ids: Vec::new(),
+            registered_artifact_roots: Vec::new(),
+        };
+        registry
+            .sdk()
+            .registration_candidate(registry.holdings(), &terms, self.config.register_class.as_deref())
+            .ok()
+            .map(|c| c.entry.class_id())
+    }
+
+    /// **This network's price for a job shape** — the same arithmetic the chain used to open the
+    /// claim (`fp_cu_v3` then `derive_quanta_and_pwu`), read from the bundle rather than
+    /// re-spelled, so a seat and the chain cannot come to two prices for one job.
+    fn fp_price_of(&self, prompt_tokens: u32, decode_tokens_executed: u32) -> Option<(u32, u64)> {
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) =
+            &self.consensus_config.params.palw_consensus_mode
+        else {
+            return None;
+        };
+        let cu =
+            kaspa_consensus_core::palw_freeprompt_v3::fp_cu_v3(prompt_tokens, decode_tokens_executed, bundle.freeprompt.cu_weights());
+        bundle.freeprompt.derive_quanta_and_pwu(cu)
     }
 
     /// The panel's one resolve door: the tables, then — armed — the chain's own registration,
@@ -1272,7 +1312,15 @@ impl PalwPanelService {
         // than at startup because it needs the chain: the share it must take is the ruleset's
         // minimum grantable one, and a node cannot know that before it has state to read.
         let mut class_registration: Option<PalwConsensusObjectV2> = None;
-        let mut class_registration_submitted = false;
+        // **Not a latch on the mempool's yes.** A registration is judged when a block ACCEPTS it,
+        // and it can be dropped there (the target it names must equal the base class's live one,
+        // and an epoch retarget can land while the carrier waits behind up to MAX_INFLIGHT_CARRIERS
+        // ancestors). A boolean set on submission made that loss permanent AND silent: the retry
+        // was gated off forever by the same flag. This remembers the carrier instead, and the tick
+        // clears it once the chain has answered — the class appeared (done) or the carrier is gone
+        // from the mempool without one (try again).
+        let mut class_registration_inflight: Option<(kaspa_consensus_core::tx::TransactionId, u64)> = None;
+        let mut class_registration_done = false;
         // Carriers submitted whose change is not yet on chain. Reset the moment the chain's tip
         // appears in the virtual UTXO set, which is the only honest signal that it was mined.
         let mut inflight: usize = 0;
@@ -1378,7 +1426,41 @@ impl PalwPanelService {
             // in a row, each dying mid-sweep, an armed --palw-register-class and not one build
             // attempt. Building is chain-reads only; the SUBMIT still rides the funding block
             // below, where the fee UTXO lives.
-            if self.config.register_class.is_some() && !class_registration_submitted && class_registration.is_none() {
+            // **What the chain says about the carrier we sent.** Read before anything decides
+            // whether to build or submit, so one tick sees one answer.
+            if let Some((txid, sent_daa)) = class_registration_inflight {
+                // Did the class actually appear? `registered_class_ids` is the chain's own answer,
+                // and it is the ONE fact that distinguishes "the carrier was mined and the object
+                // stood" from "the carrier was mined and the object was dropped inside it".
+                let landed = match (session.palw_v2_registration_terms(), self.class_registration_id()) {
+                    (Some(terms), Some(id)) => terms.registered_class_ids.contains(&id),
+                    // No terms (no V2 bundle) or no id this node can derive: the honest answer is
+                    // "cannot tell", and the retry horizon below is what keeps that from latching.
+                    _ => false,
+                };
+                if landed {
+                    info!("[{PALW_PANEL}] the class registration in tx {txid} is on the chain");
+                    class_registration_inflight = None;
+                    class_registration_done = true;
+                } else if current_daa.saturating_sub(sent_daa) > CLASS_REGISTRATION_RETRY_DAA {
+                    // The carrier had a generous window to be mined and the class still is not
+                    // there, so the object was dropped inside a block that stood (the acceptance
+                    // gate refuses a target the epoch retarget has since moved) — or the carrier
+                    // never made it. Both are "the registration did not happen", and believing a
+                    // MEMPOOL receipt forever is what made that loss permanent and silent.
+                    warn!(
+                        "[{PALW_PANEL}] the class registration carrier {txid} was sent at daa {sent_daa} and the class is still \
+                         not registered at {current_daa} — rebuilding and retrying"
+                    );
+                    class_registration_inflight = None;
+                    class_registration = None;
+                }
+            }
+            if self.config.register_class.is_some()
+                && !class_registration_done
+                && class_registration_inflight.is_none()
+                && class_registration.is_none()
+            {
                 match self.build_class_registration(&session).await {
                     Ok(object) => {
                         info!("[{PALW_PANEL}] built a class registration for this node's worker");
@@ -1919,14 +2001,41 @@ impl PalwPanelService {
                                     continue;
                                 }
                             };
-                            if run.outcome.execution_root == duty.execution_root && run.facts.full_logits_trace_root == duty.trace_root
+                            if run.outcome.execution_root != duty.execution_root || run.facts.full_logits_trace_root != duty.trace_root
                             {
-                                self.persist_foreign_material(&duty.claim_id, &bytes);
-                                break 'verdict Some(PalwReceiptVerdictV2::Valid);
+                                // A replay that disagrees is the court's business, not a receipt's:
+                                // this seat simply has not verified the claim, and the shared tail
+                                // below (pull, then the half-window accusation) applies unchanged.
+                                continue;
                             }
-                            // A replay that disagrees is the court's business, not a receipt's:
-                            // this seat simply has not verified the claim, and the shared tail
-                            // below (pull, then the half-window accusation) applies unchanged.
+                            // **The roots are not the whole question: WAS THIS THE WORK THE CLAIM
+                            // WAS PAID FOR?**
+                            //
+                            // A commitment's `execution_root` rides its payload verbatim and the
+                            // chain relates it to nothing (it holds no leg roots to recompute
+                            // from), while the claim's `pwu`/`quanta` come from the job shape the
+                            // payload DECLARES. So a producer may declare a hundred-thousand-token
+                            // job, serve a one-token material whose roots are honestly that
+                            // material's, and a seat comparing only roots certifies it — after
+                            // which the claim's quanta are spendable as block work bought with
+                            // recycled collateral instead of inference. That is the one property
+                            // this lane exists to establish, so the seat re-prices what it
+                            // actually ran and refuses anything that is not the claim's price.
+                            let priced = self.fp_price_of(material.job.prompt_tokens, run.facts.decode_tokens_executed);
+                            match priced {
+                                Some((quanta, pwu)) if pwu == duty.pwu && quanta == duty.quanta => {}
+                                other => {
+                                    warn!(
+                                        "[{PALW_PANEL}] claim {}: the material's job prices at {:?}, and the claim was opened at \
+                                         (quanta {}, pwu {}) — the roots match but the WORK does not, so this is not the \
+                                         claim's material",
+                                        duty.claim_id, other, duty.quanta, duty.pwu
+                                    );
+                                    continue;
+                                }
+                            }
+                            self.persist_foreign_material(&duty.claim_id, &bytes);
+                            break 'verdict Some(PalwReceiptVerdictV2::Valid);
                         }
                     }
                     if !duty.free_prompt {
@@ -2137,7 +2246,7 @@ impl PalwPanelService {
                 // absence costs the whole lane rather than one claim. It is offered first for the
                 // same reason a court rung is: everything behind it can wait a tick, and it
                 // cannot — a producer with a worker and no class is a node doing nothing.
-                if self.config.register_class.is_some() && !class_registration_submitted {
+                if self.config.register_class.is_some() && !class_registration_done && class_registration_inflight.is_none() {
                     // Built at the top of the tick (chain reads only); this block owns the SUBMIT
                     // because the fee UTXO lives here.
                     //
@@ -2168,7 +2277,7 @@ impl PalwPanelService {
                                 match self.flow_context.submit_rpc_transaction(&session, tx, Orphan::Forbidden).await {
                                     Ok(()) => {
                                         info!("[{PALW_PANEL}] submitted the class registration in tx {txid}");
-                                        class_registration_submitted = true;
+                                        class_registration_inflight = Some((txid, current_daa));
                                         let next = TransactionOutpoint::new(txid, 0);
                                         self.persist_fee_outpoint(next);
                                         funding = Some((
