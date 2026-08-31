@@ -142,9 +142,8 @@ impl RequestPruningPointPalwStateFlow {
             // those rows, so without this it holds classes it cannot serve. Collected in the same
             // blocking hop, because two hops could straddle a reorg and hand the peer a state and
             // a declaration set from different chain points.
-            let (carriage, class_carriages) = session
-                .spawn_blocking(move |c| (c.pruning_point_palw_state(pp), c.palw_class_carriages_for_sync_v1()))
-                .await;
+            let (carriage, class_carriages) =
+                session.spawn_blocking(move |c| (c.pruning_point_palw_state(pp), c.palw_class_carriages_for_sync_v1())).await;
             let reply = match carriage {
                 Some(c) => PruningPointPalwStateMessage {
                     found: true,

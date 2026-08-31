@@ -2454,8 +2454,10 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
     async fn request_pruning_point_palw_state(
         &mut self,
         pruning_point: BlockHash,
-    ) -> Result<Option<(kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2, Vec<(kaspa_consensus_core::Hash64, Vec<u8>)>)>, ProtocolError>
-    {
+    ) -> Result<
+        Option<(kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2, Vec<(kaspa_consensus_core::Hash64, Vec<u8>)>)>,
+        ProtocolError,
+    > {
         let palw_active = matches!(
             self.ctx.config.params.palw_consensus_mode,
             kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)
