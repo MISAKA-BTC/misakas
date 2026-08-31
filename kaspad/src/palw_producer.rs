@@ -113,6 +113,8 @@ pub struct PalwProducerConfig {
     /// at startup and matched against what the CHAIN says the class is; a file that does not
     /// match is not used, never trusted into service.
     pub class_artifacts: Vec<std::path::PathBuf>,
+    /// ADR-0067 tier ④: the byte bound on resident artifacts (0 = unbounded).
+    pub class_cache_bytes: u64,
 }
 
 pub struct PalwProducerService {
@@ -208,16 +210,14 @@ impl PalwProducerService {
         // silently fell back to the floor would look like a working producer that never touches
         // the class they deployed 1.7 GiB for.
         let sdk = misaka_palw_sdk::PalwClassSdk::builtin_v1(config.court, config.network_id.as_bytes().to_vec());
-        let mut class_holdings = Vec::new();
-        for path in &config.class_artifacts {
-            match sdk.load_artifact(path) {
-                Ok(holding) => {
-                    info!("[{PALW_PRODUCER}] {}", holding.summary);
-                    class_holdings.push(holding);
-                }
-                Err(err) => warn!("[{PALW_PRODUCER}] class artifact {} is unusable: {err}", path.display()),
-            }
+        let (loaded, skipped) = sdk.load_artifacts_bounded_v1(&config.class_artifacts, config.class_cache_bytes);
+        for holding in &loaded {
+            info!("[{PALW_PRODUCER}] {}", holding.summary);
         }
+        for (path, why) in &skipped {
+            warn!("[{PALW_PRODUCER}] class artifact {} is not held: {why}", path.display());
+        }
+        let class_holdings = loaded;
         Self { config, consensus_manager, mining_manager, flow_context, keypair, key_seed, bond, miner_data, class_holdings }
     }
 

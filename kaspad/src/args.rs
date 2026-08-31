@@ -215,6 +215,14 @@ pub struct Args {
     /// then matched against what the CHAIN says the class is; a file matching neither the
     /// registered graph nor the registered weights is not used.
     pub palw_class_artifact: Vec<String>,
+    /// **The byte bound on artifacts this node holds resident** (0 = unbounded).
+    ///
+    /// ADR-0067 makes the class registry permissionless, which multiplies MODELS — and a node that
+    /// answered every registration by holding its weights would have its disk chosen by strangers.
+    /// Registration obligates no node to hold anything. This is the number that says so: artifacts
+    /// load in the order given, and loading stops here. What is skipped is named in the log, and a
+    /// class this node does not hold is one it never declares and is never drawn to judge.
+    pub palw_class_cache_bytes: u64,
     /// **Register the class of this node's converted artifact on the running chain, once.**
     ///
     /// A network is born with the classes its ruleset id commits to; every later one arrives as a
@@ -228,6 +236,8 @@ pub struct Args {
     pub palw_dump_classes: bool,
     /// ADR-0067: arm the chain-registered-class arm (the fence's node half).
     pub palw_chain_classes: bool,
+    /// ADR-0067 Decision 6: `class-id:file` pairs whose declarations this node should adopt.
+    pub palw_class_carriage: Vec<String>,
     pub palw_bond_collateral: Option<u64>,
     /// **Produce for this class instead of the network's floor.**
     ///
@@ -380,10 +390,12 @@ impl Default for Args {
             palw_producer_key: None,
             palw_producer_bond: None,
             palw_class_artifact: Vec::new(),
+            palw_class_cache_bytes: 0,
             palw_register_class: None,
             palw_register_bond: false,
             palw_dump_classes: false,
             palw_chain_classes: false,
+            palw_class_carriage: Vec::new(),
             palw_bond_collateral: None,
             palw_producer_class: None,
             palw_challenge: false,
@@ -887,6 +899,20 @@ pub fn cli() -> Command {
                 ),
         )
         .arg(
+            Arg::new("palw-class-cache-bytes")
+                .long("palw-class-cache-bytes")
+                .value_name("bytes")
+                .require_equals(false)
+                .value_parser(clap::value_parser!(u64))
+                .help(
+                    "MISAKA PALW: hold at most this many bytes of --palw-class-artifact weights (0 = unbounded, the \
+                     default). Artifacts load in the order given -- your priority -- and loading stops at the bound; \
+                     what did not fit is named in the log. A class this node does not hold is one it does not declare \
+                     and is not drawn to judge, so a bound too small for the classes you meant to serve costs you \
+                     draws rather than correctness.",
+                ),
+        )
+        .arg(
             Arg::new("palw-register-class")
                 .long("palw-register-class")
                 .num_args(0..=1)
@@ -899,6 +925,19 @@ pub fn cli() -> Command {
                      (--palw-producer-bond), its key and a funded --palw-fee-outpoint. Give a model id (e.g. \
                      \"Qwen/Qwen2.5-Coder-1.5B-Instruct\") when the artifact's shape matches more than one class this build \
                      knows — sibling models share a converted shape, so the file alone cannot say which one it is.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-class-carriage")
+                .long("palw-class-carriage")
+                .action(ArgAction::Append)
+                .value_name("class-id:file")
+                .help(
+                    "MISAKA PALW (ADR-0067 Decision 6): adopt a class DECLARATION this node did not watch arrive — the \
+                     pruned-sync path, where the class table arrives wholesale and no declaration with it. The file is \
+                     the borsh PalwClassAdmissionCarriageV2 the registration carried. It needs no trust in whoever \
+                     supplied it: the node refuses unless the chain currently holds that class unfrozen, the profile \
+                     hashes to the class id, and the canonical job names the same class. Repeatable.",
                 ),
         )
         .arg(
@@ -1453,10 +1492,15 @@ impl Args {
                 .get_many::<String>("palw-class-artifact")
                 .map(|v| v.cloned().collect())
                 .unwrap_or(defaults.palw_class_artifact),
+            palw_class_cache_bytes: m.get_one::<u64>("palw-class-cache-bytes").copied().unwrap_or(defaults.palw_class_cache_bytes),
             palw_register_class: m.get_one::<String>("palw-register-class").cloned().or(defaults.palw_register_class.clone()),
             palw_register_bond: arg_match_unwrap_or::<bool>(&m, "palw-register-bond", defaults.palw_register_bond),
             palw_dump_classes: arg_match_unwrap_or::<bool>(&m, "palw-dump-classes", defaults.palw_dump_classes),
             palw_chain_classes: arg_match_unwrap_or::<bool>(&m, "palw-chain-classes", defaults.palw_chain_classes),
+            palw_class_carriage: m
+                .get_many::<String>("palw-class-carriage")
+                .map(|v| v.cloned().collect())
+                .unwrap_or(defaults.palw_class_carriage.clone()),
             palw_bond_collateral: m.get_one::<u64>("palw-bond-collateral").copied(),
             palw_producer_class: m.get_one::<String>("palw-producer-class").cloned().or(defaults.palw_producer_class),
             palw_challenge: m.get_one::<bool>("palw-challenge").copied().unwrap_or(defaults.palw_challenge),

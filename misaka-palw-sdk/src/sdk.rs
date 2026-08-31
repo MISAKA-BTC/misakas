@@ -258,6 +258,61 @@ impl PalwClassSdk {
         Err(format!("this node cannot serve the registered class {class_id} (artifact root {artifact_root})"))
     }
 
+    /// **ADR-0067 Decision 6 tier ④: load holdings under the operator's byte bound.**
+    ///
+    /// A permissionless registry multiplies MODELS; it must not multiply every node's resident
+    /// bytes. Registration obligates no node to hold anything, and this is where that stops being
+    /// a principle and becomes a number: artifacts load in the order the operator listed them —
+    /// their priority, stated by them, not inferred — and loading stops at `bound_bytes`.
+    ///
+    /// **What is skipped is NAMED, not silently dropped.** A node that quietly held nine of ten
+    /// artifacts would declare capability for nine classes and look, to its operator, like it
+    /// served ten. The skipped ones are simply not held, and a class this node does not hold is
+    /// one it cannot resolve, cannot declare and will not be drawn to judge — which is
+    /// declaration-first eviction arriving structurally rather than as a rule somebody has to
+    /// remember to obey.
+    ///
+    /// `bound_bytes == 0` means unbounded, which is the behaviour every node had before this and
+    /// is right for an operator running one class on a dedicated box.
+    ///
+    /// **The bound is over FILE bytes, which overstates a mapped artifact's resident set.** The
+    /// mmap container's whole point is that the kernel's page cache holds the fraction actually
+    /// read — eight of two hundred and fifty-six experts per token — so a 33.5 GiB file is never
+    /// 33.5 GiB of pressure. Bounding the file anyway is the conservative direction and the only
+    /// one that can be checked before the bytes are touched; an operator who knows their working
+    /// set is smaller raises the bound, and the log names what a too-small one cost them.
+    pub fn load_artifacts_bounded_v1(
+        &self,
+        paths: &[std::path::PathBuf],
+        bound_bytes: u64,
+    ) -> (Vec<PalwLoadedArtifactV1>, Vec<(std::path::PathBuf, String)>) {
+        let mut held = Vec::new();
+        let mut skipped = Vec::new();
+        let mut bytes: u64 = 0;
+        for path in paths {
+            // The file's size, before it is read: a bound that only notices after loading is a
+            // bound that OOMs the node it was set to protect.
+            let size = std::fs::metadata(path).map(|m| m.len()).unwrap_or(0);
+            if bound_bytes > 0 && bytes.saturating_add(size) > bound_bytes {
+                skipped.push((
+                    path.clone(),
+                    format!(
+                        "{size} bytes would take this node past its {bound_bytes}-byte artifact bound (holding {bytes});                          raise --palw-class-cache-bytes or drop a class from the list"
+                    ),
+                ));
+                continue;
+            }
+            match self.load_artifact(path) {
+                Ok(holding) => {
+                    bytes = bytes.saturating_add(size);
+                    held.push(holding);
+                }
+                Err(err) => skipped.push((path.clone(), err)),
+            }
+        }
+        (held, skipped)
+    }
+
     /// Arm the ADR-0067 chain-registered-class arm. A separate constructor step rather than a
     /// parameter, so every call site that arms it is greppable and deliberate.
     pub fn with_chain_classes_v1(mut self) -> Self {

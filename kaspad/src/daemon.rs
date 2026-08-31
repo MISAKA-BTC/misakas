@@ -1318,6 +1318,7 @@ Do you confirm? (y/n)";
                         // registered.
                         court: palw_court.expect("a ConsensusV2 bundle was matched above"),
                         class_artifacts: args.palw_class_artifact.iter().map(std::path::PathBuf::from).collect(),
+                        class_cache_bytes: args.palw_class_cache_bytes,
                     },
                     consensus_manager.clone(),
                     mining_manager.clone(),
@@ -1488,6 +1489,7 @@ Do you confirm? (y/n)";
                         state_dir: palw_panel_state_dir(&app_dir, network),
                         court: panel_court.expect("v2 is true exactly when this is Some"),
                         class_artifacts: args.palw_class_artifact.iter().map(std::path::PathBuf::from).collect(),
+                        class_cache_bytes: args.palw_class_cache_bytes,
                         challenge: args.palw_challenge || args.palw_drill_challenge_all,
                         // The same directory the producer writes to, so a node that produces can
                         // answer a court about its own work after its gossip pool has moved on.
@@ -1529,6 +1531,33 @@ Do you confirm? (y/n)";
 
     if args.palw_dump_classes {
         async_runtime.register(Arc::new(crate::palw_dump::PalwDumpService::new(consensus_manager.clone())));
+    }
+    // **ADR-0067 Decision 6: declarations this node did not watch arrive.** A pruned sync brings
+    // the class table and no carriage rows, so an operator on such a node supplies them. The
+    // adoption is checked against chain state — class present and unfrozen, profile hashing to
+    // the id, canonical naming the same class — so a wrong or hostile file is refused rather than
+    // trusted, and a right one is exactly the bytes the accept path would have written.
+    for pair in &args.palw_class_carriage {
+        let Some((id, path)) = pair.split_once(':') else {
+            warn!("[palw-class-carriage] {pair:?} is not <class-id>:<file>");
+            continue;
+        };
+        let Ok(class_id) = id.parse::<kaspa_hashes::Hash64>() else {
+            warn!("[palw-class-carriage] {id:?} is not a class id");
+            continue;
+        };
+        let bytes = match std::fs::read(path) {
+            Ok(bytes) => bytes,
+            Err(e) => {
+                warn!("[palw-class-carriage] {path}: {e}");
+                continue;
+            }
+        };
+        let session = consensus_manager.consensus().unguarded_session_blocking();
+        match session.palw_adopt_class_carriage_v1(class_id, &bytes) {
+            Ok(()) => info!("[palw-class-carriage] adopted the declaration for class {class_id} from {path}"),
+            Err(why) => warn!("[palw-class-carriage] refused the declaration for {class_id} from {path}: {why}"),
+        }
     }
     if let Some(palw_panel_service) = palw_panel_service {
         async_runtime.register(palw_panel_service);

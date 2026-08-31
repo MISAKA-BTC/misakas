@@ -145,6 +145,8 @@ pub struct PalwPanelConfig {
     /// Converted-class artifacts this seat holds. A seat can only judge a class whose weights it
     /// has; the floor's are derived, so this is empty on an RC node.
     pub class_artifacts: Vec<PathBuf>,
+    /// ADR-0067 tier ④: the byte bound on resident artifacts (0 = unbounded).
+    pub class_cache_bytes: u64,
     /// **Re-run every licensed claim and dispute the ones this node cannot reproduce.**
     ///
     /// Off by default because it is not free: it costs one full inference per licensed claim, and
@@ -307,15 +309,12 @@ impl PalwPanelService {
         // seat silently unable to judge a class looks exactly like a seat whose material never
         // arrived.
         let sdk = misaka_palw_sdk::PalwClassSdk::builtin_v1(config.court, consensus_config.params.net.to_string().into_bytes());
-        let mut class_holdings = Vec::new();
-        for path in &config.class_artifacts {
-            match sdk.load_artifact(path) {
-                Ok(holding) => {
-                    info!("[{PALW_PANEL}] {}", holding.summary);
-                    class_holdings.push(holding);
-                }
-                Err(err) => warn!("[{PALW_PANEL}] class artifact {} is unusable: {err}", path.display()),
-            }
+        let (class_holdings, skipped) = sdk.load_artifacts_bounded_v1(&config.class_artifacts, config.class_cache_bytes);
+        for holding in &class_holdings {
+            info!("[{PALW_PANEL}] {}", holding.summary);
+        }
+        for (path, why) in &skipped {
+            warn!("[{PALW_PANEL}] class artifact {} is not held: {why}", path.display());
         }
         Self {
             config,
