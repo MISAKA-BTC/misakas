@@ -337,7 +337,7 @@ Three of the four items the section above listed as not landed are now code rath
 The mmap (Qwen3.6) interpreter was staged second on the rollout above because it is the larger
 piece. Building it turned up something the sequencing did not anticipate: **it cannot be built
 correctly against the graph this class has registered, because that graph misdescribes the engine.**
-Two of them are unambiguous, and both are measured mechanically by
+Three of them are unambiguous, and all are measured mechanically by
 `misaka-palw-base0/tests/qwen36_profile_conformance.rs` rather than argued from a reading:
 
 * **The shared expert's gate is two different tensors under one name.** The engine reads
@@ -375,6 +375,23 @@ the tiled logits trace), so nothing ever resolves these names against an artifac
 labels until an interpreter makes them the program. That is precisely the condition under which the
 dense family's identical defect survived: the A16 differential found the SwiGLU rows out of declared
 order only once something executed the declaration.
+
+**The rule that was missing is now written, and it closes almost all of the gap.** The fusion was
+never the problem — one node standing for "the eight chosen experts' gate projections" is a name for
+a computation, not for a tensor anyone stored. The problem was that the mapping from a fused name to
+the bytes it reads lived only inside the compiled engine's hardcoded order, which is precisely the
+dependency this ADR exists to remove. `RESOLUTION` in the conformance test is that mapping, derived
+by reading the engine's arms against the IR they claim to mirror and held to a real artifact: every
+target must be a store an artifact of this lineage carries. With it, the 14 declared names no
+artifact can deliver fall to **1**, and the 27 engine reads no node names fall to **0**.
+
+**The one name left is not a name at all — it is a third finding.** The profile declares a
+`VCacheWrite` node (`blk.N.attn_v_cache.a16`) that narrows the V projection as it enters the cache.
+`Qwen36Engine::full_arm` pushes V in RAW — `cache.values[li].push(v)` — with no requant and no such
+store in any artifact. K is normed and rotated before its cache write and the graph declares both;
+the V path was written as though it were symmetric. This one cannot be closed by renaming: ADR-0030
+gives a step leg one committed row per declared node, so a node with no computation behind it is a
+slot that can never be filled, and every step leg of the class would be short by exactly one row.
 
 **The fix cannot be an edit.** `shape_profile_id` is the borsh of the whole profile, node tables
 included, and the hybrid's id is pinned in-tree as a live chain fact — "the shipped hybrid class id

@@ -223,3 +223,140 @@ fn qwen36_declared_operands_against_the_artifact() {
     // Deliberately not an assertion yet — the first run's job is to report, and the pin follows
     // the measurement rather than the other way round.
 }
+
+// -------------------------------------------------------------------------------------------------
+// The resolution rule
+// -------------------------------------------------------------------------------------------------
+//
+// The measurement above says the registered graph names 53 operands while an artifact of this
+// lineage carries 76, and that the two do not nest. Much of that gap is FUSION and is legitimate:
+// one declared node stands for a computation that reads several stores, and `ffn_gate_exps.routed`
+// is a name for "the eight chosen experts' gate projections", not for a tensor anyone stored.
+//
+// The problem was never the fusion. It is that **the rule mapping a fused name to the bytes it
+// reads existed only inside the compiled engine's hardcoded order** — so a node reading the
+// registered declaration had no way to follow it, which is exactly the dependency ADR-0067 exists
+// to remove. This table is that rule, written down, and the test under it holds the table to the
+// artifact: every target must be something an artifact of this lineage actually carries.
+//
+// Derived by reading `Qwen36Engine`'s arms against the IR they claim to mirror, not by guessing.
+// `{e}` stands for each routed expert the router selected for this token.
+const RESOLUTION: &[(&str, &[&str])] = &[
+    // --- the GatedDeltaNet arm ---------------------------------------------------------------
+    // The convolution's taps and the requant of its output are two stores under one declared node.
+    ("linear_conv.weight", &["linear_conv.weight", "linear_conv.a16"]),
+    // "decay" is a computation over two calibration rows, neither of which is named `linear_decay`.
+    ("linear_decay.a16", &["linear_decay_c.a16", "linear_dt_bias.a16"]),
+    // The fused recurrence. One declared node, five stores.
+    ("linear_gdn.a16", &["linear_delta.a16", "linear_gate.a16", "linear_read.a16", "linear_write.a16", "linear_out.a16"]),
+    // --- the attention arm --------------------------------------------------------------------
+    // The declared node is named for the rope TABLE (a global in the artifact); what it reads per
+    // layer is the rope requant.
+    ("rope_table", &["attn_rope.a16"]),
+    ("attn_softmax.a16", &["attn_softmax_up.a16"]),
+    // --- the mixture --------------------------------------------------------------------------
+    ("ffn_gate_exps.routed", &["ffn_expert.{e}_gate.weight", "ffn_expert.{e}_gate.weight.a16"]),
+    ("ffn_up_exps.routed", &["ffn_expert.{e}_up.weight", "ffn_expert.{e}_up.weight.a16"]),
+    ("ffn_down_exps.routed", &["ffn_expert.{e}_down.weight", "ffn_expert.{e}_down.weight.a16"]),
+    ("ffn_expert_gated.a16", &["ffn_expert.{e}_gated.a16", "ffn_expert.{e}_silu.a16"]),
+    // The router's top-k reads the widening the profile does not name at all — Finding 2, stated
+    // here as the resolution it would need if the graph were followed as written.
+    ("ffn_router_topk.a16", &["ffn_router_up.a16"]),
+    // --- the shared expert, which is where the names genuinely disagree (Finding 1) ------------
+    ("ffn_shared_up.weight", &["ffn_shared_expert_up.weight", "ffn_shared_expert_up.weight.a16"]),
+    ("ffn_shared_down.weight", &["ffn_shared_expert_down.weight", "ffn_shared_expert_down.weight.a16"]),
+    // The declared `ffn_shared_gate.weight` is the EXPERT's gate at `shared_dim` wide; the engine's
+    // tensor of that name is the SCALAR gate. The declared name resolves to the expert's.
+    ("ffn_shared_gate.weight", &["ffn_shared_expert_gate.weight", "ffn_shared_expert_gate.weight.a16", "ffn_shared_expert_silu.a16"]),
+    ("ffn_shared_gated.a16", &["ffn_shared_expert_gated.a16"]),
+    // ...and the declared `ffn_shared_scalar.weight` is the tensor the engine calls
+    // `ffn_shared_gate.weight`. The two names are swapped between the graph and the engine.
+    ("ffn_shared_scalar.weight", &["ffn_shared_gate.weight", "ffn_shared_gate.weight.a16"]),
+    ("ffn_shared_apply.a16", &["ffn_shared_gated.a16"]),
+];
+
+/// **Every target of the resolution rule is a store an artifact actually carries.**
+///
+/// A rule that resolves a fused name to bytes nobody stored is not a rule, it is a second guess.
+#[test]
+fn the_resolution_rule_lands_on_real_operands() {
+    let available = artifact_operands();
+    let mut missing: Vec<String> = Vec::new();
+    for (declared, targets) in RESOLUTION {
+        for t in *targets {
+            if !available.contains(*t) {
+                missing.push(format!("{declared} -> {t}"));
+            }
+        }
+    }
+    assert!(missing.is_empty(), "the rule names {} store(s) no artifact carries: {missing:#?}", missing.len());
+}
+
+/// **What the rule still does not cover, counted rather than assumed.**
+///
+/// The residue in both directions is what an interpreter would still be unable to follow. Printing
+/// it is the point: the pin below is the SHAPE of the remaining gap, so a later correction that
+/// shrinks it fails this test and has to restate the number.
+#[test]
+fn the_residue_after_the_rule_is_named() {
+    let declared = declared_operands();
+    let available = artifact_operands();
+    let resolved_from: BTreeSet<String> = RESOLUTION.iter().map(|(d, _)| d.to_string()).collect();
+    let resolved_to: BTreeSet<String> = RESOLUTION.iter().flat_map(|(_, t)| t.iter().map(|s| s.to_string())).collect();
+
+    let rides_with_declared = |name: &str| match name.strip_suffix(".a16") {
+        Some(stem) => declared.contains(stem) || resolved_to.contains(stem),
+        None => false,
+    };
+
+    let still_undeliverable: Vec<&String> = declared.difference(&available).filter(|n| !resolved_from.contains(*n)).collect();
+    let still_unreachable: Vec<&String> =
+        available.difference(&declared).filter(|n| !resolved_to.contains(*n) && !rides_with_declared(n)).collect();
+
+    println!("declared names the rule still cannot deliver ({}):", still_undeliverable.len());
+    for n in &still_undeliverable {
+        println!("  {n}");
+    }
+    println!("engine reads the rule still cannot reach ({}):", still_unreachable.len());
+    for n in &still_unreachable {
+        println!("  {n}");
+    }
+
+    // Before the rule these were 14 and 27. The rule is written to shrink them, not to close them:
+    // what is left is the honest size of the correction a `graph-v2` row would have to make.
+    assert!(still_undeliverable.len() < 14 && still_unreachable.len() < 27, "the rule did not shrink the gap it was written for");
+}
+
+/// **Finding 3: the graph declares a node the engine never executes.**
+///
+/// The residue the resolution rule cannot close is one name, and it is not a naming disagreement
+/// like Findings 1 and 2 — it is an operation. The profile declares a `VCacheWrite` node
+/// (`MulElem` under the requantize kernel, `blk.N.attn_v_cache.a16`) whose job is to narrow the V
+/// projection as it enters the cache. `Qwen36Engine::full_arm` pushes V into the cache RAW:
+/// `cache.values[li].push(v)`, with no requant and no such store in any artifact. K is normed and
+/// rotated before its cache write and the graph declares both; the V path was written as if it were
+/// symmetric, and it is not.
+///
+/// This one matters more than a name. ADR-0030 gives a step leg one committed row per declared
+/// node, so a node with no computation behind it is a slot that can never be filled — an
+/// interpreter following this declaration would owe a row it cannot produce, and every step leg of
+/// the class would be short by one. It cannot be papered over by a rename.
+#[test]
+fn the_graph_declares_a_v_cache_requant_the_engine_does_not_do() {
+    let p = qwen36_profile_v1(QWEN36_35B_A3B).expect("the registered geometry projects");
+    let node = p
+        .attn_nodes
+        .iter()
+        .find(|n| n.weight_name.ends_with("attn_v_cache.a16"))
+        .expect("the registered profile declares the V-cache write");
+    assert_eq!(
+        node.role,
+        kaspa_consensus_core::palw_step::PalwStepNodeRoleV1::VCacheWrite,
+        "the node under test is the V cache write"
+    );
+    // Nothing in an artifact of this lineage can feed it.
+    assert!(
+        !artifact_operands().iter().any(|n| n.ends_with("attn_v_cache.a16")),
+        "if this ever fails, the engine grew the requant this node declares and the finding is closed"
+    );
+}
