@@ -14,6 +14,10 @@ kaspa-consensus-core.workspace = true
 kaspa-hashes.workspace = true
 misaka-palw-base0.workspace = true
 
+[dev-dependencies]
+kaspa-pq-validator-core.workspace = true
+kaspa-txscript.workspace = true
+
 [[bin]]
 name = "palw-class"
 path = "src/bin/palw-class.rs"

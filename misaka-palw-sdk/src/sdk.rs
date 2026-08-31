@@ -390,6 +390,11 @@ impl PalwClassSdk {
 }
 
 #[cfg(test)]
+mod chain_arm_tests_support {
+    pub(super) use super::chain_arm_tests::{class, court, fp_job, holding};
+}
+
+#[cfg(test)]
 mod chain_arm_tests {
     use super::*;
     use kaspa_consensus_core::palw_base0_profile::rc_job_context;
@@ -397,13 +402,13 @@ mod chain_arm_tests {
     use misaka_palw_base0::artifact::{Base0ArtifactV1, Base0ShapeV1, LN_THETA_10000_GEN_Q};
     use misaka_palw_base0::engine_a16::derived_a16_store;
 
-    fn court() -> PalwCourtParamsV2 {
+    pub(super) fn court() -> PalwCourtParamsV2 {
         PalwCourtParamsV2::new(kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES, 4, 2).expect("shipped court")
     }
 
     /// A tiny dense artifact + the CORRECTED profile for its geometry — a class that exists
     /// nowhere in this build's tables, which is the whole scenario.
-    fn class() -> (std::sync::Arc<Base0ArtifactV1>, kaspa_consensus_core::palw_step::PalwShapeProfileV3) {
+    pub(super) fn class() -> (std::sync::Arc<Base0ArtifactV1>, kaspa_consensus_core::palw_step::PalwShapeProfileV3) {
         let shape = Base0ShapeV1 {
             n_layers: 1,
             n_heads: 4,
@@ -435,7 +440,7 @@ mod chain_arm_tests {
         (std::sync::Arc::new(artifact), qwen25_a16_profile_v2(geometry).expect("the corrected profile builds"))
     }
 
-    fn holding(artifact: std::sync::Arc<Base0ArtifactV1>) -> PalwLoadedArtifactV1 {
+    pub(super) fn holding(artifact: std::sync::Arc<Base0ArtifactV1>) -> PalwLoadedArtifactV1 {
         PalwLoadedArtifactV1::from_parts(
             crate::lineages::dense::DENSE_LINEAGE_ID,
             None,
@@ -444,7 +449,7 @@ mod chain_arm_tests {
         )
     }
 
-    fn fp_job(
+    pub(super) fn fp_job(
         class_id: Hash64,
         n_ctx: u32,
         prompt: &[u32],
@@ -559,5 +564,178 @@ mod chain_arm_tests {
             .map(drop)
             .unwrap_err();
         assert!(unserved.contains("cannot serve the registered graph"), "the kernel boundary speaks: {unserved}");
+    }
+}
+
+#[cfg(test)]
+mod chain_only_lattice_tests {
+    use super::chain_arm_tests_support::*;
+    use super::*;
+    use kaspa_consensus_core::palw_base0_profile::rc_job_context;
+    use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, palw_fp_commitment_v3};
+    use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpCuWeightsV3, fp_claim_id_v3, fp_quanta_v3};
+    use kaspa_consensus_core::palw_state_v2::{
+        PalwBlockContextV2, PalwBondKeyV2, PalwChainStateV2, PalwClaimPhaseV2, PalwConsensusObjectV2 as Obj, PalwPanelSeatV2,
+        PalwPwuRuleV2, PalwStateParamsV2, apply_palw_transition_v2,
+    };
+    use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
+
+    const MATURITY: u64 = 5;
+    const USE_WINDOW: u64 = 50;
+    const NETWORK: &[u8] = b"misaka-palw-rc";
+    const QUANTUM_CU: u128 = 100;
+
+    fn h(v: u64) -> Hash64 {
+        Hash64::from_u64_word(v)
+    }
+
+    /// **ADR-0067's whole promise, walked: a class that exists ONLY as chain data goes from
+    /// registration to a minted-receipt admission, with no row for it in any table.**
+    ///
+    /// The registration object is the SAME shape the wire carries (built by
+    /// `palw_post_genesis_registration_v1`, carriage included). The execution backend comes from
+    /// `resolve_chain_registered` — the fenced arm, armed — so every forward walks the registered
+    /// declaration. The lattice is the state machine's own: committed → bound (and the duty says
+    /// free-prompt) → licensed → Final → the FULL receipt-spend admission, ML-DSA-87 signature
+    /// and all, for the envelope a mining node's producer builds.
+    #[test]
+    fn a_chain_only_class_certifies_and_earns_a_receipt_block_admission() {
+        // ---- the class, existing nowhere but as data -------------------------------------
+        let (artifact, profile) = class();
+        let class_id = profile.shape_profile_id();
+        let root = artifact.artifact_digest();
+        let canonical = rc_job_context(&profile, 4, 2);
+        let holdings = vec![holding(artifact.clone())];
+
+        // The wire-shaped registration: profile and canonical RIDE the object (ADR-0049
+        // Decision H), exactly as a stranger's carrier would deliver them.
+        let bond_outpoint = TransactionOutpoint { transaction_id: TransactionId::from_u64_word(1), index: 0 };
+        let key = kaspa_pq_validator_core::ValidatorKey::from_seed([0x67u8; kaspa_pq_validator_core::VALIDATOR_SEED_LEN]);
+        let pubkey = key.public_key().to_vec();
+        let registration = kaspa_consensus_core::palw_class_admission_v2::palw_post_genesis_registration_v1(
+            profile.clone(),
+            canonical.clone(),
+            root,
+            1,
+            u128::MAX,
+            5,
+            0,
+            PalwBondKeyV2(bond_outpoint),
+            Vec::new(),
+        )
+        .expect("the chain-only class registers");
+
+        // ---- the base the state machine requires, plus the bond, plus the stranger --------
+        let floor = misaka_palw_base0::classes::canonical_class_by_model_id_v1(&court(), "PALW-BASE-0/rc")
+            .expect("the floor is registered");
+        let floor_root = misaka_palw_base0::rc::palw_rc_base0_artifact_root_v1().expect("the floor's pinned root");
+        let params = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, floor.class_id(), 4, 1000, 1, 800, 0).unwrap();
+        let at = |block: u64, daa: u64, blue: u64| PalwBlockContextV2 { block: h(block), daa_score: daa, blue_score: blue, subsidy: 0 };
+        let genesis_objects = vec![
+            Obj::ClassRegistered {
+                class_id: floor.class_id(),
+                artifact_root: floor_root,
+                slash_value_per_pwu: 5,
+                pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
+                initial_target: u128::MAX,
+                share_permille: 1000,
+                activation_daa: 0,
+                admission: None,
+            },
+            Obj::BondRegistered {
+                bond: PalwBondKeyV2(bond_outpoint),
+                pubkey: pubkey.clone(),
+                operator_pubkey: vec![21; 8],
+                collateral: 1_000,
+                payout_payload: h(0x9A11),
+                signature: Vec::new(),
+            },
+        ];
+        let (s1, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &params, &at(1, 100, 1), &genesis_objects, None).unwrap();
+        let (s2, _) = apply_palw_transition_v2(&s1, &params, &at(2, 101, 2), &[registration], None).unwrap();
+        assert!(s2.class(&class_id).is_some(), "the chain now holds the stranger's class");
+
+        // ---- execution, through the FENCED ARM — no table row exists to fall back to ------
+        let armed = PalwClassSdk::builtin_v1(court(), NETWORK.to_vec()).with_chain_classes_v1();
+        let backend = armed
+            .resolve_chain_registered(class_id, root, &holdings, &profile, &canonical)
+            .expect("the armed arm serves the chain-only class");
+
+        let prompt_ids: Vec<u32> = vec![3, 9, 17];
+        let prompt: Vec<usize> = prompt_ids.iter().map(|t| *t as usize).collect();
+        let mut job = fp_job(class_id, profile.n_ctx, &prompt_ids, 3);
+        job.executor_bond = bond_outpoint;
+        job.executor_pubkey = pubkey.clone();
+        let run = backend.execute_free_prompt(&job, &prompt).expect("the declared graph runs the caller's prompt");
+
+        let class_facts = PalwFpClassFactsV3 {
+            model_profile_id: root,
+            runtime_manifest_hash: Hash64::default(),
+            runtime_class_id: root,
+            shape_profile_id: class_id,
+            cu_ruleset_id: Hash64::default(),
+        };
+        let weights = PalwFpCuWeightsV3 { prefill_weight: 1, decode_weight: 64 };
+        let commitment = palw_fp_commitment_v3(&job, &class_facts, &run, NETWORK, &weights, 999_999).expect("a finished run commits");
+        let claim_id = fp_claim_id_v3(&commitment);
+        let quanta = fp_quanta_v3(commitment.cu, QUANTUM_CU, 16);
+        assert!(quanta >= 1, "the job earns a draw at the shipped quantum, got {quanta} at cu {}", commitment.cu);
+
+        // ---- the lattice: committed → bound → licensed → Final ---------------------------
+        let committed = Obj::FreePromptCommitted {
+            claim: claim_id,
+            class_id,
+            bond: PalwBondKeyV2(bond_outpoint),
+            executor_pubkey: pubkey.clone(),
+            pwu: quanta as u64 * 10,
+            quanta,
+            trace_root: commitment.trace_root,
+            output_root: commitment.output_root,
+            execution_root: commitment.execution_root,
+            trace_chunk_count: commitment.trace_chunk_count,
+            trace_retention_daa: commitment.trace_retention_daa,
+        };
+        let (s3, _) = apply_palw_transition_v2(&s2, &params, &at(3, 102, 3), &[committed], None).unwrap();
+        let seats = vec![PalwPanelSeatV2 { bond: PalwBondKeyV2(bond_outpoint), operator_id: h(90) }];
+        let (s4, _) =
+            apply_palw_transition_v2(&s3, &params, &at(4, 103, 4), &[Obj::PanelBound { claim: claim_id, anchor: h(77), seats }], None)
+                .unwrap();
+        let duties = kaspa_consensus_core::palw_producer_v2::palw_seat_duties_v2(&s4, &params, &[PalwBondKeyV2(bond_outpoint)]);
+        let duty = duties.iter().find(|d| d.claim_id == claim_id).expect("the seat sees the stranger's claim");
+        assert!(duty.free_prompt, "and its duty names the replay lane");
+        let (s5, _) = apply_palw_transition_v2(
+            &s4,
+            &params,
+            &at(5, 104, 5),
+            &[Obj::ReceiptLicensed { claim: claim_id, receipts: Vec::new() }],
+            None,
+        )
+        .unwrap();
+        let (state, _) = apply_palw_transition_v2(&s5, &params, &at(6, 125, 6), &[], None).unwrap();
+        assert!(matches!(state.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }), "the chain-only claim certifies");
+
+        // ---- the receipt block: the producer's envelope, fully admitted -------------------
+        let beacon = kaspa_consensus_core::palw_freeprompt_v3::PalwBeaconFactV3 {
+            beacon_block: h(0xBEAC),
+            beacon_daa: 131,
+            prev_attempt_daa: 121,
+        };
+        let (pph, ts, nonce) = (h(0xB0), 1_700u64, 9u64);
+        let envelope = key.build_fp_receipt_spend_envelope(h(999), pph, ts, nonce, claim_id, 0, bond_outpoint, h(0xBEAC));
+        let admitted = kaspa_consensus_core::palw_fp_admission_v3::check_palw_receipt_spend_admission_full_v3(
+            &state,
+            &at(7, 132, 7),
+            h(999),
+            pph,
+            ts,
+            nonce,
+            MATURITY,
+            USE_WINDOW,
+            &beacon,
+            &envelope,
+            |pk: &[u8], m: &[u8], c: &[u8], sig: &[u8]| kaspa_txscript::verify_mldsa87_with_context(pk, m, c, sig).unwrap_or(false),
+        )
+        .expect("the chain admits a receipt block for a class no binary ever tabled");
+        assert_ne!(admitted, Hash64::default());
     }
 }
