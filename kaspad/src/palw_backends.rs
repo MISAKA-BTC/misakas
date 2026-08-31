@@ -69,7 +69,10 @@ impl PalwBackendRegistry {
         fetch: F,
     ) -> Result<Box<dyn PalwExecutionBackendV1>, String>
     where
-        F: FnOnce(Hash64) -> Option<(kaspa_consensus_core::palw_step::PalwShapeProfileV3, kaspa_consensus_core::palw_v2::PalwJobContextV2)>,
+        F: FnOnce(
+            Hash64,
+        )
+            -> Option<(kaspa_consensus_core::palw_step::PalwShapeProfileV3, kaspa_consensus_core::palw_v2::PalwJobContextV2)>,
     {
         match self.sdk.resolve(class_id, artifact_root, &self.holdings) {
             Ok(backend) => Ok(backend),

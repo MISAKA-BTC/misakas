@@ -98,10 +98,9 @@ fn main() {
         }
         "verify" => {
             let kat_path = flag("--kat").unwrap_or_else(|| die("verify needs --kat <kat.json>".into()));
-            let kat: serde_json::Value = serde_json::from_slice(
-                &std::fs::read(&kat_path).unwrap_or_else(|e| die(format!("{kat_path}: {e}"))),
-            )
-            .unwrap_or_else(|e| die(format!("{kat_path}: {e}")));
+            let kat: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&kat_path).unwrap_or_else(|e| die(format!("{kat_path}: {e}"))))
+                    .unwrap_or_else(|e| die(format!("{kat_path}: {e}")));
             let want = |k: &str| kat.get(k).and_then(|v| v.as_str()).map(str::to_string);
             let (slice_digest, digest, layers, _) = run_slice(&slice);
             if let Some(expected) = want("slice_artifact_digest")

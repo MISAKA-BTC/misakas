@@ -6083,6 +6083,8 @@ version = "1.1.0"
 dependencies = [
  "kaspa-consensus-core",
  "kaspa-hashes",
+ "kaspa-pq-validator-core",
+ "kaspa-txscript",
  "misaka-palw-base0",
 ]
 

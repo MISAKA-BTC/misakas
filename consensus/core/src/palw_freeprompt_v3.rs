@@ -1723,10 +1723,7 @@ mod fp_material_tests {
             version: PALW_FP_V3_VERSION,
             network_domain: kaspa_hashes::Hash64::from_u64_word(9),
             class_id: kaspa_hashes::Hash64::from_u64_word(7),
-            executor_bond: crate::tx::TransactionOutpoint {
-                transaction_id: crate::tx::TransactionId::from_u64_word(1),
-                index: 0,
-            },
+            executor_bond: crate::tx::TransactionOutpoint { transaction_id: crate::tx::TransactionId::from_u64_word(1), index: 0 },
             executor_pubkey: vec![7; 8],
             operator_id: kaspa_hashes::Hash64::from_u64_word(4),
             anchor_block: kaspa_hashes::Hash64::from_u64_word(0xA0),

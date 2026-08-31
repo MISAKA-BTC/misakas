@@ -441,12 +441,7 @@ mod chain_arm_tests {
     }
 
     pub(super) fn holding(artifact: std::sync::Arc<Base0ArtifactV1>) -> PalwLoadedArtifactV1 {
-        PalwLoadedArtifactV1::from_parts(
-            crate::lineages::dense::DENSE_LINEAGE_ID,
-            None,
-            "a test holding".into(),
-            artifact,
-        )
+        PalwLoadedArtifactV1::from_parts(crate::lineages::dense::DENSE_LINEAGE_ID, None, "a test holding".into(), artifact)
     }
 
     pub(super) fn fp_job(
@@ -511,8 +506,7 @@ mod chain_arm_tests {
         let holdings = vec![holding(artifact.clone())];
 
         let armed = PalwClassSdk::builtin_v1(court(), b"misaka-palw-rc".to_vec()).with_chain_classes_v1();
-        let interpreted =
-            armed.resolve_chain_registered(class_id, root, &holdings, &profile, &canonical).expect("resolves");
+        let interpreted = armed.resolve_chain_registered(class_id, root, &holdings, &profile, &canonical).expect("resolves");
         let compiled = misaka_palw_base0::qwen25_a16_backend::Qwen25A16Backend::new(
             artifact,
             b"misaka-palw-rc".to_vec(),
@@ -559,10 +553,8 @@ mod chain_arm_tests {
             kaspa_consensus_core::palw_step::kernel_semantics_id_v1("a16/some-future-kernel/v9");
         let foreign_id = foreign.shape_profile_id();
         let foreign_canonical = rc_job_context(&foreign, 4, 2);
-        let unserved = armed
-            .resolve_chain_registered(foreign_id, root, &holdings, &foreign, &foreign_canonical)
-            .map(drop)
-            .unwrap_err();
+        let unserved =
+            armed.resolve_chain_registered(foreign_id, root, &holdings, &foreign, &foreign_canonical).map(drop).unwrap_err();
         assert!(unserved.contains("cannot serve the registered graph"), "the kernel boundary speaks: {unserved}");
     }
 }
@@ -626,11 +618,12 @@ mod chain_only_lattice_tests {
         .expect("the chain-only class registers");
 
         // ---- the base the state machine requires, plus the bond, plus the stranger --------
-        let floor = misaka_palw_base0::classes::canonical_class_by_model_id_v1(&court(), "PALW-BASE-0/rc")
-            .expect("the floor is registered");
+        let floor =
+            misaka_palw_base0::classes::canonical_class_by_model_id_v1(&court(), "PALW-BASE-0/rc").expect("the floor is registered");
         let floor_root = misaka_palw_base0::rc::palw_rc_base0_artifact_root_v1().expect("the floor's pinned root");
         let params = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, floor.class_id(), 4, 1000, 1, 800, 0).unwrap();
-        let at = |block: u64, daa: u64, blue: u64| PalwBlockContextV2 { block: h(block), daa_score: daa, blue_score: blue, subsidy: 0 };
+        let at =
+            |block: u64, daa: u64, blue: u64| PalwBlockContextV2 { block: h(block), daa_score: daa, blue_score: blue, subsidy: 0 };
         let genesis_objects = vec![
             Obj::ClassRegistered {
                 class_id: floor.class_id(),

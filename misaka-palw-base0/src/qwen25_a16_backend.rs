@@ -181,7 +181,16 @@ impl Qwen25A16Backend {
     ) -> Self {
         let shape_id = artifact.artifact_digest();
         let class_profile_id = profile.shape_profile_id();
-        Self { artifact, model_id: "PALW-QWEN25-A16".to_string(), network_id, shape_id, profile, class_profile_id, canonical_job, plan: None }
+        Self {
+            artifact,
+            model_id: "PALW-QWEN25-A16".to_string(),
+            network_id,
+            shape_id,
+            profile,
+            class_profile_id,
+            canonical_job,
+            plan: None,
+        }
     }
 
     /// **ADR-0067 Decision 2's constructor: a backend for a class this build's table never
@@ -247,7 +256,8 @@ impl Qwen25A16Backend {
             let next = kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(last) as u32;
             generated.push(next);
             let position = prompt.len() + step;
-            let (row, _) = self.forward(&engine, &mut cache, next as usize, position).map_err(|e| format!("decode at {position}: {e}"))?;
+            let (row, _) =
+                self.forward(&engine, &mut cache, next as usize, position).map_err(|e| format!("decode at {position}: {e}"))?;
             logits_rows.push(row);
         }
         Ok(Qwen25A16RunV1 { logits_rows, generated })
@@ -370,22 +380,22 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         // from three frames down. Closing it means the class declaring that node — which moves the
         // shape profile id, and therefore registers a different class.
         if self.plan.is_none() {
-        let probe = engine
-            .forward_token_traced(&mut A16Cache::new(self.artifact.shape.n_layers), prompt_tokens[0], 0)
-            .map_err(|e| format!("probing the graph: {e:?}"))?
-            .1;
-        let (declared_pre, recorded_pre) = (self.profile.pre_nodes.len(), probe.pre.len());
-        let declared_attn = self.profile.attn_nodes.len();
-        let recorded_attn = probe.attn.first().map(Vec::len).unwrap_or(0);
-        if recorded_pre != declared_pre || recorded_attn != declared_attn {
-            return Err(format!(
-                "this class's registered graph does not name every narrowing its engine performs (ADR-0049 Decision F): pre \
+            let probe = engine
+                .forward_token_traced(&mut A16Cache::new(self.artifact.shape.n_layers), prompt_tokens[0], 0)
+                .map_err(|e| format!("probing the graph: {e:?}"))?
+                .1;
+            let (declared_pre, recorded_pre) = (self.profile.pre_nodes.len(), probe.pre.len());
+            let declared_attn = self.profile.attn_nodes.len();
+            let recorded_attn = probe.attn.first().map(Vec::len).unwrap_or(0);
+            if recorded_pre != declared_pre || recorded_attn != declared_attn {
+                return Err(format!(
+                    "this class's registered graph does not name every narrowing its engine performs (ADR-0049 Decision F): pre \
                  declares {declared_pre} node(s) and the engine records {recorded_pre} — the embedding gather and the requant \
                  that lifts it onto the A16 stream, of which only the gather is declared; per-layer declares {declared_attn} \
                  against {recorded_attn} recorded. Committing a step leg under this profile would commit arithmetic the court \
                  recomputes differently."
-            ));
-        }
+                ));
+            }
         }
 
         let leaf_count = kaspa_consensus_core::palw_step::step_leaf_count(&self.profile, &ctx).map_err(|e| format!("{e:?}"))?;

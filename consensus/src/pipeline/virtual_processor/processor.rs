@@ -4128,8 +4128,7 @@ impl VirtualStateProcessor {
         let (_, state) = self.palw_state_v2_store.read().load_tip(state_params).ok().flatten()?;
         state.class(&class_id)?;
         let record = self.palw_class_carriage_store.read().get(class_id)?;
-        let carriage: kaspa_consensus_core::palw_state_v2::PalwClassAdmissionCarriageV2 =
-            borsh::from_slice(&record.carriage).ok()?;
+        let carriage: kaspa_consensus_core::palw_state_v2::PalwClassAdmissionCarriageV2 = borsh::from_slice(&record.carriage).ok()?;
         // The id IS the profile's hash; a row that fails this was corrupted, and absent (None)
         // fails closed at every consumer.
         if carriage.profile.shape_profile_id() != class_id {

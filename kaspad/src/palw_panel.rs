@@ -1887,7 +1887,11 @@ impl PalwPanelService {
                     if duty.free_prompt {
                         let pooled = materials.get(&duty.claim_id).map(|v| v.to_vec()).unwrap_or_default();
                         let disk = [
-                            self.config.retention_dir.join(format!("{}{}", duty.claim_id, crate::palw_producer::PALW_RETAINED_MATERIAL_SUFFIX)),
+                            self.config.retention_dir.join(format!(
+                                "{}{}",
+                                duty.claim_id,
+                                crate::palw_producer::PALW_RETAINED_MATERIAL_SUFFIX
+                            )),
                             self.config.retention_dir.join("foreign").join(format!("{}.material", duty.claim_id)),
                         ]
                         .into_iter()
@@ -1911,15 +1915,11 @@ impl PalwPanelService {
                                 Err(e) => {
                                     // An execution the class refuses is not evidence either way —
                                     // logged so an operator can see WHY a lane stays unverified.
-                                    warn!(
-                                        "[{PALW_PANEL}] free-prompt replay for claim {} refused: {e}",
-                                        duty.claim_id
-                                    );
+                                    warn!("[{PALW_PANEL}] free-prompt replay for claim {} refused: {e}", duty.claim_id);
                                     continue;
                                 }
                             };
-                            if run.outcome.execution_root == duty.execution_root
-                                && run.facts.full_logits_trace_root == duty.trace_root
+                            if run.outcome.execution_root == duty.execution_root && run.facts.full_logits_trace_root == duty.trace_root
                             {
                                 self.persist_foreign_material(&duty.claim_id, &bytes);
                                 break 'verdict Some(PalwReceiptVerdictV2::Valid);
@@ -1930,75 +1930,75 @@ impl PalwPanelService {
                         }
                     }
                     if !duty.free_prompt {
-                    for bytes in materials.get(&duty.claim_id).map(|v| v.as_slice()).unwrap_or(&[]) {
-                        // Through the backend seam, which recomputes the leg root exactly.
-                        // `Mismatch` is deliberately NOT an accusation here: it gathers no quorum
-                        // and the claim voids. Convicting is the court's move, on evidence, and a
-                        // seat that cannot reproduce a claim has not yet produced any.
-                        //
-                        // Resolved per duty from what the CHAIN says the claim's class is. A seat
-                        // holding no material for that class cannot judge it — and it now SAYS so,
-                        // instead of filing nothing.
-                        //
-                        // Filing nothing was read by the chain as a no-show and charged. Sortition
-                        // does not ask which classes a node can execute, so that charge landed on
-                        // seats whose only fault was being picked, and no answer avoided it:
-                        // `Valid` would be a lie and `Unavailable` a signed accusation against an
-                        // honest producer. `Incapable` is the missing answer — free, and counting
-                        // toward neither side of the quorum. The chain refuses it for the liveness
-                        // floor, where no node can truthfully claim it, so filing it there would
-                        // only waste a fee.
-                        let Ok(backend) = self.resolve_backend(&session, duty.class_id, duty.artifact_root) else {
-                            break 'verdict Some(PalwReceiptVerdictV2::Incapable);
-                        };
-                        let Some(anchor) = self.job_anchor_for_claim(
-                            &session,
-                            backend.as_ref(),
-                            network_domain,
-                            duty.accepted_block,
-                            duty.class_id,
-                            &duty.executor_bond,
-                        ) else {
-                            break 'verdict None;
-                        };
-                        if backend.verify_material(
-                            bytes,
-                            PalwClaimRootsV1 { execution_root: duty.execution_root, trace_root: duty.trace_root, anchor },
-                        ) == PalwMaterialVerdictV1::Matches
+                        for bytes in materials.get(&duty.claim_id).map(|v| v.as_slice()).unwrap_or(&[]) {
+                            // Through the backend seam, which recomputes the leg root exactly.
+                            // `Mismatch` is deliberately NOT an accusation here: it gathers no quorum
+                            // and the claim voids. Convicting is the court's move, on evidence, and a
+                            // seat that cannot reproduce a claim has not yet produced any.
+                            //
+                            // Resolved per duty from what the CHAIN says the claim's class is. A seat
+                            // holding no material for that class cannot judge it — and it now SAYS so,
+                            // instead of filing nothing.
+                            //
+                            // Filing nothing was read by the chain as a no-show and charged. Sortition
+                            // does not ask which classes a node can execute, so that charge landed on
+                            // seats whose only fault was being picked, and no answer avoided it:
+                            // `Valid` would be a lie and `Unavailable` a signed accusation against an
+                            // honest producer. `Incapable` is the missing answer — free, and counting
+                            // toward neither side of the quorum. The chain refuses it for the liveness
+                            // floor, where no node can truthfully claim it, so filing it there would
+                            // only waste a fee.
+                            let Ok(backend) = self.resolve_backend(&session, duty.class_id, duty.artifact_root) else {
+                                break 'verdict Some(PalwReceiptVerdictV2::Incapable);
+                            };
+                            let Some(anchor) = self.job_anchor_for_claim(
+                                &session,
+                                backend.as_ref(),
+                                network_domain,
+                                duty.accepted_block,
+                                duty.class_id,
+                                &duty.executor_bond,
+                            ) else {
+                                break 'verdict None;
+                            };
+                            if backend.verify_material(
+                                bytes,
+                                PalwClaimRootsV1 { execution_root: duty.execution_root, trace_root: duty.trace_root, anchor },
+                            ) == PalwMaterialVerdictV1::Matches
+                            {
+                                // **Retained here, and only here**: the chain carries this claim, this
+                                // seat is on its panel, and these exact bytes reproduce its committed
+                                // roots. Everything weaker was what let a stranger fill the disk
+                                // (audit M2-2).
+                                self.persist_foreign_material(&duty.claim_id, bytes);
+                                break 'verdict Some(PalwReceiptVerdictV2::Valid);
+                            }
+                        }
+                        // **This node's own disk, before the network and before any accusation**
+                        // (audit M2-21). A seat that restarts loses its pool but keeps its retention,
+                        // and the court arm already reads it — the verdict arm did not, so a restarted
+                        // seat signed `Unavailable` against a producer whose material was sitting in
+                        // its own directory. Verified like anything else: a file is evidence only if it
+                        // reproduces the roots the claim committed to.
+                        if let Some(bytes) = self.retained_capture(&duty.claim_id).or_else(|| {
+                            std::fs::read(self.config.retention_dir.join("foreign").join(format!("{}.material", duty.claim_id))).ok()
+                        }) && let Ok(backend) = self.resolve_backend(&session, duty.class_id, duty.artifact_root)
+                            && let Some(anchor) = self.job_anchor_for_claim(
+                                &session,
+                                backend.as_ref(),
+                                network_domain,
+                                duty.accepted_block,
+                                duty.class_id,
+                                &duty.executor_bond,
+                            )
+                            && backend.verify_material(
+                                &bytes,
+                                PalwClaimRootsV1 { execution_root: duty.execution_root, trace_root: duty.trace_root, anchor },
+                            ) == PalwMaterialVerdictV1::Matches
                         {
-                            // **Retained here, and only here**: the chain carries this claim, this
-                            // seat is on its panel, and these exact bytes reproduce its committed
-                            // roots. Everything weaker was what let a stranger fill the disk
-                            // (audit M2-2).
-                            self.persist_foreign_material(&duty.claim_id, bytes);
+                            materials.entry(duty.claim_id).or_default().push(bytes);
                             break 'verdict Some(PalwReceiptVerdictV2::Valid);
                         }
-                    }
-                    // **This node's own disk, before the network and before any accusation**
-                    // (audit M2-21). A seat that restarts loses its pool but keeps its retention,
-                    // and the court arm already reads it — the verdict arm did not, so a restarted
-                    // seat signed `Unavailable` against a producer whose material was sitting in
-                    // its own directory. Verified like anything else: a file is evidence only if it
-                    // reproduces the roots the claim committed to.
-                    if let Some(bytes) = self.retained_capture(&duty.claim_id).or_else(|| {
-                        std::fs::read(self.config.retention_dir.join("foreign").join(format!("{}.material", duty.claim_id))).ok()
-                    }) && let Ok(backend) = self.resolve_backend(&session, duty.class_id, duty.artifact_root)
-                        && let Some(anchor) = self.job_anchor_for_claim(
-                            &session,
-                            backend.as_ref(),
-                            network_domain,
-                            duty.accepted_block,
-                            duty.class_id,
-                            &duty.executor_bond,
-                        )
-                        && backend.verify_material(
-                            &bytes,
-                            PalwClaimRootsV1 { execution_root: duty.execution_root, trace_root: duty.trace_root, anchor },
-                        ) == PalwMaterialVerdictV1::Matches
-                    {
-                        materials.entry(duty.claim_id).or_default().push(bytes);
-                        break 'verdict Some(PalwReceiptVerdictV2::Valid);
-                    }
                     }
                     // No verifying material yet. Ask the network before accusing: the producer may
                     // be gone, but any peer that heard the broadcast can re-serve it.

@@ -1142,12 +1142,8 @@ impl<'a> A16Engine<'a> {
                         MatSlot::Q => (&self.artifact.layers[li].wq, lp(li).q.clone()),
                         MatSlot::K => (&self.artifact.layers[li].wk, lp(li).k.clone()),
                         MatSlot::V => (&self.artifact.layers[li].wv, lp(li).v.clone()),
-                        MatSlot::Wo => {
-                            (&self.artifact.layers[li].wo, if sink { lp(li).wo_sink.clone() } else { lp(li).wo.clone() })
-                        }
-                        MatSlot::Up => {
-                            (&self.artifact.layers[li].w_up, if sink { lp(li).up_sink.clone() } else { lp(li).up.clone() })
-                        }
+                        MatSlot::Wo => (&self.artifact.layers[li].wo, if sink { lp(li).wo_sink.clone() } else { lp(li).wo.clone() }),
+                        MatSlot::Up => (&self.artifact.layers[li].w_up, if sink { lp(li).up_sink.clone() } else { lp(li).up.clone() }),
                         MatSlot::Down => {
                             (&self.artifact.layers[li].w_down, if sink { lp(li).down_sink.clone() } else { lp(li).down.clone() })
                         }

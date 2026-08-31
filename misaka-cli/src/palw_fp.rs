@@ -82,13 +82,13 @@ pub async fn submit(ctx: &Ctx, path: &Path, yes: bool, material_out: Option<&Pat
     // a material for a claim the chain never saw would make the panel replay a ghost.
     let mut material_note: Option<String> = None;
     if let Some(dir) = material_out {
-        let payload: kaspa_consensus_core::palw_freeprompt_v3::PalwFpCommitmentTxPayloadV3 = borsh::from_slice(&tx.payload)
-            .map_err(|e| CliError::new(exit::GENERIC, format!("the accepted payload does not decode — not writing a material: {e}")))?;
+        let payload: kaspa_consensus_core::palw_freeprompt_v3::PalwFpCommitmentTxPayloadV3 =
+            borsh::from_slice(&tx.payload).map_err(|e| {
+                CliError::new(exit::GENERIC, format!("the accepted payload does not decode — not writing a material: {e}"))
+            })?;
         let claim = kaspa_consensus_core::palw_freeprompt_v3::fp_claim_id_v3(&payload.commitment);
-        let bytes = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_material_encode_v1(
-            &payload.commitment.job,
-            &payload.prompt_token_ids,
-        );
+        let bytes =
+            kaspa_consensus_core::palw_freeprompt_v3::palw_fp_material_encode_v1(&payload.commitment.job, &payload.prompt_token_ids);
         std::fs::create_dir_all(dir).map_err(|e| CliError::new(exit::GENERIC, format!("{}: {e}", dir.display())))?;
         let file = dir.join(format!("{claim}.material"));
         std::fs::write(&file, &bytes).map_err(|e| CliError::new(exit::GENERIC, format!("{}: {e}", file.display())))?;
@@ -96,10 +96,9 @@ pub async fn submit(ctx: &Ctx, path: &Path, yes: bool, material_out: Option<&Pat
     }
 
     match ctx.output {
-        OutputFormat::Json => println!(
-            "{}",
-            serde_json::json!({ "submitted": true, "txid": submitted.to_string(), "material": material_note })
-        ),
+        OutputFormat::Json => {
+            println!("{}", serde_json::json!({ "submitted": true, "txid": submitted.to_string(), "material": material_note }))
+        }
         _ => {
             println!("submitted {submitted}");
             if let Some(file) = &material_note {

@@ -160,7 +160,11 @@ fn mutate(rng: &mut FuzzRng, profile: &mut PalwShapeProfileV3) {
 
 /// The gate the chain runs, over the probe object the SDK's preflight builds — placeholder
 /// economics, which the gate does not read.
-fn gate_accepts(bundle: &kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2, profile: &PalwShapeProfileV3, root: kaspa_hashes::Hash64) -> bool {
+fn gate_accepts(
+    bundle: &kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2,
+    profile: &PalwShapeProfileV3,
+    root: kaspa_hashes::Hash64,
+) -> bool {
     let canonical = kaspa_consensus_core::palw_base0_profile::rc_job_context(profile, 4, 2);
     let Ok(probe) = kaspa_consensus_core::palw_class_admission_v2::palw_post_genesis_registration_v1(
         profile.clone(),

@@ -81,21 +81,23 @@ fn load() -> Loaded {
 
     let court = PalwCourtParamsV2::new(kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES, 4, 2)
         .unwrap_or_else(|e| die(format!("the shipped court params do not build: {e:?}")));
-    let entry = canonical_class_by_model_id_v1(&court, MODEL_ID)
-        .unwrap_or_else(|| die(format!("this build's catalog has no {MODEL_ID} row")));
+    let entry =
+        canonical_class_by_model_id_v1(&court, MODEL_ID).unwrap_or_else(|| die(format!("this build's catalog has no {MODEL_ID} row")));
 
     let started = std::time::Instant::now();
     let bytes = std::fs::read(&artifact_path).unwrap_or_else(|e| die(format!("{artifact_path}: {e}")));
     let artifact = decode_artifact_file_v1(&bytes).unwrap_or_else(|e| die(format!("{artifact_path}: {e}")));
     let digest = artifact.artifact_digest();
     let tokenizer_commitment = artifact.tokenizer_commitment;
-    let tokenizer = QwenTokenizer::from_json(&std::fs::read(&tokenizer_path).unwrap_or_else(|e| die(format!("{tokenizer_path}: {e}"))))
-        .unwrap_or_else(|e| die(format!("{tokenizer_path}: {e}")));
+    let tokenizer =
+        QwenTokenizer::from_json(&std::fs::read(&tokenizer_path).unwrap_or_else(|e| die(format!("{tokenizer_path}: {e}"))))
+            .unwrap_or_else(|e| die(format!("{tokenizer_path}: {e}")));
     let load_ms = started.elapsed().as_millis() as u64;
 
     let n_ctx = entry.profile.n_ctx;
     let class_id = entry.profile.shape_profile_id();
-    let backend = Qwen25A16Backend::new(std::sync::Arc::new(artifact), RC_NETWORK_ID.to_vec(), entry.profile.clone(), entry.canonical_job);
+    let backend =
+        Qwen25A16Backend::new(std::sync::Arc::new(artifact), RC_NETWORK_ID.to_vec(), entry.profile.clone(), entry.canonical_job);
     Loaded { backend, tokenizer, digest, tokenizer_commitment, n_ctx, class_id, load_ms }
 }
 
@@ -129,7 +131,10 @@ fn run_job(trace_out: PathBuf) {
         die(format!("v3-job rejected: request version {} is not {}", request.version, PALW_FP_V3_VERSION));
     }
     if request.privacy_mode != PALW_FP_PRIVACY_PUBLIC_DA {
-        die(format!("v3-job rejected: privacy mode {} is not PublicDa — a mode the panel cannot replay must not execute", request.privacy_mode));
+        die(format!(
+            "v3-job rejected: privacy mode {} is not PublicDa — a mode the panel cannot replay must not execute",
+            request.privacy_mode
+        ));
     }
     if request.decode_token_limit == 0 {
         die("v3-job rejected: a zero decode ceiling is not a job".into());
@@ -142,7 +147,11 @@ fn run_job(trace_out: PathBuf) {
     // commit this artifact's arithmetic under that other identity.
     let mismatch = |field: &str, ours: Hash64, theirs: Hash64| {
         if ours != theirs {
-            die(format!("v3-job rejected: {field} mismatch — the request declares a runtime this worker is not (ours {}, request {})", hex(ours), hex(theirs)));
+            die(format!(
+                "v3-job rejected: {field} mismatch — the request declares a runtime this worker is not (ours {}, request {})",
+                hex(ours),
+                hex(theirs)
+            ));
         }
     };
     mismatch("class_id", loaded.class_id, request.class_id);
@@ -153,7 +162,10 @@ fn run_job(trace_out: PathBuf) {
     mismatch("trace_scheme_id", kaspa_consensus_core::palw_step_refute::tiled_logits_scheme_id_v1(), request.trace_scheme_id);
 
     if request.max_context_tokens == 0 || request.max_context_tokens > loaded.n_ctx {
-        die(format!("v3-job rejected: max_context_tokens {} is outside this class's 1..={}", request.max_context_tokens, loaded.n_ctx));
+        die(format!(
+            "v3-job rejected: max_context_tokens {} is outside this class's 1..={}",
+            request.max_context_tokens, loaded.n_ctx
+        ));
     }
 
     // Tokenize (the Text arm) or accept ids (the TokenIds arm echoes). `parse_special = false`
@@ -235,9 +247,11 @@ fn run_job(trace_out: PathBuf) {
     // Retention BEFORE the result frame exists: the family's disclosure object is the encoded run
     // (what a seat checks, what a court opens), written under the job id.
     let retain_dir = trace_out.join(hex(binding));
-    std::fs::create_dir_all(&retain_dir).unwrap_or_else(|e| die(format!("cannot create the retention dir {}: {e}", retain_dir.display())));
+    std::fs::create_dir_all(&retain_dir)
+        .unwrap_or_else(|e| die(format!("cannot create the retention dir {}: {e}", retain_dir.display())));
     let material_path = retain_dir.join("material.bin");
-    std::fs::write(&material_path, &run.outcome.material).unwrap_or_else(|e| die(format!("cannot retain {}: {e}", material_path.display())));
+    std::fs::write(&material_path, &run.outcome.material)
+        .unwrap_or_else(|e| die(format!("cannot retain {}: {e}", material_path.display())));
     let manifest_doc = serde_json::json!({
         "schema": "misaka.palw.fp-v3-a16-retention.v1",
         "trace_binding": hex(binding),
