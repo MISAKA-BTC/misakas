@@ -7,40 +7,25 @@ testnet-11 is the public PALW network. Every post-genesis block's proof-of-work 
 deterministic LLM inference**, not a hash. There is no hash lane to fall back to — that is the
 point, and it is what makes the rest of this document necessary.
 
-> **Pending change (not yet deployed).** Two independent re-mints are now merged and waiting:
+> **Current identity — DEPLOYED 2026-08-31 ("Relaunch 4", the arm-ready + reachable-quantum
+> re-genesis). Wipe your datadir if you joined earlier; the startup genesis-mismatch guard
+> refuses un-wiped nodes.**
 >
-> 1. the free-prompt receipt quantum lowered 1,000 → 100 (with `pwu_per_quantum` 100 → 10, holding
->    weight-per-CU constant) — at 1,000 no registered class could reach a single quantum;
-> 2. the genesis bond registry grown from six seats to eight, so ADR-0065 D1's maturity fence can
->    be armed by configuration instead of by another re-mint. This one also moves the GENESIS:
->    `d2789338…` → `572f80c0…`, coinbase marker `11,3` → `11,4` ("Relaunch 4").
+> * consensus fingerprint: **`5ccdd6841c7510b9fa87b2c69aba8018a3d2eb5ec1709d09dbed3a4cb1f67e44`**
+> * genesis hash: **`8d2002ccb6b32216…`** — measured from the running node's own handshake line.
+>   (Earlier revisions of this document listed `TESTNET11_GENESIS`'s value here; the chain a V2
+>   preset actually boots is `PALW_RC_GENESIS`, and the old chain's real genesis was `4b619a1a…`,
+>   not the `d2789338…` this file used to claim. Both constants moved in this re-genesis; the one
+>   in your logs is this one.)
+> * coinbase marker: `11,4`
 >
-> Together they move this network's fingerprint to
-> `5ccdd6841c7510b9fa87b2c69aba8018a3d2eb5ec1709d09dbed3a4cb1f67e44`. **That is neither change's own
-> value** — a fingerprint is a function of the whole ruleset, not a sum of diffs, so the figures the
-> two branches carried separately (`d29e5667…` and `4f89ec82…`) are both stale now that they are
-> merged. Do not deploy against either.
->
-> Until this is deployed the live chain is still the value below; when it is, this whole block is
-> re-minted and every node wipes again. The value here is what is running NOW, not what the branch
-> builds — and because the genesis moves too, an un-wiped node is refused at startup by the
-> genesis-mismatch guard rather than silently resuming.
->
-> **Current identity (2026-08-30 re-mint, ADR-0059 "Relaunch 3", the 10B premine cap) — wipe
-> your datadir if you joined earlier.**
-> The live chain's consensus fingerprint is **`f3bf86b4e9327f8b02ab2ad1d121d62ecd11bd78cca1455d8bcd7372595153d8`**,
-> genesis **`d2789338…`** (coinbase marker `11,3`; three execution classes + the 547M MSK
-> community allocation, now carved out of the single 10B main wallet — the 40-vault block is
-> gone and every network's genesis mints exactly 10B).
-> A node holding any earlier testnet-11 state does not resume on this chain — it is refused at
-> handshake by fingerprint, which is the intended behaviour; `rm -rf` the appdir (or use a new
-> one). Earlier identities, all dead: `95265934…` (2026-08-29 audit3 re-mint, genesis
-> `c664a224…`), `15bab795…`, `49ff9628…` (Relaunch 2, 2026-08-20, genesis `3564ea39…`),
-> `048e6902…`, `25a74c81…`, `bb3e06b4…`, and `bb0a3ad3…`. See
-> [adr/0059-the-10b-premine-cap.md](adr/0059-the-10b-premine-cap.md) for what this re-mint
-> changed and [testnet11-relaunch2-genesis.md](testnet11-relaunch2-genesis.md) for how the
-> allocation constants derive. DNS seeding is live (`seeder1.misakascan.com`): a fresh node
-> needs no `--addpeer`.
+> Two changes, one re-mint: the genesis bond registry grew from six seats to **eight** (so
+> ADR-0065 D1's seat-maturity fence is armable by configuration — seats 6 and 7 are staffed on the
+> operator fleet), and the free-prompt quantum dropped **1,000 → 100 CU** with `pwu_per_quantum`
+> 100 → 10 (weight-per-CU unchanged), so registered classes actually earn draws — at 1,000 no
+> registered class could reach a single quantum. The 10B premine cap and the community allocations
+> are unchanged from Relaunch 3. Post-genesis class registrations from the previous chain (Coder
+> `745ae042…`, Huihui `e4fbba1f…`) do not carry over and must be re-registered on this chain.
 
 Read §2 before you build anything. A node outside the determinism class does not sync slowly or
 mine badly; it computes different tags, rejects every honest block, and has its own rejected. It
