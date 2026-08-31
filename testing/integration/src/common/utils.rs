@@ -134,6 +134,49 @@ where
     }
 }
 
+/// Wait until the node's `virtual_daa_score` reaches `target`, failing only when sync STOPS
+/// MOVING — never because a fixed ceiling guessed a machine's speed wrong.
+///
+/// The fixed-iteration `wait_for` above is right for conditions that flip, and wrong for an IBD:
+/// an IBD's duration is throughput times work, and both of this file's callers have already been
+/// recalibrated once ("a GitHub runner is roughly four times slower and blew it on every run").
+/// The recalibrated six-minute ceiling then turned out to STRADDLE the real duration on an Apple
+///-silicon dev machine — measured 2026-08-31: connect→IBD in 4ms, headers ~56s, bodies at ~8/s,
+/// end-to-end within seconds of the ceiling either way — so the same tests were red, green and
+/// red again across runs with nothing changing but load. A guess cannot be patched into a
+/// non-guess by making it bigger.
+///
+/// What the ceiling was actually there to catch is a WEDGE — the chain-participation review
+/// refusing every candidate, observed live on testnet-11 the same day (`recovery-trace
+/// stage=Rejected … participation=candidate-review`, zero forward progress for minutes). A wedge
+/// is exactly zero progress, so it is what this waits on: `header_count + block_count +
+/// virtual_daa_score` is monotone through every IBD phase (headers tick first, then bodies, and
+/// the virtual jumps at resolution — the DAA score alone sits still for almost the whole IBD,
+/// which is why it cannot be the progress signal), and a `stall` window with no movement is a
+/// failure on any machine at any speed. Locally batches land seconds apart; a stalled node
+/// produces nothing forever; the window only decides how fast the genuine failure is reported.
+pub async fn wait_for_sync_progress(client: &GrpcClient, target: u64, stall: Duration, panic_message: &'static str) {
+    let mut last_progress = 0u64;
+    let mut last_change = std::time::Instant::now();
+    loop {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        let info = client.get_block_dag_info().await.unwrap();
+        if info.virtual_daa_score >= target {
+            return;
+        }
+        let progress = info.header_count + info.block_count + info.virtual_daa_score;
+        if progress != last_progress {
+            last_progress = progress;
+            last_change = std::time::Instant::now();
+        } else if last_change.elapsed() > stall {
+            panic!(
+                "{panic_message}: no sync progress for {stall:?} (headers+blocks+daa stuck at {last_progress}, daa {}/{target})",
+                info.virtual_daa_score
+            );
+        }
+    }
+}
+
 pub fn generate_tx(
     schnorr_key: Keypair,
     utxos: &[(TransactionOutpoint, UtxoEntry)],

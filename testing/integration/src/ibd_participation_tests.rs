@@ -26,7 +26,7 @@ use crate::common::{
     daemon::Daemon,
     laggy_link::{LaggyLink, WAN_DELAY},
     shallow_pruning::{BLOCKS_TO_PRUNE, write_shallow_pruning_params},
-    utils::wait_for,
+    utils::{wait_for, wait_for_sync_progress},
 };
 use kaspa_addresses::Address;
 use kaspa_alloc::init_allocator_with_default_settings;
@@ -272,23 +272,14 @@ async fn joined_follower(overrides: &std::path::Path, leader_p2p_port: u16, targ
     let client = follower.start().await;
     connect(&client, leader_p2p_port).await;
 
-    let check = client.clone();
-    // 200ms x 1800 = six minutes for the follower to complete an IBD of the leader's chain.
-    // The previous two-minute budget was calibrated on a dev machine, where this test finishes
-    // in ~155s end to end; a GitHub runner is roughly four times slower and blew it on every
-    // run — including on this branch's base, which is how it was identified as a budget rather
-    // than a regression. Generous on purpose: when the IBD works the poll exits as soon as the
-    // score lands, so the ceiling only ever costs time on a genuine failure.
-    wait_for(
-        200,
-        1800,
-        move || {
-            let c = check.clone();
-            async move { c.get_block_dag_info().await.unwrap().virtual_daa_score >= target }
-        },
-        "the follower never synced the leader's chain",
-    )
-    .await;
+    // Progress-based, not a ceiling. This wait has been recalibrated twice — two minutes blew up
+    // on GitHub runners, and the six minutes that replaced it turned out to STRADDLE the measured
+    // end-to-end on an Apple-silicon dev machine, going red/green/red across runs with nothing
+    // changing but load. An IBD's duration is throughput times work; what a wait can actually
+    // assert machine-independently is that sync keeps MOVING. The wedge this exists to catch —
+    // candidate-review refusing everything, seen live on testnet-11 — is zero progress and trips
+    // the stall window on any machine. See `wait_for_sync_progress` for the measurement.
+    wait_for_sync_progress(&client, target, Duration::from_secs(120), "the follower never synced the leader's chain").await;
     (follower, client)
 }
 
@@ -548,17 +539,10 @@ async fn e2e_b_bootstrap_recovery_crosses_a_provisional_pruning_point() {
     let follower_client = follower.start().await;
     connect(&follower_client, light.p2p_port).await;
 
-    let check = follower_client.clone();
-    wait_for(
-        200,
-        600,
-        move || {
-            let c = check.clone();
-            async move { c.get_block_dag_info().await.unwrap().virtual_daa_score >= light_score }
-        },
-        "the follower never synced the lighter chain",
-    )
-    .await;
+    // Progress-based for the same reason as `joined_follower` — this two-minute ceiling was the
+    // same speed guess one size smaller.
+    wait_for_sync_progress(&follower_client, light_score, Duration::from_secs(120), "the follower never synced the lighter chain")
+        .await;
     let provisional = follower_client.get_block_dag_info().await.unwrap().pruning_point_hash;
     assert_eq!(provisional, light_pp, "the follower did not provisionally adopt the lighter chain");
     assert!(!follower_client.get_sync_status().await.unwrap(), "should still be withholding participation");
