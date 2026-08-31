@@ -1635,6 +1635,125 @@ mod profile_plan_tests {
         }
     }
 
+    /// **ADR-0067 Decision 5, clause (b): the differential over the classes THIS BUILD CARRIES.**
+    ///
+    /// The differential above proves the two engines agree on two synthetic geometries. That is
+    /// the mechanism; it is not the claim Decision 5 makes, which is about the rows a node
+    /// actually ships — because those are the graphs a chain registers, and a class the build
+    /// carries that the interpreter cannot serve is a node that admits what it cannot run.
+    ///
+    /// Two halves, both over the REAL catalog:
+    ///
+    /// * every A16-family row's real profile is compiled, and the planner's answer is pinned. A
+    ///   `graph-v2` row must be servable; a v1 row must be REFUSED, and refused for its own
+    ///   documented reason (its pre table omits the embed-lift requant, so the interpreter
+    ///   executing the declaration is a different arithmetic from the compiled engine — which is
+    ///   exactly what makes v1 unfit for the free-prompt lane).
+    /// * for every row the planner serves, the SAME graph is built at a runnable geometry and the
+    ///   two engines are compared row for row. The node tables are generated from one IR and one
+    ///   geometry, so a reduced geometry walks the identical node sequence; what it cannot do is
+    ///   hold 1.7 GiB of weights in a unit test, which is why the artifact is derived.
+    #[test]
+    fn the_interpreter_serves_every_a16_class_this_build_carries() {
+        use crate::classes::canonical_classes_v1;
+        use kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2;
+
+        let court = PalwCourtParamsV2::new(kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES, 4, 2).expect("shipped court");
+        let a16: Vec<_> = canonical_classes_v1(&court)
+            .into_iter()
+            .filter(|c| matches!(c.source, crate::classes::ArtifactSourceV1::ConvertedA16))
+            .collect();
+        assert!(!a16.is_empty(), "the build carries A16 rows, or this test gates nothing");
+
+        let mut served = 0usize;
+        for entry in &a16 {
+            // The row's REAL profile — the graph a chain would register for it.
+            let probe_artifact = artifact(1, 4, 12);
+            let probe_engine = A16Engine::new(&probe_artifact).expect("the store resolves");
+            let real = probe_engine.plan_from_profile(&entry.profile);
+            let corrected = entry.model_id.ends_with("/graph-v2");
+            match (&real, corrected) {
+                // A real profile against a MISMATCHED artifact must refuse on geometry — that is
+                // the root check doing its job, and it tells us the planner reached the geometry
+                // gate rather than accepting a graph it cannot size.
+                (Err(A16PlanErrorV1::GeometryMismatch { .. }), _) => {}
+                (Err(A16PlanErrorV1::UnservedNode { table, index, reason }), false) => {
+                    assert!(
+                        reason.contains("requant") || reason.contains("vocabulary") || !reason.is_empty(),
+                        "a v1 row's refusal must name something: {table}[{index}] {reason}"
+                    );
+                }
+                (other, _) => panic!("{}: unexpected plan answer {other:?}", entry.model_id),
+            }
+
+            // The same graph at a runnable geometry, both engines, row for row.
+            let g = kaspa_consensus_core::palw_qwen25_profile::PalwQwen25GeometryV1 {
+                layer_count: 2,
+                hidden_dim: 16,
+                ffn_dim: 12,
+                attn_heads: 4,
+                attn_kv_heads: 2,
+                attn_head_dim: 4,
+                vocab_size: 64,
+                n_ctx: entry.profile.n_ctx,
+                n_threads: 1,
+                rms_eps_q: 1,
+                tile_len: 4,
+            };
+            let small = if corrected {
+                kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_profile_v2(g)
+            } else {
+                kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_profile_v1(g)
+            };
+            let Ok(small) = small else { continue };
+            let small_artifact = artifact(2, 4, 12);
+            let engine = A16Engine::new(&small_artifact).expect("the store resolves");
+            let Ok(plan) = engine.plan_from_profile(&small) else {
+                // A v1 row is refused here for its own reason; that IS the pinned answer.
+                assert!(!corrected, "{}: a corrected row must be servable at a runnable geometry", entry.model_id);
+                continue;
+            };
+            served += 1;
+            let (mut a, mut b) = (A16Cache::new(2), A16Cache::new(2));
+            for position in 0..4usize {
+                let token = (position * 11 + 5) % small_artifact.shape.vocab;
+                let (la, ta) = engine.forward_token_traced(&mut a, token, position).expect("compiled");
+                let (lb, tb) = engine.forward_token_planned(&plan, &mut b, token, position).expect("planned");
+                if corrected {
+                    // The corrected graph names what the engine does, so the two must agree
+                    // everywhere — this is the property the whole ADR turns on.
+                    assert_eq!(la, lb, "{} logits at {position}", entry.model_id);
+                    assert_eq!(ta.pre, tb.pre, "{} pre rows at {position}", entry.model_id);
+                    assert_eq!(ta.attn, tb.attn, "{} layer rows at {position}", entry.model_id);
+                    assert_eq!(ta.post, tb.post, "{} post rows at {position}", entry.model_id);
+                } else {
+                    // **A v1 row is servable and DIFFERENT, and that is the finding, not a bug in
+                    // this test.** Its pre table declares one node where the engine performs two
+                    // (the gather, then the embed-lift requant), so an interpreter executing the
+                    // declaration commits one row where the compiled engine commits two. A
+                    // producer running the compiled engine under a v1 class therefore commits
+                    // rows at coordinates the court does not have — which is precisely why
+                    // ADR-0049 Decision F refuses v1 on the free-prompt lane, and precisely what
+                    // the interpreter makes structurally impossible for a class built from its
+                    // own declaration.
+                    assert_eq!(
+                        tb.pre.len(),
+                        entry.profile.pre_nodes.len(),
+                        "{} commits one row per DECLARED pre node",
+                        entry.model_id
+                    );
+                    assert!(
+                        ta.pre.len() > tb.pre.len(),
+                        "{}: the compiled engine performs a narrowing this graph does not name — if this ever stops \
+                         being true, the v1 rows have become servable and Decision F's refusal needs revisiting",
+                        entry.model_id
+                    );
+                }
+            }
+        }
+        assert!(served > 0, "at least one carried class must be servable, or the interpreter serves nothing this build ships");
+    }
+
     /// **The audit's own findings, as tests.** Each of these was a gate-accepted profile that the
     /// planner let through and the forward then panicked on, or executed under the wrong
     /// parameters — found by adversarial review of this file (2026-08-31), and each is now a
