@@ -171,6 +171,15 @@ kaspad --testnet --netsuffix=11 --palw-class-artifact=/path/to/qwen36.palwq36 \
 
 `--palw-dump-classes` prints the classes the chain registers and their ids.
 
+**Bounding what the node holds.** `--palw-class-cache-bytes=<N>` caps the artifact bytes this node
+keeps resident. Artifacts load in the order you list them — your priority, not one the node infers —
+and loading stops at the bound; whatever did not fit is named in the log rather than dropped
+silently. A class the node does not hold is one it does not declare and is never drawn to judge, so
+too small a bound costs you draws, not correctness. Omit it (or pass 0) for the old behaviour, which
+is unbounded and is the right setting for one class on a dedicated box. The bound is over FILE
+bytes, and a mapped artifact's resident set is much smaller than its file — 33.5 GiB on disk is
+never 33.5 GiB of pressure — so raise it if you know your working set.
+
 **Cost per block:** the canonical job is **7 prefill + 2 decode** tokens — ten forward passes of a
 35B hybrid, **8.0 s** on the reference host, producing 8.9 MB of committed material. Memory is the
 mapping (33 GiB, paged) plus working space; the reference host runs it in 24 GiB of RAM because the
