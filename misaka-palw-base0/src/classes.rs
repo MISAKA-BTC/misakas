@@ -630,14 +630,22 @@ mod tests {
     #[test]
     fn the_qwen36_table_separates_its_members() {
         let table = qwen36_canonical_classes_v1();
-        assert_eq!(table.len(), 2);
+        // Three members since the dense tier joined the lineage (Qwen/Qwen3.5-2B expressed as a
+        // one-expert mixture) — the count is pinned so a row added without reading this test is
+        // still a row added on purpose.
+        assert_eq!(table.len(), 3);
         let hybrid = &table[0];
         let coder = &table[1];
+        let dense = &table[2];
         assert_eq!(hybrid.model_id, "Qwen3.6-35B-A3B");
         assert_eq!(coder.model_id, "huihui-ai/Huihui-Qwen3-Coder-30B-A3B-Instruct-abliterated");
+        assert_eq!(dense.model_id, "Qwen/Qwen3.5-2B");
         let hybrid_id = hybrid.class_id().expect("the hybrid geometry projects");
         let coder_id = coder.class_id().expect("the qwen3moe geometry projects");
+        let dense_id = dense.class_id().expect("the dense geometry projects");
         assert_ne!(hybrid_id, coder_id, "two models must be two classes");
+        assert_ne!(hybrid_id, dense_id, "the dense member is its own class");
+        assert_ne!(coder_id, dense_id, "and not the coder's either");
 
         let shape_of = |c: &Qwen36CanonicalClassV1| crate::qwen36::Qwen36ShapeV1 {
             layer_types: (0..c.geometry.layer_count as usize)
