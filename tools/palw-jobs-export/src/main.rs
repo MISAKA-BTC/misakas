@@ -158,7 +158,15 @@ fn main() {
         let pre_pow = pre_pow_hash_64(&header);
         let bond =
             TransactionOutpoint::new(TransactionId::from_bytes(a.executor_bond.transaction_id.as_bytes()), a.executor_bond.index);
-        let anchor = palw_job_anchor_v1(domain, pre_pow, a.class_id, &bond);
+        // The bucket the block's own nonce names — the same fact a verifier reads, so an export
+        // and a court derive one job (ADR-0071 Decision 2).
+        let anchor = palw_job_anchor_v1(
+            domain,
+            pre_pow,
+            a.class_id,
+            &bond,
+            kaspa_consensus_core::palw_attempt_v2::palw_nonce_bucket_v1(header.nonce),
+        );
         let prompt: Vec<usize> = if class_hex == QWEN36_CLASS {
             qwen36_prompt_for_anchor(anchor, vocab, job.0)
         } else {

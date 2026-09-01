@@ -561,10 +561,17 @@ async fn palw_attempt_blocks_weigh_the_constant_under_the_fence() {
         .edit_consensus_params(|p| {
             p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(palw_v2_test_bundle(&catalog));
             *p = p.clone().with_palw_v2_cadence();
+            // **A genesis at the ambient V2 target** (ADR-0071 Decision 1). `VirtualState::from_genesis`
+            // seeds the first template's bits from the genesis, and MAINNET's genesis sits at a
+            // harder one — so with the freeze armed this harness built a block its own header
+            // processor rejected. `validate_palw_v2` now refuses that configuration, and this is
+            // the genesis a V2 network has.
+            p.genesis = kaspa_consensus_core::config::genesis::SIMNET_GENESIS;
             p.palw_attempt_work = Some(kaspa_consensus_core::config::params::PalwAttemptWorkV1 {
                 activation: kaspa_consensus_core::config::params::ForkActivation::always(),
                 work_log2: kaspa_consensus_core::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2,
                 pow_bits: kaspa_consensus_core::pow_layer0::PALW_V2_ATTEMPT_BITS,
+                ticket_bucket_log2: kaspa_consensus_core::palw_attempt_v2::PALW_TICKET_NONCE_BUCKET_LOG2,
             });
         })
         .build();
@@ -642,10 +649,17 @@ async fn the_heartbeat_clock_sweeps_a_stopped_chain_back_to_life() {
                 work_log2: kaspa_consensus_core::pow_layer0::PALW_HEARTBEAT_WORK_LOG2,
                 max_per_mergeset: kaspa_consensus_core::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET,
             });
+            // **A genesis at the ambient V2 target** (ADR-0071 Decision 1). `VirtualState::from_genesis`
+            // seeds the first template's bits from the genesis, and MAINNET's genesis sits at a
+            // harder one — so with the freeze armed this harness built a block its own header
+            // processor rejected. `validate_palw_v2` now refuses that configuration, and this is
+            // the genesis a V2 network has.
+            p.genesis = kaspa_consensus_core::config::genesis::SIMNET_GENESIS;
             p.palw_attempt_work = Some(kaspa_consensus_core::config::params::PalwAttemptWorkV1 {
                 activation: kaspa_consensus_core::config::params::ForkActivation::always(),
                 work_log2: kaspa_consensus_core::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2,
                 pow_bits: kaspa_consensus_core::pow_layer0::PALW_V2_ATTEMPT_BITS,
+                ticket_bucket_log2: kaspa_consensus_core::palw_attempt_v2::PALW_TICKET_NONCE_BUCKET_LOG2,
             });
         })
         .build();
@@ -837,10 +851,17 @@ async fn a_heartbeat_chain_of_any_depth_merges_but_a_tree_does_not() {
                 work_log2: kaspa_consensus_core::pow_layer0::PALW_HEARTBEAT_WORK_LOG2,
                 max_per_mergeset: kaspa_consensus_core::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET,
             });
+            // **A genesis at the ambient V2 target** (ADR-0071 Decision 1). `VirtualState::from_genesis`
+            // seeds the first template's bits from the genesis, and MAINNET's genesis sits at a
+            // harder one — so with the freeze armed this harness built a block its own header
+            // processor rejected. `validate_palw_v2` now refuses that configuration, and this is
+            // the genesis a V2 network has.
+            p.genesis = kaspa_consensus_core::config::genesis::SIMNET_GENESIS;
             p.palw_attempt_work = Some(kaspa_consensus_core::config::params::PalwAttemptWorkV1 {
                 activation: kaspa_consensus_core::config::params::ForkActivation::always(),
                 work_log2: kaspa_consensus_core::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2,
                 pow_bits: kaspa_consensus_core::pow_layer0::PALW_V2_ATTEMPT_BITS,
+                ticket_bucket_log2: kaspa_consensus_core::palw_attempt_v2::PALW_TICKET_NONCE_BUCKET_LOG2,
             });
         })
         .build();
@@ -1491,8 +1512,17 @@ async fn palw_v2_the_bootstrap_registry_is_the_state_the_transition_will_hold() 
         operator_pubkey: operator_pubkey.clone(),
         collateral,
         payout_payload,
+        capable_classes: Default::default(),
         signature: sign(
-            palw_bond_registration_message_v2(network_domain, &bond, &pubkey, &operator_pubkey, collateral, &payout_payload),
+            palw_bond_registration_message_v2(
+                network_domain,
+                &bond,
+                &pubkey,
+                &operator_pubkey,
+                collateral,
+                &payout_payload,
+                &Default::default(),
+            ),
             PALW_BOND_REGISTRATION_V2_MLDSA87_CONTEXT,
         ),
     };
@@ -2183,7 +2213,7 @@ async fn palw_rc_a_real_execution_produces_a_block_the_chain_accepts() {
     );
     let network_domain = palw_network_domain_v2_for(config.params.net.to_string().as_bytes(), Some(config.params.genesis.hash));
     let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(&block.header);
-    let anchor = base0_rc_job_anchor_v1(network_domain, pre_pow, facts.class_id, &bond_key.0);
+    let anchor = base0_rc_job_anchor_v1(network_domain, pre_pow, facts.class_id, &bond_key.0, 0);
 
     // The work. A real inference, over the job this template names.
     let profile = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("the floor's graph is expressible");
@@ -2335,7 +2365,7 @@ async fn palw_rc_the_real_qwen25_a16_model_produces_a_block() {
     let timestamp = block.header.timestamp;
     let network_domain = palw_network_domain_v2_for(config.params.net.to_string().as_bytes(), Some(config.params.genesis.hash));
     let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(&block.header);
-    let anchor = base0_rc_job_anchor_v1(network_domain, pre_pow, dense_class_id, &bond_key.0);
+    let anchor = base0_rc_job_anchor_v1(network_domain, pre_pow, dense_class_id, &bond_key.0, 0);
 
     let backend = Qwen25A16Backend::new(
         std::sync::Arc::new(artifact),
@@ -2530,7 +2560,14 @@ async fn qwen36_block_e2e(artifact: misaka_palw_base0::qwen36::Qwen36ArtifactV1,
     let timestamp = block.header.timestamp;
     let network_domain = palw_network_domain_v2_for(config.params.net.to_string().as_bytes(), Some(config.params.genesis.hash));
     let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(&block.header);
-    let anchor = base0_rc_job_anchor_v1(network_domain, pre_pow, qwen36_class_id, &bond_key.0);
+    // The bucket the block's own nonce names — the same fact a verifier reads off the header.
+    let anchor = base0_rc_job_anchor_v1(
+        network_domain,
+        pre_pow,
+        qwen36_class_id,
+        &bond_key.0,
+        kaspa_consensus_core::palw_attempt_v2::palw_nonce_bucket_v1(block.header.nonce),
+    );
 
     let backend = Qwen36Backend::new(
         std::sync::Arc::new(artifact),
@@ -2662,7 +2699,7 @@ async fn palw_v2_a_stranger_can_register_their_own_bond() {
     // What a registrant can compute at signing time: "the output at index 0 of whatever carries me".
     let declared = PalwBondKeyV2(TransactionOutpoint::new(TransactionId::default(), 0));
     let sign_over = |key: &PalwBondKeyV2| {
-        let message = palw_bond_registration_message_v2(network_domain, key, &pubkey, &pubkey, collateral, &payout_payload);
+        let message = palw_bond_registration_message_v2(network_domain, key, &pubkey, &pubkey, collateral, &payout_payload, &Default::default());
         libcrux_ml_dsa::ml_dsa_87::sign(
             &keypair.signing_key,
             message.as_byte_slice(),
@@ -2681,6 +2718,7 @@ async fn palw_v2_a_stranger_can_register_their_own_bond() {
             operator_pubkey: pubkey.clone(),
             collateral,
             payout_payload,
+            capable_classes: Default::default(),
             signature,
         };
         let payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object })
@@ -8860,6 +8898,7 @@ async fn palw_rc_qwen36_per_epoch_expected_observed_target() {
         kaspa_hashes::Hash64::from_u64_word(1),
         base_class_id,
         &kaspa_consensus_core::config::premine::premine_outpoint(0),
+        0,
     );
     let (base_job, base_prompt) =
         base0_rc_job_v1(&base_profile, seed_anchor, base_artifact.shape.vocab, PALW_RC_BASE0_CANONICAL.0, PALW_RC_BASE0_CANONICAL.1);
@@ -8876,6 +8915,7 @@ async fn palw_rc_qwen36_per_epoch_expected_observed_target() {
         kaspa_hashes::Hash64::from_u64_word(2),
         qwen_class_id,
         &kaspa_consensus_core::config::premine::premine_outpoint(1),
+        0,
     );
     let (qwen_job, qwen_prompt) = qwen_backend.job_for_anchor(qwen_anchor).expect("the anchor implies a job");
     let qwen_run = qwen_backend.execute(&qwen_job, &qwen_prompt).expect("a real hybrid forward pass");
@@ -9094,6 +9134,7 @@ async fn palw_rc_qwen36_earns_share_through_real_blocks() {
         kaspa_hashes::Hash64::from_u64_word(1),
         base_class_id,
         &kaspa_consensus_core::config::premine::premine_outpoint(0),
+        0,
     );
     let (base_job, base_prompt) =
         base0_rc_job_v1(&base_profile, seed, base_artifact.shape.vocab, PALW_RC_BASE0_CANONICAL.0, PALW_RC_BASE0_CANONICAL.1);
@@ -9110,6 +9151,7 @@ async fn palw_rc_qwen36_earns_share_through_real_blocks() {
         kaspa_hashes::Hash64::from_u64_word(2),
         qwen_class_id,
         &kaspa_consensus_core::config::premine::premine_outpoint(1),
+        0,
     );
     let (qwen_job, qwen_prompt) = backend.job_for_anchor(qwen_anchor).expect("the anchor implies a job");
     let qwen_run = backend.execute(&qwen_job, &qwen_prompt).expect("a real hybrid forward pass");
@@ -9283,6 +9325,7 @@ async fn palw_rc_qwen36_counts_merged_work() {
         kaspa_hashes::Hash64::from_u64_word(1),
         base_class_id,
         &kaspa_consensus_core::config::premine::premine_outpoint(0),
+        0,
     );
     let (base_job, base_prompt) =
         base0_rc_job_v1(&base_profile, seed, base_artifact.shape.vocab, PALW_RC_BASE0_CANONICAL.0, PALW_RC_BASE0_CANONICAL.1);
@@ -9299,6 +9342,7 @@ async fn palw_rc_qwen36_counts_merged_work() {
         kaspa_hashes::Hash64::from_u64_word(2),
         qwen_class_id,
         &kaspa_consensus_core::config::premine::premine_outpoint(1),
+        0,
     );
     let (qwen_job, qwen_prompt) = backend.job_for_anchor(qwen_anchor).expect("the anchor implies a job");
     let qwen_run = backend.execute(&qwen_job, &qwen_prompt).expect("a real hybrid forward pass");

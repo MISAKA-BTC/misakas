@@ -605,6 +605,15 @@ impl PalwPanelService {
         // under one key are one operator by construction — which is the honest reading for a node
         // registering its own bond, and the only one it can make without a second key to name.
         let pubkey = kp.verification_key.as_ref().to_vec();
+        // **A registration declares no capability** (ADR-0071 Decision 3), and that is the honest
+        // resting state rather than an omission. At registration this node has proved it holds
+        // collateral; it has proved nothing about holding a 33 GiB artifact, and the chain has not
+        // even told it which classes exist yet. Undeclared is excluded from the draw, so the bond
+        // simply takes no seats until its operator says what it can run — with
+        // `BondCapabilityDeclared`, which is signed by this same key and can be sent, changed and
+        // withdrawn as the node's holdings change. Declaring here would be volunteering for duty
+        // the node cannot yet perform, and the duty accounting convicts the seats the draw names.
+        let capable_classes = std::collections::BTreeSet::new();
         let bond = PalwBondKeyV2(TransactionOutpoint::new(kaspa_consensus_core::tx::TransactionId::default(), 0));
         let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
             self.consensus_config.params.net.to_string().as_bytes(),
@@ -617,6 +626,7 @@ impl PalwPanelService {
             &pubkey,
             collateral,
             &payout_payload,
+            &capable_classes,
         );
         let signature = self
             .sign(message.as_byte_slice(), kaspa_consensus_core::palw_state_v2::PALW_BOND_REGISTRATION_V2_MLDSA87_CONTEXT)
@@ -628,6 +638,7 @@ impl PalwPanelService {
                 operator_pubkey: pubkey,
                 collateral,
                 payout_payload,
+                capable_classes,
                 signature,
             },
             kaspa_consensus_core::tx::TransactionOutput::new(collateral, payee_script),
@@ -991,7 +1002,12 @@ impl PalwPanelService {
     ) -> Option<Hash64> {
         let header = session.palw_claim_block_header_v2(accepted_block)?;
         let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(&header);
-        backend.job_anchor_v1(network_domain, pre_pow, class_id, &executor_bond.0)
+        // **The fifth fact, and it comes off the same header** (ADR-0071 Decision 2): which
+        // execution the block's nonce was supposed to be paid for by. Read here rather than taken
+        // from the material, for the reason this whole function exists — a capture that named its
+        // own bucket would be the accused setting the question again.
+        let nonce_bucket = kaspa_consensus_core::palw_attempt_v2::palw_nonce_bucket_v1(header.nonce);
+        backend.job_anchor_v1(network_domain, pre_pow, class_id, &executor_bond.0, nonce_bucket)
     }
 
     /// Persist a foreign (gossiped) material under `retention/foreign/`, best-effort.
@@ -2585,6 +2601,7 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::ProducerDefaulted { .. } => "ProducerDefaulted",
         PalwConsensusObjectV2::BondRegistered { .. } => "BondRegistered",
         PalwConsensusObjectV2::BondRetireRequested { .. } => "BondRetireRequested",
+        PalwConsensusObjectV2::BondCapabilityDeclared { .. } => "BondCapabilityDeclared",
         PalwConsensusObjectV2::ClassRegistered { .. } => "ClassRegistered",
         PalwConsensusObjectV2::ClassFrozen { .. } => "ClassFrozen",
         PalwConsensusObjectV2::PanelBound { .. } => "PanelBound",

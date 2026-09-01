@@ -208,6 +208,195 @@ pub async fn status(ctx: &Ctx, ks: &KeySource, class_id: Option<&str>) -> CliRes
 /// This moves the bond to `Retiring`; the collateral is released after the withdrawal delay, which
 /// is why the delay must outlast the whole claim lattice (a bond that could leave sooner could
 /// commit fraud and withdraw before it was provable).
+/// **`misaka bond capability`** (ADR-0071 Decision 3) — say which classes this bond will judge.
+///
+/// A panel seat's job is to re-execute the claim under judgement, so the draw only seats a bond for
+/// classes it declared. Undeclared is excluded and never defaulted: a permissive default would
+/// volunteer an operator for duty it cannot perform, and the duty accounting convicts exactly the
+/// seats the draw names.
+///
+/// The set is REPLACED, not merged. Withdrawing capability is as legitimate as declaring it — an
+/// operator who deletes a 33 GiB artifact must be able to stop being seated for it, and the
+/// alternative is choosing between keeping the disk and being convicted for no-shows. So
+/// `--declare` with no ids is a legal command that stands the bond down, and it is spelled that
+/// way rather than as a separate `--withdraw` because there is one set and one way to state it.
+///
+/// The object carries the owner's ML-DSA-87 over `palw_bond_capability_message_v2`, verified
+/// against the bond's own registered key — the same lock `retire` carries, for the same reason: a
+/// bond key is a public outpoint, so naming one must differ from owning it.
+pub async fn capability(
+    ctx: &Ctx,
+    ks: &KeySource,
+    bond_arg: Option<&str>,
+    class_id: Option<&str>,
+    declare: &[String],
+    dry_run: bool,
+    yes: bool,
+) -> CliResult {
+    let nv = connect(ctx).await?;
+    let key = ks.load_key()?;
+    let addr = key.funding_address(nv.params.prefix());
+    let all = page_all(&nv, &addr).await?;
+    let bond_outpoint = resolve_bond(bond_arg, &all, &addr)?;
+
+    // The declared ids, parsed before anything is signed: a typo'd class id is a declaration for a
+    // class that does not exist, and the transition refuses it — but the operator should learn that
+    // here rather than from a carrier fee and a dropped object.
+    let mut classes = std::collections::BTreeSet::new();
+    for raw in declare {
+        for piece in raw.split(',').map(str::trim).filter(|p| !p.is_empty()) {
+            let mut bytes = [0u8; 64];
+            faster_hex::hex_decode(piece.as_bytes(), &mut bytes).map_err(|_| {
+                CliError::new(exit::GENERIC, format!("`{piece}` is not a 128-hex class id — the node logs the ids it can serve"))
+            })?;
+            classes.insert(kaspa_consensus_core::Hash64::from_bytes(bytes));
+        }
+    }
+
+    // The same ownership guard `retire` carries, and for the same reason: consensus verifies the
+    // signature against the bond's registered key, so a declaration signed by another key is a
+    // carrier fee spent on a transaction that can never succeed.
+    let Some(class_id) = class_id else {
+        return Err(CliError::new(
+            exit::GENERIC,
+            format!(
+                "cannot check that this key owns {}:{} without --class-id.\n\
+                 The node reports a bond's registered key only alongside a class it knows, and no RPC lists classes.\n\
+                 Pass any registered class id (128-hex) — the ownership answer belongs to the bond, not the class.",
+                bond_outpoint.transaction_id, bond_outpoint.index
+            ),
+        ));
+    };
+    let facts = nv
+        .client
+        .get_palw_producer_facts(class_id.to_string(), bond_outpoint.transaction_id.to_string(), bond_outpoint.index, true)
+        .await
+        .map_err(|e| CliError::new(exit::GENERIC, format!("getPalwProducerFacts: {e}")))?;
+    if !facts.available || !facts.bond_known {
+        return Err(CliError::new(
+            exit::GENERIC,
+            format!(
+                "this node did not answer for bond {}:{} under class {class_id} — either it is not a ConsensusV2 network, or it does not know that class or that bond.",
+                bond_outpoint.transaction_id, bond_outpoint.index
+            ),
+        ));
+    }
+    let ours = faster_hex::hex_string(key.public_key());
+    if facts.bond_registered_pubkey.is_empty() || !ours.eq_ignore_ascii_case(&facts.bond_registered_pubkey) {
+        return Err(CliError::new(
+            exit::GENERIC,
+            format!(
+                "bond {}:{} was registered by a different key (or the node returned none), so a declaration signed with this one would be refused by consensus.",
+                bond_outpoint.transaction_id, bond_outpoint.index
+            ),
+        ));
+    }
+
+    let mut spendable: Vec<&crate::wallet::Funding> = all.iter().filter(|u| u.mature && !u.bonded).collect();
+    spendable.sort_by(|a, b| b.amount.cmp(&a.amount));
+    let fee = estimate_fee(&key, &nv.params, 1, false);
+    let funding = spendable.first().ok_or_else(|| {
+        CliError::new(exit::GENERIC, format!("no mature, unbonded UTXO at {addr} to pay the carrier's {fee} sompi fee"))
+    })?;
+    if funding.amount <= fee {
+        return Err(CliError::new(
+            exit::GENERIC,
+            format!("largest spendable UTXO at {addr} holds {} sompi, under the {fee} sompi fee", funding.amount),
+        ));
+    }
+
+    let bond = PalwBondKeyV2(bond_outpoint);
+    let message = kaspa_consensus_core::palw_state_v2::palw_bond_capability_message_v2(network_domain(&nv), &bond, &classes);
+    let signature = key
+        .sign_with_context(message.as_byte_slice(), kaspa_consensus_core::palw_state_v2::PALW_BOND_CAPABILITY_V2_MLDSA87_CONTEXT)
+        .to_vec();
+    let object = PalwConsensusObjectV2::BondCapabilityDeclared { bond, capable_classes: classes.clone(), signature };
+    let tx = key
+        .build_palw_lifecycle_tx(&object, funding.outpoint, &funding.entry, fee)
+        .map_err(|e| CliError::new(exit::GENERIC, format!("build the declaration carrier: {e}")))?;
+    let txid = tx.id();
+
+    let listed: Vec<String> = classes.iter().map(|c| c.to_string()).collect();
+    if dry_run || !yes {
+        match ctx.output {
+            OutputFormat::Human => {
+                println!("bond:    {}:{}", bond_outpoint.transaction_id, bond_outpoint.index);
+                println!("carrier: {txid} (fee {fee} sompi from {}:{})", funding.outpoint.transaction_id, funding.outpoint.index);
+                println!();
+                if listed.is_empty() {
+                    println!("This stands the bond DOWN: it declares no classes, so the panel draw will");
+                    println!("seat it for nothing. Its collateral is untouched — this is not a retirement.");
+                } else {
+                    println!("This replaces the bond's declared classes with exactly these {}:", listed.len());
+                    for c in &listed {
+                        println!("  {c}");
+                    }
+                    println!();
+                    println!("Declare only classes this node can actually run. A seat that cannot serve is a");
+                    println!("seat that gets convicted — the declaration is binding on the declarer.");
+                }
+                println!();
+                println!("{}", if dry_run { "--dry-run: nothing submitted." } else { "Re-run with --yes to submit." });
+            }
+            OutputFormat::Json => println!(
+                "{}",
+                serde_json::json!({
+                    "ok": true, "submitted": false, "txid": txid.to_string(),
+                    "bond": format!("{}:{}", bond_outpoint.transaction_id, bond_outpoint.index),
+                    "fee_sompi": fee, "declared": listed,
+                })
+            ),
+        }
+        return Ok(());
+    }
+
+    nv.client
+        .submit_transaction(tx.as_ref().into(), false)
+        .await
+        .map_err(|e| CliError::new(exit::GENERIC, format!("submit the declaration carrier: {e}")))?;
+    match ctx.output {
+        OutputFormat::Human => println!("submitted {txid} — the declaration takes effect when the carrier is accepted"),
+        OutputFormat::Json => println!(
+            "{}",
+            serde_json::json!({ "ok": true, "submitted": true, "txid": txid.to_string(), "declared": listed })
+        ),
+    }
+    Ok(())
+}
+
+/// Which bond a command acts on: named explicitly, or inferred when this key holds exactly one —
+/// never guessed when it holds several. Shared by `retire` and `capability` so the two cannot come
+/// to different conclusions about "the" bond.
+fn resolve_bond(
+    bond_arg: Option<&str>,
+    all: &[crate::wallet::Funding],
+    addr: &impl std::fmt::Display,
+) -> Result<kaspa_consensus_core::tx::TransactionOutpoint, CliError> {
+    match bond_arg {
+        Some(s) => parse_outpoint(s),
+        None => {
+            let locked: Vec<&crate::wallet::Funding> = all.iter().filter(|u| u.bonded).collect();
+            match locked.as_slice() {
+                [one] => Ok(one.outpoint),
+                [] => Err(CliError::new(
+                    exit::GENERIC,
+                    format!(
+                        "no locked bond at {addr}. Run `misaka bond status` to see what this key holds, or pass --bond <txid>:<index> if the bond is at another address."
+                    ),
+                )),
+                many => {
+                    let list: Vec<String> =
+                        many.iter().map(|u| format!("{}:{}", u.outpoint.transaction_id, u.outpoint.index)).collect();
+                    Err(CliError::new(
+                        exit::GENERIC,
+                        format!("this key holds {} bonds — name one with --bond: {}", many.len(), list.join(", ")),
+                    ))
+                }
+            }
+        }
+    }
+}
+
 pub async fn retire(ctx: &Ctx, ks: &KeySource, bond_arg: Option<&str>, class_id: Option<&str>, dry_run: bool, yes: bool) -> CliResult {
     let nv = connect(ctx).await?;
     let key = ks.load_key()?;

@@ -300,8 +300,11 @@ mod tests {
     /// than a zero-weight block.
     #[test]
     fn pwu_is_resolved_or_refused() {
-        let target = u128::MAX >> 10; // 1_024 expected attempts
-        assert_eq!(block_pwu_v1(Some(target), Some(100)), Ok(102_400));
+        // 2^24 expected TRIES; at the shipped nonce bucket that is 4 executions, and pwu counts
+        // executions (ADR-0071 Decision 2). `>> 10` here used to read 1,024 tries as 1,024
+        // inferences' worth of work — the over-statement that finding is about.
+        let target = u128::MAX >> 24;
+        assert_eq!(block_pwu_v1(Some(target), Some(100)), Ok(400));
         assert_eq!(block_pwu_v1(None, Some(100)), Err(PalwFactsError::Unresolved { what: "the class's DAA target" }));
         assert_eq!(block_pwu_v1(Some(target), None), Err(PalwFactsError::Unresolved { what: "the class's per-inference cost" }));
     }
@@ -2018,7 +2021,9 @@ mod resolver_tests {
         let weight =
             resolve_block_weight_v1(&input(&carriage, &panel, 1_100, &bonds(), &NoStepWeights), &RAMP, accept_fixture_signature)
                 .unwrap();
-        assert_eq!(weight.pwu, 102_400);
+        // 2^10 expected TRIES fall inside one nonce bucket, so the block carries the one
+        // execution it commits to: `pwu_per_inference` (ADR-0071 Decision 2).
+        assert_eq!(weight.pwu, 100);
         assert_eq!(weight.stage, PalwWorkRampStageV1::ReceiptLicensed);
     }
 

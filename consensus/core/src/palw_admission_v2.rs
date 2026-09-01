@@ -599,6 +599,7 @@ mod tests {
                 operator_pubkey: op_key(0x21),
                 collateral: 1_000,
                 payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+                capable_classes: Default::default(),
                 signature: Vec::new(),
             },
         ];
@@ -687,6 +688,7 @@ mod tests {
                 operator_pubkey: op_key(0x22),
                 collateral: 2_000_000,
                 payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+                capable_classes: Default::default(),
                 signature: Vec::new(),
             },
         ];
@@ -816,6 +818,7 @@ mod tests {
             1_000,
             kaspa_hashes::Hash64::from_u64_word(0x9A11),
             101,
+            Default::default(),
         );
         check_palw_attempt_admission_v2_with_bootstrap(&classes_only, &sp, &ap, &c, &env, Some(&declared))
             .expect("one ordinary block carrying its own registration is how a stopped chain restarts");
@@ -841,6 +844,7 @@ mod tests {
             1_000,
             kaspa_hashes::Hash64::from_u64_word(0x9A11),
             101,
+            Default::default(),
         );
         let err = check_palw_attempt_admission_v2_with_bootstrap(&classes_only, &sp, &ap, &c, &env, Some(&impostor)).unwrap_err();
         assert!(
@@ -887,6 +891,7 @@ mod tests {
                     operator_pubkey: op_key(0x21),
                     collateral: 1_000_000,
                     payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+                    capable_classes: Default::default(),
                     signature: Vec::new(),
                 },
             ];
@@ -1001,7 +1006,9 @@ mod tests {
         // Epoch 1, where the derived class has a budget (see `state_with_derived_class`).
         let c = ctx(4, 1_002, 4);
         let derived = crate::palw_pwu::palw_pwu_v1(u128::MAX / 2, 7);
-        assert_eq!(derived, 14, "two expected attempts at seven per inference");
+        // Two expected TRIES, both inside one nonce bucket, so one execution at seven per
+        // inference (ADR-0071 Decision 2 — pwu counts executions, not tries).
+        assert_eq!(derived, 7, "one execution at seven per inference");
 
         // The one legal value admits (with a nonce that also wins the 6b lottery).
         check_palw_attempt_admission_v2(
@@ -1035,19 +1042,41 @@ mod tests {
         let admission = admission_params_with_derived_class();
         let c = ctx(4, 1_002, 4);
 
-        let easy = state_with_derived_class(u128::MAX / 2); // 2 attempts expected → pwu 14
-        let hard = state_with_derived_class(u128::MAX / 8); // 8 attempts expected → pwu 56
+        // **Both targets straddle the nonce bucket**, because that is where a harder chain starts
+        // deriving a LARGER value. Two tries and eight tries are the same one execution
+        // (ADR-0071 Decision 2), so a fixture that stays under the bucket would be asserting the
+        // rule against two identical numbers and would pass whatever the derivation did.
+        // The EASY side has to stay easy: `derived_class_attempt_admitting` searches 512 nonces for
+        // a ticket, so a target above the bucket has no admitting draw to find. The HARD side never
+        // reaches the lottery — item 6 refuses its pwu first — so that is where the bucket is
+        // crossed, which is the only place the two derivations can differ at all.
+        let easy_target = u128::MAX / 2; // 2 tries, one bucket = 1 execution → pwu 7
+        let hard_target = u128::MAX >> 24; // 2^24 tries = 4 executions → pwu 28
+        let easy = state_with_derived_class(easy_target);
+        let hard = state_with_derived_class(hard_target);
+        let easy_pwu = crate::palw_pwu::palw_pwu_v1(easy_target, 7);
+        let hard_pwu = crate::palw_pwu::palw_pwu_v1(hard_target, 7);
+        assert!(hard_pwu > easy_pwu, "a harder chain must derive a larger value or this proves nothing");
 
-        check_palw_attempt_admission_v2(&easy, &state_params(), &admission, &c, &derived_class_attempt_admitting(14, u128::MAX / 2))
-            .expect("14 is the easy chain's one legal value");
-        let err = check_palw_attempt_admission_v2(&hard, &state_params(), &admission, &c, &derived_class_attempt(14, 1)).unwrap_err();
+        check_palw_attempt_admission_v2(
+            &easy,
+            &state_params(),
+            &admission,
+            &c,
+            &derived_class_attempt_admitting(easy_pwu, easy_target),
+        )
+        .expect("the easy chain's one legal value");
+        let err =
+            check_palw_attempt_admission_v2(&hard, &state_params(), &admission, &c, &derived_class_attempt(easy_pwu, 1)).unwrap_err();
         assert_eq!(
             err,
-            PalwAdmissionV2Error::PwuClaimNotDerived { claimed: 14, derived: 56 },
+            PalwAdmissionV2Error::PwuClaimNotDerived { claimed: easy_pwu, derived: hard_pwu },
             "the harder chain derives a different — larger — legal value for the same class"
         );
-        check_palw_attempt_admission_v2(&hard, &state_params(), &admission, &c, &derived_class_attempt_admitting(56, u128::MAX / 8))
-            .expect("56 is the hard chain's one legal value");
+        // The hard chain's own legal value is asserted through the refusal above rather than by
+        // producing a block for it: a target above the nonce bucket has no admitting draw inside
+        // the 512 the fixture searches, which is the same fact the bucket exists to state.
+        assert_eq!(hard_pwu, crate::palw_pwu::palw_pwu_v1(hard_target, 7), "the refusal named the hard chain's derivation");
     }
 
     // ---- the remaining items, one refusal each ----
@@ -1504,10 +1533,12 @@ mod tests {
             .expect("no escrow, no requirement");
     }
 
-    /// The pwu the shipped floor class derives for one inference. Pinned here rather than
-    /// computed so that a change to the derivation fails this test with both numbers in the
-    /// message, instead of silently re-deriving whatever the code now says.
-    const PALW_RC_FLOOR_DERIVED_PWU: u64 = 15_416;
+    /// The pwu the shipped floor class derives for one block. Pinned here rather than computed so
+    /// that a change to the derivation fails this test with both numbers in the message, instead
+    /// of silently re-deriving whatever the code now says — which is how it caught ADR-0071
+    /// Decision 2: 15,416 was two expected TRIES' worth, and both tries fall inside one nonce
+    /// bucket, so the block carries the one execution it commits to.
+    const PALW_RC_FLOOR_DERIVED_PWU: u64 = 7_708;
 
     /// **The economic deterrent is armable on the network this build ships — that is the claim,
     /// and it is not the same as the rule being correct.**

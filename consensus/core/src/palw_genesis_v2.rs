@@ -345,6 +345,7 @@ mod tests {
             operator_pubkey: vec![0x21, n as u8, 0, 0, 0, 0, 0, 0],
             collateral: FIXTURE_COLLATERAL,
             payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+            capable_classes: Default::default(),
             signature: Vec::new(),
         }
     }
@@ -478,6 +479,7 @@ mod tests {
                     operator_pubkey,
                     collateral: c,
                     payout_payload,
+                    capable_classes: std::collections::BTreeSet::from([h64(1)]),
                     signature: Vec::new(),
                 });
             }
@@ -537,6 +539,7 @@ mod tests {
                 operator_pubkey: vec![21; 8],
                 collateral,
                 payout_payload,
+                capable_classes: std::collections::BTreeSet::from([h64(1)]),
                 signature: Vec::new(),
             });
         }

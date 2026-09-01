@@ -929,6 +929,7 @@ mod chain_only_lattice_tests {
                 operator_pubkey: vec![21; 8],
                 collateral: 1_000,
                 payout_payload: h(0x9A11),
+                capable_classes: Default::default(),
                 signature: Vec::new(),
             },
         ];

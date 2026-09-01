@@ -421,6 +421,31 @@ enum BondCmd {
     /// The collateral is released after the withdrawal delay, not immediately. Refuses while the
     /// bond has unresolved claims, because retiring then would pull the collateral out from under
     /// a live dispute.
+    /// Declare which classes this bond will judge — the panel draw seats it only for these.
+    ///
+    /// The set is REPLACED, not merged, so `--declare` with nothing stands the bond down. Declare
+    /// only classes this node can actually run: a seat that cannot serve is a seat that gets
+    /// convicted, which is what makes the declaration a stake rather than a permission list.
+    Capability {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// Which bond, as `<txid>:<index>`. Optional when this key holds exactly one.
+        #[arg(long)]
+        bond: Option<String>,
+        /// A class id (128-hex) the chain knows — required, because the only RPC that reports a
+        /// bond's registered key will not answer without one.
+        #[arg(long)]
+        class_id: Option<String>,
+        /// Class ids (128-hex) to declare. Repeatable, or comma-separated. Omit to declare none.
+        #[arg(long)]
+        declare: Vec<String>,
+        /// Build and price the carrier, print it, submit nothing.
+        #[arg(long)]
+        dry_run: bool,
+        /// Submit. Without it the command stops after printing what it would do.
+        #[arg(long)]
+        yes: bool,
+    },
     Retire {
         #[command(flatten)]
         key: KeyArgs,
@@ -779,6 +804,9 @@ async fn main() -> std::process::ExitCode {
         Command::Key(KeyCmd::Address { key }) => key_address(&ctx, &key.source()),
         Command::Key(KeyCmd::Import { out, hex_stdin }) => key_import(&ctx, &out, hex_stdin),
         Command::Bond(BondCmd::Status { key, class_id }) => bond::status(&ctx, &key.source(), class_id.as_deref()).await,
+        Command::Bond(BondCmd::Capability { key, bond, class_id, declare, dry_run, yes }) => {
+            bond::capability(&ctx, &key.source(), bond.as_deref(), class_id.as_deref(), &declare, dry_run, yes).await
+        }
         Command::Bond(BondCmd::Retire { key, bond, class_id, dry_run, yes }) => {
             bond::retire(&ctx, &key.source(), bond.as_deref(), class_id.as_deref(), dry_run, yes).await
         }

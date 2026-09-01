@@ -56,12 +56,20 @@ use misaka_palw_base0::produce::base0_rc_job_anchor_v1;
 
 pub const PALW_PRODUCER: &str = "palw-producer";
 
-/// How many nonces to try against one template before rebuilding.
+/// How many nonces to try against one template before rebuilding: **exactly one nonce bucket**
+/// (ADR-0071 Decision 2).
 ///
 /// A template goes stale as the past-median time moves, and a stale template's block is refused for
 /// its timestamp rather than its work — so the search is bounded and the loop refetches. Bounded
 /// LOUDLY: a silent give-up would look identical to a network whose difficulty is out of reach.
-const NONCES_PER_TEMPLATE: u64 = 4_000_000;
+///
+/// It used to be `4_000_000`, chosen here, and that was the ONLY thing bounding how many lottery
+/// tickets one execution bought — a node-local constant, so it bound honest producers and nobody
+/// else. The bound is now in the job anchor, which is consensus: a nonce outside the bucket the
+/// anchor names derives a different job, so its block is one no verifier can adjudicate. Deriving
+/// the sweep from the same constant keeps an honest producer using exactly the search it paid for,
+/// and makes "search harder" mean "run another inference" rather than "raise this number".
+const NONCES_PER_TEMPLATE: u64 = 1 << kaspa_consensus_core::palw_attempt_v2::PALW_TICKET_NONCE_BUCKET_LOG2;
 
 #[derive(Clone, Debug)]
 pub struct PalwProducerConfig {
@@ -571,10 +579,17 @@ impl PalwProducerService {
         if template.block.header.pow_algo_id != kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2 {
             return Err(format!("this network declares algo {} — not a ConsensusV2 lane", template.block.header.pow_algo_id));
         }
-        // The job is the TEMPLATE's, so it is computed once and every nonce reuses it. See
-        // `base0_rc_job_anchor_v1` for why it is not the challenge's.
+        // The job is the TEMPLATE's AND the bucket's, so it is computed once and every nonce in
+        // that bucket reuses it. See `base0_rc_job_anchor_v1` for why it is not the challenge's,
+        // and `PALW_TICKET_NONCE_BUCKET_LOG2` for why it is no longer the whole nonce space.
+        //
+        // Bucket 0, because the sweep below starts at nonce 0 and runs exactly `1 << k` of them —
+        // one execution, one bucket. A producer that wanted a second bucket would have to run the
+        // inference again, which is the entire point: the search is free inside a bucket and costs
+        // an inference to leave.
         let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(&template.block.header);
-        let anchor = base0_rc_job_anchor_v1(network_domain, pre_pow, facts.class_id, &bond);
+        let nonce_bucket = 0u64;
+        let anchor = base0_rc_job_anchor_v1(network_domain, pre_pow, facts.class_id, &bond, nonce_bucket);
 
         // **The class comes from the CHAIN, not from a constant here.** This resolved the floor by
         // name — `base0_profile_v1(PALW_RC_BASE0_GEOMETRY)` and `palw_rc_base0_artifact_v1()` —
@@ -667,7 +682,10 @@ impl PalwProducerService {
             let mut attempt_for_search = attempt.clone();
             tokio::task::spawn_blocking(move || {
                 let mut header = header0;
-                for nonce in 0..NONCES_PER_TEMPLATE {
+                // The bucket the anchor named, and only it: a nonce outside it belongs to a job
+                // this execution did not run, so a block carrying one is unadjudicable.
+                let bucket_base = nonce_bucket << kaspa_consensus_core::palw_attempt_v2::PALW_TICKET_NONCE_BUCKET_LOG2;
+                for nonce in bucket_base..bucket_base + NONCES_PER_TEMPLATE {
                     attempt_for_search.challenge = challenge_v2(network_domain, pre_pow, timestamp, nonce, class_id, &bond);
                     if class_ticket_v2(&attempt_for_search) > class_target {
                         continue;

@@ -264,6 +264,7 @@ mod tests {
                 operator_pubkey: vec![0x21; 8],
                 collateral: 1_000_000,
                 payout_payload: h64(0x9A11),
+                capable_classes: Default::default(),
                 signature: Vec::new(),
             },
         ];

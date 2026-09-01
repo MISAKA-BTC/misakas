@@ -123,8 +123,15 @@ impl TestConsensus {
         header.parents_by_level = parents_by_level;
         let ghostdag_data = self.consensus.services.ghostdag_manager.ghostdag(header.direct_parents());
         let daa_window = self.consensus.services.window_manager.block_daa_window(&ghostdag_data).unwrap();
-        header.bits = self.consensus.services.window_manager.calculate_difficulty_bits(&ghostdag_data, &daa_window);
         header.daa_score = daa_window.daa_score;
+        // **The frozen target when the network has one** (ADR-0071 Decision 1) — the same source
+        // `pre_pow_validation` and the virtual template read. A builder with its own answer builds
+        // blocks the header processor rejects, which is exactly what this harness did the first
+        // time the freeze was armed: `UnexpectedDifficulty(0x1f7fffff, 0x207fffff)` on its own work.
+        header.bits = match self.params.palw_attempt_pow_bits_at(header.daa_score) {
+            Some(bits) => bits,
+            None => self.consensus.services.window_manager.calculate_difficulty_bits(&ghostdag_data, &daa_window),
+        };
         // kaspa-pq ADR-0007 Phase 3: declare the algo the network mandates at
         // this DAA score (`header_from_precomputed_hash` defaults to the
         // Phase-1 kHeavyHash id, which `check_pow_algo_id` rejects on the

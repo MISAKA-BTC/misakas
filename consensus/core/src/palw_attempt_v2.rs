@@ -83,16 +83,31 @@ pub const PALW_DOMAIN_JOB_ANCHOR_V1: &[u8] = b"misaka-palw/base0/rc-job-anchor/v
 /// family's crate. Without that, a verifier read the anchor out of the material it was judging —
 /// which is the accused setting the question, and the answer always agrees.
 ///
-/// Not derived from the challenge, which also binds the timestamp and the nonce: `l1_tag_v2` is a
+/// Not derived from the challenge, which binds the timestamp and the FULL nonce: `l1_tag_v2` is a
 /// free CPU hash precisely so the Layer-0 nonce search stays a nonce search, and a job that moved
-/// with the nonce would price one full inference per PoW try. What a producer CAN still move is the
-/// pre-pow hash, by reshuffling the block it builds — that is job grinding, it is real, and it
+/// with every nonce would price one full inference per PoW try. What a producer CAN still move is
+/// the pre-pow hash, by reshuffling the block it builds — that is job grinding, it is real, and it
 /// costs a full inference per try, which is the price the design means to charge.
+///
+/// **But `nonce_bucket` is here, and the reason is the measurement the ADR-0068 audit ran**
+/// (ADR-0071 Decision 2). With the nonce out of the anchor ENTIRELY, one inference served an
+/// unbounded sweep: `class_ticket_v2` moves with every nonce, so the lottery ran millions of times
+/// against a single execution, and `kaspad`'s `NONCES_PER_TEMPLATE` — a node-local constant, which
+/// binds honest producers and nobody else — was the only thing that made it four million rather
+/// than 2^64. A chain whose thesis is that blocks are paid for by inference cannot meter its
+/// lottery in a unit the inference does not produce.
+///
+/// The bucket is the middle term the first design skipped straight past. `nonce >> k` covers
+/// exactly `2^k` nonces per execution: the search inside a bucket is still a free CPU search (the
+/// property `l1_tag_v2` exists for), and leaving the bucket costs another inference. `k` is a
+/// network constant carried by the attempt-work fence, so it is a number two nodes agree on before
+/// they agree on a block, rather than a convention one of them happens to run.
 pub fn palw_job_anchor_v1(
     network_domain: Hash64,
     pre_pow_hash: Hash64,
     class_id: Hash64,
     bond: &crate::tx::TransactionOutpoint,
+    nonce_bucket: u64,
 ) -> Hash64 {
     let mut h = blake2b_simd::Params::new().hash_length(64).key(PALW_DOMAIN_JOB_ANCHOR_V1).to_state();
     h.update(network_domain.as_byte_slice());
@@ -100,9 +115,30 @@ pub fn palw_job_anchor_v1(
     h.update(class_id.as_byte_slice());
     h.update(bond.transaction_id.as_bytes().as_slice());
     h.update(&bond.index.to_le_bytes());
+    h.update(&nonce_bucket.to_le_bytes());
     let mut out = [0u8; 64];
     out.copy_from_slice(h.finalize().as_bytes());
     Hash64::from_bytes(out)
+}
+
+/// **How many nonces one execution covers, as an exponent** (ADR-0071 Decision 2).
+///
+/// `22` is today's behaviour made enforceable rather than a change to it: `kaspad`'s producer
+/// sweeps `NONCES_PER_TEMPLATE` nonces against one template, and that constant is node-local, so it
+/// bounded honest producers and nobody else. At `k = 22` an honest sweep fills exactly one bucket
+/// and nothing about its economics moves, while a producer that swept 2^40 against one inference
+/// now builds an anchor no verifier derives.
+///
+/// Lowering it later is the real design surface and it is an economic measurement, not a code
+/// change: `k = 0` is one inference per nonce, which is the honest extreme and almost certainly
+/// unaffordable. The number belongs to a measurement of inference cost against hash cost on the
+/// registered classes, and it moves by activation like every other rule here.
+pub const PALW_TICKET_NONCE_BUCKET_LOG2: u32 = 22;
+
+/// The bucket a nonce falls in — the one spelling, so a producer and a verifier cannot disagree
+/// about which execution a block's nonce was supposed to be paid for by.
+pub fn palw_nonce_bucket_v1(nonce: u64) -> u64 {
+    nonce >> PALW_TICKET_NONCE_BUCKET_LOG2
 }
 
 /// Width of the expanded L1 tag, matching algo-4's so the finalizer's call shape is unchanged.
@@ -459,6 +495,31 @@ impl PalwAttemptEnvelopeV2 {
 
 #[cfg(test)]
 mod tests {
+
+    /// **One execution covers exactly `2^k` nonces — asserted as the boundary, in both
+    /// directions** (ADR-0071 Decision 2, invariant 3).
+    ///
+    /// The first half is what makes the search free inside a bucket, which is the property
+    /// `l1_tag_v2` exists for. The second is what makes leaving the bucket cost an inference. A
+    /// test that only checked one of them would pass for an anchor that ignored the nonce entirely
+    /// — which is precisely the state this Decision found.
+    #[test]
+    fn one_execution_covers_exactly_one_nonce_bucket() {
+        let bond = crate::tx::TransactionOutpoint::new(Hash64::from_u64_word(7), 0);
+        let (net, pre_pow, class) = (Hash64::from_u64_word(1), Hash64::from_u64_word(2), Hash64::from_u64_word(3));
+        let anchor_of = |nonce: u64| palw_job_anchor_v1(net, pre_pow, class, &bond, palw_nonce_bucket_v1(nonce));
+
+        let k = PALW_TICKET_NONCE_BUCKET_LOG2;
+        let last_in_bucket = (1u64 << k) - 1;
+        assert_eq!(anchor_of(0), anchor_of(last_in_bucket), "every nonce in one bucket runs one job");
+        assert_eq!(anchor_of(1), anchor_of(last_in_bucket - 1));
+        assert_ne!(anchor_of(last_in_bucket), anchor_of(last_in_bucket + 1), "the next nonce is the next execution");
+        assert_ne!(anchor_of(0), anchor_of(1u64 << k));
+        // …and the bucket is the ONLY thing about the nonce the anchor sees, so a producer cannot
+        // move its job without either rebuilding the block or paying for another execution.
+        assert_eq!(palw_nonce_bucket_v1(last_in_bucket), 0);
+        assert_eq!(palw_nonce_bucket_v1(1u64 << k), 1);
+    }
     use super::*;
 
     fn op(seed: u8) -> TransactionOutpoint {

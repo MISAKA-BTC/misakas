@@ -136,17 +136,21 @@ pub const PALW_BASE0_DOMAIN_JOB_PROMPT: &[u8] = b"misaka-palw/base0/rc-job-promp
 /// job grinding, it is real, and it costs a full inference per try — which is the price the design
 /// means to charge. Deriving from the challenge would charge it per NONCE instead, and deriving
 /// from nothing would charge it never.
+///
+/// `nonce_bucket` is ADR-0071 Decision 2's middle term: one execution covers `2^k` nonces, so the
+/// search inside a bucket stays a free CPU search and leaving the bucket costs another inference.
 pub fn base0_rc_job_anchor_v1(
     network_domain: Hash64,
     pre_pow_hash: Hash64,
     class_id: Hash64,
     bond: &kaspa_consensus_core::tx::TransactionOutpoint,
+    nonce_bucket: u64,
 ) -> Hash64 {
     // The derivation moved to `kaspa_consensus_core::palw_attempt_v2` — it is the protocol's
     // anchor, not this family's, and a verifier must be able to compute it without depending on an
     // execution family's crate. Kept as a delegating name because the producer and the fixtures
     // call it here, and because two copies of a hash is how the value quietly moves.
-    kaspa_consensus_core::palw_attempt_v2::palw_job_anchor_v1(network_domain, pre_pow_hash, class_id, bond)
+    kaspa_consensus_core::palw_attempt_v2::palw_job_anchor_v1(network_domain, pre_pow_hash, class_id, bond, nonce_bucket)
 }
 
 /// **The anchor's job: the prompt it names, and the context that commits to it.**

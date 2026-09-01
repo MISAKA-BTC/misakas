@@ -156,6 +156,7 @@ fn run(scenario: &Scenario, epochs: u64) {
             operator_pubkey: vec![21u8; 8],
             collateral: 1_000_000_000_000_000,
             payout_payload: h(0x9A4),
+            capable_classes: Default::default(),
             signature: vec![9u8; 64],
         },
         registration(base, 1_000, BASE_PWU_PER_INFERENCE),
@@ -484,6 +485,7 @@ fn the_share_rule_fires_only_where_it_should() {
                 operator_pubkey: vec![21u8; 8],
                 collateral: 1_000_000_000_000_000,
                 payout_payload: h(0x9A4),
+                capable_classes: Default::default(),
                 signature: vec![9u8; 64],
             },
             registration(base, 1_000, BASE_PWU_PER_INFERENCE),
@@ -799,9 +801,15 @@ fn the_bind_window_gate_measures_the_dearest_class() {
         .iter()
         .cloned()
         .map(|o| match o {
-            Obj::BondRegistered { bond, pubkey, operator_pubkey, payout_payload, signature, .. } => {
-                Obj::BondRegistered { bond, pubkey, operator_pubkey, collateral: floor_sized, payout_payload, signature }
-            }
+            Obj::BondRegistered { bond, pubkey, operator_pubkey, payout_payload, capable_classes, signature, .. } => Obj::BondRegistered {
+                bond,
+                pubkey,
+                operator_pubkey,
+                collateral: floor_sized,
+                payout_payload,
+                capable_classes,
+                signature,
+            },
             other => other,
         })
         .collect();
@@ -895,6 +903,7 @@ fn difficulty_and_share_co_adjust_across_models_to_equilibrium() {
                 operator_pubkey: vec![21u8; 8],
                 collateral: 1_000_000_000_000_000,
                 payout_payload: h(0x9A4),
+                capable_classes: Default::default(),
                 signature: vec![9u8; 64],
             },
             registration(base, 1_000, BASE_PWU_PER_INFERENCE),

@@ -434,6 +434,19 @@ pub struct PalwAttemptWorkV1 {
     /// [`crate::pow_layer0::PALW_V2_ATTEMPT_BITS`] — the value the enforcing code substitutes and
     /// the value every V2 genesis already carries.
     pub pow_bits: u32,
+    /// **ADR-0071 Decision 2: how many nonces one execution buys, as an exponent.**
+    ///
+    /// The lane's third price, and the one that was not a number anywhere in consensus at all. The
+    /// job anchor deliberately excluded the nonce, so a single inference served an unbounded sweep
+    /// and the only thing making it four million rather than 2^64 was `kaspad`'s own
+    /// `NONCES_PER_TEMPLATE` — a node-local constant, which bounds honest producers and nobody
+    /// else. With the bucket in the anchor the bound is a rule, and a rule two nodes must agree on
+    /// belongs in the id they compare.
+    ///
+    /// Same lock as its two siblings: refused at start unless it names
+    /// [`crate::palw_attempt_v2::PALW_TICKET_NONCE_BUCKET_LOG2`], the value the anchor actually
+    /// buckets by.
+    pub ticket_bucket_log2: u32,
 }
 
 /// **ADR-0066 Decision 4's parameter: the inactivity leak, and how long silence must last.**
@@ -988,6 +1001,32 @@ impl Params {
             return Err(PalwModeV2Error::Invalid(
                 "palw_attempt_work declares a pow_bits this binary does not substitute: the attempt lane's target is a \
                  network constant and the fence must name the same one",
+            ));
+        }
+        // …and the third price, for the third time and the same reason (ADR-0071 Decision 2).
+        if let Some(attempt_work) = self.palw_attempt_work
+            && attempt_work.activation != ForkActivation::never()
+            && attempt_work.ticket_bucket_log2 != crate::palw_attempt_v2::PALW_TICKET_NONCE_BUCKET_LOG2
+        {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_attempt_work declares a ticket_bucket_log2 this binary does not bucket by: how many nonces one \
+                 execution buys is a network constant and the fence must name the same one",
+            ));
+        }
+        // **And the GENESIS has to carry the frozen target, or the chain's first block is refused
+        // by its own rule** (ADR-0071 Decision 1). `VirtualState::from_genesis` seeds the template's
+        // bits from `genesis.bits`, so a V2 network whose genesis sits at a harder target builds a
+        // first block declaring that target while `pre_pow_validation` demands the frozen one —
+        // `UnexpectedDifficulty` on a node's own work, before any peer is involved. Both shipped V2
+        // genesis blocks already carry it; this refuses the configuration that does not, which is
+        // the only way "V2 over an arbitrary base" can be offered honestly.
+        if let Some(attempt_work) = self.palw_attempt_work
+            && attempt_work.activation != ForkActivation::never()
+            && self.genesis.bits != attempt_work.pow_bits
+        {
+            return Err(PalwModeV2Error::Invalid(
+                "a ConsensusV2 network's genesis must carry the frozen target its blocks are priced at — seeded from \
+                 genesis, the first template would declare a difficulty this network's own rule refuses",
             ));
         }
 
@@ -2026,6 +2065,7 @@ impl Params {
             // not come from `bits`". A rule this changes silently would be two networks with one
             // name — the exact failure the id exists to make impossible.
             h.write(attempt_work.pow_bits.to_le_bytes());
+            h.write(attempt_work.ticket_bucket_log2.to_le_bytes());
         }
         if let Some(leak) = palw_inactivity_leak {
             h.write(b"palw_inactivity_leak");
@@ -3856,11 +3896,28 @@ pub fn palw_v2_params_with_classes_on_base(
     // held amount is the honest figure and C-08 (`held ≥ declared`) still passes by construction.
     let carried_collateral = crate::palw_fp_devnet_v3::palw_v2_collateral_for_claim_lifetime_v1(dearest_pwu_per_inference)
         .max(crate::config::premine::GENESIS_BOND_COLLATERAL_SOMPI);
+    // **And the registry has to be able to JUDGE the tiers this card funds** (ADR-0071
+    // Decision 3).
+    //
+    // Same shape as the collateral re-derivation directly above, one field over: the base assembly
+    // declared each genesis bond capable of the FLOOR, because the floor was the only class it
+    // registered. A panel seat is drawn only for classes its bond declared, and the genesis
+    // registry has zero slack by construction — `seat_count + 1` bonds with the executor excluded
+    // — so tiers registered here without extending the declarations would be tiers whose every
+    // claim fails to seat a panel and voids at `BindTimeout`. Funding cadence to a class no seat
+    // will judge is funding nothing, exactly as funding a bond that cannot carry the claim is.
+    //
+    // A genesis operator runs what the genesis says it runs; a stranger joining later declares for
+    // itself with `BondCapabilityDeclared`. This is the one moment capability can be assigned
+    // rather than claimed, for the same reason cadence can be.
+    let tier_class_ids: Vec<crate::Hash64> =
+        std::iter::once(entry.class_id).chain(dense.as_ref().map(|(_, dense_entry, _)| dense_entry.class_id)).collect();
     for genesis_object in bundle.genesis_objects.iter_mut() {
-        if let crate::palw_state_v2::PalwConsensusObjectV2::BondRegistered { collateral, .. } = genesis_object
-            && *collateral < carried_collateral
-        {
-            *collateral = carried_collateral;
+        if let crate::palw_state_v2::PalwConsensusObjectV2::BondRegistered { collateral, capable_classes, .. } = genesis_object {
+            if *collateral < carried_collateral {
+                *collateral = carried_collateral;
+            }
+            capable_classes.extend(tier_class_ids.iter().copied());
         }
     }
 
@@ -6372,6 +6429,7 @@ fn palw_rc_arm_phase1(mut params: Params) -> Params {
         activation: ForkActivation::always(),
         work_log2: crate::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2,
         pow_bits: crate::pow_layer0::PALW_V2_ATTEMPT_BITS,
+        ticket_bucket_log2: crate::palw_attempt_v2::PALW_TICKET_NONCE_BUCKET_LOG2,
     });
     // **ADR-0065 Decision 4, armed — the launch audit's other unattended fence.**
     //
@@ -6750,6 +6808,7 @@ pub const DEVNET_PARAMS: Params = Params {
         activation: ForkActivation::always(),
         work_log2: crate::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2,
         pow_bits: crate::pow_layer0::PALW_V2_ATTEMPT_BITS,
+        ticket_bucket_log2: crate::palw_attempt_v2::PALW_TICKET_NONCE_BUCKET_LOG2,
     }),
     palw_inactivity_leak: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
@@ -6791,6 +6850,59 @@ mod consensus_params_id_tests {
             dns.min_active_validators as u64 * dns.min_bond_amount_sompi,
             "the stake gate is the product; raise either floor and this must move with it"
         );
+    }
+
+    /// **Every class the shipped genesis funds is a class its own registry can judge**
+    /// (ADR-0071 Decision 3).
+    ///
+    /// Not a consensus gate, deliberately: ADR-0061 retired the "a genesis must seat a panel"
+    /// refusal because an under-seated genesis is a transitional state — the heartbeat carries
+    /// blocks, bonds arrive as transactions, and licensing begins when the seats do. A class no
+    /// seat declares is the same shape of transitional, and refusing it at genesis would re-impose
+    /// the rule that ADR retired.
+    ///
+    /// What is NOT transitional is shipping a card whose model tiers hold 97.8% of cadence and
+    /// whose registry declares none of them. That is a network which produces tier blocks whose
+    /// every claim voids at `BindTimeout`, forever, with the escrow burning each time — so it is
+    /// asserted here, over the real assembly, rather than left to be discovered on a live chain.
+    #[test]
+    fn the_shipped_genesis_can_seat_a_panel_for_every_class_it_registers() {
+        use crate::palw_mode_v2::PalwConsensusMode;
+        use crate::palw_state_v2::PalwConsensusObjectV2 as Obj;
+        let params = palw_rc_shipped_params();
+        let PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else { panic!("the RC is a V2 network") };
+
+        let classes: Vec<crate::Hash64> = bundle
+            .genesis_objects
+            .iter()
+            .filter_map(|o| match o {
+                Obj::ClassRegistered { class_id, .. } => Some(*class_id),
+                _ => None,
+            })
+            .collect();
+        assert!(classes.len() >= 2, "the shipped card registers the floor and at least one tier");
+
+        // `derive_panel_v2` seats one bond per operator and excludes the executor, so a class needs
+        // `PALW_V2_PANEL_SEATS + 1` distinct operators that declare it.
+        let needed = crate::palw_fp_devnet_v3::palw_v2_min_genesis_bonds_v1();
+        for class_id in classes {
+            let operators: std::collections::BTreeSet<crate::Hash64> = bundle
+                .genesis_objects
+                .iter()
+                .filter_map(|o| match o {
+                    Obj::BondRegistered { operator_pubkey, capable_classes, .. } if capable_classes.contains(&class_id) => {
+                        Some(crate::palw_state_v2::palw_operator_id_v2(operator_pubkey))
+                    }
+                    _ => None,
+                })
+                .collect();
+            assert!(
+                operators.len() >= needed,
+                "class {class_id} is funded but only {} distinct operators declare it — it needs {needed}, and short of that every \
+                 one of its claims voids at BindTimeout with its escrow burned",
+                operators.len()
+            );
+        }
     }
 
     /// **The 120 s cadence substitution is the identity on the network that already runs it.**
@@ -7264,6 +7376,7 @@ mod consensus_params_id_tests {
                 activation,
                 work_log2: crate::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2,
                 pow_bits: crate::pow_layer0::PALW_V2_ATTEMPT_BITS,
+                ticket_bucket_log2: crate::palw_attempt_v2::PALW_TICKET_NONCE_BUCKET_LOG2,
             });
             p
         };
@@ -7307,6 +7420,7 @@ mod consensus_params_id_tests {
                 activation: ForkActivation::new(1),
                 work_log2: crate::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2,
                 pow_bits: crate::pow_layer0::PALW_V2_ATTEMPT_BITS,
+                ticket_bucket_log2: crate::palw_attempt_v2::PALW_TICKET_NONCE_BUCKET_LOG2,
             });
         rc.validate_palw_v2().expect("the shipped V2 preset may re-price its attempt lane by configuration");
         assert!(rc.palw_attempt_work_open_at(2));
@@ -7316,6 +7430,7 @@ mod consensus_params_id_tests {
             activation: ForkActivation::always(),
             work_log2: crate::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2 + 1,
             pow_bits: crate::pow_layer0::PALW_V2_ATTEMPT_BITS,
+            ticket_bucket_log2: crate::palw_attempt_v2::PALW_TICKET_NONCE_BUCKET_LOG2,
         });
         assert!(wrong_work.validate_palw_v2().is_err(), "an attempt work the binary does not implement must not start");
 
@@ -7351,6 +7466,7 @@ mod consensus_params_id_tests {
             activation: ForkActivation::always(),
             work_log2: crate::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2,
             pow_bits: crate::pow_layer0::PALW_V2_ATTEMPT_BITS,
+            ticket_bucket_log2: crate::palw_attempt_v2::PALW_TICKET_NONCE_BUCKET_LOG2,
         });
         assert!(!hash_net.palw_attempt_work_open_at(0), "the constant is a V2 rule");
         assert!(hash_net.palw_attempt_work_fence().is_none());
@@ -8161,7 +8277,7 @@ mod consensus_params_id_tests {
                 // nodes must agree on before they agree on a block, so the id moves and old builds
                 // refuse this one at the handshake instead of diverging at a verdict.
                 // **Deploy is whole-fleet-together.**
-                "ce79c069497fc4fb4daf6d1f9d4ecd849f3f237d708fca5127917c3d833b3386",
+                "accaadce562c120da9d7dd972c46903dfa59a607d50f335af55e2c3bccfdfeb2",
             ),
             ("simnet", SIMNET_PARAMS, "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd"),
             // Re-pinned twice for ADR-0068 Phase 1: first when the drill network armed the
@@ -8181,7 +8297,7 @@ mod consensus_params_id_tests {
             // set; devnet keeps its deliberately widened `max_block_parents: 64`. testnet-11 is
             // untouched because its base already carried the whole set — which is the property
             // that made this safe to apply unconditionally.
-            ("devnet", DEVNET_PARAMS, "771371ea1c35fb6acbac2c74c49e094aea64044aa4e1297545a8087910f122a2"),
+            ("devnet", DEVNET_PARAMS, "b6140f2efe846c44be6df9ef3ff50f992e50a313bc685421f69de7316a774eb8"),
         ]
         .into_iter()
         .filter_map(|(name, params, expected)| {

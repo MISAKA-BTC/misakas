@@ -138,17 +138,39 @@ inference does not produce.
 **Decision.** Two changes that must ship together:
 
 1. Add a **coarse nonce bucket** to `palw_job_anchor_v1`: include `nonce >> k`, so one inference
-   covers exactly `2^k` nonces rather than an unbounded sweep. `k` is a network constant on the
-   bundle, hence in `palw_ruleset_id_v2`, hence a value two nodes cannot disagree about.
-2. **Decouple `palw_pwu_v1` from `palw_expected_attempts_v1`**: a block's pwu becomes
-   `2^k × pwu_per_inference` — the work the producer actually had to do to hold that ticket — rather
-   than `expected_attempts(target) × pwu_per_inference`, which is the work the *difficulty* implies.
+   covers exactly `2^k` nonces rather than an unbounded sweep. `k` is a network constant carried by
+   the attempt-work fence, hence in `consensus_params_id`, hence a value two nodes cannot disagree
+   about.
+2. **Reprice `palw_pwu_v1` in executions**: a block's pwu becomes
+   `max(1, expected_attempts(target) >> k) × pwu_per_inference`.
+
+**AMENDED at implementation — the formula in this ADR's first draft was wrong.** It said
+`pwu = 2^k × pwu_per_inference`, which is the work the bucket *covers*, not the work the search
+*required*. The producer runs one execution per bucket and needs `expected_attempts / 2^k` buckets
+on average, so the executions a block cost are the tries divided by the bucket, and the draft's
+formula makes pwu a per-class constant — a class a thousand times harder would weigh exactly the
+same, which deletes the quantity per-class difficulty exists to express. The corrected form still
+removes what the premise objects to: before the bucket, the divisor was effectively `2^64` (one
+execution served an unbounded sweep) while pwu claimed the whole try count, over-stating a block's
+LLM cost by exactly the difficulty.
+
+Floored at one execution, because a block always carries the one inference it commits to; rounding
+a cheap class's work to zero would make its blocks weightless and its share unearnable.
 
 `k` is the whole design surface. `k = 0` is one inference per nonce, which is the honest extreme and
-almost certainly unaffordable. `k = 22` is today's behaviour to within a rounding. The number is an
-economic choice about how much hash the network is willing to let one inference cover, and it should
-be picked from a measurement of inference cost against hash cost on the shipped classes, not from
-this document.
+almost certainly unaffordable. **`k = 22` ships**, and it is today's behaviour made enforceable
+rather than a change to it: `kaspad`'s producer already swept `NONCES_PER_TEMPLATE = 4,000,000`
+against one template, and that constant is node-local, so it bounded honest producers and nobody
+else. At `k = 22` an honest sweep fills exactly one bucket and its economics do not move, while a
+producer that swept 2^40 against one execution now builds an anchor no verifier derives. Lowering it
+is an economic measurement of inference cost against hash cost on the registered classes, and it
+moves by activation like every other rule here.
+
+One consequence is worth stating rather than discovering: at today's shipped targets every class's
+expected tries sit *below* one bucket, so pwu is `pwu_per_inference` for all of them and per-class
+difficulty does not differentiate weight until a class needs more than `2^k` tries per block. That
+is not a loss of information — it is the true statement that, at these difficulties, every block
+costs one inference.
 
 **Interaction with Decision 1, stated because it is the reason these are one ADR.** Decision 1
 removes `expected_attempts` from the *header*'s price; Decision 2 removes it from the *pwu*.
@@ -187,10 +209,49 @@ activation. It is named here rather than patched because a capability the chain 
 cannot be filtered on, and inventing the record is a design decision about who attests to holding
 an artifact and what it costs to lie.
 
-**What it must not become.** A capability declaration is a claim, not a proof; the thing that makes
-it expensive to lie is that a declared seat which cannot serve is a seat that gets convicted. The
-declaration therefore has to be *binding on the declarer*, or it is a permission list with extra
-steps — and a permission list is the central party ADR-0067 exists to remove.
+**AMENDED at implementation, on two points.**
+
+*A node's own registration declares nothing.* At registration a node has proved it holds
+collateral; it has proved nothing about holding a 33 GiB artifact, and it has not yet read which
+classes the chain registers. Declaring there would be volunteering for duty it cannot perform, and
+the duty accounting convicts the seats the draw names. So `kaspad`'s self-registration ships an
+empty set and the operator declares separately — which is also what makes withdrawal work, since an
+operator who deletes an artifact must be able to stop being seated for it rather than choose between
+keeping the disk and being convicted.
+
+*Genesis is where capability is assigned rather than claimed*, for the same reason cadence is. The
+genesis registry has zero slack by construction (`seat_count + 1` bonds, executor excluded), so a
+genesis whose bonds declared nothing would be a network where every claim voids at `BindTimeout`
+with its escrow burned. Genesis bonds therefore declare the classes the genesis registers, and the
+class-registering assembly extends the declarations at the same moment it funds the tiers — the same
+shape as the collateral re-derivation that already sits one line above it.
+
+*And it is not a consensus gate.* ADR-0061 retired the "a genesis must seat a panel" refusal because
+an under-seated genesis is transitional: the heartbeat carries blocks, bonds arrive as transactions,
+licensing begins when the seats do. A class no seat declares is transitional in exactly the same
+way, so refusing it at genesis would re-impose the rule that ADR retired. What is asserted instead
+is a test over the real shipped assembly: every class the card funds has `seat_count + 1` distinct
+operators declaring it.
+
+**What it is not, stated because this ADR's first draft got it wrong.** A capability declaration is
+a claim, not a proof, and **lying about it is not punished on this chain today.** The draft said the
+thing making it expensive to lie is that "a declared seat which cannot serve is a seat that gets
+convicted". That is false here: ADR-0065 D4 turns an `Unavailable` receipt into an abstention rather
+than a conviction, and it is armed on every shipped preset — because silence is not checkable (a
+seat that says nothing is indistinguishable from a seat that was never asked), a doctrine this
+project reached by measurement and does not intend to reverse.
+
+So what a false declaration actually costs is nothing directly, and it costs the *network* a seat
+that can only abstain. What bounds the damage is the redraw — a panel that concludes nothing is
+revived once and binds a second — and what bounds the incentive is that a seat which never concludes
+earns nothing for sitting. That is weaker than "binding on the declarer", and the honest statement
+is that this Decision makes the draw **correct** (it stops seating validators who provably cannot run
+the class) without yet making the declaration **costly**.
+
+Making it costly is a separate question and it runs straight into the silence doctrine: any rule
+that punishes a declared seat for not answering punishes an offline honest operator identically. It
+is named here as the open item rather than assumed away — and it is the reason this Decision is not,
+by itself, a defence against a registrant who declares everything.
 
 ## 6. Considered and rejected
 
@@ -212,16 +273,28 @@ steps — and a permission list is the central party ADR-0067 exists to remove.
 
 1. **No V2 header's price is read from `bits`.** The substitution is on the algo id in
    `pow/src/lib.rs`, `expected_bits` is frozen in `pre_pow_validation`, and the fence declares the
-   same constant `validate_palw_v2` demands.
+   same constant `validate_palw_v2` demands. **Every producer of a header reads that same source**
+   — the virtual template, the test harness's builder, and the genesis. This one is not a
+   formality: the freeze arrived with three writers still computing `bits` from the difficulty
+   window, so a node built blocks its own header processor rejected with `UnexpectedDifficulty` on
+   its own work. The third writer was `VirtualState::from_genesis`, which is why a V2 network's
+   genesis must itself carry the frozen target and why `validate_palw_v2` now refuses one that does
+   not.
 2. **An idle class can enter, and cannot enter cheaply.** A class priced above every incumbent
    converges to the incumbent price and stops there; a class already below it does not move; and
    `Σ expected = Σ observed` is untouched for every class that produced. Asserted as the three
    cases together, because a rule that only checks the first is the unbounded walk again.
 3. **One inference covers exactly `2^k` nonces.** Two attempts whose nonces differ above bit `k`
-   must have different job anchors; two differing below it must share one.
-4. **pwu is difficulty-free.** `palw_pwu_v1`'s output is invariant under the class target.
-5. **An undeclared bond is never seated**, and a declared-but-silent seat is convicted rather than
-   ignored — the property that makes the declaration binding.
+   must have different job anchors; two differing below it must share one. Asserted in both
+   directions, because a test that only checks the first passes for an anchor that ignores the
+   nonce entirely — which is the state this Decision found.
+4. **pwu counts executions.** Below the bucket a tighter target buys no extra pwu; above it, eight
+   times the tries is eight times the pwu. Asserted as both, so a derivation that dropped the
+   difficulty term altogether cannot pass.
+5. **An undeclared bond is never seated**, asserted as a difference — the same registry, anchor and
+   claim, with only the declarations moved, seats a full panel in one case and fails closed in the
+   other. (The companion property a first draft asserted here — that a declared-but-silent seat is
+   convicted — is NOT true on this chain and must not be written as if it were; see §5.)
 6. **Activation, not re-genesis.** Each Decision moves `palw_ruleset_id_v2`; none moves a genesis
    hash.
 
@@ -230,10 +303,30 @@ steps — and a permission list is the central party ADR-0067 exists to remove.
 **Decision 1 and Decision 1a.** The attempt lane's PoW target is substituted on the algo id in
 `consensus/pow/src/lib.rs` (the one place every PoW path goes through, so the pruning proof and
 trusted import cannot price the lane by forgetting to); `pre_pow_validation` freezes `expected_bits`
-so the window does not require a `bits` the PoW check will not use; `PalwAttemptWorkV1::pow_bits`
+so the window does not require a `bits` the PoW check will not use; the virtual template and the
+test harness's header builder read the same fence, and `validate_palw_v2` refuses a V2 network whose
+GENESIS does not carry the frozen target — `VirtualState::from_genesis` seeds the first template
+from it, so a mismatched genesis is a chain that rejects its own first block; `PalwAttemptWorkV1::pow_bits`
 carries the constant into `consensus_params_id` and `validate_palw_v2` refuses a fence that names a
 value this binary does not substitute. `converge_idle_target_v1` closes the `observed == 0` blind
 spot. Both V2 fingerprints move, which is what a rule change is supposed to do.
 
-§4 and §5 remain PROPOSED. §2 is the part of the same audit that had already shipped when this was
+**Decision 2.** `palw_job_anchor_v1` takes the nonce bucket, `palw_nonce_bucket_v1` is its one
+spelling, `PALW_TICKET_NONCE_BUCKET_LOG2 = 22` is the constant, `PalwAttemptWorkV1::ticket_bucket_log2`
+carries it into the fingerprint under the same lock as the other two prices, `palw_pwu_v1` counts
+executions, and `kaspad`'s producer derives its sweep from the same constant so an honest search
+uses exactly the bucket it paid for. The verifier reads the bucket off the accepted header, beside
+the four facts `job_anchor_for_claim` already read there.
+
+**Decision 3.** `PalwBondStateV2::capable_classes`, carried by `BondRegistered` and covered by its
+signature; `BondCapabilityDeclared` as the amendment object, admitted to the ride list on the same
+signature-present rule as retirement and authenticated against the bond's own registered key at
+acceptance; `palw_bond_may_judge_class_v2` as the one predicate; the filter in
+`derive_panel_v2_with_maturity`; genesis bonds declaring the classes their genesis registers, in
+both the base assembly and the tier-funding one. `PALW_STATE_V2_VERSION` 13 → 14, with both golden
+roots and the ADR-0043 second implementation moved together, per that test's own rule. The operator
+path is `misaka bond capability`, built the way `misaka bond retire` is — same ownership guard, same
+carrier, same dry-run — because an object an operator cannot send is a rule that only genesis obeys.
+
+All three Decisions are implemented. §2 is the part of the same audit that had already shipped when this was
 written, listed so the two are not confused.

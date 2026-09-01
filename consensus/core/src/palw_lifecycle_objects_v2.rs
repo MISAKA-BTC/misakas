@@ -132,6 +132,15 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         // Whether that signature is the bond's own is the acceptance layer's, where the registry
         // is in hand — the same split `ClassRegistered` uses two arms below.
         PalwConsensusObjectV2::BondRetireRequested { signature, .. } if !signature.is_empty() => Ok(()),
+        // **A capability declaration rides, and carries its own authorisation** (ADR-0071
+        // Decision 3). Same split as retirement: this layer is stateless, so it checks that a
+        // signature is PRESENT; whether it is the bond's own is the acceptance layer's, where the
+        // registry is in hand. Without one, a relayer could volunteer any bond — a public outpoint
+        // — for duty on any class, and the duty accounting convicts the seats the draw names.
+        PalwConsensusObjectV2::BondCapabilityDeclared { signature, .. } if !signature.is_empty() => Ok(()),
+        PalwConsensusObjectV2::BondCapabilityDeclared { .. } => Err(
+            "a capability declaration must carry the owner signature that authorizes it — a bond key is a public outpoint, so without one anyone could volunteer anyone's collateral for duty",
+        ),
         PalwConsensusObjectV2::BondRetireRequested { .. } => Err(
             "a bond retirement must carry the owner signature that authorizes it — a bond key is a public outpoint, so without one anyone could retire anyone's bond",
         ),
@@ -247,16 +256,23 @@ pub fn palw_bond_registration_signed_key_v2(bond: &crate::palw_state_v2::PalwBon
 /// an output of its own carrier, and only a carrier knows its own id.
 pub fn palw_bond_registration_keyed_to_its_carrier_v2(carrier: TransactionId, object: PalwConsensusObjectV2) -> PalwConsensusObjectV2 {
     match object {
-        PalwConsensusObjectV2::BondRegistered { bond, pubkey, operator_pubkey, collateral, payout_payload, signature } => {
-            PalwConsensusObjectV2::BondRegistered {
-                bond: crate::palw_state_v2::PalwBondKeyV2(crate::tx::TransactionOutpoint::new(carrier, bond.0.index)),
-                pubkey,
-                operator_pubkey,
-                collateral,
-                payout_payload,
-                signature,
-            }
-        }
+        PalwConsensusObjectV2::BondRegistered {
+            bond,
+            pubkey,
+            operator_pubkey,
+            collateral,
+            payout_payload,
+            capable_classes,
+            signature,
+        } => PalwConsensusObjectV2::BondRegistered {
+            bond: crate::palw_state_v2::PalwBondKeyV2(crate::tx::TransactionOutpoint::new(carrier, bond.0.index)),
+            pubkey,
+            operator_pubkey,
+            collateral,
+            payout_payload,
+            capable_classes,
+            signature,
+        },
         other => other,
     }
 }
@@ -366,6 +382,7 @@ mod tests {
                 operator_pubkey: vec![21; 8],
                 collateral: 500_000,
                 payout_payload: payee,
+                capable_classes: Default::default(),
                 signature: vec![1; 8],
             };
             let payload = borsh::to_vec(&crate::palw_lifecycle_objects_v2::PalwLifecycleTxPayloadV2 {
@@ -416,6 +433,7 @@ mod tests {
             operator_pubkey: vec![21; 8],
             collateral: 500_000,
             payout_payload: payee,
+            capable_classes: Default::default(),
             signature: vec![1; 8],
         };
         let payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object })
@@ -484,6 +502,7 @@ mod tests {
             operator_pubkey: vec![21; 8],
             collateral,
             payout_payload: payee,
+            capable_classes: Default::default(),
             signature: vec![1; 8],
         };
 
@@ -521,6 +540,7 @@ mod tests {
             operator_pubkey: vec![21; 8],
             collateral: 500_000,
             payout_payload: h64(0x9A11),
+            capable_classes: Default::default(),
             signature: Vec::new(),
         };
         let e = palw_lifecycle_object_may_ride_v2(&object).unwrap_err();
@@ -625,6 +645,7 @@ mod tests {
             // The number that would be free: nothing on this path locks a UTXO behind it.
             collateral: 1_000_000_000_000,
             payout_payload: h64(0x9A11),
+            capable_classes: Default::default(),
             signature: Vec::new(),
         };
         // A class registration with NO admission material: still refused, because there is
@@ -778,6 +799,7 @@ mod tests {
                     operator_pubkey: vec![5u8; 8],
                     collateral: 1_000_000,
                     payout_payload: h64(0x1234),
+                    capable_classes: Default::default(),
                     signature: Vec::new(),
                 },
             })

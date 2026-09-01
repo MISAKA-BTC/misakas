@@ -227,14 +227,19 @@ pub trait PalwExecutionBackendV1: Send + Sync {
     /// a family with no canonical job at all, and a caller that gets it must decline to judge
     /// rather than fall back to the anchor named inside the material — that is the thing under
     /// test.
+    /// `nonce_bucket` is `palw_nonce_bucket_v1(header.nonce)` — the execution the block's nonce was
+    /// supposed to be paid for by (ADR-0071 Decision 2). A verifier reads it off the accepted
+    /// header it already fetched, so it is a fact about the claim like the other four and not
+    /// something the material under judgement gets to say.
     fn job_anchor_v1(
         &self,
         network_domain: Hash64,
         pre_pow_hash: Hash64,
         class_id: Hash64,
         executor_bond: &crate::tx::TransactionOutpoint,
+        nonce_bucket: u64,
     ) -> Option<Hash64> {
-        Some(crate::palw_attempt_v2::palw_job_anchor_v1(network_domain, pre_pow_hash, class_id, executor_bond))
+        Some(crate::palw_attempt_v2::palw_job_anchor_v1(network_domain, pre_pow_hash, class_id, executor_bond, nonce_bucket))
     }
 
     /// **The weight rows that refutation reads — exactly those, proven against the class root.**

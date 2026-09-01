@@ -14,7 +14,6 @@ use kaspa_consensus_core::BlueWorkType;
 use kaspa_consensus_core::dns_finality::{ActiveBondView, BondStatus, STAKE_ATTESTATION_SIG_LEN, StakeBondRecord};
 use kaspa_consensus_core::header::Header;
 use kaspa_consensus_core::palw_block_commitment::{PALW_BLOCK_COMMITMENT_VERSION_V1, PalwBlockCommitmentV1};
-use kaspa_consensus_core::palw_pwu::palw_expected_attempts_v1;
 use kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_LLM;
 use kaspa_consensus_core::tx::TransactionOutpoint;
 use kaspa_hashes::{Hash64, ZERO_HASH64};
@@ -62,8 +61,11 @@ fn commitment(op: TransactionOutpoint, facts: PalwAdmissionClassFacts) -> PalwBl
         executor_bond_outpoint: op,
         trace_root: Hash64::from_u64_word(4),
         output_root: Hash64::from_u64_word(5),
-        // The one legal value: `expected_attempts(target) × pwu_per_inference`.
-        pwu_claim: palw_expected_attempts_v1(facts.class_target).saturating_mul(facts.pwu_per_inference),
+        // The one legal value, through the derivation itself rather than a restatement of it —
+        // which is how this fixture stopped reaching the lottery it is named for when ADR-0071
+        // Decision 2 repriced pwu in EXECUTIONS: the local copy still claimed the try count, so
+        // `check_pwu_claim_v1` refused first and the ticket was never drawn.
+        pwu_claim: kaspa_consensus_core::palw_pwu::palw_pwu_v1(facts.class_target, facts.pwu_per_inference),
         signature: vec![0x5A; STAKE_ATTESTATION_SIG_LEN],
     }
 }

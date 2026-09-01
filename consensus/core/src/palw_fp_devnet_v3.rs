@@ -572,6 +572,14 @@ pub fn palw_fp_devnet_bundle_v3(
             operator_pubkey: b.operator_pubkey,
             collateral: genesis_collateral,
             payout_payload: b.payout_payload,
+            // **Every genesis bond judges every class this genesis registers** (ADR-0071
+            // Decision 3). The registry has zero slack by construction — `seat_count + 1` bonds
+            // and the draw excludes the executor — so a genesis seat that declared nothing would
+            // make the first claim unpanellable and the chain would never leave `safe_frontier`
+            // 0. Here that is exactly the base class; a bundle that adds the model tiers extends
+            // this set at the same time it registers them, and `verify_palw_genesis_v2` refuses a
+            // registry where any registered class cannot reach quorum.
+            capable_classes: std::collections::BTreeSet::from([base_class_id]),
             // Genesis bonds carry no signature: `verify_palw_genesis_v2` establishes the whole
             // registry as one artifact, and there is no chain yet for a signature to be replayed
             // across. The field exists for the post-genesis path, where the carrier proves the

@@ -142,8 +142,22 @@ pub fn palw_expected_attempts_v1(class_target: u128) -> u64 {
 /// here would make a very hard class weigh *nothing* — the one arithmetic accident that turns a
 /// difficulty increase into a weight collapse.
 pub fn palw_pwu_v1(class_target: u128, pwu_per_inference: u64) -> u64 {
-    let attempts = palw_expected_attempts_v1(class_target) as u128;
-    let product = attempts.saturating_mul(pwu_per_inference as u128);
+    // **The EXECUTIONS the search required, not the tries it made** (ADR-0071 Decision 2).
+    //
+    // `palw_expected_attempts_v1` counts lottery tries. One execution covers
+    // `2^PALW_TICKET_NONCE_BUCKET_LOG2` of them (the job anchor's bucket), so the number of
+    // inferences a block's ticket actually cost is the tries divided by the bucket. Before the
+    // bucket existed this divisor was effectively `2^64` — one execution served an unbounded sweep
+    // — and pwu claimed the whole try count as work, over-stating a block's LLM cost by exactly the
+    // difficulty. That is the quantity ADR-0071's premise says may not price the chain.
+    //
+    // Floored at one execution, because a block always carries the one inference it commits to:
+    // rounding a cheap class's work to zero would make its blocks weightless and its share
+    // unearnable, which is the "difficulty increase turns into a weight collapse" accident this
+    // function's saturation already exists to refuse, arriving from the other side.
+    let attempts = palw_expected_attempts_v1(class_target);
+    let executions = (attempts >> crate::palw_attempt_v2::PALW_TICKET_NONCE_BUCKET_LOG2).max(1) as u128;
+    let product = executions.saturating_mul(pwu_per_inference as u128);
     product.min(u64::MAX as u128) as u64
 }
 
@@ -202,8 +216,12 @@ mod tests {
     fn pwu_is_the_product_and_saturates() {
         // Easiest target: pwu IS the per-inference cost.
         assert_eq!(palw_pwu_v1(u128::MAX, 7), 7);
-        // Half the space: two inferences' worth.
-        assert_eq!(palw_pwu_v1(u128::MAX / 2, 7), 14);
+        // **Half the space is still ONE inference's worth**, and that is the ADR-0071 Decision 2
+        // correction. Two expected TRIES both fall inside one nonce bucket, so the search that
+        // found the ticket ran one execution — the old `14` here priced a block at the tries it
+        // made rather than the executions it required, which over-stated a block's LLM cost by
+        // exactly the difficulty.
+        assert_eq!(palw_pwu_v1(u128::MAX / 2, 7), 7);
         // Saturation, not wraparound.
         assert_eq!(palw_pwu_v1(0, u64::MAX), u64::MAX);
         assert_eq!(palw_pwu_v1(u128::MAX / 2, u64::MAX), u64::MAX);
@@ -235,19 +253,29 @@ mod tests {
     /// count is exact and the relations are arithmetic rather than approximate.
     #[test]
     fn pwu_separates_cost_from_difficulty() {
-        let easy = u128::MAX >> 10; // 1_024 expected attempts
-        let hard = u128::MAX >> 13; // 8_192 expected attempts
-        assert_eq!(palw_expected_attempts_v1(easy), 1_024);
-        assert_eq!(palw_expected_attempts_v1(hard), 8_192);
+        // **Both targets are chosen ABOVE the nonce bucket**, because that is where difficulty and
+        // work stop being the same statement. Below it a tighter target buys nothing: one
+        // execution already covers `2^PALW_TICKET_NONCE_BUCKET_LOG2` tries, so eight times the
+        // tries inside one bucket is still one inference. The scaling this test is named for is
+        // real, and it starts where the bucket ends.
+        let easy = u128::MAX >> 24; // 2^24 expected tries = 4 executions
+        let hard = u128::MAX >> 27; // 2^27 expected tries = 32 executions
+        assert_eq!(palw_expected_attempts_v1(easy), 1 << 24);
+        assert_eq!(palw_expected_attempts_v1(hard), 1 << 27);
+        assert_eq!(palw_pwu_v1(easy, 1), 1 << (24 - crate::palw_attempt_v2::PALW_TICKET_NONCE_BUCKET_LOG2));
 
         // Cost scales pwu at a fixed target.
         assert_eq!(palw_pwu_v1(easy, 1_000), 10 * palw_pwu_v1(easy, 100));
-        // Difficulty scales pwu at a fixed cost — 8x tighter target, 8x the work.
+        // Difficulty scales pwu at a fixed cost — 8x tighter target, 8x the executions.
         assert_eq!(palw_pwu_v1(hard, 100), 8 * palw_pwu_v1(easy, 100));
         // A cheap class cannot reach an expensive one's per-block weight by difficulty alone
         // unless it actually spends the inferences; that it CAN by spending them is why
         // cross-class fairness is the epoch share cap's job, never pwu magnitude's.
         assert_eq!(palw_pwu_v1(hard, 100), palw_pwu_v1(easy, 800));
+
+        // …and INSIDE the bucket the two are deliberately indistinguishable, which is the whole
+        // finding: eight times the tries, the same one execution, the same pwu.
+        assert_eq!(palw_pwu_v1(u128::MAX >> 10, 100), palw_pwu_v1(u128::MAX >> 13, 100));
     }
 }
 

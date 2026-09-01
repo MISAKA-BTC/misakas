@@ -615,8 +615,11 @@ mod tests {
         // anchor — which is what makes the check above bite at all.
         let bond = kaspa_consensus_core::tx::TransactionOutpoint::new(Hash64::from_u64_word(9), 0);
         let net = Hash64::from_u64_word(0x7E57);
-        let a = backend.job_anchor_v1(net, Hash64::from_u64_word(1), Hash64::from_u64_word(0xC), &bond).expect("the floor has a job");
-        let b = backend.job_anchor_v1(net, Hash64::from_u64_word(2), Hash64::from_u64_word(0xC), &bond).expect("the floor has a job");
+        // Same bucket for both, so what this compares is the pre-pow hash and not the bucket.
+        let a =
+            backend.job_anchor_v1(net, Hash64::from_u64_word(1), Hash64::from_u64_word(0xC), &bond, 0).expect("the floor has a job");
+        let b =
+            backend.job_anchor_v1(net, Hash64::from_u64_word(2), Hash64::from_u64_word(0xC), &bond, 0).expect("the floor has a job");
         assert_ne!(a, b, "two blocks must ask different questions, or re-mining is free again");
     }
 
@@ -904,6 +907,7 @@ mod end_to_end_tests {
                 operator_pubkey: vec![21; 8],
                 collateral: 1_000,
                 payout_payload: h(0x9A11),
+                capable_classes: Default::default(),
                 signature: Vec::new(),
             },
         ];

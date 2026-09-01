@@ -224,6 +224,7 @@ mod tests {
                 operator_pubkey: op_key(0x21),
                 collateral: 100_000,
                 payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+                capable_classes: Default::default(),
                 signature: Vec::new(),
             },
         ]

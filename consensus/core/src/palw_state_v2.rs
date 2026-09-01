@@ -201,7 +201,7 @@ use std::collections::{BTreeMap, BTreeSet};
 ///
 /// The claim record gains a field, so unlike 12 this is not root-schema-neutral: an old build
 /// cannot decode this state at all, which is the honest failure and the reason the number moves.
-pub const PALW_STATE_V2_VERSION: u16 = 13;
+pub const PALW_STATE_V2_VERSION: u16 = 14;
 
 pub const PALW_STATE_V2_DOMAIN_OPERATOR_ID: &[u8] = b"misaka-palw/state-v2/operator-id/v1";
 
@@ -251,6 +251,7 @@ pub fn palw_bond_state_from_registration_v2(
     collateral: u64,
     payout_payload: Hash64,
     registered_daa: u64,
+    capable_classes: std::collections::BTreeSet<Hash64>,
 ) -> PalwBondStateV2 {
     PalwBondStateV2 {
         pubkey: pubkey.to_vec(),
@@ -260,7 +261,16 @@ pub fn palw_bond_state_from_registration_v2(
         status: PalwBondStatusV2::Active,
         registered_daa,
         payout_payload,
+        capable_classes,
     }
+}
+
+/// **Whether this bond may be seated to judge `class_id`** (ADR-0071 Decision 3).
+///
+/// The one predicate, so the RPC that reports eligibility and the sortition that decides it cannot
+/// answer differently — the same reason `palw_bond_may_take_work_v2` exists one field over.
+pub fn palw_bond_may_judge_class_v2(bond: &PalwBondStateV2, class_id: &Hash64) -> bool {
+    bond.capable_classes.contains(class_id)
 }
 
 pub fn palw_operator_id_v2(operator_pubkey: &[u8]) -> Hash64 {
@@ -1029,6 +1039,26 @@ pub struct PalwBondStateV2 {
     /// conditions consensus never classified, on a chain whose whole input policy is PQ-only.
     /// With a payload there is exactly one script it can become.
     pub payout_payload: Hash64,
+    /// **The classes this bond has staked its collateral on being able to run** (ADR-0071
+    /// Decision 3).
+    ///
+    /// A panel seat's job is to re-execute the claim under judgement. Drawing a seat that holds
+    /// none of the class's artifact seats a validator who can only abstain, and a claim whose panel
+    /// cannot reach quorum voids — so a draw blind to capability is a draw that can only license
+    /// the classes every node happens to hold. That was every class while the floor held all the
+    /// weight; ADR-0068 gave the model tiers 97.8% of cadence, and a 33 GiB artifact is not
+    /// something a seat holds by default.
+    ///
+    /// **Empty is EXCLUDED, never defaulted** — the rule the V1 job panel already states for
+    /// `runtime_class_id`: "a validator that never declared one cannot be assigned to replay a
+    /// class it may not have, and assigning it anyway would manufacture no-shows against honest
+    /// operators." The duty accounting charges exactly the seats the draw names, so a permissive
+    /// default converts an operator's silence into its conviction.
+    ///
+    /// A declaration is a claim, not a proof. What makes it expensive to lie is that a declared
+    /// seat which cannot serve is a seat that gets convicted — the declaration is binding on the
+    /// declarer, which is what keeps this a stake and not a permission list.
+    pub capable_classes: std::collections::BTreeSet<Hash64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
@@ -1566,6 +1596,7 @@ pub fn palw_bond_registration_message_v2(
     operator_pubkey: &[u8],
     collateral: u64,
     payout_payload: &Hash64,
+    capable_classes: &std::collections::BTreeSet<Hash64>,
 ) -> Hash64 {
     let mut state = keyed(PALW_BOND_REGISTRATION_V2_DOMAIN);
     state.update(network_domain.as_byte_slice());
@@ -1576,6 +1607,37 @@ pub fn palw_bond_registration_message_v2(
     state.update(operator_pubkey);
     state.update(&collateral.to_le_bytes());
     state.update(payout_payload.as_byte_slice());
+    // **The declaration is signed, or it is a field anyone may edit in flight.** A relayer that
+    // could add a class to somebody else's bond would be volunteering that operator for duty it
+    // never accepted — and the duty accounting convicts the seats the draw names.
+    state.update(&(capable_classes.len() as u64).to_le_bytes());
+    for class_id in capable_classes {
+        state.update(class_id.as_byte_slice());
+    }
+    finish(state)
+}
+
+pub const PALW_BOND_CAPABILITY_V2_MLDSA87_CONTEXT: &[u8] = b"misaka-palw/bond-capability-v2/mldsa87/v1";
+pub const PALW_BOND_CAPABILITY_V2_DOMAIN: &[u8] = b"misaka-palw/bond-capability-v2/message/v1";
+
+/// What a bond's owner signs to change which classes it will judge (ADR-0071 Decision 3).
+///
+/// A whole-set replacement rather than an add/remove, because the set is what the draw reads and a
+/// diff has an ordering problem the chain would have to arbitrate. Signed over the network, the
+/// bond and the new set: without the set in the message, the object's authorisation would carry
+/// over to a different declaration.
+pub fn palw_bond_capability_message_v2(
+    network_domain: Hash64,
+    bond: &PalwBondKeyV2,
+    capable_classes: &std::collections::BTreeSet<Hash64>,
+) -> Hash64 {
+    let mut state = keyed(PALW_BOND_CAPABILITY_V2_DOMAIN);
+    state.update(network_domain.as_byte_slice());
+    state.update(&borsh::to_vec(bond).expect("a bond key is borsh-serializable"));
+    state.update(&(capable_classes.len() as u64).to_le_bytes());
+    for class_id in capable_classes {
+        state.update(class_id.as_byte_slice());
+    }
     finish(state)
 }
 
@@ -1692,6 +1754,11 @@ pub enum PalwConsensusObjectV2 {
         /// refused: a bond that names no payee is a bond whose every reward would be minted to a
         /// script nobody can open, and the place to find that out is registration.
         payout_payload: Hash64,
+        /// **The classes this registrant stakes on being able to run** (ADR-0071 Decision 3).
+        /// May be empty — a bond that judges nothing is a legal bond, it simply never draws a
+        /// seat. See [`PalwBondStateV2::capable_classes`] for why empty is excluded and not
+        /// defaulted, and [`PalwConsensusObjectV2::BondCapabilityDeclared`] for how it changes.
+        capable_classes: std::collections::BTreeSet<Hash64>,
         /// The registrant's ML-DSA-87 over [`palw_bond_registration_message_v2`], verified against
         /// the `pubkey` this registration declares.
         ///
@@ -1700,6 +1767,21 @@ pub enum PalwConsensusObjectV2 {
         /// the carrier cannot prove is that the party registering holds the key it names: anyone
         /// can pay to somebody else's script. Without this, a stranger could pad the registry with
         /// bonds under keys nobody controls, and a registry is a list of who may be seated.
+        signature: Vec<u8>,
+    },
+    /// **A bond changes which classes it will judge** (ADR-0071 Decision 3).
+    ///
+    /// A whole-set replacement, not a diff: the set is what the draw reads, and a diff has an
+    /// ordering problem the chain would have to arbitrate. Withdrawing capability is as legitimate
+    /// as declaring it — an operator that deletes a 33 GiB artifact should be able to stop being
+    /// seated for it, and the alternative is an operator who must either keep the disk or be
+    /// convicted for no-shows.
+    BondCapabilityDeclared {
+        bond: PalwBondKeyV2,
+        capable_classes: std::collections::BTreeSet<Hash64>,
+        /// The owner's ML-DSA-87 over [`palw_bond_capability_message_v2`], verified against the
+        /// bond's own registered `pubkey`. Without it a relayer could volunteer somebody else's
+        /// collateral for duty the operator never accepted.
         signature: Vec<u8>,
     },
     BondRetireRequested {
@@ -4855,7 +4937,15 @@ fn apply_object(
     object: &PalwConsensusObjectV2,
 ) -> Result<(), PalwStateV2Error> {
     match object {
-        PalwConsensusObjectV2::BondRegistered { bond, pubkey, operator_pubkey, collateral, payout_payload, signature: _ } => {
+        PalwConsensusObjectV2::BondRegistered {
+            bond,
+            pubkey,
+            operator_pubkey,
+            collateral,
+            payout_payload,
+            capable_classes,
+            signature: _,
+        } => {
             if builder.state.bonds.contains_key(bond) {
                 return Err(PalwStateV2Error::DuplicateBond(*bond));
             }
@@ -4886,8 +4976,28 @@ fn apply_object(
             }
             builder.write_bond(
                 *bond,
-                Some(palw_bond_state_from_registration_v2(pubkey, operator_pubkey, *collateral, *payout_payload, ctx.daa_score)),
+                Some(palw_bond_state_from_registration_v2(
+                    pubkey,
+                    operator_pubkey,
+                    *collateral,
+                    *payout_payload,
+                    ctx.daa_score,
+                    capable_classes.clone(),
+                )),
             );
+        }
+        PalwConsensusObjectV2::BondCapabilityDeclared { bond, capable_classes, .. } => {
+            let record = builder.state.bonds.get(bond).ok_or(PalwStateV2Error::MissingBond(*bond))?.clone();
+            // **Only classes this chain has actually registered.** A declaration naming an
+            // unregistered id is either a typo or a bet on a future registration, and the draw
+            // would carry it silently until that id appeared — at which point a seat would be
+            // volunteered for a class its operator declared before the class existed.
+            if let Some(unknown) = capable_classes.iter().find(|id| !builder.state.classes.contains_key(id)) {
+                return Err(PalwStateV2Error::MissingClass(*unknown));
+            }
+            let mut declared = record;
+            declared.capable_classes = capable_classes.clone();
+            builder.write_bond(*bond, Some(declared));
         }
         PalwConsensusObjectV2::BondRetireRequested { bond, .. } => {
             let record = builder.state.bonds.get(bond).ok_or(PalwStateV2Error::MissingBond(*bond))?.clone();
@@ -6300,6 +6410,7 @@ pub(crate) mod tests {
             status: PalwBondStatusV2::Active,
             registered_daa: 0,
             payout_payload: h64(0x9A11),
+            capable_classes: Default::default(),
         };
 
         // Active: locked at every score, because it is backing claims and may take more.
@@ -6507,6 +6618,7 @@ pub(crate) mod tests {
                 operator_pubkey: op_key(21),
                 collateral: 1_000,
                 payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+                capable_classes: Default::default(),
                 signature: Vec::new(),
             },
         ]
@@ -7746,6 +7858,7 @@ pub(crate) mod tests {
                 operator_pubkey: op_key(20 + n),
                 collateral: 1_000,
                 payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+                capable_classes: Default::default(),
                 signature: Vec::new(),
             });
         }
@@ -7783,6 +7896,7 @@ pub(crate) mod tests {
             operator_pubkey: op_key(0x99),
             collateral: 1_000,
             payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+            capable_classes: Default::default(),
             signature: Vec::new(),
         });
         let (base, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None);
@@ -8309,6 +8423,7 @@ pub(crate) mod tests {
             operator_pubkey: op_key(22),
             collateral: 1_000,
             payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A22),
+            capable_classes: Default::default(),
             signature: Vec::new(),
         });
         // The producer's class is one this build cannot certify — which is the whole premise of the
@@ -8774,6 +8889,7 @@ pub(crate) mod tests {
                 operator_pubkey: op_key(22),
                 collateral: 1_000,
                 payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+                capable_classes: Default::default(),
                 signature: Vec::new(),
             }],
             None,
@@ -9158,6 +9274,7 @@ pub(crate) mod tests {
             operator_pubkey: op_key(22),
             collateral: 1_000,
             payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+            capable_classes: Default::default(),
             signature: Vec::new(),
         });
         let (s1, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None);
@@ -9198,6 +9315,7 @@ pub(crate) mod tests {
                 operator_pubkey: op_key(0xAA),
                 collateral: 1_000,
                 payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+                capable_classes: Default::default(),
                 signature: Vec::new(),
             },
             PalwConsensusObjectV2::BondRegistered {
@@ -9206,6 +9324,7 @@ pub(crate) mod tests {
                 operator_pubkey: op_key(0xAA),
                 collateral: 1_000,
                 payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+                capable_classes: Default::default(),
                 signature: Vec::new(),
             },
         ];
@@ -9229,6 +9348,7 @@ pub(crate) mod tests {
                 operator_pubkey: op_key(0xBB),
                 collateral: 1_000,
                 payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+                capable_classes: Default::default(),
                 signature: Vec::new(),
             }],
             None,
@@ -9246,6 +9366,7 @@ pub(crate) mod tests {
                 operator_pubkey: op_key(0xCC),
                 collateral: p.min_collateral_sompi() - 1,
                 payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+                capable_classes: Default::default(),
                 signature: Vec::new(),
             }],
             None,
@@ -9263,6 +9384,7 @@ pub(crate) mod tests {
                 operator_pubkey: op_key(0xCC),
                 collateral: p.min_collateral_sompi(),
                 payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+                capable_classes: Default::default(),
                 signature: Vec::new(),
             }],
             None,
@@ -9279,6 +9401,7 @@ pub(crate) mod tests {
                 operator_pubkey: Vec::new(),
                 collateral: 1_000,
                 payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+                capable_classes: Default::default(),
                 signature: Vec::new(),
             }],
             None,
@@ -9376,6 +9499,7 @@ pub(crate) mod tests {
             operator_pubkey: op_key(0x99),
             collateral: 1_000,
             payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+            capable_classes: Default::default(),
             signature: Vec::new(),
         });
         let (base, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None);
@@ -10716,7 +10840,7 @@ pub(crate) mod tests {
             })
         }
         spec_hash(b"misaka-palw/state-v2/state-root/v1", |s| {
-            s.update(&13u16.to_le_bytes()); // version_le(2) = 13, restated from the ADR (the union bump: bond economics + ADR-0060/0061)
+            s.update(&14u16.to_le_bytes()); // version_le(2) = 14, restated from the ADR (ADR-0071 Decision 3: bonds declare what they can judge)
             s.update(spec_collection_root(b"bonds", &c.bonds).as_byte_slice());
             s.update(spec_collection_root(b"reserved_exposure", &c.reserved_exposure).as_byte_slice());
             s.update(spec_collection_root(b"classes", &c.classes).as_byte_slice());
@@ -10774,6 +10898,7 @@ pub(crate) mod tests {
                 status: PalwBondStatusV2::Active,
                 registered_daa: 0,
                 payout_payload: h64(0xA1),
+                capable_classes: Default::default(),
             },
         );
         state.bonds.insert(
@@ -10786,6 +10911,7 @@ pub(crate) mod tests {
                 status: PalwBondStatusV2::Retiring { since_daa: 40 },
                 registered_daa: 1,
                 payout_payload: h64(0xA2),
+                capable_classes: Default::default(),
             },
         );
         state.reserved_exposure.insert(bond_key(1), 79_000);
@@ -11016,6 +11142,12 @@ pub(crate) mod tests {
     /// version is the only carrier for a semantics-only change, so these constants moved with it —
     /// which is the rule working, not a nuisance.
     ///
+    /// A fifth, for ADR-0071 Decision 3: `PalwBondStateV2` gained `capable_classes`, so the
+    /// inhabited root moves for the record shape and the empty root moves for the version — the
+    /// same pair of signals, from a schema change this time. A bond that declares nothing is
+    /// excluded from a panel draw, which is a validity rule as well as a schema, and both ride
+    /// this number.
+    ///
     /// A fourth, for the UNION 13 (bond economics + ADR-0060/0061, merged 2026-08-30): the
     /// bond-economics half DID change the schema — `PalwClaimStateV2` gained `rebound_daa`, so
     /// the inhabited root moves for the record shape as well as for the version; the liveness
@@ -11023,16 +11155,16 @@ pub(crate) mod tests {
     /// schema and rides the same number. The empty root moves for the version alone, which is
     /// exactly the pair of signals these two constants exist to separate.
     #[test]
-    fn the_version_13_state_root_golden_vectors() {
+    fn the_version_14_state_root_golden_vectors() {
         assert_eq!(
             PalwChainStateV2::genesis().state_root().to_string(),
-            "935b81ba3a3f319f5c554a62c395ec00068fa813f7714c35670f94ef39953c85d8b3011cdfee1c11b8fc42af392f9a52c387b94e6ff96c77b29b81edc1e057e7",
-            "the empty state's version-13 root moved"
+            "4233a04ab57e6005613c3842e93bb2dafcfd80c73838301bf7082e25bdaf390a94e8fa38cafa21873a24f9384612e4e0299b325a229f89922dee800b8163f682",
+            "the empty state's version-14 root moved"
         );
         assert_eq!(
             m02_populated_state().state_root().to_string(),
-            "cf5ba494e938c44c14756aff651ea65971a46577db848ffb7595103f6e707fd0e3fee0f63d4671af7c7d80d99050becb5f0f55621f3f3f09713204c9ab34ab63",
-            "the inhabited state's version-13 root moved"
+            "9fe572101e0cd2ca9f4ebb88297ee97e86100b14b97336a24999ce8c0331c52a9aad2ca2939ad0345cab7550a9657ca9d86ced3f9fb2d1751f64e1ccec68d6f3",
+            "the inhabited state's version-14 root moved"
         );
     }
 }

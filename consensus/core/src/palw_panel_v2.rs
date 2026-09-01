@@ -342,6 +342,20 @@ pub fn derive_panel_v2_with_maturity(
         if *bond_key == executor_bond || bond.operator_id == executor_operator || bond.pubkey == executor_key {
             continue;
         }
+        // **ADR-0071 Decision 3: a seat must be able to RUN the class it is drawn to judge.**
+        //
+        // A seat's job is re-execution. Drawn blind to capability, a bond holding none of the
+        // class's artifact can only abstain, and a claim whose panel cannot reach quorum voids —
+        // so the draw could only ever license the classes every node happens to hold. That was
+        // every class while the floor held all the weight; ADR-0068 gave the model tiers 97.8% of
+        // cadence, and a 33 GiB artifact is not something a seat holds by default.
+        //
+        // Undeclared is excluded, never defaulted — the rule the V1 job panel already states. A
+        // permissive default converts an operator's silence into its conviction, because the duty
+        // accounting charges exactly the seats this function names.
+        if !crate::palw_state_v2::palw_bond_may_judge_class_v2(bond, &claim.class_id) {
+            continue;
+        }
         let mut ticket = keyed(PALW_PANEL_V2_DOMAIN_SEAT_TICKET);
         ticket.update(anchor_block.as_byte_slice());
         ticket.update(claim_id.as_byte_slice());
@@ -751,8 +765,59 @@ mod tests {
             operator_pubkey: op_key(operator),
             collateral: 1_000_000,
             payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+            // The fixture's one class. ADR-0071 Decision 3 excludes an undeclared bond from the
+            // draw, so a registry of silent bonds seats nobody — which is the rule working, and
+            // which is why every fixture that expects a panel has to say what its seats can run.
+            capable_classes: std::collections::BTreeSet::from([h64(1)]),
             signature: Vec::new(),
         }
+    }
+
+    /// `register`, declaring a class other than the one the fixture claims under — the only thing
+    /// that moves between the two halves of the capability test.
+    fn register_declaring(bond: u64, pubkey: u8, operator: u64, class_id: Hash64) -> PalwConsensusObjectV2 {
+        match register(bond, pubkey, operator) {
+            PalwConsensusObjectV2::BondRegistered { bond, pubkey, operator_pubkey, collateral, payout_payload, signature, .. } => {
+                PalwConsensusObjectV2::BondRegistered {
+                    bond,
+                    pubkey,
+                    operator_pubkey,
+                    collateral,
+                    payout_payload,
+                    capable_classes: std::collections::BTreeSet::from([class_id]),
+                    signature,
+                }
+            }
+            other => other,
+        }
+    }
+
+    /// [`populated_state`] with every bond declaring `class_id` instead of the fixture's.
+    fn populated_state_declaring(class_id: Hash64) -> (PalwChainStateV2, Hash64) {
+        let objects = vec![
+            PalwConsensusObjectV2::ClassRegistered {
+                class_id: h64(1),
+                artifact_root: h64(11),
+                slash_value_per_pwu: 5,
+                pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
+                initial_target: u128::MAX / 2,
+                share_permille: 1000,
+                activation_daa: 0,
+                admission: None,
+            },
+            register_declaring(1, 7, 0x21, class_id),
+            register_declaring(2, 8, 0x22, class_id),
+            register_declaring(3, 9, 0x23, class_id),
+            register_declaring(4, 10, 0x24, class_id),
+            register_declaring(5, 11, 0x24, class_id),
+            register_declaring(6, 12, 0x21, class_id),
+        ];
+        let (s1, _) =
+            apply_palw_transition_v2(&PalwChainStateV2::genesis(), &state_params(), &ctx(1, 100, 1), &objects, None).unwrap();
+        let env = attempt(40, 1);
+        let claim_id = attempt_id_v2(&env.attempt);
+        let (s2, _) = apply_palw_transition_v2(&s1, &state_params(), &ctx(2, 101, 2), &[], Some(&env)).unwrap();
+        (s2, claim_id)
     }
 
     fn attempt(pwu: u64, nonce: u64) -> PalwAttemptEnvelopeV2 {
@@ -911,6 +976,32 @@ mod tests {
     ///
     /// Asserted on the predicate the draw calls, because the state transition offers no way to
     /// hand a test an exhausted bond without running a whole court to produce one.
+    /// **A seat must be able to run the class it is drawn to judge** (ADR-0071 Decision 3).
+    ///
+    /// Asserted as a difference: the same registry, the same anchor, the same claim — only the
+    /// declarations move. A test that checked the positive case alone would pass for a draw that
+    /// ignored capability entirely, which is the state this Decision found.
+    #[test]
+    fn a_bond_that_cannot_run_the_class_is_not_drawn_to_judge_it() {
+        let (state, claim_id) = populated_state();
+        let anchor = BlockHash::from_u64_word(0xA0C0);
+
+        // Every bond declares the fixture's class: the draw seats, as it always did.
+        let full = derive_panel_v2(&state, &panel_params(), &claim_id, anchor, 0).expect("a declaring registry seats");
+        assert_eq!(full.len(), 3, "the baseline is the same panel the exclusion test asserts, or this measures nothing");
+
+        // The same registry, the same anchor, the same claim — declaring a class nobody is
+        // claiming under. Nothing else moves.
+        let (deaf, deaf_claim) = populated_state_declaring(h64(0xDEAD));
+        assert_eq!(deaf_claim, claim_id, "the claim is the same one; only the declarations differ");
+        let err = derive_panel_v2(&deaf, &panel_params(), &claim_id, anchor, 0)
+            .expect_err("a registry that cannot run the class seats nobody");
+        assert!(
+            matches!(err, PalwPanelV2Error::InsufficientEligibleBonds { .. }),
+            "and it fails CLOSED — a short panel is not a smaller panel, it is a claim that never binds: {err:?}"
+        );
+    }
+
     #[test]
     fn a_bond_with_nothing_left_to_lose_may_not_take_work() {
         use crate::palw_state_v2::{PalwBondStateV2, PalwBondStatusV2, palw_bond_may_take_work_v2};
@@ -922,6 +1013,7 @@ mod tests {
             status: PalwBondStatusV2::Active,
             registered_daa: 0,
             payout_payload: Hash64::default(),
+            capable_classes: Default::default(),
         };
         assert!(palw_bond_may_take_work_v2(&live, 1_000), "a fully-collateralised Active bond seats");
 
