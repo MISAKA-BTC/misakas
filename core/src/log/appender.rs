@@ -93,7 +93,21 @@ impl Encode for CrescendoEncoder {
         if record.target() == self.keyword {
             // Hack: override log level to debug so that inner encoder does not reset the style
             // (note that we use the custom pattern with CRND so this change isn't visible)
-            let record = record.to_builder().level(log::Level::Debug).build();
+            //
+            // Rebuilt field by field rather than through `Record::to_builder`, which is not
+            // available under every feature set `log` can be unified into: a dev-dependency
+            // elsewhere in the workspace enables one where it is absent, so `cargo check` passed
+            // while `cargo test -p kaspa-core` could not build the crate AT ALL — every test in it
+            // silently unrun. This form compiles under all of them and carries the same fields.
+            let mut builder = log::Record::builder();
+            builder
+                .args(*record.args())
+                .level(log::Level::Debug)
+                .target(record.target())
+                .module_path(record.module_path())
+                .file(record.file())
+                .line(record.line());
+            let record = builder.build();
             w.set_style(Style::new().text(Color::Cyan))?;
             self.crescendo_encoder.encode(w, &record)?;
             w.set_style(&Style::new())?;
