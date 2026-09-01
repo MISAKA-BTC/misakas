@@ -1,15 +1,30 @@
 # testnet-11 Relaunch 5 — the LLM-primary economy (ADR-0068 Phase 2)
 
-Branch: `palw-adr0068-phase2`. Target identity: params fingerprint **`272ed6a8…`** (devnet moves
-to **`67785790…`** through the shared builder). **This is a re-genesis: every host wipes.**
+Branch: `palw-adr0068-phase2`. Target identity: params fingerprint **`accaadce…`** (devnet moves
+to **`b6140f2e…`** through the shared builder), genesis **`08e9c8a4…`**.
+**This is a re-genesis: every host wipes.**
 
-> **The fingerprint moved three times after this document was first written**, and the value
-> above is the only one to deploy against. `d7510c7a…` was the audit-free branch; the launch
-> audit's remediation took it to `b1aad428…`; merging the model tiers' step-space work took it to
-> `40d76c2c…`; and registering the corrected class rows with cadence took it here. A fingerprint
-> is not the sum of its diffs, which is exactly why it is computed once at the end and read off
-> `consensus_params_id()` rather than carried forward by hand. Verify what a node ANNOUNCES, not
-> what a commit message said.
+> **Verified 2026-09-02 by running the release binary, not by reading this file.**
+> `./target/release/kaspad --testnet --netsuffix=11 --palw-dump-classes` announces:
+> ```
+> PALW court certified end-to-end for: PALW-BASE-0, PALW-QWEN36, PALW-QWEN25-A16
+>   (court_e2e_root 581466da…)
+> Consensus params fingerprint: accaadce562c120da9d7dd972c46903dfa59a607d50f335af55e2c3bccfdfeb2 (network testnet-11)
+> ```
+> and `PALW_RC_GENESIS.hash` is `08e9c8a4cb59714574bc76e25e4dc16bb24e213fc2f0f6c8c6fd5d8c4a25ef70d…`.
+> The **live** fleet answers on genesis `8d2002cc…` (Relaunch 4), so the two do not meet: this is a
+> wipe, not a rolling upgrade, and a half-deployed fleet is two networks wearing one name.
+
+> **The fingerprint has now moved SEVEN times since this document was first written**, and the
+> value above is the only one to deploy against. `d7510c7a…` was the audit-free branch; the launch
+> audit's remediation took it to `b1aad428…`; the model tiers' step-space work to `40d76c2c…`;
+> registering the corrected class rows with cadence to `272ed6a8…` — **which is the number this
+> document told you to deploy against until 2026-09-02, and by then it was three moves stale.**
+> The 120 s cadence set took devnet to `84f15819…`; ADR-0071 Decision 1 took both presets to
+> `ce79c069…`/`771371ea…`; Decision 2 to `cc65f3b4…`/`8c92f2a3…`; Decision 3 to the pair above.
+> A fingerprint is not the sum of its diffs, which is exactly why it is computed once at the end
+> and read off `consensus_params_id()` rather than carried forward by hand. **Verify what a node
+> ANNOUNCES, not what this page says** — this page has been wrong about it before.
 
 ## What this train carries (all landed on the branch, all suites green)
 
@@ -26,6 +41,37 @@ to **`67785790…`** through the shared builder). **This is a re-genesis: every 
    arms identically the day its genesis card is pinned.
 4. **F4 fixed in the shared assembly**: pruning depth-consistency nudge (remainder k+1) for
    every V2 network — t11 leaves `6600 = 11 × 600`.
+
+
+## Readiness, measured 2026-09-02 — GREEN on code, blocked on five operational facts
+
+The implementation is sound: every suite green, the binary certifies all three families end to end,
+and it announces the identity above. What is not ready is the launch, and each item below was
+measured rather than assumed.
+
+1. **This wipes a live, producing network with third-party participants.** `.113`'s node accepted
+   37 blocks in the half hour before this was written, and its log shows outside peers
+   (`13.140.185.225`, `111.67.115.228`) failing handshake with genesis values of their own — people
+   are running builds against t11 today. A re-genesis strands every one of them until they upgrade,
+   and there is no channel from here that reaches them.
+2. **Two of the four shipped DNS seeder names do not resolve at all.** `seeder2.misakascan.com` and
+   `seeder4.misakascan.com` return NXDOMAIN on every discovery round; only `seeder1` and `seeder3`
+   answer (both → `169.58.39.220`, `169.58.232.113`). Those two are also the only ones this fleet
+   can reconfigure — the other pair answers from hosts it does not administer. Shipping four names
+   of which two are dead is a discovery configuration decision, not a code fix; `dns_seeders` is
+   deliberately outside `consensus_params_id`, so removing them is a plain edit and not a flag day.
+3. **`169.58.39.220` is in the seeder answer set and in no inventory here.** Same shape as the
+   unexplained `169.58.232.114` noted in the fleet preflight. A relaunch that publishes addresses
+   nobody can account for is publishing an unknown.
+4. **Twelve commits are unmerged to `main`.** Step 2 below is the flag-day landing and has not
+   happened; until it does, `main` builds Relaunch-4 binaries.
+5. **The key custody findings from the fleet preflight are unresolved.** Seats 2,3,4,5 — half the
+   registry — hold their bond AND operator keys on host C alone, which is the same single-host
+   exposure that permanently lost the original seat 5; host C also runs `MemoryMax=infinity` on
+   its seats. Seat 7 has no key on any host (within ADR-0065's "at most two unmanned", together
+   with seat 6 whose key is on `.113`).
+
+Seat key inventory as measured: ibm `0,1` · C `2,3,4,5` · `.113` `6` · seat `7` unmanned.
 
 ## Sequencing (do not reorder)
 
