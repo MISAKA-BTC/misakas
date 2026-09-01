@@ -1,7 +1,14 @@
 # testnet-11 Relaunch 5 — the LLM-primary economy (ADR-0068 Phase 2)
 
-Branch: `palw-adr0068-phase2`. Target identity: params fingerprint **`accaadce…`** (devnet moves
-to **`b6140f2e…`** through the shared builder), genesis **`08e9c8a4…`**.
+Branch: `palw-adr0068-phase2`. Target identity: params fingerprint **`f0e50f83…`** (devnet moves
+to **`873a5ae8…`** through the shared builder), genesis **`08e9c8a4…`**.
+
+> **`accaadce…` was deployed and taken back the same evening.** It froze the attempt lane's Layer-0
+> target (ADR-0071 Decision 1) and the live network measured what that costs: the floor produced
+> ~50 blocks a minute against a 0.5/min target, flat, because block interval is
+> `calculate_difficulty_bits`'s job and the per-class retarget is a deliberate no-op on a
+> single-class network. Claims voided every block and the public entry node could never leave
+> `CandidateReview`. The freeze is reverted; the genesis is unchanged.
 **This is a re-genesis: every host wipes.**
 
 > **Verified 2026-09-02 by running the release binary, not by reading this file.**

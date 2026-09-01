@@ -265,23 +265,19 @@ impl StateLayer0 {
         // validation, the pruning proof, trusted import), so no caller can price the lane by
         // forgetting to.
         //
-        // **ADR-0071 Decision 1 extends the same substitution to the ATTEMPT lane**, for the half
-        // of the coupling the heartbeat fix did not reach. An attempt block's fork-choice weight
-        // is already a constant, so `bits` does not buy weight — but it still set what the block
-        // COSTS, and `bits` is window-derived, so a burst of blocks hardened the target and a
-        // bonded producer had to buy its next block with hashing. On a V2 network the throttle is
-        // the per-class ticket lottery against `state.class_target`, which is chain state; the
-        // global target has no remaining job, and every job it kept doing was a coupling between
-        // the chain's history and the price of inference.
-        //
-        // Substituted unconditionally on the algo id rather than behind the fence, because this
-        // function has no params and the pruning proof and trusted import reach it without one.
-        // That is safe in exactly one direction and it is this one: algo-6 exists only under
-        // `ConsensusV2`, and every V2 genesis already carries `PALW_V2_ATTEMPT_BITS`.
+        // **ADR-0071 Decision 1 tried to extend this substitution to the ATTEMPT lane, and that
+        // was wrong — see the ADR's own amendment.** The premise it served ("block-generation
+        // weight must not depend on hash computation") was already satisfied: an algo-6 block's
+        // blue work is the constant `PALW_ATTEMPT_BLUE_WORK_LOG2` (ADR-0068 Phase 1). Freezing the
+        // TARGET as well took out something else entirely — the block interval — because
+        // `retarget_over_span_v1` only ever redistributes cadence BETWEEN classes and says so:
+        // "Block interval stays `DifficultyManager::calculate_difficulty_bits`'s job". On a
+        // network where one class produces, that retarget is a deliberate no-op, so with `bits`
+        // frozen nothing limited the rate at all. Measured on Relaunch 5: the floor produced ~50
+        // blocks a minute against a 0.5/min target, flat for five minutes, and the public entry
+        // node could never complete a review floor because it was IBD-ing continuously.
         let target_512 = if header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_HEARTBEAT_V1 {
             Uint512::MAX >> kaspa_consensus_core::pow_layer0::PALW_HEARTBEAT_WORK_LOG2
-        } else if header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2 {
-            Uint512::from_compact_target_bits_512(kaspa_consensus_core::pow_layer0::PALW_V2_ATTEMPT_BITS)
         } else {
             Uint512::from_compact_target_bits_512(header.bits)
         };

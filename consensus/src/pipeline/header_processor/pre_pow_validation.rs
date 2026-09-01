@@ -47,21 +47,9 @@ impl HeaderProcessor {
         // walked chain-order evidence and terminated on `Err(get_header)` — a node-local fact, so
         // an archival node and a pruned node computed different verdicts for the same header and
         // rejected each other along the `--archival` flag.
-        // **ADR-0071 Decision 1: a V2 network's global target is frozen, so the window does not
-        // get to answer this question.**
-        //
-        // `pow/src/lib.rs` substitutes `PALW_V2_ATTEMPT_BITS` for an algo-6 header's target. If the
-        // window still decided what `bits` a header must DECLARE, the two would disagree the first
-        // time blocks arrived faster than the cadence: the header would be required to carry a
-        // harder `bits` than the one its PoW is checked against, and the lane would be priced by
-        // the field the substitution exists to leave. Frozen here, the two are one number.
-        //
-        // Only while the fence is open, and only on `ConsensusV2` — `palw_attempt_pow_bits_at`
-        // folds both conditions in, so a hash-priced network is untouched.
-        let expected_bits = match self.palw_attempt_pow_bits {
-            Some((fence, bits)) if fence.is_active(header.daa_score) => bits,
-            _ => self.window_manager.calculate_difficulty_bits(ghostdag_data, &daa_window),
-        };
+        // ADR-0071 Decision 1 froze this for a `ConsensusV2` network and the ADR now records why
+        // that was wrong: the window's answer IS the block interval, and nothing else sets it.
+        let expected_bits = self.window_manager.calculate_difficulty_bits(ghostdag_data, &daa_window);
         if header.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID
             && self.palw_heartbeat_lane.is_some_and(|fence| fence.is_active(header.daa_score))
         {

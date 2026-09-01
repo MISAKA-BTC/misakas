@@ -1,6 +1,12 @@
 # ADR-0071 — The attempt lane's price, the ticket's bound, and who may judge a class
 
-Status: **IMPLEMENTED (2026-09-02; proposed 2026-09-01).** All three Decisions are in code, and two
+Status: **IMPLEMENTED WITH DECISION 1 WITHDRAWN (2026-09-02; proposed 2026-09-01).**
+Decision 1's target freeze shipped to the public testnet, was measured to remove the only control on
+block interval, and is reverted — see §3. Decisions 1a, 2 and 3 stand. The rest of this header
+records the other two places this ADR was wrong when written, on the same principle: the wrong
+version stays beside the right one.
+
+All Decisions are in code, and two
 of them are amended below because implementing them showed the original text was wrong — Decision 1a
 (an absolute retarget expectation would have reintroduced the unbounded walk three audit findings
 closed) and Decision 2's pwu formula (it priced the work the bucket covers, not the work the search
@@ -83,6 +89,51 @@ header's `bits` is a fixed network value rather than a window output. The per-cl
 its own target — `class_ticket_v2` against `state.class_target`, which is chain state and not a
 header field — so difficulty stays per-class and stays retargeted, but it stops riding the field
 the global window averages.
+
+### Decision 1 — WITHDRAWN after Relaunch 5 measured it (2026-09-02)
+
+**Shipped, run on the public testnet, and taken back out.** The freeze is reverted; what remains of
+this section is the record of why it was wrong, because the argument for it is one a reader will
+reconstruct.
+
+The premise was the user's: *block-generation weight must not depend on hash computation.* That was
+**already satisfied before this Decision** — ADR-0068 Phase 1 made an algo-6 block's blue work the
+constant `PALW_ATTEMPT_BLUE_WORK_LOG2`, so `bits` bought no weight. This Decision then froze the
+lane's *target* as well, on the reasoning that "a V2 network's throttle is the per-class ticket
+lottery, so the global target has no remaining job."
+
+**The codebase says what its remaining job is, in the function this Decision left untouched.**
+`retarget_over_span_v1`'s own doc:
+
+> `Σ_c expected_c = total`, so this loop only ever redistributes share BETWEEN classes. **Block
+> interval stays `DifficultyManager::calculate_difficulty_bits`'s job**, and the two retargets
+> cannot fight each other over one cadence.
+
+…and, three lines further on, that a single-class network is a **deliberate no-op** for it: at
+1000‰ with every block in the class, observed equals expected and the target never moves.
+
+So on a network where one class produces — which is every V2 network at launch, and was Relaunch 5
+for its whole first half hour — freezing `bits` left *nothing at all* controlling the block
+interval.
+
+**Measured on the live network, 2026-09-02.** The floor produced 47/54/52/53/46/41 blocks per minute
+across six consecutive one-minute samples against a target of **0.5/min** — flat, not converging.
+QWEN36 produced 0 blocks in 25 minutes and A16 produced 2, because a 33.27 GiB artifact on a 23 GB
+host runs at disk speed, so the census was single-class exactly as the no-op case describes. Two
+consequences followed: every claim voided at `BindTimeout` with its escrow destroyed, and the public
+entry node could never leave `CandidateReview` — it IBD-ed continuously, and each IBD re-armed the
+review floor through the `!ever_ready()` clause, which is the failure `flow_context.rs` already
+documents with its own measurement ("22 IBDs in 16 minutes").
+
+**What is kept.** Decision 1a's `converge_idle_target_v1`, Decision 2 and Decision 3 all stand; none
+of them depended on the freeze. `PALW_V2_ATTEMPT_BITS` survives as a documented constant with the
+test that pins it to `MAX_DIFFICULTY_TARGET` and to both V2 genesis blocks — that equality is worth
+asserting even though nothing enforces it any more.
+
+**The general lesson, since this ADR has now been wrong three times.** Each error was the same
+move: reasoning from what a value is *called* rather than from what reads it. "The lane's price
+comes from `bits`" was true and irrelevant; what mattered was the *other* caller of the same field.
+A Decision that removes a mechanism should have to name every consumer of that mechanism first.
 
 ### Decision 1a — AMENDED at implementation: the expectation stays relative, and the repair is a ceiling
 

@@ -561,16 +561,9 @@ async fn palw_attempt_blocks_weigh_the_constant_under_the_fence() {
         .edit_consensus_params(|p| {
             p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(palw_v2_test_bundle(&catalog));
             *p = p.clone().with_palw_v2_cadence();
-            // **A genesis at the ambient V2 target** (ADR-0071 Decision 1). `VirtualState::from_genesis`
-            // seeds the first template's bits from the genesis, and MAINNET's genesis sits at a
-            // harder one — so with the freeze armed this harness built a block its own header
-            // processor rejected. `validate_palw_v2` now refuses that configuration, and this is
-            // the genesis a V2 network has.
-            p.genesis = kaspa_consensus_core::config::genesis::SIMNET_GENESIS;
             p.palw_attempt_work = Some(kaspa_consensus_core::config::params::PalwAttemptWorkV1 {
                 activation: kaspa_consensus_core::config::params::ForkActivation::always(),
                 work_log2: kaspa_consensus_core::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2,
-                pow_bits: kaspa_consensus_core::pow_layer0::PALW_V2_ATTEMPT_BITS,
                 ticket_bucket_log2: kaspa_consensus_core::palw_attempt_v2::PALW_TICKET_NONCE_BUCKET_LOG2,
             });
         })
@@ -649,16 +642,9 @@ async fn the_heartbeat_clock_sweeps_a_stopped_chain_back_to_life() {
                 work_log2: kaspa_consensus_core::pow_layer0::PALW_HEARTBEAT_WORK_LOG2,
                 max_per_mergeset: kaspa_consensus_core::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET,
             });
-            // **A genesis at the ambient V2 target** (ADR-0071 Decision 1). `VirtualState::from_genesis`
-            // seeds the first template's bits from the genesis, and MAINNET's genesis sits at a
-            // harder one — so with the freeze armed this harness built a block its own header
-            // processor rejected. `validate_palw_v2` now refuses that configuration, and this is
-            // the genesis a V2 network has.
-            p.genesis = kaspa_consensus_core::config::genesis::SIMNET_GENESIS;
             p.palw_attempt_work = Some(kaspa_consensus_core::config::params::PalwAttemptWorkV1 {
                 activation: kaspa_consensus_core::config::params::ForkActivation::always(),
                 work_log2: kaspa_consensus_core::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2,
-                pow_bits: kaspa_consensus_core::pow_layer0::PALW_V2_ATTEMPT_BITS,
                 ticket_bucket_log2: kaspa_consensus_core::palw_attempt_v2::PALW_TICKET_NONCE_BUCKET_LOG2,
             });
         })
@@ -851,16 +837,9 @@ async fn a_heartbeat_chain_of_any_depth_merges_but_a_tree_does_not() {
                 work_log2: kaspa_consensus_core::pow_layer0::PALW_HEARTBEAT_WORK_LOG2,
                 max_per_mergeset: kaspa_consensus_core::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET,
             });
-            // **A genesis at the ambient V2 target** (ADR-0071 Decision 1). `VirtualState::from_genesis`
-            // seeds the first template's bits from the genesis, and MAINNET's genesis sits at a
-            // harder one — so with the freeze armed this harness built a block its own header
-            // processor rejected. `validate_palw_v2` now refuses that configuration, and this is
-            // the genesis a V2 network has.
-            p.genesis = kaspa_consensus_core::config::genesis::SIMNET_GENESIS;
             p.palw_attempt_work = Some(kaspa_consensus_core::config::params::PalwAttemptWorkV1 {
                 activation: kaspa_consensus_core::config::params::ForkActivation::always(),
                 work_log2: kaspa_consensus_core::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2,
-                pow_bits: kaspa_consensus_core::pow_layer0::PALW_V2_ATTEMPT_BITS,
                 ticket_bucket_log2: kaspa_consensus_core::palw_attempt_v2::PALW_TICKET_NONCE_BUCKET_LOG2,
             });
         })

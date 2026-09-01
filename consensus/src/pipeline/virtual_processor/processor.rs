@@ -426,9 +426,6 @@ pub struct VirtualStateProcessor {
     pub(super) palw_frontier_provenance: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0066: the heartbeat lane's fence, mode folded in.
     pub(super) palw_heartbeat_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
-    /// ADR-0071 Decision 1: the frozen global target and the fence that opens it. The template must
-    /// read the same value `pre_pow_validation` demands, or a node rejects its own blocks.
-    pub(super) palw_attempt_pow_bits: Option<(kaspa_consensus_core::config::params::ForkActivation, u32)>,
     /// ADR-0066 Decision 4: the inactivity leak's fence and its duration.
     pub(super) palw_inactivity_leak: Option<kaspa_consensus_core::config::params::PalwInactivityLeakV1>,
 
@@ -695,7 +692,6 @@ impl VirtualStateProcessor {
             pow_palw_ollama_activation: params.pow_palw_ollama_activation,
             palw_required_algo_id: params.palw_consensus_mode.required_algo_id(),
             palw_heartbeat_lane: params.palw_heartbeat_lane_fence(),
-            palw_attempt_pow_bits: params.palw_attempt_pow_bits_fence(),
             palw_maturity_warn_last_daa: std::sync::atomic::AtomicU64::new(
                 kaspa_consensus_core::palw_panel_v2::PALW_SHORTFALL_NEVER_REPORTED,
             ),
@@ -2479,14 +2475,7 @@ impl VirtualStateProcessor {
 
         // Calc virtual DAA score, difficulty bits and past median time
         let virtual_daa_window = self.window_manager.block_daa_window(&virtual_ghostdag_data)?;
-        // **The same freeze `pre_pow_validation` enforces** (ADR-0071 Decision 1). A template that
-        // computed its `bits` from the window while validation demanded the frozen value would be
-        // a node building blocks its own header processor rejects — `UnexpectedDifficulty` on its
-        // own work, which is how this gap announced itself. The two must read one source.
-        let virtual_bits = match self.palw_attempt_pow_bits {
-            Some((fence, bits)) if fence.is_active(virtual_daa_window.daa_score) => bits,
-            _ => self.window_manager.calculate_difficulty_bits(&virtual_ghostdag_data, &virtual_daa_window),
-        };
+        let virtual_bits = self.window_manager.calculate_difficulty_bits(&virtual_ghostdag_data, &virtual_daa_window);
         let virtual_past_median_time = self.window_manager.calc_past_median_time(&virtual_ghostdag_data)?.0;
 
         // Audit C-08: virtual acceptance runs the same bond-spend filter the chain walk runs, or

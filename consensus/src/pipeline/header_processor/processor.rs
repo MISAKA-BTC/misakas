@@ -130,9 +130,6 @@ pub struct HeaderProcessor {
     pub(super) palw_block_commitment: Option<kaspa_consensus_core::palw_block_commitment::PalwBlockCommitmentParamsV1>,
     /// ADR-0066: the heartbeat lane's fence, mode folded in (`Params::palw_heartbeat_lane_fence`).
     pub(super) palw_heartbeat_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
-    /// ADR-0071 Decision 1: the frozen global target and the fence that opens it, mode folded in
-    /// (`Params::palw_attempt_pow_bits_fence`). `None` leaves the difficulty window in charge.
-    pub(super) palw_attempt_pow_bits: Option<(kaspa_consensus_core::config::params::ForkActivation, u32)>,
     /// ADR-0039 W4′: which rule this network orders candidate tips by. `BlueWorkOnly` on every
     /// shipped preset, cloned from `Params` at construction so the seam reads one value rather
     /// than re-deriving it per header.
@@ -238,7 +235,6 @@ impl HeaderProcessor {
             palw_consensus_mode: params.palw_consensus_mode.clone(),
             palw_block_commitment: params.palw_block_commitment,
             palw_heartbeat_lane: params.palw_heartbeat_lane_fence(),
-            palw_attempt_pow_bits: params.palw_attempt_pow_bits_fence(),
             palw_tip_order: params.palw_tip_order_v1(),
             pow_palw_ollama_activation: params.pow_palw_ollama_activation,
             evm_activation_daa_score: params.evm_activation_daa_score,
