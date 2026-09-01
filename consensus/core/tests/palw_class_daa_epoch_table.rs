@@ -762,7 +762,14 @@ fn the_bind_window_gate_measures_the_dearest_class() {
         if *class_id == bundle.state.base_class_id() {
             continue;
         }
-        let built = kaspa_consensus_core::palw_qwen36_profile::qwen36_registration_v1(
+        // **Through `qwen36_registration_v3`, which is what the chain registers.** This asked
+        // `qwen36_registration_v1` first, and v1 declares the graph
+        // `Qwen36Backend::from_registered_profile` refuses — so its class id never matched, the
+        // `filter` dropped it, and the qwen25 fallback built a SECOND qwen25 entry for the qwen36
+        // registration. Two entries with one class id, and the catalog constructor said so:
+        // "must be ascending and unique by class id". The tier builder a test reaches for has to
+        // be the one the genesis reached for, or the fallback quietly answers a different question.
+        let built = kaspa_consensus_core::palw_qwen36_profile::qwen36_registration_v3(
             *artifact_root,
             *share_permille,
             *slash_value_per_pwu,
@@ -771,7 +778,10 @@ fn the_bind_window_gate_measures_the_dearest_class() {
         .ok()
         .filter(|(_, entry, _)| entry.class_id == *class_id)
         .or_else(|| {
-            kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_registration_v1(
+            // …and `_v2` for the dense tier, for the same reason: this rebuilds the shipped
+            // catalog, so every entry has to come from the builder the shipped assembly used or
+            // the reconstructed root is a different ruleset's.
+            kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_registration_v2(
                 *artifact_root,
                 *share_permille,
                 *slash_value_per_pwu,
@@ -805,25 +815,40 @@ fn the_bind_window_gate_measures_the_dearest_class() {
 }
 
 /// **Step-5 witness for the root re-pin: the class id is a function of the graph, and the graph
-/// did not move.** Printed from BOTH derivations that exist — the profile's own
-/// `shape_profile_id()` and the shipped card's registered id — so a divergence between the two
-/// (the C5 pattern) cannot hide behind either one.
+/// this build SERVES is the one the chain registers.** Printed from every derivation that exists,
+/// so a divergence between them (the C5 pattern) cannot hide behind any one of them.
+///
+/// This used to compare the registration against `qwen36_profile_v1`, and it was asserting the
+/// wrong equality rather than catching a defect. There are two real ids and the difference between
+/// them is the point: `qwen36_class_id_v1` names the graph
+/// `Qwen36Backend::from_registered_profile` REFUSES ("op SoftMax with operand
+/// `blk.{layer}.ffn_router_topk.a16` is not arithmetic this build serves"), and `qwen36_class_id_v3`
+/// names the `graph-v3` row this build's SDK dispatches on. A chain that registered the first would
+/// have a tier with no backend, no capture and no court — so the assertion has to be that the
+/// registration is the SECOND, and that the two are still distinct.
 #[test]
 fn the_qwen36_class_id_is_the_same_through_every_derivation() {
     use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
-    use kaspa_consensus_core::palw_qwen36_profile::{QWEN36_35B_A3B, qwen36_profile_v1};
-    let profile_id = qwen36_profile_v1(QWEN36_35B_A3B).expect("projects").shape_profile_id();
-    println!("qwen36 shape_profile_id: {profile_id}");
+    use kaspa_consensus_core::palw_qwen36_profile::{qwen36_class_id_v1, qwen36_class_id_v3};
+    let servable = qwen36_class_id_v3();
+    let unservable = qwen36_class_id_v1();
+    println!("qwen36 graph-v3 (this build serves it): {servable}");
+    println!("qwen36 v1 declaration (this build refuses it): {unservable}");
+    assert_ne!(servable, unservable, "the two declarations are different classes — that is why the re-pin happened");
     let params = kaspa_consensus_core::config::params::palw_rc_shipped_params();
     let PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else { panic!() };
+    let mut saw_the_tier = false;
     for object in &bundle.genesis_objects {
         if let Obj::ClassRegistered { class_id, artifact_root, share_permille, .. } = object {
             println!("registered: {class_id} root {artifact_root} share {share_permille}");
             if *artifact_root == kaspa_consensus_core::config::params::PALW_RC_GENESIS_QWEN36_ARTIFACT_ROOT {
-                assert_eq!(*class_id, profile_id, "the registered hybrid id IS the profile id — one derivation, not two");
+                saw_the_tier = true;
+                assert_eq!(*class_id, servable, "the chain must register the graph this build can serve");
+                assert_ne!(*class_id, unservable, "and never the one it refuses");
             }
         }
     }
+    assert!(saw_the_tier, "the shipped RC registers the qwen36 tier — if it stopped, this test is measuring nothing");
 }
 
 /// **The whole loop, closed: per-model difficulty and cross-model share co-adjust to a stable
