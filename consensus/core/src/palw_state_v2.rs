@@ -4517,12 +4517,46 @@ fn apply_class_retargets(
     // compose with the lane's split permille. At split = 1000 the receipt lane's permille is 0
     // (skipped whole), one class renormalizes to 1000‰, and the attempt arm is the single-lane
     // rule byte for byte — the compatibility claim both parents made, preserved through both fixes.
+    // **The launch audit's F1/F10/F27 — the LANE split needs the renormalization the class shares
+    // already get.** Three reviewers reached this line independently.
+    //
+    // H1 (above) renormalizes over the classes that competed inside a lane. Nothing renormalized
+    // over the LANES, and the split is a constant. So with the receipt lane silent, every producing
+    // class is measured against `share × 900 / 1000` while the census total stays the whole combined
+    // count: Σexpected = 0.9 × Σobserved, and every class — the liveness floor included — has its
+    // target multiplied by nine tenths. The verdict repeats at every boundary, in one direction,
+    // and there is no negative feedback anywhere in it: the ratio is 0.9 whatever the difficulty
+    // does, because both sides of it move together.
+    //
+    // A silent receipt lane is not an edge case, it is the DEFAULT on a fresh network. A receipt
+    // block spends a certified free-prompt quantum, and no quantum can exist until a claim has
+    // cleared bind, receipt and challenge — 2,400 DAA at the shipped windows — so the opening
+    // epochs are structurally receipt-free. On a V2 network `header.bits` is pinned at the maximum
+    // and the class lottery is the only throttle, which makes this multiplier the real inference
+    // count per block: measured against the shipped epoch, about 3.2x in a fortnight.
+    //
+    // The repair is H1 one axis over. A lane that produced nothing holds no expectation, so the
+    // lanes that DID produce hold the whole denominator between them. One lane silent: the
+    // survivor's effective permille is 1000 and Σexpected = combined again. Both producing: the
+    // arithmetic is unchanged, which is what makes this a repair and not a re-tuning.
+    //
+    // `combined > 0` is established above, so at least one lane produced and this cannot be zero.
+    let producing_lanes_permille: u32 =
+        (if attempt_total > 0 { split } else { 0 }) + (if receipt_total > 0 { 1000 - split } else { 0 });
     for (lane_permille, counters_are_receipts) in [(split, false), (1000 - split, true)] {
         if lane_permille == 0 {
             // A lane the split allots nothing measures nothing (the pure-attempt configuration's
             // receipt arm, and only that on a live network — FP-05 refuses interior zeros).
             continue;
         }
+        // A lane that produced nothing in the closed epoch is not a lane that under-produced: it
+        // was not in the span at all, exactly as an idle CLASS is not, and measuring it would ease
+        // every target on every epoch it sits out.
+        let lane_produced = if counters_are_receipts { receipt_total } else { attempt_total };
+        if lane_produced == 0 {
+            continue;
+        }
+        let lane_permille = lane_permille * 1000 / producing_lanes_permille;
         // Snapshot the lane census before any write, so the plan is a pure function of the
         // parent state.
         let produced_in_lane: BTreeMap<Hash64, u64> = {
@@ -10068,6 +10102,58 @@ pub(crate) mod tests {
     /// **The two-lane retarget (ADR-0044 Decision 5/9).** One combined census, split once by the
     /// attempt share, each lane retargeted by the SAME rule against its scaled expectation — and
     /// at split = 1000 the receipt lane measures nothing and its target never moves.
+    /// **A silent receipt lane must not tighten the attempt lane** (launch audit F1/F10/F27).
+    ///
+    /// The class shares are renormalized over the classes that competed; the LANE split was a
+    /// constant. With no receipt block in the epoch, every producing class was measured against
+    /// `share x 900 / 1000` while the census total stayed the whole combined count, so
+    /// Sum(expected) = 0.9 x Sum(observed) and every target — the liveness floor included — was
+    /// multiplied by nine tenths at every boundary, one direction, no negative feedback.
+    ///
+    /// Two things make this the fixture the defect needed and the suite did not have. **Split 900**,
+    /// the shipped figure: every anti-ratchet test before this one ran at 1000, where the receipt
+    /// lane's permille is zero and the arm is skipped whole. **Six blocks**: the composition rounds
+    /// half-up, so below six `(total*900 + 500)/1000` still equals `total` and the defect hides
+    /// inside the rounding — which is exactly why the one- and three-block fixtures passed against
+    /// it.
+    #[test]
+    fn a_silent_receipt_lane_does_not_ratchet_the_attempt_lane() {
+        let p = PalwStateParamsV2::new(100, 60, 60, 20, 500, 100, h64(1), 4, 1000, 100, 900, 0).unwrap();
+        let genesis = PalwChainStateV2::genesis();
+        let (mut s, _) = apply(&genesis, &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+        let before = s.class_targets.get(&h64(1)).map(|t| t.target).expect("the class has a target");
+
+        for i in 0..6u64 {
+            let env = attempt(40, i);
+            let (next, _) = apply(&s, &p, &ctx(10 + i, 110 + i, 10 + i), &[], Some(&env));
+            s = next;
+        }
+        assert_eq!(
+            s.epoch_counters.get(&h64(1)).map(|c| c.produced_blocks),
+            Some(6),
+            "the attempt lane produced the whole epoch"
+        );
+        let receipts: u64 = s.receipt_epoch_counters.values().map(|c| c.produced_blocks).sum();
+        assert_eq!(receipts, 0, "the premise: a fresh network has no certified quantum to spend, so no receipt block exists");
+
+        // **The premise, in arithmetic, so this test cannot pass for the wrong reason.** Under the
+        // constant split the expectation for this epoch was `(6*900 + 500)/1000 = 5` against six
+        // observed blocks — a tightening verdict against a class that produced everything there was
+        // to produce. Renormalized, the surviving lane holds the whole denominator and the
+        // expectation is six. Stated here because the assertion below is an equality between two
+        // numbers the fixture does not otherwise reveal.
+        assert_eq!((6u64 * 900 + 500) / 1000, 5, "the constant split expected five of the six");
+        assert_eq!((6u64 * 1000 + 500) / 1000, 6, "the renormalized lane expects all six");
+
+        let (closed, _) = apply(&s, &p, &ctx(99, 250, 99), &[], None);
+        let after = closed.class_targets.get(&h64(1)).map(|t| t.target).expect("the class still has a target");
+        assert_eq!(
+            after, before,
+            "a class that produced the whole of what happened has met its expectation — the lane it \
+             did not use holds no share of a census it contributed nothing to"
+        );
+    }
+
     #[test]
     fn two_lane_retarget_splits_one_census() {
         // Split 800‰: epoch_length 100, so daa 100..200 is epoch 1, closed when a block lands at
