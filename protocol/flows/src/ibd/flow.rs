@@ -913,7 +913,10 @@ impl IbdFlow {
         // A node that has participated on its chain for a stable stretch has not been ping-ponging,
         // so the budget the cap protects starts over. Done before the verdict so a long-settled node
         // is judged on its recent behaviour rather than on its whole life.
-        if self.ctx.chain_participation().ready_stable_for_ms().is_some_and(|stable_ms| stable_ms >= SWITCH_BUDGET_STABLE_RESET_MS) {
+        // `settled_span_ms`, not `ready_stable_for_ms`: this function returns early above unless the
+        // node is NOT participating, so the participating-only reader answered `None` every time it
+        // was called here and the reset never fired. See `ChainParticipationGate::settled_span_ms`.
+        if self.ctx.chain_participation().settled_span_ms().is_some_and(|stable_ms| stable_ms >= SWITCH_BUDGET_STABLE_RESET_MS) {
             self.ctx.ibd_candidates().write().reset_switches();
             self.ctx.chain_participation().clear_switches();
         }

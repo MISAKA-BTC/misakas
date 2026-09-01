@@ -116,6 +116,13 @@ pub struct ChainParticipationGate {
     /// THIS process", and a restart is an interruption. Persisting it would let a node inherit
     /// stability it did not have.
     ready_since_ms: AtomicU64,
+    /// How long the last UNINTERRUPTED participation ran, stamped as it ended.
+    ///
+    /// `ready_since_ms` answers "how long has it been participating", which is unanswerable once
+    /// it stops. The switch budget needs the other question — "was it settled before this started"
+    /// — and its only caller asks after the node has already left `Ready`. In memory only: a
+    /// restart is conservative (no span, so no reset), which is the direction to fail in.
+    last_ready_span_ms: AtomicU64,
     /// What to return to when an IBD changes nothing. Written on entry, read on a no-op failure.
     /// Only one IBD runs at a time — the latch guarantees it — so a single slot is enough.
     pre_ibd_state: AtomicU8,
@@ -152,6 +159,7 @@ impl ChainParticipationGate {
             adoption_generation: AtomicU64::new(0),
             switches: AtomicU32::new(0),
             ready_since_ms: AtomicU64::new(unix_now()),
+            last_ready_span_ms: AtomicU64::new(0),
             pre_ibd_state: AtomicU8::new(READY),
             ibd_generation: AtomicU64::new(0),
             enabled,
@@ -250,6 +258,49 @@ impl ChainParticipationGate {
         self.ready_since_ms.store(unix_now(), Ordering::SeqCst);
     }
 
+    /// Close the current participation span, if one is running.
+    ///
+    /// Called on the transitions OUT of `Ready`. `ready_since_ms` is deliberately left alone: it is
+    /// what `ready_stable_for_ms` reads, and only `quarantine` retires it.
+    fn stamp_ready_span(&self) {
+        let since = self.ready_since_ms.load(Ordering::SeqCst);
+        if since != 0 {
+            // `max(1)`: zero is this field's "never participated", so a span that happened and was
+            // shorter than a millisecond must not be filed as one that did not happen. The caller
+            // compares against thirty minutes, so the floor changes no decision — it keeps the two
+            // states distinguishable.
+            self.last_ready_span_ms.store(unix_now().saturating_sub(since).max(1), Ordering::SeqCst);
+        }
+    }
+
+    /// **The span the switch budget's reset is allowed to judge — the settled stretch before the
+    /// node stopped participating.**
+    ///
+    /// The reset exists so a node with a long, healthy life is judged on its recent behaviour
+    /// rather than on its lifetime switch count. It read [`Self::ready_stable_for_ms`], which
+    /// answers `None` unless the node is participating right now — and its only caller,
+    /// `consider_post_ibd_switch`, returns early when the node IS participating. So the condition
+    /// was false on every call that could reach it, the reset never fired once, and
+    /// `MAX_CHAIN_SWITCHES` became a lifetime cap: the fifth legitimate adoption of a
+    /// verified-better chain, however many months apart, quarantined the node until an operator
+    /// restarted it with `--clear-quarantine`.
+    ///
+    /// Answers the live span while participating and the last completed one otherwise, so the
+    /// caller's question ("was this node settled, or is it ping-ponging") has an answer in the
+    /// state the caller is actually in.
+    pub fn settled_span_ms(&self) -> Option<u64> {
+        if !self.enabled {
+            return None;
+        }
+        if self.state() == ChainParticipation::Ready {
+            return self.ready_stable_for_ms();
+        }
+        match self.last_ready_span_ms.load(Ordering::SeqCst) {
+            0 => None,
+            ms => Some(ms),
+        }
+    }
+
     /// Participation stopped; the stability clock is not running.
     fn mark_not_ready(&self) {
         self.ready_since_ms.store(0, Ordering::SeqCst);
@@ -316,6 +367,7 @@ impl ChainParticipationGate {
         // The interrupted state and the lease are established together with the transition itself,
         // so there is no window in which the node is IbdRunning without a recorded way back.
         let interrupted = if self.state.compare_exchange(READY, IBD_RUNNING, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+            self.stamp_ready_span();
             Some(READY)
         } else if self.state.compare_exchange(CANDIDATE_REVIEW, IBD_RUNNING, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
             Some(CANDIDATE_REVIEW)
@@ -351,7 +403,9 @@ impl ChainParticipationGate {
         // adoption, so one issued for an earlier situation cannot be redeemed against this one.
         self.adoption_generation.fetch_add(1, Ordering::SeqCst);
         let _ = self.state.compare_exchange(IBD_RUNNING, CANDIDATE_REVIEW, Ordering::SeqCst, Ordering::SeqCst);
-        let _ = self.state.compare_exchange(READY, CANDIDATE_REVIEW, Ordering::SeqCst, Ordering::SeqCst);
+        if self.state.compare_exchange(READY, CANDIDATE_REVIEW, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
+            self.stamp_ready_span();
+        }
         self.persist();
     }
 
@@ -939,6 +993,48 @@ mod tests {
     }
 
     #[test]
+    /// **The switch budget's reset could never fire, so the cap was a lifetime cap.**
+    ///
+    /// `consider_post_ibd_switch` returns early unless the node is NOT participating, and then asked
+    /// `ready_stable_for_ms`, which answers only while it IS. The condition was false on every call
+    /// that could reach it. Five legitimate adoptions of verified-better chains — however many
+    /// months apart — then quarantined the node until an operator cleared it by hand.
+    ///
+    /// Asserted as the DIFFERENCE between the two readers in the state the caller is actually in: a
+    /// test that only checked the new one would pass just as well if the old one had been fixed to
+    /// answer everywhere, which would break `ready_stable_for_ms`'s own meaning.
+    #[test]
+    fn the_switch_budgets_reset_can_see_a_span_that_has_already_ended() {
+        let gate = ChainParticipationGate::new(true);
+        assert_eq!(gate.state(), ChainParticipation::Ready, "a fresh gate participates");
+        assert!(gate.ready_stable_for_ms().is_some(), "and its span is running");
+
+        // The state every caller of the reset is in: participation interrupted.
+        gate.enter_candidate_review(60_000);
+        assert_eq!(gate.state(), ChainParticipation::CandidateReview);
+        assert!(
+            gate.ready_stable_for_ms().is_none(),
+            "the participating-only reader is blind here — this is what made the reset dead code"
+        );
+        assert!(gate.settled_span_ms().is_some(), "and the span it should have judged is still there to read");
+
+        // An IBD interrupting participation records its span too.
+        let fresh = ChainParticipationGate::new(true);
+        let lease = fresh.enter_ibd();
+        assert_eq!(fresh.state(), ChainParticipation::IbdRunning);
+        assert!(fresh.ready_stable_for_ms().is_none());
+        assert!(fresh.settled_span_ms().is_some(), "an IBD is an interruption, not an erasure");
+        fresh.release_after_noop_ibd(lease);
+
+        // While participating, the two agree: the new reader adds a state, it does not replace one.
+        let live = ChainParticipationGate::new(true);
+        assert_eq!(live.settled_span_ms(), live.ready_stable_for_ms());
+
+        // A node that never participated has no span to judge, and must not be handed one.
+        let off = ChainParticipationGate::disabled();
+        assert!(off.settled_span_ms().is_none());
+    }
+
     fn quarantine_never_clears_on_its_own() {
         let gate = ChainParticipationGate::new(true);
         gate.quarantine();
