@@ -41,8 +41,12 @@ acceptance tests state it as code:
   inventory answers the operands through real Merkle openings against its root, and the court
   finds no fault; then one tampered lane convicts at representative kernels — a decode call (the
   tiled pin) and a checkpoint-anchored attention step (the v2-map geometry) included.
-* the qwen36 twin of the same sweep, over the hybrid fixture (GDN recurrence, conv, router,
-  routed experts, combine, shared expert, attention — every arm of both layer kinds).
+* `every_qwen36_leaf_adjudicates_and_a_tampered_one_convicts` — the hybrid twin, over the RC's
+  canonical job shape: ~1,900 leaves, every one `NoFaultFound`, five tampered leaves convicting
+  (embed, a GDN recurrence head, a routed-expert tile, a decode call, the last leaf); plus
+  `every_qwen3moe_leaf_adjudicates_and_a_tampered_routed_tile_convicts` for the all-attention
+  flavor. Between them every arm of both layer kinds is exercised — recurrence, convolution,
+  router, routed experts, combine, shared expert, gated attention.
 * `a_real_bisection_converges_on_the_tampered_leaf_and_the_close_convicts`: the composition
   nothing had — a real ladder driven by the two parties' own materials converges on exactly the
   injected-fault leaf, the close passes the cost gate, proves operands against the class root,
@@ -111,10 +115,21 @@ was `Unadjudicable` by construction.
 
 Derive, never declare: the canonical input set for a `.routed` node APPENDS the table's unique
 router-topk row at the same `(call, position)` — committed material, opened like any other input —
-and the arm reads the challenged tile's expert block `b`, takes `e = row[2b]`, and resolves the
-codes/exps/triples under the PER-EXPERT tensors the artifact already stores
-(`blk.N.ffn_expert.{e}_…`). The expert identity is never the accuser's to choose: it comes off the
-claim's own committed row, proven against the claim's own step root.
+and the arm walks the challenged tile block by block, reading each block's expert id off that row
+and resolving the codes/exps/triples under the PER-EXPERT tensors the artifact already stores
+(`blk.N.ffn_expert.{e}_…`) at expert-local offsets. The expert identity is never the accuser's to
+choose: it comes off the claim's own committed row, proven against the claim's own step root.
+
+Building the arm convicted five more court-side descriptions of this graph, each of which would
+have refuted an honest producer at a real dispute: the router arm read `k` from a stored triple
+the engine never reads and emitted an interleaved row (the engine commits ids then weights, and
+`k` is the declared width halved); the combine passed the whole routing row where the kernel takes
+its weight lanes, and assumed disjoint covering runs; `MulWide` needed the four name-dispatched
+resolutions the engine performs (plain, routed-fused, shared-fused, scalar broadcast); the decay
+read a declared name no store holds instead of its two calibration rows plus the bias; the
+convolution's decode window was one position short, and its requant name carried a `.weight` the
+store does not. The `.sink0` position-0 convention is now scoped to classes that declare the dense
+family's own projection kernel — it was firing on the hybrid's like-named seams.
 
 ## 6. Registration obligations — what a court-capable class pins
 
@@ -145,6 +160,15 @@ claim's own committed row, proven against the claim's own step root.
 * The hybrid's checkpoint-anchored recurrence (a registered state chunk map for the GDN state) —
   deliberately deferred exactly as the profile's own comment defers it; `n_ctx 8` is the
   genesis-replay budget until then, and raising the context is gated on that map.
-* Court capability for the ledger-compiled hybrid path (the probed walk is bit-compatible with the
-  planned one, so extending capture to it is mechanical; today the plan-backed path is the
-  court-capable one).
+* **Two findings the sweep left standing rather than papering over.** (a) The hybrid's compiled
+  `forward_token_probed` walk records ~17 named sites per layer against the 46–48 nodes the v2/v3
+  tables declare, so it cannot fill the declared step space: BOTH authorities capture by compiling
+  the plan from the profile they hold (bit-identical to the compiled engine by the standing
+  differentials), and a backend whose id names no ledger row stays legacy and court-incapable.
+  (b) A per-token `embed_lift.a16` store — which the real converter may write for the 33 GiB
+  artifact — is not servable per lane; the inventory refuses it rather than guessing, and the
+  Requantize arm would need the gather's per-token resolution before that leaf adjudicates on real
+  weights. Neither blocks a fixture-verified class; both block claiming the real artifact is
+  covered, which is why they are written here.
+* The hybrid's checkpoint-anchored recurrence, as above; and the `MulElem` cost arm's 9-byte
+  triple pricing (A16 triples are 17), an under-pricing the already-admitted dense class shares.

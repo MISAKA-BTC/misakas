@@ -18,11 +18,11 @@
 //! carrying sampling parameters are answered anyway, and `/health` says the sampler is greedy, so
 //! nobody has to infer it from output that happens to look deterministic.
 //!
-//! **Not court-capable, and it says so.** The A16 family produces logit rows and generated tokens;
-//! it does not capture the activation, checkpoint and step legs that make an execution
-//! adjudicable, and `Qwen25A16Backend` accordingly leaves `supports_court` at its default `false`.
-//! A run served here is therefore a real inference under a registered class and NOT yet a
-//! free-prompt claim anyone can mine — `court_capable: false` in `/health` is that fact, published
+//! **Not court-capable, and it says so.** The A16 FAMILY captures now — the corrected class's
+//! backend commits step, checkpoint and activation legs and answers a court's turns — but THIS
+//! SERVER does not: it drives the engine directly for chat, retains no capture, and a run served
+//! here is a real inference under a registered class and NOT a claim anyone can adjudicate or
+//! mine. `court_capable: false` in `/health` is that fact about the server's own lane, published
 //! where a client can read it rather than discovered after a claim fails to adjudicate.
 //!
 //! **One generation at a time.** A single engine and a single KV cache: concurrent decodes would

@@ -301,7 +301,44 @@ pub fn derive_court_cost_v1(profile: &PalwShapeProfileV3) -> Result<PalwCourtCos
                     // The head-sliced recurrence opens its head's four registered triples.
                     Op::GatedDeltaNet if head_sliced_gdn => 4 * 17,
                     // Tile-local since Decision B: the tile's own weight rows, one byte per int8.
-                    Op::MatMulQuant => tile.checked_mul(in_w).ok_or_else(over)?,
+                    // The GROUPED pair also opens its per-32 exponent rows and its per-row
+                    // triples (the `.exp` / `.a16` suffix reads the executor performs beside the
+                    // codes — for a routed node, per chosen expert at local offsets, which sums
+                    // to the same tile volume). A block-misaligned routed geometry reads up to
+                    // two covering chunks more per block boundary; the projector's own budgets
+                    // keep every expressible geometry aligned, and the term is priced only when
+                    // the alignment does not hold.
+                    Op::MatMulQuant => {
+                        let grouped = [
+                            crate::palw_step_refute::KDESC_Q36_MATMUL_GROUPED,
+                            crate::palw_step_refute::KDESC_Q36_MATMUL_GROUPED_WIDE,
+                        ]
+                        .iter()
+                        .any(|d| crate::palw_step::kernel_semantics_id_v1(d) == node.kernel_semantics_id);
+                        let codes = tile.checked_mul(in_w).ok_or_else(over)?;
+                        if grouped {
+                            let groups = in_w.div_ceil(crate::palw_qwen36_ops::QWEN36_WEIGHT_GROUP as u64);
+                            let row_unit = in_w.checked_add(groups).and_then(|v| v.checked_add(17)).ok_or_else(over)?;
+                            let mut payload =
+                                codes.checked_add(tile.checked_mul(groups.checked_add(17).ok_or_else(over)?).ok_or_else(over)?).ok_or_else(over)?;
+                            if node.weight_name.ends_with(".routed") {
+                                let block_w = if node.weight_name.ends_with(".ffn_down_exps.routed") {
+                                    profile.hidden_dim as u64
+                                } else {
+                                    profile.ffn_dim as u64
+                                };
+                                let chunk = tile.min(block_w.max(1));
+                                if block_w > 0 && (!block_w.is_multiple_of(chunk) || (tile < block_w && !block_w.is_multiple_of(tile))) {
+                                    payload = payload
+                                        .checked_add(2u64.checked_mul(chunk).and_then(|c| c.checked_mul(row_unit)).ok_or_else(over)?)
+                                        .ok_or_else(over)?;
+                                }
+                            }
+                            payload
+                        } else {
+                            codes
+                        }
+                    }
                     // (multiplier LE, shift, zero LE) per channel — per SLICE channel where the
                     // kernel is lane-sliced, because the executor reads its triples at the
                     // slice's own offset and nothing else is served.
@@ -415,6 +452,26 @@ pub fn derive_court_cost_v1(profile: &PalwShapeProfileV3) -> Result<PalwCourtCos
                     .and_then(|v| v.checked_add(24u64.checked_mul(run_tiles)?))
                     .ok_or_else(over)?;
                 evidence = evidence.checked_add(runs.checked_mul(per_run).ok_or_else(over)?).ok_or_else(over)?;
+            }
+
+            // **The routing appendix.** A routed reader's canonical set appends the layer's
+            // committed `RouterTopk` row after the declared refs — one more short run, priced
+            // exactly as the leaf derivation opens it.
+            if crate::palw_step_refute::qwen36_reads_routing_v1(node) {
+                let topk = crate::palw_step::kernel_semantics_id_v1(crate::palw_step_refute::KDESC_Q36_ROUTER_TOPK);
+                if let Some(router) = table.iter().find(|n| n.kernel_semantics_id == topk) {
+                    let lanes = node_out_width_v1(router, profile).ok_or_else(over)?;
+                    let tiles = lanes.div_ceil((router.tile_len as u64).max(1));
+                    let run_path = step_path_bytes
+                        .checked_add(64 * (u64::from(tiles.max(1).next_power_of_two().trailing_zeros()) + 1))
+                        .ok_or_else(over)?;
+                    let appendix = lanes
+                        .checked_mul(4)
+                        .and_then(|l| l.checked_add(run_path))
+                        .and_then(|v| v.checked_add(24u64.checked_mul(tiles)?))
+                        .ok_or_else(over)?;
+                    evidence = evidence.checked_add(appendix).ok_or_else(over)?;
+                }
             }
 
             // **The generated-token pin** (ADR-0049 Decision E). A gather at a DECODE position

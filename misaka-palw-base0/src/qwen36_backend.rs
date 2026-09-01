@@ -6,20 +6,19 @@
 //!
 //! # What this backend can and cannot do, stated first
 //!
-//! `execute` and `verify_material` are real. `bisect_prefix_state` and `refutation_for_index` are
-//! **not implemented**, and they take the trait's honest defaults — `None` and `Err` — rather than
-//! something that looks like a court.
+//! `execute` and `verify_material` are real, and so is the court: a backend holding the
+//! registered graph (either constructor — the chain-registered one, or the ledger-compiled one
+//! armed with a `graph_version >= 2` class) captures every declared step, and
+//! `bisect_prefix_state` / `refutation_for_index` / `operand_openings_for` /
+//! `execute_with_injected_fault` answer over that capture exactly as the floor's and the dense
+//! tier's do. A backend armed with neither a plan nor a profile — a v1 class, or a class this
+//! build's ledger never heard of — keeps the trait's honest defaults (`None` and `Err`) rather
+//! than something that looks like a court, and `supports_court()` says so at boot.
 //!
-//! That is not an oversight to be tidied later; it is a fact about where the work is. The court's
-//! step space for the hybrid graph (`palw_step`'s coordinates, the tile leaves, the refutation
-//! prover) is a separate piece, and ADR-0039 already says what follows from its absence: **no
-//! class may carry fork-choice weight until its kernel catalog is complete.** So a Qwen3.6 class
-//! registered on this backend is admissible for liveness and must not carry weight, and the
-//! coverage gate that enforces that is the same one that already refuses the float families.
-//!
-//! Writing the backend anyway is not premature. Producing is the half that has to exist first —
-//! there is nothing for a court to adjudicate until somebody has run a job and committed to it —
-//! and every root here is one the court will pin against.
+//! The checkpoint leg is EMPTY by construction for this family
+//! ([`qwen36_checkpoint_profile_v1`]), so a refutation never carries a KV anchor: the history
+//! rides as ordinary step openings, which is also the required set the court derives for a
+//! class with zero checkpoints.
 
 use crate::qwen36::{Qwen36ArtifactV1, Qwen36Cache, Qwen36Engine, Qwen36ShapeV1};
 use kaspa_consensus_core::palw_backend::{PalwClaimRootsV1, PalwExecutionBackendV1, PalwExecutionOutcomeV1, PalwMaterialVerdictV1};
@@ -147,7 +146,50 @@ impl Qwen36Backend {
         network_id: Vec<u8>,
     ) -> Self {
         let shape_id = qwen36_shape_id_v1(&artifact.shape);
-        Self { artifact, model_id: model_id.into(), canonical_job, shape_id, class_profile_id, network_id, plan: None, profile: None }
+        // **The ledger-compiled authority captures too, when its class can carry a capture.**
+        // The caller names the class by id; when this build's own ledger holds that class's
+        // graph (a `graph_version >= 2` row — the criterion by which a trace can fill the
+        // declared step space) and the interpreter can serve it over THIS artifact, the plan is
+        // compiled here and every execute commits the captured binding — the same commitment the
+        // chain-registered constructor produces, which is what keeps the two authorities one
+        // protocol. A v1 row, a foreign id or a contradicted artifact stays on the legacy
+        // composite and says `supports_court() == false`, stated rather than guessed.
+        let armed = crate::classes::qwen36_canonical_classes_v1()
+            .into_iter()
+            .filter(|row| row.graph_version >= 2)
+            .filter_map(|row| row.profile().ok())
+            .find(|profile| profile.shape_profile_id() == class_profile_id)
+            .and_then(|profile| {
+                let plan = Qwen36Engine::new(&artifact).plan_from_profile(&profile).ok()?;
+                Some((plan, profile))
+            });
+        let (plan, profile) = match armed {
+            Some((plan, profile)) => (Some(plan), Some(profile)),
+            None => (None, None),
+        };
+        Self { artifact, model_id: model_id.into(), canonical_job, shape_id, class_profile_id, network_id, plan, profile }
+    }
+
+    /// **The ledger-compiled authority, handed the graph it serves** — for callers that already
+    /// hold the class's profile (a resolved ledger row, or a test's own fixture class) rather
+    /// than only its id. Arms the capture exactly when the interpreter can serve the graph over
+    /// this artifact; an unservable declaration keeps the legacy composite and stays
+    /// court-incapable, because refusing to RUN is the registered-constructor's job
+    /// ([`Self::from_registered_profile`]) and this one's callers chose the class themselves.
+    pub fn with_class_profile(
+        artifact: std::sync::Arc<Qwen36ArtifactV1>,
+        model_id: impl Into<String>,
+        canonical_job: (u32, u32),
+        profile: kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+        network_id: Vec<u8>,
+    ) -> Self {
+        let shape_id = qwen36_shape_id_v1(&artifact.shape);
+        let class_profile_id = profile.shape_profile_id();
+        let (plan, profile) = match Qwen36Engine::new(&artifact).plan_from_profile(&profile) {
+            Ok(plan) => (Some(plan), Some(profile)),
+            Err(_) => (None, None),
+        };
+        Self { artifact, model_id: model_id.into(), canonical_job, shape_id, class_profile_id, network_id, plan, profile }
     }
 
     /// **ADR-0067 Decision 2's constructor for the mmap container: a backend for a class this
@@ -192,6 +234,12 @@ impl Qwen36Backend {
 
     pub fn artifact(&self) -> &Qwen36ArtifactV1 {
         &self.artifact
+    }
+
+    /// The CHAIN's id for the class this backend serves — what a caller compares against the
+    /// class a registration names.
+    pub fn class_profile_id(&self) -> Hash64 {
+        self.class_profile_id
     }
 
     pub fn shape_id(&self) -> Hash64 {
@@ -582,6 +630,165 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
             PalwMaterialVerdictV1::Mismatch
         }
     }
+
+    /// The hybrid tier takes a court's turn exactly when it holds the registered graph and the
+    /// plan that proves this build serves it — the pair every capture is placed by. A backend
+    /// armed with neither keeps the trait's honest refusals.
+    fn supports_court(&self) -> bool {
+        self.plan.is_some() && self.profile.is_some()
+    }
+
+    fn bisect_prefix_state(&self, material: &[u8], index: u64) -> Option<kaspa_hashes::Hash64> {
+        let (binding, tiles, _, _, _) = crate::produce::base0_material_decode_v1(material).ok()?;
+        // The count arrived over gossip inside a borsh blob; bounding it BEFORE the allocation is
+        // the lesson the seat check already wrote down.
+        if binding.step_leaf_count == 0 || binding.step_leaf_count > kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES {
+            return None;
+        }
+        let leaves = qwen36_leaves_by_position(&binding, &tiles);
+        Some(crate::legs::base0_bisect_prefix_state_v1(&binding.job_context, &leaves, index))
+    }
+
+    fn refutation_for_index(
+        &self,
+        material: &[u8],
+        index: u64,
+    ) -> Result<kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1, String> {
+        let (binding, tiles, logits_rows, generated, _chunks) =
+            crate::produce::base0_material_decode_v1(material).map_err(|_| "the capture does not decode".to_string())?;
+        if binding.step_leaf_count == 0 || binding.step_leaf_count > kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES {
+            return Err("the binding's leaf count is outside the leg's own cap".to_string());
+        }
+        let coord = kaspa_consensus_core::palw_step::canonical_step_coordinates(&binding.shape_profile, &binding.job_context, index)
+            .ok_or_else(|| format!("leaf {index} is not a main step coordinate"))?;
+        let leaves = qwen36_leaves_by_position(&binding, &tiles);
+        let step_tiles = crate::legs::Base0StepTilesV1 { leaves, tiles };
+
+        // **This class's own pin: the tiled scheme's.** The generated ids are bound through the
+        // rows-tree root — at this family's vocabulary, carrying the rows themselves is exactly
+        // what the tiled scheme exists to avoid.
+        let rows_root = kaspa_consensus_core::palw_step_refute::tiled_logits_rows_root_v1(&binding.job_context, &logits_rows)
+            .ok_or_else(|| "the retained rows build no tree".to_string())?;
+        let pin = kaspa_consensus_core::palw_step_refute::PalwDecodeTokenPinV1::TiledV1(
+            kaspa_consensus_core::palw_step_refute::PalwTiledDecodeTokensV1 { rows_root, generated_token_ids: generated },
+        );
+
+        // **The prompt, re-derived rather than carried** — the attempt lane's prompt is a pure
+        // function of the job's own anchor. A context whose prompt hash does not match the
+        // derivation (a free-prompt lane's, whose tokens the caller chose) gets an empty prompt
+        // instead: the court's hash guard would refuse a wrong one, and an absent one only
+        // narrows which leaves adjudicate.
+        let derived = qwen36_prompt_for_anchor(
+            binding.job_context.job_id,
+            self.artifact.shape.vocab,
+            binding.job_context.declared_prefill_tokens,
+        );
+        let derived_ids: Vec<u32> = derived.iter().map(|t| *t as u32).collect();
+        let prompt_token_ids = if kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(&derived_ids)
+            == binding.job_context.prompt_token_ids_hash
+        {
+            derived_ids
+        } else {
+            Vec::new()
+        };
+
+        // No anchor, ever: this class registers no state chunk map, its leg holds zero
+        // checkpoints ([`qwen36_checkpoint_profile_v1`]), and the KV history rides as ordinary
+        // step openings — which is also the required set the court derives for it.
+        crate::legs::base0_refutation_from_capture_v1(
+            &binding.shape_profile.clone(),
+            &binding.job_context.clone(),
+            &step_tiles,
+            binding,
+            coord,
+            prompt_token_ids,
+            Some(pin),
+            None,
+        )
+        .map_err(|e| format!("{e:?}"))
+    }
+
+    fn operand_openings_for(
+        &self,
+        refutation: &kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1,
+    ) -> Result<Vec<kaspa_consensus_core::palw_artifact::PalwArtifactOpeningV1>, String> {
+        let profile = self.profile.as_ref().ok_or_else(|| "this backend holds no registered graph to open against".to_string())?;
+        let inventory = crate::inventory::qwen36_inventory_v1(&self.artifact, profile).map_err(|e| format!("{e:?}"))?;
+        let recorder = kaspa_consensus_core::palw_artifact::PalwRecordingOracleV1::new(inventory.operands());
+        // The verdict is not ours to read here — this runs the adjudicator only to learn WHICH
+        // rows it resolves, and it resolves the same rows whichever way the step reads.
+        let _ = kaspa_consensus_core::palw_step_refute::check_execution_step_refutation_v1(refutation, &recorder);
+        recorder.openings().ok_or_else(|| "the inventory could not open a recorded row".to_string())
+    }
+
+    fn execute_with_injected_fault(
+        &self,
+        job: &PalwJobContextV2,
+        prompt: &[usize],
+        leaf_index: u64,
+    ) -> Result<PalwExecutionOutcomeV1, String> {
+        let (Some(plan), Some(profile)) = (&self.plan, &self.profile) else {
+            return Err("a backend with no registered graph carries no capture to tamper with".to_string());
+        };
+        let mut run = qwen36_execute_for_attempt_v1(&self.artifact, profile, plan, job, prompt)?;
+        let ctx_hash = job.context_hash();
+        let profile_hash = profile.shape_profile_id();
+        {
+            let slot = run
+                .tiles
+                .tiles
+                .iter_mut()
+                .find(|(i, _)| *i == leaf_index)
+                .ok_or_else(|| format!("the capture holds no tile at leaf {leaf_index}"))?;
+            slot.1.values_le[0] = slot.1.values_le[0].wrapping_add(1);
+            run.tiles.leaves[leaf_index as usize] =
+                kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, &slot.1);
+        }
+        // **Re-derive, do not patch.** The commitment must be the corrupted capture's OWN, or
+        // this is a producer whose roots disagree with its material — which any seat catches
+        // without a court, and which is therefore not the fraud under test.
+        let checkpoint_profile = qwen36_checkpoint_profile_v1(profile);
+        let binding = crate::legs::base0_binding_from_capture_with_profile_v1(
+            profile,
+            job,
+            &run.tiles,
+            &run.checkpoints,
+            &checkpoint_profile,
+            run.trace_root,
+            crate::produce::base0_activation_leg_root_v1(job),
+        )
+        .map_err(|e| format!("{e:?}"))?;
+        run.execution_root = binding.committed_execution_root;
+        run.binding = binding;
+        let material = crate::produce::base0_material_encode_v1(&run).map_err(|e| e.to_string())?;
+        Ok(PalwExecutionOutcomeV1 {
+            trace_root: run.trace_root,
+            output_root: run.output_root,
+            execution_root: run.execution_root,
+            trace_manifest_root: run.trace_manifest_root,
+            trace_chunk_count: run.trace_chunk_count,
+            material,
+        })
+    }
+}
+
+/// The committed leaf-hash vector, rebuilt from retained tiles — the shape the rung and the
+/// refutation helpers read. The floor and the dense tier each keep an identical private helper
+/// beside their own backends; this is the hybrid family's copy of the same eleven lines rather
+/// than a premature trait.
+fn qwen36_leaves_by_position(
+    binding: &kaspa_consensus_core::palw_step_leg::PalwStepBindingV2,
+    tiles: &[(u64, kaspa_consensus_core::palw_step_leg::PalwStepTileLeafV1)],
+) -> Vec<Hash64> {
+    let ctx_hash = binding.job_context.context_hash();
+    let profile_hash = binding.shape_profile.shape_profile_id();
+    let mut leaves = vec![Hash64::default(); binding.step_leaf_count as usize];
+    for (index, leaf) in tiles {
+        if let Some(slot) = leaves.get_mut(*index as usize) {
+            *slot = kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, leaf);
+        }
+    }
+    leaves
 }
 
 #[cfg(test)]
@@ -684,19 +891,22 @@ mod tests {
     }
 
     /// **ADR-0067: the chain-registered constructor commits exactly what the ledger path
-    /// commits.** Same artifact, same graph — one backend built the compiled way, one FROM the
-    /// registered declaration — one anchor: the derived jobs, all four roots and the material
-    /// must be equal, or a chain-armed node and a ledger node would answer one claim differently.
+    /// commits.** Same artifact, same graph — one backend built the ledger-compiled way (handed
+    /// the class it serves, as a resolved ledger row hands it), one FROM the registered
+    /// declaration — one anchor: the derived jobs, all four roots and the material must be
+    /// equal, or a chain-armed node and a ledger node would answer one claim differently. Both
+    /// authorities CAPTURE: a capture-capable class commits the step binding's own root
+    /// whichever door built the backend, which is what makes the roots comparable at all.
     #[test]
     fn the_registered_declaration_backend_commits_the_compiled_backends_roots() {
         let artifact = std::sync::Arc::new(crate::qwen36::test_fixture(4, 8));
         let geometry = crate::qwen36_plan::fixture_geometry_of(&artifact.shape, 4);
         let profile = kaspa_consensus_core::palw_qwen36_profile::qwen36_profile_v2(geometry).expect("the fixture geometry projects");
-        let class_id = profile.shape_profile_id();
         let network = b"misaka-palw-test".to_vec();
-        let compiled = Qwen36Backend::new(artifact.clone(), "Qwen3.6-fixture", (4, 2), class_id, network.clone());
+        let compiled = Qwen36Backend::with_class_profile(artifact.clone(), "Qwen3.6-fixture", (4, 2), profile.clone(), network.clone());
         let planned = Qwen36Backend::from_registered_profile(artifact, network, profile, (4, 2)).expect("the graph is servable");
         assert_eq!(planned.model_id(), "PALW-QWEN36/chain-registered");
+        assert!(compiled.supports_court() && planned.supports_court(), "both authorities hold the capture");
 
         let anchor = Hash64::from_u64_word(0xC0FFEE);
         let (job_a, prompt_a) = compiled.job_for_anchor(anchor).expect("a job");
@@ -747,6 +957,163 @@ mod tests {
             b"misaka-palw-test".to_vec(),
         );
         assert!(a.job_for_anchor(Hash64::default()).is_err());
+    }
+
+    /// **The hybrid step space, end to end: every leaf of a captured attempt adjudicates, and a
+    /// tampered one convicts** — the theorem this family's court capability rests on, and the
+    /// same sweep the dense tier already passes
+    /// (`every_a16_leaf_adjudicates_and_a_tampered_one_convicts`).
+    ///
+    /// One captured run of the corrected (`graph-v2`) class at the RC-canonical job shape; then,
+    /// for EVERY leaf of its step space, the backend's own prover assembles the refutation, the
+    /// backend's own inventory answers for the operands through real Merkle openings against its
+    /// root, and the court finds no fault. A single leaf that reads `Unadjudicable` is a step
+    /// nobody can police — the coverage-clean-but-unprosecutable shape ADR-0049 exists to refuse
+    /// — so the sweep is exhaustive rather than sampled, and it is what held the court's arms to
+    /// the registration: the routed experts' resolution, the router row's committed layout, the
+    /// decay's two calibration rows and the sink convention's family scope were all its
+    /// convictions. The same prover then convicts a run with one tampered lane at kernels of
+    /// different shapes — the embedding gather, a GatedDeltaNet recurrence head, a routed-expert
+    /// projection tile, and a decode-call leaf (whose adjudication rides the tiled pin).
+    #[test]
+    fn every_qwen36_leaf_adjudicates_and_a_tampered_one_convicts() {
+        use kaspa_consensus_core::palw_step_refute::{PalwStepRefuteError, check_execution_step_refutation_v1};
+
+        let artifact = std::sync::Arc::new(crate::qwen36::test_fixture(4, 8));
+        let geometry = crate::qwen36_plan::fixture_geometry_of(&artifact.shape, 4);
+        let profile = kaspa_consensus_core::palw_qwen36_profile::qwen36_profile_v2(geometry).expect("the fixture geometry projects");
+        let backend = Qwen36Backend::from_registered_profile(
+            artifact.clone(),
+            b"misaka-palw-test".to_vec(),
+            profile.clone(),
+            kaspa_consensus_core::palw_qwen36_profile::QWEN36_RC_CANONICAL,
+        )
+        .expect("the corrected graph is servable");
+        assert!(backend.supports_court(), "the corrected class takes a court's turn");
+
+        let anchor = Hash64::from_u64_word(0x0936_C017);
+        let (job, prompt) = backend.job_for_anchor(anchor).expect("the anchor implies a job");
+        let outcome = backend.execute(&job, &prompt).expect("the corrected class runs the attempt lane");
+        let (binding, _tiles, _logits, _generated, _chunks) =
+            crate::produce::base0_material_decode_v1(&outcome.material).expect("the captured material decodes");
+        assert_eq!(outcome.execution_root, binding.committed_execution_root, "the claim commits the binding's own root");
+
+        // The seat's half, against this very claim.
+        let claim =
+            PalwClaimRootsV1 { execution_root: outcome.execution_root, trace_root: outcome.trace_root, anchor };
+        assert_eq!(backend.verify_material(&outcome.material, claim), PalwMaterialVerdictV1::Matches);
+
+        // One proven oracle over the whole inventory — the production path a close takes.
+        let inventory = crate::inventory::qwen36_inventory_v1(&artifact, &profile).expect("the corrected class yields an inventory");
+        let openings: Vec<_> = (0..inventory.operands().len())
+            .map(|i| kaspa_consensus_core::palw_artifact::open_artifact_leaf_v1(inventory.operands(), i as u32).unwrap())
+            .collect();
+        let oracle = kaspa_consensus_core::palw_artifact::PalwProvenOperandsV1::from_openings_v1(&openings, inventory.root())
+            .expect("every inventory row proves against its own root");
+
+        // The sweep: every leaf of the step space clears the honest capture.
+        for index in 0..binding.step_leaf_count {
+            let refutation = backend
+                .refutation_for_index(&outcome.material, index)
+                .unwrap_or_else(|e| panic!("leaf {index} must open from an honest capture: {e}"));
+            let got = check_execution_step_refutation_v1(&refutation, &oracle);
+            let named = profile
+                .resolve_node_slot(refutation.output_preimage.coord.node_slot)
+                .map(|(n, l)| format!("{} (layer {l:?})", n.weight_name))
+                .unwrap_or_default();
+            assert!(
+                matches!(got, Err(PalwStepRefuteError::NoFaultFound)),
+                "an honest execution must clear itself at leaf {index} (coord {:?}, node {named}): got {got:?}",
+                refutation.output_preimage.coord
+            );
+        }
+
+        // The other direction: one tampered lane convicts, at kernels of different shapes. The
+        // coordinates are FOUND, not hardcoded, so a table edit cannot silently retarget the
+        // tampering at some other kernel.
+        let coord_of = |index: u64| {
+            kaspa_consensus_core::palw_step::canonical_step_coordinates(&profile, &job, index).expect("a main step coordinate")
+        };
+        let leaf_where = |want: &dyn Fn(&kaspa_consensus_core::palw_step::PalwStepNodeV1, u32) -> bool| -> u64 {
+            (0..binding.step_leaf_count)
+                .find(|i| {
+                    let coord = coord_of(*i);
+                    profile.resolve_node_slot(coord.node_slot).is_some_and(|(n, _)| want(n, coord.call_index))
+                })
+                .expect("the step space holds the wanted kernel")
+        };
+        let embed_leaf = 0u64;
+        let gdn_leaf = leaf_where(&|n, _| {
+            n.kernel_semantics_id
+                == kaspa_consensus_core::palw_step::kernel_semantics_id_v1(kaspa_consensus_core::palw_step_refute::KDESC_Q36_GDN_STEP)
+        });
+        let routed_leaf = leaf_where(&|n, _| n.weight_name.ends_with(".routed"));
+        let decode_leaf = leaf_where(&|_, call| call > 0);
+        assert!(coord_of(decode_leaf).call_index > 0, "the decode representative rides the tiled pin");
+        for index in [embed_leaf, gdn_leaf, routed_leaf, decode_leaf, binding.step_leaf_count - 1] {
+            let lying = backend.execute_with_injected_fault(&job, &prompt, index).expect("a tampered capture still commits");
+            let refutation = backend.refutation_for_index(&lying.material, index).expect("a tampered capture opens too");
+            let openings = backend.operand_openings_for(&refutation).expect("the prover opens what the court resolves");
+            let proven = kaspa_consensus_core::palw_artifact::PalwProvenOperandsV1::from_openings_v1(&openings, inventory.root())
+                .expect("recorded openings prove");
+            assert!(
+                check_execution_step_refutation_v1(&refutation, &proven).is_ok(),
+                "a tampered lane at leaf {index} must convict, not read as no fault"
+            );
+        }
+    }
+
+    /// The all-attention (qwen3moe) flavor through the same sweep: no recurrence, no gate, no
+    /// shared expert — the stripped v2 graph — every leaf adjudicates and a routed tile still
+    /// convicts. Cheaper than the hybrid sweep (three layers, one call class fewer of kernels),
+    /// and what says the Coder-shaped members are prosecutable, not just the hybrid.
+    #[test]
+    fn every_qwen3moe_leaf_adjudicates_and_a_tampered_routed_tile_convicts() {
+        use kaspa_consensus_core::palw_step_refute::{PalwStepRefuteError, check_execution_step_refutation_v1};
+
+        let artifact = std::sync::Arc::new(crate::qwen36::qwen3moe_dev_fixture(3, 8));
+        let geometry = crate::qwen36_plan::fixture_geometry_of(&artifact.shape, 1);
+        let profile = kaspa_consensus_core::palw_qwen36_profile::qwen36_profile_v2(geometry).expect("the stripped geometry projects");
+        let backend =
+            Qwen36Backend::from_registered_profile(artifact.clone(), b"misaka-palw-test".to_vec(), profile.clone(), (4, 2))
+                .expect("the stripped graph is servable");
+        assert!(backend.supports_court());
+
+        let (job, prompt) = backend.job_for_anchor(Hash64::from_u64_word(0x30E5_C017)).expect("a job");
+        let outcome = backend.execute(&job, &prompt).expect("the stripped class runs the attempt lane");
+        let (binding, _, _, _, _) = crate::produce::base0_material_decode_v1(&outcome.material).expect("decodes");
+
+        let inventory = crate::inventory::qwen36_inventory_v1(&artifact, &profile).expect("an inventory");
+        let openings: Vec<_> = (0..inventory.operands().len())
+            .map(|i| kaspa_consensus_core::palw_artifact::open_artifact_leaf_v1(inventory.operands(), i as u32).unwrap())
+            .collect();
+        let oracle = kaspa_consensus_core::palw_artifact::PalwProvenOperandsV1::from_openings_v1(&openings, inventory.root())
+            .expect("proves");
+
+        for index in 0..binding.step_leaf_count {
+            let refutation =
+                backend.refutation_for_index(&outcome.material, index).unwrap_or_else(|e| panic!("leaf {index}: {e}"));
+            let got = check_execution_step_refutation_v1(&refutation, &oracle);
+            assert!(
+                matches!(got, Err(PalwStepRefuteError::NoFaultFound)),
+                "leaf {index} (coord {:?}): got {got:?}",
+                refutation.output_preimage.coord
+            );
+        }
+
+        let routed_leaf = (0..binding.step_leaf_count)
+            .find(|i| {
+                kaspa_consensus_core::palw_step::canonical_step_coordinates(&profile, &job, *i)
+                    .and_then(|c| profile.resolve_node_slot(c.node_slot).map(|(n, _)| n.weight_name.ends_with(".routed")))
+                    .unwrap_or(false)
+            })
+            .expect("the stripped graph still routes");
+        let lying = backend.execute_with_injected_fault(&job, &prompt, routed_leaf).expect("commits");
+        let refutation = backend.refutation_for_index(&lying.material, routed_leaf).expect("opens");
+        let openings = backend.operand_openings_for(&refutation).expect("the prover opens what the court resolves");
+        let proven = kaspa_consensus_core::palw_artifact::PalwProvenOperandsV1::from_openings_v1(&openings, inventory.root())
+            .expect("proves");
+        assert!(check_execution_step_refutation_v1(&refutation, &proven).is_ok(), "a tampered routed tile must convict");
     }
 
     /// The shape id separates two graphs. Two classes that shared one would be two classes the

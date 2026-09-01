@@ -77,6 +77,29 @@ pub(crate) fn dense_artifact_by_digest(
     holdings.iter().filter_map(artifact_of).find(|a| a.artifact_digest() == root)
 }
 
+/// The dense holding a CHAIN-REGISTERED root names, under either root form a dense registration
+/// can pin: the artifact's digest (the v1 A16 spelling), or — when the registered profile is the
+/// court-capable one (the four-byte map, the same predicate `supports_court` answers) — the A16
+/// operand-inventory root derived from THAT profile, which is what an arithmetic close's openings
+/// prove against. The profile is the registration's own carriage, so the derivation cannot be a
+/// second mapping: it is `a16_inventory_v1` at the class's declared graph, per candidate holding.
+pub(crate) fn dense_artifact_by_registered_root(
+    holdings: &[PalwLoadedArtifactV1],
+    root: kaspa_hashes::Hash64,
+    profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+) -> Option<std::sync::Arc<Base0ArtifactV1>> {
+    if let Some(artifact) = dense_artifact_by_digest(holdings, root) {
+        return Some(artifact);
+    }
+    if profile.state_chunk_map_id != kaspa_consensus_core::palw_state_chunk_map::integer_kv_state_chunk_map_id_v2() {
+        return None;
+    }
+    holdings
+        .iter()
+        .filter_map(artifact_of)
+        .find(|a| misaka_palw_base0::inventory::a16_inventory_v1(a, profile).is_ok_and(|inv| inv.root() == root))
+}
+
 fn dense_artifacts(holdings: &[PalwLoadedArtifactV1]) -> Vec<Base0ArtifactV1> {
     holdings.iter().filter_map(artifact_of).map(|a| (*a).clone()).collect()
 }

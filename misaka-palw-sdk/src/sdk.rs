@@ -415,7 +415,7 @@ impl PalwClassSdk {
                 canonical.shape_profile_id
             ));
         }
-        if let Some(artifact) = crate::lineages::dense::dense_artifact_by_digest(holdings, artifact_root) {
+        if let Some(artifact) = crate::lineages::dense::dense_artifact_by_registered_root(holdings, artifact_root, profile) {
             let backend = misaka_palw_base0::qwen25_a16_backend::Qwen25A16Backend::from_registered_profile(
                 artifact,
                 self.network_id.clone(),
@@ -737,13 +737,20 @@ mod mmap_chain_arm_tests {
             armed.resolve_chain_registered(class_id, root, &holdings, &profile, &canonical).expect("a held mapping serves");
         assert_eq!(interpreted.model_id(), "PALW-QWEN36/chain-registered");
 
-        let compiled = misaka_palw_base0::qwen36_backend::Qwen36Backend::new(
+        // The ledger-compiled authority, handed the graph it serves. `::new` self-arms from THIS
+        // BUILD's own class ledger, and this fixture class is deliberately not a ledger row — a
+        // node whose tables never heard of the class would fall back to the legacy composite and
+        // the comparison below would be against an authority that is not serving this graph at
+        // all. `with_class_profile` is the same compiled authority for a caller that holds the
+        // declaration, which is what a resolved ledger row is.
+        let compiled = misaka_palw_base0::qwen36_backend::Qwen36Backend::with_class_profile(
             artifact,
             "Qwen3.6-fixture",
             (4, 2),
-            class_id,
+            profile.clone(),
             b"misaka-palw-rc".to_vec(),
         );
+        assert_eq!(compiled.class_profile_id(), class_id, "the compiled authority serves the class the chain named");
         let anchor = Hash64::from_u64_word(0x67);
         let (job_i, prompt_i) = interpreted.job_for_anchor(anchor).expect("a job");
         let (job_c, prompt_c) = compiled.job_for_anchor(anchor).expect("a job");
