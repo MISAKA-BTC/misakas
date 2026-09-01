@@ -381,6 +381,40 @@ impl<'a> Qwen36Engine<'a> {
         Ok((logits, trace))
     }
 
+    /// The same planned pass, keeping only the logit row — the PRODUCER's entry. A walk must
+    /// retain a table's rows while that table runs (any later node may read any earlier row),
+    /// but nothing after a layer reads that layer's rows again, and the traced variant retains
+    /// all of them for the life of the token — tens of megabytes per forward at the real class's
+    /// widths, serving no reader. The roots this family commits are computed from logits alone.
+    /// Held bit-identical to [`Self::forward_token_planned`] by `the_untraced_walk_is_the_traced_one`.
+    pub fn forward_token_planned_logits(
+        &self,
+        plan: &Qwen36ProfilePlanV1,
+        cache: &mut Qwen36Cache,
+        token_id: usize,
+        position: usize,
+    ) -> Result<Vec<i32>, Qwen36Error> {
+        let s = &self.artifact.shape;
+        if plan.layer_kinds.len() != s.n_layers() {
+            return Err(Qwen36Error::BadParams("the plan and the artifact disagree about the layer count".into()));
+        }
+        if token_id >= s.vocab {
+            return Err(Qwen36Error::Position);
+        }
+        let rows = self.walk_table(&plan.pre, None, token_id, position, None)?;
+        let mut h = rows.into_iter().next_back().ok_or_else(|| Qwen36Error::BadParams("an empty pre table".into()))?;
+        for (li, kind) in plan.layer_kinds.iter().enumerate() {
+            let table = match kind {
+                Qwen36LayerKind::LinearAttention => &plan.gdn,
+                Qwen36LayerKind::FullAttention => &plan.attn,
+            };
+            let rows = self.walk_table(table, Some(&h), token_id, position, Some((li, cache)))?;
+            h = rows.into_iter().next_back().ok_or_else(|| Qwen36Error::BadParams("an empty layer table".into()))?;
+        }
+        let rows = self.walk_table(&plan.post, Some(&h), token_id, position, None)?;
+        rows.into_iter().next_back().ok_or_else(|| Qwen36Error::BadParams("an empty post table".into()))
+    }
+
     /// Walk one table. `layer` is `Some((index, cache))` for the layer tables — the only ones
     /// with cache reads, cache writes and per-layer operands.
     fn walk_table(
@@ -1276,40 +1310,48 @@ fn plan_table(
     Ok(out)
 }
 
+/// The geometry a fixture's shape registers as — for tests in this crate. `interval` is the
+/// profile's spelling of the layer alternation; the fixtures use the family's own rule, so 4
+/// reproduces the hybrid stack and 1 the all-attention one.
+#[cfg(test)]
+pub(crate) fn fixture_geometry_of(
+    s: &Qwen36ShapeV1,
+    interval: u16,
+) -> kaspa_consensus_core::palw_qwen36_profile::PalwQwen36GeometryV1 {
+    kaspa_consensus_core::palw_qwen36_profile::PalwQwen36GeometryV1 {
+        layer_count: s.n_layers() as u16,
+        full_attention_interval: interval,
+        hidden_dim: s.d_model as u32,
+        attn_heads: s.n_heads as u16,
+        attn_kv_heads: s.n_kv_heads as u16,
+        attn_head_dim: s.head_dim as u32,
+        rope_dims: s.rotary_dim as u16,
+        rope_freq_base_bits: 0x4B18_9680,
+        gdn_k_heads: s.linear_k_heads as u16,
+        gdn_v_heads: s.linear_v_heads as u16,
+        gdn_head_dim: s.linear_head_dim as u32,
+        gdn_conv_kernel: s.conv_kernel as u16,
+        n_experts: s.n_experts as u32,
+        experts_per_token: s.experts_per_token as u32,
+        moe_dim: s.moe_dim as u32,
+        shared_dim: s.shared_dim as u32,
+        attn_output_gate: if s.attn_output_gate() { 1 } else { 0 },
+        vocab_size: s.vocab as u32,
+        n_ctx: 8,
+        n_threads: 1,
+        rms_eps_q: s.eps_q,
+        tile_len: 512,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::qwen36::{Qwen36Cache, qwen3moe_dev_fixture, qwen36_dev_fixture, test_fixture_for_shape};
     use kaspa_consensus_core::palw_qwen36_profile::{PalwQwen36GeometryV1, qwen36_profile_v1, qwen36_profile_v2};
 
-    /// The geometry a fixture's shape registers as. `interval` is the profile's spelling of the
-    /// layer alternation; the fixtures use the family's own rule, so 4 reproduces the hybrid
-    /// stack and 1 the all-attention one.
     fn geometry_of(s: &Qwen36ShapeV1, interval: u16) -> PalwQwen36GeometryV1 {
-        PalwQwen36GeometryV1 {
-            layer_count: s.n_layers() as u16,
-            full_attention_interval: interval,
-            hidden_dim: s.d_model as u32,
-            attn_heads: s.n_heads as u16,
-            attn_kv_heads: s.n_kv_heads as u16,
-            attn_head_dim: s.head_dim as u32,
-            rope_dims: s.rotary_dim as u16,
-            rope_freq_base_bits: 0x4B18_9680,
-            gdn_k_heads: s.linear_k_heads as u16,
-            gdn_v_heads: s.linear_v_heads as u16,
-            gdn_head_dim: s.linear_head_dim as u32,
-            gdn_conv_kernel: s.conv_kernel as u16,
-            n_experts: s.n_experts as u32,
-            experts_per_token: s.experts_per_token as u32,
-            moe_dim: s.moe_dim as u32,
-            shared_dim: s.shared_dim as u32,
-            attn_output_gate: if s.attn_output_gate() { 1 } else { 0 },
-            vocab_size: s.vocab as u32,
-            n_ctx: 8,
-            n_threads: 1,
-            rms_eps_q: s.eps_q,
-            tile_len: 512,
-        }
+        super::fixture_geometry_of(s, interval)
     }
 
     /// Both passes over a fresh cache each, compared to the bit at every position.
@@ -1347,6 +1389,28 @@ mod tests {
     #[test]
     fn the_qwen3moe_flavor_agrees_bit_for_bit() {
         differential(&qwen3moe_dev_fixture(3, 8), 1, 6);
+    }
+
+    /// The producer's untraced walk is the traced one — same logits, same cache left behind — or
+    /// the two entries have drifted and the differential above vouches for only one of them.
+    #[test]
+    fn the_untraced_walk_is_the_traced_one() {
+        let artifact = qwen36_dev_fixture(4, 8);
+        let engine = Qwen36Engine::new(&artifact);
+        let profile = qwen36_profile_v2(geometry_of(&artifact.shape, 4)).expect("projects");
+        let plan = engine.plan_from_profile(&profile).expect("servable");
+        let mut traced_cache = Qwen36Cache::new(&artifact.shape);
+        let mut untraced_cache = Qwen36Cache::new(&artifact.shape);
+        for position in 0..5usize {
+            let token = (position * 7 + 3) % artifact.shape.vocab;
+            let (a, _) = engine.forward_token_planned(&plan, &mut traced_cache, token, position).expect("traced");
+            let b = engine.forward_token_planned_logits(&plan, &mut untraced_cache, token, position).expect("untraced");
+            assert_eq!(a, b, "logits at position {position}");
+        }
+        assert_eq!(traced_cache.keys, untraced_cache.keys);
+        assert_eq!(traced_cache.values, untraced_cache.values);
+        assert_eq!(traced_cache.conv, untraced_cache.conv);
+        assert_eq!(traced_cache.gdn, untraced_cache.gdn);
     }
 
     /// **The committed rows, at every site the compiled engine can name.** The logits agreeing

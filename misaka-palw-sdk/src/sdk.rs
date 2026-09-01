@@ -382,11 +382,15 @@ impl PalwClassSdk {
     ///    wrong object, not a wrong opinion;
     /// 3. the canonical job names the same class, because the pwu this class is paid per was
     ///    counted from that job (a canonical job for another graph prices another class);
-    /// 4. an artifact whose digest is the registered root is among `holdings` — Decision 6:
+    /// 4. an artifact whose COMPUTED root is the registered root is among `holdings` — Decision 6:
     ///    possession is the operator's chosen act, so its absence is a "fetch it" error, not a
-    ///    protocol fault;
+    ///    protocol fault. The root also decides the CONTAINER: it is a digest over one artifact's
+    ///    own bytes, so it matches at most one holding, and that holding's lineage — dense or
+    ///    mmap — is the engine that serves the declaration. Nothing infers a family from the
+    ///    profile, because a profile is what is being judged;
     /// 5. the plan compiles — every declared node lands inside this build's kernel vocabulary
-    ///    (Decision 3's boundary, surfaced with the node named).
+    ///    and none of it contradicts the held artifact's geometry (Decision 3's boundary,
+    ///    surfaced with the node or the field named).
     pub fn resolve_chain_registered(
         &self,
         class_id: Hash64,
@@ -411,19 +415,28 @@ impl PalwClassSdk {
                 canonical.shape_profile_id
             ));
         }
-        let Some(artifact) = crate::lineages::dense::dense_artifact_by_digest(holdings, artifact_root) else {
-            return Err(format!(
-                "this node holds no artifact whose digest is the registered root {artifact_root} — fetch the class's \
-                 artifact and load it (--palw-class-artifact); registration does not obligate possession (ADR-0067 Decision 6)"
-            ));
-        };
-        let backend = misaka_palw_base0::qwen25_a16_backend::Qwen25A16Backend::from_registered_profile(
-            artifact,
-            self.network_id.clone(),
-            profile.clone(),
-            (canonical.declared_prefill_tokens, canonical.exact_decode_tokens),
-        )?;
-        Ok(Box::new(backend))
+        if let Some(artifact) = crate::lineages::dense::dense_artifact_by_digest(holdings, artifact_root) {
+            let backend = misaka_palw_base0::qwen25_a16_backend::Qwen25A16Backend::from_registered_profile(
+                artifact,
+                self.network_id.clone(),
+                profile.clone(),
+                (canonical.declared_prefill_tokens, canonical.exact_decode_tokens),
+            )?;
+            return Ok(Box::new(backend));
+        }
+        if let Some(artifact) = crate::lineages::qwen36::qwen36_artifact_by_root(holdings, artifact_root) {
+            let backend = misaka_palw_base0::qwen36_backend::Qwen36Backend::from_registered_profile(
+                artifact,
+                self.network_id.clone(),
+                profile.clone(),
+                (canonical.declared_prefill_tokens, canonical.exact_decode_tokens),
+            )?;
+            return Ok(Box::new(backend));
+        }
+        Err(format!(
+            "this node holds no artifact whose digest is the registered root {artifact_root} — fetch the class's \
+             artifact and load it (--palw-class-artifact); registration does not obligate possession (ADR-0067 Decision 6)"
+        ))
     }
 
     /// **The admission gate, run BEFORE anything is signed or funded.**
@@ -664,6 +677,116 @@ mod chain_arm_tests {
         let unserved =
             armed.resolve_chain_registered(foreign_id, root, &holdings, &foreign, &foreign_canonical).map(drop).unwrap_err();
         assert!(unserved.contains("cannot serve the registered graph"), "the kernel boundary speaks: {unserved}");
+    }
+}
+
+#[cfg(test)]
+mod mmap_chain_arm_tests {
+    use super::chain_arm_tests::court;
+    use super::*;
+    use kaspa_consensus_core::palw_base0_profile::rc_job_context;
+    use kaspa_consensus_core::palw_qwen36_profile::{PalwQwen36GeometryV1, qwen36_profile_v1, qwen36_profile_v2};
+
+    /// The geometry of `qwen36_dev_fixture(4, 8)`, spelled out — the SDK cannot reach the base0
+    /// crate's test-only helper, and the interpreter's own differentials pin this mapping.
+    fn fixture_geometry() -> PalwQwen36GeometryV1 {
+        PalwQwen36GeometryV1 {
+            layer_count: 4,
+            full_attention_interval: 4,
+            hidden_dim: 32,
+            attn_heads: 4,
+            attn_kv_heads: 2,
+            attn_head_dim: 16,
+            rope_dims: 4,
+            rope_freq_base_bits: 0x4B18_9680,
+            gdn_k_heads: 2,
+            gdn_v_heads: 4,
+            gdn_head_dim: 8,
+            gdn_conv_kernel: 4,
+            n_experts: 8,
+            experts_per_token: 4,
+            moe_dim: 16,
+            shared_dim: 16,
+            attn_output_gate: 1,
+            vocab_size: 64,
+            n_ctx: 8,
+            n_threads: 1,
+            rms_eps_q: 1,
+            tile_len: 512,
+        }
+    }
+
+    /// **The chain arm serves the mmap container, and its execution is the compiled path's.**
+    /// The same fence, the same refusal order, and the same promise the dense arm made: one
+    /// anchor, two authorities, one set of roots — or ADR-0067's merge is still two authorities.
+    #[test]
+    fn the_chain_arm_serves_the_mmap_family_and_matches_the_compiled_path() {
+        let artifact = std::sync::Arc::new(misaka_palw_base0::qwen36::qwen36_dev_fixture(4, 8));
+        let profile = qwen36_profile_v2(fixture_geometry()).expect("the fixture geometry projects");
+        let class_id = profile.shape_profile_id();
+        let root = artifact.artifact_root();
+        let canonical = rc_job_context(&profile, 4, 2);
+        let holdings = vec![crate::lineages::qwen36::holding_from_artifact(artifact.clone(), None)];
+
+        let sealed = PalwClassSdk::builtin_v1(court(), b"misaka-palw-rc".to_vec());
+        let err = sealed.resolve_chain_registered(class_id, root, &holdings, &profile, &canonical).map(drop).unwrap_err();
+        assert!(err.contains("fenced off"), "the mmap arm sits behind the same fence: {err}");
+
+        let armed = PalwClassSdk::builtin_v1(court(), b"misaka-palw-rc".to_vec()).with_chain_classes_v1();
+        let interpreted =
+            armed.resolve_chain_registered(class_id, root, &holdings, &profile, &canonical).expect("a held mapping serves");
+        assert_eq!(interpreted.model_id(), "PALW-QWEN36/chain-registered");
+
+        let compiled = misaka_palw_base0::qwen36_backend::Qwen36Backend::new(
+            artifact,
+            "Qwen3.6-fixture",
+            (4, 2),
+            class_id,
+            b"misaka-palw-rc".to_vec(),
+        );
+        let anchor = Hash64::from_u64_word(0x67);
+        let (job_i, prompt_i) = interpreted.job_for_anchor(anchor).expect("a job");
+        let (job_c, prompt_c) = compiled.job_for_anchor(anchor).expect("a job");
+        assert_eq!(prompt_i, prompt_c, "the prompt is a pure function of the anchor");
+        assert_eq!(job_i.context_hash(), job_c.context_hash(), "one job, whichever authority derived it");
+        let a = interpreted.execute(&job_i, &prompt_i).expect("the chain arm runs");
+        let b = compiled.execute(&job_c, &prompt_c).expect("the compiled path runs");
+        assert_eq!(a.execution_root, b.execution_root, "one root, whichever authority built the engine");
+        assert_eq!(a.trace_root, b.trace_root);
+        assert_eq!(a.output_root, b.output_root);
+        assert_eq!(a.material, b.material);
+    }
+
+    /// **The v1 graph is refused by the arm with its defect named.** The conformance suite
+    /// convicted v1's names against the artifact; here that conviction is what a node DOES —
+    /// a chain-armed node asked to serve the v1 declaration says which node it cannot build.
+    #[test]
+    fn the_v1_declaration_is_refused_with_the_node_named() {
+        let artifact = std::sync::Arc::new(misaka_palw_base0::qwen36::qwen36_dev_fixture(4, 8));
+        let profile = qwen36_profile_v1(fixture_geometry()).expect("v1 projects");
+        let class_id = profile.shape_profile_id();
+        let root = artifact.artifact_root();
+        let canonical = rc_job_context(&profile, 4, 2);
+        let holdings = vec![crate::lineages::qwen36::holding_from_artifact(artifact, None)];
+        let armed = PalwClassSdk::builtin_v1(court(), b"misaka-palw-rc".to_vec()).with_chain_classes_v1();
+        let err = armed.resolve_chain_registered(class_id, root, &holdings, &profile, &canonical).map(drop).unwrap_err();
+        assert!(err.contains("cannot serve the registered graph"), "the kernel boundary speaks: {err}");
+    }
+
+    /// **The root decides the container.** A dense declaration paired with a root that a held
+    /// MAPPING answers to reaches the mmap engine — and is refused by that engine's geometry
+    /// gate, because a family is never inferred from the profile under judgment.
+    #[test]
+    fn a_dense_declaration_on_a_mapped_root_is_refused_by_the_mmap_engine() {
+        let artifact = std::sync::Arc::new(misaka_palw_base0::qwen36::qwen36_dev_fixture(4, 8));
+        let (_, dense_profile) = super::chain_arm_tests::class();
+        let class_id = dense_profile.shape_profile_id();
+        let root = artifact.artifact_root();
+        let canonical = rc_job_context(&dense_profile, 4, 2);
+        let holdings = vec![crate::lineages::qwen36::holding_from_artifact(artifact, None)];
+        let armed = PalwClassSdk::builtin_v1(court(), b"misaka-palw-rc".to_vec()).with_chain_classes_v1();
+        let err = armed.resolve_chain_registered(class_id, root, &holdings, &dense_profile, &canonical).map(drop).unwrap_err();
+        assert!(err.contains("cannot serve the registered graph"), "the geometry gate speaks: {err}");
     }
 }
 

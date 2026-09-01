@@ -126,6 +126,12 @@ pub struct Qwen36Backend {
     /// The network the node runs, from its own configuration — a job context is not portable
     /// across networks and a hardcoded string said otherwise.
     network_id: Vec<u8>,
+    /// **ADR-0067: `Some` when this backend executes FROM the registered declaration.** The plan
+    /// is compiled at construction — every declared node bound to a served kernel and a resolved
+    /// operand, or the constructor refuses with the node named — and every forward walks it.
+    /// `None` is the compiled engine, kept for the rows this build's own ledger names (and as the
+    /// interpreter's reference vectors, per the differentials beside the plan).
+    plan: Option<crate::qwen36_plan::Qwen36ProfilePlanV1>,
 }
 
 impl Qwen36Backend {
@@ -137,7 +143,46 @@ impl Qwen36Backend {
         network_id: Vec<u8>,
     ) -> Self {
         let shape_id = qwen36_shape_id_v1(&artifact.shape);
-        Self { artifact, model_id: model_id.into(), canonical_job, shape_id, class_profile_id, network_id }
+        Self { artifact, model_id: model_id.into(), canonical_job, shape_id, class_profile_id, network_id, plan: None }
+    }
+
+    /// **ADR-0067 Decision 2's constructor for the mmap container: a backend for a class this
+    /// build's ledger never heard of.** The profile arrives from chain state (the registration's
+    /// admission carriage), and the plan it compiles to IS the admission decision — a graph
+    /// outside this build's kernel vocabulary, or one this artifact's geometry contradicts, is
+    /// refused here with the node or the field named, before anything executes. The class id is
+    /// derived from the profile (the id IS the declaration), never passed in.
+    pub fn from_registered_profile(
+        artifact: std::sync::Arc<Qwen36ArtifactV1>,
+        network_id: Vec<u8>,
+        profile: kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+        canonical_job: (u32, u32),
+    ) -> Result<Self, String> {
+        let engine = Qwen36Engine::new(&artifact);
+        let plan = engine.plan_from_profile(&profile).map_err(|e| format!("this build cannot serve the registered graph: {e}"))?;
+        let shape_id = qwen36_shape_id_v1(&artifact.shape);
+        let class_profile_id = profile.shape_profile_id();
+        Ok(Self {
+            artifact,
+            model_id: "PALW-QWEN36/chain-registered".to_string(),
+            canonical_job,
+            shape_id,
+            class_profile_id,
+            network_id,
+            plan: Some(plan),
+        })
+    }
+
+    /// One forward, through whichever authority constructed this backend: the registered plan
+    /// where one exists, the compiled engine where the build's own ledger named the class. The
+    /// untraced planned walk, because this path needs the logit row and nothing else.
+    fn forward(&self, engine: &Qwen36Engine<'_>, cache: &mut Qwen36Cache, token: usize, position: usize) -> Result<Vec<i32>, String> {
+        match &self.plan {
+            Some(plan) => {
+                engine.forward_token_planned_logits(plan, cache, token, position).map_err(|e| format!("planned forward: {e}"))
+            }
+            None => engine.forward_token(cache, token, position).map_err(|e| e.to_string()),
+        }
     }
 
     pub fn artifact(&self) -> &Qwen36ArtifactV1 {
@@ -156,7 +201,7 @@ impl Qwen36Backend {
         let mut generated: Vec<u32> = Vec::with_capacity(job.exact_decode_tokens as usize);
 
         for (position, token) in prompt.iter().enumerate() {
-            let row = engine.forward_token(&mut cache, *token, position).map_err(|e| format!("prefill at {position}: {e}"))?;
+            let row = self.forward(&engine, &mut cache, *token, position).map_err(|e| format!("prefill at {position}: {e}"))?;
             logits_rows.push(row);
         }
         // The decode budget is EXACT: an early end-of-generation is telemetry and never terminates,
@@ -170,7 +215,7 @@ impl Qwen36Backend {
             if position >= self.artifact.shape.max_position {
                 return Err(format!("the job runs past the rotary table at position {position}"));
             }
-            let row = engine.forward_token(&mut cache, next as usize, position).map_err(|e| format!("decode at {position}: {e}"))?;
+            let row = self.forward(&engine, &mut cache, next as usize, position).map_err(|e| format!("decode at {position}: {e}"))?;
             logits_rows.push(row);
         }
         Ok(Qwen36RunV1 { logits_rows, generated })
@@ -451,6 +496,57 @@ mod tests {
         assert!(a.execute_with_injected_fault(&a.job_for_anchor(Hash64::default()).expect("a job").0, &[1], 0).is_err());
         // And the family is the one whose disputes CAN end in a conviction, because the arithmetic
         // is deterministic-integer — what is missing is the step space, not the premise.
+    }
+
+    /// **ADR-0067: the chain-registered constructor commits exactly what the ledger path
+    /// commits.** Same artifact, same graph — one backend built the compiled way, one FROM the
+    /// registered declaration — one anchor: the derived jobs, all four roots and the material
+    /// must be equal, or a chain-armed node and a ledger node would answer one claim differently.
+    #[test]
+    fn the_registered_declaration_backend_commits_the_compiled_backends_roots() {
+        let artifact = std::sync::Arc::new(crate::qwen36::test_fixture(4, 8));
+        let geometry = crate::qwen36_plan::fixture_geometry_of(&artifact.shape, 4);
+        let profile = kaspa_consensus_core::palw_qwen36_profile::qwen36_profile_v2(geometry).expect("the fixture geometry projects");
+        let class_id = profile.shape_profile_id();
+        let network = b"misaka-palw-test".to_vec();
+        let compiled = Qwen36Backend::new(artifact.clone(), "Qwen3.6-fixture", (4, 2), class_id, network.clone());
+        let planned = Qwen36Backend::from_registered_profile(artifact, network, profile, (4, 2)).expect("the graph is servable");
+        assert_eq!(planned.model_id(), "PALW-QWEN36/chain-registered");
+
+        let anchor = Hash64::from_u64_word(0xC0FFEE);
+        let (job_a, prompt_a) = compiled.job_for_anchor(anchor).expect("a job");
+        let (job_b, prompt_b) = planned.job_for_anchor(anchor).expect("a job");
+        assert_eq!(prompt_a, prompt_b);
+        assert_eq!(job_a.context_hash(), job_b.context_hash(), "one job, whichever authority derived it");
+
+        let a = compiled.execute(&job_a, &prompt_a).expect("the compiled path runs");
+        let b = planned.execute(&job_b, &prompt_b).expect("the planned path runs");
+        assert_eq!(a.trace_root, b.trace_root);
+        assert_eq!(a.output_root, b.output_root);
+        assert_eq!(a.execution_root, b.execution_root);
+        assert_eq!(a.trace_manifest_root, b.trace_manifest_root);
+        assert_eq!(a.material, b.material, "one retained material, bit for bit");
+
+        // And the planned backend judges the compiled one's material as its own — the seat's
+        // verb, which is where a chain-armed node meets a table producer's claim.
+        assert_eq!(
+            planned
+                .verify_material(&a.material, PalwClaimRootsV1 { execution_root: a.execution_root, trace_root: a.trace_root, anchor }),
+            PalwMaterialVerdictV1::Matches
+        );
+    }
+
+    /// A declaration this artifact contradicts is refused at CONSTRUCTION with the field named —
+    /// the admission decision, never a mid-forward surprise.
+    #[test]
+    fn a_contradicted_declaration_is_refused_at_construction() {
+        let artifact = std::sync::Arc::new(crate::qwen36::test_fixture(4, 8));
+        let mut geometry = crate::qwen36_plan::fixture_geometry_of(&artifact.shape, 4);
+        geometry.hidden_dim *= 2;
+        let profile = kaspa_consensus_core::palw_qwen36_profile::qwen36_profile_v2(geometry).expect("the widened geometry projects");
+        let err =
+            Qwen36Backend::from_registered_profile(artifact, b"misaka-palw-test".to_vec(), profile, (4, 2)).map(drop).unwrap_err();
+        assert!(err.contains("cannot serve the registered graph"), "the refusal names the boundary: {err}");
     }
 
     /// A job that runs past the rotary table is refused at derivation, not discovered mid-decode.

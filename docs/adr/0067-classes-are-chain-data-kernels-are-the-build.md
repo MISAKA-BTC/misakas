@@ -5,7 +5,9 @@ dormant; Decision 4 needed no code; Decision 6 including its cache bound LANDED 
 the pruning-point sidecar and the cross-architecture clause. The mmap (Qwen3.6) interpreter's blocker —
 a measured defect in the class's registered graph — is CLOSED by the corrected `graph-v2` row, and the
 interpreter itself is BUILT and differential-tested (2026-09-01), a pass that convicted a FOURTH
-graph defect on the way; the mmap container's chain-resolve arm, its profile fuzz gate and the
+graph defect on the way; the mmap container's chain-resolve arm is BUILT behind the same fence
+(same day — the registered root decides the container, and the mmap engine serves the declaration
+bit-identically to its compiled path); the mmap profile fuzz gate, the epsilon disposition and the
 operational arming remain PROPOSED.** See "What landed" at
 the foot of this document. Builds on ADR-0049 (the adjudication contract — whose admission
 carriage is the load-bearing half of this design and is ALREADY LIVE), ADR-0054 (share follows
@@ -455,6 +457,23 @@ The disposition is NOT taken here: v2 is unregistered, so its geometry can still
 artifact's epsilon (or the fleet's artifacts could someday be re-converted at 17, which moves
 every artifact root) — but the 35B and Coder artifacts live on the fleet and their headers should
 be read before any constant moves. Until then the finding stands as a refusal with a name.
+
+**The chain-resolve arm now serves this container too (2026-09-01, same day).**
+`resolve_chain_registered`'s refusal order is unchanged — fence, profile-hashes-to-id,
+canonical-names-the-class, artifact-held, plan-compiles — and its fourth step gained the rule
+that was implicit when one family existed: **the registered root decides the container.** The
+root is a digest over one artifact's own bytes, so it matches at most one holding, and that
+holding's lineage — dense or mmap — is the engine that serves the declaration; nothing infers a
+family from the profile, because the profile is what is being judged. A mapping match constructs
+`Qwen36Backend::from_registered_profile`: the plan compiles at construction (the admission
+decision, refused with the node or geometry field named) and every forward walks the declaration
+through the interpreter's untraced entry — held bit-identical to the traced walk, and the whole
+backend held root-for-root and material-for-material against the compiled path, including the
+seat's verb (`verify_material` on the other authority's material answers `Matches`). The v1
+declaration is refused by the arm with its defect named; a dense declaration paired with a mapped
+root reaches the mmap engine and is refused by its geometry gate. kaspad's `resolve_or_chain` and
+the `--palw-chain-classes` fence needed no change — both were already family-agnostic, which is
+the shape the SDK seam was for.
 
 **The fix cannot be an edit.** `shape_profile_id` is the borsh of the whole profile, node tables
 included, and the hybrid's id is pinned in-tree as a live chain fact — "the shipped hybrid class id

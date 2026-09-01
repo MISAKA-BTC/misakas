@@ -62,6 +62,13 @@ pub fn parts_of(holding: &PalwLoadedArtifactV1) -> Option<(Hash64, Arc<Qwen36Art
     holding.payload().downcast::<Qwen36HoldingV1>().ok().map(|h| (h.computed_root, h.artifact.clone()))
 }
 
+/// The held mapping whose COMPUTED root is `root`, if this node loaded one — the chain-registered
+/// arm's lookup, the exact analogue of the dense lineage's by-digest one. The root was derived
+/// from the mapping's own bytes at load, so a match here IS possession of the registered weights.
+pub(crate) fn qwen36_artifact_by_root(holdings: &[PalwLoadedArtifactV1], root: Hash64) -> Option<Arc<Qwen36ArtifactV1>> {
+    holdings.iter().filter_map(parts_of).find(|(computed, _)| *computed == root).map(|(_, artifact)| artifact)
+}
+
 fn table_entry(model_id: &str) -> Option<Qwen36CanonicalClassV1> {
     qwen36_canonical_classes_v1().into_iter().find(|c| c.model_id == model_id)
 }
