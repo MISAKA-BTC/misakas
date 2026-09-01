@@ -10,7 +10,8 @@ not by hashing.
 >
 > **To run a full node (sync, validate, serve RPC) you need `kaspad` and nothing else.** No
 > `misaka-palw-worker`, no `Qwen3.5-2B-Q4_K_M.gguf`, no llama.cpp, no `PALW_WORKER`, no
-> `MISAKA_PALW_GGUF`. Any x86-64 or arm host, Apple Silicon included.
+> `MISAKA_PALW_GGUF`. **Any** x86-64 or arm host, Apple Silicon included — the execution family is
+> pinned integer arithmetic and has no per-architecture build (§2).
 >
 > ```bash
 > cargo build --release -p kaspad --bin kaspad     # this is the whole build
@@ -67,27 +68,47 @@ lane.
 
 | | |
 |---|---|
-| CPU | any x86-64 or arm host, **Apple Silicon included**. A verifier runs no model, so no determinism class applies to it. |
+| CPU | **any** x86-64 or arm host, Apple Silicon included. See §2: the execution family is pinned integer arithmetic with no host-dependent branch, so there is no determinism class to be outside of — for producers either. |
 | cores | whatever the node itself wants. There is no pinned thread count on this path. |
 | RAM | the node's own working set. Measured on the operator fleet, a validating node settles near **8–11 GiB**, so give it a `MemoryMax` (see §6) rather than assuming it stays small. |
 | disk | chain data only — no model to store. |
 | time | **not measured on this lane yet.** §5's hours-to-days figures were dominated by a per-header inference a node no longer runs, so they are an upper bound rather than an estimate. If you time a first sync, please report it — §9. |
 
 **To PRODUCE blocks for a model class** you additionally need that class's artifact and the flags in
-[testnet11-join-mining.md](testnet11-join-mining.md). Producing for the model-free floor class needs
-no artifact at all.
+[testnet11-join-mining.md](testnet11-join-mining.md) — plus RAM and time for the model itself, which
+is a size question and not an architecture one. Producing for the model-free floor class needs no
+artifact at all, on any host.
 
 ---
 
-## 2. The determinism class — **the algo-4 lane only; not required today**
+## 2. The determinism class — **withdrawn; nothing on this network has one**
 
-> **Superseded.** Everything in this section describes the pinned llama.cpp worker that verified
-> algo-4 headers. The published network does not run that lane, and a full node neither builds nor
-> loads any of it. Kept because the pins are a real record and because a producer for a *converted*
-> class still reasons this way about its own artifact.
+> **Superseded, and not only for verifiers.** Everything below describes the pinned llama.cpp
+> worker that verified algo-4 headers. The execution family that replaced it is **pinned integer
+> arithmetic in this tree's own Rust** (ADR-0053), and integer arithmetic does not vary by host.
+> There is no determinism class to be inside or outside of — **for a producer either**, which is
+> where an earlier revision of this correction still got it wrong.
 >
-> In particular: **"Apple Silicon cannot join testnet-11" is no longer true of a node.** It was true
-> of a *worker*, because an arm build computed different tags. A verifier computes no tags.
+> Three facts, each checkable in the tree rather than taken on trust:
+>
+> * **No architecture branch exists on the execution path.** `misaka-palw-base0`'s `engine.rs`,
+>   `engine_a16.rs` and `qwen36.rs`, and `palw_base0_ops.rs` / `palw_qwen36_ops.rs` in
+>   consensus-core, contain no `#[cfg(target_arch)]`, no `is_x86_feature_detected!`, and no
+>   `aarch64` path. There is one implementation and every host runs it.
+> * **The runtime is not part of a class's identity.** `runtime_class_id` and
+>   `runtime_manifest_hash` are `Hash64::default()` everywhere on this path — the integer family's
+>   identity IS its graph (`backend.rs`). A CPU class cannot scope a class that does not carry one.
+> * **The pins below pin a thing no node runs.** GGUF sha, llama.cpp commit, `GGML_*` flags,
+>   `CPU_THREADS = 4`, `misaka-palw-lite-cpu/x86_64/v1` — all properties of the float worker.
+>
+> So **Apple Silicon, arm servers and x86-64 are the same class, which is to say no class**, whether
+> you verify or produce. The float lane needed the scoping because llama.cpp's kernels differ by
+> instruction set; that is exactly why the network left it.
+>
+> What is NOT claimed here: this document does not carry a cross-architecture bit-identity
+> measurement, because the repository does not contain one. The argument above is structural — one
+> implementation, no host-dependent branches, no runtime in the class id — and a measurement across
+> real arm and x86 hosts would be worth publishing beside it.
 
 The tag a node computes must be bit-identical to every other node's, so the runtime is pinned, not
 merely recommended.
