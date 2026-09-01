@@ -676,9 +676,17 @@ fn qwen36_row(
     let shape16 = |_e: a16::PalwA16OpError| PalwStepRefuteError::InputSetNotCanonical("an a16 op refused its operand shape");
     let shape36 = |_e: q36::PalwQwen36OpError| PalwStepRefuteError::InputSetNotCanonical("a q36 op refused its operand shape");
 
-    // `count` parameter triples from the node's registered tensor, starting at `first`.
-    let params = |first: usize, count: usize| -> Result<Vec<A16QuantParams>, PalwStepRefuteError> {
-        if node.weight_name.is_empty() || count == 0 {
+    // `count` parameter triples from the named registered tensor, starting at `first`.
+    //
+    // The NAME is the caller's, because two conventions coexist by design: a narrowing node's
+    // `weight_name` IS its triple tensor (Requantize, RescaleRow, Decay, …), while a matmul's
+    // names its code bytes and the triples ride the `.a16` suffix — the same derived-suffix rule
+    // the grouped exps (`.exp`), the conv triples (`.a16`) and the rope clamp (`.clamp`) already
+    // follow. Reading a matmul's triples under its bare name collides with its own codes at byte
+    // offset zero, and `find_operand_v1` resolves `(name, layer, offset)` before it checks the
+    // length — so one of the two requests is structurally unservable by any canonical inventory.
+    let params_named = |name: &str, first: usize, count: usize| -> Result<Vec<A16QuantParams>, PalwStepRefuteError> {
+        if name.is_empty() || count == 0 {
             return Err(PalwStepRefuteError::Unadjudicable);
         }
         let width = A16QuantParams::WIRE_BYTES;
@@ -686,7 +694,7 @@ fn qwen36_row(
             .map_err(|_| PalwStepRefuteError::Unadjudicable)?;
         let len = u32::try_from(count.checked_mul(width).ok_or(PalwStepRefuteError::Unadjudicable)?)
             .map_err(|_| PalwStepRefuteError::Unadjudicable)?;
-        let bytes = weights.operand_bytes(node.weight_name.as_str(), layer, offset, len).ok_or(PalwStepRefuteError::Unadjudicable)?;
+        let bytes = weights.operand_bytes(name, layer, offset, len).ok_or(PalwStepRefuteError::Unadjudicable)?;
         if bytes.len() != len as usize {
             return Err(PalwStepRefuteError::Unadjudicable);
         }
@@ -697,6 +705,9 @@ fn qwen36_row(
                     .map_err(|_| PalwStepRefuteError::InputSetNotCanonical("an a16 parameter triple is malformed"))
             })
             .collect()
+    };
+    let params = |first: usize, count: usize| -> Result<Vec<A16QuantParams>, PalwStepRefuteError> {
+        params_named(node.weight_name.as_str(), first, count)
     };
     let fixed_width = || -> Result<usize, PalwStepRefuteError> {
         match node.out_len {
@@ -829,7 +840,10 @@ fn qwen36_row(
                 return Err(PalwStepRefuteError::Unadjudicable);
             }
             let codes: Vec<i8> = w.iter().map(|b| *b as i8).collect();
-            let p = params(first, rows)?;
+            // The per-row triples, under the `.a16` suffix: the bare name is the codes' (both are
+            // asked for at byte offset zero when tile 0 is challenged, and an inventory can hold
+            // only one row at one `(name, layer, offset)`).
+            let p = params_named(&format!("{}.a16", node.weight_name), first, rows)?;
             match op {
                 Qwen36Op::MatMulRequant => Ok(out(a16::a16_matmul_requant(&codes, &x, &p).map_err(shape16)?)),
                 Qwen36Op::MatMulRescale => Ok(out(a16::a16_matmul_rescale(&codes, &x, &p).map_err(shape16)?)),
@@ -1781,6 +1795,24 @@ pub enum PalwDecodeTokenPinV1 {
     FloatV2(PalwDecodeTokensV1),
     /// The `Int32` class's pin: recompute [`base0_logits_trace_root_v1`] from the carried rows.
     Base0V1(PalwBase0DecodeTokensV1),
+    /// The `Int32` TILED class's pin: recompute [`tiled_logits_outer_root_v1`] from the carried
+    /// rows-tree root and ids. The whole rows are deliberately NOT carried — at a model-class
+    /// vocabulary one selecting row is hundreds of kilobytes against the ~80 KiB close carrier,
+    /// which is the reason the tiled scheme exists at all.
+    TiledV1(PalwTiledDecodeTokensV1),
+}
+
+/// What a court needs to pin the generated ids of a tiled integer class: the ids themselves and
+/// the rows tree's root, both inside [`tiled_logits_trace_root_v1`]'s preimage. Recomputing that
+/// root against the binding's committed one IS the check — a challenger who alters one id, or the
+/// rows root, produces a different hash. Nothing here vouches for the ROWS; the two-tile
+/// [`PalwTiledDecodePinV1`] close arm is what adjudicates a row's argmax, and this pin only has to
+/// bind which tokens the claim generated.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwTiledDecodeTokensV1 {
+    /// The merkle root over the run's committed selecting-row roots.
+    pub rows_root: Hash64,
+    pub generated_token_ids: Vec<u32>,
 }
 
 /// What a court needs to recompute [`base0_logits_trace_root_v1`] and so pin the generated
@@ -1911,6 +1943,29 @@ pub fn tiled_logits_trace_root_v1(ctx: &crate::palw_v2::PalwJobContextV2, logits
         logits_rows.iter().enumerate().map(|(r, row)| tiled_logits_row_root_v1(&ctx_hash, r as u32, row)).collect();
     let rows_root =
         crate::palw_step_leg::step_merkle_root_v1(&row_roots).expect("a run has at least one row and fewer than the leg cap");
+    tiled_logits_outer_root_v1(ctx, logits_rows.len() as u64, &rows_root, generated)
+}
+
+/// The merkle root over a run's committed selecting-row roots — the value [`PalwTiledDecodeTokensV1`]
+/// carries. Exposed so the PROVER (a backend assembling a refutation from its own retained rows)
+/// derives it through the same code the committing side does.
+pub fn tiled_logits_rows_root_v1(ctx: &crate::palw_v2::PalwJobContextV2, logits_rows: &[Vec<i32>]) -> Option<Hash64> {
+    let ctx_hash = ctx.context_hash();
+    let row_roots: Vec<Hash64> =
+        logits_rows.iter().enumerate().map(|(r, row)| tiled_logits_row_root_v1(&ctx_hash, r as u32, row)).collect();
+    crate::palw_step_leg::step_merkle_root_v1(&row_roots).ok()
+}
+
+/// The tiled root's OUTER hash — the committing side above and the decode-token pin check share
+/// this derivation, so "the ids are inside the trace root" is one implementation rather than an
+/// agreement between two.
+pub fn tiled_logits_outer_root_v1(
+    ctx: &crate::palw_v2::PalwJobContextV2,
+    row_count: u64,
+    rows_root: &Hash64,
+    generated: &[u32],
+) -> Hash64 {
+    let ctx_hash = ctx.context_hash();
     let mut ids = Vec::with_capacity(generated.len() * 4);
     for t in generated {
         ids.extend_from_slice(&t.to_le_bytes());
@@ -1921,7 +1976,7 @@ pub fn tiled_logits_trace_root_v1(ctx: &crate::palw_v2::PalwJobContextV2, logits
             ctx_hash.as_byte_slice(),
             &(ctx.declared_prefill_tokens as u64).to_le_bytes(),
             &(ctx.exact_decode_tokens as u64).to_le_bytes(),
-            &(logits_rows.len() as u64).to_le_bytes(),
+            &row_count.to_le_bytes(),
             rows_root.as_byte_slice(),
             &ids,
         ],
@@ -2267,6 +2322,29 @@ pub fn base0_decode_token_select_v1(values: &[i32]) -> usize {
 /// recomputed from the carried material and compared against the binding's committed slot — a
 /// challenger that alters one lane gets a different root and is refused before a single id is
 /// read.
+/// The tiled arm of the same check: only for a class that registered the tiled scheme, and the
+/// recomputed outer root must be the claim's own. The id count is the context's decode count and
+/// the row count equals it — the committed set is one selecting row per generated token, which is
+/// what [`tiled_logits_trace_root_v1`]'s callers commit.
+fn check_tiled_decode_pin(binding: &PalwStepBindingV2, pin: &PalwTiledDecodeTokensV1) -> Result<(), PalwStepRefuteError> {
+    if binding.shape_profile.logits_scheme_id != tiled_logits_scheme_id_v1() {
+        return Err(PalwStepRefuteError::InputSetNotCanonical(
+            "this class does not commit tiled selecting rows — the tiled pin is not its scheme",
+        ));
+    }
+    let decode = binding.job_context.exact_decode_tokens as usize;
+    if pin.generated_token_ids.len() != decode {
+        return Err(PalwStepRefuteError::InputSetNotCanonical("the pin's id count is not the context's decode count"));
+    }
+    let root = tiled_logits_outer_root_v1(&binding.job_context, decode as u64, &pin.rows_root, &pin.generated_token_ids);
+    if root != binding.full_logits_trace_root {
+        return Err(PalwStepRefuteError::InputSetNotCanonical(
+            "the carried ids and rows root do not reproduce the claim's own tiled trace root",
+        ));
+    }
+    Ok(())
+}
+
 fn check_base0_decode_pin(binding: &PalwStepBindingV2, pin: &PalwBase0DecodeTokensV1) -> Result<(), PalwStepRefuteError> {
     // **This arm speaks the FLAT scheme, and only for a class that registered it.** The scheme is
     // the class's (`shape_profile.logits_scheme_id`, inside the class id), so a flat pin against a
@@ -2748,10 +2826,20 @@ pub struct PalwCheckpointKvOperandsV1 {
     pub chunks: Vec<Vec<u8>>,
 }
 
+/// How wide one element of an anchored state row is — the registered map's declaration, which the
+/// court reads back rather than assuming. The v1 map is one `i8` code per element; the v2 map is
+/// the same enumeration at four little-endian bytes per element, for the classes whose cache is
+/// `i32` (`palw_state_chunk_map`'s own distinction).
+enum KvAnchorElemV1 {
+    I8,
+    I32Le,
+}
+
 /// The geometry a verified anchor's chunks are read under, plus the anchor itself.
 struct VerifiedKvAnchor<'a> {
     ops: &'a PalwCheckpointKvOperandsV1,
     geometry: crate::palw_state_chunk_map::PalwStateChunkGeometryV1,
+    elem: KvAnchorElemV1,
 }
 
 /// Verify a carried anchor against the binding, for a step at `disputed_call`.
@@ -2797,12 +2885,26 @@ fn verify_kv_anchor<'a>(
     }
 
     let positions = map::integer_kv_positions_at_v1(&binding.job_context, ops.leaf.covered_decode_call);
-    let geometry =
-        map::integer_kv_state_geometry_v1(&binding.shape_profile, positions).map_err(|_| PalwStepRefuteError::Unadjudicable)?;
+    // **The geometry the CLASS registered, not the one this court knew first.** The producer's
+    // capture already dispatches on `state_chunk_map_id` (a v2 class chunks four bytes per
+    // element); a court that derived v1 unconditionally would read a v2 class's chunks at a
+    // quarter width and call honest material `Unadjudicable` — the I10 freeze arm, on a class
+    // whose only fault was registering the map that describes its cache. A class whose map id is
+    // neither registered map has no anchor arm at all: its bindings carry zero checkpoints, so a
+    // carried anchor is an accusation about a leg nobody committed.
+    let declared = binding.shape_profile.state_chunk_map_id;
+    let (geometry, elem) = if declared == map::integer_kv_state_chunk_map_id_v1() {
+        (map::integer_kv_state_geometry_v1(&binding.shape_profile, positions), KvAnchorElemV1::I8)
+    } else if declared == map::integer_kv_state_chunk_map_id_v2() {
+        (map::integer_kv_state_geometry_v2(&binding.shape_profile, positions), KvAnchorElemV1::I32Le)
+    } else {
+        return Err(PalwStepRefuteError::Unadjudicable);
+    };
+    let geometry = geometry.map_err(|_| PalwStepRefuteError::Unadjudicable)?;
     if geometry.chunk_count() as usize != ops.chunks.len() {
         return Err(PalwStepRefuteError::InputSetNotCanonical("the carried chunk count is not the map's for this state"));
     }
-    Ok(VerifiedKvAnchor { ops, geometry })
+    Ok(VerifiedKvAnchor { ops, geometry, elem })
 }
 
 impl VerifiedKvAnchor<'_> {
@@ -2820,7 +2922,19 @@ impl VerifiedKvAnchor<'_> {
             let entry = map::integer_kv_state_chunk_entry_v1(&self.geometry, chunk_index)?;
             let bytes = self.ops.chunks.get(chunk_index as usize)?;
             let row = map::integer_kv_state_row_v1(&entry, bytes, position)?;
-            out.extend(row.iter().map(|b| (*b as i8) as i32 as u32));
+            // Widened the way the ENGINE that filled the map's bytes did. The v1 map holds `i8`
+            // codes and the step row records `*c as i32`; the v2 map already holds the `i32`
+            // lanes as four little-endian bytes each. Reading v2 bytes through the v1 widening is
+            // the quarter-width defect the geometry dispatch above closes — same rule here.
+            match self.elem {
+                KvAnchorElemV1::I8 => out.extend(row.iter().map(|b| (*b as i8) as i32 as u32)),
+                KvAnchorElemV1::I32Le => {
+                    if row.len() % 4 != 0 {
+                        return None;
+                    }
+                    out.extend(row.chunks_exact(4).map(|q| i32::from_le_bytes([q[0], q[1], q[2], q[3]]) as u32));
+                }
+            }
         }
         Some(out)
     }
@@ -3012,6 +3126,10 @@ pub fn check_execution_step_refutation_v1(
         }
         (crate::palw_step::PalwStepLaneV1::Int32, Some(PalwDecodeTokenPinV1::Base0V1(d))) => {
             check_base0_decode_pin(binding, d)?;
+            &d.generated_token_ids
+        }
+        (crate::palw_step::PalwStepLaneV1::Int32, Some(PalwDecodeTokenPinV1::TiledV1(d))) => {
+            check_tiled_decode_pin(binding, d)?;
             &d.generated_token_ids
         }
         _ => return Err(PalwStepRefuteError::InputSetNotCanonical("the decode-token pin does not speak the class's lane")),

@@ -591,6 +591,8 @@ fn decode_pin_bytes_v2(pin: &crate::palw_step_refute::PalwDecodeTokenPinV1) -> u
     match pin {
         Pin::FloatV2(d) => (d.generated_token_ids.len() as u64).saturating_mul(4),
         Pin::Base0V1(d) => base0_decode_bytes_v2(d),
+        // The rows-tree root plus the ids — the tiled pin's whole point is that no row rides in it.
+        Pin::TiledV1(d) => (d.generated_token_ids.len() as u64).saturating_mul(4).saturating_add(64),
     }
 }
 

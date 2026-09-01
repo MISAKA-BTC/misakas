@@ -7718,7 +7718,16 @@ mod consensus_params_id_tests {
                 // follow one chain — until the fence height, where an un-upgraded node stops
                 // accepting new blocks (the attempt lane's declared blue work changes). Roll the
                 // fleet before DAA 5,000.
-                "d7510c7a537fc54beb14ec213d35e5c5a5642f683f104e7ab9750e2b74e1dd55",
+                //
+                // **Re-pinned 2026-09-01 (the model tiers' step spaces become adjudicable):**
+                // d7510c7a… → 923fe103…, because `PALW_V2_TRACE_FORMAT_VERSION` moved 2 → 3 (the
+                // tiled decode-token pin, and the map-versioned checkpoint-anchor geometry — see
+                // the constant's own doc). The genesis is untouched; the RULESET id moves, so
+                // this build and d7510c7a-era builds refuse each other at the handshake instead
+                // of disagreeing about a court verdict at consensus. **Deploy is
+                // whole-fleet-together** (a Relaunch train, or every host upgraded in one
+                // window); devnet moved with it (→ 65eaa6e7…) through the shared builder.
+                "923fe1033096e1707ebab610610eb25aae88848392a820f0320ac80b99c432ad",
             ),
             ("simnet", SIMNET_PARAMS, "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd"),
             // Re-pinned twice for ADR-0068 Phase 1: first when the drill network armed the
@@ -7728,7 +7737,8 @@ mod consensus_params_id_tests {
             // The genesis is untouched (nothing is carved), so only the fingerprint moves.
             // …and once more when the drill's pruning-consistency nudge raised devnet's
             // pruning_depth 10,800 → 10,805 (remainder k+1 of finality 600).
-            ("devnet", DEVNET_PARAMS, "3f13411b3ef2f48bfc9de0534ee44e556eb56ee0db084dde9b972e8870481fa0"),
+            // …and with `PALW_V2_TRACE_FORMAT_VERSION` 2 → 3 (the t11 pin's 2026-09-01 note).
+            ("devnet", DEVNET_PARAMS, "65eaa6e70a4be6cf6488a9f58948ecbd2002116dc95d0f5860c3ecf08f6f82f0"),
         ]
         .into_iter()
         .filter_map(|(name, params, expected)| {

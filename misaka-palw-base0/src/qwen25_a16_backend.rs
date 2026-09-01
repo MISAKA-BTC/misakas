@@ -94,6 +94,170 @@ pub fn qwen25_a16_roots_v1(job: &PalwJobContextV2, shape_id: Hash64, run: &Qwen2
     (trace_root, output_root, execution_root, manifest)
 }
 
+/// **The A16 tier's captured attempt: run, capture every declared step, commit the binding.**
+///
+/// The same object the floor's [`crate::produce::base0_execute_for_attempt_v1`] returns, because
+/// it answers the same three verbs: `execution_root` is the step binding's own commitment (what a
+/// court pins a refutation against), the retained material is the family codec's tuple, and the
+/// tiles/checkpoints are what a rung or a close is later assembled from. What differs is the
+/// family: the engine is [`A16Engine`], the trace scheme is the TILED one (at vocabulary 151,936 a
+/// flat pin row cannot ride the close carrier), and the logits retention follows the floor's
+/// convention — the SELECTING rows only, one per generated token, which are exactly the rows the
+/// tiled root commits.
+///
+/// Refuses (rather than degrading) for a class whose profile cannot carry a capture: a graph that
+/// does not name every narrowing (ADR-0049 Decision F, probed when no plan proves it
+/// structurally), or a state map that cannot describe an `i32` cache (the v1 map). The v1
+/// registered class therefore cannot reach this path — which is the honest statement of why
+/// `qwen25_a16_profile_v2` exists.
+pub fn a16_execute_for_attempt_v1(
+    artifact: &Base0ArtifactV1,
+    profile: &PalwShapeProfileV3,
+    plan: Option<&crate::engine_a16::A16ProfilePlanV1>,
+    ctx: &PalwJobContextV2,
+    prompt: &[usize],
+) -> Result<crate::produce::Base0ExecutionV1, String> {
+    use kaspa_consensus_core::palw_state_chunk_map as map;
+
+    let prefill = ctx.declared_prefill_tokens as usize;
+    let decode_tokens = ctx.exact_decode_tokens as usize;
+    if prefill == 0 || decode_tokens == 0 {
+        return Err("an empty job is not a job".to_string());
+    }
+    if prompt.len() < prefill {
+        return Err(format!("the job declares {prefill} prefill tokens and {} were supplied", prompt.len()));
+    }
+    let vocab = artifact.shape.vocab;
+    if let Some(bad) = prompt.iter().take(prefill).find(|t| **t >= vocab) {
+        return Err(format!("token {bad} is outside this class's vocabulary of {vocab}"));
+    }
+
+    let engine = A16Engine::new(artifact).map_err(|e| format!("the artifact is not an A16 class: {e:?}"))?;
+    // **ADR-0049 Decision F's obligation, before the first committed leaf.** Under a
+    // registered-profile plan the correspondence is structural — the declaration IS the program —
+    // and the probe would burn a forward pass re-proving a constructor invariant. Without one, the
+    // engine and the profile are two authorities, and the probe is what compares them.
+    if plan.is_none() {
+        let probe = engine
+            .forward_token_traced(&mut A16Cache::new(artifact.shape.n_layers), prompt[0], 0)
+            .map_err(|e| format!("probing the graph: {e:?}"))?
+            .1;
+        let (declared_pre, recorded_pre) = (profile.pre_nodes.len(), probe.pre.len());
+        let declared_attn = profile.attn_nodes.len();
+        let recorded_attn = probe.attn.first().map(Vec::len).unwrap_or(0);
+        if recorded_pre != declared_pre || recorded_attn != declared_attn {
+            return Err(format!(
+                "this class's registered graph does not name every narrowing its engine performs (ADR-0049 Decision F): pre \
+                 declares {declared_pre} node(s) and the engine records {recorded_pre} — the embedding gather and the requant \
+                 that lifts it onto the A16 stream, of which only the gather is declared; per-layer declares {declared_attn} \
+                 against {recorded_attn} recorded. Committing a step leg under this profile would commit arithmetic the court \
+                 recomputes differently."
+            ));
+        }
+    }
+
+    let forward = |engine: &A16Engine<'_>,
+                   cache: &mut A16Cache,
+                   token: usize,
+                   position: usize|
+     -> Result<(Vec<i32>, crate::engine_a16::A16TraceV1), String> {
+        match plan {
+            Some(plan) => engine.forward_token_planned(plan, cache, token, position).map_err(|e| format!("planned forward: {e:?}")),
+            None => engine.forward_token_traced(cache, token, position).map_err(|e| format!("forward: {e:?}")),
+        }
+    };
+
+    let leaf_count = kaspa_consensus_core::palw_step::step_leaf_count(profile, ctx).map_err(|e| format!("{e:?}"))?;
+    let mut capture = crate::legs::Base0StepCaptureV1::new(leaf_count).map_err(|e| format!("{e:?}"))?;
+    let checkpoint_profile = map::integer_kv_checkpoint_profile_v1(map::PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1);
+    let mut checkpoints = crate::legs::Base0CheckpointCaptureV1::new(ctx, profile, &checkpoint_profile);
+    let mut cache = A16Cache::new(artifact.shape.n_layers);
+
+    let mut logits_rows: Vec<Vec<i32>> = Vec::with_capacity(decode_tokens);
+    let mut generated: Vec<u32> = Vec::with_capacity(decode_tokens);
+
+    // Call 0 — prefill. Logits leaves exist only at its LAST position; the earlier rows predict
+    // tokens the prompt already contains, so the capture drops their Post rows (steps this class's
+    // step space does not have) and the retention keeps only the selecting row.
+    let mut last_logits = Vec::new();
+    for (position, token) in prompt.iter().take(prefill).enumerate() {
+        let (logits, trace) = forward(&engine, &mut cache, *token, position).map_err(|e| format!("prefill at {position}: {e}"))?;
+        let mut rows = crate::legs::a16_captured_rows_v1(&trace);
+        if position + 1 != prefill {
+            rows.retain(|r| r.table != kaspa_consensus_core::palw_step::PalwStepTableV1::Post);
+        }
+        capture.push_call(profile, ctx, 0, position as u32, &rows).map_err(|e| format!("{e:?}"))?;
+        last_logits = logits;
+    }
+    let mut next = kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(&last_logits) as u32;
+    generated.push(next);
+    logits_rows.push(last_logits);
+
+    // Calls 1..=D−1 — decode. The COORDINATE's position is 0 in every decode call (each call has
+    // one position); the cache position is absolute. Conflating them lands every decode row on
+    // top of the first one's.
+    for call in 1..decode_tokens {
+        let cache_position = prefill + call - 1;
+        let (logits, trace) =
+            forward(&engine, &mut cache, next as usize, cache_position).map_err(|e| format!("decode at {cache_position}: {e}"))?;
+        let rows = crate::legs::a16_captured_rows_v1(&trace);
+        capture.push_call(profile, ctx, call as u32, 0, &rows).map_err(|e| format!("{e:?}"))?;
+        next = kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(&logits) as u32;
+        generated.push(next);
+        logits_rows.push(logits);
+        if call as u32 == checkpoints.next_covered_decode_call() {
+            // Through the CACHE's own serializer, at the width the class declares. Under a map
+            // that cannot describe this state — the v1 one-byte map over an `i32` cache — this
+            // refuses, and the run fails here rather than committing a checkpoint that opens to a
+            // state it never held.
+            let geometry = checkpoints.next_geometry().map_err(|e| format!("{e:?}"))?;
+            let mut chunks = Vec::with_capacity(geometry.chunk_count() as usize);
+            for index in 0..geometry.chunk_count() {
+                let entry = map::integer_kv_state_chunk_entry_v1(&geometry, index)
+                    .ok_or_else(|| format!("the map has no chunk {index}"))?;
+                chunks.push(cache.state_chunk_bytes_v1(&entry).ok_or_else(|| {
+                    format!(
+                        "this cache does not fit the state map the class declares (chunk {index}, {} bytes per row)",
+                        entry.row_bytes
+                    )
+                })?);
+            }
+            checkpoints.push_chunks(chunks).map_err(|e| format!("{e:?}"))?;
+        }
+    }
+
+    let decode_calls = ctx.exact_decode_tokens.saturating_sub(1);
+    let checkpoints = checkpoints.finish(decode_calls / checkpoint_profile.checkpoint_interval).map_err(|e| format!("{e:?}"))?;
+    let tiles = capture.finish().map_err(|e| format!("{e:?}"))?;
+
+    // **This class's own trace scheme, not the floor's.** The retained rows ARE the selecting
+    // rows (row `r` is the one `generated[r]` was chosen from), so the tiled root commits them
+    // directly and a seat recomputes it from the same retention.
+    let trace_root = kaspa_consensus_core::palw_step_refute::tiled_logits_trace_root_v1(ctx, &logits_rows, &generated);
+    let activation_leg_root = crate::produce::base0_activation_leg_root_v1(ctx);
+    let binding = crate::legs::base0_binding_from_capture_v1(profile, ctx, &tiles, &checkpoints, trace_root, activation_leg_root)
+        .map_err(|e| format!("{e:?}"))?;
+
+    let context = ctx.context_hash();
+    let rendered =
+        keyed(QWEN25_A16_DOMAIN_EXECUTION, &[b"rendered", &generated.iter().flat_map(|t| t.to_le_bytes()).collect::<Vec<_>>()]);
+    let output_root = output_commitment_v2(&context, &generated, &rendered);
+    let trace_manifest_root = keyed(QWEN25_A16_DOMAIN_MANIFEST, &[context.as_byte_slice(), trace_root.as_byte_slice(), &1u64.to_le_bytes()]);
+
+    Ok(crate::produce::Base0ExecutionV1 {
+        trace_root,
+        output_root,
+        execution_root: binding.committed_execution_root,
+        trace_manifest_root,
+        trace_chunk_count: 1,
+        binding,
+        tiles,
+        checkpoints,
+        logits_rows,
+        generated_token_ids: generated,
+    })
+}
+
 pub fn qwen25_a16_material_encode_v1(run: &Qwen25A16RunV1) -> Vec<u8> {
     let mut out = Vec::with_capacity(8 + run.logits_rows.iter().map(|r| r.len() * 4 + 8).sum::<usize>());
     out.extend_from_slice(&(run.logits_rows.len() as u64).to_le_bytes());
@@ -170,6 +334,14 @@ pub struct Qwen25A16Backend {
     /// engine, kept for the rows this build's own table names (and as the interpreter's
     /// reference vectors, per the differential test beside the plan).
     plan: Option<crate::engine_a16::A16ProfilePlanV1>,
+    /// **Whether this instance's class can carry a capture at all** — the four-byte state map,
+    /// which is the width `A16Cache` holds. Decided from the profile at construction (declared
+    /// rather than probed: `supports_court` is read at boot, before any capture exists). The v1
+    /// registered class declares the one-byte map and therefore cannot commit a checkpoint leg;
+    /// its instances keep the legacy composite roots and say `supports_court() == false`, which
+    /// is the honest description of that class. The Decision-F graph correspondence is still
+    /// guarded inside the captured path itself.
+    court_capable: bool,
 }
 
 impl Qwen25A16Backend {
@@ -181,6 +353,8 @@ impl Qwen25A16Backend {
     ) -> Self {
         let shape_id = artifact.artifact_digest();
         let class_profile_id = profile.shape_profile_id();
+        let court_capable =
+            profile.state_chunk_map_id == kaspa_consensus_core::palw_state_chunk_map::integer_kv_state_chunk_map_id_v2();
         Self {
             artifact,
             model_id: "PALW-QWEN25-A16".to_string(),
@@ -190,6 +364,7 @@ impl Qwen25A16Backend {
             class_profile_id,
             canonical_job,
             plan: None,
+            court_capable,
         }
     }
 
@@ -207,6 +382,8 @@ impl Qwen25A16Backend {
         let plan = engine.plan_from_profile(&profile).map_err(|e| format!("this build cannot serve the registered graph: {e:?}"))?;
         let shape_id = artifact.artifact_digest();
         let class_profile_id = profile.shape_profile_id();
+        let court_capable =
+            profile.state_chunk_map_id == kaspa_consensus_core::palw_state_chunk_map::integer_kv_state_chunk_map_id_v2();
         Ok(Self {
             artifact,
             model_id: "PALW-A16/chain-registered".to_string(),
@@ -216,6 +393,7 @@ impl Qwen25A16Backend {
             class_profile_id,
             canonical_job,
             plan: Some(plan),
+            court_capable,
         })
     }
 
@@ -304,6 +482,23 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
     }
 
     fn execute(&self, job: &PalwJobContextV2, prompt: &[usize]) -> Result<PalwExecutionOutcomeV1, String> {
+        // **The captured attempt, for the class that can carry one.** Its `execution_root` is the
+        // step binding's own commitment — the value `check_execution_root_binding` compares a
+        // close against — and its material is the family codec's, which is what a rung or a
+        // refutation is later assembled from. The v1 class (one-byte map over an `i32` cache)
+        // cannot capture, so it keeps the legacy composite exactly as registered.
+        if self.court_capable {
+            let run = a16_execute_for_attempt_v1(&self.artifact, &self.profile, self.plan.as_ref(), job, prompt)?;
+            let material = crate::produce::base0_material_encode_v1(&run).map_err(|e| e.to_string())?;
+            return Ok(PalwExecutionOutcomeV1 {
+                trace_root: run.trace_root,
+                output_root: run.output_root,
+                execution_root: run.execution_root,
+                trace_manifest_root: run.trace_manifest_root,
+                trace_chunk_count: run.trace_chunk_count,
+                material,
+            });
+        }
         let run = self.run(job, prompt)?;
         let (trace_root, output_root, execution_root, trace_manifest_root) = qwen25_a16_roots_v1(job, self.shape_id, &run);
         Ok(PalwExecutionOutcomeV1 {
@@ -323,7 +518,6 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
     ) -> Result<kaspa_consensus_core::palw_backend::PalwFpRunV1, String> {
         use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, PalwFpRunFactsV3, palw_fp_job_context_v3};
         use kaspa_consensus_core::palw_freeprompt_v3::PalwFpStopReasonV3;
-        use kaspa_consensus_core::palw_state_chunk_map as map;
 
         if job.prompt_tokens as usize != prompt_tokens.len() {
             return Err(format!("the job declares {} prompt tokens and {} were supplied", job.prompt_tokens, prompt_tokens.len()));
@@ -366,152 +560,55 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         // nobody can reproduce.
         let ctx = palw_fp_job_context_v3(job, &class, &shape, &self.network_id).map_err(|e| format!("{e:?}"))?;
 
-        let engine = A16Engine::new(&self.artifact).map_err(|e| format!("the artifact is not an A16 class: {e:?}"))?;
-        let mut cache = A16Cache::new(self.artifact.shape.n_layers);
-        // **The correspondence ADR-0049 Decision F requires, checked before a single leaf is filled.**
-        //
-        // Under a registered-profile plan (ADR-0067) the check is structural — the engine IS the
-        // profile, so recorded and declared cannot diverge — and the probe below would burn a
-        // forward pass to re-prove a constructor invariant. It runs only on the compiled path,
-        // where the engine and the profile are still two authorities.
-        //
-        // "No worker may commit a step leg for a class whose profile does not name every narrowing
-        // the engine performs." `Base0Engine` exposes `plan()` and `base0_check_graph_v1` enforces
-        // it; `A16Engine` has no plan and there is no A16 counterpart, so nothing establishes the
-        // correspondence for this family. Measured, the per-layer and post tables agree exactly —
-        // and the pre table does not: the engine records the embedding gather AND the requant that
-        // lifts it onto the A16 stream, while the profile declares only the gather. A requant is a
-        // narrowing, which is precisely what Decision F is about.
-        //
-        // The consequence is not cosmetic. Decision F states it: a producer that ran anyway would
-        // commit to arithmetic the court recomputes differently and be convicted for performing it
-        // correctly. So this refuses, and names the node rather than surfacing an `UnknownSlot`
-        // from three frames down. Closing it means the class declaring that node — which moves the
-        // shape profile id, and therefore registers a different class.
-        if self.plan.is_none() {
-            let probe = engine
-                .forward_token_traced(
-                    &mut A16Cache::new(self.artifact.shape.n_layers),
-                    *prompt_tokens.first().ok_or("a job with no prompt tokens is not a job")?,
-                    0,
-                )
-                .map_err(|e| format!("probing the graph: {e:?}"))?
-                .1;
-            let (declared_pre, recorded_pre) = (self.profile.pre_nodes.len(), probe.pre.len());
-            let declared_attn = self.profile.attn_nodes.len();
-            let recorded_attn = probe.attn.first().map(Vec::len).unwrap_or(0);
-            if recorded_pre != declared_pre || recorded_attn != declared_attn {
-                return Err(format!(
-                    "this class's registered graph does not name every narrowing its engine performs (ADR-0049 Decision F): pre \
-                 declares {declared_pre} node(s) and the engine records {recorded_pre} — the embedding gather and the requant \
-                 that lifts it onto the A16 stream, of which only the gather is declared; per-layer declares {declared_attn} \
-                 against {recorded_attn} recorded. Committing a step leg under this profile would commit arithmetic the court \
-                 recomputes differently."
-                ));
-            }
-        }
+        // **The one capture path this family has** (ADR-0049 Decision F's probe, the checkpoint
+        // serializer at the class's declared width, and the selecting-rows retention all live in
+        // it). The free-prompt lane differs from the attempt lane only in where its context and
+        // its tokens come from, so the run itself must not be a second implementation.
+        let run = a16_execute_for_attempt_v1(&self.artifact, &self.profile, self.plan.as_ref(), &ctx, prompt_tokens)?;
 
-        let leaf_count = kaspa_consensus_core::palw_step::step_leaf_count(&self.profile, &ctx).map_err(|e| format!("{e:?}"))?;
-        let mut capture = crate::legs::Base0StepCaptureV1::new(leaf_count).map_err(|e| format!("{e:?}"))?;
-        let checkpoint_profile = map::integer_kv_checkpoint_profile_v1(map::PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1);
-        let mut checkpoints = crate::legs::Base0CheckpointCaptureV1::new(&ctx, &self.profile, &checkpoint_profile);
-
-        let prefill = prompt_tokens.len();
-        let mut logits_rows: Vec<Vec<i32>> = Vec::with_capacity(job.decode_token_limit as usize);
-        let mut generated: Vec<u32> = Vec::with_capacity(job.decode_token_limit as usize);
-
-        // Call 0 — prefill. Logits leaves exist only at its LAST position; the earlier rows predict
-        // tokens the prompt already contains, and pushing them would place steps this class's step
-        // space does not have.
-        // **This family keeps a logits row per PREFILL position, not only the last one.**
-        // `qwen25_a16_roots_v1` indexes `prefill - 1 + i` to check that every committed token is
-        // its own row's argmax, so a vector built the floor's way — last prefill row, then the
-        // decodes — makes that check read the wrong rows. The capture still drops the Post rows at
-        // every position but the last, because those are steps this class's step space does not
-        // have; the two conventions are about different objects and both are followed here.
-        for (position, token) in prompt_tokens.iter().enumerate() {
-            let (logits, trace) =
-                self.forward(&engine, &mut cache, *token, position).map_err(|e| format!("prefill at {position}: {e}"))?;
-            let mut rows = crate::legs::a16_captured_rows_v1(&trace);
-            if position + 1 != prefill {
-                rows.retain(|r| r.table != kaspa_consensus_core::palw_step::PalwStepTableV1::Post);
-            }
-            capture.push_call(&self.profile, &ctx, 0, position as u32, &rows).map_err(|e| format!("{e:?}"))?;
-            logits_rows.push(logits);
-        }
-        let last = logits_rows.last().ok_or_else(|| "an empty prefill".to_string())?;
-        let mut next = kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(last) as u32;
-        generated.push(next);
-
-        for call in 1..job.decode_token_limit as usize {
-            let cache_position = prefill + call - 1;
-            let (logits, trace) = self
-                .forward(&engine, &mut cache, next as usize, cache_position)
-                .map_err(|e| format!("decode at {cache_position}: {e}"))?;
-            let rows = crate::legs::a16_captured_rows_v1(&trace);
-            // The COORDINATE's position is 0 in every decode call — each call has one position —
-            // while the cache position is absolute. Conflating them lands every decode row on top
-            // of the first one's.
-            capture.push_call(&self.profile, &ctx, call as u32, 0, &rows).map_err(|e| format!("{e:?}"))?;
-            next = kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(&logits) as u32;
-            generated.push(next);
-            logits_rows.push(logits);
-            if call as u32 == checkpoints.next_covered_decode_call() {
-                // Through the CACHE's own serializer, at the width the class declares. Under a map
-                // that cannot describe this state — which is what this class declares today — this
-                // refuses, and the run fails here rather than committing a checkpoint that opens
-                // to a state it never held.
-                let geometry = checkpoints.next_geometry().map_err(|e| format!("{e:?}"))?;
-                let mut chunks = Vec::with_capacity(geometry.chunk_count() as usize);
-                for index in 0..geometry.chunk_count() {
-                    let entry = map::integer_kv_state_chunk_entry_v1(&geometry, index)
-                        .ok_or_else(|| format!("the map has no chunk {index}"))?;
-                    chunks.push(cache.state_chunk_bytes_v1(&entry).ok_or_else(|| {
-                        format!(
-                            "this cache does not fit the state map the class declares (chunk {index}, {} bytes per row)",
-                            entry.row_bytes
-                        )
-                    })?);
-                }
-                checkpoints.push_chunks(chunks).map_err(|e| format!("{e:?}"))?;
-            }
-        }
-
-        let decode_calls = ctx.exact_decode_tokens.saturating_sub(1);
-        let checkpoints = checkpoints.finish(decode_calls / checkpoint_profile.checkpoint_interval).map_err(|e| format!("{e:?}"))?;
-        let tiles = capture.finish().map_err(|e| format!("{e:?}"))?;
-        // **This class's own trace scheme, not the floor's.** Its `trace_scheme_id` is the tiled
-        // logits one; committing `base0_logits_trace_root_v1` here would file a root under a scheme
-        // the class does not declare, and the court dispatches on the registered lane.
-        let run = Qwen25A16RunV1 { logits_rows, generated: generated.clone() };
-        let (trace_root, output_root, _, trace_manifest_root) = qwen25_a16_roots_v1(&ctx, self.shape_id, &run);
-        let activation_leg_root = crate::produce::base0_activation_leg_root_v1(&ctx);
-        let binding =
-            crate::legs::base0_binding_from_capture_v1(&self.profile, &ctx, &tiles, &checkpoints, trace_root, activation_leg_root)
-                .map_err(|e| format!("{e:?}"))?;
-        let (checkpoint_leg_root, step_leg_root) = crate::legs::base0_leg_roots_from_binding_v1(&binding);
-
+        // The four legs, measured — the derived roots the execution root is built from, which is
+        // what `palw_fp_execution_root_v3` recomputes.
+        let (checkpoint_leg_root, step_leg_root) = crate::legs::base0_leg_roots_from_binding_v1(&run.binding);
+        let material = crate::produce::base0_material_encode_v1(&run).map_err(|e| e.to_string())?;
         Ok(kaspa_consensus_core::palw_backend::PalwFpRunV1 {
             outcome: PalwExecutionOutcomeV1 {
-                trace_root,
-                output_root,
-                execution_root: binding.committed_execution_root,
-                trace_manifest_root,
-                trace_chunk_count: 1,
-                material: qwen25_a16_material_encode_v1(&run),
+                trace_root: run.trace_root,
+                output_root: run.output_root,
+                execution_root: run.execution_root,
+                trace_manifest_root: run.trace_manifest_root,
+                trace_chunk_count: run.trace_chunk_count,
+                material,
             },
             facts: PalwFpRunFactsV3 {
-                full_logits_trace_root: trace_root,
-                activation_leg_root,
+                full_logits_trace_root: run.trace_root,
+                activation_leg_root: run.binding.activation_leg_root,
                 checkpoint_leg_root,
                 step_leg_root,
                 ..shape
             },
-            output_token_ids: generated,
+            output_token_ids: run.generated_token_ids,
         })
     }
 
     fn verify_material(&self, material: &[u8], claim: PalwClaimRootsV1) -> PalwMaterialVerdictV1 {
+        // **The family codec first** — a captured attempt's material carries its binding, and the
+        // seat check rebuilds the step root from the tiles, the checkpoint leg from the chunks,
+        // and the tiled trace root from the retained rows. The legacy composite decode stays as
+        // the fallback for the v1 class's claims, whose material is rows-and-ids only.
+        if let Ok(decoded) = crate::produce::base0_material_decode_v1(material) {
+            if claim.anchor != Hash64::default() && decoded.0.job_context.job_id != claim.anchor {
+                return PalwMaterialVerdictV1::Mismatch;
+            }
+            // A capture for some OTHER class of this family is not this backend's to vouch for.
+            if decoded.0.shape_profile.shape_profile_id() != self.class_profile_id {
+                return PalwMaterialVerdictV1::Unverifiable;
+            }
+            return match crate::produce::base0_material_matches_claim_v1(&decoded, claim.execution_root, claim.trace_root) {
+                Ok(true) => PalwMaterialVerdictV1::Matches,
+                Ok(false) => PalwMaterialVerdictV1::Mismatch,
+                Err(_) => PalwMaterialVerdictV1::Unverifiable,
+            };
+        }
         let Some(run) = qwen25_a16_material_decode_v1(material) else {
             return PalwMaterialVerdictV1::Unverifiable;
         };
@@ -532,6 +629,172 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
             PalwMaterialVerdictV1::Mismatch
         }
     }
+
+    /// The A16 tier can take a court's turn exactly when its class can carry a capture — the
+    /// four-byte state map. The v1 registered class cannot, and says so here rather than stalling
+    /// a court at round 0.
+    fn supports_court(&self) -> bool {
+        self.court_capable
+    }
+
+    fn bisect_prefix_state(&self, material: &[u8], index: u64) -> Option<kaspa_hashes::Hash64> {
+        let (binding, tiles, _, _, _) = crate::produce::base0_material_decode_v1(material).ok()?;
+        // The count arrived over gossip inside a borsh blob; bounding it BEFORE the allocation is
+        // the lesson the seat check already wrote down.
+        if binding.step_leaf_count == 0 || binding.step_leaf_count > kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES {
+            return None;
+        }
+        let leaves = a16_leaves_by_position(&binding, &tiles);
+        Some(crate::legs::base0_bisect_prefix_state_v1(&binding.job_context, &leaves, index))
+    }
+
+    fn refutation_for_index(
+        &self,
+        material: &[u8],
+        index: u64,
+    ) -> Result<kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1, String> {
+        let (binding, tiles, logits_rows, generated, checkpoint_chunks) =
+            crate::produce::base0_material_decode_v1(material).map_err(|_| "the capture does not decode".to_string())?;
+        if binding.step_leaf_count == 0 || binding.step_leaf_count > kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES {
+            return Err("the binding's leaf count is outside the leg's own cap".to_string());
+        }
+        let coord = kaspa_consensus_core::palw_step::canonical_step_coordinates(&binding.shape_profile, &binding.job_context, index)
+            .ok_or_else(|| format!("leaf {index} is not a main step coordinate"))?;
+        let leaves = a16_leaves_by_position(&binding, &tiles);
+        let step_tiles = crate::legs::Base0StepTilesV1 { leaves, tiles };
+
+        // **This class's own pin: the tiled scheme's.** The generated ids are bound through the
+        // rows-tree root — carrying the rows themselves is exactly what the tiled scheme exists to
+        // avoid at this vocabulary.
+        let rows_root = kaspa_consensus_core::palw_step_refute::tiled_logits_rows_root_v1(&binding.job_context, &logits_rows)
+            .ok_or_else(|| "the retained rows build no tree".to_string())?;
+        let pin = kaspa_consensus_core::palw_step_refute::PalwDecodeTokenPinV1::TiledV1(
+            kaspa_consensus_core::palw_step_refute::PalwTiledDecodeTokensV1 { rows_root, generated_token_ids: generated },
+        );
+
+        // **The prompt, re-derived rather than carried** — the job's own `job_id` IS the anchor
+        // and the attempt lane's prompt is a pure function of it. A context whose prompt hash does
+        // not match the derivation (the free-prompt lane's, whose tokens the caller chose) gets an
+        // empty prompt instead: the court's hash guard would refuse a wrong one, and an absent one
+        // only narrows which leaves adjudicate.
+        let derived = qwen25_a16_prompt_for_anchor(
+            binding.job_context.job_id,
+            self.artifact.shape.vocab,
+            binding.job_context.declared_prefill_tokens,
+        );
+        let derived_ids: Vec<u32> = derived.iter().map(|t| *t as u32).collect();
+        let prompt_token_ids = if kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(&derived_ids)
+            == binding.job_context.prompt_token_ids_hash
+        {
+            derived_ids
+        } else {
+            Vec::new()
+        };
+
+        // **The anchor its committed leg gives this call, when the node reads the cache.** A
+        // carried anchor for a node with no KV refs is refused by the court rather than ignored,
+        // so attachment follows the node's own declaration.
+        let reads_cache = binding
+            .shape_profile
+            .resolve_node_slot(coord.node_slot)
+            .map(|(node, _)| {
+                node.input_refs.iter().any(|r| {
+                    *r == kaspa_consensus_core::palw_step::PALW_STEP_INPUT_KV_K
+                        || *r == kaspa_consensus_core::palw_step::PALW_STEP_INPUT_KV_V
+                })
+            })
+            .unwrap_or(false);
+        let kv_checkpoint = if reads_cache && coord.call_index > 0 {
+            crate::legs::Base0CheckpointCaptureV1::from_chunks_v1(
+                &binding.job_context,
+                &binding.shape_profile,
+                &binding.checkpoint_profile,
+                &checkpoint_chunks,
+            )
+            .ok()
+            .and_then(|checkpoints| crate::legs::base0_kv_anchor_for_call_v1(&checkpoints, coord.call_index))
+        } else {
+            None
+        };
+
+        crate::legs::base0_refutation_from_capture_v1(
+            &binding.shape_profile.clone(),
+            &binding.job_context.clone(),
+            &step_tiles,
+            binding,
+            coord,
+            prompt_token_ids,
+            Some(pin),
+            kv_checkpoint,
+        )
+        .map_err(|e| format!("{e:?}"))
+    }
+
+    fn execute_with_injected_fault(
+        &self,
+        job: &PalwJobContextV2,
+        prompt: &[usize],
+        leaf_index: u64,
+    ) -> Result<PalwExecutionOutcomeV1, String> {
+        if !self.court_capable {
+            return Err("the v1 class carries no capture to tamper with".to_string());
+        }
+        let mut run = a16_execute_for_attempt_v1(&self.artifact, &self.profile, self.plan.as_ref(), job, prompt)?;
+        let ctx_hash = job.context_hash();
+        let profile_hash = self.profile.shape_profile_id();
+        {
+            let slot = run
+                .tiles
+                .tiles
+                .iter_mut()
+                .find(|(i, _)| *i == leaf_index)
+                .ok_or_else(|| format!("the capture holds no tile at leaf {leaf_index}"))?;
+            slot.1.values_le[0] = slot.1.values_le[0].wrapping_add(1);
+            run.tiles.leaves[leaf_index as usize] =
+                kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, &slot.1);
+        }
+        // **Re-derive, do not patch.** The commitment must be the corrupted capture's OWN, or this
+        // is a producer whose roots disagree with its material — which any seat catches without a
+        // court, and which is therefore not the fraud under test.
+        let binding = crate::legs::base0_binding_from_capture_v1(
+            &self.profile,
+            job,
+            &run.tiles,
+            &run.checkpoints,
+            run.trace_root,
+            crate::produce::base0_activation_leg_root_v1(job),
+        )
+        .map_err(|e| format!("{e:?}"))?;
+        run.execution_root = binding.committed_execution_root;
+        run.binding = binding;
+        let material = crate::produce::base0_material_encode_v1(&run).map_err(|e| e.to_string())?;
+        Ok(PalwExecutionOutcomeV1 {
+            trace_root: run.trace_root,
+            output_root: run.output_root,
+            execution_root: run.execution_root,
+            trace_manifest_root: run.trace_manifest_root,
+            trace_chunk_count: run.trace_chunk_count,
+            material,
+        })
+    }
+}
+
+/// The committed leaf-hash vector, rebuilt from retained tiles — the shape the rung and the
+/// refutation helpers read. The floor keeps an identical private helper beside its own backend;
+/// this one is the A16 family's copy of the same eleven lines rather than a premature trait.
+fn a16_leaves_by_position(
+    binding: &kaspa_consensus_core::palw_step_leg::PalwStepBindingV2,
+    tiles: &[(u64, kaspa_consensus_core::palw_step_leg::PalwStepTileLeafV1)],
+) -> Vec<Hash64> {
+    let ctx_hash = binding.job_context.context_hash();
+    let profile_hash = binding.shape_profile.shape_profile_id();
+    let mut leaves = vec![Hash64::default(); binding.step_leaf_count as usize];
+    for (index, leaf) in tiles {
+        if let Some(slot) = leaves.get_mut(*index as usize) {
+            *slot = kaspa_consensus_core::palw_step_leg::step_tile_leaf_hash_v1(&ctx_hash, &profile_hash, leaf);
+        }
+    }
+    leaves
 }
 
 #[cfg(test)]

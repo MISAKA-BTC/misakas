@@ -698,13 +698,21 @@ pub fn base0_material_matches_claim_v1(
     if root != binding.step_merkle_root {
         return Ok(false);
     }
-    // The logits rows and generated ids must REPRODUCE the integer trace root the binding
-    // carries — equality of the binding's field against the claim says the producer kept the
-    // right commitment; this says it kept the execution behind it, which is what a decode-side
-    // dispute (ADR-0049 Decision E) is adjudicated against.
-    if kaspa_consensus_core::palw_step_refute::base0_logits_trace_root_v1(&binding.job_context, logits_rows, generated)
-        != binding.full_logits_trace_root
-    {
+    // The logits rows and generated ids must REPRODUCE the trace root the binding carries —
+    // equality of the binding's field against the claim says the producer kept the right
+    // commitment; this says it kept the execution behind it, which is what a decode-side dispute
+    // (ADR-0049 Decision E) is adjudicated against. **Under the scheme the CLASS registered**:
+    // the floor commits the flat integer root over every row, and the model tiers commit the
+    // tiled root over their selecting rows — one check that recomputed only the flat root would
+    // read every tiled-class material as a mismatch, which is a seat refusing every honest
+    // producer of the classes this check exists to police.
+    let recomputed_trace_root =
+        if binding.shape_profile.logits_scheme_id == kaspa_consensus_core::palw_step_refute::tiled_logits_scheme_id_v1() {
+            kaspa_consensus_core::palw_step_refute::tiled_logits_trace_root_v1(&binding.job_context, logits_rows, generated)
+        } else {
+            kaspa_consensus_core::palw_step_refute::base0_logits_trace_root_v1(&binding.job_context, logits_rows, generated)
+        };
+    if recomputed_trace_root != binding.full_logits_trace_root {
         return Ok(false);
     }
     // **And the checkpoints must be the ones it committed.**
