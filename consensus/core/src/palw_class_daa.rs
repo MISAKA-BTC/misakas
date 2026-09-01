@@ -793,6 +793,20 @@ pub struct PalwShareGrowthV1 {
 /// and gives it back at the same rate. `growth_permille = 0` disables the whole rule, which is
 /// what every network built before ADR-0054 runs at.
 ///
+/// # Zero is not a small share (ADR-0069)
+///
+/// A class holding 0‰ is not a class that decayed to the bottom of this rule — the decay arm stops
+/// at the grant floor, so nothing this rule does produces a zero. Zero is the WEIGHTLESS grant:
+/// the admission gate's answer that no end-to-end certified family covers the class's kernels, so
+/// nobody can prosecute its claims (ADR-0069 Decisions 5 and 6). The gate that decides weight is
+/// `verify_class_admission_v2`, and this rule must not be a second door into the same room. It
+/// was: the step's `max(1‰, …)` floor made a zero share step to 1‰, and a weightless class's epoch
+/// budget is floored at one block (`derive_epoch_budgets_v2`), so producing that one block read as
+/// "filled its allowance" and the class grew — into weight the court cannot check, and into the
+/// round-0 silence conviction that `class_shares > 0` selects. So a class at zero is skipped by the
+/// growth arm: weight returns to an uncertified family by ACTIVATION, once some build certifies a
+/// backend for it, never by production.
+///
 /// Consensus-inert on its own: this is arithmetic. The transition decides WHEN it runs (one closed
 /// epoch boundary, immediately after the retarget and before the new epoch's budgets are derived).
 pub fn derive_class_share_growth_v1(
@@ -843,6 +857,12 @@ pub fn derive_class_share_growth_v1(
         let Some(used) = use_by_class.get(class_id) else { continue };
         // Filled its allowance: the budget stopped it, which is a statement about its SHARE.
         if used.budget == 0 || used.produced < used.budget {
+            continue;
+        }
+        // **A weightless class does not grow** — see the module note. Its one-block budget is the
+        // liveness floor, not an allowance whose filling says anything about cadence, and the
+        // step's own `max(1‰, …)` would otherwise be the entry point.
+        if *share == 0 {
             continue;
         }
         let base_share = out.shares.get(&base_class_id).copied().unwrap_or(0);
@@ -898,6 +918,35 @@ mod tests {
         // 3. Exactly at the incumbent price is case 2, not case 1 — the boundary is inclusive so
         //    a class at parity cannot ratchet itself below parity one epoch at a time.
         assert_eq!(converge_idle_target_v1(INCUMBENT, INCUMBENT, 4), INCUMBENT);
+    }
+
+    /// **A weightless class never grows through production** (ADR-0069, after the review that
+    /// found the door).
+    ///
+    /// Zero is the certification state, not the bottom of the growth ladder: the admission gate
+    /// grants it to a class no end-to-end certified family can prosecute, and the only way out is
+    /// activation once a build certifies a backend. The growth step's `max(1‰, …)` floor made a
+    /// zero share step to 1‰, and a weightless class's epoch budget is floored at one block — so
+    /// one produced block read as a filled allowance and the class took weight the court cannot
+    /// check. Asserted beside a share-bearing class filling the same budget, which MUST grow, so
+    /// the arm being tested is the zero-share exclusion and not a broken growth rule.
+    #[test]
+    fn a_weightless_class_never_grows_through_production() {
+        let base = Hash64::from_u64_word(1);
+        let weightless = Hash64::from_u64_word(2);
+        let earning = Hash64::from_u64_word(3);
+        let shares: BTreeMap<_, u16> = [(base, 990u16), (weightless, 0u16), (earning, 10u16)].into_iter().collect();
+        // `derive_epoch_budgets_v2` floors every budget at one block, the weightless class's
+        // included; producing it is exactly "filled its allowance" for the growth rule.
+        let used: BTreeMap<_, _> =
+            [(weightless, PalwClassEpochUseV1 { produced: 1, budget: 1 }), (earning, PalwClassEpochUseV1 { produced: 3, budget: 3 })]
+                .into_iter()
+                .collect();
+        let out = derive_class_share_growth_v1(&shares, &std::collections::BTreeSet::new(), &used, base, 250, 20, 1);
+        assert_eq!(out.shares.get(&weightless).copied(), Some(0), "a zero share is a certification state: it does not grow");
+        assert!(!out.grew.contains_key(&weightless), "and nothing is recorded as its growth");
+        assert!(out.shares.get(&earning).copied().unwrap_or(0) > 10, "the share-bearing class filling its budget still grows");
+        assert_eq!(out.shares.values().map(|s| u32::from(*s)).sum::<u32>(), 1000, "and the table conserves");
     }
 
     /// The overflow arm, because a target near `u128::MAX` times `max_factor` is the one input

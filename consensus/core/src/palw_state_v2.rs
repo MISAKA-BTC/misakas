@@ -6354,6 +6354,58 @@ pub(crate) mod tests {
         );
     }
 
+    /// **ADR-0069 at the same boundary: a weightless class that fills its one-block budget stays
+    /// weightless.**
+    ///
+    /// The growth rule is `max(1‰, share × g / 1000)` per filled budget, and a zero share's budget
+    /// is floored at one block — so, before the growth arm excluded zero, producing that block
+    /// raised an UNCERTIFIED class to 1‰ at the next boundary: weight the admission gate had
+    /// refused, taken through a rule the gate does not run, and with it the round-0 silence
+    /// conviction that `class_shares > 0` selects for a family that cannot answer at a rung.
+    /// Driven through the transition rather than the pure rule so the budget floor, the census and
+    /// the boundary sequencing are the real ones.
+    #[test]
+    fn a_weightless_class_that_produces_its_floor_block_takes_no_share() {
+        let p = economy_params();
+        let bond = bond_key(1);
+        let (mut state, _) = apply_palw_transition_v2(
+            &PalwChainStateV2::genesis(),
+            &p,
+            &ctx(1, 10, 1),
+            // The weightless grant the acceptance path issues to a class no certified family
+            // covers (ADR-0069 Decision 6), beside a share-bearing entrant as the control.
+            &[registration(h64(1), 1000, None), registration(h64(2), 0, Some(bond)), registration(h64(3), 1, Some(bond))],
+            None,
+        )
+        .expect("registers");
+        assert_eq!(state.class_shares.get(&h64(2)).copied(), Some(0), "the weightless entrant holds a zero row");
+        let control_started = state.class_shares.get(&h64(3)).copied().expect("the control holds share");
+
+        let epoch = p.epoch_length();
+        for step in 1..=3u64 {
+            let closed = (10 + (step - 1) * epoch) / epoch;
+            for id in [h64(1), h64(2), h64(3)] {
+                let budget = state.epoch_budgets.as_ref().and_then(|b| b.budget_blocks.get(&id).copied()).unwrap_or(1);
+                assert!(budget >= 1, "every class, the weightless one included, may produce at least one block");
+                state.epoch_counters.insert(id, PalwEpochCounterV2 { epoch_index: closed, produced_pwu: 1, produced_blocks: budget });
+            }
+            let (next, _) =
+                apply_palw_transition_v2(&state, &p, &ctx(10 + step, 10 + step * epoch, 10 + step), &[], None).expect("a boundary");
+            state = next;
+            assert_eq!(state.class_shares.get(&h64(2)).copied(), Some(0), "filling the floor budget is not earning cadence");
+            assert_eq!(state.class_shares.values().map(|s| *s as u32).sum::<u32>(), 1000, "conserved at every boundary");
+            state.assert_internal_consistency(&p).expect("and internally consistent");
+        }
+        assert!(
+            state.class_shares.get(&h64(3)).copied().expect("still holds share") > control_started,
+            "the share-bearing control filling the same budgets is raised — the arm under test is the zero-share exclusion"
+        );
+        assert!(
+            matches!(state.classes.get(&h64(2)).map(|r| &r.status), Some(PalwClassStatusV2::Active)),
+            "a producing weightless class is never reclaimed: it is registered, produces and counts for liveness"
+        );
+    }
+
     /// **The floor is never reclaimed and never diluted below its protected permille**, whatever
     /// the walk and the donations do. ADR-0039 W6′ as arithmetic.
     #[test]

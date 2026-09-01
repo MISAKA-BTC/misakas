@@ -289,6 +289,16 @@ pub enum PalwE2eError {
     GraphMisdescribesTheEngine { committed: u64, declared: u64 },
     #[error("a refutation at leaf {leaf} opens leaf {opened} instead")]
     RefutationOpensAnotherLeaf { leaf: u64, opened: u64 },
+    /// The vector's refutations are bound to a graph other than the one the evidence names.
+    ///
+    /// The certificate's kernel set, its covering and its `drilled_class_id` are all read off
+    /// `evidence.profile`, while the verdicts below are read off each refutation's OWN binding —
+    /// which carries the profile it was captured under. Leaving the two unbound let a drill of one
+    /// graph be filed as evidence for another with the same leaf count (a kernel id moves the
+    /// class id and nothing else), and the certificate would then vouch for kernels no court ever
+    /// re-executed. The seal is only as good as this line.
+    #[error("the vector at leaf {leaf} was drilled under class {vector}, not the evidence's class {drilled}")]
+    VectorIsAboutAnotherGraph { leaf: u64, drilled: Hash64, vector: Hash64 },
     #[error("the operand openings do not prove against the class's artifact root: {0}")]
     OperandProofInvalid(String),
     /// The whole point. An honest capture that convicts itself would mean the court punishes
@@ -333,8 +343,24 @@ pub fn certify_e2e_family_v1(evidence: &PalwE2eDrillEvidenceV1) -> Result<PalwE2
         return Err(PalwE2eError::NoVectors);
     }
 
+    let drilled_class_id = evidence.profile.shape_profile_id();
     let mut covering = PalwE2eCoveringV1 { malformed_refused: evidence.malformed_inputs_refused > 0, ..Default::default() };
     for vector in &evidence.vectors {
+        // **Every vector is about THIS graph.** The verdicts below are read off each refutation's
+        // own binding, and `verify_binding` ties that binding's profile to its job context — but
+        // nothing ties either to `evidence.profile`, which is where the kernel set, the covering
+        // and the drilled class id come from. Checked on both sides and by class id (the id IS the
+        // borsh of the profile), so a drill of one graph cannot be filed as evidence for another.
+        for refutation in [&vector.honest, &vector.guilty] {
+            let bound = refutation.binding.shape_profile.shape_profile_id();
+            if bound != drilled_class_id || refutation.binding.job_context.shape_profile_id != drilled_class_id {
+                return Err(PalwE2eError::VectorIsAboutAnotherGraph {
+                    leaf: vector.leaf_index,
+                    drilled: drilled_class_id,
+                    vector: bound,
+                });
+            }
+        }
         // The context is the binding's own — the drill cannot hand one profile and adjudicate
         // under another, because the refutation carries the context it was built against.
         let ctx = &vector.honest.binding.job_context;
@@ -418,7 +444,7 @@ pub fn certify_e2e_family_v1(evidence: &PalwE2eDrillEvidenceV1) -> Result<PalwE2
 
     let family = PalwE2eFamilyV1 {
         family_id: evidence.family_id,
-        drilled_class_id: evidence.profile.shape_profile_id(),
+        drilled_class_id,
         // Read off the graph, never supplied: a drill that named its own kernel set would be
         // certifying arithmetic it had not walked.
         kernel_ids: crate::palw_class_admission_v2::reachable_kernels_v1(&evidence.profile),

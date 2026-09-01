@@ -770,6 +770,56 @@ mod exported_evidence_tests {
             "evidence whose guilty run is an honest one must not certify — the grader is what the certificate means"
         );
     }
+
+    /// **Recorded vectors certify the graph they were drilled under, and no other.**
+    ///
+    /// The certificate's kernel set, covering and drilled class id are read off `evidence.profile`;
+    /// the verdicts are read off each vector's own binding. Before the certifier bound the two, a
+    /// drill of one graph could be filed as evidence for another with the same leaf count — a
+    /// kernel id moves the class id and nothing else — and the resulting certificate would vouch
+    /// for kernels no court ever re-executed. The consensus path never consumed a certificate (it
+    /// reads the pinned family set), so this was the mechanism's own promise failing rather than
+    /// the chain's; the mechanism is what this ADR is.
+    ///
+    /// The substituted profile is well-formed, statically adjudicable, and enumerates the SAME
+    /// step space (only the epsilon differs), so every check the certifier ran before this one
+    /// passes — which is what makes the refusal below the graph binding and nothing else.
+    #[test]
+    fn exported_vectors_do_not_certify_a_graph_they_were_not_drilled_under() {
+        use kaspa_consensus_core::palw_e2e_adjudicability::{PalwE2eError, certify_e2e_family_v1};
+
+        let court =
+            kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2::new(kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES, 4, 2)
+                .expect("shipped court");
+        let entry = crate::classes::canonical_class_by_model_id_v1(&court, "PALW-BASE-0/rc").expect("the floor");
+        let root = crate::rc::palw_rc_base0_artifact_root_v1().expect("pinned");
+        let resolved = crate::classes::resolve_class_v1(&court, entry.class_id(), root, &[]).expect("the floor resolves");
+        let profile = resolved.profile.clone();
+        let backend = crate::backend::Base0Backend::new(resolved);
+        let evidence = drill_family_evidence_v1(base0_family_id_v1(), &backend, &profile, root, Hash64::from_u64_word(0xE8))
+            .expect("the floor drills");
+        certify_e2e_family_v1(&evidence).expect("the honest pairing certifies");
+
+        // Another class: same tables, same tiling, same leaf count — a different graph by id.
+        let mut other = evidence.profile.clone();
+        other.base0_rms_eps_q += 1;
+        other.validate_shape().expect("still well-formed");
+        assert_ne!(other.shape_profile_id(), evidence.profile.shape_profile_id());
+        assert_eq!(
+            kaspa_consensus_core::palw_step::step_leaf_count(&other, &evidence.vectors[0].honest.binding.job_context).expect("counts"),
+            evidence.vectors[0].honest.binding.step_leaf_count,
+            "the substituted graph enumerates the same space, so the leaf-count check alone cannot tell them apart"
+        );
+        let filed_under_another_graph = PalwE2eDrillEvidenceV1 { profile: other, ..evidence.clone() };
+        match certify_e2e_family_v1(&filed_under_another_graph) {
+            Err(PalwE2eError::VectorIsAboutAnotherGraph { leaf, drilled, vector }) => {
+                assert_eq!(leaf, evidence.vectors[0].leaf_index);
+                assert_eq!(drilled, filed_under_another_graph.profile.shape_profile_id());
+                assert_eq!(vector, evidence.profile.shape_profile_id());
+            }
+            other => panic!("evidence filed under a graph its vectors were not drilled under must be refused by name: {other:?}"),
+        }
+    }
 }
 
 #[cfg(test)]
