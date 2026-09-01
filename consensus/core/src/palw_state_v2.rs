@@ -3862,6 +3862,27 @@ fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCon
             && session.ladder.last_deadline_daa() < session.deadline_daa;
         if rung_fired {
             if let Ok(no_show) = session.ladder.declare_no_show(ctx.daa_score) {
+                // **Whether the accused could have moved at all, as a fact the chain already
+                // holds** (ADR-0069 Decision 3-3).
+                //
+                // The opening-rung exemption below exists for one reason: a family with no
+                // `bisect_prefix_state` cannot make the first move, so convicting its silence
+                // convicts an honest producer for its build's gap. ADR-0069 turns "can move" into
+                // an on-chain fact rather than a property of this tree — a class holds cadence only
+                // if its family is certified end to end, and that certificate IS the drill that
+                // proves the family plays a court through to a conviction. So weight is the
+                // question, and the state answers it.
+                //
+                // Weight-bearing: the family certified, the producer CAN stand behind its root, and
+                // a silence at round 0 is a default like any other. Weightless: the exemption
+                // stands, because the reason for it stands. It is also self-correcting — a family
+                // that certifies later takes weight by activation, and its claims become
+                // convictable at that same moment with nothing here to change.
+                //
+                // A class that certified and then decayed out of the table is exempted too, which
+                // is generous by one case and deliberately so: the arm decides whether to DESTROY
+                // collateral, and the direction to be wrong in is the one that does not.
+                let class_holds_weight = builder.state.class_shares.get(&claim.class_id).copied().unwrap_or(0) > 0;
                 builder.write_court(session_id, None);
                 match no_show.silent_party {
                     // **A silence at the OPENING rung is not a conviction** (audit M2-5).
@@ -3880,7 +3901,7 @@ fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCon
                     // challenger's side — the right answer for an accusation that was never
                     // supported by an exchange. A responder that has answered once and then goes
                     // silent still loses at the next rung, which is the case the ladder is for.
-                    crate::palw_bisect::PalwBisectPartyV1::Responder if session.ladder.round() == 0 => {
+                    crate::palw_bisect::PalwBisectPartyV1::Responder if session.ladder.round() == 0 && !class_holds_weight => {
                         // Ends the session, convicts nobody, and FINES nobody — see
                         // `rearm_after_unanswered_opening` (audit3 H4). Routing this to the
                         // challenger-side close made the accuser pay for the accused's silence,
@@ -7822,6 +7843,47 @@ pub(crate) mod tests {
         params().with_turn_deadline_daa(20).unwrap()
     }
 
+    /// A second class that holds NO cadence — the shape ADR-0069 gives a family whose court this
+    /// build cannot certify. The base class keeps the whole table, so the shares still sum to 1000.
+    fn register_weightless_class() -> PalwConsensusObjectV2 {
+        PalwConsensusObjectV2::ClassRegistered {
+            class_id: h64(2),
+            artifact_root: h64(12),
+            slash_value_per_pwu: 5,
+            pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
+            initial_target: u128::MAX / 2,
+            share_permille: 0,
+            activation_daa: 0,
+            admission: None,
+        }
+    }
+
+    /// [`licensed_with_court`] over the WEIGHTLESS class: the producer's family is one this build
+    /// cannot certify, so it cannot make a move at any rung.
+    fn licensed_with_court_weightless(p: &PalwStateParamsV2) -> (PalwChainStateV2, Hash64, Hash64) {
+        let genesis = PalwChainStateV2::genesis();
+        let mut objects = register_class_and_bond();
+        objects.push(register_weightless_class());
+        let (s1, _) = apply(&genesis, p, &ctx(1, 100, 1), &objects, None);
+        assert_eq!(s1.class_shares.get(&h64(2)).copied(), Some(0), "the fixture's premise: this class holds no cadence");
+        let env = attempt_for_class(40, 1, h64(2), bond_key(1), vec![7; 4], op_id(21), h64(12));
+        let claim_id = attempt_id_v2(&env.attempt);
+        let (s2, _) = apply(&s1, p, &ctx(2, 101, 2), &[], Some(&env));
+        let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: op_id(21) }];
+        let (s3, _) =
+            apply(&s2, p, &ctx(3, 102, 3), &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }], None);
+        let (s4, _) = apply(
+            &s3,
+            p,
+            &ctx(4, 103, 4),
+            &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: seat_says(true) }],
+            None,
+        );
+        let (s5, _) = apply(&s4, p, &ctx(5, 104, 5), &[court_open(claim_id, h64(31), bond_key(1), bond_key(1))], None);
+        let sid = court_session_of(claim_id, h64(31), bond_key(1), bond_key(1));
+        (s5, claim_id, sid)
+    }
+
     fn licensed_with_court(p: &PalwStateParamsV2) -> (PalwChainStateV2, Hash64, Hash64) {
         let genesis = PalwChainStateV2::genesis();
         let (s1, _) = apply(&genesis, p, &ctx(1, 100, 1), &register_class_and_bond(), None);
@@ -8088,7 +8150,7 @@ pub(crate) mod tests {
     #[test]
     fn the_opening_rung_does_not_convict_a_responder_that_never_moved() {
         let p = params_with_ladder();
-        let (s5, claim_id, sid) = licensed_with_court(&p);
+        let (s5, claim_id, sid) = licensed_with_court_weightless(&p);
         // Inside the rung window, nothing has happened yet.
         let (s6, _) = apply(&s5, &p, &ctx(6, 120, 6), &[], None);
         assert!(s6.court_session(&sid).is_some(), "the rung has not run out at 120");
@@ -8121,6 +8183,37 @@ pub(crate) mod tests {
     /// silence is a certainty rather than a risk, accusing was a guaranteed loss. There was no
     /// sequence of moves by which an honest detector could win: arithmetic fraud across 40 % of
     /// cadence was unpunishable, and reporting it was the only punishable act.
+    /// **A certified family's silence at the opening rung IS a default** (ADR-0069 Decision 3-3).
+    ///
+    /// The exemption beside this test exists for one reason, stated in its own comment: a family
+    /// with no `bisect_prefix_state` cannot make the first move, so convicting its silence convicts
+    /// an honest producer for its build's gap. That reason is a fact about a FAMILY, and ADR-0069
+    /// puts that fact on chain — a class holds cadence only if its family certified end to end, and
+    /// the certificate is the drill that proves it plays a court through to a conviction.
+    ///
+    /// So the exemption follows the reason rather than outliving it. Asserted as the DIFFERENCE
+    /// against the weightless fixture: the two tests run the same sequence over the same ladder and
+    /// disagree only about whether the class holds cadence, which is the only thing the rule reads.
+    #[test]
+    fn the_opening_rung_convicts_a_certified_responder_that_never_moved() {
+        let p = params_with_ladder();
+        let (s5, claim_id, sid) = licensed_with_court(&p);
+        assert!(
+            s5.class_shares.get(&h64(1)).copied().unwrap_or(0) > 0,
+            "the premise: this fixture's class holds cadence, so ADR-0069 says its family certified"
+        );
+
+        let (s6, _) = apply(&s5, &p, &ctx(6, 120, 6), &[], None);
+        assert!(s6.court_session(&sid).is_some(), "the rung has not run out at 120");
+
+        let (s7, _) = apply(&s6, &p, &ctx(7, 125, 7), &[], None);
+        assert!(s7.court_session(&sid).is_none(), "the session is decided and gone");
+        assert!(
+            matches!(s7.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Voided { reason: PalwVoidReasonV2::CourtFraud, .. }),
+            "a producer whose family can stand behind its root, and does not, has defaulted on the only defence it had"
+        );
+    }
+
     #[test]
     fn an_unanswered_opening_rung_charges_neither_side() {
         let p = params_with_ladder();
@@ -8134,9 +8227,13 @@ pub(crate) mod tests {
             payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A22),
             signature: Vec::new(),
         });
+        // The producer's class is one this build cannot certify — which is the whole premise of the
+        // rule this test protects. A certified family CAN answer, and its silence is a default;
+        // see `the_opening_rung_convicts_a_certified_responder_that_never_moved`.
+        objects.push(register_weightless_class());
         let genesis = PalwChainStateV2::genesis();
         let (s1, _) = apply(&genesis, &p, &ctx(1, 100, 1), &objects, None);
-        let env = attempt(40, 1);
+        let env = attempt_for_class(40, 1, h64(2), bond_key(1), vec![7; 4], op_id(21), h64(12));
         let claim_id = attempt_id_v2(&env.attempt);
         let (s2, _) = apply(&s1, &p, &ctx(2, 101, 2), &[], Some(&env));
         let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: op_id(21) }];
