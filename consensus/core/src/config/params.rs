@@ -786,6 +786,103 @@ impl Params {
     ///   pure V2 — every V1 fence `None`, every V1 PALW PoW activation `never()`. A node that
     ///   accepted a mixed set would run half of two rulesets, which is the five-fences defect
     ///   reborn with an enum in front of it.
+    /// **`finality_depth` and `pruning_depth` for a V2 network, derived from its own bundle.**
+    ///
+    /// Split out of `palw_v2_params_on_base` because a second caller assembling a V2 params set by
+    /// hand restated only part of it and then failed the lattice bound — the same "one field of a
+    /// derived set" shape as [`Self::with_two_minute_cadence`], one level down. Call it after the
+    /// cadence and before installing the bundle.
+    pub fn with_palw_v2_depths(mut self, bundle: &crate::palw_mode_v2::PalwConsensusParamsV2) -> Self {
+        // Sized against the bundle's own challenge window, which is what the schedule rule compares:
+        // `finality_depth < w_challenge`. Half the window, so the inequality holds with margin rather
+        // than by one.
+        self.blockrate.finality_depth = bundle.state.window_challenge() / 2;
+        // **And the depths that DEPEND on finality move with it** (audit M2-20). Writing one field of
+        // a derived set left `pruning_depth` at the value computed for the inherited finality depth, so
+        // `anticone_finalization_depth()` — 1,354 for this preset — was silently clamped to a
+        // pruning_depth of 1,144 under a comment about test networks, and, worse, the claim lattice
+        // (bind + receipt + challenge + court DAA) outran the horizon in which the chain keeps the
+        // headers every judgement is anchored on: `job_anchor_for_claim` reads the claim block's
+        // header, and the pruning processor deletes it. A court that cannot derive the anchor cannot
+        // adjudicate, and the seat that cannot verify accuses.
+        //
+        // Recomputed here from the same decomposition the constructor uses, then raised to hold the
+        // whole lattice. `validate_palw_v2` asserts both bounds so a preset that violates either
+        // cannot be constructed at all.
+        {
+            let k = self.blockrate.ghostdag_k as u64;
+            let lower_bound = self.blockrate.finality_depth
+                + self.blockrate.merge_depth * 2
+                + 4 * self.blockrate.mergeset_size_limit * k
+                + 2 * k
+                + 2;
+            // TWO bind+receipt pairs: a claim whose first panel concludes nothing is revived once and
+            // binds a second (`sweep_deadlines`' `PanelBound` arm), so the longest path a judgement
+            // can be anchored on is the redrawn one — and it is the length the horizon has to cover.
+            let lattice = 2 * (bundle.state.window_bind() + bundle.state.window_receipt())
+                + bundle.state.window_challenge()
+                + bundle.state.window_court();
+            self.blockrate.pruning_depth = self.blockrate.pruning_depth.max(lower_bound).max(lattice);
+            // **Upstream pruning's consistency invariant, restored HERE for every V2 network**
+            // (ADR-0068 drill finding F4; Phase 2 is the flag day the drill's note deferred to).
+            // The pruning processor requires `pruning_depth % finality_depth` strictly inside
+            // `(k, finality_depth - k)` (`assert_pruning_depth_consistency`) and the lattice bound
+            // above landed testnet-11 on EXACTLY `6600 = 11 × 600`, remainder zero — unseen because
+            // the invariant test iterates suffix-less NetworkTypes. Nudge upward to remainder
+            // `k + 1`: raising keeps every inequality `validate_palw_v2` proved (the lattice and
+            // anticone bounds are `<=`). This moves the live testnet-11's `consensus_params_id`,
+            // which is exactly what a Relaunch train is for; the devnet-local copy of this nudge is
+            // gone, subsumed.
+            let f = self.blockrate.finality_depth;
+            let m = self.blockrate.pruning_depth % f;
+            if m <= k {
+                self.blockrate.pruning_depth += k + 1 - m;
+            } else if m >= f - k {
+                self.blockrate.pruning_depth += (f - m) + k + 1;
+            }
+        }
+        self
+    }
+
+    /// **Every field that means "how fast this chain runs", set together.**
+    ///
+    /// A PALW V2 network runs one block per 120 s (ADR-0038 Decision H). That is not one field:
+    /// `ghostdag_k`, `mergeset_size_limit`, `merge_depth`, `coinbase_maturity` and the DNS windows
+    /// are all counts derived from the same rate, and the DNS windows are block counts that state a
+    /// duration only in company with a cadence. Writing `target_time_per_block` alone — which is
+    /// what every assembly path here used to do — leaves a chain running a 10 bps DAG and 10 bps
+    /// windows on a 120 s clock. The visible end of that is `bond_spend_gate`, which enforces
+    /// `unbonding_period_blocks` in consensus: inherited from a 10 bps base, the "14 day" period is
+    /// about 46 years, so validator collateral is confiscated by a unit mismatch.
+    ///
+    /// Three groups move, and nothing else does:
+    ///
+    /// * **The DAG parameters**, from `BlockrateParams::new_two_minute_bps()` — the one place they
+    ///   are derived together from lambda = 1/120. A base that deliberately widened its DAG keeps
+    ///   that width, because `max_block_parents` is a topology choice and not a clock reading.
+    /// * **Crescendo**, forced active. Mainnet activates it at DAA 110 165 000 and runs
+    ///   `pre_crescendo_target_time_per_block` below that, so a V2 mainnet would have produced
+    ///   10 bps headers under 120 s-denominated consensus windows for its whole pre-fork life.
+    /// * **The DNS windows**, via [`DnsParams::at_two_minute_cadence`].
+    ///
+    /// Callers that raise `finality_depth` / `pruning_depth` afterwards must keep doing so: this
+    /// sets the canonical pair, and the claim lattice needs more.
+    ///
+    /// **This is the exact identity on a base already sized for 120 s** (the RC's is), which is
+    /// what lets a live network's assembly call it without moving `consensus_params_id`.
+    pub fn with_two_minute_cadence(mut self) -> Self {
+        let widened_parents = self.blockrate.max_block_parents;
+        self.blockrate = BlockrateParams::new_two_minute_bps();
+        if widened_parents > self.blockrate.max_block_parents {
+            self.blockrate = self.blockrate.increase_max_block_parents(widened_parents);
+        }
+        self.crescendo_activation = ForkActivation::always();
+        if let Some(dns) = self.dns_params.take() {
+            self.dns_params = Some(dns.at_two_minute_cadence());
+        }
+        self
+    }
+
     pub fn validate_palw_v2(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
         use crate::palw_mode_v2::{PalwConsensusMode, PalwModeV2Error};
         let PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode else {
@@ -924,6 +1021,55 @@ impl Params {
         if self.blockrate.target_time_per_block != crate::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS {
             return Err(PalwModeV2Error::Invalid(
                 "a ConsensusV2 network must run the frozen 120 s cadence (ADR-0038 Decision H) — every window in the bundle is DAA-denominated",
+            ));
+        }
+        // **…and `target_time_per_block` is one field of a SET, so checking it alone was the gate
+        // agreeing with the bug it was meant to catch** (mainnet audit item 6).
+        //
+        // `ghostdag_k`, `mergeset_size_limit`, `merge_depth` and `coinbase_maturity` are all
+        // derived from the same lambda, and a 10 bps base that had only its `target_time_per_block`
+        // overwritten passed the check above while running a 10 bps DAG at a 120 s clock. Compared
+        // against the shared constructor rather than against literals, so the two cannot drift.
+        //
+        // Two fields are deliberately not compared. `max_block_parents` may be WIDER (a topology
+        // choice a base is allowed to make), and `finality_depth` / `pruning_depth` are raised by
+        // the assembly to cover the claim lattice — both already carry their own bounds above.
+        {
+            let canonical = BlockrateParams::new_two_minute_bps();
+            let mismatch = (self.blockrate.ghostdag_k != canonical.ghostdag_k)
+                || (self.blockrate.mergeset_size_limit != canonical.mergeset_size_limit)
+                || (self.blockrate.merge_depth != canonical.merge_depth)
+                || (self.blockrate.coinbase_maturity != canonical.coinbase_maturity)
+                || (self.blockrate.past_median_time_sample_rate != canonical.past_median_time_sample_rate)
+                || (self.blockrate.difficulty_sample_rate != canonical.difficulty_sample_rate)
+                || (self.blockrate.max_block_parents < canonical.max_block_parents);
+            if mismatch {
+                return Err(PalwModeV2Error::Invalid(
+                    "a ConsensusV2 network runs the 120 s DAG parameters, not just the 120 s clock: k, mergeset, \
+                     merge depth and maturity are derived from the same rate and must come from new_two_minute_bps",
+                ));
+            }
+        }
+        // **The fork that selects that cadence must already be behind us.** Mainnet activates
+        // Crescendo at a finite height and runs `pre_crescendo_target_time_per_block` below it, so
+        // a V2 network with a future Crescendo would produce 10 bps headers under 120 s-denominated
+        // consensus windows for its entire pre-fork life.
+        if self.crescendo_activation != ForkActivation::always() {
+            return Err(PalwModeV2Error::Invalid(
+                "a ConsensusV2 network must have Crescendo active from genesis — its cadence is the frozen one, not a fork away",
+            ));
+        }
+        // **And the DNS windows are block counts, so they are cadence too.** Inherited from a
+        // 10 bps base the "14 day" unbonding period states about 46 years at 120 s, and
+        // `bond_spend_gate` enforces it in consensus — validator collateral confiscated by a unit
+        // mismatch. Stated as a fixed point of `at_two_minute_cadence` so the gate and the
+        // assembly cannot disagree about what the right table is.
+        if let Some(dns) = self.dns_params.as_ref()
+            && *dns != dns.clone().at_two_minute_cadence()
+        {
+            return Err(PalwModeV2Error::Invalid(
+                "the network's DNS windows are counted for a different block rate — at 120 s these state \
+                 durations they do not mean, and the unbonding period is enforced in consensus",
             ));
         }
         // …and the cadence the bundle COMMITS to must be the cadence the network RUNS. The
@@ -6308,7 +6454,9 @@ pub fn palw_rc_base_params() -> Params {
     params.pow_blake2b_sha3_activation = ForkActivation::never();
     params.pow_palw_activation = ForkActivation::never();
     params.pow_palw_ollama_activation = ForkActivation::never();
-    params.blockrate.target_time_per_block = crate::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
+    // The whole cadence in one spelling; a no-op on this base, which is the point of asserting it
+    // here rather than trusting `TESTNET_PARAMS` to keep carrying it.
+    let params = params.with_two_minute_cadence();
     // **The EVM lane is ON from DAA 0, inherited from `TESTNET_PARAMS` and kept deliberately.**
     //
     // It was briefly turned off here on the reasoning that `MAINNET_PARAMS` never activates the
@@ -6392,55 +6540,13 @@ pub fn palw_v2_params_on_base(
     // For mainnet it is not a small change and should not read as one: mainnet runs 10 bps, and a
     // V2 network runs one block per 120 s. Enabling PALW on mainnet slows its cadence by that
     // factor, which is a consequence of the consensus and not a knob beside it.
-    params.blockrate.target_time_per_block = crate::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
-    // Sized against the bundle's own challenge window, which is what the schedule rule compares:
-    // `finality_depth < w_challenge`. Half the window, so the inequality holds with margin rather
-    // than by one.
-    params.blockrate.finality_depth = bundle.state.window_challenge() / 2;
-    // **And the depths that DEPEND on finality move with it** (audit M2-20). Writing one field of
-    // a derived set left `pruning_depth` at the value computed for the inherited finality depth, so
-    // `anticone_finalization_depth()` — 1,354 for this preset — was silently clamped to a
-    // pruning_depth of 1,144 under a comment about test networks, and, worse, the claim lattice
-    // (bind + receipt + challenge + court DAA) outran the horizon in which the chain keeps the
-    // headers every judgement is anchored on: `job_anchor_for_claim` reads the claim block's
-    // header, and the pruning processor deletes it. A court that cannot derive the anchor cannot
-    // adjudicate, and the seat that cannot verify accuses.
-    //
-    // Recomputed here from the same decomposition the constructor uses, then raised to hold the
-    // whole lattice. `validate_palw_v2` asserts both bounds so a preset that violates either
-    // cannot be constructed at all.
-    {
-        let k = params.blockrate.ghostdag_k as u64;
-        let lower_bound = params.blockrate.finality_depth
-            + params.blockrate.merge_depth * 2
-            + 4 * params.blockrate.mergeset_size_limit * k
-            + 2 * k
-            + 2;
-        // TWO bind+receipt pairs: a claim whose first panel concludes nothing is revived once and
-        // binds a second (`sweep_deadlines`' `PanelBound` arm), so the longest path a judgement
-        // can be anchored on is the redrawn one — and it is the length the horizon has to cover.
-        let lattice = 2 * (bundle.state.window_bind() + bundle.state.window_receipt())
-            + bundle.state.window_challenge()
-            + bundle.state.window_court();
-        params.blockrate.pruning_depth = params.blockrate.pruning_depth.max(lower_bound).max(lattice);
-        // **Upstream pruning's consistency invariant, restored HERE for every V2 network**
-        // (ADR-0068 drill finding F4; Phase 2 is the flag day the drill's note deferred to).
-        // The pruning processor requires `pruning_depth % finality_depth` strictly inside
-        // `(k, finality_depth - k)` (`assert_pruning_depth_consistency`) and the lattice bound
-        // above landed testnet-11 on EXACTLY `6600 = 11 × 600`, remainder zero — unseen because
-        // the invariant test iterates suffix-less NetworkTypes. Nudge upward to remainder
-        // `k + 1`: raising keeps every inequality `validate_palw_v2` proved (the lattice and
-        // anticone bounds are `<=`). This moves the live testnet-11's `consensus_params_id`,
-        // which is exactly what a Relaunch train is for; the devnet-local copy of this nudge is
-        // gone, subsumed.
-        let f = params.blockrate.finality_depth;
-        let m = params.blockrate.pruning_depth % f;
-        if m <= k {
-            params.blockrate.pruning_depth += k + 1 - m;
-        } else if m >= f - k {
-            params.blockrate.pruning_depth += (f - m) + k + 1;
-        }
-    }
+    // **One spelling of "this network runs at 120 s", because there turned out to be two
+    // assembly paths and only one of them had it** (mainnet audit item 6). See the method.
+    params = params.with_two_minute_cadence();
+    // **The depths a V2 network needs, derived from its own bundle in ONE place.** Restated by
+    // hand anywhere else, they drift — which is how a params set assembled outside this function
+    // ended up failing the very lattice bound this derivation exists to satisfy.
+    params = params.with_palw_v2_depths(&bundle);
     params.palw_consensus_mode = crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle);
     params.validate_palw_v2()?;
     Ok(params)
@@ -6608,6 +6714,86 @@ mod consensus_params_id_tests {
             dns.min_active_validators as u64 * dns.min_bond_amount_sompi,
             "the stake gate is the product; raise either floor and this must move with it"
         );
+    }
+
+    /// **The 120 s cadence substitution is the identity on the network that already runs it.**
+    ///
+    /// This is the property that lets every V2 assembly apply it unconditionally: testnet-11 is
+    /// live and its `consensus_params_id` is pinned, so a rescale that moved even one of its
+    /// windows would be a flag day wearing a mainnet fix's clothes.
+    #[test]
+    fn the_two_minute_cadence_is_a_fixed_point_of_the_live_testnet_table() {
+        assert_eq!(TESTNET_DNS_PARAMS.at_two_minute_cadence(), TESTNET_DNS_PARAMS);
+        let after = TESTNET_PARAMS.clone().with_two_minute_cadence();
+        let (a, b) = (&after.blockrate, &TESTNET_PARAMS.blockrate);
+        assert_eq!(
+            (a.target_time_per_block, a.ghostdag_k, a.mergeset_size_limit, a.merge_depth, a.coinbase_maturity, a.max_block_parents),
+            (b.target_time_per_block, b.ghostdag_k, b.mergeset_size_limit, b.merge_depth, b.coinbase_maturity, b.max_block_parents),
+        );
+        assert_eq!((a.finality_depth, a.pruning_depth), (b.finality_depth, b.pruning_depth));
+        assert_eq!(after.dns_params, TESTNET_PARAMS.dns_params);
+        // Idempotent, which is also the form the `validate_palw_v2` gate asserts.
+        let once = PRODUCTION_DNS_PARAMS.at_two_minute_cadence();
+        assert_eq!(once.clone().at_two_minute_cadence(), once);
+    }
+
+    /// **What the substitution buys a 10 bps base, stated as the harm it removes.**
+    ///
+    /// `bond_spend_gate` enforces `unbonding_period_blocks` in consensus, so inheriting the
+    /// production count at 120 s is not a cosmetic unit error — it is confiscation.
+    #[test]
+    fn production_dns_windows_state_decades_at_the_v2_cadence_until_rescaled() {
+        const SECS: u64 = 120;
+        const YEAR: u64 = 365 * 86_400;
+        assert!(
+            PRODUCTION_DNS_PARAMS.unbonding_period_blocks * SECS > 40 * YEAR,
+            "the premise of this test is the defect it guards: {} blocks",
+            PRODUCTION_DNS_PARAMS.unbonding_period_blocks
+        );
+        let rescaled = PRODUCTION_DNS_PARAMS.at_two_minute_cadence();
+        assert_eq!(rescaled.evidence_window_blocks * SECS, 14 * 86_400, "14 days, exactly");
+        assert_eq!(rescaled.unbonding_period_blocks, rescaled.evidence_window_blocks + rescaled.max_reorg_horizon_blocks);
+        // The two relational invariants a PURE duration rescale breaks, which is why this is a
+        // substitution and not an arithmetic: 25x headroom over a healthy anchor-to-tip distance,
+        // and the gate horizon's 3x over the TTL.
+        let healthy_anchor_distance = rescaled.attestation_lag_blue_score + rescaled.epoch_length_blocks;
+        assert!(rescaled.dns_veto_ttl_daa_score >= 25 * healthy_anchor_distance);
+        assert!(rescaled.dns_gate_horizon_blocks >= 3 * rescaled.dns_veto_ttl_daa_score);
+        // Only the CLOCK moves — the security posture is the network's, not the cadence's.
+        assert_eq!(rescaled.min_bond_amount_sompi, PRODUCTION_DNS_PARAMS.min_bond_amount_sompi);
+        assert_eq!(rescaled.min_active_validators, PRODUCTION_DNS_PARAMS.min_active_validators);
+        assert_eq!(rescaled.min_active_stake_sompi, PRODUCTION_DNS_PARAMS.min_active_stake_sompi);
+        assert_eq!(rescaled.required_work_depth, PRODUCTION_DNS_PARAMS.required_work_depth);
+        assert_eq!(rescaled.reward_params, PRODUCTION_DNS_PARAMS.reward_params);
+    }
+
+    /// **A 10 bps base carries more than a wrong clock, and the gate must say so for each part.**
+    ///
+    /// Asserted as three separate breakages of a set that passes, because a gate that only reads
+    /// `target_time_per_block` agrees with exactly the bug it exists to catch — which is what it
+    /// did until the mainnet audit.
+    #[test]
+    fn a_v2_network_is_refused_for_each_half_of_a_ten_bps_cadence() {
+        let rc = Params::from(NetworkId::with_suffix(NetworkType::Testnet, 11));
+        rc.validate_palw_v2().expect("the shipped RC is a well-formed V2 network");
+        assert!(matches!(rc.palw_consensus_mode, crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)));
+
+        // The DAG parameters, with the clock left correct — the exact shape the old gate passed.
+        let mut ten_bps_dag = rc.clone();
+        ten_bps_dag.blockrate.ghostdag_k = BlockrateParams::new::<10>().ghostdag_k;
+        assert_eq!(ten_bps_dag.blockrate.target_time_per_block, 120_000, "the clock is still right, which is the point");
+        assert!(ten_bps_dag.validate_palw_v2().is_err(), "a 10 bps k at a 120 s clock must be refused");
+
+        // The DNS windows — block counts that state 14 days and mean about 46 years here.
+        let mut ten_bps_windows = rc.clone();
+        ten_bps_windows.dns_params = Some(PRODUCTION_DNS_PARAMS);
+        assert!(ten_bps_windows.validate_palw_v2().is_err(), "10 bps DNS windows at a 120 s clock must be refused");
+
+        // And the fork that selects the cadence: mainnet's Crescendo is a finite height away.
+        let mut future_crescendo = rc.clone();
+        future_crescendo.crescendo_activation = MAINNET_PARAMS.crescendo_activation;
+        assert!(!MAINNET_PARAMS.crescendo_activation.is_active(0), "the premise: mainnet's Crescendo is not active at genesis");
+        assert!(future_crescendo.validate_palw_v2().is_err(), "a V2 network may not spend its pre-fork life at 10 bps");
     }
 
     /// **A bond may not leave before the history it voted on is beyond dispute.**
@@ -7894,7 +8080,14 @@ mod consensus_params_id_tests {
             // …and once more with the pair above: the audit remediation's `court_e2e_root` and
             // armed D4 fence, and `PALW_V2_TRACE_FORMAT_VERSION` 2 → 3. The drill preset shares
             // both through the same bundle builder.
-            ("devnet", DEVNET_PARAMS, "677857903c6a224dda2063ccd4a0bad8462c41eefb4442ab810e087218702937"),
+            // …and once more for the 120 s cadence SET (mainnet audit item 6). `Params::from(Devnet)`
+            // is a ConsensusV2 assembly, and the assembly used to write `target_time_per_block`
+            // alone — so the drill network ran a 10 bps DAG (k, mergeset, merge depth, maturity)
+            // and 10 bps DNS windows on a 120 s clock. `with_two_minute_cadence` sets the whole
+            // set; devnet keeps its deliberately widened `max_block_parents: 64`. testnet-11 is
+            // untouched because its base already carried the whole set — which is the property
+            // that made this safe to apply unconditionally.
+            ("devnet", DEVNET_PARAMS, "84f15819280df2bcac00f33db78ca7a8f291bd99ad6a1b4173f6def90f93f785"),
         ]
         .into_iter()
         .filter_map(|(name, params, expected)| {

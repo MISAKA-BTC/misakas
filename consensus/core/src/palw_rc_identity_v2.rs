@@ -293,8 +293,12 @@ mod tests {
     /// A base at the frozen cadence and a proportionate depth — the network identity ADR-0036
     /// Decision 2 says mainnet PALW needs, expressed as the edit that makes SIMNET admissible.
     fn base() -> Params {
-        let mut p = crate::config::params::SIMNET_PARAMS.clone();
-        p.blockrate.target_time_per_block = crate::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
+        let p = crate::config::params::SIMNET_PARAMS.clone();
+        // The WHOLE cadence, not just the clock: patching `target_time_per_block` alone here
+        // left a simnet base running 10 bps DAG parameters and 10 bps DNS windows at 120 s,
+        // which `validate_palw_v2` now refuses — as it should, since that is the shape of the
+        // mainnet defect this helper was quietly modelling.
+        let p = p.with_two_minute_cadence();
         p
     }
 

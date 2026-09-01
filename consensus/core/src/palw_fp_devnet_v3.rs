@@ -802,7 +802,11 @@ mod tests {
         // ADR-0038 Decision H: a ConsensusV2 network runs the frozen cadence, and the bundle's
         // own `cadence_target_time_per_block_ms` must equal the network's — the two are one fact
         // in two places, which is what the H2 fix made checkable.
-        v2.blockrate.target_time_per_block = PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
+        // The whole cadence AND the bundle-derived depths, through the same two spellings the
+        // real assembly uses. Patching `target_time_per_block` alone here used to pass, which is
+        // exactly how a hand-built set can satisfy the gate while running 10 bps DAG parameters
+        // and 10 bps DNS windows at 120 s.
+        let v2 = v2.with_two_minute_cadence().with_palw_v2_depths(&bundle());
         v2.validate_palw_v2().expect("a pure V2 params set carrying the devnet bundle validates");
 
         // …and the mixed-lineage refusal still bites. DEVNET used to be the V1 PALW PoW preset
@@ -813,7 +817,7 @@ mod tests {
         let mut mixed = DEVNET_PARAMS.clone();
         mixed.pow_palw_activation = crate::config::params::ForkActivation::always();
         mixed.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle());
-        mixed.blockrate.target_time_per_block = PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
+        let mixed = mixed.with_two_minute_cadence().with_palw_v2_depths(&bundle());
         assert!(mixed.validate_palw_v2().is_err());
     }
 

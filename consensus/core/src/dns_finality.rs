@@ -1474,6 +1474,48 @@ pub fn canonical_lagged_epoch_anchor(
 }
 
 impl DnsParams {
+    /// **The block-denominated windows this table needs when the chain runs one block per 120 s.**
+    ///
+    /// Every field below is a *count of blocks*, so it states a duration only in company with a
+    /// cadence. [`PRODUCTION_DNS_PARAMS`] counts them for a 10 bps chain; a PALW V2 network runs
+    /// one block per 120 s (ADR-0038 Decision H), which is 1 200x slower. Inheriting the 10 bps
+    /// counts there does not make the windows conservative, it makes them absurd — the "14 day"
+    /// unbonding period becomes about 46 years, and `bond_spend_gate` enforces it in consensus, so
+    /// a validator's collateral would be confiscated in all but name.
+    ///
+    /// The values are **not** a formula applied to the production table, and the reason is worth
+    /// recording: a pure duration rescale drives the small windows below one block and then breaks
+    /// the relational invariants sitting on top of them — the veto TTL's >= 25x headroom over a
+    /// healthy anchor-to-tip distance, and the gate horizon's 3x over that TTL. These are instead
+    /// the table the public 120 s testnet has actually run, which is the only 120 s DNS cadence
+    /// anything has validated. Hence a substitution, not an arithmetic.
+    ///
+    /// Only the *cadence* fields move. Bond floors, validator counts, work depths and reward
+    /// params are the network's security posture rather than its clock, so a mainnet assembled
+    /// through this keeps mainnet's. Consequently this is the exact identity on a base already
+    /// sized for 120 s — `TESTNET_DNS_PARAMS.at_two_minute_cadence() == TESTNET_DNS_PARAMS`,
+    /// asserted in `params.rs` — which is what lets the V2 assembly apply it unconditionally
+    /// without moving a running network's `consensus_params_id`.
+    ///
+    /// One field is deliberately NOT here: `reward_uniqueness_window_blocks` stays at the base's
+    /// count (600), which the 120 s testnet also inherited unexamined and has run without harm.
+    /// Moving it would change a live network for no measured reason, and this function's whole
+    /// value is that it cannot.
+    pub const fn at_two_minute_cadence(mut self) -> Self {
+        self.epoch_length_blocks = 2;
+        self.max_reorg_horizon_blocks = 3;
+        self.evidence_window_blocks = 10_080;
+        self.unbonding_period_blocks = 10_083;
+        self.dns_gate_horizon_blocks = 360;
+        self.dns_veto_ttl_daa_score = 120;
+        self.attestation_epoch_length_blue_score = 2;
+        self.attestation_lag_blue_score = 2;
+        self.attestation_anchor_backoff_blue_score = 1;
+        self.stake_score_window_blue_score = 30;
+        self.bridge_finality_max_staleness_daa_score = 2;
+        self
+    }
+
     /// Which epoch-credit rule — and therefore which source of voting weight — is in force at
     /// `daa_score`.
     ///
