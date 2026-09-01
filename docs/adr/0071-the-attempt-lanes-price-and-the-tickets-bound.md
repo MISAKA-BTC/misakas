@@ -1,6 +1,12 @@
 # ADR-0071 — The attempt lane's price, the ticket's bound, and who may judge a class
 
-Status: **PROPOSED (2026-09-01).** Written against the mainnet-premise audit of ADR-0068 Phase 2,
+Status: **IMPLEMENTED (2026-09-02; proposed 2026-09-01).** All three Decisions are in code, and two
+of them are amended below because implementing them showed the original text was wrong — Decision 1a
+(an absolute retarget expectation would have reintroduced the unbounded walk three audit findings
+closed) and Decision 2's pwu formula (it priced the work the bucket covers, not the work the search
+required). §5's claim about what a false capability declaration costs was also wrong and is
+corrected in place. The wrong versions are kept beside the right ones, because the reasoning that
+produced them is the reasoning a future reader will produce again. Written against the mainnet-premise audit of ADR-0068 Phase 2,
 whose remaining findings do not fit inside a local fix: each one contradicts a decision some earlier
 ADR made deliberately, and says so in that decision's own comment. Builds on ADR-0038 (PALW is the
 consensus work), ADR-0045 (`DerivedV1`, the class economy), ADR-0054/0056 (share follows
