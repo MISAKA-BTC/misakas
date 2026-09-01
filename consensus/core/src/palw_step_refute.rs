@@ -3262,6 +3262,15 @@ fn vec_dot_f32(a: &[u32], b: &[u32], dot: DotStructure) -> u32 {
 /// `sum_j = dot(S_col_j, k)`, `delta_j = (v_j − sum_j)·β`, `S[i][j] += k_i·delta_j` (fused),
 /// `out_j = dot(S_col_j, q) · (1/sqrtf(head_k_dim))` — the scale on the OUTPUT (the fused
 /// path's placement; the unfused graph scales q, a different rounding).
+/// **The ceiling every GDN dimension is held to inside the adjudicator.**
+///
+/// Not a claim about model architecture — a bound on what this arm's arithmetic can serve. It has
+/// to sit below `1 << 24`, where `i32_len_to_f32_bits` stops being able to represent its argument
+/// and starts underflowing, and low enough that `kd * vd * heads` words is an allocation rather
+/// than a denial of service. 65,536 is both, with room to spare over the low-hundreds head dims
+/// the hybrid classes actually declare.
+const PALW_GDN_MAX_DIM: usize = 1 << 16;
+
 fn gdn_core_genesis_replay(
     profile: &PalwShapeProfileV3,
     inputs: &[Vec<u32>],
@@ -3279,7 +3288,30 @@ fn gdn_core_genesis_replay(
         DotStructure::Step16Epr4 => 16,
         DotStructure::Step32Epr8 => 32,
     };
+    // **And the same clause needs a ceiling, which it did not have** (the ADR-0068 launch audit's
+    // sweep). `PalwShapeProfileV3::validate_geometry` bounds the attention geometry and says so;
+    // it never bounds `gdn_heads`, `gdn_head_k_dim` or `gdn_head_v_dim` at all, so a registered
+    // class may declare `gdn_head_k_dim = 1 << 24` — a multiple of both dot steps, and therefore a
+    // value this guard admitted. Two things then break, in this order:
+    //
+    // * `i32_len_to_f32_bits(kd)` one line below computes `n.leading_zeros() - 8`, which for
+    //   `n >= 1 << 24` has fewer than eight leading zeros and underflows. The release profile
+    //   keeps `overflow-checks = true` (`Cargo.toml`), so that is a panic, and this arm runs in
+    //   virtual processing — the block is stored and relayed before it kills the node, and every
+    //   node re-reads it on restart. Its `debug_assert!(n > 0 && n <= 1 << 24)` does not catch it
+    //   even in a debug build: `1 << 24` satisfies the assertion and underflows anyway.
+    // * the state buffer below is `kd * vd * heads` words, which the same declaration makes
+    //   gigabytes.
+    //
+    // The ceiling is deliberately far above anything adjudicable — the hybrid classes this court
+    // serves carry head dims in the low hundreds — so it refuses no class that could be judged,
+    // and it is applied HERE, beside the multiple-of-step rule, because both are facts about what
+    // this arm's arithmetic can serve rather than about what a class may declare. Bounding the
+    // profile at registration is the other half and belongs in `validate_geometry`.
     if kd == 0 || vd == 0 || heads == 0 || !kd.is_multiple_of(step) {
+        return Err(PalwStepRefuteError::Unadjudicable);
+    }
+    if kd > PALW_GDN_MAX_DIM || vd > PALW_GDN_MAX_DIM || heads > PALW_GDN_MAX_DIM {
         return Err(PalwStepRefuteError::Unadjudicable);
     }
     if !inputs.len().is_multiple_of(5) || inputs.is_empty() {
@@ -3332,7 +3364,13 @@ fn gdn_core_genesis_replay(
 
 fn i32_len_to_f32_bits(n: u32) -> u32 {
     // Small positive integers are exact in f32 for our head dims.
-    debug_assert!(n > 0 && n <= 1 << 24);
+    //
+    // **The bound is strict, and it used to admit the one value that breaks it.** At `n == 1 << 24`
+    // there are seven leading zeros, so `n.leading_zeros() - 8` underflows — under
+    // `overflow-checks`, a panic — and the old `n <= 1 << 24` asserted that value was fine. The
+    // caller (`gdn_core_genesis_replay`) is what actually keeps a stranger's profile out of here;
+    // this states the precondition correctly so the next caller inherits a true one.
+    debug_assert!(n > 0 && n < 1 << 24);
     let shift = n.leading_zeros() - 8;
     let sig = n << shift;
     ((150 - shift as i32) as u32) << 23 | (sig & 0x007F_FFFF)
@@ -3861,6 +3899,61 @@ pub(crate) mod tests {
             })
             .collect();
         gdn_core_genesis_replay(p, &narrowed, DotStructure::Step16Epr4)
+    }
+
+    /// **An unbounded GDN dimension is refused, not panicked on** (ADR-0068 launch audit sweep).
+    ///
+    /// `validate_geometry` bounds the ATTENTION geometry and explains itself while doing it; it
+    /// never looks at `gdn_heads`, `gdn_head_k_dim` or `gdn_head_v_dim`. So a class could register
+    /// `gdn_head_k_dim = 1 << 24` — a multiple of both dot steps, so the arm's multiple-of-step
+    /// rule waved it through — and `i32_len_to_f32_bits` then computed `leading_zeros() - 8` on a
+    /// value with seven leading zeros. Under the release profile's `overflow-checks` that is a
+    /// panic, in virtual processing, on a block already stored and relayed.
+    ///
+    /// The premise is asserted alongside the fix, because the premise is what makes the guard
+    /// load-bearing: if `validate_geometry` ever starts refusing this profile, this test should
+    /// keep passing for a second reason rather than quietly stop testing anything.
+    #[test]
+    fn an_unbounded_gdn_dimension_is_refused_rather_than_panicked_on() {
+        // The premise, in arithmetic: the value the old assertion permitted is the value that
+        // underflows. `debug_assert!(n <= 1 << 24)` admitted exactly this.
+        assert_eq!((1u32 << 24).leading_zeros(), 7, "fewer than the eight `leading_zeros() - 8` subtracts");
+
+        // The premise, in the class check: nothing upstream refuses this profile.
+        let mut poisoned = profile();
+        poisoned.gdn_head_k_dim = 1 << 24;
+        assert!(
+            poisoned.validate_geometry().is_ok(),
+            "the class-level check does not bound the GDN geometry — which is why the arm must"
+        );
+        assert!((1usize << 24).is_multiple_of(16) && (1usize << 24).is_multiple_of(32), "and it clears the multiple-of-step rule");
+
+        // Five rows, so the input-shape clause cannot be what refuses it: the ceiling is.
+        let rows = vec![Vec::<u32>::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new()];
+        assert!(
+            matches!(gdn_core_genesis_replay(&poisoned, &rows, DotStructure::Step16Epr4), Err(PalwStepRefuteError::Unadjudicable)),
+            "an unservable geometry is a refusal of the DISPUTE, never a dead node"
+        );
+        // `gdn_head_v_dim` rides the same clause — it is the other factor in the state buffer.
+        let mut wide = profile();
+        wide.gdn_head_v_dim = PALW_GDN_MAX_DIM as u32 + 1;
+        assert!(matches!(
+            gdn_core_genesis_replay(&wide, &rows, DotStructure::Step16Epr4),
+            Err(PalwStepRefuteError::Unadjudicable)
+        ));
+        // `gdn_heads` is a `u16` and so cannot reach the ceiling at all. Its clause is kept for
+        // symmetry rather than reachability: the three dimensions are one geometry, and a later
+        // widening of the field would otherwise arrive with no guard and no test.
+        assert!(u16::MAX as usize <= PALW_GDN_MAX_DIM, "the heads clause is unreachable today, and this is why");
+
+        // And the honest shape is untouched — a ceiling that refused real classes would be a
+        // different defect wearing this fix's clothes.
+        let honest = profile();
+        assert!(honest.gdn_head_k_dim as usize <= PALW_GDN_MAX_DIM);
+        assert!(
+            !matches!(gdn_core_genesis_replay(&honest, &rows, DotStructure::Step16Epr4), Err(PalwStepRefuteError::Unadjudicable)),
+            "the ceiling must not be what refuses an adjudicable class"
+        );
     }
 
     // ---- P0-8's end-to-end fixture: a BASE-0 MatMul execution, real weights, no model ----
