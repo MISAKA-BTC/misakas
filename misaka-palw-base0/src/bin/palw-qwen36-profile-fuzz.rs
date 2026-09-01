@@ -1,6 +1,7 @@
-//! **ADR-0067 Decision 5's saturation runner.** `--seed N --iters N`; the tally prints, and a
-//! non-zero finding column exits non-zero — a CI or an operator can gate on the exit code. The
-//! seed is the repro: the same seed replays the same corpus bit for bit.
+//! **ADR-0067 Decision 5's saturation runner, for the mmap (Qwen3.6) container.** `--seed N
+//! --iters N`; the tally prints, and a non-zero finding column exits non-zero — a CI or an
+//! operator can gate on the exit code. The seed is the repro: the same seed replays the same
+//! corpus bit for bit.
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let flag = |name: &str, default: u64| -> u64 {
@@ -21,7 +22,7 @@ fn main() {
     let seed = flag("--seed", 0x0067);
     let iters = flag("--iters", 10_000);
     let started = std::time::Instant::now();
-    let tally = misaka_palw_base0::fuzz_a16::fuzz_a16_profiles_v1(seed, iters);
+    let tally = misaka_palw_base0::fuzz_qwen36::fuzz_qwen36_profiles_v1(seed, iters);
     println!("seed {seed:#x}, {iters} iterations in {:?}", started.elapsed());
     println!("{tally:?}");
     if tally.panics != 0 || tally.nondeterminism != 0 {

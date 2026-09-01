@@ -48,7 +48,7 @@ impl FuzzRng {
         self.0 = x;
         x.wrapping_mul(0x2545F4914F6CDD1D)
     }
-    fn below(&mut self, n: u64) -> u64 {
+    pub(crate) fn below(&mut self, n: u64) -> u64 {
         self.next() % n.max(1)
     }
 }

@@ -244,18 +244,22 @@ pub struct Qwen36CanonicalClassV1 {
     pub model_id: &'static str,
     pub geometry: kaspa_consensus_core::palw_qwen36_profile::PalwQwen36GeometryV1,
     pub canonical_job: (u32, u32),
-    /// Which node-table revision this row describes the geometry with. 1 is the genesis tables;
-    /// 2 is the 2026-09-01 correction (`qwen36_profile_v2`) whose names the engine actually reads.
-    /// A class IS its graph, so the two revisions are two class ids over the same weights — the
-    /// same arrangement the dense family shipped as `Qwen/Qwen2.5-1.5B/graph-v2`.
+    /// Which node-table revision this row describes the geometry with. 1 is the genesis tables.
+    /// 2 was the first correction (2026-09-01) and is RETIRED, never to be reused: its spelling
+    /// reached testnet-11 (`6c3bdc67…`, the race ADR-0067 records) while still carrying the
+    /// fourth defect and the 17 epsilon, so the number names that orphaned chain row and nothing
+    /// in this table. 3 is the shipping correction (`qwen36_profile_v2`'s tables with all six
+    /// findings closed, over the artifact-epsilon geometry). A class IS its graph, so every
+    /// revision is its own class id over the same weights — the same arrangement the dense
+    /// family shipped as `Qwen/Qwen2.5-1.5B/graph-v2`.
     pub graph_version: u8,
 }
 
 impl Qwen36CanonicalClassV1 {
     pub fn profile(&self) -> Result<PalwShapeProfileV3, kaspa_consensus_core::palw_step::PalwStepError> {
         match self.graph_version {
-            2 => kaspa_consensus_core::palw_qwen36_profile::qwen36_profile_v2(self.geometry),
-            _ => kaspa_consensus_core::palw_qwen36_profile::qwen36_profile_v1(self.geometry),
+            1 => kaspa_consensus_core::palw_qwen36_profile::qwen36_profile_v1(self.geometry),
+            _ => kaspa_consensus_core::palw_qwen36_profile::qwen36_profile_v2(self.geometry),
         }
     }
 
@@ -267,8 +271,12 @@ impl Qwen36CanonicalClassV1 {
     /// Does this artifact have the shape this class is defined at? Dimension by dimension, so
     /// the error names the field. `max_position` is deliberately NOT compared — the artifact
     /// states what its rotary table covers, the profile states what the court admits — and the
-    /// epsilons are not either, for the same reason the dense table skips them on its A16 arm:
-    /// the engine's integer epsilon is the artifact format's, the class constant is the court's.
+    /// epsilons are not either. An earlier version of this sentence said "the engine's integer
+    /// epsilon is the artifact format's, the class constant is the court's" — describing, without
+    /// noticing, a court that diverges from every honest engine. That split was the fifth
+    /// finding; the graph-v3 geometries close it by declaring the artifact's epsilon
+    /// (`QWEN36_ARTIFACT_EPS_Q`), and the planner's geometry gate — not this shape check — is
+    /// what refuses a declaration whose epsilon the artifact does not execute.
     pub fn shape_matches(&self, shape: &crate::qwen36::Qwen36ShapeV1) -> Result<(), String> {
         let g = &self.geometry;
         let want_kinds: Vec<crate::qwen36::Qwen36LayerKind> = (0..g.layer_count as usize)
@@ -337,29 +345,40 @@ pub fn qwen36_canonical_classes_v1() -> Vec<Qwen36CanonicalClassV1> {
             canonical_job: kaspa_consensus_core::palw_qwen36_profile::QWEN36_RC_CANONICAL,
             graph_version: 1,
         },
-        // --- graph-v2: the corrected tables, one row per geometry ---------------------------------
+        // --- graph-v3: the corrected rows, one per geometry ---------------------------------------
         // The v1 rows above stay exactly as the chain registered them; these are the SAME weights
-        // under the graph whose names the engine actually reads (three measured defects closed —
-        // the shared-gate collision, the unnamed router widening, the phantom V-cache node). An
-        // interpreter follows these rows; it can never follow the v1 rows, which is the finding
-        // that forced them to exist.
+        // under the graph whose names, kernels and epsilon the engine actually executes — the six
+        // measured findings closed (the shared-gate collision, the unnamed router widening, the
+        // phantom V-cache node, the backwards expert wideness, the unexecuted epsilon, the
+        // ungrouped scalar gate). An interpreter follows these rows; it can never follow the v1
+        // rows, which is the finding that forced them to exist. The name is v3, not v2, because
+        // "graph-v2" is burned: the superseded spelling reached testnet-11 first (tx `6c3bdc67…`)
+        // and a registered name cannot be re-pointed at a different id. The geometry is the frozen
+        // const under `qwen36_geometry_artifact_eps` — one declared difference, nothing
+        // transcribed.
         Qwen36CanonicalClassV1 {
-            model_id: "Qwen3.6-35B-A3B/graph-v2",
-            geometry: kaspa_consensus_core::palw_qwen36_profile::QWEN36_35B_A3B,
+            model_id: "Qwen3.6-35B-A3B/graph-v3",
+            geometry: kaspa_consensus_core::palw_qwen36_profile::qwen36_geometry_artifact_eps(
+                kaspa_consensus_core::palw_qwen36_profile::QWEN36_35B_A3B,
+            ),
             canonical_job: kaspa_consensus_core::palw_qwen36_profile::QWEN36_RC_CANONICAL,
-            graph_version: 2,
+            graph_version: 3,
         },
         Qwen36CanonicalClassV1 {
-            model_id: "huihui-ai/Huihui-Qwen3-Coder-30B-A3B-Instruct-abliterated/graph-v2",
-            geometry: kaspa_consensus_core::palw_qwen36_profile::QWEN3_CODER_30B_A3B,
+            model_id: "huihui-ai/Huihui-Qwen3-Coder-30B-A3B-Instruct-abliterated/graph-v3",
+            geometry: kaspa_consensus_core::palw_qwen36_profile::qwen36_geometry_artifact_eps(
+                kaspa_consensus_core::palw_qwen36_profile::QWEN3_CODER_30B_A3B,
+            ),
             canonical_job: kaspa_consensus_core::palw_qwen36_profile::QWEN36_RC_CANONICAL,
-            graph_version: 2,
+            graph_version: 3,
         },
         Qwen36CanonicalClassV1 {
-            model_id: "Qwen/Qwen3.5-2B/graph-v2",
-            geometry: kaspa_consensus_core::palw_qwen36_profile::QWEN35_2B,
+            model_id: "Qwen/Qwen3.5-2B/graph-v3",
+            geometry: kaspa_consensus_core::palw_qwen36_profile::qwen36_geometry_artifact_eps(
+                kaspa_consensus_core::palw_qwen36_profile::QWEN35_2B,
+            ),
             canonical_job: kaspa_consensus_core::palw_qwen36_profile::QWEN36_RC_CANONICAL,
-            graph_version: 2,
+            graph_version: 3,
         },
     ]
 }
@@ -667,16 +686,17 @@ mod tests {
         let table = qwen36_canonical_classes_v1();
         // Six members: three geometries, each under two graphs — the count is pinned so a row
         // added without reading this test is still a row added on purpose. The second trio is
-        // graph-v2 (2026-09-01), the corrected node tables over the SAME weights, and the whole
-        // point of the pairing is that each is a different class than its v1 twin.
+        // graph-v3 (2026-09-01), the corrected node tables and epsilon over the SAME weights, and
+        // the whole point of the pairing is that each is a different class than its v1 twin.
         assert_eq!(table.len(), 6);
         let hybrid = &table[0];
         let coder = &table[1];
         let dense = &table[2];
-        // The v2 trio: same geometries, corrected graph, and therefore six pairwise-distinct ids.
-        assert_eq!(table[3].model_id, "Qwen3.6-35B-A3B/graph-v2");
-        assert_eq!(table[4].model_id, "huihui-ai/Huihui-Qwen3-Coder-30B-A3B-Instruct-abliterated/graph-v2");
-        assert_eq!(table[5].model_id, "Qwen/Qwen3.5-2B/graph-v2");
+        // The v3 trio: frozen geometries under the artifact epsilon, corrected graph, and
+        // therefore six pairwise-distinct ids.
+        assert_eq!(table[3].model_id, "Qwen3.6-35B-A3B/graph-v3");
+        assert_eq!(table[4].model_id, "huihui-ai/Huihui-Qwen3-Coder-30B-A3B-Instruct-abliterated/graph-v3");
+        assert_eq!(table[5].model_id, "Qwen/Qwen3.5-2B/graph-v3");
         let mut ids = Vec::new();
         for row in &table {
             ids.push(row.class_id().expect("every row projects"));
@@ -728,6 +748,27 @@ mod tests {
         assert!(coder.shape_matches(&shape_of(coder)).is_ok());
         assert!(hybrid.shape_matches(&shape_of(coder)).is_err(), "a qwen3moe artifact must not pass as the hybrid");
         assert!(coder.shape_matches(&shape_of(hybrid)).is_err(), "the hybrid's artifact must not pass as qwen3moe");
+    }
+
+    /// **The fifth finding stays closed, unconditionally.** The real-weights differential that
+    /// found it (`qwen36_plan.rs`) is env-gated on a multi-gigabyte artifact, so it guards
+    /// nothing in a plain checkout — this pins the same fact locally: every corrected row
+    /// declares the epsilon the converter builds ([`QWEN36_ARTIFACT_EPS_Q`]), and every v1 row
+    /// still declares its frozen 17, because a v1 geometry that moved would rename a class the
+    /// chain already registered.
+    #[test]
+    fn the_corrected_rows_declare_the_artifact_epsilon() {
+        for row in qwen36_canonical_classes_v1() {
+            match row.graph_version {
+                1 => assert_eq!(row.geometry.rms_eps_q, 17, "{}: the frozen v1 epsilon moved", row.model_id),
+                _ => assert_eq!(
+                    row.geometry.rms_eps_q,
+                    kaspa_consensus_core::palw_qwen36_profile::QWEN36_ARTIFACT_EPS_Q,
+                    "{}: a corrected row must declare the epsilon its artifacts execute",
+                    row.model_id
+                ),
+            }
+        }
     }
 
     /// **A16 entries never resolve through the floor engine.** The registry knows them (they are

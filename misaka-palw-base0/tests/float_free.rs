@@ -81,6 +81,8 @@ const CONSENSUS_PATH: &[&str] = &[
     // would make the gate's own determinism claim unfalsifiable — the harness would inherit the
     // nondeterminism it exists to detect.
     "src/fuzz_a16.rs",
+    // The mmap container's fuzz gate — the same argument, the same clause of the same ADR.
+    "src/fuzz_qwen36.rs",
 ];
 
 /// Not executed by consensus, but they *state* the class's arithmetic: the KAT set publishes the
@@ -115,6 +117,7 @@ const EXEMPT: &[(&str, &str)] = &[
     // ADR-0067's saturation runner: it prints a tally and an elapsed time (a timer is float). The
     // arithmetic under test is `fuzz_a16.rs`, which is scanned.
     ("src/bin/palw-a16-profile-fuzz.rs", "fuzz driver: it times and tallies, the harness it drives is on the path"),
+    ("src/bin/palw-qwen36-profile-fuzz.rs", "fuzz driver: it times and tallies, the harness it drives is on the path"),
     // ADR-0067 Decision 6 tier ②. It STATES arithmetic in the KAT sense — a publisher's rows
     // digest is what a third party conforms to — but it computes that digest by running the
     // scanned engine and hashing integers, adding none of its own. Listed with the reason rather

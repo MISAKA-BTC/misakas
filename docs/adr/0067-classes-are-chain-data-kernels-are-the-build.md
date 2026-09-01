@@ -7,8 +7,12 @@ a measured defect in the class's registered graph — is CLOSED by the corrected
 interpreter itself is BUILT and differential-tested (2026-09-01), a pass that convicted a FOURTH
 graph defect on the way; the mmap container's chain-resolve arm is BUILT behind the same fence
 (same day — the registered root decides the container, and the mmap engine serves the declaration
-bit-identically to its compiled path); the mmap profile fuzz gate, the epsilon disposition and the
-operational arming remain PROPOSED.** See "What landed" at
+bit-identically to its compiled path); the epsilon disposition is TAKEN (same day — the corrected
+rows are `graph-v3`, declaring the artifact's measured epsilon, after the graph author's review
+convicted a SIXTH defect that folded into the same id move); the mmap profile fuzz gate is BUILT
+and run to saturation with zero findings (same day — and its design pass convicted a reachable
+walk panic before the first iteration ran); only the operational arming remains PROPOSED.** See
+"What landed" at
 the foot of this document. Builds on ADR-0049 (the adjudication contract — whose admission
 carriage is the load-bearing half of this design and is ALREADY LIVE), ADR-0054 (share follows
 production — the economics that make permissionless classes survivable), and ADR-0034 (capability
@@ -440,6 +444,24 @@ frozen with the rest of it), `structural_diff_v1_v2` excuses exactly those four 
 directions, and the v2 class id moved with its graph — pinned at `23ef487f…`, still registered on
 no chain, which is what made the correction an edit instead of a third row.
 
+**The superseded spelling reached the chain first (2026-09-01, 03:07 CEST — recorded, not
+retracted, because a registration cannot be).** Thirteen minutes after the corrected labels were
+pushed, a fleet node still running the previous build (`e74260cb`, whose ledger derives the OLD
+v2 id) executed a name-based registration drop-in — `--palw-register-class=Qwen3.6-35B-A3B/graph-v2`
+— and `069b9482…` was accepted in tx `6c3bdc67…`, block `01152888…`. What that row now is: a
+permanent orphan carrying the fourth defect's backwards labels and the fifth finding's epsilon —
+**structurally unservable on any build from the interpreter onward** (no current ledger derives
+its id, so it resolves only through the chain arm, whose geometry gate refuses the declared 17
+against the artifact's executed 1), servable only by the previous build's compiled table, idle
+unless a producer names it, and decaying at ADR-0054's floor share. The damage is a sunk bond and
+a squatted name. The corrected id `23ef487f…` remains registered nowhere, so the epsilon
+disposition still lands as an edit to the ledger row — with one addition: when it lands, the
+ledger row should take a NEW model_id (`graph-v3`) so that the name a chain row already answers
+to stops meaning two different graphs in operator tooling; the known-weights seeding rule's
+treatment of the suffix has to be checked when renaming. The order this forces is now doctrine
+for the family: **measure, correct, re-pin, and only then register — a registration is the one
+step that cannot be taken back, so it goes last.**
+
 And the real-weights run surfaced a FIFTH, this one reaching past the graph into the geometry
 constants: **the declared epsilon is not the executed one.** Every registered geometry of this
 lineage pins `rms_eps_q = 17` (the integer spelling of the checkpoint's `1e-6`, "because the
@@ -458,6 +480,52 @@ artifact's epsilon (or the fleet's artifacts could someday be re-converted at 17
 every artifact root) — but the 35B and Coder artifacts live on the fleet and their headers should
 be read before any constant moves. Until then the finding stands as a refusal with a name.
 
+**The epsilon disposition is taken, and the corrected rows are `graph-v3` (2026-09-01, later the
+same day).** The fleet headers were read before the constant moved, as required above — three
+`.palwq36` headers on the fleet (`original-from-hf` at 40 layers, `huihui-30b` at 48, and the
+36.5 GB `qwen36.palwq36` the `6c3bdc67…` registration actually loaded) all carry `eps_q = 1`,
+agreeing with the converter's hardcode and the local `Qwen3.5-2B` conversion: five measurements,
+one value, no unknown left. So the geometries adopt it — `QWEN36_ARTIFACT_EPS_Q` and
+`qwen36_geometry_artifact_eps` (`palw_qwen36_profile.rs`): the frozen consts stay exactly as v1
+registered them and the corrected rows take the one-field update, transcribing nothing. This is
+the dense family's own precedent replayed: `Qwen/Qwen2.5-1.5B` declared `rms_eps_q: 1` against an
+artifact executing `1 << 8`, and its `graph-v2` row corrected the declaration to what the
+converter builds — `classes.rs` calls that "the defect this class was born from".
+
+**The graph author's review of the interpreter convicted a SIXTH defect, folded into the same id
+move.** The mixture's scalar gate (`ffn_shared_scalar.weight` in v1, the engine's
+`ffn_shared_gate.weight`) declares `KDESC_A16_MATMUL_RESCALE` — the UNGROUPED matmul, whose court
+program (`palw_step_refute.rs`, `Qwen36Op::MatMulRescale`) reads no exponent table — while the
+converter writes `.exp` for that tensor like every other projection (`qwen36-convert.rs`,
+`with_exp(…ffn_shared_gate.weight…)`) and `Qwen36Engine::project` therefore runs the grouped-wide
+kernel over it. Every existing measurement was structurally blind: the interpreter shares
+`project()` with the engine, so their differential agrees at that node BY CONSTRUCTION; the
+fixtures carry no `.exp`, so the ungrouped label is TRUE on fixtures; and the one real artifact
+the differential has run on (`Qwen3.5-2B`) has no shared expert at all. The only party that would
+ever see it is a court re-executing from the committed kernel id — anchoring the codes up to
+`2^QWEN36_MAX_GROUP_EXP` below their scale and refuting an honest producer at every hybrid
+layer's shared gate. The corrected arm declares `KDESC_Q36_MATMUL_GROUPED_WIDE` (a fifth kernel
+parameter of the shared macro; v1 frozen, `structural_diff_v1_v2` excusing exactly five kernel
+corrections in their exact directions), and the planner needs no change — it already treated the
+rescale and grouped-wide ids as the same wideness, which is itself part of how the defect hid.
+
+**The rows are `graph-v3`, and `graph_version: 2` is retired.** The chain answer to
+"Qwen3.6-35B-A3B/graph-v2" is the orphaned `069b9482…`, so the corrected rows take a name no
+chain row answers to; the seeding rule was checked as this section required — `base_model_id`
+strips any wholly-numeric `/graph-vN` suffix, so registered weights admit a `graph-v3` revision
+exactly as they did a v2 — and operator tooling must now spell
+`--palw-register-class=…/graph-v3`. The corrected id is pinned at `5bd9ae3d…`
+(`v3_shape_profile_id_golden_vector`): the corrected tables over the artifact-epsilon geometry,
+the pair `classes.rs` actually registers. Registered on no chain, and registration stays an
+operator action taken last. The teeth grew with the findings: the hot differential now heats
+gates AND ups, routed AND shared, and every heated site must prove itself hot in BOTH arms
+(`a_hot_gate_row_distinguishes_the_declared_wideness` — a wide row by lanes past the rail, a
+narrow row by lanes saturated at it), because a global count would let a site go quietly cold,
+which is how the fourth defect survived its first differential; the epsilon fact is pinned
+unconditionally in a plain checkout (`the_corrected_rows_declare_the_artifact_epsilon`), not only
+behind the env-gated real-weights run; and the real-weights differential now plans the row
+directly while keeping the 17-refusal pinned as a refusal.
+
 **The chain-resolve arm now serves this container too (2026-09-01, same day).**
 `resolve_chain_registered`'s refusal order is unchanged — fence, profile-hashes-to-id,
 canonical-names-the-class, artifact-held, plan-compiles — and its fourth step gained the rule
@@ -474,6 +542,29 @@ declaration is refused by the arm with its defect named; a dense declaration pai
 root reaches the mmap engine and is refused by its geometry gate. kaspad's `resolve_or_chain` and
 the `--palw-chain-classes` fence needed no change — both were already family-agnostic, which is
 the shape the SDK seam was for.
+
+**The fuzz gate now covers this container too (2026-09-01, same day), and its design pass
+convicted a panic before the first iteration ran.** `fuzz_qwen36_profiles_v1`
+(`misaka-palw-base0/src/fuzz_qwen36.rs`, saturation runner `palw-qwen36-profile-fuzz`) is the
+dense harness's clause for the mmap space: mutate the corrected profile — structural, nominal,
+and ROLE edits, because this family declares its cache writes per node, plus REAL operand names
+landed on wrong nodes, which stress the width checks harder than foreign names the planner
+refuses on sight — then the chain's own admission gate, the plan, the court cost against the
+carrier ceiling, and a caller's prompt twice under `catch_unwind`. Walking that mutation space on
+paper before running it found the panic: a convolution declared in the ATTENTION table lands on a
+window the artifact's layer kinds never pre-filled, and the walk's `remove(0)` ran BEFORE the tap
+tensor read that would have refused — measured pre-fix as `removal index (is 0) should be < len
+(is 0)`, from a plannable table any gate-accepted registration could carry. The fix is
+declaration-faithful: the window (and the recurrence's states, same rule, defense in depth) start
+as the zero state a fresh sequence has, made on first demand; the refusal that follows names the
+tensor an attention layer does not carry, and the regression test asserts the walk now gets PAST
+the site it used to die on. Measured: 400 iterations (the CI slice, seed `0x0067_2026_09_01`) —
+136 gate-accepted, 59 executed, zero panics, zero non-determinism, zero closes over the ceiling,
+worst close 38,020 bytes against 81,920, corpus digest pinned (`5b9be0a7…`) so the
+cross-architecture clause is met by the suite; and 50,000 iterations at an independent seed
+(`0x67`, 93 s) — 17,779 past the gate, 7,289 executed, and the same three zeros. The fence's
+arming condition for this container is now measurement plus one operator decision, which is the
+only thing left of the fourth clause.
 
 **The fix cannot be an edit.** `shape_profile_id` is the borsh of the whole profile, node tables
 included, and the hybrid's id is pinned in-tree as a live chain fact — "the shipped hybrid class id

@@ -591,6 +591,15 @@ impl<'a> Qwen36Engine<'a> {
                     current.extend_from_slice(&k);
                     current.extend_from_slice(&v);
                     let window = &mut cache.conv[*li];
+                    // The cache pre-fills windows only for the layers the ARTIFACT calls
+                    // recurrent, but the declaration is the program: a gate-accepted profile may
+                    // put a convolution in the attention table, and its window before the
+                    // sequence start is zero rows — the same start the engine's own windows have.
+                    // `remove(0)` on the unfilled window was a panic a stranger's registration
+                    // could reach (found by this module's own fuzz harness design pass).
+                    if window.is_empty() {
+                        *window = vec![vec![0; width]; s.conv_kernel.max(1)];
+                    }
                     window.remove(0);
                     window.push(current);
                     let flat: Vec<i32> = window.iter().flatten().copied().collect();
@@ -649,6 +658,16 @@ impl<'a> Qwen36Engine<'a> {
                     let decays = resolve(&node.inputs[3], &rows)?;
                     let betas = resolve(&node.inputs[4], &rows)?;
                     let (li, cache) = layer.as_mut().ok_or_else(|| Qwen36Error::BadParams("a recurrence outside a layer".into()))?;
+                    // Same rule as the convolution window above: the cache pre-allocates states
+                    // only for the layers the ARTIFACT calls recurrent, and a gate-accepted
+                    // declaration may put the recurrence in the attention table. Its state before
+                    // the sequence start is zero — `Qwen36Cache::new`'s own start — so the states
+                    // are made on first demand rather than indexed into a panic.
+                    if cache.gdn[*li].len() != s.linear_v_heads {
+                        cache.gdn[*li] = (0..s.linear_v_heads)
+                            .map(|_| kaspa_consensus_core::palw_qwen36_ops::Qwen36GdnStateV1::zeros(hd, hd))
+                            .collect();
+                    }
                     // RESOLUTION_V2: the declared `linear_gdn.a16` is the recurrence's four
                     // per-head narrowings, each its own store.
                     let read_rows = a.param_rows(&format!("blk.{li}.linear_read.a16"))?;
@@ -1499,20 +1518,24 @@ mod tests {
         }
     }
 
-    /// **The wideness labels have to be RIGHT, and this is the test with the teeth to say so.**
+    /// **The kernel labels have to be RIGHT, and this is the test with the teeth to say so.**
     ///
     /// The plain differential above passed even while v2 still carried v1's backwards expert
     /// wideness (gate narrow, up wide — the engine does the opposite), because the fixture's
     /// derived scales keep every row inside the 16-bit code rail, where the narrow and wide
     /// matmuls agree bit for bit. A differential that passes either way at a site has no
-    /// authority there. So this one heats the expert gates — a low shift makes the gate products
-    /// overrun the rail — and then:
+    /// authority there. So this one heats every projection the corrected labels describe —
+    /// gates AND ups, routed AND shared — and then:
     ///
-    /// * the interpreter must still match the engine's bits (under the swapped labels it cannot:
-    ///   the declared narrow gate clamps where the engine's wide one carries — measured before
-    ///   the label fix, logits diverged at position 0);
-    /// * at least one committed gate lane must actually sit PAST the rail, or the site went cold
-    ///   and this test has quietly lost its teeth.
+    /// * the interpreter must still match the engine's bits (under swapped labels it cannot: a
+    ///   declared-narrow gate clamps where the engine's wide one carries — measured before the
+    ///   label fix, logits diverged at position 0 — and a declared-wide up carries where the
+    ///   engine's narrow one clamps);
+    /// * every heated site must prove it is hot SEPARATELY, in both arms — a wide row by lanes
+    ///   past the rail, a narrow row by lanes saturated at it — or that site went cold and
+    ///   quietly lost its authority, which is how the fourth defect survived the plain
+    ///   differential and how the shared sites would have survived the first version of this
+    ///   test, which heated and counted only the gates.
     #[test]
     fn a_hot_gate_row_distinguishes_the_declared_wideness() {
         use kaspa_consensus_core::palw_base0_a16::A16_CODE_MAX;
@@ -1520,31 +1543,54 @@ mod tests {
         let hot = kaspa_consensus_core::palw_base0_a16::A16QuantParams { multiplier: 1, shift: 2, zero: 0 };
         for li in 0..artifact.shape.n_layers() {
             for e in 0..artifact.shape.n_experts {
-                artifact = artifact.with_params(format!("blk.{li}.ffn_expert.{e}_gate.weight.a16"), &[hot]);
+                artifact = artifact
+                    .with_params(format!("blk.{li}.ffn_expert.{e}_gate.weight.a16"), &[hot])
+                    .with_params(format!("blk.{li}.ffn_expert.{e}_up.weight.a16"), &[hot]);
             }
-            artifact = artifact.with_params(format!("blk.{li}.ffn_shared_expert_gate.weight.a16"), &[hot]);
+            artifact = artifact
+                .with_params(format!("blk.{li}.ffn_shared_expert_gate.weight.a16"), &[hot])
+                .with_params(format!("blk.{li}.ffn_shared_expert_up.weight.a16"), &[hot]);
         }
         let engine = Qwen36Engine::new(&artifact);
         let profile = qwen36_profile_v2(geometry_of(&artifact.shape, 4)).expect("projects");
         let plan = engine.plan_from_profile(&profile).expect("servable");
         let mut compiled_cache = Qwen36Cache::new(&artifact.shape);
         let mut planned_cache = Qwen36Cache::new(&artifact.shape);
-        let mut past_rail = 0usize;
+        // [arm][site] hot-lane counts. The mixture starts at 24 in the GDN table and 22 in the
+        // attention one; gate/up sit at +5/+6 (routed) and +11/+12 (shared).
+        let mut hot_lanes = [[0usize; 4]; 2];
         for position in 0..4usize {
             let token = (position * 7 + 3) % artifact.shape.vocab;
             let (a, _) = engine.forward_token_probed(&mut compiled_cache, token, position).expect("compiled");
             let (b, trace) = engine.forward_token_planned(&plan, &mut planned_cache, token, position).expect("planned");
-            assert_eq!(a, b, "logits at position {position} under hot gates");
+            assert_eq!(a, b, "logits at position {position} under hot expert projections");
             for (li, kind) in artifact.shape.layer_types.iter().enumerate() {
-                // The gate-projection node: 24 + 5 in the GDN table, 22 + 5 in the attention one.
-                let gate_row = match kind {
-                    Qwen36LayerKind::LinearAttention => &trace.layers[li][29],
-                    Qwen36LayerKind::FullAttention => &trace.layers[li][27],
+                let (arm, first) = match kind {
+                    Qwen36LayerKind::LinearAttention => (0usize, 24usize),
+                    Qwen36LayerKind::FullAttention => (1usize, 22usize),
                 };
-                past_rail += gate_row.iter().filter(|v| (**v as i64).abs() > A16_CODE_MAX).count();
+                for (site, offset, wide) in [(0usize, 5usize, true), (1, 6, false), (2, 11, true), (3, 12, false)] {
+                    let row = &trace.layers[li][first + offset];
+                    hot_lanes[arm][site] += row
+                        .iter()
+                        .filter(|v| if wide { (**v as i64).abs() > A16_CODE_MAX } else { (**v as i64).abs() == A16_CODE_MAX })
+                        .count();
+                }
             }
         }
-        assert!(past_rail > 0, "no gate lane left the code rail — the site went cold and the differential lost its teeth here");
+        for (arm, arm_name) in [(0usize, "gdn"), (1, "attn")] {
+            for (site, site_name, how) in [
+                (0usize, "routed gate", "left the code rail"),
+                (1, "routed up", "saturated at the code rail"),
+                (2, "shared gate", "left the code rail"),
+                (3, "shared up", "saturated at the code rail"),
+            ] {
+                assert!(
+                    hot_lanes[arm][site] > 0,
+                    "no {arm_name} {site_name} lane {how} — the site went cold and the differential lost its teeth there"
+                );
+            }
+        }
     }
 
     /// **The v1 graph is refusable, and refused for its measured reasons.** The conformance
@@ -1600,32 +1646,31 @@ mod tests {
         let artifact = crate::qwen36::open_artifact(std::path::Path::new(&path)).expect("the artifact opens");
         let row = crate::classes::qwen36_canonical_classes_v1()
             .into_iter()
-            .find(|c| c.graph_version == 2 && c.shape_matches(&artifact.shape).is_ok())
-            .expect("the artifact's shape matches a graph-v2 ledger row");
+            .find(|c| c.graph_version >= 2 && c.shape_matches(&artifact.shape).is_ok())
+            .expect("the artifact's shape matches a corrected ledger row");
         eprintln!("real-weights differential against {}", row.model_id);
         let engine = Qwen36Engine::new(&artifact);
 
-        // **The fifth misdescription, pinned where it was found.** Every real artifact of this
-        // lineage carries `eps_q = 1` — the converter hardcodes it (`qwen36-convert.rs`) — while
-        // every registered geometry declares `rms_eps_q = 17`. The engine normalizes with the
-        // artifact's constant, so the declared epsilon is not the executed one, and the planner's
-        // geometry gate refuses the row over its own weights: right answer, wrong world. The
-        // finding is asserted exactly (this field and no other), and the differential below runs
-        // under the declaration with the epsilon corrected to the artifact's — the graph as it
-        // would read if the class declared what its converter builds.
-        let declared = row.profile().expect("the row projects");
-        match engine.plan_from_profile(&declared) {
+        // **The fifth misdescription, found here and since disposed.** When this differential
+        // first ran, every registered geometry declared `rms_eps_q = 17` while the converter
+        // hardcodes `eps_q = 1` into every artifact header and the engine normalizes with the
+        // artifact's — so the planner's geometry gate refused the row over its own class's
+        // weights: right answer, wrong world. The graph-v3 rows now declare the artifact's
+        // epsilon (`QWEN36_ARTIFACT_EPS_Q`, measured five ways), so the row plans directly below;
+        // what stays pinned here is the refusal itself — a declaration carrying the old 17 must
+        // still refuse on exactly that field and no other.
+        let mut undisposed = row.geometry;
+        undisposed.rms_eps_q = 17;
+        let seventeen = qwen36_profile_v2(undisposed).expect("the undisposed geometry projects");
+        match engine.plan_from_profile(&seventeen) {
             Err(Qwen36PlanErrorV1::GeometryMismatch { what: "rms_eps_q", profile, artifact: got }) => {
-                eprintln!("the ledger row declares rms_eps_q {profile} and the artifact executes {got} — the pinned finding");
+                eprintln!("a rms_eps_q {profile} declaration refuses against the artifact's {got} — the fifth finding, pinned");
             }
-            Ok(_) => panic!("the ledger row planned over the real artifact — the epsilon finding is closed; make this the plain path"),
-            other => panic!("the real artifact must refuse on the epsilon and nothing else, got {other:?}"),
+            other => panic!("an epsilon the artifact does not execute must refuse on rms_eps_q and nothing else, got {other:?}"),
         }
 
-        let mut corrected = row.geometry;
-        corrected.rms_eps_q = artifact.shape.eps_q;
-        let profile = qwen36_profile_v2(corrected).expect("the corrected geometry projects");
-        let plan = engine.plan_from_profile(&profile).expect("the epsilon-corrected graph-v2 row is servable");
+        let profile = row.profile().expect("the row projects");
+        let plan = engine.plan_from_profile(&profile).expect("the graph-v3 row is servable over its own class's weights");
         let mut compiled_cache = Qwen36Cache::new(&artifact.shape);
         let mut planned_cache = Qwen36Cache::new(&artifact.shape);
         for (position, token) in [9_000usize, 42, 777].into_iter().enumerate() {
@@ -1645,16 +1690,16 @@ mod tests {
     /// classes THIS BUILD carries.** Every qwen36-family ledger row's graph is compiled at a
     /// reduced geometry that keeps the row's structure (the layer alternation, the gate, the
     /// shared expert, the expert counts) and walked against the compiled engine, bit for bit. A
-    /// `graph-v2` row must be servable; a v1 row must be refused. The real profiles themselves
-    /// are additionally held to the geometry gate: against a mismatched artifact the planner
-    /// must refuse on geometry, never accept.
+    /// corrected (`graph-v3`) row must be servable; a v1 row must be refused. The real profiles
+    /// themselves are additionally held to the geometry gate: against a mismatched artifact the
+    /// planner must refuse on geometry, never accept.
     #[test]
     fn the_interpreter_serves_every_qwen36_class_this_build_carries() {
         let rows = crate::classes::qwen36_canonical_classes_v1();
         assert!(!rows.is_empty(), "the build carries qwen36 rows, or this test gates nothing");
         let mut served = 0usize;
         for row in &rows {
-            let corrected = row.graph_version == 2;
+            let corrected = row.graph_version >= 2;
             let g = row.geometry;
             let hybrid = g.full_attention_interval != 1;
             let reduced = PalwQwen36GeometryV1 {
@@ -1740,11 +1785,11 @@ mod tests {
                     assert_eq!(compiled_cache.gdn, planned_cache.gdn, "{}: recurrent state", row.model_id);
                 }
                 Err(Qwen36PlanErrorV1::UnservedNode { reason, .. }) => {
-                    assert!(!corrected, "{}: a graph-v2 row must be servable, refused: {reason}", row.model_id);
+                    assert!(!corrected, "{}: a corrected row must be servable, refused: {reason}", row.model_id);
                 }
                 Err(other) => panic!("{}: unexpected plan answer {other}", row.model_id),
             }
         }
-        assert_eq!(served, 3, "the three graph-v2 rows are the servable half of the ledger");
+        assert_eq!(served, 3, "the three graph-v3 rows are the servable half of the ledger");
     }
 }
