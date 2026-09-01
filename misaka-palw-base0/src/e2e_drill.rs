@@ -527,6 +527,31 @@ mod tests {
         );
     }
 
+    /// **Every profile this build knows how to describe, by the class id it registers under.**
+    ///
+    /// A genesis registration carries no admission carriage — `admission: None` is the genesis
+    /// FORM, because the carriage is what the post-genesis acceptance path reads — so the profile
+    /// of a genesis-registered class is not in the object. It is in the build, in the same class
+    /// tables the SDK dispatches on, and that is where this looks.
+    fn known_profiles() -> std::collections::BTreeMap<Hash64, PalwShapeProfileV3> {
+        let court = kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2::new(
+            kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES,
+            4,
+            2,
+        )
+        .expect("shipped court");
+        let mut out = std::collections::BTreeMap::new();
+        for class in crate::classes::canonical_classes_v1(&court) {
+            out.insert(class.class_id(), class.profile);
+        }
+        for class in crate::classes::qwen36_canonical_classes_v1() {
+            if let (Some(id), Ok(profile)) = (class.class_id(), class.profile()) {
+                out.insert(id, profile);
+            }
+        }
+        out
+    }
+
     /// **ADR-0069 invariant 1/5: no unearned weight on the network this build ships.**
     ///
     /// Reads the real `Params` a node boots with, walks the classes its genesis registers, and
@@ -538,6 +563,15 @@ mod tests {
     /// A weightless class is fine and is the point — it registers, produces and counts for
     /// liveness. What this refuses is a class that takes cadence away from work the court can
     /// check, in exchange for work it cannot.
+    ///
+    /// **"I cannot see the profile" and "it is not certified" are different answers, and this
+    /// separates them.** The first version of this test did not: it resolved the profile only from
+    /// the registration's admission carriage, which a GENESIS registration never carries, so every
+    /// genesis model class fell into the uncertified bucket by construction. While those classes
+    /// held no share the two answers coincided and nothing showed it — the blind spot was reachable
+    /// only by giving the model tiers weight, which is the exact moment this test is supposed to
+    /// speak. An unresolvable profile is now its own failure, because a registered class whose
+    /// graph this build cannot even name is a class no node can serve.
     #[test]
     fn the_shipped_genesis_grants_weight_only_to_certified_families() {
         use kaspa_consensus_core::palw_class_admission_v2::reachable_kernels_v1;
@@ -545,6 +579,7 @@ mod tests {
         use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
 
         register_builtin_certified_families_v1();
+        let known = known_profiles();
         let params: kaspa_consensus_core::config::params::Params =
             kaspa_consensus_core::network::NetworkId::with_suffix(kaspa_consensus_core::network::NetworkType::Testnet, 11).into();
         let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
@@ -552,32 +587,23 @@ mod tests {
         };
 
         let mut unearned: Vec<(Hash64, u16)> = Vec::new();
+        let mut unresolvable: Vec<(Hash64, u16)> = Vec::new();
         for object in &bundle.genesis_objects {
             let PalwConsensusObjectV2::ClassRegistered { class_id, share_permille, admission, .. } = object else { continue };
             if *share_permille == 0 {
                 continue; // weightless: registered, produces, earns no cadence. Exactly the state the ADR adds.
             }
-            // The profile is what names the kernels. A genesis registration carries it in its
-            // admission carriage; the floor's is the one this crate derives, and a class whose
-            // profile this build cannot even see is certainly not one it has drilled.
+            // The carriage where a post-genesis registration carries its graph; the build's own
+            // tables where a genesis one does not.
             let reachable = match admission.as_ref() {
                 Some(carriage) => reachable_kernels_v1(&carriage.profile),
-                None if *class_id == bundle.base_class_id => {
-                    let court = kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2::new(
-                        kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES,
-                        4,
-                        2,
-                    )
-                    .expect("shipped court");
-                    let entry = crate::classes::canonical_class_by_model_id_v1(&court, "PALW-BASE-0/rc").expect("the floor");
-                    let root = crate::rc::palw_rc_base0_artifact_root_v1().expect("pinned");
-                    let resolved = crate::classes::resolve_class_v1(&court, entry.class_id(), root, &[]).expect("the floor resolves");
-                    reachable_kernels_v1(&resolved.profile)
-                }
-                None => {
-                    unearned.push((*class_id, *share_permille));
-                    continue;
-                }
+                None => match known.get(class_id) {
+                    Some(profile) => reachable_kernels_v1(profile),
+                    None => {
+                        unresolvable.push((*class_id, *share_permille));
+                        continue;
+                    }
+                },
             };
             if family_certified_for_kernels_v1(&reachable).is_none() {
                 unearned.push((*class_id, *share_permille));
@@ -585,10 +611,25 @@ mod tests {
         }
 
         assert!(
+            unresolvable.is_empty(),
+            "these genesis classes hold weight and this build cannot even name their graphs — no node could serve them, \
+             whatever their certification says: {unresolvable:?}"
+        );
+        assert!(
             unearned.is_empty(),
             "ADR-0069 invariant 1: these genesis classes hold weight this build cannot prosecute — they must register \
              weightless (share 0) until a backend for them certifies: {unearned:?}"
         );
+
+        // **And the test can still fail.** Every assertion above passes vacuously on a genesis that
+        // grants nobody weight, which is what this network looked like an hour ago — so the last
+        // thing checked is that there was actually something to check.
+        let weighted = bundle
+            .genesis_objects
+            .iter()
+            .filter(|o| matches!(o, PalwConsensusObjectV2::ClassRegistered { share_permille, .. } if *share_permille > 0))
+            .count();
+        assert!(weighted >= 2, "the shipped genesis grants weight to {weighted} class(es) — this test proves nothing on a table of zeros");
     }
 
     /// **A family that declares no court cannot be drilled into one.**

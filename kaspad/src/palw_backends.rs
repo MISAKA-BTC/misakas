@@ -86,14 +86,14 @@ impl PalwBackendRegistry {
     }
 }
 
-/// The hybrid class's chain id, derived once per call from the registered geometry — the same
-/// `shape_profile_id` the registration and the admission gate compute, because a second spelling
-/// of the class id would be a second thing to drift.
-pub fn qwen36_class_id_v1() -> Hash64 {
-    kaspa_consensus_core::palw_qwen36_profile::qwen36_profile_v1(kaspa_consensus_core::palw_qwen36_profile::QWEN36_35B_A3B)
-        .expect("the pinned geometry projects")
-        .shape_profile_id()
-}
+/// The hybrid class's chain id — **re-exported, not re-derived**.
+///
+/// This used to project the geometry here, which its own doc called out as the hazard it was: "a
+/// second spelling of the class id would be a second thing to drift". It then drifted. The
+/// registration moved to the `graph-v3` declaration (ADR-0069: v1 names a GDN node no backend can
+/// serve) and this spelling stayed on v1, so the node was asserting that the chain registers a
+/// class the chain no longer registers. One spelling now, in the module that owns the geometry.
+pub use kaspa_consensus_core::palw_qwen36_profile::qwen36_class_id_v3 as qwen36_class_id_v1;
 
 #[cfg(test)]
 mod tests {
@@ -156,7 +156,7 @@ mod tests {
                 .then(|| (qwen36_class_id_v1(), kaspa_consensus_core::config::params::PALW_RC_GENESIS_QWEN36_ARTIFACT_ROOT)),
             kaspa_consensus_core::config::params::palw_rc_qwen25_a16_is_registered().then(|| {
                 (
-                    kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_class_id_v1(),
+                    kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_class_id_v2(),
                     kaspa_consensus_core::config::params::PALW_RC_GENESIS_QWEN25_A16_ARTIFACT_ROOT,
                 )
             }),

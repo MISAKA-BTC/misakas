@@ -2263,7 +2263,7 @@ async fn palw_rc_the_real_qwen25_a16_model_produces_a_block() {
         challenge_v2, class_ticket_v2, palw_network_domain_v2_for,
     };
     use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
-    use kaspa_consensus_core::palw_qwen25_profile::{QWEN25_A16_CANONICAL, qwen25_a16_class_id_v1};
+    use kaspa_consensus_core::palw_qwen25_profile::{QWEN25_A16_CANONICAL, qwen25_a16_class_id_v2};
     use misaka_palw_base0::produce::base0_rc_job_anchor_v1;
     use misaka_palw_base0::qwen25_a16_backend::Qwen25A16Backend;
 
@@ -2301,7 +2301,10 @@ async fn palw_rc_the_real_qwen25_a16_model_produces_a_block() {
         kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) => b.clone(),
         _ => panic!("the RC ships a ConsensusV2 bundle"),
     };
-    let dense_class_id = qwen25_a16_class_id_v1();
+    // The REGISTERED dense class is the corrected `graph-v2` one (ADR-0069): the v1 declaration
+    // announces a one-byte state map against an i32 cache, so its backend is not court-capable and
+    // a class on it cannot hold weight.
+    let dense_class_id = qwen25_a16_class_id_v2();
     assert_ne!(dense_class_id, bundle.base_class_id, "the dense class is not the floor");
 
     let config = ConfigBuilder::new(params)
@@ -2490,7 +2493,11 @@ async fn qwen36_block_e2e(artifact: misaka_palw_base0::qwen36::Qwen36ArtifactV1,
         kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) => b.clone(),
         _ => panic!("a ConsensusV2 network"),
     };
-    let qwen36_class_id = qwen36_profile_v1(QWEN36_35B_A3B).expect("the profile projects").shape_profile_id();
+    // The REGISTERED hybrid class is `graph-v3` (ADR-0069) — the v2 projection over the
+    // eps-corrected geometry. v1 names a GDN node no backend can serve, so a class on it has no
+    // court; asked through the accessor rather than projected here, so this test cannot drift away
+    // from what the genesis card actually registers.
+    let qwen36_class_id = kaspa_consensus_core::palw_qwen36_profile::qwen36_class_id_v3();
     assert_ne!(qwen36_class_id, bundle.base_class_id, "two classes, and the floor is not the entrant");
 
     let config = ConfigBuilder::new(params)
