@@ -1714,6 +1714,57 @@ pub fn palw_fp_material_decode_v1(bytes: &[u8]) -> Option<PalwFpMaterialV1> {
     Some(material)
 }
 
+pub const PALW_FP_CAPTURE_V1_MAGIC: [u8; 4] = *b"FPC1";
+
+/// **The answer beside the question** (ADR-0073 Decision 1a). `FPM1` carries the job the user
+/// fixed on chain and the prompt that hashes to it — the question. A court needs the executor's
+/// CAPTURE: the family material tuple `execute_free_prompt` computes into `outcome.material`,
+/// which until this existed nothing persisted or gossiped. One payload holding both, so the
+/// pool, the resolver and the relay budget treat a free-prompt claim's evidence exactly as an
+/// attempt's — by claim id — and a seat or a court that holds the payload holds everything it
+/// needs to check the claim without running it.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwFpCaptureV1 {
+    pub material: PalwFpMaterialV1,
+    /// The family capture, opaque here: the backend that ran it is what decodes it
+    /// (`verify_material`, `capture_shape`, `refutation_for_free_prompt_index`).
+    pub capture: Vec<u8>,
+}
+
+pub fn palw_fp_capture_encode_v1(job: &PalwFreePromptJobV3, prompt_token_ids: &[u32], capture: &[u8]) -> Vec<u8> {
+    let body = borsh::to_vec(&PalwFpCaptureV1 {
+        material: PalwFpMaterialV1 { job: job.clone(), prompt_token_ids: prompt_token_ids.to_vec() },
+        capture: capture.to_vec(),
+    })
+    .expect("a capture payload serializes");
+    let mut out = Vec::with_capacity(4 + body.len());
+    out.extend_from_slice(&PALW_FP_CAPTURE_V1_MAGIC);
+    out.extend_from_slice(&body);
+    out
+}
+
+/// `None` for anything that is not an `FPC1` payload, for a job material that fails
+/// [`palw_fp_material_decode_v1`]'s own checks (the prompt must hash to the job's and count to
+/// its length), and for an empty capture — a question with no answer is `FPM1`, not this.
+pub fn palw_fp_capture_decode_v1(bytes: &[u8]) -> Option<PalwFpCaptureV1> {
+    let body = bytes.strip_prefix(&PALW_FP_CAPTURE_V1_MAGIC)?;
+    let payload: PalwFpCaptureV1 = borsh::from_slice(body).ok()?;
+    let material = &payload.material;
+    if material.job.prompt_token_ids_hash != crate::palw_v2::prompt_token_ids_hash_v2(&material.prompt_token_ids)
+        || material.job.prompt_tokens as usize != material.prompt_token_ids.len()
+        || payload.capture.is_empty()
+    {
+        return None;
+    }
+    Some(payload)
+}
+
+/// The job material of EITHER free-prompt payload — `FPC1` (question and answer) or `FPM1`
+/// (question alone). Readers that need only the job and the user's prompt take this.
+pub fn palw_fp_job_material_decode_v1(bytes: &[u8]) -> Option<PalwFpMaterialV1> {
+    palw_fp_capture_decode_v1(bytes).map(|payload| payload.material).or_else(|| palw_fp_material_decode_v1(bytes))
+}
+
 #[cfg(test)]
 mod fp_material_tests {
     use super::*;
@@ -1736,6 +1787,36 @@ mod fp_material_tests {
             max_context_tokens: 16,
             privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
         }
+    }
+
+    /// **`FPC1` is `FPM1` with the answer attached** (ADR-0073 Decision 1a): it round-trips, the
+    /// either-decoder reads the job material out of both payloads, and every check `FPM1` makes
+    /// on the question is made here too — plus one: a payload with no capture is not a capture.
+    #[test]
+    fn a_capture_payload_round_trips_and_either_payload_yields_the_job_material() {
+        let ids = [7u32, 11, 13];
+        let job = job(&ids);
+        let capture = vec![0xC4u8; 64];
+        let bytes = palw_fp_capture_encode_v1(&job, &ids, &capture);
+        assert_eq!(&bytes[..4], &PALW_FP_CAPTURE_V1_MAGIC);
+        let decoded = palw_fp_capture_decode_v1(&bytes).expect("a capture payload decodes");
+        assert_eq!(decoded.material.job, job);
+        assert_eq!(decoded.material.prompt_token_ids, ids);
+        assert_eq!(decoded.capture, capture);
+
+        // The job material comes out of either spelling.
+        assert_eq!(palw_fp_job_material_decode_v1(&bytes).expect("FPC1 yields its material").job, job);
+        let question_only = palw_fp_material_encode_v1(&job, &ids);
+        assert_eq!(palw_fp_job_material_decode_v1(&question_only).expect("FPM1 yields its material").job, job);
+        // …and neither decoder reads the other's magic.
+        assert!(palw_fp_capture_decode_v1(&question_only).is_none(), "FPM1 is not a capture payload");
+        assert!(palw_fp_material_decode_v1(&bytes).is_none(), "FPC1 is not a bare material");
+
+        // The question's checks still apply, and an empty answer is refused.
+        let mut wrong = job.clone();
+        wrong.prompt_token_ids_hash = Hash64::from_u64_word(0xBAD);
+        assert!(palw_fp_capture_decode_v1(&palw_fp_capture_encode_v1(&wrong, &ids, &capture)).is_none(), "ids must hash to the job");
+        assert!(palw_fp_capture_decode_v1(&palw_fp_capture_encode_v1(&job, &ids, &[])).is_none(), "no capture, no payload");
     }
 
     #[test]

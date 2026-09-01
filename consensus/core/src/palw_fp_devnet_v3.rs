@@ -33,7 +33,7 @@ use crate::palw_state_v2::PalwStateParamsV2;
 /// unresolved claims gains a tenth of what resolving them would.
 const BETA_PERMILLE: u16 = 100;
 
-/// Lattice windows, in DAA score: bind 600, receipt 600, challenge 1200, court 2400.
+/// Lattice windows, in DAA score: bind 600, receipt 600, challenge 1200, court 3000.
 ///
 /// **What these mean in wall-clock changed when the bundle got its cadence field.** They were
 /// sized against a 1-DAA-per-block devnet as "a full commit→bind→license→challenge→court cycle
@@ -112,7 +112,7 @@ const RECEIPT_USE_WINDOW: u64 = 600;
 
 /// Measured worst-case honest prosecution time — a PLACEHOLDER shaped like the real thing: the
 /// gate demands `window_court > this`, so the constant is what a fleet measurement replaces, and
-/// until it does, the ratio here (2400 vs 1200) is the safety factor.
+/// until it does, the ratio here (3000 vs 1200) is the safety factor.
 /// The court's SHAPE, from which `worst_case_duration_daa` is derived (ADR-0042 Decision 8:
 /// `(ceil(log2(leaves)) + terminal) × turn_deadline`).
 ///
@@ -124,7 +124,7 @@ const RECEIPT_USE_WINDOW: u64 = 600;
 /// it cannot be raised afterwards.
 ///
 /// 2^22 leaves = 22 bisection rounds, +2 terminal, × 60 DAA per turn = 1,440 — still inside
-/// `WINDOW_COURT` (2,400). Nothing deeper than the cap is admissible at all, so this ladder cannot
+/// `WINDOW_COURT` (3,000). Nothing deeper than the cap is admissible at all, so this ladder cannot
 /// fail to reach a class that exists.
 const COURT_MAX_STEP_LEAVES: u64 = crate::palw_step::PALW_STEP_MAX_LEAVES;
 const COURT_TURN_DEADLINE: u64 = 60;

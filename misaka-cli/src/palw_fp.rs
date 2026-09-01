@@ -26,7 +26,7 @@ use kaspa_rpc_core::{RpcTransaction, api::rpc::RpcApi};
 use std::path::Path;
 
 /// Submit the rail's `*.commitment-tx.borsh`.
-pub async fn submit(ctx: &Ctx, path: &Path, yes: bool, material_out: Option<&Path>) -> Result<(), CliError> {
+pub async fn submit(ctx: &Ctx, path: &Path, yes: bool, material_out: Option<&Path>, capture: Option<&Path>) -> Result<(), CliError> {
     let bytes = std::fs::read(path).map_err(|e| CliError::new(exit::GENERIC, format!("{}: {e}", path.display())))?;
     // Borsh, because that is what the rail wrote. A file that does not decode is named as such
     // rather than passed to a node that would refuse it less clearly.
@@ -88,10 +88,37 @@ pub async fn submit(ctx: &Ctx, path: &Path, yes: bool, material_out: Option<&Pat
                     CliError::new(exit::GENERIC, format!("this payload does not decode, so no material can be written: {e}"))
                 })?;
             let claim = kaspa_consensus_core::palw_freeprompt_v3::fp_claim_id_v3(&payload.commitment);
-            let bytes = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_material_encode_v1(
-                &payload.commitment.job,
-                &payload.prompt_token_ids,
-            );
+            // With the capture, the answer travels beside the question (`FPC1`, ADR-0073
+            // Decision 1a); without it, the question alone (`FPM1`) and a seat's only verifier is
+            // a re-run. Checked before the broadcast like everything else here: a capture that
+            // does not decode as the family's tuple is refused now, not discovered by a seat.
+            let bytes = match capture {
+                Some(capture_path) => {
+                    let capture_bytes = std::fs::read(capture_path)
+                        .map_err(|e| CliError::new(exit::GENERIC, format!("{}: {e}", capture_path.display())))?;
+                    // The family tuple is the backend's to decode (a seat verifies it against the
+                    // claim's roots); what is refused here is the one mistake a hand can make —
+                    // pointing this at a payload instead of at the worker's capture.
+                    let looks_like_a_payload = capture_bytes.is_empty()
+                        || capture_bytes.starts_with(&kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_MATERIAL_V1_MAGIC)
+                        || capture_bytes.starts_with(&kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_CAPTURE_V1_MAGIC);
+                    if looks_like_a_payload {
+                        return Err(CliError::new(
+                            exit::GENERIC,
+                            format!("{} is not a family capture (expected the worker's material.bin)", capture_path.display()),
+                        ));
+                    }
+                    kaspa_consensus_core::palw_freeprompt_v3::palw_fp_capture_encode_v1(
+                        &payload.commitment.job,
+                        &payload.prompt_token_ids,
+                        &capture_bytes,
+                    )
+                }
+                None => kaspa_consensus_core::palw_freeprompt_v3::palw_fp_material_encode_v1(
+                    &payload.commitment.job,
+                    &payload.prompt_token_ids,
+                ),
+            };
             std::fs::create_dir_all(dir).map_err(|e| CliError::new(exit::GENERIC, format!("{}: {e}", dir.display())))?;
             let file = dir.join(format!("{claim}.material"));
             let partial = file.with_extension("material.partial");

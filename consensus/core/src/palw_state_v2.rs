@@ -5541,12 +5541,13 @@ fn apply_object(
             // Refusing the claim is the only safe reading — admitting it and hoping no fraud
             // occurs is precisely the fail-open shape the consumer-layer audit found ten of.
             //
-            // Today this refuses every commitment the free-prompt worker can build: its v3
-            // execution path emits a schedule commitment and a trace root but captures no legs,
-            // so it has no `PalwStepBindingV2` to recompute a root from and deliberately emits
-            // the null one rather than a fabricated value. That is the honest state of the lane —
-            // the remaining work is legs capture on the free-prompt execution path, and until it
-            // lands the chain says so at admission instead of at a dispute nobody can win.
+            // This used to refuse every commitment the free-prompt worker could build — its
+            // execution path once captured no legs and deliberately emitted the null root rather
+            // than a fabricated value. It no longer does: `execute_free_prompt` runs the same
+            // capture path as an attempt and commits the binding's own root (byte-identical to
+            // `palw_fp_execution_root_v3`, tested where each backend lives), so what this refuses
+            // today is a commitment assembled by something that is not the shipped worker. The
+            // court itself is ADR-0073 Decision 1's.
             if *execution_root == Hash64::default() {
                 return Err(PalwStateV2Error::UnadjudicableCommitment(*claim_id));
             }
@@ -9708,9 +9709,9 @@ pub(crate) mod tests {
     /// is a producer that can commit arithmetic fraud with impunity.
     ///
     /// The commitment carries the real root now, and a null one is refused at admission rather
-    /// than admitted and discovered at a dispute nobody could win. That refusal currently rejects
-    /// every commitment the free-prompt worker can build — its v3 execution path captures no legs
-    /// — which is the honest state of the lane stated where it can be acted on.
+    /// than admitted and discovered at a dispute nobody could win. The shipped worker commits the
+    /// binding's own root (`execute_free_prompt` runs the attempt lane's capture path), so what
+    /// this refuses is a commitment built by something else.
     #[test]
     fn a_free_prompt_claim_without_an_execution_root_is_refused() {
         let p = params();
