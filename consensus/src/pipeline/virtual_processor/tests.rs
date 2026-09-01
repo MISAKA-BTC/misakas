@@ -804,6 +804,145 @@ async fn a_mergeset_holds_at_most_four_heartbeats_and_templates_chunk_the_rest()
     }
 }
 
+/// **F5, closed: a heartbeat CHAIN of any depth merges in one mergeset — a heartbeat TREE does
+/// not** (ADR-0068 Phase 1, the drill's fifth finding).
+///
+/// The live drill manufactured the strand: a heavier bonded fork put five outage heartbeats in
+/// its anticone, merging the tip meant dragging all five ancestors into one mergeset, the flat
+/// bound refused, and — because the intermediates are not tips — no chunking path existed. 400+
+/// templates excluded the branch forever, and whatever rode it would have unwound. But a CHAIN
+/// is the lane doing its job through a long outage, already rate-priced by the slot ladder;
+/// what F3a is about is WIDTH. So the rule is "flat bound, or one chain", and this test pins
+/// both edges: the drill's exact shape now merges, and a tree — one root, many children, the
+/// shape that would fool a chain-HEAD count — still refuses.
+#[tokio::test]
+async fn a_heartbeat_chain_of_any_depth_merges_but_a_tree_does_not() {
+    use kaspa_consensus_core::palw_heartbeat_v1 as hb;
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    kaspa_core::log::try_init_logger("info");
+    let catalog = palw_v2_test_catalog();
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(palw_v2_test_bundle(&catalog));
+            p.palw_heartbeat = Some(kaspa_consensus_core::config::params::PalwHeartbeatV1 {
+                activation: kaspa_consensus_core::config::params::ForkActivation::always(),
+                work_log2: kaspa_consensus_core::pow_layer0::PALW_HEARTBEAT_WORK_LOG2,
+                max_per_mergeset: kaspa_consensus_core::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET,
+            });
+            p.palw_attempt_work = Some(kaspa_consensus_core::config::params::PalwAttemptWorkV1 {
+                activation: kaspa_consensus_core::config::params::ForkActivation::always(),
+                work_log2: kaspa_consensus_core::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2,
+            });
+        })
+        .build();
+    config.params.validate_palw_v2().expect("the fixture bundle is a runnable ruleset");
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+
+    // A bonded base, then the drill's outage: SIX heartbeats in one chain, each the next's
+    // selected parent — they become the sink chain, one ε at a time.
+    ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    ctx.simulated_time += 120_000;
+    let base = ctx.build_block_template(1, ctx.simulated_time);
+    let base_hash = base.block.header.hash;
+    ctx.validate_and_insert_block(base.block.clone().to_immutable()).await.assert_valid_utxo_tip();
+    let mut chain = Vec::new();
+    for nonce in 0..6u64 {
+        ctx.simulated_time += if nonce == 0 { hb::HEARTBEAT_NOMINAL_INTERVAL_MS + 60_000 } else { hb::HEARTBEAT_RECOVERY_INTERVAL_MS };
+        let template = ctx.build_block_template(2 + nonce, ctx.simulated_time);
+        let (hb_template, _) = ctx.consensus.virtual_processor().heartbeat_adapt_block_template(template).expect("the lane adapts");
+        ctx.simulated_time = ctx.simulated_time.max(hb_template.block.header.timestamp);
+        chain.push(hb_template.block.header.hash);
+        ctx.validate_and_insert_block(hb_template.block.clone().to_immutable()).await;
+    }
+
+    // The heavier bonded fork from BASE: a tip is compared by the work of its PAST, so the
+    // fork's own 2^20 counts once a child stands on it — one extension block, and the bonded
+    // branch (W + 2^20) dwarfs the heartbeat chain's W + 5ε. The six become a deep side
+    // branch: the drill's stranded shape, exactly.
+    let fork = ctx.build_block_with_parents(vec![base_hash], 77, ctx.simulated_time + 1_000);
+    let fork_hash = fork.header.hash;
+    ctx.consensus.validate_and_insert_block(fork.to_immutable()).virtual_state_task.await.expect("the bonded fork is valid");
+    let fork_ext = ctx.build_block_with_parents(vec![fork_hash], 78, ctx.simulated_time + 1_500);
+    let fork_ext_hash = fork_ext.header.hash;
+    ctx.consensus.validate_and_insert_block(fork_ext.to_immutable()).virtual_state_task.await.expect("the extension is valid");
+
+    // THE F5 EDGE: a block merging the chain's tip drags all six into one mergeset — over the
+    // flat bound, admissible because they are one chain. Before the exemption this was the
+    // permanent strand. The shape is asserted, not assumed: the merger's selected parent is the
+    // bonded branch (F2's constant makes its past the heaviest), so the whole heartbeat chain
+    // is its mergeset.
+    let merger = ctx.build_block_with_parents(vec![fork_ext_hash, chain[5]], 79, ctx.simulated_time + 2_000);
+    {
+        let gd = ctx.consensus.services.ghostdag_manager.ghostdag(merger.header.direct_parents());
+        assert_eq!(gd.selected_parent, fork_ext_hash, "the bonded branch's past outweighs six ε — F2's constant at work");
+        let hbs_in_mergeset = gd.mergeset_blues.iter().chain(gd.mergeset_reds.iter()).filter(|h| chain.contains(h)).count() as u64;
+        assert_eq!(hbs_in_mergeset, 6, "all six outage heartbeats land in ONE mergeset — the drill's exact strand shape");
+        assert!(hbs_in_mergeset > kaspa_consensus_core::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET);
+    }
+    ctx.consensus
+        .validate_and_insert_block(merger.to_immutable())
+        .virtual_state_task
+        .await
+        .expect("six heartbeats in ONE chain merge in one mergeset — the drill's strand is absorbed");
+
+    // And the TREE: two chained heartbeats, then four siblings on the second — six members, one
+    // head, NOT one chain. A chain-head count would admit it; the pairwise order refuses it.
+    // A FRESH consensus, deliberately: the chain half left a heavy disqualified branch behind,
+    // and a template would merge its tips as extra parents — the sibling POV then out-weighs
+    // the fork and the six split across past and mergeset, which is a different diagram than
+    // the one under test (measured: hbs-in-mergeset dropped to three).
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    ctx.simulated_time += 120_000;
+    let base2 = ctx.build_block_template(20, ctx.simulated_time);
+    let base2_hash = base2.block.header.hash;
+    ctx.validate_and_insert_block(base2.block.clone().to_immutable()).await.assert_valid_utxo_tip();
+    let mut tree = Vec::new();
+    for nonce in 0..2u64 {
+        ctx.simulated_time += if nonce == 0 { hb::HEARTBEAT_NOMINAL_INTERVAL_MS + 60_000 } else { hb::HEARTBEAT_RECOVERY_INTERVAL_MS };
+        let template = ctx.build_block_template(21 + nonce, ctx.simulated_time);
+        let (hb_template, _) = ctx.consensus.virtual_processor().heartbeat_adapt_block_template(template).expect("the lane adapts");
+        ctx.simulated_time = ctx.simulated_time.max(hb_template.block.header.timestamp);
+        tree.push(hb_template.block.header.hash);
+        ctx.validate_and_insert_block(hb_template.block.clone().to_immutable()).await;
+    }
+    ctx.simulated_time += hb::HEARTBEAT_RECOVERY_INTERVAL_MS;
+    let template = ctx.build_block_template(23, ctx.simulated_time);
+    let (sib_template, _) = ctx.consensus.virtual_processor().heartbeat_adapt_block_template(template).expect("the lane adapts");
+    assert_eq!(sib_template.block.header.direct_parents(), &[tree[1]], "the siblings all ride the chain's tip");
+    for nonce in 0..4u64 {
+        let mut sib = sib_template.block.clone();
+        sib.header.nonce = 100 + nonce;
+        sib.header.finalize();
+        tree.push(sib.header.hash);
+        ctx.validate_and_insert_block(sib.to_immutable()).await;
+    }
+    ctx.simulated_time = ctx.simulated_time.max(sib_template.block.header.timestamp);
+    let fork2 = ctx.build_block_with_parents(vec![base2_hash], 81, ctx.simulated_time + 1_000);
+    let fork2_hash = fork2.header.hash;
+    ctx.consensus.validate_and_insert_block(fork2.to_immutable()).virtual_state_task.await.expect("the second fork is valid");
+    let fork2_ext = ctx.build_block_with_parents(vec![fork2_hash], 82, ctx.simulated_time + 1_500);
+    let fork2_ext_hash = fork2_ext.header.hash;
+    ctx.consensus.validate_and_insert_block(fork2_ext.to_immutable()).virtual_state_task.await.expect("the second extension is valid");
+    let tree_merger =
+        ctx.build_block_with_parents(vec![fork2_ext_hash, tree[2], tree[3], tree[4], tree[5]], 83, ctx.simulated_time + 2_000);
+    {
+        let gd = ctx.consensus.services.ghostdag_manager.ghostdag(tree_merger.header.direct_parents());
+        assert_eq!(gd.selected_parent, fork2_ext_hash, "the bonded branch's past is the heaviest here too");
+        let hbs_in_mergeset = gd.mergeset_blues.iter().chain(gd.mergeset_reds.iter()).filter(|h| tree.contains(h)).count() as u64;
+        assert_eq!(hbs_in_mergeset, 6, "the whole tree — two chained, four siblings — lands in one mergeset");
+    }
+    match ctx.consensus.validate_and_insert_block(tree_merger.to_immutable()).virtual_state_task.await {
+        Err(kaspa_consensus_core::errors::block::RuleError::MergeSetTooManyHeartbeats(count, bound)) => {
+            assert_eq!(count, 6, "two chained plus four siblings — six members, not one chain");
+            assert_eq!(bound, kaspa_consensus_core::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET);
+        }
+        other => panic!("a heartbeat TREE over the bound must be MergeSetTooManyHeartbeats, got {other:?}"),
+    }
+}
+
 /// **Unit C step 5: the header's committed state root is CHECKED, in both of the two ways a
 /// wrong one can be wrong.**
 ///

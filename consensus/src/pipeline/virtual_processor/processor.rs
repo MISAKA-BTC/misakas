@@ -10022,42 +10022,41 @@ impl VirtualStateProcessor {
         virtual_parents.push(selected_parent);
         let mut mergeset_size = 1; // Count the selected parent
 
-        // ADR-0068 Phase 1 (F3a): the heartbeat width budget, `None` where the lane is not
-        // armed (no header can be a heartbeat there, so the count is vacuously zero and the
+        // ADR-0068 Phase 1 (F3a/F5): the heartbeat width tracking, `None` where the lane is not
+        // armed (no header can be a heartbeat there, so the set is vacuously empty and the
         // per-member header reads are skipped). The selected parent is in the mergeset, so it
-        // spends from the budget first — in the heartbeat-only regime (total collapse) that is
-        // exactly one of the four slots, leaving three of healing headroom.
-        let heartbeat_bound =
-            self.palw_heartbeat_width_fence.map(|_| kaspa_consensus_core::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET);
-        let mut heartbeat_count = match heartbeat_bound {
-            Some(_) => {
-                let sp = self.headers_store.get_header(selected_parent).unwrap();
-                (sp.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID) as u64
+        // seeds the set. Admissibility is decided over the WHOLE accumulated set — flat bound,
+        // or the F5 chain exemption — mirroring `check_mergeset_heartbeat_width` exactly, so a
+        // template never builds what consensus refuses and never refuses what consensus admits.
+        let track_heartbeats = self.palw_heartbeat_width_fence.is_some();
+        let mut heartbeat_set: Vec<(u64, BlockHash)> = Vec::new();
+        if track_heartbeats {
+            let sp = self.headers_store.get_header(selected_parent).unwrap();
+            if sp.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID {
+                heartbeat_set.push((sp.blue_score, selected_parent));
             }
-            None => 0,
-        };
+        }
 
         // Try adding parents as long as mergeset size and number of parents limits are not reached
         while let Some(candidate) = candidates.pop_front() {
             if mergeset_size >= mergeset_size_limit || virtual_parents.len() >= max_block_parents {
                 break;
             }
-            match self.mergeset_increase(
-                &virtual_parents,
-                candidate,
-                mergeset_size_limit - mergeset_size,
-                heartbeat_bound.map(|bound| bound.saturating_sub(heartbeat_count)),
-            ) {
-                MergesetIncreaseResult::Accepted { increase_size, heartbeat_increase } => {
+            match self.mergeset_increase(&virtual_parents, candidate, mergeset_size_limit - mergeset_size, track_heartbeats) {
+                MergesetIncreaseResult::Accepted { increase_size, heartbeat_members } => {
+                    if !heartbeat_members.is_empty() {
+                        let mut combined = heartbeat_set.clone();
+                        combined.extend_from_slice(&heartbeat_members);
+                        if !self.heartbeat_set_admissible(&mut combined) {
+                            // Over the flat bound and not one chain: this candidate widens the
+                            // heartbeat lane past what consensus admits. Nothing to substitute —
+                            // skip it; a later template absorbs it against a fresh mergeset.
+                            continue;
+                        }
+                        heartbeat_set = combined;
+                    }
                     mergeset_size += increase_size;
-                    heartbeat_count += heartbeat_increase;
                     virtual_parents.push(candidate);
-                }
-                MergesetIncreaseResult::RejectedForHeartbeatWidth => {
-                    // The width budget is spent: this candidate reaches one heartbeat too many.
-                    // Nothing to substitute (see the variant's doc) — skip it; a later template
-                    // absorbs it against a fresh budget.
-                    continue;
                 }
                 MergesetIncreaseResult::Rejected { new_candidate } => {
                     // If we already have a candidate in the past of new candidate then skip.
@@ -10080,32 +10079,31 @@ impl VirtualStateProcessor {
         selected_parents: &[BlockHash],
         candidate: BlockHash,
         budget: u64,
-        heartbeat_budget: Option<u64>,
+        track_heartbeats: bool,
     ) -> MergesetIncreaseResult {
         /*
         Algo:
             Traverse past(candidate) \setminus past(selected_parents) and make
             sure the increase in mergeset size is within the available budget —
             and, where the heartbeat lane is fenced in (ADR-0068 Phase 1 / F3a),
-            that the heartbeat members of the increase fit the width budget too.
+            hand the increase's heartbeat members back for the caller's whole-set
+            width decision (F5's chain exemption is a property of the final set,
+            not of one candidate's increase).
         */
 
-        // `None` = the lane is not armed on this network, so no header can be a heartbeat and
-        // the count is vacuously zero — skip the per-member header reads entirely.
-        let mut heartbeats = 0u64;
-        let count_heartbeat = |hash: BlockHash| -> u64 {
-            if heartbeat_budget.is_none() {
-                return 0;
+        // `false` = the lane is not armed on this network, so no header can be a heartbeat and
+        // the set is vacuously empty — skip the per-member header reads entirely.
+        let mut heartbeat_members: Vec<(u64, BlockHash)> = Vec::new();
+        let mut note_heartbeat = |hash: BlockHash| {
+            if !track_heartbeats {
+                return;
             }
             let header = self.headers_store.get_header(hash).unwrap();
-            (header.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID) as u64
+            if header.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID {
+                heartbeat_members.push((header.blue_score, hash));
+            }
         };
-        heartbeats += count_heartbeat(candidate);
-        if let Some(hb_budget) = heartbeat_budget
-            && heartbeats > hb_budget
-        {
-            return MergesetIncreaseResult::RejectedForHeartbeatWidth;
-        }
+        note_heartbeat(candidate);
 
         let candidate_parents = self.relations_service.get_parents(candidate).unwrap();
         let mut queue: VecDeque<_> = candidate_parents.iter().copied().collect();
@@ -10120,12 +10118,7 @@ impl VirtualStateProcessor {
             if mergeset_increase > budget {
                 return MergesetIncreaseResult::Rejected { new_candidate: current };
             }
-            heartbeats += count_heartbeat(current);
-            if let Some(hb_budget) = heartbeat_budget
-                && heartbeats > hb_budget
-            {
-                return MergesetIncreaseResult::RejectedForHeartbeatWidth;
-            }
+            note_heartbeat(current);
 
             let current_parents = self.relations_service.get_parents(current).unwrap();
             for &parent in current_parents.iter() {
@@ -10134,7 +10127,23 @@ impl VirtualStateProcessor {
                 }
             }
         }
-        MergesetIncreaseResult::Accepted { increase_size: mergeset_increase, heartbeat_increase: heartbeats }
+        MergesetIncreaseResult::Accepted { increase_size: mergeset_increase, heartbeat_members }
+    }
+
+    /// **The width rule's answer, template-side** (ADR-0068 Phase 1, F3a with F5's chain
+    /// exemption) — the same predicate `check_mergeset_heartbeat_width` enforces: at most
+    /// `PALW_HEARTBEAT_MAX_PER_MERGESET` heartbeats, or any number of them provided they form
+    /// ONE chain (sorted by blue score, each adjacent pair ancestor-related; a blue-score tie
+    /// is never ancestor-related and fails). Sorts the given buffer in place.
+    fn heartbeat_set_admissible(&self, set: &mut [(u64, BlockHash)]) -> bool {
+        if set.len() as u64 <= kaspa_consensus_core::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET {
+            return true;
+        }
+        set.sort_unstable_by_key(|(blue_score, _)| *blue_score);
+        set.windows(2).all(|pair| {
+            let ((_, older), (_, newer)) = (pair[0], pair[1]);
+            self.reachability_service.is_dag_ancestor_of(older, newer)
+        })
     }
 
     fn remove_bounded_merge_breaking_parents(
@@ -11858,16 +11867,17 @@ impl VirtualStateProcessor {
 enum MergesetIncreaseResult {
     Accepted {
         increase_size: u64,
-        heartbeat_increase: u64,
+        /// ADR-0068 Phase 1 (F3a/F5): the increase's heartbeat members as
+        /// `(blue_score, hash)`, empty when the lane is not armed. The CALLER decides
+        /// admissibility over the whole accumulated set (`heartbeat_set_admissible`) —
+        /// width with the chain exemption is a property of the final mergeset, not of one
+        /// candidate's increase, and a rejected candidate is simply skipped (the excess IS
+        /// a heartbeat or reaches one; there is nothing to substitute).
+        heartbeat_members: Vec<(u64, BlockHash)>,
     },
     Rejected {
         new_candidate: BlockHash,
     },
-    /// ADR-0068 Phase 1 (F3a): merging this candidate would put the mergeset over the heartbeat
-    /// width bound. Unlike `Rejected` there is no useful replacement to propose — the excess IS
-    /// a heartbeat (or reaches one), and a later template absorbs it once the width budget
-    /// refreshes — so the candidate is simply skipped this round.
-    RejectedForHeartbeatWidth,
 }
 
 /// How many per-certificate credit skips one recompute may name before the diagnostic stops

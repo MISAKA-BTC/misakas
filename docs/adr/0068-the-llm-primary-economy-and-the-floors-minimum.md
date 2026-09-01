@@ -14,11 +14,17 @@
   F1 fix, residual noted), **F4** (the V2 assembly violates upstream pruning depth-consistency,
   and LIVE testnet-11 does at 6,600 = 11 × 600 — devnet fixed, t11's correction rides the
   Phase 2 flag day), **F5** (a heartbeat CHAIN deeper than `max_per_mergeset` strands
-  permanently once a heavier bonded fork puts it in the anticone — chunking rescues sibling
-  floods, not deep side-chains; Phase 2 candidates: template-side prefix absorption via
-  non-tip parents, or a reorg bound on displacing the public heartbeat lane).
+  permanently once a heavier bonded fork puts it in the anticone — **closed the same day by
+  amending the width rule**: at most four heartbeats, or any number provided they form ONE
+  chain (sorted by blue score, every adjacent pair ancestor-related). A chain is the lane
+  doing its job through a long outage, already rate-priced by the slot ladder; width —
+  siblings, and the tree shape that would fool a chain-HEAD count — is what F3a is about, and
+  the pairwise total order refuses both. The rule's semantic version rides the fingerprint
+  label (`palw_heartbeat/width-chain-exempt-v2`), so only armed presets moved: t11's
+  scheduled fingerprint 05df4e5e… → 0533c8ee…, devnet's 47ba789e… → 280db9e1…. The drill's
+  exact strand shape is the regression test).
   Phase 0 is operations and began the same day; Phase 2 is a coordinated re-mint and now
-  carries F4's t11 correction and F5's close beside `min_base_class_share_permille`.
+  carries F4's t11 correction beside `min_base_class_share_permille` (F5 no longer rides it).
 - Date: 2026-09-01
 - Depends on: ADR-0045 (class economy: block-denominated budgets, share table),
   ADR-0054 (share follows production), ADR-0058 (merged work is counted),
@@ -110,14 +116,16 @@ and level assignment (digest zeros) never depended on it.
 
 `PalwHeartbeatV1` grows `max_per_mergeset` (locked to
 `PALW_HEARTBEAT_MAX_PER_MERGESET = 4`): a valid block's mergeset — selected parent included —
-holds at most four heartbeat blocks (`RuleError::MergeSetTooManyHeartbeats`, checked beside
-`check_mergeset_size_limit`; POV-independent, no walk, no window). The template builder
-carries the same budget through `pick_virtual_parents`/`mergeset_increase` and chunks: four
-this block, the rest against later blocks' fresh budgets — absorbed at a bounded rate, and a
-flood older than the merge depth is simply never merged. Four = one heartbeat-parent chain
-slot plus three siblings of healing headroom: an honest steady state (one heartbeat per
-interval) never sees two, and a partition that ran on the clock heals a foreign heartbeat
-chain at three per block.
+holds at most four heartbeat blocks, **or any number of them provided they form ONE chain**
+(F5's amendment: sorted by blue score, every adjacent pair ancestor-related; a blue-score tie
+is never ancestor-related and fails). `RuleError::MergeSetTooManyHeartbeats`, checked beside
+`check_mergeset_size_limit`; POV-independent, no walk, no window — over the flat bound it
+costs one reachability query per adjacent pair. The template builder decides the same
+predicate over its accumulated set (`heartbeat_set_admissible`) and chunks sibling floods:
+four this block, the rest against later blocks' fresh mergesets — while an outage CHAIN of
+any depth is absorbed whole, which is what un-strands the drill's F5 shape. A chain is
+rate-priced by the slot ladder already; width — siblings, and the tree shape that would fool
+a chain-HEAD count — is what this bound is for, and the pairwise total order refuses both.
 
 What the bound does NOT claim: relay/storage of never-merged siblings stays priced by the
 2²⁴ header cost, as before. The bound removes their *consensus* influence — DAA, mergesets,

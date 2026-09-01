@@ -1791,7 +1791,12 @@ impl Params {
         // ADR-0066 Decisions 1 and 4: Some-only, so every preset that leaves them unset
         // fingerprints byte-identically to a build without the fields at all.
         if let Some(heartbeat) = palw_heartbeat {
-            h.write(b"palw_heartbeat");
+            // The label carries the WIDTH RULE's semantic version: `max_per_mergeset` began as a
+            // flat member count and the ADR-0068 drill's F5 amended it to "flat bound, or one
+            // chain" — same value, different rule, and a rule change with an unchanged hash is
+            // this project's textbook silent fork. Only armed presets move (Some-only), which is
+            // the drill devnet and testnet-11's scheduled arming; both pins moved with it.
+            h.write(b"palw_heartbeat/width-chain-exempt-v2");
             h.write(heartbeat.activation.daa_score().to_le_bytes());
             h.write(heartbeat.work_log2.to_le_bytes());
             h.write(heartbeat.max_per_mergeset.to_le_bytes());
@@ -7690,7 +7695,8 @@ mod consensus_params_id_tests {
                 // nothing in this build accepts the old chain.
                 //
                 // **Re-pinned 2026-09-01 (ADR-0068 Phase 1): the clock arms.** 5ccdd684… →
-                // 05df4e5e… because `palw_rc_shipped_params` now schedules `palw_heartbeat`
+                // 05df4e5e… (then → 0533c8ee… when F5's chain exemption re-versioned the width
+                // rule's hash label, same deploy train) because `palw_rc_shipped_params` now schedules `palw_heartbeat`
                 // (work_log2 24, max_per_mergeset 4) and `palw_attempt_work` (work_log2 20) at
                 // DAA `PALW_RC_PHASE1_FENCE_DAA` (5,000; the tip was 1,746 when chosen). This is
                 // NOT a re-genesis and NOT a wipe: a scheduled fence is normalised out of
@@ -7698,7 +7704,7 @@ mod consensus_params_id_tests {
                 // follow one chain — until the fence height, where an un-upgraded node stops
                 // accepting new blocks (the attempt lane's declared blue work changes). Roll the
                 // fleet before DAA 5,000.
-                "05df4e5e3627805860e14c94336e0d85a5245d966729aeceec58c19a81cd2f15",
+                "0533c8eeccdbdb65d1556b47fb61bf503e374cd4d26fd1b9d4b96d85b6c50ba7",
             ),
             ("simnet", SIMNET_PARAMS, "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd"),
             // Re-pinned twice for ADR-0068 Phase 1: first when the drill network armed the
@@ -7708,7 +7714,7 @@ mod consensus_params_id_tests {
             // The genesis is untouched (nothing is carved), so only the fingerprint moves.
             // …and once more when the drill's pruning-consistency nudge raised devnet's
             // pruning_depth 10,800 → 10,805 (remainder k+1 of finality 600).
-            ("devnet", DEVNET_PARAMS, "47ba789e563df1ac4f12baa01c10902119a394c6b3d2cf48fe6026d7f7e1444f"),
+            ("devnet", DEVNET_PARAMS, "280db9e1b46da27f2905638bd6c5284c438f921452dbd1ff4b5f60a3b5232306"),
         ]
         .into_iter()
         .filter_map(|(name, params, expected)| {
