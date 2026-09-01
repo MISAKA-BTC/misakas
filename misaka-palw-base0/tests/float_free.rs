@@ -83,6 +83,14 @@ const CONSENSUS_PATH: &[&str] = &[
     "src/fuzz_a16.rs",
     // The mmap container's fuzz gate — the same argument, the same clause of the same ADR.
     "src/fuzz_qwen36.rs",
+    // The end-to-end certification drill (ADR-0069). It runs no model arithmetic of its own, and
+    // it is on this list anyway: its OUTPUT is committed. A certificate says which families this
+    // build proved adjudicable, the set is hashed into the bundle's `court_e2e_root`, and that
+    // value is part of `consensus_params_id` — so a float anywhere in deciding whether a planted
+    // fault convicted would let two honest builds certify different sets, announce different
+    // fingerprints and refuse each other at the handshake. That is the divergence Decision A
+    // exists to make impossible, reached through a value rather than through a block.
+    "src/e2e_drill.rs",
 ];
 
 /// Not executed by consensus, but they *state* the class's arithmetic: the KAT set publishes the
