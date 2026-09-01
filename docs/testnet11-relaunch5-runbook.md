@@ -134,6 +134,38 @@ manager backs off while node0 spends ~12 min mapping the model) → C seat2, sea
 `.113` seat4 (last; it maps 33 GiB too) → explorer filler/REST/MTP/minerpool/slot. Verify each
 node announces `d38abe44…` before starting the next host.
 
+### 5c — what actually happened (2026-09-02, CEST)
+
+* 01:29:51 ibm node0 started on `d38abe44…` (`v1.1.0-b4a98a937`, sha `1fcac716…`); P2P opened
+  ~01:43 after the 33 GiB map. 01:43:31 node1 restarted to clear its address-manager backoff —
+  established 6, producing. 01:43:29 / 01:43:59 C seat2 / seat3 up on `d38abe44…`. .113 node up
+  01:43:30.
+* **bond 4 handoff**: `qwen36.palwq36` landed on .113 by direct `rsync` from ibm (ibm→.113 ssh
+  already works; do not route 34 GB through an operator laptop — 13 MB/s vs 4 MB/s). sha `7a944595…`
+  matched ibm's. 01:44:06 `.113 misaka-t11-seat4` active+enabled on `d38abe44…`; C's
+  `misaka-t11-seat4` inactive **and disabled**. Bond 4 runs on exactly one host.
+* .113 also holds `qwen25-1.5b-a16.palwart` (sha `a8c4e53e…`) and `node.sh` passes it, so bond 6
+  can judge the registered A16 class.
+* seat2 (A16 producer) logged **0 refusals** after the restart; the old build refused within seconds
+  of the producer loop starting.
+
+### Disk, under the operator's "unused for two weeks may be deleted" rule (2026-09-02)
+
+* **ibm was at 97 %** — `/root/palw-class` alone is ~209 GB. Removed: the datadir archives of the
+  two chains that no longer exist anywhere (`*.old-8d2002cc-*`, `*.old-accaadce-*`, 32.5 GB),
+  `/root/x-tools` (March), `palw-unified-476d73b.tar.gz` (Aug 16), and `qwen36-run2.palwq36`
+  (34.8 GB, **sha-identical** to the referenced `qwen36.palwq36` — a duplicate, not data). Kept:
+  `.rustup`/`.cargo` (builds need them), the `*.old-f0e50f83-*` archives (most recent wiped chain),
+  and — because they are under two weeks old — `huihui-30b.palwq36` 30.6 GB, the abliterated Q4
+  GGUF 22.8 GB, `huihui-q4km.gguf` 17.7 GB, `probe-1layer.palwq36` 1.8 GB (none referenced by any
+  launcher on this genesis; next candidates). 97 % → 75 %.
+* **C**: removed six >14-day directories referenced by no unit (`misaka-cand-00d1294`,
+  `misaka-regression`, `palw-drill-build`, `valbuild`, `/opt/misakas`, `palw-drill`; 10.5 GB).
+  **Not removed**: `/var/lib/misaka` (56 GB, mtime July) — it is testnet-10's datadir and contains
+  `validator/`; `kaspad-tn` is inactive but `misaka-validator-c` / `misaka-miner-c` still run.
+  An operator decision, not a cleanup.
+* .113: 14 %, nothing eligible.
+
 ## Sequencing (do not reorder)
 
 0. **Precondition**: ADR-0068 Phase 1 (main `12e3aa2d`) deployed and verified on the current
