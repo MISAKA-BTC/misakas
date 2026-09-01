@@ -231,15 +231,22 @@ const CLASS_DAA_MAX_FACTOR: u32 = 4;
 /// takes the cadence table before anyone has watched them produce.
 const CLASS_GROWTH_PERMILLE: u16 = 250;
 
-/// **The permille the liveness floor keeps** (ADR-0054 Decision 2). Half the table stays with the
-/// class every node can run without an artifact, whatever the model classes earn: ADR-0039 W6' says
-/// the floor's share may never be zero, and against a rule that moves permille every epoch that
-/// bound is worth only what the reserve says it is.
+/// **The permille the liveness floor keeps** (ADR-0054 Decision 2; **20‰ since ADR-0068 Phase 2**,
+/// was 500). Half the table was the pre-heartbeat figure: with no clock but the floor, a large
+/// reserve WAS the liveness story. ADR-0068 armed the clock (heartbeat lane, drill-proven: the
+/// nominal hour to the second, unattended re-entry, the exposure wedge released by ticks alone)
+/// and with time supplied by a lane no bond can stop, a 50% reserve defends nothing the census
+/// and the heartbeat do not already defend — it only caps the model classes at half the cadence
+/// forever. Twenty permille keeps the three jobs the floor still has: the permissionless entry
+/// ramp (one floor block funds ~10⁵ minimum collaterals), the artifact-less KAT class the dispute
+/// machinery tests against, and the census's expansion seed (an epoch with silent model classes
+/// hands the floor the whole budget regardless of this figure — the ambulance wage is ADR-0045
+/// arithmetic, not this reserve). ADR-0039 W6' holds: never zero, and it does not leave.
 ///
 /// Set through `with_min_base_class_share_permille`, not through the growth builder: the merge
 /// converged three independent floor guards onto that one field, so a grant and a growth step check
 /// the same number.
-const BASE_CLASS_RESERVE_PERMILLE: u16 = 500;
+const BASE_CLASS_RESERVE_PERMILLE: u16 = 20;
 const BUDGET_TOLERANCE_PERMILLE: u32 = 1_000;
 
 /// Audit C5's abandon hold, in DAA: how long a free-prompt commitment abandoned at `BindTimeout`

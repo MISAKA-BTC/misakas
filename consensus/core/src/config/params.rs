@@ -3466,12 +3466,17 @@ fn genesis_pwu_of(object: &crate::palw_state_v2::PalwConsensusObjectV2) -> u64 {
 ///
 /// Changing it changes `palw_ruleset_id_v2` — the genesis object list is inside the bundle — so it
 /// is a mint-time decision. Nothing raises a share by fiat afterwards; production does.
-pub const PALW_RC_GENESIS_QWEN36_SHARE_PERMILLE: u16 = 200;
+pub const PALW_RC_GENESIS_QWEN36_SHARE_PERMILLE: u16 = 489;
 
 /// **The dense tier's, at genesis.** Equal to the hybrid's on purpose: the two differ enormously in
 /// what they cost to run, and nothing about that difference is knowable at mint time. ADR-0054 is
 /// what separates them afterwards, out of what they each produce.
-pub const PALW_RC_GENESIS_QWEN25_A16_SHARE_PERMILLE: u16 = 200;
+///
+/// **490/490 since ADR-0068 Phase 2** (was 200/200): with the heartbeat clock armed from genesis,
+/// the floor retires to its 20‰ reserve and the model tiers hold the table — the LLM-primary
+/// economy the ADR is for. Blocks and issuance follow this table (ADR-0045: budgets are blocks,
+/// the subsidy carve is class-blind), so this line IS the "LLM ≈ 98% of issuance" decision.
+pub const PALW_RC_GENESIS_QWEN25_A16_SHARE_PERMILLE: u16 = 489;
 
 /// The same assembly, with the A16 dense class when its root is pinned. `None` is the two-class
 /// network exactly as before — an unpinned class is absent, never a placeholder.
@@ -6010,8 +6015,15 @@ pub fn mainnet_shipped_params() -> Params {
         .collect();
     // A card that is set and does not assemble is a binary that would boot a network its own
     // genesis gate refuses; failing at startup with the gate's own message is the honest outcome.
-    palw_v2_params_from_artifacts_on_base(MAINNET_PARAMS, PALW_MAINNET_GENESIS_ARTIFACT_ROOT, bonds)
-        .unwrap_or_else(|e| panic!("the pinned mainnet PALW genesis card does not assemble: {e}"))
+    //
+    // ADR-0068 Phase 2: a V2 mainnet is born with its clock armed — the heartbeat lane, its
+    // width bound and the attempt-work constant, from genesis, exactly as the testnet rehearses.
+    // The floor's 20‰ reserve rides the shared bundle builder, and the class share table is a
+    // pin-time decision whose ADR-0068 figure is {floor ≈ 20‰, model classes ≈ 980‰}.
+    palw_rc_arm_phase1(
+        palw_v2_params_from_artifacts_on_base(MAINNET_PARAMS, PALW_MAINNET_GENESIS_ARTIFACT_ROOT, bonds)
+            .unwrap_or_else(|e| panic!("the pinned mainnet PALW genesis card does not assemble: {e}")),
+    )
 }
 
 /// **ADR-0068 Phase 1: the DAA height at which testnet-11's clock arms.** Chosen 2026-09-01
@@ -6028,15 +6040,19 @@ pub const PALW_RC_PHASE1_FENCE_DAA: u64 = 5_000;
 /// values are the binary's own constants by construction, so the `validate_palw_v2` locks hold
 /// by definition — asserted anyway, because "by definition" is how two sources drift.
 fn palw_rc_arm_phase1(mut params: Params) -> Params {
+    // ADR-0068 Phase 2: armed FROM GENESIS. Phase 1 scheduled the fences at DAA 5,000 on the
+    // running Relaunch-4 chain (a scheduled fence keeps the identity, so the fleet could roll);
+    // this branch is the Relaunch-5 identity, whose chain begins with the clock already open —
+    // "genesis から armed" is the mainnet preset's rule and the testnet rehearses what mainnet
+    // ships. A fresh chain's first block may be a heartbeat (the drill's zero-bond devnet
+    // bootstrapped exactly that way).
     params.palw_heartbeat = Some(PalwHeartbeatV1 {
-        activation: ForkActivation::new(PALW_RC_PHASE1_FENCE_DAA),
+        activation: ForkActivation::always(),
         work_log2: crate::pow_layer0::PALW_HEARTBEAT_WORK_LOG2,
         max_per_mergeset: crate::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET,
     });
-    params.palw_attempt_work = Some(PalwAttemptWorkV1 {
-        activation: ForkActivation::new(PALW_RC_PHASE1_FENCE_DAA),
-        work_log2: crate::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2,
-    });
+    params.palw_attempt_work =
+        Some(PalwAttemptWorkV1 { activation: ForkActivation::always(), work_log2: crate::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2 });
     if let Err(e) = params.validate_palw_v2() {
         panic!("the armed PALW-RC ruleset does not validate: {e}");
     }
@@ -6112,25 +6128,8 @@ pub fn devnet_shipped_params() -> Params {
         // A base that cannot carry the bundle is a build defect, not an operator state: failing
         // at startup with the gate's own message is the only honest outcome.
         .unwrap_or_else(|e| panic!("the devnet ADR-0068 drill ruleset does not assemble: {e}"));
-    // **Upstream pruning's consistency invariant, restored for THIS network** (drill finding):
-    // the assembly minted `pruning_depth = 10,800 = 18 x finality 600` from the deci-bps base,
-    // and the pruning processor forbids a remainder inside `[0..=k]` or `[F-k..F)`
-    // (`assert_pruning_depth_consistency` — which iterates suffix-less NetworkTypes, so devnet
-    // IS covered by it and would fail the suite). Nudge upward to remainder `k + 1`. Raising
-    // pruning_depth keeps every inequality `validate_palw_v2` proved (the lattice and anticone
-    // bounds are `<=`). The shared assembly deliberately does NOT carry this correction, because
-    // there it would re-fingerprint the live testnet-11 — see the note in
-    // `palw_v2_params_on_base`.
-    {
-        let f = params.blockrate.finality_depth;
-        let k = params.blockrate.ghostdag_k as u64;
-        let m = params.blockrate.pruning_depth % f;
-        if m <= k {
-            params.blockrate.pruning_depth += k + 1 - m;
-        } else if m >= f - k {
-            params.blockrate.pruning_depth += (f - m) + k + 1;
-        }
-    }
+    // The pruning depth-consistency nudge (drill finding F4) moved into the shared assembly at
+    // ADR-0068 Phase 2 — every V2 network gets it there, this one included.
     params
 }
 
@@ -6306,16 +6305,23 @@ pub fn palw_v2_params_on_base(
             + bundle.state.window_challenge()
             + bundle.state.window_court();
         params.blockrate.pruning_depth = params.blockrate.pruning_depth.max(lower_bound).max(lattice);
-        // NOTE (found by the ADR-0068 devnet drill, NOT fixed here): this assembly can mint a
-        // depth pair that violates upstream pruning's consistency invariant — the pruning
-        // processor requires `pruning_depth % finality_depth` strictly inside
-        // `(k, finality_depth - k)` (`assert_pruning_depth_consistency`), and the lattice bound
-        // above lands testnet-11 on EXACTLY `6600 = 11 x 600`, remainder zero. The invariant test
-        // iterates suffix-less `NetworkType`s only, so it has never seen a suffixed network.
-        // Correcting it inside this shared assembly would move `consensus_params_id` for the LIVE
-        // testnet-11 fleet — a flag-day decision, not a drill's — so the correction is applied
-        // per-network where a network can afford it (`devnet_shipped_params`), and this note is
-        // the record that the shared path still owes the fix at t11's next re-mint.
+        // **Upstream pruning's consistency invariant, restored HERE for every V2 network**
+        // (ADR-0068 drill finding F4; Phase 2 is the flag day the drill's note deferred to).
+        // The pruning processor requires `pruning_depth % finality_depth` strictly inside
+        // `(k, finality_depth - k)` (`assert_pruning_depth_consistency`) and the lattice bound
+        // above landed testnet-11 on EXACTLY `6600 = 11 × 600`, remainder zero — unseen because
+        // the invariant test iterates suffix-less NetworkTypes. Nudge upward to remainder
+        // `k + 1`: raising keeps every inequality `validate_palw_v2` proved (the lattice and
+        // anticone bounds are `<=`). This moves the live testnet-11's `consensus_params_id`,
+        // which is exactly what a Relaunch train is for; the devnet-local copy of this nudge is
+        // gone, subsumed.
+        let f = params.blockrate.finality_depth;
+        let m = params.blockrate.pruning_depth % f;
+        if m <= k {
+            params.blockrate.pruning_depth += k + 1 - m;
+        } else if m >= f - k {
+            params.blockrate.pruning_depth += (f - m) + k + 1;
+        }
     }
     params.palw_consensus_mode = crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle);
     params.validate_palw_v2()?;
@@ -7694,6 +7700,14 @@ mod consensus_params_id_tests {
                 // were for. **This is a re-genesis for t11 and every host must wipe its datadir**;
                 // nothing in this build accepts the old chain.
                 //
+                // **Re-pinned again 2026-09-01 (ADR-0068 Phase 2 — the Relaunch 5 identity):**
+                // 0533c8ee… → c096a627…, four decisions in one train: the floor's reserve
+                // 500‰ → 20‰, genesis shares 489/489 (floor ends at its reserve — the
+                // LLM-primary table), both fences armed FROM GENESIS (always), and drill
+                // finding F4's pruning depth-consistency nudge now applied in the shared
+                // assembly. **This is a re-genesis for t11 and every host must wipe**; devnet
+                // moved with it (→ 3f13411b…) through the shared builder.
+                //
                 // **Re-pinned 2026-09-01 (ADR-0068 Phase 1): the clock arms.** 5ccdd684… →
                 // 05df4e5e… (then → 0533c8ee… when F5's chain exemption re-versioned the width
                 // rule's hash label, same deploy train) because `palw_rc_shipped_params` now schedules `palw_heartbeat`
@@ -7704,7 +7718,7 @@ mod consensus_params_id_tests {
                 // follow one chain — until the fence height, where an un-upgraded node stops
                 // accepting new blocks (the attempt lane's declared blue work changes). Roll the
                 // fleet before DAA 5,000.
-                "0533c8eeccdbdb65d1556b47fb61bf503e374cd4d26fd1b9d4b96d85b6c50ba7",
+                "c096a6272847bb27355c1891143c7c0b5b4ce58cf34a0cd4f182e9c36ec87232",
             ),
             ("simnet", SIMNET_PARAMS, "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd"),
             // Re-pinned twice for ADR-0068 Phase 1: first when the drill network armed the
@@ -7714,7 +7728,7 @@ mod consensus_params_id_tests {
             // The genesis is untouched (nothing is carved), so only the fingerprint moves.
             // …and once more when the drill's pruning-consistency nudge raised devnet's
             // pruning_depth 10,800 → 10,805 (remainder k+1 of finality 600).
-            ("devnet", DEVNET_PARAMS, "280db9e1b46da27f2905638bd6c5284c438f921452dbd1ff4b5f60a3b5232306"),
+            ("devnet", DEVNET_PARAMS, "3f13411b3ef2f48bfc9de0534ee44e556eb56ee0db084dde9b972e8870481fa0"),
         ]
         .into_iter()
         .filter_map(|(name, params, expected)| {
