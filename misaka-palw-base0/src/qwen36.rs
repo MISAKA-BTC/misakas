@@ -472,7 +472,7 @@ impl Qwen36ArtifactV1 {
         }
     }
 
-    fn tensor_sized(&self, name: &str, want: usize) -> Result<&[i8], Qwen36Error> {
+    pub(crate) fn tensor_sized(&self, name: &str, want: usize) -> Result<&[i8], Qwen36Error> {
         let row = self.tensor(name)?;
         if row.len() != want {
             return Err(Qwen36Error::BadTensor { name: name.to_string(), want, got: row.len() });
@@ -492,7 +492,7 @@ impl Qwen36ArtifactV1 {
             .collect()
     }
 
-    fn one_param(&self, name: &str) -> Result<A16QuantParams, Qwen36Error> {
+    pub(crate) fn one_param(&self, name: &str) -> Result<A16QuantParams, Qwen36Error> {
         let rows = self.param_rows(name)?;
         if rows.len() != 1 {
             return Err(Qwen36Error::BadParams(name.to_string()));
@@ -500,7 +500,7 @@ impl Qwen36ArtifactV1 {
         Ok(rows[0])
     }
 
-    fn params_sized(&self, name: &str, want: usize) -> Result<Vec<A16QuantParams>, Qwen36Error> {
+    pub(crate) fn params_sized(&self, name: &str, want: usize) -> Result<Vec<A16QuantParams>, Qwen36Error> {
         let rows = self.param_rows(name)?;
         // A per-layer-uniform triple is stored once and tiled, which keeps the store small without
         // a second layout — the same rule the dense tier's oracle applies.
@@ -523,7 +523,7 @@ impl Qwen36ArtifactV1 {
 
     /// A registered scalar, in Q[`K`]. Carried in a triple's `zero` so the store has one wire
     /// format rather than two.
-    fn scalar(&self, name: &str) -> Result<i64, Qwen36Error> {
+    pub(crate) fn scalar(&self, name: &str) -> Result<i64, Qwen36Error> {
         Ok(self.one_param(name)?.zero)
     }
 }
@@ -611,7 +611,7 @@ impl<'a> Qwen36Engine<'a> {
     /// power-of-two scale per 32 elements — Q4_K's granularity, and measured at 5.3e-3 relative
     /// against 8.7e-3 for one scale per row — and otherwise the plain per-row form is used, which
     /// is what a fixture and the older artifacts carry.
-    fn project(&self, name: &str, x: &[i32], out_dim: usize, wide: bool) -> Result<Vec<i32>, Qwen36Error> {
+    pub(crate) fn project(&self, name: &str, x: &[i32], out_dim: usize, wide: bool) -> Result<Vec<i32>, Qwen36Error> {
         let a = self.artifact;
         let weights = a.tensor_sized(name, out_dim * x.len())?;
         let params = a.params_sized(&format!("{name}.a16"), out_dim)?;
@@ -650,7 +650,7 @@ impl<'a> Qwen36Engine<'a> {
     /// Called with the routing the moment it commits and before the first expert runs, so the
     /// twenty-four reads are in flight together rather than one at a time behind the arithmetic
     /// that consumes them.
-    fn admit_experts(&self, li: usize, chosen: &[usize]) {
+    pub(crate) fn admit_experts(&self, li: usize, chosen: &[usize]) {
         let Some(cache) = self.residency.as_ref() else { return };
         let mut cache = cache.lock().expect("the residency lock is never poisoned");
         for which in chosen {
@@ -1436,6 +1436,18 @@ impl Qwen36ArtifactV1 {
 #[cfg(test)]
 pub(crate) fn test_fixture(layers: usize, experts: usize) -> Qwen36ArtifactV1 {
     tests::fixture(layers, experts)
+}
+
+/// A fixture at an ARBITRARY (validated) shape, for tests in other modules of this crate — the
+/// interpreter's per-row differential shrinks each catalog member to a runnable geometry, and the
+/// members differ structurally (interval, gate, shared expert, expert count), so one hard-coded
+/// shape cannot stand for all of them.
+#[cfg(test)]
+pub(crate) fn test_fixture_for_shape(shape: Qwen36ShapeV1) -> Qwen36ArtifactV1 {
+    use crate::artifact::LN_THETA_10000_GEN_Q;
+    let rope = RopeTableV1::generate(shape.head_dim, shape.max_position, LN_THETA_10000_GEN_Q).expect("a table");
+    let artifact = Qwen36ArtifactV1::new(shape.clone(), rope).expect("a valid shape");
+    fill_fixture(artifact, shape)
 }
 
 /// **The fixture, for tests in OTHER crates** — the consensus block E2E runs a real

@@ -281,6 +281,12 @@ macro_rules! moe_tail {
     // they are because the genesis-registered class id is the borsh of this table, and moving it
     // orphans every registered QWEN36 claim. The named arm below is how a corrected graph says the
     // same computation with the names the engine actually reads.
+    //
+    // The four kernel parameters carry the fourth correction (also 2026-09-01, found by the
+    // interpreter's differential): v1 declares the expert SwiGLU's wideness BACKWARDS — its gate
+    // narrow and its up wide — while the engine projects the gate WIDE (silu is nonlinear, so its
+    // input scale is part of the function; `Qwen36Engine::expert` says why) and the up narrow.
+    // v1's spelling stays, for the same id-pinning reason as the names.
     ($first:expr) => {
         moe_tail!(
             $first,
@@ -290,10 +296,14 @@ macro_rules! moe_tail {
             "blk.{layer}.ffn_shared_gated.a16",
             "blk.{layer}.ffn_shared_down.weight",
             "blk.{layer}.ffn_shared_scalar.weight",
-            "blk.{layer}.ffn_shared_apply.a16"
+            "blk.{layer}.ffn_shared_apply.a16",
+            KDESC_Q36_MATMUL_GROUPED,
+            KDESC_Q36_MATMUL_GROUPED_WIDE,
+            KDESC_Q36_MATMUL_GROUPED,
+            KDESC_Q36_MATMUL_GROUPED_WIDE
         )
     };
-    ($first:expr, $router:literal, $sh_gate:literal, $sh_up:literal, $sh_gated:literal, $sh_down:literal, $sh_scalar:literal, $sh_apply:literal) => {
+    ($first:expr, $router:literal, $sh_gate:literal, $sh_up:literal, $sh_gated:literal, $sh_down:literal, $sh_scalar:literal, $sh_apply:literal, $gate_k:expr, $up_k:expr, $shg_k:expr, $shu_k:expr) => {
         [
             // The stream that reaches the mixture, normalized.
             n(K::RmsNorm, KDESC_A16_RMS_NORM, "", Hidden, &[Step($first - 1)]),
@@ -304,15 +314,15 @@ macro_rules! moe_tail {
             n(K::MulElem, KDESC_A16_REQUANTIZE, "blk.{layer}.ffn_router.a16", Experts, &[Step($first + 2)]),
             n(K::SoftMax, KDESC_Q36_ROUTER_TOPK, $router, TopK2, &[Step($first + 3)]),
             // The eight chosen experts, as the concatenation the engine builds.
-            n(K::MatMulQuant, KDESC_Q36_MATMUL_GROUPED, "blk.{layer}.ffn_gate_exps.routed", RoutedMid, &[Step($first + 1)]),
-            n(K::MatMulQuant, KDESC_Q36_MATMUL_GROUPED_WIDE, "blk.{layer}.ffn_up_exps.routed", RoutedMid, &[Step($first + 1)]),
+            n(K::MatMulQuant, $gate_k, "blk.{layer}.ffn_gate_exps.routed", RoutedMid, &[Step($first + 1)]),
+            n(K::MatMulQuant, $up_k, "blk.{layer}.ffn_up_exps.routed", RoutedMid, &[Step($first + 1)]),
             n(K::Silu, KDESC_Q36_SILU, "", RoutedMid, &[Step($first + 5)]),
             n(K::MulElem, KDESC_Q36_MUL_WIDE, "blk.{layer}.ffn_expert_gated.a16", RoutedMid, &[Step($first + 7), Step($first + 6)]),
             n(K::MatMulQuant, KDESC_Q36_MATMUL_GROUPED_WIDE, "blk.{layer}.ffn_down_exps.routed", RoutedOut, &[Step($first + 8)]),
             n(K::MulElem, KDESC_Q36_MOE_COMBINE, "blk.{layer}.ffn_combine.a16", Hidden, &[Step($first + 9), Step($first + 4)]),
             // The shared expert, always on, behind its own scalar gate.
-            n(K::MatMulQuant, KDESC_Q36_MATMUL_GROUPED, $sh_gate, SharedMid, &[Step($first + 1)]),
-            n(K::MatMulQuant, KDESC_Q36_MATMUL_GROUPED_WIDE, $sh_up, SharedMid, &[Step($first + 1)]),
+            n(K::MatMulQuant, $shg_k, $sh_gate, SharedMid, &[Step($first + 1)]),
+            n(K::MatMulQuant, $shu_k, $sh_up, SharedMid, &[Step($first + 1)]),
             n(K::Silu, KDESC_Q36_SILU, "", SharedMid, &[Step($first + 11)]),
             n(K::MulElem, KDESC_Q36_MUL_WIDE, $sh_gated, SharedMid, &[Step($first + 13), Step($first + 12)]),
             n(K::MatMulQuant, KDESC_Q36_MATMUL_GROUPED_WIDE, $sh_down, Hidden, &[Step($first + 14)]),
@@ -479,9 +489,21 @@ const QWEN36_ATTN_IR: &[Ir] = &{
 // Also corrected while the row was open, both pure renames to real stores: the rope nodes name
 // `attn_rope.a16` (the rotation's requant — the rope TABLE is a structured artifact field bound by
 // the artifact root, not a named tensor), and the softmax names `attn_softmax_up.a16`.
+//
+// 4. (Found by the interpreter's differential, 2026-09-01, same day.) The expert SwiGLU's
+//    wideness was declared BACKWARDS: v1 labels the gate projection `MATMUL_GROUPED` (narrow to
+//    codes) and the up projection `MATMUL_GROUPED_WIDE`, while the engine projects the gate WIDE —
+//    silu is nonlinear, so its input scale is part of the function, and a narrowed gate clamps at
+//    the code rail exactly on the rows where the model is loudest — and the up narrow. Both the
+//    routed and the shared expert carry the swap. The name-conformance measurement cannot see
+//    this (the names are right); the fixture differential cannot either when every row sits
+//    inside the code rail (narrow and wide agree there by construction). What convicts it is the
+//    hot-row differential in `misaka-palw-base0/src/qwen36_plan.rs`, which drives a gate row past
+//    the rail and holds the interpreter to the engine's bits.
 
 /// The GDN arm, v2: the arm's own 24 nodes are IDENTICAL to v1's — copied, not transcribed, so
-/// they cannot drift — and only the mixture's seven wrong names change.
+/// they cannot drift — and only the mixture's seven wrong names and four backwards wideness
+/// labels change (the expert SwiGLU's gate is WIDE and its up narrow, as the engine performs it).
 const QWEN36_LINEAR_IR_V2: &[Ir] = &{
     const TAIL: [Ir; 24] = moe_tail!(
         24u16,
@@ -491,7 +513,11 @@ const QWEN36_LINEAR_IR_V2: &[Ir] = &{
         "blk.{layer}.ffn_shared_expert_gated.a16",
         "blk.{layer}.ffn_shared_expert_down.weight",
         "blk.{layer}.ffn_shared_gate.weight",
-        "blk.{layer}.ffn_shared_gated.a16"
+        "blk.{layer}.ffn_shared_gated.a16",
+        KDESC_Q36_MATMUL_GROUPED_WIDE,
+        KDESC_Q36_MATMUL_GROUPED,
+        KDESC_Q36_MATMUL_GROUPED_WIDE,
+        KDESC_Q36_MATMUL_GROUPED
     );
     let mut all = [QWEN36_LINEAR_IR[0]; 48];
     let mut i = 0;
@@ -548,7 +574,11 @@ const QWEN36_ATTN_IR_V2: &[Ir] = &{
         "blk.{layer}.ffn_shared_expert_gated.a16",
         "blk.{layer}.ffn_shared_expert_down.weight",
         "blk.{layer}.ffn_shared_gate.weight",
-        "blk.{layer}.ffn_shared_gated.a16"
+        "blk.{layer}.ffn_shared_gated.a16",
+        KDESC_Q36_MATMUL_GROUPED_WIDE,
+        KDESC_Q36_MATMUL_GROUPED,
+        KDESC_Q36_MATMUL_GROUPED_WIDE,
+        KDESC_Q36_MATMUL_GROUPED
     );
     let mut all = [HEAD[0]; 46];
     let mut i = 0;
@@ -929,10 +959,27 @@ mod qwen3moe_family {
     /// The renumbering after the phantom's deletion is derived by hand, and a hand-derived shift is
     /// exactly the kind of edit that slips one index and produces a graph that computes something
     /// adjacent to the truth. So the diff is CHECKED: every v2 attention node must equal its v1
-    /// counterpart — the deleted node skipped, the three renames and the role move excused, and
-    /// every step reference shifted by exactly the deletion.
+    /// counterpart — the deleted node skipped, the three renames, the role move and the four
+    /// wideness corrections excused (each in its exact direction), and every step reference
+    /// shifted by exactly the deletion.
     #[test]
     fn structural_diff_v1_v2() {
+        // The fourth correction: the expert SwiGLU's wideness, which v1 declares backwards. The
+        // excuse is exact — gate narrow→wide, up wide→narrow, nothing else — so the diff cannot
+        // quietly admit a fifth kernel change.
+        let expect_kernel = |v1: &Ir, v2_weight: &str| -> &'static str {
+            let widened = v2_weight.ends_with("ffn_gate_exps.routed") || v2_weight.ends_with("ffn_shared_expert_gate.weight");
+            let narrowed = v2_weight.ends_with("ffn_up_exps.routed") || v2_weight.ends_with("ffn_shared_expert_up.weight");
+            if widened {
+                assert_eq!(v1.kernel, KDESC_Q36_MATMUL_GROUPED, "{v2_weight}: v1 declared the gate narrow");
+                KDESC_Q36_MATMUL_GROUPED_WIDE
+            } else if narrowed {
+                assert_eq!(v1.kernel, KDESC_Q36_MATMUL_GROUPED_WIDE, "{v2_weight}: v1 declared the up wide");
+                KDESC_Q36_MATMUL_GROUPED
+            } else {
+                v1.kernel
+            }
+        };
         // The GDN arm: identical except the mixture's seven renamed operands.
         let renames = [
             ("ffn_router_topk.a16", "ffn_router_up.a16"),
@@ -959,7 +1006,7 @@ mod qwen3moe_family {
         assert_eq!(QWEN36_LINEAR_IR.len(), QWEN36_LINEAR_IR_V2.len());
         for (i, (v1, v2)) in QWEN36_LINEAR_IR.iter().zip(QWEN36_LINEAR_IR_V2.iter()).enumerate() {
             assert_eq!(v1.op as u8, v2.op as u8, "gdn node {i}");
-            assert_eq!(v1.kernel, v2.kernel, "gdn node {i}");
+            assert_eq!(expect_kernel(v1, v2.weight), v2.kernel, "gdn node {i}");
             assert_eq!(rename(v1.weight), v2.weight, "gdn node {i}");
             assert_eq!(v1.inputs, v2.inputs, "gdn node {i}: the GDN arm renumbers nothing");
         }
@@ -972,7 +1019,7 @@ mod qwen3moe_family {
             let i1 = if i2 < PHANTOM { i2 } else { i2 + 1 };
             let v1 = &QWEN36_ATTN_IR[i1];
             assert_eq!(v1.op as u8, v2.op as u8, "attn node v1[{i1}] vs v2[{i2}]");
-            assert_eq!(v1.kernel, v2.kernel, "attn node v1[{i1}] vs v2[{i2}]");
+            assert_eq!(expect_kernel(v1, v2.weight), v2.kernel, "attn node v1[{i1}] vs v2[{i2}]");
             assert_eq!(rename(v1.weight), v2.weight, "attn node v1[{i1}] vs v2[{i2}]");
             // The role move: V's projection carries VCacheWrite in v2 and Plain in v1.
             if v1.weight == "blk.{layer}.attn_v.weight" {
@@ -1016,7 +1063,7 @@ mod qwen3moe_family {
     fn v2_shape_profile_id_golden_vector() {
         assert_eq!(
             qwen36_profile_v2(QWEN36_35B_A3B).expect("projects").shape_profile_id().to_string(),
-            "069b948273069a4e66255e636562fc33459a482a70218f31cbd466d373d2ef67c45b7790137d3e37d0d451c616ba713789ae26a301c52950dfea5b05b3ec5cc1"
+            "23ef487f6497fade207193b6b480ea9991ba6e1f4995aed307e50bfba19688e2cc815498c17a46d2756390b00dbf4a8af5e5982c86dab5bc66a288dee1bc860b"
         );
     }
 

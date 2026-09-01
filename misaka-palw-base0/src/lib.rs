@@ -54,6 +54,7 @@ pub mod qwen25_a16_backend;
 pub mod qwen36;
 pub mod qwen36_backend;
 pub mod qwen36_calibrate;
+pub mod qwen36_plan;
 pub mod qwen36_reference;
 pub mod rc;
 pub mod rope;

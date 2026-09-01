@@ -56,6 +56,10 @@ const CONSENSUS_PATH: &[&str] = &[
     "src/produce.rs",
     "src/qwen36.rs",
     "src/qwen36_backend.rs",
+    // The mmap container's profile interpreter (ADR-0067): it walks a REGISTERED declaration and
+    // commits one row per node, so it is the execution path in its purest form — the declaration
+    // is the program, and Decision A binds the walker exactly as it binds the compiled arms.
+    "src/qwen36_plan.rs",
     // The dense A16 tier's producer — same rule, same reason: an execution path may not
     // compute in floats, and this one derives its job, runs the engine and commits four roots.
     "src/qwen25_a16_backend.rs",
