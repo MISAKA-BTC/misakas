@@ -50,7 +50,7 @@ pub struct GhostdagManager<T: GhostdagStoreReader, S: RelationsStoreReader, U: R
     /// attempt-lane (algo-6) block's blue work is the constant
     /// `1 << PALW_ATTEMPT_BLUE_WORK_LOG2` instead of `calc_work(bits)` — on a V2 network the
     /// bits sit at the ambient maximum and price every bonded block at 2, parity with two ε = 1
-    /// heartbeats. Maxed with `level_work`, unlike ε: the attempt lane is the real production
+    /// heartbeats. NOT maxed with `level_work`, for the same reason ε is not: the attempt lane is the real production
     /// lane and its inference-priced digest is what the pruning-proof hierarchy is built from.
     /// Mode folded in (`Params::palw_attempt_work_fence`).
     attempt_work_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
@@ -235,13 +235,36 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
                 // pwu — the claim is only verified against class state on the selected chain, and
                 // this function holds only the header; a claim-derived figure would let a
                 // shape-valid header that never faces the lottery mint fork-choice weight with a
-                // number (see `PALW_ATTEMPT_BLUE_WORK_LOG2`). Maxed with `level_work`, unlike ε:
-                // this lane's inference-priced digest is what the pruning hierarchy is built from.
+                // number (see `PALW_ATTEMPT_BLUE_WORK_LOG2`).
+                //
+                // **And NOT maxed with `level_work`, for the reason ε is not** (mainnet audit).
+                // This used to read `.max(self.level_work)`, justified as "this lane's
+                // inference-priced digest is what the pruning hierarchy is built from". The digest
+                // is not inference-priced in the sense that sentence needs. `level_work` is
+                // `1 << (level + 256 - max_level)`, the level comes from the digest's leading
+                // zeros, and the digest is GRINDABLE at hash cost alone: `l1_tag_v2` is a free CPU
+                // expansion "deliberately, so this stays a nonce search", and the job is computed
+                // once per template and reused by every nonce. One inference buys an unbounded
+                // nonce search, so leading zeros — and therefore level, and therefore level-sized
+                // weight — are bought with hashing.
+                //
+                // `level_work` is only non-zero under `GhostdagManager::with_level`, whose sole
+                // callers are `pruning_proof::build` and `pruning_proof::validate`. So the effect
+                // was confined to the comparison a syncing node uses to choose between chains —
+                // and confined there it is worse, not better: live fork choice was
+                // inference-priced while the proof that decides which history a new node adopts
+                // was priced in hashes. Two chains carrying the same inference could be ordered by
+                // which one's producers ground harder.
+                //
+                // The heartbeat arm above already refuses exactly this, in these words: "at no
+                // level may it earn level-sized weight, or the proof comparison would price hash
+                // again." The rule was right; it was applied to one lane. The lane still DERIVES a
+                // level (`algo_id_derives_no_block_level` is false for it) because the hierarchy's
+                // STRUCTURE is what levels are for — what it must not derive is weight.
                 if header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2
                     && self.attempt_work_lane.is_some_and(|fence| fence.is_active(header.daa_score))
                 {
-                    return BlueWorkType::from(1u64 << kaspa_consensus_core::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2)
-                        .max(self.level_work);
+                    return BlueWorkType::from(1u64 << kaspa_consensus_core::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2);
                 }
                 calc_work(header.bits).max(self.level_work)
             })
@@ -388,4 +411,52 @@ enum ColoringState {
 enum ColoringOutput {
     Blue(KType, BlockHashMap<KType>), // (blue anticone size, map of blue anticone sizes for each affected blue)
     Red,
+}
+
+#[cfg(test)]
+mod lane_weight_tests {
+    use crate::processes::difficulty::level_work;
+    use kaspa_consensus_core::BlueWorkType;
+    use kaspa_consensus_core::palw_heartbeat_v1::HEARTBEAT_BLUE_WORK_EPSILON;
+    use kaspa_consensus_core::pow_layer0::{
+        PALW_ATTEMPT_BLUE_WORK_LOG2, POW_ALGO_ID_HEARTBEAT_V1, POW_ALGO_ID_PALW_COMMITTED_V2, POW_ALGO_ID_PALW_RECEIPT_V3,
+        algo_id_carries_no_chain_position, algo_id_derives_no_block_level,
+    };
+
+    /// **No PALW lane may earn level-sized weight, because levels are bought with hashing.**
+    ///
+    /// The attempt arm used to read `.max(self.level_work)`. `level_work` is non-zero only under
+    /// `GhostdagManager::with_level`, whose only callers are the pruning proof's build and
+    /// validate — so the effect sat exactly on the comparison a syncing node uses to choose
+    /// between chains, while live fork choice was already a flat constant. Two chains carrying the
+    /// same inference could be ordered by which one's producers ground harder.
+    ///
+    /// **This asserts the removed `.max` was load-bearing rather than decorative**, which is the
+    /// part a reader cannot check by looking at the diff: above level 20 it strictly exceeded the
+    /// attempt constant, so the grinder was paid.
+    #[test]
+    fn level_work_outgrows_the_attempt_constant_which_is_why_it_may_not_be_maxed_in() {
+        let attempt = BlueWorkType::from(1u64 << PALW_ATTEMPT_BLUE_WORK_LOG2);
+
+        // `level_work` is `1 << (level + 256 - max_block_level)`, so at the shipped ceiling the
+        // exponent starts at 31 — and there is no parity point at all. **The very first level a
+        // digest can reach already outweighs the attempt constant by 4096x**, and it climbs from
+        // there. Whatever the grinder found, the max took it.
+        let max: u8 = 225;
+        assert_eq!(level_work(0, max), BlueWorkType::from(0u64), "level 0 is the only one the max left alone");
+        assert!(level_work(1, max) > attempt, "one level of luck already beat the constant");
+        assert_eq!(level_work(1, max), attempt * BlueWorkType::from(4096u64), "…by this much");
+        assert!(level_work(8, max) > level_work(1, max), "and it is exponential in the leading zeros");
+
+        // ε was never in that range — the heartbeat arm always refused the max, in these words:
+        // "at no level may it earn level-sized weight, or the proof comparison would price hash
+        // again". The attempt lane now follows the same rule.
+        assert!(BlueWorkType::from(HEARTBEAT_BLUE_WORK_EPSILON) < attempt);
+
+        // What each lane may still DERIVE. Structure, yes — weight, no. The attempt lane keeps its
+        // level because the pruning hierarchy is built from it; the receipt lane has neither.
+        assert!(!algo_id_derives_no_block_level(POW_ALGO_ID_PALW_COMMITTED_V2), "the attempt lane still places the hierarchy");
+        assert!(algo_id_derives_no_block_level(POW_ALGO_ID_HEARTBEAT_V1), "a fixed target buys no level");
+        assert!(algo_id_carries_no_chain_position(POW_ALGO_ID_PALW_RECEIPT_V3), "and a receipt buys no position at all");
+    }
 }
