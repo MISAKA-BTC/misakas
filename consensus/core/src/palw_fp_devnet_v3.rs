@@ -792,9 +792,13 @@ mod tests {
         v2.blockrate.target_time_per_block = PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
         v2.validate_palw_v2().expect("a pure V2 params set carrying the devnet bundle validates");
 
-        // …and the mixed-lineage refusal still bites: DEVNET runs V1 PALW PoW, so a V2 mode on it
-        // is half of two lineages.
+        // …and the mixed-lineage refusal still bites. DEVNET used to be the V1 PALW PoW preset
+        // and carried the mixed lineage by itself; since ADR-0068 Phase 1 its base ships no V1
+        // PoW (the shipped devnet IS a V2 network), so the V1 half is stated explicitly — the
+        // rule under test is "a V2 mode beside ANY V1 PALW proof-of-work is refused", not a fact
+        // about which preset happens to ship V1 today.
         let mut mixed = DEVNET_PARAMS.clone();
+        mixed.pow_palw_activation = crate::config::params::ForkActivation::always();
         mixed.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle());
         mixed.blockrate.target_time_per_block = PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
         assert!(mixed.validate_palw_v2().is_err());

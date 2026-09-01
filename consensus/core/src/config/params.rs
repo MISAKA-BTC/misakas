@@ -2149,7 +2149,9 @@ impl From<NetworkType> for Params {
         with_registered_models(match value {
             NetworkType::Mainnet => MAINNET_PARAMS,
             NetworkType::Testnet => TESTNET_PARAMS,
-            NetworkType::Devnet => DEVNET_PARAMS,
+            // The BUNDLED form (ADR-0068 Phase 1 drill network), so the two `From` impls cannot
+            // disagree about what devnet is — `DEVNET_PARAMS` alone is the bundle-free base.
+            NetworkType::Devnet => devnet_shipped_params(),
             NetworkType::Simnet => SIMNET_PARAMS,
         })
     }
@@ -2177,7 +2179,8 @@ impl From<NetworkId> for Params {
                 Some(x) => panic!("Testnet suffix {} is not supported (this build knows 10, 11 and 12)", x),
                 None => panic!("Testnet suffix not provided"),
             },
-            NetworkType::Devnet => DEVNET_PARAMS,
+            // The ADR-0068 drill ruleset — see `devnet_shipped_params`.
+            NetworkType::Devnet => devnet_shipped_params(),
             NetworkType::Simnet => SIMNET_PARAMS,
         })
     }
@@ -6042,6 +6045,37 @@ pub fn palw_rc_shipped_params() -> Params {
     .unwrap_or_else(|e| panic!("the pinned PALW-RC genesis card does not assemble: {e}"))
 }
 
+/// **Devnet as it ships on this branch: the ADR-0068 Phase 1 drill network — `ConsensusV2`
+/// with a ZERO-row genesis bond registry.**
+///
+/// The same shape `palw_rc_shipped_params` and `mainnet_shipped_params` have — a node's ruleset
+/// is a property of its BINARY — assembled over the devnet base. Two deliberate differences from
+/// the RC card:
+///
+/// * **Zero genesis bonds (ADR-0061).** A registry may be empty: bonds ride ordinary
+///   transactions, and the heartbeat lane (armed on this preset from genesis) produces the blocks
+///   they ride. A fresh devnet therefore boots as a heartbeat-only chain, a newcomer registers a
+///   bond ON that chain (`--palw-register-bond`), and only then does the bonded attempt lane
+///   start — which is exactly the bootstrap story the Phase 1 drill exists to prove on real
+///   processes. No premine is carved (no collateral outputs, no fee floats), so the devnet
+///   genesis block — hash, UTXO commitment, everything — is byte-identical to the base's and no
+///   re-mint rides this change.
+/// * **The floor's artifact root is the SAME derived BASE-0 root the RC pins**
+///   ([`PALW_RC_GENESIS_ARTIFACT_ROOT`]): the root is a function of the BASE-0 specification
+///   (every weight byte derives from one pinned seed), not of the network, so devnet re-uses the
+///   derivation rather than pinning a second copy of the same value.
+///
+/// The assembly imposes the frozen 120 s cadence and re-derives finality/pruning depths
+/// (`palw_v2_params_on_base`), runs the genesis gate (`verify_palw_genesis_v2` — which since
+/// ADR-0061 admits the empty registry), and `validate_palw_v2` proves the armed heartbeat and
+/// attempt-work fences declare exactly the constants this binary enforces.
+pub fn devnet_shipped_params() -> Params {
+    palw_v2_params_from_artifacts_on_base(DEVNET_PARAMS, PALW_RC_GENESIS_ARTIFACT_ROOT, Vec::new())
+        // A base that cannot carry the bundle is a build defect, not an operator state: failing
+        // at startup with the gate's own message is the only honest outcome.
+        .unwrap_or_else(|e| panic!("the devnet ADR-0068 drill ruleset does not assemble: {e}"))
+}
+
 /// **The PALW-RC network's identity WITHOUT a ruleset bundle — what `NetworkId` testnet-12 maps
 /// to, and the base every bundled variant is built from.**
 ///
@@ -6345,12 +6379,14 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_inactivity_leak: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
-    // PALW LLM PoW from genesis: devnet IS the 0.1-bps LLM-PoW network on this branch. Every
-    // post-genesis header declares algo_id = 4 and is validated by replaying one deterministic
-    // pinned-Qwen3.5-2B inference (or the explicit `MISAKA_PALW_POW_FIXTURE=1` fixture). Devnet
-    // deliberately keeps the WORKER flavor (full-logits `gemm_trace_root` binding) — the Ollama
-    // flavor (5) is testnet's fleet-runtime concession.
-    pow_palw_activation: ForkActivation::always(),
+    // **Devnet is the ADR-0068 drill network on this branch: ConsensusV2, so no V1 PALW
+    // proof-of-work.** This was `always()` — devnet as the algo-4 pinned-Qwen (or
+    // `MISAKA_PALW_POW_FIXTURE=1`) V1 network — but `validate_palw_v2` refuses a V1 PoW fence
+    // beside a V2 ruleset, and `devnet_shipped_params` installs the V2 bundle on this base.
+    // The const alone is therefore the BASE identity (hash-only), exactly the shape
+    // `palw_rc_base_params` has for testnet-11; what a node actually runs is
+    // `Params::from(Devnet)` = `devnet_shipped_params()`, the bundled form.
+    pow_palw_activation: ForkActivation::never(),
     pow_palw_ollama_activation: ForkActivation::never(),
 };
 
@@ -6513,7 +6549,15 @@ mod consensus_params_id_tests {
         assert_eq!(b.finality_depth, 4_320);
         assert_eq!(b.pruning_depth, 10_800);
         assert_eq!(b.coinbase_maturity, 10);
-        assert!(DEVNET_PARAMS.pow_palw_activation.is_active(0));
+        // ADR-0068 Phase 1: the devnet BASE carries no V1 PALW proof-of-work any more — the
+        // shipped form (`Params::from(Devnet)`) is the ConsensusV2 drill ruleset, whose gate
+        // refuses a V1 fence beside it. The base const keeps the deci-bps blockrate this test
+        // is about; the shipped form overrides the cadence to the frozen 120 s.
+        assert!(!DEVNET_PARAMS.pow_palw_activation.is_active(0));
+        assert!(matches!(
+            Params::from(NetworkId::new(NetworkType::Devnet)).palw_consensus_mode,
+            crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)
+        ));
         // And the integer-bps view floors at 1 (the raw division is 0 — the reason emission
         // consumes `target_time_per_block_history` and sizing consumers get the floored view).
         assert_eq!(DEVNET_PARAMS.bps(), 1);
@@ -7575,9 +7619,12 @@ mod consensus_params_id_tests {
                 "5ccdd6841c7510b9fa87b2c69aba8018a3d2eb5ec1709d09dbed3a4cb1f67e44",
             ),
             ("simnet", SIMNET_PARAMS, "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd"),
-            // Re-pinned for ADR-0068 Phase 1: the drill network arms the heartbeat and
-            // attempt-work fences (both ride `consensus_params_id`).
-            ("devnet", DEVNET_PARAMS, "a8de9209a8202aaadefcaadfb07af526d88414a52b95e452d08b6b8c1d32f3ee"),
+            // Re-pinned twice for ADR-0068 Phase 1: first when the drill network armed the
+            // heartbeat and attempt-work fences (both ride `consensus_params_id`), then when
+            // `Params::from(Devnet)` became the BUNDLED `devnet_shipped_params()` — ConsensusV2
+            // over a zero-row registry (ADR-0061), the ruleset the live drill actually runs.
+            // The genesis is untouched (nothing is carved), so only the fingerprint moves.
+            ("devnet", DEVNET_PARAMS, "0fbc6564b5a3b6272f7eb34c91e0edc6fed7b638de03051029797e4a31f4731c"),
         ]
         .into_iter()
         .filter_map(|(name, params, expected)| {
