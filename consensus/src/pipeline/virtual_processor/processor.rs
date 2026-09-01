@@ -5624,6 +5624,9 @@ impl VirtualStateProcessor {
             pre_pow_hash,
             header.timestamp,
             header.nonce,
+            // The HEADER's own score (ADR-0072 Decision 8's retention pin): for a merged block this
+            // is the merged block's, which is the one its producer derived from.
+            header.daa_score,
             &envelope,
             |key, message, sig, context| verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false),
             bootstrap_bond.as_ref(),

@@ -106,6 +106,12 @@ pub enum PalwAdmissionV2Error {
     PwuExceedsClassRule { claimed: u64, ceiling: u64 },
     #[error("claimed pwu {claimed} is not the derived {derived} — pwu is chain state, not a miner input (ADR-0045 Decision 1)")]
     PwuClaimNotDerived { claimed: u64, derived: u64 },
+    #[error("the trace retention {claimed} is not the derived obligation {derived} (the block's DAA plus the lattice windows)")]
+    TraceRetentionNotDerived { claimed: u64, derived: u64 },
+    #[error("the trace chunk count {claimed} is not the canonical {canonical}")]
+    TraceChunkCountNotCanonical { claimed: u32, canonical: u32 },
+    #[error("the trace manifest root {claimed} is not the one the trace root derives ({derived})")]
+    TraceManifestNotDerived { claimed: Hash64, derived: Hash64 },
     #[error("class {0} has no epoch budget entry — a missing budget admits nothing, not everything")]
     EpochBudgetUnspecified(Hash64),
     #[error("epoch budget exceeded for class {class_id}: produced {produced} + claimed {claimed} > budget {budget}")]
@@ -507,9 +513,46 @@ pub fn check_palw_class_lottery_v3(
     Ok(())
 }
 
+/// **The data-availability pins** (ADR-0072 Decision 8): every field inside the priced bytes is an
+/// equality against chain state, a value the panel replays, or the challenge — and the three DA
+/// fields were none of those. A producer chose them, nothing read `trace_manifest_root`, nothing
+/// pinned `trace_chunk_count` beyond `!= 0`, and any `trace_retention_daa` at or above the honest
+/// minimum was harmless to it: 2^64 free draws on both lotteries from one inference, with honest
+/// roots so the panel convicts nothing. So each is pinned to what it always should have been:
+///
+/// * `trace_chunk_count == PALW_ATTEMPT_V2_TRACE_CHUNKS` — the one shape every family serves;
+/// * `trace_manifest_root == attempt_trace_manifest_root_v1(trace_root, count)` — a function of a
+///   value the panel replays;
+/// * `trace_retention_daa == daa_score + palw_min_trace_retention_daa_v1(params)` — the obligation
+///   the chain defines, at the block's OWN DAA score (a merged block's, not the accepting block's,
+///   which is why this takes the header's score rather than reading `ctx`).
+///
+/// Checked from the composed entry point, beside the lottery: the retention pin needs the header,
+/// and the envelope-only list is what the state machine re-runs without one.
+pub fn check_palw_attempt_da_pins_v1(
+    state_params: &PalwStateParamsV2,
+    attempt: &crate::palw_attempt_v2::PalwAttemptUnsignedV2,
+    daa_score: u64,
+) -> Result<(), PalwAdmissionV2Error> {
+    let canonical = crate::palw_attempt_v2::PALW_ATTEMPT_V2_TRACE_CHUNKS;
+    if attempt.trace_chunk_count != canonical {
+        return Err(PalwAdmissionV2Error::TraceChunkCountNotCanonical { claimed: attempt.trace_chunk_count, canonical });
+    }
+    let derived = crate::palw_attempt_v2::attempt_trace_manifest_root_v1(attempt.trace_root, attempt.trace_chunk_count);
+    if attempt.trace_manifest_root != derived {
+        return Err(PalwAdmissionV2Error::TraceManifestNotDerived { claimed: attempt.trace_manifest_root, derived });
+    }
+    let derived = daa_score.saturating_add(crate::palw_producer_v2::palw_min_trace_retention_daa_v1(state_params));
+    if attempt.trace_retention_daa != derived {
+        return Err(PalwAdmissionV2Error::TraceRetentionNotDerived { claimed: attempt.trace_retention_daa, derived });
+    }
+    Ok(())
+}
+
 /// The composed admission a wiring layer should call: stateless shape → stateless signature →
-/// the stateful list → the class lottery, in that order, one entry point — so no pipeline can wire
-/// four layers and forget one. (The PoW itself is the finalizer's, upstream of all of this.)
+/// the DA pins → the stateful list → the class lottery, in that order, one entry point — so no
+/// pipeline can wire five layers and forget one. (The PoW itself is the finalizer's, upstream of
+/// all of this.) `daa_score` is the HEADER's own — a merged block's, not the accepting block's.
 #[allow(clippy::too_many_arguments)]
 pub fn check_palw_attempt_admission_full_v2<V>(
     state: &PalwChainStateV2,
@@ -520,6 +563,7 @@ pub fn check_palw_attempt_admission_full_v2<V>(
     pre_pow_hash: Hash64,
     timestamp: u64,
     nonce: u64,
+    daa_score: u64,
     envelope: &PalwAttemptEnvelopeV2,
     verify_mldsa87: V,
 ) -> Result<Hash64, PalwAdmissionV2Error>
@@ -535,6 +579,7 @@ where
         pre_pow_hash,
         timestamp,
         nonce,
+        daa_score,
         envelope,
         verify_mldsa87,
         None,
@@ -556,6 +601,7 @@ pub fn check_palw_attempt_admission_full_v2_with_bootstrap<V>(
     pre_pow_hash: Hash64,
     timestamp: u64,
     nonce: u64,
+    daa_score: u64,
     envelope: &PalwAttemptEnvelopeV2,
     verify_mldsa87: V,
     bootstrap_bond: Option<&crate::palw_state_v2::PalwBondStateV2>,
@@ -565,6 +611,7 @@ where
 {
     envelope.validate_stateless_v2(network_domain, pre_pow_hash, timestamp, nonce)?;
     envelope.validate_signature_v2(verify_mldsa87)?;
+    check_palw_attempt_da_pins_v1(state_params, &envelope.attempt, daa_score)?;
     let attempt_id = check_palw_attempt_admission_v2_with_bootstrap(state, state_params, admission, ctx, envelope, bootstrap_bond)?;
     // The anchor is derived HERE, from the header, after the stateless list has agreed that the
     // carried domain IS this network's and the carried challenge IS this position's — so it names
@@ -619,6 +666,7 @@ mod tests {
         ctx: &PalwBlockContextV2,
         envelope: &PalwAttemptEnvelopeV2,
     ) -> Result<Hash64, PalwAdmissionV2Error> {
+        check_palw_attempt_da_pins_v1(state_params, &envelope.attempt, ctx.daa_score)?;
         let id = check_palw_attempt_admission_v2(state, state_params, admission, ctx, envelope)?;
         check_palw_class_lottery_v3(state, &envelope.attempt, anchor_of(envelope))?;
         Ok(id)
@@ -699,13 +747,21 @@ mod tests {
                 trace_root: h64(31),
                 output_root: h64(32),
                 pwu,
-                trace_manifest_root: h64(33),
-                trace_chunk_count: 4,
+                trace_manifest_root: crate::palw_attempt_v2::attempt_trace_manifest_root_v1(h64(31), 1),
+                trace_chunk_count: 1,
+                // The envelope-only list never reads this; the tests that reach the composed
+                // entry point's DA pins set it to the derived value for their block (`pinned_at`).
                 trace_retention_daa: 999_999,
                 execution_root: h64(41),
             },
             signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
         }
+    }
+
+    /// The retention the DA pin demands for a block at `daa` (ADR-0072 Decision 8).
+    fn pinned_at(mut env: PalwAttemptEnvelopeV2, daa: u64) -> PalwAttemptEnvelopeV2 {
+        env.attempt.trace_retention_daa = daa.saturating_add(crate::palw_producer_v2::palw_min_trace_retention_daa_v1(&state_params()));
+        env
     }
 
     /// The same attempt, for a class other than the liveness floor — what the epoch budget still
@@ -794,7 +850,9 @@ mod tests {
 
         // Face 1: the attacker's own key on the victim's bond. Even a signature that VERIFIES
         // under the carried key is refused: the carried key is not the bond's.
-        let foreign = attempt_for_bond(100, 1, bond_outpoint(1), vec![9; 4], h64(0x21));
+        // Pinned for this block, so the DA pins (which run before the stateful list) let the
+        // attack reach the item it is an attack on.
+        let foreign = pinned_at(attempt_for_bond(100, 1, bond_outpoint(1), vec![9; 4], h64(0x21)), 101);
         let always_valid = |_k: &[u8], _m: &[u8], _s: &[u8], _c: &[u8]| true;
         let err = check_palw_attempt_admission_full_v2(
             &state,
@@ -805,6 +863,7 @@ mod tests {
             h64(PPH),
             TS,
             1,
+            101,
             &foreign,
             always_valid,
         )
@@ -827,6 +886,7 @@ mod tests {
             h64(PPH),
             TS,
             1,
+            101,
             &honest,
             strict,
         )
@@ -935,7 +995,7 @@ mod tests {
         let ap = admission_params();
 
         // A target of MAX admits every ticket; one below the attempt's ticket admits none.
-        let env = attempt(10, 1);
+        let env = pinned_at(attempt(10, 1), 101);
         let ticket = crate::palw_attempt_v2::class_ticket_v3(&env.attempt, anchor_of(&env));
         assert!(ticket > 0, "a zero ticket would make the check vacuous");
 
@@ -978,9 +1038,9 @@ mod tests {
         // The ticket is a function of the EXECUTION (ADR-0072): a different nonce in the same
         // bucket is the SAME ticket — re-rolling it costs a new inference, not a re-hash — and a
         // different execution is a different ticket.
-        let other = attempt(10, 2);
+        let other = pinned_at(attempt(10, 2), 101);
         assert_eq!(crate::palw_attempt_v2::class_ticket_v3(&other.attempt, anchor_of(&other)), ticket, "a nonce is not a draw");
-        let mut rerun = attempt(10, 1);
+        let mut rerun = pinned_at(attempt(10, 1), 101);
         rerun.attempt.execution_root = h64(42);
         assert_ne!(crate::palw_attempt_v2::class_ticket_v3(&rerun.attempt, anchor_of(&rerun)), ticket, "an inference is");
         // …and it is not the L1 tag under another name.
@@ -988,6 +1048,65 @@ mod tests {
         let mut tag_le = [0u8; 16];
         tag_le.copy_from_slice(&tag[..16]);
         assert_ne!(u128::from_le_bytes(tag_le), ticket, "the class lottery is domain-separated from the PoW tag");
+    }
+
+    /// **A field the producer may choose and no rule pins is a nonce by another name** — the
+    /// ADR-0072 review's finding, kept as the test that would have caught it. Before Decision 8,
+    /// sweeping `trace_retention_daa` over one execution gave a distinct ticket and a distinct
+    /// Layer-0 tag per value and admitted about one in 2^9 of them at a 2^-9 target: free draws
+    /// on both lotteries, with honest roots, so the panel had nothing to convict. Now every DA
+    /// field is pinned by equality at the composed entry point, and at most the ONE derived value
+    /// of each survives to the lottery at all.
+    #[test]
+    fn a_free_field_inside_the_priced_bytes_is_a_nonce_by_another_name() {
+        let target = u128::MAX >> 9;
+        let state = state_with_derived_class(target);
+        let admission = admission_params_with_derived_class();
+        let c = ctx(4, 1_002, 4);
+        let pwu = crate::palw_pwu::palw_pwu_v1(target, 7);
+        let base = derived_class_attempt(pwu, 1);
+
+        // Retention: only the derived value reaches the lottery.
+        let mut reached = Vec::new();
+        let pinned = base.attempt.trace_retention_daa;
+        for retention in (0u64..4096).filter(|r| *r != pinned).chain([pinned, u64::MAX]) {
+            let mut env = base.clone();
+            env.attempt.trace_retention_daa = retention;
+            match check_with_lottery(&state, &state_params(), &admission, &c, &env) {
+                Err(PalwAdmissionV2Error::TraceRetentionNotDerived { claimed, .. }) => assert_eq!(claimed, retention),
+                Ok(_) | Err(PalwAdmissionV2Error::ClassTicketAboveTarget { .. }) => reached.push(retention),
+                Err(other) => panic!("a retention sweep must fail at the pin or reach the lottery, got {other:?}"),
+            }
+        }
+        assert_eq!(reached, vec![pinned], "exactly one retention value is admissible");
+
+        // Chunk count: only the canonical one.
+        for count in [0u32, 2, 3, 8, 1 << 20, u32::MAX] {
+            let mut env = base.clone();
+            env.attempt.trace_chunk_count = count;
+            let err = check_with_lottery(&state, &state_params(), &admission, &c, &env).expect_err("a re-chunking is refused");
+            assert!(
+                matches!(err, PalwAdmissionV2Error::TraceChunkCountNotCanonical { claimed, .. } if claimed == count),
+                "got {err:?}"
+            );
+        }
+
+        // Manifest root: only the one the trace root derives.
+        for word in 0u64..64 {
+            let mut env = base.clone();
+            env.attempt.trace_manifest_root = h64(0x3300 + word);
+            let err = check_with_lottery(&state, &state_params(), &admission, &c, &env).expect_err("a free manifest is refused");
+            assert!(matches!(err, PalwAdmissionV2Error::TraceManifestNotDerived { .. }), "got {err:?}");
+        }
+        // …and the derived one, with a different trace root, is a different execution — which the
+        // panel replays. That is the only way the manifest moves.
+        let mut rerun = base.clone();
+        rerun.attempt.trace_root = h64(0x7B);
+        rerun.attempt.trace_manifest_root = crate::palw_attempt_v2::attempt_trace_manifest_root_v1(h64(0x7B), 1);
+        match check_with_lottery(&state, &state_params(), &admission, &c, &rerun) {
+            Ok(_) | Err(PalwAdmissionV2Error::ClassTicketAboveTarget { .. }) => {}
+            Err(other) => panic!("a re-derived manifest reaches the lottery, got {other:?}"),
+        }
     }
 
     #[test]
@@ -1049,7 +1168,9 @@ mod tests {
         let mut env = attempt(pwu, nonce);
         env.attempt.class_id = h64(2);
         env.attempt.artifact_root = h64(22);
-        env
+        // Every test of the derived class sits at `ctx(4, 1_002, 4)`, and the composed entry
+        // point's DA pin wants the retention derived for THAT block.
+        pinned_at(env, 1_002)
     }
 
     /// The derived class's target is real (unlike the fixture class's pass-everything MAX), so an
@@ -1484,6 +1605,7 @@ mod tests {
             h64(PPH),
             TS,
             1,
+            101,
             &env,
             |_k, _m, _s, _c| true,
         )

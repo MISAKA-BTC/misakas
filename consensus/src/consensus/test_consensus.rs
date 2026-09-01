@@ -291,7 +291,7 @@ impl TestConsensus {
         let network_id = self.params.net.to_string();
         let network_domain = palw_network_domain_v2_for(network_id.as_bytes(), Some(self.params.genesis.hash));
         let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(header);
-        let (class_id, class_target, pwu_per_inference) = match &self.params.palw_consensus_mode {
+        let (class_id, class_target, pwu_per_inference, min_retention) = match &self.params.palw_consensus_mode {
             kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => {
                 // The class's registered seed target and per-inference cost, read from the genesis
                 // registration the bundle carries — the same two facts admission will re-derive
@@ -315,7 +315,12 @@ impl TestConsensus {
                         };
                     }
                 }
-                (bundle.base_class_id, target, per_inference)
+                (
+                    bundle.base_class_id,
+                    target,
+                    per_inference,
+                    kaspa_consensus_core::palw_producer_v2::palw_min_trace_retention_daa_v1(&bundle.state),
+                )
             }
             _ => unreachable!("only called on a ConsensusV2 network"),
         };
@@ -341,9 +346,15 @@ impl TestConsensus {
             // are chain state, so a miner picking a number is a miner refused — which is the whole
             // point of the derivation, and what this harness measured the moment it was wired.
             pwu: kaspa_consensus_core::palw_pwu::palw_pwu_v1(class_target, pwu_per_inference),
-            trace_manifest_root: kaspa_hashes::Hash64::from_u64_word(0xD0),
-            trace_chunk_count: 8,
-            trace_retention_daa: u64::MAX,
+            // The three DA fields are PINNED (ADR-0072 Decision 8): the shipped one-chunk shape,
+            // the manifest the trace root derives (re-derived after the hunt below moves the
+            // root), and the retention the chain defines for this header's own DAA score.
+            trace_manifest_root: kaspa_consensus_core::palw_attempt_v2::attempt_trace_manifest_root_v1(
+                kaspa_hashes::Hash64::from_u64_word(0x7A),
+                kaspa_consensus_core::palw_attempt_v2::PALW_ATTEMPT_V2_TRACE_CHUNKS,
+            ),
+            trace_chunk_count: kaspa_consensus_core::palw_attempt_v2::PALW_ATTEMPT_V2_TRACE_CHUNKS,
+            trace_retention_daa: header.daa_score.saturating_add(min_retention),
         };
         // The anchor a VERIFIER derives for this header — the ticket is drawn under it (ADR-0072).
         let anchor =
@@ -389,6 +400,11 @@ impl TestConsensus {
         // equality).
         for execution in 0u64..1_000_000 {
             attempt.trace_root = kaspa_hashes::Hash64::from_u64_word(0x7A00_0000_0000_0000u64.wrapping_add(execution));
+            // The manifest is a function of the trace root (Decision 8), so it moves with it.
+            attempt.trace_manifest_root = kaspa_consensus_core::palw_attempt_v2::attempt_trace_manifest_root_v1(
+                attempt.trace_root,
+                attempt.trace_chunk_count,
+            );
             if kaspa_consensus_core::palw_attempt_v2::class_ticket_v3(&attempt, anchor) <= class_target {
                 return attempt;
             }

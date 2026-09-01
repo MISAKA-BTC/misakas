@@ -656,9 +656,9 @@ impl PalwProducerService {
             trace_chunk_count: run.trace_chunk_count,
             // The retention window a producer promises to keep the trace for. The material is in
             // hand (`run.material`, encoded by the backend), which is what makes the promise one
-            // it can keep.
-            // Derived from the network's own lattice windows, not chosen: see the field's docs.
-            trace_retention_daa: facts.daa_score.saturating_add(facts.min_trace_retention_daa),
+            // it can keep. Derived, not chosen, and PINNED by admission (ADR-0072 Decision 8):
+            // this header's own DAA score plus the network's lattice windows.
+            trace_retention_daa: template.block.header.daa_score.saturating_add(facts.min_trace_retention_daa),
         };
         // A dummy of the right length so the shape gate sees the real wire size at the draw. The
         // signature is outside the priced bytes, so it changes neither lottery — it is made once,

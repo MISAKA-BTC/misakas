@@ -170,6 +170,7 @@ pub const PALW_ATTEMPT_V2_ALL_DOMAINS: &[&[u8]] = &[
     PALW_ATTEMPT_V2_DOMAIN_CLASS_TICKET,
     PALW_ATTEMPT_V2_DOMAIN_EXECUTION_COMMITMENT_V3,
     PALW_ATTEMPT_V2_DOMAIN_CLASS_TICKET_V3,
+    PALW_ATTEMPT_V2_DOMAIN_TRACE_MANIFEST,
     PALW_ATTEMPT_V2_DOMAIN_NETWORK,
     PALW_ATTEMPT_V2_MLDSA87_CONTEXT,
 ];
@@ -251,17 +252,27 @@ pub struct PalwAttemptUnsignedV2 {
     pub trace_root: Hash64,
     pub output_root: Hash64,
     pub pwu: u64,
-    /// Root of the trace MANIFEST (chunk index -> chunk digest list) the producer must serve
-    /// (ADR-0042 Decision 7: the commitment binds the data-availability obligation). `trace_root`
-    /// stays the step-level merkle root the court opens against (Decision 8); the manifest is how
-    /// a panel fetches chunks to verify at all.
+    /// Root of the trace MANIFEST the producer must serve (ADR-0042 Decision 7: the commitment
+    /// binds the data-availability obligation). `trace_root` stays the step-level merkle root the
+    /// court opens against (Decision 8).
+    ///
+    /// **Pinned** (ADR-0072 Decision 8): MUST equal [`attempt_trace_manifest_root_v1`] over this
+    /// attempt's `trace_root` and `trace_chunk_count`, checked at the composed admission entry
+    /// point. Every shipped family derived it from the trace root and one chunk already, under a
+    /// family domain nobody verified; a producer-chosen value inside the priced bytes is a nonce
+    /// by another name, which is what the review of ADR-0072 found.
     pub trace_manifest_root: Hash64,
     /// Number of trace chunks behind `trace_manifest_root`. Zero chunks is an unverifiable
-    /// attempt and is refused statelessly.
+    /// attempt and is refused statelessly; **pinned** to [`PALW_ATTEMPT_V2_TRACE_CHUNKS`] at the
+    /// composed entry point (ADR-0072 Decision 8) — the one shape every shipped family serves.
     pub trace_chunk_count: u32,
     /// DAA score until which the producer is obliged to serve openings/chunks. Failing a request
     /// inside this window defaults the producer: claim void, bond slash (Decision 7) — silence
     /// can never pin a block at `Provisional` forever.
+    ///
+    /// **Pinned** (ADR-0072 Decision 8): MUST equal the block's own DAA score plus the network's
+    /// `palw_min_trace_retention_daa_v1` — derived, never chosen. A longer promise was harmless to
+    /// the producer and free to change, so it was 2^64 draws on both lotteries.
     pub trace_retention_daa: u64,
     /// The executor's `committed_execution_root` (ADR-0030's `PalwStepBindingV2`) — the single
     /// value that fixes the SHAPE of the execution being claimed: the job context, both profiles,
@@ -367,6 +378,30 @@ pub fn class_ticket_v2(attempt: &PalwAttemptUnsignedV2) -> u128 {
 }
 
 pub const PALW_ATTEMPT_V2_DOMAIN_EXECUTION_COMMITMENT_V3: &[u8] = b"misaka-palw/attempt-v2/execution-commitment/v3";
+pub const PALW_ATTEMPT_V2_DOMAIN_TRACE_MANIFEST: &[u8] = b"misaka-palw/attempt-v2/trace-manifest/v1";
+
+/// **The shipped DA shape: one chunk** (ADR-0072 Decision 8). Every shipped family serves its
+/// trace as one object, and the panel's obligation accounting counts chunks; a count a producer
+/// could choose was a free field inside the priced bytes. This is the shipped families' constant,
+/// not a law of the lane: the day a family chunks a large trace, the count becomes a family-level
+/// derivation (from the class's profile and job) and this pin is replaced by that derivation under
+/// a new attempt version — what may never return is a count the producer picks.
+pub const PALW_ATTEMPT_V2_TRACE_CHUNKS: u32 = 1;
+
+/// **The manifest root an attempt MUST carry** (ADR-0072 Decision 8):
+/// `H(domain ‖ trace_root ‖ chunk_count)`.
+///
+/// One derivation in consensus, used by every family, so the composed admission entry point can
+/// pin the field by equality without the family's crate. It carries no information beyond the
+/// trace root — the shipped families' own derivations (`H(family domain ‖ job context ‖
+/// trace_root ‖ 1)`) carried none either, and no verifier ever read them; what the field must be
+/// is FIXED by things the panel replays, so that it cannot be a draw.
+pub fn attempt_trace_manifest_root_v1(trace_root: Hash64, chunk_count: u32) -> Hash64 {
+    let mut state = keyed(PALW_ATTEMPT_V2_DOMAIN_TRACE_MANIFEST);
+    state.update(trace_root.as_byte_slice());
+    state.update(&chunk_count.to_le_bytes());
+    finish(state)
+}
 pub const PALW_ATTEMPT_V2_DOMAIN_CLASS_TICKET_V3: &[u8] = b"misaka-palw/attempt-v2/class-ticket/v3";
 
 /// **The anchor a verifier derives for an algo-6 header** — `palw_job_anchor_v1` at the bucket the
@@ -626,8 +661,8 @@ mod tests {
             trace_root: Hash64::from_u64_word(0x7A),
             output_root: Hash64::from_u64_word(0x00),
             pwu: 4_242,
-            trace_manifest_root: Hash64::from_u64_word(0xD0),
-            trace_chunk_count: 8,
+            trace_manifest_root: attempt_trace_manifest_root_v1(Hash64::from_u64_word(0x7A), PALW_ATTEMPT_V2_TRACE_CHUNKS),
+            trace_chunk_count: PALW_ATTEMPT_V2_TRACE_CHUNKS,
             trace_retention_daa: 999_999,
             execution_root: Hash64::from_u64_word(0x41),
         }
@@ -755,6 +790,72 @@ mod tests {
         let mut tag_le = [0u8; 16];
         tag_le.copy_from_slice(&baseline[..16]);
         assert_ne!(u128::from_le_bytes(tag_le), ticket, "the class lottery is domain-separated from the PoW tag");
+    }
+
+    /// **Every field inside the priced bytes is pinned, or it is the challenge** (ADR-0072
+    /// Decision 8). "Priced" is not "pinned": a field the producer may choose freely and no rule
+    /// pins is a nonce by another name, and `every_priced_field_moves_the_pow_tag` asserting that
+    /// such a field moves the tag is the finding stated as a passing test. So every field is
+    /// classified here, exhaustively — a field added tomorrow does not compile until it is placed
+    /// — and the derived ones are shown to derive.
+    #[test]
+    fn every_priced_field_is_pinned_or_is_the_challenge() {
+        #[derive(Debug, PartialEq, Eq)]
+        enum Pin {
+            /// An equality against chain state at admission (bond record, class record, params).
+            ChainEquality,
+            /// A value the panel replays and the court convicts: a wrong one is a false claim.
+            ExecutionReplay,
+            /// A pure function of pinned values, checked by equality at the composed entry point.
+            Derived,
+            /// The header position: outside the priced bytes, bound by the challenge equation.
+            Position,
+        }
+        let a = attempt();
+        let PalwAttemptUnsignedV2 {
+            version: _,
+            network_domain: _,
+            challenge: _,
+            class_id: _,
+            executor_bond: _,
+            executor_pubkey: _,
+            operator_id: _,
+            artifact_root: _,
+            trace_root: _,
+            output_root: _,
+            pwu: _,
+            trace_manifest_root: _,
+            trace_chunk_count: _,
+            trace_retention_daa: _,
+            execution_root: _,
+        } = a.clone();
+        let classified = [
+            ("version", Pin::ChainEquality),           // == PALW_ATTEMPT_V2_VERSION (shape)
+            ("network_domain", Pin::ChainEquality),    // == the network's (stateless)
+            ("challenge", Pin::Position),              // the header position, blanked in the priced bytes
+            ("class_id", Pin::ChainEquality),          // a registered class; in the anchor
+            ("executor_bond", Pin::ChainEquality),     // a registered bond; in the anchor
+            ("executor_pubkey", Pin::ChainEquality),   // == the bond's key (item 2)
+            ("operator_id", Pin::ChainEquality),       // == the registration's (item 3)
+            ("artifact_root", Pin::ChainEquality),     // == the class's (item 5)
+            ("trace_root", Pin::ExecutionReplay),      // the panel replays it
+            ("output_root", Pin::ExecutionReplay),     // the panel replays it
+            ("pwu", Pin::ChainEquality),               // DerivedV1 equality (item 6)
+            ("trace_manifest_root", Pin::Derived),     // attempt_trace_manifest_root_v1 (D8)
+            ("trace_chunk_count", Pin::Derived),       // == the shipped families' constant (D8); a family derivation if a family ever chunks
+            ("trace_retention_daa", Pin::Derived),     // block DAA + min retention (D8)
+            ("execution_root", Pin::ExecutionReplay),  // the court's binding
+        ];
+        assert_eq!(classified.len(), 15, "one row per field of the struct destructured above");
+        assert_eq!(classified.iter().filter(|(_, p)| *p == Pin::Position).count(), 1, "exactly one position field");
+        assert!(classified.iter().all(|(name, _)| !name.is_empty()));
+        // The derived ones derive: the fixture carries what the pin demands, so the pin and the
+        // fixture cannot silently disagree.
+        assert_eq!(a.trace_chunk_count, PALW_ATTEMPT_V2_TRACE_CHUNKS);
+        assert_eq!(a.trace_manifest_root, attempt_trace_manifest_root_v1(a.trace_root, a.trace_chunk_count));
+        // …and the derivation is a function of the trace root and the count, and of nothing else.
+        assert_ne!(attempt_trace_manifest_root_v1(Hash64::from_u64_word(0x7B), 1), a.trace_manifest_root);
+        assert_ne!(attempt_trace_manifest_root_v1(a.trace_root, 2), a.trace_manifest_root);
     }
 
     /// The identity and the priced commitment are the same bytes but for the challenge, so they

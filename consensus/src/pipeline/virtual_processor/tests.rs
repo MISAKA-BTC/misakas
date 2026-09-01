@@ -2221,7 +2221,7 @@ async fn palw_rc_a_real_execution_produces_a_block_the_chain_accepts() {
             pwu: facts.pwu,
             trace_manifest_root: run.trace_manifest_root,
             trace_chunk_count: run.trace_chunk_count,
-            trace_retention_daa: facts.daa_score.saturating_add(facts.min_trace_retention_daa),
+            trace_retention_daa: block.header.daa_score.saturating_add(facts.min_trace_retention_daa),
         };
         if class_ticket_v3(&attempt, anchor) <= facts.class_target {
             won = Some((nonce, attempt));
@@ -2388,7 +2388,7 @@ async fn palw_rc_the_real_qwen25_a16_model_produces_a_block() {
             pwu: facts.pwu,
             trace_manifest_root: run.trace_manifest_root,
             trace_chunk_count: run.trace_chunk_count,
-            trace_retention_daa: facts.daa_score.saturating_add(facts.min_trace_retention_daa),
+            trace_retention_daa: block.header.daa_score.saturating_add(facts.min_trace_retention_daa),
         };
         if class_ticket_v3(&attempt, anchor) <= facts.class_target {
             won = Some((nonce, attempt));
@@ -2580,7 +2580,7 @@ async fn qwen36_block_e2e(artifact: misaka_palw_base0::qwen36::Qwen36ArtifactV1,
             pwu: facts.pwu,
             trace_manifest_root: run.trace_manifest_root,
             trace_chunk_count: run.trace_chunk_count,
-            trace_retention_daa: facts.daa_score.saturating_add(facts.min_trace_retention_daa),
+            trace_retention_daa: block.header.daa_score.saturating_add(facts.min_trace_retention_daa),
         };
         if class_ticket_v3(&attempt, anchor) <= facts.class_target {
             won = Some((nonce, attempt));
@@ -8952,7 +8952,7 @@ async fn palw_rc_qwen36_per_epoch_expected_observed_target() {
                 pwu: facts.pwu,
                 trace_manifest_root: run.3,
                 trace_chunk_count: run.4,
-                trace_retention_daa: facts.daa_score.saturating_add(facts.min_trace_retention_daa),
+                trace_retention_daa: block.header.daa_score.saturating_add(facts.min_trace_retention_daa),
             };
             // The draw walks the bucket (ADR-0072): the ticket is the execution's under the anchor the
             // header derives, so a nonce inside a bucket moves nothing and the next bucket is the next draw.
@@ -9180,7 +9180,7 @@ async fn palw_rc_qwen36_earns_share_through_real_blocks() {
             pwu: facts.pwu,
             trace_manifest_root: run.3,
             trace_chunk_count: run.4,
-            trace_retention_daa: facts.daa_score.saturating_add(facts.min_trace_retention_daa),
+            trace_retention_daa: block.header.daa_score.saturating_add(facts.min_trace_retention_daa),
         };
         // The draw walks the bucket (ADR-0072): the ticket is the execution's under the anchor the
         // header derives, so a nonce inside a bucket moves nothing and the next bucket is the next draw.
@@ -9394,7 +9394,7 @@ async fn palw_rc_qwen36_counts_merged_work() {
                 pwu: facts.pwu,
                 trace_manifest_root: qwen_roots.3,
                 trace_chunk_count: qwen_roots.4,
-                trace_retention_daa: facts.daa_score.saturating_add(facts.min_trace_retention_daa),
+                trace_retention_daa: block.header.daa_score.saturating_add(facts.min_trace_retention_daa),
             };
             // The draw walks the bucket (ADR-0072): the ticket is the execution's under the anchor the
             // header derives, so a nonce inside a bucket moves nothing and the next bucket is the next draw.
@@ -9440,7 +9440,7 @@ async fn palw_rc_qwen36_counts_merged_work() {
                 pwu: facts.pwu,
                 trace_manifest_root: base_roots.3,
                 trace_chunk_count: base_roots.4,
-                trace_retention_daa: facts.daa_score.saturating_add(facts.min_trace_retention_daa),
+                trace_retention_daa: block.header.daa_score.saturating_add(facts.min_trace_retention_daa),
             };
             // The draw walks the bucket (ADR-0072): the ticket is the execution's under the anchor the
             // header derives, so a nonce inside a bucket moves nothing and the next bucket is the next draw.

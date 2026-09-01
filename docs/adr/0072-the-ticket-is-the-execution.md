@@ -1,6 +1,7 @@
 # ADR-0072 — The ticket is the execution: both lotteries priced in inferences
 
-Status: **IMPLEMENTED (2026-09-02).** Builds on ADR-0042 (Decision 3a: the algo-6 tag is an
+Status: **IMPLEMENTED (2026-09-02); Decision 7's rollout is OPEN — see §3.** Reviewed the same day
+by a second session, whose finding became Decision 8 and the invariant in §4. Builds on ADR-0042 (Decision 3a: the algo-6 tag is an
 expansion, never an inference), ADR-0044 (Decision 4: the receipt lane's quantum ticket is a
 function of the certified execution), ADR-0045 (`DerivedV1`: pwu is derived from the class target),
 ADR-0058 (merged work is counted) and ADR-0071 (Decision 1 withdrawn — `bits` stays the absolute
@@ -85,13 +86,61 @@ what keeps a producer from re-running it — a template with the same pre-PoW ha
 next bucket (the timestamp is outside `pre_pow_hash_64`, so a refreshed template with the same
 parents continues rather than replaying), any other template starts at zero.
 
-**Decision 7 — Version and rollout.**
+**Decision 7 — Version, and how this goes live.**
 `PALW_ATTEMPT_V2_VERSION` 5 → 6. A node on the old rule draws a ticket per nonce and admits blocks
 this rule refuses at the class lottery, so the two cannot share a chain; the version check keeps
-them from trying. The shipped fingerprints move on every preset (the version is inside the ruleset
-id by design). testnet-11 upgrades together, as it has for every fingerprint move; no re-genesis.
+them from trying. The shipped fingerprints move on the two presets that carry a V2 bundle
+(testnet-11, devnet), because the attempt version is inside the bundle's ruleset id.
 
-## 3. What this costs, stated before it is measured
+The first draft of this decision said "testnet-11 upgrades together; no re-genesis" and left the
+rest to the DAA. The review showed that is not a rollout, for two reasons that are stated here
+rather than fixed here, because the fix is the operator's choice (§3):
+
+* **The version check is not fence-gated.** A node on this build refuses every version-5 envelope,
+  which is every attempt block the chain already holds — a fresh node cannot validate the history
+  it is asked to sync. Every earlier attempt-format change shipped with a re-genesis for exactly
+  this reason.
+* **`bits` cannot relax.** The swap divides the network's draw rate by ~2^22 while `bits` is
+  inherited from the old rate. The difficulty window has no lane filter, so it keeps moving only
+  through heartbeat blocks, and each heartbeat adds at most (heartbeat interval / target interval)
+  ≈ 3,000 of span per block of work; the relaxation is therefore bounded at ~3,000× however long
+  one waits, against the ~10^6× the swap needs. The attempt lane would be dead, not slow — the
+  algo-6 dead time after the swap is unbounded.
+
+**Decision 8 — Every field inside the priced bytes is pinned, or it is the challenge.**
+"Priced" is not "pinned." A field the producer chooses freely and no rule pins is a nonce by
+another name, and the review reproduced it: sweeping `trace_retention_daa` over ONE execution gave
+4,096 distinct tickets and 4,096 distinct Layer-0 tags and admitted nine of them at a 2^-9
+target, with honest roots, so the panel had nothing to convict — 2^64 free draws on both
+lotteries, and with Decision 5 in force each ground block also claimed the full
+`expected_draws × per_inference` as pwu. Nothing read `trace_manifest_root`; nothing pinned
+`trace_chunk_count` beyond `!= 0`. So the three DA fields are pinned at the composed entry point
+(`check_palw_attempt_da_pins_v1`): `trace_chunk_count == 1` (the one shape every shipped family
+serves), `trace_manifest_root == attempt_trace_manifest_root_v1(trace_root, count)` (one
+derivation in consensus, which every family now uses — theirs hashed a job context under a family
+domain that no verifier ever read), and `trace_retention_daa == the block's own DAA score +
+palw_min_trace_retention_daa_v1` (the obligation the chain defines, derived not chosen; a merged
+block's own score, not the accepting block's). The invariant is stated as a test that classifies
+every field of the struct exhaustively — chain equality, execution replay, derived, or the one
+position field — so a field added tomorrow does not compile until it is placed.
+
+## 3. What this costs, stated before it is measured — and the rollout choice
+
+**Rollout (Decision 7, open).** Two ways this rule can go live, and only two:
+
+* **(a) Relaunch 6.** A re-genesis resets `bits` to the genesis value (~20 draws) and leaves no
+  version-5 history to validate. Zero code. It is the re-genesis the standing doctrine
+  (2026-08-27: consensus changes ship by activation, never by re-genesis; mainnet cannot re-mint)
+  says to stop doing.
+* **(b) Activation.** A new algo id for the execution-priced lane, gated by a DAA fence, with the
+  algo-6 arm and its envelope-only lottery kept byte-identical for history; the difficulty window
+  filtered to the new lane, so it restarts from genesis `bits` at the fence the way the chain
+  restarts at genesis (fewer than the minimum window of new-lane blocks → genesis `bits`). The
+  doctrine's answer and ADR-0066's shape, at the cost of dual arms and dual admission paths, and
+  the fingerprint still moves at the swap (the fork-id handshake that would let it not move is a
+  later ADR). Roughly the size of this ADR again.
+
+The rule is the same under both; what differs is whether the chain's history survives the swap.
 
 Expected inferences per block per producer = `1 / (P_class × P_bits)`. At the RC genesis the class
 target is `2^-1` and the genesis `bits` is about `1/20`, so a producer expects ~40 inferences per
@@ -123,6 +172,12 @@ inferences is the only kind that can be handed to real work.
   bucket no longer flattens the curve — and the easiest target is still one execution.
 * The integration tests that produce blocks from real executions draw per bucket: a lost draw is a
   second real inference, never a nonce.
+* `every_priced_field_is_pinned_or_is_the_challenge`: every field of the attempt is classified —
+  chain equality, execution replay, derived, or the one position field — and the derived ones
+  derive.
+* `a_free_field_inside_the_priced_bytes_is_a_nonce_by_another_name`: sweeping each DA field over
+  one execution reaches the lottery for exactly the one derived value; every other value is
+  refused at the pin, by name.
 
 ## 5. Supersession
 
@@ -131,3 +186,4 @@ inferences is the only kind that can be handed to real work.
 | ADR-0042 Decision 3a — tag is `Expand(commitment_root_v2)` | tag is `Expand(execution_commitment_v3)`; 3a's guarantee ("a solved header attests exactly one attempt at exactly this position") is kept by the challenge equation plus the derived anchor |
 | ADR-0071 Decision 2 — `executions = tries >> k` | withdrawn: `executions = tries`; the bucket `k = 22` stands as the anchor's position field |
 | Admission item 6b in the envelope-only list | moved to `check_palw_class_lottery_v3`, called from the composed entry point |
+| The three DA fields, producer-chosen | pinned by equality at the composed entry point (`check_palw_attempt_da_pins_v1`); every family derives the manifest the consensus way |

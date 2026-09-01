@@ -82,10 +82,10 @@ pub struct PalwProducerFactsV2 {
     /// boundary the lookup missed, `unwrap_or(0)` made the budget zero, and the producer held
     /// forever.
     pub is_base_class: bool,
-    /// How long a producer must promise to keep its trace. Derived from the lattice windows this
-    /// network runs, because a promise shorter than the challenge-plus-court span is a promise to
-    /// discard the evidence before anyone can ask for it — and nothing at admission catches that,
-    /// so it is the producer's to get right and this is where it gets it.
+    /// How long a producer must promise to keep its trace: [`palw_min_trace_retention_daa_v1`].
+    /// The attempt's `trace_retention_daa` MUST be the block's own DAA score plus this — admission
+    /// pins it by equality (ADR-0072 Decision 8), so it is not the producer's to get right but the
+    /// chain's, and this is where a producer reads it.
     pub min_trace_retention_daa: u64,
     pub bond: Option<PalwProducerBondFactsV2>,
 
@@ -154,6 +154,19 @@ impl PalwProducerFactsV2 {
 /// `daa_score` is the candidate's, because the epoch index admission uses is the CANDIDATE's, not
 /// the tip's — a producer handed the tip's epoch at an epoch boundary would check its budget
 /// against the wrong epoch and mine into a refusal.
+/// **The retention a producer owes, and the only one admission accepts** (ADR-0072 Decision 8):
+/// the four lattice windows a claim can be asked inside — bind, receipt, challenge, court. A
+/// promise shorter than this discards the evidence before anyone can ask for it; a promise longer
+/// was harmless and free to change, which made `trace_retention_daa` a draw. One spelling, read
+/// by the facts a producer builds from and by the pin admission checks them against.
+pub fn palw_min_trace_retention_daa_v1(state_params: &PalwStateParamsV2) -> u64 {
+    state_params
+        .window_bind()
+        .saturating_add(state_params.window_receipt())
+        .saturating_add(state_params.window_challenge())
+        .saturating_add(state_params.window_court())
+}
+
 pub fn palw_producer_facts_v2(
     state: &PalwChainStateV2,
     state_params: &PalwStateParamsV2,
@@ -195,11 +208,7 @@ pub fn palw_producer_facts_v2(
     });
     Some(PalwProducerFactsV2 {
         is_base_class: class_id == state_params.base_class_id(),
-        min_trace_retention_daa: state_params
-            .window_bind()
-            .saturating_add(state_params.window_receipt())
-            .saturating_add(state_params.window_challenge())
-            .saturating_add(state_params.window_court()),
+        min_trace_retention_daa: palw_min_trace_retention_daa_v1(state_params),
         chain_point,
         daa_score,
         class_id,
@@ -312,8 +321,8 @@ mod tests {
                 output_root: h64(32),
                 execution_root: h64(41),
                 pwu: facts.pwu,
-                trace_manifest_root: h64(33),
-                trace_chunk_count: 4,
+                trace_manifest_root: crate::palw_attempt_v2::attempt_trace_manifest_root_v1(h64(31), 1),
+                trace_chunk_count: 1,
                 trace_retention_daa: 999_999,
             },
             signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
@@ -365,8 +374,8 @@ mod tests {
                     output_root: h64(32),
                     execution_root: h64(41),
                     pwu: facts.pwu,
-                    trace_manifest_root: h64(33),
-                    trace_chunk_count: 4,
+                    trace_manifest_root: crate::palw_attempt_v2::attempt_trace_manifest_root_v1(h64(31), 1),
+                    trace_chunk_count: 1,
                     trace_retention_daa: 999_999,
                 },
                 signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],

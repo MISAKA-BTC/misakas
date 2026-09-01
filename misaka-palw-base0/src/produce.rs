@@ -318,16 +318,10 @@ pub fn base0_execute_for_attempt_v1(
     );
     // One chunk: the whole trace is one object at this class's size, and a manifest that claimed
     // more chunks than the producer retained would be a retention promise it cannot keep.
-    let trace_manifest_root = {
-        let mut h = blake2b_simd::Params::new().hash_length(64).key(PALW_BASE0_DOMAIN_TRACE_MANIFEST).to_state();
-        h.update(ctx_hash.as_byte_slice());
-        h.update(trace_root.as_byte_slice());
-        h.update(binding.step_merkle_root.as_byte_slice());
-        h.update(&1u32.to_le_bytes());
-        let mut out = [0u8; 64];
-        out.copy_from_slice(h.finalize().as_bytes());
-        Hash64::from_bytes(out)
-    };
+    // **The consensus derivation, not this family's** (ADR-0072 Decision 8): admission pins the
+    // manifest root by equality to `attempt_trace_manifest_root_v1(trace_root, 1)`, so a family
+    // that hashed its own context in here would produce attempts the chain refuses.
+    let trace_manifest_root = kaspa_consensus_core::palw_attempt_v2::attempt_trace_manifest_root_v1(trace_root, 1);
 
     Ok(Base0ExecutionV1 {
         trace_root,

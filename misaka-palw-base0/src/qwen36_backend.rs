@@ -411,7 +411,9 @@ pub fn qwen36_execute_for_attempt_v1(
     let rendered =
         keyed(QWEN36_DOMAIN_EXECUTION, &[b"rendered", &generated.iter().flat_map(|t| t.to_le_bytes()).collect::<Vec<_>>()]);
     let output_root = output_commitment_v2(&context, &generated, &rendered);
-    let trace_manifest_root = keyed(QWEN36_DOMAIN_MANIFEST, &[context.as_byte_slice(), trace_root.as_byte_slice(), &1u64.to_le_bytes()]);
+    // The consensus derivation (ADR-0072 Decision 8): admission pins the manifest root to
+    // `attempt_trace_manifest_root_v1(trace_root, 1)`, whichever family produced it.
+    let trace_manifest_root = kaspa_consensus_core::palw_attempt_v2::attempt_trace_manifest_root_v1(trace_root, 1);
 
     Ok(crate::produce::Base0ExecutionV1 {
         trace_root,
@@ -484,7 +486,9 @@ pub fn qwen36_roots_v1(job: &PalwJobContextV2, shape_id: Hash64, run: &Qwen36Run
         QWEN36_DOMAIN_EXECUTION,
         &[context.as_byte_slice(), shape_id.as_byte_slice(), trace_root.as_byte_slice(), output_root.as_byte_slice()],
     );
-    let manifest = keyed(QWEN36_DOMAIN_MANIFEST, &[context.as_byte_slice(), trace_root.as_byte_slice(), &1u64.to_le_bytes()]);
+    // The consensus derivation (ADR-0072 Decision 8), the same one `execute` commits to — a seat
+    // that recomputed this family's old domain hash here would refuse every honest claim.
+    let manifest = kaspa_consensus_core::palw_attempt_v2::attempt_trace_manifest_root_v1(trace_root, 1);
     Some((trace_root, output_root, execution_root, manifest))
 }
 
