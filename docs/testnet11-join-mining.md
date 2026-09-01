@@ -311,7 +311,27 @@ kaspad --testnet --netsuffix=11 \
   ... (bond, key, pay-address and fee-outpoint flags exactly as in §4)
 ```
 
+> **The class id above is the LIVE chain's, and it changes at Relaunch 5.** `ec7bbcbf…` is the
+> Qwen3.6 class the current chain registers. The next re-genesis registers the corrected `graph-v3`
+> declaration instead (`5bd9ae3d…`; the dense tier moves from `f942e268…` to `71bbb755…`), because
+> the graphs those two ids name are ones this build's backend **refuses to serve** — the hybrid's v1
+> declaration names a GDN node outside the served kernel vocabulary, and the dense v1 declares a
+> one-byte state map against an `i32` cache. A producer started with an old id against a new chain
+> points at a class the chain does not have.
+>
+> **Do not copy an id out of any document — including this one.** Ask the binary you are about to
+> run, which is the only source that cannot go stale:
+>
+> ```bash
+> kaspad --testnet --netsuffix=11 --palw-dump-classes
+> ```
+
 Conversion recipes, per-class hardware requirements, and how a panel seat serves an LLM class are
 in [palw-public-testnet-classes-runbook.md](palw-public-testnet-classes-runbook.md). The floor
 remains the zero-download path and the liveness guarantee; the LLM classes are where the share
 economy (ADR-0054/0056) grows.
+
+**A panel seat does not need the model.** `--palw-panel` verifies material by recomputing roots from
+the material itself; measured on the operator fleet, a validating seat handed a 33 GiB artifact kept
+**0.00 GiB of it resident**. Give `--palw-class-artifact` to producers. A seat that carries it
+anyway is not faster and not safer — it is only larger to configure.

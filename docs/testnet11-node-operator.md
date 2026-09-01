@@ -3,9 +3,41 @@
 ADR-0035 §6.5 launch criterion: *"node-operator doc published with the shas and the audit-harness
 check"*. This is that document.
 
-testnet-11 is the public PALW network. Every post-genesis block's proof-of-work is **one
-deterministic LLM inference**, not a hash. There is no hash lane to fall back to — that is the
-point, and it is what makes the rest of this document necessary.
+testnet-11 is the public PALW network: a block is paid for by **one deterministic LLM inference**,
+not by hashing.
+
+> ## Read this first — you probably need neither the worker nor a GGUF
+>
+> **To run a full node (sync, validate, serve RPC) you need `kaspad` and nothing else.** No
+> `misaka-palw-worker`, no `Qwen3.5-2B-Q4_K_M.gguf`, no llama.cpp, no `PALW_WORKER`, no
+> `MISAKA_PALW_GGUF`. Any x86-64 or arm host, Apple Silicon included.
+>
+> ```bash
+> cargo build --release -p kaspad --bin kaspad     # this is the whole build
+> ```
+>
+> **Why**, so you can check it rather than trust it: testnet-11 runs `ConsensusV2` at **PoW algo 6**,
+> where a block carries a signed attempt envelope committing to an execution, and validating one
+> means checking commitments and signatures — not re-running a model. The dependency graph is the
+> proof: `misaka-palw-base0` (the execution runtime) is a **dev-dependency** of `kaspa-consensus`
+> (`consensus/Cargo.toml`), so a node's consensus cannot run a model even if it wanted to. That is
+> ADR-0042 Decision 4, made structural by ADR-0053.
+>
+> The worker's own build script says the same thing and refuses to build without being asked:
+> *"You almost certainly do not need this crate. No node needs it to produce or verify a block."*
+> `cargo build --release` skips it by default. **The build script is right; earlier revisions of
+> this document were wrong**, and §2, §4, §5, §6 and §9 below carry what they were written for.
+>
+> **Who does need a model:** an operator producing blocks for a model class
+> (`--palw-produce` with that class's artifact). That is the mining path, and it is
+> [testnet11-join-mining.md](testnet11-join-mining.md) — not this document's §2.
+
+**What the sections below are.** This file was written for the **algo-4 lane**, where every header
+was verified by re-running a pinned llama.cpp inference. The published network has not worked that
+way since it moved to ConsensusV2. The measurements are real and are kept as a record; the
+instructions built on them are marked where they no longer apply. If a section talks about
+`palw-worker`, a GGUF sha, `CPU_THREADS`, or a per-header inference cost, it is describing the old
+lane.
 
 > **Current identity — DEPLOYED 2026-08-31 ("Relaunch 4", the arm-ready + reachable-quantum
 > re-genesis). Wipe your datadir if you joined earlier; the startup genesis-mismatch guard
@@ -27,25 +59,35 @@ point, and it is what makes the rest of this document necessary.
 > are unchanged from Relaunch 3. Post-genesis class registrations from the previous chain (Coder
 > `745ae042…`, Huihui `e4fbba1f…`) do not carry over and must be re-registered on this chain.
 
-Read §2 before you build anything. A node outside the determinism class does not sync slowly or
-mine badly; it computes different tags, rejects every honest block, and has its own rejected. It
-looks like a network fault and is not one.
-
 ---
 
 ## 1. What you need
 
+**To run a full node:**
+
 | | |
 |---|---|
-| CPU | **x86-64**. See §2 — Apple Silicon and other arm hosts cannot join this class. |
-| cores | 4 free (the worker pins `CPU_THREADS = 4`). More cores do **not** help; see §6. |
-| RAM | ~1.4 GiB per resident model on top of the node. 8 GiB comfortable. |
-| disk | ~2 GiB for the model + chain data |
-| time | **The first sync is measured in hours to days.** §5 gives real numbers. |
+| CPU | any x86-64 or arm host, **Apple Silicon included**. A verifier runs no model, so no determinism class applies to it. |
+| cores | whatever the node itself wants. There is no pinned thread count on this path. |
+| RAM | the node's own working set. Measured on the operator fleet, a validating node settles near **8–11 GiB**, so give it a `MemoryMax` (see §6) rather than assuming it stays small. |
+| disk | chain data only — no model to store. |
+| time | **not measured on this lane yet.** §5's hours-to-days figures were dominated by a per-header inference a node no longer runs, so they are an upper bound rather than an estimate. If you time a first sync, please report it — §9. |
+
+**To PRODUCE blocks for a model class** you additionally need that class's artifact and the flags in
+[testnet11-join-mining.md](testnet11-join-mining.md). Producing for the model-free floor class needs
+no artifact at all.
 
 ---
 
-## 2. The determinism class — check yours before you join
+## 2. The determinism class — **the algo-4 lane only; not required today**
+
+> **Superseded.** Everything in this section describes the pinned llama.cpp worker that verified
+> algo-4 headers. The published network does not run that lane, and a full node neither builds nor
+> loads any of it. Kept because the pins are a real record and because a producer for a *converted*
+> class still reasons this way about its own artifact.
+>
+> In particular: **"Apple Silicon cannot join testnet-11" is no longer true of a node.** It was true
+> of a *worker*, because an arm build computed different tags. A verifier computes no tags.
 
 The tag a node computes must be bit-identical to every other node's, so the runtime is pinned, not
 merely recommended.
@@ -63,9 +105,9 @@ merely recommended.
 
 **The class is scoped to the instruction set, and that scoping is deliberate.** An arm build is a
 different class (`misaka-palw-lite-cpu/aarch64-dotprod/v1`) and measured out of class against
-x86-64 — 0 of 61 GEMM kernels agreed. Apple Silicon cannot join testnet-11 at launch. That is
-stated rather than hidden; an arm class would arrive as its own pin and ADR addendum, not as a
-silent widening.
+x86-64 — 0 of 61 GEMM kernels agreed. Apple Silicon could not run an algo-4 *worker*, which is what
+this sentence originally said and what the banner above corrects: it was never a statement about a
+node. An arm class would arrive as its own pin and ADR addendum, not as a silent widening.
 
 Two build flags are not optional, and neither is a preference:
 
@@ -123,14 +165,23 @@ pre-guard builds did. `--features evm` in older scripts is now a harmless no-op.
 ### Run
 
 ```bash
-PALW_WORKER=/opt/misaka/palw-worker \
-MISAKA_PALW_GGUF=/opt/misaka/Qwen3.5-2B-Q4_K_M.gguf \
-  ./kaspad --testnet --netsuffix=11 --appdir=/var/lib/misaka-t11 \
-           --listen=0.0.0.0:37711 --rpclisten=127.0.0.1:37710
+./kaspad --testnet --netsuffix=11 --appdir=/var/lib/misaka-t11 \
+         --listen=0.0.0.0:37711 --rpclisten=127.0.0.1:37710
 ```
 
-`PALW_WORKER` and `MISAKA_PALW_GGUF` are **required**. A node that starts without them refuses at
-the startup rail rather than syncing and then failing per-header — the message names both variables.
+**No environment variables.** `PALW_WORKER` and `MISAKA_PALW_GGUF` are **not** required, and this
+document said they were until 2026-09-01 — the error a community operator found and reported.
+
+The startup rail that demands them exists, and it is conditional: it fires only when the network's
+`pow_palw_activation` is in force. On testnet-11 that activation is `never`, so the rail is not
+reached and a node without either variable starts normally. You can check the same fact the code
+does:
+
+```bash
+# testnet-11: pow_palw_activation = false, consensus mode = ConsensusV2, algorithm_id = 6
+```
+
+If you set them anyway, nothing happens — no node process on this network reads them.
 
 Discovery (seeder names for testnet-11) is an operator item that is **not settled yet**; until it
 is, join with `--addpeer=<host>:37711` against a published peer. `n11-seed*.misakascan.com` do not
@@ -150,10 +201,19 @@ resolve today — do not configure them.
 
 ---
 
-## 4. Verification cost, and the two knobs that change it
+## 4. Verification cost — **the algo-4 lane's numbers; not today's**
 
-By default a node spawns one worker process per header: SHA-256 of the whole 1.28 GiB model, then a
-model load, then the inference. Measured on an 8-vCPU EPYC (the reference fleet host):
+> **Superseded.** A node on the published network spawns no worker and loads no model, so none of
+> the knobs below apply and none of the costs below are paid. Validating a ConsensusV2 header is
+> signature and commitment checking. Kept as the record of what the old lane cost, which is also
+> why the network left it.
+>
+> `MISAKA_PALW_AGENT`, `MISAKA_PALW_CONCURRENCY` and `MISAKA_PALW_LEASE_DIR` are read by the
+> **worker**, not by the node. Setting them on a full node does nothing.
+
+By default an algo-4 node spawned one worker process per header: SHA-256 of the whole 1.28 GiB
+model, then a model load, then the inference. Measured on an 8-vCPU EPYC (the reference fleet
+host):
 
 | | per header |
 |---|---|
@@ -187,7 +247,13 @@ rate**.
 
 ---
 
-## 5. How long the first sync takes
+## 5. How long the first sync takes — **measured on the algo-4 lane**
+
+> **Superseded.** The hours-to-days figures below are dominated by a ~19 s per-header inference that
+> a node no longer performs. Today the per-header cost is ordinary signature and commitment
+> checking, so a first sync is hours at most and the "headroom" margin below is not a constraint a
+> full node can fail. The section is kept because the *shape* of the argument still applies to a
+> PRODUCER, whose block rate is bounded by its own inference time.
 
 Measured, on the reference host, joining from genesis over the public path:
 
@@ -220,14 +286,33 @@ not reassurance. `CO-LOCATED` firing means co-location; its silence does not pro
 
 ---
 
-## 6. Things that will not help
+## 6. Running more than one node on a host
 
-* **More cores.** `CPU_THREADS = 4` is pinned by the determinism class. A host cannot trade worker
-  count against threads per worker; see §4 for what concurrency actually costs.
-* **A GPU.** The x86-64 CPU class is what testnet-11 pins. A Metal or CUDA build is a different
-  class and computes different tags.
-* **A different quantisation, a re-converted GGUF, or a newer llama.cpp.** All three change the
-  class. The size check catches a truncated download; the sha256 catches everything else.
+**Give every node a memory limit.** Measured on the operator fleet 2026-09-01: a host running three
+validating nodes with `MemoryMax = infinity` had them grow to 20.1 GiB of a 23 GiB box, and the
+kernel OOM-killed one of them 29 times in a day. The consumption is the node's own heap — its
+consensus caches — and **not** any model: the same measurement found 0.00 GiB resident in the
+mapped artifacts, which are `mmap`ped and never touched by a validating node.
+
+A drop-in like the reference fleet's:
+
+```ini
+# /etc/systemd/system/<your-unit>.d/memory.conf
+[Service]
+MemoryHigh=13G
+MemoryMax=17G
+```
+
+Sizes are the host's to choose; what matters is that a limit exists, so the kernel throttles one
+node instead of killing whichever it likes.
+
+### Things that will not help
+
+* **More cores, a GPU, a different quantisation.** These were the algo-4 lane's levers, when a node
+  ran an inference per header. A node runs none, so none of them change its cost.
+* **`--palw-class-artifact` on a validating seat.** Measured: resident 0.00 GiB. A panel seat
+  verifies material by recomputing roots from the material itself, not by running the model. Give
+  the artifact to producers.
 
 ---
 
@@ -268,9 +353,15 @@ quarantine — the node logs exactly that at WARN each time it fires.
 
 Include, always:
 
-* `palw-worker --mode manifest` output (this identifies your class),
-* `bash scripts/misaka-palw-headroom.sh <appdir>`,
+* the node's **consensus params fingerprint** and **genesis hash**, copied from its own startup
+  log rather than from any document — every fingerprint written down anywhere goes stale, and the
+  one in your logs is the one your node will be judged by,
 * the node's participation state line,
-* whether any other PALW process runs on the same host.
+* `kaspad --version`,
+* whether any other node runs on the same host, and whether it has a `MemoryMax` (§6).
 
-The first two answer most questions before anyone has to guess.
+If you are producing rather than only validating, add the class id your producer was started with
+and the `PALW court certified end-to-end for: …` line from startup.
+
+`palw-worker --mode manifest` was the first item here and is no longer meaningful: a full node has
+no worker to ask.
