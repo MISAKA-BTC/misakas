@@ -3466,7 +3466,24 @@ fn genesis_pwu_of(object: &crate::palw_state_v2::PalwConsensusObjectV2) -> u64 {
 ///
 /// Changing it changes `palw_ruleset_id_v2` — the genesis object list is inside the bundle — so it
 /// is a mint-time decision. Nothing raises a share by fiat afterwards; production does.
-pub const PALW_RC_GENESIS_QWEN36_SHARE_PERMILLE: u16 = 489;
+///
+/// # Zero since the ADR-0068 launch audit (ADR-0069 invariant 5)
+///
+/// **The paragraphs above are the funding argument, and they are still correct — about a class this
+/// chain could prosecute.** This one it cannot. `Qwen36Backend` takes the trait defaults for
+/// `bisect_prefix_state` and `refutation_for_index`, so a dispute over one of its claims cannot
+/// leave round 0 whichever party is honest; its own module header says so and draws ADR-0039's
+/// conclusion — a class on that backend "is admissible for liveness and must not carry weight".
+/// The audit's finding was that the genesis table said otherwise, handing 489‰ + 489‰ = 97.8% of
+/// cadence to the two families nothing can convict, which made "the block was paid for by actual
+/// inference" an unenforced sentence.
+///
+/// So the tier registers at genesis and produces at genesis, and it earns nothing: weightless is a
+/// state the share table can now express, and this is what expresses it. **It is not a retreat from
+/// the LLM-primary economy — it is the order that economy has to be built in.** Weight returns by
+/// ACTIVATION once the family certifies end-to-end (ADR-0069 Decision 6), which is the same
+/// mechanism ADR-0054 already uses and the same doctrine that forbids re-genesis for a rule change.
+pub const PALW_RC_GENESIS_QWEN36_SHARE_PERMILLE: u16 = 0;
 
 /// **The dense tier's, at genesis.** Equal to the hybrid's on purpose: the two differ enormously in
 /// what they cost to run, and nothing about that difference is knowable at mint time. ADR-0054 is
@@ -3476,7 +3493,18 @@ pub const PALW_RC_GENESIS_QWEN36_SHARE_PERMILLE: u16 = 489;
 /// the floor retires to its 20‰ reserve and the model tiers hold the table — the LLM-primary
 /// economy the ADR is for. Blocks and issuance follow this table (ADR-0045: budgets are blocks,
 /// the subsidy carve is class-blind), so this line IS the "LLM ≈ 98% of issuance" decision.
-pub const PALW_RC_GENESIS_QWEN25_A16_SHARE_PERMILLE: u16 = 489;
+///
+/// # Zero since the ADR-0068 launch audit (ADR-0069 invariant 5)
+///
+/// The dense tier is here for the same reason the hybrid is, and it is closer to the exit: the A16
+/// capture bridge exists (`a16_captured_rows_v1`), which is the first of the three pieces
+/// `legs.rs` counts. The other two — the checkpoint leg and the two rung methods — do not, so
+/// `supports_court()` is `false` here too, and a family that cannot answer at a rung loses every
+/// dispute whichever party is honest. Weight follows the certificate, not the intent.
+///
+/// The line above still states the decision it always stated. What it no longer does is state it
+/// about a family that could not be held to it.
+pub const PALW_RC_GENESIS_QWEN25_A16_SHARE_PERMILLE: u16 = 0;
 
 /// The same assembly, with the A16 dense class when its root is pinned. `None` is the two-class
 /// network exactly as before — an unpinned class is absent, never a placeholder.
@@ -6053,6 +6081,26 @@ fn palw_rc_arm_phase1(mut params: Params) -> Params {
     });
     params.palw_attempt_work =
         Some(PalwAttemptWorkV1 { activation: ForkActivation::always(), work_log2: crate::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2 });
+    // **ADR-0065 Decision 4, armed — the launch audit's other unattended fence.**
+    //
+    // Dormant, an `Unavailable` quorum needs no proof of anything: a seat that did not RECEIVE a
+    // producer's material signs the same verdict as a seat the producer withheld from, and three
+    // of them void the claim, slash the producer's bond and slash the honest seats that signed
+    // `Valid`. Nothing in that sentence requires an attacker. This tree's own measurement, recorded
+    // beside the panel parameters, is that roughly a third of remote seats' verdicts on testnet-11
+    // were transport rather than withholding, which puts a quorum of three within ordinary reach —
+    // the audit's arithmetic was about one claim in twelve.
+    //
+    // Armed, the `ProducerUnavailable` quorum becomes unreachable and such a claim falls to a
+    // redraw and then a receipt timeout, which voids WITHOUT slashing. That is the correct verdict
+    // for "the network did not deliver": it is not a finding about anybody's conduct, and a rule
+    // that destroys an honest participant's collateral for the network's own packet loss is worse
+    // than no rule.
+    //
+    // Armed here rather than scheduled because Relaunch 5 is a new genesis — there is no running
+    // chain whose identity a fence would have to preserve, so the honest form is the one that is
+    // true from block one.
+    params.palw_unavailable_abstains = Some(ForkActivation::always());
     if let Err(e) = params.validate_palw_v2() {
         panic!("the armed PALW-RC ruleset does not validate: {e}");
     }
@@ -7131,6 +7179,34 @@ mod consensus_params_id_tests {
     /// and every old/new pair would fail the handshake outright instead of peering with a warning,
     /// which for a fix that must be deployed while the chain runs is the difference between a
     /// remedy and a second outage.
+    /// **The RC ruleset arms D4, and the preset it is built from does not** (ADR-0068 launch audit).
+    ///
+    /// Two facts, and the pair is the point. Dormant, an `Unavailable` quorum needs no proof: three
+    /// seats that did not RECEIVE material sign what three withheld-from seats would sign, and the
+    /// claim voids with the producer's bond and the honest `Valid` signers' collateral. The measured
+    /// transport rate on testnet-11 put that within ordinary reach with no attacker present.
+    ///
+    /// Asserted as a DIFFERENCE rather than as one `is_some()`: the fence lives outside the V2
+    /// bundle precisely so an un-armed build and an armed one stay peers, and a test that only
+    /// checked the armed side would pass just as happily if arming had been moved into the bundle
+    /// and taken the handshake with it.
+    #[test]
+    fn the_rc_ruleset_arms_the_unavailable_abstains_rule_from_genesis() {
+        let rc = palw_rc_shipped_params();
+        assert_eq!(
+            rc.palw_unavailable_abstains,
+            Some(ForkActivation::always()),
+            "a new genesis has no running chain to keep peers with, so the honest form is armed at block one"
+        );
+        assert!(
+            rc.palw_unavailable_abstains.is_some_and(|f| f.is_active(0)),
+            "and it must be in force AT genesis — a fence that arms later leaves the first epochs slashing honest seats"
+        );
+        // The preset it is assembled from stays dormant: arming is the assembly's decision, which
+        // is what keeps `for_each_fence` able to reach it on a running network.
+        assert!(MAINNET_PARAMS.palw_unavailable_abstains.is_none(), "the raw preset is untouched");
+    }
+
     #[test]
     fn the_unavailable_abstains_fence_separates_networks_only_when_it_is_in_force() {
         let shipped = MAINNET_PARAMS;
