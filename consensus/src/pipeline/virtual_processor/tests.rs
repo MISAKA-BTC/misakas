@@ -678,8 +678,7 @@ async fn the_heartbeat_clock_sweeps_a_stopped_chain_back_to_life() {
         let interval = if tick == 0 { hb::HEARTBEAT_NOMINAL_INTERVAL_MS } else { hb::HEARTBEAT_RECOVERY_INTERVAL_MS };
         ctx.simulated_time = ctx.simulated_time.max(sink_ts) + interval;
         let template = ctx.build_block_template(1_000 + tick, ctx.simulated_time);
-        let (hb_template, _) =
-            ctx.consensus.virtual_processor().heartbeat_adapt_block_template(template).expect("the lane adapts");
+        let (hb_template, _) = ctx.consensus.virtual_processor().heartbeat_adapt_block_template(template).expect("the lane adapts");
         ctx.validate_and_insert_block(hb_template.block.clone().to_immutable()).await;
         if tick % 100 == 99 {
             let store = ctx.consensus.virtual_processor().palw_state_v2_store.read();
@@ -777,17 +776,12 @@ async fn a_mergeset_holds_at_most_four_heartbeats_and_templates_chunk_the_rest()
     // block's fresh budget instead of being merged here.
     ctx.simulated_time += 120_000;
     let next = ctx.build_block_template(3, ctx.simulated_time);
-    let hb_parents =
-        next.block.header.direct_parents().iter().filter(|p| siblings.contains(p)).count() as u64;
+    let hb_parents = next.block.header.direct_parents().iter().filter(|p| siblings.contains(p)).count() as u64;
     let mergeset_hbs = {
         // The template's parents are not the whole story — the bound is on the MERGESET. Count
         // heartbeats the way the rule does.
         let gd = ctx.consensus.services.ghostdag_manager.ghostdag(next.block.header.direct_parents());
-        gd.mergeset_blues
-            .iter()
-            .chain(gd.mergeset_reds.iter())
-            .filter(|h| siblings.contains(h))
-            .count() as u64
+        gd.mergeset_blues.iter().chain(gd.mergeset_reds.iter()).filter(|h| siblings.contains(h)).count() as u64
     };
     assert!(
         mergeset_hbs <= kaspa_consensus_core::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET,

@@ -10027,9 +10027,8 @@ impl VirtualStateProcessor {
         // per-member header reads are skipped). The selected parent is in the mergeset, so it
         // spends from the budget first — in the heartbeat-only regime (total collapse) that is
         // exactly one of the four slots, leaving three of healing headroom.
-        let heartbeat_bound = self
-            .palw_heartbeat_width_fence
-            .map(|_| kaspa_consensus_core::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET);
+        let heartbeat_bound =
+            self.palw_heartbeat_width_fence.map(|_| kaspa_consensus_core::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET);
         let mut heartbeat_count = match heartbeat_bound {
             Some(_) => {
                 let sp = self.headers_store.get_header(selected_parent).unwrap();
@@ -11857,8 +11856,13 @@ impl VirtualStateProcessor {
 }
 
 enum MergesetIncreaseResult {
-    Accepted { increase_size: u64, heartbeat_increase: u64 },
-    Rejected { new_candidate: BlockHash },
+    Accepted {
+        increase_size: u64,
+        heartbeat_increase: u64,
+    },
+    Rejected {
+        new_candidate: BlockHash,
+    },
     /// ADR-0068 Phase 1 (F3a): merging this candidate would put the mergeset over the heartbeat
     /// width bound. Unlike `Rejected` there is no useful replacement to propose — the excess IS
     /// a heartbeat (or reaches one), and a later template absorbs it once the width budget

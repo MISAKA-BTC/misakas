@@ -6789,7 +6789,11 @@ mod consensus_params_id_tests {
         // **Armable on the preset that actually runs the lane**, at any height — no rebuild.
         for height in [ForkActivation::always(), ForkActivation::new(1), ForkActivation::new(9_000_000)] {
             let mut rc = palw_rc_shipped_params();
-            rc.palw_heartbeat = Some(PalwHeartbeatV1 { activation: height, work_log2: crate::pow_layer0::PALW_HEARTBEAT_WORK_LOG2, max_per_mergeset: crate::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET });
+            rc.palw_heartbeat = Some(PalwHeartbeatV1 {
+                activation: height,
+                work_log2: crate::pow_layer0::PALW_HEARTBEAT_WORK_LOG2,
+                max_per_mergeset: crate::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET,
+            });
             rc.validate_palw_v2().expect("the shipped V2 preset may open its clock lane by configuration");
             assert!(rc.palw_heartbeat_lane_open_at(9_000_001));
         }
@@ -6798,15 +6802,21 @@ mod consensus_params_id_tests {
         // the fence names the number operators coordinate on, `StateLayer0` applies it, and two
         // sources for one value is how a rule gets announced instead of enforced.
         let mut wrong_price = palw_rc_shipped_params();
-        wrong_price.palw_heartbeat =
-            Some(PalwHeartbeatV1 { activation: ForkActivation::always(), work_log2: crate::pow_layer0::PALW_HEARTBEAT_WORK_LOG2 + 1, max_per_mergeset: crate::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET });
+        wrong_price.palw_heartbeat = Some(PalwHeartbeatV1 {
+            activation: ForkActivation::always(),
+            work_log2: crate::pow_layer0::PALW_HEARTBEAT_WORK_LOG2 + 1,
+            max_per_mergeset: crate::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET,
+        });
         assert!(wrong_price.validate_palw_v2().is_err(), "a lane price the binary does not implement must not start");
 
         // A hash network never opens the lane however the fence is set — there is no PALW clock to
         // rescue there, and the mode half is folded into one predicate so no call site can forget it.
         let mut hash_net = MAINNET_PARAMS;
-        hash_net.palw_heartbeat =
-            Some(PalwHeartbeatV1 { activation: ForkActivation::always(), work_log2: crate::pow_layer0::PALW_HEARTBEAT_WORK_LOG2, max_per_mergeset: crate::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET });
+        hash_net.palw_heartbeat = Some(PalwHeartbeatV1 {
+            activation: ForkActivation::always(),
+            work_log2: crate::pow_layer0::PALW_HEARTBEAT_WORK_LOG2,
+            max_per_mergeset: crate::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET,
+        });
         assert!(!hash_net.palw_heartbeat_lane_open_at(0), "the lane is a V2 rule");
         assert!(hash_net.palw_heartbeat_lane_fence().is_none());
     }
@@ -6825,8 +6835,7 @@ mod consensus_params_id_tests {
 
         let armed = |activation: ForkActivation| {
             let mut p = MAINNET_PARAMS;
-            p.palw_attempt_work =
-                Some(PalwAttemptWorkV1 { activation, work_log2: crate::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2 });
+            p.palw_attempt_work = Some(PalwAttemptWorkV1 { activation, work_log2: crate::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2 });
             p
         };
         assert_eq!(
@@ -8217,8 +8226,11 @@ mod consensus_params_id_tests {
         assert!(!bundle.accepts_algo_id(crate::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID));
         assert!(!zero_seat.palw_heartbeat_lane_open_at(0), "and the fence ships unset");
         let mut clocked = zero_seat.clone();
-        clocked.palw_heartbeat =
-            Some(PalwHeartbeatV1 { activation: ForkActivation::always(), work_log2: crate::pow_layer0::PALW_HEARTBEAT_WORK_LOG2, max_per_mergeset: crate::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET });
+        clocked.palw_heartbeat = Some(PalwHeartbeatV1 {
+            activation: ForkActivation::always(),
+            work_log2: crate::pow_layer0::PALW_HEARTBEAT_WORK_LOG2,
+            max_per_mergeset: crate::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET,
+        });
         assert!(clocked.palw_heartbeat_lane_open_at(0), "arming the fence opens it, with no rebuild");
         // Only an unset artifact root drops the bundle, because only that is unmintable by code.
         assert_ne!(PALW_RC_GENESIS_ARTIFACT_ROOT, crate::Hash64::from_bytes([0u8; 64]));
