@@ -316,6 +316,16 @@ pub enum PalwE2eError {
     /// set of families than the network agreed to must stop, not quietly grant nobody weight.
     #[error("the supplied certified set hashes to {computed}, and the network committed to {committed}")]
     CertifiedSetIsNotTheCommittedOne { committed: Hash64, computed: Hash64 },
+    #[error("the free-prompt drill carries {questions} questions for {vectors} vectors — every vector must name the job it answered")]
+    FreePromptQuestionsMismatch { vectors: usize, questions: usize },
+    #[error("the question at leaf {leaf} is not its own: the prompt does not hash or count to the job it is filed with")]
+    FreePromptQuestionNotItsOwn { leaf: u64 },
+    #[error("the vector at leaf {leaf} was not run over the question it is filed with (job id, prompt hash or prompt length differ)")]
+    VectorIsNotAboutTheQuestion { leaf: u64 },
+    #[error("a refutation at leaf {leaf} carries a prompt that is not the question's")]
+    RefutationCarriesAnotherPrompt { leaf: u64 },
+    #[error("no vector adjudicated a leaf with the user's prompt in hand — the free-prompt path was never exercised")]
+    NoPromptCarried,
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -720,6 +730,108 @@ pub fn family_certified_for_kernels_v1(reachable: &BTreeSet<Hash64>) -> Option<P
 ///
 /// The gate's REFUSAL is proven where a genuinely uncertified family exists: `misaka-palw-base0`'s
 /// drill, against the shipped genesis table.
+// ---------------------------------------------------------------------------------------------
+// The free-prompt lane (ADR-0073 Decision 1f)
+// ---------------------------------------------------------------------------------------------
+
+/// The question a free-prompt drill vector answered: the user's job and the prompt that hashes
+/// to it. Filed beside the attempt-shaped evidence, one per vector, in order.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwE2eFreePromptQuestionV1 {
+    pub job: crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+    pub prompt_token_ids: Vec<u32>,
+}
+
+/// **Evidence that a family's FREE-PROMPT path adjudicates** (ADR-0073 Decision 1f): the same
+/// drill evidence an attempt certificate is minted from, plus the question each vector answered.
+///
+/// The attempt lane's certificate says "this family's canonical job is adjudicable". It says
+/// nothing about a job whose prompt the user chose — a prover that derives the prompt from the
+/// anchor opens no prefill gather on such a job, and a court handed the wrong list files no
+/// verdict — so a class's free-prompt lane bears weight (Decision 2) only against evidence that
+/// was ABOUT a user's job: bindings that name it by `fp_job_id_v3`, refutations that carry its
+/// prompt, and the shipped court convicting and acquitting on those.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwE2eFreePromptDrillEvidenceV1 {
+    pub evidence: PalwE2eDrillEvidenceV1,
+    pub questions: Vec<PalwE2eFreePromptQuestionV1>,
+}
+
+/// A free-prompt certificate. Sealed like [`PalwE2eCertificateV1`]: only
+/// [`certify_e2e_free_prompt_lane_v1`] constructs one, so holding it IS having passed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwE2eFreePromptCertificateV1 {
+    pub family: PalwE2eFamilyV1,
+    pub family_digest: Hash64,
+    _sealed: (),
+}
+
+/// **An attempt certificate whose vectors were about a user's job** — never the other way round.
+///
+/// Runs [`certify_e2e_family_v1`] first (every check it makes, including the shipped court
+/// convicting the guilty run and clearing the honest one), then asks of every vector: the
+/// question it is filed with is its own (the prompt hashes and counts to the job); both bindings
+/// name that job (`job_id == fp_job_id_v3(job)`, the prompt hash and the prefill length agree);
+/// and both refutations carry that prompt and no other. At least one vector must have carried
+/// it — a drill whose provers were all handed nothing certifies the attempt path under a new
+/// name, which is the confusion this exists to refuse.
+pub fn certify_e2e_free_prompt_lane_v1(
+    drill: &PalwE2eFreePromptDrillEvidenceV1,
+) -> Result<PalwE2eFreePromptCertificateV1, PalwE2eError> {
+    let base = certify_e2e_family_v1(&drill.evidence)?;
+    if drill.questions.len() != drill.evidence.vectors.len() {
+        return Err(PalwE2eError::FreePromptQuestionsMismatch {
+            vectors: drill.evidence.vectors.len(),
+            questions: drill.questions.len(),
+        });
+    }
+    let mut carried = false;
+    for (vector, question) in drill.evidence.vectors.iter().zip(&drill.questions) {
+        let leaf = vector.leaf_index;
+        let ids_hash = crate::palw_v2::prompt_token_ids_hash_v2(&question.prompt_token_ids);
+        if question.job.prompt_token_ids_hash != ids_hash || question.job.prompt_tokens as usize != question.prompt_token_ids.len() {
+            return Err(PalwE2eError::FreePromptQuestionNotItsOwn { leaf });
+        }
+        let job_id = crate::palw_freeprompt_v3::fp_job_id_v3(&question.job);
+        for refutation in [&vector.honest, &vector.guilty] {
+            let ctx = &refutation.binding.job_context;
+            if ctx.job_id != job_id
+                || ctx.prompt_token_ids_hash != ids_hash
+                || ctx.declared_prefill_tokens != question.job.prompt_tokens
+            {
+                return Err(PalwE2eError::VectorIsNotAboutTheQuestion { leaf });
+            }
+            if refutation.prompt_token_ids != question.prompt_token_ids {
+                return Err(PalwE2eError::RefutationCarriesAnotherPrompt { leaf });
+            }
+            carried |= !refutation.prompt_token_ids.is_empty();
+        }
+    }
+    if !carried {
+        return Err(PalwE2eError::NoPromptCarried);
+    }
+    Ok(PalwE2eFreePromptCertificateV1 { family: base.family, family_digest: base.family_digest, _sealed: () })
+}
+
+/// **The RC free-prompt-certified set** — the families whose free-prompt lane may bear weight
+/// under ADR-0073 Decision 2. Read through [`family_certified_for_weight_v1`] against
+/// [`palw_rc_court_fp_e2e_root_v1`], exactly as the attempt set is.
+///
+/// EMPTY, deliberately: Decision 2 is decided but not activated (it waits on Decision 3, the
+/// shared price unit), and an empty set is how "no class's free-prompt lane bears weight yet"
+/// is spelled so that the day it does is a diff to this function and a fingerprint move, never
+/// a flag. The floor's free-prompt drill already certifies (see `misaka-palw-base0`'s
+/// `e2e_drill`); it enters here with Decision 3.
+pub fn palw_rc_fp_certified_families_v1() -> Vec<PalwE2eFamilyV1> {
+    Vec::new()
+}
+
+/// The root the free-prompt set commits to — derived from [`palw_rc_fp_certified_families_v1`]
+/// rather than pinned, because the set is empty; the pin arrives with the first entry.
+pub fn palw_rc_court_fp_e2e_root_v1() -> Hash64 {
+    palw_court_e2e_root_of_v1(&palw_rc_fp_certified_families_v1())
+}
+
 #[cfg(test)]
 pub(crate) fn catalog_covering_family_for_tests_v1() -> Vec<PalwE2eFamilyV1> {
     vec![PalwE2eFamilyV1 {
