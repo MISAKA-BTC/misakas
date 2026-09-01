@@ -1,7 +1,15 @@
 # testnet-11 Relaunch 5 — the LLM-primary economy (ADR-0068 Phase 2)
 
-Branch: `palw-adr0068-phase2`. Target identity: params fingerprint **`f0e50f83…`** (devnet moves
-to **`873a5ae8…`** through the shared builder), genesis **`08e9c8a4…`**.
+Branch: `palw-adr0068-phase2`. Target identity: params fingerprint **`d38abe44…`** (devnet stays
+**`873a5ae8…`** — it registers no A16 tier), genesis **`08e9c8a4…`**.
+
+> **`f0e50f83…` ran the revert of the frozen target and measured it working** — the floor went
+> 77 → 4.7 blocks/min in 20 minutes and reached 95–119 s inter-block gaps by 01:04 CEST. What it
+> also measured: the QWEN25-A16 producer refused its own artifact nine times, because the genesis
+> card pinned `PALW_RC_GENESIS_QWEN25_A16_ARTIFACT_ROOT` as the file's flat digest (`c00faa48…`)
+> while the graph-v2 row resolves by the operand-inventory root (`1a7457f1…`) — the two-mappings
+> defect the resolver's own comment names. Re-pinned; the fingerprint moves, the genesis does not.
+> Verify with `misaka-palw-base0/tests/a16_root_probe.rs` (`PALW_A16_PATH=… --ignored`).
 
 > **`accaadce…` was deployed and taken back the same evening.** It froze the attempt lane's Layer-0
 > target (ADR-0071 Decision 1) and the live network measured what that costs: the floor produced

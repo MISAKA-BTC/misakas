@@ -3945,8 +3945,26 @@ pub const PALW_RC_GENESIS_QWEN36_ARTIFACT_ROOT: crate::Hash64 = crate::Hash64::f
     0x68,
 ]);
 
-/// **The Qwen2.5-1.5B A16 class's artifact root** — `Base0ArtifactV1::artifact_digest()` over the
-/// `.palwart` converted from `Qwen/Qwen2.5-1.5B-Instruct` with `qwen25-convert --a16`.
+/// **The Qwen2.5-1.5B A16 class's artifact root — the A16 OPERAND-INVENTORY root, not the file's
+/// digest.**
+///
+/// The `.palwart` is the one `qwen25-convert --a16` produces from `Qwen/Qwen2.5-1.5B-Instruct`
+/// (sha256 `a8c4e53e…`, 1,795,427,276 bytes). Its `Base0ArtifactV1::artifact_digest()` is
+/// `c00faa48…`, and **that is what this constant used to hold, and it was the wrong root form.**
+/// The row the chain registers is the court-capable `graph-v2` row, and
+/// `CanonicalClassV1::artifact_root` derives that row's root as
+/// `a16_inventory_v1(artifact, profile).root()` — because an arithmetic close's openings prove
+/// against the registered root, and nothing can be opened against a flat digest. The producer's
+/// resolver compares the inventory root of every holding against this constant, so with the digest
+/// pinned here seat2 refused its own artifact nine times at Relaunch 5 ("holds no artifact whose
+/// registered root form is c00faa48…") and the dense tier produced zero blocks. Measured
+/// 2026-09-02 with `misaka-palw-base0/tests/a16_root_probe.rs` over the deployed file:
+/// `artifact_digest = c00faa48…`, `inventory_root = 1a7457f1…`. The comment on
+/// `CanonicalClassV1::artifact_root` names this exact failure ("deciding it here a second time is
+/// the two-mappings defect"); this constant was the second mapping.
+///
+/// Re-pinning it moves `palw_ruleset_id_v2` and therefore `consensus_params_id`; the genesis hash
+/// does not move.
 ///
 /// The dense tier the network registers is W8A16, not the floor's W8A8: static PTQ of this
 /// checkpoint into a seven-bit activation stream degenerates (ADR-0053), while on A16 the same
@@ -3957,10 +3975,10 @@ pub const PALW_RC_GENESIS_QWEN36_ARTIFACT_ROOT: crate::Hash64 = crate::Hash64::f
 ///
 /// Zero means the class is absent — the two-class network exactly as before, never a placeholder.
 pub const PALW_RC_GENESIS_QWEN25_A16_ARTIFACT_ROOT: crate::Hash64 = crate::Hash64::from_bytes([
-    0xc0, 0x0f, 0xaa, 0x48, 0x0f, 0x23, 0x44, 0xd4, 0xa7, 0x37, 0xe5, 0xb2, 0xe8, 0x7a, 0xb6, 0x06, 0x4d, 0x8d, 0x6e, 0x42, 0xc1,
-    0xff, 0xeb, 0x6a, 0xa0, 0xa1, 0x4e, 0xd6, 0x21, 0x34, 0x29, 0x9a, 0x7c, 0x9d, 0xc0, 0x8f, 0x15, 0x34, 0x2c, 0xef, 0xca, 0x1e,
-    0x29, 0x39, 0x08, 0x10, 0xe6, 0xd2, 0xc5, 0x87, 0x9f, 0x4c, 0x38, 0x53, 0xeb, 0xe4, 0x3a, 0x9e, 0x2d, 0x47, 0xed, 0x57, 0xba,
-    0x17,
+    0x1a, 0x74, 0x57, 0xf1, 0x00, 0xd9, 0xfb, 0x0f, 0x34, 0x06, 0xd8, 0x82, 0xb4, 0xb5, 0xbc, 0xd7, 0xe2, 0xeb, 0xcc, 0xcd, 0x54,
+    0xed, 0xc5, 0x26, 0x8a, 0x08, 0xc3, 0xa8, 0x5b, 0xc6, 0xc8, 0xd3, 0xad, 0xac, 0xdf, 0x34, 0x5c, 0xde, 0x3c, 0xb7, 0x2f, 0xfe,
+    0x8e, 0xd7, 0xfe, 0x7a, 0x2f, 0x72, 0x9d, 0x10, 0xf0, 0x08, 0x21, 0xf9, 0x4b, 0x1e, 0x85, 0x62, 0xe4, 0xe2, 0x17, 0xb7, 0x27,
+    0x08,
 ]);
 
 pub fn palw_rc_qwen25_a16_is_registered() -> bool {
@@ -8206,7 +8224,14 @@ mod consensus_params_id_tests {
                 // one-class network is a deliberate no-op for it. Block interval is
                 // `calculate_difficulty_bits`'s job, which the freeze had taken away.
                 // **Deploy is whole-fleet-together.**
-                "f0e50f8331c6ba2edbdb9ccedf90465b2cfb4639aba086cf138ad01fa4e3103f",
+                //
+                // **And once more because the A16 genesis card pinned the wrong ROOT FORM.**
+                // `PALW_RC_GENESIS_QWEN25_A16_ARTIFACT_ROOT` held the file's `artifact_digest()`;
+                // the graph-v2 row the chain registers resolves by the A16 operand-inventory root
+                // (`CanonicalClassV1::artifact_root`), so every A16 producer refused its own
+                // artifact and the dense tier made zero blocks on Relaunch 5. Re-pinned to the
+                // inventory root measured over the deployed file. Genesis hash unchanged.
+                "d38abe4420a53c585917404ef2195e0d643cf472b38e385c6515087c840014e5",
             ),
             ("simnet", SIMNET_PARAMS, "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd"),
             // Re-pinned twice for ADR-0068 Phase 1: first when the drill network armed the
