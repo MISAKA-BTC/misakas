@@ -6070,10 +6070,30 @@ pub fn palw_rc_shipped_params() -> Params {
 /// ADR-0061 admits the empty registry), and `validate_palw_v2` proves the armed heartbeat and
 /// attempt-work fences declare exactly the constants this binary enforces.
 pub fn devnet_shipped_params() -> Params {
-    palw_v2_params_from_artifacts_on_base(DEVNET_PARAMS, PALW_RC_GENESIS_ARTIFACT_ROOT, Vec::new())
+    let mut params = palw_v2_params_from_artifacts_on_base(DEVNET_PARAMS, PALW_RC_GENESIS_ARTIFACT_ROOT, Vec::new())
         // A base that cannot carry the bundle is a build defect, not an operator state: failing
         // at startup with the gate's own message is the only honest outcome.
-        .unwrap_or_else(|e| panic!("the devnet ADR-0068 drill ruleset does not assemble: {e}"))
+        .unwrap_or_else(|e| panic!("the devnet ADR-0068 drill ruleset does not assemble: {e}"));
+    // **Upstream pruning's consistency invariant, restored for THIS network** (drill finding):
+    // the assembly minted `pruning_depth = 10,800 = 18 x finality 600` from the deci-bps base,
+    // and the pruning processor forbids a remainder inside `[0..=k]` or `[F-k..F)`
+    // (`assert_pruning_depth_consistency` — which iterates suffix-less NetworkTypes, so devnet
+    // IS covered by it and would fail the suite). Nudge upward to remainder `k + 1`. Raising
+    // pruning_depth keeps every inequality `validate_palw_v2` proved (the lattice and anticone
+    // bounds are `<=`). The shared assembly deliberately does NOT carry this correction, because
+    // there it would re-fingerprint the live testnet-11 — see the note in
+    // `palw_v2_params_on_base`.
+    {
+        let f = params.blockrate.finality_depth;
+        let k = params.blockrate.ghostdag_k as u64;
+        let m = params.blockrate.pruning_depth % f;
+        if m <= k {
+            params.blockrate.pruning_depth += k + 1 - m;
+        } else if m >= f - k {
+            params.blockrate.pruning_depth += (f - m) + k + 1;
+        }
+    }
+    params
 }
 
 /// **The PALW-RC network's identity WITHOUT a ruleset bundle — what `NetworkId` testnet-12 maps
@@ -6248,6 +6268,16 @@ pub fn palw_v2_params_on_base(
             + bundle.state.window_challenge()
             + bundle.state.window_court();
         params.blockrate.pruning_depth = params.blockrate.pruning_depth.max(lower_bound).max(lattice);
+        // NOTE (found by the ADR-0068 devnet drill, NOT fixed here): this assembly can mint a
+        // depth pair that violates upstream pruning's consistency invariant — the pruning
+        // processor requires `pruning_depth % finality_depth` strictly inside
+        // `(k, finality_depth - k)` (`assert_pruning_depth_consistency`), and the lattice bound
+        // above lands testnet-11 on EXACTLY `6600 = 11 x 600`, remainder zero. The invariant test
+        // iterates suffix-less `NetworkType`s only, so it has never seen a suffixed network.
+        // Correcting it inside this shared assembly would move `consensus_params_id` for the LIVE
+        // testnet-11 fleet — a flag-day decision, not a drill's — so the correction is applied
+        // per-network where a network can afford it (`devnet_shipped_params`), and this note is
+        // the record that the shared path still owes the fix at t11's next re-mint.
     }
     params.palw_consensus_mode = crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle);
     params.validate_palw_v2()?;
@@ -7624,7 +7654,9 @@ mod consensus_params_id_tests {
             // `Params::from(Devnet)` became the BUNDLED `devnet_shipped_params()` — ConsensusV2
             // over a zero-row registry (ADR-0061), the ruleset the live drill actually runs.
             // The genesis is untouched (nothing is carved), so only the fingerprint moves.
-            ("devnet", DEVNET_PARAMS, "0fbc6564b5a3b6272f7eb34c91e0edc6fed7b638de03051029797e4a31f4731c"),
+            // …and once more when the drill's pruning-consistency nudge raised devnet's
+            // pruning_depth 10,800 → 10,805 (remainder k+1 of finality 600).
+            ("devnet", DEVNET_PARAMS, "47ba789e563df1ac4f12baa01c10902119a394c6b3d2cf48fe6026d7f7e1444f"),
         ]
         .into_iter()
         .filter_map(|(name, params, expected)| {
