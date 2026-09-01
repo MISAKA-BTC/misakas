@@ -3467,23 +3467,22 @@ fn genesis_pwu_of(object: &crate::palw_state_v2::PalwConsensusObjectV2) -> u64 {
 /// Changing it changes `palw_ruleset_id_v2` — the genesis object list is inside the bundle — so it
 /// is a mint-time decision. Nothing raises a share by fiat afterwards; production does.
 ///
-/// # Zero since the ADR-0068 launch audit (ADR-0069 invariant 5)
+/// # Zeroed by the ADR-0068 launch audit, and restored when the family earned it back
 ///
-/// **The paragraphs above are the funding argument, and they are still correct — about a class this
-/// chain could prosecute.** This one it cannot. `Qwen36Backend` takes the trait defaults for
-/// `bisect_prefix_state` and `refutation_for_index`, so a dispute over one of its claims cannot
-/// leave round 0 whichever party is honest; its own module header says so and draws ADR-0039's
-/// conclusion — a class on that backend "is admissible for liveness and must not carry weight".
-/// The audit's finding was that the genesis table said otherwise, handing 489‰ + 489‰ = 97.8% of
-/// cadence to the two families nothing can convict, which made "the block was paid for by actual
-/// inference" an unenforced sentence.
+/// The audit found this line handing 489‰ + 489‰ — 97.8% of cadence — to two families nothing
+/// could convict: both backends took the trait defaults for `bisect_prefix_state` and
+/// `refutation_for_index`, so a dispute over one of their claims could not leave round 0 whichever
+/// party was honest, and `Qwen36Backend`'s own module header said so and drew ADR-0039's
+/// conclusion. "The block was paid for by actual inference" was an unenforced sentence, so the
+/// share went to zero — with the reason recorded that weight would return by ACTIVATION once the
+/// family certified end-to-end (ADR-0069 Decision 6).
 ///
-/// So the tier registers at genesis and produces at genesis, and it earns nothing: weightless is a
-/// state the share table can now express, and this is what expresses it. **It is not a retreat from
-/// the LLM-primary economy — it is the order that economy has to be built in.** Weight returns by
-/// ACTIVATION once the family certifies end-to-end (ADR-0069 Decision 6), which is the same
-/// mechanism ADR-0054 already uses and the same doctrine that forbids re-genesis for a rule change.
-pub const PALW_RC_GENESIS_QWEN36_SHARE_PERMILLE: u16 = 0;
+/// **It certified.** The step spaces adjudicate (ADR-0070: every leaf swept rather than sampled),
+/// the family is in this build's `court_e2e_root`, and the admission gate would refuse a nonzero
+/// share here if it were not — which is what makes restoring this a consequence rather than a
+/// decision. The funding argument in the paragraphs above was always correct about a class this
+/// chain can prosecute; this is now one.
+pub const PALW_RC_GENESIS_QWEN36_SHARE_PERMILLE: u16 = 489;
 
 /// **The dense tier's, at genesis.** Equal to the hybrid's on purpose: the two differ enormously in
 /// what they cost to run, and nothing about that difference is knowable at mint time. ADR-0054 is
@@ -3494,17 +3493,16 @@ pub const PALW_RC_GENESIS_QWEN36_SHARE_PERMILLE: u16 = 0;
 /// economy the ADR is for. Blocks and issuance follow this table (ADR-0045: budgets are blocks,
 /// the subsidy carve is class-blind), so this line IS the "LLM ≈ 98% of issuance" decision.
 ///
-/// # Zero since the ADR-0068 launch audit (ADR-0069 invariant 5)
+/// # Zeroed by the launch audit, and restored on the same terms as the hybrid
 ///
-/// The dense tier is here for the same reason the hybrid is, and it is closer to the exit: the A16
-/// capture bridge exists (`a16_captured_rows_v1`), which is the first of the three pieces
-/// `legs.rs` counts. The other two — the checkpoint leg and the two rung methods — do not, so
-/// `supports_court()` is `false` here too, and a family that cannot answer at a rung loses every
-/// dispute whichever party is honest. Weight follows the certificate, not the intent.
+/// The dense tier was zeroed for the hybrid's reason and was always closer to the exit: the A16
+/// capture bridge already existed, and what was missing was the checkpoint leg and the two rung
+/// methods. Those landed (ADR-0070), the family certifies end-to-end, and the admission gate
+/// enforces the rest — a nonzero share here is refused unless this build's `court_e2e_root`
+/// carries the family, so this line cannot claim more than the certificate supports.
 ///
-/// The line above still states the decision it always stated. What it no longer does is state it
-/// about a family that could not be held to it.
-pub const PALW_RC_GENESIS_QWEN25_A16_SHARE_PERMILLE: u16 = 0;
+/// Weight follows the certificate, not the intent. It did when the number was zero and it does now.
+pub const PALW_RC_GENESIS_QWEN25_A16_SHARE_PERMILLE: u16 = 489;
 
 /// The same assembly, with the A16 dense class when its root is pinned. `None` is the two-class
 /// network exactly as before — an unpinned class is absent, never a placeholder.
@@ -3571,13 +3569,21 @@ pub fn palw_rc_params_with_classes(
         return Err(invalid("the genesis class shares would start the liveness floor below its own reserve"));
     }
     let (_profile, entry, object) =
-        crate::palw_qwen36_profile::qwen36_registration_v1(qwen36_artifact_root, hybrid_share, slash, target)
+        // **`_v3`, and the version number is not the obvious one.** The hybrid's corrected row is
+        // `graph-v3` — the v2 projection over the eps-corrected geometry — because `graph-v2`'s
+        // spelling reached t11 first and a registered name cannot be re-pointed at a different id.
+        // Registering `qwen36_profile_v2` instead would clear every other check and mint a THIRD
+        // class id that no node dispatches, which is the shape this line has to get right because
+        // nothing downstream can tell it apart: the admission gate's weight rule is scoped to the
+        // FAMILY, and the family is certified either way.
+        crate::palw_qwen36_profile::qwen36_registration_v3(qwen36_artifact_root, hybrid_share, slash, target)
             .map_err(|_| invalid("the Qwen3.6 registration does not derive"))?;
     // The A16 dense class, when its artifact root is pinned. It registers last, so what it declares
     // is what it keeps — no dilution follows it.
     let dense = match qwen25_a16_artifact_root {
         Some(root) => Some(
-            crate::palw_qwen25_profile::qwen25_a16_registration_v1(root, dense_share, slash, target)
+            // The dense tier's correction shares its geometry, so its row is simply `_v2`.
+            crate::palw_qwen25_profile::qwen25_a16_registration_v2(root, dense_share, slash, target)
                 .map_err(|_| invalid("the Qwen2.5 A16 registration does not derive"))?,
         ),
         None => None,
