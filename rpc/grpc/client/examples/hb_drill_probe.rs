@@ -30,6 +30,11 @@ async fn print_block(client: &GrpcClient, hash: kaspa_rpc_core::RpcHash, with_tx
         h.bits,
         block.transactions.len(),
     );
+    if let Some(parents) = block.header.parents_by_level.first() {
+        for p in parents {
+            println!("  parent {p}");
+        }
+    }
     if with_txs {
         for (i, tx) in block.transactions.iter().enumerate() {
             println!(
