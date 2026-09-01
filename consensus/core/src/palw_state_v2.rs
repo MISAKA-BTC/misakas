@@ -3952,25 +3952,52 @@ fn granted_share_table_v2(
     if share > 1000 {
         return Err(PalwStateV2Error::ShareOutOfRange { got: share });
     }
-    if share < floor {
+    // **Zero is the weightless grant, and it is a real state now** (ADR-0069 Decision 5).
+    //
+    // The floor exists so that a class holding share cannot hold so little that its worst-case
+    // epoch budget rounds to no blocks. A class holding NO share is not that class — it is
+    // ADR-0039's "admissible for liveness, weightless", which this table could not express before:
+    // every registered class got at least one permille, so "register it weightless and let it earn
+    // weight when it can be prosecuted" was a sentence with no arithmetic behind it, and the launch
+    // audit found 97.8% of cadence sitting on families nobody could convict.
+    //
+    // Nothing else needs a special case. `keep` is the whole 1000‰, so the scaling loop below is
+    // the identity and no incumbent is diluted; the entrant still takes a ROW, because
+    // `assert_internal_consistency` requires every class past its activation edge to hold one, and
+    // the row's value is what says it earns no cadence. `derive_epoch_budgets_v2` floors every
+    // budget at one block per epoch, so a weightless class still produces, is still gossiped and
+    // still counts for liveness — it simply cannot take a slice of the cadence away from families
+    // whose work the court can check.
+    if share != 0 && share < floor {
         return Err(PalwStateV2Error::ShareBelowGrantFloor { class_id: entrant, share, floor });
     }
     let keep = 1000u32 - share as u32;
     // Scale every incumbent to the kept permille, undivided residues first: `s_k · keep` is at
     // most 10⁶, so the arithmetic is exact in u32 and the residue distribution is what makes
     // Σ = 1000 a construction rather than an assertion.
-    let mut scaled: Vec<(Hash64, u32, u32)> =
-        current.iter().map(|(id, s)| (*id, (*s as u32) * keep / 1000, (*s as u32) * keep % 1000)).collect();
-    let distributed: u32 = scaled.iter().map(|(_, base, _)| *base).sum();
+    // `(id, base, remainder, share_before)` — the original is carried because the donor floor below
+    // is a question about what a class LOSES, and a class holding nothing loses nothing.
+    let mut scaled: Vec<(Hash64, u32, u32, u16)> =
+        current.iter().map(|(id, s)| (*id, (*s as u32) * keep / 1000, (*s as u32) * keep % 1000, *s)).collect();
+    let distributed: u32 = scaled.iter().map(|(_, base, _, _)| *base).sum();
     let deficit = keep - distributed;
     // Largest remainder, class-id order on ties. The sort is total (remainder, then id), so two
     // nodes cannot hand the same residue permille to different classes.
     scaled.sort_by(|a, b| b.2.cmp(&a.2).then(a.0.cmp(&b.0)));
     let mut table: BTreeMap<Hash64, u16> = BTreeMap::new();
-    for (index, (id, base, _)) in scaled.iter().enumerate() {
+    for (index, (id, base, _, before)) in scaled.iter().enumerate() {
         let granted = base + u32::from((index as u32) < deficit);
         let granted = u16::try_from(granted).expect("a scaled share is at most 1000");
-        if granted < floor {
+        // **A weightless incumbent stays weightless; that is not a broken donation**
+        // (ADR-0069 Decision 5).
+        //
+        // The donor floor exists so a registration cannot starve a class that is carrying weight
+        // down to a share whose epoch budget rounds to nothing. A class already at zero is not
+        // being starved — it holds no cadence to lose, and `0 · keep / 1000` is zero for the same
+        // reason it was zero before. Without this exemption the SECOND weightless registration on
+        // a chain is refused by the first one's existence, which would make ADR-0039's
+        // "admissible for liveness, weightless" a state at most one class could ever be in.
+        if granted < floor && *before != 0 {
             return Err(PalwStateV2Error::DonationBreaksGrantFloor { donor: *id, would_hold: granted, floor });
         }
         table.insert(*id, granted);
@@ -9644,8 +9671,23 @@ pub(crate) mod tests {
         // A later grant outside the denominator, or below the grant floor, refuses.
         let err = apply_palw_transition_v2(&funded, &p, &ctx(2, 101, 2), &[register(2, 1001)], None);
         assert!(matches!(err, Err(PalwStateV2Error::ShareOutOfRange { got: 1001 })), "got {err:?}");
-        let err = apply_palw_transition_v2(&funded, &p, &ctx(2, 101, 2), &[register(2, 0)], None);
-        assert!(matches!(err, Err(PalwStateV2Error::ShareBelowGrantFloor { .. })), "got {err:?}");
+        // **Zero is not "below the floor", it is the weightless grant** (ADR-0069 Decision 5).
+        // This asserted a refusal until the launch audit measured what the refusal cost: every
+        // registered class held at least one permille, so a family the court cannot prosecute
+        // could not be registered without also being paid, and 97.8% of cadence sat on two of
+        // them. A zero grant takes nothing from anybody — the incumbents below are unmoved — and
+        // `derive_epoch_budgets_v2` still floors the class at one block per epoch, so it produces
+        // and counts for liveness while earning no cadence.
+        let (weightless, _) = apply_palw_transition_v2(&funded, &p, &ctx(2, 101, 2), &[register(2, 0)], None)
+            .expect("a weightless registration is a legal grant");
+        assert_eq!(weightless.class_share_permille(&h64(2)), Some(0), "it holds a row, and the row says nothing is owed");
+        assert_eq!(weightless.class_share_permille(&h64(1)), Some(1000), "and no incumbent paid for it");
+        // Anything BETWEEN zero and the floor is still refused: that is a class asking for weight
+        // whose epoch budget would round to nothing, which is what the floor is for.
+        let err = apply_palw_transition_v2(&funded, &p, &ctx(2, 101, 2), &[register(2, p.min_grantable_share_permille() - 1)], None);
+        if p.min_grantable_share_permille() > 1 {
+            assert!(matches!(err, Err(PalwStateV2Error::ShareBelowGrantFloor { .. })), "got {err:?}");
+        }
 
         // A grant that would starve every donor to zero refuses too — the base class may never
         // be pushed below the floor, and 1000‰ for an entrant leaves it exactly nothing.

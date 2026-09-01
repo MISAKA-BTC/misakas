@@ -507,6 +507,12 @@ pub fn palw_fp_devnet_bundle_v3(
         base_class_id,
         class_catalog_root,
         court_catalog_root,
+        // **This build's own certified set** (ADR-0069 Decision 2), never an argument. The
+        // sibling roots above are parameters because a caller assembling a genesis may be
+        // describing a network it is not itself running; the E2E root is not that kind of value —
+        // it says what THIS binary's court can play, and a caller allowed to name it could hand a
+        // devnet a root claiming families no drill ever certified.
+        court_e2e_root: crate::palw_e2e_adjudicability::palw_rc_court_e2e_root_v1(),
         state,
         admission,
         panel: PalwPanelParamsV2::new(PALW_V2_PANEL_SEATS, PALW_V2_PANEL_QUORUM, ANCHOR_DELAY)?,

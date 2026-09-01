@@ -445,10 +445,18 @@ pub fn q36_matmul_grouped(weights: &[i8], exps: &[i8], x: &[i32], params: &[A16Q
     }
     // The accumulator's bound, checked once rather than assumed: a group contributes at most
     // `32 · 128 · 32767 · 2^max_exp`, and there are `groups` of them.
-    let max_exp = exps.iter().copied().max().unwrap_or(0);
-    if !(0..=QWEN36_MAX_GROUP_EXP).contains(&max_exp) {
-        return Err(PalwQwen36OpError::BadK { k: max_exp as usize, experts: QWEN36_MAX_GROUP_EXP as usize });
+    //
+    // **Every exponent is checked, not the largest one.** `max()` answers the accumulator's
+    // question and says nothing about the smallest: a table holding `[0, -1]` has a maximum of 0,
+    // clears a range test written against that maximum, and reaches `partial << exps[..]` below
+    // with a NEGATIVE shift — which panics under the release profile's `overflow-checks`, in
+    // virtual processing, on a block that has already been stored and relayed. The doc above
+    // already calls the exponent non-negative; this is the line that makes that true of a
+    // stranger's bytes and not only of ours.
+    if let Some(bad) = exps.iter().copied().find(|e| !(0..=QWEN36_MAX_GROUP_EXP).contains(e)) {
+        return Err(PalwQwen36OpError::BadK { k: bad.unsigned_abs() as usize, experts: QWEN36_MAX_GROUP_EXP as usize });
     }
+    let max_exp = exps.iter().copied().max().unwrap_or(0);
     let per_group = (QWEN36_WEIGHT_GROUP as i128) * 128 * (A16_CODE_MAX as i128) * (1i128 << max_exp);
     if per_group * groups as i128 > i64::MAX as i128 {
         return Err(PalwQwen36OpError::NotAMultiple { got: n, unit: QWEN36_WEIGHT_GROUP });
@@ -1062,6 +1070,41 @@ mod tests {
 
     fn unity() -> A16QuantParams {
         A16QuantParams { multiplier: 1, shift: K as u8, zero: 0 }
+    }
+
+    /// **A negative group exponent is refused, not shifted by** (ADR-0068 launch audit, F15).
+    ///
+    /// The entry check took `exps.iter().max()` and range-tested that, which answers the
+    /// accumulator's question and nothing about the smallest exponent. `[0, -1]` has a maximum of
+    /// 0, cleared the test, and reached `partial << -1` — a negative shift, which panics under the
+    /// release profile's `overflow-checks = true`. The reachable path is a court close: the op runs
+    /// in virtual processing, so the poisoned block is stored and relayed before it kills the node,
+    /// and every node re-reads it on restart.
+    ///
+    /// Asserted as a REFUSAL rather than caught, because a panic here is the failure — a test that
+    /// merely survived would pass against the defect too.
+    #[test]
+    fn a_negative_group_exponent_is_refused_rather_than_shifted_by() {
+        let n = QWEN36_WEIGHT_GROUP * 2;
+        let x: Vec<i32> = (0..n).map(|i| (i % 7) as i32).collect();
+        let weights: Vec<i8> = (0..n).map(|i| (i % 5) as i8).collect();
+        let params = vec![unity()];
+
+        // The honest table: one non-negative exponent per group, and it runs.
+        assert!(q36_matmul_grouped(&weights, &[0, 0], &x, &params).is_ok(), "a well-formed table must still multiply");
+
+        // The maximum is still 0, so a check written against the maximum sees nothing wrong.
+        let poisoned: [i8; 2] = [0, -1];
+        assert_eq!(poisoned.iter().copied().max(), Some(0), "the premise: the maximum alone cannot see this");
+        assert!(matches!(q36_matmul_grouped(&weights, &poisoned, &x, &params), Err(PalwQwen36OpError::BadK { .. })));
+        // The wide form validates through the narrow one, so it is closed by the same line — pinned
+        // because a future refactor could give it its own entry check.
+        assert!(matches!(q36_matmul_grouped_wide(&weights, &poisoned, &x, &params), Err(PalwQwen36OpError::BadK { .. })));
+        // And the ceiling still binds from above, which the max-only check did get right.
+        assert!(matches!(
+            q36_matmul_grouped(&weights, &[0, QWEN36_MAX_GROUP_EXP + 1], &x, &params),
+            Err(PalwQwen36OpError::BadK { .. })
+        ));
     }
 
     /// `IntLn` against `f64::ln` across the whole domain a decay gate uses.

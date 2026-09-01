@@ -476,6 +476,47 @@ pub fn create_core_with_runtime(runtime: &Runtime, args: &Args, fd_total_budget:
         );
     }
 
+    // **ADR-0069: run the certification drill before anything can ask who may hold weight.**
+    //
+    // `verify_class_admission_v2` grants a nonzero share only to a class whose kernels some
+    // end-to-end certified family covers, and the certified set is a BUILD fact that only a crate
+    // holding backends can fill — `kaspa-consensus-core`, where the gate lives, cannot run a
+    // model. So the node fills it here, once, before a peer is dialed or a block is validated.
+    //
+    // The drill is a real execution and a real court close, and it is the whole basis on which
+    // this build claims it can prosecute anyone, so its failure is reported rather than swallowed:
+    // a node whose floor does not certify still runs and still validates — every class simply
+    // registers weightless — and an operator who is not told would see "my registration got no
+    // share" with nothing anywhere saying why.
+    {
+        let certified = misaka_palw_base0::e2e_drill::register_builtin_certified_families_v1();
+        let built = kaspa_consensus_core::palw_e2e_adjudicability::palw_court_e2e_root_v1();
+        if certified.is_empty() {
+            warn!(
+                "no execution family certified end-to-end on this build — every class will register WEIGHTLESS \
+                 (ADR-0069). The floor's drill did not reach a conviction; this node still validates and still \
+                 produces, but it cannot grant cadence to anyone."
+            );
+        } else {
+            info!("PALW court certified end-to-end for: {} (court_e2e_root {built})", certified.join(", "));
+        }
+        // **And it must be the set the network agreed to.** The root is inside every V2 bundle and
+        // therefore inside `consensus_params_id`, so a node whose court can play a different set of
+        // families is on a different ruleset — the same discipline `court_catalog_root` follows.
+        // Said here rather than left to the handshake because "no peers" is what an operator would
+        // otherwise see, and the cause would be nowhere in their logs.
+        if let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode {
+            if bundle.court_e2e_root != built {
+                warn!(
+                    "this build certifies end-to-end family set {built}, and network {} commits to {}. Peers on that \
+                     network will refuse the handshake, and no class can be granted weight here. This is a BUILD \
+                     mismatch, not a networking fault (ADR-0069).",
+                    network, bundle.court_e2e_root
+                );
+            }
+        }
+    }
+
     // MISAKA Phase 4 (PALW LLM PoW, ADR-0021) startup rails. Header validation on a PALW-active
     // network replays a pinned-LLM inference per header; a node whose runtime is missing there
     // would price every honest header as failed PoW and follow nothing (ADR-0042 Decision 4 —

@@ -233,7 +233,9 @@ pub struct Qwen36RunV1 {
 /// `execution_root` is a composite over the job, the trace and the output. In BASE-0 that slot
 /// holds the step leg's binding, which a refutation is pinned against; here there is no step leg
 /// yet, so it holds the thing that is true today and is stated as such rather than dressed up.
-pub fn qwen36_roots_v1(job: &PalwJobContextV2, shape_id: Hash64, run: &Qwen36RunV1) -> (Hash64, Hash64, Hash64, Hash64) {
+/// `None` when the run does not carry the rows it claims to have selected from — see the refusal
+/// inside. Every caller must treat that as "this material answers nothing", never as a root.
+pub fn qwen36_roots_v1(job: &PalwJobContextV2, shape_id: Hash64, run: &Qwen36RunV1) -> Option<(Hash64, Hash64, Hash64, Hash64)> {
     let context = job.context_hash();
     // **The tiled trace, over the SELECTING rows.** The run keeps every logits row it produced —
     // prefill rows included — but the committed set is one row per generated token: the row that
@@ -241,8 +243,31 @@ pub fn qwen36_roots_v1(job: &PalwJobContextV2, shape_id: Hash64, run: &Qwen36Run
     // would put `prefill × vocab` lanes behind the root for no adjudicable claim: no token is
     // selected from them, so no decode-token dispute can ever open one.
     let prefill = job.declared_prefill_tokens as usize;
-    let selecting: Vec<Vec<i32>> =
-        (0..run.generated.len()).map(|i| run.logits_rows.get(prefill.saturating_sub(1) + i).cloned().unwrap_or_default()).collect();
+    // **A missing row is a refusal, never an empty one** (ADR-0068 launch audit, the panel-seat
+    // panic).
+    //
+    // This read `.cloned().unwrap_or_default()`, which fabricated an empty `Vec<i32>` wherever the
+    // material did not carry the row a token was selected from. That is a lie with teeth: an empty
+    // row has no lanes, so `tiled_logits_row_root_v1` tiles it into zero leaves and
+    // `step_merkle_root_v1` refuses a zero-leaf tree — under an `.expect`, in the panel service, on
+    // material ANYONE may gossip with no bond. One message with `rows = 0, generated = 1` killed
+    // every seat that read it, and seats are what a claim needs to license and a court needs to
+    // open, so a bondless message could disarm the court.
+    //
+    // The honest answer is that material which does not carry the row it says a token came from is
+    // material that answers nothing — `verify_material` turns this `None` into `Unverifiable`,
+    // which is exactly the verdict for bytes a seat cannot check.
+    if run.generated.is_empty() {
+        return None;
+    }
+    let mut selecting: Vec<Vec<i32>> = Vec::with_capacity(run.generated.len());
+    for i in 0..run.generated.len() {
+        let row = run.logits_rows.get(prefill.saturating_sub(1) + i)?;
+        if row.is_empty() {
+            return None;
+        }
+        selecting.push(row.clone());
+    }
     debug_assert!(
         selecting
             .iter()
@@ -261,7 +286,7 @@ pub fn qwen36_roots_v1(job: &PalwJobContextV2, shape_id: Hash64, run: &Qwen36Run
         &[context.as_byte_slice(), shape_id.as_byte_slice(), trace_root.as_byte_slice(), output_root.as_byte_slice()],
     );
     let manifest = keyed(QWEN36_DOMAIN_MANIFEST, &[context.as_byte_slice(), trace_root.as_byte_slice(), &1u64.to_le_bytes()]);
-    (trace_root, output_root, execution_root, manifest)
+    Some((trace_root, output_root, execution_root, manifest))
 }
 
 /// The retained material: the logit rows and the generated ids, which is everything a seat needs
@@ -363,7 +388,11 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
 
     fn execute(&self, job: &PalwJobContextV2, prompt: &[usize]) -> Result<PalwExecutionOutcomeV1, String> {
         let run = self.run(job, prompt)?;
-        let (trace_root, output_root, execution_root, trace_manifest_root) = qwen36_roots_v1(job, self.shape_id, &run);
+        // Unreachable for a run this backend just performed — `run` keeps a row per position and
+        // decodes exactly `exact_decode_tokens` — and an error rather than an `expect` because the
+        // one thing worse than a producer that cannot commit is a producer that panics instead.
+        let (trace_root, output_root, execution_root, trace_manifest_root) = qwen36_roots_v1(job, self.shape_id, &run)
+            .ok_or_else(|| "this run did not keep the rows its tokens were selected from".to_string())?;
         Ok(PalwExecutionOutcomeV1 {
             trace_root,
             output_root,
@@ -390,7 +419,11 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         let Ok((job, _)) = self.job_for_anchor(claim.anchor) else {
             return PalwMaterialVerdictV1::Unverifiable;
         };
-        let (trace_root, _, execution_root, _) = qwen36_roots_v1(&job, self.shape_id, &run);
+        // Material that does not carry the rows it selected from is material this seat cannot
+        // check — the honest `Unverifiable`, not an accusation, and not a panic.
+        let Some((trace_root, _, execution_root, _)) = qwen36_roots_v1(&job, self.shape_id, &run) else {
+            return PalwMaterialVerdictV1::Unverifiable;
+        };
         if trace_root == claim.trace_root && execution_root == claim.execution_root {
             PalwMaterialVerdictV1::Matches
         } else {
@@ -464,7 +497,7 @@ mod tests {
         let run = qwen36_material_decode_v1(&out.material).expect("its own material decodes");
         assert_eq!(run.logits_rows.len(), prompt.len() + job.exact_decode_tokens as usize);
         assert_eq!(run.generated.len(), job.exact_decode_tokens as usize);
-        let (trace_root, _, execution_root, _) = qwen36_roots_v1(&job, a.shape_id(), &run);
+        let (trace_root, _, execution_root, _) = qwen36_roots_v1(&job, a.shape_id(), &run).expect("its own run carries its own rows");
         assert_eq!(trace_root, out.trace_root);
         assert_eq!(execution_root, out.execution_root);
 
@@ -480,6 +513,60 @@ mod tests {
             ),
             PalwMaterialVerdictV1::Unverifiable
         );
+    }
+
+    /// **A bondless gossiped message must not be able to kill every panel seat** (ADR-0068 launch
+    /// audit; found by the Gate 0 sweep).
+    ///
+    /// `verify_material` is the one verb a stranger reaches: material is gossiped and no bond
+    /// stands behind a message. The decoder reads the row count and the token count independently,
+    /// so `rows = 0, generated = 1` parses — and `qwen36_roots_v1` then read the missing row as
+    /// `unwrap_or_default()`, an empty `Vec<i32>`. An empty row has no lanes, so the tiled trace
+    /// root tiles it into ZERO leaves, and `step_merkle_root_v1` refuses a zero-leaf tree under an
+    /// `.expect`. `configure_panic` turns that into `process::exit(1)` with no `catch_unwind`
+    /// anywhere on the path.
+    ///
+    /// One message, every seat that read it dead — and a claim with no seats never licenses and
+    /// never reaches a court, so the attack disarms the court for free. Both variants are pinned
+    /// (the missing row and the empty run), because they hit two different `.expect`s.
+    #[test]
+    fn a_material_that_kept_no_rows_is_unverifiable_rather_than_fatal() {
+        let a = backend();
+        let anchor = Hash64::from_u64_word(0x5EA7);
+        let (job, prompt) = a.job_for_anchor(anchor).expect("a job");
+        let honest = a.execute(&job, &prompt).expect("runs");
+        let claim =
+            PalwClaimRootsV1 { execution_root: honest.execution_root, trace_root: honest.trace_root, anchor };
+
+        // `rows = 0, generated = 1` — the row a token was selected from is simply absent.
+        let mut no_rows = Vec::new();
+        no_rows.extend_from_slice(&0u64.to_le_bytes());
+        no_rows.extend_from_slice(&1u64.to_le_bytes());
+        no_rows.extend_from_slice(&7u32.to_le_bytes());
+        assert!(qwen36_material_decode_v1(&no_rows).is_some(), "the premise: these bytes really do decode");
+        assert_eq!(a.verify_material(&no_rows, claim), PalwMaterialVerdictV1::Unverifiable);
+
+        // `rows = 0, generated = 0` — nothing was selected at all, which empties the row set the
+        // trace root is taken over.
+        let mut empty = Vec::new();
+        empty.extend_from_slice(&0u64.to_le_bytes());
+        empty.extend_from_slice(&0u64.to_le_bytes());
+        assert!(qwen36_material_decode_v1(&empty).is_some(), "the premise: these bytes really do decode");
+        assert_eq!(a.verify_material(&empty, claim), PalwMaterialVerdictV1::Unverifiable);
+
+        // A row that is present and EMPTY is the same lie told a third way: the material says the
+        // token came from a row with no lanes.
+        let mut empty_row = Vec::new();
+        empty_row.extend_from_slice(&1u64.to_le_bytes());
+        empty_row.extend_from_slice(&0u64.to_le_bytes());
+        empty_row.extend_from_slice(&1u64.to_le_bytes());
+        empty_row.extend_from_slice(&7u32.to_le_bytes());
+        assert!(qwen36_material_decode_v1(&empty_row).is_some());
+        assert_eq!(a.verify_material(&empty_row, claim), PalwMaterialVerdictV1::Unverifiable);
+
+        // And the honest material still verifies — a refusal that also refused the real thing
+        // would be a seat that certifies nothing.
+        assert_eq!(a.verify_material(&honest.material, claim), PalwMaterialVerdictV1::Matches);
     }
 
     /// **The court is unavailable and says so.** A backend that returned something plausible from

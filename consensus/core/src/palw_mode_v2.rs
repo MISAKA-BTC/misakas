@@ -426,6 +426,18 @@ pub struct PalwConsensusParamsV2 {
     /// Commitment to the adjudicable primitive set. The boot path runs
     /// `verify_catalog_coverage_v1` against this build's own catalog.
     pub court_catalog_root: Hash64,
+    /// **Commitment to the END-TO-END certified family set** (ADR-0069 Decision 2).
+    ///
+    /// `court_catalog_root` commits to what this build's court can re-execute; this commits to what
+    /// it can actually PLAY — the families whose backends took a planted fault all the way to a
+    /// conviction under the shipped adjudicator
+    /// ([`crate::palw_e2e_adjudicability::palw_court_e2e_root_v1`]).
+    ///
+    /// It rides the bundle for the same reason its sibling does, and the reason is not
+    /// bookkeeping: the admission gate that reads it is a consensus rule whose input is a BUILD
+    /// fact, so two nodes whose courts can play different families must produce different ruleset
+    /// ids and refuse to peer — rather than stay peers and disagree about who gets paid.
+    pub court_e2e_root: Hash64,
     pub state: PalwStateParamsV2,
     pub admission: PalwAdmissionParamsV2,
     pub panel: PalwPanelParamsV2,
@@ -526,6 +538,14 @@ impl PalwConsensusParamsV2 {
         }
         if self.class_catalog_root == Hash64::default() || self.court_catalog_root == Hash64::default() {
             return Err(PalwModeV2Error::Invalid("a zero catalog root commits to nothing adjudicable"));
+        }
+        // **A build that has certified no family still commits to that** (ADR-0069 Decision 2).
+        // The empty set has a real root — `palw_court_e2e_root_v1` hashes the count and no
+        // digests — so `Hash64::default()` here is not "nothing is certified", it is a field
+        // nobody filled, which is the failure this line refuses. A network whose E2E root is unset
+        // would grant weight by a rule whose input was never committed.
+        if self.court_e2e_root == Hash64::default() {
+            return Err(PalwModeV2Error::Invalid("the court's end-to-end root is unset — even an empty certified set has a root"));
         }
 
         // ADR-0045 Decision 3: the share table is chain state now, so the old boot-time checks
@@ -1066,6 +1086,13 @@ pub(crate) mod tests {
             base_class_id: base,
             class_catalog_root: h64(0xCA7),
             court_catalog_root: h64(0xC0517),
+            // The real one, not a fixture hash: a bundle whose E2E root is invented would be a
+            // bundle the boot gate accepts and no drill stands behind. `palw_court_e2e_root_v1` is
+            // a pure function of this build, so it is the same value in a test and in production —
+            // the empty set's root when nothing has registered, which is exactly what a
+            // consensus-core test should be describing (the PIN, so it does not depend on whether
+            // a drill has run in this process — see `palw_rc_court_e2e_root_v1`).
+            court_e2e_root: crate::palw_e2e_adjudicability::palw_rc_court_e2e_root_v1(),
             // Split 900‰/100‰: both lanes are producible (`accepts_algo_id` takes algo-7), so both
             // must hold a real share or the retarget measures one against a census the other
             // dilutes. The carve is set on BOTH, because `validate` requires them equal — the

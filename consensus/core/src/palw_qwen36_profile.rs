@@ -1198,7 +1198,13 @@ mod qwen3moe_family {
                     continue;
                 }
             };
-            let verdict = crate::palw_class_admission_v2::verify_class_admission_v2(b, &profile, &canonical, &reg);
+            // ADR-0069 Decision 5: the weight gate needs a certified set that hashes to the
+            // bundle's own `court_e2e_root`. These tests are about the class's SHAPE, so the gate
+            // is satisfied rather than exercised — see `catalog_covering_family_for_tests_v1`.
+            let certified = crate::palw_e2e_adjudicability::catalog_covering_family_for_tests_v1();
+            let mut b = b.clone();
+            b.court_e2e_root = crate::palw_e2e_adjudicability::palw_court_e2e_root_of_v1(&certified);
+            let verdict = crate::palw_class_admission_v2::verify_class_admission_v2(&b, &profile, &canonical, &reg, &certified);
             match nctx {
                 4 | 6 | 8 | 9 | 10 => assert!(verdict.is_ok(), "n_ctx {nctx} fell out of the qwen3moe family's room: {verdict:?}"),
                 _ => assert!(verdict.is_err(), "n_ctx {nctx} was admitted — the qwen3moe ceiling moved, revisit the ladder comment"),

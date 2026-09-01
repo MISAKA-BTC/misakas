@@ -213,7 +213,13 @@ mod a16_family {
                 vec![],
             )
             .unwrap();
-            let verdict = crate::palw_class_admission_v2::verify_class_admission_v2(b, &profile, &canonical, &reg);
+            // ADR-0069 Decision 5: the weight gate needs a certified set that hashes to the
+            // bundle's own `court_e2e_root`. These tests are about the class's SHAPE, so the gate
+            // is satisfied rather than exercised — see `catalog_covering_family_for_tests_v1`.
+            let certified = crate::palw_e2e_adjudicability::catalog_covering_family_for_tests_v1();
+            let mut b = b.clone();
+            b.court_e2e_root = crate::palw_e2e_adjudicability::palw_court_e2e_root_of_v1(&certified);
+            let verdict = crate::palw_class_admission_v2::verify_class_admission_v2(&b, &profile, &canonical, &reg, &certified);
             match nctx {
                 16 => {
                     assert!(verdict.is_ok(), "the genesis dense geometry must stay admissible: {verdict:?}");
@@ -686,7 +692,11 @@ mod tests {
         bundle.court = crate::palw_mode_v2::PalwCourtParamsV2::new(crate::palw_step::PALW_STEP_MAX_LEAVES, 20, 2)
             .expect("the full ladder is a legal court");
         let canonical = crate::palw_base0_profile::rc_job_context(&profile, QWEN25_A16_CANONICAL.0, QWEN25_A16_CANONICAL.1);
-        let admitted = crate::palw_class_admission_v2::verify_class_admission_v2(&bundle, &profile, &canonical, &object)
+        // ADR-0069 Decision 5, satisfied rather than exercised — this test is about the court
+        // cost the gate derives, not about who may hold weight.
+        let certified = crate::palw_e2e_adjudicability::catalog_covering_family_for_tests_v1();
+        bundle.court_e2e_root = crate::palw_e2e_adjudicability::palw_court_e2e_root_of_v1(&certified);
+        let admitted = crate::palw_class_admission_v2::verify_class_admission_v2(&bundle, &profile, &canonical, &object, &certified)
             .expect("the A16 dense class is admissible on a network with the shipped ceilings");
         assert_eq!(admitted.court_cost, entry.court_cost, "the gate and the mint derive one cost");
         assert!(
@@ -813,7 +823,10 @@ mod tests {
             activation_daa: 0,
             admission: None,
         };
-        match crate::palw_class_admission_v2::verify_class_admission_v2(&bundle, &profile, &canonical, &registration) {
+        let certified = crate::palw_e2e_adjudicability::catalog_covering_family_for_tests_v1();
+        let mut bundle = bundle;
+        bundle.court_e2e_root = crate::palw_e2e_adjudicability::palw_court_e2e_root_of_v1(&certified);
+        match crate::palw_class_admission_v2::verify_class_admission_v2(&bundle, &profile, &canonical, &registration, &certified) {
             Err(crate::palw_class_admission_v2::PalwClassAdmissionError::CourtCostExceedsCeiling { what, got, ceiling }) => {
                 assert_eq!(what, "court close");
                 assert!(got > ceiling * 10, "the refusal is by an order of magnitude: {got} against {ceiling}");

@@ -40,6 +40,10 @@
 pub mod artifact;
 pub mod backend;
 pub mod classes;
+/// ADR-0069 Decision 3: the certification drill — the harness that takes a family's own backend
+/// through a real dispute and asks the SHIPPED court which way it reads. Holding the certificate
+/// it returns is the fact that the court convicted a planted fault and acquitted the honest run.
+pub mod e2e_drill;
 pub mod engine;
 pub mod engine_a16;
 pub mod fuzz_a16;

@@ -102,6 +102,19 @@ fn base_model_id(model_id: &str) -> &str {
 impl PalwClassSdk {
     /// The SDK over [`builtin_lineages_v1`] — what node code uses.
     pub fn builtin_v1(court: PalwCourtParamsV2, network_id: Vec<u8>) -> Self {
+        // **The certification drill runs here, once, for whoever builds an SDK** (ADR-0069).
+        //
+        // The weight gate reads this build's certified family set and refuses one that does not
+        // hash to the network's committed `court_e2e_root`, so an empty registry is not a neutral
+        // starting state — it is a different set, and every admission answer computed from it is
+        // wrong rather than conservative. Anyone holding an SDK is by construction linked against
+        // the crate that can drill, so this is the earliest point where "what can this build
+        // prosecute" has a true answer, and it is cheap after the first call (the drill is cached
+        // in `base0_certificate_v1`).
+        //
+        // The node also calls the registration explicitly at startup — that call is where the
+        // operator-facing log and the pin check live, and both are idempotent.
+        misaka_palw_base0::e2e_drill::register_builtin_certified_families_v1();
         Self::with_lineages(builtin_lineages_v1(), court, network_id)
     }
 
@@ -468,7 +481,11 @@ impl PalwClassSdk {
             Vec::new(),
         )
         .map_err(|e| format!("this build cannot express a registration for {}: {e}", entry.model_id))?;
-        verify_class_admission_v2(bundle, &entry.profile, &canonical, &probe).map_err(|e| {
+        // The build's certified families (ADR-0069 Decision 5) — the same set the consensus gate
+        // reads, so a preflight that says "this would be admitted" is answering the question the
+        // chain will actually ask.
+        let certified = kaspa_consensus_core::palw_e2e_adjudicability::certified_families_v1();
+        verify_class_admission_v2(bundle, &entry.profile, &canonical, &probe, &certified).map_err(|e| {
             format!("the {} registration would be refused by the admission gate, so nothing was signed or funded: {e}", entry.model_id)
         })
     }

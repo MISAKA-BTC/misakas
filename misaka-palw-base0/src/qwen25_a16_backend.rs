@@ -70,11 +70,26 @@ pub fn qwen25_a16_prompt_for_anchor(anchor: Hash64, vocab: usize, prefill: u32) 
 
 /// The four roots, from one run — the same decomposition every family uses, because the header
 /// does not know which family produced them.
-pub fn qwen25_a16_roots_v1(job: &PalwJobContextV2, shape_id: Hash64, run: &Qwen25A16RunV1) -> (Hash64, Hash64, Hash64, Hash64) {
+/// `None` when the run does not carry the rows it claims to have selected from — the same refusal
+/// `qwen36_roots_v1` makes, for the same reason and against the same gossiped-material attack.
+pub fn qwen25_a16_roots_v1(job: &PalwJobContextV2, shape_id: Hash64, run: &Qwen25A16RunV1) -> Option<(Hash64, Hash64, Hash64, Hash64)> {
     let context = job.context_hash();
     let prefill = job.declared_prefill_tokens as usize;
-    let selecting: Vec<Vec<i32>> =
-        (0..run.generated.len()).map(|i| run.logits_rows.get(prefill.saturating_sub(1) + i).cloned().unwrap_or_default()).collect();
+    // **A missing row is a refusal, never an empty one** (ADR-0068 launch audit; see the twin
+    // comment in `qwen36_roots_v1` for the full path). `unwrap_or_default()` fabricated a row with
+    // no lanes, which tiles to a zero-leaf tree, which `step_merkle_root_v1` refuses under an
+    // `.expect` — inside the panel service, on material anyone may gossip without a bond.
+    if run.generated.is_empty() {
+        return None;
+    }
+    let mut selecting: Vec<Vec<i32>> = Vec::with_capacity(run.generated.len());
+    for i in 0..run.generated.len() {
+        let row = run.logits_rows.get(prefill.saturating_sub(1) + i)?;
+        if row.is_empty() {
+            return None;
+        }
+        selecting.push(row.clone());
+    }
     debug_assert!(
         selecting
             .iter()
@@ -91,7 +106,7 @@ pub fn qwen25_a16_roots_v1(job: &PalwJobContextV2, shape_id: Hash64, run: &Qwen2
         &[context.as_byte_slice(), shape_id.as_byte_slice(), trace_root.as_byte_slice(), output_root.as_byte_slice()],
     );
     let manifest = keyed(QWEN25_A16_DOMAIN_MANIFEST, &[context.as_byte_slice(), trace_root.as_byte_slice(), &1u64.to_le_bytes()]);
-    (trace_root, output_root, execution_root, manifest)
+    Some((trace_root, output_root, execution_root, manifest))
 }
 
 pub fn qwen25_a16_material_encode_v1(run: &Qwen25A16RunV1) -> Vec<u8> {
@@ -305,7 +320,10 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
 
     fn execute(&self, job: &PalwJobContextV2, prompt: &[usize]) -> Result<PalwExecutionOutcomeV1, String> {
         let run = self.run(job, prompt)?;
-        let (trace_root, output_root, execution_root, trace_manifest_root) = qwen25_a16_roots_v1(job, self.shape_id, &run);
+        // Unreachable for a run this backend just performed; an error rather than an `expect`
+        // because a producer that panics is worse than one that cannot commit.
+        let (trace_root, output_root, execution_root, trace_manifest_root) = qwen25_a16_roots_v1(job, self.shape_id, &run)
+            .ok_or_else(|| "this run did not keep the rows its tokens were selected from".to_string())?;
         Ok(PalwExecutionOutcomeV1 {
             trace_root,
             output_root,
@@ -484,7 +502,8 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         // logits one; committing `base0_logits_trace_root_v1` here would file a root under a scheme
         // the class does not declare, and the court dispatches on the registered lane.
         let run = Qwen25A16RunV1 { logits_rows, generated: generated.clone() };
-        let (trace_root, output_root, _, trace_manifest_root) = qwen25_a16_roots_v1(&ctx, self.shape_id, &run);
+        let (trace_root, output_root, _, trace_manifest_root) = qwen25_a16_roots_v1(&ctx, self.shape_id, &run)
+            .ok_or_else(|| "this run did not keep the rows its tokens were selected from".to_string())?;
         let activation_leg_root = crate::produce::base0_activation_leg_root_v1(&ctx);
         let binding =
             crate::legs::base0_binding_from_capture_v1(&self.profile, &ctx, &tiles, &checkpoints, trace_root, activation_leg_root)
@@ -525,7 +544,11 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         let Ok((job, _)) = self.job_for_anchor(claim.anchor) else {
             return PalwMaterialVerdictV1::Unverifiable;
         };
-        let (trace_root, _, execution_root, _) = qwen25_a16_roots_v1(&job, self.shape_id, &run);
+        // Material that does not carry the rows it selected from is material this seat cannot
+        // check — the honest `Unverifiable`, not an accusation, and not a panic.
+        let Some((trace_root, _, execution_root, _)) = qwen25_a16_roots_v1(&job, self.shape_id, &run) else {
+            return PalwMaterialVerdictV1::Unverifiable;
+        };
         if trace_root == claim.trace_root && execution_root == claim.execution_root {
             PalwMaterialVerdictV1::Matches
         } else {

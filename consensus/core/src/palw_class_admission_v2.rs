@@ -511,6 +511,16 @@ pub enum PalwClassAdmissionError {
     /// case the ladder was checked against.
     #[error("the canonical job is deeper than the class's own worst case: {canonical} > {worst}")]
     CanonicalDeeperThanWorstCase { canonical: u64, worst: u64 },
+    /// **ADR-0069 Decision 5: weight is the thing certification buys.**
+    ///
+    /// Static adjudicability (every check above this one) says the court could re-execute this
+    /// graph's steps. It does not say any backend can actually PLAY the dispute — assemble a
+    /// refutation, answer a rung, close — and the launch audit measured exactly that gap: two
+    /// families holding 97.8% of cadence whose court methods are the trait's defaults. A class
+    /// that fails here is still perfectly registrable; it takes a zero share and earns no cadence
+    /// until some build certifies a backend for it.
+    #[error("the class asks for {share}‰ but no end-to-end certified family covers the kernels it reaches — it may register weightless")]
+    NotEndToEndCertified { share: u16 },
 }
 
 /// Every kernel a profile's graph can reach, read off the graph.
@@ -535,13 +545,20 @@ pub fn reachable_kernels_v1(profile: &PalwShapeProfileV3) -> BTreeSet<Hash64> {
 /// The returned entry is what a genesis catalog would have held for this class. A caller that
 /// keeps it has the same object the genesis path produces, so the two lanes cannot drift into
 /// describing a class differently.
+///
+/// `certified` is this build's end-to-end certified family set (ADR-0069 Decision 5), and it must
+/// hash to the `court_e2e_root` `bundle` commits to — see [`crate::palw_e2e_adjudicability`]. It is
+/// only read when the registration asks for a nonzero share: a weightless registration is admitted
+/// on the static properties alone, which is ADR-0039's "admissible for liveness" and the reason
+/// this gate can be strict about weight without being a gatekeeper on existence.
 pub fn verify_class_admission_v2(
     bundle: &PalwConsensusParamsV2,
     profile: &PalwShapeProfileV3,
     canonical: &PalwJobContextV2,
     registration: &PalwConsensusObjectV2,
+    certified: &[crate::palw_e2e_adjudicability::PalwE2eFamilyV1],
 ) -> Result<PalwClassCatalogEntryV2, PalwClassAdmissionError> {
-    let PalwConsensusObjectV2::ClassRegistered { class_id, artifact_root, pwu_rule, .. } = registration else {
+    let PalwConsensusObjectV2::ClassRegistered { class_id, artifact_root, pwu_rule, share_permille, .. } = registration else {
         return Err(PalwClassAdmissionError::NotARegistration);
     };
 
@@ -617,6 +634,39 @@ pub fn verify_class_admission_v2(
     // chain where bonds are supposed to be at risk. The BASE-0 profile shipped 2026-08-20 did
     // exactly this at two nodes per layer and passed the id gate.
     crate::palw_catalog_coverage::verify_profile_coverage_v1(profile).map_err(|_| PalwClassAdmissionError::CoverageGap)?;
+
+    // **And the half neither of those can see: can anybody actually PLAY this class's dispute?**
+    // (ADR-0069 Decision 5.)
+    //
+    // Both gates above are about the GRAPH — the adjudicator's arithmetic can re-execute every
+    // kernel it reaches, at every node's shape, in both call classes. A class can pass all of that
+    // and still be unprosecutable, because a dispute needs a party that can assemble the evidence:
+    // a refutation at the narrowed leaf, a prefix state at each rung, a close carrying the weight
+    // rows. `supports_court()` is where a backend answers that today, and it is node-local, it is
+    // a `bool` a family writes about itself, and it appears in no consensus rule — the launch audit
+    // found it `false` on both model families while 97.8% of cadence flowed to them regardless.
+    //
+    // So weight — and only weight — asks for the end-to-end certificate: some family this build
+    // drilled to a real conviction must cover every kernel this class reaches. Registration itself
+    // is untouched, which is the whole point of putting the gate here rather than on existence:
+    // an uncertified class registers at a zero share, produces, gossips and counts for liveness,
+    // and takes weight later by activation when a build can prosecute it. Permissionless in, and
+    // still permissionless — certification is a mechanical property of a build, not a signature.
+    //
+    // `certified` is an argument and is nonetheless not the caller's opinion: it must hash to the
+    // `court_e2e_root` this bundle commits to, so a node that padded it would be refused. That is
+    // the shape `verify_catalog_coverage_v1` could NOT use — its catalog side was an argument with
+    // nothing to check it against, and a caller could pass whatever the reachable set needed — and
+    // it is available here only because the commitment exists. It also keeps this function pure,
+    // which matters: a gate that read process-global state would be one every test had to arrange
+    // and no reader could see the inputs of.
+    if *share_permille > 0 {
+        let covered = crate::palw_e2e_adjudicability::family_certified_for_weight_v1(bundle.court_e2e_root, certified, &kernel_ids)
+            .map_err(|e| PalwClassAdmissionError::Profile(e.to_string()))?;
+        if covered.is_none() {
+            return Err(PalwClassAdmissionError::NotEndToEndCertified { share: *share_permille });
+        }
+    }
 
     let worst = worst_case_step_leaf_count_v1(profile).map_err(|e| PalwClassAdmissionError::Profile(format!("{e:?}")))?;
     let ladder = bundle.court.max_step_leaf_count();
@@ -835,6 +885,39 @@ mod tests {
         bundle
     }
 
+    /// **The certified family these tests admit against, and the bundle that commits to it.**
+    ///
+    /// Every test below is about the STATIC half of admission — ids, coverage, ladder depth, court
+    /// cost, pwu derivation — so each one needs the weight gate (ADR-0069 Decision 5) to be
+    /// satisfied rather than exercised. Satisfying it honestly means holding a family that covers
+    /// what the class reaches AND a bundle whose `court_e2e_root` is that family's root: the gate
+    /// refuses a set that does not hash to the commitment, so a test cannot wave it away by
+    /// passing a bigger list.
+    ///
+    /// The family covers everything this build catalogs, which is the weakest claim that admits
+    /// every profile these fixtures use — coverage already requires a class's kernels to be a
+    /// subset of the catalog, so nothing here is admitted that A4 would not admit. The gate's
+    /// REFUSAL is proven where the real registry lives (`misaka-palw-base0`'s drill, against the
+    /// shipped genesis), because that is the only place a genuinely uncertified family exists.
+    fn certified_for_tests() -> Vec<crate::palw_e2e_adjudicability::PalwE2eFamilyV1> {
+        crate::palw_e2e_adjudicability::catalog_covering_family_for_tests_v1()
+    }
+
+    /// `verify_class_admission_v2` with the weight gate satisfied — see [`certified_for_tests`].
+    /// The bundle is cloned and re-rooted rather than mutated in place so a caller's fixture keeps
+    /// describing whatever it was built to describe.
+    fn admit(
+        bundle: &PalwConsensusParamsV2,
+        profile: &PalwShapeProfileV3,
+        canonical: &PalwJobContextV2,
+        registration: &PalwConsensusObjectV2,
+    ) -> Result<PalwClassCatalogEntryV2, PalwClassAdmissionError> {
+        let certified = certified_for_tests();
+        let mut bundle = bundle.clone();
+        bundle.court_e2e_root = crate::palw_e2e_adjudicability::palw_court_e2e_root_of_v1(&certified);
+        verify_class_admission_v2(&bundle, profile, canonical, registration, &certified)
+    }
+
     fn registration(class_id: Hash64, pwu_per_inference: u64) -> PalwConsensusObjectV2 {
         PalwConsensusObjectV2::ClassRegistered {
             class_id,
@@ -858,12 +941,12 @@ mod tests {
         let counted = step_leaf_count(&profile, &canonical).expect("counts");
         let bundle = bundle_that_pays_for_qwen();
         // Known schemes pass this gate (the flat default is the fixture's own).
-        verify_class_admission_v2(&bundle, &profile, &canonical, &registration(profile.shape_profile_id(), counted))
+        admit(&bundle, &profile, &canonical, &registration(profile.shape_profile_id(), counted))
             .expect("the flat scheme is adjudicable");
         // An invented scheme is refused BY the scheme gate, not downstream.
         profile.logits_scheme_id = Hash64::from_u64_word(0xDEAD_5C11E);
         let counted = step_leaf_count(&profile, &canonical).expect("counts");
-        let err = verify_class_admission_v2(&bundle, &profile, &canonical, &registration(profile.shape_profile_id(), counted))
+        let err = admit(&bundle, &profile, &canonical, &registration(profile.shape_profile_id(), counted))
             .expect_err("a scheme nothing can adjudicate must not admit");
         assert!(format!("{err}").contains("cannot adjudicate"), "got {err}");
     }
@@ -884,13 +967,13 @@ mod tests {
         // Exactly at the bound: footprint = 63 + 2 − 1 = 64 = n_ctx. Admissible.
         let at_bound = context(&profile, 63, 2);
         let counted = step_leaf_count(&profile, &at_bound).expect("the boundary job counts");
-        verify_class_admission_v2(&bundle, &profile, &at_bound, &registration(profile.shape_profile_id(), counted))
+        admit(&bundle, &profile, &at_bound, &registration(profile.shape_profile_id(), counted))
             .expect("a job whose footprint is exactly n_ctx is the declared worst case, not a violation");
         // One past it: refused by the span gate, by name.
         let past = context(&profile, 64, 2);
         let counted =
             step_leaf_count(&profile, &past).expect("still enumerable — the violation is the class's bound, not the ladder's");
-        let err = verify_class_admission_v2(&bundle, &profile, &past, &registration(profile.shape_profile_id(), counted))
+        let err = admit(&bundle, &profile, &past, &registration(profile.shape_profile_id(), counted))
             .expect_err("a canonical job past the registered context prices work the class never bounded");
         assert!(format!("{err}").contains("cached positions"), "got {err}");
     }
@@ -907,7 +990,7 @@ mod tests {
         // at the one the hand-written table pretended to.
         let canonical = context(&profile, 8, 4);
         let counted = step_leaf_count(&profile, &canonical).expect("the canonical job counts");
-        let entry = verify_class_admission_v2(
+        let entry = admit(
             &bundle_that_pays_for_qwen(),
             &profile,
             &canonical,
@@ -945,7 +1028,7 @@ mod tests {
         let canonical = context(&profile, 8, 4);
         let counted = step_leaf_count(&profile, &canonical).expect("counts");
         let object = registration(profile.shape_profile_id(), counted);
-        verify_class_admission_v2(&bundle, &profile, &canonical, &object).expect("admissible");
+        admit(&bundle, &profile, &canonical, &object).expect("admissible");
 
         // The bundle is untouched by admitting it: admission RETURNS a catalog entry, it does not
         // put one into the params. The entry lives in chain state from here on.
@@ -969,7 +1052,7 @@ mod tests {
         let big = qwen_admissible();
         let canonical = context(&big, 8, 4);
         let counted = step_leaf_count(&big, &canonical).expect("counts");
-        verify_class_admission_v2(&bundle_that_pays_for_qwen(), &big, &canonical, &registration(big.shape_profile_id(), counted))
+        admit(&bundle_that_pays_for_qwen(), &big, &canonical, &registration(big.shape_profile_id(), counted))
             .expect("admissible");
         assert_eq!(base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("re-derives").shape_profile_id(), before);
         assert_ne!(before, big.shape_profile_id(), "two geometries are two classes");
@@ -1012,14 +1095,14 @@ mod tests {
         let reg = registration(lame.shape_profile_id(), 1);
         let lame_ctx = context(&lame, PALW_RC_BASE0_CANONICAL.0, PALW_RC_BASE0_CANONICAL.1);
         assert!(
-            matches!(verify_class_admission_v2(&bundle, &lame, &lame_ctx, &reg), Err(PalwClassAdmissionError::CoverageGap)),
+            matches!(admit(&bundle, &lame, &lame_ctx, &reg), Err(PalwClassAdmissionError::CoverageGap)),
             "a class the adjudicator cannot serve must not be registrable"
         );
 
         // And the honest floor still admits, so the gate is a bound rather than a blanket refusal.
         let ok = registration(good.shape_profile_id(), 7_900);
         assert!(
-            !matches!(verify_class_admission_v2(&bundle, &good, &canonical, &ok), Err(PalwClassAdmissionError::CoverageGap)),
+            !matches!(admit(&bundle, &good, &canonical, &ok), Err(PalwClassAdmissionError::CoverageGap)),
             "the floor's own graph is servable"
         );
     }
@@ -1036,7 +1119,7 @@ mod tests {
         let big = qwen_admissible();
         let canonical = context(&big, 8, 4);
         let counted = step_leaf_count(&big, &canonical).expect("counts");
-        let err = verify_class_admission_v2(&bundle, &big, &canonical, &registration(big.shape_profile_id(), counted))
+        let err = admit(&bundle, &big, &canonical, &registration(big.shape_profile_id(), counted))
             .expect_err("the ladder cannot reach it");
         assert!(matches!(err, PalwClassAdmissionError::DeeperThanTheLadder { .. }), "got {err:?}");
     }
@@ -1048,7 +1131,7 @@ mod tests {
         let profile = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("expressible");
         let canonical = context(&profile, PALW_RC_BASE0_CANONICAL.0, PALW_RC_BASE0_CANONICAL.1);
         let counted = step_leaf_count(&profile, &canonical).expect("counts");
-        let err = verify_class_admission_v2(
+        let err = admit(
             &bundle_with_full_ladder(),
             &profile,
             &canonical,
@@ -1068,7 +1151,7 @@ mod tests {
         let counted = step_leaf_count(&profile, &canonical).expect("counts");
         let bundle = bundle_with_full_ladder();
 
-        let borrowed = verify_class_admission_v2(&bundle, &profile, &canonical, &registration(Hash64::from_u64_word(7), counted))
+        let borrowed = admit(&bundle, &profile, &canonical, &registration(Hash64::from_u64_word(7), counted))
             .expect_err("an id that is not the graph's is refused");
         assert!(matches!(borrowed, PalwClassAdmissionError::ClassIdIsNotTheProfileId { .. }), "got {borrowed:?}");
 
@@ -1076,7 +1159,7 @@ mod tests {
         if let PalwConsensusObjectV2::ClassRegistered { pwu_rule, .. } = &mut bounded {
             *pwu_rule = PalwPwuRuleV2::MaxPerAttempt(1_000);
         }
-        let err = verify_class_admission_v2(&bundle, &profile, &canonical, &bounded).expect_err("bounded is not derived");
+        let err = admit(&bundle, &profile, &canonical, &bounded).expect_err("bounded is not derived");
         assert!(matches!(err, PalwClassAdmissionError::ClassIsNotDerived), "got {err:?}");
     }
 
@@ -1444,7 +1527,7 @@ mod tests {
             let cost = derive_court_cost_v1(&p).expect("derivable");
             let canonical = context(&p, 8, 4);
             let Ok(counted) = step_leaf_count(&p, &canonical) else { continue };
-            match verify_class_admission_v2(&default_bundle, &p, &canonical, &registration(p.shape_profile_id(), counted)) {
+            match admit(&default_bundle, &p, &canonical, &registration(p.shape_profile_id(), counted)) {
                 Ok(_) => {
                     assert!(cost.max_close_bytes <= crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES);
                     fits.push(tile);
@@ -1541,7 +1624,7 @@ mod tests {
             activation_daa: 0,
             admission: None,
         };
-        let entry = verify_class_admission_v2(&bundle, &profile, &canonical, &reg).expect("the floor is admissible");
+        let entry = admit(&bundle, &profile, &canonical, &reg).expect("the floor is admissible");
         assert_eq!(entry.canonical_step_leaf_count, counted, "still counted in STEP LEAVES, not decode tokens");
         assert!(!entry.reachable_kernels.is_empty(), "and still coverage-checked");
     }

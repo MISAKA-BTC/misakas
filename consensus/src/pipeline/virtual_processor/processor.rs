@@ -5099,11 +5099,19 @@ impl VirtualStateProcessor {
                     ) {
                         return Err(format!("class {class_id}'s registration is not signed by the bond it names"));
                     }
+                    // **The certified family set, from this build** (ADR-0069 Decision 5). The
+                    // gate reads it only for a registration asking a nonzero share, and it refuses
+                    // a set that does not hash to `bundle.court_e2e_root` — so a node whose court
+                    // can play a different set of families than the network agreed to is stopped
+                    // here rather than quietly granting or refusing weight on its own authority.
+                    // The set is filled by the node's boot drill; the boot gate is what makes sure
+                    // it agrees with the network's pin before a block is ever validated.
                     kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v2(
                         bundle,
                         &carriage.profile,
                         &carriage.canonical,
                         object,
+                        &kaspa_consensus_core::palw_e2e_adjudicability::certified_families_v1(),
                     )
                     .map_err(|e| format!("class {class_id} is not admissible: {e}"))?;
                 }

@@ -193,11 +193,16 @@ fn gate_accepts(
     root: kaspa_hashes::Hash64,
 ) -> bool {
     let canonical = kaspa_consensus_core::palw_base0_profile::rc_job_context(profile, 4, 2);
+    // **Probed WEIGHTLESS** (ADR-0069 Decision 5). What this fuzzer asks is whether a mutated
+    // profile is a well-formed, adjudicable SHAPE — ids, coverage, ladder depth, court cost. Who
+    // may hold cadence is a different question with a different input (the build's certified family
+    // set), and asking it here would make every mutation fail for a reason that has nothing to do
+    // with the mutation.
     let Ok(probe) = kaspa_consensus_core::palw_class_admission_v2::palw_post_genesis_registration_v1(
         profile.clone(),
         canonical.clone(),
         root,
-        1,
+        0,
         1,
         1,
         0,
@@ -209,7 +214,7 @@ fn gate_accepts(
     ) else {
         return false;
     };
-    kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v2(bundle, profile, &canonical, &probe).is_ok()
+    kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v2(bundle, profile, &canonical, &probe, &[]).is_ok()
 }
 
 /// Drive `iterations` mutated profiles through gate → plan → double execution. See the module

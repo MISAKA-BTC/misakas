@@ -813,6 +813,16 @@ pub struct PalwStepCoordinateV1 {
 }
 
 fn tiles_for(len: u64, tile_len: u32) -> u64 {
+    // **Total, because one caller reaches it before the shape is bounded.** `validate_shape`
+    // refuses `tile_len < PALW_STEP_MIN_TILE_LEN`, so on every validated profile this branch is
+    // dead — and `canonical_step_coordinates` used to enumerate an UNVALIDATED profile carried in
+    // a stranger's close, where `div_ceil(0)` is a division by zero: a panic in virtual
+    // processing, after the block is stored and relayed, on every node. The caller validates now;
+    // this stays as the second lock on the same door, and answering "no tiles" for a width of
+    // zero is the only arithmetic that could be right.
+    if tile_len == 0 {
+        return 0;
+    }
     len.div_ceil(tile_len as u64)
 }
 
@@ -920,6 +930,17 @@ pub fn canonical_step_coordinates(
     context: &PalwJobContextV2,
     leaf_index: u64,
 ) -> Option<PalwStepCoordinateV1> {
+    // **Validate BEFORE enumerating** — `step_leaf_count` and `worst_case_step_leaf_count_v1` both
+    // do, and this one did not, which mattered because this is the sibling a STRANGER reaches.
+    // `adjudicate_court_close_v2`'s DecodeToken arms hand it `binding.shape_profile` straight out
+    // of an attacker's close, and the shape check that would have refused it (`validate_shape`
+    // inside `check_step_refutation_v1`) runs later, in `adjudicate_close_proof_v2`. Two of the
+    // bounds this restores are the difference between an error and a dead network: `tile_len`
+    // (a zero width divided by zero, one line down the walk) and the `n_ctx × layer_count` work
+    // ceiling (a declared context of four billion, enumerated here before anything can compare
+    // against the leaf cap). Both run in virtual processing, so the block is stored and relayed
+    // first and every node re-reads it on restart.
+    profile.validate_shape().ok()?;
     let prefill = context.declared_prefill_tokens as u64;
     let decode_calls = context.exact_decode_tokens.saturating_sub(1) as u64;
     let mut cursor = leaf_index;
@@ -1081,6 +1102,41 @@ mod tests {
         assert!(profile.validate_shape().is_ok(), "a huge context is admissible while the product fits");
     }
 
+    /// **The same ceiling, on the sibling a stranger reaches** (ADR-0068 launch audit, F25).
+    ///
+    /// `worst_case_step_leaf_count_v1` is reached by class registration, which a node validates.
+    /// `canonical_step_coordinates` is reached by a court CLOSE — `adjudicate_court_close_v2`'s
+    /// DecodeToken arms pass `binding.shape_profile` to it verbatim, and the shape check that
+    /// would refuse the profile runs afterwards, in `adjudicate_close_proof_v2`. So the unbounded
+    /// walk and the zero-width divide were both live on a path whose input is an attacker's bytes,
+    /// in virtual processing, on a block already stored and relayed.
+    ///
+    /// Two shapes, because they break it in two different places: a context that buys an
+    /// enumeration, and a tile width that divides by zero one line into the walk. Timed for the
+    /// same reason the sibling is — a regression here hangs rather than fails.
+    #[test]
+    fn an_unvalidated_profile_cannot_buy_an_enumeration_or_a_zero_divide() {
+        let good = crate::palw_base0_profile::base0_profile_v1(crate::palw_base0_profile::PALW_RC_BASE0_GEOMETRY)
+            .expect("the shipped floor profile is well-formed");
+        let ctx = crate::palw_base0_profile::rc_job_context(&good, 4, 2);
+        assert!(canonical_step_coordinates(&good, &ctx, 0).is_some(), "the real class must still address leaf 0");
+
+        let mut unbounded = good.clone();
+        unbounded.n_ctx = u32::MAX;
+        unbounded.layer_count = u16::MAX;
+        let started = std::time::Instant::now();
+        let refused = canonical_step_coordinates(&unbounded, &ctx, u64::MAX / 2);
+        let took = started.elapsed();
+        assert!(refused.is_none(), "an unbounded shape must be refused, not enumerated");
+        assert!(took < std::time::Duration::from_millis(200), "refusing took {took:?} — it is being enumerated before it is refused");
+
+        // A width of zero: `tiles_for` divided by it on the first node of the first position.
+        let mut zero_tile = good.clone();
+        zero_tile.pre_nodes[0].tile_len = 0;
+        assert!(zero_tile.validate_shape().is_err(), "the shape check is what refuses it");
+        assert!(canonical_step_coordinates(&zero_tile, &ctx, 0).is_none(), "and the walk must refuse rather than divide by zero");
+    }
+
     fn node(kind: PalwStepOpKindV1, out: PalwStepOutLenV1, tile: u32) -> PalwStepNodeV1 {
         PalwStepNodeV1 {
             op_kind: kind,
@@ -1194,6 +1250,7 @@ mod tests {
             .chain(PALW_REFERENCE_ALL_DOMAINS.iter())
             .chain(PALW_SCHEDULE_ALL_DOMAINS.iter())
             .chain(PALW_CARRIAGE_ALL_DOMAINS.iter())
+            .chain(crate::palw_e2e_adjudicability::PALW_E2E_ALL_DOMAINS.iter())
         {
             assert!(!seen.contains(d), "step module reuses a foreign domain: {}", String::from_utf8_lossy(d));
         }
