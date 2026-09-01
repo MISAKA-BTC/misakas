@@ -1,0 +1,134 @@
+# ADR-0068: The LLM-primary economy — the floor retires to the doctrine's minimum
+
+- Status: Accepted; **Phase 1 implemented 2026-09-01** (F3a and F2 closed in code, fences
+  shipped OFF; this branch). Phase 0 is operations and began the same day; Phase 2 is a
+  coordinated re-mint and is gated on the Phase 1 drill.
+- Date: 2026-09-01
+- Depends on: ADR-0045 (class economy: block-denominated budgets, share table),
+  ADR-0054 (share follows production), ADR-0058 (merged work is counted),
+  ADR-0060 (the liveness doctrine), ADR-0064 (trustless recovery), ADR-0066 (heartbeat out of
+  bits — findings F2 and F3a, which this ADR closes)
+- Amends: testnet-11's de-facto floor-majority cadence (share table 550/200/250) and
+  `min_base_class_share_permille = 100`.
+
+## 1. Goal
+
+Rewards AND block production come from LLM computation by default; base (model-free)
+computation exists only for the minimum the liveness doctrine requires. End-state on a
+three-class network:
+
+| axis | floor (BASE-0) | LLM classes | mechanism |
+|---|---|---|---|
+| time (clock) | — | — | heartbeat lane (armed): ε-weight, fee-only, ramps on silence |
+| blocks / issuance | 2% | 98% | share table (blocks × the same subsidy carve) |
+| chain weight | ~0.01% | ~99.99% | pwu (unchanged) |
+
+## 2. What was already true (measured, not designed here)
+
+* **Issuance follows block counts.** The subsidy carve is class-independent (ADR-0042 D10:
+  a carve of the fixed emission, never an addition) and the epoch budgets are "blocks, never
+  pwu" (`derive_epoch_budgets_v2`). The share table is therefore THE issuance lever, and pwu
+  is chain weight — security, reorg depth, slash exposure — not pay.
+* **Liveness does not need the floor's share.** Three shipped mechanisms carry it: the census
+  denominator (an idle class's budget redistributes), S-04 (over-budget blocks are merged but
+  unpaid — the floor can advance DAA past a dying epoch at zero issuance cost), and the
+  heartbeat lane (ADR-0060 D1 / ADR-0066) once armed.
+* **Emergency full pay needs no new rule.** If every LLM class dies, the next epoch's census
+  hands the floor ~the whole block budget at full pay — the ambulance wage emerges from
+  ADR-0045 arithmetic.
+
+## 3. The three phases
+
+**Phase 0 — walk the table, don't fork it (operations, no consensus change).** Run the LLM
+producers persistently; ADR-0054 walks the floor 550‰ → 100‰ (its current minimum) as LLM
+production sustains. The floor producer keeps running through its unpaid over-budget tail —
+that tail IS its liveness readiness. *(Begun 2026-09-01: node0 restored to the QWEN36
+producer class; C's seat 2 doubles as the QWEN25-A16 producer, because node-b — the class's
+producer and panel seat 5 — is dark, which is also why the void rate is elevated: three dark
+seats where ADR-0065 assumed at most two.)*
+
+**Phase 1 — arm the clock before shrinking the reserve.** Close ADR-0066's two leftovers in
+code (§4), then arm `palw_heartbeat` and `palw_attempt_work` on testnet-11 **by a rolling
+preset update**: both fences follow the fence discipline — a scheduled activation keeps
+`consensus_identity_id`, so old and new builds stay peers until the fence fires, and the
+locked values (`work_log2`, `max_per_mergeset`) refuse to start a binary that does not
+implement them. Run the bondless heartbeat miner (one flag) on ≥ 2 independent hosts. Then
+the drill, on a devnet clone: kill every producer AND the floor; verify the ramp
+(1 h → 120 s), re-entry transactions riding heartbeats, epoch closure, census hand-back, and
+unattended recovery. **Phase 2 is gated on this drill passing.**
+
+**Phase 2 — the floor's minimum drops 100‰ → 20‰ (coordinated re-mint).**
+`min_base_class_share_permille` is inside the V2 bundle and therefore inside the identity, so
+this is testnet-11's next re-mint train, not a fence. With the clock armed, the 10% reserve
+defends nothing the census + heartbeat do not already defend; 20‰ (the grant floor admits
+≥ 1‰) keeps the floor as a permissionless entry ramp (one floor block funds ~10⁵ minimum
+collaterals), the artifact-less KAT class for the dispute machinery, and the census's
+expansion seed. Mainnet preset: genesis share table {floor 20‰, LLM 980‰},
+`min_base_class_share_permille = 20`, both fences armed from genesis.
+
+**The floor is never withdrawn.** ADR-0053 measured what withdrawal costs; the floor is the
+one class with no artifact to lose and the one class every seat verifies by construction. It
+shrinks; it does not leave.
+
+## 4. Phase 1's two closures (implemented on this branch)
+
+### F2 — the attempt lane's blue work leaves `calc_work(bits)`
+
+`Params::palw_attempt_work` (`PalwAttemptWorkV1 { activation, work_log2 }`): under the fence
+an algo-6 block's blue work is the constant `1 << PALW_ATTEMPT_BLUE_WORK_LOG2` (2²⁰), maxed
+with `level_work`, at every proof level (threaded through the pruning-proof managers the same
+way ε is). The audit's finding: on a V2 preset the ambient bits price every bonded block at
+2 — parity with two ε = 1 sibling heartbeats for ~280 kH/s.
+
+**A constant, deliberately NOT the envelope's claimed pwu.** The claim is verified against
+class state, class state lives on the selected chain, and GHOSTDAG holds only the header. A
+claim-derived work would let a shape-valid header that never faces the lottery mint
+fork-choice weight with a number; the constant keeps the spam/honest ratio exactly where it
+is today while fixing the one ratio F2 is about. Per-class weight (QWEN36 vs floor) is not
+this layer's job either — that is the pwu-verified PALW chain weight (`safe(C)`, ADR-0058),
+which only counts what the chain actually checked. The pruning-proof level argument is
+undisturbed in structure: per-block work is still a constant across the lane, only larger,
+and level assignment (digest zeros) never depended on it.
+
+### F3a — sibling heartbeat width is bounded where `mergeset_size_limit` lives
+
+`PalwHeartbeatV1` grows `max_per_mergeset` (locked to
+`PALW_HEARTBEAT_MAX_PER_MERGESET = 4`): a valid block's mergeset — selected parent included —
+holds at most four heartbeat blocks (`RuleError::MergeSetTooManyHeartbeats`, checked beside
+`check_mergeset_size_limit`; POV-independent, no walk, no window). The template builder
+carries the same budget through `pick_virtual_parents`/`mergeset_increase` and chunks: four
+this block, the rest against later blocks' fresh budgets — absorbed at a bounded rate, and a
+flood older than the merge depth is simply never merged. Four = one heartbeat-parent chain
+slot plus three siblings of healing headroom: an honest steady state (one heartbeat per
+interval) never sees two, and a partition that ran on the clock heals a foreign heartbeat
+chain at three per block.
+
+What the bound does NOT claim: relay/storage of never-merged siblings stays priced by the
+2²⁴ header cost, as before. The bound removes their *consensus* influence — DAA, mergesets,
+blue sets — which is what "unbounded valid blocks at a permanently fixed price" was about.
+
+## 5. Considered and rejected
+
+* **Claim-derived attempt work** — rejected above (weight minted by a number).
+* **Per-class pay discount** (`base_class_pay_permille`, don't-mint the remainder): at a 20‰
+  share the floor is already 2% of issuance; a second lever on the same axis buys < 2pp of
+  purity for a new consensus mechanism and audit surface. One lever per axis.
+* **Zero-pay floor**: an unpaid backbone is an assigned duty (re-centralizes to staff), and
+  the entry ramp dies. The heartbeat lane is the correct zero-pay liveness instrument.
+* **Removing BASE-0**: the heartbeat is fee-only and ε-weight — on a young chain it pays
+  ~nothing (no faucet role) and weighs nothing (no weight-flow through an outage); and the
+  dispute machinery loses its CI-runnable class.
+
+## 6. Invariants to verify at each step
+
+* I1 (seat capacity): at 98% LLM cadence ≈ 1 claim / 2 min sustained; seat artifact rollout
+  precedes each share step (the 2026-08-28 slash incident generalizes: at LLM-majority
+  cadence, seat coverage is chain-critical).
+* I2 (escrow float): ~all issuance becomes Final-gated. Document miner cashflow; collateral
+  derivation already prices claim lifetime.
+* I3 (mid-epoch death): floor budget exhausts in a dying epoch → unpaid floor blocks + the
+  heartbeat ramp close the epoch; census restores paid floor cadence next epoch. Drill it.
+* I4 (finality during outage): weight-flow pauses on a heartbeat-only chain; the inactivity
+  leak (ADR-0060 §6 / ADR-0066 D4) covers the overlay. No new rule.
+* I5 (walk rate): 550 → 100 takes multiple epochs under the retarget clamp — fine on t11;
+  new networks write the end-state table into genesis instead of walking to it.

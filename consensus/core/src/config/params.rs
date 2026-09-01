@@ -386,6 +386,39 @@ pub struct PalwHeartbeatV1 {
     /// The lane's price as a work exponent: a heartbeat header must satisfy
     /// `Uint256::MAX >> work_log2`, independent of the `bits` it carries.
     pub work_log2: u32,
+    /// **F3a's bound (ADR-0068 Phase 1): how many heartbeat blocks one mergeset may hold**,
+    /// selected parent included. The slot rule bounds the chain and the price bounds the header
+    /// rate; this is the missing third bound — the DAG's — placed where `mergeset_size_limit`
+    /// already lives. Like `work_log2` it is a value beside the fence: hashed into
+    /// `consensus_params_id`, invisible to the fence visitor, and locked to
+    /// [`crate::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET`] at `validate_palw_v2` so the fence
+    /// can only declare a bound this binary enforces.
+    pub max_per_mergeset: u64,
+}
+
+/// **ADR-0066 Decision 3's parameter (finding F2), closed by ADR-0068 Phase 1: the attempt lane's
+/// fork-choice work leaves `calc_work(header.bits)`.**
+///
+/// On `ConsensusV2` the hash target is not the throttle, so `calc_work` prices a bonded block at
+/// 2 — parity with two sibling heartbeats at ε = 1. Under this fence an attempt-lane (algo-6)
+/// block's blue work is the constant `1 << work_log2` instead, so a bonded block outweighs a
+/// million heartbeats and hash buys nothing back. A constant and not the claimed pwu: the claim
+/// is only verified against class state on the selected chain, and GHOSTDAG has only the header —
+/// see [`crate::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2`] for the whole argument.
+///
+/// `work_log2` sits beside the fence exactly as [`PalwHeartbeatV1::work_log2`] does, and carries
+/// the same hazard and the same lock: hashed into `consensus_params_id`, never visited by the
+/// fence visitor, refused at start if it names a value this binary does not implement. Arming it
+/// moves `header.blue_work` on every attempt block from the fence height on, so it is a
+/// coordinated change — every operator schedules the same height or the chain splits the moment
+/// the fence fires.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwAttemptWorkV1 {
+    /// When attempt-lane blue work switches to the constant.
+    pub activation: ForkActivation,
+    /// The attempt lane's work as an exponent: an algo-6 block contributes `1 << work_log2` to
+    /// blue work, independent of the `bits` it carries.
+    pub work_log2: u32,
 }
 
 /// **ADR-0066 Decision 4's parameter: the inactivity leak, and how long silence must last.**
@@ -622,6 +655,14 @@ pub struct Params {
     /// that disagreed about which blocks are valid, and nothing in the handshake could say so.
     pub palw_heartbeat: Option<PalwHeartbeatV1>,
 
+    /// **ADR-0066 Decision 3 (finding F2), closed by ADR-0068 Phase 1 — attempt-lane blue work
+    /// becomes a constant.** `None` on every shipped preset.
+    ///
+    /// Fenced separately from `palw_heartbeat` because it moves `header.blue_work` on every
+    /// attempt block whether or not the heartbeat lane is armed — but the two are meant to arm
+    /// together: ε is only "near-weightless" once the other side of the comparison is real.
+    pub palw_attempt_work: Option<PalwAttemptWorkV1>,
+
     /// **ADR-0066 Decision 4 — the inactivity leak.** `None` on every shipped preset.
     ///
     /// Replaces `DnsParams.inactivity_leak_daa`, which is retired at `u64::MAX` permanently rather
@@ -780,6 +821,28 @@ impl Params {
         {
             return Err(PalwModeV2Error::Invalid(
                 "palw_heartbeat declares a work_log2 this binary does not implement: the lane's target is a \
+                 network constant and the fence must name the same one",
+            ));
+        }
+        // **ADR-0068 Phase 1: the same lock for the same reason, twice over.** F3a's mergeset
+        // bound and F2's attempt work are both values beside a fence with a second source in the
+        // enforcing code, and two sources for one number is how a value gets announced rather
+        // than enforced.
+        if let Some(heartbeat) = self.palw_heartbeat
+            && heartbeat.activation != ForkActivation::never()
+            && heartbeat.max_per_mergeset != crate::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET
+        {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_heartbeat declares a max_per_mergeset this binary does not enforce: the width bound is a \
+                 network constant and the fence must name the same one",
+            ));
+        }
+        if let Some(attempt_work) = self.palw_attempt_work
+            && attempt_work.activation != ForkActivation::never()
+            && attempt_work.work_log2 != crate::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2
+        {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_attempt_work declares a work_log2 this binary does not implement: the attempt lane's work is a \
                  network constant and the fence must name the same one",
             ));
         }
@@ -1110,6 +1173,10 @@ impl Params {
         if self.palw_heartbeat.is_some_and(|h| h.activation == ForkActivation::never()) {
             self.palw_heartbeat = None;
         }
+        // ADR-0068 Phase 1: F2's fence, the D1 rule for the D1 reason.
+        if self.palw_attempt_work.is_some_and(|w| w.activation == ForkActivation::never()) {
+            self.palw_attempt_work = None;
+        }
         if self.palw_inactivity_leak.is_some_and(|l| l.activation == ForkActivation::never()) {
             self.palw_inactivity_leak = None;
         }
@@ -1156,6 +1223,33 @@ impl Params {
     pub fn palw_heartbeat_lane_fence(&self) -> Option<ForkActivation> {
         match (&self.palw_consensus_mode, self.palw_heartbeat) {
             (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(h)) => Some(h.activation),
+            _ => None,
+        }
+    }
+
+    /// **F3a's width bound with the mode condition folded in** (ADR-0068 Phase 1) — the same
+    /// activation the lane fence answers, because the bound arms WITH the lane: a mergeset can
+    /// only hold heartbeats once the lane exists, and a lane must never exist without its bound.
+    /// The processors store this one `Option<ForkActivation>` and read the bound itself from
+    /// [`crate::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET`], which `validate_palw_v2` proved
+    /// equal to the fence's declared value.
+    pub fn palw_heartbeat_width_fence(&self) -> Option<ForkActivation> {
+        self.palw_heartbeat_lane_fence()
+    }
+
+    /// **Is the attempt lane's constant work in force at `daa_score`?** (ADR-0066 Decision 3 /
+    /// finding F2, closed by ADR-0068 Phase 1.)
+    pub fn palw_attempt_work_open_at(&self, daa_score: u64) -> bool {
+        self.palw_attempt_work_fence().is_some_and(|f| f.is_active(daa_score))
+    }
+
+    /// The attempt-work fence **with the mode condition already folded in** — `Some` only on a
+    /// `ConsensusV2` network that has armed it, for the same one-question-one-answer reason as
+    /// [`Self::palw_heartbeat_lane_fence`]: algo-6 exists only under `ConsensusV2`, so on any
+    /// other network there is no block this rule could price.
+    pub fn palw_attempt_work_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_attempt_work) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(w)) => Some(w.activation),
             _ => None,
         }
     }
@@ -1259,6 +1353,7 @@ impl Params {
             palw_bond_maturity,
             palw_frontier_provenance,
             palw_heartbeat,
+            palw_attempt_work,
             palw_inactivity_leak,
             // The V2 bundle's fences are inside `palw_ruleset_id_v2` — see the doc block.
             palw_consensus_mode: _,
@@ -1348,6 +1443,15 @@ impl Params {
         // the `inactivity_leak_daa` trap this pair exists to escape.
         match palw_heartbeat.as_mut() {
             Some(heartbeat) => fork(&mut heartbeat.activation, visit),
+            None => {
+                absent = u64::MAX;
+                visit(&mut absent);
+            }
+        }
+        // ADR-0068 Phase 1 (F2): activation only, `work_log2` stays out — the same rule as its
+        // two siblings above, for the same reason.
+        match palw_attempt_work.as_mut() {
+            Some(attempt_work) => fork(&mut attempt_work.activation, visit),
             None => {
                 absent = u64::MAX;
                 visit(&mut absent);
@@ -1541,6 +1645,7 @@ impl Params {
             palw_bond_maturity,
             palw_frontier_provenance,
             palw_heartbeat,
+            palw_attempt_work,
             palw_inactivity_leak,
             palw_consensus_mode,
             pow_blake2b_sha3_activation,
@@ -1689,6 +1794,14 @@ impl Params {
             h.write(b"palw_heartbeat");
             h.write(heartbeat.activation.daa_score().to_le_bytes());
             h.write(heartbeat.work_log2.to_le_bytes());
+            h.write(heartbeat.max_per_mergeset.to_le_bytes());
+        }
+        // ADR-0068 Phase 1 (F2): Some-only, like its siblings — an unarmed preset fingerprints
+        // byte-identically to a build without the field at all.
+        if let Some(attempt_work) = palw_attempt_work {
+            h.write(b"palw_attempt_work");
+            h.write(attempt_work.activation.daa_score().to_le_bytes());
+            h.write(attempt_work.work_log2.to_le_bytes());
         }
         if let Some(leak) = palw_inactivity_leak {
             h.write(b"palw_inactivity_leak");
@@ -1972,6 +2085,7 @@ impl Params {
             palw_bond_maturity: self.palw_bond_maturity,
             palw_frontier_provenance: self.palw_frontier_provenance,
             palw_heartbeat: self.palw_heartbeat,
+            palw_attempt_work: self.palw_attempt_work,
             palw_inactivity_leak: self.palw_inactivity_leak,
             palw_consensus_mode: self.palw_consensus_mode.clone(),
             // kaspa-pq PoW algo activation is consensus-fixed, never runtime-overridable.
@@ -2876,6 +2990,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_bond_maturity: None,
     palw_frontier_provenance: None,
     palw_heartbeat: None,
+    palw_attempt_work: None,
     palw_inactivity_leak: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
@@ -3007,6 +3122,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_bond_maturity: None,
     palw_frontier_provenance: None,
     palw_heartbeat: None,
+    palw_attempt_work: None,
     palw_inactivity_leak: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
@@ -3120,6 +3236,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_bond_maturity: None,
     palw_frontier_provenance: None,
     palw_heartbeat: None,
+    palw_attempt_work: None,
     palw_inactivity_leak: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
@@ -6211,6 +6328,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_bond_maturity: None,
     palw_frontier_provenance: None,
     palw_heartbeat: None,
+    palw_attempt_work: None,
     palw_inactivity_leak: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
@@ -6540,7 +6658,11 @@ mod consensus_params_id_tests {
 
         let armed = |activation: ForkActivation| {
             let mut p = MAINNET_PARAMS;
-            p.palw_heartbeat = Some(PalwHeartbeatV1 { activation, work_log2: crate::pow_layer0::PALW_HEARTBEAT_WORK_LOG2 });
+            p.palw_heartbeat = Some(PalwHeartbeatV1 {
+                activation,
+                work_log2: crate::pow_layer0::PALW_HEARTBEAT_WORK_LOG2,
+                max_per_mergeset: crate::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET,
+            });
             p
         };
         assert_eq!(
@@ -6580,7 +6702,7 @@ mod consensus_params_id_tests {
         // **Armable on the preset that actually runs the lane**, at any height — no rebuild.
         for height in [ForkActivation::always(), ForkActivation::new(1), ForkActivation::new(9_000_000)] {
             let mut rc = palw_rc_shipped_params();
-            rc.palw_heartbeat = Some(PalwHeartbeatV1 { activation: height, work_log2: crate::pow_layer0::PALW_HEARTBEAT_WORK_LOG2 });
+            rc.palw_heartbeat = Some(PalwHeartbeatV1 { activation: height, work_log2: crate::pow_layer0::PALW_HEARTBEAT_WORK_LOG2, max_per_mergeset: crate::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET });
             rc.validate_palw_v2().expect("the shipped V2 preset may open its clock lane by configuration");
             assert!(rc.palw_heartbeat_lane_open_at(9_000_001));
         }
@@ -6590,16 +6712,117 @@ mod consensus_params_id_tests {
         // sources for one value is how a rule gets announced instead of enforced.
         let mut wrong_price = palw_rc_shipped_params();
         wrong_price.palw_heartbeat =
-            Some(PalwHeartbeatV1 { activation: ForkActivation::always(), work_log2: crate::pow_layer0::PALW_HEARTBEAT_WORK_LOG2 + 1 });
+            Some(PalwHeartbeatV1 { activation: ForkActivation::always(), work_log2: crate::pow_layer0::PALW_HEARTBEAT_WORK_LOG2 + 1, max_per_mergeset: crate::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET });
         assert!(wrong_price.validate_palw_v2().is_err(), "a lane price the binary does not implement must not start");
 
         // A hash network never opens the lane however the fence is set — there is no PALW clock to
         // rescue there, and the mode half is folded into one predicate so no call site can forget it.
         let mut hash_net = MAINNET_PARAMS;
         hash_net.palw_heartbeat =
-            Some(PalwHeartbeatV1 { activation: ForkActivation::always(), work_log2: crate::pow_layer0::PALW_HEARTBEAT_WORK_LOG2 });
+            Some(PalwHeartbeatV1 { activation: ForkActivation::always(), work_log2: crate::pow_layer0::PALW_HEARTBEAT_WORK_LOG2, max_per_mergeset: crate::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET });
         assert!(!hash_net.palw_heartbeat_lane_open_at(0), "the lane is a V2 rule");
         assert!(hash_net.palw_heartbeat_lane_fence().is_none());
+    }
+
+    /// **ADR-0068 Phase 1: the two values that closed ADR-0066's leftovers follow the exact fence
+    /// discipline the heartbeat established.** F3a's width bound rides the heartbeat fence as a
+    /// second locked value; F2's attempt-work constant is its own fence. For each: shipped unset,
+    /// armable by configuration on the shipped V2 preset, scheduled-ahead keeps the identity,
+    /// in-force splits it, the VALUE is in the fingerprint and never in the visitor, and a value
+    /// the binary does not implement refuses to start.
+    #[test]
+    fn the_attempt_work_fence_and_the_width_bound_follow_the_fence_discipline() {
+        let shipped = MAINNET_PARAMS;
+        assert!(shipped.palw_attempt_work.is_none(), "every shipped preset leaves the constant off");
+        assert!(!shipped.palw_attempt_work_open_at(0));
+
+        let armed = |activation: ForkActivation| {
+            let mut p = MAINNET_PARAMS;
+            p.palw_attempt_work =
+                Some(PalwAttemptWorkV1 { activation, work_log2: crate::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2 });
+            p
+        };
+        assert_eq!(
+            shipped.consensus_identity_id(),
+            armed(ForkActivation::new(9_000_000)).consensus_identity_id(),
+            "scheduled ahead: old and new builds stay peers"
+        );
+        assert_ne!(
+            shipped.consensus_params_id(),
+            armed(ForkActivation::new(9_000_000)).consensus_params_id(),
+            "…and visible, which is what makes it a fence and not a const"
+        );
+        assert_ne!(
+            shipped.consensus_identity_id(),
+            armed(ForkActivation::always()).consensus_identity_id(),
+            "in force on one side is a block-validity difference and must split the network"
+        );
+        assert_eq!(
+            shipped.consensus_identity_id(),
+            armed(ForkActivation::never()).consensus_identity_id(),
+            "Some(never()) is absence, or the collapse is gone"
+        );
+
+        // The WORK is in the fingerprint and not in the fence visitor — the same lesson, applied
+        // to the same shape, for the third time.
+        let mut cheap = armed(ForkActivation::new(9_000_000));
+        let Some(w) = cheap.palw_attempt_work.as_mut() else { unreachable!() };
+        w.work_log2 = crate::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2 + 1;
+        assert_ne!(
+            armed(ForkActivation::new(9_000_000)).consensus_params_id(),
+            cheap.consensus_params_id(),
+            "a different attempt work is a different rule and must be in the fingerprint"
+        );
+
+        // Armable on the preset that actually runs the lane; a value the binary does not
+        // implement refuses to start — for the attempt work AND for the width bound.
+        let mut rc = palw_rc_shipped_params();
+        rc.palw_attempt_work =
+            Some(PalwAttemptWorkV1 { activation: ForkActivation::new(1), work_log2: crate::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2 });
+        rc.validate_palw_v2().expect("the shipped V2 preset may re-price its attempt lane by configuration");
+        assert!(rc.palw_attempt_work_open_at(2));
+
+        let mut wrong_work = palw_rc_shipped_params();
+        wrong_work.palw_attempt_work = Some(PalwAttemptWorkV1 {
+            activation: ForkActivation::always(),
+            work_log2: crate::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2 + 1,
+        });
+        assert!(wrong_work.validate_palw_v2().is_err(), "an attempt work the binary does not implement must not start");
+
+        let mut wrong_width = palw_rc_shipped_params();
+        wrong_width.palw_heartbeat = Some(PalwHeartbeatV1 {
+            activation: ForkActivation::always(),
+            work_log2: crate::pow_layer0::PALW_HEARTBEAT_WORK_LOG2,
+            max_per_mergeset: crate::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET + 1,
+        });
+        assert!(wrong_width.validate_palw_v2().is_err(), "a width bound the binary does not enforce must not start");
+
+        // The width bound is in the fingerprint too — two builds bounding different widths must
+        // not share one, or they disagree about a merging block's validity when the lane opens.
+        let hb_armed = |max_per_mergeset: u64| {
+            let mut p = MAINNET_PARAMS;
+            p.palw_heartbeat = Some(PalwHeartbeatV1 {
+                activation: ForkActivation::new(9_000_000),
+                work_log2: crate::pow_layer0::PALW_HEARTBEAT_WORK_LOG2,
+                max_per_mergeset,
+            });
+            p
+        };
+        assert_ne!(
+            hb_armed(crate::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET).consensus_params_id(),
+            hb_armed(crate::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET + 1).consensus_params_id(),
+            "a different width bound is a different rule and must be in the fingerprint"
+        );
+
+        // And the mode is folded into the accessor: a hash network never re-prices a lane it
+        // does not have.
+        let mut hash_net = MAINNET_PARAMS;
+        hash_net.palw_attempt_work = Some(PalwAttemptWorkV1 {
+            activation: ForkActivation::always(),
+            work_log2: crate::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2,
+        });
+        assert!(!hash_net.palw_attempt_work_open_at(0), "the constant is a V2 rule");
+        assert!(hash_net.palw_attempt_work_fence().is_none());
     }
 
     /// **ADR-0066 Decision 4's fence: the inactivity leak, off the constant that could not be armed.**
@@ -7901,7 +8124,7 @@ mod consensus_params_id_tests {
         assert!(!zero_seat.palw_heartbeat_lane_open_at(0), "and the fence ships unset");
         let mut clocked = zero_seat.clone();
         clocked.palw_heartbeat =
-            Some(PalwHeartbeatV1 { activation: ForkActivation::always(), work_log2: crate::pow_layer0::PALW_HEARTBEAT_WORK_LOG2 });
+            Some(PalwHeartbeatV1 { activation: ForkActivation::always(), work_log2: crate::pow_layer0::PALW_HEARTBEAT_WORK_LOG2, max_per_mergeset: crate::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET });
         assert!(clocked.palw_heartbeat_lane_open_at(0), "arming the fence opens it, with no rebuild");
         // Only an unset artifact root drops the bundle, because only that is unmintable by code.
         assert_ne!(PALW_RC_GENESIS_ARTIFACT_ROOT, crate::Hash64::from_bytes([0u8; 64]));

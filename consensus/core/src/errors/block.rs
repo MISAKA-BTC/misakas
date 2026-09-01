@@ -153,6 +153,9 @@ pub enum RuleError {
     #[error("block merges {0} blocks > {1} merge set size limit")]
     MergeSetTooBig(u64, u64),
 
+    #[error("block merges {0} heartbeat blocks > {1}, the heartbeat width bound (ADR-0068 Phase 1 / finding F3a)")]
+    MergeSetTooManyHeartbeats(u64, u64),
+
     #[error("block is violating bounded merge depth")]
     ViolatingBoundedMergeDepth,
 

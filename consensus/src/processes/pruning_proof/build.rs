@@ -594,6 +594,8 @@ impl PruningProofManager {
             self.max_block_level,
             // ADR-0060: ε work for heartbeat blocks at every proof level too.
             self.palw_heartbeat_lane,
+            // ADR-0068 Phase 1 (F2): and the attempt constant, for the same reason.
+            self.palw_attempt_work_lane,
         );
 
         // No need to initialize origin since we have a single root

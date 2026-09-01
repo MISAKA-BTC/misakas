@@ -139,6 +139,9 @@ pub struct PruningProofManager {
     palw_consensus_mode: kaspa_consensus_core::palw_mode_v2::PalwConsensusMode,
     /// ADR-0066: the heartbeat lane's fence, mode folded in.
     palw_heartbeat_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// ADR-0068 Phase 1 (F2): the attempt-work fence, mode folded in — threaded to every
+    /// proof-level ghostdag so proof weight and chain weight price an attempt block alike.
+    palw_attempt_work_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
 
     is_consensus_exiting: Arc<AtomicBool>,
 }
@@ -167,6 +170,7 @@ impl PruningProofManager {
         palw_required_algo_id: Option<u8>,
         palw_consensus_mode: kaspa_consensus_core::palw_mode_v2::PalwConsensusMode,
         palw_heartbeat_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
+        palw_attempt_work_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
         is_consensus_exiting: Arc<AtomicBool>,
     ) -> Self {
         Self {
@@ -209,6 +213,7 @@ impl PruningProofManager {
             palw_required_algo_id,
             palw_consensus_mode,
             palw_heartbeat_lane,
+            palw_attempt_work_lane,
 
             is_consensus_exiting,
         }

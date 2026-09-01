@@ -122,6 +122,8 @@ impl ConsensusServices {
             // ADR-0060 as ADR-0066 fenced it: heartbeat blocks weigh ε exactly where the lane is
             // open, which is a `ConsensusV2` network whose `palw_heartbeat` fence is in force.
             params.palw_heartbeat_lane_fence(),
+            // ADR-0068 Phase 1 (F2): attempt blocks weigh the network constant under this fence.
+            params.palw_attempt_work_fence(),
         );
 
         let coinbase_manager = CoinbaseManager::new(
@@ -196,6 +198,7 @@ impl ConsensusServices {
             params.palw_consensus_mode.required_algo_id(),
             params.palw_consensus_mode.clone(),
             params.palw_heartbeat_lane_fence(),
+            params.palw_attempt_work_fence(),
             is_consensus_exiting,
         ));
 

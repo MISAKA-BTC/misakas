@@ -208,6 +208,8 @@ impl ProofContext {
                     ppm.max_block_level,
                     // ADR-0060: ε work for heartbeat blocks in proof validation as in building.
                     ppm.palw_heartbeat_lane,
+                    // ADR-0068 Phase 1 (F2): and the attempt constant, validation as building.
+                    ppm.palw_attempt_work_lane,
                 )
             })
             .collect_vec();

@@ -1,6 +1,7 @@
 use super::{HeaderProcessingContext, HeaderProcessor};
 use crate::errors::{BlockProcessResult, RuleError, TwoDimVecDisplay};
 use crate::model::services::reachability::ReachabilityService;
+use crate::model::stores::headers::HeaderStoreReader;
 use crate::processes::window::WindowManager;
 use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::header::Header;
@@ -12,6 +13,7 @@ impl HeaderProcessor {
         self.check_blue_work(ctx, header)?;
         self.check_median_timestamp(ctx, header)?;
         self.check_mergeset_size_limit(ctx)?;
+        self.check_mergeset_heartbeat_width(ctx, header)?;
         self.check_bounded_merge_depth(ctx)?;
         self.check_indirect_parents(ctx, header)
     }
@@ -32,6 +34,40 @@ impl HeaderProcessor {
         let mergeset_size_limit = self.mergeset_size_limit;
         if mergeset_size > mergeset_size_limit {
             return Err(RuleError::MergeSetTooBig(mergeset_size, mergeset_size_limit));
+        }
+        Ok(())
+    }
+
+    /// **F3a's bound — a mergeset may hold at most `PALW_HEARTBEAT_MAX_PER_MERGESET` heartbeat
+    /// blocks** (ADR-0068 Phase 1, closing what ADR-0066 recorded open).
+    ///
+    /// The slot rule bounds the CHAIN (one heartbeat per interval behind its selected parent) and
+    /// the fixed price bounds the header rate, but sibling heartbeats share one selected parent
+    /// and one admissible timestamp, so nothing bounded how many the DAG accepts. The bound lives
+    /// here, beside `check_mergeset_size_limit`, because it is the same kind of rule: a property
+    /// of the accepting block's mergeset, derived deterministically from its parents — no walk,
+    /// no window, no node-local fact. A sibling flood is absorbed at a bounded rate (the template
+    /// builder chunks it exactly as it chunks `mergeset_size_limit`), and a flood older than the
+    /// merge depth is simply never merged.
+    ///
+    /// Gated on the heartbeat lane's own fence at the ACCEPTING header's daa score: before the
+    /// fence no heartbeat header is admitted at all, so the bound arms exactly when the lane
+    /// does — a lane must never exist without its width bound.
+    pub fn check_mergeset_heartbeat_width(&self, ctx: &mut HeaderProcessingContext, header: &Header) -> BlockProcessResult<()> {
+        if !self.palw_heartbeat_lane.is_some_and(|fence| fence.is_active(header.daa_score)) {
+            return Ok(());
+        }
+        let bound = kaspa_consensus_core::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET;
+        let ghostdag_data = ctx.ghostdag_data();
+        let mut heartbeats = 0u64;
+        for member in ghostdag_data.mergeset_blues.iter().chain(ghostdag_data.mergeset_reds.iter()) {
+            let member_header = self.headers_store.get_header(*member).unwrap();
+            if member_header.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID {
+                heartbeats += 1;
+                if heartbeats > bound {
+                    return Err(RuleError::MergeSetTooManyHeartbeats(heartbeats, bound));
+                }
+            }
         }
         Ok(())
     }

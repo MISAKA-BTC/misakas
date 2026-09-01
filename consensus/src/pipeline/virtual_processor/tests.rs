@@ -390,6 +390,7 @@ async fn palw_heartbeat_blocks_tick_the_clock_and_weigh_epsilon() {
             p.palw_heartbeat = Some(kaspa_consensus_core::config::params::PalwHeartbeatV1 {
                 activation: kaspa_consensus_core::config::params::ForkActivation::always(),
                 work_log2: kaspa_consensus_core::pow_layer0::PALW_HEARTBEAT_WORK_LOG2,
+                max_per_mergeset: kaspa_consensus_core::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET,
             });
         })
         .build();
@@ -536,6 +537,179 @@ async fn palw_heartbeat_blocks_tick_the_clock_and_weigh_epsilon() {
             assert_eq!(expected, 0, "the lane's subsidy is zero by rule");
         }
         other => panic!("a heartbeat declaring a subsidy must be WrongSubsidy, got {other:?}"),
+    }
+}
+
+/// **ADR-0066 Decision 3 (finding F2), closed by ADR-0068 Phase 1: under the fence an attempt
+/// block's blue work is the network constant — and without it, `calc_work(bits)` as before.**
+///
+/// The audit's finding 2: on a V2 preset the class lottery is the throttle, so the ambient bits
+/// price a bonded block at ~2 — parity with two ε = 1 sibling heartbeats for ~280 kH/s. Both
+/// sides of the fence are asserted as blue-work DIFFERENCES through the real pipeline, so the
+/// number a peer actually adds is the number under test.
+#[tokio::test]
+async fn palw_attempt_blocks_weigh_the_constant_under_the_fence() {
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    kaspa_core::log::try_init_logger("info");
+    let catalog = palw_v2_test_catalog();
+
+    // Fence ON: two bonded blocks, the second merging exactly the first — its blue-work delta is
+    // the first block's whole contribution, and the rule says that is the constant.
+    let armed = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(palw_v2_test_bundle(&catalog));
+            p.palw_attempt_work = Some(kaspa_consensus_core::config::params::PalwAttemptWorkV1 {
+                activation: kaspa_consensus_core::config::params::ForkActivation::always(),
+                work_log2: kaspa_consensus_core::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2,
+            });
+        })
+        .build();
+    armed.params.validate_palw_v2().expect("the fixture bundle plus the attempt-work fence is a runnable ruleset");
+    assert!(armed.params.palw_attempt_work_open_at(0), "the fence is armed, so the constant is in force");
+    let mut ctx = TestContext::new(TestConsensus::new(&armed));
+    ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    ctx.simulated_time += 120_000;
+    let a = ctx.build_block_template(1, ctx.simulated_time);
+    ctx.validate_and_insert_block(a.block.clone().to_immutable()).await.assert_valid_utxo_tip();
+    ctx.simulated_time += 120_000;
+    let b = ctx.build_block_template(2, ctx.simulated_time);
+    assert_eq!(b.block.header.direct_parents(), &[a.block.header.hash], "b merges exactly a");
+    let constant = kaspa_consensus_core::BlueWorkType::from(1u64 << kaspa_consensus_core::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2);
+    assert_eq!(
+        b.block.header.blue_work - a.block.header.blue_work,
+        constant,
+        "under the fence a bonded block's whole fork-choice contribution is the constant — \
+         2^20, a million heartbeats, not the ambient 2"
+    );
+    ctx.validate_and_insert_block(b.block.clone().to_immutable()).await.assert_valid_utxo_tip();
+
+    // Fence OFF: the same two-block shape prices the bonded block from its bits — whatever that
+    // figure is at these params, it is NOT the constant, or the fence gates nothing.
+    let unfenced = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(palw_v2_test_bundle(&catalog));
+        })
+        .build();
+    assert!(unfenced.params.palw_attempt_work.is_none());
+    let mut off = TestContext::new(TestConsensus::new(&unfenced));
+    off.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    off.simulated_time += 120_000;
+    let a = off.build_block_template(1, off.simulated_time);
+    off.validate_and_insert_block(a.block.clone().to_immutable()).await.assert_valid_utxo_tip();
+    off.simulated_time += 120_000;
+    let b = off.build_block_template(2, off.simulated_time);
+    assert_ne!(
+        b.block.header.blue_work - a.block.header.blue_work,
+        constant,
+        "without the fence the old pricing stands — the constant only enters by activation"
+    );
+}
+
+/// **F3a, closed (ADR-0068 Phase 1): a mergeset holds at most `PALW_HEARTBEAT_MAX_PER_MERGESET`
+/// heartbeats — refused by consensus, and never built by a template.**
+///
+/// Sibling heartbeats share one selected parent, one admissible timestamp and one fixed price,
+/// so nothing bounded how many the DAG accepts. The bound is a mergeset property beside
+/// `mergeset_size_limit`: five siblings exist, a block merging all five is refused, a block
+/// merging four is valid, and the template builder chunks — four this block, the fifth against
+/// the next block's fresh budget — so a flood is absorbed at a bounded rate rather than refused
+/// forever or accepted wholesale.
+#[tokio::test]
+async fn a_mergeset_holds_at_most_four_heartbeats_and_templates_chunk_the_rest() {
+    use kaspa_consensus_core::palw_heartbeat_v1 as hb;
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    kaspa_core::log::try_init_logger("info");
+    let catalog = palw_v2_test_catalog();
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(palw_v2_test_bundle(&catalog));
+            p.palw_heartbeat = Some(kaspa_consensus_core::config::params::PalwHeartbeatV1 {
+                activation: kaspa_consensus_core::config::params::ForkActivation::always(),
+                work_log2: kaspa_consensus_core::pow_layer0::PALW_HEARTBEAT_WORK_LOG2,
+                max_per_mergeset: kaspa_consensus_core::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET,
+            });
+        })
+        .build();
+    config.params.validate_palw_v2().expect("the fixture bundle is a runnable ruleset");
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+
+    // A bonded base, then FIVE sibling heartbeats behind it — each valid alone (they share the
+    // one admissible slot, which is exactly the width the slot rule cannot see).
+    ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    ctx.simulated_time += 120_000;
+    let base = ctx.build_block_template(1, ctx.simulated_time);
+    let base_hash = base.block.header.hash;
+    ctx.validate_and_insert_block(base.block.clone().to_immutable()).await.assert_valid_utxo_tip();
+    ctx.simulated_time += hb::HEARTBEAT_NOMINAL_INTERVAL_MS + 60_000;
+    let template = ctx.build_block_template(2, ctx.simulated_time);
+    let (hb_template, _) =
+        ctx.consensus.virtual_processor().heartbeat_adapt_block_template(template).expect("the lane adapts a template");
+    assert_eq!(hb_template.block.header.direct_parents(), &[base_hash], "the siblings all sit behind the bonded base");
+    let mut siblings = Vec::new();
+    for nonce in 0..5u64 {
+        let mut sib = hb_template.block.clone();
+        sib.header.nonce = nonce;
+        sib.header.finalize();
+        siblings.push(sib.header.hash);
+        ctx.validate_and_insert_block(sib.to_immutable()).await;
+    }
+    ctx.simulated_time = ctx.simulated_time.max(hb_template.block.header.timestamp);
+
+    // Consensus: merging all five is one heartbeat too many; merging four is a valid block.
+    ctx.simulated_time += 120_000;
+    let over = ctx.build_block_with_parents(siblings.clone(), 77, ctx.simulated_time);
+    match ctx.consensus.validate_and_insert_block(over.to_immutable()).virtual_state_task.await {
+        Err(kaspa_consensus_core::errors::block::RuleError::MergeSetTooManyHeartbeats(count, bound)) => {
+            assert_eq!(bound, kaspa_consensus_core::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET);
+            assert!(count > bound, "refused at the first heartbeat past the bound");
+        }
+        other => panic!("five heartbeats in one mergeset must be MergeSetTooManyHeartbeats, got {other:?}"),
+    }
+    let four = ctx.build_block_with_parents(siblings[..4].to_vec(), 78, ctx.simulated_time + 1);
+    ctx.consensus.validate_and_insert_block(four.to_immutable()).virtual_state_task.await.expect("four heartbeats fit the bound");
+
+    // Template: pointed at the five-sibling DAG (before the manual merger reshaped it, the
+    // template path saw the same five tips) the builder never over-merges — count the heartbeat
+    // parents of the four-merger's OWN template-built successor: the fifth sibling rides a later
+    // block's fresh budget instead of being merged here.
+    ctx.simulated_time += 120_000;
+    let next = ctx.build_block_template(3, ctx.simulated_time);
+    let hb_parents =
+        next.block.header.direct_parents().iter().filter(|p| siblings.contains(p)).count() as u64;
+    let mergeset_hbs = {
+        // The template's parents are not the whole story — the bound is on the MERGESET. Count
+        // heartbeats the way the rule does.
+        let gd = ctx.consensus.services.ghostdag_manager.ghostdag(next.block.header.direct_parents());
+        gd.mergeset_blues
+            .iter()
+            .chain(gd.mergeset_reds.iter())
+            .filter(|h| siblings.contains(h))
+            .count() as u64
+    };
+    assert!(
+        mergeset_hbs <= kaspa_consensus_core::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET,
+        "a template never builds what consensus refuses: {mergeset_hbs} heartbeats in its mergeset"
+    );
+    ctx.validate_and_insert_block(next.block.clone().to_immutable()).await.assert_valid_utxo_tip();
+    let _ = hb_parents;
+
+    // And the fifth is absorbed, not orphaned: within a couple of template rounds every sibling
+    // is in the selected chain's past — the flood was chunked, which is the whole design.
+    ctx.simulated_time += 120_000;
+    let after = ctx.build_block_template(4, ctx.simulated_time);
+    ctx.validate_and_insert_block(after.block.clone().to_immutable()).await.assert_valid_utxo_tip();
+    let sink = ctx.consensus.get_sink();
+    for sib in &siblings {
+        assert!(
+            ctx.consensus.services.reachability_service.is_dag_ancestor_of(*sib, sink),
+            "every sibling heartbeat ends up merged — the bound chunks, it does not strand"
+        );
     }
 }
 

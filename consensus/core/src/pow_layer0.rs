@@ -420,6 +420,49 @@ pub const POW_ALGO_ID_HEARTBEAT_V1: u8 = 8;
 /// arming, and a binary that cannot compute that price says so at boot rather than at block one.
 pub const PALW_HEARTBEAT_WORK_LOG2: u32 = 24;
 
+/// **How many heartbeat blocks one mergeset may hold — ADR-0066 F3a's bound, as a network
+/// CONSTANT.** (ADR-0068 Phase 1.)
+///
+/// The slot rule bounds the CHAIN (one heartbeat per interval behind its selected parent) and the
+/// fixed price bounds nothing but the header rate: siblings share one selected parent, one
+/// admissible timestamp and one price, so nothing bounded how many of them the DAG accepts — that
+/// is finding 3a, recorded open when the lane landed. The bound that closes it is placed where
+/// `mergeset_size_limit` already lives: a valid block's mergeset (selected parent included) may
+/// carry at most this many heartbeat-lane members, so sibling floods are absorbed at a bounded
+/// rate instead of wholesale, and a flood older than the merge depth is simply never merged.
+/// Four is one heartbeat-parent chain slot plus three siblings of healing headroom: a partition
+/// that ran on the clock heals a foreign heartbeat chain at three per block, while an honest
+/// steady state (one heartbeat per interval) never sees two.
+///
+/// `Params::palw_heartbeat`'s `max_per_mergeset` must equal this or `validate_palw_v2` refuses to
+/// start — same stance, same reason as `work_log2` above.
+pub const PALW_HEARTBEAT_MAX_PER_MERGESET: u64 = 4;
+
+/// **The attempt lane's fork-choice work, as a work exponent — a network CONSTANT, never
+/// `calc_work(header.bits)`.** ADR-0066 Decision 3 (finding F2), staged there and closed here
+/// (ADR-0068 Phase 1).
+///
+/// On a `ConsensusV2` network the hash target is not the throttle — the class lottery is — so
+/// `header.bits` sits at `MAX_DIFFICULTY_TARGET` and `calc_work` prices every bonded block at
+/// **2**. Against `HEARTBEAT_BLUE_WORK_EPSILON = 1` that is parity for two sibling heartbeats per
+/// layer (~280 kH/s), which is finding F2: ε was never too large, the other side of the
+/// comparison was too small. Under the fence, an attempt-lane block's blue work is this constant
+/// instead: 2²⁰, so a bonded block outweighs a million heartbeats again and the ε ordering among
+/// heartbeat-only branches (total collapse) is undisturbed.
+///
+/// **A constant, deliberately NOT the envelope's claimed pwu.** The claim is verified against
+/// class state (target, per-inference cost) and class state lives on the selected chain — at
+/// GHOSTDAG time there is only the header. A claim-derived work would let a shape-valid header
+/// that never faces the lottery mint fork-choice weight with a number; a constant keeps the
+/// spam/honest ratio exactly where it is today (parity at work 2, parity at work 2²⁰) while
+/// fixing the one ratio F2 is about. Per-CLASS weight (a QWEN36 block vs a floor block) is not
+/// this layer's job either: that is the pwu-verified PALW chain weight (`safe(C)`, ADR-0058),
+/// which only counts what the chain actually checked.
+///
+/// `Params::palw_attempt_work`'s `work_log2` must equal this or `validate_palw_v2` refuses to
+/// start — the fence declares the price it believes it is arming.
+pub const PALW_ATTEMPT_BLUE_WORK_LOG2: u32 = 20;
+
 /// Output width of the algo_id = 3 Layer-1 tag: BLAKE2b-512 (64) ∥ SHA3-512 (64) = 128 bytes. Within
 /// [`POW_L1_TAG_MAX_BYTES`] (256), so the Layer-0 finalizer accepts it.
 pub const POW_L1_BLAKE2B_SHA3_OUT_BYTES: usize = 128;

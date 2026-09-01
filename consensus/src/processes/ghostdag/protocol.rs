@@ -45,6 +45,15 @@ pub struct GhostdagManager<T: GhostdagStoreReader, S: RelationsStoreReader, U: R
     /// network, where algo-3 is the real production lane and its bits are the real price.
     /// ADR-0066: the heartbeat lane's fence, mode folded in (`Params::palw_heartbeat_lane_fence`).
     heartbeat_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
+
+    /// ADR-0066 Decision 3 (finding F2), closed by ADR-0068 Phase 1: under this fence an
+    /// attempt-lane (algo-6) block's blue work is the constant
+    /// `1 << PALW_ATTEMPT_BLUE_WORK_LOG2` instead of `calc_work(bits)` — on a V2 network the
+    /// bits sit at the ambient maximum and price every bonded block at 2, parity with two ε = 1
+    /// heartbeats. Maxed with `level_work`, unlike ε: the attempt lane is the real production
+    /// lane and its inference-priced digest is what the pruning-proof hierarchy is built from.
+    /// Mode folded in (`Params::palw_attempt_work_fence`).
+    attempt_work_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
 }
 
 impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V: HeaderStoreReader> GhostdagManager<T, S, U, V> {
@@ -57,6 +66,8 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
         reachability_service: U,
         // ADR-0060: true exactly on `ConsensusV2` networks — heartbeat blocks then weigh ε.
         heartbeat_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
+        // ADR-0068 Phase 1 (F2): attempt-lane blocks then weigh the network constant.
+        attempt_work_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
     ) -> Self {
         // For ordinary GD, always keep level_work=0 so the lower bound is ineffective
         Self {
@@ -68,6 +79,7 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
             headers_store,
             level_work: 0.into(),
             heartbeat_lane,
+            attempt_work_lane,
         }
     }
 
@@ -82,6 +94,8 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
         max_block_level: BlockLevel,
         // ADR-0060: the ε rule holds at every level — see `heartbeat_lane` on the struct.
         heartbeat_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
+        // ADR-0068 Phase 1 (F2): and so does the attempt constant — see the struct field.
+        attempt_work_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
     ) -> Self {
         Self {
             genesis_hash,
@@ -92,6 +106,7 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
             headers_store,
             level_work: level_work(level, max_block_level),
             heartbeat_lane,
+            attempt_work_lane,
         }
     }
 
@@ -210,6 +225,23 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
                     && self.heartbeat_lane.is_some_and(|fence| fence.is_active(header.daa_score))
                 {
                     return BlueWorkType::from(kaspa_consensus_core::palw_heartbeat_v1::HEARTBEAT_BLUE_WORK_EPSILON);
+                }
+                // **An attempt block's work is the network constant** (ADR-0066 Decision 3 /
+                // finding F2, closed by ADR-0068 Phase 1). On a V2 network `header.bits` sits at
+                // the ambient maximum — the class lottery is the throttle, not the hash — so
+                // `calc_work` prices every bonded block at 2, parity with two ε = 1 heartbeats
+                // for ~280 kH/s. The constant restores the ratio ε was designed around: a bonded
+                // block outweighs a million heartbeats. A constant and NOT the envelope's claimed
+                // pwu — the claim is only verified against class state on the selected chain, and
+                // this function holds only the header; a claim-derived figure would let a
+                // shape-valid header that never faces the lottery mint fork-choice weight with a
+                // number (see `PALW_ATTEMPT_BLUE_WORK_LOG2`). Maxed with `level_work`, unlike ε:
+                // this lane's inference-priced digest is what the pruning hierarchy is built from.
+                if header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2
+                    && self.attempt_work_lane.is_some_and(|fence| fence.is_active(header.daa_score))
+                {
+                    return BlueWorkType::from(1u64 << kaspa_consensus_core::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2)
+                        .max(self.level_work);
                 }
                 calc_work(header.bits).max(self.level_work)
             })
