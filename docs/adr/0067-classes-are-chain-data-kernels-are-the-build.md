@@ -3,8 +3,10 @@
 Status: **Decisions 1–3 and 5 LANDED for the dense (A16) container (2026-08-31), fenced and
 dormant; Decision 4 needed no code; Decision 6 including its cache bound LANDED (2026-09-01), as did
 the pruning-point sidecar and the cross-architecture clause. The mmap (Qwen3.6) interpreter's blocker —
-a measured defect in the class's registered graph — is CLOSED by the corrected `graph-v2` row
-(2026-09-01); the interpreter itself and the operational arming remain PROPOSED.** See "What landed" at
+a measured defect in the class's registered graph — is CLOSED by the corrected `graph-v2` row, and the
+interpreter itself is BUILT and differential-tested (2026-09-01), a pass that convicted a FOURTH
+graph defect on the way; the mmap container's chain-resolve arm, its profile fuzz gate and the
+operational arming remain PROPOSED.** See "What landed" at
 the foot of this document. Builds on ADR-0049 (the adjudication contract — whose admission
 carriage is the load-bearing half of this design and is ALREADY LIVE), ADR-0054 (share follows
 production — the economics that make permissionless classes survivable), and ADR-0034 (capability
@@ -399,14 +401,60 @@ it, the phantom V-cache node deleted with its `VCacheWrite` role moved onto the 
 computation that actually feeds the cache. The GDN arm's own 24 nodes are COPIED from v1 at compile
 time rather than transcribed, so they cannot drift; the attention arm's renumbering after the
 deletion is hand-derived and machine-checked (`structural_diff_v1_v2` holds v2 to v1 node by node,
-excusing exactly the three corrections and requiring every step reference past the deletion to
+excusing exactly the corrections and requiring every step reference past the deletion to
 shift by exactly one). Against the same artifact measurement that convicted v1, v2's residue is
 **zero in both directions** with a resolution table reduced to the structural fusions alone, and
 all three findings are asserted closed (`v2_leaves_no_residue`, `v2_closes_the_three_findings`).
-The v2 class id is pinned (`069b9482…`, a different class by construction), and the ledger carries
-`graph-v2` rows for all three lineage members. **Registered on no chain yet** — registration is an
-operator action with a bond and a fee, and it stays one. The interpreter now has a graph it can
-follow; building it is the remaining piece of this clause.
+The ledger carries `graph-v2` rows for all three lineage members. **Registered on no chain yet** —
+registration is an operator action with a bond and a fee, and it stays one.
+
+**The interpreter is built, and building it convicted a fourth defect (2026-09-01, same day).**
+`Qwen36Engine::plan_from_profile` / `forward_token_planned`
+(`misaka-palw-base0/src/qwen36_plan.rs`): the A16 seam for the mmap container — construction is
+the admission check and it is width-sound; execution is one committed row per declared node in
+the declared order, cache writes where the declared roles sit, and the `RESOLUTION_V2` fusion
+rules (the conformance test's own table) implemented as the mapping from each fused name to the
+stores it reads, cited rule by rule at the exec arms. The differentials: bit-identity against the
+compiled engine on the hybrid and qwen3moe fixtures (logits, every cache, the recurrent state);
+the committed row at every site the engine's probe can name, pinned to its v2 node index; a
+per-ledger-row differential that shrinks each of the six rows to a runnable geometry keeping its
+structure — the three `graph-v2` rows must serve and agree to the bit, the three v1 rows must be
+refused by name; and a REAL-WEIGHTS differential (env-gated on an artifact path) that runs a
+converted `.palwq36` through both paths, which is the one place the grouped per-32-exponent
+kernels and calibrated clamps are actually exercised.
+
+The fourth defect: **v1 declares the expert SwiGLU's wideness backwards** — the gate projection
+narrow and the up wide, while the engine projects the gate WIDE (silu is nonlinear; its input
+scale is part of the function) and the up narrow, in both the routed and the shared expert. The
+name-conformance measurement cannot see this (the names are right), and the plain fixture
+differential passed with the swap in place, because the fixture's derived scales keep every row
+inside the 16-bit code rail where narrow and wide agree by construction — a differential with no
+authority at that site. The conviction is `a_hot_gate_row_distinguishes_the_declared_wideness`:
+heat the gate params until the products overrun the rail, and the declared-narrow interpreter
+clamps where the engine carries (measured: logits diverge at position 0); the test also asserts a
+lane actually left the rail, so the site cannot quietly go cold again. v2 now carries the
+corrected labels (the four kernel parameters of the shared `moe_tail` macro; v1's spelling is
+frozen with the rest of it), `structural_diff_v1_v2` excuses exactly those four in their exact
+directions, and the v2 class id moved with its graph — pinned at `23ef487f…`, still registered on
+no chain, which is what made the correction an edit instead of a third row.
+
+And the real-weights run surfaced a FIFTH, this one reaching past the graph into the geometry
+constants: **the declared epsilon is not the executed one.** Every registered geometry of this
+lineage pins `rms_eps_q = 17` (the integer spelling of the checkpoint's `1e-6`, "because the
+court recomputes with the CLASS's constant"), and every real artifact carries `eps_q = 1` —
+the converter hardcodes it (`qwen36-convert.rs`), and the engine normalizes with the ARTIFACT's
+constant. `Qwen36CanonicalClassV1::shape_matches` even documents the split ("the engine's integer
+epsilon is the artifact format's, the class constant is the court's") without noticing that it
+describes a divergence: a court that ever recomputes a norm with 17 convicts an engine that ran
+with 1. Nothing enforces it today — this container commits no step leg — which is the same
+dormancy that hid the first three findings. The interpreter's geometry gate is where it stopped
+being dormant: the graph-v2 row refuses to plan over its own class's artifact, on exactly that
+field. Pinned in `the_interpreter_matches_the_engine_on_a_real_artifact`, whose differential then
+runs under the declaration with the epsilon corrected to the artifact's and holds to the bit.
+The disposition is NOT taken here: v2 is unregistered, so its geometry can still adopt the
+artifact's epsilon (or the fleet's artifacts could someday be re-converted at 17, which moves
+every artifact root) — but the 35B and Coder artifacts live on the fleet and their headers should
+be read before any constant moves. Until then the finding stands as a refusal with a name.
 
 **The fix cannot be an edit.** `shape_profile_id` is the borsh of the whole profile, node tables
 included, and the hybrid's id is pinned in-tree as a live chain fact — "the shipped hybrid class id
