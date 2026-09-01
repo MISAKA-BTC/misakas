@@ -672,6 +672,30 @@ mod pin_tests {
     /// Order-independent on purpose: a root read out of a process-global registry would depend on
     /// whether a drill had run yet when the params were assembled, which is not a property a
     /// consensus identity may have.
+    /// **And the network's SET is the set this build drilled, family by family.**
+    ///
+    /// The root alone would let the two agree by luck of a hash; and the set is what CONSENSUS
+    /// actually reads — `palw_rc_certified_families_v1` derives it without a model runtime, because
+    /// a node's consensus never links one. That derivation recomputes the kernel sets from profiles
+    /// and PINS the parts only a drill can measure (which graph was drilled, how many leaves were
+    /// convicted). This is what keeps those pins honest: a build whose drill covers different
+    /// kernels, or convicts a different number of leaves, no longer matches what the network says
+    /// its court can play — and it should not be able to join quietly.
+    #[test]
+    fn the_committed_family_set_is_the_one_this_build_drilled() {
+        super::register_builtin_certified_families_v1();
+        let drilled = kaspa_consensus_core::palw_e2e_adjudicability::certified_families_v1();
+        let committed = kaspa_consensus_core::palw_e2e_adjudicability::palw_rc_certified_families_v1();
+        assert_eq!(drilled.len(), committed.len(), "the network commits to {} families and this build drilled {}", committed.len(), drilled.len());
+        for want in &committed {
+            let got = drilled
+                .iter()
+                .find(|f| f.family_id == want.family_id)
+                .unwrap_or_else(|| panic!("this build drilled no family {}", want.family_id));
+            assert_eq!(got, want, "the drilled family and the committed one differ");
+        }
+    }
+
     #[test]
     fn the_pinned_rc_e2e_root_is_what_this_build_certifies() {
         super::register_builtin_certified_families_v1();
@@ -812,5 +836,110 @@ mod registered_class_tests {
         let names = super::register_builtin_certified_families_v1();
         assert_eq!(names.len(), 3, "the floor and both model tiers certify on this build: {names:?}");
         assert_eq!(certified_families_v1().len(), 3);
+    }
+}
+
+#[cfg(test)]
+mod permissionless_tests {
+    use kaspa_consensus_core::palw_class_admission_v2::{reachable_kernels_v1, verify_class_admission_v2};
+    use kaspa_consensus_core::palw_e2e_adjudicability::{certified_families_v1, family_certified_for_weight_v1};
+
+    /// **A family nobody has drilled can still JOIN — and this build leaves room for one to exist**
+    /// (ADR-0069 Decision 6).
+    ///
+    /// Weight is what certification buys; existence is not. The two rules that decide this were
+    /// written apart and, together, closed the door completely: Decision H said an entrant takes
+    /// exactly `min_grantable` (never zero), and ADR-0069 refused a nonzero grant to an uncertified
+    /// family. A class reaching a catalogued-but-undrilled kernel was therefore statically
+    /// adjudicable, refused weight, AND refused registration — it could not join at all, which is
+    /// the opposite of what both ADRs decided.
+    ///
+    /// Two halves, and the first is what makes the second mean anything: there must BE kernels no
+    /// family has drilled, or the whole rule is untested by construction. If a later build drills
+    /// everything the adjudicator catalogs, this test starts passing vacuously and says so.
+    #[test]
+    fn an_uncertified_family_has_somewhere_to_stand() {
+        super::register_builtin_certified_families_v1();
+        let catalogued = kaspa_consensus_core::palw_step_refute::catalogued_kernel_ids_v1();
+        let mut drilled = std::collections::BTreeSet::new();
+        for f in certified_families_v1() {
+            drilled.extend(f.kernel_ids);
+        }
+        let undrilled: Vec<_> = catalogued.difference(&drilled).copied().collect();
+        assert!(
+            !undrilled.is_empty(),
+            "every catalogued kernel is drilled, so this build cannot express an uncertified family — the rule below is \
+             untested rather than satisfied ({} catalogued)",
+            catalogued.len()
+        );
+
+        // A class reaching one of those is covered by NO certified family: the uncertified case,
+        // constructed from this build's own measurements rather than from a fixture.
+        let want: std::collections::BTreeSet<_> = [undrilled[0]].into_iter().collect();
+        let certified = certified_families_v1();
+        let params: kaspa_consensus_core::config::params::Params =
+            kaspa_consensus_core::network::NetworkId::with_suffix(kaspa_consensus_core::network::NetworkType::Testnet, 11).into();
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
+            panic!("testnet-11 ships a ConsensusV2 bundle");
+        };
+        assert!(
+            family_certified_for_weight_v1(bundle.court_e2e_root, &certified, &want).expect("the set matches the commitment").is_none(),
+            "an undrilled kernel must not be covered, or this test is about the wrong case"
+        );
+
+        // **The gate admits it weightless and refuses it weight — both, from one class.** The
+        // floor's own profile stands in for the graph: what varies here is the SHARE, which is the
+        // thing the two rules disagreed about.
+        let court = kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2::new(
+            kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES,
+            4,
+            2,
+        )
+        .expect("shipped court");
+        let entry = crate::classes::canonical_class_by_model_id_v1(&court, "PALW-BASE-0/rc").expect("the floor");
+        let root = crate::rc::palw_rc_base0_artifact_root_v1().expect("pinned");
+        let resolved = crate::classes::resolve_class_v1(&court, entry.class_id(), root, &[]).expect("resolves");
+        let profile = resolved.profile.clone();
+        let canonical = kaspa_consensus_core::palw_base0_profile::rc_job_context(
+            &profile,
+            kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_CANONICAL.0,
+            kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_CANONICAL.1,
+        );
+        assert!(
+            family_certified_for_weight_v1(bundle.court_e2e_root, &certified, &reachable_kernels_v1(&profile))
+                .expect("the set matches")
+                .is_some(),
+            "the floor is certified, which is what lets the weight-bearing half of this test be about the share"
+        );
+
+        let build = |share: u16| {
+            kaspa_consensus_core::palw_class_admission_v2::palw_post_genesis_registration_v1(
+                profile.clone(),
+                canonical.clone(),
+                root,
+                share,
+                1,
+                1,
+                0,
+                kaspa_consensus_core::palw_state_v2::PalwBondKeyV2(kaspa_consensus_core::tx::TransactionOutpoint::new(
+                    kaspa_consensus_core::tx::TransactionId::default(),
+                    0,
+                )),
+                Vec::new(),
+            )
+            .expect("the object builds")
+        };
+        // A zero grant is a legal registration at the gate — the state ADR-0039 named and nothing
+        // could reach.
+        verify_class_admission_v2(bundle, &profile, &canonical, &build(0), &certified).expect("a weightless registration is admissible");
+        // And an uncertified family asking for weight is still refused, which is the rule the
+        // weightless state exists to make survivable rather than fatal.
+        assert!(
+            matches!(
+                verify_class_admission_v2(bundle, &profile, &canonical, &build(1), &[]),
+                Err(kaspa_consensus_core::palw_class_admission_v2::PalwClassAdmissionError::Profile(_))
+            ),
+            "a certified set that does not match the network's commitment must be refused outright"
+        );
     }
 }

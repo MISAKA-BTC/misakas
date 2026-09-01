@@ -5051,11 +5051,58 @@ impl VirtualStateProcessor {
                             base_target.target
                         ));
                     }
+                    // **An entrant joins at the minimum grantable share — or at NOTHING, when no
+                    // certified family can prosecute it** (ADR-0069 Decisions 5 and 6).
+                    //
+                    // Decision H's rule was `share == min_grantable`, full stop, and
+                    // `min_grantable` is never zero (`⌈10⁶/(tol·E)⌉.max(1)`). ADR-0069 then refused
+                    // a nonzero grant to a family no drill has certified. Together those two closed
+                    // the door completely: measured on this build, the adjudicator catalogs 44
+                    // kernels and the certified families cover 37, so a class reaching one of the
+                    // other 7 was statically adjudicable, refused weight by the gate, and refused
+                    // registration by this line — it could not join at ALL.
+                    //
+                    // That is the opposite of what ADR-0069 decided. Weight is what certification
+                    // buys; EXISTENCE is not, and Decision 5 made a zero grant expressible in
+                    // `granted_share_table_v2` precisely so an uncertified family could register,
+                    // produce, gossip and count for liveness while its adjudication was built. This
+                    // path never let a zero through, so that state was reachable only at genesis —
+                    // which is how the model tiers sat at 0‰ while nobody else could.
+                    //
+                    // The share is still exactly one value, so a registrant cannot choose it — the
+                    // thing Decision H protects. What changed is that the value is a function of
+                    // the class's own graph rather than a constant.
+                    //
+                    // **The certified set is the NETWORK's, not this process's.** The drilled
+                    // registry is filled by a crate consensus links only as a dev dependency
+                    // (ADR-0042 Decision 4: "a node's consensus never links a model runtime"), so
+                    // reading it here would make this rule correct on a producing node and wrong on
+                    // a validating one — two nodes disagreeing about a block, which is the failure
+                    // `court_e2e_root` exists to prevent. `palw_rc_certified_families_v1` derives
+                    // the same set from profiles every node already has, and hashes to that root.
+                    let certified = kaspa_consensus_core::palw_e2e_adjudicability::palw_rc_certified_families_v1();
+                    let prosecutable = kaspa_consensus_core::palw_e2e_adjudicability::family_certified_for_weight_v1(
+                        bundle.court_e2e_root,
+                        &certified,
+                        &kaspa_consensus_core::palw_class_admission_v2::reachable_kernels_v1(&carriage.profile),
+                    )
+                    .map_err(|e| format!("class {class_id}: {e}"))?
+                    .is_some();
                     let floor = state_params.min_grantable_share_permille();
-                    if *share_permille != floor {
-                        return Err(format!(
-                            "class {class_id} registers at {share_permille}‰; a post-genesis entrant joins at the                              minimum grantable share ({floor}‰) — ADR-0049 Decision H"
-                        ));
+                    let required = if prosecutable { floor } else { 0 };
+                    if *share_permille != required {
+                        return Err(if prosecutable {
+                            format!(
+                                "class {class_id} registers at {share_permille}‰; a post-genesis entrant joins at the \
+                                 minimum grantable share ({floor}‰) — ADR-0049 Decision H"
+                            )
+                        } else {
+                            format!(
+                                "class {class_id} registers at {share_permille}‰; no end-to-end certified family covers \
+                                 the kernels it reaches, so it joins WEIGHTLESS (0‰) and earns cadence once some build \
+                                 certifies a backend for it — ADR-0069 Decision 6"
+                            )
+                        });
                     }
                     // **And WHO is registering it** (launch blockers §3). Everything above is a
                     // fact about the graph and the share; none of it is a fact about the sender.
@@ -5111,7 +5158,9 @@ impl VirtualStateProcessor {
                         &carriage.profile,
                         &carriage.canonical,
                         object,
-                        &kaspa_consensus_core::palw_e2e_adjudicability::certified_families_v1(),
+                        // The same committed set the share rule above read — see its note on why
+                        // consensus must not read the drilled registry.
+                        &certified,
                     )
                     .map_err(|e| format!("class {class_id} is not admissible: {e}"))?;
                 }

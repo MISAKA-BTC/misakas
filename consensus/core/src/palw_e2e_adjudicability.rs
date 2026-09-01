@@ -69,8 +69,12 @@ pub const PALW_E2E_FAMILY_DIGEST_DOMAIN: &[u8] = b"misaka-palw/e2e-family-digest
 /// The bundle commitment: `H(domain ‖ count ‖ sorted family digests)`.
 pub const PALW_COURT_E2E_ROOT_DOMAIN: &[u8] = b"misaka-palw/court-e2e/root/v1";
 
+/// A family's build-level name, hashed under its own domain.
+pub const PALW_E2E_FAMILY_ID_DOMAIN: &[u8] = b"misaka-palw/e2e-family-id/v1";
+
 /// Every domain this module introduces (uniqueness-tested against every other PALW family).
-pub const PALW_E2E_ALL_DOMAINS: &[&[u8]] = &[PALW_E2E_FAMILY_DIGEST_DOMAIN, PALW_COURT_E2E_ROOT_DOMAIN];
+pub const PALW_E2E_ALL_DOMAINS: &[&[u8]] =
+    &[PALW_E2E_FAMILY_DIGEST_DOMAIN, PALW_COURT_E2E_ROOT_DOMAIN, PALW_E2E_FAMILY_ID_DOMAIN];
 
 // ---------------------------------------------------------------------------------------------
 // What a drill covered
@@ -538,6 +542,101 @@ const PALW_RC_COURT_E2E_ROOT_BYTES: [u8; 64] = [
     0xba, 0xd1, 0x8a, 0x63, 0x10, 0xcb, 0x7e, 0x4b,
     0x2a, 0x9f, 0x9d, 0x26, 0x8b, 0x0a, 0x8b, 0x9f,
     0xbb, 0x37, 0x06, 0x08, 0xe5, 0xd2, 0x8f, 0xcd,
+];
+
+/// **The certified family set this network COMMITS to — readable without a model runtime.**
+///
+/// The registry below is filled by whoever can run a drill, and a drill needs a backend: those live
+/// in crates that depend on this one, and `kaspa-consensus` links them only as a DEV dependency
+/// ("a node's consensus never links a model runtime", ADR-0042 Decision 4). So a consensus rule
+/// that read the registry would be correct only when some other crate had filled it first — true
+/// on a producing node whose boot path drills, false on a validating one, and the disagreement
+/// would be about whether a block is valid. That is the failure `court_e2e_root` exists to prevent,
+/// arriving through the door meant to enforce it.
+///
+/// So the SET is derived here, where every node can reach it, and only the parts a drill measures
+/// are pinned:
+///
+/// * `kernel_ids` is computed from the class's own profile — the same `reachable_kernels_v1` the
+///   admission gate runs on a registrant. Measured: a family's fixture geometry and its production
+///   geometry reach the same set, which is what lets a drill on the small one vouch for the large.
+/// * `drilled_class_id` and `convicted_leaves` are FACTS ABOUT A DRILL. Nothing here can recompute
+///   them, so they are written down, and `misaka-palw-base0`'s drill asserts that this build
+///   reproduces them exactly. A build whose drill produces anything else does not match the network.
+///
+/// [`palw_court_e2e_root_v1`] is the digest of this, so the pin and the set cannot drift apart.
+pub fn palw_rc_certified_families_v1() -> Vec<PalwE2eFamilyV1> {
+    let full = |gdn: bool, convicted_leaves: u32| PalwE2eCoveringV1 {
+        pre: true,
+        gdn,
+        attn: true,
+        post: true,
+        prefill: true,
+        decode: true,
+        convicted_leaves,
+        malformed_refused: true,
+    };
+    let mut out = Vec::with_capacity(3);
+    if let Ok(floor) = crate::palw_base0_profile::base0_profile_v1(crate::palw_base0_profile::PALW_RC_BASE0_GEOMETRY) {
+        out.push(PalwE2eFamilyV1 {
+            family_id: palw_e2e_family_id_v1("PALW-BASE-0"),
+            drilled_class_id: floor.shape_profile_id(),
+            kernel_ids: crate::palw_class_admission_v2::reachable_kernels_v1(&floor),
+            covering: full(false, 6),
+        });
+    }
+    if let Ok(hybrid) = crate::palw_qwen36_profile::qwen36_profile_v2(crate::palw_qwen36_profile::qwen36_geometry_artifact_eps(
+        crate::palw_qwen36_profile::QWEN36_35B_A3B,
+    )) {
+        out.push(PalwE2eFamilyV1 {
+            family_id: palw_e2e_family_id_v1("PALW-QWEN36"),
+            drilled_class_id: Hash64::from_bytes(QWEN36_DRILLED_CLASS_ID),
+            kernel_ids: crate::palw_class_admission_v2::reachable_kernels_v1(&hybrid),
+            covering: full(true, 8),
+        });
+    }
+    if let Ok(dense) = crate::palw_qwen25_profile::qwen25_a16_profile_v2(crate::palw_qwen25_profile::QWEN25_1_5B_A16) {
+        out.push(PalwE2eFamilyV1 {
+            family_id: palw_e2e_family_id_v1("PALW-QWEN25-A16"),
+            drilled_class_id: Hash64::from_bytes(A16_DRILLED_CLASS_ID),
+            kernel_ids: crate::palw_class_admission_v2::reachable_kernels_v1(&dense),
+            covering: full(false, 6),
+        });
+    }
+    out
+}
+
+/// A family's build-level name, hashed. Under its own domain so it can never be read as a class id
+/// or an artifact root.
+pub fn palw_e2e_family_id_v1(name: &str) -> Hash64 {
+    let mut h = blake2b_simd::Params::new().hash_length(64).key(PALW_E2E_FAMILY_ID_DOMAIN).to_state();
+    h.update(name.as_bytes());
+    let mut out = [0u8; 64];
+    out.copy_from_slice(h.finalize().as_bytes());
+    Hash64::from_bytes(out)
+}
+
+/// The fixture graphs the two model tiers were drilled on. Facts about a drill, not values anything
+/// here recomputes — see [`palw_rc_certified_families_v1`].
+const QWEN36_DRILLED_CLASS_ID: [u8; 64] = [
+    0xdd, 0x99, 0x86, 0x33, 0x45, 0x98, 0xca, 0xea,
+    0xe5, 0xae, 0x2e, 0x1c, 0xea, 0xc7, 0xe3, 0xdb,
+    0x0a, 0x3b, 0xd9, 0xfb, 0xdf, 0x38, 0x2a, 0xdd,
+    0xb1, 0x81, 0x5a, 0x7e, 0x4b, 0x4b, 0xf2, 0xe2,
+    0x89, 0x91, 0xa3, 0x66, 0x19, 0xea, 0xbc, 0x76,
+    0xf8, 0xa1, 0x47, 0xfa, 0x95, 0x65, 0x89, 0xde,
+    0xd4, 0x06, 0x4d, 0x69, 0x59, 0x54, 0x0b, 0x73,
+    0x13, 0x7a, 0x8f, 0x48, 0x3c, 0x6e, 0x43, 0xf1,
+];
+const A16_DRILLED_CLASS_ID: [u8; 64] = [
+    0xa1, 0x17, 0xaf, 0xb3, 0x93, 0xb2, 0xf7, 0x6c,
+    0xa9, 0x17, 0xc2, 0x9f, 0xf3, 0xde, 0x66, 0x7b,
+    0xae, 0x3e, 0x80, 0xcd, 0x90, 0x2d, 0xde, 0xb0,
+    0x80, 0x12, 0x63, 0xff, 0xf9, 0x73, 0x0e, 0xe1,
+    0x92, 0xd3, 0x60, 0x96, 0x0e, 0x9c, 0x60, 0xe2,
+    0x21, 0x1c, 0x13, 0xb7, 0x07, 0xc0, 0x12, 0x8b,
+    0x96, 0x24, 0xfe, 0xeb, 0x03, 0xce, 0x27, 0xd9,
+    0x94, 0x95, 0x29, 0x75, 0x72, 0xf7, 0x3a, 0x04,
 ];
 
 /// **The families this build has certified end to end.**

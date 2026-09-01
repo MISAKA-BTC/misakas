@@ -469,11 +469,32 @@ impl PalwClassSdk {
         artifact_root: Hash64,
     ) -> Result<PalwClassCatalogEntryV2, String> {
         let canonical = entry.canonical_context();
+        // The build's certified families (ADR-0069 Decision 5) — the same set the consensus gate
+        // reads, so a preflight that says "this would be admitted" is answering the question the
+        // chain will actually ask.
+        let certified = kaspa_consensus_core::palw_e2e_adjudicability::palw_rc_certified_families_v1();
+        // **The probe's share is the one this class may actually take**, not a placeholder. Every
+        // other economic field here is ignored by the gate; the share is not, since ADR-0069, and a
+        // probe that asked for weight on behalf of an uncertified family would report "refused" for
+        // a class that is in fact perfectly registrable — weightless. That refusal reads as "your
+        // model cannot join", which is the opposite of what the chain means.
+        let share = if kaspa_consensus_core::palw_e2e_adjudicability::family_certified_for_weight_v1(
+            bundle.court_e2e_root,
+            &certified,
+            &kaspa_consensus_core::palw_class_admission_v2::reachable_kernels_v1(&entry.profile),
+        )
+        .map_err(|e| format!("this node cannot price a registration for {}: {e}", entry.model_id))?
+        .is_some()
+        {
+            1
+        } else {
+            0
+        };
         let probe = palw_post_genesis_registration_v1(
             entry.profile.clone(),
             canonical.clone(),
             artifact_root,
-            1,
+            share,
             1,
             1,
             0,
@@ -481,10 +502,6 @@ impl PalwClassSdk {
             Vec::new(),
         )
         .map_err(|e| format!("this build cannot express a registration for {}: {e}", entry.model_id))?;
-        // The build's certified families (ADR-0069 Decision 5) — the same set the consensus gate
-        // reads, so a preflight that says "this would be admitted" is answering the question the
-        // chain will actually ask.
-        let certified = kaspa_consensus_core::palw_e2e_adjudicability::certified_families_v1();
         verify_class_admission_v2(bundle, &entry.profile, &canonical, &probe, &certified).map_err(|e| {
             format!("the {} registration would be refused by the admission gate, so nothing was signed or funded: {e}", entry.model_id)
         })
@@ -507,11 +524,27 @@ impl PalwClassSdk {
         signature: Vec<u8>,
     ) -> Result<PalwConsensusObjectV2, String> {
         self.preflight_admission(bundle, &candidate.entry, candidate.artifact_root)?;
+        // **The share an entrant may take is a function of its own graph** (ADR-0069 Decisions 5
+        // and 6). `terms` carries the chain-wide minimum, which is the right value for a class some
+        // end-to-end certified family covers; a class no family covers joins WEIGHTLESS instead,
+        // and the acceptance path requires exactly that value rather than the minimum. Building at
+        // the minimum regardless would produce an object every node refuses — a registrant told
+        // "you may not join" when what the chain means is "you may join, and earn once somebody can
+        // prosecute you".
+        let certified = kaspa_consensus_core::palw_e2e_adjudicability::palw_rc_certified_families_v1();
+        let reachable = kaspa_consensus_core::palw_class_admission_v2::reachable_kernels_v1(&candidate.entry.profile);
+        let prosecutable = kaspa_consensus_core::palw_e2e_adjudicability::family_certified_for_weight_v1(
+            bundle.court_e2e_root,
+            &certified,
+            &reachable,
+        )
+        .map_err(|e| format!("this node cannot price a registration for {}: {e}", candidate.entry.model_id))?
+        .is_some();
         palw_post_genesis_registration_v1(
             candidate.entry.profile.clone(),
             candidate.entry.canonical_context(),
             candidate.artifact_root,
-            terms.min_grantable_share_permille,
+            if prosecutable { terms.min_grantable_share_permille } else { 0 },
             terms.initial_target,
             terms.slash_value_per_pwu,
             activation_daa,
