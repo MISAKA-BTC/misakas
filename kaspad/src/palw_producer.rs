@@ -119,6 +119,13 @@ pub struct PalwProducerConfig {
 
 pub struct PalwProducerService {
     config: PalwProducerConfig,
+    /// Fired by `signal_exit` so this service's `start` future can finish — the panel's fix
+    /// (`PalwPanelService::shutdown`), copied to the lane that never got it. The ADR-0068 drill
+    /// measured the omission three out of three times: every server stopped, the worker loop
+    /// kept ticking, the AsyncRuntime join parked the main thread in `pthread_join` forever, and
+    /// only SIGKILL ended the process. On a fleet under systemd that is a silent
+    /// `TimeoutStopSec`-then-SIGKILL on EVERY restart.
+    shutdown: kaspa_utils::triggers::SingleTrigger,
     /// Loaded once at construction, through the SDK — each file by its own container's rules
     /// (digest-checked whole for the dense tier, mapped and rooted for the Qwen3.6 tier); whether
     /// a holding is the artifact the CHAIN registered is decided per block, against the producer
@@ -218,7 +225,28 @@ impl PalwProducerService {
             warn!("[{PALW_PRODUCER}] class artifact {} is not held: {why}", path.display());
         }
         let class_holdings = loaded;
-        Self { config, consensus_manager, mining_manager, flow_context, keypair, key_seed, bond, miner_data, class_holdings }
+        Self {
+            config,
+            shutdown: kaspa_utils::triggers::SingleTrigger::default(),
+            consensus_manager,
+            mining_manager,
+            flow_context,
+            keypair,
+            key_seed,
+            bond,
+            miner_data,
+            class_holdings,
+        }
+    }
+
+    /// Sleep `period`, or return `false` the moment `signal_exit` fires — the panel's `tick`,
+    /// copied verbatim. Every wait in the worker loop goes through this, which is what makes
+    /// shutdown reach code that would otherwise sleep forever (ADR-0068 drill finding F1).
+    async fn tick(&self, period: std::time::Duration) -> bool {
+        tokio::select! {
+            _ = tokio::time::sleep(period) => true,
+            _ = self.shutdown.listener.clone() => false,
+        }
     }
 
     /// **Keep what the attempt promises to keep.**
@@ -351,7 +379,9 @@ impl PalwProducerService {
         let mut last_hold: Option<String> = None;
         let mut last_hold_at: Option<std::time::Instant> = None;
         loop {
-            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            if !self.tick(std::time::Duration::from_millis(200)).await {
+                break;
+            }
             ticks += 1;
             if ticks.is_multiple_of(300) {
                 // Every ~60 s: re-serve the retained material of still-licensable claims.
@@ -374,7 +404,9 @@ impl PalwProducerService {
                     self.flow_context.hub().has_peers() && self.flow_context.is_consensus_participation_allowed();
                 if !(self.config.enable_unsynced_mining && peers_and_participation) {
                     trace!("[{PALW_PRODUCER}] holding: the mining rule engine says this node should not mine");
-                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    if !self.tick(std::time::Duration::from_secs(2)).await {
+                        break;
+                    }
                     continue;
                 }
                 if produced == 0 {
@@ -385,7 +417,9 @@ impl PalwProducerService {
             }
             let Some(facts) = session.palw_producer_facts_v2(self.config.class_id, Some(bond)) else {
                 trace!("[{PALW_PRODUCER}] this network has no ConsensusV2 facts — nothing to produce");
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                if !self.tick(std::time::Duration::from_secs(5)).await {
+                    break;
+                }
                 continue;
             };
             if let Err(why) = facts.ready_to_produce(&self.verification_key()) {
@@ -415,7 +449,9 @@ impl PalwProducerService {
                     last_hold = Some(detail);
                     last_hold_at = Some(std::time::Instant::now());
                 }
-                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                if !self.tick(std::time::Duration::from_secs(5)).await {
+                    break;
+                }
                 continue;
             }
             // Cleared so the next hold, whatever it is, prints immediately rather than being
@@ -457,6 +493,7 @@ impl PalwProducerService {
                 Err(err) => warn!("[{PALW_PRODUCER}] {err}"),
             }
         }
+        info!("[{PALW_PRODUCER}] stopping ({produced} blocks this run)");
     }
 
     /// **One receipt block, if a quantum wins right now.**
@@ -698,6 +735,10 @@ impl AsyncService for PalwProducerService {
 
     fn signal_exit(self: Arc<Self>) {
         trace!("sending an exit signal to {}", PALW_PRODUCER);
+        // The half that was missing (ADR-0068 drill finding F1): without the trigger the trace
+        // above was the whole implementation, the worker loop never learned, and the AsyncRuntime
+        // join waited forever on a future that could not finish.
+        self.shutdown.trigger.trigger();
     }
 
     fn stop(self: Arc<Self>) -> AsyncServiceFuture {

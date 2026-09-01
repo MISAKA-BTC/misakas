@@ -48,6 +48,10 @@ pub struct PalwHeartbeatMinerService {
     mining_manager: MiningManagerProxy,
     flow_context: Arc<FlowContext>,
     miner_data: Option<MinerData>,
+    /// Fired by `signal_exit` so `start` can finish — the panel's fix, copied here for the same
+    /// reason it went into the producer: the ADR-0068 drill's H node hung in `pthread_join` on
+    /// SIGTERM with every server already stopped (finding F1).
+    shutdown: kaspa_utils::triggers::SingleTrigger,
 }
 
 impl PalwHeartbeatMinerService {
@@ -77,7 +81,23 @@ impl PalwHeartbeatMinerService {
                 None
             }
         };
-        Self { config, consensus_manager, mining_manager, flow_context, miner_data }
+        Self {
+            config,
+            consensus_manager,
+            mining_manager,
+            flow_context,
+            miner_data,
+            shutdown: kaspa_utils::triggers::SingleTrigger::default(),
+        }
+    }
+
+    /// Sleep `period`, or return `false` the moment `signal_exit` fires (the panel's `tick`,
+    /// ADR-0068 drill finding F1). Every wait in the worker goes through this.
+    async fn tick(&self, period: std::time::Duration) -> bool {
+        tokio::select! {
+            _ = tokio::time::sleep(period) => true,
+            _ = self.shutdown.listener.clone() => false,
+        }
     }
 
     pub async fn worker(self: &Arc<Self>) {
@@ -88,7 +108,9 @@ impl PalwHeartbeatMinerService {
         info!("[{PALW_HEARTBEAT}] starting — bondless heartbeat lane (ADR-0060), fee-only, one thread");
         let mut mined = 0u64;
         loop {
-            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            if !self.tick(std::time::Duration::from_secs(2)).await {
+                break;
+            }
             let session = self.consensus_manager.consensus().unguarded_session();
             if session.async_is_consensus_in_transitional_ibd_state().await {
                 continue;
@@ -99,7 +121,9 @@ impl PalwHeartbeatMinerService {
                     self.flow_context.hub().has_peers() && self.flow_context.is_consensus_participation_allowed();
                 if !(self.config.enable_unsynced_mining && peers_and_participation) {
                     trace!("[{PALW_HEARTBEAT}] holding: the mining rule engine says this node should not mine");
-                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    if !self.tick(std::time::Duration::from_secs(5)).await {
+                        break;
+                    }
                     continue;
                 }
             }
@@ -111,10 +135,13 @@ impl PalwHeartbeatMinerService {
                 Ok(None) => {}
                 Err(err) => {
                     warn!("[{PALW_HEARTBEAT}] {err}");
-                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    if !self.tick(std::time::Duration::from_secs(5)).await {
+                        break;
+                    }
                 }
             }
         }
+        info!("[{PALW_HEARTBEAT}] stopping ({mined} heartbeats this run)");
     }
 
     /// One template, one adapt, at most one slot wait, one bounded nonce search.
@@ -137,7 +164,10 @@ impl PalwHeartbeatMinerService {
             // picked up by a fresh template) and try again with fresh facts.
             let wait = (earliest - now).min(60_000u64);
             trace!("[{PALW_HEARTBEAT}] slot in {} s", wait / 1000);
-            tokio::time::sleep(std::time::Duration::from_millis(wait)).await;
+            // A slot wait can be a full minute — long enough to be the wait a SIGTERM lands in
+            // (finding F1), so it is a tick like every other: on shutdown, hand back to the
+            // worker loop, whose own tick exits.
+            self.tick(std::time::Duration::from_millis(wait)).await;
             return Ok(None);
         }
         // Grind. The lane's floor is ~2²⁴ hashes — seconds of one core — and the retarget can
@@ -180,6 +210,8 @@ impl AsyncService for PalwHeartbeatMinerService {
 
     fn signal_exit(self: Arc<Self>) {
         trace!("sending an exit signal to {}", PALW_HEARTBEAT);
+        // ADR-0068 drill finding F1: the missing half — see the producer's twin comment.
+        self.shutdown.trigger.trigger();
     }
 
     fn stop(self: Arc<Self>) -> AsyncServiceFuture {
