@@ -307,8 +307,8 @@ async fn palw_v2_state_walks_with_the_utxo_diff() {
     let config = ConfigBuilder::new(MAINNET_PARAMS)
         .skip_proof_of_work()
         .edit_consensus_params(|p| {
-            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
             p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(palw_v2_test_bundle(&catalog));
+            *p = p.clone().with_palw_v2_cadence();
         })
         .build();
     // The fixture is a ruleset a node would really boot on, not a shape that merely type-checks.
@@ -386,8 +386,8 @@ async fn palw_heartbeat_blocks_tick_the_clock_and_weigh_epsilon() {
     let config = ConfigBuilder::new(MAINNET_PARAMS)
         .skip_proof_of_work()
         .edit_consensus_params(|p| {
-            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
             p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(palw_v2_test_bundle(&catalog));
+            *p = p.clone().with_palw_v2_cadence();
             p.palw_heartbeat = Some(kaspa_consensus_core::config::params::PalwHeartbeatV1 {
                 activation: kaspa_consensus_core::config::params::ForkActivation::always(),
                 work_log2: kaspa_consensus_core::pow_layer0::PALW_HEARTBEAT_WORK_LOG2,
@@ -505,8 +505,8 @@ async fn palw_heartbeat_blocks_tick_the_clock_and_weigh_epsilon() {
         let closed = ConfigBuilder::new(MAINNET_PARAMS)
             .skip_proof_of_work()
             .edit_consensus_params(|p| {
-                p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
                 p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(palw_v2_test_bundle(&catalog));
+                *p = p.clone().with_palw_v2_cadence();
             })
             .build();
         assert!(closed.params.palw_heartbeat.is_none());
@@ -559,8 +559,8 @@ async fn palw_attempt_blocks_weigh_the_constant_under_the_fence() {
     let armed = ConfigBuilder::new(MAINNET_PARAMS)
         .skip_proof_of_work()
         .edit_consensus_params(|p| {
-            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
             p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(palw_v2_test_bundle(&catalog));
+            *p = p.clone().with_palw_v2_cadence();
             p.palw_attempt_work = Some(kaspa_consensus_core::config::params::PalwAttemptWorkV1 {
                 activation: kaspa_consensus_core::config::params::ForkActivation::always(),
                 work_log2: kaspa_consensus_core::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2,
@@ -591,8 +591,8 @@ async fn palw_attempt_blocks_weigh_the_constant_under_the_fence() {
     let unfenced = ConfigBuilder::new(MAINNET_PARAMS)
         .skip_proof_of_work()
         .edit_consensus_params(|p| {
-            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
             p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(palw_v2_test_bundle(&catalog));
+            *p = p.clone().with_palw_v2_cadence();
         })
         .build();
     assert!(unfenced.params.palw_attempt_work.is_none());
@@ -632,8 +632,8 @@ async fn the_heartbeat_clock_sweeps_a_stopped_chain_back_to_life() {
     let config = ConfigBuilder::new(MAINNET_PARAMS)
         .skip_proof_of_work()
         .edit_consensus_params(|p| {
-            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
             p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            *p = p.clone().with_palw_v2_cadence();
             // The whole Phase 1 configuration: the clock, its width bound, and the attempt-work
             // constant — armed together, the way a deployment would.
             p.palw_heartbeat = Some(kaspa_consensus_core::config::params::PalwHeartbeatV1 {
@@ -650,19 +650,23 @@ async fn the_heartbeat_clock_sweeps_a_stopped_chain_back_to_life() {
     config.params.validate_palw_v2().expect("the Phase 1 configuration is a runnable ruleset");
     let mut ctx = TestContext::new(TestConsensus::new(&config));
 
-    // 1) Fill the ceiling: four claims fit, the fifth block cannot become the sink. This is the
-    //    wedge — the one party that could advance the clock is the one party that is stuck.
-    for _ in 0..4 {
+    // 1) Fill the ceiling: as many claims as it admits fit, the next block cannot become the
+    //    sink. This is the wedge — the one party that could advance the clock is the one party
+    //    that is stuck. The count is derived so the wedge, not an arithmetic coincidence, is
+    //    what this reproduces.
+    let fits = palw_v2_claims_that_fit(&bundle);
+    assert!(fits >= 2, "the fixture must admit more than one claim for the wedge to be the thing under test");
+    for _ in 0..fits {
         ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
     }
     {
         let store = ctx.consensus.virtual_processor().palw_state_v2_store.read();
         let (_, state) = store.load_tip(&bundle.state).unwrap().unwrap();
-        assert_eq!(state.claims_iter().count(), 4, "four claims open — the bond is at its ceiling");
+        assert_eq!(state.claims_iter().count() as u64, fits, "the bond is at its ceiling");
     }
     let wedged_sink = ctx.consensus.get_sink();
     ctx.build_block_template_row(0..1).validate_and_insert_row().await;
-    assert_eq!(ctx.consensus.get_sink(), wedged_sink, "the fifth claim exceeds the ceiling: the chain is wedged");
+    assert_eq!(ctx.consensus.get_sink(), wedged_sink, "one claim past the ceiling: the chain is wedged");
 
     // 2) The clock, and nothing else. First tick an hour out (the chain was producing a block
     //    ago), then the recovery cadence — each tick one DAA unit, sweeping the lifecycle
@@ -723,8 +727,8 @@ async fn a_mergeset_holds_at_most_four_heartbeats_and_templates_chunk_the_rest()
     let config = ConfigBuilder::new(MAINNET_PARAMS)
         .skip_proof_of_work()
         .edit_consensus_params(|p| {
-            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
             p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(palw_v2_test_bundle(&catalog));
+            *p = p.clone().with_palw_v2_cadence();
             p.palw_heartbeat = Some(kaspa_consensus_core::config::params::PalwHeartbeatV1 {
                 activation: kaspa_consensus_core::config::params::ForkActivation::always(),
                 work_log2: kaspa_consensus_core::pow_layer0::PALW_HEARTBEAT_WORK_LOG2,
@@ -824,8 +828,8 @@ async fn a_heartbeat_chain_of_any_depth_merges_but_a_tree_does_not() {
     let config = ConfigBuilder::new(MAINNET_PARAMS)
         .skip_proof_of_work()
         .edit_consensus_params(|p| {
-            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
             p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(palw_v2_test_bundle(&catalog));
+            *p = p.clone().with_palw_v2_cadence();
             p.palw_heartbeat = Some(kaspa_consensus_core::config::params::PalwHeartbeatV1 {
                 activation: kaspa_consensus_core::config::params::ForkActivation::always(),
                 work_log2: kaspa_consensus_core::pow_layer0::PALW_HEARTBEAT_WORK_LOG2,
@@ -975,8 +979,8 @@ async fn palw_v3_a_receipt_carriage_with_a_junk_signature_is_refused_at_the_head
     let config = ConfigBuilder::new(MAINNET_PARAMS)
         .skip_proof_of_work()
         .edit_consensus_params(|p| {
-            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
             p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(palw_v2_test_bundle(&catalog));
+            *p = p.clone().with_palw_v2_cadence();
         })
         .build();
     let mut ctx = TestContext::new(TestConsensus::new(&config));
@@ -1036,8 +1040,8 @@ async fn a_block_committing_to_the_wrong_palw_state_root_is_disqualified() {
     let config = ConfigBuilder::new(MAINNET_PARAMS)
         .skip_proof_of_work()
         .edit_consensus_params(|p| {
-            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
             p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(palw_v2_test_bundle(&catalog));
+            *p = p.clone().with_palw_v2_cadence();
         })
         .build();
     let mut ctx = TestContext::new(TestConsensus::new(&config));
@@ -1100,10 +1104,10 @@ async fn the_beacon_fact_comes_from_the_chain_not_from_the_block() {
     let config = ConfigBuilder::new(MAINNET_PARAMS)
         .skip_proof_of_work()
         .edit_consensus_params(|p| {
-            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
             // Six chain blocks is six concurrent claims; the default bond backs four. Funded for
             // the chain it mines — see `palw_v2_test_bundle_funded_for`.
             p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(palw_v2_test_bundle_funded_for(&catalog, 16));
+            *p = p.clone().with_palw_v2_cadence();
         })
         .build();
     let mut ctx = TestContext::new(TestConsensus::new(&config));
@@ -1165,8 +1169,8 @@ async fn the_palw_candidate_order_is_the_candidates_own() {
     let config = ConfigBuilder::new(MAINNET_PARAMS)
         .skip_proof_of_work()
         .edit_consensus_params(|p| {
-            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
             p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(palw_v2_test_bundle(&catalog));
+            *p = p.clone().with_palw_v2_cadence();
         })
         .build();
     let mut ctx = TestContext::new(TestConsensus::new(&config));
@@ -1231,10 +1235,10 @@ async fn palw_v2_sink_is_the_blue_work_maximum_of_its_virtual_parents() {
     let config = ConfigBuilder::new(MAINNET_PARAMS)
         .skip_proof_of_work()
         .edit_consensus_params(|p| {
-            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
             // Five wide rows is five chain blocks, so five concurrent claims — one more than the
             // bundle's default bond can back. Funded for the chain it mines; see the fixture.
             p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(palw_v2_test_bundle_funded_for(&catalog, 16));
+            *p = p.clone().with_palw_v2_cadence();
         })
         .build();
     // A V2 network orders tips by PALW — not by the V1 fence, which it does not and may not set.
@@ -1309,8 +1313,8 @@ async fn a_duplicate_lifecycle_object_is_dropped_and_the_block_stands() {
     let config = ConfigBuilder::new(MAINNET_PARAMS)
         .skip_proof_of_work()
         .edit_consensus_params(|p| {
-            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
             p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            *p = p.clone().with_palw_v2_cadence();
         })
         .build();
     let mut ctx = TestContext::new(TestConsensus::new(&config));
@@ -1451,8 +1455,8 @@ async fn palw_v2_the_bootstrap_registry_is_the_state_the_transition_will_hold() 
     let config = ConfigBuilder::new(MAINNET_PARAMS)
         .skip_proof_of_work()
         .edit_consensus_params(|p| {
-            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
             p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            *p = p.clone().with_palw_v2_cadence();
         })
         .build();
     let mut ctx = TestContext::new(TestConsensus::new(&config));
@@ -1590,8 +1594,8 @@ async fn palw_v2_an_unbonded_merged_blue_is_not_paid() {
     let config = ConfigBuilder::new(MAINNET_PARAMS)
         .skip_proof_of_work()
         .edit_consensus_params(|p| {
-            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
             p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            *p = p.clone().with_palw_v2_cadence();
         })
         .build();
     let mut ctx = TestContext::new(TestConsensus::new(&config));
@@ -1671,8 +1675,8 @@ async fn palw_v2_a_tip_that_does_not_stand_at_the_sink_is_re_derived() {
     let config = ConfigBuilder::new(MAINNET_PARAMS)
         .skip_proof_of_work()
         .edit_consensus_params(|p| {
-            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
             p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            *p = p.clone().with_palw_v2_cadence();
         })
         .build();
     let mut ctx = TestContext::new(TestConsensus::new(&config));
@@ -1744,8 +1748,8 @@ async fn palw_v2_tip_heap_has_no_weight_key_but_the_gate_does() {
     let config = ConfigBuilder::new(MAINNET_PARAMS)
         .skip_proof_of_work()
         .edit_consensus_params(|p| {
-            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
             p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(palw_v2_test_bundle_funded_for(&catalog, 16));
+            *p = p.clone().with_palw_v2_cadence();
         })
         .build();
 
@@ -1809,8 +1813,8 @@ async fn palw_v2_attempt_admission_runs_on_the_live_path() {
     let config = ConfigBuilder::new(MAINNET_PARAMS)
         .skip_proof_of_work()
         .edit_consensus_params(|p| {
-            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
             p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            *p = p.clone().with_palw_v2_cadence();
         })
         .build();
     let genesis_hash = config.params.genesis.hash;
@@ -1901,8 +1905,8 @@ async fn palw_v2_an_attempt_block_creates_its_claim() {
     let config = ConfigBuilder::new(MAINNET_PARAMS)
         .skip_proof_of_work()
         .edit_consensus_params(|p| {
-            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
             p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            *p = p.clone().with_palw_v2_cadence();
         })
         .build();
     let genesis_hash = config.params.genesis.hash;
@@ -1979,8 +1983,8 @@ async fn palw_v2_the_escrow_is_carved_out_of_the_block_that_earned_it() {
     let config = ConfigBuilder::new(MAINNET_PARAMS)
         .skip_proof_of_work()
         .edit_consensus_params(|p| {
-            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
             p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            *p = p.clone().with_palw_v2_cadence();
         })
         .build();
     let fee_split = config.params.dns_params.as_ref().expect("the fixture network carves").reward_params.fee_split.clone();
@@ -2044,8 +2048,8 @@ async fn palw_v2_a_live_bonds_collateral_outpoint_is_locked() {
     let config = ConfigBuilder::new(MAINNET_PARAMS)
         .skip_proof_of_work()
         .edit_consensus_params(|p| {
-            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
             p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            *p = p.clone().with_palw_v2_cadence();
         })
         .build();
     let mut ctx = TestContext::new(TestConsensus::new(&config));
@@ -2627,8 +2631,8 @@ async fn palw_v2_a_stranger_can_register_their_own_bond() {
     let config = ConfigBuilder::new(MAINNET_PARAMS)
         .skip_proof_of_work()
         .edit_consensus_params(|p| {
-            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
             p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            *p = p.clone().with_palw_v2_cadence();
         })
         .build();
     let mut ctx = TestContext::new(TestConsensus::new(&config));
@@ -2738,8 +2742,8 @@ async fn palw_v2_a_class_registration_needs_a_bond_that_signed_for_it() {
     let config = ConfigBuilder::new(MAINNET_PARAMS)
         .skip_proof_of_work()
         .edit_consensus_params(|p| {
-            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
             p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            *p = p.clone().with_palw_v2_cadence();
         })
         .build();
     let mut ctx = TestContext::new(TestConsensus::new(&config));
@@ -2870,8 +2874,8 @@ async fn palw_v2_a_signed_quorum_licenses_a_claim() {
     let config = ConfigBuilder::new(MAINNET_PARAMS)
         .skip_proof_of_work()
         .edit_consensus_params(|p| {
-            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
             p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            *p = p.clone().with_palw_v2_cadence();
         })
         .build();
     let mut ctx = TestContext::new(TestConsensus::new(&config));
@@ -3004,8 +3008,8 @@ async fn palw_v2_the_pruning_point_import_verifies_the_root_before_it_writes() {
     let config = ConfigBuilder::new(MAINNET_PARAMS)
         .skip_proof_of_work()
         .edit_consensus_params(|p| {
-            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
             p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            *p = p.clone().with_palw_v2_cadence();
         })
         .build();
     let mut ctx = TestContext::new(TestConsensus::new(&config));
@@ -3112,8 +3116,8 @@ async fn the_pruning_point_witness_is_the_selected_chain_child_not_a_side_block(
     let config = ConfigBuilder::new(MAINNET_PARAMS)
         .skip_proof_of_work()
         .edit_consensus_params(|p| {
-            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
             p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            *p = p.clone().with_palw_v2_cadence();
         })
         .build();
     let mut ctx = TestContext::new(TestConsensus::new(&config));
@@ -3302,8 +3306,8 @@ async fn palw_v2_a_node_with_no_palw_state_refuses_to_run() {
     let config = ConfigBuilder::new(MAINNET_PARAMS)
         .skip_proof_of_work()
         .edit_consensus_params(|p| {
-            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
             p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            *p = p.clone().with_palw_v2_cadence();
         })
         .build();
 
@@ -3366,8 +3370,8 @@ fn palw_v2_a_staging_consensus_without_palw_state_is_allowed() {
     let staging = ConfigBuilder::new(MAINNET_PARAMS)
         .skip_proof_of_work()
         .edit_consensus_params(|p| {
-            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
             p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            *p = p.clone().with_palw_v2_cadence();
         })
         .skip_adding_genesis()
         .build();
@@ -3399,8 +3403,8 @@ fn palw_v2_constructing_a_bundled_consensus_over_an_empty_store_panics() {
     let config = ConfigBuilder::new(MAINNET_PARAMS)
         .skip_proof_of_work()
         .edit_consensus_params(|p| {
-            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
             p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            *p = p.clone().with_palw_v2_cadence();
         })
         .build();
 
@@ -3421,8 +3425,8 @@ fn palw_v2_constructing_a_bundled_consensus_over_an_empty_store_panics() {
     let resumed = ConfigBuilder::new(MAINNET_PARAMS)
         .skip_proof_of_work()
         .edit_consensus_params(|p| {
-            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
             p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            *p = p.clone().with_palw_v2_cadence();
         })
         .skip_adding_genesis()
         .build();
@@ -3450,8 +3454,8 @@ async fn palw_v2_an_unsigned_receipt_set_cannot_slash_anyone() {
     let config = ConfigBuilder::new(MAINNET_PARAMS)
         .skip_proof_of_work()
         .edit_consensus_params(|p| {
-            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
             p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            *p = p.clone().with_palw_v2_cadence();
         })
         .build();
     let mut ctx = TestContext::new(TestConsensus::new(&config));
@@ -3532,8 +3536,8 @@ async fn palw_v2_a_gossiped_receipt_pool_assembles_the_object_a_block_accepts() 
     let config = ConfigBuilder::new(MAINNET_PARAMS)
         .skip_proof_of_work()
         .edit_consensus_params(|p| {
-            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
             p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            *p = p.clone().with_palw_v2_cadence();
         })
         .build();
     let mut ctx = TestContext::new(TestConsensus::new(&config));
@@ -3630,8 +3634,8 @@ async fn palw_v2_producer_facts_track_the_chain_the_blocks_actually_built() {
     let config = ConfigBuilder::new(MAINNET_PARAMS)
         .skip_proof_of_work()
         .edit_consensus_params(|p| {
-            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
             p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            *p = p.clone().with_palw_v2_cadence();
         })
         .build();
     let mut ctx = TestContext::new(TestConsensus::new(&config));
@@ -3681,30 +3685,36 @@ async fn palw_v2_the_exposure_ceiling_bites_when_reservations_are_real() {
     let config = ConfigBuilder::new(MAINNET_PARAMS)
         .skip_proof_of_work()
         .edit_consensus_params(|p| {
-            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
             p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            *p = p.clone().with_palw_v2_cadence();
         })
         .build();
     let mut ctx = TestContext::new(TestConsensus::new(&config));
 
-    // Four fit.
-    for _ in 0..4 {
+    // As many as the ceiling admits — derived, not typed.
+    let fits = palw_v2_claims_that_fit(&bundle);
+    assert!(fits >= 2, "the fixture must admit more than one claim for the ceiling to be the thing under test");
+    for _ in 0..fits {
         ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
     }
-    let sink_after_four = ctx.consensus.get_sink();
+    let sink_at_ceiling = ctx.consensus.get_sink();
     {
         let store = ctx.consensus.virtual_processor().palw_state_v2_store.read();
         let (_, state) = store.load_tip(&bundle.state).unwrap().unwrap();
-        assert_eq!(state.claims_iter().count(), 4, "four claims, all still open — nothing has matured to release one");
+        assert_eq!(
+            state.claims_iter().count() as u64,
+            fits,
+            "every admitted claim is still open — nothing has matured to release one"
+        );
     }
 
-    // The fifth does not: its claim would push the bond past `collateral × 500‰`, and no claim
+    // The next does not: its claim would push the bond past `collateral × 500‰`, and no claim
     // has resolved to give the room back. The block exists in the DAG; it is not the chain.
     ctx.build_block_template_row(0..1).validate_and_insert_row().await;
     assert_eq!(
         ctx.consensus.get_sink(),
-        sink_after_four,
-        "a fifth concurrent claim exceeds the bond's exposure ceiling, so its block cannot become the sink"
+        sink_at_ceiling,
+        "one claim past the ceiling exceeds the bond's exposure, so its block cannot become the sink"
     );
 }
 
@@ -3738,8 +3748,8 @@ async fn palw_v2_a_bond_holders_own_resignature_buys_a_block_but_never_a_second_
     let config = ConfigBuilder::new(MAINNET_PARAMS)
         .skip_proof_of_work()
         .edit_consensus_params(|p| {
-            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
             p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            *p = p.clone().with_palw_v2_cadence();
         })
         .build();
     let mut ctx = TestContext::new(TestConsensus::new(&config));
@@ -3822,8 +3832,8 @@ async fn palw_v2_a_forged_attempt_signature_cannot_become_the_sink() {
     let config = ConfigBuilder::new(MAINNET_PARAMS)
         .skip_proof_of_work()
         .edit_consensus_params(|p| {
-            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
             p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            *p = p.clone().with_palw_v2_cadence();
         })
         .build();
     let consensus = TestConsensus::new(&config);
@@ -3964,6 +3974,36 @@ fn palw_v2_test_bundle_at_min_collateral(
     b
 }
 
+/// How many concurrent claims this fixture's bond can hold before the exposure ceiling refuses
+/// one. Derived, because the answer is a function of the pricing and the two tests that asserted a
+/// literal "four" both broke the moment the pricing was corrected — which is the fixture asserting
+/// an arithmetic accident rather than the rule it is named for.
+fn palw_v2_claims_that_fit(bundle: &kaspa_consensus_core::palw_mode_v2::PalwConsensusParamsV2) -> u64 {
+    use kaspa_consensus_core::palw_state_v2::{PalwConsensusObjectV2, PalwPwuRuleV2};
+    let reserve = bundle
+        .genesis_objects
+        .iter()
+        .find_map(|o| match o {
+            PalwConsensusObjectV2::ClassRegistered {
+                pwu_rule: PalwPwuRuleV2::DerivedV1 { pwu_per_inference },
+                slash_value_per_pwu,
+                ..
+            } => Some(*pwu_per_inference as u128 * *slash_value_per_pwu as u128),
+            _ => None,
+        })
+        .expect("the fixture bundle registers its class with a derived pwu rule");
+    let collateral = bundle
+        .genesis_objects
+        .iter()
+        .find_map(|o| match o {
+            PalwConsensusObjectV2::BondRegistered { collateral, .. } => Some(*collateral as u128),
+            _ => None,
+        })
+        .expect("the fixture bundle registers a bond");
+    let ceiling = collateral * bundle.admission.max_exposure_ratio_permille() as u128 / 1000;
+    (ceiling / reserve) as u64
+}
+
 fn palw_v2_test_bundle_funded_for(
     catalog: &kaspa_consensus_core::palw_mode_v2::PalwClassCatalogV2,
     concurrent_claims: u64,
@@ -3971,9 +4011,10 @@ fn palw_v2_test_bundle_funded_for(
     use kaspa_consensus_core::palw_state_v2::{PalwConsensusObjectV2, PalwPwuRuleV2};
     let mut b = palw_v2_test_bundle(catalog);
     // Read off the bundle's OWN class registration rather than typed, so a ruleset change moves
-    // the fixture with it instead of silently under-funding it. At the genesis target
-    // (`u128::MAX / 2`) the derivation yields `pwu = 2 × pwu_per_inference`, and a claim reserves
-    // `pwu × slash_value_per_pwu`.
+    // the fixture with it instead of silently under-funding it. A claim reserves
+    // `pwu_per_inference × slash_value_per_pwu` — one inference's worth, NOT the derived `pwu`,
+    // which carries an `expected_attempts(target)` factor the ceiling must not depend on
+    // (`palw_state_v2::palw_exposure_pwu_v1`).
     let reserve_per_claim = b
         .genesis_objects
         .iter()
@@ -3982,14 +4023,19 @@ fn palw_v2_test_bundle_funded_for(
                 pwu_rule: PalwPwuRuleV2::DerivedV1 { pwu_per_inference },
                 slash_value_per_pwu,
                 ..
-            } => Some(2 * pwu_per_inference * slash_value_per_pwu),
+            } => Some(pwu_per_inference * slash_value_per_pwu),
             _ => None,
         })
         .expect("the fixture bundle registers its class with a derived pwu rule");
-    // The ceiling is `collateral × 500‰`, so N concurrent claims need `2 × N × reserve`.
+    // The ceiling is `collateral × 500‰`, so N concurrent claims need `2 × N × reserve` — but never
+    // less than the bundle's own bond floor, which `CollateralBelowMinimum` refuses at genesis. The
+    // clamp is not cosmetic: correcting the exposure pricing halved this figure and put the funded
+    // fixtures under the floor, so a helper named "funded for N" was producing registries the chain
+    // will not accept at all.
+    let floor = b.bond.min_collateral_sompi();
     for object in b.genesis_objects.iter_mut() {
         if let PalwConsensusObjectV2::BondRegistered { collateral, .. } = object {
-            *collateral = 2 * concurrent_claims * reserve_per_claim;
+            *collateral = (2 * concurrent_claims * reserve_per_claim).max(floor);
         }
     }
     b
@@ -9596,8 +9642,8 @@ async fn a_receipt_carriage_passes_the_header_signature_gate() {
     let config = ConfigBuilder::new(MAINNET_PARAMS)
         .skip_proof_of_work()
         .edit_consensus_params(|p| {
-            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
             p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            *p = p.clone().with_palw_v2_cadence();
         })
         .build();
     let mut ctx = TestContext::new(TestConsensus::new(&config));

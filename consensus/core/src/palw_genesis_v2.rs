@@ -204,14 +204,15 @@ pub fn verify_palw_genesis_v2(
     // shipped RC bundle did, silently, with no test able to say so.
     // ------------------------------------------------------------------------------------------
 
-    // **Gate 1 — the bind window.** A claim reserves `pwu × slash_value_per_pwu` against its bond
+    // **Gate 1 — the bind window.** A claim reserves one inference's worth of collateral against
+    // its bond (`palw_exposure_pwu_v1 × slash_value_per_pwu`)
     // and holds it until `BindTimeout` at `accepted_daa + window_bind`. On a ConsensusV2 network
     // EVERY block is an attempt, so every block creates a claim, and DAA advances only when blocks
     // are produced. If a bond's ceiling admits fewer concurrent claims than the window is long,
     // the producer fills the ceiling and then needs DAA it can only get by producing — a deadlock
     // with no timeout, no operator action, and no error message. The chain simply stops.
-    // **The HEAVIEST class, not the base one.** A claim's reservation is `pwu × slash_value`, and
-    // `pwu` is the class's counted work — so on a network that registers a model tier beside the
+    // **The HEAVIEST class, not the base one.** A claim's reservation is
+    // `pwu_per_inference × slash_value`, and that factor is the class's counted work — so on a network that registers a model tier beside the
     // floor the two differ by orders of magnitude (measured: Qwen3.6's canonical inference counts
     // 348× the floor's). Reading the base class alone made this gate answer about the cheapest
     // claims a bond will ever hold while the genesis was allocating cadence to the dearest: the
@@ -222,15 +223,15 @@ pub fn verify_palw_genesis_v2(
     let mut dearest = bundle.base_class_id;
     let mut saw_base = false;
     for object in registrations {
-        let PalwConsensusObjectV2::ClassRegistered { class_id, slash_value_per_pwu, pwu_rule, initial_target, .. } = object else {
+        let PalwConsensusObjectV2::ClassRegistered { class_id, slash_value_per_pwu, pwu_rule, .. } = object else {
             continue;
         };
         saw_base |= *class_id == bundle.base_class_id;
-        let pwu = match pwu_rule {
-            PalwPwuRuleV2::DerivedV1 { pwu_per_inference } => crate::palw_pwu::palw_pwu_v1(*initial_target, *pwu_per_inference),
-            // A value network cannot register one of these (checked above); the arm keeps the match total.
-            PalwPwuRuleV2::MaxPerAttempt(cap) => *cap,
-        };
+        // Through the SAME derivation the live reserve uses. This used to call `palw_pwu_v1`,
+        // which multiplies by the expected attempt count at `initial_target` — so the gate priced
+        // a claim at the genesis difficulty and the chain repriced it at every retarget, and the
+        // affordability this gate proves would quietly stop being true.
+        let pwu = crate::palw_state_v2::palw_max_exposure_pwu_of_rule_v1(pwu_rule);
         let cost = (pwu as u128).saturating_mul(*slash_value_per_pwu as u128).max(1);
         if cost > per_claim {
             per_claim = cost;
@@ -438,22 +439,27 @@ mod tests {
     /// the shipped RC bundle stop at block two.
     ///
     /// Every ConsensusV2 block is an attempt, so every block creates a claim that reserves
-    /// `pwu × slash_value_per_pwu` until `BindTimeout` at `+window_bind`. DAA advances only when
+    /// `pwu_per_inference × slash_value_per_pwu` until `BindTimeout` at `+window_bind`. DAA advances only when
     /// blocks are produced. A ceiling admitting fewer concurrent claims than the window is long is
     /// therefore a deadlock with no timeout and no message: the producer fills the ceiling and then
     /// needs DAA it can only get by producing.
     ///
     /// Measured on the SHIPPED numbers this gate would have caught: collateral 400,000 at 500‰ is a
-    /// ceiling of 200,000; the floor's claim reserves 15,800 pwu × 5 = 79,000; 200,000 / 79,000 = 2
-    /// concurrent claims against a 600-DAA window. Two blocks, then nothing, forever.
+    /// ceiling of 200,000, against a 600-DAA window. Two blocks, then nothing, forever. (The
+    /// per-claim figure quoted here was 15,800 pwu × 5 = 79,000 when a claim was priced on the
+    /// derived `pwu`; it is now one inference's worth, so the gate binds at a smaller collateral
+    /// for the same reason. The defect and the arithmetic are unchanged in shape.)
     #[test]
     fn a_registry_that_cannot_outlast_its_own_bind_window_is_refused() {
         let catalog = catalog();
         let bundle = bundle(&catalog);
         let window = bundle.state.window_bind();
         let ratio = bundle.admission.max_exposure_ratio_permille() as u128;
-        // What one claim of the fixture floor reserves, computed the way admission computes it.
-        let pwu = crate::palw_pwu::palw_pwu_v1(u128::MAX / 2, CANONICAL);
+        // What one claim of the fixture floor reserves, computed the way admission computes it —
+        // ONE inference's worth. This used to call `palw_pwu_v1`, which multiplies by the expected
+        // attempt count at the genesis target, and so asserted a requirement that moved with the
+        // difficulty the gate is not allowed to depend on.
+        let pwu = crate::palw_state_v2::palw_max_exposure_pwu_of_rule_v1(&PalwPwuRuleV2::DerivedV1 { pwu_per_inference: CANONICAL });
         let per_claim = (pwu as u128) * 5;
         let need = (per_claim * window as u128) * 1000 / ratio;
 

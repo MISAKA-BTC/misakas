@@ -186,7 +186,10 @@ pub fn palw_producer_facts_v2(
             collateral: bond_state.collateral,
             reserved_exposure: state.reserved_exposure(key),
             exposure_ceiling: (bond_state.collateral as u128).saturating_mul(admission.max_exposure_ratio_permille() as u128) / 1000,
-            claim_exposure: (pwu as u128).saturating_mul(class.slash_value_per_pwu as u128),
+            // The SAME derivation admission applies, or the producer's own headroom prediction
+            // disagrees with the rule that refuses it.
+            claim_exposure: (crate::palw_state_v2::palw_exposure_pwu_v1(class, pwu) as u128)
+                .saturating_mul(class.slash_value_per_pwu as u128),
         })
     });
     Some(PalwProducerFactsV2 {

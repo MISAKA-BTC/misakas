@@ -658,7 +658,7 @@ impl PalwStateParamsV2 {
 
     /// **Require a claim's collateral to be a fraction of the reward it escrows** (2026-08-30).
     ///
-    /// The downside of producing is `pwu x slash_value_per_pwu`; the upside is the block's worker
+    /// The downside of producing is `pwu_per_inference x slash_value_per_pwu`; the upside is the block's worker
     /// carve. Nothing tied them together, and on the live network they sat four orders of
     /// magnitude apart — so abandoning a claim, which costs the panel five seats' verification and
     /// destroys the escrow, cost its producer 0.00005 % of what the claim was worth. This is the
@@ -1072,6 +1072,50 @@ pub enum PalwClassStatusV2 {
     },
 }
 
+/// **The pwu a claim's EXPOSURE is priced on — one inference's worth, not one difficulty's worth.**
+///
+/// Deliberately NOT `attempt.pwu`. Under [`PalwPwuRuleV2::DerivedV1`] that value is
+/// `expected_attempts(class_target) × pwu_per_inference` (`palw_pwu::palw_pwu_v1`), so it tracks
+/// the class TARGET and grows with every retarget — while the bond standing behind it does not.
+/// Pricing exposure on it made the per-bond ceiling a function of difficulty:
+///
+/// * A class that gets popular retargets harder, so each of its claims reserves more against the
+///   same collateral, so its own producers hit `ExposureCeilingExceeded` for succeeding. On the
+///   floor class — the one every node must be able to produce, and on a `ConsensusV2` network the
+///   only block type — a refused attempt is `StatusDisqualifiedFromChain`: no block, so DAA does
+///   not advance, so nothing that depends on a clock recovers. The chain stops for getting used.
+/// * It is also the wrong quantity on its own terms. What a defaulting producer owes is the work
+///   it promised and did not serve: ONE canonical inference, whose cost is exactly
+///   `pwu_per_inference`. How many hash tries the lottery took to find the ticket is not part of
+///   the obligation, and pricing the obligation on it says the same default costs more on a
+///   Tuesday than a Monday.
+///
+/// `MaxPerAttempt` keeps the claimed value, because under that rule the miner's `pwu` is already
+/// difficulty-independent (it is bounded by a registered ceiling, not derived from a target).
+///
+/// The comment in `palw_admission_v2`'s escrow-backing item used to assert that both factors of
+/// the exposure were "chain-fixed (`DerivedV1` pins the pwu)". Half of that was true: `DerivedV1`
+/// pins the pwu to a *formula*, and the formula reads a value the retarget moves.
+pub fn palw_exposure_pwu_v1(class: &PalwClassStateV2, claimed_pwu: u64) -> u64 {
+    match class.pwu_rule {
+        PalwPwuRuleV2::DerivedV1 { pwu_per_inference } => pwu_per_inference,
+        PalwPwuRuleV2::MaxPerAttempt(_) => claimed_pwu,
+    }
+}
+
+/// The dearest exposure a claim under this rule can carry.
+///
+/// The form a gate wants when there is no attempt yet to read a claimed pwu from — the genesis
+/// bind-window check, which asks whether a bond can afford to hold claims for a whole window
+/// before any claim exists. Same quantity as [`palw_exposure_pwu_v1`], upper-bounded on the arm
+/// where the miner has a choice, so the two can never disagree about what a claim costs.
+pub fn palw_max_exposure_pwu_of_rule_v1(rule: &PalwPwuRuleV2) -> u64 {
+    match rule {
+        PalwPwuRuleV2::DerivedV1 { pwu_per_inference } => *pwu_per_inference,
+        PalwPwuRuleV2::MaxPerAttempt(cap) => *cap,
+    }
+}
+
 /// The class's PWU rule — what Decision 6 item 6 checks an attempt's claimed `pwu` against.
 ///
 /// The derivation record ADR-0039 left open and ADR-0042 required "before any class carries
@@ -1276,9 +1320,13 @@ pub struct PalwClaimStateV2 {
     /// whose request falls outside it accuses the producer of breaking an obligation it did not
     /// have.
     pub trace_retention_daa: u64,
-    /// Collateral value reserved at creation: `pwu × slash_value_per_pwu(class at creation)`.
-    /// Snapshotted so release always returns exactly what reserve took, whatever happens to the
-    /// class record afterwards.
+    /// Collateral value reserved at creation:
+    /// `palw_exposure_pwu_v1(class) × slash_value_per_pwu(class at creation)`. Snapshotted so
+    /// release always returns exactly what reserve took, whatever happens to the class record
+    /// afterwards.
+    ///
+    /// **Not `pwu × slash_value_per_pwu`, and the difference is a liveness property** — see
+    /// [`palw_exposure_pwu_v1`].
     pub reserved: u128,
     /// `⌊β·pwu/1000⌋` at creation, for the same snapshot reason.
     pub immature_contribution: u128,
@@ -3130,7 +3178,7 @@ impl<'a> TransitionBuilder<'a> {
     /// whoever would have received it.
     /// **Charge a SEAT — bounded by what the chain says, not by what a registrant wrote.**
     ///
-    /// A seat's penalty is `claim.reserved`, which is `pwu x slash_value_per_pwu`. Both factors
+    /// A seat's penalty is `claim.reserved`, which is `pwu_per_inference x slash_value_per_pwu`. Both factors
     /// come from the class REGISTRATION: the registrant picks the slash value and picks the pwu
     /// ceiling, and nothing bounded either beyond "not zero". So one registration could name a
     /// class whose every claim charges an arbitrary sum, get panels drawn from other operators'
@@ -3161,7 +3209,7 @@ impl<'a> TransitionBuilder<'a> {
 
     /// Void a claim AND take the collateral it put at risk.
     ///
-    /// `claim.reserved` is exactly `pwu × slash_value_per_pwu` — the number the exposure ceiling
+    /// `claim.reserved` is exactly `pwu_per_inference × slash_value_per_pwu` — the number the exposure ceiling
     /// exists to bound — so the penalty is the stake the claim itself named. No new parameter,
     /// and the punishment scales with the work claimed rather than with a constant somebody
     /// would have to pick.
@@ -3727,7 +3775,7 @@ fn rearm_after_challenger_side_close(
     // for a whole window each time.
     //
     // Capped exactly as a seat's charge is, and for the same reason: `claim.reserved` is
-    // `pwu x slash_value_per_pwu`, both picked by whoever registered the CLASS. Left uncapped, a
+    // `pwu_per_inference x slash_value_per_pwu`, both picked by whoever registered the CLASS. Left uncapped, a
     // registrant could make challenging its own class ruinous and buy itself immunity from the
     // court. The floor is the registry's own.
     builder.slash_seat(challenger_bond, claim.reserved, builder.params.min_collateral_sompi())?;
@@ -4851,7 +4899,7 @@ fn apply_object(
             if *initial_target == 0 {
                 return Err(PalwStateV2Error::ZeroClassTarget(*class_id));
             }
-            // **Audit H3.** `reserved = pwu × slash_value_per_pwu` is the collateral a claim puts
+            // **Audit H3.** `reserved = pwu_per_inference × slash_value_per_pwu` is the collateral a claim puts
             // at risk, and admission's ceiling (Decision 6 item 8) compares it against the bond's
             // headroom. At zero every claim reserves zero, so ANY number of immature claims fits
             // under ANY ceiling — the per-bond exposure cap, which is the whole of P0-10's remedy,
@@ -5358,8 +5406,9 @@ fn apply_object(
             if *execution_root == Hash64::default() {
                 return Err(PalwStateV2Error::UnadjudicableCommitment(*claim_id));
             }
-            let reserved =
-                (*pwu as u128).checked_mul(class.slash_value_per_pwu as u128).ok_or(PalwStateV2Error::Overflow("reserve"))?;
+            let reserved = (palw_exposure_pwu_v1(class, *pwu) as u128)
+                .checked_mul(class.slash_value_per_pwu as u128)
+                .ok_or(PalwStateV2Error::Overflow("reserve"))?;
             let claim = PalwClaimStateV2 {
                 source: PalwClaimSourceV2::FreePrompt { quanta: *quanta, spent: BTreeSet::new() },
                 class_id: *class_id,
@@ -5489,8 +5538,9 @@ fn apply_attempt(
     if let PalwClassStatusV2::Frozen { .. } = class.status {
         return Err(PalwStateV2Error::FrozenClass(attempt.class_id));
     }
-    let reserved =
-        (attempt.pwu as u128).checked_mul(class.slash_value_per_pwu as u128).ok_or(PalwStateV2Error::Overflow("reserve"))?;
+    let reserved = (palw_exposure_pwu_v1(class, attempt.pwu) as u128)
+        .checked_mul(class.slash_value_per_pwu as u128)
+        .ok_or(PalwStateV2Error::Overflow("reserve"))?;
     let claim = PalwClaimStateV2 {
         source: PalwClaimSourceV2::Attempt,
         class_id: attempt.class_id,

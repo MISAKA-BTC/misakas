@@ -368,7 +368,13 @@ pub fn check_palw_attempt_admission_v2_with_bootstrap(
         .reserved_exposure(&bond_key)
         .checked_add(state.registration_exposure(&bond_key))
         .ok_or(PalwAdmissionV2Error::Overflow("total exposure"))?;
-    let claim_exposure = (attempt.pwu as u128)
+    // **Priced on ONE inference, not on the difficulty** — see `palw_exposure_pwu_v1`. Using
+    // `attempt.pwu` here made the ceiling a function of the class target: a class that retargets
+    // harder reserves more against unchanged collateral, so its own producers are locked out for
+    // succeeding, and on the floor class that is the chain stopping. This must stay the same
+    // expression the state uses when it writes `claim.reserved`, or the ceiling would be checked
+    // against a number the ledger never records.
+    let claim_exposure = (crate::palw_state_v2::palw_exposure_pwu_v1(class, attempt.pwu) as u128)
         .checked_mul(class.slash_value_per_pwu as u128)
         .ok_or(PalwAdmissionV2Error::Overflow("claim exposure"))?;
     let ceiling = (bond.collateral as u128)
@@ -418,13 +424,21 @@ pub fn check_palw_attempt_admission_v2_with_bootstrap(
     //    so nothing that depends on a clock can recover, because the clock IS the blocks.
     //
     //    That is not a footnote, it is the whole reason `min_slash_permille_of_escrow` has never
-    //    left 0. `claim_exposure` is `pwu x slash_value_per_pwu` with both factors chain-fixed
-    //    (`DerivedV1` pins the pwu, `SlashValueNotTheNetworks` pins the slash value), so at the
-    //    shipped constants the floor satisfies at most 0.00028 permille — a value of 1 refuses the
-    //    floor's own attempt and halts the chain permanently. An economic gate whose only settable
-    //    value is "off" is not a gate, and this exemption is what makes the parameter raisable at
-    //    all: past it, a non-zero permille refuses the classes that are a producer's choice and
-    //    can never refuse the one class every node must be able to produce.
+    //    left 0. `claim_exposure` is `pwu_per_inference x slash_value_per_pwu`, and both factors
+    //    really are chain-fixed — the genesis gate pins the first to the catalog's counted step
+    //    leaves, `SlashValueNotTheNetworks` pins the second — so the permille the floor can
+    //    satisfy is a constant of the shipped economy and it is far below 1. A value of 1 refuses
+    //    the floor's own attempt and halts the chain permanently. An economic gate whose only
+    //    settable value is "off" is not a gate, and this exemption is what makes the parameter
+    //    raisable at all: past it, a non-zero permille refuses the classes that are a producer's
+    //    choice and can never refuse the one class every node must be able to produce.
+    //
+    //    **The figures this paragraph used to quote (0.00028 permille; 3,600x) were computed when
+    //    `claim_exposure` was priced on `attempt.pwu`** — which under `DerivedV1` carries an extra
+    //    `expected_attempts(class_target)` factor and therefore moved with every retarget. Pricing
+    //    an exposure ceiling on the difficulty is what `palw_exposure_pwu_v1` removed; the numbers
+    //    are smaller by exactly that factor and are deliberately not restated here, because the
+    //    old ones were quoted as facts about the economy while being facts about one target.
     //
     //    What is still required to arm it is money, not code: 1 permille needs
     //    `slash_value_per_pwu` about 3,600x today's, which sizes genesis bond collateral at
@@ -1452,9 +1466,10 @@ mod tests {
     /// On a `ConsensusV2` network the attempt lane is the only block type, so an attempt refused on
     /// the chain block's own header is `StatusDisqualifiedFromChain` — no block, so DAA does not
     /// advance, so there is no clock to recover on. Item 7 exempts the floor for exactly this and
-    /// says so at length; item 9 did not, and `claim_exposure` is `pwu x slash_value_per_pwu` with
-    /// both factors chain-fixed, so at the shipped constants the floor satisfies at most
-    /// 0.00028 permille. A value of 1 would have halted the chain permanently.
+    /// says so at length; item 9 did not, and `claim_exposure` is
+    /// `pwu_per_inference x slash_value_per_pwu` with both factors chain-fixed, so the permille the
+    /// floor can satisfy is a constant of the shipped economy and far below 1. A value of 1 would
+    /// have halted the chain permanently.
     ///
     /// So this asserts the floor is admitted at a backing it CANNOT satisfy — the same numbers the
     /// entrant is refused for two tests above, which is what makes it a difference in the rule

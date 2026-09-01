@@ -180,15 +180,19 @@ const MAX_EXPOSURE_RATIO_PERMILLE: u32 = 500;
 /// Devnet bond floor and withdrawal delay. The delay must outlast bind+receipt+challenge+court
 /// plus the reorg margin (5100 here), so 6000 leaves margin without making a devnet operator
 /// wait a week to leave.
-/// Sized against what a claim actually RESERVES, which is the number that binds: at
-/// `initial_target = u128::MAX/2` the derivation yields pwu = 2 × `pwu_per_inference`, and a claim
-/// reserves `pwu × slash_value_per_pwu`. At 4,096 per inference and 5 per pwu that is 40,960 per
-/// claim, so a bond must carry at least `40_960 / (500‰)` = 81,920 to make ONE claim — and the
-/// floor below funds four concurrent ones.
+/// Sized against what a claim actually RESERVES, which is the number that binds: one inference's
+/// worth, `pwu_per_inference × slash_value_per_pwu` (`palw_state_v2::palw_exposure_pwu_v1`). At
+/// 4,096 per inference and 5 per pwu that is 20,480 per claim, so a bond must carry at least
+/// `20_480 / (500‰)` = 40,960 to make ONE claim, and this floor funds several concurrent ones.
+///
+/// **The figures here used to be twice as large**, because a claim was priced on the derived `pwu`
+/// — which at `initial_target = u128::MAX/2` carries a factor of 2, and at any other target a
+/// different one. An exposure ceiling that moves with the difficulty locks a class's own producers
+/// out for succeeding; the collateral floor inherited that motion and is now free of it.
 ///
 /// The old 20,000 was chosen before the exposure ceiling had a consumer, and it made every
-/// attempt on this bundle refusable: `reserved 0 + 40960 > ceiling 10000`. Measured the moment
-/// P0-10's check was wired into the pipeline, which is exactly what that check is for.
+/// attempt on this bundle refusable. Measured the moment P0-10's check was wired into the
+/// pipeline, which is exactly what that check is for.
 const MIN_COLLATERAL_SOMPI: u64 = 400_000;
 
 // ---------------------------------------------------------------------------------------------
@@ -320,7 +324,7 @@ pub struct PalwGenesisBondSpecV1 {
 /// **The collateral a bond must declare to survive its own bind window.**
 ///
 /// Every ConsensusV2 block is an attempt, so every block creates a claim reserving
-/// `pwu × slash_value_per_pwu` until `BindTimeout` at `+window_bind`; and DAA advances only when
+/// `pwu_per_inference × slash_value_per_pwu` until `BindTimeout` at `+window_bind`; and DAA advances only when
 /// blocks are produced. A bond whose ceiling admits fewer concurrent claims than the window is long
 /// therefore deadlocks: the producer fills the ceiling and then needs DAA it can only get by
 /// producing. Derived rather than declared so a change to the window, the target, the class or the
@@ -346,6 +350,13 @@ pub struct PalwGenesisBondSpecV1 {
 /// advancing more slowly than one per block (parallel producers sharing a DAA score) must fund
 /// beyond it — the ceiling is per BOND, so a bond that produces in parallel with itself needs a
 /// multiple.
+/// **Deliberately sized on the DERIVED pwu, which is now an over-estimate, and that is the safe
+/// direction.** A claim reserves one inference's worth
+/// (`palw_state_v2::palw_exposure_pwu_v1`); `palw_pwu_v1` multiplies that by the expected attempt
+/// count at the genesis target. Funding a bond above its requirement costs an operator nothing the
+/// chain enforces, while funding one below it is the permanent wedge this whole doc comment is
+/// about — so the margin stays, named, rather than being tightened into the exact figure and
+/// moving every shipped network's genesis registry to save collateral nobody is short of.
 pub fn palw_v2_collateral_for_claim_lifetime_v1(pwu_per_inference: u64) -> u64 {
     let pwu = crate::palw_pwu::palw_pwu_v1(GENESIS_CLASS_TARGET, pwu_per_inference);
     let per_claim = (pwu as u128).saturating_mul(SLASH_VALUE_PER_PWU as u128).max(1);
