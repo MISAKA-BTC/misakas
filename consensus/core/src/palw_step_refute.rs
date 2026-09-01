@@ -3944,6 +3944,13 @@ fn vec_dot_f32(a: &[u32], b: &[u32], dot: DotStructure) -> u32 {
 /// the hybrid classes actually declare.
 const PALW_GDN_MAX_DIM: usize = 1 << 16;
 
+/// **The whole GDN state, in words** — because three legal dimensions still multiply.
+///
+/// `PALW_GDN_MAX_DIM` alone admits `2^16 x 2^16 x 2^16`. This is the figure a court may actually
+/// be asked to allocate: 2^26 words is 256 MiB, far above any adjudicable class and far below a
+/// request that aborts the process.
+const PALW_GDN_MAX_STATE_WORDS: usize = 1 << 26;
+
 fn gdn_core_genesis_replay(
     profile: &PalwShapeProfileV3,
     inputs: &[Vec<u32>],
@@ -3984,7 +3991,13 @@ fn gdn_core_genesis_replay(
     if kd == 0 || vd == 0 || heads == 0 || !kd.is_multiple_of(step) {
         return Err(PalwStepRefuteError::Unadjudicable);
     }
-    if kd > PALW_GDN_MAX_DIM || vd > PALW_GDN_MAX_DIM || heads > PALW_GDN_MAX_DIM {
+    // Per-dimension AND the product: three individually-legal ceilings still multiply, and the
+    // state buffer below is `kd * vd` words per head across `heads` of them.
+    if kd > PALW_GDN_MAX_DIM
+        || vd > PALW_GDN_MAX_DIM
+        || heads > PALW_GDN_MAX_DIM
+        || kd.checked_mul(vd).and_then(|n| n.checked_mul(heads)).is_none_or(|n| n > PALW_GDN_MAX_STATE_WORDS)
+    {
         return Err(PalwStepRefuteError::Unadjudicable);
     }
     if !inputs.len().is_multiple_of(5) || inputs.is_empty() {

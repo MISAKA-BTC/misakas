@@ -163,6 +163,10 @@ pub enum PalwCourtV2Error {
          (ADR-0049 Decision C — the cost bound is what makes 'a full node can close this court' true)"
     )]
     CloseTooLarge { got: u64, ceiling: u64 },
+    /// The close adjudicates a geometry the class never registered. A class id IS its
+    /// `shape_profile_id`, so this is the profile arriving from somewhere other than the chain.
+    #[error("the close declares shape profile {declared} but claim's class is {class_id}")]
+    CloseProfileIsNotTheClass { class_id: Hash64, declared: Hash64 },
 }
 
 /// May THIS `CourtOpened` object be accepted at THIS chain point?
@@ -354,6 +358,45 @@ fn binding_logits_root_of(binding: &crate::palw_step_leg::PalwStepBindingV2) -> 
     binding.full_logits_trace_root
 }
 
+/// The binding every close carries, whichever scheme it uses.
+fn binding_of(proof: &PalwCourtVerdictProofV2) -> &crate::palw_step_leg::PalwStepBindingV2 {
+    match proof {
+        PalwCourtVerdictProofV2::Arithmetic { refutation, .. } => &refutation.binding,
+        PalwCourtVerdictProofV2::DecodeToken { binding, .. } => binding,
+        PalwCourtVerdictProofV2::DecodeTokenTiled { binding, .. } => binding,
+    }
+}
+
+/// **The geometry a close adjudicates must be the geometry the CLASS registered** (mainnet audit).
+///
+/// `check_execution_root_binding` pins the binding to the claim's committed execution root, and
+/// that is the right pin against an ACCUSER who invents a geometry. It is not a pin against the
+/// defendant, because a producer that committed a poisoned `shape_profile` in the first place
+/// carries a binding whose `committed_execution_root` matches it honestly — the root is a function
+/// of the binding, so a consistent lie is consistent.
+///
+/// What the lie then reaches is every arm that reads geometry out of the binding before anything
+/// bounds it: unbounded GDN dimensions multiplying into an allocation, tile widths dividing,
+/// enumerations walking. Those sites are bounded individually now, but bounding each consumer is a
+/// race against whoever adds the next one. This is the bound that does not have to be repeated: a
+/// class id IS its `shape_profile_id` (`qwen36_class_id_v3` is literally
+/// `profile.shape_profile_id()`), so the class the claim names decides the geometry, and a profile
+/// nobody registered cannot enter the court at all.
+///
+/// One `permissionless` bond could otherwise register a class, produce a claim under it, open a
+/// court against itself and close it with a profile no node can survive — which is the cheapest
+/// possible path to stopping every node at once.
+fn check_close_profile_is_the_registered_class(
+    claim_class_id: Hash64,
+    binding: &crate::palw_step_leg::PalwStepBindingV2,
+) -> Result<(), PalwCourtV2Error> {
+    let declared = binding.shape_profile.shape_profile_id();
+    if declared != claim_class_id {
+        return Err(PalwCourtV2Error::CloseProfileIsNotTheClass { class_id: claim_class_id, declared });
+    }
+    Ok(())
+}
+
 /// The binding must be the EXECUTION THE CLAIM COMMITTED TO — not merely one that mentions the
 /// claim's public trace root (audit C3).
 ///
@@ -482,6 +525,9 @@ pub fn adjudicate_close_proof_v2(
     court: &crate::palw_mode_v2::PalwCourtParamsV2,
 ) -> Result<PalwCourtVerdictV2, PalwCourtV2Error> {
     check_close_cost_v2(proof, court)?;
+    // Before ANY arm reads geometry out of the binding. See the function's own docs: this is the
+    // bound that does not have to be repeated at each consumer.
+    check_close_profile_is_the_registered_class(claim.class_id, binding_of(proof))?;
     match proof {
         PalwCourtVerdictProofV2::Arithmetic { refutation, operand_openings } => {
             check_arithmetic_close_binding(claim.trace_root, binding_logits_root_of(&refutation.binding))?;
@@ -715,7 +761,17 @@ mod tests {
     }
 
     fn params() -> PalwStateParamsV2 {
-        PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, 100, 1000, 0).unwrap()
+        params_for(h64(1))
+    }
+
+    /// The same params with a chosen base class id.
+    ///
+    /// Needed because a class id IS its `shape_profile_id` — `verify_class_admission_v2` refuses
+    /// any other pairing with `ClassIdIsNotTheProfileId` — so a fixture that registers a synthetic
+    /// `h64(1)` alongside a real binding is describing a state the chain cannot produce. The
+    /// close's profile pin is what made that visible.
+    fn params_for(base_class_id: Hash64) -> PalwStateParamsV2 {
+        PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, base_class_id, 4, 1000, 100, 1000, 0).unwrap()
     }
 
     fn bond_key(v: u64) -> PalwBondKeyV2 {
@@ -1139,14 +1195,17 @@ mod tests {
         // producer does, and it is what let the close binding stay wrong without a red test.
         let trace_root = refutation.binding.full_logits_trace_root;
         let execution_root = refutation.binding.committed_execution_root;
-        let p = params();
+        // A class id IS its `shape_profile_id`; `verify_class_admission_v2` refuses any other
+        // pairing, so the fixture registers the binding's own geometry.
+        let cid = refutation.binding.shape_profile.shape_profile_id();
+        let p = params_for(cid);
 
         // A class registered at the fraud's own artifact root, and a claim carrying the fraud's
         // own committed roots — the two bindings `adjudicate_court_close_v2` checks before any
         // fault may be read (audit C3).
         let objects = vec![
             PalwConsensusObjectV2::ClassRegistered {
-                class_id: h64(1),
+                class_id: cid,
                 artifact_root,
                 slash_value_per_pwu: 5,
                 pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
@@ -1174,10 +1233,11 @@ mod tests {
         ];
         let (s1, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None).unwrap();
         let mut env = attempt(40, 1);
+        env.attempt.class_id = cid;
         env.attempt.artifact_root = artifact_root;
         env.attempt.trace_root = trace_root;
         env.attempt.execution_root = execution_root;
-        env.attempt.challenge = challenge_v2(h64(999), h64(5), 1_700, 1, h64(1), &bond_key(1).0);
+        env.attempt.challenge = challenge_v2(h64(999), h64(5), 1_700, 1, cid, &bond_key(1).0);
         let claim_id = attempt_id_v2(&env.attempt);
         let (s2, _) = apply_palw_transition_v2(&s1, &p, &ctx(2, 101, 2), &[], Some(&env)).unwrap();
         let seats = vec![PalwPanelSeatV2 { bond: bond_key(2), operator_id: h64(0x22) }];
@@ -1265,10 +1325,13 @@ mod tests {
             // See above: the claim commits the logits root, not the step root.
             let trace_root = binding.full_logits_trace_root;
             let execution_root = binding.committed_execution_root;
-            let p = params();
+            // A class id IS its `shape_profile_id`; `verify_class_admission_v2` refuses any other
+            // pairing, so the fixture registers the binding's own geometry.
+            let cid = binding.shape_profile.shape_profile_id();
+            let p = params_for(cid);
             let objects = vec![
                 PalwConsensusObjectV2::ClassRegistered {
-                    class_id: h64(1),
+                    class_id: cid,
                     artifact_root: h64(0xA1),
                     slash_value_per_pwu: 5,
                     pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
@@ -1296,10 +1359,11 @@ mod tests {
             ];
             let (s1, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None).unwrap();
             let mut env = attempt(40, 1);
+            env.attempt.class_id = cid;
             env.attempt.artifact_root = h64(0xA1);
             env.attempt.trace_root = trace_root;
             env.attempt.execution_root = execution_root;
-            env.attempt.challenge = challenge_v2(h64(999), h64(5), 1_700, 1, h64(1), &bond_key(1).0);
+            env.attempt.challenge = challenge_v2(h64(999), h64(5), 1_700, 1, cid, &bond_key(1).0);
             let claim_id = attempt_id_v2(&env.attempt);
             let (s2, _) = apply_palw_transition_v2(&s1, &p, &ctx(2, 101, 2), &[], Some(&env)).unwrap();
             let seats = vec![PalwPanelSeatV2 { bond: bond_key(2), operator_id: h64(0x22) }];
@@ -1408,11 +1472,14 @@ mod tests {
         // producer does, and it is what let the close binding stay wrong without a red test.
         let trace_root = refutation.binding.full_logits_trace_root;
         let execution_root = refutation.binding.committed_execution_root;
-        let p = params();
+        // A class id IS its `shape_profile_id`; `verify_class_admission_v2` refuses any other
+        // pairing, so the fixture registers the binding's own geometry.
+        let cid = refutation.binding.shape_profile.shape_profile_id();
+        let p = params_for(cid);
 
         let objects = vec![
             PalwConsensusObjectV2::ClassRegistered {
-                class_id: h64(1),
+                class_id: cid,
                 artifact_root,
                 slash_value_per_pwu: 5,
                 pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
@@ -1440,10 +1507,11 @@ mod tests {
         ];
         let (s1, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None).unwrap();
         let mut env = attempt(40, 1);
+        env.attempt.class_id = cid;
         env.attempt.artifact_root = artifact_root;
         env.attempt.trace_root = trace_root;
         env.attempt.execution_root = execution_root;
-        env.attempt.challenge = challenge_v2(h64(999), h64(5), 1_700, 1, h64(1), &bond_key(1).0);
+        env.attempt.challenge = challenge_v2(h64(999), h64(5), 1_700, 1, cid, &bond_key(1).0);
         let claim_id = attempt_id_v2(&env.attempt);
         let (s2, _) = apply_palw_transition_v2(&s1, &p, &ctx(2, 101, 2), &[], Some(&env)).unwrap();
         let seats = vec![PalwPanelSeatV2 { bond: bond_key(2), operator_id: h64(0x22) }];
@@ -1568,8 +1636,20 @@ mod tests {
         // and that is asserted separately below.
         let claim_rec = in_court.claim(&claim_id).expect("the claim is in state");
         let outcome = adjudicate_close_proof_v2(&in_court, claim_rec, &bogus, &court());
+        // **Refused, and now for a sharper reason than when this test was written.**
+        //
+        // It used to land on `TraceRootMismatch`: the skeleton's roots are not the claim's. The
+        // profile pin runs first and answers a stronger question — the skeleton's geometry is not
+        // the class's geometry either, and a class id IS its `shape_profile_id`. Both are the same
+        // verdict for this proof (it adjudicates nothing), so the property under test is intact;
+        // what changed is that a close carrying a geometry nobody registered is now refused before
+        // any arm reads that geometry, which is what stops a poisoned profile from reaching an
+        // allocation or a shift.
         assert!(
-            matches!(outcome, Err(PalwCourtV2Error::TraceRootMismatch)),
+            matches!(
+                outcome,
+                Err(PalwCourtV2Error::CloseProfileIsNotTheClass { .. }) | Err(PalwCourtV2Error::TraceRootMismatch)
+            ),
             "a proof about another execution must not produce a verdict at all, got {outcome:?}"
         );
         let procedural = adjudicate_court_close_v2(&in_court, &sid, &bogus, &court());
