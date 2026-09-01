@@ -255,7 +255,7 @@ pub fn a16_inventory_v1(
 
     let mut rows: Vec<PalwArtifactOperandV1> = Vec::new();
     let mut seen: std::collections::BTreeSet<(String, Option<u16>, u32)> = std::collections::BTreeSet::new();
-    let mut push = |rows: &mut Vec<PalwArtifactOperandV1>,
+    let push = |rows: &mut Vec<PalwArtifactOperandV1>,
                     seen: &mut std::collections::BTreeSet<(String, Option<u16>, u32)>,
                     name: &str,
                     layer: Option<u16>,
