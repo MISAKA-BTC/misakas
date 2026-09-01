@@ -7886,6 +7886,14 @@ mod consensus_params_id_tests {
         // And once more when `pow_palw_ollama_activation` entered the hash (the Phase-4b
         // Ollama-runtime algo, `always()` on testnet-10 — the fleet's runtime — and `never()`
         // elsewhere).
+        //
+        // **Moved 2026-09-02 by ADR-0072 — the ticket is the execution.** `PALW_ATTEMPT_V2_VERSION`
+        // 5 → 6: both lotteries of an algo-6 header are drawn from `execution_commitment_v3`, which no
+        // nonce inside the anchor's bucket moves, so a build on the old rule admits blocks this one
+        // refuses at the class lottery and the two must not peer. The attempt version sits inside the
+        // V2 bundle's ruleset id by design, so the rows carrying a bundle move (2: testnet-11, devnet)
+        // and no other row does. Values taken from this test's own output on the fixed tree, twice,
+        // never transcribed. Coordinated upgrade for testnet-11; no re-genesis.
         let changed: Vec<String> = [
             // main's 2026-08-14 row (`a1e6602e…`) is deliberately not taken: it pins a testnet
             // whose `dns_veto_ttl_daa_score` is 2_000, and this lineage keeps 120 for the reason
@@ -8231,7 +8239,7 @@ mod consensus_params_id_tests {
                 // (`CanonicalClassV1::artifact_root`), so every A16 producer refused its own
                 // artifact and the dense tier made zero blocks on Relaunch 5. Re-pinned to the
                 // inventory root measured over the deployed file. Genesis hash unchanged.
-                "d38abe4420a53c585917404ef2195e0d643cf472b38e385c6515087c840014e5",
+                "cae1dec999236370afc1de45adce044631cc298cf950fb88371184119665459e",
             ),
             ("simnet", SIMNET_PARAMS, "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd"),
             // Re-pinned twice for ADR-0068 Phase 1: first when the drill network armed the
@@ -8251,7 +8259,7 @@ mod consensus_params_id_tests {
             // set; devnet keeps its deliberately widened `max_block_parents: 64`. testnet-11 is
             // untouched because its base already carried the whole set — which is the property
             // that made this safe to apply unconditionally.
-            ("devnet", DEVNET_PARAMS, "873a5ae8b63f93f5a57fd41f359f582b8d860943b86c9a9720bb92612123a97e"),
+            ("devnet", DEVNET_PARAMS, "7f42b2bb1b26dff39fa8176b1db4dcf4a4e51306d7114429a7e92898d7558921"),
         ]
         .into_iter()
         .filter_map(|(name, params, expected)| {

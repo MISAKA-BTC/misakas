@@ -250,6 +250,13 @@ pub fn check_palw_attempt_admission_v2(
 /// [`check_palw_attempt_admission_v2`] with ADR-0064's mergeset bond view. See
 /// [`check_palw_producer_entitlement_v2_with_bootstrap`] for what `bootstrap_bond` is and, more
 /// importantly, for what deliberately does NOT read it.
+///
+/// **This is the envelope-only list.** Everything in it is decidable from the chain state and the
+/// envelope, which is why the state machine can re-run it as a transition guard with no header in
+/// hand. What it does NOT contain, since ADR-0072, is the class lottery: that ticket is a function
+/// of the header position too, and it is checked beside the position in
+/// [`check_palw_class_lottery_v3`] — from the composed entry point, the way the network lottery is
+/// checked in the finalizer and never here.
 pub fn check_palw_attempt_admission_v2_with_bootstrap(
     state: &PalwChainStateV2,
     state_params: &PalwStateParamsV2,
@@ -347,16 +354,10 @@ pub fn check_palw_attempt_admission_v2_with_bootstrap(
         }
     }
 
-    // 6b. The CLASS lottery (ADR-0039's per-class DAA). The network target decided this header
-    //     is a block; this decides it is a block of this class, against the target the retarget
-    //     maintains. Without it the per-class retarget was arithmetic nothing consumed — it ran
-    //     every epoch, moved a number, and no admission, weight or selection ever read it (audit
-    //     H1's second half). A class target with no reader is a difficulty that does not exist.
-    let target = state.class_target(&attempt.class_id).ok_or(PalwAdmissionV2Error::ClassTargetMissing(attempt.class_id))?;
-    let ticket = crate::palw_attempt_v2::class_ticket_v2(attempt);
-    if ticket > target.target {
-        return Err(PalwAdmissionV2Error::ClassTicketAboveTarget { class_id: attempt.class_id, ticket, target: target.target });
-    }
+    // 6b. The CLASS lottery is `check_palw_class_lottery_v3` (ADR-0072). Its ticket is a function
+    //     of the header position as well as the attempt, so it is checked where the header is —
+    //     the composed entry point — and this list, which the state machine re-runs with only the
+    //     envelope in hand, deliberately holds nothing the envelope alone cannot decide.
 
     // 8. The exposure ceiling (closes P0-10): what this bond already backs, plus what this claim
     //    would reserve, against collateral × ratio. Floor on the ceiling — conservative.
@@ -475,9 +476,40 @@ pub fn check_palw_attempt_admission_v2_with_bootstrap(
     Ok(attempt_id)
 }
 
+/// **Item 6b, the CLASS lottery** (ADR-0039's per-class DAA), drawn per ADR-0072.
+///
+/// The network target decided this header is a block; this decides it is a block of this class,
+/// against the target the retarget maintains. Without it the per-class retarget was arithmetic
+/// nothing consumed — it ran every epoch, moved a number, and no admission, weight or selection
+/// ever read it (audit H1's second half). A class target with no reader is a difficulty that does
+/// not exist.
+///
+/// It stands outside the envelope-only list because its ticket is a function of the HEADER
+/// POSITION as well as the attempt: [`crate::palw_attempt_v2::class_ticket_v3`] hashes the
+/// execution commitment under the anchor a verifier derives from the template, class, bond and
+/// nonce bucket, so the only way to another draw is another inference — the discipline the
+/// receipt lane has had since ADR-0044 Decision 4. `class_ticket_v2` hashed the identity root,
+/// which carried the position inside the challenge; that let the lottery sit in the envelope-only
+/// list, and it also let one inference draw a fresh ticket per nonce. The anchor is never read off
+/// the attempt (the accused does not set the question): the composed entry point derives it from
+/// the header, after the stateless list has agreed that the carried domain and challenge ARE this
+/// network's and this position's.
+pub fn check_palw_class_lottery_v3(
+    state: &PalwChainStateV2,
+    attempt: &crate::palw_attempt_v2::PalwAttemptUnsignedV2,
+    execution_anchor: Hash64,
+) -> Result<(), PalwAdmissionV2Error> {
+    let target = state.class_target(&attempt.class_id).ok_or(PalwAdmissionV2Error::ClassTargetMissing(attempt.class_id))?;
+    let ticket = crate::palw_attempt_v2::class_ticket_v3(attempt, execution_anchor);
+    if ticket > target.target {
+        return Err(PalwAdmissionV2Error::ClassTicketAboveTarget { class_id: attempt.class_id, ticket, target: target.target });
+    }
+    Ok(())
+}
+
 /// The composed admission a wiring layer should call: stateless shape → stateless signature →
-/// the stateful list, in that order, one entry point — so no pipeline can wire three layers and
-/// forget one. (The PoW itself is the finalizer's, upstream of all of this.)
+/// the stateful list → the class lottery, in that order, one entry point — so no pipeline can wire
+/// four layers and forget one. (The PoW itself is the finalizer's, upstream of all of this.)
 #[allow(clippy::too_many_arguments)]
 pub fn check_palw_attempt_admission_full_v2<V>(
     state: &PalwChainStateV2,
@@ -533,7 +565,19 @@ where
 {
     envelope.validate_stateless_v2(network_domain, pre_pow_hash, timestamp, nonce)?;
     envelope.validate_signature_v2(verify_mldsa87)?;
-    check_palw_attempt_admission_v2_with_bootstrap(state, state_params, admission, ctx, envelope, bootstrap_bond)
+    let attempt_id = check_palw_attempt_admission_v2_with_bootstrap(state, state_params, admission, ctx, envelope, bootstrap_bond)?;
+    // The anchor is derived HERE, from the header, after the stateless list has agreed that the
+    // carried domain IS this network's and the carried challenge IS this position's — so it names
+    // the job this header was paid for by, and the attempt has had no say in it (ADR-0072).
+    let execution_anchor = crate::palw_attempt_v2::execution_anchor_v3(
+        network_domain,
+        pre_pow_hash,
+        envelope.attempt.class_id,
+        &envelope.attempt.executor_bond,
+        nonce,
+    );
+    check_palw_class_lottery_v3(state, &envelope.attempt, execution_anchor)?;
+    Ok(attempt_id)
 }
 
 #[cfg(test)]
@@ -556,6 +600,28 @@ mod tests {
 
     fn op_id(v: u64) -> Hash64 {
         crate::palw_state_v2::palw_operator_id_v2(&op_key(v))
+    }
+
+    /// **ADR-0072**: the class ticket is drawn under the anchor a VERIFIER derives from the header.
+    /// Every fixture sits in nonce bucket 0, so one anchor per (class, bond) is exactly the value
+    /// `check_palw_attempt_admission_full_v2` would derive for it.
+    fn anchor_of(env: &PalwAttemptEnvelopeV2) -> Hash64 {
+        crate::palw_attempt_v2::execution_anchor_v3(h64(NET), h64(PPH), env.attempt.class_id, &env.attempt.executor_bond, 0)
+    }
+
+    /// The envelope-only list and then the class lottery, in the order the composed entry point
+    /// runs them — for the tests whose fixture class has a REAL target (the base fixture's is MAX,
+    /// which admits every ticket, so the list alone is the whole question there).
+    fn check_with_lottery(
+        state: &PalwChainStateV2,
+        state_params: &PalwStateParamsV2,
+        admission: &PalwAdmissionParamsV2,
+        ctx: &PalwBlockContextV2,
+        envelope: &PalwAttemptEnvelopeV2,
+    ) -> Result<Hash64, PalwAdmissionV2Error> {
+        let id = check_palw_attempt_admission_v2(state, state_params, admission, ctx, envelope)?;
+        check_palw_class_lottery_v3(state, &envelope.attempt, anchor_of(envelope))?;
+        Ok(id)
     }
 
     fn h64(v: u64) -> Hash64 {
@@ -861,8 +927,8 @@ mod tests {
     /// The retarget ran at every epoch boundary, moved a number, and nothing on the V2 lane ever
     /// compared anything to it — so "per-class DAA" was arithmetic with no lottery behind it, and
     /// a strangled target produced no symptom until it hit zero. Admission draws the class ticket
-    /// from the attempt's own commitment root, so it is a function of the whole attempt and
-    /// cannot be ground without new proof of work.
+    /// from the attempt's execution commitment (ADR-0072), so it is a function of the inference
+    /// and cannot be ground without running another one.
     #[test]
     fn the_class_target_is_what_admits_a_block_of_that_class() {
         let sp = state_params();
@@ -870,7 +936,7 @@ mod tests {
 
         // A target of MAX admits every ticket; one below the attempt's ticket admits none.
         let env = attempt(10, 1);
-        let ticket = crate::palw_attempt_v2::class_ticket_v2(&env.attempt);
+        let ticket = crate::palw_attempt_v2::class_ticket_v3(&env.attempt, anchor_of(&env));
         assert!(ticket > 0, "a zero ticket would make the check vacuous");
 
         let state_with = |target: u128| {
@@ -901,20 +967,24 @@ mod tests {
         // Exactly at the target admits — the comparison is inclusive, so a target is reachable
         // rather than asymptotic.
         let at = state_with(ticket);
-        check_palw_attempt_admission_v2(&at, &sp, &ap, &ctx(2, 101, 2), &env).expect("a ticket equal to the target admits");
+        check_with_lottery(&at, &sp, &ap, &ctx(2, 101, 2), &env).expect("a ticket equal to the target admits");
 
         // One below refuses.
         let under = state_with(ticket - 1);
-        let err = check_palw_attempt_admission_v2(&under, &sp, &ap, &ctx(2, 101, 2), &env)
+        let err = check_with_lottery(&under, &sp, &ap, &ctx(2, 101, 2), &env)
             .expect_err("a ticket above the target is not a block of this class");
         assert!(matches!(err, PalwAdmissionV2Error::ClassTicketAboveTarget { .. }), "got {err:?}");
 
-        // The ticket is a function of the WHOLE attempt: a different nonce is a different ticket,
-        // which is why re-rolling it costs a new proof of work rather than a re-hash.
+        // The ticket is a function of the EXECUTION (ADR-0072): a different nonce in the same
+        // bucket is the SAME ticket — re-rolling it costs a new inference, not a re-hash — and a
+        // different execution is a different ticket.
         let other = attempt(10, 2);
-        assert_ne!(crate::palw_attempt_v2::class_ticket_v2(&other.attempt), ticket, "the ticket follows the attempt");
+        assert_eq!(crate::palw_attempt_v2::class_ticket_v3(&other.attempt, anchor_of(&other)), ticket, "a nonce is not a draw");
+        let mut rerun = attempt(10, 1);
+        rerun.attempt.execution_root = h64(42);
+        assert_ne!(crate::palw_attempt_v2::class_ticket_v3(&rerun.attempt, anchor_of(&rerun)), ticket, "an inference is");
         // …and it is not the L1 tag under another name.
-        let tag = crate::palw_attempt_v2::l1_tag_v2(crate::palw_attempt_v2::commitment_root_v2(&env.attempt));
+        let tag = crate::palw_attempt_v2::l1_tag_v2(crate::palw_attempt_v2::execution_commitment_v3(&env.attempt, anchor_of(&env)));
         let mut tag_le = [0u8; 16];
         tag_le.copy_from_slice(&tag[..16]);
         assert_ne!(u128::from_le_bytes(tag_le), ticket, "the class lottery is domain-separated from the PoW tag");
@@ -983,16 +1053,19 @@ mod tests {
     }
 
     /// The derived class's target is real (unlike the fixture class's pass-everything MAX), so an
-    /// ADMIT case must also win the item-6b lottery: hunt the deterministic ticket space for a
-    /// nonce that lands under `target`. Refusal cases need no hunt — item 6 fires before 6b.
+    /// ADMIT case must also win the item-6b lottery: hunt the deterministic ticket space for an
+    /// EXECUTION that lands under `target`. Not a nonce — under ADR-0072 every nonce in the bucket
+    /// draws the same ticket, and what a producer re-rolls is the inference; here that is the
+    /// execution root. Refusal cases need no hunt — item 6 fires before 6b.
     fn derived_class_attempt_admitting(pwu: u64, target: u128) -> PalwAttemptEnvelopeV2 {
-        for nonce in 0..512 {
-            let env = derived_class_attempt(pwu, nonce);
-            if crate::palw_attempt_v2::class_ticket_v2(&env.attempt) <= target {
+        for execution in 0..512u64 {
+            let mut env = derived_class_attempt(pwu, 1);
+            env.attempt.execution_root = h64(0x4100 + execution);
+            if crate::palw_attempt_v2::class_ticket_v3(&env.attempt, anchor_of(&env)) <= target {
                 return env;
             }
         }
-        panic!("no admitting nonce in 512 draws at target {target} — the ticket space is broken, not unlucky");
+        panic!("no admitting execution in 512 draws at target {target} — the ticket space is broken, not unlucky");
     }
 
     fn admission_params_with_derived_class() -> PalwAdmissionParamsV2 {
@@ -1006,30 +1079,22 @@ mod tests {
         // Epoch 1, where the derived class has a budget (see `state_with_derived_class`).
         let c = ctx(4, 1_002, 4);
         let derived = crate::palw_pwu::palw_pwu_v1(u128::MAX / 2, 7);
-        // Two expected TRIES, both inside one nonce bucket, so one execution at seven per
-        // inference (ADR-0071 Decision 2 — pwu counts executions, not tries).
-        assert_eq!(derived, 7, "one execution at seven per inference");
+        // Two expected draws, and a draw is an inference (ADR-0072), so two executions at seven
+        // per inference.
+        assert_eq!(derived, 14, "two executions at seven per inference");
 
-        // The one legal value admits (with a nonce that also wins the 6b lottery).
-        check_palw_attempt_admission_v2(
-            &state,
-            &state_params(),
-            &admission,
-            &c,
-            &derived_class_attempt_admitting(derived, u128::MAX / 2),
-        )
-        .expect("the derived claim admits");
+        // The one legal value admits (with an execution that also wins the 6b lottery).
+        check_with_lottery(&state, &state_params(), &admission, &c, &derived_class_attempt_admitting(derived, u128::MAX / 2))
+            .expect("the derived claim admits");
 
         // The H3 attack — claim the maximum — is refused by equality, not by a ceiling.
-        let err =
-            check_palw_attempt_admission_v2(&state, &state_params(), &admission, &c, &derived_class_attempt(u64::MAX, 2)).unwrap_err();
+        let err = check_with_lottery(&state, &state_params(), &admission, &c, &derived_class_attempt(u64::MAX, 2)).unwrap_err();
         assert_eq!(err, PalwAdmissionV2Error::PwuClaimNotDerived { claimed: u64::MAX, derived });
 
         // And so is one unit off in either direction — there is no tolerance band, because
         // neither factor is something the miner chooses.
         for wrong in [derived - 1, derived + 1] {
-            let err = check_palw_attempt_admission_v2(&state, &state_params(), &admission, &c, &derived_class_attempt(wrong, 3))
-                .unwrap_err();
+            let err = check_with_lottery(&state, &state_params(), &admission, &c, &derived_class_attempt(wrong, 3)).unwrap_err();
             assert!(matches!(err, PalwAdmissionV2Error::PwuClaimNotDerived { .. }), "got {err:?}");
         }
     }
@@ -1042,40 +1107,30 @@ mod tests {
         let admission = admission_params_with_derived_class();
         let c = ctx(4, 1_002, 4);
 
-        // **Both targets straddle the nonce bucket**, because that is where a harder chain starts
-        // deriving a LARGER value. Two tries and eight tries are the same one execution
-        // (ADR-0071 Decision 2), so a fixture that stays under the bucket would be asserting the
-        // rule against two identical numbers and would pass whatever the derivation did.
-        // The EASY side has to stay easy: `derived_class_attempt_admitting` searches 512 nonces for
-        // a ticket, so a target above the bucket has no admitting draw to find. The HARD side never
-        // reaches the lottery — item 6 refuses its pwu first — so that is where the bucket is
-        // crossed, which is the only place the two derivations can differ at all.
-        let easy_target = u128::MAX / 2; // 2 tries, one bucket = 1 execution → pwu 7
-        let hard_target = u128::MAX >> 24; // 2^24 tries = 4 executions → pwu 28
+        // The EASY side has to stay easy: `derived_class_attempt_admitting` searches 512 executions
+        // for a ticket, so a target far under 2^-9 has no admitting draw to find. The HARD side
+        // never reaches the lottery — item 6 refuses its pwu first — so it can be as hard as it
+        // likes. Under ADR-0072 a draw is an execution, so the two derivations differ by exactly
+        // the ratio of the targets; there is no longer a bucket below which they would agree.
+        let easy_target = u128::MAX / 2; // 2 draws = 2 executions → pwu 14
+        let hard_target = u128::MAX >> 24; // 2^24 draws = 2^24 executions → pwu 7 · 2^24
         let easy = state_with_derived_class(easy_target);
         let hard = state_with_derived_class(hard_target);
         let easy_pwu = crate::palw_pwu::palw_pwu_v1(easy_target, 7);
         let hard_pwu = crate::palw_pwu::palw_pwu_v1(hard_target, 7);
         assert!(hard_pwu > easy_pwu, "a harder chain must derive a larger value or this proves nothing");
 
-        check_palw_attempt_admission_v2(
-            &easy,
-            &state_params(),
-            &admission,
-            &c,
-            &derived_class_attempt_admitting(easy_pwu, easy_target),
-        )
-        .expect("the easy chain's one legal value");
-        let err =
-            check_palw_attempt_admission_v2(&hard, &state_params(), &admission, &c, &derived_class_attempt(easy_pwu, 1)).unwrap_err();
+        check_with_lottery(&easy, &state_params(), &admission, &c, &derived_class_attempt_admitting(easy_pwu, easy_target))
+            .expect("the easy chain's one legal value");
+        let err = check_with_lottery(&hard, &state_params(), &admission, &c, &derived_class_attempt(easy_pwu, 1)).unwrap_err();
         assert_eq!(
             err,
             PalwAdmissionV2Error::PwuClaimNotDerived { claimed: easy_pwu, derived: hard_pwu },
             "the harder chain derives a different — larger — legal value for the same class"
         );
         // The hard chain's own legal value is asserted through the refusal above rather than by
-        // producing a block for it: a target above the nonce bucket has no admitting draw inside
-        // the 512 the fixture searches, which is the same fact the bucket exists to state.
+        // producing a block for it: a 2^-24 target has no admitting draw inside the 512 executions
+        // the fixture searches — which is the same fact its pwu now states.
         assert_eq!(hard_pwu, crate::palw_pwu::palw_pwu_v1(hard_target, 7), "the refusal named the hard chain's derivation");
     }
 
@@ -1536,9 +1591,11 @@ mod tests {
     /// The pwu the shipped floor class derives for one block. Pinned here rather than computed so
     /// that a change to the derivation fails this test with both numbers in the message, instead
     /// of silently re-deriving whatever the code now says — which is how it caught ADR-0071
-    /// Decision 2: 15,416 was two expected TRIES' worth, and both tries fall inside one nonce
-    /// bucket, so the block carries the one execution it commits to.
-    const PALW_RC_FLOOR_DERIVED_PWU: u64 = 7_708;
+    /// Decision 2 (15,416 was two expected TRIES' worth while both tries fell inside one nonce
+    /// bucket, so it became 7,708: the one execution the block commits to) and how it caught
+    /// ADR-0072 going the other way: two expected draws at the floor's `2^-1` target are two
+    /// EXECUTIONS now that the ticket is the execution, so 2 × 7,708 again.
+    const PALW_RC_FLOOR_DERIVED_PWU: u64 = 15_416;
 
     /// **The economic deterrent is armable on the network this build ships — that is the claim,
     /// and it is not the same as the rule being correct.**

@@ -2,7 +2,9 @@
 
 Status: **IMPLEMENTED WITH DECISION 1 WITHDRAWN (2026-09-02; proposed 2026-09-01).**
 Decision 1's target freeze shipped to the public testnet, was measured to remove the only control on
-block interval, and is reverted — see §3. Decisions 1a, 2 and 3 stand. The rest of this header
+block interval, and is reverted — see §3. Decisions 1a, 2 and 3 stand (Decision 2's pwu divisor is
+superseded by ADR-0072, which takes the nonce out of the ticket altogether; the bucket itself
+stands as the anchor's position field). The rest of this header
 records the other two places this ADR was wrong when written, on the same principle: the wrong
 version stays beside the right one.
 

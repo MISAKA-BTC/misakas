@@ -227,7 +227,10 @@ fn the_receipt_lane_binds_identity_without_pricing_or_buying_level() {
 
     // A free digest must not buy hierarchy position: the receipt lane sits at the base level for
     // EVERY nonce, while the attempt lane's level still varies with its digest (so the arm did
-    // not flatten the hierarchy for everyone).
+    // not flatten the hierarchy for everyone). Since ADR-0072 the attempt lane's digest is a
+    // function of the EXECUTION under the header's anchor — no nonce inside a bucket moves it —
+    // so the attempt side of this loop walks nonce BUCKETS: each is a different anchor, a
+    // different job, and therefore a different digest and level.
     //
     // **This assertion only became true of the stored level in this commit.** It goes through
     // `calc_block_level_check_pow_layer0`, and until now the ordinary block path did NOT — the
@@ -244,7 +247,7 @@ fn the_receipt_lane_binds_identity_without_pricing_or_buying_level() {
         assert!(receipt_passed && receipt_level == 0, "a receipt block is level 0 at nonce {nonce}, always");
 
         let mut attempt = header_with(POW_ALGO_ID_PALW_COMMITTED_V2, Vec::new());
-        attempt.nonce = nonce;
+        attempt.nonce = nonce << kaspa_consensus_core::palw_attempt_v2::PALW_TICKET_NONCE_BUCKET_LOG2;
         attempt.palw_commitment = attempt_carriage(&attempt);
         let (attempt_level, _) = kaspa_pow::calc_block_level_check_pow_layer0(&attempt, NETWORK, 255);
         attempt_saw_a_level |= attempt_level > 0;

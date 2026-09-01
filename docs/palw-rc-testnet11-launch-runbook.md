@@ -217,16 +217,20 @@ and it clears as claims resolve.
 
 ### What a block costs
 
-One template is one job. The job is anchored on the template's **pre-pow hash** — not on the
-challenge — so:
+One template and one nonce bucket is one job. The job is anchored on the template's **pre-pow
+hash** and the bucket — not on the challenge — and since ADR-0072 the job's execution IS the draw:
 
-* one inference per template (~38 ms on the RC floor), then
-* a free nonce grind: per nonce the attempt is rebuilt and hashed, and `l1_tag_v2` is a CPU
-  expansion by design so this stays a nonce search rather than an inference search;
+* one inference per draw (~38 ms on the RC floor, ~9 s on the hybrid tier), then
+* two hashes: the class ticket and the Layer-0 digest are both functions of the execution
+  commitment, which no nonce inside the bucket and no timestamp moves, so there is no nonce
+  search — a lost draw is re-rolled by the next bucket, which is a different job and a second
+  inference;
 * one ML-DSA-87 signature, on a hit only.
 
 A producer can still grind jobs by reshuffling the block it builds, which moves the pre-pow hash —
-and that costs a full inference per try, which is the price the design means to charge.
+and that costs a full inference per try, which is now the price of EVERY draw, not only of a
+reshuffle. Expect roughly `1 / (P_class × P_bits)` inferences per block per producer; the DAA
+relaxes `bits` as the network's draw rate is now its inference rate.
 
 ---
 
@@ -388,7 +392,8 @@ its licensed quanta cannot be spent.
   bond's registered key and operator id, its exposure room and a readiness verdict, all DERIVED
   (ADR-0046) so a miner cannot disagree with admission by multiplying its own. With it the wire
   path is complete: `getCurrentNetwork` → `getPalwProducerFacts` → `getBlockTemplate` → run the
-  inference and the nonce search → `submitBlock` with the envelope in `palw_commitment`
+  inference for the bucket's job and check its two hashes (ADR-0072: no nonce search) →
+  `submitBlock` with the envelope in `palw_commitment`
   (`network_domain` is `H(network_id)`, derivable from what the node already publishes).
   What remains is not protocol: `misaminer` and `pq-miner` still branch on algo 4 and 5 only, and
   an algo-6 miner has to implement the BASE-0 engine, the carriage build and the retention

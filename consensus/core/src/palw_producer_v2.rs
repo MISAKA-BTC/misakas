@@ -61,7 +61,8 @@ pub struct PalwProducerFactsV2 {
     pub class_id: Hash64,
     /// Admission item 5: equality against the attempt's.
     pub artifact_root: Hash64,
-    /// Admission item 6b: the attempt's `class_ticket_v2` must land at or under this.
+    /// Admission item 6b: the attempt's `class_ticket_v3` (drawn from its execution under the
+    /// header's anchor, ADR-0072) must land at or under this.
     pub class_target: u128,
     /// Admission item 6: an EQUALITY, and both factors are chain state. Derived here so the
     /// producer cannot pick.
@@ -225,7 +226,7 @@ mod tests {
     use super::*;
     use crate::palw_admission_v2::check_palw_attempt_admission_v2;
     use crate::palw_attempt_v2::{
-        PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, challenge_v2, class_ticket_v2,
+        PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, challenge_v2, class_ticket_v3, execution_anchor_v3,
     };
     use crate::palw_state_v2::{PalwBlockContextV2, PalwConsensusObjectV2, apply_palw_transition_v2, palw_operator_id_v2};
     use crate::tx::{TransactionId, TransactionOutpoint};
@@ -317,11 +318,13 @@ mod tests {
             },
             signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
         };
-        // The class lottery, run the way a producer runs it — over its own execution.
+        // The class lottery, run the way a producer runs it — over its own execution, under the
+        // anchor the header derives (ADR-0072).
+        let anchor = execution_anchor_v3(h64(NET), h64(0x5050_4800), facts.class_id, &bond_outpoint(), 1);
         let mut won = false;
         for n in 0u64..100_000 {
             env.attempt.trace_root = h64(0x3100_0000_0000_0000u64.wrapping_add(n));
-            if class_ticket_v2(&env.attempt) <= facts.class_target {
+            if class_ticket_v3(&env.attempt, anchor) <= facts.class_target {
                 won = true;
                 break;
             }
@@ -330,6 +333,7 @@ mod tests {
 
         let ctx = PalwBlockContextV2 { block: crate::BlockHash::from_u64_word(2), daa_score: 101, blue_score: 2, subsidy: 0 };
         check_palw_attempt_admission_v2(&state, &params, &admission, &ctx, &env).expect("the chain takes it");
+        crate::palw_admission_v2::check_palw_class_lottery_v3(&state, &env.attempt, anchor).expect("and its draw wins");
     }
 
     /// **Every fact is load-bearing.** Move one and admission refuses — which is what makes this a
@@ -367,10 +371,11 @@ mod tests {
                 },
                 signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN],
             };
+            let anchor = execution_anchor_v3(h64(NET), h64(0x5050_4800), facts.class_id, &bond_outpoint(), 1);
             for n in 0u64..100_000 {
                 env.attempt.trace_root = h64(0x3100_0000_0000_0000u64.wrapping_add(n));
                 mutate(&mut env.attempt);
-                if class_ticket_v2(&env.attempt) <= facts.class_target {
+                if class_ticket_v3(&env.attempt, anchor) <= facts.class_target {
                     break;
                 }
             }

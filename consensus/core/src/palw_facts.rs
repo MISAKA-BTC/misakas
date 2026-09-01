@@ -300,11 +300,12 @@ mod tests {
     /// than a zero-weight block.
     #[test]
     fn pwu_is_resolved_or_refused() {
-        // 2^24 expected TRIES; at the shipped nonce bucket that is 4 executions, and pwu counts
-        // executions (ADR-0071 Decision 2). `>> 10` here used to read 1,024 tries as 1,024
-        // inferences' worth of work — the over-statement that finding is about.
+        // 2^24 expected draws, and a draw is an execution (ADR-0072), so 2^24 inferences' worth
+        // of work at 100 each. Under ADR-0071 Decision 2 this read `400` — four executions, the
+        // draws divided by the nonce bucket — because one inference then bought 2^22 draws; the
+        // ticket is the execution now, and the division is gone with the sweep it accounted for.
         let target = u128::MAX >> 24;
-        assert_eq!(block_pwu_v1(Some(target), Some(100)), Ok(400));
+        assert_eq!(block_pwu_v1(Some(target), Some(100)), Ok(100 << 24));
         assert_eq!(block_pwu_v1(None, Some(100)), Err(PalwFactsError::Unresolved { what: "the class's DAA target" }));
         assert_eq!(block_pwu_v1(Some(target), None), Err(PalwFactsError::Unresolved { what: "the class's per-inference cost" }));
     }
@@ -2021,9 +2022,10 @@ mod resolver_tests {
         let weight =
             resolve_block_weight_v1(&input(&carriage, &panel, 1_100, &bonds(), &NoStepWeights), &RAMP, accept_fixture_signature)
                 .unwrap();
-        // 2^10 expected TRIES fall inside one nonce bucket, so the block carries the one
-        // execution it commits to: `pwu_per_inference` (ADR-0071 Decision 2).
-        assert_eq!(weight.pwu, 100);
+        // 2^10 expected draws at the fixture's target, and a draw is an execution (ADR-0072):
+        // 2^10 × `pwu_per_inference`. (Under ADR-0071 Decision 2 the 2^10 fell inside one nonce
+        // bucket and this read `100`.)
+        assert_eq!(weight.pwu, 100 << 10);
         assert_eq!(weight.stage, PalwWorkRampStageV1::ReceiptLicensed);
     }
 

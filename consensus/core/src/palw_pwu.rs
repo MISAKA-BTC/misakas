@@ -142,21 +142,21 @@ pub fn palw_expected_attempts_v1(class_target: u128) -> u64 {
 /// here would make a very hard class weigh *nothing* — the one arithmetic accident that turns a
 /// difficulty increase into a weight collapse.
 pub fn palw_pwu_v1(class_target: u128, pwu_per_inference: u64) -> u64 {
-    // **The EXECUTIONS the search required, not the tries it made** (ADR-0071 Decision 2).
+    // **The EXECUTIONS the search required — and since ADR-0072, a try IS an execution.**
     //
-    // `palw_expected_attempts_v1` counts lottery tries. One execution covers
-    // `2^PALW_TICKET_NONCE_BUCKET_LOG2` of them (the job anchor's bucket), so the number of
-    // inferences a block's ticket actually cost is the tries divided by the bucket. Before the
-    // bucket existed this divisor was effectively `2^64` — one execution served an unbounded sweep
-    // — and pwu claimed the whole try count as work, over-stating a block's LLM cost by exactly the
-    // difficulty. That is the quantity ADR-0071's premise says may not price the chain.
+    // `palw_expected_attempts_v1` counts lottery draws. Under ADR-0071 Decision 2 one execution
+    // bought `2^PALW_TICKET_NONCE_BUCKET_LOG2` of them (every nonce in the anchor's bucket drew a
+    // fresh ticket), so this divided the draws by the bucket to recover the inferences. ADR-0072
+    // took the nonce out of the ticket altogether: `class_ticket_v3` is a function of the
+    // EXECUTION commitment, which no nonce inside a bucket moves, so a producer draws exactly once
+    // per inference and the division is by one. The bucket still exists — it is what names WHICH
+    // execution a nonce was paid for by — but it no longer multiplies tickets.
     //
     // Floored at one execution, because a block always carries the one inference it commits to:
     // rounding a cheap class's work to zero would make its blocks weightless and its share
     // unearnable, which is the "difficulty increase turns into a weight collapse" accident this
     // function's saturation already exists to refuse, arriving from the other side.
-    let attempts = palw_expected_attempts_v1(class_target);
-    let executions = (attempts >> crate::palw_attempt_v2::PALW_TICKET_NONCE_BUCKET_LOG2).max(1) as u128;
+    let executions = palw_expected_attempts_v1(class_target).max(1) as u128;
     let product = executions.saturating_mul(pwu_per_inference as u128);
     product.min(u64::MAX as u128) as u64
 }
@@ -216,12 +216,12 @@ mod tests {
     fn pwu_is_the_product_and_saturates() {
         // Easiest target: pwu IS the per-inference cost.
         assert_eq!(palw_pwu_v1(u128::MAX, 7), 7);
-        // **Half the space is still ONE inference's worth**, and that is the ADR-0071 Decision 2
-        // correction. Two expected TRIES both fall inside one nonce bucket, so the search that
-        // found the ticket ran one execution — the old `14` here priced a block at the tries it
-        // made rather than the executions it required, which over-stated a block's LLM cost by
-        // exactly the difficulty.
-        assert_eq!(palw_pwu_v1(u128::MAX / 2, 7), 7);
+        // **Half the space is two inferences' worth** (ADR-0072). This value has moved twice, and
+        // both moves are the record: it was `14` originally, ADR-0071 Decision 2 made it `7`
+        // because two expected tries fell inside one nonce bucket and the search ran one
+        // execution, and ADR-0072 makes it `14` again for the opposite reason — there is no
+        // sweep any more, so two expected draws ARE two executions.
+        assert_eq!(palw_pwu_v1(u128::MAX / 2, 7), 14);
         // Saturation, not wraparound.
         assert_eq!(palw_pwu_v1(0, u64::MAX), u64::MAX);
         assert_eq!(palw_pwu_v1(u128::MAX / 2, u64::MAX), u64::MAX);
@@ -253,16 +253,14 @@ mod tests {
     /// count is exact and the relations are arithmetic rather than approximate.
     #[test]
     fn pwu_separates_cost_from_difficulty() {
-        // **Both targets are chosen ABOVE the nonce bucket**, because that is where difficulty and
-        // work stop being the same statement. Below it a tighter target buys nothing: one
-        // execution already covers `2^PALW_TICKET_NONCE_BUCKET_LOG2` tries, so eight times the
-        // tries inside one bucket is still one inference. The scaling this test is named for is
-        // real, and it starts where the bucket ends.
-        let easy = u128::MAX >> 24; // 2^24 expected tries = 4 executions
-        let hard = u128::MAX >> 27; // 2^27 expected tries = 32 executions
+        // A draw is an execution (ADR-0072), so every tighter target is more inferences and the
+        // scaling this test is named for holds at EVERY target — there is no longer a bucket
+        // below which eight times the tries is the same one inference.
+        let easy = u128::MAX >> 24; // 2^24 expected draws = 2^24 executions
+        let hard = u128::MAX >> 27; // 2^27 expected draws = 2^27 executions
         assert_eq!(palw_expected_attempts_v1(easy), 1 << 24);
         assert_eq!(palw_expected_attempts_v1(hard), 1 << 27);
-        assert_eq!(palw_pwu_v1(easy, 1), 1 << (24 - crate::palw_attempt_v2::PALW_TICKET_NONCE_BUCKET_LOG2));
+        assert_eq!(palw_pwu_v1(easy, 1), 1 << 24, "one execution per draw: pwu counts the draws");
 
         // Cost scales pwu at a fixed target.
         assert_eq!(palw_pwu_v1(easy, 1_000), 10 * palw_pwu_v1(easy, 100));
@@ -273,9 +271,12 @@ mod tests {
         // cross-class fairness is the epoch share cap's job, never pwu magnitude's.
         assert_eq!(palw_pwu_v1(hard, 100), palw_pwu_v1(easy, 800));
 
-        // …and INSIDE the bucket the two are deliberately indistinguishable, which is the whole
-        // finding: eight times the tries, the same one execution, the same pwu.
-        assert_eq!(palw_pwu_v1(u128::MAX >> 10, 100), palw_pwu_v1(u128::MAX >> 13, 100));
+        // **The bucket no longer flattens the curve.** Under ADR-0071 Decision 2 these two were
+        // deliberately equal — eight times the tries inside one bucket was one inference. Under
+        // ADR-0072 a try IS an inference, so they differ by exactly the eight.
+        assert_eq!(palw_pwu_v1(u128::MAX >> 13, 100), 8 * palw_pwu_v1(u128::MAX >> 10, 100));
+        // And the floor: the easiest target is still one execution, never zero.
+        assert_eq!(palw_pwu_v1(u128::MAX, 100), 100);
     }
 }
 

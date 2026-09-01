@@ -284,14 +284,21 @@ mod tests {
         PalwAttemptEnvelopeV2 { attempt, signature: vec![0x5A; 4627] }
     }
 
-    /// Find a nonce whose class ticket the (generous) initial target admits, so the fixture
-    /// chain carries a real claim without hand-picking magic numbers.
+    /// Find an EXECUTION whose class ticket the (generous) initial target admits, so the fixture
+    /// chain carries a claim that won its draw without hand-picking magic numbers. The transition
+    /// itself no longer draws the lottery — since ADR-0072 the ticket is the header's, checked
+    /// beside the position — but the book should still record blocks that would have won it.
     fn admitted_attempt(pwu: u64) -> PalwAttemptEnvelopeV2 {
-        use kaspa_consensus_core::palw_attempt_v2::class_ticket_v2;
+        use kaspa_consensus_core::palw_attempt_v2::{class_ticket_v3, execution_anchor_v3};
+        let anchor = execution_anchor_v3(Hash64::from_u64_word(0x7E57), Hash64::from_u64_word(0xB0), class_id(), &bond_key().0, 0);
         (0..64u64)
-            .map(|nonce| attempt(pwu, nonce))
-            .find(|env| class_ticket_v2(&env.attempt) <= u128::MAX / 2)
-            .expect("a 2^-1 target admits one of 64 nonces")
+            .map(|execution| {
+                let mut env = attempt(pwu, 0);
+                env.attempt.execution_root = Hash64::from_u64_word(0x4100 + execution);
+                env
+            })
+            .find(|env| class_ticket_v3(&env.attempt, anchor) <= u128::MAX / 2)
+            .expect("a 2^-1 target admits one of 64 executions")
     }
 
     fn steps() -> Vec<PalwChainStepV2> {

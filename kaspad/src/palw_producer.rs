@@ -41,8 +41,8 @@ use std::sync::Arc;
 
 use kaspa_consensus_core::coinbase::MinerData;
 use kaspa_consensus_core::palw_attempt_v2::{
-    PALW_ATTEMPT_V2_MLDSA87_CONTEXT, PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, attempt_id_v2,
-    challenge_v2, class_ticket_v2,
+    PALW_ATTEMPT_V2_MLDSA87_CONTEXT, PALW_ATTEMPT_V2_VERSION, PALW_TICKET_NONCE_BUCKET_LOG2, PalwAttemptEnvelopeV2,
+    PalwAttemptUnsignedV2, attempt_id_v2, challenge_v2, class_ticket_v3,
 };
 use kaspa_consensus_core::palw_producer_v2::PalwProducerFactsV2;
 use kaspa_consensus_core::tx::TransactionOutpoint;
@@ -55,21 +55,6 @@ use kaspa_p2p_flows::flow_context::FlowContext;
 use misaka_palw_base0::produce::base0_rc_job_anchor_v1;
 
 pub const PALW_PRODUCER: &str = "palw-producer";
-
-/// How many nonces to try against one template before rebuilding: **exactly one nonce bucket**
-/// (ADR-0071 Decision 2).
-///
-/// A template goes stale as the past-median time moves, and a stale template's block is refused for
-/// its timestamp rather than its work — so the search is bounded and the loop refetches. Bounded
-/// LOUDLY: a silent give-up would look identical to a network whose difficulty is out of reach.
-///
-/// It used to be `4_000_000`, chosen here, and that was the ONLY thing bounding how many lottery
-/// tickets one execution bought — a node-local constant, so it bound honest producers and nobody
-/// else. The bound is now in the job anchor, which is consensus: a nonce outside the bucket the
-/// anchor names derives a different job, so its block is one no verifier can adjudicate. Deriving
-/// the sweep from the same constant keeps an honest producer using exactly the search it paid for,
-/// and makes "search harder" mean "run another inference" rather than "raise this number".
-const NONCES_PER_TEMPLATE: u64 = 1 << kaspa_consensus_core::palw_attempt_v2::PALW_TICKET_NONCE_BUCKET_LOG2;
 
 #[derive(Clone, Debug)]
 pub struct PalwProducerConfig {
@@ -386,6 +371,8 @@ impl PalwProducerService {
         // loop wrote 5,281 identical warnings on a live testnet node while it produced nothing.
         let mut last_hold: Option<String> = None;
         let mut last_hold_at: Option<std::time::Instant> = None;
+        // Where the bucket walk stands on the template last drawn against — see `produce_one`.
+        let mut cursor: Option<(Hash64, u64)> = None;
         loop {
             if !self.tick(std::time::Duration::from_millis(200)).await {
                 break;
@@ -480,7 +467,7 @@ impl PalwProducerService {
                 Ok(None) => {} // No winning quantum right now; fall through to an attempt.
                 Err(err) => warn!("[{PALW_PRODUCER}] receipt: {err}"),
             }
-            match self.produce_one(&session, &facts, network_domain, bond, miner_data.clone()).await {
+            match self.produce_one(&session, &facts, network_domain, bond, miner_data.clone(), &mut cursor).await {
                 Ok(Some(hash)) => {
                     produced += 1;
                     info!("[{PALW_PRODUCER}] produced block #{produced} {hash} (class ticket + Layer-0 both under target)");
@@ -497,7 +484,7 @@ impl PalwProducerService {
                         facts.safe_weight, facts.live_total, facts.final_claims, facts.unresolved_claims, facts.open_courts
                     );
                 }
-                Ok(None) => trace!("[{PALW_PRODUCER}] no nonce in {NONCES_PER_TEMPLATE} tries against this template"),
+                Ok(None) => {} // A lost draw. The next call draws the next bucket, or a fresh template.
                 Err(err) => warn!("[{PALW_PRODUCER}] {err}"),
             }
         }
@@ -561,7 +548,13 @@ impl PalwProducerService {
         Ok(Some(hash))
     }
 
-    /// One template, one inference, one bounded nonce search.
+    /// One template, one inference, one draw (ADR-0072).
+    ///
+    /// There is no nonce search any more. Both lotteries — the class ticket and the Layer-0 digest
+    /// against `bits` — are functions of the execution commitment, which no nonce inside the
+    /// anchor's bucket and no timestamp moves; the ADR-0071 audit measured the search this
+    /// replaced at four million free draws per inference. What a producer re-rolls is the
+    /// inference itself: the next bucket is a different job. `cursor` is where that walk stands.
     async fn produce_one(
         &self,
         session: &kaspa_consensusmanager::ConsensusProxy,
@@ -569,6 +562,7 @@ impl PalwProducerService {
         network_domain: Hash64,
         bond: TransactionOutpoint,
         miner_data: MinerData,
+        cursor: &mut Option<(Hash64, u64)>,
     ) -> Result<Option<kaspa_consensus_core::BlockHash>, String> {
         let mut template = self
             .mining_manager
@@ -579,16 +573,23 @@ impl PalwProducerService {
         if template.block.header.pow_algo_id != kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2 {
             return Err(format!("this network declares algo {} — not a ConsensusV2 lane", template.block.header.pow_algo_id));
         }
-        // The job is the TEMPLATE's AND the bucket's, so it is computed once and every nonce in
-        // that bucket reuses it. See `base0_rc_job_anchor_v1` for why it is not the challenge's,
-        // and `PALW_TICKET_NONCE_BUCKET_LOG2` for why it is no longer the whole nonce space.
+        // The job is the TEMPLATE's AND the bucket's. See `base0_rc_job_anchor_v1` for why it is
+        // not the challenge's, and `PALW_TICKET_NONCE_BUCKET_LOG2` for what a bucket is.
         //
-        // Bucket 0, because the sweep below starts at nonce 0 and runs exactly `1 << k` of them —
-        // one execution, one bucket. A producer that wanted a second bucket would have to run the
-        // inference again, which is the entire point: the search is free inside a bucket and costs
-        // an inference to leave.
+        // **The bucket is the draw, and it walks.** The engine is deterministic, so
+        // (template, bucket) → job → execution → ticket is a function: a bucket this template has
+        // already lost stays lost, and re-running it is the one thing a producer must never do.
+        // The cursor is what stops that across calls — a template with the same pre-PoW hash
+        // (same parents; the timestamp is outside it) resumes at the bucket after the last one
+        // drawn, and any other template starts at zero. Bucket 2^42 would push the nonce out of
+        // its 64 bits; a template that has lost that many draws has long since gone stale.
         let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(&template.block.header);
-        let nonce_bucket = 0u64;
+        let nonce_bucket = match *cursor {
+            Some((at, next)) if at == pre_pow && next < (1u64 << (64 - PALW_TICKET_NONCE_BUCKET_LOG2)) => next,
+            _ => 0,
+        };
+        *cursor = Some((pre_pow, nonce_bucket + 1));
+        let nonce = nonce_bucket << PALW_TICKET_NONCE_BUCKET_LOG2;
         let anchor = base0_rc_job_anchor_v1(network_domain, pre_pow, facts.class_id, &bond, nonce_bucket);
 
         // **The class comes from the CHAIN, not from a constant here.** This resolved the floor by
@@ -634,13 +635,14 @@ impl PalwProducerService {
         .await
         .map_err(|e| format!("the execution task did not finish: {e}"))??;
 
-        // Every field but the challenge is fixed now: the roots are the execution's and the six
-        // chain facts are `facts`'. The nonce moves the challenge, the challenge moves the
-        // commitment root, and the root moves BOTH lotteries.
+        // Every field is fixed now: the roots are the execution's, the six chain facts are
+        // `facts`', and the challenge binds the position — this template, this timestamp, this
+        // nonce — and moves neither lottery. The draw was made the moment the inference finished.
+        let timestamp = template.block.header.timestamp;
         let mut attempt = PalwAttemptUnsignedV2 {
             version: PALW_ATTEMPT_V2_VERSION,
             network_domain,
-            challenge: Hash64::default(),
+            challenge: challenge_v2(network_domain, pre_pow, timestamp, nonce, facts.class_id, &bond),
             class_id: facts.class_id,
             executor_bond: bond,
             executor_pubkey: self.verification_key(),
@@ -658,10 +660,9 @@ impl PalwProducerService {
             // Derived from the network's own lattice windows, not chosen: see the field's docs.
             trace_retention_daa: facts.daa_score.saturating_add(facts.min_trace_retention_daa),
         };
-        let timestamp = template.block.header.timestamp;
-        // A dummy of the right length so the shape gate sees the real wire size during the search.
-        // The signature is outside `commitment_root_v2`, so it changes neither lottery — signing
-        // per nonce would throw away an ML-DSA-87 operation every try.
+        // A dummy of the right length so the shape gate sees the real wire size at the draw. The
+        // signature is outside the priced bytes, so it changes neither lottery — it is made once,
+        // over the attempt id, after the draw is known to have won.
         let sig_len = self
             .keypair
             .as_ref()
@@ -672,38 +673,27 @@ impl PalwProducerService {
             })
             .unwrap_or(0);
 
-        // The nonce search, also off the async worker and for the same reason as the inference: it
-        // is a pure-CPU loop with no await in it, and at the retargeted cadence it runs long enough
-        // to hold a tokio worker for essentially all of it.
-        let search = {
-            let header0 = template.block.header.clone();
-            let network_id = self.config.network_id.clone();
-            let (class_id, class_target) = (facts.class_id, facts.class_target);
-            let mut attempt_for_search = attempt.clone();
-            tokio::task::spawn_blocking(move || {
-                let mut header = header0;
-                // The bucket the anchor named, and only it: a nonce outside it belongs to a job
-                // this execution did not run, so a block carrying one is unadjudicable.
-                let bucket_base = nonce_bucket << kaspa_consensus_core::palw_attempt_v2::PALW_TICKET_NONCE_BUCKET_LOG2;
-                for nonce in bucket_base..bucket_base + NONCES_PER_TEMPLATE {
-                    attempt_for_search.challenge = challenge_v2(network_domain, pre_pow, timestamp, nonce, class_id, &bond);
-                    if class_ticket_v2(&attempt_for_search) > class_target {
-                        continue;
-                    }
-                    // The class lottery is won; now the network's. Only one nonce in many reaches
-                    // here, so the expensive check runs rarely.
-                    header.nonce = nonce;
-                    header.palw_commitment =
-                        PalwAttemptEnvelopeV2 { attempt: attempt_for_search.clone(), signature: vec![0u8; sig_len] }.encode_wire();
-                    let state = kaspa_pow::StateLayer0::new(&header, network_id.as_bytes());
-                    if state.check_pow_layer0(nonce).map(|(ok, _)| ok).unwrap_or(false) {
-                        return Some((nonce, attempt_for_search));
-                    }
-                }
+        // **The draw.** The class lottery first, then the network's against `bits` — both are
+        // functions of the one execution, so both are decided here, once, with no search and no
+        // blocking task: two hashes, not a loop.
+        let search: Option<(u64, PalwAttemptUnsignedV2)> = {
+            let ticket = class_ticket_v3(&attempt, anchor);
+            if ticket > facts.class_target {
+                trace!("[{PALW_PRODUCER}] bucket {nonce_bucket}: the class draw lost");
                 None
-            })
-            .await
-            .map_err(|e| format!("the nonce search task did not finish: {e}"))?
+            } else {
+                let mut header = template.block.header.clone();
+                header.nonce = nonce;
+                header.palw_commitment =
+                    PalwAttemptEnvelopeV2 { attempt: attempt.clone(), signature: vec![0u8; sig_len] }.encode_wire();
+                let state = kaspa_pow::StateLayer0::new(&header, self.config.network_id.as_bytes());
+                if state.check_pow_layer0(nonce).map(|(ok, _)| ok).unwrap_or(false) {
+                    Some((nonce, attempt.clone()))
+                } else {
+                    trace!("[{PALW_PRODUCER}] bucket {nonce_bucket}: the class draw won, the network draw lost");
+                    None
+                }
+            }
         };
         if let Some((nonce, won)) = search {
             attempt = won;

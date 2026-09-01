@@ -345,7 +345,10 @@ impl TestConsensus {
             trace_chunk_count: 8,
             trace_retention_daa: u64::MAX,
         };
-        let attempt = self.palw_v2_win_class_ticket(attempt, class_target);
+        // The anchor a VERIFIER derives for this header — the ticket is drawn under it (ADR-0072).
+        let anchor =
+            kaspa_consensus_core::palw_attempt_v2::execution_anchor_v3(network_domain, pre_pow, class_id, &bond, header.nonce);
+        let attempt = self.palw_v2_win_class_ticket(attempt, anchor, class_target);
         // Signed AFTER the ticket search, because the search moves fields that are inside
         // `attempt_id_v2` and the signature is over that id. Signing first would authorise an
         // attempt nobody mined.
@@ -365,26 +368,28 @@ impl TestConsensus {
     /// The class LOTTERY, run the way a miner runs it (ADR-0039: "ticket, not hash").
     ///
     /// The network target decides whether a header is a block at all; the class target decides
-    /// whether it is a block of THIS class, and `class_ticket_v2` is a function of the whole
-    /// unsigned attempt — so a miner varies its `job_nonce` until the ticket lands under the
-    /// class's target. The harness does exactly that, and it must: the alternative is a fixture
-    /// that only ever produced losing tickets, which is what it did before this existed.
+    /// whether it is a block of THIS class, and `class_ticket_v3` is a function of the attempt's
+    /// EXECUTION under the header's anchor (ADR-0072) — so a miner runs inferences until one
+    /// lands under the class's target. The harness does exactly that, and it must: the
+    /// alternative is a fixture that only ever produced losing tickets, which is what it did
+    /// before this existed.
     ///
     /// Bounded, and the bound fails LOUDLY. A silent give-up would hand back a carriage the chain
     /// refuses, and the block would die at admission with no hint that the lottery was the reason.
     fn palw_v2_win_class_ticket(
         &self,
         mut attempt: kaspa_consensus_core::palw_attempt_v2::PalwAttemptUnsignedV2,
+        anchor: kaspa_hashes::Hash64,
         class_target: u128,
     ) -> kaspa_consensus_core::palw_attempt_v2::PalwAttemptUnsignedV2 {
-        // The ticket is a function of the whole unsigned attempt, and what a real executor varies
-        // between tries is its EXECUTION — a different run yields a different trace root. The
-        // harness stands in for that by varying the trace root, which is the same lever at the
-        // same place; it does not touch the challenge (that binds the header position) or the
-        // pwu (that is derived and checked for equality).
-        for nonce in 0u64..1_000_000 {
-            attempt.trace_root = kaspa_hashes::Hash64::from_u64_word(0x7A00_0000_0000_0000u64.wrapping_add(nonce));
-            if kaspa_consensus_core::palw_attempt_v2::class_ticket_v2(&attempt) <= class_target {
+        // What a real executor varies between draws is its EXECUTION — a different run yields a
+        // different trace root. The harness stands in for that by varying the trace root, which
+        // is the same lever at the same place; it does not touch the challenge (that binds the
+        // header position and, since ADR-0072, moves no ticket) or the pwu (derived, checked for
+        // equality).
+        for execution in 0u64..1_000_000 {
+            attempt.trace_root = kaspa_hashes::Hash64::from_u64_word(0x7A00_0000_0000_0000u64.wrapping_add(execution));
+            if kaspa_consensus_core::palw_attempt_v2::class_ticket_v3(&attempt, anchor) <= class_target {
                 return attempt;
             }
         }

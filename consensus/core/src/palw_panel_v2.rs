@@ -1091,10 +1091,15 @@ mod tests {
             "the newcomer is not eligible yet, and a short draw is no panel — never a smaller one"
         );
 
-        // …and the rule takes nothing away from the bonds that were already standing.
+        // …and the rule takes nothing away from the bonds that were already standing: with the
+        // floor, the draw is exactly the draw the registry made BEFORE the newcomer existed. (This
+        // used to compare against the post-registration draw without the floor, which only agrees
+        // when the newcomer happens not to be drawn — a fact about one claim id, not about the
+        // rule, and the ADR-0072 attempt-version bump moved the id and exposed it.)
         let unchanged =
             derive_panel_v2_with_maturity(&late, &panel_params(), &claim_id, anchor, 0, floor).expect("the older bonds still seat");
-        assert_eq!(unchanged, derive_panel_v2(&late, &panel_params(), &claim_id, anchor, 0).unwrap(), "same seats, same order");
+        assert_eq!(unchanged, derive_panel_v2(&state, &panel_params(), &claim_id, anchor, 0).unwrap(), "same seats, same order");
+        assert!(unchanged.iter().all(|s| s.bond != PalwBondKeyV2(bond_outpoint(7))), "and none of them is the newcomer");
 
         // Once the window has actually elapsed the newcomer joins on its own merits.
         let matured = palw_seat_maturity_floor_v1(400, Some(100));

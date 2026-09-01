@@ -2125,7 +2125,7 @@ async fn palw_rc_a_real_execution_produces_a_block_the_chain_accepts() {
     use kaspa_consensus_core::api::ConsensusApi;
     use kaspa_consensus_core::palw_attempt_v2::{
         PALW_ATTEMPT_V2_MLDSA87_CONTEXT, PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, attempt_id_v2,
-        challenge_v2, class_ticket_v2, palw_network_domain_v2_for,
+        challenge_v2, class_ticket_v3, palw_network_domain_v2_for,
     };
     use kaspa_consensus_core::palw_base0_profile::{PALW_RC_BASE0_CANONICAL, PALW_RC_BASE0_GEOMETRY, base0_profile_v1};
     use misaka_palw_base0::produce::{base0_execute_for_attempt_v1, base0_rc_job_anchor_v1, base0_rc_job_v1};
@@ -2192,43 +2192,43 @@ async fn palw_rc_a_real_execution_produces_a_block_the_chain_accepts() {
     );
     let network_domain = palw_network_domain_v2_for(config.params.net.to_string().as_bytes(), Some(config.params.genesis.hash));
     let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(&block.header);
-    let anchor = base0_rc_job_anchor_v1(network_domain, pre_pow, facts.class_id, &bond_key.0, 0);
-
-    // The work. A real inference, over the job this template names.
     let profile = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("the floor's graph is expressible");
     let artifact = misaka_palw_base0::rc::palw_rc_base0_artifact_v1().expect("derives");
-    let (job, prompt) = base0_rc_job_v1(&profile, anchor, artifact.shape.vocab, PALW_RC_BASE0_CANONICAL.0, PALW_RC_BASE0_CANONICAL.1);
-    let run = base0_execute_for_attempt_v1(&artifact, &profile, &job, &prompt).expect("the floor runs its own job");
 
-    let mut attempt = PalwAttemptUnsignedV2 {
-        version: PALW_ATTEMPT_V2_VERSION,
-        network_domain,
-        challenge: kaspa_hashes::Hash64::default(),
-        class_id: facts.class_id,
-        executor_bond: bond_key.0,
-        executor_pubkey: keypair.verification_key.as_ref().to_vec(),
-        operator_id: facts.bond.as_ref().unwrap().operator_id,
-        artifact_root: facts.artifact_root,
-        trace_root: run.trace_root,
-        output_root: run.output_root,
-        execution_root: run.execution_root,
-        pwu: facts.pwu,
-        trace_manifest_root: run.trace_manifest_root,
-        trace_chunk_count: run.trace_chunk_count,
-        trace_retention_daa: facts.daa_score.saturating_add(facts.min_trace_retention_daa),
-    };
-    // The class lottery: the nonce moves the challenge, the challenge moves the commitment root,
-    // and the root moves the ticket. One inference, a free nonce search — which is the whole reason
-    // `l1_tag_v2` is a CPU expansion rather than a second inference.
+    // The work, and the draw (ADR-0072): a real inference over the job this template and bucket
+    // name, whose execution IS the ticket. A lost draw is not re-rolled by moving the nonce —
+    // every nonce in the bucket derives the same anchor and the same ticket — but by the next
+    // bucket, which is a different job and a second real inference.
     let mut won = None;
-    for nonce in 0u64..1_000_000 {
-        attempt.challenge = challenge_v2(network_domain, pre_pow, timestamp, nonce, facts.class_id, &bond_key.0);
-        if class_ticket_v2(&attempt) <= facts.class_target {
-            won = Some(nonce);
+    for bucket in 0u64..4096 {
+        let nonce = bucket << kaspa_consensus_core::palw_attempt_v2::PALW_TICKET_NONCE_BUCKET_LOG2;
+        let anchor = base0_rc_job_anchor_v1(network_domain, pre_pow, facts.class_id, &bond_key.0, bucket);
+        let (job, prompt) =
+            base0_rc_job_v1(&profile, anchor, artifact.shape.vocab, PALW_RC_BASE0_CANONICAL.0, PALW_RC_BASE0_CANONICAL.1);
+        let run = base0_execute_for_attempt_v1(&artifact, &profile, &job, &prompt).expect("the floor runs its own job");
+        let attempt = PalwAttemptUnsignedV2 {
+            version: PALW_ATTEMPT_V2_VERSION,
+            network_domain,
+            challenge: challenge_v2(network_domain, pre_pow, timestamp, nonce, facts.class_id, &bond_key.0),
+            class_id: facts.class_id,
+            executor_bond: bond_key.0,
+            executor_pubkey: keypair.verification_key.as_ref().to_vec(),
+            operator_id: facts.bond.as_ref().unwrap().operator_id,
+            artifact_root: facts.artifact_root,
+            trace_root: run.trace_root,
+            output_root: run.output_root,
+            execution_root: run.execution_root,
+            pwu: facts.pwu,
+            trace_manifest_root: run.trace_manifest_root,
+            trace_chunk_count: run.trace_chunk_count,
+            trace_retention_daa: facts.daa_score.saturating_add(facts.min_trace_retention_daa),
+        };
+        if class_ticket_v3(&attempt, anchor) <= facts.class_target {
+            won = Some((nonce, attempt));
             break;
         }
     }
-    let nonce = won.expect("the floor's genesis target is winnable");
+    let (nonce, attempt) = won.expect("the floor's genesis target is winnable");
 
     // Signed ONCE, after the search, over the attempt id — the signature is outside the commitment
     // root, so signing per nonce would be an ML-DSA-87 operation thrown away every try.
@@ -2276,7 +2276,7 @@ async fn palw_rc_the_real_qwen25_a16_model_produces_a_block() {
     use kaspa_consensus_core::api::ConsensusApi;
     use kaspa_consensus_core::palw_attempt_v2::{
         PALW_ATTEMPT_V2_MLDSA87_CONTEXT, PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, attempt_id_v2,
-        challenge_v2, class_ticket_v2, palw_network_domain_v2_for,
+        challenge_v2, class_ticket_v3, palw_network_domain_v2_for,
     };
     use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
     use kaspa_consensus_core::palw_qwen25_profile::{QWEN25_A16_CANONICAL, qwen25_a16_class_id_v2};
@@ -2344,8 +2344,6 @@ async fn palw_rc_the_real_qwen25_a16_model_produces_a_block() {
     let timestamp = block.header.timestamp;
     let network_domain = palw_network_domain_v2_for(config.params.net.to_string().as_bytes(), Some(config.params.genesis.hash));
     let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(&block.header);
-    let anchor = base0_rc_job_anchor_v1(network_domain, pre_pow, dense_class_id, &bond_key.0, 0);
-
     let backend = Qwen25A16Backend::new(
         std::sync::Arc::new(artifact),
         config.params.net.to_string().into_bytes(),
@@ -2358,43 +2356,46 @@ async fn palw_rc_the_real_qwen25_a16_model_produces_a_block() {
         .expect("a valid A16 profile"),
         QWEN25_A16_CANONICAL,
     );
-    let (job, prompt) = backend.job_for_anchor(anchor).expect("the anchor implies a job inside the artifact's table");
-    let ran = std::time::Instant::now();
-    let run = backend.execute(&job, &prompt).expect("a real Qwen2.5-1.5B forward pass over the anchored job");
-    eprintln!(
-        "dense drill: executed ({} prefill + {} decode) in {:?}; material {} bytes",
-        job.declared_prefill_tokens,
-        job.exact_decode_tokens,
-        ran.elapsed(),
-        run.material.len()
-    );
-
-    let mut attempt = PalwAttemptUnsignedV2 {
-        version: PALW_ATTEMPT_V2_VERSION,
-        network_domain,
-        challenge: kaspa_hashes::Hash64::default(),
-        class_id: dense_class_id,
-        executor_bond: bond_key.0,
-        executor_pubkey: keypair.verification_key.as_ref().to_vec(),
-        operator_id: facts.bond.as_ref().expect("the pre-flight held a bond").operator_id,
-        artifact_root: facts.artifact_root,
-        trace_root: run.trace_root,
-        output_root: run.output_root,
-        execution_root: run.execution_root,
-        pwu: facts.pwu,
-        trace_manifest_root: run.trace_manifest_root,
-        trace_chunk_count: run.trace_chunk_count,
-        trace_retention_daa: facts.daa_score.saturating_add(facts.min_trace_retention_daa),
-    };
+    // The work, and the draw (ADR-0072): the execution IS the ticket, so a lost draw is re-rolled
+    // by the next bucket — a different job, a second real inference — never by moving the nonce.
     let mut won = None;
-    for nonce in 0u64..1_000_000 {
-        attempt.challenge = challenge_v2(network_domain, pre_pow, timestamp, nonce, dense_class_id, &bond_key.0);
-        if class_ticket_v2(&attempt) <= facts.class_target {
-            won = Some(nonce);
+    for bucket in 0u64..4096 {
+        let nonce = bucket << kaspa_consensus_core::palw_attempt_v2::PALW_TICKET_NONCE_BUCKET_LOG2;
+        let anchor = base0_rc_job_anchor_v1(network_domain, pre_pow, dense_class_id, &bond_key.0, bucket);
+        let (job, prompt) = backend.job_for_anchor(anchor).expect("the anchor implies a job inside the artifact's table");
+        let ran = std::time::Instant::now();
+        let run = backend.execute(&job, &prompt).expect("a real Qwen2.5-1.5B forward pass over the anchored job");
+        eprintln!(
+            "dense drill: executed ({} prefill + {} decode) in {:?}; material {} bytes [bucket {}]",
+            job.declared_prefill_tokens,
+            job.exact_decode_tokens,
+            ran.elapsed(),
+            run.material.len(),
+            bucket
+        );
+        let attempt = PalwAttemptUnsignedV2 {
+            version: PALW_ATTEMPT_V2_VERSION,
+            network_domain,
+            challenge: challenge_v2(network_domain, pre_pow, timestamp, nonce, dense_class_id, &bond_key.0),
+            class_id: dense_class_id,
+            executor_bond: bond_key.0,
+            executor_pubkey: keypair.verification_key.as_ref().to_vec(),
+            operator_id: facts.bond.as_ref().expect("the pre-flight held a bond").operator_id,
+            artifact_root: facts.artifact_root,
+            trace_root: run.trace_root,
+            output_root: run.output_root,
+            execution_root: run.execution_root,
+            pwu: facts.pwu,
+            trace_manifest_root: run.trace_manifest_root,
+            trace_chunk_count: run.trace_chunk_count,
+            trace_retention_daa: facts.daa_score.saturating_add(facts.min_trace_retention_daa),
+        };
+        if class_ticket_v3(&attempt, anchor) <= facts.class_target {
+            won = Some((nonce, attempt));
             break;
         }
     }
-    let nonce = won.expect("the entrant's genesis target is winnable");
+    let (nonce, attempt) = won.expect("the entrant's genesis target is winnable");
     let signature = libcrux_ml_dsa::ml_dsa_87::sign(
         &keypair.signing_key,
         attempt_id_v2(&attempt).as_byte_slice(),
@@ -2474,10 +2475,10 @@ async fn qwen36_block_e2e(artifact: misaka_palw_base0::qwen36::Qwen36ArtifactV1,
     use kaspa_consensus_core::api::ConsensusApi;
     use kaspa_consensus_core::palw_attempt_v2::{
         PALW_ATTEMPT_V2_MLDSA87_CONTEXT, PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, attempt_id_v2,
-        challenge_v2, class_ticket_v2, palw_network_domain_v2_for,
+        challenge_v2, class_ticket_v3, palw_network_domain_v2_for,
     };
     use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
-    use kaspa_consensus_core::palw_qwen36_profile::{QWEN36_35B_A3B, QWEN36_RC_CANONICAL, qwen36_profile_v1};
+    use kaspa_consensus_core::palw_qwen36_profile::QWEN36_RC_CANONICAL;
     use misaka_palw_base0::produce::base0_rc_job_anchor_v1;
     use misaka_palw_base0::qwen36_backend::Qwen36Backend;
 
@@ -2539,14 +2540,6 @@ async fn qwen36_block_e2e(artifact: misaka_palw_base0::qwen36::Qwen36ArtifactV1,
     let timestamp = block.header.timestamp;
     let network_domain = palw_network_domain_v2_for(config.params.net.to_string().as_bytes(), Some(config.params.genesis.hash));
     let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(&block.header);
-    // The bucket the block's own nonce names — the same fact a verifier reads off the header.
-    let anchor = base0_rc_job_anchor_v1(
-        network_domain,
-        pre_pow,
-        qwen36_class_id,
-        &bond_key.0,
-        kaspa_consensus_core::palw_attempt_v2::palw_nonce_bucket_v1(block.header.nonce),
-    );
 
     let backend = Qwen36Backend::new(
         std::sync::Arc::new(artifact),
@@ -2555,43 +2548,46 @@ async fn qwen36_block_e2e(artifact: misaka_palw_base0::qwen36::Qwen36ArtifactV1,
         qwen36_class_id,
         config.params.net.to_string().into_bytes(),
     );
-    let (job, prompt) = backend.job_for_anchor(anchor).expect("the anchor implies a job inside the artifact's table");
-    let ran = std::time::Instant::now();
-    let run = backend.execute(&job, &prompt).expect("a real hybrid forward pass over the anchored job");
-    eprintln!(
-        "drill: executed the canonical job ({} prefill + {} decode) in {:?}; material {} bytes",
-        job.declared_prefill_tokens,
-        job.exact_decode_tokens,
-        ran.elapsed(),
-        run.material.len()
-    );
-
-    let mut attempt = PalwAttemptUnsignedV2 {
-        version: PALW_ATTEMPT_V2_VERSION,
-        network_domain,
-        challenge: kaspa_hashes::Hash64::default(),
-        class_id: qwen36_class_id,
-        executor_bond: bond_key.0,
-        executor_pubkey: keypair.verification_key.as_ref().to_vec(),
-        operator_id: facts.bond.as_ref().expect("the pre-flight held a bond").operator_id,
-        artifact_root: facts.artifact_root,
-        trace_root: run.trace_root,
-        output_root: run.output_root,
-        execution_root: run.execution_root,
-        pwu: facts.pwu,
-        trace_manifest_root: run.trace_manifest_root,
-        trace_chunk_count: run.trace_chunk_count,
-        trace_retention_daa: facts.daa_score.saturating_add(facts.min_trace_retention_daa),
-    };
+    // The work, and the draw (ADR-0072): the execution IS the ticket, so a lost draw is re-rolled
+    // by the next bucket — a different job, a second real inference — never by moving the nonce.
     let mut won = None;
-    for nonce in 0u64..1_000_000 {
-        attempt.challenge = challenge_v2(network_domain, pre_pow, timestamp, nonce, qwen36_class_id, &bond_key.0);
-        if class_ticket_v2(&attempt) <= facts.class_target {
-            won = Some(nonce);
+    for bucket in 0u64..4096 {
+        let nonce = bucket << kaspa_consensus_core::palw_attempt_v2::PALW_TICKET_NONCE_BUCKET_LOG2;
+        let anchor = base0_rc_job_anchor_v1(network_domain, pre_pow, qwen36_class_id, &bond_key.0, bucket);
+        let (job, prompt) = backend.job_for_anchor(anchor).expect("the anchor implies a job inside the artifact's table");
+        let ran = std::time::Instant::now();
+        let run = backend.execute(&job, &prompt).expect("a real hybrid forward pass over the anchored job");
+        eprintln!(
+            "drill: executed the canonical job ({} prefill + {} decode) in {:?}; material {} bytes [bucket {}]",
+            job.declared_prefill_tokens,
+            job.exact_decode_tokens,
+            ran.elapsed(),
+            run.material.len(),
+            bucket
+        );
+        let attempt = PalwAttemptUnsignedV2 {
+            version: PALW_ATTEMPT_V2_VERSION,
+            network_domain,
+            challenge: challenge_v2(network_domain, pre_pow, timestamp, nonce, qwen36_class_id, &bond_key.0),
+            class_id: qwen36_class_id,
+            executor_bond: bond_key.0,
+            executor_pubkey: keypair.verification_key.as_ref().to_vec(),
+            operator_id: facts.bond.as_ref().expect("the pre-flight held a bond").operator_id,
+            artifact_root: facts.artifact_root,
+            trace_root: run.trace_root,
+            output_root: run.output_root,
+            execution_root: run.execution_root,
+            pwu: facts.pwu,
+            trace_manifest_root: run.trace_manifest_root,
+            trace_chunk_count: run.trace_chunk_count,
+            trace_retention_daa: facts.daa_score.saturating_add(facts.min_trace_retention_daa),
+        };
+        if class_ticket_v3(&attempt, anchor) <= facts.class_target {
+            won = Some((nonce, attempt));
             break;
         }
     }
-    let nonce = won.expect("the entrant's genesis target is winnable");
+    let (nonce, attempt) = won.expect("the entrant's genesis target is winnable");
     let signature = libcrux_ml_dsa::ml_dsa_87::sign(
         &keypair.signing_key,
         attempt_id_v2(&attempt).as_byte_slice(),
@@ -2678,7 +2674,8 @@ async fn palw_v2_a_stranger_can_register_their_own_bond() {
     // What a registrant can compute at signing time: "the output at index 0 of whatever carries me".
     let declared = PalwBondKeyV2(TransactionOutpoint::new(TransactionId::default(), 0));
     let sign_over = |key: &PalwBondKeyV2| {
-        let message = palw_bond_registration_message_v2(network_domain, key, &pubkey, &pubkey, collateral, &payout_payload, &Default::default());
+        let message =
+            palw_bond_registration_message_v2(network_domain, key, &pubkey, &pubkey, collateral, &payout_payload, &Default::default());
         libcrux_ml_dsa::ml_dsa_87::sign(
             &keypair.signing_key,
             message.as_byte_slice(),
@@ -8816,7 +8813,7 @@ async fn palw_rc_qwen36_per_epoch_expected_observed_target() {
     use kaspa_consensus_core::api::ConsensusApi;
     use kaspa_consensus_core::palw_attempt_v2::{
         PALW_ATTEMPT_V2_MLDSA87_CONTEXT, PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, attempt_id_v2,
-        challenge_v2, class_ticket_v2, palw_network_domain_v2_for,
+        challenge_v2, class_ticket_v3, execution_anchor_v3, palw_network_domain_v2_for,
     };
     use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
     use kaspa_consensus_core::palw_base0_profile::{PALW_RC_BASE0_CANONICAL, PALW_RC_BASE0_GEOMETRY, base0_profile_v1};
@@ -8957,10 +8954,14 @@ async fn palw_rc_qwen36_per_epoch_expected_observed_target() {
                 trace_chunk_count: run.4,
                 trace_retention_daa: facts.daa_score.saturating_add(facts.min_trace_retention_daa),
             };
+            // The draw walks the bucket (ADR-0072): the ticket is the execution's under the anchor the
+            // header derives, so a nonce inside a bucket moves nothing and the next bucket is the next draw.
             let mut won = None;
-            for nonce in 0u64..1_000_000 {
-                attempt.challenge = challenge_v2(network_domain, pre_pow, timestamp, nonce, class_id, &bond);
-                if class_ticket_v2(&attempt) <= facts.class_target {
+            for bucket in 0u64..4096 {
+                let nonce = bucket << kaspa_consensus_core::palw_attempt_v2::PALW_TICKET_NONCE_BUCKET_LOG2;
+                let anchor = execution_anchor_v3(network_domain, pre_pow, class_id, &bond, nonce);
+                if class_ticket_v3(&attempt, anchor) <= facts.class_target {
+                    attempt.challenge = challenge_v2(network_domain, pre_pow, timestamp, nonce, class_id, &bond);
                     won = Some(nonce);
                     break;
                 }
@@ -9057,7 +9058,7 @@ async fn palw_rc_qwen36_earns_share_through_real_blocks() {
     use kaspa_consensus_core::api::ConsensusApi;
     use kaspa_consensus_core::palw_attempt_v2::{
         PALW_ATTEMPT_V2_MLDSA87_CONTEXT, PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, attempt_id_v2,
-        challenge_v2, class_ticket_v2, palw_network_domain_v2_for,
+        challenge_v2, class_ticket_v3, execution_anchor_v3, palw_network_domain_v2_for,
     };
     use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
     use kaspa_consensus_core::palw_base0_profile::{PALW_RC_BASE0_CANONICAL, PALW_RC_BASE0_GEOMETRY, base0_profile_v1};
@@ -9181,10 +9182,14 @@ async fn palw_rc_qwen36_earns_share_through_real_blocks() {
             trace_chunk_count: run.4,
             trace_retention_daa: facts.daa_score.saturating_add(facts.min_trace_retention_daa),
         };
+        // The draw walks the bucket (ADR-0072): the ticket is the execution's under the anchor the
+        // header derives, so a nonce inside a bucket moves nothing and the next bucket is the next draw.
         let mut won = None;
-        for nonce in 0u64..1_000_000 {
-            attempt.challenge = challenge_v2(network_domain, pre_pow, timestamp, nonce, class_id, &bond);
-            if class_ticket_v2(&attempt) <= facts.class_target {
+        for bucket in 0u64..4096 {
+            let nonce = bucket << kaspa_consensus_core::palw_attempt_v2::PALW_TICKET_NONCE_BUCKET_LOG2;
+            let anchor = execution_anchor_v3(network_domain, pre_pow, class_id, &bond, nonce);
+            if class_ticket_v3(&attempt, anchor) <= facts.class_target {
+                attempt.challenge = challenge_v2(network_domain, pre_pow, timestamp, nonce, class_id, &bond);
                 won = Some(nonce);
                 break;
             }
@@ -9249,7 +9254,7 @@ async fn palw_rc_qwen36_counts_merged_work() {
     use kaspa_consensus_core::api::ConsensusApi;
     use kaspa_consensus_core::palw_attempt_v2::{
         PALW_ATTEMPT_V2_MLDSA87_CONTEXT, PALW_ATTEMPT_V2_VERSION, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, attempt_id_v2,
-        challenge_v2, class_ticket_v2, palw_network_domain_v2_for,
+        challenge_v2, class_ticket_v3, execution_anchor_v3, palw_network_domain_v2_for,
     };
     use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
     use kaspa_consensus_core::palw_base0_profile::{PALW_RC_BASE0_CANONICAL, PALW_RC_BASE0_GEOMETRY, base0_profile_v1};
@@ -9391,10 +9396,14 @@ async fn palw_rc_qwen36_counts_merged_work() {
                 trace_chunk_count: qwen_roots.4,
                 trace_retention_daa: facts.daa_score.saturating_add(facts.min_trace_retention_daa),
             };
+            // The draw walks the bucket (ADR-0072): the ticket is the execution's under the anchor the
+            // header derives, so a nonce inside a bucket moves nothing and the next bucket is the next draw.
             let mut won = None;
-            for nonce in 0u64..1_000_000 {
-                attempt.challenge = challenge_v2(network_domain, pre_pow, timestamp, nonce, qwen_class_id, &bond);
-                if class_ticket_v2(&attempt) <= facts.class_target {
+            for bucket in 0u64..4096 {
+                let nonce = bucket << kaspa_consensus_core::palw_attempt_v2::PALW_TICKET_NONCE_BUCKET_LOG2;
+                let anchor = execution_anchor_v3(network_domain, pre_pow, qwen_class_id, &bond, nonce);
+                if class_ticket_v3(&attempt, anchor) <= facts.class_target {
+                    attempt.challenge = challenge_v2(network_domain, pre_pow, timestamp, nonce, qwen_class_id, &bond);
                     won = Some(nonce);
                     break;
                 }
@@ -9433,10 +9442,14 @@ async fn palw_rc_qwen36_counts_merged_work() {
                 trace_chunk_count: base_roots.4,
                 trace_retention_daa: facts.daa_score.saturating_add(facts.min_trace_retention_daa),
             };
+            // The draw walks the bucket (ADR-0072): the ticket is the execution's under the anchor the
+            // header derives, so a nonce inside a bucket moves nothing and the next bucket is the next draw.
             let mut won = None;
-            for nonce in 0u64..1_000_000 {
-                attempt.challenge = challenge_v2(network_domain, pre_pow, timestamp, nonce, base_class_id, &bond);
-                if class_ticket_v2(&attempt) <= facts.class_target {
+            for bucket in 0u64..4096 {
+                let nonce = bucket << kaspa_consensus_core::palw_attempt_v2::PALW_TICKET_NONCE_BUCKET_LOG2;
+                let anchor = execution_anchor_v3(network_domain, pre_pow, base_class_id, &bond, nonce);
+                if class_ticket_v3(&attempt, anchor) <= facts.class_target {
+                    attempt.challenge = challenge_v2(network_domain, pre_pow, timestamp, nonce, base_class_id, &bond);
                     won = Some(nonce);
                     break;
                 }

@@ -68,7 +68,13 @@ use blake2b_simd::Params;
 /// build accepted. A node running the older rules produces attempts this one must not accept, and
 /// now cannot: the version check refuses them by construction rather than by hoping the two never
 /// meet.
-pub const PALW_ATTEMPT_V2_VERSION: u16 = 5;
+///
+/// **5 → 6** (2026-09-02): **the ticket is the execution** (ADR-0072). Both lotteries an algo-6
+/// header enters — the class ticket and the Layer-0 digest against `bits` — are drawn from
+/// [`execution_commitment_v3`], which no nonce inside the anchor's bucket and no timestamp moves.
+/// A node on the older rule draws a fresh ticket per nonce and admits blocks this one refuses at
+/// the class lottery, so the two cannot share a chain; the version check keeps them from trying.
+pub const PALW_ATTEMPT_V2_VERSION: u16 = 6;
 
 /// The anchor's domain key. Unchanged from where this function used to live
 /// (`misaka_palw_base0::produce`), name included: moving it must not move the value, or every
@@ -162,6 +168,8 @@ pub const PALW_ATTEMPT_V2_ALL_DOMAINS: &[&[u8]] = &[
     PALW_ATTEMPT_V2_DOMAIN_ATTEMPT_ID,
     PALW_ATTEMPT_V2_DOMAIN_L1_TAG,
     PALW_ATTEMPT_V2_DOMAIN_CLASS_TICKET,
+    PALW_ATTEMPT_V2_DOMAIN_EXECUTION_COMMITMENT_V3,
+    PALW_ATTEMPT_V2_DOMAIN_CLASS_TICKET_V3,
     PALW_ATTEMPT_V2_DOMAIN_NETWORK,
     PALW_ATTEMPT_V2_MLDSA87_CONTEXT,
 ];
@@ -336,7 +344,9 @@ pub fn attempt_id_v2(attempt: &PalwAttemptUnsignedV2) -> Hash64 {
 
 pub const PALW_ATTEMPT_V2_DOMAIN_CLASS_TICKET: &[u8] = b"misaka-palw/attempt-v2/class-ticket/v1";
 
-/// The attempt's ticket in its CLASS's lottery (ADR-0039's per-class DAA: "ticket, not hash").
+/// **Superseded by [`class_ticket_v3`] (ADR-0072)** — kept as the record of the draw the lane made
+/// while the nonce was inside it. The attempt's ticket in its CLASS's lottery (ADR-0039's per-class
+/// DAA: "ticket, not hash").
 ///
 /// The network-wide Layer-0 target decides whether a header is a block at all; this decides
 /// whether it is a block of THIS class, against the target the per-class retarget maintains. The
@@ -350,6 +360,72 @@ pub const PALW_ATTEMPT_V2_DOMAIN_CLASS_TICKET: &[u8] = b"misaka-palw/attempt-v2/
 pub fn class_ticket_v2(attempt: &PalwAttemptUnsignedV2) -> u128 {
     let mut state = keyed(PALW_ATTEMPT_V2_DOMAIN_CLASS_TICKET);
     state.update(commitment_root_v2(attempt).as_byte_slice());
+    let digest = finish(state);
+    let mut le = [0u8; 16];
+    le.copy_from_slice(&digest.as_byte_slice()[..16]);
+    u128::from_le_bytes(le)
+}
+
+pub const PALW_ATTEMPT_V2_DOMAIN_EXECUTION_COMMITMENT_V3: &[u8] = b"misaka-palw/attempt-v2/execution-commitment/v3";
+pub const PALW_ATTEMPT_V2_DOMAIN_CLASS_TICKET_V3: &[u8] = b"misaka-palw/attempt-v2/class-ticket/v3";
+
+/// **The anchor a verifier derives for an algo-6 header** — `palw_job_anchor_v1` at the bucket the
+/// header's own nonce falls in. One spelling, so the finalizer, admission and the panel cannot
+/// disagree about which execution a block was paid for by.
+pub fn execution_anchor_v3(
+    network_domain: Hash64,
+    pre_pow_hash: Hash64,
+    class_id: Hash64,
+    executor_bond: &TransactionOutpoint,
+    nonce: u64,
+) -> Hash64 {
+    palw_job_anchor_v1(network_domain, pre_pow_hash, class_id, executor_bond, palw_nonce_bucket_v1(nonce))
+}
+
+/// **What an algo-6 header's work is drawn from** (ADR-0072): the attempt with its `challenge`
+/// blanked, keyed under the execution anchor.
+///
+/// [`commitment_root_v2`] is the block's IDENTITY and it stays that — it covers the challenge, so
+/// two nonces are two blocks. It was also what both lotteries hashed, and the challenge carries
+/// the nonce, so every nonce in a bucket drew a fresh ticket against one inference: the
+/// ADR-0071 audit measured one execution buying four million draws. The thing the lottery must
+/// price is the execution, and the execution is everything in the attempt EXCEPT the field that
+/// changes per nonce.
+///
+/// The anchor is what keeps this position-bound without the challenge. It is
+/// `H(network ‖ pre-pow hash ‖ class ‖ bond ‖ nonce bucket)` — the block's template and the job
+/// the inference actually ran — so an execution re-mounted on another template, or claimed for
+/// another bucket, commits to a different value and draws a different ticket. That is not a
+/// carried field (the accused does not get to set the question): every verifier derives it from
+/// the header it holds, and [`PalwAttemptEnvelopeV2::validate_stateless_v2`] still refuses a
+/// challenge that does not match the header, so nonce and timestamp remain bound to the position
+/// while buying nothing.
+///
+/// Zeroing the field rather than projecting a second struct: the wire type stays one type, and a
+/// field added to the attempt tomorrow is priced here the moment it exists, which is the P0-1
+/// discipline `commitment_root_v2` already keeps.
+pub fn execution_commitment_v3(attempt: &PalwAttemptUnsignedV2, execution_anchor: Hash64) -> Hash64 {
+    let mut view = attempt.clone();
+    view.challenge = Hash64::default();
+    let bytes = borsh::to_vec(&view).expect("PalwAttemptUnsignedV2 is borsh-serializable");
+    let mut state = keyed(PALW_ATTEMPT_V2_DOMAIN_EXECUTION_COMMITMENT_V3);
+    state.update(execution_anchor.as_byte_slice());
+    state.update(&(bytes.len() as u64).to_le_bytes());
+    state.update(&bytes);
+    finish(state)
+}
+
+/// **The class lottery, priced in inferences** (ADR-0072; supersedes [`class_ticket_v2`] as the
+/// lottery — v2 remains the record of what the lane drew from before).
+///
+/// A function of [`execution_commitment_v3`] and nothing else, so a producer that wants another
+/// draw runs another inference: a different bucket or a different template is a different anchor
+/// is a different job. Within a bucket every nonce yields this same value, which is the whole
+/// change — the nonce is a uniqueness field now, as it already was on the receipt lane
+/// (ADR-0044 Decision 4).
+pub fn class_ticket_v3(attempt: &PalwAttemptUnsignedV2, execution_anchor: Hash64) -> u128 {
+    let mut state = keyed(PALW_ATTEMPT_V2_DOMAIN_CLASS_TICKET_V3);
+    state.update(execution_commitment_v3(attempt, execution_anchor).as_byte_slice());
     let digest = finish(state);
     let mut le = [0u8; 16];
     le.copy_from_slice(&digest.as_byte_slice()[..16]);
@@ -561,7 +637,8 @@ mod tests {
         PalwAttemptEnvelopeV2 { attempt: a, signature: vec![0x5A; crate::dns_finality::STAKE_ATTESTATION_SIG_LEN] }
     }
 
-    /// **ADR-0042 Decision 3a**: mutating ANY field fails the PoW.
+    /// **ADR-0042 Decision 3a, priced per ADR-0072**: mutating any EXECUTION field fails the PoW —
+    /// and the one POSITION field does not.
     ///
     /// The audit's P0-1 remedy, as the consensus test it asks for — and the shape matters as much
     /// as the assertion. This used to hand-enumerate the six fields the commitment root happened
@@ -572,10 +649,18 @@ mod tests {
     /// So the list is derived from an exhaustive destructuring of `PalwAttemptUnsignedV2`
     /// instead. A field added tomorrow does not compile until it is named here, and naming it
     /// forces a mutation for it — the test cannot silently fall behind the struct.
+    ///
+    /// ADR-0072 moved both lotteries from `commitment_root_v2` to `execution_commitment_v3`: the
+    /// same bytes with `challenge` blanked and the execution anchor keyed in. So the list is still
+    /// exhaustive, but it now has two answers. Every field but `challenge` moves the tag; the
+    /// `challenge` moves the block identity and leaves the tag exactly where it was — which is the
+    /// property that makes a nonce a uniqueness field rather than a lottery ticket.
     #[test]
     fn every_priced_field_moves_the_pow_tag() {
         let base = attempt();
-        let baseline = l1_tag_v2(commitment_root_v2(&base));
+        let anchor = execution_anchor_v3(net(), pph(), base.class_id, &base.executor_bond, NONCE);
+        let baseline = l1_tag_v2(execution_commitment_v3(&base, anchor));
+        let identity = attempt_id_v2(&base);
 
         // Exhaustive by construction: this destructuring names every field of
         // `PalwAttemptUnsignedV2`, so adding one to the struct breaks THIS LINE until the new
@@ -623,28 +708,89 @@ mod tests {
         push("pwu", &|m| m.pwu += 1);
 
         for (field, mutated) in mutations {
-            assert_ne!(l1_tag_v2(commitment_root_v2(&mutated)), baseline, "mutating {field} left the PoW tag unchanged");
+            assert_ne!(attempt_id_v2(&mutated), identity, "mutating {field} left the block identity unchanged");
+            let tag = l1_tag_v2(execution_commitment_v3(&mutated, anchor));
+            if field == "challenge" {
+                assert_eq!(tag, baseline, "the challenge is position, not execution: it must not move the PoW tag (ADR-0072)");
+            } else {
+                assert_ne!(tag, baseline, "mutating {field} left the PoW tag unchanged");
+            }
         }
     }
 
-    /// The transcript and the identity are the SAME set of bytes, so they cannot drift.
-    ///
-    /// The stronger statement behind the exhaustive test above: two attempts share a PoW tag if
-    /// and only if they share an attempt id. Stated as a property here so a future refactor that
-    /// re-introduces a hand-written field list has to delete this test to do it.
+    /// **The anchor is the position** (ADR-0072). With the challenge out of the priced bytes, what
+    /// binds an execution to its template, class, bond and bucket is the anchor every verifier
+    /// derives — and every input to it moves the tag and the ticket, while a nonce inside the
+    /// bucket moves neither. One inference, one draw; the next draw is the next bucket.
     #[test]
-    fn the_pow_tag_and_the_block_identity_agree_on_every_attempt() {
+    fn the_anchor_binds_the_execution_to_its_position_and_nothing_inside_a_bucket_moves_it() {
         let base = attempt();
+        let (class, bond) = (base.class_id, base.executor_bond);
+        let anchor = execution_anchor_v3(net(), pph(), class, &bond, NONCE);
+        let baseline = l1_tag_v2(execution_commitment_v3(&base, anchor));
+        let ticket = class_ticket_v3(&base, anchor);
+
+        let bucket = palw_nonce_bucket_v1(NONCE);
+        for nonce in [bucket << PALW_TICKET_NONCE_BUCKET_LOG2, NONCE + 1, ((bucket + 1) << PALW_TICKET_NONCE_BUCKET_LOG2) - 1] {
+            let same = execution_anchor_v3(net(), pph(), class, &bond, nonce);
+            assert_eq!(same, anchor, "nonce {nonce} is in the same bucket and must derive the same anchor");
+            assert_eq!(l1_tag_v2(execution_commitment_v3(&base, same)), baseline, "same bucket, same tag");
+            assert_eq!(class_ticket_v3(&base, same), ticket, "same bucket, same ticket");
+        }
+
+        let moved = [
+            ("network_domain", execution_anchor_v3(Hash64::from_u64_word(0x99), pph(), class, &bond, NONCE)),
+            ("pre_pow_hash", execution_anchor_v3(net(), Hash64::from_u64_word(0xB1), class, &bond, NONCE)),
+            ("class_id", execution_anchor_v3(net(), pph(), Hash64::from_u64_word(0xC2), &bond, NONCE)),
+            ("executor_bond", execution_anchor_v3(net(), pph(), class, &op(2), NONCE)),
+            ("nonce bucket", execution_anchor_v3(net(), pph(), class, &bond, (bucket + 1) << PALW_TICKET_NONCE_BUCKET_LOG2)),
+        ];
+        for (what, other) in moved {
+            assert_ne!(other, anchor, "{what} must move the anchor");
+            assert_ne!(l1_tag_v2(execution_commitment_v3(&base, other)), baseline, "{what} must move the PoW tag");
+            assert_ne!(class_ticket_v3(&base, other), ticket, "{what} must move the class ticket");
+        }
+
+        // And the ticket is not the tag under another name.
+        let mut tag_le = [0u8; 16];
+        tag_le.copy_from_slice(&baseline[..16]);
+        assert_ne!(u128::from_le_bytes(tag_le), ticket, "the class lottery is domain-separated from the PoW tag");
+    }
+
+    /// The identity and the priced commitment are the same bytes but for the challenge, so they
+    /// cannot drift on any execution field — and they DO differ on the position field, by design.
+    ///
+    /// Stated as a property so a future refactor that re-introduces a hand-written field list, or
+    /// that puts the nonce back into the priced bytes, has to delete this test to do it.
+    #[test]
+    fn the_pow_tag_and_the_block_identity_agree_on_every_execution_field() {
+        let base = attempt();
+        let anchor = execution_anchor_v3(net(), pph(), base.class_id, &base.executor_bond, NONCE);
         let mut other = base.clone();
         other.trace_retention_daa += 1;
 
         assert_ne!(attempt_id_v2(&other), attempt_id_v2(&base), "the ids differ");
-        assert_ne!(commitment_root_v2(&other), commitment_root_v2(&base), "so the priced roots must differ too");
-        // And the root is a pure function of the id — same id, same root, whatever the route.
-        assert_eq!(commitment_root_v2(&base), commitment_root_v2(&base.clone()));
-        // The root is NOT the id: a domain key separates them, so neither can be replayed as the
-        // other in any transcript that consumes both.
+        assert_ne!(
+            execution_commitment_v3(&other, anchor),
+            execution_commitment_v3(&base, anchor),
+            "so the priced commitments differ"
+        );
+        assert_ne!(commitment_root_v2(&other), commitment_root_v2(&base), "and so do the identity roots");
+        // A pure function — same attempt, same anchor, same commitment, whatever the route.
+        assert_eq!(execution_commitment_v3(&base, anchor), execution_commitment_v3(&base.clone(), anchor));
+
+        // The identity still covers the challenge (two nonces are two blocks) and ONLY it separates
+        // the two hashes: the priced commitment is the identity with the challenge blank.
+        let mut renonced = base.clone();
+        renonced.challenge = challenge_v2(net(), pph(), TS, NONCE + 1, base.class_id, &base.executor_bond);
+        assert_ne!(attempt_id_v2(&renonced), attempt_id_v2(&base), "two nonces are two blocks");
+        assert_eq!(execution_commitment_v3(&renonced, anchor), execution_commitment_v3(&base, anchor), "…and one execution");
+
+        // Neither hash is another under a different name: a domain key separates each pair, so
+        // none can be replayed as another in any transcript that consumes them.
         assert_ne!(commitment_root_v2(&base), attempt_id_v2(&base), "the root must be domain-separated from the id");
+        assert_ne!(execution_commitment_v3(&base, anchor), commitment_root_v2(&base), "the execution commitment is not the root");
+        assert_ne!(execution_commitment_v3(&base, anchor), attempt_id_v2(&base), "nor the id");
     }
 
     /// The challenge binds the header position, the class and the bond.

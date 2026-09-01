@@ -14,7 +14,9 @@ use crate::matrix::Matrix;
 use kaspa_consensus_core::{
     BlockLevel, hashing,
     header::Header,
-    palw_attempt_v2::{PALW_ATTEMPT_V2_L1_TAG_BYTES, PalwAttemptEnvelopeV2, challenge_v2, commitment_root_v2, l1_tag_v2},
+    palw_attempt_v2::{
+        PALW_ATTEMPT_V2_L1_TAG_BYTES, PalwAttemptEnvelopeV2, challenge_v2, execution_anchor_v3, execution_commitment_v3, l1_tag_v2,
+    },
     pow_layer0::{
         POW_ALGO_ID_ARGON2ID, POW_ALGO_ID_BLAKE2B_SHA3, POW_ALGO_ID_KHEAVYHASH, POW_ALGO_ID_PALW_COMMITTED_V2, POW_ALGO_ID_PALW_LLM,
         POW_ALGO_ID_PALW_OLLAMA, POW_ALGO_ID_PALW_RECEIPT_V3, POW_FINALIZER_BYTES, POW_L1_BLAKE2B_SHA3_OUT_BYTES,
@@ -336,17 +338,19 @@ impl StateLayer0 {
     #[inline]
     fn calculate_l1_tag(&self, nonce: u64, buf: &mut [u8; POW_L1_TAG_MAX_BYTES]) -> Result<usize, PowLayer0Error> {
         match self.pow_algo_id {
-            // ADR-0042 Decision 3a (algo_id = 6): the tag is `Expand(commitment_root_v2)` — a
-            // cheap, total expansion of the carried attempt's identity, never an inference. The
+            // ADR-0042 Decision 3a (algo_id = 6): the tag is `Expand(execution_commitment_v3)`
+            // (ADR-0072; it was `Expand(commitment_root_v2)` until the nonce came out of it) — a
+            // cheap, total expansion of the carried attempt's execution, never an inference. The
             // work is priced by the attempt's life-cycle (bond, admission, panel, court), not by
             // this hash; what THIS arm guarantees is that a solved header attests exactly one
             // attempt at exactly this position:
             //
             // * the envelope must be present — an algo-6 header without one has no work to check;
             // * the carried `challenge` must equal the one this (pre_pow_hash, timestamp, nonce,
-            //   class, bond) derives. The challenge is INSIDE the identity the root expands, so
-            //   this equation is what forces a nonce move to be a new attempt (W2: one ticket,
-            //   one inference). It is asked HERE and not only in `validate_stateless_v2` so that
+            //   class, bond) derives. Since ADR-0072 the challenge is OUTSIDE the priced bytes —
+            //   it is the block's position, not its work — so this equation is what keeps an
+            //   attempt from being re-mounted at another position, while the draw itself comes
+            //   from the execution. It is asked HERE and not only in `validate_stateless_v2` so that
             //   every path that computes PoW — the pruning-proof path included, which never
             //   reaches stateful admission — refuses an attempt re-mounted at another position.
             //
@@ -379,7 +383,17 @@ impl StateLayer0 {
                 if attempt.challenge != expected {
                     return Err(PowLayer0Error::PalwV2ChallengeMismatch);
                 }
-                let tag = l1_tag_v2(commitment_root_v2(attempt));
+                // **ADR-0072: the tag expands the EXECUTION commitment, not the identity root.**
+                // `commitment_root_v2` covers the challenge and the challenge carries the nonce, so
+                // every nonce in a bucket was a fresh draw against one inference — the ADR-0071
+                // audit measured four million draws per execution. The execution commitment blanks
+                // the challenge and keys in the anchor THIS position derives (template, class, bond,
+                // nonce bucket): the same for every nonce the anchor's execution was paid for by,
+                // different for any other template or bucket. The equation above still binds nonce
+                // and timestamp to the position; they just buy nothing.
+                let anchor =
+                    execution_anchor_v3(attempt.network_domain, self.pre_pow_hash_64, attempt.class_id, &attempt.executor_bond, nonce);
+                let tag = l1_tag_v2(execution_commitment_v3(attempt, anchor));
                 buf[..PALW_ATTEMPT_V2_L1_TAG_BYTES].copy_from_slice(&tag);
                 Ok(PALW_ATTEMPT_V2_L1_TAG_BYTES)
             }
@@ -484,15 +498,26 @@ impl StateLayer0 {
     pub fn calculate_pow_layer0(&self, nonce: u64) -> Result<[u8; POW_FINALIZER_BYTES], PowLayer0Error> {
         let mut tag_buf = [0u8; POW_L1_TAG_MAX_BYTES];
         let tag_len = self.calculate_l1_tag(nonce, &mut tag_buf)?;
+        // **ADR-0072 (algo_id = 6): the digest carries neither nonce nor timestamp.** On this lane
+        // the tag is already position-bound through the execution anchor (the tag arm refuses a
+        // challenge that does not match the header, and the anchor keys template, class, bond and
+        // bucket into the commitment), so mixing the nonce in here would only re-open the free
+        // sweep one layer down: the class lottery would be one draw per inference and the network
+        // lottery four million. Both lotteries are drawn from one value per execution. `bits` keeps
+        // its meaning as the absolute rate control — ADR-0071's withdrawn Decision 1 is why it is
+        // kept rather than bypassed the way the receipt lane's is — priced in inferences now,
+        // which is what it was always meant to price.
+        let (timestamp, nonce_in_digest) =
+            if self.pow_algo_id == POW_ALGO_ID_PALW_COMMITTED_V2 { (0, 0) } else { (self.timestamp, nonce) };
         pow_finalizer_blake2b_512(
             &self.network_id,
             // PR-9.5d: bind the digest to the header's declared
             // algo id rather than a hardcoded constant.
             self.pow_algo_id,
             self.pre_pow_hash_64,
-            self.timestamp,
+            timestamp,
             self.bits,
-            nonce,
+            nonce_in_digest,
             &tag_buf[..tag_len],
         )
     }
@@ -1182,14 +1207,35 @@ mod tests_pq {
             "the signature must stay outside the priced identity"
         );
 
-        // And the honest move: a NEW nonce with a re-derived envelope is a new ticket with a new
-        // digest — the W2 cost model in one assertion.
+        // **ADR-0072: a new nonce in the SAME bucket, honestly re-derived, is the same draw.** The
+        // re-derived envelope is a valid header at NONCE + 1 — and its digest is `digest0`, because
+        // nothing the finalizer hashes for this lane moved: the execution commitment blanks the
+        // challenge and the digest carries neither nonce nor timestamp. That is the whole change:
+        // the sweep the ADR-0071 audit measured at four million draws per inference yields one.
         let mut fresh_header = dummy_header_algo(BITS, NONCE + 1, TS, POW_ALGO_ID_PALW_COMMITTED_V2);
         let fresh = v2_envelope_for(&fresh_header, NONCE + 1);
         fresh_header.palw_commitment = fresh.encode_wire();
         let fresh_digest = StateLayer0::new(&fresh_header, network_id)
             .calculate_pow_layer0(NONCE + 1)
             .expect("a re-derived envelope at the new position computes");
-        assert_ne!(fresh_digest, digest0, "a new ticket is a new digest");
+        assert_eq!(fresh_digest, digest0, "a nonce inside the bucket is not a new draw (ADR-0072)");
+        // A new timestamp, honestly re-derived, is the same draw too: the position is bound by
+        // the challenge equation, and the digest does not price it.
+        let mut later = dummy_header_algo(BITS, NONCE, TS + 1, POW_ALGO_ID_PALW_COMMITTED_V2);
+        let relater = v2_envelope_for(&later, NONCE);
+        later.palw_commitment = relater.encode_wire();
+        assert_eq!(
+            StateLayer0::new(&later, network_id).calculate_pow_layer0(NONCE).expect("re-derived at a later timestamp"),
+            digest0,
+            "a timestamp is not a draw either"
+        );
+        // The honest move is the NEXT BUCKET: a different anchor is a different job, which is a
+        // different inference — and only then a different digest.
+        let next = 1u64 << kaspa_consensus_core::palw_attempt_v2::PALW_TICKET_NONCE_BUCKET_LOG2;
+        let mut next_header = dummy_header_algo(BITS, next, TS, POW_ALGO_ID_PALW_COMMITTED_V2);
+        let next_env = v2_envelope_for(&next_header, next);
+        next_header.palw_commitment = next_env.encode_wire();
+        let next_digest = StateLayer0::new(&next_header, network_id).calculate_pow_layer0(next).expect("the next bucket computes");
+        assert_ne!(next_digest, digest0, "a new bucket is a new draw");
     }
 }
