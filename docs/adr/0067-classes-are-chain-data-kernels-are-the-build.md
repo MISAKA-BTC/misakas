@@ -9,8 +9,10 @@ graph defect on the way; the mmap container's chain-resolve arm is BUILT behind 
 (same day — the registered root decides the container, and the mmap engine serves the declaration
 bit-identically to its compiled path); the epsilon disposition is TAKEN (same day — the corrected
 rows are `graph-v3`, declaring the artifact's measured epsilon, after the graph author's review
-convicted a SIXTH defect that folded into the same id move); the mmap profile fuzz gate and the
-operational arming remain PROPOSED.** See "What landed" at
+convicted a SIXTH defect that folded into the same id move); the mmap profile fuzz gate is BUILT
+and run to saturation with zero findings (same day — and its design pass convicted a reachable
+walk panic before the first iteration ran); only the operational arming remains PROPOSED.** See
+"What landed" at
 the foot of this document. Builds on ADR-0049 (the adjudication contract — whose admission
 carriage is the load-bearing half of this design and is ALREADY LIVE), ADR-0054 (share follows
 production — the economics that make permissionless classes survivable), and ADR-0034 (capability
@@ -540,6 +542,29 @@ declaration is refused by the arm with its defect named; a dense declaration pai
 root reaches the mmap engine and is refused by its geometry gate. kaspad's `resolve_or_chain` and
 the `--palw-chain-classes` fence needed no change — both were already family-agnostic, which is
 the shape the SDK seam was for.
+
+**The fuzz gate now covers this container too (2026-09-01, same day), and its design pass
+convicted a panic before the first iteration ran.** `fuzz_qwen36_profiles_v1`
+(`misaka-palw-base0/src/fuzz_qwen36.rs`, saturation runner `palw-qwen36-profile-fuzz`) is the
+dense harness's clause for the mmap space: mutate the corrected profile — structural, nominal,
+and ROLE edits, because this family declares its cache writes per node, plus REAL operand names
+landed on wrong nodes, which stress the width checks harder than foreign names the planner
+refuses on sight — then the chain's own admission gate, the plan, the court cost against the
+carrier ceiling, and a caller's prompt twice under `catch_unwind`. Walking that mutation space on
+paper before running it found the panic: a convolution declared in the ATTENTION table lands on a
+window the artifact's layer kinds never pre-filled, and the walk's `remove(0)` ran BEFORE the tap
+tensor read that would have refused — measured pre-fix as `removal index (is 0) should be < len
+(is 0)`, from a plannable table any gate-accepted registration could carry. The fix is
+declaration-faithful: the window (and the recurrence's states, same rule, defense in depth) start
+as the zero state a fresh sequence has, made on first demand; the refusal that follows names the
+tensor an attention layer does not carry, and the regression test asserts the walk now gets PAST
+the site it used to die on. Measured: 400 iterations (the CI slice, seed `0x0067_2026_09_01`) —
+136 gate-accepted, 59 executed, zero panics, zero non-determinism, zero closes over the ceiling,
+worst close 38,020 bytes against 81,920, corpus digest pinned (`5b9be0a7…`) so the
+cross-architecture clause is met by the suite; and 50,000 iterations at an independent seed
+(`0x67`, 93 s) — 17,779 past the gate, 7,289 executed, and the same three zeros. The fence's
+arming condition for this container is now measurement plus one operator decision, which is the
+only thing left of the fourth clause.
 
 **The fix cannot be an edit.** `shape_profile_id` is the borsh of the whole profile, node tables
 included, and the hybrid's id is pinned in-tree as a live chain fact — "the shipped hybrid class id

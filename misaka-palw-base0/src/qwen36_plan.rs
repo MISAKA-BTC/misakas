@@ -591,6 +591,15 @@ impl<'a> Qwen36Engine<'a> {
                     current.extend_from_slice(&k);
                     current.extend_from_slice(&v);
                     let window = &mut cache.conv[*li];
+                    // The cache pre-fills windows only for the layers the ARTIFACT calls
+                    // recurrent, but the declaration is the program: a gate-accepted profile may
+                    // put a convolution in the attention table, and its window before the
+                    // sequence start is zero rows — the same start the engine's own windows have.
+                    // `remove(0)` on the unfilled window was a panic a stranger's registration
+                    // could reach (found by this module's own fuzz harness design pass).
+                    if window.is_empty() {
+                        *window = vec![vec![0; width]; s.conv_kernel.max(1)];
+                    }
                     window.remove(0);
                     window.push(current);
                     let flat: Vec<i32> = window.iter().flatten().copied().collect();
@@ -649,6 +658,16 @@ impl<'a> Qwen36Engine<'a> {
                     let decays = resolve(&node.inputs[3], &rows)?;
                     let betas = resolve(&node.inputs[4], &rows)?;
                     let (li, cache) = layer.as_mut().ok_or_else(|| Qwen36Error::BadParams("a recurrence outside a layer".into()))?;
+                    // Same rule as the convolution window above: the cache pre-allocates states
+                    // only for the layers the ARTIFACT calls recurrent, and a gate-accepted
+                    // declaration may put the recurrence in the attention table. Its state before
+                    // the sequence start is zero — `Qwen36Cache::new`'s own start — so the states
+                    // are made on first demand rather than indexed into a panic.
+                    if cache.gdn[*li].len() != s.linear_v_heads {
+                        cache.gdn[*li] = (0..s.linear_v_heads)
+                            .map(|_| kaspa_consensus_core::palw_qwen36_ops::Qwen36GdnStateV1::zeros(hd, hd))
+                            .collect();
+                    }
                     // RESOLUTION_V2: the declared `linear_gdn.a16` is the recurrence's four
                     // per-head narrowings, each its own store.
                     let read_rows = a.param_rows(&format!("blk.{li}.linear_read.a16"))?;
