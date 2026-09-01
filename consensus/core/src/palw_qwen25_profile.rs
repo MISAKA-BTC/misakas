@@ -326,6 +326,7 @@ pub fn qwen25_a16_profile_v1(geometry: PalwQwen25GeometryV1) -> Result<PalwShape
         geometry,
         crate::palw_base0_profile::QWEN25_A16_PRE_IR,
         crate::palw_state_chunk_map::integer_kv_state_chunk_map_id_v1(),
+        QWEN25_HEAD_TENSOR,
     )
 }
 
@@ -343,13 +344,27 @@ pub fn qwen25_a16_profile_v2(geometry: PalwQwen25GeometryV1) -> Result<PalwShape
         geometry,
         crate::palw_base0_profile::QWEN25_A16_PRE_IR_V2,
         crate::palw_state_chunk_map::integer_kv_state_chunk_map_id_v2(),
+        QWEN25_A16_HEAD_TENSOR_V2,
     )
 }
+
+/// **The v2 class's head node names the ENGINE's head view, not the embedding table.**
+///
+/// The v1 spelling (`token_embd.weight`, this family's tied head) puts two row SHAPES under one
+/// inventory name: the gather's one-row-per-token and the head matmul's one-tile-of-rows. Their
+/// byte offsets collide — both start at zero — and `find_operand_v1` resolves `(name, layer,
+/// offset)` before it checks length, so whichever view the canonical inventory lists first makes
+/// the other structurally unservable and its steps `Unadjudicable`. The floor's inventory solved
+/// this years of commits ago by emitting BOTH views under two names ("a tied class is a size
+/// question, never an adjudicability one"); the v2 class adopts the same spelling. Tying stays a
+/// fact about bytes: the artifact's `unembed` equals its `embed` when tied.
+pub const QWEN25_A16_HEAD_TENSOR_V2: &str = "output.weight";
 
 fn qwen25_a16_profile_inner(
     geometry: PalwQwen25GeometryV1,
     pre_ir: &'static [crate::palw_base0_profile::Base0IrNodeV1],
     state_chunk_map_id: Hash64,
+    head: &'static str,
 ) -> Result<PalwShapeProfileV3, PalwStepError> {
     use crate::palw_base0_profile::{Base0IrGeometryV1, Base0IrScopeV1, QWEN25_A16_LAYER_IR, QWEN25_A16_POST_IR, base0_ir_nodes_v1};
 
@@ -405,12 +420,12 @@ fn qwen25_a16_profile_inner(
         }
     };
 
-    let mut pre_nodes = base0_ir_nodes_v1(pre_ir, ir_geometry(geometry.tile_len), Base0IrScopeV1::Graph, QWEN25_HEAD_TENSOR);
+    let mut pre_nodes = base0_ir_nodes_v1(pre_ir, ir_geometry(geometry.tile_len), Base0IrScopeV1::Graph, head);
     budget(&mut pre_nodes, pre_ir);
     let mut attn_nodes = base0_ir_nodes_v1(QWEN25_A16_LAYER_IR, ir_geometry(geometry.tile_len), Base0IrScopeV1::PerLayer, "");
     budget(&mut attn_nodes, QWEN25_A16_LAYER_IR);
     let mut post_nodes =
-        base0_ir_nodes_v1(QWEN25_A16_POST_IR, ir_geometry(geometry.tile_len), Base0IrScopeV1::Graph, QWEN25_HEAD_TENSOR);
+        base0_ir_nodes_v1(QWEN25_A16_POST_IR, ir_geometry(geometry.tile_len), Base0IrScopeV1::Graph, head);
     budget(&mut post_nodes, QWEN25_A16_POST_IR);
 
     let profile = PalwShapeProfileV3 {

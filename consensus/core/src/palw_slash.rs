@@ -197,7 +197,13 @@ pub(crate) fn check_job_context_shape(ctx: &PalwJobContextV2) -> Result<(), Palw
         Some(total) if total <= ctx.max_context_tokens => {}
         _ => return Err(PalwSlashError::ContextShape("token budget overflows or exceeds max_context_tokens")),
     }
-    if ctx.trace_scheme_id != trace_scheme_id_v2() {
+    // The two schemes an honestly-produced v2 context can pin: the float family's event tree,
+    // and the model tiers' tiled selecting-row scheme. The pin used to admit only the first, so
+    // every tiled-class binding failed its context check before a single leaf was read — the
+    // whole step space of both model tiers, unprosecutable at the front door.
+    if ctx.trace_scheme_id != trace_scheme_id_v2()
+        && ctx.trace_scheme_id != crate::palw_step_refute::tiled_logits_scheme_id_v1()
+    {
         return Err(PalwSlashError::SchemeMismatch);
     }
     Ok(())

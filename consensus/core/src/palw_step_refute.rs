@@ -709,6 +709,41 @@ fn qwen36_row(
     let params = |first: usize, count: usize| -> Result<Vec<A16QuantParams>, PalwStepRefuteError> {
         params_named(node.weight_name.as_str(), first, count)
     };
+    // **The A16 family's position-0 sink convention, court-side.** Seven seams resolve their
+    // parameters through the `.sink0`-suffixed tensor at the sequence's first position — the
+    // engine's own words: "the position-0 sink convention are the A16 family's kernel semantics"
+    // — and a court that read the generic table there would recompute honest position-0 rows
+    // differently and convict. Membership is the family's fixed list, never the artifact's
+    // contents: an artifact-dependent rule would let a challenger steer which table the court
+    // reads by withholding an opening.
+    let sink_position = kv_len == 1;
+    let seam_suffixed = |base: String| -> String {
+        const A16_SINK_SEAMS: &[&str] = &[
+            "attn_output.weight.a16",
+            "ffn_up.weight.a16",
+            "ffn_down.weight.a16",
+            "attn_align.a16",
+            "ffn_silu.a16",
+            "ffn_gated.a16",
+            "ffn_align.a16",
+        ];
+        if sink_position && A16_SINK_SEAMS.iter().any(|s| base.ends_with(s)) { format!("{base}.sink0") } else { base }
+    };
+    // Per-lane vs singleton, decided by the DECLARED width. A `KvScaled` node's lane count is the
+    // job's own, so no registration can hold one triple per lane — the class registers ONE and
+    // the kernel tiles it across the row, exactly as the engine does. A `Fixed` node's parameter
+    // table is per-lane at the node's registered width (the canonical inventory expands a
+    // site whose artifact stores a single triple).
+    let stream_params = |lane_base: usize, lanes: usize| -> Result<Vec<A16QuantParams>, PalwStepRefuteError> {
+        let name = seam_suffixed(node.weight_name.clone());
+        match node.out_len {
+            crate::palw_step::PalwStepOutLenV1::Fixed { .. } => params_named(&name, lane_base, lanes),
+            crate::palw_step::PalwStepOutLenV1::KvScaled { .. } => {
+                let one = params_named(&name, 0, 1)?[0];
+                Ok(vec![one; lanes])
+            }
+        }
+    };
     let fixed_width = || -> Result<usize, PalwStepRefuteError> {
         match node.out_len {
             crate::palw_step::PalwStepOutLenV1::Fixed { elements } => Ok(elements as usize),
@@ -740,9 +775,23 @@ fn qwen36_row(
         Ok(gather.0.node_slot - intra_table_index(profile, gather.0.node_slot).ok_or(PalwStepRefuteError::Unadjudicable)? as u32)
     };
     // The producing node's tile width for ref `ordinal` — what the covering tiles were cut at.
+    // Sentinel refs resolve the way the canonical leaf set resolves them: `LayerIn` is the slot
+    // just before this table (the previous table's terminal node), which is where those covering
+    // tiles were actually committed. Treating the sentinel as a table-relative index read a slot
+    // that does not exist and adjudicated every lane-sliced step with a `LayerIn` ref
+    // `Unadjudicable` — at any tile but the first, where the slice happens to start at zero.
     let src_tile = |ordinal: usize| -> Result<u64, PalwStepRefuteError> {
         let r = node.input_refs.get(ordinal).copied().ok_or(PalwStepRefuteError::Unadjudicable)?;
-        let (n, _) = profile.resolve_node_slot(table_first_slot()? + r as u32).ok_or(PalwStepRefuteError::Unadjudicable)?;
+        let first = table_first_slot()?;
+        let in_slot = if r >= crate::palw_step::PALW_STEP_INPUT_SENTINEL_MIN {
+            match r {
+                crate::palw_step::PALW_STEP_INPUT_LAYER_IN if first > 0 => first - 1,
+                _ => return Err(PalwStepRefuteError::Unadjudicable),
+            }
+        } else {
+            first + r as u32
+        };
+        let (n, _) = profile.resolve_node_slot(in_slot).ok_or(PalwStepRefuteError::Unadjudicable)?;
         Ok(n.tile_len as u64)
     };
     // The lane-sliced family's slice for THIS step, from the same derivation the leaf set used.
@@ -842,8 +891,9 @@ fn qwen36_row(
             let codes: Vec<i8> = w.iter().map(|b| *b as i8).collect();
             // The per-row triples, under the `.a16` suffix: the bare name is the codes' (both are
             // asked for at byte offset zero when tile 0 is challenged, and an inventory can hold
-            // only one row at one `(name, layer, offset)`).
-            let p = params_named(&format!("{}.a16", node.weight_name), first, rows)?;
+            // only one row at one `(name, layer, offset)`). The three sink-seamed projections
+            // resolve through `.a16.sink0` at position 0, the family's own rule.
+            let p = params_named(&seam_suffixed(format!("{}.a16", node.weight_name)), first, rows)?;
             match op {
                 Qwen36Op::MatMulRequant => Ok(out(a16::a16_matmul_requant(&codes, &x, &p).map_err(shape16)?)),
                 Qwen36Op::MatMulRescale => Ok(out(a16::a16_matmul_rescale(&codes, &x, &p).map_err(shape16)?)),
@@ -903,7 +953,7 @@ fn qwen36_row(
         Qwen36Op::Requantize => {
             need(1)?;
             let x = lane_input(0)?;
-            let p = params(lane_param_base, x.len())?;
+            let p = stream_params(lane_param_base, x.len())?;
             Ok(out(a16::a16_requant(&x, &p).map_err(shape16)?))
         }
         Qwen36Op::RescaleRow => {
@@ -1151,8 +1201,15 @@ fn qwen36_row(
             if row_len == 0 {
                 return Err(PalwStepRefuteError::Unadjudicable);
             }
-            let p = params(0, 1)?[0];
-            let up = u8::try_from(p.zero.clamp(0, 62)).map_err(|_| PalwStepRefuteError::Unadjudicable)?;
+            // **One raw byte, not a triple** — the widening is registered as the byte the engine
+            // reads (`derived_a16_store` stores `vec![up]`; the hybrid's scalar is normalised to
+            // the same byte by its inventory). Reading a triple here requested nine bytes of a
+            // one-byte tensor and adjudicated every softmax `Unadjudicable`.
+            let b = weights.operand_bytes(node.weight_name.as_str(), layer, 0, 1).ok_or(PalwStepRefuteError::Unadjudicable)?;
+            if b.len() != 1 {
+                return Err(PalwStepRefuteError::Unadjudicable);
+            }
+            let up = b[0].min(62);
             Ok(out(a16::a16_softmax_rows(&as_i32(&inputs[0]), row_len, up).map_err(shape16)?))
         }
         Qwen36Op::AttnScores | Qwen36Op::AttnValues => {
@@ -1170,7 +1227,12 @@ fn qwen36_row(
             } else {
                 heads * d_head
             };
-            let p = params(0, count.max(1))?;
+            // **The registration is ONE triple, tiled** — `projection(d_head, 1)` in the store,
+            // `tile(lp.logits, …)` in the engine. A per-`(head, position)` request has no
+            // registered tensor to land on (the scores count is the JOB's), so it adjudicated
+            // every attention step `Unadjudicable`.
+            let one = params(0, 1)?[0];
+            let p = vec![one; count.max(1)];
             if op == Qwen36Op::AttnScores {
                 Ok(out(a16::a16_attn_scores(&row, &series, heads, kv_heads, d_head, &p).map_err(shape16)?))
             } else {
@@ -3209,6 +3271,22 @@ fn run_program(
         // channel range — and say so, exactly as the tile-local matmuls do.
         | KernelProgram::Qwen36(Qwen36Op::GdnStep)
         | KernelProgram::Qwen36(Qwen36Op::SsmConv) => (gather.0.tile_index as usize).saturating_mul(node.tile_len as usize),
+        // The LANE- and HEAD-sliced families likewise recompute only the slice the leaf set
+        // opened — `lane_input` extracts it before the kernel runs — and their slice start is
+        // the same derivation the leaf set used. Reporting 0 for them was invisible at tile 0
+        // (where the slice starts at 0) and mis-sliced every later tile: the comparer subtracted
+        // nothing, indexed past the recomputed slice, and read honest material as "recomputed row
+        // is shorter than the tile claims".
+        KernelProgram::Qwen36(_) => {
+            let out_w = match node.out_len {
+                crate::palw_step::PalwStepOutLenV1::Fixed { elements } => elements as u64,
+                crate::palw_step::PalwStepOutLenV1::KvScaled { .. } => 0,
+            };
+            qwen36_lane_slice_v1(node, out_w, gather.0.tile_index)
+                .or_else(|| qwen36_head_norm_slice_v1(node, out_w, gather.0.tile_index))
+                .map(|(start, _)| start as usize)
+                .unwrap_or(0)
+        }
         _ => 0,
     };
     let row = match program {

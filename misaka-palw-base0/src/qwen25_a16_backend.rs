@@ -730,6 +730,18 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         .map_err(|e| format!("{e:?}"))
     }
 
+    fn operand_openings_for(
+        &self,
+        refutation: &kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1,
+    ) -> Result<Vec<kaspa_consensus_core::palw_artifact::PalwArtifactOpeningV1>, String> {
+        let inventory = crate::inventory::a16_inventory_v1(&self.artifact, &self.profile).map_err(|e| format!("{e:?}"))?;
+        let recorder = kaspa_consensus_core::palw_artifact::PalwRecordingOracleV1::new(inventory.operands());
+        // The verdict is not ours to read here — this runs the adjudicator only to learn WHICH
+        // rows it resolves, and it resolves the same rows whichever way the step reads.
+        let _ = kaspa_consensus_core::palw_step_refute::check_execution_step_refutation_v1(refutation, &recorder);
+        recorder.openings().ok_or_else(|| "the inventory could not open a recorded row".to_string())
+    }
+
     fn execute_with_injected_fault(
         &self,
         job: &PalwJobContextV2,
@@ -950,6 +962,87 @@ mod free_prompt_tests {
             };
             assert!(error.contains("registered graph"), "the refusal names the gap: {error}");
             assert!(error.contains("requant"), "and the node it is missing: {error}");
+        }
+    }
+
+    /// **The A16 step space, end to end: every leaf of a captured attempt adjudicates, and a
+    /// tampered one convicts** — the theorem this family's court capability rests on.
+    ///
+    /// One captured run of the corrected class; then, for EVERY leaf of its step space, the
+    /// backend's own prover assembles the refutation, the backend's own inventory answers for the
+    /// operands through real Merkle openings against its root, and the court finds no fault. A
+    /// single leaf that reads `Unadjudicable` is a step nobody can police — the
+    /// coverage-clean-but-unprosecutable shape ADR-0049 exists to refuse — so the sweep is
+    /// exhaustive rather than sampled. The same prover then convicts a run with one tampered lane
+    /// at representative kernels, including a decode call (the tiled pin) and an anchored
+    /// attention step (the v2-map checkpoint geometry).
+    #[test]
+    fn every_a16_leaf_adjudicates_and_a_tampered_one_convicts() {
+        use kaspa_consensus_core::palw_step_refute::{PalwStepRefuteError, check_execution_step_refutation_v1};
+
+        let (artifact, profile) = class_from(map::integer_kv_state_chunk_map_id_v2(), true);
+        let backend = Qwen25A16Backend::new(artifact.clone(), NETWORK.to_vec(), profile.clone(), (4, 3));
+        assert!(backend.supports_court(), "the corrected class takes a court's turn");
+
+        let (job, prompt) = backend.job_for_anchor(Hash64::from_u64_word(0xA16C0117)).expect("the anchor implies a job");
+        let outcome = backend.execute(&job, &prompt).expect("the corrected class runs the attempt lane");
+        let (binding, _tiles, _logits, _generated, _chunks) =
+            crate::produce::base0_material_decode_v1(&outcome.material).expect("the captured material decodes");
+        assert_eq!(outcome.execution_root, binding.committed_execution_root, "the claim commits the binding's own root");
+
+        // The seat's half, against this very claim.
+        let claim = PalwClaimRootsV1 {
+            execution_root: outcome.execution_root,
+            trace_root: outcome.trace_root,
+            anchor: Hash64::from_u64_word(0xA16C0117),
+        };
+        assert_eq!(
+            backend.verify_material(&outcome.material, claim),
+            kaspa_consensus_core::palw_backend::PalwMaterialVerdictV1::Matches
+        );
+
+        // One proven oracle over the whole inventory — the production path a close takes.
+        let inventory = crate::inventory::a16_inventory_v1(&artifact, &profile).expect("the corrected class yields an inventory");
+        let openings: Vec<_> = (0..inventory.operands().len())
+            .map(|i| kaspa_consensus_core::palw_artifact::open_artifact_leaf_v1(inventory.operands(), i as u32).unwrap())
+            .collect();
+        let oracle = kaspa_consensus_core::palw_artifact::PalwProvenOperandsV1::from_openings_v1(&openings, inventory.root())
+            .expect("every inventory row proves against its own root");
+
+        // The sweep: every leaf of the step space clears the honest capture.
+        let mut anchored_seen = 0u32;
+        for index in 0..binding.step_leaf_count {
+            let refutation = backend
+                .refutation_for_index(&outcome.material, index)
+                .unwrap_or_else(|e| panic!("leaf {index} must open from an honest capture: {e}"));
+            anchored_seen += u32::from(refutation.kv_checkpoint.is_some());
+            let got = check_execution_step_refutation_v1(&refutation, &oracle);
+            let named = profile
+                .resolve_node_slot(refutation.output_preimage.coord.node_slot)
+                .map(|(n, l)| format!("{} (layer {l:?})", n.weight_name))
+                .unwrap_or_default();
+            assert!(
+                matches!(got, Err(PalwStepRefuteError::NoFaultFound)),
+                "an honest execution must clear itself at leaf {index} (coord {:?}, node {named}): got {got:?}",
+                refutation.output_preimage.coord
+            );
+        }
+        assert!(anchored_seen > 0, "the sweep exercised the checkpoint-anchored attention path (v2 map geometry)");
+
+        // The other direction: one tampered lane convicts, at kernels of different shapes —
+        // the embedding gather, a matmul tile, and a decode-call leaf (whose adjudication rides
+        // the tiled decode-token pin).
+        let coords = [0u64, binding.step_leaf_count / 3, binding.step_leaf_count - 1];
+        for &index in &coords {
+            let lying = backend.execute_with_injected_fault(&job, &prompt, index).expect("a tampered capture still commits");
+            let refutation = backend.refutation_for_index(&lying.material, index).expect("a tampered capture opens too");
+            let openings = backend.operand_openings_for(&refutation).expect("the prover opens what the court resolves");
+            let proven = kaspa_consensus_core::palw_artifact::PalwProvenOperandsV1::from_openings_v1(&openings, inventory.root())
+                .expect("recorded openings prove");
+            assert!(
+                check_execution_step_refutation_v1(&refutation, &proven).is_ok(),
+                "a tampered lane at leaf {index} must convict, not read as no fault"
+            );
         }
     }
 

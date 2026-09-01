@@ -211,6 +211,225 @@ pub fn base0_inventory_v1(
     PalwArtifactInventoryV1::new(rows).map_err(InventoryBuildError::NotCanonical)
 }
 
+/// **Every operand row an A16-tier execution can open, for one artifact under one registered
+/// profile** — the model tier's answer to [`base0_inventory_v1`], and the other half of the
+/// court-side parameter conventions `palw_step_refute`'s A16 arms encode.
+///
+/// The layout normalises the artifact's parameter store to the shapes the arms request:
+///
+/// * a matmul's codes tile at the NODE's own `tile_len` (the per-node budget, not one global
+///   number), and its per-channel triples ride the `.a16` suffix at the same tiling — with the
+///   `.sink0` variants carried verbatim where the store registers them;
+/// * a `Fixed`-width narrowing's triples are served per lane. A site whose store registers ONE
+///   triple is EXPANDED — the engine tiles that triple across the row, so the expansion commits
+///   exactly the parameters the execution applied, and the court's one per-lane rule serves
+///   every site;
+/// * a `KvScaled` narrowing (the probs), the scores and the values keep their single registered
+///   triple at offset zero — their lane counts are the job's, so no fixed table can exist;
+/// * the softmax widening is its registered single byte; the rotation is one row per position,
+///   `cos` then `sin`, exactly the floor's layout.
+///
+/// The root over these rows is what a court-capable A16 registration pins as `artifact_root`:
+/// a flat digest can answer "are these the same bytes" but nothing can be OPENED against it,
+/// and a close needs openings.
+pub fn a16_inventory_v1(
+    artifact: &Base0ArtifactV1,
+    profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+) -> Result<PalwArtifactInventoryV1, InventoryBuildError> {
+    use kaspa_consensus_core::palw_base0_a16::A16QuantParams;
+    use kaspa_consensus_core::palw_step::PalwStepOutLenV1;
+    use kaspa_consensus_core::palw_step_refute as kd;
+    use kaspa_consensus_core::palw_step::kernel_semantics_id_v1 as kid;
+
+    let store = artifact.a16_params.as_ref().ok_or(InventoryBuildError::Operand(OperandError::UnknownTensor { name: "the artifact carries no A16 parameter store".to_string() }))?;
+    let w = A16QuantParams::WIRE_BYTES;
+
+    let store_row = |name: &str, layer: Option<u16>| -> Option<&[u8]> {
+        let key = match layer {
+            Some(l) => name.replace("{layer}", &l.to_string()),
+            None => name.to_string(),
+        };
+        store.iter().find(|(n, _)| *n == key).map(|(_, b)| b.as_slice())
+    };
+    let missing = |name: &str| InventoryBuildError::Operand(OperandError::UnknownTensor { name: name.to_string() });
+
+    let mut rows: Vec<PalwArtifactOperandV1> = Vec::new();
+    let mut seen: std::collections::BTreeSet<(String, Option<u16>, u32)> = std::collections::BTreeSet::new();
+    let mut push = |rows: &mut Vec<PalwArtifactOperandV1>,
+                    seen: &mut std::collections::BTreeSet<(String, Option<u16>, u32)>,
+                    name: &str,
+                    layer: Option<u16>,
+                    start: u32,
+                    bytes: Vec<u8>| {
+        if seen.insert((name.to_string(), layer, start)) {
+            rows.push(PalwArtifactOperandV1 { tensor_name: name.to_string(), layer, row_start: start, bytes });
+        }
+    };
+
+    // A per-lane triple table for a `Fixed`-width site: the store's own table where it holds one,
+    // the single triple expanded across the width where it holds one triple — the engine's own
+    // tiling, committed.
+    let lane_table = |bytes: &[u8], width: usize, name: &str| -> Result<Vec<u8>, InventoryBuildError> {
+        if bytes.len() == width * w {
+            Ok(bytes.to_vec())
+        } else if bytes.len() == w {
+            Ok(bytes.iter().copied().cycle().take(width * w).collect())
+        } else {
+            Err(missing(&format!("{name}: {} bytes serve neither one triple nor {width}", bytes.len())))
+        }
+    };
+    // Emit a per-lane table chunked at the node's tile — the offsets the arm's
+    // `(lane_base × wire, lanes × wire)` requests land on.
+    let push_tiled = |rows: &mut Vec<PalwArtifactOperandV1>,
+                      seen: &mut std::collections::BTreeSet<(String, Option<u16>, u32)>,
+                      name: &str,
+                      layer: Option<u16>,
+                      table: &[u8],
+                      unit: usize,
+                      tile_len: usize| {
+        let stride = tile_len.max(1) * unit;
+        let mut offset = 0usize;
+        while offset < table.len() {
+            let end = (offset + stride).min(table.len());
+            push(rows, seen, name, layer, offset as u32, table[offset..end].to_vec());
+            offset = end;
+        }
+    };
+
+    let matmul_codes = |name: &str, layer: Option<u16>| -> Result<&[i8], InventoryBuildError> {
+        let suffix = name.strip_prefix("blk.{layer}.").unwrap_or(name);
+        let l = layer.map(|l| l as usize).unwrap_or(0);
+        let layer_of = |f: fn(&crate::artifact::Base0LayerWeightsV1) -> &Vec<i8>| -> Result<&[i8], InventoryBuildError> {
+            artifact.layers.get(l).map(|lw| f(lw).as_slice()).ok_or_else(|| missing(name))
+        };
+        match suffix {
+            "attn_q.weight" => layer_of(|lw| &lw.wq),
+            "attn_k.weight" => layer_of(|lw| &lw.wk),
+            "attn_v.weight" => layer_of(|lw| &lw.wv),
+            "attn_output.weight" => layer_of(|lw| &lw.wo),
+            "ffn_gate.weight" => layer_of(|lw| &lw.w_gate),
+            "ffn_up.weight" => layer_of(|lw| &lw.w_up),
+            "ffn_down.weight" => layer_of(|lw| &lw.w_down),
+            // Both head spellings serve the engine's unembedding — the v2 class names the head
+            // view so the gather's rows and these tiles stop sharing a name.
+            "output.weight" | "token_embd.weight" => Ok(&artifact.unembed),
+            _ => Err(missing(name)),
+        }
+    };
+
+    let k_embed = kid(kd::KDESC_A16_EMBED);
+    let k_mm = kid(kd::KDESC_A16_MATMUL_REQUANT);
+    let k_rs = kid(kd::KDESC_A16_MATMUL_RESCALE);
+    let k_req = kid(kd::KDESC_A16_REQUANTIZE);
+    let k_scores = kid(kd::KDESC_A16_ATTN_SCORES);
+    let k_values = kid(kd::KDESC_A16_ATTN_VALUES);
+    let k_soft = kid(kd::KDESC_A16_SOFTMAX);
+    let k_rope = kid(kd::KDESC_A16_ROPE);
+    let k_none = [kid(kd::KDESC_A16_RMS_NORM), kid(kd::KDESC_A16_ADD_ELEM), kid(kd::KDESC_A16_MUL_ELEM), kid(kd::KDESC_Q36_SILU)];
+
+    for slot in 0..profile.global_node_count() {
+        let Some((node, layer)) = profile.resolve_node_slot(slot) else { continue };
+        let name = node.weight_name.as_str();
+        let kidv = node.kernel_semantics_id;
+        let fixed = match node.out_len {
+            PalwStepOutLenV1::Fixed { elements } => Some(elements as usize),
+            PalwStepOutLenV1::KvScaled { .. } => None,
+        };
+        if kidv == k_embed {
+            let width = fixed.ok_or_else(|| missing(name))?;
+            for token in 0..artifact.embed.len() / width.max(1) {
+                push(
+                    &mut rows,
+                    &mut seen,
+                    name,
+                    layer,
+                    (token * width) as u32,
+                    artifact.embed[token * width..(token + 1) * width].iter().map(|v| *v as u8).collect(),
+                );
+            }
+        } else if kidv == k_mm || kidv == k_rs {
+            let out_dim = fixed.ok_or_else(|| missing(name))?;
+            let codes = matmul_codes(name, layer)?;
+            if out_dim == 0 || !codes.len().is_multiple_of(out_dim) {
+                return Err(missing(&format!("{name}: {} code bytes over {out_dim} rows", codes.len())));
+            }
+            let in_dim = codes.len() / out_dim;
+            let tile = node.tile_len as usize;
+            for (t, chunk) in codes.chunks(tile.max(1) * in_dim).enumerate() {
+                push(&mut rows, &mut seen, name, layer, (t * tile * in_dim) as u32, chunk.iter().map(|v| *v as u8).collect());
+            }
+            for variant in ["", ".sink0"] {
+                let triple_name = format!("{name}.a16{variant}");
+                // The head's triples live in the store under the TIED spelling — the engine loads
+                // `logits_out` from `token_embd.weight.a16` — while the v2 class addresses the
+                // head view by its own name. The inventory is the canonical layout, so it aliases:
+                // the bytes are the store's, the coordinate is the class's.
+                let store_key =
+                    if name == "output.weight" { format!("token_embd.weight.a16{variant}") } else { triple_name.clone() };
+                match store_row(&store_key, layer) {
+                    Some(bytes) => {
+                        let table = lane_table(bytes, out_dim, &triple_name)?;
+                        push_tiled(&mut rows, &mut seen, &triple_name, layer, &table, w, tile);
+                    }
+                    None if variant == ".sink0" => {} // a site without the sink convention
+                    None => return Err(missing(&triple_name)),
+                }
+            }
+        } else if kidv == k_req {
+            match fixed {
+                Some(width) => {
+                    for variant in ["", ".sink0"] {
+                        let triple_name = if variant.is_empty() { name.to_string() } else { format!("{name}{variant}") };
+                        match store_row(&triple_name, layer) {
+                            Some(bytes) => {
+                                let table = lane_table(bytes, width, &triple_name)?;
+                                push_tiled(&mut rows, &mut seen, &triple_name, layer, &table, w, node.tile_len as usize);
+                            }
+                            None if variant == ".sink0" => {}
+                            None => return Err(missing(&triple_name)),
+                        }
+                    }
+                }
+                // The probs: one registered triple, tiled by the kernel at the job's width.
+                None => {
+                    let bytes = store_row(name, layer).ok_or_else(|| missing(name))?;
+                    if bytes.len() != w {
+                        return Err(missing(&format!("{name}: a job-scaled site registers exactly one triple")));
+                    }
+                    push(&mut rows, &mut seen, name, layer, 0, bytes.to_vec());
+                }
+            }
+        } else if kidv == k_scores || kidv == k_values {
+            let bytes = store_row(name, layer).ok_or_else(|| missing(name))?;
+            if bytes.len() != w {
+                return Err(missing(&format!("{name}: the attention sites register exactly one triple")));
+            }
+            push(&mut rows, &mut seen, name, layer, 0, bytes.to_vec());
+        } else if kidv == k_soft {
+            let bytes = store_row(name, layer).ok_or_else(|| missing(name))?;
+            if bytes.len() != 1 {
+                return Err(missing(&format!("{name}: the softmax widening is one registered byte")));
+            }
+            push(&mut rows, &mut seen, name, layer, 0, bytes.to_vec());
+        } else if kidv == k_rope {
+            let mut offset = 0u32;
+            for position in 0..artifact.shape.max_position {
+                let bytes = rope_row_bytes(&artifact.rope, artifact.shape.d_head, position);
+                let len = bytes.len() as u32;
+                push(&mut rows, &mut seen, name, layer, offset, bytes);
+                offset += len;
+            }
+        } else if k_none.contains(&kidv) {
+            // Parameterless: nothing to open, nothing to emit.
+        } else {
+            return Err(missing(&format!("{name}: kernel this inventory does not lay out")));
+        }
+    }
+
+    rows.sort_by(|a, b| (a.tensor_name.as_str(), a.layer, a.row_start).cmp(&(b.tensor_name.as_str(), b.layer, b.row_start)));
+    PalwArtifactInventoryV1::new(rows).map_err(InventoryBuildError::NotCanonical)
+}
+
 #[cfg(test)]
 mod tests {
 
