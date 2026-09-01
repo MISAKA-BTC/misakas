@@ -1,5 +1,6 @@
 use crate::{
-    consensus::test_consensus::TestConsensus, model::services::reachability::ReachabilityService,
+    consensus::test_consensus::TestConsensus,
+    model::{services::reachability::ReachabilityService, stores::headers::HeaderStoreReader},
     pipeline::virtual_processor::ContributionWeight,
 };
 use kaspa_consensus_core::BlockHash;
@@ -607,6 +608,102 @@ async fn palw_attempt_blocks_weigh_the_constant_under_the_fence() {
         constant,
         "without the fence the old pricing stands — the constant only enters by activation"
     );
+}
+
+/// **The Phase 1 drill (ADR-0068 / ADR-0064): the heartbeat clock sweeps a stopped chain back
+/// to life, unattended.** This is the block-600 wedge — the exposure deadlock ADR-0060 §1 names
+/// first — re-run WITH the clock, as the regression it should have been from the start:
+///
+/// 1. The only bond fills its exposure ceiling: four claims open, the fifth block exists in the
+///    DAG but cannot become the sink. Releasing a claim requires DAA to advance; before the
+///    lane, only this bond could advance it. Held forever, by arithmetic.
+/// 2. The heartbeat lane ticks — one block an hour behind a producing chain, the full cadence
+///    behind itself — and every tick advances the DAA the timeout sweep runs on. No bond, no
+///    claim, no operator.
+/// 3. The sweep voids the stuck claims on the clock's time, exposure releases, and the SAME
+///    bonded producer's next block becomes the sink again. Nobody restarted anything.
+#[tokio::test]
+async fn the_heartbeat_clock_sweeps_a_stopped_chain_back_to_life() {
+    use kaspa_consensus_core::palw_heartbeat_v1 as hb;
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    kaspa_core::log::try_init_logger("info");
+    let catalog = palw_v2_test_catalog();
+    let bundle = palw_v2_test_bundle_at_min_collateral(&catalog);
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.blockrate.target_time_per_block = kaspa_consensus_core::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            // The whole Phase 1 configuration: the clock, its width bound, and the attempt-work
+            // constant — armed together, the way a deployment would.
+            p.palw_heartbeat = Some(kaspa_consensus_core::config::params::PalwHeartbeatV1 {
+                activation: kaspa_consensus_core::config::params::ForkActivation::always(),
+                work_log2: kaspa_consensus_core::pow_layer0::PALW_HEARTBEAT_WORK_LOG2,
+                max_per_mergeset: kaspa_consensus_core::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET,
+            });
+            p.palw_attempt_work = Some(kaspa_consensus_core::config::params::PalwAttemptWorkV1 {
+                activation: kaspa_consensus_core::config::params::ForkActivation::always(),
+                work_log2: kaspa_consensus_core::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2,
+            });
+        })
+        .build();
+    config.params.validate_palw_v2().expect("the Phase 1 configuration is a runnable ruleset");
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+
+    // 1) Fill the ceiling: four claims fit, the fifth block cannot become the sink. This is the
+    //    wedge — the one party that could advance the clock is the one party that is stuck.
+    for _ in 0..4 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+    {
+        let store = ctx.consensus.virtual_processor().palw_state_v2_store.read();
+        let (_, state) = store.load_tip(&bundle.state).unwrap().unwrap();
+        assert_eq!(state.claims_iter().count(), 4, "four claims open — the bond is at its ceiling");
+    }
+    let wedged_sink = ctx.consensus.get_sink();
+    ctx.build_block_template_row(0..1).validate_and_insert_row().await;
+    assert_eq!(ctx.consensus.get_sink(), wedged_sink, "the fifth claim exceeds the ceiling: the chain is wedged");
+
+    // 2) The clock, and nothing else. First tick an hour out (the chain was producing a block
+    //    ago), then the recovery cadence — each tick one DAA unit, sweeping the lifecycle
+    //    windows a stuck bond never could. Claims void along the way; the loop watches for the
+    //    release rather than assuming the horizon, and the ceiling on iterations IS the
+    //    documented sweep horizon plus rebind slack.
+    let mut released_at = None;
+    for tick in 0u64..9_000 {
+        let sink_ts = {
+            let h = ctx.consensus.headers_store.get_header(ctx.consensus.get_sink()).unwrap();
+            h.timestamp
+        };
+        let interval = if tick == 0 { hb::HEARTBEAT_NOMINAL_INTERVAL_MS } else { hb::HEARTBEAT_RECOVERY_INTERVAL_MS };
+        ctx.simulated_time = ctx.simulated_time.max(sink_ts) + interval;
+        let template = ctx.build_block_template(1_000 + tick, ctx.simulated_time);
+        let (hb_template, _) =
+            ctx.consensus.virtual_processor().heartbeat_adapt_block_template(template).expect("the lane adapts");
+        ctx.validate_and_insert_block(hb_template.block.clone().to_immutable()).await;
+        if tick % 100 == 99 {
+            let store = ctx.consensus.virtual_processor().palw_state_v2_store.read();
+            let (_, state) = store.load_tip(&bundle.state).unwrap().unwrap();
+            if state.claims_iter().count() == 0 {
+                released_at = Some(tick + 1);
+                break;
+            }
+        }
+    }
+    let ticks = released_at.expect("the sweep must void every stuck claim within the lifecycle horizon — that is the doctrine");
+
+    // 3) Unattended recovery: the SAME bond's next block binds a fresh claim and becomes the
+    //    sink. Nothing was restarted, re-registered or forced — the clock did all of it.
+    ctx.simulated_time += 120_000;
+    let sink_before = ctx.consensus.get_sink();
+    ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    assert_ne!(ctx.consensus.get_sink(), sink_before, "with exposure released the bonded lane re-enters by itself");
+    {
+        let store = ctx.consensus.virtual_processor().palw_state_v2_store.read();
+        let (_, state) = store.load_tip(&bundle.state).unwrap().unwrap();
+        assert_eq!(state.claims_iter().count(), 1, "one fresh claim — the ceiling has room again");
+    }
+    kaspa_core::info!("heartbeat sweep released the wedge after {ticks} clock ticks");
 }
 
 /// **F3a, closed (ADR-0068 Phase 1): a mergeset holds at most `PALW_HEARTBEAT_MAX_PER_MERGESET`
