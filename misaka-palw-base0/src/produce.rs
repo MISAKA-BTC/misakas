@@ -1471,11 +1471,15 @@ mod tests {
         let run = base0_execute_for_attempt_v1(&artifact, &profile, &ctx, &prompt).expect("the job runs");
 
         let covered = 1u32;
+        // The CHAIN's identity inputs: the claim id the session was opened for, and the claim's
+        // announced trace root — the two values `court_session_id_v2` reads.
+        let claim_id = Hash64::from_u64_word(0xC7A1);
         let ladder = crate::legs::base0_anchored_ladder_v1(
             &profile,
             &ctx,
             &run.checkpoints,
             &run.binding,
+            &claim_id,
             covered,
             &Hash64::from_u64_word(0xC1),
             &Hash64::from_u64_word(0xE2),
@@ -1500,11 +1504,14 @@ mod tests {
             "the leaf before the anchor is NOT covered — the anchor is too high and skips execution"
         );
 
-        // Same session as the unanchored form: a court derives the id from the claim, and a ladder
-        // whose id moved is a ladder no court accepts.
+        // Same session as the ladder the V2 TRANSITION opens — `open(claim_id, claim.trace_root,
+        // …)`, the claim's announced trace root being the binding's logits trace root. A court
+        // derives the id from the claim, and a ladder whose id moved is a ladder no court accepts;
+        // comparing against a plain ladder built from the binding's internals (as this test once
+        // did) only proved the two wrong derivations agreed with each other.
         let plain = kaspa_consensus_core::palw_bisect::PalwBisectLadderV1::open(
-            &ctx.context_hash(),
-            &run.binding.committed_execution_root,
+            &claim_id,
+            &run.binding.full_logits_trace_root,
             &Hash64::from_u64_word(0xC1),
             &Hash64::from_u64_word(0xE2),
             kaspa_consensus_core::palw_bisect::PalwBisectSpaceV1::StepLeaves,

@@ -624,17 +624,43 @@ pub fn base0_binding_from_capture_v1(
     full_logits_trace_root: Hash64,
     activation_leg_root: Hash64,
 ) -> Result<kaspa_consensus_core::palw_step_leg::PalwStepBindingV2, LegError> {
-    use kaspa_consensus_core::palw_step_leg::{
-        PALW_STEP_LEG_OBJECT_VERSION_V1, PalwStepBindingV2, checkpoint_empty_root_v2, execution_commitment_root_v2,
-    };
-    let context_hash = ctx.context_hash();
-    let profile_hash = profile.shape_profile_id();
     // The family's registered layout, at this producer's interval. Both were `Hash64::default()`
     // — the unregistered sentinel — which was the only honest value while no map existed; filing
     // it now would file a layout the class does not register, and `verify_binding` refuses that.
     let checkpoint_profile = kaspa_consensus_core::palw_state_chunk_map::integer_kv_checkpoint_profile_v1(
         kaspa_consensus_core::palw_state_chunk_map::PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1,
     );
+    base0_binding_from_capture_with_profile_v1(
+        profile,
+        ctx,
+        tiles,
+        checkpoints,
+        &checkpoint_profile,
+        full_logits_trace_root,
+        activation_leg_root,
+    )
+}
+
+/// The same commitment at a CALLER-supplied checkpoint cadence. The interval is the one free
+/// parameter of a checkpoint profile (`palw_step_leg`'s shape pass recomputes
+/// `decode_calls / interval` from whatever the binding files), and a class with no registered
+/// state map files an interval its jobs can never reach — `n_ctx` is canonical for that: every
+/// legal job's decode-call count is below its own context, so the leg is the empty one and the
+/// sentinel map id is never asked to chunk anything.
+pub fn base0_binding_from_capture_with_profile_v1(
+    profile: &PalwShapeProfileV3,
+    ctx: &PalwJobContextV2,
+    tiles: &Base0StepTilesV1,
+    checkpoints: &Base0CheckpointsV1,
+    checkpoint_profile: &kaspa_consensus_core::palw_legs::PalwCheckpointProfileV1,
+    full_logits_trace_root: Hash64,
+    activation_leg_root: Hash64,
+) -> Result<kaspa_consensus_core::palw_step_leg::PalwStepBindingV2, LegError> {
+    use kaspa_consensus_core::palw_step_leg::{
+        PALW_STEP_LEG_OBJECT_VERSION_V1, PalwStepBindingV2, checkpoint_empty_root_v2, execution_commitment_root_v2,
+    };
+    let context_hash = ctx.context_hash();
+    let profile_hash = profile.shape_profile_id();
     let step_leaf_count = tiles.leaves.len() as u64;
     let step_merkle_root = step_merkle_root_v1(&tiles.leaves).map_err(|_| LegError::EmptySpace)?;
     // **From the profile, not from the family constant.** A producer files what ITS class
@@ -674,7 +700,7 @@ pub fn base0_binding_from_capture_v1(
         version: PALW_STEP_LEG_OBJECT_VERSION_V1,
         job_context: ctx.clone(),
         shape_profile: profile.clone(),
-        checkpoint_profile,
+        checkpoint_profile: checkpoint_profile.clone(),
         state_chunk_map_id,
         full_logits_trace_root,
         activation_leg_root,
@@ -735,11 +761,19 @@ pub fn base0_kv_anchor_for_call_v1(
 ///
 /// `None` when the leg has no checkpoint at `covered`, or when the remaining interval is too small
 /// to bisect — both of which are answers, not faults.
+///
+/// **Seeded with the CHAIN's identity inputs, not the binding's internals.** The V2 transition
+/// opens every ladder as `open(claim_id, claim.trace_root, …)` and refuses a ladder whose derived
+/// id is not the session's (`court_session_id_v2` reads the claim), so a producer-side ladder
+/// seeded from `(context_hash, committed_execution_root)` derived a session id NO court would ever
+/// carry — the anchored open was unreachable from any real dispute, and the test beside it only
+/// compared against a plain ladder built the same wrong way.
 pub fn base0_anchored_ladder_v1(
     profile: &PalwShapeProfileV3,
     ctx: &PalwJobContextV2,
     checkpoints: &Base0CheckpointsV1,
     binding: &kaspa_consensus_core::palw_step_leg::PalwStepBindingV2,
+    claim_id: &Hash64,
     covered_decode_call: u32,
     challenger_id: &Hash64,
     responder_id: &Hash64,
@@ -757,8 +791,8 @@ pub fn base0_anchored_ladder_v1(
             .is_some_and(|c| c.call_index > covered_decode_call)
     })?;
     PalwBisectLadderV1::open_anchored(
-        &ctx.context_hash(),
-        &binding.committed_execution_root,
+        claim_id,
+        &binding.full_logits_trace_root,
         challenger_id,
         responder_id,
         PalwBisectSpaceV1::StepLeaves,

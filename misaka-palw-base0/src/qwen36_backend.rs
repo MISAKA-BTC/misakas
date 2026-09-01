@@ -132,6 +132,10 @@ pub struct Qwen36Backend {
     /// `None` is the compiled engine, kept for the rows this build's own ledger names (and as the
     /// interpreter's reference vectors, per the differentials beside the plan).
     plan: Option<crate::qwen36_plan::Qwen36ProfilePlanV1>,
+    /// The registered graph itself, kept beside the plan it compiled to: the capture places rows
+    /// at the PROFILE's coordinates and the binding carries it whole, so a backend that dropped
+    /// it after planning could execute but never commit a step space.
+    profile: Option<kaspa_consensus_core::palw_step::PalwShapeProfileV3>,
 }
 
 impl Qwen36Backend {
@@ -143,7 +147,7 @@ impl Qwen36Backend {
         network_id: Vec<u8>,
     ) -> Self {
         let shape_id = qwen36_shape_id_v1(&artifact.shape);
-        Self { artifact, model_id: model_id.into(), canonical_job, shape_id, class_profile_id, network_id, plan: None }
+        Self { artifact, model_id: model_id.into(), canonical_job, shape_id, class_profile_id, network_id, plan: None, profile: None }
     }
 
     /// **ADR-0067 Decision 2's constructor for the mmap container: a backend for a class this
@@ -170,6 +174,7 @@ impl Qwen36Backend {
             class_profile_id,
             network_id,
             plan: Some(plan),
+            profile: Some(profile),
         })
     }
 
@@ -226,6 +231,152 @@ impl Qwen36Backend {
 pub struct Qwen36RunV1 {
     pub logits_rows: Vec<Vec<i32>>,
     pub generated: Vec<u32>,
+}
+
+/// **One planned pass's rows, in the step space's own coordinates.** The trace records one row per
+/// declared node per table; the capture places them by `(table kind, absolute layer, index)`, and
+/// the layer's KIND comes from the profile — a GDN row filed as `Attn` is a row about a different
+/// graph, and `push_call` refuses it.
+pub fn qwen36_captured_rows_v1(
+    profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+    trace: &crate::qwen36_plan::Qwen36PlanTraceV1,
+) -> Vec<crate::legs::Base0CapturedRowV1> {
+    use kaspa_consensus_core::palw_step::{PalwLayerKindV1, PalwStepTableV1};
+    let mut rows =
+        Vec::with_capacity(trace.pre.len() + trace.post.len() + trace.layers.iter().map(Vec::len).sum::<usize>());
+    for (index, row) in trace.pre.iter().enumerate() {
+        rows.push(crate::legs::Base0CapturedRowV1 { table: PalwStepTableV1::Pre, layer: 0, index, row: row.clone() });
+    }
+    for (layer, nodes) in trace.layers.iter().enumerate() {
+        let table = match profile.layer_kind(layer as u16) {
+            PalwLayerKindV1::GatedDeltaNet => PalwStepTableV1::Gdn,
+            PalwLayerKindV1::Attention => PalwStepTableV1::Attn,
+        };
+        for (index, row) in nodes.iter().enumerate() {
+            rows.push(crate::legs::Base0CapturedRowV1 { table, layer: layer as u16, index, row: row.clone() });
+        }
+    }
+    for (index, row) in trace.post.iter().enumerate() {
+        rows.push(crate::legs::Base0CapturedRowV1 { table: PalwStepTableV1::Post, layer: 0, index, row: row.clone() });
+    }
+    rows
+}
+
+/// **The hybrid's checkpoint cadence: none, canonically.** The class registers no state chunk map
+/// (`state_chunk_map_id` is the sentinel — the recurrence is genesis-anchored by declaration), so
+/// no checkpoint can ever be CAPTURED; what makes zero also the canonical COUNT is the interval:
+/// at `n_ctx`, every legal job's decode-call count sits below it, `decode_calls / interval` is
+/// zero, and the leg is the empty one whose sentinel pairing the shape pass checks. A registered
+/// map later replaces this constant with the real cadence — and moves the class id with it.
+pub fn qwen36_checkpoint_profile_v1(
+    profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+) -> kaspa_consensus_core::palw_legs::PalwCheckpointProfileV1 {
+    kaspa_consensus_core::palw_state_chunk_map::integer_kv_checkpoint_profile_v1(profile.n_ctx.max(1))
+}
+
+/// **The hybrid tier's captured attempt** — the same object the floor's and the dense tier's
+/// captured runs return, because it answers the same three verbs. What differs is the walk (the
+/// planned interpreter, one committed row per declared node) and the checkpoint leg (empty by
+/// construction — see [`qwen36_checkpoint_profile_v1`]).
+pub fn qwen36_execute_for_attempt_v1(
+    artifact: &Qwen36ArtifactV1,
+    profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+    plan: &crate::qwen36_plan::Qwen36ProfilePlanV1,
+    ctx: &PalwJobContextV2,
+    prompt: &[usize],
+) -> Result<crate::produce::Base0ExecutionV1, String> {
+    let prefill = ctx.declared_prefill_tokens as usize;
+    let decode_tokens = ctx.exact_decode_tokens as usize;
+    if prefill == 0 || decode_tokens == 0 {
+        return Err("an empty job is not a job".to_string());
+    }
+    if prompt.len() < prefill {
+        return Err(format!("the job declares {prefill} prefill tokens and {} were supplied", prompt.len()));
+    }
+    let vocab = artifact.shape.vocab;
+    if let Some(bad) = prompt.iter().take(prefill).find(|t| **t >= vocab) {
+        return Err(format!("token {bad} is outside this class's vocabulary of {vocab}"));
+    }
+
+    let engine = Qwen36Engine::new(artifact);
+    let leaf_count = kaspa_consensus_core::palw_step::step_leaf_count(profile, ctx).map_err(|e| format!("{e:?}"))?;
+    let mut capture = crate::legs::Base0StepCaptureV1::new(leaf_count).map_err(|e| format!("{e:?}"))?;
+    let checkpoint_profile = qwen36_checkpoint_profile_v1(profile);
+    let checkpoints = crate::legs::Base0CheckpointCaptureV1::new(ctx, profile, &checkpoint_profile);
+    let mut cache = Qwen36Cache::new(&artifact.shape);
+
+    let mut logits_rows: Vec<Vec<i32>> = Vec::with_capacity(decode_tokens);
+    let mut generated: Vec<u32> = Vec::with_capacity(decode_tokens);
+
+    // Call 0 — prefill. Post rows exist only at its LAST position; earlier rows predict tokens
+    // the prompt already contains, and the step space has no coordinate for them.
+    let mut last_logits = Vec::new();
+    for (position, token) in prompt.iter().take(prefill).enumerate() {
+        let (logits, trace) =
+            engine.forward_token_planned(plan, &mut cache, *token, position).map_err(|e| format!("prefill at {position}: {e}"))?;
+        let mut rows = qwen36_captured_rows_v1(profile, &trace);
+        if position + 1 != prefill {
+            rows.retain(|r| r.table != kaspa_consensus_core::palw_step::PalwStepTableV1::Post);
+        }
+        capture.push_call(profile, ctx, 0, position as u32, &rows).map_err(|e| format!("{e:?}"))?;
+        last_logits = logits;
+    }
+    let mut next = kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(&last_logits) as u32;
+    generated.push(next);
+    logits_rows.push(last_logits);
+
+    for call in 1..decode_tokens {
+        let cache_position = prefill + call - 1;
+        if cache_position >= artifact.shape.max_position {
+            return Err(format!("the job runs past the rotary table at position {cache_position}"));
+        }
+        let (logits, trace) = engine
+            .forward_token_planned(plan, &mut cache, next as usize, cache_position)
+            .map_err(|e| format!("decode at {cache_position}: {e}"))?;
+        let rows = qwen36_captured_rows_v1(profile, &trace);
+        capture.push_call(profile, ctx, call as u32, 0, &rows).map_err(|e| format!("{e:?}"))?;
+        next = kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(&logits) as u32;
+        generated.push(next);
+        logits_rows.push(logits);
+    }
+
+    let decode_calls = ctx.exact_decode_tokens.saturating_sub(1);
+    let checkpoints = checkpoints.finish(decode_calls / checkpoint_profile.checkpoint_interval).map_err(|e| format!("{e:?}"))?;
+    let tiles = capture.finish().map_err(|e| format!("{e:?}"))?;
+
+    // The retained rows ARE the selecting rows — row `r` is the one `generated[r]` was chosen
+    // from — and the tiled root commits them directly.
+    let trace_root = kaspa_consensus_core::palw_step_refute::tiled_logits_trace_root_v1(ctx, &logits_rows, &generated);
+    let activation_leg_root = crate::produce::base0_activation_leg_root_v1(ctx);
+    let binding = crate::legs::base0_binding_from_capture_with_profile_v1(
+        profile,
+        ctx,
+        &tiles,
+        &checkpoints,
+        &checkpoint_profile,
+        trace_root,
+        activation_leg_root,
+    )
+    .map_err(|e| format!("{e:?}"))?;
+
+    let context = ctx.context_hash();
+    let rendered =
+        keyed(QWEN36_DOMAIN_EXECUTION, &[b"rendered", &generated.iter().flat_map(|t| t.to_le_bytes()).collect::<Vec<_>>()]);
+    let output_root = output_commitment_v2(&context, &generated, &rendered);
+    let trace_manifest_root = keyed(QWEN36_DOMAIN_MANIFEST, &[context.as_byte_slice(), trace_root.as_byte_slice(), &1u64.to_le_bytes()]);
+
+    Ok(crate::produce::Base0ExecutionV1 {
+        trace_root,
+        output_root,
+        execution_root: binding.committed_execution_root,
+        trace_manifest_root,
+        trace_chunk_count: 1,
+        binding,
+        tiles,
+        checkpoints,
+        logits_rows,
+        generated_token_ids: generated,
+    })
 }
 
 /// The four roots, from a run.
@@ -362,6 +513,24 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
     }
 
     fn execute(&self, job: &PalwJobContextV2, prompt: &[usize]) -> Result<PalwExecutionOutcomeV1, String> {
+        // **The captured attempt, where the declaration is the program.** A plan proves this
+        // build serves the registered graph node for node, and the planned traced walk is what a
+        // capture is placed from — so court capability rides exactly the constructor that proves
+        // servability. The ledger-compiled path keeps the legacy composite: an engine whose op
+        // order is this build's hardcode cannot commit a step space the COURT's coordinates
+        // describe unless the two provably correspond, and the plan is that proof.
+        if let (Some(plan), Some(profile)) = (&self.plan, &self.profile) {
+            let run = qwen36_execute_for_attempt_v1(&self.artifact, profile, plan, job, prompt)?;
+            let material = crate::produce::base0_material_encode_v1(&run).map_err(|e| e.to_string())?;
+            return Ok(PalwExecutionOutcomeV1 {
+                trace_root: run.trace_root,
+                output_root: run.output_root,
+                execution_root: run.execution_root,
+                trace_manifest_root: run.trace_manifest_root,
+                trace_chunk_count: run.trace_chunk_count,
+                material,
+            });
+        }
         let run = self.run(job, prompt)?;
         let (trace_root, output_root, execution_root, trace_manifest_root) = qwen36_roots_v1(job, self.shape_id, &run);
         Ok(PalwExecutionOutcomeV1 {
@@ -375,6 +544,22 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
     }
 
     fn verify_material(&self, material: &[u8], claim: PalwClaimRootsV1) -> PalwMaterialVerdictV1 {
+        // The family codec first — a captured attempt's material carries its binding, and the
+        // seat check rebuilds the legs from it. The legacy rows-and-ids decode stays for the
+        // ledger-compiled path's claims.
+        if let Ok(decoded) = crate::produce::base0_material_decode_v1(material) {
+            if claim.anchor != Hash64::default() && decoded.0.job_context.job_id != claim.anchor {
+                return PalwMaterialVerdictV1::Mismatch;
+            }
+            if decoded.0.shape_profile.shape_profile_id() != self.class_profile_id {
+                return PalwMaterialVerdictV1::Unverifiable;
+            }
+            return match crate::produce::base0_material_matches_claim_v1(&decoded, claim.execution_root, claim.trace_root) {
+                Ok(true) => PalwMaterialVerdictV1::Matches,
+                Ok(false) => PalwMaterialVerdictV1::Mismatch,
+                Err(_) => PalwMaterialVerdictV1::Unverifiable,
+            };
+        }
         let Some(run) = qwen36_material_decode_v1(material) else {
             return PalwMaterialVerdictV1::Unverifiable;
         };
