@@ -3506,7 +3506,32 @@ pub const PALW_RC_GENESIS_QWEN25_A16_SHARE_PERMILLE: u16 = 489;
 
 /// The same assembly, with the A16 dense class when its root is pinned. `None` is the two-class
 /// network exactly as before — an unpinned class is absent, never a placeholder.
+/// **[`palw_v2_params_with_classes_on_base`] on the RC's own base identity.**
+///
+/// The RC spelling, kept because every caller of it means the RC. The base is a parameter one
+/// level down for the reason every other assembly takes one: mainnet is a different base and the
+/// SAME economy, and a class-registering path that could only be spelled for the RC is a path
+/// mainnet does not have (mainnet audit — `mainnet_shipped_params` assembled through the
+/// class-FREE builder while its own comment described the ADR-0068 share table, so a carded
+/// mainnet would have been born a floor-only network with the model tiers' 980‰ nowhere to go).
 pub fn palw_rc_params_with_classes(
+    base0_artifact_root: crate::Hash64,
+    qwen36_artifact_root: crate::Hash64,
+    qwen25_a16_artifact_root: Option<crate::Hash64>,
+    genesis_bonds: Vec<crate::palw_fp_devnet_v3::PalwGenesisBondSpecV1>,
+) -> Result<Params, crate::palw_mode_v2::PalwModeV2Error> {
+    palw_v2_params_with_classes_on_base(
+        palw_rc_base_params(),
+        base0_artifact_root,
+        qwen36_artifact_root,
+        qwen25_a16_artifact_root,
+        genesis_bonds,
+    )
+}
+
+/// The floor plus the model tiers, over an arbitrary base identity.
+pub fn palw_v2_params_with_classes_on_base(
+    base: Params,
     base0_artifact_root: crate::Hash64,
     qwen36_artifact_root: crate::Hash64,
     qwen25_a16_artifact_root: Option<crate::Hash64>,
@@ -3515,7 +3540,7 @@ pub fn palw_rc_params_with_classes(
     use crate::palw_mode_v2::PalwModeV2Error as E;
     let invalid = |what: &'static str| E::Invalid(what);
 
-    let mut params = palw_rc_params_from_artifacts(base0_artifact_root, genesis_bonds)?;
+    let mut params = palw_v2_params_from_artifacts_on_base(base, base0_artifact_root, genesis_bonds)?;
     let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut params.palw_consensus_mode else {
         unreachable!("palw_rc_params_from_artifacts installs a ConsensusV2 bundle or returns Err");
     };
@@ -3813,6 +3838,31 @@ pub const PALW_MAINNET_GENESIS_BONDS: &[PalwRcGenesisBondCard] = &[];
 /// Mainnet's BASE-0 artifact root. Zero means "no ruleset to assemble", exactly as it does for the
 /// RC card, and `mainnet_shipped_params` falls back to the hash-only `MAINNET_PARAMS`.
 pub const PALW_MAINNET_GENESIS_ARTIFACT_ROOT: crate::Hash64 = crate::Hash64::from_bytes([0u8; 64]);
+
+/// **Mainnet's hybrid tier, as a pinned artifact root.** Zero means the tier is absent, exactly as
+/// zero means "no card" above — an unpinned class is not a placeholder.
+///
+/// Mainnet had no spelling for this at all until the mainnet audit, and its absence was not
+/// visible from `mainnet_shipped_params`: that function assembled through the class-FREE builder
+/// while its own comment described ADR-0068's table as "{floor ≈ 20‰, model classes ≈ 980‰}". A
+/// carded mainnet would therefore have been born a floor-only network — the LLM lane the ADR is
+/// about would not have existed on it, and the 980‰ would have had nowhere to go. The share table
+/// is still a pin-time decision; what changed is that there is now a pin to make.
+pub const PALW_MAINNET_QWEN36_ARTIFACT_ROOT: crate::Hash64 = crate::Hash64::from_bytes([0u8; 64]);
+
+/// Mainnet's dense tier. Optional in the same sense the RC's is: `None` is the two-class network.
+pub const PALW_MAINNET_QWEN25_A16_ARTIFACT_ROOT: crate::Hash64 = crate::Hash64::from_bytes([0u8; 64]);
+
+/// Is mainnet's hybrid tier pinned? The model tiers ride the class-registering assembly only when
+/// it is; otherwise mainnet assembles the floor alone, which is what it does today.
+pub fn palw_mainnet_qwen36_is_registered() -> bool {
+    PALW_MAINNET_QWEN36_ARTIFACT_ROOT != crate::Hash64::from_bytes([0u8; 64])
+}
+
+/// …and the dense tier, on the same terms.
+pub fn palw_mainnet_qwen25_a16_is_registered() -> bool {
+    PALW_MAINNET_QWEN25_A16_ARTIFACT_ROOT != crate::Hash64::from_bytes([0u8; 64])
+}
 
 pub const PALW_RC_GENESIS_BONDS: &[PalwRcGenesisBondCard] = &[
     PalwRcGenesisBondCard {
@@ -6054,10 +6104,24 @@ pub fn mainnet_shipped_params() -> Params {
     // width bound and the attempt-work constant, from genesis, exactly as the testnet rehearses.
     // The floor's 20‰ reserve rides the shared bundle builder, and the class share table is a
     // pin-time decision whose ADR-0068 figure is {floor ≈ 20‰, model classes ≈ 980‰}.
-    palw_rc_arm_phase1(
+    // **Through the class-registering assembly when the model tiers are pinned** (mainnet audit).
+    // This used to call `palw_v2_params_from_artifacts_on_base` unconditionally — the builder that
+    // takes only the FLOOR's artifact root — so a carded mainnet came out floor-only however the
+    // comment above described it. The two paths differ in exactly one thing, which is whether the
+    // model tiers exist, and that is the whole of ADR-0068 on this network.
+    let assembled = if palw_mainnet_qwen36_is_registered() {
+        let dense = palw_mainnet_qwen25_a16_is_registered().then_some(PALW_MAINNET_QWEN25_A16_ARTIFACT_ROOT);
+        palw_v2_params_with_classes_on_base(
+            MAINNET_PARAMS,
+            PALW_MAINNET_GENESIS_ARTIFACT_ROOT,
+            PALW_MAINNET_QWEN36_ARTIFACT_ROOT,
+            dense,
+            bonds,
+        )
+    } else {
         palw_v2_params_from_artifacts_on_base(MAINNET_PARAMS, PALW_MAINNET_GENESIS_ARTIFACT_ROOT, bonds)
-            .unwrap_or_else(|e| panic!("the pinned mainnet PALW genesis card does not assemble: {e}")),
-    )
+    };
+    palw_rc_arm_phase1(assembled.unwrap_or_else(|e| panic!("the pinned mainnet PALW genesis card does not assemble: {e}")))
 }
 
 /// **ADR-0068 Phase 1: the DAA height at which testnet-11's clock arms.** Chosen 2026-09-01
@@ -8035,6 +8099,69 @@ mod consensus_params_id_tests {
     ///
     /// Both positions, because the dormant half is the one that ships: mainnet as it stands is
     /// asserted byte-identical first, so this cannot pass by having quietly turned PALW on.
+    /// **Mainnet has a path to the economy its own comment describes** (mainnet audit).
+    ///
+    /// `mainnet_shipped_params` assembled through `palw_v2_params_from_artifacts_on_base` — the
+    /// builder that takes only the FLOOR's artifact root — while the comment beside the call
+    /// described ADR-0068's table as "{floor ≈ 20‰, model classes ≈ 980‰}". Those two statements
+    /// cannot both be true: a carded mainnet came out floor-only, the model tiers did not exist on
+    /// it, and the 980‰ had nowhere to go. The class-registering assembly was spelled for the RC
+    /// and only for the RC, so there was no way to say it for mainnet at all.
+    ///
+    /// Asserted as the DIFFERENCE between the two builders on ONE base, because that difference is
+    /// the whole content of the defect — and then as the absence of any change to mainnet today,
+    /// because a fix that moved the shipped preset would be a far bigger event than the bug.
+    #[test]
+    fn the_class_registering_assembly_can_be_spelled_for_any_base_not_only_the_rc() {
+        use crate::palw_mode_v2::PalwConsensusMode;
+        use crate::palw_state_v2::PalwConsensusObjectV2;
+
+        let bonds = || -> Vec<crate::palw_fp_devnet_v3::PalwGenesisBondSpecV1> {
+            PALW_RC_GENESIS_BONDS
+                .iter()
+                .map(|c| crate::palw_fp_devnet_v3::PalwGenesisBondSpecV1 {
+                    bond: crate::palw_state_v2::PalwBondKeyV2(crate::config::premine::premine_outpoint(c.premine_index)),
+                    pubkey: c.bond_pubkey.to_vec(),
+                    operator_pubkey: c.operator_pubkey.to_vec(),
+                    payout_payload: crate::Hash64::from_bytes(c.payout_payload),
+                })
+                .collect()
+        };
+        let classes_of = |p: &Params| -> usize {
+            let PalwConsensusMode::ConsensusV2(bundle) = &p.palw_consensus_mode else { panic!("V2") };
+            bundle
+                .genesis_objects
+                .iter()
+                .filter(|o| matches!(o, PalwConsensusObjectV2::ClassRegistered { .. }))
+                .count()
+        };
+
+        // The floor alone — what mainnet used to get however its card was filled in.
+        let floor_only = palw_v2_params_from_artifacts_on_base(palw_rc_base_params(), PALW_RC_GENESIS_ARTIFACT_ROOT, bonds())
+            .expect("the floor-only assembly is the one that always worked");
+        assert_eq!(classes_of(&floor_only), 1, "one class: the liveness floor, and nothing to be LLM-primary about");
+
+        // The same base, the same floor, plus the tiers — through the variant that takes a base.
+        let with_tiers = palw_v2_params_with_classes_on_base(
+            palw_rc_base_params(),
+            PALW_RC_GENESIS_ARTIFACT_ROOT,
+            PALW_RC_GENESIS_QWEN36_ARTIFACT_ROOT,
+            palw_rc_qwen25_a16_is_registered().then_some(PALW_RC_GENESIS_QWEN25_A16_ARTIFACT_ROOT),
+            bonds(),
+        )
+        .expect("the class-registering assembly works on a base it is handed");
+        assert!(classes_of(&with_tiers) > classes_of(&floor_only), "the difference between the two builders IS the model tiers");
+
+        // Mainnet's own spelling now exists, and is dormant exactly as its card is.
+        assert!(!palw_mainnet_qwen36_is_registered(), "no tier is pinned for mainnet yet — this is a path, not a launch");
+        assert!(!palw_mainnet_qwen25_a16_is_registered());
+        assert_eq!(
+            mainnet_shipped_params().consensus_params_id(),
+            MAINNET_PARAMS.consensus_params_id(),
+            "and with nothing pinned, mainnet is byte-identical to what it shipped as"
+        );
+    }
+
     #[test]
     fn a_mainnet_equivalent_genesis_actually_enables_palw() {
         use crate::config::premine::{MISAKA_PREMINE_CAP_SOMPI, bonded_genesis_utxos, premine_outpoint};
