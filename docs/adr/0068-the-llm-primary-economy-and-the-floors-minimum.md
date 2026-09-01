@@ -23,6 +23,15 @@
   label (`palw_heartbeat/width-chain-exempt-v2`), so only armed presets moved: t11's
   scheduled fingerprint 05df4e5e… → 0533c8ee…, devnet's 47ba789e… → 280db9e1…. The drill's
   exact strand shape is the regression test).
+  **F6 (the launch audit's finding, fixed before the train left):** the heartbeat MINER
+  consulted `should_mine`, which folds in `is_nearly_synced` — and the sync-rate escape that
+  clause leans on itself expires once the finality point is over three finality durations old.
+  So the longer a chain had been stopped (or the older a fresh re-genesis's timestamp), the
+  more firmly the clock refused to start: the ADR-0060 §1 self-referential hostage, wearing a
+  mining-heuristic costume, masked in the drill by `--enable-unsynced-mining` on the H node.
+  The miner now holds only on what a stalled chain can still supply — peer connectivity, the
+  chain-participation gate, and the transitional-IBD check — and its first tick is what makes
+  every unmodified producer's `should_mine` pass flag-free again.
   Phase 0 is operations and began the same day. **Phase 2 is implemented on this branch
   (`palw-adr0068-phase2`, the Relaunch 5 identity `d7510c7a…`)**: the floor reserve
   500‰ → 20‰ (one field, every V2 network), genesis shares 489/489 so the floor lands

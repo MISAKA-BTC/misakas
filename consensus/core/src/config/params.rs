@@ -6124,7 +6124,7 @@ pub fn palw_rc_shipped_params() -> Params {
 /// ADR-0061 admits the empty registry), and `validate_palw_v2` proves the armed heartbeat and
 /// attempt-work fences declare exactly the constants this binary enforces.
 pub fn devnet_shipped_params() -> Params {
-    let mut params = palw_v2_params_from_artifacts_on_base(DEVNET_PARAMS, PALW_RC_GENESIS_ARTIFACT_ROOT, Vec::new())
+    let params = palw_v2_params_from_artifacts_on_base(DEVNET_PARAMS, PALW_RC_GENESIS_ARTIFACT_ROOT, Vec::new())
         // A base that cannot carry the bundle is a build defect, not an operator state: failing
         // at startup with the gate's own message is the only honest outcome.
         .unwrap_or_else(|e| panic!("the devnet ADR-0068 drill ruleset does not assemble: {e}"));

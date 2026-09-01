@@ -1367,7 +1367,6 @@ Do you confirm? (y/n)";
                     pay_address: pay_address.clone(),
                     address_prefix: config.prefix(),
                     network_id: config.params.net,
-                    enable_unsynced_mining: args.enable_unsynced_mining,
                 },
                 consensus_manager.clone(),
                 mining_manager.clone(),

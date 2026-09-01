@@ -36,10 +36,10 @@ pub struct PalwHeartbeatMinerConfig {
     pub pay_address: String,
     pub address_prefix: kaspa_addresses::Prefix,
     pub network_id: NetworkId,
-    /// The operator's `--enable-unsynced-mining`, honoured exactly as the producer honours it:
-    /// it waives only the "sink is older than the sync window" clause, never peers or
-    /// participation.
-    pub enable_unsynced_mining: bool,
+    // `enable_unsynced_mining` used to live here, "honoured exactly as the producer honours it" —
+    // which was the defect: the sink-age clause it waived should never have applied to the clock
+    // at all (see the worker's gate comment, ADR-0068 launch audit). The lane needs no waiver
+    // because it holds on nothing a stalled chain cannot supply.
 }
 
 pub struct PalwHeartbeatMinerService {
@@ -115,17 +115,29 @@ impl PalwHeartbeatMinerService {
             if session.async_is_consensus_in_transitional_ibd_state().await {
                 continue;
             }
-            // The same participation gate the producer consults, with the same narrow escape.
-            if !self.flow_context.should_mine(&session).await {
-                let peers_and_participation =
-                    self.flow_context.hub().has_peers() && self.flow_context.is_consensus_participation_allowed();
-                if !(self.config.enable_unsynced_mining && peers_and_participation) {
-                    trace!("[{PALW_HEARTBEAT}] holding: the mining rule engine says this node should not mine");
-                    if !self.tick(std::time::Duration::from_secs(5)).await {
-                        break;
-                    }
-                    continue;
+            // **Deliberately NOT `should_mine`** (ADR-0068 launch audit). `should_mine` folds in
+            // `is_nearly_synced` — the sink's timestamp must be recent — with the sync-rate rule
+            // as its only escape, and that escape itself expires once the finality point is more
+            // than three finality durations old. Which is to say: the longer a chain has been
+            // stopped, the more firmly it refuses to be restarted — the exact self-referential
+            // hostage ADR-0060 §1 catalogues, wearing a mining-heuristic costume. This lane IS
+            // the clock; a stale sink is not a reason for the clock to hold, it is the one
+            // condition the clock exists to end (its own block is what makes the sink recent
+            // again, which is also what lets every PRODUCER's unmodified `should_mine` pass
+            // flag-free after an outage). The drill never saw this because its miner carried
+            // `--enable-unsynced-mining`; a fresh re-genesis (whose genesis timestamp is months
+            // old) or any stall past the sync-rate rule's horizon would have seen it immediately.
+            //
+            // What legitimately still holds the lane: the chain-participation gate (a quarantined
+            // or unresolved chain must not be extended — by anyone, clock included), peer
+            // connectivity (a tick nobody hears sweeps nobody's timeouts; total isolation would
+            // only mint a weightless solo branch), and the transitional-IBD check above.
+            if !(self.flow_context.hub().has_peers() && self.flow_context.is_consensus_participation_allowed()) {
+                trace!("[{PALW_HEARTBEAT}] holding: no peers, or chain participation is not allowed");
+                if !self.tick(std::time::Duration::from_secs(5)).await {
+                    break;
                 }
+                continue;
             }
             match self.mine_one(&session, miner_data.clone()).await {
                 Ok(Some(hash)) => {
