@@ -1,5 +1,15 @@
 # PALW aarch64 CPU class — determinism measurement, 2026-08-20
 
+> **This describes the WITHDRAWN float lane, and no longer applies to any network.** The CPU
+> determinism class exists because llama.cpp ships hand-written per-ISA kernels whose reductions sum
+> in different orders — a real property of that runtime. The execution family replaced it
+> (ADR-0053): pinned integer arithmetic in this tree's own Rust, with **no `target_arch` branch on
+> the execution path** and `runtime_class_id` left at zero, because the integer family's identity is
+> its graph and not its host. **There is no CPU class today, and arm and x86 hosts are not
+> separated** — for verifiers or producers. Kept as the record of what the float lane cost and of
+> why the network left it. See `testnet11-node-operator.md` §2.
+
+
 **What this is:** the gate-ledger §12 items 2 and 4 measurements, run on the **aarch64 CPU class**
 (`misaka-palw-lite-cpu/aarch64-dotprod/v1`). Real inference against the pinned
 Qwen3.5-2B-Q4_K_M, not a fixture.

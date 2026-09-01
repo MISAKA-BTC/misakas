@@ -105,10 +105,21 @@ artifact at all, on any host.
 > you verify or produce. The float lane needed the scoping because llama.cpp's kernels differ by
 > instruction set; that is exactly why the network left it.
 >
-> What is NOT claimed here: this document does not carry a cross-architecture bit-identity
-> measurement, because the repository does not contain one. The argument above is structural — one
-> implementation, no host-dependent branches, no runtime in the class id — and a measurement across
-> real arm and x86 hosts would be worth publishing beside it.
+> **And it is measured, on a real class, across architectures — both halves.**
+>
+> * **Execution.** `palw-fp-on-registered-classes.md` records the same prompt ("What is 2+2?", 7
+>   tokens, decode 9) run on the real 1.7 GiB A16 artifact on *this repo's arm64 dev machine and
+>   the x86_64 fleet host*: **identical output ids, all four leg roots, execution root, CU and
+>   claim id.** Its own words: "the integer family's determinism claim, held across architectures
+>   on the real class — not the unit-test geometry."
+> * **Conversion.** `palw-public-testnet-classes-runbook.md` records the Qwen3.6 artifact
+>   reproduced by "two full conversions on x86-64/Linux (byte-compared), one full conversion on
+>   arm64/macOS streaming the public URL … every route lands on this root" — different instruction
+>   sets, the same 36 GiB of int8 codes, byte for byte.
+>
+> An earlier revision of this section said the repository held no cross-architecture measurement.
+> It holds two, on the real artifacts, and they are the reason the paragraph above is a statement
+> rather than an expectation.
 
 The tag a node computes must be bit-identical to every other node's, so the runtime is pinned, not
 merely recommended.

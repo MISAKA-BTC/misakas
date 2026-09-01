@@ -1,5 +1,15 @@
 # MISAKA PALW algo_id=2 VPS Canonical Worker 経路設計書
 
+> **This describes the WITHDRAWN float lane, and no longer applies to any network.** The CPU
+> determinism class exists because llama.cpp ships hand-written per-ISA kernels whose reductions sum
+> in different orders — a real property of that runtime. The execution family replaced it
+> (ADR-0053): pinned integer arithmetic in this tree's own Rust, with **no `target_arch` branch on
+> the execution path** and `runtime_class_id` left at zero, because the integer family's identity is
+> its graph and not its host. **There is no CPU class today, and arm and x86 hosts are not
+> separated** — for verifiers or producers. Kept as the record of what the float lane cost and of
+> why the network left it. See `testnet11-node-operator.md` §2.
+
+
 **文書ID:** MISAKA-PALW-VPS-RUNTIME-0001  
 **版:** v0.1  
 **日付:** 2026-08-12  
