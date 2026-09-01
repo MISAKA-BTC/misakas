@@ -7817,7 +7817,7 @@ mod consensus_params_id_tests {
                 // The genesis is untouched by both; the RULESET id moves, so this build and
                 // d7510c7a-era builds refuse each other at the handshake instead of disagreeing
                 // about a court verdict at consensus. **Deploy is whole-fleet-together.**
-                "40d76c2c65bc77238313c61993247994c9258acbe9e4bfa1c5c6e4995fce6bd7",
+                "272ed6a8ebbb421cbdcfd3bb8619e685fad372357112ccbf5fb354a58aa27d89",
             ),
             ("simnet", SIMNET_PARAMS, "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd"),
             // Re-pinned twice for ADR-0068 Phase 1: first when the drill network armed the
@@ -7830,7 +7830,7 @@ mod consensus_params_id_tests {
             // …and once more with the pair above: the audit remediation's `court_e2e_root` and
             // armed D4 fence, and `PALW_V2_TRACE_FORMAT_VERSION` 2 → 3. The drill preset shares
             // both through the same bundle builder.
-            ("devnet", DEVNET_PARAMS, "f9c473dcdfedc6f32f3ba297ef1ed6e515c72bdb956c0649c45c721834185cd5"),
+            ("devnet", DEVNET_PARAMS, "677857903c6a224dda2063ccd4a0bad8462c41eefb4442ab810e087218702937"),
         ]
         .into_iter()
         .filter_map(|(name, params, expected)| {
