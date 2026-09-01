@@ -295,11 +295,175 @@ fn drill_base0_v1() -> Result<PalwE2eCertificateV1, PalwDrillError> {
 /// answer that question.
 pub fn register_builtin_certified_families_v1() -> Vec<&'static str> {
     let mut registered = Vec::new();
-    if let Ok(certificate) = base0_certificate_v1() {
-        kaspa_consensus_core::palw_e2e_adjudicability::register_certified_family_v1(certificate);
-        registered.push("PALW-BASE-0");
+    for (name, certificate) in
+        [("PALW-BASE-0", base0_certificate_v1()), ("PALW-QWEN36", qwen36_certificate_v1()), ("PALW-QWEN25-A16", a16_certificate_v1())]
+    {
+        if let Ok(certificate) = certificate {
+            kaspa_consensus_core::palw_e2e_adjudicability::register_certified_family_v1(certificate);
+            registered.push(name);
+        }
     }
     registered
+}
+
+/// The two model tiers' family ids, under the same construction the floor uses.
+pub fn qwen36_family_id_v1() -> Hash64 {
+    family_id_of("PALW-QWEN36")
+}
+
+pub fn a16_family_id_v1() -> Hash64 {
+    family_id_of("PALW-QWEN25-A16")
+}
+
+fn family_id_of(name: &str) -> Hash64 {
+    let mut h = blake2b_simd::Params::new().hash_length(64).key(b"misaka-palw/e2e-family-id/v1").to_state();
+    h.update(name.as_bytes());
+    let mut out = [0u8; 64];
+    out.copy_from_slice(h.finalize().as_bytes());
+    Hash64::from_bytes(out)
+}
+
+/// **The hybrid tier's certificate, drilled on a FIXTURE geometry.**
+///
+/// The registered class is Qwen3.6 35B-A3B, whose weights are tens of gigabytes; drilling those at
+/// startup would make `court_e2e_root` depend on which files a node happens to hold, which is the
+/// environment-dependence the root is pinned to avoid. It does not need to: a certificate
+/// generalises over the REACHABLE KERNEL SET, and measured, the production geometry and this
+/// fixture reach exactly the same 23 kernels. What the drill proves — that this build's backend can
+/// assemble a refutation, answer a rung and close, and that the shipped court convicts — is a
+/// property of the code and the kernel arithmetic, not of how many layers are stacked.
+///
+/// **What it therefore does NOT prove, stated because a certificate that overclaims is worse than
+/// none:** a fault that only appears at production dimensions. The GDN geometry ceiling found by
+/// the ADR-0068 sweep (a `1<<24` head dimension underflowing a shift) is exactly that class of
+/// defect, and a fixture drill would not have caught it. This certificate says the family is
+/// PROSECUTABLE; it does not say the family is bug-free, and the sweep is what answers the second
+/// question.
+pub fn qwen36_certificate_v1() -> Result<&'static PalwE2eCertificateV1, &'static PalwDrillError> {
+    static CERT: std::sync::OnceLock<Result<PalwE2eCertificateV1, PalwDrillError>> = std::sync::OnceLock::new();
+    CERT.get_or_init(drill_qwen36_v1).as_ref()
+}
+
+fn drill_qwen36_v1() -> Result<PalwE2eCertificateV1, PalwDrillError> {
+    use kaspa_consensus_core::palw_qwen36_profile::{PalwQwen36GeometryV1, qwen36_profile_v2};
+
+    let artifact = std::sync::Arc::new(crate::qwen36::qwen36_dev_fixture(4, 8));
+    let s = &artifact.shape;
+    // The fixture's own shape, projected into the geometry the registered class is described by.
+    // Read off the artifact rather than written out, so the two cannot describe different models.
+    let geometry = PalwQwen36GeometryV1 {
+        layer_count: s.n_layers() as u16,
+        full_attention_interval: 4,
+        hidden_dim: s.d_model as u32,
+        attn_heads: s.n_heads as u16,
+        attn_kv_heads: s.n_kv_heads as u16,
+        attn_head_dim: s.head_dim as u32,
+        rope_dims: s.rotary_dim as u16,
+        rope_freq_base_bits: 0x4B18_9680,
+        gdn_k_heads: s.linear_k_heads as u16,
+        gdn_v_heads: s.linear_v_heads as u16,
+        gdn_head_dim: s.linear_head_dim as u32,
+        gdn_conv_kernel: s.conv_kernel as u16,
+        n_experts: s.n_experts as u32,
+        experts_per_token: s.experts_per_token as u32,
+        moe_dim: s.moe_dim as u32,
+        shared_dim: s.shared_dim as u32,
+        attn_output_gate: if s.attn_output_gate() { 1 } else { 0 },
+        vocab_size: s.vocab as u32,
+        n_ctx: 8,
+        n_threads: 1,
+        rms_eps_q: s.eps_q,
+        tile_len: 4,
+    };
+    let profile = qwen36_profile_v2(geometry)
+        .map_err(|e| PalwDrillError::Backend { what: "project the fixture geometry", why: format!("{e:?}") })?;
+    // **From the REGISTERED declaration, not the compiled table.** `supports_court` is true only
+    // for a backend that holds both a plan and the profile it was planned from, because a court's
+    // coordinates are the profile's — a backend running its own hardcoded graph could not place a
+    // capture at the leaves the chain's class enumerates.
+    // **The fixture's OWN inventory root.** A close's weight rows must prove against the root the
+    // class registered, and the certifier checks exactly that — so the drill has to hand it the
+    // root its own backend opens against, computed from the same artifact and profile the backend
+    // holds. A value invented here produces evidence nothing can verify, which is the certifier
+    // doing its job and the drill wasting a run.
+    let root = crate::inventory::qwen36_inventory_v1(&artifact, &profile)
+        .map_err(|e| PalwDrillError::Backend { what: "root its own fixture inventory", why: format!("{e:?}") })?
+        .root();
+    let backend = Qwen36BackendCtor::build(artifact, profile.clone())?;
+    drill_family_v1(qwen36_family_id_v1(), &backend, &profile, root, Hash64::from_u64_word(0x0E2E_D836))
+}
+
+/// A named constructor so the two `from_registered_profile` failure modes read differently in a
+/// log: a graph this build cannot serve is a different problem from an artifact it cannot open.
+struct Qwen36BackendCtor;
+
+impl Qwen36BackendCtor {
+    fn build(
+        artifact: std::sync::Arc<crate::qwen36::Qwen36ArtifactV1>,
+        profile: PalwShapeProfileV3,
+    ) -> Result<crate::qwen36_backend::Qwen36Backend, PalwDrillError> {
+        crate::qwen36_backend::Qwen36Backend::from_registered_profile(artifact, b"misaka-palw-rc".to_vec(), profile, (4, 2))
+            .map_err(|why| PalwDrillError::Backend { what: "serve its own registered graph", why })
+    }
+}
+
+/// **The dense tier's certificate, drilled on a fixture** — same reasoning as the hybrid's, and the
+/// same limitation. Measured: the production A16 geometry and this fixture reach the same 12
+/// kernels.
+///
+/// The class this certifies is the one whose profile declares the four-byte state map. The map is
+/// not a detail: `supports_court` is false without it, because a one-byte map cannot describe an
+/// `i32` KV cache and a checkpoint taken under it would open to a state the producer never held.
+pub fn a16_certificate_v1() -> Result<&'static PalwE2eCertificateV1, &'static PalwDrillError> {
+    static CERT: std::sync::OnceLock<Result<PalwE2eCertificateV1, PalwDrillError>> = std::sync::OnceLock::new();
+    CERT.get_or_init(drill_a16_v1).as_ref()
+}
+
+fn drill_a16_v1() -> Result<PalwE2eCertificateV1, PalwDrillError> {
+    use kaspa_consensus_core::palw_qwen25_profile::{PalwQwen25GeometryV1, qwen25_a16_profile_v2};
+
+    let geometry = PalwQwen25GeometryV1 {
+        layer_count: 2,
+        hidden_dim: 8,
+        ffn_dim: 8,
+        attn_heads: 2,
+        attn_kv_heads: 2,
+        attn_head_dim: 4,
+        vocab_size: 64,
+        n_ctx: 32,
+        n_threads: 1,
+        rms_eps_q: 1,
+        tile_len: 4,
+    };
+    let shape = crate::artifact::Base0ShapeV1 {
+        n_layers: geometry.layer_count as usize,
+        n_heads: geometry.attn_heads as usize,
+        n_kv_heads: geometry.attn_kv_heads as usize,
+        d_head: geometry.attn_head_dim as usize,
+        d_ff: geometry.ffn_dim as usize,
+        vocab: geometry.vocab_size as usize,
+        max_position: geometry.n_ctx as usize,
+        ln_theta_gen_q: crate::artifact::LN_THETA_10000_GEN_Q,
+        eps_q: 1,
+    };
+    let artifact = crate::artifact::Base0ArtifactV1::derive_deterministic(shape, 0x5A16)
+        .map_err(|e| PalwDrillError::Backend { what: "derive its fixture weights", why: format!("{e:?}") })?
+        .with_a16_params(crate::engine_a16::derived_a16_store(&shape))
+        .map_err(|e| PalwDrillError::Backend { what: "derive its A16 parameter store", why: format!("{e:?}") })?;
+    let profile = qwen25_a16_profile_v2(geometry)
+        .map_err(|e| PalwDrillError::Backend { what: "project the fixture geometry", why: format!("{e:?}") })?;
+    // The fixture's own inventory root — see the hybrid tier's twin comment.
+    let root = crate::inventory::a16_inventory_v1(&artifact, &profile)
+        .map_err(|e| PalwDrillError::Backend { what: "root its own fixture inventory", why: format!("{e:?}") })?
+        .root();
+    let backend = crate::qwen25_a16_backend::Qwen25A16Backend::from_registered_profile(
+        std::sync::Arc::new(artifact),
+        b"misaka-palw-rc".to_vec(),
+        profile.clone(),
+        (4, 2),
+    )
+    .map_err(|why| PalwDrillError::Backend { what: "serve its own registered graph", why })?;
+    drill_family_v1(a16_family_id_v1(), &backend, &profile, root, Hash64::from_u64_word(0x0E2E_D825))
 }
 
 #[cfg(test)]
@@ -540,5 +704,72 @@ mod exported_evidence_tests {
             certify_e2e_family_v1(&tampered).is_err(),
             "evidence whose guilty run is an honest one must not certify — the grader is what the certificate means"
         );
+    }
+}
+
+#[cfg(test)]
+mod registered_class_tests {
+    use kaspa_consensus_core::palw_class_admission_v2::reachable_kernels_v1;
+    use kaspa_consensus_core::palw_e2e_adjudicability::{certified_families_v1, family_certified_for_kernels_v1};
+    use kaspa_consensus_core::palw_step::PalwShapeProfileV3;
+
+    fn covered(profile: &PalwShapeProfileV3) -> bool {
+        super::register_builtin_certified_families_v1();
+        family_certified_for_kernels_v1(&reachable_kernels_v1(profile)).is_some()
+    }
+
+    /// **The class a chain registers, the class a node dispatches on, and the class a drill
+    /// certified are one class** (ADR-0069).
+    ///
+    /// Three modules derive that id independently — the registration builder, the SDK's lineage
+    /// table, and this crate's drill — and nothing but this test compares them. The failure mode is
+    /// specific and has happened here before: a registration naming an id no lineage serves is a
+    /// class no node can run, and it looks like "my producer makes no blocks" with nothing in any
+    /// log connecting the two.
+    ///
+    /// The pairing is also not obvious, which is why it is pinned rather than assumed. The hybrid's
+    /// corrected row is **graph-v3** — the v2 PROJECTION over the eps-corrected GEOMETRY — and the
+    /// name skips v2 because "graph-v2" is burned: that spelling reached testnet-11 first and a
+    /// registered name cannot be re-pointed. Registering `qwen36_profile_v2(QWEN36_35B_A3B)`
+    /// instead would produce a third id that passes every other check and that no node dispatches
+    /// on.
+    #[test]
+    fn the_registered_model_classes_are_the_ones_this_build_serves_and_certified() {
+        let court = kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2::new(
+            kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES,
+            4,
+            2,
+        )
+        .expect("shipped court");
+
+        // --- the hybrid tier: graph-v3 ---------------------------------------------------------
+        let (profile, entry, _) =
+            kaspa_consensus_core::palw_qwen36_profile::qwen36_registration_v3(kaspa_hashes::Hash64::from_u64_word(1), 1, 1, 1)
+                .expect("the corrected hybrid registration derives");
+        let row = crate::classes::qwen36_canonical_classes_v1()
+            .into_iter()
+            .find(|c| c.model_id == "Qwen3.6-35B-A3B/graph-v3")
+            .expect("the lineage table carries the corrected row");
+        assert_eq!(row.class_id(), Some(entry.class_id), "the registration and the lineage table name one class");
+        assert_ne!(
+            entry.class_id,
+            kaspa_consensus_core::palw_qwen36_profile::qwen36_class_id_v1(),
+            "and it is not the graph this build refuses to plan"
+        );
+        assert!(covered(&profile), "the drill's certified family covers the class the chain would register");
+
+        // --- the dense tier: graph-v2 ----------------------------------------------------------
+        let (profile, entry, _) =
+            kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_registration_v2(kaspa_hashes::Hash64::from_u64_word(2), 1, 1, 1)
+                .expect("the corrected dense registration derives");
+        let row = crate::classes::canonical_class_by_model_id_v1(&court, "Qwen/Qwen2.5-1.5B/graph-v2")
+            .expect("the lineage table carries the corrected row");
+        assert_eq!(row.class_id(), entry.class_id, "the registration and the lineage table name one class");
+        assert!(covered(&profile), "the drill's certified family covers the class the chain would register");
+
+        // And the certified set really is the three families, not an accident of ordering.
+        let names = super::register_builtin_certified_families_v1();
+        assert_eq!(names.len(), 3, "the floor and both model tiers certify on this build: {names:?}");
+        assert_eq!(certified_families_v1().len(), 3);
     }
 }

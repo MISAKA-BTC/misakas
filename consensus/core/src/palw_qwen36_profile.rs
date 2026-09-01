@@ -1372,9 +1372,105 @@ pub fn qwen36_registration_v1(
     Ok((profile, entry, object))
 }
 
+/// The class id the v1 declaration derives — the graph this build cannot serve. Kept because it
+/// names a real historical class and [`qwen36_class_id_v2`]'s test asserts the two differ.
+pub fn qwen36_class_id_v1() -> Hash64 {
+    qwen36_profile_v1(QWEN36_35B_A3B).expect("the pinned geometry projects").shape_profile_id()
+}
+
+/// **The class id a chain should register for this tier** — the `graph-v3` row, which is the one
+/// this build's SDK actually serves.
+///
+/// Not `qwen36_profile_v2(QWEN36_35B_A3B)`, which is a third id nothing dispatches on. The
+/// lineage table's corrected rows pair the v2 PROJECTION with the eps-corrected GEOMETRY
+/// (`qwen36_geometry_artifact_eps`), and the name is v3 rather than v2 because "graph-v2" is
+/// burned: the superseded spelling reached testnet-11 first and a registered name cannot be
+/// re-pointed at a different id. Derived through the same pair the table uses, so a node's
+/// dispatch and a chain's registration cannot describe different classes.
+pub fn qwen36_class_id_v3() -> Hash64 {
+    qwen36_profile_v2(qwen36_geometry_artifact_eps(QWEN36_35B_A3B)).expect("the pinned geometry projects").shape_profile_id()
+}
+
+/// **The same registration, from the `graph-v3` declaration this build can serve** (ADR-0069).
+///
+/// `qwen36_registration_v1` is not merely older: the graph it declares is one
+/// `Qwen36Backend::from_registered_profile` REFUSES — measured 2026-09-01, "gdn node 28 cannot be
+/// served: op SoftMax with operand `blk.{layer}.ffn_router_topk.a16` is not arithmetic this build
+/// serves". A class registered on it therefore has no backend, no capture and no court:
+/// `supports_court` is false because the backend holds no plan, and every dispute over one of its
+/// claims dies at round 0 whichever party is honest.
+///
+/// That was survivable while the tier held no weight, and it is not now that it does. ADR-0069
+/// grants a nonzero share only to a class some end-to-end certified family covers, and no family
+/// can be certified for a graph nobody can plan — so a chain that wants this tier to earn must
+/// register THIS declaration.
+///
+/// A separate builder rather than a repair of v1, following the A16 tier's precedent and the
+/// principle its test states: **a correction is a different class, never a repair in place.** The
+/// id moves off `ec7bbcbf…`, which is the honest cost of the graph having changed.
+pub fn qwen36_registration_v3(
+    artifact_root: Hash64,
+    share_permille: u16,
+    slash_value_per_pwu: u64,
+    initial_target: u128,
+) -> Result<
+    (PalwShapeProfileV3, crate::palw_mode_v2::PalwClassCatalogEntryV2, crate::palw_state_v2::PalwConsensusObjectV2),
+    PalwStepError,
+> {
+    // The lineage table's own pairing: the v2 projection over the eps-corrected geometry. Written
+    // as that pair rather than as a fourth spelling, because a class id derived two ways is two
+    // classes waiting to disagree.
+    let profile = qwen36_profile_v2(qwen36_geometry_artifact_eps(QWEN36_35B_A3B))?;
+    let class_id = profile.shape_profile_id();
+    let canonical = crate::palw_base0_profile::rc_job_context(&profile, QWEN36_RC_CANONICAL.0, QWEN36_RC_CANONICAL.1);
+    let counted = crate::palw_step::step_leaf_count(&profile, &canonical)?;
+    let entry = crate::palw_mode_v2::PalwClassCatalogEntryV2 {
+        class_id,
+        artifact_root,
+        max_step_leaf_count: crate::palw_step::worst_case_step_leaf_count_v1(&profile)?,
+        canonical_step_leaf_count: counted,
+        // **Off the corrected profile's own nodes**, not the v1 helper: the two declarations differ
+        // in the graph, so a reachable set read from the wrong one would describe a class nobody
+        // registered — and it is exactly the set the admission gate compares against a certificate.
+        reachable_kernels: crate::palw_class_admission_v2::reachable_kernels_v1(&profile),
+        court_cost: crate::palw_class_admission_v2::derive_court_cost_v1(&profile)
+            .map_err(|_| PalwStepError::ProfileNotCanonical("the corrected hybrid class's court cost does not derive"))?,
+    };
+    let object = crate::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
+        class_id,
+        artifact_root,
+        slash_value_per_pwu,
+        pwu_rule: crate::palw_state_v2::PalwPwuRuleV2::DerivedV1 { pwu_per_inference: counted },
+        initial_target,
+        share_permille,
+        activation_daa: 0,
+        admission: None,
+    };
+    Ok((profile, entry, object))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **The corrected hybrid class is the one a chain can prosecute, and it is a DIFFERENT class**
+    /// (ADR-0069).
+    ///
+    /// Two claims in one test because they are one fact: v1 declares a graph this build refuses to
+    /// plan, so a class registered on it can never be certified and can never hold weight; v2 is
+    /// the declaration that can. Asserted as a difference — same geometry, same weights, different
+    /// id — so a future "repair" of v1 in place fails here rather than silently re-pointing a
+    /// registered class at another graph.
+    #[test]
+    fn the_corrected_hybrid_class_is_a_different_class_and_the_servable_one() {
+        let (profile, entry, _) = qwen36_registration_v3(Hash64::from_u64_word(0x36A7), 1, 1, 1).expect("derives");
+        assert_eq!(entry.class_id, qwen36_class_id_v3());
+        assert_ne!(entry.class_id, qwen36_class_id_v1(), "a correction is a different class, never a repair in place");
+        assert_eq!(entry.reachable_kernels, crate::palw_class_admission_v2::reachable_kernels_v1(&profile));
+        // Statically adjudicable, which the weight gate requires before it even asks about a
+        // certificate.
+        crate::palw_catalog_coverage::verify_profile_coverage_v1(&profile).expect("every node's shape is servable");
+    }
 
     /// The profile is a graph a court can walk: every table inside the cap, every reference
     /// strictly earlier, every width non-zero.
