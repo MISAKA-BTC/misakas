@@ -1642,6 +1642,31 @@ fn qwen36_row(
                 return Err(PalwStepRefuteError::InputSetNotCanonical("the recurrence reads five sliced rows per position"));
             }
             let (hd_k, hd_v) = (profile.gdn_head_k_dim as usize, profile.gdn_head_v_dim as usize);
+            // **The same ceiling as `gdn_core_genesis_replay`, on the arm that was missed.**
+            //
+            // `PALW_GDN_MAX_DIM` was added for the replay path after the launch-audit sweep found
+            // an unbounded `gdn_head_k_dim` reaching a shift. This arm allocates from the same
+            // unbounded declaration — `vec![0; hd_v * hd_k]` a few lines down — and
+            // `validate_geometry` still bounds neither: it bounds layers, n_ctx, hidden, vocab and
+            // the attention geometry, and says so, but names no GDN dimension anywhere.
+            //
+            // The product is what makes this arm worse than its sibling. Two `u32` fields multiply
+            // into a `usize` request of up to ~1.8e19 elements, and a failed Rust allocation
+            // ABORTS rather than unwinding — so there is no error to return and no panic hook to
+            // soften it. This runs in `check_execution_step_refutation_v1`, i.e. in virtual
+            // processing on a court close, which means the block is stored and relayed before the
+            // process dies and every node meets it again on restart.
+            //
+            // Bounded before the geometry is used for anything, and the product bounded on its
+            // own, because two individually-legal dimensions still multiply.
+            if hd_k == 0
+                || hd_v == 0
+                || hd_k > PALW_GDN_MAX_DIM
+                || hd_v > PALW_GDN_MAX_DIM
+                || hd_k.checked_mul(hd_v).is_none_or(|n| n > PALW_GDN_MAX_DIM * PALW_GDN_MAX_DIM)
+            {
+                return Err(PalwStepRefuteError::Unadjudicable);
+            }
             let vh = gather.0.tile_index as usize;
             let table_first_slot =
                 gather.0.node_slot - intra_table_index(profile, gather.0.node_slot).ok_or(PalwStepRefuteError::Unadjudicable)? as u32;
@@ -4593,6 +4618,19 @@ pub(crate) mod tests {
         // symmetry rather than reachability: the three dimensions are one geometry, and a later
         // widening of the field would otherwise arrive with no guard and no test.
         assert!(u16::MAX as usize <= PALW_GDN_MAX_DIM, "the heads clause is unreachable today, and this is why");
+
+        // **The product, which is what the GdnStep arm allocates from and the replay arm does not.**
+        //
+        // Two individually-legal `u32` dimensions still multiply into a `usize`, and that arm asks
+        // for `hd_v * hd_k` elements in one go. A failed Rust allocation ABORTS rather than
+        // unwinding, so unlike the shift there is no panic to catch and no error to return — which
+        // is why that site bounds the product on its own and not just each factor.
+        let widest = PALW_GDN_MAX_DIM;
+        assert!(widest.checked_mul(widest).is_some(), "the ceiling squared must itself be representable");
+        assert!(
+            (u32::MAX as usize).checked_mul(u32::MAX as usize).unwrap() > widest * widest,
+            "…and the unbounded declaration reaches far past it, which is the whole reason for the bound"
+        );
 
         // And the honest shape is untouched — a ceiling that refused real classes would be a
         // different defect wearing this fix's clothes.
