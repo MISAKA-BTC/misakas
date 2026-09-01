@@ -440,6 +440,24 @@ frozen with the rest of it), `structural_diff_v1_v2` excuses exactly those four 
 directions, and the v2 class id moved with its graph — pinned at `23ef487f…`, still registered on
 no chain, which is what made the correction an edit instead of a third row.
 
+**The superseded spelling reached the chain first (2026-09-01, 03:07 CEST — recorded, not
+retracted, because a registration cannot be).** Thirteen minutes after the corrected labels were
+pushed, a fleet node still running the previous build (`e74260cb`, whose ledger derives the OLD
+v2 id) executed a name-based registration drop-in — `--palw-register-class=Qwen3.6-35B-A3B/graph-v2`
+— and `069b9482…` was accepted in tx `6c3bdc67…`, block `01152888…`. What that row now is: a
+permanent orphan carrying the fourth defect's backwards labels and the fifth finding's epsilon —
+**structurally unservable on any build from the interpreter onward** (no current ledger derives
+its id, so it resolves only through the chain arm, whose geometry gate refuses the declared 17
+against the artifact's executed 1), servable only by the previous build's compiled table, idle
+unless a producer names it, and decaying at ADR-0054's floor share. The damage is a sunk bond and
+a squatted name. The corrected id `23ef487f…` remains registered nowhere, so the epsilon
+disposition still lands as an edit to the ledger row — with one addition: when it lands, the
+ledger row should take a NEW model_id (`graph-v3`) so that the name a chain row already answers
+to stops meaning two different graphs in operator tooling; the known-weights seeding rule's
+treatment of the suffix has to be checked when renaming. The order this forces is now doctrine
+for the family: **measure, correct, re-pin, and only then register — a registration is the one
+step that cannot be taken back, so it goes last.**
+
 And the real-weights run surfaced a FIFTH, this one reaching past the graph into the geometry
 constants: **the declared epsilon is not the executed one.** Every registered geometry of this
 lineage pins `rms_eps_q = 17` (the integer spelling of the checkpoint's `1e-6`, "because the
