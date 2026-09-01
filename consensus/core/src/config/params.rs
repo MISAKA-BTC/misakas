@@ -6009,6 +6009,35 @@ pub fn mainnet_shipped_params() -> Params {
         .unwrap_or_else(|e| panic!("the pinned mainnet PALW genesis card does not assemble: {e}"))
 }
 
+/// **ADR-0068 Phase 1: the DAA height at which testnet-11's clock arms.** Chosen 2026-09-01
+/// with the live tip at DAA 1,746: +3,254 covers a serialized fleet rollout (~14 min of mesh
+/// downtime per node restart, measured) several times over. Until this height an armed and an
+/// un-armed build are PEERS — the schedule is normalised out of `consensus_identity_id` — and
+/// from it, every node must run a build that carries these fences or it refuses every new block
+/// (the attempt lane's declared blue work changes). One height for both fences: ε is only
+/// near-weightless once the other side of the comparison is real.
+pub const PALW_RC_PHASE1_FENCE_DAA: u64 = 5_000;
+
+/// Arm the ADR-0068 Phase 1 fences on an assembled PALW-RC ruleset: the heartbeat lane (with
+/// its width bound) and the attempt-work constant, both at [`PALW_RC_PHASE1_FENCE_DAA`]. The
+/// values are the binary's own constants by construction, so the `validate_palw_v2` locks hold
+/// by definition — asserted anyway, because "by definition" is how two sources drift.
+fn palw_rc_arm_phase1(mut params: Params) -> Params {
+    params.palw_heartbeat = Some(PalwHeartbeatV1 {
+        activation: ForkActivation::new(PALW_RC_PHASE1_FENCE_DAA),
+        work_log2: crate::pow_layer0::PALW_HEARTBEAT_WORK_LOG2,
+        max_per_mergeset: crate::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET,
+    });
+    params.palw_attempt_work = Some(PalwAttemptWorkV1 {
+        activation: ForkActivation::new(PALW_RC_PHASE1_FENCE_DAA),
+        work_log2: crate::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2,
+    });
+    if let Err(e) = params.validate_palw_v2() {
+        panic!("the armed PALW-RC ruleset does not validate: {e}");
+    }
+    params
+}
+
 pub fn palw_rc_shipped_params() -> Params {
     // The artifact root is the one thing code cannot mint. Without it there is no class to
     // register and therefore no ruleset to assemble — that, and only that, is what falls back to
@@ -6034,15 +6063,19 @@ pub fn palw_rc_shipped_params() -> Params {
     // the weights still validates the chain, it simply cannot produce for that class.
     if palw_rc_qwen36_is_registered() {
         let dense = palw_rc_qwen25_a16_is_registered().then_some(PALW_RC_GENESIS_QWEN25_A16_ARTIFACT_ROOT);
-        return palw_rc_params_with_classes(PALW_RC_GENESIS_ARTIFACT_ROOT, PALW_RC_GENESIS_QWEN36_ARTIFACT_ROOT, dense, bonds)
-            .unwrap_or_else(|e| panic!("the pinned PALW-RC genesis card does not assemble: {e}"));
+        return palw_rc_arm_phase1(
+            palw_rc_params_with_classes(PALW_RC_GENESIS_ARTIFACT_ROOT, PALW_RC_GENESIS_QWEN36_ARTIFACT_ROOT, dense, bonds)
+                .unwrap_or_else(|e| panic!("the pinned PALW-RC genesis card does not assemble: {e}")),
+        );
     }
-    palw_rc_params_from_artifacts(PALW_RC_GENESIS_ARTIFACT_ROOT, bonds)
-    // A card that is set and does not assemble is a binary that would boot a network its own
-    // genesis gate refuses. Failing at startup with the gate's own message is the only honest
-    // outcome; silently falling back to the bundle-free base would put a node on a chain it
-    // cannot join and tell it nothing.
-    .unwrap_or_else(|e| panic!("the pinned PALW-RC genesis card does not assemble: {e}"))
+    palw_rc_arm_phase1(
+        palw_rc_params_from_artifacts(PALW_RC_GENESIS_ARTIFACT_ROOT, bonds)
+            // A card that is set and does not assemble is a binary that would boot a network its own
+            // genesis gate refuses. Failing at startup with the gate's own message is the only honest
+            // outcome; silently falling back to the bundle-free base would put a node on a chain it
+            // cannot join and tell it nothing.
+            .unwrap_or_else(|e| panic!("the pinned PALW-RC genesis card does not assemble: {e}")),
+    )
 }
 
 /// **Devnet as it ships on this branch: the ADR-0068 Phase 1 drill network — `ConsensusV2`
@@ -7655,7 +7688,17 @@ mod consensus_params_id_tests {
                 // a free-prompt bundle, so the blast radius is exactly the network both changes
                 // were for. **This is a re-genesis for t11 and every host must wipe its datadir**;
                 // nothing in this build accepts the old chain.
-                "5ccdd6841c7510b9fa87b2c69aba8018a3d2eb5ec1709d09dbed3a4cb1f67e44",
+                //
+                // **Re-pinned 2026-09-01 (ADR-0068 Phase 1): the clock arms.** 5ccdd684… →
+                // 05df4e5e… because `palw_rc_shipped_params` now schedules `palw_heartbeat`
+                // (work_log2 24, max_per_mergeset 4) and `palw_attempt_work` (work_log2 20) at
+                // DAA `PALW_RC_PHASE1_FENCE_DAA` (5,000; the tip was 1,746 when chosen). This is
+                // NOT a re-genesis and NOT a wipe: a scheduled fence is normalised out of
+                // `consensus_identity_id`, so this build and 5ccdd684-era builds handshake and
+                // follow one chain — until the fence height, where an un-upgraded node stops
+                // accepting new blocks (the attempt lane's declared blue work changes). Roll the
+                // fleet before DAA 5,000.
+                "05df4e5e3627805860e14c94336e0d85a5245d966729aeceec58c19a81cd2f15",
             ),
             ("simnet", SIMNET_PARAMS, "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd"),
             // Re-pinned twice for ADR-0068 Phase 1: first when the drill network armed the
