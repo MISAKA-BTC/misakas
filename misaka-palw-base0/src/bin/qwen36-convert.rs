@@ -980,8 +980,7 @@ fn main() {
     let output_norm = reader.get("output_norm.weight");
     // Tied embeddings: the 2B carries no `output.weight` and reads its logits off the embedding
     // matrix, so the head IS `token_embd.weight` — same bytes, quantized as a projection here.
-    let output =
-        if dir.tensors.contains_key("output.weight") { reader.get("output.weight") } else { reader.get("token_embd.weight") };
+    let output = if dir.tensors.contains_key("output.weight") { reader.get("output.weight") } else { reader.get("token_embd.weight") };
     let (codes, out_exps, out_scales) = quantize_rows_grouped(&output, vocab);
     if !reference_only {
         writer.push("output.weight", &codes).unwrap_or_else(|e| die(format!("output.weight: {e}")));

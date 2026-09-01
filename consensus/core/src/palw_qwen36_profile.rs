@@ -205,6 +205,29 @@ pub const QWEN35_2B: PalwQwen36GeometryV1 = PalwQwen36GeometryV1 {
     tile_len: 512,
 };
 
+/// **The epsilon every artifact of this lineage executes.** The fifth finding
+/// (`misaka-palw-base0/src/qwen36_plan.rs`, the real-weights differential): the three geometries
+/// above declare `rms_eps_q: 17` while `qwen36-convert` hardcodes `eps_q = 1` into every artifact
+/// header, and the engine normalizes with the ARTIFACT's constant — so the declared epsilon was
+/// not the executed one, and the planner's geometry gate refused each row over its own class's
+/// weights. Measured five ways on 2026-09-01 before this constant was adopted: the converter
+/// source, the local `Qwen3.5-2B` conversion, and the fleet's three `.palwq36` headers —
+/// `original-from-hf` (40 layers), `huihui-30b` (48), and the 36.5 GB `qwen36.palwq36` the chain
+/// registration actually loaded — all read `1`. The dense family did exactly this once already:
+/// `Qwen/Qwen2.5-1.5B` declared `rms_eps_q: 1` against an artifact executing `1 << 8`, and its
+/// `graph-v2` row corrected the declaration to what the converter builds (`classes.rs` calls it
+/// "the defect this class was born from").
+pub const QWEN36_ARTIFACT_EPS_Q: i64 = 1;
+
+/// A lineage geometry with its epsilon corrected to [`QWEN36_ARTIFACT_EPS_Q`] — the graph-v3
+/// rows' geometry. A field update on the SAME const rather than a fourth hand-kept table, so the
+/// corrected geometry cannot drift from the frozen one in any other field: the v1 rows keep the
+/// consts above exactly as the chain registered them (their ids are live chain facts), and this
+/// is the one declared difference.
+pub const fn qwen36_geometry_artifact_eps(g: PalwQwen36GeometryV1) -> PalwQwen36GeometryV1 {
+    PalwQwen36GeometryV1 { rms_eps_q: QWEN36_ARTIFACT_EPS_Q, ..g }
+}
+
 /// A step's output width, named the way the engine names it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum W {
@@ -287,6 +310,16 @@ macro_rules! moe_tail {
     // narrow and its up wide — while the engine projects the gate WIDE (silu is nonlinear, so its
     // input scale is part of the function; `Qwen36Engine::expert` says why) and the up narrow.
     // v1's spelling stays, for the same id-pinning reason as the names.
+    //
+    // The fifth kernel parameter carries the sixth correction (2026-09-01, found by the author's
+    // review of the interpreter): the scalar gate's declared kernel. v1 says
+    // `KDESC_A16_MATMUL_RESCALE` — the UNGROUPED matmul, whose court program reads no exponent
+    // table — while the converter writes `ffn_shared_gate.weight.exp` like every other projection
+    // and the engine's `project()` therefore runs the grouped-wide kernel. No differential can
+    // see this one: the interpreter shares `project()` (agreement by construction) and the
+    // fixtures carry no `.exp` (the ungrouped label is TRUE on fixtures). Only the court,
+    // re-executing from the committed kernel id, would anchor the codes below their scale and
+    // refute an honest producer at every hybrid layer's shared gate.
     ($first:expr) => {
         moe_tail!(
             $first,
@@ -300,10 +333,11 @@ macro_rules! moe_tail {
             KDESC_Q36_MATMUL_GROUPED,
             KDESC_Q36_MATMUL_GROUPED_WIDE,
             KDESC_Q36_MATMUL_GROUPED,
-            KDESC_Q36_MATMUL_GROUPED_WIDE
+            KDESC_Q36_MATMUL_GROUPED_WIDE,
+            KDESC_A16_MATMUL_RESCALE
         )
     };
-    ($first:expr, $router:literal, $sh_gate:literal, $sh_up:literal, $sh_gated:literal, $sh_down:literal, $sh_scalar:literal, $sh_apply:literal, $gate_k:expr, $up_k:expr, $shg_k:expr, $shu_k:expr) => {
+    ($first:expr, $router:literal, $sh_gate:literal, $sh_up:literal, $sh_gated:literal, $sh_down:literal, $sh_scalar:literal, $sh_apply:literal, $gate_k:expr, $up_k:expr, $shg_k:expr, $shu_k:expr, $scalar_k:expr) => {
         [
             // The stream that reaches the mixture, normalized.
             n(K::RmsNorm, KDESC_A16_RMS_NORM, "", Hidden, &[Step($first - 1)]),
@@ -326,7 +360,7 @@ macro_rules! moe_tail {
             n(K::Silu, KDESC_Q36_SILU, "", SharedMid, &[Step($first + 11)]),
             n(K::MulElem, KDESC_Q36_MUL_WIDE, $sh_gated, SharedMid, &[Step($first + 13), Step($first + 12)]),
             n(K::MatMulQuant, KDESC_Q36_MATMUL_GROUPED_WIDE, $sh_down, Hidden, &[Step($first + 14)]),
-            n(K::MatMulQuant, KDESC_A16_MATMUL_RESCALE, $sh_scalar, One, &[Step($first + 1)]),
+            n(K::MatMulQuant, $scalar_k, $sh_scalar, One, &[Step($first + 1)]),
             n(K::Sigmoid, KDESC_Q36_SIGMOID, "", One, &[Step($first + 16)]),
             n(K::MulElem, KDESC_Q36_MUL_WIDE, $sh_apply, Hidden, &[Step($first + 15), Step($first + 17)]),
             n(K::AddElem, KDESC_A16_ADD_ELEM, "", Hidden, &[Step($first + 10), Step($first + 18)]),
@@ -500,10 +534,31 @@ const QWEN36_ATTN_IR: &[Ir] = &{
 //    inside the code rail (narrow and wide agree there by construction). What convicts it is the
 //    hot-row differential in `misaka-palw-base0/src/qwen36_plan.rs`, which drives a gate row past
 //    the rail and holds the interpreter to the engine's bits.
+//
+// 5. (Found by the same differential run on real weights, 2026-09-01.) The declared epsilon was
+//    not the executed one: every geometry pinned `rms_eps_q: 17` while the converter hardcodes
+//    `eps_q = 1` into every artifact header and the engine normalizes with the artifact's. Not a
+//    node-table defect — the correction lives in the ledger geometries, which take
+//    [`qwen36_geometry_artifact_eps`] (measured five ways; see [`QWEN36_ARTIFACT_EPS_Q`]).
+//
+// 6. (Found by the graph author's review of the interpreter, 2026-09-01.) The scalar gate's
+//    kernel id hid the group exponents. v1 declares the mixture's scalar gate
+//    (`ffn_shared_scalar.weight` there, the engine's `ffn_shared_gate.weight`) as
+//    `KDESC_A16_MATMUL_RESCALE` — the ungrouped matmul, whose court program
+//    (`palw_step_refute.rs`, `Qwen36Op::MatMulRescale`) reads no exponent table — while the
+//    converter writes `.exp` for that tensor like any other and `Qwen36Engine::project` therefore
+//    runs the grouped-wide kernel over it. Engine and interpreter agree by construction (they
+//    share `project()`), fixtures make the label true by omission (no `.exp`), and the one real
+//    artifact differentially tested (`Qwen3.5-2B`) has no shared expert at all — so every
+//    measurement was structurally blind, and only a court re-executing from the committed kernel
+//    id would diverge, refuting an honest producer at every hybrid layer's shared gate. The
+//    corrected arm declares `KDESC_Q36_MATMUL_GROUPED_WIDE`, which is what the engine performs
+//    over the registered artifact.
 
 /// The GDN arm, v2: the arm's own 24 nodes are IDENTICAL to v1's — copied, not transcribed, so
-/// they cannot drift — and only the mixture's seven wrong names and four backwards wideness
-/// labels change (the expert SwiGLU's gate is WIDE and its up narrow, as the engine performs it).
+/// they cannot drift — and only the mixture's seven wrong names and five wrong kernel labels
+/// change (the expert SwiGLU's gate is WIDE and its up narrow, and the scalar gate is GROUPED
+/// wide, as the engine performs them).
 const QWEN36_LINEAR_IR_V2: &[Ir] = &{
     const TAIL: [Ir; 24] = moe_tail!(
         24u16,
@@ -517,7 +572,8 @@ const QWEN36_LINEAR_IR_V2: &[Ir] = &{
         KDESC_Q36_MATMUL_GROUPED_WIDE,
         KDESC_Q36_MATMUL_GROUPED,
         KDESC_Q36_MATMUL_GROUPED_WIDE,
-        KDESC_Q36_MATMUL_GROUPED
+        KDESC_Q36_MATMUL_GROUPED,
+        KDESC_Q36_MATMUL_GROUPED_WIDE
     );
     let mut all = [QWEN36_LINEAR_IR[0]; 48];
     let mut i = 0;
@@ -578,7 +634,8 @@ const QWEN36_ATTN_IR_V2: &[Ir] = &{
         KDESC_Q36_MATMUL_GROUPED_WIDE,
         KDESC_Q36_MATMUL_GROUPED,
         KDESC_Q36_MATMUL_GROUPED_WIDE,
-        KDESC_Q36_MATMUL_GROUPED
+        KDESC_Q36_MATMUL_GROUPED,
+        KDESC_Q36_MATMUL_GROUPED_WIDE
     );
     let mut all = [HEAD[0]; 46];
     let mut i = 0;
@@ -959,23 +1016,28 @@ mod qwen3moe_family {
     /// The renumbering after the phantom's deletion is derived by hand, and a hand-derived shift is
     /// exactly the kind of edit that slips one index and produces a graph that computes something
     /// adjacent to the truth. So the diff is CHECKED: every v2 attention node must equal its v1
-    /// counterpart — the deleted node skipped, the three renames, the role move and the four
-    /// wideness corrections excused (each in its exact direction), and every step reference
+    /// counterpart — the deleted node skipped, the three renames, the role move and the five
+    /// kernel corrections excused (each in its exact direction), and every step reference
     /// shifted by exactly the deletion.
     #[test]
     fn structural_diff_v1_v2() {
-        // The fourth correction: the expert SwiGLU's wideness, which v1 declares backwards. The
-        // excuse is exact — gate narrow→wide, up wide→narrow, nothing else — so the diff cannot
-        // quietly admit a fifth kernel change.
+        // The fourth and sixth corrections: the expert SwiGLU's wideness, which v1 declares
+        // backwards, and the scalar gate's kernel, which v1 declares ungrouped. The excuse is
+        // exact — gate narrow→wide, up wide→narrow, scalar ungrouped→grouped-wide, nothing else —
+        // so the diff cannot quietly admit any other kernel change.
         let expect_kernel = |v1: &Ir, v2_weight: &str| -> &'static str {
             let widened = v2_weight.ends_with("ffn_gate_exps.routed") || v2_weight.ends_with("ffn_shared_expert_gate.weight");
             let narrowed = v2_weight.ends_with("ffn_up_exps.routed") || v2_weight.ends_with("ffn_shared_expert_up.weight");
+            let regrouped = v2_weight.ends_with("ffn_shared_gate.weight");
             if widened {
                 assert_eq!(v1.kernel, KDESC_Q36_MATMUL_GROUPED, "{v2_weight}: v1 declared the gate narrow");
                 KDESC_Q36_MATMUL_GROUPED_WIDE
             } else if narrowed {
                 assert_eq!(v1.kernel, KDESC_Q36_MATMUL_GROUPED_WIDE, "{v2_weight}: v1 declared the up wide");
                 KDESC_Q36_MATMUL_GROUPED
+            } else if regrouped {
+                assert_eq!(v1.kernel, KDESC_A16_MATMUL_RESCALE, "{v2_weight}: v1 declared the scalar gate ungrouped");
+                KDESC_Q36_MATMUL_GROUPED_WIDE
             } else {
                 v1.kernel
             }
@@ -1058,12 +1120,18 @@ mod qwen3moe_family {
         assert!(m2.validate_shape().is_ok());
     }
 
-    /// The v2 id, pinned the day the row was authored. Anything that moves it is a NEW class again.
+    /// The registrable corrected id — the `graph-v3` row's, pinned the day the row was authored:
+    /// the corrected tables OVER the artifact-epsilon geometry, because that pair is what
+    /// `classes.rs` registers. Anything that moves it is a NEW class again. Two prior pins died
+    /// in review before ever being registered from a shipping build (`069b9482…` with the
+    /// backwards expert wideness — though THAT spelling reached testnet-11 from a stale binary,
+    /// which is why the ledger says v3 — and `23ef487f…` with the ungrouped scalar gate and the
+    /// unexecuted epsilon).
     #[test]
-    fn v2_shape_profile_id_golden_vector() {
+    fn v3_shape_profile_id_golden_vector() {
         assert_eq!(
-            qwen36_profile_v2(QWEN36_35B_A3B).expect("projects").shape_profile_id().to_string(),
-            "23ef487f6497fade207193b6b480ea9991ba6e1f4995aed307e50bfba19688e2cc815498c17a46d2756390b00dbf4a8af5e5982c86dab5bc66a288dee1bc860b"
+            qwen36_profile_v2(qwen36_geometry_artifact_eps(QWEN36_35B_A3B)).expect("projects").shape_profile_id().to_string(),
+            "5bd9ae3d91df80650caffe3126a38bafb0b4feb9b046a416d353a7c3f71af6eab5aadf9b1ce41650007a980f1cc6044ef218424f4cbb8299ef9e92c97b99ef8e"
         );
     }
 
