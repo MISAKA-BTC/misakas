@@ -109,6 +109,31 @@ lands at 489‰ after the dense tier's dilution), QWEN25-A16 `71bbb755…` (root
 > the page had no way to be sure, and a number that happens to be correct is not the same as a
 > number you can check. It is stated here only because it was read off this build.
 
+## Relaunch 5c — the A16 root re-pin, and seat 4 moves off host C (2026-09-02)
+
+Third whole-fleet swap of the day; the genesis does not move. Two host changes ride it:
+
+* **seat 4 (bond `:4`) runs on `.113` from now on, not on C.** C (23 GB RAM) was OOM-killing its
+  three seats every few minutes — the heap burst at artifact load is ~9–15 GB per process and
+  three of them map the same 33 GiB. Dropping QWEN36 from seats 3/4 instead was ruled out by
+  arithmetic: QWEN36-capable seats would be `{0,1,2}` and a claim by node0 draws its panel from
+  `{1,2}` — two seats against a quorum of three, so no QWEN36 claim could ever license. `.113`
+  has 19 GB free RAM and 267 GB disk. Staged there: `/etc/misaka/t12/t12-bond-4.key` +
+  `t12-operator-4.key` (sha-verified against C), `/root/t11/seat4.sh` (C's launcher verbatim —
+  same appdir `/root/.t11c`, ports 26331–26333, `--palw-panel`, fee outpoint `:45`), unit
+  `misaka-t11-seat4.service` installed but **disabled until the swap**. C's `misaka-t11-seat4`
+  is stopped AND disabled at the swap so the bond never runs twice.
+* **`.113` gains the artifacts its bond was declared for.** Its node held only
+  `qwen25-coder-a16.palwart`, whose root is not the registered A16 root, and no QWEN36 — so bond 6
+  could judge floor claims only. `qwen25-1.5b-a16.palwart` (sha `a8c4e53e…`) and
+  `qwen36.palwq36` are staged into `/root/palw-class/`; `node.sh` gains
+  `--palw-class-artifact=/root/palw-class/qwen25-1.5b-a16.palwart` (`.bak-r5c` beside it).
+
+Start order for 5c: ibm node0 → ibm node1 (restart node1 once node0's P2P is up — its address
+manager backs off while node0 spends ~12 min mapping the model) → C seat2, seat3 → `.113` node →
+`.113` seat4 (last; it maps 33 GiB too) → explorer filler/REST/MTP/minerpool/slot. Verify each
+node announces `d38abe44…` before starting the next host.
+
 ## Sequencing (do not reorder)
 
 0. **Precondition**: ADR-0068 Phase 1 (main `12e3aa2d`) deployed and verified on the current
