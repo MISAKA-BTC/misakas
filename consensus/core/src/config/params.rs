@@ -6327,8 +6327,21 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_unavailable_abstains: None,
     palw_bond_maturity: None,
     palw_frontier_provenance: None,
-    palw_heartbeat: None,
-    palw_attempt_work: None,
+    // **ADR-0068 Phase 1, armed on the drill network and nowhere else.** Devnet is the network
+    // these fences exist to be drilled on: the heartbeat lane (fixed 2^24-hash price, width-bounded
+    // mergesets) and the attempt lane's constant blue work, both live from genesis. Every other
+    // preset ships None — arming them is a per-network activation decision, and this preset IS
+    // that decision for the local drill. The values are locked to the pow_layer0 constants by
+    // `validate_palw_v2`, so the fence can only declare what this binary enforces.
+    palw_heartbeat: Some(PalwHeartbeatV1 {
+        activation: ForkActivation::always(),
+        work_log2: crate::pow_layer0::PALW_HEARTBEAT_WORK_LOG2,
+        max_per_mergeset: crate::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET,
+    }),
+    palw_attempt_work: Some(PalwAttemptWorkV1 {
+        activation: ForkActivation::always(),
+        work_log2: crate::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2,
+    }),
     palw_inactivity_leak: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
@@ -7562,7 +7575,9 @@ mod consensus_params_id_tests {
                 "5ccdd6841c7510b9fa87b2c69aba8018a3d2eb5ec1709d09dbed3a4cb1f67e44",
             ),
             ("simnet", SIMNET_PARAMS, "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd"),
-            ("devnet", DEVNET_PARAMS, "6b12b8e9c755c0117057989406dbc36214fc8b7be97108beca4ae2099ab86a69"),
+            // Re-pinned for ADR-0068 Phase 1: the drill network arms the heartbeat and
+            // attempt-work fences (both ride `consensus_params_id`).
+            ("devnet", DEVNET_PARAMS, "a8de9209a8202aaadefcaadfb07af526d88414a52b95e452d08b6b8c1d32f3ee"),
         ]
         .into_iter()
         .filter_map(|(name, params, expected)| {
