@@ -198,6 +198,22 @@ pub struct PalwE2eCertificateV1 {
 /// Both sides come from the SAME prover (`refutation_for_index`), which is the property BASE-0's
 /// own drill asserts and the one that makes the evidence meaningful: a prover only the challenger
 /// could run would be a prover that decides the verdict.
+/// **Serializable, deliberately** — and it does not weaken the seal.
+///
+/// The certificate must be unforgeable, so it is sealed and is not `BorshDeserialize`. The
+/// EVIDENCE is the opposite: it may be written down, carried, and read back by a machine that has
+/// never seen the model, because reading it back proves nothing on its own. What makes it mean
+/// something is [`certify_e2e_family_v1`] re-running the shipped adjudicator over it, and evidence
+/// that does not convict does not certify no matter where it came from.
+///
+/// That asymmetry is what makes the model tiers certifiable at all. `drill_family_v1` needs a live
+/// backend, and a Qwen-scale family needs tens of gigabytes of weights — so a build-time drill
+/// would make `court_e2e_root` depend on which artifacts a node happens to hold, which is exactly
+/// the order- and environment-dependence the root is pinned to avoid. Instead: whoever holds the
+/// weights drills once and exports these vectors; the build ships them; every node re-grades them
+/// with no model present and computes the same root. ADR-0069 Decision 3 already says the passing
+/// vectors ARE the certification evidence — this is the type that lets them be.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwE2eFaultVectorV1 {
     /// The leaf the fault was planted at, and the leaf both refutations open.
     pub leaf_index: u64,
@@ -217,6 +233,10 @@ pub struct PalwE2eFaultVectorV1 {
 }
 
 /// Everything a drill records, in the form [`certify_e2e_family_v1`] grades.
+///
+/// Serializable for the reason [`PalwE2eFaultVectorV1`] gives: a family whose weights do not fit
+/// in a build drills once, elsewhere, and ships what it proved.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwE2eDrillEvidenceV1 {
     pub family_id: Hash64,
     /// The graph the drill ran. The certificate's kernel set is read off THIS, never supplied.

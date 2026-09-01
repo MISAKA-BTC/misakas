@@ -64,7 +64,14 @@ struct Candidate {
     decode: bool,
 }
 
-/// **Drill one family to a certificate.**
+/// **Drill one family and record what it proved** — the half that needs the model.
+///
+/// Returns the evidence rather than a certificate so that the two halves can happen on different
+/// machines: a family whose weights are tens of gigabytes drills once, wherever those weights are,
+/// and exports these vectors. [`certify_e2e_family_v1`] grades them anywhere, with no artifact
+/// present, because grading re-runs the adjudicator over recorded objects. That separation is what
+/// keeps `court_e2e_root` a property of the BUILD rather than of which files a node happens to
+/// hold — see `PalwE2eFaultVectorV1`'s note.
 ///
 /// `anchor` decides the job, exactly as it does in production — the drill runs the canonical job
 /// the chain would have asked for rather than one chosen to be easy. `artifact_root` is the class's
@@ -74,13 +81,13 @@ struct Candidate {
 ///
 /// The returned certificate is sealed — see [`certify_e2e_family_v1`] — so holding one IS the fact
 /// that the shipped adjudicator convicted every planted fault and acquitted the honest run.
-pub fn drill_family_v1(
+pub fn drill_family_evidence_v1(
     family_id: Hash64,
     backend: &dyn PalwExecutionBackendV1,
     profile: &PalwShapeProfileV3,
     artifact_root: Hash64,
     anchor: Hash64,
-) -> Result<PalwE2eCertificateV1, PalwDrillError> {
+) -> Result<PalwE2eDrillEvidenceV1, PalwDrillError> {
     // **Refused up front, by the family's own declaration.** A backend whose court verbs are the
     // trait defaults would fail at `refutation_for_index` below with a less legible message; asking
     // first means a family that has not built a court is told that, rather than told that one of
@@ -195,14 +202,24 @@ pub fn drill_family_v1(
         malformed_inputs_refused += 1;
     }
 
-    certify_e2e_family_v1(&PalwE2eDrillEvidenceV1 {
-        family_id,
-        profile: profile.clone(),
-        artifact_root,
-        vectors,
-        malformed_inputs_refused,
-    })
-    .map_err(PalwDrillError::Certify)
+    Ok(PalwE2eDrillEvidenceV1 { family_id, profile: profile.clone(), artifact_root, vectors, malformed_inputs_refused })
+}
+
+/// **Drill one family to a certificate** — [`drill_family_evidence_v1`] and then the grader.
+///
+/// The two are separate verbs because they run in different places for a family whose weights do
+/// not fit in a build. Drilling needs the model; GRADING needs only the shipped adjudicator, so a
+/// node with no artifact at all can certify from exported vectors and reach the same
+/// `court_e2e_root`. For BASE-0 both happen here, because the floor is derived and needs no files.
+pub fn drill_family_v1(
+    family_id: Hash64,
+    backend: &dyn PalwExecutionBackendV1,
+    profile: &PalwShapeProfileV3,
+    artifact_root: Hash64,
+    anchor: Hash64,
+) -> Result<PalwE2eCertificateV1, PalwDrillError> {
+    let evidence = drill_family_evidence_v1(family_id, backend, profile, artifact_root, anchor)?;
+    certify_e2e_family_v1(&evidence).map_err(PalwDrillError::Certify)
 }
 
 /// Malformed inputs derived from one honest material, in the shapes a gossiped message actually
@@ -458,6 +475,70 @@ mod pin_tests {
             built,
             kaspa_consensus_core::palw_e2e_adjudicability::palw_rc_court_e2e_root_v1(),
             "this build certifies a different family set than the RC networks pin"
+        );
+    }
+}
+
+#[cfg(test)]
+mod exported_evidence_tests {
+    use super::*;
+
+    /// **A family can be certified by a machine that never ran it** (ADR-0069 Decision 3, the half
+    /// that was missing).
+    ///
+    /// `drill_family_evidence_v1` needs a live backend, and the model tiers need tens of gigabytes
+    /// of weights. Running that at build time would make `court_e2e_root` depend on which artifacts
+    /// a node happens to hold — the exact order- and environment-dependence the root is pinned to
+    /// avoid — so the model tiers had no path to a certificate at all, which is why they still
+    /// register weightless even though their step spaces are adjudicable.
+    ///
+    /// This is that path: drill once where the weights are, write the vectors down, and grade them
+    /// anywhere. The floor stands in for a model tier here because it is the family that needs no
+    /// files, which is what lets the ROUND TRIP be tested rather than described.
+    ///
+    /// The property is asymmetric on purpose and the test asserts both halves: evidence may be
+    /// deserialized by anyone, and evidence that does not convict still does not certify. If those
+    /// were not both true this would be a hole rather than a mechanism.
+    #[test]
+    fn exported_vectors_certify_without_the_model_that_produced_them() {
+        use kaspa_consensus_core::palw_e2e_adjudicability::{PalwE2eDrillEvidenceV1, certify_e2e_family_v1};
+
+        let court = kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2::new(
+            kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES,
+            4,
+            2,
+        )
+        .expect("shipped court");
+        let entry = crate::classes::canonical_class_by_model_id_v1(&court, "PALW-BASE-0/rc").expect("the floor");
+        let root = crate::rc::palw_rc_base0_artifact_root_v1().expect("pinned");
+        let resolved = crate::classes::resolve_class_v1(&court, entry.class_id(), root, &[]).expect("the floor resolves");
+        let profile = resolved.profile.clone();
+        let backend = crate::backend::Base0Backend::new(resolved);
+
+        let evidence = drill_family_evidence_v1(base0_family_id_v1(), &backend, &profile, root, Hash64::from_u64_word(0xE7))
+            .expect("the floor drills");
+
+        // Written down and read back — the step a model tier's vectors would take through a file.
+        let bytes = borsh::to_vec(&evidence).expect("evidence serializes");
+        let restored: PalwE2eDrillEvidenceV1 = borsh::from_slice(&bytes).expect("and reads back");
+        assert_eq!(restored, evidence, "the round trip is lossless, or a shipped vector is not what was drilled");
+
+        // Graded with no backend in scope at all: this is the whole claim.
+        let from_export = certify_e2e_family_v1(&restored).expect("recorded vectors certify");
+        let from_live = certify_e2e_family_v1(&evidence).expect("so do the live ones");
+        assert_eq!(from_export.family_digest, from_live.family_digest, "one family, whichever side of the file it was graded on");
+
+        // **And the seal is not weakened.** Evidence is readable by anyone; a certificate is still
+        // only what the adjudicator's verdicts produce. Corrupt one planted fault so the guilty run
+        // no longer convicts, and the same deserialization path must refuse.
+        let mut tampered = restored.clone();
+        let vector = tampered.vectors.first_mut().expect("the drill planted at least one fault");
+        vector.guilty = vector.honest.clone();
+        let bytes = borsh::to_vec(&tampered).expect("tampered evidence still serializes");
+        let tampered: PalwE2eDrillEvidenceV1 = borsh::from_slice(&bytes).expect("and still reads back");
+        assert!(
+            certify_e2e_family_v1(&tampered).is_err(),
+            "evidence whose guilty run is an honest one must not certify — the grader is what the certificate means"
         );
     }
 }
