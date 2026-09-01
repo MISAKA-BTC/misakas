@@ -698,13 +698,21 @@ pub fn base0_material_matches_claim_v1(
     if root != binding.step_merkle_root {
         return Ok(false);
     }
-    // The logits rows and generated ids must REPRODUCE the integer trace root the binding
-    // carries — equality of the binding's field against the claim says the producer kept the
-    // right commitment; this says it kept the execution behind it, which is what a decode-side
-    // dispute (ADR-0049 Decision E) is adjudicated against.
-    if kaspa_consensus_core::palw_step_refute::base0_logits_trace_root_v1(&binding.job_context, logits_rows, generated)
-        != binding.full_logits_trace_root
-    {
+    // The logits rows and generated ids must REPRODUCE the trace root the binding carries —
+    // equality of the binding's field against the claim says the producer kept the right
+    // commitment; this says it kept the execution behind it, which is what a decode-side dispute
+    // (ADR-0049 Decision E) is adjudicated against. **Under the scheme the CLASS registered**:
+    // the floor commits the flat integer root over every row, and the model tiers commit the
+    // tiled root over their selecting rows — one check that recomputed only the flat root would
+    // read every tiled-class material as a mismatch, which is a seat refusing every honest
+    // producer of the classes this check exists to police.
+    let recomputed_trace_root =
+        if binding.shape_profile.logits_scheme_id == kaspa_consensus_core::palw_step_refute::tiled_logits_scheme_id_v1() {
+            kaspa_consensus_core::palw_step_refute::tiled_logits_trace_root_v1(&binding.job_context, logits_rows, generated)
+        } else {
+            kaspa_consensus_core::palw_step_refute::base0_logits_trace_root_v1(&binding.job_context, logits_rows, generated)
+        };
+    if recomputed_trace_root != binding.full_logits_trace_root {
         return Ok(false);
     }
     // **And the checkpoints must be the ones it committed.**
@@ -1463,11 +1471,15 @@ mod tests {
         let run = base0_execute_for_attempt_v1(&artifact, &profile, &ctx, &prompt).expect("the job runs");
 
         let covered = 1u32;
+        // The CHAIN's identity inputs: the claim id the session was opened for, and the claim's
+        // announced trace root — the two values `court_session_id_v2` reads.
+        let claim_id = Hash64::from_u64_word(0xC7A1);
         let ladder = crate::legs::base0_anchored_ladder_v1(
             &profile,
             &ctx,
             &run.checkpoints,
             &run.binding,
+            &claim_id,
             covered,
             &Hash64::from_u64_word(0xC1),
             &Hash64::from_u64_word(0xE2),
@@ -1492,11 +1504,14 @@ mod tests {
             "the leaf before the anchor is NOT covered — the anchor is too high and skips execution"
         );
 
-        // Same session as the unanchored form: a court derives the id from the claim, and a ladder
-        // whose id moved is a ladder no court accepts.
+        // Same session as the ladder the V2 TRANSITION opens — `open(claim_id, claim.trace_root,
+        // …)`, the claim's announced trace root being the binding's logits trace root. A court
+        // derives the id from the claim, and a ladder whose id moved is a ladder no court accepts;
+        // comparing against a plain ladder built from the binding's internals (as this test once
+        // did) only proved the two wrong derivations agreed with each other.
         let plain = kaspa_consensus_core::palw_bisect::PalwBisectLadderV1::open(
-            &ctx.context_hash(),
-            &run.binding.committed_execution_root,
+            &claim_id,
+            &run.binding.full_logits_trace_root,
             &Hash64::from_u64_word(0xC1),
             &Hash64::from_u64_word(0xE2),
             kaspa_consensus_core::palw_bisect::PalwBisectSpaceV1::StepLeaves,

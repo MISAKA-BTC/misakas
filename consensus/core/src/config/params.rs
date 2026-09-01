@@ -7795,15 +7795,23 @@ mod consensus_params_id_tests {
                 // accepting new blocks (the attempt lane's declared blue work changes). Roll the
                 // fleet before DAA 5,000.
                 //
-                // **Re-pinned for the ADR-0068 launch audit's remediation** — one pin for the whole
-                // of it, because a fingerprint is not the sum of its diffs and two re-pins merged
-                // produce a third value. Three params-visible changes ride it: the model tiers'
-                // genesis shares go to zero (weight follows the end-to-end certificate and neither
-                // model family holds one yet, ADR-0069), ADR-0065 D4 arms from genesis so an
-                // `Unavailable` quorum can no longer slash honest seats for the network's own
-                // packet loss, and the bundle gains `court_e2e_root`. Genesis is untouched: a
-                // coordinated deploy, NOT a re-mint and NOT a wipe.
-                "b1aad4287ca0664a0289f1575529e79df51df74b4a22ca5a5190a11dc8ab5481",
+                // **Re-pinned once for two bodies of work that landed together** — a fingerprint
+                // is not the sum of its diffs, so the merge of two re-pins is a third value and it
+                // is computed here, after both.
+                //
+                // The launch audit's remediation: the model tiers' genesis shares go to zero
+                // (weight follows the end-to-end certificate, ADR-0069), ADR-0065 D4 arms from
+                // genesis so an `Unavailable` quorum can no longer slash honest seats for the
+                // network's own packet loss, and the bundle gains `court_e2e_root`.
+                //
+                // And the model tiers' step spaces becoming adjudicable, which moved
+                // `PALW_V2_TRACE_FORMAT_VERSION` 2 → 3 (the tiled decode-token pin and the
+                // map-versioned checkpoint-anchor geometry — see the constant's own doc).
+                //
+                // The genesis is untouched by both; the RULESET id moves, so this build and
+                // d7510c7a-era builds refuse each other at the handshake instead of disagreeing
+                // about a court verdict at consensus. **Deploy is whole-fleet-together.**
+                "40d76c2c65bc77238313c61993247994c9258acbe9e4bfa1c5c6e4995fce6bd7",
             ),
             ("simnet", SIMNET_PARAMS, "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd"),
             // Re-pinned twice for ADR-0068 Phase 1: first when the drill network armed the
@@ -7813,9 +7821,10 @@ mod consensus_params_id_tests {
             // The genesis is untouched (nothing is carved), so only the fingerprint moves.
             // …and once more when the drill's pruning-consistency nudge raised devnet's
             // pruning_depth 10,800 → 10,805 (remainder k+1 of finality 600).
-            // …and again with the launch audit's remediation, which the drill preset shares
-            // through the same bundle builder: `court_e2e_root` and the armed D4 fence.
-            ("devnet", DEVNET_PARAMS, "0230634c826647359a80f806e022af41018b89c078267e6cc24f090346cdb973"),
+            // …and once more with the pair above: the audit remediation's `court_e2e_root` and
+            // armed D4 fence, and `PALW_V2_TRACE_FORMAT_VERSION` 2 → 3. The drill preset shares
+            // both through the same bundle builder.
+            ("devnet", DEVNET_PARAMS, "f9c473dcdfedc6f32f3ba297ef1ed6e515c72bdb956c0649c45c721834185cd5"),
         ]
         .into_iter()
         .filter_map(|(name, params, expected)| {

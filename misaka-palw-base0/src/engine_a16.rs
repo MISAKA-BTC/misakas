@@ -1455,7 +1455,12 @@ fn plan_table(
                     Some("attn_output.weight") => (MatSlot::Wo, d),
                     Some("ffn_up.weight") => (MatSlot::Up, ffn),
                     Some("ffn_down.weight") => (MatSlot::Down, d),
-                    None if n == "token_embd.weight" => (MatSlot::Head, vocab),
+                    // Both head spellings resolve to the same slot: the v1 class ties the head to
+                    // the embedding by NAME, the v2 class names the engine's own head view so the
+                    // gather's rows and the matmul's tiles stop colliding in the inventory
+                    // (`QWEN25_A16_HEAD_TENSOR_V2`'s doc). The bytes are `artifact.unembed` either
+                    // way — tying remains a fact about bytes.
+                    None if n == "token_embd.weight" || n == "output.weight" => (MatSlot::Head, vocab),
                     _ => return Err(refuse(index, format!("matmul operand {n:?} is not one this store names"))),
                 };
                 width(slot.1, "the slot's width")?;

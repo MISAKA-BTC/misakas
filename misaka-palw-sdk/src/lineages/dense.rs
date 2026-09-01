@@ -77,6 +77,29 @@ pub(crate) fn dense_artifact_by_digest(
     holdings.iter().filter_map(artifact_of).find(|a| a.artifact_digest() == root)
 }
 
+/// The dense holding a CHAIN-REGISTERED root names, under either root form a dense registration
+/// can pin: the artifact's digest (the v1 A16 spelling), or — when the registered profile is the
+/// court-capable one (the four-byte map, the same predicate `supports_court` answers) — the A16
+/// operand-inventory root derived from THAT profile, which is what an arithmetic close's openings
+/// prove against. The profile is the registration's own carriage, so the derivation cannot be a
+/// second mapping: it is `a16_inventory_v1` at the class's declared graph, per candidate holding.
+pub(crate) fn dense_artifact_by_registered_root(
+    holdings: &[PalwLoadedArtifactV1],
+    root: kaspa_hashes::Hash64,
+    profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+) -> Option<std::sync::Arc<Base0ArtifactV1>> {
+    if let Some(artifact) = dense_artifact_by_digest(holdings, root) {
+        return Some(artifact);
+    }
+    if profile.state_chunk_map_id != kaspa_consensus_core::palw_state_chunk_map::integer_kv_state_chunk_map_id_v2() {
+        return None;
+    }
+    holdings
+        .iter()
+        .filter_map(artifact_of)
+        .find(|a| misaka_palw_base0::inventory::a16_inventory_v1(a, profile).is_ok_and(|inv| inv.root() == root))
+}
+
 fn dense_artifacts(holdings: &[PalwLoadedArtifactV1]) -> Vec<Base0ArtifactV1> {
     holdings.iter().filter_map(artifact_of).map(|a| (*a).clone()).collect()
 }
@@ -152,13 +175,22 @@ impl PalwModelLineageV1 for DenseLineageV1 {
             return Some(Ok(Box::new(misaka_palw_base0::backend::Base0Backend::new(resolved))));
         }
         // **The A16 dense class.** Its artifact rides the same container as the floor's, so it is
-        // found in the same holdings — by its DIGEST, which is what the chain registered.
+        // found in the same holdings — under the ROOT FORM the row registers: the v1 row's is the
+        // artifact's digest, the court-capable row's is the A16 operand-inventory root
+        // (`CanonicalClassV1::artifact_root` decides, and deciding it here a second time is the
+        // two-mappings defect). The inventory derivation costs a pass over the store per candidate
+        // holding; a resolve is per producer tick, not per block validation, and correctness of
+        // WHICH bytes the court opens is the thing this lineage exists to keep single-sourced.
         if let Some(entry) = canonical_classes_v1(court)
             .into_iter()
             .filter(|c| matches!(c.source, ArtifactSourceV1::ConvertedA16))
             .find(|c| c.class_id() == class_id)
         {
-            if let Some(artifact) = holdings.iter().filter_map(artifact_of).find(|a| a.artifact_digest() == artifact_root) {
+            if let Some(artifact) = holdings
+                .iter()
+                .filter_map(artifact_of)
+                .find(|a| entry.artifact_root(a).is_ok_and(|root| root == artifact_root))
+            {
                 return Some(Ok(Box::new(misaka_palw_base0::qwen25_a16_backend::Qwen25A16Backend::new(
                     artifact,
                     network_id.to_vec(),
@@ -167,7 +199,7 @@ impl PalwModelLineageV1 for DenseLineageV1 {
                 ))));
             }
             return Some(Err(format!(
-                "the chain names the {} class and this node holds no artifact whose digest is {artifact_root} \
+                "the chain names the {} class and this node holds no artifact whose registered root form is {artifact_root} \
                  (pass the converted .palwart with --palw-class-artifact)",
                 entry.model_id
             )));

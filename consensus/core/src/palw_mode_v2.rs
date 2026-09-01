@@ -65,7 +65,18 @@ pub const PALW_V2_FORK_CHOICE_VERSION: u16 = 1;
 /// refutation would read the anchor as trailing bytes, and a v2 court accepts material a v1 court
 /// would have called `InputSetNotCanonical`. Either way the two disagree about a verdict, which is
 /// a fork, so the version is what makes them refuse each other at startup instead.
-pub const PALW_V2_TRACE_FORMAT_VERSION: u16 = 2;
+///
+/// **3** when the model tiers' step spaces became adjudicable end to end, for the same two-courts
+/// reason twice over:
+/// * `PalwDecodeTokenPinV1` gained `TiledV1` — a tiled-scheme class pins its generated ids
+///   through the rows-tree root instead of whole logits rows (one selecting row of a model class
+///   is hundreds of kilobytes against the close carrier). A v2 court cannot decode the new
+///   variant, so it refuses evidence a v3 court convicts on.
+/// * `verify_kv_anchor` reads an anchor's state chunks under the GEOMETRY the class's registered
+///   `state_chunk_map_id` names (the v2 four-byte map included) instead of the v1 one-byte map
+///   unconditionally. A v2 court reads a v2-map class's chunks at a quarter width and answers
+///   `Unadjudicable` where a v3 court reaches a verdict.
+pub const PALW_V2_TRACE_FORMAT_VERSION: u16 = 3;
 
 /// The ML-DSA-87 signing contexts the V2 ruleset uses, in a fixed order.
 ///

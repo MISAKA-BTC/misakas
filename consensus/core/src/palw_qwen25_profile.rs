@@ -332,6 +332,7 @@ pub fn qwen25_a16_profile_v1(geometry: PalwQwen25GeometryV1) -> Result<PalwShape
         geometry,
         crate::palw_base0_profile::QWEN25_A16_PRE_IR,
         crate::palw_state_chunk_map::integer_kv_state_chunk_map_id_v1(),
+        QWEN25_HEAD_TENSOR,
     )
 }
 
@@ -349,13 +350,27 @@ pub fn qwen25_a16_profile_v2(geometry: PalwQwen25GeometryV1) -> Result<PalwShape
         geometry,
         crate::palw_base0_profile::QWEN25_A16_PRE_IR_V2,
         crate::palw_state_chunk_map::integer_kv_state_chunk_map_id_v2(),
+        QWEN25_A16_HEAD_TENSOR_V2,
     )
 }
+
+/// **The v2 class's head node names the ENGINE's head view, not the embedding table.**
+///
+/// The v1 spelling (`token_embd.weight`, this family's tied head) puts two row SHAPES under one
+/// inventory name: the gather's one-row-per-token and the head matmul's one-tile-of-rows. Their
+/// byte offsets collide — both start at zero — and `find_operand_v1` resolves `(name, layer,
+/// offset)` before it checks length, so whichever view the canonical inventory lists first makes
+/// the other structurally unservable and its steps `Unadjudicable`. The floor's inventory solved
+/// this years of commits ago by emitting BOTH views under two names ("a tied class is a size
+/// question, never an adjudicability one"); the v2 class adopts the same spelling. Tying stays a
+/// fact about bytes: the artifact's `unembed` equals its `embed` when tied.
+pub const QWEN25_A16_HEAD_TENSOR_V2: &str = "output.weight";
 
 fn qwen25_a16_profile_inner(
     geometry: PalwQwen25GeometryV1,
     pre_ir: &'static [crate::palw_base0_profile::Base0IrNodeV1],
     state_chunk_map_id: Hash64,
+    head: &'static str,
 ) -> Result<PalwShapeProfileV3, PalwStepError> {
     use crate::palw_base0_profile::{Base0IrGeometryV1, Base0IrScopeV1, QWEN25_A16_LAYER_IR, QWEN25_A16_POST_IR, base0_ir_nodes_v1};
 
@@ -411,12 +426,12 @@ fn qwen25_a16_profile_inner(
         }
     };
 
-    let mut pre_nodes = base0_ir_nodes_v1(pre_ir, ir_geometry(geometry.tile_len), Base0IrScopeV1::Graph, QWEN25_HEAD_TENSOR);
+    let mut pre_nodes = base0_ir_nodes_v1(pre_ir, ir_geometry(geometry.tile_len), Base0IrScopeV1::Graph, head);
     budget(&mut pre_nodes, pre_ir);
     let mut attn_nodes = base0_ir_nodes_v1(QWEN25_A16_LAYER_IR, ir_geometry(geometry.tile_len), Base0IrScopeV1::PerLayer, "");
     budget(&mut attn_nodes, QWEN25_A16_LAYER_IR);
     let mut post_nodes =
-        base0_ir_nodes_v1(QWEN25_A16_POST_IR, ir_geometry(geometry.tile_len), Base0IrScopeV1::Graph, QWEN25_HEAD_TENSOR);
+        base0_ir_nodes_v1(QWEN25_A16_POST_IR, ir_geometry(geometry.tile_len), Base0IrScopeV1::Graph, head);
     budget(&mut post_nodes, QWEN25_A16_POST_IR);
 
     let profile = PalwShapeProfileV3 {
@@ -518,6 +533,57 @@ pub fn qwen25_a16_registration_v1(
             .collect(),
         court_cost: crate::palw_class_admission_v2::derive_court_cost_v1(&profile)
             .map_err(|_| PalwStepError::ProfileNotCanonical("the A16 dense class's court cost does not derive"))?,
+    };
+    let object = crate::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
+        class_id,
+        artifact_root,
+        slash_value_per_pwu,
+        pwu_rule: crate::palw_state_v2::PalwPwuRuleV2::DerivedV1 { pwu_per_inference: counted },
+        initial_target,
+        share_permille,
+        activation_daa: 0,
+        admission: None,
+    };
+    Ok((profile, entry, object))
+}
+
+/// The CORRECTED class's id — the court-capable one: the four-byte state map, the embed-lift
+/// requant named, the head under the engine's own view.
+pub fn qwen25_a16_class_id_v2() -> Hash64 {
+    qwen25_a16_profile_v2(QWEN25_1_5B_A16).expect("the corrected A16 geometry projects").shape_profile_id()
+}
+
+/// **The registration a court-capable A16 tier files** — [`qwen25_a16_profile_v2`]'s class, with
+/// the same economics derivation as the v1 constructor beside it. Two obligations distinguish it:
+/// `artifact_root` must be the class's INVENTORY root (`a16_inventory_v1` in the producer crate) —
+/// a flat digest can say "same bytes" but a close's operand openings prove against this value and
+/// nothing can be opened against a flat hash — and the producer that registers it must commit the
+/// step binding's own execution root, which is what its captured attempt path does.
+pub fn qwen25_a16_registration_v2(
+    artifact_root: Hash64,
+    share_permille: u16,
+    slash_value_per_pwu: u64,
+    initial_target: u128,
+) -> Result<
+    (PalwShapeProfileV3, crate::palw_mode_v2::PalwClassCatalogEntryV2, crate::palw_state_v2::PalwConsensusObjectV2),
+    PalwStepError,
+> {
+    let profile = qwen25_a16_profile_v2(QWEN25_1_5B_A16)?;
+    let class_id = profile.shape_profile_id();
+    let canonical = crate::palw_base0_profile::rc_job_context(&profile, QWEN25_A16_CANONICAL.0, QWEN25_A16_CANONICAL.1);
+    let counted = crate::palw_step::step_leaf_count(&profile, &canonical)?;
+    let entry = crate::palw_mode_v2::PalwClassCatalogEntryV2 {
+        class_id,
+        artifact_root,
+        max_step_leaf_count: crate::palw_step::worst_case_step_leaf_count_v1(&profile)?,
+        canonical_step_leaf_count: counted,
+        reachable_kernels: [&profile.pre_nodes, &profile.attn_nodes, &profile.post_nodes]
+            .into_iter()
+            .flatten()
+            .map(|n| n.kernel_semantics_id)
+            .collect(),
+        court_cost: crate::palw_class_admission_v2::derive_court_cost_v1(&profile)
+            .map_err(|_| PalwStepError::ProfileNotCanonical("the corrected A16 class's court cost does not derive"))?,
     };
     let object = crate::palw_state_v2::PalwConsensusObjectV2::ClassRegistered {
         class_id,
@@ -713,6 +779,54 @@ mod tests {
         // The canonical job fits the registered context in the enumeration's own form.
         let footprint = QWEN25_A16_CANONICAL.0 + QWEN25_A16_CANONICAL.1 - 1;
         assert!(footprint <= profile.n_ctx, "canonical footprint {footprint} inside n_ctx {}", profile.n_ctx);
+    }
+
+    /// **The CORRECTED class passes the same whole gate** — the admission the court-capable tier
+    /// answers to at registration, at the real 1.5B geometry. Beside the v1 test on purpose: the
+    /// corrections (the four-byte map, the named embed-lift requant, the head under the engine's
+    /// own view) each move the id and each could in principle have moved a cost past a ceiling,
+    /// and "the corrected class is registrable" is a claim this file must be able to make with a
+    /// test rather than a comment.
+    #[test]
+    fn the_corrected_a16_class_passes_the_full_admission_gate() {
+        use crate::palw_state_v2::{PalwConsensusObjectV2, PalwPwuRuleV2};
+        let (profile, entry, object) = qwen25_a16_registration_v2(Hash64::from_u64_word(0xA162), 1, 1, 1).expect("derives");
+        assert_eq!(entry.class_id, qwen25_a16_class_id_v2());
+        assert_ne!(entry.class_id, qwen25_a16_class_id_v1(), "a correction is a different class, never a repair in place");
+        assert_eq!(
+            profile.state_chunk_map_id,
+            crate::palw_state_chunk_map::integer_kv_state_chunk_map_id_v2(),
+            "the map the i32 cache actually has"
+        );
+        assert_eq!(profile.pre_nodes.len(), 2, "the embed-lift requant is named");
+        assert_eq!(profile.post_nodes.last().expect("a head").weight_name, QWEN25_A16_HEAD_TENSOR_V2);
+
+        let catalog = crate::palw_mode_v2::PalwClassCatalogV2::new(vec![entry.clone()]).expect("well-formed");
+        let mut bundle = crate::palw_fp_devnet_v3::palw_fp_devnet_bundle_v3(
+            entry.class_id,
+            catalog.root(),
+            crate::palw_catalog_coverage::palw_court_catalog_root_v1(),
+            entry.canonical_step_leaf_count,
+            entry.artifact_root,
+            Vec::new(),
+        )
+        .expect("a bundle for this class assembles");
+        bundle.court = crate::palw_mode_v2::PalwCourtParamsV2::new(crate::palw_step::PALW_STEP_MAX_LEAVES, 20, 2)
+            .expect("the full ladder is a legal court");
+        let canonical = crate::palw_base0_profile::rc_job_context(&profile, QWEN25_A16_CANONICAL.0, QWEN25_A16_CANONICAL.1);
+        // ADR-0069 Decision 5, satisfied rather than exercised — this test is about the corrected
+        // graph's court cost, not about who may hold weight.
+        let certified = crate::palw_e2e_adjudicability::catalog_covering_family_for_tests_v1();
+        bundle.court_e2e_root = crate::palw_e2e_adjudicability::palw_court_e2e_root_of_v1(&certified);
+        let admitted =
+            crate::palw_class_admission_v2::verify_class_admission_v2(&bundle, &profile, &canonical, &object, &certified)
+                .expect("the corrected A16 class is admissible on a network with the shipped ceilings");
+        assert_eq!(admitted.court_cost, entry.court_cost, "the gate and the mint derive one cost");
+        assert!(admitted.court_cost.max_close_bytes <= bundle.court.max_close_bytes());
+        let PalwConsensusObjectV2::ClassRegistered { pwu_rule: PalwPwuRuleV2::DerivedV1 { pwu_per_inference }, .. } = object else {
+            panic!("a derived registration");
+        };
+        assert_eq!(pwu_per_inference, entry.canonical_step_leaf_count);
     }
     use super::*;
     // Test-only: the lib target does not name either of these, and an import that is unused
