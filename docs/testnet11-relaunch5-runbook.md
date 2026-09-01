@@ -47,8 +47,21 @@ to **`67785790…`** through the shared builder). **This is a re-genesis: every 
    (`mv .t11 .t11.old-8d2002cc-<date>`) → install the new binary everywhere → start node1
    (floor producer + heartbeat miner) first, node0 (QWEN36 producer), C seats serialized,
    .113 last.
-4. **Producers/miners**: node0 `--palw-producer-class=5bd9ae3d…` (QWEN36), seat2
-   `--palw-producer-class=71bbb755…` (QWEN25-A16), node1 the floor, seat3 the second miner.
+4. **Producers/miners**: node0 `--palw-producer-class=5bd9ae3d…` (QWEN36 — the ONLY id this
+   document is allowed to state, because it is the only one pinned as a literal in source:
+   `palw_qwen36_profile.rs:1134`). seat2 takes the QWEN25-A16 id, node1 is the floor, seat3 the
+   second miner.
+
+   > **Read the A16 id off the binary, not off this page.** An earlier revision of this document
+   > printed `71bbb755…` for it. That value appears nowhere in the tree — it was transcribed from a
+   > measurement someone else had run, which is precisely the move the paragraph below tells you not
+   > to make, made by the person writing the paragraph. The registration builder derives the id; no
+   > literal pins it; so the authority is the running binary:
+   > ```
+   > ./kaspad --testnet --netsuffix=11 --palw-dump-classes
+   > ```
+   > Take the dense tier's id from that output on the SAME binary you are about to deploy, and put
+   > it in seat2's flag. If the dump and this page ever disagree, the page is wrong.
    Same scripts as today — they survive the wipe.
 
    > **The class ids changed and the old ones will not dispatch.** `ec7b…` and `f942…` were the
