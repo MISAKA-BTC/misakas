@@ -544,6 +544,53 @@ mod tests_pq {
         )
     }
 
+    /// **The receipt lane skips the target comparison on purpose — this pins what makes that safe.**
+    ///
+    /// The ADR-0068 launch audit read `check_pow_layer0`'s algo-7 arm as an unpriced block lane and
+    /// filed it as a launch blocker: one ML-DSA signature buys a header every node validates,
+    /// stores and relays. The reading of the code was right and the verdict was wrong. ADR-0044
+    /// Decision 6 stands and the operator confirmed it: a receipt block's work is a CERTIFIED
+    /// QUANTUM, audited and paid for before the block exists, so the digest binds the header to
+    /// that spend rather than pricing it — and comparing it to `bits` would be a filter its
+    /// producer walks through for free while honest software stalls on it.
+    ///
+    /// This test exists because that is a decision an audit will keep rediscovering as a defect.
+    /// What bounds the lane is elsewhere, in five places, and none of them is `bits`: the quantum
+    /// lottery against the class's receipt target, the per-claim quanta cap and its spent set, the
+    /// bond the spend is bound to, the use window, and the lane's **weightlessness**.
+    ///
+    /// **It is the last of those this file can check, and it is the one that matters here.** An
+    /// unpriced lane that could buy chain position would be an attack; an unpriced lane that cannot
+    /// is a receipt. So the skip stops being safe at the exact moment a receipt starts weighing
+    /// something, and that is what fails here. (The arm itself needs a real spend envelope to
+    /// reach — a digest cannot be computed without one — so it is exercised where envelopes are
+    /// built, not here.)
+    #[test]
+    fn the_receipt_lanes_freedom_from_bits_rests_on_its_weightlessness() {
+        // The lane the audit was worried about buys nothing: no fork-choice weight…
+        assert!(
+            kaspa_consensus_core::pow_layer0::algo_id_carries_no_chain_position(POW_ALGO_ID_PALW_RECEIPT_V3),
+            "a receipt buys no chain position — the moment it does, skipping the target becomes an attack"
+        );
+        // …and no pruning-proof hierarchy: a free digest must never be sold as structure.
+        assert!(kaspa_consensus_core::pow_layer0::algo_id_derives_no_block_level(POW_ALGO_ID_PALW_RECEIPT_V3));
+
+        // Asserted as a DIFFERENCE against the lane that IS priced by its target, because a test
+        // that only checked the receipt side would pass just as well if every lane had gone
+        // weightless — which would be a far worse defect than the one it is guarding.
+        assert!(!kaspa_consensus_core::pow_layer0::algo_id_carries_no_chain_position(POW_ALGO_ID_PALW_COMMITTED_V2));
+        assert!(!kaspa_consensus_core::pow_layer0::algo_id_derives_no_block_level(POW_ALGO_ID_PALW_COMMITTED_V2));
+
+        // And the target comparison is alive for the lanes that are priced by it: an impossible
+        // target refuses, so the algo-7 arm is a lane-specific decision rather than a comparison
+        // that quietly stopped working.
+        let impossible = 0x0100_0001u32;
+        let hashed = dummy_header_algo(impossible, 7, 1_700_000_000_000, POW_ALGO_ID_BLAKE2B_SHA3);
+        let (admitted, _) =
+            StateLayer0::new(&hashed, b"misaka-receipt-lane-test").check_pow_layer0(7).expect("the hash digest computes");
+        assert!(!admitted, "a priced lane must still be refused by its own target");
+    }
+
     /// **ADR-0066 Decision 1, at the one place that decides it: a heartbeat's target is the
     /// network constant and `header.bits` does not move it.**
     ///
