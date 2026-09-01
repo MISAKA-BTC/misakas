@@ -76,8 +76,21 @@ impl CanonicalClassV1 {
     /// what openings prove against.
     pub fn artifact_root(&self, artifact: &Base0ArtifactV1) -> Result<Hash64, InventoryBuildError> {
         match self.source {
-            // The A16 tier registers the artifact's own digest — see [`ArtifactSourceV1::ConvertedA16`].
-            ArtifactSourceV1::ConvertedA16 => Ok(artifact.artifact_digest()),
+            // The v1 A16 row registers the artifact's own digest — see
+            // [`ArtifactSourceV1::ConvertedA16`] — and that spelling is kept for it: the row is
+            // not court-capable (the one-byte map cannot describe its cache), so nothing opens
+            // against its root. The COURT-CAPABLE row (the four-byte map is the discriminator,
+            // the same predicate its backend answers `supports_court` with) registers the A16
+            // operand-inventory root, because an arithmetic close's openings prove against the
+            // registered root and nothing can be opened against a flat digest.
+            ArtifactSourceV1::ConvertedA16 => {
+                if self.profile.state_chunk_map_id == kaspa_consensus_core::palw_state_chunk_map::integer_kv_state_chunk_map_id_v2()
+                {
+                    Ok(crate::inventory::a16_inventory_v1(artifact, &self.profile)?.root())
+                } else {
+                    Ok(artifact.artifact_digest())
+                }
+            }
             _ => Ok(base0_inventory_v1(artifact, self.inventory_geometry)?.root()),
         }
     }

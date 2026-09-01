@@ -1046,6 +1046,28 @@ mod free_prompt_tests {
         }
     }
 
+    /// **Two authorities, one commitment.** The ledger-compiled backend and the chain-registered
+    /// one (whose plan is compiled FROM the profile) must capture the same job to the same roots
+    /// and the same material — otherwise the same class's claims would be prosecutable or not
+    /// depending on WHICH node produced them, and "the class is adjudicable" would be a property
+    /// of a deployment rather than of the class.
+    #[test]
+    fn both_authorities_capture_one_job_to_one_commitment() {
+        let (artifact, profile) = class_from(map::integer_kv_state_chunk_map_id_v2(), true);
+        let compiled = Qwen25A16Backend::new(artifact.clone(), NETWORK.to_vec(), profile.clone(), (4, 3));
+        let registered = Qwen25A16Backend::from_registered_profile(artifact, NETWORK.to_vec(), profile, (4, 3))
+            .expect("the corrected profile plans");
+        assert!(compiled.supports_court() && registered.supports_court());
+
+        let anchor = Hash64::from_u64_word(0x2AA16);
+        let (job, prompt) = compiled.job_for_anchor(anchor).expect("a job");
+        let a = compiled.execute(&job, &prompt).expect("the compiled walk runs");
+        let b = registered.execute(&job, &prompt).expect("the planned walk runs");
+        assert_eq!(a.execution_root, b.execution_root, "one binding, whichever authority walked");
+        assert_eq!(a.trace_root, b.trace_root);
+        assert_eq!(a.material, b.material, "and one retained material, byte for byte");
+    }
+
     /// **Under the map the class declares TODAY, the same run refuses.**
     ///
     /// `integer_kv_state_chunk_map_id_v1` describes one byte per element and this cache holds

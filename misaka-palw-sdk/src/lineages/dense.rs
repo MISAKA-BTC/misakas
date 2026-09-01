@@ -152,13 +152,22 @@ impl PalwModelLineageV1 for DenseLineageV1 {
             return Some(Ok(Box::new(misaka_palw_base0::backend::Base0Backend::new(resolved))));
         }
         // **The A16 dense class.** Its artifact rides the same container as the floor's, so it is
-        // found in the same holdings — by its DIGEST, which is what the chain registered.
+        // found in the same holdings — under the ROOT FORM the row registers: the v1 row's is the
+        // artifact's digest, the court-capable row's is the A16 operand-inventory root
+        // (`CanonicalClassV1::artifact_root` decides, and deciding it here a second time is the
+        // two-mappings defect). The inventory derivation costs a pass over the store per candidate
+        // holding; a resolve is per producer tick, not per block validation, and correctness of
+        // WHICH bytes the court opens is the thing this lineage exists to keep single-sourced.
         if let Some(entry) = canonical_classes_v1(court)
             .into_iter()
             .filter(|c| matches!(c.source, ArtifactSourceV1::ConvertedA16))
             .find(|c| c.class_id() == class_id)
         {
-            if let Some(artifact) = holdings.iter().filter_map(artifact_of).find(|a| a.artifact_digest() == artifact_root) {
+            if let Some(artifact) = holdings
+                .iter()
+                .filter_map(artifact_of)
+                .find(|a| entry.artifact_root(a).is_ok_and(|root| root == artifact_root))
+            {
                 return Some(Ok(Box::new(misaka_palw_base0::qwen25_a16_backend::Qwen25A16Backend::new(
                     artifact,
                     network_id.to_vec(),
@@ -167,7 +176,7 @@ impl PalwModelLineageV1 for DenseLineageV1 {
                 ))));
             }
             return Some(Err(format!(
-                "the chain names the {} class and this node holds no artifact whose digest is {artifact_root} \
+                "the chain names the {} class and this node holds no artifact whose registered root form is {artifact_root} \
                  (pass the converted .palwart with --palw-class-artifact)",
                 entry.model_id
             )));
