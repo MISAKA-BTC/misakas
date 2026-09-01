@@ -1172,6 +1172,34 @@ impl IbdFlow {
     ///   would be free for anyone willing to lie.
     /// - a valid candidate exists that nobody could compare. Deciding between them by which peer
     ///   relayed first is the bug; quarantine and let an operator decide.
+/// **Does refusing to commit under this verdict also mean the node cannot fix itself?**
+///
+/// Pure, and separate from `authorize_commit`, for the reason `decide_commit` is: this is the
+/// security-critical half and it should be answerable without a consensus, a router or a peer.
+///
+/// `authorize_commit` runs BEFORE `staging.commit()`, so every refusal leaves the node running the
+/// chain it was already running. `FlowContext::finish_ibd_after_failure_kind` states the rule that
+/// follows — quarantine only when the active consensus was actually replaced — and this path used
+/// to quarantine unconditionally.
+///
+/// A trusted checkpoint the network will not deliver is an operator's own configuration failing,
+/// and a hard stop is what an operator who pinned one is asking for. `RefuseUnresolved` is not
+/// that: refusing the commit already prevents the harm, because nothing is adopted and no partition
+/// is fixed in place. Quarantining on top of it made one gossiped summary a permanent, bondless
+/// denial of service — `IbdCandidateRegistry::unresolved` counts a candidate that has merely been
+/// SEEN, and a summary carrying this network's genesis hash, its params id and thirty-two arbitrary
+/// bytes of pruning point is a rival lineage by construction (ADR-0068 launch audit, F14).
+const fn commit_refusal_quarantines(verdict: &CommitVerdict) -> bool {
+    match verdict {
+        // Not refusals.
+        CommitVerdict::Allow | CommitVerdict::RefuseVerifiedSuperior { .. } => false,
+        // The operator pinned a history this network is not serving. Say so and stop.
+        CommitVerdict::RefuseCheckpointParamsMismatch | CommitVerdict::RefuseCheckpointMissing => true,
+        // Declining to pick between rivals nobody could check. The decline IS the remedy.
+        CommitVerdict::RefuseUnresolved { .. } => false,
+    }
+}
+
     async fn authorize_commit(&self, staging: &ConsensusProxy) -> Result<(), ProtocolError> {
         let tip = staging.async_get_header_download_hint().await;
         let staged_blue_work = staging.async_get_header(tip).await?.blue_work;
@@ -1418,6 +1446,28 @@ impl IbdFlow {
             )));
         }
 
+        // **A refusal is not an adoption, and only an adoption can leave a node unable to fix
+        // itself** (ADR-0068 launch audit, F14).
+        //
+        // This function is "the last check before this node's active consensus is replaced", so
+        // every path out of it that is not `Allow` leaves the node running exactly the chain it was
+        // running when it started. `FlowContext::finish_ibd_after_failure_kind` already states the
+        // rule that follows from that — it quarantines only when `active_consensus_replaced`, and
+        // otherwise hands the node back to whatever it was doing — and this path did not obey it.
+        //
+        // Which verdict deserves which is the whole question. A trusted checkpoint the network will
+        // not deliver is an operator's own configuration failing loudly, and a hard stop is what an
+        // operator who pinned one is asking for. `RefuseUnresolved` is not that: it says a rival
+        // lineage was on offer and nobody could check it in time. Refusing the commit is right, and
+        // refusing it is complete — the partition is not fixed in place, because nothing is
+        // adopted. Quarantining ON TOP of that made one gossiped summary a permanent, bondless
+        // denial of service against any node that is syncing: `unresolved()` counts a candidate
+        // that has merely been SEEN (`proof_attempts == 0`), and a summary carrying this network's
+        // genesis hash, this network's params id and thirty-two arbitrary bytes of pruning point is
+        // a rival lineage by construction. The node discarded a multi-minute sync and stopped
+        // mining, attesting and reporting synced, until a human restarted it with
+        // `--clear-quarantine`.
+        let quarantine_this_node = Self::commit_refusal_quarantines(&verdict);
         let refusal = match verdict {
             CommitVerdict::Allow => return Ok(()),
             CommitVerdict::RefuseCheckpointParamsMismatch => {
@@ -1432,9 +1482,9 @@ impl IbdFlow {
             CommitVerdict::RefuseCheckpointMissing => {
                 let cp = self.ctx.config.trusted_checkpoint.expect("set when this verdict is reachable");
                 format!(
-                    "refusing to commit the chain synced from {}: it does not descend from the trusted checkpoint {} at DAA \
-                     {}. That is the history this operator vouched for, so a chain without it is not admissible however much \
-                     work it claims.",
+                    "refusing to commit the chain synced from {}: it does not descend from the trusted checkpoint {} at \
+                     DAA {}. That is the history this operator vouched for, so a chain without it is not admissible \
+                     however much work it claims.",
                     self.router, cp.block_hash, cp.daa_score
                 )
             }
@@ -1442,15 +1492,17 @@ impl IbdFlow {
             CommitVerdict::RefuseVerifiedSuperior { .. } => unreachable!("handled before this match"),
             CommitVerdict::RefuseUnresolved { count } => format!(
                 "refusing to commit the chain synced from {}: {} other chain candidate(s) are on offer and none could be \
-                 verified in time. Choosing by arrival order is what fixes a partition in place, so this node is \
-                 quarantined until an operator resolves which branch is canonical. Pinning --trusted-checkpoint to a \
-                 block on the intended chain IS that resolution: a staged chain that verifiably descends from the pin \
-                 commits without waiting on rivals nobody can verify.",
+                 verified in time. Choosing by arrival order is what fixes a partition in place, so this sync is \
+                 discarded and this node stays on the chain it already had. Pinning --trusted-checkpoint to a block on \
+                 the intended chain resolves it: a staged chain that verifiably descends from the pin commits without \
+                 waiting on rivals nobody can verify.",
                 self.router, count
             ),
         };
 
-        self.ctx.chain_participation().quarantine();
+        if quarantine_this_node {
+            self.ctx.chain_participation().quarantine();
+        }
         Err(ProtocolError::OtherOwned(refusal))
     }
 
@@ -2785,7 +2837,41 @@ staging selected tip ({}) is too small or negative. Aborting IBD...",
 
 #[cfg(test)]
 mod switch_budget_tests {
-    use super::{MAX_CHAIN_SWITCHES, SwitchVerdict, switch_verdict};
+    /// **Refusing to adopt a chain is not a reason to stop participating** (launch audit F14).
+    ///
+    /// `authorize_commit` runs before `staging.commit()`, so every refusal leaves the node on the
+    /// chain it already had — nothing was replaced, and `finish_ibd_after_failure_kind` says that
+    /// is exactly when a node is NOT quarantined. This path quarantined on every refusal, which
+    /// turned `RefuseUnresolved` into a permanent, bondless denial of service: `unresolved()`
+    /// counts a candidate that has only been SEEN, and a summary with this network's genesis hash,
+    /// its params id and thirty-two arbitrary bytes of pruning point is a rival lineage by
+    /// construction. One gossiped message discarded a multi-minute sync and stopped the node
+    /// mining, attesting and reporting synced until a human passed `--clear-quarantine`.
+    ///
+    /// Asserted as the DIFFERENCE across verdicts, because the fix is a distinction and not a
+    /// removal: the checkpoint verdicts still stop the node, and they should — an operator who
+    /// pinned a history the network will not serve is asking to be told loudly.
+    #[test]
+    fn only_a_refusal_the_node_cannot_fix_itself_quarantines() {
+        assert!(
+            !IbdFlow::commit_refusal_quarantines(&CommitVerdict::RefuseUnresolved { count: 1 }),
+            "declining to pick between rivals nobody could check IS the remedy; nothing was adopted"
+        );
+        assert!(
+            !IbdFlow::commit_refusal_quarantines(&CommitVerdict::RefuseUnresolved { count: 9 }),
+            "and the count is not what makes it harmful — any peer can raise it by one for free"
+        );
+        assert!(
+            IbdFlow::commit_refusal_quarantines(&CommitVerdict::RefuseCheckpointMissing),
+            "a pinned history the network will not serve is the operator's own configuration failing"
+        );
+        assert!(IbdFlow::commit_refusal_quarantines(&CommitVerdict::RefuseCheckpointParamsMismatch));
+        // Neither of these reaches the refusal path at all; pinned so a later reshuffle of the
+        // match cannot quietly start quarantining a successful commit.
+        assert!(!IbdFlow::commit_refusal_quarantines(&CommitVerdict::Allow));
+    }
+
+    use super::{CommitVerdict, IbdFlow, MAX_CHAIN_SWITCHES, SwitchVerdict, switch_verdict};
 
     /// The bug this encodes: the counter was advanced before the decision, so refusing a candidate
     /// advanced the count that caused the refusal. A candidate re-offered every second drove a live
