@@ -60,9 +60,12 @@ measured rather than assumed.
    can reconfigure — the other pair answers from hosts it does not administer. Shipping four names
    of which two are dead is a discovery configuration decision, not a code fix; `dns_seeders` is
    deliberately outside `consensus_params_id`, so removing them is a plain edit and not a flag day.
-3. **`169.58.39.220` is in the seeder answer set and in no inventory here.** Same shape as the
-   unexplained `169.58.232.114` noted in the fleet preflight. A relaunch that publishes addresses
-   nobody can account for is publishing an unknown.
+3. ~~**`169.58.39.220` is in the seeder answer set and in no inventory here.**~~ **RESOLVED
+   2026-09-02: it is `misaka-ibm` itself** — `hostname` returns `vmi3450148`, the same host the
+   node0 journal is written by. It was an unknown only because the inventory recorded the ssh alias
+   and the seeder records the address. `169.58.232.114` is likewise not a participant: it answers
+   ssh as `vmi3527649`, runs no misaka unit and has 26311 closed. The only non-fleet peer touching
+   t11 is `111.67.115.228`, which handshake-fails on genesis and is a third party.
 4. **Twelve commits are unmerged to `main`.** Step 2 below is the flag-day landing and has not
    happened; until it does, `main` builds Relaunch-4 binaries.
 5. **The key custody findings from the fleet preflight are unresolved.** Seats 2,3,4,5 — half the
@@ -72,6 +75,24 @@ measured rather than assumed.
    with seat 6 whose key is on `.113`).
 
 Seat key inventory as measured: ibm `0,1` · C `2,3,4,5` · `.113` `6` · seat `7` unmanned.
+
+### Two producer-class ids were pointing at classes this chain does not register
+
+Found while staging the relaunch, corrected on the hosts (`.bak-relaunch5` beside each launcher):
+
+| host | launcher | was | now | what it is |
+|---|---|---|---|---|
+| ibm | `ibm-node0.sh` | `ec7bbcbf…` | `5bd9ae3d…` | QWEN36 — `ec7bbcbf…` is `qwen36_class_id_v1`, the graph this build's backend REFUSES |
+| C | `c-seat2.sh` | `f942e268…` | `71bbb755…` | QWEN25-A16 |
+
+Read off the binary, which is the only authority: the registered set for this genesis is
+BASE-0 `f1c5635c…` (root `bcf2d9eb…`), QWEN36 `5bd9ae3d…` (root `f4aad4fd…`, declared 957‰ so it
+lands at 489‰ after the dense tier's dilution), QWEN25-A16 `71bbb755…` (root `c00faa48…`, 489‰).
+
+> An earlier revision of this page printed `71bbb755…` for A16 and a later one struck it out as
+> unverifiable. **The value was right and the objection was still right**: no literal pins it, so
+> the page had no way to be sure, and a number that happens to be correct is not the same as a
+> number you can check. It is stated here only because it was read off this build.
 
 ## Sequencing (do not reorder)
 
