@@ -1,6 +1,6 @@
 # testnet-11 Relaunch 5 — the LLM-primary economy (ADR-0068 Phase 2)
 
-Branch: `palw-adr0068-phase2`. Target identity: params fingerprint `c096a627…` (devnet moves
+Branch: `palw-adr0068-phase2`. Target identity: params fingerprint `d7510c7a…` (devnet moves
 to `3f13411b…` through the shared builder). **This is a re-genesis: every host wipes.**
 
 ## What this train carries (all landed on the branch, all suites green)

@@ -24,7 +24,7 @@
   scheduled fingerprint 05df4e5e… → 0533c8ee…, devnet's 47ba789e… → 280db9e1…. The drill's
   exact strand shape is the regression test).
   Phase 0 is operations and began the same day. **Phase 2 is implemented on this branch
-  (`palw-adr0068-phase2`, the Relaunch 5 identity `c096a627…`)**: the floor reserve
+  (`palw-adr0068-phase2`, the Relaunch 5 identity `d7510c7a…`)**: the floor reserve
   500‰ → 20‰ (one field, every V2 network), genesis shares 489/489 so the floor lands
   exactly on its reserve, both fences armed from genesis (mainnet's assembly arms the same
   way the day its card is pinned), and F4's depth-consistency nudge moved into the shared
