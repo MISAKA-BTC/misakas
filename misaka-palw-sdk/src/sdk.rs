@@ -87,6 +87,18 @@ pub struct PalwClassSdk {
     chain_classes: bool,
 }
 
+/// The model a row is a revision OF: `"Qwen/Qwen2.5-1.5B/graph-v2"` → `"Qwen/Qwen2.5-1.5B"`.
+///
+/// The `/graph-vN` suffix is the established spelling for a corrected node table over the same
+/// weights — the dense family's precedent, reused by the qwen36 lineage. Anything else is its own
+/// base model, suffix look-alikes included: only a wholly numeric revision counts.
+fn base_model_id(model_id: &str) -> &str {
+    match model_id.rsplit_once("/graph-v") {
+        Some((base, rev)) if !base.is_empty() && !rev.is_empty() && rev.bytes().all(|b| b.is_ascii_digit()) => base,
+        _ => model_id,
+    }
+}
+
 impl PalwClassSdk {
     /// The SDK over [`builtin_lineages_v1`] — what node code uses.
     pub fn builtin_v1(court: PalwCourtParamsV2, network_id: Vec<u8>) -> Self {
@@ -195,10 +207,46 @@ impl PalwClassSdk {
                 debug_assert!(false, "a holding carries lineage id {:?}, which this SDK does not hold", artifact.lineage_id);
                 continue;
             };
-            if lineage.registered_weight_keys(artifact).iter().any(|k| terms.registered_artifact_roots.contains(k)) {
+            // **Weights the chain already pinned seed no NEW class — unless the chain's own owner
+            // of those bytes is this model, in which case the not-yet-registered entries are its
+            // GRAPH REVISIONS and refusing them contradicts the correction path this repo already
+            // shipped once (`Qwen/Qwen2.5-1.5B/graph-v2`).**
+            //
+            // The blanket veto was the n_ctx-17 scar: with two same-shape files loaded, the first
+            // filled every sibling ledger entry before the second's turn came, and the genesis
+            // 1.5B digest landed under the Coder class id. That danger is CROSS-model — an
+            // artifact seeding an entry whose weights on chain belong to somebody else. A revision
+            // row is the opposite case: the chain says these bytes belong to THIS model (a
+            // registered class of this lineage pairs with this artifact, base model equal), and
+            // the candidate is the same model under a corrected graph. Measured the day this
+            // clause was added: the Qwen3.6 graph-v2 row — built precisely because the registered
+            // graph misdescribes the engine — was unregistrable through this filter while the
+            // CHAIN's own transition would have accepted it (acceptance refuses `DuplicateClass`
+            // by id and never by root).
+            let weights_on_chain =
+                lineage.registered_weight_keys(artifact).iter().any(|k| terms.registered_artifact_roots.contains(k));
+            let entries = lineage.classes(&self.court);
+            let owner_models: Vec<&str> = if weights_on_chain {
+                entries
+                    .iter()
+                    .filter(|e| terms.registered_class_ids.contains(&e.class_id()))
+                    .filter(|e| lineage.pair(&self.court, e, artifact).is_ok())
+                    .map(|e| base_model_id(e.model_id))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            if weights_on_chain && owner_models.is_empty() {
+                // The scar's case, intact: bytes the chain pinned under a class this artifact
+                // cannot claim as its own model. Not a candidate source for anything.
                 continue;
             }
-            for entry in lineage.classes(&self.court) {
+            for entry in entries {
+                if weights_on_chain && !owner_models.contains(&base_model_id(entry.model_id)) {
+                    // Registered weights may seed only their own model's revisions — a same-shape
+                    // SIBLING still pairs, and letting it through would re-open the mispairing.
+                    continue;
+                }
                 if let Ok(artifact_root) = lineage.pair(&self.court, &entry, artifact)
                     && !out.iter().any(|seen| seen.entry.class_id() == entry.class_id())
                 {
@@ -479,7 +527,13 @@ mod chain_arm_tests {
             .expect("a valid shape")
             .with_a16_params(derived_a16_store(&shape))
             .expect("sorted and unique");
-        let geometry = PalwQwen25GeometryV1 {
+        (std::sync::Arc::new(artifact), qwen25_a16_profile_v2(small_geometry()).expect("the corrected profile builds"))
+    }
+
+    /// The one-layer test geometry, shared with the revision-row tests (which vary its `n_ctx` to
+    /// mint distinct class ids cheaply).
+    pub(super) fn small_geometry() -> PalwQwen25GeometryV1 {
+        PalwQwen25GeometryV1 {
             layer_count: 1,
             hidden_dim: 16,
             ffn_dim: 12,
@@ -491,8 +545,7 @@ mod chain_arm_tests {
             n_threads: 1,
             rms_eps_q: 1,
             tile_len: 4,
-        };
-        (std::sync::Arc::new(artifact), qwen25_a16_profile_v2(geometry).expect("the corrected profile builds"))
+        }
     }
 
     pub(super) fn holding(artifact: std::sync::Arc<Base0ArtifactV1>) -> PalwLoadedArtifactV1 {
@@ -785,5 +838,175 @@ mod chain_only_lattice_tests {
         )
         .expect("the chain admits a receipt block for a class no binary ever tabled");
         assert_ne!(admitted, Hash64::default());
+    }
+}
+
+#[cfg(test)]
+mod revision_row_tests {
+    //! **The weight-key veto, and the one exception it earned on 2026-09-01.**
+    //!
+    //! The mock's world is deliberately the dangerous one: every entry pairs with the artifact, so
+    //! nothing here rests on shapes happening to differ. What separates the cases is only what the
+    //! TERMS say the chain has — which is exactly the information the filter must decide by.
+
+    use std::sync::Arc;
+
+    use kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_profile_v2;
+    use kaspa_consensus_core::palw_step::PalwShapeProfileV3;
+
+    use super::*;
+
+    const ROOT: u64 = 0xA17;
+
+    /// The fields this module's cases never read, at values the filter ignores.
+    fn terms_rest() -> PalwRegistrationTermsV2 {
+        PalwRegistrationTermsV2 {
+            registered_class_ids: Vec::new(),
+            registered_artifact_roots: Vec::new(),
+            initial_target: 1u128,
+            min_grantable_share_permille: 1,
+            slash_value_per_pwu: 1,
+        }
+    }
+
+    fn profile(n_ctx: u32) -> PalwShapeProfileV3 {
+        let geometry =
+            kaspa_consensus_core::palw_qwen25_profile::PalwQwen25GeometryV1 { n_ctx, ..super::chain_arm_tests::small_geometry() };
+        qwen25_a16_profile_v2(geometry).expect("the test geometry projects")
+    }
+
+    struct MockLineage;
+
+    impl PalwModelLineageV1 for MockLineage {
+        fn lineage_id(&self) -> &'static str {
+            "mock-revision"
+        }
+        fn classes(&self, _court: &PalwCourtParamsV2) -> Vec<PalwClassEntryV1> {
+            vec![
+                PalwClassEntryV1 {
+                    model_id: "ModelM",
+                    lineage_id: "mock-revision",
+                    profile: profile(16),
+                    canonical_job: (7, 2),
+                    needs_artifact_file: true,
+                },
+                PalwClassEntryV1 {
+                    model_id: "ModelM/graph-v2",
+                    lineage_id: "mock-revision",
+                    profile: profile(17),
+                    canonical_job: (7, 2),
+                    needs_artifact_file: true,
+                },
+                PalwClassEntryV1 {
+                    model_id: "SiblingS",
+                    lineage_id: "mock-revision",
+                    profile: profile(18),
+                    canonical_job: (7, 2),
+                    needs_artifact_file: true,
+                },
+            ]
+        }
+        fn sniffs(&self, _head: &[u8; 8]) -> bool {
+            false
+        }
+        fn load(&self, _path: &std::path::Path) -> Result<PalwLoadedArtifactV1, String> {
+            Err("the mock loads nothing".into())
+        }
+        fn registered_weight_keys(&self, _artifact: &PalwLoadedArtifactV1) -> Vec<Hash64> {
+            vec![Hash64::from_u64_word(ROOT)]
+        }
+        fn pair(
+            &self,
+            _court: &PalwCourtParamsV2,
+            _entry: &PalwClassEntryV1,
+            _artifact: &PalwLoadedArtifactV1,
+        ) -> Result<Hash64, String> {
+            Ok(Hash64::from_u64_word(ROOT))
+        }
+        fn resolve(
+            &self,
+            _court: &PalwCourtParamsV2,
+            _class_id: Hash64,
+            _artifact_root: Hash64,
+            _holdings: &[PalwLoadedArtifactV1],
+            _network_id: &[u8],
+        ) -> Option<Result<Box<dyn PalwExecutionBackendV1>, String>> {
+            None
+        }
+    }
+
+    fn sdk() -> PalwClassSdk {
+        PalwClassSdk::with_lineages(vec![Arc::new(MockLineage)], super::chain_arm_tests::court(), b"mock-net".to_vec())
+    }
+
+    fn holding() -> PalwLoadedArtifactV1 {
+        PalwLoadedArtifactV1::from_parts("mock-revision", None, "a mock holding".into(), Arc::new(()))
+    }
+
+    fn id_of(sdk: &PalwClassSdk, model: &str) -> Hash64 {
+        sdk.lineages()[0].classes(&super::chain_arm_tests::court()).iter().find(|e| e.model_id == model).unwrap().class_id()
+    }
+
+    fn models(candidates: &[PalwRegistrationCandidateV1]) -> Vec<&'static str> {
+        candidates.iter().map(|c| c.entry.model_id).collect()
+    }
+
+    /// Fresh weights: every pairing entry is a candidate — the pre-existing behaviour.
+    #[test]
+    fn fresh_weights_offer_everything() {
+        let s = sdk();
+        let terms =
+            PalwRegistrationTermsV2 { registered_class_ids: Vec::new(), registered_artifact_roots: Vec::new(), ..terms_rest() };
+        assert_eq!(models(&s.candidate_classes(&[holding()], &terms)), vec!["ModelM", "ModelM/graph-v2", "SiblingS"]);
+    }
+
+    /// **The exception**: the chain's owner of these bytes is ModelM, so ModelM's revision row is a
+    /// candidate — and the sibling, which pairs just as well, still is not.
+    #[test]
+    fn registered_weights_admit_their_own_models_revision_and_nothing_else() {
+        let s = sdk();
+        let terms = PalwRegistrationTermsV2 {
+            registered_class_ids: vec![id_of(&s, "ModelM")],
+            registered_artifact_roots: vec![Hash64::from_u64_word(ROOT)],
+            ..terms_rest()
+        };
+        let got = models(&s.candidate_classes(&[holding()], &terms));
+        assert!(got.contains(&"ModelM/graph-v2"), "the revision row is the whole point: {got:?}");
+        assert!(!got.contains(&"SiblingS"), "a same-shape sibling on registered weights is the n_ctx-17 scar: {got:?}");
+    }
+
+    /// The scar, intact: weights pinned by a class this build cannot attribute seed nothing.
+    #[test]
+    fn registered_weights_with_no_known_owner_seed_nothing() {
+        let s = sdk();
+        let terms = PalwRegistrationTermsV2 {
+            registered_class_ids: Vec::new(),
+            registered_artifact_roots: vec![Hash64::from_u64_word(ROOT)],
+            ..terms_rest()
+        };
+        assert!(s.candidate_classes(&[holding()], &terms).is_empty());
+    }
+
+    /// The sibling as owner: ModelM gets nothing off SiblingS's registered bytes — in either
+    /// direction, revisions included.
+    #[test]
+    fn a_siblings_registered_weights_admit_only_the_sibling() {
+        let s = sdk();
+        let terms = PalwRegistrationTermsV2 {
+            registered_class_ids: vec![id_of(&s, "SiblingS")],
+            registered_artifact_roots: vec![Hash64::from_u64_word(ROOT)],
+            ..terms_rest()
+        };
+        assert_eq!(models(&s.candidate_classes(&[holding()], &terms)), vec!["SiblingS"]);
+    }
+
+    /// The suffix rule is exact: only a wholly numeric `/graph-vN` is a revision.
+    #[test]
+    fn base_model_id_is_strict() {
+        assert_eq!(base_model_id("Qwen/Qwen2.5-1.5B/graph-v2"), "Qwen/Qwen2.5-1.5B");
+        assert_eq!(base_model_id("Qwen3.6-35B-A3B/graph-v12"), "Qwen3.6-35B-A3B");
+        assert_eq!(base_model_id("ModelM"), "ModelM");
+        assert_eq!(base_model_id("ModelM/graph-vNext"), "ModelM/graph-vNext");
+        assert_eq!(base_model_id("/graph-v2"), "/graph-v2");
     }
 }
