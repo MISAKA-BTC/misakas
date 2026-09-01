@@ -40,6 +40,12 @@ pub struct PersistedChainParticipation {
     adoption_generation: u64,
     #[serde(default)]
     switches: u32,
+    /// Whether the IBD that was running had already replaced the active consensus. `false` by
+    /// default, which is right for rows written before this field existed: those rows restore an
+    /// `IbdRunning` state, and the arm that reads this is the one deciding whether that state is
+    /// recoverable — a row that never recorded a commit cannot be used to claim one happened.
+    #[serde(default)]
+    ibd_replaced_consensus: bool,
 }
 
 pub struct ChainParticipationStore {
@@ -69,6 +75,7 @@ impl ChainParticipationPersistence for ChainParticipationStore {
             ever_ready: snapshot.ever_ready,
             adoption_generation: snapshot.adoption_generation,
             switches: snapshot.switches,
+            ibd_replaced_consensus: snapshot.ibd_replaced_consensus,
         };
         // Non-fatal by contract: a node that cannot write this must keep running with an in-memory
         // gate rather than abort. Louder than a debug line because the consequence is that a restart
@@ -91,6 +98,9 @@ impl ChainParticipationPersistence for ChainParticipationStore {
             ever_ready: false,
             adoption_generation: generation,
             switches,
+            // A row nobody could read says nothing about a commit, and this state is quarantined
+            // by its own name — the flag only matters for `IbdRunning`.
+            ibd_replaced_consensus: false,
         };
         match read {
             Ok(None) => None,
@@ -119,6 +129,7 @@ impl ChainParticipationPersistence for ChainParticipationStore {
                     ever_ready: p.ever_ready,
                     adoption_generation: p.adoption_generation,
                     switches: p.switches,
+                    ibd_replaced_consensus: p.ibd_replaced_consensus,
                 })
             }
         }

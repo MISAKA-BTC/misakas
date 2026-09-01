@@ -73,6 +73,15 @@ pub struct ChainParticipationSnapshot {
     /// Increments each time a chain is provisionally adopted, binding a recovery permit to the
     /// situation that issued it.
     pub adoption_generation: u64,
+    /// **Did the IBD that was running actually replace the active consensus?**
+    ///
+    /// `staging.commit()` happens partway through an IBD, so "IbdRunning" spans both sides of the
+    /// point of no return and cannot say which one a crash landed on. In-process the lease answers
+    /// it; across a restart nothing did, so every interrupted IBD restored as `Quarantined` —
+    /// including the overwhelmingly common one where nothing had been adopted and the node was
+    /// still running the chain it started with, untouched. `false` is the safe default for rows
+    /// written before this existed, because those rows are quarantined by the state itself.
+    pub ibd_replaced_consensus: bool,
     /// Syncs abandoned for a verified-better chain. A cap a restart resets is not a cap.
     pub switches: u32,
 }
@@ -123,6 +132,8 @@ pub struct ChainParticipationGate {
     /// — and its only caller asks after the node has already left `Ready`. In memory only: a
     /// restart is conservative (no span, so no reset), which is the direction to fail in.
     last_ready_span_ms: AtomicU64,
+    /// See [`ChainParticipationSnapshot::ibd_replaced_consensus`].
+    ibd_replaced_consensus: AtomicBool,
     /// What to return to when an IBD changes nothing. Written on entry, read on a no-op failure.
     /// Only one IBD runs at a time — the latch guarantees it — so a single slot is enough.
     pre_ibd_state: AtomicU8,
@@ -160,6 +171,7 @@ impl ChainParticipationGate {
             switches: AtomicU32::new(0),
             ready_since_ms: AtomicU64::new(unix_now()),
             last_ready_span_ms: AtomicU64::new(0),
+            ibd_replaced_consensus: AtomicBool::new(false),
             pre_ibd_state: AtomicU8::new(READY),
             ibd_generation: AtomicU64::new(0),
             enabled,
@@ -181,9 +193,20 @@ impl ChainParticipationGate {
             self.state.store(
                 match restored.state {
                     ChainParticipation::Ready => READY,
-                    // An IBD that was running when the process died did not finish, and whatever it
-                    // was doing to the active consensus is now in an unknown state. That is the
-                    // quarantine case, not a reason to start clean.
+                    // **An IBD that was running when the process died is only the quarantine case
+                    // if it had already replaced the active consensus.** It used to be treated as
+                    // that unconditionally, on the reasoning that the outcome was unknown — but the
+                    // outcome IS knowable, and now it is recorded: `staging.commit()` marks it. A
+                    // crash before that point left the active consensus untouched, so the node
+                    // holds exactly the chain it held before and quarantining it destroys nothing
+                    // but its own participation.
+                    //
+                    // Restored as `CandidateReview` rather than `Ready`, because `pre_ibd_state` is
+                    // not persisted and this arm must not promote a node past a review it owed.
+                    // `review_until_ms` IS persisted, so a node with nothing pending promotes to
+                    // `Ready` on the next `state()` call and a node that owed a review still owes
+                    // exactly as much of it as it did.
+                    ChainParticipation::IbdRunning if !restored.ibd_replaced_consensus => CANDIDATE_REVIEW,
                     ChainParticipation::IbdRunning | ChainParticipation::Quarantined => QUARANTINED,
                     ChainParticipation::CandidateReview => CANDIDATE_REVIEW,
                 },
@@ -208,6 +231,7 @@ impl ChainParticipationGate {
             ever_ready: self.ever_ready.load(Ordering::SeqCst),
             adoption_generation: self.adoption_generation.load(Ordering::SeqCst),
             switches: self.switches.load(Ordering::SeqCst),
+            ibd_replaced_consensus: self.ibd_replaced_consensus.load(Ordering::SeqCst),
         }
     }
 
@@ -301,6 +325,22 @@ impl ChainParticipationGate {
         }
     }
 
+    /// **The IBD that is running has replaced the active consensus** — the point of no return.
+    ///
+    /// Persisted, because it is the only thing that can tell a restart which side of
+    /// `staging.commit()` a crash landed on. Without it every interrupted IBD looked identical to
+    /// the one case that genuinely cannot be fixed by restarting, and a node killed mid-sync — by
+    /// systemd, by the OOM killer, or by an operator running the serialized startup the runbook
+    /// asks for — came back quarantined for good, with one WARN line, still holding the chain it
+    /// had before and perfectly able to use it.
+    pub fn mark_chain_replaced(&self) {
+        if !self.enabled {
+            return;
+        }
+        self.ibd_replaced_consensus.store(true, Ordering::SeqCst);
+        self.persist();
+    }
+
     /// Participation stopped; the stability clock is not running.
     fn mark_not_ready(&self) {
         self.ready_since_ms.store(0, Ordering::SeqCst);
@@ -366,6 +406,8 @@ impl ChainParticipationGate {
         }
         // The interrupted state and the lease are established together with the transition itself,
         // so there is no window in which the node is IbdRunning without a recorded way back.
+        // A new attempt has replaced nothing yet, whatever the last one did.
+        self.ibd_replaced_consensus.store(false, Ordering::SeqCst);
         let interrupted = if self.state.compare_exchange(READY, IBD_RUNNING, Ordering::SeqCst, Ordering::SeqCst).is_ok() {
             self.stamp_ready_span();
             Some(READY)
@@ -784,6 +826,7 @@ mod tests {
             ever_ready: false,
             adoption_generation: 3,
             switches: 1,
+            ibd_replaced_consensus: false,
         }))));
         let gate = ChainParticipationGate::new(true).with_persistence(recorder);
 
@@ -818,6 +861,54 @@ mod tests {
         // And once the decision lands, it reports nothing because there is no review.
         gate.end_decision();
         assert_eq!(gate.review_remaining_ms(), None);
+    }
+
+    /// **A crash mid-IBD is only unrecoverable if the IBD had already committed** (audit F19).
+    ///
+    /// `staging.commit()` happens partway through, so `IbdRunning` spans both sides of the point of
+    /// no return. In-process the lease tells them apart; across a restart nothing did, and the
+    /// restore treated every interrupted IBD as the case that cannot be fixed by restarting. The
+    /// common one is the opposite: the crash landed before the commit, the active consensus was
+    /// never touched, and the node came back holding exactly the chain it had — quarantined for
+    /// good, with one WARN line, over a sync that changed nothing.
+    ///
+    /// That is not a theoretical kill. The Relaunch runbook starts the fleet serialized, so every
+    /// node is running an IBD off the previous one while an operator is at the keyboard; a systemd
+    /// restart, an OOM kill, or one more stop/start puts a node here.
+    ///
+    /// Asserted as the DIFFERENCE, because the fix is a distinction: the committed case must still
+    /// quarantine, and a test that only checked the recoverable side would pass on a restore that
+    /// had simply stopped quarantining.
+    #[test]
+    fn only_an_ibd_that_committed_makes_a_restart_unrecoverable() {
+        // Crash before the commit: nothing was adopted.
+        let recorder = Arc::new(Recorder::default());
+        let gate = ChainParticipationGate::new(true).with_persistence(recorder.clone());
+        let _lease = gate.enter_ibd();
+        assert_eq!(gate.state(), ChainParticipation::IbdRunning);
+        let restarted = ChainParticipationGate::new(true).with_persistence(recorder.clone());
+        assert_ne!(
+            restarted.state(),
+            ChainParticipation::Quarantined,
+            "the active consensus was never replaced, so the node holds the chain it always held"
+        );
+        assert!(restarted.allows_participation(), "and with no review owed it is free to participate again");
+
+        // Crash after it: the node is running a chain whose sync never finished.
+        let recorder2 = Arc::new(Recorder::default());
+        let gate2 = ChainParticipationGate::new(true).with_persistence(recorder2.clone());
+        let _lease2 = gate2.enter_ibd();
+        gate2.mark_chain_replaced();
+        let restarted2 = ChainParticipationGate::new(true).with_persistence(recorder2.clone());
+        assert_eq!(
+            restarted2.state(),
+            ChainParticipation::Quarantined,
+            "this is the case quarantine is for, and it must survive the fix"
+        );
+
+        // A fresh attempt starts over: last time's commit is not this time's.
+        let _lease3 = restarted2.enter_ibd();
+        assert!(!restarted2.snapshot().ibd_replaced_consensus, "a new IBD has replaced nothing yet");
     }
 
     /// Stands in for the meta-DB row, so a "restart" is just building a new gate from what the
@@ -992,7 +1083,6 @@ mod tests {
         assert!(gate.allows_participation());
     }
 
-    #[test]
     /// **The switch budget's reset could never fire, so the cap was a lifetime cap.**
     ///
     /// `consider_post_ibd_switch` returns early unless the node is NOT participating, and then asked
@@ -1035,6 +1125,7 @@ mod tests {
         assert!(off.settled_span_ms().is_none());
     }
 
+    #[test]
     fn quarantine_never_clears_on_its_own() {
         let gate = ChainParticipationGate::new(true);
         gate.quarantine();
@@ -1165,14 +1256,22 @@ mod tests {
     }
 
     #[test]
-    fn dying_mid_ibd_comes_back_quarantined() {
-        // An IBD that was running when the process died did not finish. `staging.commit()` may have
-        // already swapped the active consensus, and nothing recorded whether it did — so the node
-        // cannot vouch for what it is now running.
+    fn dying_mid_ibd_that_had_committed_comes_back_quarantined() {
+        // An IBD that was running when the process died did not finish. If `staging.commit()` had
+        // already swapped the active consensus, the node is running a chain whose sync never
+        // completed and cannot vouch for it — which is what quarantine is for, and it still is.
+        //
+        // **This test used to make that claim unconditionally, and its own comment said why: "and
+        // nothing recorded whether it did".** Something records it now (`mark_chain_replaced`), so
+        // the claim narrowed to the case it was always about. The other case — a crash BEFORE the
+        // commit, where nothing was adopted — is the far more common one and is covered by
+        // `only_an_ibd_that_committed_makes_a_restart_unrecoverable`, which asserts both arms
+        // against each other.
         let recorder = Arc::new(Recorder::default());
         let gate = ChainParticipationGate::new(true).with_persistence(recorder.clone());
         gate.enter_ibd();
         assert_eq!(recorder.restore().map(|s| s.state), Some(ChainParticipation::IbdRunning));
+        gate.mark_chain_replaced();
 
         let restarted = ChainParticipationGate::new(true).with_persistence(recorder.clone());
         assert!(restarted.is_quarantined());

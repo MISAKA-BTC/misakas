@@ -1224,6 +1224,10 @@ impl FlowContext {
     /// [`FlowContext::finish_ibd_after_failure`].
     pub fn mark_active_consensus_replaced(&self) {
         self.active_consensus_replaced.store(true, Ordering::SeqCst);
+        // …and durably, because the in-memory flag dies with the process and a restart is exactly
+        // when the question gets asked. Without it every interrupted IBD restored as quarantined,
+        // including the common case where nothing had been adopted (ADR-0068 launch audit, F19).
+        self.chain_participation().mark_chain_replaced();
     }
 
     /// Settle the gate after an IBD that failed.
