@@ -1,8 +1,24 @@
 # ADR-0068: The LLM-primary economy — the floor retires to the doctrine's minimum
 
-- Status: Accepted; **Phase 1 implemented 2026-09-01** (F3a and F2 closed in code, fences
-  shipped OFF; this branch). Phase 0 is operations and began the same day; Phase 2 is a
-  coordinated re-mint and is gated on the Phase 1 drill.
+- Status: Accepted; **Phase 1 implemented AND drilled 2026-09-01**. F3a and F2 are closed in
+  code (fences shipped OFF everywhere but devnet, which arms them as the standing drill
+  network); the deterministic drill (`the_heartbeat_clock_sweeps_a_stopped_chain_back_to_life`)
+  releases the block-600 wedge in 4,300 clock ticks; the live two-node drill
+  (`scratchpad hb-drill/REPORT.md` of the implementing session) PROVED the lane on real
+  processes — a zero-bond devnet born and bootstrapped over heartbeats, the nominal hour held
+  to the second twice, 120 s recovery cadence, ε = 1 vs 2²⁰ priced exactly as declared, and
+  unattended producer re-entry twice. Drill findings: **F1** (producer/heartbeat-miner SIGTERM
+  hang — fixed on this branch, the panel's `tick()` copied to both), **F2** (no cadence pacing
+  at genesis-permissive targets — first-epoch mint runaway on fresh nets, Phase 2 item),
+  **F3** (a dying producer accepts its own block after its P2P server stops — narrowed by the
+  F1 fix, residual noted), **F4** (the V2 assembly violates upstream pruning depth-consistency,
+  and LIVE testnet-11 does at 6,600 = 11 × 600 — devnet fixed, t11's correction rides the
+  Phase 2 flag day), **F5** (a heartbeat CHAIN deeper than `max_per_mergeset` strands
+  permanently once a heavier bonded fork puts it in the anticone — chunking rescues sibling
+  floods, not deep side-chains; Phase 2 candidates: template-side prefix absorption via
+  non-tip parents, or a reorg bound on displacing the public heartbeat lane).
+  Phase 0 is operations and began the same day; Phase 2 is a coordinated re-mint and now
+  carries F4's t11 correction and F5's close beside `min_base_class_share_permille`.
 - Date: 2026-09-01
 - Depends on: ADR-0045 (class economy: block-denominated budgets, share table),
   ADR-0054 (share follows production), ADR-0058 (merged work is counted),
