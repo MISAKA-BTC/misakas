@@ -564,6 +564,7 @@ async fn palw_attempt_blocks_weigh_the_constant_under_the_fence() {
             p.palw_attempt_work = Some(kaspa_consensus_core::config::params::PalwAttemptWorkV1 {
                 activation: kaspa_consensus_core::config::params::ForkActivation::always(),
                 work_log2: kaspa_consensus_core::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2,
+                pow_bits: kaspa_consensus_core::pow_layer0::PALW_V2_ATTEMPT_BITS,
             });
         })
         .build();
@@ -644,6 +645,7 @@ async fn the_heartbeat_clock_sweeps_a_stopped_chain_back_to_life() {
             p.palw_attempt_work = Some(kaspa_consensus_core::config::params::PalwAttemptWorkV1 {
                 activation: kaspa_consensus_core::config::params::ForkActivation::always(),
                 work_log2: kaspa_consensus_core::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2,
+                pow_bits: kaspa_consensus_core::pow_layer0::PALW_V2_ATTEMPT_BITS,
             });
         })
         .build();
@@ -838,6 +840,7 @@ async fn a_heartbeat_chain_of_any_depth_merges_but_a_tree_does_not() {
             p.palw_attempt_work = Some(kaspa_consensus_core::config::params::PalwAttemptWorkV1 {
                 activation: kaspa_consensus_core::config::params::ForkActivation::always(),
                 work_log2: kaspa_consensus_core::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2,
+                pow_bits: kaspa_consensus_core::pow_layer0::PALW_V2_ATTEMPT_BITS,
             });
         })
         .build();

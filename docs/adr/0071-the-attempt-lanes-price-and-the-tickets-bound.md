@@ -78,20 +78,45 @@ its own target — `class_ticket_v2` against `state.class_target`, which is chai
 header field — so difficulty stays per-class and stays retargeted, but it stops riding the field
 the global window averages.
 
-**And the retarget's expectation must change with it**, or Decision 1 ships a regression.
-`retarget_over_span_v1` computes `expected = share × census.total_daa_blocks / 1000` — a share of
-the blocks that *actually happened*. When a class under-produces, the realized total falls with it,
-the expectation falls in step, and the retarget cannot see the shortfall it exists to correct. The
-expectation must be the **absolute** count the DAA span implies: `share × span / 1000`, where the
-span is DAA distance and not a block census.
+### Decision 1a — AMENDED at implementation: the expectation stays relative, and the repair is a ceiling
 
-**The `observed == 0` skip is the same bug's other half.** `palw_state_v2`'s per-class retarget
-loop skips a class that produced nothing in the span, on the stated grounds that easing its target
-on a span it sat out would be an unbounded walk in the other direction. That is right for a class
-that *sat out* and wrong for a class that was *locked out* — one whose share entitled it to blocks
-it could not mine. With an absolute expectation the two are distinguishable for the first time
-(`expected == 0` is "sat out"; `expected > 0 && observed == 0` is "locked out"), so the split lands
-with this Decision and cannot land before it.
+**This ADR's first draft said the retarget's expectation must become absolute — `share × DAA span`
+rather than `share × realized total` — and that was wrong.** Recorded rather than quietly replaced,
+because the reasoning that produced it is the reasoning a future reader will produce again.
+
+`retarget_over_span_v1`'s renormalization is load-bearing. Three separate audit findings (H1, and
+F1/F10/F27) were the same shape: an expectation that does not sum back to the realized total gives
+*every* class the same one-directional multiplier at every boundary, with `max_factor` bounding each
+step and nothing bounding the walk. It was measured once at 4^12 over twelve boundaries, ending at
+a target of zero, from which `ZeroPreviousTarget` rejects every block and no node can rejoin. An
+absolute expectation reintroduces exactly that whenever the network produces more or fewer blocks
+than the span implies, which is always.
+
+The diagnosis was also narrower than the draft claimed. A class that produces *any* blocks is
+measured correctly: at 500‰ each, A producing 100 and B producing 20 gives A `observed 100 >
+expected 60` and B `observed 20 < expected 60`, so B eases. The blind spot is exactly one case wide
+— `observed == 0`.
+
+And that case cannot be repaired by easing. **Silence is not evidence of trying.** The chain sees
+block counts, never attempts, so "locked out" and "nobody ran it" are the same observation; a rule
+that eases on silence lets a registrant buy cadence with patience instead of work — register, wait
+for the target to walk to trivial, then take the class's whole epoch budget for free.
+
+**Decision.** An idle class converges toward the price the producing classes are actually paying,
+and never past it. `floor_price` is the hardest target any class that produced in this span holds.
+A class harder than that is paying more than anyone and losing, so it converges toward that price,
+`max_factor`-bounded per boundary, and stops there. A class already easier than that is not locked
+out and does not move. Nothing is ever priced below what a producing class pays, so patience buys
+the incumbent's terms and never better ones — which is what work buys.
+
+This is arithmetically independent of `retarget_over_span_v1`: an idle class is outside the
+`Σ expected = Σ observed` sum by construction, so the ceiling cannot disturb any producer's
+expectation. It is also the missing half of a rule the codebase already states elsewhere — an
+entrant's initial target is the base class's, "priced like the incumbent rather than by its
+registrant" — which was true at registration and never tracked the incumbent again.
+
+Implemented as `palw_class_daa::converge_idle_target_v1`, called from the epoch-close retarget where
+the `continue` used to be.
 
 ## 4. Decision 2 — The ticket is bound to executions, not to tries
 
@@ -185,11 +210,13 @@ steps — and a permission list is the central party ADR-0067 exists to remove.
 
 ## 7. Invariants to verify at each step
 
-1. **No V2 header's price is read from `bits`.** A test that mutates `bits` on an otherwise valid
-   attempt header and asserts the admitted set is unchanged.
-2. **The retarget sees a shortfall it caused.** A class with a nonzero share that produces nothing
-   across a span must ease; a class with a share too small to round up to one block must not.
-   Asserted as a difference, so a collapsed expectation cannot pass both.
+1. **No V2 header's price is read from `bits`.** The substitution is on the algo id in
+   `pow/src/lib.rs`, `expected_bits` is frozen in `pre_pow_validation`, and the fence declares the
+   same constant `validate_palw_v2` demands.
+2. **An idle class can enter, and cannot enter cheaply.** A class priced above every incumbent
+   converges to the incumbent price and stops there; a class already below it does not move; and
+   `Σ expected = Σ observed` is untouched for every class that produced. Asserted as the three
+   cases together, because a rule that only checks the first is the unbounded walk again.
 3. **One inference covers exactly `2^k` nonces.** Two attempts whose nonces differ above bit `k`
    must have different job anchors; two differing below it must share one.
 4. **pwu is difficulty-free.** `palw_pwu_v1`'s output is invariant under the class target.
@@ -200,5 +227,13 @@ steps — and a permission list is the central party ADR-0067 exists to remove.
 
 ## What landed
 
-Nothing from §3-§5 — this is PROPOSED. §2 is the part of the same audit that shipped, listed so the
-two are not confused.
+**Decision 1 and Decision 1a.** The attempt lane's PoW target is substituted on the algo id in
+`consensus/pow/src/lib.rs` (the one place every PoW path goes through, so the pruning proof and
+trusted import cannot price the lane by forgetting to); `pre_pow_validation` freezes `expected_bits`
+so the window does not require a `bits` the PoW check will not use; `PalwAttemptWorkV1::pow_bits`
+carries the constant into `consensus_params_id` and `validate_palw_v2` refuses a fence that names a
+value this binary does not substitute. `converge_idle_target_v1` closes the `observed == 0` blind
+spot. Both V2 fingerprints move, which is what a rule change is supposed to do.
+
+§4 and §5 remain PROPOSED. §2 is the part of the same audit that had already shipped when this was
+written, listed so the two are not confused.

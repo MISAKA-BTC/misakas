@@ -264,8 +264,24 @@ impl StateLayer0 {
         // The substitution lives HERE, in the one place every PoW path goes through (ordinary
         // validation, the pruning proof, trusted import), so no caller can price the lane by
         // forgetting to.
+        //
+        // **ADR-0071 Decision 1 extends the same substitution to the ATTEMPT lane**, for the half
+        // of the coupling the heartbeat fix did not reach. An attempt block's fork-choice weight
+        // is already a constant, so `bits` does not buy weight — but it still set what the block
+        // COSTS, and `bits` is window-derived, so a burst of blocks hardened the target and a
+        // bonded producer had to buy its next block with hashing. On a V2 network the throttle is
+        // the per-class ticket lottery against `state.class_target`, which is chain state; the
+        // global target has no remaining job, and every job it kept doing was a coupling between
+        // the chain's history and the price of inference.
+        //
+        // Substituted unconditionally on the algo id rather than behind the fence, because this
+        // function has no params and the pruning proof and trusted import reach it without one.
+        // That is safe in exactly one direction and it is this one: algo-6 exists only under
+        // `ConsensusV2`, and every V2 genesis already carries `PALW_V2_ATTEMPT_BITS`.
         let target_512 = if header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_HEARTBEAT_V1 {
             Uint512::MAX >> kaspa_consensus_core::pow_layer0::PALW_HEARTBEAT_WORK_LOG2
+        } else if header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2 {
+            Uint512::from_compact_target_bits_512(kaspa_consensus_core::pow_layer0::PALW_V2_ATTEMPT_BITS)
         } else {
             Uint512::from_compact_target_bits_512(header.bits)
         };

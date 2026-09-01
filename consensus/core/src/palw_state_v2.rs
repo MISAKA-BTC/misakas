@@ -4655,6 +4655,28 @@ fn apply_class_retargets(
             // here is a statement about any class's difficulty.
             continue;
         }
+        // **The hardest price anyone actually paid to produce in this lane** (ADR-0071 Decision 1).
+        //
+        // `observed == 0` used to be a plain `continue`, and the reasoning was sound as far as it
+        // went: a span a class sat out says nothing about its difficulty, and easing on silence
+        // walks unboundedly. What it left is a class that CANNOT win a block — an entrant is
+        // priced like the incumbent at registration (`min_grantable_share_permille` is sized so
+        // its expectation is one block per epoch) and then never tracks the incumbent again, so a
+        // target too hard for that one block is a target that stays too hard forever. ADR-0054's
+        // share path decays such a class's cadence; nothing ever touched its price.
+        //
+        // The chain sees block counts and not attempts, so silence cannot be read as evidence of
+        // trying — which is why the repair is a CEILING and not an ease. See
+        // `converge_idle_target_v1`: an idle class converges toward this price and stops, so
+        // patience buys the incumbent's terms and never better ones.
+        let incumbent_price: Option<u128> = {
+            let targets = if counters_are_receipts { &builder.state.receipt_targets } else { &builder.state.class_targets };
+            class_ids
+                .iter()
+                .filter(|id| produced_in_lane.get(id).copied().unwrap_or(0) > 0)
+                .filter_map(|id| targets.get(id).map(|t| t.target))
+                .min()
+        };
         for class_id in &class_ids {
             let class_id = *class_id;
             let class = builder.state.classes.get(&class_id).expect("iterating the map's own keys");
@@ -4664,9 +4686,21 @@ fn apply_class_retargets(
             let Some(share) = builder.state.class_shares.get(&class_id).copied() else { continue };
             let observed = produced_in_lane.get(&class_id).copied().unwrap_or(0);
             if observed == 0 {
-                // It was not in this lane's span. Measuring it as an under-producer would ease
-                // its target on every span it sits out, which is the same unbounded walk in the
-                // other direction.
+                // Not measured against the span — it is outside the `Σ expected = Σ observed` sum
+                // by construction, and putting it back in is the unbounded walk H1 closed. Only
+                // the ceiling applies.
+                let Some(floor_price) = incumbent_price else { continue };
+                let targets = if counters_are_receipts { &builder.state.receipt_targets } else { &builder.state.class_targets };
+                let Some(current) = targets.get(&class_id).map(|t| t.target) else { continue };
+                let next = crate::palw_class_daa::converge_idle_target_v1(current, floor_price, builder.params.class_daa_max_factor())
+                    .max(1);
+                if next != current {
+                    if counters_are_receipts {
+                        builder.write_receipt_target(class_id, Some(PalwClassTargetV2 { target: next }));
+                    } else {
+                        builder.write_target(class_id, Some(PalwClassTargetV2 { target: next }));
+                    }
+                }
                 continue;
             }
             // Renormalized share, saturating at the whole denominator: a sole competing class is

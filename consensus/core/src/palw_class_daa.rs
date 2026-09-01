@@ -606,6 +606,47 @@ pub fn retarget_over_span_v1(
     adjust_class_target_v1(current_target, census.class_daa_blocks, expected, max_factor)
 }
 
+/// **An idle class converges toward the price the producing classes are actually paying, and
+/// never past it** (ADR-0071 Decision 1, as amended at implementation).
+///
+/// [`retarget_over_span_v1`] measures a class against its share of what the span REALIZED, and the
+/// renormalization that makes `Σ expected = Σ observed` is load-bearing: three separate audit
+/// findings (H1, F1/F10/F27) were all the same shape — an expectation that does not sum back to
+/// the realized total gives every class the same one-directional multiplier at every boundary, with
+/// `max_factor` bounding each step and nothing bounding the walk. Measured once at 4^12 over twelve
+/// boundaries, ending at a target of zero, from which no node can rejoin.
+///
+/// So the sum rule stays, and with it a blind spot that is exactly one case wide. A class that
+/// produced ANY blocks is measured correctly — at 500‰ each, A producing 100 and B producing 20
+/// gives A `observed 100 > expected 60` and B `observed 20 < expected 60`, so B eases. A class that
+/// produced NOTHING is skipped, and that is the case the chain could never repair: ADR-0054's share
+/// path decays its cadence but never touches its price, so a class whose target is too hard to win
+/// even one block per epoch stays too hard forever. An entrant is "priced like the incumbent" at
+/// registration and then never tracks the incumbent again.
+///
+/// **Why the price cannot simply be eased.** Silence is not evidence of trying. The chain sees
+/// block counts, not attempts, so "locked out" and "nobody ran it" are the same observation, and a
+/// rule that eases on silence lets a registrant buy cadence with patience instead of work: register,
+/// wait for the target to walk to trivial, then take the class's whole epoch budget for free.
+///
+/// **What the price CAN be is an incumbent's.** `floor_price` is the hardest target any class that
+/// actually produced in this span is paying. An idle class harder than that is paying more than
+/// anyone and losing; it converges toward that price, `max_factor`-bounded per boundary, and stops
+/// there. An idle class already easier than that is not locked out — nobody ran it — and does not
+/// move. Nothing can ever be priced below what a producing class pays, so patience buys the
+/// incumbent's price and never a better one, which is the same thing work buys.
+///
+/// Returns the class's next target. Arithmetically independent of `retarget_over_span_v1`: an idle
+/// class is outside the sum by construction, so this cannot disturb any producer's expectation.
+pub fn converge_idle_target_v1(current_target: u128, floor_price: u128, max_factor: u32) -> u128 {
+    // Not locked out: it is at least as cheap as the cheapest price anyone paid to produce here.
+    if current_target >= floor_price {
+        return current_target;
+    }
+    let step = current_target.saturating_mul(max_factor.max(1) as u128);
+    step.min(floor_price).max(current_target)
+}
+
 /// The whole retarget rule as a pure function of one chain's steps: fold from `boot_target` in chain
 /// order (oldest first), retargeting once at each boundary the steps cross.
 ///
@@ -828,6 +869,49 @@ pub fn derive_class_share_growth_v1(
 
 #[cfg(test)]
 mod tests {
+
+    /// **The locked-out repair, asserted as the three cases it has to tell apart** (ADR-0071
+    /// Decision 1).
+    #[test]
+    fn an_idle_class_converges_to_the_incumbent_price_and_never_past_it() {
+        const INCUMBENT: u128 = 1_000_000;
+        // 1. Harder than every producer, so it is losing a lottery it pays more than anyone to
+        //    enter. It moves — this is the case that had no repair at all.
+        let stuck = INCUMBENT / 16;
+        let eased = converge_idle_target_v1(stuck, INCUMBENT, 4);
+        assert!(eased > stuck, "a class priced above every incumbent must be able to move");
+        assert_eq!(eased, stuck * 4, "and by at most max_factor in one boundary");
+        assert!(eased <= INCUMBENT, "never past the price a producing class is actually paying");
+        // Repeated boundaries converge and then STOP at the incumbent's price.
+        let mut t = stuck;
+        for _ in 0..10 {
+            t = converge_idle_target_v1(t, INCUMBENT, 4);
+        }
+        assert_eq!(t, INCUMBENT, "it converges to the incumbent price");
+        assert_eq!(converge_idle_target_v1(t, INCUMBENT, 4), INCUMBENT, "and does not walk past it, ever");
+
+        // 2. Already cheaper than the cheapest producer and still silent: nobody ran it. Easing
+        //    here is the unbounded walk H1 closed, and buying cadence with patience.
+        let idle_but_cheap = INCUMBENT * 8;
+        assert_eq!(converge_idle_target_v1(idle_but_cheap, INCUMBENT, 4), idle_but_cheap, "silence is not evidence of trying");
+
+        // 3. Exactly at the incumbent price is case 2, not case 1 — the boundary is inclusive so
+        //    a class at parity cannot ratchet itself below parity one epoch at a time.
+        assert_eq!(converge_idle_target_v1(INCUMBENT, INCUMBENT, 4), INCUMBENT);
+    }
+
+    /// The overflow arm, because a target near `u128::MAX` times `max_factor` is the one input
+    /// that could wrap a difficulty into "impossibly hard" — the accident this codebase has
+    /// already paid for once in `palw_pwu_v1`.
+    #[test]
+    fn converging_an_almost_maximal_target_saturates_rather_than_wrapping() {
+        let huge = u128::MAX / 2;
+        assert_eq!(converge_idle_target_v1(huge, u128::MAX, 8), u128::MAX, "saturating, then clamped to the price");
+        assert_eq!(converge_idle_target_v1(u128::MAX, u128::MAX, 8), u128::MAX);
+        // A zero factor would freeze the rule; it is treated as one, which is a no-op and not a
+        // multiply-by-zero that hands back the hardest target representable.
+        assert_eq!(converge_idle_target_v1(100, 1_000, 0), 100);
+    }
 
     /// ADR-0038 Decision D: a share is looked up, and a class outside the domain has none.
     ///

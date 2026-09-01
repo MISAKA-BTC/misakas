@@ -419,6 +419,21 @@ pub struct PalwAttemptWorkV1 {
     /// The attempt lane's work as an exponent: an algo-6 block contributes `1 << work_log2` to
     /// blue work, independent of the `bits` it carries.
     pub work_log2: u32,
+    /// **ADR-0071 Decision 1: the lane's PoW TARGET, frozen, so its price leaves `header.bits`
+    /// the way its weight already did.**
+    ///
+    /// `work_log2` above stopped the difficulty window from buying fork-choice weight. It did not
+    /// stop the window from setting what an attempt block COSTS: `bits` is window-derived, it
+    /// hardens whenever blocks arrive faster than the cadence, and a bonded producer then has to
+    /// buy its block with hashing. A V2 network's throttle is the per-class ticket lottery against
+    /// `state.class_target` — chain state, not a header field — so the global target has no job
+    /// left to do and every job it keeps doing is a coupling.
+    ///
+    /// Same hazard and same lock as `work_log2`: hashed into `consensus_params_id`, never visited
+    /// by the fence visitor, and refused at start unless it names
+    /// [`crate::pow_layer0::PALW_V2_ATTEMPT_BITS`] — the value the enforcing code substitutes and
+    /// the value every V2 genesis already carries.
+    pub pow_bits: u32,
 }
 
 /// **ADR-0066 Decision 4's parameter: the inactivity leak, and how long silence must last.**
@@ -844,6 +859,24 @@ impl Params {
         self
     }
 
+    /// **Cadence and depths together, reading the bundle out of the params themselves.**
+    ///
+    /// The form a caller wants once `palw_consensus_mode` is already installed. The assembly uses
+    /// the two halves separately because it derives the depths before it has anywhere to put the
+    /// bundle; every OTHER caller sets the mode first, and every other caller that hand-rolled a
+    /// V2 params set got the cadence wrong — which is what this exists to make hard.
+    pub fn with_palw_v2_cadence(self) -> Self {
+        let bundle = match &self.palw_consensus_mode {
+            crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => Some(bundle.clone()),
+            _ => None,
+        };
+        let out = self.with_two_minute_cadence();
+        match bundle {
+            Some(bundle) => out.with_palw_v2_depths(&bundle),
+            None => out,
+        }
+    }
+
     /// **Every field that means "how fast this chain runs", set together.**
     ///
     /// A PALW V2 network runs one block per 120 s (ADR-0038 Decision H). That is not one field:
@@ -940,6 +973,20 @@ impl Params {
         {
             return Err(PalwModeV2Error::Invalid(
                 "palw_attempt_work declares a work_log2 this binary does not implement: the attempt lane's work is a \
+                 network constant and the fence must name the same one",
+            ));
+        }
+        // **ADR-0071 Decision 1: the same lock for the lane's PRICE, and for the same reason the
+        // one above exists for its weight.** The target actually applied lives in `pow/src/lib.rs`
+        // as a constant, because the PoW path has no params; `pow_bits` is what an operator reads
+        // off `consensus_params_id`. Two sources for one number is how a value gets announced
+        // rather than enforced.
+        if let Some(attempt_work) = self.palw_attempt_work
+            && attempt_work.activation != ForkActivation::never()
+            && attempt_work.pow_bits != crate::pow_layer0::PALW_V2_ATTEMPT_BITS
+        {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_attempt_work declares a pow_bits this binary does not substitute: the attempt lane's target is a \
                  network constant and the fence must name the same one",
             ));
         }
@@ -1387,6 +1434,27 @@ impl Params {
     /// finding F2, closed by ADR-0068 Phase 1.)
     pub fn palw_attempt_work_open_at(&self, daa_score: u64) -> bool {
         self.palw_attempt_work_fence().is_some_and(|f| f.is_active(daa_score))
+    }
+
+    /// **The bits every header must carry while the attempt-work fence is open** (ADR-0071
+    /// Decision 1).
+    ///
+    /// `None` means the ordinary window output applies. `Some(bits)` means the network has frozen
+    /// its global target, so `check_difficulty_and_daa_score` must compare against this instead of
+    /// against what the window computed — otherwise the window still prices the lane and the
+    /// substitution in `pow/src/lib.rs` is a header that fails its own difficulty check.
+    pub fn palw_attempt_pow_bits_at(&self, daa_score: u64) -> Option<u32> {
+        self.palw_attempt_pow_bits_fence().filter(|(fence, _)| fence.is_active(daa_score)).map(|(_, bits)| bits)
+    }
+
+    /// The same fact as a `(fence, bits)` pair, for a processor that holds no `Params` and must
+    /// decide per header. The mode condition is already folded in, so a hash-priced network gets
+    /// `None` and keeps the window's answer.
+    pub fn palw_attempt_pow_bits_fence(&self) -> Option<(ForkActivation, u32)> {
+        match (&self.palw_consensus_mode, self.palw_attempt_work) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(w)) => Some((w.activation, w.pow_bits)),
+            _ => None,
+        }
     }
 
     /// The attempt-work fence **with the mode condition already folded in** — `Some` only on a
@@ -1953,6 +2021,11 @@ impl Params {
             h.write(b"palw_attempt_work");
             h.write(attempt_work.activation.daa_score().to_le_bytes());
             h.write(attempt_work.work_log2.to_le_bytes());
+            // ADR-0071 Decision 1: the frozen target rides beside the frozen weight, so an
+            // operator who reads the fingerprint has read both halves of "this lane's price does
+            // not come from `bits`". A rule this changes silently would be two networks with one
+            // name — the exact failure the id exists to make impossible.
+            h.write(attempt_work.pow_bits.to_le_bytes());
         }
         if let Some(leak) = palw_inactivity_leak {
             h.write(b"palw_inactivity_leak");
@@ -6295,8 +6368,11 @@ fn palw_rc_arm_phase1(mut params: Params) -> Params {
         work_log2: crate::pow_layer0::PALW_HEARTBEAT_WORK_LOG2,
         max_per_mergeset: crate::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET,
     });
-    params.palw_attempt_work =
-        Some(PalwAttemptWorkV1 { activation: ForkActivation::always(), work_log2: crate::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2 });
+    params.palw_attempt_work = Some(PalwAttemptWorkV1 {
+        activation: ForkActivation::always(),
+        work_log2: crate::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2,
+        pow_bits: crate::pow_layer0::PALW_V2_ATTEMPT_BITS,
+    });
     // **ADR-0065 Decision 4, armed — the launch audit's other unattended fence.**
     //
     // Dormant, an `Unavailable` quorum needs no proof of anything: a seat that did not RECEIVE a
@@ -6673,6 +6749,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_attempt_work: Some(PalwAttemptWorkV1 {
         activation: ForkActivation::always(),
         work_log2: crate::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2,
+        pow_bits: crate::pow_layer0::PALW_V2_ATTEMPT_BITS,
     }),
     palw_inactivity_leak: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
@@ -7183,7 +7260,11 @@ mod consensus_params_id_tests {
 
         let armed = |activation: ForkActivation| {
             let mut p = MAINNET_PARAMS;
-            p.palw_attempt_work = Some(PalwAttemptWorkV1 { activation, work_log2: crate::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2 });
+            p.palw_attempt_work = Some(PalwAttemptWorkV1 {
+                activation,
+                work_log2: crate::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2,
+                pow_bits: crate::pow_layer0::PALW_V2_ATTEMPT_BITS,
+            });
             p
         };
         assert_eq!(
@@ -7222,7 +7303,11 @@ mod consensus_params_id_tests {
         // implement refuses to start — for the attempt work AND for the width bound.
         let mut rc = palw_rc_shipped_params();
         rc.palw_attempt_work =
-            Some(PalwAttemptWorkV1 { activation: ForkActivation::new(1), work_log2: crate::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2 });
+            Some(PalwAttemptWorkV1 {
+                activation: ForkActivation::new(1),
+                work_log2: crate::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2,
+                pow_bits: crate::pow_layer0::PALW_V2_ATTEMPT_BITS,
+            });
         rc.validate_palw_v2().expect("the shipped V2 preset may re-price its attempt lane by configuration");
         assert!(rc.palw_attempt_work_open_at(2));
 
@@ -7230,6 +7315,7 @@ mod consensus_params_id_tests {
         wrong_work.palw_attempt_work = Some(PalwAttemptWorkV1 {
             activation: ForkActivation::always(),
             work_log2: crate::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2 + 1,
+            pow_bits: crate::pow_layer0::PALW_V2_ATTEMPT_BITS,
         });
         assert!(wrong_work.validate_palw_v2().is_err(), "an attempt work the binary does not implement must not start");
 
@@ -7264,6 +7350,7 @@ mod consensus_params_id_tests {
         hash_net.palw_attempt_work = Some(PalwAttemptWorkV1 {
             activation: ForkActivation::always(),
             work_log2: crate::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2,
+            pow_bits: crate::pow_layer0::PALW_V2_ATTEMPT_BITS,
         });
         assert!(!hash_net.palw_attempt_work_open_at(0), "the constant is a V2 rule");
         assert!(hash_net.palw_attempt_work_fence().is_none());
@@ -8067,7 +8154,14 @@ mod consensus_params_id_tests {
                 // The genesis is untouched by both; the RULESET id moves, so this build and
                 // d7510c7a-era builds refuse each other at the handshake instead of disagreeing
                 // about a court verdict at consensus. **Deploy is whole-fleet-together.**
-                "272ed6a8ebbb421cbdcfd3bb8619e685fad372357112ccbf5fb354a58aa27d89",
+                //
+                // …and once more for ADR-0071: the attempt lane's PoW target leaves `header.bits`
+                // (`PalwAttemptWorkV1::pow_bits`), the ticket is bounded by executions, and the
+                // per-class retarget expects an absolute count. Every one of those is a rule two
+                // nodes must agree on before they agree on a block, so the id moves and old builds
+                // refuse this one at the handshake instead of diverging at a verdict.
+                // **Deploy is whole-fleet-together.**
+                "ce79c069497fc4fb4daf6d1f9d4ecd849f3f237d708fca5127917c3d833b3386",
             ),
             ("simnet", SIMNET_PARAMS, "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd"),
             // Re-pinned twice for ADR-0068 Phase 1: first when the drill network armed the
@@ -8087,7 +8181,7 @@ mod consensus_params_id_tests {
             // set; devnet keeps its deliberately widened `max_block_parents: 64`. testnet-11 is
             // untouched because its base already carried the whole set — which is the property
             // that made this safe to apply unconditionally.
-            ("devnet", DEVNET_PARAMS, "84f15819280df2bcac00f33db78ca7a8f291bd99ad6a1b4173f6def90f93f785"),
+            ("devnet", DEVNET_PARAMS, "771371ea1c35fb6acbac2c74c49e094aea64044aa4e1297545a8087910f122a2"),
         ]
         .into_iter()
         .filter_map(|(name, params, expected)| {

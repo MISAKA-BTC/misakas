@@ -463,6 +463,25 @@ pub const PALW_HEARTBEAT_MAX_PER_MERGESET: u64 = 4;
 /// start — the fence declares the price it believes it is arming.
 pub const PALW_ATTEMPT_BLUE_WORK_LOG2: u32 = 20;
 
+/// **The attempt lane's Layer-0 TARGET, as a network constant** (ADR-0071 Decision 1).
+///
+/// [`PALW_ATTEMPT_BLUE_WORK_LOG2`] took the lane's fork-choice WEIGHT off `header.bits`. This takes
+/// its PRICE off the same field, and the reason is the one ADR-0066 already wrote down for the
+/// heartbeat lane: `bits` is what the difficulty window averages, so any lane priced by it is a
+/// lane whose cost the chain's own history feeds back into.
+///
+/// For the attempt lane the feedback does not show up in fork choice — the weight is already a
+/// constant — it shows up in **admission**. `bits` sets the global target, and a V2 network's
+/// throttle is supposed to be the per-class ticket lottery against `state.class_target`, which is
+/// chain state. Left window-derived, `bits` hardens whenever blocks arrive faster than the cadence
+/// and a bonded producer must then buy its block with hashing, which is exactly what a network
+/// whose work is inference must not require.
+///
+/// The value is the ambient V2 target — `MAX_DIFFICULTY_TARGET` in compact form, which is what
+/// every V2 genesis already carries (`PALW_RC_GENESIS`, `DEVNET_GENESIS`). Asserted against the
+/// constant rather than typed twice, in this module's tests.
+pub const PALW_V2_ATTEMPT_BITS: u32 = 0x207fffff;
+
 /// Output width of the algo_id = 3 Layer-1 tag: BLAKE2b-512 (64) ∥ SHA3-512 (64) = 128 bytes. Within
 /// [`POW_L1_TAG_MAX_BYTES`] (256), so the Layer-0 finalizer accepts it.
 pub const POW_L1_BLAKE2B_SHA3_OUT_BYTES: usize = 128;
@@ -1213,6 +1232,23 @@ pub fn calc_work_512(target: Uint512) -> Uint576 {
 
 #[cfg(test)]
 mod tests {
+
+    /// **The attempt lane's frozen bits ARE the ambient V2 target, not a number beside it.**
+    ///
+    /// `PALW_V2_ATTEMPT_BITS` is what `pow/src/lib.rs` substitutes and what `validate_palw_v2`
+    /// makes the fence declare, so a typo here would be a target no V2 genesis carries and every
+    /// V2 header would fail its own PoW. Compared against the constant every preset's
+    /// `max_difficulty_target` is set from, so the two cannot drift.
+    #[test]
+    fn the_attempt_lanes_frozen_bits_are_the_ambient_v2_target() {
+        use crate::config::constants::consensus::MAX_DIFFICULTY_TARGET;
+        assert_eq!(PALW_V2_ATTEMPT_BITS, MAX_DIFFICULTY_TARGET.compact_target_bits());
+        // …and it is the value the shipped V2 genesis blocks already carry, so arming the lock
+        // does not invalidate a genesis header.
+        assert_eq!(crate::config::genesis::PALW_RC_GENESIS.bits, PALW_V2_ATTEMPT_BITS);
+        assert_eq!(crate::config::genesis::DEVNET_GENESIS.bits, PALW_V2_ATTEMPT_BITS);
+    }
+
     use super::*;
     use kaspa_hashes::ZERO_HASH64;
 
