@@ -24,6 +24,8 @@ chain-side model distribution network (ADR-0067 Decision 6).
 
 ---
 
+> **Security amendment appended (2026-09-02)** — see the last section (SA-1…SA-8), corrections found reading the ADR against the tree: the memory ceiling must not be `RLIMIT_AS` (the hybrid maps 33 GiB); the signer trusts the supervisor's channel, not the gateway's bytes; the DA opening server authenticates; `PATH` leaves the allowlist; Decision 7 and ADR-0077 Decision 6 are one rule; nothing logs a prompt.
+
 ## 1. The finding: the provenance half is built, the host half is not
 
 The proposal's chain — model → runtime → input → execution → receipt → output root → artifact — is
@@ -409,3 +411,42 @@ reason gets re-proposed.
 | confinement backend `linux-seccomp-landlock` / `macos-sandbox-exec` / `none` | reported string | what is actually in force, never what was configured (Decisions 5, 13; S12) |
 
 No consensus constant, no state field, no object, no version bump. That is the point of Decision 2.
+
+## Security amendment (2026-09-02) — corrections found reading the ADR against the tree
+
+**SA-1 — The memory ceiling measures the right thing.** Decision 6 names `RLIMIT_AS`. The hybrid
+maps a 33 GiB artifact (Relaunch 5e: 5m40s to map), so an address-space limit at any "RSS-shaped"
+value kills the worker at startup. On Linux the ceiling is cgroup v2 `memory.max` (or
+`RLIMIT_DATA` plus a supervisor RSS poll where cgroups are unavailable); on macOS a supervisor RSS
+watchdog with kill; the constant is named for what it measures (`PALW_WORKER_MAX_RESIDENT_BYTES`).
+Mapped file pages are not the process's to be charged for twice.
+
+**SA-2 — The signer trusts the supervisor's channel, not the gateway's bytes.** Decision 8 has the
+signer re-derive the id; it must also refuse a commitment whose roots differ from the worker result
+frame the supervisor attaches to the request. Otherwise a compromised gateway obtains signatures on
+fabricated commitments, and an honest court then slashes the operator's bond for them. Residual,
+stated: a compromised worker can still fabricate — the court doing its job — and the loss is bounded
+by the exposure ceiling (ADR-0077 SA-1).
+
+**SA-3 — The DA opening server authenticates** (ADR-0077 SA-2): bonded requesters, bounded bytes,
+a per-bond rate; Decision 4's table row gains that column.
+
+**SA-4 — `PATH` leaves the allowlist.** The supervisor spawns the worker by absolute path; a `PATH`
+the child inherits is an execution vector on every platform without an `execve` denial (macOS
+partial, Windows none).
+
+**SA-5 — Decision 9 for a persistent runtime**: verify at map time, re-verify on file-identity
+change, open read-only, fault → `JobFailed` (ADR-0077 SA-6).
+
+**SA-6 — Decision 7 and ADR-0077 Decision 6 are one rule.** The segment-wise template is
+gateway-side and consensus-inert (`TEMPLATE_ID_V1` lives in `misaka-palw-gateway`; consensus sees
+ids); Decision 7's "a future class profile rather than an edit of this one" is corrected to that.
+The security property is the same in both forms — untrusted text never yields a control id — and
+S7's corpus pins it.
+
+**SA-7 — Nothing logs a prompt.** Gateway, supervisor, worker and seat log no prompt text or ids by
+default; `security-report` prints paths and posture, never key material or prompts.
+
+**SA-8 — Decision 10's per-source rate is not the bound.** Sources share addresses behind proxies;
+the binding limits are one job slot, a bounded in-flight queue, and a daily public-job budget tied
+to exposure (ADR-0077 SA-1).
