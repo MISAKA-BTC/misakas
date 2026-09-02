@@ -84,8 +84,57 @@ const PALW_PROCESS_NAMES: &[&str] =
 
 /// **SA-7.** A flag whose VALUE would name or carry key material keeps its name and loses its
 /// value. The report says "this process was pointed at a key", never where or which.
-const SECRET_BEARING_FLAGS: &[&str] =
-    &["--bond-key-seed", "--seed", "--key", "--private-key", "--keyfile", "--validator-seed", "--mnemonic", "--password"];
+///
+/// This list is exact and it is not the whole rule: [`flag_is_secret_bearing`] also applies a
+/// SUFFIX rule, because a redaction list that has to be remembered is a redaction list that is
+/// one flag out of date. `--rpckey` (the RPC TLS private key) and `--palw-producer-key` were both
+/// missing from this list until the suffix rule was written, and both had already shipped.
+const SECRET_BEARING_FLAGS: &[&str] = &[
+    "--bond-key-seed",
+    "--derive-seed",
+    "--key",
+    "--key-file",
+    "--keyfile",
+    "--mnemonic",
+    "--palw-producer-key",
+    "--passphrase",
+    "--password",
+    "--private-key",
+    "--rpckey",
+    "--secret",
+    "--seed",
+    "--seed-hex",
+    "--validator-key",
+    "--validator-seed",
+];
+
+/// Flags that end in `seed` or `key` and are NOT key material. A seeder host list is operational
+/// information this report exists to show; redacting it would make the report worse for nothing.
+const NOT_SECRET_DESPITE_THE_SUFFIX: &[&str] = &["--dnsseed", "--nodnsseed", "--grpcseed", "--addpeer", "--connect"];
+
+/// Does this flag's VALUE carry, or point at, key material?
+///
+/// Exact names first, then a suffix rule so a flag added tomorrow is redacted today: anything
+/// ending in `key` or `seed`, or naming a secret, a mnemonic, a password or a passphrase — with
+/// `pubkey`/`publickey` excluded, because a public key is public.
+fn flag_is_secret_bearing(flag: &str) -> bool {
+    if NOT_SECRET_DESPITE_THE_SUFFIX.contains(&flag) {
+        return false;
+    }
+    if SECRET_BEARING_FLAGS.contains(&flag) {
+        return true;
+    }
+    let name = flag.trim_start_matches('-');
+    if name.ends_with("pubkey") || name.ends_with("publickey") {
+        return false;
+    }
+    name.ends_with("key")
+        || name.ends_with("seed")
+        || name.contains("secret")
+        || name.contains("mnemonic")
+        || name.contains("password")
+        || name.contains("passphrase")
+}
 
 fn redact_args(raw: &str) -> Vec<String> {
     let mut out = Vec::new();
@@ -97,12 +146,12 @@ fn redact_args(raw: &str) -> Vec<String> {
             continue;
         }
         if let Some((flag, _)) = token.split_once('=')
-            && SECRET_BEARING_FLAGS.contains(&flag)
+            && flag_is_secret_bearing(flag)
         {
             out.push(format!("{flag}=<redacted>"));
             continue;
         }
-        if SECRET_BEARING_FLAGS.contains(&token) {
+        if flag_is_secret_bearing(token) {
             redact_next = true;
         }
         out.push(token.to_string());
@@ -520,8 +569,7 @@ fn process_holds_key_material(p: &LiveProcess) -> Option<String> {
     if p.name == "kaspa-pq-signer" {
         return Some("the ML-DSA-87 secret (this is the signer sidecar — the one process that should)".into());
     }
-    let flags: Vec<&String> =
-        p.args.iter().filter(|a| SECRET_BEARING_FLAGS.iter().any(|f| a.as_str() == *f || a.starts_with(&format!("{f}=")))).collect();
+    let flags: Vec<&String> = p.args.iter().filter(|a| flag_is_secret_bearing(a.split('=').next().unwrap_or(a))).collect();
     if flags.is_empty() {
         return None;
     }
@@ -638,6 +686,46 @@ mod tests {
         let joined = redact_args("misaka-palw-fp-rail --bond-key-seed=/srv/secret/bond.seed");
         assert!(joined.contains(&"--bond-key-seed=<redacted>".to_string()));
         assert!(!joined.iter().any(|a| a.contains("/srv/secret")));
+    }
+
+    /// **SA-7, the half a hand-maintained list gets wrong.** `--rpckey` (the RPC TLS private key)
+    /// and `--palw-producer-key` both shipped while the redaction list did not name them. The
+    /// suffix rule is what makes tomorrow's flag redacted today; the exceptions are the flags that
+    /// end in `seed`/`key` and are not secrets, and over-redacting those would only make the
+    /// report worse.
+    #[test]
+    fn the_suffix_rule_redacts_the_flags_nobody_added_to_the_list() {
+        for secret in [
+            "--rpckey",
+            "--palw-producer-key",
+            "--validator-key",
+            "--validator-seed",
+            "--derive-seed",
+            "--seed-hex",
+            "--secret",
+            "--passphrase",
+            // The point of the rule: a flag that does not exist yet.
+            "--some-future-signing-key",
+            "--operator-recovery-seed",
+            "--wallet-password",
+        ] {
+            assert!(flag_is_secret_bearing(secret), "{secret} must lose its value");
+            let args = redact_args(&format!("kaspad {secret} /srv/private/material"));
+            assert!(args.contains(&"<redacted>".to_string()), "{secret}: {args:?}");
+            assert!(!args.iter().any(|a| a.contains("/srv/private")), "{secret}: {args:?}");
+        }
+
+        for public in ["--dnsseed", "--nodnsseed", "--grpcseed", "--print-bond-pubkey", "--rpclisten", "--utxoindex", "--key-stdin"] {
+            assert!(!flag_is_secret_bearing(public), "{public} carries no key material and must keep its value");
+        }
+        let seeder = redact_args("kaspad --dnsseed seeder.misakachain.com --rpckey /etc/tls/node.key");
+        assert!(seeder.contains(&"seeder.misakachain.com".to_string()), "a seeder host is operational information: {seeder:?}");
+        assert!(!seeder.iter().any(|a| a.contains("node.key")), "the TLS private key path must not be printed: {seeder:?}");
+
+        // ...and a process pointed at one is NAMED as holding key material, by the same rule.
+        let node = LiveProcess { pid: 9, name: "kaspad".into(), args: redact_args("kaspad --rpckey /etc/tls/node.key") };
+        let held = process_holds_key_material(&node).expect("a node pointed at a TLS private key holds key material");
+        assert!(held.contains("--rpckey") && held.contains("value not shown"), "{held}");
     }
 
     /// **S12.** With no installer having declared a backend, the report says `none` — not the

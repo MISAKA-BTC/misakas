@@ -1,0 +1,39 @@
+{
+  "01-cube.json": {
+    "artifact_bytes": 1716,
+    "artifact_hash": "8ddb391b35d0fd52b7ebf640143dce5901a14c1da0babbe17f07eb1cad3a3ec4f7f5146bfd489030927a4dbd78ae3f2e05288b51ee1991f6f44a5bd48ccf1e5a",
+    "dsl_hash": "ca684e0bc7fc97b466decd921ba73585b4c305d42d670e41a916aa3c62625fb2a637d73dee065b32273d7566d27e6112cb89b8c5d1404a2ddd73149c49fb92dc"
+  },
+  "02-hierarchy.json": {
+    "artifact_bytes": 2716,
+    "artifact_hash": "f4cbcf0f3b4c79f2b1386f5c884f91ca080b6e5fde73a2c4f4ee650679ed526f4e7d762015c6bae13381d4f07491c7322583baa83fdae533d9b8d7382ee5caff",
+    "dsl_hash": "c75bed84259082c774c24ce1186dd313e7def35ed81f658080a444bc5662fbbefa3dd3a149bf0ab7ae528d1949271ba500a72d5bf667df71bd72d228e542fbbe"
+  },
+  "03-prism-octagon.json": {
+    "artifact_bytes": 1616,
+    "artifact_hash": "17de2582bcd71ffea4d21ccc634cb4591a1721fe7d4c211eccdf85795237f87db26f14593a304c7be52bcdd5e45eb8c0bea09b5fb2a6e913c58e6afdb2ad50c6",
+    "dsl_hash": "0675b3ffa94190e2c4adc28eedde26ab351b77555b7b1db2e5bfe31055c06b8204b93c03984bfeb6e14de89a6a0d1690cd0c8bc4918a9e0c2531e89fa6fe4a55"
+  },
+  "04-triangles-alignment-gap.json": {
+    "artifact_bytes": 1768,
+    "artifact_hash": "a4ec293990aca63dfd58b6d4f21315656953e2c5d74c156b61881d60654790fbe8f78c73519d5797fa3afd2cb1e1b6999371c8c37894142b31dd1ac62b0a2af8",
+    "dsl_hash": "add69097c58ac86a619bb9037e1db308b76dee40696b2e5bdefd62a65e9555f984d8dc6a9f4b64b2ca656eca0595b1d8ffdcc800ecec72d66c2403773f61ba48"
+  },
+  "05-tetrahedral-rotations.json": {
+    "artifact_bytes": 17728,
+    "artifact_hash": "71d32ab8a35497119e4466a270dd8e71254392526abd703a631042418d553b5862ea0a8d880a25c2d2737cc08f5854a3cb0859500b311a8d1cec0a5c1e6dd14e",
+    "dsl_hash": "003bb4bc2384d1d16650a5cf51b79451647279754d9a9943df7fa6dea7a3400e44b123af14d06eb6867a85e2556d6cef4a24c801a30eb3eb0f98024281663a7a"
+  },
+  "06-inexact-refused.json": {
+    "refused": "inexact: 16777217/2^8 needs 25 significant bits; binary32 holds 24"
+  },
+  "07-over-dsl-bytes-refused.json": {
+    "refused": "grammar: the answer is 273739 bytes, past the declared max_dsl_bytes of 262144; a bound exceeded is no object (ADR-0078 SA-2)"
+  },
+  "08-over-vertex-budget-refused.json": {
+    "refused": "grammar: the scene builds 66048 mesh vertices, past the declared max_steps of 65536; a bound exceeded is no object (ADR-0078 SA-2), and it is decided before a vertex is allocated"
+  },
+  "09-over-artifact-bytes-refused.json": {
+    "refused": "grammar: the scene would write at most 2205162 bytes, past the declared max_artifact_bytes of 2097152; a bound exceeded is no object (ADR-0078 SA-2), and it is decided before a byte is written"
+  }
+}
