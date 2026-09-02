@@ -164,7 +164,7 @@ impl HeaderProcessor {
         if !root_committing_lane && header.palw_state_root != kaspa_hashes::ZERO_HASH64 {
             return Err(RuleError::UncommittedPalwStateRoot(header.pow_algo_id));
         }
-        self.check_palw_carriage_stateless(header)
+        self.check_palw_carriage_stateless(header, attempt_lane)
     }
 
     /// ADR-0042 Decision 6's stateless list (Unit A) and ADR-0044's (Unit B), at the header stage.
@@ -174,8 +174,12 @@ impl HeaderProcessor {
     /// header whose carriage decoded but was never checked against its own position is a solved
     /// PoW that can be re-announced elsewhere — audit P0-1, arriving through the new lanes.
     ///
-    /// **The SIGNATURE is verified here, on both PALW lanes** — this paragraph used to say the
-    /// opposite, and the arms below have disagreed with it since launch blockers §5.
+    /// **The SIGNATURE is verified here, on every PALW lane** — this paragraph used to say the
+    /// opposite, and the arms below have disagreed with it since launch blockers §5. "Every lane"
+    /// is spelled as the shared predicate `is_palw_attempt_algo_id` rather than as a list of
+    /// constants, because the list is what went stale: ADR-0072 added a second attempt id and the
+    /// arm below kept naming only the first, which put every post-fence attempt header back
+    /// through the `_ => Ok(())` this doc was written about.
     ///
     /// The original reasoning was that a signature is only meaningful beside the stateful fact
     /// that the carried key IS the named bond's key, so it belonged in Unit C's admission and the
@@ -187,8 +191,11 @@ impl HeaderProcessor {
     /// receipt lane was written afterwards from the paragraph rather than from the code, and
     /// inherited the hole. Both are checked now, and the stateful admission checks the signature
     /// again beside the bond — the two answer different questions and neither replaces the other.
-    fn check_palw_carriage_stateless(&self, header: &Header) -> BlockProcessResult<()> {
-        use kaspa_consensus_core::pow_layer0::{POW_ALGO_ID_PALW_COMMITTED_V2, POW_ALGO_ID_PALW_RECEIPT_V3};
+    fn check_palw_carriage_stateless(
+        &self,
+        header: &Header,
+        attempt_lane: kaspa_consensus_core::pow_layer0::PalwAttemptLaneV1,
+    ) -> BlockProcessResult<()> {
         // **The SAME domain the acceptance layer verifies under** (re-audit R-8).
         //
         // Audit M2-18 bound the network domain to the genesis so a class-registration signature
@@ -200,67 +207,107 @@ impl HeaderProcessor {
         // reached `StatusUTXOValid`. The header processor already holds the genesis it needs.
         let network_domain =
             kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(&self.network_id, Some(self.genesis.hash));
-        let pre_pow_hash = kaspa_consensus_core::hashing::header::pre_pow_hash_64(header);
-        let reason = match header.pow_algo_id {
-            POW_ALGO_ID_PALW_COMMITTED_V2 => {
-                kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2::decode_wire(&header.palw_commitment)
-                    .map_err(|e| e.to_string())
-                    .and_then(|envelope| {
-                        envelope
-                            .validate_stateless_v2(network_domain, pre_pow_hash, header.timestamp, header.nonce)
-                            .map_err(|e| e.to_string())?;
-                        // **The signature, on the RELAY path** (launch blockers §5).
-                        //
-                        // It was verified only on the chain walk, and the signature sits OUTSIDE
-                        // `commitment_root_v2` (ADR-0042 Decision 3c, deliberately) while the block-identity
-                        // digest hashes the raw carrier bytes. So anyone could take a solved block, write
-                        // arbitrary bytes of the right length into `signature`, and mint an unbounded number
-                        // of distinct blocks that every peer accepted, stored and relayed from ONE proof of
-                        // work — a byte flip and a re-hash each. They never became chain, which is why the
-                        // chain-walk check was thought sufficient; they did not need to, because the cost of
-                        // making one was zero and the cost of carrying one was everybody else's.
-                        //
-                        // Checkable here because the attempt carries its OWN key: whether that key is the
-                        // named bond's is admission item 2's stateful question, but whether the carrier
-                        // authored this attempt with the key it claims needs no state at all.
-                        envelope
-                            .validate_signature_v2(|key, message, sig, context| {
-                                kaspa_txscript::verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false)
-                            })
-                            .map_err(|e| e.to_string())
-                    })
-            }
-            POW_ALGO_ID_PALW_RECEIPT_V3 => {
-                kaspa_consensus_core::palw_freeprompt_v3::PalwReceiptSpendEnvelopeV3::decode(&header.palw_commitment)
-                    .map_err(|e| e.to_string())
-                    .and_then(|envelope| {
-                        envelope
-                            .validate_stateless_v3(network_domain, pre_pow_hash, header.timestamp, header.nonce)
-                            .map_err(|e| e.to_string())?;
-                        // **The same signature, on the same relay path, for the same reason** — the
-                        // arm above learned this and this one was written without it.
-                        //
-                        // `validate_stateless_v3` checks the signature's LENGTH and recomputes the
-                        // challenge; it never verifies the bytes. The challenge commits to
-                        // `pre_pow_hash`, `timestamp` and `nonce` but not to the signature, and the
-                        // signature is not inside the spend id it signs — so flipping one byte of it
-                        // leaves the stateless check passing, the proof of work untouched, and the
-                        // block a different block. One solve, unbounded distinct valid blocks, each
-                        // one accepted, stored and relayed by every peer. That is verbatim the attack
-                        // the attempt lane documents ten lines above, and the receipt lane inherited
-                        // its shape without its fix.
-                        envelope
-                            .validate_signature_v3(|key, message, sig, context| {
-                                kaspa_txscript::verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false)
-                            })
-                            .map_err(|e| e.to_string())
-                    })
-            }
-            _ => return Ok(()),
-        };
-        reason.map_err(|reason| RuleError::BadPalwCarriageAdmission { algo_id: header.pow_algo_id, reason })
+        palw_carriage_stateless_v1(header, attempt_lane, network_domain)
+            .map_err(|reason| RuleError::BadPalwCarriageAdmission { algo_id: header.pow_algo_id, reason })
     }
+}
 
+/// [`HeaderProcessor::check_palw_carriage_stateless`]'s rule, as a function of the header, the lane
+/// and the domain — the three things it actually reads.
+///
+/// Free rather than a method so the dispatch is REACHABLE BY A TEST. That is not tidiness: the
+/// dispatch is what went wrong (ADR-0072 added a second attempt id and the arm kept naming only the
+/// first, so every post-fence attempt header skipped both the envelope binding and the ML-DSA
+/// signature check through the `_ => Ok(())` below), and a rule whose only spelling is inside a
+/// method on a processor that needs six stores to construct is a rule nothing can hold to account.
+/// `the_signature_is_checked_on_every_lane_the_shape_gate_demands_a_carriage_for` is what holds it
+/// now, and it quantifies over the lanes rather than listing ids.
+pub(crate) fn palw_carriage_stateless_v1(
+    header: &Header,
+    attempt_lane: kaspa_consensus_core::pow_layer0::PalwAttemptLaneV1,
+    network_domain: kaspa_hashes::Hash64,
+) -> Result<(), String> {
+    use kaspa_consensus_core::pow_layer0::{POW_ALGO_ID_PALW_RECEIPT_V3, is_palw_attempt_algo_id};
+    let pre_pow_hash = kaspa_consensus_core::hashing::header::pre_pow_hash_64(header);
+    let reason = match header.pow_algo_id {
+        // **EITHER attempt id** (ADR-0072 SA-4). Naming only algo-6 here is how the launch
+        // blockers §5 hole comes back on the new lane: past the fence every attempt block
+        // carries algo-9, and an arm that does not name it falls to the `_` below — no
+        // envelope binding and, worse, no signature check, which is the unbounded-blocks-per-
+        // solve attack this function's own doc describes. Which id is a lane at this height
+        // is not asked again here; the gate above already refused the closed one by id.
+        algo_id if is_palw_attempt_algo_id(algo_id) => {
+            kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2::decode_wire(&header.palw_commitment)
+                .map_err(|e| e.to_string())
+                .and_then(|envelope| {
+                    envelope
+                            // **The LANE's version, not the compiled-in one** (SA-3). The fenced
+                            // shape gate 45 lines above already took it; this call taking
+                            // `PALW_ATTEMPT_V2_VERSION` instead made the fence a no-op on the
+                            // relay path — the gate admitted a legacy envelope and this refused
+                            // it, so an armed network could not validate its own pre-fence
+                            // history at the header stage.
+                            .validate_stateless_v2_at_version(
+                                attempt_lane.attempt_version(),
+                                network_domain,
+                                pre_pow_hash,
+                                header.timestamp,
+                                header.nonce,
+                            )
+                            .map_err(|e| e.to_string())?;
+                    // **The signature, on the RELAY path** (launch blockers §5).
+                    //
+                    // It was verified only on the chain walk, and the signature sits OUTSIDE
+                    // `commitment_root_v2` (ADR-0042 Decision 3c, deliberately) while the block-identity
+                    // digest hashes the raw carrier bytes. So anyone could take a solved block, write
+                    // arbitrary bytes of the right length into `signature`, and mint an unbounded number
+                    // of distinct blocks that every peer accepted, stored and relayed from ONE proof of
+                    // work — a byte flip and a re-hash each. They never became chain, which is why the
+                    // chain-walk check was thought sufficient; they did not need to, because the cost of
+                    // making one was zero and the cost of carrying one was everybody else's.
+                    //
+                    // Checkable here because the attempt carries its OWN key: whether that key is the
+                    // named bond's is admission item 2's stateful question, but whether the carrier
+                    // authored this attempt with the key it claims needs no state at all.
+                    envelope
+                        .validate_signature_v2(|key, message, sig, context| {
+                            kaspa_txscript::verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false)
+                        })
+                        .map_err(|e| e.to_string())
+                })
+        }
+        POW_ALGO_ID_PALW_RECEIPT_V3 => {
+            kaspa_consensus_core::palw_freeprompt_v3::PalwReceiptSpendEnvelopeV3::decode(&header.palw_commitment)
+                .map_err(|e| e.to_string())
+                .and_then(|envelope| {
+                    envelope
+                        .validate_stateless_v3(network_domain, pre_pow_hash, header.timestamp, header.nonce)
+                        .map_err(|e| e.to_string())?;
+                    // **The same signature, on the same relay path, for the same reason** — the
+                    // arm above learned this and this one was written without it.
+                    //
+                    // `validate_stateless_v3` checks the signature's LENGTH and recomputes the
+                    // challenge; it never verifies the bytes. The challenge commits to
+                    // `pre_pow_hash`, `timestamp` and `nonce` but not to the signature, and the
+                    // signature is not inside the spend id it signs — so flipping one byte of it
+                    // leaves the stateless check passing, the proof of work untouched, and the
+                    // block a different block. One solve, unbounded distinct valid blocks, each
+                    // one accepted, stored and relayed by every peer. That is verbatim the attack
+                    // the attempt lane documents ten lines above, and the receipt lane inherited
+                    // its shape without its fix.
+                    envelope
+                        .validate_signature_v3(|key, message, sig, context| {
+                            kaspa_txscript::verify_mldsa87_with_context(key, message, sig, context).unwrap_or(false)
+                        })
+                        .map_err(|e| e.to_string())
+                })
+        }
+        _ => return Ok(()),
+    };
+    reason
+}
+
+impl HeaderProcessor {
     fn check_block_timestamp_in_isolation(&self, header: &Header) -> BlockProcessResult<()> {
         // Timestamp deviation tolerance is in seconds so we multiply by 1000 to get milliseconds (without BPS dependency)
         let max_block_time = unix_now() + self.timestamp_deviation_tolerance * 1000;
@@ -350,5 +397,170 @@ impl HeaderProcessor {
         // (`validate_header_in_isolation` and the ordinary `validate_header`).
         let (level, passed) = kaspa_pow::calc_block_level_check_pow_layer0(header, &self.network_id, self.max_block_level);
         if passed || self.skip_proof_of_work { Ok(level) } else { Err(RuleError::InvalidPoW) }
+    }
+}
+
+#[cfg(test)]
+mod palw_carriage_lane_tests {
+    use super::palw_carriage_stateless_v1;
+    use kaspa_consensus_core::BlueWorkType;
+    use kaspa_consensus_core::header::Header;
+    use kaspa_consensus_core::palw_attempt_v2::{
+        PALW_ATTEMPT_V2_MLDSA87_CONTEXT, PalwAttemptEnvelopeV2, PalwAttemptUnsignedV2, attempt_id_v2, attempt_trace_manifest_root_v1,
+        challenge_v2,
+    };
+    use kaspa_consensus_core::pow_layer0::{
+        POW_ALGO_ID_KHEAVYHASH, POW_ALGO_ID_PALW_COMMITTED_V2, POW_ALGO_ID_PALW_EXEC_V3, PalwAttemptLaneV1,
+    };
+    use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
+    use kaspa_hashes::{Hash64, ZERO_HASH64};
+
+    const TS: u64 = 1_700_000;
+    const NONCE: u64 = 42;
+
+    fn domain() -> Hash64 {
+        Hash64::from_u64_word(0xD0)
+    }
+
+    fn header_with(algo_id: u8, carriage: Vec<u8>) -> Header {
+        let mut header = Header::new_finalized(
+            1,
+            vec![vec![1.into()]].try_into().unwrap(),
+            ZERO_HASH64,
+            ZERO_HASH64,
+            ZERO_HASH64,
+            TS,
+            0x207fffff,
+            NONCE,
+            algo_id,
+            0,
+            BlueWorkType::from_u64(0),
+            0,
+            ZERO_HASH64,
+        );
+        header.palw_commitment = carriage;
+        header.finalize();
+        header
+    }
+
+    fn keypair() -> &'static libcrux_ml_dsa::ml_dsa_87::MLDSA87KeyPair {
+        static KP: std::sync::OnceLock<libcrux_ml_dsa::ml_dsa_87::MLDSA87KeyPair> = std::sync::OnceLock::new();
+        KP.get_or_init(|| libcrux_ml_dsa::ml_dsa_87::generate_key_pair([0xC1u8; 32]))
+    }
+
+    /// A carriage bound to `header`'s position and really signed, at `version`.
+    fn signed_carriage(header: &Header, version: u16) -> Vec<u8> {
+        let bond = TransactionOutpoint::new(TransactionId::from_u64_word(0xB0), 0);
+        let class_id = Hash64::from_u64_word(0xC5);
+        let pre_pow = kaspa_consensus_core::hashing::header::pre_pow_hash_64(header);
+        let trace_root = Hash64::from_u64_word(0x7A);
+        let attempt = PalwAttemptUnsignedV2 {
+            version,
+            network_domain: domain(),
+            challenge: challenge_v2(domain(), pre_pow, header.timestamp, header.nonce, class_id, &bond),
+            class_id,
+            executor_bond: bond,
+            executor_pubkey: keypair().verification_key.as_ref().to_vec(),
+            operator_id: Hash64::from_u64_word(0x0B),
+            artifact_root: Hash64::from_u64_word(0xA7),
+            trace_root,
+            output_root: Hash64::from_u64_word(0x00),
+            execution_root: Hash64::from_u64_word(0x4E),
+            pwu: 7,
+            trace_manifest_root: attempt_trace_manifest_root_v1(
+                trace_root,
+                kaspa_consensus_core::palw_attempt_v2::PALW_ATTEMPT_V2_TRACE_CHUNKS,
+            ),
+            trace_chunk_count: kaspa_consensus_core::palw_attempt_v2::PALW_ATTEMPT_V2_TRACE_CHUNKS,
+            trace_retention_daa: 1_000,
+        };
+        let signature = libcrux_ml_dsa::ml_dsa_87::sign(
+            &keypair().signing_key,
+            attempt_id_v2(&attempt).as_byte_slice(),
+            PALW_ATTEMPT_V2_MLDSA87_CONTEXT,
+            [0x5Au8; 32],
+        )
+        .expect("ML-DSA-87 sign over a 64-byte attempt id")
+        .as_ref()
+        .to_vec();
+        PalwAttemptEnvelopeV2 { attempt, signature }.encode_wire()
+    }
+
+    /// **Every id that carries an attempt reaches a verifier — quantified over the lanes, not
+    /// listed** (ADR-0072 SA-4, launch blockers §5).
+    ///
+    /// The dispatch was `POW_ALGO_ID_PALW_COMMITTED_V2 =>`, and ADR-0072's fence makes the open
+    /// attempt id 9 past it. An algo-9 header therefore fell to `_ => return Ok(())`: no envelope
+    /// binding and no signature check, on the relay path, for every block on the lane the fence
+    /// opens. Listing ids is what went stale, so this asks the lane resolver which id each arm of
+    /// the fence carries and requires that each one is checked.
+    #[test]
+    fn every_attempt_lane_id_reaches_the_stateless_carriage_check() {
+        for lane in [PalwAttemptLaneV1::Unfenced, PalwAttemptLaneV1::LegacyArm, PalwAttemptLaneV1::ExecutionArm] {
+            let algo_id = lane.attempt_algo_id();
+            // No carriage at all is the cheapest thing a verifier must refuse. An arm that never
+            // runs returns `Ok(())` here, which is the defect stated as an assertion.
+            let bare = header_with(algo_id, Vec::new());
+            assert!(
+                palw_carriage_stateless_v1(&bare, lane, domain()).is_err(),
+                "{lane:?} carries algo-{algo_id}; a header with no carriage must not pass the relay gate"
+            );
+        }
+        // The negative side, so the test cannot pass by refusing everything: a non-PALW header has
+        // no carriage to check and must still be admitted here.
+        assert_eq!(
+            palw_carriage_stateless_v1(&header_with(POW_ALGO_ID_KHEAVYHASH, Vec::new()), PalwAttemptLaneV1::Unfenced, domain()),
+            Ok(())
+        );
+    }
+
+    /// **One solved PoW may not become unbounded blocks on the new lane either.**
+    ///
+    /// The exact failure the finding describes: the signature is outside the Layer-0 digest and
+    /// inside the block identity, so an unchecked signature is free bytes anyone can re-roll. With
+    /// the dispatch naming only algo-6 this returned `Ok(())` for a tampered algo-9 carriage.
+    #[test]
+    fn a_tampered_signature_is_refused_on_both_attempt_ids() {
+        for (lane, algo_id) in
+            [(PalwAttemptLaneV1::Unfenced, POW_ALGO_ID_PALW_COMMITTED_V2), (PalwAttemptLaneV1::ExecutionArm, POW_ALGO_ID_PALW_EXEC_V3)]
+        {
+            let mut header = header_with(algo_id, Vec::new());
+            header.palw_commitment = signed_carriage(&header, lane.attempt_version());
+            header.finalize();
+            assert_eq!(palw_carriage_stateless_v1(&header, lane, domain()), Ok(()), "the honest carriage on algo-{algo_id}");
+
+            let mut envelope = PalwAttemptEnvelopeV2::decode_wire(&header.palw_commitment).unwrap();
+            envelope.signature[0] ^= 0x01;
+            let mut tampered = header.clone();
+            tampered.palw_commitment = envelope.encode_wire();
+            tampered.finalize();
+            assert_ne!(tampered.hash, header.hash, "a signature byte really is a different block identity");
+            assert!(
+                palw_carriage_stateless_v1(&tampered, lane, domain()).is_err(),
+                "algo-{algo_id}: a flipped signature byte must not mint a second block from one solve"
+            );
+        }
+    }
+
+    /// **SA-3 binds on the relay path, not only at the shape gate.**
+    ///
+    /// The fenced shape check took the lane's version and the stateless check 45 lines later took
+    /// the compiled-in one, so on an armed network below its fence the two disagreed about every
+    /// block the chain already held: admitted by the gate, refused by the check. A fence nobody can
+    /// sync under is not a fence.
+    #[test]
+    fn the_admissible_envelope_version_is_the_lanes_and_not_the_binarys() {
+        let legacy = PalwAttemptLaneV1::LegacyArm;
+        let mut header = header_with(legacy.attempt_algo_id(), Vec::new());
+        header.palw_commitment = signed_carriage(&header, legacy.attempt_version());
+        header.finalize();
+        assert_eq!(
+            palw_carriage_stateless_v1(&header, legacy, domain()),
+            Ok(()),
+            "below the fence the chain's own pre-ADR-0072 history must validate"
+        );
+        // And the same bytes at a position where the lane demands the current version are refused,
+        // so the check is reading the lane rather than accepting anything.
+        assert!(palw_carriage_stateless_v1(&header, PalwAttemptLaneV1::Unfenced, domain()).is_err());
     }
 }

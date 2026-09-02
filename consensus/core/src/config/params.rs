@@ -686,8 +686,24 @@ pub struct Params {
     /// [`crate::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2`] carrying the pre-ADR-0072 envelope
     /// version, and at or above it the lane is
     /// [`crate::pow_layer0::POW_ALGO_ID_PALW_EXEC_V3`] carrying the current one** — two lanes, one
-    /// binary, so pre-fence history still validates while post-fence blocks are drawn per
-    /// execution.
+    /// binary.
+    ///
+    /// **What that buys, and what it does not, measured rather than asserted.** Post-fence blocks
+    /// are produced and validated: the template builder declares algo-9, the shipped producer
+    /// builds on it, the relay path validates its envelope and its signature, GHOSTDAG prices it at
+    /// the attempt lane's ε, and the free-prompt beacon walk still finds it. Pre-fence history is a
+    /// different matter, and this field must not be read as claiming it works. The LEGACY arm is
+    /// version-fenced on the two peer-facing shape gates and on the relay path's stateless check,
+    /// but two things behind them are still compiled in at the current rule: the stateful admission
+    /// (`palw_admission_v2::check_palw_attempt_admission_full_v2*` → `validate_stateless_v2`), and —
+    /// decisively — the pre-ADR-0072 lottery arithmetic itself, which was deleted at Relaunch 5's
+    /// re-genesis and is not restored here. A legacy-arm block therefore cannot pass PoW under this
+    /// binary whatever its envelope says.
+    ///
+    /// So this fence is safe to arm **at genesis** (`ForkActivation::always()`, where `LegacyArm` is
+    /// unreachable and `consensus_identity_id` separates armed from un-armed builds on its own),
+    /// and arming it at a FUTURE height on a chain with real pre-ADR-0072 history additionally
+    /// requires that arithmetic back byte for byte, as §3 option (b) says.
     ///
     /// **`None` is not "off"; it is "un-fenced".** An un-armed network runs the current rule at
     /// every height on algo-6 — exactly what testnet-11 and devnet run today, and why arming this
@@ -696,9 +712,12 @@ pub struct Params {
     /// on the new rule has none.
     ///
     /// **A bare fence with no companion value** (the [`Self::palw_frontier_provenance`] rule and
-    /// its reason): everything the new lane needs beside the height — the per-class target seed and
-    /// the lane-filtered window's first `bits` — is DERIVED at the fence from state the chain
-    /// already holds (SA-1), never configured. A value sitting beside a fence is normalised out of
+    /// its reason): everything the new lane needs beside the height — the per-class target seed
+    /// ([`crate::palw_class_daa::attempt_target_seed_v1`], the same call a post-genesis admission
+    /// makes) and the lane-filtered window's first `bits` (a constraint on a filter nobody has
+    /// written; no difficulty window in this tree reads `pow_algo_id`) — is DERIVED at the fence
+    /// from state the chain already holds (SA-1), never configured. A value sitting beside a fence
+    /// is normalised out of
     /// [`Self::consensus_identity_id`], so two builds scheduling this at one height with different
     /// companion values would share an identity, peer, and then disagree the moment it fires.
     ///

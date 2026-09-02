@@ -566,7 +566,19 @@ impl PalwProducerService {
             .get_block_template(session, miner_data)
             .await
             .map_err(|e| format!("no block template: {e}"))?;
-        if template.block.header.pow_algo_id != kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2 {
+        // **Either attempt id, because the template's id is the CHAIN's answer** (ADR-0072 SA-4).
+        //
+        // Spelled `!= POW_ALGO_ID_PALW_COMMITTED_V2` this was a stall with a deploy date: past an
+        // armed `palw_attempt_activation` the virtual processor declares algo-9 on every template,
+        // and this returned an error for every one of them, on every node, from the same DAA score
+        // onward. It could not self-heal either — `PalwRulesetV2::validate` requires the bundle's
+        // `algorithm_id` to be 6, so `palw_required_algo_id` is never 9 and the comparison could
+        // never come back. The fence exists to be crossed; the producer must be able to build on
+        // the far side of it.
+        //
+        // What this still refuses is a template from a network that is not running an attempt lane
+        // at all — a kHeavyHash or Argon2id template — which is the check that was meant.
+        if !template_declares_an_attempt_lane(template.block.header.pow_algo_id) {
             return Err(format!("this network declares algo {} — not a ConsensusV2 lane", template.block.header.pow_algo_id));
         }
         // The job is the TEMPLATE's AND the bucket's. See `base0_rc_job_anchor_v1` for why it is
@@ -636,6 +648,18 @@ impl PalwProducerService {
         // nonce — and moves neither lottery. The draw was made the moment the inference finished.
         let timestamp = template.block.header.timestamp;
         let mut attempt = PalwAttemptUnsignedV2 {
+            // **The current version, on both ids this producer can build for** (ADR-0072 SA-3).
+            //
+            // `PalwAttemptLaneV1::attempt_version` is the current version on `Unfenced` (every
+            // shipped preset) and on `ExecutionArm` (algo-9, past an armed fence), so a template
+            // declaring either id wants exactly this number. The third arm — `LegacyArm`, an armed
+            // network BELOW its fence — wants the pre-ADR-0072 version, and this producer cannot
+            // build for it: the pre-ADR-0072 lottery arithmetic those blocks were mined under was
+            // deleted at Relaunch 5's re-genesis, so a legacy envelope could not pass PoW here
+            // whatever version it declared. That is the honest limit of §3 option (b), and it is
+            // why arming this fence is safe at genesis (`ForkActivation::always()`, where
+            // `LegacyArm` is unreachable) and not safe at a future height on a chain with real
+            // pre-ADR-0072 history.
             version: PALW_ATTEMPT_V2_VERSION,
             network_domain,
             challenge: challenge_v2(network_domain, pre_pow, timestamp, nonce, facts.class_id, &bond),
@@ -750,5 +774,45 @@ impl AsyncService for PalwProducerService {
             trace!("{} stopped", PALW_PRODUCER);
             Ok(())
         })
+    }
+}
+
+/// **Can this producer build on the lane the template declares?**
+///
+/// A free function because the answer has to be checkable: as a `!=` against one constant inside an
+/// async method it was a network-wide stall with a deploy date. `build_block_template` writes
+/// `PalwAttemptLaneV1::attempt_algo_id()` for the network's fence at the virtual DAA score, so past
+/// an armed `palw_attempt_activation` every template on every node declares algo-9 — and a producer
+/// that only knows algo-6 stops producing everywhere at the same height, with no configuration that
+/// could bring it back (`PalwRulesetV2::validate` pins the bundle's `algorithm_id` at 6, so
+/// `palw_required_algo_id` is never 9).
+fn template_declares_an_attempt_lane(pow_algo_id: u8) -> bool {
+    kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(pow_algo_id)
+}
+
+#[cfg(test)]
+mod attempt_lane_tests {
+    use super::template_declares_an_attempt_lane;
+    use kaspa_consensus_core::pow_layer0::{POW_ALGO_ID_KHEAVYHASH, POW_ALGO_ID_PALW_RECEIPT_V3, PalwAttemptLaneV1};
+
+    /// **The producer accepts every id the template builder can declare** — asked of the lane
+    /// resolver, not of a list, because the list is what went stale.
+    ///
+    /// Red the moment this is a comparison against a single attempt id: `ExecutionArm`'s id is 9.
+    #[test]
+    fn the_producer_builds_on_every_lane_the_chain_can_declare() {
+        for lane in [PalwAttemptLaneV1::Unfenced, PalwAttemptLaneV1::LegacyArm, PalwAttemptLaneV1::ExecutionArm] {
+            let declared = lane.attempt_algo_id();
+            assert!(
+                template_declares_an_attempt_lane(declared),
+                "{lane:?} makes the template declare algo-{declared}; refusing it stops production on every node at the fence"
+            );
+        }
+        // And it still refuses what the check was actually for: a template from a network that is
+        // not running an attempt lane at all.
+        assert!(!template_declares_an_attempt_lane(POW_ALGO_ID_KHEAVYHASH));
+        // The receipt lane is a different producer path (`produce_one_receipt`), so this one must
+        // not claim it.
+        assert!(!template_declares_an_attempt_lane(POW_ALGO_ID_PALW_RECEIPT_V3));
     }
 }

@@ -5862,6 +5862,14 @@ impl VirtualStateProcessor {
         kaspa_consensus_core::palw_freeprompt_v3::PalwBeaconFactV3,
         kaspa_consensus_core::palw_fp_beacon_v3::PalwBeaconDeriveV3Error,
     > {
+        // The network's attempt-lane id. This walk descends THROUGH ADR-0072's fence, so the id it
+        // is given cannot be the whole answer — `derive_beacon_fact_to_genesis_v3` matches it with
+        // `is_attempt_class_v3`, which admits either attempt id once this one is an attempt id at
+        // all. Handing it a single number was a permanent liveness defect on an armed network: past
+        // the fence every attempt block carries algo-9, the filter matched none of them, and
+        // `prev_attempt_daa` froze at the last pre-fence attempt block for the rest of the chain's
+        // life. `palw_required_algo_id` can never be 9 — `PalwRulesetV2::validate` requires the
+        // bundle's `algorithm_id` to be 6 — so no configuration could have fixed it.
         let attempt_algo_id = self.palw_required_algo_id.unwrap_or(kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2);
         let facts = self.reachability_service.default_backward_chain_iterator(from).filter_map(|block| {
             let header = self.headers_store.get_header(block).ok()?;

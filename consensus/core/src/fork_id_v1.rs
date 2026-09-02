@@ -44,14 +44,23 @@
 //! prefix while `u64::MAX` is not the fence that follows it. That is the whole gate — it separates
 //! "behind" from "different" using the one field a stale-but-honest node always gets right.
 //!
-//! ## Why the gate only bites once a fence has fired
+//! ## Why the gate only bites once the DISPUTED fence has fired
 //!
 //! Refusing a different schedule at ANY height would re-create the deploy-day partition M1-6 exists
 //! to remove: the first operator to publish a build that arms a future fence would disconnect from
 //! every un-upgraded peer immediately, for the whole rollout, with nothing about the fence height
-//! involved. So before this node has crossed a fence of its own, a schedule difference is a
-//! WARNING — the same verdict `consensus_schedule_id` already earns. At and after the first fence
-//! it is a refusal, because from there the two builds disagree about blocks that exist.
+//! involved. So before the disputed fence fires, a schedule difference is a WARNING — the same
+//! verdict `consensus_schedule_id` already earns. At and after it, it is a refusal, because from
+//! there the two builds disagree about blocks that exist.
+//!
+//! **"The disputed fence", not "any fence", and the difference is the whole of finding 6.** Three
+//! shipped presets already schedule crescendo, so "this node has crossed a fence" is true of
+//! mainnet from DAA 110,165,000 — and under the first rule ("has this node crossed anything")
+//! arming ADR-0072's fence at a future height refused every un-armed peer from the instant the
+//! build started, which is the partition, not the fence. When the mismatch names a fence
+//! (`NextFenceDiffers`) that fence is the one the height test asks about; when it does not
+//! (`Absent`, `UnknownFiredSet`) the test falls back to [`fork_id_gate_fences_v1`], the fences this
+//! module refuses on, which crescendo is deliberately not among.
 //!
 //! ## Why the gate is armed by a field and not by "does this build schedule anything"
 //!
@@ -63,14 +72,18 @@
 //! a build that predates the fork-id field — a peering change on a running network, shipped by a
 //! commit whose whole premise is that it changes nothing until an operator arms it.
 //!
-//! So the gate is armed by [`fork_id_gate_armed_v1`], which today reads
+//! So the gate is armed by [`fork_id_gate_fences_v1`], which today names
 //! `Params::palw_attempt_activation` — ADR-0072's fence, the one this module was written to make
-//! survivable. The fork id is still ADVERTISED by every node from the moment this lands, because an
-//! advertisement refuses nobody and a gate that has never been on the wire is a gate nobody has
-//! tested. What is fenced is only the refusal.
+//! survivable — and which crescendo is deliberately not in. That list does double duty: it is both
+//! "is the gate armed at all" and "which fences does a refusal rest on", and the second is what
+//! keeps a pre-existing fence from turning the gate on by being crossed. The fork id is still
+//! ADVERTISED by every node from the moment this lands, because an advertisement refuses nobody and
+//! a gate that has never been on the wire is a gate nobody has tested. What is fenced is only the
+//! refusal.
 //!
-//! A later ADR arming a different fence must add it to that predicate, and the test
-//! `the_gate_is_disarmed_on_every_shipped_preset` is what makes forgetting visible.
+//! A later ADR arming a different fence must add it to that list, and the tests
+//! `the_gate_is_disarmed_on_every_shipped_preset` and `the_gate_refuses_only_on_the_fences_it_names`
+//! are what make forgetting visible.
 
 use crate::config::params::Params;
 use kaspa_hashes::{ConsensusParamsId, Hash, Hash64};
@@ -137,12 +150,14 @@ pub enum ForkIdVerdict {
     Unfenced,
     /// The peer runs this build's schedule, seen from some height along it.
     Agree,
-    /// A different schedule, but this node has not crossed a fence yet: the two still agree about
-    /// every block either can produce, so refusing would partition the network for the whole
-    /// rollout (M1-6). Warn.
+    /// A different schedule, but this node has not crossed the fence the difference is ABOUT: the
+    /// two still agree about every block either can produce, so refusing would partition the
+    /// network for the whole rollout (M1-6). Warn. The name is kept for the wire-visible verdict
+    /// text; "any fence" is what it used to mean and what made it wrong past crescendo.
     DisagreeBeforeAnyFence(ForkIdMismatch),
-    /// A different schedule and this node is already past `fired_through`: from here the two
-    /// disagree about blocks that exist. Refuse.
+    /// A different schedule and this node is already past `fired_through` — the disputed fence
+    /// itself when the mismatch names one, otherwise the highest gate-arming fence crossed. From
+    /// here the two disagree about blocks that exist. Refuse.
     DisagreePastFence { mismatch: ForkIdMismatch, fired_through: u64 },
 }
 
@@ -162,7 +177,34 @@ impl ForkIdVerdict {
 ///
 /// A fence added later that needs the gate must be ORed in HERE, and only here.
 pub fn fork_id_gate_armed_v1(params: &Params) -> bool {
-    params.palw_attempt_activation.is_some()
+    !fork_id_gate_fences_v1(params).is_empty()
+}
+
+/// **The fences that ARM the gate, as heights.**
+///
+/// The set [`fork_id_gate_armed_v1`] is derived from, and the one this module refuses on. A fence
+/// listed here is one whose crossing turns a schedule disagreement from a warning into a refusal;
+/// a fence NOT listed here — crescendo, on all three presets that schedule it — is a rule every
+/// build in circulation already implements, so crossing it says nothing about whether a peer can
+/// follow this node.
+///
+/// The distinction is not cosmetic, and it is the whole of finding 6. `evaluate_fork_id_v1` used to
+/// classify on "has this node crossed ANY fence", which on mainnet is true from DAA 110,165,000 —
+/// so scheduling ADR-0072's fence at a future height would have made the first operator to deploy
+/// the armed build refuse every un-armed peer, inbound and outbound, from the moment it started,
+/// for the entire rollout window BEFORE the fence fired. That is M1-6's deploy-day partition
+/// arriving through the module written to prevent it.
+///
+/// A later ADR arming a different fence adds it HERE. `0` and `u64::MAX` are excluded for the same
+/// reasons [`Params::fence_schedule_v1`] excludes them: a fence active at genesis is
+/// `consensus_identity_id`'s business and never "crossed", and `never()` is not a height.
+pub fn fork_id_gate_fences_v1(params: &Params) -> Vec<u64> {
+    params
+        .palw_attempt_activation
+        .map(|fence| fence.daa_score())
+        .filter(|&score| score != 0 && score != u64::MAX)
+        .into_iter()
+        .collect()
 }
 
 /// The fence heights at or below `daa_score`, in order — what this node has crossed.
@@ -209,12 +251,44 @@ pub fn evaluate_fork_id_v1(params: &Params, local_daa_score: u64, peer_fired: &[
     if schedule.is_empty() {
         return ForkIdVerdict::Unfenced;
     }
-    let local_fired = fired_at(&schedule, local_daa_score);
-    // The verdict on a difference depends only on whether THIS node has crossed anything.
-    let classify = |mismatch: ForkIdMismatch| match local_fired.last() {
-        Some(&fired_through) => ForkIdVerdict::DisagreePastFence { mismatch, fired_through },
-        None => ForkIdVerdict::DisagreeBeforeAnyFence(mismatch),
+    // **The verdict on a difference depends on whether THIS node has crossed the fence the
+    // difference is ABOUT — not on whether it has crossed anything at all.**
+    //
+    // "Anything at all" was `local_fired.last()`, and it is wrong on every preset that already
+    // schedules a fence, which is three of the five. On mainnet a node is past crescendo from DAA
+    // 110,165,000 onward; under that rule, arming ADR-0072's fence at a FUTURE height made the
+    // first operator to deploy the armed build refuse every un-armed peer — in both directions,
+    // because `initialize_connection` is one code path — for the whole rollout window, with
+    // nothing about the new fence's height involved. Reproduced before it was fixed: mainnet armed
+    // at 200,000,000 judging an un-armed mainnet at local DAA 120,000,000 returned
+    // `DisagreePastFence { fired_through: 110165000 }`. That is M1-6's deploy-day partition,
+    // arriving through the module written to prevent it — and the lane's own tests could not see it
+    // because `armed_at()` clears crescendo first, which is exactly the configuration in which the
+    // bug is unreachable.
+    //
+    // Two questions, because a mismatch either names a fence or does not:
+    //
+    // * `NextFenceDiffers` names one — `schedule[k]`, the fence following the prefix the peer
+    //   agrees about. Refuse once this node is at or past THAT height, and not before: below it
+    //   the two builds still agree about every block either can produce, which is the whole
+    //   premise of a scheduled activation.
+    // * `Absent` and `UnknownFiredSet` name none, so the question falls back to
+    //   [`fork_id_gate_fences_v1`] — the fences whose crossing this module refuses on. Crescendo is
+    //   not one of them: a build that predates the fork-id field still implements crescendo, so
+    //   this node being past it says nothing about whether that peer can follow.
+    let armed_fired_through = || fork_id_gate_fences_v1(params).into_iter().filter(|&fence| fence <= local_daa_score).max();
+    let classify_at = |mismatch: ForkIdMismatch, disputed: Option<u64>| {
+        let fired_through = match disputed {
+            Some(fence) if fence <= local_daa_score => Some(fence),
+            Some(_) => None,
+            None => armed_fired_through(),
+        };
+        match fired_through {
+            Some(fired_through) => ForkIdVerdict::DisagreePastFence { mismatch, fired_through },
+            None => ForkIdVerdict::DisagreeBeforeAnyFence(mismatch),
+        }
     };
+    let classify = |mismatch: ForkIdMismatch| classify_at(mismatch, None);
 
     if peer_fired.is_empty() {
         return classify(ForkIdMismatch::Absent);
@@ -235,7 +309,9 @@ pub fn evaluate_fork_id_v1(params: &Params, local_daa_score: u64, peer_fired: &[
         // The peer is somewhere along this schedule with a fence still ahead of it. That fence is
         // the one term a stale-but-honest node still gets right, and an un-upgraded node cannot:
         // it is the rule the peer has not reached, not the history it has.
-        Some(&expected) if peer_next != expected => classify(ForkIdMismatch::NextFenceDiffers { expected, got: peer_next }),
+        Some(&expected) if peer_next != expected => {
+            classify_at(ForkIdMismatch::NextFenceDiffers { expected, got: peer_next }, Some(expected))
+        }
         // Either the next fence agrees, or the peer has crossed this build's whole schedule and is
         // announcing a fence this build does not carry. The second is this node being out of date,
         // which is a fork-choice question and not a reason to refuse a peer.
@@ -408,6 +484,80 @@ mod tests {
             ForkIdVerdict::DisagreeBeforeAnyFence(ForkIdMismatch::NextFenceDiffers { expected: 1_000, got: FORK_ID_NO_NEXT_FENCE })
         );
         assert!(!early.refuses(), "a scheduled fence must not partition the network on deploy day");
+    }
+
+    /// **Crossing a fence this module does not refuse on is not a refusal** — the deploy-day
+    /// partition, reproduced and then closed.
+    ///
+    /// This is the case `armed_at()` cannot see, because it clears crescendo first. On the real
+    /// mainnet preset crescendo fires at 110,165,000, so a node at DAA 120,000,000 has "crossed a
+    /// fence" from the moment it starts. Under the first rule — refuse as soon as `local_fired` is
+    /// non-empty — arming ADR-0072's fence at 200,000,000 made that node refuse every un-armed peer
+    /// immediately, in both directions (`initialize_connection` is one path), for the 80 million
+    /// DAA scores before the fence it is arming actually fires. The measured verdict was
+    /// `DisagreePastFence { NextFenceDiffers { expected: 200000000, got: u64::MAX },
+    /// fired_through: 110165000 }`.
+    ///
+    /// Both builds agree about crescendo and about every block either can produce until 200M. They
+    /// must stay peers until then, and be refused from then.
+    #[test]
+    fn arming_a_future_fence_does_not_refuse_peers_over_a_fence_they_already_share() {
+        const ADR_0072: u64 = 200_000_000;
+        const CRESCENDO: u64 = 110_165_000;
+        let mut armed = MAINNET_PARAMS;
+        armed.palw_attempt_activation = Some(ForkActivation::new(ADR_0072));
+        assert_eq!(armed.fence_schedule_v1(), vec![CRESCENDO, ADR_0072], "crescendo is real and it is first");
+
+        // The un-armed build: same mainnet, same crescendo, no ADR-0072 fence and no fork-id field.
+        let un_armed = MAINNET_PARAMS;
+        assert_eq!(un_armed.fence_schedule_v1(), vec![CRESCENDO]);
+        let peer = fork_id_v1(&un_armed, CRESCENDO + 10);
+
+        // Deploy day: past crescendo, far below the new fence.
+        for local_daa in [0u64, CRESCENDO, CRESCENDO + 10, ADR_0072 - 1] {
+            let verdict = evaluate_fork_id_v1(&armed, local_daa, peer.fired.as_bytes().as_slice(), peer.next);
+            assert!(!verdict.refuses(), "at {local_daa}: the two agree about every block either can produce");
+            // A build with no fork-id field at all is the same case, and it is the common one.
+            assert!(!evaluate_fork_id_v1(&armed, local_daa, &[], FORK_ID_NO_NEXT_FENCE).refuses(), "absent, at {local_daa}");
+        }
+
+        // And from the fence itself, the refusal the module exists for.
+        let verdict = evaluate_fork_id_v1(&armed, ADR_0072, peer.fired.as_bytes().as_slice(), peer.next);
+        assert_eq!(
+            verdict,
+            ForkIdVerdict::DisagreePastFence {
+                mismatch: ForkIdMismatch::NextFenceDiffers { expected: ADR_0072, got: FORK_ID_NO_NEXT_FENCE },
+                fired_through: ADR_0072
+            },
+            "the fence that is reported is the one in dispute, not the one both builds implement"
+        );
+        assert!(evaluate_fork_id_v1(&armed, ADR_0072, &[], FORK_ID_NO_NEXT_FENCE).refuses());
+    }
+
+    /// **Crescendo does not arm the gate, and the ADR-0072 fence does** — the predicate the case
+    /// above rests on, stated on its own so a later ADR that forgets to add its fence fails here.
+    #[test]
+    fn the_gate_refuses_only_on_the_fences_it_names() {
+        let mut params = MAINNET_PARAMS;
+        assert_eq!(fork_id_gate_fences_v1(&params), Vec::<u64>::new(), "crescendo is not a gate-arming fence");
+        assert!(!fork_id_gate_armed_v1(&params));
+
+        params.palw_attempt_activation = Some(ForkActivation::new(9_000_000));
+        assert_eq!(fork_id_gate_fences_v1(&params), vec![9_000_000]);
+        assert!(fork_id_gate_armed_v1(&params));
+
+        // `never()` is not a height and a genesis-active fence is not crossed — the same two
+        // exclusions `fence_schedule_v1` makes, for the same reasons. A fence at genesis separates
+        // `consensus_identity_id` instead, which refuses before this module is consulted.
+        params.palw_attempt_activation = Some(ForkActivation::never());
+        assert!(!fork_id_gate_armed_v1(&params));
+        params.palw_attempt_activation = Some(ForkActivation::always());
+        assert!(!fork_id_gate_armed_v1(&params));
+        assert_ne!(
+            params.consensus_identity_id(),
+            MAINNET_PARAMS.consensus_identity_id(),
+            "a genesis-active fence is a rule difference the identity id already refuses on"
+        );
     }
 
     /// A build that predates the field sends nothing, and nothing is not a fired set.

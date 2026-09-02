@@ -11,6 +11,7 @@ version, never by re-genesis: this is a version bump (`PALW_ATTEMPT_V2_VERSION` 
 coordinated upgrade, not a re-mint.
 
 > **Security amendment appended (2026-09-02)** — see the last section: the mainnet activation path §3 records must seed the new lane's targets (ADR-0076), ship the fork-id handshake before the fence, fence the version check, and prove cross-lane replay is refused by algo id.
+> **Second pass (2026-09-03)** — the amendment was written before the code and the code was then reviewed adversarially. SA-1's window half is narrower than stated (nothing in this tree lane-filters a window), SA-3 binds on every peer-facing caller and not only the shape gate, SA-4 is a predicate that four sites had to ask, and SA-2's gate must refuse on the DISPUTED fence rather than on any fence. See the last section, including what still argues against arming.
 
 ## 1. The finding
 
@@ -226,3 +227,74 @@ blocks by the new, in one binary, pinned by a test that syncs a mixed history fr
 **SA-4 — Cross-lane replay is refused by construction**: the new lane's `algo_id` enters the
 Layer-0 digest, so an attempt built for the old lottery is not a candidate in the new; a test
 asserts a valid version-5 attempt is refused after the fence by algo id, not merely by version.
+
+## Security amendment, second pass (2026-09-03) — what the implementation measured
+
+The first pass wrote SA-1..SA-4 before the code existed. The code was then written, reviewed
+adversarially, and the review found the amendment wrong in one place and the implementation wrong in
+six. This section is the correction, so that the divergence lives in the ADR rather than only in Rust
+comments.
+
+**SA-1 is one rule, and its second half is a constraint on a filter nobody has written.** The seed
+half stands verbatim: at the fence a class's new-lane target is
+`attempt_target_seed_v1(share, pwu_per_inference)` from the fold at the fence — the *same function*
+a post-genesis admission calls, not a second rule that agrees. The implementation briefly carried a
+wrapper (`attempt_lane_target_seed_at_fence_v1`) and an identity function
+(`attempt_lane_window_seed_bits_v1(a, b) = a`), each with a test asserting what an alias and an
+identity cannot fail; both are deleted, because a ceiling nobody reaches is not a rule.
+
+The window half is narrower than this ADR stated. **No difficulty window in this tree is
+lane-filtered at all** — nothing in `consensus/src/processes/window.rs` or `difficulty.rs` reads
+`pow_algo_id` — and `SampledDifficultyManager::calculate_difficulty_bits`'s short-window fallback
+already returns the *selected parent's own* `bits` unless that parent IS genesis. At a fence on a
+live chain the selected parent is never genesis, so the pre-fence `bits` is what the fallback yields
+for free. The hazard therefore bites only if someone later writes a lane filter that RESETS the
+window rather than emptying it. **The rule, for whoever writes it: a lane-filtered attempt window
+starts from the pre-fence window's last `bits`, never from genesis bits.**
+
+**SA-3 binds on every peer-facing caller, not just the shape gate.** Fencing
+`check_palw_commitment_shape_at` was not enough: `check_palw_carriage_stateless` called the
+un-parameterised `validate_stateless_v2` forty-five lines later, so on an armed network below its
+fence the fenced gate admitted a legacy envelope and the un-fenced check refused it — Decision 7's
+defect reproduced by its own fix. The relay path now takes `PalwAttemptLaneV1::attempt_version()`
+(`validate_stateless_v2_at_version`). **Still compiled in at the current version:** the stateful
+admission (`check_palw_attempt_admission_full_v2*`). See "What still argues against arming" below.
+
+**SA-4 is a predicate, not a constant, and four sites had to ask it.** "Which id carries the attempt
+lane" is `pow_layer0::is_palw_attempt_algo_id`. Four rules were spelled as equality against the old
+id and each broke differently at the fence:
+
+| Site | What the stale spelling did past the fence |
+| --- | --- |
+| `pre_ghostdag_validation::check_palw_carriage_stateless` | fell to `_ => Ok(())`: no envelope binding and **no ML-DSA signature check**, so one solved PoW minted unbounded distinct blocks (launch blockers §5, on the new lane) |
+| `kaspad::palw_producer::produce_one` | hard-errored on every template, so **every producer on every node stopped at the same DAA score**, unrecoverably (`PalwRulesetV2::validate` pins the bundle's `algorithm_id` at 6, so no configuration reaches 9) |
+| `ghostdag::protocol` blue work | attempt blocks stopped earning ADR-0068 F2's fixed ε and started earning `calc_work(bits)` — fork-choice weight re-priced at one height as a side effect of an id change |
+| `virtual_processor::palw_beacon_fact_of_candidate` | the ADR-0044 beacon walk saw the attempt chain stop at the fence; `prev_attempt_daa` froze permanently |
+
+The beacon walk is the one consumer that must accept **both** ids at once, because it descends
+through the fence; the other three resolve the lane at a single height. Sites that legitimately keep
+naming algo-6 are the ones that mean *this specific algorithm*: the V2 bundle's own `algorithm_id`
+(`PalwRulesetV2::validate`, the genesis bundles), and test fixtures that build a V2 network.
+
+**SA-2's gate refuses on the DISPUTED fence, not on any fence.** As first implemented,
+`evaluate_fork_id_v1` classified on "has this node crossed anything", and three shipped presets
+already schedule crescendo (mainnet 110,165,000; testnet-10/-11 2,125,000). Arming ADR-0072's fence
+at a future height therefore refused every un-armed peer from the moment the build started — in both
+directions, for the whole rollout — which is exactly the M1-6 deploy-day partition SA-2 exists to
+prevent. `fork_id_gate_fences_v1` now names the fences a refusal may rest on (crescendo is not among
+them), and a `NextFenceDiffers` mismatch is tested against the height of the fence actually in
+dispute.
+
+### What still argues against arming this fence
+
+* **At genesis (`ForkActivation::always()`) the fence is safe.** `LegacyArm` is unreachable, so none
+  of the residuals below can occur, and `consensus_identity_id` already separates armed from
+  un-armed builds (a genesis-active fence is a rule about block 1, not a schedule) — which is why
+  `fork_id_gate_fences_v1` deliberately excludes height 0.
+* **At a future height on a chain with real pre-ADR-0072 history it is not.** Two things behind the
+  fenced gates still speak only the current rule: the stateful admission's `validate_stateless_v2`,
+  and the pre-ADR-0072 lottery arithmetic itself, which was deleted at Relaunch 5's re-genesis. A
+  legacy-arm block cannot pass PoW under this binary whatever version its envelope declares, so §3
+  option (b) needs that arithmetic restored byte for byte before the fence can be scheduled ahead of
+  a live chain. The shipped producer says the same thing from the other side: it stamps the current
+  envelope version on both ids it can build for, and cannot build a `LegacyArm` block at all.

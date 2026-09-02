@@ -605,7 +605,28 @@ impl PalwAttemptEnvelopeV2 {
         timestamp: u64,
         nonce: u64,
     ) -> Result<(), PalwAttemptV2Error> {
-        self.validate_shape_v2()?;
+        self.validate_stateless_v2_at_version(PALW_ATTEMPT_V2_VERSION, network_domain, pre_pow_hash, timestamp, nonce)
+    }
+
+    /// [`Self::validate_stateless_v2`] with the admissible version supplied by the POSITION rather
+    /// than compiled in — the rest of ADR-0072 SA-3.
+    ///
+    /// The fenced shape gate alone was not the rule. `check_palw_commitment_shape_at` took the
+    /// lane's version and this function, called 45 lines later on the same relay path, took
+    /// [`PALW_ATTEMPT_V2_VERSION`] — so on an armed network below the fence the fenced gate
+    /// admitted a legacy envelope and the un-fenced one refused it, which is the SA-3 defect
+    /// ("a fresh node cannot validate the history it is asked to sync") reproduced by the fix for
+    /// it. A version check that is fenced at one call site and compiled in at the next is not a
+    /// fenced version check; every peer-facing caller has to take the lane's number.
+    pub fn validate_stateless_v2_at_version(
+        &self,
+        expected_version: u16,
+        network_domain: Hash64,
+        pre_pow_hash: Hash64,
+        timestamp: u64,
+        nonce: u64,
+    ) -> Result<(), PalwAttemptV2Error> {
+        self.validate_shape_v2_at_version(expected_version)?;
         let a = &self.attempt;
         if a.network_domain != network_domain
             || a.challenge != challenge_v2(network_domain, pre_pow_hash, timestamp, nonce, a.class_id, &a.executor_bond)
