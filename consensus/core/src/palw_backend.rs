@@ -350,6 +350,16 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         None
     }
 
+    /// **The same count, from CHAIN data alone** — the job's prompt length and the commitment's
+    /// executed decode count (both on the accepted 0x4a payload) and this family's own checkpoint
+    /// interval for the class. A seat draws its intervals from this, never from a count the
+    /// executor reports: an executor that could shrink the count could predict the draw. Must
+    /// agree with [`Self::fp_interval_count`] on every capture this family produces (a test
+    /// pins it). `None` when this family has no free-prompt path.
+    fn fp_interval_count_for(&self, _prompt_tokens: u32, _decode_tokens_executed: u32) -> Option<u32> {
+        None
+    }
+
     /// **The executor's side of Decision 8: open interval `index` of its own retained capture.**
     ///
     /// The opening carries the binding (what `verify_binding_v1` authenticates against the
