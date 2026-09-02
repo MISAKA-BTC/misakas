@@ -106,27 +106,12 @@ pub const PALW_RC_WINDOWS_V1: PalwLatticeWindowsV1 = PalwLatticeWindowsV1 {
 /// minutes"). Same interlocks, one-fifteenth the spans: a commitment binds within 40 DAA, is
 /// licensed within 40 more, finalizes 100 after that and its draw matures 20 later — ~200 DAA
 /// from commitment to spendability, under an hour on a fixture-paced devnet. The court window
-/// holds a 2^32 ladder at a 4-DAA move clock (`(2 × 32 + 2) × 4 = 264`).
-///
-/// **`window_court` is 600 and was 300** (ADR-0080 W4). A court close no longer fits one carrier,
-/// so the blocks a mover spends ASSEMBLING one are blocks of the window that carry no move —
-/// `palw_context_ladder::PALW_COURT_ASSEMBLY_RESERVE_DAA_V1`, 216 DAA, charged for both sides. At
-/// 300 the shipped clock stopped fitting its own window the moment that term was counted
-/// (`264 + 216 = 480`, and `184 + 216 = 400` at the shipped `2^22` ladder), and a window that does
-/// not hold its own prosecution closes on the CHALLENGER while the mover is still assembling —
-/// audit M2-24's shape. 600 holds both readings with margin, and the largest clock it admits is 5,
-/// so the shipped 4 keeps a DAA of slack rather than sitting on its own ceiling.
-///
-/// **`withdrawal_delay` moved with it, and had to.** `PalwConsensusParamsV2::validate` refuses a
-/// bundle whose delay does not outlast `2 × (bind + receipt) + challenge + court + reorg_margin` —
-/// `2 × 80 + 100 + 600 + 10 = 870` at the wider court window, against 570 before. 600 would no
-/// longer construct; 900 keeps the same 30-DAA margin over the liability period this set has always
-/// carried. Nothing else in the lattice moves: the court window is the only widened span.
+/// holds a 2^32 ladder at a 4-DAA move clock (`(2 × 32 + 2) × 4 = 264 < 300`).
 pub const PALW_DEVNET_WINDOWS_V1: PalwLatticeWindowsV1 = PalwLatticeWindowsV1 {
     window_bind: 40,
     window_receipt: 40,
     window_challenge: 100,
-    window_court: 600,
+    window_court: 300,
     anchor_delay: 4,
     max_beacon_gap: 20,
     reorg_margin: 10,
@@ -135,7 +120,7 @@ pub const PALW_DEVNET_WINDOWS_V1: PalwLatticeWindowsV1 = PalwLatticeWindowsV1 {
     court_turn_deadline: 4,
     fp_abandon_hold: 40,
     claim_retirement: 300,
-    withdrawal_delay: 900,
+    withdrawal_delay: 600,
 };
 /// **3,000, from the corrected worst case** (audit M2-24). The ladder's clock runs per MOVE, and a
 /// bisection round is two of them — a disclosure and a verdict — so a 22-rung ladder plus two
@@ -944,21 +929,7 @@ mod tests {
         assert!(w.claim_retirement > w.fp_abandon_hold);
         // Decision 12's ladder, at the shipped per-move clock: `(2 × 32 + 2) × turn < court`.
         assert!((2 * 32 + 2) * w.court_turn_deadline < w.window_court);
-        // **And with ADR-0080's close-assembly reserve counted, which is why the window is 600.**
-        // The bare inequality above held at 300 as well; this one is what 300 fails.
-        assert!(
-            crate::palw_context_ladder::palw_ladder_fits_window_court_v1(
-                w.window_court,
-                crate::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES,
-                2,
-                w.court_turn_deadline
-            ),
-            "the devnet court window does not hold its own ladder plus the close-assembly reserve"
-        );
         assert!(w.withdrawal_delay > w.window_bind + w.window_receipt + w.window_challenge + w.window_court + w.reorg_margin);
-        // The interlock `validate` actually applies is the REDRAWN lattice — two bind+receipt
-        // pairs — and it is what forced the delay up with the court window.
-        assert!(w.withdrawal_delay > 2 * (w.window_bind + w.window_receipt) + w.window_challenge + w.window_court + w.reorg_margin);
         assert_eq!(devnet.state.window_bind(), 40);
         assert_eq!(devnet.court.turn_deadline_daa(), 4);
     }

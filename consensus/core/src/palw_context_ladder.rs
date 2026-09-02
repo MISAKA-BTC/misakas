@@ -129,30 +129,56 @@ pub const fn palw_court_move_count_v1(max_step_leaves: u64, terminal_moves: u32)
 /// a close no longer rides one transaction: it is assembled over several blocks and the mover
 /// spends those blocks out of its own turn.
 ///
-/// **This constant is the ADR-0080 owner's shipped chunk count, and nothing in this tree derives
-/// it.** It is written here rather than left implicit because the reserve below is what stops the
-/// clock closing on the CHALLENGER while the mover is still assembling — the audit M2-24 shape, a
-/// court that convicts an honest party by clock. The two nearby readings of the same measurement
-/// are `2_240_241 / 81_920 = 27` (floor) and `28` (ceiling); the figure carried here is 27, and a
-/// later owner who meant the ceiling moves this one constant and every number below follows.
+/// **The widest step binding a shipped class carries, in serialized bytes** — measured.
 ///
-/// Its home is the court params once ADR-0080's carriage lands — a chunk count is a ruleset
-/// quantity, inside `palw_ruleset_id_v2` like every other court ceiling. Until then it is pinned
-/// beside the derivation that consumes it, so there is ONE spelling rather than two.
-pub const PALW_COURT_MAX_CLOSE_CHUNKS_V1: u64 = 27;
+/// A close carries a `PalwStepBindingV2`, which carries the whole `PalwShapeProfileV3`, and
+/// `check_close_cost_v2` charges for NONE of it: the cost rule prices the close's payload against
+/// `max_close_bytes` and the binding rides free. So the bytes a CARRIER must hold are the priced
+/// ceiling plus this, and a derivation that forgets it under-counts the carrier by fourteen
+/// kilobytes.
+///
+/// 13,996 is the hybrid `Qwen3.6-35B-A3B` row, widest of the three shipped classes (A16 5,631,
+/// BASE-0 6,346), measured by serializing an EMPTY close on each — ADR-0080 W13, branch
+/// `palw-adr0080-w13-carriage` (`429c8157`), `the_binding_is_the_untolled_part_of_a_carrier`.
+/// A measurement carried across a crate boundary, so it is named here rather than inlined.
+pub const PALW_WIDEST_STEP_BINDING_BYTES_V1: u64 = 13_996;
 
-/// **How many split closes ONE side assembles in a worst-case dispute** (ADR-0080 W4).
+/// **How many carriers a legal close can need — DERIVED from the ceilings, never pinned.**
 ///
-/// The reserve is `2 × this × max_close_chunks`: `2` because both sides assemble — a reserve
-/// charged to the mover alone would leave the challenger's own assembly unpaid, which is the same
-/// defect one level down — and `this` because a side carries more than one close in a full
-/// prosecution. Named rather than written as a literal `4 ×`, so a reader can see which factor is
-/// "both sides" and which is "closes per side".
+/// An earlier draft of this module pinned `27` here, and 27 was impossible: the chunk rules cap a
+/// group at `PALW_OBJECT_CHUNK_MAX_COUNT` = 8 parts, enforced twice — the builder refuses at
+/// `palw_state_v2.rs:2917` with `ObjectTooLargeToChunk`, and the transition refuses again at 7362.
+/// A 27-part object cannot exist on any preset, so a reserve sized for one bought nothing and cost
+/// the devnet its shipped clock. **The lesson is the shape, not the number**: a quantity with no
+/// derivation is a quantity nobody can check, and it compiled, went green, and moved a fingerprint.
+///
+/// The derivation is the two ceilings over the carrier: `⌈(max_close_bytes + widest binding) /
+/// PALW_OBJECT_CHUNK_MAX_BYTES⌉`, saturated at the chunk cap. At the shipped ceilings that is
+/// `⌈(81,920 + 13,996) / 100,000⌉ = 1` — every admissible close is ONE carrier, with 4,084 bytes
+/// to spare. **Raise `max_close_bytes` past that headroom and this follows on its own**, which is
+/// the point of deriving it: the reserve cannot go stale behind the ceiling it prices.
+pub const fn palw_close_max_chunks_v1(max_close_bytes: u64) -> u64 {
+    let carrier = crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES as u64;
+    let cap = crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_COUNT as u64;
+    let total = max_close_bytes.saturating_add(PALW_WIDEST_STEP_BINDING_BYTES_V1);
+    let chunks = total.saturating_add(carrier - 1) / carrier;
+    if chunks == 0 {
+        1
+    } else if chunks > cap {
+        cap
+    } else {
+        chunks
+    }
+}
+
+/// [`palw_close_max_chunks_v1`] at the close ceiling both shipped presets carry.
+pub const PALW_COURT_MAX_CLOSE_CHUNKS_V1: u64 = palw_close_max_chunks_v1(crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES);
+
 pub const PALW_COURT_CHUNKED_CLOSES_PER_SIDE_V1: u64 = 4;
 
 /// **The DAA a court window must reserve for CLOSE ASSEMBLY, counted for both sides** (ADR-0080).
 ///
-/// `2 × PALW_COURT_CHUNKED_CLOSES_PER_SIDE_V1 × max_close_chunks` — 216 at the shipped chunk
+/// `2 × PALW_COURT_CHUNKED_CLOSES_PER_SIDE_V1 × max_close_chunks` — 8 at the shipped chunk
 /// count. It is subtracted from the window before a move clock is derived
 /// ([`palw_court_turn_deadline_v1`]) and added to the worst case before the window is checked
 /// ([`palw_ladder_fits_window_court_v1`]), so a ladder that fits is a ladder that fits *with* the
@@ -294,12 +320,13 @@ pub const fn palw_court_replay_floor_daa_v1(row: &PalwCourtRowCostV1, interval_p
 /// challenger's side while the mover is still assembling — audit M2-24's shape, a court that
 /// convicts an honest party by clock.
 ///
-/// **What that did to the shipped devnet constant.** `PALW_DEVNET_WINDOWS_V1` used to carry
-/// `window_court: 300` and this derivation returned its `court_turn_deadline: 4` exactly. With the
-/// reserve, 300 no longer holds the shipped clock at all — `66 × 4 + 216 = 480` — so the devnet
-/// window widened to 600, where the derivation returns 5 and the shipped 4 is admitted with margin.
-/// `the_devnet_court_window_had_to_widen_for_the_assembly_reserve` is that arithmetic, including the
-/// refusal at 300 that makes the widening necessary rather than preferred.
+/// **What that did to the shipped devnet constant: nothing, once the term was derived.** A draft
+/// of this reserve priced a 27-carrier close, which the chunk rules cap at 8 and the cost rule caps
+/// at 1; at 216 DAA it took the devnet's 300-DAA window below its own shipped clock and the window
+/// was widened to pay for it. At the derived reserve of 8 the devnet keeps `window_court: 300`,
+/// this derivation returns its `court_turn_deadline: 4` exactly as it did before ADR-0080, and no
+/// preset constant moves. `the_reserve_is_derived_and_leaves_every_shipped_window_alone` is that
+/// arithmetic.
 pub const fn palw_court_turn_deadline_v1(window_court: u64, max_step_leaves: u64, terminal_moves: u32) -> Option<u64> {
     let moves = palw_court_move_count_v1(max_step_leaves, terminal_moves);
     if moves == 0 || window_court == 0 {
@@ -762,38 +789,37 @@ mod tests {
     fn the_derived_move_clock_is_the_largest_the_window_admits() {
         // 2^32 leaves: 32 bisection rounds, two moves each, plus two terminal moves.
         assert_eq!(palw_court_move_count_v1(PALW_CONTEXT_LADDER_MAX_STEP_LEAVES, PALW_CONTEXT_LADDER_TERMINAL_MOVES), 66);
-        // testnet-11's 3,000-DAA court window, less ADR-0080's 216-DAA assembly reserve:
-        // 66 × 42 + 216 = 2,988. (It was 45 before the reserve existed: 66 × 45 = 2,970.)
-        assert_eq!(palw_court_turn_deadline_v1(3_000, PALW_CONTEXT_LADDER_MAX_STEP_LEAVES, 2), Some(42));
-        assert_eq!(66 * 42 + PALW_COURT_ASSEMBLY_RESERVE_DAA_V1, 2_988);
+        // testnet-11's 3,000-DAA court window, less ADR-0080's 8-DAA assembly reserve:
+        // 66 × 45 + 8 = 2,978. ADR-0077 Decision 12 derives `turn_deadline ≤ 45` from the window
+        // and the move count without ever seeing this file; two derivations agree on 45.
+        assert_eq!(palw_court_turn_deadline_v1(3_000, PALW_CONTEXT_LADDER_MAX_STEP_LEAVES, 2), Some(45));
+        assert_eq!(66 * 45 + PALW_COURT_ASSEMBLY_RESERVE_DAA_V1, 2_978);
         // One more DAA of clock does not fit, which is what "largest the window admits" means:
-        // 66 × 43 + 216 = 3,054.
-        assert!(!palw_ladder_fits_window_court_v1(3_000, PALW_CONTEXT_LADDER_MAX_STEP_LEAVES, 2, 43));
+        // 66 × 46 + 8 = 3,044.
+        assert!(!palw_ladder_fits_window_court_v1(3_000, PALW_CONTEXT_LADDER_MAX_STEP_LEAVES, 2, 46));
         // A window that cannot hold a one-DAA clock is refused rather than saturated — and now a
         // window that cannot even hold the reserve is refused for its own, earlier reason.
         assert_eq!(palw_court_turn_deadline_v1(66, PALW_CONTEXT_LADDER_MAX_STEP_LEAVES, 2), None);
         assert_eq!(palw_court_turn_deadline_v1(PALW_COURT_ASSEMBLY_RESERVE_DAA_V1, PALW_CONTEXT_LADDER_MAX_STEP_LEAVES, 2), None);
     }
 
-    /// **The devnet set's shipped move clock is one the derivation ADMITS** — which is the check on
-    /// the rule rather than on the number.
+    /// **The devnet set's shipped move clock IS the one this derivation returns** — an equality,
+    /// restored.
     ///
-    /// It used to be an equality: at `window_court: 300` this derivation returned exactly the
-    /// shipped 4. ADR-0080's close-assembly reserve ended that, and ended it in the dangerous
-    /// direction — 300 stopped holding the shipped clock at all — so the window widened to 600,
-    /// where the derivation returns 5. The rule that survives is the bracket SA-4 actually states:
-    /// the shipped clock is at or below the largest the window admits, and it fits the predicate.
-    /// An equality would now be a coincidence to maintain rather than a property to check.
+    /// It was briefly weakened to a bracket, because a reserve priced at an impossible 27-carrier
+    /// close pushed the derivation below the shipped 4 and the devnet window was widened to 600 to
+    /// compensate. With the reserve derived rather than pinned the equality holds again at the
+    /// shipped `window_court: 300`, which is the stronger statement: the constant in the preset is
+    /// not a choice somebody made, it is what the window and the ladder produce.
     #[test]
-    fn the_devnet_move_clock_is_one_the_window_admits() {
+    fn the_devnet_move_clock_is_the_derived_one() {
         let derived = palw_court_turn_deadline_v1(PALW_DEVNET_WINDOWS_V1.window_court, PALW_CONTEXT_LADDER_MAX_STEP_LEAVES, 2)
             .expect("the devnet window holds the deeper ladder");
-        assert_eq!(derived, 5, "the devnet window's largest move clock moved");
-        assert!(
-            PALW_DEVNET_WINDOWS_V1.court_turn_deadline <= derived,
-            "the shipped devnet clock {} is past the largest its window admits ({derived})",
-            PALW_DEVNET_WINDOWS_V1.court_turn_deadline
+        assert_eq!(
+            PALW_DEVNET_WINDOWS_V1.court_turn_deadline, derived,
+            "the shipped devnet clock is no longer the one its window derives"
         );
+        assert_eq!(derived, 4, "the devnet window's move clock moved");
         assert!(palw_ladder_fits_window_court_v1(
             PALW_DEVNET_WINDOWS_V1.window_court,
             PALW_CONTEXT_LADDER_MAX_STEP_LEAVES,
@@ -801,86 +827,83 @@ mod tests {
             PALW_DEVNET_WINDOWS_V1.court_turn_deadline
         ));
         assert_eq!(66 * PALW_DEVNET_WINDOWS_V1.court_turn_deadline, 264);
-        assert_eq!(66 * derived + PALW_COURT_ASSEMBLY_RESERVE_DAA_V1, 546);
+        assert_eq!(66 * derived + PALW_COURT_ASSEMBLY_RESERVE_DAA_V1, 272);
     }
 
-    /// **The widening is NECESSARY, not preferred** — ADR-0080 W4's deliverable.
+    /// **The reserve is DERIVED, and it leaves every shipped window alone** — ADR-0080 W4's
+    /// deliverable, and the correction that replaced it.
     ///
-    /// Three derivations, one arithmetic. The reserve is `2 × 4 × 27 = 216` DAA, charged for both
-    /// sides, and it is what a mover spends assembling a close that no longer fits one carrier:
+    /// The first version of this test asserted the opposite: that the devnet's 300-DAA window had
+    /// to widen to 600 to pay for close assembly. It was wrong, and wrong in the expensive
+    /// direction — it moved a preset constant, and with it the devnet fingerprint. The reserve had
+    /// been sized for a 27-carrier close, from arithmetic with no source. Two independent ceilings
+    /// say a close is ONE carrier:
     ///
-    /// * the RC's 3,000-DAA window derives 42 and fits — `66 × 42 + 216 = 2,988 < 3,000`;
-    /// * the devnet's widened 600-DAA window derives 5 — `66 × 5 + 216 = 546 < 600`;
-    /// * the devnet's OLD 300-DAA window derives 1, and REFUSES the shipped clock at both ladders —
-    ///   `66 × 4 + 216 = 480` armed and `46 × 4 + 216 = 400` at the shipped `2^22` ladder, either
-    ///   of them past a 300-DAA window.
+    /// * **structural** — `PALW_OBJECT_CHUNK_MAX_COUNT` caps a group at 8 parts, refused by the
+    ///   builder (`palw_state_v2.rs:2917`) and again by the transition (7362). 27 could never have
+    ///   been built, on any preset, by anyone.
+    /// * **the cost rule** — `max_close_bytes` (81,920) plus the untolled binding (13,996) is
+    ///   95,916 against a 100,000-byte carrier. Measured, not assumed: ADR-0080 W13.
     ///
-    /// The third case is the one that says something. A suite in which the old devnet window still
-    /// passed would have proven only that a term had been added somewhere; this one names the
-    /// window that the term makes unusable, so the constant moved for a reason a reader can check.
+    /// So the reserve is `2 × 4 × 1 = 8`, and the two shipped windows keep the clocks they ship.
+    /// A test that had *demanded* the widening would have made the wrong constant permanent, which
+    /// is why this one now checks the derivation rather than the outcome.
     #[test]
-    fn the_devnet_court_window_had_to_widen_for_the_assembly_reserve() {
-        // The reserve itself, in its two factors.
-        assert_eq!(PALW_COURT_MAX_CLOSE_CHUNKS_V1, 27);
+    fn the_reserve_is_derived_and_leaves_every_shipped_window_alone() {
+        // The chunk count is derived from the ceilings, and lands under BOTH of them.
+        assert_eq!(PALW_COURT_MAX_CLOSE_CHUNKS_V1, 1);
+        assert!(PALW_COURT_MAX_CLOSE_CHUNKS_V1 <= crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_COUNT as u64);
+        assert_eq!(
+            crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES + PALW_WIDEST_STEP_BINDING_BYTES_V1,
+            95_916,
+            "the bytes one carrier must hold are the priced ceiling plus the untolled binding"
+        );
+        assert!(95_916 < crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES as u64);
+
+        // It FOLLOWS the ceiling rather than trailing it: past the headroom, a second carrier.
+        assert_eq!(palw_close_max_chunks_v1(crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES as u64), 2);
+        // And it never claims more carriers than the chunk rules will assemble.
+        assert_eq!(palw_close_max_chunks_v1(u64::MAX), crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_COUNT as u64);
+
         assert_eq!(PALW_COURT_CHUNKED_CLOSES_PER_SIDE_V1, 4);
-        assert_eq!(palw_close_assembly_daa_v1(PALW_COURT_MAX_CLOSE_CHUNKS_V1), 216);
-        assert_eq!(PALW_COURT_ASSEMBLY_RESERVE_DAA_V1, 2 * 4 * 27);
+        assert_eq!(PALW_COURT_ASSEMBLY_RESERVE_DAA_V1, 2 * 4 * 1);
 
         let deep = PALW_CONTEXT_LADDER_MAX_STEP_LEAVES;
         let moves = palw_court_move_count_v1(deep, PALW_CONTEXT_LADDER_TERMINAL_MOVES);
         assert_eq!(moves, 66);
 
-        // ---- the RC: 66 × 42 + 216 = 2,988 < 3,000 ----
+        // ---- the RC keeps its window: 66 × 45 + 8 = 2,978 < 3,000 ----
         assert_eq!(PALW_RC_WINDOWS_V1.window_court, 3_000);
         let rc = palw_court_turn_deadline_v1(PALW_RC_WINDOWS_V1.window_court, deep, 2).expect("the RC window holds the ladder");
-        assert_eq!(rc, 42);
-        assert_eq!(moves * rc + PALW_COURT_ASSEMBLY_RESERVE_DAA_V1, 2_988);
+        assert_eq!(rc, 45);
+        assert_eq!(moves * rc + PALW_COURT_ASSEMBLY_RESERVE_DAA_V1, 2_978);
         assert!(palw_ladder_fits_window_court_v1(PALW_RC_WINDOWS_V1.window_court, deep, 2, rc));
 
-        // ---- devnet at the widened window: 66 × 5 + 216 = 546 < 600 ----
-        assert_eq!(PALW_DEVNET_WINDOWS_V1.window_court, 600, "the devnet court window is not the widened one");
-        let wide = palw_court_turn_deadline_v1(600, deep, 2).expect("600 holds the ladder");
-        assert_eq!(wide, 5);
-        assert_eq!(moves * wide + PALW_COURT_ASSEMBLY_RESERVE_DAA_V1, 546);
-        assert!(palw_ladder_fits_window_court_v1(600, deep, 2, PALW_DEVNET_WINDOWS_V1.court_turn_deadline));
-
-        // ---- devnet at the OLD window: derives 1, and the shipped clock is REFUSED ----
-        const OLD_DEVNET_WINDOW_COURT: u64 = 300;
-        assert_eq!(palw_court_turn_deadline_v1(OLD_DEVNET_WINDOW_COURT, deep, 2), Some(1));
-        assert!(
-            !palw_ladder_fits_window_court_v1(OLD_DEVNET_WINDOW_COURT, deep, 2, PALW_DEVNET_WINDOWS_V1.court_turn_deadline),
-            "the old 300-DAA window still holds the shipped clock at the 2^32 ladder: {} x {} + {} against \
-             {OLD_DEVNET_WINDOW_COURT}",
-            moves,
-            PALW_DEVNET_WINDOWS_V1.court_turn_deadline,
-            PALW_COURT_ASSEMBLY_RESERVE_DAA_V1
-        );
-        assert_eq!(moves * PALW_DEVNET_WINDOWS_V1.court_turn_deadline + PALW_COURT_ASSEMBLY_RESERVE_DAA_V1, 480);
-        // And at the SHIPPED `2^22` ladder too, which is the one a devnet node boots on — so the
-        // refusal is not an artifact of the fenced depth.
+        // ---- the devnet keeps its window AND its clock: 66 × 4 + 8 = 272 < 300 ----
+        assert_eq!(PALW_DEVNET_WINDOWS_V1.window_court, 300, "the devnet court window was moved");
+        assert_eq!(palw_court_turn_deadline_v1(300, deep, 2), Some(4));
+        assert_eq!(moves * PALW_DEVNET_WINDOWS_V1.court_turn_deadline + PALW_COURT_ASSEMBLY_RESERVE_DAA_V1, 272);
+        assert!(palw_ladder_fits_window_court_v1(300, deep, 2, PALW_DEVNET_WINDOWS_V1.court_turn_deadline));
+        // At the SHIPPED 2^22 ladder a devnet node actually boots on, with more room still.
         let shipped_moves = palw_court_move_count_v1(PALW_STEP_MAX_LEAVES, PALW_CONTEXT_LADDER_TERMINAL_MOVES);
         assert_eq!(shipped_moves, 46);
-        assert!(
-            !palw_ladder_fits_window_court_v1(
-                OLD_DEVNET_WINDOW_COURT,
-                PALW_STEP_MAX_LEAVES,
-                2,
-                PALW_DEVNET_WINDOWS_V1.court_turn_deadline
-            ),
-            "the old devnet window holds the shipped ladder too — the widening would be preferred rather than necessary"
-        );
-        assert_eq!(shipped_moves * PALW_DEVNET_WINDOWS_V1.court_turn_deadline + PALW_COURT_ASSEMBLY_RESERVE_DAA_V1, 400);
-        // The clock the old window DOES derive is 1 DAA, which is below the floor a split close
-        // puts under one honest move — so 300 has no admissible clock at all, not merely a small
-        // one. (`palw_court_move_cost_daa_v1` is the SA-4 cost model; this passes it the chunk
-        // count rather than re-deriving the assembly term a second time.)
+        assert!(palw_ladder_fits_window_court_v1(300, PALW_STEP_MAX_LEAVES, 2, PALW_DEVNET_WINDOWS_V1.court_turn_deadline));
+        assert_eq!(shipped_moves * PALW_DEVNET_WINDOWS_V1.court_turn_deadline + PALW_COURT_ASSEMBLY_RESERVE_DAA_V1, 192);
+
+        // And one honest move over a ONE-carrier close is the replay, with nothing added — the
+        // assembly term is real but empty at the shipped ceilings, which is what "dormant" means.
         let floor = crate::palw_court_deadline::palw_court_move_cost_daa_v1(
             &PALW_COURT_COST_QWEN36,
             palw_checkpoint_interval_v1(512),
             PALW_COURT_MAX_CLOSE_CHUNKS_V1,
         );
-        assert_eq!(floor, 27, "one honest move over a 27-chunk close is the replay plus 26 assembly blocks");
-        assert!(1 < floor, "the 300-DAA window's derived clock clears the split close's own floor");
+        assert_eq!(
+            floor,
+            palw_court_replay_floor_daa_v1(&PALW_COURT_COST_QWEN36, palw_checkpoint_interval_v1(512)),
+            "a one-carrier close adds no assembly blocks: the move cost IS the replay floor"
+        );
+        assert_eq!(floor, 1);
+        assert!(PALW_DEVNET_WINDOWS_V1.court_turn_deadline as u64 >= floor);
     }
 
     // ---------------------------------------------------------------------------------------
@@ -919,9 +942,9 @@ mod tests {
             }
         }
         // The binding row, in numbers: the hybrid at the top rung replays two DAA and assembles
-        // twenty-six, against a derived clock of 42.
-        assert_eq!(armed.court_turn_deadline, 42);
-        assert_eq!(palw_court_move_cost_daa_v1(&PALW_COURT_COST_QWEN36, 256, PALW_COURT_MAX_CLOSE_CHUNKS_V1), 28);
+        // none — its close is one carrier — against a derived clock of 45.
+        assert_eq!(armed.court_turn_deadline, 45);
+        assert_eq!(palw_court_move_cost_daa_v1(&PALW_COURT_COST_QWEN36, 256, PALW_COURT_MAX_CLOSE_CHUNKS_V1), 2);
     }
 
     /// The floor's own arithmetic, pinned, so the measured inputs cannot drift silently.
