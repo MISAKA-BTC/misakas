@@ -23,6 +23,30 @@
 //! * `--mode v2-manifest` → display-only JSON of the `RuntimeManifestV2` identity (the
 //!   canonical identity is the manifest hash, not this JSON).
 //!
+//! # There is no free-prompt mode here, and there must not be one again (ADR-0077 Decision 5)
+//!
+//! This worker carried `--mode v3-manifest` / `--mode v3-job` — the gateway's two-mode
+//! free-prompt contract — from FP-06 until 2026-09-02. They are deleted, for three reasons that
+//! compound:
+//!
+//! * **Consensus refuses what they produced.** The v3 path here captured no step leg, so it
+//!   committed `execution_root = 0`, and `apply_palw_transition_v3` rejects exactly that
+//!   (`UnadjudicableCommitment`, the audit-C3 fail-closed door). Every commitment this runtime
+//!   could build was inadmissible on every network — a browser pipeline that ran end to end and
+//!   could never reach a chain.
+//! * **No registered class runs on this runtime** (ADR-0053): there is one execution family and
+//!   it is the integer one. A `runtime_class_id` derived from a llama.cpp build names a class no
+//!   chain registers and no court can adjudicate.
+//! * **Nothing noticed it rot.** This crate is outside `default-members` (its build script needs
+//!   a pinned llama.cpp checkout CI does not have), so the v3 arms were compiled by no gate for
+//!   months while three smoke scripts drove them.
+//!
+//! The gateway's workers are `palw-a16-fp-worker` and `palw-qwen36-fp-worker` in
+//! `misaka-palw-base0` — the integer backends whose `execute_free_prompt` captures all four legs
+//! and whose execution root is the one `palw_fp_execution_root_v3` recomputes. Anything that
+//! wants a free-prompt job goes there. What stays here is the v1/v2 attempt-lane surface the
+//! ADR-0034 capability probe and the replay bench still drive.
+//!
 //! Both job modes print a `misaka.palw.testnet-submission.v3` document: the 16
 //! `MatchProjectionV1` fields, every one derived from the actual execution or from the pinned
 //! identity — never from randomness. That is the entire determinism contract: an executor and a
@@ -47,10 +71,6 @@ use std::collections::HashSet;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use kaspa_consensus_core::palw_freeprompt_v3::{
-    PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_V3_VERSION, PalwFpStopReasonV3, PalwFpWorkerInputV3, PalwFpWorkerRequestV3,
-    PalwFpWorkerResultV3, PalwFreePromptJobV3, fp_job_id_v3, fp_trace_manifest_v3, fp_worker_request_hash_v3,
-};
 use kaspa_consensus_core::palw_legs::{
     PALW_LEGS_DOMAIN_ACTIVATION_MERKLE_LEAF, PALW_LEGS_DOMAIN_ACTIVATION_MERKLE_NODE, PALW_LEGS_DOMAIN_CHECKPOINT_MERKLE_LEAF,
     PALW_LEGS_DOMAIN_CHECKPOINT_MERKLE_NODE, PALW_LEGS_MAX_ACTIVATION_LEAVES, PALW_LEGS_MAX_CHECKPOINTS, PALW_LEGS_OBJECT_VERSION_V1,
@@ -70,9 +90,8 @@ use kaspa_consensus_core::palw_v2::{
     PalwJobTelemetryV2, PalwLogitsDtypeV2, PalwResultProjectionV2, PalwRuntimeManifestV2, PalwScheduleCommitmentBuilderV2,
     PalwStopReasonV2, PalwTraceCommitmentV2, PalwTracePhaseV2, PalwTraceSummaryV2, canonical_compute_units_v2, cu_ruleset_id_v2,
     decode_framed_borsh, expected_schedule_commitment_v2, full_logits_trace_root_v2, golden_vector_root_unpopulated_v2,
-    job_request_hash_v2, logits_event_hash_v2, output_commitment_v2, output_token_ids_hash_v2, prompt_token_ids_hash_v2, read_framed,
-    rendered_output_hash_v2, shape_profile_id_v2, tokenizer_id_v2_for_gguf, trace_event_merkle_root_v2, trace_scheme_id_v2,
-    write_framed,
+    job_request_hash_v2, logits_event_hash_v2, output_commitment_v2, output_token_ids_hash_v2, read_framed, rendered_output_hash_v2,
+    shape_profile_id_v2, tokenizer_id_v2_for_gguf, trace_event_merkle_root_v2, trace_scheme_id_v2, write_framed,
 };
 use kaspa_consensus_core::vlt::{derive_model_weights_hash, derive_runtime_class_id, derive_runtime_hash, qwen35_pins};
 use kaspa_hashes::Hash64;
@@ -1264,63 +1283,6 @@ fn run_v2_job() {
     write_framed(&mut stdout, &bytes).unwrap_or_else(|e| die(format!("cannot write the v2 result frame: {e}")));
 }
 
-// ---------------------------------------------------------------------------------------------
-// ADR-0044 (FP-06): the free-prompt v3 job — one execution, an ANSWER and a commitment.
-// ---------------------------------------------------------------------------------------------
-
-/// The v3 execution shape. Differs from v2 in exactly the stop semantics — the decode budget is
-/// a CEILING and end-of-generation is a real stop (a chat answer that ends, ends) — and in
-/// admitting a text arm (the worker tokenizes under the pinned GGUF tokenizer; the template, if
-/// any, was the GATEWAY's frozen transform, never this process's). A different stop rule is a
-/// different shape profile, never an in-place edit of v2's.
-fn shape_string_v3() -> String {
-    let gpu_layers = if cfg!(misaka_palw_cpu) { "none" } else { "all" };
-    format!(
-        "n_ctx={N_CTX}/n_batch={N_BATCH}/n_ubatch={N_BATCH}/n_seq=1/n_threads={N_THREADS}/flash-attn=disabled/gpu-layers={gpu_layers}/greedy-argmax-first-index/text-or-token-ids-input/ceiling-decode/early-eog-stops/prefill-single-batch/v3"
-    )
-}
-
-/// Rejects a v3 request whose declared runtime identity is not THIS worker — the five pins
-/// (`tokenizer_id` is inside the manifest-pinned GGUF; the CU rule is the consensus bundle's,
-/// applied by the caller over returned counts — neither is a separate pin here).
-fn check_v3_identity(request: &PalwFpWorkerRequestV3, manifest: &PalwRuntimeManifestV2) {
-    let checks: [(&str, Hash64, Hash64); 5] = [
-        ("model_profile_id", model_profile_id(), request.model_profile_id),
-        ("runtime_manifest_hash", manifest.manifest_hash(), request.runtime_manifest_hash),
-        ("runtime_class_id", runtime_class_id(), request.runtime_class_id),
-        ("shape_profile_id", shape_profile_id_v2(&shape_string_v3()), request.shape_profile_id),
-        ("trace_scheme_id", trace_scheme_id_v2(), request.trace_scheme_id),
-    ];
-    for (field, ours, declared) in checks {
-        if ours != declared {
-            die(format!(
-                "v3-job rejected: {field} mismatch — the request declares a runtime this worker is not (ours {}, request {})",
-                hex(ours),
-                hex(declared)
-            ));
-        }
-    }
-}
-
-/// `--mode v3-manifest`: the machine-readable identity a gateway pins its requests with. JSON on
-/// stdout; the canonical identities are the hashes, this document is how a caller learns them.
-fn run_v3_manifest() {
-    let manifest = runtime_manifest_v2(worker_binary_sha256(), resolve_golden_root());
-    let doc = serde_json::json!({
-        "schema": "misaka.palw.fp-v3-manifest.v1",
-        "runtime_manifest_hash": hex(manifest.manifest_hash()),
-        "runtime_class_id": hex(runtime_class_id()),
-        "model_profile_id": hex(model_profile_id()),
-        "shape_profile_id": hex(shape_profile_id_v2(&shape_string_v3())),
-        "trace_scheme_id": hex(trace_scheme_id_v2()),
-        "tokenizer_id": hex(tokenizer_id_v2_for_gguf(qwen35_pins::GGUF_SHA256)),
-        "n_ctx": N_CTX,
-        "prefill_single_batch_cap": N_BATCH,
-        "shape_string": shape_string_v3(),
-    });
-    println!("{doc}");
-}
-
 /// `--mode geometry`: the pinned model's real shape, measured (P0-8b).
 ///
 /// A `PalwShapeProfileV3` restates the model's geometry so the step space is self-contained, and
@@ -1402,284 +1364,6 @@ fn run_geometry() {
     if !pins_agree {
         die("the loaded model's geometry disagrees with the pins — this is not the pinned artifact".into());
     }
-}
-
-/// `--mode v3-job`: one framed Borsh [`PalwFpWorkerRequestV3`] on stdin, one framed Borsh
-/// [`PalwFpWorkerResultV3`] on stdout, nothing else. Fail-closed exactly as v2: any error path
-/// is `die` with NOTHING on stdout.
-///
-/// The trace is bound to [`fp_job_id_v3`] — a value a panel seat can rebuild from CHAIN data
-/// alone (the commitment carries the job and the token ids whole), which is what makes the
-/// `TokenIds` replay arm reach byte-identical roots. The v2 trace-layer summary records the
-/// EXECUTED count as its exact count with its one stop variant — at the trace layer that reads
-/// "this trace is complete at E events", which is true; the run's own stop reason
-/// (budget vs end-of-generation) is the v3 result's, checked canonical by every consumer.
-fn run_v3_job(trace_out: &Path) {
-    let mut stdin = std::io::stdin().lock();
-    let payload = read_framed(&mut stdin, PALW_V2_MAX_FRAME_BYTES).unwrap_or_else(|e| die(format!("v3-job rejected: {e}")));
-    let request_hash = fp_worker_request_hash_v3(&payload);
-    let request: PalwFpWorkerRequestV3 = decode_framed_borsh(&payload).unwrap_or_else(|e| die(format!("v3-job rejected: {e}")));
-    if request.version != PALW_FP_V3_VERSION {
-        die(format!("v3-job rejected: request version {} is not {}", request.version, PALW_FP_V3_VERSION));
-    }
-    if request.privacy_mode != PALW_FP_PRIVACY_PUBLIC_DA {
-        die(format!(
-            "v3-job rejected: privacy mode {} is not PublicDa — a mode the panel cannot replay must not execute",
-            request.privacy_mode
-        ));
-    }
-    if request.decode_token_limit == 0 {
-        die("v3-job rejected: a zero decode ceiling is not a job".into());
-    }
-    if request.max_context_tokens == 0 || request.max_context_tokens > N_CTX as u32 {
-        die(format!("v3-job rejected: max_context_tokens {} is outside this runtime's 1..={N_CTX}", request.max_context_tokens));
-    }
-    let fp = fp_env::probe();
-    if !fp.is_canonical() {
-        die(format!(
-            "v3-job rejected: floating-point environment is not the canonical profile ({}; required {FP_ENVIRONMENT_PROFILE_V2})",
-            fp.canonical_string()
-        ));
-    }
-    let manifest = runtime_manifest_v2(worker_binary_sha256(), resolve_golden_root());
-    check_v3_identity(&request, &manifest);
-    let model_path = pinned_model_path_v2();
-
-    let load_started = std::time::Instant::now();
-    let ctx = unsafe { shim_open(format!("{}\0", model_path.display()).as_ptr(), N_CTX, N_BATCH, N_THREADS) };
-    if ctx.is_null() {
-        die(format!("llama.cpp failed to load {}", model_path.display()));
-    }
-    let n_vocab_raw = unsafe { shim_n_vocab(ctx) };
-    if n_vocab_raw <= 0 {
-        die(format!("model reports a non-positive vocab size ({n_vocab_raw})"));
-    }
-    let n_vocab = n_vocab_raw as u32;
-    let model_load_ms = load_started.elapsed().as_millis() as u64;
-    eprintln!("[palw-worker] model loaded in {:?} (n_vocab={n_vocab})", load_started.elapsed());
-
-    // Re-probe AFTER model load, exactly as v2: a backend that flipped MXCSR/FPCR during init
-    // would change the arithmetic of every decode call.
-    let fp = fp_env::probe();
-    if !fp.is_canonical() {
-        die(format!("v3-job rejected: floating-point environment drifted after model load: {}", fp.canonical_string()));
-    }
-
-    // The two input arms converge on canonical token ids here; everything after this line is one
-    // code path, which is what makes text-in and ids-in root equality a testable property.
-    let prompt_ids: Vec<u32> = match &request.input {
-        PalwFpWorkerInputV3::Text(bytes) => {
-            if bytes.is_empty() {
-                die("v3-job rejected: the text arm carries no bytes".into());
-            }
-            if std::str::from_utf8(bytes).is_err() {
-                die("v3-job rejected: the text arm is not UTF-8 — a template renders text, not bytes".into());
-            }
-            let mut out = vec![0i32; N_CTX as usize];
-            let n = unsafe { shim_tokenize(ctx, bytes.as_ptr(), bytes.len() as i32, out.as_mut_ptr(), out.len() as i32) };
-            if n <= 0 {
-                die(format!("v3-job rejected: tokenization failed or produced nothing (rc={n})"));
-            }
-            out[..n as usize].iter().map(|t| *t as u32).collect()
-        }
-        PalwFpWorkerInputV3::TokenIds(ids) => {
-            if ids.is_empty() {
-                die("v3-job rejected: the ids arm carries no tokens".into());
-            }
-            ids.clone()
-        }
-    };
-    for &t in &prompt_ids {
-        if t >= n_vocab {
-            die(format!("v3-job rejected: token id {t} is outside the model's vocab ({n_vocab})"));
-        }
-    }
-    let prefill = prompt_ids.len() as u32;
-    if prefill > N_BATCH as u32 {
-        die(format!("v3-job rejected: prefill {prefill} exceeds the single-batch prefill schedule (n_batch={N_BATCH})"));
-    }
-    if prefill as u64 + request.decode_token_limit as u64 > request.max_context_tokens as u64 {
-        die(format!(
-            "v3-job rejected: prompt {prefill} + decode ceiling {} exceeds max_context_tokens {}",
-            request.decode_token_limit, request.max_context_tokens
-        ));
-    }
-
-    // The job identity the trace binds — rebuilt by every replayer from chain data alone.
-    let job = PalwFreePromptJobV3 {
-        version: PALW_FP_V3_VERSION,
-        network_domain: request.network_domain,
-        class_id: request.class_id,
-        executor_bond: request.executor_bond,
-        executor_pubkey: request.executor_pubkey.clone(),
-        operator_id: request.operator_id,
-        anchor_block: request.anchor_block,
-        anchor_daa: request.anchor_daa,
-        job_nonce: request.job_nonce,
-        tokenizer_id: tokenizer_id_v2_for_gguf(qwen35_pins::GGUF_SHA256),
-        prompt_token_ids_hash: prompt_token_ids_hash_v2(&prompt_ids),
-        prompt_tokens: prefill,
-        decode_token_limit: request.decode_token_limit,
-        max_context_tokens: request.max_context_tokens,
-        privacy_mode: request.privacy_mode,
-    };
-    let binding = fp_job_id_v3(&job);
-
-    let exec_started = std::time::Instant::now();
-    let limit = request.decode_token_limit;
-    let tokens: Vec<i32> = prompt_ids.iter().map(|t| *t as i32).collect();
-    let mut logits = vec![0f32; n_vocab as usize];
-    let mut scratch: Vec<u8> = Vec::with_capacity(n_vocab as usize * 4);
-    let mut events: Vec<Hash64> = Vec::with_capacity(limit as usize);
-    let mut schedule = PalwScheduleCommitmentBuilderV2::new(&binding);
-
-    step_v2(ctx, &tokens, PalwTracePhaseV2::Prefill, 0, 0, n_vocab, &binding, &mut logits, &mut scratch, &mut events, &mut schedule);
-
-    let mut outputs: Vec<u32> = Vec::with_capacity(limit as usize);
-    let mut rendered: Vec<u8> = Vec::new();
-    let mut piece = vec![0u8; 512];
-    let stop_reason = loop {
-        let tok = argmax(&logits);
-        outputs.push(tok as u32);
-        let n = unsafe { shim_token_to_piece(ctx, tok, piece.as_mut_ptr(), piece.len() as i32) };
-        if n > 0 {
-            rendered.extend_from_slice(&piece[..n as usize]);
-        }
-        // Canonical stop order: the budget edge FIRST (executed == limit is ExactBudgetReached
-        // even when the last token is EOG — one executed count, one encoding), then EOG.
-        if outputs.len() as u32 == limit {
-            break PalwFpStopReasonV3::ExactBudgetReached;
-        }
-        if unsafe { shim_is_eog(ctx, tok) } == 1 {
-            break PalwFpStopReasonV3::EndOfGeneration;
-        }
-        let event_index = outputs.len() as u32;
-        let fed = [tok];
-        step_v2(
-            ctx,
-            &fed,
-            PalwTracePhaseV2::Decode,
-            event_index - 1,
-            event_index,
-            n_vocab,
-            &binding,
-            &mut logits,
-            &mut scratch,
-            &mut events,
-            &mut schedule,
-        );
-    };
-    unsafe { shim_close(ctx) };
-
-    let executed = outputs.len() as u32;
-    // Defense in depth, as v2: the streamed schedule must equal the canonical schedule for the
-    // EXECUTED shape.
-    let (schedule_commitment, calls) = schedule.finalize();
-    let (expected_schedule, expected_calls) = expected_schedule_commitment_v2(&binding, prefill, executed);
-    if schedule_commitment != expected_schedule || calls != expected_calls {
-        die("internal error: the executed call schedule diverged from the canonical schedule".into());
-    }
-
-    // The trace-layer summary records the EXECUTED count as its exact count (see the fn doc).
-    let summary = PalwTraceSummaryV2 {
-        vocab_size: n_vocab,
-        logits_dtype: PalwLogitsDtypeV2::F32Le,
-        declared_prefill_tokens: prefill,
-        exact_decode_tokens: executed,
-        event_count: executed,
-        first_event_kind: PalwTracePhaseV2::Prefill,
-        last_event_kind: if executed == 1 { PalwTracePhaseV2::Prefill } else { PalwTracePhaseV2::Decode },
-        output_token_ids_hash: output_token_ids_hash_v2(&outputs),
-        stop_reason: PalwStopReasonV2::ExactBudgetReached,
-    };
-    let event_merkle =
-        trace_event_merkle_root_v2(&events).unwrap_or_else(|e| die(format!("internal error: trace merkle failed: {e}")));
-    let trace_root = full_logits_trace_root_v2(&binding, &summary, &event_merkle);
-
-    // Retained-trace DA (ADR-0044 Decision 3's obligation trio, made honest): the ordered
-    // event-hash list, chunked to disk BEFORE the result frame exists — a commitment whose
-    // producer kept nothing cannot serve an opening and would default in court, so failing to
-    // retain is failing the job. Layout: <trace_out>/<job-id-hex>/chunk-<k>.bin (raw 64-byte
-    // event hashes) + manifest.json (digests, for the serving layer's own bookkeeping).
-    let (trace_manifest_root, trace_chunk_count, chunk_digests) = fp_trace_manifest_v3(binding, &events);
-    let retain_dir = trace_out.join(hex(binding));
-    std::fs::create_dir_all(&retain_dir)
-        .unwrap_or_else(|e| die(format!("cannot create the retention dir {}: {e}", retain_dir.display())));
-    for (index, chunk) in events.chunks(kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_TRACE_CHUNK_EVENTS_V3 as usize).enumerate() {
-        let mut bytes = Vec::with_capacity(chunk.len() * 64);
-        for event in chunk {
-            bytes.extend_from_slice(event.as_byte_slice());
-        }
-        let path = retain_dir.join(format!("chunk-{index}.bin"));
-        std::fs::write(&path, &bytes).unwrap_or_else(|e| die(format!("cannot retain {}: {e}", path.display())));
-    }
-    let manifest_doc = serde_json::json!({
-        "schema": "misaka.palw.fp-v3-trace-manifest.v1",
-        "trace_binding": hex(binding),
-        "trace_root": hex(trace_root),
-        "chunk_events": kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_TRACE_CHUNK_EVENTS_V3,
-        "chunk_count": trace_chunk_count,
-        "chunk_digests": chunk_digests.iter().map(|d| hex(*d)).collect::<Vec<_>>(),
-        "manifest_root": hex(trace_manifest_root),
-    });
-    std::fs::write(retain_dir.join("manifest.json"), serde_json::to_vec_pretty(&manifest_doc).unwrap())
-        .unwrap_or_else(|e| die(format!("cannot write the retention manifest: {e}")));
-
-    eprintln!(
-        "[palw-worker] v3 executed: prefill={prefill} decode={executed}/{limit} stop={stop_reason:?} in {:?}; root={}…",
-        exec_started.elapsed(),
-        &hex(trace_root)[..16]
-    );
-
-    let result = PalwFpWorkerResultV3 {
-        version: PALW_FP_V3_VERSION,
-        request_hash,
-        job,
-        prompt_token_ids: prompt_ids,
-        trace_root,
-        output_root: output_commitment_v2(&binding, &outputs, &rendered_output_hash_v2(&rendered)),
-        schedule_root: schedule_commitment,
-        // **Deliberately null, and consensus refuses it — but the reason is NOT the one this
-        // comment used to give, and the correction matters.**
-        //
-        // It said the v2-legs path "already produces the binding this field wants". It does not.
-        // The court binds a refutation to `PalwStepBindingV2::committed_execution_root`, which
-        // `execution_commitment_root_v2` builds from FOUR roots: the logits trace, the activation
-        // leg, a **v2** checkpoint leg (keyed differently from the v1 one and carrying a
-        // `state_chunk_map_id`), and a **step leg**. The v2-legs path produces the v1 composite —
-        // `execution_commitment_root_v1`, no step leg — so its root is a different value for a
-        // different purpose.
-        //
-        // **No worker path on this tree captures a step leg at all.** `PalwStepLegBuilderV1`
-        // wants one leaf per (call, node slot, position, tile) of every kernel invocation, and
-        // the shim exposes taps and logits, not per-kernel tile outputs. That is instrumentation
-        // this runtime does not have, and it is the same gap on BOTH lanes: an attempt envelope's
-        // `execution_root` is a value the miner supplies, bound into `attempt_id` and therefore
-        // into the PoW, but recomputed from a real execution by nothing.
-        //
-        // So the free-prompt lane's fail-closed refusal is not this lane being behind the attempt
-        // lane — it is the shared gap surfacing where a rule actually checks for it. A fabricated
-        // value would be strictly worse than none: it would make disputes fail in a way that looks
-        // like the producer winning them.
-        //
-        // What IS ready: `palw_fp_execution_v3` derives the context and the root from measured
-        // facts, so the day the step leg is captured this becomes
-        // `palw_fp_execution_root_v3(&ctx, &facts)` and nothing else moves. What is missing is the
-        // capture, in the shim.
-        execution_root: Hash64::default(),
-        trace_manifest_root,
-        trace_chunk_count,
-        trace_event_count: executed,
-        decode_tokens_executed: executed,
-        stop_reason,
-        output_token_ids: outputs,
-        rendered,
-        model_load_ms,
-        execute_ms: exec_started.elapsed().as_millis() as u64,
-    };
-    let bytes = borsh::to_vec(&result).unwrap_or_else(|e| die(format!("cannot serialize the v3 result: {e}")));
-    let mut stdout = std::io::stdout().lock();
-    write_framed(&mut stdout, &bytes).unwrap_or_else(|e| die(format!("cannot write the v3 result frame: {e}")));
 }
 
 /// `--mode v2-legs-job`: the v2 job with execution-commitment legs. Same envelope in; a
@@ -2582,7 +2266,6 @@ fn main() {
     let mut runs: Option<u32> = None;
     let mut decode_override: Option<u32> = None;
     let mut legs_flag = false;
-    let mut trace_out: Option<String> = None;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -2620,10 +2303,6 @@ fn main() {
                 decode_override = args.get(i).and_then(|s| s.parse().ok());
             }
             "--legs" => legs_flag = true,
-            "--trace-out" => {
-                i += 1;
-                trace_out = args.get(i).cloned();
-            }
             other => die(format!("unknown argument {other:?}")),
         }
         i += 1;
@@ -2649,8 +2328,6 @@ fn main() {
                 | "v2-legs-open-request"
                 | "v2-legs-open-verify"
                 | "v2-replay-bench"
-                | "v3-job"
-                | "v3-manifest"
                 | "geometry"
                 | "pow-agent"
         )
@@ -2663,13 +2340,6 @@ fn main() {
     match mode.as_deref() {
         Some("v2-job") => run_v2_job(),
         Some("v2-manifest") => run_v2_manifest(),
-        Some("v3-job") => {
-            let dir = trace_out.unwrap_or_else(|| {
-                die("--trace-out <dir> is required for v3-job: a job whose trace is not retained cannot be defended".into())
-            });
-            run_v3_job(Path::new(&dir));
-        }
-        Some("v3-manifest") => run_v3_manifest(),
         Some("geometry") => run_geometry(),
         Some("v2-golden-gen") => {
             let out = out_path.unwrap_or_else(|| die("--out <path> is required for v2-golden-gen".into()));

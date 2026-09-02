@@ -318,6 +318,35 @@ pub fn derive_panel_v2_with_maturity(
     min_collateral_sompi: u64,
     registered_by_daa: Option<u64>,
 ) -> Result<Vec<PalwPanelSeatV2>, PalwPanelV2Error> {
+    derive_panel_v2_with_capability_proof(state, params, claim_id, anchor_block, min_collateral_sompi, registered_by_daa, false)
+}
+
+/// [`derive_panel_v2_with_maturity`] with **ADR-0071 SA-3's production proof**.
+///
+/// `capability_proof` is `Params::palw_capability_bound` resolved at the anchor, and `false` —
+/// every shipped preset — is byte-identical to the draw before the parameter existed.
+///
+/// **Measured at the ANCHOR like maturity, and for the same reason**: the panel is a pure function
+/// of the claim (`validate_panel_bound_v2` recomputes it and demands exact equality), so a
+/// predicate resolved at the binding block would make the derived panel change block by block.
+/// The production FACTS it reads are chain state at the point the draw runs, which is the same
+/// state `validate_panel_bound_v2` holds when it recomputes.
+///
+/// **The liveness trap, closed by the genesis-class exemption.** A short draw is not a smaller
+/// panel — it is `InsufficientEligibleBonds`, and every claim then voids at `BindTimeout` with its
+/// escrow burned. The shipped genesis registry has zero slack, and no genesis bond has produced
+/// anything at block 0; `palw_bond_may_judge_class_v3` exempts a class with no registrant bond,
+/// which is exactly the set a genesis assembly registers.
+#[allow(clippy::too_many_arguments)]
+pub fn derive_panel_v2_with_capability_proof(
+    state: &PalwChainStateV2,
+    params: &PalwPanelParamsV2,
+    claim_id: &Hash64,
+    anchor_block: BlockHash,
+    min_collateral_sompi: u64,
+    registered_by_daa: Option<u64>,
+    capability_proof: bool,
+) -> Result<Vec<PalwPanelSeatV2>, PalwPanelV2Error> {
     let claim = state.claim(claim_id).ok_or(PalwPanelV2Error::MissingClaim(*claim_id))?;
     let executor_bond = claim.bond;
     let executor = state.bond(&executor_bond).ok_or(PalwPanelV2Error::SeatBondMissing(executor_bond))?;
@@ -353,7 +382,13 @@ pub fn derive_panel_v2_with_maturity(
         // Undeclared is excluded, never defaulted — the rule the V1 job panel already states. A
         // permissive default converts an operator's silence into its conviction, because the duty
         // accounting charges exactly the seats this function names.
-        if !crate::palw_state_v2::palw_bond_may_judge_class_v2(bond, &claim.class_id) {
+        //
+        // **ADR-0071 SA-3, past `capability_proof`: declaring is a claim, producing is a proof.**
+        // A declaration costs a signature and (SA-2) some reserved collateral; an accepted attempt
+        // or free-prompt claim on the class is the chain having seen this bond actually run it.
+        // Silence stays unjudged — a bond that declared and never produced is simply not drawn,
+        // never charged for the omission and never convicted of it (ADR-0065 D4).
+        if !crate::palw_state_v2::palw_bond_may_judge_class_v3(state, bond_key, bond, &claim.class_id, capability_proof) {
             continue;
         }
         let mut ticket = keyed(PALW_PANEL_V2_DOMAIN_SEAT_TICKET);
@@ -416,6 +451,40 @@ pub fn validate_panel_bound_v2_with_maturity(
     proposed_seats: &[PalwPanelSeatV2],
     bond_maturity_daa: Option<u64>,
 ) -> Result<(), PalwPanelV2Error> {
+    validate_panel_bound_v2_with_capability_proof(
+        state,
+        params,
+        state_params,
+        ctx,
+        claim_id,
+        anchor,
+        proposed_anchor,
+        proposed_seats,
+        bond_maturity_daa,
+        false,
+    )
+}
+
+/// [`validate_panel_bound_v2_with_maturity`] with **ADR-0071 SA-3's production proof**.
+///
+/// `capability_proof` is `Params::palw_capability_bound` resolved at this block, and it must be
+/// the value the assembler used — a `PanelBound` is accepted only if it equals the panel this
+/// function derives, so an acceptance layer and a producer that disagree about the fence refuse
+/// every panel the other builds. `false` — every shipped preset — is byte-identical to the check
+/// before the parameter existed.
+#[allow(clippy::too_many_arguments)]
+pub fn validate_panel_bound_v2_with_capability_proof(
+    state: &PalwChainStateV2,
+    params: &PalwPanelParamsV2,
+    state_params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
+    claim_id: &Hash64,
+    anchor: &PalwAnchorFactV2,
+    proposed_anchor: Hash64,
+    proposed_seats: &[PalwPanelSeatV2],
+    bond_maturity_daa: Option<u64>,
+    capability_proof: bool,
+) -> Result<(), PalwPanelV2Error> {
     let claim = state.claim(claim_id).ok_or(PalwPanelV2Error::MissingClaim(*claim_id))?;
     if !matches!(claim.phase, PalwClaimPhaseV2::Provisional) {
         return Err(PalwPanelV2Error::WrongPhase { claim: *claim_id, edge: "PanelBound" });
@@ -456,13 +525,14 @@ pub fn validate_panel_bound_v2_with_maturity(
         return Err(PalwPanelV2Error::BindOutsideWindow("the bind window has already lapsed"));
     }
 
-    let derived = derive_panel_v2_with_maturity(
+    let derived = derive_panel_v2_with_capability_proof(
         state,
         params,
         claim_id,
         anchor.anchor_block,
         state_params.min_collateral_sompi(),
         palw_seat_maturity_floor_v1(anchor.anchor_daa, bond_maturity_daa),
+        capability_proof,
     )?;
     if derived != proposed_seats {
         return Err(PalwPanelV2Error::PanelMismatch);
@@ -1026,6 +1096,179 @@ mod tests {
 
         let retiring = PalwBondStateV2 { status: PalwBondStatusV2::Retiring { since_daa: 5 }, ..live };
         assert!(!palw_bond_may_take_work_v2(&retiring, 0), "and retirement still excludes, collateral or not");
+    }
+
+    // ---- ADR-0071 SA-3: a seat is drawn only after a production fact -------------------------
+
+    /// [`populated_state`] with class `h64(1)` registered by a REGISTRANT bond rather than by the
+    /// genesis assembly, folded past the capability fence.
+    ///
+    /// The distinction is the whole of SA-3's exemption: a class with `registrant_bond == None` is
+    /// one a genesis assembly registered, and those stay drawable on a fresh network; a class an
+    /// entrant bought has to be proven by production. This fixture builds the second kind, so the
+    /// test can see the rule bite.
+    fn populated_state_with_a_registrant_class() -> (PalwChainStateV2, Hash64) {
+        use crate::palw_state_v2::{PalwBlockWorkV3, PalwClassAdmissionCarriageV2, apply_palw_transition_v6};
+        let profile = crate::palw_base0_profile::base0_profile_v1(crate::palw_base0_profile::PALW_RC_BASE0_GEOMETRY)
+            .expect("the floor's geometry projects");
+        let canonical = crate::palw_base0_profile::rc_job_context(&profile, 2, 2);
+        // The bonds come first: a registration's carriage names a bond the chain must already hold.
+        let bonds = vec![
+            register(1, 7, 0x21),
+            register(2, 8, 0x22),
+            register(3, 9, 0x23),
+            register(4, 10, 0x24),
+            register(5, 11, 0x24),
+            register(6, 12, 0x21),
+        ];
+        let (s0, ..) = apply_palw_transition_v6(
+            &PalwChainStateV2::genesis(),
+            &state_params(),
+            None,
+            &ctx(1, 100, 1),
+            &bonds,
+            PalwBlockWorkV3::None,
+            &[],
+            false,
+            true,
+        )
+        .expect("the registry loads");
+        let class = PalwConsensusObjectV2::ClassRegistered {
+            class_id: h64(1),
+            artifact_root: h64(11),
+            slash_value_per_pwu: 5,
+            pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
+            initial_target: u128::MAX / 2,
+            share_permille: 1000,
+            activation_daa: 0,
+            // The transition reads only `registrant_bond` from the carriage — the graph walk is
+            // the acceptance layer's — so this is the cheapest well-formed stand-in.
+            admission: Some(Box::new(PalwClassAdmissionCarriageV2 {
+                registrant_bond: PalwBondKeyV2(bond_outpoint(1)),
+                profile,
+                canonical,
+                signature: Vec::new(),
+            })),
+        };
+        let (s1, ..) =
+            apply_palw_transition_v6(&s0, &state_params(), None, &ctx(2, 101, 2), &[class], PalwBlockWorkV3::None, &[], false, true)
+                .expect("an entrant registers the class");
+        let env = attempt(40, 1);
+        let claim_id = attempt_id_v2(&env.attempt);
+        let (s2, ..) = apply_palw_transition_v6(
+            &s1,
+            &state_params(),
+            None,
+            &ctx(3, 102, 3),
+            &[],
+            PalwBlockWorkV3::Attempt(&env),
+            &[],
+            false,
+            true,
+        )
+        .expect("the executor produces on it");
+        (s2, claim_id)
+    }
+
+    /// **SA-3: declaring is a claim, producing is a proof.**
+    ///
+    /// Every bond in the fixture declared the class. Only the executor has ever produced on it,
+    /// and the executor is excluded from its own panel — so past the fence the draw finds nobody,
+    /// and it fails CLOSED, which is `derive_panel_v2`'s standing behaviour for a registry it
+    /// cannot seat. Before the fence the same registry seats a full panel, which is the half that
+    /// says the rule and not the fixture is what changed.
+    ///
+    /// Silence is not judged here and that is the point: the five bonds that declared and never
+    /// produced are not charged, not convicted and not accused. They are simply not drawn.
+    #[test]
+    fn a_bond_that_declared_but_never_produced_is_not_drawn_for_a_registrant_class() {
+        let (state, claim_id) = populated_state_with_a_registrant_class();
+        let anchor = BlockHash::from_u64_word(0xA0C0);
+
+        let before =
+            derive_panel_v2(&state, &panel_params(), &claim_id, anchor, 0).expect("without the fence the registry seats a panel");
+        assert_eq!(before.len(), 3, "three eligible seats, as in every other fixture");
+
+        let err = derive_panel_v2_with_capability_proof(&state, &panel_params(), &claim_id, anchor, 0, None, true)
+            .expect_err("past the fence only a bond that produced on this class may judge it");
+        assert!(
+            matches!(err, PalwPanelV2Error::InsufficientEligibleBonds { available: 0, .. }),
+            "and it fails CLOSED rather than seating a short panel: {err:?}"
+        );
+
+        // The executor DID produce — the fact is on the chain — and is excluded for a different
+        // reason entirely. Asserting it here keeps the two exclusions from being confused.
+        let executor = PalwBondKeyV2(bond_outpoint(1));
+        assert!(
+            crate::palw_state_v2::palw_bond_produced_on_class_v1(&state, &executor, &h64(1)),
+            "the producer's own fact was recorded"
+        );
+        for bond in [2u64, 3, 4, 5, 6] {
+            assert!(
+                !crate::palw_state_v2::palw_bond_produced_on_class_v1(&state, &PalwBondKeyV2(bond_outpoint(bond)), &h64(1)),
+                "and nobody else's was"
+            );
+        }
+    }
+
+    /// **The liveness proof the fence cannot ship without.**
+    ///
+    /// A short draw is `InsufficientEligibleBonds`, so every claim then voids at `BindTimeout`
+    /// with its escrow burned — and the shipped genesis registry has ZERO slack by construction
+    /// (`seat_count + 1` bonds, executor excluded) with no bond having produced anything at block
+    /// 0. What keeps it drawable past the fence is the genesis-class exemption, and this asserts
+    /// it over the REAL shipped assembly rather than a fixture: for every class the card
+    /// registers, the fence removes exactly nobody, and what is left is still enough operators to
+    /// seat a panel after excluding any one of them as the executor.
+    #[test]
+    fn the_shipped_registry_still_draws_a_full_panel_with_the_capability_fence_armed() {
+        use crate::config::params::palw_rc_shipped_params;
+        use crate::palw_mode_v2::PalwConsensusMode;
+        use crate::palw_state_v2::{palw_bond_may_judge_class_v3, palw_bond_may_take_work_v2};
+
+        let params = palw_rc_shipped_params();
+        let PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
+            panic!("the shipped RC preset carries a V2 bundle");
+        };
+        let sp = bundle.state.clone();
+        let genesis_ctx =
+            PalwBlockContextV2 { block: params.genesis.hash, daa_score: params.genesis.daa_score, blue_score: 0, subsidy: 0 };
+        let (booted, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &sp, &genesis_ctx, &bundle.genesis_objects, None)
+            .expect("the shipped genesis applies");
+
+        let seats_needed = bundle.panel.seat_count() as usize;
+        let min_collateral = sp.min_collateral_sompi();
+        let classes: Vec<Hash64> = booted.classes_iter().map(|(id, _)| *id).collect();
+        assert!(!classes.is_empty(), "the shipped card registers classes");
+
+        for class_id in classes {
+            let count = |proof: bool| -> usize {
+                let mut operators: Vec<Hash64> = booted
+                    .bonds_iter()
+                    .filter(|(key, bond)| {
+                        palw_bond_may_take_work_v2(bond, min_collateral)
+                            && palw_bond_may_judge_class_v3(&booted, key, bond, &class_id, proof)
+                    })
+                    .map(|(_, bond)| bond.operator_id)
+                    .collect();
+                operators.sort();
+                operators.dedup();
+                operators.len()
+            };
+            let open = count(false);
+            let fenced = count(true);
+            assert_eq!(
+                open, fenced,
+                "class {class_id:?}: the capability fence removed a seat from the shipped genesis registry — every claim on this \
+                 network would void at BindTimeout. The genesis-class exemption is what must keep this equal."
+            );
+            // The executor is drawn out of this same set, so a panel needs one spare.
+            assert!(
+                fenced >= seats_needed + 1,
+                "class {class_id:?}: {fenced} eligible operators past the fence, and a panel of {seats_needed} needs one spare for \
+                 the executor it excludes"
+            );
+        }
     }
 
     /// **The audit register's P0-7 exclusion red test.** The trio reads the ONE registry: the
