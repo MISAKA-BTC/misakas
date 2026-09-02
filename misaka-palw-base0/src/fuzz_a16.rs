@@ -684,4 +684,71 @@ mod tests {
         assert!(honest < PALW_INTERPRETER_TRACE_BYTES_CEILING_V1);
         assert!(engine.plan_from_profile(&base).is_ok(), "the corrected profile must plan under the shipped ceiling");
     }
+
+    /// **ADR-0067 SA-1: the shipped ceiling is answerable to a measurement, in both directions.**
+    ///
+    /// The mechanism is proven by the test above — a ceiling one byte under a profile's own cost
+    /// refuses it by name, before an allocation. That says nothing about the VALUE, and the first
+    /// value shipped said nothing either: 1 GiB was 60x the largest class this build serves and
+    /// 40,000x the largest gate-accepted profile the adversarial corpus produces, which is a number
+    /// no evidence chose. A ceiling nobody can reach is not a ceiling.
+    ///
+    /// So the constant is pinned to what this build actually runs. Both bounds are load-bearing:
+    ///
+    /// * **Below** — the ceiling must clear the biggest class by a real margin, or a legitimate
+    ///   registration becomes an outage. Measured at each class's registered context AND at a
+    ///   4,096-position stress context far past anything the admission court accepts.
+    /// * **Above** — the ceiling must NOT be an arbitrary distance above them, or it is back to
+    ///   being a number with nothing behind it. This half is what fails if someone restores 1 GiB.
+    ///
+    /// Raising a class past the band is a legitimate reason to move the constant. Doing it without
+    /// touching this test is not possible, which is the point.
+    #[test]
+    fn the_interpreter_ceiling_is_derived_from_what_this_build_actually_serves() {
+        // Fully qualified rather than imported: a `use` list's internal order is a rustfmt style
+        // question this repo has been burned by across tool versions, and this test has no need of
+        // one.
+        let b0g = kaspa_consensus_core::palw_base0_profile::PALW_RC_BASE0_GEOMETRY;
+        let a16g = kaspa_consensus_core::palw_qwen25_profile::QWEN25_1_5B_A16;
+        let g36 = kaspa_consensus_core::palw_qwen36_profile::qwen36_geometry_artifact_eps(
+            kaspa_consensus_core::palw_qwen36_profile::QWEN36_35B_A3B,
+        );
+
+        let bytes = crate::engine_a16::interpreted_trace_bytes_v1;
+        let base0 = kaspa_consensus_core::palw_base0_profile::base0_profile_v1(b0g).expect("BASE-0 projects");
+        let a16 = kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_profile_v2(a16g).expect("the A16 geometry projects");
+        let q36 = kaspa_consensus_core::palw_qwen36_profile::qwen36_profile_v2(g36).expect("the Qwen3.6 geometry projects");
+
+        let registered = [
+            ("BASE-0", bytes(&base0, b0g.n_ctx as u64)),
+            ("QWEN25-A16", bytes(&a16, a16g.n_ctx as u64)),
+            ("QWEN36", bytes(&q36, g36.n_ctx as u64)),
+        ];
+        for (name, cost) in registered {
+            println!("{name}: one token's committed trace = {cost} bytes");
+            assert!(cost > 0, "{name}: a class that costs nothing is a measurement error, not a cheap class");
+        }
+        let largest = registered.iter().map(|(_, c)| *c).max().expect("three classes");
+
+        // Below: real headroom over the largest registered class, and over the same graph at a
+        // context no court admits — so the margin is known to cover growth, not just today.
+        let stress = bytes(&q36, 4_096);
+        assert!(
+            stress > largest && stress < PALW_INTERPRETER_TRACE_BYTES_CEILING_V1,
+            "the largest class stretched to a 4,096-position context costs {stress} and must still fit under \
+             {PALW_INTERPRETER_TRACE_BYTES_CEILING_V1}: a ceiling a legitimate class can cross is an outage"
+        );
+        assert!(
+            PALW_INTERPRETER_TRACE_BYTES_CEILING_V1 >= largest.saturating_mul(2),
+            "the ceiling ({PALW_INTERPRETER_TRACE_BYTES_CEILING_V1}) leaves under 2x over the largest class this \
+             build serves ({largest}) — too tight to be a second line"
+        );
+        // Above: the constant stays tied to the measurement. 1 GiB fails here, which is the whole
+        // reason this half exists.
+        assert!(
+            PALW_INTERPRETER_TRACE_BYTES_CEILING_V1 <= largest.saturating_mul(8),
+            "the ceiling ({PALW_INTERPRETER_TRACE_BYTES_CEILING_V1}) is more than 8x the largest class this build \
+             serves ({largest}), so it is a number nothing measured chose — derive it or say why the band moved"
+        );
+    }
 }

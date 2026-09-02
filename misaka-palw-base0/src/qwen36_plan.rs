@@ -291,12 +291,6 @@ impl<'a> Qwen36Engine<'a> {
         ceiling_bytes: u64,
     ) -> Result<Qwen36ProfilePlanV1, Qwen36PlanErrorV1> {
         let s = &self.artifact.shape;
-        // Before anything is compiled: one token's committed trace, priced from the declaration
-        // itself, against the bound. `max_position` is the artifact's own bound on a kv-scaled row.
-        let bytes = crate::engine_a16::interpreted_trace_bytes_v1(profile, s.max_position as u64);
-        if bytes > ceiling_bytes {
-            return Err(Qwen36PlanErrorV1::OverMemoryCeiling { bytes, ceiling: ceiling_bytes });
-        }
         if profile.lane != PalwStepLaneV1::Int32 {
             return Err(Qwen36PlanErrorV1::NotAnIntegerLane);
         }
@@ -338,6 +332,16 @@ impl<'a> Qwen36Engine<'a> {
         check("vocab_size", profile.vocab_size as u64, s.vocab as u64)?;
         // The eps is an artifact field AND a profile field, and it moves every activation.
         check("rms_eps_q", profile.base0_rms_eps_q as u64, s.eps_q as u64)?;
+
+        // The memory ceiling, in the dense container's position and for its reason (ADR-0067
+        // SA-1): after the free scalar comparisons, before `plan_table` spends a byte. Everything
+        // allocated between here and there is bounded by `layer_count`, which the first `check`
+        // above already pinned to the artifact. `max_position` is the artifact's own bound on a
+        // kv-scaled row.
+        let bytes = crate::engine_a16::interpreted_trace_bytes_v1(profile, s.max_position as u64);
+        if bytes > ceiling_bytes {
+            return Err(Qwen36PlanErrorV1::OverMemoryCeiling { bytes, ceiling: ceiling_bytes });
+        }
 
         let gdn_layers = layer_kinds.iter().filter(|k| **k == Qwen36LayerKind::LinearAttention).count();
         let attn_layers = layer_kinds.len() - gdn_layers;

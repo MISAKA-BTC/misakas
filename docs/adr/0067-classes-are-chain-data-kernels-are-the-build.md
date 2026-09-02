@@ -616,6 +616,28 @@ Decision 11, on its branch): the profile-space fuzzer's corpus includes profiles
 memory and to recurse, and the interpreted path runs under the worker memory ceiling with the
 ceiling proven to bind. A chain-registered profile is a stranger's program.
 
+*As built (2026-09-03), with the honest scope of the claim.*
+`misaka_palw_base0::engine_a16::PALW_INTERPRETER_TRACE_BYTES_CEILING_V1` bounds one token's
+committed trace, priced from the declaration before the plan allocates, in BOTH containers — a
+ceiling that were it in only one would be a property of which container an attacker picked. The
+mechanism binds: a ceiling one byte under a profile's own cost refuses it by name.
+
+The VALUE is a separate claim and the first one shipped did not survive it. 1 GiB was 60x the
+largest class this build serves and ~40,000x the largest gate-accepted profile in the adversarial
+corpus, i.e. a number nothing measured chose. It is now 64 MiB, derived from the measured cost of
+every class this build ships (BASE-0 182 KB, QWEN25-A16 9.4 MB, QWEN36 17.6 MB, and QWEN36 stretched
+to a 4,096-position context 49.0 MB), and
+`the_interpreter_ceiling_is_derived_from_what_this_build_actually_serves` fails in both directions —
+too tight to be a second line, or far enough above the measurement to be arbitrary again.
+
+And what actually binds FIRST, because SA-1 should not be read as more than it is: on the shipped
+admission gate the leaf bound and the per-node width checks refuse every oversized shape the
+adversarial corpus can generate (372 of 400 refused at the gate; the largest gate-ACCEPTED profile
+costs 26,624 bytes). The ceiling is the second line — the one that survives a gate whose node counts
+or row widths are ever loosened. It is evaluated after the scalar geometry comparisons, which are
+free, so a profile that is merely the wrong shape for this artifact is reported as the wrong shape
+rather than as an oversized one.
+
 **SA-2 — Resolution is off the consensus thread and fails closed to "cannot serve".** Resolving a
 chain class (fetching bytes, verifying the digest, compiling the profile) runs lazily, off the
 block-processing path; a failure marks the class unservable on this node and never rejects a block.
@@ -624,6 +646,20 @@ Otherwise a hostile profile is a way to stall every validator's pipeline with on
 **SA-3 — Re-entry after eviction re-verifies from bytes**, never from a remembered verdict —
 ADR-0079 Decision 9's rule ("no artifact identity from metadata") applied to profiles; the cache
 bound is per class and in total, and "eviction must retract" (above) stands.
+
+*As built (2026-09-03).* The first implementation made eviction the mechanism — and
+`evict_held_artifacts_v1` / `evict_all_held_artifacts_v1` have no production caller, so in a running
+node the retraction rule this amendment states did not exist: the `(class_id, artifact_root)`
+negative mark was a process-lifetime verdict that could outlive the fact it described. The rule is
+enforced at the READ instead, where no caller has to remember it: each mark records the holdings
+identity it was derived from — per holding, the lineage, the file's `(path, len, mtime)` re-stat'ed
+at read time, and the lineage's summary — and a read whose holdings do not match drops the mark and
+re-derives. Replacing a configured artifact file therefore retracts every verdict about it with no
+evictor call, and one registry's holdings can no longer decide another's.
+
+What that does not do, stated rather than implied: `load_class_holdings_v1` runs once per service
+construction, so a replaced file does not reach a running producer's or panel's MAPPING. The verdict
+retracts; the mapping still needs a restart. Two caches, and only this one ever promised to retract.
 
 **SA-4 — R-7 is a security item, not only a liveness one.** An unpaid seat has no income to lose;
 its only stake is its bond, and ADR-0065 measured what a post-genesis bond costs (400,000 sompi).

@@ -90,7 +90,7 @@ impl PalwBackendRegistry {
                 // hostile registration that costs a second to refuse costs that second on EVERY
                 // duty until it is remembered. The mark is node-local serviceability and nothing
                 // else — see `unservable_chain_classes`.
-                if let Some(why) = remembered_unservable(class_id, artifact_root) {
+                if let Some(why) = remembered_unservable(class_id, artifact_root, &self.holdings) {
                     return Err(why);
                 }
                 match fetch(class_id) {
@@ -98,7 +98,7 @@ impl PalwBackendRegistry {
                         match self.sdk.resolve_chain_registered(class_id, artifact_root, &self.holdings, &profile, &canonical) {
                             Ok(backend) => Ok(backend),
                             Err(why) => {
-                                remember_unservable(class_id, artifact_root, &why);
+                                remember_unservable(class_id, artifact_root, &why, &self.holdings);
                                 Err(why)
                             }
                         }
@@ -123,21 +123,71 @@ impl PalwBackendRegistry {
 /// path, and fails closed to "cannot serve" — because the alternative is a stranger's registration
 /// stalling every validator's pipeline once.
 ///
-/// The mark is dropped when the holdings it was computed against are (SA-3): a refusal that said
-/// "this node holds no artifact whose digest is the registered root" is a statement about the
-/// node's files, and it stops being true the moment the operator supplies them.
-fn unservable_chain_classes() -> &'static Mutex<HashMap<(Hash64, Hash64), String>> {
-    static UNSERVABLE: OnceLock<Mutex<HashMap<(Hash64, Hash64), String>>> = OnceLock::new();
+/// **The mark is answerable to the holdings it was computed against, and it is answerable AT THE
+/// READ** (SA-3). A refusal that said "this node holds no artifact whose digest is the registered
+/// root" is a statement about this node's files, and it stops being true the moment the operator
+/// supplies them — so a cached copy of it must not be able to outlive the holdings it described.
+///
+/// The first form of this map delegated that to an evictor, and **the evictor had no production
+/// caller**: `evict_held_artifacts_v1` and `evict_all_held_artifacts_v1` are `pub` and are reached
+/// only from this file's tests, so in a running node the rule the doc promised did not exist. It
+/// is enforced here instead, where it cannot be forgotten: each entry records the holdings identity
+/// it was derived from, and a read whose holdings do not match DROPS the entry and recomputes. No
+/// caller has to remember anything, and the eviction path still clears the map for the same reason
+/// it always did — one rule, two doors.
+///
+/// Two consequences worth stating because they are the whole of the guarantee:
+///
+/// * A registry whose holdings differ — a different `--palw-class-artifact` list, or the same list
+///   whose files have been replaced — cannot be served another registry's verdict. That was safe by
+///   accident before (`daemon.rs` builds the producer's and the panel's configs from the same two
+///   args, so their holdings could not diverge); it is safe by construction now, and a future
+///   caller that builds a registry over a different list does not have to know this map exists.
+/// * What the mark still cannot fix on its own: `load_class_holdings_v1` runs once per service
+///   construction, so replacing an artifact file on disk does not reach a running service's
+///   holdings. The verdict retracts; the MAPPING does not reload, and that is a restart today. The
+///   two are separate and only the first was ever this map's promise.
+fn unservable_chain_classes() -> &'static Mutex<HashMap<(Hash64, Hash64), UnservableMarkV1>> {
+    static UNSERVABLE: OnceLock<Mutex<HashMap<(Hash64, Hash64), UnservableMarkV1>>> = OnceLock::new();
     UNSERVABLE.get_or_init(Default::default)
 }
 
-fn remembered_unservable(class_id: Hash64, artifact_root: Hash64) -> Option<String> {
-    unservable_chain_classes().lock().unwrap_or_else(|p| p.into_inner()).get(&(class_id, artifact_root)).cloned()
+/// A remembered refusal and the holdings it is a statement about.
+#[derive(Clone, Debug)]
+struct UnservableMarkV1 {
+    why: String,
+    /// [`holdings_identity_v1`] as of the moment the refusal was computed.
+    against: Vec<(&'static str, Option<HeldArtifactKey>, String)>,
 }
 
-fn remember_unservable(class_id: Hash64, artifact_root: Hash64, why: &str) {
+/// **What a set of holdings IS, for the purpose of deciding whether a verdict about them still
+/// stands.** Per holding: which lineage loaded it, the file identity ADR-0079 Decision 9 keys a
+/// mapping by (`path`, `len`, `mtime` — recomputed HERE, from the file as it is now, not from what
+/// it was when it was mapped), and the lineage's own summary, which is where a container records
+/// the root it derived. Order is the registry's, which is the operator's argument order.
+fn holdings_identity_v1(holdings: &[PalwLoadedArtifactV1]) -> Vec<(&'static str, Option<HeldArtifactKey>, String)> {
+    holdings.iter().map(|h| (h.lineage_id, h.path.as_deref().and_then(HeldArtifactKey::of), h.summary.clone())).collect()
+}
+
+fn remembered_unservable(class_id: Hash64, artifact_root: Hash64, holdings: &[PalwLoadedArtifactV1]) -> Option<String> {
+    let mut marks = unservable_chain_classes().lock().unwrap_or_else(|p| p.into_inner());
+    let mark = marks.get(&(class_id, artifact_root))?;
+    if mark.against == holdings_identity_v1(holdings) {
+        return Some(mark.why.clone());
+    }
+    // The holdings this verdict was about are not the holdings in hand. Drop it rather than serve
+    // it: re-deriving costs one compile, and answering from it costs correctness.
+    warn!("[palw] the remembered refusal for class {class_id} was computed against different holdings; re-deriving it");
+    marks.remove(&(class_id, artifact_root));
+    None
+}
+
+fn remember_unservable(class_id: Hash64, artifact_root: Hash64, why: &str, holdings: &[PalwLoadedArtifactV1]) {
     warn!("[palw] class {class_id} is unservable on this node and will not be recompiled until its artifacts change: {why}");
-    unservable_chain_classes().lock().unwrap_or_else(|p| p.into_inner()).insert((class_id, artifact_root), why.to_string());
+    unservable_chain_classes()
+        .lock()
+        .unwrap_or_else(|p| p.into_inner())
+        .insert((class_id, artifact_root), UnservableMarkV1 { why: why.to_string(), against: holdings_identity_v1(holdings) });
 }
 
 /// **ADR-0067 SA-3: dropping a held artifact drops every verdict derived from it.**
@@ -163,9 +213,10 @@ pub fn evict_held_artifacts_v1(paths: &[PathBuf]) -> usize {
         held.retain(|key, _| key.path != canonical);
         released += before - held.len();
     }
-    // The negative verdicts go with them. A class marked unservable because this node held no
-    // matching artifact must be re-judged once the holdings change, or supplying the file would
-    // never take effect — the remembered refusal would outlive the fact it described.
+    // The negative verdicts go with them. This is the SECOND door, not the only one: a mark is
+    // already checked against its holdings at every read (see `unservable_chain_classes`), so an
+    // operator flush does not have to be the thing that keeps the map honest — which is just as
+    // well, since nothing in a running node calls this.
     unservable_chain_classes().lock().unwrap_or_else(|p| p.into_inner()).clear();
     released
 }
@@ -568,31 +619,99 @@ mod tests {
         std::fs::remove_file(&path).ok();
     }
 
-    /// **ADR-0067 SA-2: an unservable chain class is remembered, and forgotten when the holdings
-    /// that made it unservable change.**
+    /// **ADR-0067 SA-2: an unservable chain class is remembered, and the mark cannot outlive the
+    /// holdings it is a statement about.**
     ///
     /// The mark exists so a hostile registration costs one compile per node rather than one per
     /// duty. It must also be exactly as short-lived as the fact it records: most refusals say
     /// "this node holds no artifact whose digest is the registered root", which stops being true
     /// the moment the operator supplies the file. A remembered refusal that outlived its cause
     /// would make supplying the artifact do nothing.
+    ///
+    /// **The first form of this test proved the wrong thing and this is the correction.** It
+    /// called `evict_all_held_artifacts_v1` to show the mark being dropped — and that function's
+    /// only callers were this test and its sibling, so what it demonstrated was a rule with no
+    /// production path. The rule is enforced at the READ now, so the assertions below are about
+    /// asking with DIFFERENT HOLDINGS, which is what a running node actually does.
     #[test]
-    fn an_unservable_chain_class_is_remembered_until_the_holdings_change() {
+    fn a_remembered_refusal_answers_only_for_the_holdings_it_was_computed_against() {
         let _serial = exclusive();
         evict_all_held_artifacts_v1();
         let class = Hash64::from_u64_word(0x0067_5A02);
         let root = Hash64::from_u64_word(0x0067_5A03);
-        assert!(remembered_unservable(class, root).is_none(), "nothing is unservable before anything was tried");
-        remember_unservable(class, root, "the profile names a kernel this build does not carry");
+        let holding = |lineage: &'static str, summary: &str| {
+            PalwLoadedArtifactV1::from_parts(lineage, None, summary.to_string(), std::sync::Arc::new(0usize))
+        };
+        let held = vec![holding("test-lineage", "artifact root aaaa")];
+        let other = vec![holding("test-lineage", "artifact root bbbb")];
+
+        assert!(remembered_unservable(class, root, &held).is_none(), "nothing is unservable before anything was tried");
+        remember_unservable(class, root, "the profile names a kernel this build does not carry", &held);
         assert_eq!(
-            remembered_unservable(class, root).as_deref(),
+            remembered_unservable(class, root, &held).as_deref(),
             Some("the profile names a kernel this build does not carry"),
             "the second caller gets the first caller's sentence, without recompiling a stranger's graph"
         );
         // A different pairing is a different question and is not answered by this mark.
-        assert!(remembered_unservable(class, Hash64::from_u64_word(0xFEED)).is_none());
+        assert!(remembered_unservable(class, Hash64::from_u64_word(0xFEED), &held).is_none());
+
+        // **The rule, with no evictor involved.** Ask the same question holding something else and
+        // the verdict does not answer — it is dropped and re-derived. This is what makes supplying
+        // the artifact take effect, and what stops one registry's holdings from deciding another's.
+        assert!(
+            remembered_unservable(class, root, &other).is_none(),
+            "a verdict about one set of holdings must not be served to a caller holding another set"
+        );
+        assert!(
+            remembered_unservable(class, root, &held).is_none(),
+            "…and the stale entry is dropped rather than left for the next matching caller"
+        );
+
+        // The eviction door still works, for the same reason it always did.
+        remember_unservable(class, root, "still unservable", &held);
         evict_all_held_artifacts_v1();
-        assert!(remembered_unservable(class, root).is_none(), "changing the holdings re-opens the question");
+        assert!(remembered_unservable(class, root, &held).is_none(), "an explicit flush re-opens the question too");
+    }
+
+    /// **The FILE behind a holding is part of that holding's identity, so replacing it retracts
+    /// every verdict derived from it — with no evictor call.**
+    ///
+    /// This is the half that reaches an operator: the refusal "this node holds no artifact whose
+    /// digest is the registered root" is a statement about bytes on disk, and
+    /// [`holdings_identity_v1`] re-stats those bytes on every read. A re-mint dropped in at a
+    /// configured path moves `len`/`mtime`, and the verdict is gone.
+    ///
+    /// What this does NOT do, asserted nowhere because it is not true: reload the MAPPING.
+    /// `load_class_holdings_v1` runs once per service construction, so a running producer still
+    /// serves the artifact it mapped at startup and the re-derived refusal will be the same
+    /// sentence until it restarts. The verdict and the mapping are two caches and only this one
+    /// ever claimed to retract.
+    #[test]
+    fn replacing_a_holdings_file_retracts_the_verdict_derived_from_it() {
+        let _serial = exclusive();
+        evict_all_held_artifacts_v1();
+        let class = Hash64::from_u64_word(0x0067_5A04);
+        let root = Hash64::from_u64_word(0x0067_5A05);
+        let path = temp_artifact("unservable-mark");
+        std::fs::write(&path, b"the first bytes").expect("fixture writes");
+        let held = vec![PalwLoadedArtifactV1::from_parts(
+            "test-lineage",
+            Some(path.clone()),
+            "held".to_string(),
+            std::sync::Arc::new(0usize),
+        )];
+
+        remember_unservable(class, root, "this node holds no artifact whose digest is the registered root", &held);
+        assert!(remembered_unservable(class, root, &held).is_some(), "the mark stands while the file does");
+
+        // The operator supplies different bytes at the path they configured.
+        std::fs::write(&path, b"the second bytes, a re-mint, a different length").expect("fixture rewrites");
+        assert!(
+            remembered_unservable(class, root, &held).is_none(),
+            "the file the refusal was about is not the file on disk, so the refusal is not an answer any more"
+        );
+        std::fs::remove_file(&path).ok();
+        evict_all_held_artifacts_v1();
     }
 
     /// **ADR-0067 SA-2's load-bearing half, asserted from the manifests: class resolution is not

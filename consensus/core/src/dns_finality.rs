@@ -6165,15 +6165,56 @@ pub enum LeakTableProvenanceV1 {
     /// the window's far edge is one it holds, so nothing in the table depends on where this
     /// node's pruning point happens to sit.
     SelfComputed,
-    /// No table this node can stand behind: the walk was truncated by its own pruning point, or
-    /// the table arrived from somewhere without an authenticated commitment to check it against.
-    /// The leak computes NOTHING under this — see the type doc.
+    /// No table this node can stand behind: the walk hit a header this node does not hold before
+    /// it covered the window, or the table arrived from somewhere without an authenticated
+    /// commitment to check it against. The leak computes NOTHING under this — see the type doc.
     ///
-    /// **This is the state a pruned-IBD node is in today**, because the fourth
-    /// `PruningPointOverlaySnapshot` component ADR-0066 Decision 4 budgets for is not built. The
-    /// consequence is a node that finalizes on the full denominator where an archival peer would
-    /// leak — conservative, and the direction that cannot partition.
+    /// **This is NOT the ordinary state of a pruned node, and planning a deployment as if it were
+    /// is the mistake this paragraph exists to stop.** A pruned node in steady state holds every
+    /// header above a pruning point that sits far below its tip, so it covers
+    /// `stake_score_window_blue_score` and answers [`Self::SelfComputed`] exactly as an archival
+    /// peer does — which is right, and which means **arming the leak on a pruned fleet leaks
+    /// validators there.** `Unverified` is for the node that genuinely cannot reach the far edge:
+    /// mid-IBD, or a store truncated above the window.
+    ///
+    /// Such a node ought to be able to IMPORT the table under `PruningPointOverlaySnapshot`'s
+    /// trustless gate; that fourth component ADR-0066 Decision 4 budgets for is not built, so it
+    /// stays on the full denominator rather than guessing — conservative, and the direction that
+    /// cannot partition.
     Unverified,
+}
+
+/// **ADR-0066 SA-1's question, as a pure function of the walk that answers it.**
+///
+/// The leak table is built by iterating the backward chain from the tip and stopping on the first
+/// of two things: a blue score more than `stake_score_window_blue_score` below the tip's (the
+/// window is COVERED — every block the table is defined over was read), or a header this node
+/// cannot read (the walk is TRUNCATED — the table has a hole in it, and a hole silently excludes
+/// validators whose attestations this node cannot see). Running out of chain is the covered case:
+/// on a chain younger than the window, "every block there is" is the same table an archival node
+/// builds.
+///
+/// `walk` yields one entry per chain block from the tip downwards, `Some(blue_score)` for a header
+/// this node holds and `None` for one it does not. It is consumed lazily and abandoned at the
+/// first decisive step, so the caller pays for the prefix and no more.
+///
+/// **Why a walk and not the pruning point.** The obvious proxy — "is the consensus pruning point at
+/// least a window below the tip" — cannot answer this: the pruning point is derived from the chain,
+/// so it is the same number on an archival node and a pruned one, and a store that is short for any
+/// other reason is told it is fine. The divergence SA-1 closes is node-local, so the measurement
+/// has to be node-local too.
+pub fn leak_table_provenance_from_walk_v1(
+    tip_blue_score: u64,
+    stake_score_window_blue_score: u64,
+    walk: impl IntoIterator<Item = Option<u64>>,
+) -> LeakTableProvenanceV1 {
+    for blue_score in walk {
+        let Some(bs) = blue_score else { return LeakTableProvenanceV1::Unverified };
+        if tip_blue_score.saturating_sub(bs) > stake_score_window_blue_score {
+            return LeakTableProvenanceV1::SelfComputed;
+        }
+    }
+    LeakTableProvenanceV1::SelfComputed
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -12061,12 +12102,8 @@ mod tests {
             (Hash64::from_u64_word(0xB), 200u64),
             (Hash64::from_u64_word(0xC), 300u64),
         ]);
-        let view = |table| InactivityLeakViewV1 {
-            last_attestation_daa: &last,
-            leak_after_daa: 5_040,
-            min_retained_validators: 0,
-            table,
-        };
+        let view =
+            |table| InactivityLeakViewV1 { last_attestation_daa: &last, leak_after_daa: 5_040, min_retained_validators: 0, table };
         assert_eq!(
             total_active_stake_by_epoch(&bonds, &epochs, view(LeakTableProvenanceV1::SelfComputed)).get(&9),
             Some(&100),
@@ -12080,6 +12117,71 @@ mod tests {
         );
         assert!(!view(LeakTableProvenanceV1::Unverified).is_armed());
         assert!(view(LeakTableProvenanceV1::Unverified).retains(&Hash64::from_u64_word(0xB), 0, 20_000));
+    }
+
+    /// **ADR-0066 SA-1, the measurement rather than a proxy for it.**
+    ///
+    /// The first form of this check compared the CONSENSUS pruning point against the tip. That
+    /// number is derived from the chain, so it is identical on an archival node and a pruned one —
+    /// it cannot see the node-local divergence SA-1 exists to close, and on any chain older than
+    /// the window it answers `SelfComputed` on both. Two things follow and both are asserted here:
+    /// a store that is short of the window must come out `Unverified` even though its chain is
+    /// long, and a pruned node that DOES cover the window must come out `SelfComputed` — because
+    /// it computes the same table an archival node does, and "the leak is inert on a pruned fleet"
+    /// was never true and must not be planned around.
+    #[test]
+    fn leak_table_provenance_is_a_property_of_this_nodes_walk_not_of_the_chain() {
+        let window = 1_500u64;
+        let tip_blue = 200_000u64;
+        // A store that reaches past the far edge: covered on the step that crosses it.
+        let covered: Vec<Option<u64>> = (0..=window + 1).map(|d| Some(tip_blue - d)).collect();
+        assert_eq!(
+            leak_table_provenance_from_walk_v1(tip_blue, window, covered.clone()),
+            LeakTableProvenanceV1::SelfComputed,
+            "every header from the tip to past the window's far edge is readable — this is the table"
+        );
+        // The same long chain, with the store running out one block INSIDE the window. The
+        // pruning-point proxy called this SelfComputed; the walk that builds the table breaks here
+        // with a hole, so it is not.
+        let mut truncated: Vec<Option<u64>> = (0..window).map(|d| Some(tip_blue - d)).collect();
+        truncated.push(None);
+        assert_eq!(
+            leak_table_provenance_from_walk_v1(tip_blue, window, truncated),
+            LeakTableProvenanceV1::Unverified,
+            "a header this node does not hold, inside the window, is a hole in the table — fail closed"
+        );
+        // Exactly the far edge and nothing below it: still covered, because the far edge itself is
+        // the deepest block the table is defined over.
+        let to_the_edge: Vec<Option<u64>> = (0..=window).map(|d| Some(tip_blue - d)).collect();
+        assert_eq!(
+            leak_table_provenance_from_walk_v1(tip_blue, window, to_the_edge),
+            LeakTableProvenanceV1::SelfComputed,
+            "the walk that ran out having read the whole window read the whole window"
+        );
+        // A chain younger than the window: the iterator ends, and "every block there is" is the
+        // same table an archival node builds.
+        let young: Vec<Option<u64>> = (0..=30).map(|d| Some(30 - d)).collect();
+        assert_eq!(
+            leak_table_provenance_from_walk_v1(30, window, young),
+            LeakTableProvenanceV1::SelfComputed,
+            "a chain shorter than the window is covered by definition"
+        );
+        // And a node mid-IBD, which is the state `Unverified` is actually for: the first header
+        // below the tip is already missing.
+        assert_eq!(
+            leak_table_provenance_from_walk_v1(tip_blue, window, vec![Some(tip_blue), None]),
+            LeakTableProvenanceV1::Unverified,
+            "a store that is short at the very top leaks nobody"
+        );
+        // The lazy contract the caller relies on: a decided walk must not be drained, because in
+        // the processor each step is a store read.
+        let mut steps = 0usize;
+        let counted = covered.iter().map(|b| {
+            steps += 1;
+            *b
+        });
+        assert_eq!(leak_table_provenance_from_walk_v1(tip_blue, window, counted), LeakTableProvenanceV1::SelfComputed);
+        assert_eq!(steps, window as usize + 2, "the walk stops on the step that decides it, not at the end of the chain");
     }
 
     /// **ADR-0066 SA-2: exclusion is monotone, and re-entry waits for finality.**

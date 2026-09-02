@@ -3864,20 +3864,38 @@ impl VirtualStateProcessor {
     /// **ADR-0066 SA-1: can this node stand behind the leak table it just built?**
     ///
     /// The table comes from `collect_stake_contributions_v2`'s walk, and that walk ends on
-    /// `get_blue_score(chain_block) => break` — a node-local fact. An archival node never hits it;
-    /// a node that joined by a pruned sync hits it at its own pruning point and computes a table
-    /// with a hole in it. Two such nodes exclude different validators, and a rule whose input
-    /// differs by `--archival` is finding F4 wearing a new hat.
+    /// `get_blue_score(chain_block) => break` — a node-local fact. A node whose header store is
+    /// short of the window's far edge computes a table with a hole in it and excludes validators an
+    /// archival node would keep, and a rule whose input differs by what this node happens to hold
+    /// is finding F4 wearing a new hat.
     ///
-    /// So the answer is `SelfComputed` only when this node holds chain history back past the
-    /// window the table is defined over — i.e. its pruning point is at least
-    /// `stake_score_window_blue_score` below the tip. Anything else is `Unverified`, and an
-    /// unverified table leaks nobody (fail closed: full denominator).
+    /// **So this asks the walk, not the chain.** It re-runs the same backward chain iteration with
+    /// the same two break conditions and nothing else — no acceptance data, no signature checks —
+    /// and answers `SelfComputed` only if the iteration terminated because it had COVERED the
+    /// window (or reached the end of the chain, which is the same table an archival node builds on
+    /// a chain younger than the window). If any `get_blue_score` on the way down fails, the walk
+    /// that builds the table would have broken there too, so the answer is `Unverified` and an
+    /// unverified table leaks nobody: fail closed, full denominator.
     ///
-    /// **The verified-import half is the gap this ADR still budgets for.** A pruned node ought to
-    /// be able to import the table under `PruningPointOverlaySnapshot`'s existing trustless gate;
-    /// that fourth component does not exist, so such a node stays on the full denominator rather
-    /// than guessing. Conservative, and the only direction that cannot partition.
+    /// **The earlier form of this check asked the wrong question and its doc drew the wrong
+    /// conclusion, so both are corrected here.** It compared the CONSENSUS pruning point against
+    /// the tip. That value is identical on an archival node and a pruned one — it is derived from
+    /// the chain, not from this store — so it could not see the divergence it named, and it told
+    /// operators the opposite of the truth: on any chain older than `stake_score_window_blue_score`
+    /// it answers `SelfComputed` on a pruned node too. **Arming the leak on a pruned fleet is not a
+    /// no-op.** A pruned node in steady state holds everything above a pruning point that sits far
+    /// below the tip, so it covers the window and it leaks — which is correct, and is precisely why
+    /// "it will be inert there" was never a safe thing to plan a deployment around.
+    ///
+    /// **What still is not built** is the verified-IMPORT half ADR-0066 Decision 4 budgets for: a
+    /// node that genuinely cannot cover the window ought to be able to import the table under
+    /// `PruningPointOverlaySnapshot`'s trustless gate, and that fourth component does not exist. So
+    /// such a node stays on the full denominator rather than guessing. Conservative, and the only
+    /// direction that cannot partition.
+    ///
+    /// Cost: at most `stake_score_window_blue_score` blue-score reads, and only once the fence is
+    /// ARMED — the short circuit below returns before touching a store on every network that has
+    /// not armed the leak, which is all of them.
     fn palw_leak_table_provenance(
         &self,
         tip: BlockHash,
@@ -3892,18 +3910,16 @@ impl VirtualStateProcessor {
             return Provenance::Unverified;
         }
         let Ok(tip_blue) = self.headers_store.get_blue_score(tip) else { return Provenance::Unverified };
-        let Some(pp) = self.pruning_point_store.read().pruning_point().optional().ok().flatten() else {
-            return Provenance::Unverified;
-        };
-        let Ok(pp_blue) = self.headers_store.get_blue_score(pp) else { return Provenance::Unverified };
-        // The window is measured from the tip; the walk can only cover it if the pruning point is
-        // at or below its far edge. `>=` and not `>`: the far edge itself is a block the walk
-        // reads, so a pruning point exactly there still leaves it readable.
-        if tip_blue.saturating_sub(pp_blue) >= dns_params.stake_score_window_blue_score {
-            Provenance::SelfComputed
-        } else {
-            Provenance::Unverified
-        }
+        // The table walk, verbatim in its termination and in nothing else. Deliberately the SAME
+        // iterator as `collect_stake_contributions_v2`, so this probe cannot reach a state that
+        // walk does not already reach, and the two break conditions live once, in the pure
+        // `leak_table_provenance_from_walk_v1`, where they are unit-tested. Lazy: the map runs one
+        // `get_blue_score` per step and the fold abandons it at the first decisive one.
+        kaspa_consensus_core::dns_finality::leak_table_provenance_from_walk_v1(
+            tip_blue,
+            dns_params.stake_score_window_blue_score,
+            self.reachability_service.default_backward_chain_iterator(tip).map(|b| self.headers_store.get_blue_score(b).ok()),
+        )
     }
 
     fn palw_frontier_provenance_outcome(&self, candidate: BlockHash, prev_sink: BlockHash) -> DnsReorgOutcome {
