@@ -5,11 +5,33 @@ whose mechanism it builds on — see that ADR's status block for the three findi
 survive and one is this ADR's own error, recorded because the error is more instructive than the
 proposal:
 
-* **§1.2 stands and is the most useful thing in this document.** `prompt_token_ids_hash_v2` really
-  is a flat digest (`palw_v2.rs:521`), a flat digest really cannot be opened, and the `n_ctx × 4`
-  term really does ride every node. Decision 3 — make it a Merkle root — is worth doing on its own
-  merits, independently of segmentation, because it lowers the close cost of EVERY long-context
-  design including the ones that replace this one.
+* **§1.2 stands, and Decision 3 is built — but its value was overstated and the measurement says
+  so.** `prompt_token_ids_hash_v2` really is a flat digest (`palw_v2.rs:521`), a flat digest really
+  cannot be opened, and the `n_ctx × 4` term really does ride every node. It is now implemented
+  (`palw_prompt_ids_v1`, behind the dormant `palw_prompt_ids_merkle` fence) and the opening's term
+  grows by exactly 64 bytes per doubling of the context, swept from 32 to 2^24. What was NOT
+  measured when this ADR claimed the decision "lowers the close cost of EVERY long-context design"
+  is the term's SHARE of that close: **0.091–0.098 % of `max_close_bytes` at every context**, so
+  arming it moves no class across the carrier anywhere today. The claim is true in the arithmetic of
+  a design that has already flattened every other term, and it is noise in the arithmetic of the
+  tree as it stands. Both readings are honest; only the second is a measurement, and this ADR
+  asserted the first as though it were one.
+
+* **§1.1's premise is FALSE, and it was false in the source's own documentation before this ADR
+  repeated it.** This ADR (and ADR-0080 Decision 5) treats graph-v4's tiled map as the precondition
+  that makes a per-leaf attention opening tile-sized. Measured over six contexts: the v3 map
+  flattens exactly ONE term — the checkpoint-chunk opening, 18,432 bytes at every context against
+  the v2 map's 1,026,048 at n_ctx 1,000 — and the disputed attention leaf's close stays **linear**,
+  86,585 → 1,533,761 bytes from n_ctx 250 to 8,000, at consecutive slopes 189.6 / 189.6 / 185.3 /
+  187.3 / 186.3 with a ~40 KiB constant. Affine, not flat. `PALW_ATTN_HISTORY_TILE_V4`'s own doc
+  comment (`palw_state_chunk_map.rs:117`) asserts the opposite — "the close a v4 attention node
+  derives is flat in the context (W1) instead of linear in it" — and is contradicted by the same
+  file's recurrence doc and by `palw_context_ladder`'s module header. Worse for anyone planning
+  around it: measured against `palw_anchored_court_cost_v1`, the function a network actually reads,
+  a v3-mapped class is admitted at exactly **30**, identical to v2, because the shipped rule charges
+  it the v2 whole-history opening (`palw_kv_checkpoint_opening_bytes_v1` has one production caller
+  and, unlike its recurrence twin, no `_for_map_v1` variant). Today the tile buys the dense tier
+  nothing.
 * **§1.3 IS WRONG, and it was this author's error, stated confidently.** It claims the state chain
   "already exists and is already enforced" and cites `prev_checkpoint_leaf_hash` and
   `palw_step_leg.rs:1215`. The chain exists — INSIDE ONE CLAIM. `checkpoint_genesis_prev_v2`

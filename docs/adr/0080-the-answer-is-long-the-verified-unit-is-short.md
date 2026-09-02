@@ -18,12 +18,35 @@ own author:
 * **`fp_work_id_v1` refuses segmented claims outright.** It is keyed on `(class_id,
   prompt_token_ids_hash, decode_tokens_executed, executor_bond)` with no state and no parent
   (`palw_freeprompt_v3.rs:286-299`), so the second segment of one prompt is `DuplicateWork`.
-* **The per-CLAIM costs make it more expensive than the carrier it exists to respect.** Decision 3
-  is right that the FP quanta and the quantum ticket are per-leaf and neutral. Everything else that
-  pays or weighs is per-claim or per-block: exposure reserves a flat `pwu_per_inference` per claim
-  regardless of leaves executed, the panel is five seats and three receipts per claim, the epoch
-  budget is per block, `PALW_DERIVED_MAX_PER_CLAIM` is four per claim. A 37-segment answer is 37
-  panels and 111 ML-DSA-87 receipts at 4,627 bytes — about **514 KB of signatures for one answer**.
+* **The per-CLAIM costs make it more expensive than the carrier it exists to respect.** The panel is
+  five seats and three receipts per claim, the epoch budget is per block, `PALW_DERIVED_MAX_PER_CLAIM`
+  is four per claim. Measured rather than estimated (`palw_economic_locus_v1`): `PalwSeatReceiptV2`
+  is **4,772** bytes on the wire and a `ReceiptLicensed` carrying three is **14,385**, so a
+  37-segment answer is **513,597 bytes of signatures** (513 kB decimal, 501 KiB — this ADR's
+  original "about 514 KB" was decimal-right and KiB-wrong) inside **532,245 bytes** of consensus
+  objects, more than six times `DEFAULT_MAX_CLOSE_BYTES`. And that is a FLOOR: it counts receipt
+  carriage only, excluding the N commitment transactions, N `PanelBound` objects, N full-size court
+  closes, N exposure reservations and 740 seat interval replays against 20 for the same answer as
+  one claim.
+* **Decision 3's invariance holds only inside a BAND, and both edges are reachable at shipped
+  constants.** This is the correction that matters most, because the ADR asserted the invariance
+  without qualification. `fp_quanta_v3` FLOORS — a segment under one quantum prices at zero and
+  `apply_free_prompt` refuses it by name (`ZeroQuanta`) — and SATURATES at
+  `MAX_QUANTA_PER_RECEIPT = 64`. Measured: **51,200 leaves as ONE claim weighs 12,800 pwu; the same
+  leaves as FOUR claims weigh 51,200** — a 4× weight multiplier, at the shipped cap rather than at
+  a pathological parameter. That is precisely the free money Decision 3 was written to forbid,
+  produced by the very restructuring it was written to license.
+* **And the exposure sentence above was imprecise in a way worth naming.** "Reserves a flat
+  `pwu_per_inference` per claim" is exact for the ATTEMPT lane (`palw_exposure_pwu_v1` takes no leaf
+  argument), and FALSE for the FREE-PROMPT lane — the lane a long answer actually travels — where
+  `apply_free_prompt` reserves `quanta × quantum × slash_value`, which DOES scale with the work,
+  until the cap saturates it and the flat reading becomes true again.
+* **A per-claim queue drained per block, sized by the premise a segmenting design negates.**
+  `PALW_V2_MAX_PAYOUTS_PER_BLOCK = 8` is justified in the source verbatim, twice: "Eight against at
+  most one new claim per block: a backlog drains eight times faster than it can be created, so this
+  bounds latency, not throughput." `apply_attempt` relies on the same premise. N claims per answer
+  enqueue N rows against a fixed 8 per block, dividing the safety factor by N; at N ≥ 8 the stated
+  property inverts.
 * **The cost of the parent field is a re-mint, not a fence.** A `parent` in `PalwJobContextV2`
   changes `context_hash`'s preimage, which carries `PALW_TRACE_COMMITMENT_VERSION_V2`, so every
   class id, every trace root and every checkpoint leaf moves. That is a new trace-commitment
