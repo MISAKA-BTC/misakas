@@ -84,11 +84,18 @@ use crate::palw_v2::PalwJobContextV2;
 /// and one opened leaf's Merkle path grows from 22 elements to 32, which is 640 bytes inside an
 /// 80 KiB close. Nothing per block changes.
 ///
-/// **And it bounds the ANSWER, not the WORK.** The walk that computes a leaf count is bounded by
-/// [`crate::palw_step::PALW_STEP_MAX_ENUMERATION`] — `n_ctx × layer_count`, `2^24`, checked by
-/// `validate_shape` before anything enumerates — which is untouched. Raising this buys no
-/// registrant a longer enumeration to make a node perform; it buys a deeper tree, and every
-/// consumer of a leaf index already carries `u64`.
+/// **And it bounds the ANSWER, not the WORK.** Raising this buys no registrant a longer
+/// enumeration to make a node perform; it buys a deeper tree, and every consumer of a leaf index
+/// already carries `u64`.
+///
+/// That was previously justified by [`crate::palw_step::PALW_STEP_MAX_ENUMERATION`] — "`n_ctx ×
+/// layer_count`, `2^24`, checked by `validate_shape`" — and **that justification was wrong**. The
+/// product it bounds is not the cost: a position walk visits up to
+/// [`crate::palw_step::PALW_STEP_MAX_NODES_PER_TABLE`] node entries per layer, so the admitted
+/// worst case was ≈1.07e9 node visits, and a wide-tiled profile keeps its leaf count small enough
+/// that the in-loop cap never breaks the walk. The claim holds now for a different reason:
+/// `worst_case_step_leaf_count_capped_v1` is a closed form over the node tables with no `n_ctx`
+/// and no `layer_count` factor, so this constant cannot buy a walk of any length.
 ///
 /// The constant is inside `palw_ruleset_id_v2` through `PalwCourtParamsV2::max_step_leaf_count`,
 /// so arming it is a re-mint and never a value a running chain may raise.

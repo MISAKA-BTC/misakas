@@ -61,17 +61,28 @@ pub const PALW_STEP_ALL_DOMAINS: &[&[u8]] = &[
 /// ceiling is ≈ 3.26 M — inside with headroom, tight against adversarial allocation).
 pub const PALW_STEP_MAX_LEAVES: u64 = 1 << 22;
 
-/// Cap on the ENUMERATION the shape drives — `n_ctx` positions times `layer_count` layers.
+/// Cap on the PRODUCT `n_ctx × layer_count` a registered shape may declare.
 ///
-/// `PALW_STEP_MAX_LEAVES` bounds the ANSWER; this bounds the WORK of computing it, and the two
-/// are not the same bound. `worst_case_step_leaf_count_v1` walks every position and every layer
-/// before it can compare against the leaf cap, so with `n_ctx: u32` and `layer_count: u16`
-/// unbounded a single ~5 KB `ClassRegistered` object buys ≈2.8e14 iterations — evaluated by every
-/// node, for every chain candidate, on a block already stored by isolation validation. It
-/// reproduces on restart and on resync, so the only recovery is a hard fork.
+/// **It is not a bound on the work, and reading it as one is how a live DoS survived a review.**
+/// `PALW_STEP_MAX_LEAVES` bounds the answer; this bounds a product two of whose three factors are
+/// the cost of a position walk. The third factor is [`PALW_STEP_MAX_NODES_PER_TABLE`]: a walk
+/// visits `pre + Σ_layers |table(layer)| + post` node entries per position, so the cost of an
+/// enumeration that this ceiling admits is `n_ctx × layer_count × nodes_per_table` ≈ **1.07e9**
+/// node visits, not 1.7e7. That is seconds per candidate on every validating node, repeated on
+/// every restart and every resync, and the in-loop leaf cap does not catch it: a profile with
+/// wide tiles produces few leaves per position, so the ANSWER stays small while the WALK runs to
+/// the end.
 ///
-/// 1 << 24 is ≈8× the largest real class this bundle contemplates (Qwen at 32 K context and 64
-/// layers is 2.1 M) and is a few tens of milliseconds of cheap iteration once, at registration.
+/// What it does stop is the unbounded case: with `n_ctx: u32` and `layer_count: u16` free, a
+/// single ~5 KB `ClassRegistered` bought ≈2.8e14 iterations, which is unrecoverable rather than
+/// merely expensive. 1 << 24 is ≈8× the largest real class this bundle contemplates (Qwen at 32 K
+/// context and 64 layers is 2.1 M).
+///
+/// The remaining 1.07e9 is closed where it was actually spent:
+/// [`worst_case_step_leaf_count_capped_v1`] no longer walks positions at all (it is a closed form,
+/// `O(nodes)`, with no `n_ctx` and no `layer_count` factor). **The sibling walks in this module —
+/// [`step_leaf_count_capped_v1`] and [`canonical_step_coordinates`] — still do**, and their driver
+/// is the CONTEXT's `declared_prefill_tokens`, which this ceiling does not constrain at all.
 pub const PALW_STEP_MAX_ENUMERATION: u64 = 1 << 24;
 
 /// Ceiling on declared layers. A layer's table is walked at every position, so this is the inner
@@ -863,6 +874,250 @@ pub fn kv_aux_leaf_count(profile: &PalwShapeProfileV3, context: &PalwJobContextV
     attn_layers * profile.attn_kv_heads as u64 * 2 * positions.div_ceil(profile.kv_chunk_calls as u64)
 }
 
+// ---------------------------------------------------------------------------------------------
+// The worst case, in closed form
+// ---------------------------------------------------------------------------------------------
+//
+// # Why there is a closed form at all
+//
+// `leaves_per_position(profile, k, wl)` is
+//
+// ```text
+//   Σ_{n ∈ pre}  ceil(out(n, k) / tile(n))
+// + Σ_{l < L}    Σ_{n ∈ table(l)} ceil(out(n, k) / tile(n))
+// + [wl] ·       Σ_{n ∈ post} ceil(out(n, k) / tile(n))
+// ```
+//
+// Two facts about it are what make the position loop redundant.
+//
+// **(a) The layer loop is a multiplicity, not a walk.** `layer_table(l)` is one of exactly two
+// tables — `gdn_nodes` or `attn_nodes` — chosen by `layer_kind(l)`, and nothing else in the
+// summand mentions `l`. So the middle line is `G · Σ_{gdn} … + A · Σ_{attn} …` where `A` is the
+// number of Attention layers and `G = L − A` the number of GatedDeltaNet layers. Nothing per
+// layer is ever visited twice, and nothing is visited `L` times.
+//
+// **(b) Only ONE thing varies with the position, and it varies affinely.** `out(n, k)` is
+// `Fixed { elements }` (independent of `k`) or `KvScaled { multiplier }` (`multiplier · k`), and
+// `tile(n)` never depends on `k`. Writing `B(k)` for the pre/gdn/attn part and `Post(k)` for the
+// post part,
+//
+// ```text
+//   B(k) = C_body + Σ_{i ∈ body-kv} w_i · ceil(m_i · k / t_i)
+//   C_body = Σ_{i ∈ body-fixed} w_i · ceil(e_i / t_i)          — the same at every position
+// ```
+//
+// with `w_i ∈ {1, G, A}` the multiplicity of the term's table. `C_body` is a constant of the
+// profile; the only position-dependent term is `ceil(m·k/t)`.
+//
+// **The enumeration `worst_case_step_leaf_count_capped_v1` performs** is, with `P = n_ctx − 1`,
+//
+// ```text
+//   Σ_{k=1}^{P} B(k)  +  [P ≥ 1] · Post(P)  +  B(P+1)  +  Post(P+1)
+// ```
+//
+// (the prefill call at kv lengths `1..=P`, logits only at its last position; then one decode call
+// at kv length `P+1`, logits always). Substituting (b), the only sum left over positions is
+//
+// ```text
+//   Σ_{k=1}^{K} ceil(m·k / t)  =  Σ_{j=0}^{K-1} floor((m·j + (m + t − 1)) / t)
+// ```
+//
+// — `ceil(x/t) = floor((x + t − 1)/t)`, then `j = k − 1` — which is exactly the argument shape of
+// the Euclidean-like **floor sum** `Σ_{i<n} floor((a·i + b)/m)`, evaluated in `O(log max(a, m))`
+// by [`floor_sum_v1`]. There is no closed form in elementary functions for the residue term
+// `Σ (m·k mod t)`; the floor sum is the closed form, and it is the one that terminates in a
+// number of steps that does not mention `K`.
+//
+// Every term above is exact — no bound, no approximation, and no case where the two disagree.
+// `the_closed_form_is_the_loop_on_every_shipped_profile` asserts the whole `Result`, error payload
+// included, against the real loop for every shipped profile at every `n_ctx` in `2..=512`.
+
+/// One kv-scaled node, collapsed to the three numbers its leaf count depends on. `weight` is the
+/// multiplicity of the table it came from: 1 for pre/post, `G` for gdn, `A` for attn.
+#[derive(Clone, Copy, Debug)]
+struct PalwKvTermV1 {
+    multiplier: u128,
+    tile_len: u128,
+    weight: u128,
+}
+
+/// `leaves_per_position` with the position factored out (see the module note above).
+#[derive(Debug, Default)]
+struct PalwLeafShapeV1 {
+    /// `C_body`: the pre/gdn/attn `Fixed` nodes, already multiplied by their table's multiplicity.
+    body_const: u128,
+    /// The pre/gdn/attn `KvScaled` nodes.
+    body_kv: Vec<PalwKvTermV1>,
+    /// The post table's `Fixed` nodes (multiplicity 1 — the post table runs once, at logits).
+    logits_const: u128,
+    /// The post table's `KvScaled` nodes.
+    logits_kv: Vec<PalwKvTermV1>,
+}
+
+/// `tiles_for` in `u128`. The `tile_len == 0` answer is the same "no tiles" the `u64` twin gives —
+/// unreachable after `validate_shape`, kept total for the same reason it is kept total there.
+fn tiles_u128(len: u128, tile_len: u128) -> u128 {
+    if tile_len == 0 {
+        return 0;
+    }
+    len.div_ceil(tile_len)
+}
+
+/// How many layers are Attention, in O(1).
+///
+/// `layer_kind(l)` is Attention iff `interval != 0 && (l+1) % interval == 0`, so over
+/// `l ∈ 0..layer_count` this counts the multiples of `interval` in `1..=layer_count`, which is
+/// `layer_count / interval`. `the_layer_multiplicities_are_the_layer_walk` sweeps every
+/// `(layer_count, interval)` this schema admits against `table_layer_span`, which is the walk the
+/// loop performs.
+fn attention_layer_count_v1(profile: &PalwShapeProfileV3) -> u128 {
+    if profile.full_attention_interval == 0 {
+        return 0;
+    }
+    (profile.layer_count as u128) / (profile.full_attention_interval as u128)
+}
+
+/// `Σ_{i=0}^{n-1} floor((a·i + b) / m)` — the Euclidean-like floor sum, `O(log max(a, m))`.
+///
+/// The transform is the standard one: strip the whole quotients `a/m` and `b/m` (their
+/// contribution is `a/m · n(n−1)/2 + n · b/m` exactly), then reflect the remaining lattice count
+/// under the line about `y` instead of `x`, which swaps `m` and `a` and shrinks the pair the way
+/// the Euclidean algorithm does. `n == 0` returns 0 rather than evaluating `n·(n−1)`, which is a
+/// panic under this crate's `overflow-checks` and a silent wrap without them.
+///
+/// Everything is `u128` and every intermediate is a partial sum of the answer (the loop's
+/// invariant is `ans + F(n, m, a, b) = F(n₀, m₀, a₀, b₀)`, all terms non-negative). With
+/// `n ≤ 2^24`, `a ≤ 2^32`, `m ≥ 4` the answer is below `2^78`, so no intermediate approaches the
+/// type's range.
+fn floor_sum_v1(mut n: u128, mut m: u128, mut a: u128, mut b: u128) -> u128 {
+    if m == 0 {
+        return 0;
+    }
+    let mut ans: u128 = 0;
+    loop {
+        if n == 0 {
+            return ans;
+        }
+        if a >= m {
+            ans += n * (n - 1) / 2 * (a / m);
+            a %= m;
+        }
+        if b >= m {
+            ans += n * (b / m);
+            b %= m;
+        }
+        let y_max = a * n + b;
+        if y_max < m {
+            return ans;
+        }
+        // `y_max >= m` with `b < m` forces `a > 0`, so the swapped modulus stays non-zero.
+        n = y_max / m;
+        b = y_max % m;
+        std::mem::swap(&mut m, &mut a);
+    }
+}
+
+/// `Σ_{k=1}^{k_max} ceil(multiplier · k / tile_len)`, via [`floor_sum_v1`].
+fn kv_scaled_prefix_sum_v1(multiplier: u128, tile_len: u128, k_max: u128) -> u128 {
+    if tile_len == 0 || k_max == 0 {
+        return 0;
+    }
+    floor_sum_v1(k_max, tile_len, multiplier, multiplier + tile_len - 1)
+}
+
+/// Builds [`PalwLeafShapeV1`]. `visits` counts node-table entries touched — the quantity the old
+/// loop paid `n_ctx` times over.
+fn palw_leaf_shape_v1(profile: &PalwShapeProfileV3, visits: &mut u64) -> PalwLeafShapeV1 {
+    let attn_layers = attention_layer_count_v1(profile);
+    let gdn_layers = (profile.layer_count as u128).saturating_sub(attn_layers);
+    let mut shape = PalwLeafShapeV1::default();
+    for (table, weight, is_logits) in [
+        (&profile.pre_nodes, 1u128, false),
+        (&profile.gdn_nodes, gdn_layers, false),
+        (&profile.attn_nodes, attn_layers, false),
+        (&profile.post_nodes, 1u128, true),
+    ] {
+        for node in table {
+            *visits += 1;
+            let tile = node.tile_len as u128;
+            match node.out_len {
+                PalwStepOutLenV1::Fixed { elements } => {
+                    let c = weight.saturating_mul(tiles_u128(elements as u128, tile));
+                    if is_logits {
+                        shape.logits_const = shape.logits_const.saturating_add(c);
+                    } else {
+                        shape.body_const = shape.body_const.saturating_add(c);
+                    }
+                }
+                PalwStepOutLenV1::KvScaled { multiplier } => {
+                    // A zero multiplicity is a table no layer selects, and a zero tile width tiles
+                    // nothing — both contribute 0 at every position, so both drop out here rather
+                    // than being carried as a term that is always zero.
+                    if weight == 0 || tile == 0 {
+                        continue;
+                    }
+                    let term = PalwKvTermV1 { multiplier: multiplier as u128, tile_len: tile, weight };
+                    if is_logits {
+                        shape.logits_kv.push(term);
+                    } else {
+                        shape.body_kv.push(term);
+                    }
+                }
+            }
+        }
+    }
+    shape
+}
+
+/// `B(k)` — the pre/gdn/attn leaves of one position at kv length `k`.
+fn palw_body_at_v1(shape: &PalwLeafShapeV1, kv_len: u128, visits: &mut u64) -> u128 {
+    let mut total = shape.body_const;
+    for term in &shape.body_kv {
+        *visits += 1;
+        let tiles = tiles_u128(term.multiplier.saturating_mul(kv_len), term.tile_len);
+        total = total.saturating_add(term.weight.saturating_mul(tiles));
+    }
+    total
+}
+
+/// `Post(k)` — the post-table leaves a logits position adds at kv length `k`.
+fn palw_logits_at_v1(shape: &PalwLeafShapeV1, kv_len: u128, visits: &mut u64) -> u128 {
+    let mut total = shape.logits_const;
+    for term in &shape.logits_kv {
+        *visits += 1;
+        let tiles = tiles_u128(term.multiplier.saturating_mul(kv_len), term.tile_len);
+        total = total.saturating_add(term.weight.saturating_mul(tiles));
+    }
+    total
+}
+
+/// `Σ_{k=1}^{k_max} B(k)`.
+fn palw_body_prefix_v1(shape: &PalwLeafShapeV1, k_max: u128, visits: &mut u64) -> u128 {
+    let mut total = shape.body_const.saturating_mul(k_max);
+    for term in &shape.body_kv {
+        *visits += 1;
+        let sum = kv_scaled_prefix_sum_v1(term.multiplier, term.tile_len, k_max);
+        total = total.saturating_add(term.weight.saturating_mul(sum));
+    }
+    total
+}
+
+/// The loop's running total after it has processed the prefill position of kv length `k` — the
+/// value it would put in `TooManyLeaves.got` if it refused there. Non-decreasing in `k`.
+fn palw_prefill_running_total_v1(shape: &PalwLeafShapeV1, k: u128, prefill: u128, visits: &mut u64) -> u128 {
+    let mut total = palw_body_prefix_v1(shape, k, visits);
+    if k == prefill {
+        total = total.saturating_add(palw_logits_at_v1(shape, prefill, visits));
+    }
+    total
+}
+
+/// The loop accumulated in `u64` with `saturating_add`, so its running total is
+/// `min(true_total, u64::MAX)` at every step. This is that clamp.
+fn palw_saturate_u64(x: u128) -> u64 {
+    if x > u64::MAX as u128 { u64::MAX } else { x as u64 }
+}
+
 /// The largest leaf count this profile can ever produce — the class's worst case, from shape alone.
 ///
 /// The longest job a class admits is its whole context as prefill with one decode call, so this is
@@ -882,27 +1137,66 @@ pub fn worst_case_step_leaf_count_v1(profile: &PalwShapeProfileV3) -> Result<u64
 /// is exactly that caller and stays byte-identical — and it is what lets a FENCED ruleset ask the
 /// same question against a deeper ladder without a second enumeration to keep in step.
 ///
-/// The cap bounds the ANSWER, and the enumeration's own work bound ([`PALW_STEP_MAX_ENUMERATION`],
-/// checked by `validate_shape`) is unchanged and unaffected: raising the cap buys a registrant no
-/// longer walk to make a node perform, only a deeper tree, and every consumer of a leaf index
-/// already carries `u64`.
+/// # This used to walk every position, and the walk was the attack
+///
+/// It looped `n_ctx` positions and called `leaves_per_position`, which walks
+/// `pre + Σ_layers table + post` node entries. [`PALW_STEP_MAX_ENUMERATION`] bounds `n_ctx ×
+/// layer_count` at `2^24` — but the cost is `n_ctx × layer_count × nodes_per_table`, and
+/// [`PALW_STEP_MAX_NODES_PER_TABLE`] is 64, so a validly-shaped profile could buy **≈1.07e9 node
+/// visits** from every node validating the `ClassRegistered` that carries it. The in-loop cap
+/// break does not help: a profile whose nodes are wide-tiled produces very FEW leaves per
+/// position, so the answer stays under the cap while the walk runs to the end. That cost is paid
+/// again on every restart and every resync.
+///
+/// It is now a closed form (derivation in the module note above [`PalwLeafShapeV1`]) costing
+/// `O(pre + gdn + attn + post)` — at most 256 node visits — with no `n_ctx` and no `layer_count`
+/// factor at all. `a_sparse_leaf_profile_costs_the_same_at_every_context` pins that the visit
+/// count is *identical* at `n_ctx` 2 and at `n_ctx` 16 384.
+///
+/// Observable behaviour is unchanged, error payloads included: when the total does exceed `cap`
+/// the reported `got` is still the loop's PREFIX total at the first position that exceeded, found
+/// by bisection over the same closed form rather than by having walked there.
 pub fn worst_case_step_leaf_count_capped_v1(profile: &PalwShapeProfileV3, cap: u64) -> Result<u64, PalwStepError> {
-    // **Validate BEFORE enumerating.** This walk is driven by `n_ctx` and `layer_count`, so a
-    // shape that has not been bounded yet decides how long it runs. `step_leaf_count` has always
-    // validated first; this sibling did not, and it is the one an unadmitted class reaches.
+    worst_case_step_leaf_count_capped_counted_v1(profile, cap, &mut 0)
+}
+
+/// [`worst_case_step_leaf_count_capped_v1`] with the node-visit counter its cost test reads.
+fn worst_case_step_leaf_count_capped_counted_v1(
+    profile: &PalwShapeProfileV3,
+    cap: u64,
+    visits: &mut u64,
+) -> Result<u64, PalwStepError> {
+    // **Validate BEFORE deriving.** The closed form no longer costs `n_ctx`, but `validate_shape`
+    // is also what makes the terms meaningful (`tile_len ≥ 4`, non-zero multipliers, kv-scaled
+    // nodes only where attention layers exist), and `step_leaf_count` has always validated first.
     profile.validate_shape()?;
-    let prefill = profile.n_ctx.saturating_sub(1);
-    let mut total = 0u64;
-    for p in 0..prefill as u64 {
-        total = total.saturating_add(leaves_per_position(profile, p + 1, p + 1 == prefill as u64));
-        // Inside the loop, not after it: a cap tested at the end is an answer bound that has
-        // already paid the whole cost of the answer.
-        if total > cap {
-            return Err(PalwStepError::TooManyLeaves { got: total, max: cap });
+    let shape = palw_leaf_shape_v1(profile, visits);
+    let prefill = profile.n_ctx.saturating_sub(1) as u128;
+
+    let mut total: u128 = 0;
+    if prefill >= 1 {
+        total = palw_prefill_running_total_v1(&shape, prefill, prefill, visits);
+        if palw_saturate_u64(total) > cap {
+            // The loop refused at the FIRST position whose running total exceeded, and reported
+            // that prefix. The running total is non-decreasing in `k`, so bisection finds the same
+            // position in ⌈log₂ n_ctx⌉ closed-form evaluations instead of `k` walked positions.
+            let (mut lo, mut hi) = (1u128, prefill);
+            while lo < hi {
+                let mid = lo + (hi - lo) / 2;
+                if palw_saturate_u64(palw_prefill_running_total_v1(&shape, mid, prefill, visits)) > cap {
+                    hi = mid;
+                } else {
+                    lo = mid + 1;
+                }
+            }
+            let got = palw_saturate_u64(palw_prefill_running_total_v1(&shape, lo, prefill, visits));
+            return Err(PalwStepError::TooManyLeaves { got, max: cap });
         }
     }
     // One decode call at the far end of the context, matching `step_leaf_count`'s own enumeration.
-    total = total.saturating_add(leaves_per_position(profile, prefill as u64 + 1, true));
+    total = total.saturating_add(palw_body_at_v1(&shape, prefill + 1, visits));
+    total = total.saturating_add(palw_logits_at_v1(&shape, prefill + 1, visits));
+    let total = palw_saturate_u64(total);
     if total > cap {
         return Err(PalwStepError::TooManyLeaves { got: total, max: cap });
     }
@@ -1550,5 +1844,323 @@ mod tests {
         assert_ne!(k, t, "same string under different domains must differ");
         assert_ne!(k, s);
         assert_ne!(t, s);
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // W0 — the leaf-enumeration closed form (ADR-0080 prerequisite)
+    // -----------------------------------------------------------------------------------------
+
+    /// **The oracle: `worst_case_step_leaf_count_capped_v1` exactly as it was.**
+    ///
+    /// The closed form is proved against THIS — the real position loop, calling the real
+    /// `leaves_per_position` — and never against a second closed form, which would only prove that
+    /// two spellings of one idea agree.
+    ///
+    /// `visits` counts the node-table entries `leaves_per_position` touches, accumulated beside the
+    /// call rather than inside it so the function under comparison stays byte-for-byte the old one.
+    fn worst_case_leaf_count_loop_oracle_v1(profile: &PalwShapeProfileV3, cap: u64, visits: &mut u64) -> Result<u64, PalwStepError> {
+        profile.validate_shape()?;
+        let body_nodes =
+            profile.pre_nodes.len() as u64 + (0..profile.layer_count).map(|l| profile.layer_table(l).len() as u64).sum::<u64>();
+        let logits_nodes = profile.post_nodes.len() as u64;
+        let prefill = profile.n_ctx.saturating_sub(1);
+        let mut total = 0u64;
+        for p in 0..prefill as u64 {
+            let with_logits = p + 1 == prefill as u64;
+            *visits += body_nodes + if with_logits { logits_nodes } else { 0 };
+            total = total.saturating_add(leaves_per_position(profile, p + 1, with_logits));
+            if total > cap {
+                return Err(PalwStepError::TooManyLeaves { got: total, max: cap });
+            }
+        }
+        *visits += body_nodes + logits_nodes;
+        total = total.saturating_add(leaves_per_position(profile, prefill as u64 + 1, true));
+        if total > cap {
+            return Err(PalwStepError::TooManyLeaves { got: total, max: cap });
+        }
+        Ok(total)
+    }
+
+    /// Every profile this tree ships, plus two synthetics that reach arithmetic no shipped class
+    /// reaches: a kv-scaled node at the widest multiplier the schema admits, and a profile whose
+    /// every node is fixed-width (no kv term at all, so the prefix sum is pure multiplication).
+    fn profiles_under_test() -> Vec<(&'static str, PalwShapeProfileV3)> {
+        let mut out: Vec<(&'static str, PalwShapeProfileV3)> = Vec::new();
+        let mut push = |name: &'static str, p: Result<PalwShapeProfileV3, PalwStepError>| {
+            if let Ok(p) = p {
+                out.push((name, p));
+            }
+        };
+        push("base0", crate::palw_base0_profile::base0_profile_v1(crate::palw_base0_profile::PALW_RC_BASE0_GEOMETRY));
+        push("qwen25-1.5b", crate::palw_qwen25_profile::qwen25_profile_v1(crate::palw_qwen25_profile::QWEN25_1_5B));
+        push("qwen25-3b", crate::palw_qwen25_profile::qwen25_profile_v1(crate::palw_qwen25_profile::QWEN25_3B));
+        push("qwen25-a16-v1", crate::palw_qwen25_profile::qwen25_a16_profile_v1(crate::palw_qwen25_profile::QWEN25_1_5B_A16));
+        push("qwen25-a16-v2", crate::palw_qwen25_profile::qwen25_a16_profile_v2(crate::palw_qwen25_profile::QWEN25_1_5B_A16));
+        push("qwen35-2b-v1", crate::palw_qwen36_profile::qwen36_profile_v1(crate::palw_qwen36_profile::QWEN35_2B));
+        push("qwen35-2b-v2", crate::palw_qwen36_profile::qwen36_profile_v2(crate::palw_qwen36_profile::QWEN35_2B));
+        push("qwen36-35b-a3b", crate::palw_qwen36_profile::qwen36_profile_v1(crate::palw_qwen36_profile::QWEN36_35B_A3B));
+        push("qwen3-coder-30b", crate::palw_qwen36_profile::qwen36_profile_v1(crate::palw_qwen36_profile::QWEN3_CODER_30B_A3B));
+        assert!(out.len() >= 6, "the shipped profile set went missing — {} constructors answered", out.len());
+        out.push(("tiny-synthetic", tiny_profile()));
+        out.push(("widest-kv-synthetic", widest_kv_profile()));
+        out.push(("all-fixed-synthetic", sparse_leaf_profile(2, 3)));
+        out
+    }
+
+    /// A kv-scaled node at `u32::MAX` against the minimum tile width — the term that makes the
+    /// closed form's `u128` intermediates load-bearing (`2^32 · k / 4` per position).
+    fn widest_kv_profile() -> PalwShapeProfileV3 {
+        let mut p = tiny_profile();
+        p.attn_nodes = vec![
+            node(PalwStepOpKindV1::MatMulF16, PalwStepOutLenV1::KvScaled { multiplier: u32::MAX }, PALW_STEP_MIN_TILE_LEN),
+            node(PalwStepOpKindV1::SoftMax, PalwStepOutLenV1::KvScaled { multiplier: 3 }, 7),
+            node(PalwStepOpKindV1::MatMulQuant, PalwStepOutLenV1::Fixed { elements: u32::MAX }, PALW_STEP_MIN_TILE_LEN),
+        ];
+        p.kv_chunk_calls = 0;
+        p
+    }
+
+    /// **The hostile shape: one leaf per node, and as many nodes as the schema allows.**
+    ///
+    /// Every node is `Fixed { elements: 1 }` against the widest tile, so each contributes exactly
+    /// one leaf — which makes the walk's node-visit count and its leaf count the SAME number, and
+    /// lets the cost of the loop be read straight off the answer.
+    fn sparse_leaf_profile(n_ctx: u32, layer_count: u16) -> PalwShapeProfileV3 {
+        let wide = || node(PalwStepOpKindV1::MulElem, PalwStepOutLenV1::Fixed { elements: 1 }, PALW_STEP_MAX_TILE_LEN);
+        let table = || (0..PALW_STEP_MAX_NODES_PER_TABLE).map(|_| wide()).collect::<Vec<_>>();
+        let mut p = tiny_profile();
+        p.layer_count = layer_count;
+        p.full_attention_interval = 2;
+        p.n_ctx = n_ctx;
+        p.pre_nodes = table();
+        p.gdn_nodes = table();
+        p.attn_nodes = table();
+        p.post_nodes = table();
+        p.kv_chunk_calls = 0;
+        p
+    }
+
+    /// `Σ_{k=1}^{K} ceil(m·k / t)` the slow way.
+    fn ceil_sum_naive(multiplier: u128, tile_len: u128, k_max: u128) -> u128 {
+        (1..=k_max).map(|k| (multiplier * k).div_ceil(tile_len)).sum()
+    }
+
+    /// The floor sum is the only step of the derivation that is not arithmetic rearrangement, so
+    /// it is checked exhaustively on a small box and then at the ends of its real range.
+    #[test]
+    fn the_kv_prefix_sum_is_the_ceiling_sum() {
+        for multiplier in 1u128..=24 {
+            for tile_len in 1u128..=24 {
+                for k_max in 0u128..=40 {
+                    assert_eq!(
+                        kv_scaled_prefix_sum_v1(multiplier, tile_len, k_max),
+                        ceil_sum_naive(multiplier, tile_len, k_max),
+                        "m={multiplier} t={tile_len} K={k_max}"
+                    );
+                }
+            }
+        }
+        // The corners of the range a validated profile can actually declare.
+        for &(multiplier, tile_len, k_max) in &[
+            (u32::MAX as u128, PALW_STEP_MIN_TILE_LEN as u128, 1u128),
+            (u32::MAX as u128, PALW_STEP_MIN_TILE_LEN as u128, 4096u128),
+            (1, PALW_STEP_MAX_TILE_LEN as u128, 4096),
+            (u32::MAX as u128, PALW_STEP_MAX_TILE_LEN as u128, 999),
+            (7, 65_536, 65_536),
+        ] {
+            assert_eq!(
+                kv_scaled_prefix_sum_v1(multiplier, tile_len, k_max),
+                ceil_sum_naive(multiplier, tile_len, k_max),
+                "m={multiplier} t={tile_len} K={k_max}"
+            );
+        }
+        // A `K` no naive sum could reach — the point of having a closed form at all. The identity
+        // is `Σ ceil(k/1) = K(K+1)/2` for a tile of one element.
+        let k: u128 = 1 << 24;
+        assert_eq!(kv_scaled_prefix_sum_v1(1, 1, k), k * (k + 1) / 2);
+    }
+
+    /// **Derivation step (a): the layer loop is a multiplicity.** `table_layer_span` IS the walk
+    /// `leaves_per_position` performs over layers, so the O(1) count has to agree with it on every
+    /// `(layer_count, full_attention_interval)` the schema admits — including the degenerate
+    /// interval 0 (no attention layers) and intervals above the layer count.
+    #[test]
+    fn the_layer_multiplicities_are_the_layer_walk() {
+        let mut p = tiny_profile();
+        let layer_counts: Vec<u16> = (0u16..=80).chain([100, 255, 256, 257, 511, 512, 1000, 1023, 1024]).collect();
+        let intervals: Vec<u16> = (0u16..=40).chain([64, 127, 128, 255, 256, 1023, 1024, 1025, u16::MAX]).collect();
+        for &layer_count in &layer_counts {
+            for &interval in &intervals {
+                p.layer_count = layer_count;
+                p.full_attention_interval = interval;
+                let attn = attention_layer_count_v1(&p);
+                let gdn = (p.layer_count as u128) - attn;
+                assert_eq!(
+                    attn,
+                    p.table_layer_span(PalwStepTableV1::Attn) as u128,
+                    "attention layers disagree at layer_count={layer_count} interval={interval}"
+                );
+                assert_eq!(
+                    gdn,
+                    p.table_layer_span(PalwStepTableV1::Gdn) as u128,
+                    "gdn layers disagree at layer_count={layer_count} interval={interval}"
+                );
+            }
+        }
+    }
+
+    /// **The proof obligation: the closed form and the loop are the same function.**
+    ///
+    /// Every shipped profile (plus the synthetics that reach arithmetic no shipped class reaches),
+    /// at every `n_ctx` in `1..=512`, against six caps — the shipped `2^22`, the fenced ladder's
+    /// `2^32`, `u64::MAX` (both of which make the whole sum run rather than break early), and three
+    /// caps low enough that the refusal happens at or near the first position, which is the only
+    /// place the two could disagree about `TooManyLeaves.got`.
+    ///
+    /// The assertion is on the whole `Result`, error payload included — not on `is_ok`. 36 864
+    /// comparisons, ≈2 s.
+    #[test]
+    fn the_closed_form_is_the_loop_on_every_shipped_profile() {
+        // The first four are caps the loop can BREAK on — 1 refuses at the first position, and
+        // `PALW_STEP_MAX_LEAVES` is the one every shipped preset actually froze. The last two are
+        // past anything these profiles reach at these widths, so the loop runs its full length and
+        // the comparison is of the whole sum rather than of a prefix of it.
+        let caps = [1u64, 1000, 100_000, PALW_STEP_MAX_LEAVES, 1 << 32, u64::MAX];
+        let mut compared = 0u64;
+        let mut reached_512 = 0u64;
+        let profiles = profiles_under_test();
+        let profile_count = profiles.len() as u64;
+        for (name, base) in profiles {
+            let mut p = base.clone();
+            for n_ctx in 1u32..=512 {
+                p.n_ctx = n_ctx;
+                if n_ctx == 512 {
+                    reached_512 += 1;
+                }
+                for &cap in &caps {
+                    let (mut lv, mut cv) = (0u64, 0u64);
+                    let want = worst_case_leaf_count_loop_oracle_v1(&p, cap, &mut lv);
+                    let got = worst_case_step_leaf_count_capped_counted_v1(&p, cap, &mut cv);
+                    assert_eq!(got, want, "{name} disagrees at n_ctx={n_ctx} cap={cap}");
+                    compared += 1;
+                }
+            }
+            // The public entry point is the same function as the counted one it delegates to.
+            p.n_ctx = base.n_ctx;
+            assert_eq!(
+                worst_case_step_leaf_count_capped_v1(&p, PALW_STEP_MAX_LEAVES),
+                worst_case_leaf_count_loop_oracle_v1(&p, PALW_STEP_MAX_LEAVES, &mut 0),
+                "{name} disagrees at its own registered context"
+            );
+        }
+        assert!(compared >= 30_000, "the sweep shrank to {compared} comparisons");
+        assert_eq!(reached_512, profile_count, "every profile must be swept to n_ctx 512");
+    }
+
+    /// **The one corner the `n_ctx ≤ 512` sweep cannot reach: `u64` saturation.**
+    ///
+    /// The loop accumulates in `u64` with `saturating_add`, so its running total is
+    /// `min(true_total, u64::MAX)`; the closed form sums in `u128` and clamps. The two agree only
+    /// if the clamp is applied at the same places, and the only cap under which the loop can reach
+    /// the clamp at all is `u64::MAX` itself — every smaller cap breaks the loop first. So the
+    /// case needs a profile whose true total is past `2^64`: 3 attention layers × 64 nodes at the
+    /// widest kv multiplier and the narrowest tile is ≈2.06e11 leaves per position, and 20 000
+    /// positions of that is ≈4.1e19.
+    #[test]
+    fn the_saturating_total_clamps_where_the_loop_clamps() {
+        let mut p = tiny_profile();
+        p.layer_count = 3;
+        p.full_attention_interval = 1; // every layer is Attention, so the gdn table must be empty
+        p.gdn_nodes = Vec::new();
+        p.n_ctx = 20_000;
+        p.kv_chunk_calls = 0;
+        p.attn_nodes = (0..PALW_STEP_MAX_NODES_PER_TABLE)
+            .map(|_| node(PalwStepOpKindV1::MatMulF16, PalwStepOutLenV1::KvScaled { multiplier: u32::MAX }, PALW_STEP_MIN_TILE_LEN))
+            .collect();
+        assert!(p.validate_shape().is_ok(), "the shape is inside every declared ceiling");
+
+        // At the only cap the loop cannot break on, both saturate and both answer `u64::MAX`.
+        let saturated = worst_case_step_leaf_count_capped_counted_v1(&p, u64::MAX, &mut 0);
+        assert_eq!(saturated, Ok(u64::MAX), "the total is past 2^64 and must clamp, not wrap");
+        assert_eq!(saturated, worst_case_leaf_count_loop_oracle_v1(&p, u64::MAX, &mut 0));
+
+        // One below it, both refuse — and at the same prefix.
+        for cap in [u64::MAX - 1, PALW_STEP_MAX_LEAVES, 1 << 32] {
+            assert_eq!(
+                worst_case_step_leaf_count_capped_counted_v1(&p, cap, &mut 0),
+                worst_case_leaf_count_loop_oracle_v1(&p, cap, &mut 0),
+                "the saturating profile disagrees at cap={cap}"
+            );
+        }
+    }
+
+    /// **The cost, measured: the walk pays for the context, the closed form does not.**
+    ///
+    /// `sparse_leaf_profile` contributes exactly one leaf per node visited, so for this profile the
+    /// loop's node-visit count and its leaf count are the same number — which is what lets the
+    /// untruncated cost be stated exactly rather than estimated.
+    ///
+    /// **What the shipped cap actually buys, stated honestly.** The old loop breaks as soon as the
+    /// running total passes `cap`, and every node it visits adds at least one leaf, so its visits
+    /// are bounded by `cap` plus one position — ≈4.2e6 at `PALW_STEP_MAX_LEAVES`, not the 1e9 an
+    /// unbroken walk would cost. The 1e9 figure is what the SAME registration costs once the cap is
+    /// the context ladder's `2^32` (`palw_context_ladder`, fenced `None` on every shipped preset)
+    /// or once anything weakens the in-loop break: at `n_ctx` 16 384 this profile's answer is
+    /// 1.07e9 leaves, and that number IS the walk's node-visit count.
+    #[test]
+    fn a_sparse_leaf_profile_costs_the_same_at_every_context() {
+        let widest = PALW_STEP_MAX_ENUMERATION as u32 / PALW_STEP_MAX_LAYERS as u32; // 16 384
+        let narrow = sparse_leaf_profile(2, PALW_STEP_MAX_LAYERS);
+        let hostile = sparse_leaf_profile(widest, PALW_STEP_MAX_LAYERS);
+        assert!(hostile.validate_shape().is_ok(), "the hostile shape is inside every declared ceiling");
+
+        // The closed form: identical cost at n_ctx 2 and at n_ctx 16 384, and it is the size of the
+        // node tables, nothing else.
+        let (mut narrow_visits, mut hostile_visits) = (0u64, 0u64);
+        let started = std::time::Instant::now();
+        let hostile_answer = worst_case_step_leaf_count_capped_counted_v1(&hostile, PALW_STEP_MAX_LEAVES, &mut hostile_visits);
+        let took = started.elapsed();
+        let narrow_answer = worst_case_step_leaf_count_capped_counted_v1(&narrow, PALW_STEP_MAX_LEAVES, &mut narrow_visits);
+        assert_eq!(
+            hostile_visits, narrow_visits,
+            "the closed form's cost moved with n_ctx: {narrow_visits} at 2, {hostile_visits} at {widest}"
+        );
+        assert_eq!(
+            hostile_visits,
+            4 * PALW_STEP_MAX_NODES_PER_TABLE as u64,
+            "the closed form should touch each of the four node tables exactly once"
+        );
+        assert!(took < std::time::Duration::from_millis(50), "the closed form took {took:?} — it is walking something");
+
+        // The loop: linear in n_ctx, and it agrees with the closed form at both.
+        let (mut narrow_loop_visits, mut hostile_loop_visits) = (0u64, 0u64);
+        assert_eq!(worst_case_leaf_count_loop_oracle_v1(&narrow, PALW_STEP_MAX_LEAVES, &mut narrow_loop_visits), narrow_answer);
+        assert_eq!(worst_case_leaf_count_loop_oracle_v1(&hostile, PALW_STEP_MAX_LEAVES, &mut hostile_loop_visits), hostile_answer);
+        assert!(
+            hostile_loop_visits > 4_000_000,
+            "the loop was expected to walk ≈4.2e6 node entries before the cap broke it, walked {hostile_loop_visits}"
+        );
+        assert!(
+            hostile_loop_visits > 30 * narrow_loop_visits,
+            "the loop's cost is supposed to grow with n_ctx: {narrow_loop_visits} at 2, {hostile_loop_visits} at {widest}"
+        );
+        assert!(hostile_visits * 10_000 < hostile_loop_visits, "closed form {hostile_visits} vs loop {hostile_loop_visits}");
+
+        // And the number the in-loop break is currently hiding: at the fenced ladder's cap the walk
+        // is not broken at all, and its node-visit count is exactly this answer.
+        let (mut ladder_visits, mut ladder_narrow) = (0u64, 0u64);
+        let ladder = worst_case_step_leaf_count_capped_counted_v1(
+            &hostile,
+            crate::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES,
+            &mut ladder_visits,
+        );
+        let unbroken = ladder.expect("the sparse profile fits the 2^32 ladder");
+        assert!(unbroken > 1_000_000_000, "the unbroken walk was expected to cost >1e9 node visits, costs {unbroken}");
+        let _ = worst_case_step_leaf_count_capped_counted_v1(
+            &narrow,
+            crate::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES,
+            &mut ladder_narrow,
+        );
+        assert_eq!(ladder_visits, ladder_narrow, "the closed form's cost is independent of the cap as well as of n_ctx");
     }
 }
