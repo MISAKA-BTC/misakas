@@ -44,6 +44,7 @@ use std::sync::Arc;
 
 use kaspa_consensus_core::BlockHash;
 use kaspa_consensus_core::Hash64;
+use kaspa_consensus_core::config::params::ForkActivation;
 use kaspa_consensus_core::palw_state_v2::{
     PalwChainStateV2, PalwStateCarriageV2, PalwStateDeltaV2, PalwStateParamsV2, PalwStateV2Error,
 };
@@ -98,6 +99,15 @@ pub struct DbPalwStateV2Store {
     /// abort.
     pruning_snapshot: CachedDbItem<PalwStateTipRecordV2>,
     schema: CachedDbItem<u32>,
+    /// **ADR-0069 Decision 7's fence, because this store RE-CHECKS what it decodes.**
+    ///
+    /// Both loaders run `assert_internal_consistency`, and past the fence that identity is an
+    /// upper bound rather than an equality (see `PalwChainStateV2::assert_internal_consistency_v2`).
+    /// A store that did not carry the fence would decode a state this node's own fold had just
+    /// written, re-derive it by the pre-Decision-7 rule, and refuse it — so the node would come
+    /// back from a restart unable to load its own tip. `None` on every shipped preset, which is
+    /// byte-for-byte the behaviour before the field existed.
+    uncertified_weightless: Option<ForkActivation>,
 }
 
 impl DbPalwStateV2Store {
@@ -108,11 +118,27 @@ impl DbPalwStateV2Store {
             tip: CachedDbItem::new(Arc::clone(&db), DatabaseStorePrefixes::PalwStateV2Tip.into()),
             pruning_snapshot: CachedDbItem::new(Arc::clone(&db), DatabaseStorePrefixes::PalwPruningPointState.into()),
             schema: CachedDbItem::new(db, DatabaseStorePrefixes::PalwStateV2Schema.into()),
+            uncertified_weightless: None,
         }
     }
 
+    /// Install ADR-0069 Decision 7's fence. Every construction path starts dormant, so a caller
+    /// that forgets this gets exactly today's behaviour rather than a silently different rule.
+    pub fn with_uncertified_weightless(mut self, fence: Option<ForkActivation>) -> Self {
+        self.uncertified_weightless = fence;
+        self
+    }
+
+    /// The rule in force at the chain point a decoded snapshot stands at. A carriage with no
+    /// `last_point` is a genesis state, which holds no claims and so is priced identically either
+    /// way.
+    fn uncertified_weightless_at(&self, carriage: &PalwStateCarriageV2) -> bool {
+        let daa = carriage.last_point.as_ref().map(|point| point.daa_score).unwrap_or(0);
+        self.uncertified_weightless.is_some_and(|fence| fence.is_active(daa))
+    }
+
     pub fn clone_with_new_cache(&self, cache_policy: CachePolicy) -> Self {
-        Self::new(Arc::clone(&self.db), cache_policy)
+        Self::new(Arc::clone(&self.db), cache_policy).with_uncertified_weightless(self.uncertified_weightless)
     }
 
     /// If the stored schema is not this build's, delete rows and tip TOGETHER and stamp the new
@@ -269,8 +295,9 @@ impl DbPalwStateV2Store {
         };
         let carriage = borsh::from_slice::<PalwStateCarriageV2>(&record.carriage_borsh)
             .map_err(|e| StoreError::DataInconsistency(format!("palw v2 pruning snapshot does not decode: {e}")))?;
+        let armed = self.uncertified_weightless_at(&carriage);
         let state = carriage
-            .into_state(params, Some(record.state_root))
+            .into_state_v2(params, Some(record.state_root), armed)
             .map_err(|e: PalwStateV2Error| StoreError::DataInconsistency(format!("palw v2 pruning snapshot refused: {e}")))?;
         Ok(Some((record.block, state)))
     }
@@ -281,8 +308,9 @@ impl DbPalwStateV2Store {
         };
         let carriage = borsh::from_slice::<PalwStateCarriageV2>(&record.carriage_borsh)
             .map_err(|e| StoreError::DataInconsistency(format!("palw v2 tip snapshot does not decode: {e}")))?;
+        let armed = self.uncertified_weightless_at(&carriage);
         let state = carriage
-            .into_state(params, Some(record.state_root))
+            .into_state_v2(params, Some(record.state_root), armed)
             .map_err(|e: PalwStateV2Error| StoreError::DataInconsistency(format!("palw v2 tip snapshot refused: {e}")))?;
         Ok(Some((record.block, state)))
     }

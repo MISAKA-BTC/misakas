@@ -1821,6 +1821,39 @@ impl VirtualStateProcessor {
         Some(kaspa_pow::palw_admission::PalwAdmissionClassFacts {
             class_target,
             pwu_per_inference: credit.registration.pwu_per_inference,
+            // **ADR-0069 Decision 7's predicate — and on THIS path it is a constant, said as one
+            // rather than dressed up as a lookup.**
+            //
+            // The first draft wrote `share > 0` here, which reads like a guard and is a
+            // tautology twice over. `share` comes from `single_class_domain(runtime_class_id)`,
+            // which BUILDS the map `{that_class: 1000‰}` from its own argument, and the class
+            // asked about was already required to equal `runtime_class_id` at the top of this
+            // function. Worse, `PalwDifficultyDomainSetV1::validate` refuses a zero share outright
+            // (`ZeroShare`), so `share_permille` returning `Some(0)` is unrepresentable for ANY
+            // domain set, not just this one — the expression could not be false on a real network
+            // or an invented one.
+            //
+            // Where the rule actually binds on a V1-credit network is the line above: a block
+            // naming any class other than the single fence-registered one yields `None`, which is
+            // `ClassUnresolved` — a REFUSAL, which is strictly stronger than weightless. There is
+            // no share-0 entrant to price at zero because a V1 fence carries exactly one
+            // registration and cannot represent a second class at all. Decision 7's live sites are
+            // the V2 state fold (`palw_claim_safe_contribution_v2` at the `Final` accumulation and
+            // at `assert_internal_consistency_v2`'s re-derivation); ADR-0069 says so now, where it
+            // used to claim three sites through one helper.
+            //
+            // The day this path gains a real multi-class domain — a chain-point-resolved share
+            // table, which it does not have and must not take from `load_tip` for the reason the
+            // `class_target` doc above gives — this constant is the line that has to change, and
+            // `single_class_domain`'s own doc ("would be a LIE on a multi-class network") is the
+            // other one.
+            // The impossible case REFUSES rather than panicking. An earlier draft wrote
+            // `debug_assert!(share > 0, ..)` here and handed back a constant `true`; this function
+            // runs inside block validation, so the day a real multi-class table makes the case
+            // reachable, an assert aborts every debug node at the same height, while `None` —
+            // which this function already means by "no facts here" — is a refusal the pipeline
+            // knows how to carry. See the helper's doc.
+            weight_bearing: kaspa_consensus_core::palw_facts::palw_v1_weight_bearing_or_refuse(share)?,
         })
     }
 

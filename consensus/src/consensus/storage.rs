@@ -353,7 +353,11 @@ impl ConsensusStorage {
         // exists for readers, but a tracked-bytes policy on a store whose rows vary by orders of
         // magnitude is how the validator-attestation crash happened.
         let palw_state_v2_store = {
-            let mut store = DbPalwStateV2Store::new(db.clone(), PolicyBuilder::new().max_items(4096).untracked().build());
+            // ADR-0069 Decision 7's fence rides the store because the store RE-DERIVES what it
+            // decodes: past the fence the consistency identity is an upper bound, and a store told
+            // otherwise would refuse this node's own tip on the next restart.
+            let mut store = DbPalwStateV2Store::new(db.clone(), PolicyBuilder::new().max_items(4096).untracked().build())
+                .with_uncertified_weightless(params.palw_uncertified_weightless);
             if let Err(err) = store.reindex_if_stale() {
                 kaspa_core::warn!("[palw-state-v2-store] could not check the record layout version: {err}; leaving existing rows");
             }

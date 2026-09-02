@@ -334,6 +334,46 @@ pub struct PalwClassFactsV1 {
     pub class_target: u128,
     /// The class's registered normative operation count per canonical inference.
     pub pwu_per_inference: u64,
+    /// **ADR-0069 Decision 7: whether this class may carry fork-choice weight at this block's
+    /// acceptance point.** `false` is "registered, produces, is paid, counts for liveness — and
+    /// weighs nothing".
+    ///
+    /// The predicate is the class's GRANTED SHARE, and the equivalence to certification is
+    /// enforced on the other side: `palw_class_admission_v2::verify_class_admission_v3` refuses a
+    /// class asking for `share > 0` with `NotEndToEndCertified` unless some end-to-end certified
+    /// family covers every kernel it reaches. So `share > 0 ⇒ certified`, which is the same proxy
+    /// ADR-0069's Gate 3-3 already uses — and it is the only one reachable here, because the class
+    /// state carries no family and the shape profile is not in this path.
+    ///
+    /// Resolved by the same fold that answers [`Self::class_target`], **at the block's own
+    /// acceptance DAA**, for that field's reason: a bit read from "now" would let a certification
+    /// grant weight to history that had already matured, which is E3's retroactivity.
+    ///
+    /// Read only when the caller says the rule is in force
+    /// ([`PalwResolverInputV1::uncertified_weightless`]), so a network below the fence prices
+    /// blocks exactly as it did before this field existed.
+    pub weight_bearing: bool,
+}
+
+/// **ADR-0069 Decision 7's answer on the V1 credit path — or a REFUSAL, never a panic.**
+///
+/// `Some(true)` for a class holding permille; `None` for a share of zero, which the caller
+/// propagates as "this block has no class facts here" (`ClassUnresolved`) — a refusal, which is
+/// strictly stronger than weightless and is the answer that path already gives for every other
+/// unanswerable question.
+///
+/// A zero share is unrepresentable today: `PalwDifficultyDomainSetV1::validate` returns
+/// `ZeroShare` for any set holding one, and the only set the V1 resolver builds is
+/// `single_class_domain`'s `{that_class: 1000‰}`. The first draft of the call site therefore wrote
+/// `debug_assert!(share > 0, ..)` and handed back a constant `true` — which is the wrong failure
+/// mode in the wrong file. That assert sits inside block validation: the day the surrounding
+/// redesign gives this path a real multi-class share table (the redesign its own comment invites),
+/// a zero share would abort every debug/CI node mid-validation at the same height, and this
+/// codebase has turned a wrong assumption into exactly that more than once. An unreachable branch
+/// costs one comparison; a panic in block validation costs the network. So the impossible case is
+/// spelled as the refusal it should be, and it is testable rather than merely asserted.
+pub fn palw_v1_weight_bearing_or_refuse(share_permille: u16) -> Option<bool> {
+    (share_permille > 0).then_some(true)
 }
 
 /// Where a block's class facts come from.
@@ -425,6 +465,18 @@ pub struct PalwResolverInputV1<'a> {
     /// as its own parameter could pass anything. `PalwScheduleParamsV1::validate` is what keeps
     /// `duty_close < w_challenge` true, and it can only enforce that over windows it holds together.
     pub schedule: crate::palw_schedule::PalwScheduleParamsV1,
+    /// **ADR-0069 Decision 7's fence, resolved by the caller** from
+    /// `Params::palw_uncertified_weightless` at [`Self::accepted_daa`] — the block's own acceptance
+    /// point, not the evaluating node's, so two nodes sitting at different tips price one block
+    /// alike.
+    ///
+    /// A resolved bool rather than a lookup, the way `palw_state_v2` takes ADR-0065 D4's
+    /// `unavailable_abstains`: this crate holds no `Params`, and a rule that reached for one would
+    /// be a rule no test could see the inputs of.
+    ///
+    /// `false` — every shipped preset today — makes [`resolve_block_weight_v1`] byte-identical to
+    /// the version before Decision 7 existed.
+    pub uncertified_weightless: bool,
 }
 
 /// Decode the carriage records this block's facts depend on and assemble them.
@@ -1009,6 +1061,24 @@ where
         return Err(PalwFactsError::ClassFactsMismatch { asked: input.execution_class_id, answered: class_facts.execution_class_id });
     }
     let pwu = block_pwu_v1(Some(class_facts.class_target), Some(class_facts.pwu_per_inference))?;
+    // **ADR-0069 Decision 7 — an uncertified class's block weighs nothing.**
+    //
+    // Zeroed HERE, on the pwu, and nowhere else: `chain_weights_v1` folds `pwu` into `safe` at
+    // `Final` and into the bounded immature total at the two provisional stages, so a zero pwu is
+    // zero in BOTH weights at EVERY ramp stage without the ramp needing a fifth case. The stage is
+    // deliberately left alone — the block still matures, its receipts still license it, its claim
+    // still runs the lattice, and every other consumer of that stage reads the same value it did.
+    //
+    // What this refuses is the trade the shipped numbers made available: a permissionless share-0
+    // registration inherits the base class's live target (≈ 12,663 expected draws), may declare
+    // `pwu_per_inference` up to 2²², cannot be convicted — so a draw costs one hash, not one
+    // inference — and still gets a one-block epoch budget. That is ≈ 8× the honest network's whole
+    // epoch of `safe(C)` for one fabricated block, and `safe(C)` is what the IBD and deep-reorg
+    // gates read.
+    //
+    // The fence is the caller's, resolved at this block's own `accepted_daa`; below it the line is
+    // dead and this function is what it was.
+    let pwu = if input.uncertified_weightless && !class_facts.weight_bearing { 0 } else { pwu };
     Ok(crate::palw_chain_weight::PalwBlockWeightV1 { pwu, stage: crate::palw_weight::ramp_stage_v1(&facts, ramp) })
 }
 
@@ -1289,6 +1359,10 @@ mod resolver_tests {
             pov_daa: pov,
             classes: &FIXTURE_CLASSES,
             schedule: SCHEDULE,
+            // ADR-0069 Decision 7 dormant by default — every fixture below that does not name the
+            // rule must read the pre-Decision-7 behaviour, which is what makes the fence's own
+            // tests meaningful.
+            uncertified_weightless: false,
         }
     }
 
@@ -1304,6 +1378,7 @@ mod resolver_tests {
                 execution_class_id: *execution_class_id,
                 class_target: u128::MAX >> 10, // 1_024 expected attempts
                 pwu_per_inference: 100,
+                weight_bearing: true,
             })
         }
     }
@@ -1967,7 +2042,12 @@ mod resolver_tests {
         struct WrongClassView;
         impl PalwClassFactsViewV1 for WrongClassView {
             fn class_facts_for_block(&self, _: &Hash64, _: u64) -> Option<PalwClassFactsV1> {
-                Some(PalwClassFactsV1 { execution_class_id: h(0xDEAD), class_target: u128::MAX >> 10, pwu_per_inference: 100 })
+                Some(PalwClassFactsV1 {
+                    execution_class_id: h(0xDEAD),
+                    class_target: u128::MAX >> 10,
+                    pwu_per_inference: 100,
+                    weight_bearing: true,
+                })
             }
         }
         let carriage = vec![receipt_row(1, 1_050), receipt_row(2, 1_060)];
@@ -1992,7 +2072,12 @@ mod resolver_tests {
         impl PalwClassFactsViewV1 for RecordingView {
             fn class_facts_for_block(&self, id: &Hash64, block_accepted_daa: u64) -> Option<PalwClassFactsV1> {
                 ASKED_AT.store(block_accepted_daa, Ordering::SeqCst);
-                Some(PalwClassFactsV1 { execution_class_id: *id, class_target: u128::MAX >> 10, pwu_per_inference: 100 })
+                Some(PalwClassFactsV1 {
+                    execution_class_id: *id,
+                    class_target: u128::MAX >> 10,
+                    pwu_per_inference: 100,
+                    weight_bearing: true,
+                })
             }
         }
         let carriage = vec![receipt_row(1, 1_050), receipt_row(2, 1_060)];
@@ -2900,5 +2985,304 @@ mod resolver_tests {
             forward,
             "a rotated walk must resolve identically"
         );
+    }
+
+    // =============================================================================================
+    // ADR-0069 Decision 7 — an uncertified class's blocks weigh nothing (invariants E1, E2, E3)
+    // =============================================================================================
+
+    /// A class-facts view whose WEIGHT-BEARING answer is a function of the block's own acceptance
+    /// DAA, which is the axis E3 is about.
+    ///
+    /// `granted_from: None` is a class that never holds share — the permissionless share-0
+    /// registration Decision 7 was written for. `Some(d)` is a class granted share at `d`, which
+    /// every block accepted before `d` must still be priced against.
+    ///
+    /// Everything else matches [`FixtureClasses`] exactly, so a difference between the two can only
+    /// be the bit under test.
+    struct ShareGrantedAt {
+        granted_from: Option<u64>,
+    }
+    impl PalwClassFactsViewV1 for ShareGrantedAt {
+        fn class_facts_for_block(&self, execution_class_id: &Hash64, block_accepted_daa: u64) -> Option<PalwClassFactsV1> {
+            (*execution_class_id == h(0xC1) || *execution_class_id == gap_class()).then_some(PalwClassFactsV1 {
+                execution_class_id: *execution_class_id,
+                class_target: u128::MAX >> 10,
+                pwu_per_inference: 100,
+                weight_bearing: self.granted_from.is_some_and(|from| block_accepted_daa >= from),
+            })
+        }
+    }
+
+    /// **The V1 credit path's impossible case is a refusal, not a panic.**
+    ///
+    /// `palw_class_facts_for_block` (consensus/src/pipeline/virtual_processor/utxo_validation.rs)
+    /// builds its `weight_bearing` through this helper and propagates `None` with `?`. `None` is
+    /// `ClassUnresolved` there — the same answer the line above it already gives a block naming an
+    /// unregistered class — so a share the domain set is not supposed to be able to hold costs the
+    /// block, not the node. Replace the body with the `debug_assert!(share > 0, ..); Some(true)`
+    /// this had first and the zero case panics instead of answering, which is the whole point:
+    /// this function runs inside block validation.
+    #[test]
+    fn a_zero_share_refuses_rather_than_panicking_inside_block_validation() {
+        assert_eq!(
+            palw_v1_weight_bearing_or_refuse(0),
+            None,
+            "a zero share must yield `ClassUnresolved` — a refusal the pipeline carries — and must not abort validation"
+        );
+        assert_eq!(palw_v1_weight_bearing_or_refuse(1), Some(true), "one permille is a share, and a share bears weight");
+        assert_eq!(
+            palw_v1_weight_bearing_or_refuse(crate::palw_class_daa::PALW_CLASS_SHARE_DENOMINATOR),
+            Some(true),
+            "and so is the whole cadence — the only shape a V1 domain set can actually hold today"
+        );
+    }
+
+    /// The pwu the fixture class prices a block at when it bears weight — derived, never
+    /// transcribed, so a change to the pwu rule moves the expectation with it.
+    fn fixture_pwu() -> u64 {
+        block_pwu_v1(Some(u128::MAX >> 10), Some(100)).expect("the fixture class resolves")
+    }
+
+    /// One carriage/pov pair per ramp stage, so "at every ramp stage" is a sweep and not a claim.
+    ///
+    /// The block is accepted at 1 000 and the challenge window closes at 1 500 (`W_CHALLENGE`), so
+    /// a point of view inside the window with a quorum is `ReceiptLicensed` and the same carriage
+    /// past it is `Final`. Both provisional stages matter on their own: `chain_weights_v1` folds
+    /// them into the BOUNDED immature term rather than into `safe`, and a rule that only zeroed
+    /// `Final` would leave a fabricated block competing for tip selection.
+    fn d7_stage_scenarios() -> Vec<(&'static str, Vec<(u8, u64, Vec<u8>)>, u64, PalwWorkRampStageV1)> {
+        let quorum = vec![receipt_row(1, 1_100), receipt_row(2, 1_110)];
+        let mut voided = quorum.clone();
+        voided.push(equivocation_row(1_400));
+        vec![
+            ("final", quorum.clone(), 9_000, PalwWorkRampStageV1::Final),
+            ("receipt-licensed", quorum, 1_200, PalwWorkRampStageV1::ReceiptLicensed),
+            ("provisional", vec![receipt_row(1, 1_100)], 9_000, PalwWorkRampStageV1::Provisional),
+            ("voided", voided, 9_000, PalwWorkRampStageV1::Voided),
+        ]
+    }
+
+    /// **E1 — a block of a share-0 class contributes 0 to BOTH chain weights, at EVERY ramp
+    /// stage; a share-bearing class of the same shape contributes its pwu.**
+    ///
+    /// The attack this closes is not a rounding matter. A permissionless share-0 registration
+    /// inherits the base class's LIVE target — ≈ 12,663 expected draws on testnet-11 5e — may
+    /// declare `pwu_per_inference` up to 2²², cannot be convicted (so a draw costs one hash, not
+    /// one inference), and still receives the one-block epoch budget floor. One such block per
+    /// epoch carried ≈ 8× the honest network's whole-epoch weight into `safe(C)`, which is what
+    /// the IBD and deep-reorg gates read.
+    ///
+    /// Both weights, because zeroing only `safe` would leave the same block winning tip selection
+    /// through `live`, and both are swept at every stage because the ramp is where a partial fix
+    /// would hide.
+    #[test]
+    fn adr0069_d7_e1_a_share_zero_class_contributes_no_weight_at_any_ramp_stage() {
+        let bonds = bonds();
+        let panel = [seat(1), seat(2)];
+        let bearing = ShareGrantedAt { granted_from: Some(0) };
+        let weightless = ShareGrantedAt { granted_from: None };
+        let fork_choice = crate::palw_chain_weight::PalwChainWeightParamsV1 {
+            penalty_sompi_per_pwu: 1,
+            // A NON-ZERO immature bound, or the two provisional stages would read zero for the
+            // honest class too and the sweep would pass vacuously on half its rows.
+            immature_bound_permille: 100,
+        };
+
+        let mut seen: Vec<PalwWorkRampStageV1> = Vec::new();
+        for (name, carriage, pov, expected_stage) in d7_stage_scenarios() {
+            let weigh = |view: &dyn PalwClassFactsViewV1| {
+                let mut inp = input(&carriage, &panel, pov, &bonds, &NoStepWeights);
+                inp.classes = view;
+                inp.uncertified_weightless = true;
+                resolve_block_weight_v1(&inp, &RAMP, accept_fixture_signature).expect("every fixture resolves")
+            };
+            let honest = weigh(&bearing);
+            let fabricated = weigh(&weightless);
+            assert_eq!(honest.stage, expected_stage, "{name}: the scenario must be the stage it is named for");
+            seen.push(honest.stage);
+
+            assert_eq!(fabricated.pwu, 0, "{name}: a share-0 class's block must be priced at zero pwu");
+            assert_eq!(honest.pwu, fixture_pwu(), "{name}: the same block from a share-bearing class keeps its pwu");
+
+            // The fold is what fork choice actually reads, so the assertion is made there and not
+            // only on the pwu the fold is given.
+            let zero = crate::palw_chain_weight::chain_weights_v1(&[Some(fabricated)], &fork_choice).expect("resolved");
+            assert_eq!(zero, crate::palw_chain_weight::PalwChainWeightsV1 { safe: 0, live: 0 }, "{name}: both weights, zero");
+
+            let paid = crate::palw_chain_weight::chain_weights_v1(&[Some(honest)], &fork_choice).expect("resolved");
+            match expected_stage {
+                // A voided block is already worth nothing to anyone, so it is the one stage where
+                // the honest side cannot show a difference — and it is still swept, because a rule
+                // that crashed or refused on it would be a liveness defect of its own.
+                PalwWorkRampStageV1::Voided => {
+                    assert_eq!(paid, crate::palw_chain_weight::PalwChainWeightsV1 { safe: 0, live: 0 })
+                }
+                _ => assert!(paid.live > 0, "{name}: the share-bearing block must carry weight, or the row proves nothing"),
+            }
+        }
+
+        // No vacuous pass: every stage the ramp can produce was actually produced.
+        for stage in [
+            PalwWorkRampStageV1::Final,
+            PalwWorkRampStageV1::ReceiptLicensed,
+            PalwWorkRampStageV1::Provisional,
+            PalwWorkRampStageV1::Voided,
+        ] {
+            assert!(seen.contains(&stage), "the sweep never reached {stage:?} — 'at every ramp stage' would be untested");
+        }
+    }
+
+    /// **E2 — the block is otherwise unchanged: it still matures, it is still budgeted, and its
+    /// panel still owes what it owed.**
+    ///
+    /// Decision 7 prices weight and nothing else. The half this crate can check directly is that
+    /// the resolver's output differs in `pwu` and in NO other field: `PalwBlockWeightV1` carries
+    /// the ramp stage, which is what maturity, the claim lattice and the duty accounting read, and
+    /// a rule that voided the stage instead of the price would stop paying the block and would
+    /// charge its panel for a block nobody had to verify.
+    ///
+    /// The other half is the epoch budget, which is where "it may still produce" lives: a share-0
+    /// class holds the one-block floor `derive_epoch_budgets_v2` gives it, and Decision 7 does not
+    /// read, move or gate that. DAA advance is a property of headers and never consults a block's
+    /// pwu — `chain_weights_v1` is the only consumer of that field.
+    #[test]
+    fn adr0069_d7_e2_subsidy_entitlement_and_daa_advance_are_untouched() {
+        let bonds = bonds();
+        let panel = [seat(1), seat(2)];
+        let bearing = ShareGrantedAt { granted_from: Some(0) };
+        let weightless = ShareGrantedAt { granted_from: None };
+
+        for (name, carriage, pov, _) in d7_stage_scenarios() {
+            let mut honest_in = input(&carriage, &panel, pov, &bonds, &NoStepWeights);
+            honest_in.classes = &bearing;
+            honest_in.uncertified_weightless = true;
+            let mut fabricated_in = input(&carriage, &panel, pov, &bonds, &NoStepWeights);
+            fabricated_in.classes = &weightless;
+            fabricated_in.uncertified_weightless = true;
+
+            let honest = resolve_block_weight_v1(&honest_in, &RAMP, accept_fixture_signature).expect("resolves");
+            let fabricated = resolve_block_weight_v1(&fabricated_in, &RAMP, accept_fixture_signature).expect("resolves");
+            assert_eq!(
+                crate::palw_chain_weight::PalwBlockWeightV1 { pwu: honest.pwu, ..fabricated },
+                honest,
+                "{name}: Decision 7 must move the pwu and nothing else — the stage is what maturity and the lattice read"
+            );
+
+            // The facts underneath are the same facts. The rule is a price, not a verdict.
+            assert_eq!(
+                resolve_block_facts_v1(&fabricated_in, accept_fixture_signature),
+                resolve_block_facts_v1(&honest_in, accept_fixture_signature),
+                "{name}: the resolved carriage facts must not move"
+            );
+            assert_eq!(
+                panel_duty_v1(&fabricated_in, accept_fixture_signature),
+                panel_duty_v1(&honest_in, accept_fixture_signature),
+                "{name}: the seats that owe a receipt are the same seats — a weightless block is still verified"
+            );
+        }
+
+        // **And it may still produce the block.** The one-block epoch-budget floor is what makes a
+        // share-0 class admissible for liveness (ADR-0039), and Decision 7 leaves it exactly there:
+        // weightless is not the same as banned, which is the distinction ADR-0069 Decision 5 turned
+        // down the other rule for.
+        let base = h(0xBA5E);
+        let entrant = h(0xC1);
+        let shares = std::collections::BTreeMap::from([(base, 1_000u16), (entrant, 0u16)]);
+        let budgets = crate::palw_state_v2::derive_epoch_budgets_v2(
+            &shares,
+            &std::collections::BTreeSet::new(),
+            &std::collections::BTreeSet::new(),
+            1_000,
+            1_000,
+            0,
+        );
+        assert_eq!(
+            budgets.budget_blocks.get(&entrant).copied(),
+            Some(1),
+            "the share-0 class keeps its one-block floor — Decision 7 prices its weight, it does not starve it"
+        );
+    }
+
+    /// **E3 — a class that becomes share-bearing mid-chain gains weight only for blocks after that
+    /// point, never retroactively.**
+    ///
+    /// A retroactive gain would let a certification REORDER HISTORY: every block the class had
+    /// already produced would acquire weight at the moment of the grant, and a chain that had been
+    /// behind since it was built would overtake one that had been ahead — with no block produced
+    /// and no work done. That is why the predicate is resolved through
+    /// [`PalwClassFactsViewV1::class_facts_for_block`] at the block's own `accepted_daa` rather
+    /// than read off the class's state now.
+    ///
+    /// Swept across points of view well past the grant, because "never retroactively" is a claim
+    /// about what a LATER reader computes for an EARLIER block.
+    #[test]
+    fn adr0069_d7_e3_a_class_granted_share_mid_chain_gains_no_weight_backwards() {
+        const GRANT: u64 = 5_000;
+        let bonds = bonds();
+        let panel = [seat(1), seat(2)];
+        let view = ShareGrantedAt { granted_from: Some(GRANT) };
+
+        // A matured block of this class at an arbitrary acceptance point, weighed from an arbitrary
+        // later point of view.
+        let weigh_at = |accepted: u64, pov: u64| {
+            let carriage = vec![receipt_row(1, accepted + 100), receipt_row(2, accepted + 110)];
+            let mut inp = input(&carriage, &panel, pov, &bonds, &NoStepWeights);
+            inp.accepted_daa = accepted;
+            inp.classes = &view;
+            inp.uncertified_weightless = true;
+            resolve_block_weight_v1(&inp, &RAMP, accept_fixture_signature).expect("every fixture resolves")
+        };
+
+        // Every point of view is at or past the grant, so a rule that read "the class's share NOW"
+        // would pay all of these.
+        for pov in [GRANT, GRANT + 1, GRANT + 1_000, 100_000, 10_000_000] {
+            for accepted in [1_000, GRANT - 2_000, GRANT - 1] {
+                // Past the block's own challenge window as well as past the grant, so the block is
+                // MATURED when it is read: an immature block is worth a bounded fraction and the
+                // row would prove less than it claims.
+                let read_from = pov.max(accepted + 9_000);
+                let w = weigh_at(accepted, read_from);
+                assert_eq!(
+                    w.pwu, 0,
+                    "a block accepted at {accepted}, before the grant at {GRANT}, must still weigh nothing when read \
+                     from {read_from} — a certification that reordered history is worse than one that arrives late"
+                );
+                assert_eq!(w.stage, PalwWorkRampStageV1::Final, "and it must still be a matured block, or the row is vacuous");
+            }
+            for accepted in [GRANT, GRANT + 1, GRANT + 100_000] {
+                assert_eq!(
+                    weigh_at(accepted, pov.max(accepted + 9_000)).pwu,
+                    fixture_pwu(),
+                    "a block accepted at {accepted}, at or after the grant, carries its class's pwu"
+                );
+            }
+        }
+    }
+
+    /// **The fence: off is today's behaviour, byte for byte; on is Decision 7.**
+    ///
+    /// Decision 7 is a fork-choice rule, so it may not change what a shipped preset does — every
+    /// one of them leaves `Params::palw_uncertified_weightless` unset. With the flag `false` a
+    /// share-0 class must still be priced at its full pwu, which is the pre-Decision-7 defect
+    /// stated as an expectation: it is what the running networks do, and it is what an unarmed
+    /// build must keep doing or a rolling deploy would fork the chain at the first such block.
+    #[test]
+    fn adr0069_d7_the_fence_is_what_switches_the_rule() {
+        let bonds = bonds();
+        let panel = [seat(1), seat(2)];
+        let weightless = ShareGrantedAt { granted_from: None };
+        let carriage = vec![receipt_row(1, 1_100), receipt_row(2, 1_110)];
+
+        let weigh = |armed: bool| {
+            let mut inp = input(&carriage, &panel, 9_000, &bonds, &NoStepWeights);
+            inp.classes = &weightless;
+            inp.uncertified_weightless = armed;
+            resolve_block_weight_v1(&inp, &RAMP, accept_fixture_signature).expect("resolves")
+        };
+
+        assert_eq!(weigh(false).pwu, fixture_pwu(), "below the fence a share-0 class is priced exactly as it is today");
+        assert_eq!(weigh(true).pwu, 0, "past it, nothing");
+        assert_eq!(weigh(false).stage, weigh(true).stage, "and the fence moves the price, never the stage");
     }
 }

@@ -1089,6 +1089,55 @@ pub fn immature_contribution_v2(params: &PalwStateParamsV2, pwu: u64) -> u128 {
     (pwu as u128) * (params.beta_permille as u128) / 1000
 }
 
+/// **ADR-0069 Decision 7: may this class's work carry fork-choice weight on this chain?**
+///
+/// The predicate is the class's GRANTED SHARE in `class_shares` — non-zero bears weight, zero or
+/// absent does not. It is sound as a certification proxy because admission enforces the converse:
+/// `palw_class_admission_v2::verify_class_admission_v3` refuses a class asking for `share > 0`
+/// with `NotEndToEndCertified` unless an end-to-end certified family covers every kernel it
+/// reaches. So `share > 0 ⇒ certified`, and it is the only proxy reachable here — the class record
+/// carries no family and the shape profile is not in this state.
+///
+/// Absent is weightless, deliberately: a `Registered`/`Dormant` class holds no row at all
+/// (`assert_internal_consistency` requires exactly that), and a class with no row has not reached
+/// its activation edge, let alone certification.
+///
+/// **This is the whole of the rule.** Every accumulation that carries FORK-CHOICE weight —
+/// `safe_weight` at a claim's `Final`, `bounded_immature` through the `immature_contribution` this
+/// prices at claim creation — is priced through this one function or through a value it produced,
+/// so there is one spelling of a fork-choice rule rather than five, which is the defect this pass
+/// removed from `palw_block_weight_v1` on the V1 side.
+///
+/// Two accumulators deliberately do NOT go through it, each with its reason written where it is
+/// decided: `retired_safe_weight` (`retire_claim` — asking this question twice at two chain points
+/// is what makes the totals drift apart permanently) and the free-prompt spend
+/// (`apply_receipt_spend` — that lane holds its own certificate).
+///
+/// `uncertified_weightless` is `Params::palw_uncertified_weightless` resolved at the block's DAA;
+/// `false` — every shipped preset — makes this the constant `true` and the fold byte-identical to
+/// the one before Decision 7 existed.
+pub fn palw_class_bears_weight_v2(class_shares: &BTreeMap<Hash64, u16>, class_id: &Hash64, uncertified_weightless: bool) -> bool {
+    !uncertified_weightless || class_shares.get(class_id).is_some_and(|share| *share > 0)
+}
+
+/// The `safe_weight` one **attempt** claim contributes — its `pwu`, or zero when its class does
+/// not bear weight (ADR-0069 Decision 7).
+///
+/// Read at the accumulation point, which for an attempt claim's `Final` is the finalizing block.
+/// The residual that follows from that is stated rather than hidden, in two places: a claim
+/// accepted while its class was weightless and finalized after the class took permille IS paid
+/// (`known_limitation_the_safe_half_is_priced_when_the_claim_finalizes`), and a re-derivation run
+/// at a later chain point can therefore only bound `safe_weight` from above
+/// ([`PalwChainStateV2::assert_internal_consistency_v2`]). Both close together, and only, when the
+/// decision is frozen on the claim record — a state-version bump.
+pub fn palw_claim_safe_contribution_v2(
+    class_shares: &BTreeMap<Hash64, u16>,
+    claim: &PalwClaimStateV2,
+    uncertified_weightless: bool,
+) -> u128 {
+    if palw_class_bears_weight_v2(class_shares, &claim.class_id, uncertified_weightless) { claim.pwu as u128 } else { 0 }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Keys and records
 // ---------------------------------------------------------------------------------------------
@@ -2892,6 +2941,12 @@ pub struct PalwChainStateV2 {
     /// inequality. `safe_weight == retired_safe_weight + Σ Final claims` is the same statement the
     /// check made before, with the retired claims named.
     ///
+    /// **Past ADR-0069 Decision 7's fence, read "the MOST safe weight they could have carried".**
+    /// It still accumulates `claim.pwu`, because asking the share table a second question at the
+    /// retirement block is what would make this total and `safe_weight` drift apart with nothing
+    /// left to reconcile them — the argument is at `TransitionBuilder::retire_claim`, and the
+    /// identity it turns into an upper bound is at [`Self::assert_internal_consistency_v2`].
+    ///
     /// Zero on every state of a network that does not retire.
     retired_safe_weight: u128,
 
@@ -3162,6 +3217,18 @@ impl PalwChainStateV2 {
         self.bounded_immature
     }
 
+    /// The `safe_weight` carried by claims this state no longer holds.
+    ///
+    /// Hashed into [`Self::state_root`], so what `retire_claim` books here is a consensus choice
+    /// and not bookkeeping. Public so a test can pin that choice directly: the accumulator is the
+    /// only place a retired claim's contribution still exists, and asserting on `safe_weight`
+    /// alone cannot tell "priced at `pwu`" from "priced through Decision 7" for a claim whose
+    /// class was weightless the whole time — the reviewer's mutation of exactly that line left
+    /// every test green.
+    pub fn retired_safe_weight(&self) -> u128 {
+        self.retired_safe_weight
+    }
+
     pub fn safe_frontier(&self) -> (u64, BlockHash) {
         (self.safe_frontier_blue_score, self.safe_frontier)
     }
@@ -3247,8 +3314,26 @@ impl PalwChainStateV2 {
     /// function of the claim record AND the configured hold span, so an accumulator that could be
     /// recomputed without them would be one the hold is invisible to.
     pub fn assert_internal_consistency(&self, params: &PalwStateParamsV2) -> Result<(), PalwStateV2Error> {
+        self.assert_internal_consistency_v2(params, false)
+    }
+
+    /// [`Self::assert_internal_consistency`] with ADR-0069 Decision 7's weight rule.
+    ///
+    /// `uncertified_weightless` is `Params::palw_uncertified_weightless` resolved at the chain
+    /// point this state stands at, and `false` — every shipped preset — is byte-identical to the
+    /// check before the rule existed, refusals included. The face above passes `false` and is kept
+    /// for the fixtures that predate the rule; **every production caller must reach this one**, the
+    /// same rule `apply_palw_transition_v5` states for its own predecessors.
+    pub fn assert_internal_consistency_v2(
+        &self,
+        params: &PalwStateParamsV2,
+        uncertified_weightless: bool,
+    ) -> Result<(), PalwStateV2Error> {
         let mut exposure: BTreeMap<PalwBondKeyV2, u128> = BTreeMap::new();
         let mut safe: u128 = 0;
+        // The same sum with Decision 7 switched OFF: the most `safe_weight` this claim set could
+        // ever have justified. See the bound at the end of this function for why both are carried.
+        let mut safe_ceiling: u128 = 0;
         let mut immature: u128 = 0;
         let mut unresolved: BTreeSet<(u64, Hash64)> = BTreeSet::new();
         for (id, claim) in &self.claims {
@@ -3275,7 +3360,13 @@ impl PalwChainStateV2 {
                 PalwClaimPhaseV2::Final { .. } => match &claim.source {
                     // An attempt's Final IS its block's certified work.
                     PalwClaimSourceV2::Attempt => {
-                        safe = safe.checked_add(claim.pwu as u128).ok_or(PalwStateV2Error::Overflow("consistency safe"))?;
+                        // ADR-0069 Decision 7, through the SAME helper the fold accumulates with —
+                        // a re-derivation that priced weight by its own rule would refuse every
+                        // state the fold had just built.
+                        let contribution = palw_claim_safe_contribution_v2(&self.class_shares, claim, uncertified_weightless);
+                        safe = safe.checked_add(contribution).ok_or(PalwStateV2Error::Overflow("consistency safe"))?;
+                        safe_ceiling =
+                            safe_ceiling.checked_add(claim.pwu as u128).ok_or(PalwStateV2Error::Overflow("consistency safe"))?;
                     }
                     // A free-prompt Final licenses; only SPENT quanta weighed blocks.
                     PalwClaimSourceV2::FreePrompt { quanta, spent } => {
@@ -3283,7 +3374,12 @@ impl PalwChainStateV2 {
                         let spent_weight = per_quantum
                             .checked_mul(spent.len() as u128)
                             .ok_or(PalwStateV2Error::Overflow("consistency spent weight"))?;
+                        // **The free-prompt lane is NOT priced by Decision 7** — see the open
+                        // question recorded at `apply_receipt_spend`. It contributes identically to
+                        // both sums, so the bound below neither tightens nor loosens around it.
                         safe = safe.checked_add(spent_weight).ok_or(PalwStateV2Error::Overflow("consistency safe"))?;
+                        safe_ceiling =
+                            safe_ceiling.checked_add(spent_weight).ok_or(PalwStateV2Error::Overflow("consistency safe"))?;
                     }
                 },
                 // A voided claim weighs nothing and holds no place in the frontier queue. It may
@@ -3375,7 +3471,58 @@ impl PalwChainStateV2 {
             ));
         }
         let safe = safe.checked_add(self.retired_safe_weight).ok_or(PalwStateV2Error::Overflow("consistency safe"))?;
-        if safe != self.safe_weight {
+        let safe_ceiling =
+            safe_ceiling.checked_add(self.retired_safe_weight).ok_or(PalwStateV2Error::Overflow("consistency safe"))?;
+        // **Dormant, this is the equality it has always been.** With Decision 7 off,
+        // `palw_claim_safe_contribution_v2` is the identity on `pwu`, so `safe == safe_ceiling`
+        // and the test below is `safe == self.safe_weight` — every state this check used to accept
+        // or refuse it accepts or refuses identically, error string included.
+        //
+        // **Armed, it is an UPPER BOUND, and the reason is worth stating in full rather than
+        // discovering.** `safe_weight` is a running total: a claim's contribution is priced once,
+        // at the block that finalizes it, and never revisited — that is E3, the rule that stops a
+        // later certification from reordering history. This re-derivation runs at a different
+        // chain point, against a share table that can have MOVED since, in both directions: a
+        // `Registered` class holds no row until its activation edge and then holds permille, and
+        // reclamation takes a walked-away class's row away again. `retired_safe_weight` cannot
+        // reconcile the difference either — the claims it summarizes are gone — so it counts
+        // `claim.pwu`, the most any of them could have carried (see `retire_claim`).
+        //
+        // **The free-prompt lane is exempt from that slack.** A retiring free-prompt claim folds
+        // `per_quantum × |spent|` — the same expression the live arm above uses — so its half of
+        // both sums is an equality in both directions. That is not a nicety: before it, a spent
+        // free-prompt claim's retirement stranded its weight in `safe_weight`, `safe_weight` rose
+        // ABOVE `safe_ceiling`, and this check refused the node's OWN tip on the next restart. It
+        // is fenced with the rest of Decision 7 because `retired_safe_weight` is rooted; dormant
+        // the stranding is still there, and `retire_claim` says what that costs.
+        //
+        // **What this bound is worth, stated at its real strength rather than its hoped-for one.**
+        // It stops a snapshot from claiming more safe weight than its own LIVE claims could have
+        // justified — the ≈8× fabrication Decision 7 prices at zero — and nothing beyond that.
+        // Understating is unchecked, which is harmless. Two things are NOT covered and saying so
+        // here is the point of writing it down:
+        //
+        //  * `retired_safe_weight` is a carriage-supplied scalar with no re-derivation at all, in
+        //    either fence position, because the claims that would re-derive it are gone by design.
+        //    A carriage may declare any value for it and both the equality and the bound absorb it.
+        //  * `class_shares` is carriage-supplied too, and the only checks on it are structural
+        //    (keys match the non-`Registered`/non-`Dormant` classes, sum is 1000‰). Nothing ties a
+        //    share to a certificate, so a peer can declare its own uncertified class `Active` at
+        //    1000‰ and be weight-bearing by this fold's own predicate.
+        //
+        // So this is NOT the authority on an import, and an earlier draft of this comment claimed
+        // `into_state_v2`'s `state_root` check was. It is not either: `palw_state_root` is not
+        // checked at header validation (see the comment at `import_pruning_point_palw_state`), the
+        // expected root comes from the pruning point's selected-chain-child header, and in a pruned
+        // IBD that header arrived from the same peer that supplied the carriage — so the check
+        // authenticates carriage-against-header, not carriage-against-rule. What actually stands
+        // behind an imported weight is that the peer had to win the headers-proof and PoW race for
+        // that child. Closing the two holes above needs the weight-bearing decision FROZEN on the
+        // claim (a per-claim bit, so `retired_safe_weight` can be re-derived by class) and a
+        // certification field the share table can be checked against — both change the claim /
+        // class encoding, so both need a `PALW_STATE_V2_VERSION` bump and a re-mint.
+        let consistent = if uncertified_weightless { self.safe_weight <= safe_ceiling } else { safe == self.safe_weight };
+        if !consistent {
             return Err(PalwStateV2Error::CarriageInconsistent(format!(
                 "safe_weight {} differs from the Final claims' sum plus the retired total {safe}",
                 self.safe_weight
@@ -3801,6 +3948,11 @@ struct TransitionBuilder<'a> {
     /// about the BLOCK, constant for the whole fold, and threading it through every object arm
     /// would give a future arm the chance to forget it.
     capability_bound: bool,
+    /// ADR-0069 Decision 7, resolved by the caller from `Params::palw_uncertified_weightless` at
+    /// this block's DAA. It rides the builder for `unavailable_abstains`' reason — it is a fact
+    /// about the BLOCK, constant for the whole fold, and an arm that had to be handed it is an arm
+    /// that can forget it.
+    uncertified_weightless: bool,
 }
 
 impl<'a> TransitionBuilder<'a> {
@@ -3809,8 +3961,16 @@ impl<'a> TransitionBuilder<'a> {
         params: &'a PalwStateParamsV2,
         unavailable_abstains: bool,
         capability_bound: bool,
+        uncertified_weightless: bool,
     ) -> Self {
-        Self { params, state: parent.clone(), entries: Vec::new(), unavailable_abstains, capability_bound }
+        Self {
+            params,
+            state: parent.clone(),
+            entries: Vec::new(),
+            unavailable_abstains,
+            capability_bound,
+            uncertified_weightless,
+        }
     }
 
     // Every write goes through one of these, so the delta cannot miss a change.
@@ -4310,8 +4470,14 @@ impl<'a> TransitionBuilder<'a> {
         // certified work; a free-prompt Final only LICENSES — its weight arrives per spent
         // quantum, at the receipt block that spends it.
         if matches!(claim.source, PalwClaimSourceV2::Attempt) {
+            // **ADR-0069 Decision 7, at the site that feeds `safe(C)`.** A class holding no granted
+            // share cannot be prosecuted, so its work buys no fork-choice weight — the block still
+            // advanced DAA, was still paid its budgeted subsidy, and its claim still ran this whole
+            // lattice to get here. Priced through the one helper, so the re-derivation in
+            // `assert_internal_consistency_v2` and `retire_claim` cannot drift from it.
+            let contribution = palw_claim_safe_contribution_v2(&self.state.class_shares, claim, self.uncertified_weightless);
             self.state.safe_weight =
-                self.state.safe_weight.checked_add(claim.pwu as u128).ok_or(PalwStateV2Error::Overflow("safe_weight"))?;
+                self.state.safe_weight.checked_add(contribution).ok_or(PalwStateV2Error::Overflow("safe_weight"))?;
         }
         // ADR-0042 Decision 10: `Final` is where escrow becomes payable, so it is where the
         // release is recorded. Nothing is minted here — this only names an amount and a payee for
@@ -4396,9 +4562,70 @@ impl<'a> TransitionBuilder<'a> {
         // running total does not move here — the claim's contribution is simply carried by a
         // different name, so the consistency identity stays an equality rather than degrading to
         // "at least".
-        if matches!(claim.phase, PalwClaimPhaseV2::Final { .. }) && matches!(claim.source, PalwClaimSourceV2::Attempt) {
+        //
+        // **ADR-0069 Decision 7 is deliberately NOT applied here, and the reason is the one
+        // failure this whole remediation must not cause.** The obvious symmetry — price the
+        // retirement through `palw_claim_safe_contribution_v2` too — asks the share table the same
+        // question at a LATER chain point, and the answer can have changed in between: the
+        // activation edge turns a `Registered` class (no row at all, so weightless) into an
+        // `Active` one holding permille, and reclamation takes a walked-away class's row away
+        // again. Either move makes `retired_safe_weight` carry a number `safe_weight` never
+        // received, and the difference is permanent — the claim is gone, so nothing later can
+        // reconcile it. The drift accumulates over the chain's whole life until every
+        // pruning-point import is refused for a state that obeyed the rule exactly.
+        //
+        // So the ATTEMPT arm stays `claim.pwu`, byte-identical to the pre-Decision-7 fold in both
+        // fence positions, and `retired_safe_weight` means what its name says with one word added:
+        // the MOST safe weight the claims this state no longer holds could have carried. Armed,
+        // that makes the consistency identity an upper bound rather than an equality — stated in
+        // full at [`PalwChainStateV2::assert_internal_consistency_v2`], which is where the two meet.
+        //
+        // **The FREE-PROMPT arm is a different question with an exact answer, and leaving it out
+        // was a node that refuses its own tip.** A free-prompt claim's spent quanta really do move
+        // `safe_weight` (`apply_receipt_spend` adds `pwu / quanta` per spend), and that lane is not
+        // priced by Decision 7 in EITHER direction — not at the spend, not in the re-derivation —
+        // so the amount `safe_weight` received is a pure function of the record: `per_quantum ×
+        // |spent|`, the same expression `assert_internal_consistency_v2` uses for a live one. There
+        // is no share table to ask and therefore no later chain point to disagree with, which is
+        // exactly what makes the attempt arm hard and this one trivial.
+        //
+        // Before this, a retiring free-prompt claim with any spent quantum dropped that weight out
+        // of the re-derivation and left it in `safe_weight` forever. Nothing on the live fold
+        // notices — the fold does not run the check — but `PalwStateCarriageV2::into_state_v2` does,
+        // so the node restarted, `load_tip` refused its own durable tip with `CarriageInconsistent`,
+        // and every peer importing that pruning-point snapshot was refused with it. Both fence
+        // positions failed it: dormant the equality, armed the `<=` bound, because the stranded
+        // weight pushes `safe_weight` ABOVE the ceiling rather than below it.
+        //
+        // **Which is also why arming this fence is a repair only for retirements that have not
+        // happened yet.** Once the strand exists there is nothing left to re-derive it from, so no
+        // fence position accepts the state again and crossing the activation height changes
+        // neither scalar — measured in all three positions by
+        // `arming_the_fence_does_not_repair_a_chain_that_already_stranded_weight`. That is why
+        // `Params::validate_palw_v2` refuses an activation above genesis: a chain that has already
+        // stranded weight is repaired by a re-mint or not at all, and an operator must not be able
+        // to reach the wedged state by scheduling the rule that was supposed to prevent it.
+        //
+        // It is fenced anyway, because `retired_safe_weight` is hashed into `state_root`
+        // ([`PalwChainStateV2::state_root`]) and a block that retires a spent free-prompt claim
+        // therefore roots differently with the repair than without. Dormant is the broken
+        // arithmetic, unchanged, because dormant must be the chain that is already running. The
+        // exposure that leaves is pinned by
+        // `known_limitation_dormant_a_spent_free_prompt_retirement_strands_its_weight`.
+        let retiring: Option<u128> = match (&claim.phase, &claim.source) {
+            (PalwClaimPhaseV2::Final { .. }, PalwClaimSourceV2::Attempt) => Some(claim.pwu as u128),
+            (PalwClaimPhaseV2::Final { .. }, PalwClaimSourceV2::FreePrompt { quanta, spent }) if self.uncertified_weightless => {
+                // `quanta == 0` is unrepresentable (`ZeroQuanta` at creation, and the consistency
+                // check refuses it in every phase), so the `unwrap_or(0)` is a division guard and
+                // not a policy — a claim that reached here with no quanta carried no spend either.
+                let per_quantum = claim.pwu.checked_div(*quanta as u64).unwrap_or(0) as u128;
+                Some(per_quantum.checked_mul(spent.len() as u128).ok_or(PalwStateV2Error::Overflow("retired free-prompt weight"))?)
+            }
+            _ => None,
+        };
+        if let Some(amount) = retiring {
             let old = self.state.retired_safe_weight;
-            let new = old.checked_add(claim.pwu as u128).ok_or(PalwStateV2Error::Overflow("retired_safe_weight"))?;
+            let new = old.checked_add(amount).ok_or(PalwStateV2Error::Overflow("retired_safe_weight"))?;
             self.state.retired_safe_weight = new;
             self.entries.push(PalwDeltaEntryV2::RetiredWeight { old, new });
         }
@@ -4477,17 +4704,21 @@ pub fn apply_palw_transition_v2_with_verdict_policy(
         Some(envelope) => PalwBlockWorkV3::Attempt(envelope),
         None => PalwBlockWorkV3::None,
     };
-    apply_palw_transition_v6(parent, params, None, ctx, accepted_objects, work, &[], unavailable_abstains, false)
+    apply_palw_transition_v6(parent, params, None, ctx, accepted_objects, work, &[], unavailable_abstains, false, false)
         .map(|(state, delta, _)| (state, delta))
 }
 
-/// [`apply_palw_transition_v2_with_verdict_policy`] with **ADR-0071's capability bound** beside
-/// ADR-0065 D4's verdict policy.
+/// [`apply_palw_transition_v2_with_verdict_policy`] with **every fenced POLICY beside ADR-0065
+/// D4's verdict policy** — ADR-0071's capability bound and ADR-0069 Decision 7's weight rule.
 ///
-/// The object-acceptance rehearsal reaches this one: a rehearsal that resolved the capability
-/// fence differently from the fold would admit a declaration into a block's object list that the
-/// fold then refuses, taking the whole block down for a reason acceptance said was fine. Both
-/// `false` is byte-identical to the transition before either parameter existed.
+/// Both arrived as separate faces of the same shape and are one face here on purpose: this is what
+/// the object-acceptance REHEARSAL, the genesis fold and the state-sync walk call, and each exists
+/// to predict what [`apply_palw_transition_v6`] will compute. A rehearsal that resolved the
+/// capability fence differently from the fold admits a declaration the fold then refuses, taking
+/// the whole block down for a reason acceptance said was fine; a rehearsal that priced a weightless
+/// class's work differently computes a different state root for the same block. Two faces would
+/// let a third policy be added to one of them and forgotten in the other, which is the whole defect
+/// class. All-`false` is byte-identical to the transition before either parameter existed.
 pub fn apply_palw_transition_v2_with_policies(
     parent: &PalwChainStateV2,
     params: &PalwStateParamsV2,
@@ -4496,13 +4727,25 @@ pub fn apply_palw_transition_v2_with_policies(
     current_attempt: Option<&PalwAttemptEnvelopeV2>,
     unavailable_abstains: bool,
     capability_bound: bool,
+    uncertified_weightless: bool,
 ) -> Result<(PalwChainStateV2, PalwStateDeltaV2), PalwStateV2Error> {
     let work = match current_attempt {
         Some(envelope) => PalwBlockWorkV3::Attempt(envelope),
         None => PalwBlockWorkV3::None,
     };
-    apply_palw_transition_v6(parent, params, None, ctx, accepted_objects, work, &[], unavailable_abstains, capability_bound)
-        .map(|(state, delta, _)| (state, delta))
+    apply_palw_transition_v6(
+        parent,
+        params,
+        None,
+        ctx,
+        accepted_objects,
+        work,
+        &[],
+        unavailable_abstains,
+        capability_bound,
+        uncertified_weightless,
+    )
+    .map(|(state, delta, _)| (state, delta))
 }
 
 /// The merged-work-free face of [`apply_palw_transition_v4`]: byte-identical semantics to the
@@ -4539,7 +4782,7 @@ pub fn apply_palw_transition_v4(
     block_work: PalwBlockWorkV3<'_>,
     merged_work: &[PalwMergedWorkV1<'_>],
 ) -> Result<(PalwChainStateV2, PalwStateDeltaV2, Vec<(BlockHash, String)>), PalwStateV2Error> {
-    apply_palw_transition_v6(parent, params, admission, ctx, accepted_objects, block_work, merged_work, false, false)
+    apply_palw_transition_v6(parent, params, admission, ctx, accepted_objects, block_work, merged_work, false, false, false)
 }
 
 /// [`apply_palw_transition_v4`] with ADR-0065 D4's verdict policy.
@@ -4560,10 +4803,10 @@ pub fn apply_palw_transition_v5(
     merged_work: &[PalwMergedWorkV1<'_>],
     unavailable_abstains: bool,
 ) -> Result<(PalwChainStateV2, PalwStateDeltaV2, Vec<(BlockHash, String)>), PalwStateV2Error> {
-    apply_palw_transition_v6(parent, params, admission, ctx, accepted_objects, block_work, merged_work, unavailable_abstains, false)
+    apply_palw_transition_v6(parent, params, admission, ctx, accepted_objects, block_work, merged_work, unavailable_abstains, false, false)
 }
 
-/// [`apply_palw_transition_v5`] with **ADR-0071's capability bound** (SA-1..SA-4).
+/// [`apply_palw_transition_v5`] with **ADR-0071's capability bound** (SA-1..SA-4) and **ADR-0069 Decision 7**.
 ///
 /// `capability_bound` is `Params::palw_capability_bound` resolved at `ctx.daa_score`, and `false`
 /// — every shipped preset — is byte-identical to the transition before the parameter existed:
@@ -4572,6 +4815,14 @@ pub fn apply_palw_transition_v5(
 /// fixtures that predate the rule; **every production caller must reach this one**, because a fold
 /// that disagrees with the acceptance layer about whether a declaration was refused computes a
 /// different state root.
+///
+/// **And with ADR-0069 Decision 7's weight rule.** `uncertified_weightless` is `Params::palw_uncertified_weightless` resolved at `ctx.daa_score`,
+/// and `false` — every shipped preset — is byte-identical to the transition before the parameter
+/// existed, state root included. Past it, an attempt claim whose class holds no granted share
+/// prices at zero in `bounded_immature` (at creation) and in `safe_weight` (at its `Final`); the
+/// block is otherwise untouched, which is the whole of Decision 7. A fold that disagrees with its
+/// peers about what a weightless class's block is worth computes a different state root, so the
+/// same "every production caller must reach this one" applies to it.
 #[allow(clippy::too_many_arguments)]
 pub fn apply_palw_transition_v6(
     parent: &PalwChainStateV2,
@@ -4583,6 +4834,7 @@ pub fn apply_palw_transition_v6(
     merged_work: &[PalwMergedWorkV1<'_>],
     unavailable_abstains: bool,
     capability_bound: bool,
+    uncertified_weightless: bool,
 ) -> Result<(PalwChainStateV2, PalwStateDeltaV2, Vec<(BlockHash, String)>), PalwStateV2Error> {
     // 1. Context monotonicity: blue score strictly increases along a chain, DAA never decreases.
     if let Some(last) = &parent.last_point {
@@ -4594,7 +4846,7 @@ pub fn apply_palw_transition_v6(
         }
     }
 
-    let mut builder = TransitionBuilder::new(parent, params, unavailable_abstains, capability_bound);
+    let mut builder = TransitionBuilder::new(parent, params, unavailable_abstains, capability_bound, uncertified_weightless);
 
     // 1b. Drain the payout queue THIS block's coinbase paid. It must happen before the sweeps,
     //     because the sweeps are what refill it: a claim finalized by this block is paid by the
@@ -4967,7 +5219,13 @@ fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCon
                 // A class that certified and then decayed out of the table is exempted too, which
                 // is generous by one case and deliberately so: the arm decides whether to DESTROY
                 // collateral, and the direction to be wrong in is the one that does not.
-                let class_holds_weight = builder.state.class_shares.get(&claim.class_id).copied().unwrap_or(0) > 0;
+                //
+                // Through the SAME helper the fold and the re-derivation use, with the predicate
+                // asked unconditionally: this exemption is not fenced and never was — it decides
+                // whether to destroy collateral, and it answered `share > 0` before Decision 7
+                // existed. Spelling it a third time by hand is what let the ADR claim "one helper"
+                // while three call sites each held their own copy of the question.
+                let class_holds_weight = palw_class_bears_weight_v2(&builder.state.class_shares, &claim.class_id, true);
                 builder.write_court(session_id, None);
                 match no_show.silent_party {
                     // **A silence at the OPENING rung is not a conviction** (audit M2-5).
@@ -6919,6 +7177,21 @@ fn apply_receipt_spend(
         return Err(PalwStateV2Error::QuantumAlreadySpent { claim: claim_id, index: spend.quantum_index });
     }
     let per_quantum = claim.pwu / (*quanta as u64);
+    // **ADR-0069 Decision 7 is deliberately NOT applied here, and this is an open question rather
+    // than an oversight.**
+    //
+    // Decision 7's predicate is the ATTEMPT lane's granted cadence share, and it is a certification
+    // proxy only because `verify_class_admission_v3` refuses `share > 0` to an uncertified family.
+    // A spent quantum is free-prompt-lane weight, and that lane carries its own certification
+    // (ADR-0075's `fp_certified_families` / `fp_certified_classes`, ADR-0074's pricing) — a class
+    // can hold no cadence share and still be a certified free-prompt executor, and the converse
+    // holds too. Gating this on `class_shares` would therefore price one lane by the other lane's
+    // certificate, which is the shape of defect Decision 7 exists to remove, arriving from the
+    // other side.
+    //
+    // The candidate rule, if the FP lane wants one, is `fp_certified_classes` membership at this
+    // block's chain point. That is a different decision with a different proof obligation and it
+    // belongs to whoever owns ADR-0074/0075, not to this remediation.
     builder.state.safe_weight =
         builder.state.safe_weight.checked_add(per_quantum as u128).ok_or(PalwStateV2Error::Overflow("safe_weight"))?;
     let mut updated = claim.clone();
@@ -7006,7 +7279,24 @@ fn apply_attempt(
         trace_chunk_count: attempt.trace_chunk_count,
         trace_retention_daa: attempt.trace_retention_daa,
         reserved,
-        immature_contribution: immature_contribution_v2(builder.params, attempt.pwu),
+        // **ADR-0069 Decision 7's immature half, priced ONCE and stored.**
+        //
+        // Deliberately here rather than at the three sites that add and subtract it. This field is
+        // primary data: `reserve_for_claim`, `release_for_claim`, `void_claim` and the consistency
+        // re-derivation all read the STORED value, so pricing it at creation makes every one of
+        // them agree by construction and makes the decision a fact about the block that produced
+        // the claim — E3 exactly, with no way for a later share grant to reach back. Gating the
+        // accumulations instead would let a claim reserved at zero be released at `β·pwu/1000`
+        // after a share change, which underflows `bounded_immature`.
+        immature_contribution: if palw_class_bears_weight_v2(
+            &builder.state.class_shares,
+            &attempt.class_id,
+            builder.uncertified_weightless,
+        ) {
+            immature_contribution_v2(builder.params, attempt.pwu)
+        } else {
+            0
+        },
         // For the block's OWN attempt: the claim IS this block, so the block's carve funds
         // exactly one claim and the "never exceeds the subsidy" bound is structural rather than
         // arithmetic. For a MERGED blue's attempt (ADR-0058 Decision 5): zero — the coinbase
@@ -7368,6 +7658,20 @@ impl PalwStateCarriageV2 {
     /// lie about a DIFFERENT state; "load then notice later" is how a poisoned summary becomes a
     /// sink.
     pub fn into_state(self, params: &PalwStateParamsV2, expected_root: Option<Hash64>) -> Result<PalwChainStateV2, PalwStateV2Error> {
+        self.into_state_v2(params, expected_root, false)
+    }
+
+    /// [`Self::into_state`] with ADR-0069 Decision 7's weight rule, which the consistency check
+    /// needs in order not to refuse a state that obeyed it — see
+    /// [`PalwChainStateV2::assert_internal_consistency_v2`]. `false` on every shipped preset and
+    /// byte-identical to the import before the rule existed; the face above passes `false` for the
+    /// fixtures, and every production import must reach this one.
+    pub fn into_state_v2(
+        self,
+        params: &PalwStateParamsV2,
+        expected_root: Option<Hash64>,
+        uncertified_weightless: bool,
+    ) -> Result<PalwChainStateV2, PalwStateV2Error> {
         if self.version != PALW_STATE_V2_VERSION {
             return Err(PalwStateV2Error::CarriageInconsistent(format!(
                 "carriage version {} is not {}",
@@ -7410,7 +7714,7 @@ impl PalwStateCarriageV2 {
         };
         rebuild_deadline_free_indices(&mut state);
         rebuild_deadline_index_v2(&mut state, params)?;
-        state.assert_internal_consistency(params)?;
+        state.assert_internal_consistency_v2(params, uncertified_weightless)?;
         state.assert_deadline_consistency(params)?;
         if let Some(expected) = expected_root {
             let got = state.state_root();
@@ -7670,6 +7974,7 @@ pub(crate) mod tests {
             &[],
             false,
             true,
+            false,
         )
         .expect("the bound admits exactly sixteen");
 
@@ -7683,6 +7988,7 @@ pub(crate) mod tests {
             &[],
             false,
             true,
+            false,
         )
         .expect_err("seventeen is one past the bound");
         assert!(
@@ -7706,7 +8012,7 @@ pub(crate) mod tests {
         let bond = bond_key(1);
 
         let (four, ..) =
-            apply_palw_transition_v6(&state, &p, None, &ctx(2, 11, 2), &[declare(1, &ids)], PalwBlockWorkV3::None, &[], false, true)
+            apply_palw_transition_v6(&state, &p, None, &ctx(2, 11, 2), &[declare(1, &ids)], PalwBlockWorkV3::None, &[], false, true, false)
                 .expect("four classes are declarable");
         let record = four.bond(&bond).expect("the bond stands");
         assert_eq!(record.capable_classes.len(), 4);
@@ -7726,6 +8032,7 @@ pub(crate) mod tests {
             &[],
             false,
             true,
+            false,
         )
         .expect("a declaration replaces");
         let record = one.bond(&bond).expect("the bond stands");
@@ -7757,6 +8064,7 @@ pub(crate) mod tests {
             &[],
             false,
             true,
+            false,
         )
         .expect("two classes fit exactly");
 
@@ -7770,6 +8078,7 @@ pub(crate) mod tests {
             &[],
             false,
             true,
+            false,
         )
         .expect_err("three do not");
         assert!(
@@ -7793,13 +8102,13 @@ pub(crate) mod tests {
         let bond = bond_key(1);
 
         let (declared, ..) =
-            apply_palw_transition_v6(&state, &p, None, &ctx(2, 11, 2), &[declare(1, &ids)], PalwBlockWorkV3::None, &[], false, true)
+            apply_palw_transition_v6(&state, &p, None, &ctx(2, 11, 2), &[declare(1, &ids)], PalwBlockWorkV3::None, &[], false, true, false)
                 .expect("an active bond declares");
         assert_eq!(palw_bond_capability_exposure_v1(declared.bond(&bond).unwrap()), 2 * PALW_CAPABILITY_EXPOSURE_SOMPI as u128);
 
         let retire = PalwConsensusObjectV2::BondRetireRequested { bond, signature: vec![1] };
         let (retired, ..) =
-            apply_palw_transition_v6(&declared, &p, None, &ctx(3, 12, 3), &[retire], PalwBlockWorkV3::None, &[], false, true)
+            apply_palw_transition_v6(&declared, &p, None, &ctx(3, 12, 3), &[retire], PalwBlockWorkV3::None, &[], false, true, false)
                 .expect("the bond retires");
         let record = retired.bond(&bond).expect("a retiring bond is still a row");
         assert!(matches!(record.status, PalwBondStatusV2::Retiring { .. }));
@@ -7816,6 +8125,7 @@ pub(crate) mod tests {
             &[],
             false,
             true,
+            false,
         )
         .expect_err("a retiring bond may not declare");
         assert!(
@@ -7845,6 +8155,7 @@ pub(crate) mod tests {
             &[],
             false,
             false,
+            false,
         )
         .expect("with the fence off there is no bound and no price");
         let legacy = apply_palw_transition_v2(&state, &p, &ctx(2, 11, 2), std::slice::from_ref(&over), None)
@@ -7853,7 +8164,7 @@ pub(crate) mod tests {
         assert_eq!(fenced_off.1, legacy.1, "including the delta, entry for entry");
 
         assert!(
-            apply_palw_transition_v6(&state, &p, None, &ctx(2, 11, 2), &[over], PalwBlockWorkV3::None, &[], false, true).is_err(),
+            apply_palw_transition_v6(&state, &p, None, &ctx(2, 11, 2), &[over], PalwBlockWorkV3::None, &[], false, true, false).is_err(),
             "and the only thing that changed is the fence"
         );
     }
@@ -7878,7 +8189,7 @@ pub(crate) mod tests {
         assert!(!palw_bond_produced_on_class_v1(&off, &bond, &class), "the fence is off, so nothing is recorded");
 
         let (on, ..) =
-            apply_palw_transition_v6(&state, &p, None, &ctx(2, 11, 2), &[], PalwBlockWorkV3::Attempt(&env), &[], false, true)
+            apply_palw_transition_v6(&state, &p, None, &ctx(2, 11, 2), &[], PalwBlockWorkV3::Attempt(&env), &[], false, true, false)
                 .expect("the same attempt lands past the fence");
         assert!(palw_bond_produced_on_class_v1(&on, &bond, &class), "and the production fact is on the chain");
         let fact = on.capability_fact(&palw_capability_fact_key_v1(&class, &bond)).expect("the row exists");
