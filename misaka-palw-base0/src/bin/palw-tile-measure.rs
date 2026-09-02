@@ -152,13 +152,16 @@ fn label(row: &PalwCourtCostRowV1) -> String {
     format!("{}[{}] {:?} `{weight}`", row.table, row.index, row.op_kind)
 }
 
-/// Section 1 and 2: the disputed attention leaf's close at three contexts, both maps.
+/// One map's priceable readings: `(n_ctx, the attention-KV node's close, the class's close)`.
+type ClosePoint = (u32, u64, u64);
+
+/// Section 1 and 2: the disputed attention leaf's close at four contexts, both maps.
 fn attention_leaf_table(kind: &str, build: impl Fn(Map, u32) -> PalwShapeProfileV3, contexts: &[u32]) {
     println!("### {kind}: a disputed attention leaf's close, anchored at the 2^32 ladder");
     println!();
     println!("| n_ctx | interval | map | kv_checkpoint_bytes | attention-KV node | its close | max_close_bytes | binding node |");
     println!("|---|---|---|---|---|---|---|---|");
-    let mut series: Vec<(Map, Vec<(u32, u64, u64)>)> = vec![(Map::IntegerV2, vec![]), (Map::TiledV3, vec![])];
+    let mut series: Vec<(Map, Vec<ClosePoint>)> = vec![(Map::IntegerV2, vec![]), (Map::TiledV3, vec![])];
     for &n_ctx in contexts {
         for (map, points) in series.iter_mut() {
             let profile = build(*map, n_ctx);
@@ -194,11 +197,11 @@ fn attention_leaf_table(kind: &str, build: impl Fn(Map, u32) -> PalwShapeProfile
     println!();
     println!("Growth of the attention-KV node's close, and of the whole class's:");
     println!();
-    println!("| map | points (n_ctx → attn-KV close) | ratio | shape |");
-    println!("|---|---|---|---|");
+    println!("| map | points (n_ctx → attn-KV close) | ratio | consecutive slopes (bytes/position) | shape |");
+    println!("|---|---|---|---|---|");
     for (map, points) in &series {
         if points.len() < 2 {
-            println!("| {} | (fewer than two priceable points) | — | — |", map.name());
+            println!("| {} | (fewer than two priceable points) | — | — | — |", map.name());
             continue;
         }
         let spelled = points.iter().map(|(n, c, _)| format!("{n} → {c}")).collect::<Vec<_>>().join(", ");
@@ -206,18 +209,29 @@ fn attention_leaf_table(kind: &str, build: impl Fn(Map, u32) -> PalwShapeProfile
         let (n1, c1, _) = points[points.len() - 1];
         let ctx_ratio = n1 as f64 / n0 as f64;
         let cost_ratio = if c0 == 0 { f64::NAN } else { c1 as f64 / c0 as f64 };
-        // Named from the two ratios rather than from a guess: flat is 1x under a growing context,
-        // linear tracks it, and anything strictly between the two is sub-linear.
+        // **Named from the SLOPES, not from the end-to-end ratio.** A ratio cannot tell an affine
+        // line from a sub-linear curve: the v3 reading grows 3.53x over a 4x context only because
+        // it carries a ~40 KiB constant, and a ratio-only classifier called that "sub-linear but
+        // GROWING" for a series whose slope is 185.3 then 187.3 — one straight line, and the
+        // opposite of the reading a reader would have inherited. Consecutive slopes settle it,
+        // which is the same method §6 uses and the reason §1–2 now prices a third context.
+        let slopes: Vec<f64> = points.windows(2).map(|w| (w[1].1 as f64 - w[0].1 as f64) / (w[1].0 as f64 - w[0].0 as f64)).collect();
+        let spelled_slopes = slopes.iter().map(|s| format!("{s:.2}")).collect::<Vec<_>>().join(", ");
+        let lo = slopes.iter().cloned().fold(f64::INFINITY, f64::min);
+        let hi = slopes.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
         let shape = if (cost_ratio - 1.0).abs() < 0.01 {
-            "FLAT"
-        } else if cost_ratio > ctx_ratio * 0.9 {
-            "LINEAR in n_ctx"
-        } else if cost_ratio > 1.5 {
-            "sub-linear but GROWING"
+            "FLAT".to_string()
+        } else if slopes.len() < 2 {
+            // Two points is one slope, and one slope cannot be checked against anything.
+            format!("GROWING at {lo:.1} bytes/position (one slope — not enough points to name the shape)")
+        } else if hi <= lo * 1.10 {
+            format!("**LINEAR in n_ctx** — one slope, ~{:.1} bytes/position", (lo + hi) / 2.0)
+        } else if hi > lo * 1.10 && slopes[slopes.len() - 1] < slopes[0] {
+            "sub-linear but GROWING".to_string()
         } else {
-            "near-flat"
+            "GROWING faster than linear".to_string()
         };
-        println!("| {} | {spelled} | {cost_ratio:.2}x over a {ctx_ratio:.0}x context | **{shape}** |", map.name());
+        println!("| {} | {spelled} | {cost_ratio:.2}x over a {ctx_ratio:.0}x context | {spelled_slopes} | {shape} |", map.name());
     }
     println!();
 }
@@ -302,7 +316,7 @@ fn residue(kind: &str, build: impl Fn(Map, u32) -> PalwShapeProfileV3, narrow: u
             ));
         }
     }
-    deltas.sort_by(|x, y| y.3.cmp(&x.3));
+    deltas.sort_by_key(|d| std::cmp::Reverse(d.3));
     println!("| node | close at {narrow} | close at {wide} | delta | bytes/position | of which opening | of which evidence |");
     println!("|---|---|---|---|---|---|---|");
     let span = (wide - narrow) as f64;
@@ -523,7 +537,10 @@ fn main() {
 
     println!("## §1–2 — the leaf, and its growth");
     println!();
-    let contexts = [1_000u32, 4_096, 32_768];
+    // 2,000 is here so the growth classifier below has THREE priceable points and can check a
+    // slope against another slope; 32,768 is not priceable (§7) and 1,000/4,096 are the two the
+    // permanent tests pin.
+    let contexts = [1_000u32, 2_000, 4_096, 32_768];
     attention_leaf_table("Dense (Qwen2.5-1.5B / A16)", |m, n| m.dense(n), &contexts);
     attention_leaf_table("Hybrid (Qwen3.6-35B-A3B)", |m, n| m.hybrid(n), &contexts);
 
