@@ -1289,9 +1289,14 @@ pub enum PalwFpWorkerFrameV1 {
     /// One generated id as soon as it is selected (ADR-0077 Decision 2 — the answer streams; the
     /// commitment does not). `rendered` is this id's rendering alone; the gateway re-renders the
     /// committed ids at completion and refuses a stream that does not match them.
-    Token { token_id: u32, rendered: Vec<u8> } = 1,
+    Token {
+        token_id: u32,
+        rendered: Vec<u8>,
+    } = 1,
     Result(Box<PalwFpWorkerResultV3>) = 2,
-    Refused { reason: String } = 3,
+    Refused {
+        reason: String,
+    } = 3,
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1998,6 +2003,26 @@ pub const PALW_FP_MATERIAL_V1_MAGIC: [u8; 4] = *b"FPM1";
 /// and what changes is that failing to serve it is now the only way to withhold a prompt. That
 /// failure is never a verdict about arithmetic; which arm it reaches is
 /// [`crate::palw_panel_da_v1::palw_panel_da_withholding_arm_v1`]'s answer.
+///
+/// # This payload carries the ids WHOLE, and ADR-0081 Decision 3 does not change that
+///
+/// Decision 3 makes `prompt_token_ids_hash` an openable Merkle root so a COURT CLOSE can prove one
+/// id instead of carrying all of them — `n_ctx x 4` bytes on every node of the graph against an
+/// 80 KiB carrier. None of that reasoning applies here, and shrinking this payload to an opening
+/// would be a regression rather than an optimisation:
+///
+/// * a seat REPLAYS the job. It needs every id, not the one a dispute happens to address, and an
+///   opening of one tile is exactly what it cannot replay from.
+/// * a data-availability obligation is not a close. There is no carrier budget on this path — the
+///   payload is served peer-to-peer on request, not relayed as a transaction — so the bytes an
+///   opening would save are bytes nothing was competing for.
+/// * under `PanelDa` this is the ONLY place the ids exist off the executor's disk. A payload that
+///   carried less than the whole prompt would make withholding *representable as a well-formed
+///   response*, which is precisely the failure Decision 16's disclosure rule exists to prevent.
+///
+/// So the encoding below is deliberately NOT optimised, and `palw_fp_prompt_ids_admit_v1` keeps
+/// re-deriving the commitment over the whole list. Past the fence it re-derives the Merkle root
+/// over the whole list instead of the flat digest; the LIST is what is carried either way.
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwFpMaterialV1 {
     pub job: PalwFreePromptJobV3,
@@ -2183,6 +2208,36 @@ mod fp_material_tests {
         let back = palw_fp_material_decode_v1(&bytes).expect("round trip");
         assert_eq!(back.prompt_token_ids, ids);
         assert_eq!(back.job, job(&ids));
+    }
+
+    /// **The DA payload still carries the ids WHOLE, and that is the design** (ADR-0081 Decision 3
+    /// carve-out).
+    ///
+    /// Decision 3 makes a COURT CLOSE log-shaped in the context. This payload is not a close: a
+    /// seat replaying the job needs every id, there is no carrier budget on a peer-to-peer fetch,
+    /// and under `PanelDa` a payload carrying less than the whole prompt would make withholding
+    /// representable as a well-formed response. So the encoding is linear in the prompt by
+    /// intent, and this test is the tripwire for anyone who reads "the ids became a Merkle root"
+    /// and shrinks the wrong thing.
+    #[test]
+    fn the_da_material_carries_every_prompt_id_and_is_deliberately_not_an_opening() {
+        let short: Vec<u32> = (0..8u32).collect();
+        let long: Vec<u32> = (0..512u32).collect();
+        let a = palw_fp_material_encode_v1(&job(&short), &short);
+        let b = palw_fp_material_encode_v1(&job(&long), &long);
+        // Linear, not logarithmic: exactly four bytes per additional id and nothing else moved.
+        assert_eq!(b.len() - a.len(), (long.len() - short.len()) * 4, "the payload is O(prompt) by design");
+        // Every id round-trips — what a replaying seat needs and what one opened tile cannot give.
+        assert_eq!(palw_fp_material_decode_v1(&b).expect("round trip").prompt_token_ids, long);
+        // …and the COURT's term at the same context is what Decision 3 actually shrank. The two
+        // paths are priced differently on purpose; asserting the gap keeps that stated.
+        let close = crate::palw_prompt_ids_v1::prompt_ids_close_bytes_v1(
+            crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1,
+            long.len() as u64,
+        )
+        .expect("512 ids open");
+        assert_eq!(close, 472, "one tile plus a four-deep path plus the opening header");
+        assert!(b.len() as u64 > 4 * close, "the DA payload is {} bytes against a {close}-byte close term", b.len());
     }
 
     /// The decoder refuses what it can check, and only that: swapped ids (the hash binding), a
