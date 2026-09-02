@@ -204,20 +204,16 @@ impl PalwProducerService {
                 None
             }
         };
-        // Loaded once — through the SDK, each file by its own container's magic — and each file
-        // is refused loudly rather than skipped quietly: an operator who passed
+        // Loaded once — through the SDK, each file by its own container's magic, and once PER
+        // PROCESS: the panel names the same list and takes this constructor's holdings rather than
+        // mapping and hashing the same file again (`palw_backends::load_class_holdings_v1`). Each
+        // file is refused loudly rather than skipped quietly: an operator who passed
         // `--palw-class-artifact` meant this node to produce for that class, and a node that
         // silently fell back to the floor would look like a working producer that never touches
         // the class they deployed 1.7 GiB for.
         let sdk = misaka_palw_sdk::PalwClassSdk::builtin_v1(config.court, config.network_id.as_bytes().to_vec());
-        let (loaded, skipped) = sdk.load_artifacts_bounded_v1(&config.class_artifacts, config.class_cache_bytes);
-        for holding in &loaded {
-            info!("[{PALW_PRODUCER}] {}", holding.summary);
-        }
-        for (path, why) in &skipped {
-            warn!("[{PALW_PRODUCER}] class artifact {} is not held: {why}", path.display());
-        }
-        let class_holdings = loaded;
+        let class_holdings =
+            crate::palw_backends::load_class_holdings_v1(PALW_PRODUCER, &sdk, &config.class_artifacts, config.class_cache_bytes);
         Self {
             config,
             shutdown: kaspa_utils::triggers::SingleTrigger::default(),

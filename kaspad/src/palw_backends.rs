@@ -12,15 +12,23 @@
 //! installed can always serve it, and a converted class this node lacks the artifact for is an
 //! error and never a fallback to some class it does have.
 
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
+
 use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
 use kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2;
+use kaspa_core::{info, warn};
 use kaspa_hashes::Hash64;
 use misaka_palw_sdk::{PalwClassSdk, PalwLoadedArtifactV1};
 
 /// What a node holds that lets it act for some class: the SDK (which classes exist, how they
 /// load, pair, and execute) plus this node's loaded holdings. Rebuilt per duty and per pooled
 /// payload; the holdings are `Arc`-backed inside, so the rebuild is pointer clones, not gigabytes
-/// (audit M2-14).
+/// (audit M2-14). That sharing is between REBUILDS of one service's registry; between the two
+/// services that each build one from the same `--palw-class-artifact` list it is
+/// [`load_class_holdings_v1`], because each constructor loading the list for itself was two
+/// mappings and two root passes over the same 33 GiB file (testnet-11 Relaunch 5c).
 pub struct PalwBackendRegistry {
     sdk: PalwClassSdk,
     holdings: Vec<PalwLoadedArtifactV1>,
@@ -84,6 +92,97 @@ impl PalwBackendRegistry {
             },
         }
     }
+}
+
+/// **What identifies an artifact FILE to the process-wide holdings below**: the path the operator
+/// named, resolved (two spellings of one file are one file), and the size and modification time
+/// it had when it was mapped. A re-mint dropped in under the same name has a different size or
+/// mtime, so it is mapped afresh and re-hashed rather than served from the previous file's root —
+/// the root is derived from bytes, and a key blind to which bytes would let a stale derivation
+/// stand in for a fresh one, which is a declared root wearing a derived one's clothes.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct HeldArtifactKey {
+    path: PathBuf,
+    len: u64,
+    modified: Option<std::time::SystemTime>,
+}
+
+impl HeldArtifactKey {
+    /// `None` when the file cannot be stat'ed: the load itself then refuses by name, and a
+    /// refusal is never held.
+    fn of(path: &Path) -> Option<Self> {
+        let meta = std::fs::metadata(path).ok()?;
+        let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        Some(Self { path, len: meta.len(), modified: meta.modified().ok() })
+    }
+}
+
+/// The holdings this process has loaded, by file identity — the one place a mapping lives.
+fn held_artifacts() -> &'static Mutex<HashMap<HeldArtifactKey, PalwLoadedArtifactV1>> {
+    static HELD: OnceLock<Mutex<HashMap<HeldArtifactKey, PalwLoadedArtifactV1>>> = OnceLock::new();
+    HELD.get_or_init(Default::default)
+}
+
+/// **Load a duty's `--palw-class-artifact` list, mapping and hashing each file at most once per
+/// process.**
+///
+/// The producer and the panel build their registries from the same list, and each service's
+/// constructor loaded it for itself. On testnet-11 Relaunch 5c (2026-09-02) that was two `mmap`s
+/// of one 33 GiB file and two full root passes over it — `[palw-producer] mapped …` at 01:49:44,
+/// `[palw-panel] mapped …` at 01:57:23 on the same host — with a 24 GiB machine paying the
+/// second pass's page-cache churn right after the first. The `Arc` inside a holding shares it
+/// between rebuilds of ONE duty's registry, which is all the claim on [`PalwBackendRegistry`]
+/// ever covered; between the two constructors nothing was shared, and that is where the second
+/// mapping came from.
+///
+/// So the process holds each artifact once, here, and every duty that names that file gets the
+/// same holding back: pointer clones of one mapping, the root computed exactly once. The
+/// operator's byte bound still applies per duty, in their order, through the SDK's own loop — a
+/// file the bound would skip is skipped whether or not another duty holds it, because the bound
+/// says what this duty declares it can serve, not what the process has mapped.
+///
+/// Every outcome is logged under `role` as the two constructors logged it before: the lineage's
+/// own summary for a file this call mapped (`mapped Qwen3.6 artifact …` — once per file per
+/// process, so that line still counts artifacts), a line naming the file for one another duty
+/// already holds, and a warning for each path not held and why. A file about to be mapped is
+/// announced first, because a cold root pass over 33 GiB is minutes of otherwise silent startup.
+pub fn load_class_holdings_v1(role: &str, sdk: &PalwClassSdk, paths: &[PathBuf], bound_bytes: u64) -> Vec<PalwLoadedArtifactV1> {
+    // Held across the whole load on purpose: the guarantee is "once", so a second duty asking
+    // for a file the first is still hashing waits for that holding rather than starting its own
+    // pass. Nothing under the lock calls back in. A load that panicked (the root pass on a file
+    // that became unreadable) poisons the lock without corrupting the map, so a later duty takes
+    // the map as it stands rather than losing every holding to one bad file.
+    let mut held = held_artifacts().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let (holdings, skipped) = sdk.load_artifacts_bounded_with_v1(paths, bound_bytes, |path| {
+        let key = HeldArtifactKey::of(path);
+        if let Some(holding) = key.as_ref().and_then(|key| held.get(key)) {
+            info!(
+                "[{role}] class artifact {} is already held by this process ({}): sharing that holding, \
+                 not mapping it a second time",
+                path.display(),
+                holding.lineage_id
+            );
+            return Ok(holding.clone());
+        }
+        if let Some(key) = &key {
+            info!(
+                "[{role}] loading class artifact {} ({:.2} GiB); a mapped class derives its root in one pass over the file, \
+                 which is minutes on a cold disk",
+                path.display(),
+                key.len as f64 / (1u64 << 30) as f64
+            );
+        }
+        let holding = sdk.load_artifact(path)?;
+        info!("[{role}] {}", holding.summary);
+        if let Some(key) = key {
+            held.insert(key, holding.clone());
+        }
+        Ok(holding)
+    });
+    for (path, why) in &skipped {
+        warn!("[{role}] class artifact {} is not held: {why}", path.display());
+    }
+    holdings
 }
 
 /// The hybrid class's chain id — **re-exported, not re-derived**.
@@ -222,5 +321,90 @@ mod tests {
             Ok(b) => panic!("a node with no artifacts resolved an unknown class to {}", b.model_id()),
         };
         assert!(err.contains("cannot serve the registered class"), "{err}");
+    }
+
+    /// A `.palwq36` on disk, written from the dev fixture the way the base0 round-trip test writes
+    /// one. `layers` changes the file's size, which is what a replaced artifact looks like to the
+    /// holdings' key.
+    fn write_qwen36_fixture(path: &Path, layers: usize) {
+        use misaka_palw_base0::qwen36::{Qwen36Writer, qwen36_dev_fixture};
+        let owned = qwen36_dev_fixture(layers, 8);
+        let plan: Vec<(String, usize)> =
+            owned.tensor_names().iter().map(|n| (n.to_string(), owned.tensor(n).expect("present").len())).collect();
+        let mut writer =
+            Qwen36Writer::create(path, &owned.shape, &owned.rope, owned.params_map(), plan.clone()).expect("the file is created");
+        for (name, _) in &plan {
+            writer.push(name, owned.tensor(name).expect("present")).expect("the tensor is appended");
+        }
+        writer.finish().expect("the plan is filled");
+    }
+
+    fn temp_artifact(name: &str) -> PathBuf {
+        std::env::temp_dir().join(format!("misaka-holdings-{name}-{}.palwq36", std::process::id()))
+    }
+
+    fn sdk() -> PalwClassSdk {
+        PalwClassSdk::builtin_v1(court(), b"misaka-palw-rc".to_vec())
+    }
+
+    fn qwen36_parts(holding: &PalwLoadedArtifactV1) -> (Hash64, std::sync::Arc<misaka_palw_base0::qwen36::Qwen36ArtifactV1>) {
+        misaka_palw_sdk::lineages::qwen36::parts_of(holding).expect("a Qwen3.6 holding")
+    }
+
+    /// **Two duties naming one file hold one mapping.** The producer's and the panel's
+    /// constructors each ask for the operator's list; the second answer is the first's holding —
+    /// the same `Arc`, the same mapping, the root computed once — which is the whole of the fix
+    /// for the testnet-11 double mapping.
+    #[test]
+    fn two_duties_naming_one_artifact_share_one_mapping() {
+        let path = temp_artifact("shared");
+        write_qwen36_fixture(&path, 1);
+        let producer = load_class_holdings_v1("test-producer", &sdk(), std::slice::from_ref(&path), 0);
+        let panel = load_class_holdings_v1("test-panel", &sdk(), std::slice::from_ref(&path), 0);
+        assert_eq!((producer.len(), panel.len()), (1, 1), "both duties hold the file");
+        assert!(
+            std::sync::Arc::ptr_eq(&producer[0].payload(), &panel[0].payload()),
+            "the panel holds the producer's holding, not a second one"
+        );
+        let (root_a, map_a) = qwen36_parts(&producer[0]);
+        let (root_b, map_b) = qwen36_parts(&panel[0]);
+        assert_eq!(root_a, root_b, "one root, computed once");
+        assert!(std::sync::Arc::ptr_eq(&map_a, &map_b), "one `Qwen36ArtifactV1`, one mmap");
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// **A file replaced under the same name is mapped and hashed afresh.** The key is the file's
+    /// identity (size, mtime), not the path string: a re-mint dropped in over the old artifact has
+    /// a different root, and serving the previous mapping's root for it would be a declared root
+    /// wearing a derived one's clothes.
+    #[test]
+    fn a_replaced_artifact_is_mapped_and_hashed_afresh() {
+        let path = temp_artifact("replaced");
+        write_qwen36_fixture(&path, 1);
+        let first = load_class_holdings_v1("test", &sdk(), std::slice::from_ref(&path), 0);
+        // Replaced by rename, the way an operator drops in a new artifact: the old mapping stays
+        // valid on its own inode, and the path now names a file of another size.
+        let staged = temp_artifact("replaced-staged");
+        write_qwen36_fixture(&staged, 2);
+        std::fs::rename(&staged, &path).expect("renamed over the old artifact");
+        let second = load_class_holdings_v1("test", &sdk(), std::slice::from_ref(&path), 0);
+        assert_eq!((first.len(), second.len()), (1, 1));
+        assert!(!std::sync::Arc::ptr_eq(&first[0].payload(), &second[0].payload()), "a different file is a different holding");
+        assert_ne!(qwen36_parts(&first[0]).0, qwen36_parts(&second[0]).0, "the new file's root is derived from the new file");
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// **The operator's byte bound is still this duty's, held file or not.** A path the bound
+    /// would skip is skipped by name even when another duty already holds it: the bound says what
+    /// this duty declares it can serve, and sharing a mapping does not widen that.
+    #[test]
+    fn the_bound_still_skips_a_file_the_process_already_holds() {
+        let path = temp_artifact("bounded");
+        write_qwen36_fixture(&path, 1);
+        let size = std::fs::metadata(&path).expect("the fixture exists").len();
+        assert_eq!(load_class_holdings_v1("test", &sdk(), std::slice::from_ref(&path), 0).len(), 1, "unbounded: held");
+        let bounded = load_class_holdings_v1("test", &sdk(), std::slice::from_ref(&path), size - 1);
+        assert!(bounded.is_empty(), "the bound skips the file whether or not the process already holds it");
+        std::fs::remove_file(&path).ok();
     }
 }
