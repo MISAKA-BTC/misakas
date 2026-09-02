@@ -389,9 +389,16 @@ async fn handle_http_request(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     use tokio::io::AsyncWriteExt;
 
-    let path = request.lines().next().and_then(|line| line.split_whitespace().nth(1)).unwrap_or("/");
+    // Audit #3: dispatch on the EXACT (method, path) — not request.starts_with("GET /metrics")
+    // which also matched `/metricsXYZ` etc. The path is the request-target with any `?query`
+    // stripped (so `/metrics?x` still routes to /metrics).
+    let request_line = request.lines().next().unwrap_or("");
+    let mut rl = request_line.split_whitespace();
+    let method = rl.next().unwrap_or("");
+    let raw_path = rl.next().unwrap_or("/");
+    let path = raw_path.split('?').next().unwrap_or(raw_path);
 
-    if request.starts_with("GET /metrics") {
+    if method == "GET" && path == "/metrics" {
         use prometheus::Encoder;
         let encoder = prometheus::TextEncoder::new();
         let metric_families = match mode {
@@ -410,7 +417,7 @@ async fn handle_http_request(
         return Ok(());
     }
 
-    if request.starts_with("GET /api/status") {
+    if method == "GET" && path == "/api/status" {
         let kaspad_version = crate::kaspaapi::NODE_STATUS.lock().server_version.clone().unwrap_or_else(|| "-".to_string());
         let status_cfg = get_web_status_config();
         let web_bind = match mode {
@@ -426,7 +433,7 @@ async fn handle_http_request(
         return Ok(());
     }
 
-    if request.starts_with("GET /api/stats") {
+    if method == "GET" && path == "/api/stats" {
         let stats = match mode {
             HttpMode::Aggregated { .. } => get_stats_json_all().await,
             HttpMode::Instance { instance_id, .. } => get_stats_json(instance_id).await,
@@ -437,7 +444,7 @@ async fn handle_http_request(
         return Ok(());
     }
 
-    if matches!(mode, HttpMode::Instance { .. }) && request.starts_with("GET /api/config") {
+    if matches!(mode, HttpMode::Instance { .. }) && method == "GET" && path == "/api/config" {
         let config_json = get_config_json().await;
         let response = format!(
             "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
@@ -448,7 +455,7 @@ async fn handle_http_request(
         return Ok(());
     }
 
-    if matches!(mode, HttpMode::Instance { .. }) && request.starts_with("POST /api/config") {
+    if matches!(mode, HttpMode::Instance { .. }) && method == "POST" && path == "/api/config" {
         if !config_write_allowed() {
             let json_response =
                 r#"{"success": false, "message": "Config write disabled. Set RKSTRATUM_ALLOW_CONFIG_WRITE=1 to enable."}"#;
@@ -541,7 +548,7 @@ async fn handle_http_request(
         return Ok(());
     }
 
-    if request.starts_with("GET /") {
+    if method == "GET" {
         if let Some((rel, bytes)) = try_read_static_file(path) {
             let ct = content_type_for_path(&rel);
             let response = format!("HTTP/1.1 200 OK\r\nContent-Type: {}\r\nContent-Length: {}\r\n\r\n", ct, bytes.len());
