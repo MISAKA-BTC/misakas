@@ -1628,6 +1628,20 @@ mod u00_tiled_attention_measurement {
             bare(4_096) - bare(1_000) > 40 * id_only,
             "the residue after the ids is no longer the dominant growth — the finding changed shape"
         );
+
+        // 4. And "not flat" is **LINEAR**, not "sub-linear" — which two points cannot tell apart
+        //    and which is the reading the next design inherits. 228,769 → 806,577 is 3.53x over a
+        //    4x context, and a ratio-only classifier called that sub-linear; a third context says
+        //    the slopes are 185.3 then 187.3, i.e. one straight line carrying a ~40 KiB constant.
+        //    The constant is what the tile bought. The slope is what it did not.
+        let mid = close(2_000);
+        assert_eq!(mid, 414_033, "the v3 close at the midpoint moved — re-run palw-tile-measure and re-pin");
+        let (s1, s2) = ((mid - narrow) as f64 / 1_000.0, (wide - mid) as f64 / 2_096.0);
+        assert!(
+            s2 <= s1 * 1.10 && s1 <= s2 * 1.10,
+            "the v3 close stopped being one straight line in n_ctx: {s1} bytes/position then {s2} — \
+             if it genuinely became sub-linear, this module's headline is what changed"
+        );
     }
 
     /// **What is still linear, once the interval is held still: the attention PROBABILITY ROW.**
