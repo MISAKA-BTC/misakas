@@ -61,19 +61,42 @@ pub struct PalwConsensusObjectV3Carrier {
 pub fn palw_fp_objects_from_accepted_txs_v3<V>(
     txs: &[Transaction],
     network_domain: Hash64,
-    // On the signature so every caller hands the walk the bundle it reads under. The PRICE it used
-    // to derive from these params is the transition's now (ADR-0074 Decision 5); what it reads
-    // here is `panel_da_enabled` — ADR-0077 Decision 16's arming, and the reason the flag is a
-    // rule rather than a decoration. This is the layer that holds the ruleset, so this is where
-    // "is mode 2 admissible on this network" is answered.
+    // Kept on the signature so every caller still hands the walk the bundle it reads under; the
+    // price it used to derive from these params is the transition's now (ADR-0074 Decision 5).
     freeprompt: &PalwFreePromptParamsV3,
-    _accepted_block: BlockHash,
+    accepted_block: BlockHash,
     // **The ML-DSA-87 verifier, and it is not optional.** Without it this walk turned any
     // stranger's 0x4a transaction into a claim bound to any bond outpoint it named — including the
     // genesis premine bond, a published constant — because the commitment's signature was checked
     // on no path in the tree. Taking it as an argument rather than leaving it to a caller is what
     // makes "somebody else verifies it" unrepresentable; the previous arrangement said exactly that
     // in a doc comment, and nobody did.
+    verify_mldsa87: V,
+) -> PalwFpExtractionV3
+where
+    V: Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
+{
+    // `false`: this entry cannot resolve a height, so it answers the ADR-0077 Decision 16 arming
+    // the way every build answered it before the fence existed. A caller that holds the block's
+    // DAA score calls [`palw_fp_objects_from_accepted_txs_under_v3`] instead.
+    palw_fp_objects_from_accepted_txs_under_v3(txs, network_domain, freeprompt, accepted_block, false, verify_mldsa87)
+}
+
+/// The same walk **under this block's `PanelDa` arming** (ADR-0077 Decision 16).
+///
+/// `panel_da_armed` is `Params::palw_panel_da_at(block_daa)` — the accepting block's own DAA
+/// score, not the node's tip, for the reason every rule on this lane is candidate-scoped: two
+/// nodes folding the same block must fold it identically however far either has synced.
+///
+/// A separate entry rather than a parameter on the old one so the processor's switch to it is a
+/// one-line, reviewable change, and so a caller that has NOT switched keeps refusing mode 2
+/// rather than silently acquiring it.
+pub fn palw_fp_objects_from_accepted_txs_under_v3<V>(
+    txs: &[Transaction],
+    network_domain: Hash64,
+    _freeprompt: &PalwFreePromptParamsV3,
+    _accepted_block: BlockHash,
+    panel_da_armed: bool,
     verify_mldsa87: V,
 ) -> PalwFpExtractionV3
 where
@@ -94,7 +117,7 @@ where
         };
         // The same stateless rules a peer applies — re-run here rather than assumed, because this
         // walk must be total over whatever was accepted.
-        if payload.validate_stateless_under_v3(network_domain, freeprompt).is_err() {
+        if payload.validate_stateless_under_v3(network_domain, panel_da_armed).is_err() {
             out.skipped.push((id, "payload is not stateless-admissible"));
             continue;
         }
@@ -149,9 +172,34 @@ where
 /// gate is strictly weaker than the walk, so it can never reject something the walk would have
 /// accepted, and it cannot admit anything the walk will silently credit.
 pub fn validate_palw_fp_commitment_tx(payload: &[u8]) -> Result<(), crate::palw_freeprompt_v3::PalwFpV3Error> {
+    // `false`: on every shipped preset `PanelDa` is dormant, so this door answers exactly as it
+    // did before ADR-0077 Decision 16 existed and no block becomes acceptable to this build that
+    // was not acceptable to the last one.
+    validate_palw_fp_commitment_tx_under_v3(payload, false)
+}
+
+/// The same door **on a network whose ruleset carries `PanelDa`** (ADR-0077 Decision 16).
+///
+/// `panel_da_admissible` is `Params::palw_panel_da_admissible` — `is_some()` on the fence, not
+/// `is_active(daa)`, because isolation validation holds no DAA score and its own contract is that
+/// it never will. Reading the fence's PRESENCE rather than its height is what keeps this gate
+/// weaker than the walk at every height: `palw_panel_da_at(h) ⇒ palw_panel_da_admissible` for all
+/// `h`, so the door can never reject a carrier the walk would have credited, while a mode-2
+/// carrier that the walk will refuse (before the height) is admitted and then skipped — the same
+/// direction of failure this whole gate is built around.
+///
+/// The consequence, stated rather than buried: a network that SCHEDULES the fence starts
+/// admitting mode-2 shape into blocks the moment it ships that preset, which is a coordinated
+/// release exactly like the 0x30/0x31 token band's ("admitting the ids is part of the coordinated
+/// release... what the DAA fence governs is the *effect*"). A network that has not scheduled it
+/// — every shipped preset — refuses the shape here, as it always did.
+pub fn validate_palw_fp_commitment_tx_under_v3(
+    payload: &[u8],
+    panel_da_admissible: bool,
+) -> Result<(), crate::palw_freeprompt_v3::PalwFpV3Error> {
     let payload: PalwFpCommitmentTxPayloadV3 =
         borsh::from_slice(payload).map_err(|_| crate::palw_freeprompt_v3::PalwFpV3Error::PayloadUndecodable)?;
-    payload.validate_shape_v3()
+    payload.validate_shape_under_v3(panel_da_admissible)
 }
 
 #[cfg(test)]

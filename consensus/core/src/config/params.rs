@@ -768,6 +768,45 @@ pub struct Params {
     /// assertion, not a deployment note.
     pub palw_capability_bound: Option<ForkActivation>,
 
+    /// **ADR-0077 Decision 16 (P-16): may a free-prompt claim keep its prompt off chain?**
+    ///
+    /// `PanelDa` (privacy mode 2) lets the commitment transaction carry `prompt_token_ids_hash`
+    /// and NO ids; the ids travel with the capture the executor already serves its panel. Dormant
+    /// (`None`) on every shipped preset, so every network this build ships refuses mode 2 by name
+    /// — the mode is not a default a network acquires by upgrading.
+    ///
+    /// **Two questions, one field, and they are asked at different times.**
+    ///
+    /// * [`Self::palw_panel_da_at`] — *is the rule in force at this height?* — is what the
+    ///   extraction walk asks. It decides whether a mode-2 commitment becomes a claim, which is
+    ///   the EFFECT, and effects are what a height fences.
+    /// * [`Self::palw_panel_da_admissible`] — *does this build's ruleset carry the rule at all?*
+    ///   — is what transaction admission asks, because isolation validation holds no DAA score
+    ///   and never will (its own contract is that it is context-free). This is the shape the
+    ///   0x30/0x31 token band already ships under: admitting the bytes is part of a coordinated
+    ///   release, and the fence governs the effect.
+    ///
+    /// The pair is ordered on purpose: `admissible` ⊇ `at`, so the door is never stricter than
+    /// the walk and a carrier the walk would credit can always get in — the asymmetry
+    /// `validate_palw_fp_commitment_tx` exists to preserve.
+    ///
+    /// **A bare fence with no companion value, deliberately** — the mode number, the disclosure
+    /// sentence and the payload rule are constants in `palw_freeprompt_v3`/`palw_panel_da_v1`, so
+    /// there is no duration beside this height for [`Self::consensus_identity_id`] to normalise
+    /// away (the `palw_bond_maturity` hazard).
+    ///
+    /// **TOP LEVEL rather than in the V2 bundle**, for the `palw_unavailable_abstains` reason:
+    /// a fence inside the bundle moves `palw_ruleset_id_v2`, which `for_each_fence` never
+    /// descends into, so every old/new pair would fail the handshake outright instead of peering
+    /// with a warning until the height. ADR-0077 P-16 calls the arming "its own ruleset move";
+    /// a scheduled top-level fence is that move without the flag day.
+    ///
+    /// **What arming does NOT buy** (ADR-0077 SA-5): it is a LICENCE, not a punishment. Until
+    /// ADR-0062's data-availability court lands, a producer that withholds the ids reaches
+    /// abstention (ADR-0065 D4) → no quorum → one redraw → `ReceiptTimeout` void, and nobody is
+    /// slashed. Arming this fence must therefore never be read as arming an enforcement.
+    pub palw_panel_da: Option<ForkActivation>,
+
     /// ADR-0042 Decision 1 (PR-10): the ONE PALW switch on the V2 lineage. `Disabled` on every
     /// shipped preset. A network is in exactly one mode; `ConsensusV2` carries the whole atomic
     /// ruleset and is validated at construction ([`Params::validate_palw_v2`]) — including the
@@ -1478,6 +1517,12 @@ impl Params {
         if self.palw_capability_bound == Some(ForkActivation::never()) {
             self.palw_capability_bound = None;
         }
+        // ADR-0077 Decision 16, a bare fence: same collapse, same reason. It matters twice here,
+        // because `palw_panel_da_admissible` reads `is_some()` — a `Some(never())` left standing
+        // would open the transaction door on a network whose rule can never come into force.
+        if self.palw_panel_da == Some(ForkActivation::never()) {
+            self.palw_panel_da = None;
+        }
         let Some(dns) = self.dns_params.as_mut() else {
             return;
         };
@@ -1566,6 +1611,39 @@ impl Params {
             (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(f)) => Some(f),
             _ => None,
         }
+    }
+
+    /// **Is ADR-0077 Decision 16's `PanelDa` in force at `daa_score`?** The extraction walk's
+    /// question: a mode-2 commitment becomes a `FreePromptCommitted` claim only past this height.
+    pub fn palw_panel_da_at(&self, daa_score: u64) -> bool {
+        self.palw_panel_da_fence().is_some_and(|f| f.is_active(daa_score))
+    }
+
+    /// The `PanelDa` fence **with the mode condition already folded in** — `Some` only on a
+    /// `ConsensusV2` network that has armed it, for the same one-question-one-answer reason as
+    /// [`Self::palw_capability_bound_fence`]: the free-prompt lane exists only under
+    /// `ConsensusV2`, so on any other network there is no commitment this rule could admit.
+    pub fn palw_panel_da_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_panel_da) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(f)) => Some(f),
+            _ => None,
+        }
+    }
+
+    /// **Does this build's ruleset carry `PanelDa` at all?** — transaction admission's question,
+    /// and the only one it can ask: `validate_tx_in_isolation` is context-free by contract and
+    /// holds no DAA score, so it cannot ask whether a height has passed.
+    ///
+    /// Height-free, and therefore strictly WEAKER than [`Self::palw_panel_da_at`] at every height
+    /// — which is the direction the free-prompt door is required to fail in. A network that has
+    /// scheduled the fence admits the mode-2 SHAPE into a block from the moment it ships that
+    /// preset, and the claim it would become still waits for the height; a network that has not
+    /// scheduled it refuses the shape at the door, exactly as every build does today.
+    ///
+    /// Reading `is_some()` rather than a height is the 0x30/0x31 token band's shape: "admitting
+    /// the ids is part of the coordinated release... what the DAA fence governs is the *effect*".
+    pub fn palw_panel_da_admissible(&self) -> bool {
+        self.palw_panel_da_fence().is_some()
     }
 
     /// **The activation schedule alone**, so a mismatch can be REPORTED precisely rather than only
@@ -1680,6 +1758,7 @@ impl Params {
             palw_inactivity_leak,
             palw_beacon_fold,
             palw_capability_bound,
+            palw_panel_da,
             // The V2 bundle's fences are inside `palw_ruleset_id_v2` — see the doc block.
             palw_consensus_mode: _,
             pow_blake2b_sha3_activation,
@@ -1803,6 +1882,17 @@ impl Params {
         // ADR-0071 SA-1..SA-4. A pure fence with no duration beside it, so visiting it is safe:
         // the identity visitor normalises a height, and a height is all this field carries.
         match palw_capability_bound.as_mut() {
+            Some(activation) => fork(activation, visit),
+            None => {
+                absent = u64::MAX;
+                visit(&mut absent);
+            }
+        }
+        // ADR-0077 Decision 16. A pure fence with no duration beside it, so visiting it is safe,
+        // for the reason directly above. Being visited is what lets a network SCHEDULE `PanelDa`
+        // and stay peers with a build that has not: the identity collapses a future height, so the
+        // two agree about every block either can produce until the height arrives.
+        match palw_panel_da.as_mut() {
             Some(activation) => fork(activation, visit),
             None => {
                 absent = u64::MAX;
@@ -1994,6 +2084,7 @@ impl Params {
             palw_inactivity_leak,
             palw_beacon_fold,
             palw_capability_bound,
+            palw_panel_da,
             palw_consensus_mode,
             pow_blake2b_sha3_activation,
             pow_palw_activation,
@@ -2141,6 +2232,14 @@ impl Params {
         // there is no companion value to drag into the identity (the D1 hazard).
         if let Some(activation) = palw_capability_bound {
             h.write(b"palw_capability_bound");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // ADR-0077 Decision 16, Some-only for the same reason: every shipped preset leaves it
+        // unset and therefore fingerprints byte-identically to a build without the field at all.
+        // The mode number and the payload rule are constants rather than fields beside the fence,
+        // so there is no companion value to drag into the identity (the D1 hazard).
+        if let Some(activation) = palw_panel_da {
+            h.write(b"palw_panel_da");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0066 Decisions 1 and 4: Some-only, so every preset that leaves them unset
@@ -2458,6 +2557,7 @@ impl Params {
             palw_inactivity_leak: self.palw_inactivity_leak,
             palw_beacon_fold: self.palw_beacon_fold,
             palw_capability_bound: self.palw_capability_bound,
+            palw_panel_da: self.palw_panel_da,
             palw_consensus_mode: self.palw_consensus_mode.clone(),
             // kaspa-pq PoW algo activation is consensus-fixed, never runtime-overridable.
             pow_blake2b_sha3_activation: self.pow_blake2b_sha3_activation,
@@ -3368,6 +3468,9 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_inactivity_leak: None,
     palw_beacon_fold: None,
     palw_capability_bound: None,
+    // ADR-0077 Decision 16: `PanelDa` is dormant. A prompt that stays off chain is a mode a
+    // network arms on purpose, never one it acquires by upgrading.
+    palw_panel_da: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: inert on mainnet until its own fork ADR schedules it.
@@ -3502,6 +3605,9 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_inactivity_leak: None,
     palw_beacon_fold: None,
     palw_capability_bound: None,
+    // ADR-0077 Decision 16: `PanelDa` is dormant. A prompt that stays off chain is a mode a
+    // network arms on purpose, never one it acquires by upgrading.
+    palw_panel_da: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: DISABLED on the public preset (2026-08-12). The Ollama flavor (algo_id = 5)
@@ -3618,6 +3724,9 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_inactivity_leak: None,
     palw_beacon_fold: None,
     palw_capability_bound: None,
+    // ADR-0077 Decision 16: `PanelDa` is dormant. A prompt that stays off chain is a mode a
+    // network arms on purpose, never one it acquires by upgrading.
+    palw_panel_da: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // PALW LLM PoW: simnet keeps instant local kHeavyHash (simulation/tests must not need a model).
@@ -7055,6 +7164,9 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_inactivity_leak: None,
     palw_beacon_fold: None,
     palw_capability_bound: None,
+    // ADR-0077 Decision 16: `PanelDa` is dormant. A prompt that stays off chain is a mode a
+    // network arms on purpose, never one it acquires by upgrading.
+    palw_panel_da: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // **Devnet is the ADR-0068 drill network on this branch: ConsensusV2, so no V1 PALW
