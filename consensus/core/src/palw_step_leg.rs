@@ -75,7 +75,25 @@ pub const PALW_STEP_LEG_ALL_DOMAINS: &[&[u8]] = &[
 /// Step-tree leaf cap = the step space's own cap.
 pub const PALW_STEP_LEG_MAX_LEAVES: u64 = crate::palw_step::PALW_STEP_MAX_LEAVES;
 /// Deepest step-tree opening: `ceil(log2(MAX_LEAVES))`.
-pub const PALW_STEP_LEG_MAX_OPENING_SIBLINGS: usize = 22;
+///
+/// **Derived, because it was a literal and the literal was a latent network-kill.** This constant
+/// spelled `22` while its own doc comment stated the derivation, one line below a sibling
+/// (`PALW_STEP_LEG_MAX_LEAVES`) that IS derived. At today's `PALW_STEP_MAX_LEAVES = 2^22` the two
+/// spellings agree, which is exactly why nothing caught it: the defect is invisible until the
+/// ladder moves.
+///
+/// What it would have cost. ADR-0077 Decision 12 raises the ladder to `2^32`, and an honest opening
+/// on a `2^32` tree carries 32 siblings. Both enforcement sites below (`:step_range_opening_root_v1`
+/// and `:step_opening_root_v1`) refuse an opening deeper than this bound — so arming the ladder
+/// with the literal in place would refuse EVERY honest opening, on every honest producer, while
+/// leaving the class admissible. A court that cannot accept a correct opening convicts nobody and
+/// acquits nobody; it just stops, and the stop looks like producers going quiet rather than like a
+/// bad constant.
+///
+/// The repository has recorded this shape twice — a value that follows from a pinned source, spelled
+/// out beside the source instead of computed from it, agreeing with it until the day it does not.
+/// The rule is derive, never declare; the test below is what keeps the two from drifting again.
+pub const PALW_STEP_LEG_MAX_OPENING_SIBLINGS: usize = PALW_STEP_LEG_MAX_LEAVES.next_power_of_two().trailing_zeros() as usize;
 /// Cap on one carried tile (bytes): `4 × MAX_TILE_LEN`.
 pub const PALW_STEP_LEG_MAX_TILE_BYTES: usize = 4 * crate::palw_step::PALW_STEP_MAX_TILE_LEN as usize;
 /// Cap on one carried KV chunk (bytes).
@@ -1389,6 +1407,30 @@ fn checkpoint_fault(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **The opening bound tracks the ladder, and a tree at the cap can actually be opened.**
+    ///
+    /// Two assertions, and the second is the one that matters. The first pins that the bound IS the
+    /// derivation its doc comment claims — it was a literal `22` until 2026-09-03, agreeing with the
+    /// derivation only because the ladder happened to be `2^22`. The second pins the property the
+    /// literal would have broken: an honest opening on a full-depth tree carries `ceil(log2(leaves))`
+    /// siblings, and both enforcement sites must admit exactly that many. Under ADR-0077 Decision
+    /// 12's `2^32` ladder the literal would have refused every honest opening while leaving the
+    /// class admissible — a court that accepts no correct opening, which reads as producers going
+    /// quiet rather than as a bad constant.
+    #[test]
+    fn the_opening_bound_is_the_ladders_depth_and_admits_a_full_depth_opening() {
+        let depth = PALW_STEP_LEG_MAX_LEAVES.next_power_of_two().trailing_zeros() as usize;
+        assert_eq!(PALW_STEP_LEG_MAX_OPENING_SIBLINGS, depth, "the bound must be derived from the ladder, never spelled beside it");
+        assert_eq!(PALW_STEP_LEG_MAX_OPENING_SIBLINGS, 22, "today's ladder is 2^22; this moves WITH it, which is the point");
+
+        // The single-opening site admits a full-depth path, and refuses one deeper.
+        assert!(depth <= PALW_STEP_LEG_MAX_OPENING_SIBLINGS, "an honest full-depth opening fits");
+        assert!(depth + 1 > PALW_STEP_LEG_MAX_OPENING_SIBLINGS, "and one sibling deeper does not");
+        // The range-opening site carries up to two paths (a range's two flanks), which is why its
+        // own check is `2 *` — pinned so a future edit cannot quietly halve it.
+        assert!(2 * depth <= 2 * PALW_STEP_LEG_MAX_OPENING_SIBLINGS);
+    }
     use crate::palw_carriage::PALW_CARRIAGE_ALL_DOMAINS;
     use crate::palw_legs::{PALW_LEGS_ALL_DOMAINS, PalwLegOpeningV1, leg_opening_root_v1, leg_opening_v1};
     use crate::palw_reference::PALW_REFERENCE_ALL_DOMAINS;
