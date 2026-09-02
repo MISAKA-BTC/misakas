@@ -28,6 +28,19 @@ open PWU-derivation item for the receipt lane only.
 
 ---
 
+> **Amended by later ADRs (index reconciliation, 2026-09-02).** Decision 4's sentence "the
+> receipt lane is weightless" is amended by [ADR-0073](0073-real-demand-work-bears-the-weight.md)
+> (after its Decisions 1 and 3 the lane bears weight), and Decision 4's beacon draw is adopted by
+> the attempt lane too ([ADR-0074](0074-the-attempt-is-a-claim-drawn-by-the-chain.md)). Decision 6
+> is extended by [ADR-0055](0055-palw-position-is-earned-not-declared.md) (chain position is
+> earned; the question is set by the block). Decision 7's CU pricing (`fp_cu_v3`, `QUANTUM_CU`,
+> `PWU_PER_QUANTUM`) is **withdrawn** by ADR-0074 Decision 5 — the unit is step leaves and a
+> quantum is an eighth of the class's own canonical job. The certified free-prompt set this ADR
+> keeps in the build is chain state since [ADR-0075](0075-certification-is-a-consensus-object.md)
+> (`fp_certified_families` / `fp_certified_classes`, read as genesis ∪ chain). The Status line's
+> "activates nothing" is the 2026-08-20 state: the lane is a required part of the `ConsensusV2`
+> bundle testnet-11 and devnet ship. Map: [`README.md`](README.md).
+
 ## Context — what was asked, and the two flaws in the straightforward answer
 
 The product ask: a person uses their own LLM for their own work — code review, drafting,

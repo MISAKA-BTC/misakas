@@ -8,6 +8,13 @@ Governs how a node validates a pruning-point proof and a trusted set on a networ
 PALW inference (`pow_palw_activation` / `pow_palw_ollama_activation` active — testnet-11 and devnet
 today).
 
+> **Not the ADR-0041 that ADR-0036 supersedes.** The `main-backup-8107bfb-20260807` snapshot
+> carries a *different*, non-ancestral ADR-0041 (`palw_spam` / `palw_algo4_accept` /
+> `palw_compute_work_scale` / qwen-8.0 `mint.rs`), whose mechanism
+> [ADR-0036](0036-palw-mainnet-activation-model.md) Decision 2 declines to port. That number was
+> released to the live lineage by ADR-0036 Decision 1. This ADR is the live-lineage 0041 and has
+> nothing to do with it.
+
 Date: 2026-08-18
 Relates to: ADR-0007/0008 (the Layer-0 512-bit PoW the proof headers carry), ADR-0038/0039 (PALW
 is the consensus work; there is no hash lane), the pruning-proof machinery in

@@ -13,6 +13,15 @@ every preset, so no shipped fingerprint moves and either can be armed by rolling
 was worked out and is corrected there. **Growing the registry so D1 can be armed at all is a
 separate change and it IS a re-mint** — testnet-11 Relaunch 4, below.
 
+> **Arming changed after the Status line (index reconciliation, 2026-09-02).** "`None` on every
+> preset" was the 2026-08-30/31 state. Decision 4 (`palw_unavailable_abstains`) is armed **from
+> genesis** on testnet-11 since Relaunch 5 (`palw_rc_arm_phase1`, [ADR-0068](0068-the-llm-primary-economy-and-the-floors-minimum.md)
+> Phase 2); devnet and mainnet leave it `None`. Decision 1 (`palw_bond_maturity`) is armable — the RC
+> registry holds eight cards — but is still `None` on every preset; arming it is the out-of-band
+> window this ADR names. Decision 2a stays dormant. The "0.004 MSK" registration floor measured
+> here is the post-genesis carrier's `min_collateral_sompi`; genesis seats are 10,000 MSK
+> ([ADR-0061](0061-zero-seat-genesis-and-right-sized-collateral.md)). Map: [`README.md`](README.md).
+
 ## The single root
 
 Three facts about a bond, all verified in the tree:
