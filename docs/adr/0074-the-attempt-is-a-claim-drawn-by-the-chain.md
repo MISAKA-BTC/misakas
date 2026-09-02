@@ -130,3 +130,30 @@ from the pin test in an isolated worktree and handed to the fleet operator befor
 | ADR-0072 §3 "the attempt lane is still the canonical-job lane" | the canonical job is a claim too (Decision 1); the attempt lane is the liveness-and-beacon lane (Decision 3) |
 | ADR-0073 Decision 3 (a, b, c) | discharged by Decisions 5, 5 and 2 respectively |
 | ADR-0073 Decision 2 activation gate | met for PALW-BASE-0 (Decision 6); open for A16 and QWEN36 |
+
+## 7. What landed (2026-09-02, branch `palw-adr0073-fp-weight`)
+
+* **Decision 1:** `PalwFreePromptJobV3::prompt_mode` (`PALW_FP_PROMPT_MODE_USER` / `_CANONICAL`),
+  `fp_canonical_anchor_v1`; the chain refuses a canonical payload that carries ids; seats, the
+  court arm and the challenger derive and verify the canonical prompt (`fp_prompt_for_job`). The
+  work queue is the node panel's: `--palw-canonical-claims`, `--palw-canonical-class`,
+  `--palw-canonical-interval-daa`, funded from `--palw-fee-outpoint`; the commitment is assembled
+  from the capture's own context (`palw_fp_commitment_from_context_v3`) and the `FPC1` material is
+  retained and broadcast under the claim id.
+* **Decision 2:** no code change — `derive_beacon_fact_v3` is the beacon; this ADR is its law.
+* **Decision 3:** algo 6 unchanged (ADR-0072 + D8 on main).
+* **Decision 4:** `fp_work_id_v1`, `PalwClaimStateV2::work_id`, the state's derived work-id index,
+  `DuplicateWork`.
+* **Decision 5:** `work_leaves` replaces `cu`; `fp_class_quantum_leaves_v1` (⅛ of the class's job,
+  `PalwPwuRuleV2::canonical_leaves_v1`); the transition prices from `PalwStateParamsV2::with_fp_quanta`
+  and the bundle's `validate()` holds the two readers equal; exposure = the claim's own pwu; the
+  seat's pricing check is `capture_shape().step_leaf_count == work_leaves`; worker results carry
+  `step_leaf_count`; CU weights, `QUANTUM_CU`, `PWU_PER_QUANTUM` withdrawn.
+* **Decision 6:** `palw_rc_fp_certified_families_v1` = {PALW-BASE-0}, pinned from the floor's own
+  drill; presets carry `with_fp_certified_classes`; `FreePromptLaneUncertified`.
+* **Decision 7:** FP wire version 3 → 4, `PALW_STATE_V2_VERSION` 14 → 15, golden ids and roots
+  re-taken; the preset fingerprints are re-pinned on the re-genesis build (rebased on main's
+  ADR-0072 + D8) and handed to the fleet operator before any host moves.
+* **Outside this repo:** MISAKA Studio's worker request must carry `prompt_mode` (wire version 4),
+  and its rail must pass the class's canonical leaves to `build_fp_commitment_tx`.
+
