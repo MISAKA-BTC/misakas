@@ -180,14 +180,14 @@ pub mod palw_court_v2;
 /// registration unrepresentable. Land-stage, consensus-inert (ADR-0033's gate is its first
 /// consumer).
 pub mod palw_credit;
+pub mod palw_credit_batch;
+pub mod palw_derived_v1;
+pub mod palw_dispute;
 /// ADR-0069: end-to-end adjudicability — the half of "can this class be prosecuted" that coverage
 /// does not answer. Static adjudicability says the adjudicator can re-execute every kernel the
 /// graph reaches; this says a real backend can actually PLAY the dispute, proven by re-running the
 /// shipped court over a drill's planted faults. Weight requires both.
 pub mod palw_e2e_adjudicability;
-pub mod palw_credit_batch;
-pub mod palw_derived_v1;
-pub mod palw_dispute;
 pub mod palw_exposure;
 pub mod palw_facts;
 pub mod palw_fork_authority_v2;
@@ -221,6 +221,10 @@ pub mod palw_mode_v2;
 pub mod palw_panel_da_v1;
 pub mod palw_panel_v2;
 pub mod palw_producer_v2;
+/// ADR-0081 Decision 3 — the one decision of ADR-0081 that survives its refutation: the
+/// prompt's token ids as a tiled Merkle root, so a gather proves ONE id instead of carrying
+/// all of them. Dormant (`Params::palw_prompt_ids_merkle` is `None` on every preset).
+pub mod palw_prompt_ids_v1;
 pub mod palw_pwu;
 pub mod palw_qwen25_profile;
 pub mod palw_qwen36_ops;
