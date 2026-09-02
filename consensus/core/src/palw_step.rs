@@ -1263,8 +1263,32 @@ pub fn canonical_step_coordinates(
     // against the leaf cap). Both run in virtual processing, so the block is stored and relayed
     // first and every node re-reads it on restart.
     profile.validate_shape().ok()?;
+    // **And validate the CONTEXT against the profile, because the walk's LENGTH is the context's,
+    // not the profile's.**
+    //
+    // `validate_shape` above bounds the profile — its `n_ctx`, its layer count, its tile widths.
+    // It says nothing about `declared_prefill_tokens` and `exact_decode_tokens`, which are the two
+    // u32 fields the loop below actually counts, and which arrive inside `binding.job_context`
+    // straight out of an attacker's court close (`palw_court_v2.rs`'s two `DecodeToken` arms).
+    // Nothing between the close and here compares them against anything: the only place in the
+    // tree that asserts `declared_prefill + exact_decode <= max_context_tokens` is an `assert!` in
+    // a test (`palw_fp_execution_v3.rs`). So a close declaring four billion prefill tokens bought
+    // a four-billion-iteration walk on EVERY validating node, in virtual processing — the block is
+    // stored and relayed first, and every node re-walks it on restart.
+    //
+    // The bound is the executor's own rule, not a new one: `fp_worker::run_one_job_v1` refuses a
+    // job unless `prefill + decode <= n_ctx`, so no honestly produced context can fail this and no
+    // honest close changes its verdict. A context that fails it could not have been executed by
+    // any conforming worker, which is why refusing it here is a refusal of the impossible rather
+    // than a rule change — and `None` becomes `CloseIsNotTheNarrowedStep`, a refusal, never a panic.
     let prefill = context.declared_prefill_tokens as u64;
     let decode_calls = context.exact_decode_tokens.saturating_sub(1) as u64;
+    if context.exact_decode_tokens == 0 {
+        return None;
+    }
+    if prefill.saturating_add(context.exact_decode_tokens as u64) > u64::from(profile.n_ctx) {
+        return None;
+    }
     let mut cursor = leaf_index;
     for call in 0..=decode_calls {
         let positions = if call == 0 { prefill } else { 1 };
@@ -1556,6 +1580,58 @@ mod tests {
             exact_decode_tokens: 4, // 1 prefill call + 3 decode calls
             max_context_tokens: 64,
         }
+    }
+
+    /// **A close cannot buy a four-billion-position walk on every validating node.**
+    ///
+    /// `canonical_step_coordinates` is the sibling a STRANGER reaches: `adjudicate_court_close_v2`
+    /// hands it `binding.job_context` straight out of a court close, and the loop's length is that
+    /// context's `declared_prefill_tokens` + `exact_decode_tokens` — two u32 fields nothing between
+    /// the close and here compared against anything. `profile.validate_shape()` bounds the PROFILE
+    /// and is silent about them.
+    ///
+    /// The bound asserted here is the executor's own (`fp_worker::run_one_job_v1` refuses a job
+    /// unless `prefill + decode <= n_ctx`), so it refuses only contexts no conforming worker could
+    /// have produced. Reverting the guard makes this test hang rather than fail, which is the
+    /// point: the defect is unbounded work, and a test that merely returned the wrong answer would
+    /// be measuring something else.
+    #[test]
+    fn a_context_wider_than_the_profile_is_refused_before_it_is_walked() {
+        let profile = tiny_profile();
+        let honest = tiny_context();
+        assert!(
+            u64::from(honest.declared_prefill_tokens) + u64::from(honest.exact_decode_tokens) <= u64::from(profile.n_ctx),
+            "the fixture must be an honest context, or this test proves nothing"
+        );
+        assert!(canonical_step_coordinates(&profile, &honest, 0).is_some(), "an honest context still resolves");
+
+        // **The boundary FIRST, deliberately.** Exactly at the profile's width is admissible and one
+        // position past it is not, so the guard is the bound rather than a large-number filter —
+        // and this is the assertion that goes red FAST when the guard is reverted, which is what
+        // makes the red demonstrable at all. The two hostile cases below cannot do that job: with
+        // the guard gone they do not fail, they run for four billion positions.
+        let mut edge = tiny_context();
+        edge.declared_prefill_tokens = profile.n_ctx - 1;
+        edge.exact_decode_tokens = 1;
+        assert!(canonical_step_coordinates(&profile, &edge, 0).is_some(), "prefill + decode == n_ctx must be admissible");
+        let mut over = edge.clone();
+        over.exact_decode_tokens = 2;
+        assert_eq!(canonical_step_coordinates(&profile, &over, 0), None, "one position past the profile is refused");
+
+        // The shape a close can declare and no executor can produce.
+        let mut hostile = tiny_context();
+        hostile.declared_prefill_tokens = u32::MAX;
+        assert_eq!(canonical_step_coordinates(&profile, &hostile, u64::MAX), None);
+
+        // The same door through the other field.
+        let mut hostile_decode = tiny_context();
+        hostile_decode.exact_decode_tokens = u32::MAX;
+        assert_eq!(canonical_step_coordinates(&profile, &hostile_decode, u64::MAX), None);
+
+        // A zero decode count is not a walk either.
+        let mut zero = tiny_context();
+        zero.exact_decode_tokens = 0;
+        assert_eq!(canonical_step_coordinates(&profile, &zero, 0), None);
     }
 
     #[test]
