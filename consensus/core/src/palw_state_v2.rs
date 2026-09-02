@@ -493,6 +493,12 @@ pub struct PalwStateParamsV2 {
     /// class is refused. `None`: ungated, the pre-gate configuration fixtures run at — a preset
     /// always sets it.
     fp_certified_classes: Option<BTreeSet<Hash64>>,
+    /// **The free-prompt lane's exposure ceiling, in permille of the bond's collateral** — the
+    /// attempt lane's admission item 8, written where free-prompt claims enter (the transition,
+    /// since a commitment arrives in a transaction and meets no admission list). The same number
+    /// the bundle's admission params declare, held equal by `validate()`. Defaults to 1000‰ — the
+    /// collateral itself — so no configuration is ever ungated.
+    fp_max_exposure_ratio_permille: u32,
     /// **ADR-0054: how fast a class's cadence share may follow its own production, in permille of
     /// its own share per closed epoch.**
     ///
@@ -576,6 +582,7 @@ impl PalwStateParamsV2 {
             fp_quanta_per_canonical_job: 0,
             fp_max_quanta_per_receipt: 0,
             fp_certified_classes: None,
+            fp_max_exposure_ratio_permille: 1000,
             // Zero: `new` builds a network that pays no PALW reward, which is what every caller
             // predating the reward wiring meant and still means. See
             // `with_worker_carve_permille`.
@@ -655,6 +662,20 @@ impl PalwStateParamsV2 {
 
     pub fn fp_certified_classes(&self) -> Option<&BTreeSet<Hash64>> {
         self.fp_certified_classes.as_ref()
+    }
+
+    /// The free-prompt lane's exposure ceiling (admission item 8's ratio, applied at the
+    /// transition). `1..=1000` permille of the bond's collateral.
+    pub fn with_fp_exposure_ceiling(mut self, ratio_permille: u32) -> Result<Self, PalwStateV2Error> {
+        if ratio_permille == 0 || ratio_permille > 1000 {
+            return Err(PalwStateV2Error::InvalidParams("the free-prompt exposure ceiling must be 1..=1000 permille"));
+        }
+        self.fp_max_exposure_ratio_permille = ratio_permille;
+        Ok(self)
+    }
+
+    pub fn fp_max_exposure_ratio_permille(&self) -> u32 {
+        self.fp_max_exposure_ratio_permille
     }
 
     pub fn with_claim_retirement_daa(mut self, claim_retirement_daa: u64) -> Result<Self, PalwStateV2Error> {
@@ -2216,6 +2237,10 @@ pub enum PalwStateV2Error {
         "class {0}'s free-prompt lane is not certified — no drill has shown its free-prompt path adjudicates (ADR-0074 Decision 6)"
     )]
     FreePromptLaneUncertified(Hash64),
+    #[error(
+        "bond {bond:?} backs {backed} and this claim would reserve {claim}, above its exposure ceiling {ceiling} (admission item 8, free-prompt lane)"
+    )]
+    FreePromptExposureCeiling { bond: PalwBondKeyV2, backed: u128, claim: u128, ceiling: u128 },
     #[error("free-prompt pwu {pwu} does not divide into {quanta} uniform non-zero quanta")]
     NonUniformQuanta { pwu: u64, quanta: u32 },
     #[error("class {frozen} cannot be frozen on evidence about class {evidenced}")]
@@ -5669,6 +5694,24 @@ fn apply_object(
             // claim the size of eight.
             let reserved =
                 (pwu as u128).checked_mul(class.slash_value_per_pwu as u128).ok_or(PalwStateV2Error::Overflow("reserve"))?;
+            // **Admission item 8, on this lane** (closes the free-prompt half of P0-10): what this
+            // bond already backs — live claims and its own registrations — plus what this claim
+            // would reserve, against collateral × ratio. A commitment meets no admission list (it
+            // arrives in a transaction), so the ceiling is the transition's; the expression is the
+            // attempt lane's, and `reserve_for_claim` below adds exactly `reserved`.
+            let backed = builder
+                .state
+                .reserved_exposure(bond)
+                .checked_add(builder.state.registration_exposure(bond))
+                .ok_or(PalwStateV2Error::Overflow("total exposure"))?;
+            let ceiling = (bond_record.collateral as u128)
+                .checked_mul(builder.params.fp_max_exposure_ratio_permille as u128)
+                .ok_or(PalwStateV2Error::Overflow("exposure ceiling"))?
+                / 1000;
+            let would_reserve = backed.checked_add(reserved).ok_or(PalwStateV2Error::Overflow("reserved exposure"))?;
+            if would_reserve > ceiling {
+                return Err(PalwStateV2Error::FreePromptExposureCeiling { bond: *bond, backed, claim: reserved, ceiling });
+            }
             let claim = PalwClaimStateV2 {
                 source: PalwClaimSourceV2::FreePrompt { quanta, spent: BTreeSet::new() },
                 class_id: *class_id,
@@ -10609,6 +10652,36 @@ pub(crate) mod tests {
         let (c1, _) = apply(&genesis, &this_one, &ctx(1, 100, 1), &register_class_and_bond(), None);
         let (c2, _) = apply(&c1, &this_one, &ctx(2, 101, 2), &[fp_commit(0xFC, 60, 3)], None);
         assert!(matches!(c2.claim(&h64(0xFC)).unwrap().phase, PalwClaimPhaseV2::Provisional), "a certified class takes the claim");
+    }
+
+    /// **Admission item 8 reaches the free-prompt lane** (review of ADR-0074 Decision 5): what a
+    /// bond already backs plus what a commitment would reserve may not exceed collateral × ratio.
+    /// At a 500‰ ceiling over 1,000 of collateral, one 300-sompi claim fits and a second does not;
+    /// at the default 1000‰ both do. The refusal names the numbers, and nothing was reserved.
+    #[test]
+    fn fp_a_bond_at_its_exposure_ceiling_is_refused_a_further_claim() {
+        let genesis = PalwChainStateV2::genesis();
+        let tight = params().with_fp_exposure_ceiling(500).unwrap();
+        let (s1, _) = apply(&genesis, &tight, &ctx(1, 100, 1), &register_class_and_bond(), None);
+        let (s2, _) = apply(&s1, &tight, &ctx(2, 101, 2), &[fp_commit(0xFC, 60, 3)], None);
+        assert_eq!(s2.reserved_exposure(&bond_key(1)), 300);
+        let refused = apply_palw_transition_v2(&s2, &tight, &ctx(3, 102, 3), &[fp_commit(0xFD, 60, 3)], None);
+        assert_eq!(
+            refused.unwrap_err(),
+            PalwStateV2Error::FreePromptExposureCeiling { bond: bond_key(1), backed: 300, claim: 300, ceiling: 500 }
+        );
+
+        let roomy = params();
+        let (r1, _) = apply(&genesis, &roomy, &ctx(1, 100, 1), &register_class_and_bond(), None);
+        let (r2, _) = apply(&r1, &roomy, &ctx(2, 101, 2), &[fp_commit(0xFC, 60, 3)], None);
+        let (r3, _) = apply(&r2, &roomy, &ctx(3, 102, 3), &[fp_commit(0xFD, 60, 3)], None);
+        assert_eq!(r3.reserved_exposure(&bond_key(1)), 600, "under the collateral itself, both claims reserve");
+        assert!(
+            PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, 100, 1000, 0)
+                .unwrap()
+                .with_fp_exposure_ceiling(0)
+                .is_err()
+        );
     }
 
     /// **One inference, one claim** (ADR-0074 Decision 4): the same work — class, prompt, decode

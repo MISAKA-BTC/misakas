@@ -161,6 +161,12 @@ from the pin test in an isolated worktree and handed to the fleet operator befor
   `step_leaf_count`; CU weights, `QUANTUM_CU`, `PWU_PER_QUANTUM` withdrawn.
 * **Decision 6:** `palw_rc_fp_certified_families_v1` = {PALW-BASE-0}, pinned from the floor's own
   drill; presets carry `with_fp_certified_classes`; `FreePromptLaneUncertified`.
+* **Found on review (ac), closed:** the free-prompt lane never had admission item 8 — a
+  commitment meets no admission list, and `reserve_for_claim` only added — so a bond could pile
+  free-prompt reserves past its collateral, and Decision 5 made each claim up to eight jobs'
+  worth. The ceiling is now the transition's (`PalwStateParamsV2::with_fp_exposure_ceiling`,
+  `FreePromptExposureCeiling`), the same expression as the attempt lane's item 8, held equal to
+  the admission ratio by the bundle's `validate()`; every preset carries it.
 * **Decision 7:** FP wire version 3 → 4, `PALW_STATE_V2_VERSION` 14 → 15, golden ids and roots
   re-taken; the preset fingerprints are re-pinned on the re-genesis build (rebased on main's
   ADR-0072 + D8) and handed to the fleet operator before any host moves.

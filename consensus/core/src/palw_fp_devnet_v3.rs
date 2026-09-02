@@ -460,6 +460,8 @@ pub fn palw_fp_devnet_bundle_v3(
     // transition is what derives quanta and pwu — the SAME two numbers `freeprompt` declares
     // below, checked equal by `validate()`.
     .with_fp_quanta(FP_QUANTA_PER_CANONICAL_JOB, MAX_QUANTA_PER_RECEIPT)?
+    // Admission item 8 on the free-prompt lane: the SAME ratio `admission` declares below.
+    .with_fp_exposure_ceiling(MAX_EXPOSURE_RATIO_PERMILLE)?
     // The SAME constants the `reward` and `court` fields below declare — `validate()` requires
     // each pair to agree, so these are not second sources, they are the one source reaching both
     // readers. `COURT_TURN_DEADLINE` here is what turns the interactive ladder ON: it is strictly

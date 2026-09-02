@@ -755,6 +755,12 @@ impl PalwConsensusParamsV2 {
                 "the state's free-prompt price must be the freeprompt params' (quanta per job, cap)",
             ));
         }
+        // …and admission item 8's ratio is one number for both lanes: the attempt lane reads it
+        // off `admission` at block validation, the free-prompt lane off the state params at the
+        // transition.
+        if self.state.fp_max_exposure_ratio_permille() != self.admission.max_exposure_ratio_permille() {
+            return Err(PalwModeV2Error::Invalid("the state's free-prompt exposure ceiling must be the admission params' ratio"));
+        }
         Ok(())
     }
 
@@ -1083,6 +1089,8 @@ pub(crate) mod tests {
             // ADR-0074 Decision 5: the same price `conforming_freeprompt` declares.
             .with_fp_quanta(8, 64)
             .unwrap()
+            .with_fp_exposure_ceiling(500)
+            .unwrap()
     }
 
     pub(crate) fn conforming_freeprompt() -> PalwFreePromptParamsV3 {
@@ -1120,6 +1128,8 @@ pub(crate) mod tests {
                 .with_claim_retirement_daa(200)
                 .unwrap()
                 .with_fp_quanta(8, 64)
+                .unwrap()
+                .with_fp_exposure_ceiling(500)
                 .unwrap(),
             admission: PalwAdmissionParamsV2::new(500).unwrap(),
             panel: PalwPanelParamsV2::new(3, 2, 4).unwrap(),
@@ -1203,6 +1213,8 @@ pub(crate) mod tests {
                         .with_claim_retirement_daa(200)
                         .unwrap()
                         .with_fp_quanta(8, 64)
+                        .unwrap()
+                        .with_fp_exposure_ceiling(500)
                         .unwrap();
                 }),
             ),
@@ -1218,6 +1230,8 @@ pub(crate) mod tests {
                         .with_claim_retirement_daa(200)
                         .unwrap()
                         .with_fp_quanta(8, 64)
+                        .unwrap()
+                        .with_fp_exposure_ceiling(500)
                         .unwrap();
                 }),
             ),
@@ -1706,7 +1720,13 @@ pub(crate) mod tests {
                     b.state = b.state.clone().with_turn_deadline_daa(19).unwrap();
                 }),
             ),
-            ("exposure ratio", Box::new(|b| b.admission = PalwAdmissionParamsV2::new(501).unwrap())),
+            (
+                "exposure ratio",
+                Box::new(|b| {
+                    b.admission = PalwAdmissionParamsV2::new(501).unwrap();
+                    b.state = b.state.clone().with_fp_exposure_ceiling(501).unwrap();
+                }),
+            ),
             (
                 // ADR-0074 Decision 5: the price is one number with two readers, so a mutation
                 // moves both or the bundle refuses itself for incoherence rather than as another
@@ -1760,6 +1780,8 @@ pub(crate) mod tests {
                 .with_claim_retirement_daa(200)
                 .unwrap()
                 .with_fp_quanta(8, 64)
+                .unwrap()
+                .with_fp_exposure_ceiling(500)
                 .unwrap();
             assert!(
                 bundle.validate().is_err(),
