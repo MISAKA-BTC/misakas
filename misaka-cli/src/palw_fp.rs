@@ -224,6 +224,22 @@ pub async fn submit_objects(ctx: &Ctx, ks: &crate::keys::KeySource, paths: &[std
             PalwConsensusObjectV2::ObjectChunk { group, index, count, bytes: part } => {
                 format!("ObjectChunk: part {index} of {count} of group {group}, {} bytes", part.len())
             }
+            // ADR-0078: a derivation. Checked here for shape only, exactly as the ride list will;
+            // whether its claim exists, its output root is the claim's and its key is the bond's
+            // is the chain's to say.
+            PalwConsensusObjectV2::DerivedArtifactV1 { object, signature } => {
+                use kaspa_consensus_core::palw_derived_v1::{derived_id_v1, kind};
+                format!(
+                    "DerivedArtifactV1: claim {}, kind {} ({}), transformer {}, artifact {} bytes, derived id {}, signature {} bytes",
+                    object.claim_id,
+                    object.kind,
+                    kind::name(object.kind).unwrap_or("unassigned"),
+                    object.transformer_id,
+                    object.artifact_bytes,
+                    derived_id_v1(object),
+                    signature.len()
+                )
+            }
             other => format!("{other:?}"),
         };
         objects.push((path.clone(), object, summary));

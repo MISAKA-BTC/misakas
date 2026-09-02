@@ -46,6 +46,15 @@ fn keyed(domain: &[u8], parts: &[&[u8]]) -> Hash64 {
     Hash64::from_bytes(out)
 }
 
+/// **ADR-0078 X6: the family's rendered-output hash, as a public rule.** `output_root` is
+/// `output_commitment_v2(job_context_hash, output_token_ids, rendered)`, and this family's
+/// `rendered` is a keyed hash of the output ids — a pure function of the ids, so a consumer who
+/// holds the answer's ids and the job's context hash recomputes the claim's `output_root` without
+/// the model. Exported so the verifier does not have to restate the rule.
+pub fn rendered_output_hash_v1(generated: &[u32]) -> Hash64 {
+    keyed(QWEN36_DOMAIN_EXECUTION, &[b"rendered", &generated.iter().flat_map(|t| t.to_le_bytes()).collect::<Vec<_>>()])
+}
+
 /// **The graph's identity.** Every field of the shape, fixed-width, in declaration order.
 ///
 /// Stands in for the court's `shape_profile_id` until the hybrid step space exists. It carries the
@@ -408,8 +417,7 @@ pub fn qwen36_execute_for_attempt_v1(
     .map_err(|e| format!("{e:?}"))?;
 
     let context = ctx.context_hash();
-    let rendered =
-        keyed(QWEN36_DOMAIN_EXECUTION, &[b"rendered", &generated.iter().flat_map(|t| t.to_le_bytes()).collect::<Vec<_>>()]);
+    let rendered = rendered_output_hash_v1(&generated);
     let output_root = output_commitment_v2(&context, &generated, &rendered);
     // The consensus derivation (ADR-0072 Decision 8): admission pins the manifest root to
     // `attempt_trace_manifest_root_v1(trace_root, 1)`, whichever family produced it.

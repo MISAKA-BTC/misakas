@@ -1,0 +1,21 @@
+[package]
+name = "misaka-palw-derive"
+description = "ADR-0078: what was made from it is committed, the thing itself never rides — registered grammars, content-named deterministic transformers, and the derivation glue that binds a derived artifact to a free-prompt claim"
+publish = false
+rust-version.workspace = true
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+include.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+kaspa-consensus-core.workspace = true
+kaspa-hashes.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

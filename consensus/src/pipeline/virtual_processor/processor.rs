@@ -5404,6 +5404,30 @@ impl VirtualStateProcessor {
                 // the evidence by the court's grader, the class binding by the class's own profile
                 // hash and kernel coverage — and neither needs a signature, a bundle or a store.
                 Obj::FamilyCertified { .. } | Obj::ClassLaneCertified { .. } | Obj::ObjectChunk { .. } => {}
+                // **ADR-0078: a derivation is authorised by the key it declares, on this chain.**
+                // The ride list proved a signature is present and the shape is the object's; here
+                // the signature is verified under the declared executor key, over the object's own
+                // message under its own context, and an object naming another network's domain is
+                // refused before any state is read. Whether the declared key is the claim's bond
+                // key is the transition's comparison (`DerivedSignerIsNotTheExecutor`).
+                Obj::DerivedArtifactV1 { object, signature } => {
+                    let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+                        self.network_id_bytes.as_slice(),
+                        Some(self.genesis.hash),
+                    );
+                    if object.network_domain != network_domain {
+                        return Err(format!("the derivation of claim {} names another network's domain", object.claim_id));
+                    }
+                    let message = kaspa_consensus_core::palw_derived_v1::palw_derived_message_v1(object);
+                    if !Self::verify_mldsa87_with_context_bool(
+                        &object.executor_pubkey,
+                        message.as_byte_slice(),
+                        signature,
+                        kaspa_consensus_core::palw_derived_v1::PALW_DERIVED_V1_MLDSA87_CONTEXT,
+                    ) {
+                        return Err(format!("the derivation of claim {} is not signed by the executor key it declares", object.claim_id));
+                    }
+                }
             }
         }
         Ok(())
@@ -12308,6 +12332,7 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::FamilyCertified { .. } => "FamilyCertified",
         O::ClassLaneCertified { .. } => "ClassLaneCertified",
         O::ObjectChunk { .. } => "ObjectChunk",
+        O::DerivedArtifactV1 { .. } => "DerivedArtifactV1",
     }
 }
 
