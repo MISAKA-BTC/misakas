@@ -215,6 +215,142 @@ fn the_registered_class_path_admits_by_a_computed_digest() {
     );
 }
 
+/// **SA-7, the RELAY form.** [`nothing_in_the_palw_path_logs_a_prompt`] is name-based — it looks
+/// for `rendered_prompt`, `prompt_token_ids` and their siblings — and it therefore cannot see the
+/// shape both live findings actually took: **forwarding another process's stderr.** A worker that
+/// echoes any part of its input while failing turns its supervisor's helpful relay into a
+/// disclosure, and no name in the supervisor's source says "prompt" anywhere on that path.
+///
+/// So this scan bans the relay itself. Two boot paths keep theirs, because at boot there is no job
+/// in the process and therefore no user input to leak; everything else is tracked with what closes
+/// it, and a tracked entry that no longer matches FAILS, so the list cannot outlive its subjects.
+#[test]
+fn no_shipped_path_relays_a_worker_s_stderr_unless_it_is_named_here() {
+    /// The relay form, in the spellings this tree uses.
+    const RELAY: &[&str] = &["from_utf8_lossy(&stderr", "from_utf8_lossy(&err", "\"[palw-worker] {line}\""];
+
+    /// Permanently exempt: `(file, a substring of the offending line, why it is allowed)`.
+    const ALLOWED: &[(&str, &str, &str)] = &[
+        (
+            "misaka-palw-agent/src/agent.rs",
+            "worker v2-manifest probe failed",
+            "BOOT: `run_captured`'s manifest probe, before any job exists. The supervisor is \
+             starting; no prompt has entered the process, and an operator whose worker will not \
+             report its manifest needs the worker's own reason.",
+        ),
+        (
+            "misaka-palw-agent/src/agent.rs",
+            "from_utf8_lossy(&stderr[tail_start..])",
+            "BOOT: the golden selftest's stderr tail on the quarantine path. Same reason — it runs \
+             once at startup over the REGISTERED golden vectors, which are chain data, not a \
+             stranger's text.",
+        ),
+    ];
+
+    /// Tolerated for now, each with the thing that closes it. A tracked line that no longer
+    /// matches is a stale exemption and fails below: the list cannot rot into a blanket.
+    const TRACKED: &[(&str, &str, &str)] = &[
+        (
+            "misaka-palw-gateway/src/main.rs",
+            "\"[palw-worker] {line}\"",
+            "the gateway's per-job stderr relay — the public entrance, so the worst case. Being \
+             gated behind MISAKA_PALW_GATEWAY_LOG_WORKER_STDERR=1 by the gateway lane; delete this \
+             entry when that lands.",
+        ),
+        (
+            "misaka-palw-agent/src/agent.rs",
+            "worker exited with {status}",
+            "PER JOB: the JobFailed reason carries the worker's stderr tail to the client, which \
+             logs it. Not a log line here, the same disclosure one hop later. Closes by sending \
+             the exit status and a bounded, non-echoing reason.",
+        ),
+        (
+            "misaka-palw/src/lib.rs",
+            "stderr: String::from_utf8_lossy(&stderr).trim()",
+            "PER JOB: `PalwError::WorkerFailed` carries the worker's stderr into an error whose \
+             Display a node logs. Same shape as the entry above and closes the same way.",
+        ),
+    ];
+
+    let mut findings = Vec::new();
+    let mut matched: Vec<(String, String)> = Vec::new();
+    for (path, source) in rust_sources() {
+        let rel = relative(&path);
+        // Test modules construct these deliberately; the rule is about the shipped path.
+        let shipped = source.split("#[cfg(test)]").next().unwrap_or(&source).to_string();
+        for (n, line) in shipped.lines().enumerate() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("//") || trimmed.starts_with("///") || trimmed.starts_with("*") {
+                continue;
+            }
+            if !RELAY.iter().any(|r| line.contains(r)) {
+                continue;
+            }
+            let named = ALLOWED.iter().chain(TRACKED.iter()).find(|(f, needle, _)| *f == rel && line.contains(needle));
+            match named {
+                Some((f, needle, _)) => matched.push(((*f).to_string(), (*needle).to_string())),
+                None => findings.push(format!("{rel}:{}: relays another process's stderr — {}", n + 1, line.trim())),
+            }
+        }
+    }
+    assert!(
+        findings.is_empty(),
+        "ADR-0079 SA-7: a supervisor that forwards its worker's stderr forwards whatever the \
+         worker echoed of its input. A new one is either a BOOT path (add it to ALLOWED with that \
+         reason) or a job path (fix it, or add it to TRACKED with what closes it). Found:\n  {}",
+        findings.join("\n  ")
+    );
+    for (file, needle, _) in ALLOWED.iter().chain(TRACKED.iter()) {
+        assert!(
+            matched.iter().any(|(f, n)| f == file && n == needle),
+            "the exemption {file} / {needle:?} matches nothing any more — delete it rather than \
+             leave a name standing in for a line that is gone"
+        );
+    }
+}
+
+/// **S12, at tree level.** `declare_backend_in_force` is the one function that makes
+/// `security-report` and the boot line say something other than `none`. It has to be `pub`,
+/// because the backends live in child modules of `host_security` and one of them is a separate
+/// file — and `pub` makes it callable from anywhere in the workspace. So the guard is here: the
+/// only call sites are the installers themselves, each of which has just watched its own drill
+/// deny what it promises. A call from a supervisor, a CLI, or a test fixture would be a report
+/// naming a backend nobody proved, which is precisely the failure S12 exists to forbid.
+#[test]
+fn only_an_installer_declares_a_backend_in_force() {
+    /// The files that ARE the installers: each declares a backend only after its drill returned.
+    const INSTALLERS: &[&str] = &["misaka-palw/src/host_security.rs", "misaka-palw/src/host_security_linux.rs"];
+
+    let mut findings = Vec::new();
+    let mut declared_in = Vec::new();
+    for (path, source) in rust_sources() {
+        let rel = relative(&path);
+        for (n, line) in source.lines().enumerate() {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("//") || trimmed.starts_with("///") || trimmed.starts_with("*") {
+                continue;
+            }
+            if !line.contains("declare_backend_in_force(") {
+                continue;
+            }
+            declared_in.push(rel.clone());
+            if !INSTALLERS.contains(&rel.as_str()) {
+                findings.push(format!("{rel}:{}: declares a backend in force outside the installers", n + 1));
+            }
+        }
+    }
+    assert!(
+        findings.is_empty(),
+        "ADR-0079 S12: the backend actually in force is declared by the installer that PROVED it, and by nothing \
+         else. Found:\n  {}",
+        findings.join("\n  ")
+    );
+    assert!(
+        declared_in.iter().any(|f| f == "misaka-palw/src/host_security.rs"),
+        "the declaration point itself must still exist in host_security.rs — this guard is empty if it does not"
+    );
+}
+
 /// **SA-7 — nothing logs a prompt.** The gateway, the supervisor, the worker and the seat log
 /// token counts and roots. A log line that interpolates prompt text or prompt ids turns "private
 /// unless disputed" into a disclosure by default.
