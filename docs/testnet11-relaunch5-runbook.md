@@ -149,6 +149,21 @@ node announces `d38abe44…` before starting the next host.
 * seat2 (A16 producer) logged **0 refusals** after the restart; the old build refused within seconds
   of the producer loop starting.
 
+### Four stores are per-genesis and must be rotated at every regenesis — one was missed today
+
+| store | where | rotation |
+|---|---|---|
+| explorer DB | postgres `kaspa_t11` on .113 | `ALTER DATABASE kaspa_t11 RENAME TO kaspa_t11_old_<fp>_<date>; CREATE DATABASE kaspa_t11 OWNER kaspa;` then start the filler |
+| MTP ledger | `/var/lib/misaka-mtp/data` on .113 | `mv` to `data.old-<fp>-<date>` |
+| miner-pool slot | `/var/lib/misaka-minerpool/slots/slot-01/appdir` on .113 | `mv` like any appdir |
+| **faucet grant ledger** | `/var/lib/misaka-faucet/granted.jsonl` on ibm | `mv` to `granted.jsonl.old-<fp>-<date>`, `systemctl restart misaka-faucet` |
+
+The faucet one is **not genesis-keyed**: `/opt/misaka-faucet.py` appends `{address,…}` rows and
+loads them all into `PAID` at start, so an address that claimed on any earlier chain is refused on
+every later one until the file is rotated. Measured 2026-09-02: 10 rows, last written Sep 1 11:59
+— all from the `8d2002cc` era. **Not rotated today** (it changes who can claim on the live
+network; operator's call), so those ten addresses are currently refused on 5c too.
+
 ### Disk, under the operator's "unused for two weeks may be deleted" rule (2026-09-02)
 
 * **ibm was at 97 %** — `/root/palw-class` alone is ~209 GB. Removed: the datadir archives of the
