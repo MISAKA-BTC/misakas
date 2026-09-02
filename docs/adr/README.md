@@ -183,7 +183,7 @@ than from any ADR's Status line.
 | --- | --- | --- | --- |
 | **testnet-11** (`--netsuffix=11`; the PALW-RC) | `ConsensusV2` — the RC bundle: floor + QWEN36 graph-v3 + QWEN25-A16 graph-v2 classes, 8 genesis bonds, genesis free-prompt set = all three families (ADR-0075 D6), per-class seeds (ADR-0076) | heartbeat lane (ADR-0060/0066/0068), attempt-work constant (ADR-0068 F2), `palw_unavailable_abstains` (ADR-0065 D4) | `palw_bond_maturity` (ADR-0065 D1, armable), `palw_inactivity_leak` (ADR-0066 D4 fence), `palw_bootstrap_activation` (ADR-0064) |
 | **devnet** | `ConsensusV2` — floor only, 6 public-seed genesis bonds (ADR-0075 §7's rehearsal chain) | heartbeat lane, attempt-work constant | maturity, abstains, leak, bootstrap |
-| **mainnet** | `Disabled` — the genesis card (`PALW_MAINNET_GENESIS_ARTIFACT_ROOT`, `PALW_MAINNET_GENESIS_BONDS`) is unset; when set, the same arming as the RC applies from genesis | — | everything |
+| **mainnet** | `Disabled` — the genesis card (`PALW_MAINNET_GENESIS_ARTIFACT_ROOT`, `PALW_MAINNET_GENESIS_BONDS`) is unset; when set, the same arming as the RC applies from genesis | — | everything. **One of these absences is permanent:** `palw_uncertified_weightless` (ADR-0069 D7) can only ever be armed IN a genesis, so the day the card is set is the only day it can be added — see the card checklist in `docs/mainnet-palw-certification-runbook.md` |
 | testnet-10, simnet | `Disabled` | — | everything |
 
 testnet-12 is retired into 11 (`--netsuffix=12` is refused by name). The `LegacyTn11` algo-4 lane
