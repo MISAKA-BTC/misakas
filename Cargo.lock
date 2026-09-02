@@ -6011,6 +6011,7 @@ dependencies = [
  "kaspa-consensus-core",
  "kaspa-evm",
  "kaspa-hashes",
+ "misaka-palw",
  "misaka-palw-base0",
  "revm",
  "serde",

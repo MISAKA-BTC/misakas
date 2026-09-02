@@ -49,9 +49,39 @@ preimage, so loosening one is a NEW transformer and the derivations made under t
 checkable against the old id. `palw-derive list` prints them; `palw-derive manifest --transformer
 <name|id>` prints the whole manifest with its exact preimage.
 
-External toolchains for `code` (rustc → wasm32, solc, clang → wasm32) are manifests run by the
-hermetic runner in `misaka-palw-derive::kinds::code`; none is registered — an external toolchain
-is named only when its two-architecture drill passes on the fleet (Decision 11).
+### `code` and `contract`: where the initcode actually runs (ADR-0078 SA-1, ADR-0079 Decision 12)
+
+Both rows execute a program a model wrote, so neither runs in the process that asked for it.
+
+* **The in-tree EVM runs in a separate confined process.** `code/evm/v1` and `contract/evm/v1`
+  frame the job — the deploy data, each test's calldata, value and gas limit, and the *digest* of
+  the run manifest — and spawn `palw-evm-runner` (shipped beside `palw-derive`, or named by
+  `MISAKA_PALW_EVM_RUNNER`) through the host's confinement backend, in an ephemeral tree destroyed
+  after the run, `env_clear`ed, under a resident ceiling of 1 GiB and a deadline derived from the
+  gas the answer itself declares. The runner reads one `MEVJ` frame on stdin, writes one `MEVR`
+  frame on stdout, and holds no prompt, no claim, no key and no test name: it returns facts
+  (success, output, gas), and the transformer turns them into the verdict log. **There is no
+  in-process fallback** — a missing runner is a refusal, which is what "the row does not ship
+  without it" means. A killed, over-ceiling or denied run is `no object` (Decision 2's
+  parse-failure arm), never a different artifact: the backend cannot change a number, only refuse
+  one (ADR-0079 S4).
+* **The gas ceiling and the state fixture are part of `transformer_id`.** The fixture is an empty
+  world plus one funded deployer at nonce 0 under a zero block environment; its digest and every
+  gas ceiling are hashed into the *run manifest*, whose digest rides in the transformer manifest's
+  writer name (`misaka-code-build/2/canonical-v1+evm-run/<ceiling>/<digest>`) and in the `MCOD`
+  header. The runner refuses any job that names a run manifest other than the one it was built
+  with, so a stale runner beside a new library cannot execute under someone else's ceiling.
+* **External toolchains** for `code` (rustc → wasm32, solc, clang → wasm32) are manifests run by
+  the hermetic runner in `misaka-palw-derive::kinds::code`; none is registered — an external
+  toolchain is named only when its two-architecture drill passes on the fleet (Decision 11). Its
+  runner now enforces ADR-0079 Decision 12: it refuses on a host whose confinement backend is
+  `none` (no backend, no socket denial, no run), and refuses when a bond or wallet key is
+  reachable in the process's environment or in the directories the caller names — *the build's
+  output is never executed on a host that holds a key*.
+
+Running the crate's tests therefore builds two binaries: `cargo test -p misaka-palw-derive`.
+`cargo test -p misaka-palw-derive --lib` does not build binaries, and every EVM test then fails
+naming the absent runner — that is the gate holding, not a broken test.
 
 ## The bounds, and what refuses what (SA-2, SA-3, SA-5)
 
