@@ -674,6 +674,110 @@ impl PruningProcessor {
                 // The content-addressed code store (222) is NEVER per-block pruned:
                 // a `code_hash` is shared by every block that references that code,
                 // so deleting it on one block's pruning would corrupt others.
+                //
+                // kaspa-pq ADR-0020 §16 ("Safe-light" pruned profile): reclaim this
+                // pruned block's entries in the RPC-only SECONDARY indexes too —
+                // tx-lookup (204), raw-tx (217), block-hash map (210), number index
+                // (213) and log postings (205). Without this they grow O(tx × blocks)
+                // and are never reclaimed (the datadir keeps growing on a pruned VPS).
+                // These stores are never part of any commitment, so this is fully
+                // consensus-neutral; archival nodes never reach here (the prune loop
+                // returns early on `is_archival`). The keys are derived from this
+                // block's payload (211), receipts (203) and header (201), which the
+                // primary deletes BELOW remove — so this MUST run first, while those
+                // rows are still readable, and all deletes share `batch` (atomic).
+                #[cfg(feature = "evm")]
+                {
+                    use crate::model::stores::evm::{EvmHeaderStoreReader, EvmPayloadStoreReader, EvmReceiptsStoreReader};
+                    use kaspa_consensus_core::evm::{LogPostingKind, LogPostingLoc};
+
+                    // Gather the soon-to-be-deleted source rows for `current` first.
+                    let evm_payload = self.evm_payload_store.get(current).optional().unwrap();
+                    let evm_receipts = self.evm_receipts_store.get(current).optional().unwrap();
+                    let evm_header = self.evm_header_store.get(current).optional().unwrap();
+
+                    // 213 number index: release this block's evm_number row iff it is
+                    // still the canonical claimant (guards a reorg re-claim).
+                    if let Some(h) = &evm_header {
+                        self.evm_number_store.delete_if_matches_batch(&mut batch, h.evm_number, current).unwrap();
+                    }
+
+                    // 210 block-hash map: the rpc id is the first 32 bytes of the
+                    // 64-byte L1 hash (mirrors the write at virtual_processor).
+                    let mut rpc_block_id = [0u8; 32];
+                    rpc_block_id.copy_from_slice(&current.as_bytes()[..32]);
+                    self.evm_block_hash_map_store
+                        .delete_if_matches_batch(&mut batch, kaspa_hashes::EvmH256::from_bytes(rpc_block_id), current)
+                        .unwrap();
+
+                    // 204 tx-lookup + 217 raw-tx. `current` appears in `included_in`
+                    // for the txs in its payload and in `accepted_in` for the txs in
+                    // its receipts; reclaim the union of those tx rows exactly once.
+                    let mut affected: std::collections::HashSet<kaspa_hashes::EvmH256> = std::collections::HashSet::new();
+                    if let Some(payload) = &evm_payload {
+                        for raw in &payload.transactions {
+                            // Same keccak(raw EIP-2718) derivation used when writing 217/204.
+                            affected.insert(kaspa_evm::tx::tx_hash(raw));
+                        }
+                    }
+                    if let Some(receipts) = &evm_receipts {
+                        for &txh in &receipts.tx_hashes {
+                            affected.insert(txh);
+                        }
+                    }
+                    for txh in affected {
+                        let mut row = self.evm_tx_index_store.get_or_default(txh).unwrap();
+                        // Writes are deduped, so `current` is present at most once per
+                        // list — a single retain is the exact inverse of the push.
+                        row.included_in.retain(|b| *b != current);
+                        row.accepted_in.retain(|(b, _)| *b != current);
+                        if row.included_in.is_empty() && row.accepted_in.is_empty() {
+                            // No retained block references this tx any more → drop both
+                            // its tx-lookup row (204) AND its raw bytes (217). The 217
+                            // delete MUST be gated on this emptiness, NOT on payload
+                            // ownership (`payload_block == current`) alone: EVM inclusion
+                            // and acceptance are decoupled, so a tx whose payload
+                            // (inclusion) block is pruned may still be accepted in a
+                            // RETAINED chain block — and 217 is the only home of the raw
+                            // bytes that back `eth_getTransactionByHash`. Emptiness ⟺ no
+                            // reference anywhere (a kept re-inclusion keeps `included_in`
+                            // non-empty), so this unconditional 217 delete is safe and
+                            // never strands an orphan even when the inclusion block is
+                            // pruned before the accepting block.
+                            self.evm_tx_index_store.delete_batch(&mut batch, txh).unwrap();
+                            self.evm_raw_tx_store.delete_batch(&mut batch, txh).unwrap();
+                        } else {
+                            self.evm_tx_index_store.write_batch(&mut batch, txh, row).unwrap();
+                        }
+                    }
+
+                    // 205 log postings: mirror the writer (processes/evm/mod.rs)
+                    // key-for-key — l1_hash = the accepting block (= `current`),
+                    // evm_number = this block's header number, address + topic0..3.
+                    if let Some(receipts) = &evm_receipts {
+                        let evm_number = evm_header.as_ref().map(|h| h.evm_number).unwrap_or(0);
+                        for (rcpt_idx, receipt) in receipts.receipts.iter().enumerate() {
+                            for (in_rcpt_idx, log) in receipt.logs.iter().enumerate() {
+                                let loc = LogPostingLoc {
+                                    evm_number,
+                                    l1_hash: current,
+                                    tx_index: rcpt_idx as u32,
+                                    in_receipt_log_index: in_rcpt_idx as u32,
+                                };
+                                self.evm_log_index_store
+                                    .delete_posting_batch(&mut batch, LogPostingKind::Address, &log.address.as_bytes(), &loc)
+                                    .unwrap();
+                                for (ti, topic) in log.topics.iter().take(4).enumerate() {
+                                    if let Some(kind) = LogPostingKind::topic(ti) {
+                                        self.evm_log_index_store
+                                            .delete_posting_batch(&mut batch, kind, &topic.as_bytes(), &loc)
+                                            .unwrap();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 self.evm_state_store.delete_batch(&mut batch, current).unwrap();
                 self.evm_payload_store.delete_batch(&mut batch, current).unwrap();
                 self.evm_receipts_store.delete_batch(&mut batch, current).unwrap();
@@ -782,6 +886,21 @@ impl PruningProcessor {
             let mut pruning_point_write = self.pruning_point_store.write();
             let mut batch = WriteBatch::default();
             pruning_point_write.set_retention_checkpoint(&mut batch, retention_period_root).unwrap();
+            // kaspa-pq ADR-0020 §16: after pruning the blocks below the new pruning
+            // point we deleted their (205) log postings, so raise the log-index
+            // completeness floor (218) to the pruning point's evm_number — otherwise
+            // the eth_getLogs fast path would keep trusting the now-pruned range. A
+            // conservative over-raise (the pruning point is at/above the retention
+            // root) is correctness-safe: below the floor the reader falls back to the
+            // canonical per-block scan. No-op when the index is inactive or the
+            // pruning point is not an EVM-active block.
+            #[cfg(feature = "evm")]
+            {
+                use crate::model::stores::evm::EvmHeaderStoreReader;
+                if let Some(h) = self.evm_header_store.get(new_pruning_point).optional().unwrap() {
+                    self.evm_log_index_store.raise_floor_batch(&mut batch, h.evm_number).unwrap();
+                }
+            }
             self.db.write(batch).unwrap();
             drop(pruning_point_write);
         }

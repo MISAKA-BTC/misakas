@@ -262,6 +262,13 @@ impl DbEvmTxIndexStore {
     pub fn write_batch(&self, batch: &mut WriteBatch, tx_hash: EvmH256, row: EvmTxLocations) -> Result<(), StoreError> {
         self.access.write(BatchDbWriter::new(batch), tx_hash, row)
     }
+
+    /// Drop a tx-locations row entirely. Used by pruning once the last block that
+    /// referenced the tx (in `included_in`/`accepted_in`) is pruned and both lists
+    /// become empty. Delete-of-absent is a harmless no-op. RPC index only.
+    pub fn delete_batch(&self, batch: &mut WriteBatch, tx_hash: EvmH256) -> Result<(), StoreError> {
+        self.access.delete(BatchDbWriter::new(batch), tx_hash)
+    }
 }
 
 impl EvmTxIndexStoreReader for DbEvmTxIndexStore {
@@ -296,6 +303,20 @@ impl DbEvmBlockHashMapStore {
     /// Unguarded upsert into the caller's batch.
     pub fn write_batch(&self, batch: &mut WriteBatch, rpc_hash: EvmH256, l1_hash: BlockHash) -> Result<(), StoreError> {
         self.access.write(BatchDbWriter::new(batch), rpc_hash, l1_hash)
+    }
+
+    /// Reclaim a pruned block's rpc-id row ONLY if it still maps to `expected`.
+    /// Match-guarded because the 32-byte rpc id is `l1_hash[..32]`, so two distinct
+    /// 64-byte L1 hashes could (astronomically unlikely) share a first-32 prefix; we
+    /// must never drop a colliding still-live block's row. Mirrors `DbEvmNumberStore`.
+    /// RPC index only — consensus-neutral.
+    pub fn delete_if_matches_batch(&self, batch: &mut WriteBatch, rpc_hash: EvmH256, expected: BlockHash) -> Result<(), StoreError> {
+        match self.access.read(rpc_hash) {
+            Ok(h) if h == expected => self.access.delete(BatchDbWriter::new(batch), rpc_hash),
+            Ok(_) => Ok(()),
+            Err(StoreError::KeyNotFound(_)) => Ok(()),
+            Err(e) => Err(e),
+        }
     }
 }
 
@@ -762,6 +783,20 @@ impl DbEvmLogIndexStore {
         Ok(())
     }
 
+    /// Raise the completeness floor UP to `n` after pruning has deleted all postings
+    /// below `n`. The opposite direction of [`set_floor_batch`] (which only lowers it
+    /// for forward processing / backfill): once a low range is pruned the index is no
+    /// longer complete there, so the floor must move up or the `eth_getLogs` fast path
+    /// would keep trusting (and silently under-serving) the now-pruned range. Only
+    /// raises an EXISTING floor — never fabricates one when the index is inactive
+    /// (`indexed_floor() == None`).
+    pub fn raise_floor_batch(&self, batch: &mut WriteBatch, n: u64) -> Result<(), StoreError> {
+        if self.indexed_floor().is_some_and(|cur| n > cur) {
+            self.floor.write(BatchDbWriter::new(batch), EvmH256::from_bytes([0u8; 32]), n)?;
+        }
+        Ok(())
+    }
+
     /// Add one posting (`kind`+`selector` bucket → `loc`) to the caller's batch.
     pub fn write_posting_batch(
         &self,
@@ -771,6 +806,19 @@ impl DbEvmLogIndexStore {
         loc: &LogPostingLoc,
     ) -> Result<(), StoreError> {
         self.access.write(BatchDbWriter::new(batch), log_posting_bucket(kind, selector), encode_log_posting_loc(loc))
+    }
+
+    /// Exact inverse of [`write_posting_batch`]: remove one `(kind, selector) → loc`
+    /// posting from the caller's batch. Used by pruning to reclaim a pruned block's
+    /// log postings. Idempotent — deleting an absent member is a harmless tombstone.
+    pub fn delete_posting_batch(
+        &self,
+        batch: &mut WriteBatch,
+        kind: LogPostingKind,
+        selector: &[u8],
+        loc: &LogPostingLoc,
+    ) -> Result<(), StoreError> {
+        self.access.delete(BatchDbWriter::new(batch), log_posting_bucket(kind, selector), encode_log_posting_loc(loc))
     }
 
     /// Iterate the postings of a `(kind, selector)` bucket in ascending block
@@ -1222,5 +1270,172 @@ mod tests {
         store.set_floor_batch(&mut b, 3).unwrap();
         db.write(b).unwrap();
         assert_eq!(store.indexed_floor(), Some(3), "a backfill of an older block lowers the floor");
+    }
+
+    /// ADR-0020 §16 (Safe-light prune): pruning raises the floor UP to the lowest
+    /// retained block so the eth_getLogs fast path never trusts a pruned range —
+    /// but only an EXISTING floor; it must never fabricate one on an inactive index.
+    #[test]
+    fn evm_log_index_raise_floor_after_prune() {
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let store = DbEvmLogIndexStore::new(db.clone());
+
+        // Inactive index: a raise is a no-op (never claims completeness it lacks).
+        let mut b = WriteBatch::default();
+        store.raise_floor_batch(&mut b, 100).unwrap();
+        db.write(b).unwrap();
+        assert_eq!(store.indexed_floor(), None, "must not fabricate a floor on an inactive index");
+
+        let mut b = WriteBatch::default();
+        store.set_floor_batch(&mut b, 50).unwrap();
+        db.write(b).unwrap();
+
+        let mut b = WriteBatch::default();
+        store.raise_floor_batch(&mut b, 30).unwrap(); // below current → ignored
+        db.write(b).unwrap();
+        assert_eq!(store.indexed_floor(), Some(50), "a lower value must not lower the floor");
+
+        let mut b = WriteBatch::default();
+        store.raise_floor_batch(&mut b, 80).unwrap(); // above current → applied
+        db.write(b).unwrap();
+        assert_eq!(store.indexed_floor(), Some(80), "pruning raises the floor up to the retained range");
+    }
+
+    /// ADR-0020 §16: `delete_posting_batch` is the exact inverse of
+    /// `write_posting_batch` (same bucket + member encoding), so pruning a block's
+    /// logs empties its postings without disturbing a co-bucketed kept block.
+    #[test]
+    fn evm_log_index_delete_posting_is_exact_inverse() {
+        use kaspa_consensus_core::evm::{LogPostingKind, LogPostingLoc};
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let store = DbEvmLogIndexStore::new(db.clone());
+        let addr = [0x42u8; 20];
+        let pruned = LogPostingLoc { evm_number: 5, l1_hash: bh(0x05), tx_index: 0, in_receipt_log_index: 0 };
+        let kept = LogPostingLoc { evm_number: 6, l1_hash: bh(0x06), tx_index: 0, in_receipt_log_index: 0 };
+
+        let mut b = WriteBatch::default();
+        store.write_posting_batch(&mut b, LogPostingKind::Address, &addr, &pruned).unwrap();
+        store.write_posting_batch(&mut b, LogPostingKind::Address, &addr, &kept).unwrap();
+        db.write(b).unwrap();
+        assert_eq!(store.bucket_locs(LogPostingKind::Address, &addr).count(), 2);
+
+        // Delete only the pruned block's posting — the kept block's survives.
+        let mut b = WriteBatch::default();
+        store.delete_posting_batch(&mut b, LogPostingKind::Address, &addr, &pruned).unwrap();
+        db.write(b).unwrap();
+        let remaining: Vec<u64> = store.bucket_locs(LogPostingKind::Address, &addr).map(|l| l.evm_number).collect();
+        assert_eq!(remaining, vec![6], "only the pruned posting is removed; the kept block's survives");
+
+        // Idempotent: deleting an already-absent posting is a no-op.
+        let mut b = WriteBatch::default();
+        store.delete_posting_batch(&mut b, LogPostingKind::Address, &addr, &pruned).unwrap();
+        db.write(b).unwrap();
+        assert_eq!(store.bucket_locs(LogPostingKind::Address, &addr).count(), 1);
+    }
+
+    /// ADR-0020 §16: the block-hash map (210) reclaim is match-guarded so pruning
+    /// one block never drops a still-live block's row, and a tx-index (204) row is
+    /// dropped only once empty.
+    #[test]
+    fn evm_block_hash_map_and_tx_index_prune_reclaim() {
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let bhm = DbEvmBlockHashMapStore::new(db.clone(), CachePolicy::Empty);
+        let id = EvmH256::from_bytes([0xAB; 32]);
+        let owner = bh(0x01);
+        let other = bh(0x02);
+
+        let mut b = WriteBatch::default();
+        bhm.write_batch(&mut b, id, owner).unwrap();
+        db.write(b).unwrap();
+
+        // Guard mismatch: a delete keyed by a different owner leaves the row intact.
+        let mut b = WriteBatch::default();
+        bhm.delete_if_matches_batch(&mut b, id, other).unwrap();
+        db.write(b).unwrap();
+        assert_eq!(bhm.get(id).unwrap(), Some(owner), "must not drop a row owned by a different block");
+
+        // Guard match: the owning block's prune removes exactly its row; a re-prune is a no-op.
+        let mut b = WriteBatch::default();
+        bhm.delete_if_matches_batch(&mut b, id, owner).unwrap();
+        bhm.delete_if_matches_batch(&mut b, id, owner).unwrap();
+        db.write(b).unwrap();
+        assert_eq!(bhm.get(id).unwrap(), None);
+
+        // 204: a row is rewritten while a location remains, deleted once empty.
+        let txs = DbEvmTxIndexStore::new(db.clone(), CachePolicy::Empty);
+        let txh = EvmH256::from_bytes([0x11; 32]);
+        let row = EvmTxLocations { included_in: vec![owner, other], accepted_in: vec![(owner, 0)], last_skip_class: None };
+        let mut b = WriteBatch::default();
+        txs.write_batch(&mut b, txh, row).unwrap();
+        db.write(b).unwrap();
+
+        // Prune `owner`: it is removed from both lists but `other` keeps the row alive.
+        let mut b = WriteBatch::default();
+        let mut r = txs.get_or_default(txh).unwrap();
+        r.included_in.retain(|x| *x != owner);
+        r.accepted_in.retain(|(x, _)| *x != owner);
+        assert!(!(r.included_in.is_empty() && r.accepted_in.is_empty()));
+        txs.write_batch(&mut b, txh, r).unwrap();
+        db.write(b).unwrap();
+        assert_eq!(txs.get_or_default(txh).unwrap().included_in, vec![other]);
+
+        // Prune `other`: both lists empty → the whole row is dropped.
+        let mut b = WriteBatch::default();
+        let mut r = txs.get_or_default(txh).unwrap();
+        r.included_in.retain(|x| *x != other);
+        r.accepted_in.retain(|(x, _)| *x != other);
+        assert!(r.included_in.is_empty() && r.accepted_in.is_empty());
+        txs.delete_batch(&mut b, txh).unwrap();
+        db.write(b).unwrap();
+        assert_eq!(txs.get_or_default(txh).unwrap(), EvmTxLocations::default());
+    }
+
+    /// ADR-0020 §16 (217 acceptance-awareness, adversarial-review fix): EVM inclusion
+    /// and acceptance are decoupled, so a tx whose INCLUSION (payload) block is pruned
+    /// while its ACCEPTANCE block is RETAINED must KEEP its raw-tx (217) row — else
+    /// eth_getTransactionByHash returns null while eth_getTransactionReceipt still
+    /// resolves it. The raw bytes are reclaimed only once the 204 row has no retained
+    /// reference left (NOT on payload ownership alone). This mirrors the prune() loop.
+    #[test]
+    fn evm_raw_tx_kept_until_no_retained_reference() {
+        let (_lt, db) = create_temp_db!(ConnBuilder::default().with_files_limit(10));
+        let txs = DbEvmTxIndexStore::new(db.clone(), CachePolicy::Empty);
+        let raw = DbEvmRawTxStore::new(db.clone(), CachePolicy::Empty);
+        let txh = EvmH256::from_bytes([0x33; 32]);
+        let incl = bh(0xC1); // inclusion (payload) block
+        let acc = bh(0xA1); // acceptance block — a DIFFERENT chain block
+
+        let mut b = WriteBatch::default();
+        raw.write_batch(&mut b, txh, vec![0xde, 0xad], incl).unwrap();
+        txs.write_batch(&mut b, txh, EvmTxLocations { included_in: vec![incl], accepted_in: vec![(acc, 0)], last_skip_class: None })
+            .unwrap();
+        db.write(b).unwrap();
+
+        // The exact 204+217 reclaim the prune() loop performs for a pruned block.
+        let do_prune = |current: BlockHash| {
+            let mut b = WriteBatch::default();
+            let mut r = txs.get_or_default(txh).unwrap();
+            r.included_in.retain(|x| *x != current);
+            r.accepted_in.retain(|(x, _)| *x != current);
+            if r.included_in.is_empty() && r.accepted_in.is_empty() {
+                txs.delete_batch(&mut b, txh).unwrap();
+                raw.delete_batch(&mut b, txh).unwrap();
+            } else {
+                txs.write_batch(&mut b, txh, r).unwrap();
+            }
+            db.write(b).unwrap();
+        };
+
+        // Prune the INCLUSION block: 204 still references the retained acceptance, so
+        // the row is kept and 217 MUST survive.
+        do_prune(incl);
+        assert!(raw.get(txh).unwrap().is_some(), "217 must survive while the tx is still accepted in a retained block");
+        assert_eq!(txs.get_or_default(txh).unwrap().accepted_in, vec![(acc, 0)]);
+
+        // Prune the ACCEPTANCE block too: no retained reference remains → 204 and 217
+        // are both reclaimed (no orphan even though inclusion was pruned first).
+        do_prune(acc);
+        assert!(raw.get(txh).unwrap().is_none(), "217 reclaimed once no retained block references the tx");
+        assert_eq!(txs.get_or_default(txh).unwrap(), EvmTxLocations::default());
     }
 }
