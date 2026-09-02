@@ -21,6 +21,8 @@ Decision 6 (a weightless entrant is seated by an object, not by a re-genesis), A
 > drill → binding, and mainnet ships `PalwConsensusMode::Disabled` until the card is set. Map:
 > [`README.md`](README.md).
 
+> **Security amendment appended (2026-09-02)** — see the last section: the permissionless lane's griefing budget — chunk groups carry a deposit, grading is priced before it is performed, the card's keys are the operators' own, and the tooling reads genesis ∪ chain.
+
 ## 1. The problem: a certificate lived in the binary
 
 ADR-0069 made weight the price of adjudicability: a class holds a share only if some family this
@@ -236,3 +238,26 @@ part that duplicates, a part under another count, an assembly that does not hash
 or a chunked object of any other kind is refused and the block stands. `palw-certify drill`
 writes the chunks beside the whole object and `misaka-cli palw submit-object` carries them as one
 chained burst, each carrier funded from the previous one's change.
+
+## Security amendment (2026-09-02) — the permissionless lane's griefing budget
+
+**SA-1 — Chunk groups are deposited, not merely fee-priced.** `ObjectChunk` groups are unsigned and
+permissionless; eight pending groups × 800,000 bytes live in the state root for up to 4,000 DAA. A
+griefer can hold all eight with junk for ~5.5 days at the price of carriage and block every honest
+drill. Rule: a chunk group's carrier locks a deposit proportional to its bytes (an output the
+transition recognises, as it does a bond's collateral), refunded when the group completes into an
+accepted object and forfeited at TTL or on refusal. Junk pays; honesty is refunded.
+
+**SA-2 — Grading is priced before it is performed.** Two `FamilyCertified` are graded per block
+whether or not they pass; a refused one still costs every validator up to 32 court re-executions.
+The minimum fee for a `FamilyCertified` is derived from its vector count (compute mass, as `misaka
+palw submit-object` already sizes it) and a block that grades one paying less is invalid — so the
+CPU every validator spends per block is bounded by fees the griefer actually paid.
+
+**SA-3 — The card's keys are the operators' own**, generated on their hosts; only public rows enter
+`params.rs` (the testnet-11 practice); a card with two rows sharing an operator id is refused by the
+genesis gate.
+
+**SA-4 — The SDK preflight and the gateway read genesis ∪ chain** (the open item above), because a
+tool that reports a chain-certified class as uncertified will be "fixed" by an operator with a flag,
+and flags that override chain facts are how a rolling re-genesis starts.

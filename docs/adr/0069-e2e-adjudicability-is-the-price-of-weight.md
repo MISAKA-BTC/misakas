@@ -25,6 +25,8 @@ activation, never by re-genesis.
 > is the route ADR-0075 §7 spells out for mainnet. [ADR-0073](0073-real-demand-work-bears-the-weight.md)
 > narrows a certificate's scope to the lane it was drilled on. Map: [`README.md`](README.md).
 
+> **Security amendment appended (2026-09-02) — Decision 7.** The review's open item ("a weightless class's block still adds pwu") is a fork-choice hole with shipped numbers behind it; the last section closes it: an uncertified family's blocks weigh nothing in either chain weight.
+
 ## 1. The goal, stated as a test
 
 PALW's one claim is that its blocks are paid for by *actual* LLM inference. The claim is only as
@@ -314,3 +316,44 @@ Everything the tracking list named, and two things the review found it had not s
 * The ADR-0067 sidecar fence (`--palw-chain-classes`) and the deployment of the ruleset this ADR
   moved are operator decisions, recorded in `docs/palw-step-space-deployment-notes.md` and the
   Relaunch 5 runbook.
+
+## Security amendment (2026-09-02) — the open item is a fork-choice hole, closed as Decision 7
+
+The review note left one item open: "a weightless class's block still adds pwu to fork choice;
+pricing it at zero is an undone fork-choice change". Read against the shipped tree it is not a
+rounding matter.
+
+**The attack, from shipped numbers.** (1) Registration is permissionless; a family whose kernels are
+all in the catalog but not all drilled registers at share 0 (Decision 5). (2) A post-genesis
+entrant's `initial_target` is the base class's live target (the processor's M2-12 rule: "the
+entrant's difficulty is the chain's"); on testnet-11 5e the floor's seed is `MAX/12,663`, so the
+entrant's block claims `expected_draws ≈ 12,663`. (3) `pwu_per_inference` is the class's own counted
+leaves, admitted up to `PALW_STEP_MAX_LEAVES = 2²²`; the hybrid tier already declares 2,685,360. One
+such block's `pwu = expected_draws × per_inference ≈ 12,663 × 4.19×10⁶ ≈ 5.3×10¹⁰`, against
+≈ 4.4×10⁶ for an honest QWEN36 block and ≈ 2.1×10⁹ for a whole class's epoch. (4) A share-0 class
+still has an epoch budget of one block. (5) For an uncertified family a fabricated execution
+commitment cannot be convicted — that is what "uncertified" means — so each draw costs one hash,
+not one inference; 12,663 hashes is nothing. (6) The panel that licenses it is drawn from bonds that
+declared capability for the class (ADR-0071 Decision 3 — a signature and nothing else); for a class
+only its registrant can run, those are the registrant's own bonds, at 400,000 sompi each. One
+fabricated block per epoch then carries ≈ 8× the fork-choice weight the entire honest network
+produces in that epoch, in `safe(C)` once its own panel licenses it to `Final` — the weight the
+IBD and deep-reorg gates read.
+
+**Decision 7 — an uncertified family's blocks weigh nothing.** In `chain_weights_v1`'s inputs, a
+block whose class's family is not attempt-lane certified at that block's chain point (genesis ∪
+chain, ADR-0075 Decision 4) contributes `pwu = 0` to both `safe` and `live`, whatever its ramp
+stage. The block is otherwise unchanged: it advances DAA, it is paid its budgeted subsidy
+(ADR-0039's "admissible for liveness"), its claim runs the same lattice. Weight is what
+certification buys — Decision 5's sentence, applied to the quantity it was written about. This is a
+fork-choice rule and moves the ruleset id: it ships in the next ruleset move and is a mainnet
+precondition.
+
+Two companions, so Decision 7 is not the only wall: **(a)** a `BondCapabilityDeclared` set is
+bounded and priced (ADR-0071's security amendment); **(b)** ADR-0076 §8's field is pinned to the
+base target by the processor today — recorded there — and seating (ADR-0076 Decision 4) re-prices it.
+
+Invariants: **E1** a block of a share-0 or uncertified class contributes 0 to both chain weights at
+every ramp stage; **E2** the same block's subsidy and DAA advance are unchanged; **E3** a class that
+becomes certified mid-chain gains weight only for blocks after the certifying object's chain
+point — never retroactively (a retroactive gain would let a certification reorder history).

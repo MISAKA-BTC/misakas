@@ -16,6 +16,8 @@ ADR-0069's certification scope (a family is certified for the lane it was drille
 > `ClassLaneCertified` object, and the certified free-prompt set is chain state (genesis ∪
 > chain), not the first entry in the build's `palw_rc_fp_certified_families_v1`. Map: [`README.md`](README.md).
 
+> **Security amendment appended (2026-09-02)** — see the last section: preconditions on Phase ④ — the single-block beacon's withholding bias is bounded (`k ≥ 3` attempt blocks), 4b's supply metric counts executors not claims, and receipt weight ramps like attempts.
+
 ## 1. The finding
 
 MISAKA's purpose is a user running a local LLM on a prompt of their own. The chain has two lanes
@@ -235,3 +237,27 @@ the `UnadjudicableCommitment` refusal) and `palw_fp_devnet_v3.rs` ("court 2400";
 | ADR-0068 — the LLM-primary economy, the floor's minimum | refined: real demand is the primary lane; the attempt lane is the floor doctrine's fallback |
 | ADR-0069 — a certified family may bear weight | extended: certification names the lane; the FP bit gates Decision 2 |
 | ADR-0072 §3 "does not make real-demand work the primary lane" | this is the ADR it deferred to |
+
+## Security amendment (2026-09-02) — preconditions on Phase ④ (Decision 4) and on 4b's supply metric
+
+**SA-1 — The beacon's single-block bias is bounded before receipt blocks gain chain position.**
+Today the beacon is the first attempt-class chain block at or after the slot
+(`derive_beacon_fact_v3`); re-rolling costs one inference, but *withholding* costs only that
+block's subsidy: a producer whose block would be the beacon can drop it when the draw is
+unfavourable to its own pending claims. The quantized ticket (ADR-0044 Decision 5) bounds the gain
+per bit; Decision 4 multiplies the stake on that bit by giving receipt blocks position and share.
+Precondition: the beacon becomes the fold of the first `k ≥ 3` attempt blocks at or after the slot,
+so a producer with attempt share `p` controls the draw with probability `pᵏ` instead of `p`; the
+bound is stated here with `p` read from the live share table and pinned by a test on the fork-choice
+simulator. Receipt blocks remain non-beacons (F15).
+
+**SA-2 — 4b's supply metric counts executors, not claims.** "Bounded by what the lane produces"
+must not be movable by one operator flooding `Canonical` self-claims — honest work, but self-dealt.
+Count distinct executor bonds with a certified claim in the span, and cap one bond's contribution
+at `1/seat_count` of the metric; otherwise the share walks toward the lane its largest operator
+dominates.
+
+**SA-3 — A receipt block's chain position is priced by its class's receipt target under the class
+retarget's `max_factor` (4 per epoch), and receipt weight ramps exactly as attempts do**
+(Provisional → ReceiptLicensed → Final); a receipt block whose claim voids is weightless
+retroactively only inside the ramp window and never after `Final` (ADR-0039 3e).

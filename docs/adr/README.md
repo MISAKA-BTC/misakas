@@ -12,10 +12,13 @@ non-ancestral lineage (0039–0048), two same-day ADRs claiming one number (0035
 Reading by number alone gives you the wrong decision. The "Number hygiene" table below is the
 authoritative map.
 
-Last reconciled: **2026-09-02**, against `main` at the Relaunch 5e stack (ADR-0075 + ADR-0076).
-Every ADR whose Status line no longer describes the shipped state carries a blockquote banner
-dated 2026-09-02 under its header, pointing back here. ADR bodies are otherwise never rewritten:
-a reversed decision stays in the file, labelled, so the reasoning that reached it can be found again.
+Last reconciled: **2026-09-02**, against `main` at the Relaunch 5e stack (ADR-0075 + ADR-0076), with
+ADR-0077–0079 read from their branches. Every ADR whose Status line no longer describes the shipped
+state carries a blockquote banner dated 2026-09-02 under its header, pointing back here, and every
+unimplemented decision that was weak against an adversary carries a dated **Security amendment**
+section at its end (the "Security amendments" section below is the list). ADR bodies are otherwise
+never rewritten: a reversed decision stays in the file, labelled, so the reasoning that reached it
+can be found again.
 
 ## The direction that governs the PALW lineage (2026-09-02)
 
@@ -33,7 +36,10 @@ ADR-0069 / ADR-0070 (weight is the price of end-to-end adjudicability; the model
 adjudicable) → ADR-0072 (+ Decision 8) / ADR-0074 (the ticket is the execution; the attempt is a
 claim drawn by the chain's beacon) → ADR-0073 (real-demand work bears the weight — Phases ① and ③
 landed, ② and ④ open) → ADR-0075 (certification is a consensus object) → ADR-0076 (per-class
-attempt-lane seed).
+attempt-lane seed) → *on branches, PROPOSED:* ADR-0077 (a prompt a person would type is a claim the
+court can try — one runtime, checkpoint-priced court, the 512-token rows), ADR-0078 (what was made
+from it is committed; the thing itself never rides — derived artifacts), ADR-0079 (a pure function
+needs no permissions; the sandbox is for the host — no security field ever enters the priced bytes).
 
 What that chain means today, in the sentences people most often get wrong:
 
@@ -155,7 +161,8 @@ genesis and is `None` on devnet and mainnet.
 | 0039–0048 | Held by the non-ancestral `main-backup-8107bfb-20260807` snapshot (`48e3e05f`: snapshot auth, sibling-flood bounding, nullifier prune, PCPB fraud audit, economic calibration, model-genesis dual reproduction, header v4 staging). Released to the live lineage by [ADR-0036](0036-palw-mainnet-activation-model.md) Decision 1; the live 0039–0047 are unrelated to the snapshot's. In particular the live [0041](0041-palw-pruning-proof-verification.md) (pruning-proof verification) is **not** the ADR-0041 that ADR-0036 supersedes. |
 | 0045 | Drafted twice the same day on two branches — the class economy and the V2 consensus-object carriage. The class economy keeps [0045](0045-palw-class-economy-on-chain.md); the carriage ADR is [0046](0046-palw-v2-consensus-object-carriage.md). Code, runbooks and later ADRs (0049, 0060, 0062) already cite the carriage as **ADR-0046**; `main` carried the file under 0045 until 2026-09-02, when this rename reached it. `docs/evidence/palw-rc-launch-blockers-2026-08-21-findings.json` records the old name as a dated audit artifact and is left as is. |
 | 0047 | [The A16 activation tier](0047-palw-a16-activation-tier.md) was written on `palw-mainnet-rc-integration` (`d3880149`, 2026-08-21) and never merged into `main`'s `docs/adr/`, while ADR-0052, `palw_base0_a16.rs`, `engine_a16.rs`, `artifact.rs` and two design docs cite it by number. Restored verbatim 2026-09-02 with a residency note; ADR-0040's amendment trailer that came with it is restored too. |
-| 0048 | Unused on the live lineage (the snapshot's `0048-header-v4-staging-mainnet.md` was never released here). **The next free number is 0077.** |
+| 0048 | Unused on the live lineage (the snapshot's `0048-header-v4-staging-mainnet.md` was never released here). |
+| 0077, 0078, 0079 | Taken on 2026-09-02 on unpushed branches, not yet on `main`: [0077](0077-a-prompt-a-person-would-type-is-a-claim-the-court-can-try.md) and [0078](0078-what-was-made-from-it-is-committed-the-thing-never-rides.md) on `palw-adr0078-impl` (`bb14b63a`; ADR text at `4047e86c`), [0079](0079-a-pure-function-needs-no-permissions-the-sandbox-is-for-the-host.md) on `palw-adr0079-host-security` (`9f97db97`, on top of the former). Their 2026-09-02 security amendments sit on `docs/adr-0077-0079-security-amendments` (off `9f97db97`) for the owners to merge. Each ADR's own §"Number hygiene" records that a concurrent claimant renumbers the later writer. **The next free number is 0080.** |
 | 0054 / 0055 | Two same-day pairs collided at the `palw-share-follows-production` merge (`c6fba1f8`, 2026-08-27). "Share follows production" kept [0054](0054-palw-share-follows-production.md) and "chain position is earned" kept [0055](0055-palw-position-is-earned-not-declared.md); the permissionless-admission ADR (authored as 0054, `81a968bb`) became [0056](0056-palw-permissionless-class-admission-and-share-economy.md) and the runtime-acceleration ADR (authored as 0055, `7d907ebe`) became [0057](0057-palw-base0-runtime-acceleration.md). Commit messages `docs(adr-0054)` / `ADR-0055 — runtime acceleration` and the comment "until ADR-0055 the one still running the scalar" in `misaka-palw-base0/src/kernels.rs` refer to the pre-merge numbers. |
 | 0059 / 0060 | The data-availability court was authored as 0059 (`554ca77c`) and became [0062](0062-data-availability-court.md); the operator-tooling ADR was authored as 0060 and became [0063](0063-operator-tooling-the-missing-half.md) — both at the bond-economics merge (`3ae74676`, 2026-08-30). [0059](0059-the-10b-premine-cap.md) is the premine cap and [0060](0060-the-liveness-doctrine.md) the liveness doctrine. Every `ADR-0059` citation in code and runbooks means the premine cap. |
 | 0069 | The step-space ADR was authored as 0069 and renumbered to [0070](0070-the-model-tiers-step-spaces-are-adjudicable.md) at the audit-remediation merge (`a0b92bf1`, 2026-09-01); [0069](0069-e2e-adjudicability-is-the-price-of-weight.md) is end-to-end adjudicability. Code citations of `ADR-0069 Decision 5/6` mean the weight gate; `docs/palw-step-space-deployment-notes.md` correctly says ADR-0070. |
@@ -189,8 +196,12 @@ survives only as the unrouted `TESTNET11_PARAMS` constant.
   still true; 0055 D1 stands until then).
 * **ADR-0075** — the SDK preflight and the gateway still read the build's certified set, not the
   chain's; the mainnet card is empty until real operator keys exist.
-* **ADR-0076 §8** — a post-genesis registrant still declares its own `initial_target`, written
-  verbatim; the one-line equality closure invalidates every `ClassRegistered` fixture and is deferred.
+* **ADR-0076 §8** — restated 2026-09-02: the processor already pins a post-genesis entrant's
+  `initial_target` to the base class's live target (M2-12), so the field is not free; what stays
+  open is that the pinned price is the floor's until `ClassLaneCertified` re-seeds it (Decision 4),
+  and the fork-choice consequence for an *uncertified* entrant is closed by ADR-0069 Decision 7.
+* **ADR-0069 Decision 7 (2026-09-02)** — an uncertified family's blocks weigh nothing in either chain
+  weight; a fork-choice rule, a ruleset move, and a mainnet precondition (see "Security amendments").
 * **ADR-0072 §3** — mainnet's activation path (a new algo id behind a DAA fence, a lane-filtered
   difficulty window) and the fork-id handshake are recorded, not built; the doctrine's rolling
   upgrade has no shipped mechanism yet.
@@ -211,6 +222,46 @@ survives only as the unrouted `TESTNET11_PARAMS` constant.
   inventory; **ADR-0053 D1a** — the genesis path does not check court-cost ceilings.
 * **ADR-0045 D2 / 0056** — the mid-epoch budget gap (an entrant has no attempt-lane budget until
   the next boundary), kept for state-root compatibility.
+
+## Security amendments (2026-09-02) — what the unimplemented decisions gained before they are built
+
+Read against the shipped tree (Relaunch 5e: ADR-0065 D4 armed, ADR-0072 D8 pins, `min_collateral`
+400,000 sompi post-genesis, the beacon = one attempt block), each still-open decision below was
+weak against an adversary in a way its text did not price. The amendment is appended to the ADR it
+belongs to, dated, with the attack it closes and the invariant that proves it; nothing above the
+amendment is rewritten. Four principles recur, and are the ones to check first in any new ADR:
+
+1. **A free field is a free draw** (ADR-0072 D8) — every value an accused party chooses must be
+   pinned by chain equality, replay, derivation or position, or it is a nonce.
+2. **Silence is not a verdict** (ADR-0064 Fact A, ADR-0065 D4) — a rule may charge a positive,
+   falsifiable claim; it may never charge an abstention; "no object on this chain within W" is the
+   one checkable form of silence, and only with a window a majority would have to sustain.
+3. **Weight is what certification buys** (ADR-0069 D5) — anything an unprosecutable party can
+   produce for free must weigh nothing, however it is licensed.
+4. **The chain never takes the host's word** (ADR-0079 D2/D3) — posture, confinement and
+   attestation live off the consensus path; the host's protection is the operator's, bounded by the
+   exposure ceiling.
+
+| ADR | Security amendment (§ at the end of the file) |
+| --- | --- |
+| [0062](0062-data-availability-court.md) — DA court (Proposed) | SA-1…SA-6: the accusation is a bonded, singular `DefaultAccused` inside the retention window; the disclosure is hash-checked and bounded by `max_close_bytes`; "silence" is a fold fact with `W_disclose ≥ 2×` finality and permissionless carriage; abstaining seats pay nothing; poverty is not default; the lattice is re-derived |
+| [0063](0063-operator-tooling-the-missing-half.md) — operator tooling (D1/D4 open) | SA-1…SA-5: seeds never on argv/env; role-separated BIP39 derivation; retirement signed under the network domain; the `miner` subcommand is deleted; `ClassFrozen` is authored only by the transition |
+| [0066](0066-the-heartbeat-lane-out-of-header-bits-and-a-committed-liveness-table.md) — D4 committed table (Proposed) | SA-1…SA-4: verified from the pruning-point snapshot or no leak; monotone with hysteresis; never below `min_active_validators`; `t_leak_daa` in the identity raw before arming |
+| [0067](0067-classes-are-chain-data-kernels-are-the-build.md) — D5 arming, R-7 (open) | SA-1…SA-4: the interpreter fence is a security fence (ADR-0079 D11's two conditions); resolution off the consensus thread, fails closed to "cannot serve"; re-entry re-verifies from bytes; unpaid seats are a security item |
+| [0069](0069-e2e-adjudicability-is-the-price-of-weight.md) — the open item | **Decision 7**: an uncertified family's blocks weigh nothing — one fabricated block per epoch at the floor's `expected_draws` × 2²² leaves would outweigh ≈ 8 epochs of the honest network; invariants E1–E3; a ruleset move and a mainnet precondition |
+| [0071](0071-the-attempt-lanes-price-and-the-tickets-bound.md) — §5 open item, D3 | SA-1…SA-4: `capable_classes` bounded (16) and replacing; each declared class reserves exposure; a seat is drawn for a class only after production on it (a fold fact); a declaration is a lifecycle object with rent |
+| [0072](0072-the-ticket-is-the-execution.md) — §3 mainnet activation path | SA-1…SA-4: the new lane is seeded by ADR-0076's rule at the fence, not restarted; the fork-id handshake precedes the fence; the version check is fenced; cross-lane replay refused by algo id |
+| [0073](0073-real-demand-work-bears-the-weight.md) — Phase ④ | SA-1…SA-3: the beacon folds `k ≥ 3` attempt blocks before receipt blocks gain position (withholding bias `p → pᵏ`); 4b's supply metric counts executors, capped per bond; receipt weight ramps like attempts |
+| [0075](0075-certification-is-a-consensus-object.md) — open items | SA-1…SA-4: chunk groups carry a deposit (eight junk groups could block drills for ~5.5 days at carriage price); grading is fee-priced before it is performed; the card's keys are the operators' own; tooling reads genesis ∪ chain |
+| [0076](0076-the-attempt-lanes-seed-is-the-retargets-equilibrium.md) — §8 | restated: the processor pins the entrant's target (M2-12); the remaining gap is priced by ADR-0069 D7 |
+| [0077](0077-a-prompt-a-person-would-type-is-a-claim-the-court-can-try.md) — Phases A–D (branch) | SA-1…SA-7: a public gateway's spend of the operator's exposure is quota'd and bounded by the exposure ceiling; openings served to bonded requesters only; F1 covers the prompt side of the stream; the turn deadline is derived from worst-case honest replay; `PanelDa` is a licence until ADR-0062; the persistent runtime re-verifies what it mapped |
+| [0078](0078-what-was-made-from-it-is-committed-the-thing-never-rides.md) — kinds (branch) | SA-1…SA-6: model-written code runs on an ephemeral EVM state under a gas ceiling in a confined process; every transformer declares input/output bounds; uploaded inputs and the DSL DA election are bounded and authenticated; no manifest, no object; task graphs are never executed |
+| [0079](0079-a-pure-function-needs-no-permissions-the-sandbox-is-for-the-host.md) — the security ADR (branch) | SA-1…SA-8: the memory ceiling is not `RLIMIT_AS` (the hybrid maps 33 GiB); the signer trusts the supervisor's channel, not the gateway's bytes; the DA server authenticates; `PATH` leaves the allowlist; Decision 7 = ADR-0077 D6; nothing logs a prompt; per-source rate is not the bound |
+
+Not amended, by decision: [0023](0023-base-three-lane-execution.md) (forward-looking, nothing
+started, outside the PALW lineage — a security pass belongs to the ADR that revives it); 0049 D-G,
+0053 D1a and 0070's open items are correctness gaps in the court's coverage rather than adversarial
+surfaces, and are listed under "What the current direction still owes".
 
 ## Still governing, unreversed
 
