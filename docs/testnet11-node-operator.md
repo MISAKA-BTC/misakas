@@ -29,9 +29,20 @@ not by hashing.
 > `cargo build --release` skips it by default. **The build script is right; earlier revisions of
 > this document were wrong**, and §2, §4, §5, §6 and §9 below carry what they were written for.
 >
-> **Who does need a model:** an operator producing blocks for a model class
-> (`--palw-produce` with that class's artifact). That is the mining path, and it is
-> [testnet11-join-mining.md](testnet11-join-mining.md) — not this document's §2.
+> **Who does need a model** — three roles, and only these three:
+>
+> | role | what it runs | where |
+> |---|---|---|
+> | producing blocks for a model class | `kaspad --palw-produce --palw-class-artifact=<file>` | [testnet11-join-mining.md](testnet11-join-mining.md) §5–6c |
+> | **seating a panel** on a model class | `kaspad --palw-panel --palw-class-artifact=<file>`, once per class | join-mining §6c — a seat re-executes the claim, so it needs the weights |
+> | answering people's prompts | `misaka-palw-gateway --worker palw-a16-fp-worker` (or `palw-qwen36-fp-worker`) | join-mining §7 |
+>
+> None of them is this document's §2, and none of them is `misaka-palw-worker`: that crate's
+> free-prompt arms were deleted by ADR-0077 Decision 5 (consensus refuses their null execution
+> root, and no registered class runs on that runtime). The workers that exist are the **family**
+> workers in `misaka-palw-base0`, and the gateway spawns one and keeps it resident
+> (`--mode v3-serve`): the artifact is mapped, digested and validated once per process rather than
+> once per job.
 
 **What the sections below are.** This file was written for the **algo-4 lane**, where every header
 was verified by re-running a pinned llama.cpp inference. The published network has not worked that
@@ -407,4 +418,15 @@ If you are producing rather than only validating, add the class id your producer
 and the `PALW court certified end-to-end for: …` line from startup.
 
 `palw-worker --mode manifest` was the first item here and is no longer meaningful: a full node has
-no worker to ask.
+no worker to ask, and `palw-worker` no longer has that mode. If you are running the free-prompt
+gateway, the equivalent two lines are the gateway's own `/health` (which names `class_id`, `n_ctx`,
+`confinement_backend`, and the chain's `registered` / `fp_certified` / `bond_active` /
+`exposure_room`) and:
+
+```bash
+misaka node security-report --worker ./target/release/palw-a16-fp-worker
+```
+
+which prints the posture from live state — the backend actually in force, every listening socket
+and whether its bind needed an acknowledgement, which processes hold key material, and the
+artifact digests. It exits 13 (EXPOSED) or 14 (DEGRADED) rather than telling you it is fine.

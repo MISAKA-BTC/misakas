@@ -333,7 +333,195 @@ in [palw-public-testnet-classes-runbook.md](palw-public-testnet-classes-runbook.
 remains the zero-download path and the liveness guarantee; the LLM classes are where the share
 economy (ADR-0054/0056) grows.
 
-**A panel seat does not need the model.** `--palw-panel` verifies material by recomputing roots from
-the material itself; measured on the operator fleet, a validating seat handed a 33 GiB artifact kept
-**0.00 GiB of it resident**. Give `--palw-class-artifact` to producers. A seat that carries it
-anyway is not faster and not safer — it is only larger to configure.
+**A panel seat needs the artifact of every class it may be seated on.** This paragraph used to say
+the opposite, and the measurement it quoted ("a validating seat handed a 33 GiB artifact kept 0.00
+GiB of it resident") was real — of a seat that only re-hashed a capture. That is not what a seat
+does with a free-prompt claim: it **re-executes the claimed job with the class's own kernels**
+(`execute_free_prompt`, `kaspad/src/palw_panel.rs`) and compares roots, and ADR-0077 Decision 8
+narrows that to `k` checkpoint intervals rather than removing the replay. A replay needs the
+weights. A seat with no backend for a class abstains on it — the panel counts that as
+`no backend for the class` — so pass one `--palw-class-artifact` per class you are willing to
+verify:
+
+```bash
+kaspad --testnet --netsuffix=11 ... --palw-panel \
+  --palw-class-artifact=/srv/misaka/qwen36.palwq36 \
+  --palw-class-artifact=/srv/misaka/qwen25-1.5b-a16.palwart
+```
+
+The floor needs none: its weights derive from a seed on every node.
+
+---
+
+## 7. Mining with your own model — a prompt someone types, mined (ADR-0077)
+
+Everything above mines the **attempt lane**: the node picks the job, runs it, and the block is the
+product. This section is the other lane. A person types a prompt, your model answers it, and *that
+inference* — the one the person actually received — is the claim. One inference, one commitment:
+there is no second, mining-only run, and nothing in the pipeline can create one.
+
+**A block does not follow a prompt.** What follows a prompt is a claim, and a claim walks four
+stages before any of its work can be spent. Any interface on this lane says which stage a job is
+in, by these names:
+
+| stage | what happened | chain phase |
+|---|---|---|
+| `submitted` | the `0x4a` commitment transaction was accepted; the claim exists | `Provisional` |
+| `bound` | a panel of five seats was drawn for it | `PanelBound` |
+| `certified` | the seats replayed it and filed `Valid`; a receipt is licensed | `ReceiptLicensed` |
+| `spent` | the receipt matured and one of its quanta paid for a block | `Final`, then spent |
+
+On testnet-11's windows that is roughly **54 hours** from commitment to spendability. It is bind,
+challenge and maturity — fraud-proof safety, not a progress bar someone forgot to speed up. Show
+the stage; do not promise a block.
+
+### 7.1 The three processes
+
+```
+  a browser ──POST /v1/chat/completions──▶ misaka-palw-gateway ──▶ your kaspad (--rpc)
+                    SSE tokens ◀──────────         │  spawns ONCE, --mode v3-serve
+                                                   ▼
+                                        palw-a16-fp-worker  (or palw-qwen36-fp-worker)
+                                                   │  the answer, the capture, the four roots
+                                                   ▼
+                                        <outbox>/fp-job-<id>.*
+                                                   │
+                                    misaka-palw-fp-rail --submit --rpc  ──▶ the chain
+```
+
+* **the gateway** parses the stranger's HTTP, builds the prompt segment-wise, streams the answer,
+  and writes the commitment — and **holds no key** (ADR-0079 Decision 4).
+* **the worker** is resident: the artifact is mapped once, not once per request. It is the same
+  family worker a producer runs, and every job it answers is captured. There is no un-captured
+  chat binary left in this tree.
+* **the rail** holds the bond key (or asks the signer sidecar for one digest), signs, submits, and
+  stages the capture into the node's retention directory — one step, not three.
+
+### 7.2 Run it
+
+You need what §1–§4 already gave you (a registered, Active bond and its key) plus the class's
+artifact and tokenizer.
+
+```bash
+# 1. the identity the gateway commits under — the class you are serving, and your bond
+cat > ~/.misaka/fp-identity.json <<'JSON'
+{ "network_domain": "<128 hex — misaka node security-report prints it>",
+  "class_id":       "<128 hex — kaspad --palw-dump-classes>",
+  "bond_txid":      "<128 hex>", "bond_index": 0,
+  "executor_pubkey":"<misaka-palw-fp-rail --bond-key-seed <f> --print-bond-pubkey>",
+  "operator_id":    "<128 hex>" }
+JSON
+
+# 2. the gateway, on loopback, with the worker under it
+MISAKA_PALW_ARTIFACT=/srv/misaka/qwen25-1.5b-a16.palwart \
+MISAKA_PALW_TOKENIZER=/srv/misaka/qwen2.5-1.5b/tokenizer.json \
+MISAKA_PALW_NETWORK_ID=testnet-11 \
+MISAKA_PALW_CONFINEMENT=linux-seccomp-landlock \
+./target/release/misaka-palw-gateway \
+  --listen 127.0.0.1:8790 \
+  --worker ./target/release/palw-a16-fp-worker \
+  --outbox ~/.misaka/fp-outbox \
+  --identity ~/.misaka/fp-identity.json \
+  --rpc 127.0.0.1:26312 \
+  --class-leaves <the class's canonical leaves — --palw-dump-classes>
+
+# 3. ask it something
+curl -s localhost:8790/v1/chat/completions -H 'content-type: application/json' \
+  -d '{"messages":[{"role":"user","content":"Name the second highest mountain in Japan."}],
+       "max_tokens":64,"stream":true}'
+
+# 4. the one handoff: sign, submit, stage the capture
+./target/release/misaka-palw-fp-rail \
+  --artifact ~/.misaka/fp-outbox/fp-job-<id> \
+  --bond-key-seed ~/.misaka/miner.seed \
+  --funding-outpoint <txid>:1 --funding-amount <sompi> \
+  --capture ~/.misaka/fp-outbox/traces/<id>/material.bin \
+  --retention-dir ~/.t11/palw-retention \
+  --submit --rpc 127.0.0.1:26312
+```
+
+`GET /health` answers the question every operator asks next — *why did my answer not become a
+claim* — by name, from the chain rather than from config:
+
+```
+"chain": { "registered": true, "fp_certified": true, "bond_active": true, "exposure_room": … }
+```
+
+`registered` false means this network does not know your class. `fp_certified` false means the
+class is not seated on the free-prompt lane (ADR-0075 `ClassLaneCertified`) and a commitment would
+be refused as `FreePromptLaneUncertified`. Either way **the user still gets their answer** — the
+answer is the product — and the commitment waits in the outbox with the reason attached. A gateway
+that silently answered without committing would be lying about what you staked on it.
+
+### 7.3 What a stranger's prompt costs you, and the knobs that bound it
+
+A public prompt becomes **your** claim: it reserves `claim_exposure` on your bond and forfeits it
+if your pipeline is faulty. The bound is stated in `/health` under `exposure`, and these are the
+flags that set it:
+
+| flag | what it bounds |
+|---|---|
+| `--claim-exposure-sompi <n>` | what one claim reserves. **`0` (the default) reads it from the chain** — with `--rpc` that is the honest source. |
+| `--bond-exposure-room-sompi <n>` | how much room the bond has. `0` reads it from the chain. Without either, the gateway answers and does not commit: a gateway that cannot price the spend does not spend. |
+| `--public-job-budget-permille <n>` | the fraction of that room strangers may spend per 24 h, so your own claims are never starved by theirs. |
+| `--answer-never-commit` | answer every request, commit none. |
+| `--per-source-jobs-per-window <n>` | a courtesy rate limit per source address. Secondary — sources share addresses behind proxies. |
+
+Two bounds are not flags and cannot be raised: one job runs at a time with at most 8 queued, and a
+queued commitment **expires with its anchor** (3,000 DAA) and is never submitted stale. The lane's
+own ceiling — at most 500‰ of your collateral in flight — is the chain's, printed as
+`free_prompt_exposure_ceiling_permille`.
+
+### 7.4 Before you put it on the internet
+
+The default listen address is loopback. Binding a public address is a deliberate act and the
+gateway refuses to do it quietly:
+
+* set **`MISAKA_PALW_ALLOW_PUBLIC_GATEWAY=1`** — the acknowledgement that a stranger's text now
+  reaches your model host. Without it a non-loopback `--listen` is refused at boot.
+* set **`MISAKA_PALW_CONFINEMENT=linux-seccomp-landlock`** so the worker child runs under a real
+  platform backend. `/health` prints `confinement_backend`, and it prints **`none`** honestly when
+  no backend was installed — a public entrance on a `none` host is the posture ADR-0079 Decision 10
+  refuses.
+* `--derive-seed` (ADR-0078 signing) must point at a file **outside** `--identity`'s directory and
+  outside `--outbox`. The boot check scans exactly those two directories for reachable signing
+  secrets and refuses to start if it finds one.
+* then ask the host what it actually is, from live state rather than from your config:
+
+```bash
+misaka node security-report --worker ./target/release/palw-a16-fp-worker
+# exit 0 = OK, 14 = DEGRADED (no backend, nothing public), 13 = EXPOSED (a public
+# entrance on a none-backend host, or a public parser holding a key)
+```
+
+Worker stderr is **withheld by default** and counted instead: a model runtime line can quote its
+input, and "private unless disputed" would be false if the default log were a disclosure. Set
+`MISAKA_PALW_GATEWAY_LOG_WORKER_STDERR=1` only when you are debugging your own prompts.
+
+### 7.5 Asking for a thing, not only text (ADR-0078)
+
+The same request can ask for a **derivation**: the model's answer is a DSL, a registered
+transformer turns it into an artifact, and what the chain carries is a few hundred bytes naming
+both — never the artifact.
+
+```bash
+curl -s localhost:8790/v1/chat/completions -H 'content-type: application/json' \
+  -d '{"messages":[{"role":"user","content":"A small courtyard at dusk."}],
+       "max_tokens":256, "derive":"scene/glb/v1"}'
+```
+
+The response carries the DSL as the answer, the artifact (inline under
+`--artifact-inline-max`, else by a handle at `GET /v1/artifacts/<derived-id>`), and a signed
+`DerivedArtifactV1`. `misaka-palw-fp-rail --derive-artifact <stem>` signs it and
+`misaka palw submit-object` carries it. Anyone you hand the DSL to can check the whole chain of
+claims themselves, with no trust in you:
+
+```bash
+palw-derive verify --object <derived-object.borsh> --answer scene.json --artifact scene.glb \
+  --output-token-ids ids.json --job-context-hash <hex> --family qwen25-a16
+```
+
+A false derivation is therefore publicly demonstrable. Stated plainly rather than hidden: on this
+lane it costs the executor nothing on chain — no bond hangs on a derivation, because the chain
+cannot run an arbitrary transformer and this network refuses to pretend it can. What it costs is
+your name on a provenance anyone can show is wrong.

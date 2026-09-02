@@ -20,7 +20,10 @@ median rank 0**（チャンスは 124,160）で予測する。これがアーキ
 **整数エンジンが参照に忠実**: 40層フル・155 位置で
 **コサイン 0.9967 / rank 相関 0.9598 / top-1 151/155 / top-5 155/155**、`FAITHFUL`。
 
-**テキストが入ってテキストが出る**:
+**テキストが入ってテキストが出る**（2026-08-26 の実測ログ。`qwen36-chat` はこの記録の後、
+ADR-0077 W0 — 捕捉なしに答えるバイナリをツリーに残さない — により削除された。同じ推論を今日
+走らせるなら `palw-qwen36-fp-worker --mode v3-serve` を `misaka-palw-gateway` の下に置く。
+下の「今日の走らせ方」を参照）:
 
 ```
 $ qwen36-chat --artifact q36-40L.palwq36 --gguf <header> \
@@ -168,6 +171,9 @@ The capital of Japan is Tokyo.
 prefill 15 tok (32.7 tok/s) | decode 7 tok (28.8 tok/s)
 ```
 
+（`base0-chat` も同じ理由で削除済み。同じ経路は
+`palw-a16-fp-worker --mode v3-serve` + `misaka-palw-gateway`。）
+
 日本語（`日本の首都は東京です。`）・俳句・`17 * 23 = 391` も正しい。
 実重みの忠実度は float 参照に対し **top-1 一致 45/57、top-5 56/57、rank 相関 0.893**、
 層ごとの残差ストリーム cosine 0.98–1.00。
@@ -280,3 +286,31 @@ SIMD は i32 レーンで累算したい。`|w| ≤ 128`、`|x| ≤ 32767` な�
 4. **fixture の退化は差分テストを素通りする。** 全サイト同一ゲインの store は logit を全ゼロにしたが、
    高速版と参照版は「両方ゼロ」で一致するので差分テストは緑だった。
    捕まえたのは「別のトークンは別の行を出すか」という非退化テスト
+
+---
+
+## 今日の走らせ方（2026-09-03 追記）
+
+このページの `qwen36-chat` / `base0-chat` の実行例は 2026-08-26 の**測定記録**であって、
+今日の手順ではない。両バイナリは ADR-0077 Decision 1 / 不変条件 W0 で削除された：
+「捕捉のない答えを返すバイナリはツリーに残さない」。`court_capable: false` は、もはや
+このツリーのランタイムが取りうる状態ではない。
+
+同じモデルを同じ整数エンジンで走らせる今日の経路は、ファミリ・ワーカーを
+`misaka-palw-gateway` の下に常駐させることだけである。数字（tok/s、忠実度、mmap のコスト）は
+そのまま有効で、変わったのは**答えが必ず捕捉され、コミットメントになりうる**という一点。
+
+```bash
+MISAKA_PALW_ARTIFACT=/srv/misaka/qwen36.palwq36 \
+MISAKA_PALW_GGUF=/srv/misaka/qwen36-header.bin \
+MISAKA_PALW_NETWORK_ID=testnet-11 \
+./target/release/misaka-palw-gateway \
+  --worker ./target/release/palw-qwen36-fp-worker \
+  --outbox ~/.misaka/fp-outbox --identity ~/.misaka/fp-identity.json --rpc 127.0.0.1:26312
+```
+
+* 常駐（`--mode v3-serve`）なので、33 GiB の mmap・ダイジェスト・検証は**プロセスにつき 1 回**。
+  ジョブごとに 8 分かけていたのはこの部分だった。
+* 同じジョブの 4 つの root は `v3-job` と `v3-serve` で**バイト一致**する（W6）。常駐は
+  コストの決定であって、意味論の決定ではない。
+* 手順・フラグ・露出の上限は [testnet11-join-mining.md](testnet11-join-mining.md) §7。
