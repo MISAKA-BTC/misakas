@@ -2210,6 +2210,59 @@ mod fp_material_tests {
         assert_eq!(back.job, job(&ids));
     }
 
+    /// **The blast radius of arming ADR-0081 Decision 3, derived rather than described.**
+    ///
+    /// `prompt_token_ids_hash` is a field of the JOB, so it is inside `fp_job_id_v3` and inside
+    /// everything derived from it — the claim id, the spend id, the quantum ticket, the L1 tag —
+    /// and it is a field of `PalwJobContextV2`, so it is inside `context_hash()` and therefore
+    /// inside every step leaf, every leg root and the execution commitment. That is the whole
+    /// reason arming the fence is a RE-MINT and not a schedule, and it is asserted here so the
+    /// list cannot quietly fall behind the code.
+    ///
+    /// This test does NOT pin the armed values. There is no network to pin them for: the fence is
+    /// `None` on every preset, and the single re-pin belongs to the genesis cut that arms it.
+    #[test]
+    fn arming_the_merkle_prompt_form_moves_every_id_derived_from_the_job() {
+        use crate::palw_prompt_ids_v1::{PalwPromptIdsFormV1, prompt_token_ids_commitment_v1};
+        let ids = [7u32, 11, 13];
+        let flat = job(&ids);
+        assert_eq!(
+            flat.prompt_token_ids_hash,
+            prompt_token_ids_commitment_v1(PalwPromptIdsFormV1::Flat, &ids).expect("the flat form is total"),
+            "the shipped job commits the flat digest"
+        );
+
+        let mut merkle = flat.clone();
+        merkle.prompt_token_ids_hash = prompt_token_ids_commitment_v1(PalwPromptIdsFormV1::MerkleV1, &ids).expect("three ids commit");
+        assert_ne!(flat.prompt_token_ids_hash, merkle.prompt_token_ids_hash, "the two forms are different commitments");
+        assert_ne!(fp_job_id_v3(&flat), fp_job_id_v3(&merkle), "the job id moves");
+
+        // And the same value inside the CONTEXT moves the execution side. One assertion for the
+        // whole subtree, because `context_hash()` is what every leaf, leg and root binds.
+        let mut ctx = crate::palw_v2::PalwJobContextV2 {
+            version: crate::palw_v2::PALW_TRACE_COMMITMENT_VERSION_V2,
+            network_id: b"blast-radius".to_vec(),
+            job_id: fp_job_id_v3(&flat),
+            job_nullifier: Hash64::from_u64_word(2),
+            assignment_id: Hash64::from_u64_word(3),
+            execution_seed: [1; 32],
+            model_profile_id: Hash64::from_u64_word(4),
+            runtime_manifest_hash: Hash64::from_u64_word(5),
+            runtime_class_id: Hash64::from_u64_word(6),
+            shape_profile_id: Hash64::from_u64_word(7),
+            trace_scheme_id: Hash64::from_u64_word(8),
+            cu_ruleset_id: Hash64::from_u64_word(9),
+            tokenizer_id: Hash64::from_u64_word(10),
+            prompt_token_ids_hash: flat.prompt_token_ids_hash,
+            declared_prefill_tokens: ids.len() as u32,
+            exact_decode_tokens: 1,
+            max_context_tokens: 16,
+        };
+        let flat_ctx_hash = ctx.context_hash();
+        ctx.prompt_token_ids_hash = merkle.prompt_token_ids_hash;
+        assert_ne!(flat_ctx_hash, ctx.context_hash(), "the job context hash moves, and every leaf and leg root with it");
+    }
+
     /// **The DA payload still carries the ids WHOLE, and that is the design** (ADR-0081 Decision 3
     /// carve-out).
     ///
