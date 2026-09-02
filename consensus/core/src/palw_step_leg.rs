@@ -202,6 +202,25 @@ pub struct PalwStepOpeningV1 {
     pub siblings: Vec<Hash64>,
 }
 
+/// **`H(domain ‖ index_le ‖ leaf)` — the step tree's leaf, index-bound so a leaf cannot be moved.**
+///
+/// Public because an executor that folds the same tree sparsely (`misaka-palw-base0`'s
+/// `Base0SparseStepAccumulatorV1`, ADR-0077's Decision 8 openings) has to produce byte-identical
+/// nodes, and the only two ways to arrange that are to export this or to restate it. It was
+/// restated, and a restatement is a second spelling of a consensus hash: a root the court
+/// recomputes differently is an honest producer who can neither be convicted nor paid. So the
+/// spelling lives here, once, and the engine crate calls it.
+pub fn step_merkle_leaf_v1(index: u64, leaf_hash: &Hash64) -> Hash64 {
+    step_merkle_leaf(index, leaf_hash)
+}
+
+/// **The step tree's interior node**, `H(domain ‖ left ‖ right)` — [`step_merkle_leaf_v1`]'s
+/// companion, exported for the same reason and with the same rule: one spelling, in the crate that
+/// owns the domain constants.
+pub fn step_merkle_node_v1(left: &Hash64, right: &Hash64) -> Hash64 {
+    keyed64(PALW_STEP_LEG_DOMAIN_MERKLE_NODE, &[left.as_byte_slice(), right.as_byte_slice()])
+}
+
 fn step_merkle_leaf(index: u64, leaf_hash: &Hash64) -> Hash64 {
     let mut w = Writer::new();
     w.u64(index);
@@ -1382,6 +1401,25 @@ mod tests {
 
     fn h64(fill: u8) -> Hash64 {
         Hash64::from_bytes([fill; 64])
+    }
+
+    /// **The two exported node rules ARE the tree's own**, checked against a real root rather
+    /// than against a second copy of the same expression.
+    ///
+    /// A two-leaf tree is exactly `node(leaf(0), leaf(1))`, so this pins both exports at once: if
+    /// either drifted from what `step_merkle_root_v1` folds, the equality fails here rather than
+    /// in an executor whose captured root nobody can open.
+    #[test]
+    fn the_exported_merkle_rules_are_the_step_trees_own() {
+        let (a, b) = (h64(0x21), h64(0x22));
+        assert_eq!(step_merkle_leaf_v1(0, &a), step_merkle_leaf(0, &a));
+        assert_ne!(step_merkle_leaf_v1(0, &a), step_merkle_leaf_v1(1, &a), "the leaf is index-bound");
+        assert_eq!(
+            step_merkle_root_v1(&[a, b]).expect("a two-leaf root"),
+            step_merkle_node_v1(&step_merkle_leaf_v1(0, &a), &step_merkle_leaf_v1(1, &b)),
+            "the exported rules do not fold the tree the leg folds"
+        );
+        assert_ne!(step_merkle_node_v1(&a, &b), step_merkle_node_v1(&b, &a), "the node is ordered");
     }
 
     fn node(kind: PalwStepOpKindV1, out: PalwStepOutLenV1, tile: u32) -> PalwStepNodeV1 {

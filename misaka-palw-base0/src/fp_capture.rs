@@ -28,19 +28,22 @@
 //! leaf counts including odd ones and every retained level, and the same test covers the sibling
 //! derivation against `step_merkle_range_siblings_v1`.
 //!
-//! # Why the two primitives are spelled again here
+//! # Why the two primitives are CALLED here, and were once spelled again
 //!
-//! `step_merkle_leaf` and the node hash are private to `palw_step_leg`; only their DOMAINS are
-//! public (`PALW_STEP_LEG_DOMAIN_MERKLE_LEAF` / `..._NODE`), and a streaming fold cannot be
-//! expressed through the public whole-vector functions — `step_merkle_root_v1` re-indexes its
-//! leaves from zero, so it cannot value a subtree that starts anywhere else. They are therefore
-//! restated here against those public domains, and the equality test above is what keeps the two
-//! spellings one rule. Exporting them from `palw_step_leg` would be better and is a request in
-//! this workstream's report rather than an edit to a file another agent owns.
+//! A streaming fold cannot be expressed through the public whole-vector functions —
+//! `step_merkle_root_v1` re-indexes its leaves from zero, so it cannot value a subtree that starts
+//! anywhere else — and `step_merkle_leaf` and the node hash were private to `palw_step_leg`. So
+//! this module restated them against the public DOMAIN constants, with the equality test above as
+//! the thing that kept the two spellings one rule.
+//!
+//! That is a test standing in for a definition. The leg now exports
+//! [`kaspa_consensus_core::palw_step_leg::step_merkle_leaf_v1`] and
+//! [`kaspa_consensus_core::palw_step_leg::step_merkle_node_v1`], this module calls them, and there
+//! is one spelling of each rule in the tree. The equality test stays, because it now checks the
+//! FOLD (promote-odd, block boundaries) rather than a re-derivation of two hashes.
 
 use kaspa_consensus_core::palw_step_leg::{
-    PALW_STEP_LEG_DOMAIN_MERKLE_LEAF, PALW_STEP_LEG_DOMAIN_MERKLE_NODE, PALW_STEP_LEG_MAX_LEAVES, PALW_STEP_LEG_MAX_OPENING_SIBLINGS,
-    PalwStepRangeOpeningV1,
+    PALW_STEP_LEG_MAX_LEAVES, PALW_STEP_LEG_MAX_OPENING_SIBLINGS, PalwStepRangeOpeningV1, step_merkle_leaf_v1, step_merkle_node_v1,
 };
 use kaspa_hashes::Hash64;
 
@@ -140,29 +143,14 @@ impl std::fmt::Display for Base0SparseCaptureError {
 
 impl std::error::Error for Base0SparseCaptureError {}
 
-/// `H(domain ‖ index_le ‖ leaf)` — the step tree's leaf, index-bound so a leaf cannot be moved.
-/// The restatement `palw_step_leg` keeps private; the module header says why, and
-/// `the_sparse_accumulator_is_the_step_tree` is what keeps the two one rule.
-fn merkle_leaf_v1(index: u64, leaf_hash: &Hash64) -> Hash64 {
-    let mut preimage = Vec::with_capacity(8 + 64);
-    preimage.extend_from_slice(&index.to_le_bytes());
-    preimage.extend_from_slice(leaf_hash.as_byte_slice());
-    keyed64(PALW_STEP_LEG_DOMAIN_MERKLE_LEAF, &[&preimage])
-}
-
-fn merkle_node_v1(left: &Hash64, right: &Hash64) -> Hash64 {
-    keyed64(PALW_STEP_LEG_DOMAIN_MERKLE_NODE, &[left.as_byte_slice(), right.as_byte_slice()])
-}
-
-fn keyed64(key: &[u8], parts: &[&[u8]]) -> Hash64 {
-    let mut h = blake2b_simd::Params::new().hash_length(64).key(key).to_state();
-    for p in parts {
-        h.update(p);
-    }
-    let mut out = [0u8; 64];
-    out.copy_from_slice(h.finalize().as_bytes());
-    Hash64::from_bytes(out)
-}
+// **The step tree's leaf and node rules are `palw_step_leg`'s, called rather than restated.**
+//
+// They used to be restated here — a `merkle_leaf_v1`, a `merkle_node_v1` and a `keyed64` that
+// reproduced the leg's private ones — and a restatement of a consensus hash is a second spelling
+// of it: the two agreed only because `the_sparse_accumulator_is_the_step_tree` compared their
+// roots, and a root the court recomputes differently is an honest producer who can neither be
+// convicted nor paid. `step_merkle_leaf_v1` / `step_merkle_node_v1` are the leg's own, exported
+// for exactly this caller.
 
 /// The promote-odd fold of one level's nodes into one — the shape `step_merkle_root_v1` walks,
 /// applied to a block whose left edge is even at every level it folds through (which is what makes
@@ -175,7 +163,7 @@ fn fold_block_v1(mut level: Vec<Hash64>) -> Option<Hash64> {
         let mut next = Vec::with_capacity(level.len().div_ceil(2));
         let mut chunks = level.chunks_exact(2);
         for pair in &mut chunks {
-            next.push(merkle_node_v1(&pair[0], &pair[1]));
+            next.push(step_merkle_node_v1(&pair[0], &pair[1]));
         }
         if let [odd] = chunks.remainder() {
             next.push(*odd);
@@ -238,7 +226,7 @@ impl Base0SparseStepAccumulatorV1 {
         if self.pushed >= self.leaf_count {
             return Err(Base0SparseCaptureError::CaptureOverrun { got: self.pushed + 1, expected: self.leaf_count });
         }
-        self.block.push(merkle_leaf_v1(self.pushed, &leaf_hash));
+        self.block.push(step_merkle_leaf_v1(self.pushed, &leaf_hash));
         self.pushed += 1;
         if self.block.len() == 1usize << self.retain_level {
             let block = std::mem::take(&mut self.block);
@@ -340,7 +328,7 @@ impl Base0SparseStepTreeV1 {
             let mut next = Vec::with_capacity(level.len().div_ceil(2));
             let mut chunks = level.chunks_exact(2);
             for pair in &mut chunks {
-                next.push(merkle_node_v1(&pair[0], &pair[1]));
+                next.push(step_merkle_node_v1(&pair[0], &pair[1]));
             }
             if let [odd] = chunks.remainder() {
                 next.push(*odd);
@@ -443,7 +431,7 @@ impl Base0SparseStepTreeV1 {
     /// Levels `0..=retain_level` of the span, each as (nodes, first global position).
     fn span_levels(&self, span_first: u64, span_leaves: &[Hash64]) -> Vec<Vec<Hash64>> {
         let mut levels: Vec<Vec<Hash64>> = Vec::with_capacity(self.retain_level as usize + 1);
-        levels.push(span_leaves.iter().enumerate().map(|(i, h)| merkle_leaf_v1(span_first + i as u64, h)).collect());
+        levels.push(span_leaves.iter().enumerate().map(|(i, h)| step_merkle_leaf_v1(span_first + i as u64, h)).collect());
         for level in 0..self.retain_level {
             let width = level_width(self.leaf_count, level);
             let start = span_first >> level;
@@ -451,7 +439,7 @@ impl Base0SparseStepTreeV1 {
             let mut next = Vec::with_capacity(current.len().div_ceil(2));
             let mut i = 0usize;
             while i + 1 < current.len() {
-                next.push(merkle_node_v1(&current[i], &current[i + 1]));
+                next.push(step_merkle_node_v1(&current[i], &current[i + 1]));
                 i += 2;
             }
             if i < current.len() {
@@ -484,7 +472,7 @@ impl Base0SparseStepTreeV1 {
             let mut next = Vec::with_capacity(current.len().div_ceil(2));
             let mut chunks = current.chunks_exact(2);
             for pair in &mut chunks {
-                next.push(merkle_node_v1(&pair[0], &pair[1]));
+                next.push(step_merkle_node_v1(&pair[0], &pair[1]));
             }
             if let [odd] = chunks.remainder() {
                 next.push(*odd);
@@ -563,19 +551,66 @@ fn level_width(leaf_count: u64, level: u32) -> u64 {
 /// positions after the anchor from zeros. So the map covers both kinds, and the enumeration says
 /// which is which by name rather than by position arithmetic a reader has to reconstruct.
 ///
-/// # Not registered
+/// # Not registered, and superseded for anything that wants to be
 ///
 /// Registering it moves `state_chunk_map_id`, which is inside the checkpoint profile, which is
 /// inside the class id — a re-mint, and a consensus move this workstream does not make. It ships
 /// as the executor's machinery with its layout string frozen and its round trip and its anchored
-/// equivalence pinned, the way ADR-0078's hermetic runner shipped unregistered. The registration
-/// is Phase B's.
-pub const PALW_GDN_STATE_CHUNK_MAP_NAME_V1: &str = "palw-gdn-state/i32-le/kind-major(delta,conv)/layer-asc/head-asc/\
-     row-asc/delta-row=gdn_head_k_dim*4/conv-row=(2*gdn_head_k_dim+gdn_head_v_dim)*gdn_heads*4/chunk<=2^20/v1";
+/// equivalence pinned, the way ADR-0078's hermetic runner shipped unregistered.
+///
+/// **And a class that wants a context registers [`PALW_GDN_STATE_CHUNK_MAP_NAME_V2`] instead.**
+/// The conv row above spans every head, so a court opening one head's window pays for all of them
+/// — 196,608 bytes of an 81,920-byte close carrier on Qwen3.6's geometry. v2 is the same bytes,
+/// keyed by head. v1 stays byte-identical for anything that already named it.
+///
+/// **A RE-EXPORT, not a copy.** The spelling lives in `kaspa_consensus_core::palw_state_chunk_map`
+/// — the lower crate, the one the court reads — and this crate names it so an executor and an
+/// adjudicator cannot come to hold two strings. They did: the same descriptor was written out
+/// twice, here and there, and two spellings of a map name is two ids, which is a class whose
+/// capture and whose court disagree about their map and therefore a class no dispute can open.
+pub use kaspa_consensus_core::palw_state_chunk_map::PALW_GDN_STATE_CHUNK_MAP_NAME_V1;
+/// The head-sliced enumeration of the same state — see
+/// [`kaspa_consensus_core::palw_state_chunk_map::PALW_GDN_STATE_CHUNK_MAP_NAME_V2`]. Re-exported
+/// under the same rule.
+pub use kaspa_consensus_core::palw_state_chunk_map::PALW_GDN_STATE_CHUNK_MAP_NAME_V2;
 
 /// `state_chunk_map_id` for the recurrence layout — the value a class that registers it declares.
+///
+/// The consensus crate's function, called: the id is `H(name)` and both halves of that must come
+/// from one place, or a respelling on either side mints a second id in silence.
 pub fn base0_gdn_state_chunk_map_id_v1() -> Hash64 {
-    kaspa_consensus_core::palw_step::state_chunk_map_id_v1(PALW_GDN_STATE_CHUNK_MAP_NAME_V1)
+    kaspa_consensus_core::palw_state_chunk_map::gdn_state_chunk_map_id_v1()
+}
+
+/// `state_chunk_map_id` for the head-sliced recurrence layout (gdn v2).
+pub fn base0_gdn_state_chunk_map_id_v2() -> Hash64 {
+    kaspa_consensus_core::palw_state_chunk_map::gdn_state_chunk_map_id_v2()
+}
+
+/// **The map id a class of THIS shape registers** — the composition when it has attention layers,
+/// the recurrence's own when it does not.
+///
+/// A hybrid holds both kinds of state, so registering the recurrence map alone would leave its
+/// attention anchors with no geometry a court can read — `Unadjudicable` on honest material — and
+/// registering the cache map alone would leave the recurrence at its genesis-anchored replay. The
+/// executor is the side that files the profile, so the choice is derived here from the graph
+/// rather than passed in: a caller that reached for `base0_gdn_state_chunk_map_id_v2()` on a
+/// Qwen3.6-shaped class would register half a map.
+pub fn base0_class_state_chunk_map_id_v2(profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3) -> Hash64 {
+    if profile.full_attention_interval == 0 {
+        kaspa_consensus_core::palw_state_chunk_map::gdn_state_chunk_map_id_v2()
+    } else {
+        kaspa_consensus_core::palw_state_chunk_map::hybrid_state_chunk_map_id_v2()
+    }
+}
+
+/// [`base0_class_state_chunk_map_id_v2`] on the row-major recurrence enumeration (gdn v1).
+pub fn base0_class_state_chunk_map_id_v1(profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3) -> Hash64 {
+    if profile.full_attention_interval == 0 {
+        kaspa_consensus_core::palw_state_chunk_map::gdn_state_chunk_map_id_v1()
+    } else {
+        kaspa_consensus_core::palw_state_chunk_map::hybrid_state_chunk_map_id_v1()
+    }
 }
 
 /// Which half of the recurrence state a chunk belongs to. The discriminants ARE the enumeration
@@ -883,6 +918,282 @@ pub fn base0_gdn_state_from_chunks_v1(
     Ok(states)
 }
 
+// =============================================================================================
+// gdn v2 — the same state, enumerated so ONE HEAD's window is one opening
+// =============================================================================================
+
+/// **The layout under [`PALW_GDN_STATE_CHUNK_MAP_NAME_V2`]**: the delta half exactly as v1 has it,
+/// and the convolution half keyed by HEAD instead of by window row.
+///
+/// # Why the conv half is re-keyed and the delta half is not
+///
+/// A court replaying `KDESC_Q36_GDN_STEP` replays one HEAD. v1's delta chunks are already per
+/// head, so opening one costs `v_dim × k_dim × 4` — 65,536 bytes on Qwen3.6's geometry, and that
+/// is the state the replay genuinely needs. v1's convolution chunks are per LAYER: one row spans
+/// every head's `2·k + v` channels, so a court that needed one head's four taps opened the layer's
+/// window and paid for thirty-one heads it would not read — 196,608 bytes against an 81,920-byte
+/// carrier, a term constant in the context and therefore payable at no context at all.
+///
+/// v2 covers the SAME bytes. `total_bytes` is v1's, chunk for chunk in the delta half and
+/// head-by-head in the conv half, and `the_two_recurrence_maps_cover_the_same_state` is what makes
+/// that a property rather than a claim.
+///
+/// # The gather, because head `h`'s conv channels are not contiguous
+///
+/// A window row is `[q | k | v]`, region-major, head-major inside each region — the engine's own
+/// `current.extend(q); extend(k); extend(v)` in `Qwen36Engine::linear_attention`. So head `h`'s
+/// channels are three disjoint ranges, and the map's name spells all three: a gather a reader has
+/// to reconstruct is a gather two readers reconstruct differently.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Base0GdnStateGeometryV2 {
+    pub layers: Vec<u16>,
+    pub heads: u32,
+    pub k_dim: u32,
+    pub v_dim: u32,
+    pub conv_kernel: u32,
+    /// `(2 · k_dim + v_dim) · heads` — the full window row the engine holds, which the per-head
+    /// rows are gathered OUT of. Kept so a restore can size the row it scatters back into.
+    pub conv_width: u32,
+    /// `k_dim × 4`: one row of one head's delta state. v1's, unchanged.
+    pub delta_row_bytes: u32,
+    /// `(2 · k_dim + v_dim) × 4`: one head's slice of one window row — the whole of what v2 moves.
+    pub conv_head_row_bytes: u32,
+    pub delta_rows_per_chunk: u32,
+    pub conv_rows_per_chunk: u32,
+}
+
+impl Base0GdnStateGeometryV2 {
+    pub fn delta_chunks_per_head(&self) -> u32 {
+        self.v_dim.div_ceil(self.delta_rows_per_chunk)
+    }
+    pub fn conv_chunks_per_head(&self) -> u32 {
+        self.conv_kernel.div_ceil(self.conv_rows_per_chunk)
+    }
+    /// Every chunk in the map: the delta half, then the conv half, both `(layer, head)`-keyed.
+    pub fn chunk_count(&self) -> u64 {
+        let per_head = self.delta_chunks_per_head() as u64 + self.conv_chunks_per_head() as u64;
+        self.layers.len() as u64 * self.heads as u64 * per_head
+    }
+    pub fn total_bytes(&self) -> u64 {
+        let heads = self.layers.len() as u64 * self.heads as u64;
+        heads * self.v_dim as u64 * self.delta_row_bytes as u64 + heads * self.conv_kernel as u64 * self.conv_head_row_bytes as u64
+    }
+    /// **Head `h`'s channel indices inside one full window row**, in the map's declared order
+    /// `[q, k, v]`. The one spelling of the gather: the chunker and the restorer both walk it, so
+    /// they cannot disagree about which channels are whose.
+    pub fn conv_head_channels(&self, head: u32) -> impl Iterator<Item = usize> + '_ {
+        let (k, v, heads) = (self.k_dim as usize, self.v_dim as usize, self.heads as usize);
+        let h = head as usize;
+        (h * k..h * k + k).chain(heads * k + h * k..heads * k + h * k + k).chain(2 * heads * k + h * v..2 * heads * k + h * v + v)
+    }
+}
+
+/// One chunk of the v2 map: a run of rows of one head's delta state, or of one head's slice of the
+/// convolution window. `head` is meaningful for BOTH kinds, which is the difference from v1.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Base0GdnChunkEntryV2 {
+    pub kind: Base0GdnChunkKindV1,
+    pub layer: u16,
+    pub head: u32,
+    pub row_start: u32,
+    pub row_count: u32,
+    pub row_bytes: u32,
+}
+
+impl Base0GdnChunkEntryV2 {
+    pub fn byte_len(&self) -> u64 {
+        self.row_count as u64 * self.row_bytes as u64
+    }
+}
+
+/// **The v2 layout at this geometry.** Derived, never chosen — the same rule v1 applies, over the
+/// narrower conv row.
+pub fn base0_gdn_state_geometry_v2(
+    layers: &[u16],
+    heads: u32,
+    k_dim: u32,
+    v_dim: u32,
+    conv_kernel: u32,
+) -> Result<Base0GdnStateGeometryV2, Base0GdnStateError> {
+    use kaspa_consensus_core::palw_step_leg::{PALW_STEP_LEG_MAX_STATE_CHUNK_BYTES, PALW_STEP_LEG_MAX_STATE_CHUNKS};
+    if heads == 0 || k_dim == 0 || v_dim == 0 || conv_kernel == 0 {
+        return Err(Base0GdnStateError::ZeroGeometry { heads, k_dim, v_dim });
+    }
+    if layers.is_empty() {
+        return Err(Base0GdnStateError::NoRecurrenceLayers);
+    }
+    let conv_width = (2 * k_dim as u64 + v_dim as u64) * heads as u64;
+    let delta_row_bytes = k_dim as u64 * 4;
+    let conv_head_row_bytes = (2 * k_dim as u64 + v_dim as u64) * 4;
+    for row in [delta_row_bytes, conv_head_row_bytes] {
+        if row > PALW_STEP_LEG_MAX_STATE_CHUNK_BYTES as u64 {
+            return Err(Base0GdnStateError::RowExceedsChunk { row_bytes: row, max: PALW_STEP_LEG_MAX_STATE_CHUNK_BYTES });
+        }
+    }
+    if conv_width > u32::MAX as u64 {
+        return Err(Base0GdnStateError::RowExceedsChunk { row_bytes: conv_width * 4, max: PALW_STEP_LEG_MAX_STATE_CHUNK_BYTES });
+    }
+    let geometry = Base0GdnStateGeometryV2 {
+        layers: layers.to_vec(),
+        heads,
+        k_dim,
+        v_dim,
+        conv_kernel,
+        conv_width: conv_width as u32,
+        delta_row_bytes: delta_row_bytes as u32,
+        conv_head_row_bytes: conv_head_row_bytes as u32,
+        delta_rows_per_chunk: ((PALW_STEP_LEG_MAX_STATE_CHUNK_BYTES as u64 / delta_row_bytes).min(v_dim as u64)) as u32,
+        conv_rows_per_chunk: ((PALW_STEP_LEG_MAX_STATE_CHUNK_BYTES as u64 / conv_head_row_bytes).min(conv_kernel as u64)) as u32,
+    };
+    let count = geometry.chunk_count();
+    if count > PALW_STEP_LEG_MAX_STATE_CHUNKS as u64 {
+        return Err(Base0GdnStateError::TooManyChunks { got: count, max: PALW_STEP_LEG_MAX_STATE_CHUNKS });
+    }
+    Ok(geometry)
+}
+
+/// The v2 entry at `chunk_index`, or `None` past the end of the map — the enumeration itself.
+pub fn base0_gdn_chunk_entry_v2(geometry: &Base0GdnStateGeometryV2, chunk_index: u64) -> Option<Base0GdnChunkEntryV2> {
+    if chunk_index >= geometry.chunk_count() {
+        return None;
+    }
+    let delta_per_head = geometry.delta_chunks_per_head() as u64;
+    let conv_per_head = geometry.conv_chunks_per_head() as u64;
+    let delta_total = geometry.layers.len() as u64 * geometry.heads as u64 * delta_per_head;
+    if chunk_index < delta_total {
+        let layer_ordinal = (chunk_index / (geometry.heads as u64 * delta_per_head)) as usize;
+        let within_layer = chunk_index % (geometry.heads as u64 * delta_per_head);
+        let head = (within_layer / delta_per_head) as u32;
+        let block = (within_layer % delta_per_head) as u32;
+        let row_start = block * geometry.delta_rows_per_chunk;
+        return Some(Base0GdnChunkEntryV2 {
+            kind: Base0GdnChunkKindV1::Delta,
+            layer: geometry.layers[layer_ordinal],
+            head,
+            row_start,
+            row_count: (geometry.v_dim - row_start).min(geometry.delta_rows_per_chunk),
+            row_bytes: geometry.delta_row_bytes,
+        });
+    }
+    let within_conv = chunk_index - delta_total;
+    let layer_ordinal = (within_conv / (geometry.heads as u64 * conv_per_head)) as usize;
+    let within_layer = within_conv % (geometry.heads as u64 * conv_per_head);
+    let head = (within_layer / conv_per_head) as u32;
+    let block = (within_layer % conv_per_head) as u32;
+    let row_start = block * geometry.conv_rows_per_chunk;
+    Some(Base0GdnChunkEntryV2 {
+        kind: Base0GdnChunkKindV1::Conv,
+        layer: geometry.layers[layer_ordinal],
+        head,
+        row_start,
+        row_count: (geometry.conv_kernel - row_start).min(geometry.conv_rows_per_chunk),
+        row_bytes: geometry.conv_head_row_bytes,
+    })
+}
+
+/// **Chunk a live recurrence state under v2** — the capture side, gathering each head's conv
+/// channels out of the full window rows the engine holds.
+pub fn base0_gdn_state_chunks_v2(
+    geometry: &Base0GdnStateGeometryV2,
+    states: &[Base0GdnLayerStateV1],
+) -> Result<Vec<Vec<u8>>, Base0GdnStateError> {
+    if states.len() != geometry.layers.len() {
+        return Err(Base0GdnStateError::NoRecurrenceLayers);
+    }
+    for (ordinal, state) in states.iter().enumerate() {
+        let layer = geometry.layers[ordinal];
+        if state.heads.len() != geometry.heads as usize {
+            return Err(Base0GdnStateError::StateIsNotTheGeometrys { layer, head: state.heads.len() as u32 });
+        }
+        for (head, s) in state.heads.iter().enumerate() {
+            if s.d_k != geometry.k_dim as usize || s.d_v != geometry.v_dim as usize || s.s.len() != s.d_k * s.d_v {
+                return Err(Base0GdnStateError::StateIsNotTheGeometrys { layer, head: head as u32 });
+            }
+        }
+        if state.conv.len() != geometry.conv_kernel as usize || state.conv.iter().any(|r| r.len() != geometry.conv_width as usize) {
+            return Err(Base0GdnStateError::ConvIsNotTheGeometrys { layer });
+        }
+    }
+    let mut out = Vec::with_capacity(geometry.chunk_count() as usize);
+    for index in 0..geometry.chunk_count() {
+        let entry = base0_gdn_chunk_entry_v2(geometry, index)
+            .ok_or(Base0GdnStateError::ChunkCountIsNotTheMaps { got: index as usize, want: geometry.chunk_count() })?;
+        let ordinal = geometry.layers.iter().position(|l| *l == entry.layer).ok_or(Base0GdnStateError::NoRecurrenceLayers)?;
+        let state = &states[ordinal];
+        let mut bytes = Vec::with_capacity(entry.byte_len() as usize);
+        match entry.kind {
+            Base0GdnChunkKindV1::Delta => {
+                let head = &state.heads[entry.head as usize];
+                for row in entry.row_start..entry.row_start + entry.row_count {
+                    let start = row as usize * geometry.k_dim as usize;
+                    for value in &head.s[start..start + geometry.k_dim as usize] {
+                        bytes.extend_from_slice(&value.to_le_bytes());
+                    }
+                }
+            }
+            Base0GdnChunkKindV1::Conv => {
+                for row in entry.row_start..entry.row_start + entry.row_count {
+                    let window = &state.conv[row as usize];
+                    for channel in geometry.conv_head_channels(entry.head) {
+                        let value = window.get(channel).ok_or(Base0GdnStateError::ConvIsNotTheGeometrys { layer: entry.layer })?;
+                        bytes.extend_from_slice(&value.to_le_bytes());
+                    }
+                }
+            }
+        }
+        out.push(bytes);
+    }
+    Ok(out)
+}
+
+/// **Restore a recurrence state from v2 chunks** — the replay side, scattering each head's conv
+/// channels back where the gather took them from.
+pub fn base0_gdn_state_from_chunks_v2(
+    geometry: &Base0GdnStateGeometryV2,
+    chunks: &[Vec<u8>],
+) -> Result<Vec<Base0GdnLayerStateV1>, Base0GdnStateError> {
+    use kaspa_consensus_core::palw_qwen36_ops::Qwen36GdnStateV1;
+    if chunks.len() as u64 != geometry.chunk_count() {
+        return Err(Base0GdnStateError::ChunkCountIsNotTheMaps { got: chunks.len(), want: geometry.chunk_count() });
+    }
+    let mut states: Vec<Base0GdnLayerStateV1> = geometry
+        .layers
+        .iter()
+        .map(|_| Base0GdnLayerStateV1 {
+            heads: (0..geometry.heads).map(|_| Qwen36GdnStateV1::zeros(geometry.v_dim as usize, geometry.k_dim as usize)).collect(),
+            conv: vec![vec![0i32; geometry.conv_width as usize]; geometry.conv_kernel as usize],
+        })
+        .collect();
+    for (index, bytes) in chunks.iter().enumerate() {
+        let entry = base0_gdn_chunk_entry_v2(geometry, index as u64)
+            .ok_or(Base0GdnStateError::ChunkCountIsNotTheMaps { got: chunks.len(), want: geometry.chunk_count() })?;
+        if bytes.len() as u64 != entry.byte_len() {
+            return Err(Base0GdnStateError::ChunkIsNotItsOwnLength { index: index as u64, got: bytes.len(), want: entry.byte_len() });
+        }
+        let ordinal = geometry.layers.iter().position(|l| *l == entry.layer).ok_or(Base0GdnStateError::NoRecurrenceLayers)?;
+        let values: Vec<i32> = bytes.chunks_exact(4).map(|c| i32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+        let width = entry.row_bytes as usize / 4;
+        match entry.kind {
+            Base0GdnChunkKindV1::Delta => {
+                let head = &mut states[ordinal].heads[entry.head as usize];
+                for row in 0..entry.row_count as usize {
+                    let dst = (entry.row_start as usize + row) * width;
+                    head.s[dst..dst + width].copy_from_slice(&values[row * width..(row + 1) * width]);
+                }
+            }
+            Base0GdnChunkKindV1::Conv => {
+                for row in 0..entry.row_count as usize {
+                    let window = &mut states[ordinal].conv[entry.row_start as usize + row];
+                    for (slot, channel) in geometry.conv_head_channels(entry.head).enumerate() {
+                        window[channel] = values[row * width + slot];
+                    }
+                }
+            }
+        }
+    }
+    Ok(states)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1068,6 +1379,112 @@ mod tests {
         );
     }
 
+    /// **The executor's map ids ARE the court's** — one spelling, in the lower crate, called from
+    /// here.
+    ///
+    /// This crate held its own copy of the layout string for a round. Two spellings of a map name
+    /// is two ids, and a class whose capture and whose adjudicator disagree about their map id is a
+    /// class no dispute can open: the producer commits chunks under one identity and the court
+    /// hashes them under another, so every honest refutation reads as malformed evidence. The
+    /// identity is checked here rather than assumed because the copy compiled fine.
+    #[test]
+    fn the_executors_recurrence_map_ids_are_the_courts() {
+        use kaspa_consensus_core::palw_state_chunk_map as map;
+        assert_eq!(base0_gdn_state_chunk_map_id_v1(), map::gdn_state_chunk_map_id_v1());
+        assert_eq!(base0_gdn_state_chunk_map_id_v2(), map::gdn_state_chunk_map_id_v2());
+        assert_ne!(base0_gdn_state_chunk_map_id_v1(), base0_gdn_state_chunk_map_id_v2(), "two enumerations, two ids");
+        assert_eq!(PALW_GDN_STATE_CHUNK_MAP_NAME_V1, map::PALW_GDN_STATE_CHUNK_MAP_NAME_V1);
+        assert_eq!(PALW_GDN_STATE_CHUNK_MAP_NAME_V2, map::PALW_GDN_STATE_CHUNK_MAP_NAME_V2);
+
+        // **A class with attention layers registers the COMPOSITION, not the recurrence half.**
+        // Registering the recurrence map alone leaves its attention anchors with no geometry the
+        // court can read, which is `Unadjudicable` on honest material.
+        let hybrid = kaspa_consensus_core::palw_qwen36_profile::qwen36_profile_v2(
+            kaspa_consensus_core::palw_qwen36_profile::qwen36_geometry_artifact_eps(
+                kaspa_consensus_core::palw_qwen36_profile::QWEN36_35B_A3B,
+            ),
+        )
+        .expect("the pinned hybrid geometry projects");
+        assert_ne!(hybrid.full_attention_interval, 0, "the hybrid stopped having attention layers");
+        assert_eq!(base0_class_state_chunk_map_id_v2(&hybrid), map::hybrid_state_chunk_map_id_v2());
+        assert_eq!(base0_class_state_chunk_map_id_v1(&hybrid), map::hybrid_state_chunk_map_id_v1());
+        let mut recurrent = hybrid.clone();
+        recurrent.full_attention_interval = 0;
+        assert_eq!(base0_class_state_chunk_map_id_v2(&recurrent), map::gdn_state_chunk_map_id_v2());
+        assert_eq!(base0_class_state_chunk_map_id_v1(&recurrent), map::gdn_state_chunk_map_id_v1());
+    }
+
+    /// **v2 is a RE-ORDERING, not a narrowing: the two maps cover the same state.**
+    ///
+    /// Same total bytes, same restored value. A v2 map that dropped a channel would restore a
+    /// state the producer never held and fold forward from it — the divergence surfacing as a
+    /// fault against an honest producer, at a position nobody could point at. The head-slice is
+    /// only sound because the bytes are all still there, so that is what is checked.
+    #[test]
+    fn the_two_recurrence_maps_cover_the_same_state() {
+        let v1 = gdn_geometry();
+        let v2 = base0_gdn_state_geometry_v2(&[1, 3], 2, 4, 3, 3).expect("a v2 geometry");
+        assert_eq!(v2.total_bytes(), v1.total_bytes(), "v2 covers different bytes than v1");
+        assert_eq!(
+            v2.conv_head_row_bytes as u64 * v2.heads as u64,
+            v1.conv_row_bytes as u64,
+            "a head row is the layer row over heads"
+        );
+        // Every channel of a window row belongs to exactly one head, and to one slot of it.
+        let mut seen = std::collections::HashSet::new();
+        for head in 0..v2.heads {
+            for channel in v2.conv_head_channels(head) {
+                assert!(seen.insert(channel), "channel {channel} is in two heads' slices");
+                assert!(channel < v2.conv_width as usize, "channel {channel} is past the window row");
+            }
+        }
+        assert_eq!(seen.len(), v2.conv_width as usize, "the head slices do not cover the window row");
+
+        let live = gdn_live_state(0xC0FFEE, &v1);
+        let chunks = base0_gdn_state_chunks_v2(&v2, &live).expect("v2 chunks");
+        assert_eq!(chunks.len() as u64, v2.chunk_count());
+        assert_eq!(chunks.iter().map(|c| c.len() as u64).sum::<u64>(), v2.total_bytes());
+        for (index, bytes) in chunks.iter().enumerate() {
+            let entry = base0_gdn_chunk_entry_v2(&v2, index as u64).expect("an entry");
+            assert_eq!(bytes.len() as u64, entry.byte_len(), "chunk {index} is its entry's length");
+        }
+        assert_eq!(base0_gdn_state_from_chunks_v2(&v2, &chunks).expect("restores"), live, "the v2 map is not a bijection");
+
+        // The refusals are v1's, for v1's reasons: a partial state is never assembled.
+        let mut short = chunks.clone();
+        short[0].pop();
+        assert!(matches!(
+            base0_gdn_state_from_chunks_v2(&v2, &short),
+            Err(Base0GdnStateError::ChunkIsNotItsOwnLength { index: 0, .. })
+        ));
+        assert!(matches!(base0_gdn_state_from_chunks_v2(&v2, &chunks[1..]), Err(Base0GdnStateError::ChunkCountIsNotTheMaps { .. })));
+        // And the two maps' chunk streams are genuinely different objects — a v1 capture opened
+        // under v2 restores a state nobody folded, which is why they are different classes.
+        assert_ne!(chunks, base0_gdn_state_chunks_v1(&v1, &live).expect("v1 chunks"));
+    }
+
+    /// **The v2 map's cost, on the geometry that decided it.** Qwen3.6: 32 heads of 128, a
+    /// four-tap window. The figures are the court's
+    /// (`palw_state_chunk_map::gdn_state_row_bytes_v*`) read back through the executor's own
+    /// geometry, because a capture whose rows are not the size the court priced is a capture the
+    /// court cannot afford to open.
+    #[test]
+    fn one_heads_opening_is_the_carriers_size_under_v2_and_not_under_v1() {
+        let (heads, k, v, kernel) = (32u32, 128u32, 128u32, 4u32);
+        let layers: Vec<u16> = (0..30).collect();
+        let v1 = base0_gdn_state_geometry_v1(&layers, heads, k, v, kernel).expect("v1");
+        let v2 = base0_gdn_state_geometry_v2(&layers, heads, k, v, kernel).expect("v2");
+        let budget = kaspa_consensus_core::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES;
+
+        let delta = v as u64 * v1.delta_row_bytes as u64;
+        assert_eq!(delta, 65_536);
+        assert_eq!(kernel as u64 * v1.conv_row_bytes as u64, 196_608, "v1's window spans every head");
+        assert_eq!(kernel as u64 * v2.conv_head_row_bytes as u64, 6_144, "v2's window is one head's");
+        assert!(delta + kernel as u64 * v1.conv_row_bytes as u64 > budget, "v1 fits the carrier after all");
+        assert!(delta + kernel as u64 * v2.conv_head_row_bytes as u64 <= budget, "v2 does not fit the carrier");
+        assert_eq!(v1.total_bytes(), v2.total_bytes(), "the re-ordering moved bytes");
+    }
+
     /// **W2 for the recurrence: the anchored replay and the long form reach the same state.**
     ///
     /// The genesis form folds every position from zero — what `gdn_core_genesis_replay` does, and
@@ -1133,19 +1550,42 @@ mod tests {
         }
 
         // Commit it: chunk it under the map, and restore from the CHUNKS.
-        let chunks = base0_gdn_state_chunks_v1(&geometry, &[at_anchor.clone(), at_anchor.clone()]).expect("chunks");
-        let restored = base0_gdn_state_from_chunks_v1(&geometry, &chunks).expect("restores");
-        assert_eq!(restored[0], at_anchor, "the committed state is the state that was folded");
+        //
+        // **Both enumerations, in one sweep.** v2 re-keys the convolution half by head, and a
+        // re-keying is exactly the kind of change that round-trips its own test and still restores
+        // a state the replay folds forward differently. So the equivalence is asserted for each map
+        // against the SAME long form: a v1-named class still reaches the genesis verdict, and so
+        // does a v2-named one.
+        let v2 = base0_gdn_state_geometry_v2(&geometry.layers, geometry.heads, geometry.k_dim, geometry.v_dim, geometry.conv_kernel)
+            .expect("a v2 geometry");
+        let restored_v1 = base0_gdn_state_from_chunks_v1(
+            &geometry,
+            &base0_gdn_state_chunks_v1(&geometry, &[at_anchor.clone(), at_anchor.clone()]).expect("v1 chunks"),
+        )
+        .expect("restores");
+        let restored_v2 = base0_gdn_state_from_chunks_v2(
+            &v2,
+            &base0_gdn_state_chunks_v2(&v2, &[at_anchor.clone(), at_anchor.clone()]).expect("v2 chunks"),
+        )
+        .expect("restores");
+        assert_eq!(restored_v1[0], at_anchor, "the committed state is the state that was folded");
+        assert_eq!(restored_v2[0], at_anchor, "the head-sliced map restores a different state than it was given");
 
-        let mut anchored = restored[0].clone();
-        let anchored_tail = fold(&mut anchored, anchor_at);
+        for (map, restored) in [("gdn v1", &restored_v1), ("gdn v2", &restored_v2)] {
+            let mut anchored = restored[0].clone();
+            let anchored_tail = fold(&mut anchored, anchor_at);
 
-        assert_eq!(
-            anchored_tail,
-            long_head[anchor_at..].to_vec(),
-            "every row after the anchor must be identical — an integer recurrence has no tolerance"
-        );
-        assert_eq!(anchored.heads, long.heads, "and the states they end in are the same state");
-        assert_eq!(anchored_tail.len(), positions - anchor_at, "the anchored form costs the positions since the checkpoint");
+            assert_eq!(
+                anchored_tail,
+                long_head[anchor_at..].to_vec(),
+                "{map}: every row after the anchor must be identical — an integer recurrence has no tolerance"
+            );
+            assert_eq!(anchored.heads, long.heads, "{map}: and the states they end in are the same state");
+            assert_eq!(
+                anchored_tail.len(),
+                positions - anchor_at,
+                "{map}: the anchored form costs the positions since the checkpoint"
+            );
+        }
     }
 }

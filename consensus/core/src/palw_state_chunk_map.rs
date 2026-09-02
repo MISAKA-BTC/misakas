@@ -154,6 +154,116 @@ pub fn hybrid_state_chunk_map_id_v1() -> Hash64 {
     state_chunk_map_id_v1(&palw_hybrid_state_chunk_map_name_v1())
 }
 
+/// **The same recurrence state, enumerated so ONE HEAD's window is one opening (v2).**
+///
+/// # The measurement v1 lost the argument to
+///
+/// v1's delta half is head-sliced — a court replaying `KDESC_Q36_GDN_STEP` needs one head's
+/// `k_dim × v_dim` matrix and opens `v_dim` rows of `k_dim × 4` — and its convolution half is not:
+/// `conv-row = (2·k_dim + v_dim) · gdn_heads · 4` spans EVERY head, so a court that needs one
+/// head's four-tap window opens the whole layer's and pays for thirty-one heads it will not read.
+/// On Qwen3.6's geometry (32 heads of 128) that is 196,608 bytes against a 65,536-byte delta and
+/// an 81,920-byte carrier: the window alone is two and a half closes, and it is the term that used
+/// to make `palw_context_ladder`'s `a_hybrid_row_does_not_fit_the_carrier` true — the test now
+/// reads `a_hybrid_row_fits_the_carrier`, and its first assertion is the one that flipped.
+///
+/// # What v2 changes, and what it deliberately does not
+///
+/// **Exactly the conv enumeration.** The same bytes, in the same little-endian `i32`, covering the
+/// same state — re-ordered so the outer key is the HEAD rather than the window row, which makes a
+/// per-head opening expressible. `gdn_conv_head_slice_bytes_v2` is then
+/// `gdn_conv_kernel · (2·k_dim + v_dim) · 4` = 6,144 bytes on that geometry, and one anchored
+/// recurrence opening is 71,680 — inside the carrier for the first time.
+///
+/// The delta half is byte-identical to v1's, because it was already right.
+///
+/// # The gather, spelled out rather than left to a reader
+///
+/// A conv window row is the concatenated projections `[q | k | v]`, region-major and head-major
+/// inside each region — the executor's own `current.extend(q); extend(k); extend(v)`. Head `h`'s
+/// channels are therefore three disjoint ranges, not one, and the name says which three: a map
+/// whose gather a reader has to reconstruct is a map two readers reconstruct differently.
+///
+/// **A class that adopts it is a DIFFERENT class.** `state_chunk_map_id` is a field of
+/// `PalwShapeProfileV3` and the shape profile id IS the class id, so this registers nothing on any
+/// shipped row and repairs none of them, exactly as v1 registered nothing.
+pub const PALW_GDN_STATE_CHUNK_MAP_NAME_V2: &str = "palw-gdn-state/i32-le/kind-major(delta,conv)/layer-asc/head-asc/row-asc/\
+     delta-row=gdn_head_k_dim*4/conv-head-row=(2*gdn_head_k_dim+gdn_head_v_dim)*4/\
+     conv-head-gather=[q:h*k,k:heads*k+h*k,v:2*heads*k+h*v]/chunk<=2^20/v2";
+
+/// `state_chunk_map_id` for a class whose recurrence checkpoints its own state head by head.
+pub fn gdn_state_chunk_map_id_v2() -> Hash64 {
+    state_chunk_map_id_v1(PALW_GDN_STATE_CHUNK_MAP_NAME_V2)
+}
+
+/// **The hybrid's map over the head-sliced recurrence** — [`palw_hybrid_state_chunk_map_name_v1`]
+/// with its `gdn=` half at v2, spelled as its two parts for the same reason the first composition
+/// is.
+///
+/// A separate name and therefore a separate id, because the composition of two named layouts is
+/// not the same layout when one of them changes: a class that registered the v1 composition
+/// commits its convolution row-major, and reading those chunks head-major would restore a state
+/// the producer never held.
+pub fn palw_hybrid_state_chunk_map_name_v2() -> String {
+    format!("palw-hybrid-state/attn={PALW_INTEGER_KV_STATE_CHUNK_MAP_NAME_V2}/gdn={PALW_GDN_STATE_CHUNK_MAP_NAME_V2}/v2")
+}
+
+/// `state_chunk_map_id` for a hybrid class whose recurrence half is [v2](gdn_state_chunk_map_id_v2).
+pub fn hybrid_state_chunk_map_id_v2() -> Hash64 {
+    state_chunk_map_id_v1(&palw_hybrid_state_chunk_map_name_v2())
+}
+
+/// **What a court opening of ONE head's convolution window costs under v2**:
+/// `gdn_conv_kernel` rows of `(2·k_dim + v_dim) × 4` bytes.
+///
+/// The head-sliced twin of [`gdn_conv_window_bytes_v1`], and the whole of what v2 buys. A court
+/// replaying one head's recurrence needs that head's four taps and nothing else; v1 made it carry
+/// the layer's.
+pub fn gdn_conv_head_slice_bytes_v2(profile: &PalwShapeProfileV3) -> Option<u64> {
+    let k = profile.gdn_head_k_dim as u64;
+    let v = profile.gdn_head_v_dim as u64;
+    let kernel = profile.gdn_conv_kernel as u64;
+    if profile.gdn_heads == 0 || k == 0 || v == 0 {
+        return None;
+    }
+    let row = 2u64.checked_mul(k)?.checked_add(v)?.checked_mul(4)?;
+    (row <= PALW_STEP_LEG_MAX_STATE_CHUNK_BYTES as u64).then_some(())?;
+    row.checked_mul(kernel)
+}
+
+/// The whole recurrence opening a court pays at one anchored step under v2: one head's delta plus
+/// that head's convolution window.
+pub fn gdn_state_row_bytes_v2(profile: &PalwShapeProfileV3) -> Option<u64> {
+    gdn_delta_head_slice_bytes_v1(profile)?.checked_add(gdn_conv_head_slice_bytes_v2(profile)?)
+}
+
+/// **What THIS class's recurrence opening costs, read off the map it registered** — the delta term
+/// and the convolution term, separately, so a caller can see which half is the expensive one.
+///
+/// One dispatch, here, because the alternative is every caller writing `if map == v2 { … }` and
+/// the first one to forget prices a v2 class at v1's window (or the reverse, which is worse: a
+/// price below what the evidence costs admits a class whose disputes nobody can carry). `None` for
+/// a class that registers neither recurrence map, which is the honest answer to "what does its
+/// recurrence anchor cost" — it has none.
+pub fn gdn_state_terms_for_map_v1(profile: &PalwShapeProfileV3) -> Option<(u64, u64)> {
+    let declared = profile.state_chunk_map_id;
+    let delta = gdn_delta_head_slice_bytes_v1(profile)?;
+    if declared == gdn_state_chunk_map_id_v2() || declared == hybrid_state_chunk_map_id_v2() {
+        Some((delta, gdn_conv_head_slice_bytes_v2(profile)?))
+    } else if declared == gdn_state_chunk_map_id_v1() || declared == hybrid_state_chunk_map_id_v1() {
+        Some((delta, gdn_conv_window_bytes_v1(profile)?))
+    } else {
+        None
+    }
+}
+
+/// [`gdn_state_terms_for_map_v1`]'s total: what one anchored recurrence step opens on the map this
+/// class actually registered.
+pub fn gdn_state_row_bytes_for_map_v1(profile: &PalwShapeProfileV3) -> Option<u64> {
+    let (delta, conv) = gdn_state_terms_for_map_v1(profile)?;
+    delta.checked_add(conv)
+}
+
 /// **What a court opening of ONE head's delta state costs**, from the executor's own geometry:
 /// `v_dim` rows of `k_dim × 4` bytes.
 ///
@@ -625,6 +735,105 @@ mod tests {
     #[test]
     fn a_zero_length_state_is_refused_rather_than_mapped_empty() {
         assert_eq!(integer_kv_state_geometry_v1(&rc_profile(), 0), Err(PalwStateChunkMapError::ZeroPositions));
+    }
+
+    /// The Qwen3.6 recurrence geometry, which is the one every figure below is measured on.
+    fn hybrid_profile() -> PalwShapeProfileV3 {
+        crate::palw_qwen36_profile::qwen36_profile_v2(crate::palw_qwen36_profile::qwen36_geometry_artifact_eps(
+            crate::palw_qwen36_profile::QWEN36_35B_A3B,
+        ))
+        .expect("the pinned hybrid geometry projects")
+    }
+
+    /// **What v2 changes, in the two numbers that decided it.**
+    ///
+    /// The delta half is untouched — it was already head-sliced — and the convolution half stops
+    /// carrying thirty-one heads a court will not read. Both figures are computed from the profile
+    /// rather than recited, so a geometry change moves them and a reader can check the arithmetic.
+    #[test]
+    fn the_v2_map_head_slices_the_convolution_and_leaves_the_delta_alone() {
+        let p = hybrid_profile();
+        let (k, v, heads, kernel) = (p.gdn_head_k_dim as u64, p.gdn_head_v_dim as u64, p.gdn_heads as u64, p.gdn_conv_kernel as u64);
+        assert_eq!((k, v, heads, kernel), (128, 128, 32, 4), "the hybrid's recurrence geometry moved — re-read the figures below");
+
+        let delta = gdn_delta_head_slice_bytes_v1(&p).expect("a delta slice");
+        assert_eq!(delta, v * k * 4);
+        assert_eq!(delta, 65_536);
+
+        // v1: one row spans every head, and the window is four of them.
+        assert_eq!(gdn_conv_window_bytes_v1(&p).expect("a v1 window"), kernel * (2 * k + v) * heads * 4);
+        assert_eq!(gdn_conv_window_bytes_v1(&p).expect("a v1 window"), 196_608);
+        // v2: one row is one head's channels.
+        assert_eq!(gdn_conv_head_slice_bytes_v2(&p).expect("a v2 window"), kernel * (2 * k + v) * 4);
+        assert_eq!(gdn_conv_head_slice_bytes_v2(&p).expect("a v2 window"), 6_144);
+        // The whole recurrence opening, which is what the carrier has to hold.
+        assert_eq!(gdn_state_row_bytes_v1(&p).expect("v1"), 262_144);
+        assert_eq!(gdn_state_row_bytes_v2(&p).expect("v2"), 71_680);
+        // v2 covers exactly `heads` times fewer conv bytes and the SAME total state: it is a
+        // re-ordering, not a narrowing. A map that dropped bytes would restore a state the
+        // producer never held.
+        assert_eq!(gdn_conv_head_slice_bytes_v2(&p).expect("v2") * heads, gdn_conv_window_bytes_v1(&p).expect("v1"));
+    }
+
+    /// **The map a class registered is the map its opening is priced under**, and a class that
+    /// registers neither gets no answer rather than a cheap one.
+    #[test]
+    fn the_recurrence_terms_are_read_off_the_registered_map() {
+        let mut p = hybrid_profile();
+        assert_eq!(p.state_chunk_map_id, Hash64::default(), "the shipped hybrid registers a map after all");
+        assert!(gdn_state_terms_for_map_v1(&p).is_none(), "an unmapped class was priced as if it had an anchor");
+
+        for (id, want_conv) in [
+            (gdn_state_chunk_map_id_v1(), 196_608u64),
+            (hybrid_state_chunk_map_id_v1(), 196_608),
+            (gdn_state_chunk_map_id_v2(), 6_144),
+            (hybrid_state_chunk_map_id_v2(), 6_144),
+        ] {
+            p.state_chunk_map_id = id;
+            let (delta, conv) = gdn_state_terms_for_map_v1(&p).expect("a mapped class is priced");
+            assert_eq!(delta, 65_536, "the delta half is the same on every map");
+            assert_eq!(conv, want_conv);
+            assert_eq!(gdn_state_row_bytes_for_map_v1(&p), Some(delta + conv));
+        }
+        // The KV maps are not recurrence maps: a class that registers one of them has no anchored
+        // recurrence and must not be priced as though it did.
+        for id in [integer_kv_state_chunk_map_id_v1(), integer_kv_state_chunk_map_id_v2()] {
+            p.state_chunk_map_id = id;
+            assert!(gdn_state_terms_for_map_v1(&p).is_none(), "a KV-mapped class was given a recurrence price");
+        }
+    }
+
+    /// **Six maps, six ids.** The two cache widths, the two recurrence enumerations, and the two
+    /// compositions. A collision would make one class's evidence readable as another's — a v1
+    /// capture opened head-major, which restores a state nobody folded.
+    #[test]
+    fn every_state_chunk_map_has_its_own_identity() {
+        let ids = [
+            ("integer-kv v1", integer_kv_state_chunk_map_id_v1()),
+            ("integer-kv v2", integer_kv_state_chunk_map_id_v2()),
+            ("gdn v1", gdn_state_chunk_map_id_v1()),
+            ("gdn v2", gdn_state_chunk_map_id_v2()),
+            ("hybrid v1", hybrid_state_chunk_map_id_v1()),
+            ("hybrid v2", hybrid_state_chunk_map_id_v2()),
+        ];
+        let unique: HashSet<_> = ids.iter().map(|(_, id)| *id).collect();
+        assert_eq!(unique.len(), ids.len(), "two state chunk maps share an id");
+        for (name, id) in ids {
+            assert_ne!(id, Hash64::default(), "{name}: the unregistered sentinel is not a map id");
+        }
+        // The v1 spellings are FROZEN: every capture ever taken under one is opened by its id.
+        assert_eq!(
+            PALW_GDN_STATE_CHUNK_MAP_NAME_V1,
+            "palw-gdn-state/i32-le/kind-major(delta,conv)/layer-asc/head-asc/\
+             row-asc/delta-row=gdn_head_k_dim*4/conv-row=(2*gdn_head_k_dim+gdn_head_v_dim)*gdn_heads*4/chunk<=2^20/v1",
+            "the v1 recurrence layout was respelled — every capture taken under the old string is now unopenable"
+        );
+        // And each composition is spelled as its parts, so it cannot drift from either half.
+        let v1 = palw_hybrid_state_chunk_map_name_v1();
+        assert!(v1.contains(PALW_GDN_STATE_CHUNK_MAP_NAME_V1) && v1.contains(PALW_INTEGER_KV_STATE_CHUNK_MAP_NAME_V2));
+        let v2 = palw_hybrid_state_chunk_map_name_v2();
+        assert!(v2.contains(PALW_GDN_STATE_CHUNK_MAP_NAME_V2) && v2.contains(PALW_INTEGER_KV_STATE_CHUNK_MAP_NAME_V2));
+        assert!(!v2.contains(PALW_GDN_STATE_CHUNK_MAP_NAME_V1), "the v2 composition carries the v1 recurrence half");
     }
 
     #[test]

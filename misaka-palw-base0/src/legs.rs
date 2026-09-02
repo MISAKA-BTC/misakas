@@ -399,9 +399,19 @@ pub fn base0_state_chunk_geometry_v1(
 ) -> Result<kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkGeometryV1, LegError> {
     use kaspa_consensus_core::palw_state_chunk_map as map;
     let declared = profile.state_chunk_map_id;
+    // **A hybrid's map names both halves, and this is the CACHE half of it.** The composition is
+    // `attn=<integer-kv v2>/gdn=<recurrence>`, so a class that registers either hybrid id has
+    // declared the four-byte cache layout for its attention layers — chunking it at v1's one byte
+    // per element is the same quarter-width defect the v2 dispatch above exists to close, and
+    // refusing it outright would leave a Qwen3.6-shaped class unable to take a KV checkpoint at
+    // all. The recurrence half of the same name is `fp_capture`'s
+    // (`base0_gdn_state_geometry_v*`); this function answers only about the cache.
     let geometry = if declared == map::integer_kv_state_chunk_map_id_v1() {
         map::integer_kv_state_geometry_v1(profile, positions)
-    } else if declared == map::integer_kv_state_chunk_map_id_v2() {
+    } else if declared == map::integer_kv_state_chunk_map_id_v2()
+        || declared == map::hybrid_state_chunk_map_id_v1()
+        || declared == map::hybrid_state_chunk_map_id_v2()
+    {
         map::integer_kv_state_geometry_v2(profile, positions)
     } else {
         return Err(LegError::CheckpointStateUnavailable { chunk_index: 0 });

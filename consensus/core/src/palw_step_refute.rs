@@ -3071,6 +3071,30 @@ fn canonical_input_leaves_anchored(
         expanded.extend(positions.drain(1..));
         positions = expanded;
     }
+    // **The recurrence's anchored window** (ADR-0077 Decisions 10 and 11). The expansion above is
+    // the genesis-anchored walk — every position from the sequence start — which is what holds the
+    // hybrid's context at eight. A class that registered a recurrence state chunk map commits the
+    // state at every interval boundary, so a refutation carrying a verified anchor replays at most
+    // one interval after it, and `gdn_anchored_positions_v1` is the one spelling of that window:
+    // the prover (`canonical_input_leaves_v1_anchored`) and the checker route through here, so the
+    // required set they derive is the same set rather than two agreeing derivations.
+    //
+    // Gated on the class's OWN map, not on the flag alone: `anchored` also travels with the KV
+    // arms, and narrowing an unmapped class's recurrence would shorten a set no checkpoint covers.
+    // The interval is derived from the profile (`n_ctx` is inside `shape_profile_id`), never
+    // declared, so a registrant cannot buy a shorter replay.
+    if anchored
+        && palw_recurrence_is_checkpoint_anchored_v1(profile)
+        && matches!(program, KernelProgram::GdnCore { .. } | KernelProgram::Qwen36(Qwen36Op::GdnStep))
+        && let Some(window) = gdn_anchored_positions_v1(
+            context.declared_prefill_tokens,
+            out_coord.call_index,
+            out_coord.position,
+            crate::palw_context_ladder::palw_checkpoint_interval_v1(profile.n_ctx),
+        )
+    {
+        positions = window;
+    }
     // **The KV arms (G5c).** An attention step reads its query at the CURRENT position and the
     // cached keys or values at EVERY position up to it — so the position set is a property of the
     // input ref, not of the node, which is why a node-wide `required_positions` could not express
@@ -4083,6 +4107,27 @@ pub fn gdn_anchored_positions_v1(prefill: u32, call_index: u32, position: u32, i
             .map(|i| if i < prefill as u64 { (0u32, i as u32) } else { ((i - prefill as u64 + 1) as u32, 0u32) })
             .collect(),
     )
+}
+
+/// **Does this class commit its RECURRENCE state, or only its cache?** (ADR-0077 Decision 10.)
+///
+/// True exactly for the two maps whose enumeration covers a `GatedDeltaNet` state — the
+/// recurrence's own and the hybrid composition that carries it — in either of their versions. A
+/// class that registers an integer-KV map alone has committed no recurrence state, so its
+/// `GdnCore` replay is still genesis-anchored however many anchors its attention arms carry; a
+/// class that registers nothing has committed neither.
+///
+/// Read off the class's declaration rather than from the shape of its graph, because the
+/// declaration is what the producer's capture dispatched on: the map id is inside the shape profile
+/// id, which is the class id, so an executor and a court that both read it here cannot come to
+/// disagree about which replay a refutation is assembled under.
+pub fn palw_recurrence_is_checkpoint_anchored_v1(profile: &PalwShapeProfileV3) -> bool {
+    use crate::palw_state_chunk_map as map;
+    let declared = profile.state_chunk_map_id;
+    declared == map::gdn_state_chunk_map_id_v1()
+        || declared == map::gdn_state_chunk_map_id_v2()
+        || declared == map::hybrid_state_chunk_map_id_v1()
+        || declared == map::hybrid_state_chunk_map_id_v2()
 }
 
 /// What an anchored recurrence replay leaves behind: the challenged row, and the state a LATER

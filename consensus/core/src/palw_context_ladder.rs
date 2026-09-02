@@ -32,7 +32,7 @@
 //!
 //! | ADR-0077 | here |
 //! |---|---|
-//! | Decision 10 — anchored replay on both kinds of layer | the recurrence's anchored twin ([`crate::palw_step_refute::gdn_core_anchored_replay_v1`]) and its state map ([`crate::palw_state_chunk_map::gdn_state_chunk_map_id_v1`]); W2 proven against the shipped long form |
+//! | Decision 10 — anchored replay on both kinds of layer | the recurrence's anchored twin ([`crate::palw_step_refute::gdn_core_anchored_replay_v1`]), its state map at the head-sliced enumeration ([`crate::palw_state_chunk_map::gdn_state_chunk_map_id_v2`]) and the canonical set that window names ([`crate::palw_step_refute::gdn_anchored_positions_v1`], consumed by `canonical_input_leaves_v1_anchored`); W2 proven against the shipped long form |
 //! | Decision 11 — admission prices the interval | [`PalwCourtCostShapeV1::checkpoint_anchored_v1`] through [`palw_anchored_court_cost_v1`]; W1 proven for the term the decision governs |
 //! | Decision 12 — `COURT_MAX_STEP_LEAVES = 2^32` | [`PALW_CONTEXT_LADDER_MAX_STEP_LEAVES`]; W4 proven at every preset and armed |
 //! | Decision 13 — the 512 rows | [`palw_a16_context_row_profile_v1`], [`palw_qwen36_context_row_profile_v1`], and the bundle caps at the ladder's top |
@@ -48,6 +48,16 @@
 //! 8 KiB of lanes) and cannot collapse its bytes. So the flatness W1 states holds for the
 //! recurrence and is priced honestly as linear for the cache — see
 //! [`palw_kv_checkpoint_opening_bytes_v1`], and the two tests at the bottom that pin each half.
+//!
+//! **And the hybrid 512 row is still refused, for reasons no state chunk map reaches.** The
+//! recurrence half now fits the carrier — gdn v2 head-slices the convolution window, so one
+//! anchored recurrence opening is 71,680 bytes of an 81,920-byte close where gdn v1's was 262,144
+//! — and three terms of the derived close do not: the attention scores row is `attn_heads × n_ctx`
+//! wide (~125 KiB at 512 with no history opened at all), the KV anchor is the whole history
+//! (1,050,624 bytes, charged once per history-reading reference), and the recurrence's own replay
+//! evidence is `interval` positions of five refs at ~2 KiB of Merkle path each.
+//! [`tests::what_still_refuses_the_hybrid_512_row`] measures all three, because a change that
+//! closed one term and left three would otherwise read as success.
 
 use crate::config::constants::consensus::NETWORK_DELAY_BOUND;
 use crate::palw_class_admission_v2::{PalwClassAdmissionError, PalwCourtCostShapeV1, PalwCourtCostV1, derive_court_cost_shaped_v1};
@@ -281,26 +291,45 @@ pub const fn palw_checkpoint_interval_v1(n_ctx: u32) -> u32 {
     if derived == 0 { 1 } else { derived }
 }
 
-/// What ONE checkpoint-chunk opening of the RECURRENCE costs: one head's state row plus the path
-/// that proves it. Constant in `n_ctx` — that is the whole content of Decision 11's widening.
+/// What ONE checkpoint-chunk opening of the RECURRENCE costs under the gdn **v1** map: one head's
+/// delta state, the whole layer's convolution window, and the path that proves them. Constant in
+/// `n_ctx` — that is the whole content of Decision 11's widening.
 ///
 /// `None` for a profile with no recurrence, or one whose head state does not fit a single chunk.
+///
+/// Kept at the v1 geometry unconditionally, so a caller that wants the price of the map a class
+/// actually registered asks [`palw_gdn_checkpoint_opening_bytes_for_map_v1`] and a caller that
+/// wants v1's number gets v1's number. The alternative — one function that silently changed which
+/// layout it answered about — is how a class gets admitted at one price and prosecuted at another.
 pub fn palw_gdn_checkpoint_opening_bytes_v1(profile: &PalwShapeProfileV3, ladder: u64) -> Option<u64> {
     let row = crate::palw_state_chunk_map::gdn_state_row_bytes_v1(profile)?;
+    row.checked_add(step_path_bytes_v1(ladder))
+}
+
+/// [`palw_gdn_checkpoint_opening_bytes_v1`] at the recurrence map the class REGISTERED — which is
+/// the price the gate has to read, because the class's own declaration is what its evidence will
+/// be assembled under.
+pub fn palw_gdn_checkpoint_opening_bytes_for_map_v1(profile: &PalwShapeProfileV3, ladder: u64) -> Option<u64> {
+    let row = crate::palw_state_chunk_map::gdn_state_row_bytes_for_map_v1(profile)?;
     row.checked_add(step_path_bytes_v1(ladder))
 }
 
 /// **What the hybrid's recurrence opening actually costs, in the two terms it is made of** — so a
 /// reader can see WHICH half is the expensive one rather than reading a total.
 ///
-/// Stream B1's measured layout: the delta half is head-sliced (`v_dim` rows of `k_dim × 4`) and
-/// the convolution half is NOT (a conv row spans every head), so on a wide hybrid the window
-/// dominates. `a_hybrid_row_does_not_fit_the_carrier` measures both against the 80 KiB budget.
+/// Read off the map the class REGISTERED
+/// ([`crate::palw_state_chunk_map::gdn_state_terms_for_map_v1`]), because the two enumerations of
+/// the recurrence price differently and the class's own declaration is what says which applies.
+/// Under gdn v1 the delta half is head-sliced (`v_dim` rows of `k_dim × 4`) and the convolution
+/// half is NOT — a conv row spans every head — so on a wide hybrid the window is three times the
+/// whole close budget on its own. Under gdn v2 the window is head-sliced too and the same opening
+/// is 71,680 bytes. `a_hybrid_row_fits_the_carrier` measures both against the 80 KiB budget rather
+/// than asserting either.
+///
+/// `None` for a class that registers no recurrence map — which is the honest answer to "what does
+/// its anchor cost", not a cheap one.
 pub fn palw_gdn_checkpoint_terms_v1(profile: &PalwShapeProfileV3) -> Option<(u64, u64)> {
-    Some((
-        crate::palw_state_chunk_map::gdn_delta_head_slice_bytes_v1(profile)?,
-        crate::palw_state_chunk_map::gdn_conv_window_bytes_v1(profile)?,
-    ))
+    crate::palw_state_chunk_map::gdn_state_terms_for_map_v1(profile)
 }
 
 /// What ONE checkpoint-chunk opening of the KV CACHE costs — and it is `O(n_ctx)`, which is the
@@ -378,11 +407,17 @@ pub fn palw_a16_context_row_profile_v1(n_ctx: u32) -> Result<PalwShapeProfileV3,
 ///
 /// Two things move against the shipped row and both are deliberate: the context, and
 /// `state_chunk_map_id` from the sentinel to
-/// [`crate::palw_state_chunk_map::gdn_state_chunk_map_id_v1`]. The second is what makes the
+/// [`crate::palw_state_chunk_map::hybrid_state_chunk_map_id_v2`]. The second is what makes the
 /// anchored replay available at all — Decision 10's "the recurrence gets its own layout id, in the
 /// checkpoint profile and therefore in the class id" — and it is also why the long form must be
 /// refused for this class: a challenger who could choose between anchored and genesis-anchored
 /// would be choosing which route convicts.
+///
+/// **v2 of the recurrence half, and the reason is measured.** Under gdn v1 one anchored recurrence
+/// opening is 262,144 bytes — a convolution row that spans every head, four of them — against an
+/// 81,920-byte carrier, so the row was refused by a term that is constant in `n_ctx` and could
+/// never be paid at any context. gdn v2 enumerates the same bytes head-major and the same opening
+/// is 71,680. `a_hybrid_row_fits_the_carrier` is that arithmetic, computed from the profile.
 pub fn palw_qwen36_context_row_profile_v1(n_ctx: u32) -> Result<PalwShapeProfileV3, PalwStepError> {
     let geometry = crate::palw_qwen36_profile::qwen36_geometry_artifact_eps(crate::palw_qwen36_profile::PalwQwen36GeometryV1 {
         n_ctx,
@@ -394,12 +429,12 @@ pub fn palw_qwen36_context_row_profile_v1(n_ctx: u32) -> Result<PalwShapeProfile
     // an attention refutation carrying a checkpoint whose geometry the court cannot read —
     // `Unadjudicable` on honest material — and registering the KV map alone would leave the
     // recurrence at the genesis-anchored replay this decision exists to lift. See
-    // `palw_state_chunk_map::palw_hybrid_state_chunk_map_name_v1`, which is spelled as its two
+    // `palw_state_chunk_map::palw_hybrid_state_chunk_map_name_v2`, which is spelled as its two
     // parts so it cannot drift from either.
     profile.state_chunk_map_id = if profile.full_attention_interval == 0 {
-        crate::palw_state_chunk_map::gdn_state_chunk_map_id_v1()
+        crate::palw_state_chunk_map::gdn_state_chunk_map_id_v2()
     } else {
-        crate::palw_state_chunk_map::hybrid_state_chunk_map_id_v1()
+        crate::palw_state_chunk_map::hybrid_state_chunk_map_id_v2()
     };
     profile.validate_shape()?;
     Ok(profile)
@@ -489,14 +524,22 @@ pub fn palw_class_ladder_rules_v1(profile: &PalwShapeProfileV3) -> Option<crate:
         return None;
     }
     debug_assert!(
-        profile.state_chunk_map_id != crate::palw_state_chunk_map::gdn_state_chunk_map_id_v1() || profile.full_attention_interval == 0,
+        !matches!(
+            profile.state_chunk_map_id,
+            id if id == crate::palw_state_chunk_map::gdn_state_chunk_map_id_v1()
+                || id == crate::palw_state_chunk_map::gdn_state_chunk_map_id_v2()
+        ) || profile.full_attention_interval == 0,
         "a class with attention layers registered the recurrence map alone — its attention anchors have no geometry"
     );
     let ladder = PALW_CONTEXT_LADDER_MAX_STEP_LEAVES;
     let interval = palw_checkpoint_interval_v1(profile.n_ctx);
     let mut cost_shape = PalwCourtCostShapeV1::checkpoint_anchored_v1(profile, interval, ladder, 0);
     cost_shape.kv_checkpoint_bytes = palw_kv_checkpoint_opening_bytes_v1(profile, ladder).unwrap_or(u64::MAX);
-    cost_shape.gdn_checkpoint_bytes = palw_gdn_checkpoint_opening_bytes_v1(profile, ladder).unwrap_or(0);
+    // The map the class REGISTERED, never gdn v1 unconditionally: a v2 class priced at v1's
+    // convolution window is charged for thirty-one heads its evidence will not carry, and a v1
+    // class priced at v2's is charged less than its evidence costs — the direction that admits a
+    // class whose disputes nobody can raise.
+    cost_shape.gdn_checkpoint_bytes = palw_gdn_checkpoint_opening_bytes_for_map_v1(profile, ladder).unwrap_or(0);
     Some(crate::palw_class_admission_v2::PalwClassLadderRulesV1 {
         ladder,
         cost_shape,
@@ -896,6 +939,14 @@ mod tests {
         profile
     }
 
+    /// [`recurrent_row`] on the head-sliced recurrence map — the same graph, a different class,
+    /// because `state_chunk_map_id` is inside the shape profile id.
+    fn recurrent_row_v2(n_ctx: u32) -> PalwShapeProfileV3 {
+        let mut profile = recurrent_row(n_ctx);
+        profile.state_chunk_map_id = crate::palw_state_chunk_map::gdn_state_chunk_map_id_v2();
+        profile
+    }
+
     /// **W1.** For a class with a registered state chunk map, the anchored derivation at
     /// `n_ctx = interval`, `2 · interval` and `8 · interval` yields the same `max_close_bytes` and
     /// `max_terminal_macs`.
@@ -960,6 +1011,56 @@ mod tests {
         assert!(wide.max_terminal_macs > narrow.max_terminal_macs, "the long form's recomputation did not grow");
     }
 
+    /// **W1 on the head-sliced map, and the one term gdn v2 moved.**
+    ///
+    /// Same sweep as [`the_anchored_cost_is_flat_in_the_context_for_a_mapped_class`] — `n_ctx` at
+    /// `I`, `2I` and `8I` with the interval fixed — on a class that registers gdn v2, plus the
+    /// question v2 exists to answer: is ONE anchored recurrence opening inside the carrier?
+    ///
+    /// It is (71,680 of 81,920), and it was not (262,144). The whole close is not, and
+    /// `what_still_refuses_the_hybrid_512_row` is where that is measured; asserting it here would
+    /// make this test about the attention half, which no recurrence map touches.
+    #[test]
+    fn the_head_sliced_anchored_cost_is_flat_and_its_opening_fits_the_carrier() {
+        let budget = crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES;
+        let interval = 16u32;
+        let mut baseline: Option<(PalwCourtCostV1, u64)> = None;
+        for multiple in [1u32, 2, 8] {
+            let profile = recurrent_row_v2(interval * multiple);
+            let opening = palw_gdn_checkpoint_opening_bytes_for_map_v1(&profile, PALW_CONTEXT_LADDER_MAX_STEP_LEAVES)
+                .expect("the head-sliced opening derives");
+            assert!(
+                opening <= budget,
+                "one anchored recurrence opening is {opening} bytes against a carrier of {budget} at n_ctx {}",
+                interval * multiple
+            );
+            let mut shape = PalwCourtCostShapeV1::checkpoint_anchored_v1(&profile, interval, PALW_CONTEXT_LADDER_MAX_STEP_LEAVES, 0);
+            shape.count_ids = false;
+            shape.gdn_checkpoint_bytes = opening;
+            shape.kv_checkpoint_bytes =
+                palw_kv_checkpoint_opening_bytes_v1(&profile, PALW_CONTEXT_LADDER_MAX_STEP_LEAVES).unwrap_or(0);
+            let cost = derive_court_cost_shaped_v1(&profile, shape).expect("the anchored cost derives");
+            match &baseline {
+                None => baseline = Some((cost, opening)),
+                Some((first, first_opening)) => {
+                    assert_eq!(
+                        cost.max_close_bytes,
+                        first.max_close_bytes,
+                        "the anchored close moved at n_ctx {}",
+                        interval * multiple
+                    );
+                    assert_eq!(cost.max_terminal_macs, first.max_terminal_macs, "the anchored recomputation moved");
+                    assert_eq!(opening, *first_opening, "the head-sliced opening is not flat in the context");
+                }
+            }
+        }
+        // And the v1 enumeration of the SAME graph is over the carrier — which is what says v2 is
+        // the change and not the sweep.
+        let v1 = palw_gdn_checkpoint_opening_bytes_v1(&recurrent_row(512), PALW_CONTEXT_LADDER_MAX_STEP_LEAVES).expect("derives");
+        assert!(v1 > budget, "gdn v1's opening fits the carrier after all — re-read this test");
+        assert_eq!(v1, 262_144 + 64 * 32);
+    }
+
     /// **What the anchor does NOT flatten, named and measured.** With the id term counted, the
     /// anchored close still grows — by the ids and the decode pin, and by nothing else. Pinned as
     /// an equality against the genesis form's own id arithmetic so the residue cannot quietly
@@ -1007,33 +1108,130 @@ mod tests {
         assert_eq!(rn, rw, "the recurrence's checkpoint is not a summary after all");
     }
 
-    /// **The hybrid's recurrence opening, MEASURED against the carrier rather than assumed to
-    /// fit.** ADR-0077 Decision 11 buys flatness in the context; it does not buy a small constant,
-    /// and on this geometry the constant is the thing that refuses the row.
+    /// **The hybrid's recurrence opening fits the carrier — and it did not, one map ago.**
     ///
-    /// The layout is Stream B1's, which is the executor's: the delta half is head-sliced and the
-    /// convolution half is not (`conv-row = (2·k_dim + v_dim) · gdn_heads · 4`, one row per window
-    /// position), so at Qwen3.6's 32 heads of 128 the window is three times the whole close budget
-    /// on its own. Written down here because the alternative is discovering it at registration.
+    /// This test was `a_hybrid_row_does_not_fit_the_carrier`, and it asserted the opposite of its
+    /// first clause. What changed is the recurrence's ENUMERATION, not its arithmetic: gdn v1's
+    /// convolution row spans every head (`conv-row = (2·k_dim + v_dim) · gdn_heads · 4`, one row
+    /// per window position), so a court that needed ONE head's four-tap window opened the layer's
+    /// and paid for thirty-one heads it would not read — 196,608 bytes against an 81,920-byte
+    /// carrier, a term constant in `n_ctx` and therefore payable at no context at all. gdn v2
+    /// enumerates the same bytes head-major, and the same opening is 6,144.
+    ///
+    /// Every figure is computed from the profile rather than recited, so a geometry change moves
+    /// them and the arithmetic stays checkable.
+    ///
+    /// **What this does NOT say** is that the whole close fits — it does not, and
+    /// `what_still_refuses_the_hybrid_512_row` measures what is left rather than leaving it to be
+    /// discovered at registration.
     #[test]
-    fn a_hybrid_row_does_not_fit_the_carrier() {
+    fn a_hybrid_row_fits_the_carrier() {
+        use crate::palw_state_chunk_map::{gdn_conv_window_bytes_v1, gdn_state_chunk_map_id_v1, hybrid_state_chunk_map_id_v2};
         let row = palw_qwen36_context_row_profile_v1(512).expect("projects");
-        let (delta, conv) = palw_gdn_checkpoint_terms_v1(&row).expect("the geometry derives");
-        assert_eq!(delta, 65_536, "one head's delta state: 128 rows of 128 lanes, four bytes each");
-        assert_eq!(conv, 196_608, "the window: 4 rows of (2·128 + 128) · 32 lanes, four bytes each");
+        assert_eq!(row.state_chunk_map_id, hybrid_state_chunk_map_id_v2(), "the 512 row is not on the head-sliced composition");
+        let (k, v, heads, kernel) =
+            (row.gdn_head_k_dim as u64, row.gdn_head_v_dim as u64, row.gdn_heads as u64, row.gdn_conv_kernel as u64);
         let budget = crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES;
-        assert!(delta + conv > budget, "the recurrence opening now fits {budget} — re-read this test, the row may be registrable");
-        // And the whole derived close says the same thing, through the gate's own arithmetic.
+
+        let (delta, conv) = palw_gdn_checkpoint_terms_v1(&row).expect("the geometry derives");
+        assert_eq!(delta, v * k * 4, "one head's delta state: v_dim rows of k_dim lanes, four bytes each");
+        assert_eq!(delta, 65_536);
+        assert_eq!(conv, kernel * (2 * k + v) * 4, "one head's window: conv_kernel rows of (2·k + v) lanes");
+        assert_eq!(conv, 6_144);
+        assert_eq!(delta + conv, 71_680);
+        assert!(delta + conv <= budget, "the recurrence opening is {} bytes against a carrier of {budget}", delta + conv);
+
+        // The v1 enumeration, on the same geometry, for the contrast that says what moved — and
+        // it is still the price a v1-mapped class pays, because a class IS its map.
+        let mut old = row.clone();
+        old.state_chunk_map_id = gdn_state_chunk_map_id_v1();
+        let (old_delta, old_conv) = palw_gdn_checkpoint_terms_v1(&old).expect("v1 derives");
+        assert_eq!(old_delta, delta, "v2 changed the delta half, which was already head-sliced");
+        assert_eq!(old_conv, gdn_conv_window_bytes_v1(&row).expect("v1 window"));
+        assert_eq!(old_conv, 196_608);
+        assert_eq!(old_conv, conv * heads, "the two enumerations cover the same bytes");
+        assert!(old_delta + old_conv > budget, "gdn v1 fits the carrier after all — this test's whole premise moved");
+
+        // The dense row, for contrast: no recurrence at all, and it is the KV history that refuses
+        // it. Two different reasons, and a change that fixed one would leave the other.
+        let dense = palw_a16_context_row_profile_v1(512).expect("projects");
+        assert!(palw_gdn_checkpoint_terms_v1(&dense).is_none(), "the dense tier declared a recurrence");
+    }
+
+    /// **What still refuses the hybrid 512 row, measured — because a fix that closed one term and
+    /// left three is a fix that reads as success.**
+    ///
+    /// gdn v2 removes the recurrence opening's `gdn_heads` factor and nothing else. Three terms of
+    /// the derived close are untouched by any state chunk map, and every one of them is over the
+    /// carrier on its own at `n_ctx` 512:
+    ///
+    /// * **the attention scores row is `attn_heads × n_ctx` wide.** At 512 that is 8,192 lanes, and
+    ///   the softmax node's close is ~125 KiB with NO history opened at all — the term is a
+    ///   property of the context, not of the anchor, and `a_kv_checkpoint_is_the_history_and_grows_with_it`
+    ///   is the same finding from the cache's side.
+    /// * **the KV checkpoint is the whole history**: `n_ctx × attn_kv_heads × attn_head_dim × 4`,
+    ///   1,050,624 bytes at 512, charged once per history-reading reference.
+    /// * **the recurrence's own replay evidence** is `interval` positions × five refs × one
+    ///   sibling set each, ~2 KiB of path per run at the `2^32` ladder — ~169 KiB at interval 16,
+    ///   before a single checkpoint byte.
+    ///
+    /// Pinned as inequalities against the budget rather than as exact byte counts, so the test
+    /// states the finding and does not become a golden nobody may move.
+    #[test]
+    fn what_still_refuses_the_hybrid_512_row() {
+        let budget = crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES;
+        let row = palw_qwen36_context_row_profile_v1(512).expect("projects");
+
+        // The whole derived close, through the gate's own arithmetic.
         let cost = palw_anchored_court_cost_v1(&row).expect("a mapped row is priced").expect("derives");
         assert!(
             cost.max_close_bytes > budget,
             "the hybrid 512 row became carriable at {} bytes — Decision 13's row is registrable and the sizing note needs it",
             cost.max_close_bytes
         );
-        // The dense row, for contrast: no recurrence at all, and it is the KV history that refuses
-        // it. Two different reasons, and a change that fixed one would leave the other.
-        let dense = palw_a16_context_row_profile_v1(512).expect("projects");
-        assert!(palw_gdn_checkpoint_terms_v1(&dense).is_none(), "the dense tier declared a recurrence");
+
+        // Term 1: the attention cache's anchor is the history, and it alone is over the carrier.
+        let kv = palw_kv_checkpoint_opening_bytes_v1(&row, PALW_CONTEXT_LADDER_MAX_STEP_LEAVES).expect("derives");
+        assert_eq!(kv, (row.n_ctx as u64) * (row.attn_kv_heads as u64) * (row.attn_head_dim as u64) * 4 + 64 * 32);
+        assert!(kv > budget, "the KV anchor fits now — the attention half stopped being the history");
+
+        // Term 2: the recurrence's replay evidence, with every checkpoint byte removed. Sixteen
+        // positions of five refs, each run carrying one sibling set at the ladder's depth.
+        let mut bare = palw_class_ladder_rules_v1(&row).expect("a mapped row has rules").cost_shape;
+        bare.gdn_checkpoint_bytes = 0;
+        bare.kv_checkpoint_bytes = 0;
+        let without_anchors = derive_court_cost_shaped_v1(&row, bare).expect("derives");
+        assert!(
+            without_anchors.max_close_bytes > budget,
+            "with NO anchor bytes at all the close is {} — the residue this test names is gone",
+            without_anchors.max_close_bytes
+        );
+
+        // Term 3: and it is still over with the history term collapsed to a single position, which
+        // is what says the residue is the CONTEXT's width rather than the interval's length.
+        bare.history_positions = 1;
+        let single = derive_court_cost_shaped_v1(&row, bare).expect("derives");
+        assert!(
+            single.max_close_bytes > budget,
+            "a one-position history now fits at {} — the attention row stopped being n_ctx-wide",
+            single.max_close_bytes
+        );
+
+        // **And the term no state chunk map can shrink further**: one head's delta state is
+        // `k_dim × v_dim × 4`, and a court replaying that head needs all of it — the recurrence is
+        // separable across output lanes but the head's tile IS its `v_dim` lanes. At Qwen3.6's
+        // 128 × 128 that is 80 % of the whole carrier before a single step leaf is opened, which
+        // is the ceiling gdn v2 reaches and does not pass. Written down as the arithmetic rather
+        // than as a byte count so a narrower head moves it.
+        let (delta, _) = palw_gdn_checkpoint_terms_v1(&row).expect("terms");
+        assert_eq!(delta, (row.gdn_head_k_dim as u64) * (row.gdn_head_v_dim as u64) * 4);
+        assert!(delta * 10 > budget * 7, "one head's delta state is no longer most of the carrier — the geometry moved");
+        // The gate charges one such opening per history-reading REFERENCE, and the recurrence node
+        // declares five, so the anchored shape's floor for this graph is five of them however
+        // short the interval is. Named here because it is the largest single lever left and it
+        // lives in `derive_court_cost_shaped_v1`, not in any map.
+        let node_refs = 5u64;
+        assert!(node_refs * (delta + 6_144 + 64 * 32) > budget, "the per-reference anchor charge stopped being the floor");
     }
 
     /// **The recurrence's anchored position list is the interval window**, and it is the same
@@ -1066,6 +1264,59 @@ mod tests {
         assert!(gdn_anchored_positions_v1(prefill, 0, 0, 0).is_none());
     }
 
+    /// **And the canonical leaf set is the one that window names** — the prover's door and the
+    /// checker's derive the same rows, because they are the same derivation.
+    ///
+    /// `gdn_anchored_positions_v1` was a function with no consumer: the anchored flag shortened the
+    /// KV arms and left the recurrence at its genesis-anchored walk, so a class that committed its
+    /// recurrence state still had to open every position from the sequence start. Wiring it is the
+    /// half of Decision 10 that turns the map from a commitment nobody spends into a shorter
+    /// refutation.
+    ///
+    /// The narrowing is gated on the class's OWN map: a class that committed no recurrence state
+    /// keeps the long walk however many anchors its attention arms carry, because a set shortened
+    /// past what a checkpoint covers is a set the court cannot verify.
+    #[test]
+    fn the_anchored_recurrence_opens_the_window_and_not_the_history() {
+        use crate::palw_step::kernel_semantics_id_v1;
+        use crate::palw_step_refute::{KDESC_Q36_GDN_STEP, canonical_input_leaves_v1_anchored};
+        let mapped = recurrent_row_v2(512);
+        let gdn_kernel = kernel_semantics_id_v1(KDESC_Q36_GDN_STEP);
+        let slot = (0..u32::MAX)
+            .take_while(|s| mapped.resolve_node_slot(*s).is_some())
+            .find(|s| mapped.resolve_node_slot(*s).is_some_and(|(n, _)| n.kernel_semantics_id == gdn_kernel))
+            .expect("the recurrent row has a recurrence node");
+        let (node, _) = mapped.resolve_node_slot(slot).expect("resolves");
+        let refs = node.input_refs.len();
+        let ctx = crate::palw_base0_profile::rc_job_context(&mapped, 128, 2);
+        let coord = crate::palw_step::PalwStepCoordinateV1 { call_index: 0, node_slot: slot, position: 100, tile_index: 0 };
+
+        let long = canonical_input_leaves_v1_anchored(&mapped, &ctx, &coord, false).expect("the long set derives");
+        let anchored = canonical_input_leaves_v1_anchored(&mapped, &ctx, &coord, true).expect("the anchored set derives");
+        // The interval below position 100 is 96, so the window is 96..=100 — five positions of the
+        // node's refs, against a hundred and one.
+        assert_eq!(palw_checkpoint_interval_v1(mapped.n_ctx), 16);
+        assert_eq!(anchored.len(), 5 * refs, "the anchored set is not one interval window of rows");
+        assert_eq!(long.len(), 101 * refs, "the long walk is not the whole prefix");
+        // And it is the long set's TAIL, row for row: one canonical set read from two encodings of
+        // the same committed rows, never a second enumeration that merely agrees.
+        assert_eq!(anchored, long[long.len() - anchored.len()..].to_vec(), "the window is not the long walk's own tail");
+
+        // A class that registers no recurrence map keeps the long walk under the same flag.
+        let mut unmapped = mapped.clone();
+        unmapped.state_chunk_map_id = crate::Hash64::default();
+        assert_eq!(
+            canonical_input_leaves_v1_anchored(&unmapped, &ctx, &coord, true).expect("derives").len(),
+            long.len(),
+            "an unmapped class's recurrence was narrowed to a window no checkpoint covers"
+        );
+        // The gdn v1 enumeration commits the same state, so it narrows too — the window is a
+        // property of the CHECKPOINT existing, not of how its bytes are ordered.
+        let mut v1 = mapped.clone();
+        v1.state_chunk_map_id = crate::palw_state_chunk_map::gdn_state_chunk_map_id_v1();
+        assert_eq!(canonical_input_leaves_v1_anchored(&v1, &ctx, &coord, true).expect("derives").len(), anchored.len());
+    }
+
     /// **The map id a court reads is the one an executor captured under.** `misaka-palw-base0`
     /// derives its recurrence map id from a string it holds as `PALW_GDN_STATE_CHUNK_MAP_NAME_V1`;
     /// this crate is the lower one and holds the spelling. A second spelling would be a second id,
@@ -1075,8 +1326,9 @@ mod tests {
     #[test]
     fn the_recurrence_map_id_is_the_executors_own_spelling() {
         use crate::palw_state_chunk_map::{
-            PALW_GDN_STATE_CHUNK_MAP_NAME_V1, gdn_state_chunk_map_id_v1, hybrid_state_chunk_map_id_v1,
-            integer_kv_state_chunk_map_id_v2, palw_hybrid_state_chunk_map_name_v1,
+            PALW_GDN_STATE_CHUNK_MAP_NAME_V1, PALW_GDN_STATE_CHUNK_MAP_NAME_V2, gdn_state_chunk_map_id_v1, gdn_state_chunk_map_id_v2,
+            hybrid_state_chunk_map_id_v1, hybrid_state_chunk_map_id_v2, integer_kv_state_chunk_map_id_v2,
+            palw_hybrid_state_chunk_map_name_v1, palw_hybrid_state_chunk_map_name_v2,
         };
         assert_eq!(
             PALW_GDN_STATE_CHUNK_MAP_NAME_V1,
@@ -1084,23 +1336,33 @@ mod tests {
              row-asc/delta-row=gdn_head_k_dim*4/conv-row=(2*gdn_head_k_dim+gdn_head_v_dim)*gdn_heads*4/chunk<=2^20/v1",
             "the recurrence layout was respelled — every capture taken under the old string is now unopenable"
         );
-        // Four distinct maps, four distinct ids: the two cache widths, the recurrence, and the
-        // composition. A collision would make one class's evidence readable as another's.
+        // Six distinct maps, six distinct ids: the two cache widths, the two recurrence
+        // enumerations, and the two compositions. A collision would make one class's evidence
+        // readable as another's — a row-major capture opened head-major restores a state nobody
+        // folded.
         let ids = [
             crate::palw_state_chunk_map::integer_kv_state_chunk_map_id_v1(),
             integer_kv_state_chunk_map_id_v2(),
             gdn_state_chunk_map_id_v1(),
+            gdn_state_chunk_map_id_v2(),
             hybrid_state_chunk_map_id_v1(),
+            hybrid_state_chunk_map_id_v2(),
         ];
         let unique: std::collections::BTreeSet<_> = ids.iter().collect();
         assert_eq!(unique.len(), ids.len(), "two state chunk maps share an id");
         assert!(ids.iter().all(|id| *id != crate::Hash64::default()), "the unregistered sentinel is not a map id");
-        // The composition is spelled as its parts, so it cannot drift from either.
+        // Each composition is spelled as its parts, so it cannot drift from either.
         let name = palw_hybrid_state_chunk_map_name_v1();
         assert!(name.contains(PALW_GDN_STATE_CHUNK_MAP_NAME_V1) && name.contains("palw-integer-kv/i32-le"));
+        let name_v2 = palw_hybrid_state_chunk_map_name_v2();
+        assert!(name_v2.contains(PALW_GDN_STATE_CHUNK_MAP_NAME_V2) && name_v2.contains("palw-integer-kv/i32-le"));
         // And the hybrid row registers the composition rather than half of it.
-        assert_eq!(palw_qwen36_context_row_profile_v1(512).expect("projects").state_chunk_map_id, hybrid_state_chunk_map_id_v1());
+        assert_eq!(palw_qwen36_context_row_profile_v1(512).expect("projects").state_chunk_map_id, hybrid_state_chunk_map_id_v2());
         assert_eq!(recurrent_row(512).state_chunk_map_id, gdn_state_chunk_map_id_v1(), "a pure-recurrent row needs no cache map");
+        assert_eq!(recurrent_row_v2(512).state_chunk_map_id, gdn_state_chunk_map_id_v2());
+        // A class IS its map: the same graph on two enumerations is two classes, which is what
+        // makes v2 additive rather than a repair of anything already registered.
+        assert_ne!(recurrent_row(512).shape_profile_id(), recurrent_row_v2(512).shape_profile_id());
     }
 
     /// The pessimistic price stays for a class with no map: the anchored question is not answered
