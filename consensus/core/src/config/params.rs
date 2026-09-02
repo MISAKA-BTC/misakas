@@ -930,6 +930,55 @@ pub struct Params {
     /// `palw_bond_maturity`'s window documents).
     pub palw_certification_rent: Option<ForkActivation>,
 
+    /// **ADR-0081 Decision 3 — is a job's `prompt_token_ids_hash` a tiled Merkle root?** `None` on
+    /// every shipped preset, so the behaviour is byte-identical to not having the field at all.
+    ///
+    /// The shipped commitment is [`crate::palw_v2::prompt_token_ids_hash_v2`], a FLAT digest over
+    /// the whole prompt. A flat digest cannot be opened, so the court that adjudicates an embedding
+    /// gather — which reads exactly ONE id, `prompt_ids[position]` — has to be handed the whole
+    /// list to authenticate it, and `derive_court_cost_v1` charges `n_ctx x 4` bytes on EVERY node
+    /// of the graph for the privilege. 2 KiB per node at `n_ctx` 512 against an 80 KiB carrier;
+    /// 128 KiB at 32,768, where nothing fits. Past this fence the slot holds
+    /// [`crate::palw_prompt_ids_v1::prompt_token_ids_root_v1`] and a refutation carries one tile
+    /// plus its path: 472 bytes at 512, 856 at 32,768.
+    ///
+    /// **Arming it is a RE-MINT, not a schedule** — the `palw_context_ladder` sentence, and here it
+    /// is stronger than a convention. The hash is a field of
+    /// [`crate::palw_freeprompt_v3::PalwFreePromptJobV3`], so it is inside `fp_job_id_v3` and
+    /// therefore inside every claim id, every spend id and every golden vector over a job or a
+    /// claim. Two builds that armed this at one height would agree about the fence and disagree
+    /// about what every job on the network is called, which is not a fork a height can stage.
+    ///
+    /// **And the re-mint is NOT confined to this crate.** `prompt_token_ids_hash_v2` is called
+    /// from three crates outside consensus-core, in production paths this fence does not reach,
+    /// and every one of them would keep spelling the flat form while the court expected the other:
+    ///
+    /// * it is WRITTEN into a job by `misaka-palw-base0`'s `fp_worker::run_one_job_v1`,
+    ///   `produce::base0_rc_job_v1`, `qwen36_backend::job_for_anchor`, the `qwen25_a16_backend`
+    ///   job builder and `e2e_drill::fp_drill_job_v1` — a producer left on the flat form mints
+    ///   jobs the armed court cannot adjudicate;
+    /// * it is CHECKED against a carried prompt by `kaspad`'s `palw_panel::fp_prompt_for_job`,
+    ///   `kaspa-pq-validator-core`'s `palw_fp_sign_gate::signable_claim_id`, and
+    ///   `misaka-palw-base0`'s `fp_interval::base0_open_fp_interval_v1` /
+    ///   `base0_verify_fp_interval_opening_v1` and the three backends'
+    ///   `refutation_with_prompt` — a checker left on the flat form refuses honest material.
+    ///
+    /// Three more production sites call `check_execution_step_refutation_v1` and would have to
+    /// thread the opening: `operand_openings_for` in `misaka-palw-base0`'s `backend`,
+    /// `qwen36_backend` and `qwen25_a16_backend`. None of this is reachable from a `Params`, which
+    /// is exactly why it is written down here: the fence is the only thing an operator sets, and
+    /// the surface it does not cover is the part that fails silently.
+    ///
+    /// **A bare fence with no companion value, deliberately** — the `palw_context_ladder` rule for
+    /// its reason: the tile width, the domains and the opening's shape are constants in
+    /// `palw_prompt_ids_v1`, so there is no duration beside this height for
+    /// [`Self::consensus_identity_id`] to normalise away (the `palw_bond_maturity` hazard).
+    ///
+    /// **TOP LEVEL rather than in the V2 bundle**, for the `palw_unavailable_abstains` reason: a
+    /// fence inside the bundle moves `palw_ruleset_id_v2`, which `for_each_fence` never descends
+    /// into, so every old/new pair would fail the handshake outright.
+    pub palw_prompt_ids_merkle: Option<ForkActivation>,
+
     /// ADR-0042 Decision 1 (PR-10): the ONE PALW switch on the V2 lineage. `Disabled` on every
     /// shipped preset. A network is in exactly one mode; `ConsensusV2` carries the whole atomic
     /// ruleset and is validated at construction ([`Params::validate_palw_v2`]) — including the
@@ -1704,6 +1753,13 @@ impl Params {
         if self.palw_certification_rent == Some(ForkActivation::never()) {
             self.palw_certification_rent = None;
         }
+        // ADR-0081 Decision 3, a bare fence: the same collapse for the same reason. It matters
+        // here for the `palw_panel_da` reason too — `palw_prompt_ids_form_at` reads the fence, and
+        // a `Some(never())` left standing would be a form nothing can ever select while still
+        // writing its name into `consensus_params_id`.
+        if self.palw_prompt_ids_merkle == Some(ForkActivation::never()) {
+            self.palw_prompt_ids_merkle = None;
+        }
         let Some(dns) = self.dns_params.as_mut() else {
             return;
         };
@@ -1825,6 +1881,32 @@ impl Params {
     /// the ids is part of the coordinated release... what the DAA fence governs is the *effect*".
     pub fn palw_panel_da_admissible(&self) -> bool {
         self.palw_panel_da_fence().is_some()
+    }
+
+    /// **Which form a job's `prompt_token_ids_hash` takes at `daa_score`** (ADR-0081 Decision 3).
+    ///
+    /// [`crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat`] everywhere this build ships, and
+    /// the ONE place the answer is decided — a caller that read the fence and switched on it
+    /// itself would be a second spelling of a consensus rule, which is how a court comes to
+    /// recompute a commitment differently from the producer that made it.
+    ///
+    /// The mode condition is folded in for [`Self::palw_panel_da_fence`]'s reason: the free-prompt
+    /// lane exists only under `ConsensusV2`, so on any other network there is no job whose prompt
+    /// commitment this rule could re-form.
+    pub fn palw_prompt_ids_form_at(&self, daa_score: u64) -> crate::palw_prompt_ids_v1::PalwPromptIdsFormV1 {
+        match self.palw_prompt_ids_merkle_fence() {
+            Some(fence) if fence.is_active(daa_score) => crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1,
+            _ => crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+        }
+    }
+
+    /// ADR-0081 Decision 3's fence with the mode condition already folded in — `Some` only on a
+    /// `ConsensusV2` network that has armed it.
+    pub fn palw_prompt_ids_merkle_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_prompt_ids_merkle) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(f)) => Some(f),
+            _ => None,
+        }
     }
 
     /// **Is ADR-0072's execution-priced attempt lane in force at `daa_score`?**
@@ -1968,6 +2050,12 @@ impl Params {
             h.write(b"palw_certification_rent");
             h.write(rent.daa_score().to_le_bytes());
         }
+        // ADR-0081 Decision 3's fence, NAMED for the reason directly above: its `for_each_fence`
+        // arm is Some-only, so the name is what keeps absence from aliasing a present value.
+        if let Some(merkle) = self.palw_prompt_ids_merkle {
+            h.write(b"palw_prompt_ids_merkle");
+            h.write(merkle.daa_score().to_le_bytes());
+        }
         h.finalize()
     }
 
@@ -2050,6 +2138,7 @@ impl Params {
             palw_context_ladder,
             palw_panel_da,
             palw_certification_rent,
+            palw_prompt_ids_merkle,
             // The V2 bundle's fences are inside `palw_ruleset_id_v2` — see the doc block.
             palw_consensus_mode: _,
             pow_blake2b_sha3_activation,
@@ -2232,6 +2321,16 @@ impl Params {
         // them — it wants `for_each_fence` to hand the visitor a name. Recorded for the integrator
         // rather than done here, because that signature is the merge hotspot of this whole batch.
         if let Some(activation) = palw_certification_rent.as_mut() {
+            fork(activation, visit);
+        }
+        // ADR-0081 Decision 3. Visited SOME-ONLY, like the rent fence directly above and for its
+        // reason: an arm that stands a `u64::MAX` in for absence would put eight bytes into
+        // `consensus_schedule_id` on the four presets that leave the field `None`, and a build
+        // carrying a dormant fence would print a different schedule id from a build without the
+        // field at all. `consensus_params_id` and `consensus_schedule_id` both write this fence
+        // again under its own NAME when it is `Some`, which is what the sentinel was standing in
+        // for.
+        if let Some(activation) = palw_prompt_ids_merkle.as_mut() {
             fork(activation, visit);
         }
 
@@ -2423,6 +2522,7 @@ impl Params {
             palw_context_ladder,
             palw_panel_da,
             palw_certification_rent,
+            palw_prompt_ids_merkle,
             palw_consensus_mode,
             pow_blake2b_sha3_activation,
             pow_palw_activation,
@@ -2638,6 +2738,14 @@ impl Params {
         // byte-identically to a build without the field at all.
         if let Some(activation) = palw_certification_rent {
             h.write(b"palw_certification_rent");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // ADR-0081 Decision 3, Some-only like every fence above it: arming it changes what every
+        // job on the network is CALLED (the hash is inside `fp_job_id_v3` and therefore inside
+        // every claim id), so it belongs in the fingerprint — and every shipped preset leaves it
+        // `None` and fingerprints byte-identically to a build without the field at all.
+        if let Some(activation) = palw_prompt_ids_merkle {
+            h.write(b"palw_prompt_ids_merkle");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0042 Decisions 1 + 11: the V2 mode decides block validity wholesale, so it is in
@@ -2925,6 +3033,7 @@ impl Params {
             palw_context_ladder: self.palw_context_ladder,
             palw_panel_da: self.palw_panel_da,
             palw_certification_rent: self.palw_certification_rent,
+            palw_prompt_ids_merkle: self.palw_prompt_ids_merkle,
             palw_consensus_mode: self.palw_consensus_mode.clone(),
             // kaspa-pq PoW algo activation is consensus-fixed, never runtime-overridable.
             pow_blake2b_sha3_activation: self.pow_blake2b_sha3_activation,
@@ -3844,6 +3953,7 @@ pub const MAINNET_PARAMS: Params = Params {
     // network arms on purpose, never one it acquires by upgrading.
     palw_panel_da: None,
     palw_certification_rent: None,
+    palw_prompt_ids_merkle: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: inert on mainnet until its own fork ADR schedules it.
@@ -3987,6 +4097,7 @@ pub const TESTNET_PARAMS: Params = Params {
     // network arms on purpose, never one it acquires by upgrading.
     palw_panel_da: None,
     palw_certification_rent: None,
+    palw_prompt_ids_merkle: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: DISABLED on the public preset (2026-08-12). The Ollama flavor (algo_id = 5)
@@ -4112,6 +4223,7 @@ pub const SIMNET_PARAMS: Params = Params {
     // network arms on purpose, never one it acquires by upgrading.
     palw_panel_da: None,
     palw_certification_rent: None,
+    palw_prompt_ids_merkle: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // PALW LLM PoW: simnet keeps instant local kHeavyHash (simulation/tests must not need a model).
@@ -7557,6 +7669,7 @@ pub const DEVNET_PARAMS: Params = Params {
     // network arms on purpose, never one it acquires by upgrading.
     palw_panel_da: None,
     palw_certification_rent: None,
+    palw_prompt_ids_merkle: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // **Devnet is the ADR-0068 drill network on this branch: ConsensusV2, so no V1 PALW
@@ -8795,6 +8908,73 @@ mod consensus_params_id_tests {
         let mut d4 = MAINNET_PARAMS;
         d4.palw_unavailable_abstains = Some(ForkActivation::always());
         assert_ne!(d4.consensus_identity_id(), at_genesis.consensus_identity_id(), "two fences, two identities");
+    }
+
+    /// **ADR-0081 Decision 3's fence keeps the same discipline, and one more that is specific to
+    /// it**: arming this changes what every job on the network is CALLED, so a dormant fence has to
+    /// be indistinguishable from a build that never had the field, and an armed one has to be
+    /// visible in every commitment an operator can read.
+    #[test]
+    fn the_prompt_ids_merkle_fence_is_dormant_and_visible_the_moment_it_is_not() {
+        for (name, shipped) in
+            [("mainnet", MAINNET_PARAMS), ("testnet", TESTNET_PARAMS), ("simnet", SIMNET_PARAMS), ("devnet", DEVNET_PARAMS)]
+        {
+            assert!(shipped.palw_prompt_ids_merkle.is_none(), "{name} must leave ADR-0081 Decision 3's fence dormant");
+            assert_eq!(
+                shipped.palw_prompt_ids_form_at(0),
+                crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                "{name} commits prompts flat at genesis"
+            );
+            assert_eq!(
+                shipped.palw_prompt_ids_form_at(u64::MAX),
+                crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
+                "{name} commits prompts flat at every height there is — the fence is the only way in"
+            );
+        }
+        let shipped = MAINNET_PARAMS;
+
+        let mut armed = MAINNET_PARAMS;
+        armed.palw_prompt_ids_merkle = Some(ForkActivation::new(9_000_000));
+        assert_ne!(
+            shipped.consensus_params_id(),
+            armed.consensus_params_id(),
+            "a commitment nobody can read off the fingerprint is a silent fork"
+        );
+        assert_ne!(shipped.consensus_schedule_id(), armed.consensus_schedule_id(), "the operator log must name it");
+
+        let mut at_genesis = MAINNET_PARAMS;
+        at_genesis.palw_prompt_ids_merkle = Some(ForkActivation::always());
+        assert_ne!(
+            shipped.consensus_identity_id(),
+            at_genesis.consensus_identity_id(),
+            "in force from block 1 on one side is a rule difference — the two disagree about what every job on the network is called"
+        );
+
+        let mut never_armed = MAINNET_PARAMS;
+        never_armed.palw_prompt_ids_merkle = Some(ForkActivation::never());
+        assert_eq!(
+            shipped.consensus_identity_id(),
+            never_armed.consensus_identity_id(),
+            "Some(never()) is absence, or the collapse ahead of the dns_params early return is gone"
+        );
+
+        // Independent of its neighbours: arming this must not read as arming the rent fence.
+        let mut rent = MAINNET_PARAMS;
+        rent.palw_certification_rent = Some(ForkActivation::always());
+        assert_ne!(rent.consensus_identity_id(), at_genesis.consensus_identity_id(), "two fences, two identities");
+    }
+
+    /// **The fence only answers on a `ConsensusV2` network.** The free-prompt lane exists nowhere
+    /// else, so there is no job whose prompt commitment this rule could re-form — and an armed
+    /// fence on a non-V2 preset must still answer `Flat` rather than select a form the network has
+    /// no jobs for.
+    #[test]
+    fn the_prompt_ids_merkle_fence_answers_only_under_consensus_v2() {
+        let mut legacy = MAINNET_PARAMS;
+        legacy.palw_prompt_ids_merkle = Some(ForkActivation::always());
+        assert!(matches!(legacy.palw_consensus_mode, crate::palw_mode_v2::PalwConsensusMode::Disabled));
+        assert_eq!(legacy.palw_prompt_ids_merkle_fence(), None, "the mode condition is folded into the fence");
+        assert_eq!(legacy.palw_prompt_ids_form_at(u64::MAX), crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat);
     }
 
     /// **A dormant fence changes nothing an operator can observe — including the schedule id.**
