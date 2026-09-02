@@ -121,6 +121,59 @@ writes `fp-job-<id>.commitment-tx.borsh` and a `rail.json` summary carrying the 
 and the quanta/pwu the job earns. The rail cross-checks the result and the commitment against each
 other before signing, so an outbox edited in between is refused.
 
+## The worker protocol (ADR-0077 Decisions 1, 2 and 6)
+
+A family worker — `palw-a16-fp-worker` (dense tier) or `palw-qwen36-fp-worker` (hybrid) — has
+three modes, and they are the same code from the request onward:
+
+```text
+  --mode v3-manifest   the identity, as one JSON line              (map, print, exit)
+  --mode v3-job        one framed request in, one result out       (map, run, exit)
+  --mode v3-serve      the manifest, then a resident request loop  (map ONCE, then jobs)
+```
+
+`v3-serve` is what makes a 33 GiB class usable: the artifact used to be mapped inside `run_job`,
+about eight minutes per REQUEST, and the resident mode pays that once. A gateway spawns the worker
+with `--mode v3-serve --trace-out <dir>` and keeps its stdin/stdout pipes; both are the v2
+length-prefixed framing (four-byte little-endian length, then that many bytes) already used by
+`v3-job`.
+
+* **In**: one Borsh `PalwFpWorkerRequestV3` per frame. One generation at a time — a single engine
+  and a single KV cache — so the next request is read only after the previous job is answered.
+* **Out**: `PalwFpWorkerFrameV1::Manifest` once, first. Then per accepted request, zero or more
+  `Token { token_id, rendered }` in decode order and then **exactly one** terminator, `Result` or
+  `Refused`. `rendered` is that id's bytes alone: a multi-byte character straddles two tokens, so a
+  display buffers an incomplete UTF-8 tail — the pieces concatenated are exactly the result's
+  `rendered`, which is what makes the Decision 2 re-render check an identity rather than two
+  decoders agreeing.
+* **A refused request does not stop the worker.** One bad job must not drop a resident artifact,
+  so a refusal is a `Refused` frame and the loop reads the next request. `v3-job` has no `Refused`
+  frame: there, a refusal is an empty stdout and a non-zero exit.
+* **A job's roots through `v3-serve` are byte-identical to the same job's roots through `v3-job`**
+  (invariant W6, pinned by a test on a fixture-sized artifact).
+
+The manifest is the identity a gateway pins its requests with, and it carries what Decision 6
+needs: `special_tokens` (every control token by NAME and id) and `eog_token_ids`. A gateway builds
+its chat prompt as `PalwFpWorkerInputV3::Segments` — markers as `Special(id)` looked up by name,
+the user's text as `Text(bytes)`. The worker emits a `Special` verbatim and encodes every `Text`
+segment with special-token parsing disabled, so a user who types the twelve characters
+`<|im_start|>` gets twelve characters' worth of ordinary pieces and never the control id.
+
+Two things the manifest states that are easy to get wrong:
+
+* `n_ctx` is the **class's registered** context, not the artifact's rotary span. The dense
+  artifact's table covers 512 positions and the class registers 16; the runtime answers at 16,
+  because answering wider than the court admits is exactly the split ADR-0077 R0 exists to close.
+* `eog_token_ids` is a **display** stop. Execution runs to the job's declared decode budget — a
+  step leaf hash binds the job context, which binds the executed count, so hashing cannot start
+  before the count is fixed — and the commitment covers every executed token.
+
+The resident worker verifies its artifact by reading all of it at startup and re-verifies whenever
+the file's device, inode or size changes (ADR-0077 SA-6). An artifact replaced or truncated under a
+running worker is a `Refused` job naming the two digests, never a crash. Nothing the worker logs
+carries prompt text or prompt ids: a refusal names the rule and the position it was broken at
+(ADR-0079 SA-7).
+
 ## Boundaries to know
 
 - **Prompts are public.** PublicDA is the only weight-bearing mode: the committed job carries
