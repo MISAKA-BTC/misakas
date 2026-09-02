@@ -973,9 +973,19 @@ pub fn palw_claim_is_on_abandon_hold_v2(claim: &PalwClaimStateV2, params: &PalwS
         return false;
     };
     match voided_daa.checked_add(params.fp_abandon_hold_daa) {
-        // Strict: the block AT the release point is the one that releases, matching the sweep's
-        // `deadline < daa_score` boundary.
-        Some(release_at) => at_daa < release_at,
+        // **Inclusive, because the sweep is.** `sweep_deadlines` breaks on `deadline >= daa_score`,
+        // so a hold armed at `release_at` is released in the first block whose score EXCEEDS it —
+        // the block whose score IS `release_at` still holds the collateral, and `terminal_deadline_of`
+        // says the same thing with its own `point.daa_score <= release_at`.
+        //
+        // This read `at_daa < release_at` under a comment claiming it matched that boundary, and it
+        // did not: for exactly one block, the reservation was live in `reserved_exposure` while this
+        // predicate told `assert_internal_consistency` to leave it out. That check runs inside
+        // `PalwStateCarriageV2::into_state`, which `load_tip` calls on every virtual resolution, and
+        // its caller panics — so the state was written by every node and then killed every node, on
+        // the next resolution and again on every restart. The shipped hold is 600 DAA and the score
+        // advances about one per block, so every abandoned free-prompt commitment reaches it.
+        Some(release_at) => at_daa <= release_at,
         None => true,
     }
 }
@@ -3939,15 +3949,37 @@ impl<'a> TransitionBuilder<'a> {
     /// The panel goes with it: `write_panel` had no `None` caller anywhere, so a bound claim's
     /// panel outlived the claim by exactly forever and grew at the same one-per-block rate.
     fn retire_claim(&mut self, id: Hash64, claim: &PalwClaimStateV2) -> Result<(), PalwStateV2Error> {
-        // A `Final` attempt claim folded its `pwu` into `safe_weight` when it finalized. The
-        // running total does not move here — the claim's contribution is simply carried by a
-        // different name, so the consistency identity stays an equality rather than degrading to
-        // "at least".
-        if matches!(claim.phase, PalwClaimPhaseV2::Final { .. }) && matches!(claim.source, PalwClaimSourceV2::Attempt) {
-            let old = self.state.retired_safe_weight;
-            let new = old.checked_add(claim.pwu as u128).ok_or(PalwStateV2Error::Overflow("retired_safe_weight"))?;
-            self.state.retired_safe_weight = new;
-            self.entries.push(PalwDeltaEntryV2::RetiredWeight { old, new });
+        // A `Final` claim folded weight into `safe_weight` when it finalized. The running total
+        // does not move here — the claim's contribution is simply carried by a different name, so
+        // the consistency identity stays an equality rather than degrading to "at least".
+        //
+        // **BOTH sources, by the source's own rule.** This carried the attempt lane only, while
+        // `assert_internal_consistency` recomputes a `Final` free-prompt claim's contribution as
+        // `per_quantum × |spent|` — so retiring one subtracted its spent weight from the
+        // recomputation and added it back to nothing. The check runs inside `into_state`, which
+        // `load_tip` calls on every virtual resolution and whose caller panics: the state is
+        // written by every node and then kills every node, on the next resolution and on every
+        // restart. The shipped ruleset retires at 3,000 DAA and the receipt use window is 600, so
+        // a licensed claim with one spent quantum reaches it in the ordinary course.
+        if matches!(claim.phase, PalwClaimPhaseV2::Final { .. }) {
+            let carried = match &claim.source {
+                PalwClaimSourceV2::Attempt => claim.pwu as u128,
+                // Mirrors the recomputation exactly, including its guard: a zero `quanta` is
+                // already refused by `assert_internal_consistency`, and dividing by it here would
+                // be the second way to end the chain.
+                PalwClaimSourceV2::FreePrompt { quanta, spent } => match *quanta {
+                    0 => 0,
+                    quanta => ((claim.pwu / quanta as u64) as u128)
+                        .checked_mul(spent.len() as u128)
+                        .ok_or(PalwStateV2Error::Overflow("retired spent weight"))?,
+                },
+            };
+            if carried > 0 {
+                let old = self.state.retired_safe_weight;
+                let new = old.checked_add(carried).ok_or(PalwStateV2Error::Overflow("retired_safe_weight"))?;
+                self.state.retired_safe_weight = new;
+                self.entries.push(PalwDeltaEntryV2::RetiredWeight { old, new });
+            }
         }
         // **Everything keyed to the claim goes with it, sessions included.**
         //
@@ -4753,16 +4785,31 @@ fn activate_due_classes(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCont
         // registration validated against the table as it stood is GRANTED later by this function,
         // against the table as it then is.
         //
-        // Freezing is the honest terminal: the registration was accepted, the grant was not
+        // The honest terminal is DORMANT: the registration was accepted, the grant was not
         // available when it came due, and a class that never activates holds no share and refuses
         // attempts — which is exactly what "the activation did not happen" means. The chain keeps
         // going, and the fact is visible in the registry instead of being a halt nobody can read.
+        //
+        // **It was `Frozen`, and that broke two invariants at once — trading one chain halt for
+        // another.** `assert_internal_consistency` derives the share table's key set as every
+        // class that is not `Registered`/`Dormant`, so a `Frozen` class MUST hold a permille and
+        // this one never had any; and it derives `registration_exposure` from the classes that are
+        // `Active | Registered`, so the registrant's price had to come off and did not. Either one
+        // fails the check inside `into_state`, which `load_tip` runs on every virtual resolution
+        // under a caller that panics. `Dormant` is the status both derivations already exclude,
+        // and it is what the reclamation path writes for the same fact — a registration that ended
+        // without a cadence. `Frozen` is the contradiction certificate's status, and it is
+        // share-bearing on purpose.
         let table = match granted_share_table_v2(builder.params, &builder.state.class_shares, class_id, share) {
             Ok(table) => table,
             Err(_) => {
-                let mut record = builder.state.classes.get(&class_id).expect("just listed").clone();
-                record.status = PalwClassStatusV2::Frozen { since_daa: ctx.daa_score };
-                builder.write_class(class_id, Some(record));
+                let record = builder.state.classes.get(&class_id).expect("just listed").clone();
+                let mut dormant = record.clone();
+                dormant.status = PalwClassStatusV2::Dormant { since_daa: ctx.daa_score };
+                builder.write_class(class_id, Some(dormant));
+                if let Some(bond) = record.registrant_bond {
+                    builder.move_registration_exposure(bond, false)?;
+                }
                 continue;
             }
         };
@@ -10677,6 +10724,49 @@ pub(crate) mod tests {
         assert!(after.claim(&h64(0xFC)).is_none(), "and the block after the retirement applies like any other");
     }
 
+    /// **The block AT the hold's release point, which the test above steps over.**
+    ///
+    /// The sweep fires on `deadline < daa_score`, so a hold armed at `release_at` is still holding
+    /// collateral in the block whose score IS `release_at`; `terminal_deadline_of` agrees, keeping
+    /// the deadline while `daa_score <= release_at`. The exposure predicate did not: it answered
+    /// "no longer held" one block early, so `assert_internal_consistency` recomputed an exposure
+    /// short by the claim's whole reservation for exactly that one block.
+    ///
+    /// That is not a mis-report. The check runs inside `PalwStateCarriageV2::into_state`, which is
+    /// what `load_tip` calls on every virtual resolution — and the caller panics on its error. The
+    /// state is written first, so every node writes it, then dies on the next resolution, and dies
+    /// again on restart. The shipped hold is 600 and DAA advances about one per block, so every
+    /// abandoned free-prompt commitment on testnet-11 walks into it.
+    ///
+    /// The fixture above steps 200 → 260 → 420 with a hold of 50 and lands on neither side of 250.
+    #[test]
+    fn the_block_at_the_holds_release_point_still_holds_the_collateral() {
+        let p = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, 100, 1000, 50)
+            .unwrap()
+            .with_fp_quanta(8, 64)
+            .unwrap()
+            .with_claim_retirement_daa(200)
+            .unwrap();
+        let (base, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+        let (s2, _) = apply(&base, &p, &ctx(2, 101, 2), &[fp_commit(0xFC, 60, 3)], None);
+        let (voided, _) = apply(&s2, &p, &ctx(3, 200, 3), &[], None);
+        assert_eq!(voided.reserved_exposure(&bond_key(1)), 300, "the hold keeps the reservation");
+
+        // `apply` runs both consistency checks. Against the unfixed predicate this line does not
+        // assert anything — it fails inside the helper, which is the defect stated exactly.
+        let (at_release, _) = apply(&voided, &p, &ctx(4, 250, 4), &[], None);
+        assert_eq!(
+            at_release.reserved_exposure(&bond_key(1)),
+            300,
+            "the sweep releases at the block AFTER the deadline, so this one still holds it"
+        );
+        assert!(at_release.claim(&h64(0xFC)).is_some());
+
+        // And the block after it releases, exactly as the fixture above already proves at 260.
+        let (after, _) = apply(&at_release, &p, &ctx(5, 251, 5), &[], None);
+        assert_eq!(after.reserved_exposure(&bond_key(1)), 0, "one block later the hold is over");
+    }
+
     /// papered over here: binding is permissionless but nobody is paid to bind someone else's
     /// claim, so in practice the producer decides.
     #[test]
@@ -11024,6 +11114,50 @@ pub(crate) mod tests {
         let ghost = fp_spend(0xFC, 3);
         let out_of_range = apply_palw_transition_v3(&s7, &p, &ctx(8, 132, 8), &[], PalwBlockWorkV3::ReceiptSpend(&ghost));
         assert_eq!(out_of_range.unwrap_err(), PalwStateV2Error::QuantumOutOfRange { claim: h64(0xFC), index: 3, quanta: 3 });
+    }
+
+    /// **Retiring a spent free-prompt claim must carry its weight, not drop it.**
+    ///
+    /// `retire_claim` moves a terminal claim's contribution from the claims it can no longer be
+    /// recomputed from into `retired_safe_weight`, so the consistency identity stays an equality.
+    /// It carried the ATTEMPT lane only, while the recomputation credits a `Final` free-prompt
+    /// claim with `per_quantum × |spent|` — so the moment such a claim retired, the recomputed
+    /// safe weight fell below the running total by exactly the weight its spends had added.
+    ///
+    /// That check is `assert_internal_consistency`, run inside `PalwStateCarriageV2::into_state`,
+    /// which `load_tip` calls on every virtual resolution under a caller that panics. So the state
+    /// is written by every node and then kills every node — on the next resolution, and again on
+    /// every restart. The shipped ruleset retires at 3,000 DAA with a 600-DAA receipt use window,
+    /// so an ordinary licensed-and-spent claim reaches it.
+    ///
+    /// Every existing retirement test uses an attempt claim, and every free-prompt test runs with
+    /// retirement off. This is the combination.
+    #[test]
+    fn a_retired_free_prompt_claim_carries_the_weight_its_spends_added() {
+        let p = params().with_claim_retirement_daa(200).unwrap();
+        let certified = certify_fp_claim(&p, 60, 3);
+
+        // Two of three quanta spent: 40 of safe weight, held by the claim record.
+        let spend0 = fp_spend(0xFC, 0);
+        let (s6, _) = apply_work(&certified, &p, &ctx(6, 130, 6), &[], PalwBlockWorkV3::ReceiptSpend(&spend0));
+        let spend2 = fp_spend(0xFC, 2);
+        let (s7, _) = apply_work(&s6, &p, &ctx(7, 131, 7), &[], PalwBlockWorkV3::ReceiptSpend(&spend2));
+        assert_eq!(s7.safe_weight(), 40, "two quanta at pwu/quanta");
+
+        // Past the retirement deadline (the fixture goes terminal at daa 124; the sweep fires on
+        // `deadline < daa_score`). `apply` runs both consistency checks: against the unfixed arm
+        // this line does not assert anything, it fails inside the helper.
+        let (retired, _) = apply(&s7, &p, &ctx(8, 400, 8), &[], None);
+        assert!(retired.claim(&h64(0xFC)).is_none(), "the claim retires");
+        assert_eq!(
+            retired.safe_weight(),
+            40,
+            "and the weight its spends bought survives the record — retiring is a change of name, not of total"
+        );
+
+        // And the chain keeps going: a halt is only visible if something comes after it.
+        let (after, _) = apply(&retired, &p, &ctx(9, 401, 9), &[], None);
+        assert_eq!(after.safe_weight(), 40);
     }
 
     /// The two lanes share ONE exposure ceiling (invariant F13): an FP commitment reserves
