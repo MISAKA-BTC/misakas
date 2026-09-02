@@ -48,7 +48,8 @@
 //! | payout drain rate | [`crate::palw_state_v2::PALW_V2_MAX_PAYOUTS_PER_BLOCK`] = 8 per block | `palw_state_v2.rs:233`, drained at `palw_state_v2.rs:4616` | **the row segmentation actually breaks.** The constant is sized by an explicit premise — *"Eight against at most one new claim per block: a backlog drains eight times faster than it can be created, so this bounds latency, not throughput"* — and N claims per answer is exactly the assumption's negation. At N ≥ 8 the queue stops draining faster than it fills |
 //! | epoch budget | `budget_blocks`, denominated in **blocks** | [`crate::palw_state_v2::PalwEpochBudgetsV2`] (`:1713`), derived by [`crate::palw_state_v2::derive_epoch_budgets_v2`] (`:5159`) | not a leaf quantity in either direction: the derivation is `⌊tol‰ · E · s_c / (1000 · denom_c)⌋` and takes no pwu, no leaves and no claim count — *"Blocks, never pwu"* |
 //! | court close bytes | ≤ [`crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES`] (80 KiB) per dispute | [`crate::palw_class_admission_v2::derive_court_cost_v1`] (`palw_class_admission_v2.rs:255`) | **NOT 1/N.** ADR-0080 §1 measured the binding node as `attn[23] ffn_down`, whose operand width is the MODEL's `ffn_dim` and reads no history — a segment's close is the same size as the whole claim's |
-//! | claim state rows | `claims`, `panels`, `work_ids`, `unresolved`, `deadlines`, `open_courts_by_claim` | `palw_state_v2.rs:2880-2910` | N rows in every one of them |
+//! | claim state rows, HASHED | `claims` (`:2841`), `panels` (`:2842`), `court_sessions` (`:2843`), `pending_payouts` (`:2866`), `derived_artifacts` (`:2878`) | the `state_root` preimage, `palw_state_v2.rs:3190` | N rows in each, and each one changes the state root every node compares |
+//! | claim state rows, REBUILDABLE | `deadlines`, `unresolved`, `work_ids`, `open_courts_by_claim`, `court_deadlines` | `palw_state_v2.rs:2899` — the block marked *"indices: rebuildable, never serialized, never hashed"* | N rows in each, but **outside** the state root: memory and sweep cost, not consensus bytes |
 //!
 //! Two entries deliberately record a ZERO rather than being left out, because a reader checking
 //! whether segmentation is free needs to know they were looked at: a free-prompt commitment's
@@ -65,8 +66,20 @@
 //! value makes the suite red. Three rows are cited but not value-asserted, and they are named here
 //! rather than left to be discovered: the **court close bytes** (whose per-claim-ness rests on
 //! ADR-0080 §1's measurement, not on a constant this module can read), the **claim state rows**
-//! (structural — one row per claim in six indices), and the **singular `claim_id`/`output_root`**
-//! of `PalwDerivedArtifactV1` (structural — a type, not a number).
+//! (structural — the fields are private to `palw_state_v2`, so this module cannot enumerate them;
+//! what it CAN do is pin [`crate::palw_state_v2::PALW_STATE_V2_VERSION`], because the root
+//! preimage's own doc requires a new version constant for any change to its body — so the
+//! hashed/rebuildable split above cannot silently stop being true), and the **singular
+//! `claim_id`/`output_root`** of `PalwDerivedArtifactV1` (structural — a type, not a number).
+//!
+//! # One claim per block is a premise this codebase leans on in three places
+//!
+//! It is not a stylistic assumption. `PALW_V2_MAX_PAYOUTS_PER_BLOCK`'s sizing argument states it
+//! at the constant (`palw_state_v2.rs:232`) and again at the drain (`:4614`), and `apply_attempt`
+//! relies on it a third time to make the worker carve's "never exceeds the subsidy" bound
+//! *structural rather than arithmetic* (`:7012`: "the claim IS this block, so the block's carve
+//! funds exactly one claim"). A design that turns one answer into N claims negates the premise
+//! all three rest on, and owes each of them an argument.
 //!
 //! # Nothing here is armed
 //!
@@ -214,10 +227,16 @@ pub const PALW_ECONOMIC_LOCUS_CENSUS_V1: &[PalwEconomicQuantityV1] = &[
         under_n_segments: "N full-size closes — the binding node's operand width is the model's, not the interval's",
     },
     PalwEconomicQuantityV1 {
-        name: "claim state rows (claims/panels/work_ids/unresolved/deadlines)",
+        name: "claim state rows, hashed (claims/panels/court_sessions/pending_payouts/derived_artifacts)",
         locus: PalwEconomicLocusV1::PerClaim,
-        cited_at: "palw_state_v2.rs:2880-2911 PalwChainStateV2",
-        under_n_segments: "N rows in every index, all of them inside the state root",
+        cited_at: "palw_state_v2.rs:3190 PalwChainStateV2::state_root",
+        under_n_segments: "N rows in each, and every one of them moves the state root",
+    },
+    PalwEconomicQuantityV1 {
+        name: "claim state indices, rebuildable (deadlines/unresolved/work_ids/open_courts_by_claim/court_deadlines)",
+        locus: PalwEconomicLocusV1::PerClaim,
+        cited_at: "palw_state_v2.rs:2899 'indices: rebuildable, never serialized, never hashed'",
+        under_n_segments: "N rows in each, but OUTSIDE the state root — sweep and memory cost, not consensus bytes",
     },
     PalwEconomicQuantityV1 {
         name: "payout queue rows (pending_payouts)",
@@ -236,9 +255,10 @@ pub const PALW_ECONOMIC_LOCUS_CENSUS_V1: &[PalwEconomicQuantityV1] = &[
     PalwEconomicQuantityV1 {
         name: "producer escrow (escrowed_reward)",
         locus: PalwEconomicLocusV1::PerBlock,
-        cited_at: "palw_state_v2.rs:6881 apply_free_prompt (zero on a commitment)",
-        under_n_segments: "0 either way — a commitment rides a transaction, so it earns no carve; \
-                           segmentation buys no reward relief here",
+        cited_at: "palw_state_v2.rs:6881 apply_free_prompt (zero); :7015 apply_attempt (one carve)",
+        under_n_segments: "0 on the free-prompt lane either way; on the attempt lane exactly ONE \
+                           carve per block, because only the block's own attempt escrows \
+                           (:7012 'the claim IS this block') — per block, never per claim",
     },
     PalwEconomicQuantityV1 {
         name: "immature contribution (beta * pwu)",
@@ -394,7 +414,7 @@ mod tests {
     fn only_per_leaf_rows_claim_invariance() {
         assert_eq!(
             PALW_ECONOMIC_LOCUS_CENSUS_V1.len(),
-            20,
+            21,
             "the census is complete or it is nothing — a row added or dropped is a deliberate edit here"
         );
         let mut names: Vec<&str> = PALW_ECONOMIC_LOCUS_CENSUS_V1.iter().map(|row| row.name).collect();
@@ -619,6 +639,26 @@ mod tests {
             "the hold is a term of ONE claim's exposure lifetime, so N claims hold N of them"
         );
         assert_eq!(rc.max_claim_exposure_daa(), 7_200);
+    }
+
+    /// **The state-root row, pinned the only way this module can pin it.**
+    ///
+    /// `PalwChainStateV2`'s fields are private, so the census cannot enumerate them from here and
+    /// its hashed/rebuildable split is read off `state_root` (`palw_state_v2.rs:3190`) and off the
+    /// `"indices: rebuildable, never serialized, never hashed"` marker (`:2899`). What IS
+    /// assertable is the version that guards that body: the root's own doc says changing it "is a
+    /// consensus change and needs a new version constant, a matching ADR-0043 amendment, and new
+    /// golden vectors". So a bump here is the signal to re-read the two claim-state rows above.
+    ///
+    /// This is a tripwire, not a proof, and it is listed as such in the module doc's gaps.
+    #[test]
+    fn the_claim_state_rows_are_pinned_to_the_state_root_version() {
+        assert_eq!(
+            crate::palw_state_v2::PALW_STATE_V2_VERSION,
+            17,
+            "the census's hashed/rebuildable split was read at state version 17; a bump means the \
+             root preimage moved and both claim-state rows need re-reading"
+        );
     }
 
     /// **The payout queue is the row where segmentation breaks a stated premise, not just a
