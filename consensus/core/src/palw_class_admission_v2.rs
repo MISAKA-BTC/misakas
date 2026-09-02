@@ -351,6 +351,50 @@ pub fn derive_court_cost_shaped_v1(
     profile: &PalwShapeProfileV3,
     shape: PalwCourtCostShapeV1,
 ) -> Result<PalwCourtCostV1, PalwClassAdmissionError> {
+    derive_court_cost_walk_v1(profile, shape, &mut None)
+}
+
+/// **One node's row of the derivation** — which node bound the class, and at what.
+///
+/// A `max` tells you the number and never which term produced it, so every reading of "the 512 row
+/// costs N" had to be re-derived by hand against the source to find out WHICH node was over. This
+/// is that walk's own answer, from the same walk: [`derive_court_cost_shaped_v1`] and
+/// [`derive_court_cost_rows_v1`] are one function with the sink absent or present, so a breakdown
+/// can never disagree with the total it explains.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwCourtCostRowV1 {
+    /// `pre` / `gdn` / `attn` / `post`.
+    pub table: &'static str,
+    /// The node's index within that table.
+    pub index: usize,
+    pub op_kind: crate::palw_step::PalwStepOpKindV1,
+    pub weight_name: String,
+    /// Bytes: the artifact opening this node pays.
+    pub opening_bytes: u64,
+    /// Bytes: its own tile, every opened input run, the id terms and any checkpoint charge.
+    pub evidence_bytes: u64,
+    /// `opening_bytes + evidence_bytes` — what this node contributes to `max_close_bytes`.
+    pub close_bytes: u64,
+    pub terminal_macs: u64,
+}
+
+/// [`derive_court_cost_shaped_v1`]'s walk, reported node by node, largest close first.
+pub fn derive_court_cost_rows_v1(
+    profile: &PalwShapeProfileV3,
+    shape: PalwCourtCostShapeV1,
+) -> Result<Vec<PalwCourtCostRowV1>, PalwClassAdmissionError> {
+    let mut sink = Some(Vec::new());
+    derive_court_cost_walk_v1(profile, shape, &mut sink)?;
+    let mut rows = sink.expect("the sink was supplied");
+    rows.sort_by(|a, b| b.close_bytes.cmp(&a.close_bytes));
+    Ok(rows)
+}
+
+fn derive_court_cost_walk_v1(
+    profile: &PalwShapeProfileV3,
+    shape: PalwCourtCostShapeV1,
+    sink: &mut Option<Vec<PalwCourtCostRowV1>>,
+) -> Result<PalwCourtCostV1, PalwClassAdmissionError> {
     use crate::palw_step::{PALW_STEP_INPUT_KV_K, PALW_STEP_INPUT_KV_V, PalwStepOpKindV1 as Op};
     let over = || PalwClassAdmissionError::Profile("the class's court cost overflows a u64".to_string());
     let mut cost = PalwCourtCostV1 { max_close_bytes: 0, max_terminal_macs: 0, max_operand_count: 0 };
@@ -367,8 +411,10 @@ pub fn derive_court_cost_shaped_v1(
     // What a history-reading reference opens, and what it pays once for the right to stop there.
     let history = shape.history_positions;
 
-    for table in [&profile.pre_nodes, &profile.gdn_nodes, &profile.attn_nodes, &profile.post_nodes] {
-        for node in table.iter() {
+    for (table_name, table) in
+        [("pre", &profile.pre_nodes), ("gdn", &profile.gdn_nodes), ("attn", &profile.attn_nodes), ("post", &profile.post_nodes)]
+    {
+        for (node_index, node) in table.iter().enumerate() {
             let out_w = node_out_width_v1(node, profile).ok_or_else(over)?;
             let tile = (node.tile_len as u64).min(out_w.max(1));
             let in_w = match node.input_refs.first() {
@@ -617,14 +663,23 @@ pub fn derive_court_cost_shaped_v1(
             }
             // **The price of stopping at a checkpoint** (Decision 11: "plus ONE checkpoint-chunk
             // opening per history-reading ref"). Zero on the shipped form, which has no anchor to
-            // open. Charged per REF rather than per node, because each history-reading reference
-            // substitutes its own chunk.
+            // open.
+            //
+            // **Per REF for the cache and per NODE for the recurrence, because that is how many
+            // OBJECTS each one substitutes.** A KV arm's two sentinels address two different
+            // committed series (`K` and `V`) and each stands on its own chunk. A recurrence's five
+            // refs are five slices of ONE state — the delta matrix and the convolution window that
+            // `gdn_state_row_bytes_for_map_v1` prices together — so charging five of them billed a
+            // Qwen3.6 row 358,400 bytes for an object that opens once at 71,680. The rule is
+            // "one opening per anchored OBJECT", and the recurrence's five refs are one object.
             if reads_history {
-                let per_ref = if node.op_kind == Op::GatedDeltaNet { shape.gdn_checkpoint_bytes } else { shape.kv_checkpoint_bytes };
-                if per_ref > 0 {
+                let charge = if node.op_kind == Op::GatedDeltaNet {
+                    shape.gdn_checkpoint_bytes
+                } else {
                     let refs = node.input_refs.len().max(1) as u64;
-                    evidence = evidence.checked_add(refs.checked_mul(per_ref).ok_or_else(over)?).ok_or_else(over)?;
-                }
+                    refs.checked_mul(shape.kv_checkpoint_bytes).ok_or_else(over)?
+                };
+                evidence = evidence.checked_add(charge).ok_or_else(over)?;
             }
 
             // Recomputation: what a full node spends to redo this one step, on peer-supplied input.
@@ -660,7 +715,20 @@ pub fn derive_court_cost_shaped_v1(
             };
 
             let operands = node.input_refs.len() as u32 + u32::from(!node.weight_name.is_empty());
-            cost.max_close_bytes = cost.max_close_bytes.max(opening.checked_add(evidence).ok_or_else(over)?);
+            let close = opening.checked_add(evidence).ok_or_else(over)?;
+            if let Some(rows) = sink.as_mut() {
+                rows.push(PalwCourtCostRowV1 {
+                    table: table_name,
+                    index: node_index,
+                    op_kind: node.op_kind,
+                    weight_name: node.weight_name.clone(),
+                    opening_bytes: opening,
+                    evidence_bytes: evidence,
+                    close_bytes: close,
+                    terminal_macs: macs,
+                });
+            }
+            cost.max_close_bytes = cost.max_close_bytes.max(close);
             cost.max_terminal_macs = cost.max_terminal_macs.max(macs);
             cost.max_operand_count = cost.max_operand_count.max(operands);
         }
