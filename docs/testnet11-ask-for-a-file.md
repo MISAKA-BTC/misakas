@@ -132,8 +132,20 @@ $ file ./out/derived-9b08286e6a021ac7.artifact.mid
 ./out/derived-9b08286e6a021ac7.artifact.mid: Standard MIDI data (format 1) using 2 tracks at 1/192
 ```
 
-The same for a 3D scene: `file` reports `glTF binary model, version 2`, and its JSON chunk names
-one mesh with `POSITION` and `NORMAL` accessors — a viewer opens it.
+The same for a 3D scene: `file` reports `glTF binary model, version 2`, and the container holds up
+to an independent parse — the declared length equals the file's, the `JSON` and `BIN` chunks are
+both present, the single buffer's `byteLength` equals the `BIN` chunk, all three accessors fit
+inside their buffer views, every index is inside the vertex count, the primitive is `TRIANGLES`,
+and one node carrying the mesh is wired into scene 0. That is what a loader checks before it draws
+anything.
+
+<sub>Checked with a stand-alone parser (python3's stdlib over the GLB container and its JSON
+chunk), not with our own code, because "our verifier says our file is fine" is not evidence about
+the format. What is *not* claimed: nobody has opened these in a DAW or a 3D viewer. The MIDI was
+parsed the same independent way — `MThd` format 1, two `MTrk` chunks, both ending in an
+end-of-track meta event, consuming the file exactly to its last byte — and the STL is 12 triangles
+at the exact 84 + 50 × n binary layout, with zero normals, which is what the writer's own name
+(`stl-binary/1.0/zero-normal-rh-winding-sorted-v1`) says it emits.</sub>
 
 ### When it refuses
 
@@ -141,7 +153,7 @@ A transformer refuses rather than guessing, and the refusal names the wall it hi
 
 ```console
 $ palw-derive derive --transformer cad/stl/v1 --answer over-long.json --out ./out
-[palw-derive] fatal: derivation refused: grammar: the answer is 70105 bytes; at most 65536
+[palw-derive] fatal: derivation refused: grammar: the answer is 70105 bytes; at most 65536 (ADR-0078 SA-2)
 
 $ palw-derive derive --transformer scene/glb/v1 --answer inexact.json --out ./out
 [palw-derive] fatal: derivation refused: inexact: 16777217/2^8 needs 25 significant bits; binary32 holds 24
@@ -261,9 +273,17 @@ should show you which stage it is in, by these names:
 | **certified** | the panel replayed the job, agreed, and licensed a receipt | `receipt_licensed`, then `final` |
 | **spent** | the work behind it paid for a block | one of the claim's quanta is spent |
 
-On testnet-11's windows that walk takes about **54 hours**. It is a challenge period,
-not a progress bar someone forgot to speed up: the time is what gives anyone the room to dispute
-the job before it is paid for.
+On testnet-11's windows that walk is **about 80 hours to `final`, and about 93 hours — near four
+days — before the work behind it can pay for a block.** It is a challenge period, not a progress
+bar someone forgot to speed up: the time is what gives anyone the room to dispute the job before
+it is paid for.
+
+<sub>The arithmetic, so it can be rechecked rather than believed: the shipped bundle's windows are
+bind 600, receipt 600, challenge 1,200 and receipt maturity 400, all in DAA score, at the frozen
+120-second cadence (`PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS`). A claim reaches `final` at
+bind + receipt + challenge = 2,400 DAA = 80 h, and its receipt is spendable at
+`final + receipt_maturity` = 2,800 DAA = 93.3 h. Print the windows this build actually ships with
+`cargo test -p kaspa-consensus-core --lib dump_rc_windows -- --ignored --nocapture`.</sub>
 
 Two things follow that matter to you:
 
@@ -307,8 +327,9 @@ record attached to it — which transformer, which description fingerprint, whic
 what length, and where on the chain it was accepted.
 
 The second does the real work. It takes the answer, runs the *same* grammar and the *same*
-transformer named on the chain, and compares. It checks in this order, and stops at the first
-disagreement:
+transformer named on the chain, and compares. It checks every field below and reports all of them
+(`all_mismatches`), leading with the first in this order (`first_mismatch`) — because the first one
+to disagree is the one that tells you *what kind* of wrong you are looking at:
 
 | what disagrees | what it means |
 |---|---|

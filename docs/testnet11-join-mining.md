@@ -371,9 +371,24 @@ in, by these names:
 | `certified` | the seats replayed it and filed `Valid`; a receipt is licensed | `ReceiptLicensed` |
 | `spent` | the receipt matured and one of its quanta paid for a block | `Final`, then spent |
 
-On testnet-11's windows that is roughly **54 hours** from commitment to spendability. It is bind,
-challenge and maturity — fraud-proof safety, not a progress bar someone forgot to speed up. Show
-the stage; do not promise a block.
+On testnet-11's windows that is **about 80 hours to `Final`, and about 93 hours from commitment to
+spendability** — bind, receipt, challenge and then maturity. Fraud-proof safety, not a progress bar
+someone forgot to speed up. Show the stage; do not promise a block.
+
+The four windows are DAA-score counts in the shipped bundle — bind 600, receipt 600, challenge
+1,200, receipt maturity 400 — and the cadence is the frozen 120 s
+(`PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS`). So `Final` is bind + receipt + challenge = 2,400 DAA
+= 80 h, and the receipt is spendable at `final_daa + receipt_maturity` = 2,800 DAA = 93.3 h.
+**Corrected 2026-09-03:** this paragraph said "roughly 54 hours", which is
+bind + receipt + maturity with the 1,200-DAA challenge window left out — the one window the
+lifecycle cannot skip, since `palw_producer_v2` states a claim cannot finalize before it has
+passed. Read the shipped numbers rather than this sentence:
+
+```bash
+cargo test -p kaspa-consensus-core --lib dump_rc_windows -- --ignored --nocapture
+# RC windows: bind=600 receipt=600 challenge=1200 court=3000 epoch=1000
+#   a claim reaches Final at bind+receipt+challenge = 2400 DAA after acceptance
+```
 
 ### 7.1 The three processes
 
