@@ -394,7 +394,8 @@ pub fn qwen36_execute_for_attempt_v1(
 
     // The retained rows ARE the selecting rows — row `r` is the one `generated[r]` was chosen
     // from — and the tiled root commits them directly.
-    let trace_root = kaspa_consensus_core::palw_step_refute::tiled_logits_trace_root_v1(ctx, &logits_rows, &generated);
+    let trace_root = kaspa_consensus_core::palw_step_refute::tiled_logits_trace_root_v1(ctx, &logits_rows, &generated)
+        .ok_or_else(|| "the retained rows build no tree".to_string())?;
     let activation_leg_root = crate::produce::base0_activation_leg_root_v1(ctx);
     let binding = crate::legs::base0_binding_from_capture_with_profile_v1(
         profile,
@@ -476,7 +477,7 @@ pub fn qwen36_roots_v1(job: &PalwJobContextV2, shape_id: Hash64, run: &Qwen36Run
             .all(|(row, t)| kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(row) as u32 == *t),
         "every committed token is its own row's argmax — the property the close adjudicates"
     );
-    let trace_root = kaspa_consensus_core::palw_step_refute::tiled_logits_trace_root_v1(job, &selecting, &run.generated);
+    let trace_root = kaspa_consensus_core::palw_step_refute::tiled_logits_trace_root_v1(job, &selecting, &run.generated)?;
     // Nothing renders text on this path — the class commits token ids — so the rendered-output
     // hash is over the ids' own encoding rather than over bytes no one produced.
     let rendered =

@@ -704,9 +704,18 @@ pub fn base0_material_matches_claim_v1(
     // tiled root over their selecting rows — one check that recomputed only the flat root would
     // read every tiled-class material as a mismatch, which is a seat refusing every honest
     // producer of the classes this check exists to police.
+    // **Rows that build no tree are a refusal here, not a hash.** The tiled derivation is total
+    // (it answers `None` for a run with no rows, or a row with no lanes) because THIS is where a
+    // stranger's bytes reach it: the material comes off the gossip pool, and the binding beside it
+    // is the stranger's too, so the checks above — a leaf count in range, tiles that fill it, a
+    // step root that matches — are all satisfiable by an attacker who simply computes them. What
+    // is not satisfiable is a trace root over rows that do not exist.
     let recomputed_trace_root =
         if binding.shape_profile.logits_scheme_id == kaspa_consensus_core::palw_step_refute::tiled_logits_scheme_id_v1() {
-            kaspa_consensus_core::palw_step_refute::tiled_logits_trace_root_v1(&binding.job_context, logits_rows, generated)
+            match kaspa_consensus_core::palw_step_refute::tiled_logits_trace_root_v1(&binding.job_context, logits_rows, generated) {
+                Some(root) => root,
+                None => return Ok(false),
+            }
         } else {
             kaspa_consensus_core::palw_step_refute::base0_logits_trace_root_v1(&binding.job_context, logits_rows, generated)
         };
@@ -1831,6 +1840,45 @@ mod tests {
     /// and this is that decision: rebuild the leg from the retained tiles and ask whether it
     /// reproduces the roots the CLAIM carries. A rubber stamp would license a producer that
     /// committed one root and kept another.
+    /// **A tiled class's seat check panicked on material that carries no rows.**
+    ///
+    /// `tiled_logits_trace_root_v1` hashes a Merkle tree over the retained rows and `expect`s the
+    /// tree to exist — but the rows arrive inside a gossiped material blob, and
+    /// `PalwGossipFlow` relays that blob to every peer before anything decodes it. A blob with
+    /// zero rows (or one empty row) makes `step_merkle_root_v1` return the leaf-count error under
+    /// an `expect`, in `verify_material`, on a class whose registered `logits_scheme_id` is the
+    /// tiled one — which is both model tiers. Every seat on the claim's panel dies, holding no
+    /// bond and having landed no block, so a bondless stranger disarms the court.
+    ///
+    /// The binding is the attacker's too, so the earlier gates do not stop it: a leaf count of one
+    /// with no tiles gives a root the attacker computes and writes into the binding it sends.
+    #[test]
+    fn a_seat_refuses_tiled_material_that_carries_no_rows() {
+        use kaspa_consensus_core::palw_step_refute::tiled_logits_scheme_id_v1;
+
+        let (artifact, profile, ctx, prompt) = small_job();
+        let run = base0_execute_for_attempt_v1(&artifact, &profile, &ctx, &prompt).expect("the job runs");
+
+        // The attacker's binding: the tiled scheme (what QWEN36 and the A16 row register), one
+        // leaf and no tiles, and the step root that pair actually produces.
+        let mut binding = run.binding.clone();
+        binding.shape_profile.logits_scheme_id = tiled_logits_scheme_id_v1();
+        binding.step_leaf_count = 1;
+        binding.step_merkle_root =
+            kaspa_consensus_core::palw_step_leg::step_merkle_root_v1(&[Hash64::default()]).expect("one leaf is a tree");
+
+        for (what, rows, generated) in [
+            ("no rows at all", Vec::<Vec<i32>>::new(), Vec::<u32>::new()),
+            ("one row with no lanes", vec![Vec::<i32>::new()], vec![0u32]),
+        ] {
+            let hostile: Base0RetainedMaterialV1 = (binding.clone(), Vec::new(), rows, generated, Vec::new());
+            assert!(
+                !base0_material_matches_claim_v1(&hostile, run.execution_root, run.trace_root).expect("a refusal, not a panic"),
+                "material with {what} must be refused, not hashed"
+            );
+        }
+    }
+
     /// **A gossiped leaf count used to size an allocation before anything bounded it.**
     ///
     /// `step_leaf_count` is a plain `u64` inside a borsh blob that `PalwGossipFlow` relays before

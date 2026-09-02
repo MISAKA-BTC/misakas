@@ -2395,26 +2395,41 @@ pub fn tiled_logits_tile_leaf_v1(ctx_hash: &Hash64, row: u32, tile: u32, lanes: 
 /// tile leaves. ONE tree implementation in the codebase — `step_opening_root_v1` walks the
 /// openings for this tree exactly as it walks a leg's, because a second Merkle idiom is a second
 /// place to get an odd node wrong.
-pub fn tiled_logits_row_root_v1(ctx_hash: &Hash64, row: u32, lanes: &[i32]) -> Hash64 {
+pub fn tiled_logits_row_root_v1(ctx_hash: &Hash64, row: u32, lanes: &[i32]) -> Option<Hash64> {
+    // **`None` for a row with no lanes, because a seat is handed rows by strangers.** The
+    // committing side always has a vocabulary and therefore a tile, but this function is also
+    // reached from `verify_material` by way of the trace root, and the material there arrives
+    // inside a gossiped blob that `PalwGossipFlow` relays to every peer before anything decodes
+    // it. A row of zero lanes tiles into zero leaves, and `step_merkle_root_v1` refuses a
+    // zero-leaf tree — under an `expect` this was a panic, which on the release profile is
+    // `process::exit(1)` in every seat on the claim's panel, bought with one bondless message.
+    // The same shape (`unwrap_or_default` fabricating an empty row) was closed inside the Qwen3.6
+    // backend and left open here, one level below it.
     let leaves: Vec<Hash64> = lanes
         .chunks(PALW_LOGITS_TILE_LANES)
         .enumerate()
         .map(|(t, chunk)| tiled_logits_tile_leaf_v1(ctx_hash, row, t as u32, chunk))
         .collect();
-    crate::palw_step_leg::step_merkle_root_v1(&leaves).expect("a row has at least one tile and fewer than the leg cap")
+    crate::palw_step_leg::step_merkle_root_v1(&leaves).ok()
 }
 
 /// The trace root: the context, the run's shape, a MERKLE root over the row roots — a tree, not a
 /// chain, because recomputing a chained root needs every link and at 4,096 decode tokens the links
 /// alone are 256 KiB, past the whole close budget — and the generated ids flat, which at four
 /// bytes each stay under 16 KiB at any decode this court admits.
-pub fn tiled_logits_trace_root_v1(ctx: &crate::palw_v2::PalwJobContextV2, logits_rows: &[Vec<i32>], generated: &[u32]) -> Hash64 {
+pub fn tiled_logits_trace_root_v1(
+    ctx: &crate::palw_v2::PalwJobContextV2,
+    logits_rows: &[Vec<i32>],
+    generated: &[u32],
+) -> Option<Hash64> {
+    // Total, for the reason stated on [`tiled_logits_row_root_v1`]: rows that build no tree are
+    // rows a seat cannot check, and the honest answer to material like that is a refusal, never a
+    // hash and never a crash.
     let ctx_hash = ctx.context_hash();
     let row_roots: Vec<Hash64> =
-        logits_rows.iter().enumerate().map(|(r, row)| tiled_logits_row_root_v1(&ctx_hash, r as u32, row)).collect();
-    let rows_root =
-        crate::palw_step_leg::step_merkle_root_v1(&row_roots).expect("a run has at least one row and fewer than the leg cap");
-    tiled_logits_outer_root_v1(ctx, logits_rows.len() as u64, &rows_root, generated)
+        logits_rows.iter().enumerate().map(|(r, row)| tiled_logits_row_root_v1(&ctx_hash, r as u32, row)).collect::<Option<_>>()?;
+    let rows_root = crate::palw_step_leg::step_merkle_root_v1(&row_roots).ok()?;
+    Some(tiled_logits_outer_root_v1(ctx, logits_rows.len() as u64, &rows_root, generated))
 }
 
 /// The merkle root over a run's committed selecting-row roots — the value [`PalwTiledDecodeTokensV1`]
@@ -2423,7 +2438,7 @@ pub fn tiled_logits_trace_root_v1(ctx: &crate::palw_v2::PalwJobContextV2, logits
 pub fn tiled_logits_rows_root_v1(ctx: &crate::palw_v2::PalwJobContextV2, logits_rows: &[Vec<i32>]) -> Option<Hash64> {
     let ctx_hash = ctx.context_hash();
     let row_roots: Vec<Hash64> =
-        logits_rows.iter().enumerate().map(|(r, row)| tiled_logits_row_root_v1(&ctx_hash, r as u32, row)).collect();
+        logits_rows.iter().enumerate().map(|(r, row)| tiled_logits_row_root_v1(&ctx_hash, r as u32, row)).collect::<Option<_>>()?;
     crate::palw_step_leg::step_merkle_root_v1(&row_roots).ok()
 }
 
@@ -5443,8 +5458,11 @@ pub(crate) mod tests {
         let path_for = |leaves: &[Hash64], index: usize| -> Vec<Hash64> {
             crate::palw_step_leg::step_merkle_path_v1(leaves, index).expect("the test's trees are inside the leg bounds")
         };
-        let row_roots: Vec<Hash64> =
-            logits_rows.iter().enumerate().map(|(r, lanes)| tiled_logits_row_root_v1(&ctx_hash, r as u32, lanes)).collect();
+        let row_roots: Vec<Hash64> = logits_rows
+            .iter()
+            .enumerate()
+            .map(|(r, lanes)| tiled_logits_row_root_v1(&ctx_hash, r as u32, lanes).expect("the fixture's rows have lanes"))
+            .collect();
         let committed = generated[position as usize] as usize;
         let (ct, bt) = (committed / PALW_LOGITS_TILE_LANES, beat_lane as usize / PALW_LOGITS_TILE_LANES);
         let _ = decode;
@@ -5491,7 +5509,8 @@ pub(crate) mod tests {
         let logits_rows: Vec<Vec<i32>> =
             (0..decode).map(|c| (0..vocab).map(|i| ((c * 131 + i * 7919) % 65_536) as i32 - 32_768).collect()).collect();
         let generated: Vec<u32> = logits_rows.iter().map(|r| base0_decode_token_select_v1(r) as u32).collect();
-        binding.full_logits_trace_root = tiled_logits_trace_root_v1(&binding.job_context, &logits_rows, &generated);
+        binding.full_logits_trace_root =
+            tiled_logits_trace_root_v1(&binding.job_context, &logits_rows, &generated).expect("the fixture's rows build a tree");
         rebind_committed_root(&mut binding);
 
         // Honest: no beating lane exists, whichever tile a challenger opens.
@@ -5508,7 +5527,8 @@ pub(crate) mod tests {
         // The lie is inside the commitment, exactly as a fraudulent producer would make it.
         let mut lying = generated.clone();
         lying[1] = lying[1].wrapping_add(3) % vocab as u32;
-        binding.full_logits_trace_root = tiled_logits_trace_root_v1(&binding.job_context, &logits_rows, &lying);
+        binding.full_logits_trace_root =
+            tiled_logits_trace_root_v1(&binding.job_context, &logits_rows, &lying).expect("the fixture's rows build a tree");
         rebind_committed_root(&mut binding);
         let true_argmax = generated[1];
         let pin = tiled_pin(&binding.job_context, &logits_rows, &lying, 1, true_argmax);

@@ -101,7 +101,7 @@ pub fn qwen25_a16_roots_v1(
             .all(|(row, t)| kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(row) as u32 == *t),
         "every committed token is its own row's argmax — the property the close adjudicates"
     );
-    let trace_root = kaspa_consensus_core::palw_step_refute::tiled_logits_trace_root_v1(job, &selecting, &run.generated);
+    let trace_root = kaspa_consensus_core::palw_step_refute::tiled_logits_trace_root_v1(job, &selecting, &run.generated)?;
     let rendered =
         keyed(QWEN25_A16_DOMAIN_EXECUTION, &[b"rendered", &run.generated.iter().flat_map(|t| t.to_le_bytes()).collect::<Vec<_>>()]);
     let output_root = output_commitment_v2(&context, &run.generated, &rendered);
@@ -254,7 +254,8 @@ pub fn a16_execute_for_attempt_v1(
     // **This class's own trace scheme, not the floor's.** The retained rows ARE the selecting
     // rows (row `r` is the one `generated[r]` was chosen from), so the tiled root commits them
     // directly and a seat recomputes it from the same retention.
-    let trace_root = kaspa_consensus_core::palw_step_refute::tiled_logits_trace_root_v1(ctx, &logits_rows, &generated);
+    let trace_root = kaspa_consensus_core::palw_step_refute::tiled_logits_trace_root_v1(ctx, &logits_rows, &generated)
+        .ok_or_else(|| "the retained rows build no tree".to_string())?;
     let activation_leg_root = crate::produce::base0_activation_leg_root_v1(ctx);
     let binding = crate::legs::base0_binding_from_capture_v1(profile, ctx, &tiles, &checkpoints, trace_root, activation_leg_root)
         .map_err(|e| format!("{e:?}"))?;
