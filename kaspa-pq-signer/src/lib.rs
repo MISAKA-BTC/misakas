@@ -995,6 +995,72 @@ mod tests {
         );
     }
 
+    /// **ADR-0079 Decision 8 / S10 — the signer signs ONE message shape, and this is where that
+    /// is written down in code.**
+    ///
+    /// The rule, in three parts, all of which this test exercises:
+    ///
+    /// 1. **A signature covers a typed 64-byte digest, never arbitrary bytes.** There is no
+    ///    "sign these bytes" request in [`SignerRequest`] and there must never be one: the
+    ///    `message_digest` is a `SignerMessageDigest` enum whose every arm is a `Hash64`, so a
+    ///    caller cannot hand the key a message of its own choosing. A signer that will sign
+    ///    arbitrary bytes is a key the gateway holds by proxy.
+    /// 2. **The purpose tag must match the digest variant** (audit H-03) — a wrong tag is refused
+    ///    even when the digest is well-formed.
+    /// 3. **The ML-DSA-87 context is reserved to the purpose** (audit C-02), so a signature
+    ///    produced for one operation can never verify as another.
+    ///
+    /// The residual is stated where the gate lives
+    /// (`kaspa_pq_validator_core::palw_fp_sign_gate`): this process is handed an ID, not the
+    /// commitment it came from, so it cannot RE-DERIVE. SA-2's derivation check therefore runs in
+    /// the one process that holds both the commitment and the worker result frame — the rail —
+    /// and moving it here would need a `SignerMetadata` arm, which is a consensus-core type.
+    #[test]
+    fn the_signer_signs_one_shape_and_never_arbitrary_bytes() {
+        let k = key(0x79);
+        let vid = k.validator_id;
+        let mut s = SignerState::new(vec![k], SignerPolicy::Strict, tmp_dir("one-shape"), Hash::default()).unwrap();
+        let claim_id = Hash64::from_bytes([0xA9; 64]);
+
+        // (1) The only thing a caller may name is a typed digest. The wire type has no bytes arm,
+        //     so the strongest statement available is that every arm this build knows is a
+        //     fixed-width id — checked by construction below, and by the compiler above.
+        let legit = SignerRequest {
+            request_id: 1,
+            validator_id: vid,
+            purpose: SigningPurpose::PalwFpCommitmentV3,
+            context: PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT.to_vec(),
+            message_digest: SignerMessageDigest::PalwFpCommitmentV3(claim_id),
+            metadata: SignerMetadata::None,
+        };
+        let sig = s.handle_request(&legit, Hash::default(), 1000).result.expect("the one shape signs");
+        assert!(!sig.is_empty(), "a signature over the one shape");
+
+        // (2) A well-formed digest under the WRONG purpose tag is refused: the shape is the pair,
+        //     not the digest alone.
+        let mistagged = SignerRequest {
+            request_id: 2,
+            validator_id: vid,
+            purpose: SigningPurpose::PalwFpSpendV3,
+            context: PALW_FP_V3_MLDSA87_SPEND_CONTEXT.to_vec(),
+            message_digest: SignerMessageDigest::PalwFpCommitmentV3(claim_id),
+            metadata: SignerMetadata::None,
+        };
+        assert!(s.handle_request(&mistagged, Hash::default(), 1000).result.is_err(), "purpose must match the digest variant");
+
+        // (3) And an over-long context — the nearest thing to "arbitrary bytes" the wire allows —
+        //     is refused in band rather than panicking under the shared state mutex.
+        let long_ctx = SignerRequest {
+            request_id: 3,
+            validator_id: vid,
+            purpose: SigningPurpose::Transaction,
+            context: vec![0u8; 256],
+            message_digest: SignerMessageDigest::Transaction(Hash64::from_bytes([0x11; 64])),
+            metadata: SignerMetadata::None,
+        };
+        assert!(s.handle_request(&long_ctx, Hash::default(), 1000).result.is_err(), "an over-long context is refused in band");
+    }
+
     /// ADR-0044 (FP-08): the two free-prompt purposes hold the same C-02 discipline — each is
     /// bound to its own reserved context, neither may be borrowed, neither runs a journal (the
     /// commitment has nothing per-challenge to guard; a spend journal would strand honest
