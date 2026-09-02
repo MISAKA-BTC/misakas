@@ -149,6 +149,30 @@ node announces `d38abe44…` before starting the next host.
 * seat2 (A16 producer) logged **0 refusals** after the restart; the old build refused within seconds
   of the producer loop starting.
 
+### 5c verification (six read-only probes, 01:56–02:06 CEST) — NOT yet publishable
+
+* **Identity clean**: all seven kaspad processes (ibm node0/node1, C seat2/seat3, .113 node/seat4/
+  pool-slot) announce `d38abe44…` / `08e9c8a4…` / `581466da…`, binary `1fcac716…`; `f0e50f83…` on none.
+* **Claims license, nothing voids**: `voided`/`BindTimeout`/`InsufficientEligibleBonds` = 0 on every
+  log; ReceiptLicensed 53 → 84 in five minutes; `final_claims=0` is expected (≥ 2400 DAA ≈ 80 h).
+* **Cadence converging**: 96 → 5 blocks/min in 22 min, difficulty +67 % in 4 min, same shape as the
+  revert build. Not at target inside the window; re-sample at ~02:30.
+* **QWEN36**: first block 02:04:17, 41 min after its producer started (33 GiB paged from disk).
+* **A16 — the point of this deploy — UNVERIFIED**: seat2 logged **zero** refusals on the re-pinned
+  root (the old build refused within seconds), but it was **OOM-killed at 02:00:27** (anon-rss
+  13.8 GB, C's 4 GB swap 100 % full) while mapping the 33 GiB Qwen3.6 artifact a SECOND time — once
+  for the producer role, once for the panel role — before its producer loop ever ran. It restarted
+  into a persisted candidate-review. So the root fix is not refuted and not demonstrated.
+* Host C still cannot hold seat2 + seat3 (~14 GB + ~11 GB peaks on 24 GB); .113 has no margin
+  (22.9 / 24.6 GB, node 10.3 + seat4 11.5 GB, no swap).
+
+**Action taken (host-only, reversible, consensus-neutral)**: 16 GB swapfiles `/swapfile-r5c` added
+to C (4 → 20 GB) and .113 (0 → 16 GB), `vm.swappiness=20`, persisted in fstab. Zero OOM kills
+since. **Code follow-ups filed**: (1) a process holding both roles maps and hashes the same 33 GiB
+artifact twice — share one mapping; (2) candidate-review nodes drop fleet peers with
+`HandleRelayInvsFlow: expected Payload::Block but got IbdCandidateSummary` (seat2 ×7, seat3 ×15,
+pool-slot ×11; zero on Ready nodes).
+
 ### Four stores are per-genesis and must be rotated at every regenesis — one was missed today
 
 | store | where | rotation |
