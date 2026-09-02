@@ -1399,7 +1399,7 @@ impl VirtualStateProcessor {
                                     header.daa_score,
                                     // ADR-0075 SA-1/SA-2: what each 0x4b carrier paid, collected
                                     // by the UTXO walk two frames up, where the fee is knowable.
-                                    &ctx.palw_v2_lifecycle_fees,
+                                    &ctx.palw_v2_accepted_tx_fees,
                                 );
                                 // Decisions 7/8: every lifecycle object meets its own validator
                                 // before the transition folds it — and an object that FAILS is
@@ -4828,26 +4828,30 @@ impl VirtualStateProcessor {
         let rent_armed = self.palw_certification_rent_at(point.daa_score);
         for carried in objects {
             let PalwCarriedObjectV1 { object, carrier_fee } = carried;
-            // **ADR-0075 SA-1: a chunk group's opener pays for the room it reserves.**
+            // **ADR-0075 SA-1: a chunk group's opener pays for the SLOT it takes.**
             //
-            // A group holds one of `PALW_OBJECT_CHUNK_MAX_GROUPS` slots in the state root for up to
+            // A group holds one of `PALW_OBJECT_CHUNK_MAX_GROUPS` rows in the state root for up to
             // `PALW_OBJECT_CHUNK_TTL_DAA` — about five and a half days at a 120 s cadence — and
-            // `count` is declared by whoever opens it, so a ONE-BYTE chunk saying `count = 8`
-            // reserved eight hundred kilobytes of room for the mempool's flat relay floor and
-            // blocked every honest drill for the whole window. The opener is charged the carriage
-            // price of that room; chunks that merely extend an existing group are not, because
-            // they reserve nothing new and taxing them would fall on the carrier that completes.
+            // that row is denied to every honest drill just as completely by a group declaring two
+            // parts as by one declaring eight. Pricing the DECLARED `count` therefore priced the
+            // wrong resource, and priced it in the griefer's favour: his optimum was `count = 2`,
+            // eight of which held the whole table for a quarter of what the rule was reasoned
+            // about and for LESS per row than ADR-0075 D14's own 3- and 4-part drills pay. The
+            // rent is the slot, flat, whatever the opener says it will send; chunks that merely
+            // EXTEND an open group pay nothing, because the row is already paid for and charging
+            // them would fall on the carrier that completes.
             //
             // Refused BEFORE the group is opened, so the junk never reaches the state root.
             if rent_armed
-                && let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ObjectChunk { group, count, .. } = &object
+                && let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ObjectChunk { group, .. } = &object
                 && folded.pending_chunk_group(group).is_none()
             {
-                let owed = kaspa_consensus_core::palw_state_v2::palw_object_chunk_group_rent_v1(*count);
+                let owed = kaspa_consensus_core::palw_state_v2::palw_object_chunk_group_rent_v1();
                 if carrier_fee < owed {
                     info!(
                         "Block {block}: an ObjectChunk opening group {group} was dropped, and the block stands: its carrier paid \
-                         {carrier_fee} sompi and a {count}-part group's room rents for {owed} (ADR-0075 SA-1)"
+                         {carrier_fee} sompi and one of the {} pending-chunk slots rents for {owed} (ADR-0075 SA-1)",
+                        kaspa_consensus_core::palw_state_v2::PALW_OBJECT_CHUNK_MAX_GROUPS
                     );
                     continue;
                 }
@@ -4866,9 +4870,35 @@ impl VirtualStateProcessor {
                 }
                 _ => false,
             };
-            if matches!(object, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::FamilyCertified { .. })
-                || completes_a_group
-            {
+            // **What the block's cap counts is what the court will actually re-execute.**
+            //
+            // The predicate above answers "does this chunk finish its group", which is not the same
+            // question. `ObjectChunk { group: <fresh>, index: 5, count: 1 }` finishes a group by
+            // that reading and the transition then refuses it as `ChunkIndexOutOfRange`; so does
+            // `{ index: 0, count: 1, bytes: [1 byte] }`, which assembles into bytes no object
+            // decodes from. Sixty bytes either way, and two of them per block exhausted
+            // `PALW_CERTIFICATION_MAX_PER_BLOCK` and dropped every genuine `FamilyCertified` the
+            // block carried — a block-cheap way to keep an honest class weightless.
+            //
+            // `palw_v2_graded_vector_count` is exactly the "will the court grade this" predicate:
+            // it assembles, decodes, and answers `None` for everything the transition will refuse
+            // before `apply_object(FamilyCertified)`. Counting on IT rather than on "completes a
+            // group" charges the cap for court work and for nothing else — and it subsumes the
+            // narrower `index < count` reading of the same hole, so the two compose: with both
+            // rules in force this one already refuses everything that one does.
+            //
+            // Behind the SAME fence as the two rents (`palw_certification_rent`), because it
+            // decides which objects a block accepts and therefore its state root — an upgraded and
+            // an un-upgraded node must never answer that differently in silence. Dormant, the
+            // count is skipped entirely and the predicate below is the one that shipped.
+            let graded_vectors = rent_armed.then(|| Self::palw_v2_graded_vector_count(&folded, &object)).flatten();
+            let charges_a_grading_slot = if rent_armed {
+                graded_vectors.is_some()
+            } else {
+                matches!(object, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::FamilyCertified { .. })
+                    || completes_a_group
+            };
+            if charges_a_grading_slot {
                 // **ADR-0075 SA-2: grading is priced before it is performed.**
                 //
                 // The court re-executes one recorded fault vector per vector the object carries,
@@ -4889,7 +4919,7 @@ impl VirtualStateProcessor {
                 // stops" — and a template builder selects transactions by fee without ever
                 // consulting this filter, so honest miners would be the ones producing the invalid
                 // blocks. Dropping needs no mempool rule to be safe; invalidity would.
-                if rent_armed && let Some(vectors) = Self::palw_v2_graded_vector_count(&folded, &object) {
+                if let Some(vectors) = graded_vectors {
                     let owed = kaspa_consensus_core::palw_state_v2::palw_certification_min_fee_v1(vectors);
                     if carrier_fee < owed {
                         info!(
@@ -6169,10 +6199,13 @@ impl VirtualStateProcessor {
         // object the same block carries, which is the order a chain that is catching up needs.
         //
         // ADR-0075 SA-1/SA-2: each carried object keeps what its own carrier paid, resolved from
-        // the map `calculate_utxo_state` filled while it had the composed UTXO view in hand. A
-        // carrier missing from the map paid nothing this walk can see — which is the case on every
-        // network with the rent fence unarmed, where `PALW_RENT_UNPRICED` makes the whole rule
-        // read as absent rather than as "everyone underpaid".
+        // the map `calculate_utxo_state` filled while it had the composed UTXO view in hand. That
+        // map holds EVERY accepted transaction, not a list of PALW bands, so a carrier this walk
+        // can name is always in it: the two extractors below read `txs`, which is the accepted set
+        // that loop just priced. The `unwrap_or(0)` is therefore unreachable rather than a
+        // fail-closed branch — and it has to be, because for a priced object it is a drop, and for
+        // certification a permanent halt on that network. Below the fence `PALW_RENT_UNPRICED`
+        // makes the whole rule read as absent rather than as "everyone underpaid".
         let priced = self.palw_certification_rent_at(block_daa);
         let fee_of = |carrier: TransactionId| {
             if priced { carrier_fees.get(&carrier).copied().unwrap_or(0) } else { PALW_RENT_UNPRICED }

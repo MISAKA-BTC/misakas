@@ -44,7 +44,7 @@ use kaspa_consensus_core::{
     hashing,
     header::Header,
     muhash::MuHashExtensions,
-    subnets::{SUBNETWORK_ID_PALW_FP_COMMITMENT, SUBNETWORK_ID_PALW_LIFECYCLE, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD},
+    subnets::{SUBNETWORK_ID_PALW_LIFECYCLE, SUBNETWORK_ID_STAKE_ATTESTATION_SHARD},
     tx::{
         MutableTransaction, PopulatedTransaction, Transaction, TransactionId, TransactionOutpoint, TransactionOutput, UtxoEntry,
         ValidatedTransaction, VerifiableTransaction,
@@ -181,15 +181,19 @@ pub(super) struct UtxoProcessingContext<'a> {
     /// known exactly HERE — `calculated_fee` is `in − out` over the composed view — so it is kept
     /// here and read by `palw_v2_objects_of_block` two frames along.
     ///
-    /// Both PALW object bands are collected — 0x4b's lifecycle carriers and 0x4a's free-prompt
-    /// commitments — because `palw_v2_objects_of_block` builds one list out of both walks, and a
-    /// band missing from the map would read as "paid nothing" rather than as "not priced". No rule
-    /// prices a free-prompt commitment today; the alternative is a silent exemption the day one
-    /// does.
+    /// **Every accepted transaction, not a list of PALW bands.** The walk two frames along builds
+    /// one list out of `palw_fp_objects_from_accepted_txs_v3` (0x4a) and
+    /// `palw_lifecycle_objects_from_accepted_txs_v2` (0x4b), and its `fee_of` resolves a missing
+    /// carrier as `0` — which for a priced object is a DROP, and for certification a permanent
+    /// halt with no error a submitter can see. A band list here would have to be kept in step with
+    /// both of those walks by hand, and the day it fell behind the network would stop accepting
+    /// certifications. Collecting unconditionally makes that impossible rather than merely
+    /// unlikely: the walk reads only ACCEPTED transactions, so every carrier it can name is a
+    /// transaction this loop already saw, and `fee_of`'s fallback becomes unreachable.
     ///
     /// Filled only while a V2 bundle is installed AND the rent fence is armed, so on every shipped
     /// preset it is empty and costs one `is_some_and`.
-    pub palw_v2_lifecycle_fees: std::collections::HashMap<TransactionId, u64>,
+    pub palw_v2_accepted_tx_fees: std::collections::HashMap<TransactionId, u64>,
 }
 
 impl<'a> UtxoProcessingContext<'a> {
@@ -212,7 +216,7 @@ impl<'a> UtxoProcessingContext<'a> {
             palw_v2_escrow_withheld: 0,
             palw_v2_unentitled_blues: BlockHashSet::default(),
             palw_v2_bond_burns: Default::default(),
-            palw_v2_lifecycle_fees: Default::default(),
+            palw_v2_accepted_tx_fees: Default::default(),
         }
     }
 
@@ -398,21 +402,18 @@ impl VirtualStateProcessor {
             // Below either fence `finality_fee` stays 0 ⇒ byte-identical splits.
             let finality_fee_active = pov_daa_score >= self.evm_activation_daa_score
                 && self.dns_params.as_ref().is_some_and(|p| pov_daa_score >= p.finality_fee_activation_daa_score);
-            // ADR-0075 SA-1/SA-2: the fee of every accepted PALW object carrier, kept for the walk
-            // that grades a certification (see `UtxoProcessingContext::palw_v2_lifecycle_fees`).
+            // ADR-0075 SA-1/SA-2: what each accepted transaction paid, kept for the walk that
+            // grades a certification (see `UtxoProcessingContext::palw_v2_accepted_tx_fees`).
             // Off — and the map empty — unless the rent fence is armed, so every shipped preset
             // walks this loop exactly as it did before the field existed.
-            let collect_lifecycle_fees = self.palw_certification_rent_at(pov_daa_score);
+            let collect_carrier_fees = self.palw_certification_rent_at(pov_daa_score);
             let mut block_fee = 0u64;
             let mut finality_fee = 0u64;
             for (validated_tx, _) in validated_transactions.iter() {
                 ctx.mergeset_diff.add_transaction(validated_tx, pov_daa_score).unwrap();
                 ctx.accepted_tx_ids.push(validated_tx.id());
-                if collect_lifecycle_fees
-                    && (validated_tx.tx.subnetwork_id == SUBNETWORK_ID_PALW_LIFECYCLE
-                        || validated_tx.tx.subnetwork_id == SUBNETWORK_ID_PALW_FP_COMMITMENT)
-                {
-                    ctx.palw_v2_lifecycle_fees.insert(validated_tx.id(), validated_tx.calculated_fee);
+                if collect_carrier_fees {
+                    ctx.palw_v2_accepted_tx_fees.insert(validated_tx.id(), validated_tx.calculated_fee);
                 }
                 // **Audit C-08 part three: the miner does not collect what the chain destroyed.**
                 //
@@ -422,7 +423,38 @@ impl VirtualStateProcessor {
                 // documentation ("enters circulation nowhere") would still be false. Burned by
                 // don't-mint, the mechanism the §F service share already uses.
                 let owed = bond_filter.map(|f| f.burn_owed(validated_tx.tx)).unwrap_or(0);
-                block_fee += validated_tx.calculated_fee.saturating_sub(owed);
+                // **ADR-0075 SA-1/SA-2: the RENT is burned, and only the carriage is the miner's.**
+                //
+                // Both prices are transaction fees, and a fee is paid to the coinbase of the block
+                // that accepts it. So the cheapest adversary either amendment has — a miner, who
+                // needs no stranger's cooperation to get a carrier into a block — recovered ~90% of
+                // whatever he had just been charged, in the same block, and the claim that "the CPU
+                // every validator spends is bounded by fees the griefer actually paid" was false
+                // for exactly the party best placed to spend it. Burned by don't-mint, the
+                // mechanism the C-08 bond burn immediately above and the §F service share already
+                // use, so construction and validation agree structurally (both are this function).
+                //
+                // `palw_object_rent_ceiling_v1` is the same price the acceptance filter charges,
+                // read from the carrier's own declared object through the same extractor the object
+                // walk uses — so a carrier cannot be charged one number here and another there.
+                // Capped at the fee: a carrier that underpays is dropped ungraded anyway, and it
+                // must not be able to make the coinbase owe more than the block collected. Anything
+                // above the rent is ordinary carriage and stays with the miner, which is why an
+                // ordinary court move or a free-prompt commitment — objects no rule prices — burn
+                // nothing at all.
+                let rent_burned = if collect_carrier_fees && validated_tx.tx.subnetwork_id == SUBNETWORK_ID_PALW_LIFECYCLE {
+                    kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_objects_from_accepted_txs_v2(std::slice::from_ref(
+                        validated_tx.tx,
+                    ))
+                    .objects
+                    .first()
+                    .map(|carried| kaspa_consensus_core::palw_state_v2::palw_object_rent_ceiling_v1(&carried.object))
+                    .unwrap_or(0)
+                    .min(validated_tx.calculated_fee)
+                } else {
+                    0
+                };
+                block_fee += validated_tx.calculated_fee.saturating_sub(owed.saturating_add(rent_burned));
                 if finality_fee_active
                     && validated_tx.tx.outputs.iter().any(|o| parse_evm_deposit_lock(&o.script_public_key).is_some())
                 {

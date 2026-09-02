@@ -330,8 +330,7 @@ pub async fn submit_objects(ctx: &Ctx, ks: &crate::keys::KeySource, paths: &[std
                 kaspa_consensus_core::palw_state_v2::palw_certification_min_fee_v1(evidence.vector_count())
             }
             PalwConsensusObjectV2::ObjectChunk { index, count, .. } => {
-                let opener =
-                    if *index == 0 { kaspa_consensus_core::palw_state_v2::palw_object_chunk_group_rent_v1(*count) } else { 0 };
+                let opener = if *index == 0 { kaspa_consensus_core::palw_state_v2::palw_object_chunk_group_rent_v1() } else { 0 };
                 // The chunk that COMPLETES the group carries the certification into its block, so
                 // it owes the grading rent — and a single chunk cannot say how many vectors the
                 // assembled object holds, so it pays for the most the rules allow. Widened to u16

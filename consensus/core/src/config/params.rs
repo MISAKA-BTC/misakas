@@ -1521,6 +1521,17 @@ impl Params {
             h.write(b"palw_bond_maturity_window");
             h.write(maturity.window_daa.to_le_bytes());
         }
+        // **ADR-0075 SA-1/SA-2's fence, NAMED, because its `for_each_fence` arm is Some-only.**
+        //
+        // The sentinel that arm does not write is what kept absence from aliasing a present value
+        // in the untagged sequence above; the name does the same job without charging the four
+        // presets that leave the fence dormant eight bytes of schedule id for a rule none of them
+        // schedule. Some-only, so an unset preset's schedule id is what it was before the field
+        // existed — which is the whole point.
+        if let Some(rent) = self.palw_certification_rent {
+            h.write(b"palw_certification_rent");
+            h.write(rent.daa_score().to_le_bytes());
+        }
         h.finalize()
     }
 
@@ -1710,12 +1721,27 @@ impl Params {
         // ADR-0075 SA-1/SA-2. A pure fence with no payload beside it, so visiting it is safe: both
         // prices are constants this binary enforces, and there is nothing for the identity
         // visitor's `0`/`u64::MAX` normalisation to flatten.
-        match palw_certification_rent.as_mut() {
-            Some(activation) => fork(activation, visit),
-            None => {
-                absent = u64::MAX;
-                visit(&mut absent);
-            }
+        //
+        // **Visited SOME-ONLY, unlike its siblings above, and that is the fix rather than an
+        // omission.** `consensus_schedule_id` hashes every value this walk visits, in sequence, so
+        // an arm that stands a `u64::MAX` in for absence puts eight bytes into that hash on the
+        // four presets that leave the field `None` — and a build carrying a dormant fence then
+        // prints a different schedule id from a build without the field at all, for schedules that
+        // are identical. That is exactly the "these agree / these do not" signal the id exists to
+        // give, inverted, and it breaks the discipline that a dormant fence changes nothing an
+        // operator can observe. Absence still cannot alias a present value, because
+        // `consensus_schedule_id` writes this fence again under its own NAME when it is `Some`
+        // (the `palw_bond_maturity_window` precedent) — the tag is what the sentinel was standing
+        // in for, and it costs the dormant case nothing.
+        //
+        // The identity is untouched either way: the visitor mutates in place, and there is nothing
+        // to mutate when the field is `None`.
+        //
+        // Every sibling arm above has the same defect and the same fix is not local to any one of
+        // them — it wants `for_each_fence` to hand the visitor a name. Recorded for the integrator
+        // rather than done here, because that signature is the merge hotspot of this whole batch.
+        if let Some(activation) = palw_certification_rent.as_mut() {
+            fork(activation, visit);
         }
 
         let Some(dns) = dns_params.as_mut() else {
@@ -7878,6 +7904,51 @@ mod consensus_params_id_tests {
         let mut d4 = MAINNET_PARAMS;
         d4.palw_unavailable_abstains = Some(ForkActivation::always());
         assert_ne!(d4.consensus_identity_id(), at_genesis.consensus_identity_id(), "two fences, two identities");
+    }
+
+    /// **A dormant fence changes nothing an operator can observe — including the schedule id.**
+    ///
+    /// `consensus_schedule_id` hashes every value `for_each_fence` visits, in sequence. An arm that
+    /// stands `u64::MAX` in for absence therefore puts eight bytes into that hash on every preset
+    /// that leaves the field `None`, and two builds whose schedules are IDENTICAL — one carrying
+    /// the field unset, one built before the field existed — print two different schedule ids. The
+    /// id exists to answer "do these two agree", and that is the answer it must not get wrong.
+    ///
+    /// Measured on the walk itself, because "the same as a build without the field" is not a
+    /// `Params` this test can construct: a dormant fence must contribute NO value to the walk, and
+    /// arming it must contribute exactly one.
+    #[test]
+    fn a_dormant_rent_fence_is_absent_from_the_schedule_walk() {
+        let walk = |mut p: Params| {
+            let mut seen = Vec::new();
+            p.for_each_fence(&mut |score| seen.push(*score));
+            seen
+        };
+        for (name, shipped) in
+            [("mainnet", MAINNET_PARAMS), ("testnet", TESTNET_PARAMS), ("simnet", SIMNET_PARAMS), ("devnet", DEVNET_PARAMS)]
+        {
+            let dormant = walk(shipped.clone());
+            let mut armed = shipped.clone();
+            armed.palw_certification_rent = Some(ForkActivation::new(9_000_000));
+            assert_eq!(
+                walk(armed).len(),
+                dormant.len() + 1,
+                "{name}: a dormant rent fence adds nothing to the walk the schedule id hashes; arming it adds exactly its height"
+            );
+        }
+
+        // …and absence still cannot alias a present value, which is the job the sentinel was
+        // doing. Two builds that schedule ONE rule each, at the same height, but not the same
+        // rule, must not report the same schedule.
+        let mut rent = MAINNET_PARAMS;
+        rent.palw_certification_rent = Some(ForkActivation::new(4_242));
+        let mut abstains = MAINNET_PARAMS;
+        abstains.palw_unavailable_abstains = Some(ForkActivation::new(4_242));
+        assert_ne!(
+            rent.consensus_schedule_id(),
+            abstains.consensus_schedule_id(),
+            "a Some-only arm without a NAME would let one scheduled fence read as another"
+        );
     }
 
     /// **ADR-0075 SA-3: the genesis gate refuses a card whose rows share an operator.**
