@@ -3321,6 +3321,32 @@ impl PalwChainStateV2 {
                 self.deadlines.len()
             )));
         }
+        // **ADR-0078 Decision 4: the derived table's bound is the claim table's, and that is only
+        // true if every row still has a claim** (audit 2026-09-02).
+        //
+        // The transition enforces both halves — the cap when it writes a row, the sweep when the
+        // claim retires — but neither is a property of a STATE, and a carriage is a state
+        // somebody else wrote. An orphan row is the failure this repo has already paid for once:
+        // retirement is claim-driven, so a row whose claim is gone is never swept by anything,
+        // and the table stops being bounded by `claim_retirement_daa` at all. Rebuilt here from
+        // the claims, like every other index, so a summary that is not derivable from the claims
+        // is refused when it is READ rather than believed and grown.
+        let mut per_claim: BTreeMap<Hash64, usize> = BTreeMap::new();
+        for key in self.derived_artifacts.keys() {
+            if !self.claims.contains_key(&key.claim) {
+                return Err(PalwStateV2Error::CarriageInconsistent(format!(
+                    "a derived artifact names claim {}, which the state does not hold — the row would never retire",
+                    key.claim
+                )));
+            }
+            *per_claim.entry(key.claim).or_insert(0) += 1;
+        }
+        if let Some((claim, held)) = per_claim.iter().find(|(_, held)| **held > crate::palw_derived_v1::PALW_DERIVED_MAX_PER_CLAIM) {
+            return Err(PalwStateV2Error::CarriageInconsistent(format!(
+                "claim {claim} holds {held} derivations, more than PALW_DERIVED_MAX_PER_CLAIM ({})",
+                crate::palw_derived_v1::PALW_DERIVED_MAX_PER_CLAIM
+            )));
+        }
         Ok(())
     }
 
@@ -6152,9 +6178,12 @@ fn apply_object(
         // under its cap — and records the names. It credits no weight, no payment and no exposure
         // (X5): the object is a statement priced by its fee, and the chain cannot run the
         // transformer (Decision 5), so it does not pretend to.
-        PalwConsensusObjectV2::DerivedArtifactV1 { object, signature: _ } => {
-            use crate::palw_derived_v1::{PALW_DERIVED_MAX_PER_CLAIM, PalwDerivedKeyV1, PalwDerivedRowV1, check_derived_shape_v1};
-            check_derived_shape_v1(object).map_err(PalwStateV2Error::DerivedShapeRefused)?;
+        PalwConsensusObjectV2::DerivedArtifactV1 { object, signature } => {
+            use crate::palw_derived_v1::{PALW_DERIVED_MAX_PER_CLAIM, PalwDerivedKeyV1, PalwDerivedRowV1, check_derived_carriage_v1};
+            // The signature is checked for LENGTH here as well as in the ride list — the second
+            // lock the arms above describe, and the one that keeps Decision 1's "under any size"
+            // true if anyone ever reaches this transition from a path that is not a 0x4b carrier.
+            check_derived_carriage_v1(object, signature).map_err(PalwStateV2Error::DerivedShapeRefused)?;
             let claim = builder.state.claims.get(&object.claim_id).ok_or(PalwStateV2Error::DerivedClaimMissing(object.claim_id))?;
             if !matches!(claim.source, PalwClaimSourceV2::FreePrompt { .. }) {
                 return Err(PalwStateV2Error::DerivedClaimIsNotFreePrompt(object.claim_id));
@@ -11701,7 +11730,9 @@ pub(crate) mod tests {
                 artifact_bytes: 4_096,
                 executor_pubkey: pubkey,
             }),
-            signature: vec![1; 8],
+            // The carriage check pins this length (X1): the one object that must never carry
+            // bytes has no free-length field, so a fixture signature is a real one's size.
+            signature: vec![1; crate::palw_derived_v1::PALW_DERIVED_V1_SIGNATURE_LEN],
         }
     }
 
@@ -11878,6 +11909,256 @@ pub(crate) mod tests {
         let mut tampered = carriage;
         tampered.derived_artifacts.values_mut().next().unwrap().artifact_bytes += 1;
         assert!(tampered.into_state(&p, Some(s3.state_root())).is_err(), "a row the root did not commit to is refused");
+    }
+
+    /// **X5, proved by BYTES rather than by a list.** The existing X5 test compares a hand-picked
+    /// set of accumulators, which is only as strong as the list — a field that starts to move
+    /// with a derivation and is not on it reads as green forever. So this one folds the same
+    /// block twice, with four derivations and with none, clears the ONE table a derivation is
+    /// allowed to touch, and compares the persisted carriage byte for byte: weight, retired
+    /// weight, immature weight, every exposure row, the payout queue the coinbase drains, the
+    /// class targets the DAA retarget reads, both epoch counters, the frontier. Nothing that
+    /// prices a block may differ (ADR-0078 Decision 4, invariant X5).
+    #[test]
+    fn four_derivations_leave_every_priced_table_byte_identical() {
+        let p = params();
+        let s2 = fp_state_with_claim(&p);
+        let output_root = s2.claim(&h64(0xFC)).unwrap().output_root;
+        let objects: Vec<_> = (0x71..0x75).map(|t| derived_object(0xFC, t, output_root, fp_executor_key())).collect();
+        let (with, _) = apply(&s2, &p, &ctx(3, 102, 3), &objects, None);
+        let (without, _) = apply(&s2, &p, &ctx(3, 102, 3), &[], None);
+        assert_eq!(with.derived_artifacts_of(h64(0xFC)).count(), 4, "the derivations really were recorded");
+
+        let mut with_carriage = PalwStateCarriageV2::from_state(&with);
+        let mut without_carriage = PalwStateCarriageV2::from_state(&without);
+        assert_eq!(with_carriage.derived_artifacts.len(), 4);
+        assert!(without_carriage.derived_artifacts.is_empty());
+        with_carriage.derived_artifacts.clear();
+        without_carriage.derived_artifacts.clear();
+        assert_eq!(
+            borsh::to_vec(&with_carriage).unwrap(),
+            borsh::to_vec(&without_carriage).unwrap(),
+            "a derivation credits no weight, no payment and no exposure: outside its own table the state is the same bytes"
+        );
+    }
+
+    /// **X7: ADR-0077's R0 and R1 hold unchanged.** One inference is still one claim — a
+    /// derivation creates no second claim and does not grow the row the receipt lane reads — and
+    /// the bytes every other object rides under are what they were: `DerivedArtifactV1` was
+    /// APPENDED to `PalwConsensusObjectV2`, so no earlier variant's Borsh tag moved. A comment
+    /// said so; this pins it, because a variant inserted rather than appended re-labels every
+    /// object kind on the wire and nothing else in the tree would notice.
+    #[test]
+    fn a_derivation_does_not_grow_the_claim_row_or_move_another_objects_tag() {
+        let p = params();
+        let s2 = fp_state_with_claim(&p);
+        let claim_before = s2.claim(&h64(0xFC)).cloned().expect("the claim");
+        let output_root = claim_before.output_root;
+        let claims_before = s2.claims_iter().count();
+        let objects: Vec<_> = (0x71..0x75).map(|t| derived_object(0xFC, t, output_root, fp_executor_key())).collect();
+        let (with, _) = apply(&s2, &p, &ctx(3, 102, 3), &objects, None);
+        assert_eq!(with.claims_iter().count(), claims_before, "R0: one inference, one claim — a derivation is not a claim");
+        assert_eq!(
+            borsh::to_vec(with.claim(&h64(0xFC)).unwrap()).unwrap(),
+            borsh::to_vec(&claim_before).unwrap(),
+            "R1: the claim row the receipt lane reads is byte-identical"
+        );
+    }
+
+    /// **The table is bounded because every row has a claim, and the state says so when read.**
+    /// The transition holds both halves — the cap at the write, the sweep at the retirement — but
+    /// a carriage is a state somebody else wrote, and retirement is claim-driven: an orphan row
+    /// is swept by nothing and the table stops being bounded by `claim_retirement_daa` at all.
+    /// Refused by name at the read, like every other index that is rebuilt from the claims.
+    #[test]
+    fn an_orphaned_or_over_capped_derived_table_is_refused_when_read() {
+        let p = params();
+        let s2 = fp_state_with_claim(&p);
+        let output_root = s2.claim(&h64(0xFC)).unwrap().output_root;
+        let (s3, _) = apply(&s2, &p, &ctx(3, 102, 3), &[derived_object(0xFC, 0x71, output_root, fp_executor_key())], None);
+
+        let row = s3.derived_artifact(&h64(0xFC), &h64(0x71)).cloned().expect("the row");
+        let mut orphaned = PalwStateCarriageV2::from_state(&s3);
+        orphaned
+            .derived_artifacts
+            .insert(crate::palw_derived_v1::PalwDerivedKeyV1 { claim: h64(0xDEAD), transformer: h64(0x71) }, row.clone());
+        let err = orphaned.clone().into_state(&p, None).expect_err("an orphan row is refused");
+        assert!(format!("{err}").contains("would never retire"), "{err}");
+
+        let mut over = PalwStateCarriageV2::from_state(&s3);
+        for t in 0x72..0x76u64 {
+            over.derived_artifacts
+                .insert(crate::palw_derived_v1::PalwDerivedKeyV1 { claim: h64(0xFC), transformer: h64(t) }, row.clone());
+        }
+        let err = over.into_state(&p, None).expect_err("five rows on one claim is refused");
+        assert!(format!("{err}").contains("PALW_DERIVED_MAX_PER_CLAIM"), "{err}");
+    }
+
+    /// **X1's "chunked or whole", said about the derivation rather than about chunking.**
+    ///
+    /// Decision 1's sentence is "the chain never accepts the DSL bytes or the artifact bytes as
+    /// consensus carriage, in any chunking, under any size", and the chunk arm's whitelist is a
+    /// one-line `matches!` that today names only `FamilyCertified`. The test that covers that
+    /// whitelist uses a `ClassLaneCertified`, so widening it to admit a derivation would keep it
+    /// green — and a derivation assembled from eight 100,000-byte chunks is exactly the 800 KB of
+    /// carriage the object exists to make impossible. This asserts the whitelist about the object
+    /// Decision 1 is about, and it fails the moment `DerivedArtifactV1` joins that `matches!`.
+    #[test]
+    fn a_derivation_may_not_be_assembled_from_chunks() {
+        let p = params();
+        let s2 = fp_state_with_claim(&p);
+        let output_root = s2.claim(&h64(0xFC)).unwrap().output_root;
+        let object = derived_object(0xFC, 0x71, output_root, fp_executor_key());
+        // A real derivation is a few thousand bytes; cut it finely so the group is several parts.
+        let chunks = palw_object_chunks_with_cap_v1(&object, 4_000).expect("chunkable").expect("bigger than one carrier");
+        assert!(chunks.len() > 1, "the fixture must actually be cut into a group");
+        let mut s = s2.clone();
+        let mut d = 102u64;
+        for chunk in &chunks[..chunks.len() - 1] {
+            s = apply(&s, &p, &ctx(d - 99, d, d - 99), std::slice::from_ref(chunk), None).0;
+            d += 1;
+        }
+        // The last chunk completes the group, the group decodes — and the kind is refused.
+        let err = apply_palw_transition_v2(&s, &p, &ctx(d - 99, d, d - 99), std::slice::from_ref(chunks.last().unwrap()), None);
+        assert!(matches!(err, Err(PalwStateV2Error::ChunkedObjectKindNotAllowed)), "{err:?}");
+        assert_eq!(s.derived_artifacts_iter().count(), 0, "and no row was written on the way");
+    }
+
+    /// **The row plus the chain IS the object, so `derived_id` is not a free field** (ADR-0078
+    /// X6; ADR-0079 Decision 2 / S1, at the stored row rather than at the wire struct).
+    ///
+    /// `PalwDerivedRowV1` keeps five of the object's eleven fields and the object's id. That
+    /// looked like a summary, and a summary would be a place to hide: an id computed over fields
+    /// nobody can recover is a 64-byte value the executor chooses, which is exactly the shape
+    /// Decision 2 refuses. It is not one. Every field of the object is either in the row, in the
+    /// KEY, in the claim, in the claim's bond, or a constant of the ruleset — so this test rebuilds
+    /// the whole object from the chain and recomputes the id, and the recomputation matching is
+    /// the proof that no field of the derivation was ever the executor's to pick freely.
+    ///
+    /// It is also X6's chain half: a consumer holding the answer's bytes needs `grammar_id`,
+    /// `transformer_id`, `dsl_hash`, `artifact_hash` and `artifact_bytes` from the chain, and this
+    /// is the assertion that the chain still has all five after the object is gone.
+    #[test]
+    fn the_row_the_key_the_claim_and_the_bond_rebuild_the_object_and_its_id() {
+        let p = params();
+        let s2 = fp_state_with_claim(&p);
+        let output_root = s2.claim(&h64(0xFC)).unwrap().output_root;
+        let submitted = derived_object(0xFC, 0x71, output_root, fp_executor_key());
+        let PalwConsensusObjectV2::DerivedArtifactV1 { object: submitted_object, .. } = submitted.clone() else {
+            panic!("a derivation")
+        };
+        let (s3, _) = apply(&s2, &p, &ctx(3, 102, 3), &[submitted], None);
+
+        let key = crate::palw_derived_v1::PalwDerivedKeyV1 { claim: h64(0xFC), transformer: h64(0x71) };
+        let row = s3.derived_artifact(&key.claim, &key.transformer).expect("the row");
+        let claim = s3.claim(&key.claim).expect("the claim the row is beside");
+        let bond = s3.bond(&claim.bond).expect("the claim's bond");
+        let rebuilt = crate::palw_derived_v1::PalwDerivedArtifactV1 {
+            // Constants of the ruleset, not the executor's to choose.
+            version: crate::palw_derived_v1::PALW_DERIVED_V1_VERSION,
+            network_domain: submitted_object.network_domain,
+            // The table key.
+            claim_id: key.claim,
+            transformer_id: key.transformer,
+            // The claim's, compared at acceptance.
+            output_root: claim.output_root,
+            // The bond's, compared at acceptance.
+            executor_pubkey: bond.pubkey.clone(),
+            // The row's.
+            grammar_id: row.grammar_id,
+            kind: row.kind,
+            dsl_hash: row.dsl_hash,
+            artifact_hash: row.artifact_hash,
+            artifact_bytes: row.artifact_bytes,
+        };
+        assert_eq!(rebuilt, *submitted_object, "every field of the object comes back off the chain");
+        assert_eq!(crate::palw_derived_v1::derived_id_v1(&rebuilt), row.derived_id, "so the stored id is a function of chain state");
+    }
+
+    /// **X8 and ADR-0078 SA-5, at the transition: an unassigned kind and an unheard-of transformer
+    /// are RECORDED, because resolving either would make shipping one a ruleset move.**
+    ///
+    /// Decision 9 fixes every kind id "whether or not its transformer exists yet" and states the
+    /// consequence as a rule — "adding a row is therefore never a ruleset move" — while SA-5 asks
+    /// for a derivation to be refused when its transformer's manifest is not published in the
+    /// tree. The two are reconciled by WHERE: the manifest registry is `misaka-palw-derive`'s,
+    /// downstream of this crate, so a node cannot resolve `transformer_id` and must not pretend
+    /// to. If it did, two builds shipping different transformer sets would disagree about which
+    /// objects a block may carry — a fork with no block ever named, since a refused object is
+    /// dropped and the block stands.
+    #[test]
+    fn a_kind_the_table_never_assigned_and_a_transformer_nothing_publishes_are_recorded() {
+        let p = params();
+        let s2 = fp_state_with_claim(&p);
+        let output_root = s2.claim(&h64(0xFC)).unwrap().output_root;
+        let mut object = derived_object(0xFC, 0xEE, output_root, fp_executor_key());
+        if let PalwConsensusObjectV2::DerivedArtifactV1 { object: o, .. } = &mut object {
+            o.kind = u16::MAX;
+            o.grammar_id = h64(0xEF);
+        }
+        assert_eq!(crate::palw_derived_v1::kind::name(u16::MAX), None, "the table assigned no such id");
+        let (s3, _) = apply(&s2, &p, &ctx(3, 102, 3), &[object], None);
+        let row = s3.derived_artifact(&h64(0xFC), &h64(0xEE)).expect("recorded — the chain interprets no kind");
+        assert_eq!(row.kind, u16::MAX);
+        assert_eq!(row.grammar_id, h64(0xEF));
+    }
+
+    /// **A re-org cannot break `(claim, transformer)` uniqueness, and cannot latch the cap**
+    /// (ADR-0078 X2).
+    ///
+    /// Both bounds are computed from the derived table itself on every object — the duplicate
+    /// check is a `contains_key`, the cap is a `range(...).count()` — rather than from a counter
+    /// beside it, and this is the test that says so in the one situation where a counter would
+    /// differ from the table. Reverting the block that recorded four derivations must leave the
+    /// claim able to take four again; it must not leave a fifth admissible, and it must not leave
+    /// the same `(claim, transformer)` refused as a duplicate of a row that no longer exists.
+    #[test]
+    fn reverting_the_block_that_recorded_them_restores_both_the_cap_and_the_uniqueness() {
+        let p = params();
+        let s2 = fp_state_with_claim(&p);
+        let output_root = s2.claim(&h64(0xFC)).unwrap().output_root;
+        let objects: Vec<_> = (0x71..0x75).map(|t| derived_object(0xFC, t, output_root, fp_executor_key())).collect();
+        let (s3, delta) = apply(&s2, &p, &ctx(3, 102, 3), &objects, None);
+        assert_eq!(s3.derived_artifacts_of(h64(0xFC)).count(), crate::palw_derived_v1::PALW_DERIVED_MAX_PER_CLAIM);
+        let err =
+            apply_palw_transition_v2(&s3, &p, &ctx(4, 103, 4), &[derived_object(0xFC, 0x75, output_root, fp_executor_key())], None);
+        assert!(matches!(err, Err(PalwStateV2Error::TooManyDerivations { .. })), "full: {err:?}");
+
+        let reverted = revert_delta_v2(&s3, &delta, &p).expect("the block reverts");
+        assert_eq!(reverted.state_root(), s2.state_root(), "the re-org really undid it");
+        assert_eq!(reverted.derived_artifacts_of(h64(0xFC)).count(), 0);
+        // The cap is the table's count, so all four fit again — a counter would have latched.
+        // Re-applied at the SAME point, so "the same rows" is the whole state root and not a
+        // count: a row's `accepted_daa` is the block's, and a re-org that replays the block it
+        // undid must land on the state it undid, byte for byte.
+        let (again, _) = apply(&reverted, &p, &ctx(3, 102, 3), &objects, None);
+        assert_eq!(again.derived_artifacts_of(h64(0xFC)).count(), crate::palw_derived_v1::PALW_DERIVED_MAX_PER_CLAIM);
+        assert_eq!(again.state_root(), s3.state_root(), "and the same four rows, byte for byte, at the same daa");
+        // The uniqueness is the table's membership, so the SAME (claim, transformer) is admissible
+        // on the reverted state — a set that remembered retired keys would refuse it.
+        let (one, _) = apply(&reverted, &p, &ctx(3, 102, 3), &[derived_object(0xFC, 0x71, output_root, fp_executor_key())], None);
+        assert!(one.derived_artifact(&h64(0xFC), &h64(0x71)).is_some(), "a key a re-org removed is a key that is free again");
+    }
+
+    /// **X1's second lock.** The ride list is the block rule that keeps a free-length signature
+    /// out of the chain; the transition refuses the same shape, so a path that reached it without
+    /// a 0x4b carrier could not record a derivation whose carriage was never bounded.
+    #[test]
+    fn the_transition_refuses_a_signature_that_is_not_an_mldsa87_signature() {
+        let p = params();
+        let s2 = fp_state_with_claim(&p);
+        let output_root = s2.claim(&h64(0xFC)).unwrap().output_root;
+        for len in [0usize, 16, 4 << 20] {
+            let mut object = derived_object(0xFC, 0x71, output_root, fp_executor_key());
+            if let PalwConsensusObjectV2::DerivedArtifactV1 { signature, .. } = &mut object {
+                *signature = vec![3; len];
+            }
+            let err = apply_palw_transition_v2(&s2, &p, &ctx(3, 102, 3), &[object], None);
+            assert!(
+                matches!(&err, Err(PalwStateV2Error::DerivedShapeRefused(why)) if why.contains("free-length field")),
+                "a {len}-byte signature: {err:?}"
+            );
+        }
     }
 
     // ---- params ----
