@@ -382,7 +382,38 @@ pub async fn submit_objects(ctx: &Ctx, ks: &crate::keys::KeySource, paths: &[std
             .build_palw_lifecycle_tx(object, funding_outpoint, &funding_entry, floor)
             .map_err(|e| CliError::new(exit::GENERIC, format!("build the carrier for {}: {e}", path.display())))?;
         let compute_mass = calc.calc_non_contextual_masses(&probe).compute_mass;
-        let fee = kaspa_pq_validator_core::relay_fee_for_compute_mass(compute_mass).max(floor);
+        // **…and from the RENT the chain may charge it** (ADR-0075 SA-1/SA-2). The relay rate
+        // prices bytes on the wire; the amendment prices two things bytes do not measure — the
+        // court re-executions a vector count buys, and the state-root room a chunk group reserves
+        // for its whole TTL. Paid on every network, armed fence or not: a carrier the chain drops
+        // for underpaying is a fee spent and nothing recorded, and the over-payment where the
+        // fence is dormant is a fraction of one MSK on an object submitted a handful of times in a
+        // network's life. The room is charged to chunk 0 alone, which is the chunk that opens the
+        // group: the carriers are CHAINED on one another's change, so no later one can be mined
+        // first.
+        let rent = match object {
+            PalwConsensusObjectV2::FamilyCertified { evidence } => {
+                kaspa_consensus_core::palw_state_v2::palw_certification_min_fee_v1(evidence.vector_count())
+            }
+            PalwConsensusObjectV2::ObjectChunk { index, count, .. } => {
+                let opener = if *index == 0 { kaspa_consensus_core::palw_state_v2::palw_object_chunk_group_rent_v1() } else { 0 };
+                // The chunk that COMPLETES the group carries the certification into its block, so
+                // it owes the grading rent — and a single chunk cannot say how many vectors the
+                // assembled object holds, so it pays for the most the rules allow. Widened to u16
+                // because `index` and `count` come off a FILE an operator hands this command, and
+                // `255 + 1` on a u8 is a panic rather than a refusal.
+                let completing = if u16::from(*index) + 1 == u16::from(*count) {
+                    kaspa_consensus_core::palw_state_v2::palw_certification_min_fee_v1(
+                        kaspa_consensus_core::palw_state_v2::PALW_CERTIFICATION_MAX_VECTORS,
+                    )
+                } else {
+                    0
+                };
+                opener.max(completing)
+            }
+            _ => 0,
+        };
+        let fee = kaspa_pq_validator_core::relay_fee_for_compute_mass(compute_mass).max(floor).max(rent);
         if funding_entry.amount <= fee {
             return Err(CliError::new(
                 exit::GENERIC,
@@ -460,4 +491,26 @@ pub async fn submit_objects(ctx: &Ctx, ks: &crate::keys::KeySource, paths: &[std
         _ => println!("the chain grades them when the carriers are accepted; a chunked object applies in the block that completes it"),
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod rent_tests {
+    /// **The rent the chain charges is the relay rate this tool pays** (ADR-0075 SA-1/SA-2).
+    ///
+    /// `kaspa_consensus_core::palw_state_v2::palw_relay_fee_for_mass_v1` is a MIRROR of
+    /// `kaspa_pq_validator_core::relay_fee_for_compute_mass`: the validator-core crate depends on
+    /// consensus-core, so the consensus side cannot import the original and the two are one rate
+    /// spelled twice. A mirrored rate drifts silently and the drift is invisible until a live
+    /// carrier is dropped for underpaying a price its own submitter computed — so it is asserted
+    /// here, in the one crate that sees both spellings.
+    #[test]
+    fn the_rent_the_chain_charges_is_the_relay_rate_this_tool_pays() {
+        for mass in [0u64, 1, 999, 1_000, 20_000, 100_000, 800_000, 1 << 20, u64::MAX / 20_000] {
+            assert_eq!(
+                kaspa_consensus_core::palw_state_v2::palw_relay_fee_for_mass_v1(mass),
+                kaspa_pq_validator_core::relay_fee_for_compute_mass(mass),
+                "the two spellings of the relay rate disagree at mass {mass}"
+            );
+        }
+    }
 }

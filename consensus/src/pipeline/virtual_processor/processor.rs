@@ -418,6 +418,12 @@ pub struct VirtualStateProcessor {
     /// all get the same answer for the same block, or a derived panel and a proposed one differ
     /// and every claim voids.
     pub(super) palw_capability_bound: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// ADR-0075 SA-1/SA-2's fence, `None` on every shipped preset. Past it a chunk group's opener
+    /// and a graded `FamilyCertified` must have been carried by a transaction that paid the rent
+    /// their occupancy costs. See [`Self::palw_certification_rent_at`], the ONE place it is
+    /// resolved — the fee collection in `calculate_utxo_state` and the acceptance filter that
+    /// spends it must agree, or the filter reads an empty map and silently admits everything.
+    pub(super) palw_certification_rent: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// Rate limiter for [`Self::palw_warn_if_maturity_outruns_the_registry`] — the DAA score the
     /// shortfall was last reported at, or `PALW_SHORTFALL_NEVER_REPORTED`. **Log state only**:
     /// nothing consensus-visible reads it, so two nodes that report at different moments still
@@ -622,6 +628,26 @@ impl kaspa_consensus_core::palw_facts::PalwClassFactsViewV1 for PalwOneClassView
     }
 }
 
+/// **A fee no rent rule may refuse** (ADR-0075 SA-1/SA-2).
+///
+/// Stands for "this object was not priced", which is two different facts with one correct
+/// treatment: the rent fence is unarmed — every shipped preset — or the object was DERIVED by the
+/// chain rather than carried by anyone (a panel binding). In both cases no transaction owes rent,
+/// so the sentinel is the maximum rather than zero: a rule written as `paid < owed` must read as
+/// absent, never as "the carrier underpaid".
+pub(super) const PALW_RENT_UNPRICED: u64 = u64::MAX;
+
+/// One object a block's acceptance produced, with what its carrier paid (ADR-0075 SA-1/SA-2).
+///
+/// The pairing exists because `AcceptanceData` cannot express it: it records a transaction id and
+/// an index and nothing about value, so before this the object walk had no way to read the fee
+/// that Decision 1 calls "the rent". The number is resolved in `palw_v2_objects_of_block` from
+/// the map `calculate_utxo_state` filled, and spent in `palw_v2_accepted_objects`.
+pub(super) struct PalwCarriedObjectV1 {
+    pub(super) object: kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+    pub(super) carrier_fee: u64,
+}
+
 /// ADR-0058: one mergeset blue's admitted PALW work, held by value between assembly (against
 /// the walk state) and the transition call (which borrows it). Two arms because a header
 /// declares exactly one lane by its algorithm id.
@@ -805,6 +831,7 @@ impl VirtualStateProcessor {
             // exist only under ConsensusV2, so the mode condition is folded once in `Params`
             // rather than remembered at each of the three sites below.
             palw_capability_bound: params.palw_capability_bound_fence(),
+            palw_certification_rent: params.palw_certification_rent,
             palw_frontier_provenance: params.palw_frontier_provenance,
             finality_depth: params.blockrate.finality_depth,
             palw_credit_params: params.palw_credit.clone(),
@@ -1382,8 +1409,15 @@ impl VirtualStateProcessor {
                                 // produced rather than from the store — the store row is written
                                 // by the commit below, so reading it here would be reading a fact
                                 // that does not exist yet.
-                                let objects =
-                                    self.palw_v2_objects_of_block(&ctx.mergeset_acceptance_data, state, current, header.daa_score);
+                                let objects = self.palw_v2_objects_of_block(
+                                    &ctx.mergeset_acceptance_data,
+                                    state,
+                                    current,
+                                    header.daa_score,
+                                    // ADR-0075 SA-1/SA-2: what each 0x4b carrier paid, collected
+                                    // by the UTXO walk two frames up, where the fee is knowable.
+                                    &ctx.palw_v2_accepted_tx_fees,
+                                );
                                 // Decisions 7/8: every lifecycle object meets its own validator
                                 // before the transition folds it — and an object that FAILS is
                                 // dropped rather than fatal to the block that accepted it.
@@ -4746,7 +4780,17 @@ impl VirtualStateProcessor {
         objects: Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
         block: BlockHash,
     ) -> Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
-        self.palw_v2_accepted_objects(state, state_params, point, objects, block).0
+        self.palw_v2_accepted_objects(state, state_params, point, Self::unpriced_for_tests(objects), block).0
+    }
+
+    /// Objects a test hands the filter directly, carried by nobody: `PALW_RENT_UNPRICED` so the
+    /// ADR-0075 rent rules read as absent rather than as "every carrier paid zero", which is what
+    /// every pre-SA test means and what an unarmed network does.
+    #[cfg(test)]
+    pub(super) fn unpriced_for_tests(
+        objects: Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
+    ) -> Vec<PalwCarriedObjectV1> {
+        objects.into_iter().map(|object| PalwCarriedObjectV1 { object, carrier_fee: PALW_RENT_UNPRICED }).collect()
     }
 
     /// The same filter, with the state it folded to — ADR-0064's half. The bootstrap lookup reads
@@ -4763,7 +4807,68 @@ impl VirtualStateProcessor {
         objects: Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
         block: BlockHash,
     ) -> (Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>, kaspa_consensus_core::palw_state_v2::PalwChainStateV2) {
+        self.palw_v2_accepted_objects(state, state_params, point, Self::unpriced_for_tests(objects), block)
+    }
+
+    /// [`Self::palw_v2_accepted_objects`] with each object's carrier fee spelled out, so the
+    /// ADR-0075 rent rules can be exercised from the sibling test module.
+    #[cfg(test)]
+    pub(super) fn palw_v2_accepted_priced_objects_for_tests(
+        &self,
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
+        point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
+        objects: Vec<(kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2, u64)>,
+        block: BlockHash,
+    ) -> (Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>, kaspa_consensus_core::palw_state_v2::PalwChainStateV2) {
+        let objects = objects.into_iter().map(|(object, carrier_fee)| PalwCarriedObjectV1 { object, carrier_fee }).collect();
         self.palw_v2_accepted_objects(state, state_params, point, objects, block)
+    }
+
+    /// **How many court re-executions this object is about to buy** (ADR-0075 SA-2), or `None`
+    /// when it buys none.
+    ///
+    /// `Some` for a directly carried `FamilyCertified` — the count is a field of its evidence —
+    /// and for the `ObjectChunk` that COMPLETES a group, because that chunk's arm assembles the
+    /// object and applies it in the same block. The assembly is repeated here rather than
+    /// threaded out of the transition: it is a borsh decode of at most
+    /// `PALW_OBJECT_CHUNK_MAX_BYTES × PALW_OBJECT_CHUNK_MAX_COUNT` bytes, which is the cost this
+    /// rule is protecting against paying thirty-two times over, and it runs only while the rent
+    /// fence is armed.
+    ///
+    /// `None` — no rent owed — for anything else, INCLUDING a group whose bytes do not decode: an
+    /// object nobody can decode is never graded, so it buys no court time, and the transition
+    /// refuses it on its own (`ChunkedObjectUndecodable`).
+    fn palw_v2_graded_vector_count(
+        state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
+        object: &kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2,
+    ) -> Option<usize> {
+        use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2 as Obj;
+        match object {
+            Obj::FamilyCertified { evidence } => Some(evidence.vector_count()),
+            Obj::ObjectChunk { group, index, count, bytes } => {
+                let mut parts: std::collections::BTreeMap<u8, &[u8]> = Default::default();
+                if let Some(pending) = state.pending_chunk_group(group) {
+                    if pending.count != *count || pending.parts.contains_key(index) {
+                        return None;
+                    }
+                    parts.extend(pending.parts.iter().map(|(i, part)| (*i, part.as_slice())));
+                }
+                parts.insert(*index, bytes.as_slice());
+                if parts.len() != *count as usize {
+                    return None;
+                }
+                let mut whole = Vec::with_capacity(parts.values().map(|p| p.len()).sum());
+                for i in 0..*count {
+                    whole.extend_from_slice(parts.get(&i)?);
+                }
+                match borsh::from_slice::<Obj>(&whole) {
+                    Ok(Obj::FamilyCertified { evidence }) => Some(evidence.vector_count()),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
     }
 
     fn palw_v2_accepted_objects(
@@ -4771,7 +4876,7 @@ impl VirtualStateProcessor {
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         state_params: &kaspa_consensus_core::palw_state_v2::PalwStateParamsV2,
         point: &kaspa_consensus_core::palw_state_v2::PalwBlockContextV2,
-        objects: Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>,
+        objects: Vec<PalwCarriedObjectV1>,
         block: BlockHash,
     ) -> (Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>, kaspa_consensus_core::palw_state_v2::PalwChainStateV2) {
         // **Filtered SEQUENTIALLY, against the state each accepted object leaves behind.**
@@ -4806,7 +4911,41 @@ impl VirtualStateProcessor {
         let mut rehearsal = *point;
         let mut accepted = Vec::with_capacity(objects.len());
         let mut certifications_graded = 0usize;
-        for object in objects {
+        // **ADR-0075 SA-1/SA-2's fence, asked HERE and not only where the fees were resolved.**
+        // `false` on every shipped preset, and then neither rent below can fire whatever a caller
+        // passed for a carrier fee — so the filter's behaviour is byte-identical to before the
+        // amendment rather than identical-if-the-caller-remembers.
+        let rent_armed = self.palw_certification_rent_at(point.daa_score);
+        for carried in objects {
+            let PalwCarriedObjectV1 { object, carrier_fee } = carried;
+            // **ADR-0075 SA-1: a chunk group's opener pays for the SLOT it takes.**
+            //
+            // A group holds one of `PALW_OBJECT_CHUNK_MAX_GROUPS` rows in the state root for up to
+            // `PALW_OBJECT_CHUNK_TTL_DAA` — about five and a half days at a 120 s cadence — and
+            // that row is denied to every honest drill just as completely by a group declaring two
+            // parts as by one declaring eight. Pricing the DECLARED `count` therefore priced the
+            // wrong resource, and priced it in the griefer's favour: his optimum was `count = 2`,
+            // eight of which held the whole table for a quarter of what the rule was reasoned
+            // about and for LESS per row than ADR-0075 D14's own 3- and 4-part drills pay. The
+            // rent is the slot, flat, whatever the opener says it will send; chunks that merely
+            // EXTEND an open group pay nothing, because the row is already paid for and charging
+            // them would fall on the carrier that completes.
+            //
+            // Refused BEFORE the group is opened, so the junk never reaches the state root.
+            if rent_armed
+                && let kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ObjectChunk { group, .. } = &object
+                && folded.pending_chunk_group(group).is_none()
+            {
+                let owed = kaspa_consensus_core::palw_state_v2::palw_object_chunk_group_rent_v1();
+                if carrier_fee < owed {
+                    info!(
+                        "Block {block}: an ObjectChunk opening group {group} was dropped, and the block stands: its carrier paid \
+                         {carrier_fee} sompi and one of the {} pending-chunk slots rents for {owed} (ADR-0075 SA-1)",
+                        kaspa_consensus_core::palw_state_v2::PALW_OBJECT_CHUNK_MAX_GROUPS
+                    );
+                    continue;
+                }
+            }
             // ADR-0075 Decision 9: a block grades at most `PALW_CERTIFICATION_MAX_PER_BLOCK`
             // family drills. Counted before grading, in transaction order, so every node drops the
             // same object and the grader is never run for a drill the block may not carry.
@@ -4821,9 +4960,65 @@ impl VirtualStateProcessor {
                 }
                 _ => false,
             };
-            if matches!(object, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::FamilyCertified { .. })
-                || completes_a_group
-            {
+            // **What the block's cap counts is what the court will actually re-execute.**
+            //
+            // The predicate above answers "does this chunk finish its group", which is not the same
+            // question. `ObjectChunk { group: <fresh>, index: 5, count: 1 }` finishes a group by
+            // that reading and the transition then refuses it as `ChunkIndexOutOfRange`; so does
+            // `{ index: 0, count: 1, bytes: [1 byte] }`, which assembles into bytes no object
+            // decodes from. Sixty bytes either way, and two of them per block exhausted
+            // `PALW_CERTIFICATION_MAX_PER_BLOCK` and dropped every genuine `FamilyCertified` the
+            // block carried — a block-cheap way to keep an honest class weightless.
+            //
+            // `palw_v2_graded_vector_count` is exactly the "will the court grade this" predicate:
+            // it assembles, decodes, and answers `None` for everything the transition will refuse
+            // before `apply_object(FamilyCertified)`. Counting on IT rather than on "completes a
+            // group" charges the cap for court work and for nothing else — and it subsumes the
+            // narrower `index < count` reading of the same hole, so the two compose: with both
+            // rules in force this one already refuses everything that one does.
+            //
+            // Behind the SAME fence as the two rents (`palw_certification_rent`), because it
+            // decides which objects a block accepts and therefore its state root — an upgraded and
+            // an un-upgraded node must never answer that differently in silence. Dormant, the
+            // count is skipped entirely and the predicate below is the one that shipped.
+            let graded_vectors = rent_armed.then(|| Self::palw_v2_graded_vector_count(&folded, &object)).flatten();
+            let charges_a_grading_slot = if rent_armed {
+                graded_vectors.is_some()
+            } else {
+                matches!(object, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::FamilyCertified { .. })
+                    || completes_a_group
+            };
+            if charges_a_grading_slot {
+                // **ADR-0075 SA-2: grading is priced before it is performed.**
+                //
+                // The court re-executes one recorded fault vector per vector the object carries,
+                // up to `PALW_CERTIFICATION_MAX_VECTORS`, on every node, whether the drill passes
+                // or is refused — and the vector count is a field the submitter writes, tied to
+                // nothing about how much the object cost to carry. So the count is priced here,
+                // from the object alone, and an underpaid one is dropped BEFORE it is graded and
+                // before it consumes a grading slot: charging it a slot would let a griefer starve
+                // the honest drills for free, which is the same denial the cap exists to stop.
+                //
+                // **DROPPED, where the amendment says "a block that grades one paying less is
+                // invalid".** The security property is the same — nothing underpaid is ever
+                // graded, so the CPU a block costs every validator is bounded by fees its carriers
+                // paid — and the difference is who dies for a stranger's transaction. Admission on
+                // the 0x4b band is stateless (decode, version, may-ride), so an underpaid carrier
+                // relays and mines freely; making the accepting block invalid is audit M-01's
+                // shape exactly, where "one ~100-byte transaction, one ordinary fee, and the chain
+                // stops" — and a template builder selects transactions by fee without ever
+                // consulting this filter, so honest miners would be the ones producing the invalid
+                // blocks. Dropping needs no mempool rule to be safe; invalidity would.
+                if let Some(vectors) = graded_vectors {
+                    let owed = kaspa_consensus_core::palw_state_v2::palw_certification_min_fee_v1(vectors);
+                    if carrier_fee < owed {
+                        info!(
+                            "Block {block}: a FamilyCertified object was dropped ungraded, and the block stands: its carrier paid \
+                             {carrier_fee} sompi and grading {vectors} fault vectors rents for {owed} (ADR-0075 SA-2)"
+                        );
+                        continue;
+                    }
+                }
                 if certifications_graded >= kaspa_consensus_core::palw_state_v2::PALW_CERTIFICATION_MAX_PER_BLOCK {
                     info!(
                         "Block {block}: a FamilyCertified object was dropped, and the block stands: the block already carries {} \
@@ -5606,6 +5801,17 @@ impl VirtualStateProcessor {
         self.palw_capability_bound.is_some_and(|fence| fence.is_active(daa_score))
     }
 
+    /// **ADR-0075 SA-1/SA-2, resolved in exactly one place.** `false` on every shipped preset.
+    ///
+    /// Two sites read it and they must agree: `calculate_utxo_state` decides whether to REMEMBER
+    /// what each 0x4b carrier paid, and `palw_v2_accepted_objects` decides whether to SPEND that
+    /// memory. If the first said no and the second said yes, every carrier would look like it paid
+    /// nothing and no certification could ever be graded — the fail-closed direction, but a
+    /// liveness halt all the same, and the reverse would collect fees nobody reads.
+    pub(super) fn palw_certification_rent_at(&self, daa_score: u64) -> bool {
+        self.palw_certification_rent.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
     /// **ADR-0065 D1's blind spot, named in the log instead of left for an operator to find.**
     ///
     /// `validate_palw_v2` refuses to arm the maturity fence unless the GENESIS registry holds
@@ -6108,7 +6314,8 @@ impl VirtualStateProcessor {
         state: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2,
         block: BlockHash,
         block_daa: u64,
-    ) -> Vec<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2> {
+        carrier_fees: &std::collections::HashMap<TransactionId, u64>,
+    ) -> Vec<PalwCarriedObjectV1> {
         let Some(freeprompt) = self.palw_freeprompt_params_v3.as_ref() else {
             return Vec::new();
         };
@@ -6143,10 +6350,35 @@ impl VirtualStateProcessor {
         }
         // The derived bindings go FIRST: a claim bound by this block may then be licensed by an
         // object the same block carries, which is the order a chain that is catching up needs.
+        //
+        // ADR-0075 SA-1/SA-2: each carried object keeps what its own carrier paid, resolved from
+        // the map `calculate_utxo_state` filled while it had the composed UTXO view in hand. That
+        // map holds EVERY accepted transaction, not a list of PALW bands, so a carrier this walk
+        // can name is always in it: the two extractors below read `txs`, which is the accepted set
+        // that loop just priced. The `unwrap_or(0)` is therefore unreachable rather than a
+        // fail-closed branch — and it has to be, because for a priced object it is a drop, and for
+        // certification a permanent halt on that network. Below the fence `PALW_RENT_UNPRICED`
+        // makes the whole rule read as absent rather than as "everyone underpaid".
+        let priced = self.palw_certification_rent_at(block_daa);
+        let fee_of = |carrier: TransactionId| {
+            if priced { carrier_fees.get(&carrier).copied().unwrap_or(0) } else { PALW_RENT_UNPRICED }
+        };
         self.palw_v2_derived_panel_bindings(state, block, block_daa)
             .into_iter()
-            .chain(extraction.objects.into_iter().map(|carried| carried.object))
-            .chain(lifecycle.objects.into_iter().map(|carried| carried.object))
+            // Nothing carried a derived binding, so nothing owes rent for it.
+            .map(|object| PalwCarriedObjectV1 { object, carrier_fee: PALW_RENT_UNPRICED })
+            .chain(
+                extraction
+                    .objects
+                    .into_iter()
+                    .map(|carried| PalwCarriedObjectV1 { carrier_fee: fee_of(carried.carrier), object: carried.object }),
+            )
+            .chain(
+                lifecycle
+                    .objects
+                    .into_iter()
+                    .map(|carried| PalwCarriedObjectV1 { carrier_fee: fee_of(carried.carrier), object: carried.object }),
+            )
             .collect()
     }
 

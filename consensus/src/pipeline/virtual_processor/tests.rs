@@ -10142,3 +10142,477 @@ async fn palw_v2_a_derivation_rides_signed_by_the_claims_executor_and_is_dropped
     let (_, _, none_yet) = crate::consensus::palw_derived_claim_view_v1(&with_claim, claim_id).expect("the claim exists there too");
     assert!(none_yet.is_empty(), "before the derivation the claim is readable and carries nothing");
 }
+
+/// **ADR-0075 security amendment SA-1 and SA-2: the permissionless lane pays rent, and pays it
+/// before the work is done.**
+///
+/// Decision 1 rested certification's whole unsigned, permissionless design on "the transaction fee
+/// is the rent", and nothing on the accepting path had ever read a fee — so both prices were the
+/// mempool's flat floor. Past `palw_certification_rent`:
+///
+/// * **SA-2** — a `FamilyCertified` whose carrier paid less than its vector count's price is
+///   dropped BEFORE the court grades it and, the part that matters, before it consumes one of the
+///   block's two grading slots. Charging a refused object a slot would let a griefer starve honest
+///   drills for the price of a floor fee, which is the denial `PALW_CERTIFICATION_MAX_PER_BLOCK`
+///   exists to stop.
+/// * **SA-1** — a chunk that OPENS a group is charged the carriage of the room it reserves. A
+///   one-part-sized chunk declaring eight parts held one of eight state-root slots for ~5.5 days at
+///   the flat floor; now it pays what eight hundred kilobytes of carriage costs.
+///
+/// The evidence is real (the floor's own drills), the ruleset is the mainnet one with a V2 bundle,
+/// and the honest path is asserted with the fence ARMED — a paid drill is graded and recorded
+/// exactly as it is without the fence.
+#[tokio::test]
+async fn palw_v2_certification_and_chunk_carriage_pay_rent_past_the_fence() {
+    use kaspa_consensus_core::config::params::ForkActivation;
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    use kaspa_consensus_core::palw_state_v2::{
+        PALW_CERTIFICATION_MAX_PER_BLOCK, PalwCertificationEvidenceV1, PalwCertifiedLaneV1, PalwConsensusObjectV2,
+        palw_certification_min_fee_v1, palw_object_chunk_group_rent_v1, palw_object_chunks_with_cap_v1,
+    };
+    use misaka_palw_base0::e2e_drill::{PalwRcFamilyV1, rc_attempt_evidence_v1, rc_free_prompt_evidence_v1};
+
+    // The flat mempool floor a carrier used to be able to pay for any of this.
+    const FLOOR: u64 = 250_000;
+
+    let catalog = palw_v2_test_catalog();
+    let bundle = palw_v2_test_bundle_funded_for(&catalog, 64);
+    let armed = |rent: Option<ForkActivation>| {
+        let bundle = bundle.clone();
+        ConfigBuilder::new(MAINNET_PARAMS)
+            .skip_proof_of_work()
+            .edit_consensus_params(move |p| {
+                p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+                p.palw_certification_rent = rent;
+                *p = p.clone().with_palw_v2_cadence();
+            })
+            .build()
+    };
+
+    let floor_attempt = rc_attempt_evidence_v1(PalwRcFamilyV1::Base0).expect("the floor drills its attempt lane");
+    let floor_fp = rc_free_prompt_evidence_v1(PalwRcFamilyV1::Base0).expect("the floor drills its free-prompt lane");
+    let a16_attempt = rc_attempt_evidence_v1(PalwRcFamilyV1::Qwen25A16).expect("the A16 fixture drills its attempt lane");
+    let attempt_object = |e: kaspa_consensus_core::palw_e2e_adjudicability::PalwE2eDrillEvidenceV1| {
+        PalwConsensusObjectV2::FamilyCertified { evidence: Box::new(PalwCertificationEvidenceV1::Attempt(e)) }
+    };
+    let fp_object = PalwConsensusObjectV2::FamilyCertified { evidence: Box::new(PalwCertificationEvidenceV1::FreePrompt(floor_fp)) };
+    let floor_object = attempt_object(floor_attempt);
+    let a16_object = attempt_object(a16_attempt);
+    let price = |object: &PalwConsensusObjectV2| match object {
+        PalwConsensusObjectV2::FamilyCertified { evidence } => palw_certification_min_fee_v1(evidence.vector_count()),
+        other => panic!("{other:?} is not a certification"),
+    };
+    // The family each drill grades to — the name under which it is recorded. Asserted by NAME and
+    // not by count, because the count cannot tell the two apart: the block's grading cap is two, so
+    // "one attempt family landed" is true whether it is the underpaid floor's or the paid A16's,
+    // and a rule that drops the wrong one of them would read as green.
+    let digest_of = |object: &PalwConsensusObjectV2| match object {
+        PalwConsensusObjectV2::FamilyCertified { evidence } => evidence.grade().expect("this build grades its own drill").digest(),
+        other => panic!("{other:?} is not a certification"),
+    };
+    let floor_family = digest_of(&floor_object);
+    let a16_family = digest_of(&a16_object);
+    assert_ne!(floor_family, a16_family, "the two attempt drills are two families");
+    let attempt_families = |folded: &kaspa_consensus_core::palw_state_v2::PalwChainStateV2| {
+        folded.chain_certified_families(PalwCertifiedLaneV1::Attempt).iter().map(|f| f.digest()).collect::<Vec<_>>()
+    };
+    assert!(price(&floor_object) > FLOOR, "a real drill's grading costs more than the flat floor it used to pay");
+
+    // A context at some chain height, with the state and evaluation point the walk would use.
+    async fn walked(config: kaspa_consensus_core::config::Config) -> TestContext {
+        let mut ctx = TestContext::new(TestConsensus::new(&config));
+        for _ in 0..2 {
+            ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+        }
+        ctx
+    }
+    let point_of = |ctx: &TestContext| kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+        block: ctx.consensus.get_sink(),
+        daa_score: ctx.consensus.get_virtual_daa_score(),
+        blue_score: 5,
+        subsidy: 0,
+    };
+
+    // ── SA-2, armed ──────────────────────────────────────────────────────────────────────────
+    let ctx = walked(armed(Some(ForkActivation::always()))).await;
+    let vp = ctx.consensus.virtual_processor();
+    let (_, state) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("the tip loads");
+    let point = point_of(&ctx);
+    let (accepted, folded) = vp.palw_v2_accepted_priced_objects_for_tests(
+        &state,
+        &bundle.state,
+        &point,
+        vec![
+            // Underpaid: the flat floor a griefer used to buy 32 court re-executions with.
+            (floor_object.clone(), FLOOR),
+            (fp_object.clone(), price(&fp_object)),
+            (a16_object.clone(), price(&a16_object)),
+        ],
+        point.block,
+    );
+    assert_eq!(
+        accepted.len(),
+        PALW_CERTIFICATION_MAX_PER_BLOCK,
+        "the underpaid drill is dropped ungraded and spends no grading slot, so BOTH paid ones land"
+    );
+    assert_eq!(folded.chain_certified_families(PalwCertifiedLaneV1::FreePrompt).len(), 1, "the paid free-prompt family is recorded");
+    assert_eq!(
+        attempt_families(&folded),
+        vec![a16_family],
+        "the attempt family the block recorded is the PAID one — the underpaid floor drill was never graded, and the slot it \
+         would have burned went to the A16 carrier behind it"
+    );
+
+    // The honest path, with the fence armed: pay the rent and the same drill is graded.
+    let (accepted, folded) = vp.palw_v2_accepted_priced_objects_for_tests(
+        &state,
+        &bundle.state,
+        &point,
+        vec![(floor_object.clone(), price(&floor_object))],
+        point.block,
+    );
+    assert_eq!(accepted.len(), 1, "a drill that paid its rent is graded");
+    assert_eq!(attempt_families(&folded), vec![floor_family], "and recorded: the rent buys the grading, it does not forbid it");
+
+    // ── SA-1, armed: opening a chunk group ───────────────────────────────────────────────────
+    let bytes = borsh::to_vec(&floor_object).expect("the object serializes");
+    let chunks = palw_object_chunks_with_cap_v1(&floor_object, bytes.len().div_ceil(4)).expect("it chunks").expect("it needs to");
+    let PalwConsensusObjectV2::ObjectChunk { group, count, .. } = chunks[0].clone() else { panic!("a chunk") };
+    let room = palw_object_chunk_group_rent_v1();
+    assert!(room > FLOOR, "taking a pending-chunk slot costs more than the flat floor");
+
+    let (accepted, unopened) =
+        vp.palw_v2_accepted_priced_objects_for_tests(&state, &bundle.state, &point, vec![(chunks[0].clone(), room - 1)], point.block);
+    assert!(accepted.is_empty(), "an opener that underpays the room is dropped, and the block stands");
+    assert!(unopened.pending_chunk_group(&group).is_none(), "and no slot is held: the junk never reaches the state root");
+
+    let (accepted, opened) =
+        vp.palw_v2_accepted_priced_objects_for_tests(&state, &bundle.state, &point, vec![(chunks[0].clone(), room)], point.block);
+    assert_eq!(accepted.len(), 1, "the same chunk, having paid the room, opens the group");
+    let held = opened.pending_chunk_group(&group).expect("the group is held");
+    assert_eq!(held.count, count);
+    // Extending it is not charged the room again — that would tax only the carrier that completes.
+    // A later chain point, because `opened` already folded one object at `point`: the transition
+    // demands a strictly increasing blue score along a chain.
+    let next = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+        block: kaspa_hashes::Hash64::from_u64_word(0xB1_0075),
+        daa_score: point.daa_score + 1,
+        blue_score: point.blue_score + 8,
+        subsidy: 0,
+    };
+    let (accepted, _) =
+        vp.palw_v2_accepted_priced_objects_for_tests(&opened, &bundle.state, &next, vec![(chunks[1].clone(), FLOOR)], next.block);
+    assert_eq!(accepted.len(), 1, "a chunk that extends an open group reserves nothing new and pays no room rent");
+
+    // ── The fence OFF: byte-identical to before the amendment ────────────────────────────────
+    let ctx = walked(armed(None)).await;
+    let vp = ctx.consensus.virtual_processor();
+    let (_, state) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("the tip loads");
+    let point = point_of(&ctx);
+    let (accepted, folded) = vp.palw_v2_accepted_priced_objects_for_tests(
+        &state,
+        &bundle.state,
+        &point,
+        vec![(floor_object, FLOOR), (fp_object, FLOOR), (a16_object, FLOOR)],
+        point.block,
+    );
+    assert_eq!(accepted.len(), PALW_CERTIFICATION_MAX_PER_BLOCK, "unarmed, the cap is the only limit and the floor fee buys grading");
+    assert_eq!(
+        attempt_families(&folded),
+        vec![floor_family],
+        "unarmed, the flat-fee floor drill is graded first and the A16 behind it is what the cap drops — the pre-amendment \
+         behaviour, byte for byte"
+    );
+    assert_eq!(folded.chain_certified_families(PalwCertifiedLaneV1::FreePrompt).len(), 1);
+    let (accepted, opened) =
+        vp.palw_v2_accepted_priced_objects_for_tests(&state, &bundle.state, &point, vec![(chunks[0].clone(), FLOOR)], point.block);
+    assert_eq!(accepted.len(), 1, "unarmed, a one-floor-fee opener holds a slot exactly as it did");
+    assert!(opened.pending_chunk_group(&group).is_some());
+}
+
+/// **The block's two grading slots are spent on court work and on nothing else** (ADR-0075 SA-2).
+///
+/// The cap counted "does this chunk complete its group", which is not the question it is named
+/// for. `ObjectChunk { group: <fresh>, index: 5, count: 1 }` completes a group by that reading and
+/// the transition then refuses it as `ChunkIndexOutOfRange`; so does `{ index: 0, count: 1 }`
+/// carrying two bytes no object decodes from. Sixty-odd bytes each, and two per block exhausted
+/// `PALW_CERTIFICATION_MAX_PER_BLOCK` and dropped every genuine `FamilyCertified` the block
+/// carried — a block-cheap way to keep an honest class weightless, which is the exact denial the
+/// cap exists to prevent.
+///
+/// Both junk chunks here PAY the slot rent, so SA-1 lets them through: what must stop them is that
+/// the cap now counts `palw_v2_graded_vector_count`, the same predicate SA-2 prices from, which
+/// answers `None` for everything the transition refuses before it grades.
+#[tokio::test]
+async fn palw_v2_a_chunk_the_transition_refuses_spends_no_grading_slot() {
+    use kaspa_consensus_core::config::params::ForkActivation;
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    use kaspa_consensus_core::palw_state_v2::{
+        PalwCertificationEvidenceV1, PalwCertifiedLaneV1, PalwConsensusObjectV2, palw_certification_min_fee_v1,
+        palw_object_chunk_group_rent_v1,
+    };
+    use misaka_palw_base0::e2e_drill::{PalwRcFamilyV1, rc_attempt_evidence_v1};
+
+    let catalog = palw_v2_test_catalog();
+    let bundle = palw_v2_test_bundle_funded_for(&catalog, 64);
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params({
+            let bundle = bundle.clone();
+            move |p| {
+                p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+                p.palw_certification_rent = Some(ForkActivation::always());
+                *p = p.clone().with_palw_v2_cadence();
+            }
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    for _ in 0..2 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+    let vp = ctx.consensus.virtual_processor();
+    let (_, state) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("the tip loads");
+    let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+        block: ctx.consensus.get_sink(),
+        daa_score: ctx.consensus.get_virtual_daa_score(),
+        blue_score: 5,
+        subsidy: 0,
+    };
+
+    let evidence = rc_attempt_evidence_v1(PalwRcFamilyV1::Qwen25A16).expect("the A16 fixture drills its attempt lane");
+    let certification = PalwConsensusObjectV2::FamilyCertified { evidence: Box::new(PalwCertificationEvidenceV1::Attempt(evidence)) };
+    let (family, price) = match &certification {
+        PalwConsensusObjectV2::FamilyCertified { evidence } => (
+            evidence.grade().expect("this build grades its own drill").digest(),
+            palw_certification_min_fee_v1(evidence.vector_count()),
+        ),
+        other => panic!("{other:?}"),
+    };
+
+    // Two chunks the transition refuses on their face, each paying the slot rent in full.
+    let rent = palw_object_chunk_group_rent_v1();
+    let out_of_range = PalwConsensusObjectV2::ObjectChunk {
+        group: kaspa_hashes::Hash64::from_u64_word(0x0075_0001),
+        index: 5,
+        count: 1,
+        bytes: vec![0xAA],
+    };
+    let undecodable = PalwConsensusObjectV2::ObjectChunk {
+        group: kaspa_hashes::Hash64::from_u64_word(0x0075_0002),
+        index: 0,
+        count: 1,
+        bytes: vec![0xAA],
+    };
+
+    let (accepted, folded) = vp.palw_v2_accepted_priced_objects_for_tests(
+        &state,
+        &bundle.state,
+        &point,
+        vec![(out_of_range, rent), (undecodable, rent), (certification, price)],
+        point.block,
+    );
+    assert_eq!(accepted.len(), 1, "both junk chunks are refused as objects, and the block stands carrying the certification");
+    assert_eq!(
+        folded.chain_certified_families(PalwCertifiedLaneV1::Attempt).iter().map(|f| f.digest()).collect::<Vec<_>>(),
+        vec![family],
+        "the family is chain-certified: two sixty-byte chunks the transition was always going to refuse did not spend the \
+         grading slots it needed"
+    );
+}
+
+/// **The rent is a fee the chain actually READ, and it is burned rather than paid back.**
+///
+/// Everything else about ADR-0075's two prices is proven at the acceptance filter, which is handed
+/// `(object, fee)` pairs directly. That leaves the half the whole rule rests on untested: that
+/// `calculate_utxo_state` — the only frame where a fee exists, since `AcceptanceData` records a
+/// transaction id and an index and nothing about value — remembers a fee for every carrier the
+/// object walk will price. If it does not, `fee_of` reads `unwrap_or(0)`, every carrier looks
+/// unpaid, and no certification and no chunk group can ever be accepted again on that network: a
+/// permanent halt with no error a submitter can see, since the object is dropped and the block
+/// stands.
+///
+/// So this drives a REAL 0x4b carrier — funded from a matured coinbase, ML-DSA-87-signed, selected
+/// into a template and inserted — through `validate_and_insert_block`, and reads the answer off
+/// the state root. One sompi decides it, which is only possible if the number the walk compared is
+/// the number the block carried.
+///
+/// It also reads what the carrier block's own miner was paid, because that is the other half of
+/// SA-2's claim: a fee returns to the coinbase of the block that accepts it, so before the burn a
+/// miner — the cheapest adversary either rule has — recovered what he had just been charged.
+#[tokio::test]
+async fn palw_v2_a_funded_carrier_is_priced_by_the_fee_the_utxo_walk_read() {
+    use kaspa_consensus_core::config::params::ForkActivation;
+    use kaspa_consensus_core::palw_state_v2::palw_object_chunk_group_rent_v1;
+
+    let group = kaspa_hashes::Hash64::from_u64_word(0x5107_0075);
+    let rent = palw_object_chunk_group_rent_v1();
+
+    /// `(the group is open in the tip state, what the carrier block's miner was paid for it)`.
+    async fn run(rent_fence: Option<ForkActivation>, fee: u64, group: kaspa_hashes::Hash64) -> (bool, u64) {
+        use crate::model::stores::virtual_state::VirtualStateStoreReader;
+        use kaspa_consensus_core::hashing::sighash::{Mldsa87SigHashReusedValuesUnsync, calc_mldsa87_signature_hash};
+        use kaspa_consensus_core::hashing::sighash_type::SIG_HASH_ALL;
+        use kaspa_consensus_core::mass::MassCalculator;
+        use kaspa_consensus_core::palw_lifecycle_objects_v2::{PALW_LIFECYCLE_TX_VERSION_V2, PalwLifecycleTxPayloadV2};
+        use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+        use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
+        use kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE;
+        use kaspa_consensus_core::tx::{PopulatedTransaction, TransactionInput, TransactionOutput, UtxoEntry};
+        use kaspa_txscript::{MLDSA87_TX_CONTEXT, script_builder::ScriptBuilder};
+        use libcrux_ml_dsa::ml_dsa_87 as mldsa;
+
+        kaspa_core::log::try_init_logger("info");
+        let catalog = palw_v2_test_catalog();
+        let bundle = palw_v2_test_bundle_funded_for(&catalog, 64);
+        let config = ConfigBuilder::new(MAINNET_PARAMS)
+            .skip_proof_of_work()
+            .edit_consensus_params({
+                let bundle = bundle.clone();
+                move |p| {
+                    p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+                    p.palw_certification_rent = rent_fence;
+                    // So the funding coinbase is spendable within a short chain.
+                    p.coinbase_maturity = 2;
+                    *p = p.clone().with_palw_v2_cadence();
+                }
+            })
+            .build();
+        let mut ctx = TestContext::new(TestConsensus::new(&config));
+
+        // `TestContext::mine_block` does not stamp the V2 carriage, and on a `ConsensusV2` network
+        // the template DECLARES algo-6 and leaves producing the attempt to the miner — so the
+        // harness stands in for one, after the timestamp and the nonce the challenge binds.
+        async fn mine(ctx: &mut TestContext, miner: MinerData, txs: Vec<Transaction>) -> Block {
+            ctx.simulated_time += ctx.consensus.params().target_time_per_block();
+            let mut t =
+                ctx.consensus.build_block_template(miner, Box::new(OnetimeTxSelector::new(txs)), TemplateBuildMode::Standard).unwrap();
+            t.block.header.timestamp = ctx.simulated_time;
+            t.block.header.nonce = ctx.simulated_time;
+            if t.block.header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2 {
+                t.block.header.palw_commitment = ctx.consensus.palw_v2_test_carriage(&t.block.header);
+            }
+            t.block.header.finalize();
+            let block = t.block.to_immutable();
+            ctx.validate_and_insert_block(block.clone()).await;
+            block
+        }
+
+        // A funding key whose coinbase this test can actually spend.
+        let kp = mldsa::generate_key_pair([0x7Bu8; 32]);
+        let pubkey = kp.verification_key.as_ref().to_vec();
+        let address_payload: [u8; 64] = kaspa_hashes::blake2b_512_address_payload(&pubkey).as_bytes();
+        let spk = p2pkh_mldsa87_spk(&address_payload);
+
+        // **Funding a key on a `ConsensusV2` network takes a two-wide row.** A linear V2 chain pays
+        // nobody a coinbase output: every merging block's only DAA-eligible merged block is its own
+        // selected parent, whose reward is ESCROWED rather than paid (ADR-0042 Decision 10). A
+        // merged blue that is not the selected parent is paid to its own miner — so two siblings,
+        // both mined by K, and the block that merges them carries K's spendable output.
+        ctx.miner_data = MinerData::new(spk.clone(), vec![]);
+        ctx.build_block_template_row(0..2).validate_and_insert_row().await;
+        let harvest = mine(&mut ctx, new_miner_data(), vec![]).await;
+        let coinbase = &harvest.transactions[0];
+        let (index, out) = coinbase
+            .outputs
+            .iter()
+            .enumerate()
+            .find(|(_, o)| o.script_public_key == spk)
+            .expect("the block merging the row pays the sibling's miner");
+        let funding = TransactionOutpoint::new(coinbase.id(), index as u32);
+        let value = out.value;
+        let funding_daa = harvest.header.daa_score;
+        assert!(value > fee, "the funding coinbase ({value}) must cover the {fee} sompi rent");
+        for _ in 0..4 {
+            mine(&mut ctx, new_miner_data(), vec![]).await;
+        }
+
+        // The carrier: one chunk OPENING a group, on the lifecycle band, paying exactly `fee`.
+        let object = PalwConsensusObjectV2::ObjectChunk { group, index: 0, count: 3, bytes: vec![0xC0, 0xDE] };
+        let payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object })
+            .expect("the lifecycle payload serializes");
+        let mut tx = Transaction::new(
+            crate::constants::TX_VERSION,
+            vec![TransactionInput::new(funding, vec![], 0, 1)],
+            vec![TransactionOutput::new(value - fee, spk.clone())],
+            0,
+            SUBNETWORK_ID_PALW_LIFECYCLE,
+            0,
+            payload,
+        );
+        let utxo = UtxoEntry::new(value, spk.clone(), funding_daa, true);
+        let storage_mass = MassCalculator::new(0, 0, 0, ctx.consensus.params().storage_mass_parameter)
+            .calc_contextual_masses(&PopulatedTransaction::new(&tx, vec![utxo.clone()]))
+            .expect("contextual mass is computable for the funded carrier")
+            .storage_mass;
+        tx.set_mass(storage_mass);
+        let reused = Mldsa87SigHashReusedValuesUnsync::new();
+        let sig_hash = {
+            let populated = PopulatedTransaction::new(&tx, vec![utxo]);
+            calc_mldsa87_signature_hash(&populated, 0, SIG_HASH_ALL, &reused)
+        };
+        let sig = mldsa::sign(&kp.signing_key, sig_hash.as_bytes().as_slice(), MLDSA87_TX_CONTEXT, [0x7Bu8; 32])
+            .expect("ML-DSA-87 sign on the 64-byte sighash");
+        let mut sig_item = sig.as_ref().to_vec();
+        sig_item.push(SIG_HASH_ALL.to_u8());
+        tx.inputs[0].signature_script = ScriptBuilder::new()
+            .add_data(&sig_item)
+            .expect("the signature push fits")
+            .add_data(&pubkey)
+            .expect("the public-key push fits")
+            .drain();
+        let carrier_id = tx.id();
+
+        let carrier_block = mine(&mut ctx, new_miner_data(), vec![tx]).await;
+        assert!(carrier_block.transactions.iter().any(|t| t.id() == carrier_id), "the carrier reached the block");
+        assert_eq!(
+            ctx.consensus.block_status(carrier_block.header.hash),
+            BlockStatus::StatusUTXOValid,
+            "the block carrying the funded lifecycle spend must be UTXO-valid (construction == validation)"
+        );
+
+        let vp = ctx.consensus.virtual_processor();
+        // What the chain will MINT for this block — the same `BlockRewardData` its merging block's
+        // coinbase is built from and validated against, both of them this function's own output.
+        let minted_fees = vp
+            .virtual_stores
+            .read()
+            .state
+            .get()
+            .unwrap()
+            .mergeset_rewards
+            .get(&carrier_block.header.hash)
+            .expect("virtual merges the carrier block it was just built on")
+            .total_fees;
+        // One more block, so the carrier block is a settled chain block and the PALW state tip is
+        // the one its own object walk wrote.
+        drop(vp);
+        mine(&mut ctx, new_miner_data(), vec![]).await;
+        let vp = ctx.consensus.virtual_processor();
+        let (_, state) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("the tip loads");
+        (state.pending_chunk_group(&group).is_some(), minted_fees)
+    }
+
+    let (opened, minted_armed) = run(Some(ForkActivation::always()), rent, group).await;
+    assert!(
+        opened,
+        "a carrier that paid the slot rent opens its group — which it can only be KNOWN to have paid if calculate_utxo_state \
+         remembered the fee and the object walk read it"
+    );
+
+    let (opened_short, _) = run(Some(ForkActivation::always()), rent - 1, group).await;
+    assert!(
+        !opened_short,
+        "one sompi short and the opener is dropped and the block stands: the number the walk compares is the number the block \
+         actually carried, not a constant"
+    );
+
+    let (opened_unarmed, minted_unarmed) = run(None, rent, group).await;
+    assert!(opened_unarmed, "dormant, the fence prices nothing and the same carrier opens the same group");
+    assert_eq!(minted_unarmed, rent, "dormant, the whole fee is minted back to the block's miner, exactly as it always was");
+    assert_eq!(
+        minted_armed, 0,
+        "past the fence the rent is BURNED rather than minted: a fee returns to the coinbase of the block that accepts it, so a \
+         miner — the cheapest adversary either amendment has — was being refunded what he had just been charged"
+    );
+}
+

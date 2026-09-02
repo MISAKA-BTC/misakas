@@ -241,18 +241,66 @@ chained burst, each carrier funded from the previous one's change.
 
 ## Security amendment (2026-09-02) — the permissionless lane's griefing budget
 
-**SA-1 — Chunk groups are deposited, not merely fee-priced.** `ObjectChunk` groups are unsigned and
+**SA-1 — A chunk group's opener rents the SLOT it takes.** `ObjectChunk` groups are unsigned and
 permissionless; eight pending groups × 800,000 bytes live in the state root for up to 4,000 DAA. A
 griefer can hold all eight with junk for ~5.5 days at the price of carriage and block every honest
-drill. Rule: a chunk group's carrier locks a deposit proportional to its bytes (an output the
-transition recognises, as it does a bond's collateral), refunded when the group completes into an
-accepted object and forfeited at TTL or on refusal. Junk pays; honesty is refunded.
+drill. Rule: past `Params::palw_certification_rent`, a chunk that OPENS a group must be carried by
+a transaction paying `palw_object_chunk_group_rent_v1()` — the carriage price of everything a slot
+may ever hold (`PALW_OBJECT_CHUNK_MAX_BYTES × PALW_OBJECT_CHUNK_MAX_COUNT` = 800,000 mass ⇒
+10,000,000 sompi), flat, whatever `count` the opener declares. A chunk that merely extends an open
+group pays nothing: the row is already paid for, and charging it would fall on the carrier that
+completes. The opener is refused before the group reaches the state root.
+
+*The price is the slot and not the declared `count`, deliberately.* The resource is one of eight
+rows, and a group declaring two parts denies it exactly as completely as one declaring eight — so a
+`count`-scaled price puts the griefer's optimum at `count = 2`, holding a row for a quarter of the
+reasoned price and for LESS than Decision 14's own measured drills (248 KB ⇒ 3 parts, 310 KB ⇒ 4)
+pay for the identical row. A rent an honest opener pays more of than a griefer is not a rent.
+
+*What ships is a PRICE, where this amendment first asked for a refundable DEPOSIT.* Junk pays, and
+it pays before the state root is touched; honesty is not refunded. A refund needs the chain to
+remember which outpoint backs which group — a field on `PalwPendingChunksV2`, i.e. a
+`PALW_STATE_V2_VERSION` bump, which is hashed into every state root and into `consensus_params_id`
+and therefore re-mints every V2 network whether or not the fence is armed. That is the one thing an
+activation may not do, so the deposit belongs to the next state-version bump, with the lock (the
+group's outpoint joins `palw_v2_locked_bond_outpoints`) and the forfeit (it joins
+`palw_v2_bond_burn_obligations`). Until then the honest/junk asymmetry this amendment named as its
+point is the part that is missing, and the flat slot price is what stands in for it.
 
 **SA-2 — Grading is priced before it is performed.** Two `FamilyCertified` are graded per block
 whether or not they pass; a refused one still costs every validator up to 32 court re-executions.
-The minimum fee for a `FamilyCertified` is derived from its vector count (compute mass, as `misaka
-palw submit-object` already sizes it) and a block that grades one paying less is invalid — so the
-CPU every validator spends per block is bounded by fees the griefer actually paid.
+Rule: past the same fence, a `FamilyCertified` whose carrier paid less than
+`palw_certification_min_fee_v1(vector_count)` is **dropped ungraded and the block stands**, and it
+spends none of the block's two grading slots. The price is derived from the vector count (compute
+mass, as `misaka palw submit-object` already sizes it) rather than from the object's bytes, because
+the count is a field the submitter writes and nothing ties it to how large the object is.
+
+*Dropped, where this amendment first said the accepting block "is invalid".* The security property
+is the same — nothing underpaid is ever graded — and the difference is who dies for a stranger's
+transaction. Admission on the 0x4b band is stateless, so an underpaid carrier relays and mines
+freely, and a template builder selects by fee without consulting this filter; making the accepting
+block invalid is audit M-01's shape exactly, with honest miners producing the invalid blocks.
+
+*And the block's cap counts court work, not chunk arithmetic.* Past the fence, a chunk charges one
+of the two grading slots only when it actually assembles into a decodable `FamilyCertified` — the
+same predicate the price is read from. Counting "completes a group" instead let sixty bytes
+(`ObjectChunk { group: <fresh>, index: 5, count: 1 }`, or a one-byte payload that decodes to
+nothing) burn a slot the transition was going to refuse anyway, and two of them per block dropped
+every genuine certification the block carried.
+
+*The rent is burned, not paid to the accepting miner.* Both prices are transaction fees, and a fee
+goes to the coinbase of the block that accepts it — so a miner, who needs no stranger's cooperation
+to get a carrier into a block, recovered ~90% of whatever he had just been charged and the claim
+that the CPU is "bounded by fees the griefer actually paid" was false for the cheapest adversary
+either rule has. Past the fence, `calculate_utxo_state` withholds `palw_object_rent_ceiling_v1` of
+each certification carrier's fee from the block reward by don't-mint — the mechanism the C-08 bond
+burn and the §F service share already use — capped at the fee, so carriage above the rent is still
+the miner's and objects no rule prices (court moves, free-prompt commitments) burn nothing. The
+residual, stated plainly: the worst case is still two graded objects × 32 vectors = 64 court
+re-executions per block, and past the fence that block costs its author 20,000,000 sompi (0.2 MSK)
+destroyed. The bound on validator CPU per block is `PALW_CERTIFICATION_MAX_PER_BLOCK ×
+PALW_CERTIFICATION_MAX_VECTORS`, a constant this binary enforces; what the rent buys is that the
+bound cannot be reached for free, by a miner or by anyone else.
 
 **SA-3 — The card's keys are the operators' own**, generated on their hosts; only public rows enter
 `params.rs` (the testnet-11 practice); a card with two rows sharing an operator id is refused by the
