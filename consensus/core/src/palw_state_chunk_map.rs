@@ -97,6 +97,92 @@ pub fn integer_kv_state_geometry_v2(
     Ok(geometry)
 }
 
+/// **How many positions of the cache ride one attention leaf under graph v4** — the history tile.
+///
+/// The v1/v2 maps chunk the cache at "as many rows as fit the leg's 1 MiB cap", which on a
+/// Qwen3.6-shaped row (2,048 bytes) is 512 positions: at `n_ctx` 512 the whole history is ONE
+/// chunk, so the smallest thing the map can address is the history itself. That is the first of
+/// the three terms `palw_context_ladder::tests::what_still_refuses_the_hybrid_512_row` measures,
+/// and no anchoring policy reaches it — the map is what says how finely the state can be named.
+///
+/// Sixteen, and it is derived rather than preferred: the v4 attention leaf opens one tile of K (or
+/// V) rows beside the query row, so the tile sets the leaf's payload at `tile × kv_row` bytes, and
+/// on the widest registered geometry (`attn_kv_heads × attn_head_dim × 4` = 2,048) sixteen rows is
+/// 32,768 bytes — under half the 81,920-byte carrier, which leaves the query row, the accumulator
+/// and every Merkle path inside one close. Thirty-two would put the payload alone at 65,536 and
+/// leave 16 KiB for four paths at the `2^32` ladder's 2,048 bytes each; eight would halve the
+/// payload and double the step space at every attention site for no budget that is short.
+///
+/// It is a CONSTANT and not a function of `n_ctx`, which is the property the ladder needs: a leaf
+/// that opens sixteen positions opens sixteen positions at every context, so the close a v4
+/// attention node derives is flat in the context (W1) instead of linear in it.
+pub const PALW_ATTN_HISTORY_TILE_V4: u32 = 16;
+
+/// **The same `i32` cache, enumerated at the history tile (v3).**
+///
+/// Every rule of [`PALW_INTEGER_KV_STATE_CHUNK_MAP_NAME_V2`] except the chunk derivation, which is
+/// the one that mattered: v2's `chunk=floor(1048576/row)` is "the widest run of rows the leg
+/// admits", and the leg's cap is a TRANSPORT bound, not a court one. Reading a court's addressing
+/// granularity off a transport cap is how the whole history became the smallest addressable unit.
+///
+/// A class that adopts it is a DIFFERENT class — `state_chunk_map_id` is a field of
+/// `PalwShapeProfileV3` and the shape profile id IS the class id — so v1 and v2 are untouched, no
+/// shipped row moves, and this registers nothing. It is what a graph-v4 row declares.
+pub const PALW_TILED_KV_STATE_CHUNK_MAP_NAME_V3: &str = "palw-integer-kv/i32-le/kind-major(k,v)/layer-asc/position-asc/row=attn_kv_heads*attn_head_dim*4/\
+     chunk=min(positions,16)/v3";
+
+/// `state_chunk_map_id` for a class whose attention cache is addressed a history tile at a time.
+pub fn tiled_kv_state_chunk_map_id_v3() -> Hash64 {
+    state_chunk_map_id_v1(PALW_TILED_KV_STATE_CHUNK_MAP_NAME_V3)
+}
+
+/// The v3 geometry: [`integer_kv_state_geometry_v2`] with `positions_per_chunk` pinned to
+/// [`PALW_ATTN_HISTORY_TILE_V4`] rather than derived from the leg's cap.
+///
+/// Rebuilt from v2 rather than from v1 so the row width stays the `i32` one — the defect v2 was
+/// minted to correct — and only the chunking moves. The chunk count grows by the same factor the
+/// chunk shrinks by, so the leg's `PALW_STEP_LEG_MAX_STATE_CHUNKS` bound is the one that binds and
+/// it is checked here rather than discovered at capture time.
+pub fn tiled_kv_state_geometry_v3(
+    profile: &PalwShapeProfileV3,
+    positions: u32,
+) -> Result<PalwStateChunkGeometryV1, PalwStateChunkMapError> {
+    let mut geometry = integer_kv_state_geometry_v2(profile, positions)?;
+    let positions_per_chunk = PALW_ATTN_HISTORY_TILE_V4.min(positions.max(1));
+    geometry.positions_per_chunk = positions_per_chunk;
+    geometry.chunks_per_slice = positions.div_ceil(positions_per_chunk);
+    let chunk_count = geometry.chunk_count();
+    if chunk_count > PALW_STEP_LEG_MAX_STATE_CHUNKS as u64 {
+        return Err(PalwStateChunkMapError::TooManyChunks { got: chunk_count, max: PALW_STEP_LEG_MAX_STATE_CHUNKS });
+    }
+    Ok(geometry)
+}
+
+/// **What ONE tiled chunk of the attention cache opens**: `min(n_ctx, tile) × kv_row` bytes.
+///
+/// The flat twin of `palw_context_ladder::palw_kv_checkpoint_opening_bytes_v1`, whose whole
+/// content is that it is NOT flat: v2's chunk is the history, so an opening over it is
+/// `n_ctx × row`. Under v3 it is the tile, at every context.
+pub fn tiled_kv_chunk_bytes_v3(profile: &PalwShapeProfileV3) -> Option<u64> {
+    let row = (profile.attn_kv_heads as u64).checked_mul(profile.attn_head_dim as u64)?.checked_mul(4)?;
+    if row == 0 {
+        return None;
+    }
+    let positions = (PALW_ATTN_HISTORY_TILE_V4 as u64).min((profile.n_ctx as u64).max(1));
+    row.checked_mul(positions)
+}
+
+/// **A hybrid's map with its attention half tiled** — [`palw_hybrid_state_chunk_map_name_v2`] with
+/// `attn=` at v3, spelled as its two parts for the reason both earlier compositions are.
+pub fn palw_hybrid_state_chunk_map_name_v3() -> String {
+    format!("palw-hybrid-state/attn={PALW_TILED_KV_STATE_CHUNK_MAP_NAME_V3}/gdn={PALW_GDN_STATE_CHUNK_MAP_NAME_V2}/v3")
+}
+
+/// `state_chunk_map_id` for a hybrid class whose attention half is [v3](tiled_kv_state_chunk_map_id_v3).
+pub fn hybrid_state_chunk_map_id_v3() -> Hash64 {
+    state_chunk_map_id_v1(&palw_hybrid_state_chunk_map_name_v3())
+}
+
 /// **The RECURRENCE's map: a state, not a history** (ADR-0077 Decision 10).
 ///
 /// The two integer-KV maps above chunk the *cache*, and a cache is the whole history: at position

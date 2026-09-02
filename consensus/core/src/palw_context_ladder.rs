@@ -1456,3 +1456,31 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod scratch_breakdown {
+    use super::*;
+    use crate::palw_class_admission_v2::derive_court_cost_rows_v1;
+
+    #[test]
+    fn scratch_dump_the_512_rows() {
+        let budget = crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES;
+        for (label, profile) in [
+            ("A16 512", palw_a16_context_row_profile_v1(512).expect("projects")),
+            ("QWEN36 512", palw_qwen36_context_row_profile_v1(512).expect("projects")),
+        ] {
+            let shape = palw_class_ladder_rules_v1(&profile).expect("mapped").cost_shape;
+            eprintln!(
+                "\n=== {label} budget {budget} history {} kv_ckpt {} gdn_ckpt {} ===",
+                shape.history_positions, shape.kv_checkpoint_bytes, shape.gdn_checkpoint_bytes
+            );
+            let rows = derive_court_cost_rows_v1(&profile, shape).expect("derives");
+            for r in rows.iter().take(10) {
+                eprintln!(
+                    "  {:>4}[{:>2}] {:?} open={:>9} ev={:>9} close={:>9} {}",
+                    r.table, r.index, r.op_kind, r.opening_bytes, r.evidence_bytes, r.close_bytes, r.weight_name
+                );
+            }
+        }
+    }
+}
