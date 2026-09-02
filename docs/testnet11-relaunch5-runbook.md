@@ -198,6 +198,30 @@ pool-slot ×11; zero on Ready nodes).
   rate settles as they age out. QWEN36: two blocks (02:04:17, ~02:42). No condition here blocks
   publication; the number to re-check later is the hourly floor count.
 
+### Relaunch 5d — announced, NOT deployed (fingerprint received 2026-09-02 ~03:10 CEST)
+
+The 5c chain runs untouched until the user calls the 5d flag day. The peer session building
+ADR-0072+D8 / ADR-0073 ① / ADR-0074 ③ reported, from the pin test on its rebased tree
+(`origin/main 4c98717a` + branch `palw-adr0073-fp-weight` at `9d038706`, 8 commits, **not
+pushed** — merge and push are the user's decision):
+
+| preset | 5d fingerprint (their tree, "final for this tree") |
+|---|---|
+| testnet-11 | `f6afe2e237604b83a0cd03fe8b94be428e4aceabc12d7834b45bb455c664154a` |
+| devnet | `fd041c409b6fda1d70df60d7b9c0827349d83f74e7c0e45ef4ee5d62943bbf09` |
+
+What moves the value: free-prompt wire version 3 → 4 (job `prompt_mode`, commitment
+`work_leaves`), the bundle's free-prompt params (a quantum is ⅛ of the class's canonical job; CU
+weights gone), the certified free-prompt set (floor only), state version 15. Classes, artifact
+roots, the A16 inventory-root pin and the genesis hash (`08e9c8a4…`) are unchanged — so 5d is a
+fingerprint move on the same genesis, which the handshake still treats as a different network:
+every node wipes, exactly as 5c.
+
+**5d go/no-go gate** (all three, in order): (1) the user merges/pushes the tree and says when;
+(2) this session re-derives the fingerprint from the pushed commit in an isolated worktree and it
+equals the value above; (3) the stop-ALL → archive → rotate the four per-genesis stores → install
+→ per-host start order below is run as one window. Nobody "restarts everything".
+
 ### Four stores are per-genesis and must be rotated at every regenesis — one was missed today
 
 | store | where | rotation |
