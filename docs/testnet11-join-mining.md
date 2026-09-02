@@ -36,7 +36,7 @@ that changed.
 |---|---|
 | the node | `kaspad` from this repo, built with `--release` |
 | a key | a 32-byte ML-DSA-87 seed — `misaka key gen` (§2) |
-| MSK | enough to cover the collateral plus a transaction fee, in a **non-coinbase** output (§2) |
+| MSK | the collateral **plus 0.1 MSK**, in ONE **non-coinbase** output (§2). ~11.2 MSK for the floor, 2,290 MSK for `QWEN25-A16`, 3,868 MSK for `QWEN36` — §3's *Collateral* has the derivation |
 | a model | **no.** The default class is the integer floor; see §5 |
 
 `--netsuffix=11`, P2P **26311**, RPC **26312**. DNS seeding is live, so no `--addpeer` is needed
@@ -113,6 +113,26 @@ Restart with --palw-producer-bond=<txid>:0 (and --palw-produce) to mine with it
 did not exist until the transaction was built — nobody can tell it to you in advance, and the node
 does not store it anywhere else. Keep it.
 
+**One key, one bond, for the life of the chain.** `BondRegistered` refuses any public key that
+already appears in the bond registry (`DuplicateBondKey`), and the registry is append-only:
+retiring a bond rewrites its status, it does not remove the row. So a key that has ever registered
+can never register again — retiring the bond does **not** free it. To bond a second time, generate a
+new seed (`misaka key gen --out <a new file>`), fund that address, and pass the new file as
+`--palw-producer-key`. Running `--palw-register-bond` on a spent key is harmless — the node asks the
+chain first and refuses before it spends anything — and it now says which of the two situations you
+are in:
+
+```
+[palw-panel] this key already holds bond <txid>:<i> on this chain — not registering another.
+Drop --palw-register-bond and run with --palw-producer-bond=<txid>:<i>
+
+[palw-panel] this key's bond <txid>:<i> is RETIRING (since DAA <n>), so it can take no new work —
+and it cannot be replaced from this key. ... generate a NEW seed ...
+```
+
+Choose the collateral before you register, not after: it is fixed at registration and there is no
+top-up object. Sizing it is the next section.
+
 If instead you see
 
 ```
@@ -156,15 +176,117 @@ a claim only while
 reserved_exposure + claim_exposure  ≤  collateral × max_exposure_ratio_permille / 1000
 ```
 
-and one claim costs `pwu × slash_value_per_pwu`, where `pwu` rises as the class retargets. The
-chain's floor (400,000 sompi, `min_collateral_sompi`) therefore buys a bond that may not fit a
-**single** claim — and that producer holds forever, having locked real money to get there. The node
-reads the current numbers off the chain and sizes for one claim, logging both. Passing a smaller
-value is allowed and warned about.
+and one claim costs `pwu_per_inference × slash_value_per_pwu`, a number that belongs to the **class**
+you produce for. The chain's floor (400,000 sompi, `min_collateral_sompi`) therefore buys a bond
+that may not fit a **single** claim — and that producer holds forever, having locked real money to
+get there.
 
-**The relay limit sets a second, higher floor, and it is the one that bites first.** A UTXO's
-KIP-0009 storage mass is `C · p² / value`, so it grows as the output SHRINKS: a 400,000 sompi
-output costs 10,000,000 mass against a 480,000 standard-transaction limit, and the carrier holding
+**A bond must hold every claim that can be in flight at once, not one claim.** This is the part that
+is easy to get wrong, because the exposure a claim reserves is released at `Final` — not when a
+panel binds it. The road to `Final` runs through every window in the lattice (`2 × (bind + receipt)
++ challenge + court + abandon_hold` = **7,200 DAA** on testnet-11), so a bond sized for one claim
+admits the first block and then refuses the second for hours:
+
+```
+[palw-producer] holding: the bond's exposure ceiling leaves no room for another claim
+[... exposure=0/4166658 per_claim=13426800]
+```
+
+`exposure=0/4166658` is an EMPTY bond against a ceiling of 4.17 M sompi, and one Qwen3.6 claim wants
+13.43 M. Nothing is stuck; the bond was simply never large enough for one job of that size, and no
+amount of waiting changes it. The node now sizes for the whole claim lifetime — the same derivation
+(`palw_v2_collateral_for_claim_lifetime_v1`) every genesis bond on this chain is sized by.
+
+**It sizes for the class you told it to produce for.** `--palw-producer-class` is read by the
+registration path as well as by the producer, so registering a bond and mining a model tier are one
+decision:
+
+| class | `pwu_per_inference` | collateral the node picks | fund the pay address with at least |
+|---|---|---|---|
+| the integer floor (no `--palw-producer-class`) | 7,708 | **1,110,106,160 sompi** (11.101 MSK) | **11.2 MSK** |
+| `PALW-QWEN25-A16` `71bbb755…` | 1,589,424 | **228,908,844,480 sompi** (2,289.089 MSK) | **2,290 MSK** |
+| `PALW-QWEN36` `5bd9ae3d…` | 2,685,360 | **386,745,547,200 sompi** (3,867.455 MSK) | **3,868 MSK** |
+
+(Derived, not transcribed: `consensus/core/tests/palw_newcomer_bond_sizing.rs` recomputes every one
+of these from the shipped class profiles and fails if a profile moves them. Sizing is
+`144,020 × pwu_per_inference` on this chain's windows.)
+
+**The funding UTXO has to cover the change output too, and that is a second refusal.** A bond
+carrier is one input and two outputs — the collateral, and your change — and KIP-0009 storage mass
+is `C · p² / value`, so it grows as an output SHRINKS. Naming a large collateral therefore does not
+end the relay problem, it moves it onto the change: fund with exactly the collateral plus a fee and
+the change output is the thing that is too small to relay. The smallest change a carrier can leave
+on this chain is **8,333,316 sompi** (0.0833 MSK), and the carrier fee is a few hundred thousand
+sompi on top, which is where the **+0.1 MSK** in the table above comes from.
+
+That second refusal is much harder to read than the first, because `--palw-bond-collateral` is
+**not** raised when you named it — it is your money and your exposure ceiling, so the node refuses
+instead:
+
+```
+a collateral of <n> sompi leaves this <m> sompi funding UTXO a change output too small to relay
+(<mass> storage mass against a limit of 480000). Fund this node's pay address with more, or lower
+the collateral.
+```
+
+Read that as *fund more*, not as *lower the collateral*: past the even split the mass curve turns
+around, and lowering the collateral there makes the change smaller still.
+
+#### The literal commands
+
+Floor (the zero-download path — everything in §3 unchanged):
+
+```bash
+kaspad --testnet --netsuffix=11 --appdir=~/.t11 \
+  --listen=0.0.0.0:26311 --rpclisten=127.0.0.1:26312 \
+  --addpeer=169.58.39.220:26311 \
+  --palw-register-bond \
+  --palw-producer-key=~/.misaka/miner.seed \
+  --palw-producer-pay-address=<your misakatest: address>
+# needs ~11.2 MSK at that address, in one non-coinbase output
+```
+
+Qwen3.6 — the class flag belongs on the REGISTRATION, not only on the producer:
+
+```bash
+kaspad --testnet --netsuffix=11 --appdir=~/.t11 \
+  --listen=0.0.0.0:26311 --rpclisten=127.0.0.1:26312 \
+  --addpeer=169.58.39.220:26311 \
+  --palw-register-bond \
+  --palw-producer-class=<the full 128 hex for 5bd9ae3d…, from --palw-dump-classes> \
+  --palw-bond-collateral=386745547200 \
+  --palw-producer-key=~/.misaka/miner.seed \
+  --palw-producer-pay-address=<your misakatest: address>
+# needs 3,868 MSK at that address, in ONE non-coinbase output
+```
+
+(Do not put a `#` comment on a continued line — everything after it, including the backslash, is
+comment, and the rest of the command becomes a second one.)
+
+Qwen2.5-A16 is the same command with `--palw-producer-class=71bbb755…`,
+`--palw-bond-collateral=228908844480`, and 2,290 MSK of funding.
+
+`--palw-bond-collateral` is redundant in those commands — with `--palw-producer-class` present the
+node computes the same number itself — and it is written out anyway because it makes the amount you
+have to fund visible in the command that needs it. **The faucet's 0.5 tMSK covers neither tier and
+no longer covers the floor**: it was enough while the node sized one claim, and one claim is the
+sizing this section exists to correct.
+
+Passing a value below what the class needs is allowed and warned about, by name:
+
+```
+[palw-panel] --palw-bond-collateral <n> is below the <m> sompi that a claim of class <id> needs on
+this chain for its whole life (exposure is released at Final, not at bind, so the ceiling has to
+hold every claim in flight at once); this bond will register and its producer may then hold forever
+```
+
+A smaller bond is a legitimate choice — it produces until its ceiling fills and then holds until
+claims finalize — but it is a choice, and until this warning named the configured class an operator
+mining Qwen3.6 saw no warning at any value above 400,000 sompi.
+
+**The relay limit also sets a floor UNDER the collateral, for anyone who names a small one.** The
+same `C · p² / value` curve that bites the change output bites the collateral output from the other
+side: a 400,000 sompi output costs 10,000,000 mass against the 480,000 limit, and a carrier holding
 it is refused as non-standard no matter how it is funded —
 
 ```
@@ -172,20 +294,12 @@ the carrier was refused: transaction ... is not standard: transaction storage ma
 is larger than max allowed size of 480000
 ```
 
-On testnet-11 that puts the smallest carryable collateral at **8,333,924 sompi** when the funding
-UTXO holds 10 MSK — twenty times the chain's own floor. (The exact number moves with the funding
-amount and the fee, because the change output pays mass too.) The node computes it from the funding
-UTXO it is about to spend and **raises its default to fit**, saying so:
-
-```
-[palw-panel] raising collateral from 400000 to <n> sompi — an output of 400000 costs 10000003
-storage mass against a relay limit of 480000, so a carrier holding one cannot be submitted.
-Pass --palw-bond-collateral to choose the amount yourself.
-```
-
-A collateral you named yourself is **not** raised — it is your money and your exposure ceiling, so
-too small a value is refused with the number that would work instead. If the funding UTXO is small
-enough that no split of it clears the limit, the message says that too: send more, rather than
+On testnet-11 the smallest carryable collateral is about **8,333,316 sompi**, twenty times the
+chain's own floor. This no longer bites the default, which is now three orders of magnitude past it
+(the table above), but it still bites a `--palw-bond-collateral` you chose yourself. The node raises
+a DEFAULT to fit and says so; a value you named is **not** raised — it is your money and your
+exposure ceiling, so it is refused with the number that would work instead. If the funding UTXO is
+small enough that no split of it clears the limit, the message says that too: send more, rather than
 reaching for the collateral knob.
 
 ---
@@ -288,8 +402,17 @@ panel-verified, **is paid its worker share to its own miner script**, and moves 
 per-class difficulty and ADR-0054 share growth. You do not need to win the tip race; you need the
 work to be real, because the panel re-derives it and a false claim is slashed against your bond.
 
-To produce in an LLM class instead of the floor, everything in §1–§4 stays the same (same bond,
-same key, same node) plus the class artifact and two flags:
+To produce in an LLM class instead of the floor, everything in §1–§4 stays the same (same key, same
+node) plus the class artifact and two flags:
+
+> **Not the same bond.** A bond's exposure ceiling is `collateral × 500 / 1000` and one claim
+> reserves `pwu_per_inference × 5`, so a floor-sized bond (1,110,106,160 sompi, ceiling 555,053,080)
+> holds about **41** concurrent Qwen3.6 claims where it has to hold **7,201** — and claims release
+> their exposure at `Final`, up to 7,200 DAA after they are created. A floor bond therefore produces
+> in a model tier for a while and then holds forever. Register the bond with `--palw-producer-class`
+> already set and it is sized correctly the first time; §3's *Collateral* section has the number for
+> each class and the funding that carries it. If the bond already exists at the floor's size, it
+> cannot be topped up — collateral is fixed at registration — so it is a new key and a new bond.
 
 | class | artifact | obtain |
 |---|---|---|
