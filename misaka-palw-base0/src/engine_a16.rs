@@ -900,6 +900,46 @@ pub enum A16PlanErrorV1 {
     /// A declared node is outside this build's served vocabulary. `table` is "pre" / "layer" /
     /// "post"; the reason names the missing piece (kernel, operand, width, arity or dtype).
     UnservedNode { table: &'static str, index: usize, reason: String },
+    /// **ADR-0067 SA-1: the declaration would materialise more than the interpreted path is
+    /// allowed to hold.** A chain-registered profile is a stranger's program, and one token's
+    /// walk commits one row per declared node — so the row widths and the node counts in a
+    /// registration are an allocation the registrant chose. Refused at PLAN time, before a byte
+    /// is allocated, because a ceiling that notices after the allocation is not a ceiling.
+    OverMemoryCeiling { bytes: u64, ceiling: u64 },
+}
+
+/// **The interpreted path's memory ceiling (ADR-0067 SA-1), in bytes of one token's committed
+/// trace.**
+///
+/// What it bounds is exactly what a registration controls: the number of declared nodes and the
+/// width of each one's committed row, times the layers the layer table is walked for. It does not
+/// bound the artifact or the KV cache, because those are sized by the WEIGHTS this operator chose
+/// to hold, not by the stranger who registered the graph.
+///
+/// A gibibyte is far above any honest class — the corrected A16 profile is single-digit
+/// megabytes — and far below "the node dies". The point of a number in that range is that it can
+/// only ever be hit deliberately, which is what makes a refusal here informative rather than a
+/// tuning problem.
+pub const PALW_INTERPRETER_TRACE_BYTES_CEILING_V1: u64 = 1 << 30;
+
+/// How many bytes one token's committed trace costs under `profile`, counted the way
+/// `forward_token_planned` actually spends them: one `i32` row per declared node, the layer table
+/// once per layer, and `max_kv_len` standing in for a kv-scaled row's longest form.
+///
+/// Saturating throughout: this is called ON adversarial input, so an overflow that wrapped to a
+/// small number would be the exact failure the ceiling exists to prevent.
+pub fn interpreted_trace_bytes_v1(profile: &PalwShapeProfileV3, max_kv_len: u64) -> u64 {
+    let row_elems = |node: &PalwStepNodeV1| -> u64 {
+        match node.out_len {
+            PalwStepOutLenV1::Fixed { elements } => elements as u64,
+            PalwStepOutLenV1::KvScaled { multiplier } => (multiplier as u64).saturating_mul(max_kv_len),
+        }
+    };
+    let table = |nodes: &[PalwStepNodeV1]| -> u64 { nodes.iter().fold(0u64, |acc, n| acc.saturating_add(row_elems(n))) };
+    let elems = table(&profile.pre_nodes)
+        .saturating_add(table(&profile.attn_nodes).saturating_mul(profile.layer_count as u64))
+        .saturating_add(table(&profile.post_nodes));
+    elems.saturating_mul(std::mem::size_of::<i32>() as u64)
 }
 
 /// A node's data input, resolved at plan time.
@@ -991,7 +1031,29 @@ impl<'a> A16Engine<'a> {
     /// execution will emit exactly one row per declared node, in the declared order, from the
     /// declared operands, because the declaration is the program.
     pub fn plan_from_profile(&self, profile: &PalwShapeProfileV3) -> Result<A16ProfilePlanV1, A16PlanErrorV1> {
+        self.plan_from_profile_within(profile, PALW_INTERPRETER_TRACE_BYTES_CEILING_V1)
+    }
+
+    /// [`Self::plan_from_profile`] under a caller-chosen ceiling — ADR-0067 SA-1.
+    ///
+    /// The ceiling is a parameter so it can be PROVEN to bind: a test that only ever runs at the
+    /// shipped value can show that nothing crashed, which is not the same claim. Node code takes
+    /// the default; the fuzz gate and the ceiling's own test drive it down until it refuses, which
+    /// is the evidence the amendment asks for.
+    pub fn plan_from_profile_within(
+        &self,
+        profile: &PalwShapeProfileV3,
+        ceiling_bytes: u64,
+    ) -> Result<A16ProfilePlanV1, A16PlanErrorV1> {
         let shape = &self.artifact.shape;
+        // **First, before anything else is compiled.** The refusal must land before the plan
+        // allocates and before the walk does; every later check is about whether the arithmetic is
+        // servable, and "servable" is not a question worth asking about a program that cannot be
+        // held. `max_position` is the artifact's own bound on a kv-scaled row.
+        let bytes = interpreted_trace_bytes_v1(profile, shape.max_position as u64);
+        if bytes > ceiling_bytes {
+            return Err(A16PlanErrorV1::OverMemoryCeiling { bytes, ceiling: ceiling_bytes });
+        }
         let check = |what: &'static str, p: u64, a: u64| -> Result<(), A16PlanErrorV1> {
             if p != a { Err(A16PlanErrorV1::GeometryMismatch { what, profile: p, artifact: a }) } else { Ok(()) }
         };

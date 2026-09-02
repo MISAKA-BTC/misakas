@@ -320,9 +320,249 @@ pub fn fuzz_a16_profiles_v1(seed: u64, iterations: u64) -> FuzzTallyV1 {
     tally
 }
 
+/// **ADR-0067 security amendment SA-1's second corpus: profiles built to EXHAUST MEMORY and to
+/// RECURSE.**
+///
+/// The saturation run above mutates a real profile the way a stranger's registration might
+/// differ from it — order, arity, kernels, names, widths — and that is the right corpus for
+/// "does the interpreter compute the wrong thing". It is the wrong corpus for "does the
+/// interpreter survive a program written to kill it", because its width edits draw from a small
+/// range and its structural edits keep the tables small. A chain-registered profile is a
+/// stranger's PROGRAM, and the two things a stranger's program does to a host are allocate and
+/// recurse.
+///
+/// So this is a separate generator with a separate tally, deliberately NOT folded into
+/// [`fuzz_a16_profiles_v1`]: that run's corpus digest is a cross-architecture pin, and a pin that
+/// moves whenever someone adds a mutation is a pin nobody trusts. Two corpora, two questions.
+///
+/// The edits, and what each is trying to do:
+///
+/// * **exhaust** — maximal `Fixed` row widths, maximal kv-scaled multipliers, tables grown to the
+///   per-table cap, `tile_len` pushed to its maximum (which is what lets a huge row still fit the
+///   leaf bound and reach the planner at all), and geometry fields raised toward their own caps;
+/// * **recurse** — self references, forward references, chains that thread every node of a table
+///   in sequence, and maximal fan-in. The graph rules refuse most of these at the GATE, which is
+///   the correct outcome and is exactly why they belong in a corpus: a rule that refuses them is
+///   a rule worth running against them.
+///
+/// The plan step runs under the caller's `ceiling_bytes` so the memory ceiling can be shown to
+/// BIND rather than merely to exist, and both the plan and the walk run under `catch_unwind`,
+/// because "the planner panicked" is a finding the previous corpus could not have reported.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AdversarialTallyV1 {
+    pub iterations: u64,
+    pub gate_refused: u64,
+    /// Refused by the planner for an ordinary reason (an unserved node, a width, an arity).
+    pub plan_refused: u64,
+    /// **Refused by the memory ceiling** — the column that makes the ceiling a measurement.
+    pub refused_by_memory_ceiling: u64,
+    pub executed: u64,
+    /// The findings. Any non-zero is the fence staying down.
+    pub panics: u64,
+    pub nondeterminism: u64,
+    /// The largest one-token trace any GATE-ACCEPTED profile in this run would have committed —
+    /// reported so a non-zero `refused_by_memory_ceiling` is a number and not a hope.
+    pub max_trace_bytes_seen: u64,
+}
+
+/// A tile width for an inflated row. **The tile is what decides whether the gate ever sees the
+/// row**, and it pulls two ways: the leaf bound counts TILES, so a wide row needs a wide tile to
+/// stay under it, while the court-cost ceiling bounds a close — which carries a tile — so a tile
+/// that is too wide is refused for the opposite reason. An attacker looking for the largest
+/// declaration the gate will admit searches exactly this interval, so the corpus does too. The
+/// maximum is kept in the set because a shape refused for being over the court ceiling is also
+/// worth generating; it is just refused by a different rule.
+fn wide_tile(rng: &mut FuzzRng) -> u32 {
+    const CANDIDATES: [u32; 5] = [1_024, 4_096, 8_192, 16_384, kaspa_consensus_core::palw_step::PALW_STEP_MAX_TILE_LEN];
+    CANDIDATES[rng.below(CANDIDATES.len() as u64) as usize]
+}
+
+/// One adversarial edit. Returns nothing: the profile is mutated in place, and a mutation the
+/// gate then refuses is a result, not a failure.
+fn mutate_adversarially(rng: &mut FuzzRng, profile: &mut PalwShapeProfileV3) {
+    let pick = |rng: &mut FuzzRng, p: &mut PalwShapeProfileV3| -> *mut Vec<PalwStepNodeV1> {
+        match rng.below(3) {
+            0 => &mut p.pre_nodes,
+            1 => &mut p.attn_nodes,
+            _ => &mut p.post_nodes,
+        }
+    };
+    match rng.below(10) {
+        // ---- exhaust -----------------------------------------------------------------------
+        0 => {
+            // A maximal fixed row. `tile_len` goes with it: the leaf bound counts TILES, so a
+            // wide row only reaches the planner if its tiles are wide too — which is the shape an
+            // attacker would find, so it is the shape the corpus must carry.
+            let t: &mut Vec<PalwStepNodeV1> = unsafe { &mut *pick(rng, profile) };
+            if t.is_empty() {
+                return;
+            }
+            let i = rng.below(t.len() as u64) as usize;
+            t[i].out_len = PalwStepOutLenV1::Fixed { elements: u32::MAX - rng.below(4) as u32 };
+            t[i].tile_len = wide_tile(rng);
+        }
+        1 => {
+            let t: &mut Vec<PalwStepNodeV1> = unsafe { &mut *pick(rng, profile) };
+            if t.is_empty() {
+                return;
+            }
+            let i = rng.below(t.len() as u64) as usize;
+            t[i].out_len = PalwStepOutLenV1::KvScaled { multiplier: u32::MAX - rng.below(4) as u32 };
+            t[i].tile_len = wide_tile(rng);
+        }
+        2 => {
+            // Grow a table to its cap by duplication: N times the rows, N times the allocation,
+            // with every node individually legal.
+            let t: &mut Vec<PalwStepNodeV1> = unsafe { &mut *pick(rng, profile) };
+            let cap = kaspa_consensus_core::palw_step::PALW_STEP_MAX_NODES_PER_TABLE;
+            while !t.is_empty() && t.len() < cap {
+                let clone = t[t.len() - 1].clone();
+                t.push(clone);
+            }
+        }
+        3 => {
+            // The layer table is walked once per layer, so the layer count multiplies whatever
+            // the table costs. Raised toward the profile cap rather than to it, because the
+            // enumeration bound couples it to `n_ctx`.
+            profile.layer_count = 1 + rng.below(kaspa_consensus_core::palw_step::PALW_STEP_MAX_LAYERS as u64) as u16;
+        }
+        4 => {
+            profile.n_ctx = 1 + rng.below(1 << 20) as u32;
+        }
+        5 => {
+            // Every table at once — the honest worst case, since a registrant writes all three.
+            for t in [&mut profile.pre_nodes, &mut profile.attn_nodes, &mut profile.post_nodes] {
+                for n in t.iter_mut() {
+                    n.out_len = PalwStepOutLenV1::Fixed { elements: 1 << (16 + rng.below(14) as u32).min(31) };
+                    n.tile_len = wide_tile(rng);
+                }
+            }
+        }
+        // ---- recurse -----------------------------------------------------------------------
+        6 => {
+            // A node that reads itself. The graph rule refuses it; the corpus proves the rule
+            // runs before anything walks the reference.
+            let t: &mut Vec<PalwStepNodeV1> = unsafe { &mut *pick(rng, profile) };
+            if t.is_empty() {
+                return;
+            }
+            let i = rng.below(t.len() as u64) as usize;
+            t[i].input_refs = vec![i as u16];
+        }
+        7 => {
+            // A forward reference: a committed input defined by the output that explains it.
+            let t: &mut Vec<PalwStepNodeV1> = unsafe { &mut *pick(rng, profile) };
+            if t.len() < 2 {
+                return;
+            }
+            let i = rng.below((t.len() - 1) as u64) as usize;
+            t[i].input_refs = vec![(i + 1) as u16];
+        }
+        8 => {
+            // A chain threading every node of a table in sequence — legal, and the deepest
+            // dependency this space can express. What it hunts is a resolver that recurses per
+            // edge instead of walking the table once.
+            let t: &mut Vec<PalwStepNodeV1> = unsafe { &mut *pick(rng, profile) };
+            for i in 1..t.len() {
+                t[i].input_refs = vec![(i - 1) as u16];
+            }
+        }
+        _ => {
+            // Maximal fan-in, all onto one earlier row.
+            let t: &mut Vec<PalwStepNodeV1> = unsafe { &mut *pick(rng, profile) };
+            if t.len() < 2 {
+                return;
+            }
+            let i = 1 + rng.below((t.len() - 1) as u64) as usize;
+            t[i].input_refs = vec![0u16; 8];
+        }
+    }
+}
+
+/// Drive `iterations` adversarially-shaped profiles through gate → plan (under `ceiling_bytes`) →
+/// double execution. See [`AdversarialTallyV1`] for what each column means.
+pub fn fuzz_a16_adversarial_profiles_v1(seed: u64, iterations: u64, ceiling_bytes: u64) -> AdversarialTallyV1 {
+    let (artifact, base) = tiny_class();
+    let engine = A16Engine::new(&artifact).expect("the store resolves");
+    let bundle = kaspa_consensus_core::palw_fp_devnet_v3::palw_fp_devnet_bundle_v3(
+        base.shape_profile_id(),
+        kaspa_hashes::Hash64::from_u64_word(0xCA7),
+        kaspa_hashes::Hash64::from_u64_word(0xC0757),
+        4_096,
+        kaspa_hashes::Hash64::from_u64_word(0xA7),
+        kaspa_consensus_core::palw_fp_devnet_v3::palw_devnet_bond_registry_v1(
+            kaspa_consensus_core::palw_fp_devnet_v3::palw_v2_min_genesis_bonds_v1(),
+        ),
+    )
+    .expect("the devnet bundle assembles");
+    let root = artifact.artifact_digest();
+
+    let mut rng = FuzzRng::new(seed);
+    let mut tally = AdversarialTallyV1 { iterations, ..Default::default() };
+    for _ in 0..iterations {
+        let mut profile = base.clone();
+        // One to three edits, so an exhausting shape can also be a recursing one.
+        for _ in 0..=rng.below(3) {
+            mutate_adversarially(&mut rng, &mut profile);
+        }
+        if !gate_accepts(&bundle, &profile, root) {
+            tally.gate_refused += 1;
+            continue;
+        }
+        tally.max_trace_bytes_seen = tally
+            .max_trace_bytes_seen
+            .max(crate::engine_a16::interpreted_trace_bytes_v1(&profile, artifact.shape.max_position as u64));
+        // **The planner runs under `catch_unwind` too.** The other corpus wraps only the walk,
+        // which cannot see a planner that panics on a shape it never had to consider.
+        let planned =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| engine.plan_from_profile_within(&profile, ceiling_bytes)));
+        let plan = match planned {
+            Err(_) => {
+                tally.panics += 1;
+                continue;
+            }
+            Ok(Err(crate::engine_a16::A16PlanErrorV1::OverMemoryCeiling { .. })) => {
+                tally.refused_by_memory_ceiling += 1;
+                continue;
+            }
+            Ok(Err(_)) => {
+                tally.plan_refused += 1;
+                continue;
+            }
+            Ok(Ok(plan)) => plan,
+        };
+        let prompt: Vec<usize> = (0..(1 + rng.below(4) as usize)).map(|_| rng.below(64) as usize).collect();
+        let run = |()| -> Result<Vec<(Vec<i32>, crate::engine_a16::A16TraceV1)>, ()> {
+            let mut cache = crate::engine_a16::A16Cache::new(artifact.shape.n_layers);
+            let mut out = Vec::new();
+            for (position, token) in prompt.iter().enumerate() {
+                match engine.forward_token_planned(&plan, &mut cache, *token, position) {
+                    Ok(pair) => out.push(pair),
+                    Err(_) => return Err(()),
+                }
+            }
+            Ok(out)
+        };
+        let first = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(())));
+        let second = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run(())));
+        match (first, second) {
+            (Ok(a), Ok(b)) => {
+                if a != b {
+                    tally.nondeterminism += 1;
+                } else {
+                    tally.executed += 1;
+                }
+            }
+            _ => tally.panics += 1,
+        }
+    }
+    tally
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine_a16::PALW_INTERPRETER_TRACE_BYTES_CEILING_V1;
 
     /// The CI-sized slice of the saturation run: enough iterations to exercise every mutation
     /// arm, small enough to live in the suite. Zero findings is the assertion; the counters are
@@ -370,4 +610,78 @@ mod tests {
 
     /// Seed `0x0067_2026_08_31`, 400 iterations. See the test above.
     const CORPUS_DIGEST_400: &str = "90939894923247d3e1eb18478b0495744e9ff0416bb9a20d16d01f0c411ff5eb";
+
+    /// **ADR-0067 SA-1, first half: the corpus contains profiles built to exhaust memory and to
+    /// recurse, and driving them finds no panic.**
+    ///
+    /// The columns are printed because the interesting failure of an adversarial corpus is not a
+    /// finding — it is a corpus that stopped reaching anything. `gate_refused` climbing to the
+    /// iteration count would mean the generator only ever writes shapes the gate throws out, which
+    /// asserts about the gate and nothing about the interpreter.
+    #[test]
+    fn the_adversarial_corpus_reaches_the_interpreter_without_a_panic() {
+        let tally = fuzz_a16_adversarial_profiles_v1(0x0067_5A01, 400, PALW_INTERPRETER_TRACE_BYTES_CEILING_V1);
+        println!("adversarial tally: {tally:?}");
+        assert_eq!(tally.panics, 0, "a panic on a hostile profile is the fence staying down — planner or walk");
+        assert_eq!(tally.nondeterminism, 0, "two runs of one plan must be one bitstream, hostile shape or not");
+        assert!(
+            tally.gate_refused < tally.iterations,
+            "every generated profile was refused at the gate: this corpus would then assert nothing about the \
+             interpreter, which is the failure mode an adversarial corpus has"
+        );
+    }
+
+    /// **ADR-0067 SA-1, second half: the memory ceiling is PROVEN TO BIND.**
+    ///
+    /// The amendment's own wording is the reason this test exists in this shape: a run under the
+    /// shipped ceiling that reports zero panics shows that nothing crashed, which is not evidence
+    /// that anything would have been stopped. So the corpus is run against a ceiling the generated
+    /// shapes actually cross, and the assertion is that the ceiling REFUSED them — by name, at plan
+    /// time, before an allocation.
+    ///
+    /// **What the run measures, stated because it is smaller than it sounds and the honest number
+    /// is the useful one.** At 400 iterations of seed `0x0067_5A01` the admission GATE refuses 372
+    /// of the generated shapes, and the largest one-token trace any gate-ACCEPTED profile would
+    /// have committed is 26,624 bytes — not gigabytes. The wide-row arms never reach the planner
+    /// at all: the leaf bound multiplies a node's tiles by positions and layers, so a `u32::MAX`
+    /// row blows `PALW_STEP_MAX_LEAVES` whatever tile width it picks. That is the gate doing
+    /// exactly its job, and it means the ceiling is a SECOND line rather than the only one.
+    ///
+    /// Which is why the mechanism is also pinned directly, one byte under an honest profile's own
+    /// cost, below: "the gate happens to refuse everything big" is a fact about today's gate, and
+    /// the ceiling has to bind on its own terms or it is not a ceiling.
+    #[test]
+    fn the_interpreter_memory_ceiling_actually_stops_a_hostile_profile() {
+        // One kibibyte of committed trace: far below anything the generator's inflated rows cost,
+        // and the tiny fixture's own honest profile is comfortably under it, so a refusal here is
+        // the ceiling and not the fixture.
+        let bound = fuzz_a16_adversarial_profiles_v1(0x0067_5A01, 400, 1 << 10);
+        println!("ceiling-bound tally: {bound:?}");
+        assert_eq!(bound.panics, 0);
+        assert!(
+            bound.refused_by_memory_ceiling > 0,
+            "the ceiling refused nothing, so nothing here shows it binds — either the generator stopped producing \
+             large declarations or the check stopped running"
+        );
+        assert!(bound.max_trace_bytes_seen > (1 << 10), "…and the corpus really did ask for more than the ceiling allows");
+
+        // The refusal is a named plan error carrying both numbers, not a generic one: an operator
+        // reading it must be able to tell "this class is too big for the rule" from "this build
+        // cannot serve this graph", because only one of those is fixed by raising a bound.
+        let (artifact, base) = tiny_class();
+        let engine = A16Engine::new(&artifact).expect("the store resolves");
+        let honest = crate::engine_a16::interpreted_trace_bytes_v1(&base, artifact.shape.max_position as u64);
+        assert!(honest > 0, "the honest profile must cost something or the ceiling compares against nothing");
+        match engine.plan_from_profile_within(&base, honest - 1) {
+            Err(crate::engine_a16::A16PlanErrorV1::OverMemoryCeiling { bytes, ceiling }) => {
+                assert_eq!((bytes, ceiling), (honest, honest - 1), "the refusal reports what it measured and what it allowed");
+            }
+            other => panic!("a ceiling one byte under the cost must refuse, got {other:?}"),
+        }
+
+        // …and the SHIPPED ceiling does not bind on an honest class, which is the other half of
+        // calibration: a ceiling that refuses real work is an outage, not a defence.
+        assert!(honest < PALW_INTERPRETER_TRACE_BYTES_CEILING_V1);
+        assert!(engine.plan_from_profile(&base).is_ok(), "the corrected profile must plan under the shipped ceiling");
+    }
 }

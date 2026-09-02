@@ -60,6 +60,13 @@ pub enum Qwen36PlanErrorV1 {
     GeometryMismatch { what: &'static str, profile: u64, artifact: u64 },
     /// A declared node this build cannot serve, and why.
     UnservedNode { table: &'static str, index: usize, reason: String },
+    /// **ADR-0067 SA-1: the declaration would materialise more than the interpreted path may
+    /// hold.** The mmap container's sibling of `A16PlanErrorV1::OverMemoryCeiling`, and the same
+    /// argument: a chain-registered profile is a stranger's program, and the row widths and node
+    /// counts in it are an allocation the registrant chose. Refused at PLAN time, before a byte is
+    /// allocated. Leaving one of two interpreters unbounded would have made the ceiling a
+    /// property of which container an attacker picked.
+    OverMemoryCeiling { bytes: u64, ceiling: u64 },
 }
 
 impl std::fmt::Display for Qwen36PlanErrorV1 {
@@ -70,6 +77,11 @@ impl std::fmt::Display for Qwen36PlanErrorV1 {
                 write!(f, "the profile says {what} = {profile} and the artifact says {artifact}")
             }
             Self::UnservedNode { table, index, reason } => write!(f, "{table} node {index} cannot be served: {reason}"),
+            Self::OverMemoryCeiling { bytes, ceiling } => write!(
+                f,
+                "one token's committed trace would be {bytes} bytes and the interpreted path is bounded at {ceiling} \
+                 (ADR-0067 SA-1): a registered graph does not get to choose this node's memory"
+            ),
         }
     }
 }
@@ -266,7 +278,25 @@ impl<'a> Qwen36Engine<'a> {
     /// kernel boundary; an `Ok` is a structural Decision-F proof for this class — the declaration
     /// is the program.
     pub fn plan_from_profile(&self, profile: &PalwShapeProfileV3) -> Result<Qwen36ProfilePlanV1, Qwen36PlanErrorV1> {
+        self.plan_from_profile_within(profile, crate::engine_a16::PALW_INTERPRETER_TRACE_BYTES_CEILING_V1)
+    }
+
+    /// [`Self::plan_from_profile`] under a caller-chosen ceiling — ADR-0067 SA-1, and the same
+    /// shape as the dense container's so the two families cannot be bounded differently by
+    /// accident. The ceiling is a parameter so a test can show it BINDS rather than that nothing
+    /// crashed.
+    pub fn plan_from_profile_within(
+        &self,
+        profile: &PalwShapeProfileV3,
+        ceiling_bytes: u64,
+    ) -> Result<Qwen36ProfilePlanV1, Qwen36PlanErrorV1> {
         let s = &self.artifact.shape;
+        // Before anything is compiled: one token's committed trace, priced from the declaration
+        // itself, against the bound. `max_position` is the artifact's own bound on a kv-scaled row.
+        let bytes = crate::engine_a16::interpreted_trace_bytes_v1(profile, s.max_position as u64);
+        if bytes > ceiling_bytes {
+            return Err(Qwen36PlanErrorV1::OverMemoryCeiling { bytes, ceiling: ceiling_bytes });
+        }
         if profile.lane != PalwStepLaneV1::Int32 {
             return Err(Qwen36PlanErrorV1::NotAnIntegerLane);
         }

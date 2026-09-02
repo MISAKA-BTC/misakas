@@ -3850,6 +3850,62 @@ impl VirtualStateProcessor {
         }
     }
 
+    /// **ADR-0066 SA-2: the DAA through which an attestation counts as re-entry evidence.**
+    ///
+    /// `u64::MAX` — everything is final — below the fence, which is what makes the leak table
+    /// byte-identical to the pre-amendment one on every network that has not armed the leak.
+    fn palw_leak_final_through_daa(&self, daa_score: u64) -> u64 {
+        match self.palw_inactivity_leak {
+            Some(leak) if leak.activation.is_active(daa_score) => daa_score.saturating_sub(leak.reentry_final_depth_daa),
+            _ => u64::MAX,
+        }
+    }
+
+    /// **ADR-0066 SA-1: can this node stand behind the leak table it just built?**
+    ///
+    /// The table comes from `collect_stake_contributions_v2`'s walk, and that walk ends on
+    /// `get_blue_score(chain_block) => break` — a node-local fact. An archival node never hits it;
+    /// a node that joined by a pruned sync hits it at its own pruning point and computes a table
+    /// with a hole in it. Two such nodes exclude different validators, and a rule whose input
+    /// differs by `--archival` is finding F4 wearing a new hat.
+    ///
+    /// So the answer is `SelfComputed` only when this node holds chain history back past the
+    /// window the table is defined over — i.e. its pruning point is at least
+    /// `stake_score_window_blue_score` below the tip. Anything else is `Unverified`, and an
+    /// unverified table leaks nobody (fail closed: full denominator).
+    ///
+    /// **The verified-import half is the gap this ADR still budgets for.** A pruned node ought to
+    /// be able to import the table under `PruningPointOverlaySnapshot`'s existing trustless gate;
+    /// that fourth component does not exist, so such a node stays on the full denominator rather
+    /// than guessing. Conservative, and the only direction that cannot partition.
+    fn palw_leak_table_provenance(
+        &self,
+        tip: BlockHash,
+        daa_score: u64,
+        dns_params: &DnsParams,
+    ) -> kaspa_consensus_core::dns_finality::LeakTableProvenanceV1 {
+        use kaspa_consensus_core::dns_finality::LeakTableProvenanceV1 as Provenance;
+        // **A dormant fence reads no stores.** `Unverified` is what the view means by "leak
+        // nothing", so below the fence this is not merely the same answer — it is the same answer
+        // at the same cost, which is what lets the amendment ship on a live network.
+        if self.palw_inactivity_leak_after(daa_score) == u64::MAX {
+            return Provenance::Unverified;
+        }
+        let Ok(tip_blue) = self.headers_store.get_blue_score(tip) else { return Provenance::Unverified };
+        let Some(pp) = self.pruning_point_store.read().pruning_point().optional().ok().flatten() else {
+            return Provenance::Unverified;
+        };
+        let Ok(pp_blue) = self.headers_store.get_blue_score(pp) else { return Provenance::Unverified };
+        // The window is measured from the tip; the walk can only cover it if the pruning point is
+        // at or below its far edge. `>=` and not `>`: the far edge itself is a block the walk
+        // reads, so a pruning point exactly there still leaves it readable.
+        if tip_blue.saturating_sub(pp_blue) >= dns_params.stake_score_window_blue_score {
+            Provenance::SelfComputed
+        } else {
+            Provenance::Unverified
+        }
+    }
+
     fn palw_frontier_provenance_outcome(&self, candidate: BlockHash, prev_sink: BlockHash) -> DnsReorgOutcome {
         use kaspa_consensus_core::palw_state_v2::PalwDeltaEntryV2;
 
@@ -6280,11 +6336,17 @@ impl VirtualStateProcessor {
         // the numerator is aggregated from, so "counted as present" and "counted as voting" are
         // one fact. A validator with no contribution in the walked window and no fresh bond is
         // past the leak's grace exactly when the window itself says so.
-        let last_attestation =
-            kaspa_consensus_core::dns_finality::last_attestation_daa_by_validator(&contributions, &epoch_anchor_daa);
+        let last_attestation = kaspa_consensus_core::dns_finality::last_attestation_daa_by_validator(
+            &contributions,
+            &epoch_anchor_daa,
+            self.palw_leak_final_through_daa(sink_daa),
+        );
         let leak = kaspa_consensus_core::dns_finality::InactivityLeakViewV1 {
             last_attestation_daa: &last_attestation,
             leak_after_daa: self.palw_inactivity_leak_after(sink_daa),
+            // ADR-0066 SA-3: the floor the leak may not take the denominator below.
+            min_retained_validators: dns_params.min_active_validators,
+            table: self.palw_leak_table_provenance(sink, sink_daa, dns_params),
         };
         let totals = self.total_weight_by_epoch(sink, &bonds, net_id.as_byte_slice(), dns_params, &epoch_anchor_daa, weight, leak);
         let per_epoch = aggregate_epoch_tallies(&contributions, &totals);
@@ -6326,11 +6388,16 @@ impl VirtualStateProcessor {
                 let shadow_weight = ContributionWeight::Vlt { snapshot: &snapshot, vlt: &dns_params.vlt };
                 let (shadow_contribs, shadow_anchor_daa) =
                     self.collect_stake_contributions_v2(sink, None, &bonds, net_id.as_byte_slice(), dns_params, shadow_weight);
-                let shadow_last =
-                    kaspa_consensus_core::dns_finality::last_attestation_daa_by_validator(&shadow_contribs, &shadow_anchor_daa);
+                let shadow_last = kaspa_consensus_core::dns_finality::last_attestation_daa_by_validator(
+                    &shadow_contribs,
+                    &shadow_anchor_daa,
+                    self.palw_leak_final_through_daa(sink_daa),
+                );
                 let shadow_leak = kaspa_consensus_core::dns_finality::InactivityLeakViewV1 {
                     last_attestation_daa: &shadow_last,
                     leak_after_daa: self.palw_inactivity_leak_after(sink_daa),
+                    min_retained_validators: dns_params.min_active_validators,
+                    table: self.palw_leak_table_provenance(sink, sink_daa, dns_params),
                 };
                 let shadow_totals = self.total_weight_by_epoch(
                     sink,
@@ -7097,11 +7164,16 @@ impl VirtualStateProcessor {
             self.vlt_epoch_snapshot(tip, sink_daa, bonds, net_id, dns_params, dns_params.vlt_shadow_active_at(sink_daa), false);
         let weight = ContributionWeight::Vlt { snapshot: &snapshot, vlt: &dns_params.vlt };
         let (contributions, epoch_anchor_daa) = self.collect_stake_contributions_v2(tip, None, bonds, net_id, dns_params, weight);
-        let last_attestation =
-            kaspa_consensus_core::dns_finality::last_attestation_daa_by_validator(&contributions, &epoch_anchor_daa);
+        let last_attestation = kaspa_consensus_core::dns_finality::last_attestation_daa_by_validator(
+            &contributions,
+            &epoch_anchor_daa,
+            self.palw_leak_final_through_daa(sink_daa),
+        );
         let leak = kaspa_consensus_core::dns_finality::InactivityLeakViewV1 {
             last_attestation_daa: &last_attestation,
             leak_after_daa: self.palw_inactivity_leak_after(sink_daa),
+            min_retained_validators: dns_params.min_active_validators,
+            table: self.palw_leak_table_provenance(tip, sink_daa, dns_params),
         };
         let totals = self.total_weight_by_epoch(tip, bonds, net_id, dns_params, &epoch_anchor_daa, weight, leak);
         let prevoted = quorum_epochs(&aggregate_epoch_tallies(&contributions, &totals), dns_params.vlt.min_network_compute);

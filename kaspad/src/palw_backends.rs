@@ -84,14 +84,100 @@ impl PalwBackendRegistry {
     {
         match self.sdk.resolve(class_id, artifact_root, &self.holdings) {
             Ok(backend) => Ok(backend),
-            Err(table_refusal) => match fetch(class_id) {
-                Some((profile, canonical)) => {
-                    self.sdk.resolve_chain_registered(class_id, artifact_root, &self.holdings, &profile, &canonical)
+            Err(table_refusal) => {
+                // **ADR-0067 SA-2: a class this node already failed to serve is not compiled
+                // again.** The chain arm fetches a stranger's declaration and compiles it; a
+                // hostile registration that costs a second to refuse costs that second on EVERY
+                // duty until it is remembered. The mark is node-local serviceability and nothing
+                // else — see `unservable_chain_classes`.
+                if let Some(why) = remembered_unservable(class_id, artifact_root) {
+                    return Err(why);
                 }
-                None => Err(table_refusal),
-            },
+                match fetch(class_id) {
+                    Some((profile, canonical)) => {
+                        match self.sdk.resolve_chain_registered(class_id, artifact_root, &self.holdings, &profile, &canonical) {
+                            Ok(backend) => Ok(backend),
+                            Err(why) => {
+                                remember_unservable(class_id, artifact_root, &why);
+                                Err(why)
+                            }
+                        }
+                    }
+                    None => Err(table_refusal),
+                }
+            }
         }
     }
+}
+
+/// **ADR-0067 SA-2: the classes this node has tried to serve from chain data and could not.**
+///
+/// Keyed by `(class_id, artifact_root)` — the two facts the chain states — and holding the refusal
+/// text, so the second caller gets the same sentence the first did.
+///
+/// **What this is NOT, said where the map is:** it is not a consensus fact and it can never reject
+/// a block. Nothing in `consensus/` links against `misaka-palw-sdk` at all
+/// (`class_resolution_is_not_reachable_from_the_block_processing_path` asserts it from the
+/// manifests), so a profile that refuses to compile stops this node from PRODUCING or JUDGING for
+/// that class and stops nothing else. That is the whole of SA-2: resolution is lazy, off the block
+/// path, and fails closed to "cannot serve" — because the alternative is a stranger's registration
+/// stalling every validator's pipeline once.
+///
+/// The mark is dropped when the holdings it was computed against are (SA-3): a refusal that said
+/// "this node holds no artifact whose digest is the registered root" is a statement about the
+/// node's files, and it stops being true the moment the operator supplies them.
+fn unservable_chain_classes() -> &'static Mutex<HashMap<(Hash64, Hash64), String>> {
+    static UNSERVABLE: OnceLock<Mutex<HashMap<(Hash64, Hash64), String>>> = OnceLock::new();
+    UNSERVABLE.get_or_init(Default::default)
+}
+
+fn remembered_unservable(class_id: Hash64, artifact_root: Hash64) -> Option<String> {
+    unservable_chain_classes().lock().unwrap_or_else(|p| p.into_inner()).get(&(class_id, artifact_root)).cloned()
+}
+
+fn remember_unservable(class_id: Hash64, artifact_root: Hash64, why: &str) {
+    warn!("[palw] class {class_id} is unservable on this node and will not be recompiled until its artifacts change: {why}");
+    unservable_chain_classes().lock().unwrap_or_else(|p| p.into_inner()).insert((class_id, artifact_root), why.to_string());
+}
+
+/// **ADR-0067 SA-3: dropping a held artifact drops every verdict derived from it.**
+///
+/// Two verdicts hang off a holding, and both are derivations from BYTES: the artifact's root (the
+/// positive one — "these bytes are that class's weights") and any "unservable" mark (the negative
+/// one). ADR-0079 Decision 9's rule is that artifact identity never comes from metadata, and the
+/// holdings map is keyed by `(path, len, mtime)` — metadata, and metadata a re-mint can be made to
+/// reproduce. That key is sound only while the mapping it guards is alive, because the mapping is
+/// what pins the bytes the root was computed over. The moment a holding is released, its key stops
+/// standing for anything, so the verdict goes with it and re-entry re-reads the file.
+///
+/// Returns how many holdings were released, so a caller can log a number rather than a hope.
+pub fn evict_held_artifacts_v1(paths: &[PathBuf]) -> usize {
+    let mut held = held_artifacts().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let mut released = 0usize;
+    for path in paths {
+        // The key is recomputed from the file as it is NOW, and a file whose metadata moved is a
+        // file whose old key is unreachable anyway — so eviction also sweeps by path, or a
+        // re-minted file would leave its predecessor's holding (and its root) resident forever.
+        let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        let before = held.len();
+        held.retain(|key, _| key.path != canonical);
+        released += before - held.len();
+    }
+    // The negative verdicts go with them. A class marked unservable because this node held no
+    // matching artifact must be re-judged once the holdings change, or supplying the file would
+    // never take effect — the remembered refusal would outlive the fact it described.
+    unservable_chain_classes().lock().unwrap_or_else(|p| p.into_inner()).clear();
+    released
+}
+
+/// [`evict_held_artifacts_v1`] for every holding this process has — the shape an operator-driven
+/// cache flush takes, and what the tests use to prove re-entry re-reads bytes.
+pub fn evict_all_held_artifacts_v1() -> usize {
+    let mut held = held_artifacts().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    let released = held.len();
+    held.clear();
+    unservable_chain_classes().lock().unwrap_or_else(|p| p.into_inner()).clear();
+    released
 }
 
 /// **What identifies an artifact FILE to the process-wide holdings below**: the path the operator
@@ -154,35 +240,53 @@ pub fn load_class_holdings_v1(role: &str, sdk: &PalwClassSdk, paths: &[PathBuf],
     // the map as it stands rather than losing every holding to one bad file.
     let mut held = held_artifacts().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     let (holdings, skipped) = sdk.load_artifacts_bounded_with_v1(paths, bound_bytes, |path| {
-        let key = HeldArtifactKey::of(path);
-        if let Some(holding) = key.as_ref().and_then(|key| held.get(key)) {
-            info!(
-                "[{role}] class artifact {} is already held by this process ({}): sharing that holding, \
-                 not mapping it a second time",
-                path.display(),
-                holding.lineage_id
-            );
-            return Ok(holding.clone());
-        }
-        if let Some(key) = &key {
-            info!(
-                "[{role}] loading class artifact {} ({:.2} GiB); a mapped class derives its root in one pass over the file, \
-                 which is minutes on a cold disk",
-                path.display(),
-                key.len as f64 / (1u64 << 30) as f64
-            );
-        }
-        let holding = sdk.load_artifact(path)?;
-        info!("[{role}] {}", holding.summary);
-        if let Some(key) = key {
-            held.insert(key, holding.clone());
-        }
-        Ok(holding)
+        held_or_load_locked(&mut held, role, path, |p| sdk.load_artifact(p))
     });
     for (path, why) in &skipped {
         warn!("[{role}] class artifact {} is not held: {why}", path.display());
     }
     holdings
+}
+
+/// One path's half of [`load_class_holdings_v1`], under a lock the caller already holds.
+///
+/// Factored out so the cache's ONE rule — a holding answers for a file only while this process
+/// still holds the mapping that pins its bytes (ADR-0067 SA-3) — has one implementation and can be
+/// tested for what it does after an eviction, which is the half that matters and the half a
+/// process-wide static otherwise hides.
+fn held_or_load_locked<F>(
+    held: &mut HashMap<HeldArtifactKey, PalwLoadedArtifactV1>,
+    role: &str,
+    path: &Path,
+    load: F,
+) -> Result<PalwLoadedArtifactV1, String>
+where
+    F: FnOnce(&Path) -> Result<PalwLoadedArtifactV1, String>,
+{
+    let key = HeldArtifactKey::of(path);
+    if let Some(holding) = key.as_ref().and_then(|key| held.get(key)) {
+        info!(
+            "[{role}] class artifact {} is already held by this process ({}): sharing that holding, \
+             not mapping it a second time",
+            path.display(),
+            holding.lineage_id
+        );
+        return Ok(holding.clone());
+    }
+    if let Some(key) = &key {
+        info!(
+            "[{role}] loading class artifact {} ({:.2} GiB); a mapped class derives its root in one pass over the file, \
+             which is minutes on a cold disk",
+            path.display(),
+            key.len as f64 / (1u64 << 30) as f64
+        );
+    }
+    let holding = load(path)?;
+    info!("[{role}] {}", holding.summary);
+    if let Some(key) = key {
+        held.insert(key, holding.clone());
+    }
+    Ok(holding)
 }
 
 /// The hybrid class's chain id — **re-exported, not re-derived**.
@@ -343,6 +447,16 @@ mod tests {
         std::env::temp_dir().join(format!("misaka-holdings-{name}-{}.palwq36", std::process::id()))
     }
 
+    /// **The holdings map and the unservable map are PROCESS-wide, so a test that clears one runs
+    /// alone.** Eviction is the only operation whose effect is not confined to its own paths
+    /// (ADR-0067 SA-3: changing the holdings re-opens every "unservable" question), which is
+    /// exactly why it cannot share a process with a test asserting that two loads returned one
+    /// mapping. Every test that evicts, and every test an eviction could invalidate, takes this.
+    fn exclusive() -> std::sync::MutexGuard<'static, ()> {
+        static SERIAL: Mutex<()> = Mutex::new(());
+        SERIAL.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
     fn sdk() -> PalwClassSdk {
         PalwClassSdk::builtin_v1(court(), b"misaka-palw-rc".to_vec())
     }
@@ -357,6 +471,7 @@ mod tests {
     /// for the testnet-11 double mapping.
     #[test]
     fn two_duties_naming_one_artifact_share_one_mapping() {
+        let _serial = exclusive();
         let path = temp_artifact("shared");
         write_qwen36_fixture(&path, 1);
         let producer = load_class_holdings_v1("test-producer", &sdk(), std::slice::from_ref(&path), 0);
@@ -406,5 +521,100 @@ mod tests {
         let bounded = load_class_holdings_v1("test", &sdk(), std::slice::from_ref(&path), size - 1);
         assert!(bounded.is_empty(), "the bound skips the file whether or not the process already holds it");
         std::fs::remove_file(&path).ok();
+    }
+
+    /// **ADR-0067 SA-3: eviction retracts the verdict, and re-entry re-reads the bytes.**
+    ///
+    /// The holdings map is keyed by `(path, len, mtime)`, and ADR-0079 Decision 9 says artifact
+    /// identity may not come from metadata. It does not have to: while the mapping is alive it is
+    /// what pins the bytes the root was computed over, so the key is a handle to a live derivation
+    /// rather than a substitute for one. The rule that keeps that true is this one — releasing the
+    /// holding releases the verdict, and the next caller does the byte work again. A cache that
+    /// answered from a remembered root after its mapping was gone would be exactly the metadata
+    /// identity D9 refuses.
+    ///
+    /// Driven through `held_or_load_locked` with a counting loader, because "the bytes were read
+    /// again" is the observable and a returned holding is not.
+    #[test]
+    fn evicting_a_holding_retracts_its_verdict_so_re_entry_reads_the_bytes_again() {
+        let _serial = exclusive();
+        let path = temp_artifact("evicted");
+        write_qwen36_fixture(&path, 1);
+        let reads = std::cell::Cell::new(0usize);
+        let counting = |p: &Path| -> Result<PalwLoadedArtifactV1, String> {
+            reads.set(reads.get() + 1);
+            Ok(PalwLoadedArtifactV1::from_parts(
+                "test-lineage",
+                Some(p.to_path_buf()),
+                "a fixture holding".to_string(),
+                std::sync::Arc::new(reads.get()),
+            ))
+        };
+        {
+            let mut held = held_artifacts().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            held_or_load_locked(&mut held, "test", &path, counting).expect("first load");
+            assert_eq!(reads.get(), 1, "the first call must read the file");
+            held_or_load_locked(&mut held, "test", &path, counting).expect("cached");
+            assert_eq!(reads.get(), 1, "a live mapping answers without a second pass — that is the cache");
+        }
+        // The verdict is dropped with the mapping…
+        assert!(evict_held_artifacts_v1(std::slice::from_ref(&path)) >= 1, "the holding was released");
+        {
+            let mut held = held_artifacts().lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+            held_or_load_locked(&mut held, "test", &path, counting).expect("re-entry");
+            assert_eq!(reads.get(), 2, "…and re-entry derives from bytes, never from what the cache remembered");
+        }
+        evict_held_artifacts_v1(std::slice::from_ref(&path));
+        std::fs::remove_file(&path).ok();
+    }
+
+    /// **ADR-0067 SA-2: an unservable chain class is remembered, and forgotten when the holdings
+    /// that made it unservable change.**
+    ///
+    /// The mark exists so a hostile registration costs one compile per node rather than one per
+    /// duty. It must also be exactly as short-lived as the fact it records: most refusals say
+    /// "this node holds no artifact whose digest is the registered root", which stops being true
+    /// the moment the operator supplies the file. A remembered refusal that outlived its cause
+    /// would make supplying the artifact do nothing.
+    #[test]
+    fn an_unservable_chain_class_is_remembered_until_the_holdings_change() {
+        let _serial = exclusive();
+        evict_all_held_artifacts_v1();
+        let class = Hash64::from_u64_word(0x0067_5A02);
+        let root = Hash64::from_u64_word(0x0067_5A03);
+        assert!(remembered_unservable(class, root).is_none(), "nothing is unservable before anything was tried");
+        remember_unservable(class, root, "the profile names a kernel this build does not carry");
+        assert_eq!(
+            remembered_unservable(class, root).as_deref(),
+            Some("the profile names a kernel this build does not carry"),
+            "the second caller gets the first caller's sentence, without recompiling a stranger's graph"
+        );
+        // A different pairing is a different question and is not answered by this mark.
+        assert!(remembered_unservable(class, Hash64::from_u64_word(0xFEED)).is_none());
+        evict_all_held_artifacts_v1();
+        assert!(remembered_unservable(class, root).is_none(), "changing the holdings re-opens the question");
+    }
+
+    /// **ADR-0067 SA-2's load-bearing half, asserted from the manifests: class resolution is not
+    /// reachable from block processing at all.**
+    ///
+    /// The amendment asks that resolving a chain class — fetching bytes, verifying a digest,
+    /// compiling a stranger's profile — never run on the block-processing path, so that a hostile
+    /// registration cannot stall every validator's pipeline. The strongest form of that is not a
+    /// discipline about where a call is made; it is that the consensus crates cannot make the call.
+    /// They do not depend on `misaka-palw-sdk`, and this asserts it where a future edit would have
+    /// to notice: adding the dependency fails here, before anyone writes the call site.
+    #[test]
+    fn class_resolution_is_not_reachable_from_the_block_processing_path() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
+        for manifest in ["consensus/Cargo.toml", "consensus/core/Cargo.toml", "consensus/pow/Cargo.toml"] {
+            let path = root.join(manifest);
+            let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            assert!(
+                !text.contains("misaka-palw-sdk"),
+                "{manifest} depends on the class SDK — resolving a chain-registered class would then be reachable \
+                 from block processing, and one hostile profile could stall every validator (ADR-0067 SA-2)"
+            );
+        }
     }
 }
