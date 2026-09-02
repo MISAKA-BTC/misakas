@@ -631,3 +631,83 @@ pub async fn retire(ctx: &Ctx, ks: &KeySource, bond_arg: Option<&str>, class_id:
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod retirement_domain_tests {
+    use super::*;
+    use kaspa_consensus_core::Hash64;
+    use kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for;
+    use kaspa_consensus_core::palw_state_v2::PALW_BOND_CAPABILITY_V2_MLDSA87_CONTEXT;
+    use kaspa_pq_validator_core::ValidatorKey;
+
+    fn bond() -> PalwBondKeyV2 {
+        PalwBondKeyV2(TransactionOutpoint { transaction_id: Hash64::from_u64_word(0xB0AD), index: 2 })
+    }
+
+    /// **ADR-0063 SA-3: a retirement is signed under the network domain, so a devnet signature is
+    /// not an RC signature.**
+    ///
+    /// This is a check that the shape ALREADY holds — `palw_bond_retirement_message_v2` takes the
+    /// domain as its first argument, exactly as `palw_bond_capability_message_v2` and
+    /// `DerivedArtifactV1` do — and the reason to pin it in a test rather than read it once is
+    /// that it is invisible at the call site: `retire` passes `network_domain(&nv)` and would keep
+    /// compiling if the preimage stopped folding it in. Retirement is the object with no inverse
+    /// and the one that releases collateral; a replayable one is a bond retired on a chain its
+    /// owner never signed for.
+    ///
+    /// The verification here is the one the acceptance layer performs
+    /// (`processor.rs`, the `BondRetireRequested` arm: the bond's registered pubkey, this message,
+    /// this context), so a signature that fails below fails there.
+    #[test]
+    fn a_retirement_signed_under_another_networks_domain_is_refused() {
+        let key = ValidatorKey::from_seed([7u8; 32]);
+        let genesis = Hash64::from_u64_word(0x9E7E515);
+        let rc = palw_network_domain_v2_for(b"testnet-11", Some(genesis));
+        let devnet = palw_network_domain_v2_for(b"devnet", Some(genesis));
+        let rc_message = palw_bond_retirement_message_v2(rc, &bond());
+        let devnet_message = palw_bond_retirement_message_v2(devnet, &bond());
+        assert_ne!(rc_message, devnet_message, "the domain is not in the preimage — every retirement is cross-network replayable");
+
+        let signed_on_devnet = key.sign_with_context(devnet_message.as_byte_slice(), PALW_BOND_RETIREMENT_V2_MLDSA87_CONTEXT);
+        assert!(
+            key.verify_with_context(devnet_message.as_byte_slice(), &signed_on_devnet, PALW_BOND_RETIREMENT_V2_MLDSA87_CONTEXT),
+            "the signature must be good on the chain it was made for, or this test proves nothing"
+        );
+        assert!(
+            !key.verify_with_context(rc_message.as_byte_slice(), &signed_on_devnet, PALW_BOND_RETIREMENT_V2_MLDSA87_CONTEXT),
+            "a devnet retirement verified on the RC — the collateral of every bond with a devnet twin is releasable by replay"
+        );
+    }
+
+    /// **Same network NAME, different genesis, different domain.** This tree re-mints testnet-11
+    /// rather than renaming it, so "which testnet-11" is a question only the genesis answers —
+    /// `network_domain` binds both, and a retirement signed before a relaunch must not release
+    /// collateral after one.
+    #[test]
+    fn a_relaunch_moves_the_domain_even_though_the_name_does_not() {
+        let before = palw_network_domain_v2_for(b"testnet-11", Some(Hash64::from_u64_word(0x5E)));
+        let after = palw_network_domain_v2_for(b"testnet-11", Some(Hash64::from_u64_word(0x5F)));
+        assert_ne!(
+            palw_bond_retirement_message_v2(before, &bond()),
+            palw_bond_retirement_message_v2(after, &bond()),
+            "a re-mint must move the retirement preimage, or a pre-relaunch signature survives it"
+        );
+    }
+
+    /// The ML-DSA-87 CONTEXT separates retirement from capability, so the two objects' signatures
+    /// are not interchangeable even where both messages are made under the same domain. Retirement
+    /// is permanent and capability is routine; an operator standing a bond down for one class must
+    /// not be handing anyone a release for its collateral.
+    #[test]
+    fn a_capability_signature_is_not_a_retirement_signature() {
+        let key = ValidatorKey::from_seed([9u8; 32]);
+        let domain = palw_network_domain_v2_for(b"testnet-11", Some(Hash64::from_u64_word(0x5E)));
+        let message = palw_bond_retirement_message_v2(domain, &bond());
+        let under_capability = key.sign_with_context(message.as_byte_slice(), PALW_BOND_CAPABILITY_V2_MLDSA87_CONTEXT);
+        assert!(
+            !key.verify_with_context(message.as_byte_slice(), &under_capability, PALW_BOND_RETIREMENT_V2_MLDSA87_CONTEXT),
+            "the two contexts are interchangeable — a capability declaration would authorise a retirement"
+        );
+        assert_ne!(PALW_BOND_RETIREMENT_V2_MLDSA87_CONTEXT, PALW_BOND_CAPABILITY_V2_MLDSA87_CONTEXT);
+    }
+}
