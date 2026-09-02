@@ -22,6 +22,17 @@ does not have one today.
 
 ---
 
+> **Status as of the index reconciliation (2026-09-02).** The line above still says "Proposed …
+> activates nothing"; the body records otherwise and later ADRs built on it. Decision E is
+> implemented (`DecodeToken` close arm, 2026-08-22); Decision F landed (the canonical IR, 2026-08-26;
+> made unviolatable for interpreted classes by [ADR-0067](0067-classes-are-chain-data-kernels-are-the-build.md));
+> Decision C ships as `max_close_bytes = 80 KiB` and the RC identity gate (§Amendment); Decision H's
+> registration carriage is live on testnet-11 and is the path [ADR-0056](0056-palw-permissionless-class-admission-and-share-economy.md)
+> and [ADR-0075](0075-certification-is-a-consensus-object.md) extend (a weightless entrant, seated by
+> objects). Decision G's tied-head inventory is still the recorded open item. The carriage ADR this
+> file cites as ADR-0046 is [0046](0046-palw-v2-consensus-object-carriage.md) (renamed from a
+> colliding 0045 on 2026-09-02). Map: [`README.md`](README.md).
+
 ## Context — the central claim was measured and does not hold
 
 ADR-0038 W1 says a full node adjudicates every dispute while holding no model. The mechanism is
