@@ -949,6 +949,26 @@ pub struct Params {
     /// claim. Two builds that armed this at one height would agree about the fence and disagree
     /// about what every job on the network is called, which is not a fork a height can stage.
     ///
+    /// **And the re-mint is NOT confined to this crate.** `prompt_token_ids_hash_v2` is called
+    /// from three crates outside consensus-core, in production paths this fence does not reach,
+    /// and every one of them would keep spelling the flat form while the court expected the other:
+    ///
+    /// * it is WRITTEN into a job by `misaka-palw-base0`'s `fp_worker::run_one_job_v1`,
+    ///   `produce::base0_rc_job_v1`, `qwen36_backend::job_for_anchor`, the `qwen25_a16_backend`
+    ///   job builder and `e2e_drill::fp_drill_job_v1` — a producer left on the flat form mints
+    ///   jobs the armed court cannot adjudicate;
+    /// * it is CHECKED against a carried prompt by `kaspad`'s `palw_panel::fp_prompt_for_job`,
+    ///   `kaspa-pq-validator-core`'s `palw_fp_sign_gate::signable_claim_id`, and
+    ///   `misaka-palw-base0`'s `fp_interval::base0_open_fp_interval_v1` /
+    ///   `base0_verify_fp_interval_opening_v1` and the three backends'
+    ///   `refutation_with_prompt` — a checker left on the flat form refuses honest material.
+    ///
+    /// Three more production sites call `check_execution_step_refutation_v1` and would have to
+    /// thread the opening: `operand_openings_for` in `misaka-palw-base0`'s `backend`,
+    /// `qwen36_backend` and `qwen25_a16_backend`. None of this is reachable from a `Params`, which
+    /// is exactly why it is written down here: the fence is the only thing an operator sets, and
+    /// the surface it does not cover is the part that fails silently.
+    ///
     /// **A bare fence with no companion value, deliberately** — the `palw_context_ladder` rule for
     /// its reason: the tile width, the domains and the opening's shape are constants in
     /// `palw_prompt_ids_v1`, so there is no duration beside this height for
