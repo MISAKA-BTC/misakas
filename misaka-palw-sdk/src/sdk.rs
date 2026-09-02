@@ -640,6 +640,7 @@ mod chain_arm_tests {
             decode_token_limit: decode,
             max_context_tokens: n_ctx,
             privacy_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PRIVACY_PUBLIC_DA,
+            prompt_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER,
         }
     }
 
@@ -853,7 +854,7 @@ mod chain_only_lattice_tests {
     use super::*;
     use kaspa_consensus_core::palw_base0_profile::rc_job_context;
     use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, palw_fp_commitment_v3};
-    use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpCuWeightsV3, fp_claim_id_v3, fp_quanta_v3};
+    use kaspa_consensus_core::palw_freeprompt_v3::{fp_claim_id_v3, fp_class_quantum_leaves_v1, fp_quanta_v3};
     use kaspa_consensus_core::palw_state_v2::{
         PalwBlockContextV2, PalwBondKeyV2, PalwChainStateV2, PalwClaimPhaseV2, PalwConsensusObjectV2 as Obj, PalwPanelSeatV2,
         PalwPwuRuleV2, PalwStateParamsV2, apply_palw_transition_v2,
@@ -863,7 +864,6 @@ mod chain_only_lattice_tests {
     const MATURITY: u64 = 5;
     const USE_WINDOW: u64 = 50;
     const NETWORK: &[u8] = b"misaka-palw-rc";
-    const QUANTUM_CU: u128 = 100;
 
     fn h(v: u64) -> Hash64 {
         Hash64::from_u64_word(v)
@@ -909,7 +909,10 @@ mod chain_only_lattice_tests {
         let floor =
             misaka_palw_base0::classes::canonical_class_by_model_id_v1(&court(), "PALW-BASE-0/rc").expect("the floor is registered");
         let floor_root = misaka_palw_base0::rc::palw_rc_base0_artifact_root_v1().expect("the floor's pinned root");
-        let params = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, floor.class_id(), 4, 1000, 1, 800, 0).unwrap();
+        let params = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, floor.class_id(), 4, 1000, 1, 800, 0)
+            .unwrap()
+            .with_fp_quanta(8, 64)
+            .unwrap();
         let at =
             |block: u64, daa: u64, blue: u64| PalwBlockContextV2 { block: h(block), daa_score: daa, blue_score: blue, subsidy: 0 };
         let genesis_objects = vec![
@@ -927,7 +930,8 @@ mod chain_only_lattice_tests {
                 bond: PalwBondKeyV2(bond_outpoint),
                 pubkey: pubkey.clone(),
                 operator_pubkey: vec![21; 8],
-                collateral: 1_000,
+                // Sized for the work it backs (admission item 8 reaches the free-prompt lane).
+                collateral: 10_000,
                 payout_payload: h(0x9A11),
                 capable_classes: Default::default(),
                 signature: Vec::new(),
@@ -957,11 +961,13 @@ mod chain_only_lattice_tests {
             shape_profile_id: class_id,
             cu_ruleset_id: Hash64::default(),
         };
-        let weights = PalwFpCuWeightsV3 { prefill_weight: 1, decode_weight: 64 };
-        let commitment = palw_fp_commitment_v3(&job, &class_facts, &run, NETWORK, &weights, 999_999).expect("a finished run commits");
+        let commitment = palw_fp_commitment_v3(&job, &class_facts, &run, NETWORK, 999_999).expect("a finished run commits");
         let claim_id = fp_claim_id_v3(&commitment);
-        let quanta = fp_quanta_v3(commitment.cu, QUANTUM_CU, 16);
-        assert!(quanta >= 1, "the job earns a draw at the shipped quantum, got {quanta} at cu {}", commitment.cu);
+        // The class's quantum is an eighth of its canonical job (ADR-0074 Decision 5).
+        let canonical_leaves =
+            kaspa_consensus_core::palw_step::step_leaf_count(&profile, &canonical).expect("the class counts its job");
+        let quanta = fp_quanta_v3(commitment.work_leaves, fp_class_quantum_leaves_v1(canonical_leaves, 8), 16);
+        assert!(quanta >= 1, "the job earns a draw at the class's quantum, got {quanta} at {} leaves", commitment.work_leaves);
 
         // ---- the lattice: committed → bound → licensed → Final ---------------------------
         let committed = Obj::FreePromptCommitted {
@@ -969,8 +975,9 @@ mod chain_only_lattice_tests {
             class_id,
             bond: PalwBondKeyV2(bond_outpoint),
             executor_pubkey: pubkey.clone(),
-            pwu: quanta as u64 * 10,
-            quanta,
+            work_leaves: commitment.work_leaves,
+            prompt_token_ids_hash: commitment.job.prompt_token_ids_hash,
+            decode_tokens_executed: commitment.decode_tokens_executed,
             trace_root: commitment.trace_root,
             output_root: commitment.output_root,
             execution_root: commitment.execution_root,

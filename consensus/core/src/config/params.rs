@@ -6595,7 +6595,7 @@ pub fn palw_v2_params_on_base(
     genesis_artifact_root: crate::Hash64,
     genesis_bonds: Vec<crate::palw_fp_devnet_v3::PalwGenesisBondSpecV1>,
 ) -> Result<Params, crate::palw_mode_v2::PalwModeV2Error> {
-    let bundle = crate::palw_fp_devnet_v3::palw_fp_devnet_bundle_v3(
+    let mut bundle = crate::palw_fp_devnet_v3::palw_fp_devnet_bundle_v3(
         base_class_id,
         class_catalog_root,
         court_catalog_root,
@@ -6603,6 +6603,10 @@ pub fn palw_v2_params_on_base(
         genesis_artifact_root,
         genesis_bonds,
     )?;
+    // **The free-prompt lane bears weight only on a certified class** (ADR-0074 Decision 6): a
+    // shipped preset always carries the drilled set, so the gate is never absent on a network
+    // that carries value. The test bundles stay ungated on purpose.
+    bundle.state = bundle.state.with_fp_certified_classes(crate::palw_e2e_adjudicability::palw_rc_fp_certified_class_ids_v1());
     // The identity is the base's, in ONE place: `Params::from(testnet-12)` and this must not be
     // able to disagree about which genesis, cadence or activation set the RC network has — a
     // node whose bundled and bundle-less forms differ in anything but the bundle would be two
@@ -8239,7 +8243,7 @@ mod consensus_params_id_tests {
                 // (`CanonicalClassV1::artifact_root`), so every A16 producer refused its own
                 // artifact and the dense tier made zero blocks on Relaunch 5. Re-pinned to the
                 // inventory root measured over the deployed file. Genesis hash unchanged.
-                "cae1dec999236370afc1de45adce044631cc298cf950fb88371184119665459e",
+                "e2b91c16a868440b5cd9d5af42ed88e15399b2181593818cc8bb94fd4e7f1eca",
             ),
             ("simnet", SIMNET_PARAMS, "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd"),
             // Re-pinned twice for ADR-0068 Phase 1: first when the drill network armed the
@@ -8259,7 +8263,7 @@ mod consensus_params_id_tests {
             // set; devnet keeps its deliberately widened `max_block_parents: 64`. testnet-11 is
             // untouched because its base already carried the whole set — which is the property
             // that made this safe to apply unconditionally.
-            ("devnet", DEVNET_PARAMS, "7f42b2bb1b26dff39fa8176b1db4dcf4a4e51306d7114429a7e92898d7558921"),
+            ("devnet", DEVNET_PARAMS, "3f25063dd317688ee943ac9c1ba70fabe33b5c0fd20857f850d8774ba77ab013"),
         ]
         .into_iter()
         .filter_map(|(name, params, expected)| {

@@ -34,7 +34,10 @@ use crate::tx::TransactionOutpoint;
 use blake2b_simd::Params;
 
 /// Object version for every FP-V3 wire object. A different version is a different object family.
-pub const PALW_FP_V3_VERSION: u16 = 3;
+/// **3 → 4** (2026-09-02, ADR-0074): the job carries `prompt_mode`, the commitment carries
+/// `work_leaves` in place of `cu`, and a quantum is a fraction of the class's own canonical job.
+/// A node on the old wire cannot decode the new payload, and must not.
+pub const PALW_FP_V3_VERSION: u16 = 4;
 
 /// Width of the expanded spend L1 tag — the attempt lane's width, so the Layer-0 finalizer's call
 /// shape is identical across both block kinds.
@@ -73,6 +76,10 @@ pub const PALW_FP_V3_SPEND_CARRIAGE_MAGIC: [u8; 4] = *b"PFS3";
 pub const PALW_FP_V3_DOMAIN_TRACE_CHUNK: &[u8] = b"misaka-palw/fp-v3/trace-chunk/v1";
 /// The retained-trace manifest root (see [`fp_trace_manifest_root_v3`]).
 pub const PALW_FP_V3_DOMAIN_TRACE_MANIFEST: &[u8] = b"misaka-palw/fp-v3/trace-manifest/v1";
+/// ADR-0074 Decision 1: the anchor a CANONICAL claim's prompt derives from.
+pub const PALW_FP_V3_DOMAIN_CANONICAL_ANCHOR: &[u8] = b"misaka-palw/fp-v3/canonical-anchor/v1";
+/// ADR-0074 Decision 4: the identity of the WORK a claim commits — one inference, one claim.
+pub const PALW_FP_V3_DOMAIN_WORK_ID: &[u8] = b"misaka-palw/fp-v3/work-id/v1";
 
 /// Every domain this module keys, so a duplicate is a test failure rather than a silent collision.
 pub const PALW_FP_V3_ALL_DOMAINS: &[&[u8]] = &[
@@ -87,6 +94,8 @@ pub const PALW_FP_V3_ALL_DOMAINS: &[&[u8]] = &[
     PALW_FP_V3_DOMAIN_TRACE_CHUNK,
     PALW_FP_V3_DOMAIN_TRACE_MANIFEST,
     PALW_FP_V3_DOMAIN_SPEND_CHALLENGE,
+    PALW_FP_V3_DOMAIN_CANONICAL_ANCHOR,
+    PALW_FP_V3_DOMAIN_WORK_ID,
 ];
 
 // ---------------------------------------------------------------------------------------------
@@ -200,12 +209,63 @@ pub struct PalwFreePromptJobV3 {
     pub max_context_tokens: u32,
     /// See [`PALW_FP_PRIVACY_PUBLIC_DA`].
     pub privacy_mode: u8,
+    /// [`PALW_FP_PROMPT_MODE_USER`]: the prompt is the user's, its ids carried on chain and in the
+    /// job material, hash-bound. [`PALW_FP_PROMPT_MODE_CANONICAL`]: the prompt is the family's
+    /// canonical prompt for [`fp_canonical_anchor_v1`] of this job — the network's own job, run
+    /// when nobody is asking (ADR-0074 Decision 1); the ids are a pure function of the job and
+    /// travel only in the job material. Anything else is refused.
+    pub prompt_mode: u8,
 }
 
 /// `H(canonical(job))` — every field, no exceptions.
 pub fn fp_job_id_v3(job: &PalwFreePromptJobV3) -> Hash64 {
     let bytes = borsh::to_vec(job).expect("PalwFreePromptJobV3 is borsh-serializable");
     canonical_id(PALW_FP_V3_DOMAIN_JOB_ID, &bytes)
+}
+
+/// The prompt is the user's (ADR-0044's lane, unchanged).
+pub const PALW_FP_PROMPT_MODE_USER: u8 = 0;
+/// The prompt is the family's canonical prompt for the job's own anchor (ADR-0074 Decision 1).
+pub const PALW_FP_PROMPT_MODE_CANONICAL: u8 = 1;
+
+/// **The anchor a canonical claim's prompt derives from** (ADR-0074 Decision 1):
+/// `H(domain ‖ network ‖ class ‖ bond ‖ anchor_block ‖ anchor_daa ‖ job_nonce)`.
+///
+/// Every input is a fact about the claim's own job, so a seat derives the same value and hands it
+/// to the family's `job_for_anchor` — the same derivation the attempt lane runs from a block's
+/// template — and compares the prompt it gets to `prompt_token_ids_hash`. The bond is inside:
+/// two executors never share a canonical job, so a canonical claim is per-executor work by
+/// construction. The nonce is inside: one executor's next job is its next nonce, and each is a
+/// different inference.
+pub fn fp_canonical_anchor_v1(job: &PalwFreePromptJobV3) -> Hash64 {
+    let mut state = keyed(PALW_FP_V3_DOMAIN_CANONICAL_ANCHOR);
+    state.update(job.network_domain.as_byte_slice());
+    state.update(job.class_id.as_byte_slice());
+    state.update(job.executor_bond.transaction_id.as_bytes().as_slice());
+    state.update(&job.executor_bond.index.to_le_bytes());
+    state.update(job.anchor_block.as_byte_slice());
+    state.update(&job.anchor_daa.to_le_bytes());
+    state.update(&job.job_nonce);
+    finish(state)
+}
+
+/// **The identity of the work a claim commits** (ADR-0074 Decision 4):
+/// `H(domain ‖ class ‖ prompt hash ‖ decode executed ‖ bond)`. One execution committed under N
+/// nonces, N retention values or N anchors is N lottery entries at the cost of hashing; the
+/// transition refuses a commitment whose work identity a live claim already holds.
+pub fn fp_work_id_v1(
+    class_id: &Hash64,
+    prompt_token_ids_hash: &Hash64,
+    decode_tokens_executed: u32,
+    executor_bond: &TransactionOutpoint,
+) -> Hash64 {
+    let mut state = keyed(PALW_FP_V3_DOMAIN_WORK_ID);
+    state.update(class_id.as_byte_slice());
+    state.update(prompt_token_ids_hash.as_byte_slice());
+    state.update(&decode_tokens_executed.to_le_bytes());
+    state.update(executor_bond.transaction_id.as_bytes().as_slice());
+    state.update(&executor_bond.index.to_le_bytes());
+    finish(state)
 }
 
 /// Why the run stopped. Canonicalized, not descriptive: `decode_tokens_executed ==
@@ -251,9 +311,13 @@ pub struct PalwFreePromptCommitmentV3 {
     /// What actually ran (≤ the job's ceiling). CU prices this, not the ceiling.
     pub decode_tokens_executed: u32,
     pub stop_reason: PalwFpStopReasonV3,
-    /// The executor's CU claim. **Checked, never trusted**: every validator recomputes
-    /// [`fp_cu_v3`] from the committed shape and a mismatch is invalid — a claim, not an input.
-    pub cu: u128,
+    /// **The work, in step leaves** (ADR-0074 Decision 5): the capture's `step_leaf_count`, the
+    /// same unit the attempt lane's `pwu_per_inference` is counted in. A claim, verified by the
+    /// seats against the capture they have authenticated (`verify_material` → `capture_shape`):
+    /// the class state holds no profile, only the family can count leaves, and a claim whose
+    /// price the seats refuse never licenses. Shape-crafting is gone by construction — leaves
+    /// are the work.
+    pub work_leaves: u64,
     /// Data-availability obligation trio (ADR-0042 Decision 7 shape): the manifest the producer
     /// must serve, how many chunks stand behind it, and until when. Failing a request inside the
     /// window defaults the producer.
@@ -277,37 +341,30 @@ pub fn fp_claim_id_v3(commitment: &PalwFreePromptCommitmentV3) -> Hash64 {
     canonical_id(PALW_FP_V3_DOMAIN_CLAIM_ID, &bytes)
 }
 
-/// The CU pricing weights (ADR-0044 Decision 7). Part of the consensus bundle — a different
-/// price table is a different ruleset. The invariant the calibration harness must uphold when
-/// choosing them: **no workload shape yields more CU per real second than the pure-decode
-/// reference shape** — mispricing may only ever under-pay, so a shape-crafted job never beats
-/// honest decode-heavy work per FLOP.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
-pub struct PalwFpCuWeightsV3 {
-    pub prefill_weight: u32,
-    pub decode_weight: u32,
+/// **A quantum is a fraction of the class's own canonical job** (ADR-0074 Decision 5):
+/// `max(1, pwu_per_inference / quanta_per_canonical_job)` leaves. No network-wide leaf constant:
+/// a floor job and a QWEN36 job each earn draws in units of their OWN class's work, which is
+/// what the per-class receipt retarget normalises anyway, and `pwu = quanta × quantum` stays in
+/// leaves so `safe_weight` is one unit across lanes and classes.
+pub fn fp_class_quantum_leaves_v1(pwu_per_inference: u64, quanta_per_canonical_job: u32) -> u64 {
+    if quanta_per_canonical_job == 0 {
+        return 0;
+    }
+    (pwu_per_inference / quanta_per_canonical_job as u64).max(1)
 }
 
-/// `prompt·prefill_weight + executed·decode_weight`, in u128 — two u32×u32 products cannot
-/// overflow it, so this is total with no saturation arm to mask a bad input.
-pub fn fp_cu_v3(prompt_tokens: u32, decode_tokens_executed: u32, weights: &PalwFpCuWeightsV3) -> u128 {
-    (prompt_tokens as u128) * (weights.prefill_weight as u128) + (decode_tokens_executed as u128) * (weights.decode_weight as u128)
-}
-
-/// How many uniform quanta a certified CU total yields: `min(⌊cu / quantum_cu⌋, cap)`.
+/// How many uniform quanta a certified leaf count yields: `min(⌊work_leaves / quantum⌋, cap)`.
 ///
 /// Floor, deliberately: the sub-quantum remainder certifies (the audit still happened) but never
 /// draws — a partial ticket would need a scaled target, and a scaled target re-opens the
-/// variable-lottery arithmetic the quantization exists to delete. The cap bounds the per-receipt
-/// jackpot (the draft's `MAX_PWU_PER_RECEIPT`, made a primitive).
-pub fn fp_quanta_v3(cu: u128, quantum_cu: u128, max_quanta_per_receipt: u32) -> u32 {
-    if quantum_cu == 0 {
-        // A zero quantum is refused by the bundle's startup invariants; answering 0 here (never
-        // "everything divides") keeps the function total without minting on a broken config.
+/// shape-grinding surface the quantum exists to close. Capped, so one claim is at most `cap`
+/// lottery entries however large its job; more work is more claims, each paying its own fee.
+pub fn fp_quanta_v3(work_leaves: u64, quantum_leaves: u64, max_quanta_per_receipt: u32) -> u32 {
+    if quantum_leaves == 0 {
         return 0;
     }
-    let full = cu / quantum_cu;
-    full.min(max_quanta_per_receipt as u128) as u32
+    let full = work_leaves / quantum_leaves;
+    full.min(max_quanta_per_receipt as u64) as u32
 }
 
 /// The quantum's lottery draw: leading 128 bits (big-endian, matching `palw_ticket_v1`'s reading)
@@ -494,12 +551,9 @@ pub struct PalwFreePromptParamsV3 {
     /// == [`crate::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3`]; a bundle claiming another id is
     /// another ruleset.
     receipt_algorithm_id: u8,
-    /// One quantum's CU — the uniform slice a certified job divides into (Decision 5).
-    quantum_cu: u128,
-    /// The chain weight one spent quantum contributes.
-    pwu_per_quantum: u64,
-    /// The CU pricing rule (Decision 7).
-    cu_weights: PalwFpCuWeightsV3,
+    /// **A quantum is this fraction of the class's canonical job** (ADR-0074 Decision 5): the
+    /// quantum for a class is `max(1, pwu_per_inference / quanta_per_canonical_job)` leaves.
+    quanta_per_canonical_job: u32,
     /// The per-receipt jackpot bound.
     max_quanta_per_receipt: u32,
     /// ≤ [`crate::palw_v2::PALW_V2_MAX_PROMPT_TOKENS`] — the wire frame is the outer bound.
@@ -521,9 +575,7 @@ impl PalwFreePromptParamsV3 {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         receipt_algorithm_id: u8,
-        quantum_cu: u128,
-        pwu_per_quantum: u64,
-        cu_weights: PalwFpCuWeightsV3,
+        quanta_per_canonical_job: u32,
         max_quanta_per_receipt: u32,
         max_prompt_tokens: u32,
         max_decode_tokens: u32,
@@ -534,14 +586,8 @@ impl PalwFreePromptParamsV3 {
         if receipt_algorithm_id != crate::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3 {
             return Err(PalwFpV3Error::InvalidParams("receipt_algorithm_id is not the receipt-V3 id"));
         }
-        if quantum_cu == 0 {
-            return Err(PalwFpV3Error::InvalidParams("a zero quantum divides everything and prices nothing"));
-        }
-        if pwu_per_quantum == 0 {
-            return Err(PalwFpV3Error::InvalidParams("a zero per-quantum weight makes receipt blocks weightless"));
-        }
-        if cu_weights.decode_weight == 0 {
-            return Err(PalwFpV3Error::InvalidParams("a zero decode weight prices the reference shape at nothing"));
+        if quanta_per_canonical_job == 0 {
+            return Err(PalwFpV3Error::InvalidParams("a zero quanta-per-canonical-job divides nothing and prices nothing"));
         }
         if max_quanta_per_receipt == 0 {
             return Err(PalwFpV3Error::InvalidParams("a zero quanta cap certifies receipts that can never draw"));
@@ -560,9 +606,7 @@ impl PalwFreePromptParamsV3 {
         }
         Ok(Self {
             receipt_algorithm_id,
-            quantum_cu,
-            pwu_per_quantum,
-            cu_weights,
+            quanta_per_canonical_job,
             max_quanta_per_receipt,
             max_prompt_tokens,
             max_decode_tokens,
@@ -575,14 +619,8 @@ impl PalwFreePromptParamsV3 {
     pub fn receipt_algorithm_id(&self) -> u8 {
         self.receipt_algorithm_id
     }
-    pub fn quantum_cu(&self) -> u128 {
-        self.quantum_cu
-    }
-    pub fn pwu_per_quantum(&self) -> u64 {
-        self.pwu_per_quantum
-    }
-    pub fn cu_weights(&self) -> &PalwFpCuWeightsV3 {
-        &self.cu_weights
+    pub fn quanta_per_canonical_job(&self) -> u32 {
+        self.quanta_per_canonical_job
     }
     pub fn max_quanta_per_receipt(&self) -> u32 {
         self.max_quanta_per_receipt
@@ -607,12 +645,16 @@ impl PalwFreePromptParamsV3 {
     /// `FreePromptCommitted` object: quanta from certified CU, total pwu from quanta. `None`
     /// when the job is sub-quantum — such a commitment never enters the state (ADR-0044
     /// Decision 5: it certifies nothing the chain can act on, so it is not carried).
-    pub fn derive_quanta_and_pwu(&self, cu: u128) -> Option<(u32, u64)> {
-        let quanta = fp_quanta_v3(cu, self.quantum_cu, self.max_quanta_per_receipt);
+    /// `(quanta, pwu)` for `work_leaves` of a class whose canonical job is `pwu_per_inference`
+    /// leaves — the derivation the transition runs (ADR-0074 Decision 5), exposed so a builder
+    /// or a seat can ask the same question before the chain does.
+    pub fn derive_quanta_and_pwu(&self, work_leaves: u64, pwu_per_inference: u64) -> Option<(u32, u64)> {
+        let quantum = fp_class_quantum_leaves_v1(pwu_per_inference, self.quanta_per_canonical_job);
+        let quanta = fp_quanta_v3(work_leaves, quantum, self.max_quanta_per_receipt);
         if quanta == 0 {
             return None;
         }
-        let pwu = (quanta as u64).checked_mul(self.pwu_per_quantum)?;
+        let pwu = (quanta as u64).checked_mul(quantum)?;
         Some((quanta, pwu))
     }
 }
@@ -645,8 +687,14 @@ pub enum PalwFpV3Error {
     DecodeOverrun { executed: u32, limit: u32 },
     #[error("stop reason is not canonical for the executed count (executed {executed}, limit {limit})")]
     NonCanonicalStopReason { executed: u32, limit: u32 },
-    #[error("the carried cu ({claimed}) is not the bundle rule's derivation ({derived})")]
-    CuMismatch { claimed: u128, derived: u128 },
+    #[error("work_leaves is zero — a run that touched no leaf committed nothing")]
+    ZeroWorkLeaves,
+    #[error("work_leaves ({got}) is above the step space's own cap ({max})")]
+    WorkLeavesAboveCap { got: u64, max: u64 },
+    #[error("prompt mode {0} is not user (0) or canonical (1)")]
+    UnsupportedPromptMode(u8),
+    #[error("a canonical claim's payload carries prompt ids — the prompt is a function of the job and the chain does not carry it")]
+    CanonicalPayloadCarriesPrompt,
     #[error("trace_chunk_count is zero — a trace nobody can fetch is a trace nobody can verify")]
     ZeroTraceChunks,
     #[error("the worker result does not bind the request: {0}")]
@@ -667,8 +715,8 @@ impl PalwFreePromptCommitmentEnvelopeV3 {
     /// Stateless admission: everything checkable without chain state, in refusal-first order.
     /// The CU claim is recomputed under the bundle's weights and a mismatch is named — never
     /// clamped, never trusted (invariant F7).
-    pub fn validate_stateless_v3(&self, network_domain: Hash64, weights: &PalwFpCuWeightsV3) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(Some(network_domain), Some(weights))
+    pub fn validate_stateless_v3(&self, network_domain: Hash64) -> Result<(), PalwFpV3Error> {
+        self.validate_v3(Some(network_domain))
     }
 
     /// **The half a context-free caller can run: everything except the two checks that need the
@@ -686,10 +734,10 @@ impl PalwFreePromptCommitmentEnvelopeV3 {
     /// closing. The refusal ORDER is preserved too — the omitted checks are skipped in place,
     /// not moved — so a payload wrong in several ways names the same error either way.
     pub fn validate_shape_v3(&self) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(None, None)
+        self.validate_v3(None)
     }
 
-    fn validate_v3(&self, network_domain: Option<Hash64>, weights: Option<&PalwFpCuWeightsV3>) -> Result<(), PalwFpV3Error> {
+    fn validate_v3(&self, network_domain: Option<Hash64>) -> Result<(), PalwFpV3Error> {
         let c = &self.commitment;
         let job = &c.job;
         if job.version != PALW_FP_V3_VERSION {
@@ -702,6 +750,9 @@ impl PalwFreePromptCommitmentEnvelopeV3 {
         }
         if job.privacy_mode != PALW_FP_PRIVACY_PUBLIC_DA {
             return Err(PalwFpV3Error::UnsupportedPrivacyMode(job.privacy_mode));
+        }
+        if job.prompt_mode != PALW_FP_PROMPT_MODE_USER && job.prompt_mode != PALW_FP_PROMPT_MODE_CANONICAL {
+            return Err(PalwFpV3Error::UnsupportedPromptMode(job.prompt_mode));
         }
         if job.executor_pubkey.is_empty() {
             return Err(PalwFpV3Error::MissingPublicKey);
@@ -738,11 +789,11 @@ impl PalwFreePromptCommitmentEnvelopeV3 {
         if !canonical {
             return Err(PalwFpV3Error::NonCanonicalStopReason { executed: c.decode_tokens_executed, limit: job.decode_token_limit });
         }
-        if let Some(weights) = weights {
-            let derived = fp_cu_v3(job.prompt_tokens, c.decode_tokens_executed, weights);
-            if c.cu != derived {
-                return Err(PalwFpV3Error::CuMismatch { claimed: c.cu, derived });
-            }
+        if c.work_leaves == 0 {
+            return Err(PalwFpV3Error::ZeroWorkLeaves);
+        }
+        if c.work_leaves > crate::palw_step::PALW_STEP_MAX_LEAVES {
+            return Err(PalwFpV3Error::WorkLeavesAboveCap { got: c.work_leaves, max: crate::palw_step::PALW_STEP_MAX_LEAVES });
         }
         if c.trace_chunk_count == 0 {
             return Err(PalwFpV3Error::ZeroTraceChunks);
@@ -888,6 +939,9 @@ pub struct PalwFpWorkerRequestV3 {
     pub decode_token_limit: u32,
     pub max_context_tokens: u32,
     pub privacy_mode: u8,
+    /// [`PALW_FP_PROMPT_MODE_USER`] or [`PALW_FP_PROMPT_MODE_CANONICAL`] (ADR-0074 Decision 1);
+    /// copied onto the job verbatim.
+    pub prompt_mode: u8,
     pub input: PalwFpWorkerInputV3,
     /// Runtime identity pins, checked against the worker's own manifest-derived values —
     /// running a job under a mis-declared identity would let one runtime impersonate another's
@@ -940,6 +994,8 @@ pub struct PalwFpWorkerResultV3 {
     pub trace_chunk_count: u32,
     pub trace_event_count: u32,
     pub decode_tokens_executed: u32,
+    /// The capture's leaf count — the run's PRICE (ADR-0074 Decision 5), read off the binding.
+    pub step_leaf_count: u64,
     pub stop_reason: PalwFpStopReasonV3,
     pub output_token_ids: Vec<u32>,
     /// The rendered answer bytes — the user's reply.
@@ -1015,10 +1071,11 @@ impl PalwFpWorkerResultV3 {
 
     /// Assemble the consensus commitment from a validated result plus the two pieces only the
     /// caller holds: the retention DEADLINE (a chain-time promise the worker cannot make) and
-    /// the bundle's CU weights. The CU is DERIVED here — the worker reports counts, never
-    /// prices (invariant F7 starts at assembly, not at admission); the DA manifest is the
-    /// worker's own retained-trace measurement, cross-checked by `validate_against_request`.
-    pub fn to_commitment(&self, weights: &PalwFpCuWeightsV3, trace_retention_daa: u64) -> PalwFreePromptCommitmentV3 {
+    /// nothing else. The price is the capture's leaf count the worker read off its binding
+    /// (ADR-0074 Decision 5) — a seat verifies it against the served capture, never a table;
+    /// the DA manifest is the worker's own retained-trace measurement, cross-checked by
+    /// `validate_against_request`.
+    pub fn to_commitment(&self, trace_retention_daa: u64) -> PalwFreePromptCommitmentV3 {
         PalwFreePromptCommitmentV3 {
             job: self.job.clone(),
             trace_root: self.trace_root,
@@ -1027,7 +1084,7 @@ impl PalwFpWorkerResultV3 {
             execution_root: self.execution_root,
             decode_tokens_executed: self.decode_tokens_executed,
             stop_reason: self.stop_reason,
-            cu: fp_cu_v3(self.job.prompt_tokens, self.decode_tokens_executed, weights),
+            work_leaves: self.step_leaf_count,
             trace_manifest_root: self.trace_manifest_root,
             trace_chunk_count: self.trace_chunk_count,
             trace_retention_daa,
@@ -1070,14 +1127,14 @@ impl PalwFpCommitmentTxPayloadV3 {
     ///
     /// The signature is verified by the caller (this crate holds no ML-DSA implementation);
     /// [`Self::signed_message`] is what it must verify over.
-    pub fn validate_stateless_v3(&self, network_domain: Hash64, weights: &PalwFpCuWeightsV3) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(Some(network_domain), Some(weights))
+    pub fn validate_stateless_v3(&self, network_domain: Hash64) -> Result<(), PalwFpV3Error> {
+        self.validate_v3(Some(network_domain))
     }
 
     /// The context-free half — see [`PalwFreePromptCommitmentEnvelopeV3::validate_shape_v3`] for
     /// why the transaction validator can only run this one.
     pub fn validate_shape_v3(&self) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(None, None)
+        self.validate_v3(None)
     }
 
     /// **The signature, on the payload that actually rides a transaction.**
@@ -1097,12 +1154,20 @@ impl PalwFpCommitmentTxPayloadV3 {
             .validate_signature_v3(verify_mldsa87)
     }
 
-    fn validate_v3(&self, network_domain: Option<Hash64>, weights: Option<&PalwFpCuWeightsV3>) -> Result<(), PalwFpV3Error> {
+    fn validate_v3(&self, network_domain: Option<Hash64>) -> Result<(), PalwFpV3Error> {
         if self.version != PALW_FP_V3_VERSION {
             return Err(PalwFpV3Error::UnsupportedVersion { got: self.version, expected: PALW_FP_V3_VERSION });
         }
         let envelope = PalwFreePromptCommitmentEnvelopeV3 { commitment: self.commitment.clone(), signature: self.signature.clone() };
-        envelope.validate_v3(network_domain, weights)?;
+        envelope.validate_v3(network_domain)?;
+        // A canonical claim's prompt is a pure function of the job (ADR-0074 Decision 1): the
+        // chain does not carry it, and a payload that does is not the shipped worker's.
+        if self.commitment.job.prompt_mode == PALW_FP_PROMPT_MODE_CANONICAL {
+            if !self.prompt_token_ids.is_empty() {
+                return Err(PalwFpV3Error::CanonicalPayloadCarriesPrompt);
+            }
+            return Ok(());
+        }
         if self.prompt_token_ids.len() != self.commitment.job.prompt_tokens as usize {
             return Err(PalwFpV3Error::WorkerResultMismatch("the carried prompt length is not the committed prompt length"));
         }
@@ -1136,10 +1201,6 @@ mod tests {
         Hash64::from_u64_word(0x4E45_5457)
     }
 
-    fn weights() -> PalwFpCuWeightsV3 {
-        PalwFpCuWeightsV3 { prefill_weight: 1, decode_weight: 64 }
-    }
-
     fn job() -> PalwFreePromptJobV3 {
         PalwFreePromptJobV3 {
             version: PALW_FP_V3_VERSION,
@@ -1157,12 +1218,12 @@ mod tests {
             decode_token_limit: 128,
             max_context_tokens: 4096,
             privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
+            prompt_mode: PALW_FP_PROMPT_MODE_USER,
         }
     }
 
     fn commitment() -> PalwFreePromptCommitmentV3 {
         let job = job();
-        let cu = fp_cu_v3(job.prompt_tokens, 77, &weights());
         PalwFreePromptCommitmentV3 {
             job,
             trace_root: Hash64::from_u64_word(0x7A),
@@ -1171,7 +1232,7 @@ mod tests {
             execution_root: Hash64::from_u64_word(0x4E),
             decode_tokens_executed: 77,
             stop_reason: PalwFpStopReasonV3::EndOfGeneration,
-            cu,
+            work_leaves: 4_096,
             trace_manifest_root: Hash64::from_u64_word(0xD0),
             trace_chunk_count: 8,
             trace_retention_daa: 999_999,
@@ -1212,8 +1273,12 @@ mod tests {
     /// `ExecutionRootMismatch` and no fraud on that lane could ever be convicted), so
     /// `PALW_FP_V3_DOMAIN_CLAIM_ID` moved to `/v2` and the claim id, the spend id, the quantum
     /// ticket and the L1 tag all moved with it — they are derived from it, which is the property
-    /// worth seeing in the diff. The job id did NOT move: the job is unchanged, and a vector that
-    /// moved anyway would mean something drifted that should not have.
+    /// worth seeing in the diff. The job id did NOT move then: the job was unchanged.
+    ///
+    /// **Re-taken a second time, 2026-09-02**, under ADR-0074: the job gained `prompt_mode` and
+    /// the commitment carries `work_leaves` in place of `cu`, so the wire version moved 3 → 4 and
+    /// EVERY id below moved with it — the job id included, this time deliberately, because the
+    /// job itself changed. A vector that had stayed would have meant the version was a lie.
     #[test]
     fn golden_vector_ids_are_frozen() {
         let job_id = fp_job_id_v3(&job());
@@ -1221,15 +1286,15 @@ mod tests {
         let spend_id = fp_spend_id_v3(&spend());
         let ticket = fp_quantum_ticket_v3(net(), Hash64::from_u64_word(0xBEAC), claim_id, 2);
 
-        assert_eq!(&faster_hex::hex_string(job_id.as_byte_slice())[..32], "d1ef7bce23d0edcc1a409b111d865c2f");
-        assert_eq!(&faster_hex::hex_string(claim_id.as_byte_slice())[..32], "056161157ed31114052a6df6a021ff84");
-        assert_eq!(&faster_hex::hex_string(spend_id.as_byte_slice())[..32], "f3310411b0d910075dc625617dc90c7d");
-        assert_eq!(format!("{ticket:032x}"), "bf1ad833e20d6ff1a390b28c7bc45931");
+        assert_eq!(&faster_hex::hex_string(job_id.as_byte_slice())[..32], "700b90364860460f7d89d85eed59019c");
+        assert_eq!(&faster_hex::hex_string(claim_id.as_byte_slice())[..32], "a7c87ce376d17c9a72418fc23d2d84f7");
+        assert_eq!(&faster_hex::hex_string(spend_id.as_byte_slice())[..32], "7c3e3de729dd3f733155381721ccb71e");
+        assert_eq!(format!("{ticket:032x}"), "24a7acb7e2c5b0ab62b8a22c02e4a2b0");
 
         let tag = fp_spend_l1_tag_v3(spend_id);
         assert_eq!(tag.len(), PALW_FP_V3_L1_TAG_BYTES);
         assert_ne!(&tag[..64], &[0u8; 64][..], "the expansion is not degenerate");
-        assert_eq!(&faster_hex::hex_string(&tag[..8]), "30f21abe1ea9e23f");
+        assert_eq!(&faster_hex::hex_string(&tag[..8]), "f0a32ed18ea89de9");
     }
 
     /// Every field of the JOB is identity (total binding). The submitted draft hand-picked its
@@ -1255,6 +1320,7 @@ mod tests {
             ("decode_token_limit", |j| j.decode_token_limit += 1),
             ("max_context_tokens", |j| j.max_context_tokens += 1),
             ("privacy_mode", |j| j.privacy_mode += 1),
+            ("prompt_mode", |j| j.prompt_mode += 1),
         ];
         for (field, mutate) in mutations {
             let mut m = base.clone();
@@ -1277,7 +1343,7 @@ mod tests {
             ("execution_root", |c| c.execution_root = Hash64::from_u64_word(0x4F)),
             ("decode_tokens_executed", |c| c.decode_tokens_executed += 1),
             ("stop_reason", |c| c.stop_reason = PalwFpStopReasonV3::ExactBudgetReached),
-            ("cu", |c| c.cu += 1),
+            ("work_leaves", |c| c.work_leaves += 1),
             ("trace_manifest_root", |c| c.trace_manifest_root = Hash64::from_u64_word(0xD1)),
             ("trace_chunk_count", |c| c.trace_chunk_count += 1),
             ("trace_retention_daa", |c| c.trace_retention_daa += 1),
@@ -1319,91 +1385,88 @@ mod tests {
         }
     }
 
-    /// The CU rule prices the EXECUTED shape and refuses every non-canonical encoding: an
-    /// inflated claim, an overrun, a zero run, and both wrong stop-reason arms.
+    /// The price is the capture's leaf count, bounded by the step space's own cap (ADR-0074
+    /// Decision 5), and every non-canonical encoding of the executed shape is refused: a zero
+    /// price, a price above the cap, an overrun, a zero run, and both wrong stop-reason arms.
     #[test]
-    fn cu_is_recomputed_and_stop_reasons_are_canonical() {
-        let w = weights();
-        assert_eq!(fp_cu_v3(96, 77, &w), 96 + 77 * 64);
-        assert_eq!(fp_cu_v3(0, 0, &w), 0);
-        // u32::MAX on both axes stays inside u128 — total, no saturation arm.
-        assert_eq!(
-            fp_cu_v3(u32::MAX, u32::MAX, &PalwFpCuWeightsV3 { prefill_weight: u32::MAX, decode_weight: u32::MAX }),
-            2 * (u32::MAX as u128) * (u32::MAX as u128)
-        );
-
+    fn work_leaves_are_bounded_and_stop_reasons_are_canonical() {
         let ok = PalwFreePromptCommitmentEnvelopeV3 { commitment: commitment(), signature: sig() };
-        assert_eq!(ok.validate_stateless_v3(net(), &w), Ok(()));
+        assert_eq!(ok.validate_stateless_v3(net()), Ok(()));
 
-        let mut inflated = commitment();
-        inflated.cu += 1;
-        let e = PalwFreePromptCommitmentEnvelopeV3 { commitment: inflated, signature: sig() };
-        assert!(matches!(e.validate_stateless_v3(net(), &w), Err(PalwFpV3Error::CuMismatch { .. })));
+        let mut zero = commitment();
+        zero.work_leaves = 0;
+        let e = PalwFreePromptCommitmentEnvelopeV3 { commitment: zero, signature: sig() };
+        assert!(matches!(e.validate_stateless_v3(net()), Err(PalwFpV3Error::ZeroWorkLeaves)));
+
+        let mut above = commitment();
+        above.work_leaves = crate::palw_step::PALW_STEP_MAX_LEAVES + 1;
+        let e = PalwFreePromptCommitmentEnvelopeV3 { commitment: above, signature: sig() };
+        assert!(matches!(e.validate_stateless_v3(net()), Err(PalwFpV3Error::WorkLeavesAboveCap { .. })));
 
         let mut overrun = commitment();
         overrun.decode_tokens_executed = overrun.job.decode_token_limit + 1;
-        overrun.cu = fp_cu_v3(overrun.job.prompt_tokens, overrun.decode_tokens_executed, &w);
         let e = PalwFreePromptCommitmentEnvelopeV3 { commitment: overrun, signature: sig() };
-        assert!(matches!(e.validate_stateless_v3(net(), &w), Err(PalwFpV3Error::DecodeOverrun { .. })));
+        assert!(matches!(e.validate_stateless_v3(net()), Err(PalwFpV3Error::DecodeOverrun { .. })));
 
         // EOG exactly at the limit is the budget stop wearing the wrong name…
         let mut eog_at_limit = commitment();
         eog_at_limit.decode_tokens_executed = eog_at_limit.job.decode_token_limit;
-        eog_at_limit.cu = fp_cu_v3(eog_at_limit.job.prompt_tokens, eog_at_limit.decode_tokens_executed, &w);
         let e = PalwFreePromptCommitmentEnvelopeV3 { commitment: eog_at_limit, signature: sig() };
-        assert!(matches!(e.validate_stateless_v3(net(), &w), Err(PalwFpV3Error::NonCanonicalStopReason { .. })));
+        assert!(matches!(e.validate_stateless_v3(net()), Err(PalwFpV3Error::NonCanonicalStopReason { .. })));
 
         // …and the budget stop below the limit claims a budget that did not end.
         let mut budget_below = commitment();
         budget_below.stop_reason = PalwFpStopReasonV3::ExactBudgetReached;
         let e = PalwFreePromptCommitmentEnvelopeV3 { commitment: budget_below, signature: sig() };
-        assert!(matches!(e.validate_stateless_v3(net(), &w), Err(PalwFpV3Error::NonCanonicalStopReason { .. })));
+        assert!(matches!(e.validate_stateless_v3(net()), Err(PalwFpV3Error::NonCanonicalStopReason { .. })));
 
         let mut silent = commitment();
         silent.decode_tokens_executed = 0;
-        silent.cu = fp_cu_v3(silent.job.prompt_tokens, 0, &w);
         let e = PalwFreePromptCommitmentEnvelopeV3 { commitment: silent, signature: sig() };
-        assert!(matches!(e.validate_stateless_v3(net(), &w), Err(PalwFpV3Error::ZeroDecodeExecuted)));
+        assert!(matches!(e.validate_stateless_v3(net()), Err(PalwFpV3Error::ZeroDecodeExecuted)));
+
+        // A prompt mode the lane does not know is refused by name (ADR-0074 Decision 1).
+        let mut mode = commitment();
+        mode.job.prompt_mode = 7;
+        let e = PalwFreePromptCommitmentEnvelopeV3 { commitment: mode, signature: sig() };
+        assert!(matches!(e.validate_stateless_v3(net()), Err(PalwFpV3Error::UnsupportedPromptMode(7))));
     }
 
     /// Stateless refusals name their reasons: version, network, privacy mode, empty prompt,
     /// zero decode ceiling, context overflow, chunkless trace, key/signature shapes.
     #[test]
     fn stateless_refusals_are_named() {
-        let w = weights();
         let make = |mutate: fn(&mut PalwFreePromptCommitmentV3)| {
             let mut c = commitment();
             mutate(&mut c);
-            // Keep the CU claim consistent so the refusal under test is the one named.
-            c.cu = fp_cu_v3(c.job.prompt_tokens, c.decode_tokens_executed, &weights());
             PalwFreePromptCommitmentEnvelopeV3 { commitment: c, signature: sig() }
         };
 
         assert!(matches!(
-            make(|c| c.job.version = 2).validate_stateless_v3(net(), &w),
-            Err(PalwFpV3Error::UnsupportedVersion { got: 2, expected: 3 })
+            make(|c| c.job.version = 2).validate_stateless_v3(net()),
+            Err(PalwFpV3Error::UnsupportedVersion { got: 2, expected: PALW_FP_V3_VERSION })
         ));
         assert_eq!(
-            make(|c| c.job.network_domain = Hash64::from_u64_word(0x99)).validate_stateless_v3(net(), &w),
+            make(|c| c.job.network_domain = Hash64::from_u64_word(0x99)).validate_stateless_v3(net()),
             Err(PalwFpV3Error::NetworkDomainMismatch)
         );
         assert_eq!(
-            make(|c| c.job.privacy_mode = 2).validate_stateless_v3(net(), &w),
+            make(|c| c.job.privacy_mode = 2).validate_stateless_v3(net()),
             Err(PalwFpV3Error::UnsupportedPrivacyMode(2)),
             "an unknown privacy mode must not certify — a panel cannot replay what it cannot read"
         );
-        assert_eq!(make(|c| c.job.executor_pubkey = vec![]).validate_stateless_v3(net(), &w), Err(PalwFpV3Error::MissingPublicKey));
-        assert_eq!(make(|c| c.job.prompt_tokens = 0).validate_stateless_v3(net(), &w), Err(PalwFpV3Error::EmptyPrompt));
-        assert_eq!(make(|c| c.job.decode_token_limit = 0).validate_stateless_v3(net(), &w), Err(PalwFpV3Error::ZeroDecodeLimit));
+        assert_eq!(make(|c| c.job.executor_pubkey = vec![]).validate_stateless_v3(net()), Err(PalwFpV3Error::MissingPublicKey));
+        assert_eq!(make(|c| c.job.prompt_tokens = 0).validate_stateless_v3(net()), Err(PalwFpV3Error::EmptyPrompt));
+        assert_eq!(make(|c| c.job.decode_token_limit = 0).validate_stateless_v3(net()), Err(PalwFpV3Error::ZeroDecodeLimit));
         assert!(matches!(
-            make(|c| c.job.max_context_tokens = 100).validate_stateless_v3(net(), &w),
+            make(|c| c.job.max_context_tokens = 100).validate_stateless_v3(net()),
             Err(PalwFpV3Error::ContextOverflow { .. })
         ));
-        assert_eq!(make(|c| c.trace_chunk_count = 0).validate_stateless_v3(net(), &w), Err(PalwFpV3Error::ZeroTraceChunks));
+        assert_eq!(make(|c| c.trace_chunk_count = 0).validate_stateless_v3(net()), Err(PalwFpV3Error::ZeroTraceChunks));
 
         let mut short = PalwFreePromptCommitmentEnvelopeV3 { commitment: commitment(), signature: sig() };
         short.signature.pop();
-        assert!(matches!(short.validate_stateless_v3(net(), &w), Err(PalwFpV3Error::SignatureLength { .. })));
+        assert!(matches!(short.validate_stateless_v3(net()), Err(PalwFpV3Error::SignatureLength { .. })));
 
         let pph = Hash64::from_u64_word(SPEND_PPH);
         let spend_ok = PalwReceiptSpendEnvelopeV3 { spend: spend(), signature: sig() };
@@ -1425,7 +1488,7 @@ mod tests {
         assert_eq!(fp_quanta_v3(1_000, 1_000, 64), 1);
         assert_eq!(fp_quanta_v3(6_500, 1_000, 64), 6, "the remainder is floored, never rounded into a draw");
         assert_eq!(fp_quanta_v3(1_000_000, 1_000, 64), 64, "the cap bounds the per-receipt jackpot");
-        assert_eq!(fp_quanta_v3(u128::MAX, 1, u32::MAX), u32::MAX);
+        assert_eq!(fp_quanta_v3(u64::MAX, 1, u32::MAX), u32::MAX);
         assert_eq!(fp_quanta_v3(1_000_000, 0, 64), 0, "a broken quantum config mints nothing, not everything");
     }
 
@@ -1513,6 +1576,7 @@ mod tests {
             decode_token_limit: j.decode_token_limit,
             max_context_tokens: j.max_context_tokens,
             privacy_mode: j.privacy_mode,
+            prompt_mode: j.prompt_mode,
             input: PalwFpWorkerInputV3::TokenIds(ids.clone()),
             model_profile_id: Hash64::from_u64_word(0x1),
             runtime_manifest_hash: Hash64::from_u64_word(0x2),
@@ -1534,6 +1598,7 @@ mod tests {
             trace_chunk_count: 1,
             trace_event_count: 77,
             decode_tokens_executed: 77,
+            step_leaf_count: 4_096,
             stop_reason: PalwFpStopReasonV3::EndOfGeneration,
             output_token_ids: vec![9; 77],
             rendered: b"an answer".to_vec(),
@@ -1542,8 +1607,8 @@ mod tests {
         };
         result.validate_against_request(&request, request_hash).expect("the honest result binds");
 
-        let commitment = result.to_commitment(&weights(), 999_999);
-        assert_eq!(commitment.cu, fp_cu_v3(j.prompt_tokens, 77, &weights()), "CU is derived, never copied");
+        let commitment = result.to_commitment(999_999);
+        assert_eq!(commitment.work_leaves, result.step_leaf_count, "the price is the capture's leaf count the worker read");
         assert_eq!(commitment.job, j);
         assert_eq!(
             (commitment.trace_manifest_root, commitment.trace_chunk_count, commitment.trace_retention_daa),
@@ -1595,31 +1660,27 @@ mod tests {
         let mut c = commitment();
         c.job.prompt_token_ids_hash = crate::palw_v2::prompt_token_ids_hash_v2(&ids);
         c.job.prompt_tokens = ids.len() as u32;
-        c.cu = fp_cu_v3(c.job.prompt_tokens, c.decode_tokens_executed, &weights());
         let payload = PalwFpCommitmentTxPayloadV3 {
             version: PALW_FP_V3_VERSION,
             commitment: c,
             prompt_token_ids: ids.clone(),
             signature: sig(),
         };
-        payload.validate_stateless_v3(net(), &weights()).expect("the honest payload validates");
+        payload.validate_stateless_v3(net()).expect("the honest payload validates");
         assert_eq!(payload.claim_id(), fp_claim_id_v3(&payload.commitment));
         assert_eq!(payload.signed_message(), payload.claim_id(), "the signature covers the identity, which is total");
 
         let mut short = payload.clone();
         short.prompt_token_ids.pop();
-        assert!(short.validate_stateless_v3(net(), &weights()).is_err(), "a prompt of the wrong length");
+        assert!(short.validate_stateless_v3(net()).is_err(), "a prompt of the wrong length");
 
         let mut swapped = payload.clone();
         swapped.prompt_token_ids = (1..=96u32).collect();
-        assert!(swapped.validate_stateless_v3(net(), &weights()).is_err(), "a prompt the commitment does not bind");
+        assert!(swapped.validate_stateless_v3(net()).is_err(), "a prompt the commitment does not bind");
 
         let mut wrong_version = payload;
         wrong_version.version = 2;
-        assert!(matches!(
-            wrong_version.validate_stateless_v3(net(), &weights()),
-            Err(PalwFpV3Error::UnsupportedVersion { got: 2, .. })
-        ));
+        assert!(matches!(wrong_version.validate_stateless_v3(net()), Err(PalwFpV3Error::UnsupportedVersion { got: 2, .. })));
     }
 
     /// The retained-trace manifest: chunking is exact at the boundary, digests bind binding and
@@ -1714,6 +1775,57 @@ pub fn palw_fp_material_decode_v1(bytes: &[u8]) -> Option<PalwFpMaterialV1> {
     Some(material)
 }
 
+pub const PALW_FP_CAPTURE_V1_MAGIC: [u8; 4] = *b"FPC1";
+
+/// **The answer beside the question** (ADR-0073 Decision 1a). `FPM1` carries the job the user
+/// fixed on chain and the prompt that hashes to it — the question. A court needs the executor's
+/// CAPTURE: the family material tuple `execute_free_prompt` computes into `outcome.material`,
+/// which until this existed nothing persisted or gossiped. One payload holding both, so the
+/// pool, the resolver and the relay budget treat a free-prompt claim's evidence exactly as an
+/// attempt's — by claim id — and a seat or a court that holds the payload holds everything it
+/// needs to check the claim without running it.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwFpCaptureV1 {
+    pub material: PalwFpMaterialV1,
+    /// The family capture, opaque here: the backend that ran it is what decodes it
+    /// (`verify_material`, `capture_shape`, `refutation_for_free_prompt_index`).
+    pub capture: Vec<u8>,
+}
+
+pub fn palw_fp_capture_encode_v1(job: &PalwFreePromptJobV3, prompt_token_ids: &[u32], capture: &[u8]) -> Vec<u8> {
+    let body = borsh::to_vec(&PalwFpCaptureV1 {
+        material: PalwFpMaterialV1 { job: job.clone(), prompt_token_ids: prompt_token_ids.to_vec() },
+        capture: capture.to_vec(),
+    })
+    .expect("a capture payload serializes");
+    let mut out = Vec::with_capacity(4 + body.len());
+    out.extend_from_slice(&PALW_FP_CAPTURE_V1_MAGIC);
+    out.extend_from_slice(&body);
+    out
+}
+
+/// `None` for anything that is not an `FPC1` payload, for a job material that fails
+/// [`palw_fp_material_decode_v1`]'s own checks (the prompt must hash to the job's and count to
+/// its length), and for an empty capture — a question with no answer is `FPM1`, not this.
+pub fn palw_fp_capture_decode_v1(bytes: &[u8]) -> Option<PalwFpCaptureV1> {
+    let body = bytes.strip_prefix(&PALW_FP_CAPTURE_V1_MAGIC)?;
+    let payload: PalwFpCaptureV1 = borsh::from_slice(body).ok()?;
+    let material = &payload.material;
+    if material.job.prompt_token_ids_hash != crate::palw_v2::prompt_token_ids_hash_v2(&material.prompt_token_ids)
+        || material.job.prompt_tokens as usize != material.prompt_token_ids.len()
+        || payload.capture.is_empty()
+    {
+        return None;
+    }
+    Some(payload)
+}
+
+/// The job material of EITHER free-prompt payload — `FPC1` (question and answer) or `FPM1`
+/// (question alone). Readers that need only the job and the user's prompt take this.
+pub fn palw_fp_job_material_decode_v1(bytes: &[u8]) -> Option<PalwFpMaterialV1> {
+    palw_fp_capture_decode_v1(bytes).map(|payload| payload.material).or_else(|| palw_fp_material_decode_v1(bytes))
+}
+
 #[cfg(test)]
 mod fp_material_tests {
     use super::*;
@@ -1735,7 +1847,38 @@ mod fp_material_tests {
             decode_token_limit: 3,
             max_context_tokens: 16,
             privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
+            prompt_mode: PALW_FP_PROMPT_MODE_USER,
         }
+    }
+
+    /// **`FPC1` is `FPM1` with the answer attached** (ADR-0073 Decision 1a): it round-trips, the
+    /// either-decoder reads the job material out of both payloads, and every check `FPM1` makes
+    /// on the question is made here too — plus one: a payload with no capture is not a capture.
+    #[test]
+    fn a_capture_payload_round_trips_and_either_payload_yields_the_job_material() {
+        let ids = [7u32, 11, 13];
+        let job = job(&ids);
+        let capture = vec![0xC4u8; 64];
+        let bytes = palw_fp_capture_encode_v1(&job, &ids, &capture);
+        assert_eq!(&bytes[..4], &PALW_FP_CAPTURE_V1_MAGIC);
+        let decoded = palw_fp_capture_decode_v1(&bytes).expect("a capture payload decodes");
+        assert_eq!(decoded.material.job, job);
+        assert_eq!(decoded.material.prompt_token_ids, ids);
+        assert_eq!(decoded.capture, capture);
+
+        // The job material comes out of either spelling.
+        assert_eq!(palw_fp_job_material_decode_v1(&bytes).expect("FPC1 yields its material").job, job);
+        let question_only = palw_fp_material_encode_v1(&job, &ids);
+        assert_eq!(palw_fp_job_material_decode_v1(&question_only).expect("FPM1 yields its material").job, job);
+        // …and neither decoder reads the other's magic.
+        assert!(palw_fp_capture_decode_v1(&question_only).is_none(), "FPM1 is not a capture payload");
+        assert!(palw_fp_material_decode_v1(&bytes).is_none(), "FPC1 is not a bare material");
+
+        // The question's checks still apply, and an empty answer is refused.
+        let mut wrong = job.clone();
+        wrong.prompt_token_ids_hash = Hash64::from_u64_word(0xBAD);
+        assert!(palw_fp_capture_decode_v1(&palw_fp_capture_encode_v1(&wrong, &ids, &capture)).is_none(), "ids must hash to the job");
+        assert!(palw_fp_capture_decode_v1(&palw_fp_capture_encode_v1(&job, &ids, &[])).is_none(), "no capture, no payload");
     }
 
     #[test]

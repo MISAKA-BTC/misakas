@@ -113,6 +113,18 @@ pub struct PalwFpRunV1 {
 /// Implementor: `misaka_palw_base0::backend::Base0Backend`. The trait stays a trait because the
 /// consumers must not name that crate — a producer, a seat and the court reach an execution
 /// through the same three verbs, and a second implementor is a test double, not a second family.
+/// **What a capture SAYS it ran — read off its binding, never off a duty** (ADR-0073 Decision
+/// 1e). The job context whose hash the execution root commits to, and the size of its step space.
+/// A seat that has verified the capture against the claim's roots prices the claim from
+/// `declared_prefill_tokens` / `exact_decode_tokens` here — the shape the execution root binds,
+/// rather than the shape the commitment declared — and draws its sampled leaves from
+/// `step_leaf_count`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwCaptureShapeV1 {
+    pub job_context: PalwJobContextV2,
+    pub step_leaf_count: u64,
+}
+
 pub trait PalwExecutionBackendV1: Send + Sync {
     /// A human-readable identity for logs — the model id for a converted class, the floor's name
     /// for the derived one. Never used for dispatch: the chain's `class_id` is.
@@ -164,6 +176,13 @@ pub trait PalwExecutionBackendV1: Send + Sync {
     /// convict; a seat that disagrees signs nothing on the merits and the claim voids for want of
     /// a quorum.
     fn verify_material(&self, material: &[u8], claim: PalwClaimRootsV1) -> PalwMaterialVerdictV1;
+
+    /// The shape a capture commits to — see [`PalwCaptureShapeV1`]. `None` when the bytes are not
+    /// this family's capture. Meaningful only AFTER [`Self::verify_material`] has said `Matches`
+    /// for the claim in hand: an unverified capture states whatever its author likes.
+    fn capture_shape(&self, _material: &[u8]) -> Option<PalwCaptureShapeV1> {
+        None
+    }
 
     /// **A party's answer at one rung of the bisection: its execution's state at `index`.**
     ///
@@ -231,6 +250,29 @@ pub trait PalwExecutionBackendV1: Send + Sync {
     /// supposed to be paid for by (ADR-0071 Decision 2). A verifier reads it off the accepted
     /// header it already fetched, so it is a fact about the claim like the other four and not
     /// something the material under judgement gets to say.
+    /// **The prover's refutation for leaf `index` of a FREE-PROMPT capture** (ADR-0073 Decision
+    /// 1c) — the same object [`Self::refutation_for_index`] assembles, for a capture whose prompt
+    /// the caller chose.
+    ///
+    /// An attempt's prompt is a pure function of the job's anchor, so that prover re-derives it and
+    /// a carried copy would only be a second place to disagree with the chain. A free-prompt job's
+    /// prompt is the user's: it exists on chain (the 0x4a payload) and in the job material,
+    /// hash-bound to the binding's `job_context.prompt_token_ids_hash`, and derives from nothing —
+    /// so it is an INPUT here. An implementation MUST refuse ids that do not hash to the binding's
+    /// own value rather than pass them through: the court reads a wrong list as
+    /// `InputSetNotCanonical`, which is no verdict, and a close that assembles but never adjudicates
+    /// is a stalled court that the backstop settles against whoever was owed the move.
+    ///
+    /// Default: refused. A family with no free-prompt path has no capture this could open.
+    fn refutation_for_free_prompt_index(
+        &self,
+        _material: &[u8],
+        _index: u64,
+        _prompt_token_ids: &[u32],
+    ) -> Result<crate::palw_step_refute::PalwExecutionStepRefutationV1, String> {
+        Err("this backend cannot open a free-prompt refutation at that index".to_string())
+    }
+
     fn job_anchor_v1(
         &self,
         network_domain: Hash64,

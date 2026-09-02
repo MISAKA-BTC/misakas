@@ -9593,6 +9593,7 @@ async fn a_callers_prompt_on_a_registered_class_opens_a_claim_at_the_shipped_qua
         decode_token_limit: decode,
         max_context_tokens: backend.profile().n_ctx,
         privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
+        prompt_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER,
     };
 
     let run = backend.execute_free_prompt(&job, &prompt).expect("the floor runs a caller's prompt");
@@ -9603,8 +9604,8 @@ async fn a_callers_prompt_on_a_registered_class_opens_a_claim_at_the_shipped_qua
         shape_profile_id: backend.profile().shape_profile_id(),
         cu_ruleset_id: Hash64::default(),
     };
-    let commitment = palw_fp_commitment_v3(&job, &class, &run, b"misaka-palw-rc", bundle.freeprompt.cu_weights(), 4_096)
-        .expect("a finished run assembles a commitment");
+    let commitment =
+        palw_fp_commitment_v3(&job, &class, &run, b"misaka-palw-rc", 4_096).expect("a finished run assembles a commitment");
 
     // Signed over the claim id, which is what the extraction verifies — the bond answering for the
     // work, not a fixture asserting that somebody would have.
@@ -9619,6 +9620,7 @@ async fn a_callers_prompt_on_a_registered_class_opens_a_claim_at_the_shipped_qua
     .as_ref()
     .to_vec();
 
+    let committed_leaves = commitment.work_leaves;
     let payload = borsh::to_vec(&PalwFpCommitmentTxPayloadV3 {
         version: PALW_FP_V3_VERSION,
         commitment,
@@ -9641,12 +9643,17 @@ async fn a_callers_prompt_on_a_registered_class_opens_a_claim_at_the_shipped_qua
     );
 
     // The floor's widest job clears the quantum now, so its commitment opens a claim.
-    let ctx_max = backend.profile().n_ctx as u32;
-    let best_here = kaspa_consensus_core::palw_freeprompt_v3::fp_cu_v3(1, ctx_max - 1, bundle.freeprompt.cu_weights());
+    // The floor's quantum is an eighth of its canonical job (ADR-0074 Decision 5); this job of a
+    // few tokens must earn at least one, or the lane is unreachable on the class it ships with.
+    let (canonical_ctx, _) = backend.job_for_anchor(Hash64::from_u64_word(0xF1)).expect("the floor implies a canonical job");
+    let canonical_leaves = kaspa_consensus_core::palw_step::step_leaf_count(backend.profile(), &canonical_ctx).expect("counts");
+    let quantum = kaspa_consensus_core::palw_freeprompt_v3::fp_class_quantum_leaves_v1(
+        canonical_leaves,
+        bundle.freeprompt.quanta_per_canonical_job(),
+    );
     assert!(
-        best_here >= bundle.freeprompt.quantum_cu(),
-        "the widest job this class can hold ({best_here} CU) now reaches the {}-CU quantum",
-        bundle.freeprompt.quantum_cu()
+        committed_leaves >= quantum,
+        "this job ({committed_leaves} leaves) must reach the floor's {quantum}-leaf quantum (canonical job {canonical_leaves} leaves)"
     );
     assert!(extraction.skipped.is_empty(), "a job that earns a draw is not skipped: {:?}", extraction.skipped);
     let [carried] = &extraction.objects[..] else { panic!("exactly one object rides a commitment") };

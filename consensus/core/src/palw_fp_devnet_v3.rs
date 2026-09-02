@@ -20,7 +20,7 @@
 
 use crate::Hash64;
 use crate::palw_admission_v2::PalwAdmissionParamsV2;
-use crate::palw_freeprompt_v3::{PalwFpCuWeightsV3, PalwFreePromptParamsV3};
+use crate::palw_freeprompt_v3::PalwFreePromptParamsV3;
 use crate::palw_mode_v2::{
     PALW_V2_FORK_CHOICE_VERSION, PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS, PALW_V2_TRACE_FORMAT_VERSION, PalwBondParamsV2,
     PalwConsensusParamsV2, PalwCourtParamsV2, PalwModeV2Error, palw_v2_signature_contexts_root,
@@ -33,7 +33,7 @@ use crate::palw_state_v2::PalwStateParamsV2;
 /// unresolved claims gains a tenth of what resolving them would.
 const BETA_PERMILLE: u16 = 100;
 
-/// Lattice windows, in DAA score: bind 600, receipt 600, challenge 1200, court 2400.
+/// Lattice windows, in DAA score: bind 600, receipt 600, challenge 1200, court 3000.
 ///
 /// **What these mean in wall-clock changed when the bundle got its cadence field.** They were
 /// sized against a 1-DAA-per-block devnet as "a full commit→bind→license→challenge→court cycle
@@ -112,7 +112,7 @@ const RECEIPT_USE_WINDOW: u64 = 600;
 
 /// Measured worst-case honest prosecution time — a PLACEHOLDER shaped like the real thing: the
 /// gate demands `window_court > this`, so the constant is what a fleet measurement replaces, and
-/// until it does, the ratio here (2400 vs 1200) is the safety factor.
+/// until it does, the ratio here (3000 vs 1200) is the safety factor.
 /// The court's SHAPE, from which `worst_case_duration_daa` is derived (ADR-0042 Decision 8:
 /// `(ceil(log2(leaves)) + terminal) × turn_deadline`).
 ///
@@ -124,7 +124,7 @@ const RECEIPT_USE_WINDOW: u64 = 600;
 /// it cannot be raised afterwards.
 ///
 /// 2^22 leaves = 22 bisection rounds, +2 terminal, × 60 DAA per turn = 1,440 — still inside
-/// `WINDOW_COURT` (2,400). Nothing deeper than the cap is admissible at all, so this ladder cannot
+/// `WINDOW_COURT` (3,000). Nothing deeper than the cap is admissible at all, so this ladder cannot
 /// fail to reach a class that exists.
 const COURT_MAX_STEP_LEAVES: u64 = crate::palw_step::PALW_STEP_MAX_LEAVES;
 const COURT_TURN_DEADLINE: u64 = 60;
@@ -143,28 +143,14 @@ const COURT_MAX_CLOSE_BYTES: u64 = crate::palw_class_admission_v2::PALW_RC_COURT
 const COURT_MAX_TERMINAL_MACS: u64 = crate::palw_class_admission_v2::PALW_RC_COURT_MAX_TERMINAL_MACS;
 const COURT_MAX_OPERAND_COUNT: u32 = crate::palw_class_admission_v2::PALW_RC_COURT_MAX_OPERAND_COUNT;
 
-/// CU pricing (ADR-0044 Decision 7). Prefill is batched and roughly an order of magnitude cheaper
-/// per token than decode, and the invariant is that mispricing may only ever UNDER-pay — so the
-/// prefill weight starts at the conservative end (1 : 64).
-const CU_PREFILL_WEIGHT: u32 = 1;
-const CU_DECODE_WEIGHT: u32 = 64;
-
-/// One quantum of certified work, sized to the CONTEXTS that exist rather than to a hypothetical
-/// long chat. At 1:64 pricing the widest job a registered class can hold is bounded by its
-/// `n_ctx`: BASE-0 (n_ctx 12) tops out at `1 + 11·64 = 705` CU and QWEN25-A16 (n_ctx 16) at
-/// `1 + 15·64 = 961`. A 1,000-CU quantum floored EVERY such job to zero draws — the lane was
-/// unreachable on every class the chain registers (measured in
-/// `docs/palw-fp-on-registered-classes.md`). At 100 those become 7 and 9 quanta: a handful of
-/// draws, which is the variance the quantization exists to smooth, now actually reachable.
-///
-/// It moved WITH `PWU_PER_QUANTUM` (both ÷10), so a given CU total contributes exactly the chain
-/// weight it did before: `weight = ⌊cu / quantum⌋ · pwu_per_quantum`, and `10/100 == 100/1000`.
-/// Only the granularity changed, not the economics — a receipt lane priced against real contexts,
-/// not a re-weighting of the receipt lane against the attempt lane.
-const QUANTUM_CU: u128 = 100;
-/// Chain weight one spent quantum contributes. Lowered with `QUANTUM_CU` to hold weight-per-CU
-/// constant (see above).
-const PWU_PER_QUANTUM: u64 = 10;
+/// **A quantum is an eighth of the class's canonical job** (ADR-0074 Decision 5): the quantum
+/// for a class is `max(1, pwu_per_inference / 8)` leaves. A job the size of the canonical one is
+/// eight draws on every class; a floor free-prompt job of five prompt and two decode tokens lands
+/// near the seven quanta the CU table used to give it; and `pwu = quanta × quantum` stays in
+/// leaves — the attempt lane's unit — across lanes and classes. The CU weights (1 : 64),
+/// `QUANTUM_CU` (100) and `PWU_PER_QUANTUM` (10) this replaced are recorded in ADR-0044
+/// Decision 7 and in ADR-0074's supersession table.
+const FP_QUANTA_PER_CANONICAL_JOB: u32 = 8;
 /// Per-receipt jackpot bound: a single enormous job cannot buy unbounded consecutive blocks.
 const MAX_QUANTA_PER_RECEIPT: u32 = 64;
 
@@ -470,6 +456,12 @@ pub fn palw_fp_devnet_bundle_v3(
         ATTEMPT_SHARE_PERMILLE,
         FP_ABANDON_HOLD,
     )?
+    // The free-prompt price (ADR-0074 Decision 5) lives in the state params because the
+    // transition is what derives quanta and pwu — the SAME two numbers `freeprompt` declares
+    // below, checked equal by `validate()`.
+    .with_fp_quanta(FP_QUANTA_PER_CANONICAL_JOB, MAX_QUANTA_PER_RECEIPT)?
+    // Admission item 8 on the free-prompt lane: the SAME ratio `admission` declares below.
+    .with_fp_exposure_ceiling(MAX_EXPOSURE_RATIO_PERMILLE)?
     // The SAME constants the `reward` and `court` fields below declare — `validate()` requires
     // each pair to agree, so these are not second sources, they are the one source reaching both
     // readers. `COURT_TURN_DEADLINE` here is what turns the interactive ladder ON: it is strictly
@@ -494,9 +486,7 @@ pub fn palw_fp_devnet_bundle_v3(
     let admission = PalwAdmissionParamsV2::new(MAX_EXPOSURE_RATIO_PERMILLE)?;
     let freeprompt = PalwFreePromptParamsV3::new(
         crate::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3,
-        QUANTUM_CU,
-        PWU_PER_QUANTUM,
-        PalwFpCuWeightsV3 { prefill_weight: CU_PREFILL_WEIGHT, decode_weight: CU_DECODE_WEIGHT },
+        FP_QUANTA_PER_CANONICAL_JOB,
         MAX_QUANTA_PER_RECEIPT,
         MAX_PROMPT_TOKENS,
         MAX_DECODE_TOKENS,
@@ -781,7 +771,9 @@ mod tests {
         // `.max(MIN_COLLATERAL_SOMPI)`, so the floor is a lower bound on a number already sized
         // against the reserve.
         assert!(
-            palw_v2_collateral_for_claim_lifetime_v1(PWU_PER_QUANTUM) >= s.min_collateral_sompi(),
+            // The smallest free-prompt claim is one quantum of one leaf (ADR-0074 Decision 5);
+            // the derivation must fund even that from the floor.
+            palw_v2_collateral_for_claim_lifetime_v1(1) >= s.min_collateral_sompi(),
             "the derived lifetime collateral is what genesis demands, and it never falls below the floor"
         );
 
@@ -843,50 +835,35 @@ mod tests {
     /// The economics the numbers encode, asserted rather than assumed: an ordinary chat job earns
     /// several draws (variance smoothing), a tiny job earns none but still certifies, and the
     /// per-receipt cap bounds a huge one.
+    /// **The price is the class's own canonical job, in eighths** (ADR-0074 Decision 5). The floor's
+    /// canonical job is 7,708 leaves (the genesis rule pins `pwu_per_inference` to it), so its
+    /// quantum is 963 leaves: a free-prompt job the size of the canonical one is eight draws, a
+    /// job of a few thousand leaves a handful, a sub-quantum job none, an enormous one the cap —
+    /// and `pwu = quanta × quantum` is in leaves, the attempt lane's unit, on every class.
     #[test]
-    fn the_pricing_is_reachable_on_registered_classes() {
-        use crate::palw_freeprompt_v3::{fp_cu_v3, fp_quanta_v3};
+    fn the_pricing_is_the_classs_own_canonical_job_in_eighths() {
+        use crate::palw_freeprompt_v3::{fp_class_quantum_leaves_v1, fp_quanta_v3};
         let b = bundle();
-        let w = b.freeprompt.cu_weights();
+        let per_job = b.freeprompt.quanta_per_canonical_job();
+        let cap = b.freeprompt.max_quanta_per_receipt();
+        assert_eq!(per_job, FP_QUANTA_PER_CANONICAL_JOB);
+        assert_eq!(b.state.fp_quanta_per_canonical_job(), per_job, "the state params carry the same price the bundle declares");
+        assert_eq!(b.state.fp_max_quanta_per_receipt(), cap);
 
-        // A long chat that exceeds any registered context: at quantum 100 it is far past the
-        // per-receipt cap, which is the cap's whole job — one enormous job cannot buy unbounded
-        // blocks.
-        let chat = fp_cu_v3(100, 256, w);
-        let chat_quanta = fp_quanta_v3(chat, b.freeprompt.quantum_cu(), b.freeprompt.max_quanta_per_receipt());
-        assert_eq!(chat, 100 + 256 * 64);
-        assert_eq!(chat_quanta, b.freeprompt.max_quanta_per_receipt(), "a job larger than any real context is capped");
+        const FLOOR_LEAVES: u64 = 7_708;
+        let quantum = fp_class_quantum_leaves_v1(FLOOR_LEAVES, per_job);
+        assert_eq!(quantum, 963);
+        assert_eq!(fp_quanta_v3(FLOOR_LEAVES, quantum, cap), 8, "one canonical job is eight draws");
+        assert_eq!(fp_quanta_v3(7_000, quantum, cap), 7, "a floor free-prompt job of a few thousand leaves draws a handful");
+        assert_eq!(fp_quanta_v3(500, quantum, cap), 0, "sub-quantum draws nothing");
+        assert_eq!(fp_quanta_v3(10_000_000, quantum, cap), cap, "the largest job is capped, not unbounded");
+        // A class whose canonical job is smaller than the divisor still has a one-leaf quantum.
+        assert_eq!(fp_class_quantum_leaves_v1(3, per_job), 1);
 
-        // **The point of lowering the quantum: the widest job each REGISTERED class can hold now
-        // earns draws, where at quantum 1,000 every one of them floored to zero.** The bound is the
-        // class's `n_ctx` — one prefill token and the rest decode maximises CU under 1:64.
-        for (name, n_ctx) in [("BASE-0", 12u32), ("QWEN25-A16", 16)] {
-            let widest = fp_cu_v3(1, n_ctx - 1, w);
-            let quanta = fp_quanta_v3(widest, b.freeprompt.quantum_cu(), b.freeprompt.max_quanta_per_receipt());
-            assert!(quanta >= 1, "{name} (n_ctx {n_ctx}) earns {quanta} quanta at {widest} CU — the lane must be reachable on it");
-        }
-
-        // Sub-quantum still draws nothing: a job under one quantum of CU is not certifiable work.
-        let tiny = fp_cu_v3(30, 1, w); // 30 + 64 = 94 CU, below the 100-CU quantum
-        assert_eq!(
-            fp_quanta_v3(tiny, b.freeprompt.quantum_cu(), b.freeprompt.max_quanta_per_receipt()),
-            0,
-            "sub-quantum draws nothing"
-        );
-
-        let huge = fp_cu_v3(b.freeprompt.max_prompt_tokens(), b.freeprompt.max_decode_tokens(), w);
-        assert_eq!(
-            fp_quanta_v3(huge, b.freeprompt.quantum_cu(), b.freeprompt.max_quanta_per_receipt()),
-            b.freeprompt.max_quanta_per_receipt(),
-            "the largest admissible job is capped, not unbounded"
-        );
-
-        // The derivation the acceptance layer runs: quanta and total pwu together, uniform by
-        // construction (the state machine refuses a non-uniform commitment).
-        let (quanta, pwu) = b.freeprompt.derive_quanta_and_pwu(chat).expect("a chat job derives");
-        assert_eq!(quanta, chat_quanta);
-        assert_eq!(pwu, (quanta as u64) * b.freeprompt.pwu_per_quantum());
+        let (quanta, pwu) = b.freeprompt.derive_quanta_and_pwu(7_000, FLOOR_LEAVES).expect("a floor job derives");
+        assert_eq!((quanta, pwu), (7, 7 * 963));
         assert!(pwu % (quanta as u64) == 0 && pwu / (quanta as u64) > 0, "uniform quanta, as the state machine demands");
-        assert!(b.freeprompt.derive_quanta_and_pwu(tiny).is_none(), "a sub-quantum job never enters the chain");
+        assert!(b.freeprompt.derive_quanta_and_pwu(500, FLOOR_LEAVES).is_none(), "a sub-quantum job never enters the chain");
+        assert!(pwu <= 7_000, "the price never exceeds the leaves that were run");
     }
 }

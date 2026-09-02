@@ -226,6 +226,123 @@ pub fn drill_family_v1(
 /// takes: nothing, not-the-format, a prefix that stops mid-structure, and a body with something
 /// appended. Truncation is the one that matters — it is how a length-prefixed decoder yields a
 /// value that parses and does not cohere.
+/// **The free-prompt twin of [`drill_family_evidence_v1`]** (ADR-0073 Decision 1f): the same
+/// vectors, planted in a run over the USER's job.
+///
+/// The honest run is `execute_free_prompt`. The guilty run plants its fault under the job context
+/// the honest run COMMITTED — read off its own capture, so the drill cannot quietly run a
+/// different job — and both provers are handed the user's prompt. The malformed-material sweep
+/// verifies under the free-prompt anchor, which is the job id. Every vector is filed with the
+/// question it answered; the certifier checks that the bindings agree.
+pub fn drill_free_prompt_evidence_v1(
+    family_id: Hash64,
+    backend: &dyn PalwExecutionBackendV1,
+    profile: &PalwShapeProfileV3,
+    artifact_root: Hash64,
+    job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+    prompt_token_ids: &[u32],
+) -> Result<kaspa_consensus_core::palw_e2e_adjudicability::PalwE2eFreePromptDrillEvidenceV1, PalwDrillError> {
+    use kaspa_consensus_core::palw_e2e_adjudicability::{PalwE2eFreePromptDrillEvidenceV1, PalwE2eFreePromptQuestionV1};
+
+    if !backend.supports_court() {
+        return Err(PalwDrillError::Backend {
+            what: "take a court's turn",
+            why: "the backend declares no court (supports_court() is false)".to_string(),
+        });
+    }
+    let prompt: Vec<usize> = prompt_token_ids.iter().map(|t| *t as usize).collect();
+    let honest = backend
+        .execute_free_prompt(job, &prompt)
+        .map_err(|why| PalwDrillError::Backend { what: "execute the free prompt", why })?
+        .outcome;
+    let anchor = kaspa_consensus_core::palw_freeprompt_v3::fp_job_id_v3(job);
+    let ctx = backend
+        .capture_shape(&honest.material)
+        .ok_or_else(|| PalwDrillError::Backend {
+            what: "read the job context off its own capture",
+            why: "capture_shape returned None".to_string(),
+        })?
+        .job_context;
+    if ctx.job_id != anchor {
+        return Err(PalwDrillError::Backend {
+            what: "run the user's job",
+            why: format!("the capture names job {} and the question is {anchor}", ctx.job_id),
+        });
+    }
+
+    let leaf_count = kaspa_consensus_core::palw_step::step_leaf_count(profile, &ctx)
+        .map_err(|e| PalwDrillError::Backend { what: "count its own step space", why: format!("{e:?}") })?;
+    let mut candidates: Vec<Candidate> = Vec::new();
+    for leaf in 0..leaf_count {
+        let Some(coord) = canonical_step_coordinates(profile, &ctx, leaf) else { continue };
+        let Some(table) = table_of_slot_v1(profile, coord.node_slot) else { continue };
+        let decode = coord.call_index > 0;
+        if candidates.iter().any(|c| c.table == table && c.decode == decode) {
+            continue;
+        }
+        if backend.refutation_for_free_prompt_index(&honest.material, leaf, prompt_token_ids).is_err() {
+            continue;
+        }
+        candidates.push(Candidate { leaf, table, decode });
+    }
+    if candidates.is_empty() {
+        return Err(PalwDrillError::NoCandidate { what: "any table at any call class" });
+    }
+
+    let mut vectors = Vec::with_capacity(candidates.len());
+    for candidate in &candidates {
+        let leaf = candidate.leaf;
+        let guilty = backend
+            .execute_with_injected_fault(&ctx, &prompt, leaf)
+            .map_err(|why| PalwDrillError::Backend { what: "plant a drill fault", why })?;
+        let honest_refutation = backend
+            .refutation_for_free_prompt_index(&honest.material, leaf, prompt_token_ids)
+            .map_err(|why| PalwDrillError::Backend { what: "open an honest refutation", why })?;
+        let guilty_refutation = backend
+            .refutation_for_free_prompt_index(&guilty.material, leaf, prompt_token_ids)
+            .map_err(|why| PalwDrillError::Backend { what: "open a refutation for the planted fault", why })?;
+        let operand_openings = backend
+            .operand_openings_for(&guilty_refutation)
+            .map_err(|why| PalwDrillError::Backend { what: "open the operand rows its own close reads", why })?;
+        let prefix = |material: &[u8], at: u64| -> Result<Hash64, PalwDrillError> {
+            backend.bisect_prefix_state(material, at).ok_or(PalwDrillError::Backend {
+                what: "answer at a rung",
+                why: format!("bisect_prefix_state returned None at index {at}"),
+            })
+        };
+        vectors.push(PalwE2eFaultVectorV1 {
+            leaf_index: leaf,
+            honest: honest_refutation,
+            guilty: guilty_refutation,
+            operand_openings,
+            honest_prefix: (prefix(&honest.material, leaf)?, prefix(&honest.material, leaf + 1)?),
+            guilty_prefix: (prefix(&guilty.material, leaf)?, prefix(&guilty.material, leaf + 1)?),
+        });
+    }
+
+    let mut malformed_inputs_refused = 0u32;
+    for bytes in &malformed_variants_v1(&honest.material) {
+        let claim = kaspa_consensus_core::palw_backend::PalwClaimRootsV1 {
+            execution_root: honest.execution_root,
+            trace_root: honest.trace_root,
+            anchor,
+        };
+        if backend.verify_material(bytes, claim) == kaspa_consensus_core::palw_backend::PalwMaterialVerdictV1::Matches {
+            return Err(PalwDrillError::Backend {
+                what: "refuse a malformed material",
+                why: format!("a {}-byte fragment of this family's own material verified as Matches", bytes.len()),
+            });
+        }
+        malformed_inputs_refused += 1;
+    }
+
+    let questions = vec![PalwE2eFreePromptQuestionV1 { job: job.clone(), prompt_token_ids: prompt_token_ids.to_vec() }; vectors.len()];
+    Ok(PalwE2eFreePromptDrillEvidenceV1 {
+        evidence: PalwE2eDrillEvidenceV1 { family_id, profile: profile.clone(), artifact_root, vectors, malformed_inputs_refused },
+        questions,
+    })
+}
+
 fn malformed_variants_v1(honest: &[u8]) -> Vec<Vec<u8>> {
     let mut out = vec![Vec::new(), b"not material at all".to_vec()];
     // A spread of prefixes rather than one: different cut points stop inside different fields, and
@@ -656,6 +773,87 @@ mod tests {
             Ok(_) => panic!("a backend whose court verbs are the trait defaults must not certify"),
         };
         assert!(matches!(err, PalwDrillError::Backend { what: "take a court's turn", .. }), "{err}");
+    }
+
+    /// **The floor's free-prompt lane certifies through the shipped court** (ADR-0073 Decision
+    /// 1f) — the same drill as the attempt lane's, over a job the user fixed — and the certifier
+    /// refuses the substitutions that matter: a question the vectors were not about, and a
+    /// question that is not its own. The RC free-prompt-certified set's floor entry is pinned
+    /// from this very drill.
+    #[test]
+    fn the_floor_free_prompt_lane_certifies_and_a_swapped_question_is_refused() {
+        use kaspa_consensus_core::palw_e2e_adjudicability::{
+            PalwE2eError, certify_e2e_free_prompt_lane_v1, palw_court_e2e_root_of_v1, palw_rc_court_fp_e2e_root_v1,
+            palw_rc_fp_certified_families_v1,
+        };
+        use kaspa_consensus_core::palw_freeprompt_v3::{
+            PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER, PALW_FP_V3_VERSION, PalwFreePromptJobV3,
+        };
+        use kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2;
+        use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
+
+        let court =
+            kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2::new(kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES, 4, 2)
+                .expect("the shipped court");
+        let entry = crate::classes::canonical_class_by_model_id_v1(&court, "PALW-BASE-0/rc").expect("the floor is registered");
+        let root = crate::rc::palw_rc_base0_artifact_root_v1().expect("the floor's pinned root");
+        let resolved = crate::classes::resolve_class_v1(&court, entry.class_id(), root, &[]).expect("the floor resolves");
+        let profile = resolved.profile.clone();
+        let backend = crate::backend::Base0Backend::new(resolved);
+
+        let ids: Vec<u32> = vec![3, 5, 8, 13, 21];
+        let job = PalwFreePromptJobV3 {
+            version: PALW_FP_V3_VERSION,
+            network_domain: Hash64::from_u64_word(0xD0),
+            class_id: profile.shape_profile_id(),
+            executor_bond: TransactionOutpoint::new(TransactionId::from_u64_word(0xB0), 0),
+            executor_pubkey: vec![0x11; 32],
+            operator_id: Hash64::from_u64_word(0x0B),
+            anchor_block: Hash64::from_u64_word(0xA0),
+            anchor_daa: 1234,
+            job_nonce: [0x5A; 32],
+            tokenizer_id: Hash64::default(),
+            prompt_token_ids_hash: prompt_token_ids_hash_v2(&ids),
+            prompt_tokens: ids.len() as u32,
+            decode_token_limit: 2,
+            max_context_tokens: profile.n_ctx,
+            privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
+            prompt_mode: PALW_FP_PROMPT_MODE_USER,
+        };
+        let drill = drill_free_prompt_evidence_v1(base0_family_id_v1(), &backend, &profile, root, &job, &ids)
+            .expect("the floor drills its free-prompt lane");
+        let certificate = certify_e2e_free_prompt_lane_v1(&drill).expect("the floor's free-prompt lane certifies");
+        // **The RC set's floor entry IS this drill's family** (ADR-0074 Decision 6): the pinned
+        // covering, kernel set and drilled class are what the shipped court certified here.
+        let rc = palw_rc_fp_certified_families_v1();
+        assert_eq!(rc.len(), 1, "the floor is the one free-prompt-certified family");
+        assert_eq!(rc[0], certificate.family, "the RC entry is pinned from this drill, field for field");
+        let attempt = base0_certificate_v1().expect("the floor's attempt certificate");
+        assert_eq!(certificate.family.drilled_class_id, attempt.family.drilled_class_id, "one graph, whichever lane drilled it");
+        assert_eq!(certificate.family.kernel_ids, attempt.family.kernel_ids, "…and one kernel set");
+        assert!(drill.evidence.vectors.iter().all(|v| v.honest.prompt_token_ids == ids), "every prover was handed the user's prompt");
+
+        // A question the vectors were not about: another prompt of the same length, hashed into
+        // its own job. The vectors' bindings still name the job they actually ran.
+        let other_ids: Vec<u32> = vec![4, 6, 9, 14, 22];
+        let mut other_job = job.clone();
+        other_job.prompt_token_ids_hash = prompt_token_ids_hash_v2(&other_ids);
+        let mut swapped = drill.clone();
+        for question in &mut swapped.questions {
+            question.job = other_job.clone();
+            question.prompt_token_ids = other_ids.clone();
+        }
+        assert!(
+            matches!(certify_e2e_free_prompt_lane_v1(&swapped), Err(PalwE2eError::VectorIsNotAboutTheQuestion { .. })),
+            "vectors about one job do not certify another"
+        );
+        // A question that is not its own (the ids do not hash to the job) is refused before any
+        // vector is read.
+        let mut not_own = drill.clone();
+        not_own.questions[0].prompt_token_ids[0] ^= 1;
+        assert!(matches!(certify_e2e_free_prompt_lane_v1(&not_own), Err(PalwE2eError::FreePromptQuestionNotItsOwn { .. })));
+
+        assert_eq!(palw_rc_court_fp_e2e_root_v1(), palw_court_e2e_root_of_v1(&rc), "the root is the set's");
     }
 }
 

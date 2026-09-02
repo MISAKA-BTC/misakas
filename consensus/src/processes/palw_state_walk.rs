@@ -118,7 +118,7 @@ mod tests {
     fn params() -> PalwStateParamsV2 {
         // base = h64(1) at the whole 1000‰ (granted by the first registration, ADR-0045
         // Decision 3), max_factor 4, tolerance 1000‰, min collateral 100, fp split 800‰.
-        PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, 100, 800, 0).unwrap()
+        PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, 100, 800, 0).unwrap().with_fp_quanta(8, 64).unwrap()
     }
 
     fn ctx(block: u64, daa: u64, blue: u64) -> PalwBlockContextV2 {
@@ -131,7 +131,8 @@ mod tests {
                 class_id: h64(1),
                 artifact_root: h64(11),
                 slash_value_per_pwu: 5,
-                pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
+                // A 160-leaf job: the free-prompt quantum is 20, so 60 leaves are three quanta.
+                pwu_rule: PalwPwuRuleV2::MaxPerAttempt(160),
                 initial_target: u128::MAX / 2,
                 share_permille: 1000,
                 activation_daa: 0,
@@ -156,8 +157,9 @@ mod tests {
             bond: bond(),
             // The key this fixture's `BondRegistered` declares: the transition compares them now.
             executor_pubkey: vec![7; 4],
-            pwu,
-            quanta,
+            work_leaves: pwu,
+            prompt_token_ids_hash: h64(0x7E00 ^ claim),
+            decode_tokens_executed: quanta,
             trace_root: h64(41),
             output_root: h64(42),
             execution_root: h64(43),

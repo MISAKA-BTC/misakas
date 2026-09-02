@@ -72,7 +72,11 @@ pub fn qwen25_a16_prompt_for_anchor(anchor: Hash64, vocab: usize, prefill: u32) 
 /// does not know which family produced them.
 /// `None` when the run does not carry the rows it claims to have selected from — the same refusal
 /// `qwen36_roots_v1` makes, for the same reason and against the same gossiped-material attack.
-pub fn qwen25_a16_roots_v1(job: &PalwJobContextV2, shape_id: Hash64, run: &Qwen25A16RunV1) -> Option<(Hash64, Hash64, Hash64, Hash64)> {
+pub fn qwen25_a16_roots_v1(
+    job: &PalwJobContextV2,
+    shape_id: Hash64,
+    run: &Qwen25A16RunV1,
+) -> Option<(Hash64, Hash64, Hash64, Hash64)> {
     let context = job.context_hash();
     let prefill = job.declared_prefill_tokens as usize;
     // **A missing row is a refusal, never an empty one** (ADR-0068 launch audit; see the twin
@@ -230,8 +234,8 @@ pub fn a16_execute_for_attempt_v1(
             let geometry = checkpoints.next_geometry().map_err(|e| format!("{e:?}"))?;
             let mut chunks = Vec::with_capacity(geometry.chunk_count() as usize);
             for index in 0..geometry.chunk_count() {
-                let entry = map::integer_kv_state_chunk_entry_v1(&geometry, index)
-                    .ok_or_else(|| format!("the map has no chunk {index}"))?;
+                let entry =
+                    map::integer_kv_state_chunk_entry_v1(&geometry, index).ok_or_else(|| format!("the map has no chunk {index}"))?;
                 chunks.push(cache.state_chunk_bytes_v1(&entry).ok_or_else(|| {
                     format!(
                         "this cache does not fit the state map the class declares (chunk {index}, {} bytes per row)",
@@ -461,6 +465,104 @@ impl Qwen25A16Backend {
     }
 }
 
+impl Qwen25A16Backend {
+    /// The one prover behind both [`PalwExecutionBackendV1::refutation_for_index`] and
+    /// [`PalwExecutionBackendV1::refutation_for_free_prompt_index`]: `carried` is `None` for an
+    /// attempt (the prompt is re-derived from the anchor) and the user's ids for a free prompt.
+    fn refutation_with_prompt(
+        &self,
+        material: &[u8],
+        index: u64,
+        carried: Option<&[u32]>,
+    ) -> Result<kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1, String> {
+        let (binding, tiles, logits_rows, generated, checkpoint_chunks) =
+            crate::produce::base0_material_decode_v1(material).map_err(|_| "the capture does not decode".to_string())?;
+        if binding.step_leaf_count == 0 || binding.step_leaf_count > kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES {
+            return Err("the binding's leaf count is outside the leg's own cap".to_string());
+        }
+        let coord = kaspa_consensus_core::palw_step::canonical_step_coordinates(&binding.shape_profile, &binding.job_context, index)
+            .ok_or_else(|| format!("leaf {index} is not a main step coordinate"))?;
+        let leaves = a16_leaves_by_position(&binding, &tiles);
+        let step_tiles = crate::legs::Base0StepTilesV1 { leaves, tiles };
+
+        // **This class's own pin: the tiled scheme's.** The generated ids are bound through the
+        // rows-tree root — carrying the rows themselves is exactly what the tiled scheme exists to
+        // avoid at this vocabulary.
+        let rows_root = kaspa_consensus_core::palw_step_refute::tiled_logits_rows_root_v1(&binding.job_context, &logits_rows)
+            .ok_or_else(|| "the retained rows build no tree".to_string())?;
+        let pin = kaspa_consensus_core::palw_step_refute::PalwDecodeTokenPinV1::TiledV1(
+            kaspa_consensus_core::palw_step_refute::PalwTiledDecodeTokensV1 { rows_root, generated_token_ids: generated },
+        );
+
+        // **The prompt: re-derived for an attempt, carried for a free prompt** (ADR-0073 Decision
+        // 1c). An attempt's `job_id` IS its anchor and its prompt is a pure function of it, so it
+        // is re-derived; a context whose prompt hash does not match the derivation and arrives
+        // with NO carried ids gets an empty prompt — the court's hash guard would refuse a wrong
+        // one, and an absent one only narrows which leaves adjudicate. A free prompt is the user's
+        // and derives from nothing: the caller hands it over, and one that is not the binding's
+        // own is refused here rather than read by the court as no verdict.
+        let prompt_token_ids: Vec<u32> = match carried {
+            Some(ids) => {
+                if kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(ids) != binding.job_context.prompt_token_ids_hash {
+                    return Err("the carried prompt is not the one this capture's job context commits to".to_string());
+                }
+                ids.to_vec()
+            }
+            None => {
+                let derived = qwen25_a16_prompt_for_anchor(
+                    binding.job_context.job_id,
+                    self.artifact.shape.vocab,
+                    binding.job_context.declared_prefill_tokens,
+                );
+                let derived_ids: Vec<u32> = derived.iter().map(|t| *t as u32).collect();
+                if kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(&derived_ids) == binding.job_context.prompt_token_ids_hash {
+                    derived_ids
+                } else {
+                    Vec::new()
+                }
+            }
+        };
+
+        // **The anchor its committed leg gives this call, when the node reads the cache.** A
+        // carried anchor for a node with no KV refs is refused by the court rather than ignored,
+        // so attachment follows the node's own declaration.
+        let reads_cache = binding
+            .shape_profile
+            .resolve_node_slot(coord.node_slot)
+            .map(|(node, _)| {
+                node.input_refs.iter().any(|r| {
+                    *r == kaspa_consensus_core::palw_step::PALW_STEP_INPUT_KV_K
+                        || *r == kaspa_consensus_core::palw_step::PALW_STEP_INPUT_KV_V
+                })
+            })
+            .unwrap_or(false);
+        let kv_checkpoint = if reads_cache && coord.call_index > 0 {
+            crate::legs::Base0CheckpointCaptureV1::from_chunks_v1(
+                &binding.job_context,
+                &binding.shape_profile,
+                &binding.checkpoint_profile,
+                &checkpoint_chunks,
+            )
+            .ok()
+            .and_then(|checkpoints| crate::legs::base0_kv_anchor_for_call_v1(&checkpoints, coord.call_index))
+        } else {
+            None
+        };
+
+        crate::legs::base0_refutation_from_capture_v1(
+            &binding.shape_profile.clone(),
+            &binding.job_context.clone(),
+            &step_tiles,
+            binding,
+            coord,
+            prompt_token_ids,
+            Some(pin),
+            kv_checkpoint,
+        )
+        .map_err(|e| format!("{e:?}"))
+    }
+}
+
 impl PalwExecutionBackendV1 for Qwen25A16Backend {
     fn model_id(&self) -> &str {
         &self.model_id
@@ -576,6 +678,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
             activation_leg_root: Hash64::default(),
             checkpoint_leg_root: Hash64::default(),
             step_leg_root: Hash64::default(),
+            step_leaf_count: 0,
         };
         // Built BEFORE the run and run under: `palw_fp_execution_root_v3` recomputes the court's
         // root from this context, so an execution carried out under any other one commits a root
@@ -606,6 +709,8 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
                 activation_leg_root: run.binding.activation_leg_root,
                 checkpoint_leg_root,
                 step_leg_root,
+                // The price (ADR-0074 Decision 5): read off the binding, never declared.
+                step_leaf_count: run.binding.step_leaf_count,
                 ..shape
             },
             output_token_ids: run.generated_token_ids,
@@ -663,6 +768,14 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         self.court_capable
     }
 
+    fn capture_shape(&self, material: &[u8]) -> Option<kaspa_consensus_core::palw_backend::PalwCaptureShapeV1> {
+        let (binding, ..) = crate::produce::base0_material_decode_v1(material).ok()?;
+        Some(kaspa_consensus_core::palw_backend::PalwCaptureShapeV1 {
+            job_context: binding.job_context.clone(),
+            step_leaf_count: binding.step_leaf_count,
+        })
+    }
+
     fn bisect_prefix_state(&self, material: &[u8], index: u64) -> Option<kaspa_hashes::Hash64> {
         let (binding, tiles, _, _, _) = crate::produce::base0_material_decode_v1(material).ok()?;
         // The count arrived over gossip inside a borsh blob; bounding it BEFORE the allocation is
@@ -679,81 +792,16 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         material: &[u8],
         index: u64,
     ) -> Result<kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1, String> {
-        let (binding, tiles, logits_rows, generated, checkpoint_chunks) =
-            crate::produce::base0_material_decode_v1(material).map_err(|_| "the capture does not decode".to_string())?;
-        if binding.step_leaf_count == 0 || binding.step_leaf_count > kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES {
-            return Err("the binding's leaf count is outside the leg's own cap".to_string());
-        }
-        let coord = kaspa_consensus_core::palw_step::canonical_step_coordinates(&binding.shape_profile, &binding.job_context, index)
-            .ok_or_else(|| format!("leaf {index} is not a main step coordinate"))?;
-        let leaves = a16_leaves_by_position(&binding, &tiles);
-        let step_tiles = crate::legs::Base0StepTilesV1 { leaves, tiles };
+        self.refutation_with_prompt(material, index, None)
+    }
 
-        // **This class's own pin: the tiled scheme's.** The generated ids are bound through the
-        // rows-tree root — carrying the rows themselves is exactly what the tiled scheme exists to
-        // avoid at this vocabulary.
-        let rows_root = kaspa_consensus_core::palw_step_refute::tiled_logits_rows_root_v1(&binding.job_context, &logits_rows)
-            .ok_or_else(|| "the retained rows build no tree".to_string())?;
-        let pin = kaspa_consensus_core::palw_step_refute::PalwDecodeTokenPinV1::TiledV1(
-            kaspa_consensus_core::palw_step_refute::PalwTiledDecodeTokensV1 { rows_root, generated_token_ids: generated },
-        );
-
-        // **The prompt, re-derived rather than carried** — the job's own `job_id` IS the anchor
-        // and the attempt lane's prompt is a pure function of it. A context whose prompt hash does
-        // not match the derivation (the free-prompt lane's, whose tokens the caller chose) gets an
-        // empty prompt instead: the court's hash guard would refuse a wrong one, and an absent one
-        // only narrows which leaves adjudicate.
-        let derived = qwen25_a16_prompt_for_anchor(
-            binding.job_context.job_id,
-            self.artifact.shape.vocab,
-            binding.job_context.declared_prefill_tokens,
-        );
-        let derived_ids: Vec<u32> = derived.iter().map(|t| *t as u32).collect();
-        let prompt_token_ids = if kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(&derived_ids)
-            == binding.job_context.prompt_token_ids_hash
-        {
-            derived_ids
-        } else {
-            Vec::new()
-        };
-
-        // **The anchor its committed leg gives this call, when the node reads the cache.** A
-        // carried anchor for a node with no KV refs is refused by the court rather than ignored,
-        // so attachment follows the node's own declaration.
-        let reads_cache = binding
-            .shape_profile
-            .resolve_node_slot(coord.node_slot)
-            .map(|(node, _)| {
-                node.input_refs.iter().any(|r| {
-                    *r == kaspa_consensus_core::palw_step::PALW_STEP_INPUT_KV_K
-                        || *r == kaspa_consensus_core::palw_step::PALW_STEP_INPUT_KV_V
-                })
-            })
-            .unwrap_or(false);
-        let kv_checkpoint = if reads_cache && coord.call_index > 0 {
-            crate::legs::Base0CheckpointCaptureV1::from_chunks_v1(
-                &binding.job_context,
-                &binding.shape_profile,
-                &binding.checkpoint_profile,
-                &checkpoint_chunks,
-            )
-            .ok()
-            .and_then(|checkpoints| crate::legs::base0_kv_anchor_for_call_v1(&checkpoints, coord.call_index))
-        } else {
-            None
-        };
-
-        crate::legs::base0_refutation_from_capture_v1(
-            &binding.shape_profile.clone(),
-            &binding.job_context.clone(),
-            &step_tiles,
-            binding,
-            coord,
-            prompt_token_ids,
-            Some(pin),
-            kv_checkpoint,
-        )
-        .map_err(|e| format!("{e:?}"))
+    fn refutation_for_free_prompt_index(
+        &self,
+        material: &[u8],
+        index: u64,
+        prompt_token_ids: &[u32],
+    ) -> Result<kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1, String> {
+        self.refutation_with_prompt(material, index, Some(prompt_token_ids))
     }
 
     fn operand_openings_for(
@@ -842,7 +890,7 @@ mod free_prompt_tests {
     use crate::engine_a16::derived_a16_store;
     use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, palw_fp_execution_root_v3, palw_fp_job_context_v3};
     use kaspa_consensus_core::palw_freeprompt_v3::{
-        PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_V3_VERSION, PalwFpStopReasonV3, PalwFreePromptJobV3,
+        PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER, PALW_FP_V3_VERSION, PalwFpStopReasonV3, PalwFreePromptJobV3,
     };
     use kaspa_consensus_core::palw_qwen25_profile::{PalwQwen25GeometryV1, qwen25_a16_profile_v1, qwen25_a16_profile_v2};
     use kaspa_consensus_core::palw_state_chunk_map as map;
@@ -915,6 +963,7 @@ mod free_prompt_tests {
             decode_token_limit: decode,
             max_context_tokens: profile.n_ctx,
             privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
+            prompt_mode: PALW_FP_PROMPT_MODE_USER,
         }
     }
 

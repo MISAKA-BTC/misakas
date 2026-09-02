@@ -220,7 +220,7 @@ mod tests {
     }
 
     fn params() -> PalwStateParamsV2 {
-        PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, 100, 800, 0).unwrap()
+        PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, 100, 800, 0).unwrap().with_fp_quanta(8, 64).unwrap()
     }
 
     fn bond_op(v: u64) -> TransactionOutpoint {
@@ -237,7 +237,8 @@ mod tests {
                 class_id: h64(1),
                 artifact_root: h64(11),
                 slash_value_per_pwu: 5,
-                pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
+                // A canonical job of 160 leaves: the quantum is 20, so 60 leaves are 3 quanta.
+                pwu_rule: PalwPwuRuleV2::DerivedV1 { pwu_per_inference: 160 },
                 initial_target,
                 share_permille: 1000,
                 activation_daa: 0,
@@ -266,8 +267,9 @@ mod tests {
             class_id: h64(1),
             bond: crate::palw_state_v2::PalwBondKeyV2(bond_op(1)),
             executor_pubkey: vec![7; 4],
-            pwu: 60,
-            quanta: 3,
+            work_leaves: 60,
+            prompt_token_ids_hash: h64(0x7E),
+            decode_tokens_executed: 8,
             trace_root: h64(41),
             output_root: h64(42),
             execution_root: h64(43),
@@ -356,8 +358,9 @@ mod tests {
             class_id: h64(1),
             bond: crate::palw_state_v2::PalwBondKeyV2(bond_op(1)),
             executor_pubkey: vec![7; 4],
-            pwu: 60,
-            quanta: 3,
+            work_leaves: 60,
+            prompt_token_ids_hash: h64(0x7E),
+            decode_tokens_executed: 8,
             trace_root: h64(41),
             output_root: h64(42),
             execution_root: h64(43),

@@ -31,7 +31,7 @@
 //! a peer thought was valid is exactly the "reads as nothing" failure ADR-0042 Decision 5 warns
 //! about, and the count is how an operator sees it happening.
 
-use crate::palw_freeprompt_v3::{PalwFpCommitmentTxPayloadV3, PalwFreePromptParamsV3, fp_cu_v3};
+use crate::palw_freeprompt_v3::{PalwFpCommitmentTxPayloadV3, PalwFreePromptParamsV3};
 use crate::palw_state_v2::{PalwBondKeyV2, PalwConsensusObjectV2};
 use crate::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT;
 use crate::tx::Transaction;
@@ -61,7 +61,9 @@ pub struct PalwConsensusObjectV3Carrier {
 pub fn palw_fp_objects_from_accepted_txs_v3<V>(
     txs: &[Transaction],
     network_domain: Hash64,
-    freeprompt: &PalwFreePromptParamsV3,
+    // Kept on the signature so every caller still hands the walk the bundle it reads under; the
+    // price it used to derive from these params is the transition's now (ADR-0074 Decision 5).
+    _freeprompt: &PalwFreePromptParamsV3,
     _accepted_block: BlockHash,
     // **The ML-DSA-87 verifier, and it is not optional.** Without it this walk turned any
     // stranger's 0x4a transaction into a claim bound to any bond outpoint it named — including the
@@ -89,7 +91,7 @@ where
         };
         // The same stateless rules a peer applies — re-run here rather than assumed, because this
         // walk must be total over whatever was accepted.
-        if payload.validate_stateless_v3(network_domain, freeprompt.cu_weights()).is_err() {
+        if payload.validate_stateless_v3(network_domain).is_err() {
             out.skipped.push((id, "payload is not stateless-admissible"));
             continue;
         }
@@ -100,29 +102,21 @@ where
             out.skipped.push((id, "commitment signature does not verify under the carried key"));
             continue;
         }
-        // The price is re-derived, never read: the payload's `cu` was checked against the shape
-        // above, and the quanta/pwu split is the bundle's alone (invariant F7).
+        // **Priced by the TRANSITION, against the class's own canonical job** (ADR-0074
+        // Decision 5). Extraction holds no class state, so it carries the leaves and the facts
+        // the work identity is made of; the state derives quanta and pwu where the class rule
+        // lives, and refuses sub-quantum work there with a readable reason.
         let commitment = &payload.commitment;
-        let derived_cu = fp_cu_v3(commitment.job.prompt_tokens, commitment.decode_tokens_executed, freeprompt.cu_weights());
-        let Some((quanta, pwu)) = freeprompt.derive_quanta_and_pwu(derived_cu) else {
-            // Sub-quantum work certifies nothing the chain can act on, so it never becomes a
-            // claim — the state machine would refuse a zero-quanta object anyway, and refusing
-            // it here keeps the reason readable.
-            out.skipped.push((id, "job earns no quanta"));
-            continue;
-        };
         out.objects.push(PalwConsensusObjectV3Carrier {
             carrier: id,
             object: PalwConsensusObjectV2::FreePromptCommitted {
                 claim: payload.claim_id(),
                 class_id: commitment.job.class_id,
                 bond: PalwBondKeyV2(commitment.job.executor_bond),
-                // Carried, not dropped: the signature above proves this key authored the
-                // commitment; only the chain can say whether it is the key the named bond
-                // registered, and it can only say so if the key reaches it.
                 executor_pubkey: commitment.job.executor_pubkey.clone(),
-                pwu,
-                quanta,
+                work_leaves: commitment.work_leaves,
+                prompt_token_ids_hash: commitment.job.prompt_token_ids_hash,
+                decode_tokens_executed: commitment.decode_tokens_executed,
                 trace_root: commitment.trace_root,
                 output_root: commitment.output_root,
                 // The DA trio and the court binding travel WITH the claim: they are the
@@ -183,7 +177,6 @@ mod tests {
 
     /// A commitment whose CU earns real quanta under the devnet bundle.
     fn payload(prompt_tokens: u32, decode: u32) -> PalwFpCommitmentTxPayloadV3 {
-        let fp = freeprompt();
         let ids: Vec<u32> = (0..prompt_tokens).collect();
         let job = PalwFreePromptJobV3 {
             version: PALW_FP_V3_VERSION,
@@ -201,6 +194,7 @@ mod tests {
             decode_token_limit: decode.max(1) + 1,
             max_context_tokens: 4_096,
             privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
+            prompt_mode: crate::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER,
         };
         let events: Vec<Hash64> = (0..decode as u64).map(|i| h64(i + 1)).collect();
         let (manifest_root, chunk_count, _) = fp_trace_manifest_v3(h64(0xB1), &events);
@@ -211,7 +205,7 @@ mod tests {
             schedule_root: h64(0x5C),
             decode_tokens_executed: decode,
             stop_reason: PalwFpStopReasonV3::EndOfGeneration,
-            cu: fp_cu_v3(prompt_tokens, decode, fp.cu_weights()),
+            work_leaves: (prompt_tokens as u64 + decode as u64) * 64,
             trace_manifest_root: manifest_root,
             trace_chunk_count: chunk_count,
             trace_retention_daa: 505_000,
@@ -281,15 +275,13 @@ mod tests {
         assert_eq!(seen[0].2, crate::palw_freeprompt_v3::PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT, "in its own domain");
     }
 
-    /// The happy path: an accepted commitment becomes exactly one object, priced by the bundle    /// The happy path: an accepted commitment becomes exactly one object, priced by the bundle
-    /// and NOT by the payload's own claim.
+    /// The happy path: an accepted commitment becomes exactly one object, priced by the bundle    /// The happy path: an accepted commitment becomes exactly one object carrying the leaves the
+    /// transition prices against the class's own job (ADR-0074 Decision 5) — never a price.
     #[test]
-    fn an_accepted_commitment_becomes_one_priced_object() {
+    fn an_accepted_commitment_becomes_one_object_carrying_its_leaves() {
         let fp = freeprompt();
         let p = payload(96, 256);
         let expected_claim = p.claim_id();
-        let expected_cu = fp_cu_v3(96, 256, fp.cu_weights());
-        let (expected_quanta, expected_pwu) = fp.derive_quanta_and_pwu(expected_cu).unwrap();
 
         let extracted = palw_fp_objects_from_accepted_txs_v3(
             &[tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, borsh::to_vec(&p).unwrap())],
@@ -301,11 +293,20 @@ mod tests {
         assert_eq!(extracted.objects.len(), 1);
         assert!(extracted.skipped.is_empty());
         match &extracted.objects[0].object {
-            PalwConsensusObjectV2::FreePromptCommitted { claim, class_id, bond, pwu, quanta, trace_root, output_root, .. } => {
+            PalwConsensusObjectV2::FreePromptCommitted {
+                claim,
+                class_id,
+                bond,
+                work_leaves,
+                decode_tokens_executed,
+                trace_root,
+                output_root,
+                ..
+            } => {
                 assert_eq!(*claim, expected_claim);
                 assert_eq!(*class_id, h64(1));
                 assert_eq!(bond.0.transaction_id, TransactionId::from_u64_word(7));
-                assert_eq!((*quanta, *pwu), (expected_quanta, expected_pwu));
+                assert_eq!((*work_leaves, *decode_tokens_executed), (p.commitment.work_leaves, 256));
                 assert_eq!(*trace_root, h64(0x7A));
                 assert_eq!(*output_root, h64(0x0B));
             }
@@ -313,14 +314,14 @@ mod tests {
         }
     }
 
-    /// **The price is the bundle's.** A payload claiming a different CU does not get it — it is
-    /// refused outright (the stateless rule re-derives CU), so an inflated claim never becomes an
-    /// object at all.
+    /// A leaf count above the step space's own cap is refused outright by the stateless rule, so
+    /// it never becomes an object at all (a count within the cap is the seats' to verify against
+    /// the capture — ADR-0074 Decision 5).
     #[test]
-    fn an_inflated_price_never_becomes_an_object() {
+    fn a_leaf_count_above_the_cap_never_becomes_an_object() {
         let fp = freeprompt();
         let mut p = payload(96, 256);
-        p.commitment.cu *= 10;
+        p.commitment.work_leaves = crate::palw_step::PALW_STEP_MAX_LEAVES + 1;
         let extracted = palw_fp_objects_from_accepted_txs_v3(
             &[tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, borsh::to_vec(&p).unwrap())],
             net(),
@@ -336,7 +337,8 @@ mod tests {
     }
 
     /// Every skip reason is reachable and NAMED, so an operator can see a carrier being dropped:
-    /// undecodable bytes, a foreign network, and sub-quantum work.
+    /// undecodable bytes and a foreign network. (Sub-quantum work is the transition's refusal,
+    /// where the class's quantum lives — ADR-0074 Decision 5.)
     #[test]
     fn every_skip_reason_is_named() {
         let fp = freeprompt();
@@ -348,11 +350,6 @@ mod tests {
         let foreign = tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, borsh::to_vec(&payload(96, 256)).unwrap());
         let out = palw_fp_objects_from_accepted_txs_v3(std::slice::from_ref(&foreign), h64(0x99), &fp, h64(1), |_, _, _, _| true);
         assert_eq!(out.skipped, vec![(foreign.id(), "payload is not stateless-admissible")], "a foreign network's payload");
-
-        // 30 prompt tokens and 1 decode token is 30 + 64 = 94 CU, under the 100-CU quantum.
-        let tiny = tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, borsh::to_vec(&payload(30, 1)).unwrap());
-        let out = palw_fp_objects_from_accepted_txs_v3(std::slice::from_ref(&tiny), net(), &fp, h64(1), |_, _, _, _| true);
-        assert_eq!(out.skipped, vec![(tiny.id(), "job earns no quanta")]);
     }
 
     /// Only the free-prompt subnetwork is read, and acceptance ORDER is preserved — the
@@ -430,10 +427,13 @@ mod tests {
         assert!(out.objects.is_empty(), "but the walk knows, and credits nothing");
         assert_eq!(out.skipped.len(), 1);
 
+        // An inflated leaf count WITHIN the cap passes the door and the walk alike: neither holds
+        // the capture, and the price is verified by the seats against it (ADR-0074 Decision 5).
+        // Above the cap, the door itself refuses — that much it can know.
         let mut inflated = payload(96, 256);
-        inflated.commitment.cu *= 10;
+        inflated.commitment.work_leaves *= 10;
         let inflated = borsh::to_vec(&inflated).unwrap();
-        assert!(validate_palw_fp_commitment_tx(&inflated).is_ok(), "the door cannot price without the bundle's weights");
+        assert!(validate_palw_fp_commitment_tx(&inflated).is_ok(), "the door cannot price without the capture");
         let out = palw_fp_objects_from_accepted_txs_v3(
             &[tx(SUBNETWORK_ID_PALW_FP_COMMITMENT, inflated)],
             net(),
@@ -441,7 +441,9 @@ mod tests {
             h64(1),
             |_, _, _, _| true,
         );
-        assert!(out.objects.is_empty(), "and the walk re-derives the price rather than reading it");
-        assert_eq!(out.skipped.len(), 1);
+        assert_eq!(out.objects.len(), 1, "and the walk carries the leaves for the seats to judge");
+        let mut above = payload(96, 256);
+        above.commitment.work_leaves = crate::palw_step::PALW_STEP_MAX_LEAVES + 1;
+        assert!(validate_palw_fp_commitment_tx(&borsh::to_vec(&above).unwrap()).is_err(), "the cap the door does know");
     }
 }

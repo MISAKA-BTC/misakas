@@ -746,6 +746,21 @@ impl PalwConsensusParamsV2 {
         if self.freeprompt.receipt_maturity_daa() < self.reorg_margin_daa {
             return Err(PalwModeV2Error::Invalid("receipt maturity must cover the reorg margin"));
         }
+        // ADR-0074 Decision 5: the transition prices free-prompt claims from the state params;
+        // builders and seats read the same two numbers off `freeprompt`. One price, two readers.
+        if self.state.fp_quanta_per_canonical_job() != self.freeprompt.quanta_per_canonical_job()
+            || self.state.fp_max_quanta_per_receipt() != self.freeprompt.max_quanta_per_receipt()
+        {
+            return Err(PalwModeV2Error::Invalid(
+                "the state's free-prompt price must be the freeprompt params' (quanta per job, cap)",
+            ));
+        }
+        // …and admission item 8's ratio is one number for both lanes: the attempt lane reads it
+        // off `admission` at block validation, the free-prompt lane off the state params at the
+        // transition.
+        if self.state.fp_max_exposure_ratio_permille() != self.admission.max_exposure_ratio_permille() {
+            return Err(PalwModeV2Error::Invalid("the state's free-prompt exposure ceiling must be the admission params' ratio"));
+        }
         Ok(())
     }
 
@@ -1071,22 +1086,15 @@ pub(crate) mod tests {
             // §8: a runnable ruleset retires terminal claims; a fixture is one a node starts on.
             .with_claim_retirement_daa(200)
             .unwrap()
+            // ADR-0074 Decision 5: the same price `conforming_freeprompt` declares.
+            .with_fp_quanta(8, 64)
+            .unwrap()
+            .with_fp_exposure_ceiling(500)
+            .unwrap()
     }
 
     pub(crate) fn conforming_freeprompt() -> PalwFreePromptParamsV3 {
-        PalwFreePromptParamsV3::new(
-            crate::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3,
-            1_000,
-            10,
-            crate::palw_freeprompt_v3::PalwFpCuWeightsV3 { prefill_weight: 1, decode_weight: 64 },
-            64,
-            4_096,
-            512,
-            150,
-            200,
-            5,
-        )
-        .unwrap()
+        PalwFreePromptParamsV3::new(crate::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3, 8, 64, 4_096, 512, 150, 200, 5).unwrap()
     }
 
     pub(crate) fn conforming_bundle() -> PalwConsensusParamsV2 {
@@ -1118,6 +1126,10 @@ pub(crate) mod tests {
                 .with_turn_deadline_daa(20)
                 .unwrap()
                 .with_claim_retirement_daa(200)
+                .unwrap()
+                .with_fp_quanta(8, 64)
+                .unwrap()
+                .with_fp_exposure_ceiling(500)
                 .unwrap(),
             admission: PalwAdmissionParamsV2::new(500).unwrap(),
             panel: PalwPanelParamsV2::new(3, 2, 4).unwrap(),
@@ -1199,6 +1211,10 @@ pub(crate) mod tests {
                     b.state = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(2), 4, 1000, 100, 800, 0)
                         .unwrap()
                         .with_claim_retirement_daa(200)
+                        .unwrap()
+                        .with_fp_quanta(8, 64)
+                        .unwrap()
+                        .with_fp_exposure_ceiling(500)
                         .unwrap();
                 }),
             ),
@@ -1212,6 +1228,10 @@ pub(crate) mod tests {
                     b.state = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, 100, 1000, 0)
                         .unwrap()
                         .with_claim_retirement_daa(200)
+                        .unwrap()
+                        .with_fp_quanta(8, 64)
+                        .unwrap()
+                        .with_fp_exposure_ceiling(500)
                         .unwrap();
                 }),
             ),
@@ -1220,9 +1240,7 @@ pub(crate) mod tests {
                 Box::new(|b| {
                     b.freeprompt = PalwFreePromptParamsV3::new(
                         crate::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3,
-                        1_000,
-                        10,
-                        crate::palw_freeprompt_v3::PalwFpCuWeightsV3 { prefill_weight: 1, decode_weight: 64 },
+                        8,
                         64,
                         4_096,
                         512,
@@ -1238,9 +1256,7 @@ pub(crate) mod tests {
                 Box::new(|b| {
                     b.freeprompt = PalwFreePromptParamsV3::new(
                         crate::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3,
-                        1_000,
-                        10,
-                        crate::palw_freeprompt_v3::PalwFpCuWeightsV3 { prefill_weight: 1, decode_weight: 64 },
+                        8,
                         64,
                         4_096,
                         512,
@@ -1704,41 +1720,32 @@ pub(crate) mod tests {
                     b.state = b.state.clone().with_turn_deadline_daa(19).unwrap();
                 }),
             ),
-            ("exposure ratio", Box::new(|b| b.admission = PalwAdmissionParamsV2::new(501).unwrap())),
             (
-                "free-prompt quantum",
+                "exposure ratio",
                 Box::new(|b| {
-                    b.freeprompt = PalwFreePromptParamsV3::new(
-                        crate::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3,
-                        1_001,
-                        10,
-                        crate::palw_freeprompt_v3::PalwFpCuWeightsV3 { prefill_weight: 1, decode_weight: 64 },
-                        64,
-                        4_096,
-                        512,
-                        100,
-                        200,
-                        5,
-                    )
-                    .unwrap()
+                    b.admission = PalwAdmissionParamsV2::new(501).unwrap();
+                    b.state = b.state.clone().with_fp_exposure_ceiling(501).unwrap();
                 }),
             ),
             (
-                "free-prompt cu price",
+                // ADR-0074 Decision 5: the price is one number with two readers, so a mutation
+                // moves both or the bundle refuses itself for incoherence rather than as another
+                // ruleset.
+                "free-prompt quantum (quanta per canonical job)",
                 Box::new(|b| {
-                    b.freeprompt = PalwFreePromptParamsV3::new(
-                        crate::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3,
-                        1_000,
-                        10,
-                        crate::palw_freeprompt_v3::PalwFpCuWeightsV3 { prefill_weight: 2, decode_weight: 64 },
-                        64,
-                        4_096,
-                        512,
-                        100,
-                        200,
-                        5,
-                    )
-                    .unwrap()
+                    b.freeprompt =
+                        PalwFreePromptParamsV3::new(crate::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3, 9, 64, 4_096, 512, 100, 200, 5)
+                            .unwrap();
+                    b.state = b.state.clone().with_fp_quanta(9, 64).unwrap();
+                }),
+            ),
+            (
+                "free-prompt quanta cap",
+                Box::new(|b| {
+                    b.freeprompt =
+                        PalwFreePromptParamsV3::new(crate::pow_layer0::POW_ALGO_ID_PALW_RECEIPT_V3, 8, 65, 4_096, 512, 100, 200, 5)
+                            .unwrap();
+                    b.state = b.state.clone().with_fp_quanta(8, 65).unwrap();
                 }),
             ),
         ];
@@ -1771,6 +1778,10 @@ pub(crate) mod tests {
                 .with_turn_deadline_daa(20)
                 .unwrap()
                 .with_claim_retirement_daa(200)
+                .unwrap()
+                .with_fp_quanta(8, 64)
+                .unwrap()
+                .with_fp_exposure_ceiling(500)
                 .unwrap();
             assert!(
                 bundle.validate().is_err(),

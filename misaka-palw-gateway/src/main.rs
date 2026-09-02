@@ -39,8 +39,8 @@ use std::process::{Command, Stdio};
 use std::sync::Mutex;
 
 use kaspa_consensus_core::palw_freeprompt_v3::{
-    PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_V3_VERSION, PalwFpCuWeightsV3, PalwFpStopReasonV3, PalwFpWorkerInputV3, PalwFpWorkerRequestV3,
-    PalwFpWorkerResultV3, fp_job_id_v3, fp_quanta_v3, fp_worker_request_hash_v3,
+    PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER, PALW_FP_V3_VERSION, PalwFpStopReasonV3, PalwFpWorkerInputV3,
+    PalwFpWorkerRequestV3, PalwFpWorkerResultV3, fp_class_quantum_leaves_v1, fp_job_id_v3, fp_quanta_v3, fp_worker_request_hash_v3,
 };
 use kaspa_consensus_core::palw_v2::{PALW_V2_MAX_FRAME_BYTES, read_framed, write_framed};
 use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
@@ -148,10 +148,10 @@ struct Config {
     outbox: PathBuf,
     identity_path: PathBuf,
     anchor_path: PathBuf,
-    cu_weights: PalwFpCuWeightsV3,
-    /// Devnet display aid: the bundle's quantum size, so the summary can say how many draws a
-    /// job earned. Zero disables the display (no bundle known).
-    quantum_cu: u128,
+    /// Devnet display aid: the class's canonical job in leaves, so the summary can say how many
+    /// draws a job earned (a quantum is an eighth of it — ADR-0074 Decision 5). Zero disables the
+    /// display (no class known).
+    class_leaves: u64,
     max_decode_default: u32,
     max_decode_cap: u32,
     /// How long past the job's anchor the producer promises to serve retained-trace chunks, in
@@ -387,6 +387,7 @@ fn handle_chat(config: &Config, identity: &Identity, worker_id: &WorkerIdentity,
         decode_token_limit: decode_limit,
         max_context_tokens: worker_id.n_ctx,
         privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
+        prompt_mode: PALW_FP_PROMPT_MODE_USER,
         input: PalwFpWorkerInputV3::Text(rendered_prompt.clone().into_bytes()),
         model_profile_id: worker_id.model_profile_id,
         runtime_manifest_hash: worker_id.runtime_manifest_hash,
@@ -399,10 +400,14 @@ fn handle_chat(config: &Config, identity: &Identity, worker_id: &WorkerIdentity,
     std::fs::create_dir_all(&trace_dir).map_err(|e| format!("cannot create the trace retention dir: {e}"))?;
     let (result, _request_hash) = run_worker_v3(&config.worker, &trace_dir, &request)?;
     let job_id = fp_job_id_v3(&result.job);
-    let commitment = result.to_commitment(&config.cu_weights, anchor_daa.saturating_add(config.trace_retention_window_daa));
-    let cu = commitment.cu;
+    let commitment = result.to_commitment(anchor_daa.saturating_add(config.trace_retention_window_daa));
+    let work_leaves = commitment.work_leaves;
     let claim_id = kaspa_consensus_core::palw_freeprompt_v3::fp_claim_id_v3(&commitment);
-    let quanta = if config.quantum_cu == 0 { 0 } else { fp_quanta_v3(cu, config.quantum_cu, u32::MAX) };
+    let quanta = if config.class_leaves == 0 {
+        0
+    } else {
+        fp_quanta_v3(work_leaves, fp_class_quantum_leaves_v1(config.class_leaves, 8), u32::MAX)
+    };
 
     // The outbox artifact: the framed result (borsh) + a JSON summary. Everything the executor
     // rail needs to assemble, sign and submit the commitment — and an honest list of what is
@@ -432,8 +437,8 @@ fn handle_chat(config: &Config, identity: &Identity, worker_id: &WorkerIdentity,
         "trace_chunk_count": result.trace_chunk_count,
         "trace_retention_daa": commitment.trace_retention_daa,
         "trace_dir": trace_dir.join(hex(job_id)).display().to_string(),
-        "cu": cu.to_string(),
-        "cu_weights": { "prefill": config.cu_weights.prefill_weight, "decode": config.cu_weights.decode_weight },
+        "work_leaves": work_leaves,
+        "class_leaves": config.class_leaves,
         "quanta_at_configured_quantum": quanta,
         "answer_untrimmed": rendered_string,
         "pending_for_chain_submission": [
@@ -474,7 +479,7 @@ fn handle_chat(config: &Config, identity: &Identity, worker_id: &WorkerIdentity,
             "trace_root": hex(result.trace_root),
             "output_root": hex(result.output_root),
             "schedule_root": hex(result.schedule_root),
-            "cu": cu.to_string(),
+            "work_leaves": work_leaves,
             "artifact": artifact_json.display().to_string(),
         },
     }))
@@ -487,9 +492,7 @@ fn main() {
     let mut outbox: Option<PathBuf> = None;
     let mut identity_path: Option<PathBuf> = None;
     let mut anchor_path: Option<PathBuf> = None;
-    let mut cu_prefill: u32 = 1;
-    let mut cu_decode: u32 = 64;
-    let mut quantum_cu: u128 = 0;
+    let mut class_leaves: u64 = 0;
     let mut max_decode_default: u32 = 256;
     let mut max_decode_cap: u32 = 1024;
     let mut trace_retention_window_daa: u64 = 500_000;
@@ -501,9 +504,7 @@ fn main() {
             "--outbox" => outbox = Some(PathBuf::from(value("--outbox"))),
             "--identity" => identity_path = Some(PathBuf::from(value("--identity"))),
             "--anchor" => anchor_path = Some(PathBuf::from(value("--anchor"))),
-            "--cu-prefill-weight" => cu_prefill = value("--cu-prefill-weight").parse().unwrap_or_else(|e| die(format!("{e}"))),
-            "--cu-decode-weight" => cu_decode = value("--cu-decode-weight").parse().unwrap_or_else(|e| die(format!("{e}"))),
-            "--quantum-cu" => quantum_cu = value("--quantum-cu").parse().unwrap_or_else(|e| die(format!("{e}"))),
+            "--class-leaves" => class_leaves = value("--class-leaves").parse().unwrap_or_else(|e| die(format!("{e}"))),
             "--max-decode-default" => {
                 max_decode_default = value("--max-decode-default").parse().unwrap_or_else(|e| die(format!("{e}")))
             }
@@ -512,7 +513,7 @@ fn main() {
                 trace_retention_window_daa = value("--trace-retention-window").parse().unwrap_or_else(|e| die(format!("{e}")))
             }
             other => die(format!(
-                "unknown argument {other:?}\nusage: misaka-palw-gateway --worker <palw-worker> --outbox <dir> --identity <json> --anchor <json> [--listen addr] [--cu-prefill-weight n] [--cu-decode-weight n] [--quantum-cu n] [--max-decode-default n] [--max-decode-cap n]"
+                "unknown argument {other:?}\nusage: misaka-palw-gateway --worker <palw-worker> --outbox <dir> --identity <json> --anchor <json> [--listen addr] [--class-leaves n] [--max-decode-default n] [--max-decode-cap n]"
             )),
         }
     }
@@ -522,15 +523,11 @@ fn main() {
         outbox: outbox.unwrap_or_else(|| die("--outbox <dir> is required".into())),
         identity_path: identity_path.unwrap_or_else(|| die("--identity <json> is required".into())),
         anchor_path: anchor_path.unwrap_or_else(|| die("--anchor <json> is required".into())),
-        cu_weights: PalwFpCuWeightsV3 { prefill_weight: cu_prefill, decode_weight: cu_decode },
-        quantum_cu,
+        class_leaves,
         max_decode_default,
         max_decode_cap,
         trace_retention_window_daa,
     };
-    if cu_decode == 0 {
-        die("--cu-decode-weight 0 prices the reference shape at nothing".into());
-    }
     std::fs::create_dir_all(&config.outbox).unwrap_or_else(|e| die(format!("cannot create the outbox: {e}")));
     let identity = load_identity(&config.identity_path);
     load_anchor(&config.anchor_path).unwrap_or_else(|e| die(e));

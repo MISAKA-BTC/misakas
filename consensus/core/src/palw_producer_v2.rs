@@ -520,6 +520,10 @@ pub struct PalwSeatDutyV2 {
     /// honest free-prompt executor, and a quorum of those DEFAULTS the producer — the panel
     /// would convict the lane's every user for using it.
     pub free_prompt: bool,
+    /// The leaf count the free-prompt claim was priced from (ADR-0074 Decision 5): a seat's one
+    /// pricing check is that the capture it authenticated has exactly this many leaves. Zero on
+    /// an attempt.
+    pub work_leaves: u64,
 }
 
 /// **Every seat duty this node holds at one chain point** (launch blockers §2).
@@ -555,6 +559,11 @@ pub struct PalwDisputableClaimV2 {
     pub trace_root: Hash64,
     pub execution_root: Hash64,
     pub licensed_daa: u64,
+    /// The claim is a free-prompt commitment (ADR-0073 Decision 1d): its job is the USER's, fixed
+    /// on chain as `fp_job_id_v3(job)` with a hash-bound prompt, so a challenger re-executes THAT
+    /// job — never `job_for_anchor`, whose answer is a job nobody asked and whose roots differ
+    /// from every honest free-prompt claim's.
+    pub free_prompt: bool,
 }
 
 pub fn palw_disputable_claims_v2(state: &PalwChainStateV2, mine: &[PalwBondKeyV2]) -> Vec<PalwDisputableClaimV2> {
@@ -581,6 +590,7 @@ pub fn palw_disputable_claims_v2(state: &PalwChainStateV2, mine: &[PalwBondKeyV2
             trace_root: claim.trace_root,
             execution_root: claim.execution_root,
             licensed_daa,
+            free_prompt: matches!(claim.source, crate::palw_state_v2::PalwClaimSourceV2::FreePrompt { .. }),
         });
     }
     out
@@ -629,6 +639,11 @@ pub struct PalwCourtDutyV2 {
     pub session_deadline_daa: u64,
     pub trace_root: Hash64,
     pub execution_root: Hash64,
+    /// The disputed claim is a free-prompt commitment (ADR-0073 Decision 1b). Its anchor is not
+    /// derived from the accepted block — the user set the question — but read as
+    /// `fp_job_id_v3(job)` off the claim's job material, and the prover is handed the user's
+    /// prompt rather than deriving one. `PalwSeatDutyV2` carries the same bit for the same reason.
+    pub free_prompt: bool,
 }
 
 /// Every open session in which `mine` holds the executor's bond or the challenger's.
@@ -664,6 +679,7 @@ pub fn palw_court_duties_v2(state: &PalwChainStateV2, mine: &[PalwBondKeyV2]) ->
             session_deadline_daa: session.deadline_daa,
             trace_root: claim.trace_root,
             execution_root: claim.execution_root,
+            free_prompt: matches!(claim.source, crate::palw_state_v2::PalwClaimSourceV2::FreePrompt { .. }),
         });
     }
     out
@@ -704,6 +720,7 @@ pub fn palw_seat_duties_v2(state: &PalwChainStateV2, state_params: &PalwStatePar
                     _ => 0,
                 },
                 free_prompt: matches!(claim.source, crate::palw_state_v2::PalwClaimSourceV2::FreePrompt { .. }),
+                work_leaves: claim.work_leaves,
             });
         }
     }

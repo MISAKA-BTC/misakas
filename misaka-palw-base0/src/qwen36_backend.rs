@@ -675,6 +675,14 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         self.plan.is_some() && self.profile.is_some()
     }
 
+    fn capture_shape(&self, material: &[u8]) -> Option<kaspa_consensus_core::palw_backend::PalwCaptureShapeV1> {
+        let (binding, ..) = crate::produce::base0_material_decode_v1(material).ok()?;
+        Some(kaspa_consensus_core::palw_backend::PalwCaptureShapeV1 {
+            job_context: binding.job_context.clone(),
+            step_leaf_count: binding.step_leaf_count,
+        })
+    }
+
     fn bisect_prefix_state(&self, material: &[u8], index: u64) -> Option<kaspa_hashes::Hash64> {
         let (binding, tiles, _, _, _) = crate::produce::base0_material_decode_v1(material).ok()?;
         // The count arrived over gossip inside a borsh blob; bounding it BEFORE the allocation is

@@ -804,17 +804,19 @@ impl ValidatorKey {
     ///   uniform non-zero quanta, and a claim that cannot enter the chain should not cost a fee;
     /// * an oversized payload, before it is built rather than after a peer drops it.
     ///
-    /// The CU is NOT re-derived here on purpose: `to_commitment` derived it from the executed
-    /// counts under the bundle's weights, and every validator re-derives it at admission
-    /// (invariant F7). A second derivation site here would be a second place to drift.
+    /// The price is NOT re-derived here on purpose: `work_leaves` is the capture's leaf count the
+    /// worker read off its binding (ADR-0074 Decision 5), and the seats verify it against the
+    /// served capture. What IS asked here is the transition's own question — does this many
+    /// leaves earn a whole quantum of `class_canonical_leaves`, the class's canonical job size —
+    /// so a sub-quantum claim never pays a fee to be refused.
     #[allow(clippy::too_many_arguments)]
     pub fn build_fp_commitment_tx(
         &self,
         network_domain: Hash64,
         commitment: PalwFreePromptCommitmentV3,
         prompt_token_ids: Vec<u32>,
-        weights: &kaspa_consensus_core::palw_freeprompt_v3::PalwFpCuWeightsV3,
         freeprompt: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptParamsV3,
+        class_canonical_leaves: u64,
         funding_outpoint: TransactionOutpoint,
         funding: &UtxoEntry,
         fee: u64,
@@ -825,13 +827,13 @@ impl ValidatorKey {
             self.sign_with_context(fp_claim_id_v3(&commitment).as_bytes().as_slice(), PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT).to_vec();
         let payload = PalwFpCommitmentTxPayloadV3 { version: PALW_FP_V3_VERSION, commitment, prompt_token_ids, signature };
         // The same stateless rules a peer will apply, applied before spending a fee on them.
-        payload
-            .validate_stateless_v3(network_domain, weights)
-            .map_err(|e| format!("free-prompt commitment is not admissible: {e}"))?;
-        // …and the derivation the state machine will demand: a sub-quantum job never enters the
-        // chain, so publishing one is paying a fee for a claim that can never act.
-        let (quanta, pwu) = freeprompt.derive_quanta_and_pwu(payload.commitment.cu).ok_or_else(|| {
-            format!("free-prompt job earns no quanta at cu {} — it certifies nothing the chain can act on", payload.commitment.cu)
+        payload.validate_stateless_v3(network_domain).map_err(|e| format!("free-prompt commitment is not admissible: {e}"))?;
+        let (quanta, pwu) = freeprompt.derive_quanta_and_pwu(payload.commitment.work_leaves, class_canonical_leaves).ok_or_else(|| {
+            format!(
+                "free-prompt job earns no quanta at {} leaves against a {class_canonical_leaves}-leaf canonical job — it certifies \
+                 nothing the chain can act on",
+                payload.commitment.work_leaves
+            )
         })?;
         if quanta == 0 || pwu % (quanta as u64) != 0 || pwu / (quanta as u64) == 0 {
             return Err(format!("free-prompt derivation is not uniform ({pwu} pwu over {quanta} quanta)"));
@@ -2011,14 +2013,13 @@ mod tests {
         .expect("the devnet bundle validates")
     }
 
-    /// A commitment whose CU earns real quanta under the devnet bundle: 96 prompt tokens, 256
-    /// executed decode tokens at 1:64 = 16_480 CU ≈ 16 quanta.
-    fn fp_commitment_fixture(
-        network_domain: Hash64,
-        key: &ValidatorKey,
-        weights: &kaspa_consensus_core::palw_freeprompt_v3::PalwFpCuWeightsV3,
-    ) -> (PalwFreePromptCommitmentV3, Vec<u32>) {
-        fp_commitment_fixture_with_prompt(network_domain, key, weights, 96)
+    /// The floor's canonical job, in leaves (ADR-0074 Decision 5): the fixtures price against it.
+    const FLOOR_LEAVES: u64 = 7_708;
+
+    /// A commitment that earns real quanta under the devnet bundle: 96 prompt tokens, 256
+    /// executed decode tokens, 16 quanta's worth of the floor's leaves.
+    fn fp_commitment_fixture(network_domain: Hash64, key: &ValidatorKey) -> (PalwFreePromptCommitmentV3, Vec<u32>) {
+        fp_commitment_fixture_with_prompt(network_domain, key, 96)
     }
 
     /// The same fixture over a prompt of `prompt_len` tokens.
@@ -2030,10 +2031,9 @@ mod tests {
     fn fp_commitment_fixture_with_prompt(
         network_domain: Hash64,
         key: &ValidatorKey,
-        weights: &kaspa_consensus_core::palw_freeprompt_v3::PalwFpCuWeightsV3,
         prompt_len: u32,
     ) -> (PalwFreePromptCommitmentV3, Vec<u32>) {
-        use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpStopReasonV3, PalwFreePromptJobV3, fp_cu_v3, fp_trace_manifest_v3};
+        use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpStopReasonV3, PalwFreePromptJobV3, fp_trace_manifest_v3};
         let ids: Vec<u32> = (0..prompt_len).collect();
         let job = PalwFreePromptJobV3 {
             version: PALW_FP_V3_VERSION,
@@ -2051,6 +2051,7 @@ mod tests {
             decode_token_limit: 512,
             max_context_tokens: 4_096,
             privacy_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PRIVACY_PUBLIC_DA,
+            prompt_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER,
         };
         let events: Vec<Hash64> = (0..256u64).map(|i| Hash64::from_u64_word(i + 1)).collect();
         let (manifest_root, chunk_count, _) = fp_trace_manifest_v3(Hash64::from_bytes([0xB1; 64]), &events);
@@ -2061,7 +2062,7 @@ mod tests {
             execution_root: Hash64::from_bytes([0x4E; 64]),
             decode_tokens_executed: 256,
             stop_reason: PalwFpStopReasonV3::EndOfGeneration,
-            cu: fp_cu_v3(job.prompt_tokens, 256, weights),
+            work_leaves: 16 * (FLOOR_LEAVES / 8),
             trace_manifest_root: manifest_root,
             trace_chunk_count: chunk_count,
             trace_retention_daa: 505_000,
@@ -2078,7 +2079,7 @@ mod tests {
         let key = compute_key();
         let bundle = fp_bundle();
         let network_domain = Hash64::from_bytes([0x4E; 64]);
-        let (commitment, ids) = fp_commitment_fixture(network_domain, &key, bundle.freeprompt.cu_weights());
+        let (commitment, ids) = fp_commitment_fixture(network_domain, &key);
         let expected_claim = fp_claim_id_v3(&commitment);
 
         let tx = key
@@ -2086,8 +2087,8 @@ mod tests {
                 network_domain,
                 commitment,
                 ids.clone(),
-                bundle.freeprompt.cu_weights(),
                 &bundle.freeprompt,
+                FLOOR_LEAVES,
                 fop(9, 0),
                 &fentry(u64::MAX / 2, 0, false),
                 SF_FEE,
@@ -2098,7 +2099,7 @@ mod tests {
         let decoded: PalwFpCommitmentTxPayloadV3 = borsh::from_slice(&tx.payload).expect("the payload decodes");
         assert_eq!(decoded.claim_id(), expected_claim, "the on-chain claim id is the one the builder signed");
         assert_eq!(decoded.prompt_token_ids, ids, "PublicDA carries the prompt the panel replays from");
-        decoded.validate_stateless_v3(network_domain, bundle.freeprompt.cu_weights()).expect("a peer accepts what we built");
+        decoded.validate_stateless_v3(network_domain).expect("a peer accepts what we built");
 
         // The signature verifies over the claim id under the bond key, in the commitment context…
         assert!(
@@ -2125,8 +2126,7 @@ mod tests {
         let key = compute_key();
         let bundle = fp_bundle();
         let network_domain = Hash64::from_bytes([0x4E; 64]);
-        let weights = bundle.freeprompt.cu_weights();
-        let (commitment, ids) = fp_commitment_fixture(network_domain, &key, weights);
+        let (commitment, ids) = fp_commitment_fixture(network_domain, &key);
 
         // A prompt that is not the committed one.
         let mut wrong_ids = ids.clone();
@@ -2136,8 +2136,8 @@ mod tests {
                 network_domain,
                 commitment.clone(),
                 wrong_ids,
-                weights,
                 &bundle.freeprompt,
+                FLOOR_LEAVES,
                 fop(9, 0),
                 &fentry(u64::MAX / 2, 0, false),
                 SF_FEE,
@@ -2156,23 +2156,25 @@ mod tests {
         // The decode count cannot be the lever: zero is refused separately, as a run that emitted
         // nothing. So the prompt shrinks instead, and the assertion below is what makes the next
         // quantum change fail loudly here rather than silently exercise the payable path.
-        let quantum = bundle.freeprompt.quantum_cu();
-        let (mut tiny, tiny_ids) = fp_commitment_fixture_with_prompt(network_domain, &key, weights, 8);
+        let quantum = kaspa_consensus_core::palw_freeprompt_v3::fp_class_quantum_leaves_v1(
+            FLOOR_LEAVES,
+            bundle.freeprompt.quanta_per_canonical_job(),
+        );
+        let (mut tiny, tiny_ids) = fp_commitment_fixture_with_prompt(network_domain, &key, 8);
         tiny.decode_tokens_executed = 1;
-        tiny.cu = kaspa_consensus_core::palw_freeprompt_v3::fp_cu_v3(tiny.job.prompt_tokens, 1, weights);
+        tiny.work_leaves = quantum / 2;
         assert!(
-            tiny.cu > 0 && tiny.cu < quantum,
-            "the sub-quantum fixture must actually be sub-quantum: cu {} against quantum {}",
-            tiny.cu,
-            quantum
+            tiny.work_leaves > 0 && tiny.work_leaves < quantum,
+            "the sub-quantum fixture must actually be sub-quantum: {} leaves against a quantum of {quantum}",
+            tiny.work_leaves
         );
         let err = key
             .build_fp_commitment_tx(
                 network_domain,
                 tiny,
                 tiny_ids,
-                weights,
                 &bundle.freeprompt,
+                FLOOR_LEAVES,
                 fop(9, 0),
                 &fentry(u64::MAX / 2, 0, false),
                 SF_FEE,

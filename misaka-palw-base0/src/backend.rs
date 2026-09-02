@@ -58,6 +58,69 @@ impl Base0Backend {
     }
 }
 
+impl Base0Backend {
+    /// The one prover behind both [`PalwExecutionBackendV1::refutation_for_index`] and
+    /// [`PalwExecutionBackendV1::refutation_for_free_prompt_index`]: `carried` is `None` for an
+    /// attempt (the prompt is re-derived from the anchor) and the user's ids for a free prompt.
+    fn refutation_with_prompt(
+        &self,
+        material: &[u8],
+        index: u64,
+        carried: Option<&[u32]>,
+    ) -> Result<kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1, String> {
+        let (binding, tiles, logits_rows, generated, _) =
+            base0_material_decode_v1(material).map_err(|_| "the capture does not decode".to_string())?;
+        // The ladder narrows to an INDEX; the prover addresses a COORDINATE. `canonical_step_
+        // coordinates` is the inverse of the index the ladder counts in, and it answers `None` for
+        // the KV aux leaves, which live in their own coordinate space and cannot be opened this way.
+        let coord = kaspa_consensus_core::palw_step::canonical_step_coordinates(&binding.shape_profile, &binding.job_context, index)
+            .ok_or_else(|| format!("leaf {index} is not a main step coordinate"))?;
+        let leaves = leaves_by_position(&binding, &tiles);
+        let step_tiles = crate::legs::Base0StepTilesV1 { leaves, tiles };
+        let pin = kaspa_consensus_core::palw_step_refute::PalwDecodeTokenPinV1::Base0V1(
+            kaspa_consensus_core::palw_step_refute::PalwBase0DecodeTokensV1 { logits_rows, generated_token_ids: generated },
+        );
+        // **The prompt: re-derived for an attempt, carried for a free prompt** (ADR-0073 Decision
+        // 1c). An embedding leaf is adjudicated against the token it read, so a refutation with no
+        // prompt reads `Unadjudicable` at leaf 0 — and the retained material does not carry the
+        // ids. An attempt's job does not need them carried: its `job_id` IS the anchor and the
+        // prompt is a pure function of it, so a carried copy would be a second place the producer
+        // could disagree with the chain about what it was asked. A free prompt is the user's and
+        // derives from nothing — the caller hands it over, and one that is not the binding's own
+        // is refused HERE: the court reads a wrong list as `InputSetNotCanonical` and files no
+        // verdict, which is the shape every free-prompt close on this floor used to take.
+        let prompt_token_ids: Vec<u32> = match carried {
+            Some(ids) => {
+                if kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(ids) != binding.job_context.prompt_token_ids_hash {
+                    return Err("the carried prompt is not the one this capture's job context commits to".to_string());
+                }
+                ids.to_vec()
+            }
+            None => {
+                let (_, prompt) = crate::produce::base0_rc_job_v1(
+                    &binding.shape_profile,
+                    binding.job_context.job_id,
+                    self.artifact.shape.vocab,
+                    binding.job_context.declared_prefill_tokens,
+                    binding.job_context.exact_decode_tokens,
+                );
+                prompt.iter().map(|t| *t as u32).collect()
+            }
+        };
+        crate::legs::base0_refutation_from_capture_v1(
+            &binding.shape_profile.clone(),
+            &binding.job_context.clone(),
+            &step_tiles,
+            binding,
+            coord,
+            prompt_token_ids,
+            Some(pin),
+            None,
+        )
+        .map_err(|e| format!("{e:?}"))
+    }
+}
+
 impl PalwExecutionBackendV1 for Base0Backend {
     fn model_id(&self) -> &str {
         &self.model_id
@@ -124,6 +187,7 @@ impl PalwExecutionBackendV1 for Base0Backend {
             activation_leg_root: Hash64::default(),
             checkpoint_leg_root: Hash64::default(),
             step_leg_root: Hash64::default(),
+            step_leaf_count: 0,
         };
 
         // The context the COURT will recompute against — built first, and then run under. The
@@ -147,6 +211,8 @@ impl PalwExecutionBackendV1 for Base0Backend {
             activation_leg_root: run.binding.activation_leg_root,
             checkpoint_leg_root,
             step_leg_root,
+            // The price (ADR-0074 Decision 5): read off the binding, never declared.
+            step_leaf_count: run.binding.step_leaf_count,
             ..shape
         };
         let material = base0_material_encode_v1(&run).map_err(|e| e.to_string())?;
@@ -236,6 +302,14 @@ impl PalwExecutionBackendV1 for Base0Backend {
         true
     }
 
+    fn capture_shape(&self, material: &[u8]) -> Option<kaspa_consensus_core::palw_backend::PalwCaptureShapeV1> {
+        let (binding, ..) = base0_material_decode_v1(material).ok()?;
+        Some(kaspa_consensus_core::palw_backend::PalwCaptureShapeV1 {
+            job_context: binding.job_context.clone(),
+            step_leaf_count: binding.step_leaf_count,
+        })
+    }
+
     fn bisect_prefix_state(&self, material: &[u8], index: u64) -> Option<kaspa_hashes::Hash64> {
         let (binding, tiles, _, _, _) = base0_material_decode_v1(material).ok()?;
         let leaves = leaves_by_position(&binding, &tiles);
@@ -247,43 +321,16 @@ impl PalwExecutionBackendV1 for Base0Backend {
         material: &[u8],
         index: u64,
     ) -> Result<kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1, String> {
-        let (binding, tiles, logits_rows, generated, _) =
-            base0_material_decode_v1(material).map_err(|_| "the capture does not decode".to_string())?;
-        // The ladder narrows to an INDEX; the prover addresses a COORDINATE. `canonical_step_
-        // coordinates` is the inverse of the index the ladder counts in, and it answers `None` for
-        // the KV aux leaves, which live in their own coordinate space and cannot be opened this way.
-        let coord = kaspa_consensus_core::palw_step::canonical_step_coordinates(&binding.shape_profile, &binding.job_context, index)
-            .ok_or_else(|| format!("leaf {index} is not a main step coordinate"))?;
-        let leaves = leaves_by_position(&binding, &tiles);
-        let step_tiles = crate::legs::Base0StepTilesV1 { leaves, tiles };
-        let pin = kaspa_consensus_core::palw_step_refute::PalwDecodeTokenPinV1::Base0V1(
-            kaspa_consensus_core::palw_step_refute::PalwBase0DecodeTokensV1 { logits_rows, generated_token_ids: generated },
-        );
-        // **The prompt, re-derived rather than carried.** An embedding leaf is adjudicated against
-        // the token it read, so a refutation with no prompt reads `Unadjudicable` at leaf 0 — and
-        // the retained material does not carry the ids. It does not need to: the job's own
-        // `job_id` IS the anchor, and the prompt is a pure function of the anchor. Re-deriving is
-        // also the safer half of the choice, because a carried prompt would be a second place the
-        // producer could disagree with the chain about what it was asked.
-        let (_, prompt) = crate::produce::base0_rc_job_v1(
-            &binding.shape_profile,
-            binding.job_context.job_id,
-            self.artifact.shape.vocab,
-            binding.job_context.declared_prefill_tokens,
-            binding.job_context.exact_decode_tokens,
-        );
-        let prompt_token_ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
-        crate::legs::base0_refutation_from_capture_v1(
-            &binding.shape_profile.clone(),
-            &binding.job_context.clone(),
-            &step_tiles,
-            binding,
-            coord,
-            prompt_token_ids,
-            Some(pin),
-            None,
-        )
-        .map_err(|e| format!("{e:?}"))
+        self.refutation_with_prompt(material, index, None)
+    }
+
+    fn refutation_for_free_prompt_index(
+        &self,
+        material: &[u8],
+        index: u64,
+        prompt_token_ids: &[u32],
+    ) -> Result<kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1, String> {
+        self.refutation_with_prompt(material, index, Some(prompt_token_ids))
     }
 
     fn operand_openings_for(
@@ -372,6 +419,7 @@ mod tests {
             decode_token_limit,
             max_context_tokens: backend.profile().n_ctx,
             privacy_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PRIVACY_PUBLIC_DA,
+            prompt_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER,
         }
     }
 
@@ -429,7 +477,6 @@ mod tests {
     #[test]
     fn a_free_prompt_run_assembles_a_commitment_whose_fields_are_all_derived() {
         use kaspa_consensus_core::palw_fp_execution_v3::{palw_fp_commitment_v3, palw_fp_job_context_v3};
-        use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpCuWeightsV3, fp_cu_v3};
 
         let backend = floor_backend();
         let prompt: Vec<usize> = vec![3, 5, 8, 13, 21];
@@ -437,19 +484,13 @@ mod tests {
         let run = backend.execute_free_prompt(&job, &prompt).expect("the floor runs a caller's prompt");
 
         let class = floor_class_facts(&backend);
-        let weights = PalwFpCuWeightsV3 { prefill_weight: 1, decode_weight: 4 };
         let retention = 4_096;
-        let commitment =
-            palw_fp_commitment_v3(&job, &class, &run, RC_NETWORK_ID, &weights, retention).expect("a finished run commits");
+        let commitment = palw_fp_commitment_v3(&job, &class, &run, RC_NETWORK_ID, retention).expect("a finished run commits");
 
-        // Priced by the assembly, from counts and weights — never carried up from the executor.
-        assert_eq!(commitment.cu, fp_cu_v3(job.prompt_tokens, run.facts.decode_tokens_executed, &weights));
-        // `5 * 1` is written out rather than folded: the two products ARE the assertion — five
-        // prompt tokens at prefill_weight 1 plus two decoded at decode_weight 4. Reducing it to
-        // `5 + 8` would state the answer and stop showing which weight met which count.
-        #[allow(clippy::identity_op)]
-        let expected_cu = 5 * 1 + 2 * 4;
-        assert_eq!(commitment.cu, expected_cu, "the weights are applied to the counts, not to the ceiling");
+        // Priced by the capture's leaf count (ADR-0074 Decision 5) — read off the binding the run
+        // committed, never carried up as a number the executor chose.
+        assert_eq!(commitment.work_leaves, run.facts.step_leaf_count);
+        assert!(commitment.work_leaves > 0, "a run that touched no leaf committed nothing");
 
         // The schedule is a function of the context and the counts. Recomputing it the way a
         // verifier does must land on the same value.
@@ -788,6 +829,108 @@ mod tests {
         assert_ne!(a.prompt_token_ids_hash, b.prompt_token_ids_hash);
         assert_eq!(a.declared_prefill_tokens, b.declared_prefill_tokens, "the SHAPE is the class's, not the anchor's");
     }
+
+    /// **A free-prompt capture adjudicates in the same court as an attempt's** (ADR-0073
+    /// Decision 1; the FP twin of ADR-0069's drill). The floor runs a caller's prompt; the capture
+    /// it retains verifies against the claim's roots under the FP anchor — the job id — and under
+    /// no attempt anchor; handed the user's prompt, every leaf of the step space clears the honest
+    /// capture; the attempt-path prover, handed the same capture, derives a foreign prompt and the
+    /// court reads NO verdict at all (the shape every FP close used to take); a foreign prompt is
+    /// refused at the prover; and one tampered lane convicts at kernels of different shapes.
+    #[test]
+    fn every_free_prompt_leaf_adjudicates_and_a_tampered_one_convicts() {
+        use kaspa_consensus_core::palw_artifact::{PalwProvenOperandsV1, open_artifact_leaf_v1};
+        use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpRunFactsV3, palw_fp_job_context_v3};
+        use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpStopReasonV3, fp_job_id_v3};
+        use kaspa_consensus_core::palw_step_refute::{PalwStepRefuteError, check_execution_step_refutation_v1};
+        use kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2;
+
+        let backend = floor_backend();
+        let prompt: Vec<usize> = vec![3, 5, 8, 13, 21];
+        let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        let mut job = free_prompt_job(&backend, prompt.len() as u32, 2);
+        // The user's prompt, hash-bound to the job the way the 0x4a payload binds it.
+        job.prompt_token_ids_hash = prompt_token_ids_hash_v2(&ids);
+        let run = backend.execute_free_prompt(&job, &prompt).expect("the floor runs a caller's prompt");
+        let capture = run.outcome.material.clone();
+        let (binding, ..) = base0_material_decode_v1(&capture).expect("an FP capture is the family tuple");
+        assert_eq!(binding.job_context.job_id, fp_job_id_v3(&job), "an FP capture names its job by the job id");
+        assert_eq!(binding.job_context.prompt_token_ids_hash, job.prompt_token_ids_hash);
+
+        // The seat's half: the FP anchor IS the job id (ADR-0073 Decision 1b), and the capture
+        // verifies under it — and under nothing an attempt-lane derivation could produce, which
+        // is what kept every FP close from assembling.
+        let roots = PalwClaimRootsV1 {
+            execution_root: run.outcome.execution_root,
+            trace_root: run.outcome.trace_root,
+            anchor: fp_job_id_v3(&job),
+        };
+        assert_eq!(backend.verify_material(&capture, roots), PalwMaterialVerdictV1::Matches);
+        let attempt_anchor = PalwClaimRootsV1 { anchor: Hash64::from_u64_word(0xA71E), ..roots };
+        assert_ne!(backend.verify_material(&capture, attempt_anchor), PalwMaterialVerdictV1::Matches);
+
+        // One proven oracle over the whole inventory — the production path a close takes.
+        let inventory = crate::inventory::base0_inventory_v1(&backend.artifact, backend.inventory_geometry).expect("inventory");
+        let openings: Vec<_> =
+            (0..inventory.operands().len()).map(|i| open_artifact_leaf_v1(inventory.operands(), i as u32).unwrap()).collect();
+        let oracle = PalwProvenOperandsV1::from_openings_v1(&openings, inventory.root()).expect("every row proves against its root");
+
+        // The sweep: every leaf clears the honest capture when the prover holds the user's prompt.
+        for index in 0..binding.step_leaf_count {
+            let refutation = backend
+                .refutation_for_free_prompt_index(&capture, index, &ids)
+                .unwrap_or_else(|e| panic!("leaf {index} must open from an honest FP capture: {e}"));
+            let got = check_execution_step_refutation_v1(&refutation, &oracle);
+            assert!(
+                matches!(got, Err(PalwStepRefuteError::NoFaultFound)),
+                "an honest free-prompt execution must clear itself at leaf {index} (coord {:?}): got {got:?}",
+                refutation.output_preimage.coord
+            );
+        }
+
+        // The attempt-path prover derives the prompt from the anchor. For an FP capture that is a
+        // foreign list, and the court's guard reads it as NO verdict — a close that assembles and
+        // never adjudicates. That is ADR-0073 §4 G1, kept as the negative control.
+        let from_anchor = backend.refutation_for_index(&capture, 0).expect("the attempt-path prover still assembles");
+        let got = check_execution_step_refutation_v1(&from_anchor, &oracle);
+        assert!(
+            matches!(got, Err(PalwStepRefuteError::InputSetNotCanonical(..))),
+            "the derived prompt is not the user's: got {got:?}"
+        );
+        // …and a foreign prompt handed to the FP prover is refused before any court sees it.
+        let mut foreign = ids.clone();
+        foreign[0] ^= 1;
+        assert!(
+            backend.refutation_for_free_prompt_index(&capture, 0, &foreign).is_err(),
+            "a prompt that is not the binding's is refused"
+        );
+
+        // The other direction: one tampered lane convicts. The fault is injected into the SAME
+        // job context `execute_free_prompt` ran under, so the lying capture is an FP capture.
+        let shape = PalwFpRunFactsV3 {
+            decode_tokens_executed: job.decode_token_limit,
+            stop_reason: PalwFpStopReasonV3::ExactBudgetReached,
+            full_logits_trace_root: Hash64::default(),
+            activation_leg_root: Hash64::default(),
+            checkpoint_leg_root: Hash64::default(),
+            step_leg_root: Hash64::default(),
+            step_leaf_count: 0,
+        };
+        let ctx = palw_fp_job_context_v3(&job, &floor_class_facts(&backend), &shape, RC_NETWORK_ID).expect("the FP context");
+        assert_eq!(ctx.job_id, binding.job_context.job_id, "the drill runs the job the honest capture ran");
+        for &index in &[0u64, binding.step_leaf_count / 3, binding.step_leaf_count - 1] {
+            let lying = backend.execute_with_injected_fault(&ctx, &prompt, index).expect("a tampered FP capture still commits");
+            assert_ne!(lying.execution_root, run.outcome.execution_root, "the lie commits its own root");
+            let refutation =
+                backend.refutation_for_free_prompt_index(&lying.material, index, &ids).expect("a tampered capture opens too");
+            let openings = backend.operand_openings_for(&refutation).expect("the prover opens what the court resolves");
+            let proven = PalwProvenOperandsV1::from_openings_v1(&openings, inventory.root()).expect("recorded openings prove");
+            assert!(
+                check_execution_step_refutation_v1(&refutation, &proven).is_ok(),
+                "a tampered lane at leaf {index} of a free-prompt capture must convict, not read as no fault"
+            );
+        }
+    }
 }
 
 /// **The whole lane, end to end, with a real execution in it.**
@@ -808,8 +951,8 @@ mod end_to_end_tests {
     use crate::classes::{canonical_class_by_model_id_v1, resolve_class_v1};
     use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, palw_fp_commitment_v3};
     use kaspa_consensus_core::palw_freeprompt_v3::{
-        PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_V3_VERSION, PalwBeaconFactV3, PalwFpCuWeightsV3, PalwFreePromptJobV3, fp_claim_id_v3,
-        fp_quanta_v3,
+        PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER, PALW_FP_V3_VERSION, PalwBeaconFactV3, PalwFreePromptJobV3,
+        fp_claim_id_v3, fp_quanta_v3,
     };
     use kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2;
     use kaspa_consensus_core::palw_state_v2::{
@@ -821,12 +964,6 @@ mod end_to_end_tests {
     const MATURITY: u64 = 5;
     const USE_WINDOW: u64 = 50;
     const NETWORK: &[u8] = b"misaka-palw-rc";
-    /// **The shipped devnet quantum.** It was 1,000, which no registered class could reach; it is
-    /// now 100 (lowered with `pwu_per_quantum`, weight-per-CU held constant — see the constant's
-    /// comment in `palw_fp_devnet_v3`), and the floor's widest job (705 CU) clears it. This test
-    /// asserts on the shipped value so it fails if that pricing regresses, rather than pinning its
-    /// own.
-    const QUANTUM_CU: u128 = 100;
 
     fn h(v: u64) -> Hash64 {
         Hash64::from_u64_word(v)
@@ -867,6 +1004,7 @@ mod end_to_end_tests {
             decode_token_limit: decode,
             max_context_tokens: backend.profile().n_ctx,
             privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
+            prompt_mode: PALW_FP_PROMPT_MODE_USER,
         };
         let run = backend.execute_free_prompt(&job, &prompt).expect("the floor runs a caller's prompt");
         let class = PalwFpClassFactsV3 {
@@ -876,16 +1014,26 @@ mod end_to_end_tests {
             shape_profile_id: backend.profile().shape_profile_id(),
             cu_ruleset_id: Hash64::default(),
         };
-        let weights = PalwFpCuWeightsV3 { prefill_weight: 1, decode_weight: 64 };
-        let commitment = palw_fp_commitment_v3(&job, &class, &run, NETWORK, &weights, 999_999).expect("a finished run commits");
+        let commitment = palw_fp_commitment_v3(&job, &class, &run, NETWORK, 999_999).expect("a finished run commits");
         let claim_id = fp_claim_id_v3(&commitment);
-        let quanta = fp_quanta_v3(commitment.cu, QUANTUM_CU, 16);
-        assert!(quanta >= 1, "this job must earn at least one draw to be worth certifying, got {quanta} at cu {}", commitment.cu);
+        // The floor's quantum is an eighth of its own canonical job (ADR-0074 Decision 5).
+        let (canonical_ctx, _) = backend.job_for_anchor(h(0xF1)).expect("the floor implies a canonical job");
+        let canonical_leaves = kaspa_consensus_core::palw_step::step_leaf_count(backend.profile(), &canonical_ctx).expect("counts");
+        let quantum = kaspa_consensus_core::palw_freeprompt_v3::fp_class_quantum_leaves_v1(canonical_leaves, 8);
+        let quanta = fp_quanta_v3(commitment.work_leaves, quantum, 64);
+        assert!(
+            quanta >= 1,
+            "this job must earn at least one draw to be worth certifying, got {quanta} at {} leaves",
+            commitment.work_leaves
+        );
 
         // ---- the chain: register, commit, bind, license, finalise ------------------------------
         // The base class is the floor's REAL id — the state machine refuses a first registration
         // that is not the declared base, and the whole point here is that this is the floor.
-        let params = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, entry.class_id(), 4, 1000, 100, 800, 0).unwrap();
+        let params = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, entry.class_id(), 4, 1000, 100, 800, 0)
+            .unwrap()
+            .with_fp_quanta(8, 64)
+            .unwrap();
         let at =
             |block: u64, daa: u64, blue: u64| PalwBlockContextV2 { block: h(block), daa_score: daa, blue_score: blue, subsidy: 0 };
         let registrations = vec![
@@ -893,7 +1041,9 @@ mod end_to_end_tests {
                 class_id: entry.class_id(),
                 artifact_root: root,
                 slash_value_per_pwu: 5,
-                pwu_rule: PalwPwuRuleV2::MaxPerAttempt(1_000_000),
+                // The floor's own canonical job, so the transition's quantum is the 963 leaves
+                // this test priced against (ADR-0074 Decision 5).
+                pwu_rule: PalwPwuRuleV2::DerivedV1 { pwu_per_inference: canonical_leaves },
                 // Every ticket admits: the lottery is tested where it lives, and a target that
                 // refused here would make this test about luck.
                 initial_target: u128::MAX,
@@ -905,7 +1055,10 @@ mod end_to_end_tests {
                 bond: PalwBondKeyV2(bond_outpoint),
                 pubkey: pubkey.clone(),
                 operator_pubkey: vec![21; 8],
-                collateral: 1_000,
+                // Sized for the work it backs: the floor's job is thousands of leaves at slash 5,
+                // and admission item 8 now reaches this lane (ADR-0074 review) — a bond that
+                // cannot back its own claim is refused, not admitted and hoped over.
+                collateral: 100_000,
                 payout_payload: h(0x9A11),
                 capable_classes: Default::default(),
                 signature: Vec::new(),
@@ -919,8 +1072,9 @@ mod end_to_end_tests {
             class_id: entry.class_id(),
             bond: PalwBondKeyV2(bond_outpoint),
             executor_pubkey: pubkey.clone(),
-            pwu: quanta as u64 * 100,
-            quanta,
+            work_leaves: commitment.work_leaves,
+            prompt_token_ids_hash: commitment.job.prompt_token_ids_hash,
+            decode_tokens_executed: commitment.decode_tokens_executed,
             trace_root: commitment.trace_root,
             output_root: commitment.output_root,
             execution_root: commitment.execution_root,
@@ -945,7 +1099,8 @@ mod end_to_end_tests {
         // roots are honestly that material's, and a root-only seat certifies it. The seat
         // re-prices what it actually ran against these two numbers (kaspad's `fp_price_of`), so
         // they have to be on the duty or the check is unwritable.
-        assert_eq!(duty.pwu, quanta as u64 * 100, "the duty carries the claim's pwu");
+        assert_eq!(duty.pwu, quanta as u64 * quantum, "the duty carries the claim's pwu — whole quanta of the floor's own job");
+        assert_eq!(duty.work_leaves, commitment.work_leaves, "and the leaves it was priced from");
         assert_eq!(duty.quanta, quanta, "and its quanta");
         let (s4, _) = apply_palw_transition_v2(
             &s3,

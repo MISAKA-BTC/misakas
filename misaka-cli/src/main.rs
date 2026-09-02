@@ -341,6 +341,13 @@ enum PalwCmd {
         /// material no seat can replay the job, and an Unavailable quorum DEFAULTS the executor.
         #[arg(long)]
         material_out: Option<std::path::PathBuf>,
+        /// The executor's CAPTURE for this claim — the family material the worker retained
+        /// (`material.bin` under its `--trace-out`). With it, `--material-out` writes an `FPC1`
+        /// payload (job + prompt + capture) instead of the question-only `FPM1`, and a seat can
+        /// verify the claim from the bytes instead of re-running it, and a court can try it
+        /// (ADR-0073 Decision 1a). Requires `--material-out`.
+        #[arg(long, requires = "material_out")]
+        capture: Option<std::path::PathBuf>,
     },
 }
 
@@ -789,7 +796,9 @@ async fn main() -> std::process::ExitCode {
         }
         Command::Evm(EvmCmd::Tx(EvmTxCmd::Status { hash })) => eth::tx_status(&ctx, &hash),
         Command::Evm(EvmCmd::Tx(EvmTxCmd::Wait { hash, timeout, poll })) => eth::tx_wait(&ctx, &hash, timeout, poll),
-        Command::Palw(PalwCmd::FpSubmit { tx, yes, material_out }) => palw_fp::submit(&ctx, &tx, yes, material_out.as_deref()).await,
+        Command::Palw(PalwCmd::FpSubmit { tx, yes, material_out, capture }) => {
+            palw_fp::submit(&ctx, &tx, yes, material_out.as_deref(), capture.as_deref()).await
+        }
         Command::Wallet(WalletCmd::Utxo(UtxoCmd::List { address, key })) => {
             wallet::utxo_list(&ctx, address.as_deref(), &key.source()).await
         }

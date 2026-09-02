@@ -238,6 +238,7 @@ fn run_job(trace_out: PathBuf) {
         decode_token_limit: request.decode_token_limit,
         max_context_tokens: request.max_context_tokens,
         privacy_mode: request.privacy_mode,
+        prompt_mode: request.prompt_mode,
     };
     let binding = fp_job_id_v3(&job);
 
@@ -305,6 +306,7 @@ fn run_job(trace_out: PathBuf) {
         trace_chunk_count: run.outcome.trace_chunk_count,
         trace_event_count: run.facts.decode_tokens_executed,
         decode_tokens_executed: run.facts.decode_tokens_executed,
+        step_leaf_count: run.facts.step_leaf_count,
         stop_reason: PalwFpStopReasonV3::ExactBudgetReached,
         output_token_ids: run.output_token_ids,
         rendered: rendered.into_bytes(),

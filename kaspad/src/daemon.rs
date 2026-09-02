@@ -1531,6 +1531,9 @@ Do you confirm? (y/n)";
                         class_artifacts: args.palw_class_artifact.iter().map(std::path::PathBuf::from).collect(),
                         class_cache_bytes: args.palw_class_cache_bytes,
                         challenge: args.palw_challenge || args.palw_drill_challenge_all,
+                        canonical_claims: args.palw_canonical_claims,
+                        canonical_class: args.palw_canonical_class.clone(),
+                        canonical_interval_daa: args.palw_canonical_interval_daa,
                         // The same directory the producer writes to, so a node that produces can
                         // answer a court about its own work after its gossip pool has moved on.
                         retention_dir: app_dir.join(network.to_prefixed()).join("palw-retention"),

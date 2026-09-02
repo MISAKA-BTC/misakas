@@ -253,6 +253,13 @@ pub struct Args {
     pub palw_drill_tamper_leaf: Option<u64>,
     /// DRILL ONLY: open a court against every licensed claim, reproduced or not.
     pub palw_drill_challenge_all: bool,
+    /// ADR-0074 Decision 1: run the network's own job when nobody is asking and commit it as a
+    /// canonical free-prompt claim, drawn by the chain's beacon like any other.
+    pub palw_canonical_claims: bool,
+    /// The 128-hex class the canonical claims are run on (defaults to the producer class).
+    pub palw_canonical_class: Option<String>,
+    /// DAA score between two canonical claims from this bond.
+    pub palw_canonical_interval_daa: u64,
     pub palw_producer_pay_address: Option<String>,
     pub palw_panel: bool,
     pub palw_fee_outpoint: Option<String>,
@@ -401,6 +408,9 @@ impl Default for Args {
             palw_challenge: false,
             palw_drill_tamper_leaf: None,
             palw_drill_challenge_all: false,
+            palw_canonical_claims: false,
+            palw_canonical_class: None,
+            palw_canonical_interval_daa: 600,
             palw_producer_pay_address: None,
             palw_panel: false,
             palw_fee_outpoint: None,
@@ -888,6 +898,31 @@ pub fn cli() -> Command {
                      inference per claim and stakes this bond the claim's own reserved amount on every dispute it opens, \
                      so it is a watchdog role rather than something every seat does.",
                 ),
+        )
+        .arg(
+            Arg::new("palw-canonical-claims")
+                .long("palw-canonical-claims")
+                .env("KASPAD_PALW_CANONICAL_CLAIMS")
+                .action(clap::ArgAction::SetTrue)
+                .help(
+                    "PALW (ADR-0074): when nobody is asking, run the network's own job and commit it as a canonical \
+                     free-prompt claim — drawn by the chain's beacon, priced in leaves, verified and tried exactly as a \
+                     user's. Needs --palw-fee-outpoint for the commitment's fee.",
+                ),
+        )
+        .arg(
+            Arg::new("palw-canonical-class")
+                .long("palw-canonical-class")
+                .value_name("HEX")
+                .help("PALW: the 128-hex class id canonical claims are run on (default: the producer class, else the floor)."),
+        )
+        .arg(
+            Arg::new("palw-canonical-interval-daa")
+                .long("palw-canonical-interval-daa")
+                .value_name("DAA")
+                .value_parser(clap::value_parser!(u64))
+                .default_value("600")
+                .help("PALW: DAA score between two canonical claims from this bond."),
         )
         .arg(
             Arg::new("palw-producer-class")
@@ -1509,6 +1544,12 @@ impl Args {
                 .get_one::<bool>("palw-drill-challenge-all")
                 .copied()
                 .unwrap_or(defaults.palw_drill_challenge_all),
+            palw_canonical_claims: m.get_one::<bool>("palw-canonical-claims").copied().unwrap_or(defaults.palw_canonical_claims),
+            palw_canonical_class: m.get_one::<String>("palw-canonical-class").cloned().or(defaults.palw_canonical_class),
+            palw_canonical_interval_daa: m
+                .get_one::<u64>("palw-canonical-interval-daa")
+                .copied()
+                .unwrap_or(defaults.palw_canonical_interval_daa),
             palw_producer_pay_address: m
                 .get_one::<String>("palw-producer-pay-address")
                 .cloned()

@@ -68,6 +68,16 @@ const RECEIPTS_PER_CLAIM: usize = 16;
 /// Distinct material payloads kept per claim (mirrors the gossip relay budget).
 const MATERIALS_PER_CLAIM: usize = 4;
 
+/// The family capture inside a pool payload: an `FPC1` payload's inner tuple (ADR-0073 Decision
+/// 1a), or the bytes themselves for an attempt's raw capture. What `verify_material` and the
+/// provers take — the pool and the retention keep the payload as it travelled.
+fn fp_capture_view(bytes: &[u8]) -> std::borrow::Cow<'_, [u8]> {
+    match kaspa_consensus_core::palw_freeprompt_v3::palw_fp_capture_decode_v1(bytes) {
+        Some(payload) => std::borrow::Cow::Owned(payload.capture),
+        None => std::borrow::Cow::Borrowed(bytes),
+    }
+}
+
 /// **How many carriers this panel may have unconfirmed at once.**
 ///
 /// Every carrier spends the previous one's change, so a panel's whole output is ONE chain of
@@ -153,6 +163,15 @@ pub struct PalwPanelConfig {
     /// opening a court stakes this bond the claim's own reserved amount. A network wants some
     /// nodes doing it, not all of them — which is the same shape as any other watchdog.
     pub challenge: bool,
+    /// **ADR-0074 Decision 1: the work queue.** When nobody is asking, run the network's own job
+    /// on `canonical_class` and commit it as a canonical free-prompt claim — drawn by the chain's
+    /// beacon, priced in leaves, verified and tried exactly as a user's. Funded like every other
+    /// carrier this node submits (`fee_outpoint`).
+    pub canonical_claims: bool,
+    /// The 128-hex class canonical claims run on; the network's base class when unset.
+    pub canonical_class: Option<String>,
+    /// DAA score between two canonical claims from this bond.
+    pub canonical_interval_daa: u64,
     /// DRILL ONLY: dispute even a claim this node reproduces exactly, so the innocent half of a
     /// round trip can be shown on a live chain. Refused on mainnet by the daemon.
     pub drill_challenge_all: bool,
@@ -252,16 +271,6 @@ impl PalwPanelService {
     /// **This network's price for a job shape** — the same arithmetic the chain used to open the
     /// claim (`fp_cu_v3` then `derive_quanta_and_pwu`), read from the bundle rather than
     /// re-spelled, so a seat and the chain cannot come to two prices for one job.
-    fn fp_price_of(&self, prompt_tokens: u32, decode_tokens_executed: u32) -> Option<(u32, u64)> {
-        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) =
-            &self.consensus_config.params.palw_consensus_mode
-        else {
-            return None;
-        };
-        let cu =
-            kaspa_consensus_core::palw_freeprompt_v3::fp_cu_v3(prompt_tokens, decode_tokens_executed, bundle.freeprompt.cu_weights());
-        bundle.freeprompt.derive_quanta_and_pwu(cu)
-    }
 
     /// The panel's one resolve door: the tables, then — armed — the chain's own registration,
     /// read from this session (ADR-0067). Every duty path resolves through here so a
@@ -1073,6 +1082,234 @@ impl PalwPanelService {
         }
     }
 
+    /// **A free-prompt claim's job, and the user's prompt, off its job material** (ADR-0073
+    /// Decision 1b). Either payload spelling (`FPC1` or `FPM1`) carries the question the user
+    /// fixed on chain — the job whose id is the claim's anchor and the ids that hash to its
+    /// `prompt_token_ids_hash` — and it is the only place the prompt lives off chain. The pool
+    /// first, then this node's own retention and its foreign directory; class, bond and privacy
+    /// mode are pre-checked so garbage fails before anything is derived from it.
+    fn fp_job_material_for_claim(
+        &self,
+        claim: &Hash64,
+        class_id: Hash64,
+        executor_bond: &kaspa_consensus_core::palw_state_v2::PalwBondKeyV2,
+        pooled: &[Vec<u8>],
+    ) -> Option<kaspa_consensus_core::palw_freeprompt_v3::PalwFpMaterialV1> {
+        let disk = [
+            crate::palw_producer::palw_retained_material_path(&self.config.retention_dir, claim),
+            self.config.retention_dir.join("foreign").join(format!("{claim}.material")),
+        ]
+        .into_iter()
+        .filter_map(|path| std::fs::read(path).ok());
+        pooled.iter().cloned().chain(disk).find_map(|bytes| {
+            let material = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_job_material_decode_v1(&bytes)?;
+            (material.job.class_id == class_id
+                && material.job.executor_bond == executor_bond.0
+                && material.job.privacy_mode == kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PRIVACY_PUBLIC_DA)
+                .then_some(material)
+        })
+    }
+
+    /// **The prompt a free-prompt claim's job was run over** (ADR-0074 Decision 1). For a user's
+    /// job, the ids in the job material, hash-bound to the job. For a CANONICAL job, the family's
+    /// own derivation from `fp_canonical_anchor_v1(job)` — the same `job_for_anchor` the attempt
+    /// lane runs from a block's template — which the material must agree with: a canonical claim
+    /// whose job hash is not the derived prompt's, or whose material carries any other prompt,
+    /// is not the network's job, and no seat certifies it and no court is opened over it.
+    fn fp_prompt_for_job(
+        backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
+        material: &kaspa_consensus_core::palw_freeprompt_v3::PalwFpMaterialV1,
+    ) -> Option<Vec<u32>> {
+        use kaspa_consensus_core::palw_freeprompt_v3::{PALW_FP_PROMPT_MODE_CANONICAL, fp_canonical_anchor_v1};
+        if material.job.prompt_mode != PALW_FP_PROMPT_MODE_CANONICAL {
+            return Some(material.prompt_token_ids.clone());
+        }
+        let (ctx, prompt) = backend.job_for_anchor(fp_canonical_anchor_v1(&material.job)).ok()?;
+        let derived: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        let is_the_networks_job = kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(&derived)
+            == material.job.prompt_token_ids_hash
+            && derived.len() == material.job.prompt_tokens as usize
+            && ctx.declared_prefill_tokens == material.job.prompt_tokens
+            && derived == material.prompt_token_ids;
+        is_the_networks_job.then_some(derived)
+    }
+
+    /// **A seat checks; it does not re-run** (ADR-0073 Decision 1e). Leaves drawn with this
+    /// node's own randomness — leaf 0 always, because the prompt's first embedding gather is
+    /// where a run over a different prompt shows — each opened by the prover from the served
+    /// capture with the user's prompt, and adjudicated by the court's own check against rows
+    /// proven to the class root. `NoFaultFound` on every sample is what a seat can truthfully
+    /// sign as `Valid`. A fault is the court's business: this seat simply has not verified the
+    /// claim. A leaf the prover cannot open (an aux leaf outside the main coordinates, or one the
+    /// court cannot read) is re-drawn, bounded — a capture that yields fewer clear samples than
+    /// asked is not verified either.
+    fn fp_capture_samples_clear(
+        &self,
+        backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
+        capture: &[u8],
+        prompt_token_ids: &[u32],
+        step_leaf_count: u64,
+        artifact_root: Hash64,
+        claim: &Hash64,
+    ) -> bool {
+        use kaspa_consensus_core::palw_step_refute::{PalwStepRefuteError, check_execution_step_refutation_v1};
+        use rand::Rng;
+        const SAMPLES: u64 = 4;
+        const DRAWS_MAX: u64 = 32;
+        if step_leaf_count == 0 {
+            return false;
+        }
+        let wanted = SAMPLES.min(step_leaf_count);
+        let mut rng = rand::thread_rng();
+        let mut cleared = 0u64;
+        for draw in 0..DRAWS_MAX {
+            if cleared >= wanted {
+                break;
+            }
+            let index = if draw == 0 { 0 } else { rng.gen_range(0..step_leaf_count) };
+            let Ok(refutation) = backend.refutation_for_free_prompt_index(capture, index, prompt_token_ids) else { continue };
+            let Ok(openings) = backend.operand_openings_for(&refutation) else { continue };
+            let proven = match kaspa_consensus_core::palw_artifact::PalwProvenOperandsV1::from_openings_v1(&openings, artifact_root) {
+                Ok(proven) => proven,
+                Err(e) => {
+                    // The prover's own rows do not prove against the class root this node
+                    // registered — a class/artifact mismatch on THIS seat, not a fact about the
+                    // producer. Say so rather than sample around it.
+                    warn!("[{PALW_PANEL}] claim {claim}: the openings for leaf {index} do not prove against the class root: {e:?}");
+                    return false;
+                }
+            };
+            match check_execution_step_refutation_v1(&refutation, &proven) {
+                Err(PalwStepRefuteError::NoFaultFound) => cleared += 1,
+                Ok(_) => {
+                    warn!(
+                        "[{PALW_PANEL}] claim {claim}: leaf {index} of the served capture does not recompute — the court's business, not a receipt's"
+                    );
+                    return false;
+                }
+                Err(other) => trace!("[{PALW_PANEL}] claim {claim}: leaf {index} is not a sample ({other:?}) — redrawing"),
+            }
+        }
+        cleared >= wanted
+    }
+
+    /// **Run the network's own job and make it a claim** (ADR-0074 Decision 1). The job's prompt
+    /// is the family's canonical prompt for `fp_canonical_anchor_v1(job)` — derived, never
+    /// chosen — and the commitment is assembled from the capture's own context, so the seats'
+    /// `verify_material` reproduces it whichever family ran it. Returns the funded, signed 0x4a
+    /// transaction, the claim id, and the `FPC1` material (question + answer) to retain and
+    /// broadcast.
+    fn build_canonical_claim(
+        &self,
+        session: &kaspa_consensusmanager::ConsensusProxy,
+        network_domain: Hash64,
+        bond: TransactionOutpoint,
+        current_daa: u64,
+        funding_outpoint: TransactionOutpoint,
+        funding: &UtxoEntry,
+    ) -> Result<(Transaction, Hash64, Vec<u8>), String> {
+        use kaspa_consensus_core::palw_freeprompt_v3::{
+            PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_CANONICAL, PALW_FP_V3_VERSION, PalwFreePromptJobV3, fp_canonical_anchor_v1,
+            fp_claim_id_v3, palw_fp_capture_encode_v1,
+        };
+        const CANONICAL_CLAIM_FEE_SOMPI: u64 = 250_000;
+
+        let class_id = match self.config.canonical_class.as_deref() {
+            Some(hex) => {
+                let mut out = [0u8; 64];
+                if hex.len() != 128 || faster_hex::hex_decode(hex.as_bytes(), &mut out).is_err() {
+                    return Err("--palw-canonical-class is not 128 hex chars".to_string());
+                }
+                Hash64::from_bytes(out)
+            }
+            None => session
+                .palw_v2_class_table()
+                .into_iter()
+                .find(|row| row.is_base_class)
+                .map(|row| row.class_id)
+                .ok_or("the chain names no base class to run canonical claims on")?,
+        };
+        let facts = session.palw_producer_facts_v2(class_id, Some(bond)).ok_or("no producer facts for the canonical class")?;
+        let bond_facts = facts.bond.as_ref().ok_or("this bond is not registered on the chain")?;
+        let backend = self.resolve_backend(session, class_id, facts.artifact_root)?;
+        // The class's canonical job in leaves: the attempt lane's derived pwu is expected draws ×
+        // one job, and the draws are a pure function of the class target.
+        let per_inference = facts.pwu / kaspa_consensus_core::palw_pwu::palw_expected_attempts_v1(facts.class_target).max(1);
+        let kp = self.keypair.as_ref().ok_or("no signing key")?;
+
+        let mut job_nonce = [0u8; 32];
+        rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut job_nonce);
+        let mut job = PalwFreePromptJobV3 {
+            version: PALW_FP_V3_VERSION,
+            network_domain,
+            class_id,
+            executor_bond: bond,
+            executor_pubkey: kp.verification_key.as_ref().to_vec(),
+            operator_id: bond_facts.operator_id,
+            anchor_block: facts.chain_point,
+            anchor_daa: facts.daa_score,
+            job_nonce,
+            tokenizer_id: Hash64::default(),
+            prompt_token_ids_hash: Hash64::default(),
+            prompt_tokens: 0,
+            decode_token_limit: 0,
+            max_context_tokens: 0,
+            privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
+            prompt_mode: PALW_FP_PROMPT_MODE_CANONICAL,
+        };
+        // The anchor is a function of the job's own facts, not of its prompt — so the prompt
+        // can be derived from it and then written into the job.
+        let (canonical_ctx, prompt) = backend.job_for_anchor(fp_canonical_anchor_v1(&job))?;
+        let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        job.prompt_token_ids_hash = kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(&ids);
+        job.prompt_tokens = ids.len() as u32;
+        job.decode_token_limit = canonical_ctx.exact_decode_tokens;
+        job.max_context_tokens = canonical_ctx.max_context_tokens;
+
+        let run = backend.execute_free_prompt(&job, &prompt)?;
+        let shape = backend.capture_shape(&run.outcome.material).ok_or("the capture has no shape this family can read")?;
+        let retention = current_daa.saturating_add(facts.min_trace_retention_daa);
+        let commitment =
+            kaspa_consensus_core::palw_fp_execution_v3::palw_fp_commitment_from_context_v3(&job, &shape.job_context, &run, retention)
+                .map_err(|e| format!("the run does not assemble into a commitment: {e}"))?;
+        let claim_id = fp_claim_id_v3(&commitment);
+        let material = palw_fp_capture_encode_v1(&job, &ids, &run.outcome.material);
+
+        let kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) =
+            &self.consensus_config.params.palw_consensus_mode
+        else {
+            return Err("this network runs no ConsensusV2 bundle".to_string());
+        };
+        let seed = kaspa_pq_validator_core::load_validator_seed(&self.config.key_path)?;
+        let key = kaspa_pq_validator_core::ValidatorKey::from_seed(seed);
+        // Canonical: the chain carries no prompt ids (they are a function of the job).
+        let tx = key.build_fp_commitment_tx(
+            network_domain,
+            commitment,
+            Vec::new(),
+            &bundle.freeprompt,
+            per_inference,
+            funding_outpoint,
+            funding,
+            CANONICAL_CLAIM_FEE_SOMPI,
+        )?;
+        Ok((tx, claim_id, material))
+    }
+
+    /// Retain this node's own free-prompt material under the claim id, where the resolver serves
+    /// it — written whole then renamed, so a reader never sees a half file.
+    fn retain_own_material(&self, claim: &Hash64, bytes: &[u8]) {
+        let path = crate::palw_producer::palw_retained_material_path(&self.config.retention_dir, claim);
+        let partial = path.with_extension("material.partial");
+        if let Err(e) = std::fs::create_dir_all(&self.config.retention_dir) {
+            warn!("[{PALW_PANEL}] cannot create the retention directory: {e}");
+            return;
+        }
+        if let Err(e) = std::fs::write(&partial, bytes).and_then(|()| std::fs::rename(&partial, &path)) {
+            warn!("[{PALW_PANEL}] cannot retain the material for claim {claim}: {e}");
+        }
+    }
+
     fn retained_capture(&self, claim: &Hash64) -> Option<Vec<u8>> {
         std::fs::read(crate::palw_producer::palw_retained_material_path(&self.config.retention_dir, claim)).ok()
     }
@@ -1339,6 +1576,8 @@ impl PalwPanelService {
         // Carriers submitted whose change is not yet on chain. Reset the moment the chain's tip
         // appears in the virtual UTXO set, which is the only honest signal that it was mined.
         let mut inflight: usize = 0;
+        // ADR-0074 Decision 1: the DAA the last canonical claim was committed at (0: never).
+        let mut canonical_last_daa: u64 = 0;
 
         loop {
             if !self.tick(std::time::Duration::from_secs(2)).await {
@@ -1524,18 +1763,37 @@ impl PalwPanelService {
                     //
                     // Every input to the real anchor is a fact about the CLAIM's own block, so any
                     // third party derives the same value the producer was forced to use.
-                    let Some(anchor) = self.job_anchor_for_claim(
-                        &session,
-                        backend.as_ref(),
-                        network_domain,
-                        target.accepted_block,
-                        target.class_id,
-                        &target.executor_bond,
-                    ) else {
-                        continue;
+                    let mine_run = if target.free_prompt {
+                        // **The job that was claimed is the user's** (ADR-0073 Decision 1d). It is
+                        // fixed on chain by its id and its hash-bound prompt, so it is read off the
+                        // claim's job material and nothing in it is the accused's to set — the
+                        // block's anchor job is a question nobody asked, and re-executing it
+                        // accused every honest free-prompt claim this node ever saw.
+                        let pooled = materials.get(&target.claim_id).map(|v| v.as_slice()).unwrap_or(&[]);
+                        let Some(job) =
+                            self.fp_job_material_for_claim(&target.claim_id, target.class_id, &target.executor_bond, pooled)
+                        else {
+                            continue;
+                        };
+                        let Some(prompt_ids) = Self::fp_prompt_for_job(backend.as_ref(), &job) else { continue };
+                        let prompt: Vec<usize> = prompt_ids.iter().map(|t| *t as usize).collect();
+                        let Ok(run) = backend.execute_free_prompt(&job.job, &prompt) else { continue };
+                        run.outcome
+                    } else {
+                        let Some(anchor) = self.job_anchor_for_claim(
+                            &session,
+                            backend.as_ref(),
+                            network_domain,
+                            target.accepted_block,
+                            target.class_id,
+                            &target.executor_bond,
+                        ) else {
+                            continue;
+                        };
+                        let Ok((job, prompt)) = backend.job_for_anchor(anchor) else { continue };
+                        let Ok(run) = backend.execute(&job, &prompt) else { continue };
+                        run
                     };
-                    let Ok((job, prompt)) = backend.job_for_anchor(anchor) else { continue };
-                    let Ok(mine_run) = backend.execute(&job, &prompt) else { continue };
                     let reproduced = mine_run.execution_root == target.execution_root && mine_run.trace_root == target.trace_root;
                     if reproduced && !self.config.drill_challenge_all {
                         // Reproduced and nothing to say: THIS is the only case where the claim is
@@ -1675,24 +1933,47 @@ impl PalwPanelService {
                 // receipt verdict below) takes the opposite branch, and correctly: there an
                 // underivable anchor means "no opinion", because verifying without it is exactly
                 // what let borrowed material pass.
-                let anchor = self
-                    .job_anchor_for_claim(
-                        &session,
-                        backend.as_ref(),
-                        network_domain,
-                        duty.accepted_block,
-                        duty.class_id,
-                        &duty.executor_bond,
-                    )
-                    .unwrap_or_default();
+                // **A free-prompt claim's anchor is its job id, and its prompt is the user's**
+                // (ADR-0073 Decision 1b/1c). Both come off the claim's JOB material — the question
+                // the user fixed on chain — never off the block, which asked none. `None` for an
+                // attempt, whose anchor the block derives as before.
+                let fp_job = if duty.free_prompt {
+                    let pooled = materials.get(&duty.claim_id).map(|v| v.as_slice()).unwrap_or(&[]);
+                    let Some(job) = self.fp_job_material_for_claim(&duty.claim_id, duty.class_id, &duty.executor_bond, pooled) else {
+                        *court_stalls.entry("a free-prompt session whose job material this node has not heard").or_default() += 1;
+                        continue;
+                    };
+                    if Self::fp_prompt_for_job(backend.as_ref(), &job).is_none() {
+                        *court_stalls.entry("a canonical claim whose material is not its own prompt").or_default() += 1;
+                        continue;
+                    }
+                    Some(job)
+                } else {
+                    None
+                };
+                let anchor = match &fp_job {
+                    Some(job) => kaspa_consensus_core::palw_freeprompt_v3::fp_job_id_v3(&job.job),
+                    None => self
+                        .job_anchor_for_claim(
+                            &session,
+                            backend.as_ref(),
+                            network_domain,
+                            duty.accepted_block,
+                            duty.class_id,
+                            &duty.executor_bond,
+                        )
+                        .unwrap_or_default(),
+                };
                 let roots = PalwClaimRootsV1 { execution_root: duty.execution_root, trace_root: duty.trace_root, anchor };
                 let pool_has_it = materials
                     .get(&duty.claim_id)
-                    .map(|pool| pool.iter().any(|b| backend.verify_material(b, roots) == PalwMaterialVerdictV1::Matches))
+                    .map(|pool| {
+                        pool.iter().any(|b| backend.verify_material(&fp_capture_view(b), roots) == PalwMaterialVerdictV1::Matches)
+                    })
                     .unwrap_or(false);
                 if !pool_has_it
                     && let Some(bytes) = self.retained_capture(&duty.claim_id)
-                    && backend.verify_material(&bytes, roots) == PalwMaterialVerdictV1::Matches
+                    && backend.verify_material(&fp_capture_view(&bytes), roots) == PalwMaterialVerdictV1::Matches
                 {
                     info!(
                         "[{PALW_PANEL}] session {} answered from this node's retained capture for claim {}",
@@ -1719,17 +2000,25 @@ impl PalwPanelService {
                 // rather than borrowing the accused's — silence costs it the dispute, which is the
                 // right price for an accusation it can no longer support.
                 if !duty.i_am_responder && !own_executions.contains_key(&duty.claim_id) {
-                    let rerun = self
-                        .job_anchor_for_claim(
-                            &session,
-                            backend.as_ref(),
-                            network_domain,
-                            duty.accepted_block,
-                            duty.class_id,
-                            &duty.executor_bond,
-                        )
-                        .and_then(|anchor| backend.job_for_anchor(anchor).ok())
-                        .and_then(|(job, prompt)| backend.execute(&job, &prompt).ok());
+                    // The job that was CLAIMED: the user's for a free prompt (ADR-0073 Decision
+                    // 1d), the block's for an attempt.
+                    let rerun = match &fp_job {
+                        Some(job) => {
+                            let prompt: Vec<usize> = job.prompt_token_ids.iter().map(|t| *t as usize).collect();
+                            backend.execute_free_prompt(&job.job, &prompt).ok().map(|run| run.outcome)
+                        }
+                        None => self
+                            .job_anchor_for_claim(
+                                &session,
+                                backend.as_ref(),
+                                network_domain,
+                                duty.accepted_block,
+                                duty.class_id,
+                                &duty.executor_bond,
+                            )
+                            .and_then(|anchor| backend.job_for_anchor(anchor).ok())
+                            .and_then(|(job, prompt)| backend.execute(&job, &prompt).ok()),
+                    };
                     match rerun {
                         Some(outcome) => {
                             own_executions.insert(duty.claim_id, outcome.material);
@@ -1765,11 +2054,15 @@ impl PalwPanelService {
                 // its own case and a challenger closing a real fraud assemble the identical
                 // object." Identical objects require identical material, and the material both
                 // sides can name is the accused's.
-                let accused_capture = materials
-                    .get(&duty.claim_id)
-                    .and_then(|pool| pool.iter().find(|b| backend.verify_material(b, roots) == PalwMaterialVerdictV1::Matches));
-                let capture_from_own = (!duty.i_am_responder).then(|| own_executions.get(&duty.claim_id)).flatten();
-                let Some(capture) = capture_from_own.or(accused_capture) else {
+                let accused_capture: Option<std::borrow::Cow<'_, [u8]>> = materials.get(&duty.claim_id).and_then(|pool| {
+                    pool.iter()
+                        .map(|b| fp_capture_view(b))
+                        .find(|c| backend.verify_material(c, roots) == PalwMaterialVerdictV1::Matches)
+                });
+                let capture_from_own: Option<std::borrow::Cow<'_, [u8]>> = (!duty.i_am_responder)
+                    .then(|| own_executions.get(&duty.claim_id).map(|v| std::borrow::Cow::Borrowed(v.as_slice())))
+                    .flatten();
+                let Some(capture) = capture_from_own.or_else(|| accused_capture.as_deref().map(std::borrow::Cow::Borrowed)) else {
                     *court_stalls
                         .entry(if materials.contains_key(&duty.claim_id) {
                             // Held material, and none of it reproduces the claim's roots — a
@@ -1791,7 +2084,7 @@ impl PalwPanelService {
                             *court_stalls.entry("the interval has no midpoint to disclose").or_default() += 1;
                             continue;
                         };
-                        let Some(mid_state) = backend.bisect_prefix_state(capture, midpoint) else {
+                        let Some(mid_state) = backend.bisect_prefix_state(&capture, midpoint) else {
                             // Two different facts wearing one message (audit3 H4). "This capture
                             // has no state at that index" is a bad capture; "this FAMILY has no
                             // rung move at all" is a class whose disputes can never be decided by
@@ -1827,7 +2120,7 @@ impl PalwPanelService {
                             *court_stalls.entry("no disclosure to post a verdict about").or_default() += 1;
                             continue;
                         };
-                        let Some(ours) = backend.bisect_prefix_state(capture, disclosed.0) else {
+                        let Some(ours) = backend.bisect_prefix_state(&capture, disclosed.0) else {
                             *court_stalls.entry("the backend cannot state its prefix at the disclosed index").or_default() += 1;
                             continue;
                         };
@@ -1867,7 +2160,7 @@ impl PalwPanelService {
                         // disagreement possible at all. The close does not: it is an assertion
                         // about the accused's step, so it is assembled from the accused's bytes by
                         // whichever party is making it (audit3 S-01).
-                        let Some(accused) = accused_capture else {
+                        let Some(accused) = accused_capture.as_deref() else {
                             // **And ASK for it.** The pull lived only in the receipt-duty loop, so
                             // a challenger that never needed the accused's bytes to open its case
                             // — it compares roots, not material — had no way to obtain them for
@@ -1888,7 +2181,12 @@ impl PalwPanelService {
                             );
                             continue;
                         };
-                        let refutation = match backend.refutation_for_index(accused, index) {
+                        let assembled = match &fp_job {
+                            // The user's prompt, hash-bound to the binding (ADR-0073 Decision 1c).
+                            Some(job) => backend.refutation_for_free_prompt_index(accused, index, &job.prompt_token_ids),
+                            None => backend.refutation_for_index(accused, index),
+                        };
+                        let refutation = match assembled {
                             Ok(r) => r,
                             Err(e) => {
                                 *court_stalls.entry("the close does not assemble from this capture").or_default() += 1;
@@ -1994,6 +2292,70 @@ impl PalwPanelService {
                         .into_iter()
                         .filter_map(|path| std::fs::read(path).ok());
                         for bytes in pooled.into_iter().chain(disk) {
+                            // **The answer beside the question** (ADR-0073 Decision 1a/1e). An
+                            // `FPC1` payload carries the job, the user's prompt and the executor's
+                            // family capture, and a seat CHECKS it — the roots under the job-id
+                            // anchor, the shape the binding commits to (priced from the capture,
+                            // not from what the commitment declared), and sampled leaves through
+                            // the court's own adjudicator — and never re-runs it.
+                            if let Some(payload) = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_capture_decode_v1(&bytes) {
+                                let job = &payload.material.job;
+                                if job.class_id != duty.class_id
+                                    || job.executor_bond != duty.executor_bond.0
+                                    || job.privacy_mode != kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PRIVACY_PUBLIC_DA
+                                {
+                                    continue;
+                                }
+                                let Ok(backend) = self.resolve_backend(&session, duty.class_id, duty.artifact_root) else {
+                                    break 'verdict Some(PalwReceiptVerdictV2::Incapable);
+                                };
+                                let roots = PalwClaimRootsV1 {
+                                    execution_root: duty.execution_root,
+                                    trace_root: duty.trace_root,
+                                    anchor: kaspa_consensus_core::palw_freeprompt_v3::fp_job_id_v3(job),
+                                };
+                                if backend.verify_material(&payload.capture, roots) != PalwMaterialVerdictV1::Matches {
+                                    continue;
+                                }
+                                let Some(shape) = backend.capture_shape(&payload.capture) else { continue };
+                                // **Was this the work the claim was paid for?** The claim was
+                                // priced from the leaf count its commitment declared; the capture
+                                // the execution root binds has a leaf count of its own, and the
+                                // two must be one number (ADR-0074 Decision 5).
+                                if shape.step_leaf_count != duty.work_leaves {
+                                    warn!(
+                                        "[{PALW_PANEL}] claim {}: the capture has {} leaves and the claim was priced at {} — the roots \
+                                         match but the WORK does not, so this is not the claim's capture",
+                                        duty.claim_id, shape.step_leaf_count, duty.work_leaves
+                                    );
+                                    continue;
+                                }
+                                // The prompt the samples are opened with: the user's, or the
+                                // network's own for a canonical claim (ADR-0074 Decision 1).
+                                let Some(prompt_ids) = Self::fp_prompt_for_job(backend.as_ref(), &payload.material) else {
+                                    warn!(
+                                        "[{PALW_PANEL}] claim {}: a canonical claim whose material is not its own prompt",
+                                        duty.claim_id
+                                    );
+                                    continue;
+                                };
+                                if !self.fp_capture_samples_clear(
+                                    backend.as_ref(),
+                                    &payload.capture,
+                                    &prompt_ids,
+                                    shape.step_leaf_count,
+                                    duty.artifact_root,
+                                    &duty.claim_id,
+                                ) {
+                                    continue;
+                                }
+                                self.persist_foreign_material(&duty.claim_id, &bytes);
+                                break 'verdict Some(PalwReceiptVerdictV2::Valid);
+                            }
+                            // `FPM1` alone — the question without the answer. Re-execution is the
+                            // verifier this lane had before ADR-0073, kept for clients that do not
+                            // yet ship the capture: a seat's last resort, never its duty, and
+                            // bounded exactly as it always was.
                             let Some(material) = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_material_decode_v1(&bytes) else {
                                 continue;
                             };
@@ -2006,7 +2368,14 @@ impl PalwPanelService {
                             let Ok(backend) = self.resolve_backend(&session, duty.class_id, duty.artifact_root) else {
                                 break 'verdict Some(PalwReceiptVerdictV2::Incapable);
                             };
-                            let prompt: Vec<usize> = material.prompt_token_ids.iter().map(|t| *t as usize).collect();
+                            let Some(prompt_ids) = Self::fp_prompt_for_job(backend.as_ref(), &material) else {
+                                warn!(
+                                    "[{PALW_PANEL}] claim {}: a canonical claim whose material is not its own prompt",
+                                    duty.claim_id
+                                );
+                                continue;
+                            };
+                            let prompt: Vec<usize> = prompt_ids.iter().map(|t| *t as usize).collect();
                             let run = match backend.execute_free_prompt(&material.job, &prompt) {
                                 Ok(run) => run,
                                 Err(e) => {
@@ -2036,18 +2405,13 @@ impl PalwPanelService {
                             // recycled collateral instead of inference. That is the one property
                             // this lane exists to establish, so the seat re-prices what it
                             // actually ran and refuses anything that is not the claim's price.
-                            let priced = self.fp_price_of(material.job.prompt_tokens, run.facts.decode_tokens_executed);
-                            match priced {
-                                Some((quanta, pwu)) if pwu == duty.pwu && quanta == duty.quanta => {}
-                                other => {
-                                    warn!(
-                                        "[{PALW_PANEL}] claim {}: the material's job prices at {:?}, and the claim was opened at \
-                                         (quanta {}, pwu {}) — the roots match but the WORK does not, so this is not the \
-                                         claim's material",
-                                        duty.claim_id, other, duty.quanta, duty.pwu
-                                    );
-                                    continue;
-                                }
+                            if run.facts.step_leaf_count != duty.work_leaves {
+                                warn!(
+                                    "[{PALW_PANEL}] claim {}: the replay has {} leaves and the claim was priced at {} — the roots \
+                                     match but the WORK does not, so this is not the claim's material",
+                                    duty.claim_id, run.facts.step_leaf_count, duty.work_leaves
+                                );
+                                continue;
                             }
                             self.persist_foreign_material(&duty.claim_id, &bytes);
                             break 'verdict Some(PalwReceiptVerdictV2::Valid);
@@ -2261,6 +2625,48 @@ impl PalwPanelService {
                 // absence costs the whole lane rather than one claim. It is offered first for the
                 // same reason a court rung is: everything behind it can wait a tick, and it
                 // cannot — a producer with a worker and no class is a node doing nothing.
+                // **The work queue** (ADR-0074 Decision 1): with nobody asking, run the network's
+                // own job and commit it as a canonical free-prompt claim, one per interval per
+                // bond, funded like any other carrier. A failed build is retried next interval,
+                // not next tick — an inference is not something to spin on.
+                if self.config.canonical_claims
+                    && current_daa >= canonical_last_daa.saturating_add(self.config.canonical_interval_daa)
+                    && let Some((funding_outpoint, funding_entry)) = funding.clone()
+                {
+                    canonical_last_daa = current_daa;
+                    match self.build_canonical_claim(&session, network_domain, bond, current_daa, funding_outpoint, &funding_entry) {
+                        Ok((tx, claim_id, material)) => {
+                            let txid = tx.id();
+                            let change = tx.outputs[0].clone();
+                            match self.flow_context.submit_rpc_transaction(&session, tx, Orphan::Forbidden).await {
+                                Ok(()) => {
+                                    info!("[{PALW_PANEL}] committed canonical claim {claim_id} in tx {txid}");
+                                    // The answer beside the question, retained under the claim id
+                                    // (the resolver serves it) and broadcast to the seats.
+                                    self.retain_own_material(&claim_id, &material);
+                                    self.flow_context.broadcast_palw_material(claim_id, material).await;
+                                    let next = TransactionOutpoint::new(txid, 0);
+                                    self.persist_fee_outpoint(next);
+                                    funding = Some((
+                                        next,
+                                        UtxoEntry {
+                                            amount: change.value,
+                                            script_public_key: change.script_public_key,
+                                            block_daa_score: current_daa,
+                                            is_coinbase: false,
+                                        },
+                                    ));
+                                    inflight += 1;
+                                }
+                                Err(e) => {
+                                    warn!("[{PALW_PANEL}] the mempool refused the canonical claim: {e}");
+                                    funding = None;
+                                }
+                            }
+                        }
+                        Err(e) => warn!("[{PALW_PANEL}] cannot build a canonical claim: {e}"),
+                    }
+                }
                 if self.config.register_class.is_some() && !class_registration_done && class_registration_inflight.is_none() {
                     // Built at the top of the tick (chain reads only); this block owns the SUBMIT
                     // because the fee UTXO lives here.
