@@ -130,6 +130,9 @@ pub struct HeaderProcessor {
     pub(super) palw_block_commitment: Option<kaspa_consensus_core::palw_block_commitment::PalwBlockCommitmentParamsV1>,
     /// ADR-0066: the heartbeat lane's fence, mode folded in (`Params::palw_heartbeat_lane_fence`).
     pub(super) palw_heartbeat_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// ADR-0072 SA-3/SA-4: the attempt lane's activation fence. `None` on every shipped preset,
+    /// which resolves to `PalwAttemptLaneV1::Unfenced` and leaves this gate exactly as it was.
+    pub(super) palw_attempt_activation: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0039 W4′: which rule this network orders candidate tips by. `BlueWorkOnly` on every
     /// shipped preset, cloned from `Params` at construction so the seam reads one value rather
     /// than re-deriving it per header.
@@ -235,6 +238,7 @@ impl HeaderProcessor {
             palw_consensus_mode: params.palw_consensus_mode.clone(),
             palw_block_commitment: params.palw_block_commitment,
             palw_heartbeat_lane: params.palw_heartbeat_lane_fence(),
+            palw_attempt_activation: params.palw_attempt_activation,
             palw_tip_order: params.palw_tip_order_v1(),
             pow_palw_ollama_activation: params.pow_palw_ollama_activation,
             evm_activation_daa_score: params.evm_activation_daa_score,

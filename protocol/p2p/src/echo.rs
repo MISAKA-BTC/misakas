@@ -106,6 +106,9 @@ fn build_dummy_version_message() -> VersionMessage {
         consensus_params_id: Vec::new(),
         consensus_identity_id: Vec::new(),
         consensus_schedule_id: Vec::new(),
+        // ADR-0072 SA-2: same reason — a test harness has no fences to have crossed.
+        fork_id_fired: Vec::new(),
+        fork_id_next: u64::MAX,
     }
 }
 

@@ -737,6 +737,57 @@ pub struct Params {
     /// together: ε is only "near-weightless" once the other side of the comparison is real.
     pub palw_attempt_work: Option<PalwAttemptWorkV1>,
 
+    /// **ADR-0072 §3 option (b) / the security amendment — the attempt lane's execution-priced
+    /// rule, arriving by activation instead of by re-genesis.** `None` on every shipped preset, so
+    /// the behaviour is byte-identical to not having the field at all.
+    ///
+    /// ADR-0072's rule went live on testnet-11 inside Relaunch 5's re-genesis, which is the one
+    /// rollout mainnet may not have (2026-08-27 doctrine: consensus changes ship by activation,
+    /// never by re-genesis). Armed, this fence says: **below it the attempt lane is
+    /// [`crate::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2`] carrying the pre-ADR-0072 envelope
+    /// version, and at or above it the lane is
+    /// [`crate::pow_layer0::POW_ALGO_ID_PALW_EXEC_V3`] carrying the current one** — two lanes, one
+    /// binary.
+    ///
+    /// **What that buys, and what it does not, measured rather than asserted.** Post-fence blocks
+    /// are produced and validated: the template builder declares algo-9, the shipped producer
+    /// builds on it, the relay path validates its envelope and its signature, GHOSTDAG prices it at
+    /// the attempt lane's ε, and the free-prompt beacon walk still finds it. Pre-fence history is a
+    /// different matter, and this field must not be read as claiming it works. The LEGACY arm is
+    /// version-fenced on the two peer-facing shape gates and on the relay path's stateless check,
+    /// but two things behind them are still compiled in at the current rule: the stateful admission
+    /// (`palw_admission_v2::check_palw_attempt_admission_full_v2*` → `validate_stateless_v2`), and —
+    /// decisively — the pre-ADR-0072 lottery arithmetic itself, which was deleted at Relaunch 5's
+    /// re-genesis and is not restored here. A legacy-arm block therefore cannot pass PoW under this
+    /// binary whatever its envelope says.
+    ///
+    /// So this fence is safe to arm **at genesis** (`ForkActivation::always()`, where `LegacyArm` is
+    /// unreachable and `consensus_identity_id` separates armed from un-armed builds on its own),
+    /// and arming it at a FUTURE height on a chain with real pre-ADR-0072 history additionally
+    /// requires that arithmetic back byte for byte, as §3 option (b) says.
+    ///
+    /// **`None` is not "off"; it is "un-fenced".** An un-armed network runs the current rule at
+    /// every height on algo-6 — exactly what testnet-11 and devnet run today, and why arming this
+    /// field is the only thing that changes any of their behaviour. That asymmetry is deliberate:
+    /// the fence exists for a chain that has pre-ADR-0072 history to keep, and a chain re-minted
+    /// on the new rule has none.
+    ///
+    /// **A bare fence with no companion value** (the [`Self::palw_frontier_provenance`] rule and
+    /// its reason): everything the new lane needs beside the height — the per-class target seed
+    /// ([`crate::palw_class_daa::attempt_target_seed_v1`], the same call a post-genesis admission
+    /// makes) and the lane-filtered window's first `bits` (a constraint on a filter nobody has
+    /// written; no difficulty window in this tree reads `pow_algo_id`) — is DERIVED at the fence
+    /// from state the chain already holds (SA-1), never configured. A value sitting beside a fence
+    /// is normalised out of
+    /// [`Self::consensus_identity_id`], so two builds scheduling this at one height with different
+    /// companion values would share an identity, peer, and then disagree the moment it fires.
+    ///
+    /// **Arming it is a coordinated flag day and the fork-id handshake is what makes it survivable**
+    /// (SA-2): see [`crate::fork_id_v1`]. Without it the un-upgraded minority keeps extending the
+    /// algo-6 arm past the fence, refuses the majority's algo-9 blocks, and neither side's
+    /// handshake says anything is wrong.
+    pub palw_attempt_activation: Option<ForkActivation>,
+
     /// **ADR-0066 Decision 4 — the inactivity leak.** `None` on every shipped preset.
     ///
     /// Replaces `DnsParams.inactivity_leak_daa`, which is retired at `u64::MAX` permanently rather
@@ -1619,6 +1670,12 @@ impl Params {
         if self.palw_attempt_work.is_some_and(|w| w.activation == ForkActivation::never()) {
             self.palw_attempt_work = None;
         }
+        // ADR-0072's fence, the D4 rule for the D4 reason: a bare `ForkActivation`, so the whole
+        // option collapses rather than being left as a present `never()` that a build without the
+        // field never writes.
+        if self.palw_attempt_activation == Some(ForkActivation::never()) {
+            self.palw_attempt_activation = None;
+        }
         if self.palw_inactivity_leak.is_some_and(|l| l.activation == ForkActivation::never()) {
             self.palw_inactivity_leak = None;
         }
@@ -1768,6 +1825,58 @@ impl Params {
     /// the ids is part of the coordinated release... what the DAA fence governs is the *effect*".
     pub fn palw_panel_da_admissible(&self) -> bool {
         self.palw_panel_da_fence().is_some()
+    }
+
+    /// **Is ADR-0072's execution-priced attempt lane in force at `daa_score`?**
+    ///
+    /// `None` — every shipped preset — means "un-fenced", and an un-fenced network runs the
+    /// execution-priced rule at every height (that is what testnet-11 and devnet do today, having
+    /// been re-minted onto it). Only an ARMED network has a height at which the answer is `false`,
+    /// and below that height its attempt lane is the pre-ADR-0072 one. See the field's doc.
+    pub fn palw_attempt_execution_priced_at(&self, daa_score: u64) -> bool {
+        match self.palw_attempt_activation {
+            None => true,
+            Some(fence) => fence.is_active(daa_score),
+        }
+    }
+
+    /// **Which attempt lane is open at `daa_score`** (ADR-0072 SA-3/SA-4) — the ONE place the
+    /// fence is turned into the pair of facts that decide an attempt header's admissibility: which
+    /// algo id carries the lane, and which envelope version it admits.
+    ///
+    /// One resolver rather than two lookups, because the defect §3's Decision 7 analysis found is
+    /// precisely the two drifting apart: an activation that opened a new id while leaving the
+    /// version check compiled in refuses the history it is asked to sync.
+    pub fn palw_attempt_lane_at(&self, daa_score: u64) -> crate::pow_layer0::PalwAttemptLaneV1 {
+        crate::pow_layer0::PalwAttemptLaneV1::from_fence(self.palw_attempt_activation.map(|fence| fence.is_active(daa_score)))
+    }
+
+    /// **Every scheduled fence height this build carries, sorted and deduped** (ADR-0072 SA-2).
+    ///
+    /// Derived from [`Self::for_each_fence`] and nothing else, so it can never drift from the
+    /// identity and schedule ids — and so a fence added to `Params` tomorrow joins the fork id the
+    /// moment it is classified there, without a second exhaustive list to forget.
+    ///
+    /// Two heights are deliberately excluded, and neither exclusion loses a rule:
+    ///
+    /// * `0` — a fence active at genesis is not a schedule, it is a rule about block 1, and
+    ///   [`Self::consensus_identity_id`] already refuses a peer that disagrees about one (re-audit
+    ///   R-1). Including it here would say two builds "cross" it at some height, which is false.
+    /// * `u64::MAX` — `never()`, and the `None` sentinel `for_each_fence` writes for an absent
+    ///   Some-only fence. Neither is a height any chain reaches.
+    ///
+    /// What is left is exactly the set of heights at which THIS build changes the rules, which is
+    /// what a peer needs to be able to say it has or has not crossed.
+    pub fn fence_schedule_v1(&self) -> Vec<u64> {
+        let mut scores: Vec<u64> = Vec::new();
+        // `for_each_fence` needs `&mut self` because the identity visitor writes through it; this
+        // visitor only reads, so the clone comes back unchanged and is dropped.
+        let mut probe = self.clone();
+        probe.for_each_fence(&mut |score| scores.push(*score));
+        scores.retain(|&score| score != 0 && score != u64::MAX);
+        scores.sort_unstable();
+        scores.dedup();
+        scores
     }
 
     /// **The activation schedule alone**, so a mismatch can be REPORTED precisely rather than only
@@ -1934,6 +2043,7 @@ impl Params {
             palw_frontier_provenance,
             palw_heartbeat,
             palw_attempt_work,
+            palw_attempt_activation,
             palw_inactivity_leak,
             palw_beacon_fold,
             palw_capability_bound,
@@ -2037,6 +2147,16 @@ impl Params {
         // two siblings above, for the same reason.
         match palw_attempt_work.as_mut() {
             Some(attempt_work) => fork(&mut attempt_work.activation, visit),
+            None => {
+                absent = u64::MAX;
+                visit(&mut absent);
+            }
+        }
+        // ADR-0072 SA-1..SA-4. A pure fence with no payload — the D2 rule, for the D2 reason: the
+        // new lane's per-class target seed and its window's first `bits` are derived at the fence
+        // from the fold, so there is no companion value that normalisation could hide.
+        match palw_attempt_activation.as_mut() {
+            Some(activation) => fork(activation, visit),
             None => {
                 absent = u64::MAX;
                 visit(&mut absent);
@@ -2296,6 +2416,7 @@ impl Params {
             palw_frontier_provenance,
             palw_heartbeat,
             palw_attempt_work,
+            palw_attempt_activation,
             palw_inactivity_leak,
             palw_beacon_fold,
             palw_capability_bound,
@@ -2479,6 +2600,14 @@ impl Params {
             h.write(attempt_work.activation.daa_score().to_le_bytes());
             h.write(attempt_work.work_log2.to_le_bytes());
             h.write(attempt_work.ticket_bucket_log2.to_le_bytes());
+        }
+        // ADR-0072 SA-1..SA-4, Some-only for the reason every fence above it is: an unset field
+        // writes nothing, so every shipped preset fingerprints byte-identically to a build without
+        // it. Armed, it decides which algo id the attempt lane uses and which envelope version is
+        // admissible at a height, which is as much a rule about block validity as a rule gets.
+        if let Some(activation) = palw_attempt_activation {
+            h.write(b"palw_attempt_activation");
+            h.write(activation.daa_score().to_le_bytes());
         }
         if let Some(leak) = palw_inactivity_leak {
             // The label carries the RULE's semantic version: ADR-0066 SA-2 added the re-entry
@@ -2789,6 +2918,7 @@ impl Params {
             palw_frontier_provenance: self.palw_frontier_provenance,
             palw_heartbeat: self.palw_heartbeat,
             palw_attempt_work: self.palw_attempt_work,
+            palw_attempt_activation: self.palw_attempt_activation,
             palw_inactivity_leak: self.palw_inactivity_leak,
             palw_beacon_fold: self.palw_beacon_fold,
             palw_capability_bound: self.palw_capability_bound,
@@ -3702,6 +3832,10 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_frontier_provenance: None,
     palw_heartbeat: None,
     palw_attempt_work: None,
+    // ADR-0072's activation fence ships dormant: this preset runs the execution-priced rule at
+    // every height on algo-6, exactly as it does today, and arming the fence is the only thing
+    // that would change a block.
+    palw_attempt_activation: None,
     palw_inactivity_leak: None,
     palw_beacon_fold: None,
     palw_capability_bound: None,
@@ -3841,6 +3975,10 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_frontier_provenance: None,
     palw_heartbeat: None,
     palw_attempt_work: None,
+    // ADR-0072's activation fence ships dormant: this preset runs the execution-priced rule at
+    // every height on algo-6, exactly as it does today, and arming the fence is the only thing
+    // that would change a block.
+    palw_attempt_activation: None,
     palw_inactivity_leak: None,
     palw_beacon_fold: None,
     palw_capability_bound: None,
@@ -3962,6 +4100,10 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_frontier_provenance: None,
     palw_heartbeat: None,
     palw_attempt_work: None,
+    // ADR-0072's activation fence ships dormant: this preset runs the execution-priced rule at
+    // every height on algo-6, exactly as it does today, and arming the fence is the only thing
+    // that would change a block.
+    palw_attempt_activation: None,
     palw_inactivity_leak: None,
     palw_beacon_fold: None,
     palw_capability_bound: None,
@@ -7404,6 +7546,9 @@ pub const DEVNET_PARAMS: Params = Params {
         work_log2: crate::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2,
         ticket_bucket_log2: crate::palw_attempt_v2::PALW_TICKET_NONCE_BUCKET_LOG2,
     }),
+    // ADR-0072 ships dormant here too: the drill devnet was re-minted onto the execution-priced
+    // rule, so it has no pre-ADR-0072 history for a fence to protect.
+    palw_attempt_activation: None,
     palw_inactivity_leak: None,
     palw_beacon_fold: None,
     palw_capability_bound: None,

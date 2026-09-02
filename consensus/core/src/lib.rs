@@ -126,6 +126,8 @@ pub mod errors;
 /// types (block-body payload, executor-output header, EVM-domain newtypes).
 /// Types only; the revm executor lives behind the `evm` cargo feature (P2).
 pub mod evm;
+/// ADR-0072 SA-2: the fork-id handshake — what a node has crossed, and what it will cross next.
+pub mod fork_id_v1;
 pub mod hashing;
 pub mod header;
 pub mod mass;

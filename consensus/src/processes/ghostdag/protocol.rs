@@ -194,79 +194,14 @@ impl<T: GhostdagStoreReader, S: RelationsStoreReader, U: ReachabilityService, V:
             .cloned()
             .map(|hash| {
                 let header = self.headers_store.get_header(hash).unwrap();
-                // **A receipt block's work is zero** (ADR-0044 Decision 6, extended).
-                //
-                // `calc_block_level_check_pow_layer0` already refuses to derive a block LEVEL from
-                // a receipt digest, because nothing in a receipt header costs anything to re-roll
-                // and hierarchy position would be sold for the price of one signature. Chain
-                // WEIGHT is the same purchase and a cheaper one: blue work is what decides which
-                // chain wins, so a receipt block that adds `calc_work(bits)` lets a producer mint
-                // reorg weight out of signatures.
-                //
-                // The lane's meter is the quantum ticket, and the ticket is chain-relative by
-                // construction — it draws against a beacon derived from the candidate's own chain,
-                // which is exactly why it can only run on a chain candidate and cannot gate DAG
-                // entry. So a merged-but-never-candidate receipt block never faces it. Zero is the
-                // only figure that is right whether or not the ticket ever runs: all chain weight
-                // comes from the attempt lane, whose digests are inference-priced.
-                if kaspa_consensus_core::pow_layer0::algo_id_carries_no_chain_position(header.pow_algo_id) {
-                    return BlueWorkType::from(0u64);
-                }
-                // **A heartbeat block's work is ε** (ADR-0060 Decision 1.2) — the lane sells
-                // time, not weight. Fixed and independent of the lane's own difficulty, so an
-                // ASIC pointed at it buys cadence-capped, near-weightless blocks; and deliberately
-                // NOT `.max(self.level_work)`: a heartbeat digest with many leading zeros earns a
-                // hierarchy position (levels are about pruning-proof structure), but at no level
-                // may it earn level-sized weight, or the proof comparison would price hash again.
-                // One, not zero (the receipt lane's figure above): among heartbeat-only branches —
-                // total bonded collapse, the regime the lane exists for — ε × n still orders the
-                // longer chain first.
-                if header.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID
-                    && self.heartbeat_lane.is_some_and(|fence| fence.is_active(header.daa_score))
-                {
-                    return BlueWorkType::from(kaspa_consensus_core::palw_heartbeat_v1::HEARTBEAT_BLUE_WORK_EPSILON);
-                }
-                // **An attempt block's work is the network constant** (ADR-0066 Decision 3 /
-                // finding F2, closed by ADR-0068 Phase 1). On a V2 network `header.bits` sits at
-                // the ambient maximum — the class lottery is the throttle, not the hash — so
-                // `calc_work` prices every bonded block at 2, parity with two ε = 1 heartbeats
-                // for ~280 kH/s. The constant restores the ratio ε was designed around: a bonded
-                // block outweighs a million heartbeats. A constant and NOT the envelope's claimed
-                // pwu — the claim is only verified against class state on the selected chain, and
-                // this function holds only the header; a claim-derived figure would let a
-                // shape-valid header that never faces the lottery mint fork-choice weight with a
-                // number (see `PALW_ATTEMPT_BLUE_WORK_LOG2`).
-                //
-                // **And NOT maxed with `level_work`, for the reason ε is not** (mainnet audit).
-                // This used to read `.max(self.level_work)`, justified as "this lane's
-                // inference-priced digest is what the pruning hierarchy is built from". The digest
-                // is not inference-priced in the sense that sentence needs. `level_work` is
-                // `1 << (level + 256 - max_level)`, the level comes from the digest's leading
-                // zeros, and the digest is GRINDABLE at hash cost alone: `l1_tag_v2` is a free CPU
-                // expansion "deliberately, so this stays a nonce search", and the job is computed
-                // once per template and reused by every nonce. One inference buys an unbounded
-                // nonce search, so leading zeros — and therefore level, and therefore level-sized
-                // weight — are bought with hashing.
-                //
-                // `level_work` is only non-zero under `GhostdagManager::with_level`, whose sole
-                // callers are `pruning_proof::build` and `pruning_proof::validate`. So the effect
-                // was confined to the comparison a syncing node uses to choose between chains —
-                // and confined there it is worse, not better: live fork choice was
-                // inference-priced while the proof that decides which history a new node adopts
-                // was priced in hashes. Two chains carrying the same inference could be ordered by
-                // which one's producers ground harder.
-                //
-                // The heartbeat arm above already refuses exactly this, in these words: "at no
-                // level may it earn level-sized weight, or the proof comparison would price hash
-                // again." The rule was right; it was applied to one lane. The lane still DERIVES a
-                // level (`algo_id_derives_no_block_level` is false for it) because the hierarchy's
-                // STRUCTURE is what levels are for — what it must not derive is weight.
-                if header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2
-                    && self.attempt_work_lane.is_some_and(|fence| fence.is_active(header.daa_score))
-                {
-                    return BlueWorkType::from(1u64 << kaspa_consensus_core::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2);
-                }
-                calc_work(header.bits).max(self.level_work)
+                palw_lane_blue_work_v1(
+                    header.pow_algo_id,
+                    header.bits,
+                    header.daa_score,
+                    self.heartbeat_lane,
+                    self.attempt_work_lane,
+                    self.level_work,
+                )
             })
             .sum();
         let blue_work: BlueWorkType = self.ghostdag_store.get_blue_work(selected_parent).unwrap() + added_blue_work;
@@ -407,6 +342,105 @@ enum ColoringState {
     Pending,
 }
 
+/// **What one merged block adds to blue work** (ADR-0044 Decision 6, ADR-0060 Decision 1.2,
+/// ADR-0068 F2 / ADR-0066 Decision 3).
+///
+/// A free function over the six values the rule reads, so the rule is reachable by a test. It used
+/// to live inside a closure inside `ghostdag`, where reaching it meant standing up four stores —
+/// and the defect it grew was a stale id list (`== POW_ALGO_ID_PALW_COMMITTED_V2`) that ADR-0072's
+/// fence walked straight past, silently re-pricing fork-choice weight at one height. `level_work`
+/// is `0` for ordinary GHOSTDAG and non-zero only under `GhostdagManager::with_level`, whose only
+/// callers are the pruning proof's build and validate.
+fn palw_lane_blue_work_v1(
+    pow_algo_id: u8,
+    bits: u32,
+    daa_score: u64,
+    heartbeat_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    attempt_work_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    level_work: BlueWorkType,
+) -> BlueWorkType {
+    // **A receipt block's work is zero** (ADR-0044 Decision 6, extended).
+    //
+    // `calc_block_level_check_pow_layer0` already refuses to derive a block LEVEL from
+    // a receipt digest, because nothing in a receipt header costs anything to re-roll
+    // and hierarchy position would be sold for the price of one signature. Chain
+    // WEIGHT is the same purchase and a cheaper one: blue work is what decides which
+    // chain wins, so a receipt block that adds `calc_work(bits)` lets a producer mint
+    // reorg weight out of signatures.
+    //
+    // The lane's meter is the quantum ticket, and the ticket is chain-relative by
+    // construction — it draws against a beacon derived from the candidate's own chain,
+    // which is exactly why it can only run on a chain candidate and cannot gate DAG
+    // entry. So a merged-but-never-candidate receipt block never faces it. Zero is the
+    // only figure that is right whether or not the ticket ever runs: all chain weight
+    // comes from the attempt lane, whose digests are inference-priced.
+    if kaspa_consensus_core::pow_layer0::algo_id_carries_no_chain_position(pow_algo_id) {
+        return BlueWorkType::from(0u64);
+    }
+    // **A heartbeat block's work is ε** (ADR-0060 Decision 1.2) — the lane sells
+    // time, not weight. Fixed and independent of the lane's own difficulty, so an
+    // ASIC pointed at it buys cadence-capped, near-weightless blocks; and deliberately
+    // NOT `.max(level_work)`: a heartbeat digest with many leading zeros earns a
+    // hierarchy position (levels are about pruning-proof structure), but at no level
+    // may it earn level-sized weight, or the proof comparison would price hash again.
+    // One, not zero (the receipt lane's figure above): among heartbeat-only branches —
+    // total bonded collapse, the regime the lane exists for — ε × n still orders the
+    // longer chain first.
+    if pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID
+        && heartbeat_lane.is_some_and(|fence| fence.is_active(daa_score))
+    {
+        return BlueWorkType::from(kaspa_consensus_core::palw_heartbeat_v1::HEARTBEAT_BLUE_WORK_EPSILON);
+    }
+    // **An attempt block's work is the network constant** (ADR-0066 Decision 3 /
+    // finding F2, closed by ADR-0068 Phase 1). On a V2 network `bits` sits at
+    // the ambient maximum — the class lottery is the throttle, not the hash — so
+    // `calc_work` prices every bonded block at 2, parity with two ε = 1 heartbeats
+    // for ~280 kH/s. The constant restores the ratio ε was designed around: a bonded
+    // block outweighs a million heartbeats. A constant and NOT the envelope's claimed
+    // pwu — the claim is only verified against class state on the selected chain, and
+    // this function holds only the header; a claim-derived figure would let a
+    // shape-valid header that never faces the lottery mint fork-choice weight with a
+    // number (see `PALW_ATTEMPT_BLUE_WORK_LOG2`).
+    //
+    // **And NOT maxed with `level_work`, for the reason ε is not** (mainnet audit).
+    // This used to read `.max(level_work)`, justified as "this lane's
+    // inference-priced digest is what the pruning hierarchy is built from". The digest
+    // is not inference-priced in the sense that sentence needs. `level_work` is
+    // `1 << (level + 256 - max_level)`, the level comes from the digest's leading
+    // zeros, and the digest is GRINDABLE at hash cost alone: `l1_tag_v2` is a free CPU
+    // expansion "deliberately, so this stays a nonce search", and the job is computed
+    // once per template and reused by every nonce. One inference buys an unbounded
+    // nonce search, so leading zeros — and therefore level, and therefore level-sized
+    // weight — are bought with hashing.
+    //
+    // `level_work` is only non-zero under `GhostdagManager::with_level`, whose sole
+    // callers are `pruning_proof::build` and `pruning_proof::validate`. So the effect
+    // was confined to the comparison a syncing node uses to choose between chains —
+    // and confined there it is worse, not better: live fork choice was
+    // inference-priced while the proof that decides which history a new node adopts
+    // was priced in hashes. Two chains carrying the same inference could be ordered by
+    // which one's producers ground harder.
+    //
+    // The heartbeat arm above already refuses exactly this, in these words: "at no
+    // level may it earn level-sized weight, or the proof comparison would price hash
+    // again." The rule was right; it was applied to one lane. The lane still DERIVES a
+    // level (`algo_id_derives_no_block_level` is false for it) because the hierarchy's
+    // STRUCTURE is what levels are for — what it must not derive is weight.
+    //
+    // **Either attempt id** (ADR-0072 SA-4). Spelled `== POW_ALGO_ID_PALW_COMMITTED_V2`
+    // this rule stopped applying at the ADR-0072 fence — post-fence attempt blocks carry
+    // algo-9, fell through to `calc_work(bits).max(level_work)`, and started
+    // earning exactly the hash-priced weight the paragraph above forbids. A fence whose
+    // stated scope is "which id carries the lane" would have re-priced fork-choice
+    // weight at one height as a side effect.
+    if kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(pow_algo_id)
+        && attempt_work_lane.is_some_and(|fence| fence.is_active(daa_score))
+    {
+        return BlueWorkType::from(1u64 << kaspa_consensus_core::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2);
+    }
+    calc_work(bits).max(level_work)
+}
+
 /// Represents the final output of GHOSTDAG coloring for the current candidate
 enum ColoringOutput {
     Blue(KType, BlockHashMap<KType>), // (blue anticone size, map of blue anticone sizes for each affected blue)
@@ -458,5 +492,44 @@ mod lane_weight_tests {
         assert!(!algo_id_derives_no_block_level(POW_ALGO_ID_PALW_COMMITTED_V2), "the attempt lane still places the hierarchy");
         assert!(algo_id_derives_no_block_level(POW_ALGO_ID_HEARTBEAT_V1), "a fixed target buys no level");
         assert!(algo_id_carries_no_chain_position(POW_ALGO_ID_PALW_RECEIPT_V3), "and a receipt buys no position at all");
+    }
+
+    /// **The ε rule follows the lane across ADR-0072's fence.**
+    ///
+    /// F2's rule was spelled `== POW_ALGO_ID_PALW_COMMITTED_V2`. Past the fence an attempt block
+    /// carries algo-9, that equality failed, and the block fell through to
+    /// `calc_work(bits).max(level_work)` — the hash-priced weight the rule's own comment says must
+    /// never come back. Nothing else would have noticed: no fingerprint moves, no gate refuses, and
+    /// fork choice simply starts pricing one lane differently at one height.
+    ///
+    /// Quantified over the lane resolver rather than over a list of ids, so a third attempt id
+    /// would be covered by construction.
+    #[test]
+    fn the_attempt_lanes_epsilon_survives_the_activation_that_renames_its_id() {
+        use super::palw_lane_blue_work_v1;
+        use kaspa_consensus_core::config::params::ForkActivation;
+        use kaspa_consensus_core::pow_layer0::PalwAttemptLaneV1;
+
+        const FENCE: u64 = 1_000;
+        const BITS: u32 = 0x1e00_ffff; // an ordinary target, so `calc_work` is large and unmistakable
+        let attempt_work = Some(ForkActivation::new(0));
+        let epsilon = BlueWorkType::from(1u64 << PALW_ATTEMPT_BLUE_WORK_LOG2);
+        let hash_priced = crate::processes::difficulty::calc_work(BITS);
+        assert!(hash_priced > epsilon, "the two figures really are different, or this test proves nothing");
+
+        for (lane, daa) in [(PalwAttemptLaneV1::LegacyArm, FENCE - 1), (PalwAttemptLaneV1::ExecutionArm, FENCE)] {
+            let algo_id = lane.attempt_algo_id();
+            assert_eq!(
+                palw_lane_blue_work_v1(algo_id, BITS, daa, None, attempt_work, BlueWorkType::from(0u64)),
+                epsilon,
+                "{lane:?} carries algo-{algo_id} and an attempt block's weight is the constant at every height"
+            );
+        }
+
+        // The negative side: with the attempt-work fence unset, both ids price by bits — so the
+        // test above is measuring the fence and not the id list.
+        for lane in [PalwAttemptLaneV1::LegacyArm, PalwAttemptLaneV1::ExecutionArm] {
+            assert_eq!(palw_lane_blue_work_v1(lane.attempt_algo_id(), BITS, FENCE, None, None, BlueWorkType::from(0u64)), hash_priced);
+        }
     }
 }

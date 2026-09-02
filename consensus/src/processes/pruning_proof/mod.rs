@@ -142,6 +142,11 @@ pub struct PruningProofManager {
     /// ADR-0068 Phase 1 (F2): the attempt-work fence, mode folded in — threaded to every
     /// proof-level ghostdag so proof weight and chain weight price an attempt block alike.
     palw_attempt_work_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// ADR-0072 SA-3/SA-4: the attempt lane's activation fence. `None` on every shipped preset, so
+    /// the proof path's lane resolves to `Unfenced` and this gate is what it was. Threaded here for
+    /// the reason `palw_consensus_mode` is: a node that joined by a pruned sync must refuse and
+    /// accept exactly what the chain it is joining does.
+    palw_attempt_activation: Option<kaspa_consensus_core::config::params::ForkActivation>,
 
     is_consensus_exiting: Arc<AtomicBool>,
 }
@@ -171,6 +176,7 @@ impl PruningProofManager {
         palw_consensus_mode: kaspa_consensus_core::palw_mode_v2::PalwConsensusMode,
         palw_heartbeat_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
         palw_attempt_work_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
+        palw_attempt_activation: Option<kaspa_consensus_core::config::params::ForkActivation>,
         is_consensus_exiting: Arc<AtomicBool>,
     ) -> Self {
         Self {
@@ -213,6 +219,7 @@ impl PruningProofManager {
             palw_required_algo_id,
             palw_consensus_mode,
             palw_heartbeat_lane,
+            palw_attempt_activation,
             palw_attempt_work_lane,
 
             is_consensus_exiting,
@@ -242,6 +249,11 @@ impl PruningProofManager {
         // than `direct_parents().is_empty()`. The two differ for `parents_by_level == [[]]`, where
         // `direct_parents()` reports parentless but the finalizer still runs — which let algo_id = 4
         // reach the panicking PALW arm through this very gate (see the predicate's own docs).
+        // ADR-0072 SA-3/SA-4. Resolved before the short-circuit guard because the commitment-shape
+        // check below runs for EVERY proof header, root included.
+        let attempt_lane = kaspa_consensus_core::pow_layer0::PalwAttemptLaneV1::from_fence(
+            self.palw_attempt_activation.map(|fence| fence.is_active(header.daa_score)),
+        );
         if !kaspa_consensus_core::pow_layer0::pow_short_circuits_as_parentless_root(header) {
             let palw_ollama_active = self.pow_palw_ollama_activation.is_active(header.daa_score);
             let palw_active = self.pow_palw_activation.is_active(header.daa_score);
@@ -250,20 +262,38 @@ impl PruningProofManager {
                 header.pow_algo_id,
                 self.palw_required_algo_id,
                 // ADR-0066: the heartbeat lane is a top-level fence the bundle cannot see, so a
-                // proof header on that lane is admitted here and nowhere else.
+                // proof header on that lane is admitted here and nowhere else. ADR-0072 SA-4's
+                // second attempt id joins on the same terms — and, like the heartbeat, ONLY where
+                // its fence is active, so a proof cannot smuggle a post-fence id into pre-fence
+                // history.
                 self.palw_consensus_mode.accepts_algo_id(header.pow_algo_id).map(|a| {
                     a || (header.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID
                         && self.palw_heartbeat_lane.is_some_and(|fence| fence.is_active(header.daa_score)))
+                        || (header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_EXEC_V3
+                            && attempt_lane == kaspa_consensus_core::pow_layer0::PalwAttemptLaneV1::ExecutionArm)
                 }),
                 palw_ollama_active,
                 palw_active,
                 blake2b_sha3_active,
             )
             .map_err(|_| PruningImportError::PruningProofUnknownPowAlgoId(header.hash, level, header.pow_algo_id))?;
+            // The accept-list's other half (SA-4): exactly one attempt id is a lane at a height.
+            // A proof is peer-supplied, and it is how a fresh node learns the history it will
+            // trust, so this path needs the closure as much as the relay path does.
+            if !attempt_lane.admits_attempt_algo_id(header.pow_algo_id) {
+                return Err(PruningImportError::PruningProofUnknownPowAlgoId(header.hash, level, header.pow_algo_id));
+            }
         }
         let commitment_bound = self.palw_block_commitment.is_some_and(|fence| fence.is_bound(header.daa_score));
-        kaspa_consensus_core::pow_layer0::check_palw_commitment_shape(header.pow_algo_id, &header.palw_commitment, commitment_bound)
-            .map_err(|e| PruningImportError::PruningProofBadPalwCommitment(header.hash, level, e.to_string()))?;
+        // ADR-0072 SA-3: pre-fence proof headers validate under the old envelope version, which is
+        // the whole point of a fence on a chain that keeps its history.
+        kaspa_consensus_core::pow_layer0::check_palw_commitment_shape_at(
+            header.pow_algo_id,
+            &header.palw_commitment,
+            commitment_bound,
+            attempt_lane,
+        )
+        .map_err(|e| PruningImportError::PruningProofBadPalwCommitment(header.hash, level, e.to_string()))?;
         Ok(())
     }
 

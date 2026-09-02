@@ -206,6 +206,22 @@ message VersionMessage{
   // differs. Empty from peers predating these fields, which then fall back to the exact comparison.
   bytes consensusIdentityId = 13;
   bytes consensusScheduleId = 14;
+  // ADR-0072 SA-2 — the fork id: which of this build's fences the node has already CROSSED, and
+  // which it will cross next.
+  //
+  // The identity/schedule split above makes a scheduled activation deployable, and leaves exactly
+  // one hole, which the identity id's own doc names: it is computed with every fence normalised
+  // away, so it cannot tell whether the chain has passed one. At the fence the disagreement stops
+  // being about the future — the un-upgraded minority keeps extending the old arm and refuses every
+  // block the majority produces — and both handshakes still say the two are peers. A silent fork.
+  //
+  // `forkIdFired` is a digest of (genesis, the fence heights crossed at this node's DAA score),
+  // computed from the node's own params and its own DAA — never from what a peer says about itself.
+  // `forkIdNext` is the lowest fence still ahead of it, or u64::MAX for none; it is what separates
+  // "has crossed nothing YET" from "will never cross anything", which the digest alone cannot.
+  // Empty/zero from peers predating these fields.
+  bytes forkIdFired = 15;
+  uint64 forkIdNext = 16;
 }
 
 // A peer's answer to "which chain are you on?", asked during an IBD so that the chain a

@@ -33,6 +33,16 @@ pub enum ProtocolError {
     )]
     WrongConsensusParams(String, String, String),
 
+    /// **Same network, same genesis, same rules — a different position on the fence schedule**
+    /// (ADR-0072 SA-2). The one case `WrongConsensusParams` structurally cannot catch: the identity
+    /// id is computed with every fence normalised away, so two builds that disagree about a fence
+    /// this node has already CROSSED produce one identity and peer. Past the fence they disagree
+    /// about blocks that exist, and neither side's handshake would say so.
+    #[error(
+        "Fork-id mismatch on network {0} at DAA {1} - this node has crossed fence {2}; {3}. Syncing from this peer would extend the pre-fence arm and neither side would see the partition"
+    )]
+    WrongForkId(String, u64, u64, String),
+
     /// **This peer could not serve a pruning-point sidecar — which is not a statement about the
     /// chain** (audit3 H2/H9). Kept distinct from `Other` so the IBD can tell "the chain I just
     /// committed is unusable" from "one auxiliary snapshot did not arrive from THIS peer", because

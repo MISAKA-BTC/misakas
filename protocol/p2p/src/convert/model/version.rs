@@ -29,6 +29,13 @@ pub struct Version {
     pub consensus_identity_id: Vec<u8>,
     /// The activation fences alone. Never a gate; reported so a schedule difference is legible.
     pub consensus_schedule_id: Vec<u8>,
+    /// **ADR-0072 SA-2** — a digest of `(genesis, the fences this node has already CROSSED)`,
+    /// computed by the sender from its own params and its own DAA score. Empty from peers predating
+    /// the field. Opaque: only ever compared against digests the receiver computes for itself.
+    pub fork_id_fired: Vec<u8>,
+    /// The lowest fence still ahead of the sender, or `u64::MAX` for none. Zero from peers
+    /// predating the field, which `fork_id_fired` being empty already says.
+    pub fork_id_next: u64,
 }
 
 impl Version {
@@ -42,6 +49,8 @@ impl Version {
         consensus_params_id: Vec<u8>,
         consensus_identity_id: Vec<u8>,
         consensus_schedule_id: Vec<u8>,
+        fork_id_fired: Vec<u8>,
+        fork_id_next: u64,
     ) -> Self {
         Self {
             protocol_version,
@@ -57,6 +66,8 @@ impl Version {
             consensus_params_id,
             consensus_identity_id,
             consensus_schedule_id,
+            fork_id_fired,
+            fork_id_next,
         }
     }
 

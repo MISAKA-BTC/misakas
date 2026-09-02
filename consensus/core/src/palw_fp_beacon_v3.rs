@@ -57,7 +57,9 @@ pub const PALW_BEACON_FOLD_MIN_K_V1: u8 = 3;
 pub struct PalwChainBlockFactV3 {
     pub block: Hash64,
     pub daa_score: u64,
-    /// The header's declared algorithm. Only the attempt id makes a block a beacon.
+    /// The header's declared algorithm. Only an attempt-lane id makes a block a beacon — which of
+    /// the two ADR-0072 ids that is depends on the block's own height, so the derivation asks
+    /// `is_attempt_class_v3` rather than comparing against one number.
     pub pow_algo_id: u8,
 }
 
@@ -131,10 +133,32 @@ fn fold_width(fold_k: u8) -> usize {
     fold_k.max(1) as usize
 }
 
+/// **Is this chain block on the attempt lane of a network whose attempt id is `attempt_algo_id`?**
+///
+/// Exact equality, PLUS ADR-0072's other attempt id when `attempt_algo_id` is a PALW attempt id at
+/// all — because the walk crosses the fence and the chain it walks does not.
+///
+/// A beacon walk is the one consumer that cannot resolve the lane at a single height: it descends
+/// through the fence, so the blocks it must recognise as attempt-class carry algo-6 below it and
+/// algo-9 at and above it. Asked with one id it saw the attempt chain stop at the fence —
+/// `prev_attempt_daa` froze on the last pre-fence attempt block and never advanced again, and every
+/// ADR-0044 receipt spend for the rest of the chain's life drew against that stale witness. There
+/// is no ambiguity to resolve: exactly one of the two ids is admissible at any height, and the
+/// header gate refused the other one before the block was stored.
+///
+/// The "not in V2 mode cannot accidentally match" property is kept: if `attempt_algo_id` is not
+/// itself an attempt id, only exact equality matches.
+#[inline]
+fn is_attempt_class_v3(declared: u8, attempt_algo_id: u8) -> bool {
+    declared == attempt_algo_id
+        || (crate::pow_layer0::is_palw_attempt_algo_id(attempt_algo_id) && crate::pow_layer0::is_palw_attempt_algo_id(declared))
+}
+
 /// Derive the beacon fact for `slot` from chain blocks in DESCENDING DAA order.
 ///
 /// `attempt_algo_id` is the network's attempt-lane id (the bundle's `algorithm_id`), passed in
-/// rather than hard-coded so a network that is not in V2 mode cannot accidentally match.
+/// rather than hard-coded so a network that is not in V2 mode cannot accidentally match. Matched
+/// through [`is_attempt_class_v3`], which is what makes the walk survive ADR-0072's fence.
 ///
 /// `fold_k` is ADR-0073 SA-1's width, resolved by the caller from the fence at the DRAW'S OWN SLOT
 /// (`Params::palw_beacon_fold`). `1` is the pre-SA-1 rule and derives byte-identical facts.
@@ -163,7 +187,7 @@ where
     let mut ring = FirstKDescending::new(needed);
     for fact in descending_chain {
         if fact.daa_score >= slot {
-            if fact.pow_algo_id == attempt_algo_id {
+            if is_attempt_class_v3(fact.pow_algo_id, attempt_algo_id) {
                 ring.push(fact);
             }
             continue;
@@ -171,7 +195,7 @@ where
         // Below the slot: this is the region the predecessor witness comes from. The first
         // attempt block found here is the last one before the slot; genesis-shaped chains with
         // none use 0, which the validator's inequality accepts (`prev < slot`).
-        let prev_attempt_daa = if fact.pow_algo_id == attempt_algo_id {
+        let prev_attempt_daa = if is_attempt_class_v3(fact.pow_algo_id, attempt_algo_id) {
             fact.daa_score
         } else {
             // Keep descending for the witness — but only through this same iterator, which the
@@ -205,12 +229,12 @@ where
     let not_yet = |ring: &FirstKDescending| PalwBeaconDeriveV3Error::NoBeaconYet { slot, needed: needed as u8, found: ring.found() };
     for fact in descending_chain_to_genesis {
         if fact.daa_score >= slot {
-            if fact.pow_algo_id == attempt_algo_id {
+            if is_attempt_class_v3(fact.pow_algo_id, attempt_algo_id) {
                 ring.push(fact);
             }
             continue;
         }
-        if fact.pow_algo_id == attempt_algo_id {
+        if is_attempt_class_v3(fact.pow_algo_id, attempt_algo_id) {
             let (beacon_block, beacon_daa) = ring.fold().ok_or_else(|| not_yet(&ring))?;
             return Ok(PalwBeaconFactV3 { beacon_block, beacon_daa, prev_attempt_daa: fact.daa_score });
         }
@@ -262,6 +286,43 @@ mod tests {
         let fact = derive_beacon_fact_v3(100, ATTEMPT, NO_FOLD, chain(&[(140, ATTEMPT), (100, ATTEMPT), (90, ATTEMPT)])).unwrap();
         assert_eq!((fact.beacon_daa, fact.prev_attempt_daa), (100, 90));
         validate_beacon_fact_v3(100, &fact).unwrap();
+    }
+
+    /// **The walk crosses ADR-0072's fence, so both attempt ids are attempt-class.**
+    ///
+    /// Past the fence every attempt block carries [`crate::pow_layer0::POW_ALGO_ID_PALW_EXEC_V3`]
+    /// and the pre-fence history carries [`POW_ALGO_ID_PALW_COMMITTED_V2`]. Matching one id, the
+    /// derivation saw the attempt chain STOP at the fence: no beacon existed above it, and
+    /// `prev_attempt_daa` froze on the last pre-fence attempt block for the rest of the chain's
+    /// life. The caller cannot fix this by passing a different number — the network's attempt id
+    /// comes from the bundle, whose `algorithm_id` `PalwRulesetV2::validate` pins at 6.
+    #[test]
+    fn a_chain_that_crossed_the_fence_still_has_a_beacon() {
+        const EXEC: u8 = crate::pow_layer0::POW_ALGO_ID_PALW_EXEC_V3;
+        // Fence at 100: 140 and 120 are post-fence (algo-9), 95 and 80 are pre-fence (algo-6).
+        let fact =
+            derive_beacon_fact_v3(110, ATTEMPT, 1, chain(&[(140, EXEC), (130, RECEIPT), (120, EXEC), (95, ATTEMPT), (80, ATTEMPT)]))
+                .unwrap();
+        assert_eq!((fact.beacon_daa, fact.prev_attempt_daa), (120, 95), "the post-fence attempt block is a beacon");
+        validate_beacon_fact_v3(110, &fact).expect("what the chain derived, the validator accepts");
+
+        // And the witness below the slot is found on the OTHER side of the fence, which is the half
+        // that freezes: with only the pre-fence id matched, `prev_attempt_daa` is the last thing
+        // that ever moves.
+        let fact = derive_beacon_fact_v3(90, ATTEMPT, 1, chain(&[(140, EXEC), (120, EXEC), (85, ATTEMPT)])).unwrap();
+        assert_eq!((fact.beacon_daa, fact.prev_attempt_daa), (120, 85));
+
+        // The receipt lane is still never a beacon on either side of the fence — the widening is to
+        // the attempt lane's two ids and to nothing else.
+        assert_eq!(
+            derive_beacon_fact_v3(100, ATTEMPT, 1, chain(&[(160, RECEIPT), (150, RECEIPT), (95, EXEC)])).unwrap_err(),
+            PalwBeaconDeriveV3Error::NoBeaconYet { slot: 100, found: 0, needed: 1 }
+        );
+
+        // A non-PALW network's id matches only itself: `is_attempt_class_v3`'s fallback is exact
+        // equality, so nothing about algo-1 chains moved.
+        assert!(!is_attempt_class_v3(ATTEMPT, crate::pow_layer0::POW_ALGO_ID_KHEAVYHASH));
+        assert!(!is_attempt_class_v3(EXEC, crate::pow_layer0::POW_ALGO_ID_KHEAVYHASH));
     }
 
     /// **Receipt blocks are never beacons** (invariant F15) — a chain of nothing but receipt

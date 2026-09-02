@@ -725,6 +725,23 @@ pub const PALW_ATTEMPT_TARGET_UNIT_SHARE_PWU_V1: u128 = 1 << 31;
 ///
 /// Never returns zero: a zero target admits nothing, and
 /// [`crate::palw_state_v2::PalwStateV2Error::ZeroClassTarget`] refuses it at the transition.
+///
+/// # ADR-0072 SA-1 uses THIS function, and there is no second one
+///
+/// A fence is the same event a new class is: a lane starts producing with no history behind it, and
+/// the retarget provably cannot reach the right price on its own (see "Why a seed and not a
+/// retarget" above). So at ADR-0072's fence each class's new-lane target is
+/// `attempt_target_seed_v1(share, pwu_per_inference)` from the fold at the fence — the same call,
+/// not a second rule that happens to agree.
+///
+/// This paragraph replaces a wrapper named `attempt_lane_target_seed_at_fence_v1` that called this
+/// function and nothing else, tested by an assertion that the two agreed. An alias cannot disagree
+/// with what it aliases, so the test could not fail for any implementation and the "rule" enforced
+/// nothing — a ceiling nobody reaches. SA-1's other half (the lane-filtered window's first `bits`)
+/// is now stated in ADR-0072 §SA-1 as a constraint on a filter nobody has written yet: no difficulty
+/// window in this tree is lane-filtered at all, and `SampledDifficultyManager`'s short-window
+/// fallback already returns the selected parent's own `bits` unless that parent IS genesis, so at a
+/// fence on a live chain the pre-fence `bits` is what it yields for free.
 pub fn attempt_target_seed_v1(share_permille: u16, pwu_per_inference: u64) -> u128 {
     let share_pwu = (share_permille as u128).saturating_mul(pwu_per_inference as u128);
     if share_pwu == 0 {

@@ -439,6 +439,9 @@ pub struct VirtualStateProcessor {
     pub(super) palw_frontier_provenance: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0066: the heartbeat lane's fence, mode folded in.
     pub(super) palw_heartbeat_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
+    /// ADR-0072 SA-3/SA-4: the attempt lane's activation fence. `None` on every shipped preset, so
+    /// the lane resolves to `Unfenced` and the template keeps declaring algo-6.
+    pub(super) palw_attempt_activation: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0066 Decision 4: the inactivity leak's fence and its duration.
     pub(super) palw_inactivity_leak: Option<kaspa_consensus_core::config::params::PalwInactivityLeakV1>,
     /// **ADR-0073 SA-1: the free-prompt beacon's fold width and its fence.** `None` on every
@@ -730,6 +733,7 @@ impl VirtualStateProcessor {
             pow_palw_ollama_activation: params.pow_palw_ollama_activation,
             palw_required_algo_id: params.palw_consensus_mode.required_algo_id(),
             palw_heartbeat_lane: params.palw_heartbeat_lane_fence(),
+            palw_attempt_activation: params.palw_attempt_activation,
             palw_maturity_warn_last_daa: std::sync::atomic::AtomicU64::new(
                 kaspa_consensus_core::palw_panel_v2::PALW_SHORTFALL_NEVER_REPORTED,
             ),
@@ -5981,7 +5985,12 @@ impl VirtualStateProcessor {
         bootstrap_state: Option<&kaspa_consensus_core::palw_state_v2::PalwChainStateV2>,
     ) -> Result<Option<kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2>, String> {
         use kaspa_consensus_core::palw_attempt_v2::PalwAttemptEnvelopeV2;
-        if header.pow_algo_id != kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2 {
+        // ADR-0072 SA-4: EITHER attempt id. Which one is a lane at this height was already decided
+        // by the header processor and the pruning-proof gate, both of which refuse the closed side
+        // by id; asking again here would be a second spelling of one rule. What this must NOT do is
+        // keep naming only algo-6, which past the fence would skip admission entirely for every
+        // block on the open lane.
+        if !kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(header.pow_algo_id) {
             return Ok(None);
         }
         let Some(admission) = self.palw_admission_params_v2.as_ref() else {
@@ -6197,6 +6206,14 @@ impl VirtualStateProcessor {
         kaspa_consensus_core::palw_freeprompt_v3::PalwBeaconFactV3,
         kaspa_consensus_core::palw_fp_beacon_v3::PalwBeaconDeriveV3Error,
     > {
+        // The network's attempt-lane id. This walk descends THROUGH ADR-0072's fence, so the id it
+        // is given cannot be the whole answer — `derive_beacon_fact_to_genesis_v3` matches it with
+        // `is_attempt_class_v3`, which admits either attempt id once this one is an attempt id at
+        // all. Handing it a single number was a permanent liveness defect on an armed network: past
+        // the fence every attempt block carries algo-9, the filter matched none of them, and
+        // `prev_attempt_daa` froze at the last pre-fence attempt block for the rest of the chain's
+        // life. `palw_required_algo_id` can never be 9 — `PalwRulesetV2::validate` requires the
+        // bundle's `algorithm_id` to be 6 — so no configuration could have fixed it.
         let attempt_algo_id = self.palw_required_algo_id.unwrap_or(kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2);
         let fold_k = self.palw_beacon_fold_k_at(slot);
         let facts = self.reachability_service.default_backward_chain_iterator(from).filter_map(|block| {
@@ -11592,12 +11609,24 @@ impl VirtualStateProcessor {
             // kaspa-pq ADR-0007: the template declares the network-correct Layer-1 algo for this
             // DAA score — PALW LLM (algo_id = 4) once activated, else BLAKE2b-512 ∥ SHA3-512 (3)
             // once activated, else kHeavyHash (1).
-            kaspa_consensus_core::pow_layer0::required_algo_id_for_mode(
-                self.palw_required_algo_id,
-                self.pow_palw_ollama_activation.is_active(virtual_state.daa_score),
-                self.pow_palw_activation.is_active(virtual_state.daa_score),
-                self.pow_blake2b_sha3_activation.is_active(virtual_state.daa_score),
-            ),
+            {
+                let declared = kaspa_consensus_core::pow_layer0::required_algo_id_for_mode(
+                    self.palw_required_algo_id,
+                    self.pow_palw_ollama_activation.is_active(virtual_state.daa_score),
+                    self.pow_palw_activation.is_active(virtual_state.daa_score),
+                    self.pow_blake2b_sha3_activation.is_active(virtual_state.daa_score),
+                );
+                // **ADR-0072 SA-4: past the fence, the template declares the OPEN attempt lane.**
+                //
+                // The cascade above cannot know about a top-level fence, and a producer that kept
+                // stamping algo-6 past the fence would build blocks its own validator refuses —
+                // the chain would stop at the fence rather than cross it. Only the attempt id is
+                // rewritten: the receipt and heartbeat lanes are other fences' business.
+                let lane = kaspa_consensus_core::pow_layer0::PalwAttemptLaneV1::from_fence(
+                    self.palw_attempt_activation.map(|fence| fence.is_active(virtual_state.daa_score)),
+                );
+                if kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(declared) { lane.attempt_algo_id() } else { declared }
+            },
             virtual_state.daa_score,
             virtual_state.ghostdag_data.blue_work,
             virtual_state.ghostdag_data.blue_score,

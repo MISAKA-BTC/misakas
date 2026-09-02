@@ -199,6 +199,7 @@ impl ConsensusServices {
             params.palw_consensus_mode.clone(),
             params.palw_heartbeat_lane_fence(),
             params.palw_attempt_work_fence(),
+            params.palw_attempt_activation,
             is_consensus_exiting,
         ));
 
