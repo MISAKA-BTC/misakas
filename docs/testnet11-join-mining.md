@@ -40,19 +40,21 @@ that changed.
 | a model | **no.** The default class is the integer floor; see §5 |
 
 `--netsuffix=11`, P2P **26311**, RPC **26312**. DNS seeding is live, so no `--addpeer` is needed
-(fallback entry nodes: `169.58.232.113:26311`, `169.58.39.220:26311`, `5.104.81.23:26311`.
-`169.58.232.114` was withdrawn from the network on 2026-08-29 and no longer answers.)
+(fallback entry nodes: `169.58.232.113:26311`, `169.58.39.220:26311` — the two the seeders
+verify and advertise. `5.104.81.23` does not accept inbound connections and `169.58.232.114`
+was withdrawn on 2026-08-29.)
 A node on the right chain logs
 
 ```
-Consensus params fingerprint: f3bf86b4e9327f8b02ab2ad1d121d62ecd11bd78cca1455d8bcd7372595153d8 (network testnet-11)
+Consensus params fingerprint: d38abe4420a53c585917404ef2195e0d643cf472b38e385c6515087c840014e5 (network testnet-11)
 ```
 
-(Identity as of the **2026-08-30 re-mint** for the 10B premine cap, ADR-0059 — genesis
-`d2789338…`, coinbase marker `11,3`. The previous value was `95265934…` (2026-08-29), and
-`15bab795…` before that; a node still announcing either is on an old chain and every upgraded
-node will refuse it at the handshake. If you joined an earlier testnet-11, wipe the appdir;
-the old chain is archived, not continued.)
+(Identity as of **Relaunch 5c, 2026-09-02** — genesis `08e9c8a4…` (`PALW_RC_GENESIS`). Earlier
+values — `f0e50f83…` and `accaadce…` (both 2026-09-02, each live for about an hour),
+`5ccdd684…` (2026-08-31), `f3bf86b4…` (2026-08-30), `95265934…` (2026-08-29) — name archived
+chains; a node still announcing any of them is refused at the handshake by every node on this
+one. If you joined an earlier testnet-11, wipe the appdir; the old chain is archived, not
+continued.)
 
 A different fingerprint means a different ruleset, and the two will refuse each other at handshake.
 Do not treat that as a connectivity problem.
@@ -307,17 +309,16 @@ Then produce with:
 kaspad --testnet --netsuffix=11 \
   --palw-produce --palw-panel \
   --palw-class-artifact=/path/to/qwen36.palwq36 \
-  --palw-producer-class=ec7bbcbffe13f36f1c2c418c65bdab840dd40b2bc22b217522dae836153078ddb77a92fb0645d34f98e9e3a1302e4543448a3924b3cd152fc74774ad3f02fb3f \
+  --palw-producer-class=5bd9ae3d…   # the graph-v3 Qwen3.6 id — take the full value from --palw-dump-classes \
   ... (bond, key, pay-address and fee-outpoint flags exactly as in §4)
 ```
 
-> **The class id above is the LIVE chain's, and it changes at Relaunch 5.** `ec7bbcbf…` is the
-> Qwen3.6 class the current chain registers. The next re-genesis registers the corrected `graph-v3`
-> declaration instead (`5bd9ae3d…`; the dense tier moves from `f942e268…` to `71bbb755…`), because
-> the graphs those two ids name are ones this build's backend **refuses to serve** — the hybrid's v1
-> declaration names a GDN node outside the served kernel vocabulary, and the dense v1 declares a
-> one-byte state map against an `i32` cache. A producer started with an old id against a new chain
-> points at a class the chain does not have.
+> **The class ids are the LIVE chain's as of Relaunch 5c (2026-09-02).** `5bd9ae3d…` is the
+> corrected `graph-v3` Qwen3.6 registration and `71bbb755…` the dense Qwen2.5-A16 tier; both
+> produced accepted blocks on this chain on 2026-09-02. The ids earlier revisions of this page
+> named (`ec7bbcbf…`, `f942e268…`) described graphs this build's backend refuses to serve and do
+> not exist on this chain. A producer started with an old id points at a class the chain does
+> not have.
 >
 > **Do not copy an id out of any document — including this one.** Ask the binary you are about to
 > run, which is the only source that cannot go stale:
