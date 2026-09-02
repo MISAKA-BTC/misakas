@@ -201,7 +201,25 @@ fn cmd_verify(mut args: VecDeque<String>) {
     verdict.insert("claim_id".into(), hex(object.claim_id).into());
     verdict.insert("kind".into(), object.kind.into());
     verdict.insert("kind_name".into(), kind::name(object.kind).into());
-    verdict.insert("signed".into(), signature.is_some().into());
+    // **`signed: true` was a claim this tool cannot make.** It was `signature.is_some()` — a
+    // BORSH field being present — printed under a name every reader takes to mean "the executor's
+    // ML-DSA-87 signature verifies". It does not: nothing here checks it, so a `.derived-object`
+    // whose signature is a byte of noise verified `consistent` with `signed: true` (reproduced by
+    // flipping one byte of the rail's own output). Decision 4's signature IS verified, but by the
+    // acceptance layer under `PALW_DERIVED_V1_MLDSA87_CONTEXT` — which is why a derivation read
+    // back from a chain is signed by definition, and one handed over as a FILE is not checked at
+    // all. So the field says what it knows, and names where the check lives. Renamed rather than
+    // qualified: a reader who greps `signed` must not find a field that answers a different
+    // question than the one they asked.
+    verdict.insert("signature_bytes".into(), signature.as_ref().map(|s| s.len()).into());
+    verdict.insert(
+        "signature_verified".into(),
+        "not checked here: this tool re-runs the DERIVATION (Decision 5 / X6) and does not hold a signature verifier. \
+         Decision 4's signature is verified by the chain's acceptance layer under PALW_DERIVED_V1_MLDSA87_CONTEXT, so a \
+         derivation read back from a chain is signed by definition — `misaka palw derived-verify <claim-id>` is the check \
+         that covers it. A `.derived-object.borsh` handed to you out of band carries no proof of its own signer."
+            .into(),
+    );
     let mut all_ok = true;
     // **"I cannot check this" is not "this is a forgery."** An object naming a grammar or a
     // transformer THIS build does not publish is SA-5's case, and it is the ordinary consequence

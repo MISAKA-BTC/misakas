@@ -327,6 +327,43 @@ else
   bad "an unparseable answer did not produce a re-run refusal"
 fi
 
+# ---- what this leg does NOT check, demonstrated rather than asserted --------------------
+#
+# **The signature is Decision 4's, and it is not checked here.** The section above signs the
+# object with the executor's own bond key, so it is easy to read the pass as "and the signature
+# was verified". It was not: `palw-derive verify` re-runs the DERIVATION (Decision 5 / X6) and
+# holds no signature verifier, which is why its output reports `signature_bytes` and a
+# `signature_verified` note rather than a boolean called `signed`. This flips one byte INSIDE the
+# ML-DSA-87 signature and requires the tool to (a) still reach its derivation verdict — the
+# derivation really is unaffected — and (b) not claim the signature was checked. Decision 4 is
+# covered on the chain path, where the acceptance layer verifies under
+# PALW_DERIVED_V1_MLDSA87_CONTEXT before the object is ever recorded.
+python3 - "$OBJECT" "$C/forged-signature.borsh" <<'PY'
+import sys
+b = bytearray(open(sys.argv[1], "rb").read())
+# The signature is the object's last field, so a byte 100 from the end is inside it and nowhere
+# near the derivation fields the verdict is about.
+b[-100] ^= 0xFF
+open(sys.argv[2], "wb").write(bytes(b))
+PY
+"$PALW_DERIVE_BIN" verify --object "$C/forged-signature.borsh" --answer "$ANSWER" --artifact "$ART" \
+    --output-token-ids "$C/output-token-ids.json" --job-context-hash "$CTX" --family "$FAMILY" > "$C/verify-forged-sig.json" 2>&1 || true
+if python3 -c "
+import json,sys
+d = json.load(open(sys.argv[1]))
+# The tool must not print a bare boolean that reads as 'the signature is good'.
+sys.exit(0 if d.get('signature_verified','').startswith('not checked here') and 'signed' not in d else 1)" "$C/verify-forged-sig.json"; then
+  skip "the executor's signature: NOT verified offline — $(jget "$C/verify-forged-sig.json" signature_verified | cut -c1-96)…"
+else
+  bad "palw-derive verify claims something about a signature it does not check — see $C/verify-forged-sig.json"
+fi
+# And the derivation verdict is unmoved by it, which is what says the two are separate questions.
+if [ "$(jget "$C/verify-forged-sig.json" dsl_hash_matches)" = "True" ]; then
+  ok "a forged signature leaves the derivation verdict alone — the two are separate questions"
+else
+  bad "a byte flipped inside the signature moved a derivation hash: see $C/verify-forged-sig.json"
+fi
+
 # `misaka palw derived-verify` is the same arithmetic against what a NODE returns, so it needs a
 # node holding this claim. Without one it is skipped BY NAME with the command an operator runs.
 if [ -n "${MISAKA_NODE_RPC:-}" ] && [ -x "$CLI_BIN" ]; then
