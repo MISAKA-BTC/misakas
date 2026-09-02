@@ -597,6 +597,11 @@ mandatory acceptance criteria for each phase:
 
 ## 12. ADR index
 
+> **The maintained index is [`docs/adr/README.md`](adr/README.md)** — it covers every ADR
+> (0001–0076, including the PALW lineage) together with the supersede map that says which
+> decisions were later reversed. The list below is the PQ-phase snapshot (ADR-0001–0015) and
+> is kept for the revision history; it is not extended.
+
 - [ADR-0001 — Network isolation](adr/0001-network-isolation.md)
 - [ADR-0002 — ML-DSA-65 P2PKH as the only standard script](adr/0002-mldsa65-p2pkh.md)
 - [ADR-0003 — LtHash32_1024 UTXO accumulator](adr/0003-lthash-utxo-accumulator.md)

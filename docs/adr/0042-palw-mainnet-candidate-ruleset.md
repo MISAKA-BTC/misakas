@@ -26,6 +26,19 @@ those fences would have switched on piecemeal.
 
 ---
 
+> **Network table amended (index reconciliation, 2026-09-02).** The "two-network split" table
+> below lists testnet-11 as the legacy algo-4 soak (`PalwConsensusMode::LegacyTn11`) and the PALW-RC
+> as a separate network (suffix 12). Since then testnet-12 was retired into 11: `--netsuffix=11`
+> resolves to `palw_rc_shipped_params` — the RC bundle, `ConsensusV2` — and `--netsuffix=12` is
+> refused by name; the `LegacyTn11` lane survives only as the unrouted `TESTNET11_PARAMS` constant.
+> The table's RC(n+1) rule is what testnet-11 has lived by (Relaunch 2 through 5e). Later ADRs on
+> top of this ruleset: Decision 3a's tag now expands `execution_commitment_v3`
+> ([ADR-0072](0072-the-ticket-is-the-execution.md)); Decision 7's no-show verdict is an abstention
+> on armed presets ([ADR-0065](0065-a-bond-must-be-earned-and-a-seat-must-be-someone-else.md) D4) and
+> its proof-carrying half is [ADR-0062](0062-data-availability-court.md) (Proposed); Decision 11's
+> "RC == mainnet by tag" is the route [ADR-0075](0075-certification-is-a-consensus-object.md) §7
+> relies on, with mainnet shipping `Disabled` until its card is set. Map: [`README.md`](README.md).
+
 ## Context — why an RC, and not five `Some`s
 
 The shipped presets set `palw_credit`, `palw_fork_choice`, `palw_schedule`, `palw_ramp` and

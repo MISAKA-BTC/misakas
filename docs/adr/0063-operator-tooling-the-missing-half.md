@@ -5,6 +5,15 @@
 
 Status: **Proposed** (2026-08-30).
 
+> **Standing (index reconciliation, 2026-09-02).** Decisions 2 and 3 are built and were verified
+> against testnet-11 (the body's corrections record it); `misaka bond capability` followed the same
+> shape under [ADR-0071](0071-the-attempt-lanes-price-and-the-tickets-bound.md) Decision 3, and
+> `misaka palw submit-object` / `palw-certify` under [ADR-0075](0075-certification-is-a-consensus-object.md)
+> Decision 7. Decision 1's BIP39 half and Decision 4 (the `miner` subcommand) remain open as
+> written. Map: [`README.md`](README.md).
+
+> **Security amendment appended (2026-09-02)** — see the last section: seeds never on argv or in the environment; role-separated BIP39 derivation; retirement signed under the network domain; the `miner` subcommand is deleted rather than shipped; `ClassFrozen` has one author — the transition.
+
 ## How this was found
 
 A user pasted a 24-word BIP39 mnemonic and asked to send from it. `misaka key` could not: it
@@ -182,3 +191,30 @@ is entirely tooling and carries no fingerprint, no version bump and no re-mint.
 D2 first, and not because it is the largest. Every other gap costs an operator time; that one costs
 them their collateral, it is promised in writing to work, and the amount at risk grows with every
 bond floor the economics pass raises.
+
+## Security amendment (2026-09-02) — hardening before the open decisions are built
+
+**SA-1 — Key import never touches argv or the environment.** `misaka key import` reads the seed
+from stdin or from a `0600` file named by path, refuses to write a key file that is not `0600`,
+zeroizes its buffers and never echoes the seed. A seed on the command line is in `ps` and shell
+history on every host; a seed in an environment variable is inherited by every child — including,
+until ADR-0079 R-01 lands, the model worker.
+
+**SA-2 — A shared BIP39 derivation is domain-separated per role.** If Decision 1's BIP39 half is
+built, the derivation string carries the role — bond key, operator key, payout key, wallet — as a
+pinned constant with a known-answer test, so one mnemonic never yields the same key in two roles.
+A payout key that equals a bond key turns a wallet compromise into a slashable-collateral compromise.
+
+**SA-3 — Retirement is signed under the network domain.** `BondRetireRequested` is verified against
+the bond's own key; its message must include the network domain (as `BondCapabilityDeclared` and
+`DerivedArtifactV1` do), so a retirement signed on a devnet is not replayable on the RC.
+
+**SA-4 — Decision 4 resolves to deletion.** A `misaka miner` that forwards to an absent binary
+found on `PATH` executes whatever a writable `PATH` entry holds; a hash miner on a network whose
+only hash lane is the fee-only heartbeat would be a tool for earning nothing. Remove the subcommand.
+
+**SA-5 — `ClassFrozen` has an author, and it is the transition.** The ADR notes a verify-only
+object with no constructor and leaves "who may freeze a class" undecided. Decide it before a
+constructor appears: a class is frozen only by the transition on a court outcome (`Unadjudicable`,
+ADR-0037 I10 as carried by ADR-0038), never by an operator-signed object. An operator freeze is a
+governance key on a chain that has none.

@@ -1,8 +1,11 @@
 # ADR-0039: PALW-only block production — a Base class instead of a hash floor, and a two-weight fork choice
 
-Status: **Proposed.** Activates nothing. Supersedes **ADR-0038 W4 and W6** (restated below as
-W4′ and W6′) and amends its Decision B and Decision E. Everything else in ADR-0038 — the layer
-inversion, sampled verification, the court, per-class DAA, bonded producers — stands.
+Status: **Proposed, with Decision 5 and its 2026-08-17 amendment SUPERSEDED IN PART by
+ADR-0045.** Activates nothing. Supersedes **ADR-0038 W4 and W6** (restated below as W4′ and W6′)
+and amends its Decision B and Decision E. Everything else in ADR-0038 — the layer inversion,
+sampled verification, the court, per-class DAA, bonded producers — stands. Decisions 1–4 and 6 of
+this ADR stand unchanged; Decision 5's epoch cap is re-denominated by
+[ADR-0045](0045-palw-class-economy-on-chain.md) Decision 2 — see the banners on that decision.
 
 Date: 2026-08-17
 Relates to: ADR-0038 (the layer inversion this completes), ADR-0036 (lineage and the mainnet
@@ -263,6 +266,17 @@ mispriced class becomes a standing arbitrage and multi-class collapses into a mo
 is the failure the multi-class design exists to prevent. Price is discovered per class by
 independent DAA; PWU stays static **within** a class, derived from normative operation counts.
 
+> **Superseded in part 2026-08-20 by [ADR-0045](0045-palw-class-economy-on-chain.md)
+> Decision 2.** On the V2 lineage the budget below is denominated in **blocks**, not weight:
+> `budget_c(e) = ⌊tol‰ · E · s_c / (1000 · denom_c)⌋`, derived at the epoch boundary and frozen in
+> rooted state, with `denom_c` the H1 census of the closed epoch's producers. The share table is
+> likewise chain state granted at registration (ADR-0045 Decision 3), not the params constant this
+> decision assumes. What this decision *wants* — a mis-tuned DAA may not flood the DAG, and share
+> is granted rather than self-declared — is unchanged and is exactly what ADR-0045 implements. The
+> weight-denominated inequality and the pwu election of the amendment below are retained as the
+> record of how that currency was reached and why it was abandoned; see the closing note at the end
+> of the amendment.
+
 To stop a transiently mis-tuned DAA from letting one class flood the DAG, each class carries an
 epoch weight budget:
 
@@ -283,7 +297,7 @@ next finalized boundary; its share is redistributed, never stranded.
 
 ### Decision 5 amendment (2026-08-17) — the clause as written cannot be enforced at admission
 
-An attempt to build the enforcement point found four defects in the clause itself, not in the
+An attempt to build the enforcement point found five defects in the clause itself, not in the
 wiring. They are recorded here because the code cannot be written correctly against the clause as
 stated, and shipping *something* that type-checks would have been worse than saying so.
 
@@ -361,6 +375,26 @@ The enforcement point is therefore blocked on (c): a formulation of the cap as a
 producing block's own selected-chain class production, evaluable at a chain point the validating
 node can reconstruct for the block itself. Until that exists in this ADR, the budget numbers are
 derivable and testable but nothing rejects on them.
+
+> **How this ended — 2026-08-20, [ADR-0045](0045-palw-class-economy-on-chain.md) Decision 2.**
+> The pwu election of defect (a) is **superseded**, and defect (e) is the proof of why: pwu was the
+> right answer to immutability and the wrong currency, because the share cancels out of its own
+> inequality and what remains — `tol · mean(pwu) ≥ pwu_c` — is a cross-class pwu comparison, the
+> price ADR-0038 Decision D rejects everywhere else. Denominating the budget in **blocks** closes
+> the set: (a) a block count is more immutable than pwu, and within an epoch the two caps are the
+> same cap entry for entry (Decision 1 makes per-block pwu a constant of (class, epoch)); (b) the
+> budget is derived once at the boundary and written to rooted state, so it cannot grow as the
+> epoch fills; (c) **the missing predicate exists** — the cap is charged to the *producing* block's
+> own class counter along its *own* selected chain, the accumulator V2 state already carries, and
+> never to a merger; (d) dissolves, because no pwu magnitude crosses a class boundary anywhere in
+> the cap; (e) `budget_c ≥ expected_c ⟺ tol ≥ 1000‰`, which is the tolerance floor, so
+> `StarvedClass` has nothing left to refuse in V2.
+>
+> **"Nothing rejects on them" is therefore void on the V2 lineage** — admission reads the frozen
+> snapshot, and for the crossing block itself derives from the parent state with the same pure
+> function, so the snapshot and the crossing block's own admission cannot disagree. The V1
+> pwu-denominated derivation (`class_epoch_budgets_v1`) stands unchanged as the V1 lineage's record
+> of this amendment; the V2 lineage does not call it.
 
 ## Decision 6 — Bonded is not permissioned
 

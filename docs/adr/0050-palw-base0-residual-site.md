@@ -16,6 +16,12 @@ free-prompt lane stays. This is arithmetic inside one class's graph.
 
 ---
 
+> **Landed (index reconciliation, 2026-09-02).** The residual site's narrowing nodes and their
+> parameters are in the shipped floor profile (`palw_base0_profile.rs`:
+> `blk.{layer}.attn_residual.scale` / `.requant` and `blk.{layer}.ffn_residual.scale` / `.requant`),
+> so Decisions A and D are the shipped floor and the class id this ADR said would move moved with
+> them. The Status line's "Proposed" is the 2026-08-21 state. Map: [`README.md`](README.md).
+
 ## Context — the question asked, and the larger one found underneath it
 
 The question put to this ADR was: BASE-0's residual stream is `int8` because ADR-0040 Decision D
