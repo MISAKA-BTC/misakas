@@ -299,8 +299,7 @@ pub fn qwen36_captured_rows_v1(
     trace: &crate::qwen36_plan::Qwen36PlanTraceV1,
 ) -> Vec<crate::legs::Base0CapturedRowV1> {
     use kaspa_consensus_core::palw_step::{PalwLayerKindV1, PalwStepTableV1};
-    let mut rows =
-        Vec::with_capacity(trace.pre.len() + trace.post.len() + trace.layers.iter().map(Vec::len).sum::<usize>());
+    let mut rows = Vec::with_capacity(trace.pre.len() + trace.post.len() + trace.layers.iter().map(Vec::len).sum::<usize>());
     for (index, row) in trace.pre.iter().enumerate() {
         rows.push(crate::legs::Base0CapturedRowV1 { table: PalwStepTableV1::Pre, layer: 0, index, row: row.clone() });
     }
@@ -342,6 +341,23 @@ pub fn qwen36_execute_for_attempt_v1(
     ctx: &PalwJobContextV2,
     prompt: &[usize],
 ) -> Result<crate::produce::Base0ExecutionV1, String> {
+    qwen36_execute_for_attempt_streaming_v1(artifact, profile, plan, ctx, prompt, &mut |_| {})
+}
+
+/// **The same capture, with each id handed over as it is SELECTED** (ADR-0077 Decision 2).
+///
+/// The streaming verb is the loop; the non-streaming one is the loop with a callback that does
+/// nothing. On this tier the point is sharpest: one decode call is ~9 s of real inference, so a
+/// stream assembled after the run would show the user nothing for the whole job and a second run
+/// to feed it would double a 33 GiB model's work — and commit an answer nobody watched.
+pub fn qwen36_execute_for_attempt_streaming_v1(
+    artifact: &Qwen36ArtifactV1,
+    profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+    plan: &crate::qwen36_plan::Qwen36ProfilePlanV1,
+    ctx: &PalwJobContextV2,
+    prompt: &[usize],
+    on_token: &mut dyn FnMut(u32),
+) -> Result<crate::produce::Base0ExecutionV1, String> {
     let prefill = ctx.declared_prefill_tokens as usize;
     let decode_tokens = ctx.exact_decode_tokens as usize;
     if prefill == 0 || decode_tokens == 0 {
@@ -380,6 +396,7 @@ pub fn qwen36_execute_for_attempt_v1(
     }
     let mut next = kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(&last_logits) as u32;
     generated.push(next);
+    on_token(next);
     logits_rows.push(last_logits);
 
     for call in 1..decode_tokens {
@@ -394,6 +411,7 @@ pub fn qwen36_execute_for_attempt_v1(
         capture.push_call(profile, ctx, call as u32, 0, &rows).map_err(|e| format!("{e:?}"))?;
         next = kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(&logits) as u32;
         generated.push(next);
+        on_token(next);
         logits_rows.push(logits);
     }
 
@@ -616,6 +634,82 @@ impl Qwen36Backend {
     }
 }
 
+/// **The hybrid tier's kernels, as a seat's interval replay needs them** (ADR-0077 Decision 8).
+///
+/// Genesis-anchored only, and that is a statement about the CLASS rather than a shortcut here: the
+/// registered graph declares no state chunk map (`state_chunk_map_id` is the sentinel), so it
+/// commits no checkpoint any replay could resume from, and interval 0 is the whole job. ADR-0077
+/// Decision 10 is what changes that — a registered recurrence state map (the GatedDeltaNet state
+/// plus the conv window, [`crate::fp_capture`]) moves the class id, and the `Checkpoint` arm below
+/// becomes a restore instead of a refusal.
+struct Qwen36IntervalKernels<'a> {
+    artifact: &'a Qwen36ArtifactV1,
+    plan: &'a crate::qwen36_plan::Qwen36ProfilePlanV1,
+}
+
+impl crate::fp_interval::Base0FpIntervalKernelsV1 for Qwen36IntervalKernels<'_> {
+    fn replay_interval(
+        &self,
+        profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+        ctx: &PalwJobContextV2,
+        start: &crate::fp_interval::Base0FpIntervalStartV1<'_>,
+        first_call: u32,
+        last_call: u32,
+    ) -> Result<Vec<(u64, Hash64)>, String> {
+        let crate::fp_interval::Base0FpIntervalStartV1::Genesis { .. } = start else {
+            return Err(
+                "this class registers no state chunk map, so no committed checkpoint exists to resume from (ADR-0077 Decision 10)"
+                    .to_string(),
+            );
+        };
+        let engine = Qwen36Engine::new(self.artifact);
+        let mut cache = Qwen36Cache::new(&self.artifact.shape);
+        let vocab = self.artifact.shape.vocab;
+        let max_position = self.artifact.shape.max_position;
+        crate::fp_interval::base0_fp_replay_interval_v1(profile, ctx, start, first_call, last_call, |token, position| {
+            if token >= vocab {
+                return Err(format!("token {token} is outside this class's vocabulary of {vocab}"));
+            }
+            if position >= max_position {
+                return Err(format!("the job runs past the rotary table at position {position}"));
+            }
+            let (logits, trace) = engine
+                .forward_token_planned(self.plan, &mut cache, token, position)
+                .map_err(|e| format!("forward at {position}: {e}"))?;
+            Ok((logits, qwen36_captured_rows_v1(profile, &trace)))
+        })
+    }
+}
+
+impl Qwen36Backend {
+    /// The cadence this class checkpoints at — `n_ctx`, which is above every legal job's decode
+    /// count, so `decode_calls / interval` is zero and the leg is the empty one
+    /// ([`qwen36_checkpoint_profile_v1`]). `None` for a backend serving no registered graph.
+    fn checkpoint_interval(&self) -> Option<u32> {
+        self.profile.as_ref().map(|p| qwen36_checkpoint_profile_v1(p).checkpoint_interval)
+    }
+
+    /// **ADR-0077 SA-6, at the job boundary.**
+    ///
+    /// The artifact is opened read-only (`PROT_READ`, `MAP_PRIVATE`, an `O_RDONLY` descriptor —
+    /// `crate::mmap::ReadOnlyMap`), so nothing this process does can write it. What CAN change is
+    /// the file under the mapping, and the failure mode of a directory extent that no longer lies
+    /// inside it is a read past the end. `Qwen36ArtifactV1::tensor` already answers that with a
+    /// refusal rather than a fault; this walks every extent through it once, at the job boundary,
+    /// so a host whose artifact has been truncated or swapped reports `JobFailed` with the tensor
+    /// named instead of failing forty layers into a decode call. It touches directory entries, not
+    /// pages: the cost is a `BTreeMap` walk, not a re-read of 33 GiB.
+    fn artifact_read_probe_v1(&self) -> Result<(), String> {
+        let names: Vec<String> = self.artifact.tensor_names().into_iter().map(str::to_string).collect();
+        for name in names {
+            self.artifact
+                .tensor(&name)
+                .map_err(|e| format!("this host can no longer read the mapped artifact: tensor {name}: {e}"))?;
+        }
+        Ok(())
+    }
+}
+
 impl PalwExecutionBackendV1 for Qwen36Backend {
     fn model_id(&self) -> &str {
         &self.model_id
@@ -707,8 +801,24 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
         prompt_tokens: &[usize],
     ) -> Result<kaspa_consensus_core::palw_backend::PalwFpRunV1, String> {
+        self.execute_free_prompt_streaming(job, prompt_tokens, &mut |_| {})
+    }
+
+    /// The streaming verb IS the run; the non-streaming one is this with a callback that does
+    /// nothing (ADR-0077 Decision 2). One inference, one capture, one commitment.
+    fn execute_free_prompt_streaming(
+        &self,
+        job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        prompt_tokens: &[usize],
+        on_token: &mut dyn FnMut(u32),
+    ) -> Result<kaspa_consensus_core::palw_backend::PalwFpRunV1, String> {
         use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, PalwFpRunFactsV3, palw_fp_job_context_v3};
         use kaspa_consensus_core::palw_freeprompt_v3::PalwFpStopReasonV3;
+
+        // ADR-0077 SA-6: the artifact is a 33 GiB read-only mapping and a job may outlive the file
+        // it was opened from. A directory extent that no longer lies inside the mapping is named
+        // HERE, as a job failure, rather than taken as a fault deep in a kernel.
+        self.artifact_read_probe_v1()?;
 
         let (Some(plan), Some(profile)) = (&self.plan, &self.profile) else {
             return Err("this backend serves no registered graph, so it cannot commit a free-prompt step leg".to_string());
@@ -742,7 +852,7 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         };
         let ctx = palw_fp_job_context_v3(job, &class, &shape, &self.network_id).map_err(|e| format!("{e:?}"))?;
 
-        let run = qwen36_execute_for_attempt_v1(&self.artifact, profile, plan, &ctx, prompt_tokens)?;
+        let run = qwen36_execute_for_attempt_streaming_v1(&self.artifact, profile, plan, &ctx, prompt_tokens, on_token)?;
 
         let (checkpoint_leg_root, step_leg_root) = crate::legs::base0_leg_roots_from_binding_v1(&run.binding);
         let material = crate::produce::base0_material_encode_v1(&run).map_err(|e| e.to_string())?;
@@ -853,6 +963,53 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         prompt_token_ids: &[u32],
     ) -> Result<kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1, String> {
         self.refutation_with_prompt(material, index, Some(prompt_token_ids))
+    }
+
+    // ---- ADR-0077 Decision 8: the interval seam -------------------------------------------
+    //
+    // This class's interval count is one — `n_ctx` is its checkpoint cadence, so no legal job
+    // reaches a checkpoint and interval 0 is the whole job (`qwen36_checkpoint_profile_v1`). The
+    // count is still derived and still answered, because a seat draws against it and a family that
+    // answered `None` would have its claims declined rather than checked whole.
+
+    fn fp_interval_count(&self, capture: &[u8]) -> Option<u32> {
+        let interval = self.checkpoint_interval()?;
+        let (binding, ..) = crate::produce::base0_material_decode_v1(capture).ok()?;
+        crate::fp_interval::Base0FpIntervalGeometryV1::from_binding_v1(&binding, interval).ok().map(|g| g.interval_count)
+    }
+
+    fn fp_interval_count_for(&self, prompt_tokens: u32, decode_tokens_executed: u32) -> Option<u32> {
+        crate::fp_interval::base0_fp_interval_count_for_v1(prompt_tokens, decode_tokens_executed, self.checkpoint_interval()?)
+    }
+
+    fn open_fp_interval(&self, capture: &[u8], index: u32, prompt_token_ids: &[u32]) -> Result<Vec<u8>, String> {
+        let interval = self
+            .checkpoint_interval()
+            .ok_or_else(|| "this backend serves no registered graph, so it opens no interval".to_string())?;
+        let material = crate::produce::base0_material_decode_v1(capture).map_err(|_| "the capture does not decode".to_string())?;
+        crate::fp_interval::base0_open_fp_interval_v1(&material, index, prompt_token_ids, interval).map_err(|e| e.to_string())
+    }
+
+    fn verify_fp_interval_opening(
+        &self,
+        opening: &[u8],
+        claim: PalwClaimRootsV1,
+        index: u32,
+        prompt_token_ids: &[u32],
+        work_leaves: u64,
+    ) -> kaspa_consensus_core::palw_backend::PalwFpIntervalVerdictV1 {
+        let (Some(interval), Some(plan)) = (self.checkpoint_interval(), self.plan.as_ref()) else {
+            return kaspa_consensus_core::palw_backend::PalwFpIntervalVerdictV1::Unverifiable;
+        };
+        crate::fp_interval::base0_verify_fp_interval_opening_v1(
+            opening,
+            claim,
+            index,
+            prompt_token_ids,
+            work_leaves,
+            interval,
+            &Qwen36IntervalKernels { artifact: &self.artifact, plan },
+        )
     }
 
     fn operand_openings_for(
@@ -1041,8 +1198,7 @@ mod tests {
         let anchor = Hash64::from_u64_word(0x5EA7);
         let (job, prompt) = a.job_for_anchor(anchor).expect("a job");
         let honest = a.execute(&job, &prompt).expect("runs");
-        let claim =
-            PalwClaimRootsV1 { execution_root: honest.execution_root, trace_root: honest.trace_root, anchor };
+        let claim = PalwClaimRootsV1 { execution_root: honest.execution_root, trace_root: honest.trace_root, anchor };
 
         // `rows = 0, generated = 1` — the row a token was selected from is simply absent.
         let mut no_rows = Vec::new();
@@ -1104,7 +1260,8 @@ mod tests {
         let geometry = crate::qwen36_plan::fixture_geometry_of(&artifact.shape, 4);
         let profile = kaspa_consensus_core::palw_qwen36_profile::qwen36_profile_v2(geometry).expect("the fixture geometry projects");
         let network = b"misaka-palw-test".to_vec();
-        let compiled = Qwen36Backend::with_class_profile(artifact.clone(), "Qwen3.6-fixture", (4, 2), profile.clone(), network.clone());
+        let compiled =
+            Qwen36Backend::with_class_profile(artifact.clone(), "Qwen3.6-fixture", (4, 2), profile.clone(), network.clone());
         let planned = Qwen36Backend::from_registered_profile(artifact, network, profile, (4, 2)).expect("the graph is servable");
         assert_eq!(planned.model_id(), "PALW-QWEN36/chain-registered");
         assert!(compiled.supports_court() && planned.supports_court(), "both authorities hold the capture");
@@ -1200,8 +1357,7 @@ mod tests {
         assert_eq!(outcome.execution_root, binding.committed_execution_root, "the claim commits the binding's own root");
 
         // The seat's half, against this very claim.
-        let claim =
-            PalwClaimRootsV1 { execution_root: outcome.execution_root, trace_root: outcome.trace_root, anchor };
+        let claim = PalwClaimRootsV1 { execution_root: outcome.execution_root, trace_root: outcome.trace_root, anchor };
         assert_eq!(backend.verify_material(&outcome.material, claim), PalwMaterialVerdictV1::Matches);
 
         // One proven oracle over the whole inventory — the production path a close takes.
@@ -1275,9 +1431,8 @@ mod tests {
         let artifact = std::sync::Arc::new(crate::qwen36::qwen3moe_dev_fixture(3, 8));
         let geometry = crate::qwen36_plan::fixture_geometry_of(&artifact.shape, 1);
         let profile = kaspa_consensus_core::palw_qwen36_profile::qwen36_profile_v2(geometry).expect("the stripped geometry projects");
-        let backend =
-            Qwen36Backend::from_registered_profile(artifact.clone(), b"misaka-palw-test".to_vec(), profile.clone(), (4, 2))
-                .expect("the stripped graph is servable");
+        let backend = Qwen36Backend::from_registered_profile(artifact.clone(), b"misaka-palw-test".to_vec(), profile.clone(), (4, 2))
+            .expect("the stripped graph is servable");
         assert!(backend.supports_court());
 
         let (job, prompt) = backend.job_for_anchor(Hash64::from_u64_word(0x30E5_C017)).expect("a job");
@@ -1288,12 +1443,11 @@ mod tests {
         let openings: Vec<_> = (0..inventory.operands().len())
             .map(|i| kaspa_consensus_core::palw_artifact::open_artifact_leaf_v1(inventory.operands(), i as u32).unwrap())
             .collect();
-        let oracle = kaspa_consensus_core::palw_artifact::PalwProvenOperandsV1::from_openings_v1(&openings, inventory.root())
-            .expect("proves");
+        let oracle =
+            kaspa_consensus_core::palw_artifact::PalwProvenOperandsV1::from_openings_v1(&openings, inventory.root()).expect("proves");
 
         for index in 0..binding.step_leaf_count {
-            let refutation =
-                backend.refutation_for_index(&outcome.material, index).unwrap_or_else(|e| panic!("leaf {index}: {e}"));
+            let refutation = backend.refutation_for_index(&outcome.material, index).unwrap_or_else(|e| panic!("leaf {index}: {e}"));
             let got = check_execution_step_refutation_v1(&refutation, &oracle);
             assert!(
                 matches!(got, Err(PalwStepRefuteError::NoFaultFound)),
@@ -1312,8 +1466,8 @@ mod tests {
         let lying = backend.execute_with_injected_fault(&job, &prompt, routed_leaf).expect("commits");
         let refutation = backend.refutation_for_index(&lying.material, routed_leaf).expect("opens");
         let openings = backend.operand_openings_for(&refutation).expect("the prover opens what the court resolves");
-        let proven = kaspa_consensus_core::palw_artifact::PalwProvenOperandsV1::from_openings_v1(&openings, inventory.root())
-            .expect("proves");
+        let proven =
+            kaspa_consensus_core::palw_artifact::PalwProvenOperandsV1::from_openings_v1(&openings, inventory.root()).expect("proves");
         assert!(check_execution_step_refutation_v1(&refutation, &proven).is_ok(), "a tampered routed tile must convict");
     }
 
