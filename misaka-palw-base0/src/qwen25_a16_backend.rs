@@ -18,7 +18,7 @@
 //! that commits what it cannot produce mints and then makes no blocks.
 
 use crate::artifact::Base0ArtifactV1;
-use crate::engine_a16::{A16Cache, A16Engine};
+use crate::engine_a16::{A16Cache, A16Engine, A16PlanErrorV1};
 use kaspa_consensus_core::palw_backend::{PalwClaimRootsV1, PalwExecutionBackendV1, PalwExecutionOutcomeV1, PalwMaterialVerdictV1};
 use kaspa_consensus_core::palw_step::PalwShapeProfileV3;
 use kaspa_consensus_core::palw_v2::{
@@ -430,7 +430,21 @@ impl Qwen25A16Backend {
         canonical_job: (u32, u32),
     ) -> Result<Self, String> {
         let engine = A16Engine::new(&artifact).map_err(|e| format!("the artifact is not an A16 class: {e:?}"))?;
-        let plan = engine.plan_from_profile(&profile).map_err(|e| format!("this build cannot serve the registered graph: {e:?}"))?;
+        // **Two different facts must not wear the same words** (round-3 defect I-3). "This build
+        // cannot serve the registered graph" is true of a kernel this build does not carry, and an
+        // operator reading it goes looking for missing software. `OverMemoryCeiling` is not that:
+        // the chain admitted the class, this build's own capacity bound refused it, and a node
+        // whose ceiling is larger runs the very same graph.
+        let plan = engine.plan_from_profile(&profile).map_err(|e| match e {
+            A16PlanErrorV1::OverMemoryCeiling { bytes, ceiling } => format!(
+                "this node's interpreted-execution capacity refuses the registered graph: one token's committed trace \
+                 is {bytes} bytes and this build's capacity is {ceiling} (ADR-0067 SA-1). The chain's admission caps \
+                 accepted this class and do not bound a declared row's width, so this is node-local servability, not a \
+                 statement about the class: a node built with a larger ceiling serves it, and this one will not produce \
+                 or judge for it"
+            ),
+            other => format!("this build cannot serve the registered graph: {other:?}"),
+        })?;
         let shape_id = artifact.artifact_digest();
         let class_profile_id = profile.shape_profile_id();
         let court_capable =

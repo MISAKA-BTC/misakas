@@ -638,6 +638,22 @@ or row widths are ever loosened. It is evaluated after the scalar geometry compa
 free, so a profile that is merely the wrong shape for this artifact is reported as the wrong shape
 rather than as an oversized one.
 
+*Corrected (2026-09-03): the ceiling is this NODE's capacity, and the derivation above is
+calibration against what this build compiles — not a bound the chain's caps imply.* Classes are
+permissionless (ADR-0054), and the consensus shape caps do not bound a declared row's width at all:
+`validate_shape` asks for a non-zero width and a tile inside `[MIN, MAX]_TILE_LEN`.
+`the_consensus_shape_caps_admit_more_than_this_build_will_materialise` constructs the witness — one
+extra node of 20 M elements at the widest admitted tile, 8,576 worst-case leaves against a
+4,194,304 cap, 80,006,272 bytes of committed trace — so a shape the caps admit is over a 64 MiB
+ceiling by construction, and the gap is measured rather than assumed. Deriving the ceiling from the
+caps instead would put it at `PALW_STEP_MAX_LEAVES × PALW_STEP_MAX_TILE_LEN × 4`, a terabyte: the
+"number nothing chose" problem again. So the value stays a capacity choice, and what is fixed is the
+sentence an operator reads — both containers' `from_registered_profile` now distinguish "this build
+cannot serve the registered graph" (a kernel this software does not carry) from "this node's
+interpreted-execution capacity refuses it" (the chain admitted the class, a node with a larger
+ceiling serves it, and the divergence is node-local servability — who produces and who judges —
+never block validity).
+
 **SA-2 — Resolution is off the consensus thread and fails closed to "cannot serve".** Resolving a
 chain class (fetching bytes, verifying the digest, compiling the profile) runs lazily, off the
 block-processing path; a failure marks the class unservable on this node and never rejects a block.
@@ -652,14 +668,26 @@ bound is per class and in total, and "eviction must retract" (above) stands.
 node the retraction rule this amendment states did not exist: the `(class_id, artifact_root)`
 negative mark was a process-lifetime verdict that could outlive the fact it described. The rule is
 enforced at the READ instead, where no caller has to remember it: each mark records the holdings
-identity it was derived from — per holding, the lineage, the file's `(path, len, mtime)` re-stat'ed
-at read time, and the lineage's summary — and a read whose holdings do not match drops the mark and
-re-derives. Replacing a configured artifact file therefore retracts every verdict about it with no
-evictor call, and one registry's holdings can no longer decide another's.
+identity it was derived from and a read whose holdings do not match drops the mark and re-derives.
+One registry's holdings can no longer decide another's.
 
-What that does not do, stated rather than implied: `load_class_holdings_v1` runs once per service
-construction, so a replaced file does not reach a running producer's or panel's MAPPING. The verdict
-retracts; the mapping still needs a restart. Two caches, and only this one ever promised to retract.
+*Corrected (2026-09-03): that identity is the holdings, not their files.* The first form re-stat'ed
+every configured path — `fs::metadata` plus `fs::canonicalize`, one pair per holding — and did it
+with the process-wide mark mutex held, which is a blocking syscall under a global lock on a node
+whose duties all queue behind it; this project has watched that shape wedge a public node for 46
+minutes while systemd still called it active. It also retracted on any `len`/`mtime` movement, so an
+rsync in place, a backup or a `touch` dropped every remembered refusal and re-paid the compile SA-2
+exists to prevent — for no possible change of answer, because `load_class_holdings_v1` runs once per
+service construction and the running service still dispatches against the mapping it loaded at
+startup. The identity is now the loaded holdings themselves (lineage, configured path, the lineage's
+summary — which carries the root it derived — and the address of the loaded object), which is
+exactly what `resolve_chain_registered` answers from, and it is computed with no lock held and no
+filesystem touched.
+
+What that does not do, stated rather than implied: supplying an artifact to a RUNNING service does
+not retract anything, because it does not reach that service's mapping either. It never usefully
+did — the re-derived verdict was the same sentence. Supplying an artifact is a restart, or an
+eviction (which drops the holdings and clears the marks in one move); it was never a `touch`.
 
 **SA-4 — R-7 is a security item, not only a liveness one.** An unpaid seat has no income to lose;
 its only stake is its bond, and ADR-0065 measured what a post-genesis bond costs (400,000 sompi).

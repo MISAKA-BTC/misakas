@@ -214,7 +214,19 @@ impl Qwen36Backend {
         canonical_job: (u32, u32),
     ) -> Result<Self, String> {
         let engine = Qwen36Engine::new(&artifact);
-        let plan = engine.plan_from_profile(&profile).map_err(|e| format!("this build cannot serve the registered graph: {e}"))?;
+        // The A16 container's sibling, and the same distinction (round-3 defect I-3): a capacity
+        // refusal by THIS build is not "the graph is unservable", and an operator must be able to
+        // tell them apart from the log line alone.
+        let plan = engine.plan_from_profile(&profile).map_err(|e| match e {
+            crate::qwen36_plan::Qwen36PlanErrorV1::OverMemoryCeiling { bytes, ceiling } => format!(
+                "this node's interpreted-execution capacity refuses the registered graph: one token's committed trace \
+                 is {bytes} bytes and this build's capacity is {ceiling} (ADR-0067 SA-1). The chain's admission caps \
+                 accepted this class and do not bound a declared row's width, so this is node-local servability, not a \
+                 statement about the class: a node built with a larger ceiling serves it, and this one will not produce \
+                 or judge for it"
+            ),
+            other => format!("this build cannot serve the registered graph: {other}"),
+        })?;
         let shape_id = qwen36_shape_id_v1(&artifact.shape);
         let class_profile_id = profile.shape_profile_id();
         Ok(Self {

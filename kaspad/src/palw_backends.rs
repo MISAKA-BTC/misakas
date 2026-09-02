@@ -125,8 +125,9 @@ impl PalwBackendRegistry {
 ///
 /// **The mark is answerable to the holdings it was computed against, and it is answerable AT THE
 /// READ** (SA-3). A refusal that said "this node holds no artifact whose digest is the registered
-/// root" is a statement about this node's files, and it stops being true the moment the operator
-/// supplies them — so a cached copy of it must not be able to outlive the holdings it described.
+/// root" is a statement about the artifacts this registry dispatches against, so a cached copy of
+/// it must not be able to outlive them. What "them" means — and why it is the loaded holdings and
+/// not the files on disk — is [`holdings_identity_v1`].
 ///
 /// The first form of this map delegated that to an evictor, and **the evictor had no production
 /// caller**: `evict_held_artifacts_v1` and `evict_all_held_artifacts_v1` are `pub` and are reached
@@ -138,15 +139,17 @@ impl PalwBackendRegistry {
 ///
 /// Two consequences worth stating because they are the whole of the guarantee:
 ///
-/// * A registry whose holdings differ — a different `--palw-class-artifact` list, or the same list
-///   whose files have been replaced — cannot be served another registry's verdict. That was safe by
-///   accident before (`daemon.rs` builds the producer's and the panel's configs from the same two
-///   args, so their holdings could not diverge); it is safe by construction now, and a future
+/// * A registry whose holdings differ — a different `--palw-class-artifact` list, or a list
+///   reloaded into different objects — cannot be served another registry's verdict. That was safe
+///   by accident before (`daemon.rs` builds the producer's and the panel's configs from the same
+///   two args, so their holdings could not diverge); it is safe by construction now, and a future
 ///   caller that builds a registry over a different list does not have to know this map exists.
-/// * What the mark still cannot fix on its own: `load_class_holdings_v1` runs once per service
-///   construction, so replacing an artifact file on disk does not reach a running service's
-///   holdings. The verdict retracts; the MAPPING does not reload, and that is a restart today. The
-///   two are separate and only the first was ever this map's promise.
+/// * What the mark cannot do, and no longer pretends to: notice a file rewritten under a live
+///   holding. `load_class_holdings_v1` runs once per service construction, so the running service
+///   keeps dispatching against the mapping it loaded at startup — re-deriving would return the
+///   identical sentence, which is why retraction keys on the holdings and not on their files
+///   (see [`holdings_identity_v1`]). Supplying an artifact to a running node is a restart, or an
+///   eviction; it was never a `touch`.
 fn unservable_chain_classes() -> &'static Mutex<HashMap<(Hash64, Hash64), UnservableMarkV1>> {
     static UNSERVABLE: OnceLock<Mutex<HashMap<(Hash64, Hash64), UnservableMarkV1>>> = OnceLock::new();
     UNSERVABLE.get_or_init(Default::default)
@@ -157,37 +160,86 @@ fn unservable_chain_classes() -> &'static Mutex<HashMap<(Hash64, Hash64), Unserv
 struct UnservableMarkV1 {
     why: String,
     /// [`holdings_identity_v1`] as of the moment the refusal was computed.
-    against: Vec<(&'static str, Option<HeldArtifactKey>, String)>,
+    against: HoldingsIdentityV1,
 }
 
+/// One entry per holding: the lineage that loaded it, the path the operator named for it, the
+/// lineage's own summary line, and the address of the loaded object itself.
+type HoldingsIdentityV1 = Vec<(&'static str, Option<PathBuf>, String, usize)>;
+
 /// **What a set of holdings IS, for the purpose of deciding whether a verdict about them still
-/// stands.** Per holding: which lineage loaded it, the file identity ADR-0079 Decision 9 keys a
-/// mapping by (`path`, `len`, `mtime` — recomputed HERE, from the file as it is now, not from what
-/// it was when it was mapped), and the lineage's own summary, which is where a container records
-/// the root it derived. Order is the registry's, which is the operator's argument order.
-fn holdings_identity_v1(holdings: &[PalwLoadedArtifactV1]) -> Vec<(&'static str, Option<HeldArtifactKey>, String)> {
-    holdings.iter().map(|h| (h.lineage_id, h.path.as_deref().and_then(HeldArtifactKey::of), h.summary.clone())).collect()
+/// stands — and it is a question about MEMORY, with no filesystem in it.**
+///
+/// A refusal is derived from `resolve_chain_registered`'s inputs, and the only one of those that
+/// can change under a running node is `&self.holdings`: the loaded objects a registry dispatches
+/// against. So the identity is those objects — per holding, the lineage that produced it, the path
+/// it was named by, the summary the lineage wrote (which is where a container records the root it
+/// DERIVED from the bytes), and the address of the loaded payload, which is the mapping the answer
+/// was actually computed from. Different holdings, different verdict; identical holdings, the same
+/// verdict as many times as it is asked for.
+///
+/// **Two round-3 defects are closed by keying it here rather than on file metadata.**
+///
+/// * The first form re-stat'ed every configured artifact — `fs::metadata` plus `fs::canonicalize`,
+///   one pair per holding — and did it with the process-wide [`unservable_chain_classes`] guard
+///   held. One `--palw-class-artifact` on a mount that can block in `stat` would then park the
+///   producer's registry and the panel's registry (one static, shared) behind a syscall that does
+///   not return. This node has watched that shape wedge a public node for 46 minutes while systemd
+///   still called it active; it does not belong under a global lock, and it does not belong on
+///   this path at all.
+/// * The first form also retracted the mark on any `len`/`mtime` movement, so an rsync in place, a
+///   backup, or a `touch` dropped every remembered refusal in the process — and each subsequent
+///   duty re-paid the compile SA-2 exists to prevent, only to re-derive the identical refusal,
+///   because `load_class_holdings_v1` runs once per service construction and the MAPPING had not
+///   moved. Retraction now keys on the thing that would actually change the answer.
+///
+/// **What this costs, said plainly:** replacing an artifact file at a configured path no longer
+/// retracts anything. It never usefully did — the running service still dispatches against the
+/// mapping it loaded at startup, so the re-derived verdict was the same sentence — and the honest
+/// version of "supply the artifact and the refusal goes away" is and always was a restart, or an
+/// eviction (which drops the holdings and clears this map in one move).
+///
+/// The payload address cannot go stale under us: a holding is released only by
+/// [`evict_held_artifacts_v1`] / [`evict_all_held_artifacts_v1`], and both clear this map in the
+/// same call — so no mark can outlive the allocation its address names.
+fn holdings_identity_v1(holdings: &[PalwLoadedArtifactV1]) -> HoldingsIdentityV1 {
+    holdings
+        .iter()
+        .map(|h| {
+            let payload = std::sync::Arc::as_ptr(&h.payload()) as *const () as usize;
+            (h.lineage_id, h.path.clone(), h.summary.clone(), payload)
+        })
+        .collect()
 }
 
 fn remembered_unservable(class_id: Hash64, artifact_root: Hash64, holdings: &[PalwLoadedArtifactV1]) -> Option<String> {
-    let mut marks = unservable_chain_classes().lock().unwrap_or_else(|p| p.into_inner());
-    let mark = marks.get(&(class_id, artifact_root))?;
+    // Read the mark under the lock and compare outside it. Nothing between these two guards
+    // blocks, and nothing under either one calls back into this module.
+    let mark = {
+        let marks = unservable_chain_classes().lock().unwrap_or_else(|p| p.into_inner());
+        marks.get(&(class_id, artifact_root))?.clone()
+    };
     if mark.against == holdings_identity_v1(holdings) {
-        return Some(mark.why.clone());
+        return Some(mark.why);
     }
     // The holdings this verdict was about are not the holdings in hand. Drop it rather than serve
-    // it: re-deriving costs one compile, and answering from it costs correctness.
+    // it: re-deriving costs one compile, and answering from it costs correctness. A racing caller
+    // that inserted a fresh mark for this key in between loses it and pays that one compile again
+    // — the conservative direction, and the only one available without holding the lock across the
+    // comparison.
     warn!("[palw] the remembered refusal for class {class_id} was computed against different holdings; re-deriving it");
-    marks.remove(&(class_id, artifact_root));
+    unservable_chain_classes().lock().unwrap_or_else(|p| p.into_inner()).remove(&(class_id, artifact_root));
     None
 }
 
 fn remember_unservable(class_id: Hash64, artifact_root: Hash64, why: &str, holdings: &[PalwLoadedArtifactV1]) {
-    warn!("[palw] class {class_id} is unservable on this node and will not be recompiled until its artifacts change: {why}");
+    warn!("[palw] class {class_id} is unservable on this node and will not be recompiled while it holds these artifacts: {why}");
+    // Built before the lock is taken, for the same reason the read compares outside it.
+    let against = holdings_identity_v1(holdings);
     unservable_chain_classes()
         .lock()
         .unwrap_or_else(|p| p.into_inner())
-        .insert((class_id, artifact_root), UnservableMarkV1 { why: why.to_string(), against: holdings_identity_v1(holdings) });
+        .insert((class_id, artifact_root), UnservableMarkV1 { why: why.to_string(), against });
 }
 
 /// **ADR-0067 SA-3: dropping a held artifact drops every verdict derived from it.**
@@ -248,9 +300,53 @@ impl HeldArtifactKey {
     /// `None` when the file cannot be stat'ed: the load itself then refuses by name, and a
     /// refusal is never held.
     fn of(path: &Path) -> Option<Self> {
+        // The one place this module touches the filesystem for a holding, so it is the one place
+        // the round-3 lock probe has to sit. See `fs_probe`.
+        #[cfg(test)]
+        fs_probe::record();
         let meta = std::fs::metadata(path).ok()?;
         let path = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
         Some(Self { path, len: meta.len(), modified: meta.modified().ok() })
+    }
+}
+
+/// **The instrument for "no syscall runs under the global mark lock" (round-3 defect I-1).**
+///
+/// Counts every stat this thread performs for a holding, and how many of them happened while
+/// SOMEBODY held [`unservable_chain_classes`]. `try_lock` reporting `WouldBlock` is that
+/// "somebody" — a `std::sync::Mutex` is not reentrant, so a caller that stats while holding its
+/// own guard sees exactly this, which is the failure the probe exists to catch. A POISONED lock
+/// is not a held lock and is not counted.
+///
+/// Thread-local on purpose: these tests share a process with tests that map artifacts, and a
+/// process-wide counter would be measuring them too.
+#[cfg(test)]
+mod fs_probe {
+    use std::cell::Cell;
+
+    thread_local! {
+        static STATS: Cell<usize> = const { Cell::new(0) };
+        static UNDER_LOCK: Cell<usize> = const { Cell::new(0) };
+    }
+
+    pub(super) fn record() {
+        STATS.with(|c| c.set(c.get() + 1));
+        if matches!(super::unservable_chain_classes().try_lock(), Err(std::sync::TryLockError::WouldBlock)) {
+            UNDER_LOCK.with(|c| c.set(c.get() + 1));
+        }
+    }
+
+    pub(super) fn reset() {
+        STATS.with(|c| c.set(0));
+        UNDER_LOCK.with(|c| c.set(0));
+    }
+
+    pub(super) fn stats() -> usize {
+        STATS.with(|c| c.get())
+    }
+
+    pub(super) fn under_lock() -> usize {
+        UNDER_LOCK.with(|c| c.get())
     }
 }
 
@@ -673,21 +769,23 @@ mod tests {
         assert!(remembered_unservable(class, root, &held).is_none(), "an explicit flush re-opens the question too");
     }
 
-    /// **The FILE behind a holding is part of that holding's identity, so replacing it retracts
-    /// every verdict derived from it — with no evictor call.**
+    /// **Round-3 defect I-2: a file rewritten under a live holding does NOT retract the verdict,
+    /// because it cannot change the verdict — and the mark exists to stop exactly that
+    /// recomputation.**
     ///
-    /// This is the half that reaches an operator: the refusal "this node holds no artifact whose
-    /// digest is the registered root" is a statement about bytes on disk, and
-    /// [`holdings_identity_v1`] re-stats those bytes on every read. A re-mint dropped in at a
-    /// configured path moves `len`/`mtime`, and the verdict is gone.
+    /// This test asserted the opposite shape one round ago: [`holdings_identity_v1`] re-stat'ed
+    /// each configured path, so any `len`/`mtime` movement dropped every remembered refusal in the
+    /// process. That reads like operator responsiveness and is not: `load_class_holdings_v1` runs
+    /// once per service construction, so a running producer keeps dispatching against the mapping
+    /// it loaded at startup, and the "retracted" verdict is re-derived — one compile of a
+    /// stranger's graph — to the identical sentence. An rsync in place, a backup that rewrites
+    /// mtime, or a `touch` therefore re-paid the compile SA-2 exists to prevent, on every duty,
+    /// for no possible change of answer.
     ///
-    /// What this does NOT do, asserted nowhere because it is not true: reload the MAPPING.
-    /// `load_class_holdings_v1` runs once per service construction, so a running producer still
-    /// serves the artifact it mapped at startup and the re-derived refusal will be the same
-    /// sentence until it restarts. The verdict and the mapping are two caches and only this one
-    /// ever claimed to retract.
+    /// What retracts it is a change to the holdings the registry actually dispatches against: a
+    /// different list, a reloaded mapping, or an eviction. Both halves are asserted here.
     #[test]
-    fn replacing_a_holdings_file_retracts_the_verdict_derived_from_it() {
+    fn a_file_rewritten_under_a_live_holding_does_not_retract_the_verdict() {
         let _serial = exclusive();
         evict_all_held_artifacts_v1();
         let class = Hash64::from_u64_word(0x0067_5A04);
@@ -702,14 +800,93 @@ mod tests {
         )];
 
         remember_unservable(class, root, "this node holds no artifact whose digest is the registered root", &held);
-        assert!(remembered_unservable(class, root, &held).is_some(), "the mark stands while the file does");
+        assert!(remembered_unservable(class, root, &held).is_some(), "the mark stands while the holding does");
 
-        // The operator supplies different bytes at the path they configured.
+        // Different bytes, a different length, a new mtime — and the same in-memory holding, so
+        // the same answer, so the same mark.
         std::fs::write(&path, b"the second bytes, a re-mint, a different length").expect("fixture rewrites");
         assert!(
-            remembered_unservable(class, root, &held).is_none(),
-            "the file the refusal was about is not the file on disk, so the refusal is not an answer any more"
+            remembered_unservable(class, root, &held).is_some(),
+            "the running service still dispatches against the mapping it loaded, so re-deriving could only \
+             reproduce this refusal — paying for that is what the mark is for"
         );
+
+        // A RELOADED holding is a different holding, and the question is open again. This is what
+        // an operator supplying the artifact actually does: restart the service, or evict.
+        let reloaded = vec![PalwLoadedArtifactV1::from_parts(
+            "test-lineage",
+            Some(path.clone()),
+            "held".to_string(),
+            std::sync::Arc::new(0usize),
+        )];
+        assert!(
+            remembered_unservable(class, root, &reloaded).is_none(),
+            "a verdict about one loaded artifact must not answer for another one"
+        );
+        std::fs::remove_file(&path).ok();
+        evict_all_held_artifacts_v1();
+    }
+
+    /// **Round-3 defect I-1: the mark path performs no filesystem work at all, and therefore none
+    /// of it under the process-wide mark lock.**
+    ///
+    /// The first form of the read-the-mark rule re-stat'ed every configured artifact — `metadata`
+    /// plus `canonicalize`, one pair per holding — with the global `unservable_chain_classes`
+    /// guard held. A blocking syscall under a process-wide lock is the shape that wedged a public
+    /// node for 46 minutes while systemd still called it active: one `--palw-class-artifact` on a
+    /// stalled NFS mount, and the producer's registry and the panel's registry (they share this
+    /// one static) both queue behind a stat that will not return.
+    ///
+    /// The rule the mark actually needs is answered from the holdings this process serves FROM,
+    /// which is memory, so the fix is not "stat outside the lock" but "do not stat": see
+    /// [`holdings_identity_v1`]. Both halves are asserted here, because only the second one stays
+    /// true if someone reintroduces a filesystem read on this path.
+    #[test]
+    fn the_mark_path_does_no_filesystem_work_under_the_global_lock() {
+        let _serial = exclusive();
+        evict_all_held_artifacts_v1();
+        let path = temp_artifact("mark-lock-syscalls");
+        std::fs::write(&path, b"a held artifact").expect("fixture writes");
+        let holding = |summary: &str| {
+            PalwLoadedArtifactV1::from_parts("test-lineage", Some(path.clone()), summary.to_string(), std::sync::Arc::new(0usize))
+        };
+        let held = vec![holding("held, root aaaa")];
+        let other = vec![holding("held, root bbbb")];
+        let class = Hash64::from_u64_word(0x0067_5A08);
+        let root = Hash64::from_u64_word(0x0067_5A09);
+
+        // **The probe is not vacuous**: a stat this thread really performs is counted, and counted
+        // as "not under the lock", because nothing holds the lock right here.
+        fs_probe::reset();
+        assert!(HeldArtifactKey::of(&path).is_some(), "the fixture file is there to be stat'ed");
+        assert_eq!(fs_probe::stats(), 1, "the probe counts a stat this thread performs — otherwise it proves nothing");
+        assert_eq!(fs_probe::under_lock(), 0, "…and nothing holds the mark lock on this line");
+
+        for (what, expected) in [("write", true), ("read-hit", true), ("read-miss", false), ("read-stale", false)] {
+            fs_probe::reset();
+            let answered = match what {
+                "write" => {
+                    remember_unservable(class, root, "the profile names a kernel this build does not carry", &held);
+                    true
+                }
+                "read-hit" => remembered_unservable(class, root, &held).is_some(),
+                "read-miss" => remembered_unservable(class, Hash64::from_u64_word(0xFEED), &held).is_some(),
+                _ => remembered_unservable(class, root, &other).is_some(),
+            };
+            assert_eq!(answered, expected, "{what}: the mark answers the way SA-3 says it does");
+            assert_eq!(
+                fs_probe::under_lock(),
+                0,
+                "{what}: a filesystem syscall ran while the process-wide mark lock was held — that is the wedge shape, \
+                 and every duty in this process queues behind it"
+            );
+            assert_eq!(
+                fs_probe::stats(),
+                0,
+                "{what}: the mark path touched the filesystem at all; the verdict is about the holdings this process \
+                 serves from, and those are in memory"
+            );
+        }
         std::fs::remove_file(&path).ok();
         evict_all_held_artifacts_v1();
     }

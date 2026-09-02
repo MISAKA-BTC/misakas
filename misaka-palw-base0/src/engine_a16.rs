@@ -1020,6 +1020,25 @@ pub enum A16PlanErrorV1 {
 /// the line that survives a gate whose node counts or row widths are ever loosened. It is checked
 /// after the scalar geometry comparisons (which are free) and before the first allocation, so a
 /// profile that is merely the wrong shape is reported as the wrong shape.
+///
+/// **And this is a NODE CAPACITY limit, not a bound the chain's admission gate implies — which
+/// matters because classes are permissionless (ADR-0054) and the band above is measured over the
+/// three classes THIS BUILD compiles.** The consensus shape caps do not bound a declared row's
+/// width at all: `validate_shape` asks for a non-zero width and a tile inside
+/// `[PALW_STEP_MIN_TILE_LEN, PALW_STEP_MAX_TILE_LEN]`, so at the widest admitted tile a single
+/// extra node of 20 M elements costs 306 leaves per position — nowhere near the leaf cap — and
+/// 80 MB of committed trace, which is over this ceiling.
+/// `the_consensus_shape_caps_admit_more_than_this_build_will_materialise` constructs exactly that
+/// profile and drives it, so the gap is a demonstration rather than a hope. Deriving the ceiling
+/// from the caps instead would put it at `PALW_STEP_MAX_LEAVES × PALW_STEP_MAX_TILE_LEN × 4` — a
+/// terabyte, i.e. back to a number nothing measured chose and nothing can reach.
+///
+/// So the honest statement, and the one the REFUSAL carries to whoever reads a node's log
+/// (`from_registered_profile` in both backends): a class between this ceiling and what the chain
+/// admits is registered, valid, and adjudicable — this node simply will not materialise it, a node
+/// built with a larger ceiling will, and the divergence is node-local servability (who produces and
+/// who judges), never block validity. Raising the constant is an operator's call about memory; it
+/// is not a consensus change and it never was.
 pub const PALW_INTERPRETER_TRACE_BYTES_CEILING_V1: u64 = 64 << 20;
 
 /// How many bytes one token's committed trace costs under `profile`, counted the way
