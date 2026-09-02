@@ -205,10 +205,15 @@ ADR-0072+D8 / ADR-0073 ① / ADR-0074 ③ reported, from the pin test on its reb
 (`origin/main 4c98717a` + branch `palw-adr0073-fp-weight` at `9d038706`, 8 commits, **not
 pushed** — merge and push are the user's decision):
 
-| preset | 5d fingerprint (their tree, "final for this tree") |
-|---|---|
-| testnet-11 | `f6afe2e237604b83a0cd03fe8b94be428e4aceabc12d7834b45bb455c664154a` |
-| devnet | `fd041c409b6fda1d70df60d7b9c0827349d83f74e7c0e45ef4ee5d62943bbf09` |
+| preset | 5d fingerprint (their tree, current tip) | superseded 03:10 value (tip `9d038706`) |
+|---|---|---|
+| testnet-11 | `e2b91c16a868440b5cd9d5af42ed88e15399b2181593818cc8bb94fd4e7f1eca` | `f6afe2e2…` |
+| devnet | `3f25063dd317688ee943ac9c1ba70fabe33b5c0fd20857f850d8774ba77ab013` | `fd041c40…` |
+
+The value moved once already (~03:35 CEST): review found the free-prompt lane never had
+admission item 8 (the exposure ceiling), which ADR-0074 Decision 5 makes 8× larger per claim, so
+it was landed in the transition before the swap; the state params gained a field, so the bundle
+bytes moved. Same genesis, same class roots, same A16 pin.
 
 What moves the value: free-prompt wire version 3 → 4 (job `prompt_mode`, commitment
 `work_leaves`), the bundle's free-prompt params (a quantum is ⅛ of the class's canonical job; CU
@@ -217,11 +222,9 @@ roots, the A16 inventory-root pin and the genesis hash (`08e9c8a4…`) are uncha
 fingerprint move on the same genesis, which the handshake still treats as a different network:
 every node wipes, exactly as 5c.
 
-**Pre-check done 03:20 CEST**: this session re-derived the value from the peer's tip `9d038706` in
-an isolated detached worktree with its own target dir — `shipped_presets_have_pinned_fingerprints`
-ok, pinned testnet-11 `f6afe2e2…` / devnet `fd041c40…`, the A16 inventory-root pin present and
-`a16_root_probe` green. Step (2) below is therefore already satisfied *if* the pushed commit is
-`9d038706`; any other commit is re-derived again.
+**Pre-checks**: 03:20 CEST on tip `9d038706` — pin test ok, `f6afe2e2…` / `fd041c40…`, A16 pin
+present, `a16_root_probe` green (now superseded). The same check is re-run on the new tip; step
+(2) below is satisfied only for the exact commit the user pushes.
 
 **5d go/no-go gate** (all three, in order): (1) the user merges/pushes the tree and says when;
 (2) this session re-derives the fingerprint from the pushed commit in an isolated worktree and it
