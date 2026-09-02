@@ -87,6 +87,16 @@ output: `coinbase_maturity`, and the ADR-0018 DNS settlement floor
 scan skips coinbase entries outright, so a coinbase UTXO will not be found at all and the only
 symptom is "no confirmed UTXO to spend".
 
+**Give the PALW producer its own key — do not reuse a validator's** (issue #83). The funding scan
+reads the UTXO set under the pay address's script, and with one key the two roles share one
+script: a validator StakeBond sitting there was a candidate the scan could pick as registration
+funding — on testnet-11 it picked exactly that, the largest output under the script. The node now
+refuses locked bond collateral by name (the registration then waits for a spendable, unbonded
+output instead), but separate keys keep the two roles' money structurally apart rather than
+filtered apart. Note the "already holds bond" refusal is about PALW bonds only — holding a
+validator StakeBond does **not** stop a registration from proceeding, which is exactly why the
+funding overlap could happen at all.
+
 ---
 
 ## 3. Register a bond

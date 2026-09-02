@@ -14,10 +14,22 @@ announces:
 
 | | |
 |---|---|
-| fleet today | `15bab795442ec3efc3a58e02dd9c7a6f3015ff0634bc4a50a7af589338857ad0` |
-| this build | `95265934e8965e91f3c22281af735bcd38527b5ee89fa09a05290db566d444a3` |
+| fleet before the re-mint | `15bab795442ec3efc3a58e02dd9c7a6f3015ff0634bc4a50a7af589338857ad0` |
+| this build — and the fleet since 2026-08-29 (see Outcome below) | `95265934e8965e91f3c22281af735bcd38527b5ee89fa09a05290db566d444a3` |
 | branch | `palw-audit3-2026-08-29` @ `7457cff3` |
 | `PALW_STATE_V2_VERSION` | 10 → 12 |
+
+**Which commit to build (issue #82).** `7457cff3` was this runbook's pin on the day; the branch has
+since been **merged into `main`** (merge `bbde3168`), so `7457cff3` and any `main` commit
+containing that merge materialize the *same* testnet-11 fingerprint, `95265934…` — the
+pinned-fingerprint test (`shipped_presets_have_pinned_fingerprints` in
+`consensus/core/src/config/params.rs`) holds it there, so a `main` commit whose tests are green
+cannot silently announce something else. **Build current `main`.** The startup line, not any doc
+or branch name, is the authority: boot the binary you actually built (step 1 below) and read its
+`Consensus params fingerprint:` line — it must say `95265934…` *before* you wipe anything. A build
+announcing `15bab795…` is a checkout from before this re-mint, or an old binary your unit or
+`PATH` still launches — not a wrong branch choice; note that in the mismatch log line
+(`Consensus params mismatch … local: X, remote: Y`) **`local` is your own node's fingerprint**.
 
 **What does NOT move: the genesis.** `git diff 8e982b7e 7457cff3 -- consensus/core/src/config/genesis.rs consensus/core/src/config/premine.rs`
 is empty. The genesis block, the 13B premine and the **347,000,000 MSK community allocation across
