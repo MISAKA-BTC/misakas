@@ -1888,12 +1888,18 @@ pub fn palw_da_accuse_window_daa_v1(params: &PalwStateParamsV2) -> u64 {
         .saturating_sub(palw_da_disclose_window_daa_v1(params))
 }
 
-/// **What an accusation costs the accuser** (SA-1): `⌈claim.reserved / seat_count⌉`, on the ledger
-/// the claim's own exposure lives on.
+/// **The fraction SA-1 prices an accusation at**: `⌈claim.reserved / seat_count⌉`.
 ///
-/// A fraction of the producer's own stake rather than a new constant, so griefing an honest
-/// producer costs the griefer more per attempt than it costs the producer (which is nothing but a
-/// disclosure), and so ten accusations cannot be funded out of one fee float.
+/// A fraction of the producer's own stake rather than a new constant, so the price scales with the
+/// claim being attacked instead of with a number somebody has to pick.
+///
+/// **This is not by itself what an accusation costs** — see `palw_da_accusation_exposure_v2`, which
+/// is what the fold reserves and what `slash_seat` collects. The doc here used to say a reservation
+/// of this size meant "ten accusations cannot be funded out of one fee float"; nothing enforced
+/// that, because reserving does not touch collateral and the only exposure ceiling in the tree is
+/// applied to bonds that want to PRODUCE. The ceiling is now applied at the accusation too, and the
+/// figure it counts is `v2`'s capped one, so the sentence is true of the pair and was never true of
+/// this function alone.
 ///
 /// Rounded UP, because `reserved / seat_count` floors to zero for a small claim and an accusation
 /// that reserves nothing is an accusation anyone can make forever. Zero seats is not a panel, and
@@ -1903,6 +1909,68 @@ pub fn palw_da_accusation_exposure_v1(reserved: u128, seat_count: usize) -> u128
         return reserved;
     }
     reserved.div_ceil(seat_count as u128)
+}
+
+/// **What an accusation actually puts at risk** (SA-4 as amended): the fraction above, capped at
+/// the same `min_collateral_sompi` the CHARGE is capped at.
+///
+/// `slash_seat` takes `min(amount, min_collateral_sompi)`, for the reason its own doc gives — the
+/// factors of `claim.reserved` are chosen by whoever registered the CLASS, so an uncapped charge
+/// would let a registrant make accusing its own class ruinous. `v1` reserved the UNCAPPED fraction
+/// while the charge was capped, and the gap is not cosmetic: for any claim where
+/// `reserved / seat_count > min_collateral_sompi` — every large claim — the ledger said the accuser
+/// had risked a sum the fold could never take from it, so the exposure ceiling below counted
+/// liability that did not exist and the sizing argument in `palw_da_accusation_exposure_v1`'s doc
+/// ("griefing costs the griefer more per attempt than it costs the producer") described a number
+/// nobody ever paid.
+///
+/// Reserving exactly what can be taken is what makes the ceiling a real bound: a bond's total DA
+/// liability is then its exposure ceiling, and no arrangement of claim sizes moves it. Capping the
+/// reservation admits MORE concurrent accusations for a big claim than `v1` did (`ceiling / floor`
+/// rather than `ceiling / fraction`) and the total charge is the same `ceiling` either way — which
+/// is the point: the bound is on the money, not on the count.
+pub fn palw_da_accusation_exposure_v2(reserved: u128, seat_count: usize, min_collateral_sompi: u64) -> u128 {
+    palw_da_accusation_exposure_v1(reserved, seat_count).min(min_collateral_sompi as u128)
+}
+
+/// **The phase a claim would be in if no data-availability accusation were open on it.**
+///
+/// A DA accusation and the arithmetic fraud court answer different questions — "is the material
+/// there" and "is the arithmetic right" — and a producer can be innocent of one and guilty of the
+/// other. Until this existed, `validate_court_opened_v2` read `claim.phase` directly, so an open
+/// accusation made the claim un-`ReceiptLicensed` and therefore un-challengeable for the whole
+/// remaining challenge window. That is not a side effect, it is a purchase: a producer whose
+/// ARITHMETIC is fraudulent has any bond accuse it (its own second bond will do — nothing makes
+/// the two accounts strangers), answers the single index honestly out of a complete trace, and the
+/// challenge window lapses underneath the session. `CourtFraud` would have taken `claim.reserved`
+/// and voided the escrow; the accusation costs `min_collateral_sompi`, once.
+///
+/// So the challenge surface is read THROUGH the disputed phase. `resumed` is exactly the phase the
+/// accusation found, `assert_internal_consistency` proves it is one of the three live ones, and on
+/// a claim that is not disputed this is the identity — which is why arming nothing changes nothing.
+pub fn palw_challenge_surface_phase_v2(phase: &PalwClaimPhaseV2) -> &PalwClaimPhaseV2 {
+    match phase {
+        PalwClaimPhaseV2::DefaultDisputed { resumed, .. } => resumed,
+        other => other,
+    }
+}
+
+/// **How much of a claim's own clock an OPEN accusation has consumed so far**, in DAA.
+///
+/// The claim's clock is paused for the duration of a session, and a pause the surface does not add
+/// back is not a pause — it is a deduction. Reading the challenge surface through `resumed`
+/// (`palw_challenge_surface_phase_v2`) without this would leave a disputed claim challengeable
+/// against the deadline it had BEFORE the session, so an accusation filed near the end of the
+/// window would still close the arithmetic court, just more slowly.
+///
+/// Zero on every phase but `DefaultDisputed`, so it is the identity while the fence is dormant.
+/// Saturating: a caller at a DAA before the accusation is reading a branch that cannot exist, and
+/// answering "no pause yet" is the safe reading of it.
+pub fn palw_da_paused_daa_v2(phase: &PalwClaimPhaseV2, now_daa: u64) -> u64 {
+    match phase {
+        PalwClaimPhaseV2::DefaultDisputed { accused_daa, .. } => now_daa.saturating_sub(*accused_daa),
+        _ => 0,
+    }
 }
 
 /// **The one arithmetic statement a disclosure has to satisfy about its preimage** (SA-2).
@@ -2726,6 +2794,12 @@ pub enum PalwStateV2Error {
     DaClaimNotAccusable(Hash64),
     #[error("bond {0:?} cannot accuse the claim it produced")]
     DaAccuserIsTheProducer(PalwBondKeyV2),
+    #[error(
+        "bond {bond:?} already backs {backed} and cannot reserve another {accusation} for a \
+         data-availability accusation against a ceiling of {ceiling} — one bond's total DA \
+         liability is its exposure ceiling (ADR-0062 SA-7)"
+    )]
+    DaAccusationExposureCeiling { bond: PalwBondKeyV2, backed: u128, accusation: u128, ceiling: u128 },
     #[error("the disclosure answers index {got} on a claim accused at index {want} — another index is not an answer")]
     DaDisclosureIndexMismatch { want: u32, got: u32 },
     #[error("the disclosure's opening does not reconstruct claim {claim}'s committed trace root: {why}")]
@@ -4731,18 +4805,85 @@ fn rearm_claim_after_court_close(
     Ok(())
 }
 
+/// **Advance a refuted claim's anchor by the length of the session it just answered** (ADR-0062
+/// SA-7).
+///
+/// The phase's anchor IS the clock — every deadline in this ruleset is `anchor + window` — so
+/// pausing the clock for a session is advancing the anchor by the session's length, and nothing
+/// else in the fold has to learn a new concept. In particular `assert_deadline_consistency` and
+/// `rebuild_deadline_index_v2` keep deriving the deadline from the record alone, which is what lets
+/// the deadline index stay out of the state root.
+///
+/// **Why it must extend and not merely resume.** `W_disclose = window_challenge`, and every
+/// ConsensusV2 preset has `window_challenge > window_receipt` and `> window_bind` (the shipped
+/// reference bundle: bind 600, receipt 600, challenge 1200). A claim that is accused while
+/// `PanelBound` and answers HONESTLY on the last block of its disclose window therefore came back
+/// to a receipt deadline 600 DAA in the past, and the very next sweep redrew it; the redraw leaves
+/// the old panel record in place, so a second accusation was admissible immediately, and the second
+/// honest answer came back to an expired BIND deadline and the sweep voided the claim. Two
+/// accusations, `2 × min_collateral_sompi`, and an honest producer that answered both correctly and
+/// on time lost its escrow — audit3 H4's shape against a producer that did everything right, and a
+/// responder cannot help because answering is what triggers it.
+///
+/// **Which anchors move, and which one deliberately does not.** The pause returns time the session
+/// TOOK FROM the producer, and it takes time only where the producer owed an object it could not
+/// deliver: a disputed claim is neither `Provisional` nor `PanelBound`, so the `PanelBound` object
+/// arm and the `ReceiptLicensed` object arm both refuse it, and every DAA of the session is a DAA
+/// the producer was locked out of its own window. `ReceiptLicensed` names no such obligation — the
+/// producer has finished and is only waiting — so it resumes UNMOVED, and the claim finalizes at
+/// the first sweep after the disclosure. Advancing it too would only delay an honest producer's
+/// `Final` further, and it is the delay, not the deadline, that a serial accuser is buying.
+///
+/// Nothing else may move. `accepted_daa` anchors `trace_retention_daa` and the accuse window, so
+/// advancing it would extend the producer's own retention obligation as a reward for being accused;
+/// the extension therefore rides `rebound_daa` for a `Provisional` claim, which is the anchor
+/// `bind_base_daa` already reads. That claim is necessarily a REDRAWN one — the accusation arm
+/// requires a bound panel, and the only way to hold a panel while `Provisional` is to have been
+/// redrawn — so `rebound_daa` is already `Some` and this consumes no redraw. The accusation arm
+/// refuses the impossible case outright rather than leaving the invariant implicit.
+fn resume_claim_after_da_session_v2(
+    claim_id: Hash64,
+    claim: &PalwClaimStateV2,
+    resumed: PalwClaimPhaseV2,
+    paused_daa: u64,
+) -> Result<PalwClaimStateV2, PalwStateV2Error> {
+    let mut restored = claim.clone();
+    let shift = |anchor: u64| anchor.checked_add(paused_daa).ok_or(PalwStateV2Error::Overflow("da resume anchor"));
+    match resumed {
+        PalwClaimPhaseV2::Provisional => {
+            restored.rebound_daa = Some(shift(claim.bind_base_daa())?);
+            restored.phase = PalwClaimPhaseV2::Provisional;
+        }
+        PalwClaimPhaseV2::PanelBound { bound_daa } => {
+            restored.phase = PalwClaimPhaseV2::PanelBound { bound_daa: shift(bound_daa)? };
+        }
+        PalwClaimPhaseV2::ReceiptLicensed { licensed_daa } => {
+            restored.phase = PalwClaimPhaseV2::ReceiptLicensed { licensed_daa };
+        }
+        // Unreachable by construction and stated as an error for the reason
+        // `rearm_claim_after_da_session` states it: the accusation arm refuses a terminal claim and
+        // refuses a disputed one, and `assert_internal_consistency` refuses a loaded state that
+        // says otherwise — but a fold every node runs on peer input does not get to be sure.
+        PalwClaimPhaseV2::Final { .. } | PalwClaimPhaseV2::Voided { .. } | PalwClaimPhaseV2::DefaultDisputed { .. } => {
+            return Err(PalwStateV2Error::WrongPhase { claim: claim_id, edge: "MaterialDisclosed/resume" });
+        }
+    }
+    Ok(restored)
+}
+
 /// **Put a refuted claim's own clock back** (ADR-0062 SA-4's other half).
 ///
 /// The deadline is RE-DERIVED from the resumed phase rather than remembered, so the index stays
 /// exactly what `assert_deadline_consistency` recomputes from the claims alone — the property that
 /// lets the index be dropped from the state root and rebuilt on load.
 ///
-/// A restored deadline may already be in this block's past, and that is correct rather than a bug:
-/// the claim's clock kept running underneath the session, so a claim whose challenge window elapsed
-/// while it was disputed finalizes at the next sweep, and one whose receipt window elapsed is
-/// redrawn or voided there. What it may NOT do is restart, which is what D4's "return to
-/// `ReceiptLicensed { licensed_daa: the disclosure's DAA }`" would have done — see the phase's own
-/// note on why serial accusations would then hold a claim open forever.
+/// The restored deadline is derived from the anchor `resume_claim_after_da_session_v2` has already
+/// advanced by the session's length, so it is never in this block's past for a claim that answered
+/// on time. What it may NOT do is RESTART, which is what D4's "return to `ReceiptLicensed
+/// { licensed_daa: the disclosure's DAA }`" would have done — see the phase's own note on why
+/// serial accusations would then hold a claim open forever. Advancing by exactly the elapsed
+/// session is the difference between the two: a producer gets back the time it had left and not one
+/// DAA more.
 fn rearm_claim_after_da_session(
     builder: &mut TransitionBuilder<'_>,
     ctx: &PalwBlockContextV2,
@@ -6499,6 +6640,15 @@ fn apply_object(
             );
             // An open court freezes the path to Final: the claim keeps no deadline while any
             // session is open (void-by-timeout of the COURT is PR-07's deadline system).
+            //
+            // **`DefaultDisputed` is deliberately not in this set** (ADR-0062 SA-7). Past the DA
+            // fence a claim can be challengeable while disputed — `validate_court_opened_v2` reads
+            // the challenge surface through the accusation — and the deadline such a claim holds is
+            // the DISCLOSE deadline, not a path to `Final`. Disarming it would delete the silence
+            // clock the accusation runs on, and the DA sweep would never fire: opening a court
+            // would then be the way to cancel an accusation. The disclosure re-arms through
+            // `rearm_claim_after_da_session`, which asks `open_courts_by_claim` the same question
+            // this does, so the two cannot arm a final deadline behind each other's back.
             if matches!(claim.phase, PalwClaimPhaseV2::ReceiptLicensed { .. }) {
                 builder.disarm_deadline(*claim_id);
             }
@@ -6581,6 +6731,17 @@ fn apply_object(
             if matches!(claim.phase, PalwClaimPhaseV2::DefaultDisputed { .. }) {
                 return Err(PalwStateV2Error::DaAccusationAlreadyOpen(*claim_id));
             }
+            // **A phase this fold could not put back is a phase it may not take away** (SA-7).
+            // `resume_claim_after_da_session_v2` returns a `Provisional` claim's paused time on
+            // `rebound_daa`, because `accepted_daa` anchors the retention obligation and may not
+            // move. A `Provisional` claim that has never been rebound has no such anchor — and it
+            // also has no panel, so the check below already refuses it. Asked here anyway: the
+            // alternative is an invariant that lives only in the argument that the panel gate
+            // implies it, and the arm that would discover it broken is the DISCLOSURE, where
+            // refusing means an honest producer's answer is rejected.
+            if matches!(claim.phase, PalwClaimPhaseV2::Provisional) && claim.rebound_daa.is_none() {
+                return Err(PalwStateV2Error::DaClaimNotAccusable(*claim_id));
+            }
             // **An accusation names ONE piece of the obligation, and the obligation's size is a
             // chain fact.** `trace_chunk_count` is pinned by ADR-0072 Decision 8, so the range this
             // refuses against cannot be restated by the producer OR the accuser.
@@ -6634,7 +6795,42 @@ fn apply_object(
             // challenger on the same terms — which is the intent: the accusation is priced, not
             // privileged. What is excluded is the producer itself (above) and any bond that is
             // leaving or under the floor.
-            let exposure = palw_da_accusation_exposure_v1(claim.reserved, panel.seats.len());
+            let exposure = palw_da_accusation_exposure_v2(claim.reserved, panel.seats.len(), builder.params.min_collateral_sompi());
+            // **Admission item 8, on this lane** (SA-7, closing the DA half of P0-10): what this
+            // bond already backs — its live claims, its own registrations and every accusation it
+            // has open — plus what this accusation would reserve, against collateral × ratio.
+            //
+            // Being Active and above the floor is a check on the accuser's STATE, and reserving
+            // does not change it: `write_exposure` moves the exposure ledger and leaves
+            // `collateral` alone, which the lane's own `da3` test asserts ("reserving is not
+            // charging"). So without a ceiling one bond holding exactly `min_collateral_sompi`
+            // passed the same two checks once per live claim on the network and froze all of them
+            // in a single block. The exposure ceiling the `CourtOpened` arm says "does the
+            // counting" is applied only in `check_palw_attempt_admission_v2`, i.e. only to a bond
+            // that wants to PRODUCE — no bound at all on a bond that only accuses.
+            //
+            // With the reservation capped at the same figure `slash_seat` can take, the ceiling is
+            // a bound on money and not merely on count: `K × min(fraction, floor) ≤ ceiling`, so
+            // the K-th refutation is funded exactly like the first and `slash_bond`'s clamp at
+            // collateral stops being the thing that makes accusations K..K free.
+            //
+            // The expression is the free-prompt lane's (`FreePromptCommitted` above), for the
+            // reason that one gives: a commitment meets no admission list, so the ceiling is the
+            // transition's. `palw_mode_v2` proves `fp_max_exposure_ratio_permille` equals
+            // `admission.max_exposure_ratio_permille`, so both lanes ride one number.
+            let backed = builder
+                .state
+                .reserved_exposure(accuser)
+                .checked_add(builder.state.registration_exposure(accuser))
+                .ok_or(PalwStateV2Error::Overflow("accuser total exposure"))?;
+            let ceiling = (accuser_record.collateral as u128)
+                .checked_mul(builder.params.fp_max_exposure_ratio_permille as u128)
+                .ok_or(PalwStateV2Error::Overflow("accuser exposure ceiling"))?
+                / 1000;
+            let next = backed.checked_add(exposure).ok_or(PalwStateV2Error::Overflow("accuser exposure"))?;
+            if next > ceiling {
+                return Err(PalwStateV2Error::DaAccusationExposureCeiling { bond: *accuser, backed, accusation: exposure, ceiling });
+            }
             let already = builder.state.reserved_exposure.get(accuser).copied().unwrap_or(0);
             let next = already.checked_add(exposure).ok_or(PalwStateV2Error::Overflow("accuser exposure"))?;
             builder.write_exposure(*accuser, Some(next));
@@ -6658,7 +6854,7 @@ fn apply_object(
                 return Err(PalwStateV2Error::DaCourtDormant);
             }
             let claim = builder.state.claims.get(claim_id).ok_or(PalwStateV2Error::MissingClaim(*claim_id))?.clone();
-            let PalwClaimPhaseV2::DefaultDisputed { missing_event_index, accuser, accuser_exposure, resumed, .. } =
+            let PalwClaimPhaseV2::DefaultDisputed { accused_daa, missing_event_index, accuser, accuser_exposure, resumed } =
                 claim.phase.clone()
             else {
                 return Err(PalwStateV2Error::WrongPhase { claim: *claim_id, edge: "MaterialDisclosed" });
@@ -6698,8 +6894,13 @@ fn apply_object(
             // disputed phase releases it too — see the note there on why this is not a line in
             // this arm.
             builder.slash_seat(accuser, accuser_exposure, builder.params.min_collateral_sompi())?;
-            let mut restored = claim.clone();
-            restored.phase = *resumed;
+            // **The pause is given back** (SA-7). The claim's clock stopped at `accused_daa` and
+            // starts again here, so its anchor moves forward by exactly the session it just spent
+            // answering — see `resume_claim_after_da_session_v2` for the two-accusation sequence
+            // that destroyed an honest producer's claim while it was merely restored.
+            let paused = palw_da_paused_daa_v2(&claim.phase, ctx.daa_score);
+            debug_assert_eq!(paused, ctx.daa_score.saturating_sub(accused_daa), "the pause is the session's own length");
+            let restored = resume_claim_after_da_session_v2(*claim_id, &claim, *resumed, paused)?;
             builder.write_claim(*claim_id, Some(restored.clone()));
             // The session's own clock goes with the session — a claim holds at most one deadline,
             // and leaving the disclose entry behind would sweep a claim that is no longer disputed.
@@ -12944,6 +13145,13 @@ pub(crate) mod tests {
     /// The producer's bond is 1 and the accuser's is 2; the claim commits to the real trace above
     /// and owes retention until `retention`.
     fn da_setup(p: &PalwStateParamsV2, retention: u64) -> (PalwChainStateV2, Hash64, Hash64, Vec<Vec<u8>>, Vec<Hash64>) {
+        da_setup_pwu(p, retention, 40)
+    }
+
+    /// The same fixture with the claim's size as a knob. `reserved = pwu × slash_value_per_pwu`
+    /// (the class registers 5), so `pwu` is what decides whether `⌈reserved / seats⌉` sits under
+    /// the registry floor or above it — the two sides of the cap SA-4 puts on an accusation.
+    fn da_setup_pwu(p: &PalwStateParamsV2, retention: u64, pwu: u64) -> (PalwChainStateV2, Hash64, Hash64, Vec<Vec<u8>>, Vec<Hash64>) {
         let (preimages, hashes, root) = da_trace();
         let mut objects = register_class_and_bond();
         objects.push(PalwConsensusObjectV2::BondRegistered {
@@ -12958,7 +13166,7 @@ pub(crate) mod tests {
         let genesis = PalwChainStateV2::genesis();
         let (s1, _) = apply_da(&genesis, p, &ctx(1, 100, 1), &objects, None);
 
-        let mut env = attempt(40, 1);
+        let mut env = attempt(pwu, 1);
         env.attempt.trace_root = root;
         env.attempt.trace_chunk_count = 4;
         env.attempt.trace_retention_daa = retention;
@@ -13076,10 +13284,12 @@ pub(crate) mod tests {
         assert_eq!(s5.bond(&bond_key(1)).unwrap().collateral, producer_before, "the producer that answered pays nothing");
         assert_eq!(s5.bond(&bond_key(1)).unwrap().slashed, 0);
         assert_eq!(s5.reserved_exposure(&bond_key(2)), 0, "and the reservation is released, not held");
-        // The claim is back where the accusation found it, with its own clock — not restarted.
+        // The claim is back in the phase the accusation found it in, with the ONE DAA the session
+        // took from it given back — not restarted (SA-7). It was bound at 102, accused at 103 and
+        // answered at 104, so the receipt window it is serving now runs from 103.
         assert!(
-            matches!(s5.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::PanelBound { bound_daa: 102 }),
-            "the refuted claim resumes the phase it held, at the DAA it held it from"
+            matches!(s5.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::PanelBound { bound_daa: 103 }),
+            "the refuted claim resumes the phase it held, its anchor advanced by the session it spent answering"
         );
 
         // The three ways a disclosure can be wrong, each refused by arithmetic alone.
@@ -13408,5 +13618,282 @@ pub(crate) mod tests {
                 "a session opened at the last admissible DAA still ends inside the retention obligation"
             );
         }
+    }
+
+    // ---- ADR-0062 SA-7: what an accusation costs, what it buys, and what it may not suspend ----
+
+    /// **SA-7(a): an open accusation does not close the ARITHMETIC court.**
+    ///
+    /// The two courts answer different questions, and a producer whose data is available can still
+    /// be a producer whose arithmetic is fraudulent. While `validate_court_opened_v2` read
+    /// `claim.phase` directly, one accusation — at `min(⌈reserved/seats⌉, min_collateral_sompi)`,
+    /// from any bond including the producer's own second one — made the claim un-`ReceiptLicensed`
+    /// and therefore un-challengeable for every remaining DAA of its challenge window, against a
+    /// `CourtFraud` conviction worth `claim.reserved` and the whole escrow. The immunity was
+    /// cheaper than the fraud by construction whenever `seat_count ≥ 2`.
+    ///
+    /// So the surface is read through the disputed phase, and the part of the window the session
+    /// has eaten is added back — otherwise looking through it would only make the same purchase
+    /// slower. The claim stays challengeable at every DAA of the session, and the DA session's own
+    /// deadline survives a court opening: disarming it would make opening a court the way to cancel
+    /// an accusation.
+    #[test]
+    fn an_open_accusation_does_not_close_the_arithmetic_court() {
+        let p = params();
+        let (s3, claim_id, trace_root, preimages, hashes) = da_setup(&p, 999_999);
+        let sid = crate::palw_court_v2::court_session_id_v2(
+            &claim_id,
+            &trace_root,
+            &bond_key(1),
+            &bond_key(2),
+            crate::palw_bisect::PalwBisectSpaceV1::StepLeaves,
+            16,
+        );
+        let challengeable = |state: &PalwChainStateV2, daa: u64| {
+            crate::palw_court_v2::validate_court_opened_v2(
+                state,
+                &p,
+                &ctx(9, daa, 9),
+                &sid,
+                &claim_id,
+                &bond_key(2),
+                crate::palw_bisect::PalwBisectSpaceV1::StepLeaves,
+                16,
+                &[7; 8],
+                |_, _, _, _| true,
+            )
+        };
+
+        let (licensed, _) = apply_da(
+            &s3,
+            &p,
+            &ctx(4, 103, 4),
+            &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: seat_says(true) }],
+            None,
+        );
+        let lapses_at = 103 + p.window_challenge();
+        assert!(challengeable(&licensed, 104).is_ok(), "the licensed claim is in its challenge surface");
+        assert!(challengeable(&licensed, lapses_at).is_ok(), "…up to and including the last DAA of the window");
+        assert!(challengeable(&licensed, lapses_at + 1).is_err(), "…and not past it");
+
+        // One accusation, at the first DAA of the challenge window.
+        let (accused, _) = apply_da(&licensed, &p, &ctx(5, 104, 5), &[da_accuse(claim_id, 1)], None);
+        let da_deadline = 104 + palw_da_disclose_window_daa_v1(&p);
+        for daa in [105u64, 110, 120, lapses_at, lapses_at + 1, da_deadline] {
+            assert!(
+                challengeable(&accused, daa).is_ok(),
+                "an accusation may not buy immunity from the fraud court at DAA {daa} — the claim is not Final and a claim \
+                 that is not Final must be challengeable"
+            );
+        }
+
+        // And a court that DOES open on a disputed claim leaves the silence clock alone.
+        let (both, _) = apply_da(&accused, &p, &ctx(6, 106, 6), &[court_open(claim_id, trace_root, bond_key(1), bond_key(2))], None);
+        assert!(
+            both.deadlines.contains(&(da_deadline, claim_id)),
+            "opening a court must not disarm the accusation's own deadline — that would make it the way to cancel one"
+        );
+
+        // The disclosure ends the session; the claim goes back to waiting out the window it was
+        // already serving, and the court it is under is untouched.
+        let (refuted, _) = apply_da(&both, &p, &ctx(7, da_deadline, 7), &[da_disclose(claim_id, 1, &preimages, &hashes)], None);
+        assert_eq!(
+            refuted.claim(&claim_id).unwrap().phase,
+            PalwClaimPhaseV2::ReceiptLicensed { licensed_daa: 103 },
+            "a producer that has finished its own work is only waiting, so its wait is not extended"
+        );
+        assert_eq!(refuted.open_courts_by_claim.get(&claim_id).copied(), Some(1), "the arithmetic court is still open");
+    }
+
+    /// **SA-7(b): two accusations answered correctly and on time do not destroy an honest claim.**
+    ///
+    /// `W_disclose = window_challenge`, and every ConsensusV2 preset has `window_challenge` strictly
+    /// greater than both `window_receipt` and `window_bind` (shipped reference bundle: 600 / 600 /
+    /// 1200). So a claim accused while `PanelBound` and restored to the deadline it held BEFORE the
+    /// session came back to a receipt window that had already lapsed — guaranteed, not by accident —
+    /// and the very next sweep redrew it. The redraw leaves the old panel record in place, so a
+    /// second accusation was admissible at once, and the second honest answer came back to an
+    /// expired BIND deadline: `Voided { BindTimeout }`. Two accusations at the registry floor, and a
+    /// producer that answered both correctly and on time lost its escrow. A responder cannot help,
+    /// because ANSWERING is what triggers it.
+    ///
+    /// The fix is that the pause is a pause: the anchor advances by exactly the session's length, so
+    /// the producer gets back the window it had left and not one DAA more.
+    #[test]
+    fn two_answered_accusations_do_not_destroy_an_honest_producers_claim() {
+        let p = params();
+        let window = palw_da_disclose_window_daa_v1(&p);
+        assert!(window > p.window_receipt() && window > p.window_bind(), "the disclose window outruns both — that is the hazard");
+        let (s3, claim_id, _, preimages, hashes) = da_setup(&p, 999_999);
+        assert!(
+            matches!(s3.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::PanelBound { bound_daa: 102 }),
+            "the claim is serving its receipt window"
+        );
+
+        // Session one: accused at 103, answered on the LAST block of the disclose window.
+        let (a1, _) = apply_da(&s3, &p, &ctx(4, 103, 4), &[da_accuse(claim_id, 0)], None);
+        let (r1, _) = apply_da(&a1, &p, &ctx(5, 103 + window, 5), &[da_disclose(claim_id, 0, &preimages, &hashes)], None);
+        assert!(
+            matches!(r1.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::PanelBound { bound_daa: 122 }),
+            "the receipt window resumes with the time the session took, not without it: got {:?}",
+            r1.claim(&claim_id).unwrap().phase
+        );
+
+        // Session two, immediately, on the same claim.
+        let at2 = 104 + window;
+        let (a2, _) = apply_da(&r1, &p, &ctx(6, at2, 6), &[da_accuse(claim_id, 1)], None);
+        let (r2, _) = apply_da(&a2, &p, &ctx(7, at2 + window, 7), &[da_disclose(claim_id, 1, &preimages, &hashes)], None);
+        assert!(
+            matches!(r2.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::PanelBound { .. }),
+            "and the claim is still alive and still bound: got {:?}",
+            r2.claim(&claim_id).unwrap().phase
+        );
+        assert!(r2.claim(&claim_id).unwrap().rebound_daa.is_none(), "nothing was redrawn — no window ever lapsed");
+
+        // The proof it costs the producer nothing but time: it licenses and finalizes normally.
+        let licensed_at = at2 + window + 1;
+        let (licensed, _) = apply_da(
+            &r2,
+            &p,
+            &ctx(8, licensed_at, 8),
+            &[PalwConsensusObjectV2::ReceiptLicensed { claim: claim_id, receipts: seat_says(true) }],
+            None,
+        );
+        let (finalized, _) = apply_da(&licensed, &p, &ctx(9, licensed_at + p.window_challenge() + 1, 9), &[], None);
+        assert!(
+            matches!(finalized.claim(&claim_id).unwrap().phase, PalwClaimPhaseV2::Final { .. }),
+            "an honest producer that answered every accusation reaches Final: got {:?}",
+            finalized.claim(&claim_id).unwrap().phase
+        );
+        assert_eq!(finalized.bond(&bond_key(1)).unwrap().slashed, 0, "and is never charged for having been accused");
+        assert_eq!(
+            finalized.bond(&bond_key(2)).unwrap().slashed,
+            2 * palw_da_accusation_exposure_v2(200, 2, p.min_collateral_sompi()) as u64,
+            "while the accuser paid for both of its wrong accusations"
+        );
+    }
+
+    /// **SA-7(c): one bond's total data-availability liability is its exposure ceiling.**
+    ///
+    /// Being Active and above the floor is a check on the accuser's STATE, and reserving does not
+    /// change it — `write_exposure` moves the exposure ledger and leaves `collateral` alone. So
+    /// without a ceiling one bond holding exactly `min_collateral_sompi` passed the same two checks
+    /// once per live claim on the network and froze all of them, in one block if it liked; and
+    /// because `slash_bond` debits `min(amount, collateral)` and returns early at zero, the FIRST
+    /// refutation emptied the bond and every later one cost nothing. K frozen claims for one
+    /// registry floor.
+    ///
+    /// The ceiling the `CourtOpened` arm says "does the counting" is applied only in
+    /// `check_palw_attempt_admission_v2` — i.e. only to a bond that wants to PRODUCE. Applied here
+    /// too, and with the reservation capped at the figure `slash_seat` can actually take, the K-th
+    /// accusation is funded exactly like the first.
+    #[test]
+    fn one_bond_at_the_floor_can_freeze_exactly_one_claim() {
+        let p = params();
+        let (preimages, hashes, root) = da_trace();
+        let floor = p.min_collateral_sompi();
+        let mut objects = register_class_and_bond();
+        for (bond, pubkey, op, collateral) in
+            [(bond_key(2), vec![8; 4], op_key(22), 1_000u64), (bond_key(3), vec![6; 4], op_key(23), floor)]
+        {
+            objects.push(PalwConsensusObjectV2::BondRegistered {
+                bond,
+                pubkey,
+                operator_pubkey: op,
+                collateral,
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A33),
+                capable_classes: Default::default(),
+                signature: Vec::new(),
+            });
+        }
+        let genesis = PalwChainStateV2::genesis();
+        let (s1, _) = apply_da(&genesis, &p, &ctx(1, 100, 1), &objects, None);
+
+        // Two live claims, each with a two-seat panel — the network an attacker wants to freeze.
+        let mut state = s1;
+        let mut claims = Vec::new();
+        for (nonce, daa, blue) in [(1u64, 101u64, 2u64), (2, 103, 4)] {
+            let mut env = attempt(40, nonce);
+            env.attempt.trace_root = root;
+            env.attempt.trace_chunk_count = 4;
+            env.attempt.trace_retention_daa = 999_999;
+            let claim_id = attempt_id_v2(&env.attempt);
+            let (next, _) = apply_da(&state, &p, &ctx(10 + nonce, daa, blue), &[], Some(&env));
+            let seats = vec![
+                PalwPanelSeatV2 { bond: bond_key(1), operator_id: h64(90) },
+                PalwPanelSeatV2 { bond: bond_key(2), operator_id: h64(91) },
+            ];
+            let (bound, _) = apply_da(
+                &next,
+                &p,
+                &ctx(20 + nonce, daa + 1, blue + 1),
+                &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }],
+                None,
+            );
+            state = bound;
+            claims.push(claim_id);
+        }
+
+        let accuse = |claim: Hash64| PalwConsensusObjectV2::DefaultAccused {
+            claim,
+            missing_event_index: 0,
+            accuser: bond_key(3),
+            signature: vec![9; 8],
+        };
+        // The first accusation exhausts the floor bond's whole ceiling.
+        let (one, _) = apply_da(&state, &p, &ctx(30, 105, 6), &[accuse(claims[0])], None);
+        assert_eq!(one.reserved_exposure(&bond_key(3)), floor as u128, "the accusation reserves the whole ceiling");
+        assert_eq!(one.bond(&bond_key(3)).unwrap().collateral, floor, "and reserving is still not charging");
+
+        // …so the second claim cannot be frozen by the same bond, in this block or any other.
+        let refused = apply_da_err(&one, &p, &ctx(31, 106, 7), &[accuse(claims[1])]);
+        assert!(
+            matches!(refused, PalwStateV2Error::DaAccusationExposureCeiling { ceiling, .. } if ceiling == floor as u128),
+            "one floor buys one freeze, not the whole network: got {refused:?}"
+        );
+        let both_at_once = apply_da_err(&state, &p, &ctx(32, 105, 6), &[accuse(claims[0]), accuse(claims[1])]);
+        assert!(
+            matches!(both_at_once, PalwStateV2Error::DaAccusationExposureCeiling { .. }),
+            "and not by putting them in one block either: got {both_at_once:?}"
+        );
+
+        // The refutation collects the whole reservation, so the bond is spent, not merely clamped.
+        let (paid, _) = apply_da(&one, &p, &ctx(33, 106, 7), &[da_disclose(claims[0], 0, &preimages, &hashes)], None);
+        assert_eq!(paid.bond(&bond_key(3)).unwrap().collateral, 0, "the accuser paid the floor it reserved");
+        assert_eq!(paid.bond(&bond_key(3)).unwrap().slashed, floor);
+        let broke = apply_da_err(&paid, &p, &ctx(34, 107, 8), &[accuse(claims[1])]);
+        assert!(matches!(broke, PalwStateV2Error::BondBelowFloor { .. }), "and cannot accuse again: got {broke:?}");
+    }
+
+    /// **SA-7(d): an accusation reserves exactly what the fold can take from it.**
+    ///
+    /// `slash_seat` caps the charge at `min_collateral_sompi`, for the reason its own doc gives:
+    /// both factors of `claim.reserved` are chosen by whoever registered the CLASS, so an uncapped
+    /// charge would let a registrant make accusing its own class ruinous. The RESERVATION was the
+    /// uncapped fraction, so for any claim with `reserved / seat_count > min_collateral_sompi` the
+    /// ledger recorded a liability the fold could never collect — and the ceiling above then counted
+    /// money that did not exist.
+    #[test]
+    fn an_accusation_reserves_exactly_what_the_fold_can_take() {
+        let p = params();
+        let floor = p.min_collateral_sompi();
+        // pwu 160 × the class's slash_value_per_pwu 5 = 800 reserved, so ⌈800/2⌉ = 400 — four times
+        // the registry floor, which is the case v1 got wrong.
+        let (s3, claim_id, _, preimages, hashes) = da_setup_pwu(&p, 999_999, 160);
+        let reserved = s3.claim(&claim_id).unwrap().reserved;
+        assert_eq!(reserved, 800);
+        assert_eq!(palw_da_accusation_exposure_v1(reserved, 2), 400, "the raw fraction is above the floor");
+        assert_eq!(palw_da_accusation_exposure_v2(reserved, 2, floor), floor as u128, "and the price is the floor");
+
+        let before = s3.bond(&bond_key(2)).unwrap().collateral;
+        let (accused, _) = apply_da(&s3, &p, &ctx(4, 103, 4), &[da_accuse(claim_id, 0)], None);
+        assert_eq!(
+            accused.reserved_exposure(&bond_key(2)),
+            floor as u128,
+            "the ledger holds the charge, not a fraction nobody will ever pay"
+        );
+        let (paid, _) = apply_da(&accused, &p, &ctx(5, 104, 5), &[da_disclose(claim_id, 0, &preimages, &hashes)], None);
+        assert_eq!(paid.bond(&bond_key(2)).unwrap().collateral, before - floor, "and the charge is exactly what was reserved");
+        assert_eq!(paid.reserved_exposure(&bond_key(2)), 0, "with nothing left over on either side");
     }
 }
