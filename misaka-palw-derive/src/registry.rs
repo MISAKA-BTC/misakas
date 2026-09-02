@@ -40,10 +40,14 @@ pub fn grammar_names() -> Vec<&'static str> {
 
 /// Every registered transformer name, with its kind and grammar.
 pub fn transformer_names() -> Vec<(&'static str, u16, &'static str)> {
-    registry().transformers.iter().map(|t| {
-        let m = t.manifest();
-        (m.name, m.kind, m.grammar)
-    }).collect()
+    registry()
+        .transformers
+        .iter()
+        .map(|t| {
+            let m = t.manifest();
+            (m.name, m.kind, m.grammar)
+        })
+        .collect()
 }
 
 #[cfg(test)]

@@ -22,7 +22,9 @@ pub fn f32_bits_exact(value: i64, frac_bits: u32) -> Result<u32, DeriveError> {
     let msb = 63 - mag.leading_zeros(); // position of the top set bit
     let significant_bits = msb - tz + 1;
     if significant_bits > 24 {
-        return Err(DeriveError::Inexact(format!("{value}/2^{frac_bits} needs {significant_bits} significant bits; binary32 holds 24")));
+        return Err(DeriveError::Inexact(format!(
+            "{value}/2^{frac_bits} needs {significant_bits} significant bits; binary32 holds 24"
+        )));
     }
     // value = mag · 2^-frac_bits = 1.xxx · 2^(msb - frac_bits)
     let exp: i64 = msb as i64 - frac_bits as i64;
@@ -61,7 +63,9 @@ mod tests {
 
     #[test]
     fn matches_the_hardware_conversion_where_exact() {
-        for &(v, fb) in &[(1i64, 0u32), (-1, 0), (3, 1), (5, 2), (-7, 3), (1024, 10), (16_777_215, 0), (1, 16), (-12345, 16), (123, 24)] {
+        for &(v, fb) in
+            &[(1i64, 0u32), (-1, 0), (3, 1), (5, 2), (-7, 3), (1024, 10), (16_777_215, 0), (1, 16), (-12345, 16), (123, 24)]
+        {
             let expected = ((v as f64) / f64::from(1u32 << fb)) as f32; // test-only: the oracle
             assert_eq!(f32_bits_exact(v, fb).unwrap(), expected.to_bits(), "{v}/2^{fb}");
         }

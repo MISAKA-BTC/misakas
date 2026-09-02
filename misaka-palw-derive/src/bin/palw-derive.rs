@@ -195,7 +195,10 @@ fn cmd_verify(mut args: VecDeque<String>) {
         }
         Err(e) => {
             all_ok = false;
-            verdict.insert("derivation_rerun".into(), format!("could not re-run: {e} — the object names a computation the answer does not admit").into());
+            verdict.insert(
+                "derivation_rerun".into(),
+                format!("could not re-run: {e} — the object names a computation the answer does not admit").into(),
+            );
         }
     }
     if let Some(path) = artifact {
@@ -206,7 +209,8 @@ fn cmd_verify(mut args: VecDeque<String>) {
     }
     if let (Some(ids_path), Some(ctx), Some(family)) = (ids_path, job_context_hash, family) {
         let text = std::fs::read_to_string(&ids_path).unwrap_or_else(|e| die(format!("{}: {e}", ids_path.display())));
-        let ids: Vec<u32> = serde_json::from_str(&text).unwrap_or_else(|e| die(format!("{} is not a JSON array of ids: {e}", ids_path.display())));
+        let ids: Vec<u32> =
+            serde_json::from_str(&text).unwrap_or_else(|e| die(format!("{} is not a JSON array of ids: {e}", ids_path.display())));
         let rendered = rendered_output_hash(&family, &ids);
         let recomputed = kaspa_consensus_core::palw_v2::output_commitment_v2(&ctx, &ids, &rendered);
         let ok = recomputed == object.output_root;
@@ -216,10 +220,14 @@ fn cmd_verify(mut args: VecDeque<String>) {
     } else {
         verdict.insert(
             "output_root".into(),
-            "not checked: pass --output-token-ids, --job-context-hash and --family to recompute the claim's output_root (ADR-0078 X6)".into(),
+            "not checked: pass --output-token-ids, --job-context-hash and --family to recompute the claim's output_root (ADR-0078 X6)"
+                .into(),
         );
     }
-    verdict.insert("verdict".into(), if all_ok { "consistent" } else { "MISMATCH — a demonstrable false object (ADR-0078 Decision 5)" }.into());
+    verdict.insert(
+        "verdict".into(),
+        if all_ok { "consistent" } else { "MISMATCH — a demonstrable false object (ADR-0078 Decision 5)" }.into(),
+    );
     println!("{}", serde_json::Value::Object(verdict));
     if !all_ok {
         std::process::exit(2);
@@ -284,7 +292,8 @@ fn cmd_drill(mut args: VecDeque<String>) {
     for (name, k, grammar) in registry::transformer_names() {
         let kind_dir = corpus.join(kind::name(k).unwrap_or("unassigned"));
         let Ok(entries) = std::fs::read_dir(&kind_dir) else { continue };
-        let mut files: Vec<PathBuf> = entries.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "json")).collect();
+        let mut files: Vec<PathBuf> =
+            entries.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "json")).collect();
         files.sort();
         for file in files {
             if file.file_name().is_some_and(|f| f == "golden.json") {
@@ -326,8 +335,9 @@ fn cmd_drill(mut args: VecDeque<String>) {
         std::fs::write(path, serde_json::to_vec_pretty(&doc).unwrap()).unwrap_or_else(|e| die(format!("{}: {e}", path.display())));
     }
     if let Some(other_path) = check {
-        let other: serde_json::Value = serde_json::from_slice(&std::fs::read(&other_path).unwrap_or_else(|e| die(format!("{}: {e}", other_path.display()))))
-            .unwrap_or_else(|e| die(format!("{} is not a drill report: {e}", other_path.display())));
+        let other: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&other_path).unwrap_or_else(|e| die(format!("{}: {e}", other_path.display()))))
+                .unwrap_or_else(|e| die(format!("{} is not a drill report: {e}", other_path.display())));
         let theirs = other.get("rows").and_then(|r| r.as_object()).cloned().unwrap_or_default();
         let mut diverged = Vec::new();
         for (key, mine) in &doc["rows"].as_object().cloned().unwrap_or_default() {
@@ -360,7 +370,10 @@ fn cmd_drill(mut args: VecDeque<String>) {
             std::process::exit(3);
         }
     } else {
-        println!("{}", serde_json::json!({ "schema": "misaka.palw.derive-drill.v1", "rows": rows.len(), "refused": refused.len(), "report": report.map(|p| p.display().to_string()) }));
+        println!(
+            "{}",
+            serde_json::json!({ "schema": "misaka.palw.derive-drill.v1", "rows": rows.len(), "refused": refused.len(), "report": report.map(|p| p.display().to_string()) })
+        );
     }
 }
 

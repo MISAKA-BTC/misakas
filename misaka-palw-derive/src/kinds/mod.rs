@@ -13,7 +13,15 @@ pub mod scene;
 pub mod simulation;
 
 fn all() -> Vec<(Vec<Box<dyn Grammar>>, Vec<Box<dyn Transformer>>)> {
-    vec![scene::register(), music::register(), code::register(), cad::register(), map::register(), image::register(), simulation::register()]
+    vec![
+        scene::register(),
+        music::register(),
+        code::register(),
+        cad::register(),
+        map::register(),
+        image::register(),
+        simulation::register(),
+    ]
 }
 
 pub fn grammars() -> Vec<Box<dyn Grammar>> {

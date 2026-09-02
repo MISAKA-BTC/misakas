@@ -83,7 +83,8 @@ pub fn derive_named(transformer_name: &str, binding: &ClaimBinding, answer: &[u8
     let transformer = crate::registry::transformer_by_name(transformer_name)
         .ok_or_else(|| DeriveError::UnknownTransformer(transformer_name.to_string()))?;
     let grammar_name = transformer.manifest().grammar;
-    let grammar = crate::registry::grammar_by_name(grammar_name).ok_or_else(|| DeriveError::UnknownGrammar(grammar_name.to_string()))?;
+    let grammar =
+        crate::registry::grammar_by_name(grammar_name).ok_or_else(|| DeriveError::UnknownGrammar(grammar_name.to_string()))?;
     derive_with(grammar, transformer, binding, answer)
 }
 

@@ -23,7 +23,7 @@ pub fn put_u32_be(out: &mut Vec<u8>, v: u32) {
 }
 /// Pad `out` with `pad` up to the next multiple of `align`.
 pub fn pad_to(out: &mut Vec<u8>, align: usize, pad: u8) {
-    while out.len() % align != 0 {
+    while !out.len().is_multiple_of(align) {
         out.push(pad);
     }
 }

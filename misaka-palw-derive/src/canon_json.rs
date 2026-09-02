@@ -143,18 +143,19 @@ fn reject_duplicate_keys(text: &str) -> Result<(), DeriveError> {
                     return Err(DeriveError::Grammar("unterminated string".into()));
                 }
                 let raw = &text[start..j];
-                if let Some(top) = stack.last_mut() {
-                    if top.is_object && top.expect_key {
-                        // The raw (still-escaped) key text is compared: two keys that differ only
-                        // in escaping (`"a"` vs `"a"`) are decoded by serde before they
-                        // collide, so decode here too for the comparison.
-                        let decoded: String = serde_json::from_str(&format!("\"{raw}\"")).unwrap_or_else(|_| raw.to_string());
-                        if top.keys.contains(&decoded) {
-                            return Err(DeriveError::Grammar(format!("duplicate key {decoded:?}")));
-                        }
-                        top.keys.push(decoded);
-                        top.expect_key = false;
+                if let Some(top) = stack.last_mut()
+                    && top.is_object
+                    && top.expect_key
+                {
+                    // The raw (still-escaped) key text is compared: two keys that differ only
+                    // in escaping (`"a"` vs `"a"`) are decoded by serde before they
+                    // collide, so decode here too for the comparison.
+                    let decoded: String = serde_json::from_str(&format!("\"{raw}\"")).unwrap_or_else(|_| raw.to_string());
+                    if top.keys.contains(&decoded) {
+                        return Err(DeriveError::Grammar(format!("duplicate key {decoded:?}")));
                     }
+                    top.keys.push(decoded);
+                    top.expect_key = false;
                 }
                 i = j + 1;
                 continue;
@@ -165,10 +166,10 @@ fn reject_duplicate_keys(text: &str) -> Result<(), DeriveError> {
                 stack.pop();
             }
             b',' => {
-                if let Some(top) = stack.last_mut() {
-                    if top.is_object {
-                        top.expect_key = true;
-                    }
+                if let Some(top) = stack.last_mut()
+                    && top.is_object
+                {
+                    top.expect_key = true;
                 }
             }
             _ => {}
