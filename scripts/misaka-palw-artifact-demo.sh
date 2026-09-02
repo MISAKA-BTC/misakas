@@ -126,6 +126,11 @@ else
   # The one value no shipped binary prints: `identity.json` binds `network_domain`, which is
   # blake2b512(key=…/network-domain/v1, u64le(len(net)) ‖ net ‖ genesis). A wrong value here does
   # not fail loudly — it produces claims whose context hash no seat reproduces.
+  # The producer's own gate: `--enable-unsynced-mining` waives "my sink is older than the window"
+  # and NOTHING else — `flow_context.hub().has_peers()` is checked separately
+  # (`kaspad/src/palw_producer.rs`), so a single-node devnet holds forever and prints only a trace.
+  # Named here rather than discovered as a silent stall.
+  [ "$NODES" -ge 2 ] || die "NODES=$NODES cannot produce: the producer requires peers (has_peers() in kaspad/src/palw_producer.rs, checked separately from --enable-unsynced-mining), so a one-node devnet holds forever without an error. Use NODES>=2."
   [ -n "${MISAKA_DEVNET_GENESIS:-}" ] || die "MISAKA_DEVNET_GENESIS must be the devnet genesis hash, 128 hex chars (consensus/core/src/config/genesis.rs, DEVNET_GENESIS). A guessed value silently produces claims no seat can replay."
   [ "${#MISAKA_DEVNET_GENESIS}" -eq 128 ] || die "MISAKA_DEVNET_GENESIS is ${#MISAKA_DEVNET_GENESIS} chars, not 128"
 fi
