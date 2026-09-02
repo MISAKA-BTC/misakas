@@ -81,6 +81,13 @@ hands it to a model**, on a host that may also hold a bond. The posture is enfor
 reported honestly by `misaka node security-report`, and **committed nowhere**: the chain cannot
 observe whether a host ran confined, and a court that cannot compute a verdict is a vote.
 
+**Where each provenance and host-security layer actually lives** — the model registry, the artifact
+hash, the runtime registry, the input canonicalization, the receipt, the output root, the
+verification, the metering, the capability profile, the sandbox, the secrets rule, the egress rule
+and the posture report — is one table in
+[`docs/palw-registry-map.md`](docs/palw-registry-map.md), with the field, the file and the ADR for
+each, and the reason for each of the five layers that are refused.
+
 **The model process starts with nothing.** `misaka-palw-agent` and `misaka-palw-gateway` spawn every
 worker — the job, the boot manifest probe and the boot selftest alike — with `env_clear()` and the
 in-tree constant `PALW_WORKER_ENV_ALLOWLIST` (the `MISAKA_PALW_*` artifact variables the worker
@@ -136,7 +143,18 @@ it):
 - **A per-source rate limit is secondary, by design.** Sources share addresses behind proxies; the
   binding limits are the single job slot, the bounded queue and the budget.
 - **Nothing logs a prompt.** Gateway, supervisor, worker and seat log token counts and roots, never
-  prompt text or prompt ids.
+  prompt text or prompt ids. A failed job reports the *shape* of the worker's death — the signal or
+  the exit status, and how many bytes of worker stderr there were — and **withholds the stderr
+  itself**, because a runtime's own diagnostics can quote the input (a tokenizer refusal names the
+  piece of text it could not represent). Set `MISAKA_PALW_AGENT_LOG_WORKER_STDERR=1` on your own
+  host to include the tail while debugging. The boot manifest probe and the boot golden selftest
+  still print theirs: no user input exists in the process at boot, and a quarantine an operator
+  cannot diagnose is its own failure mode.
+- **A worker that dies by signal is a failed job, not a dead node.** `SIGBUS` (an I/O fault on a
+  page of a mapped artifact — a truncated or replaced file, or failing storage), `SIGSEGV`,
+  `SIGKILL` from an outside OOM killer: each becomes a `JobFailed` whose code is `worker_signal`
+  and whose message names the signal. The supervisor keeps its socket, its slot, its identity and
+  its seat, and answers the next request.
 
 **Model-written code never runs in the process that asked for it** (ADR-0079 Decision 12, ADR-0078
 SA-1). A `code` or `contract` derivation compiles nothing of the operator's and executes a program

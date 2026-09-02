@@ -48,6 +48,13 @@ use misaka_palw::host_security::{
 
 const DEDUPE_WINDOW: usize = 1024;
 const STDERR_TAIL_BYTES: usize = 4096;
+/// **ADR-0079 SA-7 — nothing logs a prompt.** A worker's stderr is the model runtime's own output
+/// and is not the supervisor's to characterise: a tokenizer refusal names the piece it could not
+/// represent (`TokenizerError::Unrepresentable` carries a fragment of the text), and a future
+/// runtime may say more. So a failed job's stderr tail is WITHHELD by default — from the log line
+/// and from the `JobFailed` message that leaves this process — and released only when an operator
+/// asks for it on their own machine. The shape of the failure (status, byte count) is always said.
+const AGENT_LOG_WORKER_STDERR_ENV: &str = "MISAKA_PALW_AGENT_LOG_WORKER_STDERR";
 const MANIFEST_PROBE_TIMEOUT: Duration = Duration::from_secs(60);
 const SELFTEST_TIMEOUT: Duration = Duration::from_secs(1800);
 /// How often the supervision loop asks what the child is resident for. Cheap on Linux (one
@@ -432,6 +439,86 @@ enum SupervisionOutcome {
     WaitFailed(String),
 }
 
+/// The name of a termination signal, from `libc` rather than a table: `SIGBUS` is 7 on Linux and
+/// 10 on macOS, and a hard-coded number would misname exactly the fault this exists to name.
+fn signal_name(signal: i32) -> &'static str {
+    match signal {
+        libc::SIGBUS => "SIGBUS",
+        libc::SIGSEGV => "SIGSEGV",
+        libc::SIGKILL => "SIGKILL",
+        libc::SIGABRT => "SIGABRT",
+        libc::SIGILL => "SIGILL",
+        libc::SIGFPE => "SIGFPE",
+        libc::SIGSYS => "SIGSYS",
+        libc::SIGTERM => "SIGTERM",
+        libc::SIGPIPE => "SIGPIPE",
+        libc::SIGXCPU => "SIGXCPU",
+        _ => "an unnamed signal",
+    }
+}
+
+/// **How a worker's termination becomes a `JobFailed` — never a dead node** (ADR-0079 Decision 6,
+/// ADR-0077 SA-6).
+///
+/// A worker that dies by SIGNAL is the interesting case and the one that used to be reported as
+/// an opaque `worker exited with signal: 10`:
+///
+/// * **`SIGBUS`** is the fault ADR-0077 SA-6 is written about — an I/O error on a page of a mapped
+///   artifact, or an artifact truncated or replaced under a live mapping. The worker refuses
+///   before it touches a page it cannot trust; the supervisor's job is to survive the case where
+///   the platform got there first, and to SAY which one it was, because "the node died" and "one
+///   job hit a bad page" need different operator actions.
+/// * **`SIGKILL`** is the OS or an OOM killer — the availability attack Decision 6 bounds with its
+///   own resident ceiling, arriving from outside it.
+/// * **`SIGSEGV` / `SIGILL` / `SIGFPE`** are a defect in the runtime, and the operator needs to
+///   know that is what they are looking at rather than a rejected job.
+///
+/// Returns `(code, how)`: a stable machine code for the response, and one clause naming what
+/// happened. The supervisor keeps its socket, its slot and its identity in every arm.
+fn worker_termination(status: &std::process::ExitStatus) -> (&'static str, String) {
+    use std::os::unix::process::ExitStatusExt;
+    if let Some(signal) = status.signal() {
+        let why = match signal {
+            libc::SIGBUS => {
+                " — an I/O fault on a mapped page: the artifact was truncated, replaced or is on failing storage (ADR-0077 SA-6)"
+            }
+            libc::SIGKILL => " — killed from outside this supervisor (the OS or an OOM killer)",
+            libc::SIGSEGV | libc::SIGILL | libc::SIGFPE | libc::SIGABRT => {
+                " — the runtime faulted; this is a defect, not a rejected job"
+            }
+            _ => "",
+        };
+        return ("worker_signal", format!("worker died on {} ({signal}){why}", signal_name(signal)));
+    }
+    match status.code() {
+        Some(code) => ("worker_exit", format!("worker exited with status {code}")),
+        None => ("worker_exit", format!("worker exited: {status}")),
+    }
+}
+
+/// **ADR-0079 SA-7.** What a failed job may say about the worker's stderr. By default: the shape
+/// only. With [`AGENT_LOG_WORKER_STDERR_ENV`] set by the operator, the tail as well.
+///
+/// Taking `release` as an argument rather than reading the environment inside makes both arms
+/// testable without mutating a process-wide variable from a test thread.
+fn worker_failure_message(how: &str, stderr: &[u8], release: bool) -> String {
+    if stderr.is_empty() {
+        return format!("{how}; it wrote nothing to stderr");
+    }
+    if !release {
+        return format!(
+            "{how}; {} bytes of worker stderr withheld (ADR-0079 SA-7 — set {AGENT_LOG_WORKER_STDERR_ENV}=1 on this host to include the tail)",
+            stderr.len()
+        );
+    }
+    let tail_start = stderr.len().saturating_sub(STDERR_TAIL_BYTES);
+    format!("{how}: {}", String::from_utf8_lossy(&stderr[tail_start..]))
+}
+
+fn worker_stderr_released() -> bool {
+    std::env::var(AGENT_LOG_WORKER_STDERR_ENV).map(|v| v == "1").unwrap_or(false)
+}
+
 /// Wait for a worker child under BOTH ceilings — the wall-clock deadline the supervisor already
 /// owned, and the resident-memory ceiling ADR-0079 Decision 6 adds.
 ///
@@ -561,12 +648,11 @@ fn run_worker_job(state: &AgentState, envelope: &PalwJobEnvelopeV2) -> PalwAgent
     let stderr_bytes = err_thread.join().unwrap_or_default();
 
     if !status.success() {
-        let tail_start = stderr_bytes.len().saturating_sub(STDERR_TAIL_BYTES);
-        return failed(
-            state,
-            "worker_exit",
-            format!("worker exited with {status}: {}", String::from_utf8_lossy(&stderr_bytes[tail_start..])),
-        );
+        // ADR-0079 Decision 6 / ADR-0077 SA-6: a signalled death is named as one and is a FAILED
+        // JOB — this supervisor keeps its socket, its slot and its identity, and answers the next
+        // request. SA-7: the worker's own stderr is withheld unless the operator asked for it.
+        let (code, how) = worker_termination(&status);
+        return failed(state, code, worker_failure_message(&how, &stderr_bytes, worker_stderr_released()));
     }
 
     // Re-parse and re-bind the result before it leaves this process.
@@ -752,6 +838,11 @@ pub fn run() {
             eprintln!("[palw-agent] golden selftest PASSED");
             (false, true)
         } else {
+            // SA-7 exemption, stated: this is BOOT. The selftest runs the class's REGISTERED
+            // golden vectors — chain-public data — and no user input exists in this process yet,
+            // so there is no prompt here to withhold. A quarantine an operator cannot diagnose is
+            // its own failure mode. The JOB path is the one that withholds; see
+            // `worker_failure_message`.
             let tail_start = stderr.len().saturating_sub(STDERR_TAIL_BYTES);
             eprintln!(
                 "[palw-agent] golden selftest FAILED — entering QUARANTINE, all jobs will be rejected: {}",
@@ -952,6 +1043,116 @@ mod tests {
         assert_eq!(state.jobs_failed.load(Ordering::Relaxed), 1);
         assert_eq!(state.health().state, PalwAgentStateV1::Ready, "the supervisor is still ready to serve");
         std::fs::remove_dir_all(&workdir).ok();
+    }
+
+    /// **ADR-0079 Decision 6 / ADR-0077 SA-6 — a worker that dies by SIGNAL is a failed job that
+    /// NAMES the signal, and the supervisor is still there afterwards.**
+    ///
+    /// `SIGBUS` is the one this is written for: an I/O fault on a page of a mapped artifact — a
+    /// truncated or replaced file, or failing storage. The worker refuses before it touches a page
+    /// it cannot trust; this is the case where the platform got there first. "The node died" and
+    /// "one job hit a bad page" need different operator actions, so the message says which.
+    #[test]
+    fn a_worker_that_dies_by_signal_is_a_failed_job_that_names_the_signal() {
+        use std::os::unix::process::ExitStatusExt;
+
+        for (spelling, signal, expected_name) in
+            [("BUS", libc::SIGBUS, "SIGBUS"), ("SEGV", libc::SIGSEGV, "SIGSEGV"), ("KILL", libc::SIGKILL, "SIGKILL")]
+        {
+            let mut child = Command::new("/bin/sh")
+                .args(["-c", &format!("kill -s {spelling} $$")])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::piped())
+                .spawn()
+                .expect("spawn a child that signals itself");
+            let status = match supervise_child(&mut child, Duration::from_secs(20), u64::MAX) {
+                SupervisionOutcome::Exited(status) => status,
+                other => panic!("a self-signalled child must be reaped as an exit, got {other:?}"),
+            };
+            assert_eq!(status.signal(), Some(signal), "the child did not die on {expected_name}");
+            assert!(!status.success(), "a signalled death is not a success");
+
+            let (code, how) = worker_termination(&status);
+            assert_eq!(code, "worker_signal", "a signalled death must not be reported as an ordinary exit");
+            assert!(how.contains(expected_name), "the message must name the signal: {how}");
+            assert!(how.contains(&signal.to_string()), "the message must carry the number too: {how}");
+        }
+
+        // SIGBUS specifically says what an operator should go and look at.
+        let mut bus = Command::new("/bin/sh")
+            .args(["-c", "kill -s BUS $$"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn");
+        let SupervisionOutcome::Exited(status) = supervise_child(&mut bus, Duration::from_secs(20), u64::MAX) else {
+            panic!("reaped as something other than an exit")
+        };
+        let (code, how) = worker_termination(&status);
+        assert!(how.contains("mapped page"), "SIGBUS must name the mapped-page fault ADR-0077 SA-6 is about: {how}");
+
+        // It is a FAILED JOB, not a dead node: counted, the slot free, health Ready...
+        let workdir = scratch("signal");
+        let state = test_state(test_config(workdir.clone(), 0));
+        let response = failed(&state, code, worker_failure_message(&how, b"", false));
+        match response {
+            PalwAgentResponseV1::JobFailed { code, .. } => assert_eq!(code, "worker_signal"),
+            other => panic!("a signalled worker must be a JobFailed, got {other:?}"),
+        }
+        assert_eq!(state.jobs_failed.load(Ordering::Relaxed), 1);
+        assert_eq!(state.health().state, PalwAgentStateV1::Ready, "the supervisor is still ready to serve");
+
+        // ...and the very next job runs to completion through the same loop.
+        let mut next = Command::new("/bin/sh")
+            .args(["-c", "exit 0"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn the next job");
+        match supervise_child(&mut next, Duration::from_secs(20), u64::MAX) {
+            SupervisionOutcome::Exited(status) => {
+                assert!(status.success(), "the next job must run normally");
+                assert_eq!(worker_termination(&status).0, "worker_exit");
+            }
+            other => panic!("the supervisor stopped serving after a signalled worker: {other:?}"),
+        }
+        std::fs::remove_dir_all(&workdir).ok();
+    }
+
+    /// **ADR-0079 SA-7 — nothing logs a prompt.** A worker's stderr is not the supervisor's to
+    /// characterise: `TokenizerError::Unrepresentable` carries the piece of text it could not
+    /// represent, which on the free-prompt path is a fragment of a stranger's prompt. So a failed
+    /// job says the SHAPE of the failure by default — and the tail only when the operator asked.
+    #[test]
+    fn a_failed_job_withholds_the_workers_stderr_by_default() {
+        const LEAKY: &[u8] = b"v3-job rejected: tokenization failed: no token covers the piece \"my-private-question\"";
+
+        let withheld = worker_failure_message("worker died on SIGBUS (10)", LEAKY, false);
+        assert!(!withheld.contains("my-private-question"), "the prompt fragment left the process: {withheld}");
+        assert!(!withheld.contains("no token covers"), "the worker's own words left the process: {withheld}");
+        assert!(withheld.contains("SIGBUS"), "the shape of the failure is always said: {withheld}");
+        assert!(withheld.contains(&LEAKY.len().to_string()), "the byte count is said, so nothing is silently dropped: {withheld}");
+        assert!(withheld.contains(AGENT_LOG_WORKER_STDERR_ENV), "the operator is told how to get it: {withheld}");
+
+        let released = worker_failure_message("worker died on SIGBUS (10)", LEAKY, true);
+        assert!(released.contains("my-private-question"), "the opt-in must actually release it: {released}");
+
+        let silent = worker_failure_message("worker exited with status 1", b"", false);
+        assert!(silent.contains("wrote nothing"), "an empty stderr is said plainly, not as `0 bytes withheld`: {silent}");
+
+        // The job path itself must not reach around the helper. (The boot manifest probe and the
+        // boot selftest still print their tails: no user input exists at boot, and a quarantine an
+        // operator cannot diagnose is its own failure mode.)
+        let source = include_str!("agent.rs");
+        let job_path = source.split("fn run_worker_job").nth(1).expect("run_worker_job exists");
+        let job_path = job_path.split("\nfn ").next().unwrap_or(job_path);
+        assert!(
+            !job_path.contains("from_utf8_lossy(&stderr"),
+            "the job path interpolates the worker's stderr directly again — ADR-0079 SA-7"
+        );
     }
 
     /// The working directory a worker is given is neither the operator's home nor a path it

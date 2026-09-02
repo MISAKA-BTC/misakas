@@ -113,6 +113,19 @@ pub const COORD_LIMIT: i64 = 1 << 20;
 pub const SIZE_LIMIT: i64 = 1 << 21;
 /// A circle's radius lies in `1..=MAX_RADIUS`.
 pub const MAX_RADIUS: i64 = 4096;
+/// **ADR-0078 SA-2's `max_dsl_bytes`.** The most answer bytes this kind will look at, checked on
+/// the byte COUNT before the parser is asked what the bytes spell — a JSON parser is an allocator
+/// driven by its input, and a bound applied after parsing is applied after the damage. Exceeding
+/// it is "no object" (Decision 2's parse-failure arm, X4), never a repair and never a truncation.
+///
+/// The number is the retention payload's own cap (`PALW_FP_DSL_V1_MAX_BYTES`): a DSL above it
+/// could not be served to a verifier under Decision 6 even if it derived, so deriving from one
+/// would be building a derivation nobody could check. This kind's schema admits documents larger
+/// than that in its extreme corner (4,096 layers of 1,024-point polygons), and this ceiling is the
+/// binding one — it is far above any answer a class at these widths emits, and far below
+/// what a parser could be made to allocate.
+pub const MAX_DSL_BYTES: u64 = kaspa_consensus_core::palw_derived_v1::PALW_FP_DSL_V1_MAX_BYTES as u64;
+
 /// The artifact ceiling: a PNG above this is refused by the transformer.
 pub const ARTIFACT_MAX_BYTES: u64 = 32 * 1024 * 1024;
 
@@ -159,6 +172,7 @@ impl Grammar for ImageGrammar {
     /// Parse → validate → write. A violation of the schema is a grammar refusal (X4: no object,
     /// the claim untouched), never a repair.
     fn canonicalize(&self, answer: &[u8]) -> Result<Vec<u8>, DeriveError> {
+        crate::check_dsl_bytes(MAX_DSL_BYTES, answer)?;
         let tree = parse_canonical(answer)?;
         ImageDsl::from_tree(&tree)?;
         Ok(write_canonical(&tree))
@@ -174,6 +188,10 @@ impl Transformer for ImagePngTransformer {
             discipline: Discipline::Integer,
             writer: WRITER_NAME,
             source_tree_sha256: crate::SOURCE_TREE_SHA256_HEX,
+            // ADR-0078 SA-2: the ceilings this kind enforces, each already a constant above.
+            max_dsl_bytes: MAX_DSL_BYTES,
+            max_artifact_bytes: ARTIFACT_MAX_BYTES,
+            max_steps: MAX_PIXELS,
         }
     }
 
@@ -181,6 +199,7 @@ impl Transformer for ImagePngTransformer {
     /// write. The refusal is the trait's rule ("refuse, not repair"): a transformer that repaired
     /// its input would let two spellings of one answer name one artifact under two `dsl_hash`es.
     fn run(&self, dsl: &[u8]) -> Result<Artifact, DeriveError> {
+        crate::check_dsl_bytes(MAX_DSL_BYTES, dsl)?;
         let tree = parse_canonical(dsl)?;
         let image = ImageDsl::from_tree(&tree)?;
         if write_canonical(&tree) != dsl {
