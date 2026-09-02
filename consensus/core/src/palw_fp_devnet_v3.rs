@@ -43,9 +43,85 @@ const BETA_PERMILLE: u16 = 100;
 /// ruleset id — the windows never had wall-clock meaning on their own, and this constant block
 /// is where the two are read together. A shorter devnet cycle is a decision about these
 /// numbers, made in daylight; it is not something the cadence should be bent for.
-const WINDOW_BIND: u64 = 600;
-const WINDOW_RECEIPT: u64 = 600;
-const WINDOW_CHALLENGE: u64 = 1_200;
+const WINDOW_BIND: u64 = PALW_RC_WINDOWS_V1.window_bind;
+const WINDOW_RECEIPT: u64 = PALW_RC_WINDOWS_V1.window_receipt;
+const WINDOW_CHALLENGE: u64 = PALW_RC_WINDOWS_V1.window_challenge;
+
+/// **The lattice's windows, as ONE named set** (ADR-0077 Decision 7).
+///
+/// Every DAA-denominated window of the claim lattice, the court's move clock and the retention
+/// spans that are derived from them. Two sets ship: [`PALW_RC_WINDOWS_V1`] is what testnet-11
+/// runs (the constants this module has always carried, byte for byte), and
+/// [`PALW_DEVNET_WINDOWS_V1`] is the same lattice in MINUTES, for the devnet preset only — the
+/// in-harness finding stands (a single-chain `TestConsensus` does not accrue the DAA the windows
+/// need) and a multi-node devnet chain does, so a drill that has to reach `Final` and spend a
+/// quantum inside one run needs windows a chain can cross in a session. Every interlock
+/// `PalwConsensusParamsV2::validate` states holds on both sets; the set is inside the ruleset id,
+/// so the two presets are two networks, which they are.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwLatticeWindowsV1 {
+    pub window_bind: u64,
+    pub window_receipt: u64,
+    pub window_challenge: u64,
+    pub window_court: u64,
+    pub anchor_delay: u64,
+    pub max_beacon_gap: u64,
+    pub reorg_margin: u64,
+    pub receipt_maturity: u64,
+    pub receipt_use_window: u64,
+    pub court_turn_deadline: u64,
+    pub fp_abandon_hold: u64,
+    pub claim_retirement: u64,
+    pub withdrawal_delay: u64,
+}
+
+impl PalwLatticeWindowsV1 {
+    /// The longest a single claim can hold its executor's exposure under these windows: every
+    /// window on the path from creation to a terminal phase, laid end to end, with the redraw's
+    /// second bind+receipt pair (see `MAX_CLAIM_EXPOSURE_DAA`).
+    pub const fn max_claim_exposure_daa(&self) -> u64 {
+        2 * (self.window_bind + self.window_receipt) + self.window_challenge + self.window_court + self.fp_abandon_hold
+    }
+}
+
+/// testnet-11's windows: bind 600, receipt 600, challenge 1,200, court 3,000, at the frozen 120 s
+/// cadence. Unchanged by ADR-0077 Decision 7 — the devnet set is a second network, not an edit.
+pub const PALW_RC_WINDOWS_V1: PalwLatticeWindowsV1 = PalwLatticeWindowsV1 {
+    window_bind: 600,
+    window_receipt: 600,
+    window_challenge: 1_200,
+    window_court: 3_000,
+    anchor_delay: 20,
+    max_beacon_gap: 400,
+    reorg_margin: 300,
+    receipt_maturity: 400,
+    receipt_use_window: 600,
+    court_turn_deadline: 60,
+    fp_abandon_hold: 600,
+    claim_retirement: 3_000,
+    withdrawal_delay: 7_500,
+};
+
+/// **The devnet lattice, in minutes** (ADR-0077 Decision 7 — "a devnet preset whose windows are
+/// minutes"). Same interlocks, one-fifteenth the spans: a commitment binds within 40 DAA, is
+/// licensed within 40 more, finalizes 100 after that and its draw matures 20 later — ~200 DAA
+/// from commitment to spendability, under an hour on a fixture-paced devnet. The court window
+/// holds a 2^32 ladder at a 4-DAA move clock (`(2 × 32 + 2) × 4 = 264 < 300`).
+pub const PALW_DEVNET_WINDOWS_V1: PalwLatticeWindowsV1 = PalwLatticeWindowsV1 {
+    window_bind: 40,
+    window_receipt: 40,
+    window_challenge: 100,
+    window_court: 300,
+    anchor_delay: 4,
+    max_beacon_gap: 20,
+    reorg_margin: 10,
+    receipt_maturity: 20,
+    receipt_use_window: 40,
+    court_turn_deadline: 4,
+    fp_abandon_hold: 40,
+    claim_retirement: 300,
+    withdrawal_delay: 600,
+};
 /// **3,000, from the corrected worst case** (audit M2-24). The ladder's clock runs per MOVE, and a
 /// bisection round is two of them — a disclosure and a verdict — so a 22-rung ladder plus two
 /// terminal moves is `(2 x 22 + 2) x 60 = 2,760` DAA of honest prosecution. `worst_case_duration_daa`
@@ -54,7 +130,7 @@ const WINDOW_CHALLENGE: u64 = 1_200;
 /// backstop closes on the challenger's side — a dispute lost for being played correctly. 3,000
 /// leaves ~9 % margin and keeps the startup invariant that refuses a bundle where the window cannot
 /// hold its own ladder.
-const WINDOW_COURT: u64 = 3_000;
+const WINDOW_COURT: u64 = PALW_RC_WINDOWS_V1.window_court;
 
 /// Class-production epoch / retarget span.
 const EPOCH_LENGTH: u64 = 1_000;
@@ -97,18 +173,23 @@ const EPOCH_LENGTH: u64 = 1_000;
 const ATTEMPT_SHARE_PERMILLE: u16 = 900;
 
 /// The panel's anchor delay: 20 DAA after acceptance the claim's beacon slot opens.
-const ANCHOR_DELAY: u64 = 20;
+#[allow(dead_code)] // the RC set's named reading, kept beside its rationale (ADR-0077 Decision 7)
+const ANCHOR_DELAY: u64 = PALW_RC_WINDOWS_V1.anchor_delay;
 /// Declared worst-case wait for the first attempt-class block at or after a slot. At a 150‰
 /// floor the expected gap is ~7 blocks; 400 is a wide margin, and the startup gate proves
 /// `ANCHOR_DELAY + this < WINDOW_BIND`, so even a very unlucky lull still binds in time.
-const MAX_BEACON_GAP: u64 = 400;
+#[allow(dead_code)] // the RC set's named reading, kept beside its rationale (ADR-0077 Decision 7)
+const MAX_BEACON_GAP: u64 = PALW_RC_WINDOWS_V1.max_beacon_gap;
 
 /// Draw maturity and use window. Maturity must cover the reorg margin (the draw beacon must sit
 /// past the reorgable fringe of the certification it draws for); the use window is generous
 /// because a producer that misses it loses the win outright.
-const REORG_MARGIN: u64 = 300;
-const RECEIPT_MATURITY: u64 = 400;
-const RECEIPT_USE_WINDOW: u64 = 600;
+#[allow(dead_code)] // the RC set's named reading, kept beside its rationale (ADR-0077 Decision 7)
+const REORG_MARGIN: u64 = PALW_RC_WINDOWS_V1.reorg_margin;
+#[allow(dead_code)] // the RC set's named reading, kept beside its rationale (ADR-0077 Decision 7)
+const RECEIPT_MATURITY: u64 = PALW_RC_WINDOWS_V1.receipt_maturity;
+#[allow(dead_code)] // the RC set's named reading, kept beside its rationale (ADR-0077 Decision 7)
+const RECEIPT_USE_WINDOW: u64 = PALW_RC_WINDOWS_V1.receipt_use_window;
 
 /// Measured worst-case honest prosecution time — a PLACEHOLDER shaped like the real thing: the
 /// gate demands `window_court > this`, so the constant is what a fleet measurement replaces, and
@@ -127,7 +208,8 @@ const RECEIPT_USE_WINDOW: u64 = 600;
 /// `WINDOW_COURT` (3,000). Nothing deeper than the cap is admissible at all, so this ladder cannot
 /// fail to reach a class that exists.
 const COURT_MAX_STEP_LEAVES: u64 = crate::palw_step::PALW_STEP_MAX_LEAVES;
-const COURT_TURN_DEADLINE: u64 = 60;
+#[allow(dead_code)] // the RC set's named reading, kept beside its rationale (ADR-0077 Decision 7)
+const COURT_TURN_DEADLINE: u64 = PALW_RC_WINDOWS_V1.court_turn_deadline;
 const COURT_TERMINAL_ROUNDS: u32 = 2;
 
 /// **What a round may COST** (ADR-0049 Decision C), named here rather than left to the
@@ -205,7 +287,8 @@ const REGISTRATION_EXPOSURE_SOMPI: u64 = 40_000;
 /// what this rule is about.
 const RECLAIM_EPOCHS: u32 = 12;
 
-const WITHDRAWAL_DELAY: u64 = 7_500;
+#[allow(dead_code)] // the RC set's named reading, kept beside its rationale (ADR-0077 Decision 7)
+const WITHDRAWAL_DELAY: u64 = PALW_RC_WINDOWS_V1.withdrawal_delay;
 
 /// Per-adjustment retarget clamp (ADR-0038 Decision D) and the ADR-0045 Decision 2 epoch-budget
 /// tolerance, in permille of a class's cadence share. Unity is the floor (below it a budget
@@ -243,7 +326,7 @@ const BUDGET_TOLERANCE_PERMILLE: u32 = 1_000;
 /// keeps its collateral reserved. One bind window (600) — the span the producer had to bind and
 /// chose not to use, which is the natural price for declining it, and long enough that a redraw
 /// loop needs a fresh reservation per attempt rather than recycling one.
-const FP_ABANDON_HOLD: u64 = WINDOW_BIND;
+const FP_ABANDON_HOLD: u64 = PALW_RC_WINDOWS_V1.fp_abandon_hold;
 
 /// **How long a terminal claim is kept before it is removed** (launch blockers §8, third bullet).
 ///
@@ -255,7 +338,8 @@ const FP_ABANDON_HOLD: u64 = WINDOW_BIND;
 /// ~7,200 entries instead of growing by one per block forever: ~3.8 MB of tip row and ~6 ms of
 /// `state_root` per block at the frozen 120 s cadence, flat, rather than 54 MB and 49 ms after
 /// four months and no ceiling after that.
-const CLAIM_RETIREMENT: u64 = WINDOW_COURT;
+#[allow(dead_code)] // the RC set's named reading, kept beside its rationale (ADR-0077 Decision 7)
+const CLAIM_RETIREMENT: u64 = PALW_RC_WINDOWS_V1.claim_retirement;
 
 /// The worker share of the fixed subsidy (a carve, never an addition).
 const WORKER_CARVE_PERMILLE: u16 = 620;
@@ -300,7 +384,7 @@ const SLASH_VALUE_PER_PWU: u64 = 5;
 // TWO bind+receipt pairs — the redraw (`sweep_deadlines`' `PanelBound` arm) revives a claim once
 // and binds a second panel, so a claim's exposure is held across the LONGER path. Sizing this at
 // one pair under-funded the derived collateral by 20 % against the lifetime it actually reserves.
-const MAX_CLAIM_EXPOSURE_DAA: u64 = 2 * (WINDOW_BIND + WINDOW_RECEIPT) + WINDOW_CHALLENGE + WINDOW_COURT + FP_ABANDON_HOLD;
+const MAX_CLAIM_EXPOSURE_DAA: u64 = PALW_RC_WINDOWS_V1.max_claim_exposure_daa();
 
 /// One bond in a genesis registry.
 ///
@@ -449,6 +533,31 @@ pub fn palw_fp_devnet_bundle_v3(
     // The whole registry, because a panel is seated out of it — see `PalwGenesisBondSpecV1`.
     genesis_bonds: Vec<PalwGenesisBondSpecV1>,
 ) -> Result<PalwConsensusParamsV2, PalwModeV2Error> {
+    palw_fp_bundle_with_windows_v3(
+        base_class_id,
+        class_catalog_root,
+        court_catalog_root,
+        genesis_pwu_per_inference,
+        genesis_artifact_root,
+        genesis_bonds,
+        &PALW_RC_WINDOWS_V1,
+    )
+}
+
+/// [`palw_fp_devnet_bundle_v3`] under a named window set (ADR-0077 Decision 7). The RC set
+/// reproduces the bundle above byte for byte; the devnet set is what `devnet_shipped_params`
+/// assembles. Everything that is NOT a window — the economy, the ladder, the caps, the
+/// registrations, and the collateral derivation (sized against the RC lifetime so a devnet
+/// genesis premine is unchanged and over-funded rather than re-laid) — is one source for both.
+pub fn palw_fp_bundle_with_windows_v3(
+    base_class_id: Hash64,
+    class_catalog_root: Hash64,
+    court_catalog_root: Hash64,
+    genesis_pwu_per_inference: u64,
+    genesis_artifact_root: Hash64,
+    genesis_bonds: Vec<PalwGenesisBondSpecV1>,
+    windows: &PalwLatticeWindowsV1,
+) -> Result<PalwConsensusParamsV2, PalwModeV2Error> {
     // Derived, not declared: see `palw_v2_collateral_for_claim_lifetime_v1`. Applied to the policy
     // minimum as well as to every registration, so "the minimum collateral" means "the smallest
     // stake that can carry a claim through the bind window" rather than a number chosen earlier.
@@ -458,17 +567,17 @@ pub fn palw_fp_devnet_bundle_v3(
     // single-class devnet shape this bundle used to spell out as a params constant.
     let state = PalwStateParamsV2::new(
         BETA_PERMILLE,
-        WINDOW_BIND,
-        WINDOW_RECEIPT,
-        WINDOW_CHALLENGE,
-        WINDOW_COURT,
+        windows.window_bind,
+        windows.window_receipt,
+        windows.window_challenge,
+        windows.window_court,
         EPOCH_LENGTH,
         base_class_id,
         CLASS_DAA_MAX_FACTOR,
         BUDGET_TOLERANCE_PERMILLE,
         MIN_COLLATERAL_SOMPI,
         ATTEMPT_SHARE_PERMILLE,
-        FP_ABANDON_HOLD,
+        windows.fp_abandon_hold,
     )?
     // The free-prompt price (ADR-0074 Decision 5) lives in the state params because the
     // transition is what derives quanta and pwu — the SAME two numbers `freeprompt` declares
@@ -481,8 +590,8 @@ pub fn palw_fp_devnet_bundle_v3(
     // readers. `COURT_TURN_DEADLINE` here is what turns the interactive ladder ON: it is strictly
     // inside `WINDOW_COURT`, which is what makes a rung deadline able to fire at all.
     .with_worker_carve_permille(WORKER_CARVE_PERMILLE)?
-    .with_turn_deadline_daa(COURT_TURN_DEADLINE)?
-    .with_claim_retirement_daa(CLAIM_RETIREMENT)?
+    .with_turn_deadline_daa(windows.court_turn_deadline)?
+    .with_claim_retirement_daa(windows.claim_retirement)?
     // **ADR-0056 Decisions 3 and 5, as this network sets them**: the registration reservation and
     // the reclamation window. The share WALK is not here — it is the growth rule below, which
     // measures filled budget instead of a streak.
@@ -504,9 +613,9 @@ pub fn palw_fp_devnet_bundle_v3(
         MAX_QUANTA_PER_RECEIPT,
         MAX_PROMPT_TOKENS,
         MAX_DECODE_TOKENS,
-        RECEIPT_MATURITY,
-        RECEIPT_USE_WINDOW,
-        MAX_BEACON_GAP,
+        windows.receipt_maturity,
+        windows.receipt_use_window,
+        windows.max_beacon_gap,
     )?;
     let bundle = PalwConsensusParamsV2 {
         // **One panel, and it is the network's.** ADR-0051 put a `min_class_panel` floor of
@@ -530,19 +639,19 @@ pub fn palw_fp_devnet_bundle_v3(
         court_e2e_root: crate::palw_e2e_adjudicability::palw_rc_court_e2e_root_v1(),
         state,
         admission,
-        panel: PalwPanelParamsV2::new(PALW_V2_PANEL_SEATS, PALW_V2_PANEL_QUORUM, ANCHOR_DELAY)?,
+        panel: PalwPanelParamsV2::new(PALW_V2_PANEL_SEATS, PALW_V2_PANEL_QUORUM, windows.anchor_delay)?,
         reward: PalwRewardParamsV2::new(WORKER_CARVE_PERMILLE)?,
         // The POLICY floor, deliberately not the derived one. `palw_v2_collateral_for_claim_lifetime_v1`
         // is what a bond must declare to keep a chain moving, and `verify_palw_genesis_v2` enforces
         // it on the registrations themselves; this is the smaller "a bond is not nothing" bar, and
         // keeping the two apart is what lets a fixture build a deliberately thin network to watch
         // the exposure ceiling bite.
-        bond: PalwBondParamsV2::new(MIN_COLLATERAL_SOMPI, WITHDRAWAL_DELAY)?,
+        bond: PalwBondParamsV2::new(MIN_COLLATERAL_SOMPI, windows.withdrawal_delay)?,
         freeprompt,
-        reorg_margin_daa: REORG_MARGIN,
+        reorg_margin_daa: windows.reorg_margin,
         court: PalwCourtParamsV2::with_cost_ceilings(
             COURT_MAX_STEP_LEAVES,
-            COURT_TURN_DEADLINE,
+            windows.court_turn_deadline,
             COURT_TERMINAL_ROUNDS,
             COURT_MAX_CLOSE_BYTES,
             COURT_MAX_TERMINAL_MACS,
@@ -753,6 +862,46 @@ mod tests {
         assert_eq!(b.court.max_close_bytes(), PALW_RC_COURT_MAX_CLOSE_BYTES, "gate 6's, and the one derived from carriage");
         assert_eq!(b.court.max_terminal_macs(), PALW_RC_COURT_MAX_TERMINAL_MACS);
         assert_eq!(b.court.max_operand_count(), PALW_RC_COURT_MAX_OPERAND_COUNT);
+    }
+
+    /// **Two window sets, one lattice** (ADR-0077 Decision 7): the RC set is the bundle this
+    /// module always built, and the devnet set validates every interlock the RC set does — the
+    /// beacon binds inside the bind window, the draw matures past the reorg margin, and the court
+    /// window holds a 2^32 ladder at its own move clock.
+    #[test]
+    fn the_devnet_windows_validate_and_the_rc_windows_are_the_bundles_own() {
+        let rc = bundle();
+        let via_windows = palw_fp_bundle_with_windows_v3(
+            h64(0xBA5E),
+            h64(0xCA7),
+            h64(0xC0757),
+            4_096,
+            h64(0xA7),
+            palw_devnet_bond_registry_v1(palw_v2_min_genesis_bonds_v1()),
+            &PALW_RC_WINDOWS_V1,
+        )
+        .expect("the RC windows validate");
+        assert_eq!(palw_ruleset_id_v2(&rc), palw_ruleset_id_v2(&via_windows), "the RC set IS the bundle");
+        let devnet = palw_fp_bundle_with_windows_v3(
+            h64(0xBA5E),
+            h64(0xCA7),
+            h64(0xC0757),
+            4_096,
+            h64(0xA7),
+            palw_devnet_bond_registry_v1(palw_v2_min_genesis_bonds_v1()),
+            &PALW_DEVNET_WINDOWS_V1,
+        )
+        .expect("the devnet windows validate");
+        assert_ne!(palw_ruleset_id_v2(&rc), palw_ruleset_id_v2(&devnet), "a window set is a ruleset");
+        let w = PALW_DEVNET_WINDOWS_V1;
+        assert!(w.anchor_delay + w.max_beacon_gap < w.window_bind);
+        assert!(w.receipt_maturity >= w.reorg_margin);
+        assert!(w.claim_retirement > w.fp_abandon_hold);
+        // Decision 12's ladder, at the shipped per-move clock: `(2 × 32 + 2) × turn < court`.
+        assert!((2 * 32 + 2) * w.court_turn_deadline < w.window_court);
+        assert!(w.withdrawal_delay > w.window_bind + w.window_receipt + w.window_challenge + w.window_court + w.reorg_margin);
+        assert_eq!(devnet.state.window_bind(), 40);
+        assert_eq!(devnet.court.turn_deadline_daa(), 4);
     }
 
     #[test]

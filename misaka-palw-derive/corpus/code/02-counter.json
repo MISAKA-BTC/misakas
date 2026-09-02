@@ -1,0 +1,36 @@
+{
+  "v": 1,
+  "toolchain": "evm/v1",
+  "sources": {
+    "counter.hex": "0x6012600c60003960126000f36000546001018060005560005260206000f3",
+    "NOTES.txt": "counter: runtime (18 bytes) does slot0 = slot0 + 1 and returns the new value.\n  6000 54        PUSH1 0, SLOAD\n  6001 01        PUSH1 1, ADD\n  80             DUP1\n  6000 55        PUSH1 0, SSTORE\n  6000 52        PUSH1 0, MSTORE\n  6020 6000 f3   PUSH1 32, PUSH1 0, RETURN\nEvery test runs against the freshly deployed state (evm/v1 does not commit test calls),\nso each call counts to one, whatever ran before it and whatever value it carried.\n"
+  },
+  "manifest": {
+    "targets": [
+      { "name": "counter", "source": "counter.hex", "constructor_args": "0x" }
+    ],
+    "tests": [
+      {
+        "name": "first-call-counts-one",
+        "calldata": "0x",
+        "value": 0,
+        "gas_limit": 100000,
+        "expect": { "success": true, "output": "0x0000000000000000000000000000000000000000000000000000000000000001" }
+      },
+      {
+        "name": "value-carrying-call-also-counts-one",
+        "calldata": "0x",
+        "value": 1000000000000000000,
+        "gas_limit": 100000,
+        "expect": { "success": true, "output": "0x0000000000000000000000000000000000000000000000000000000000000001" }
+      },
+      {
+        "name": "any-calldata-is-accepted",
+        "calldata": "0x01020304",
+        "value": 0,
+        "gas_limit": 60000,
+        "expect": { "success": true, "output": null }
+      }
+    ]
+  }
+}

@@ -47,6 +47,9 @@ use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
 use kaspa_hashes::Hash64;
 use serde::Deserialize;
 
+// ADR-0078 Decision 6: the derivation step and one-response delivery. One module, one hook.
+mod derive;
+
 // ---------------------------------------------------------------------------------------------
 // The canonical chat template, v1 — a frozen transform. Its identity is part of the class
 // profile (ADR-0044 Decision 10); editing it in place is a fork of the class, so: don't.
@@ -157,6 +160,11 @@ struct Config {
     /// How long past the job's anchor the producer promises to serve retained-trace chunks, in
     /// DAA score. A chain-time promise, so it rides the caller side of `to_commitment`.
     trace_retention_window_daa: u64,
+    /// ADR-0078 Decision 6: the bond key's seed, when the gateway signs derivations itself (the
+    /// rail's local-seed form); `None` leaves the object unsigned for the rail.
+    derive_seed: Option<[u8; kaspa_pq_validator_core::VALIDATOR_SEED_LEN]>,
+    /// Artifacts at or under this many bytes ride inline in the response; larger ones by handle.
+    artifact_inline_max: usize,
 }
 
 fn die(msg: String) -> ! {
@@ -255,6 +263,15 @@ struct ChatRequest {
     /// make clients hang on SSE parsing.
     #[serde(default)]
     stream: Option<bool>,
+    /// ADR-0078: the kind the person asked for — a transformer name (`scene/glb/v1`) or a kind
+    /// name (`scene`). Absent: the answer is the product and nothing is derived.
+    #[serde(default)]
+    derive: Option<String>,
+    /// ADR-0078 Decision 6: elect this claim's DSL into the data-availability obligation, so
+    /// third parties can verify the derivation on request. Default off — the DSL is the answer
+    /// to the person's prompt, and it is theirs to publish.
+    #[serde(default)]
+    serve_dsl: bool,
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -349,6 +366,14 @@ fn respond(stream: &mut TcpStream, status: &str, body: &serde_json::Value) {
     let _ = stream.flush();
 }
 
+/// A binary body (ADR-0078 Decision 6's fetch handle: the artifact by its derived id).
+fn respond_bytes(stream: &mut TcpStream, status: &str, content_type: &str, bytes: &[u8]) {
+    let head = format!("HTTP/1.1 {status}\r\ncontent-type: {content_type}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n", bytes.len());
+    let _ = stream.write_all(head.as_bytes());
+    let _ = stream.write_all(bytes);
+    let _ = stream.flush();
+}
+
 fn error_body(message: &str) -> serde_json::Value {
     serde_json::json!({ "error": { "message": message, "type": "invalid_request_error" } })
 }
@@ -421,6 +446,25 @@ fn handle_chat(config: &Config, identity: &Identity, worker_id: &WorkerIdentity,
     let commitment_bytes = borsh::to_vec(&commitment).map_err(|e| format!("cannot serialize the commitment: {e}"))?;
     std::fs::write(&commitment_borsh, &commitment_bytes).map_err(|e| format!("cannot write {}: {e}", commitment_borsh.display()))?;
     let rendered_string = String::from_utf8_lossy(&result.rendered).into_owned();
+    // ADR-0078 Decision 6: derive from the FULL committed rendering (never the display trim —
+    // a DSL hashed from a trimmed answer is one no verifier holding the ids can reach).
+    let derivation = match chat.derive.as_deref() {
+        Some(spec) => Some(derive::run(
+            spec,
+            &derive::DeriveConfig { seed: config.derive_seed, serve_dsl: chat.serve_dsl },
+            &misaka_palw_derive::ClaimBinding {
+                network_domain: identity.network_domain,
+                claim_id,
+                output_root: result.output_root,
+                executor_pubkey: identity.executor_pubkey.clone(),
+            },
+            rendered_string.as_bytes(),
+            &config.outbox,
+            &artifact_stem,
+        )?),
+        None => None,
+    };
+    let (job_context_hash, family) = derive::read_worker_manifest(&trace_dir.join(hex(job_id)));
     let summary = serde_json::json!({
         "schema": "misaka.palw.fp-v3-gateway-artifact.v1",
         "fp_job_id": hex(job_id),
@@ -441,6 +485,9 @@ fn handle_chat(config: &Config, identity: &Identity, worker_id: &WorkerIdentity,
         "class_leaves": config.class_leaves,
         "quanta_at_configured_quantum": quanta,
         "answer_untrimmed": rendered_string,
+        "job_context_hash": job_context_hash,
+        "family": family,
+        "derivation": derivation.as_ref().map(|d| d.to_json(0)),
         "pending_for_chain_submission": [
             "ML-DSA-87 signature over fp_claim_id (signer sidecar)",
             "commitment transaction assembly + submission (executor rail, FP-08)",
@@ -481,6 +528,15 @@ fn handle_chat(config: &Config, identity: &Identity, worker_id: &WorkerIdentity,
             "schedule_root": hex(result.schedule_root),
             "work_leaves": work_leaves,
             "artifact": artifact_json.display().to_string(),
+            // ADR-0078 X6: what a consumer needs beside the answer to recompute the claim's
+            // output_root — the ids, the job's context hash, and which family's rendered-hash
+            // rule applies — and the executor key the derivation is bound to.
+            "fp_claim_id": hex(claim_id),
+            "output_token_ids": result.output_token_ids,
+            "job_context_hash": job_context_hash,
+            "family": family,
+            "executor_pubkey": faster_hex::hex_string(&identity.executor_pubkey),
+            "derivation": derivation.as_ref().map(|d| d.to_json(config.artifact_inline_max)),
         },
     }))
 }
@@ -496,6 +552,8 @@ fn main() {
     let mut max_decode_default: u32 = 256;
     let mut max_decode_cap: u32 = 1024;
     let mut trace_retention_window_daa: u64 = 500_000;
+    let mut derive_seed_path: Option<PathBuf> = None;
+    let mut artifact_inline_max: usize = 4 << 20;
     while let Some(arg) = args.pop_front() {
         let mut value = |what: &str| args.pop_front().unwrap_or_else(|| die(format!("{what} needs a value")));
         match arg.as_str() {
@@ -512,8 +570,10 @@ fn main() {
             "--trace-retention-window" => {
                 trace_retention_window_daa = value("--trace-retention-window").parse().unwrap_or_else(|e| die(format!("{e}")))
             }
+            "--derive-seed" => derive_seed_path = Some(PathBuf::from(value("--derive-seed"))),
+            "--artifact-inline-max" => artifact_inline_max = value("--artifact-inline-max").parse().unwrap_or_else(|e| die(format!("{e}"))),
             other => die(format!(
-                "unknown argument {other:?}\nusage: misaka-palw-gateway --worker <palw-worker> --outbox <dir> --identity <json> --anchor <json> [--listen addr] [--class-leaves n] [--max-decode-default n] [--max-decode-cap n]"
+                "unknown argument {other:?}\nusage: misaka-palw-gateway --worker <palw-worker> --outbox <dir> --identity <json> --anchor <json> [--listen addr] [--class-leaves n] [--max-decode-default n] [--max-decode-cap n] [--derive-seed <file>] [--artifact-inline-max <bytes>]"
             )),
         }
     }
@@ -527,6 +587,8 @@ fn main() {
         max_decode_default,
         max_decode_cap,
         trace_retention_window_daa,
+        derive_seed: derive_seed_path.map(|p| derive::read_seed(&p).unwrap_or_else(|e| die(e))),
+        artifact_inline_max,
     };
     std::fs::create_dir_all(&config.outbox).unwrap_or_else(|e| die(format!("cannot create the outbox: {e}")));
     let identity = load_identity(&config.identity_path);
@@ -585,7 +647,17 @@ fn main() {
                     Err(e) => respond(&mut stream, "400 Bad Request", &error_body(&e)),
                 }
             }
-            _ => respond(&mut stream, "404 Not Found", &error_body("this gateway serves POST /v1/chat/completions and GET /health")),
+            ("GET", path) if path.starts_with("/v1/artifacts/") => {
+                match derive::artifact_by_id(&config.outbox, &path["/v1/artifacts/".len()..]) {
+                    Some((bytes, content_type)) => respond_bytes(&mut stream, "200 OK", content_type, &bytes),
+                    None => respond(&mut stream, "404 Not Found", &error_body("no artifact under that derived id")),
+                }
+            }
+            _ => respond(
+                &mut stream,
+                "404 Not Found",
+                &error_body("this gateway serves POST /v1/chat/completions, GET /health and GET /v1/artifacts/<derived-id>"),
+            ),
         }
     }
 }

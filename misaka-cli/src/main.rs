@@ -352,6 +352,12 @@ enum PalwCmd {
         /// (ADR-0073 Decision 1a). Requires `--material-out`.
         #[arg(long, requires = "material_out")]
         capture: Option<std::path::PathBuf>,
+        /// ADR-0078 Decision 6: put this claim's canonical DSL under the data-availability
+        /// obligation — the gateway's `<job>.dsl-payload.fpd1`, staged as `<claim-id>.dsl` beside
+        /// the material so the node serves it on request. Off unless given: the DSL is the
+        /// answer to the person's prompt. Requires `--material-out`.
+        #[arg(long, requires = "material_out")]
+        dsl_payload: Option<std::path::PathBuf>,
     },
     /// Submit a PALW lifecycle object written by `palw-certify` — the ADR-0075 certification
     /// objects `FamilyCertified` (a family's drill evidence, graded on chain) and
@@ -830,8 +836,8 @@ async fn main() -> std::process::ExitCode {
         }
         Command::Evm(EvmCmd::Tx(EvmTxCmd::Status { hash })) => eth::tx_status(&ctx, &hash),
         Command::Evm(EvmCmd::Tx(EvmTxCmd::Wait { hash, timeout, poll })) => eth::tx_wait(&ctx, &hash, timeout, poll),
-        Command::Palw(PalwCmd::FpSubmit { tx, yes, material_out, capture }) => {
-            palw_fp::submit(&ctx, &tx, yes, material_out.as_deref(), capture.as_deref()).await
+        Command::Palw(PalwCmd::FpSubmit { tx, yes, material_out, capture, dsl_payload }) => {
+            palw_fp::submit(&ctx, &tx, yes, material_out.as_deref(), capture.as_deref(), dsl_payload.as_deref()).await
         }
         Command::Palw(PalwCmd::SubmitObject { key, object, yes }) => palw_fp::submit_objects(&ctx, &key.source(), &object, yes).await,
         Command::Wallet(WalletCmd::Utxo(UtxoCmd::List { address, key })) => {

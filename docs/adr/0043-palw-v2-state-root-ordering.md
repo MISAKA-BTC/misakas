@@ -161,3 +161,44 @@ claims cannot mature, so from the fork point its frontier never moves again.
 
 This is ADR-0043; 0042 is the last committed. Ties with a concurrent 0043 resolve per ADR-0036
 Decision 5 (this file's content stays, the later writer renumbers).
+
+## Amendment 2026-09-02 — version 17 (ADR-0078): the derivation table
+
+ADR-0078 Decision 4 adds one collection, `derived_artifacts` — the derivations of free-prompt
+claims, keyed `(claim, transformer)` (`PalwDerivedKeyV1`), valued by names and hashes only
+(`PalwDerivedRowV1`: derived id, grammar id, kind, DSL hash, artifact hash, artifact size,
+accepted DAA). It is primary data: a derivation is a statement the executor signed and the chain
+accepted, not derivable from any other table. `PALW_STATE_V2_VERSION` moves 16 → 17. The listing
+this amendment restates is the WHOLE current preimage, because the text above stopped at version 7
+while the code went on to 16 (registration exposure and class walks — ADR-0056; the certification
+tables — ADR-0075), and a listing that is not the whole list is not a listing:
+
+```
+H( version_le(2)                                                            # = 17
+ ‖ root("bonds")  ‖ root("reserved_exposure") ‖ root("classes") ‖ root("class_targets")
+ ‖ root("class_shares")
+ ‖ root("registration_exposure") ‖ root("class_walks")                      # ADR-0056 D3, D5
+ ‖ epoch_budgets_tag(1) [‖ borsh(epoch_budgets)]
+ ‖ root("receipt_targets")
+ ‖ root("capabilities") ‖ root("claims")
+ ‖ root("pending_payouts")
+ ‖ root("certified_families") ‖ root("fp_certified_families")               # ADR-0075 D3
+ ‖ root("fp_certified_classes")                                             # ADR-0075 D5
+ ‖ root("pending_chunks")                                                   # ADR-0075 D14
+ ‖ root("derived_artifacts")                                                # ADR-0078 D4
+ ‖ root("panels") ‖ root("court_sessions")
+ ‖ root("epoch_counters") ‖ root("receipt_epoch_counters")
+ ‖ safe_weight_le(16) ‖ retired_safe_weight_le(16) ‖ bounded_immature_le(16)
+ ‖ safe_frontier_blue_score_le(8) ‖ safe_frontier(64)
+ ‖ last_point_tag(1) [‖ borsh(last_point)] )
+```
+
+| item | added by | why it is primary |
+|---|---|---|
+| `registration_exposure`, `class_walks` | ADR-0056 Decisions 3 and 5 | the registry's own exposure ledger and the per-class streak counters — accumulators the transition maintains and the consistency check re-derives |
+| `certified_families`, `fp_certified_families`, `fp_certified_classes` | ADR-0075 Decisions 3 and 5 | what the court graded on this chain, and which classes it seated — chain history of one identity |
+| `pending_chunks` | ADR-0075 Decision 14 | half-assembled objects, kept in state so every node completes a group in the same block |
+| `derived_artifacts` | ADR-0078 Decision 4 | a signed, accepted statement of what was made from a claim's answer; retired with the claim |
+
+`the_state_root_preimage_is_exactly_the_adr_0043_list` restates this listing and holds it equal to
+`PalwChainStateV2::state_root`; `the_version_17_state_root_golden_vectors` pins both roots.

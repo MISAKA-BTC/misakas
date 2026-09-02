@@ -2793,6 +2793,12 @@ pub enum SigningPurpose {
     /// a second, different spend envelope to follow the winning fork. A journal would strand
     /// exactly that producer. (Appended; 0-5 unchanged.)
     PalwFpSpendV3 = 6,
+    /// PALW derived artifact (ADR-0078 Decision 4) — message digest is
+    /// [`crate::palw_derived_v1::palw_derived_message_v1`]; context is
+    /// `crate::palw_derived_v1::PALW_DERIVED_V1_MLDSA87_CONTEXT`. No journal: the object's id is
+    /// total over its fields and the chain refuses a duplicate `(claim, transformer)`
+    /// idempotently, so a re-signed derivation records nothing twice. (Appended; 0-6 unchanged.)
+    PalwDerivedArtifactV1 = 7,
 }
 
 /// The digest the signer will ML-DSA-87-sign, **typed by purpose** (audit H-03). This makes the
@@ -2820,6 +2826,8 @@ pub enum SignerMessageDigest {
     PalwFpCommitmentV3(Hash64),
     /// 64-byte free-prompt spend id ([`crate::palw_freeprompt_v3::fp_spend_id_v3`]).
     PalwFpSpendV3(Hash64),
+    /// 64-byte derived-artifact message ([`crate::palw_derived_v1::palw_derived_message_v1`]).
+    PalwDerivedArtifactV1(Hash64),
 }
 
 impl SignerMessageDigest {
@@ -2834,6 +2842,7 @@ impl SignerMessageDigest {
             SignerMessageDigest::PalwAttemptV2(_) => SigningPurpose::PalwAttemptV2,
             SignerMessageDigest::PalwFpCommitmentV3(_) => SigningPurpose::PalwFpCommitmentV3,
             SignerMessageDigest::PalwFpSpendV3(_) => SigningPurpose::PalwFpSpendV3,
+            SignerMessageDigest::PalwDerivedArtifactV1(_) => SigningPurpose::PalwDerivedArtifactV1,
         }
     }
 }

@@ -188,6 +188,18 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         PalwConsensusObjectV2::FreePromptCommitted { .. } => {
             Err("a free-prompt commitment rides its own subnetwork, where its price is checked")
         }
+        // **ADR-0078: a derivation rides, and carries the executor's authorisation.** Same split
+        // as a bond's declarations: this layer is stateless, so it checks SHAPE — the object's
+        // version, a non-zero kind, an ML-DSA-87-sized executor key, a non-empty artifact — and
+        // that a signature is present. Whether the signature is the declared key's is the
+        // acceptance layer's; whether the declared key is the claim's bond key is the
+        // transition's, where the registry and the claim table are in hand.
+        PalwConsensusObjectV2::DerivedArtifactV1 { object, signature } if !signature.is_empty() => {
+            crate::palw_derived_v1::check_derived_shape_v1(object)
+        }
+        PalwConsensusObjectV2::DerivedArtifactV1 { .. } => Err(
+            "a derived artifact must carry the claim executor's signature — without one anyone could put their name on a derivation of anyone's answer",
+        ),
     }
 }
 
@@ -859,6 +871,48 @@ mod tests {
             assert_eq!(extracted.objects.len(), 1);
             assert_eq!(extracted.objects[0].object, object, "extracted unchanged — nothing is keyed to the carrier");
             assert_eq!(extracted.objects[0].carrier, tx.id());
+        }
+    }
+
+    /// ADR-0078: a derivation rides the lifecycle subnetwork with its signature and its shape,
+    /// extracts unchanged, and is refused — admission and extraction agreeing — when the signature
+    /// is missing or the shape is wrong.
+    #[test]
+    fn derived_artifacts_ride_signed_and_shaped_and_extract_unchanged() {
+        use crate::palw_derived_v1::{PALW_DERIVED_V1_EXECUTOR_PUBKEY_LEN, PALW_DERIVED_V1_VERSION, PalwDerivedArtifactV1, kind};
+        let object = PalwDerivedArtifactV1 {
+            version: PALW_DERIVED_V1_VERSION,
+            network_domain: h64(1),
+            claim_id: h64(2),
+            output_root: h64(3),
+            grammar_id: h64(4),
+            transformer_id: h64(5),
+            kind: kind::MUSIC,
+            dsl_hash: h64(6),
+            artifact_hash: h64(7),
+            artifact_bytes: 99,
+            executor_pubkey: vec![9; PALW_DERIVED_V1_EXECUTOR_PUBKEY_LEN],
+        };
+        let signed = PalwConsensusObjectV2::DerivedArtifactV1 { object: Box::new(object.clone()), signature: vec![1; 16] };
+        let payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object: signed.clone() }).unwrap();
+        validate_palw_lifecycle_tx(&payload).expect("a signed, shaped derivation may ride");
+        let tx = carrier(SUBNETWORK_ID_PALW_LIFECYCLE.clone(), payload);
+        let extracted = palw_lifecycle_objects_from_accepted_txs_v2(std::slice::from_ref(&tx));
+        assert!(extracted.skipped.is_empty(), "{:?}", extracted.skipped);
+        assert_eq!(extracted.objects[0].object, signed, "extracted unchanged");
+
+        let unsigned = PalwConsensusObjectV2::DerivedArtifactV1 { object: Box::new(object.clone()), signature: Vec::new() };
+        let mut zero_kind = object.clone();
+        zero_kind.kind = 0;
+        let unshaped = PalwConsensusObjectV2::DerivedArtifactV1 { object: Box::new(zero_kind), signature: vec![1; 16] };
+        for (refused, why) in [(unsigned, "signature"), (unshaped, "kind 0")] {
+            let payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object: refused }).unwrap();
+            let err = validate_palw_lifecycle_tx(&payload).expect_err("refused at admission");
+            assert!(format!("{err:?}").contains(why), "{err:?}");
+            let tx = carrier(SUBNETWORK_ID_PALW_LIFECYCLE.clone(), payload);
+            let extracted = palw_lifecycle_objects_from_accepted_txs_v2(std::slice::from_ref(&tx));
+            assert!(extracted.objects.is_empty(), "and skipped by the walk");
+            assert_eq!(extracted.skipped.len(), 1);
         }
     }
 }

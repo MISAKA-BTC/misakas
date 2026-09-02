@@ -108,6 +108,22 @@ pub struct PalwFpRunV1 {
     pub output_token_ids: Vec<u32>,
 }
 
+/// What a seat concluded about ONE opened checkpoint interval (ADR-0077 Decision 8).
+///
+/// Four outcomes, because they are four different accusations: `Valid` is every replayed row
+/// equal to its committed hash; `Fault` is a row that is not — the court's question, carried
+/// with the leaf a challenger opens at; `Mismatch` is an opening that does not bind to THIS
+/// claim's roots at all (a forgery, or the wrong claim), which is the same as nothing served;
+/// `Unverifiable` is bytes this family cannot read. A seat's verdict convicts nobody — conviction
+/// runs only through the court's bisection to one leaf (ADR-0026, ADR-0028).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwFpIntervalVerdictV1 {
+    Valid,
+    Fault { leaf_index: u64 },
+    Mismatch,
+    Unverifiable,
+}
+
 /// The execution path, as a node uses it.
 ///
 /// Implementor: `misaka_palw_base0::backend::Base0Backend`. The trait stays a trait because the
@@ -306,6 +322,73 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         _refutation: &crate::palw_step_refute::PalwExecutionStepRefutationV1,
     ) -> Result<Vec<crate::palw_artifact::PalwArtifactOpeningV1>, String> {
         Err("this execution family cannot be adjudicated".to_string())
+    }
+
+    /// **The free-prompt run, streamed** (ADR-0077 Decision 2): `on_token` is called with each
+    /// generated id in decode order, as soon as it is selected, from the SAME run whose capture
+    /// and commitment the returned [`PalwFpRunV1`] carries — never from a second inference. The
+    /// default runs the non-streaming verb and replays the ids afterwards, which is correct and not
+    /// streaming; a family overrides it inside its decode loop.
+    fn execute_free_prompt_streaming(
+        &self,
+        job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        prompt_tokens: &[usize],
+        on_token: &mut dyn FnMut(u32),
+    ) -> Result<PalwFpRunV1, String> {
+        let run = self.execute_free_prompt(job, prompt_tokens)?;
+        for id in &run.output_token_ids {
+            on_token(*id);
+        }
+        Ok(run)
+    }
+
+    /// **How many checkpoint intervals a retained free-prompt capture has** (ADR-0077
+    /// Decision 8). Interval 0 is the prefill and the calls up to the first checkpoint (replayed
+    /// from genesis — the prompt); interval `j ≥ 1` is the calls after checkpoint `j − 1`, replayed
+    /// from that checkpoint's state chunks. `None` when this family cannot read the bytes.
+    fn fp_interval_count(&self, _capture: &[u8]) -> Option<u32> {
+        None
+    }
+
+    /// **The same count, from CHAIN data alone** — the job's prompt length and the commitment's
+    /// executed decode count (both on the accepted 0x4a payload) and this family's own checkpoint
+    /// interval for the class. A seat draws its intervals from this, never from a count the
+    /// executor reports: an executor that could shrink the count could predict the draw. Must
+    /// agree with [`Self::fp_interval_count`] on every capture this family produces (a test
+    /// pins it). `None` when this family has no free-prompt path.
+    fn fp_interval_count_for(&self, _prompt_tokens: u32, _decode_tokens_executed: u32) -> Option<u32> {
+        None
+    }
+
+    /// **The executor's side of Decision 8: open interval `index` of its own retained capture.**
+    ///
+    /// The opening carries the binding (what `verify_binding_v1` authenticates against the
+    /// claim's execution root), the checkpoint chunk at the interval's start opened against the
+    /// checkpoint leg root, the range opening of the interval's leaves against the step leg root,
+    /// and the ids the interval consumed and produced opened against the prompt hash and the
+    /// decode pin — never the capture whole. Opaque bytes: only the family that wrote them reads
+    /// them, which is the point of the seam. Bytes are `O(interval × row + log₂ leaves)`,
+    /// independent of the job's length (R1).
+    fn open_fp_interval(&self, _capture: &[u8], _index: u32, _prompt_token_ids: &[u32]) -> Result<Vec<u8>, String> {
+        Err("this execution family cannot open a checkpoint interval".to_string())
+    }
+
+    /// **The seat's side of Decision 8: replay one opened interval and compare every row
+    /// EXACTLY.** The class is a pinned integer computation, so "close" is not a verdict. The
+    /// seat first binds the opening to `claim` (execution root, trace root, the FP job id as the
+    /// anchor) and prices it (`work_leaves` must equal the binding's `step_leaf_count`), then
+    /// restores the state from the opened chunk, runs the interval with the class's own kernels,
+    /// and checks the recomputed leaves against the committed range. Fetching and hashing the whole
+    /// capture is what this replaces.
+    fn verify_fp_interval_opening(
+        &self,
+        _opening: &[u8],
+        _claim: PalwClaimRootsV1,
+        _index: u32,
+        _prompt_token_ids: &[u32],
+        _work_leaves: u64,
+    ) -> PalwFpIntervalVerdictV1 {
+        PalwFpIntervalVerdictV1::Unverifiable
     }
 
     /// **A DRILL fault: run the job, corrupt one lane of one tile, and commit to the result.**

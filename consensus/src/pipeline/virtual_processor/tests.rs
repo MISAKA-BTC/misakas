@@ -9824,3 +9824,192 @@ async fn palw_v2_a_block_grades_at_most_two_family_drills_and_a_class_binds_to_t
         }
     }
 }
+
+/// **ADR-0078 Decision 4, on the shipped acceptance path.** A derivation of a free-prompt claim
+/// rides when it is signed by the claim's executor over its own message under its own context,
+/// on this chain; it is dropped — and the block stands — when the signature is not the declared
+/// key's, when it names another network's domain, when the declared key is a real key that is
+/// not the claim's bond key, and when it repeats a `(claim, transformer)` the chain already holds.
+/// The claim it derives from is a REAL floor execution committed through the shipped extractor.
+#[tokio::test]
+async fn palw_v2_a_derivation_rides_signed_by_the_claims_executor_and_is_dropped_otherwise() {
+    use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
+    use kaspa_consensus_core::palw_derived_v1::{
+        PALW_DERIVED_V1_MLDSA87_CONTEXT, PALW_DERIVED_V1_VERSION, PalwDerivedArtifactV1, kind, palw_derived_message_v1,
+    };
+    use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, palw_fp_commitment_v3};
+    use kaspa_consensus_core::palw_freeprompt_v3::{
+        PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT, PALW_FP_V3_VERSION, PalwFpCommitmentTxPayloadV3,
+        PalwFreePromptJobV3, fp_claim_id_v3,
+    };
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2 as Obj;
+    use kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_FP_COMMITMENT;
+    use kaspa_consensus_core::tx::{Transaction, TransactionId, TransactionOutpoint};
+    use kaspa_hashes::Hash64;
+    use misaka_palw_base0::backend::Base0Backend;
+    use misaka_palw_base0::classes::{canonical_class_by_model_id_v1, resolve_class_v1};
+
+    let catalog = palw_v2_test_catalog();
+    let bundle = palw_v2_test_bundle_funded_for(&catalog, 64);
+    let court = bundle.court.clone();
+    let entry = canonical_class_by_model_id_v1(&court, "PALW-BASE-0/rc").expect("the floor is a canonical class");
+    // The fixture bundle registers the floor under its OWN base class id (`palw_v2_test_bundle`
+    // names `Hash64::from_u64_word(1)`, the id the harness's attempt carriage also names), so the
+    // claim commits under that id; the floor's backend runs the job whatever id the job names.
+    let floor_class = bundle.base_class_id;
+    // The floor's free-prompt lane certified at genesis, so the commitment below opens a claim.
+    let params = bundle.state.clone().with_fp_certified_classes([floor_class].into_iter().collect());
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            *p = p.clone().with_palw_v2_cadence();
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    for _ in 0..2 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+    let vp = ctx.consensus.virtual_processor();
+    let (_, state) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("the tip loads");
+    let network_domain = kaspa_consensus_core::palw_attempt_v2::palw_network_domain_v2_for(
+        MAINNET_PARAMS.net.to_string().as_bytes(),
+        Some(MAINNET_PARAMS.genesis.hash),
+    );
+
+    // A real floor execution of a caller's prompt, committed by the harness bond (registry row 0,
+    // whose REAL key the chain registered), extracted by the shipped extractor.
+    let root = misaka_palw_base0::rc::palw_rc_base0_artifact_root_v1().expect("the floor's pinned root");
+    let backend = Base0Backend::new(resolve_class_v1(&court, entry.class_id(), root, &[]).expect("the floor resolves"));
+    let prompt: Vec<usize> = vec![11];
+    let decode = (backend.profile().n_ctx as usize - prompt.len()) as u32;
+    let bond = TransactionOutpoint::new(TransactionId::from_u64_word(0xB0), 0);
+    let keypair = crate::consensus::test_consensus::TestConsensus::palw_v2_harness_keypair();
+    let executor_pubkey = crate::consensus::test_consensus::TestConsensus::palw_v2_harness_pubkey();
+    let job = PalwFreePromptJobV3 {
+        version: PALW_FP_V3_VERSION,
+        network_domain,
+        class_id: floor_class,
+        executor_bond: bond,
+        executor_pubkey: executor_pubkey.clone(),
+        operator_id: Hash64::from_u64_word(0x0B),
+        anchor_block: MAINNET_PARAMS.genesis.hash,
+        anchor_daa: 1,
+        job_nonce: [0x5B; 32],
+        tokenizer_id: Hash64::default(),
+        prompt_token_ids_hash: kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(&prompt.iter().map(|t| *t as u32).collect::<Vec<_>>()),
+        prompt_tokens: prompt.len() as u32,
+        decode_token_limit: decode,
+        max_context_tokens: backend.profile().n_ctx,
+        privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
+        prompt_mode: kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PROMPT_MODE_USER,
+    };
+    let run = backend.execute_free_prompt(&job, &prompt).expect("the floor runs a caller's prompt");
+    let class = PalwFpClassFactsV3 {
+        model_profile_id: Hash64::default(),
+        runtime_manifest_hash: Hash64::default(),
+        runtime_class_id: Hash64::default(),
+        shape_profile_id: backend.profile().shape_profile_id(),
+        cu_ruleset_id: Hash64::default(),
+    };
+    let commitment = palw_fp_commitment_v3(&job, &class, &run, b"misaka-palw-rc", 4_096).expect("a finished run assembles a commitment");
+    let claim_id = fp_claim_id_v3(&commitment);
+    let output_root = commitment.output_root;
+    let sign = |message: &[u8], context: &[u8]| {
+        libcrux_ml_dsa::ml_dsa_87::sign(&keypair.signing_key, message, context, [0u8; 32]).expect("sign").as_ref().to_vec()
+    };
+    let payload = borsh::to_vec(&PalwFpCommitmentTxPayloadV3 {
+        version: PALW_FP_V3_VERSION,
+        commitment,
+        prompt_token_ids: prompt.iter().map(|t| *t as u32).collect(),
+        signature: sign(claim_id.as_byte_slice(), PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT),
+    })
+    .unwrap();
+    let tx = Transaction::new(0, vec![], vec![], 0, SUBNETWORK_ID_PALW_FP_COMMITMENT.clone(), 0, payload);
+    let extraction = kaspa_consensus_core::palw_fp_objects_v3::palw_fp_objects_from_accepted_txs_v3(
+        std::slice::from_ref(&tx),
+        network_domain,
+        &bundle.freeprompt,
+        kaspa_consensus_core::BlockHash::default(),
+        |pubkey: &[u8], message: &[u8], context: &[u8], signature: &[u8]| {
+            kaspa_txscript::verify_mldsa87_with_context(pubkey, message, context, signature).unwrap_or(false)
+        },
+    );
+    assert!(extraction.skipped.is_empty(), "{:?}", extraction.skipped);
+    let committed = extraction.objects[0].object.clone();
+    assert!(matches!(committed, Obj::FreePromptCommitted { .. }));
+
+    let point = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+        block: ctx.consensus.get_sink(),
+        daa_score: ctx.consensus.get_virtual_daa_score(),
+        blue_score: 5,
+        subsidy: 0,
+    };
+    // The transition's own answer first, so a refusal is named rather than counted.
+    kaspa_consensus_core::palw_state_v2::apply_palw_transition_v2(&state, &params, &point, std::slice::from_ref(&committed), None)
+        .unwrap_or_else(|e| panic!("the floor's commitment must open a claim on this state: {e}"));
+    let (accepted, with_claim) = vp.palw_v2_accepted_objects_and_state_for_tests(&state, &params, &point, vec![committed], ctx.consensus.get_sink());
+    assert_eq!(accepted.len(), 1, "the floor's commitment opens a claim");
+    assert_eq!(with_claim.claim(&claim_id).expect("the claim is on chain").output_root, output_root);
+
+    let transformer = Hash64::from_u64_word(0x7A);
+    let object = PalwDerivedArtifactV1 {
+        version: PALW_DERIVED_V1_VERSION,
+        network_domain,
+        claim_id,
+        output_root,
+        grammar_id: Hash64::from_u64_word(0x6A),
+        transformer_id: transformer,
+        kind: kind::SCENE,
+        dsl_hash: Hash64::from_u64_word(0xD5),
+        artifact_hash: Hash64::from_u64_word(0xA7),
+        artifact_bytes: 4_096,
+        executor_pubkey: executor_pubkey.clone(),
+    };
+    let signed = |o: &PalwDerivedArtifactV1, key: &libcrux_ml_dsa::ml_dsa_87::MLDSA87KeyPair| Obj::DerivedArtifactV1 {
+        object: Box::new(o.clone()),
+        signature: libcrux_ml_dsa::ml_dsa_87::sign(&key.signing_key, palw_derived_message_v1(o).as_byte_slice(), PALW_DERIVED_V1_MLDSA87_CONTEXT, [0u8; 32])
+            .expect("sign")
+            .as_ref()
+            .to_vec(),
+    };
+    let point2 = kaspa_consensus_core::palw_state_v2::PalwBlockContextV2 {
+        block: Hash64::from_u64_word(0xB201),
+        daa_score: point.daa_score + 1,
+        blue_score: point.blue_score + 8,
+        subsidy: 0,
+    };
+
+    // Signed by the executor, on this chain: accepted and recorded beside the claim.
+    let good = signed(&object, keypair);
+    let (accepted, folded) = vp.palw_v2_accepted_objects_and_state_for_tests(&with_claim, &params, &point2, vec![good.clone()], point2.block);
+    assert_eq!(accepted.len(), 1, "the executor's derivation rides");
+    let row = folded.derived_artifact(&claim_id, &transformer).expect("recorded beside the claim");
+    assert_eq!(row.kind, kind::SCENE);
+    assert_eq!(row.accepted_daa, point2.daa_score);
+
+    // A signature that is not the declared key's over this message: dropped at acceptance.
+    let mut bad_sig = good.clone();
+    if let Obj::DerivedArtifactV1 { signature, .. } = &mut bad_sig {
+        signature[0] ^= 1;
+    }
+    // Another network's domain, properly signed: dropped at acceptance before any state is read.
+    let mut foreign = object.clone();
+    foreign.network_domain = Hash64::from_u64_word(0xF0);
+    let foreign = signed(&foreign, keypair);
+    // A real key that is not the claim's bond key: the signature verifies, the transition refuses.
+    let stranger_key = crate::consensus::test_consensus::TestConsensus::palw_v2_registry_keypair(1);
+    let mut stranger = object.clone();
+    stranger.executor_pubkey = crate::consensus::test_consensus::TestConsensus::palw_v2_registry_pubkey(1);
+    let stranger = signed(&stranger, &stranger_key);
+    for (name, refused) in [("a mismatching signature", bad_sig), ("another network's domain", foreign), ("a stranger's key", stranger)] {
+        let (accepted, unchanged) = vp.palw_v2_accepted_objects_and_state_for_tests(&with_claim, &params, &point2, vec![refused], point2.block);
+        assert_eq!(accepted.len(), 0, "{name} is dropped");
+        assert!(unchanged.derived_artifact(&claim_id, &transformer).is_none(), "{name} records nothing");
+    }
+    // The same (claim, transformer) again: refused by the transition, the block stands.
+    let (accepted, still) = vp.palw_v2_accepted_objects_and_state_for_tests(&folded, &params, &point2, vec![good], point2.block);
+    assert_eq!(accepted.len(), 0, "a duplicate derivation is dropped");
+    assert_eq!(still.derived_artifacts_of(claim_id).count(), 1);
+}

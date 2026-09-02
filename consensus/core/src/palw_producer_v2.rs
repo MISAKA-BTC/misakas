@@ -67,6 +67,12 @@ pub struct PalwProducerFactsV2 {
     /// Admission item 6: an EQUALITY, and both factors are chain state. Derived here so the
     /// producer cannot pick.
     pub pwu: u64,
+    /// **Is this class seated on the free-prompt lane** (ADR-0075 `ClassLaneCertified`, genesis
+    /// set ∪ chain set)? What `FreePromptCommitted` refuses as `FreePromptLaneUncertified`, read
+    /// off the same two sets the transition reads, so a gateway (ADR-0077 Decision 3) learns
+    /// before it commits whether its class can take a free-prompt claim at all. A params set
+    /// with no certified-class gate (the ungated test bundles) reads as certified.
+    pub fp_certified: bool,
     pub epoch_index: u64,
     /// Admission item 7: blocks of this class this epoch may not exceed this.
     pub epoch_budget_blocks: u64,
@@ -208,6 +214,8 @@ pub fn palw_producer_facts_v2(
     });
     Some(PalwProducerFactsV2 {
         is_base_class: class_id == state_params.base_class_id(),
+        fp_certified: state_params.fp_certified_classes().is_none_or(|set| set.contains(&class_id))
+            || state.fp_lane_certification(&class_id).is_some(),
         min_trace_retention_daa: palw_min_trace_retention_daa_v1(state_params),
         chain_point,
         daa_score,
@@ -496,6 +504,15 @@ pub struct PalwSeatDutyV2 {
     pub bound_daa: u64,
     /// The last DAA at which a receipt for this claim still counts.
     pub receipt_deadline: u64,
+    /// **The beacon the panel was drawn from** — the block at the claim's anchor slot, which did
+    /// not exist when the commitment was fixed (ADR-0044 F4/F5). A free-prompt seat draws the
+    /// checkpoint intervals it must open from this and its own seat index
+    /// (`palw_fp_interval_draw_v1`, ADR-0077 Decision 8), so the executor cannot know which
+    /// intervals will be checked when it commits.
+    pub panel_anchor: Hash64,
+    /// This seat's position in the bound panel — the second input to the interval draw, so two
+    /// seats of one panel open different intervals.
+    pub seat_index: u8,
     /// **What the chain PRICED this claim at** — the seat's only handle on "is the material I was
     /// served the work this claim was paid for".
     ///
@@ -699,11 +716,13 @@ pub fn palw_seat_duties_v2(state: &PalwChainStateV2, state_params: &PalwStatePar
         let Some(class_artifact_root) = state.class(&claim.class_id).map(|c| c.artifact_root) else {
             continue;
         };
-        for seat in &panel.seats {
+        for (seat_index, seat) in panel.seats.iter().enumerate() {
             if !mine.contains(&seat.bond) {
                 continue;
             }
             out.push(PalwSeatDutyV2 {
+                panel_anchor: panel.anchor,
+                seat_index: seat_index as u8,
                 accepted_block: claim.accepted_block,
                 claim_id: *claim_id,
                 class_id: claim.class_id,

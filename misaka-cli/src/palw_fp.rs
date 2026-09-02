@@ -26,7 +26,14 @@ use kaspa_rpc_core::{RpcTransaction, api::rpc::RpcApi};
 use std::path::Path;
 
 /// Submit the rail's `*.commitment-tx.borsh`.
-pub async fn submit(ctx: &Ctx, path: &Path, yes: bool, material_out: Option<&Path>, capture: Option<&Path>) -> Result<(), CliError> {
+pub async fn submit(
+    ctx: &Ctx,
+    path: &Path,
+    yes: bool,
+    material_out: Option<&Path>,
+    capture: Option<&Path>,
+    dsl_payload: Option<&Path>,
+) -> Result<(), CliError> {
     let bytes = std::fs::read(path).map_err(|e| CliError::new(exit::GENERIC, format!("{}: {e}", path.display())))?;
     // Borsh, because that is what the rail wrote. A file that does not decode is named as such
     // rather than passed to a node that would refuse it less clearly.
@@ -123,35 +130,78 @@ pub async fn submit(ctx: &Ctx, path: &Path, yes: bool, material_out: Option<&Pat
             let file = dir.join(format!("{claim}.material"));
             let partial = file.with_extension("material.partial");
             std::fs::write(&partial, &bytes).map_err(|e| CliError::new(exit::GENERIC, format!("{}: {e}", partial.display())))?;
-            Some((partial, file))
+            // ADR-0078 Decision 6: the DSL under the data-availability election. Staged the same
+            // way, beside the material, only when the operator passed the gateway's `FPD1`
+            // payload — the default is off, and "off" means no file for the node to serve.
+            let dsl = match dsl_payload {
+                Some(dsl_path) => {
+                    let dsl_bytes =
+                        std::fs::read(dsl_path).map_err(|e| CliError::new(exit::GENERIC, format!("{}: {e}", dsl_path.display())))?;
+                    let decoded = kaspa_consensus_core::palw_derived_v1::palw_fp_dsl_decode_v1(&dsl_bytes).ok_or_else(|| {
+                        CliError::new(exit::GENERIC, format!("{} is not an FPD1 DSL payload", dsl_path.display()))
+                    })?;
+                    if decoded.claim_id != claim {
+                        return Err(CliError::new(
+                            exit::GENERIC,
+                            format!("the DSL payload names claim {} but this transaction commits claim {claim}", decoded.claim_id),
+                        ));
+                    }
+                    let dsl_file = dir.join(format!("{claim}.dsl"));
+                    let dsl_partial = dsl_file.with_extension("dsl.partial");
+                    std::fs::write(&dsl_partial, &dsl_bytes)
+                        .map_err(|e| CliError::new(exit::GENERIC, format!("{}: {e}", dsl_partial.display())))?;
+                    Some((dsl_partial, dsl_file))
+                }
+                None => None,
+            };
+            Some((partial, file, dsl))
         }
-        None => None,
+        None => {
+            if dsl_payload.is_some() {
+                return Err(CliError::new(exit::GENERIC, "--dsl-payload needs --material-out (the node's retention directory)".to_string()));
+            }
+            None
+        }
     };
 
     let nv = connect(ctx).await?;
     let submitted = nv.client.submit_transaction(RpcTransaction::from(&tx), false).await.map_err(|e| {
         // The staged file is not a claim's material if the claim never reached the chain.
-        if let Some((partial, _)) = &staged {
+        if let Some((partial, _, dsl)) = &staged {
             let _ = std::fs::remove_file(partial);
+            if let Some((dsl_partial, _)) = dsl {
+                let _ = std::fs::remove_file(dsl_partial);
+            }
         }
         CliError::new(exit::GENERIC, format!("submit {txid}: {e}"))
     })?;
 
     // Accepted: the obligation is real, so the file takes its real name.
     let mut material_note: Option<String> = None;
-    if let Some((partial, file)) = staged {
+    let mut dsl_note: Option<String> = None;
+    if let Some((partial, file, dsl)) = staged {
         std::fs::rename(&partial, &file).map_err(|e| CliError::new(exit::GENERIC, format!("{}: {e}", file.display())))?;
         material_note = Some(file.display().to_string());
+        if let Some((dsl_partial, dsl_file)) = dsl {
+            std::fs::rename(&dsl_partial, &dsl_file).map_err(|e| CliError::new(exit::GENERIC, format!("{}: {e}", dsl_file.display())))?;
+            dsl_note = Some(dsl_file.display().to_string());
+        }
     }
 
     match ctx.output {
         OutputFormat::Json => {
-            println!("{}", serde_json::json!({ "submitted": true, "txid": submitted.to_string(), "material": material_note }))
+            println!(
+                "{}",
+                serde_json::json!({ "submitted": true, "txid": submitted.to_string(), "material": material_note, "dsl": dsl_note })
+            )
         }
         _ => {
             println!("submitted {submitted}");
             if let Some(file) = &material_note {
                 println!("  DA material written: {file}");
+            }
+            if let Some(file) = &dsl_note {
+                println!("  DSL under the DA election (ADR-0078 Decision 6): {file}");
             }
             // Said here because the next question is always "so am I mining now", and the answer
             // is no — not yet, and not because anything is wrong.
@@ -223,6 +273,22 @@ pub async fn submit_objects(ctx: &Ctx, ks: &crate::keys::KeySource, paths: &[std
             }
             PalwConsensusObjectV2::ObjectChunk { group, index, count, bytes: part } => {
                 format!("ObjectChunk: part {index} of {count} of group {group}, {} bytes", part.len())
+            }
+            // ADR-0078: a derivation. Checked here for shape only, exactly as the ride list will;
+            // whether its claim exists, its output root is the claim's and its key is the bond's
+            // is the chain's to say.
+            PalwConsensusObjectV2::DerivedArtifactV1 { object, signature } => {
+                use kaspa_consensus_core::palw_derived_v1::{derived_id_v1, kind};
+                format!(
+                    "DerivedArtifactV1: claim {}, kind {} ({}), transformer {}, artifact {} bytes, derived id {}, signature {} bytes",
+                    object.claim_id,
+                    object.kind,
+                    kind::name(object.kind).unwrap_or("unassigned"),
+                    object.transformer_id,
+                    object.artifact_bytes,
+                    derived_id_v1(object),
+                    signature.len()
+                )
             }
             other => format!("{other:?}"),
         };

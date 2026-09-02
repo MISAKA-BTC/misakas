@@ -183,6 +183,7 @@ pub mod palw_credit;
 /// shipped court over a drill's planted faults. Weight requires both.
 pub mod palw_e2e_adjudicability;
 pub mod palw_credit_batch;
+pub mod palw_derived_v1;
 pub mod palw_dispute;
 pub mod palw_exposure;
 pub mod palw_facts;
@@ -192,6 +193,7 @@ pub mod palw_fp_admission_v3;
 pub mod palw_fp_beacon_v3;
 pub mod palw_fp_devnet_v3;
 pub mod palw_fp_execution_v3;
+pub mod palw_fp_interval_v1;
 pub mod palw_fp_objects_v3;
 pub mod palw_freeprompt_v3;
 pub mod palw_genesis_v2;

@@ -37,6 +37,7 @@ members = [
     "misaka-palw-base0",
     "misaka-palw-base0-ref2",
     "misaka-palw-sdk",
+    "misaka-palw-derive",
     "tools/palw-jobs-export",
     "tools/palw-job-replay",
     "misaka-palw-reference2",
@@ -144,6 +145,7 @@ default-members = [
     "misaka-palw-base0",
     "misaka-palw-base0-ref2",
     "misaka-palw-sdk",
+    "misaka-palw-derive",
     "tools/palw-jobs-export",
     "tools/palw-job-replay",
     "misaka-palw-reference2",
@@ -280,6 +282,7 @@ kaspad = { version = "1.1.0", path = "kaspad" }
 kaspa-pq-validator-core = { version = "1.1.0", path = "kaspa-pq-validator-core" }
 misaka-palw-base0 = { version = "1.0.1", path = "misaka-palw-base0" }
 misaka-palw-sdk = { version = "1.1.0", path = "misaka-palw-sdk" }
+misaka-palw-derive = { version = "1.1.0", path = "misaka-palw-derive" }
 kaspa-alloc = { version = "1.1.0", path = "utils/alloc" }
 misaka-endpoints = { version = "1.1.0", path = "misaka-endpoints" }
 misaka-palw = { version = "1.1.0", path = "misaka-palw" }

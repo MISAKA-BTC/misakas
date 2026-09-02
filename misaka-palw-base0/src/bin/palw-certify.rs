@@ -175,6 +175,22 @@ fn main() {
                 PalwConsensusObjectV2::ObjectChunk { group, index, count, bytes: part } => {
                     println!("ObjectChunk: part {index} of {count} of group {group}, {} bytes", part.len());
                 }
+                PalwConsensusObjectV2::DerivedArtifactV1 { object, signature } => {
+                    use kaspa_consensus_core::palw_derived_v1::{derived_id_v1, kind};
+                    println!(
+                        "DerivedArtifactV1: claim {}, kind {} ({}), grammar {}, transformer {}, dsl {}, artifact {} ({} bytes), derived id {}, signature {} bytes",
+                        object.claim_id,
+                        object.kind,
+                        kind::name(object.kind).unwrap_or("unassigned"),
+                        object.grammar_id,
+                        object.transformer_id,
+                        object.dsl_hash,
+                        object.artifact_hash,
+                        object.artifact_bytes,
+                        derived_id_v1(object),
+                        signature.len()
+                    );
+                }
                 other => println!("{other:?}"),
             }
         }
