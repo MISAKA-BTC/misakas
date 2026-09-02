@@ -57,6 +57,20 @@ the checkpoint whose header carries the tokenizer, optional `MISAKA_PALW_MODEL_I
 graph-v3 row). Both take `MISAKA_PALW_NETWORK_ID`. The rail's `--class-id` and `--class-leaves`
 name the class and its canonical job in leaves.
 
+**Three modes, and the gateway uses the third** (ADR-0077 Decision 1). Both workers answer
+`--mode v3-manifest` (print the identity and exit), `--mode v3-job` (one framed request in, one
+result out — what the drills and the replay arm use) and `--mode v3-serve`, the resident loop the
+gateway spawns: the artifact is mapped, digested and validated ONCE, and every later job travels
+the same framed request/result pair over the persistent stream. On the hybrid tier that is the
+difference between eight minutes per request and eight minutes per process. A job's four roots are
+byte-identical whichever of `v3-job` and `v3-serve` produced them, which is what makes residency a
+cost decision rather than a semantics one.
+
+You do not pass `--mode` yourself: `--worker <binary>` is enough, and the gateway spawns it as
+`--mode v3-serve --trace-out <outbox>/traces/...`. Run `--mode v3-manifest` by hand when you want
+to see which class id, `n_ctx` and end-of-generation ids a worker will announce before you point a
+gateway at it.
+
 ## Limits, stated
 
 * A drill certifies kernels, not weights. A model whose graph reaches a kernel no shipped family

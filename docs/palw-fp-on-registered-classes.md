@@ -1,7 +1,13 @@
 # Free prompts on a registered class — what is left, and why it is executor-side only
 
-Status: specification. Nothing here is implemented. Written from the code as it stands at
-`d181577d`, after an attempt to reach "type a prompt, that inference mines" end to end.
+Status: **implemented**, and this page is now a record of how it got there rather than a plan.
+The header it used to carry — "specification; nothing here is implemented" — was written at
+`d181577d` and stayed put through the three landings logged at the bottom of this page; a stale
+"not implemented" stops the next person looking, which is the exact failure this document opens by
+warning about. What the page still is: the reasoning, in the order it was found, for why the FP
+lane runs on a class the chain already registers instead of bringing its own. Read the dated
+sections from the bottom for the current shape, and
+[palw-freeprompt-gateway.md](palw-freeprompt-gateway.md) for the protocol.
 
 ## The finding
 
@@ -14,13 +20,15 @@ What works today, measured rather than assumed:
 * `misaka-palw-gateway` takes an OpenAI-style request, runs ONE inference through `palw-worker
   --mode v3-job`, and returns the answer with `cu`, `fp_job_id` and the trace/output/schedule
   roots in-band. A prompt through it returned `cu 8221` over 29 prompt / 128 completion tokens.
+  (`palw-worker` and its `v3` arms are gone — ADR-0077 Decision 5. The runtime is a family worker
+  and the mode is `v3-serve`; see the last section.)
 * `calculate_l1_tag` has its algo-7 arm; `SUBNETWORK_ID_PALW_FP_COMMITMENT` (0x4a) is validated in
   `tx_validation_in_isolation`; `palw_fp_admission_v3` implements all eight items.
 * testnet-11 runs `palw_rc_params` — a `ConsensusV2` network with the free-prompt bundle installed.
 
-Two documents disagree with that code and should be corrected when this lands:
-`docs/palw-freeprompt-gateway.md` and `misaka-palw-gateway/src/bin/rail.rs` both say no network
-accepts subnetwork 0x4a. One does.
+Two documents disagreed with that code and both have since been corrected:
+`docs/palw-freeprompt-gateway.md` and `misaka-palw-gateway/src/bin/rail.rs` said no network accepts
+subnetwork 0x4a. One does, and both now say so.
 
 ## Why the obvious route is the wrong one
 
@@ -369,3 +377,36 @@ gateway's two-mode contract for the hybrid tier (`MISAKA_PALW_ARTIFACT` = the co
 `.palwq36`, `MISAKA_PALW_GGUF` = the checkpoint whose header carries the tokenizer,
 `MISAKA_PALW_NETWORK_ID`, optional `MISAKA_PALW_MODEL_ID` for another graph-v3 row), so the
 gateway can point `--worker` at it and a browser prompt reaches a Qwen3.6 free-prompt claim.
+
+## 2026-09-03 — one runtime, three modes: `v3-serve` (ADR-0077 Decision 1)
+
+The "two-mode contract" named twice above is a three-mode contract now, and the third mode is the
+one an operator actually runs.
+
+```text
+  --mode v3-manifest   the identity, as one JSON line              (map, print, exit)
+  --mode v3-job        one framed request in, one result out       (map, run, exit)
+  --mode v3-serve      the manifest, then a resident request loop  (map ONCE, then jobs)
+```
+
+`v3-job` mapped the artifact inside every job — about eight minutes per REQUEST on the hybrid
+tier, because a 33 GiB artifact is opened, digested and validated before a single token is
+decoded. `v3-serve` pays that once: the gateway spawns the worker once, reads its manifest once,
+and every later job travels the same framed `PalwFpWorkerRequestV3` / `PalwFpWorkerResultV3` over
+the persistent stream, one generation at a time (a single engine, a single KV cache — which is why
+the whole runtime sits behind one mutex).
+
+Three things did not change, and each is the answer to a way this could have gone wrong:
+
+* **A job's roots through `v3-serve` are byte-identical to the same job's roots through `v3-job`**
+  (invariant W6). Residency is a cost decision; it is not allowed to be a semantics decision.
+* **The served width is the CLASS's registered `n_ctx`**, read from the catalog row and never from
+  the artifact's rotary span. A runtime that answered wider than the court admits would be the
+  two-products split ADR-0077 R0 exists to close.
+* **Every job is captured.** `misaka-palw-serve` is retired and the two un-captured chat drivers
+  (`base0-chat`, `qwen36-chat`) are deleted, so `court_capable: false` is no longer a state a
+  runtime in this tree can be in.
+
+The artifact is re-verified rather than assumed: it is opened read-only, digested at map time, and
+re-digested whenever the file's device, inode or size changes (SA-6). An I/O fault on a mapped page
+is a `JobFailed`, never a crash of the gateway or the node.

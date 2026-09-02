@@ -116,14 +116,12 @@ const EXEMPT: &[(&str, &str)] = &[
     ("src/bin/qwen25-convert.rs", "offline PTQ driver"),
     ("src/bin/qwen36-convert.rs", "offline PTQ driver for the hybrid architecture"),
     ("src/bin/qwen36-run.rs", "the hybrid runtime's driver: it times itself, and a timer is float"),
-    ("src/bin/qwen36-chat.rs", "the hybrid runtime's chat driver: tokenizer, template and a tokens-per-second figure"),
     ("src/qwen36_calibrate.rs", "offline PTQ: it turns measured ranges into (multiplier, shift) triples"),
     ("src/qwen36_reference.rs", "the hybrid graph in f32: it measures the checkpoint's ranges so the PTQ can pick scales"),
     ("src/reference.rs", "the float reference forward: it measures the checkpoint's ranges so the PTQ can pick scales"),
     ("src/bin/base0-depth-sweep.rs", "measurement tool"),
     ("src/bin/base0-class-sizing.rs", "measurement tool"),
     ("src/bin/palw-rc-genesis.rs", "genesis card generator"),
-    ("src/bin/base0-chat.rs", "the runtime's front door: it times itself, and a timer is float"),
     // Off the path by CATEGORY, not because it holds a float — it holds none today. It drives
     // `A16Engine` over HTTP and its own module doc is explicit that a run served here is "a real
     // inference under a registered class and NOT yet" an adjudicable commitment: nothing it

@@ -57,11 +57,24 @@ c00faa480f2344d4a737e5b2e87ab6064d8d6e42c1ffeb6aa0a14ed62134299a7c9dc08f15342cef
 That is `PALW_RC_GENESIS_QWEN25_A16_ARTIFACT_ROOT`. **Cost:** 2.9 GiB read, ~3 s to convert, 1.7 GiB
 written. The node re-checks the digest on load (the container verifies it on decode).
 
-Try it before you trust it:
+Try it before you trust it. `base0-chat` used to answer a prompt here; it is deleted, because it
+answered without a capture and ADR-0077 W0 leaves no such binary in this tree. The two things that
+replace it:
 
 ```bash
-./target/release/base0-chat --artifact qwen25-1.5b-a16.palwart --tokenizer /path/to/tokenizer.json \
-  --prompt "What is the capital of France? Answer in one sentence."
+# (a) what this artifact IS, as the class the chain adjudicates — fast, no generation
+MISAKA_PALW_ARTIFACT=qwen25-1.5b-a16.palwart \
+MISAKA_PALW_TOKENIZER=/path/to/tokenizer.json \
+MISAKA_PALW_NETWORK_ID=testnet-11 \
+./target/release/palw-a16-fp-worker --mode v3-manifest --trace-out /tmp/t
+# one JSON line: class_id, shape_profile_id, n_ctx, vocab, the end-of-generation ids
+
+# (b) an actual answer — through the gateway, so the inference is captured and committable
+#     (see docs/testnet11-join-mining.md §7 for the identity file and the rail)
+./target/release/misaka-palw-gateway --worker ./target/release/palw-a16-fp-worker \
+  --outbox /tmp/outbox --identity ~/.misaka/fp-identity.json --anchor /tmp/anchor.json
+curl -s localhost:8790/v1/chat/completions -H 'content-type: application/json' \
+  -d '{"messages":[{"role":"user","content":"Capital of France, one sentence."}],"max_tokens":32}'
 ```
 
 **Producing for it costs 474 ms per block** — the canonical job is 14 prefill + 2 decode tokens,
