@@ -823,4 +823,41 @@ mod tests {
             assert_eq!(admitted, extracted, "admission and extraction disagree on {payload:?}");
         }
     }
+
+    /// ADR-0075: both certification objects ride the lifecycle subnetwork — admission and
+    /// extraction give one answer — and neither needs a carrier-bound outpoint, so the object
+    /// extracted is the object carried, byte for byte.
+    #[test]
+    fn certification_objects_ride_and_extract_unchanged() {
+        use crate::palw_base0_profile::{PALW_RC_BASE0_GEOMETRY, base0_profile_v1};
+        use crate::palw_e2e_adjudicability::{PalwE2eDrillEvidenceV1, palw_e2e_family_id_v1};
+        use crate::palw_state_v2::{PalwCertificationEvidenceV1, PalwCertifiedLaneV1};
+
+        let profile = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("the floor's profile");
+        let bind = PalwConsensusObjectV2::ClassLaneCertified {
+            class_id: profile.shape_profile_id(),
+            lane: PalwCertifiedLaneV1::FreePrompt,
+            profile: Box::new(profile.clone()),
+        };
+        let family = PalwConsensusObjectV2::FamilyCertified {
+            evidence: Box::new(PalwCertificationEvidenceV1::Attempt(PalwE2eDrillEvidenceV1 {
+                family_id: palw_e2e_family_id_v1("RIDES"),
+                profile,
+                artifact_root: h64(9),
+                vectors: Vec::new(),
+                malformed_inputs_refused: 0,
+            })),
+        };
+        for object in [bind, family] {
+            let payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object: object.clone() })
+                .expect("serializes");
+            validate_palw_lifecycle_tx(&payload).expect("a certification object may ride");
+            let tx = carrier(SUBNETWORK_ID_PALW_LIFECYCLE.clone(), payload);
+            let extracted = palw_lifecycle_objects_from_accepted_txs_v2(std::slice::from_ref(&tx));
+            assert!(extracted.skipped.is_empty(), "{:?}", extracted.skipped);
+            assert_eq!(extracted.objects.len(), 1);
+            assert_eq!(extracted.objects[0].object, object, "extracted unchanged — nothing is keyed to the carrier");
+            assert_eq!(extracted.objects[0].carrier, tx.id());
+        }
+    }
 }

@@ -363,6 +363,9 @@ Two of the findings above are now closed, and one premise has moved:
   class, so the real models take free-prompt claims from genesis; any later model takes the
   on-chain route with `palw-certify drill|bind` and `misaka-cli palw submit-object`.
 
-Still true: the seat replays from token ids and needs no tokenizer; a Qwen36 worker binary for
-the gateway's two-mode contract does not exist yet (the backend method does), and the artifact's
-`tokenizer_commitment` remains zero and unchecked.
+Still true: the seat replays from token ids and needs no tokenizer, and the artifact's
+`tokenizer_commitment` remains zero and unchecked. New: `palw-qwen36-fp-worker` implements the
+gateway's two-mode contract for the hybrid tier (`MISAKA_PALW_ARTIFACT` = the converted
+`.palwq36`, `MISAKA_PALW_GGUF` = the checkpoint whose header carries the tokenizer,
+`MISAKA_PALW_NETWORK_ID`, optional `MISAKA_PALW_MODEL_ID` for another graph-v3 row), so the
+gateway can point `--worker` at it and a browser prompt reaches a Qwen3.6 free-prompt claim.

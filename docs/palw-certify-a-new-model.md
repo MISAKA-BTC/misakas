@@ -47,6 +47,16 @@ recorded — the node logs it under `[palw-lifecycle]`).
 | `ClassLaneCertified` (attempt) | the class is Active and holds no share; `profile` hashes to the class id; a chain family for the lane covers its kernels | `CertificationNeedsActiveClass`, `ClassAlreadyWeighted`, `CertificationProfileIsNotTheClass`, `NoCertifiedFamilyCovers` |
 | `ClassLaneCertified` (free-prompt) | as above, and the class is not already free-prompt certified | `ClassLaneAlreadyCertified` |
 
+## Producing free-prompt claims on the certified class
+
+Once a class's free-prompt lane is certified (genesis or on chain), `misaka-palw-gateway
+--worker <binary>` turns browser prompts into commitments. Two workers ship:
+`palw-a16-fp-worker` (dense tier, `MISAKA_PALW_ARTIFACT` + `MISAKA_PALW_TOKENIZER`) and
+`palw-qwen36-fp-worker` (hybrid tier, `MISAKA_PALW_ARTIFACT` = `.palwq36`, `MISAKA_PALW_GGUF` =
+the checkpoint whose header carries the tokenizer, optional `MISAKA_PALW_MODEL_ID` for another
+graph-v3 row). Both take `MISAKA_PALW_NETWORK_ID`. The rail's `--class-id` and `--class-leaves`
+name the class and its canonical job in leaves.
+
 ## Limits, stated
 
 * A drill certifies kernels, not weights. A model whose graph reaches a kernel no shipped family
