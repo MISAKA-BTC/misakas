@@ -5,7 +5,9 @@ network's stated purpose is a person using their own local LLM on a prompt of th
 one inference mining (ADR-0044 §Context, ADR-0073 §1), and on the live testnet-11 (Relaunch 5e)
 the widest such prompt a registered class admits is **eight tokens, answer included**, on a lane
 that holds 100‰ of the cadence, weighs nothing as a block, and has never been run on the fleet.
-Nothing here is armed by this document. Phase A is executor-side and consensus-inert. Phase B
+Nothing here is armed by this document. Its one requirement is R0 (§2): the practical local
+LLM and the mining runtime are the SAME inference — not two binaries that each hold half of the
+purpose. Phase A is executor-side and consensus-inert. Phase B
 moves the ruleset (a re-genesis on testnet-11, as every relaunch has been; mainnet ships PALW off
 and is untouched). Phase C is ADR-0073 Decision 4's activation, sequenced here and not re-decided.
 Phase D is refused by admission until the ruleset move that carries its rules.
@@ -79,11 +81,27 @@ Neither ceiling is a bug in an executor. A class's width IS the width its court 
 widening the lane is a court change first, and the executor-side gaps are a product that has never
 been assembled. This ADR does both, in that order.
 
-## 2. The principle
+## 2. The requirement, and the principle
 
-**The court's cost is a function of the checkpoint interval, never of the context; the ladder is
-sized to a prompt a person would type; and everything the person touches is one pipeline that a
-drill runs end to end.** Nothing about how a beacon is drawn, how a panel is seated, how a ticket
+Two things exist in this tree today, separately. `misaka-palw-serve` is a practical local LLM: the
+same A16 engine a class registers, speaking OpenAI at the artifact's full 512 positions — and its
+own header says a run served there is "NOT a claim anyone can adjudicate or mine"
+(`court_capable: false`). The family workers behind the gateway mine with a prompt — and admit 8
+or 16 positions. Each is real; neither is the purpose, and a tree that keeps both is a tree in
+which "practical" and "mines" are two products that never meet. So this ADR has one requirement,
+and every decision below is in its service:
+
+> **R0 — one inference, at the width a person uses, is one answer and one claim.** There is one
+> runtime; it answers at the width the class registers; every answer it gives is captured and
+> committed by the same run; and the only reasons a commitment does not reach the chain are the
+> chain's — no bond, no exposure room, a class the chain does not certify — never a runtime mode.
+> "Practical" is therefore a property of the class table (Phase B), not of a side binary, and
+> "mines" is a property of every served inference (Phase A), not of a narrow one. Neither phase
+> is done on its own: R0 is measured on ONE job id (§6).
+
+**The principle that delivers R0:** the court's cost is a function of the checkpoint interval,
+never of the context; the ladder is sized to a prompt a person would type; and everything the
+person touches is one pipeline that a drill runs end to end. Nothing about how a beacon is drawn, how a panel is seated, how a ticket
 is compared or how a claim is disputed changes — F4, F5, F6 and F15 of ADR-0044 hold verbatim,
 which is the whole reason a wide prompt is safe here and forbidden on the attempt lane (the win is
 a quantum ticket against the class's receipt target; the prompt does not decide the lottery).
@@ -92,13 +110,19 @@ a quantum ticket against the class's receipt target; the prompt does not decide 
 
 ### Phase A — the executor side, consensus-inert
 
-**Decision 1 — a resident worker.** Both family workers gain `--mode v3-serve`: the artifact is
-mapped once, the manifest handshake happens once, and jobs arrive as the SAME framed
-`PalwFpWorkerRequestV3` / `PalwFpWorkerResultV3` frames over a persistent stream, one generation at
-a time (a single engine and a single KV cache, `misaka-palw-serve`'s stated rule). Per-job
-retention (`material.bin`, the manifest) is unchanged, and `v3-job` stays as the one-shot form the
-drills and the replay arm use. The property that makes this safe is testable and pinned:
-a job's roots through `v3-serve` are byte-identical to the same job's roots through `v3-job`.
+**Decision 1 — one runtime: the server is the worker.** `misaka-palw-serve` is retired and its
+role moves into the family workers, which gain `--mode v3-serve`: the artifact is mapped once, the
+manifest handshake happens once, and jobs arrive as the SAME framed `PalwFpWorkerRequestV3` /
+`PalwFpWorkerResultV3` frames over a persistent stream, one generation at a time (a single engine
+and a single KV cache — the rule `misaka-palw-serve` stated, kept). Every job it answers is
+captured; there is no un-captured chat path left in the tree, and `court_capable: false` ceases to
+be a state a runtime can be in. The served width is the class's registered `n_ctx`, read from the
+catalog row, never the artifact's rotary span: a runtime that answered wider than the court admits
+would be exactly the two-products split R0 exists to close — which is also why Phase A alone does
+not satisfy R0, and Phase B is what makes the one width a practical one. Per-job retention
+(`material.bin`, the manifest) is unchanged, and `v3-job` stays as the one-shot form the drills and
+the replay arm use. Pinned: a job's roots through `v3-serve` are byte-identical to the same job's
+roots through `v3-job`.
 
 **Decision 2 — the answer streams; the commitment does not.** The gateway accepts
 `stream: true` and forwards tokens as the worker decodes them (a side channel the worker writes
@@ -115,7 +139,9 @@ It now reads, from its node over RPC: the class registry, the free-prompt-certif
 and `ClassLaneCertified`), the executor bond's status and exposure room, and a fresh anchor. A job
 on a class the chain does not certify is still answered — the answer is the product — but its
 commitment is marked unsubmittable and never leaves the outbox, and `/health` says so by name:
-`registered`, `fp_certified`, `bond_active`, `exposure_room`.
+`registered`, `fp_certified`, `bond_active`, `exposure_room`. A gateway with no bond at all is
+served the same way: the answer, a capture, a commitment, and the chain-side reason it stays in
+the outbox — R0's "never a runtime mode", made visible.
 
 **Decision 4 — one handoff: answer, commitment, signature, submission, capture.** After the
 frame: the commitment is signed (the `kaspa-pq-signer` sidecar, or a local seed for devnets — the
@@ -192,8 +218,10 @@ The dense artifact's rotary table covers 512 positions (`max_position` 512, the 
 default); the hybrid's "still covers 512". So the first practical rows are
 `Qwen/Qwen2.5-1.5B/graph-v2` at `n_ctx` 512 and `Qwen3.6-35B-A3B/graph-v3` at `n_ctx` 512 — each a
 NEW class id, because a class IS its graph, registered and seated through `palw-certify drill|bind`
-and `misaka-cli palw submit-object` once Phase B's court is the shipped one. The 8- and 16-token
-rows stay on chain exactly as they are. Wider than 512 needs a re-converted artifact with a wider
+and `misaka-cli palw submit-object` once Phase B's court is the shipped one. 512 is the width
+`misaka-palw-serve` serves today, so this is the number at which the practical runtime and the
+mineable one become one row — R0's width. The 8- and 16-token rows stay on chain exactly as they
+are. Wider than 512 needs a re-converted artifact with a wider
 table, and takes the same route with no further consensus change.
 
 **Decision 13 — the canonical job grows with the context, so the cap stays a jackpot bound.** A
@@ -255,6 +283,10 @@ panel cannot replay must not execute").
 ## 5. Invariants the tests must hold
 
 ```
+W0   R0: every answer the runtime gives has a capture and a commitment from the same run; the
+     served n_ctx equals the class's registered n_ctx; a commitment that does not reach the chain
+     names a chain-side reason (no bond, no exposure room, uncertified class) in /health; no
+     binary in the tree answers a chat without a capture.
 W1   For a class with a registered state chunk map, derive_court_cost_v1 at n_ctx = interval,
      2·interval and 8·interval yields the same max_close_bytes and max_terminal_macs.
 W2   The anchored refutation and the long form reach the same verdict on honest material, for
@@ -277,7 +309,7 @@ W9   No decision here changes how a beacon, a panel or a ticket is derived: ADR-
 
 | unit | content | done when |
 |---|---|---|
-| P-01 | Decision 1 — `v3-serve` on both family workers | W6 green; the hybrid answers a second job without re-mapping |
+| P-01 | Decision 1 — `v3-serve` on both family workers; `misaka-palw-serve` retired | W0 and W6 green; the hybrid answers a second job without re-mapping |
 | P-02 | Decision 2 — SSE side channel + the re-render check | W5 green, with a deliberately mismatching worker refused |
 | P-03 | Decision 3 — the gateway reads registry, certified set, bond, anchor over RPC | `/health` names all four; an uncertified class answers and never submits |
 | P-04 | Decision 4 — sign, submit, stage capture, retain; shared with the CLI | a browser request ends in `FreePromptCommitted` on a devnet node with `<claim>.material` present |
@@ -293,6 +325,13 @@ W9   No decision here changes how a beacon, a panel or a ticket is derived: ADR-
 | P-14 | Decision 14 — ADR-0073 Phase ④ activation | one retarget span of measured receipt supply on a 512 row |
 | P-15 | Decision 15 — `PanelDa` | W8 green; drilled; its own ruleset move |
 
+**Done when** the Decision 7 drill, on a Decision 12 row, shows ONE job id in three places: the
+gateway's streamed answer to a ~300-token chat turn, the node's `FreePromptCommitted` → `Final`
+for that claim, and a receipt block spending one of its quanta, accepted by every node. R0 is a
+property of a single inference, so it is measured on a single job id — never on one log of a
+practical runtime beside another log of a mining one. Until that job id exists, this ADR is not
+implemented, whatever else has landed.
+
 ## 7. Supersession
 
 | what | disposition |
@@ -305,6 +344,7 @@ W9   No decision here changes how a beacon, a panel or a ticket is derived: ADR-
 | ADR-0049 Decision C — admission bounds the court from the geometry | honoured; the bound's form changes (Decision 10) |
 | ADR-0073 Decision 4 — receipts gain position and share | sequenced by Decision 14, not re-decided |
 | ADR-0074 Decision 5 — the quantum is an eighth of the canonical job | honoured; Decision 13 sizes the canonical job |
+| `misaka-palw-serve` — "a run served here is … NOT a claim anyone can adjudicate or mine" | retired by Decision 1; no un-captured serving path remains |
 | `palw_qwen36_profile` — "n_ctx 8 … a larger context returns when the recurrence's replay is checkpoint-anchored" | that return is Decisions 9–12; the row itself is unchanged |
 | `palw_fp_devnet_v3::COURT_MAX_STEP_LEAVES` — "cannot be raised afterwards" | correct; raised by a ruleset move (Decision 11) |
 
