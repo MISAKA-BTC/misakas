@@ -232,6 +232,28 @@ green. Step (2) below is satisfied only for the exact commit the user pushes.
 equals the value above; (3) the stop-ALL → archive → rotate the four per-genesis stores → install
 → per-host start order below is run as one window. Nobody "restarts everything".
 
+### Why the cadence takes hours, not minutes — measured 03:15 CEST, and what 5d can do about it
+
+The floor rate rose again after 03:00 (80–110 blocks/hour at 03:06–03:15 against 30) while the
+difficulty *eased* 3.5 % (bits mantissa 782,386 at blue 700 / 03:00 → 809,401 at blue 720 /
+03:14, after tightening 12.9× from blue 500 to 700). Not a class effect: the A16 block at blue
+643 carries bits 504,996,465 — the same window-derived target as its floor neighbours, so LLM
+blocks do not pull the window average. It is the start burst meeting the difficulty formula:
+`new_target = average_target(window) × (max_ts − min_ts) / (120 s × N)` over a 264-block window
+(`..TESTNET_PARAMS`, sample rate 1, span-based). The first ten minutes put ~500 blocks one second
+apart into the chain because genesis bits `0x200ccccc` are ~100× too easy for one floor producer.
+While those blocks exit the window, `min_ts` advances ~1 s per exiting block and `max_ts` ~45 s per
+new block, so the span grows faster than wall-clock and the target loosens — the 03:00–03:15
+easing. The burst is fully out at block ~764 (~03:40); from there the span grows at the real rate
+and the target tightens geometrically toward 120 s over roughly one window (264 blocks, several
+hours at the current rate). Nothing here is a defect and nothing was touched.
+
+For 5d the same start will produce the same hours-long settle unless one of these is chosen
+(the user's call, none taken): (a) accept it; (b) re-mint genesis `bits` harder — moves the
+genesis hash, i.e. a real re-genesis, not a fingerprint move; (c) hold the floor producer back at
+start (start it throttled, or only once node0's P2P is open) so the burst is small — the revert
+build reached 95–119 s gaps in ~40 min with a smaller burst.
+
 ### Four stores are per-genesis and must be rotated at every regenesis — one was missed today
 
 | store | where | rotation |
