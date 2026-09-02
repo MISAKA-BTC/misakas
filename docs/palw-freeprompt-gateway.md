@@ -254,8 +254,24 @@ carries prompt text or prompt ids: a refusal names the rule and the position it 
 
 - **Prompts are public.** PublicDA is the only weight-bearing mode: the committed job carries
   the token ids whole. Do not point private material at a gateway whose outbox feeds a chain.
-- **Prompt budget**: single-batch prefill caps the prompt at 512 tokens; prompt + ceiling must
-  fit the context window. Long-context profiles are a future class identity.
+- **Prompt budget — read this before sizing anything.** `prompt + decode ceiling` must fit the
+  CLASS's registered `n_ctx`, and on this build the worker sets both `n_ctx` and
+  `prefill_single_batch_cap` from the class row (`fp_worker.rs`), so there is no separate 512-token
+  prefill allowance: the class's width is the whole budget. Today the widest registered model class
+  is **16 tokens for prompt and answer together** (`QWEN25-A16`; the floor is 12 and `QWEN36` is 8),
+  and the ChatML wrapper alone is 8 of them — so `"hello"` leaves 7 decode tokens and a one-sentence
+  prompt does not fit at all. Over the width the worker refuses the job by name rather than trimming
+  it:
+
+  ```
+  prompt 23 + decode ceiling 256 exceeds max_context_tokens 16
+  ```
+
+  This bullet used to say "single-batch prefill caps the prompt at 512 tokens", which was true of
+  a bundle cap and never of a registered class — an optimistic number is as stale as a pessimistic
+  one. Longer rows are a NEW class identity (`n_ctx` is inside the shape profile id), which is the
+  ladder ADR-0077 Decision 13 exists for; [testnet11-ask-for-a-file.md](testnet11-ask-for-a-file.md)
+  §0 states what today's width means for a person typing a prompt.
 - **The display stop is not the execution stop.** On a model whose control tokens the manifest
   declares, the `chat-segments/v1` template elicits EOG and the shown answer ends there. On one it
   cannot name, the `plain-markers-segments/v1` fallback rarely does, so size `max_tokens` for the
