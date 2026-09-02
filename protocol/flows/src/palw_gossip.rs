@@ -102,8 +102,8 @@ pub struct PalwGossipCenter {
     material_resolver: Mutex<Option<std::sync::Arc<dyn Fn(Hash64) -> Option<Vec<u8>> + Send + Sync>>>,
     /// Serve throttle: a claim answered within the last window is not answered again — one
     /// request refills every peer (the serve is a broadcast), so immediate repeats are pure
-    /// amplification. Keyed by claim, pruned inline.
-    served_recently: Mutex<HashMap<Hash64, std::time::Instant>>,
+    /// amplification. Keyed by claim, bounded by [`SERVED_RECENTLY_CAP`], evicted oldest-first.
+    served_recently: Mutex<ServeThrottle>,
     /// What this node has ASKED for and not yet received, with the time it asked.
     ///
     /// A solicited answer must not be refused by the per-claim relay budget (audit M2-1): four
@@ -157,7 +157,34 @@ const OUTSTANDING_PULL_CAP: usize = 512;
 /// unbounded memory and quadratic CPU inside a lock every runtime worker can block on. The sibling
 /// map `outstanding_pulls`, which only this node writes, was already capped; the peer-written one
 /// was not.
+///
+/// **Bounding it with `clear()` was an off-switch, not a bound** (audit 2026-09-02). The first
+/// repair swept at the cap and, when the sweep freed nothing — every entry still inside its
+/// 60 s window, which is what a flood of fresh ids produces — dropped the whole map. So ~287 KB
+/// of ~70-byte requests erased the throttle record of every HONEST claim as collateral, and
+/// audit3 H6's "a refused request is free and repeatable" was back for all of them at once. A
+/// bounded map whose overflow behaviour is "forget everything" is a rate limiter with a reset
+/// button. Eviction is per entry and oldest-first now — see [`ServeThrottle`] — and the bound
+/// that survives the throttle being defeated at all is [`SERVE_ATTEMPT_FLOOR_BYTES`], which is
+/// charged to the asking PEER and cannot be reset by anything the asker sends.
 const SERVED_RECENTLY_CAP: usize = 4096;
+/// **What one serve ATTEMPT costs its asker, whatever the attempt produces.**
+///
+/// The reservation above is the worst case and the difference comes back once the real size is
+/// known — so the per-peer share bounded BYTES and not READS: at a 1 KiB material a peer's 48 MiB
+/// bought ~49,000 synchronous disk reads a minute, and a read that produced nothing (no resolver,
+/// nothing on disk, bytes over the cap) was refunded in full and therefore free. What this node
+/// actually spends on a request is a blocking-pool thread and a `std::fs::read`, and that is a
+/// per-REQUEST cost, so the ceiling has to be one too.
+///
+/// 48 MiB / 64 KiB = 768 attempts per peer per minute is the ceiling this sets, and the real figure
+/// is lower still — the 16 MiB worst-case reservation must also fit in what is left of the share,
+/// so a peer is refused at ~513. Either number is far above five seats pulling one claim on a
+/// 25-DAA throttle (~50 minutes at the frozen cadence) and far below what a request loop conjures.
+/// The property that matters is that it is keyed by `PeerKey` rather than by an attacker-chosen
+/// claim id, so no message can flush it. Where a real material is served the floor is invisible:
+/// every registered class's material is orders of magnitude larger than it.
+const SERVE_ATTEMPT_FLOOR_BYTES: u64 = 64 << 10;
 /// **A ceiling on the solicited exemption, and a floor of slots one peer cannot take** (audit3 H7).
 ///
 /// The exemption existed so four cheap payloads from a stranger could not make the honest answer
@@ -174,6 +201,44 @@ const SERVED_RECENTLY_CAP: usize = 4096;
 /// the LAST voice and the panel pool evicts its oldest.
 const PALW_SOLICITED_MATERIALS_PER_CLAIM: usize = 16;
 const PALW_MATERIALS_PER_PEER_PER_CLAIM: usize = 2;
+
+/// **The serve throttle's memory, bounded per entry.**
+///
+/// A `HashMap` for the lookup and a FIFO of the keys for the eviction: at the cap the OLDEST
+/// recorded claim is dropped, one of them, in `O(1)`. That is the difference between "a flood
+/// costs the flooder's own oldest record" and "a flood costs every honest claim's record at
+/// once", which is what `clear()` bought. There is no periodic sweep either — a stale entry is
+/// simply outside its window when it is read, and 4096 of them is the whole memory bill — so no
+/// request walks the map under the lock any more.
+#[derive(Default)]
+struct ServeThrottle {
+    at: HashMap<Hash64, std::time::Instant>,
+    order: VecDeque<Hash64>,
+}
+
+impl ServeThrottle {
+    fn recorded_at(&self, claim: &Hash64) -> Option<std::time::Instant> {
+        self.at.get(claim).copied()
+    }
+
+    /// Charge `claim` its window. A claim already recorded keeps its place in the FIFO and only
+    /// refreshes its time: moving it would let a peer pin an entry by re-asking, which is the
+    /// behaviour the throttle exists to charge for.
+    fn record(&mut self, claim: Hash64, now: std::time::Instant) {
+        if self.at.insert(claim, now).is_none() {
+            self.order.push_back(claim);
+            while self.order.len() > SERVED_RECENTLY_CAP {
+                let Some(oldest) = self.order.pop_front() else { break };
+                self.at.remove(&oldest);
+            }
+        }
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.at.len()
+    }
+}
 
 struct GossipState {
     seen: HashSet<u64>,
@@ -209,7 +274,7 @@ impl Default for PalwGossipCenter {
             inbox_taken: std::sync::atomic::AtomicBool::new(false),
             hasher: RandomState::new(),
             material_resolver: Mutex::new(None),
-            served_recently: Mutex::new(HashMap::new()),
+            served_recently: Mutex::new(ServeThrottle::default()),
             outstanding_pulls: Mutex::new(HashMap::new()),
             serve_budget: Mutex::new(ServeBudget {
                 window_started: std::time::Instant::now(),
@@ -285,31 +350,29 @@ impl PalwGossipCenter {
         {
             let mut served = self.served_recently.lock().unwrap();
             let now = std::time::Instant::now();
-            // Amortised, and bounded: sweep only when the map is at its cap, and if the sweep does
-            // not get it under the cap — every entry still inside its window — drop the whole map.
-            // Losing the throttle for a moment lets a claim be served sooner than it might have
-            // been; keeping an unbounded map lets a stranger decide how much memory this node uses
-            // and how long every other peer waits for the lock.
-            if served.len() >= SERVED_RECENTLY_CAP {
-                served.retain(|_, at| now.duration_since(*at) < std::time::Duration::from_secs(60));
-                if served.len() >= SERVED_RECENTLY_CAP {
-                    served.clear();
-                }
-            }
-            if let Some(at) = served.get(&claim)
-                && now.duration_since(*at) < SERVE_THROTTLE
+            if let Some(at) = served.recorded_at(&claim)
+                && now.duration_since(at) < SERVE_THROTTLE
             {
                 return None;
             }
             // Charged here, on the attempt. A refusal below must cost the asker its window too, or
-            // the refusal is free and repeatable.
-            served.insert(claim, now);
+            // the refusal is free and repeatable. The map bounds itself by evicting its oldest
+            // entry, one at a time — never by forgetting everything, which is what handed a
+            // flooder an off-switch for every honest claim's record at once.
+            served.record(claim, now);
         }
         // Reserve the worst case; the difference comes back once the real size is known.
         let reservation = PALW_MATERIAL_MAX_BYTES as u64;
         if !self.reserve_serve_budget(peer, reservation) {
             return None;
         }
+        // **Past the reservation every exit costs the asker [`SERVE_ATTEMPT_FLOOR_BYTES`].** The
+        // refund used to return the reservation minus the bytes actually sent, and the whole
+        // reservation on every path that sent none — so a small material, or a claim this node
+        // does not hold, made the read free and the per-peer share bounded nothing that costs
+        // this node anything. The floor is what makes the share a bound on READS, and it is the
+        // one that still holds when the claim throttle above has been flushed.
+        let settle = |served: u64| self.refund_serve_budget(peer, reservation.saturating_sub(served.max(SERVE_ATTEMPT_FLOOR_BYTES)));
         // **The disk read happens with NO lock held and NOT on an async worker.** The closure reads
         // up to 16 MiB synchronously; holding the global resolver mutex across it (as this did
         // until audit M2-2) serialises every serve on the slowest one, and running it inline on the
@@ -317,19 +380,19 @@ impl PalwGossipCenter {
         // thread.
         let resolver = { self.material_resolver.lock().unwrap().clone() };
         let Some(resolver) = resolver else {
-            self.refund_serve_budget(peer, reservation);
+            settle(0);
             return None;
         };
         let read = tokio::task::spawn_blocking(move || resolver(claim)).await;
         let Some(bytes) = read.ok().flatten() else {
-            self.refund_serve_budget(peer, reservation);
+            settle(0);
             return None;
         };
         if bytes.len() > PALW_MATERIAL_MAX_BYTES {
-            self.refund_serve_budget(peer, reservation); // never serve what the transport would refuse
+            settle(0); // never serve what the transport would refuse
             return None;
         }
-        self.refund_serve_budget(peer, reservation.saturating_sub(bytes.len() as u64));
+        settle(bytes.len() as u64);
         Some(bytes)
     }
 
@@ -378,29 +441,24 @@ impl PalwGossipCenter {
         pulls.get(&claim).is_some_and(|at| std::time::Instant::now().duration_since(*at) < PULL_SOLICITED_TTL)
     }
 
-    /// Undo an [`Self::admit_digest`] whose payload never reached the consumer, giving back the
-    /// per-claim and per-peer slots with it so neither map outlives the FIFO that feeds it — the
-    /// same bookkeeping the FIFO's own eviction does, in the other direction.
-    fn forget_digest(&self, digest: u64) {
-        let mut state = self.state.lock().unwrap();
-        if !state.seen.remove(&digest) {
-            return;
+    /// **An inbox slot, taken BEFORE anything is recorded.**
+    ///
+    /// `Ok(None)` on a node with no consumer: it relays and deduplicates for the network without
+    /// keeping a copy, and owes nobody one. `Err(())` when the inbox is full, and the caller must
+    /// then record NOTHING — see [`Self::admit_material`].
+    ///
+    /// This replaced an undo. The first repair recorded the digest, offered the bytes, and on a
+    /// failed `try_send` walked `seen_order` from the FRONT looking for the entry it had pushed to
+    /// the BACK one instruction earlier — a full 4096-element scan and a 96 KB memmove per inbound
+    /// message, inside the one `Mutex` that serialises every peer's gossip, on exactly the path an
+    /// attacker takes by keeping the inbox full. That is the shape the sibling fix in the same
+    /// commit condemns in the serve throttle. Reserving first means there is no undo to make
+    /// O(1): a payload this node cannot keep never becomes a digest it remembers.
+    fn inbox_permit(&self) -> Result<Option<mpsc::Permit<'_, PalwGossipEvent>>, ()> {
+        if !self.has_consumer() {
+            return Ok(None);
         }
-        let Some(position) = state.seen_order.iter().position(|(seen, _)| *seen == digest) else { return };
-        let Some((_, material)) = state.seen_order.remove(position) else { return };
-        let Some((peer, claim)) = material else { return };
-        if let Some(count) = state.materials_per_claim.get_mut(&claim) {
-            *count = count.saturating_sub(1);
-            if *count == 0 {
-                state.materials_per_claim.remove(&claim);
-            }
-        }
-        if let Some(count) = state.materials_per_peer_claim.get_mut(&(peer, claim)) {
-            *count = count.saturating_sub(1);
-            if *count == 0 {
-                state.materials_per_peer_claim.remove(&(peer, claim));
-            }
-        }
+        self.inbox_tx.try_reserve().map(Some).map_err(|_| ())
     }
 
     fn admit_digest(&self, digest: u64, material: Option<(PeerKey, Hash64)>, solicited: bool) -> PalwGossipAdmit {
@@ -466,22 +524,25 @@ impl PalwGossipCenter {
         if bytes.len() > PALW_MATERIAL_MAX_BYTES {
             return PalwGossipAdmit::TooBig;
         }
+        // **A payload the inbox cannot hold must not leave a digest behind.** The digest is what
+        // makes the next sighting a `Duplicate`, and `try_send` on a full inbox drops the newest,
+        // not the oldest — so one burst (or one slow tick of the panel service) made this node
+        // permanently blind to that claim: the pull built for exactly this case re-fetches the
+        // same bytes, they hash to the same digest, and `admit_digest` answers `Duplicate` for the
+        // next `SEEN_CAP` messages. The seat then holds no material, signs `Unavailable` at the
+        // half-window, and an honest producer is defaulted by a quorum.
+        //
+        // Taking the slot FIRST is the version of that with nothing to undo, and no counters
+        // charged to a claim whose payload was never kept.
+        let Ok(permit) = self.inbox_permit() else { return PalwGossipAdmit::Duplicate };
         let digest = self.digest(1, Some(&claim), bytes);
         let verdict = self.admit_digest(digest, Some((peer, claim)), self.is_solicited(claim));
-        // Drop-on-full: a node with no consumer is not obliged to remember.
-        if verdict == PalwGossipAdmit::Fresh && self.has_consumer() {
-            // **A payload the inbox refused must not leave its digest marked seen.** The digest is
-            // recorded before the bytes are offered, because the verdict is what the caller relays
-            // on — and `try_send` on a full inbox drops the newest, not the oldest. So a single
-            // burst (or a slow tick) used to make this node permanently blind to that claim: the
-            // pull built for exactly this case re-fetches the same bytes, they hash to the same
-            // digest, and `admit_digest` answers `Duplicate` for the next `SEEN_CAP` messages. The
-            // seat then holds no material, signs `Unavailable` at the half-window, and an honest
-            // producer is defaulted by a quorum.
-            if self.inbox_tx.try_send(PalwGossipEvent::Material { claim, bytes: bytes.to_vec() }).is_err() {
-                self.forget_digest(digest);
-                return PalwGossipAdmit::Duplicate;
-            }
+        // No permit means no consumer, which is most nodes: they relay and deduplicate for the
+        // network without keeping a copy.
+        if verdict == PalwGossipAdmit::Fresh
+            && let Some(permit) = permit
+        {
+            permit.send(PalwGossipEvent::Material { claim, bytes: bytes.to_vec() });
         }
         verdict
     }
@@ -491,9 +552,20 @@ impl PalwGossipCenter {
         if bytes.len() > PALW_RECEIPT_MAX_BYTES {
             return PalwGossipAdmit::TooBig;
         }
+        // Same order and the same reason: a receipt the inbox refused used to stay marked seen, so
+        // the re-broadcast that would have delivered it was a `Duplicate` and the quorum was one
+        // signature short for no reason a node could observe.
+        //
+        // The trade is the one `admit_material` already makes: a full inbox now stops the RELAY
+        // too, not just the copy. It costs a relay hop on panel nodes whose service is momentarily
+        // behind — every node without the role has no inbox to fill and relays unaffected — and it
+        // buys back the property that a payload this node could not keep can still arrive.
+        let Ok(permit) = self.inbox_permit() else { return PalwGossipAdmit::Duplicate };
         let verdict = self.admit_digest(self.digest(2, None, bytes), None, false);
-        if verdict == PalwGossipAdmit::Fresh && self.has_consumer() {
-            let _ = self.inbox_tx.try_send(PalwGossipEvent::Receipt { bytes: bytes.to_vec() });
+        if verdict == PalwGossipAdmit::Fresh
+            && let Some(permit) = permit
+        {
+            permit.send(PalwGossipEvent::Receipt { bytes: bytes.to_vec() });
         }
         verdict
     }
@@ -508,12 +580,22 @@ impl PalwGossipCenter {
     /// service had nothing to answer with, and the session ran out. Everyone else gets these bytes
     /// over the wire, so the executor being the one node without them was the wrong asymmetry.
     pub fn mark_own_material(&self, claim: Hash64, bytes: &[u8]) {
+        // **The slot first, and on this path the ordering decides a court case.** Marked-then-sent
+        // left a producer whose panel service was a moment behind PERMANENTLY blind to its own
+        // capture, with no way back at all: the echo a peer relays is the identical bytes, so it
+        // hashes to the identical digest and `admit_digest` answers `Duplicate`; a
+        // `PalwMaterialRequest` pull returns the same bytes with the same result; and re-running
+        // the execution is deterministic, so re-marking is a no-op. The doc above names what that
+        // costs — a dispute is opened against the executor and the executor has nothing to answer
+        // with. Not recording the digest when the payload could not be kept is what leaves the
+        // echo admissible.
+        let Ok(permit) = self.inbox_permit() else { return };
         // Charged to NO peer and to no claim slot: this node is not a remote flooder of its own
         // claim, and the counters exist to bound what remote peers may occupy (audit3 H7). The
         // digest is still recorded, which is what stops the echo being re-admitted.
         let _ = self.admit_digest(self.digest(1, Some(&claim), bytes), None, true);
-        if self.has_consumer() {
-            let _ = self.inbox_tx.try_send(PalwGossipEvent::Material { claim, bytes: bytes.to_vec() });
+        if let Some(permit) = permit {
+            permit.send(PalwGossipEvent::Material { claim, bytes: bytes.to_vec() });
         }
     }
 
@@ -660,7 +742,7 @@ mod tests {
         //     so a refused claim was never throttled and the identical request could be repeated
         //     immediately and indefinitely, with zero outbound traffic to make it visible.
         assert!(
-            center.served_recently.lock().unwrap().contains_key(&other),
+            center.served_recently.lock().unwrap().recorded_at(&other).is_some(),
             "a refused serve still costs the asker its throttle window, or the refusal is free and repeatable"
         );
     }
@@ -838,5 +920,131 @@ mod tests {
             }
         }
         assert_eq!((materials, receipts), (5, 1), "4 for claim 7, 1 for claim 8; the one receipt — marks push nothing");
+    }
+
+    /// **A stranger must not be able to switch the serve throttle off for everybody else** (audit
+    /// 2026-09-02).
+    ///
+    /// The first bound swept at the cap and, when the sweep freed nothing — which is exactly what
+    /// a flood of FRESH ids produces, since every entry is still inside its 60 s window — called
+    /// `clear()`. So ~287 KB of ~70-byte requests deleted the throttle record of every honest
+    /// claim at once, and audit3 H6's "a refused request is free and repeatable" was back for all
+    /// of them. A bounded map whose overflow behaviour is "forget everything" is a rate limiter
+    /// with a reset button.
+    #[tokio::test]
+    async fn the_serve_throttle_is_not_a_map_a_stranger_can_flush() {
+        let center = PalwGossipCenter::default();
+        let reads = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = reads.clone();
+        center.set_material_resolver(std::sync::Arc::new(move |_| {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Some(vec![0u8; 1024])
+        }));
+
+        // A stranger names a fresh claim per ~70-byte request, filling the map to one short of its
+        // cap. Its own requests stop being ANSWERED once its share is spent — the throttle is
+        // charged before the budget, which is the point — so what this buys is the map, not bytes.
+        let honest = h64(0xA11CE);
+        for n in 0..(SERVED_RECENTLY_CAP as u64 - 1) {
+            let _ = center.resolve_material_for_serve(peer(2), h64(1_000_000 + n)).await;
+        }
+        assert!(center.resolve_material_for_serve(peer(1), honest).await.is_some(), "the honest seat's pull is answered once");
+        assert_eq!(center.served_recently.lock().unwrap().len(), SERVED_RECENTLY_CAP, "the map is full, which is the precondition");
+        let reads_before = reads.load(std::sync::atomic::Ordering::SeqCst);
+
+        // **And now the flood continues against a full map.** Evicting one entry per insert, the
+        // oldest first, these fall on the flooder's own earlier ids and the honest record — the
+        // NEWEST in the map — is the last thing to go. `clear()` inverts that: the very first of
+        // these requests discards every record there is, the honest one included, for one
+        // ~70-byte message.
+        for n in 0..(SERVED_RECENTLY_CAP as u64 - 1) {
+            let _ = center.resolve_material_for_serve(peer(2), h64(2_000_000 + n)).await;
+        }
+
+        // The honest claim is inside its window still, and no message any peer can send may change
+        // that. Asked from a THIRD peer, so this is the claim throttle and not a spent budget.
+        assert!(
+            center.resolve_material_for_serve(peer(3), honest).await.is_none(),
+            "a flooder must not be able to buy this node a fresh read of somebody else's claim"
+        );
+        assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), reads_before, "and the disk was not touched for it");
+    }
+
+    /// **A serve attempt costs its asker a floor, whatever the attempt returns** (audit
+    /// 2026-09-02).
+    ///
+    /// The per-peer share bounded BYTES: the 16 MiB reservation was refunded down to the material's
+    /// real size, and refunded in full on every path that produced none. So a 1 KiB material left
+    /// one peer's 48 MiB good for tens of thousands of synchronous disk reads a minute, and a
+    /// request for a claim this node does not hold was free. What a request actually costs this
+    /// node is a blocking-pool thread and a `std::fs::read` — a per-REQUEST cost — so the ceiling
+    /// has to be per request too. This is the bound that still holds when the claim throttle has
+    /// been defeated, because it is keyed by `PeerKey` and nothing on the wire can flush it.
+    #[tokio::test]
+    async fn a_serve_attempt_costs_its_asker_a_floor_whatever_it_returns() {
+        let center = PalwGossipCenter::default();
+        let reads = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = reads.clone();
+        center.set_material_resolver(std::sync::Arc::new(move |_| {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Some(vec![0u8; 1024]) // a small material: the case the byte ceiling never bounded
+        }));
+
+        let attempts = 1500u64;
+        let mut served = 0usize;
+        for n in 0..attempts {
+            if center.resolve_material_for_serve(peer(1), h64(2_000_000 + n)).await.is_some() {
+                served += 1;
+            }
+        }
+        let ceiling = (SERVE_BUDGET_BYTES_PER_PEER / SERVE_ATTEMPT_FLOOR_BYTES) as usize;
+        assert!(
+            served <= ceiling,
+            "one peer forced {served} reads of a 1 KiB material against a {ceiling}-attempt ceiling — the share bounds bytes, \
+             and the cost of a request is not its bytes"
+        );
+        assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), served, "every read that happened produced a serve");
+        assert!(served > 0, "and an honest peer is still answered — the floor is a ceiling on volume, not a refusal");
+    }
+
+    /// **A producer that could not queue its own capture is not blind to it forever** (audit
+    /// 2026-09-02).
+    ///
+    /// `mark_own_material` recorded the digest and then dropped the payload on a full inbox — and
+    /// unlike the remote path there is no way back: the echo a peer relays is the identical bytes,
+    /// so it hashes to the identical digest and comes back `Duplicate`; a `PalwMaterialRequest`
+    /// pull returns the same bytes with the same result; and the execution is deterministic, so
+    /// re-running and re-marking is a no-op. The function's own doc block names what that costs —
+    /// "a producer whose own capture never reached its own panel service had nothing to answer
+    /// with, and the session ran out", i.e. a dispute is opened against the executor and the
+    /// executor is defaulted.
+    #[test]
+    fn a_producer_whose_inbox_was_full_can_still_receive_its_own_capture() {
+        let center = PalwGossipCenter::default();
+        let mut rx = center.take_inbox().expect("first taker");
+        for n in 0..INBOX_CAP as u64 {
+            assert_eq!(center.admit_material(peer(1), h64(n), b"payload"), PalwGossipAdmit::Fresh, "event {n} is queued");
+        }
+
+        let claim = h64(9_002);
+        let capture = b"the producer's own execution capture";
+        center.mark_own_material(claim, capture);
+
+        // The panel service catches up, and the echo a peer relays back is the only copy left.
+        let mut drained = 0usize;
+        while rx.try_recv().is_ok() {
+            drained += 1;
+        }
+        assert_eq!(drained, INBOX_CAP, "the inbox was full, which is the precondition this test needs");
+
+        assert_eq!(
+            center.admit_material(peer(2), claim, capture),
+            PalwGossipAdmit::Fresh,
+            "the executor's own bytes must still be admissible, or it has nothing to answer a court with"
+        );
+        match rx.try_recv() {
+            Ok(PalwGossipEvent::Material { claim: got, .. }) => assert_eq!(got, claim, "and its own panel finally holds it"),
+            other => panic!("the echo must reach the producer's own service, got {other:?}"),
+        }
     }
 }
