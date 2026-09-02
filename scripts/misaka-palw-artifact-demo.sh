@@ -588,13 +588,26 @@ PY
 
   # `n + 1` seeds: the N seats, plus one for the registrar, which runs on its own bond (see the
   # registration stage) so its panel cannot collide with a seat's.
+  #
+  # **TWO SPELLINGS OF THE SAME SEED, and the drill needs both.** `misaka key` and kaspad's
+  # `--palw-producer-key` read the 64-character HEX TEXT; `misaka-palw-fp-rail --bond-key-seed`
+  # and the gateway's `--derive-seed` call `read_seed`, which requires exactly 32 RAW bytes and
+  # dies with "the bond key seed is 64 bytes, not 32" on the hex form. The FP drill writes the
+  # hex form and then hands it to the rail, which is why its stage 4 cannot pass. It is one
+  # value in two encodings, both written from the same digest, so `.rawseed` is not a second
+  # secret to keep in step.
   python3 - "$WORK_DIR/keys" "$((NODES + 1))" <<'PY'
 import hashlib, os, sys
 d, n = sys.argv[1], int(sys.argv[2])
-h = lambda b: hashlib.blake2b(b, digest_size=32).hexdigest()
+def digest(b):
+    return hashlib.blake2b(b, digest_size=32).digest()
+def write(stem, raw):
+    hex_path, raw_path = f"{stem}.seed", f"{stem}.rawseed"
+    open(hex_path, "w").write(raw.hex()); os.chmod(hex_path, 0o600)
+    open(raw_path, "wb").write(raw); os.chmod(raw_path, 0o600)
 for i in range(n):
-    p = f"{d}/bond-{i}.seed"; open(p, "w").write(h(b"misaka-devnet-genesis-bond-v1/" + str(i).encode())); os.chmod(p, 0o600)
-p = f"{d}/main.seed"; open(p, "w").write(h(b"misaka-testnet-premine-9b-claude-managed")); os.chmod(p, 0o600)
+    write(f"{d}/bond-{i}", digest(b"misaka-devnet-genesis-bond-v1/" + str(i).encode()))
+write(f"{d}/main", digest(b"misaka-testnet-premine-9b-claude-managed"))
 PY
 
   declare -a ADDRS
@@ -743,7 +756,7 @@ PY
   all_nodes_logged "PALW lifecycle carried.*ClassLaneCertified" \
     || log "WARNING: not every node logged the class-lane binding — the commitment may be refused as uncertified"
 
-  EXEC_PUBKEY=$("$RAIL_BIN" --bond-key-seed "$WORK_DIR/keys/bond-0.seed" --print-bond-pubkey \
+  EXEC_PUBKEY=$("$RAIL_BIN" --bond-key-seed "$WORK_DIR/keys/bond-0.rawseed" --print-bond-pubkey \
     | python3 -c 'import json,sys; print(json.load(sys.stdin)["executor_pubkey"])') \
     || die "cannot read bond 0's public key from the rail"
   OPERATOR_ID=$(python3 - <<'PY'
@@ -769,13 +782,13 @@ JSON
   # one-response delivery of Decision 6 real. The seed must live OUTSIDE --identity's directory
   # and outside --outbox, and the gateway refuses otherwise.
   mkdir -p "$WORK_DIR/derive-seed"
-  cp "$WORK_DIR/keys/bond-0.seed" "$WORK_DIR/derive-seed/bond-0.seed"
+  cp "$WORK_DIR/keys/bond-0.rawseed" "$WORK_DIR/derive-seed/bond-0.rawseed"
   log "starting the gateway on 127.0.0.1:$GATEWAY_PORT"
   MISAKA_PALW_ARTIFACT="$MISAKA_PALW_ARTIFACT" MISAKA_PALW_TOKENIZER="$MISAKA_PALW_TOKENIZER" \
   MISAKA_PALW_NETWORK_ID="devnet" \
   "$GATEWAY_BIN" --listen "127.0.0.1:$GATEWAY_PORT" --worker "$WORKER_BIN" \
     --outbox "$WORK_DIR/outbox" --identity "$WORK_DIR/identity.json" \
-    --derive-seed "$WORK_DIR/derive-seed/bond-0.seed" \
+    --derive-seed "$WORK_DIR/derive-seed/bond-0.rawseed" \
     --rpc 127.0.0.1:17730 >"$WORK_DIR/gateway.log" 2>&1 &
   pids+=($!)
 
@@ -951,7 +964,7 @@ print(p["derivation"]["files"]["object"].rsplit(".derived-unsigned.borsh", 1)[0]
   $kind: the answer DERIVED and the claim was not submitted — set RAIL_FUNDING_OUTPOINT=<txid:index> and RAIL_FUNDING_AMOUNT=<sompi> to a UTXO bond 0 can spend (ADR-0077 Decision 4). The artifact and the signed object are in $WORK_DIR."
       idx=$((idx + 1)); continue
     fi
-    "$RAIL_BIN" --artifact "$stem" --bond-key-seed "$WORK_DIR/keys/bond-0.seed" \
+    "$RAIL_BIN" --artifact "$stem" --bond-key-seed "$WORK_DIR/keys/bond-0.rawseed" \
       --funding-outpoint "$RAIL_FUNDING_OUTPOINT" --funding-amount "$RAIL_FUNDING_AMOUNT" \
       --class-id "$CLASS_ID" --submit --rpc 127.0.0.1:17730 \
       --retention-dir "$WORK_DIR/node-0/palw-retention" \
@@ -961,7 +974,7 @@ print(p["derivation"]["files"]["object"].rsplit(".derived-unsigned.borsh", 1)[0]
 
     signed="$stem.derived-object.borsh"
     if [ ! -f "$signed" ]; then
-      "$RAIL_BIN" --derive-artifact "$stem" --bond-key-seed "$WORK_DIR/keys/bond-0.seed" >"$WORK_DIR/derived/$kind.sign.json" 2>&1 \
+      "$RAIL_BIN" --derive-artifact "$stem" --bond-key-seed "$WORK_DIR/keys/bond-0.rawseed" >"$WORK_DIR/derived/$kind.sign.json" 2>&1 \
         || { cat "$WORK_DIR/derived/$kind.sign.json" >&2; die "signing the $kind derivation failed"; }
     fi
     submit "$signed"
