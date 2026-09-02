@@ -23,7 +23,13 @@ CLI_BIN="${CLI_BIN:-$REPO_ROOT/target/release/misaka-cli}"
 CERTIFY_BIN="${CERTIFY_BIN:-$REPO_ROOT/target/release/palw-certify}"
 NODES="${NODES:-3}"
 WORK_DIR="${WORK_DIR:-$REPO_ROOT/.misaka-palw-certify-devnet}"
-WAIT="${WAIT:-240}"
+WAIT="${WAIT:-600}"
+# How long any one step may wait for the chain to advance. Every wait below is a POLL against
+# the chain rather than a fixed sleep: ADR-0076 seeds the devnet floor at MAX/278 instead of
+# MAX/2, so a block is ~279 draws (~14 s) where it used to be two, and every fixed sleep in this
+# script was sized for ~4 blocks/s. A poll is right at both cadences and at whatever the seed
+# rule produces next.
+STEP_WAIT="${STEP_WAIT:-300}"
 PREMINE_TXID="6d6973616b612d7072656d696e65$(printf '0%.0s' $(seq 1 100))"   # "misaka-premine" zero-padded to 64 bytes
 MAIN_PREMINE_INDEX=40   # consensus/core/src/config/premine.rs; bond n's fee float sits at MAIN_PREMINE_INDEX + 1 + n
 
@@ -67,13 +73,40 @@ for ((i=0; i<NODES; i++)); do
 done
 
 blocks_of() { grep -c "produced block #" "$WORK_DIR/node-$1.log" 2>/dev/null || true; }
+
+# Wait for node-0 to produce `n` more blocks than it had on entry. Returns after the deadline
+# rather than dying: the verdict below is the one that decides PASS/FAIL, and a step that timed
+# out should reach it with its evidence rather than hide the reason in a wait.
+advance() {
+  local want="${1:-1}" from now
+  from=$(blocks_of 0)
+  local deadline=$((SECONDS + STEP_WAIT))
+  while :; do
+    now=$(blocks_of 0)
+    [ $((now - from)) -ge "$want" ] && return 0
+    [ $SECONDS -lt $deadline ] || { log "node-0 gained $((now - from))/$want block(s) in ${STEP_WAIT}s — continuing"; return 0; }
+    sleep 2
+  done
+}
+
+# Wait until every node has logged `pattern`, or the deadline passes.
+all_nodes_logged() {
+  local pattern="$1" deadline=$((SECONDS + STEP_WAIT)) i ok
+  while :; do
+    ok=1
+    for ((i=0; i<NODES; i++)); do grep -q "$pattern" "$WORK_DIR/node-$i.log" || ok=0; done
+    [ "$ok" = 1 ] && return 0
+    [ $SECONDS -lt $deadline ] || { log "not every node logged \"$pattern\" within ${STEP_WAIT}s — continuing to the verdict"; return 0; }
+    sleep 3
+  done
+}
 deadline=$((SECONDS + WAIT))
 until [ "$(blocks_of 0)" -ge 3 ]; do
   [ $SECONDS -lt $deadline ] || { tail -30 "$WORK_DIR/node-0.log" >&2; die "node-0 produced no blocks within ${WAIT}s"; }
   sleep 3
 done
 log "node-0 produced $(blocks_of 0) blocks; waiting for the peers to follow"
-sleep 10
+advance 1
 
 CLI=("$CLI_BIN" --network devnet --rpc 127.0.0.1:17610)
 # An object above one carrier's bytes was written as `<f>.chunkN` files by palw-certify; submit
@@ -86,21 +119,24 @@ submit() {
     args=(--object "$f")
   fi
   "${CLI[@]}" palw submit-object --key-file "$WORK_DIR/keys/main.seed" "${args[@]}" --yes
-  # The next burst funds itself from this one's change, which must be in a block first.
-  sleep 8
+  # The next burst funds itself from this one's change, which must be in a block first — and a
+  # chunked object needs one carrier per chunk, so wait for two blocks rather than one.
+  advance 2
 }
 
 "$CERTIFY_BIN" drill --family base0 --lane fp --out "$WORK_DIR/obj/base0-fp.obj"
 submit "$WORK_DIR/obj/base0-fp.obj"
-sleep 12
+advance 1
 "$CERTIFY_BIN" bind --model-id "PALW-BASE-0/rc" --lane fp --out "$WORK_DIR/obj/base0-bind.obj"
 submit "$WORK_DIR/obj/base0-bind.obj"
-sleep 12
+advance 1
 "$CERTIFY_BIN" drill --family base0 --lane attempt --out "$WORK_DIR/obj/base0-attempt.obj"
 "$CERTIFY_BIN" drill --family a16 --lane attempt --out "$WORK_DIR/obj/a16-attempt.obj"
 "$CERTIFY_BIN" drill --family qwen36 --lane attempt --out "$WORK_DIR/obj/qwen36-attempt.obj"
 submit "$WORK_DIR/obj/base0-attempt.obj"; submit "$WORK_DIR/obj/a16-attempt.obj"; submit "$WORK_DIR/obj/qwen36-attempt.obj"
-sleep 45
+# The verdict's own conditions, polled: every node reassembles a chunk group and carries the bind.
+all_nodes_logged "assembled from its chunks"
+all_nodes_logged "PALW lifecycle carried.*ClassLaneCertified"
 
 fail=0
 for ((i=0; i<NODES; i++)); do
