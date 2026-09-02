@@ -14,6 +14,14 @@ nothing is skipped by the retarget).
 
 ---
 
+> **Amended (index reconciliation, 2026-09-02).** Decision 2's floor reserve
+> (`base_class_reserve_permille = 500‰`) is [ADR-0068](0068-the-llm-primary-economy-and-the-floors-minimum.md)'s
+> 20‰ since Relaunch 5 — the floor retires to the doctrine's minimum and the growth walk stops
+> there. Decision 1's walk is the one share rule ([ADR-0056](0056-palw-permissionless-class-admission-and-share-economy.md)
+> Decision 4 was withdrawn in its favour), it counts merged work ([ADR-0058](0058-palw-merged-work-is-counted.md)),
+> and it may not grow a class whose family is uncertified ([ADR-0069](0069-e2e-adjudicability-is-the-price-of-weight.md):
+> a zero share is a certification state, not a small one). Map: [`README.md`](README.md).
+
 ## Context — the measurement that forced this
 
 A post-genesis entrant takes `min_grantable_share_permille` and nothing else: `verify_class_admission_v2`
