@@ -31,6 +31,8 @@ mod node;
 mod palw_fp;
 #[cfg(feature = "evm-send")]
 mod prea;
+/// ADR-0079 Decision 13: `node security-report` — the host posture, printed from live state.
+mod security;
 mod setup;
 mod validator_reader;
 mod wallet;
@@ -53,6 +55,13 @@ pub mod exit {
     pub const LIVENESS_WEDGED: i32 = 11;
     /// `node liveness`: the node answers but its chain has not moved within the stall window.
     pub const LIVENESS_STALLED: i32 = 12;
+    /// `node security-report` (ADR-0079 Decision 13): a PUBLIC entrance on a host whose
+    /// confinement backend is `none`, or a process that parses public input while holding key
+    /// material. Decision 10's refusals, observed after the fact rather than at startup.
+    pub const SECURITY_EXPOSED: i32 = 13;
+    /// `node security-report`: no platform confinement backend is in force, but nothing public is
+    /// exposed behind it. The environment discipline is the whole of the posture.
+    pub const SECURITY_DEGRADED: i32 = 14;
 }
 
 /// A CLI error that carries the process exit code to surface.
@@ -586,6 +595,24 @@ enum NodeCmd {
         #[arg(long, default_value_t = 900)]
         stall_secs: u64,
     },
+    /// Print the host's SECURITY POSTURE from live state (ADR-0079 Decision 13): the confinement
+    /// backend actually in force, the worker environment as a child actually receives it, every
+    /// listening socket with its bind address and whether the acknowledgement variable was
+    /// required, which processes hold key material, the artifact paths and their digests, and the
+    /// interpreter fence read off the running node's own argv. Never printed from config, and
+    /// `none` is reported honestly where a backend is missing. Exits 13 (EXPOSED) when a public
+    /// entrance runs on a `none`-backend host or a public parser holds a key, 14 (DEGRADED) when
+    /// there is no backend and nothing public behind it. Signed by nobody; earns nothing.
+    SecurityReport {
+        /// Probe this worker's manifest for the roots it verified at load. Optional: without it
+        /// the artifact section reports paths and says it did not probe.
+        #[arg(long)]
+        worker: Option<std::path::PathBuf>,
+        /// Recompute the SHA-256 of every artifact path from its BYTES. This is a full read — the
+        /// hybrid class's artifact is 33 GiB — so it is opt-in.
+        #[arg(long, default_value_t = false)]
+        verify_artifacts: bool,
+    },
     /// Show the effective local node RPC endpoints (the registry the node wrote, else the
     /// network defaults). Lets you see what `misaka miner`/`validator` will auto-connect to.
     Endpoints,
@@ -813,6 +840,9 @@ async fn main() -> std::process::ExitCode {
     let result = match cli.command {
         Command::Node(NodeCmd::Doctor) => node::doctor(&ctx).await,
         Command::Node(NodeCmd::Liveness { state, stall_secs }) => node::liveness(&ctx, &state, stall_secs).await,
+        Command::Node(NodeCmd::SecurityReport { worker, verify_artifacts }) => {
+            security::security_report(&ctx, worker.as_ref(), verify_artifacts)
+        }
         Command::Node(NodeCmd::Endpoints) => bootstrap::endpoints(ctx.output, &ctx.network),
         Command::Node(NodeCmd::Start(a)) => {
             forward::node(&ctx, a.profile.as_deref(), a.node_profile.as_deref(), a.vps_8gb, a.min_disk_free_percent, &a.args, false)
