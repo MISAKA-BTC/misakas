@@ -162,8 +162,26 @@ pub const PALW_WIDEST_STEP_BINDING_BYTES_V1: u64 = 13_996;
 /// The derivation is the two ceilings over the carrier: `⌈(max_close_bytes + widest binding) /
 /// PALW_OBJECT_CHUNK_MAX_BYTES⌉`, saturated at the chunk cap. At the shipped ceilings that is
 /// `⌈(81,920 + 13,996) / 100,000⌉ = 1` — every admissible close is ONE carrier, with 4,084 bytes
-/// to spare. **Raise `max_close_bytes` past that headroom and this follows on its own**, which is
-/// the point of deriving it: the reserve cannot go stale behind the ceiling it prices.
+/// to spare.
+///
+/// **This is a floor from the transport that exists TODAY, and it is NOT the rule.** The rule is a
+/// ruleset quantity — `PalwCourtParamsV2::max_close_chunks`, ADR-0080 W3 — because the worst case a
+/// court session may be asked to assemble is what the ruleset admits, not what the rows registered
+/// this morning happen to need. Deriving it from the live ceilings makes it 1 now and silently
+/// stale the day a wide row registers, which is the same shape as the constant it replaced: a
+/// number that was true when it was written.
+///
+/// It is derived here anyway, rather than pinned again, because the ruleset field does not exist
+/// yet and a floor that moves with the transport is checkable while a guessed constant is not.
+/// **When W3 lands, this function and [`PALW_COURT_ASSEMBLY_RESERVE_DAA_V1`] must both go** and the
+/// reserve becomes `2 × PALW_COURT_CHUNKED_CLOSES_PER_SIDE_V1 × court.max_close_chunks()`, read per
+/// session. `the_reserve_is_still_a_floor_because_the_ruleset_has_no_chunk_count` fails on the day
+/// the field appears, so this note cannot outlive the gap it describes.
+///
+/// One thing that reads like a contradiction and is not: `PALW_OBJECT_CHUNK_MAX_COUNT` = 8 caps
+/// `ObjectChunk`, the CERTIFICATION lane's transport, and it does not bind the court. ADR-0080
+/// design A gives a close's group its own table at `(session_id, side)` — `court_close_groups`,
+/// built by W5 — so a chunk count above 8 is not impossible, it merely has no transport yet.
 pub const fn palw_close_max_chunks_v1(max_close_bytes: u64) -> u64 {
     let carrier = crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES as u64;
     let cap = crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_COUNT as u64;
@@ -843,6 +861,31 @@ mod tests {
         ));
         assert_eq!(66 * PALW_DEVNET_WINDOWS_V1.court_turn_deadline, 264);
         assert_eq!(66 * derived + PALW_COURT_ASSEMBLY_RESERVE_DAA_V1, 272);
+    }
+
+    /// **The reserve is a FLOOR only because the ruleset cannot yet state the rule** — and this
+    /// test ends the day it can.
+    ///
+    /// `palw_close_max_chunks_v1` derives from the live ceilings, which answers "what does a close
+    /// need today" and not "what may a session be asked to assemble". The second question is the
+    /// one a reserve must answer, and its answer is a `PalwCourtParamsV2` field (ADR-0080 W3).
+    /// Until that field exists the derivation is the best checkable floor available; once it
+    /// exists, leaving the derivation in place would under-reserve every window whose ruleset
+    /// admits more than today's rows need.
+    ///
+    /// So this asserts the ABSENCE of the field, and fails when it arrives. A comment saying
+    /// "revisit when W3 lands" would not have failed; it would have been read, believed, and left.
+    #[test]
+    fn the_reserve_is_still_a_floor_because_the_ruleset_has_no_chunk_count() {
+        let mode_src = include_str!("palw_mode_v2.rs");
+        assert!(
+            !mode_src.contains("max_close_chunks"),
+            "PalwCourtParamsV2 now carries max_close_chunks. The assembly reserve must stop deriving \
+             from the live ceilings and read the ruleset instead: 2 x PALW_COURT_CHUNKED_CLOSES_PER_SIDE_V1 \
+             x court.max_close_chunks(), per session. Delete palw_close_max_chunks_v1 and \
+             PALW_COURT_ASSEMBLY_RESERVE_DAA_V1, and re-derive both windows -- devnet's may need widening \
+             at that point, which it did NOT need against a tree with no court chunk transport."
+        );
     }
 
     /// **The reserve is DERIVED, and it leaves every shipped window alone** — ADR-0080 W4's
