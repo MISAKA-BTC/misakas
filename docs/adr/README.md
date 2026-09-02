@@ -35,7 +35,7 @@ ADR-0067 (classes are chain data, kernels are the build) → ADR-0068 (the LLM-p
 ADR-0069 / ADR-0070 (weight is the price of end-to-end adjudicability; the model tiers are
 adjudicable) → ADR-0072 (+ Decision 8) / ADR-0074 (the ticket is the execution; the attempt is a
 claim drawn by the chain's beacon) → ADR-0073 (real-demand work bears the weight — Phases ① and ③
-landed, ② and ④ open) → ADR-0075 (certification is a consensus object) → ADR-0076 (per-class
+landed, ② in force, ④ open) → ADR-0075 (certification is a consensus object) → ADR-0076 (per-class
 attempt-lane seed) → *on branches, PROPOSED:* ADR-0077 (a prompt a person would type is a claim the
 court can try — one runtime, checkpoint-priced court, the 512-token rows), ADR-0078 (what was made
 from it is committed; the thing itself never rides — derived artifacts), ADR-0079 (a pure function
@@ -191,11 +191,19 @@ survives only as the unrouted `TESTNET11_PARAMS` constant.
 
 ## What the current direction still owes (open items recorded in the ADRs)
 
-* **ADR-0073 Phases ② and ④** — the receipt lane's weight activation (gated on ① and ③, both
-  landed) and the receipt block's chain position / share migration (`algo_id_carries_no_chain_position(7)`
+* **ADR-0073 Phase ④** — Phase ② is **NOT open**: it names no switch, only the conjunction "① has
+  landed and the class is FP-certified, and ③ has landed", and both hold on `main`
+  (`palw_freeprompt_v3.rs:349`, `palw_state_v2.rs:6178-6183` price a quantum in leaves;
+  `palw_state_v2.rs:6172-6177` refuses an uncertified class's claim). A grep for a Phase-② fence
+  returns nothing, so arming it would be an empty diff. What is open is Phase ④ and the receipt block's chain position / share migration (`algo_id_carries_no_chain_position(7)`
   still true; 0055 D1 stands until then).
-* **ADR-0075** — the SDK preflight and the gateway still read the build's certified set, not the
-  chain's; the mainnet card is empty until real operator keys exist.
+* **ADR-0075** — **corrected 2026-09-02 against the tree: the SDK half is CLOSED.**
+  `PalwClassSdk` takes the chain's set as an argument (`terms.chain_certified_families`,
+  `misaka-palw-sdk/src/sdk.rs:496,569,583`), so it reads genesis ∪ chain. What remains is the
+  GATEWAY: `misaka-palw-gateway/src/` contains no reference to a certified set at all, so it cannot
+  tell a chain-certified class from an uncertified one — which is also ADR-0077 Decision 3's
+  requirement that the gateway read the chain it commits to. The mainnet card is still empty until
+  real operator keys exist.
 * **ADR-0076 §8** — restated 2026-09-02: the processor already pins a post-genesis entrant's
   `initial_target` to the base class's live target (M2-12), so the field is not free; what stays
   open is that the pinned price is the floor's until `ClassLaneCertified` re-seeds it (Decision 4),
@@ -208,8 +216,11 @@ survives only as the unrouted `TESTNET11_PARAMS` constant.
 * **ADR-0071 §5** — a false capability declaration costs nothing, and pricing it collides with the
   silence doctrine.
 * **ADR-0069** — a zero-share class's floor block still adds pwu to fork choice.
-* **ADR-0067** — operational arming of chain-registered classes (`--palw-chain-classes`); nothing
-  pays a panel seat (R-7).
+* **ADR-0067** — **not unimplemented: unarmed.** `--palw-chain-classes` is shipped
+  (`kaspad/src/args.rs:238,979`, `daemon.rs:1328,1522`, and `palw_backends.rs:43`, whose comment
+  names the flag as the fence's only caller), and testnet-11's launchers do not pass it. Arming is
+  an operator act with the conditions ADR-0067 Decision 5 and its security amendment state.
+  Separately, nothing pays a panel seat (R-7).
 * **ADR-0066 D4** — the committed liveness table (the pruned-IBD snapshot component) and the leak
   fence's arming; **ADR-0065 D1** — seat maturity is armable and unarmed; seat accountability past
   the D4 fence is zero until receipts ride the chain independently.
@@ -219,7 +230,11 @@ survives only as the unrouted `TESTNET11_PARAMS` constant.
   derivation and the `miner` subcommand.
 * **ADR-0070** — the hybrid's checkpoint-anchored recurrence (`n_ctx 8` until then), the per-token
   `embed_lift.a16` store, the `MulElem` cost arm's under-pricing; **ADR-0049 D-G** — the tied-head
-  inventory; **ADR-0053 D1a** — the genesis path does not check court-cost ceilings.
+  inventory. (**ADR-0053 D1a is CLOSED and this index was wrong**: the catalog carries
+  `court_cost` (`palw_mode_v2.rs:840`), the genesis loader runs `verify_against_catalog` before any
+  registration (`palw_genesis_v2.rs:138`), and the three ceilings are checked at
+  `palw_mode_v2.rs:948/953/958`; `palw_rc_shipped_params` panics rather than boot a network that
+  breaks one. The re-mint that carried it is already in the fingerprint trail at `params.rs:8125`.)
 * **ADR-0045 D2 / 0056** — the mid-epoch budget gap (an entrant has no attempt-lane budget until
   the next boundary), kept for state-root compatibility.
 
@@ -260,7 +275,7 @@ amendment is rewritten. Four principles recur, and are the ones to check first i
 
 Not amended, by decision: [0023](0023-base-three-lane-execution.md) (forward-looking, nothing
 started, outside the PALW lineage — a security pass belongs to the ADR that revives it); 0049 D-G,
-0053 D1a and 0070's open items are correctness gaps in the court's coverage rather than adversarial
+and 0070's open items are correctness gaps in the court's coverage rather than adversarial
 surfaces, and are listed under "What the current direction still owes".
 
 ## Still governing, unreversed
@@ -270,7 +285,7 @@ surfaces, and are listed under "What the current direction still owes".
 amended), 0045 (as amended), 0046, 0047, 0049 (as amended), 0050, 0052 (as amended), 0053, 0054,
 0055, 0056 (D4 withdrawn), 0057, 0058, 0059, 0060 (the doctrine; D1/D2/D4 in 0066's form), 0061,
 0064 (Facts A and B), 0065 (D1, D2a, D4–D6), 0066 (D1, D2, D4's fence), 0067, 0068, 0069 (as
-amended by 0075), 0070, 0071 (D1a, D2's bucket, D3), 0072, 0073 (① and ③; ② decided, ④ open), 0074,
+amended by 0075), 0070, 0071 (D1a, D2's bucket, D3), 0072, 0073 (①, ② and ③ in force; ④ open), 0074,
 0075, 0076. Proposed and unlanded: 0062, 0063. Dormant, not on the V2 path: 0032, 0033. Forward-looking
 and not started: 0023 (Base three-lane execution; the EVM lane it builds on is 0020, activated).
 

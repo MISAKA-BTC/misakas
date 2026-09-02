@@ -48,6 +48,33 @@ pub enum TokenizerError {
     /// Decoding produced bytes that are not UTF-8. Returned rather than replaced: a runtime that
     /// silently substitutes U+FFFD hides a real decoding bug.
     NotUtf8,
+    /// [`QwenTokenizer::encode_without_specials`] found an added token's id in its OWN ordinary
+    /// output (ADR-0077 Decision 6, ADR-0079 Decision 7).
+    ///
+    /// Not a theoretical guard. `encode_ordinary` looks its merged pieces up in the same
+    /// vocabulary the added tokens live in, so any added token whose content the pre-tokenizer
+    /// does NOT split — a `<pad>`-style marker, or any of the plain-looking strings a GGUF is free
+    /// to declare `USER_DEFINED` — is reachable from prose, and the whole promise of the segment
+    /// arm is that prose cannot reach one. A pattern that happens to split every marker in today's
+    /// two checkpoints is not that promise; checking the output is.
+    ControlTokenFromText(u32),
+}
+
+impl TokenizerError {
+    /// **The reason, with nothing of the input in it** (ADR-0079 SA-7).
+    ///
+    /// [`Self::Unrepresentable`] carries the piece that had no id, which is a fragment of whatever
+    /// text was encoded — for the free-prompt worker that is a stranger's prompt. `Display` is
+    /// right for a converter's console and wrong for anything a prompt reaches, so the two forms
+    /// are named separately rather than left to each caller's judgement about which one it holds.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Malformed(_) => "the tokenizer file is not the shape this loader reads",
+            Self::Unrepresentable(_) => "a piece of the text has no id in this vocabulary",
+            Self::NotUtf8 => "the decoded bytes are not UTF-8",
+            Self::ControlTokenFromText(_) => "ordinary text encoded to a control token, which no text may produce",
+        }
+    }
 }
 
 impl std::fmt::Display for TokenizerError {
@@ -56,6 +83,7 @@ impl std::fmt::Display for TokenizerError {
             Self::Malformed(what) => write!(f, "tokenizer.json: {what}"),
             Self::Unrepresentable(p) => write!(f, "no token covers the piece {p:?}"),
             Self::NotUtf8 => write!(f, "decoded bytes are not UTF-8"),
+            Self::ControlTokenFromText(id) => write!(f, "ordinary text encoded to the added token {id}, which no text may produce"),
         }
     }
 }
@@ -248,6 +276,54 @@ impl QwenTokenizer {
         self.added.iter().find(|a| a.content == content).map(|a| a.id)
     }
 
+    /// **Every added token, by name and id** — the table a worker publishes in its manifest
+    /// (`PalwFpWorkerManifestV1::special_tokens`) so a gateway builds
+    /// `PalwFpPromptSegmentV1::Special` from a NAME it looked up and never from an id it guessed.
+    ///
+    /// Read-only, and deliberately the whole table rather than a curated subset: which of a
+    /// model's control tokens a template needs is the template's business, and a runtime that
+    /// filtered the list would decide it silently for every future template.
+    pub fn added_tokens(&self) -> &[AddedToken] {
+        &self.added
+    }
+
+    /// Is this id one of the added tokens? The check behind a `Special` segment: a gateway names a
+    /// control token from the manifest's table, so an id that is not in it is not a control token
+    /// however plausible it looks, and passing it through would be a prompt nobody wrote.
+    pub fn is_added_id(&self, id: u32) -> bool {
+        self.added.iter().any(|a| a.id == id)
+    }
+
+    /// **Encode text that must never become a control token** (ADR-0077 Decision 6).
+    ///
+    /// [`Self::encode`] matches added tokens FIRST, on the raw text, which is correct for a
+    /// rendered template and is exactly the smuggling path Decision 6 closes: under it a user who
+    /// types the twelve literal characters `<|im_start|>` hands the model a control id, ends the
+    /// system turn early and speaks in the template's own voice. This entry point does not consult
+    /// the added-token table at all — the text becomes ordinary byte-level BPE pieces, whatever it
+    /// spells — so the only way a control id reaches the prompt is a
+    /// `PalwFpPromptSegmentV1::Special` the GATEWAY emitted.
+    ///
+    /// [`Self::encode`] is left exactly as it was: the v1 plain-marker template and the replay
+    /// paths depend on its behaviour, and a tokenizer with two rules must say which one it is
+    /// applying rather than change the one everybody already calls.
+    ///
+    /// **The result is checked, not assumed.** Skipping the added-token MATCH is not the same as
+    /// producing no added-token ID: `encode_ordinary` resolves its merged pieces against the same
+    /// vocabulary the added tokens live in, so an added token the pre-tokenizer does not split
+    /// would come back out of the ordinary path. Today's two checkpoints spell their markers
+    /// `<|…|>`, which the pattern does split — but "the marker happens to contain characters the
+    /// current pattern breaks on" is a coincidence, and Decision 6 is a promise. So the promise is
+    /// enforced where it can be seen: on the ids this returns.
+    pub fn encode_without_specials(&self, text: &str) -> Result<Vec<u32>, TokenizerError> {
+        let mut out = Vec::new();
+        self.encode_ordinary(text, &mut out)?;
+        if let Some(id) = out.iter().find(|id| self.is_added_id(**id)) {
+            return Err(TokenizerError::ControlTokenFromText(*id));
+        }
+        Ok(out)
+    }
+
     /// Encode text to token ids.
     ///
     /// Added tokens are matched first, on the RAW text, before normalization: they are declared
@@ -324,6 +400,28 @@ impl QwenTokenizer {
                 return parts;
             }
         }
+    }
+
+    /// **The bytes of ONE token** — the primitive a streaming detokenizer needs (ADR-0077
+    /// Decision 2; the `Token` frame carries "this id's rendering alone").
+    ///
+    /// `None`, and not an error, for an id this table does not hold. That is a NORMAL id: a class
+    /// registers a padded `vocab_size` and the engine's argmax may select anywhere in its logit
+    /// row, so a model can legitimately produce an id past the tokenizer's own table. The caller
+    /// renders nothing for it and keeps going — the alternative, which this replaces, was a
+    /// `decode` failure that threw away a completed inference because one token had no spelling.
+    ///
+    /// The concatenation over a run's ids is exactly the answer's bytes, which is what lets a
+    /// worker's streamed pieces and its final `rendered` field be the same bytes by construction
+    /// rather than by two decoders agreeing.
+    pub fn token_bytes(&self, id: u32) -> Option<Vec<u8>> {
+        let token = self.tokens.get(id as usize)?;
+        if self.added.iter().any(|a| a.id == id) {
+            return Some(token.as_bytes().to_vec());
+        }
+        // A token holding a character outside the byte table has no byte spelling; it is skipped
+        // rather than substituted, for the same reason `decode` refuses U+FFFD.
+        token.chars().map(|c| self.char_to_byte.get(&c).copied()).collect()
     }
 
     /// Decode ids back to text.
@@ -503,9 +601,150 @@ pub fn qwen_chat_prompt(system: Option<&str>, turns: &[(&str, &str)]) -> String 
     out
 }
 
+/// **A byte-level tokenizer over a tiny vocabulary, for the tests that need one.**
+///
+/// Every one of the 256 byte characters is its own token and there are no merges, so any text is
+/// representable and every id below 256 decodes to exactly one byte — which is what lets a test
+/// assert about the SHAPE of an encoding (ordinary pieces vs a control id) without shipping a
+/// 150,000-entry vocabulary into the test binary. The two control tokens are declared the way a
+/// GGUF declares them (`token_type` 3 = CONTROL), so they land in the added-token table and
+/// `encode` matches them on raw text exactly as it does for the real Qwen files.
+///
+/// The table is [`FIXTURE_VOCAB`] entries wide and not the 258 the two control tokens would make
+/// it: a fixture ENGINE's logit row is its class's `vocab_size` wide and its argmax can select any
+/// id in it, so a tokenizer narrower than the class could not spell its own model's answer. The
+/// two filler ids are declared USER_DEFINED, which is what a GGUF calls a token matched whole that
+/// is not a control.
+///
+/// Placed here, immediately before the test module, so the float-free guard's scan of this file
+/// still ends where it always did.
+#[cfg(test)]
+pub(crate) const FIXTURE_VOCAB: u32 = 260;
+
+#[cfg(test)]
+pub(crate) fn byte_level_fixture_v1() -> (QwenTokenizer, u32, u32) {
+    let table = byte_to_char_table();
+    let mut tokens: Vec<String> = table.iter().map(|c| c.to_string()).collect();
+    let mut types = vec![1i64; tokens.len()];
+    let im_start = tokens.len() as u32;
+    tokens.push("<|im_start|>".to_string());
+    types.push(3);
+    let im_end = tokens.len() as u32;
+    tokens.push("<|im_end|>".to_string());
+    types.push(3);
+    while (tokens.len() as u32) < FIXTURE_VOCAB {
+        tokens.push(format!("<|fixture_{}|>", tokens.len()));
+        types.push(4);
+    }
+    let tokenizer = QwenTokenizer::from_gguf(&tokens, &[], &types).expect("the byte-level fixture builds");
+    (tokenizer, im_start, im_end)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **ADR-0077 Decision 6: user text can never smuggle a control token.**
+    ///
+    /// The same twelve characters, through the two entry points: `encode` matches the added token
+    /// on raw text and emits the control id — correct for a rendered template, and the reason the
+    /// segment-wise arm exists — while `encode_without_specials` never consults the table and
+    /// emits ordinary byte pieces. If this ever produced the control id, a user who typed
+    /// `<|im_start|>` would be speaking in the template's voice.
+    #[test]
+    fn user_text_spelling_a_control_token_encodes_to_ordinary_pieces() {
+        let (tokenizer, im_start, im_end) = byte_level_fixture_v1();
+        let literal = "<|im_start|>";
+
+        assert_eq!(tokenizer.encode(literal).expect("the added-token path encodes"), vec![im_start]);
+
+        let ordinary = tokenizer.encode_without_specials(literal).expect("the specials-disabled path encodes");
+        assert_eq!(ordinary.len(), literal.len(), "with no merges every byte is its own piece");
+        assert!(!ordinary.contains(&im_start), "the specials-disabled path emitted the control id it exists to refuse");
+        assert!(!ordinary.contains(&im_end));
+        // And it is a real encoding, not an escape: it decodes back to what the user typed.
+        assert_eq!(tokenizer.decode(&ordinary).expect("byte pieces decode"), literal);
+    }
+
+    /// **Per-token bytes: the concatenation over a run is the answer, and an id with no spelling
+    /// is skipped rather than fatal.**
+    ///
+    /// The property a streamed answer rests on (ADR-0077 Decision 2). The last assertion is the
+    /// one that matters: a class's registered `vocab_size` is padded past the tokenizer's table,
+    /// the engine's argmax can select there, and `decode` refuses such a run outright — which
+    /// would throw away a completed inference over a token that has no spelling.
+    #[test]
+    fn a_tokens_bytes_concatenate_to_the_answer_and_a_padded_id_renders_nothing() {
+        let (tokenizer, im_start, _) = byte_level_fixture_v1();
+        let ids = tokenizer.encode("hi <|im_start|>").expect("the fixture encodes");
+        let joined: Vec<u8> = ids.iter().filter_map(|id| tokenizer.token_bytes(*id)).flatten().collect();
+        assert_eq!(joined, b"hi <|im_start|>".to_vec(), "the pieces are the whole text");
+        assert_eq!(tokenizer.token_bytes(im_start), Some(b"<|im_start|>".to_vec()), "an added token spells itself");
+
+        // A multi-byte character straddles tokens, and no single piece is valid UTF-8 on its own.
+        let kanji = tokenizer.encode("字").expect("the fixture encodes");
+        assert_eq!(kanji.len(), 3, "no merges: one piece per byte");
+        assert!(kanji.iter().all(|id| tokenizer.token_bytes(*id).map(|b| b.len()) == Some(1)));
+        assert_eq!(kanji.iter().filter_map(|id| tokenizer.token_bytes(*id)).flatten().collect::<Vec<u8>>(), "字".as_bytes());
+
+        // Past the table: `None`, not an error, and `decode` shows why that distinction exists.
+        assert_eq!(tokenizer.token_bytes(FIXTURE_VOCAB), None);
+        assert!(tokenizer.decode(&[FIXTURE_VOCAB]).is_err(), "the strict decoder refuses a whole run for one such id");
+    }
+
+    /// **The no-specials path checks its own output, and here is the vocabulary that needs it.**
+    ///
+    /// Decision 6 rests on "ordinary encoding cannot produce a control id". Disabling the added-
+    /// token MATCH does not establish that: `encode_ordinary` resolves its pieces against the same
+    /// vocabulary the added tokens live in, so an added token the pre-tokenizer does not split
+    /// comes straight back out. Today's Qwen files spell their markers `<|…|>` and the pattern
+    /// splits those — but a GGUF may declare any token `USER_DEFINED`, including a one-character
+    /// one, and then the pattern splits nothing. This fixture declares exactly that, and the
+    /// promise holds because it is checked rather than inferred.
+    #[test]
+    fn ordinary_text_that_resolves_to_an_added_token_is_refused() {
+        let table = byte_to_char_table();
+        let tokens: Vec<String> = table.iter().map(|c| c.to_string()).collect();
+        let mut types = vec![1i64; tokens.len()];
+        types[b'x' as usize] = 4;
+        let tokenizer = QwenTokenizer::from_gguf(&tokens, &[], &types).expect("the fixture builds");
+        assert!(tokenizer.is_added_id(b'x' as u32), "the fixture declares an ordinary-looking added token");
+
+        assert!(tokenizer.encode_without_specials("ab").is_ok(), "text that touches none of it still encodes");
+        let err = tokenizer.encode_without_specials("axb").expect_err("prose reached an added token and was refused");
+        assert!(matches!(err, TokenizerError::ControlTokenFromText(id) if id == b'x' as u32), "{err}");
+        // The plain path still emits it: that is its job, and it is the reason the two are named
+        // apart rather than one function with a flag nobody reads at the call site.
+        assert_eq!(tokenizer.encode("axb").expect("the plain path encodes"), vec![b'a' as u32, b'x' as u32, b'b' as u32]);
+    }
+
+    /// ADR-0079 SA-7: an error a prompt can cause must not carry the prompt.
+    #[test]
+    fn the_error_kind_carries_no_text_of_the_input() {
+        // A piece with no id — the only tokenizer error a stranger's text can provoke.
+        let (tokenizer, _, _) = byte_level_fixture_v1();
+        let err = TokenizerError::Unrepresentable("SECRET".to_string());
+        assert!(format!("{}", err).contains("SECRET"), "Display is the converter's form and keeps the piece");
+        assert!(!err.kind().contains("SECRET"), "kind() is the form a worker may log: {}", err.kind());
+        // And the redacted form still says which of the three things went wrong.
+        assert_ne!(TokenizerError::NotUtf8.kind(), err.kind());
+        assert_ne!(TokenizerError::Malformed("x").kind(), err.kind());
+        let _ = tokenizer;
+    }
+
+    /// The added-token table is what a manifest publishes by NAME, so a gateway never guesses an
+    /// id. Both control tokens must be in it, with the ids the fixture assigned.
+    #[test]
+    fn the_added_token_table_names_every_control_token() {
+        let (tokenizer, im_start, im_end) = byte_level_fixture_v1();
+        let named: Vec<(String, u32)> = tokenizer.added_tokens().iter().map(|a| (a.content.clone(), a.id)).collect();
+        assert!(named.contains(&("<|im_start|>".to_string(), im_start)), "{named:?}");
+        assert!(named.contains(&("<|im_end|>".to_string(), im_end)), "{named:?}");
+        // Only the declared CONTROL and USER_DEFINED tokens are added tokens; the 256 byte pieces
+        // are ordinary BPE and must never be matched whole on raw text.
+        assert_eq!(named.len(), (FIXTURE_VOCAB - 256) as usize, "{named:?}");
+        assert!(named.iter().all(|(name, _)| name.starts_with("<|")), "a byte piece leaked into the added table: {named:?}");
+    }
 
     /// The byte table is GPT-2's, and the property that matters is that it is a bijection: every
     /// byte has a character and no two bytes share one, or decoding is ambiguous.

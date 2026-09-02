@@ -9,11 +9,20 @@
 //!  build_fp_commitment_tx  ──▶  <outbox>/fp-job-<id>.commitment-tx.borsh  + a JSON summary
 //! ```
 //!
-//! **What this binary does not do, deliberately.** It does not submit, and it does not choose the
-//! funding: the outpoint and amount are supplied, not discovered. Submission is
-//! `misaka palw fp-submit`, which lives in the CLI because that is where the RPC client, the
-//! endpoint registry and the network identity already are — a second answer to "which node" is a
-//! way for two answers to disagree.
+//! **ADR-0077 Decision 4 — one handoff.** With `--submit --rpc <host:port>` this binary finishes
+//! the job: it signs, then hands the transaction to `misaka-palw-fp-submit`, which is the SAME
+//! library `misaka palw fp-submit` calls. There is one place that answers "is this still fresh,
+//! which funding, which subnetwork, when does the material become real", and a second copy of any
+//! of those answers is a way for two answers to disagree.
+//!
+//! The signing half lives here rather than in the gateway because ADR-0079 Decision 4 says the
+//! process that parses a stranger's HTTP text holds no key. The gateway therefore queues the
+//! commitment with its anchor deadline, and this binary — which legitimately holds the bond key,
+//! or asks the signer sidecar for one digest — is the half that spends the fee.
+//!
+//! **SA-1(b) rides the whole way.** The gateway's sweep renames a lapsed artifact `…​.expired`;
+//! this binary reads through `load_unsigned_commitment`, which refuses that name, and the submit
+//! path re-checks the anchor against the NODE's own DAA before it stages or broadcasts anything.
 //!
 //! The reason this comment used to give — "no network accepts subnetwork `0x4a` yet" — was true
 //! when it was written and is not now: `tx_validation_in_isolation` validates that subnetwork,
@@ -32,7 +41,10 @@ use std::path::{Path, PathBuf};
 use kaspa_consensus_core::palw_derived_v1::{
     PALW_DERIVED_V1_MLDSA87_CONTEXT, PalwDerivedArtifactV1, derived_id_v1, palw_derived_message_v1,
 };
-use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpWorkerResultV3, PalwFreePromptCommitmentV3, fp_claim_id_v3};
+// `fp_claim_id_v3` is deliberately NOT imported here: ADR-0079 SA-2 moved the claim id the rail
+// signs behind `palw_fp_sign_gate::signable_claim_id`, so the rail cannot re-derive one that the
+// gate never checked.
+use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpWorkerResultV3, PalwFreePromptCommitmentV3};
 use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
 use kaspa_consensus_core::tx::{TransactionOutpoint, UtxoEntry};
 use kaspa_hashes::Hash64;
@@ -50,6 +62,14 @@ fn hex(h: Hash64) -> String {
 fn read_borsh<T: borsh::BorshDeserialize>(path: &Path, what: &str) -> T {
     let bytes = std::fs::read(path).unwrap_or_else(|e| die(format!("cannot read the {what} at {}: {e}", path.display())));
     borsh::from_slice(&bytes).unwrap_or_else(|e| die(format!("the {what} at {} does not decode: {e}", path.display())))
+}
+
+/// The queued commitment, read the ONE way that honours the gateway's anchor sweep (ADR-0077
+/// SA-1b). A plain `read_borsh` here would read straight through a `…​.expired` rename and submit
+/// exactly the stale claim the rename exists to stop.
+fn read_queued_commitment(path: &Path) -> PalwFreePromptCommitmentV3 {
+    let bytes = misaka_palw_fp_submit::load_unsigned_commitment(path).unwrap_or_else(|e| die(e.to_string()));
+    borsh::from_slice(&bytes).unwrap_or_else(|e| die(format!("the unsigned commitment at {} does not decode: {e}", path.display())))
 }
 
 fn read_seed(path: &Path) -> [u8; VALIDATOR_SEED_LEN] {
@@ -88,6 +108,16 @@ fn main() {
     // The class's canonical job in leaves — what a quantum is an eighth of (ADR-0074 Decision 5).
     // Defaults to the floor's; a rail for another class passes that class's `pwu_per_inference`.
     let mut class_leaves: u64 = 7_708;
+    // ADR-0077 Decision 4: the handoff continues through `misaka-palw-fp-submit`.
+    let mut submit = false;
+    let mut rpc_endpoint: Option<String> = None;
+    let mut retention_dir: Option<PathBuf> = None;
+    let mut capture_path: Option<PathBuf> = None;
+    let mut dsl_path: Option<PathBuf> = None;
+    // ADR-0077 SA-1(b). The gateway's own sweep uses the same number; it is spelled once here
+    // because the two halves must retire the same artifacts, and a rail with a longer TTL would
+    // submit exactly what the gateway retired.
+    let mut anchor_ttl_daa: u64 = 3_000;
     while let Some(arg) = args.pop_front() {
         let mut value = |what: &str| args.pop_front().unwrap_or_else(|| die(format!("{what} needs a value")));
         match arg.as_str() {
@@ -99,6 +129,12 @@ fn main() {
             "--class-id" => class_id = Some(value("--class-id")),
             "--class-leaves" => class_leaves = value("--class-leaves").parse().unwrap_or_else(|e| die(format!("{e}"))),
             "--print-claim" => print_claim = true,
+            "--submit" => submit = true,
+            "--rpc" => rpc_endpoint = Some(value("--rpc")),
+            "--retention-dir" => retention_dir = Some(PathBuf::from(value("--retention-dir"))),
+            "--capture" => capture_path = Some(PathBuf::from(value("--capture"))),
+            "--dsl" => dsl_path = Some(PathBuf::from(value("--dsl"))),
+            "--anchor-ttl-daa" => anchor_ttl_daa = value("--anchor-ttl-daa").parse().unwrap_or_else(|e| die(format!("{e}"))),
             // The public key a `--bond-key-seed` file yields, so an operator can put the SAME key
             // in the gateway's identity file before any inference runs. Without this the two
             // halves of the rail can only be matched by a failed signing attempt.
@@ -108,7 +144,9 @@ fn main() {
             other => die(format!(
                 "unknown argument {other:?}\nusage: misaka-palw-fp-rail --artifact <outbox/fp-job-XXXX> [--print-claim] \
                  [--bond-key-seed <file> [--print-bond-pubkey] --funding-outpoint <txid:index> --funding-amount <sompi> \
-                 [--fee <sompi>]] [--class-id <128hex>] [--class-leaves <u64>]\n       misaka-palw-fp-rail --derive-artifact <outbox/fp-job-XXXX> (--bond-key-seed <file> | --print-derived-message)"
+                 [--fee <sompi>]] [--class-id <128hex>] [--class-leaves <u64>] \
+                 [--submit --rpc <host:port> [--retention-dir <dir>] [--capture <material.bin>] [--dsl <fpd1>] \
+                 [--anchor-ttl-daa <n>]]\n       misaka-palw-fp-rail --derive-artifact <outbox/fp-job-XXXX> (--bond-key-seed <file> | --print-derived-message)"
             )),
         }
     }
@@ -134,7 +172,9 @@ fn main() {
             );
             return;
         }
-        let seed = read_seed(&seed_path.unwrap_or_else(|| die("--bond-key-seed <file> is required to sign (or use --print-derived-message)".into())));
+        let seed = read_seed(
+            &seed_path.unwrap_or_else(|| die("--bond-key-seed <file> is required to sign (or use --print-derived-message)".into())),
+        );
         let key = ValidatorKey::from_seed(seed);
         if key.public_key() != object.executor_pubkey.as_slice() {
             die("the bond key does not match the derivation's executor_pubkey — this key cannot sign this derivation".into());
@@ -144,7 +184,8 @@ fn main() {
         kaspa_consensus_core::palw_lifecycle_objects_v2::palw_lifecycle_object_may_ride_v2(&consensus_object)
             .unwrap_or_else(|why| die(format!("the signed derivation would not ride: {why}")));
         let out = PathBuf::from(format!("{}.derived-object.borsh", stem.display()));
-        std::fs::write(&out, borsh::to_vec(&consensus_object).unwrap()).unwrap_or_else(|e| die(format!("cannot write {}: {e}", out.display())));
+        std::fs::write(&out, borsh::to_vec(&consensus_object).unwrap())
+            .unwrap_or_else(|e| die(format!("cannot write {}: {e}", out.display())));
         println!(
             "{}",
             serde_json::json!({
@@ -175,53 +216,37 @@ fn main() {
     let unsigned_path = PathBuf::from(format!("{}.commitment-unsigned.borsh", stem.display()));
     let result_path = PathBuf::from(format!("{}.result.borsh", stem.display()));
 
-    let mut commitment: PalwFreePromptCommitmentV3 = read_borsh(&unsigned_path, "unsigned commitment");
-    let result: PalwFpWorkerResultV3 = read_borsh(&result_path, "worker result");
-
-    // The rail re-derives what it is about to sign from the two artifacts, rather than trusting
-    // either alone: the commitment must be the one this result produces, prompt ids included.
-    // A mismatch here means the outbox was edited between the inference and the signature —
-    // exactly the moment a rail must refuse.
-    if commitment.job != result.job {
-        die("the unsigned commitment and the worker result describe different jobs".into());
-    }
-    if commitment.trace_root != result.trace_root
-        || commitment.output_root != result.output_root
-        || commitment.schedule_root != result.schedule_root
-        || commitment.trace_manifest_root != result.trace_manifest_root
-        || commitment.trace_chunk_count != result.trace_chunk_count
-        || commitment.decode_tokens_executed != result.decode_tokens_executed
-        || commitment.stop_reason != result.stop_reason
-    {
-        die("the unsigned commitment does not match the execution it claims".into());
-    }
-    if result.job.prompt_token_ids_hash != kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(&result.prompt_token_ids) {
-        die("the worker result's prompt ids are not the ones its job binds".into());
-    }
-    // The one commitment field with NO counterpart in the worker result: the retention deadline
-    // is a chain-time promise the caller makes, so it cannot be cross-checked — a different value
-    // is a different, still-honest promise (and a different claim id). What CAN be checked is
-    // that the promise was not already broken when it was made: a deadline at or before the job's
-    // own anchor commits to serving nothing.
-    if commitment.trace_retention_daa <= commitment.job.anchor_daa {
-        die(format!(
-            "the retention deadline {} is at or before the job's anchor {} — a promise to serve nothing",
-            commitment.trace_retention_daa, commitment.job.anchor_daa
-        ));
-    }
+    let mut commitment: PalwFreePromptCommitmentV3 = read_queued_commitment(&unsigned_path);
+    let mut result: PalwFpWorkerResultV3 = read_borsh(&result_path, "worker result");
 
     // A class id may be supplied to bind the commitment to the network's registered class (the
     // gateway's devnet identity file carries a placeholder). Rewriting it changes the claim id,
-    // which is why it is an explicit flag rather than a silent default.
+    // which is why it is an explicit flag rather than a silent default. It is applied BEFORE the
+    // gate, so the gate sees exactly the object that will be signed — a rewrite the gate never saw
+    // would be a free field inside a signed object.
     if let Some(id) = class_id.as_deref() {
         let mut out = [0u8; 64];
         if id.len() != 128 || faster_hex::hex_decode(id.as_bytes(), &mut out).is_err() {
             die("--class-id is not 128 hex chars".into());
         }
         commitment.job.class_id = Hash64::from_bytes(out);
+        // The result frame must move with it, or the gate below correctly refuses the pair. The
+        // rewrite is the operator saying "this execution belongs to that registered class"; it is
+        // not a claim that some OTHER execution did.
+        result.job.class_id = commitment.job.class_id;
     }
 
-    let claim_id = fp_claim_id_v3(&commitment);
+    // **ADR-0079 Decision 8 / SA-2 — the one message shape.** The claim id is RE-DERIVED from the
+    // commitment, and only after the commitment has been checked field by field against the worker
+    // result frame that produced it. The check lives in
+    // `kaspa_pq_validator_core::palw_fp_sign_gate` rather than inline here, so the local-seed form
+    // below and the `--print-claim` digest a signer sidecar signs cannot disagree about what may
+    // be signed. The old inline check omitted `execution_root` and `work_leaves` — the field a
+    // court binds refutations to, and the field that prices the claim.
+    let claim_id = match kaspa_pq_validator_core::palw_fp_sign_gate::signable_claim_id(&commitment, &result) {
+        Ok(id) => id,
+        Err(e) => die(format!("refusing to sign: {e}")),
+    };
     if print_claim {
         // The digest a signer sidecar signs under SigningPurpose::PalwFpCommitmentV3 — emitted so
         // a signer-backed rail can be scripted without the bond key ever entering this process.
@@ -284,6 +309,32 @@ fn main() {
     let tx_bytes = borsh::to_vec(&tx).unwrap_or_else(|e| die(format!("cannot serialize the transaction: {e}")));
     std::fs::write(&tx_path, &tx_bytes).unwrap_or_else(|e| die(format!("cannot write {}: {e}", tx_path.display())));
 
+    // **ADR-0077 Decision 4 — the same step.** Sign, then submit and stage the material through
+    // the one library; not two commands an operator has to remember to run in order, and not a
+    // shell-out. Every refusal below is named by `FpSubmitError`, including the SA-1(b) one that
+    // fires when the node's DAA has passed this commitment's anchor deadline.
+    let submitted = if submit {
+        let endpoint = rpc_endpoint.unwrap_or_else(|| die("--submit needs --rpc <host:port>".into()));
+        let capture = capture_path.as_ref().map(|path| {
+            let bytes = std::fs::read(path).unwrap_or_else(|e| die(format!("cannot read the capture at {}: {e}", path.display())));
+            misaka_palw_fp_submit::check_capture_shape(&bytes).unwrap_or_else(|e| die(e.to_string()));
+            bytes
+        });
+        let dsl = dsl_path
+            .as_ref()
+            .map(|path| std::fs::read(path).unwrap_or_else(|e| die(format!("cannot read the DSL at {}: {e}", path.display()))));
+        Some(submit_through_the_one_path(
+            &endpoint,
+            &tx,
+            retention_dir.as_deref(),
+            capture.as_deref(),
+            dsl.as_deref(),
+            misaka_palw_fp_submit::AnchorExpiry::new(commitment.job.anchor_daa, anchor_ttl_daa),
+        ))
+    } else {
+        None
+    };
+
     let (quanta, pwu) = bundle
         .freeprompt
         .derive_quanta_and_pwu(commitment.work_leaves, class_leaves)
@@ -302,13 +353,62 @@ fn main() {
         "trace_manifest_root": hex(commitment.trace_manifest_root),
         "trace_retention_daa": commitment.trace_retention_daa,
         "tx_file": tx_path.display().to_string(),
-        "not_done_here": [
-            "submission (`misaka palw fp-submit --tx <this file> --yes`)",
-            "funding selection (the outpoint and amount are supplied, not discovered)",
-        ],
+        "submitted": submitted.as_ref().map(|s| s.0.clone()),
+        "material_file": submitted.as_ref().and_then(|s| s.1.clone()),
+        "commit_by_anchor_daa": commitment.job.anchor_daa.saturating_add(anchor_ttl_daa),
+        "not_done_here": if submitted.is_some() {
+            vec!["funding selection (the outpoint and amount are supplied, not discovered)"]
+        } else {
+            vec![
+                "submission (`--submit --rpc <host:port>`, or `misaka palw fp-submit --tx <this file> --yes`)",
+                "funding selection (the outpoint and amount are supplied, not discovered)",
+            ]
+        },
     });
     let summary_path = PathBuf::from(format!("{}.rail.json", stem.display()));
     std::fs::write(&summary_path, serde_json::to_vec_pretty(&summary).unwrap())
         .unwrap_or_else(|e| die(format!("cannot write {}: {e}", summary_path.display())));
     println!("{summary}");
+}
+
+/// **The submit half of Decision 4's handoff.**
+///
+/// A one-shot connection and one call into `misaka-palw-fp-submit`: the freshness check against
+/// the node's own DAA, the material staged `.partial` before the broadcast, the rename only after
+/// acceptance. Returns `(txid, material path)`.
+fn submit_through_the_one_path(
+    endpoint: &str,
+    tx: &kaspa_consensus_core::tx::Transaction,
+    retention_dir: Option<&Path>,
+    capture: Option<&[u8]>,
+    dsl: Option<&[u8]>,
+    expiry: misaka_palw_fp_submit::AnchorExpiry,
+) -> (String, Option<String>) {
+    use kaspa_wrpc_client::{
+        KaspaRpcClient, WrpcEncoding,
+        client::{ConnectOptions, ConnectStrategy},
+    };
+    let url = if endpoint.contains("://") { endpoint.to_string() } else { format!("ws://{endpoint}") };
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .enable_all()
+        .build()
+        .unwrap_or_else(|e| die(format!("cannot start the RPC runtime: {e}")));
+    runtime.block_on(async {
+        let client = KaspaRpcClient::new(WrpcEncoding::Borsh, Some(&url), None, None, None)
+            .unwrap_or_else(|e| die(format!("cannot build an RPC client for {url}: {e}")));
+        let options = ConnectOptions {
+            block_async_connect: true,
+            connect_timeout: Some(std::time::Duration::from_secs(10)),
+            strategy: ConnectStrategy::Fallback,
+            ..Default::default()
+        };
+        client.connect(Some(options)).await.unwrap_or_else(|e| die(format!("cannot reach {url}: {e}")));
+        let staging = misaka_palw_fp_submit::FpStaging { retention_dir, capture, dsl_payload: dsl, expiry: Some(expiry) };
+        let done = misaka_palw_fp_submit::submit_fp_commitment(&client, tx, staging)
+            .await
+            .unwrap_or_else(|e| die(format!("the commitment was not submitted: {e}")));
+        let _ = client.disconnect().await;
+        (done.txid, done.material_path.map(|p| p.display().to_string()))
+    })
 }

@@ -19,7 +19,7 @@ use kaspa_consensus_core::palw_derived_v1::{
 use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
 use kaspa_hashes::Hash64;
 use kaspa_pq_validator_core::{VALIDATOR_SEED_LEN, ValidatorKey};
-use misaka_palw_derive::{ClaimBinding, DeriveError, derive_named, registry};
+use misaka_palw_derive::{ClaimBinding, derive_named, registry};
 
 /// The gateway's derivation settings.
 pub struct DeriveConfig {
@@ -86,9 +86,13 @@ pub fn run(spec: &str, cfg: &DeriveConfig, binding: &ClaimBinding, answer: &[u8]
     let transformer = resolve_transformer(spec)?;
     let derivation = match derive_named(transformer, binding, answer) {
         Ok(d) => d,
-        Err(DeriveError::Grammar(why)) => return Ok(Outcome::Refused { transformer, reason: format!("grammar: {why}") }),
-        Err(DeriveError::Inexact(why)) => return Ok(Outcome::Refused { transformer, reason: format!("inexact: {why}") }),
-        Err(DeriveError::Transformer(why)) => return Ok(Outcome::Refused { transformer, reason: format!("transformer: {why}") }),
+        // **A refusal is the derive core's to define, not this caller's** (ADR-0078 X4). The three
+        // arms this used to spell out have since become five — `Bound` and `UnpublishedManifest`
+        // joined them — and a caller that enumerates them turns each new one into a 500 for the
+        // person who asked, instead of "your answer did not parse under this grammar; the claim is
+        // untouched". `Display` already prefixes each arm with its own name, so the message loses
+        // nothing by not being re-prefixed here.
+        Err(e) if e.is_refusal() => return Ok(Outcome::Refused { transformer, reason: e.to_string() }),
         Err(e) => return Err(format!("derivation failed: {e}")),
     };
     let manifest = registry::transformer_by_name(transformer).expect("resolved above").manifest();

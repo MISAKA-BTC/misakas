@@ -379,6 +379,36 @@ pub struct Base0CheckpointsV1 {
     pub chunks: Vec<Vec<Vec<u8>>>,
 }
 
+/// **The state layout the CLASS declares, at `positions`** — the one dispatch on
+/// `profile.state_chunk_map_id`, for both directions.
+///
+/// The capture side and the replay side must chunk a state the same way or the producer commits
+/// bytes the verifier cannot read back. They did not: `Base0CheckpointCaptureV1::next_geometry`
+/// dispatched on the declared map id while `base0_replay_from_checkpoint_v1` called
+/// `integer_kv_state_geometry_v1` unconditionally, so a class registering the FOUR-byte map (the
+/// one an `i32` cache actually fits) would have its checkpoints taken at four bytes per element
+/// and restored at one — an honest producer whose own anchored replay refuses its own state. Every
+/// class in the tree declares v1 today, which is why nothing caught it; ADR-0077 Decision 10 is
+/// what makes a second map real.
+///
+/// A map this family does not implement is an error rather than a fallback: falling back to v1
+/// would chunk an unknown class's state at a width nobody chose.
+pub fn base0_state_chunk_geometry_v1(
+    profile: &PalwShapeProfileV3,
+    positions: u32,
+) -> Result<kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkGeometryV1, LegError> {
+    use kaspa_consensus_core::palw_state_chunk_map as map;
+    let declared = profile.state_chunk_map_id;
+    let geometry = if declared == map::integer_kv_state_chunk_map_id_v1() {
+        map::integer_kv_state_geometry_v1(profile, positions)
+    } else if declared == map::integer_kv_state_chunk_map_id_v2() {
+        map::integer_kv_state_geometry_v2(profile, positions)
+    } else {
+        return Err(LegError::CheckpointStateUnavailable { chunk_index: 0 });
+    };
+    geometry.map_err(LegError::CheckpointStateMap)
+}
+
 /// Accumulates checkpoints in call order, chaining each to the one before it.
 pub struct Base0CheckpointCaptureV1 {
     ctx: PalwJobContextV2,
@@ -439,29 +469,12 @@ impl Base0CheckpointCaptureV1 {
         self.push_chunks(chunk_bytes)
     }
 
-    /// The map this capture's NEXT checkpoint is taken under.
-    /// **The geometry the CLASS declares, not the one this file happens to know first.**
-    ///
-    /// This used to call `integer_kv_state_geometry_v1` unconditionally while
-    /// `profile.state_chunk_map_id` sat unread beside it. For every class in the tree that was the
-    /// same answer, so nothing broke — and it made the declaration decorative: a class that
-    /// declared the four-byte map would have had its state chunked at one byte per element, which
-    /// is the failure the map id exists to prevent.
-    ///
-    /// A map this family does not implement is an error rather than a fallback. Falling back to v1
-    /// would chunk an unknown class's state at a width nobody chose.
+    /// The map this capture's NEXT checkpoint is taken under — the geometry the CLASS declares,
+    /// through [`base0_state_chunk_geometry_v1`], which is the one dispatch both directions take.
     pub fn next_geometry(&self) -> Result<kaspa_consensus_core::palw_state_chunk_map::PalwStateChunkGeometryV1, LegError> {
-        use kaspa_consensus_core::palw_state_chunk_map as map;
-        let positions = map::integer_kv_positions_at_v1(&self.ctx, self.next_covered_decode_call());
-        let declared = self.profile.state_chunk_map_id;
-        let geometry = if declared == map::integer_kv_state_chunk_map_id_v1() {
-            map::integer_kv_state_geometry_v1(&self.profile, positions)
-        } else if declared == map::integer_kv_state_chunk_map_id_v2() {
-            map::integer_kv_state_geometry_v2(&self.profile, positions)
-        } else {
-            return Err(LegError::CheckpointStateUnavailable { chunk_index: 0 });
-        };
-        geometry.map_err(LegError::CheckpointStateMap)
+        let positions =
+            kaspa_consensus_core::palw_state_chunk_map::integer_kv_positions_at_v1(&self.ctx, self.next_covered_decode_call());
+        base0_state_chunk_geometry_v1(&self.profile, positions)
     }
 
     /// **The leaf rule, in one place.** Serializing a cache and re-deriving from served bytes must

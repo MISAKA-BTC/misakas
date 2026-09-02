@@ -147,6 +147,23 @@ pub fn a16_execute_for_attempt_v1(
     ctx: &PalwJobContextV2,
     prompt: &[usize],
 ) -> Result<crate::produce::Base0ExecutionV1, String> {
+    a16_execute_for_attempt_streaming_v1(artifact, profile, plan, ctx, prompt, &mut |_| {})
+}
+
+/// **The same capture, with each id handed over as it is SELECTED** (ADR-0077 Decision 2).
+///
+/// The streaming verb is the loop; the non-streaming one is the loop with a callback that does
+/// nothing. The other way round — running the job, then replaying the committed ids to the stream
+/// — is not streaming, and a second inference to produce the stream is the exact failure Decision
+/// 2 forbids: a worker that shows one answer and commits another.
+pub fn a16_execute_for_attempt_streaming_v1(
+    artifact: &Base0ArtifactV1,
+    profile: &PalwShapeProfileV3,
+    plan: Option<&crate::engine_a16::A16ProfilePlanV1>,
+    ctx: &PalwJobContextV2,
+    prompt: &[usize],
+    on_token: &mut dyn FnMut(u32),
+) -> Result<crate::produce::Base0ExecutionV1, String> {
     use kaspa_consensus_core::palw_state_chunk_map as map;
 
     let prefill = ctx.declared_prefill_tokens as usize;
@@ -221,6 +238,7 @@ pub fn a16_execute_for_attempt_v1(
     }
     let mut next = kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(&last_logits) as u32;
     generated.push(next);
+    on_token(next);
     logits_rows.push(last_logits);
 
     // Calls 1..=D−1 — decode. The COORDINATE's position is 0 in every decode call (each call has
@@ -234,6 +252,7 @@ pub fn a16_execute_for_attempt_v1(
         capture.push_call(profile, ctx, call as u32, 0, &rows).map_err(|e| format!("{e:?}"))?;
         next = kaspa_consensus_core::palw_step_refute::base0_decode_token_select_v1(&logits) as u32;
         generated.push(next);
+        on_token(next);
         logits_rows.push(logits);
         if call as u32 == checkpoints.next_covered_decode_call() {
             // Through the CACHE's own serializer, at the width the class declares. Under a map
@@ -571,6 +590,68 @@ impl Qwen25A16Backend {
     }
 }
 
+/// **The dense tier's kernels, as a seat's interval replay needs them** (ADR-0077 Decision 8).
+///
+/// The window is walked by [`crate::fp_interval::base0_fp_replay_interval_v1`] — the capture's own
+/// loop — and this supplies only what the family owns: restoring the cache the interval resumes
+/// from and running one forward call, through the SAME plan-or-traced dispatch the capture uses.
+/// A replay that took the other arm would recompute rows the capture never committed.
+struct A16IntervalKernels<'a> {
+    artifact: &'a Base0ArtifactV1,
+    plan: Option<&'a crate::engine_a16::A16ProfilePlanV1>,
+}
+
+impl crate::fp_interval::Base0FpIntervalKernelsV1 for A16IntervalKernels<'_> {
+    fn replay_interval(
+        &self,
+        profile: &PalwShapeProfileV3,
+        ctx: &PalwJobContextV2,
+        start: &crate::fp_interval::Base0FpIntervalStartV1<'_>,
+        first_call: u32,
+        last_call: u32,
+    ) -> Result<Vec<(u64, Hash64)>, String> {
+        let engine = A16Engine::new(self.artifact).map_err(|e| format!("the artifact is not an A16 class: {e:?}"))?;
+        let layers = self.artifact.shape.n_layers;
+        let row_elements = profile.attn_kv_heads as usize * profile.attn_head_dim as usize;
+        let mut cache = match start {
+            crate::fp_interval::Base0FpIntervalStartV1::Genesis { .. } => A16Cache::new(layers),
+            crate::fp_interval::Base0FpIntervalStartV1::Checkpoint { covered_decode_call, chunks, .. } => {
+                let positions = kaspa_consensus_core::palw_state_chunk_map::integer_kv_positions_at_v1(ctx, *covered_decode_call);
+                let geometry = crate::legs::base0_state_chunk_geometry_v1(profile, positions).map_err(|e| format!("{e:?}"))?;
+                A16Cache::from_state_chunks_v1(layers, row_elements, &geometry, chunks).map_err(|e| format!("{e:?}"))?
+            }
+        };
+        let vocab = self.artifact.shape.vocab;
+        crate::fp_interval::base0_fp_replay_interval_v1(profile, ctx, start, first_call, last_call, |token, position| {
+            if token >= vocab {
+                return Err(format!("token {token} is outside this class's vocabulary of {vocab}"));
+            }
+            let (logits, trace) = match self.plan {
+                Some(plan) => {
+                    engine.forward_token_planned(plan, &mut cache, token, position).map_err(|e| format!("planned forward: {e:?}"))?
+                }
+                None => engine.forward_token_traced(&mut cache, token, position).map_err(|e| format!("forward: {e:?}"))?,
+            };
+            Ok((logits, crate::legs::a16_captured_rows_v1(&trace)))
+        })
+    }
+}
+
+impl Qwen25A16Backend {
+    /// The cadence this family checkpoints at — a class fact from the family's registration, never
+    /// read off a capture.
+    fn checkpoint_interval(&self) -> u32 {
+        kaspa_consensus_core::palw_state_chunk_map::PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1
+    }
+
+    /// **ADR-0077 SA-6, at the job boundary.** This tier's artifact is owned memory (the converter
+    /// writes a `Base0ArtifactV1`), so no mapped page can fault under a job. Stated rather than
+    /// assumed — the hybrid answers differently and one seam serves both.
+    fn artifact_read_probe_v1(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
 impl PalwExecutionBackendV1 for Qwen25A16Backend {
     fn model_id(&self) -> &str {
         &self.model_id
@@ -643,13 +724,28 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         })
     }
 
+    /// The non-streaming verb IS the streaming one with a callback that does nothing — never the
+    /// reverse (ADR-0077 Decision 2). One inference, one capture, one commitment.
     fn execute_free_prompt(
         &self,
         job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
         prompt_tokens: &[usize],
     ) -> Result<kaspa_consensus_core::palw_backend::PalwFpRunV1, String> {
+        self.execute_free_prompt_streaming(job, prompt_tokens, &mut |_| {})
+    }
+
+    fn execute_free_prompt_streaming(
+        &self,
+        job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        prompt_tokens: &[usize],
+        on_token: &mut dyn FnMut(u32),
+    ) -> Result<kaspa_consensus_core::palw_backend::PalwFpRunV1, String> {
         use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, PalwFpRunFactsV3, palw_fp_job_context_v3};
         use kaspa_consensus_core::palw_freeprompt_v3::PalwFpStopReasonV3;
+
+        // ADR-0077 SA-6: an artifact this host can no longer read is a job failure named at the
+        // boundary, not a fault taken three layers into a kernel.
+        self.artifact_read_probe_v1()?;
 
         if job.prompt_tokens as usize != prompt_tokens.len() {
             return Err(format!("the job declares {} prompt tokens and {} were supplied", job.prompt_tokens, prompt_tokens.len()));
@@ -697,7 +793,8 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         // serializer at the class's declared width, and the selecting-rows retention all live in
         // it). The free-prompt lane differs from the attempt lane only in where its context and
         // its tokens come from, so the run itself must not be a second implementation.
-        let run = a16_execute_for_attempt_v1(&self.artifact, &self.profile, self.plan.as_ref(), &ctx, prompt_tokens)?;
+        let run =
+            a16_execute_for_attempt_streaming_v1(&self.artifact, &self.profile, self.plan.as_ref(), &ctx, prompt_tokens, on_token)?;
 
         // The four legs, measured — the derived roots the execution root is built from, which is
         // what `palw_fp_execution_root_v3` recomputes.
@@ -810,6 +907,51 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         prompt_token_ids: &[u32],
     ) -> Result<kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1, String> {
         self.refutation_with_prompt(material, index, Some(prompt_token_ids))
+    }
+
+    // ---- ADR-0077 Decision 8: the interval seam -------------------------------------------
+    //
+    // Only for a class that can carry a capture at all. The v1 class declares the one-byte map
+    // over an `i32` cache, so it commits no checkpoint leg and there is no interval to open —
+    // `None`/refusal is the honest answer there, and it is the same fact `supports_court` reports.
+
+    fn fp_interval_count(&self, capture: &[u8]) -> Option<u32> {
+        let (binding, ..) = crate::produce::base0_material_decode_v1(capture).ok()?;
+        crate::fp_interval::Base0FpIntervalGeometryV1::from_binding_v1(&binding, self.checkpoint_interval())
+            .ok()
+            .map(|g| g.interval_count)
+    }
+
+    fn fp_interval_count_for(&self, prompt_tokens: u32, decode_tokens_executed: u32) -> Option<u32> {
+        if !self.court_capable {
+            return None;
+        }
+        crate::fp_interval::base0_fp_interval_count_for_v1(prompt_tokens, decode_tokens_executed, self.checkpoint_interval())
+    }
+
+    fn open_fp_interval(&self, capture: &[u8], index: u32, prompt_token_ids: &[u32]) -> Result<Vec<u8>, String> {
+        let material = crate::produce::base0_material_decode_v1(capture).map_err(|_| "the capture does not decode".to_string())?;
+        crate::fp_interval::base0_open_fp_interval_v1(&material, index, prompt_token_ids, self.checkpoint_interval())
+            .map_err(|e| e.to_string())
+    }
+
+    fn verify_fp_interval_opening(
+        &self,
+        opening: &[u8],
+        claim: PalwClaimRootsV1,
+        index: u32,
+        prompt_token_ids: &[u32],
+        work_leaves: u64,
+    ) -> kaspa_consensus_core::palw_backend::PalwFpIntervalVerdictV1 {
+        crate::fp_interval::base0_verify_fp_interval_opening_v1(
+            opening,
+            claim,
+            index,
+            prompt_token_ids,
+            work_leaves,
+            self.checkpoint_interval(),
+            &A16IntervalKernels { artifact: &self.artifact, plan: self.plan.as_ref() },
+        )
     }
 
     fn operand_openings_for(

@@ -1,6 +1,6 @@
 [package]
 name = "misaka-palw-gateway"
-description = "MISAKA free-prompt gateway (ADR-0044 FP-07): an OpenAI-compatible /v1/chat/completions front end whose ONE inference answers the user AND produces the consensus-grade execution commitment inputs, via the pinned palw-worker's v3-job contract"
+description = "MISAKA free-prompt gateway (ADR-0044 FP-07): an OpenAI-compatible /v1/chat/completions front end whose ONE inference answers the user AND produces the consensus-grade execution commitment inputs, via a resident family worker on the v3-serve contract (ADR-0077 Decisions 1-4)"
 publish = false
 rust-version.workspace = true
 version.workspace = true
@@ -24,6 +24,19 @@ kaspa-hashes.workspace = true
 kaspa-pq-validator-core.workspace = true
 # ADR-0078: the derivation step — registered grammars and content-named transformers.
 misaka-palw-derive.workspace = true
+# ADR-0079: the ONE spelling of the host posture — the worker spawn discipline, the public-bind
+# guard, and the reachable-secret check. A second copy here would be a second answer to the same
+# question, and this repository has paid that bill before.
+misaka-palw.workspace = true
+# ADR-0077 Decision 4: the ONE submit path's shared vocabulary — the anchor TTL and the `.expired`
+# suffix, so the gateway's sweep and the rail's refusal cannot disagree about what "stale" is.
+misaka-palw-fp-submit.workspace = true
+# ADR-0077 Decision 3: the gateway reads the chain it commits to, over the SAME wRPC-borsh client
+# `misaka --rpc` uses. A second answer to "which node, which encoding" is a way for two answers to
+# disagree.
+kaspa-rpc-core.workspace = true
+kaspa-wrpc-client.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread"] }
 
 borsh.workspace = true
 faster-hex.workspace = true

@@ -251,6 +251,22 @@ so a producer with attempt share `p` controls the draw with probability `pᵏ` i
 bound is stated here with `p` read from the live share table and pinned by a test on the fork-choice
 simulator. Receipt blocks remain non-beacons (F15).
 
+> **SA-1 as landed (2026-09-02).** `derive_beacon_fact_v3` / `derive_beacon_fact_to_genesis_v3` take
+> a `fold_k`, and past the fence the fact's `beacon_block` is `fp_beacon_fold_v3` of the first `k`
+> attempt blocks at or after the slot (ascending chain order, domain-separated, count-prefixed) with
+> `beacon_daa` the **k-th** — the height at which the draw becomes determined, so the use window
+> cannot open against a fold that does not exist yet. `prev_attempt_daa` is unchanged, so "the fold
+> begins at the slot" stays checkable by a non-walker. Fewer than `k` attempt blocks above the slot
+> is `NoBeaconYet { needed, found }`, never a shorter fold. `k = 1` is the pre-SA-1 rule and the
+> IDENTITY rather than a one-element digest, which is what keeps the fence-off bytes.
+> **Fenced** as `Params::palw_beacon_fold: Option<PalwBeaconFoldV1 { activation, k }>` — top level,
+> `None` on every shipped preset, activation-only in `for_each_fence`, both halves in
+> `consensus_params_id` and `consensus_schedule_id`, resolved at the DRAW'S OWN SLOT so producer and
+> validator cannot pick different widths for one claim. `validate_palw_v2` refuses an armed `k < 3`.
+> `k` belongs in `PalwFreePromptParamsV3` (inside `palw_ruleset_id_v2`, where the V2 handshake would
+> compare it) at the re-mint that arms the fence; until then it carries ADR-0065 D1's
+> coordinated-change hazard, recorded on `PalwBeaconFoldV1`.
+
 **SA-2 — 4b's supply metric counts executors, not claims.** "Bounded by what the lane produces"
 must not be movable by one operator flooding `Canonical` self-claims — honest work, but self-dealt.
 Count distinct executor bonds with a certified claim in the span, and cap one bond's contribution
