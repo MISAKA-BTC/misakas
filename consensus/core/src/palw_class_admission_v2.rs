@@ -1984,8 +1984,18 @@ mod tests {
     /// the whole `max_close_bytes` moves by exactly the term's difference — which it can only do if
     /// the term is charged on the binding node and nowhere else is affected.
     ///
-    /// `n_ctx` 30 is the widest dense row the 80 KiB carrier admits armed; 512 / 4,096 / 32,768 are
-    /// the contexts a long-context design is actually about. The floor's OWN `n_ctx` is 12.
+    /// `n_ctx` 512 / 4,096 / 32,768 are the contexts a long-context design is about; 30 is here
+    /// because it is the one measured point where the opening is DEARER than the list it replaces.
+    /// The floor's OWN `n_ctx` is 12.
+    ///
+    /// **And the term is ~0.1% of the close it sits in, at every one of them** — asserted below,
+    /// because the four numbers read like headroom and are not. The floor's close is 52,704 bytes
+    /// at `n_ctx` 12 against an 81,920-byte carrier; it passes the carrier at `n_ctx` 20 (85,536)
+    /// and by `n_ctx` 512 it is 2,105,024, twenty-five times the carrier, of which the whole
+    /// prompt-id term is 2,048. So arming this fence moves no class across the ceiling at any
+    /// context, and it was never going to: what Decision 3 buys is the term's SHAPE
+    /// (`log`-shaped instead of linear), which a long context needs and which the other terms —
+    /// the history runs and their paths, ADR-0077 Decision 11's business — still do not have.
     #[test]
     fn the_prompt_id_term_is_the_openings_size_past_the_fence() {
         use crate::palw_prompt_ids_v1::{PalwPromptIdsFormV1, prompt_ids_close_bytes_v1};
@@ -2022,6 +2032,41 @@ mod tests {
             vec![(30u32, 120u64, 208u64), (512, 2_048, 472), (4_096, 16_384, 664), (32_768, 131_072, 856)],
             "the four numbers ADR-0081 Decision 3 is worth",
         );
+        // **What the four numbers are NOT: admission headroom.** Every close above is already past
+        // the carrier, the id term is a thousandth of it, and arming the fence leaves every one of
+        // them past it. Stated as an assertion rather than a caveat, because "the prompt ids cost
+        // 128 KiB at 32,768, where nothing fits" invites exactly the reading this refutes.
+        for (n_ctx, flat_term, _) in &measured {
+            let mut geometry = PALW_RC_BASE0_GEOMETRY;
+            geometry.n_ctx = *n_ctx;
+            let profile = base0_profile_v1(geometry).expect("expressible");
+            let mut shape = PalwCourtCostShapeV1::genesis_anchored_v1(&profile);
+            shape.ladder = crate::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES;
+            for form in [PalwPromptIdsFormV1::Flat, PalwPromptIdsFormV1::MerkleV1] {
+                let close =
+                    derive_court_cost_shaped_v1(&profile, shape.with_prompt_ids_form_v1(form)).expect("derives").max_close_bytes;
+                assert!(
+                    close > crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES,
+                    "n_ctx {n_ctx} under {form:?} closes at {close}, which the carrier would admit — \
+                     the fence would then be an admission change and needs its own gate test"
+                );
+            }
+            assert!(
+                flat_term * 1_000 < derive_court_cost_shaped_v1(&profile, shape).expect("derives").max_close_bytes,
+                "n_ctx {n_ctx}: the prompt-id term is under a thousandth of the close, so its form is a shape \
+                 argument and never a ceiling one"
+            );
+        }
+        // The floor's own context is the one that fits, and the widest BASE-0 row that does is 18
+        // — not any of the four above. Measured, so the sentence cannot drift from the derivation.
+        let widest = |n_ctx: u32| {
+            let mut g = PALW_RC_BASE0_GEOMETRY;
+            g.n_ctx = n_ctx;
+            let p = base0_profile_v1(g).expect("expressible");
+            derive_court_cost_v1(&p).expect("derives").max_close_bytes
+        };
+        assert!(widest(18) <= crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES, "n_ctx 18 fits: {}", widest(18));
+        assert!(widest(20) > crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES, "n_ctx 20 does not: {}", widest(20));
     }
 
     /// **No shipped price moves.** Both constructors say `Flat`, so a class derived through

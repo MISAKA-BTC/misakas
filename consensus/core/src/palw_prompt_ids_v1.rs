@@ -18,6 +18,19 @@
 //! plus `⌈log₂ tiles⌉` path elements: `prompt_ids_close_bytes_v1` measures the difference at
 //! 2,048 → 472 bytes at `n_ctx` 512 and 131,072 → 856 at 32,768.
 //!
+//! # What this does NOT buy, measured
+//!
+//! It does not make any context admissible. The prompt-id term is a stable **~0.1% of the close it
+//! sits in** at every context measured — the floor's court closes at 52,704 bytes at `n_ctx` 12,
+//! passes the 81,920-byte carrier at `n_ctx` 20, and reaches 2,105,024 at `n_ctx` 512, of which
+//! the whole flat id term is 2,048. Arming this fence moves no class across the ceiling at any
+//! context, and at `n_ctx` 30 it makes the close 88 bytes *worse*. What Decision 3 buys is the
+//! term's SHAPE: `⌈log₂⌉` instead of linear, which is a property the flat form can never have and
+//! which a long context needs from EVERY term. The ones that dominate the close — the history runs
+//! and their Merkle paths — are ADR-0077 Decision 11's business and are not touched here.
+//! `palw_class_admission_v2::tests::the_prompt_id_term_is_the_openings_size_past_the_fence`
+//! asserts all of that, so the claim cannot drift from the derivation.
+//!
 //! # ADR-0081's OTHER decisions do not live here
 //!
 //! ADR-0080 and ADR-0081 are **REFUTED IN PART**: the segment chain they proposed is not
