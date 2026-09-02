@@ -1489,7 +1489,7 @@ impl VirtualStateProcessor {
                                         }
                                     })
                                     .collect();
-                                match kaspa_consensus_core::palw_state_v2::apply_palw_transition_v5(
+                                match kaspa_consensus_core::palw_state_v2::apply_palw_transition_v6(
                                     state,
                                     state_params,
                                     self.palw_admission_params_v2.as_ref(),
@@ -1498,6 +1498,9 @@ impl VirtualStateProcessor {
                                     work,
                                     &merged_refs,
                                     self.palw_unavailable_abstains_at(point.daa_score),
+                                    // ADR-0069 Decision 7, at this BLOCK's DAA. `false` on every
+                                    // shipped preset, where the fold is byte-identical.
+                                    self.palw_uncertified_weightless_at(point.daa_score),
                                 ) {
                                     Ok((next, delta, merged_skips)) => {
                                         // A skipped merged work is the block standing while a
@@ -4764,13 +4767,17 @@ impl VirtualStateProcessor {
             }
             match self.palw_v2_validate_objects(&folded, state_params, point, std::slice::from_ref(&object)) {
                 Ok(()) => {
-                    match kaspa_consensus_core::palw_state_v2::apply_palw_transition_v2_with_verdict_policy(
+                    match kaspa_consensus_core::palw_state_v2::apply_palw_transition_v2_with_policies(
                         &folded,
                         state_params,
                         &rehearsal,
                         std::slice::from_ref(&object),
                         None,
                         self.palw_unavailable_abstains_at(point.daa_score),
+                        // The rehearsal exists to predict the fold; a policy it did not carry
+                        // would be a policy the two disagree about, and they would then compute
+                        // different state roots for the same block.
+                        self.palw_uncertified_weightless_at(point.daa_score),
                     ) {
                         Ok((next, _)) => {
                             if completes_a_group {
@@ -11355,13 +11362,14 @@ impl VirtualStateProcessor {
                 // registers — it creates no claim, so there is nothing for a carve to attach to.
                 subsidy: 0,
             };
-            let (genesis_state, delta) = kaspa_consensus_core::palw_state_v2::apply_palw_transition_v2_with_verdict_policy(
+            let (genesis_state, delta) = kaspa_consensus_core::palw_state_v2::apply_palw_transition_v2_with_policies(
                 &kaspa_consensus_core::palw_state_v2::PalwChainStateV2::genesis(),
                 state_params,
                 &point,
                 &objects,
                 None,
                 self.palw_unavailable_abstains_at(self.genesis.daa_score),
+                self.palw_uncertified_weightless_at(self.genesis.daa_score),
             )
             .expect("the bundle's genesis registrations must apply — `validate_palw_v2` ran them at construction");
             let mut batch = WriteBatch::default();
@@ -11694,16 +11702,23 @@ impl VirtualStateProcessor {
         //
         // The selected-chain child is at most one by construction, and displacing it costs a chain
         // that out-works the pruning point forward.
-        let expected_root = self
+        // The witness child's DAA rides along: ADR-0069 Decision 7's fence is a chain-point rule,
+        // so the consistency check has to be told the rule in force AT THE SNAPSHOT, not at
+        // genesis. The child is the nearest header this import trusts that stands above the
+        // pruning point, and a fence is monotone in DAA, so resolving at the child is the honest
+        // reading of "the rule this state was built under".
+        let witness = self
             .pruning_point_witness_child(pruning_point)
             .and_then(|child| self.headers_store.get_header(child).ok())
-            .map(|h| h.palw_state_root);
+            .map(|h| (h.palw_state_root, h.daa_score));
         // No child header to check against yet: REFUSE rather than write on trust. An unverifiable
         // carriage is exactly the one an attacker supplies, and the IBD can be retried once the
         // child header is in hand.
-        let expected_root = expected_root.ok_or(PruningImportError::ImportedPalwStateHeaderMissing(pruning_point))?;
+        let (expected_root, witness_daa) = witness.ok_or(PruningImportError::ImportedPalwStateHeaderMissing(pruning_point))?;
         let state = carriage
-            .into_state(params, Some(expected_root))
+            // ADR-0069 Decision 7: the consistency check has to know the rule the snapshot was
+            // built under, or it refuses a state for having obeyed it.
+            .into_state_v2(params, Some(expected_root), self.palw_uncertified_weightless_at(witness_daa))
             .map_err(|e| PruningImportError::ImportedPalwStateInvalid(pruning_point, expected_root, e.to_string()))?;
         // Written through `set_tip_batch`, which RE-DERIVES the root from the state it is handed —
         // so what becomes durable is a function of what was verified, and a caller cannot store a

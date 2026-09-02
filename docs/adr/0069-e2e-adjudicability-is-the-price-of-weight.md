@@ -340,14 +340,36 @@ fabricated block per epoch then carries ≈ 8× the fork-choice weight the entir
 produces in that epoch, in `safe(C)` once its own panel licenses it to `Final` — the weight the
 IBD and deep-reorg gates read.
 
-**Decision 7 — an uncertified family's blocks weigh nothing.** In `chain_weights_v1`'s inputs, a
-block whose class's family is not attempt-lane certified at that block's chain point (genesis ∪
-chain, ADR-0075 Decision 4) contributes `pwu = 0` to both `safe` and `live`, whatever its ramp
-stage. The block is otherwise unchanged: it advances DAA, it is paid its budgeted subsidy
-(ADR-0039's "admissible for liveness"), its claim runs the same lattice. Weight is what
-certification buys — Decision 5's sentence, applied to the quantity it was written about. This is a
-fork-choice rule and moves the ruleset id: it ships in the next ruleset move and is a mainnet
-precondition.
+**Decision 7 — an uncertified family's blocks weigh nothing.** A block whose class's family is not
+attempt-lane certified at that block's chain point (genesis ∪ chain, ADR-0075 Decision 4)
+contributes `pwu = 0` to both `safe` and `live`, whatever its ramp stage. The block is otherwise
+unchanged: it advances DAA, it is paid its budgeted subsidy (ADR-0039's "admissible for liveness"),
+its claim runs the same lattice. Weight is what certification buys — Decision 5's sentence, applied
+to the quantity it was written about. This is a fork-choice rule and moves the ruleset id: it ships
+in the next ruleset move and is a mainnet precondition.
+
+**Where the rule lives — this text said `chain_weights_v1`'s inputs, which is right as a rule and
+wrong as a location.** `chain_weights_v1` is fed by `palw_facts::resolve_block_weight_v1`, and on a
+`ConsensusV2` network the heap that reads it is a SEARCH ORDER, not the authority — the processor's
+own `palw_tip_weights_v1` says so. The authority is the V2 **state fold**: `PalwChainStateV2` keeps
+`safe_weight` and `bounded_immature` as running totals, hands both to `PalwCandidateOrderV1::new`,
+and hashes both into `palw_state_root`. So Decision 7 is priced in three places, all through the one
+helper `palw_class_bears_weight_v2`: the V1 resolver (the search order), the claim's
+`immature_contribution` at creation (the `live` half), and `safe_weight` at the claim's `Final` (the
+half the IBD and deep-reorg gates read). The predicate implemented is the class's **granted share**,
+which admission makes a sound proxy for certification in the one direction that matters —
+`verify_class_admission_v3` refuses `share > 0` to a family that is not certified end to end, so
+`share > 0 ⇒ certified`.
+
+Two consequences are residuals rather than choices, and are pinned by tests rather than left to be
+discovered. **(i)** The safe half is priced at the finalizing block, so a claim accepted while its
+class was weightless and finalized after the class took cadence is paid in full; freezing the
+decision on the claim record is a claim-encoding change, hence a state-version bump and a re-mint.
+**(ii)** Because of (i), `retired_safe_weight` must NOT re-ask the question at the retirement block —
+it accumulates `claim.pwu`, the most the retired claims could have carried — and the internal
+consistency identity `safe_weight == retired + Σ Final` therefore becomes an upper bound while the
+fence is armed. Asking twice instead makes the two totals drift apart permanently, which shows up
+as every pruning-point import being refused for a state that obeyed the rule exactly.
 
 Two companions, so Decision 7 is not the only wall: **(a)** a `BondCapabilityDeclared` set is
 bounded and priced (ADR-0071's security amendment); **(b)** ADR-0076 §8's field is pinned to the
