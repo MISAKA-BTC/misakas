@@ -2399,11 +2399,8 @@ impl Deserializer for GetPalwProducerFactsResponse {
         // and unpriced rather than as certified-by-omission: a gateway that submits on a `false`
         // it should not have trusted loses a fee, and one that holds back on a stale `false` loses
         // nothing it cannot retry from the outbox. Fail closed.
-        let (fp_certified, fp_quanta_per_canonical_job, fp_max_quanta_per_receipt) = if version >= 3 {
-            (load!(bool, reader)?, load!(u32, reader)?, load!(u32, reader)?)
-        } else {
-            (false, 0, 0)
-        };
+        let (fp_certified, fp_quanta_per_canonical_job, fp_max_quanta_per_receipt) =
+            if version >= 3 { (load!(bool, reader)?, load!(u32, reader)?, load!(u32, reader)?) } else { (false, 0, 0) };
         Ok(Self {
             available,
             chain_point,

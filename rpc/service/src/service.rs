@@ -943,13 +943,12 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
         // hardcoded "an eighth" (as the shipped one did) would size its own exposure room by a
         // constant the chain owns. Zero on a network that prices no free-prompt lane, which is an
         // honest answer: a commitment there enters no state.
-        let (fp_quanta_per_canonical_job, fp_max_quanta_per_receipt) =
-            match &self.config.params.palw_consensus_mode {
-                kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => {
-                    (bundle.freeprompt.quanta_per_canonical_job(), bundle.freeprompt.max_quanta_per_receipt())
-                }
-                _ => (0, 0),
-            };
+        let (fp_quanta_per_canonical_job, fp_max_quanta_per_receipt) = match &self.config.params.palw_consensus_mode {
+            kaspa_consensus_core::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) => {
+                (bundle.freeprompt.quanta_per_canonical_job(), bundle.freeprompt.max_quanta_per_receipt())
+            }
+            _ => (0, 0),
+        };
         let mut response = GetPalwProducerFactsResponse {
             available: true,
             fp_certified: facts.fp_certified,

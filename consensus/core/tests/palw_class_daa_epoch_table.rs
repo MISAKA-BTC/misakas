@@ -801,15 +801,17 @@ fn the_bind_window_gate_measures_the_dearest_class() {
         .iter()
         .cloned()
         .map(|o| match o {
-            Obj::BondRegistered { bond, pubkey, operator_pubkey, payout_payload, capable_classes, signature, .. } => Obj::BondRegistered {
-                bond,
-                pubkey,
-                operator_pubkey,
-                collateral: floor_sized,
-                payout_payload,
-                capable_classes,
-                signature,
-            },
+            Obj::BondRegistered { bond, pubkey, operator_pubkey, payout_payload, capable_classes, signature, .. } => {
+                Obj::BondRegistered {
+                    bond,
+                    pubkey,
+                    operator_pubkey,
+                    collateral: floor_sized,
+                    payout_payload,
+                    capable_classes,
+                    signature,
+                }
+            }
             other => other,
         })
         .collect();

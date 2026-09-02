@@ -24,10 +24,10 @@ use kaspa_hashes::Hash64;
 use thiserror::Error;
 
 use crate::palw_legs::PalwCheckpointProfileV1;
-use crate::palw_slash::{check_job_context_shape, PalwSlashError};
+use crate::palw_slash::{PalwSlashError, check_job_context_shape};
 use crate::palw_step::{
-    canonical_step_leaf_index, kv_aux_leaf_count, step_leaf_count, PalwLayerKindV1, PalwShapeProfileV3, PalwStepCoordinateV1,
-    PalwStepError,
+    PalwLayerKindV1, PalwShapeProfileV3, PalwStepCoordinateV1, PalwStepError, canonical_step_leaf_index, kv_aux_leaf_count,
+    step_leaf_count,
 };
 use crate::palw_v2::PalwJobContextV2;
 
@@ -1481,12 +1481,12 @@ fn checkpoint_fault(
 mod tests {
     use super::*;
     use crate::palw_carriage::PALW_CARRIAGE_ALL_DOMAINS;
-    use crate::palw_legs::{leg_opening_root_v1, leg_opening_v1, PalwLegOpeningV1, PALW_LEGS_ALL_DOMAINS};
+    use crate::palw_legs::{PALW_LEGS_ALL_DOMAINS, PalwLegOpeningV1, leg_opening_root_v1, leg_opening_v1};
     use crate::palw_reference::PALW_REFERENCE_ALL_DOMAINS;
     use crate::palw_schedule::PALW_SCHEDULE_ALL_DOMAINS;
     use crate::palw_slash::PALW_S_ALL_DOMAINS;
     use crate::palw_step::{
-        canonical_step_coordinates, PalwStepNodeRoleV1, PalwStepNodeV1, PalwStepOpKindV1, PalwStepOutLenV1, PALW_STEP_ALL_DOMAINS,
+        PALW_STEP_ALL_DOMAINS, PalwStepNodeRoleV1, PalwStepNodeV1, PalwStepOpKindV1, PalwStepOutLenV1, canonical_step_coordinates,
     };
     use crate::palw_v2::{PALW_TRACE_COMMITMENT_VERSION_V2, PALW_V2_ALL_DOMAINS};
 

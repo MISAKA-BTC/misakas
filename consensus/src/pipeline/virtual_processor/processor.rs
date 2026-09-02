@@ -6139,7 +6139,10 @@ impl VirtualStateProcessor {
                         signature,
                         kaspa_consensus_core::palw_derived_v1::PALW_DERIVED_V1_MLDSA87_CONTEXT,
                     ) {
-                        return Err(format!("the derivation of claim {} is not signed by the executor key it declares", object.claim_id));
+                        return Err(format!(
+                            "the derivation of claim {} is not signed by the executor key it declares",
+                            object.claim_id
+                        ));
                     }
                 }
             }

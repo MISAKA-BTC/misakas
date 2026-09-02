@@ -1882,8 +1882,7 @@ mod tests {
             }
         }
 
-        let node_wide =
-            ((SERVE_BUDGET_BYTES_PER_WINDOW - PALW_MATERIAL_MAX_BYTES as u64) / SERVE_ATTEMPT_FLOOR_BYTES + 1) as usize;
+        let node_wide = ((SERVE_BUDGET_BYTES_PER_WINDOW - PALW_MATERIAL_MAX_BYTES as u64) / SERVE_ATTEMPT_FLOOR_BYTES + 1) as usize;
         let held = center.served_recently.lock().unwrap().len();
         assert!(
             held <= node_wide + 1,

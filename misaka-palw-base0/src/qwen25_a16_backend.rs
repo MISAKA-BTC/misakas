@@ -22,7 +22,7 @@ use crate::engine_a16::{A16Cache, A16Engine, A16PlanErrorV1};
 use kaspa_consensus_core::palw_backend::{PalwClaimRootsV1, PalwExecutionBackendV1, PalwExecutionOutcomeV1, PalwMaterialVerdictV1};
 use kaspa_consensus_core::palw_step::PalwShapeProfileV3;
 use kaspa_consensus_core::palw_v2::{
-    output_commitment_v2, prompt_token_ids_hash_v2, PalwJobContextV2, PALW_TRACE_COMMITMENT_VERSION_V2,
+    PALW_TRACE_COMMITMENT_VERSION_V2, PalwJobContextV2, output_commitment_v2, prompt_token_ids_hash_v2,
 };
 use kaspa_hashes::Hash64;
 
@@ -781,7 +781,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         prompt_tokens: &[usize],
         on_token: &mut dyn FnMut(u32),
     ) -> Result<kaspa_consensus_core::palw_backend::PalwFpRunV1, String> {
-        use kaspa_consensus_core::palw_fp_execution_v3::{palw_fp_job_context_v3, PalwFpClassFactsV3, PalwFpRunFactsV3};
+        use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, PalwFpRunFactsV3, palw_fp_job_context_v3};
         use kaspa_consensus_core::palw_freeprompt_v3::PalwFpStopReasonV3;
 
         // ADR-0077 SA-6: an artifact this host can no longer read is a job failure named at the
@@ -1079,11 +1079,11 @@ mod free_prompt_tests {
     use super::*;
     use crate::artifact::{Base0ShapeV1, LN_THETA_10000_GEN_Q};
     use crate::engine_a16::derived_a16_store;
-    use kaspa_consensus_core::palw_fp_execution_v3::{palw_fp_execution_root_v3, palw_fp_job_context_v3, PalwFpClassFactsV3};
+    use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, palw_fp_execution_root_v3, palw_fp_job_context_v3};
     use kaspa_consensus_core::palw_freeprompt_v3::{
-        PalwFpStopReasonV3, PalwFreePromptJobV3, PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER, PALW_FP_V3_VERSION,
+        PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER, PALW_FP_V3_VERSION, PalwFpStopReasonV3, PalwFreePromptJobV3,
     };
-    use kaspa_consensus_core::palw_qwen25_profile::{qwen25_a16_profile_v1, qwen25_a16_profile_v2, PalwQwen25GeometryV1};
+    use kaspa_consensus_core::palw_qwen25_profile::{PalwQwen25GeometryV1, qwen25_a16_profile_v1, qwen25_a16_profile_v2};
     use kaspa_consensus_core::palw_state_chunk_map as map;
     use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
 
@@ -1244,7 +1244,7 @@ mod free_prompt_tests {
     /// attention step (the v2-map checkpoint geometry).
     #[test]
     fn every_a16_leaf_adjudicates_and_a_tampered_one_convicts() {
-        use kaspa_consensus_core::palw_step_refute::{check_execution_step_refutation_v1, PalwStepRefuteError};
+        use kaspa_consensus_core::palw_step_refute::{PalwStepRefuteError, check_execution_step_refutation_v1};
 
         let (artifact, profile) = class_from(map::integer_kv_state_chunk_map_id_v2(), true);
         let backend = Qwen25A16Backend::new(artifact.clone(), NETWORK.to_vec(), profile.clone(), (4, 3));
