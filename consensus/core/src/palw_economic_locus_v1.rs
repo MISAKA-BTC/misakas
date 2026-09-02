@@ -691,6 +691,13 @@ mod tests {
     ///   envelopes add 18,648 bytes, for **532,245 bytes** of consensus objects. The ADR
     ///   understated by the envelope.
     ///
+    /// **And 532,245 is still a FLOOR, not a total.** It counts the receipt carriage only. It does
+    /// not count the 37 commitment transactions, the 37 `PanelBound` objects, the 37 court closes
+    /// a disputed answer would need (each of which ADR-0080 §1 measured as full-size, not 1/37th),
+    /// or the 37 flat exposure reservations and 740 interval replays the sibling tests price
+    /// separately. Understating this number once already cost an ADR its mechanism; the honest
+    /// statement is that the cheapest half of the bill is half a megabyte.
+    ///
     /// For scale, the carrier this whole exercise exists to respect is
     /// [`crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES`] = 80 KiB (81,920): the receipt carriage
     /// alone for a 37-way split
