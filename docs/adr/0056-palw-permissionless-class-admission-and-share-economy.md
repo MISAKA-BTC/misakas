@@ -15,6 +15,18 @@ ADR-0049 Decision H (the post-genesis admission carriage), ADR-0053 (one executi
 
 ---
 
+> **Amended (index reconciliation, 2026-09-02).** Three statements below are stale. (1) The
+> constants table's `min_base_class_share_permille = 300‰` is [ADR-0068](0068-the-llm-primary-economy-and-the-floors-minimum.md)'s
+> 20‰ since Relaunch 5. (2) Item 7's "the mid-epoch budget defect is also closed" is contradicted by
+> [ADR-0053](0053-palw-one-execution-family.md) (the fix was reverted on `main`) and by the shipped
+> transition: a class activating mid-epoch has no attempt-lane budget until the next boundary
+> (`ensure_epoch_budgets`), a known gap kept for state-root compatibility. (3) Decision 5 still says
+> "share is earned per Decision 4"; Decision 4 is withdrawn and the share walk is
+> [ADR-0054](0054-palw-share-follows-production.md) Decision 1. Registration itself is gated further
+> by [ADR-0069](0069-e2e-adjudicability-is-the-price-of-weight.md) (an uncertified family registers
+> weightless) and [ADR-0065](0065-a-bond-must-be-earned-and-a-seat-must-be-someone-else.md) (a bond
+> is earned). Map: [`README.md`](README.md).
+
 ## Context
 
 testnet-11 registers three classes at genesis. The question this ADR answers is the next one:
