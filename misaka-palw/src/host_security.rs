@@ -31,6 +31,13 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
 
+/// The Linux backend: `seccomp` + `Landlock`, in its own file because it is long and exists on one
+/// platform. It is a child module, so it reaches this module's private constructors — which is the
+/// point: [`Confinement`] must stay unconstructible from outside the installers.
+#[cfg(target_os = "linux")]
+#[path = "host_security_linux.rs"]
+mod linux;
+
 // -------------------------------------------------------------------------------------------
 // Decision 5 / S2 — the environment a worker child receives
 // -------------------------------------------------------------------------------------------
@@ -384,12 +391,37 @@ pub struct Confinement {
     backend: ConfinementBackend,
     /// The generated `sandbox-exec` profile, when the macOS backend is in force.
     profile: Option<PathBuf>,
+    /// The resolved Landlock rules and seccomp program, when the Linux backend is in force.
+    /// Everything that allocates lives here so the child between `fork` and `execve` allocates
+    /// nothing (see `host_security_linux.rs`).
+    #[cfg(target_os = "linux")]
+    plan: Option<std::sync::Arc<linux::Plan>>,
 }
 
 impl Confinement {
     /// The honest absence of a backend.
     pub fn none() -> Self {
-        Self { backend: ConfinementBackend::None, profile: None }
+        Self {
+            backend: ConfinementBackend::None,
+            profile: None,
+            #[cfg(target_os = "linux")]
+            plan: None,
+        }
+    }
+
+    /// The Linux backend, PROVEN. Private, and called by [`linux::establish`] and nothing else:
+    /// the whole value of this type is that it cannot be constructed without the drill.
+    #[cfg(target_os = "linux")]
+    fn linux_seccomp_landlock(plan: std::sync::Arc<linux::Plan>) -> Self {
+        Self { backend: ConfinementBackend::LinuxSeccompLandlock, profile: None, plan: Some(plan) }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn linux_plan(&self) -> Option<&std::sync::Arc<linux::Plan>> {
+        match self.backend {
+            ConfinementBackend::LinuxSeccompLandlock => self.plan.as_ref(),
+            _ => None,
+        }
     }
 
     pub fn backend(&self) -> ConfinementBackend {
@@ -407,7 +439,16 @@ impl Confinement {
                 cmd.arg("-f").arg(profile).arg(program);
                 cmd
             }
-            _ => Command::new(program),
+            _ => {
+                // Linux confines the child itself, in `pre_exec`, rather than wrapping the program
+                // in a helper: there is no `sandbox-exec` to hand the profile to, and a wrapper
+                // would be one more binary in the execution path.
+                #[cfg(target_os = "linux")]
+                if let Some(plan) = self.linux_plan() {
+                    return linux::confined_command(plan, program);
+                }
+                Command::new(program)
+            }
         }
     }
 }
@@ -436,6 +477,10 @@ pub fn establish_confinement(workdir: &Path, writable: &[PathBuf]) -> (Confineme
     #[cfg(target_os = "macos")]
     if requested == ConfinementBackend::MacosSandboxExec.name() {
         return macos::establish(workdir, writable);
+    }
+    #[cfg(target_os = "linux")]
+    if requested == ConfinementBackend::LinuxSeccompLandlock.name() {
+        return linux::establish(workdir, writable);
     }
     let _ = (workdir, writable);
     (
@@ -626,9 +671,10 @@ pub fn confinement_backend_in_force() -> ConfinementBackend {
 /// `macos-sandbox-exec` and [`confinement_backend_in_force`] says `none` is a host where nobody
 /// asked for it, or where its drill did not pass.
 ///
-/// Linux is `none` here and will stay so until a `seccomp` + `Landlock` backend ships and can
-/// prove its own denials the way the macOS one does (ADR-0079 R-04). Naming it before then would
-/// be promising a posture this build does not have.
+/// On Linux the answer is read from the kernel, not from a version string: the LSM list
+/// (`/sys/kernel/security/lsm`) must name `landlock`, `landlock_create_ruleset` must answer with
+/// an ABI level, and `prctl(PR_GET_SECCOMP)` must answer at all. A kernel that was built with
+/// Landlock and booted without it says so in the first of those, and a version number would not.
 pub fn confinement_backend_available() -> ConfinementBackend {
     #[cfg(target_os = "macos")]
     {
@@ -636,7 +682,65 @@ pub fn confinement_backend_available() -> ConfinementBackend {
             return ConfinementBackend::MacosSandboxExec;
         }
     }
+    #[cfg(target_os = "linux")]
+    {
+        if linux::kernel_supports_backend().is_ok() {
+            return ConfinementBackend::LinuxSeccompLandlock;
+        }
+    }
     ConfinementBackend::None
+}
+
+/// **Decision 5's "no `execve` after setup", stacked by the process it applies to.**
+///
+/// The supervisor installs its filter between `fork` and `execve`, so that filter cannot deny the
+/// worker's own exec. Seccomp filters STACK and cannot be removed, so the worker denies `execve`
+/// on itself, once, at the top of `main`:
+///
+/// ```no_run
+/// // first line of a worker binary's main():
+/// let _ = misaka_palw::host_security::confine_self_after_exec();
+/// ```
+///
+/// It stacks the denial only when a filter is ALREADY in force — i.e. when a confining supervisor
+/// spawned this process. A worker started by hand keeps every capability it had, because a binary
+/// whose posture depended on who ran it would make the report an assumption. The return value says
+/// which of those happened; nothing here ever silently claims more than it did.
+pub fn confine_self_after_exec() -> ExecveDenial {
+    #[cfg(target_os = "linux")]
+    {
+        linux::confine_self_after_exec()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        ExecveDenial::Unsupported("no seccomp on this platform; the execve denial is a Linux-only control".to_string())
+    }
+}
+
+/// What [`confine_self_after_exec`] did — reported, never assumed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ExecveDenial {
+    /// A supervisor's filter was in force and the `execve` denial is now stacked on it.
+    Stacked,
+    /// No filter was in force: this process was not spawned by a confining supervisor, so nothing
+    /// was stacked.
+    NotConfined,
+    /// This platform or kernel has no seccomp filter mode.
+    Unsupported(String),
+    /// A filter WAS in force and the stack failed. The caller should refuse to run: the process
+    /// has less confinement than the supervisor's report already claims.
+    Failed(String),
+}
+
+impl ExecveDenial {
+    pub fn name(&self) -> &'static str {
+        match self {
+            ExecveDenial::Stacked => "execve-denied",
+            ExecveDenial::NotConfined => "not-confined",
+            ExecveDenial::Unsupported(_) => "unsupported",
+            ExecveDenial::Failed(_) => "failed",
+        }
+    }
 }
 
 // -------------------------------------------------------------------------------------------
@@ -879,26 +983,30 @@ mod tests {
         assert!(err.contains("does NOT override"), "the acknowledgement must not be a way past this one");
     }
 
-    /// **S12, the default.** The honest absence of a backend is a value with a name, and this
-    /// build ships no installer for any platform but macOS — so `available` is `none` and a
-    /// [`Confinement::none`] names itself.
+    /// **S12, the default.** The honest absence of a backend is a value with a name, and
+    /// `available` may only ever name THIS platform's installer.
     ///
     /// This deliberately does NOT assert the process-global `confinement_backend_in_force()`: the
-    /// macOS drill below declares it when it passes, and a test that read that global would pass
-    /// or fail on test ORDER. The real S12 assertion — a backend that was configured but did not
-    /// install reports `none` — lives in
-    /// [`an_unrequested_or_unsupported_backend_reports_none`], on the returned value.
+    /// drills below declare it when they pass, and a test that read that global would pass or fail
+    /// on test ORDER. The real S12 assertion — a backend that was configured but did not install
+    /// reports `none` — lives in [`an_unrequested_or_unsupported_backend_reports_none`], on the
+    /// returned value.
     #[test]
     fn the_absence_of_a_backend_is_a_named_value() {
         assert_eq!(Confinement::none().backend(), ConfinementBackend::None);
         assert_eq!(ConfinementBackend::None.name(), "none");
-        // "available" is not "in force": on a mac with sandbox-exec this build COULD install one,
-        // and that says nothing about whether anyone asked or whether its drill passed.
-        assert_ne!(
-            confinement_backend_available(),
-            ConfinementBackend::LinuxSeccompLandlock,
-            "no Linux backend ships yet, and naming one would promise a posture this build does not have"
-        );
+        // "available" is not "in force": on a host that HAS the mechanism this build COULD install
+        // one, and that says nothing about whether anyone asked or whether its drill passed. What
+        // it may never do is name another platform's backend.
+        let available = confinement_backend_available();
+        let allowed: &[ConfinementBackend] = if cfg!(target_os = "macos") {
+            &[ConfinementBackend::None, ConfinementBackend::MacosSandboxExec]
+        } else if cfg!(target_os = "linux") {
+            &[ConfinementBackend::None, ConfinementBackend::LinuxSeccompLandlock]
+        } else {
+            &[ConfinementBackend::None]
+        };
+        assert!(allowed.contains(&available), "{} is not a backend this platform can install", available.name());
     }
 
     /// **S5.** A secret in the process's own view is found by name and by shape.
@@ -934,7 +1042,13 @@ mod tests {
         assert_eq!(conf.backend(), ConfinementBackend::None);
         assert!(notes.iter().any(|n| n.contains("no backend requested")), "{notes:?}");
 
-        unsafe { std::env::set_var(PALW_CONFINEMENT_ENV, "linux-seccomp-landlock") };
+        // The OTHER platform's backend: a real name this build can spell and cannot install here.
+        let foreign = if cfg!(target_os = "linux") {
+            ConfinementBackend::MacosSandboxExec.name()
+        } else {
+            ConfinementBackend::LinuxSeccompLandlock.name()
+        };
+        unsafe { std::env::set_var(PALW_CONFINEMENT_ENV, foreign) };
         let (conf, notes) = establish_confinement(&workdir, &[]);
         assert_eq!(conf.backend(), ConfinementBackend::None, "a backend this build cannot install is `none`, not a promise");
         assert!(notes.iter().any(|n| n.contains("not a backend this build can install")), "{notes:?}");
@@ -973,6 +1087,81 @@ mod tests {
         assert_eq!(plain.stdout, confined.stdout, "confinement must not change what a child computes");
         assert_eq!(plain.status.success(), confined.status.success());
         std::fs::remove_dir_all(&workdir).ok();
+    }
+
+    /// **S3 and S4 on Linux.** The `seccomp` + `Landlock` backend is installed only after its own
+    /// drill has OBSERVED the denials: a dynamically linked child starts, a write lands inside the
+    /// writable set and is denied outside it, a file readable UNCONFINED is denied under the
+    /// profile — the read half macOS could not deliver — a socket reachable unconfined is refused,
+    /// and a child that stacks the `execve` denial can no longer exec.
+    ///
+    /// And S4's shape: the same deterministic child produces identical bytes confined and
+    /// unconfined. That is the invariant that lets the backend ship at all — a security control
+    /// that could change an arithmetic result is a fork risk.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_linux_backend_proves_its_denials_before_it_is_declared() {
+        let workdir = std::env::temp_dir().join(format!("palw-ll-{}", std::process::id()));
+        std::fs::create_dir_all(&workdir).unwrap();
+        // SAFETY: single-threaded test setup.
+        unsafe { std::env::set_var(PALW_CONFINEMENT_ENV, ConfinementBackend::LinuxSeccompLandlock.name()) };
+        let (conf, notes) = establish_confinement(&workdir, std::slice::from_ref(&workdir));
+        unsafe { std::env::remove_var(PALW_CONFINEMENT_ENV) };
+
+        if conf.backend() == ConfinementBackend::None {
+            // A kernel with no Landlock, a container that hides the LSM list, a restricted CI —
+            // all report `none` WITH THE REASON, which is the property rather than a skipped test.
+            assert!(notes.iter().any(|n| n.contains("`none`")), "a refusal must say why: {notes:?}");
+            // But on a host whose kernel DOES expose the mechanism, `none` may only ever be an
+            // INCONCLUSIVE drill — a missing probe binary, a temp dir that overlaps the writable
+            // set. A FAILED leg there is a profile that does not do what this file says it does,
+            // and this assertion is what stops that from passing as a skipped test.
+            if confinement_backend_available() == ConfinementBackend::LinuxSeccompLandlock {
+                assert!(
+                    !notes.iter().any(|n| n.contains("drill FAILED")),
+                    "this kernel exposes Landlock and seccomp, and a drill leg FAILED: {notes:?}"
+                );
+            }
+            std::fs::remove_dir_all(&workdir).ok();
+            return;
+        }
+        assert_eq!(conf.backend(), ConfinementBackend::LinuxSeccompLandlock);
+        for observed in [
+            "starts under the profile",
+            "denied outside it",
+            "readable UNCONFINED and DENIED under the profile",
+            "a read inside the allowed set is permitted",
+            "a socket reachable unconfined is DENIED under the profile",
+            "cannot exec",
+            "limitation, stated",
+        ] {
+            assert!(notes.iter().any(|n| n.contains(observed)), "the drill must observe {observed:?}: {notes:?}");
+        }
+
+        // S4: confinement changes what a child MAY do, never what it computes.
+        let plain = Command::new("/bin/echo").arg("deterministic").output().expect("echo");
+        let confined = conf.command(Path::new("/bin/echo")).arg("deterministic").output().expect("echo under the profile");
+        assert_eq!(plain.stdout, confined.stdout, "confinement must not change what a child computes");
+        assert_eq!(plain.status.success(), confined.status.success());
+        std::fs::remove_dir_all(&workdir).ok();
+    }
+
+    /// The worker's own half of Decision 5 stacks a denial only on a process a confining
+    /// supervisor spawned. A binary that confined itself regardless would have a posture that
+    /// depends on who ran it, and the report would then be reading an assumption.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn an_unsupervised_process_stacks_no_execve_denial() {
+        // 21 is `PR_GET_SECCOMP`. The assertion below is only meaningful — and only SAFE — on a
+        // process that is not already filtered: calling the function under a filter would install
+        // one on the test binary and break every later spawn in this process.
+        if unsafe { libc::prctl(21) } != 0 {
+            eprintln!("this test process is already seccomp-filtered; the NotConfined case cannot be observed here");
+            return;
+        }
+        assert_eq!(confine_self_after_exec(), ExecveDenial::NotConfined);
+        assert_eq!(ExecveDenial::NotConfined.name(), "not-confined");
+        assert_eq!(ExecveDenial::Stacked.name(), "execve-denied");
     }
 
     /// The ceiling is named for what it measures and is above the hybrid class's mapped artifact,

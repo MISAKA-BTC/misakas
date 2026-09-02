@@ -58,6 +58,19 @@ pub const NOTES_MAX_TOTAL: usize = 65_536;
 pub const TRACK_NAME_MAX_BYTES: usize = 64;
 /// No note ends after this tick; every onset and every duration is below it.
 pub const TICK_END_MAX: i128 = 1 << 28;
+/// **ADR-0078 SA-2's `max_dsl_bytes`.** The most answer bytes this kind will look at, checked on
+/// the byte COUNT before the parser is asked what the bytes spell — a JSON parser is an allocator
+/// driven by its input, and a bound applied after parsing is applied after the damage. Exceeding
+/// it is "no object" (Decision 2's parse-failure arm, X4), never a repair and never a truncation.
+///
+/// The number is the retention payload's own cap (`PALW_FP_DSL_V1_MAX_BYTES`): a DSL above it
+/// could not be served to a verifier under Decision 6 even if it derived, so deriving from one
+/// would be building a derivation nobody could check. This kind's schema admits documents larger
+/// than that in its extreme corner (65,536 notes over 64 tracks), and this ceiling is the
+/// binding one — it is far above any answer a class at these widths emits, and far below
+/// what a parser could be made to allocate.
+pub const MAX_DSL_BYTES: u64 = kaspa_consensus_core::palw_derived_v1::PALW_FP_DSL_V1_MAX_BYTES as u64;
+
 /// The largest artifact the transformer hands out. The schema's bounds keep every artifact
 /// under 1 MiB; the ceiling is stated so that the bound is a number and not an accident.
 pub const ARTIFACT_MAX_BYTES: usize = 16 << 20;
@@ -99,6 +112,7 @@ impl Grammar for MusicGrammar {
 
     /// Parse, hold to the schema, re-emit. A refusal anywhere is `DeriveError::Grammar` (X4).
     fn canonicalize(&self, answer: &[u8]) -> Result<Vec<u8>, DeriveError> {
+        crate::check_dsl_bytes(MAX_DSL_BYTES, answer)?;
         let value = parse_canonical(answer)?;
         parse_song(&value)?;
         Ok(write_canonical(&value))
@@ -114,10 +128,15 @@ impl Transformer for MusicSmfTransformer {
             discipline: Discipline::Integer,
             writer: WRITER_NAME,
             source_tree_sha256: crate::SOURCE_TREE_SHA256_HEX,
+            // ADR-0078 SA-2: the ceilings this kind enforces, each already a constant above.
+            max_dsl_bytes: MAX_DSL_BYTES,
+            max_artifact_bytes: ARTIFACT_MAX_BYTES as u64,
+            max_steps: NOTES_MAX_TOTAL as u64,
         }
     }
 
     fn run(&self, dsl: &[u8]) -> Result<Artifact, DeriveError> {
+        crate::check_dsl_bytes(MAX_DSL_BYTES, dsl)?;
         let song = canonical_song(dsl)?;
         let bytes = write_smf(&song)?;
         Ok(Artifact { bytes, media_type: MEDIA_TYPE, extension: EXTENSION })

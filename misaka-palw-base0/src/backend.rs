@@ -121,6 +121,71 @@ impl Base0Backend {
     }
 }
 
+/// **The floor's kernels, as a seat's interval replay needs them** (ADR-0077 Decision 8).
+///
+/// A thin adapter and deliberately not a second execution path: the window is walked by
+/// [`crate::fp_interval::base0_fp_replay_interval_v1`], which is the capture's own loop, and this
+/// supplies only the two things a family owns — how to restore the cache the interval resumes from
+/// and how to run one forward call. A family that re-implemented the coordinate rule here would
+/// commit its replay at coordinates the leg does not use, and every comparison would fail for a
+/// reason that is not the producer's.
+struct Base0IntervalKernels<'a> {
+    artifact: &'a Base0ArtifactV1,
+}
+
+impl crate::fp_interval::Base0FpIntervalKernelsV1 for Base0IntervalKernels<'_> {
+    fn replay_interval(
+        &self,
+        profile: &PalwShapeProfileV3,
+        ctx: &PalwJobContextV2,
+        start: &crate::fp_interval::Base0FpIntervalStartV1<'_>,
+        first_call: u32,
+        last_call: u32,
+    ) -> Result<Vec<(u64, Hash64)>, String> {
+        use crate::engine::{Base0Engine, KvCache};
+        let engine = Base0Engine::new(self.artifact);
+        // **ADR-0049 Decision F's obligation before the first token, on the SEAT's side too.** A
+        // seat that replayed under a graph the profile does not name would recompute rows the
+        // court recomputes differently and report a fault against an honest producer.
+        for kv_len in 1..=2 {
+            crate::plan::base0_check_graph_v1(engine.plan().map_err(|e| format!("{e:?}"))?, profile, &self.artifact.shape, kv_len)
+                .map_err(|e| format!("{e:?}"))?;
+        }
+        let mut cache = match start {
+            crate::fp_interval::Base0FpIntervalStartV1::Genesis { .. } => KvCache::new(self.artifact),
+            crate::fp_interval::Base0FpIntervalStartV1::Checkpoint { covered_decode_call, chunks, .. } => {
+                let positions = kaspa_consensus_core::palw_state_chunk_map::integer_kv_positions_at_v1(ctx, *covered_decode_call);
+                let geometry = crate::legs::base0_state_chunk_geometry_v1(profile, positions).map_err(|e| format!("{e:?}"))?;
+                KvCache::from_state_chunks(self.artifact, &geometry, chunks).map_err(|e| format!("{e:?}"))?
+            }
+        };
+        let vocab = self.artifact.shape.vocab;
+        crate::fp_interval::base0_fp_replay_interval_v1(profile, ctx, start, first_call, last_call, |token, position| {
+            if token >= vocab {
+                return Err(format!("token {token} is outside this class's vocabulary of {vocab}"));
+            }
+            let (logits, probe) = engine.forward_token_probed(&mut cache, token, position).map_err(|e| format!("{e:?}"))?;
+            Ok((logits, crate::legs::base0_captured_rows_v1(&probe)))
+        })
+    }
+}
+
+impl Base0Backend {
+    /// The cadence this family checkpoints at — a class fact, read from the family's own
+    /// registration and never off a capture. The seat's interval count is derived from it and two
+    /// chain numbers ([`crate::fp_interval::base0_fp_interval_count_for_v1`]).
+    fn checkpoint_interval(&self) -> u32 {
+        kaspa_consensus_core::palw_state_chunk_map::PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1
+    }
+
+    /// **ADR-0077 SA-6, at the job boundary.** The floor derives its weights from a seed and holds
+    /// them in owned memory, so there is no mapped page to fault on — stated rather than assumed,
+    /// because the two model tiers answer this differently and a caller reads one seam.
+    fn artifact_read_probe_v1(&self) -> Result<(), String> {
+        Ok(())
+    }
+}
+
 impl PalwExecutionBackendV1 for Base0Backend {
     fn model_id(&self) -> &str {
         &self.model_id
@@ -147,13 +212,28 @@ impl PalwExecutionBackendV1 for Base0Backend {
         })
     }
 
+    /// The non-streaming verb IS the streaming one with a callback that does nothing — never the
+    /// reverse (ADR-0077 Decision 2). One inference, one capture, one commitment.
     fn execute_free_prompt(
         &self,
         job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
         prompt_tokens: &[usize],
     ) -> Result<kaspa_consensus_core::palw_backend::PalwFpRunV1, String> {
+        self.execute_free_prompt_streaming(job, prompt_tokens, &mut |_| {})
+    }
+
+    fn execute_free_prompt_streaming(
+        &self,
+        job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        prompt_tokens: &[usize],
+        on_token: &mut dyn FnMut(u32),
+    ) -> Result<kaspa_consensus_core::palw_backend::PalwFpRunV1, String> {
         use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, PalwFpRunFactsV3, palw_fp_job_context_v3};
         use kaspa_consensus_core::palw_freeprompt_v3::PalwFpStopReasonV3;
+
+        // ADR-0077 SA-6: an artifact this host can no longer read is a job failure named at the
+        // boundary, not a fault taken three layers into a kernel.
+        self.artifact_read_probe_v1()?;
 
         // The job declares how many tokens it is a job about, and the caller hands the tokens. If
         // those two disagree the derivation would build a context for a run that did not happen —
@@ -195,7 +275,8 @@ impl PalwExecutionBackendV1 for Base0Backend {
         // roots belong to the execution root derived from it afterwards.
         let ctx = palw_fp_job_context_v3(job, &class, &shape, RC_NETWORK_ID).map_err(|e| format!("{e:?}"))?;
 
-        let run = base0_execute_for_attempt_v1(&self.artifact, &self.profile, &ctx, prompt_tokens).map_err(|e| e.to_string())?;
+        let run = crate::produce::base0_execute_for_attempt_streaming_v1(&self.artifact, &self.profile, &ctx, prompt_tokens, on_token)
+            .map_err(|e| e.to_string())?;
 
         // The four legs, measured. They exist on every attempt this family makes — it is what makes
         // its claims adjudicable — and this is the first caller that needed them by name.
@@ -331,6 +412,49 @@ impl PalwExecutionBackendV1 for Base0Backend {
         prompt_token_ids: &[u32],
     ) -> Result<kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1, String> {
         self.refutation_with_prompt(material, index, Some(prompt_token_ids))
+    }
+
+    // ---- ADR-0077 Decision 8: the interval seam -------------------------------------------
+    //
+    // The count a seat draws from comes from CHAIN data (`fp_interval_count_for`); the count read
+    // off a capture (`fp_interval_count`) exists so the two can be pinned equal on every capture
+    // this family produces, and for nothing else. An executor whose reported count a seat trusted
+    // could shrink it and predict the draw.
+
+    fn fp_interval_count(&self, capture: &[u8]) -> Option<u32> {
+        let (binding, ..) = base0_material_decode_v1(capture).ok()?;
+        crate::fp_interval::Base0FpIntervalGeometryV1::from_binding_v1(&binding, self.checkpoint_interval())
+            .ok()
+            .map(|g| g.interval_count)
+    }
+
+    fn fp_interval_count_for(&self, prompt_tokens: u32, decode_tokens_executed: u32) -> Option<u32> {
+        crate::fp_interval::base0_fp_interval_count_for_v1(prompt_tokens, decode_tokens_executed, self.checkpoint_interval())
+    }
+
+    fn open_fp_interval(&self, capture: &[u8], index: u32, prompt_token_ids: &[u32]) -> Result<Vec<u8>, String> {
+        let material = base0_material_decode_v1(capture).map_err(|_| "the capture does not decode".to_string())?;
+        crate::fp_interval::base0_open_fp_interval_v1(&material, index, prompt_token_ids, self.checkpoint_interval())
+            .map_err(|e| e.to_string())
+    }
+
+    fn verify_fp_interval_opening(
+        &self,
+        opening: &[u8],
+        claim: PalwClaimRootsV1,
+        index: u32,
+        prompt_token_ids: &[u32],
+        work_leaves: u64,
+    ) -> kaspa_consensus_core::palw_backend::PalwFpIntervalVerdictV1 {
+        crate::fp_interval::base0_verify_fp_interval_opening_v1(
+            opening,
+            claim,
+            index,
+            prompt_token_ids,
+            work_leaves,
+            self.checkpoint_interval(),
+            &Base0IntervalKernels { artifact: &self.artifact },
+        )
     }
 
     fn operand_openings_for(
@@ -928,6 +1052,93 @@ mod tests {
             assert!(
                 check_execution_step_refutation_v1(&refutation, &proven).is_ok(),
                 "a tampered lane at leaf {index} of a free-prompt capture must convict, not read as no fault"
+            );
+        }
+    }
+
+    /// **Decision 2: the stream is the run, not a replay of it.**
+    ///
+    /// The streamed ids must be the committed ids, in decode order, and the run they come out of
+    /// must be the run whose roots the caller gets — a worker that streamed one answer and
+    /// committed another is exactly what F1 dies on. Asserted three ways: same ids, same order,
+    /// and the same roots as the non-streaming verb over the same job, which is what makes "one
+    /// inference, both halves" checkable rather than asserted.
+    #[test]
+    fn the_streamed_ids_are_the_committed_ids_of_the_same_run() {
+        let backend = floor_backend();
+        let prompt: Vec<usize> = vec![7, 11, 13, 17];
+        let job = free_prompt_job(&backend, prompt.len() as u32, 4);
+
+        let mut streamed: Vec<u32> = Vec::new();
+        let run = backend
+            .execute_free_prompt_streaming(&job, &prompt, &mut |id| streamed.push(id))
+            .expect("the floor streams a caller's prompt");
+        assert_eq!(streamed, run.output_token_ids, "the stream is the answer, id for id and in order");
+        assert_eq!(streamed.len(), job.decode_token_limit as usize);
+
+        // …and it is the same inference the non-streaming verb performs. A default implementation
+        // that ran the job and replayed the ids afterwards would also satisfy the equality above;
+        // this is the part that says the callback rides the decode loop, because the roots of the
+        // two runs are identical and the streaming one produced its ids before it had any roots.
+        let plain = backend.execute_free_prompt(&job, &prompt).expect("the floor runs the same job");
+        assert_eq!(plain.outcome.execution_root, run.outcome.execution_root);
+        assert_eq!(plain.output_token_ids, run.output_token_ids);
+    }
+
+    /// **The interval seam, through the trait a node holds** (ADR-0077 Decision 8, P-08).
+    ///
+    /// The seat's count comes from the chain (`fp_interval_count_for`) and must equal the one the
+    /// capture implies; every drawn interval opens and verifies; and the bytes a seat fetches are
+    /// the opening, never the capture.
+    #[test]
+    fn the_backend_opens_and_verifies_the_intervals_a_seat_draws() {
+        use kaspa_consensus_core::palw_backend::PalwFpIntervalVerdictV1;
+        use kaspa_consensus_core::palw_fp_interval_v1::{PALW_FP_SEAT_INTERVAL_SAMPLES_V1, palw_fp_interval_draw_v1};
+
+        let backend = floor_backend();
+        let prompt: Vec<usize> = vec![7, 11, 13, 17];
+        let ids: Vec<u32> = prompt.iter().map(|t| *t as u32).collect();
+        let mut job = free_prompt_job(&backend, prompt.len() as u32, 5);
+        job.prompt_token_ids_hash = kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(&ids);
+        let run = backend.execute_free_prompt(&job, &prompt).expect("the floor runs a caller's prompt");
+
+        // The count a seat draws against: two chain numbers and the class's own cadence. Nothing
+        // in it came from the capture.
+        let from_chain = backend
+            .fp_interval_count_for(job.prompt_tokens, run.facts.decode_tokens_executed)
+            .expect("the floor has a free-prompt path");
+        assert_eq!(from_chain, backend.fp_interval_count(&run.outcome.material).expect("the capture reads"));
+        assert!(from_chain > 1, "the fixture exercises both the genesis and the anchored arms");
+
+        let claim = PalwClaimRootsV1 {
+            execution_root: run.outcome.execution_root,
+            trace_root: run.outcome.trace_root,
+            // The FP lane's anchor is the job id the derivation produced, which is what a seat
+            // reads off the accepted commitment.
+            anchor: Hash64::default(),
+        };
+        let draw = palw_fp_interval_draw_v1(
+            &job.network_domain,
+            &job.anchor_block,
+            &Hash64::from_u64_word(0xC1A1),
+            2,
+            PALW_FP_SEAT_INTERVAL_SAMPLES_V1,
+            from_chain,
+        );
+        assert!(!draw.is_empty());
+        for index in draw {
+            let opening =
+                backend.open_fp_interval(&run.outcome.material, index, &ids).unwrap_or_else(|e| panic!("interval {index} opens: {e}"));
+            assert!(
+                opening.len() < run.outcome.material.len(),
+                "a seat fetches the opening ({} bytes), never the capture ({} bytes)",
+                opening.len(),
+                run.outcome.material.len()
+            );
+            assert_eq!(
+                backend.verify_fp_interval_opening(&opening, claim, index, &ids, run.facts.step_leaf_count),
+                PalwFpIntervalVerdictV1::Valid,
+                "interval {index}"
             );
         }
     }

@@ -21,6 +21,11 @@ faster-hex.workspace = true
 # `kaspa-evm` pins the spec id the lane executes under, `revm` is the machine.
 kaspa-evm.workspace = true
 revm = { version = "14", default-features = false, features = ["std"] }
+# ADR-0079 Decision 12 / ADR-0078 SA-1: the ONE spelling of the host posture — the confinement
+# backend that proves its own denials, the worker spawn discipline, the resident measurement and
+# the reachable-secret check. Model-written code runs in a child process built by THAT api; a
+# second copy of the rules here would be a second answer to the same question.
+misaka-palw.workspace = true
 # The X6 verifier: a family's rendered-output hash rule, exported by the family crate.
 misaka-palw-base0.workspace = true
 serde.workspace = true
@@ -33,3 +38,11 @@ workspace = true
 [[bin]]
 name = "palw-derive"
 path = "src/bin/palw-derive.rs"
+
+# ADR-0078 SA-1: model-written initcode never runs inside the caller's process. This binary IS
+# the separate process — one canonical job on stdin, one canonical result on stdout, an ephemeral
+# isolated state, and nothing else. It ships beside every binary that derives a `code` or
+# `contract` artifact; without it the two transformers refuse rather than fall back in-process.
+[[bin]]
+name = "palw-evm-runner"
+path = "src/bin/palw-evm-runner.rs"

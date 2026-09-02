@@ -1352,6 +1352,14 @@ message GetPalwProducerFactsResponseMessage {
   // Answered on any ConsensusV2 network, including for a request that names no class — a wallet
   // needs this and has no class id to offer (audit3 H3).
   repeated string lockedBondOutpoints = 21;
+  // ADR-0077 Decision 3: is this class seated on the FREE-PROMPT lane (ADR-0075
+  // ClassLaneCertified, genesis set union chain set)? False whenever `available` is false.
+  bool fpCertified = 22;
+  // The free-prompt lane's price, from the network's own bundle: a quantum is
+  // max(1, pwu_per_inference / fpQuantaPerCanonicalJob) leaves, and one claim earns at most
+  // fpMaxQuantaPerReceipt of them. Zero on a network that prices no free-prompt lane.
+  uint32 fpQuantaPerCanonicalJob = 23;
+  uint32 fpMaxQuantaPerReceipt = 24;
   RPCError error = 1000;
 }
 

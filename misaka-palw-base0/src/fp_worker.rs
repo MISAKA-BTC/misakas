@@ -540,7 +540,10 @@ pub fn prompt_ids_for_input_v1(
             }
             let text = std::str::from_utf8(bytes)
                 .map_err(|_| "the text arm is not UTF-8 — a template renders text, not bytes".to_string())?;
-            tokenizer.encode(text).map_err(|e| format!("the text arm did not tokenize: {}", e.kind()))?
+            // ADR-0079 Decision 7 / S7 (and ADR-0077 Decision 6): the Text arm is a stranger's bytes,
+            // so added tokens are NOT matched — a user's `<|im_start|>` is ordinary text. A template
+            // that means to emit a control token says so through the Segments arm's `Special(id)`.
+            tokenizer.encode_without_specials(text).map_err(|e| format!("the text arm did not tokenize: {}", e.kind()))?
         }
         PalwFpWorkerInputV3::TokenIds(ids) => {
             if ids.is_empty() {

@@ -405,6 +405,9 @@ from!(item: RpcResult<&kaspa_rpc_core::GetPalwProducerFactsResponse>, protowire:
         bond_claim_exposure: item.bond_claim_exposure.clone(),
         not_ready_reason: item.not_ready_reason.clone(),
         locked_bond_outpoints: item.locked_bond_outpoints.clone(),
+        fp_certified: item.fp_certified,
+        fp_quanta_per_canonical_job: item.fp_quanta_per_canonical_job,
+        fp_max_quanta_per_receipt: item.fp_max_quanta_per_receipt,
         error: None,
     }
 });
@@ -1109,6 +1112,9 @@ try_from!(item: &protowire::GetPalwProducerFactsResponseMessage, RpcResult<kaspa
         bond_claim_exposure: item.bond_claim_exposure.clone(),
         not_ready_reason: item.not_ready_reason.clone(),
         locked_bond_outpoints: item.locked_bond_outpoints.clone(),
+        fp_certified: item.fp_certified,
+        fp_quanta_per_canonical_job: item.fp_quanta_per_canonical_job,
+        fp_max_quanta_per_receipt: item.fp_max_quanta_per_receipt,
     }
 });
 try_from!(item: &protowire::GetTokenSupplyRequestMessage, kaspa_rpc_core::GetTokenSupplyRequest, { Self { asset_id: item.asset_id } });
@@ -1506,6 +1512,10 @@ mod palw_producer_facts_tests {
             not_ready_reason: "the bond's exposure ceiling leaves no room for another claim".to_string(),
             // audit3 H3: the set a wallet must have before it selects inputs.
             locked_bond_outpoints: vec![format!("{}:0", "aa".repeat(64)), format!("{}:7", "bb".repeat(64))],
+            // ADR-0077 Decision 3: what a gateway reads before it commits.
+            fp_certified: true,
+            fp_quanta_per_canonical_job: 8,
+            fp_max_quanta_per_receipt: 64,
         };
         let wire: crate::protowire::GetPalwProducerFactsResponseMessage = RpcResult::Ok(&response).into();
         let back: GetPalwProducerFactsResponse = GetPalwProducerFactsResponse::try_from(&wire).unwrap();
@@ -1533,6 +1543,9 @@ mod palw_producer_facts_tests {
             back.locked_bond_outpoints, response.locked_bond_outpoints,
             "the locked-collateral set must survive the wire — a wallet that loses it selects a bonded input"
         );
+        assert!(back.fp_certified, "a gateway that loses fp_certified cannot say why its commitment is unsubmittable");
+        assert_eq!(back.fp_quanta_per_canonical_job, response.fp_quanta_per_canonical_job);
+        assert_eq!(back.fp_max_quanta_per_receipt, response.fp_max_quanta_per_receipt);
     }
 }
 

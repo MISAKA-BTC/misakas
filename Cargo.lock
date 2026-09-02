@@ -5986,6 +5986,7 @@ dependencies = [
  "kaspa-pq-validator-core",
  "kaspa-txscript",
  "libc",
+ "misaka-palw",
  "rayon",
  "serde_json",
  "unicode-normalization",
@@ -6011,11 +6012,26 @@ dependencies = [
  "kaspa-consensus-core",
  "kaspa-evm",
  "kaspa-hashes",
+ "misaka-palw",
  "misaka-palw-base0",
  "revm",
  "serde",
  "serde_json",
  "thiserror 1.0.64",
+]
+
+[[package]]
+name = "misaka-palw-fp-submit"
+version = "1.1.0"
+dependencies = [
+ "borsh",
+ "futures",
+ "kaspa-addresses",
+ "kaspa-consensus-core",
+ "kaspa-hashes",
+ "kaspa-pq-validator-core",
+ "kaspa-rpc-core",
+ "kaspa-txscript",
 ]
 
 [[package]]
@@ -6027,11 +6043,15 @@ dependencies = [
  "kaspa-consensus-core",
  "kaspa-hashes",
  "kaspa-pq-validator-core",
+ "kaspa-rpc-core",
+ "kaspa-wrpc-client",
  "misaka-palw",
  "misaka-palw-derive",
+ "misaka-palw-fp-submit",
  "rand 0.8.6",
  "serde",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]

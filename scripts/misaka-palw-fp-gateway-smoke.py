@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
-"""FP gateway smoke (ADR-0044 FP-07): an OpenAI-style chat request answered by the real model,
-with the commitment inputs in the response and the artifact in the outbox — one inference.
+"""FP gateway smoke (ADR-0044 FP-07, ADR-0077 Decisions 1-3): an OpenAI-style chat request
+answered by the real model, with the commitment inputs in the response and the artifact in the
+outbox — one inference, one resident worker, and the SSE form of the same answer.
 
-usage: misaka-palw-fp-gateway-smoke.py <misaka-palw-gateway> <palw-worker> <gguf>
+Runs the OFFLINE form (`--anchor`), so the four chain facts read as `unknown` and `/health` says
+so by name. The live form is `--rpc <host:port>`; the devnet drill exercises that.
+
+usage: misaka-palw-fp-gateway-smoke.py <misaka-palw-gateway> <family-fp-worker> <gguf>
 """
 import http.client
 import json
@@ -34,7 +38,7 @@ env = dict(os.environ)
 env["MISAKA_PALW_GGUF"] = GGUF
 gateway = subprocess.Popen(
     [GATEWAY, "--listen", f"127.0.0.1:{PORT}", "--worker", WORKER, "--outbox", str(outbox),
-     "--identity", str(identity), "--anchor", str(anchor), "--quantum-cu", "1000"],
+     "--identity", str(identity), "--anchor", str(anchor), "--class-leaves", "7708"],
     env=env, stderr=subprocess.PIPE, text=True,
 )
 try:
@@ -53,7 +57,13 @@ try:
             if gateway.poll() is not None:
                 raise RuntimeError(f"gateway died: {gateway.stderr.read()}")
             time.sleep(0.3)
-    print(f"[1] health ok — manifest {health['runtime_manifest_hash'][:16]}…, template {health['template_id']}")
+    # ADR-0077 Decision 3: all four names are present in every answer, including the unknown one.
+    for name in ("registered", "fp_certified", "bond_active", "exposure_room"):
+        assert name in health["chain"], f"/health must name {name} (ADR-0077 Decision 3)"
+        assert health["chain"][name] == "unknown", f"the offline form must say unknown, never a yes: {name}"
+    assert health["can_submit"] is False, "a gateway with no --rpc cannot submit, and says so"
+    print(f"[1] health ok — manifest {health['runtime_manifest_hash'][:16]}…, template {health['template_id']}, "
+          f"n_ctx {health['n_ctx']}, chain {health['chain']['source']}")
 
     body = json.dumps({
         "model": "misaka-palw-fp-v3",
@@ -73,7 +83,8 @@ try:
     misaka = payload["misaka"]
     print(f"[2] chat answered: {answer!r}")
     print(f"    usage: {usage}")
-    print(f"    fp_job_id={misaka['fp_job_id'][:16]}… trace_root={misaka['trace_root'][:16]}… cu={misaka['cu']}")
+    print(f"    fp_job_id={misaka['fp_job_id'][:16]}… trace_root={misaka['trace_root'][:16]}… "
+          f"work_leaves={misaka['work_leaves']} stream_checked={misaka['answer_stream_checked']}")
     assert len(answer.strip()) > 0
     assert usage["completion_tokens"] > 0 and usage["prompt_tokens"] > 0
     assert len(misaka["trace_root"]) == 128 and len(misaka["output_root"]) == 128
@@ -83,8 +94,10 @@ try:
     summary = json.loads(artifact.read_text())
     assert summary["schema"] == "misaka.palw.fp-v3-gateway-artifact.v1"
     assert summary["trace_root"] == misaka["trace_root"]
-    assert summary["cu"] == misaka["cu"]
-    assert int(summary["quanta_at_configured_quantum"]) >= 1, "the job earned at least one draw at quantum 1000"
+    assert summary["work_leaves"] == misaka["work_leaves"]
+    assert int(summary["quanta_at_configured_quantum"]) >= 1, "the job earned at least one draw at the class's quantum"
+    # ADR-0077 SA-3: the prompt side of F1 is checked on every job that produced a commitment.
+    assert summary["prompt_ids_checked"] is True, "the committed prompt ids were checked against the plan (SA-3)"
     borsh_artifact = artifact.with_suffix("").with_suffix(".result.borsh")
     assert borsh_artifact.is_file() and borsh_artifact.stat().st_size > 0, "the framed result rides beside the summary"
     commitment_artifact = artifact.with_suffix("").with_suffix(".commitment-unsigned.borsh")
@@ -109,16 +122,39 @@ try:
     assert second["misaka"]["trace_root"] != misaka["trace_root"], "the trace binds the job id — anti-replay, by design"
     print("[4] re-ask: same answer (F1), different job id and trace root (anti-replay binding)")
 
-    # Refusals: streaming, and a body with no user message.
-    conn = http.client.HTTPConnection("127.0.0.1", PORT, timeout=60)
-    conn.request("POST", "/v1/chat/completions", json.dumps({"messages": [{"role": "user", "content": "x"}], "stream": True}),
+    # ADR-0077 Decision 2: the answer STREAMS as SSE and the commitment does not. W5 is asserted
+    # by the gateway itself — a stream whose rendering is not the committed one writes no
+    # commitment — and what this script checks is that the two surfaces agree about the answer.
+    conn = http.client.HTTPConnection("127.0.0.1", PORT, timeout=600)
+    conn.request("POST", "/v1/chat/completions", json.dumps(json.loads(body) | {"stream": True}),
                  {"Content-Type": "application/json"})
-    assert conn.getresponse().status == 400, "a stream request is refused, not silently downgraded"
+    sse = conn.getresponse()
+    assert sse.status == 200, "stream: true is served, not refused"
+    assert sse.getheader("content-type") == "text/event-stream"
+    streamed, tail = "", None
+    for raw in sse.read().decode().split("\n\n"):
+        raw = raw.strip()
+        if not raw.startswith("data: "):
+            continue
+        payload_text = raw[len("data: "):]
+        if payload_text == "[DONE]":
+            break
+        event = json.loads(payload_text)
+        if "misaka" in event:
+            tail = event
+            continue
+        streamed += event["choices"][0]["delta"].get("content", "")
+    assert tail is not None, "the terminal event carries the misaka object — an SSE client is told whether it made a claim"
+    assert streamed.strip() == answer.strip(), f"the streamed answer is the buffered one: {streamed!r} vs {answer!r}"
+    assert tail["misaka"]["answer_stream_checked"] is True, "W5 was actually exercised on the streamed run"
+    print(f"[5] SSE ok — {len(streamed)} bytes streamed, same answer, W5 checked")
+
+    # Refusals: a body with no user message.
     conn = http.client.HTTPConnection("127.0.0.1", PORT, timeout=60)
     conn.request("POST", "/v1/chat/completions", json.dumps({"messages": [{"role": "system", "content": "x"}]}),
                  {"Content-Type": "application/json"})
     assert conn.getresponse().status == 400, "no user message is refused"
-    print("[5] refusals ok (stream, userless chat)")
+    print("[6] refusals ok (userless chat)")
 
     print("PALW fp gateway smoke: ALL PASS")
 finally:

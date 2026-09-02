@@ -13,6 +13,8 @@ repository.workspace = true
 borsh.workspace = true
 kaspa-txscript.workspace = true
 kaspa-consensus-core.workspace = true
+# ADR-0079 Decision 5: the worker stacks the execve denial on itself (seccomp filters stack).
+misaka-palw.workspace = true
 # `palw-rc-genesis` only: an operator generates a bond seed with `misaka validator keygen`, and
 # something has to turn that seed into the PUBLIC values the genesis card wants. The derivation
 # must be the same one the producer uses, so it is imported rather than re-implemented.
