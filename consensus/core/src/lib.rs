@@ -188,6 +188,11 @@ pub mod palw_e2e_adjudicability;
 pub mod palw_credit_batch;
 pub mod palw_derived_v1;
 pub mod palw_dispute;
+/// **The economic locus census** (ADR-0080 Decision 3, narrowed): which quantities on the
+/// free-prompt path are priced in LEAVES and survive restructuring, and which are priced per
+/// claim or per block and do not. A doc comment with a test suite attached; no rule, no state,
+/// no caller. Read it before proposing that one answer become several claims.
+pub mod palw_economic_locus_v1;
 pub mod palw_exposure;
 pub mod palw_facts;
 pub mod palw_fork_authority_v2;
