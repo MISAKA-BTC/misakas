@@ -1741,6 +1741,19 @@ impl VirtualStateProcessor {
         Some(kaspa_pow::palw_admission::PalwAdmissionClassFacts {
             class_target,
             pwu_per_inference: credit.registration.pwu_per_inference,
+            // **ADR-0069 Decision 7's predicate, answered by the fold that already resolved the
+            // share above.**
+            //
+            // A class holding no granted share is a class admission never asked to be end-to-end
+            // certified (`verify_class_admission_v3` gates only `share > 0`), so it is the set
+            // whose blocks cannot be prosecuted — and Decision 7 prices exactly that set at zero
+            // weight. The share is read at this BLOCK's chain point, which is what makes the rule
+            // non-retroactive: a class granted share later gains weight for its later blocks only.
+            //
+            // Not consulted by admission, and not by the subsidy or DAA paths: the block is
+            // admissible, budgeted and paid exactly as before. Only `resolve_block_weight_v1`
+            // reads it, and only past the fence.
+            weight_bearing: share > 0,
         })
     }
 

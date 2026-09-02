@@ -102,7 +102,7 @@ fn a_complete_block_admits_and_names_its_payee() {
     select_the_fixture_tag_family();
     // The easiest possible target: the lottery admits everything, so this test is about the other
     // five conjuncts and cannot pass or fail on the ticket.
-    let facts = PalwAdmissionClassFacts { class_target: u128::MAX, pwu_per_inference: 100 };
+    let facts = PalwAdmissionClassFacts { class_target: u128::MAX, pwu_per_inference: 100, weight_bearing: true };
     let op = outpoint(2);
     let bonds = bonds_with(op);
     let h = header(commitment(op, facts).encode());
@@ -140,7 +140,7 @@ fn one_pow_solution_cannot_carry_two_commitments() {
     // SAFETY: single-threaded test process; the fixture family is selected for this whole test.
     unsafe { std::env::set_var("MISAKA_PALW_POW_FIXTURE", "1") };
     let op = outpoint(1);
-    let base = commitment(op, PalwAdmissionClassFacts { class_target: u128::MAX, pwu_per_inference: 100 });
+    let base = commitment(op, PalwAdmissionClassFacts { class_target: u128::MAX, pwu_per_inference: 100, weight_bearing: true });
     // The nonce comes off the header the digest is taken over, so the two can never drift apart.
     let digest_of = |c: &PalwBlockCommitmentV1| {
         let h = header(c.encode());
@@ -172,7 +172,7 @@ fn one_pow_solution_cannot_carry_two_commitments() {
 #[test]
 fn a_ticket_over_the_class_target_does_not_admit() {
     select_the_fixture_tag_family();
-    let facts = PalwAdmissionClassFacts { class_target: 0, pwu_per_inference: 100 };
+    let facts = PalwAdmissionClassFacts { class_target: 0, pwu_per_inference: 100, weight_bearing: true };
     let op = outpoint(2);
     let bonds = bonds_with(op);
     let h = header(commitment(op, facts).encode());

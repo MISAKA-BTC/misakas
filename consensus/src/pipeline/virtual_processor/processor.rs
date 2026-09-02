@@ -411,6 +411,10 @@ pub struct VirtualStateProcessor {
     /// ADR-0065 D1's fence and window, `None` on every shipped preset. See
     /// [`Self::palw_bond_maturity_at`], which is the ONE place this is resolved.
     pub(super) palw_bond_maturity: Option<kaspa_consensus_core::config::params::PalwBondMaturityV1>,
+    /// ADR-0069 Decision 7's fence, `None` on every shipped preset. Past it a block whose class
+    /// holds no granted share contributes zero pwu to both chain weights — see
+    /// [`Self::palw_uncertified_weightless_at`], which is the ONE place this is resolved.
+    pub(super) palw_uncertified_weightless: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// Rate limiter for [`Self::palw_warn_if_maturity_outruns_the_registry`] — the DAA score the
     /// shortfall was last reported at, or `PALW_SHORTFALL_NEVER_REPORTED`. **Log state only**:
     /// nothing consensus-visible reads it, so two nodes that report at different moments still
@@ -594,6 +598,9 @@ struct PalwOneClassView {
     class_id: kaspa_hashes::Hash64,
     class_target: u128,
     pwu_per_inference: u64,
+    /// ADR-0069 Decision 7. Resolved with the two facts beside it, by the same fold, at the same
+    /// chain point — see `palw_class_facts_for_block`.
+    weight_bearing: bool,
 }
 
 impl kaspa_consensus_core::palw_facts::PalwClassFactsViewV1 for PalwOneClassView {
@@ -606,6 +613,7 @@ impl kaspa_consensus_core::palw_facts::PalwClassFactsViewV1 for PalwOneClassView
             execution_class_id: self.class_id,
             class_target: self.class_target,
             pwu_per_inference: self.pwu_per_inference,
+            weight_bearing: self.weight_bearing,
         })
     }
 }
@@ -788,6 +796,7 @@ impl VirtualStateProcessor {
             palw_bootstrap_activation: params.palw_bootstrap_activation,
             palw_unavailable_abstains: params.palw_unavailable_abstains,
             palw_bond_maturity: params.palw_bond_maturity,
+            palw_uncertified_weightless: params.palw_uncertified_weightless,
             palw_frontier_provenance: params.palw_frontier_provenance,
             finality_depth: params.blockrate.finality_depth,
             palw_credit_params: params.palw_credit.clone(),
@@ -3319,10 +3328,8 @@ impl VirtualStateProcessor {
         ramp: &kaspa_consensus_core::palw_weight::PalwWeightParamsV1,
     ) -> Option<kaspa_consensus_core::palw_chain_weight::PalwBlockWeightV1> {
         use kaspa_consensus_core::palw_block_commitment::PalwBlockCommitmentV1;
-        use kaspa_consensus_core::palw_chain_weight::PalwBlockWeightV1;
-        use kaspa_consensus_core::palw_facts::{PalwResolverInputV1, block_pwu_v1, resolve_block_facts_v1, weight_facts_v1};
+        use kaspa_consensus_core::palw_facts::{PalwResolverInputV1, resolve_block_weight_v1};
         use kaspa_consensus_core::palw_step_refute::PalwNoWeightsV1;
-        use kaspa_consensus_core::palw_weight::ramp_stage_v1;
 
         let network_id = self.genesis.hash.as_bytes();
         let network_id = network_id.as_slice();
@@ -3366,6 +3373,8 @@ impl VirtualStateProcessor {
             class_id: commitment.execution_class_id,
             class_target: facts.class_target,
             pwu_per_inference: facts.pwu_per_inference,
+            // ADR-0069 Decision 7: the third class fact, from the same fold as the other two.
+            weight_bearing: facts.weight_bearing,
         };
 
         let carriage = self.palw_carriage_on_chain_v1(chain_tip, accepted_daa);
@@ -3387,6 +3396,9 @@ impl VirtualStateProcessor {
             pov_daa,
             classes: &classes,
             schedule: *schedule,
+            // **ADR-0069 Decision 7's fence, at the BLOCK's acceptance point.** `false` on every
+            // shipped preset, where this whole line is inert and the pwu below is what it was.
+            uncertified_weightless: self.palw_uncertified_weightless_at(accepted_daa),
         };
 
         // Audit P0-6: the CURVE is supplied here, the DOMAIN is not.
@@ -3397,12 +3409,18 @@ impl VirtualStateProcessor {
         // (which uses the right domain) convicted on it. A bond was slashed and its block kept its
         // weight: the court and the ledger in different universes. Each family now names its own
         // domain where it builds its digest.
-        let resolved = resolve_block_facts_v1(&input, |key, digest, sig, context| {
+        //
+        // **One call, because there must be ONE definition of a block's weight.** This used to
+        // re-spell `resolve_block_weight_v1`'s body — resolve, tally, price — and pull the pwu
+        // straight off `facts` rather than through the view. The two spellings were equal only by
+        // inspection, and ADR-0069 Decision 7 is exactly the kind of rule that would have landed in
+        // one of them: a fork-choice rule with two implementations is two fork-choice rules. Going
+        // through the resolver also buys the class stamp check (a view that answered for another
+        // class would otherwise price this block with that class's numbers) at this site.
+        resolve_block_weight_v1(&input, ramp, |key, digest, sig, context| {
             kaspa_txscript::verify_mldsa87_with_context(key, digest.as_bytes().as_slice(), sig, context).unwrap_or(false)
-        });
-        let weight_facts = weight_facts_v1(&resolved, schedule.w_challenge).ok()?;
-        let pwu = block_pwu_v1(Some(facts.class_target), Some(facts.pwu_per_inference)).ok()?;
-        Some(PalwBlockWeightV1 { pwu, stage: ramp_stage_v1(&weight_facts, ramp) })
+        })
+        .ok()
     }
 
     /// The panel drawn for one block's PALW commitment, from chain state alone.
@@ -5464,6 +5482,16 @@ impl VirtualStateProcessor {
     /// dissenting seat is two rules wearing one name.
     fn palw_unavailable_abstains_at(&self, daa_score: u64) -> bool {
         self.palw_unavailable_abstains.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// **ADR-0069 Decision 7, resolved in exactly one place**, and resolved at the BLOCK's own
+    /// acceptance DAA rather than at the evaluating node's tip.
+    ///
+    /// Fork choice compares candidate chains, so a rule that read the reader's point of view would
+    /// make one block worth different amounts to two nodes — the same defect
+    /// `PalwClassFactsViewV1` exists to close for the class target one line over.
+    fn palw_uncertified_weightless_at(&self, daa_score: u64) -> bool {
+        self.palw_uncertified_weightless.is_some_and(|fence| fence.is_active(daa_score))
     }
 
     /// **ADR-0065 D1, resolved in exactly one place.** The window, or `None` when the rule is off.

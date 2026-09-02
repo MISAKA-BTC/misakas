@@ -683,6 +683,42 @@ pub struct Params {
     /// activation.
     pub palw_inactivity_leak: Option<PalwInactivityLeakV1>,
 
+    /// **ADR-0069 Decision 7 — an uncertified class's blocks weigh nothing.** `None` on every
+    /// shipped preset, so the behaviour is byte-identical to not having the field at all.
+    ///
+    /// Past this fence a block whose execution class holds a GRANTED SHARE of zero at that block's
+    /// own acceptance point contributes `pwu = 0` to both `safe` and `live`
+    /// ([`crate::palw_chain_weight::chain_weights_v1`]), whatever ramp stage it has reached. The
+    /// block is otherwise untouched: it still advances DAA, it is still paid its budgeted subsidy
+    /// (ADR-0039's "admissible for liveness"), and its claim runs the same lattice. Weight is what
+    /// certification buys.
+    ///
+    /// **Why share is the predicate and not a family lookup.** Admission enforces the converse:
+    /// `palw_class_admission_v2::verify_class_admission_v3` returns `NotEndToEndCertified` when a
+    /// class asks for `share > 0` and no end-to-end certified family covers its reachable kernels,
+    /// so `share > 0 ⇒ certified` by construction. That is the same proxy ADR-0069's own Gate 3-3
+    /// uses, and it is the only one available in the weight path — the class state carries no
+    /// family and the shape profile is not reachable there.
+    ///
+    /// **What it closes.** Registration is permissionless and an uncertified family registers at
+    /// share 0; a post-genesis entrant's `initial_target` is pinned to the base class's LIVE target
+    /// (≈ 12,663 expected draws on testnet-11 5e); `pwu_per_inference` is admitted up to
+    /// `PALW_STEP_MAX_LEAVES = 2²²`; a share-0 class still gets the one-block epoch budget floor
+    /// (`derive_epoch_budgets_v2`); and an uncertified family cannot be convicted, so each draw
+    /// costs one hash rather than one inference. One fabricated block per epoch therefore carried
+    /// ≈ 8× the honest network's whole-epoch weight into `safe(C)` — the weight the IBD and
+    /// deep-reorg gates read.
+    ///
+    /// **A bare fence with no companion value**, for `palw_frontier_provenance`'s reason: the
+    /// predicate is the share the chain already records, so there is no threshold to configure and
+    /// nothing that could be normalised out of [`Self::consensus_identity_id`] and then disagree.
+    ///
+    /// **TOP LEVEL for the reason on `palw_bootstrap_activation`**: this is a fork-choice rule that
+    /// has to reach a live network by rolling deploy, and a fence inside the V2 bundle moves
+    /// `palw_ruleset_id_v2` — which `for_each_fence` never descends into — so every old/new pair
+    /// would fail the handshake outright instead of peering with a warning.
+    pub palw_uncertified_weightless: Option<ForkActivation>,
+
     /// ADR-0042 Decision 1 (PR-10): the ONE PALW switch on the V2 lineage. `Disabled` on every
     /// shipped preset. A network is in exactly one mode; `ConsensusV2` carries the whole atomic
     /// ruleset and is validated at construction ([`Params::validate_palw_v2`]) — including the
@@ -1366,6 +1402,10 @@ impl Params {
         if self.palw_inactivity_leak.is_some_and(|l| l.activation == ForkActivation::never()) {
             self.palw_inactivity_leak = None;
         }
+        // ADR-0069 Decision 7, a bare fence: the D2 shape, for the D2 reason.
+        if self.palw_uncertified_weightless == Some(ForkActivation::never()) {
+            self.palw_uncertified_weightless = None;
+        }
         let Some(dns) = self.dns_params.as_mut() else {
             return;
         };
@@ -1541,6 +1581,7 @@ impl Params {
             palw_heartbeat,
             palw_attempt_work,
             palw_inactivity_leak,
+            palw_uncertified_weightless,
             // The V2 bundle's fences are inside `palw_ruleset_id_v2` — see the doc block.
             palw_consensus_mode: _,
             pow_blake2b_sha3_activation,
@@ -1645,6 +1686,15 @@ impl Params {
         }
         match palw_inactivity_leak.as_mut() {
             Some(leak) => fork(&mut leak.activation, visit),
+            None => {
+                absent = u64::MAX;
+                visit(&mut absent);
+            }
+        }
+        // ADR-0069 Decision 7. A pure fence with no payload, so visiting it is safe — the same
+        // shape as D2 beside it.
+        match palw_uncertified_weightless.as_mut() {
+            Some(activation) => fork(activation, visit),
             None => {
                 absent = u64::MAX;
                 visit(&mut absent);
@@ -1833,6 +1883,7 @@ impl Params {
             palw_heartbeat,
             palw_attempt_work,
             palw_inactivity_leak,
+            palw_uncertified_weightless,
             palw_consensus_mode,
             pow_blake2b_sha3_activation,
             pow_palw_activation,
@@ -1999,6 +2050,12 @@ impl Params {
             h.write(b"palw_inactivity_leak");
             h.write(leak.activation.daa_score().to_le_bytes());
             h.write(leak.t_leak_daa.to_le_bytes());
+        }
+        // ADR-0069 Decision 7, Some-only like every fence beside it: an unset field writes
+        // nothing, so every shipped preset fingerprints byte-identically to a build without it.
+        if let Some(activation) = palw_uncertified_weightless {
+            h.write(b"palw_uncertified_weightless");
+            h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0042 Decisions 1 + 11: the V2 mode decides block validity wholesale, so it is in
         // the fingerprint — through the RULESET ID, one hash for the whole atomic bundle, which
@@ -2279,6 +2336,7 @@ impl Params {
             palw_heartbeat: self.palw_heartbeat,
             palw_attempt_work: self.palw_attempt_work,
             palw_inactivity_leak: self.palw_inactivity_leak,
+            palw_uncertified_weightless: self.palw_uncertified_weightless,
             palw_consensus_mode: self.palw_consensus_mode.clone(),
             // kaspa-pq PoW algo activation is consensus-fixed, never runtime-overridable.
             pow_blake2b_sha3_activation: self.pow_blake2b_sha3_activation,
@@ -3187,6 +3245,8 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_heartbeat: None,
     palw_attempt_work: None,
     palw_inactivity_leak: None,
+    // ADR-0069 Decision 7: dormant. Arming it is a per-network activation decision.
+    palw_uncertified_weightless: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: inert on mainnet until its own fork ADR schedules it.
@@ -3319,6 +3379,8 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_heartbeat: None,
     palw_attempt_work: None,
     palw_inactivity_leak: None,
+    // ADR-0069 Decision 7: dormant. Arming it is a per-network activation decision.
+    palw_uncertified_weightless: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: DISABLED on the public preset (2026-08-12). The Ollama flavor (algo_id = 5)
@@ -3433,6 +3495,8 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_heartbeat: None,
     palw_attempt_work: None,
     palw_inactivity_leak: None,
+    // ADR-0069 Decision 7: dormant. Arming it is a per-network activation decision.
+    palw_uncertified_weightless: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // PALW LLM PoW: simnet keeps instant local kHeavyHash (simulation/tests must not need a model).
@@ -6858,6 +6922,8 @@ pub const DEVNET_PARAMS: Params = Params {
         ticket_bucket_log2: crate::palw_attempt_v2::PALW_TICKET_NONCE_BUCKET_LOG2,
     }),
     palw_inactivity_leak: None,
+    // ADR-0069 Decision 7: dormant. Arming it is a per-network activation decision.
+    palw_uncertified_weightless: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // **Devnet is the ADR-0068 drill network on this branch: ConsensusV2, so no V1 PALW
@@ -7668,6 +7734,91 @@ mod consensus_params_id_tests {
         }
         let mut armed_rc = palw_rc_shipped_params();
         armed_rc.palw_frontier_provenance = Some(ForkActivation::always());
+        armed_rc.validate_palw_v2().expect("and on the V2 preset that actually runs the rule");
+    }
+
+    /// **ADR-0069 Decision 7's fence, in the same four positions — and it is the one whose
+    /// dormancy has to be checked on the ASSEMBLED rulesets too.**
+    ///
+    /// Decision 7 changes fork choice: past it a block whose class holds no granted share
+    /// contributes zero pwu to `safe` and `live`. Two builds that disagree about whether that rule
+    /// is in force choose different tips from the same DAG, so the fence has to be visible in the
+    /// fingerprint — and, because it must reach a network that is already running by rolling
+    /// deploy, it has to be schedulable without splitting the mesh on deploy day. That pair is
+    /// what the first two assertions are.
+    ///
+    /// The RC ruleset is checked as well as the raw preset. `palw_rc_shipped_params` is what
+    /// testnet-11 actually runs, it arms ADR-0065 D4 from genesis, and a Decision 7 armed there by
+    /// accident would move `consensus_params_id` and refuse every node on the live build at the
+    /// handshake.
+    #[test]
+    fn the_uncertified_weightless_fence_separates_networks_only_when_it_is_in_force() {
+        let shipped = MAINNET_PARAMS;
+        assert!(shipped.palw_uncertified_weightless.is_none(), "every shipped preset must leave ADR-0069 D7 dormant");
+        for (name, base) in
+            [("mainnet", MAINNET_PARAMS), ("testnet", TESTNET_PARAMS), ("simnet", SIMNET_PARAMS), ("devnet", DEVNET_PARAMS)]
+        {
+            assert!(base.palw_uncertified_weightless.is_none(), "{name}: a fork-choice rule may not ship armed by default");
+        }
+        assert!(
+            palw_rc_shipped_params().palw_uncertified_weightless.is_none(),
+            "the assembled RC ruleset leaves it dormant too — arming it is a deployment decision and it moves the \
+             params id, which is what the running network compares"
+        );
+
+        let mut scheduled = MAINNET_PARAMS;
+        scheduled.palw_uncertified_weightless = Some(ForkActivation::new(9_000_000));
+        assert_eq!(
+            shipped.consensus_identity_id(),
+            scheduled.consensus_identity_id(),
+            "scheduling D7 ahead must keep old and new builds peers — it is a fork-choice rule and it has to reach a \
+             running network by rolling deploy"
+        );
+        assert_ne!(
+            shipped.consensus_params_id(),
+            scheduled.consensus_params_id(),
+            "…and still be visible in the fingerprint, or two builds price the same block differently in silence"
+        );
+
+        let mut at_genesis = MAINNET_PARAMS;
+        at_genesis.palw_uncertified_weightless = Some(ForkActivation::always());
+        assert_ne!(
+            shipped.consensus_identity_id(),
+            at_genesis.consensus_identity_id(),
+            "in force from block 1 on one side is a rule difference — the two disagree about what an uncertified \
+             class's block is worth to fork choice"
+        );
+
+        let mut never_armed = MAINNET_PARAMS;
+        never_armed.palw_uncertified_weightless = Some(ForkActivation::never());
+        assert_eq!(
+            shipped.consensus_identity_id(),
+            never_armed.consensus_identity_id(),
+            "Some(never()) is absence, or the collapse is gone"
+        );
+
+        // Independent of the fences beside it — arming one must never read as arming another.
+        let mut d2_and_d7 = MAINNET_PARAMS;
+        d2_and_d7.palw_uncertified_weightless = Some(ForkActivation::always());
+        d2_and_d7.palw_frontier_provenance = Some(ForkActivation::always());
+        assert_ne!(d2_and_d7.consensus_identity_id(), at_genesis.consensus_identity_id(), "two fences, two identities");
+
+        // **Armable on every shipped preset, at any height, with no precondition to satisfy** —
+        // D2's property, for D2's reason: the predicate is the granted share the chain already
+        // records, so there is no registry, duration or quantity behind it that a preset could
+        // fail to provide. A fence with no precondition is one whose only failure mode is being
+        // wired wrong, and this is the wiring.
+        for (name, base) in
+            [("mainnet", MAINNET_PARAMS), ("testnet", TESTNET_PARAMS), ("simnet", SIMNET_PARAMS), ("devnet", DEVNET_PARAMS)]
+        {
+            for height in [ForkActivation::always(), ForkActivation::new(1), ForkActivation::new(9_000_000)] {
+                let mut armed = base.clone();
+                armed.palw_uncertified_weightless = Some(height);
+                armed.validate_palw_v2().unwrap_or_else(|e| panic!("{name}: D7 must be armable at any height: {e}"));
+            }
+        }
+        let mut armed_rc = palw_rc_shipped_params();
+        armed_rc.palw_uncertified_weightless = Some(ForkActivation::always());
         armed_rc.validate_palw_v2().expect("and on the V2 preset that actually runs the rule");
     }
 

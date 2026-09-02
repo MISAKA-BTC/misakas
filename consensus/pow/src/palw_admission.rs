@@ -36,7 +36,7 @@ use thiserror::Error;
 
 use crate::StateLayer0;
 
-/// What a block's class contributes to admission — the same two facts
+/// What a block's class contributes to admission — the same facts
 /// `kaspa_consensus_core::palw_facts::PalwClassFactsV1` carries, taken by value here so this crate
 /// needs no view trait of its own.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -46,6 +46,15 @@ pub struct PalwAdmissionClassFacts {
     pub class_target: u128,
     /// The class's registered normative operation count per canonical inference.
     pub pwu_per_inference: u64,
+    /// **ADR-0069 Decision 7: whether the class may carry fork-choice WEIGHT here.** Carried so one
+    /// fold answers every class fact a block needs, and **deliberately not read by
+    /// [`check_palw_block_admission_v1`]** — the whole shape of Decision 7 is that an uncertified
+    /// class still produces, still gossips and is still paid; only its weight is zero. Admission
+    /// reading this bit would turn "weighs nothing" into "may not build", which is the rule
+    /// ADR-0069 Decision 5 explicitly refused.
+    ///
+    /// See `palw_facts::PalwClassFactsV1::weight_bearing` for why granted share is the predicate.
+    pub weight_bearing: bool,
 }
 
 /// The outcome of the admission predicate.
@@ -205,7 +214,8 @@ mod tests {
     const NETWORK: &[u8] = b"devnet";
     /// The easiest possible target: every ticket admits, so the lottery never decides a test that
     /// is about something else. The one test that IS about the lottery tightens it.
-    const EASY: PalwAdmissionClassFacts = PalwAdmissionClassFacts { class_target: u128::MAX, pwu_per_inference: 100 };
+    const EASY: PalwAdmissionClassFacts =
+        PalwAdmissionClassFacts { class_target: u128::MAX, pwu_per_inference: 100, weight_bearing: true };
 
     /// Accepts iff the signature is the fixture's own `[0x5A; SIG_LEN]` under a non-empty key and
     /// the block-commitment context. Stands in for ML-DSA-87, which lives outside this crate.
