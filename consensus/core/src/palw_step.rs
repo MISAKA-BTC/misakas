@@ -211,6 +211,14 @@ pub enum PalwStepOpKindV1 {
     Scale = 15,
     /// f32 → f16 cache write (SET_ROWS; the software RNE bit-twiddle = ruleset v2 semantics).
     CpyF32F16 = 16,
+    /// **ADR-0082 Decision 1: the fused attention site.** Scores, softmax, the probability
+    /// requantization and the value reduction of one position as ONE node whose committed row is
+    /// the OUTPUT (`attn_heads × attn_head_dim` codes) and nothing else. The context-wide rows the
+    /// four separate nodes commit are internal here: never committed, never carried, and refuted
+    /// by a dissection over the history (`palw_attn_dissect`) rather than by opening them. A graph
+    /// that carries this kind is graph v5 — a new class id — and its inputs are exactly the
+    /// rotated query row, the K cache and the V cache.
+    AttnFused = 17,
 }
 
 /// What role a node's output plays for the auxiliary series (ADR-0030 §3): K/V cache writes

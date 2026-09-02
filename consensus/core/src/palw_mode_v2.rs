@@ -318,6 +318,10 @@ pub const DEFAULT_MAX_TERMINAL_MACS: u64 = 16 * 1024 * 1024;
 /// two).
 pub const DEFAULT_MAX_OPERAND_COUNT: u32 = 8;
 
+/// **The shipped ladder's arity: binary, one pinned midpoint a round** (ADR-0082 Decision 3's
+/// baseline). Every shipped preset's court carries this value; a wider arity is a ruleset move.
+pub const PALW_COURT_BINARY_ARITY_V1: u8 = 2;
+
 /// One opaque number becomes three checkable ones.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwCourtParamsV2 {
@@ -356,6 +360,15 @@ pub struct PalwCourtParamsV2 {
     max_close_chunks: u64,
     max_terminal_macs: u64,
     max_operand_count: u32,
+    /// **ADR-0082 Decision 3: the dissection arity.** `2` is the shipped binary ladder; `k`
+    /// discloses the `k` subtree roots below the current node — `log₂ k` binary levels at once,
+    /// authenticated by hashing them back up — so a search over `space` items takes
+    /// `⌈log₂ space / log₂ k⌉` rounds (`palw_attn_dissect::palw_kary_rounds_v1`). It is DERIVED
+    /// at genesis from the move budget the window affords over the widest row the ruleset
+    /// admits, never chosen; a power of two in `2..=64`; inside the ruleset id like every field
+    /// beside it. The binary ladder at `2^32` already spends `(2 × 32 + 2) × 45 = 2,970` of the
+    /// RC's 3,000-DAA window, which is why a history dissection cannot be added without it.
+    dissection_arity: u8,
 }
 
 impl PalwCourtParamsV2 {
@@ -403,7 +416,39 @@ impl PalwCourtParamsV2 {
             max_close_chunks,
             max_terminal_macs,
             max_operand_count,
+            dissection_arity: PALW_COURT_BINARY_ARITY_V1,
         })
+    }
+
+    /// The same court with a wider dissection (ADR-0082 Decision 3). Refuses an arity that is
+    /// not a power of two in `2..=64`, by name.
+    pub fn with_dissection_arity(mut self, arity: u8) -> Result<Self, PalwModeV2Error> {
+        if !crate::palw_attn_dissect::palw_attn_arity_is_legal_v1(arity) {
+            return Err(PalwModeV2Error::Invalid("a dissection arity is a power of two in 2..=64"));
+        }
+        self.dissection_arity = arity;
+        Ok(self)
+    }
+
+    pub fn dissection_arity(&self) -> u8 {
+        self.dissection_arity
+    }
+
+    /// **The rounds a dissection over `history_positions` positions takes**, at `tile` positions a
+    /// tile and this court's arity (ADR-0082 Decision 2). `None` for a zero tile.
+    pub fn history_dissection_rounds(&self, history_positions: u64, tile: u32) -> Option<u32> {
+        crate::palw_attn_dissect::palw_attn_dissection_rounds_v1(history_positions, tile, self.dissection_arity)
+    }
+
+    /// [`Self::worst_case_duration_daa`] with a history dissection of `history_positions`
+    /// positions appended to the ladder: `(2 × (rounds + history_rounds) + terminal) × deadline`.
+    /// The window gate a graph-v5 row is admitted against; a row with no fused site passes
+    /// `history_positions = 0` and gets the ladder's own number.
+    pub fn worst_case_duration_with_history_daa(&self, history_positions: u64, tile: u32) -> Option<u64> {
+        let ladder = u64::from(self.bisection_rounds());
+        let history = u64::from(self.history_dissection_rounds(history_positions, tile)?);
+        let moves = ladder.checked_add(history)?.checked_mul(2)?.checked_add(u64::from(self.terminal_rounds))?;
+        moves.checked_mul(self.turn_deadline_daa)
     }
 
     pub fn max_close_bytes(&self) -> u64 {
@@ -437,10 +482,13 @@ impl PalwCourtParamsV2 {
         self.terminal_rounds
     }
 
-    /// `ceil(log2(max_step_leaf_count))` — the bisection depth needed to isolate one step.
+    /// `⌈log₂ max_step_leaf_count / log₂ arity⌉` — the dissection depth needed to isolate one
+    /// step; at the shipped binary arity, `ceil(log2(n))` exactly as before ADR-0082.
     pub fn bisection_rounds(&self) -> u32 {
-        // `next_power_of_two` is exact for powers of two, so this is ceil(log2(n)) for n >= 2.
-        self.max_step_leaf_count.next_power_of_two().trailing_zeros()
+        // The arity is validated at construction, so the derivation always answers; a court
+        // that somehow carried an illegal arity is treated as the deepest ladder, never a
+        // shallower one.
+        crate::palw_attn_dissect::palw_kary_rounds_v1(self.max_step_leaf_count, self.dissection_arity).unwrap_or(u32::MAX)
     }
 
     /// ADR-0042 Decision 8's formula, in DAA units. `None` on overflow, which the startup gate

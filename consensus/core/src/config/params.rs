@@ -1099,6 +1099,15 @@ pub struct Params {
     /// into, so every old/new pair would fail the handshake outright.
     pub palw_prompt_ids_merkle: Option<ForkActivation>,
 
+    /// **ADR-0082 Decision 3's fence: the k-ary court and the history dissection.** Active, the
+    /// court's dissection arity is the value DERIVED from the ruleset's window, deadline, ladder
+    /// and the widest registered history (never a companion value carried here, for the
+    /// `palw_bond_maturity` reason), and a fused attention leaf may be refuted by dissection
+    /// (`palw_attn_dissect`). Dormant, the court is the shipped binary ladder and a graph-v5
+    /// row is refused at admission. A bare fence, top level, `None` on every shipped preset —
+    /// the `palw_prompt_ids_merkle` shape for its reasons.
+    pub palw_kary_court: Option<ForkActivation>,
+
     /// ADR-0042 Decision 1 (PR-10): the ONE PALW switch on the V2 lineage. `Disabled` on every
     /// shipped preset. A network is in exactly one mode; `ConsensusV2` carries the whole atomic
     /// ruleset and is validated at construction ([`Params::validate_palw_v2`]) — including the
@@ -1996,6 +2005,10 @@ impl Params {
         if self.palw_prompt_ids_merkle == Some(ForkActivation::never()) {
             self.palw_prompt_ids_merkle = None;
         }
+        // ADR-0082 Decision 3, a bare fence: the same collapse for the same reason.
+        if self.palw_kary_court == Some(ForkActivation::never()) {
+            self.palw_kary_court = None;
+        }
         let Some(dns) = self.dns_params.as_mut() else {
             return;
         };
@@ -2134,6 +2147,21 @@ impl Params {
             Some(fence) if fence.is_active(daa_score) => crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::MerkleV1,
             _ => crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
         }
+    }
+
+    /// ADR-0082 Decision 3's fence with the mode condition already folded in — `Some` only on a
+    /// `ConsensusV2` network that has armed it. The ONE place the k-ary court is decided; a court
+    /// or an admission gate switches on this and never on the raw field.
+    pub fn palw_kary_court_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_kary_court) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(f)) => Some(f),
+            _ => None,
+        }
+    }
+
+    /// Is ADR-0082's k-ary court in force at `daa_score`? `false` on every shipped preset.
+    pub fn palw_kary_court_active_at(&self, daa_score: u64) -> bool {
+        self.palw_kary_court_fence().is_some_and(|f| f.is_active(daa_score))
     }
 
     /// ADR-0081 Decision 3's fence with the mode condition already folded in — `Some` only on a
@@ -2292,6 +2320,11 @@ impl Params {
             h.write(b"palw_prompt_ids_merkle");
             h.write(merkle.daa_score().to_le_bytes());
         }
+        // ADR-0082 Decision 3's fence, NAMED for the same reason.
+        if let Some(kary) = self.palw_kary_court {
+            h.write(b"palw_kary_court");
+            h.write(kary.daa_score().to_le_bytes());
+        }
         h.finalize()
     }
 
@@ -2378,6 +2411,7 @@ impl Params {
             palw_da_court,
             palw_chunk_cap_charge,
             palw_prompt_ids_merkle,
+            palw_kary_court,
             // The V2 bundle's fences are inside `palw_ruleset_id_v2` — see the doc block.
             palw_consensus_mode: _,
             pow_blake2b_sha3_activation,
@@ -2600,6 +2634,10 @@ impl Params {
         if let Some(activation) = palw_prompt_ids_merkle.as_mut() {
             fork(activation, visit);
         }
+        // ADR-0082 Decision 3. Visited SOME-ONLY, for the reason directly above.
+        if let Some(activation) = palw_kary_court.as_mut() {
+            fork(activation, visit);
+        }
 
         let Some(dns) = dns_params.as_mut() else {
             absent = u64::MAX;
@@ -2793,6 +2831,7 @@ impl Params {
             palw_da_court,
             palw_chunk_cap_charge,
             palw_prompt_ids_merkle,
+            palw_kary_court,
             palw_consensus_mode,
             pow_blake2b_sha3_activation,
             pow_palw_activation,
@@ -3036,6 +3075,13 @@ impl Params {
         // `None` and fingerprints byte-identically to a build without the field at all.
         if let Some(activation) = palw_prompt_ids_merkle {
             h.write(b"palw_prompt_ids_merkle");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // ADR-0082 Decision 3, Some-only like every fence above it: arming it changes what a court
+        // may do and what a class may declare, so it belongs in the fingerprint — and every shipped
+        // preset leaves it `None` and fingerprints byte-identically to a build without the field.
+        if let Some(activation) = palw_kary_court {
+            h.write(b"palw_kary_court");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0042 Decisions 1 + 11: the V2 mode decides block validity wholesale, so it is in
@@ -3327,6 +3373,7 @@ impl Params {
             palw_da_court: self.palw_da_court,
             palw_chunk_cap_charge: self.palw_chunk_cap_charge,
             palw_prompt_ids_merkle: self.palw_prompt_ids_merkle,
+            palw_kary_court: self.palw_kary_court,
             palw_consensus_mode: self.palw_consensus_mode.clone(),
             // kaspa-pq PoW algo activation is consensus-fixed, never runtime-overridable.
             pow_blake2b_sha3_activation: self.pow_blake2b_sha3_activation,
@@ -4251,6 +4298,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_da_court: None,
     palw_chunk_cap_charge: None,
     palw_prompt_ids_merkle: None,
+    palw_kary_court: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: inert on mainnet until its own fork ADR schedules it.
@@ -4399,6 +4447,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_da_court: None,
     palw_chunk_cap_charge: None,
     palw_prompt_ids_merkle: None,
+    palw_kary_court: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: DISABLED on the public preset (2026-08-12). The Ollama flavor (algo_id = 5)
@@ -4529,6 +4578,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_da_court: None,
     palw_chunk_cap_charge: None,
     palw_prompt_ids_merkle: None,
+    palw_kary_court: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // PALW LLM PoW: simnet keeps instant local kHeavyHash (simulation/tests must not need a model).
@@ -7978,6 +8028,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_da_court: None,
     palw_chunk_cap_charge: None,
     palw_prompt_ids_merkle: None,
+    palw_kary_court: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // **Devnet is the ADR-0068 drill network on this branch: ConsensusV2, so no V1 PALW
@@ -9458,6 +9509,40 @@ mod consensus_params_id_tests {
     /// else, so there is no job whose prompt commitment this rule could re-form — and an armed
     /// fence on a non-V2 preset must still answer `Flat` rather than select a form the network has
     /// no jobs for.
+    /// **ADR-0082 Decision 3's fence is dormant on every shipped preset and visible the moment it
+    /// is not** — the same property the prompt-ids fence holds, for the same reason: arming it
+    /// changes what a court may do, so a dormant fence must be indistinguishable from a build
+    /// that never had the field, and an armed one must move every commitment an operator reads.
+    #[test]
+    fn the_kary_court_fence_is_dormant_and_visible_the_moment_it_is_not() {
+        for (name, shipped) in
+            [("mainnet", MAINNET_PARAMS), ("testnet", TESTNET_PARAMS), ("simnet", SIMNET_PARAMS), ("devnet", DEVNET_PARAMS)]
+        {
+            assert!(shipped.palw_kary_court.is_none(), "{name} must leave ADR-0082 Decision 3's fence dormant");
+            assert!(!shipped.palw_kary_court_active_at(u64::MAX), "{name}: a dormant fence is never active");
+        }
+        let shipped = DEVNET_PARAMS;
+        let mut armed = shipped.clone();
+        armed.palw_kary_court = Some(ForkActivation::new(9_000_000));
+        assert_ne!(shipped.consensus_params_id(), armed.consensus_params_id(), "arming the k-ary court must move the fingerprint");
+        assert_ne!(shipped.consensus_schedule_id(), armed.consensus_schedule_id(), "the operator log must name it");
+        assert!(armed.palw_kary_court_active_at(9_000_000));
+        assert!(!armed.palw_kary_court_active_at(8_999_999));
+        let mut never_armed = shipped.clone();
+        never_armed.palw_kary_court = Some(ForkActivation::never());
+        assert_eq!(
+            never_armed.consensus_params_id(),
+            shipped.consensus_params_id(),
+            "a never-arming fence collapses to absence, like every bare fence beside it"
+        );
+        // The mode condition is folded in: outside ConsensusV2 the fence answers nothing.
+        let mut legacy = MAINNET_PARAMS.clone();
+        legacy.palw_kary_court = Some(ForkActivation::always());
+        assert!(matches!(legacy.palw_consensus_mode, crate::palw_mode_v2::PalwConsensusMode::Disabled));
+        assert_eq!(legacy.palw_kary_court_fence(), None);
+        assert!(!legacy.palw_kary_court_active_at(u64::MAX));
+    }
+
     #[test]
     fn the_prompt_ids_merkle_fence_answers_only_under_consensus_v2() {
         let mut legacy = MAINNET_PARAMS;

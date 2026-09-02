@@ -99,6 +99,13 @@ pub const KDESC_A16_ADD_ELEM: &str = "a16/add-elem/lane-sliced/i32-exact/v1";
 pub const KDESC_A16_SOFTMAX: &str = "a16/softmax/rowmax-shifted-intexp-intrecip/v1";
 pub const KDESC_A16_ATTN_SCORES: &str = "a16/attn-scores/i16xi16-i64-gqa/v1";
 pub const KDESC_A16_ATTN_VALUES: &str = "a16/attn-values/i16xi16-i64-gqa/v1";
+/// **ADR-0082 Decision 1: the fused attention site** — W9, W11, the probs requantization and
+/// W10 composed, committing only the output row, refuted by the history dissection of
+/// `palw_attn_dissect` rather than by opening a context-wide row. Its semantics is
+/// `palw_base0_a16::a16_attn_fused_reference_v1`; the recompute arm below is the ADR-0082 U-02
+/// stream's and refuses `Unadjudicable` until it lands, so a class declaring this kernel
+/// cannot be admitted by a build that cannot try it.
+pub const KDESC_A16_ATTN_FUSED: &str = "a16/attn-fused/scores-softmax-requant-values/history-dissection/v1";
 
 /// The hybrid graph's own ops (ADR-0052). Each names the accumulator width because that is the
 /// only degree of freedom an integer kernel has left.
@@ -143,6 +150,7 @@ pub const KDESC_A16_ALL: &[&str] = &[
     KDESC_A16_SOFTMAX,
     KDESC_A16_ATTN_SCORES,
     KDESC_A16_ATTN_VALUES,
+    KDESC_A16_ATTN_FUSED,
     KDESC_A16_ROPE,
     KDESC_A16_MUL_ELEM,
 ];
@@ -196,6 +204,7 @@ pub const KDESC_ALL: &[&str] = &[
     KDESC_A16_SOFTMAX,
     KDESC_A16_ATTN_SCORES,
     KDESC_A16_ATTN_VALUES,
+    KDESC_A16_ATTN_FUSED,
     KDESC_Q36_MATMUL_GROUPED,
     KDESC_Q36_MATMUL_GROUPED_WIDE,
     KDESC_Q36_ROPE_PARTIAL,
@@ -286,6 +295,7 @@ enum Qwen36Op {
     Softmax,
     AttnScores,
     AttnValues,
+    AttnFused,
     MatMulGrouped,
     MatMulGroupedWide,
     RopePartial,
@@ -351,6 +361,7 @@ const KERNEL_CATALOG: &[(&str, KernelProgram)] = &[
     (KDESC_A16_SOFTMAX, KernelProgram::Qwen36(Qwen36Op::Softmax)),
     (KDESC_A16_ATTN_SCORES, KernelProgram::Qwen36(Qwen36Op::AttnScores)),
     (KDESC_A16_ATTN_VALUES, KernelProgram::Qwen36(Qwen36Op::AttnValues)),
+    (KDESC_A16_ATTN_FUSED, KernelProgram::Qwen36(Qwen36Op::AttnFused)),
     (KDESC_A16_ROPE, KernelProgram::Qwen36(Qwen36Op::A16Rope)),
     (KDESC_A16_MUL_ELEM, KernelProgram::Qwen36(Qwen36Op::A16MulElem)),
     (KDESC_Q36_MATMUL_GROUPED, KernelProgram::Qwen36(Qwen36Op::MatMulGrouped)),
@@ -471,6 +482,17 @@ pub fn kernel_can_serve_node_v1(node: &crate::palw_step::PalwStepNodeV1, table_i
         KernelProgram::Qwen36(Qwen36Op::GateApply | Qwen36Op::MulWide | Qwen36Op::MoeCombine | Qwen36Op::AddElem) => {
             if inputs < 2 {
                 return Err("a two-operand elementwise node must name both rows");
+            }
+            Ok(())
+        }
+        // The fused site reads the query row and BOTH cached series, and names the tensor its
+        // three narrowings and the softmax's widening byte are registered in (ADR-0082 D1).
+        KernelProgram::Qwen36(Qwen36Op::AttnFused) => {
+            if inputs < 3 {
+                return Err("a fused attention site must name its query row and both cached series");
+            }
+            if node.weight_name.is_empty() {
+                return Err("a fused attention site must name the tensor its narrowings are registered in");
             }
             Ok(())
         }
@@ -1631,6 +1653,11 @@ fn qwen36_row(
             let up = b[0].min(62);
             Ok(out(a16::a16_softmax_rows(&as_i32(&inputs[0]), row_len, up).map_err(shape16)?))
         }
+        // **ADR-0082 U-02 lands this arm**: a fused site is not recomputed whole — its terminal
+        // adjudication is the history dissection, whose bottom recomputes ONE tile with
+        // `a16_attn_tile_triple_v1`. Until the court arm exists, a fused leaf is refused as
+        // unadjudicable rather than priced as something a whole-row recompute could reach.
+        Qwen36Op::AttnFused => Err(PalwStepRefuteError::Unadjudicable),
         Qwen36Op::AttnScores | Qwen36Op::AttnValues => {
             need(2)?;
             let heads = profile.attn_heads as usize;

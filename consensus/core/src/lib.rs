@@ -146,6 +146,8 @@ pub mod palw_admission_v2;
 #[cfg(test)]
 pub mod palw_adversarial;
 pub mod palw_artifact;
+/// ADR-0082 Decisions 2–3: the history dissection's objects, fold and round arithmetic.
+pub mod palw_attn_dissect;
 pub mod palw_attempt_v2;
 pub mod palw_backend;
 pub mod palw_base0;

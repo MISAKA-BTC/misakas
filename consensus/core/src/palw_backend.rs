@@ -391,6 +391,24 @@ pub trait PalwExecutionBackendV1: Send + Sync {
         PalwFpIntervalVerdictV1::Unverifiable
     }
 
+    /// **ADR-0082 Decision 9: the seat's cache is RECOMPUTED from the prompt it holds, never
+    /// fetched.** Run the job's prefill and its first `decode_calls` decode calls (the committed
+    /// output ids, teacher-forced) with this family's own kernels, and return the checkpoint
+    /// leg's committed root for the state at that point — the tiled cache root under the
+    /// class's state chunk map — so a seat can compare 64 bytes against the executor's
+    /// checkpoint instead of fetching a history that grows with the context. Compute is one
+    /// forward pass of the job; bytes are none. Defaulted to a refusal: a family without this
+    /// verb cannot seat a graph-v5 row, and `Incapable` is the honest verdict.
+    fn fp_recompute_checkpoint_root(
+        &self,
+        _job: &crate::palw_freeprompt_v3::PalwFreePromptJobV3,
+        _prompt_token_ids: &[u32],
+        _output_token_ids: &[u32],
+        _decode_calls: u32,
+    ) -> Result<crate::Hash64, String> {
+        Err("this execution family cannot recompute a checkpoint root from the prompt".to_string())
+    }
+
     /// **A DRILL fault: run the job, corrupt one lane of one tile, and commit to the result.**
     ///
     /// A court that has never convicted on a live chain is a court nobody has evidence works, and
