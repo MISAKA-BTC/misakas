@@ -3,7 +3,17 @@
 ## Status
 Accepted (2026-05-30); **Revised 1.1 — 2026-05-31** (scope expanded to PQ-only completion); **Revised 1.2 — 2026-06-01** (md2 alignment: identifier rename, v2 contexts, keyed address payload, 16_384 caps).
 
-Supersedes the signature-level choice in [ADR-0002](0002-mldsa65-p2pkh.md). Forces a new genesis (see [ADR-0008](0008-pq-genesis-premine.md)); **not compatible** with any prior kaspa-pq chain state, UTXO set, or address.
+> **Two dangling references (noted 2026-08-20).** `0008-pq-genesis-premine.md` and
+> `0003-pq-address-format.md` do not exist on this lineage, and the numbers 0003 and 0008 are held
+> here by [ADR-0003 (LtHash UTXO accumulator)](0003-lthash-utxo-accumulator.md) and
+> [ADR-0008 (Hash64 consensus identity)](0008-hash64-consensus-identity.md) — different decisions
+> entirely. Follow the number and you read the wrong ADR, which is the hazard
+> [ADR-0036](0036-palw-mainnet-activation-model.md) Decision 5 exists to stop. The claims those
+> links carried (this migration forces a new genesis; the address format is unchanged) stand on
+> their own and are restated in §"Consequences"; the links are de-linked rather than repointed,
+> because there is no live ADR to point them at.
+
+Supersedes the signature-level choice in [ADR-0002](0002-mldsa65-p2pkh.md). Forces a new genesis (see `ADR-0008 (pq-genesis-premine)` — **not resident**; see the note below); **not compatible** with any prior kaspa-pq chain state, UTXO set, or address.
 
 ---
 
@@ -136,5 +146,5 @@ Unchanged on purpose (variant-agnostic / opaque): opcode byte tags `0xa6` (`OP_C
 
 ## References
 - FIPS 204 (ML-DSA)
-- Supersedes [ADR-0002](0002-mldsa65-p2pkh.md); forces new genesis per [ADR-0008](0008-pq-genesis-premine.md); address format unchanged per [ADR-0003](0003-pq-address-format.md); mass policy per [ADR-0005](0005-mass-policy.md)
+- Supersedes [ADR-0002](0002-mldsa65-p2pkh.md); forces new genesis per `ADR-0008 (pq-genesis-premine)` — **not resident**; see the note below; address format unchanged per `ADR-0003 (pq-address-format)` — **not resident**; see the note below; mass policy per [ADR-0005](0005-mass-policy.md)
 - `libcrux-ml-dsa` crate (`ml_dsa_87` submodule)

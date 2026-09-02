@@ -1,11 +1,17 @@
 # ADR-0026: PALW v2 verification architecture — borrow Ambient's shape, strengthen the proof
 
-Status: **Accepted (architecture). Restored in full 2026-08-26.** ADR-0051 walked this ADR's
-thesis back for one capped family — accepting a tolerant proof model by name — and
-[ADR-0053](0053-palw-one-execution-family.md) withdrew that family, so the exception is gone: take
-Ambient's architecture, refuse its proof model, build exact-within-pinned-class, everywhere. Operating envelope unchanged: devnet, shadow mode,
-consensus-visible zero-credit only. Every activation gate in the v2 design §12 stands; this ADR
-moves none of them.
+Status: **Accepted (architecture). Restored in full 2026-08-26; PROMOTED by ADR-0038 from credit
+machinery to L1 machinery.** ADR-0051 walked this ADR's thesis back for one capped family — accepting
+a tolerant proof model by name — and [ADR-0053](0053-palw-one-execution-family.md) withdrew that
+family, so the exception is gone: take Ambient's architecture, refuse its proof model, build
+exact-within-pinned-class, everywhere. The operating envelope as first written — devnet, shadow
+mode, consensus-visible zero-credit only — was the envelope of the *credit-overlay* lineage, where
+PALW rode beside a hash-produced block. On the V2 lineage
+[ADR-0038](0038-palw-is-the-consensus-work.md) inverts the layering and
+[ADR-0039](0039-palw-only-block-production.md) removes the hash path, so this ADR's verification
+architecture is what *produces* blocks rather than what credits them; its activation is governed by
+[ADR-0042](0042-palw-mainnet-candidate-ruleset.md)'s one atomic ruleset, not by the §12 ladder
+alone. Every activation gate in the v2 design §12 still stands; this ADR moves none of them.
 Date: 2026-08-15
 Relates to: ADR-0007 (layered PoW), ADR-0021 (superseded PALW PoW record — kept as history),
 ADR-0024 (verified-LLM token-weighted BFT),
