@@ -1,6 +1,6 @@
 # ADR-0072 — The ticket is the execution: both lotteries priced in inferences
 
-Status: **IMPLEMENTED (2026-09-02); Decision 7's rollout is OPEN — see §3.** Reviewed the same day
+Status: **IMPLEMENTED (2026-09-02); Decision 7's rollout DECIDED the same day — see §3.** Reviewed the same day
 by a second session, whose finding became Decision 8 and the invariant in §4. Builds on ADR-0042 (Decision 3a: the algo-6 tag is an
 expansion, never an inference), ADR-0044 (Decision 4: the receipt lane's quantum ticket is a
 function of the certified execution), ADR-0045 (`DerivedV1`: pwu is derived from the class target),
@@ -94,7 +94,7 @@ them from trying. The shipped fingerprints move on the two presets that carry a 
 
 The first draft of this decision said "testnet-11 upgrades together; no re-genesis" and left the
 rest to the DAA. The review showed that is not a rollout, for two reasons that are stated here
-rather than fixed here, because the fix is the operator's choice (§3):
+rather than fixed here, because the fix was the operator's choice (§3, now decided):
 
 * **The version check is not fence-gated.** A node on this build refuses every version-5 envelope,
   which is every attempt block the chain already holds — a fresh node cannot validate the history
@@ -126,7 +126,21 @@ position field — so a field added tomorrow does not compile until it is placed
 
 ## 3. What this costs, stated before it is measured — and the rollout choice
 
-**Rollout (Decision 7, open).** Two ways this rule can go live, and only two:
+**Rollout (Decision 7, decided 2026-09-02): this rule goes live inside Relaunch 5's re-genesis,
+with no fence.** The operator's decision, taken with both paths below on the table: Relaunch 5
+was already pending for the A16 re-pin and ADR-0069's certified set, ADR-0073 ③ (the attempt lane
+drawn by the chain's own beacon) lands in the same genesis, and a scheduled activation would have
+carried dual finalizer arms, dual admission paths and a lane-filtered difficulty window into a
+network that is re-minting anyway. So: genesis `bits` resets the network lottery; there is no
+version-5 history to validate; the deployment is a rolling swap in the shape of the 08-29
+re-mint — the fingerprint moves, so an un-wiped old peer is refused at the handshake and cannot
+re-feed the old chain. The activation path stays recorded as what mainnet will have to do, because
+mainnet cannot re-mint (2026-08-27 doctrine); the first draft of it (algo id 9 behind a DAA fence,
+the algo-6 arm and its envelope-only lottery kept byte for byte, `pwu` re-derived per lane, the
+difficulty window restarted on the new lane) was built far enough to know its shape and then
+withdrawn from this branch unmerged.
+
+Two ways this rule could go live, and only two:
 
 * **(a) Relaunch 6.** A re-genesis resets `bits` to the genesis value (~20 draws) and leaves no
   version-5 history to validate. Zero code. It is the re-genesis the standing doctrine
@@ -141,6 +155,7 @@ position field — so a field added tomorrow does not compile until it is placed
   later ADR). Roughly the size of this ADR again.
 
 The rule is the same under both; what differs is whether the chain's history survives the swap.
+On testnet-11 it does not, by decision; on mainnet it must, by doctrine.
 
 Expected inferences per block per producer = `1 / (P_class × P_bits)`. At the RC genesis the class
 target is `2^-1` and the genesis `bits` is about `1/20`, so a producer expects ~40 inferences per
