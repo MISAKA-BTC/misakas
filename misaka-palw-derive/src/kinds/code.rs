@@ -22,6 +22,29 @@
 //!   impl and is not in [`register`] — because ADR-0078 Decision 11 names an external toolchain
 //!   only by its fleet drill, and no drill has passed.
 //!
+//! ## Confinement (ADR-0078 SA-1, ADR-0079 Decision 12, invariant S11)
+//!
+//! *Executing model-written code is the largest privilege in the lineage, and the in-tree EVM is
+//! not exempt.* Two gates, and there is no third door:
+//!
+//! * **The EVM runs in a separate process.** [`run_evm_v1`] never executes initcode in the
+//!   caller's process: it spawns `palw-evm-runner` (this crate's second binary) through
+//!   `Confinement::command`, in an ephemeral tree destroyed after the run, under the environment
+//!   discipline, a resident ceiling and a wall-clock deadline. The runner reads one canonical job
+//!   on stdin and writes one canonical result on stdout. A denied, killed, over-ceiling or absent
+//!   runner is the parse-failure arm — no object — never a panic and never an in-process retry.
+//!   The in-process executor still exists, as [`execute_evm_job_in_this_process`], and the only
+//!   caller in the tree is the runner binary (`tests/derive_tree_guard.rs` holds that).
+//! * **An external toolchain runs only under a proven backend.** [`run_external`] refuses on a
+//!   host whose confinement backend is `none`, and refuses on a host where a bond or wallet key is
+//!   reachable — Decision 12's third bullet, which is a completion condition for ADR-0078's Q-05
+//!   and not advice.
+//!
+//! What confinement is NOT: a consensus mechanism (ADR-0079 Decision 3). The deadline and the
+//! resident ceiling can turn a build into **no object**; they cannot turn it into a different
+//! artifact. Every number in the artifact is a function of the committed bytes and the run
+//! manifest, which is why a host with a backend and a host without one either agree or fail.
+//!
 //! ## Discipline (ADR-0078 Decision 3, invariant X3)
 //!
 //! The EVM is an integer machine and revm is pure Rust: gas, output and success are functions of
@@ -45,13 +68,18 @@ use crate::canon_json::{CanonValue, parse_canonical, write_canonical};
 use crate::checksum::crc32;
 use crate::{Artifact, DeriveError, Discipline, Grammar, Transformer, TransformerManifest};
 use kaspa_consensus_core::palw_derived_v1::kind;
+use misaka_palw::host_security::{
+    ConfinementBackend, establish_confinement, harden_worker_command, reachable_signing_secrets, resident_bytes,
+};
 use revm::primitives::{AccountInfo, Address, B256, Bytes, ExecutionResult, KECCAK_EMPTY, Output, TxEnv, TxKind, U256};
 use revm::{
     Database, Evm,
     db::{CacheDB, EmptyDB},
 };
 use std::collections::BTreeMap;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 // ---------------------------------------------------------------------------------------------
 // Names and bounds
@@ -63,13 +91,23 @@ pub const GRAMMAR_NAME: &str = "code/v1";
 pub const TOOLCHAIN_EVM_V1: &str = "evm/v1";
 pub const CODE_TRANSFORMER_NAME: &str = "code/evm/v1";
 pub const CONTRACT_TRANSFORMER_NAME: &str = "contract/evm/v1";
-/// The artifact's canonical writer, as the manifests name it.
-pub const WRITER_NAME: &str = "misaka-code-build/1/canonical-v1";
+/// The artifact's canonical writer, as the manifests name it — **and the run manifest's tag**.
+///
+/// `misaka-code-build/2/…` is the `MCOD` writer at version 2 (the artifact names the run manifest,
+/// § "The artifact"). The `+evm-run/<deploy gas ceiling>/<run manifest digest>` half is ADR-0078
+/// SA-1's requirement that *"the gas ceiling and the state-fixture hash are part of
+/// `transformer_id`'s manifest"*: `TransformerManifest` has no parameter field of its own, and
+/// `writer` is the manifest field whose spelling this file owns, so the run manifest rides here
+/// and a changed ceiling or a changed fixture is a changed `transformer_id` by construction rather
+/// than by the source-tree hash's accident. [`evm_v1_run_manifest_tag`] recomputes it and
+/// `the_writer_name_pins_the_run_manifest` is the pin.
+pub const WRITER_NAME: &str = "misaka-code-build/2/canonical-v1+evm-run/30000000/aae1b60f1da9ae9b";
 pub const MEDIA_TYPE: &str = "application/vnd.misaka.code-build";
 pub const EXTENSION: &str = "mcod";
 
 pub const MCOD_MAGIC: &[u8; 4] = b"MCOD";
-pub const MCOD_VERSION: u16 = 1;
+/// Version 2 carries the run manifest digest in its header (ADR-0078 SA-1).
+pub const MCOD_VERSION: u16 = 2;
 /// The keyed BLAKE2b-512 domain under which a source's text is digested into the artifact.
 pub const SOURCE_DIGEST_DOMAIN: &[u8] = b"misaka-palw/derive/code/source/v1";
 
@@ -99,6 +137,47 @@ pub const EVM_V1_DEPLOY_GAS_LIMIT: u64 = 30_000_000;
 /// that pays or calls its deployer would reach a precompile instead of an account. Twenty ASCII
 /// bytes that name what they are, with no code and a large balance.
 pub const EVM_V1_DEPLOYER: [u8; 20] = *b"misaka-code-build/v1";
+/// The deployer's balance in the fixture, so a `value`-bearing test can be paid for. Spelled as a
+/// constant because it is a fixture field and the fixture is hashed.
+pub const EVM_V1_DEPLOYER_BALANCE: u128 = u128::MAX;
+
+// --- the confined runner's own bounds (ADR-0079 Decisions 5, 6, 12) ---------------------------
+//
+// Neither of these can change an artifact: they can only refuse one. That is why they are host
+// safety nets and NOT part of the run manifest — a host that kills the run produces no object,
+// which is ADR-0078 Decision 2's parse-failure arm and ADR-0079 S4's "never a different number".
+
+/// The binary that runs model-written initcode. It is a sibling of whatever binary derives, and
+/// [`RUNNER_PATH_ENV`] names it outright when a deployment puts it elsewhere.
+pub const RUNNER_BIN_NAME: &str = "palw-evm-runner";
+/// Operator override for the runner's absolute path.
+pub const RUNNER_PATH_ENV: &str = "MISAKA_PALW_EVM_RUNNER";
+/// The prefix of every ephemeral tree this module makes, so an operator (and a test) can see that
+/// none outlives its run.
+pub const WORK_DIR_PREFIX: &str = "misaka-code-build-";
+/// The runner's resident ceiling. An `evm/v1` job's memory is bounded by gas — 30M gas buys about
+/// four megabytes of EVM memory — so a gigabyte is a wall, not a budget.
+pub const EVM_V1_MAX_RESIDENT_BYTES: u64 = 1 << 30;
+/// The deadline is DERIVED from the gas the answer itself declares (ADR-0077 SA-4's shape: a
+/// deadline is derived, never chosen): a fixed base for process start-up, plus the declared gas at
+/// a floor rate no host in the fleet is slower than, capped so nothing hangs a gateway for a day.
+pub const EVM_V1_DEADLINE_BASE_SECS: u64 = 30;
+pub const EVM_V1_GAS_PER_SEC_FLOOR: u64 = 1_000_000;
+pub const EVM_V1_DEADLINE_MAX_SECS: u64 = 3_600;
+/// How often the parent looks at the child while it works.
+pub const EVM_V1_POLL_MILLIS: u64 = 20;
+/// Every how many polls the resident size is measured. On macOS that measurement is a `/bin/ps`,
+/// so it runs at half a second rather than at every poll: a ceiling is a wall, not a sampler.
+pub const EVM_V1_RESIDENT_POLL_EVERY: u32 = 25;
+/// What the parent will read from a child before it stops reading. The result frame is bounded by
+/// the artifact bound; stderr is a message, not a channel.
+pub const MAX_CHILD_STDOUT_BYTES: u64 = (MAX_ARTIFACT_BYTES + (1 << 20)) as u64;
+pub const MAX_CHILD_STDERR_BYTES: u64 = 64 * 1024;
+
+/// The keyed BLAKE2b-512 domain of the state fixture's digest (ADR-0078 SA-1).
+pub const EVM_V1_STATE_FIXTURE_DOMAIN: &[u8] = b"misaka-palw/derive/code/evm-state-fixture/v1";
+/// The keyed BLAKE2b-512 domain of the run manifest's digest (ADR-0078 SA-1).
+pub const EVM_V1_RUN_MANIFEST_DOMAIN: &[u8] = b"misaka-palw/derive/code/evm-run-manifest/v1";
 
 // ---------------------------------------------------------------------------------------------
 // Registration
@@ -180,7 +259,9 @@ fn run_evm_v1(dsl: &[u8], transformer_name: &str, refuse_toolchain: fn(&str) -> 
     if code.toolchain != TOOLCHAIN_EVM_V1 {
         return Err(refuse_toolchain(&code.toolchain));
     }
-    let build = build_evm_v1(&code)?;
+    // ADR-0078 SA-1: the initcode below was written by a model. It runs in a child process, in an
+    // ephemeral tree, under whatever confinement this host can PROVE — never here.
+    let build = build_evm_v1_confined(&code)?;
     let bytes = write_mcod(&code, &build)?;
     Ok(Artifact { bytes, media_type: MEDIA_TYPE, extension: EXTENSION })
 }
@@ -487,15 +568,24 @@ fn canonical_tree(code: &CodeDsl) -> CanonValue {
 // The toolchain `evm/v1`
 // ---------------------------------------------------------------------------------------------
 //
-// A fresh `CacheDB<EmptyDB>`, the fixed environment above, the fixed deployer at nonce 0.
-// DEPLOY: `TxKind::Create` with data = initcode ‖ constructor_args, the deploy gas limit, gas
-// price 0, committed. A deploy that reverts, halts, creates nothing or leaves no runtime code
-// refuses the whole derivation, naming it. TESTS, in manifest order: `TxKind::Call(created)`
-// from the deployer with the test's calldata, value and gas limit, executed WITHOUT commit —
-// so EVERY TEST SEES THE FRESHLY DEPLOYED STATE and no test can depend on another's order or
-// side effects; a test that needs prior state carries it in its own calldata or in the
-// constructor. Recorded per test: success, output bytes, gas used, and whether the expectation
-// held (`expect.success == success`, and byte equality with `expect.output` when it is not null).
+// THE STATE FIXTURE, hashed into the run manifest (ADR-0078 SA-1): a fresh `CacheDB<EmptyDB>` —
+// an empty world with no accounts, no code and no storage, and not one byte of this chain's own
+// state — plus the fixed deployer at nonce 0 with a balance, under the fixed environment above.
+// A contract that reads any other address reads zero.
+//
+// THE RUN. DEPLOY: `TxKind::Create` with data = initcode ‖ constructor_args, the deploy gas
+// ceiling, gas price 0, committed. A deploy that reverts, halts, creates nothing or leaves no
+// runtime code refuses the whole derivation, naming it. TESTS, in manifest order:
+// `TxKind::Call(created)` from the deployer with the test's calldata, value and gas limit,
+// executed WITHOUT commit — so EVERY TEST SEES THE FRESHLY DEPLOYED STATE and no test can depend
+// on another's order or side effects; a test that needs prior state carries it in its own
+// calldata or in the constructor. Recorded per call: success, output bytes and gas used.
+//
+// WHERE IT RUNS: not in this process. [`build_evm_v1_confined`] frames the job, spawns the runner
+// binary under [`establish_confinement`], and compares the expectations itself. The split is the
+// point, not the ceremony: the process that executes a stranger's bytecode holds no answer, no
+// claim and no key, and the process that holds them executes nothing. The runner returns FACTS
+// (success, output, gas); the transformer turns them into VERDICTS (`expectation_held`).
 
 /// The outcome of one test call.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -553,69 +643,657 @@ fn tx_env(caller: Address, to: TxKind, data: Vec<u8>, value: u64, gas_limit: u64
     }
 }
 
-/// Run the toolchain on a validated answer.
-pub fn build_evm_v1(code: &CodeDsl) -> Result<EvmBuild, DeriveError> {
-    let mut deploy_data = decode_initcode(&code.target.source, &code.sources[&code.target.source])?;
-    deploy_data.extend_from_slice(&code.target.constructor_args);
+// ---------------------------------------------------------------------------------------------
+// The run manifest (ADR-0078 SA-1): the gas ceiling and the state fixture, named
+// ---------------------------------------------------------------------------------------------
+//
+// SA-1: *"on an ephemeral, isolated state with a gas ceiling from the transformer manifest … The
+// gas ceiling and the state-fixture hash are part of `transformer_id`'s manifest."* Two digests
+// carry that: the fixture's, over the state the EVM starts from; the run manifest's, over the
+// fixture digest and every gas ceiling the toolchain enforces. The run manifest's digest is in
+// [`WRITER_NAME`] — hence in `transformer_id` — and in the artifact's header, and the runner
+// refuses any job whose digest is not the one IT was compiled with.
+
+/// A keyed BLAKE2b-512 digest under a domain, length-prefixed so no two preimages collide by
+/// concatenation.
+fn keyed_digest(domain: &[u8], data: &[u8]) -> [u8; 64] {
+    let mut state = blake2b_simd::Params::new().hash_length(64).key(domain).to_state();
+    state.update(&(data.len() as u64).to_le_bytes());
+    state.update(data);
+    let mut out = [0u8; 64];
+    out.copy_from_slice(state.finalize().as_bytes());
+    out
+}
+
+/// The state fixture's canonical bytes — the state an `evm/v1` build starts from, spelled field
+/// by field so a reader can check the digest by hand.
+pub fn evm_v1_state_fixture_bytes() -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(b"evm/v1/state-fixture");
+    out.push(kaspa_evm::EVM_SPEC_ID as u8);
+    put_u64_le(&mut out, EVM_V1_CHAIN_ID);
+    put_u64_le(&mut out, EVM_V1_BLOCK_GAS_LIMIT);
+    // The block environment, every field named and every field zero: a build reads no clock, no
+    // coinbase, no basefee and no randomness.
+    put_u64_le(&mut out, 0); // number
+    put_u64_le(&mut out, 0); // timestamp
+    out.extend_from_slice(&[0u8; 20]); // coinbase
+    out.extend_from_slice(&[0u8; 32]); // basefee
+    out.extend_from_slice(&[0u8; 32]); // difficulty
+    out.extend_from_slice(&[0u8; 32]); // prevrandao
+    // The only account that exists.
+    out.extend_from_slice(&EVM_V1_DEPLOYER);
+    out.extend_from_slice(&U256::from(EVM_V1_DEPLOYER_BALANCE).to_be_bytes::<32>());
+    put_u64_le(&mut out, 0); // its nonce
+    out.extend_from_slice(KECCAK_EMPTY.as_slice()); // it holds no code
+    put_u32_le(&mut out, 0); // and there is no other account, no storage and no chain state
+    out
+}
+
+/// `H(the state fixture)` — the "state-fixture hash" ADR-0078 SA-1 requires.
+pub fn evm_v1_state_fixture_hash() -> [u8; 64] {
+    keyed_digest(EVM_V1_STATE_FIXTURE_DOMAIN, &evm_v1_state_fixture_bytes())
+}
+
+/// The run manifest's canonical bytes: the fixture, then every ceiling the toolchain enforces.
+pub fn evm_v1_run_manifest_bytes() -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(b"evm/v1/run-manifest");
+    out.extend_from_slice(&evm_v1_state_fixture_hash());
+    put_u64_le(&mut out, EVM_V1_DEPLOY_GAS_LIMIT);
+    put_u64_le(&mut out, EVM_V1_BLOCK_GAS_LIMIT);
+    put_u64_le(&mut out, MIN_TEST_GAS_LIMIT);
+    put_u64_le(&mut out, MAX_TEST_GAS_LIMIT);
+    put_u64_le(&mut out, MAX_INITCODE_BYTES as u64);
+    put_u64_le(&mut out, MAX_CONSTRUCTOR_ARGS_BYTES as u64);
+    put_u64_le(&mut out, MAX_CALLDATA_BYTES as u64);
+    put_u64_le(&mut out, MAX_TESTS as u64);
+    out
+}
+
+/// `H(the run manifest)`.
+pub fn evm_v1_run_manifest_hash() -> [u8; 64] {
+    keyed_digest(EVM_V1_RUN_MANIFEST_DOMAIN, &evm_v1_run_manifest_bytes())
+}
+
+/// The tag [`WRITER_NAME`] carries: the ceiling a reader can see, and the digest that fixes the
+/// rest of it.
+pub fn evm_v1_run_manifest_tag() -> String {
+    format!("evm-run/{EVM_V1_DEPLOY_GAS_LIMIT}/{}", &hex0x(&evm_v1_run_manifest_hash()[..8])[2..])
+}
+
+// ---------------------------------------------------------------------------------------------
+// The job and the result — the runner's whole vocabulary
+// ---------------------------------------------------------------------------------------------
+//
+// Little-endian, length-prefixed, CRC-trailered, the same conventions as the artifact. The job
+// carries the run manifest's DIGEST and not its numbers: a runner uses the ceilings IT was
+// compiled with and refuses a job that names any others, so no caller can widen a ceiling by
+// asking (ADR-0072 Decision 8's rule in this small place — a field the caller chooses freely is a
+// free draw, so this one is not a field).
+
+/// One call in a job — the DSL's test, stripped of its name and its expectation. The runner does
+/// not learn what a test is *for*: it returns facts.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EvmJobCall {
+    pub calldata: Vec<u8>,
+    pub value: u64,
+    pub gas_limit: u64,
+}
+
+/// The canonical job: everything the runner needs, and nothing it may choose.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EvmJob {
+    pub run_manifest: [u8; 64],
+    /// initcode ‖ constructor args.
+    pub deploy_data: Vec<u8>,
+    pub calls: Vec<EvmJobCall>,
+}
+
+/// What one call did.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EvmCallOutcome {
+    pub success: bool,
+    pub output: Vec<u8>,
+    pub gas_used: u64,
+}
+
+/// The canonical result: a build, or a refusal the parent turns into its own sentence.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum EvmJobResult {
+    Built { created: [u8; 20], deploy_gas_used: u64, runtime_code: Vec<u8>, calls: Vec<EvmCallOutcome> },
+    Refused { code: u16, index: u32, gas_used: u64, detail: Vec<u8> },
+}
+
+/// Why a job produced no build. The runner reports the code; the transformer writes the sentence,
+/// because the transformer is the side that knows the test's name.
+pub mod refusal {
+    pub const DEPLOY_NOT_ADMITTED: u16 = 1;
+    pub const DEPLOY_CREATED_NOTHING: u16 = 2;
+    pub const DEPLOY_REVERTED: u16 = 3;
+    pub const DEPLOY_HALTED: u16 = 4;
+    pub const DEPLOY_NO_RUNTIME_CODE: u16 = 5;
+    pub const ACCOUNT_MISSING: u16 = 6;
+    pub const CODE_UNREADABLE: u16 = 7;
+    pub const CALL_NOT_ADMITTED: u16 = 8;
+    pub const JOB_MALFORMED: u16 = 9;
+}
+
+pub const MEVJ_MAGIC: &[u8; 4] = b"MEVJ";
+pub const MEVR_MAGIC: &[u8; 4] = b"MEVR";
+pub const MEV_VERSION: u16 = 1;
+
+/// The job frame the runner reads on stdin.
+pub fn encode_evm_job(job: &EvmJob) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(MEVJ_MAGIC);
+    put_u16_le(&mut out, MEV_VERSION);
+    out.extend_from_slice(&job.run_manifest);
+    put_u32_le(&mut out, job.deploy_data.len() as u32);
+    out.extend_from_slice(&job.deploy_data);
+    put_u32_le(&mut out, job.calls.len() as u32);
+    for call in &job.calls {
+        put_u32_le(&mut out, call.calldata.len() as u32);
+        out.extend_from_slice(&call.calldata);
+        put_u64_le(&mut out, call.value);
+        put_u64_le(&mut out, call.gas_limit);
+    }
+    let crc = crc32(&out);
+    put_u32_le(&mut out, crc);
+    out
+}
+
+/// Read a job frame. Every bound is checked here too: the runner trusts nothing, including its
+/// own parent (ADR-0078 SA-2 — bounds are enforced before it runs).
+pub fn decode_evm_job(bytes: &[u8]) -> Result<EvmJob, DeriveError> {
+    let body = check_frame(bytes, MEVJ_MAGIC, "mevj")?;
+    let mut c = Cursor { bytes: body, pos: 6, tag: "mevj" };
+    let mut run_manifest = [0u8; 64];
+    run_manifest.copy_from_slice(c.take(64, "run manifest")?);
+    let deploy_data = c.bytes("deploy data")?;
+    if deploy_data.len() > MAX_INITCODE_BYTES + MAX_CONSTRUCTOR_ARGS_BYTES {
+        return Err(DeriveError::Mismatch(format!("mevj: deploy data is {} bytes, above the manifest's bound", deploy_data.len())));
+    }
+    let n = c.u32("call count")? as usize;
+    if n > MAX_TESTS {
+        return Err(DeriveError::Mismatch(format!("mevj: {n} calls, above the manifest's bound of {MAX_TESTS}")));
+    }
+    let mut calls = Vec::with_capacity(n);
+    for i in 0..n {
+        let calldata = c.bytes("calldata")?;
+        if calldata.len() > MAX_CALLDATA_BYTES {
+            return Err(DeriveError::Mismatch(format!("mevj: call {i}'s calldata is {} bytes, above the bound", calldata.len())));
+        }
+        let value = c.u64("value")?;
+        let gas_limit = c.u64("gas limit")?;
+        if !(MIN_TEST_GAS_LIMIT..=MAX_TEST_GAS_LIMIT).contains(&gas_limit) {
+            return Err(DeriveError::Mismatch(format!("mevj: call {i}'s gas limit {gas_limit} is outside the manifest's range")));
+        }
+        calls.push(EvmJobCall { calldata, value, gas_limit });
+    }
+    if c.pos != body.len() {
+        return Err(DeriveError::Mismatch(format!("mevj: {} trailing bytes before the CRC", body.len() - c.pos)));
+    }
+    Ok(EvmJob { run_manifest, deploy_data, calls })
+}
+
+/// The result frame the runner writes on stdout.
+pub fn encode_evm_result(run_manifest: &[u8; 64], result: &EvmJobResult) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(MEVR_MAGIC);
+    put_u16_le(&mut out, MEV_VERSION);
+    out.extend_from_slice(run_manifest);
+    match result {
+        EvmJobResult::Built { created, deploy_gas_used, runtime_code, calls } => {
+            out.push(0);
+            out.extend_from_slice(created);
+            put_u64_le(&mut out, *deploy_gas_used);
+            put_u32_le(&mut out, runtime_code.len() as u32);
+            out.extend_from_slice(runtime_code);
+            put_u32_le(&mut out, calls.len() as u32);
+            for call in calls {
+                out.push(u8::from(call.success));
+                put_u32_le(&mut out, call.output.len() as u32);
+                out.extend_from_slice(&call.output);
+                put_u64_le(&mut out, call.gas_used);
+            }
+        }
+        EvmJobResult::Refused { code, index, gas_used, detail } => {
+            out.push(1);
+            put_u16_le(&mut out, *code);
+            put_u32_le(&mut out, *index);
+            put_u64_le(&mut out, *gas_used);
+            put_u32_le(&mut out, detail.len() as u32);
+            out.extend_from_slice(detail);
+        }
+    }
+    let crc = crc32(&out);
+    put_u32_le(&mut out, crc);
+    out
+}
+
+/// Read a result frame, with the run manifest it was produced under.
+pub fn decode_evm_result(bytes: &[u8]) -> Result<([u8; 64], EvmJobResult), DeriveError> {
+    let body = check_frame(bytes, MEVR_MAGIC, "mevr")?;
+    let mut c = Cursor { bytes: body, pos: 6, tag: "mevr" };
+    let mut run_manifest = [0u8; 64];
+    run_manifest.copy_from_slice(c.take(64, "run manifest")?);
+    let result = match c.u8("status")? {
+        0 => {
+            let mut created = [0u8; 20];
+            created.copy_from_slice(c.take(20, "created address")?);
+            let deploy_gas_used = c.u64("deploy gas used")?;
+            let runtime_code = c.bytes("runtime code")?;
+            let n = c.u32("call count")? as usize;
+            if n > MAX_TESTS {
+                return Err(DeriveError::Mismatch(format!("mevr: {n} outcomes, above the bound of {MAX_TESTS}")));
+            }
+            let mut calls = Vec::with_capacity(n);
+            for _ in 0..n {
+                let success = c.flag("call success")?;
+                let output = c.bytes("call output")?;
+                let gas_used = c.u64("call gas used")?;
+                calls.push(EvmCallOutcome { success, output, gas_used });
+            }
+            EvmJobResult::Built { created, deploy_gas_used, runtime_code, calls }
+        }
+        1 => EvmJobResult::Refused {
+            code: c.u16("refusal code")?,
+            index: c.u32("refusal index")?,
+            gas_used: c.u64("refusal gas")?,
+            detail: c.bytes("refusal detail")?,
+        },
+        other => return Err(DeriveError::Mismatch(format!("mevr: status {other} is neither built nor refused"))),
+    };
+    if c.pos != body.len() {
+        return Err(DeriveError::Mismatch(format!("mevr: {} trailing bytes before the CRC", body.len() - c.pos)));
+    }
+    Ok((run_manifest, result))
+}
+
+/// Magic, version and CRC, before a byte of a frame is believed.
+fn check_frame<'a>(bytes: &'a [u8], magic: &[u8; 4], tag: &str) -> Result<&'a [u8], DeriveError> {
+    if bytes.len() < 4 + 2 + 64 + 1 + 4 {
+        return Err(DeriveError::Mismatch(format!("{tag}: shorter than a frame ({} bytes)", bytes.len())));
+    }
+    let (body, trailer) = bytes.split_at(bytes.len() - 4);
+    let want = u32::from_le_bytes(trailer.try_into().expect("4 bytes"));
+    if crc32(body) != want {
+        return Err(DeriveError::Mismatch(format!("{tag}: the trailer's CRC-32 does not match the bytes")));
+    }
+    if &body[..4] != magic {
+        return Err(DeriveError::Mismatch(format!("{tag}: magic is not {}", String::from_utf8_lossy(magic))));
+    }
+    let version = u16::from_le_bytes(body[4..6].try_into().expect("2 bytes"));
+    if version != MEV_VERSION {
+        return Err(DeriveError::Mismatch(format!("{tag}: version {version} is not {MEV_VERSION}")));
+    }
+    Ok(body)
+}
+
+// ---------------------------------------------------------------------------------------------
+// The in-process executor — THE RUNNER'S ENTRY POINT, and nothing else's
+// ---------------------------------------------------------------------------------------------
+
+/// **Execute a job in THIS process.** ADR-0078 SA-1 forbids calling this from a process that
+/// holds a claim, an answer or a key: the only caller in the tree is `bin/palw-evm-runner.rs`,
+/// and `tests/derive_tree_guard.rs` fails if a second one appears. It is `pub` because a separate
+/// binary needs it, and for no other reason.
+///
+/// Pure: the same job yields the same result on every host. It refuses a job whose run manifest is
+/// not this build's — a runner beside a library that names different ceilings is a runner that
+/// would silently execute under someone else's manifest.
+pub fn execute_evm_job_in_this_process(job: &EvmJob) -> EvmJobResult {
+    let malformed =
+        |detail: String| EvmJobResult::Refused { code: refusal::JOB_MALFORMED, index: 0, gas_used: 0, detail: detail.into_bytes() };
+    let mine = evm_v1_run_manifest_hash();
+    if job.run_manifest != mine {
+        return malformed(format!(
+            "the job names run manifest {} and this runner was built with {}",
+            hex0x(&job.run_manifest[..8]),
+            hex0x(&mine[..8])
+        ));
+    }
+    if job.deploy_data.is_empty() || job.deploy_data.len() > MAX_INITCODE_BYTES + MAX_CONSTRUCTOR_ARGS_BYTES {
+        return malformed(format!("the deploy data is {} bytes", job.deploy_data.len()));
+    }
+    if job.calls.len() > MAX_TESTS {
+        return malformed(format!("the job holds {} calls", job.calls.len()));
+    }
 
     let deployer = Address::from(EVM_V1_DEPLOYER);
     let mut db = CacheDB::new(EmptyDB::default());
-    db.insert_account_info(deployer, AccountInfo { balance: U256::from(u128::MAX), nonce: 0, code_hash: KECCAK_EMPTY, code: None });
+    db.insert_account_info(
+        deployer,
+        AccountInfo { balance: U256::from(EVM_V1_DEPLOYER_BALANCE), nonce: 0, code_hash: KECCAK_EMPTY, code: None },
+    );
 
     let deploy = {
-        let mut evm = evm_v1(&mut db, tx_env(deployer, TxKind::Create, deploy_data, 0, EVM_V1_DEPLOY_GAS_LIMIT, 0));
-        evm.transact_commit()
-            .map_err(|e| transformer(format!("{TOOLCHAIN_EVM_V1} deploy is not a transaction the EVM admits: {e:?}")))?
+        let mut evm = evm_v1(&mut db, tx_env(deployer, TxKind::Create, job.deploy_data.clone(), 0, EVM_V1_DEPLOY_GAS_LIMIT, 0));
+        match evm.transact_commit() {
+            Ok(result) => result,
+            Err(e) => {
+                return EvmJobResult::Refused {
+                    code: refusal::DEPLOY_NOT_ADMITTED,
+                    index: 0,
+                    gas_used: 0,
+                    detail: format!("{e:?}").into_bytes(),
+                };
+            }
+        }
     };
     let (created, deploy_gas_used) = match deploy {
         ExecutionResult::Success { output: Output::Create(_, Some(address)), gas_used, .. } => (address, gas_used),
-        ExecutionResult::Success { .. } => {
-            return Err(transformer(format!("{TOOLCHAIN_EVM_V1} deploy succeeded but created no account")));
+        ExecutionResult::Success { gas_used, .. } => {
+            return EvmJobResult::Refused { code: refusal::DEPLOY_CREATED_NOTHING, index: 0, gas_used, detail: Vec::new() };
         }
         ExecutionResult::Revert { gas_used, output } => {
-            return Err(transformer(format!(
-                "{TOOLCHAIN_EVM_V1} deploy reverted after {gas_used} gas with output {}",
-                hex0x(&output)
-            )));
+            return EvmJobResult::Refused { code: refusal::DEPLOY_REVERTED, index: 0, gas_used, detail: output.to_vec() };
         }
         ExecutionResult::Halt { reason, gas_used } => {
-            return Err(transformer(format!("{TOOLCHAIN_EVM_V1} deploy halted ({reason:?}) after {gas_used} gas")));
+            return EvmJobResult::Refused {
+                code: refusal::DEPLOY_HALTED,
+                index: 0,
+                gas_used,
+                detail: format!("{reason:?}").into_bytes(),
+            };
         }
     };
-    let info = db.basic(created).ok().flatten().ok_or_else(|| {
-        transformer(format!("{TOOLCHAIN_EVM_V1} deploy named {} but the state holds no such account", hex0x(created.as_slice())))
-    })?;
+    let info = match db.basic(created).ok().flatten() {
+        Some(info) => info,
+        None => {
+            return EvmJobResult::Refused {
+                code: refusal::ACCOUNT_MISSING,
+                index: 0,
+                gas_used: deploy_gas_used,
+                detail: created.as_slice().to_vec(),
+            };
+        }
+    };
     let runtime_code = if info.code_hash == KECCAK_EMPTY {
         Vec::new()
     } else {
-        db.code_by_hash(info.code_hash)
-            .map_err(|e| transformer(format!("{TOOLCHAIN_EVM_V1}: the created account's code is unreadable: {e:?}")))?
-            .original_bytes()
-            .to_vec()
+        match db.code_by_hash(info.code_hash) {
+            Ok(code) => code.original_bytes().to_vec(),
+            Err(e) => {
+                return EvmJobResult::Refused {
+                    code: refusal::CODE_UNREADABLE,
+                    index: 0,
+                    gas_used: deploy_gas_used,
+                    detail: format!("{e:?}").into_bytes(),
+                };
+            }
+        }
     };
     if runtime_code.is_empty() {
-        return Err(transformer(format!(
-            "{TOOLCHAIN_EVM_V1} deploy left no runtime code at {}: an initcode that returns nothing builds nothing",
-            hex0x(created.as_slice())
-        )));
+        return EvmJobResult::Refused {
+            code: refusal::DEPLOY_NO_RUNTIME_CODE,
+            index: 0,
+            gas_used: deploy_gas_used,
+            detail: created.as_slice().to_vec(),
+        };
     }
 
-    let mut tests = Vec::with_capacity(code.tests.len());
-    for t in &code.tests {
-        let mut evm = evm_v1(&mut db, tx_env(deployer, TxKind::Call(created), t.calldata.clone(), t.value, t.gas_limit, 1));
-        let outcome = evm
-            .transact()
-            .map_err(|e| transformer(format!("{TOOLCHAIN_EVM_V1} test {:?} is not a transaction the EVM admits: {e:?}", t.name)))?;
+    let mut calls = Vec::with_capacity(job.calls.len());
+    for (i, call) in job.calls.iter().enumerate() {
+        let mut evm = evm_v1(&mut db, tx_env(deployer, TxKind::Call(created), call.calldata.clone(), call.value, call.gas_limit, 1));
+        let outcome = match evm.transact() {
+            Ok(outcome) => outcome,
+            Err(e) => {
+                return EvmJobResult::Refused {
+                    code: refusal::CALL_NOT_ADMITTED,
+                    index: i as u32,
+                    gas_used: 0,
+                    detail: format!("{e:?}").into_bytes(),
+                };
+            }
+        };
         let (success, output, gas_used) = match outcome.result {
             ExecutionResult::Success { output, gas_used, .. } => (true, output.into_data().to_vec(), gas_used),
             ExecutionResult::Revert { output, gas_used } => (false, output.to_vec(), gas_used),
             ExecutionResult::Halt { gas_used, .. } => (false, Vec::new(), gas_used),
         };
-        let expectation_held = t.expect_success == success && t.expect_output.as_ref().is_none_or(|want| *want == output);
-        tests.push(TestOutcome { name: t.name.clone(), success, output, gas_used, expectation_held });
+        calls.push(EvmCallOutcome { success, output, gas_used });
     }
 
-    Ok(EvmBuild { created: created.into_array(), deploy_gas_used, runtime_code, tests })
+    EvmJobResult::Built { created: created.into_array(), deploy_gas_used, runtime_code, calls }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The confined half — where a transformer actually runs the toolchain
+// ---------------------------------------------------------------------------------------------
+
+/// Run the toolchain on a validated answer, in a child process (ADR-0078 SA-1).
+pub fn build_evm_v1_confined(code: &CodeDsl) -> Result<EvmBuild, DeriveError> {
+    let mut deploy_data = decode_initcode(&code.target.source, &code.sources[&code.target.source])?;
+    deploy_data.extend_from_slice(&code.target.constructor_args);
+    let job = EvmJob {
+        run_manifest: evm_v1_run_manifest_hash(),
+        deploy_data,
+        calls: code
+            .tests
+            .iter()
+            .map(|t| EvmJobCall { calldata: t.calldata.clone(), value: t.value, gas_limit: t.gas_limit })
+            .collect(),
+    };
+    match run_job_confined(&job)? {
+        EvmJobResult::Built { created, deploy_gas_used, runtime_code, calls } => {
+            if calls.len() != code.tests.len() {
+                return Err(transformer(format!(
+                    "{TOOLCHAIN_EVM_V1}: the runner answered {} calls for {} tests",
+                    calls.len(),
+                    code.tests.len()
+                )));
+            }
+            let tests = code
+                .tests
+                .iter()
+                .zip(calls)
+                .map(|(t, o)| {
+                    let expectation_held =
+                        t.expect_success == o.success && t.expect_output.as_ref().is_none_or(|want| *want == o.output);
+                    TestOutcome { name: t.name.clone(), success: o.success, output: o.output, gas_used: o.gas_used, expectation_held }
+                })
+                .collect();
+            Ok(EvmBuild { created, deploy_gas_used, runtime_code, tests })
+        }
+        EvmJobResult::Refused { code: reason, index, gas_used, detail } => {
+            Err(refusal_sentence(code, reason, index, gas_used, &detail))
+        }
+    }
+}
+
+/// The runner's refusal in the transformer's own words — the same sentences this kind has always
+/// produced, written on the side that knows the test's name.
+fn refusal_sentence(code: &CodeDsl, reason: u16, index: u32, gas_used: u64, detail: &[u8]) -> DeriveError {
+    let text = String::from_utf8_lossy(detail).chars().take(2048).collect::<String>();
+    transformer(match reason {
+        refusal::DEPLOY_NOT_ADMITTED => format!("{TOOLCHAIN_EVM_V1} deploy is not a transaction the EVM admits: {text}"),
+        refusal::DEPLOY_CREATED_NOTHING => format!("{TOOLCHAIN_EVM_V1} deploy succeeded but created no account"),
+        refusal::DEPLOY_REVERTED => format!("{TOOLCHAIN_EVM_V1} deploy reverted after {gas_used} gas with output {}", hex0x(detail)),
+        refusal::DEPLOY_HALTED => format!("{TOOLCHAIN_EVM_V1} deploy halted ({text}) after {gas_used} gas"),
+        refusal::DEPLOY_NO_RUNTIME_CODE => format!(
+            "{TOOLCHAIN_EVM_V1} deploy left no runtime code at {}: an initcode that returns nothing builds nothing",
+            hex0x(detail)
+        ),
+        refusal::ACCOUNT_MISSING => {
+            format!("{TOOLCHAIN_EVM_V1} deploy named {} but the state holds no such account", hex0x(detail))
+        }
+        refusal::CODE_UNREADABLE => format!("{TOOLCHAIN_EVM_V1}: the created account's code is unreadable: {text}"),
+        refusal::CALL_NOT_ADMITTED => {
+            let name = code.tests.get(index as usize).map_or_else(|| format!("#{index}"), |t| format!("{:?}", t.name));
+            format!("{TOOLCHAIN_EVM_V1} test {name} is not a transaction the EVM admits: {text}")
+        }
+        refusal::JOB_MALFORMED => format!("{TOOLCHAIN_EVM_V1}: the runner refused the job: {text}"),
+        other => format!("{TOOLCHAIN_EVM_V1}: the runner refused with an unknown code {other}: {text}"),
+    })
+}
+
+/// The deadline, DERIVED from the gas the answer itself declares (ADR-0077 SA-4's shape: a
+/// deadline is derived per row, never chosen), capped so nothing hangs a gateway for a day.
+pub fn evm_v1_deadline_secs(job: &EvmJob) -> u64 {
+    let declared = job.calls.iter().fold(EVM_V1_DEPLOY_GAS_LIMIT, |acc, c| acc.saturating_add(c.gas_limit));
+    EVM_V1_DEADLINE_BASE_SECS.saturating_add(declared / EVM_V1_GAS_PER_SEC_FLOOR).min(EVM_V1_DEADLINE_MAX_SECS)
+}
+
+/// Where the runner is: the operator's answer first, then beside this binary, then one directory
+/// up (a `target/debug/deps/` test binary is a sibling of the very tree that built the runner).
+/// There is no fourth candidate and no fallback: an absent runner refuses the derivation.
+pub fn locate_runner() -> Result<PathBuf, DeriveError> {
+    if let Some(named) = std::env::var_os(RUNNER_PATH_ENV) {
+        let path = PathBuf::from(named);
+        if path.is_file() {
+            return Ok(path);
+        }
+        return Err(transformer(format!("{RUNNER_PATH_ENV} names {}, which is not a file", path.display())));
+    }
+    let exe = std::env::current_exe()
+        .map_err(|e| transformer(format!("cannot read this binary's own path to find {RUNNER_BIN_NAME}: {e}")))?;
+    let mut candidates = Vec::new();
+    if let Some(dir) = exe.parent() {
+        candidates.push(dir.join(RUNNER_BIN_NAME));
+        if let Some(up) = dir.parent() {
+            candidates.push(up.join(RUNNER_BIN_NAME));
+        }
+    }
+    for candidate in &candidates {
+        if candidate.is_file() {
+            return Ok(candidate.clone());
+        }
+    }
+    let looked: Vec<String> = candidates.iter().map(|c| c.display().to_string()).collect();
+    Err(transformer(format!(
+        "{RUNNER_BIN_NAME} is not beside this binary (looked at {}). ADR-0078 SA-1: model-written initcode runs in a \
+         separate confined process, so `code`/`contract` refuse rather than fall back in-process — ship \
+         {RUNNER_BIN_NAME} next to the binary that derives, or name it with {RUNNER_PATH_ENV}",
+        looked.join(", ")
+    )))
+}
+
+/// **Spawn a child and wait for it under a resident ceiling and a wall-clock deadline**
+/// (ADR-0079 Decision 6 as corrected by SA-1: the ceiling measures what the process is charged
+/// for, and it is a safety net, not a tuning knob).
+///
+/// Neither bound can change a result: a child that breaches one is killed and its caller returns
+/// a refusal — ADR-0078 Decision 2's parse-failure arm, *no object* — so two hosts either agree on
+/// the artifact or one of them produces none. That is exactly ADR-0079 S4's shape.
+///
+/// `arm_memory_ceiling` is deliberately NOT used here: on Linux it writes `memory.max` into the
+/// operator's delegated WORKER cgroup, and a derivation must not rewrite the ceiling of the model
+/// process that owns it. The parent polls instead, which is the same mechanism
+/// `MemoryCeilingBackend::ResidentWatchdog` names.
+fn wait_with_ceiling(
+    cmd: &mut std::process::Command,
+    stdin_bytes: Option<&[u8]>,
+    what: &str,
+    deadline_secs: u64,
+) -> Result<std::process::Output, DeriveError> {
+    let io = |stage: &str, e: std::io::Error| transformer(format!("{what}: {stage}: {e}"));
+    let mut child = cmd.spawn().map_err(|e| io("spawn", e))?;
+    let pid = child.id();
+
+    if let Some(bytes) = stdin_bytes
+        && let Some(mut pipe) = child.stdin.take()
+    {
+        // A broken pipe here means the child died early; the exit status below says how. Both
+        // children of this module read their input to the end before they write, so a single
+        // write cannot deadlock against a full output pipe.
+        let _ = pipe.write_all(bytes);
+        let _ = pipe.flush();
+    }
+    // Bounded reads. The runner is this crate's own binary, but its PATH is an operator's to set
+    // (`MISAKA_PALW_EVM_RUNNER`), and a parent that reads an unbounded pipe from a child it did not
+    // build is a parent a child can exhaust.
+    let mut stdout = child.stdout.take();
+    let mut stderr = child.stderr.take();
+    let out_reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(pipe) = stdout.as_mut() {
+            let _ = pipe.take(MAX_CHILD_STDOUT_BYTES).read_to_end(&mut buf);
+        }
+        buf
+    });
+    let err_reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(pipe) = stderr.as_mut() {
+            let _ = pipe.take(MAX_CHILD_STDERR_BYTES).read_to_end(&mut buf);
+        }
+        buf
+    });
+
+    let deadline = Duration::from_secs(deadline_secs);
+    let started = Instant::now();
+    let mut polls: u32 = 0;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {}
+            Err(e) => return Err(io("wait", e)),
+        }
+        if started.elapsed() > deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(transformer(format!(
+                "{what}: killed at its deadline of {deadline_secs} s — no object (a deadline can refuse a build, \
+                 never change one)"
+            )));
+        }
+        // The resident measurement costs a `/bin/ps` on macOS, so it runs on its own slower
+        // cadence: the ceiling is a wall against a runaway, not a sampler.
+        if polls.is_multiple_of(EVM_V1_RESIDENT_POLL_EVERY)
+            && let (Some(resident), _) = resident_bytes(pid)
+            && resident > EVM_V1_MAX_RESIDENT_BYTES
+        {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(transformer(format!(
+                "{what}: killed at {resident} resident bytes, above the ceiling of {EVM_V1_MAX_RESIDENT_BYTES} — no \
+                 object"
+            )));
+        }
+        polls = polls.wrapping_add(1);
+        std::thread::sleep(Duration::from_millis(EVM_V1_POLL_MILLIS));
+    };
+    Ok(std::process::Output { status, stdout: out_reader.join().unwrap_or_default(), stderr: err_reader.join().unwrap_or_default() })
+}
+
+/// Spawn the runner in an ephemeral tree and destroy the tree afterwards.
+fn run_job_confined(job: &EvmJob) -> Result<EvmJobResult, DeriveError> {
+    let runner = locate_runner()?;
+    let work = fresh_work_dir("evm")?;
+    let outcome = run_job_in(&runner, job, &work);
+    // The tree is scratch and holds nothing but the confinement's own profile; a failure to remove
+    // it changes no result, and the test that asserts no tree outlives a run is the check.
+    let _ = std::fs::remove_dir_all(&work);
+    outcome
+}
+
+fn run_job_in(runner: &Path, job: &EvmJob, work: &Path) -> Result<EvmJobResult, DeriveError> {
+    // The child may write in its own ephemeral tree and nowhere else. A host with no backend runs
+    // it under the environment discipline alone, which is ADR-0079 Decision 5's honest `none` —
+    // the in-tree EVM is Decision 12's first bullet ("it needs none of this"), so a missing
+    // backend degrades the cage and never the answer.
+    let (confinement, _notes) = establish_confinement(work, &[work.to_path_buf()]);
+    let mut cmd = confinement.command(runner);
+    // ADR-0079 Decision 5's portable half, in its one spelling: env_clear plus the allowlist, and
+    // a working directory that is neither the operator's home nor the node's datadir.
+    harden_worker_command(&mut cmd, work);
+    cmd.stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped());
+    let what = format!("{TOOLCHAIN_EVM_V1} runner");
+    let output = wait_with_ceiling(&mut cmd, Some(&encode_evm_job(job)), &what, evm_v1_deadline_secs(job))?;
+    if !output.status.success() {
+        let shown: String = String::from_utf8_lossy(&output.stderr).chars().take(2048).collect();
+        return Err(transformer(format!("{what}: exited with {} (backend {}): {shown}", output.status, confinement.backend().name())));
+    }
+    let (run_manifest, result) = decode_evm_result(&output.stdout)?;
+    if run_manifest != job.run_manifest {
+        return Err(transformer(format!(
+            "{TOOLCHAIN_EVM_V1} runner: answered under run manifest {}, and the job named {}",
+            hex0x(&run_manifest[..8]),
+            hex0x(&job.run_manifest[..8])
+        )));
+    }
+    Ok(result)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -625,7 +1303,9 @@ pub fn build_evm_v1(code: &CodeDsl) -> Result<EvmBuild, DeriveError> {
 // Little-endian throughout; a string or byte string is a `u32` length then the bytes.
 //
 // ```text
-// HEADER    magic b"MCOD" · u16 version = 1 · string toolchain · u8 spec id (EVM_SPEC_ID as u8)
+// HEADER    magic b"MCOD" · u16 version = 2 · string toolchain · u8 spec id (EVM_SPEC_ID as u8)
+//           · [u8; 64] run manifest digest — the gas ceiling and the state fixture this build ran
+//             under, so the artifact names them and not only `transformer_id` (ADR-0078 SA-1)
 // SOURCES   u32 count · per source, sorted by path: string path · [u8; 64] digest
 //           digest = keyed BLAKE2b-512 (key SOURCE_DIGEST_DOMAIN) over u64 len ‖ text
 //           — the DSL already carries the text; the artifact is the build, and names it
@@ -660,6 +1340,7 @@ pub fn write_mcod(code: &CodeDsl, build: &EvmBuild) -> Result<Vec<u8>, DeriveErr
     put_u16_le(&mut out, MCOD_VERSION);
     put_bytes(&mut out, code.toolchain.as_bytes())?;
     out.push(kaspa_evm::EVM_SPEC_ID as u8);
+    out.extend_from_slice(&evm_v1_run_manifest_hash());
 
     put_u32_le(&mut out, code.sources.len() as u32);
     for (path, text) in &code.sources {
@@ -702,6 +1383,9 @@ pub struct McodFile {
     pub version: u16,
     pub toolchain: String,
     pub spec_id: u8,
+    /// The run manifest the build ran under (ADR-0078 SA-1) — a consumer compares it with
+    /// [`evm_v1_run_manifest_hash`] before it believes the gas numbers below.
+    pub run_manifest: [u8; 64],
     pub sources: Vec<(String, [u8; 64])>,
     pub target_name: String,
     pub created: [u8; 20],
@@ -715,12 +1399,14 @@ pub struct McodFile {
 struct Cursor<'a> {
     bytes: &'a [u8],
     pos: usize,
+    /// Which format the reader is in — `mcod`, `mevj` or `mevr` — so a truncation names itself.
+    tag: &'static str,
 }
 
 impl<'a> Cursor<'a> {
     fn take(&mut self, n: usize, what: &str) -> Result<&'a [u8], DeriveError> {
         let end = self.pos.checked_add(n).filter(|end| *end <= self.bytes.len());
-        let end = end.ok_or_else(|| DeriveError::Mismatch(format!("mcod: truncated at {what} (offset {})", self.pos)))?;
+        let end = end.ok_or_else(|| DeriveError::Mismatch(format!("{}: truncated at {what} (offset {})", self.tag, self.pos)))?;
         let slice = &self.bytes[self.pos..end];
         self.pos = end;
         Ok(slice)
@@ -742,20 +1428,21 @@ impl<'a> Cursor<'a> {
         Ok(self.take(len, what)?.to_vec())
     }
     fn string(&mut self, what: &str) -> Result<String, DeriveError> {
-        String::from_utf8(self.bytes(what)?).map_err(|_| DeriveError::Mismatch(format!("mcod: {what} is not UTF-8")))
+        String::from_utf8(self.bytes(what)?).map_err(|_| DeriveError::Mismatch(format!("{}: {what} is not UTF-8", self.tag)))
     }
     fn flag(&mut self, what: &str) -> Result<bool, DeriveError> {
+        let tag = self.tag;
         match self.u8(what)? {
             0 => Ok(false),
             1 => Ok(true),
-            other => Err(DeriveError::Mismatch(format!("mcod: {what} is {other}, not 0 or 1"))),
+            other => Err(DeriveError::Mismatch(format!("{tag}: {what} is {other}, not 0 or 1"))),
         }
     }
 }
 
 /// Read an `MCOD` artifact, checking the trailer's CRC first and every bound on the way.
 pub fn read_mcod(bytes: &[u8]) -> Result<McodFile, DeriveError> {
-    if bytes.len() < 4 + 2 + 4 + 1 + 4 {
+    if bytes.len() < 4 + 2 + 4 + 1 + 64 + 4 {
         return Err(DeriveError::Mismatch("mcod: shorter than a header".into()));
     }
     let (body, trailer) = bytes.split_at(bytes.len() - 4);
@@ -763,7 +1450,7 @@ pub fn read_mcod(bytes: &[u8]) -> Result<McodFile, DeriveError> {
     if crc32(body) != want {
         return Err(DeriveError::Mismatch("mcod: the trailer's CRC-32 does not match the bytes".into()));
     }
-    let mut c = Cursor { bytes: body, pos: 0 };
+    let mut c = Cursor { bytes: body, pos: 0, tag: "mcod" };
     if c.take(4, "magic")? != MCOD_MAGIC {
         return Err(DeriveError::Mismatch("mcod: magic is not MCOD".into()));
     }
@@ -773,6 +1460,8 @@ pub fn read_mcod(bytes: &[u8]) -> Result<McodFile, DeriveError> {
     }
     let toolchain = c.string("toolchain")?;
     let spec_id = c.u8("spec id")?;
+    let mut run_manifest = [0u8; 64];
+    run_manifest.copy_from_slice(c.take(64, "run manifest")?);
     let n_sources = c.u32("source count")? as usize;
     let mut sources = Vec::with_capacity(n_sources.min(MAX_SOURCES));
     for _ in 0..n_sources {
@@ -805,6 +1494,7 @@ pub fn read_mcod(bytes: &[u8]) -> Result<McodFile, DeriveError> {
         version,
         toolchain,
         spec_id,
+        run_manifest,
         sources,
         target_name,
         created,
@@ -834,12 +1524,27 @@ pub fn read_mcod(bytes: &[u8]) -> Result<McodFile, DeriveError> {
 // materialized under `src/`, outputs collected from `out/`, sorted by name), and the standard
 // input (closed).
 //
-// What the runner CANNOT fix, stated plainly: network isolation and the clock. A process
-// environment cannot deny a socket or freeze time; `SOURCE_DATE_EPOCH` is a convention a
-// toolchain honours, not a wall the runner builds. Those are the fleet drill host's (sandbox)
-// responsibility — a network namespace with no routes, a pinned clock — and the manifest's `env`
-// cannot provide them. A toolchain that reaches for either is excluded by the drill, not by
-// this function.
+// What the runner CANNOT fix by itself, stated plainly: network isolation and the clock. A
+// process environment cannot deny a socket or freeze time; `SOURCE_DATE_EPOCH` is a convention a
+// toolchain honours, not a wall this function builds. ADR-0079 Decision 12 answers the first half
+// and refuses to run without it: the socket denial is the platform BACKEND's, proven by its own
+// drill (`establish_confinement`), and a host whose backend is `none` does not run an external
+// toolchain at all. The clock stays a convention, and a toolchain that reaches for it is excluded
+// by ADR-0078 Decision 11's fleet drill, not by this function.
+//
+// THE GATE (ADR-0079 Decision 12, invariant S11), in the order it refuses:
+//
+//   1. no bond or wallet key may be reachable — "the build's output is never executed on a host
+//      that holds a bond key or a wallet key", checked over this process's OWN environment and
+//      the directories the caller names (identity, outbox, datadir). A `code` row's test log IS
+//      the execution of a program a model wrote; this is the completion condition for ADR-0078's
+//      Q-05 and not advice.
+//   2. the confinement backend must be one the host PROVED (`establish_confinement` runs its
+//      drill and reports `none` when it cannot) — otherwise there is no network denial and no
+//      write denial, only a promise.
+//   3. an ephemeral tree, destroyed after the run, holding the sources and the outputs.
+//   4. the manifest's environment and nothing else, plus the resident ceiling and the derived
+//      deadline the EVM runner uses.
 
 /// A pinned external toolchain (ADR-0078 Decision 11).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -857,15 +1562,16 @@ pub struct ExternalToolchainManifest {
 }
 
 /// A fresh work directory under `std::env::temp_dir()`, named by process id and a counter — no
-/// clock, no randomness.
-fn fresh_work_dir(tag: &str) -> Result<PathBuf, DeriveError> {
+/// clock, no randomness. Every tree this module makes is destroyed by the run that made it; the
+/// name is [`WORK_DIR_PREFIX`] so an operator can see at a glance that none outlived one.
+pub fn fresh_work_dir(tag: &str) -> Result<PathBuf, DeriveError> {
     use std::sync::atomic::{AtomicU64, Ordering};
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let base = std::env::temp_dir();
     let pid = std::process::id();
     for _ in 0..1024 {
         let n = SEQ.fetch_add(1, Ordering::Relaxed);
-        let dir = base.join(format!("misaka-code-build-{tag}-{pid}-{n}"));
+        let dir = base.join(format!("{WORK_DIR_PREFIX}{tag}-{pid}-{n}"));
         match std::fs::create_dir(&dir) {
             Ok(()) => return Ok(dir),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
@@ -878,13 +1584,36 @@ fn fresh_work_dir(tag: &str) -> Result<PathBuf, DeriveError> {
 }
 
 /// Run a pinned external toolchain over `sources` and collect `out_collect` (paths under the
-/// output directory), sorted by name. See the module section above for what is and is not fixed.
+/// output directory), sorted by name.
+///
+/// `key_dirs` are the directories the CALLER knows about — its identity directory, its outbox, its
+/// datadir. They are swept for secret-shaped files before anything runs (ADR-0079 Decision 12's
+/// third bullet). Passing an empty slice does not weaken the rule to nothing: the process's own
+/// environment is always swept. It does mean a caller that knows where its keys live must say so,
+/// which is the honest shape of a check no library can make complete.
+///
+/// See the module section above for the whole gate and for what it does not fix.
 pub fn run_external(
     manifest: &ExternalToolchainManifest,
     binary: &Path,
     sources: &BTreeMap<String, String>,
     out_collect: &[String],
+    key_dirs: &[&Path],
 ) -> Result<Vec<(String, Vec<u8>)>, DeriveError> {
+    // (1) Keys first, and before the binary is even read: a host that holds a bond does not build.
+    let reachable = reachable_signing_secrets(|name| std::env::var(name).ok(), key_dirs);
+    if !reachable.is_empty() {
+        let found: Vec<String> = reachable.iter().map(|s| s.to_string()).collect();
+        return Err(transformer(format!(
+            "external toolchain {}: refusing to build on a host that holds a bond or wallet key — {}. ADR-0079 \
+             Decision 12: a `code` row's test log is the execution of a program a model wrote; it runs on a \
+             disposable host or in the same confinement with no writable state that outlives it, or the row's \
+             transformer does not ship",
+            manifest.name,
+            found.join("; ")
+        )));
+    }
+
     let binary_bytes = std::fs::read(binary)
         .map_err(|e| transformer(format!("external toolchain {}: cannot read {}: {e}", manifest.name, binary.display())))?;
     let got = sha256(&binary_bytes);
@@ -925,6 +1654,22 @@ fn run_in(
     work: &Path,
 ) -> Result<Vec<(String, Vec<u8>)>, DeriveError> {
     let io = |what: &str, e: std::io::Error| transformer(format!("external toolchain {}: {what}: {e}", manifest.name));
+
+    // (2) The backend, PROVEN. `establish_confinement` runs its own drill and reports `none` when
+    // it cannot deny a socket and a write; on `none` there is no cage, so there is no run.
+    let (confinement, notes) = establish_confinement(work, &[work.to_path_buf()]);
+    if confinement.backend() == ConfinementBackend::None {
+        return Err(transformer(format!(
+            "external toolchain {}: this host's confinement backend is `none`, so a build cannot be denied a socket \
+             or a write — an external toolchain is named only by its fleet drill (ADR-0078 Decision 11), and \
+             ADR-0079 Decision 12 gives it the narrowest cage or no run. Set {}=linux-seccomp-landlock or \
+             macos-sandbox-exec on a host whose backend proves its own denials. The attempt said: {}",
+            manifest.name,
+            misaka_palw::host_security::PALW_CONFINEMENT_ENV,
+            notes.join("; ")
+        )));
+    }
+
     let src_dir = work.join("src");
     let out_dir = work.join("out");
     std::fs::create_dir(&src_dir).map_err(|e| io("create src/", e))?;
@@ -941,8 +1686,9 @@ fn run_in(
     let out_s = out_dir.to_string_lossy().into_owned();
     let argv: Vec<String> = manifest.argv.iter().map(|a| a.replace("{src}", &src_s).replace("{out}", &out_s)).collect();
 
-    let output = std::process::Command::new(binary)
-        .args(&argv)
+    // (4) The manifest's environment and nothing else, inside the cage the backend proved.
+    let mut cmd = confinement.command(binary);
+    cmd.args(&argv)
         .env_clear()
         .envs(&manifest.env)
         .env("SOURCE_DATE_EPOCH", manifest.source_date_epoch.to_string())
@@ -950,12 +1696,18 @@ fn run_in(
         .env("LC_ALL", "C")
         .current_dir(work)
         .stdin(std::process::Stdio::null())
-        .output()
-        .map_err(|e| io("spawn", e))?;
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+    let output = wait_with_ceiling(&mut cmd, None, &format!("external toolchain {}", manifest.name), EVM_V1_DEADLINE_MAX_SECS)?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let shown: String = stderr.chars().take(2048).collect();
-        return Err(transformer(format!("external toolchain {}: exited with {}: {shown}", manifest.name, output.status)));
+        return Err(transformer(format!(
+            "external toolchain {}: exited with {} under backend {}: {shown}",
+            manifest.name,
+            output.status,
+            confinement.backend().name()
+        )));
     }
 
     let mut collected = Vec::with_capacity(collect.len());
@@ -1021,6 +1773,11 @@ pub fn sha256(data: &[u8]) -> [u8; 32] {
 // Tests
 // ---------------------------------------------------------------------------------------------
 
+/// **These tests spawn `palw-evm-runner`** — ADR-0078 SA-1 means there is no in-process path for
+/// a `code` or `contract` derivation, in a test any more than in a gateway. Run them as
+/// `cargo test -p misaka-palw-derive`, which builds the crate's binaries. `cargo test
+/// -p misaka-palw-derive --lib` does NOT build binaries, and every EVM test then fails with the
+/// runner's absence message: that is the gate holding, not a broken test.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1352,20 +2109,22 @@ mod tests {
         let d = derive_with(&CodeGrammar, &CodeEvmTransformer, &binding(), &bytes_of(&return_42_answer())).unwrap();
         let b = &d.artifact.bytes;
         assert_eq!(&b[..4], b"MCOD");
-        assert_eq!(&b[4..6], &1u16.to_le_bytes());
+        assert_eq!(&b[4..6], &2u16.to_le_bytes());
         assert_eq!(&b[6..10], &6u32.to_le_bytes());
         assert_eq!(&b[10..16], b"evm/v1");
         assert_eq!(b[16], kaspa_evm::EVM_SPEC_ID as u8);
-        assert_eq!(&b[17..21], &2u32.to_le_bytes(), "two sources");
-        assert_eq!(&b[21..25], &9u32.to_le_bytes());
-        assert_eq!(&b[25..34], b"README.md");
-        assert_eq!(&b[34..98], &source_digest("the answer is 42\n"));
+        assert_eq!(&b[17..81], &evm_v1_run_manifest_hash(), "the artifact names the ceiling and the fixture it ran under");
+        assert_eq!(&b[81..85], &2u32.to_le_bytes(), "two sources");
+        assert_eq!(&b[85..89], &9u32.to_le_bytes());
+        assert_eq!(&b[89..98], b"README.md");
+        assert_eq!(&b[98..162], &source_digest("the answer is 42\n"));
         let n = b.len();
         assert_eq!(u32::from_le_bytes(b[n - 4..].try_into().unwrap()), crc32(&b[..n - 4]));
         assert_eq!(&b[n - 12..n - 4], &[1u32.to_le_bytes(), 1u32.to_le_bytes()].concat(), "summary: 1 passed, 1 failed");
 
         let m = read_mcod(b).unwrap();
-        assert_eq!(m.version, 1);
+        assert_eq!(m.version, 2);
+        assert_eq!(m.run_manifest, evm_v1_run_manifest_hash());
         assert_eq!(m.toolchain, "evm/v1");
         assert_eq!(m.spec_id, 16, "Shanghai");
         assert_eq!(m.sources.len(), 2);
@@ -1395,44 +2154,125 @@ mod tests {
         assert_eq!(hex0x(&sha256(&[0u8; 1000])), "0x541b3e9daa09b20bf85fa273e5cbd3e80185aa4ec298e765db87742b70138a53");
     }
 
-    #[cfg(unix)]
+    /// The external toolchain's own gate — refused on a `none` backend, refused beside a key,
+    /// executed inside an ephemeral tree — is `tests/external_toolchain_gate.rs`: it mutates the
+    /// process environment (`MISAKA_PALW_CONFINEMENT`) and therefore owns a test binary of its own.
+    ///
+    /// What stays here is the half that needs no environment: a source path that would escape the
+    /// tree is refused before anything is written or spawned.
     #[test]
-    fn external_runner_runs_a_pinned_fake_toolchain_and_refuses_a_wrong_hash() {
-        use std::os::unix::fs::PermissionsExt;
-        let dir = fresh_work_dir("test").unwrap();
-        let script = dir.join("copy.sh");
-        std::fs::write(&script, b"#!/bin/sh\ncat \"$1\" > \"$2\"\n").unwrap();
-        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let binary_sha256 = sha256(&std::fs::read(&script).unwrap());
-        let mut env = BTreeMap::new();
-        env.insert("PATH".to_string(), "/usr/bin:/bin".to_string());
+    fn external_runner_refuses_an_escaping_source_before_it_writes_anything() {
         let manifest = ExternalToolchainManifest {
-            name: "fake-copy/1".to_string(),
-            binary_sha256,
-            argv: vec!["{src}/hello.txt".to_string(), "{out}/hello.out".to_string()],
-            env,
+            name: "fake/1".to_string(),
+            binary_sha256: [0u8; 32],
+            argv: vec!["{src}".to_string()],
+            env: BTreeMap::new(),
             source_date_epoch: 1_700_000_000,
         };
-        let mut sources = BTreeMap::new();
-        sources.insert("hello.txt".to_string(), "hello, hermetic world\n".to_string());
-        let outs = run_external(&manifest, &script, &sources, &["hello.out".to_string()]).unwrap();
-        assert_eq!(outs, vec![("hello.out".to_string(), b"hello, hermetic world\n".to_vec())]);
-
-        let wrong = ExternalToolchainManifest { binary_sha256: [0xAB; 32], ..manifest.clone() };
-        match run_external(&wrong, &script, &sources, &["hello.out".to_string()]) {
-            Err(DeriveError::Transformer(msg)) => assert!(msg.contains("hashes to") && msg.contains("the manifest names"), "{msg}"),
-            other => panic!("{other:?}"),
-        }
-        // a missing output is named
-        match run_external(&manifest, &script, &sources, &["missing.out".to_string()]) {
-            Err(DeriveError::Transformer(msg)) => assert!(msg.contains("collect out/missing.out"), "{msg}"),
-            other => panic!("{other:?}"),
-        }
-        // a source path that would escape is refused before anything is written
         let mut escaping = BTreeMap::new();
         escaping.insert("../escape.txt".to_string(), String::new());
-        assert!(matches!(run_external(&manifest, &script, &escaping, &[]), Err(DeriveError::Grammar(_))));
-        let _ = std::fs::remove_dir_all(&dir);
+        // `/bin/sh` exists and hashes to something other than zeros, so the binary pin refuses
+        // first unless the path check comes first — which is what this asserts.
+        let outcome = run_external(&manifest, Path::new("/bin/sh"), &escaping, &[], &[]);
+        match outcome {
+            Err(DeriveError::Grammar(msg)) => assert!(msg.contains("source path"), "{msg}"),
+            Err(DeriveError::Transformer(msg)) => assert!(msg.contains("hashes to"), "the pin may refuse first: {msg}"),
+            other => panic!("{other:?}"),
+        }
+    }
+
+    // (6b) the run manifest and the runner's frames -------------------------------------------
+
+    /// **ADR-0078 SA-1's pin.** The gas ceiling and the state-fixture hash are part of the
+    /// transformer manifest — they ride in [`WRITER_NAME`], which is a manifest field — so a
+    /// changed ceiling or a changed fixture is a changed `transformer_id`. When this fails, the
+    /// change was deliberate or it was not; re-pin by COPYING the value this test prints.
+    #[test]
+    fn the_writer_name_pins_the_run_manifest() {
+        let expected = format!("misaka-code-build/2/canonical-v1+{}", evm_v1_run_manifest_tag());
+        assert_eq!(
+            WRITER_NAME, expected,
+            "the run manifest moved: the gas ceiling or the state fixture changed. \
+             WRITER_NAME is {WRITER_NAME}, the run manifest says {expected}"
+        );
+        // The fixture is the state, not the code: the digest is over bytes a reader can spell.
+        assert_eq!(evm_v1_state_fixture_bytes().len(), 20 + 1 + 8 + 8 + 8 + 8 + 20 + 32 + 32 + 32 + 20 + 32 + 8 + 32 + 4);
+        assert_ne!(evm_v1_state_fixture_hash(), evm_v1_run_manifest_hash(), "two domains, two digests");
+    }
+
+    #[test]
+    fn the_runner_frames_round_trip_and_refuse_a_flipped_byte() {
+        let job = EvmJob {
+            run_manifest: evm_v1_run_manifest_hash(),
+            deploy_data: vec![0x60, 0x2a],
+            calls: vec![
+                EvmJobCall { calldata: vec![], value: 0, gas_limit: 21_000 },
+                EvmJobCall { calldata: vec![1, 2, 3], value: 7, gas_limit: 100_000 },
+            ],
+        };
+        let frame = encode_evm_job(&job);
+        assert_eq!(decode_evm_job(&frame).unwrap(), job);
+        let mut flipped = frame.clone();
+        flipped[10] ^= 1;
+        assert!(matches!(decode_evm_job(&flipped), Err(DeriveError::Mismatch(m)) if m.contains("CRC")));
+        assert!(matches!(decode_evm_job(&frame[..8]), Err(DeriveError::Mismatch(m)) if m.contains("shorter than a frame")));
+
+        // A job that names a gas limit outside the manifest's range is refused by the READER, so
+        // the runner never runs it: the ceilings are the manifest's, not the caller's.
+        let mut wide = job.clone();
+        wide.calls[0].gas_limit = MAX_TEST_GAS_LIMIT + 1;
+        assert!(matches!(decode_evm_job(&encode_evm_job(&wide)), Err(DeriveError::Mismatch(m)) if m.contains("outside the manifest")));
+
+        for result in [
+            EvmJobResult::Built {
+                created: [7u8; 20],
+                deploy_gas_used: 53_000,
+                runtime_code: vec![0xf3],
+                calls: vec![EvmCallOutcome { success: true, output: vec![42], gas_used: 21_064 }],
+            },
+            EvmJobResult::Refused { code: refusal::DEPLOY_REVERTED, index: 0, gas_used: 1234, detail: vec![0xde, 0xad] },
+        ] {
+            let frame = encode_evm_result(&evm_v1_run_manifest_hash(), &result);
+            let (manifest, back) = decode_evm_result(&frame).unwrap();
+            assert_eq!(manifest, evm_v1_run_manifest_hash());
+            assert_eq!(back, result);
+        }
+    }
+
+    /// The refusal codes become this kind's own sentences — the runner returns facts, the
+    /// transformer names the test. A code the parent does not know is still a refusal, not a
+    /// panic.
+    #[test]
+    fn every_refusal_code_becomes_a_sentence_that_names_the_test() {
+        let (code, _) = parse_and_canonicalize(&bytes_of(&return_42_answer())).unwrap();
+        let cases = [
+            (refusal::DEPLOY_REVERTED, "deploy reverted after 5 gas with output 0xdead"),
+            (refusal::DEPLOY_NO_RUNTIME_CODE, "left no runtime code"),
+            (refusal::CALL_NOT_ADMITTED, "test \"expects-43\" is not a transaction the EVM admits"),
+            (refusal::JOB_MALFORMED, "the runner refused the job"),
+            (4242, "unknown code 4242"),
+        ];
+        for (reason, expected) in cases {
+            let detail = if reason == refusal::CALL_NOT_ADMITTED { b"why".to_vec() } else { vec![0xde, 0xad] };
+            match refusal_sentence(&code, reason, 1, 5, &detail) {
+                DeriveError::Transformer(msg) => assert!(msg.contains(expected), "code {reason}: {msg}"),
+                other => panic!("{other:?}"),
+            }
+        }
+    }
+
+    /// **The deadline is derived, never chosen** (ADR-0077 SA-4's shape): it is a function of the
+    /// gas the answer declares, and it is capped.
+    #[test]
+    fn the_deadline_is_a_function_of_the_declared_gas() {
+        let job = |gas: u64, n: usize| EvmJob {
+            run_manifest: evm_v1_run_manifest_hash(),
+            deploy_data: vec![0],
+            calls: vec![EvmJobCall { calldata: vec![], value: 0, gas_limit: gas }; n],
+        };
+        assert_eq!(evm_v1_deadline_secs(&job(21_000, 0)), EVM_V1_DEADLINE_BASE_SECS + 30);
+        assert!(evm_v1_deadline_secs(&job(MAX_TEST_GAS_LIMIT, 4)) > evm_v1_deadline_secs(&job(MAX_TEST_GAS_LIMIT, 1)));
+        assert_eq!(evm_v1_deadline_secs(&job(MAX_TEST_GAS_LIMIT, MAX_TESTS)), EVM_V1_DEADLINE_MAX_SECS, "and it is capped");
     }
 
     // (7) the fixture corpus ------------------------------------------------------------------

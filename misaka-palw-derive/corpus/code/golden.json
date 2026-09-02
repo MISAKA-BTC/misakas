@@ -1,32 +1,32 @@
 {
   "01-return-42.json#code/evm/v1": {
-    "artifact_bytes": 381,
-    "artifact_hash": "70b4d02b0d8cb81636450ab780f6279bb97775f0a89384b7bab7e8aa27e2fdf4b215bf0aa76bbbf219c48bf4af6fb41a011769cc4cfe897e0abee40936ca33cf",
+    "artifact_bytes": 445,
+    "artifact_hash": "0c26f33dc974fa9e1c9803795361eebaff427047424535202e45fc4b2960c0427776795b57f45f017a21d53f33b47e4eb6b2c73ca37a0d304cdf34e1978b3459",
     "dsl_hash": "46a44d1ca56fb6351c1afd764adfdc6d3f42f239d20293c6315acd5073e40bb5dfbb1b7160a82d6d431a2d9e3c602482f1aa4075714018e5b2405d7ce7cb4b63"
   },
   "01-return-42.json#contract/evm/v1": {
-    "artifact_bytes": 381,
-    "artifact_hash": "70b4d02b0d8cb81636450ab780f6279bb97775f0a89384b7bab7e8aa27e2fdf4b215bf0aa76bbbf219c48bf4af6fb41a011769cc4cfe897e0abee40936ca33cf",
+    "artifact_bytes": 445,
+    "artifact_hash": "0c26f33dc974fa9e1c9803795361eebaff427047424535202e45fc4b2960c0427776795b57f45f017a21d53f33b47e4eb6b2c73ca37a0d304cdf34e1978b3459",
     "dsl_hash": "46a44d1ca56fb6351c1afd764adfdc6d3f42f239d20293c6315acd5073e40bb5dfbb1b7160a82d6d431a2d9e3c602482f1aa4075714018e5b2405d7ce7cb4b63"
   },
   "02-counter.json#code/evm/v1": {
-    "artifact_bytes": 484,
-    "artifact_hash": "fbd206234b5ee0efdf1e6193a925bb46640b66b31b7d2fe8d9ad5a0811a62042cb9b36162476f0f0b9712caa8a7c2c49bb3553643ea9966a7598aa146a5e1e90",
+    "artifact_bytes": 548,
+    "artifact_hash": "d09666fecb07ca63e9116f3cfdde349a4a28b79d0408fa602ba2809807daacb2b2dbfe27fa018f7e32b97c6d75a38e35fabef270686924e1d397b8b2403dbc3f",
     "dsl_hash": "f2d22265c0b5ca492cd2f396df3c25beb2dcf9454e28edbdd2f46e129e84c2f9b1a721d55238e698e5862849cae5fa7ba5e4fbcf127a613721e312e22b2987cf"
   },
   "02-counter.json#contract/evm/v1": {
-    "artifact_bytes": 484,
-    "artifact_hash": "fbd206234b5ee0efdf1e6193a925bb46640b66b31b7d2fe8d9ad5a0811a62042cb9b36162476f0f0b9712caa8a7c2c49bb3553643ea9966a7598aa146a5e1e90",
+    "artifact_bytes": 548,
+    "artifact_hash": "d09666fecb07ca63e9116f3cfdde349a4a28b79d0408fa602ba2809807daacb2b2dbfe27fa018f7e32b97c6d75a38e35fabef270686924e1d397b8b2403dbc3f",
     "dsl_hash": "f2d22265c0b5ca492cd2f396df3c25beb2dcf9454e28edbdd2f46e129e84c2f9b1a721d55238e698e5862849cae5fa7ba5e4fbcf127a613721e312e22b2987cf"
   },
   "03-constructor-args.json#code/evm/v1": {
-    "artifact_bytes": 483,
-    "artifact_hash": "4edb284bb6d8fb74e2aa0577d979fdb9da33f7e628ee1c8e59785bba3e4b1c8724cb2e73b2e1f29c4daf41a079f311a5f053166b4f773bbd136eba7fa41ef4c1",
+    "artifact_bytes": 547,
+    "artifact_hash": "6e79b00f4ad10fce39afc9b3f0b4ae768135f494d93d6c9c47e515a2a9aaaef4cc5e25feed512c37258d9e51eb15cf4b1f5d0c9812aad363a19f9f574f38a57c",
     "dsl_hash": "2acd80a6965cc6a0a047fa34832a168a1df4411f14d5f28933554f80a040b98882d9cda7e158c30fc7b37cda1e0a90ce6d722a3972f99169ed8c1a54bf1a99a5"
   },
   "03-constructor-args.json#contract/evm/v1": {
-    "artifact_bytes": 483,
-    "artifact_hash": "4edb284bb6d8fb74e2aa0577d979fdb9da33f7e628ee1c8e59785bba3e4b1c8724cb2e73b2e1f29c4daf41a079f311a5f053166b4f773bbd136eba7fa41ef4c1",
+    "artifact_bytes": 547,
+    "artifact_hash": "6e79b00f4ad10fce39afc9b3f0b4ae768135f494d93d6c9c47e515a2a9aaaef4cc5e25feed512c37258d9e51eb15cf4b1f5d0c9812aad363a19f9f574f38a57c",
     "dsl_hash": "2acd80a6965cc6a0a047fa34832a168a1df4411f14d5f28933554f80a040b98882d9cda7e158c30fc7b37cda1e0a90ce6d722a3972f99169ed8c1a54bf1a99a5"
   }
 }

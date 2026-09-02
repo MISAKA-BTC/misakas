@@ -138,6 +138,30 @@ it):
 - **Nothing logs a prompt.** Gateway, supervisor, worker and seat log token counts and roots, never
   prompt text or prompt ids.
 
+**Model-written code never runs in the process that asked for it** (ADR-0079 Decision 12, ADR-0078
+SA-1). A `code` or `contract` derivation compiles nothing of the operator's and executes a program
+a stranger's prompt produced, which is the largest privilege on this list, so it gets the narrowest
+cage:
+
+- **The in-tree EVM (`evm/v1`) runs in `palw-evm-runner`, a separate process** — spawned through
+  the confinement backend above, in an ephemeral directory destroyed after the run, `env_clear`ed
+  under the same `PALW_WORKER_ENV_ALLOWLIST`, with a **1 GiB resident ceiling** and a **deadline
+  derived from the gas the answer itself declares**. It speaks two framed messages on stdin/stdout
+  and holds no prompt, no claim id and no key. **There is no in-process fallback**: a missing
+  runner refuses the derivation. A killed, over-ceiling or denied run yields *no object* — never a
+  different artifact, because a security control that can change an arithmetic result is a fork
+  risk (S4).
+- **The gas ceiling and the state fixture are part of `transformer_id`**, through the run
+  manifest's digest in the transformer's writer name and in the `MCOD` header; the runner refuses
+  a job that names any other run manifest, so a stale runner cannot execute under someone else's
+  ceiling.
+- **An external toolchain (rustc, solc, clang) refuses to run on a host with backend `none`** — no
+  backend means no socket denial, and a declared one would be a promise — **and refuses on a host
+  where a bond or wallet key is reachable**, in the process's environment or in the identity,
+  outbox and datadir directories the caller names. None is registered: a toolchain is named only
+  by its fleet drill (ADR-0078 Decision 11). *The build's output is never executed on a host that
+  holds a key.*
+
 **What this does not buy:** nothing here makes a dishonest executor honest, and nothing here is
 visible to a peer. A node that lies about its posture is exactly as convictable as before — through
 its roots — and exactly as unconvictable for its posture.
