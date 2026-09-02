@@ -112,6 +112,7 @@ Authoritative design & spec live under [`docs/`](docs/):
 - [Spec — `docs/kaspa-pq-spec.md`](docs/kaspa-pq-spec.md)
 - [Verification runbook — `docs/kaspa-pq-mldsa87-verification-runbook.md`](docs/kaspa-pq-mldsa87-verification-runbook.md)
 - [Validator runbook — `docs/validator-runbook.md`](docs/validator-runbook.md)
+- [Testnet points (MTP) — taking part & checking your points](docs/testnet-points-mtp.md) ([日本語](docs/testnet-points-mtp-ja.md))
 
 **Scope of PQ claims** (per the design doc): "tx authorization uses ML-DSA-87", "secp256k1 signing disabled in PQ consensus mode", "64-byte BLAKE2b-512 consensus identity". Transport-layer (network) traffic is **not** PQ unless an ML-KEM hybrid is enabled.
 
