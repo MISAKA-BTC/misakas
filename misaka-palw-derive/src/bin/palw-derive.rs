@@ -8,6 +8,8 @@
 //! palw-derive manifest --transformer <name|id> | --all
 //! palw-derive drill [--corpus <dir>] [--report <file.json>] [--check <file.json>]
 //! palw-derive inspect --object <file>
+//! palw-derive width --tokenizer <tokenizer.json> --n-ctx <n> (--prompt <text> | --prompt-file <f>)
+//!                   --dsl <file> [--transformer <name|kind>] [--template chatml|plain]
 //! ```
 //!
 //! `derive` runs the derivation offline (the same code the gateway runs) and writes the DSL, the
@@ -22,6 +24,18 @@
 //! bytes differ is not a transformer under this ADR. It exits 3 on a cross-architecture
 //! divergence, 4 on a moved golden, 5 on a declared ceiling that did not refuse, and 6 on a
 //! registered transformer the corpus never exercised.
+//!
+//! `width` is the one question ADR-0078's leg cannot answer for itself: **is the registered class
+//! row wide enough for the model to WRITE this DSL?** A derivation is a pure function of the
+//! answer, so at the widths registered today the artifact leg fails not in the transformer but in
+//! the class — and it fails as an ordinary short answer that does not parse, which reads as "the
+//! model was bad at JSON" and is nothing of the kind. This subcommand states the arithmetic the
+//! chain itself enforces (`palw_freeprompt_v3`'s `ContextOverflow`: `prompt_tokens +
+//! decode_token_limit <= max_context_tokens`, and `max_context_tokens` is the class profile's
+//! `n_ctx`) against the canonical DSL's own token count, and exits 6 when the row cannot hold it —
+//! `width`'s own 6, on its own subcommand, and not `drill`'s. The number it reports is a LOWER
+//! bound: the canonical form is the shortest text the grammar accepts, so a model writing anything
+//! else needs more.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -676,6 +690,139 @@ fn cmd_drill(mut args: VecDeque<String>) {
     }
 }
 
+// -------------------------------------------------------------------------------------------
+// `width` — can the registered row hold the DSL the derivation needs?
+// -------------------------------------------------------------------------------------------
+
+/// The gateway's ChatML template, token for token (`misaka-palw-gateway::wire::build_prompt`).
+///
+/// Reproduced here rather than approximated, because the whole value of this subcommand is that
+/// its number is the number the chain will check. The gateway encodes each TEXT segment with
+/// specials disabled and places the control ids itself, so the count is `3` (two `<|im_start|>`,
+/// one `<|im_end|>`) plus the three text segments — the role line with the user's content, the
+/// turn separator, and the assistant marker's own line.
+///
+/// `plain` is the other half of that function's `if`: one text segment, no control ids, used when
+/// the worker's manifest declares no ChatML markers.
+fn prompt_tokens_v1(tok: &misaka_palw_base0::tokenizer::QwenTokenizer, template: &str, prompt: &str) -> usize {
+    let count = |text: &str| {
+        tok.encode_without_specials(text).map(|ids| ids.len()).unwrap_or_else(|e| die(format!("tokenizing {text:?}: {e}")))
+    };
+    match template {
+        // `<|im_start|>` "user\n{prompt}" `<|im_end|>` "\n" `<|im_start|>` "assistant\n"
+        "chatml" => 3 + count(&format!("user\n{prompt}")) + count("\n") + count("assistant\n"),
+        // `render_plain_markers`: `MARKER_USER ‖ prompt ‖ TURN_SEPARATOR ‖ MARKER_ASSISTANT`, one
+        // segment. The marker text is the gateway's, spelled exactly; a count that guessed it
+        // would be measuring a different template.
+        "plain" => count(&format!("### User:\n{prompt}\n\n### Assistant:\n")),
+        other => die(format!("unknown --template {other:?}: chatml or plain (the two forms the gateway's build_prompt has)")),
+    }
+}
+
+fn cmd_width(mut args: VecDeque<String>) {
+    let mut tokenizer_path = None;
+    let mut n_ctx: Option<u64> = None;
+    let mut prompt: Option<String> = None;
+    let mut dsl_path = None;
+    let mut transformer = None;
+    let mut template = "chatml".to_string();
+    while let Some(arg) = args.pop_front() {
+        match arg.as_str() {
+            "--tokenizer" => tokenizer_path = Some(PathBuf::from(flag(&mut args, "--tokenizer"))),
+            "--n-ctx" => {
+                let v = flag(&mut args, "--n-ctx");
+                n_ctx = Some(v.parse().unwrap_or_else(|e| die(format!("--n-ctx {v:?}: {e}"))));
+            }
+            "--prompt" => prompt = Some(flag(&mut args, "--prompt")),
+            "--prompt-file" => {
+                let p = PathBuf::from(flag(&mut args, "--prompt-file"));
+                prompt = Some(std::fs::read_to_string(&p).unwrap_or_else(|e| die(format!("{}: {e}", p.display()))));
+            }
+            "--dsl" => dsl_path = Some(PathBuf::from(flag(&mut args, "--dsl"))),
+            "--transformer" => transformer = Some(flag(&mut args, "--transformer")),
+            "--template" => template = flag(&mut args, "--template"),
+            other => die(format!("unknown argument {other:?}")),
+        }
+    }
+    // Every one of these is a refusal BY NAME. A width report with a guessed tokenizer or a
+    // guessed row is a number that looks like a measurement and is not one.
+    let tokenizer_path = tokenizer_path.unwrap_or_else(|| {
+        die("--tokenizer <tokenizer.json> is required: the token count IS the measurement, and the count depends on the tokenizer the class is registered with".into())
+    });
+    let n_ctx = n_ctx.unwrap_or_else(|| {
+        die("--n-ctx <n> is required: the row is a PARAMETER of this report, because which row is registered is an operational fact and not this tool's to assume".into())
+    });
+    let prompt = prompt.unwrap_or_else(|| die("--prompt <text> or --prompt-file <file> is required".into()));
+    let dsl_path = dsl_path.unwrap_or_else(|| die("--dsl <file> is required: the DSL whose token count the row must hold".into()));
+
+    let tok_bytes = std::fs::read(&tokenizer_path).unwrap_or_else(|e| die(format!("{}: {e}", tokenizer_path.display())));
+    let tok = misaka_palw_base0::tokenizer::QwenTokenizer::from_json(&tok_bytes)
+        .unwrap_or_else(|e| die(format!("{} is not a tokenizer this build can read: {e}", tokenizer_path.display())));
+    let dsl_bytes = std::fs::read(&dsl_path).unwrap_or_else(|e| die(format!("{}: {e}", dsl_path.display())));
+
+    // **The canonical form, not the file.** `dsl_hash` is over the grammar's canonicalization, and
+    // that is also the shortest text the grammar accepts — so it is the honest floor for "what the
+    // model must emit". Without `--transformer` the file is taken as it stands and the report says
+    // so, because silently canonicalizing under a guessed grammar would move the number.
+    let (canonical, grammar_name) = match transformer.as_deref() {
+        Some(spec) => {
+            let name = match registry::transformer_by_name(spec) {
+                Some(t) => t.manifest().name,
+                None => match kind::id(spec).and_then(|k| registry::transformer_names().into_iter().find(|(_, kk, _)| *kk == k)) {
+                    Some((n, _, _)) => n,
+                    None => die(format!("no transformer or kind named {spec:?} (see `palw-derive list`)")),
+                },
+            };
+            let manifest = registry::transformer_by_name(name).expect("registered").manifest();
+            let grammar = registry::grammar_by_name(manifest.grammar).expect("registered");
+            let canonical = grammar
+                .canonicalize(&dsl_bytes)
+                .unwrap_or_else(|e| die(format!("{} does not parse under {}: {e}", dsl_path.display(), manifest.grammar)));
+            (canonical, Some(manifest.grammar))
+        }
+        None => (dsl_bytes.clone(), None),
+    };
+    let canonical_text = String::from_utf8(canonical.clone())
+        .unwrap_or_else(|_| die("the canonical DSL is not UTF-8, so it is not text a model could emit".into()));
+    let dsl_tokens =
+        tok.encode_without_specials(&canonical_text).unwrap_or_else(|e| die(format!("tokenizing the canonical DSL: {e}"))).len()
+            as u64;
+    let prompt_tokens = prompt_tokens_v1(&tok, &template, prompt.trim_end_matches('\n')) as u64;
+
+    let decode_budget = n_ctx.saturating_sub(prompt_tokens);
+    let required_n_ctx = prompt_tokens + dsl_tokens;
+    let shortfall = dsl_tokens.saturating_sub(decode_budget);
+    let fits = shortfall == 0 && prompt_tokens < n_ctx;
+    println!(
+        "{}",
+        serde_json::json!({
+            "schema": "misaka.palw.derive-width.v1",
+            "n_ctx": n_ctx,
+            "template": template,
+            "prompt_tokens": prompt_tokens,
+            "decode_budget_tokens": decode_budget,
+            "transformer": transformer,
+            "grammar": grammar_name,
+            "dsl_file": dsl_path.display().to_string(),
+            "dsl_bytes": dsl_bytes.len(),
+            "canonical_dsl_bytes": canonical.len(),
+            "canonical_dsl_tokens": dsl_tokens,
+            "required_n_ctx": required_n_ctx,
+            "shortfall_tokens": shortfall,
+            "verdict": if fits { "FITS" } else { "BLOCKED-ON-WIDTH" },
+            "rule": "prompt_tokens + decode_token_limit <= max_context_tokens, and max_context_tokens is the class profile's n_ctx \
+                     (kaspa_consensus_core::palw_freeprompt_v3 ContextOverflow; palw_class_admission_v2 sets max_context_tokens = profile.n_ctx)",
+            "note": "canonical_dsl_tokens is a LOWER bound on the answer: the canonical form is the shortest text the grammar accepts, \
+                     so a model that writes anything else — a newline, a space, a word of preamble — needs more than this",
+        })
+    );
+    if !fits {
+        // A distinct code so a drill can branch on "the row is too narrow" without parsing prose,
+        // and report BLOCKED-ON-WIDTH rather than filing it under "the answer did not parse".
+        std::process::exit(6);
+    }
+}
+
 fn main() {
     let mut args: VecDeque<String> = std::env::args().skip(1).collect();
     match args.pop_front().as_deref() {
@@ -685,6 +832,7 @@ fn main() {
         Some("inspect") => cmd_inspect(args),
         Some("manifest") => cmd_manifest(args),
         Some("drill") => cmd_drill(args),
-        _ => die("usage: palw-derive list | derive | verify | manifest | inspect | drill (see the module doc)".into()),
+        Some("width") => cmd_width(args),
+        _ => die("usage: palw-derive list | derive | verify | manifest | inspect | drill | width (see the module doc)".into()),
     }
 }

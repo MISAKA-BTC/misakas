@@ -53,12 +53,30 @@ mod linux;
 /// | `MISAKA_PALW_ARTIFACT` | the A16 / Qwen3.6 free-prompt workers' pinned artifact |
 /// | `MISAKA_PALW_TOKENIZER` | the A16 free-prompt worker's tokenizer |
 /// | `MISAKA_PALW_MODEL_ID` | the Qwen3.6 free-prompt worker's registered model id |
+/// | `MISAKA_PALW_NETWORK_ID` | BOTH free-prompt workers, and REQUIRED by both — they refuse to boot without it |
 ///
 /// **`PATH` is not on this list and must not be added** (SA-4). Neither is `HOME`, `TMPDIR`,
 /// `SSH_AUTH_SOCK`, nor anything else: a capability the arithmetic does not need is not granted
 /// "for now" — its absence is a property the court already relies on.
-pub const PALW_WORKER_ENV_ALLOWLIST: &[&str] =
-    &["MISAKA_PALW_GGUF", "MISAKA_PALW_GOLDEN", "MISAKA_PALW_ARTIFACT", "MISAKA_PALW_TOKENIZER", "MISAKA_PALW_MODEL_ID"];
+///
+/// **Why `MISAKA_PALW_NETWORK_ID` is here** (added 2026-09-03, measured): without it the gateway
+/// cannot boot a family worker at all. `palw-a16-fp-worker` and `palw-qwen36-fp-worker` both
+/// `die` at startup — "MISAKA_PALW_NETWORK_ID is not set … a guess here is a claim nobody can
+/// verify" — so `env_clear()` plus this list minus that name is a worker that always exits, and
+/// the gateway reports it as "the worker exited before announcing its manifest" with the real
+/// reason withheld by SA-7. Reproduced with `env -i` and the exact delivered set. It is the
+/// network's NAME, a public value the node already prints and the operator already typed on the
+/// gateway's own command line; forwarding it grants no capability and reveals nothing. What it
+/// buys is the property the workers refuse to run without: every committed root hangs off a
+/// context hash that absorbs the network name, so a guessed one is a claim no seat can replay.
+pub const PALW_WORKER_ENV_ALLOWLIST: &[&str] = &[
+    "MISAKA_PALW_GGUF",
+    "MISAKA_PALW_GOLDEN",
+    "MISAKA_PALW_ARTIFACT",
+    "MISAKA_PALW_TOKENIZER",
+    "MISAKA_PALW_MODEL_ID",
+    "MISAKA_PALW_NETWORK_ID",
+];
 
 /// Values PINNED by this constant rather than inherited — the locale pins the determinism rules
 /// already require. Inheriting them would make the child's number formatting a function of the
