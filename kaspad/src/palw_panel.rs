@@ -68,6 +68,65 @@ const RECEIPTS_PER_CLAIM: usize = 16;
 /// Distinct material payloads kept per claim (mirrors the gossip relay budget).
 const MATERIALS_PER_CLAIM: usize = 4;
 
+/// **The material pool's byte counter is part of the pool, and only these two functions move it.**
+///
+/// It was three sites and a hole: gossip arrival kept the counter, the whole-pool eviction kept it,
+/// and the END-OF-TICK SWEEP — which is the dominant removal path on a funded submitter, because a
+/// claim leaves the pool the moment `submitted` holds it — removed claims and their payloads and
+/// left every one of their bytes on the counter. Two later inserts (a duty answered from this
+/// node's own retention, and a foreign material proven against the claim's roots) pushed payloads
+/// and never charged for them, which is the same accounting hole pointing the other way.
+///
+/// The consequence is not a leak, it is a LATCH. Once the counter passes `PANEL_POOL_MAX_BYTES` it
+/// can never come back down, because the bytes it is counting are not in the pool to be evicted:
+/// the ceiling then fires on every arrival and drains `materials` to the single claim that just
+/// came in. A seat holding no material for a duty signs `Unavailable` at the half-window — a
+/// signed accusation that gathers a quorum and DEFAULTS an honest producer. The pool's own ceiling
+/// becomes the slashing machine the 16 MiB cap exists to prevent.
+///
+/// So the counter is maintained where the map is, in one place per direction.
+fn pool_admit_material_v1(
+    materials: &mut HashMap<Hash64, Vec<Vec<u8>>>,
+    pool_arrival: &mut HashMap<Hash64, u64>,
+    pool_arrival_seq: &mut u64,
+    pool_bytes: &mut usize,
+    claim: Hash64,
+    bytes: Vec<u8>,
+) {
+    let pool = materials.entry(claim).or_default();
+    // **A full pool must not lock out the payload that verifies** (audit M2-1). Four unverifiable
+    // byte-strings cost an attacker ~280 bytes, and the pull exists to fetch the real one —
+    // dropping the answer because the garbage arrived first was the whole failure. Oldest out.
+    if pool.len() >= MATERIALS_PER_CLAIM {
+        *pool_bytes = pool_bytes.saturating_sub(pool.remove(0).len());
+    }
+    *pool_bytes = pool_bytes.saturating_add(bytes.len());
+    pool.push(bytes);
+    pool_arrival.entry(claim).or_insert_with(|| {
+        *pool_arrival_seq += 1;
+        *pool_arrival_seq
+    });
+}
+
+/// The other direction: drop every claim `keep` refuses, and take its bytes off the counter and its
+/// entry out of the arrival order with it. `pool_arrival` was swept nowhere else, so it grew for
+/// the life of the process — the defect the sweep beside it records for `answered` and `first_seen`.
+fn pool_sweep_material_v1(
+    materials: &mut HashMap<Hash64, Vec<Vec<u8>>>,
+    pool_arrival: &mut HashMap<Hash64, u64>,
+    pool_bytes: &mut usize,
+    keep: impl Fn(&Hash64) -> bool,
+) {
+    materials.retain(|claim, pool| {
+        if keep(claim) {
+            return true;
+        }
+        *pool_bytes = pool_bytes.saturating_sub(pool.iter().map(Vec::len).sum::<usize>());
+        false
+    });
+    pool_arrival.retain(|claim, _| materials.contains_key(claim));
+}
+
 /// The family capture inside a pool payload: an `FPC1` payload's inner tuple (ADR-0073 Decision
 /// 1a), or the bytes themselves for an attempt's raw capture. What `verify_material` and the
 /// provers take — the pool and the retention keep the payload as it travelled.
@@ -1641,22 +1700,16 @@ impl PalwPanelService {
                         // them — with a 72-hour mtime sweep as the only bound, on the same volume
                         // as the consensus database. Retention now happens where the bytes have
                         // been proven to be the claim's, in the duty loop below.
-                        let pool = materials.entry(claim).or_default();
-                        // **A full pool must not lock out the payload that verifies** (audit
-                        // M2-1). Four unverifiable byte-strings cost an attacker ~280 bytes, and
-                        // the pull exists to fetch the real one — dropping the answer because the
-                        // garbage arrived first was the whole failure. Oldest out.
-                        if pool.len() >= MATERIALS_PER_CLAIM {
-                            pool_bytes = pool_bytes.saturating_sub(pool.remove(0).len());
-                        }
-                        pool_bytes = pool_bytes.saturating_add(bytes.len());
-                        pool.push(bytes);
+                        pool_admit_material_v1(
+                            &mut materials,
+                            &mut pool_arrival,
+                            &mut pool_arrival_seq,
+                            &mut pool_bytes,
+                            claim,
+                            bytes,
+                        );
                         // And the whole-pool ceiling, enforced HERE — a bound checked on the next
                         // tick is a bound the sender outruns (audit3 S-02).
-                        pool_arrival.entry(claim).or_insert_with(|| {
-                            pool_arrival_seq += 1;
-                            pool_arrival_seq
-                        });
                         while materials.len() > PANEL_POOL_MAX_CLAIMS || pool_bytes > PANEL_POOL_MAX_BYTES {
                             // Never evict the claim that just arrived: that would make the pool
                             // drop exactly the payload it was asked to hold, which is the M2-1
@@ -2028,10 +2081,14 @@ impl PalwPanelService {
                         "[{PALW_PANEL}] session {} answered from this node's retained capture for claim {}",
                         duty.session_id, duty.claim_id
                     );
-                    let pool = materials.entry(duty.claim_id).or_default();
-                    if pool.len() < MATERIALS_PER_CLAIM {
-                        pool.push(bytes);
-                    }
+                    pool_admit_material_v1(
+                        &mut materials,
+                        &mut pool_arrival,
+                        &mut pool_arrival_seq,
+                        &mut pool_bytes,
+                        duty.claim_id,
+                        bytes,
+                    );
                 }
                 // **The capture is chosen by ROLE** (audit M2-4).
                 //
@@ -2583,7 +2640,14 @@ impl PalwPanelService {
                                 PalwClaimRootsV1 { execution_root: duty.execution_root, trace_root: duty.trace_root, anchor },
                             ) == PalwMaterialVerdictV1::Matches
                         {
-                            materials.entry(duty.claim_id).or_default().push(bytes);
+                            pool_admit_material_v1(
+                                &mut materials,
+                                &mut pool_arrival,
+                                &mut pool_arrival_seq,
+                                &mut pool_bytes,
+                                duty.claim_id,
+                                bytes,
+                            );
                             break 'verdict Some(PalwReceiptVerdictV2::Valid);
                         }
                     }
@@ -3009,7 +3073,9 @@ impl PalwPanelService {
             let stale = |claim: &Hash64| {
                 first_seen.get(claim).map(|seen| current_daa > seen.saturating_add(PANEL_POOL_RETENTION_DAA)).unwrap_or(true)
             };
-            materials.retain(|claim, _| live.contains(claim) || (!submitted.contains_key(claim) && !stale(claim)));
+            pool_sweep_material_v1(&mut materials, &mut pool_arrival, &mut pool_bytes, |claim| {
+                live.contains(claim) || (!submitted.contains_key(claim) && !stale(claim))
+            });
             receipts.retain(|claim, _| live.contains(claim) || (!submitted.contains_key(claim) && !stale(claim)));
             // The bookkeeping keyed on those claims goes with them, or the maps that decide what to
             // keep become the thing that grows.
@@ -3410,6 +3476,60 @@ mod tests {
 
     fn mldsa_script(byte: u8) -> kaspa_consensus_core::tx::ScriptPublicKey {
         kaspa_consensus_core::dns_finality::p2pkh_mldsa87_spk(&[byte; 64])
+    }
+
+    /// **The pool's byte counter must survive the sweep, or the ceiling becomes a slashing
+    /// machine.**
+    ///
+    /// The end-of-tick sweep is the dominant removal path on a funded submitter — a claim leaves
+    /// the pool as soon as `submitted` holds it — and it used to remove claims without taking
+    /// their bytes off `pool_bytes`. The counter then only ever rose: past
+    /// `PANEL_POOL_MAX_BYTES` the whole-pool ceiling fires on every single arrival and, because
+    /// the bytes it is counting are no longer in the pool to evict, it drains `materials` down to
+    /// the one claim that just arrived. A seat with no material for its duty signs `Unavailable`,
+    /// which is a signed accusation that defaults an honest producer.
+    ///
+    /// The invariant this pins is the whole fix: **the counter equals the bytes actually pooled**,
+    /// after any sequence of admits and sweeps. Reverting either half of the accounting breaks it.
+    #[test]
+    fn the_pool_byte_counter_equals_what_the_pool_holds() {
+        use kaspa_hashes::Hash64;
+
+        let pooled = |materials: &HashMap<Hash64, Vec<Vec<u8>>>| -> usize {
+            materials.values().flat_map(|pool| pool.iter().map(Vec::len)).sum()
+        };
+        let mut materials: HashMap<Hash64, Vec<Vec<u8>>> = HashMap::new();
+        let mut pool_arrival: HashMap<Hash64, u64> = HashMap::new();
+        let mut seq: u64 = 0;
+        let mut pool_bytes: usize = 0;
+
+        let claim = |n: u64| Hash64::from_u64_word(n);
+        for n in 0..4u64 {
+            pool_admit_material_v1(&mut materials, &mut pool_arrival, &mut seq, &mut pool_bytes, claim(n), vec![0u8; 1000]);
+        }
+        assert_eq!(pool_bytes, pooled(&materials), "admission charges exactly what it stores");
+        assert_eq!(pool_arrival.len(), 4);
+
+        // The per-claim FIFO: a fifth payload for one claim evicts that claim's oldest, and the
+        // counter follows the eviction rather than the arrival.
+        for _ in 0..MATERIALS_PER_CLAIM + 1 {
+            pool_admit_material_v1(&mut materials, &mut pool_arrival, &mut seq, &mut pool_bytes, claim(0), vec![0u8; 7]);
+        }
+        assert_eq!(materials[&claim(0)].len(), MATERIALS_PER_CLAIM);
+        assert_eq!(pool_bytes, pooled(&materials), "the per-claim trim is charged back");
+
+        // The sweep: drop three of the four claims. Before the fix `pool_bytes` kept their bytes
+        // and `pool_arrival` kept their keys, forever.
+        pool_sweep_material_v1(&mut materials, &mut pool_arrival, &mut pool_bytes, |c| *c == claim(1));
+        assert_eq!(materials.len(), 1, "the sweep kept exactly what it was told to keep");
+        assert_eq!(pool_bytes, pooled(&materials), "the sweep is charged back — this is the latch");
+        assert_eq!(pool_arrival.len(), 1, "the arrival order is swept with the pool it orders");
+
+        // And the counter reaches zero when the pool does, which is what makes the ceiling
+        // releasable at all.
+        pool_sweep_material_v1(&mut materials, &mut pool_arrival, &mut pool_bytes, |_| false);
+        assert_eq!(pool_bytes, 0);
+        assert!(materials.is_empty() && pool_arrival.is_empty());
     }
 
     /// **This chain's floor collateral cannot be carried at all, and the fix is a number, not a

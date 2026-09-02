@@ -201,6 +201,25 @@ impl DbPalwStateV2Store {
         Ok(self.deltas.read(block)?.state_root)
     }
 
+    /// Stage a delta row VERBATIM through this store's own db handle — the delta twin of
+    /// [`Self::set_tip_record_for_tests`], for the tests that must leave behind a row this node
+    /// wrote and can no longer decode (a disk that flipped a byte, a row from another schema).
+    /// Test-only for the same reason: production serializes the delta it is handed.
+    #[cfg(test)]
+    pub fn set_delta_record_for_tests(&mut self, block: BlockHash, record: PalwStateDeltaRecordV2) -> StoreResult<()> {
+        use kaspa_database::prelude::DirectDbWriter;
+        self.deltas.write(DirectDbWriter::new(&self.db), block, Arc::new(record))
+    }
+
+    /// Remove a delta row, reproducing the OTHER thing a walk can meet: a genuine absence (a
+    /// pruned block). Kept beside the corrupter above because the whole point of the pair is that
+    /// the two are not the same fact.
+    #[cfg(test)]
+    pub fn delete_delta_for_tests(&mut self, block: BlockHash) -> StoreResult<()> {
+        use kaspa_database::prelude::DirectDbWriter;
+        self.deltas.delete(DirectDbWriter::new(&self.db), block)
+    }
+
     /// A block's transition outcome, decoded. A row whose bytes no longer decode is named
     /// (`DataInconsistency`), never reported absent.
     pub fn delta_of(&self, block: BlockHash) -> StoreResult<(Hash64, PalwStateDeltaV2)> {
@@ -248,6 +267,16 @@ impl DbPalwStateV2Store {
         let carriage = PalwStateCarriageV2::from_state(state);
         let carriage_borsh = borsh::to_vec(&carriage).expect("PalwStateCarriageV2 is borsh-serializable");
         self.tip.write(DirectDbWriter::new(&self.db), &PalwStateTipRecordV2 { block, state_root: state.state_root(), carriage_borsh })
+    }
+
+    /// Stage a tip row VERBATIM through this store's own db handle — the direct-write twin of
+    /// [`Self::set_tip_record_batch`], for the tests that must leave behind a snapshot which
+    /// cannot be read back (a disk that flipped a byte, or a row written by another schema).
+    /// Test-only for the same reason: production computes the root from the state it stores.
+    #[cfg(test)]
+    pub fn set_tip_record_for_tests(&mut self, record: PalwStateTipRecordV2) -> StoreResult<()> {
+        use kaspa_database::prelude::DirectDbWriter;
+        self.tip.write(DirectDbWriter::new(&self.db), &record)
     }
 
     /// Remove the tip row, reproducing the state a pruned join (or a `reindex_if_stale` after a

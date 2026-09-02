@@ -239,6 +239,43 @@ impl ContributionWeight<'_> {
     }
 }
 
+/// **The grading work one block may demand of every node, in FAULT VECTORS** (ADR-0075 Decision 9,
+/// widened by the audit of 2026-09-02).
+///
+/// D9 bounded the work by counting OBJECTS, and that conflated two things a block can carry: an
+/// object that made this node re-execute eight merkle-proved refutation steps, and an object the
+/// court threw out at its first line without touching one. Both spent the same scarce slot, so two
+/// ordinary lifecycle transactions — no signature, no deposit — carrying a `FamilyCertified` with
+/// an empty vector list dropped every genuine certification in the block, which is a block-cheap
+/// way to keep an honest class weightless forever.
+///
+/// A vector is what the grader actually spends time on (`certify_e2e_family_v1` walks them, and
+/// every per-vector step is a proof check), so the CPU bound is stated in vectors. The number is
+/// EXACTLY the worst case the object cap already permitted — `PALW_CERTIFICATION_MAX_PER_BLOCK`
+/// objects each carrying the per-object maximum `PALW_CERTIFICATION_MAX_VECTORS` — so nothing a
+/// node may be asked to compute grows; what changes is who pays.
+const PALW_CERTIFICATION_GRADING_VECTORS_PER_BLOCK: usize = kaspa_consensus_core::palw_state_v2::PALW_CERTIFICATION_MAX_PER_BLOCK
+    * kaspa_consensus_core::palw_state_v2::PALW_CERTIFICATION_MAX_VECTORS;
+
+/// **Why this node cannot weigh a PALW candidate — and the two reasons are not one reason.**
+///
+/// [`VirtualStateProcessor::palw_candidate_state_v2`] used to answer `None` to both, which is the
+/// `.ok().flatten()` conflation the pruning ceiling beside it was fixed for. It matters because
+/// one consumer reads "nothing to weigh" as ALLOW: `palw_frontier_provenance_outcome` returns
+/// `GateInactive` and the deep reorg proceeds. A gate that fails open on its own state fault is
+/// the shape ADR-0042 Decision 5 forbids ("reading absent data as nothing is forbidden").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PalwWeighFaultV2 {
+    /// An honest absence: not a ConsensusV2 network, no V2 tip written yet, a candidate this
+    /// consensus does not hold, or a chain path whose deltas have been pruned. An abstention.
+    NoOpinion,
+    /// This node's OWN root-verified snapshot, or a delta row on the path to the candidate, would
+    /// not read back — a disk that flipped a byte, or a row left by another schema. Not an
+    /// absence: a fault, and a gate that can refuse must. Both ends are classified, because a
+    /// split at the tip alone leaves the identical fail-open at the walk one line below it.
+    StoreUnreadable,
+}
+
 /// Everything the compute overlay contributed on one chain segment, from a single backward walk
 /// ([`VirtualStateProcessor::walk_compute_overlay`]).
 ///
@@ -459,6 +496,10 @@ pub struct VirtualStateProcessor {
     /// [`Self::palw_beacon_fold_k_at`], so the producer's walk and the validator's cannot pick
     /// different widths for one draw.
     pub(super) palw_beacon_fold: Option<kaspa_consensus_core::config::params::PalwBeaconFoldV1>,
+    /// ADR-0075 D14's fence, `None` on every shipped preset: what a block's certification slot
+    /// may be spent on, and what an ungraded object costs. See
+    /// [`Self::palw_chunk_cap_charge_at`], which is the ONE place this is resolved.
+    pub(super) palw_chunk_cap_charge: Option<kaspa_consensus_core::config::params::ForkActivation>,
 
     /// ADR-0033 (B14): the PALW credit gate's fence — `None` (every shipped network) keeps
     /// the whole gate dormant; `Some` makes crossing commitments mintable in the coinbase
@@ -754,6 +795,7 @@ impl VirtualStateProcessor {
             palw_maturity_warn_last_band: std::sync::atomic::AtomicU64::new(0),
             palw_inactivity_leak: params.palw_inactivity_leak,
             palw_beacon_fold: params.palw_beacon_fold,
+            palw_chunk_cap_charge: params.palw_chunk_cap_charge,
             max_block_parents: params.max_block_parents(),
             mergeset_size_limit: params.mergeset_size_limit(),
             palw_heartbeat_width_fence: params.palw_heartbeat_width_fence(),
@@ -4007,7 +4049,7 @@ impl VirtualStateProcessor {
         )
     }
 
-    fn palw_frontier_provenance_outcome(&self, candidate: BlockHash, prev_sink: BlockHash) -> DnsReorgOutcome {
+    pub(crate) fn palw_frontier_provenance_outcome(&self, candidate: BlockHash, prev_sink: BlockHash) -> DnsReorgOutcome {
         use kaspa_consensus_core::palw_state_v2::PalwDeltaEntryV2;
 
         // Read at the INCUMBENT's DAA: a candidate's own score is attacker-chosen, and this is the
@@ -4029,12 +4071,27 @@ impl VirtualStateProcessor {
             warn!("PALW frontier provenance abstains: no common ancestor for {candidate} and {prev_sink} within {horizon}");
             return DnsReorgOutcome::GateInactive;
         };
-        let (Some(challenger_state), Some(ancestor_state)) =
-            (self.palw_candidate_state_v2(candidate), self.palw_candidate_state_v2(ancestor))
-        else {
-            warn!("PALW frontier provenance abstains: this node cannot materialize both sides of the fork at {ancestor}");
-            return DnsReorgOutcome::GateInactive;
-        };
+        // **An absence abstains; a FAULT refuses.** Both used to arrive as `None` and both
+        // abstained, so a tip snapshot this node could not read turned D2's veto off — the gate
+        // failing open on exactly the state that says it cannot judge. A missing ancestor or a
+        // pruned delta is genuinely an absence and still abstains, for the reason the horizon
+        // paragraph above gives; a store that will not read is this node's own fault and the
+        // honest answer to "may this reorg proceed" is no.
+        let (challenger_state, ancestor_state) =
+            match (self.palw_candidate_state_v2_checked(candidate), self.palw_candidate_state_v2_checked(ancestor)) {
+                (Ok(challenger), Ok(ancestor_state)) => (challenger, ancestor_state),
+                (Err(PalwWeighFaultV2::StoreUnreadable), _) | (_, Err(PalwWeighFaultV2::StoreUnreadable)) => {
+                    warn!(
+                        "deep reorg refused: this node's own PALW snapshot is unreadable, so ADR-0065 D2 cannot clear \
+                         candidate {candidate} — a veto that cannot read its evidence does not wave the reorg through"
+                    );
+                    return DnsReorgOutcome::FrontierProvenanceViolation;
+                }
+                _ => {
+                    warn!("PALW frontier provenance abstains: this node cannot materialize both sides of the fork at {ancestor}");
+                    return DnsReorgOutcome::GateInactive;
+                }
+            };
 
         let minted: std::collections::BTreeSet<_> =
             challenger_state.bonds_iter().map(|(k, _)| *k).filter(|k| ancestor_state.bond(k).is_none()).collect();
@@ -4092,9 +4149,53 @@ impl VirtualStateProcessor {
         &self,
         candidate: BlockHash,
     ) -> Option<kaspa_consensus_core::palw_state_v2::PalwChainStateV2> {
-        let state_params = self.palw_state_params_v2.as_ref()?;
+        self.palw_candidate_state_v2_checked(candidate).ok()
+    }
+
+    /// [`Self::palw_candidate_state_v2`] with the two reasons it can answer nothing kept APART.
+    ///
+    /// The `Option` twin above spelled them the same way — one `.ok().flatten()` over `load_tip`,
+    /// so a snapshot a disk corrupted or a row written by another schema became "no V2 tip yet".
+    /// That is the identical conflation the pruning ceiling beside it was fixed for, and it is not
+    /// harmless here either: [`Self::palw_frontier_provenance_outcome`] reads `None` as
+    /// `GateInactive`, which is ALLOW, so ADR-0065 D2's veto abstained on a deep reorg exactly
+    /// when it had lost the ability to weigh one — a fork-choice gate failing open on its own
+    /// state fault. The gates that can refuse now get the distinction; the ones for which both
+    /// answers really are a refusal keep taking the `Option`.
+    pub(crate) fn palw_candidate_state_v2_checked(
+        &self,
+        candidate: BlockHash,
+    ) -> Result<kaspa_consensus_core::palw_state_v2::PalwChainStateV2, PalwWeighFaultV2> {
+        let Some(state_params) = self.palw_state_params_v2.as_ref() else { return Err(PalwWeighFaultV2::NoOpinion) };
         let store = self.palw_state_v2_store.read();
-        let (tip_block, tip_state) = store.load_tip(state_params).ok().flatten()?;
+        let (tip_block, tip_state) = match store.load_tip(state_params) {
+            Ok(Some(loaded)) => loaded,
+            Ok(None) => return Err(PalwWeighFaultV2::NoOpinion),
+            Err(e) => {
+                warn!("PALW state fault: this node's own V2 tip snapshot could not be read ({e}); it can weigh no candidate");
+                return Err(PalwWeighFaultV2::StoreUnreadable);
+            }
+        };
+        // **Both ends of the walk must be blocks this consensus can reach, or the walk is a
+        // panic.** `calculate_chain_path` asks `is_chain_ancestor_of`, which `unwrap`s the
+        // reachability lookup — `KeyNotFound` there is `process::exit(1)`, not an error.
+        //
+        // A STAGING consensus is built `skip_adding_genesis`, so it has no virtual state row and
+        // `get_sink()` answers the all-zero hash, which is not a block. It has a PALW tip, because
+        // the headers-proof IBD imports the peer's pruning-point carriage immediately before asking
+        // this question — so the tip load succeeds and the candidate is the zero hash. Every node
+        // taking that path past its own genesis died on the next line; a peer can steer a victim
+        // into it by advertising a chain whose pruning point the victim lacks.
+        //
+        // No order is the honest answer for a candidate this consensus does not HOLD. But `None`
+        // is not "no opinion" to a caller — the IBD gate and the deep-reorg gate both refuse on it
+        // — so answering it for a consensus that merely has no virtual sink turned the crash into
+        // a permanent IBD refusal. That case is not this one: see [`Self::palw_weighing_point_v2`],
+        // which never offers a candidate this function would have to answer nothing about.
+        let unknown = |block: BlockHash| !self.reachability_service.has_reachability_data(block);
+        if unknown(candidate) || unknown(tip_block) {
+            return Err(PalwWeighFaultV2::NoOpinion);
+        }
         // The order must be the CANDIDATE's, not the sink's, or every candidate would compare
         // equal and the authority would be a constant (P0-4 in fork-choice clothing). The walk
         // from the materialized tip to the candidate is what makes it candidate-scoped.
@@ -4103,7 +4204,69 @@ impl VirtualStateProcessor {
         let added: Vec<BlockHash> = path.added.to_vec();
         drop(store);
         let store = self.palw_state_v2_store.read();
-        crate::processes::palw_state_walk::walk_chain_path(&store, state_params, tip_state, &removed, &added).ok()
+        // **The same two-way split, one level down.** Removing the `.ok().flatten()` from
+        // `load_tip` above and leaving `map_err(|_| NoOpinion)` here would have moved the
+        // conflation rather than closed it: `load_delta` names an undecodable row
+        // `StoreError::DataInconsistency` precisely so it is never reported absent (the store's
+        // own words: "the same refusal by another name"), and collapsing it into an abstention
+        // hands `palw_frontier_provenance_outcome` a `GateInactive` — ALLOW — for a node whose tip
+        // reads back perfectly and whose delta rows are corrupt. A pruned or absent delta really
+        // is an absence and still abstains; anything the STORE refused, and any delta of this
+        // node's own that will not compose with this node's own state, is a fault.
+        crate::processes::palw_state_walk::walk_chain_path(&store, state_params, tip_state, &removed, &added).map_err(|e| {
+            use crate::processes::palw_state_walk::PalwStateWalkError as W;
+            match e {
+                W::MissingDelta(_) | W::NoAnchor => PalwWeighFaultV2::NoOpinion,
+                W::Store(_) | W::State(_) => {
+                    warn!("PALW state fault: this node's own V2 delta rows would not walk ({e}); it can weigh no candidate");
+                    PalwWeighFaultV2::StoreUnreadable
+                }
+            }
+        })
+    }
+
+    /// **The block whose PALW standing represents this consensus** — its virtual sink, normally.
+    ///
+    /// A STAGING consensus has no sink to be weighed at. It is built `skip_adding_genesis`, so it
+    /// holds no virtual state row and `get_sink()` answers the all-zero hash, which is not a block
+    /// any consensus can reach. Weighing it there is weighing it at nothing, and nothing is not an
+    /// abstention at either consumer: `validate_staging_palw_order` answers `(Some(_), None)` with
+    /// a hard `ProtocolError` and the deep-reorg gate answers `(None, _)` with
+    /// `DominanceViolation`. So every headers-proof sync on a ConsensusV2 network was refused
+    /// against every peer, permanently, and the pruning-point PALW import placed immediately
+    /// before that gate "so the challenger becomes a real value" was dead work. Not crashing was
+    /// necessary and not sufficient.
+    ///
+    /// What a staged chain CAN be weighed at is the pruning point whose carriage this node has
+    /// just root-verified against the witness child's header (`import_pruning_point_palw_state`)
+    /// — the deepest block of that chain whose PALW state this node has actually checked, and the
+    /// block the tip row names. Weighing it further forward is not available: the deltas the walk
+    /// needs are written by virtual processing, which staging has not run.
+    ///
+    /// Deliberately NOT the header download hint. For a consensus that HAS a sink the sink is the
+    /// answer, because the hint is a download heuristic that says so in its own name and a
+    /// fork-choice decision reading it is P0-5. The fallback fires only where the sink is not a
+    /// block at all.
+    pub(crate) fn palw_weighing_point_v2(&self, sink: BlockHash) -> Option<BlockHash> {
+        if self.reachability_service.has_reachability_data(sink) {
+            return Some(sink);
+        }
+        let state_params = self.palw_state_params_v2.as_ref()?;
+        // **`load_tip`, not `tip_record`** — fail CLOSED on a snapshot that cannot be read, and
+        // the raw row cannot tell you that. `set_tip_batch` derives the root from the state it is
+        // handed, so a tampered carriage is detected only by rebuilding it and demanding the
+        // recorded root, which is what `load_tip` does. Reading just the row would hand a chain
+        // whose state this node cannot reproduce back as its own standing — a state fault
+        // promoted to the only opinion this consensus has.
+        let tip = match self.palw_state_v2_store.read().load_tip(state_params) {
+            Ok(Some((block, _))) => block,
+            Ok(None) => return None,
+            Err(e) => {
+                warn!("PALW state fault: the V2 tip snapshot is unreadable ({e}); this consensus offers no weighing point");
+                return None;
+            }
+        };
+        self.reachability_service.has_reachability_data(tip).then_some(tip)
     }
 
     /// Unit D, site 3: whether a proposed pruning point respects the safe frontier.
@@ -4114,8 +4277,21 @@ impl VirtualStateProcessor {
     pub(crate) fn palw_pruning_point_allowed_v2(&self, candidate_point: BlockHash) -> bool {
         let Some(state_params) = self.palw_state_params_v2.as_ref() else { return true };
         let store = self.palw_state_v2_store.read();
-        let Some((_, state)) = store.load_tip(state_params).ok().flatten() else { return true };
-        let Ok(header) = self.headers_store.get_header(candidate_point) else { return true };
+        // **Fail CLOSED on what cannot be read, and OPEN only on what genuinely is not there yet.**
+        //
+        // This was one `.ok().flatten()`, which spells both answers the same way: a `load_tip` that
+        // returns `Err` — a corrupted snapshot, or one written by another schema — became `None`
+        // became "every pruning point allowed", so the gate deleted the history under trial exactly
+        // when it had lost the ability to weigh it. The deep-reorg gate beside it was already fixed
+        // for this shape, and records it: the gate failed open on exactly the candidate it could not
+        // weigh. `Ok(None)` is different and stays open — a V2 chain before its first tip has no
+        // frontier to respect, and refusing there would mean a fresh node could never prune.
+        let state = match store.load_tip(state_params) {
+            Ok(Some((_, state))) => state,
+            Ok(None) => return true,
+            Err(_) => return false,
+        };
+        let Ok(header) = self.headers_store.get_header(candidate_point) else { return false };
         let (frontier, _) = state.safe_frontier();
         kaspa_consensus_core::palw_fork_authority_v2::pruning_point_allowed_v2(header.blue_score, frontier)
     }
@@ -4958,6 +5134,9 @@ impl VirtualStateProcessor {
         // passed for a carrier fee — so the filter's behaviour is byte-identical to before the
         // amendment rather than identical-if-the-caller-remembers.
         let rent_armed = self.palw_certification_rent_at(point.daa_score);
+        // Armed only (see the accounting below): the fault vectors this block has already asked
+        // the grader to walk, refused or accepted. Dormant it is never read and never written.
+        let mut vectors_graded = 0usize;
         for carried in objects {
             let PalwCarriedObjectV1 { object, carrier_fee } = carried;
             // **ADR-0075 SA-1: a chunk group's opener pays for the SLOT it takes.**
@@ -4993,15 +5172,65 @@ impl VirtualStateProcessor {
             // same object and the grader is never run for a drill the block may not carry.
             // A chunk that completes its group applies the FamilyCertified it carried, so it
             // counts against the same cap (ADR-0075 Decision 14).
+            //
+            // **A chunk the transition will refuse on its face completes nothing, and must not
+            // spend the cap.** This asked only `count == 1` for a group that does not exist yet,
+            // so `ObjectChunk { group: anything, index: 5, count: 1 }` — sixty bytes, refused by
+            // the transition as `ChunkIndexOutOfRange` — was charged as a grading. Two of them per
+            // block exhaust `PALW_CERTIFICATION_MAX_PER_BLOCK` and every genuine `FamilyCertified`
+            // in that block is dropped, for two ordinary fees.
+            //
+            // **The index rule alone bought nothing, and that was the whole defect.** `index: 0,
+            // count: 1` was always available at the identical sixty bytes, is refused by the
+            // transition just as fast (`ChunkGroupHashMismatch`), and starves the identical cap —
+            // so a version of this that asked only `index < count` deleted a strictly dominated
+            // variant and left the attack. What the cap is spent on is the `FamilyCertified` the
+            // completing chunk carries, so "completes" has to mean what the TRANSITION means by
+            // it: every part present, the assembled bytes hashing to the declared group id, and
+            // the object they decode to being a `FamilyCertified`. That is
+            // [`Self::palw_chunk_completes_a_certification_v1`], and asking it here is the same
+            // agreement-with-the-transition this whole rehearsal exists to keep.
+            //
+            // **Behind ADR-0075 D14's fence, `None` on every shipped preset.** It decides which
+            // objects a block accepts and therefore its state root, so an upgraded node and an
+            // un-upgraded one must not disagree about it in silence — see
+            // [`Self::palw_chunk_cap_charge_at`]. Dormant, every added conjunct is `true` and the
+            // predicate is byte-identical to the one before the fence existed.
+            let cap_charged_on_grading = self.palw_chunk_cap_charge_at(point.daa_score);
+            // Armed: the fault-vector count of the certification this chunk would assemble, read
+            // ONCE here rather than decoded again for the work charge below. `None` — and dormant,
+            // always `None` — means the payload was never touched.
+            let mut chunk_vectors: Option<usize> = None;
             let completes_a_group = match &object {
-                kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ObjectChunk { group, index, count, .. } => {
-                    match folded.pending_chunk_group(group) {
+                kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ObjectChunk { group, index, count, bytes } => {
+                    let pending = folded.pending_chunk_group(group);
+                    // The cheap structural test decides almost every chunk, and dormant it is the
+                    // WHOLE test — byte-identical to the accounting before the fence existed.
+                    let structurally_completes = match pending {
                         Some(p) => p.count == *count && !p.parts.contains_key(index) && p.parts.len() + 1 == *count as usize,
                         None => *count == 1,
+                    };
+                    if !structurally_completes {
+                        false
+                    } else if !cap_charged_on_grading {
+                        true
+                    } else if *index >= *count {
+                        // `ChunkIndexOutOfRange`: the transition refuses it on its face.
+                        false
+                    } else {
+                        // Armed, and only here does anything touch the payload: the transition's
+                        // own completion test, and the grading work the object it assembles to
+                        // will cost.
+                        chunk_vectors =
+                            Self::palw_chunk_completes_a_certification_v1(pending.map(|p| &p.parts), *index, *count, bytes, group);
+                        chunk_vectors.is_some()
                     }
                 }
                 _ => false,
             };
+            let is_certification =
+                matches!(object, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::FamilyCertified { .. })
+                    || completes_a_group;
             // **What the block's cap counts is what the court will actually re-execute.**
             //
             // The predicate above answers "does this chunk finish its group", which is not the same
@@ -5024,12 +5253,12 @@ impl VirtualStateProcessor {
             // an un-upgraded node must never answer that differently in silence. Dormant, the
             // count is skipped entirely and the predicate below is the one that shipped.
             let graded_vectors = rent_armed.then(|| Self::palw_v2_graded_vector_count(&folded, &object)).flatten();
-            let charges_a_grading_slot = if rent_armed {
-                graded_vectors.is_some()
-            } else {
-                matches!(object, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::FamilyCertified { .. })
-                    || completes_a_group
-            };
+            // Which of the two fences answers depends on which is armed, and they compose in one
+            // direction: `palw_chunk_completes_a_certification_v1` (D14) also demands the assembled
+            // bytes hash to the declared group id, so anything it calls a completion
+            // `palw_v2_graded_vector_count` calls one too. The slot gate is therefore never tighter
+            // than the work gate, and no object is charged a grading it was not also priced for.
+            let charges_a_grading_slot = if rent_armed { graded_vectors.is_some() } else { is_certification };
             if charges_a_grading_slot {
                 // **ADR-0075 SA-2: grading is priced before it is performed.**
                 //
@@ -5061,15 +5290,75 @@ impl VirtualStateProcessor {
                         continue;
                     }
                 }
-                if certifications_graded >= kaspa_consensus_core::palw_state_v2::PALW_CERTIFICATION_MAX_PER_BLOCK {
-                    info!(
-                        "Block {block}: a FamilyCertified object was dropped, and the block stands: the block already carries {} \
-                         (PALW_CERTIFICATION_MAX_PER_BLOCK)",
-                        kaspa_consensus_core::palw_state_v2::PALW_CERTIFICATION_MAX_PER_BLOCK
-                    );
-                    continue;
+                // **And the SLOT itself is ADR-0075 D14's question, under D14's own fence.**
+                // Lane C's rule above decides what may be charged; this decides WHEN. The two are
+                // separate fences because they were found separately and each is sound alone: the
+                // rent bounds what a block's grading may cost its carriers, and D14 bounds what a
+                // slot may be spent on. Dormant, this is the accounting that shipped.
+                if !cap_charged_on_grading {
+                    // **Dormant — every shipped preset — this is the pre-fence accounting verbatim.**
+                    if certifications_graded >= kaspa_consensus_core::palw_state_v2::PALW_CERTIFICATION_MAX_PER_BLOCK {
+                        info!(
+                            "Block {block}: a FamilyCertified object was dropped, and the block stands: the block already carries \
+                             {} (PALW_CERTIFICATION_MAX_PER_BLOCK)",
+                            kaspa_consensus_core::palw_state_v2::PALW_CERTIFICATION_MAX_PER_BLOCK
+                        );
+                        continue;
+                    }
+                    certifications_graded += 1;
+                } else {
+                    // **Armed: a SLOT is what a certification the grader accepted has spent, and the
+                    // grading WORK is charged in fault vectors before the grader runs.**
+                    //
+                    // Charging the slot up front was the defect, and the chunk rule closed only the
+                    // side door: `matches!(object, FamilyCertified{..})` charged it too, before
+                    // `palw_v2_validate_objects` or the transition ever ran. So an object the court
+                    // refuses at its first line — `NoVectors`, decided before a single fault vector is
+                    // graded — took a slot from a family that had earned one, and two of them per
+                    // block dropped every genuine certification the block carried. Proven by
+                    // experiment twice, with the fence armed, in both the direct and the chunked
+                    // shape.
+                    //
+                    // Slots are therefore charged in the `Ok` arm of the apply below, to objects that
+                    // WERE graded and accepted, which preserves Decision 9 exactly: at most
+                    // `PALW_CERTIFICATION_MAX_PER_BLOCK` families enter the state per block. What an
+                    // object costs before it is graded is the vectors it asks the grader to walk —
+                    // `Vec::len`, free to read — against the block's fixed work budget, so a
+                    // certification the court will refuse for free costs the block nothing.
+                    //
+                    // **Residual, stated rather than hidden.** The work budget is still first-come:
+                    // an attacker who builds `PALW_CERTIFICATION_GRADING_VECTORS_PER_BLOCK` vectors of
+                    // well-formed-but-wrong evidence exhausts it and starves the block. That costs it
+                    // two `PalwShapeProfileV3`s per vector — the first thing the grader compares — so
+                    // the price of the attack rises from two sixty-byte carriers to tens of kilobytes
+                    // of structurally plausible drill, and it is bounded by the block's own byte
+                    // limit. Pricing it outright is a deposit, which is ADR-0075's chunk-deposit work
+                    // and not this fence.
+                    if certifications_graded >= kaspa_consensus_core::palw_state_v2::PALW_CERTIFICATION_MAX_PER_BLOCK {
+                        info!(
+                            "Block {block}: a FamilyCertified object was dropped, and the block stands: the block already certified {} \
+                             families (PALW_CERTIFICATION_MAX_PER_BLOCK)",
+                            kaspa_consensus_core::palw_state_v2::PALW_CERTIFICATION_MAX_PER_BLOCK
+                        );
+                        continue;
+                    }
+                    let vectors = match &object {
+                        kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::FamilyCertified { evidence } => {
+                            evidence.vector_count()
+                        }
+                        _ => chunk_vectors.unwrap_or(0),
+                    };
+                    if vectors_graded.saturating_add(vectors) > PALW_CERTIFICATION_GRADING_VECTORS_PER_BLOCK {
+                        info!(
+                            "Block {block}: a FamilyCertified object was dropped, and the block stands: it would ask for {vectors} more \
+                             fault vectors than the block's remaining grading budget ({} of {PALW_CERTIFICATION_GRADING_VECTORS_PER_BLOCK} \
+                             already spent)",
+                            vectors_graded
+                        );
+                        continue;
+                    }
+                    vectors_graded += vectors;
                 }
-                certifications_graded += 1;
             }
             match self.palw_v2_validate_objects(&folded, state_params, point, std::slice::from_ref(&object)) {
                 Ok(()) => {
@@ -5106,6 +5395,12 @@ impl VirtualStateProcessor {
                                     )
                                     .len()
                                 );
+                            }
+                            // **Armed: the slot is spent HERE, by a certification the grader
+                            // accepted.** Dormant it was already charged before the grader ran,
+                            // which is the accounting this fence replaces.
+                            if cap_charged_on_grading && is_certification {
+                                certifications_graded += 1;
                             }
                             folded = next;
                             rehearsal.blue_score = rehearsal.blue_score.saturating_add(1);
@@ -5925,6 +6220,71 @@ impl VirtualStateProcessor {
     /// wearing one name.
     fn palw_da_court_at(&self, daa_score: u64) -> bool {
         self.palw_da_court.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// **ADR-0075 D14, resolved in exactly one place: WHAT a certification slot may be spent on.**
+    ///
+    /// Past the fence a slot belongs to a certification the grader ACCEPTED, and what an object
+    /// costs before it is graded is the fault vectors it asks the court to walk
+    /// (`PALW_CERTIFICATION_GRADING_VECTORS_PER_BLOCK`). Dormant, a slot is charged to anything
+    /// shaped like a certification before any validation runs — which is why two ordinary
+    /// lifecycle transactions carrying evidence the court refuses at its first line could drop
+    /// every genuine certification in a block.
+    ///
+    /// One field for the whole rule, deliberately: it decides which objects a block accepts and
+    /// therefore its state root, and two fences over one rule is a network that can arm half of
+    /// it. The name is the field's history, not its scope — it began as the chunk index rule and
+    /// that rule, alone, bought no adversarial delta.
+    fn palw_chunk_cap_charge_at(&self, daa_score: u64) -> bool {
+        self.palw_chunk_cap_charge.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
+    /// **What a chunk has to BE for the block's grading cap to be spent on it** (ADR-0075 D14).
+    ///
+    /// The rehearsal charges the cap to a chunk that completes its group, because the
+    /// `FamilyCertified` the group carried is applied inside the completing chunk's own arm. So
+    /// the predicate has to be the transition's own completion test, not a cheaper stand-in for
+    /// it: assemble the parts in index order, demand the whole hash to the declared group id
+    /// (`ChunkGroupHashMismatch`), and demand it decode to a `FamilyCertified`
+    /// (`ChunkedObjectUndecodable`, `ChunkedObjectKindNotAllowed`). Anything less is a rule with
+    /// no adversarial delta — the attacker simply writes the field the rule does not read.
+    ///
+    /// **It answers with the WORK, not with a yes.** The caller charges the block's grading budget
+    /// in fault vectors, and the only way to know a chunked certification's vector count is to
+    /// decode it — which this already does. Returning the count means the payload is decoded once
+    /// per chunk rather than twice, and it makes the chunked path and the direct path charge the
+    /// identical figure (`PalwCertificationEvidenceV1::vector_count`).
+    ///
+    /// `parts` is the group's state so far, `None` for a lone `count == 1` chunk that opens and
+    /// closes its group in one object; `bytes` is this chunk's payload, which is not in `parts`
+    /// yet. Bounded work: the whole is at most `PALW_OBJECT_CHUNK_MAX_COUNT` ×
+    /// `PALW_OBJECT_CHUNK_MAX_BYTES`, and it is the same reassembly the transition performs on
+    /// the very next line for every chunk this answers `Some` for.
+    fn palw_chunk_completes_a_certification_v1(
+        parts: Option<&std::collections::BTreeMap<u8, Vec<u8>>>,
+        index: u8,
+        count: u8,
+        bytes: &[u8],
+        group: &kaspa_consensus_core::Hash64,
+    ) -> Option<usize> {
+        let mut whole: Vec<u8> = Vec::new();
+        for i in 0..count {
+            if i == index {
+                whole.extend_from_slice(bytes);
+            } else {
+                let part = parts.and_then(|parts| parts.get(&i))?;
+                whole.extend_from_slice(part);
+            }
+        }
+        if kaspa_consensus_core::palw_state_v2::palw_object_chunk_group_id_v1(&whole) != *group {
+            return None;
+        }
+        match borsh::from_slice::<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>(&whole) {
+            Ok(kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::FamilyCertified { evidence }) => {
+                Some(evidence.vector_count())
+            }
+            _ => None,
+        }
     }
 
     /// **ADR-0065 D1, resolved in exactly one place.** The window, or `None` when the rule is off.

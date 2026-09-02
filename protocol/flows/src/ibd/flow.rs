@@ -1945,6 +1945,17 @@ const fn commit_refusal_quarantines(verdict: &CommitVerdict) -> bool {
     ///
     /// Inert where either side has no V2 order — every shipped preset — so the existing IBD path
     /// is unchanged there.
+    ///
+    /// **The two sides are weighed at different depths, and that is stated rather than hidden.**
+    /// The incumbent is ordered at its virtual sink; the challenger is ordered at the pruning point
+    /// whose PALW carriage was imported and root-verified just above, because a staging consensus
+    /// has processed no virtual and therefore holds no deltas past that point (see
+    /// `palw_weighing_point_v2`, and ADR-0042 Decision 9's amendment). So the challenger is
+    /// weighed at a block a finality depth behind its own tip and is understated, never overstated
+    /// — a staged chain can be refused for want of standing it has but cannot yet show, and can
+    /// never be committed on standing it does not have. That direction is the safe one, and it is
+    /// the direction this gate exists to guarantee; the price is that a node whose own sink is
+    /// already past the peer's pruning point keeps its chain, which is also the right answer.
     async fn validate_staging_palw_order(
         &self,
         consensus: &ConsensusProxy,

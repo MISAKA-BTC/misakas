@@ -152,9 +152,19 @@ quorum of them needs `minted >= quorum`, and the threshold used is the strictly 
 `seat_count - quorum` that the majority invariant implies. It therefore scans sometimes when it
 need not and never skips when it must, checked exhaustively over every legal panel shape.
 
-**Three abstentions, deliberate.** No fork point within the horizon, a state this node cannot
-materialize, or a missing delta all pass with a warning rather than refusing. A veto that cannot
-name a fork point is the permanent-partition shape the gate beside it already learned to escape.
+**Two abstentions and one refusal** (amended, audit 2026-09-02). No fork point within the horizon,
+and a missing delta or an unreachable side of the fork, pass with a warning rather than refusing: a
+veto that cannot name a fork point is the permanent-partition shape the gate beside it already
+learned to escape.
+
+The third case was grouped with those two and is a different fact. `load_tip` returning `Err` means
+this node's own root-verified snapshot did not decode — a disk that flipped a byte, or a row left by
+another schema — and answering "carry on" there is a fork-choice gate failing open on exactly the
+state that says it cannot judge. That is the `.ok().flatten()` shape ADR-0042 Decision 5 forbids
+("reading absent data as nothing is forbidden"), and it arrived here because one `Option` spelled
+"no tip yet" and "unreadable tip" the same way. **An unreadable snapshot now refuses the reorg**
+(`FrontierProvenanceViolation`); `Ok(None)` — a V2 chain before its first tip — stays an
+abstention, or a young chain could never reorg at all.
 
 **And the threshold is derived, not configured.** A value that sits beside a fence is normalised
 out of `consensus_identity_id`, so two builds scheduling one height with different thresholds would

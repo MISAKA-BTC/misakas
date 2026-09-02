@@ -2300,9 +2300,16 @@ impl ConsensusApi for Consensus {
 
     /// Unit D, site 2: the order of this consensus's own virtual sink — the chain it would
     /// actually keep, not the chain it happened to download.
+    ///
+    /// **Except where there is no virtual sink at all**, which is every STAGING consensus and
+    /// therefore every headers-proof IBD. Staging is built `skip_adding_genesis`, so `get_sink()`
+    /// answers the all-zero hash and this returned `None` — which
+    /// `validate_staging_palw_order` turns into a hard `ProtocolError`, refusing the sync against
+    /// every peer forever. `palw_weighing_point_v2` supplies the answer that IS available there:
+    /// the pruning point whose PALW carriage the flow imported and root-verified one line earlier.
     fn get_palw_candidate_order_v2(&self) -> Option<kaspa_consensus_core::palw_fork_choice::PalwCandidateOrderV1> {
-        let sink = self.get_sink();
-        self.virtual_processor.palw_candidate_order_v2(sink)
+        let point = self.virtual_processor.palw_weighing_point_v2(self.get_sink())?;
+        self.virtual_processor.palw_candidate_order_v2(point)
     }
 
     fn get_antipast_from_pov(

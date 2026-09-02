@@ -309,3 +309,38 @@ genesis gate.
 **SA-4 — The SDK preflight and the gateway read genesis ∪ chain** (the open item above), because a
 tool that reports a chain-certified class as uncertified will be "fixed" by an operator with a flag,
 and flags that override chain facts are how a rolling re-genesis starts.
+
+**SA-5 — and the slot is spent by a certification the grader ACCEPTED** (audit 2026-09-02, its own
+fence `palw_chunk_cap_charge`). SA-2 above decides what a block's grading may be charged FOR; this
+decides WHEN the charge lands, and the two were found separately and are fenced separately because
+each is sound alone.
+
+`PALW_CERTIFICATION_MAX_PER_BLOCK` is charged in the acceptance rehearsal, before the transition
+runs, so the rehearsal's notion of "completes a group" has to BE the transition's or the cap is
+spendable by objects that complete nothing. It was not: the rehearsal asked only whether a lone
+chunk declared `count == 1`, so `ObjectChunk { group: anything, index: anything, count: 1, bytes:
+eight bytes of nothing }` — sixty bytes at an ordinary fee — was charged a grading and then refused
+by the transition, and two per block dropped every genuine `FamilyCertified` that block carried.
+Certification is how a family earns the right to bear weight, so a block-cheap way to starve it is a
+block-cheap way to keep an honest class weightless.
+
+The rehearsal now runs the transition's own completion test — every part present, the assembly
+hashing to the declared `group`, and the object it decodes to being a `FamilyCertified` — and spends
+the cap only on a chunk that passes it. Requiring `index < count` alone is **not** that rule and
+buys nothing: `index: 0, count: 1` was always available at the identical sixty bytes and starves the
+identical cap, so a guard that asks only the index rule deletes a strictly dominated variant. Past
+the fence the SLOT is charged in the apply's `Ok` arm, to an object the court actually graded and
+accepted, and what an object costs BEFORE it is graded is the fault vectors it asks the court to
+walk, against a per-block work budget. Behind a bare `Option<ForkActivation>`
+(`palw_chunk_cap_charge`, `None` on every shipped preset), because which objects a block accepts
+decides its state root.
+
+*How the two fences compose.* The rent's predicate (`palw_v2_graded_vector_count`) and D14's
+(`palw_chunk_completes_a_certification_v1`) both assemble and decode; D14's additionally demands the
+whole hash to the declared group id, so anything D14 calls a completion the rent calls one too. The
+slot gate is therefore never tighter than the work gate, and no object is charged a grading it was
+not also priced for. Arming the rent WITHOUT D14 leaves one corner open — a chunk whose assembled
+bytes decode to a `FamilyCertified` but do not hash to its declared group id is priced and charged a
+slot, and the transition then refuses it — so the two are armed together or the rent is armed
+knowing that.
+
