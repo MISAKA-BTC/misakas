@@ -282,6 +282,101 @@ pub fn palw_bond_may_judge_class_v2(bond: &PalwBondStateV2, class_id: &Hash64) -
     bond.capable_classes.contains(class_id)
 }
 
+/// **ADR-0071 SA-1: the most classes one bond may declare.**
+///
+/// `capable_classes` is hashed into `state_root` by `palw_bond_capability_message_v2` and carried
+/// by every node forever, and a declaration is priced only by transaction mass — so an unbounded
+/// set is a state-growth lever, and a bond that declares every id the chain will ever hold is
+/// drawn onto every panel it can reach. Sixteen is above every registry this project has shipped
+/// or planned (testnet-11 registers three) and far below the mass a transaction can buy.
+pub const PALW_MAX_CAPABLE_CLASSES: usize = 16;
+
+/// **ADR-0071 SA-2: what one declared class reserves on the declarer's bond.**
+///
+/// ADR-0056 Decision 3's shape exactly — RESERVED, never burned; released when a replacing
+/// declaration drops the class, or when the bond retires. What it buys is that "declare
+/// everything so as to be drawn everywhere" costs collateral in proportion to the griefing
+/// surface, and that §5's `declare and abstain` costs the abstainer capital **without judging its
+/// silence** (ADR-0065 D4 stands: an `Unavailable` receipt is still an abstention, never a
+/// conviction).
+///
+/// Sized against the registration price it sits beside rather than chosen: at a quarter of
+/// `REGISTRATION_EXPOSURE_SOMPI` a minimum bond (400,000 sompi at a 500‰ ceiling = 200,000 of
+/// room) can declare the full sixteen for 160,000 and have almost no room left to make a claim —
+/// so the ceiling is what stops a flood, and an operator declaring the two or three classes it
+/// actually holds spends a tenth of its headroom.
+pub const PALW_CAPABILITY_EXPOSURE_SOMPI: u64 = 10_000;
+
+/// **ADR-0071 SA-2: the exposure this bond's declaration holds**, derived from the declared set
+/// rather than accumulated beside it.
+///
+/// Derived, and that is the whole design: an accumulator would be a second answer to a question
+/// the bond record already answers, and it would have to be released by hand at every site that
+/// shrinks the set (a replacing declaration, a retirement, a bond the registry drops). A pure
+/// function of `capable_classes` releases at all three by construction, and — the property this
+/// tree cares about most — it adds no collection to `state_root`, so no golden root moves and the
+/// fence-off behaviour is byte-identical.
+pub fn palw_bond_capability_exposure_v1(bond: &PalwBondStateV2) -> u128 {
+    (bond.capable_classes.len() as u128) * (PALW_CAPABILITY_EXPOSURE_SOMPI as u128)
+}
+
+/// The key `capabilities` records a production fact under: one row per `(class, bond)`.
+///
+/// Domain-separated so a capability fact can never collide with a class id, a claim id or any
+/// other `Hash64` this ruleset mints.
+pub fn palw_capability_fact_key_v1(class_id: &Hash64, bond: &PalwBondKeyV2) -> Hash64 {
+    let mut state = keyed(PALW_STATE_V2_DOMAIN_CAPABILITY_FACT);
+    state.update(class_id.as_byte_slice());
+    state.update(&borsh::to_vec(bond).expect("a bond key is borsh-serializable"));
+    finish(state)
+}
+
+/// **ADR-0071 SA-3: has this bond actually PRODUCED on this class?**
+///
+/// The positive chain fact the amendment asks for, read from `capabilities` — the collection this
+/// ruleset has rooted and carried since PR-03 and never written, whose record is exactly
+/// `(class_id, bond, issued_daa)`. It is written by `reserve_for_claim`, the one funnel every
+/// accepted attempt claim and every accepted free-prompt claim passes through, so "produced" here
+/// means what the amendment says it means: an accepted attempt block or free-prompt claim on `C`
+/// naming this bond as producer or executor.
+pub fn palw_bond_produced_on_class_v1(state: &PalwChainStateV2, bond: &PalwBondKeyV2, class_id: &Hash64) -> bool {
+    state.capability_fact(&palw_capability_fact_key_v1(class_id, bond)).is_some()
+}
+
+/// **ADR-0071 SA-3: whether this bond may be seated to judge `class_id`, with production proven.**
+///
+/// Two conditions past the fence, and the second is where §5's open item is closed. Declaring is a
+/// claim; producing is a proof, and it is one the chain already holds. `require_production` is
+/// `Params::palw_capability_bound` resolved at this block — `false`, every shipped preset, is
+/// exactly [`palw_bond_may_judge_class_v2`].
+///
+/// **A genesis class is exempt, and that exemption is load-bearing.** The shipped genesis registry
+/// is `seat_count + 1` bonds with the executor excluded — zero slack — and none of them has
+/// produced anything at block 0. Without the exemption, arming this fence would make every claim
+/// on a fresh network fail to bind and void at `BindTimeout` with its escrow burned. A genesis
+/// class is one the assembly registered rather than a registrant bought, which the class record
+/// already distinguishes: `registrant_bond` is `None` exactly for those.
+///
+/// **Silence is still never judged.** A bond that declared and never produced is simply NOT DRAWN
+/// — it is not charged for the omission and not convicted of it, which is the ADR-0065 D4
+/// doctrine this project reached by measurement and does not intend to reverse.
+pub fn palw_bond_may_judge_class_v3(
+    state: &PalwChainStateV2,
+    bond_key: &PalwBondKeyV2,
+    bond: &PalwBondStateV2,
+    class_id: &Hash64,
+    require_production: bool,
+) -> bool {
+    if !palw_bond_may_judge_class_v2(bond, class_id) {
+        return false;
+    }
+    if !require_production {
+        return true;
+    }
+    let genesis_class = state.class(class_id).is_some_and(|record| record.registrant_bond.is_none());
+    genesis_class || palw_bond_produced_on_class_v1(state, bond_key, class_id)
+}
+
 pub fn palw_operator_id_v2(operator_pubkey: &[u8]) -> Hash64 {
     let mut state = keyed(PALW_STATE_V2_DOMAIN_OPERATOR_ID);
     state.update(&(operator_pubkey.len() as u64).to_le_bytes());
@@ -294,6 +389,8 @@ pub const PALW_STATE_V2_DOMAIN_COLLECTION: &[u8] = b"misaka-palw/state-v2/collec
 pub const PALW_STATE_V2_DOMAIN_CARRIAGE: &[u8] = b"misaka-palw/state-v2/carriage/v1";
 /// ADR-0075 Decision 14: the digest an `ObjectChunk` group is keyed by — the whole object's bytes.
 pub const PALW_STATE_V2_DOMAIN_OBJECT_CHUNK_GROUP: &[u8] = b"misaka-palw/state-v2/object-chunk-group/v1";
+/// ADR-0071 SA-3: the key a `(class, bond)` production fact is recorded under in `capabilities`.
+pub const PALW_STATE_V2_DOMAIN_CAPABILITY_FACT: &[u8] = b"misaka-palw/state-v2/capability-fact/v1";
 
 /// Every domain this module keys, so the cross-family uniqueness test can see them.
 pub const PALW_STATE_V2_ALL_DOMAINS: &[&[u8]] = &[
@@ -301,6 +398,7 @@ pub const PALW_STATE_V2_ALL_DOMAINS: &[&[u8]] = &[
     PALW_STATE_V2_DOMAIN_COLLECTION,
     PALW_STATE_V2_DOMAIN_CARRIAGE,
     PALW_STATE_V2_DOMAIN_OBJECT_CHUNK_GROUP,
+    PALW_STATE_V2_DOMAIN_CAPABILITY_FACT,
     // The two authorisation domains in this module. A signing domain that no sweep can see is a
     // domain nothing stops another family from reusing, and a reused domain is a signature made
     // for one purpose accepted for another.
@@ -2375,6 +2473,19 @@ pub enum PalwStateV2Error {
         "bond {0:?} registers a key this chain already holds a bond for — one key, one bond, or seats can be manufactured by splitting collateral"
     )]
     DuplicateBondKey(PalwBondKeyV2),
+    // ---- ADR-0071 SA-1, SA-2, SA-4: what a capability declaration is refused for ----
+    #[error(
+        "bond {bond:?} declares {got} classes, above the {max} a declaration may name — the set is hashed into the state root and a declaration is priced only by mass (ADR-0071 SA-1)"
+    )]
+    CapableClassesTooMany { bond: PalwBondKeyV2, got: usize, max: usize },
+    #[error(
+        "bond {bond:?} cannot declare {classes} classes: it already holds {already} sompi of exposure and the declaration reserves {price}, against {collateral} of collateral (ADR-0071 SA-2)"
+    )]
+    CapabilityExposureUnaffordable { bond: PalwBondKeyV2, classes: usize, already: u128, price: u128, collateral: u64 },
+    #[error(
+        "bond {0:?} is Retiring — collateral that is leaving cannot back a promise to run a class (ADR-0071 SA-4)"
+    )]
+    CapabilityDeclarationWhileRetiring(PalwBondKeyV2),
     #[error(
         "class {class} declares {got} sompi per work unit but this network's unit is {want} — weight per sompi at risk is not a class's to choose"
     )]
@@ -2652,6 +2763,14 @@ impl PalwChainStateV2 {
 
     pub fn class(&self, id: &Hash64) -> Option<&PalwClassStateV2> {
         self.classes.get(id)
+    }
+
+    /// ADR-0071 SA-3: the production fact recorded under `key`, if the chain holds one.
+    /// Keyed by [`palw_capability_fact_key_v1`]; read through
+    /// [`palw_bond_produced_on_class_v1`] so the draw and any RPC that reports eligibility ask
+    /// one question.
+    pub fn capability_fact(&self, key: &Hash64) -> Option<&PalwCapabilityStateV2> {
+        self.capabilities.get(key)
     }
 
     /// ADR-0075: the families this chain certified for `lane`, in digest order — the set the
@@ -3404,11 +3523,21 @@ struct TransitionBuilder<'a> {
     /// about the BLOCK, constant for the whole fold, and threading it through every object arm
     /// would give a future arm the chance to forget it.
     unavailable_abstains: bool,
+    /// ADR-0071 SA-1..SA-4, resolved by the caller from `Params::palw_capability_bound` at this
+    /// block's DAA. It rides the builder for the reason `unavailable_abstains` does: it is a fact
+    /// about the BLOCK, constant for the whole fold, and threading it through every object arm
+    /// would give a future arm the chance to forget it.
+    capability_bound: bool,
 }
 
 impl<'a> TransitionBuilder<'a> {
-    fn new(parent: &PalwChainStateV2, params: &'a PalwStateParamsV2, unavailable_abstains: bool) -> Self {
-        Self { params, state: parent.clone(), entries: Vec::new(), unavailable_abstains }
+    fn new(
+        parent: &PalwChainStateV2,
+        params: &'a PalwStateParamsV2,
+        unavailable_abstains: bool,
+        capability_bound: bool,
+    ) -> Self {
+        Self { params, state: parent.clone(), entries: Vec::new(), unavailable_abstains, capability_bound }
     }
 
     // Every write goes through one of these, so the delta cannot miss a change.
@@ -3435,6 +3564,18 @@ impl<'a> TransitionBuilder<'a> {
             None => self.state.registration_exposure.remove(&key),
         };
         self.entries.push(PalwDeltaEntryV2::RegistrationExposure { key, old, new });
+    }
+
+    /// ADR-0071 SA-3: record that a bond produced on a class. The `capabilities` collection has
+    /// been rooted, carried and delta-tracked since PR-03 with no writer; this is the writer its
+    /// record shape (`class_id`, `bond`, `issued_daa`) was evidently reserved for, so SA-3 adds no
+    /// collection to `state_root` and moves no golden root while the fence is off.
+    fn write_capability(&mut self, key: Hash64, new: Option<PalwCapabilityStateV2>) {
+        let old = match &new {
+            Some(record) => self.state.capabilities.insert(key, record.clone()),
+            None => self.state.capabilities.remove(&key),
+        };
+        self.entries.push(PalwDeltaEntryV2::Capability { key, old, new });
     }
 
     fn write_class_walk(&mut self, key: Hash64, new: Option<PalwClassWalkV2>) {
@@ -3661,6 +3802,33 @@ impl<'a> TransitionBuilder<'a> {
     }
 
     fn reserve_for_claim(&mut self, claim: &PalwClaimStateV2) -> Result<(), PalwStateV2Error> {
+        // **ADR-0071 SA-3: possession proven by production.** This function is the ONE funnel
+        // every accepted claim passes — the block's own attempt, a merged blue's attempt, and a
+        // free-prompt commitment — so recording here is the same set the amendment names and a
+        // future claim kind cannot forget it. First write only: the fact is "has produced at
+        // least once", so re-stamping `issued_daa` on every later claim would make an idempotent
+        // fact a per-block state write.
+        //
+        // **What this costs the state, said out loud.** One permanent row per `(class, bond)` that
+        // has produced, and nothing removes it — the row IS the proof, so a sweep would take a
+        // seat's eligibility away for having been quiet. The bound is `classes × bonds`: classes
+        // are the registry (priced by ADR-0056 Decision 3) and a bond only earns a row by
+        // PRODUCING a block, which is a whole accepted attempt with its collateral, its exposure
+        // and its lottery behind it. That is a far dearer write than the `BondCapabilityDeclared`
+        // SA-1 had to bound, which is why this one is not bounded and that one is.
+        if self.capability_bound {
+            let key = palw_capability_fact_key_v1(&claim.class_id, &claim.bond);
+            if !self.state.capabilities.contains_key(&key) {
+                self.write_capability(
+                    key,
+                    Some(PalwCapabilityStateV2 {
+                        class_id: claim.class_id,
+                        bond: claim.bond,
+                        issued_daa: claim.accepted_daa,
+                    }),
+                );
+            }
+        }
         let current = self.state.reserved_exposure.get(&claim.bond).copied().unwrap_or(0);
         let next = current.checked_add(claim.reserved).ok_or(PalwStateV2Error::Overflow("reserved_exposure"))?;
         self.write_exposure(claim.bond, Some(next));
@@ -4016,7 +4184,31 @@ pub fn apply_palw_transition_v2_with_verdict_policy(
         Some(envelope) => PalwBlockWorkV3::Attempt(envelope),
         None => PalwBlockWorkV3::None,
     };
-    apply_palw_transition_v5(parent, params, None, ctx, accepted_objects, work, &[], unavailable_abstains)
+    apply_palw_transition_v6(parent, params, None, ctx, accepted_objects, work, &[], unavailable_abstains, false)
+        .map(|(state, delta, _)| (state, delta))
+}
+
+/// [`apply_palw_transition_v2_with_verdict_policy`] with **ADR-0071's capability bound** beside
+/// ADR-0065 D4's verdict policy.
+///
+/// The object-acceptance rehearsal reaches this one: a rehearsal that resolved the capability
+/// fence differently from the fold would admit a declaration into a block's object list that the
+/// fold then refuses, taking the whole block down for a reason acceptance said was fine. Both
+/// `false` is byte-identical to the transition before either parameter existed.
+pub fn apply_palw_transition_v2_with_policies(
+    parent: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    ctx: &PalwBlockContextV2,
+    accepted_objects: &[PalwConsensusObjectV2],
+    current_attempt: Option<&PalwAttemptEnvelopeV2>,
+    unavailable_abstains: bool,
+    capability_bound: bool,
+) -> Result<(PalwChainStateV2, PalwStateDeltaV2), PalwStateV2Error> {
+    let work = match current_attempt {
+        Some(envelope) => PalwBlockWorkV3::Attempt(envelope),
+        None => PalwBlockWorkV3::None,
+    };
+    apply_palw_transition_v6(parent, params, None, ctx, accepted_objects, work, &[], unavailable_abstains, capability_bound)
         .map(|(state, delta, _)| (state, delta))
 }
 
@@ -4054,7 +4246,7 @@ pub fn apply_palw_transition_v4(
     block_work: PalwBlockWorkV3<'_>,
     merged_work: &[PalwMergedWorkV1<'_>],
 ) -> Result<(PalwChainStateV2, PalwStateDeltaV2, Vec<(BlockHash, String)>), PalwStateV2Error> {
-    apply_palw_transition_v5(parent, params, admission, ctx, accepted_objects, block_work, merged_work, false)
+    apply_palw_transition_v6(parent, params, admission, ctx, accepted_objects, block_work, merged_work, false, false)
 }
 
 /// [`apply_palw_transition_v4`] with ADR-0065 D4's verdict policy.
@@ -4075,6 +4267,30 @@ pub fn apply_palw_transition_v5(
     merged_work: &[PalwMergedWorkV1<'_>],
     unavailable_abstains: bool,
 ) -> Result<(PalwChainStateV2, PalwStateDeltaV2, Vec<(BlockHash, String)>), PalwStateV2Error> {
+    apply_palw_transition_v6(parent, params, admission, ctx, accepted_objects, block_work, merged_work, unavailable_abstains, false)
+}
+
+/// [`apply_palw_transition_v5`] with **ADR-0071's capability bound** (SA-1..SA-4).
+///
+/// `capability_bound` is `Params::palw_capability_bound` resolved at `ctx.daa_score`, and `false`
+/// — every shipped preset — is byte-identical to the transition before the parameter existed:
+/// nothing is written to `capabilities`, no declaration is bounded or priced, and no exposure
+/// ceiling gains a term. The v2/v3/v4/v5 faces pass `false` and are kept for the tests and
+/// fixtures that predate the rule; **every production caller must reach this one**, because a fold
+/// that disagrees with the acceptance layer about whether a declaration was refused computes a
+/// different state root.
+#[allow(clippy::too_many_arguments)]
+pub fn apply_palw_transition_v6(
+    parent: &PalwChainStateV2,
+    params: &PalwStateParamsV2,
+    admission: Option<&crate::palw_admission_v2::PalwAdmissionParamsV2>,
+    ctx: &PalwBlockContextV2,
+    accepted_objects: &[PalwConsensusObjectV2],
+    block_work: PalwBlockWorkV3<'_>,
+    merged_work: &[PalwMergedWorkV1<'_>],
+    unavailable_abstains: bool,
+    capability_bound: bool,
+) -> Result<(PalwChainStateV2, PalwStateDeltaV2, Vec<(BlockHash, String)>), PalwStateV2Error> {
     // 1. Context monotonicity: blue score strictly increases along a chain, DAA never decreases.
     if let Some(last) = &parent.last_point {
         if ctx.blue_score <= last.blue_score {
@@ -4085,7 +4301,7 @@ pub fn apply_palw_transition_v5(
         }
     }
 
-    let mut builder = TransitionBuilder::new(parent, params, unavailable_abstains);
+    let mut builder = TransitionBuilder::new(parent, params, unavailable_abstains, capability_bound);
 
     // 1b. Drain the payout queue THIS block's coinbase paid. It must happen before the sweeps,
     //     because the sweeps are what refill it: a claim finalized by this block is paid by the
@@ -5438,9 +5654,70 @@ fn apply_object(
             // unregistered id is either a typo or a bet on a future registration, and the draw
             // would carry it silently until that id appeared — at which point a seat would be
             // volunteered for a class its operator declared before the class existed.
+            //
+            // (ADR-0071 SA-4's second half, and it was already here — recorded rather than
+            // re-implemented, because a rule asserted twice is a rule two readers can change
+            // apart.)
             if let Some(unknown) = capable_classes.iter().find(|id| !builder.state.classes.contains_key(id)) {
                 return Err(PalwStateV2Error::MissingClass(*unknown));
             }
+            if builder.capability_bound {
+                // **SA-4: a Retiring bond may not declare.** Its collateral is on its way out, so
+                // the promise has nothing behind it — the same reason `BondNotActive` refuses a
+                // retiring bond an accusation. Undeclaring is not blocked by this: retirement
+                // itself drops the whole set, three arms down.
+                if matches!(record.status, PalwBondStatusV2::Retiring { .. }) {
+                    return Err(PalwStateV2Error::CapabilityDeclarationWhileRetiring(*bond));
+                }
+                // **SA-1: the set is bounded.** `capable_classes` is hashed into `state_root` and
+                // carried by every node forever, and this object is priced only by transaction
+                // mass, so without a bound one declaration is an unbounded state write.
+                if capable_classes.len() > PALW_MAX_CAPABLE_CLASSES {
+                    return Err(PalwStateV2Error::CapableClassesTooMany {
+                        bond: *bond,
+                        got: capable_classes.len(),
+                        max: PALW_MAX_CAPABLE_CLASSES,
+                    });
+                }
+                // **SA-2: the declaration must be affordable, and it is refused BY NAME.**
+                //
+                // The bond's own capability exposure is excluded from `already` deliberately: the
+                // new set REPLACES the old one (see below), so what the previous declaration
+                // reserved is released by this very write and charging both would refuse an
+                // operator for exposure it is in the act of giving back. Everything else the bond
+                // backs — live claims and its own class registrations — is counted, on the
+                // ADR-0056 Decision 3 rule that the ceiling applies to the SUM.
+                //
+                // **The ceiling is the collateral itself, not `collateral × ratio`**, for the
+                // reason the registry's own price is checked the same way one arm down (audit
+                // M2-16): the ratio lives in the ADMISSION params, which the transition does not
+                // hold. The weaker invariant that IS reachable here — total exposure may not
+                // exceed the collateral — is strictly implied by the ratio ceiling, so a
+                // declaration this admits can still be refused by the lane that has the ratio, and
+                // one this refuses could never have passed there.
+                let already = builder
+                    .state
+                    .reserved_exposure(bond)
+                    .checked_add(builder.state.registration_exposure(bond))
+                    .ok_or(PalwStateV2Error::Overflow("total exposure"))?;
+                let price = (capable_classes.len() as u128) * (PALW_CAPABILITY_EXPOSURE_SOMPI as u128);
+                if already.saturating_add(price) > record.collateral as u128 {
+                    return Err(PalwStateV2Error::CapabilityExposureUnaffordable {
+                        bond: *bond,
+                        classes: capable_classes.len(),
+                        already,
+                        price,
+                        collateral: record.collateral,
+                    });
+                }
+            }
+            // **SA-1's second half: a declaration REPLACES, it does not grow.** This assignment is
+            // the whole of it and it predates the amendment — recorded here rather than changed,
+            // because the amendment asks for the property and an `extend` slipped in later would
+            // silently unbound the set the check above just bounded. It is also what releases
+            // SA-2's reservation for every class the new set drops: the exposure is DERIVED from
+            // this field (`palw_bond_capability_exposure_v1`), so a shrinking set is a release with
+            // no second site to forget.
             let mut declared = record;
             declared.capable_classes = capable_classes.clone();
             builder.write_bond(*bond, Some(declared));
@@ -5452,6 +5729,15 @@ fn apply_object(
                 PalwBondStatusV2::Active => {
                     let mut retiring = record;
                     retiring.status = PalwBondStatusV2::Retiring { since_daa: ctx.daa_score };
+                    // **ADR-0071 SA-2: retirement releases the declaration's reservation.** A
+                    // retiring bond is already unseatable (`palw_bond_may_take_work_v2` refuses a
+                    // non-Active status), so dropping the set costs it nothing it still had — and
+                    // leaving the set behind would hold its collateral against a promise the draw
+                    // will never call on. The exposure is derived from this field, so clearing it
+                    // IS the release.
+                    if builder.capability_bound {
+                        retiring.capable_classes.clear();
+                    }
                     builder.write_bond(*bond, Some(retiring));
                 }
             }
@@ -5573,11 +5859,18 @@ fn apply_object(
                 // Whether the bond EXISTS is `move_registration_exposure`'s question, asked below
                 // and with its own error; this check is about affordability and says nothing when
                 // there is no bond to ask about.
-                if let Some(collateral) = builder.state.bonds.get(&carriage_bond).map(|b| b.collateral) {
+                if let Some(bond_record) = builder.state.bonds.get(&carriage_bond) {
+                    let collateral = bond_record.collateral;
+                    // ADR-0071 SA-2: a declaration's reservation is real only if it is counted
+                    // wherever the ceiling is applied — otherwise declaring sixteen classes would
+                    // cost nothing the next registration or claim could feel. Derived from the
+                    // bond's own `capable_classes`, and zero while the fence is off.
+                    let declared = if builder.capability_bound { palw_bond_capability_exposure_v1(bond_record) } else { 0 };
                     let already = builder
                         .state
                         .reserved_exposure(&carriage_bond)
                         .checked_add(builder.state.registration_exposure(&carriage_bond))
+                        .and_then(|sum| sum.checked_add(declared))
                         .ok_or(PalwStateV2Error::Overflow("total exposure"))?;
                     let price = builder.params.registration_exposure_sompi() as u128;
                     if already.saturating_add(price) > collateral as u128 {
@@ -6205,10 +6498,15 @@ fn apply_object(
             // would reserve, against collateral × ratio. A commitment meets no admission list (it
             // arrives in a transaction), so the ceiling is the transition's; the expression is the
             // attempt lane's, and `reserve_for_claim` below adds exactly `reserved`.
+            // ADR-0071 SA-2's third term, on this lane and for the same reason: the ceiling
+            // applies to the SUM, and a reservation nothing reads is not a reservation. Zero while
+            // the fence is off, so this lane's admission is byte-identical before it.
+            let declared = if builder.capability_bound { palw_bond_capability_exposure_v1(bond_record) } else { 0 };
             let backed = builder
                 .state
                 .reserved_exposure(bond)
                 .checked_add(builder.state.registration_exposure(bond))
+                .and_then(|sum| sum.checked_add(declared))
                 .ok_or(PalwStateV2Error::Overflow("total exposure"))?;
             let ceiling = (bond_record.collateral as u128)
                 .checked_mul(builder.params.fp_max_exposure_ratio_permille as u128)
@@ -6958,6 +7256,294 @@ pub(crate) mod tests {
         let mut bent = state.clone();
         bent.registration_exposure.insert(bond, 999_999);
         assert!(bent.assert_internal_consistency(&p).is_err(), "a registry ledger that does not summarize the classes is refused");
+    }
+
+    // ---- ADR-0071 security amendment: SA-1, SA-2, SA-3, SA-4 ---------------------------------
+
+    /// Params with the capability rules' neighbours on: the class economy supplies a registration
+    /// price so the SUM the ceiling applies to has more than one term in it.
+    fn capability_params() -> PalwStateParamsV2 {
+        economy_params()
+    }
+
+    /// A bond with `collateral`, declaring nothing — SA-4's `Retiring` case and SA-2's ceiling
+    /// both need to choose the collateral, which the older fixtures fix at 1,000.
+    fn bond_registration_with_collateral(bond: u64, pubkey: u8, operator: u64, collateral: u64) -> PalwConsensusObjectV2 {
+        PalwConsensusObjectV2::BondRegistered {
+            bond: bond_key(bond),
+            pubkey: vec![pubkey; 4],
+            operator_pubkey: op_key(operator),
+            collateral,
+            payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A11),
+            capable_classes: Default::default(),
+            signature: Vec::new(),
+        }
+    }
+
+    fn declare(bond: u64, classes: &[Hash64]) -> PalwConsensusObjectV2 {
+        PalwConsensusObjectV2::BondCapabilityDeclared {
+            bond: bond_key(bond),
+            capable_classes: classes.iter().copied().collect(),
+            // The owner's ML-DSA-87 is the ACCEPTANCE layer's check (processor.rs), not the
+            // transition's — the same split every other lifecycle object takes.
+            signature: vec![1],
+        }
+    }
+
+    /// A chain holding `n` registered classes and one richly collateralised bond, so a
+    /// declaration's only binding constraint is the one under test.
+    fn chain_with_classes(n: u64, collateral: u64) -> (PalwChainStateV2, PalwStateParamsV2, Vec<Hash64>) {
+        let p = capability_params();
+        let ids: Vec<Hash64> = (1..=n).map(h64).collect();
+        let mut objects: Vec<PalwConsensusObjectV2> = Vec::new();
+        // The floor holds the whole share; every other class is a genesis registration too, so
+        // this fixture is about the DECLARATION and never about the share table.
+        objects.push(registration(ids[0], 1000, None));
+        for id in ids.iter().skip(1) {
+            objects.push(registration(*id, 0, None));
+        }
+        objects.push(bond_registration_with_collateral(1, 7, 21, collateral));
+        let (state, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &p, &ctx(1, 10, 1), &objects, None)
+            .expect("classes and a bond register");
+        (state, p, ids)
+    }
+
+    /// **SA-1: the declared set is bounded.** Sixteen is admitted, seventeen is refused BY NAME —
+    /// the set is hashed into `state_root` and this object is priced only by transaction mass, so
+    /// without the bound one declaration is an unbounded state write every node carries forever.
+    #[test]
+    fn a_declaration_of_seventeen_classes_is_refused_and_sixteen_is_not() {
+        let (state, p, ids) = chain_with_classes(PALW_MAX_CAPABLE_CLASSES as u64 + 1, 1_000_000);
+        let sixteen = &ids[..PALW_MAX_CAPABLE_CLASSES];
+        let seventeen = &ids[..];
+        assert_eq!(seventeen.len(), PALW_MAX_CAPABLE_CLASSES + 1);
+
+        apply_palw_transition_v6(
+            &state,
+            &p,
+            None,
+            &ctx(2, 11, 2),
+            &[declare(1, sixteen)],
+            PalwBlockWorkV3::None,
+            &[],
+            false,
+            true,
+        )
+        .expect("the bound admits exactly sixteen");
+
+        let err = apply_palw_transition_v6(
+            &state,
+            &p,
+            None,
+            &ctx(2, 11, 2),
+            &[declare(1, seventeen)],
+            PalwBlockWorkV3::None,
+            &[],
+            false,
+            true,
+        )
+        .expect_err("seventeen is one past the bound");
+        assert!(
+            matches!(
+                err,
+                PalwStateV2Error::CapableClassesTooMany { got, max, .. }
+                    if got == PALW_MAX_CAPABLE_CLASSES + 1 && max == PALW_MAX_CAPABLE_CLASSES
+            ),
+            "the bound must refuse by name, got {err}"
+        );
+    }
+
+    /// **SA-2: a replacing declaration releases the dropped classes' exposure.**
+    ///
+    /// The reservation is DERIVED from `capable_classes`, so "release" is not a second write that
+    /// could be forgotten — it is the same assignment that makes SA-1's replacement true. This
+    /// pins both halves: four classes hold four prices, and replacing them with one holds one.
+    #[test]
+    fn a_replacing_declaration_releases_the_dropped_classes_exposure() {
+        let (state, p, ids) = chain_with_classes(4, 1_000_000);
+        let bond = bond_key(1);
+
+        let (four, ..) =
+            apply_palw_transition_v6(&state, &p, None, &ctx(2, 11, 2), &[declare(1, &ids)], PalwBlockWorkV3::None, &[], false, true)
+                .expect("four classes are declarable");
+        let record = four.bond(&bond).expect("the bond stands");
+        assert_eq!(record.capable_classes.len(), 4);
+        assert_eq!(
+            palw_bond_capability_exposure_v1(record),
+            4 * PALW_CAPABILITY_EXPOSURE_SOMPI as u128,
+            "four declared classes reserve four prices"
+        );
+
+        let (one, ..) = apply_palw_transition_v6(
+            &four,
+            &p,
+            None,
+            &ctx(3, 12, 3),
+            &[declare(1, &ids[..1])],
+            PalwBlockWorkV3::None,
+            &[],
+            false,
+            true,
+        )
+        .expect("a declaration replaces");
+        let record = one.bond(&bond).expect("the bond stands");
+        assert_eq!(record.capable_classes.len(), 1, "the new set REPLACES rather than grows");
+        assert_eq!(
+            palw_bond_capability_exposure_v1(record),
+            PALW_CAPABILITY_EXPOSURE_SOMPI as u128,
+            "and the three dropped classes released their reservation"
+        );
+    }
+
+    /// **SA-2: a declaration past the bond's exposure room is refused by name.**
+    ///
+    /// The bond is sized so two classes fit and three do not, and the refusal names the bond, the
+    /// count, what it already backs and what the declaration costs — because an operator who
+    /// cannot read the arithmetic cannot fix the declaration.
+    #[test]
+    fn a_declaration_over_the_bonds_exposure_room_is_refused_by_name() {
+        let room = 2 * PALW_CAPABILITY_EXPOSURE_SOMPI;
+        let (state, p, ids) = chain_with_classes(3, room);
+
+        apply_palw_transition_v6(
+            &state,
+            &p,
+            None,
+            &ctx(2, 11, 2),
+            &[declare(1, &ids[..2])],
+            PalwBlockWorkV3::None,
+            &[],
+            false,
+            true,
+        )
+        .expect("two classes fit exactly");
+
+        let err = apply_palw_transition_v6(
+            &state,
+            &p,
+            None,
+            &ctx(2, 11, 2),
+            &[declare(1, &ids)],
+            PalwBlockWorkV3::None,
+            &[],
+            false,
+            true,
+        )
+        .expect_err("three do not");
+        assert!(
+            matches!(
+                err,
+                PalwStateV2Error::CapabilityExposureUnaffordable { classes, price, collateral, .. }
+                    if classes == 3 && price == 3 * PALW_CAPABILITY_EXPOSURE_SOMPI as u128 && collateral == room
+            ),
+            "the ceiling must refuse by name, got {err}"
+        );
+    }
+
+    /// **SA-4: a `Retiring` bond may not declare**, and retirement releases what was declared.
+    ///
+    /// Two halves of one rule: collateral on its way out cannot back a new promise, and it must
+    /// not be held against an old one the draw will never call on (a retiring bond is already
+    /// unseatable — `palw_bond_may_take_work_v2` refuses a non-Active status).
+    #[test]
+    fn a_retiring_bond_may_not_declare_and_retirement_releases_what_it_declared() {
+        let (state, p, ids) = chain_with_classes(2, 1_000_000);
+        let bond = bond_key(1);
+
+        let (declared, ..) =
+            apply_palw_transition_v6(&state, &p, None, &ctx(2, 11, 2), &[declare(1, &ids)], PalwBlockWorkV3::None, &[], false, true)
+                .expect("an active bond declares");
+        assert_eq!(palw_bond_capability_exposure_v1(declared.bond(&bond).unwrap()), 2 * PALW_CAPABILITY_EXPOSURE_SOMPI as u128);
+
+        let retire = PalwConsensusObjectV2::BondRetireRequested { bond, signature: vec![1] };
+        let (retired, ..) =
+            apply_palw_transition_v6(&declared, &p, None, &ctx(3, 12, 3), &[retire], PalwBlockWorkV3::None, &[], false, true)
+                .expect("the bond retires");
+        let record = retired.bond(&bond).expect("a retiring bond is still a row");
+        assert!(matches!(record.status, PalwBondStatusV2::Retiring { .. }));
+        assert!(record.capable_classes.is_empty(), "retirement drops the declaration");
+        assert_eq!(palw_bond_capability_exposure_v1(record), 0, "so its reservation is released");
+
+        let err = apply_palw_transition_v6(
+            &retired,
+            &p,
+            None,
+            &ctx(4, 13, 4),
+            &[declare(1, &ids[..1])],
+            PalwBlockWorkV3::None,
+            &[],
+            false,
+            true,
+        )
+        .expect_err("a retiring bond may not declare");
+        assert!(
+            matches!(err, PalwStateV2Error::CapabilityDeclarationWhileRetiring(b) if b == bond),
+            "SA-4 must refuse by name, got {err}"
+        );
+    }
+
+    /// **The fence off is byte-identical.** Every rule above is refused past the fence and
+    /// admitted before it, and the state the un-fenced fold produces is the state this ruleset
+    /// produced before the amendment existed — asserted on the ROOT, which is the only equality
+    /// two nodes can disagree over.
+    #[test]
+    fn with_the_capability_fence_off_the_amendment_changes_nothing() {
+        let (state, p, ids) = chain_with_classes(PALW_MAX_CAPABLE_CLASSES as u64 + 1, PALW_CAPABILITY_EXPOSURE_SOMPI);
+        // Seventeen classes on a bond with room for exactly one: SA-1's bound and SA-2's price
+        // both refuse this past the fence, and neither exists before it.
+        let over = declare(1, &ids);
+
+        let fenced_off = apply_palw_transition_v6(
+            &state,
+            &p,
+            None,
+            &ctx(2, 11, 2),
+            std::slice::from_ref(&over),
+            PalwBlockWorkV3::None,
+            &[],
+            false,
+            false,
+        )
+        .expect("with the fence off there is no bound and no price");
+        let legacy = apply_palw_transition_v2(&state, &p, &ctx(2, 11, 2), std::slice::from_ref(&over), None)
+            .expect("and the pre-amendment face admits it too");
+        assert_eq!(fenced_off.0.state_root(), legacy.0.state_root(), "fence off is the transition that predates the amendment");
+        assert_eq!(fenced_off.1, legacy.1, "including the delta, entry for entry");
+
+        assert!(
+            apply_palw_transition_v6(&state, &p, None, &ctx(2, 11, 2), &[over], PalwBlockWorkV3::None, &[], false, true).is_err(),
+            "and the only thing that changed is the fence"
+        );
+    }
+
+    /// **SA-3: an accepted claim is what records production**, and it is recorded in
+    /// `capabilities` — the collection this ruleset has rooted and carried since PR-03 with no
+    /// writer, whose record is exactly `(class_id, bond, issued_daa)`.
+    ///
+    /// Also pins the fence-off half: before the fence nothing is written at all, so no golden
+    /// state root moves.
+    #[test]
+    fn an_accepted_claim_records_the_bonds_production_on_its_class() {
+        let p = params();
+        let (state, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &p, &ctx(1, 10, 1), &register_class_and_bond(), None)
+            .expect("boots");
+        let bond = bond_key(1);
+        let class = h64(1);
+        assert!(!palw_bond_produced_on_class_v1(&state, &bond, &class), "nothing has been produced yet");
+
+        let env = attempt(40, 1);
+        let (off, _) = apply_palw_transition_v2(&state, &p, &ctx(2, 11, 2), &[], Some(&env)).expect("an attempt lands");
+        assert!(!palw_bond_produced_on_class_v1(&off, &bond, &class), "the fence is off, so nothing is recorded");
+
+        let (on, ..) =
+            apply_palw_transition_v6(&state, &p, None, &ctx(2, 11, 2), &[], PalwBlockWorkV3::Attempt(&env), &[], false, true)
+                .expect("the same attempt lands past the fence");
+        assert!(palw_bond_produced_on_class_v1(&on, &bond, &class), "and the production fact is on the chain");
+        let fact = on.capability_fact(&palw_capability_fact_key_v1(&class, &bond)).expect("the row exists");
+        assert_eq!(fact.class_id, class);
+        assert_eq!(fact.bond, bond);
+        assert_eq!(fact.issued_daa, 11, "stamped at the block that accepted the claim");
+        on.assert_internal_consistency(&p).expect("the production facts do not disturb the ledgers");
     }
 
     /// **Decision 5: zero production for the window returns the whole share, frees the collateral,

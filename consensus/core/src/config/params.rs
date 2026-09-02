@@ -683,6 +683,43 @@ pub struct Params {
     /// activation.
     pub palw_inactivity_leak: Option<PalwInactivityLeakV1>,
 
+    /// **ADR-0071 security amendment (SA-1..SA-4) — a capability declaration is bounded, priced
+    /// and proven.** `None` on every shipped preset, so the behaviour is byte-identical to not
+    /// having the field at all.
+    ///
+    /// Past `activation` four rules arm together, because each is unsound without the others:
+    ///
+    /// * **SA-1** `capable_classes` may name at most
+    ///   [`crate::palw_state_v2::PALW_MAX_CAPABLE_CLASSES`] classes, and a declaration REPLACES
+    ///   the set rather than growing it. The set is hashed into `state_root`, so an unbounded
+    ///   declaration is a state-growth lever priced only by transaction mass.
+    /// * **SA-2** each declared class reserves
+    ///   [`crate::palw_state_v2::PALW_CAPABILITY_EXPOSURE_SOMPI`] on the bond's exposure — the
+    ///   ADR-0056 Decision 3 shape: reserved, never burned, released when the class is dropped by
+    ///   a replacing declaration or the bond retires.
+    /// * **SA-3** a seat is drawn for class `C` only after a POSITIVE chain fact — an accepted
+    ///   attempt or free-prompt claim on `C` naming that bond — unless `C` is a genesis class.
+    ///   Silence is still never judged: a bond that declared and never produced is simply not
+    ///   drawn, not charged and not convicted (ADR-0065 D4 stands).
+    /// * **SA-4** a declaration is refused for a `Retiring` bond.
+    ///
+    /// **A bare fence with no companion value, deliberately** — the bound and the price are
+    /// constants in `palw_state_v2`, so there is no duration beside this height for
+    /// [`Self::consensus_identity_id`] to normalise away (the `palw_bond_maturity` hazard).
+    ///
+    /// **TOP LEVEL, for the `palw_unavailable_abstains` reason**: this rule must be able to reach
+    /// a LIVE network, and a fence inside the V2 bundle moves `palw_ruleset_id_v2`, which
+    /// `for_each_fence` never descends into — so every old/new pair would fail the handshake
+    /// outright instead of peering with a warning.
+    ///
+    /// **The liveness trap it must not walk into.** SA-3 narrows the panel draw, and a short draw
+    /// is not a smaller panel — it is `InsufficientEligibleBonds`, so the claim never binds and
+    /// voids at `BindTimeout` with its escrow burned. The shipped genesis registry has zero slack
+    /// by construction, and what keeps it drawable past this fence is the genesis-class exemption:
+    /// `the_shipped_registry_still_draws_a_full_panel_with_the_capability_fence_armed` is the
+    /// assertion, not a deployment note.
+    pub palw_capability_bound: Option<ForkActivation>,
+
     /// ADR-0042 Decision 1 (PR-10): the ONE PALW switch on the V2 lineage. `Disabled` on every
     /// shipped preset. A network is in exactly one mode; `ConsensusV2` carries the whole atomic
     /// ruleset and is validated at construction ([`Params::validate_palw_v2`]) — including the
@@ -1366,6 +1403,10 @@ impl Params {
         if self.palw_inactivity_leak.is_some_and(|l| l.activation == ForkActivation::never()) {
             self.palw_inactivity_leak = None;
         }
+        // ADR-0071 SA-1..SA-4, a bare fence: same collapse, same reason as D2 above.
+        if self.palw_capability_bound == Some(ForkActivation::never()) {
+            self.palw_capability_bound = None;
+        }
         let Some(dns) = self.dns_params.as_mut() else {
             return;
         };
@@ -1436,6 +1477,22 @@ impl Params {
     pub fn palw_attempt_work_fence(&self) -> Option<ForkActivation> {
         match (&self.palw_consensus_mode, self.palw_attempt_work) {
             (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(w)) => Some(w.activation),
+            _ => None,
+        }
+    }
+
+    /// **Is ADR-0071's capability bound in force at `daa_score`?** (SA-1..SA-4.)
+    pub fn palw_capability_bound_at(&self, daa_score: u64) -> bool {
+        self.palw_capability_bound_fence().is_some_and(|f| f.is_active(daa_score))
+    }
+
+    /// The capability-bound fence **with the mode condition already folded in** — `Some` only on a
+    /// `ConsensusV2` network that has armed it, for the same one-question-one-answer reason as
+    /// [`Self::palw_heartbeat_lane_fence`]: `capable_classes`, the claim lane and the panel draw
+    /// exist only under `ConsensusV2`, so on any other network there is nothing this rule bounds.
+    pub fn palw_capability_bound_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_capability_bound) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(f)) => Some(f),
             _ => None,
         }
     }
@@ -1541,6 +1598,7 @@ impl Params {
             palw_heartbeat,
             palw_attempt_work,
             palw_inactivity_leak,
+            palw_capability_bound,
             // The V2 bundle's fences are inside `palw_ruleset_id_v2` — see the doc block.
             palw_consensus_mode: _,
             pow_blake2b_sha3_activation,
@@ -1645,6 +1703,15 @@ impl Params {
         }
         match palw_inactivity_leak.as_mut() {
             Some(leak) => fork(&mut leak.activation, visit),
+            None => {
+                absent = u64::MAX;
+                visit(&mut absent);
+            }
+        }
+        // ADR-0071 SA-1..SA-4. A pure fence with no duration beside it, so visiting it is safe:
+        // the identity visitor normalises a height, and a height is all this field carries.
+        match palw_capability_bound.as_mut() {
+            Some(activation) => fork(activation, visit),
             None => {
                 absent = u64::MAX;
                 visit(&mut absent);
@@ -1833,6 +1900,7 @@ impl Params {
             palw_heartbeat,
             palw_attempt_work,
             palw_inactivity_leak,
+            palw_capability_bound,
             palw_consensus_mode,
             pow_blake2b_sha3_activation,
             pow_palw_activation,
@@ -1972,6 +2040,14 @@ impl Params {
         // ADR-0065 D2, Some-only like its siblings.
         if let Some(activation) = palw_frontier_provenance {
             h.write(b"palw_frontier_provenance");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // ADR-0071 SA-1..SA-4, Some-only for the ADR-0065 D4 reason: an unset fence writes
+        // nothing, so every shipped preset fingerprints byte-identically to before the field
+        // existed. The bound and the price are constants rather than fields beside the fence, so
+        // there is no companion value to drag into the identity (the D1 hazard).
+        if let Some(activation) = palw_capability_bound {
+            h.write(b"palw_capability_bound");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0066 Decisions 1 and 4: Some-only, so every preset that leaves them unset
@@ -2279,6 +2355,7 @@ impl Params {
             palw_heartbeat: self.palw_heartbeat,
             palw_attempt_work: self.palw_attempt_work,
             palw_inactivity_leak: self.palw_inactivity_leak,
+            palw_capability_bound: self.palw_capability_bound,
             palw_consensus_mode: self.palw_consensus_mode.clone(),
             // kaspa-pq PoW algo activation is consensus-fixed, never runtime-overridable.
             pow_blake2b_sha3_activation: self.pow_blake2b_sha3_activation,
@@ -3187,6 +3264,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_heartbeat: None,
     palw_attempt_work: None,
     palw_inactivity_leak: None,
+    palw_capability_bound: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: inert on mainnet until its own fork ADR schedules it.
@@ -3319,6 +3397,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_heartbeat: None,
     palw_attempt_work: None,
     palw_inactivity_leak: None,
+    palw_capability_bound: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: DISABLED on the public preset (2026-08-12). The Ollama flavor (algo_id = 5)
@@ -3433,6 +3512,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_heartbeat: None,
     palw_attempt_work: None,
     palw_inactivity_leak: None,
+    palw_capability_bound: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // PALW LLM PoW: simnet keeps instant local kHeavyHash (simulation/tests must not need a model).
@@ -6858,6 +6938,7 @@ pub const DEVNET_PARAMS: Params = Params {
         ticket_bucket_log2: crate::palw_attempt_v2::PALW_TICKET_NONCE_BUCKET_LOG2,
     }),
     palw_inactivity_leak: None,
+    palw_capability_bound: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // **Devnet is the ADR-0068 drill network on this branch: ConsensusV2, so no V1 PALW
@@ -7707,6 +7788,86 @@ mod consensus_params_id_tests {
         // The preset it is assembled from stays dormant: arming is the assembly's decision, which
         // is what keeps `for_each_fence` able to reach it on a running network.
         assert!(MAINNET_PARAMS.palw_unavailable_abstains.is_none(), "the raw preset is untouched");
+    }
+
+    /// **ADR-0071 SA-1..SA-4's fence, held to the D4 discipline exactly.**
+    ///
+    /// Four properties, and each one is a way this could have shipped wrong: every preset leaves
+    /// it dormant so no shipped fingerprint moves; scheduling it for a future height keeps old and
+    /// new builds peers (which is what the TOP-LEVEL placement buys, and what a bundle placement
+    /// would have taken away); arming it at genesis is a real rule difference and separates
+    /// identities; and `Some(never())` is absence.
+    #[test]
+    fn the_capability_bound_fence_separates_networks_only_when_it_is_in_force() {
+        for (name, preset) in
+            [("mainnet", MAINNET_PARAMS), ("testnet", TESTNET_PARAMS), ("simnet", SIMNET_PARAMS), ("devnet", DEVNET_PARAMS)]
+        {
+            assert!(preset.palw_capability_bound.is_none(), "{name} must leave ADR-0071's capability bound dormant");
+        }
+        assert!(
+            palw_rc_shipped_params().palw_capability_bound.is_none(),
+            "and so must the RC assembly — SA-3 narrows the panel draw, so arming it is a measured decision and not a default"
+        );
+
+        let shipped = MAINNET_PARAMS;
+        let mut armed = MAINNET_PARAMS;
+        armed.palw_capability_bound = Some(ForkActivation::new(9_000_000));
+        assert_eq!(
+            shipped.consensus_identity_id(),
+            armed.consensus_identity_id(),
+            "scheduling it for a future height must keep old and new builds peers — the whole reason it is not in the V2 bundle"
+        );
+        assert_ne!(
+            shipped.consensus_params_id(),
+            armed.consensus_params_id(),
+            "…while still being a visible commitment: a rule change nobody can observe in the fingerprint is how two builds fork \
+             in silence"
+        );
+
+        let mut at_genesis = MAINNET_PARAMS;
+        at_genesis.palw_capability_bound = Some(ForkActivation::always());
+        assert_ne!(
+            shipped.consensus_identity_id(),
+            at_genesis.consensus_identity_id(),
+            "in force from block 1 on one side is a rule difference — the two disagree about which bonds may be seated"
+        );
+
+        let mut never_armed = MAINNET_PARAMS;
+        never_armed.palw_capability_bound = Some(ForkActivation::never());
+        assert_eq!(
+            shipped.consensus_identity_id(),
+            never_armed.consensus_identity_id(),
+            "Some(never()) is absence, or the collapse in normalize_values_a_scheduled_fence_drags_with_it is gone"
+        );
+
+        // Independent of its neighbours: arming one must not be readable as arming the other.
+        let mut d4 = MAINNET_PARAMS;
+        d4.palw_unavailable_abstains = Some(ForkActivation::always());
+        assert_ne!(
+            at_genesis.consensus_params_id(),
+            d4.consensus_params_id(),
+            "the capability bound and D4 are different rules and must fingerprint differently"
+        );
+    }
+
+    /// **The mode condition is folded in once**, so the three sites that ask (the fold, the
+    /// acceptance layer, the panel assembler) cannot each remember it differently. `capable_classes`
+    /// and the claim lane exist only under `ConsensusV2`; on a hash network there is nothing for
+    /// this rule to bound, so an armed fence there must read as off.
+    #[test]
+    fn the_capability_bound_needs_a_v2_network_to_mean_anything() {
+        let mut hash_network = MAINNET_PARAMS;
+        hash_network.palw_capability_bound = Some(ForkActivation::always());
+        assert!(
+            !hash_network.palw_capability_bound_at(0),
+            "a hash-only network has no capability declarations, so the fence must resolve off however it is set"
+        );
+
+        let mut v2 = palw_rc_shipped_params();
+        assert!(!v2.palw_capability_bound_at(0), "the shipped V2 assembly leaves it off");
+        v2.palw_capability_bound = Some(ForkActivation::new(1_000));
+        assert!(!v2.palw_capability_bound_at(999), "before the height");
+        assert!(v2.palw_capability_bound_at(1_000), "and from it");
     }
 
     #[test]
