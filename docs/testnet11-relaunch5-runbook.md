@@ -158,11 +158,16 @@ node announces `d38abe44…` before starting the next host.
 * **Cadence converging**: 96 → 5 blocks/min in 22 min, difficulty +67 % in 4 min, same shape as the
   revert build. Not at target inside the window; re-sample at ~02:30.
 * **QWEN36**: first block 02:04:17, 41 min after its producer started (33 GiB paged from disk).
-* **A16 — the point of this deploy — UNVERIFIED**: seat2 logged **zero** refusals on the re-pinned
-  root (the old build refused within seconds), but it was **OOM-killed at 02:00:27** (anon-rss
-  13.8 GB, C's 4 GB swap 100 % full) while mapping the 33 GiB Qwen3.6 artifact a SECOND time — once
-  for the producer role, once for the panel role — before its producer loop ever ran. It restarted
-  into a persisted candidate-review. So the root fix is not refuted and not demonstrated.
+* **A16 — the point of this deploy — VERIFIED at 02:19:58**, after a detour: seat2 logged **zero**
+  refusals on the re-pinned root (the old build refused within seconds), but its first instance was
+  **OOM-killed at 02:00:27** (anon-rss 13.8 GB, C's 4 GB swap 100 % full) while mapping the 33 GiB
+  Qwen3.6 artifact a SECOND time — once for the producer role, once for the panel role. The restart
+  came up in a persisted candidate-review ("an IBD left it on a chain it could not vouch for"),
+  finished IBD at 02:13:09, printed no floor ticks at all, and then resolved on its own: bond 2's
+  producer started 02:13:05 and **produced block #1 `f6d1f72b…` at 02:19:58**, which ibm node0,
+  ibm node1 and the .113 public node all **accepted via relay at 02:21:06**. The genesis card's A16
+  row now names the root the court-capable graph-v2 registration computes; the two-mappings defect
+  (`c00faa48…`, ADR-0071 §5 record) is closed on the live chain.
 * Host C still cannot hold seat2 + seat3 (~14 GB + ~11 GB peaks on 24 GB); .113 has no margin
   (22.9 / 24.6 GB, node 10.3 + seat4 11.5 GB, no swap).
 
