@@ -112,6 +112,8 @@ Authoritative design & spec live under [`docs/`](docs/):
 - [Spec — `docs/kaspa-pq-spec.md`](docs/kaspa-pq-spec.md)
 - [Verification runbook — `docs/kaspa-pq-mldsa87-verification-runbook.md`](docs/kaspa-pq-mldsa87-verification-runbook.md)
 - [Validator runbook — `docs/validator-runbook.md`](docs/validator-runbook.md)
+- [PALW provenance map — `docs/palw-registry-map.md`](docs/palw-registry-map.md) — **where the model registry, the artifact hash, the runtime registry, the receipt, the output root, the verification, the metering and the capability profile already are**, field by field, plus the layers that are refused and why (ADR-0079 §7 / R-09). Read it before proposing a provenance layer.
+- [ADR index — `docs/adr/README.md`](docs/adr/README.md) (what governs, and what was reversed)
 
 **Scope of PQ claims** (per the design doc): "tx authorization uses ML-DSA-87", "secp256k1 signing disabled in PQ consensus mode", "64-byte BLAKE2b-512 consensus identity". Transport-layer (network) traffic is **not** PQ unless an ML-KEM hybrid is enabled.
 
