@@ -688,15 +688,44 @@ run_tier() {
   # free-prompt worker, so an outside operator's route is the one this drill takes.
   # -------------------------------------------------------------------------------------------
   step "stage 2 [$tag] — registering $model_id from its artifact"
-  if ! MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" --devnet --appdir="$WORK_DIR/reg-$tag" \
+  # **The registering node does not exit when the registration lands, and waiting for it to exit is
+  # how this drill spent two hours on 2026-09-03 watching a node follow a chain.** `kaspad` is a
+  # daemon: the panel marks `class_registration_done` and keeps validating. So run it in the
+  # background, watch the chain-side sentence the panel prints when the object is IN a block, and
+  # take the node down ourselves. A timeout here is a FAILURE with the log, never a pass.
+  MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" --devnet --appdir="$WORK_DIR/reg-$tag" \
         --rpclisten-borsh=127.0.0.1:$((17900 + tier_index)) --nogrpc --nodnsseed --disable-upnp \
         --connect=127.0.0.1:16510 --utxoindex \
         --palw-register-class="$model_id" --palw-class-artifact="$artifact" \
         --palw-producer-key="$WORK_DIR/keys/bond-0.seed" --palw-producer-pay-address="${ADDRS[0]}" \
         --palw-fee-outpoint="$PREMINE_TXID:$((MAIN_PREMINE_INDEX + 1))" \
-        >"$WORK_DIR/register-$tag.log" 2>&1; then
+        >"$WORK_DIR/register-$tag.log" 2>&1 &
+  local reg_pid=$!
+  local reg_deadline=$((SECONDS + ${REGISTER_WAIT:-900}))
+  local reg_state="timeout"
+  while [ $SECONDS -lt $reg_deadline ]; do
+    if ! kill -0 "$reg_pid" 2>/dev/null; then reg_state="died"; break; fi
+    # The panel says this only after the object is in a block the node accepted.
+    if grep -q "the class registration in tx .* is on the chain" "$WORK_DIR/register-$tag.log" 2>/dev/null; then
+      reg_state="landed"; break
+    fi
+    # The service refusing to start at all is the failure that used to be pure silence.
+    if grep -q "service not started" "$WORK_DIR/register-$tag.log" 2>/dev/null; then
+      reg_state="no-service"; break
+    fi
+    sleep 5
+  done
+  kill "$reg_pid" 2>/dev/null; wait "$reg_pid" 2>/dev/null || true
+  if [ "$reg_state" != "landed" ]; then
     tail -30 "$WORK_DIR/register-$tag.log" >&2
-    record "stage 2 [$tag] FAIL — registering $model_id was refused (see register-$tag.log)"
+    case "$reg_state" in
+      no-service)
+        record "stage 2 [$tag] FAIL — the node started and NO registration service was built. The flag was read by nobody: $(grep -m1 'service not started' "$WORK_DIR/register-$tag.log" | tail -c 160)" ;;
+      died)
+        record "stage 2 [$tag] FAIL — the registering node exited before the class reached a block (see register-$tag.log)" ;;
+      *)
+        record "stage 2 [$tag] FAIL — ${REGISTER_WAIT:-900}s passed and no block carried the class registration. The node was following the chain the whole time, which is what makes this failure look like patience (see register-$tag.log)" ;;
+    esac
     worse_than 1; return 0
   fi
   advance 2 || true
