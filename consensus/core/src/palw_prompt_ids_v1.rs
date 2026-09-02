@@ -258,14 +258,16 @@ impl<'a> PalwPromptIdWindowV1<'a> {
     /// windows existed.
     pub const EMPTY: PalwPromptIdWindowV1<'static> = PalwPromptIdWindowV1 { base: 0, ids: &[] };
 
-    /// The whole prompt, already checked against the job's flat commitment by the caller.
+    /// The whole prompt, already checked against the job's FLAT commitment by the caller.
     ///
-    /// `pub(crate)`-shaped in intent but public in fact, because the producer crates assemble
-    /// refutations: the check that licenses it is
-    /// [`crate::palw_v2::prompt_token_ids_hash_v2`] against
-    /// `job_context.prompt_token_ids_hash`, and the ONE caller in the court is
-    /// `check_execution_step_refutation_v1`, immediately after that comparison.
-    pub fn whole_checked(ids: &'a [u32]) -> Self {
+    /// **`pub(crate)`, which is what makes the type an invariant rather than a convention.** The
+    /// only PUBLIC way to obtain a window is [`verify_prompt_ids_opening_v1`], so no code outside
+    /// this crate can hand a gather ids that nothing authenticated. Inside the crate there is
+    /// exactly one caller — `check_execution_step_refutation_v1`, on the line after it compares
+    /// [`crate::palw_v2::prompt_token_ids_hash_v2`] of those ids against
+    /// `job_context.prompt_token_ids_hash` — and that comparison is the check this constructor's
+    /// name asserts has happened.
+    pub(crate) fn whole_checked(ids: &'a [u32]) -> Self {
         Self { base: 0, ids }
     }
 
