@@ -191,9 +191,79 @@ pool-slot ×11; zero on Ready nodes).
 * **Newcomer pages** `testnet11-node-operator.md` and `testnet11-join-mining.md` now carry
   `d38abe44…` / `08e9c8a4…`, the three live class ids, and every archived fingerprint a stale node
   might still announce (`61af5296`, on `main`).
-* **Cadence at 02:27**: floor #655 → #666 in six minutes, last gaps 33/34/38/13/88/33/8/16 s —
-  about 1.8 blocks/min against the 0.5/min target, still converging 45 min after the empty-chain
-  start (the previous build needed ~40 min to reach 95–119 s gaps). QWEN36: one block (02:04:17).
+* **Cadence 02:27 → 03:00**: floor #655 → #666 in six minutes at 02:27 (gaps 33/34/38/13/88/33/8/16 s),
+  then per five minutes 7, 6, 4, 4, 7, 4 blocks (02:34–02:59) = 64/hour against the 30/hour
+  target, last twelve gaps 39/124/68/45/49/8/39/73/31/39/146/75 s. Still converging 76 min after
+  the empty-chain start; the first ten minutes put ~500 blocks into the difficulty window and the
+  rate settles as they age out. QWEN36: two blocks (02:04:17, ~02:42). No condition here blocks
+  publication; the number to re-check later is the hourly floor count.
+
+### Relaunch 5d — announced, NOT deployed (fingerprint received 2026-09-02 ~03:10 CEST)
+
+The 5c chain runs untouched until the user calls the 5d flag day. The peer session building
+ADR-0072+D8 / ADR-0073 ① / ADR-0074 ③ reported, from the pin test on its rebased tree
+(`origin/main 4c98717a` + branch `palw-adr0073-fp-weight` at `9d038706`, 8 commits, **not
+pushed** — merge and push are the user's decision):
+
+| preset | 5d fingerprint (their tree, current tip) | superseded 03:10 value (tip `9d038706`) |
+|---|---|---|
+| testnet-11 | `e2b91c16a868440b5cd9d5af42ed88e15399b2181593818cc8bb94fd4e7f1eca` | `f6afe2e2…` |
+| devnet | `3f25063dd317688ee943ac9c1ba70fabe33b5c0fd20857f850d8774ba77ab013` | `fd041c40…` |
+
+The value moved once already (~03:35 CEST): review found the free-prompt lane never had
+admission item 8 (the exposure ceiling), which ADR-0074 Decision 5 makes 8× larger per claim, so
+it was landed in the transition before the swap; the state params gained a field, so the bundle
+bytes moved. Same genesis, same class roots, same A16 pin.
+
+What moves the value: free-prompt wire version 3 → 4 (job `prompt_mode`, commitment
+`work_leaves`), the bundle's free-prompt params (a quantum is ⅛ of the class's canonical job; CU
+weights gone), the certified free-prompt set (floor only), state version 15. Classes, artifact
+roots, the A16 inventory-root pin and the genesis hash (`08e9c8a4…`) are unchanged — so 5d is a
+fingerprint move on the same genesis, which the handshake still treats as a different network:
+every node wipes, exactly as 5c.
+
+**Pre-checks**: 03:20 CEST on tip `9d038706` — pin test ok, `f6afe2e2…` / `fd041c40…`, A16 pin
+present, `a16_root_probe` green (superseded). 03:45 CEST on tip `697f1d0c` ("admission item 8 reaches the free-prompt lane",
+parent `9d038706`) — pin test ok, `e2b91c16…` / `3f25063d…`, A16 pin present, `a16_root_probe`
+green. 03:55 CEST on tip `85d3b547` (test-only — both hunks inside in-file test modules of `misaka-palw-base0/src/backend.rs` and `misaka-palw-sdk/src/sdk.rs`, fixture collateral 1,000 → 100,000 / 10,000) — pin test ok, pins unchanged. Step (2)
+below is satisfied only for the exact commit the user pushes.
+
+**5d go/no-go gate** (all three, in order): (1) the user merges/pushes the tree and says when;
+(2) this session re-derives the fingerprint from the pushed commit in an isolated worktree and it
+equals the value above; (3) the stop-ALL → archive → rotate the four per-genesis stores → install
+→ per-host start order below is run as one window. Nobody "restarts everything".
+
+### A16 keeps producing — 03:20 CEST
+
+seat2 (bond 2, class `71bbb755…`) produced blocks #1–#8 at 02:19:58, 02:25:55, 02:32:53, 02:38:44,
+02:50:52, 02:58:00, 03:04:32, 03:12:00 — one every 6–8 minutes, zero refusals. The only warnings
+since its producer started are five P2P flow timeouts (`SendPingsFlow` / `HandleRelayInvsFlow`,
+120 s, to .113 and ibm) — the signature of a process that stalls while swapping: seat2 holds
+13.7 GB resident with C's swap at 12.5 / 20 GB in use (host available 6.9 GB), the double artifact
+mapping's cost until the code follow-up lands. No OOM kill since 02:01. Watch item, not a blocker:
+if swap use keeps climbing, the fix is the mapping change, not a third role on host C.
+
+### Why the cadence takes hours, not minutes — measured 03:15 CEST, and what 5d can do about it
+
+The floor rate rose again after 03:00 (80–110 blocks/hour at 03:06–03:15 against 30) while the
+difficulty *eased* 3.5 % (bits mantissa 782,386 at blue 700 / 03:00 → 809,401 at blue 720 /
+03:14, after tightening 12.9× from blue 500 to 700). Not a class effect: the A16 block at blue
+643 carries bits 504,996,465 — the same window-derived target as its floor neighbours, so LLM
+blocks do not pull the window average. It is the start burst meeting the difficulty formula:
+`new_target = average_target(window) × (max_ts − min_ts) / (120 s × N)` over a 264-block window
+(`..TESTNET_PARAMS`, sample rate 1, span-based). The first ten minutes put ~500 blocks one second
+apart into the chain because genesis bits `0x200ccccc` are ~100× too easy for one floor producer.
+While those blocks exit the window, `min_ts` advances ~1 s per exiting block and `max_ts` ~45 s per
+new block, so the span grows faster than wall-clock and the target loosens — the 03:00–03:15
+easing. The burst is fully out at block ~764 (~03:40); from there the span grows at the real rate
+and the target tightens geometrically toward 120 s over roughly one window (264 blocks, several
+hours at the current rate). Nothing here is a defect and nothing was touched.
+
+For 5d the same start will produce the same hours-long settle unless one of these is chosen
+(the user's call, none taken): (a) accept it; (b) re-mint genesis `bits` harder — moves the
+genesis hash, i.e. a real re-genesis, not a fingerprint move; (c) hold the floor producer back at
+start (start it throttled, or only once node0's P2P is open) so the burst is small — the revert
+build reached 95–119 s gaps in ~40 min with a smaller burst.
 
 ### Four stores are per-genesis and must be rotated at every regenesis — one was missed today
 

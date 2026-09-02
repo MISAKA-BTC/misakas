@@ -347,6 +347,27 @@ impl PalwClassSdk {
         paths: &[std::path::PathBuf],
         bound_bytes: u64,
     ) -> (Vec<PalwLoadedArtifactV1>, Vec<(std::path::PathBuf, String)>) {
+        self.load_artifacts_bounded_with_v1(paths, bound_bytes, |path| self.load_artifact(path))
+    }
+
+    /// [`Self::load_artifacts_bounded_v1`] with "load this path" supplied by the caller.
+    ///
+    /// The bound — its order, its arithmetic, its message — stays one spelling here; what changes
+    /// is who answers for a path the bound admits. A node whose two duties are handed the same
+    /// list answers from the holding it already has before it maps anything (kaspad's
+    /// `load_class_holdings_v1`: each duty loading the list for itself was two mappings and two
+    /// root passes over one 33 GiB file), and a plain consumer hands in [`Self::load_artifact`].
+    /// `load` is asked only for paths the bound admits, in the operator's order, and its refusal
+    /// is carried into the skipped list by name exactly like the bound's own.
+    pub fn load_artifacts_bounded_with_v1<F>(
+        &self,
+        paths: &[std::path::PathBuf],
+        bound_bytes: u64,
+        mut load: F,
+    ) -> (Vec<PalwLoadedArtifactV1>, Vec<(std::path::PathBuf, String)>)
+    where
+        F: FnMut(&Path) -> Result<PalwLoadedArtifactV1, String>,
+    {
         let mut held = Vec::new();
         let mut skipped = Vec::new();
         let mut bytes: u64 = 0;
@@ -363,7 +384,7 @@ impl PalwClassSdk {
                 ));
                 continue;
             }
-            match self.load_artifact(path) {
+            match load(path) {
                 Ok(holding) => {
                     bytes = bytes.saturating_add(size);
                     held.push(holding);
@@ -1221,5 +1242,36 @@ mod revision_row_tests {
         assert_eq!(base_model_id("ModelM"), "ModelM");
         assert_eq!(base_model_id("ModelM/graph-vNext"), "ModelM/graph-vNext");
         assert_eq!(base_model_id("/graph-v2"), "/graph-v2");
+    }
+
+    /// **The bound decides before the loader is asked, and the loader is asked once per admitted
+    /// path.** A caller that answers a path from something it already holds — the node's
+    /// per-process holdings — relies on exactly that: a path past the bound is skipped by name and
+    /// never loaded, a loader's refusal is carried by name, and nothing is asked twice.
+    #[test]
+    fn the_bounded_loader_asks_its_loader_once_per_admitted_path() {
+        let stamp = std::process::id();
+        let small = std::env::temp_dir().join(format!("misaka-sdk-bound-small-{stamp}"));
+        let large = std::env::temp_dir().join(format!("misaka-sdk-bound-large-{stamp}"));
+        let broken = std::env::temp_dir().join(format!("misaka-sdk-bound-broken-{stamp}"));
+        std::fs::write(&small, [0u8; 8]).expect("a small file");
+        std::fs::write(&large, [0u8; 16]).expect("a larger file");
+        std::fs::write(&broken, [0u8; 8]).expect("a file the loader refuses");
+        let asked = std::cell::RefCell::new(Vec::new());
+        let (held, skipped) = sdk().load_artifacts_bounded_with_v1(&[small.clone(), large.clone(), broken.clone()], 16, |path| {
+            asked.borrow_mut().push(path.to_path_buf());
+            if path == broken.as_path() { Err("refused by the loader".to_string()) } else { Ok(holding()) }
+        });
+        // 8 fits; 8 + 16 would pass 16 and is skipped before the loader hears of it; 8 + 8 fits
+        // and the loader refuses it.
+        assert_eq!(held.len(), 1);
+        assert_eq!(*asked.borrow(), vec![small.clone(), broken.clone()], "asked once per admitted path, in the operator's order");
+        assert_eq!(skipped.len(), 2);
+        assert_eq!(skipped[0].0, large);
+        assert!(skipped[0].1.contains("artifact bound"), "{}", skipped[0].1);
+        assert_eq!(skipped[1], (broken.clone(), "refused by the loader".to_string()));
+        for path in [small, large, broken] {
+            std::fs::remove_file(path).ok();
+        }
     }
 }

@@ -314,18 +314,15 @@ impl PalwPanelService {
                 None
             }
         };
-        // Same loader as the producer's — the SDK's, dispatched by each file's own magic — and
-        // the same rule: a file that will not load is warned about rather than skipped, because a
-        // seat silently unable to judge a class looks exactly like a seat whose material never
-        // arrived.
+        // Same loader as the producer's — the SDK's, dispatched by each file's own magic, through
+        // the process-wide holdings — so a seat that also produces shares the producer's mapping
+        // instead of mapping and hashing the same 33 GiB file a second time (testnet-11 Relaunch
+        // 5c: two passes, eight minutes apart, on a 24 GiB host). The same rule too: a file that
+        // will not load is warned about rather than skipped, because a seat silently unable to
+        // judge a class looks exactly like a seat whose material never arrived.
         let sdk = misaka_palw_sdk::PalwClassSdk::builtin_v1(config.court, consensus_config.params.net.to_string().into_bytes());
-        let (class_holdings, skipped) = sdk.load_artifacts_bounded_v1(&config.class_artifacts, config.class_cache_bytes);
-        for holding in &class_holdings {
-            info!("[{PALW_PANEL}] {}", holding.summary);
-        }
-        for (path, why) in &skipped {
-            warn!("[{PALW_PANEL}] class artifact {} is not held: {why}", path.display());
-        }
+        let class_holdings =
+            crate::palw_backends::load_class_holdings_v1(PALW_PANEL, &sdk, &config.class_artifacts, config.class_cache_bytes);
         Self {
             config,
             consensus_manager,
