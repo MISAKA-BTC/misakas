@@ -20,7 +20,8 @@
 //! kind's `golden.json`, plus SA-2's generated bound-exhausting corpus; the hashes go to a report
 //! — run it on two architectures and `--check` one report against the other; a transformer whose
 //! bytes differ is not a transformer under this ADR. It exits 3 on a cross-architecture
-//! divergence, 4 on a moved golden, and 5 on a declared ceiling that did not refuse.
+//! divergence, 4 on a moved golden, 5 on a declared ceiling that did not refuse, and 6 on a
+//! registered transformer the corpus never exercised.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -362,15 +363,36 @@ fn cmd_drill(mut args: VecDeque<String>) {
     let mut golden_mismatched: Vec<String> = Vec::new();
     let mut golden_unpinned: Vec<String> = Vec::new();
     let mut golden_checked = 0usize;
+    // Registered transformers the corpus never exercised — see the note where this is filled.
+    let mut uncovered: Vec<String> = Vec::new();
 
     for (name, k, grammar) in registry::transformer_names() {
+        // **A transformer is drilled over the corpus of its GRAMMAR when its kind has no
+        // directory of its own.** Two transformers can share one grammar and differ only in the
+        // kind they file under — `code/evm/v1` and `contract/evm/v1` are exactly that pair — and
+        // a corpus laid out by kind name then has no `contract/` directory at all. The lookup
+        // used to stop there: `corpus_answers` on a missing directory is an empty list, so
+        // `contract/evm/v1` produced no rows, no refusals and no unpinned keys, and the drill's
+        // own counters had nothing to say about the transformer it had silently skipped. The
+        // goldens for those rows were already in `corpus/code/golden.json`
+        // (`01-return-42.json#contract/evm/v1` and its two siblings) and were dead pins.
         let kind_name = kind::name(k).unwrap_or("unassigned").to_string();
-        let kind_dir = corpus.join(&kind_name);
-        let golden = goldens.entry(kind_name.clone()).or_insert_with(|| match std::fs::read(kind_dir.join("golden.json")) {
+        let mut dir_name = kind_name.clone();
+        let mut kind_dir = corpus.join(&dir_name);
+        if !kind_dir.is_dir() {
+            let by_grammar = grammar.split('/').next().unwrap_or(grammar).to_string();
+            if corpus.join(&by_grammar).is_dir() {
+                kind_dir = corpus.join(&by_grammar);
+                dir_name = by_grammar;
+            }
+        }
+        let golden = goldens.entry(dir_name.clone()).or_insert_with(|| match std::fs::read(kind_dir.join("golden.json")) {
             Ok(bytes) => serde_json::from_slice(&bytes)
                 .unwrap_or_else(|e| die(format!("{}: not a golden document: {e}", kind_dir.join("golden.json").display()))),
             Err(_) => serde_json::Value::Null,
         });
+        let kind_name = dir_name;
+        let before = rows.len() + refused.len();
         for file in corpus_answers(&kind_dir) {
             let answer = std::fs::read(&file).unwrap_or_else(|e| die(format!("{}: {e}", file.display())));
             let leaf = file.file_name().unwrap().to_string_lossy().into_owned();
@@ -442,6 +464,13 @@ fn cmd_drill(mut args: VecDeque<String>) {
                 }
             }
         }
+        // **A registered transformer the corpus never asked to run is not drilled.** X3 compares
+        // what two architectures produced; a transformer that produced nothing on both agrees
+        // with itself and is reported as held. That is how `contract/evm/v1` sat outside the
+        // drill while every count in the report looked healthy, so the drill now says so by name.
+        if rows.len() + refused.len() == before {
+            uncovered.push(format!("{name}: no corpus answer under {}", kind_dir.display()));
+        }
     }
 
     // ---- SA-2's bound-exhausting corpus, generated rather than stored -----------------------
@@ -500,6 +529,7 @@ fn cmd_drill(mut args: VecDeque<String>) {
             "mismatched": golden_mismatched,
             "unpinned": golden_unpinned,
         },
+        "uncovered": uncovered,
     });
     if let Some(path) = &report {
         std::fs::write(path, serde_json::to_vec_pretty(&doc).unwrap()).unwrap_or_else(|e| die(format!("{}: {e}", path.display())));
@@ -575,11 +605,12 @@ fn cmd_drill(mut args: VecDeque<String>) {
                 "golden_unpinned": golden_unpinned,
                 "bounds_enforced": bounds_rows.len(),
                 "bounds_not_enforced": unbounded,
+                "uncovered": uncovered,
                 "report": report.map(|p| p.display().to_string()),
-                "verdict": if golden_mismatched.is_empty() && unbounded.is_empty() {
-                    "the corpus reproduces its goldens on this architecture and every declared bound refused an over-bound answer"
+                "verdict": if golden_mismatched.is_empty() && unbounded.is_empty() && uncovered.is_empty() {
+                    "every registered transformer ran, the corpus reproduces its goldens on this architecture, and every declared bound refused an over-bound answer"
                 } else {
-                    "FAILS: see golden_mismatched / bounds_not_enforced"
+                    "FAILS: see golden_mismatched / bounds_not_enforced / uncovered"
                 },
             })
         );
@@ -589,6 +620,12 @@ fn cmd_drill(mut args: VecDeque<String>) {
     }
     if !unbounded.is_empty() && exit == 0 {
         exit = 5;
+    }
+    // 6, and not folded into one of the three above: "a transformer nobody drilled" is a
+    // different fact from "a golden moved" or "a ceiling did not refuse", and a caller that
+    // cannot tell them apart cannot act on either.
+    if !uncovered.is_empty() && exit == 0 {
+        exit = 6;
     }
     if exit != 0 {
         std::process::exit(exit);
