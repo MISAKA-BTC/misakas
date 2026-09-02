@@ -642,3 +642,60 @@ fn the_shipped_rc_ruleset_can_reach_the_dormant_free_prompt_retirement() {
          stranding is unreachable on this network"
     );
 }
+
+/// **Arming the fence does not REPAIR a chain that already stranded weight while it was dormant —
+/// measured, in every fence position, on the state a dormant retirement actually leaves.**
+///
+/// This is the whole reason `Params::validate_palw_v2` now refuses a SCHEDULED arming of
+/// `palw_uncertified_weightless` (genesis, or not at all). A rolling activation reads like a
+/// remedy — "arm it, it closes a live network-kill" — and it is not one:
+///
+///  * the stranded weight sits in `safe_weight`, and the claim that would re-derive it is gone,
+///    so there is nothing left for a repair to compute from;
+///  * `retired_safe_weight` was never credited, so `safe_ceiling` (which adds it to the live
+///    claims' sum) is *below* `safe_weight` — the armed `<=` bound refuses for the same reason
+///    the dormant equality does, not for a weaker one;
+///  * and crossing the activation height does not heal it either: the fold carries both scalars
+///    forward unchanged, so every state after the activation is refused exactly as the one
+///    before it was.
+///
+/// A node whose durable tip is such a state cannot start (`load_tip` → `CarriageInconsistent`)
+/// and therefore never reaches the activation height at all, which is why "schedule it and the
+/// rule fixes itself at height H" is not available. What repairs the chain is a state below the
+/// fence being written differently, and that moves roots already committed — i.e. a re-mint. The
+/// gate in `validate_palw_v2` is that sentence made unignorable.
+#[test]
+fn arming_the_fence_does_not_repair_a_chain_that_already_stranded_weight() {
+    use kaspa_consensus_core::palw_state_v2::{PalwBlockWorkV3, PalwStateV2Error};
+    let p = fp_params();
+    let (spent, claim_id) = fp_claim_with_two_spends(&p, false);
+
+    // The retirement happens BELOW the fence — the chain that is already running.
+    let stranded = work_step(&spent, &p, &ctx(8, 180, 8), &[], PalwBlockWorkV3::None, false);
+    assert!(stranded.claim(&claim_id).is_none(), "the claim retired — otherwise this test asserts nothing");
+    assert_eq!(stranded.safe_weight(), 40, "the spends' weight is stranded in the running total…");
+    assert_eq!(stranded.retired_safe_weight(), 0, "…with nothing booked to re-derive it from");
+
+    // Position 1 — dormant, the equality. Refused (this is the known limitation).
+    stranded.assert_internal_consistency_v2(&p, false).expect_err("dormant refuses the stranded state");
+
+    // Position 2 — the SAME state re-derived under the armed rule, which is what an activation
+    // height would do to it. Still refused, and by the same 40.
+    let armed = stranded
+        .assert_internal_consistency_v2(&p, true)
+        .expect_err("arming is not a repair: the armed bound refuses the stranded state too");
+    assert!(
+        matches!(armed, PalwStateV2Error::CarriageInconsistent(ref m)
+            if m.contains("safe_weight 40") && m.contains("retired total 0")),
+        "the armed refusal names the same stranded total the dormant one does: {armed}"
+    );
+
+    // Position 3 — carry the chain PAST the activation with the rule in force. The fold does not
+    // re-derive either scalar, so the state stays refused for the rest of the chain's life.
+    let past_activation = work_step(&stranded, &p, &ctx(9, 181, 9), &[], PalwBlockWorkV3::None, true);
+    assert_eq!(past_activation.safe_weight(), 40, "the fold carries the stranded total forward");
+    assert_eq!(past_activation.retired_safe_weight(), 0, "and books nothing retroactively — there is no claim left to book");
+    past_activation
+        .assert_internal_consistency_v2(&p, true)
+        .expect_err("a block accepted past the activation height inherits the refusal — the fence heals nothing behind it");
+}

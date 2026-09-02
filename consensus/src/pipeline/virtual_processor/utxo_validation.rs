@@ -1767,10 +1767,13 @@ impl VirtualStateProcessor {
             // `class_target` doc above gives — this constant is the line that has to change, and
             // `single_class_domain`'s own doc ("would be a LIE on a multi-class network") is the
             // other one.
-            weight_bearing: {
-                debug_assert!(share > 0, "a domain set cannot hold a zero share — PalwDifficultyDomainSetV1::validate refuses it");
-                true
-            },
+            // The impossible case REFUSES rather than panicking. An earlier draft wrote
+            // `debug_assert!(share > 0, ..)` here and handed back a constant `true`; this function
+            // runs inside block validation, so the day a real multi-class table makes the case
+            // reachable, an assert aborts every debug node at the same height, while `None` —
+            // which this function already means by "no facts here" — is a refusal the pipeline
+            // knows how to carry. See the helper's doc.
+            weight_bearing: kaspa_consensus_core::palw_facts::palw_v1_weight_bearing_or_refuse(share)?,
         })
     }
 

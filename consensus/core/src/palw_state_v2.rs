@@ -4141,6 +4141,15 @@ impl<'a> TransitionBuilder<'a> {
         // positions failed it: dormant the equality, armed the `<=` bound, because the stranded
         // weight pushes `safe_weight` ABOVE the ceiling rather than below it.
         //
+        // **Which is also why arming this fence is a repair only for retirements that have not
+        // happened yet.** Once the strand exists there is nothing left to re-derive it from, so no
+        // fence position accepts the state again and crossing the activation height changes
+        // neither scalar — measured in all three positions by
+        // `arming_the_fence_does_not_repair_a_chain_that_already_stranded_weight`. That is why
+        // `Params::validate_palw_v2` refuses an activation above genesis: a chain that has already
+        // stranded weight is repaired by a re-mint or not at all, and an operator must not be able
+        // to reach the wedged state by scheduling the rule that was supposed to prevent it.
+        //
         // It is fenced anyway, because `retired_safe_weight` is hashed into `state_root`
         // ([`PalwChainStateV2::state_root`]) and a block that retires a spent free-prompt claim
         // therefore roots differently with the repair than without. Dormant is the broken

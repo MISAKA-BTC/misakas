@@ -355,6 +355,27 @@ pub struct PalwClassFactsV1 {
     pub weight_bearing: bool,
 }
 
+/// **ADR-0069 Decision 7's answer on the V1 credit path — or a REFUSAL, never a panic.**
+///
+/// `Some(true)` for a class holding permille; `None` for a share of zero, which the caller
+/// propagates as "this block has no class facts here" (`ClassUnresolved`) — a refusal, which is
+/// strictly stronger than weightless and is the answer that path already gives for every other
+/// unanswerable question.
+///
+/// A zero share is unrepresentable today: `PalwDifficultyDomainSetV1::validate` returns
+/// `ZeroShare` for any set holding one, and the only set the V1 resolver builds is
+/// `single_class_domain`'s `{that_class: 1000‰}`. The first draft of the call site therefore wrote
+/// `debug_assert!(share > 0, ..)` and handed back a constant `true` — which is the wrong failure
+/// mode in the wrong file. That assert sits inside block validation: the day the surrounding
+/// redesign gives this path a real multi-class share table (the redesign its own comment invites),
+/// a zero share would abort every debug/CI node mid-validation at the same height, and this
+/// codebase has turned a wrong assumption into exactly that more than once. An unreachable branch
+/// costs one comparison; a panic in block validation costs the network. So the impossible case is
+/// spelled as the refusal it should be, and it is testable rather than merely asserted.
+pub fn palw_v1_weight_bearing_or_refuse(share_permille: u16) -> Option<bool> {
+    (share_permille > 0).then_some(true)
+}
+
 /// Where a block's class facts come from.
 ///
 /// A view rather than two bare `Option`s beside the class id, for the reason
@@ -2991,6 +3012,30 @@ mod resolver_tests {
                 weight_bearing: self.granted_from.is_some_and(|from| block_accepted_daa >= from),
             })
         }
+    }
+
+    /// **The V1 credit path's impossible case is a refusal, not a panic.**
+    ///
+    /// `palw_class_facts_for_block` (consensus/src/pipeline/virtual_processor/utxo_validation.rs)
+    /// builds its `weight_bearing` through this helper and propagates `None` with `?`. `None` is
+    /// `ClassUnresolved` there — the same answer the line above it already gives a block naming an
+    /// unregistered class — so a share the domain set is not supposed to be able to hold costs the
+    /// block, not the node. Replace the body with the `debug_assert!(share > 0, ..); Some(true)`
+    /// this had first and the zero case panics instead of answering, which is the whole point:
+    /// this function runs inside block validation.
+    #[test]
+    fn a_zero_share_refuses_rather_than_panicking_inside_block_validation() {
+        assert_eq!(
+            palw_v1_weight_bearing_or_refuse(0),
+            None,
+            "a zero share must yield `ClassUnresolved` — a refusal the pipeline carries — and must not abort validation"
+        );
+        assert_eq!(palw_v1_weight_bearing_or_refuse(1), Some(true), "one permille is a share, and a share bears weight");
+        assert_eq!(
+            palw_v1_weight_bearing_or_refuse(crate::palw_class_daa::PALW_CLASS_SHARE_DENOMINATOR),
+            Some(true),
+            "and so is the whole cadence — the only shape a V1 domain set can actually hold today"
+        );
     }
 
     /// The pwu the fixture class prices a block at when it bears weight — derived, never

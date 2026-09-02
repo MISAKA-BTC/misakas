@@ -731,6 +731,18 @@ pub struct Params {
     /// has to reach a live network by rolling deploy, and a fence inside the V2 bundle moves
     /// `palw_ruleset_id_v2` — which `for_each_fence` never descends into — so every old/new pair
     /// would fail the handshake outright instead of peering with a warning.
+    ///
+    /// **GENESIS-ONLY, and [`Self::validate_palw_v2`] refuses anything else.** The paragraph above
+    /// is why the fence is placed where it is; it is NOT permission to schedule one. Arming closes
+    /// the free-prompt stranding going FORWARD and repairs nothing behind it: the stranded weight
+    /// sits in `safe_weight` with its claim already dropped, so `safe_ceiling` is below it and the
+    /// armed bound refuses exactly as the dormant equality did; the fold carries both scalars past
+    /// the activation unchanged; and a node holding such a tip cannot start, so it never reaches
+    /// the activation height at all. Measured in all three positions by
+    /// `arming_the_fence_does_not_repair_a_chain_that_already_stranded_weight`. A chain that has
+    /// already retired a spent free-prompt claim below this fence is repaired by a re-mint or not
+    /// at all — so the only arming that is a remedy rather than a second failure is one at the
+    /// genesis of a fresh relaunch, and the validator makes that the only arming that starts.
     pub palw_uncertified_weightless: Option<ForkActivation>,
 
     /// ADR-0042 Decision 1 (PR-10): the ONE PALW switch on the V2 lineage. `Disabled` on every
@@ -966,6 +978,63 @@ impl Params {
 
     pub fn validate_palw_v2(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
         use crate::palw_mode_v2::{PalwConsensusMode, PalwModeV2Error};
+        // **ADR-0069 Decision 7 is armable AT GENESIS or not at all, and a scheduled height is
+        // refused here — on every lineage, before the mode is even looked at.**
+        //
+        // The fence carries a REPAIR as well as a rule (see the field's doc): past it,
+        // `retire_claim` books a retiring free-prompt claim's spent quanta into
+        // `retired_safe_weight` instead of stranding them in `safe_weight`. Arming it closes that
+        // hole going forward. It does not, and cannot, repair a chain that already stranded weight
+        // while the fence was dormant, and that asymmetry is the difference between a fence and a
+        // recovery path:
+        //
+        //  * the stranded weight is in `safe_weight` and the claim that would re-derive it has
+        //    been dropped, so there is nothing left at the activation height to compute a
+        //    correction FROM — `retired_safe_weight` was never credited, so `safe_ceiling` sits
+        //    BELOW `safe_weight` and the armed `<=` bound refuses for the same reason the dormant
+        //    equality does;
+        //  * crossing the activation does not heal it: the fold carries both scalars forward
+        //    untouched, so every later state inherits the refusal;
+        //  * and a node whose durable tip is such a state cannot start at all (`load_tip` →
+        //    `CarriageInconsistent`), so it never reaches the activation height to be healed by
+        //    it. The same is true of every peer importing that pruning-point snapshot.
+        //
+        // All three are measured, in all three positions, by
+        // `arming_the_fence_does_not_repair_a_chain_that_already_stranded_weight` (consensus/core/
+        // tests/palw_adr0069_d7_fold.rs). Repairing such a chain means writing a state BELOW the
+        // fence differently, which moves roots that are already committed — a re-mint, not an
+        // activation.
+        //
+        // So the only safe arming is one where no dormant history exists: genesis. ADR-0069 says
+        // that in prose; a sentence in an ADR is not a gate — this is the gate, in the same place
+        // and for the same reason as ADR-0065 D1's window check below. An operator who follows
+        // the ADR by scheduling a height gets a node that refuses to start, not a mesh that
+        // wedges one retirement later.
+        //
+        // `never()` is exempt because `Some(never())` is absence (it collapses to `None` in
+        // `normalize_values_a_scheduled_fence_drags_with_it`), and the comparison is against
+        // `genesis.daa_score` rather than 0 so a preset whose genesis does not start at zero is
+        // judged against its own first block.
+        //
+        // **What this gate does NOT have to catch**: an operator arming `always()` on a chain that
+        // is already running. Params carry no chain view, so it could not be detected here — and
+        // it does not need to be, because in force from block 1 is a RULE difference: it moves
+        // `consensus_identity_id` (pinned in
+        // `the_uncertified_weightless_fence_separates_networks_only_when_it_is_in_force`), so such
+        // a node is refused at the handshake by every peer on the running network instead of
+        // joining it and wedging one retirement later. A scheduled height is the dangerous one
+        // precisely because it does NOT move the identity — that is what the top-level placement
+        // buys, and it is why the refusal has to live here rather than in the fingerprint.
+        if let Some(activation) = self.palw_uncertified_weightless {
+            let armed = activation.daa_score();
+            if armed != ForkActivation::never().daa_score() && armed > self.genesis.daa_score {
+                return Err(PalwModeV2Error::Invalid(
+                    "palw_uncertified_weightless is armed above genesis: ADR-0069 Decision 7 carries the free-prompt \
+                     retirement repair, and arming it on a chain that may already have stranded weight while it was \
+                     dormant does not repair that chain — it is genesis-only, or dormant",
+                ));
+            }
+        }
         let PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode else {
             return Ok(());
         };
@@ -7757,9 +7826,12 @@ mod consensus_params_id_tests {
     /// Decision 7 changes fork choice: past it a block whose class holds no granted share
     /// contributes zero pwu to `safe` and `live`. Two builds that disagree about whether that rule
     /// is in force choose different tips from the same DAG, so the fence has to be visible in the
-    /// fingerprint — and, because it must reach a network that is already running by rolling
-    /// deploy, it has to be schedulable without splitting the mesh on deploy day. That pair is
-    /// what the first two assertions are.
+    /// fingerprint while leaving the dormant presets byte-identical. That pair is what the first
+    /// two assertions are.
+    ///
+    /// **What they are NOT is a licence to schedule one.** The fence also carries the free-prompt
+    /// retirement repair, which cannot heal a chain that already stranded weight, so the last loop
+    /// in this test pins the other half: armable at genesis, refused at every other height.
     ///
     /// The RC ruleset is checked as well as the raw preset. `palw_rc_shipped_params` is what
     /// testnet-11 actually runs, it arms ADR-0065 D4 from genesis, and a Decision 7 armed there by
@@ -7785,8 +7857,9 @@ mod consensus_params_id_tests {
         assert_eq!(
             shipped.consensus_identity_id(),
             scheduled.consensus_identity_id(),
-            "scheduling D7 ahead must keep old and new builds peers — it is a fork-choice rule and it has to reach a \
-             running network by rolling deploy"
+            "a fence not yet in force does not separate identities — the normalization property, pinned here even \
+             though `validate_palw_v2` now refuses to START a scheduled D7 (see the loop at the end of this test): \
+             the collapse is what keeps the DORMANT presets byte-identical, and it must not depend on the gate"
         );
         assert_ne!(
             shipped.consensus_params_id(),
@@ -7817,23 +7890,52 @@ mod consensus_params_id_tests {
         d2_and_d7.palw_frontier_provenance = Some(ForkActivation::always());
         assert_ne!(d2_and_d7.consensus_identity_id(), at_genesis.consensus_identity_id(), "two fences, two identities");
 
-        // **Armable on every shipped preset, at any height, with no precondition to satisfy** —
-        // D2's property, for D2's reason: the predicate is the granted share the chain already
-        // records, so there is no registry, duration or quantity behind it that a preset could
-        // fail to provide. A fence with no precondition is one whose only failure mode is being
-        // wired wrong, and this is the wiring.
+        // **Armable AT GENESIS on every shipped preset — and at no other height.**
+        //
+        // The earlier draft of this loop asserted the opposite ("D7 must be armable at any
+        // height"), on D2's reasoning: the predicate is the granted share the chain already
+        // records, so no preset can fail to provide a precondition. That is still true of the
+        // WEIGHT RULE and false of the fence as a whole, because the fence also carries the
+        // free-prompt retirement repair, and a repair has a precondition a schedule cannot meet:
+        // that no retirement has already happened under the broken arithmetic.
+        // `arming_the_fence_does_not_repair_a_chain_that_already_stranded_weight` measures all
+        // three positions — the armed re-derivation of a stranded state, the dormant one, and a
+        // block folded past the activation — and every one of them refuses. A scheduled arming is
+        // therefore not a remedy that arrives late; it is a remedy that never arrives, on a chain
+        // whose nodes are already refusing their own tips. So the configuration is refused at
+        // construction (`ConfigBuilder::build` panics), which is the only way "arm it at genesis,
+        // never as a rolling deploy" is a rule rather than a line in a runbook.
         for (name, base) in
             [("mainnet", MAINNET_PARAMS), ("testnet", TESTNET_PARAMS), ("simnet", SIMNET_PARAMS), ("devnet", DEVNET_PARAMS)]
         {
-            for height in [ForkActivation::always(), ForkActivation::new(1), ForkActivation::new(9_000_000)] {
-                let mut armed = base.clone();
-                armed.palw_uncertified_weightless = Some(height);
-                armed.validate_palw_v2().unwrap_or_else(|e| panic!("{name}: D7 must be armable at any height: {e}"));
+            let mut at_genesis = base.clone();
+            at_genesis.palw_uncertified_weightless = Some(ForkActivation::always());
+            at_genesis.validate_palw_v2().unwrap_or_else(|e| panic!("{name}: D7 must be armable at genesis: {e}"));
+
+            let mut dormant = base.clone();
+            dormant.palw_uncertified_weightless = Some(ForkActivation::never());
+            dormant.validate_palw_v2().unwrap_or_else(|e| panic!("{name}: `Some(never())` is absence and must start: {e}"));
+
+            for height in [ForkActivation::new(1), ForkActivation::new(9_000_000)] {
+                let mut scheduled_arm = base.clone();
+                scheduled_arm.palw_uncertified_weightless = Some(height);
+                let refused = scheduled_arm.validate_palw_v2().expect_err(&format!(
+                    "{name}: a scheduled D7 arming must refuse to start — it cannot repair the stranding it inherits"
+                ));
+                assert!(
+                    format!("{refused}").contains("genesis-only"),
+                    "{name}: the refusal must say what the operator may do instead: {refused}"
+                );
             }
         }
         let mut armed_rc = palw_rc_shipped_params();
         armed_rc.palw_uncertified_weightless = Some(ForkActivation::always());
         armed_rc.validate_palw_v2().expect("and on the V2 preset that actually runs the rule");
+        let mut scheduled_rc = palw_rc_shipped_params();
+        scheduled_rc.palw_uncertified_weightless = Some(ForkActivation::new(9_000_000));
+        scheduled_rc
+            .validate_palw_v2()
+            .expect_err("…and the preset testnet-11 runs is the one this matters on: no rolling arming there either");
     }
 
     /// **ADR-0065 D4's fence, in the same four positions.**

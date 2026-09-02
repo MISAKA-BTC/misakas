@@ -373,10 +373,15 @@ V1-credit fence carries exactly ONE registration, the function refuses any other
 `PalwClassDaaParamsV1::single_class_domain`, which builds `{that_class: 1000‰}` from its own
 argument, and `PalwDifficultyDomainSetV1::validate` refuses a zero share for ANY domain set
 (`ZeroShare`). So a share-0 entrant is not representable on that path at all. The mitigation there
-is structural, not a check; the code now says `true` with the reason rather than spelling a lookup
-that cannot fail. Making the V1 half bind needs a chain-point-resolved share table on the resolver
-path — which it does not have, and must not take from `load_tip` for the reason its own
-`class_target` doc gives — so it is a redesign, not a fenced edit. A fourth site, the court's
+is structural, not a check; the code now answers through
+`palw_facts::palw_v1_weight_bearing_or_refuse`, which yields `Some(true)` for a share and `None` —
+the same `ClassUnresolved` refusal the line above it gives an unregistered class — for the zero a
+domain set cannot hold. A first draft wrote `debug_assert!(share > 0, ..)` there instead: an assert
+inside block validation is a wrong assumption turned into every node aborting at one height, and
+this path already has a refusal for questions it cannot answer. Making the V1 half bind needs a
+chain-point-resolved share table on the resolver path — which it does not have, and must not take
+from `load_tip` for the reason its own `class_target` doc gives — so it is a redesign, not a fenced
+edit. A fourth site, the court's
 D3-3 opening-rung exemption in `sweep_court_deadlines`, asks the same predicate deliberately
 unfenced and now calls the helper too, so "one helper" is at least true where it is claimed.
 
@@ -403,8 +408,8 @@ this amount is EXACT — the free-prompt lane is not priced by Decision 7 at the
 re-derivation, so `per_quantum × |spent|` is the same expression on both sides and no share table is
 asked at either point. It is fenced with Decision 7 rather than shipped bare because
 `retired_safe_weight` is hashed into `palw_state_root`, so the repair moves the root of any block
-that retires a spent free-prompt claim. **Dormant, the hole is still open**, and that is the one
-exposure arming Decision 7 removes for free.
+that retires a spent free-prompt claim. **Dormant, the hole is still open**, and arming Decision 7
+closes it — for retirements that have not happened yet. See (v): it closes nothing behind itself.
 
 **(iv) What the armed bound is worth, and what it is not.** It stops a snapshot from claiming more
 safe weight than its own LIVE claims could have justified. It does not bound `retired_safe_weight`,
@@ -419,6 +424,26 @@ not carriage-against-rule. What stands behind an imported weight is the headers-
 for that child. Closing either hole needs the weight-bearing decision frozen on the claim and a
 certification field the share table can be checked against — both claim/class encoding changes,
 hence a `PALW_STATE_V2_VERSION` bump and a re-mint.
+
+**(v) Arming is a fix going forward and NOT a recovery, so the fence is genesis-only and the code
+refuses anything else.** A chain that retired a spent free-prompt claim while the fence was dormant
+carries the stranded weight in `safe_weight` with the claim that would re-derive it already gone.
+Arming later cannot repair that, and the reason is not a missing feature: `retired_safe_weight` was
+never credited, so `safe_ceiling` sits BELOW `safe_weight` and the armed `<=` bound refuses the
+state for the same arithmetic reason the dormant equality does; the fold carries both scalars past
+the activation untouched, so every later state inherits the refusal; and a node holding such a tip
+cannot start at all (`load_tip` → `CarriageInconsistent`), so it never reaches the activation height
+to be healed by it — nor can it fetch a healthy one, since the peers' pruning-point carriage carries
+the same scalars. All three positions are measured by
+`arming_the_fence_does_not_repair_a_chain_that_already_stranded_weight`
+(`consensus/core/tests/palw_adr0069_d7_fold.rs`). Repairing such a chain means writing a state BELOW
+the fence differently, which moves roots already committed — that is a re-mint, not an activation.
+Therefore: **arm `palw_uncertified_weightless` at the genesis of a fresh relaunch, or leave it
+dormant.** `Params::validate_palw_v2` refuses an activation above `genesis.daa_score` on every
+preset and every lineage, so a node configured with a rolling activation height does not start
+(`ConfigBuilder::build` panics) — an operator following this ADR cannot reach the wedged state by
+doing what it says. The cost of arming at genesis is stated in (ii) and (iv) and is paid for the
+network's whole life: the import-side identity is a bound, not an equality, from block 0.
 
 Two companions, so Decision 7 is not the only wall: **(a)** a `BondCapabilityDeclared` set is
 bounded and priced (ADR-0071's security amendment); **(b)** ADR-0076 §8's field is pinned to the
