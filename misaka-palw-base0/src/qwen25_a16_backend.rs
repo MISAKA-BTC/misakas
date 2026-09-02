@@ -20,7 +20,7 @@
 use crate::artifact::Base0ArtifactV1;
 use crate::engine_a16::{A16Cache, A16Engine, A16PlanErrorV1};
 use kaspa_consensus_core::palw_backend::{PalwClaimRootsV1, PalwExecutionBackendV1, PalwExecutionOutcomeV1, PalwMaterialVerdictV1};
-use kaspa_consensus_core::palw_step::PalwShapeProfileV3;
+use kaspa_consensus_core::palw_step::{PALW_STEP_MAX_LEAVES, PalwShapeProfileV3};
 use kaspa_consensus_core::palw_v2::{
     output_commitment_v2, prompt_token_ids_hash_v2, PalwJobContextV2, PALW_TRACE_COMMITMENT_VERSION_V2,
 };
@@ -147,7 +147,20 @@ pub fn a16_execute_for_attempt_v1(
     ctx: &PalwJobContextV2,
     prompt: &[usize],
 ) -> Result<crate::produce::Base0ExecutionV1, String> {
-    a16_execute_for_attempt_streaming_v1(artifact, profile, plan, ctx, prompt, &mut |_| {})
+    a16_execute_for_attempt_capped_v1(artifact, profile, plan, ctx, prompt, PALW_STEP_MAX_LEAVES)
+}
+
+/// [`a16_execute_for_attempt_v1`] against the ladder top the CALLER states — the ruleset's
+/// `PalwCourtParamsV2::max_step_leaf_count`, which is the only correct argument.
+pub fn a16_execute_for_attempt_capped_v1(
+    artifact: &Base0ArtifactV1,
+    profile: &PalwShapeProfileV3,
+    plan: Option<&crate::engine_a16::A16ProfilePlanV1>,
+    ctx: &PalwJobContextV2,
+    prompt: &[usize],
+    max_step_leaf_count: u64,
+) -> Result<crate::produce::Base0ExecutionV1, String> {
+    a16_execute_for_attempt_streaming_capped_v1(artifact, profile, plan, ctx, prompt, max_step_leaf_count, &mut |_| {})
 }
 
 /// **The same capture, with each id handed over as it is SELECTED** (ADR-0077 Decision 2).
@@ -162,6 +175,31 @@ pub fn a16_execute_for_attempt_streaming_v1(
     plan: Option<&crate::engine_a16::A16ProfilePlanV1>,
     ctx: &PalwJobContextV2,
     prompt: &[usize],
+    on_token: &mut dyn FnMut(u32),
+) -> Result<crate::produce::Base0ExecutionV1, String> {
+    a16_execute_for_attempt_streaming_capped_v1(artifact, profile, plan, ctx, prompt, PALW_STEP_MAX_LEAVES, on_token)
+}
+
+/// **The capture, priced against the RULESET's ladder** (ADR-0077 Decision 12).
+///
+/// This is the one that decides how many tokens a user gets. The court's `max_step_leaf_count` is
+/// what a network froze; `PALW_STEP_MAX_LEAVES` is what every shipped preset froze it at — and
+/// until this argument existed, the executor read the constant and nothing else. That made the
+/// decode budget a build-time fact: measured on the dense A16 row, a 26-token prefill buys 12
+/// decode tokens against `2^22` and 11 120 against `2^32`, and **widening `n_ctx` moves neither
+/// number**. A class registered against a deeper frozen ladder was refused by its own executor,
+/// and every width ADR-0080's split close buys the court was worth nothing here.
+///
+/// `PALW_STEP_MAX_LEAVES` is what the delegating entry points above pass, so a caller that does
+/// not hold a ruleset is byte-identical to what it was.
+#[allow(clippy::too_many_arguments)]
+pub fn a16_execute_for_attempt_streaming_capped_v1(
+    artifact: &Base0ArtifactV1,
+    profile: &PalwShapeProfileV3,
+    plan: Option<&crate::engine_a16::A16ProfilePlanV1>,
+    ctx: &PalwJobContextV2,
+    prompt: &[usize],
+    max_step_leaf_count: u64,
     on_token: &mut dyn FnMut(u32),
 ) -> Result<crate::produce::Base0ExecutionV1, String> {
     use kaspa_consensus_core::palw_state_chunk_map as map;
@@ -214,7 +252,8 @@ pub fn a16_execute_for_attempt_streaming_v1(
         }
     };
 
-    let leaf_count = kaspa_consensus_core::palw_step::step_leaf_count(profile, ctx).map_err(|e| format!("{e:?}"))?;
+    let leaf_count = kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(profile, ctx, max_step_leaf_count)
+        .map_err(|e| format!("{e:?}"))?;
     let mut capture = crate::legs::Base0StepCaptureV1::new(leaf_count).map_err(|e| format!("{e:?}"))?;
     let checkpoint_profile = map::integer_kv_checkpoint_profile_v1(map::PALW_INTEGER_KV_CHECKPOINT_INTERVAL_V1);
     let mut checkpoints = crate::legs::Base0CheckpointCaptureV1::new(ctx, profile, &checkpoint_profile);
@@ -739,7 +778,8 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         // refutation is later assembled from. The v1 class (one-byte map over an `i32` cache)
         // cannot capture, so it keeps the legacy composite exactly as registered.
         if self.court_capable {
-            let run = a16_execute_for_attempt_v1(&self.artifact, &self.profile, self.plan.as_ref(), job, prompt)?;
+            let cap = self.step_ladder_cap;
+            let run = a16_execute_for_attempt_capped_v1(&self.artifact, &self.profile, self.plan.as_ref(), job, prompt, cap)?;
             let material = crate::produce::base0_material_encode_v1(&run).map_err(|e| e.to_string())?;
             return Ok(PalwExecutionOutcomeV1 {
                 trace_root: run.trace_root,
@@ -834,8 +874,15 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         // serializer at the class's declared width, and the selecting-rows retention all live in
         // it). The free-prompt lane differs from the attempt lane only in where its context and
         // its tokens come from, so the run itself must not be a second implementation.
-        let run =
-            a16_execute_for_attempt_streaming_v1(&self.artifact, &self.profile, self.plan.as_ref(), &ctx, prompt_tokens, on_token)?;
+        let run = a16_execute_for_attempt_streaming_capped_v1(
+            &self.artifact,
+            &self.profile,
+            self.plan.as_ref(),
+            &ctx,
+            prompt_tokens,
+            self.step_ladder_cap,
+            on_token,
+        )?;
 
         // The four legs, measured — the derived roots the execution root is built from, which is
         // what `palw_fp_execution_root_v3` recomputes.
@@ -1016,7 +1063,8 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         if !self.court_capable {
             return Err("the v1 class carries no capture to tamper with".to_string());
         }
-        let mut run = a16_execute_for_attempt_v1(&self.artifact, &self.profile, self.plan.as_ref(), job, prompt)?;
+        let mut run =
+            a16_execute_for_attempt_capped_v1(&self.artifact, &self.profile, self.plan.as_ref(), job, prompt, self.step_ladder_cap)?;
         let ctx_hash = job.context_hash();
         let profile_hash = self.profile.shape_profile_id();
         {
@@ -1229,6 +1277,51 @@ mod free_prompt_tests {
             assert!(error.contains("registered graph"), "the refusal names the gap: {error}");
             assert!(error.contains("requant"), "and the node it is missing: {error}");
         }
+    }
+
+    /// **The executor prices the job against the RULESET's ladder, not a module literal.**
+    ///
+    /// This is W1b's whole claim. `a16_execute_for_attempt_streaming_v1` derived its leaf count
+    /// with `step_leaf_count`, which hardcodes `PALW_STEP_MAX_LEAVES` and never reads
+    /// `PalwCourtParamsV2::max_step_leaf_count` — so the number of tokens a user got was a
+    /// build-time fact, a class registered against a deeper frozen ladder was refused by its own
+    /// executor, and every width ADR-0080's split close buys the court was worth nothing here.
+    ///
+    /// Stated as a boundary rather than as a ratio because the boundary is what the ladder IS: one
+    /// leaf short of this job's own price the executor refuses it, and at exactly its price it
+    /// runs — same artifact, same graph, same job, one number of ruleset apart. (The size of the
+    /// move is pinned where the arithmetic lives:
+    /// `palw_step::tests::the_decode_budget_is_the_rulesets_ladder_not_the_context` measures a
+    /// 26-token prefill at 12 decode tokens under `2^22` and 11 120 under `2^32`.)
+    #[test]
+    fn the_executor_prices_the_job_against_the_rulesets_ladder() {
+        let (artifact, profile) = class_from(map::integer_kv_state_chunk_map_id_v2(), true);
+        let anchor = Hash64::from_u64_word(0xA16C0117);
+        let backend = Qwen25A16Backend::new(artifact.clone(), NETWORK.to_vec(), profile.clone(), (4, 3));
+        let (ctx, prompt) = backend.job_for_anchor(anchor).expect("the anchor implies a job");
+        let price = kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(&profile, &ctx, u64::MAX)
+            .expect("the canonical job has a step space");
+        assert!(price > 1, "a one-leaf job cannot demonstrate a boundary");
+
+        // A ruleset one leaf short of this job's price refuses it — in the executor, and named.
+        let tight =
+            Qwen25A16Backend::new(artifact.clone(), NETWORK.to_vec(), profile.clone(), (4, 3)).with_step_ladder_cap(price - 1);
+        assert_eq!(tight.step_ladder_cap(), price - 1);
+        let err = match tight.execute(&ctx, &prompt) {
+            Err(e) => e,
+            Ok(_) => panic!("a job past the ruleset's ladder is not executable"),
+        };
+        assert!(err.contains("TooManyLeaves"), "the refusal must name the ladder, got: {err}");
+        assert!(err.contains(&format!("{}", price - 1)), "and the ladder it was measured against, got: {err}");
+
+        // The same job, the same geometry, one more leaf of ladder — and it runs, committing the
+        // price the ruleset admitted.
+        let exact = Qwen25A16Backend::new(artifact, NETWORK.to_vec(), profile.clone(), (4, 3)).with_step_ladder_cap(price);
+        let Ok(outcome) = exact.execute(&ctx, &prompt) else {
+            panic!("the ruleset that admits this job's price must execute it");
+        };
+        let (binding, ..) = crate::produce::base0_material_decode_v1(&outcome.material).expect("the capture decodes");
+        assert_eq!(binding.step_leaf_count, price, "the binding commits the price the ruleset admitted");
     }
 
     /// **The A16 step space, end to end: every leaf of a captured attempt adjudicates, and a

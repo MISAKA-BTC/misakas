@@ -13,7 +13,8 @@
 use crate::artifact::Base0ArtifactV1;
 use crate::classes::ResolvedClassV1;
 use crate::produce::{
-    base0_execute_for_attempt_v1, base0_material_decode_v1, base0_material_encode_v1, base0_material_matches_claim_v1, base0_rc_job_v1,
+    base0_execute_for_attempt_capped_v1, base0_material_decode_v1, base0_material_encode_v1, base0_material_matches_claim_v1,
+    base0_rc_job_v1,
 };
 use kaspa_consensus_core::palw_backend::{PalwClaimRootsV1, PalwExecutionBackendV1, PalwExecutionOutcomeV1, PalwMaterialVerdictV1};
 use kaspa_consensus_core::palw_step::PalwShapeProfileV3;
@@ -226,7 +227,8 @@ impl PalwExecutionBackendV1 for Base0Backend {
     }
 
     fn execute(&self, job: &PalwJobContextV2, prompt: &[usize]) -> Result<PalwExecutionOutcomeV1, String> {
-        let run = base0_execute_for_attempt_v1(&self.artifact, &self.profile, job, prompt).map_err(|e| e.to_string())?;
+        let run = base0_execute_for_attempt_capped_v1(&self.artifact, &self.profile, job, prompt, self.step_ladder_cap)
+            .map_err(|e| e.to_string())?;
         // Encoded HERE, while the run is in hand. The producer used to reach into `run.tiles` to
         // write its retention file, which meant the retention format and the broadcast format were
         // two decisions in two places; the codec has been one function since the panel service
@@ -369,7 +371,8 @@ impl PalwExecutionBackendV1 for Base0Backend {
         prompt: &[usize],
         leaf_index: u64,
     ) -> Result<PalwExecutionOutcomeV1, String> {
-        let mut run = base0_execute_for_attempt_v1(&self.artifact, &self.profile, job, prompt).map_err(|e| e.to_string())?;
+        let mut run = base0_execute_for_attempt_capped_v1(&self.artifact, &self.profile, job, prompt, self.step_ladder_cap)
+            .map_err(|e| e.to_string())?;
         let ctx_hash = job.context_hash();
         let profile_hash = self.profile.shape_profile_id();
         {

@@ -22,6 +22,7 @@
 
 use crate::qwen36::{Qwen36ArtifactV1, Qwen36Cache, Qwen36Engine, Qwen36ShapeV1};
 use kaspa_consensus_core::palw_backend::{PalwClaimRootsV1, PalwExecutionBackendV1, PalwExecutionOutcomeV1, PalwMaterialVerdictV1};
+use kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES as LEG_MAX_LEAVES;
 use kaspa_consensus_core::palw_v2::{
     PALW_TRACE_COMMITMENT_VERSION_V2, PalwJobContextV2, output_commitment_v2, prompt_token_ids_hash_v2,
 };
@@ -144,6 +145,11 @@ pub struct Qwen36Backend {
     /// at the PROFILE's coordinates and the binding carries it whole, so a backend that dropped
     /// it after planning could execute but never commit a step space.
     profile: Option<kaspa_consensus_core::palw_step::PalwShapeProfileV3>,
+    /// **The ladder top this instance prices a job against and refuses a served capture above** —
+    /// the ruleset's `PalwCourtParamsV2::max_step_leaf_count`, defaulting to the leg's own
+    /// constant (which is what every shipped preset froze). The dense tier already carried this;
+    /// the hybrid one read the constant at five separate sites.
+    step_ladder_cap: u64,
 }
 
 impl Qwen36Backend {
@@ -176,7 +182,30 @@ impl Qwen36Backend {
             Some((plan, profile)) => (Some(plan), Some(profile)),
             None => (None, None),
         };
-        Self { artifact, model_id: model_id.into(), canonical_job, shape_id, class_profile_id, network_id, plan, profile }
+        Self {
+            artifact,
+            model_id: model_id.into(),
+            canonical_job,
+            shape_id,
+            class_profile_id,
+            network_id,
+            plan,
+            profile,
+            step_ladder_cap: LEG_MAX_LEAVES,
+        }
+    }
+
+    /// **The ladder top from the ruleset**, for a caller that holds `PalwCourtParamsV2`. Passing
+    /// `max_step_leaf_count` is the only correct argument; the constructors pass the leg's default,
+    /// which is what every shipped preset froze.
+    pub fn with_step_ladder_cap(mut self, max_step_leaf_count: u64) -> Self {
+        self.step_ladder_cap = max_step_leaf_count;
+        self
+    }
+
+    /// The ladder top this instance prices a job against.
+    pub fn step_ladder_cap(&self) -> u64 {
+        self.step_ladder_cap
     }
 
     /// **The ledger-compiled authority, handed the graph it serves** — for callers that already
@@ -198,7 +227,17 @@ impl Qwen36Backend {
             Ok(plan) => (Some(plan), Some(profile)),
             Err(_) => (None, None),
         };
-        Self { artifact, model_id: model_id.into(), canonical_job, shape_id, class_profile_id, network_id, plan, profile }
+        Self {
+            artifact,
+            model_id: model_id.into(),
+            canonical_job,
+            shape_id,
+            class_profile_id,
+            network_id,
+            plan,
+            profile,
+            step_ladder_cap: LEG_MAX_LEAVES,
+        }
     }
 
     /// **ADR-0067 Decision 2's constructor for the mmap container: a backend for a class this
@@ -238,6 +277,7 @@ impl Qwen36Backend {
             network_id,
             plan: Some(plan),
             profile: Some(profile),
+            step_ladder_cap: LEG_MAX_LEAVES,
         })
     }
 
@@ -353,7 +393,27 @@ pub fn qwen36_execute_for_attempt_v1(
     ctx: &PalwJobContextV2,
     prompt: &[usize],
 ) -> Result<crate::produce::Base0ExecutionV1, String> {
-    qwen36_execute_for_attempt_streaming_v1(artifact, profile, plan, ctx, prompt, &mut |_| {})
+    qwen36_execute_for_attempt_capped_v1(
+        artifact,
+        profile,
+        plan,
+        ctx,
+        prompt,
+        kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES,
+    )
+}
+
+/// [`qwen36_execute_for_attempt_v1`] against the ladder top the CALLER states — the ruleset's
+/// `PalwCourtParamsV2::max_step_leaf_count`.
+pub fn qwen36_execute_for_attempt_capped_v1(
+    artifact: &Qwen36ArtifactV1,
+    profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+    plan: &crate::qwen36_plan::Qwen36ProfilePlanV1,
+    ctx: &PalwJobContextV2,
+    prompt: &[usize],
+    max_step_leaf_count: u64,
+) -> Result<crate::produce::Base0ExecutionV1, String> {
+    qwen36_execute_for_attempt_streaming_capped_v1(artifact, profile, plan, ctx, prompt, max_step_leaf_count, &mut |_| {})
 }
 
 /// **The same capture, with each id handed over as it is SELECTED** (ADR-0077 Decision 2).
@@ -370,6 +430,33 @@ pub fn qwen36_execute_for_attempt_streaming_v1(
     prompt: &[usize],
     on_token: &mut dyn FnMut(u32),
 ) -> Result<crate::produce::Base0ExecutionV1, String> {
+    qwen36_execute_for_attempt_streaming_capped_v1(
+        artifact,
+        profile,
+        plan,
+        ctx,
+        prompt,
+        kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES,
+        on_token,
+    )
+}
+
+/// **The hybrid tier's capture, priced against the RULESET's ladder** (ADR-0077 Decision 12) — the
+/// same threading the dense tier's `a16_execute_for_attempt_streaming_capped_v1` carries, and for
+/// the same reason: the ladder the job is counted against is what decides how many tokens a user
+/// gets, and reading it off a module constant makes that a build-time fact rather than a network
+/// one. The delegating entry points above pass `PALW_STEP_MAX_LEAVES`, which is what every shipped
+/// preset froze, so a caller that holds no ruleset is byte-identical to what it was.
+#[allow(clippy::too_many_arguments)]
+pub fn qwen36_execute_for_attempt_streaming_capped_v1(
+    artifact: &Qwen36ArtifactV1,
+    profile: &kaspa_consensus_core::palw_step::PalwShapeProfileV3,
+    plan: &crate::qwen36_plan::Qwen36ProfilePlanV1,
+    ctx: &PalwJobContextV2,
+    prompt: &[usize],
+    max_step_leaf_count: u64,
+    on_token: &mut dyn FnMut(u32),
+) -> Result<crate::produce::Base0ExecutionV1, String> {
     let prefill = ctx.declared_prefill_tokens as usize;
     let decode_tokens = ctx.exact_decode_tokens as usize;
     if prefill == 0 || decode_tokens == 0 {
@@ -384,7 +471,8 @@ pub fn qwen36_execute_for_attempt_streaming_v1(
     }
 
     let engine = Qwen36Engine::new(artifact);
-    let leaf_count = kaspa_consensus_core::palw_step::step_leaf_count(profile, ctx).map_err(|e| format!("{e:?}"))?;
+    let leaf_count = kaspa_consensus_core::palw_step::step_leaf_count_capped_v1(profile, ctx, max_step_leaf_count)
+        .map_err(|e| format!("{e:?}"))?;
     let mut capture = crate::legs::Base0StepCaptureV1::new(leaf_count).map_err(|e| format!("{e:?}"))?;
     let checkpoint_profile = qwen36_checkpoint_profile_v1(profile);
     let checkpoints = crate::legs::Base0CheckpointCaptureV1::new(ctx, profile, &checkpoint_profile);
@@ -597,8 +685,8 @@ impl Qwen36Backend {
     ) -> Result<kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1, String> {
         let (binding, tiles, logits_rows, generated, _chunks) =
             crate::produce::base0_material_decode_v1(material).map_err(|_| "the capture does not decode".to_string())?;
-        if binding.step_leaf_count == 0 || binding.step_leaf_count > kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES {
-            return Err("the binding's leaf count is outside the leg's own cap".to_string());
+        if binding.step_leaf_count == 0 || binding.step_leaf_count > self.step_ladder_cap {
+            return Err("the binding's leaf count is outside the ruleset's ladder".to_string());
         }
         let coord = kaspa_consensus_core::palw_step::canonical_step_coordinates(&binding.shape_profile, &binding.job_context, index)
             .ok_or_else(|| format!("leaf {index} is not a main step coordinate"))?;
@@ -777,7 +865,7 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         // order is this build's hardcode cannot commit a step space the COURT's coordinates
         // describe unless the two provably correspond, and the plan is that proof.
         if let (Some(plan), Some(profile)) = (&self.plan, &self.profile) {
-            let run = qwen36_execute_for_attempt_v1(&self.artifact, profile, plan, job, prompt)?;
+            let run = qwen36_execute_for_attempt_capped_v1(&self.artifact, profile, plan, job, prompt, self.step_ladder_cap)?;
             let material = crate::produce::base0_material_encode_v1(&run).map_err(|e| e.to_string())?;
             return Ok(PalwExecutionOutcomeV1 {
                 trace_root: run.trace_root,
@@ -865,7 +953,15 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         };
         let ctx = palw_fp_job_context_v3(job, &class, &shape, &self.network_id).map_err(|e| format!("{e:?}"))?;
 
-        let run = qwen36_execute_for_attempt_streaming_v1(&self.artifact, profile, plan, &ctx, prompt_tokens, on_token)?;
+        let run = qwen36_execute_for_attempt_streaming_capped_v1(
+            &self.artifact,
+            profile,
+            plan,
+            &ctx,
+            prompt_tokens,
+            self.step_ladder_cap,
+            on_token,
+        )?;
 
         let (checkpoint_leg_root, step_leg_root) = crate::legs::base0_leg_roots_from_binding_v1(&run.binding);
         let material = crate::produce::base0_material_encode_v1(&run).map_err(|e| e.to_string())?;
@@ -954,7 +1050,7 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         let (binding, tiles, _, _, _) = crate::produce::base0_material_decode_v1(material).ok()?;
         // The count arrived over gossip inside a borsh blob; bounding it BEFORE the allocation is
         // the lesson the seat check already wrote down.
-        if binding.step_leaf_count == 0 || binding.step_leaf_count > kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES {
+        if binding.step_leaf_count == 0 || binding.step_leaf_count > self.step_ladder_cap {
             return None;
         }
         let leaves = qwen36_leaves_by_position(&binding, &tiles);
@@ -1047,7 +1143,7 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         let (Some(plan), Some(profile)) = (&self.plan, &self.profile) else {
             return Err("a backend with no registered graph carries no capture to tamper with".to_string());
         };
-        let mut run = qwen36_execute_for_attempt_v1(&self.artifact, profile, plan, job, prompt)?;
+        let mut run = qwen36_execute_for_attempt_capped_v1(&self.artifact, profile, plan, job, prompt, self.step_ladder_cap)?;
         let ctx_hash = job.context_hash();
         let profile_hash = profile.shape_profile_id();
         {
