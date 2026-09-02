@@ -37,6 +37,13 @@ sha2.workspace = true
 # ADR-0079: the ONE spelling of the host posture — the environment allowlist, the working
 # directory, the resident ceiling and the backend actually in force.
 misaka-palw.workspace = true
+# ADR-0078 Decision 5: `palw derived-verify` re-runs the derivation the chain names, with the
+# SAME grammar and transformer the executor ran — the library, never a shelled-out binary, so
+# there is exactly one spelling of "the derivation" in this tree. `misaka-palw-base0` comes with
+# it for the one type the verifier must name: which family's rendered-output-hash rule applies
+# to the answer's ids (X6's third input).
+misaka-palw-derive.workspace = true
+misaka-palw-base0.workspace = true
 serde_json.workspace = true
 serde = { workspace = true, features = ["derive"] }
 toml.workspace = true

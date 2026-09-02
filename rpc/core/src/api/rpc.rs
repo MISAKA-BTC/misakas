@@ -523,6 +523,46 @@ pub trait RpcApi: Sync + Send + AnySync {
         Ok(GetPalwProducerFactsResponse::default())
     }
 
+    /// **ADR-0078 Decision 5: the derivations a claim carries, so a stranger can check them.**
+    ///
+    /// The chain stores one `DerivedArtifactV1` per (claim, transformer) and never checks what it
+    /// says — the entire guarantee is that whoever holds the answer can recompute `output_root`,
+    /// `dsl_hash` and `artifact_hash` and compare (invariant X6). That guarantee needs a reader,
+    /// and this is it: the rows, plus the claim's own `output_root` and executor key, which is
+    /// what every accepted row had to match.
+    ///
+    /// The answer's `output_token_ids` are NOT returned and are not on the chain at all: the
+    /// consumer holds them from the gateway's response, beside the job's context hash and the
+    /// family. This call returns the chain's side of the comparison and nothing else.
+    async fn get_palw_derived_artifacts(&self, claim_id: String) -> RpcResult<GetPalwDerivedArtifactsResponse> {
+        self.get_palw_derived_artifacts_call(None, GetPalwDerivedArtifactsRequest { claim_id }).await
+    }
+    /// Default returns `found: false`, so non-server `RpcApi` impls inherit a no-op; the node's
+    /// core service overrides it.
+    async fn get_palw_derived_artifacts_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwDerivedArtifactsRequest,
+    ) -> RpcResult<GetPalwDerivedArtifactsResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwDerivedArtifactsResponse::default())
+    }
+
+    /// **ADR-0077 R0: the free-prompt claim itself** — the committed roots, the executor's bond,
+    /// the phase and the spend ledger. What a verifier reads beside a derivation, and what an
+    /// operator reads to find out what became of one inference.
+    async fn get_palw_free_prompt_claim(&self, claim_id: String) -> RpcResult<GetPalwFreePromptClaimResponse> {
+        self.get_palw_free_prompt_claim_call(None, GetPalwFreePromptClaimRequest { claim_id }).await
+    }
+    async fn get_palw_free_prompt_claim_call(
+        &self,
+        connection: Option<&DynRpcConnection>,
+        request: GetPalwFreePromptClaimRequest,
+    ) -> RpcResult<GetPalwFreePromptClaimResponse> {
+        let _ = (connection, request);
+        Ok(GetPalwFreePromptClaimResponse::default())
+    }
+
     /// MISAKA Compute Token Program (design §9.3): an asset's supply counters.
     async fn get_token_supply(&self, asset_id: u64) -> RpcResult<GetTokenSupplyResponse> {
         self.get_token_supply_call(None, GetTokenSupplyRequest { asset_id }).await

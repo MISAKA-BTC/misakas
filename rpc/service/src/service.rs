@@ -141,6 +141,32 @@ fn parse_bond_status(s: &str) -> RpcResult<kaspa_consensus_core::dns_finality::B
     }
 }
 
+/// **A PALW claim's phase, named for a reader** — `(phase, void reason, the DAA it was entered
+/// at)`, shared by the two ADR-0078 read calls so they cannot disagree about one claim.
+///
+/// The void reason is spelled out rather than folded into the phase because ADR-0078 Decision 4
+/// says a derivation of a claim that later voids "is a derivation of a voided claim, and says so
+/// when read" — and a consumer deciding whether to trust a provenance wants to know whether the
+/// claim died of a timeout or of a court's fraud finding. Empty for every non-voided phase.
+fn palw_claim_phase_named(phase: &kaspa_consensus_core::palw_state_v2::PalwClaimPhaseV2) -> (String, String, u64) {
+    use kaspa_consensus_core::palw_state_v2::{PalwClaimPhaseV2 as P, PalwVoidReasonV2 as R};
+    match phase {
+        P::Provisional => ("provisional".to_string(), String::new(), 0),
+        P::PanelBound { bound_daa } => ("panel_bound".to_string(), String::new(), *bound_daa),
+        P::ReceiptLicensed { licensed_daa } => ("receipt_licensed".to_string(), String::new(), *licensed_daa),
+        P::Final { final_daa } => ("final".to_string(), String::new(), *final_daa),
+        P::Voided { voided_daa, reason } => {
+            let reason = match reason {
+                R::BindTimeout => "bind_timeout",
+                R::ReceiptTimeout => "receipt_timeout",
+                R::CourtFraud => "court_fraud",
+                R::ProducerWithholding => "producer_withholding",
+            };
+            ("voided".to_string(), reason.to_string(), *voided_daa)
+        }
+    }
+}
+
 /// kaspa-pq EVM Lane v0.4 (§16): parse a 32-byte EVM tx hash (hex, optional 0x).
 fn parse_evm_tx_hash(s: &str) -> RpcResult<kaspa_hashes::EvmH256> {
     let h = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")).unwrap_or(s);
@@ -732,6 +758,116 @@ NOTE: This error usually indicates an RPC conversion error between the node and 
             None => GetTokenLedgerEntryResponse::default(),
         };
         Ok(response)
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // ADR-0078 Decision 5 — verification belongs to the consumer, and the chain makes it possible
+    // ------------------------------------------------------------------------------------------
+
+    async fn get_palw_derived_artifacts_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwDerivedArtifactsRequest,
+    ) -> RpcResult<GetPalwDerivedArtifactsResponse> {
+        // **The read Decision 5 was promising.** A `DerivedArtifactV1` is a statement the chain
+        // stores and never checks the content of; what makes it more than an assertion is that
+        // anyone holding the answer can recompute `output_root`, `dsl_hash` and `artifact_hash`
+        // and compare them with the chain's copy (X6). Until this call, the `derived_artifacts`
+        // table had no reader outside the transition that wrote it — the object was in the state
+        // root and nowhere a person could reach, which makes "publicly demonstrable by anyone
+        // holding the DSL" a sentence about ids nobody could fetch.
+        //
+        // What is NOT returned: `output_token_ids`. They are not on this chain in any form — the
+        // claim commits `output_commitment_v2(job_context_hash, ids, family_rendered_hash)` and
+        // nothing else — and ADR-0044 Decision 8's sentence about not publishing prompts applies
+        // to answers word for word. The consumer holds the ids from the gateway's response and
+        // this call hands back the chain's side of the comparison.
+        //
+        // A malformed claim id is an ERROR, not `found: false`: "this chain does not hold that
+        // claim" and "you typed 129 characters" must not share a reply.
+        let claim_id = request
+            .claim_id
+            .parse::<kaspa_hashes::Hash64>()
+            .map_err(|_| RpcError::General(format!("claim id '{}' is not a 128-hex Hash64", request.claim_id)))?;
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let Some((claim, executor_pubkey, rows)) = session.palw_derived_artifacts_v1(claim_id) else {
+            return Ok(GetPalwDerivedArtifactsResponse { claim_id: claim_id.to_string(), ..Default::default() });
+        };
+        let (claim_phase, claim_void_reason, _phase_daa) = palw_claim_phase_named(&claim.phase);
+        Ok(GetPalwDerivedArtifactsResponse {
+            found: true,
+            claim_id: claim_id.to_string(),
+            output_root: claim.output_root.to_string(),
+            executor_pubkey: faster_hex::hex_string(&executor_pubkey),
+            executor_bond: format!("{}:{}", claim.bond.0.transaction_id, claim.bond.0.index),
+            class_id: claim.class_id.to_string(),
+            claim_phase,
+            claim_void_reason,
+            claim_accepted_block: claim.accepted_block.to_string(),
+            claim_accepted_daa: claim.accepted_daa,
+            artifacts: rows
+                .into_iter()
+                .map(|(key, row)| kaspa_rpc_core::RpcPalwDerivedArtifact {
+                    transformer_id: key.transformer.to_string(),
+                    derived_id: row.derived_id.to_string(),
+                    grammar_id: row.grammar_id.to_string(),
+                    kind: row.kind as u32,
+                    // The chain interprets no kind (Decision 9 / X8); this is the shipped table's
+                    // label for a human reader, and empty for an id this build has no name for.
+                    kind_name: kaspa_consensus_core::palw_derived_v1::kind::name(row.kind).unwrap_or_default().to_string(),
+                    dsl_hash: row.dsl_hash.to_string(),
+                    artifact_hash: row.artifact_hash.to_string(),
+                    artifact_bytes: row.artifact_bytes,
+                    accepted_daa: row.accepted_daa,
+                })
+                .collect(),
+        })
+    }
+
+    async fn get_palw_free_prompt_claim_call(
+        &self,
+        _connection: Option<&DynRpcConnection>,
+        request: GetPalwFreePromptClaimRequest,
+    ) -> RpcResult<GetPalwFreePromptClaimResponse> {
+        // The claim beside the derivation (ADR-0077 R0). Same read, same session, so the two calls
+        // cannot disagree about a claim: one function answers both.
+        let claim_id = request
+            .claim_id
+            .parse::<kaspa_hashes::Hash64>()
+            .map_err(|_| RpcError::General(format!("claim id '{}' is not a 128-hex Hash64", request.claim_id)))?;
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let Some((claim, executor_pubkey, rows)) = session.palw_derived_artifacts_v1(claim_id) else {
+            return Ok(GetPalwFreePromptClaimResponse { claim_id: claim_id.to_string(), ..Default::default() });
+        };
+        let (phase, void_reason, phase_daa) = palw_claim_phase_named(&claim.phase);
+        let (is_free_prompt, quanta, quanta_spent) = match &claim.source {
+            kaspa_consensus_core::palw_state_v2::PalwClaimSourceV2::FreePrompt { quanta, spent } => {
+                (true, *quanta, spent.len() as u32)
+            }
+            kaspa_consensus_core::palw_state_v2::PalwClaimSourceV2::Attempt => (false, 0, 0),
+        };
+        Ok(GetPalwFreePromptClaimResponse {
+            found: true,
+            claim_id: claim_id.to_string(),
+            is_free_prompt,
+            class_id: claim.class_id.to_string(),
+            executor_pubkey: faster_hex::hex_string(&executor_pubkey),
+            executor_bond: format!("{}:{}", claim.bond.0.transaction_id, claim.bond.0.index),
+            output_root: claim.output_root.to_string(),
+            trace_root: claim.trace_root.to_string(),
+            execution_root: claim.execution_root.to_string(),
+            work_leaves: claim.work_leaves,
+            work_id: claim.work_id.map(|w| w.to_string()).unwrap_or_default(),
+            quanta,
+            quanta_spent,
+            phase,
+            void_reason,
+            phase_daa,
+            accepted_block: claim.accepted_block.to_string(),
+            accepted_daa: claim.accepted_daa,
+            trace_retention_daa: claim.trace_retention_daa,
+            derived_count: rows.len() as u32,
+        })
     }
 
     async fn get_palw_producer_facts_call(

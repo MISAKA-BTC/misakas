@@ -174,6 +174,12 @@ pub enum RpcApiOps {
     /// PALW ConsensusV2: the six derived facts a block producer must read from chain state before
     /// it may build an algo-6 attempt. What makes third-party mining possible at all.
     GetPalwProducerFacts = 167,
+    /// ADR-0078 Decision 5: the derivations a claim carries, as the chain holds them — the read
+    /// that makes "verification belongs to the consumer" a thing a stranger can actually do.
+    GetPalwDerivedArtifacts = 168,
+    /// ADR-0078 Decision 5 / ADR-0077 R0: the free-prompt claim a derivation names, so a verifier
+    /// has the `output_root` and the executor key beside the row it is checking.
+    GetPalwFreePromptClaim = 169,
 }
 
 impl RpcApiOps {

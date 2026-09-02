@@ -323,6 +323,23 @@ impl ConsensusSessionOwned {
         self.consensus.palw_locked_bond_outpoints_v2()
     }
 
+    /// **ADR-0078 Decision 5: one claim's derivations, as the chain holds them.** The claim (its
+    /// `output_root`, phase and accepting block), the executor's registered bond key, and the
+    /// `(key, row)` pairs of the derived table under it. Same store-tip read profile as
+    /// `palw_producer_facts_v2` below; `None` off ConsensusV2 and for a claim this chain does not
+    /// have.
+    #[allow(clippy::type_complexity)]
+    pub fn palw_derived_artifacts_v1(
+        &self,
+        claim_id: kaspa_consensus_core::Hash64,
+    ) -> Option<(
+        kaspa_consensus_core::palw_state_v2::PalwClaimStateV2,
+        Vec<u8>,
+        Vec<(kaspa_consensus_core::palw_derived_v1::PalwDerivedKeyV1, kaspa_consensus_core::palw_derived_v1::PalwDerivedRowV1)>,
+    )> {
+        self.consensus.palw_derived_artifacts_v1(claim_id)
+    }
+
     /// The PALW-RC producer contract (ADR-0042). Reads the state store's tip, which is a lock-free
     /// snapshot read like the virtual fields above.
     pub fn palw_producer_facts_v2(

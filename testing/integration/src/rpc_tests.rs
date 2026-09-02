@@ -845,6 +845,41 @@ async fn sanity_test() {
                     assert!(!response.bond_known, "and names no bond it does not have");
                 })
             }
+            // ADR-0078 Decision 5: the consumer's read path. The sanity daemon is simnet, which is
+            // not `ConsensusV2`, so the contract asserted here is the honest-negative one — a
+            // verifier asking a hash-only chain about a claim gets `found: false` rather than an
+            // error, and can tell it is on the wrong network by asking. A MALFORMED claim id is
+            // still an error, which is the distinction the two assertions below exist to hold:
+            // "this chain does not have that claim" and "you typed it wrong" must not share a reply.
+            KaspadPayloadOps::GetPalwDerivedArtifacts => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response = rpc_client
+                        .get_palw_derived_artifacts_call(None, GetPalwDerivedArtifactsRequest { claim_id: "00".repeat(64) })
+                        .await
+                        .unwrap();
+                    assert!(!response.found, "a non-ConsensusV2 network answers found:false, and does not error");
+                    assert!(response.artifacts.is_empty(), "and lists no derivation it does not hold");
+                    assert!(
+                        rpc_client
+                            .get_palw_derived_artifacts_call(None, GetPalwDerivedArtifactsRequest { claim_id: "nonsense".into() })
+                            .await
+                            .is_err(),
+                        "a malformed claim id is an error, not an absence"
+                    );
+                })
+            }
+            KaspadPayloadOps::GetPalwFreePromptClaim => {
+                let rpc_client = client.clone();
+                tst!(op, {
+                    let response = rpc_client
+                        .get_palw_free_prompt_claim_call(None, GetPalwFreePromptClaimRequest { claim_id: "00".repeat(64) })
+                        .await
+                        .unwrap();
+                    assert!(!response.found, "a non-ConsensusV2 network answers found:false, and does not error");
+                    assert_eq!(response.derived_count, 0);
+                })
+            }
             KaspadPayloadOps::GetTokenSupply => {
                 tst!(op, "TOK supply read — inert preset answers available:false by design")
             }

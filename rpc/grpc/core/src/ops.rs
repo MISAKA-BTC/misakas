@@ -104,6 +104,9 @@ pub enum KaspadPayloadOps {
     // MISAKA Compute Token Program (design v0.1 §9.3)
     GetTokenLedgerEntry,
     GetPalwProducerFacts,
+    // ADR-0078 Decision 5: the consumer's read of a claim's derivations
+    GetPalwDerivedArtifacts,
+    GetPalwFreePromptClaim,
     GetTokenSupply,
     GetTokenEmissionInfo,
 

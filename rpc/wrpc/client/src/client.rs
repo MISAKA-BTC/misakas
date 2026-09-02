@@ -667,6 +667,8 @@ impl RpcApi for KaspaRpcClient {
             GetValidatorStatus,
             GetTokenLedgerEntry,
             GetPalwProducerFacts,
+            GetPalwDerivedArtifacts,
+            GetPalwFreePromptClaim,
             GetTokenSupply,
             GetTokenEmissionInfo,
             GetStakeBond,
