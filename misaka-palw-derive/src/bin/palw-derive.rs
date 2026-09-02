@@ -5,17 +5,22 @@
 //! palw-derive derive --transformer <name|kind> --answer <file> --out <dir> [--claim <hex> --output-root <hex> --network-domain <hex> --executor-pubkey <hex>]
 //! palw-derive verify --object <derived-unsigned.borsh|derived-object.borsh> --answer <file> [--artifact <file>]
 //!                    [--output-token-ids <json array file> --job-context-hash <hex> --family <qwen25-a16|qwen36>]
-//! palw-derive drill --corpus <dir> --report <file.json> [--check <file.json>]
+//! palw-derive manifest --transformer <name|id> | --all
+//! palw-derive drill [--corpus <dir>] [--report <file.json>] [--check <file.json>]
 //! palw-derive inspect --object <file>
 //! ```
 //!
 //! `derive` runs the derivation offline (the same code the gateway runs) and writes the DSL, the
 //! artifact and the unsigned object. `verify` is Decision 5 / X6: from the answer and the object,
 //! recompute `dsl_hash` and `artifact_hash`; with the ids, the job's context hash and the family,
-//! recompute the claim's `output_root` too. `drill` is X3's instrument: every registered
-//! transformer over every corpus file, the artifact hashes written to a report — run it on two
-//! architectures and `--check` one report against the other; a transformer whose bytes differ
-//! is not a transformer under this ADR.
+//! recompute the claim's `output_root` too. `manifest` is SA-5's: the document behind a
+//! `transformer_id`, with the exact preimage, so a consumer can recompute the id themselves — a
+//! derivation whose manifest this tree does not publish is refused rather than made. `drill` is
+//! X3's instrument: every registered transformer over every corpus file, compared with that
+//! kind's `golden.json`, plus SA-2's generated bound-exhausting corpus; the hashes go to a report
+//! — run it on two architectures and `--check` one report against the other; a transformer whose
+//! bytes differ is not a transformer under this ADR. It exits 3 on a cross-architecture
+//! divergence, 4 on a moved golden, and 5 on a declared ceiling that did not refuse.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::path::{Path, PathBuf};
@@ -45,7 +50,7 @@ fn hex64(s: &str, what: &str) -> Hash64 {
 fn hex_bytes(s: &str, what: &str) -> Vec<u8> {
     let s = s.strip_prefix("0x").unwrap_or(s);
     let mut out = vec![0u8; s.len() / 2];
-    if s.len() % 2 != 0 || faster_hex::hex_decode(s.as_bytes(), &mut out).is_err() {
+    if !s.len().is_multiple_of(2) || faster_hex::hex_decode(s.as_bytes(), &mut out).is_err() {
         die(format!("{what} is not hex"));
     }
     out
@@ -90,6 +95,19 @@ fn cmd_list() {
             m.discipline.as_str(),
             m.writer,
             &hex(misaka_palw_derive::ids::transformer_id(&m))[..16]
+        );
+        // ADR-0078 SA-2: the ceilings are part of what this build ships and of what names it, so
+        // `list` shows them rather than making a reader fetch the manifest to learn what will be
+        // refused.
+        let limits = m.named_input_limits();
+        println!(
+            "      bounds: dsl {} B  artifact {} B  work {} {}  named inputs {} ({} B)",
+            m.max_dsl_bytes,
+            m.max_artifact_bytes,
+            m.max_steps,
+            m.step_unit(),
+            limits.max_inputs,
+            limits.max_bytes
         );
     }
     println!("build source tree sha256: {}", misaka_palw_derive::SOURCE_TREE_SHA256_HEX);
@@ -190,6 +208,10 @@ fn cmd_verify(mut args: VecDeque<String>) {
             verdict.insert("dsl_hash_matches".into(), v.dsl_hash_matches.into());
             verdict.insert("artifact_hash_matches".into(), v.artifact_hash_matches.into());
             verdict.insert("artifact_bytes_matches".into(), v.artifact_bytes_matches.into());
+            // X8: the chain checks `kind != 0` and interprets nothing else, so a disagreement
+            // between an object's kind and its transformer's manifest is the consumer's to catch.
+            verdict.insert("kind_matches".into(), v.kind_matches.into());
+            verdict.insert("manifest_kind".into(), v.manifest_kind.into());
             verdict.insert("recomputed_dsl_hash".into(), hex(v.recomputed_dsl_hash).into());
             verdict.insert("recomputed_artifact_hash".into(), hex(v.recomputed_artifact_hash).into());
         }
@@ -266,7 +288,53 @@ fn cmd_inspect(mut args: VecDeque<String>) {
     );
 }
 
-/// X3's instrument: every transformer over every corpus file.
+/// The published manifest of one transformer (ADR-0078 SA-5): the document a consumer needs
+/// before they can check a `transformer_id` at all.
+fn cmd_manifest(mut args: VecDeque<String>) {
+    let mut spec = None;
+    let mut all = false;
+    while let Some(arg) = args.pop_front() {
+        match arg.as_str() {
+            "--transformer" => spec = Some(flag(&mut args, "--transformer")),
+            "--all" => all = true,
+            other => die(format!("unknown argument {other:?}")),
+        }
+    }
+    if all {
+        let docs: Vec<serde_json::Value> = registry::transformer_names()
+            .iter()
+            .map(|(n, _, _)| registry::published_manifest_document(&registry::transformer_by_name(n).expect("registered").manifest()))
+            .collect();
+        println!("{}", serde_json::to_string_pretty(&docs).unwrap());
+        return;
+    }
+    let spec = spec.unwrap_or_else(|| die("--transformer <name|id> (or --all) is required".into()));
+    let Some(m) = registry::published_manifest(&spec) else {
+        // SA-5, from the tool's side: an id this build does not publish is not a manifest a
+        // consumer could fetch, and the tool says so instead of printing an empty document.
+        die(format!(
+            "no transformer manifest is published in this tree for {spec:?} (ADR-0078 SA-5); `palw-derive list` prints the ones \
+             that are"
+        ));
+    };
+    println!("{}", serde_json::to_string_pretty(&registry::published_manifest_document(&m)).unwrap());
+}
+
+/// Every corpus answer of one kind directory, sorted, with `golden.json` left out — it is the
+/// pin, not a sample.
+fn corpus_answers(dir: &Path) -> Vec<PathBuf> {
+    let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
+    let mut files: Vec<PathBuf> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "json") && p.file_name().is_some_and(|n| n != "golden.json"))
+        .collect();
+    files.sort();
+    files
+}
+
+/// X3's instrument: every transformer over every corpus file, against the goldens, plus SA-2's
+/// bound-exhausting corpus.
 fn cmd_drill(mut args: VecDeque<String>) {
     let mut corpus = None;
     let mut report = None;
@@ -289,51 +357,155 @@ fn cmd_drill(mut args: VecDeque<String>) {
     // report: "<kind-dir>/<file>#<transformer>" -> { dsl_hash, artifact_hash, artifact_bytes }
     let mut rows: BTreeMap<String, serde_json::Value> = BTreeMap::new();
     let mut refused: BTreeMap<String, String> = BTreeMap::new();
+    // The goldens, per kind directory, loaded once.
+    let mut goldens: BTreeMap<String, serde_json::Value> = BTreeMap::new();
+    let mut golden_mismatched: Vec<String> = Vec::new();
+    let mut golden_unpinned: Vec<String> = Vec::new();
+    let mut golden_checked = 0usize;
+
     for (name, k, grammar) in registry::transformer_names() {
-        let kind_dir = corpus.join(kind::name(k).unwrap_or("unassigned"));
-        let Ok(entries) = std::fs::read_dir(&kind_dir) else { continue };
-        let mut files: Vec<PathBuf> =
-            entries.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "json")).collect();
-        files.sort();
-        for file in files {
-            if file.file_name().is_some_and(|f| f == "golden.json") {
-                continue;
-            }
+        let kind_name = kind::name(k).unwrap_or("unassigned").to_string();
+        let kind_dir = corpus.join(&kind_name);
+        let golden = goldens.entry(kind_name.clone()).or_insert_with(|| match std::fs::read(kind_dir.join("golden.json")) {
+            Ok(bytes) => serde_json::from_slice(&bytes)
+                .unwrap_or_else(|e| die(format!("{}: not a golden document: {e}", kind_dir.join("golden.json").display()))),
+            Err(_) => serde_json::Value::Null,
+        });
+        for file in corpus_answers(&kind_dir) {
             let answer = std::fs::read(&file).unwrap_or_else(|e| die(format!("{}: {e}", file.display())));
-            let key = format!("{}/{}#{name}", kind::name(k).unwrap_or("?"), file.file_name().unwrap().to_string_lossy());
-            match derive_named(name, &binding, &answer) {
-                Ok(d) => {
-                    rows.insert(
-                        key,
-                        serde_json::json!({
-                            "grammar": grammar,
-                            "dsl_hash": hex(d.dsl_hash),
-                            "artifact_hash": hex(d.artifact_hash),
-                            "artifact_bytes": d.artifact.bytes.len(),
-                        }),
-                    );
-                }
+            let leaf = file.file_name().unwrap().to_string_lossy().into_owned();
+            let key = format!("{kind_name}/{leaf}#{name}");
+            // The golden of a kind that pins its refusals (a corpus sample named `-refused-` is
+            // a sample the kind must REFUSE, and WHICH wall it hit is the thing under test) is
+            // compared here too — otherwise the drill would silently skip exactly the samples a
+            // bound-exhausting corpus exists for.
+            let pinned_for = |g: &serde_json::Value| g.get(format!("{leaf}#{name}")).or_else(|| g.get(&leaf)).cloned();
+            let d = match derive_named(name, &binding, &answer) {
+                Ok(d) => d,
                 Err(e) => {
+                    match pinned_for(golden) {
+                        None => golden_unpinned.push(key.clone()),
+                        Some(want) => {
+                            golden_checked += 1;
+                            match want.get("refused").and_then(|v| v.as_str()) {
+                                Some(pinned) if pinned == e.to_string() => {}
+                                Some(pinned) => {
+                                    golden_mismatched.push(format!("{key}: refusal pinned {pinned:?} / here {:?}", e.to_string()))
+                                }
+                                None => golden_mismatched.push(format!("{key}: the golden pins a derivation and it was refused: {e}")),
+                            }
+                        }
+                    }
                     refused.insert(key, e.to_string());
+                    continue;
+                }
+            };
+            rows.insert(
+                key.clone(),
+                serde_json::json!({
+                    "grammar": grammar,
+                    "dsl_hash": hex(d.dsl_hash),
+                    "artifact_hash": hex(d.artifact_hash),
+                    "artifact_bytes": d.artifact.bytes.len(),
+                }),
+            );
+            // The goldens are the SAME comparison on one host that `--check` is across two, and
+            // they are the half that catches a second architecture without shipping a file
+            // between the hosts: run the drill there and the pins either hold or they do not.
+            // Two key shapes exist in the tree because one kind directory can serve two
+            // transformers (`code` serves `code/evm/v1` and `contract/evm/v1`), so a bare file
+            // name would not say which; both are accepted rather than one being rewritten.
+            match pinned_for(golden) {
+                None => golden_unpinned.push(key),
+                Some(want) => {
+                    golden_checked += 1;
+                    let eq = |field: &str, got: String| {
+                        want.get(field).and_then(|v| v.as_str()).map(|s| s.eq_ignore_ascii_case(&got)).unwrap_or(false)
+                    };
+                    if !eq("dsl_hash", hex(d.dsl_hash)) {
+                        golden_mismatched.push(format!("{key}: dsl_hash pinned {} / here {}", want["dsl_hash"], hex(d.dsl_hash)));
+                    }
+                    if !eq("artifact_hash", hex(d.artifact_hash)) {
+                        golden_mismatched.push(format!(
+                            "{key}: artifact_hash pinned {} / here {}",
+                            want["artifact_hash"],
+                            hex(d.artifact_hash)
+                        ));
+                    }
+                    if want.get("artifact_bytes").and_then(|v| v.as_u64()) != Some(d.artifact.bytes.len() as u64) {
+                        golden_mismatched.push(format!(
+                            "{key}: artifact_bytes pinned {} / here {}",
+                            want["artifact_bytes"],
+                            d.artifact.bytes.len()
+                        ));
+                    }
                 }
             }
         }
     }
+
+    // ---- SA-2's bound-exhausting corpus, generated rather than stored -----------------------
+    //
+    // "X3's drill includes a bound-exhausting corpus." It is generated from each transformer's
+    // OWN declared `max_dsl_bytes` rather than checked in as files, for three reasons: a stored
+    // four-mebibyte file per kind would dwarf the repository; a stored file would go stale the
+    // moment a kind tightened its bound and would then prove nothing; and a generated one is the
+    // same bytes on both architectures, so the row belongs in the `--check` comparison like any
+    // other. Each input is one byte over the bound and otherwise well-formed enough that only
+    // the bound can be refusing it.
+    let mut bounds_rows: BTreeMap<String, String> = BTreeMap::new();
+    let mut unbounded: Vec<String> = Vec::new();
+    for (name, _, _) in registry::transformer_names() {
+        let m = registry::transformer_by_name(name).expect("registered").manifest();
+        if let Err(e) = misaka_palw_derive::check_declared_bounds(&m) {
+            unbounded.push(format!("{name}: {e}"));
+            continue;
+        }
+        let mut over = vec![b' '; m.max_dsl_bytes as usize + 1];
+        over[0] = b'{';
+        *over.last_mut().unwrap() = b'}';
+        match derive_named(name, &binding, &over) {
+            // The refusal must name the ceiling: that is what says the wall ran on the byte COUNT
+            // and not on something a parser found inside the bytes.
+            Err(e) if e.is_refusal() && e.to_string().contains(&m.max_dsl_bytes.to_string()) => {
+                bounds_rows.insert(name.to_string(), e.to_string());
+            }
+            Err(other) => unbounded
+                .push(format!("{name}: an answer of {} bytes was refused, but not by the declared ceiling: {other}", over.len())),
+            Ok(_) => unbounded.push(format!("{name}: an answer of {} bytes was DERIVED; max_dsl_bytes is not enforced", over.len())),
+        }
+    }
+
     let doc = serde_json::json!({
-        "schema": "misaka.palw.derive-drill.v1",
+        "schema": "misaka.palw.derive-drill.v2",
         "arch": std::env::consts::ARCH,
         "os": std::env::consts::OS,
         "source_tree_sha256": misaka_palw_derive::SOURCE_TREE_SHA256_HEX,
-        "transformers": registry::transformer_names().iter().map(|(n, _, _)| serde_json::json!({
-            "name": n,
-            "transformer_id": hex(misaka_palw_derive::ids::transformer_id(&registry::transformer_by_name(n).unwrap().manifest())),
-        })).collect::<Vec<_>>(),
+        "transformers": registry::transformer_names().iter().map(|(n, _, _)| {
+            let m = registry::transformer_by_name(n).unwrap().manifest();
+            serde_json::json!({
+                "name": n,
+                "transformer_id": hex(misaka_palw_derive::ids::transformer_id(&m)),
+                "max_dsl_bytes": m.max_dsl_bytes,
+                "max_artifact_bytes": m.max_artifact_bytes,
+                "max_steps": m.max_steps,
+                "step_unit": m.step_unit(),
+            })
+        }).collect::<Vec<_>>(),
         "rows": rows,
         "refused": refused,
+        "bounds": bounds_rows,
+        "golden": {
+            "checked": golden_checked,
+            "mismatched": golden_mismatched,
+            "unpinned": golden_unpinned,
+        },
     });
     if let Some(path) = &report {
         std::fs::write(path, serde_json::to_vec_pretty(&doc).unwrap()).unwrap_or_else(|e| die(format!("{}: {e}", path.display())));
     }
+
+    let mut exit = 0;
     if let Some(other_path) = check {
         let other: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&other_path).unwrap_or_else(|e| die(format!("{}: {e}", other_path.display()))))
@@ -352,6 +524,26 @@ fn cmd_drill(mut args: VecDeque<String>) {
                 diverged.push(format!("{key}: absent here"));
             }
         }
+        // A corpus answer refused on one architecture and derived on the other is a divergence
+        // the `rows` comparison alone would read as "absent there" — and WHICH wall refused it is
+        // part of the answer, so the messages are compared and not only the fact of a refusal.
+        let their_refusals = other.get("refused").and_then(|r| r.as_object()).cloned().unwrap_or_default();
+        let refusals_compared = refused.len().max(their_refusals.len());
+        for (key, why) in &refused {
+            match their_refusals.get(key) {
+                Some(t) if t.as_str() == Some(why.as_str()) => {}
+                Some(t) => diverged.push(format!("{key}: refused here as {why:?}, there as {t}")),
+                None => diverged.push(format!("{key}: refused here ({why}) and not there")),
+            }
+        }
+        for key in their_refusals.keys() {
+            if !refused.contains_key(key) {
+                diverged.push(format!("{key}: refused there and not here"));
+            }
+        }
+        if other["bounds"] != doc["bounds"] {
+            diverged.push("the bound-exhausting corpus is refused differently on the two hosts".to_string());
+        }
         if other["source_tree_sha256"] != doc["source_tree_sha256"] {
             diverged.push(format!("source tree differs: here {} / there {}", doc["source_tree_sha256"], other["source_tree_sha256"]));
         }
@@ -362,18 +554,44 @@ fn cmd_drill(mut args: VecDeque<String>) {
                 "here": format!("{}-{}", doc["arch"].as_str().unwrap(), doc["os"].as_str().unwrap()),
                 "there": format!("{}-{}", other["arch"].as_str().unwrap_or("?"), other["os"].as_str().unwrap_or("?")),
                 "rows_compared": rows.len(),
+                "refusals_compared": refusals_compared,
                 "diverged": diverged,
                 "verdict": if diverged.is_empty() { "X3 holds: byte-identical artifacts on both reports" } else { "X3 FAILS: a transformer whose bytes differ is not a transformer under ADR-0078" },
             })
         );
         if !diverged.is_empty() {
-            std::process::exit(3);
+            exit = 3;
         }
     } else {
         println!(
             "{}",
-            serde_json::json!({ "schema": "misaka.palw.derive-drill.v1", "rows": rows.len(), "refused": refused.len(), "report": report.map(|p| p.display().to_string()) })
+            serde_json::json!({
+                "schema": "misaka.palw.derive-drill.v2",
+                "arch": std::env::consts::ARCH,
+                "rows": rows.len(),
+                "refused": refused.len(),
+                "golden_checked": golden_checked,
+                "golden_mismatched": golden_mismatched,
+                "golden_unpinned": golden_unpinned,
+                "bounds_enforced": bounds_rows.len(),
+                "bounds_not_enforced": unbounded,
+                "report": report.map(|p| p.display().to_string()),
+                "verdict": if golden_mismatched.is_empty() && unbounded.is_empty() {
+                    "the corpus reproduces its goldens on this architecture and every declared bound refused an over-bound answer"
+                } else {
+                    "FAILS: see golden_mismatched / bounds_not_enforced"
+                },
+            })
         );
+    }
+    if !golden_mismatched.is_empty() && exit == 0 {
+        exit = 4;
+    }
+    if !unbounded.is_empty() && exit == 0 {
+        exit = 5;
+    }
+    if exit != 0 {
+        std::process::exit(exit);
     }
 }
 
@@ -384,7 +602,8 @@ fn main() {
         Some("derive") => cmd_derive(args),
         Some("verify") => cmd_verify(args),
         Some("inspect") => cmd_inspect(args),
+        Some("manifest") => cmd_manifest(args),
         Some("drill") => cmd_drill(args),
-        _ => die("usage: palw-derive list | derive | verify | inspect | drill (see the module doc)".into()),
+        _ => die("usage: palw-derive list | derive | verify | manifest | inspect | drill (see the module doc)".into()),
     }
 }
