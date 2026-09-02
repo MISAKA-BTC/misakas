@@ -286,6 +286,57 @@ pub fn derived_refusal(reason: &'static str) -> PalwStateV2Error {
     PalwStateV2Error::DerivedShapeRefused(reason)
 }
 
+// ---------------------------------------------------------------------------------------------
+// ADR-0078 Decision 6: the DSL under a data-availability election — the retention payload
+// ---------------------------------------------------------------------------------------------
+
+pub const PALW_FP_DSL_V1_MAGIC: [u8; 4] = *b"FPD1";
+
+/// The most DSL bytes one payload carries. The DSL is the model's answer in canonical form —
+/// kilobytes for a scene, at most the widest context a class admits rendered as text — and the
+/// transport's material cap is 16 MiB; this stays well under both.
+pub const PALW_FP_DSL_V1_MAX_BYTES: usize = 4 << 20;
+
+/// **A claim's canonical DSL, served on request when its executor elected to** (ADR-0078
+/// Decision 6). Off by default — the DSL is the answer to a person's prompt, and ADR-0044
+/// Decision 8's sentence about silently publishing prompts applies to answers word for word.
+/// The payload names the derivation it belongs to, so a reader holding the chain's row checks
+/// `dsl_hash` against it before believing the bytes; the payload's own check is that the bytes
+/// hash to the `dsl_hash` it declares.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwFpDslV1 {
+    pub claim_id: Hash64,
+    pub derived_id: Hash64,
+    pub grammar_id: Hash64,
+    pub dsl_hash: Hash64,
+    pub dsl: Vec<u8>,
+}
+
+/// Encode with the magic prefix. The inverse of [`palw_fp_dsl_decode_v1`].
+pub fn palw_fp_dsl_encode_v1(claim_id: Hash64, derived_id: Hash64, grammar_id: Hash64, dsl: &[u8]) -> Vec<u8> {
+    let body = borsh::to_vec(&PalwFpDslV1 { claim_id, derived_id, grammar_id, dsl_hash: dsl_hash_v1(&grammar_id, dsl), dsl: dsl.to_vec() })
+        .expect("a DSL payload serializes");
+    let mut out = Vec::with_capacity(4 + body.len());
+    out.extend_from_slice(&PALW_FP_DSL_V1_MAGIC);
+    out.extend_from_slice(&body);
+    out
+}
+
+/// `None` for foreign magic, junk, an oversize DSL, or bytes that do not hash to the `dsl_hash`
+/// the payload declares. Whether that `dsl_hash` is the one the CHAIN holds for `(claim,
+/// derived_id)` is the reader's comparison, against the state row.
+pub fn palw_fp_dsl_decode_v1(bytes: &[u8]) -> Option<PalwFpDslV1> {
+    let body = bytes.strip_prefix(&PALW_FP_DSL_V1_MAGIC)?;
+    let payload: PalwFpDslV1 = borsh::from_slice(body).ok()?;
+    if payload.dsl.is_empty() || payload.dsl.len() > PALW_FP_DSL_V1_MAX_BYTES {
+        return None;
+    }
+    if dsl_hash_v1(&payload.grammar_id, &payload.dsl) != payload.dsl_hash {
+        return None;
+    }
+    Some(payload)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -443,6 +494,24 @@ mod tests {
         assert!(range.contains(&PalwDerivedKeyV1 { claim: h(0x02), transformer: h(0xFF) }));
         assert!(!range.contains(&PalwDerivedKeyV1 { claim: h(0x03), transformer: h(0x00) }));
         assert!(!range.contains(&PalwDerivedKeyV1 { claim: h(0x01), transformer: h(0xFF) }));
+    }
+
+    #[test]
+    fn a_dsl_payload_round_trips_and_refuses_a_tampered_body() {
+        let grammar = grammar_id_v1("scene/v1");
+        let bytes = palw_fp_dsl_encode_v1(h(0x02), h(0x09), grammar, br#"{"v":1}"#);
+        assert!(bytes.starts_with(&PALW_FP_DSL_V1_MAGIC));
+        let decoded = palw_fp_dsl_decode_v1(&bytes).expect("decodes");
+        assert_eq!(decoded.claim_id, h(0x02));
+        assert_eq!(decoded.dsl, br#"{"v":1}"#);
+        assert_eq!(decoded.dsl_hash, dsl_hash_v1(&grammar, br#"{"v":1}"#));
+        // Flip a DSL byte: the declared hash no longer matches.
+        let mut tampered = bytes.clone();
+        let last = tampered.len() - 1;
+        tampered[last] ^= 1;
+        assert!(palw_fp_dsl_decode_v1(&tampered).is_none());
+        assert!(palw_fp_dsl_decode_v1(b"FPM1junk").is_none());
+        assert!(palw_fp_dsl_decode_v1(&palw_fp_dsl_encode_v1(h(1), h(2), grammar, b"")).is_none(), "an empty DSL is no DSL");
     }
 
     #[test]

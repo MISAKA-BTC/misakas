@@ -15,14 +15,21 @@ kaspa-consensus-core.workspace = true
 kaspa-hashes.workspace = true
 # The simulation kind's step-hash chain and every keyed digest a kind needs.
 blake2b_simd.workspace = true
+borsh.workspace = true
 faster-hex.workspace = true
 # The `code` / `contract` kinds' first named toolchain is the tree's own EVM (ADR-0078 Decision 11):
 # `kaspa-evm` pins the spec id the lane executes under, `revm` is the machine.
 kaspa-evm.workspace = true
 revm = { version = "14", default-features = false, features = ["std"] }
+# The X6 verifier: a family's rendered-output hash rule, exported by the family crate.
+misaka-palw-base0.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 
 [lints]
 workspace = true
+
+[[bin]]
+name = "palw-derive"
+path = "src/bin/palw-derive.rs"

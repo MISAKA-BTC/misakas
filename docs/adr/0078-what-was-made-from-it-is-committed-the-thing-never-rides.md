@@ -81,7 +81,11 @@ that wants the chain to hold a thing has to argue against this sentence.
 
 **Decision 2 — the DSL is the claim's output, canonicalized by a registered grammar.** The
 transformer's input is the rendering of the ids the claim committed (`output_root` is
-`output_commitment_v2` over exactly those ids, so a consumer holding the answer recomputes it),
+`output_commitment_v2(job_context_hash, ids, rendered_hash)` — the ids, the job's context hash,
+and the family's rendered-output hash, which on every shipped family is itself a keyed hash of
+the ids; so a consumer holding the answer's ids, the job's context hash (a public value the
+gateway returns beside the answer) and the family's name recomputes it — implementation note,
+2026-09-02: the ADR's first draft read "over exactly those ids", and the code says three inputs),
 passed through a grammar's canonicalizer — a pure function (whitespace, key order, number form,
 nothing semantic) named by `grammar_id`. `dsl_hash = H(grammar_id ‖ canonical bytes)`. A parse
 failure yields no derived object and nothing else: the inference still certifies and still mines,
@@ -345,8 +349,9 @@ X3   A transformer named by any object is byte-identical on two architectures ov
 X4   A parse failure under a grammar produces no object and changes nothing about the claim.
 X5   A derivation credits no weight, no payment and no exposure (Decision 7 is the only way it
      ever will, and it is not this ADR).
-X6   From (answer ids, grammar_id, transformer_id) alone, a consumer recomputes output_root,
-     dsl_hash and artifact_hash and reaches the object's values or a demonstrable mismatch.
+X6   From (answer ids, the job's context hash, the family, grammar_id, transformer_id) alone, a
+     consumer recomputes output_root, dsl_hash and artifact_hash and reaches the object's values
+     or a demonstrable mismatch (`palw-derive verify`).
 X7   ADR-0077's R0 and R1 hold unchanged: one inference, one claim; the receipt's bytes and the
      seat's bytes are what they were.
 X8   A kind id is assigned once and never reused; the chain checks kind != 0 and interprets no
