@@ -97,16 +97,40 @@ The working directory is an explicit `0700` scratch dir, never the operator's ho
 Adding a name to the allowlist is a source change and a review, not a config edit.
 
 **A platform backend is opt-in, and it proves itself before it is believed.**
-`MISAKA_PALW_CONFINEMENT=macos-sandbox-exec` installs the macOS backend; unset (or `none`) leaves
-the environment discipline alone, which is the default. A requested backend is declared **in
-force** only after its own drill has *observed* its denials on that host — a child starts, a write
-inside the outbox lands, a write outside is denied, and a socket that is reachable unconfined is
-refused under the profile. A backend that fails any of those reports `none` with the reason, never
-the value that was configured. **What the macOS backend delivers, stated exactly:** no network
-egress, and no writes outside the working directory and the outbox. **What it does not deliver:** a
-narrowed read set — the platform's loader needs to read a set this code cannot enumerate, and a
-profile with reads restricted to the artifact paths aborts every child before `main`. No Linux
-backend ships yet; `none` is what is reported there.
+`MISAKA_PALW_CONFINEMENT=macos-sandbox-exec` installs the macOS backend and
+`MISAKA_PALW_CONFINEMENT=linux-seccomp-landlock` the Linux one; unset (or `none`) leaves the
+environment discipline alone, which is the default. A requested backend is declared **in force**
+only after its own drill has *observed* its denials on that host — a child starts, a write inside
+the outbox lands, a write outside is denied, and a socket that is reachable unconfined is refused
+under the profile. A backend that fails any of those reports `none` with the reason, never the
+value that was configured.
+
+**What the macOS backend delivers, stated exactly:** no network egress, and no writes outside the
+working directory and the outbox. **What it does not deliver:** a narrowed read set — the
+platform's loader needs to read a set this code cannot enumerate, and a profile with reads
+restricted to the artifact paths aborts every child before `main`.
+
+**What the Linux backend delivers:** a `seccomp` filter that refuses 29 syscalls with `EPERM` —
+the whole socket family, `ptrace`, `process_vm_readv`/`writev`, the mount and namespace calls, and
+the module/key/`bpf` calls — and a `Landlock` ruleset whose **write** set is the working directory,
+the outbox and `/dev/null`, and whose **read** set is `/usr` (plus `/lib`, `/lib64`, `/bin`,
+`/sbin` where a split-`/usr` host has them as real directories), the artifact paths named by the
+allowlisted environment, and the worker binary itself. That read set is measured, not assumed: the
+drill's exec leg was run with each entry removed in turn, and `/usr` alone is what a dynamically
+linked binary needs. Its drill runs the two legs macOS cannot: **a file readable UNCONFINED is
+denied under the profile** — the confidentiality half — and **a child that stacks the `execve`
+denial can no longer exec**. Whether the host can run it at all is read from the kernel, never from
+a version number: `/sys/kernel/security/lsm` must name `landlock`, `landlock_create_ruleset` must
+answer with an ABI level, and `prctl(PR_GET_SECCOMP)` must answer at all.
+
+**What the Linux backend does not deliver on its own: the `execve` denial.** The supervisor
+installs its filter between `fork` and `execve`, so that filter cannot refuse the worker's own
+start. Seccomp filters stack and cannot be removed, so a worker binary denies `execve` on itself
+with one line at the top of `main`:
+`misaka_palw::host_security::confine_self_after_exec()`. It stacks the denial only when a
+supervisor's filter is already in force — a binary run by hand keeps what it had, because a posture
+that depended on who ran the process would make the report an assumption — and returns which of
+those happened. A worker that does not call it keeps every other denial and loses only that one.
 
 **Every job has a resident ceiling and a deadline, and exceeding either is a failed job — never a
 dead node.** `PALW_WORKER_MAX_RESIDENT_BYTES` (override:
