@@ -908,13 +908,24 @@ if [ "$OFFLINE" = 0 ]; then
     budget=$(python3 -c 'import json,sys; print(max(1, json.load(open(sys.argv[1]))["decode_budget_tokens"]))' "$WORK_DIR/width/$kind.json")
     set +e
     python3 - "$GATEWAY_PORT" "$(prompt_of "$kind")" "$budget" "$t" "$WORK_DIR/chat-$kind.json" <<'PY'
-import json, sys, urllib.request
+import json, sys, urllib.error, urllib.request
 port, prompt, max_tokens, transformer, out = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4], sys.argv[5]
 body = json.dumps({"messages": [{"role": "user", "content": prompt}],
                    "max_tokens": max_tokens, "derive": transformer}).encode()
 req = urllib.request.Request(f"http://127.0.0.1:{port}/v1/chat/completions", data=body,
                              headers={"content-type": "application/json"})
-payload = json.loads(urllib.request.urlopen(req, timeout=3600).read())
+# **A refusal is an ANSWER here, not a transport failure.** At the rows registered today the
+# gateway answers this request with an HTTP error whose body is the worker's own sentence —
+# "prompt 18 + decode ceiling 1 exceeds max_context_tokens 16" — and a client that only caught
+# the exception would report "the request failed" for the one outcome this drill exists to
+# measure. The body is kept and handed to the caller, which classifies it.
+try:
+    payload = json.loads(urllib.request.urlopen(req, timeout=3600).read())
+except urllib.error.HTTPError as e:
+    detail = e.read().decode("utf-8", "replace")
+    json.dump({"http_status": e.code, "error_body": detail}, open(out, "w"), indent=2)
+    print(f"  the gateway refused the request: HTTP {e.code} {detail.strip()[:400]}", file=sys.stderr)
+    sys.exit(7)
 json.dump(payload, open(out, "w"), indent=2)
 m = payload.get("misaka", {})
 d = m.get("derivation") or {}
@@ -927,6 +938,25 @@ if m.get("not_derived_because"):
 PY
     chat_rc=$?
     set -e
+    if [ "$chat_rc" = 7 ]; then
+      # The gateway said no. Whether that is the width or something else is the WIDTH REPORT's
+      # to say, and the two agree token for token when it is: the report computes prompt 18 /
+      # budget 0 from the row, and the worker refuses with "prompt 18 + decode ceiling 1
+      # exceeds max_context_tokens 16". Quoting the refusal beside the arithmetic is what makes
+      # this a measurement rather than two opinions.
+      refusal=$(python3 -c '
+import json,sys
+d = json.load(open(sys.argv[1]))
+print(f"HTTP {d.get('"'"'http_status'"'"')}: " + " ".join(str(d.get("error_body", "")).split())[:300])' "$WORK_DIR/chat-$kind.json")
+      if [ "${WIDTH_VERDICT[$idx]}" = "BLOCKED-ON-WIDTH" ]; then
+        CHAIN_LEG_NOTE="$CHAIN_LEG_NOTE
+  $kind: BLOCKED-ON-WIDTH on the RUNNING class — the gateway refused the job before any inference. $refusal"
+      else
+        CHAIN_LEG_NOTE="$CHAIN_LEG_NOTE
+  $kind: the gateway refused the request and the width report says the row FITS, so this is not the width. $refusal"
+      fi
+      idx=$((idx + 1)); continue
+    fi
     if [ "$chat_rc" != 0 ]; then
       CHAIN_LEG_NOTE="$CHAIN_LEG_NOTE
   $kind: the gateway request itself failed — see $WORK_DIR/gateway.log"
