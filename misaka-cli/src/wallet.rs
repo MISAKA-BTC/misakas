@@ -53,7 +53,7 @@ pub(crate) struct Funding {
 pub(crate) struct NodeView {
     pub(crate) client: KaspaRpcClient,
     pub(crate) params: Params,
-    virtual_daa: u64,
+    pub(crate) virtual_daa: u64,
     coinbase_maturity: u64,
     /// **The second gate on a coinbase spend** (ADR-0018), which the maturity floor is not.
     ///
