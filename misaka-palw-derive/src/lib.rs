@@ -448,17 +448,28 @@ mod host_posture {
     //! hash covers, for the spellings by which a Rust program starts a process, opens a socket or
     //! loads a library.
     //!
-    //! There is exactly ONE such spelling in the crate and it is not a violation:
-    //! `kinds/code.rs`'s pinned external-toolchain runner (`run_external`), which ADR-0078
-    //! Decision 11 and ADR-0079 S11 govern. It is not reachable from model output, and this
-    //! module proves the two halves of that rather than asserting it:
+    //! Every such spelling in the crate is in ONE file, `kinds/code.rs`, and both of the doors it
+    //! opens are ADR-0079 Decision 12's, not violations of S10:
     //!
-    //!   * the binary it runs and every argument come from an `ExternalToolchainManifest` an
-    //!     OPERATOR supplies, never from the DSL — and the runner refuses a binary whose SHA-256
-    //!     is not the one the manifest pins; and
-    //!   * nothing in the crate calls it. The scan requires `run_external(` to appear in the
-    //!     non-test source exactly once, at its own definition, so the day someone wires it to a
-    //!     `Transformer::run` this test goes red before the drill does.
+    //!   * **the confined EVM runner** (`build_evm_v1_confined` → `palw-evm-runner`). ADR-0078
+    //!     SA-1 requires model-written initcode to run in a separate process under Decision 5's
+    //!     confinement, so the `code` and `contract` transformers DO start a program on the
+    //!     strength of model output — which is precisely why the ADR gives it the narrowest cage
+    //!     rather than forbidding it: an ephemeral tree, `env_clear`, a resident ceiling, a
+    //!     derived deadline, and a child that holds no key, no claim and no answer. What S10
+    //!     forbids is executing model output *in the process that holds them*, and the door that
+    //!     does not do that is the one this crate keeps;
+    //!   * **the pinned external-toolchain runner** (`run_external`), which ADR-0078 Decision 11
+    //!     and ADR-0079 S11 govern. The binary it runs and every argument come from an
+    //!     `ExternalToolchainManifest` an OPERATOR supplies, never from the DSL; it refuses a
+    //!     binary whose SHA-256 is not the one the manifest pins, a host whose confinement backend
+    //!     is `none`, and a host where a bond or wallet key is reachable. Nothing in the crate
+    //!     calls it: the scan requires `run_external(` to appear in the non-test source exactly
+    //!     once, at its own definition, so the day someone wires it to a `Transformer::run` this
+    //!     test goes red before the drill does.
+    //!
+    //! `tests/derive_tree_guard.rs` holds the other half — that the in-process EVM entry point has
+    //! exactly one caller and that it is the runner binary.
     //!
     //! `register()` returns no transformer for kind 19 (`agent`): ADR-0078 SA-6's planning mode
     //! produces a task graph as an ARTIFACT, and the assertion below is written so that
@@ -477,6 +488,11 @@ mod host_posture {
     fn forbidden() -> Vec<&'static str> {
         vec![
             concat!("Command", "::new"),
+            // ADR-0079 Decision 12 spawns through the host-security API rather than `Command::new`
+            // — a scan that did not know that spelling would be blind to the doors this crate
+            // actually opens.
+            concat!("establish_", "confinement"),
+            concat!(".command", "("),
             concat!("std::", "net::"),
             concat!("Tcp", "Stream"),
             concat!("Tcp", "Listener"),
@@ -488,9 +504,10 @@ mod host_posture {
         ]
     }
 
-    /// The one file allowed to name a spawn, and the function that must contain it.
+    /// The one file allowed to name a spawn, and the two gate functions that must contain them.
     const RUNNER_FILE: &str = "src/kinds/code.rs";
     const RUNNER_FN: &str = "run_external";
+    const GATES: &[&str] = &["pub fn build_evm_v1_confined", "pub fn run_external"];
 
     #[test]
     fn nothing_executes_fetches_or_shells_out_on_the_strength_of_model_output() {
@@ -517,7 +534,26 @@ mod host_posture {
              These lines do:\n{}",
             offenders.join("\n")
         );
-        assert_eq!(exempted, 1, "the external runner's single spawn is the only exemption, and it must still be there");
+        assert!(
+            exempted > 0,
+            "the two gates' own spawns are the exemption, and they must still be in {RUNNER_FILE} — a crate that no \
+             longer names a spawn anywhere has either lost the confined EVM runner or grown a third spelling this scan \
+             cannot see"
+        );
+        // …and the exemption is only worth having while both gates are still gates.
+        let gate_file = std::fs::read_to_string(root.join(RUNNER_FILE)).expect("the gate file is in the crate");
+        for gate in GATES {
+            assert!(gate_file.contains(gate), "ADR-0079 Decision 12: {RUNNER_FILE} must still hold `{gate}`");
+        }
+        assert!(
+            gate_file.contains("reachable_signing_secrets"),
+            "ADR-0079 Decision 12 / S11: the external toolchain's output is never executed on a host that holds a bond \
+             or wallet key"
+        );
+        assert!(
+            gate_file.contains("ConfinementBackend::None"),
+            "ADR-0079 Decision 12 / S11: an external toolchain runs under a backend the host PROVED, or it does not run"
+        );
     }
 
     #[test]
