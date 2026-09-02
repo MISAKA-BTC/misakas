@@ -111,16 +111,16 @@ pub const PALW_DEVNET_WINDOWS_V1: PalwLatticeWindowsV1 = PalwLatticeWindowsV1 {
     window_bind: 40,
     window_receipt: 40,
     window_challenge: 100,
-    window_court: 300,
+    window_court: 600,
     anchor_delay: 4,
     max_beacon_gap: 20,
     reorg_margin: 10,
     receipt_maturity: 20,
     receipt_use_window: 40,
-    court_turn_deadline: 4,
+    court_turn_deadline: 5,
     fp_abandon_hold: 40,
     claim_retirement: 300,
-    withdrawal_delay: 600,
+    withdrawal_delay: 900,
 };
 /// **3,000, from the corrected worst case** (audit M2-24). The ladder's clock runs per MOVE, and a
 /// bisection round is two of them — a disclosure and a verdict — so a 22-rung ladder plus two
@@ -931,7 +931,7 @@ mod tests {
         assert!((2 * 32 + 2) * w.court_turn_deadline < w.window_court);
         assert!(w.withdrawal_delay > w.window_bind + w.window_receipt + w.window_challenge + w.window_court + w.reorg_margin);
         assert_eq!(devnet.state.window_bind(), 40);
-        assert_eq!(devnet.court.turn_deadline_daa(), 4);
+        assert_eq!(devnet.court.turn_deadline_daa(), 5);
     }
 
     #[test]

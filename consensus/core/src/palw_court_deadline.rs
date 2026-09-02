@@ -408,9 +408,12 @@ mod tests {
         assert_eq!(PALW_RC_WINDOWS_V1.window_court, 3_000);
         assert_eq!((2 * 22 + 2) * 60, 2_760);
         assert!(2_760 < PALW_RC_WINDOWS_V1.window_court);
-        // The devnet set, same arithmetic: (2 x 22 + 2) x 4 = 184 < 300.
-        assert_eq!((2 * 22 + 2) * PALW_DEVNET_WINDOWS_V1.court_turn_deadline, 184);
-        assert!(184 < PALW_DEVNET_WINDOWS_V1.window_court);
+        // The devnet set, same arithmetic at ITS clock: (2 x 22 + 2) x 5 = 230 < 600. Both of
+        // those numbers moved with ADR-0080's assembly reserve — the window because 300 could no
+        // longer hold `moves x clock + 216`, and the clock because it is DERIVED from the window
+        // and moved with it rather than being held fixed while the derivation walked away.
+        assert_eq!((2 * 22 + 2) * PALW_DEVNET_WINDOWS_V1.court_turn_deadline, 230);
+        assert!(230 < PALW_DEVNET_WINDOWS_V1.window_court);
     }
 
     /// **Which term dominates, in numbers** — the finding, not a decoration.
