@@ -8531,6 +8531,52 @@ mod consensus_params_id_tests {
         );
     }
 
+    /// **ADR-0075 on mainnet is the ruleset's, not a special case.** A mainnet-equivalent genesis
+    /// (the card stood in by synthetic bonds) assembles through `palw_v2_params_on_base` and so
+    /// carries the genesis free-prompt-certified set derived by kernel coverage — the floor, the
+    /// QWEN36 graph-v3 class and the A16 graph-v2 class — under the same `court_e2e_root` the RC
+    /// networks commit to; the chain half of every gate starts empty, as it must on a new identity.
+    #[test]
+    fn a_mainnet_equivalent_genesis_carries_the_certification_rules() {
+        use crate::config::premine::{bonded_genesis_utxos, premine_outpoint};
+        use crate::palw_e2e_adjudicability::{palw_rc_court_e2e_root_v1, palw_rc_fp_certified_class_ids_v1};
+        use crate::palw_fp_devnet_v3::{palw_devnet_bond_registry_v1, palw_v2_maturity_armable_bonds_v1};
+        use crate::palw_mode_v2::PalwConsensusMode;
+
+        let n = palw_v2_maturity_armable_bonds_v1();
+        let specs: Vec<_> = palw_devnet_bond_registry_v1(n)
+            .into_iter()
+            .enumerate()
+            .map(|(i, mut spec)| {
+                spec.bond = crate::palw_state_v2::PalwBondKeyV2(premine_outpoint(i as u32));
+                spec
+            })
+            .collect();
+        let money: Vec<(u32, [u8; 64])> =
+            specs.iter().enumerate().map(|(i, spec)| (i as u32, *spec.payout_payload.as_byte_slice())).collect();
+        let utxos = bonded_genesis_utxos(MAINNET_PARAMS.net, &money, std::iter::empty());
+        let params = palw_v2_params_from_artifacts_on_base_with_utxos(MAINNET_PARAMS, PALW_RC_GENESIS_ARTIFACT_ROOT, specs, utxos)
+            .expect("a mainnet-equivalent genesis assembles");
+        let PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else { panic!("the mode is V2") };
+
+        let certified = palw_rc_fp_certified_class_ids_v1();
+        assert_eq!(certified.len(), 3, "the floor and both model tiers' registered graphs");
+        assert_eq!(
+            bundle.state.fp_certified_classes(),
+            Some(&certified),
+            "the genesis free-prompt gate on mainnet is the drilled, coverage-derived set — and it is present, not absent"
+        );
+        assert_eq!(bundle.court_e2e_root, palw_rc_court_e2e_root_v1(), "the attempt-lane genesis set is the one this build certifies");
+        assert!(
+            crate::palw_state_v2::PalwChainStateV2::genesis()
+                .chain_certified_families(crate::palw_state_v2::PalwCertifiedLaneV1::Attempt)
+                .is_empty(),
+            "a new identity's chain set starts empty (ADR-0075 Decision 10)"
+        );
+        assert_eq!(crate::palw_state_v2::PALW_CERTIFICATION_MAX_PER_BLOCK, 2, "Decision 9's per-block grading cap");
+        params.validate_palw_v2().expect("the startup gate accepts the carded mainnet");
+    }
+
     #[test]
     fn a_mainnet_equivalent_genesis_actually_enables_palw() {
         use crate::config::premine::{MISAKA_PREMINE_CAP_SOMPI, bonded_genesis_utxos, premine_outpoint};
