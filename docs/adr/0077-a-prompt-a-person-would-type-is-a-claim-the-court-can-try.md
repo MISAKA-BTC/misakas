@@ -505,6 +505,24 @@ must be ≥ the worst-case honest replay of one interval on the slowest fleet ho
 `(⌈log₂ leaves⌉ + terminal)` must fit `window_court` under that deadline — otherwise the court
 convicts by clock.
 
+*Which cost "replay" is, settled 2026-09-03 rather than assumed.* The derivation
+(`consensus/core/src/palw_court_deadline.rs`) prices a replayed position at a decoded token's
+milliseconds, and the obvious objection is that a committed run measures **90× slower** than a bare
+forward — 5.66 s/token captured against 0.060 s/token not — which would make every floor here two
+orders of magnitude too small. **It does not, and the reason is that a court replay is not a
+committed run.** `gdn_core_anchored_replay_v1` (`palw_step_refute.rs:4228`) returns the output row
+and the recurrence state and contains **no hash, no digest and no leaf hashing anywhere in its
+body**: it is pure arithmetic. The 90× belongs to the EXECUTOR, which hashes every leaf of every
+step into the tree as it produces. So a seat's replay is `interval × forward`, the 0.060 figure,
+and the floors stand.
+
+One term remains **unmeasured and is named rather than buried**: a responder does not only replay,
+it also produces an OPENING at the disputed step, and that opening's leaves must be hashed. Read
+structurally that is ONE step's leaves, so it is additive — `interval × forward + one step's leaf
+hashing` — rather than a multiplier on `interval`. Until somebody measures it the floor is
+conservative, which is the direction a slashing rule should err in; a deadline that is too generous
+costs a slow prosecution, a deadline that is too tight convicts an honest responder.
+
 **SA-5 — Decision 16's enforcement is a licence, not a punishment, until ADR-0062 lands.** With
 ADR-0065 Decision 4 armed, id withholding under `PanelDa` yields abstention → no quorum → redraw →
 timeout void without slash. The mode's disclosure text says so. And seats, gateways and workers log
