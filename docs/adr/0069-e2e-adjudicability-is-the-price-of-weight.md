@@ -340,10 +340,28 @@ fabricated block per epoch then carries ≈ 8× the fork-choice weight the entir
 produces in that epoch, in `safe(C)` once its own panel licenses it to `Final` — the weight the
 IBD and deep-reorg gates read.
 
-**Decision 7 — an uncertified family's blocks weigh nothing.** In `chain_weights_v1`'s inputs, a
-block whose class's family is not attempt-lane certified at that block's chain point (genesis ∪
-chain, ADR-0075 Decision 4) contributes `pwu = 0` to both `safe` and `live`, whatever its ramp
-stage. The block is otherwise unchanged: it advances DAA, it is paid its budgeted subsidy
+**Decision 7 — an uncertified family's blocks weigh nothing.** A block whose class's family is not
+attempt-lane certified at that block's chain point (genesis ∪ chain, ADR-0075 Decision 4)
+contributes `pwu = 0` to both `safe` and `live`, whatever its ramp stage.
+
+*Where, corrected 2026-09-02 at implementation.* This paragraph first said "in `chain_weights_v1`'s
+inputs", which is the right rule at the wrong address, and an implementation that believed it
+closed the defect while leaving the live network open. `chain_weights_v1` is the V1 path and, on a
+V2 network, only a SEARCH ORDER — `palw_tip_weights_v1` says so in its own comment
+(`processor.rs:9822`). The authority is the state fold: `palw_state_v2.rs:2819` builds
+`PalwCandidateOrderV1::new(safe_frontier_blue_score, safe_weight, bounded_immature, candidate)`,
+and those three are hashed into the state root. So the predicate belongs at **both** addresses, and
+on the fold it belongs at every accumulation site — `safe_weight` at a claim's `Final`,
+`bounded_immature` at each recomputation, and `retired_safe_weight` when a claim retires — through
+ONE helper (`palw_class_bears_weight_v2`), because `assert_internal_consistency` re-derives
+`safe_weight == retired_safe_weight + Σ Final` and a second spelling of the rule makes the fold
+refuse states it has just built. A consequence worth stating: the free-prompt lane's own
+`safe_weight` contribution is a separate decision, not a corollary, and must be taken explicitly.
+
+The weightless→bearing crossing has no path through the share-growth walk in any case:
+`derive_class_share_growth_v1` refuses to grow a share-0 class (ADR-0069's own review fix — a zero
+share is a certification state, not a small one), so a class becomes weight-bearing only by being
+granted share, never by drifting into it. The block is otherwise unchanged: it advances DAA, it is paid its budgeted subsidy
 (ADR-0039's "admissible for liveness"), its claim runs the same lattice. Weight is what
 certification buys — Decision 5's sentence, applied to the quantity it was written about. This is a
 fork-choice rule and moves the ruleset id: it ships in the next ruleset move and is a mainnet

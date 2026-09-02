@@ -378,6 +378,11 @@ W8   PanelDa: a seat holding no ids cannot file Valid; a hash mismatch is refuse
      withholding reaches ProducerDefaulted; a court close still carries the ids.
 W9   No decision here changes how a beacon, a panel or a ticket is derived: ADR-0044 F4–F6 and
      F15 hold verbatim, pinned by the existing golden vectors.
+     (Naming note, 2026-09-03: do NOT grep the tree for "W9" to find this invariant's test. The
+     only W9 strings in the repository are the A16 kernel op of the same name —
+     `palw_base0_a16.rs:320`, `engine_a16.rs:28`, `kernels.rs:578` — so a grep returns three false
+     positives and an unwary reader records the invariant as held. The goldens W9 rests on do
+     exist; nothing asserts them under this label.)
 W10  R1: the bytes the chain carries per claim and the bytes a seat fetches per claim are
      bounded independent of decode_tokens_executed; a seat's comparison is exact equality; a
      sampled verdict never slashes — conviction is the court's alone.
