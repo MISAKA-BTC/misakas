@@ -1717,7 +1717,15 @@ mod tests {
     /// bucket, so it became 7,708: the one execution the block commits to) and how it caught
     /// ADR-0072 going the other way: two expected draws at the floor's `2^-1` target are two
     /// EXECUTIONS now that the ticket is the execution, so 2 × 7,708 again.
-    const PALW_RC_FLOOR_DERIVED_PWU: u64 = 15_416;
+    ///
+    /// **ADR-0076 moved it a third time, and this time the derivation did not change** — the
+    /// floor's TARGET did. The floor no longer shares the model tiers' seed: it holds 22‰ of a
+    /// table whose dearest class counts 348× its work, so its seed is `MAX/12,663` and one block
+    /// is 12,664 expected executions rather than two. 12,664 × 7,708 = 97,606,404. A floor block
+    /// weighing six thousand times more than it did is the arithmetic working: the floor produces
+    /// six thousand times less often, and `palw_pwu`'s identity keeps a class's weight per unit of
+    /// real work where it was.
+    const PALW_RC_FLOOR_DERIVED_PWU: u64 = 97_606_404;
 
     /// **The economic deterrent is armable on the network this build ships — that is the claim,
     /// and it is not the same as the rule being correct.**

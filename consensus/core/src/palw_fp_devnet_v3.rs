@@ -267,8 +267,22 @@ const WORKER_CARVE_PERMILLE: u16 = 620;
 ///
 /// Single-class table (BASE-0 at 1000‰), which is the honest devnet shape: an accelerated class
 /// with `coverage < 100%` carries share 0 at RC anyway (ADR-0042 Decision 8).
-/// The initial per-class DAA target the genesis registration seeds. Deliberately easy: a devnet
-/// that cannot win its own lottery produces nothing, and the retarget moves it from here.
+/// **The target the collateral derivation prices a claim at — no longer any network's seed**
+/// (ADR-0076).
+///
+/// It was the value every genesis registration carried, and the two uses shared one constant
+/// honestly. They do not share one any more: a class's seed is now
+/// `palw_class_daa::attempt_target_seed_v1(share, pwu_per_inference)`, which differs per class and
+/// per network, while what `palw_v2_collateral_for_claim_lifetime_v1` needs here is a fixed factor
+/// for a MARGIN — its own doc says the derivation is deliberately an over-estimate, because a
+/// claim's real reservation is `palw_exposure_pwu_v1`, which is `pwu_per_inference` alone and does
+/// not depend on any target at all.
+///
+/// So this stays exactly where it was and means something narrower: **a 2× margin on derived
+/// collateral**, named by the target that used to produce it. Moving it with the seeds would
+/// re-size every shipped genesis registry to chase a factor that is not in the reservation it
+/// funds; funding a bond above its requirement costs an operator nothing the chain enforces, and
+/// funding one below it is the permanent wedge that doc comment is about.
 const GENESIS_CLASS_TARGET: u128 = u128::MAX / 2;
 /// Slashable value per pwu — what an exposure ceiling is measured in.
 const SLASH_VALUE_PER_PWU: u64 = 5;

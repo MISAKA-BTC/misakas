@@ -3560,7 +3560,7 @@ pub fn palw_v2_params_from_artifacts_on_base_with_utxos(
         .map_err(|_| crate::palw_mode_v2::PalwModeV2Error::Invalid("BASE-0's registration does not derive"))?;
     let class_id = profile.shape_profile_id();
     let entry = catalog.entries().first().expect("the RC catalog has its one class");
-    let params = palw_v2_params_on_base(
+    let mut params = palw_v2_params_on_base(
         base,
         class_id,
         catalog.root(),
@@ -3569,6 +3569,20 @@ pub fn palw_v2_params_from_artifacts_on_base_with_utxos(
         base0_artifact_root,
         genesis_bonds,
     )?;
+    // **The floor is seeded by the same rule as any other class** (ADR-0076), and a network that
+    // registers ONLY the floor is the case the rule exists to protect. Its class target cannot set
+    // cadence — with one class the retarget is a deliberate no-op and the interval is `bits`'
+    // job — so the seed's whole job here is to be an ANCHOR: mainnet mints floor-only and every
+    // model class it will ever hold arrives afterwards, by registration. A floor left at half the
+    // ticket space leaves a factor of two above it, and no class dearer per unit of share than the
+    // floor could ever be seeded into the room that is not there. Seeded, the floor sits at
+    // `MAX/278` and the room above it is the 278× a model tier needs.
+    {
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &mut params.palw_consensus_mode else {
+            unreachable!("palw_v2_params_on_base installs a ConsensusV2 bundle or returns Err");
+        };
+        palw_seed_attempt_targets_v1(bundle)?;
+    }
     // **The genesis gate, on the path that can actually run it.**
     //
     // `verify_palw_genesis_v2` is the boot gate for a `ConsensusV2` artifact, and it needs the
@@ -3871,6 +3885,22 @@ pub fn palw_v2_params_with_classes_on_base(
         bundle.genesis_objects.push(dense_object);
     }
 
+    // **Every class's attempt lane is seeded at the retarget's equilibrium** (ADR-0076).
+    //
+    // Until this call all three rows carried the SAME target, because the model rows were built
+    // from `(slash, target)` read off the floor's registration a hundred lines up — one number
+    // meant "the floor's economics", and the tiers inherited the second half of it along with the
+    // first. The two halves are not alike: `slash_value_per_pwu` is per-network by rule (one slash
+    // value for the network, because it sets weight-per-collateral), while a target is per CLASS
+    // by construction, and sharing it hands the cadence table to whichever class draws fastest.
+    //
+    // Measured on the network this line changes: Relaunch 5d ran one hour with the floor at 249
+    // blocks and QWEN36 and A16 at zero, against a table allotting them 489‰ each — and no rule
+    // in the chain could repair it, because `retarget_over_span_v1` skips a class that produced
+    // nothing and `converge_idle_target_v1` moves an idle class only toward a price it is already
+    // paying. A shared seed is therefore not a slow start; it is a permanent one.
+    palw_seed_attempt_targets_v1(bundle)?;
+
     // Both gates again, from scratch, over the network actually being shipped.
     params.validate_palw_v2()?;
     let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
@@ -3881,6 +3911,63 @@ pub fn palw_v2_params_with_classes_on_base(
         genesis_utxos.get(outpoint).map(|entry| entry.amount)
     })?;
     Ok(params)
+}
+
+/// **The attempt-lane seed for every class a bundle registers** (ADR-0076).
+///
+/// `MAX · share · pwu_per_inference / PALW_ATTEMPT_TARGET_UNIT_SHARE_PWU_V1` —
+/// [`crate::palw_class_daa::attempt_target_seed_v1`] is the arithmetic and its doc is the
+/// derivation. This function is only the part that needs the bundle: **which share** each class
+/// actually holds.
+///
+/// The declared `share_permille` on a registration is NOT that number. A grant funds an entrant by
+/// scaling every incumbent, so the floor declares 1000‰ and holds 22‰ once the tiers register, and
+/// the hybrid declares 957‰ to hold 489‰ after the dense tier dilutes it. Pricing against the
+/// declared figures would be a 23× error on the floor alone. So the objects are FOLDED — through
+/// `apply_palw_transition_v2`, the same call `assemble_palw_rc_identity_v2` uses to prove a
+/// registration list applies — and the resulting table is what the seeds are computed from. A
+/// second, hand-rolled spelling of the dilution here would be a second place for it to drift, and
+/// this file already carries one such repeat (`floor_after`) whose only job is a sanity check.
+///
+/// Folding twice is deliberate and cheap: this fold reads shares from objects whose targets are
+/// about to change, and target is not an input to the share table, so the table this reads is the
+/// table the chain will hold.
+fn palw_seed_attempt_targets_v1(
+    bundle: &mut crate::palw_mode_v2::PalwConsensusParamsV2,
+) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
+    use crate::palw_state_v2::{
+        PalwBlockContextV2, PalwChainStateV2, PalwConsensusObjectV2, apply_palw_transition_v2, palw_max_exposure_pwu_of_rule_v1,
+    };
+    let invalid = crate::palw_mode_v2::PalwModeV2Error::Invalid;
+    // The genesis block's own context. Only the share table is read out of the fold, and no
+    // grant's arithmetic depends on the block, its DAA or its subsidy — so these are the genesis
+    // values rather than a placeholder that would have to be explained.
+    let ctx = PalwBlockContextV2 { block: Default::default(), daa_score: 0, blue_score: 0, subsidy: 0 };
+    let (state, _delta) =
+        apply_palw_transition_v2(&PalwChainStateV2::genesis(), &bundle.state, &ctx, &bundle.genesis_objects, None)
+            .map_err(|_| invalid("the genesis registrations do not apply, so no share table can be read from them"))?;
+
+    let mut rows: Vec<(usize, u16, u64)> = Vec::new();
+    for (index, object) in bundle.genesis_objects.iter().enumerate() {
+        let PalwConsensusObjectV2::ClassRegistered { class_id, pwu_rule, .. } = object else {
+            continue;
+        };
+        let share = state
+            .class_share_permille(class_id)
+            .ok_or(invalid("a registered class holds no share in the table its own registration produced"))?;
+        rows.push((index, share, palw_max_exposure_pwu_of_rule_v1(pwu_rule)));
+    }
+    if rows.is_empty() {
+        return Err(invalid("a ConsensusV2 bundle registers at least the base class"));
+    }
+    for (index, share, pwu) in rows {
+        let seed = crate::palw_class_daa::attempt_target_seed_v1(share, pwu);
+        let PalwConsensusObjectV2::ClassRegistered { initial_target, .. } = &mut bundle.genesis_objects[index] else {
+            unreachable!("the index was taken from a ClassRegistered row of this same list");
+        };
+        *initial_target = seed;
+    }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------------------------

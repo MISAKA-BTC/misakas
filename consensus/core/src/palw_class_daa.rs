@@ -647,6 +647,99 @@ pub fn converge_idle_target_v1(current_target: u128, floor_price: u128, max_fact
     step.min(floor_price).max(current_target)
 }
 
+// =============================================================================================
+// ADR-0076 — the attempt lane's SEED is the retarget's own equilibrium
+// =============================================================================================
+
+/// **The share·pwu at which a class would draw the whole ticket space** — the one absolute in
+/// [`attempt_target_seed_v1`], and the only number in it that is chosen rather than derived.
+///
+/// Only RATIOS of class targets carry meaning: a target decides what fraction of a class's draws
+/// admit, the aggregate block interval is `DifficultyManager::calculate_difficulty_bits`'s job
+/// (ADR-0071 Decision 1, as the live network measured), and the two retargets are wired so they
+/// cannot fight over one cadence. So the absolute scale is free, and free means it should be spent
+/// on the thing scaling can still get wrong: **headroom**. A class seeded at `u128::MAX` has none —
+/// no class dearer per unit of share can ever be seeded above it, and no retarget can lift it,
+/// because a target may not exceed the ticket space. Anchoring the table's dearest class AT the
+/// ceiling would therefore make the network's own genesis the permanent upper bound on every model
+/// a stranger could bring later, which is precisely what ADR-0075 opens the door to.
+///
+/// `2^31`, and what it buys, measured against the classes testnet-11 registers:
+///
+/// | class | share · pwu | seed |
+/// |---|---|---|
+/// | PALW-QWEN36 | 489 × 2,685,360 = 1,313,141,040 | `MAX / 1.63` |
+/// | PALW-QWEN25-A16 | 489 × 1,589,424 = 777,228,336 | `MAX / 2.76` |
+/// | PALW-BASE-0 | 22 × 7,708 = 169,576 | `MAX / 12,663` |
+///
+/// — the dearest class draws about every other ticket, which leaves the ceiling a factor of 1.63
+/// away and still holds the floor 7,744× below the hybrid, the ratio their shares and their
+/// counted work require. A test pins the dearest-class half of that so the constant cannot quietly
+/// stop meaning it.
+pub const PALW_ATTEMPT_TARGET_UNIT_SHARE_PWU_V1: u128 = 1 << 31;
+
+/// **One class's attempt-lane seed, at the price its share and its work already imply**
+/// (ADR-0076).
+///
+/// [`retarget_over_span_v1`] converges to `observed_c / total = share_c`. Write that out. A class
+/// produces `r_c · P_bits · (T_c / 2^128)` blocks per second, where `r_c` is how many canonical
+/// inferences its producers complete per second, so the fixed point is
+///
+/// ```text
+///     r_c · T_c  ∝  share_c        ⟺        T_c  ∝  share_c / r_c
+/// ```
+///
+/// and `r_c` is the one term consensus may not measure — a wall-clock second is a fact about a
+/// host, and ADR-0038 Decision D refuses to let one reach fork choice. What consensus DOES hold is
+/// `pwu_per_inference`: the normative step-leaf count of the class's canonical job, frozen at
+/// registration. A producer working at any fixed rate completes inferences in inverse proportion
+/// to it, so `r_c ∝ 1 / w_c` is the only hardware-free reading of the same quantity, and
+///
+/// ```text
+///     T_c  =  MAX · (share_c · w_c) / PALW_ATTEMPT_TARGET_UNIT_SHARE_PWU_V1
+/// ```
+///
+/// Each class is priced from its OWN two numbers against one pinned scale — not against the other
+/// classes — so a table's seeds do not move when a class joins or leaves it, a network that
+/// registers only the floor gets the same floor price as one that registers three tiers, and a
+/// stranger registering post-genesis is priced by the same rule that priced the incumbents.
+///
+/// # Why a seed and not a retarget
+///
+/// The retarget cannot reach this state on its own, and its own doc says why:
+/// [`converge_idle_target_v1`] moves an idle class only toward `floor_price`, the hardest target a
+/// class that ACTUALLY PRODUCED is paying — and a class seeded at the floor's price is already at
+/// it, so it does not move. A model tier seeded beside a floor that draws hundreds of times faster
+/// therefore produces nothing, is skipped by [`retarget_over_span_v1`] for producing nothing, and
+/// is left alone by [`converge_idle_target_v1`] for not being behind the incumbent's price.
+/// Measured on testnet-11 Relaunch 5d, which shipped one seed for all three classes: in the first
+/// hour the floor produced 249 blocks and the two model tiers produced zero, against a table that
+/// allots them 489‰ each.
+///
+/// # What it is not
+///
+/// It is not a cross-class price. `pwu` magnitude may never be read as one (`palw_pwu`'s own
+/// boundary note), and this does not read it as one: weight per second is `w_c · r_c · P_bits`, in
+/// which `T_c` cancels — so a seed moves the BLOCK COUNT split and leaves the weight split exactly
+/// where it was. Cadence is what the share table allots, and cadence is what this sets.
+///
+/// Never returns zero: a zero target admits nothing, and
+/// [`crate::palw_state_v2::PalwStateV2Error::ZeroClassTarget`] refuses it at the transition.
+pub fn attempt_target_seed_v1(share_permille: u16, pwu_per_inference: u64) -> u128 {
+    let share_pwu = (share_permille as u128).saturating_mul(pwu_per_inference as u128);
+    if share_pwu == 0 {
+        // A weightless or workless row. `1` is the HARDEST representable target rather than the
+        // easiest: a class that declared no share, or no work, may not be handed the space by the
+        // arithmetic that prices the ones that did. ADR-0069 Decision 5's weightless class is
+        // admissible for liveness and carries no cadence, which is exactly this value.
+        return 1;
+    }
+    if share_pwu >= PALW_ATTEMPT_TARGET_UNIT_SHARE_PWU_V1 {
+        return u128::MAX;
+    }
+    mul_div_u128(u128::MAX, share_pwu, PALW_ATTEMPT_TARGET_UNIT_SHARE_PWU_V1).max(1)
+}
+
 /// The whole retarget rule as a pure function of one chain's steps: fold from `boot_target` in chain
 /// order (oldest first), retargeting once at each boundary the steps cross.
 ///
@@ -885,6 +978,109 @@ pub fn derive_class_share_growth_v1(
         "every permille moved is a transfer with the floor, so the denominator is conserved"
     );
     out
+}
+
+#[cfg(test)]
+mod attempt_target_seed_tests {
+    use super::*;
+
+    /// The measured testnet-11 table: `(share‰, pwu_per_inference)` after the genesis grants
+    /// dilute — floor 22‰, the two model tiers 489‰ each — read off `palw_rc_shipped_params`.
+    const FLOOR: (u16, u64) = (22, 7_708);
+    const QWEN36: (u16, u64) = (489, 2_685_360);
+    const A16: (u16, u64) = (489, 1_589_424);
+
+    fn seed((share, pwu): (u16, u64)) -> u128 {
+        attempt_target_seed_v1(share, pwu)
+    }
+
+    /// The property the whole seed exists for: the RATIO of two classes' targets is the ratio of
+    /// their `share · pwu`, because that is the ratio at which their block counts land on their
+    /// shares. Asserted on the live table rather than on toy numbers, to a permille.
+    #[test]
+    fn the_seeds_are_in_the_ratio_of_share_times_counted_work() {
+        // In f64 because the exact form overflows: two seeds near the ticket space cannot be
+        // cross-multiplied in u128, and the claim under test is a ratio to a percent, not a bit.
+        for (a, b) in [(QWEN36, FLOOR), (QWEN36, A16), (A16, FLOOR)] {
+            let want = (a.0 as f64 * a.1 as f64) / (b.0 as f64 * b.1 as f64);
+            let got = seed(a) as f64 / seed(b) as f64;
+            assert!(
+                (got - want).abs() <= want / 100.0,
+                "seed ratio {got} is not the share·pwu ratio {want} for {a:?} over {b:?}"
+            );
+        }
+    }
+
+    /// **The 5d defect, as a test.** Three classes with different `share · pwu` may not share one
+    /// seed: that is what the network shipped, and the floor took every block for an hour.
+    #[test]
+    fn classes_that_cost_differently_are_not_seeded_alike() {
+        let seeds = [seed(FLOOR), seed(QWEN36), seed(A16)];
+        for (i, a) in seeds.iter().enumerate() {
+            for b in seeds.iter().skip(i + 1) {
+                assert_ne!(a, b, "two classes of different cost were seeded at one target");
+            }
+        }
+        assert!(seed(FLOOR) < seed(A16), "the floor draws fastest per unit of share, so it is priced hardest");
+        assert!(seed(A16) < seed(QWEN36), "the dearer tier holds the easier target at equal share");
+    }
+
+    /// The unit leaves headroom above the dearest class this ruleset registers. A class seeded AT
+    /// the ceiling makes the genesis the permanent upper bound on every later entrant, which is
+    /// the door ADR-0075 opens.
+    #[test]
+    fn the_dearest_class_is_under_the_ceiling_with_room_above_it() {
+        let dearest = seed(QWEN36);
+        assert!(dearest < u128::MAX, "the dearest genesis class is not pinned at the ticket space");
+        assert!(dearest > u128::MAX / 2, "the unit is not so large that the whole table is squeezed into a corner");
+    }
+
+    /// A floor-only network — mainnet's own shape at mint, before any model registers — leaves
+    /// room for the classes that arrive later. This is the number that makes ADR-0075's
+    /// permissionless path reachable at all.
+    #[test]
+    fn a_floor_only_network_leaves_room_for_the_tiers_that_arrive_later() {
+        let alone = attempt_target_seed_v1(1000, FLOOR.1);
+        assert!(alone < u128::MAX / 200, "a floor at half the space would leave a factor of two for every future class");
+        // A model tier joining at the minimum grantable share is priced above the incumbent floor
+        // exactly in the ratio of their share·pwu, and there is room to hold it.
+        let entrant = attempt_target_seed_v1(1, QWEN36.1);
+        assert!(entrant > 0 && entrant < u128::MAX);
+    }
+
+    #[test]
+    fn a_row_that_declares_nothing_is_priced_hardest_not_easiest() {
+        assert_eq!(attempt_target_seed_v1(0, 7_708), 1, "a weightless class carries no cadence");
+        assert_eq!(attempt_target_seed_v1(22, 0), 1, "a class with no counted work carries no cadence");
+    }
+
+    #[test]
+    fn a_class_dearer_than_the_unit_clamps_at_the_ticket_space_and_never_past_it() {
+        let huge = attempt_target_seed_v1(1000, u64::MAX);
+        assert_eq!(huge, u128::MAX);
+        assert_eq!(attempt_target_seed_v1(1, (PALW_ATTEMPT_TARGET_UNIT_SHARE_PWU_V1) as u64), u128::MAX);
+    }
+
+    /// Monotone in both arguments — a bigger share or a dearer job is never priced harder.
+    #[test]
+    fn the_seed_is_monotone_in_share_and_in_work() {
+        for share in [1u16, 22, 100, 489, 1000] {
+            let mut previous = 0u128;
+            for pwu in [1u64, 7_708, 1_589_424, 2_685_360] {
+                let now = attempt_target_seed_v1(share, pwu);
+                assert!(now >= previous, "a dearer job was priced harder at {share}‰");
+                previous = now;
+            }
+        }
+        for pwu in [1u64, 7_708, 2_685_360] {
+            let mut previous = 0u128;
+            for share in [1u16, 22, 489, 1000] {
+                let now = attempt_target_seed_v1(share, pwu);
+                assert!(now >= previous, "a larger share was priced harder at {pwu} pwu");
+                previous = now;
+            }
+        }
+    }
 }
 
 #[cfg(test)]
