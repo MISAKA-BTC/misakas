@@ -35,13 +35,13 @@ use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{IpAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use misaka_palw::host_security::{
-    ALLOW_PUBLIC_GATEWAY_ENV, ConfinementBackend, check_public_bind, confinement_backend_in_force, harden_worker_command,
+    ALLOW_PUBLIC_GATEWAY_ENV, Confinement, ConfinementBackend, check_public_bind, establish_confinement, harden_worker_command,
     listen_is_loopback, public_gateway_acknowledged, reachable_signing_secrets, worker_working_dir,
 };
 
@@ -218,6 +218,9 @@ struct Config {
     answer_never_commit: bool,
     /// SA-8's secondary bound: public jobs per source address per [`PER_SOURCE_WINDOW`].
     per_source_jobs_per_window: u32,
+    /// ADR-0079 Decision 5's platform half, installed and PROVEN at boot before the bind guard
+    /// reads it. `none` when there is none — which Decision 10 then refuses a public bind on.
+    confinement: Confinement,
 }
 
 /// ADR-0077 SA-1(a): what public jobs have spent of the operator's exposure in this window, and
@@ -357,8 +360,8 @@ fn load_anchor(path: &Path) -> Result<(Hash64, u64), String> {
     Ok((Hash64::from_bytes(out), file.anchor_daa))
 }
 
-fn query_worker_identity(worker: &Path, workdir: &Path) -> WorkerIdentity {
-    let mut cmd = Command::new(worker);
+fn query_worker_identity(confinement: &Confinement, worker: &Path, workdir: &Path) -> WorkerIdentity {
+    let mut cmd = confinement.command(worker);
     cmd.args(["--mode", "v3-manifest"]);
     harden_worker_command(&mut cmd, workdir);
     let output = cmd.output().unwrap_or_else(|e| die(format!("cannot run {} --mode v3-manifest: {e}", worker.display())));
@@ -407,6 +410,7 @@ struct ChatRequest {
 // ---------------------------------------------------------------------------------------------
 
 fn run_worker_v3(
+    confinement: &Confinement,
     worker: &Path,
     workdir: &Path,
     trace_out: &Path,
@@ -416,7 +420,7 @@ fn run_worker_v3(
     let request_hash = fp_worker_request_hash_v3(&payload);
     // ADR-0079 Decision 5: the process that parses a stranger's prompt starts with nothing — no
     // operator environment, no PATH, and a working directory that is not the operator's home.
-    let mut command = Command::new(worker);
+    let mut command = confinement.command(worker);
     command.args(["--mode", "v3-job", "--trace-out", &trace_out.display().to_string()]);
     harden_worker_command(&mut command, workdir);
     let mut child = command
@@ -618,7 +622,7 @@ fn handle_chat(
 
     let trace_dir = config.outbox.join("traces");
     std::fs::create_dir_all(&trace_dir).map_err(|e| format!("cannot create the trace retention dir: {e}"))?;
-    let (result, _request_hash) = run_worker_v3(&config.worker, &config.workdir, &trace_dir, &request)?;
+    let (result, _request_hash) = run_worker_v3(&config.confinement, &config.worker, &config.workdir, &trace_dir, &request)?;
     let job_id = fp_job_id_v3(&result.job);
     let commitment = result.to_commitment(anchor_daa.saturating_add(config.trace_retention_window_daa));
     let work_leaves = commitment.work_leaves;
@@ -787,7 +791,7 @@ fn main() {
         Ok(dir) => dir,
         Err(e) => die(e),
     };
-    let config = Config {
+    let mut config = Config {
         listen,
         worker: worker.unwrap_or_else(|| die("--worker <palw-worker> is required".into())),
         outbox: outbox.unwrap_or_else(|| die("--outbox <dir> is required".into())),
@@ -806,6 +810,7 @@ fn main() {
         claim_exposure_sompi,
         answer_never_commit,
         per_source_jobs_per_window,
+        confinement: Confinement::none(),
     };
 
     // -----------------------------------------------------------------------------------------
@@ -831,7 +836,14 @@ fn main() {
     // a public bind on a host whose confinement backend is `none` does not start at all: that is
     // the one place where a stranger chooses the model's input.
     // -----------------------------------------------------------------------------------------
-    let backend = confinement_backend_in_force();
+    // The backend installs and PROVES its own denials here — before the bind guard asks what is in
+    // force, because a guard that read a configured value would be reading a promise.
+    let (confinement, confinement_notes) = establish_confinement(&config.workdir, &[config.workdir.clone(), config.outbox.clone()]);
+    for note in &confinement_notes {
+        eprintln!("[misaka-palw-gateway] confinement: {note}");
+    }
+    let backend = confinement.backend();
+    config.confinement = confinement;
     let acknowledged = public_gateway_acknowledged();
     if let Err(e) = check_public_bind(&config.listen, acknowledged, backend) {
         die(e);
@@ -840,7 +852,7 @@ fn main() {
     std::fs::create_dir_all(&config.outbox).unwrap_or_else(|e| die(format!("cannot create the outbox: {e}")));
     let identity = load_identity(&config.identity_path);
     load_anchor(&config.anchor_path).unwrap_or_else(|e| die(e));
-    let worker_id = query_worker_identity(&config.worker, &config.workdir);
+    let worker_id = query_worker_identity(&config.confinement, &config.worker, &config.workdir);
     if worker_id.prefill_cap == 0 || worker_id.n_ctx == 0 {
         die("the worker's v3-manifest reports no shape limits".into());
     }
@@ -1080,6 +1092,7 @@ mod tests {
             claim_exposure_sompi: 50_000,
             answer_never_commit: false,
             per_source_jobs_per_window: 2,
+            confinement: Confinement::none(),
         }
     }
 
@@ -1094,10 +1107,10 @@ mod tests {
         assert!(err.contains(ALLOW_PUBLIC_GATEWAY_ENV));
         assert!(err.to_lowercase().contains("reverse proxy"));
 
-        // The state this build actually ships in: no backend. The acknowledgement does not help.
+        // The state a host with no requested backend ships in. The acknowledgement does not help.
         let err = check_public_bind("0.0.0.0:8790", true, ConfinementBackend::None).unwrap_err();
         assert!(err.contains("does NOT override"));
-        assert_eq!(confinement_backend_in_force(), ConfinementBackend::None, "and this is what `none` looks like in force");
+        assert_eq!(Confinement::none().backend(), ConfinementBackend::None, "and this is what `none` looks like");
     }
 
     /// **No wildcard CORS** — the house rule `SECURITY.md` already states for the mining bridge,

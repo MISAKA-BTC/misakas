@@ -365,6 +365,247 @@ impl ConfinementBackend {
     }
 }
 
+/// Operator opt-in for a platform backend. Absent (or `none`) leaves the honest default: the
+/// environment discipline alone, and ADR-0079 Decision 10 refusing a public entrance.
+///
+/// Opt-in rather than default because a backend that fails to install must never reach the
+/// report, and the only way to know it installed is to PROVE it — see [`establish_confinement`],
+/// which declares a backend in force only after its own denials have been observed.
+pub const PALW_CONFINEMENT_ENV: &str = "MISAKA_PALW_CONFINEMENT";
+
+/// A confinement that has been installed and PROVEN, or the honest absence of one.
+///
+/// The value of this type is that it cannot be constructed dishonestly: the only constructor that
+/// yields a non-`None` backend is [`establish_confinement`], and that one runs the drill before it
+/// returns. A configured-but-broken backend comes back as [`ConfinementBackend::None`] with the
+/// reason in the notes.
+#[derive(Clone, Debug)]
+pub struct Confinement {
+    backend: ConfinementBackend,
+    /// The generated `sandbox-exec` profile, when the macOS backend is in force.
+    profile: Option<PathBuf>,
+}
+
+impl Confinement {
+    /// The honest absence of a backend.
+    pub fn none() -> Self {
+        Self { backend: ConfinementBackend::None, profile: None }
+    }
+
+    pub fn backend(&self) -> ConfinementBackend {
+        self.backend
+    }
+
+    /// **Build the command for a confined child.** With a backend in force the program is run
+    /// under the platform's own mechanism; without one this is `Command::new(program)` and
+    /// nothing is pretended. Callers add their arguments and then
+    /// [`harden_worker_command`] — the environment discipline applies either way.
+    pub fn command(&self, program: &Path) -> Command {
+        match (&self.backend, &self.profile) {
+            (ConfinementBackend::MacosSandboxExec, Some(profile)) => {
+                let mut cmd = Command::new(MACOS_SANDBOX_EXEC);
+                cmd.arg("-f").arg(profile).arg(program);
+                cmd
+            }
+            _ => Command::new(program),
+        }
+    }
+}
+
+const MACOS_SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
+
+/// **Install a platform backend and PROVE it before declaring it** (ADR-0079 Decision 5, S3, S12).
+///
+/// Returns the confinement and a log of what was attempted — every line of which is safe to print,
+/// because none of it is key material or a prompt. A backend is declared in force only when its
+/// drill has observed the denials it promises; otherwise the result is `none`, honestly, and the
+/// log says why. That is S12: *a test that disables the backend asserts the report says `none`
+/// rather than the configured value.*
+///
+/// `writable` is the set of directories the child may write — the outbox, and the working
+/// directory. Everything else is read-only or denied.
+pub fn establish_confinement(workdir: &Path, writable: &[PathBuf]) -> (Confinement, Vec<String>) {
+    let requested = std::env::var(PALW_CONFINEMENT_ENV).unwrap_or_default();
+    let requested = requested.trim();
+    if requested.is_empty() || requested == "none" {
+        return (
+            Confinement::none(),
+            vec![format!("no backend requested ({PALW_CONFINEMENT_ENV} unset); environment discipline only")],
+        );
+    }
+    #[cfg(target_os = "macos")]
+    if requested == ConfinementBackend::MacosSandboxExec.name() {
+        return macos::establish(workdir, writable);
+    }
+    let _ = (workdir, writable);
+    (
+        Confinement::none(),
+        vec![format!("{PALW_CONFINEMENT_ENV}={requested} is not a backend this build can install on this platform; reporting `none`")],
+    )
+}
+
+/// The macOS `sandbox-exec` backend (ADR-0079 Decision 5's "per platform, and named honestly when
+/// absent" half).
+///
+/// **What it delivers, stated exactly, because a partial control described as a full one is worse
+/// than none:** no network egress, and no writes outside the named directories. **What it does NOT
+/// deliver:** a narrowed READ set. The platform's loader needs to read a set this code cannot
+/// enumerate — a profile with `file-read*` restricted to the artifact paths aborts every child
+/// before `main`, measured on macOS 25.4 — so reads are broad and the report says so. The
+/// confidentiality half of Decision 5 is therefore only partly held here, which is what "macOS
+/// gets a partial one" means in ADR-0079 §4.
+#[cfg(target_os = "macos")]
+mod macos {
+    use super::*;
+    use std::io::Write;
+    use std::net::TcpListener;
+
+    fn sbpl_path(path: &Path) -> String {
+        // sandbox subpath matching is on the REAL path: `/var` is a symlink to `/private/var`, and
+        // a profile that names the symlink denies every write under it. Measured, not assumed.
+        let real = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        real.display().to_string().replace('\\', "\\\\").replace('"', "\\\"")
+    }
+
+    fn write_profile(workdir: &Path, writable: &[PathBuf]) -> Result<PathBuf, String> {
+        let mut writes = String::new();
+        for dir in writable {
+            writes.push_str(&format!("\n    (subpath \"{}\")", sbpl_path(dir)));
+        }
+        let profile = format!(
+            "(version 1)\n\
+             ;; ADR-0079 Decision 5 — the capability set is the arithmetic's, deny-by-default.\n\
+             (deny default)\n\
+             (allow process*)\n\
+             (allow sysctl-read)\n\
+             (allow mach*)\n\
+             (allow signal)\n\
+             ;; Reads are BROAD and this is the backend's stated limitation: a read set narrowed to\n\
+             ;; the artifact paths aborts every child before main on this platform.\n\
+             (allow file-read*)\n\
+             ;; Writes are the outbox and the working directory, and nothing else.\n\
+             (allow file-write* (subpath \"{}\"){writes})\n\
+             ;; The determinism rules already forbid a network read; here the OS enforces it.\n\
+             (deny network*)\n",
+            sbpl_path(workdir)
+        );
+        let path = workdir.join("palw-worker.sb");
+        let mut file = std::fs::File::create(&path).map_err(|e| format!("cannot write the sandbox profile: {e}"))?;
+        file.write_all(profile.as_bytes()).map_err(|e| format!("cannot write the sandbox profile: {e}"))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+        }
+        Ok(path)
+    }
+
+    fn under(profile: &Path, program: &str, args: &[&str]) -> Option<std::process::ExitStatus> {
+        Command::new(MACOS_SANDBOX_EXEC)
+            .arg("-f")
+            .arg(profile)
+            .arg(program)
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .ok()
+    }
+
+    /// **The drill** (S3): each denial is EXERCISED and the denial asserted — never the absence of
+    /// a crash. The network probe is differential and entirely local: a listener this process owns
+    /// is reachable without the sandbox and unreachable with it, so a refused connection cannot be
+    /// mistaken for a refused *port*.
+    pub(super) fn establish(workdir: &Path, writable: &[PathBuf]) -> (Confinement, Vec<String>) {
+        let mut notes = Vec::new();
+        if !Path::new(MACOS_SANDBOX_EXEC).is_file() {
+            notes.push(format!("{MACOS_SANDBOX_EXEC} is not on this host; reporting `none`"));
+            return (Confinement::none(), notes);
+        }
+        let profile = match write_profile(workdir, writable) {
+            Ok(path) => path,
+            Err(e) => {
+                notes.push(format!("{e}; reporting `none`"));
+                return (Confinement::none(), notes);
+            }
+        };
+
+        // (a) a child can start at all.
+        match under(&profile, "/bin/echo", &["ok"]) {
+            Some(status) if status.success() => notes.push("drill: a child starts under the profile".into()),
+            _ => {
+                notes.push("drill FAILED: no child starts under the profile; reporting `none`".into());
+                return (Confinement::none(), notes);
+            }
+        }
+
+        // (b) a write inside the allowed set succeeds, and one outside is DENIED.
+        let inside = workdir.join("palw-confinement-probe");
+        let outside = std::env::temp_dir().join("palw-confinement-probe-outside");
+        let _ = std::fs::remove_file(&inside);
+        let _ = std::fs::remove_file(&outside);
+        let wrote_inside =
+            under(&profile, "/bin/sh", &["-c", &format!("echo probe > {}", inside.display())]).is_some_and(|s| s.success());
+        let wrote_outside =
+            under(&profile, "/bin/sh", &["-c", &format!("echo probe > {}", outside.display())]).is_some_and(|s| s.success());
+        let _ = std::fs::remove_file(&inside);
+        let _ = std::fs::remove_file(&outside);
+        if !wrote_inside || wrote_outside {
+            notes.push(format!(
+                "drill FAILED: write inside the allowed set {} and write outside {}; reporting `none`",
+                if wrote_inside { "succeeded" } else { "was DENIED (it must not be)" },
+                if wrote_outside { "succeeded (it must not)" } else { "was denied" }
+            ));
+            return (Confinement::none(), notes);
+        }
+        notes.push("drill: writes land inside the outbox and are denied outside it".into());
+
+        // (c) the network denial, proven against a listener this process owns.
+        let Ok(listener) = TcpListener::bind("127.0.0.1:0") else {
+            notes.push("drill FAILED: cannot open a local listener to prove the network denial; reporting `none`".into());
+            return (Confinement::none(), notes);
+        };
+        let port = match listener.local_addr() {
+            Ok(addr) => addr.port(),
+            Err(_) => {
+                notes.push("drill FAILED: the probe listener has no address; reporting `none`".into());
+                return (Confinement::none(), notes);
+            }
+        };
+        if !Path::new("/usr/bin/nc").is_file() {
+            notes.push("drill FAILED: /usr/bin/nc is absent, so the network denial cannot be PROVEN; reporting `none`".into());
+            return (Confinement::none(), notes);
+        }
+        let port = port.to_string();
+        let unconfined = Command::new("/usr/bin/nc")
+            .args(["-z", "-w", "2", "127.0.0.1", &port])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok_and(|s| s.success());
+        let confined = under(&profile, "/usr/bin/nc", &["-z", "-w", "2", "127.0.0.1", &port]).is_some_and(|s| s.success());
+        drop(listener);
+        if !unconfined {
+            notes.push("drill INCONCLUSIVE: the probe listener was unreachable even unconfined; reporting `none`".into());
+            return (Confinement::none(), notes);
+        }
+        if confined {
+            notes.push("drill FAILED: the sandboxed child reached a socket; reporting `none`".into());
+            return (Confinement::none(), notes);
+        }
+        notes.push("drill: a socket reachable unconfined is DENIED under the profile".into());
+        notes.push(
+            "limitation, stated: reads are broad under this backend — a read set narrowed to the artifact paths aborts \
+             every child before main on this platform. What it delivers is no network and no writes outside two directories."
+                .into(),
+        );
+
+        declare_backend_in_force(ConfinementBackend::MacosSandboxExec);
+        (Confinement { backend: ConfinementBackend::MacosSandboxExec, profile: Some(profile) }, notes)
+    }
+}
+
 static BACKEND_IN_FORCE: OnceLock<ConfinementBackend> = OnceLock::new();
 
 /// Record that a backend was successfully installed for children of this process. Called by the
@@ -380,10 +621,21 @@ pub fn confinement_backend_in_force() -> ConfinementBackend {
     *BACKEND_IN_FORCE.get().unwrap_or(&ConfinementBackend::None)
 }
 
-/// The backend this build COULD install on this host, which is a different question from what is
-/// in force and is reported as a different field. Today no backend ships, so this is `none`
-/// everywhere and says so rather than promising a posture the tree does not have.
+/// The backend this build COULD install on this host — a different question from what is in
+/// force, reported as a different field, and never a substitute for it. A host where this says
+/// `macos-sandbox-exec` and [`confinement_backend_in_force`] says `none` is a host where nobody
+/// asked for it, or where its drill did not pass.
+///
+/// Linux is `none` here and will stay so until a `seccomp` + `Landlock` backend ships and can
+/// prove its own denials the way the macOS one does (ADR-0079 R-04). Naming it before then would
+/// be promising a posture this build does not have.
 pub fn confinement_backend_available() -> ConfinementBackend {
+    #[cfg(target_os = "macos")]
+    {
+        if Path::new(MACOS_SANDBOX_EXEC).is_file() {
+            return ConfinementBackend::MacosSandboxExec;
+        }
+    }
     ConfinementBackend::None
 }
 
@@ -627,12 +879,26 @@ mod tests {
         assert!(err.contains("does NOT override"), "the acknowledgement must not be a way past this one");
     }
 
-    /// **S12.** With no installer having declared a backend, the report says `none` — not the
-    /// value someone configured, and not the value the platform could support.
+    /// **S12, the default.** The honest absence of a backend is a value with a name, and this
+    /// build ships no installer for any platform but macOS — so `available` is `none` and a
+    /// [`Confinement::none`] names itself.
+    ///
+    /// This deliberately does NOT assert the process-global `confinement_backend_in_force()`: the
+    /// macOS drill below declares it when it passes, and a test that read that global would pass
+    /// or fail on test ORDER. The real S12 assertion — a backend that was configured but did not
+    /// install reports `none` — lives in
+    /// [`an_unrequested_or_unsupported_backend_reports_none`], on the returned value.
     #[test]
-    fn the_backend_in_force_defaults_to_none() {
-        assert_eq!(confinement_backend_in_force(), ConfinementBackend::None);
-        assert_eq!(confinement_backend_in_force().name(), "none");
+    fn the_absence_of_a_backend_is_a_named_value() {
+        assert_eq!(Confinement::none().backend(), ConfinementBackend::None);
+        assert_eq!(ConfinementBackend::None.name(), "none");
+        // "available" is not "in force": on a mac with sandbox-exec this build COULD install one,
+        // and that says nothing about whether anyone asked or whether its drill passed.
+        assert_ne!(
+            confinement_backend_available(),
+            ConfinementBackend::LinuxSeccompLandlock,
+            "no Linux backend ships yet, and naming one would promise a posture this build does not have"
+        );
     }
 
     /// **S5.** A secret in the process's own view is found by name and by shape.
@@ -655,6 +921,58 @@ mod tests {
         let clean = reachable_signing_secrets(|_| None, &[]);
         assert!(clean.is_empty());
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **S12, the constructive half.** A backend nobody requested is `none`, and a backend name
+    /// this build cannot install is `none` too — with the reason, never the configured value.
+    #[test]
+    fn an_unrequested_or_unsupported_backend_reports_none() {
+        let workdir = std::env::temp_dir();
+        // SAFETY: single-threaded test setup.
+        unsafe { std::env::remove_var(PALW_CONFINEMENT_ENV) };
+        let (conf, notes) = establish_confinement(&workdir, &[]);
+        assert_eq!(conf.backend(), ConfinementBackend::None);
+        assert!(notes.iter().any(|n| n.contains("no backend requested")), "{notes:?}");
+
+        unsafe { std::env::set_var(PALW_CONFINEMENT_ENV, "linux-seccomp-landlock") };
+        let (conf, notes) = establish_confinement(&workdir, &[]);
+        assert_eq!(conf.backend(), ConfinementBackend::None, "a backend this build cannot install is `none`, not a promise");
+        assert!(notes.iter().any(|n| n.contains("not a backend this build can install")), "{notes:?}");
+        unsafe { std::env::remove_var(PALW_CONFINEMENT_ENV) };
+    }
+
+    /// **S3 and S4 on this platform.** The macOS backend is installed only after its own drill has
+    /// OBSERVED the denials: a child starts, a write lands inside the allowed set, a write outside
+    /// is denied, and a socket that is reachable unconfined is denied under the profile. And the
+    /// child's own output is unchanged by the confinement — S4's "identical roots or the job
+    /// fails", in the only form a test without a model can assert.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn the_macos_backend_proves_its_denials_before_it_is_declared() {
+        let workdir = std::env::temp_dir().join(format!("palw-sbx-{}", std::process::id()));
+        std::fs::create_dir_all(&workdir).unwrap();
+        // SAFETY: single-threaded test setup.
+        unsafe { std::env::set_var(PALW_CONFINEMENT_ENV, ConfinementBackend::MacosSandboxExec.name()) };
+        let (conf, notes) = establish_confinement(&workdir, std::slice::from_ref(&workdir));
+        unsafe { std::env::remove_var(PALW_CONFINEMENT_ENV) };
+
+        if conf.backend() == ConfinementBackend::None {
+            // A host where the drill could not run (no nc, no sandbox-exec, a restricted CI) is
+            // reported as `none` — which is the property, not a skipped test.
+            assert!(notes.iter().any(|n| n.contains("`none`")), "a refusal must say why: {notes:?}");
+            return;
+        }
+        assert_eq!(conf.backend(), ConfinementBackend::MacosSandboxExec);
+        assert!(notes.iter().any(|n| n.contains("DENIED under the profile")), "the network denial must be observed: {notes:?}");
+        assert!(notes.iter().any(|n| n.contains("denied outside it")), "the write denial must be observed: {notes:?}");
+        assert!(notes.iter().any(|n| n.contains("limitation, stated")), "the partial backend must name its gap: {notes:?}");
+
+        // S4's shape: the same deterministic child produces the same bytes confined and not.
+        let plain = Command::new("/bin/echo").arg("deterministic").output().expect("echo");
+        let confined = conf.command(Path::new("/bin/echo")).arg("deterministic").output().expect("echo under the sandbox");
+        assert_eq!(plain.stdout, confined.stdout, "confinement must not change what a child computes");
+        assert_eq!(plain.status.success(), confined.status.success());
+        std::fs::remove_dir_all(&workdir).ok();
     }
 
     /// The ceiling is named for what it measures and is above the hybrid class's mapped artifact,

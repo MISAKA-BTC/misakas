@@ -42,7 +42,7 @@ use kaspa_consensus_core::palw_v2::{
 };
 use kaspa_hashes::Hash64;
 use misaka_palw::host_security::{
-    ConfinementBackend, PALW_WORKER_ENV_ALLOWLIST, arm_memory_ceiling, attach_to_cgroup, confinement_backend_in_force,
+    Confinement, ConfinementBackend, PALW_WORKER_ENV_ALLOWLIST, arm_memory_ceiling, attach_to_cgroup, establish_confinement,
     harden_worker_command, resident_bytes, worker_max_resident_bytes, worker_working_dir,
 };
 
@@ -78,6 +78,9 @@ struct AgentConfig {
     /// ADR-0079 Decision 6 (as corrected by SA-1): the per-job RESIDENT ceiling. Exceeding it is
     /// a `JobFailed`; the supervisor keeps its socket, its slot and its seat.
     max_resident_bytes: u64,
+    /// ADR-0079 Decision 5's platform half: the backend that was installed AND proved its own
+    /// denials. `none` when there is none, which is a value and not a silence.
+    confinement: Confinement,
 }
 
 fn parse_args() -> AgentConfig {
@@ -151,6 +154,9 @@ fn parse_args() -> AgentConfig {
         max_conns: max_conns.clamp(1, 64),
         workdir,
         max_resident_bytes: max_resident_bytes.filter(|v| *v > 0).unwrap_or_else(worker_max_resident_bytes),
+        // Set at boot in `run`, once the notes can be printed. A config built here would have to
+        // run the drill before the log exists.
+        confinement: Confinement::none(),
     }
 }
 
@@ -227,7 +233,7 @@ fn manifest_hash64(doc: &serde_json::Value, key: &str) -> Hash64 {
 
 fn probe_worker_identity(cfg: &AgentConfig) -> WorkerIdentity {
     let (status, stdout, stderr) = run_captured(
-        Command::new(&cfg.worker).args(["--mode", "v2-manifest"]),
+        cfg.confinement.command(&cfg.worker).args(["--mode", "v2-manifest"]),
         &cfg.workdir,
         MANIFEST_PROBE_TIMEOUT,
         "worker v2-manifest probe",
@@ -481,7 +487,7 @@ fn run_worker_job(state: &AgentState, envelope: &PalwJobEnvelopeV2) -> PalwAgent
     // BEFORE the spawn so a delegated cgroup already carries `memory.max` when the child lands
     // in it.
     let ceiling_backend = arm_memory_ceiling(state.cfg.max_resident_bytes);
-    let mut command = Command::new(&state.cfg.worker);
+    let mut command = state.cfg.confinement.command(&state.cfg.worker);
     command.args(["--mode", "v2-job"]);
     harden_worker_command(&mut command, &state.cfg.workdir);
     let mut child = match command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() {
@@ -689,7 +695,7 @@ fn bind_socket(path: &Path) -> UnixListener {
 }
 
 pub fn run() {
-    let cfg = parse_args();
+    let mut cfg = parse_args();
     if !cfg.worker.is_file() {
         die(format!("worker binary not found at {}", cfg.worker.display()));
     }
@@ -697,8 +703,16 @@ pub fn run() {
     // ADR-0079 Decision 5: the boot line prints the DELIVERED set — what the child actually gets,
     // not what someone meant to configure — in the same line that prints the backend and the
     // ceiling. An operator who reads this line knows the posture without trusting a promise.
+    // The backend installs and PROVES itself here, before the first worker spawn — a configured
+    // backend that failed its own drill comes back `none` with the reason, and never reaches the
+    // report as the value someone typed (S12).
+    let (confinement, notes) = establish_confinement(&cfg.workdir, std::slice::from_ref(&cfg.workdir));
+    for note in &notes {
+        eprintln!("[palw-agent] confinement: {note}");
+    }
+    let backend = confinement.backend();
+    cfg.confinement = confinement;
     let delivered = misaka_palw::host_security::worker_environment();
-    let backend = confinement_backend_in_force();
     eprintln!(
         "[palw-agent] confinement backend {} | worker env ({} of {} allowlisted): {} | workdir {} | resident ceiling {} bytes ({})",
         backend.name(),
@@ -729,7 +743,7 @@ pub fn run() {
     let (quarantined, selftest_passed) = if identity.golden_registered {
         eprintln!("[palw-agent] running the boot golden selftest (this loads the model per vector)");
         let (status, _stdout, stderr) = run_captured(
-            Command::new(&cfg.worker).args(["--mode", "v2-selftest"]),
+            cfg.confinement.command(&cfg.worker).args(["--mode", "v2-selftest"]),
             &cfg.workdir,
             SELFTEST_TIMEOUT,
             "worker v2-selftest",
@@ -812,6 +826,7 @@ mod tests {
             max_conns: 8,
             workdir,
             max_resident_bytes,
+            confinement: Confinement::none(),
         }
     }
 

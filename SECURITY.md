@@ -89,6 +89,18 @@ the supervisor spawns by absolute path, so an inherited `PATH` would only be an 
 The working directory is an explicit `0700` scratch dir, never the operator's home or the datadir.
 Adding a name to the allowlist is a source change and a review, not a config edit.
 
+**A platform backend is opt-in, and it proves itself before it is believed.**
+`MISAKA_PALW_CONFINEMENT=macos-sandbox-exec` installs the macOS backend; unset (or `none`) leaves
+the environment discipline alone, which is the default. A requested backend is declared **in
+force** only after its own drill has *observed* its denials on that host — a child starts, a write
+inside the outbox lands, a write outside is denied, and a socket that is reachable unconfined is
+refused under the profile. A backend that fails any of those reports `none` with the reason, never
+the value that was configured. **What the macOS backend delivers, stated exactly:** no network
+egress, and no writes outside the working directory and the outbox. **What it does not deliver:** a
+narrowed read set — the platform's loader needs to read a set this code cannot enumerate, and a
+profile with reads restricted to the artifact paths aborts every child before `main`. No Linux
+backend ships yet; `none` is what is reported there.
+
 **Every job has a resident ceiling and a deadline, and exceeding either is a failed job — never a
 dead node.** `PALW_WORKER_MAX_RESIDENT_BYTES` (override:
 `MISAKA_PALW_WORKER_MAX_RESIDENT_BYTES`, or `--worker-max-resident-bytes`) is enforced by a

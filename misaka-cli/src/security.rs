@@ -29,8 +29,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use misaka_palw::host_security::{
-    ALLOW_PUBLIC_GATEWAY_ENV, PALW_WORKER_ENV_ALLOWLIST, PALW_WORKER_ENV_PINNED, confinement_backend_available,
-    confinement_backend_in_force, harden_worker_command, resident_bytes, worker_max_resident_bytes, worker_working_dir,
+    ALLOW_PUBLIC_GATEWAY_ENV, PALW_WORKER_ENV_ALLOWLIST, PALW_WORKER_ENV_PINNED, confinement_backend_available, establish_confinement,
+    harden_worker_command, resident_bytes, worker_max_resident_bytes, worker_working_dir,
 };
 
 use crate::node::Ctx;
@@ -249,8 +249,21 @@ pub fn security_report(ctx: &Ctx, worker: Option<&PathBuf>, verify_artifacts: bo
     let mut json = serde_json::Map::new();
 
     // --- 1. the confinement backend, IN FORCE ------------------------------------------------
-    let in_force = confinement_backend_in_force();
+    //
+    // Measured, not read: this runs the backend's OWN drill on this host and reports what came
+    // back. A configured backend that cannot install its denials comes back `none` with the
+    // reason, which is exactly S12. A report that printed `MISAKA_PALW_CONFINEMENT` would be
+    // printing what someone typed.
+    let probe_workdir = worker_working_dir(None);
+    let (confinement, drill_notes) = match probe_workdir.as_ref() {
+        Ok(dir) => establish_confinement(dir, std::slice::from_ref(dir)),
+        Err(e) => (misaka_palw::host_security::Confinement::none(), vec![format!("no working directory to drill in: {e}")]),
+    };
+    let in_force = confinement.backend();
     let available = confinement_backend_available();
+    for note in &drill_notes {
+        rows.push(row("confinement", "drill", note.clone(), if note.contains("FAILED") { Level::Warn } else { Level::Info }));
+    }
     rows.push(row(
         "confinement",
         "backend in force",
@@ -268,11 +281,17 @@ pub fn security_report(ctx: &Ctx, worker: Option<&PathBuf>, verify_artifacts: bo
     }
     json.insert(
         "confinement".into(),
-        serde_json::json!({ "in_force": in_force.name(), "available": available.name(), "reported_from": "live process state" }),
+        serde_json::json!({
+            "in_force": in_force.name(),
+            "available": available.name(),
+            "requested": std::env::var(misaka_palw::host_security::PALW_CONFINEMENT_ENV).unwrap_or_else(|_| "none".into()),
+            "drill": drill_notes,
+            "reported_from": "this host's own drill, run now",
+        }),
     );
 
     // --- 2. the worker environment, AS THE CHILD RECEIVED IT ---------------------------------
-    let workdir = worker_working_dir(None);
+    let workdir = probe_workdir;
     let (delivered, measured_by) = measure_delivered_environment(workdir.as_deref().ok());
     for line in &delivered {
         rows.push(row("environment", "delivered", line.clone(), Level::Ok));
@@ -625,8 +644,18 @@ mod tests {
     /// value someone configured, and not what the platform could support.
     #[test]
     fn the_report_says_none_when_no_backend_is_in_force() {
-        assert_eq!(confinement_backend_in_force().name(), "none");
-        assert_eq!(confinement_backend_available().name(), "none");
+        // SAFETY: single-threaded test setup.
+        unsafe { std::env::remove_var(misaka_palw::host_security::PALW_CONFINEMENT_ENV) };
+        let dir = std::env::temp_dir();
+        let (confinement, notes) = establish_confinement(&dir, &[]);
+        assert_eq!(confinement.backend().name(), "none");
+        assert!(notes.iter().any(|n| n.contains("no backend requested")), "{notes:?}");
+        // What the host COULD install is a separate row that never stands in for what is in
+        // force: it is reported, and it is one of the three names, and it changes nothing above.
+        assert!(
+            ["none", "macos-sandbox-exec", "linux-seccomp-landlock"].contains(&confinement_backend_available().name()),
+            "the available backend must be a named value"
+        );
     }
 
     /// Decision 4's table, as this report reads it: the gateway is the process that parses public
