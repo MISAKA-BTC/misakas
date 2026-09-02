@@ -1079,9 +1079,22 @@ mod tests {
         }
         // And the v1 enumeration of the SAME graph is over the carrier — which is what says v2 is
         // the change and not the sweep.
+        //
+        // **The unit this is stated in moved with ADR-0080 design A.** It read `v1 > budget`
+        // against `DEFAULT_MAX_CLOSE_BYTES`, which was 80 KiB and was one transaction; the budget
+        // is now a 27-chunk GROUP of 2,250,000 bytes and 264,192 is comfortably inside it. What
+        // did not change is the fact gdn v2 exists for: v1's opening does not fit ONE CARRIER and
+        // v2's does, so a court on v1 pays three extra transactions for thirty-one heads it will
+        // never read. The contrast is asserted against the chunk, which is the part, rather than
+        // against the group, which is the whole.
+        let chunk = crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES as u64;
         let v1 = palw_gdn_checkpoint_opening_bytes_v1(&recurrent_row(512), PALW_CONTEXT_LADDER_MAX_STEP_LEAVES).expect("derives");
-        assert!(v1 > budget, "gdn v1's opening fits the carrier after all — re-read this test");
+        assert!(v1 > chunk, "gdn v1's opening fits one carrier after all — re-read this test");
         assert_eq!(v1, 262_144 + 64 * 32);
+        let v2 = palw_gdn_checkpoint_opening_bytes_for_map_v1(&recurrent_row_v2(512), PALW_CONTEXT_LADDER_MAX_STEP_LEAVES)
+            .expect("derives");
+        assert!(v2 <= chunk, "the head-sliced opening stopped fitting one carrier: {v2}");
+        assert!(v1 <= budget, "the group holds v1's opening — this line is what says the comparison above is about the CHUNK");
     }
 
     /// **What the anchor does NOT flatten, named and measured.** With the id term counted, the
@@ -1162,7 +1175,12 @@ mod tests {
         assert_eq!(conv, kernel * (2 * k + v) * 4, "one head's window: conv_kernel rows of (2·k + v) lanes");
         assert_eq!(conv, 6_144);
         assert_eq!(delta + conv, 71_680);
-        assert!(delta + conv <= budget, "the recurrence opening is {} bytes against a carrier of {budget}", delta + conv);
+        // Against ONE CARRIER, which is what "fits the carrier" means for a single opening: the
+        // close budget is a 27-chunk group since ADR-0080 design A, and comparing one opening
+        // against the whole group would make this assertion true of anything.
+        let chunk = crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES as u64;
+        assert!(delta + conv <= chunk, "the recurrence opening is {} bytes against a carrier of {chunk}", delta + conv);
+        assert!(delta + conv <= budget, "and inside the group, which is the ceiling the court prices");
 
         // The v1 enumeration, on the same geometry, for the contrast that says what moved — and
         // it is still the price a v1-mapped class pays, because a class IS its map.
@@ -1173,7 +1191,13 @@ mod tests {
         assert_eq!(old_conv, gdn_conv_window_bytes_v1(&row).expect("v1 window"));
         assert_eq!(old_conv, 196_608);
         assert_eq!(old_conv, conv * heads, "the two enumerations cover the same bytes");
-        assert!(old_delta + old_conv > budget, "gdn v1 fits the carrier after all — this test's whole premise moved");
+        // **Restated in carriers, for the reason above.** This read `> budget` when the budget was
+        // 80 KiB and one transaction. 262,144 bytes is inside ADR-0080's group and outside a single
+        // chunk, and the second is the fact gdn v2 was built on: three carriers of convolution
+        // window for thirty-one heads the court will not read.
+        assert!(old_delta + old_conv > chunk, "gdn v1 fits one carrier after all — this test's whole premise moved");
+        assert_eq!(crate::palw_mode_v2::palw_close_chunks_for_bytes_v1(old_delta + old_conv), 4, "v1's opening costs four carriers");
+        assert_eq!(crate::palw_mode_v2::palw_close_chunks_for_bytes_v1(delta + conv), 1, "and v2's costs one");
 
         // The dense row, for contrast: no recurrence at all, and it is the KV history that refuses
         // it. Two different reasons, and a change that fixed one would leave the other.
@@ -1181,80 +1205,102 @@ mod tests {
         assert!(palw_gdn_checkpoint_terms_v1(&dense).is_none(), "the dense tier declared a recurrence");
     }
 
-    /// **What still refuses the hybrid 512 row, measured — because a fix that closed one term and
-    /// left three is a fix that reads as success.**
+    /// **What the hybrid 512 row costs, and by how little it now fits — because "it fits" with no
+    /// margin printed beside it is how a ceiling gets discovered at registration.**
     ///
-    /// gdn v2 removes the recurrence opening's `gdn_heads` factor and nothing else. Three terms of
-    /// the derived close are untouched by any state chunk map, and every one of them is over the
-    /// carrier on its own at `n_ctx` 512:
+    /// **This test was `what_still_refuses_the_hybrid_512_row`, and it asserted the opposite.**
+    /// Under the 80 KiB one-transaction ceiling the row was over budget three ways over, and the
+    /// test named all three so that a fix closing one and leaving two could not read as success.
+    /// ADR-0080 design A closes them by moving the CARRIER — 27 chunks rather than one transaction
+    /// — and the row is inside it. Every term below is still real and still measured; what changed
+    /// is that they are now measured against a budget that holds them.
     ///
-    /// * **the attention scores row is `attn_heads × n_ctx` wide.** At 512 that is 8,192 lanes, and
-    ///   the softmax node's close is ~125 KiB with NO history opened at all — the term is a
-    ///   property of the context, not of the anchor, and `a_kv_checkpoint_is_the_history_and_grows_with_it`
-    ///   is the same finding from the cache's side.
+    /// The three terms, unchanged as arithmetic:
+    ///
+    /// * **the attention scores row is `attn_heads × n_ctx` wide** — 8,192 lanes at 512, and the
+    ///   softmax node's close is ~125 KiB with NO history opened at all;
     /// * **the KV checkpoint is the whole history**: `n_ctx × attn_kv_heads × attn_head_dim × 4`,
-    ///   1,050,624 bytes at 512, charged once per history-reading reference.
+    ///   526,336 bytes at 512, charged once per history-reading reference;
     /// * **the recurrence's own replay evidence** is `interval` positions × five refs × one
-    ///   sibling set each, ~2 KiB of path per run at the `2^32` ladder — ~169 KiB at interval 16,
-    ///   before a single checkpoint byte.
+    ///   sibling set each, before a single checkpoint byte.
     ///
-    /// Pinned as inequalities against the budget rather than as exact byte counts, so the test
-    /// states the finding and does not become a golden nobody may move.
+    /// **The margin is the finding.** The whole derived close is 2,240,241 against a ceiling of
+    /// 2,250,000 — 9,759 bytes, 0.43 %. This row does not have room for a wider one, and a change
+    /// that adds a term to the close of any size at all takes it back out. That is asserted here
+    /// rather than left to be met at a registration.
     #[test]
-    fn what_still_refuses_the_hybrid_512_row() {
+    fn what_the_hybrid_512_row_now_costs() {
         let budget = crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES;
         let row = palw_qwen36_context_row_profile_v1(512).expect("projects");
 
         // The whole derived close, through the gate's own arithmetic.
         let cost = palw_anchored_court_cost_v1(&row).expect("a mapped row is priced").expect("derives");
+        assert_eq!(cost.max_close_bytes, 2_240_241, "the hybrid 512 row's whole close");
         assert!(
-            cost.max_close_bytes > budget,
-            "the hybrid 512 row became carriable at {} bytes — Decision 13's row is registrable and the sizing note needs it",
+            cost.max_close_bytes <= budget,
+            "the hybrid 512 row is over the ceiling again at {} — ADR-0080's count no longer buys Decision 13's first row",
             cost.max_close_bytes
         );
+        // And it is the LAST row this count buys: the margin, named.
+        let margin = budget - cost.max_close_bytes;
+        assert_eq!(margin, 9_759, "the hybrid 512 row's headroom under the 27-chunk ceiling");
+        assert!(margin * 100 < budget, "the margin grew past 1% — the ceiling or the row moved, and the launch note quotes this");
+        assert_eq!(
+            crate::palw_mode_v2::palw_close_chunks_for_bytes_v1(cost.max_close_bytes),
+            crate::palw_mode_v2::DEFAULT_MAX_CLOSE_CHUNKS,
+            "the row uses every chunk of the group — which is why 27 is the count and not 26"
+        );
 
-        // Term 1: the attention cache's anchor is the history, and it alone is over the carrier.
+        // Term 1: the attention cache's anchor is the history, and it alone is over a CARRIER —
+        // the term that made the old ceiling impossible, unchanged.
+        let chunk = crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES as u64;
         let kv = palw_kv_checkpoint_opening_bytes_v1(&row, PALW_CONTEXT_LADDER_MAX_STEP_LEAVES).expect("derives");
         assert_eq!(kv, (row.n_ctx as u64) * (row.attn_kv_heads as u64) * (row.attn_head_dim as u64) * 4 + 64 * 32);
-        assert!(kv > budget, "the KV anchor fits now — the attention half stopped being the history");
+        assert!(kv > chunk * 5, "the KV anchor stopped being the history — the attention half changed shape");
 
         // Term 2: the recurrence's replay evidence, with every checkpoint byte removed. Sixteen
-        // positions of five refs, each run carrying one sibling set at the ladder's depth.
+        // positions of five refs, each run carrying one sibling set at the ladder's depth. It was
+        // over the 80 KiB ceiling on its own; it is still most of a megabyte.
         let mut bare = palw_class_ladder_rules_v1(&row).expect("a mapped row has rules").cost_shape;
         bare.gdn_checkpoint_bytes = 0;
         bare.kv_checkpoint_bytes = 0;
         let without_anchors = derive_court_cost_shaped_v1(&row, bare).expect("derives");
         assert!(
-            without_anchors.max_close_bytes > budget,
+            without_anchors.max_close_bytes > 80 * 1024,
             "with NO anchor bytes at all the close is {} — the residue this test names is gone",
             without_anchors.max_close_bytes
         );
 
-        // Term 3: and it is still over with the history term collapsed to a single position, which
-        // is what says the residue is the CONTEXT's width rather than the interval's length.
+        // Term 3: and it is still over the OLD ceiling with the history term collapsed to a single
+        // position, which is what says the residue is the CONTEXT's width rather than the
+        // interval's length. Stated against 80 KiB because that is the ceiling the finding is
+        // about; against the group it is no longer a refusal at all.
         bare.history_positions = 1;
         let single = derive_court_cost_shaped_v1(&row, bare).expect("derives");
         assert!(
-            single.max_close_bytes > budget,
-            "a one-position history now fits at {} — the attention row stopped being n_ctx-wide",
+            single.max_close_bytes > 80 * 1024,
+            "a one-position history now fits the old carrier at {} — the attention row stopped being n_ctx-wide",
             single.max_close_bytes
         );
 
         // **And the term no state chunk map can shrink further**: one head's delta state is
         // `k_dim × v_dim × 4`, and a court replaying that head needs all of it — the recurrence is
         // separable across output lanes but the head's tile IS its `v_dim` lanes. At Qwen3.6's
-        // 128 × 128 that is 80 % of the whole carrier before a single step leaf is opened, which
-        // is the ceiling gdn v2 reaches and does not pass. Written down as the arithmetic rather
-        // than as a byte count so a narrower head moves it.
+        // 128 × 128 that is 64 KiB, which was 80 % of the whole 80 KiB carrier and is now one
+        // chunk of twenty-seven. Written down as the arithmetic rather than as a byte count so a
+        // narrower head moves it.
         let (delta, _) = palw_gdn_checkpoint_terms_v1(&row).expect("terms");
         assert_eq!(delta, (row.gdn_head_k_dim as u64) * (row.gdn_head_v_dim as u64) * 4);
-        assert!(delta * 10 > budget * 7, "one head's delta state is no longer most of the carrier — the geometry moved");
+        assert_eq!(crate::palw_mode_v2::palw_close_chunks_for_bytes_v1(delta), 1, "one head's delta state is no longer one carrier");
         // The gate charges one such opening per history-reading REFERENCE, and the recurrence node
         // declares five, so the anchored shape's floor for this graph is five of them however
         // short the interval is. Named here because it is the largest single lever left and it
-        // lives in `derive_court_cost_shaped_v1`, not in any map.
+        // lives in `derive_court_cost_shaped_v1`, not in any map — and because at 80 KiB it was
+        // the term that refused the hybrid at EVERY context, which is the zero
+        // `the_widest_context_each_family_admits` measures on the other side of the gate.
         let node_refs = 5u64;
-        assert!(node_refs * (delta + 6_144 + 64 * 32) > budget, "the per-reference anchor charge stopped being the floor");
+        assert!(node_refs * (delta + 6_144 + 64 * 32) > 80 * 1024, "the per-reference anchor charge stopped being the floor");
+        assert!(node_refs * (delta + 6_144 + 64 * 32) < budget, "five anchors are inside the group — which is what bought the row");
     }
 
     /// **The recurrence's anchored position list is the interval window**, and it is the same
@@ -1493,16 +1539,21 @@ mod the_512_breakdown {
     /// binding node while leaving the total alone would invalidate the reasoning without failing a
     /// total-only check.
     ///
-    /// **What it is evidence FOR, stated so a future reader does not re-derive it hopefully:** the
-    /// 512 rows are not carriable and no anchoring, tiling or state-chunk map reaches them. The
-    /// companion measurement is [`tests::what_still_refuses_the_hybrid_512_row`], which shows the
-    /// hybrid row is still over budget with every checkpoint byte set to ZERO and the history
-    /// collapsed to ONE position — so the residue is the CONTEXT's width, not the interval's length.
-    /// If either of these ever goes green in the other direction, ADR-0080's motivation section is
-    /// wrong and the design is worth re-opening; that is what this test is for.
+    /// **This test was `the_512_rows_name_the_node_that_refuses_them`, and it closed with
+    /// `close_bytes > budget * 10`.** That was the motivation: at the 80 KiB one-transaction
+    /// ceiling both 512 rows were an order of magnitude out of reach, and no anchoring, tiling or
+    /// state-chunk map reached them. Design A moved the carrier rather than the arithmetic, so the
+    /// four numbers below are UNCHANGED — the same nodes bind at the same byte counts — and what
+    /// they are compared against is a 27-chunk group. The test now states both halves: the
+    /// measurement that decided the ADR, and the ceiling that answered it.
+    ///
+    /// If a total ever goes DOWN, ADR-0080's motivation section is describing a cost that no
+    /// longer exists and the design is worth re-opening; that has not changed and is what the
+    /// equalities are for.
     #[test]
-    fn the_512_rows_name_the_node_that_refuses_them() {
+    fn the_512_rows_name_the_node_that_prices_them() {
         let budget = crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES;
+        const CEILING_THAT_REFUSED_THEM: u64 = 80 * 1024;
         for (label, profile, expect_close, expect_table, expect_index) in [
             ("A16 512", palw_a16_context_row_profile_v1(512).expect("projects"), 1_154_673u64, "attn", 10usize),
             ("QWEN36 512", palw_qwen36_context_row_profile_v1(512).expect("projects"), 2_240_241u64, "attn", 15usize),
@@ -1515,9 +1566,16 @@ mod the_512_breakdown {
                 "{label}: the binding close moved — if it went DOWN, re-read ADR-0080's motivation before celebrating"
             );
             assert_eq!((worst.table, worst.index), (expect_table, expect_index), "{label}: a different node binds now");
+            // The motivation, intact: an order of magnitude over the ceiling ADR-0080 replaced.
             assert!(
-                worst.close_bytes > budget * 10,
-                "{label}: {} is no longer an order of magnitude over the {budget}-byte carrier",
+                worst.close_bytes > CEILING_THAT_REFUSED_THEM * 10,
+                "{label}: {} stopped being an order of magnitude over the {CEILING_THAT_REFUSED_THEM}-byte carrier the ADR was written against",
+                worst.close_bytes
+            );
+            // And the answer: inside the 27-chunk group, which is what makes the row registrable.
+            assert!(
+                worst.close_bytes <= budget,
+                "{label}: {} is over ADR-0080's own ceiling — design A does not buy the row it was sized for",
                 worst.close_bytes
             );
         }
