@@ -616,7 +616,15 @@ pub trait ConsensusApi: Send + Sync {
     ///
     /// `None` means "no bond under this key", which is also the answer on a network with no V2
     /// state at all — both mean the same thing to the caller: nothing has been registered here.
-    fn palw_bond_of_pubkey_v2(&self, _pubkey: &[u8]) -> Option<crate::palw_state_v2::PalwBondKeyV2> {
+    ///
+    /// `Some` carries the bond's STATUS as well as its key, because "this key is taken" and "the
+    /// bond it is taken by can still work" are different answers and the caller has to tell an
+    /// operator which one it got. The lookup does not filter on that status —
+    /// [`crate::palw_state_v2::PalwChainStateV2::bond_of_pubkey_v2`] records why it must not.
+    fn palw_bond_of_pubkey_v2(
+        &self,
+        _pubkey: &[u8],
+    ) -> Option<(crate::palw_state_v2::PalwBondKeyV2, crate::palw_state_v2::PalwBondStatusV2)> {
         None
     }
 

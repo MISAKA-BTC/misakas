@@ -3513,6 +3513,27 @@ impl PalwChainStateV2 {
         self.bonds.iter()
     }
 
+    /// **Has this public key ever registered a bond here — and is that bond still Active?**
+    ///
+    /// **Deliberately UNFILTERED, and the status rides along rather than narrowing the answer.**
+    /// The registry is append-only: `BondRetireRequested` rewrites `status` in place and nothing
+    /// else writes a bond row away (`write_bond(_, None)` is reachable only from a delta undo), and
+    /// `BondRegistered` refuses any key that already appears in it —
+    /// [`PalwStateV2Error::DuplicateBondKey`], "one key, one bond". So a key that has held a bond
+    /// can never register another, retired or not.
+    ///
+    /// That is why filtering `Retiring` out here would be a defect and not a fix. A node whose
+    /// "am I already bonded?" question skipped retiring bonds would not gain the ability to
+    /// register a replacement — it would build and submit a carrier the transition must reject,
+    /// spend the fee, and leave the operator watching a ten-minute "no bond appeared" timeout
+    /// instead of reading the one line that tells them the truth: this key is spent, mint a new
+    /// ML-DSA-87 seed. The status is returned so the caller can say WHICH situation it is in
+    /// without asking a second question; `palw_bond_may_take_work_v2` is the predicate for
+    /// "may this bond be given work", which is a different question again.
+    pub fn bond_of_pubkey_v2(&self, pubkey: &[u8]) -> Option<(PalwBondKeyV2, PalwBondStatusV2)> {
+        self.bonds.iter().find(|(_, bond)| bond.pubkey == pubkey).map(|(key, bond)| (*key, bond.status.clone()))
+    }
+
     /// Decision 6's `reserved_exposure(bond)` — what the admission ceiling is checked against.
     /// Tests only: pin a class's receipt-lane target directly. The transition seeds every class
     /// at [`PALW_RECEIPT_TARGET_SEED_V1`] and only the receipt retarget moves it, so a test that
@@ -9024,6 +9045,108 @@ pub(crate) mod tests {
         assert!(
             matches!(err, PalwStateV2Error::CapabilityDeclarationWhileRetiring(b) if b == bond),
             "SA-4 must refuse by name, got {err}"
+        );
+    }
+
+    // ---- issue #95: the newcomer's key, after a retirement ------------------------------------
+
+    /// **`bond_of_pubkey_v2` must keep finding a bond after it retires, and must say that it has.**
+    ///
+    /// This is the guard on the one line a tidy-up would delete. The node asks this lookup "am I
+    /// already bonded?" before spending money on a `BondRegistered`, and the obvious-looking
+    /// improvement — skip `Retiring` rows, so a retired operator can register a replacement — is
+    /// wrong, because the CHAIN does not skip them either
+    /// (`a_retired_key_can_never_register_a_second_bond`, directly below). A filtered lookup would
+    /// not buy the replacement registration; it would buy a submitted carrier, a spent fee and the
+    /// panel's ten-minute "no bond appeared" timeout, in place of a line that tells the operator
+    /// their key is finished.
+    ///
+    /// So: the row survives retirement, the lookup still returns it, and the STATUS is what the
+    /// caller branches on. If this test ever fails because the lookup returned `None` for a
+    /// retiring bond, the fix is not to relax this assertion.
+    #[test]
+    fn bond_of_pubkey_v2_keeps_finding_a_bond_after_it_retires_and_reports_the_status() {
+        let (state, p, _ids) = chain_with_classes(1, 1_000_000);
+        let bond = bond_key(1);
+        // `chain_with_classes` registers bond 1 under this key — the same fixture the SA-4 test
+        // above uses, spelled out here because the pubkey is what this test is about.
+        let pubkey = vec![7u8; 4];
+
+        let (found, status) = state.bond_of_pubkey_v2(&pubkey).expect("an active bond is found by its key");
+        assert_eq!(found, bond);
+        assert_eq!(status, PalwBondStatusV2::Active);
+
+        let retire = PalwConsensusObjectV2::BondRetireRequested { bond, signature: vec![1] };
+        let (retired, ..) = apply_palw_transition_v6(
+            &state,
+            &p,
+            None,
+            &ctx(3, 12, 3),
+            &[retire],
+            PalwBlockWorkV3::None,
+            &[],
+            false,
+            true,
+            false,
+            false,
+        )
+        .expect("the bond retires");
+
+        let (found, status) =
+            retired.bond_of_pubkey_v2(&pubkey).expect("a RETIRING bond is still found by its key — see the doc above");
+        assert_eq!(found, bond, "retirement does not remove the row, so it must not remove the answer");
+        assert!(matches!(status, PalwBondStatusV2::Retiring { .. }), "and the status is how the caller tells them apart");
+
+        // Nothing else answers to this key, and an unknown key answers to nothing.
+        assert!(retired.bond_of_pubkey_v2(&vec![8u8; 4]).is_none(), "an unregistered key holds no bond");
+    }
+
+    /// **The reason the lookup above may not filter: one key, one bond, for the life of the chain.**
+    ///
+    /// `BondRegistered` refuses any pubkey already present in the registry
+    /// (`DuplicateBondKey`), and retirement rewrites `status` in place rather than removing the
+    /// row — so a retired key can never back another bond. An operator who wants to bond again
+    /// needs a NEW ML-DSA-87 seed, and the panel's refusal message is the only thing that says so.
+    #[test]
+    fn a_retired_key_can_never_register_a_second_bond() {
+        let (state, p, _ids) = chain_with_classes(1, 1_000_000);
+        let bond = bond_key(1);
+        let retire = PalwConsensusObjectV2::BondRetireRequested { bond, signature: vec![1] };
+        let (retired, ..) = apply_palw_transition_v6(
+            &state,
+            &p,
+            None,
+            &ctx(3, 12, 3),
+            &[retire],
+            PalwBlockWorkV3::None,
+            &[],
+            false,
+            true,
+            false,
+            false,
+        )
+        .expect("the bond retires");
+
+        // A fresh bond outpoint and a fresh operator — everything is new except the signing key.
+        let again = bond_registration_with_collateral(2, 7, 22, 1_000_000);
+        let err = apply_palw_transition_v6(
+            &retired,
+            &p,
+            None,
+            &ctx(4, 13, 4),
+            &[again],
+            PalwBlockWorkV3::None,
+            &[],
+            false,
+            true,
+            false,
+            false,
+        )
+        .expect_err("a key already in the registry may not register a second bond, retired or not");
+        assert!(
+            matches!(err, PalwStateV2Error::DuplicateBondKey(b) if b == bond_key(2)),
+            "the refusal must be DuplicateBondKey — if this ever changes, the panel's 'mint a new seed' \
+             advice and the lookup's no-filter rule both need revisiting; got {err}"
         );
     }
 

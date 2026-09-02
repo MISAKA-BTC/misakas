@@ -46,7 +46,7 @@ use kaspa_consensus_core::palw_lifecycle_objects_v2::{PALW_LIFECYCLE_TX_VERSION_
 use kaspa_consensus_core::palw_panel_v2::{
     PALW_RECEIPT_V2_MLDSA87_CONTEXT, PalwReceiptVerdictV2, PalwSeatReceiptV2, palw_receipt_message_v2,
 };
-use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwConsensusObjectV2};
+use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwBondStatusV2, PalwConsensusObjectV2};
 use kaspa_consensus_core::subnets::SUBNETWORK_ID_PALW_LIFECYCLE;
 use kaspa_consensus_core::tx::{MutableTransaction, Transaction, TransactionInput, TransactionOutpoint, TransactionOutput, UtxoEntry};
 use kaspa_consensusmanager::ConsensusManager;
@@ -1458,13 +1458,33 @@ impl PalwPanelService {
             // that restarts. Asked of the chain rather than a local marker, because this network's
             // own relaunch instructions tell operators to wipe the datadir.
             if let Some(kp) = self.keypair.as_ref()
-                && let Some(existing) = session.palw_bond_of_pubkey_v2(kp.verification_key.as_ref())
+                && let Some((existing, status)) = session.palw_bond_of_pubkey_v2(kp.verification_key.as_ref())
             {
-                info!(
-                    "[{PALW_PANEL}] this key already holds bond {}:{} on this chain — not registering another. \
-                     Drop --palw-register-bond and run with --palw-producer-bond={}:{}",
-                    existing.0.transaction_id, existing.0.index, existing.0.transaction_id, existing.0.index
-                );
+                let (txid, index) = (existing.0.transaction_id, existing.0.index);
+                match status {
+                    PalwBondStatusV2::Active => info!(
+                        "[{PALW_PANEL}] this key already holds bond {txid}:{index} on this chain — not registering \
+                         another. Drop --palw-register-bond and run with --palw-producer-bond={txid}:{index}"
+                    ),
+                    // **A key that has retired is a key that is spent, and this is the only place
+                    // that says so.** The `Active` advice is wrong twice over here:
+                    // `palw_bond_may_take_work_v2` refuses a non-Active bond, so producing with it
+                    // never seats; and registering again is not the way out either, because the
+                    // transition's `DuplicateBondKey` rule scans an append-only registry that
+                    // retirement does not remove a row from. Nothing else in the node, the RPC or
+                    // the docs told an operator that, so the observed path was: retire, restart
+                    // with --palw-register-bond, read "not registering another", and conclude the
+                    // flag was a no-op rather than that the identity was finished.
+                    PalwBondStatusV2::Retiring { since_daa } => warn!(
+                        "[{PALW_PANEL}] this key's bond {txid}:{index} is RETIRING (since DAA {since_daa}), so it can \
+                         take no new work — and it cannot be replaced from this key. The chain refuses a second \
+                         registration from any key already in the bond registry (DuplicateBondKey) and retirement \
+                         does not remove the row, so this identity is finished on this chain. To bond again: \
+                         `misaka key gen --out <a NEW seed file>`, fund that address, and pass the new file as \
+                         --palw-producer-key. The collateral of {txid}:{index} is unaffected — it is still \
+                         reclaimable at its own payee once the withdrawal delay elapses."
+                    ),
+                }
                 return;
             }
             let sized = match self.size_bond_collateral(&session) {
@@ -1520,8 +1540,11 @@ impl PalwPanelService {
                             return;
                         }
                         let session = self.consensus_manager.consensus().unguarded_session();
+                        // The status is not looked at: a bond that has just been created by
+                        // `BondRegistered` is `Active` by construction, and this loop is asking
+                        // whether the carrier landed at all.
                         if let Some(kp) = self.keypair.as_ref()
-                            && let Some(bond) = session.palw_bond_of_pubkey_v2(kp.verification_key.as_ref())
+                            && let Some((bond, _)) = session.palw_bond_of_pubkey_v2(kp.verification_key.as_ref())
                         {
                             info!(
                                 "[{PALW_PANEL}] registered bond {}:{} with {} sompi of collateral, in tx {txid}. \
@@ -3319,7 +3342,13 @@ impl PalwPanelService {
             ) {
                 return Err(PalwServeRefusalV1::BadSignature);
             }
-            let Some(bond) = session.palw_bond_of_pubkey_v2(request.requester_pubkey) else {
+            // **A `Retiring` bond is still served, deliberately.** ADR-0077 SA-2 says "an Active
+            // bond acting as challenger", but a bond that was seated before it asked to retire
+            // still owes its live duties to resolution — retirement stops it taking NEW work, not
+            // finishing old work — and its collateral is still locked, so it still bounds the
+            // requester exactly as the rate limit below needs it to. Refusing it here would cut a
+            // seat off from the material for a duty the chain still holds it to.
+            let Some((bond, _status)) = session.palw_bond_of_pubkey_v2(request.requester_pubkey) else {
                 return Err(PalwServeRefusalV1::NotBonded);
             };
             // The rate-limit key. A bond is an outpoint; hashing it gives the transport a value it

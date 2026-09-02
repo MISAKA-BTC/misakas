@@ -254,7 +254,10 @@ impl ConsensusSessionOwned {
         self.consensus.palw_class_carriages_for_sync_v1()
     }
 
-    pub fn palw_bond_of_pubkey_v2(&self, pubkey: &[u8]) -> Option<kaspa_consensus_core::palw_state_v2::PalwBondKeyV2> {
+    pub fn palw_bond_of_pubkey_v2(
+        &self,
+        pubkey: &[u8],
+    ) -> Option<(kaspa_consensus_core::palw_state_v2::PalwBondKeyV2, kaspa_consensus_core::palw_state_v2::PalwBondStatusV2)> {
         self.consensus.palw_bond_of_pubkey_v2(pubkey)
     }
 
