@@ -463,6 +463,18 @@ preset and every lineage, so a node configured with a rolling activation height 
 (`ConfigBuilder::build` panics) — an operator following this ADR cannot reach the wedged state by
 doing what it says. The cost of arming at genesis is stated in (ii) and (iv) and is paid for the
 network's whole life: the import-side identity is a bound, not an equality, from block 0.
+*And what genesis-only permanently costs* (measured 2026-09-03, `params.rs:1030`). Two consequences
+follow from the refusal above, and neither is optional:
+
+* **A chain that launched without it can only be fixed by a re-genesis.** That is why testnet-11's
+  Relaunch is the mitigation for 5e rather than one option among several, and why the relaunch's
+  schedule is a security property and not only a delivery one.
+* **On mainnet this is a one-way door.** Mainnet ships `PalwConsensusMode::Disabled`; the day its
+  genesis card is set, either this fence is armed in that genesis or the network can never carry
+  Decision 7 at all — because the standing doctrine forbids a mainnet re-genesis, and this rule
+  refuses every other arming. So "arm it at mainnet genesis" is not a deployment preference, it is
+  the only moment the option exists. A carded mainnet without it is a mainnet where an uncertified
+  family's fabricated block outweighs the honest network permanently.
 
 Two companions, so Decision 7 is not the only wall: **(a)** a `BondCapabilityDeclared` set is
 bounded and priced (ADR-0071's security amendment); **(b)** ADR-0076 §8's field is pinned to the

@@ -274,8 +274,21 @@ approval. Consequence: `max_close_bytes` becomes a function of `interval`, and `
 the one court knob a class registers that its context does not move.
 
 **Decision 12 — the ladder is sized to an artifact, not a chat turn.** `COURT_MAX_STEP_LEAVES`
-moves from `2^22` to `2^32`. The gate stays the rule: `(⌈log₂ leaves⌉ + terminal) × turn_deadline
-< window_court`, i.e. `(32 + 2) × 60 = 2,040 < 3,000`. At today's per-position counts `2^32`
+moves from `2^22` to `2^32`. The gate stays the rule — but **this paragraph stated it wrong, and
+the correction changes the decision** (measured 2026-09-03, `palw_court_deadline.rs`). The shipped
+clock counts MOVES, not rounds: `PalwCourtParamsV2::worst_case_duration_daa`
+(`palw_mode_v2.rs:361`) is `(2 × bisection_rounds + terminal_rounds) × turn_deadline_daa`, a round
+being a disclosure AND a verdict (audit M2-24). So the gate is
+`(2 × ⌈log₂ leaves⌉ + terminal) × turn_deadline < window_court`, and at `2^32` with the shipped
+deadline that is `(2 × 32 + 2) × 60 = 3,960 > 3,000` — **it does not fit.** The arithmetic below
+was a round count where the code counts moves, so this Decision as first written could not ship.
+What fits: `66 × turn_deadline < 3,000` gives `turn_deadline ≤ 45`, which is the value the ladder
+module already derives, and which the security amendment's superseded "60 → 40" proposal would
+have undercut — an unanchored 8,192-position row costs `8,192 × 572 + 10,000` = exactly 40 DAA and
+would sit on its own floor with zero margin. **45 is the number, and it is pinned from both ends:
+the ladder from above, SA-4's replay floor from below.** For reference, the shipped `2^22` ladder
+is `(2 × 22 + 2) × 60 = 2,760 < 3,000` — 8 % margin, and today it is this upper bound, not SA-4's
+lower one, that binds. At today's per-position counts `2^32`
 leaves is ~14,000 positions of the hybrid and ~43,000 of the dense tier — room for an
 8,192-position row of either, with the per-position growth the attention reductions' `KvScaled`
 widths add; the class table, not this ADR, states each row's admitted `n_ctx`, and the derivation
@@ -345,8 +358,11 @@ panel cannot replay must not execute").
   deadline, and the Decision 7 drill measures it.
 * **Commitment bytes.** `PublicDa` carries `n_ctx × 4` bytes of ids — 2 KiB at 512 — inside a
   standard transaction. `PanelDa` carries none.
-* **Court time.** A rung is a turn pair at 60 DAA; 34 rounds is ~2,040 DAA, ~68 hours worst-case
-  honest prosecution, inside `WINDOW_COURT`. `MAX_CLAIM_EXPOSURE_DAA` is unchanged.
+* **Court time.** A rung is a turn pair and the clock runs PER MOVE, so 34 rounds is 66 moves, not
+  34 (corrected 2026-09-03 — see Decision 12). At the shipped `2^22` ladder that is
+  `(2 × 22 + 2) × 60 = 2,760` DAA, ~92 hours worst-case honest prosecution, inside `WINDOW_COURT`
+  with 8 % to spare; at Decision 12's `2^32` it is 3,960 at a 60-DAA deadline and does NOT fit —
+  45 does. `MAX_CLAIM_EXPOSURE_DAA` is unchanged.
 * **Executor time.** The hybrid decodes at ~1.75 tok/s on a 24 GiB M4 Pro: a 300-token answer is
   ~3 minutes, streamed. The dense tier is interactive (~30 tok/s). Integer GPU kernels remain the
   practical-runtime plan's next stage (§8).
