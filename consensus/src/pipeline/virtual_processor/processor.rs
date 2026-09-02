@@ -428,6 +428,11 @@ pub struct VirtualStateProcessor {
     pub(super) palw_heartbeat_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0066 Decision 4: the inactivity leak's fence and its duration.
     pub(super) palw_inactivity_leak: Option<kaspa_consensus_core::config::params::PalwInactivityLeakV1>,
+    /// **ADR-0073 SA-1: the free-prompt beacon's fold width and its fence.** `None` on every
+    /// shipped preset, which is the pre-SA-1 single-block beacon. Resolved in exactly ONE place,
+    /// [`Self::palw_beacon_fold_k_at`], so the producer's walk and the validator's cannot pick
+    /// different widths for one draw.
+    pub(super) palw_beacon_fold: Option<kaspa_consensus_core::config::params::PalwBeaconFoldV1>,
 
     /// ADR-0033 (B14): the PALW credit gate's fence — `None` (every shipped network) keeps
     /// the whole gate dormant; `Some` makes crossing commitments mintable in the coinbase
@@ -697,6 +702,7 @@ impl VirtualStateProcessor {
             ),
             palw_maturity_warn_last_band: std::sync::atomic::AtomicU64::new(0),
             palw_inactivity_leak: params.palw_inactivity_leak,
+            palw_beacon_fold: params.palw_beacon_fold,
             max_block_parents: params.max_block_parents(),
             mergeset_size_limit: params.mergeset_size_limit(),
             palw_heartbeat_width_fence: params.palw_heartbeat_width_fence(),
@@ -5845,6 +5851,14 @@ impl VirtualStateProcessor {
     /// The walk starts at `from` and descends, which is what makes it candidate-scoped: two nodes
     /// with different sinks but the same candidate derive the same fact, because they walk the
     /// same chain.
+    ///
+    /// **ADR-0073 SA-1.** Past `palw_beacon_fold` the fact is the fold of the first `k` attempt
+    /// blocks at or after the slot rather than the first one alone: re-rolling a beacon costs an
+    /// inference, but WITHHOLDING one costs only a subsidy, and a producer whose block would be
+    /// the beacon can drop it when the draw disfavours its own claims. With `k` folded it must
+    /// hold all `k`. The width is resolved from the SLOT (see below), never from the walker's own
+    /// height, so the producer reading spendable quanta at the tip and the validator checking a
+    /// spend deep in the past agree about one claim's fold.
     pub(super) fn palw_beacon_fact_of_candidate(
         &self,
         from: BlockHash,
@@ -5854,6 +5868,7 @@ impl VirtualStateProcessor {
         kaspa_consensus_core::palw_fp_beacon_v3::PalwBeaconDeriveV3Error,
     > {
         let attempt_algo_id = self.palw_required_algo_id.unwrap_or(kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2);
+        let fold_k = self.palw_beacon_fold_k_at(slot);
         let facts = self.reachability_service.default_backward_chain_iterator(from).filter_map(|block| {
             let header = self.headers_store.get_header(block).ok()?;
             Some(kaspa_consensus_core::palw_fp_beacon_v3::PalwChainBlockFactV3 {
@@ -5865,7 +5880,19 @@ impl VirtualStateProcessor {
         // `..._to_genesis` rather than the bounded form: the iterator really does reach genesis,
         // and the bounded form's `WalkTooShort` exists for callers that stop early. A caller that
         // stopped early and reported `prev_attempt_daa = 0` would be inventing a witness.
-        kaspa_consensus_core::palw_fp_beacon_v3::derive_beacon_fact_to_genesis_v3(slot, attempt_algo_id, facts)
+        kaspa_consensus_core::palw_fp_beacon_v3::derive_beacon_fact_to_genesis_v3(slot, attempt_algo_id, fold_k, facts)
+    }
+
+    /// **ADR-0073 SA-1's fold width at a draw slot** — the ONE place the fence is resolved, so a
+    /// beacon two parties derive differently is unrepresentable rather than merely unlikely.
+    ///
+    /// `1` when the fence is dormant (every shipped preset) — the pre-SA-1 rule, and the width at
+    /// which the derivation returns byte-identical facts. Resolved at the SLOT and not at the
+    /// candidate's own DAA: the slot is `final_daa + receipt_maturity_daa` of the claim, a value
+    /// both the producer at virtual and the validator at the spending block read identically,
+    /// while their own heights differ by construction.
+    fn palw_beacon_fold_k_at(&self, slot: u64) -> u8 {
+        self.palw_beacon_fold.filter(|fold| fold.activation.is_active(slot)).map_or(1, |fold| fold.k)
     }
 
     /// ADR-0042 Unit C step 3: this chain block's PALW consensus objects, in the block's own
