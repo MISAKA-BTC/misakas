@@ -232,6 +232,12 @@ fn no_shipped_path_relays_a_worker_s_stderr_unless_it_is_named_here() {
     /// Permanently exempt: `(file, a substring of the offending line, why it is allowed)`.
     const ALLOWED: &[(&str, &str, &str)] = &[
         (
+            "misaka-palw-gateway/src/main.rs",
+            "[palw-worker] {line}",
+            "the gateway's per-job stderr relay: the pipe is always drained, the lines are printed only \
+             under MISAKA_PALW_GATEWAY_LOG_WORKER_STDERR=1 (consent), else one count line (ADR-0079 SA-7)",
+        ),
+        (
             "misaka-palw-agent/src/agent.rs",
             "worker v2-manifest probe failed",
             "BOOT: `run_captured`'s manifest probe, before any job exists. The supervisor is \
@@ -250,13 +256,6 @@ fn no_shipped_path_relays_a_worker_s_stderr_unless_it_is_named_here() {
     /// Tolerated for now, each with the thing that closes it. A tracked line that no longer
     /// matches is a stale exemption and fails below: the list cannot rot into a blanket.
     const TRACKED: &[(&str, &str, &str)] = &[
-        (
-            "misaka-palw-gateway/src/main.rs",
-            "\"[palw-worker] {line}\"",
-            "the gateway's per-job stderr relay — the public entrance, so the worst case. Being \
-             gated behind MISAKA_PALW_GATEWAY_LOG_WORKER_STDERR=1 by the gateway lane; delete this \
-             entry when that lands.",
-        ),
         (
             "misaka-palw-agent/src/agent.rs",
             "worker exited with {status}",

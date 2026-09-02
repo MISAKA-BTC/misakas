@@ -49,7 +49,7 @@ env = dict(os.environ)
 env["MISAKA_PALW_GGUF"] = GGUF
 gateway = subprocess.Popen(
     [GATEWAY, "--listen", f"127.0.0.1:{PORT}", "--worker", WORKER, "--outbox", str(outbox),
-     "--identity", str(identity), "--anchor", str(anchor), "--quantum-cu", "1000"],
+     "--identity", str(identity), "--anchor", str(anchor), "--class-leaves", "7708"],
     env=env, stderr=subprocess.PIPE, text=True,
 )
 try:

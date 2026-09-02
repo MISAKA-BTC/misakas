@@ -41,7 +41,7 @@ mine (ADR-0044). There is no second, mining-only lane anywhere in this path.
 
 ```bash
 MISAKA_LLAMA_SRC=$HOME/Downloads/misaka-palw-runtime/llama.cpp cargo build --release -p misaka-palw-worker
-cargo build --release -p misaka-palw-gateway
+cargo build --release -p misaka-palw-gateway -p misaka-palw-derive   # the derive crate builds palw-evm-runner, which code/contract need beside the gateway
 ```
 
 The worker needs the pinned tree (its `build.rs` refuses to build blind) and, at run time, the
