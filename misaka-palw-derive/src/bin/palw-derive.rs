@@ -203,6 +203,15 @@ fn cmd_verify(mut args: VecDeque<String>) {
     verdict.insert("kind_name".into(), kind::name(object.kind).into());
     verdict.insert("signed".into(), signature.is_some().into());
     let mut all_ok = true;
+    // **"I cannot check this" is not "this is a forgery."** An object naming a grammar or a
+    // transformer THIS build does not publish is SA-5's case, and it is the ordinary consequence
+    // of a rebuild: `transformer_id` covers the crate's source tree, so every edit under
+    // `misaka-palw-derive/src/` moves all eight ids and orphans every derivation already filed
+    // under the old ones. Reporting that as "a demonstrable false object" accuses an honest
+    // executor of the one thing Decision 5 exists to make provable, on the strength of the
+    // reader's own version. `misaka palw derived-verify` already separates UNVERIFIABLE from
+    // MISMATCH; this said MISMATCH for both.
+    let mut unverifiable: Option<String> = None;
     match verify(&object, &answer_bytes) {
         Ok(v) => {
             all_ok &= v.all_match();
@@ -215,6 +224,15 @@ fn cmd_verify(mut args: VecDeque<String>) {
             verdict.insert("manifest_kind".into(), v.manifest_kind.into());
             verdict.insert("recomputed_dsl_hash".into(), hex(v.recomputed_dsl_hash).into());
             verdict.insert("recomputed_artifact_hash".into(), hex(v.recomputed_artifact_hash).into());
+        }
+        Err(e @ (misaka_palw_derive::DeriveError::UnknownGrammar(_) | misaka_palw_derive::DeriveError::UnknownTransformer(_))) => {
+            all_ok = false;
+            unverifiable = Some(format!(
+                "{e} — this build does not publish that manifest (ADR-0078 SA-5), so nobody running it can check this derivation \
+                 either way. `palw-derive manifest --all` prints the ids this build has; a derivation is checkable only against \
+                 the build whose source tree its transformer_id names."
+            ));
+            verdict.insert("derivation_rerun".into(), unverifiable.clone().unwrap().into());
         }
         Err(e) => {
             all_ok = false;
@@ -249,7 +267,15 @@ fn cmd_verify(mut args: VecDeque<String>) {
     }
     verdict.insert(
         "verdict".into(),
-        if all_ok { "consistent" } else { "MISMATCH — a demonstrable false object (ADR-0078 Decision 5)" }.into(),
+        match (all_ok, &unverifiable) {
+            (true, _) => "consistent",
+            // Exit 2 either way — a reader who cannot check an object must not treat it as
+            // checked — but the WORD is the difference between "this executor lied" and "I am
+            // the wrong build to ask".
+            (false, Some(_)) => "UNVERIFIABLE — this build does not publish that manifest (ADR-0078 SA-5)",
+            (false, None) => "MISMATCH — a demonstrable false object (ADR-0078 Decision 5)",
+        }
+        .into(),
     );
     println!("{}", serde_json::Value::Object(verdict));
     if !all_ok {
