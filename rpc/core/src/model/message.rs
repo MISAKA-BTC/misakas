@@ -2296,6 +2296,29 @@ pub struct GetPalwProducerFactsResponse {
     /// Empty when this bond may produce now; otherwise the reason it may not, which is exactly
     /// what `PalwProducerFactsV2::ready_to_produce` says — one answer, not two.
     pub not_ready_reason: String,
+    /// **Is this class seated on the FREE-PROMPT lane** (ADR-0075 `ClassLaneCertified`, the genesis
+    /// set ∪ the chain set)? Read off `PalwProducerFactsV2::fp_certified`, which reads the same two
+    /// sets `FreePromptCommitted` refuses on (`FreePromptLaneUncertified`).
+    ///
+    /// Carried because ADR-0077 Decision 3 makes it a thing a gateway must know BEFORE it commits:
+    /// a job on a class the chain does not certify is still answered — the answer is the product —
+    /// but its commitment is unsubmittable, and the gateway can only say so by name if the chain
+    /// told it. Every other fact here was already on the wire; this was the one genuinely missing
+    /// read, and without it `identity.json`'s `class_id` was checked by nothing (ADR-0075 §4).
+    ///
+    /// False whenever `available` is false, because an unknown class is certified for nothing.
+    pub fp_certified: bool,
+    /// **The free-prompt lane's price, as the network's own bundle declares it** — the two numbers
+    /// that turn a claim's `work_leaves` into quanta and therefore into exposure
+    /// (`fp_class_quantum_leaves_v1`, `fp_quanta_v3`; ADR-0074 Decision 5).
+    ///
+    /// A gateway that hardcoded "an eighth" would be declaring a number the chain owns, and would
+    /// mis-size its own exposure room on any network that set it otherwise. Zero means this network
+    /// prices no free-prompt lane at all — the attempt-only configuration — and a commitment on it
+    /// would never enter the state.
+    pub fp_quanta_per_canonical_job: u32,
+    /// The per-receipt jackpot bound (`fp_quanta_v3`'s cap). Zero on a network with no lane.
+    pub fp_max_quanta_per_receipt: u32,
     /// **Every outpoint a wallet must not spend**, `txid:index` with a 128-hex transaction id.
     ///
     /// Two sources, deliberately in ONE list so a wallet cannot read half of it (audit3 H3, H12):
@@ -2315,9 +2338,11 @@ pub struct GetPalwProducerFactsResponse {
 
 impl Serializer for GetPalwProducerFactsResponse {
     fn serialize<W: std::io::Write>(&self, writer: &mut W) -> std::io::Result<()> {
-        // Version 2: `locked_bond_outpoints` (audit3 H3). A version-1 reader stops before it, and
-        // this reader tolerates a version-1 writer by leaving it empty — the field is additive.
-        store!(u16, &2, writer)?;
+        // Version 3: `fp_certified` and the free-prompt price (ADR-0077 Decision 3). Version 2
+        // added `locked_bond_outpoints` (audit3 H3). Every version is a strict suffix, so an older
+        // reader stops where its version ended and this reader tolerates an older writer by
+        // leaving the later fields at their defaults — additive, never re-ordered.
+        store!(u16, &3, writer)?;
         store!(bool, &self.available, writer)?;
         store!(String, &self.chain_point, writer)?;
         store!(u64, &self.daa_score, writer)?;
@@ -2339,6 +2364,9 @@ impl Serializer for GetPalwProducerFactsResponse {
         store!(String, &self.bond_claim_exposure, writer)?;
         store!(String, &self.not_ready_reason, writer)?;
         store!(Vec<String>, &self.locked_bond_outpoints, writer)?;
+        store!(bool, &self.fp_certified, writer)?;
+        store!(u32, &self.fp_quanta_per_canonical_job, writer)?;
+        store!(u32, &self.fp_max_quanta_per_receipt, writer)?;
         Ok(())
     }
 }
@@ -2367,6 +2395,15 @@ impl Deserializer for GetPalwProducerFactsResponse {
         let bond_claim_exposure = load!(String, reader)?;
         let not_ready_reason = load!(String, reader)?;
         let locked_bond_outpoints = if version >= 2 { load!(Vec<String>, reader)? } else { Vec::new() };
+        // A version-2 peer knows nothing about the free-prompt lane, so it is read as uncertified
+        // and unpriced rather than as certified-by-omission: a gateway that submits on a `false`
+        // it should not have trusted loses a fee, and one that holds back on a stale `false` loses
+        // nothing it cannot retry from the outbox. Fail closed.
+        let (fp_certified, fp_quanta_per_canonical_job, fp_max_quanta_per_receipt) = if version >= 3 {
+            (load!(bool, reader)?, load!(u32, reader)?, load!(u32, reader)?)
+        } else {
+            (false, 0, 0)
+        };
         Ok(Self {
             available,
             chain_point,
@@ -2389,6 +2426,9 @@ impl Deserializer for GetPalwProducerFactsResponse {
             bond_claim_exposure,
             not_ready_reason,
             locked_bond_outpoints,
+            fp_certified,
+            fp_quanta_per_canonical_job,
+            fp_max_quanta_per_receipt,
         })
     }
 }
@@ -5144,5 +5184,94 @@ impl Deserializer for UnsubscribeResponse {
     fn deserialize<R: std::io::Read>(reader: &mut R) -> std::io::Result<Self> {
         let _version = load!(u16, reader);
         Ok(Self {})
+    }
+}
+
+#[cfg(test)]
+mod palw_producer_facts_wire_tests {
+    use super::*;
+
+    fn v3_response() -> GetPalwProducerFactsResponse {
+        GetPalwProducerFactsResponse {
+            available: true,
+            chain_point: "cc".repeat(64),
+            daa_score: 1_234,
+            class_id: "aa".repeat(64),
+            artifact_root: "bb".repeat(64),
+            class_target: "340282366920938463463374607431768211455".to_string(),
+            pwu: 7_708,
+            is_base_class: false,
+            min_trace_retention_daa: 9_000,
+            epoch_index: 12,
+            epoch_budget_blocks: 40,
+            epoch_produced_blocks: 3,
+            bond_known: true,
+            bond_registered_pubkey: "dd".repeat(32),
+            bond_operator_id: "ee".repeat(64),
+            bond_collateral: 20_000_000_000,
+            bond_reserved_exposure: "1000".to_string(),
+            bond_exposure_ceiling: "10000000".to_string(),
+            bond_claim_exposure: "250".to_string(),
+            not_ready_reason: String::new(),
+            fp_certified: true,
+            fp_quanta_per_canonical_job: 8,
+            fp_max_quanta_per_receipt: 64,
+            locked_bond_outpoints: vec![format!("{}:0", "aa".repeat(64)), format!("{}:7", "bb".repeat(64))],
+        }
+    }
+
+    /// **The borsh wire, both directions.** wRPC carries this response through `Serializer` /
+    /// `Deserializer`, and a gateway that reads its class's certification over wRPC gets a
+    /// *different* answer from a gRPC one if the two encodings disagree — which is exactly the
+    /// failure the version prefix exists to make impossible.
+    #[test]
+    fn the_producer_facts_survive_the_borsh_round_trip() {
+        let response = v3_response();
+        let mut bytes = Vec::new();
+        Serializer::serialize(&response, &mut bytes).unwrap();
+        let back = <GetPalwProducerFactsResponse as Deserializer>::deserialize(&mut bytes.as_slice()).unwrap();
+        assert!(back.fp_certified, "ADR-0077 Decision 3: a gateway cannot name its refusal without this");
+        assert_eq!(back.fp_quanta_per_canonical_job, 8, "the lane's price is the chain's, not the gateway's");
+        assert_eq!(back.fp_max_quanta_per_receipt, 64);
+        assert_eq!(back.locked_bond_outpoints, response.locked_bond_outpoints, "the must-not-spend set must not shorten");
+        assert_eq!(back.class_target, response.class_target);
+        assert_eq!(back.bond_exposure_ceiling, response.bond_exposure_ceiling);
+        assert_eq!(back.not_ready_reason, response.not_ready_reason);
+    }
+
+    /// **An older writer is read fail-CLOSED.** A version-2 peer knows nothing about the free-prompt
+    /// lane; reading its silence as "certified" would make a gateway submit on a peer's ignorance.
+    /// Uncertified and unpriced is the safe reading, and it costs a retry, not a fee.
+    #[test]
+    fn a_version_two_writer_reads_as_uncertified_and_unpriced() {
+        let r = v3_response();
+        let mut v2 = Vec::new();
+        store!(u16, &2, &mut v2).unwrap();
+        store!(bool, &r.available, &mut v2).unwrap();
+        store!(String, &r.chain_point, &mut v2).unwrap();
+        store!(u64, &r.daa_score, &mut v2).unwrap();
+        store!(String, &r.class_id, &mut v2).unwrap();
+        store!(String, &r.artifact_root, &mut v2).unwrap();
+        store!(String, &r.class_target, &mut v2).unwrap();
+        store!(u64, &r.pwu, &mut v2).unwrap();
+        store!(bool, &r.is_base_class, &mut v2).unwrap();
+        store!(u64, &r.min_trace_retention_daa, &mut v2).unwrap();
+        store!(u64, &r.epoch_index, &mut v2).unwrap();
+        store!(u64, &r.epoch_budget_blocks, &mut v2).unwrap();
+        store!(u64, &r.epoch_produced_blocks, &mut v2).unwrap();
+        store!(bool, &r.bond_known, &mut v2).unwrap();
+        store!(String, &r.bond_registered_pubkey, &mut v2).unwrap();
+        store!(String, &r.bond_operator_id, &mut v2).unwrap();
+        store!(u64, &r.bond_collateral, &mut v2).unwrap();
+        store!(String, &r.bond_reserved_exposure, &mut v2).unwrap();
+        store!(String, &r.bond_exposure_ceiling, &mut v2).unwrap();
+        store!(String, &r.bond_claim_exposure, &mut v2).unwrap();
+        store!(String, &r.not_ready_reason, &mut v2).unwrap();
+        store!(Vec<String>, &r.locked_bond_outpoints, &mut v2).unwrap();
+
+        let back = <GetPalwProducerFactsResponse as Deserializer>::deserialize(&mut v2.as_slice()).unwrap();
+        assert_eq!(back.locked_bond_outpoints, r.locked_bond_outpoints, "everything version 2 DID say is read");
+        assert!(!back.fp_certified, "silence is not certification");
+        assert_eq!((back.fp_quanta_per_canonical_job, back.fp_max_quanta_per_receipt), (0, 0), "and it prices nothing");
     }
 }
