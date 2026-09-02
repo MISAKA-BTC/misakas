@@ -226,3 +226,21 @@ part that duplicates, a part under another count, an assembly that does not hash
 or a chunked object of any other kind is refused and the block stands. `palw-certify drill`
 writes the chunks beside the whole object and `misaka-cli palw submit-object` carries them as one
 chained burst, each carrier funded from the previous one's change.
+
+**Amendment (audit 2026-09-02) — who may spend the grading cap a completing chunk is charged.**
+`PALW_CERTIFICATION_MAX_PER_BLOCK` is charged in the acceptance rehearsal, before the transition
+runs, so the rehearsal's notion of "completes a group" has to BE the transition's or the cap is
+spendable by objects that complete nothing. It was not: the rehearsal asked only whether a lone
+chunk declared `count == 1`, so `ObjectChunk { group: anything, index: anything, count: 1, bytes:
+eight bytes of nothing }` — sixty bytes at an ordinary fee — was charged a grading and then refused
+by the transition, and two per block dropped every genuine `FamilyCertified` that block carried.
+Certification is how a family earns the right to bear weight, so a block-cheap way to starve it is a
+block-cheap way to keep an honest class weightless.
+
+The rehearsal now runs the transition's own completion test — every part present, the assembly
+hashing to the declared `group`, and the object it decodes to being a `FamilyCertified` — and spends
+the cap only on a chunk that passes it. Requiring `index < count` alone is **not** that rule and
+buys nothing: `index: 0, count: 1` was always available at the identical sixty bytes and starves the
+identical cap, so a guard that asks only the index rule deletes a strictly dominated variant. Behind
+a bare `Option<ForkActivation>` (`palw_chunk_cap_charge`, `None` on every shipped preset), because
+which objects a block accepts decides its state root.

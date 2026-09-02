@@ -9966,8 +9966,13 @@ async fn palw_v2_the_pruning_ceiling_fails_closed_on_a_tip_it_cannot_read() {
 /// fees. Certification is how a family earns the right to bear weight, so a block-cheap way to
 /// starve it is a block-cheap way to keep an honest class weightless.
 ///
-/// The index rule is the transition's own (`index < count`), which is what makes asking it here an
-/// agreement rather than a second opinion.
+/// **The index rule alone was not a rule.** `index: 0, count: 1` costs the identical sixty bytes,
+/// is refused by the transition just as fast (`ChunkGroupHashMismatch`), and starves the identical
+/// cap — so a guard that asks only `index < count` deletes a strictly dominated variant and buys
+/// zero adversarial delta. What the cap is spent on is the `FamilyCertified` a completing chunk
+/// carries, so the predicate has to be the transition's own completion test: parts assembled,
+/// hashing to the declared group, decoding to a `FamilyCertified`. All three refusals are
+/// exercised below, and each of them is charged with the fence off.
 ///
 /// **Both sides of the fence are asserted.** Dormant — every shipped preset — the rehearsal is
 /// byte-identical to the one before the field existed, which is the property that lets this reach
@@ -9984,24 +9989,30 @@ async fn palw_v2_a_malformed_chunk_does_not_spend_the_certification_cap() {
     let floor_attempt = rc_attempt_evidence_v1(PalwRcFamilyV1::Base0).expect("the floor drills its attempt lane");
     let floor_fp = rc_free_prompt_evidence_v1(PalwRcFamilyV1::Base0).expect("the floor drills its free-prompt lane");
 
-    // Two ordinary graded drills, behind one sixty-byte chunk whose index is outside its own count.
-    let objects = || {
+    // **Every shape of sixty-byte chunk the transition refuses on its face**, each in front of two
+    // ordinary graded drills. `index: 5` is out of range; `index: 0` with a mismatched group is
+    // the one the index rule alone did nothing about; the third hashes correctly and simply is not
+    // a `FamilyCertified`.
+    let junk = vec![0u8; 8];
+    let honest_group = kaspa_consensus_core::palw_state_v2::palw_object_chunk_group_id_v1(&junk);
+    let bogus_chunks = [
+        ("an index outside its own count", kaspa_hashes::Hash64::from_u64_word(0xC0FFEE), 5u8),
+        ("a group id the bytes do not hash to", kaspa_hashes::Hash64::from_u64_word(0xC0FFEE), 0u8),
+        ("bytes that hash right and are not a certification", honest_group, 0u8),
+    ];
+
+    let objects = |group: kaspa_hashes::Hash64, index: u8| {
         vec![
-            PalwConsensusObjectV2::ObjectChunk {
-                group: kaspa_hashes::Hash64::from_u64_word(0xC0FFEE),
-                index: 5,
-                count: 1,
-                bytes: vec![0u8; 8],
-            },
+            PalwConsensusObjectV2::ObjectChunk { group, index, count: 1, bytes: vec![0u8; 8] },
             PalwConsensusObjectV2::FamilyCertified { evidence: Box::new(PalwCertificationEvidenceV1::Attempt(floor_attempt.clone())) },
             PalwConsensusObjectV2::FamilyCertified { evidence: Box::new(PalwCertificationEvidenceV1::FreePrompt(floor_fp.clone())) },
         ]
     };
 
-    let graded_with = |fence: Option<ForkActivation>| {
+    let graded_with = |fence: Option<ForkActivation>, group: kaspa_hashes::Hash64, index: u8| {
         let bundle = bundle.clone();
         let state_params = bundle.state.clone();
-        let objects = objects();
+        let objects = objects(group, index);
         async move {
             let config = ConfigBuilder::new(MAINNET_PARAMS)
                 .skip_proof_of_work()
@@ -10028,20 +10039,196 @@ async fn palw_v2_a_malformed_chunk_does_not_spend_the_certification_cap() {
         }
     };
 
-    // **Armed.** The chunk is refused by the transition and dropped, and both real drills are
-    // still graded: the cap belongs to the objects that can spend it.
+    for (name, group, index) in bogus_chunks {
+        // **Armed.** The chunk is refused by the transition and dropped, and both real drills are
+        // still graded: the cap belongs to the objects that can spend it.
+        assert_eq!(
+            graded_with(Some(ForkActivation::always()), group, index).await,
+            PALW_CERTIFICATION_MAX_PER_BLOCK,
+            "{name}: a chunk the transition refuses on its face must not take a grading slot from a family that earned one"
+        );
+
+        // **Dormant — every shipped preset.** The old accounting, verbatim: the bogus chunk spends
+        // a slot and one honest drill is dropped. Asserting it is what proves the fence is a fence
+        // — and asserting it for all three shapes is what proves the fence buys an adversarial
+        // delta rather than deleting a variant an attacker would never have chosen.
+        assert_eq!(
+            graded_with(None, group, index).await,
+            PALW_CERTIFICATION_MAX_PER_BLOCK - 1,
+            "{name}: fence-off must be byte-identical to today, or this is a silent rule change wearing an activation's clothes"
+        );
+    }
+    assert!(MAINNET_PARAMS.palw_chunk_cap_charge.is_none(), "and every shipped preset leaves it dormant");
+}
+
+/// **A consensus with no virtual sink is a chain that can be WEIGHED, not one with no opinion**
+/// (audit 2026-09-02, finding 1).
+///
+/// The reachability guard beside this stopped the `KeyNotFound` panic and stopped there. But
+/// `None` is not "no opinion" at either consumer: `validate_staging_palw_order` answers
+/// `(Some(_), None)` with a hard `ProtocolError` and `decide_deep_reorg_v2`'s site answers
+/// `(None, _)` with `DominanceViolation`. And a STAGING consensus — every headers-proof IBD —
+/// hands `get_palw_candidate_order_v2` the all-zero hash, because it is built
+/// `skip_adding_genesis` and has no virtual state row. So the guard converted "every node on a V2
+/// network dies mid-IBD" into "every node on a V2 network refuses IBD against every peer,
+/// forever", and the pruning-point PALW import placed one line earlier so the challenger would be
+/// a real value was dead work.
+///
+/// The staged chain's weighing point is the block whose PALW state this node actually verified:
+/// the pruning point it just imported, which is the block the tip row names.
+#[tokio::test]
+async fn palw_v2_a_consensus_with_no_virtual_sink_is_weighed_at_its_imported_tip() {
+    use crate::model::stores::palw_state_v2::PalwStateTipRecordV2;
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    use kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2;
+
+    let catalog = palw_v2_test_catalog();
+    let bundle = palw_v2_test_bundle(&catalog);
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            *p = p.clone().with_palw_v2_cadence();
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    for _ in 0..2 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+    let vp = ctx.consensus.virtual_processor();
+    let sink = ctx.consensus.get_sink();
+
+    // A consensus that HAS a sink is weighed there, and nowhere else. The header download hint is
+    // deliberately not consulted — it is a download heuristic and a fork-choice decision reading
+    // it is P0-5.
+    assert_eq!(vp.palw_weighing_point_v2(sink), Some(sink), "a live consensus is weighed at its own sink");
+
+    // **The staging shape.** `blockhash::NONE` is exactly what `get_sink()` answers on a consensus
+    // built `skip_adding_genesis`.
+    let staged = vp
+        .palw_weighing_point_v2(blockhash::NONE)
+        .expect("a consensus with no virtual sink still holds a root-verified PALW tip, and that is its standing");
+    let tip = vp.palw_state_v2_store.read().tip_record().unwrap().expect("the tip row").block;
+    assert_eq!(staged, tip, "and the point it is weighed at is that tip — the deepest block whose PALW state was checked");
+    let order = vp.palw_candidate_order_v2(staged).expect("which produces a real order, not an absent one");
+    assert_eq!(order.candidate, staged, "candidate-scoped, so two staged chains cannot compare equal by construction");
+
+    // **A tip row that will not read is NOT a weighing point.** A state fault must not become the
+    // one opinion a sinkless consensus has; the IBD then refuses, which is the safe answer.
+    let record = vp.palw_state_v2_store.read().tip_record().unwrap().expect("the healthy node holds a tip");
+    let (_, state) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("and it loads");
+    let tampered = {
+        let mut carriage = PalwStateCarriageV2::from_state(&state);
+        carriage.safe_weight += 1;
+        borsh::to_vec(&carriage).unwrap()
+    };
+    {
+        let mut store = vp.palw_state_v2_store.write();
+        store
+            .set_tip_record_for_tests(PalwStateTipRecordV2 {
+                block: record.block,
+                state_root: record.state_root,
+                carriage_borsh: tampered,
+            })
+            .expect("the fixture can corrupt its own row");
+    }
     assert_eq!(
-        graded_with(Some(ForkActivation::always())).await,
-        PALW_CERTIFICATION_MAX_PER_BLOCK,
-        "a chunk the transition refuses on its face must not take a grading slot from a family that earned one"
+        vp.palw_weighing_point_v2(blockhash::NONE),
+        None,
+        "an unreadable snapshot is a fault, and a fault must not be the standing a chain is committed on"
+    );
+    // …and the sink path is untouched by the corruption: it is still a block, still weighed there.
+    assert_eq!(vp.palw_weighing_point_v2(sink), Some(sink), "the fallback fires only where the sink is not a block at all");
+}
+
+/// **An unreadable tip REFUSES a deep reorg; it does not wave it through** (audit 2026-09-02,
+/// finding 6).
+///
+/// `palw_candidate_state_v2` opened with one `.ok().flatten()` over `load_tip`, so a snapshot a
+/// disk corrupted and "no V2 tip yet" were the same `None` — the exact conflation the pruning
+/// ceiling four lines below was fixed for, left in place in the function the same commit edited.
+/// It is not inert: `palw_frontier_provenance_outcome` reads `None` as `GateInactive`, which is
+/// ALLOW, so ADR-0065 D2's veto abstained on a deep reorg precisely when it had lost the ability
+/// to weigh one. A missing ancestor is a genuine absence and still abstains — that is the
+/// permanent-partition escape the horizon paragraph argues for — but a store that will not read is
+/// this node's own fault, and the honest answer to "may this reorg proceed" is no.
+#[tokio::test]
+async fn palw_v2_an_unreadable_tip_refuses_a_deep_reorg_rather_than_abstaining() {
+    use crate::model::stores::palw_state_v2::PalwStateTipRecordV2;
+    use kaspa_consensus_core::config::params::ForkActivation;
+    use kaspa_consensus_core::dns_finality::DnsReorgOutcome;
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    use kaspa_consensus_core::palw_state_v2::PalwStateCarriageV2;
+
+    let catalog = palw_v2_test_catalog();
+    let bundle = palw_v2_test_bundle(&catalog);
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            p.palw_frontier_provenance = Some(ForkActivation::always());
+            *p = p.clone().with_palw_v2_cadence();
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    for _ in 0..3 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+    let vp = ctx.consensus.virtual_processor();
+    let candidate = ctx.consensus.get_sink();
+    let prev_sink = vp.headers_store.get_header(candidate).unwrap().direct_parents()[0];
+
+    // Healthy: the registry minted nothing across the fork point, so D2 has nothing to veto.
+    assert_eq!(
+        vp.palw_frontier_provenance_outcome(candidate, prev_sink),
+        DnsReorgOutcome::GateInactive,
+        "a chain that minted no bonds across the fork point is not what D2 is about"
     );
 
-    // **Dormant — every shipped preset.** The old accounting, verbatim: the bogus chunk spends a
-    // slot and one honest drill is dropped. Asserting it is what proves the fence is a fence.
+    // The same tamper the pruning ceiling's test uses: the row is written at the row level,
+    // because `set_tip_batch` re-derives the root and a caller cannot store a mismatched one.
+    let record = vp.palw_state_v2_store.read().tip_record().unwrap().expect("the healthy node holds a tip");
+    let (_, state) = vp.palw_state_v2_store.read().load_tip(&bundle.state).unwrap().expect("and it loads");
+    let tampered = {
+        let mut carriage = PalwStateCarriageV2::from_state(&state);
+        carriage.safe_weight += 1;
+        borsh::to_vec(&carriage).unwrap()
+    };
+    {
+        let mut store = vp.palw_state_v2_store.write();
+        store
+            .set_tip_record_for_tests(PalwStateTipRecordV2 {
+                block: record.block,
+                state_root: record.state_root,
+                carriage_borsh: tampered,
+            })
+            .expect("the fixture can corrupt its own row");
+    }
+    assert!(vp.palw_state_v2_store.read().load_tip(&bundle.state).is_err(), "the fixture is the unreadable case");
     assert_eq!(
-        graded_with(None).await,
-        PALW_CERTIFICATION_MAX_PER_BLOCK - 1,
-        "fence-off must be byte-identical to today, or this is a silent rule change wearing an activation's clothes"
+        vp.palw_candidate_state_v2_checked(candidate),
+        Err(crate::pipeline::virtual_processor::processor::PalwWeighFaultV2::StoreUnreadable),
+        "the two reasons this node can answer nothing are told apart at the source"
     );
-    assert!(MAINNET_PARAMS.palw_chunk_cap_charge.is_none(), "and every shipped preset leaves it dormant");
+    assert_eq!(
+        vp.palw_frontier_provenance_outcome(candidate, prev_sink),
+        DnsReorgOutcome::FrontierProvenanceViolation,
+        "a veto that cannot read its own evidence must refuse the reorg, not abstain into allowing it"
+    );
+
+    // …and an honest absence keeps abstaining, which is the half that stops this being a halt.
+    {
+        let mut store = vp.palw_state_v2_store.write();
+        store.delete_tip_for_tests().expect("empty the store");
+    }
+    assert_eq!(
+        vp.palw_candidate_state_v2_checked(candidate),
+        Err(crate::pipeline::virtual_processor::processor::PalwWeighFaultV2::NoOpinion),
+        "no tip yet is an absence, not a fault"
+    );
+    assert_eq!(
+        vp.palw_frontier_provenance_outcome(candidate, prev_sink),
+        DnsReorgOutcome::GateInactive,
+        "and an absence still abstains, or a young chain could never reorg at all"
+    );
 }

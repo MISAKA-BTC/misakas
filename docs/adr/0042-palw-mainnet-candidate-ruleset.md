@@ -443,6 +443,24 @@ processor that lacks bodies and PALW state MAY use blue work as a **download-ord
 that store is renamed `header_download_hint` (not `header_selected_tip`) and is never consulted for
 chain authority, pruning, or finality.
 
+**Amendment (audit 2026-09-02) — a site with no virtual sink is ordered at its imported tip.**
+"IBD-complete tip" is a site with no sink to order: a STAGING consensus is built
+`skip_adding_genesis`, so it holds no virtual state row and its `get_sink()` answers the all-zero
+hash. Handing that to the comparator produced no order at all — and **no order is not an
+abstention**. Both consumers refuse what they cannot weigh, deliberately, so that blue work cannot
+install a chain through IBD; so a comparator with nothing to compare refused every headers-proof
+sync on a ConsensusV2 network, against every peer, permanently, and the pruning-point PALW import
+placed one line earlier "so the challenger becomes a real value" was dead work.
+
+The rule is therefore stated positively: **a consensus is ordered at the deepest block whose PALW
+state it has verified.** For a running node that is the virtual sink. For a staging consensus
+mid-IBD it is the pruning point whose carriage it has just checked against the witness child's
+header, which is the block the PALW tip row names — weighing it further forward is not available,
+because the deltas the walk needs are written by virtual processing and staging has not run any.
+This does not reintroduce the download hint as an authority: the fallback fires only where the
+sink is not a block at all, and what it reads is the verified tip row. A tip snapshot that does
+not load is not a weighing point either — a state fault is not a standing.
+
 ---
 
 ## Decision 10 — Reward is not spendable before `Final` (closes reward-before-void)
