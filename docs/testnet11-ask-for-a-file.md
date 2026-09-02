@@ -203,6 +203,10 @@ kept the HTTP response:
 <outbox>/artifacts/<derived-id>.mid          # what GET /v1/artifacts/<derived-id> serves
 ```
 
+(A `.derived-object.borsh` appears beside those once the record is signed — either by the gateway,
+if you gave it `--derive-seed`, or by the rail command below. That signed file is the one that
+goes on the chain.)
+
 Then two commands put the record on the chain — one to sign it with the same key the claim was
 made under, one to carry it:
 
