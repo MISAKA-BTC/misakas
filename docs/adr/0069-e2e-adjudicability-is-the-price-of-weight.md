@@ -367,6 +367,22 @@ certification buys — Decision 5's sentence, applied to the quantity it was wri
 fork-choice rule and moves the ruleset id: it ships in the next ruleset move and is a mainnet
 precondition.
 
+*Genesis-only, and what that permanently costs (measured 2026-09-03, `params.rs:1030`).* As
+implemented, `validate_palw_v2` REFUSES `palw_uncertified_weightless` armed above
+`genesis.daa_score` and the node does not start: arming it mid-chain would re-weigh blocks already
+in the fold, so a running chain cannot be repaired by a rolling deploy. Two consequences follow and
+neither is optional:
+
+* **A chain that launched without it can only be fixed by a re-genesis.** That is why testnet-11's
+  Relaunch is the mitigation for 5e rather than one option among several, and why the relaunch's
+  schedule is a security property and not only a delivery one.
+* **On mainnet this is a one-way door.** Mainnet ships `PalwConsensusMode::Disabled`; the day its
+  genesis card is set, either this fence is armed in that genesis or the network can never carry
+  Decision 7 at all — because the standing doctrine forbids a mainnet re-genesis, and this rule
+  refuses every other arming. So "arm it at mainnet genesis" is not a deployment preference, it is
+  the only moment the option exists. A carded mainnet without it is a mainnet where an uncertified
+  family's fabricated block outweighs the honest network permanently.
+
 Two companions, so Decision 7 is not the only wall: **(a)** a `BondCapabilityDeclared` set is
 bounded and priced (ADR-0071's security amendment); **(b)** ADR-0076 §8's field is pinned to the
 base target by the processor today — recorded there — and seating (ADR-0076 Decision 4) re-prices it.
