@@ -20,7 +20,9 @@
 //! 7. the runner takes no arguments and answers a malformed job with a frame, not a crash.
 
 use kaspa_hashes::Hash64;
-use misaka_palw::host_security::{ConfinementBackend, PALW_CONFINEMENT_ENV, confinement_backend_in_force};
+use misaka_palw::host_security::{
+    ConfinementBackend, PALW_CONFINEMENT_ENV, confinement_backend_available, confinement_backend_in_force,
+};
 use misaka_palw_derive::kinds::code::{
     CodeEvmTransformer, CodeGrammar, EvmJob, EvmJobCall, EvmJobResult, RUNNER_PATH_ENV, WORK_DIR_PREFIX, decode_evm_result,
     encode_evm_job, evm_v1_run_manifest_hash, read_mcod, refusal,
@@ -120,7 +122,9 @@ fn the_evm_runs_in_a_separate_confined_process() {
     // (5) ADR-0079 S4 — the backend cannot change the answer. On a host whose drill passes the
     // artifact is byte-identical to the unconfined one; on a host where it does not, the run says
     // so rather than pretending it tested something.
-    unsafe { std::env::set_var(PALW_CONFINEMENT_ENV, "macos-sandbox-exec") };
+    // The backend this build could install HERE — so the Linux `seccomp`+`Landlock` backend
+    // exercises this the day it ships, without a second spelling of a platform name.
+    unsafe { std::env::set_var(PALW_CONFINEMENT_ENV, confinement_backend_available().name()) };
     let confined = derive_answer();
     unsafe { std::env::remove_var(PALW_CONFINEMENT_ENV) };
     match confined {
@@ -135,7 +139,7 @@ fn the_evm_runs_in_a_separate_confined_process() {
             "NOTE: this host's confinement drill did not pass, so the S4 comparison above was `none` against \
              `none`. The identity it asserts still holds; the backend half was not exercised here."
         ),
-        backend => assert_eq!(backend, ConfinementBackend::MacosSandboxExec, "{}", backend.name()),
+        backend => assert_eq!(backend, confinement_backend_available(), "{}", backend.name()),
     }
     assert!(stray_trees().is_empty(), "an ephemeral tree outlived a confined run: {:?}", stray_trees());
 

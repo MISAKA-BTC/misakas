@@ -15,7 +15,7 @@
 //! One test function: it moves `MISAKA_PALW_CONFINEMENT` and a signing-secret variable, and an
 //! environment is process-wide.
 
-use misaka_palw::host_security::PALW_CONFINEMENT_ENV;
+use misaka_palw::host_security::{PALW_CONFINEMENT_ENV, confinement_backend_available};
 use misaka_palw_derive::DeriveError;
 use misaka_palw_derive::kinds::code::{ExternalToolchainManifest, WORK_DIR_PREFIX, fresh_work_dir, run_external, sha256};
 use std::collections::BTreeMap;
@@ -110,7 +110,9 @@ fn the_external_toolchain_gate_refuses_a_bare_host_and_a_host_with_keys() {
     // (d) With a backend in force the toolchain RUNS, inside the ephemeral tree, and the tree is
     // gone afterwards. On a host whose drill does not pass this half cannot be tested and says so
     // rather than asserting something it did not observe.
-    unsafe { std::env::set_var(PALW_CONFINEMENT_ENV, "macos-sandbox-exec") };
+    // The backend this build could install HERE: the Linux backend exercises this the day it
+    // ships, and a host with none takes the refusal branch below and says so.
+    unsafe { std::env::set_var(PALW_CONFINEMENT_ENV, confinement_backend_available().name()) };
     let result = run_external(&good, &script, &sources(), &outs, &[&empty]);
     match result {
         Ok(collected) => {
