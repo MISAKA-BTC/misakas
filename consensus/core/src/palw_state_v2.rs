@@ -11149,8 +11149,8 @@ pub(crate) mod tests {
         // Let the bind window lapse: the claim voids (BindTimeout), then retires 50 later.
         let bind_deadline = s3.claim(&h64(0xFC)).unwrap().accepted_daa + p.window_bind();
         let (s4, _) = apply(&s3, &p, &ctx(4, bind_deadline + 1, 4), &[], None);
-        let voided_at = match s4.claim(&h64(0xFC)).unwrap().phase {
-            PalwClaimPhaseV2::Voided { voided_daa, .. } => voided_daa,
+        let voided_at = match &s4.claim(&h64(0xFC)).unwrap().phase {
+            PalwClaimPhaseV2::Voided { voided_daa, .. } => *voided_daa,
             other => panic!("expected a void, got {other:?}"),
         };
         assert_eq!(s4.derived_artifacts_of(h64(0xFC)).count(), 2, "a derivation of a voided claim is a derivation of a voided claim");
