@@ -56,9 +56,11 @@ pub const PALW_FP_PRIVACY_PUBLIC_DA: u8 = 1;
 /// ids as it does now, so a disputed prompt becomes public. *Private unless disputed* — five seats
 /// see the prompt, a dispute publishes it, and nothing here is confidentiality.
 ///
-/// Admission refuses this mode until the ruleset move that carries its rules
-/// (`PalwFreePromptParamsV3::panel_da_enabled`), exactly as the worker refuses every non-PublicDA
-/// mode today: a mode the panel cannot replay must not execute.
+/// Admission refuses this mode until the network arms it — `Params::palw_panel_da`, `None` on
+/// every shipped preset — exactly as the worker refuses every non-PublicDA mode today: a mode the
+/// panel cannot replay must not execute. See [`crate::palw_panel_da_v1`] for the disclosure the
+/// gateway owes a first-time user, the predicate a seat runs before it reads anything, and what
+/// arming does NOT buy (ADR-0077 SA-5).
 pub const PALW_FP_PRIVACY_PANEL_DA: u8 = 2;
 
 pub const PALW_FP_V3_DOMAIN_JOB_ID: &[u8] = b"misaka-palw/fp-v3/job-id/v1";
@@ -223,7 +225,19 @@ pub struct PalwFreePromptJobV3 {
     /// executed count lives in the commitment, and the CU rule prices what ran, not the ceiling.
     pub decode_token_limit: u32,
     pub max_context_tokens: u32,
-    /// See [`PALW_FP_PRIVACY_PUBLIC_DA`].
+    /// [`PALW_FP_PRIVACY_PUBLIC_DA`] (the ids ride the commitment transaction) or
+    /// [`PALW_FP_PRIVACY_PANEL_DA`] (they ride the capture the executor serves its panel, and the
+    /// transaction carries none — ADR-0077 Decision 16). Anything else is refused, and mode 2 is
+    /// refused too until this network arms it (`Params::palw_panel_da`).
+    ///
+    /// **Not a security field, and it does not become one by being here** (ADR-0079 Decision 2):
+    /// it selects where the ids travel, which is a shape rule the whole network evaluates the
+    /// same way. It is priced and committed like every other job field, and the ADR-0072 D8
+    /// classification places it as a chain equality — the mode the ruleset admits — not as a
+    /// posture a producer declares about its own host.
+    ///
+    /// It is inside the job id, so a claim cannot change its mind about the mode after the fact:
+    /// the mode a user chose is part of the identity the executor signed.
     pub privacy_mode: u8,
     /// [`PALW_FP_PROMPT_MODE_USER`]: the prompt is the user's, its ids carried on chain and in the
     /// job material, hash-bound. [`PALW_FP_PROMPT_MODE_CANONICAL`]: the prompt is the family's
@@ -713,8 +727,30 @@ pub enum PalwFpV3Error {
     UnsupportedVersion { got: u16, expected: u16 },
     #[error("the object's network domain is not this network's")]
     NetworkDomainMismatch,
-    #[error("privacy mode {0} is not weight-bearing (v1 accepts only PublicDa)")]
+    #[error("privacy mode {0} is not a mode this build understands (1 = PublicDa, 2 = PanelDa); encrypted modes are a future ADR")]
     UnsupportedPrivacyMode(u8),
+    /// **The refusal a reader can act on** (ADR-0077 Decision 16). Mode 2 is a mode this build
+    /// understands; it is not a mode THIS NETWORK has armed. Naming it separately from
+    /// `UnsupportedPrivacyMode` is the whole point: one says "no build does this", the other says
+    /// "this ruleset does not, and the ruleset move that changes it is a named field".
+    #[error(
+        "privacy mode 2 (PanelDa) is not armed on this network — it arms at a height through Params::palw_panel_da, and this network has none"
+    )]
+    PanelDaNotArmed,
+    /// A mode-2 payload that carries the prompt anyway. Refused rather than trimmed: an executor
+    /// that published a prompt the user asked to keep off chain has already done the harm, and a
+    /// claim built on that payload would be one the chain quietly blessed.
+    #[error("a PanelDa commitment carries {0} prompt ids — mode 2 keeps the prompt off chain and this payload publishes it")]
+    PanelDaPayloadCarriesPrompt(usize),
+    /// The seat-side refusal: nothing was served, so there is nothing to check (ADR-0077
+    /// Decision 16 / W8 clause 1). A seat that reaches this files no `Valid`; it files the panel's
+    /// `Unavailable` arm, which past ADR-0065 D4 is an abstention and not an accusation.
+    #[error("no prompt ids are held for this claim — a seat that holds none can verify nothing and files no Valid")]
+    PromptIdsUnavailable,
+    #[error("the served prompt is {got} ids; the job declares {declared}")]
+    PromptIdsCountMismatch { got: usize, declared: u32 },
+    #[error("the served prompt ids do not hash to the job's prompt_token_ids_hash")]
+    PromptIdsHashMismatch,
     #[error("the executor/producer public key is empty")]
     MissingPublicKey,
     #[error("the signature is {got} bytes, not the ML-DSA-87 {expected}")]
@@ -762,7 +798,18 @@ impl PalwFreePromptCommitmentEnvelopeV3 {
     /// The CU claim is recomputed under the bundle's weights and a mismatch is named — never
     /// clamped, never trusted (invariant F7).
     pub fn validate_stateless_v3(&self, network_domain: Hash64) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(Some(network_domain))
+        // **`PanelDa` disarmed, because a caller that passed no arming has armed nothing**
+        // (ADR-0077 Decision 16). This entry predates the mode; every one of its callers refuses
+        // mode 2 today and keeps refusing it until it starts passing the answer.
+        self.validate_v3(Some(network_domain), false)
+    }
+
+    /// The same rules **under this network's arming** — the entry that can admit a `PanelDa`
+    /// commitment (ADR-0077 Decision 16). `panel_da_armed` is `Params::palw_panel_da_at` resolved
+    /// at the point the caller is judging; a caller that cannot resolve it calls
+    /// [`Self::validate_stateless_v3`] and gets the disarmed answer.
+    pub fn validate_stateless_under_v3(&self, network_domain: Hash64, panel_da_armed: bool) -> Result<(), PalwFpV3Error> {
+        self.validate_v3(Some(network_domain), panel_da_armed)
     }
 
     /// **The half a context-free caller can run: everything except the two checks that need the
@@ -779,11 +826,31 @@ impl PalwFreePromptCommitmentEnvelopeV3 {
     /// then silently drops, which is exactly the "reads as nothing" failure this family keeps
     /// closing. The refusal ORDER is preserved too — the omitted checks are skipped in place,
     /// not moved — so a payload wrong in several ways names the same error either way.
+    ///
+    /// **`PanelDa`'s arming is NOT one of the omitted checks** (ADR-0077 Decision 16). It is
+    /// asked here, and the answer this entry gives is "no" — the height-free one, so the door
+    /// stays exactly as strict as it is today on every shipped preset, and no block becomes
+    /// acceptable to this build that was not acceptable to the last one.
+    ///
+    /// A network that ARMS the mode calls [`Self::validate_shape_under_v3`] with
+    /// `Params::palw_panel_da_admissible`, which is `is_some()` on the fence rather than
+    /// `is_active(daa)`: height-free, and therefore weaker at every height than the walk's
+    /// `palw_panel_da_at`. That ordering is what keeps this gate from rejecting a carrier the
+    /// walk would have credited — the one direction it is forbidden to fail in.
+    ///
+    /// Mode 2's own shape rule, that the payload carries no ids, needs no arming at all and is
+    /// checked under both answers.
     pub fn validate_shape_v3(&self) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(None)
+        self.validate_v3(None, false)
     }
 
-    fn validate_v3(&self, network_domain: Option<Hash64>) -> Result<(), PalwFpV3Error> {
+    /// The shape half under a known arming — the door on a network that carries the rule, and
+    /// what a builder asks before it spends an inference on a job the chain will refuse.
+    pub fn validate_shape_under_v3(&self, panel_da_armed: bool) -> Result<(), PalwFpV3Error> {
+        self.validate_v3(None, panel_da_armed)
+    }
+
+    fn validate_v3(&self, network_domain: Option<Hash64>, panel_da_armed: bool) -> Result<(), PalwFpV3Error> {
         let c = &self.commitment;
         let job = &c.job;
         if job.version != PALW_FP_V3_VERSION {
@@ -794,8 +861,16 @@ impl PalwFreePromptCommitmentEnvelopeV3 {
         {
             return Err(PalwFpV3Error::NetworkDomainMismatch);
         }
-        if job.privacy_mode != PALW_FP_PRIVACY_PUBLIC_DA {
-            return Err(PalwFpV3Error::UnsupportedPrivacyMode(job.privacy_mode));
+        // **Two refusals, not one** (ADR-0077 Decision 16). A mode nothing in this tree implements
+        // and a mode this network has not armed are different facts with different fixes: the
+        // first is an ADR nobody has written, the second is a fence an operator can schedule.
+        // Collapsing them into `UnsupportedPrivacyMode(2)` told a mode-2 executor to go and write
+        // the encrypted-DA ADR.
+        match job.privacy_mode {
+            PALW_FP_PRIVACY_PUBLIC_DA => {}
+            PALW_FP_PRIVACY_PANEL_DA if panel_da_armed => {}
+            PALW_FP_PRIVACY_PANEL_DA => return Err(PalwFpV3Error::PanelDaNotArmed),
+            other => return Err(PalwFpV3Error::UnsupportedPrivacyMode(other)),
         }
         if job.prompt_mode != PALW_FP_PROMPT_MODE_USER && job.prompt_mode != PALW_FP_PROMPT_MODE_CANONICAL {
             return Err(PalwFpV3Error::UnsupportedPromptMode(job.prompt_mode));
@@ -1241,7 +1316,11 @@ pub const PALW_FP_COMMITMENT_TX_MAX_BYTES: usize = 48 * 1024;
 pub struct PalwFpCommitmentTxPayloadV3 {
     pub version: u16,
     pub commitment: PalwFreePromptCommitmentV3,
-    /// The canonical prompt ids the commitment's `prompt_token_ids_hash` binds.
+    /// The canonical prompt ids the commitment's `prompt_token_ids_hash` binds — **under
+    /// `PublicDa` only**. Under `PalwFpPromptMode::Canonical` and under
+    /// [`PALW_FP_PRIVACY_PANEL_DA`] this list MUST be empty, and validation requires it (ADR-0077
+    /// Decision 16): a mode-2 executor that carried the ids anyway would be publishing a prompt
+    /// the user asked to keep off chain, and the chain would have blessed it.
     pub prompt_token_ids: Vec<u32>,
     /// ML-DSA-87 over [`fp_claim_id_v3`] under [`PALW_FP_V3_MLDSA87_COMMITMENT_CONTEXT`].
     pub signature: Vec<u8>,
@@ -1250,18 +1329,32 @@ pub struct PalwFpCommitmentTxPayloadV3 {
 impl PalwFpCommitmentTxPayloadV3 {
     /// Stateless acceptance for the payload: the commitment's own stateless rules, plus the two
     /// facts only the payload can state — that the carried ids ARE the ids the commitment binds,
-    /// and that the PublicDA promise is kept (a non-empty list under the mode that requires one).
+    /// that the PublicDA promise is kept (a non-empty list under the mode that requires one), and
+    /// that the `PanelDa` promise is kept too (an EMPTY list under the mode that forbids one).
     ///
     /// The signature is verified by the caller (this crate holds no ML-DSA implementation);
     /// [`Self::signed_message`] is what it must verify over.
     pub fn validate_stateless_v3(&self, network_domain: Hash64) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(Some(network_domain))
+        self.validate_v3(Some(network_domain), false)
+    }
+
+    /// The same, **under this network's arming** — the entry the extraction walk uses, and the
+    /// only one that can admit a `PanelDa` payload (ADR-0077 Decision 16). `panel_da_armed` is
+    /// `Params::palw_panel_da_at` at the accepting block's DAA score.
+    pub fn validate_stateless_under_v3(&self, network_domain: Hash64, panel_da_armed: bool) -> Result<(), PalwFpV3Error> {
+        self.validate_v3(Some(network_domain), panel_da_armed)
     }
 
     /// The context-free half — see [`PalwFreePromptCommitmentEnvelopeV3::validate_shape_v3`] for
-    /// why the transaction validator can only run this one.
+    /// why the transaction validator can only run this one, and why the arming it asks is the
+    /// height-free one.
     pub fn validate_shape_v3(&self) -> Result<(), PalwFpV3Error> {
-        self.validate_v3(None)
+        self.validate_v3(None, false)
+    }
+
+    /// The shape half under a known arming — `Params::palw_panel_da_admissible` at the door.
+    pub fn validate_shape_under_v3(&self, panel_da_armed: bool) -> Result<(), PalwFpV3Error> {
+        self.validate_v3(None, panel_da_armed)
     }
 
     /// **The signature, on the payload that actually rides a transaction.**
@@ -1281,12 +1374,25 @@ impl PalwFpCommitmentTxPayloadV3 {
             .validate_signature_v3(verify_mldsa87)
     }
 
-    fn validate_v3(&self, network_domain: Option<Hash64>) -> Result<(), PalwFpV3Error> {
+    fn validate_v3(&self, network_domain: Option<Hash64>, panel_da_armed: bool) -> Result<(), PalwFpV3Error> {
         if self.version != PALW_FP_V3_VERSION {
             return Err(PalwFpV3Error::UnsupportedVersion { got: self.version, expected: PALW_FP_V3_VERSION });
         }
         let envelope = PalwFreePromptCommitmentEnvelopeV3 { commitment: self.commitment.clone(), signature: self.signature.clone() };
-        envelope.validate_v3(network_domain)?;
+        envelope.validate_v3(network_domain, panel_da_armed)?;
+        // **`PanelDa` carries NO ids, and the check is a REQUIREMENT, not a tolerance** (ADR-0077
+        // Decision 16). Placed before the canonical arm because the privacy mode decides what the
+        // chain may hold and the prompt mode decides where the ids come from: a mode-2 payload
+        // that carried them is refused whichever prompt mode it declares.
+        if self.commitment.job.privacy_mode == PALW_FP_PRIVACY_PANEL_DA {
+            if !self.prompt_token_ids.is_empty() {
+                return Err(PalwFpV3Error::PanelDaPayloadCarriesPrompt(self.prompt_token_ids.len()));
+            }
+            // The job still carries `prompt_token_ids_hash` (Decision 16), so the claim is bound
+            // to one prompt and one only; what the seats fetch is checked against it by
+            // `palw_fp_prompt_ids_admit_v1` before anything else is read.
+            return Ok(());
+        }
         // A canonical claim's prompt is a pure function of the job (ADR-0074 Decision 1): the
         // chain does not carry it, and a payload that does is not the shipped worker's.
         if self.commitment.job.prompt_mode == PALW_FP_PROMPT_MODE_CANONICAL {
@@ -1577,9 +1683,24 @@ mod tests {
             make(|c| c.job.network_domain = Hash64::from_u64_word(0x99)).validate_stateless_v3(net()),
             Err(PalwFpV3Error::NetworkDomainMismatch)
         );
+        // **Mode 2 is no longer unknown — it is unarmed** (ADR-0077 Decision 16). The refusal is
+        // the same refusal, and the NAME is the change: `UnsupportedPrivacyMode(2)` told a mode-2
+        // executor that no build does this, when the truth is that this network has not scheduled
+        // it. Both refusals still exist and this asserts both, because collapsing them again is
+        // exactly the regression the two variants were split to prevent.
         assert_eq!(
             make(|c| c.job.privacy_mode = 2).validate_stateless_v3(net()),
-            Err(PalwFpV3Error::UnsupportedPrivacyMode(2)),
+            Err(PalwFpV3Error::PanelDaNotArmed),
+            "PanelDa is a mode this build knows and this network has not armed"
+        );
+        assert_eq!(
+            make(|c| c.job.privacy_mode = 2).validate_stateless_under_v3(net(), true),
+            Ok(()),
+            "…and the same commitment certifies where the fence is in force"
+        );
+        assert_eq!(
+            make(|c| c.job.privacy_mode = 3).validate_stateless_under_v3(net(), true),
+            Err(PalwFpV3Error::UnsupportedPrivacyMode(3)),
             "an unknown privacy mode must not certify — a panel cannot replay what it cannot read"
         );
         assert_eq!(make(|c| c.job.executor_pubkey = vec![]).validate_stateless_v3(net()), Err(PalwFpV3Error::MissingPublicKey));
@@ -1870,10 +1991,59 @@ pub const PALW_FP_MATERIAL_V1_MAGIC: [u8; 4] = *b"FPM1";
 /// shipping them would invite a verifier that checks less than the claim asserts. A seat holding
 /// this payload and the registered artifact re-executes and compares every root; the payload is
 /// a few hundred bytes where the attempt lane's is megabytes.
+///
+/// **Under `PanelDa` this is the only place the prompt ids exist off the executor's disk**
+/// (ADR-0077 Decision 16): the commitment transaction carries none, so the path a seat already
+/// walks — request the claim's material, decode, check the ids bind, then replay — is unchanged,
+/// and what changes is that failing to serve it is now the only way to withhold a prompt. That
+/// failure is never a verdict about arithmetic; which arm it reaches is
+/// [`crate::palw_panel_da_v1::palw_panel_da_withholding_arm_v1`]'s answer.
 #[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwFpMaterialV1 {
     pub job: PalwFreePromptJobV3,
     pub prompt_token_ids: Vec<u32>,
+}
+
+/// **The one check that comes before every other** (ADR-0077 Decision 16; W8 clauses 1 and 2).
+///
+/// `H(ids) == job.prompt_token_ids_hash`, and the count is the count the job declares. Under
+/// `PublicDa` this re-derives a binding the chain already carries; under `PanelDa` it is the ONLY
+/// thing that ties the bytes an executor served to the claim it is serving them for, so a seat
+/// that read the capture first would be replaying an execution of a prompt nobody has shown is
+/// this claim's.
+///
+/// It lives in consensus-core rather than in the seat because two programs run it — the seat
+/// (`kaspad::palw_panel`) before it verifies material, and the payload decoders below — and a
+/// second spelling of "the ids bind" is how two spellings come to disagree. It returns a NAMED
+/// refusal rather than a bool for the same reason: a seat that files nothing must be able to say
+/// which of "nothing was served" and "what was served is not this claim's" happened, because the
+/// first is the producer's default arm and the second is a producer serving somebody else's work.
+pub fn palw_fp_prompt_ids_admit_v1(job: &PalwFreePromptJobV3, prompt_token_ids: &[u32]) -> Result<(), PalwFpV3Error> {
+    if prompt_token_ids.len() != job.prompt_tokens as usize {
+        return Err(PalwFpV3Error::PromptIdsCountMismatch { got: prompt_token_ids.len(), declared: job.prompt_tokens });
+    }
+    if crate::palw_v2::prompt_token_ids_hash_v2(prompt_token_ids) != job.prompt_token_ids_hash {
+        return Err(PalwFpV3Error::PromptIdsHashMismatch);
+    }
+    Ok(())
+}
+
+/// **What a seat must establish before it reads a claim's capture, or files anything about it**
+/// (ADR-0077 Decision 16; W8 clause 1: "a seat holding no ids cannot file `Valid`").
+///
+/// `held` is what the seat FETCHED — `None` when the executor served nothing, which under
+/// `PanelDa` is the only way the ids can be missing (under `PublicDa` they ride the commitment
+/// transaction). Withholding is NOT an arithmetic verdict: a seat reaching
+/// [`PalwFpV3Error::PromptIdsUnavailable`] files the panel's `Unavailable` arm, and what that
+/// reaches is the network's own question — [`crate::palw_panel_da_v1::palw_panel_da_withholding_arm_v1`]
+/// answers it, and past ADR-0065 D4 the answer is an abstention that slashes nobody (ADR-0077
+/// SA-5). Filing `Valid` here would certify a run the seat never checked, which is the one thing
+/// this predicate exists to make unrepresentable.
+pub fn palw_fp_seat_prompt_admit_v1(job: &PalwFreePromptJobV3, held: Option<&[u32]>) -> Result<(), PalwFpV3Error> {
+    let Some(ids) = held else {
+        return Err(PalwFpV3Error::PromptIdsUnavailable);
+    };
+    palw_fp_prompt_ids_admit_v1(job, ids)
 }
 
 /// Encode with the magic prefix. The inverse of [`palw_fp_material_decode_v1`].
@@ -1893,12 +2063,9 @@ pub fn palw_fp_material_encode_v1(job: &PalwFreePromptJobV3, prompt_token_ids: &
 pub fn palw_fp_material_decode_v1(bytes: &[u8]) -> Option<PalwFpMaterialV1> {
     let body = bytes.strip_prefix(&PALW_FP_MATERIAL_V1_MAGIC)?;
     let material: PalwFpMaterialV1 = borsh::from_slice(body).ok()?;
-    if material.job.prompt_token_ids_hash != crate::palw_v2::prompt_token_ids_hash_v2(&material.prompt_token_ids) {
-        return None;
-    }
-    if material.job.prompt_tokens as usize != material.prompt_token_ids.len() {
-        return None;
-    }
+    // Through the shared predicate, not a second copy of it: the seat runs the same call on the
+    // same bytes (ADR-0077 Decision 16), and one spelling is what keeps the two answers equal.
+    palw_fp_prompt_ids_admit_v1(&material.job, &material.prompt_token_ids).ok()?;
     Some(material)
 }
 
@@ -1937,11 +2104,12 @@ pub fn palw_fp_capture_encode_v1(job: &PalwFreePromptJobV3, prompt_token_ids: &[
 pub fn palw_fp_capture_decode_v1(bytes: &[u8]) -> Option<PalwFpCaptureV1> {
     let body = bytes.strip_prefix(&PALW_FP_CAPTURE_V1_MAGIC)?;
     let payload: PalwFpCaptureV1 = borsh::from_slice(body).ok()?;
-    let material = &payload.material;
-    if material.job.prompt_token_ids_hash != crate::palw_v2::prompt_token_ids_hash_v2(&material.prompt_token_ids)
-        || material.job.prompt_tokens as usize != material.prompt_token_ids.len()
-        || payload.capture.is_empty()
-    {
+    // The ids bind BEFORE the capture is looked at, which is the order ADR-0077 Decision 16 makes
+    // load-bearing under `PanelDa`: the served ids are the only tie between these bytes and the
+    // claim, so a capture read first would be a replay of a prompt nobody has shown is this
+    // claim's. Same predicate the seat calls.
+    palw_fp_prompt_ids_admit_v1(&payload.material.job, &payload.material.prompt_token_ids).ok()?;
+    if payload.capture.is_empty() {
         return None;
     }
     Some(payload)
