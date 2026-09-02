@@ -50,19 +50,36 @@ const MAXIMUM_STANDARD_SIGNATURE_SCRIPT_SIZE: u64 = 16_384;
 /// block budget to preserve an anti-monopolization margin; it is devnet-generous here.
 pub const MAXIMUM_STANDARD_TRANSACTION_MASS: u64 = 480_000;
 
-/// **The PALW court's close ceiling is derived from the constant above** (ADR-0049 Decision C):
-/// a court close rides one lifecycle transaction, so the largest close that can be RAISED is what
-/// a standard transaction can carry. `kaspa-consensus-core` cannot see a private constant in this
-/// crate, so it mirrors the value; this is the guard that keeps the mirror honest, placed on the
-/// side that owns the number rather than the side that copies it.
+/// **The PALW court's close ceiling is derived from the constant above** (ADR-0049 Decision C,
+/// as amended by ADR-0080 design A) — now through one more step, and the step matters.
+///
+/// A court close no longer rides ONE lifecycle transaction: it rides an `ObjectChunk` group, and
+/// the chain reassembles it in state. So this limit sizes the CHUNK
+/// (`PALW_OBJECT_CHUNK_MAX_BYTES` = 100,000, the largest round number under the 120,000 bytes this
+/// mass allows a transaction), and `DEFAULT_MAX_CLOSE_BYTES` is `DEFAULT_MAX_CLOSE_CHUNKS` of
+/// those, de-framed. Moving the number above still moves what a dispute can carry — it just moves
+/// it a chunk at a time rather than a close at a time.
+///
+/// `kaspa-consensus-core` cannot see a private constant in this crate, so it mirrors the value;
+/// this is the guard that keeps the mirror honest, placed on the side that owns the number rather
+/// than the side that copies it. The second assertion is the derived half, checked here for the
+/// same reason: a mirror nobody compares is how a derived number quietly stops being derived.
 #[test]
 fn the_palw_close_ceiling_mirror_is_the_real_limit() {
     assert_eq!(
         kaspa_consensus_core::palw_mode_v2::PALW_MIRRORED_STANDARD_TX_MASS,
         MAXIMUM_STANDARD_TRANSACTION_MASS,
-        "the PALW close ceiling is derived from this limit; moving it moves what a dispute can carry, \
+        "the PALW chunk size is derived from this limit; moving it moves what a dispute can carry, \
          and `DEFAULT_MAX_CLOSE_BYTES` must be re-derived (it is inside `palw_ruleset_id_v2`, so that \
          is a new network, not an edit)"
+    );
+    // The chunk a close is cut into has to be relayable by THIS rule, which is the whole reason
+    // the mirror exists. 18,000 bytes covers the worst standard ML-DSA-87 carrier beside it.
+    let tx_bytes = MAXIMUM_STANDARD_TRANSACTION_MASS / kaspa_consensus_core::constants::TRANSIENT_BYTE_TO_MASS_FACTOR;
+    assert_eq!(tx_bytes, 120_000, "the transient arm is size x 4, and it is the binding one");
+    assert!(
+        kaspa_consensus_core::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES as u64 + 18_000 <= tx_bytes,
+        "a PALW object chunk plus its carrier no longer relays — the close ceiling is derived from a chunk nobody would forward"
     );
 }
 

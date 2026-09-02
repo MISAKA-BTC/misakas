@@ -1474,14 +1474,22 @@ mod tests {
         let layers: Vec<u16> = (0..30).collect();
         let v1 = base0_gdn_state_geometry_v1(&layers, heads, k, v, kernel).expect("v1");
         let v2 = base0_gdn_state_geometry_v2(&layers, heads, k, v, kernel).expect("v2");
+        // **The CARRIER, not the close budget** (ADR-0080 design A). A close is a chunk group of
+        // up to `DEFAULT_MAX_CLOSE_CHUNKS` parts now, so `DEFAULT_MAX_CLOSE_BYTES` is 2,250,000
+        // and comparing one opening against it would make this assertion true of both maps. The
+        // fact v2 exists for is about ONE transaction: v1's opening does not fit one and v2's
+        // does, so a v1 court pays extra carriers for thirty-one heads it will not read.
+        let carrier = kaspa_consensus_core::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES as u64;
         let budget = kaspa_consensus_core::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES;
 
         let delta = v as u64 * v1.delta_row_bytes as u64;
         assert_eq!(delta, 65_536);
         assert_eq!(kernel as u64 * v1.conv_row_bytes as u64, 196_608, "v1's window spans every head");
         assert_eq!(kernel as u64 * v2.conv_head_row_bytes as u64, 6_144, "v2's window is one head's");
-        assert!(delta + kernel as u64 * v1.conv_row_bytes as u64 > budget, "v1 fits the carrier after all");
-        assert!(delta + kernel as u64 * v2.conv_head_row_bytes as u64 <= budget, "v2 does not fit the carrier");
+        assert!(delta + kernel as u64 * v1.conv_row_bytes as u64 > carrier, "v1 fits one carrier after all");
+        assert!(delta + kernel as u64 * v2.conv_head_row_bytes as u64 <= carrier, "v2 does not fit one carrier");
+        // And both are inside the GROUP, which is what says the comparison above is about the part.
+        assert!(delta + kernel as u64 * v1.conv_row_bytes as u64 <= budget, "even v1's opening is inside the close budget now");
         assert_eq!(v1.total_bytes(), v2.total_bytes(), "the re-ordering moved bytes");
     }
 

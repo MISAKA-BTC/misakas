@@ -229,8 +229,20 @@ mod a16_family {
                         "n_ctx 16 no longer derives the class testnet-11 registered"
                     );
                 }
-                15 | 17 | 18 | 20 => assert!(verdict.is_ok(), "n_ctx {nctx} fell out of the family's room: {verdict:?}"),
-                _ => assert!(verdict.is_err(), "n_ctx {nctx} was admitted — the family's ceiling moved, revisit the ledger comment"),
+                // **The room this family has, and what bounds it.** Under the 80 KiB
+                // one-transaction ceiling the widest admitted context was 21 and the COST is what
+                // refused 24; under ADR-0080 design A's 27-chunk group the cost stops binding
+                // below the shipped `2^22` ladder, which refuses at 40. So the admitted set grew
+                // from {15..21} to {15..39} and the REASON changed with it — see
+                // `palw_class_admission_v2::tests::the_widest_context_each_family_admits`, which
+                // measures both gates for both families.
+                15 | 17 | 18 | 20 | 24 | 32 => {
+                    assert!(verdict.is_ok(), "n_ctx {nctx} fell out of the family's room: {verdict:?}")
+                }
+                _ => assert!(
+                    verdict.is_err(),
+                    "n_ctx {nctx} was admitted — the family's ceiling moved, revisit the ledger comment: {verdict:?}"
+                ),
             }
         }
     }
@@ -887,24 +899,41 @@ mod tests {
     /// **Would the chain admit this class?** — asked against the SHIPPED bundle, which is the only
     /// bundle whose answer matters.
     ///
-    /// It used to derive the pair a Qwen2.5-1.5B registration would use and run the gate on it.
-    /// Under a `max_close_bytes` that counts what a close costs to carry there is no such pair, so
-    /// the honest form of this test is the refusal and its reason: a registration attempted today
-    /// fails on-chain, and finding that out with a 1.7 GiB artifact already on four hosts is
-    /// finding it in the worst place.
+    /// **The answer changed with ADR-0080 design A and the test is named for it.** It was
+    /// `the_shipped_court_admits_no_qwen25_geometry_and_says_why`: under a `max_close_bytes` that
+    /// counted what a close costs to carry in ONE TRANSACTION there was no admissible
+    /// `(tile_len, n_ctx)` pair at all, and the honest form of the test was the refusal and its
+    /// reason — a registration attempted with a 1.7 GiB artifact already on four hosts fails
+    /// on-chain, which is finding it in the worst place. A 27-chunk group admits a pair, and the
+    /// pair is three tokens: the shipped `2^22` ladder is what bounds it now, not the price.
     ///
-    /// What has to change is code, not the genesis number: an openable logits commitment (ADR-0049
-    /// Decision E says "O(1) in vocabulary"; the root is a flat hash over every row) and a
-    /// per-layer slice of the checkpoint the KV history arrives in.
+    /// So both halves are exercised. The pair that EXISTS is pinned, small, and useless on its
+    /// own; and the gate's refusal is still run, on the pair the LADDER would allow, because that
+    /// is the error a deployer actually reads.
+    ///
+    /// What has to change for a usable context is still code and not this genesis number: the
+    /// ladder (ADR-0077's fence), an openable logits commitment (ADR-0049 Decision E says "O(1) in
+    /// vocabulary"; this family's root is a flat hash over every row) and a per-layer slice of the
+    /// checkpoint the KV history arrives in.
     #[test]
-    fn the_shipped_court_admits_no_qwen25_geometry_and_says_why() {
+    fn the_shipped_court_admits_one_three_token_qwen25_geometry_and_says_why() {
         let bundle = match &crate::config::params::palw_rc_shipped_params().palw_consensus_mode {
             crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(b) => b.clone(),
             _ => return, // a build whose card is unset ships no bundle; nothing to check against
         };
-        assert!(
-            qwen25_admissible_geometry_v1(QWEN25_1_5B, &bundle.court).is_none(),
-            "the shipped court admitted a Qwen pair — either the ceiling or this expectation moved"
+        // **This asserted `is_none()` until ADR-0080 design A**, and the doc above still records
+        // why: under an 80 KiB one-transaction ceiling no `(tile_len, n_ctx)` pair of this family
+        // had a prosecutable close, so a registration attempted with a 1.7 GiB artifact already on
+        // four hosts would have failed on-chain. A 27-chunk group changes the answer, and the
+        // honest form of the test is now the PAIR — printed, pinned, and small, because the
+        // shipped `2^22` ladder is what bounds it rather than the price.
+        let pair = qwen25_admissible_geometry_v1(QWEN25_1_5B, &bundle.court)
+            .expect("the shipped court now admits a pair — if this is None again the ceiling went back");
+        println!("shipped-court admissible pair: tile_len={} n_ctx={}", pair.tile_len, pair.n_ctx);
+        assert_eq!(
+            (pair.tile_len, pair.n_ctx),
+            (64, 3),
+            "the shipped court's widest Qwen2.5-1.5B pair — three tokens, bounded by the 2^22 ladder and not by the price"
         );
 
         // The gate's own refusal, on the pair the LADDER would allow, so the error a deployer would
@@ -942,7 +971,10 @@ mod tests {
         bundle.court_e2e_root = crate::palw_e2e_adjudicability::palw_court_e2e_root_of_v1(&certified);
         match crate::palw_class_admission_v2::verify_class_admission_v2(&bundle, &profile, &canonical, &registration, &certified) {
             Err(crate::palw_class_admission_v2::PalwClassAdmissionError::CourtCostExceedsCeiling { what, got, ceiling }) => {
-                assert_eq!(what, "court close");
+                // In CHUNKS since ADR-0080 design A — the unit a close is carried in. The
+                // order-of-magnitude clause is unchanged in meaning: the widest pair the ladder
+                // admits needs more than ten times the carriers this ruleset pays for.
+                assert_eq!(what, "court close chunks");
                 assert!(got > ceiling * 10, "the refusal is by an order of magnitude: {got} against {ceiling}");
             }
             other => panic!("the shipped gate must refuse Qwen2.5-1.5B on court cost, got {other:?}"),
@@ -1428,10 +1460,14 @@ mod tests {
     fn no_qwen_geometry_is_admissible_under_a_carriable_ceiling() {
         let shipped = crate::palw_mode_v2::PalwCourtParamsV2::new(crate::palw_step::PALW_STEP_MAX_LEAVES, 4, 2).unwrap();
         for (name, model) in [("1.5B", QWEN25_1_5B), ("3B", QWEN25_3B)] {
-            assert!(
-                qwen25_admissible_geometry_v1(model, &shipped).is_none(),
-                "{name}: a pair was admitted under a ceiling no transaction can carry"
-            );
+            let pair = qwen25_admissible_geometry_v1(model, &shipped)
+                .unwrap_or_else(|| panic!("{name}: no pair is admissible — ADR-0080's ceiling went back to one transaction"));
+            println!("{name}: admissible pair tile_len={} n_ctx={}", pair.tile_len, pair.n_ctx);
+            // **Three tokens.** The pair exists now and it is not a usable class: the LADDER is
+            // what bounds it (`PALW_STEP_MAX_LEAVES` = 2^22), not the price, so widening this
+            // family is ADR-0077's fence and not this ceiling. The number is pinned so that
+            // "Qwen2.5 became registrable" cannot be read as "at a context anyone wants".
+            assert_eq!((pair.tile_len, pair.n_ctx), (64, 3), "{name}: the widest pair the shipped ladder admits");
         }
 
         // The cheapest close either model could ever be asked for — the minimum context, swept over
@@ -1455,9 +1491,16 @@ mod tests {
         };
         assert_eq!(cheapest(QWEN25_1_5B), 1_220_368, "1.5B's cheapest possible close");
         assert_eq!(cheapest(QWEN25_3B), 1_220_944, "3B's, and the two are within 0.05% — the pin dominates both");
+        // **The gap, and the ceiling it was a gap from.** This read `> 14 x
+        // DEFAULT_MAX_CLOSE_BYTES` when that constant was 80 KiB — the order-of-magnitude finding
+        // ADR-0080 was written about. It is unchanged as arithmetic and the constant it was stated
+        // against is not, so it is stated against the number that was true: 1,220,368 is 14.9x the
+        // 80 KiB one-transaction carrier and 54% of the 27-chunk group.
+        const CEILING_THAT_REFUSED_THEM: u64 = 80 * 1024;
+        assert!(cheapest(QWEN25_1_5B) > 14 * CEILING_THAT_REFUSED_THEM, "the gap was never an order of magnitude");
         assert!(
-            cheapest(QWEN25_1_5B) > 14 * crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES,
-            "the gap is an order of magnitude, not a tuning margin"
+            cheapest(QWEN25_1_5B) < crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES,
+            "the cheapest close is outside ADR-0080's ceiling too — then nothing in this family is registrable"
         );
 
         // And a court with no ceiling at all still says something useful: the LADDER alone admits a

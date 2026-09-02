@@ -157,31 +157,60 @@ pub use crate::palw_attempt_v2::palw_network_domain_v2;
 /// # What one court close may cost to carry, in bytes
 ///
 /// ADR-0049 Decision C, restated to the quantity the ADR's own table names ("per refutation and
-/// per court close ... plus Merkle paths") rather than to the weight bytes alone.
+/// per court close ... plus Merkle paths") rather than to the weight bytes alone — and, since
+/// **ADR-0080 design A**, derived from a CHUNK GROUP rather than from one transaction.
 ///
 /// ## Why this is a carriage number and not a taste number
 ///
-/// A close is one transaction on `SUBNETWORK_ID_PALW_LIFECYCLE`. There is no chunked-evidence path
-/// for a `PalwConsensusObjectV2` — `palw_carriage`'s four-chunk envelope is the Stage-0 v1 format
-/// and carries no V2 object — so whatever a close weighs, it weighs in one payload. Two rules then
-/// decide the largest close that can exist:
+/// A close is evidence on `SUBNETWORK_ID_PALW_LIFECYCLE`, and what carries it is the chunk group
+/// ADR-0075 Decision 14 already built: an object too large for one carrier is cut into
+/// `ObjectChunk`s of at most [`crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES`], each an
+/// ordinary lifecycle transaction, and the chain reassembles them IN STATE keyed by the digest of
+/// the whole object. So the binding question is no longer "what fits one transaction" but "how
+/// many transactions may one close span", and the ceiling is derived from the group:
 ///
-/// * `transient_mass = size × TRANSIENT_BYTE_TO_MASS_FACTOR` (4), and the mempool refuses a
-///   transaction whose transient mass exceeds `MAXIMUM_STANDARD_TRANSACTION_MASS` (480,000), so a
-///   RELAYABLE transaction is at most **120,000 bytes**;
-/// * body validation refuses a block whose total transient mass exceeds `max_block_mass`
-///   (500,000), so even a hand-delivered one is at most 125,000 bytes.
+/// ```text
+/// ceiling x 1.20 <= chunks x PALW_OBJECT_CHUNK_MAX_BYTES
+///   =>  ceiling = floor(27 x 100,000 / 1.20) = 2,250,000
+/// ```
 ///
-/// A close that cannot be relayed is a dispute only a friendly miner could raise, so 120,000 is the
-/// bound. Against it: a measured carrier (one ML-DSA-87 input and a change output) is 7,457 bytes
-/// and a worst-case standard one is ~18,000; the encoded object runs about 1.2x the bytes this
-/// ceiling counts, because every opening carries its own coordinate and length prefixes. So
+/// **Only the count moves.** `PALW_OBJECT_CHUNK_MAX_BYTES` is 100,000 and does not: it is already
+/// the largest round number that relays, sitting under the 120,000 bytes a standard transaction
+/// carries (`transient_mass = size x TRANSIENT_BYTE_TO_MASS_FACTOR`, and the mempool refuses a
+/// transaction whose transient mass exceeds `MAXIMUM_STANDARD_TRANSACTION_MASS` = 480,000). The
+/// COUNT is [`DEFAULT_MAX_CLOSE_CHUNKS`], and it is the one quantity a network chooses here.
+///
+/// The `1.20` is the same measured framing factor the one-transaction derivation used: the encoded
+/// object runs about 1.2x the bytes this ceiling counts, because every opening carries its own
+/// coordinate and length prefixes (measured 90,888 borsh against 77,568 counted). The 18,000-byte
+/// carrier allowance the old derivation subtracted once is gone from the arithmetic, because it is
+/// now paid PER CHUNK out of the 20,000 bytes each chunk leaves under the relay bound rather than
+/// once out of the whole close.
+///
+/// ## The derivation this replaces — right, and no longer binding
+///
+/// Until ADR-0080 a close weighed in ONE payload, so the largest close that could exist was the
+/// largest relayable transaction:
 ///
 /// ```text
 /// ceiling x 1.20 + 18,000 <= 120,000   =>   ceiling <= 85,000
 /// ```
 ///
-/// and the value below is 80 KiB, the round number under it.
+/// and the shipped value was 80 KiB, the round number under it. That reasoning is still correct
+/// about a transaction — [`PALW_STANDARD_TX_BYTES`] still spells the 120,000, and
+/// `the_close_ceiling_fits_a_carrier_transaction` still runs it — it simply stopped being the
+/// bound on a close, because a close is no longer one transaction. What survives it verbatim is
+/// the per-chunk half: 100,000 bytes is chosen against that same 120,000.
+///
+/// ## What is NOT yet derived from this, and is a wall rather than a rounding
+///
+/// [`crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_COUNT`] is **8**. The transport this ceiling is
+/// derived from therefore reassembles at most 800,000 bytes today, and 27 chunks is 2,700,000. A
+/// class admitted at this ceiling whose close exceeds 800,000 bytes has a price and no carrier
+/// until that count moves with it — the split-court close is ADR-0080's other half, and it is not
+/// this constant's to land. The number here is the ceiling the COURT prices; the number there is
+/// what the chunk transport will carry, and a reader comparing them should expect the second to
+/// rise to meet the first rather than reading the gap as an argument for lowering this one.
 ///
 /// ## What a close is made of, measured on the shipped floor
 ///
@@ -200,12 +229,16 @@ pub use crate::palw_attempt_v2::palw_network_domain_v2;
 ///
 /// ## What it admits
 ///
-/// `PALW_RC_BASE0_GEOMETRY` is `vocab_size` 1,024 and `n_ctx` 12 BECAUSE of this number: its worst
-/// close is 61,040, or 75% of the ceiling. `n_ctx` 16 reaches 97% and 20 exceeds it; `vocab_size`
-/// 2,048 exceeds it at every context. No Qwen2.5 geometry fits — its
-/// cheapest artifact opening alone is 143,360 — so a larger ceiling would not buy that class, only
-/// admit one whose disputes nobody could raise. Carrying a model at that scale needs bisection
-/// WITHIN a step's reduction and an OPENABLE logits commitment, not a bigger number here.
+/// `PALW_RC_BASE0_GEOMETRY` is `vocab_size` 1,024 and `n_ctx` 12, and it was chosen against the
+/// 80 KiB ceiling: its worst close is 52,704, which was 64% of that number and is 2.3% of this
+/// one. Nothing about the floor moves — a ceiling admits, it does not require — and what the
+/// wider ceiling buys is the row above it: the dense A16 tier at a context wide enough to emit a
+/// real artifact, which at 80 KiB stopped at `n_ctx` 30 and at 2,250,000 does not.
+///
+/// The ladder is the other gate and it is FIRST: `verify_class_admission_v4` refuses on
+/// `max_step_leaf_count` before it prices anything, so raising this alone widens no family. See
+/// `the_widest_context_each_family_admits`, which measures both gates together rather than
+/// leaving the pair to be reasoned about.
 ///
 /// ## It is frozen with the network
 ///
@@ -214,21 +247,51 @@ pub use crate::palw_attempt_v2::palw_network_domain_v2;
 /// network will ever admit — which is why `assemble_palw_rc_identity_v2` refuses an RC identity
 /// carrying any other value.
 ///
-/// ## The other line derived 400 KiB, and 400 KiB does not relay
+/// ## The other line derived 400 KiB from the wrong mass arm
 ///
-/// `fix/audit-batch-1` lowered this same field from 1 MiB for the same reason — a close no node
+/// `fix/audit-batch-1` lowered this same field from 1 MiB for the right reason — a close no node
 /// would relay makes a court that "looks configured and is unreachable" — but sized it against
 /// `compute_mass` alone (`mass_per_tx_byte` is 1, so 480,000 mass reads as 480,000 bytes). The
 /// mempool checks BOTH arms: `check_transaction_standard.rs` rejects on `transient_mass` too, and
-/// that arm is `size x 4`. So the relay bound is 120,000 bytes, and 400 KiB is 3.4x past it — the
-/// larger number would have re-admitted exactly the class the change was meant to refuse. The
-/// derivation above is the transient arm, which is the binding one.
+/// that arm is `size x 4`. So a TRANSACTION holds 120,000 bytes, not 480,000. That is why the
+/// per-chunk number is 100,000 and not 400,000; the count above is what makes the ceiling large,
+/// and it is large by carrying more transactions rather than by mis-reading one.
+pub const DEFAULT_MAX_CLOSE_BYTES: u64 = palw_close_bytes_for_chunks_v1(DEFAULT_MAX_CLOSE_CHUNKS);
+
+/// **How many chunk-group parts one court close may span** (ADR-0080 design A).
 ///
-/// Their line also records that Qwen2.5-1.5B "needs 560 KiB and does not fit any ceiling a
-/// transaction can carry". That was true of a flat logits commitment and one Merkle path per leaf.
-/// It is no longer: the tiled logits root and range openings put the hybrid class's worst close at
-/// 73,636 bytes, and the A16 dense tier is registered against this same 80 KiB.
-pub const DEFAULT_MAX_CLOSE_BYTES: u64 = 80 * 1024;
+/// The one number a network chooses in this derivation; [`DEFAULT_MAX_CLOSE_BYTES`] is its
+/// consequence. 27 is what admits the dense A16 row at a context wide enough for ADR-0078's
+/// artifact demonstration to come out of a real inference: that row's binding node closes at
+/// 1,154,673 bytes at `n_ctx` 512, which is 14 chunks framed, and the hybrid tier's is 2,240,241,
+/// which is 27. Rounding the count DOWN to the dense row alone would have priced a court that
+/// cannot prosecute the class the same ladder admits.
+pub const DEFAULT_MAX_CLOSE_CHUNKS: u64 = 27;
+
+/// **The framing factor, as a fraction.** The encoded object runs about 1.20x the bytes the
+/// ceiling counts (measured 90,888 borsh against 77,568 counted), so a close of `n` counted bytes
+/// occupies `n * 12 / 10` carried bytes. Spelled as a numerator and denominator rather than as a
+/// float because this is consensus arithmetic and a float would make the ceiling platform-shaped.
+pub const PALW_CLOSE_FRAMING_NUMERATOR: u64 = 12;
+/// See [`PALW_CLOSE_FRAMING_NUMERATOR`].
+pub const PALW_CLOSE_FRAMING_DENOMINATOR: u64 = 10;
+
+/// The counted bytes `chunks` chunk-group parts carry, after framing — the derivation
+/// [`DEFAULT_MAX_CLOSE_BYTES`] is.
+pub const fn palw_close_bytes_for_chunks_v1(chunks: u64) -> u64 {
+    let carried = chunks.saturating_mul(crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES as u64);
+    carried.saturating_mul(PALW_CLOSE_FRAMING_DENOMINATOR) / PALW_CLOSE_FRAMING_NUMERATOR
+}
+
+/// The chunk-group parts a close of `bytes` counted bytes needs, framed and rounded up — the
+/// inverse of [`palw_close_bytes_for_chunks_v1`] and the unit the admission gate compares in.
+///
+/// Rounding UP is the honest direction: half a chunk is a whole transaction, and a close is
+/// refused for needing a part the ruleset will not pay for, not for a byte.
+pub const fn palw_close_chunks_for_bytes_v1(bytes: u64) -> u64 {
+    let carried = bytes.saturating_mul(PALW_CLOSE_FRAMING_NUMERATOR) / PALW_CLOSE_FRAMING_DENOMINATOR;
+    carried.div_ceil(crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES as u64)
+}
 
 /// **The mempool's standard-transaction mass, mirrored** — the number
 /// [`DEFAULT_MAX_CLOSE_BYTES`] is derived from.
@@ -282,6 +345,15 @@ pub struct PalwCourtParamsV2 {
     /// exceeds them cannot join a running chain, so the ceiling is chosen once, at genesis, for
     /// every class the network ever intends to admit.
     max_close_bytes: u64,
+    /// **The same ceiling in the unit it is actually carried in** (ADR-0080 design A).
+    ///
+    /// `max_close_bytes` above is a derived restatement of THIS number — see
+    /// [`palw_close_bytes_for_chunks_v1`] — and the admission gate compares chunks, not bytes,
+    /// because a close rides an `ObjectChunk` group and half a chunk is a whole transaction. The
+    /// two are kept consistent by construction: every constructor derives one from the other, so
+    /// there is no way to build a court whose byte ceiling and chunk ceiling disagree, which is
+    /// the failure mode a mirrored number has.
+    max_close_chunks: u64,
     max_terminal_macs: u64,
     max_operand_count: u32,
 }
@@ -313,6 +385,7 @@ impl PalwCourtParamsV2 {
         if max_close_bytes == 0 || max_terminal_macs == 0 || max_operand_count == 0 {
             return Err(PalwModeV2Error::Invalid("a zero court cost ceiling admits no class at all"));
         }
+        let max_close_chunks = palw_close_chunks_for_bytes_v1(max_close_bytes);
         if max_step_leaf_count < 2 {
             return Err(PalwModeV2Error::Invalid("a trace with fewer than two step leaves cannot be bisected"));
         }
@@ -322,11 +395,26 @@ impl PalwCourtParamsV2 {
         if terminal_rounds == 0 {
             return Err(PalwModeV2Error::Invalid("the terminal adjudication is a round; zero of them never reaches a verdict"));
         }
-        Ok(Self { max_step_leaf_count, turn_deadline_daa, terminal_rounds, max_close_bytes, max_terminal_macs, max_operand_count })
+        Ok(Self {
+            max_step_leaf_count,
+            turn_deadline_daa,
+            terminal_rounds,
+            max_close_bytes,
+            max_close_chunks,
+            max_terminal_macs,
+            max_operand_count,
+        })
     }
 
     pub fn max_close_bytes(&self) -> u64 {
         self.max_close_bytes
+    }
+
+    /// **What the admission gate actually compares** (ADR-0080 design A): the chunk-group parts
+    /// this ruleset will pay to carry for one close. [`Self::max_close_bytes`] is this number
+    /// framed back into counted bytes, for the readers that still speak in bytes.
+    pub fn max_close_chunks(&self) -> u64 {
+        self.max_close_chunks
     }
 
     pub fn max_terminal_macs(&self) -> u64 {
@@ -961,7 +1049,9 @@ impl PalwConsensusParamsV2 {
         // asserts the derived cost, the ruleset asserts what it will pay for, and a class whose
         // disputes cannot ride a carrier must fail the BOOT gate, not its first challenger.
         for entry in catalog.entries() {
-            if entry.court_cost.max_close_bytes > self.court.max_close_bytes() {
+            // In CHUNKS, the unit the registration gate compares in (ADR-0080 design A), so a
+            // class cannot be admitted at one rule and refused at boot by another.
+            if palw_close_chunks_for_bytes_v1(entry.court_cost.max_close_bytes) > self.court.max_close_chunks() {
                 return Err(PalwModeV2Error::Invalid(
                     "a registered class's terminal opening exceeds the ceiling this ruleset pays for",
                 ));
@@ -1037,37 +1127,56 @@ pub fn palw_ruleset_id_v2(bundle: &PalwConsensusParamsV2) -> Hash64 {
 #[cfg(test)]
 pub(crate) mod tests {
 
-    /// **The court's close ceiling has to be a number a transaction can carry.**
+    /// **The court's close ceiling is a chunk-group count, and the chunk is what a transaction
+    /// can carry.**
     ///
-    /// A close travels as the payload of a lifecycle carrier, and a carrier is an ordinary
-    /// standard transaction. Every paragraph that chose the old 1 MiB ceiling sized it against what
-    /// a CLASS wants; none asked what a carrier can hold, so the ceiling admitted closes no node
-    /// would relay — a court that looks configured and is unreachable, discoverable only by having
-    /// a dispute.
+    /// Both halves are run rather than recited. The per-chunk half is the old derivation, intact:
+    /// `transient_mass = size x 4` against `MAXIMUM_STANDARD_TRANSACTION_MASS` gives a relayable
+    /// transaction of 120,000 bytes, and `PALW_OBJECT_CHUNK_MAX_BYTES` is 100,000 — under it, with
+    /// room for the carrier's own weight (an ML-DSA-87 signature script alone is a few thousand
+    /// bytes). The group half is the count: `DEFAULT_MAX_CLOSE_BYTES` is what 27 of those chunks
+    /// hold after framing, and nothing else.
     ///
-    /// **Which mass arm is the bound is the whole question.** `fix/audit-batch-1` derived 400 KiB
-    /// from `compute_mass` alone: `mass_per_tx_byte` is 1, so 480,000 mass reads as 480,000 bytes.
-    /// But `check_transaction_standard` checks BOTH arms and rejects on `transient_mass` too, and
-    /// that arm is `size x TRANSIENT_BYTE_TO_MASS_FACTOR` — four times the bytes. So the relayable
-    /// size is 120,000, not 480,000, and a 400 KiB ceiling is 3.4x past it: it would have
-    /// re-admitted exactly the unreachable court the change was written to refuse. This asserts the
-    /// binding arm, against the mirrored figure the module already guards from the side that owns
-    /// it.
+    /// **What this test asserted before ADR-0080 design A**: that `DEFAULT_MAX_CLOSE_BYTES` itself
+    /// fit inside one 120,000-byte transaction with 32 KiB to spare. It does not any more and must
+    /// not — a close that fits one transaction is a court that cannot prosecute a class wide enough
+    /// to emit an artifact — so the property moved down one level, onto the chunk. The 400 KiB
+    /// clause is kept because the trap it records is unchanged: 400,000 is the `compute_mass`
+    /// reading of the standard limit, and it never described a transaction.
     #[test]
     fn the_close_ceiling_fits_a_carrier_transaction() {
         let payload_budget = PALW_STANDARD_TX_BYTES;
         assert_eq!(payload_budget, 120_000, "the transient arm is size x 4, not size x 1");
-        assert!(
-            DEFAULT_MAX_CLOSE_BYTES < payload_budget,
-            "a close at the ceiling ({DEFAULT_MAX_CLOSE_BYTES} bytes) must fit a standard transaction ({payload_budget})"
-        );
-        // And not merely fit: the carrier's own weight has to fit beside it. An ML-DSA-87 signature
-        // script alone is a few thousand bytes.
-        let carrier_overhead = payload_budget - DEFAULT_MAX_CLOSE_BYTES;
-        assert!(carrier_overhead > 32 * 1024, "the carrier needs room of its own beside the openings, got {carrier_overhead}");
+
+        // The per-chunk half: one chunk is a transaction, and it fits one with room for the
+        // carrier beside it.
+        let chunk = crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES as u64;
+        assert!(chunk < payload_budget, "one chunk ({chunk} bytes) must fit a standard transaction ({payload_budget})");
+        let carrier_overhead = payload_budget - chunk;
+        assert!(carrier_overhead >= 18_000, "the carrier needs room of its own beside the chunk, got {carrier_overhead}");
+
+        // The group half: the ceiling is the count and nothing else.
+        assert_eq!(DEFAULT_MAX_CLOSE_CHUNKS, 27);
+        assert_eq!(DEFAULT_MAX_CLOSE_BYTES, 2_250_000, "floor(27 x 100,000 / 1.20)");
+        assert_eq!(DEFAULT_MAX_CLOSE_BYTES, palw_close_bytes_for_chunks_v1(DEFAULT_MAX_CLOSE_CHUNKS));
+
+        // And the two directions are one arithmetic: a close at the ceiling needs exactly the
+        // chunks the ceiling buys, and one byte more needs one more.
+        assert_eq!(palw_close_chunks_for_bytes_v1(DEFAULT_MAX_CLOSE_BYTES), DEFAULT_MAX_CLOSE_CHUNKS);
+        assert_eq!(palw_close_chunks_for_bytes_v1(DEFAULT_MAX_CLOSE_BYTES + 1), DEFAULT_MAX_CLOSE_CHUNKS + 1);
+        assert_eq!(palw_close_chunks_for_bytes_v1(1), 1, "a close is never free of its first chunk");
+
         // The number the other line would have shipped, refused here so the reasoning cannot be
-        // re-derived by accident.
+        // re-derived by accident: 400,000 is the compute-mass reading, and no transaction holds it.
         assert!(400 * 1024 > payload_budget, "400 KiB was never relayable");
+
+        // **The wall, asserted so it cannot be forgotten**: the transport this ceiling is derived
+        // from carries 8 parts, not 27. Written as the inequality it currently is, so the day the
+        // count moves this line is what says the gap closed.
+        assert!(
+            DEFAULT_MAX_CLOSE_CHUNKS > crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_COUNT as u64,
+            "PALW_OBJECT_CHUNK_MAX_COUNT reached the court's count — re-read the ceiling's `What is NOT yet derived` note"
+        );
     }
     use super::*;
 

@@ -1031,8 +1031,19 @@ pub fn verify_class_admission_v4(
         profile,
         ladder.map_or_else(|| PalwCourtCostShapeV1::genesis_anchored_v1(profile), |r| r.cost_shape),
     )?;
+    // **In chunks, not bytes** (ADR-0080 design A). A close rides an `ObjectChunk` group, so what
+    // a ruleset pays for is a count of carriers and half a chunk is a whole transaction. With the
+    // shipped pair the two readings are the same refusal — `max_close_bytes` IS
+    // `palw_close_bytes_for_chunks_v1(max_close_chunks)`, and `chunks(b) <= C` iff
+    // `b <= bytes_for_chunks(C)` — and the chunk form is the one that stays true if a court is
+    // ever built off the chunk grid. `PalwConsensusParamsV2::validate` compares the same unit, so
+    // a class cannot be admitted at registration and refused at boot.
     for (what, got, ceiling) in [
-        ("court close", cost.max_close_bytes, bundle.court.max_close_bytes()),
+        (
+            "court close chunks",
+            crate::palw_mode_v2::palw_close_chunks_for_bytes_v1(cost.max_close_bytes),
+            bundle.court.max_close_chunks(),
+        ),
         ("terminal multiply-accumulates", cost.max_terminal_macs, bundle.court.max_terminal_macs()),
         ("operand count", cost.max_operand_count as u64, bundle.court.max_operand_count() as u64),
     ] {
@@ -1283,6 +1294,168 @@ mod tests {
             share_permille: 1,
             activation_daa: 0,
             admission: None,
+        }
+    }
+
+    /// **W3's number: the widest `n_ctx` each family is actually ADMITTED at, under both ladders.**
+    ///
+    /// The ceiling is not the gate on its own, and that is the trap this test exists to make
+    /// unmissable. `verify_class_admission_v4` refuses on `max_step_leaf_count` BEFORE it prices
+    /// anything, so raising `max_close_bytes` from 80 KiB to 2,250,000 widens exactly nothing
+    /// while the shipped `2^22` ladder stands — `qwen25_admissible_geometry_v1`'s own `fits`
+    /// closure has the same ordering, and reading the ceiling alone is how a design comes to
+    /// estimate a width the gate never grants.
+    ///
+    /// So both gates are measured together, per family and per ladder, through the gate's own
+    /// door rather than by re-deriving its arithmetic. The refusal at `widest + 1` is captured as
+    /// well: a width bounded by a build failure rather than by a rule would otherwise read as a
+    /// measurement.
+    ///
+    /// Run it with output when the number is what you want:
+    /// `cargo test -p kaspa-consensus-core --lib the_widest_context_each_family_admits -- --nocapture`
+    #[test]
+    fn the_widest_context_each_family_admits() {
+        use crate::palw_context_ladder::{
+            PALW_CONTEXT_LADDER_MAX_STEP_LEAVES, palw_a16_context_row_profile_v1, palw_class_ladder_rules_v1,
+            palw_qwen36_context_row_profile_v1,
+        };
+
+        // `share_permille: 0` — this measures SHAPE and COST, so ADR-0069's weight gate is out of
+        // the question rather than waved past with a fixture family.
+        let weightless = |class_id: Hash64, pwu_per_inference: u64| PalwConsensusObjectV2::ClassRegistered {
+            class_id,
+            artifact_root: Hash64::from_u64_word(0xA271FAC7),
+            slash_value_per_pwu: 1,
+            pwu_rule: PalwPwuRuleV2::DerivedV1 { pwu_per_inference },
+            initial_target: 1,
+            share_permille: 0,
+            activation_daa: 0,
+            admission: None,
+        };
+
+        // `close_bytes` is a parameter so the OLD ceiling can be measured by the same harness:
+        // a width that moved is only evidence if the two readings differ in one number.
+        let verdict = |build: fn(u32) -> Result<PalwShapeProfileV3, crate::palw_step::PalwStepError>,
+                       n_ctx: u32,
+                       deep: bool,
+                       close_bytes: u64|
+         -> Result<PalwClassCatalogEntryV2, String> {
+            let profile = build(n_ctx).map_err(|e| format!("the profile does not project: {e:?}"))?;
+            let rules = if deep {
+                Some(palw_class_ladder_rules_v1(&profile).ok_or_else(|| "the row registers no state chunk map".to_string())?)
+            } else {
+                None
+            };
+            let mut bundle = conforming_bundle();
+            // The ladder is a BUNDLE field — `verify_class_admission_v4` compares the class's worst
+            // case against `bundle.court.max_step_leaf_count()`, not against `rules.ladder` — so
+            // "arm the 2^32 ladder" means moving this, and `Some(rules)` alone would move nothing.
+            let top = if deep { PALW_CONTEXT_LADDER_MAX_STEP_LEAVES } else { PALW_STEP_MAX_LEAVES };
+            bundle.court = PalwCourtParamsV2::with_cost_ceilings(
+                top,
+                20,
+                2,
+                close_bytes,
+                crate::palw_mode_v2::DEFAULT_MAX_TERMINAL_MACS,
+                crate::palw_mode_v2::DEFAULT_MAX_OPERAND_COUNT,
+            )
+            .expect("a court at either ladder is legal");
+            // A canonical job spanning the whole context: the only declaration that meets
+            // Decision 14's `n_ctx / 8` floor at every width, so the footprint rule never stands in
+            // front of the answer this test is about.
+            let canonical = context(&profile, n_ctx.saturating_sub(2).max(1), 2);
+            let counted = match &rules {
+                Some(r) => crate::palw_step::step_leaf_count_capped_v1(&profile, &canonical, r.ladder),
+                None => step_leaf_count(&profile, &canonical),
+            }
+            .map_err(|e| format!("the canonical job has no step space: {e:?}"))?;
+            let registration = weightless(profile.shape_profile_id(), counted);
+            verify_class_admission_v4(&bundle, &profile, &canonical, &registration, &[], &[], rules).map_err(|e| format!("{e:?}"))
+        };
+
+        let widest =
+            |build: fn(u32) -> Result<PalwShapeProfileV3, crate::palw_step::PalwStepError>, deep: bool, close_bytes: u64| -> u32 {
+                if verdict(build, 2, deep, close_bytes).is_err() {
+                    return 0;
+                }
+                // Monotone in `n_ctx`: more context is strictly more leaves and never fewer opened
+                // bytes, which is the same property `qwen25_admissible_geometry_v1` binary-searches on.
+                let (mut lo, mut hi) = (2u32, 8_192u32);
+                while lo + 1 < hi {
+                    let mid = lo + (hi - lo) / 2;
+                    if verdict(build, mid, deep, close_bytes).is_ok() { lo = mid } else { hi = mid }
+                }
+                lo
+            };
+
+        // The ceiling ADR-0080 replaces, kept as a control rather than as history.
+        const OLD_CEILING: u64 = 80 * 1024;
+        let now = crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES;
+
+        let mut measured: Vec<(&str, bool, u64, u32, String)> = Vec::new();
+        for (family, build) in [
+            ("dense A16 (graph-v2)", palw_a16_context_row_profile_v1 as fn(u32) -> _),
+            ("hybrid QWEN36 (graph-v3)", palw_qwen36_context_row_profile_v1 as fn(u32) -> _),
+        ] {
+            for deep in [false, true] {
+                for close_bytes in [OLD_CEILING, now] {
+                    let w = widest(build, deep, close_bytes);
+                    // At `w == 0` nothing was admitted at all, and the refusal to report is the one
+                    // at the narrowest context the sweep tries — n_ctx 1 is degenerate.
+                    let refused_at = (w + 1).max(2);
+                    let why = verdict(build, refused_at, deep, close_bytes)
+                        .err()
+                        .unwrap_or_else(|| "ADMITTED — the search's upper bound bound it".into());
+                    println!(
+                        "{family} @ ladder {} @ ceiling {close_bytes}: widest admitted n_ctx = {w}; n_ctx {refused_at} refused by {why}",
+                        if deep { "2^32" } else { "2^22 (shipped)" },
+                    );
+                    measured.push((family, deep, close_bytes, w, why));
+                }
+            }
+        }
+        let at = |family: &str, deep: bool, close_bytes: u64| {
+            measured.iter().find(|m| m.0 == family && m.1 == deep && m.2 == close_bytes).expect("swept")
+        };
+
+        // ---- Under the SHIPPED 2^22 ladder the ceiling buys almost nothing, and what it buys is
+        // bounded by the ladder rather than by the price. This is the trap, as a measurement.
+        assert_eq!(at("dense A16 (graph-v2)", false, OLD_CEILING).3, 21, "the width the 80 KiB carrier admitted, unfenced");
+        assert_eq!(at("dense A16 (graph-v2)", false, now).3, 39, "and the width 2,250,000 admits — the LADDER stops it");
+        assert!(
+            at("dense A16 (graph-v2)", false, now).4.contains("TooManyLeaves"),
+            "the shipped ladder stopped being the binding refusal: {}",
+            at("dense A16 (graph-v2)", false, now).4
+        );
+        assert_eq!(at("hybrid QWEN36 (graph-v3)", false, OLD_CEILING).3, 8);
+        assert_eq!(at("hybrid QWEN36 (graph-v3)", false, now).3, 12, "the hybrid does not widen at all under 2^22");
+
+        // ---- Under a 2^32 ladder the ceiling is the gate, and this is what it grants.
+        // 30 is the figure ADR-0080's motivation quotes as "the widest row the carrier admits
+        // today" — reproduced here by the gate rather than recited, which is what makes the 1,002
+        // below a comparable number and not a differently-derived one.
+        assert_eq!(at("dense A16 (graph-v2)", true, OLD_CEILING).3, 30, "the anchored court at the old ceiling");
+        assert_eq!(at("dense A16 (graph-v2)", true, now).3, 1_002, "the dense row's widest admitted context");
+        // ZERO, and it is not a bug in the sweep: the anchored court charges one checkpoint
+        // opening per history-reading REFERENCE and the recurrence node declares five, so an
+        // 80 KiB ceiling cannot pay for the hybrid at ANY context — the floor
+        // `what_still_refuses_the_hybrid_512_row` names, measured from the gate's side.
+        assert_eq!(at("hybrid QWEN36 (graph-v3)", true, OLD_CEILING).3, 0, "the 80 KiB anchored court admitted a hybrid row");
+        assert_eq!(at("hybrid QWEN36 (graph-v3)", true, now).3, 514, "the hybrid row's widest admitted context");
+        for family in ["dense A16 (graph-v2)", "hybrid QWEN36 (graph-v3)"] {
+            assert!(
+                at(family, true, now).4.contains("court close chunks"),
+                "{family}: past the ladder the close ceiling must be what refuses, got {}",
+                at(family, true, now).4
+            );
+        }
+
+        // ---- The consequence ADR-0080 was written for: BOTH of ADR-0077 Decision 13's first row
+        // (`PALW_CONTEXT_LADDER_ROWS[0]` = 512) are inside the ceiling now, and neither was.
+        assert_eq!(crate::palw_context_ladder::PALW_CONTEXT_LADDER_ROWS[0], 512);
+        for family in ["dense A16 (graph-v2)", "hybrid QWEN36 (graph-v3)"] {
+            assert!(at(family, true, now).3 >= 512, "{family}: the 512 row is still not admitted");
+            assert!(at(family, true, OLD_CEILING).3 < 512, "{family}: the 512 row was admissible before — re-read ADR-0080");
         }
     }
 
@@ -1629,8 +1802,21 @@ mod tests {
             derive_court_cost_v1(&p).expect("derivable").max_close_bytes
         };
 
-        // Flat: the vocabulary IS the constraint, and one doubling leaves the ceiling behind.
-        assert!(at(2_048, flat_logits_scheme_id_v1()) > ceiling, "vocab 2,048 flat must not fit — it is why the floor is 1,024");
+        // Flat: the vocabulary IS the constraint, and one doubling leaves behind the ceiling that
+        // CHOSE the floor's geometry — 80 KiB, the one-transaction number ADR-0080 replaced.
+        //
+        // **What this asserted before, and why it moved**: it read `> ceiling` against
+        // `DEFAULT_MAX_CLOSE_BYTES`, which was the same 80 KiB. It is not any more, and 2,048 flat
+        // is comfortably inside 2,250,000 — so the sentence "it is why the floor is 1,024" is now
+        // a fact about HISTORY and is asserted against the number that was true when the choice
+        // was made. The floor keeps its vocabulary regardless: `vocab_size` is inside
+        // `shape_profile_id`, so widening it is a new class, not a cheaper one.
+        const CEILING_THAT_CHOSE_THE_FLOOR: u64 = 80 * 1024;
+        assert!(
+            at(2_048, flat_logits_scheme_id_v1()) > CEILING_THAT_CHOSE_THE_FLOOR,
+            "vocab 2,048 flat fit the 80 KiB carrier — the reason the floor is 1,024 was never the pin"
+        );
+        assert!(at(2_048, flat_logits_scheme_id_v1()) < ceiling, "and under ADR-0080's ceiling the pin no longer refuses it");
         assert_eq!(at(4_096, flat_logits_scheme_id_v1()), 200_160);
 
         // Tiled: the pin stops being the binding arm at any vocabulary, so the same close price
@@ -1695,53 +1881,72 @@ mod tests {
         );
     }
 
-    /// **The other genesis decision, as arithmetic: the close ceiling is what a transaction can
-    /// carry, and the floor is inside it with the margin it was chosen for.**
+    /// **The other genesis decision, as arithmetic: the close ceiling is what a chunk GROUP can
+    /// carry, and the floor is inside it with room to spare.**
     ///
-    /// A close is one `SUBNETWORK_ID_PALW_LIFECYCLE` transaction — there is no chunked-evidence
-    /// path for a `PalwConsensusObjectV2` — so the largest close that can be RAISED is what a
-    /// standard transaction holds. This test is the arithmetic that produced
-    /// `DEFAULT_MAX_CLOSE_BYTES`, run rather than recited, and it fails on either side: if the
-    /// ceiling grows past what a carrier can hold, or if the floor grows into the ceiling.
+    /// A close is evidence, and evidence too large for one carrier rides the `ObjectChunk` group
+    /// ADR-0075 Decision 14 built. So the ceiling is `chunks x PALW_OBJECT_CHUNK_MAX_BYTES`
+    /// de-framed, and the two halves are checked separately because they are two different facts:
+    /// the CHUNK is what a standard transaction relays, and the COUNT is what the ruleset pays for.
+    ///
+    /// **What this test asserted before ADR-0080 design A**, and it was correct then: that
+    /// `DEFAULT_MAX_CLOSE_BYTES x 1.20 + 18,000 <= PALW_STANDARD_TX_BYTES` — one close inside one
+    /// transaction — plus the maximality clause that DOUBLING it would not fit. Both were about a
+    /// close that weighs in a single payload, and a close does not any more. The maximality clause
+    /// moved with the derivation: it is now the chunk that cannot be a round number larger, which
+    /// is the sentence `PALW_OBJECT_CHUNK_MAX_BYTES` was always documented by.
+    ///
+    /// It still fails on either side: if the chunk grows past what a carrier can hold, or if the
+    /// floor grows into the ceiling.
     #[test]
-    fn the_close_ceiling_is_what_a_standard_transaction_can_carry() {
-        use crate::palw_mode_v2::{DEFAULT_MAX_CLOSE_BYTES, PALW_STANDARD_TX_BYTES};
+    fn the_close_ceiling_is_what_a_chunk_group_can_carry() {
+        use crate::palw_mode_v2::{
+            DEFAULT_MAX_CLOSE_BYTES, DEFAULT_MAX_CLOSE_CHUNKS, PALW_CLOSE_FRAMING_DENOMINATOR, PALW_CLOSE_FRAMING_NUMERATOR,
+            PALW_STANDARD_TX_BYTES,
+        };
+        let chunk = crate::palw_state_v2::PALW_OBJECT_CHUNK_MAX_BYTES as u64;
 
         // Transient mass is `size x 4` and the mempool refuses a transaction over the standard
         // limit on EITHER mass, so this — not the 480,000 — is the number in bytes.
         assert_eq!(PALW_STANDARD_TX_BYTES, 120_000);
 
-        // What has to fit beside the close: a carrier the challenger builds. One ML-DSA-87 input
-        // and a change output measures 7,457 bytes; the standard cap on a single signature script
-        // is 16,384, so 18,000 covers the worst carrier a challenger could need. And the encoded
-        // object runs about 1.2x the bytes this ceiling counts, because every opening carries its
-        // own coordinate and length prefixes (measured 90,888 borsh against 77,568 counted).
+        // Half one: ONE CHUNK is one transaction. What has to fit beside it is a carrier the
+        // challenger builds — one ML-DSA-87 input and a change output measures 7,457 bytes, and the
+        // standard cap on a single signature script is 16,384, so 18,000 covers the worst carrier.
         const CARRIER_ALLOWANCE: u64 = 18_000;
-        const FRAMING_NUMERATOR: u64 = 12;
-        const FRAMING_DENOMINATOR: u64 = 10;
-        assert!(
-            DEFAULT_MAX_CLOSE_BYTES * FRAMING_NUMERATOR / FRAMING_DENOMINATOR + CARRIER_ALLOWANCE <= PALW_STANDARD_TX_BYTES,
-            "a close at the ceiling must still fit a standard transaction"
-        );
-        // And it is not needlessly small: doubling it would not.
-        assert!(
-            DEFAULT_MAX_CLOSE_BYTES * 2 * FRAMING_NUMERATOR / FRAMING_DENOMINATOR + CARRIER_ALLOWANCE > PALW_STANDARD_TX_BYTES,
-            "the ceiling is within a factor of two of the carriage limit, so it forecloses nothing carriable"
-        );
+        assert_eq!(chunk, 100_000);
+        assert!(chunk + CARRIER_ALLOWANCE <= PALW_STANDARD_TX_BYTES, "a chunk plus its carrier must relay");
+        // And it is the largest ROUND number that does: the next one up is not relayable.
+        assert!(110_000 + CARRIER_ALLOWANCE > PALW_STANDARD_TX_BYTES, "100,000 is no longer maximal among round chunk sizes");
 
-        // The floor, under it, with the margin `PALW_RC_BASE0_GEOMETRY` was chosen for. The
-        // geometry comment carries the sweep; this is the pin.
+        // Half two: the COUNT, and the framing that turns counted bytes into carried ones. The
+        // encoded object runs about 1.20x the bytes this ceiling counts, because every opening
+        // carries its own coordinate and length prefixes (measured 90,888 borsh against 77,568).
+        assert_eq!((PALW_CLOSE_FRAMING_NUMERATOR, PALW_CLOSE_FRAMING_DENOMINATOR), (12, 10));
+        assert_eq!(DEFAULT_MAX_CLOSE_CHUNKS, 27);
+        assert_eq!(
+            DEFAULT_MAX_CLOSE_BYTES * PALW_CLOSE_FRAMING_NUMERATOR / PALW_CLOSE_FRAMING_DENOMINATOR,
+            DEFAULT_MAX_CLOSE_CHUNKS * chunk,
+            "the ceiling is exactly the group it is derived from, framed"
+        );
+        assert_eq!(DEFAULT_MAX_CLOSE_BYTES, 2_250_000);
+
+        // The floor, under it. The geometry comment carries the sweep; this is the pin.
         let floor = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("expressible");
         let cost = derive_court_cost_v1(&floor).expect("derivable");
         // Re-frozen with the range-opening carrier — see `no_qwen_geometry_...` for the trail.
         assert_eq!(cost.max_close_bytes, 52_704, "the floor's most expensive close");
         assert_eq!(cost.max_terminal_macs, 32_768, "and what a node recomputes to close it");
         assert_eq!(cost.max_operand_count, 2);
-        assert!(
-            cost.max_close_bytes * 5 <= PALW_RC_COURT_MAX_CLOSE_BYTES * 4,
-            "the floor must stay under 80% of the ceiling — {} of {PALW_RC_COURT_MAX_CLOSE_BYTES}",
-            cost.max_close_bytes
+        // **In the unit the gate compares**: the floor's worst close is ONE chunk of the 27, where
+        // against the 80 KiB ceiling it was 64% of the whole budget. The floor did not move; what
+        // it is measured against did, and stating it in chunks is what keeps that visible.
+        assert_eq!(
+            crate::palw_mode_v2::palw_close_chunks_for_bytes_v1(cost.max_close_bytes),
+            1,
+            "the liveness floor costs one carrier of the group's {DEFAULT_MAX_CLOSE_CHUNKS}"
         );
+        assert!(cost.max_close_bytes < PALW_RC_COURT_MAX_CLOSE_BYTES, "the floor must stay inside the ceiling");
         assert!(cost.max_terminal_macs <= PALW_RC_COURT_MAX_TERMINAL_MACS);
         assert!(u64::from(cost.max_operand_count) <= u64::from(PALW_RC_COURT_MAX_OPERAND_COUNT));
     }
@@ -1883,12 +2088,24 @@ mod tests {
             }
         }
         assert!(fits.is_empty(), "no tile length gives Qwen2.5-1.5B a close a transaction could carry, got {fits:?}");
-        assert!(
+
+        // **The clause ADR-0080 turned over.** This read `> DEFAULT_MAX_CLOSE_BYTES` and meant
+        // "not even the smallest expressible context fits" — true of the 80 KiB one-transaction
+        // ceiling and false of the 2,250,000-byte chunk-group one. The cheapest expressible close
+        // is 1,220,432 bytes: no TRANSACTION carries it, which is why the sweep above still finds
+        // no admissible tile at each tile's widest context, and a 27-chunk GROUP does.
+        let cheapest =
             derive_court_cost_v1(&qwen25_profile_v1(PalwQwen25GeometryV1 { n_ctx: 2, tile_len: 64, ..QWEN25_1_5B }).unwrap())
                 .unwrap()
-                .max_close_bytes
-                > crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES,
-            "even at the smallest expressible context the cheapest close is over the carrier's budget"
+                .max_close_bytes;
+        assert_eq!(cheapest, 1_220_432, "the cheapest close at the smallest expressible context");
+        assert!(
+            cheapest > crate::palw_mode_v2::PALW_STANDARD_TX_BYTES,
+            "one transaction never carried this close, and still does not"
+        );
+        assert!(
+            cheapest <= crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES,
+            "a chunk group does — that is the whole of ADR-0080 design A"
         );
 
         // **The declared 4,096-token context is not adjudicable at ANY legal tile length**, and
