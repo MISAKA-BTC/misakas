@@ -23,6 +23,12 @@ serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+# ADR-0079 host_security: geteuid for the per-user scratch directory name, and sysconf(_SC_PAGESIZE)
+# for the /proc statm fallback. Unix-gated so the Windows build of `kaspad` (a non-optional
+# dependent) does not grow a dependency it has no use for.
+libc = { workspace = true }
+
 [dev-dependencies]
 tempfile.workspace = true
 

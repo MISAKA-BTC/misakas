@@ -1,21 +1,26 @@
-//! `misaka validator …` / `misaka miner …` — thin shell-out front-ends over the
-//! existing `kaspa-pq-validator` / `kaspa-pq-miner` binaries (design §6, option A).
+//! `misaka validator …` / `misaka node start` — thin shell-out front-ends over the
+//! existing `kaspa-pq-validator` / `kaspad` binaries (design §6, option A).
 //!
 //! The unified CLI does NOT re-implement bond / attestation / ML-DSA key handling; it
 //! forwards the user's args verbatim and injects the global context. The validator's
 //! flags are PER-SUBCOMMAND (e.g. `keygen --network-id`), so a top-level flag cannot
 //! be prepended — instead the context flows through the validator's own env vars
 //! (`KASPA_PQ_NETWORK`, `KASPA_PQ_NODE_RPC`), which an explicit flag still overrides.
-//! The miner is a flat command, so its `--network-id` / optional `--node-grpc` are
-//! injected as leading flags.
-//! In both cases an operator-exported env var / explicit flag wins, the child inherits
-//! stdio, and its exact exit code is propagated.
+//! An operator-exported env var / explicit flag wins, the child inherits stdio, and
+//! its exact exit code is propagated.
+//!
+//! **There is deliberately no `miner` front-end** (ADR-0063 D4, resolved to deletion by
+//! the 2026-09-02 security amendment SA-4). It forwarded to `kaspa-pq-miner`, which is
+//! installed on no fleet host — and `resolve` below falls through to the bare name on
+//! `$PATH`, so the subcommand executed whatever a writable `PATH` entry happened to
+//! hold. A forwarder to an absent binary is an arbitrary-execution surface wearing a
+//! subcommand's name, and on a network whose only hash lane is the fee-only heartbeat
+//! it could not have earned anything even if the binary were real.
 
 use crate::node::Ctx;
 use crate::{CliError, CliResult, exit};
 use kaspa_consensus_core::config::params::Params;
 use kaspa_consensus_core::network::{NetworkId, NetworkType};
-use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
 use std::path::PathBuf;
 use std::str::FromStr;
 
@@ -34,22 +39,6 @@ fn validator_envs(network: &str, rpc: &Option<String>) -> Vec<(&'static str, Str
         envs.push(("KASPA_PQ_NODE_RPC", rpc.clone()));
     }
     envs
-}
-
-/// The miner is a flat command, so inject `--network-id` and, when explicitly configured,
-/// `--node-grpc` as leading flags unless the user already passed either. Leaving gRPC unset lets
-/// the miner use its own env/endpoint-registry/network-default resolver.
-fn miner_injection(network: &str, node_grpc: &Option<String>, args: &[String]) -> Vec<String> {
-    let mut injected = Vec::new();
-    if !has_flag(args, &["--network-id", "--network"]) {
-        injected.extend(["--network-id".to_string(), network.to_string()]);
-    }
-    if let Some(node_grpc) = node_grpc
-        && !has_flag(args, &["--node-grpc", "--rpc"])
-    {
-        injected.extend(["--node-grpc".to_string(), node_grpc.clone()]);
-    }
-    injected
 }
 
 /// Resolve the target binary: explicit `env_override` → a sibling next to the running
@@ -96,72 +85,6 @@ fn exec(bin: &str, env_override: &str, env_defaults: &[(&str, String)], injected
 pub fn validator(ctx: &Ctx, args: &[String]) -> CliResult {
     let envs = validator_envs(&ctx.network, &ctx.rpc);
     exec("kaspa-pq-validator", "MISAKA_VALIDATOR_BIN", &envs, &[], args)
-}
-
-/// `misaka miner …` → `kaspa-pq-miner [--network-id …] …`.
-/// **`misaka miner` no longer forwards** (ADR-0063 D4).
-///
-/// It forwarded to `kaspa-pq-miner`, which is not installed on the fleet hosts this was measured
-/// on — and on a `ConsensusV2` network it could not have worked if it were: every block's proof of
-/// work is a deterministic LLM inference under a registered bond, so a hash miner has no lane to
-/// mine. A command that exists and cannot run teaches an operator that the tool is unreliable, in
-/// the one place they most need to trust it, so it says what to run instead.
-///
-/// `MISAKA_MINER_BIN` still forces the old behaviour, and so does **any network that is not a PALW
-/// network** — which is the important half, because it includes MAINNET.
-///
-/// The refusal is about the CONSENSUS, not about the command. Mainnet ships
-/// `PalwConsensusMode::Disabled` and `pow_palw_activation: never()`: it is hash-only proof of work,
-/// a hash miner is exactly the right tool, and the first version of this refusal told every mainnet
-/// operator the opposite — that their blocks are LLM inferences and they should go register a bond.
-/// Wrong advice in the one place an operator most needs the tool to be right, which is the same
-/// sentence this doc uses to justify refusing at all. So ask the network the question instead of
-/// assuming the answer: only a `ConsensusV2` network has no hash lane.
-/// Does THIS network's consensus make blocks out of inference rather than hashes?
-///
-/// A network id this tree cannot DESCRIBE is not one we can make a claim about, so it answers
-/// `false` and the caller forwards — refusing on an id we cannot resolve would turn a typo into
-/// "your consensus has no miner".
-///
-/// **"Cannot describe" is two conditions, not one, and the second is a panic.** `NetworkId::from_str`
-/// parses `testnet-12` and `testnet-99` perfectly happily; it is `Params::from` that aborts the
-/// process on them (`panic!("testnet-12 was consolidated into testnet-11")`, and
-/// `panic!("Testnet suffix {} is not supported")` for the rest). A `.unwrap_or(false)` around the
-/// parse catches neither. So the convertible set is enumerated here before the conversion is
-/// attempted: this predicate must never be the reason `misaka miner` dies, and a subcommand that
-/// used to touch only strings should not gain an abort surface because it learned to ask about
-/// consensus.
-fn palw_is_the_consensus(network: &str) -> bool {
-    let Ok(nid) = NetworkId::from_str(network) else { return false };
-    let describable = match nid.network_type {
-        // The only arm `Params::from` can panic on. Kept as an explicit list rather than a
-        // `catch_unwind`, so adding a network to this build is what adds it here.
-        NetworkType::Testnet => matches!(nid.suffix, Some(10) | Some(11)),
-        NetworkType::Mainnet | NetworkType::Devnet | NetworkType::Simnet => true,
-    };
-    describable && matches!(Params::from(nid).palw_consensus_mode, PalwConsensusMode::ConsensusV2(_))
-}
-
-pub fn miner(ctx: &Ctx, args: &[String]) -> CliResult {
-    if std::env::var_os("MISAKA_MINER_BIN").is_some() {
-        let injected = miner_injection(&ctx.network, &ctx.node_grpc, args);
-        return exec("kaspa-pq-miner", "MISAKA_MINER_BIN", &[], &injected, args);
-    }
-    if !palw_is_the_consensus(&ctx.network) {
-        let injected = miner_injection(&ctx.network, &ctx.node_grpc, args);
-        return exec("kaspa-pq-miner", "MISAKA_MINER_BIN", &[], &injected, args);
-    }
-    Err(CliError::new(
-        exit::GENERIC,
-        format!(
-            "there is no hash miner for {}: on this network every block's proof of work is a deterministic LLM inference made under a registered bond, so mining means running a producer, not a miner.\n\n  \
-             1. `misaka key gen --out /etc/misaka/bond.key`   (or `key import` for an existing seed)\n  \
-             2. fund that address, then register a bond with `kaspad --palw-register-bond`\n  \
-             3. run the node with `--palw-produce` (see docs/testnet11-join-mining.md)\n\n\
-             `misaka bond status` shows the bond once it is registered. If you do have a hash miner binary you want used anyway, set MISAKA_MINER_BIN to its path and this command forwards to it.",
-            ctx.network
-        ),
-    ))
 }
 
 /// Map a network-id to kaspad's network-selection flags. Port-free: kaspad derives every
@@ -268,25 +191,6 @@ mod tests {
     }
 
     #[test]
-    fn miner_injects_network_unless_present() {
-        assert_eq!(miner_injection("testnet-10", &None, &s(&["--blocks", "0"])), s(&["--network-id", "testnet-10"]));
-        assert!(miner_injection("testnet-10", &None, &s(&["--network-id=devnet"])).is_empty());
-        assert!(miner_injection("testnet-10", &None, &s(&["--network", "devnet"])).is_empty());
-    }
-
-    #[test]
-    fn miner_injects_node_grpc_when_configured() {
-        assert_eq!(
-            miner_injection("testnet-10", &Some("127.0.0.1:26210".to_string()), &s(&["--blocks", "0"])),
-            s(&["--network-id", "testnet-10", "--node-grpc", "127.0.0.1:26210"])
-        );
-        assert_eq!(
-            miner_injection("testnet-10", &Some("127.0.0.1:26210".to_string()), &s(&["--rpc", "127.0.0.1:9999"])),
-            s(&["--network-id", "testnet-10"])
-        );
-    }
-
-    #[test]
     fn has_flag_matches_both_forms() {
         assert!(has_flag(&s(&["--network-id=devnet"]), &["--network-id"]));
         assert!(has_flag(&s(&["--network-id", "devnet"]), &["--network-id"]));
@@ -342,39 +246,5 @@ mod tests {
             .unwrap()
             .is_empty()
         );
-    }
-}
-
-#[cfg(test)]
-mod miner_refusal_tests {
-    use super::palw_is_the_consensus;
-
-    /// **`misaka miner` must not tell a mainnet operator their blocks are LLM inferences.**
-    ///
-    /// The refusal shipped unconditional, so every network got the PALW answer — including the
-    /// hash-only ones, where a hash miner is exactly the right tool and the instructions it printed
-    /// (generate a key, register a bond, run a producer) do not apply. Both positions, because a
-    /// predicate that answered `true` everywhere would also pass an assertion that only checked the
-    /// networks it is right about.
-    #[test]
-    fn only_a_palw_network_has_no_hash_miner() {
-        assert!(!palw_is_the_consensus("mainnet"), "mainnet is hash-only PoW — the miner must still forward");
-        assert!(!palw_is_the_consensus("testnet-10"), "a hash-only testnet forwards too");
-        assert!(palw_is_the_consensus("testnet-11"), "testnet-11 IS a ConsensusV2 network, and there the refusal is the truth");
-        assert!(!palw_is_the_consensus("not-a-network"), "an unparsable id is not a claim about consensus — forward, do not lecture");
-    }
-
-    /// **This predicate must never be the reason `misaka miner` dies.**
-    ///
-    /// `NetworkId::from_str` parses these; `Params::from` PANICS on them — `testnet-12` with the
-    /// consolidation message, the rest with "suffix is not supported". The first version of this
-    /// predicate wrapped only the parse, so `misaka miner --network testnet-12` aborted with exit
-    /// 101 instead of a CLI error, on a subcommand that until then had touched only strings. Each
-    /// of these is a real panic if the enumeration above is ever dropped.
-    #[test]
-    fn an_undescribable_network_forwards_instead_of_aborting() {
-        for id in ["testnet-12", "testnet-13", "testnet-99"] {
-            assert!(!palw_is_the_consensus(id), "{id}: must answer, not abort");
-        }
     }
 }

@@ -32,7 +32,10 @@ use std::path::{Path, PathBuf};
 use kaspa_consensus_core::palw_derived_v1::{
     PALW_DERIVED_V1_MLDSA87_CONTEXT, PalwDerivedArtifactV1, derived_id_v1, palw_derived_message_v1,
 };
-use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpWorkerResultV3, PalwFreePromptCommitmentV3, fp_claim_id_v3};
+// `fp_claim_id_v3` is deliberately NOT imported here: ADR-0079 SA-2 moved the claim id the rail
+// signs behind `palw_fp_sign_gate::signable_claim_id`, so the rail cannot re-derive one that the
+// gate never checked.
+use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpWorkerResultV3, PalwFreePromptCommitmentV3};
 use kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2;
 use kaspa_consensus_core::tx::{TransactionOutpoint, UtxoEntry};
 use kaspa_hashes::Hash64;
@@ -176,52 +179,36 @@ fn main() {
     let result_path = PathBuf::from(format!("{}.result.borsh", stem.display()));
 
     let mut commitment: PalwFreePromptCommitmentV3 = read_borsh(&unsigned_path, "unsigned commitment");
-    let result: PalwFpWorkerResultV3 = read_borsh(&result_path, "worker result");
-
-    // The rail re-derives what it is about to sign from the two artifacts, rather than trusting
-    // either alone: the commitment must be the one this result produces, prompt ids included.
-    // A mismatch here means the outbox was edited between the inference and the signature —
-    // exactly the moment a rail must refuse.
-    if commitment.job != result.job {
-        die("the unsigned commitment and the worker result describe different jobs".into());
-    }
-    if commitment.trace_root != result.trace_root
-        || commitment.output_root != result.output_root
-        || commitment.schedule_root != result.schedule_root
-        || commitment.trace_manifest_root != result.trace_manifest_root
-        || commitment.trace_chunk_count != result.trace_chunk_count
-        || commitment.decode_tokens_executed != result.decode_tokens_executed
-        || commitment.stop_reason != result.stop_reason
-    {
-        die("the unsigned commitment does not match the execution it claims".into());
-    }
-    if result.job.prompt_token_ids_hash != kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(&result.prompt_token_ids) {
-        die("the worker result's prompt ids are not the ones its job binds".into());
-    }
-    // The one commitment field with NO counterpart in the worker result: the retention deadline
-    // is a chain-time promise the caller makes, so it cannot be cross-checked — a different value
-    // is a different, still-honest promise (and a different claim id). What CAN be checked is
-    // that the promise was not already broken when it was made: a deadline at or before the job's
-    // own anchor commits to serving nothing.
-    if commitment.trace_retention_daa <= commitment.job.anchor_daa {
-        die(format!(
-            "the retention deadline {} is at or before the job's anchor {} — a promise to serve nothing",
-            commitment.trace_retention_daa, commitment.job.anchor_daa
-        ));
-    }
+    let mut result: PalwFpWorkerResultV3 = read_borsh(&result_path, "worker result");
 
     // A class id may be supplied to bind the commitment to the network's registered class (the
     // gateway's devnet identity file carries a placeholder). Rewriting it changes the claim id,
-    // which is why it is an explicit flag rather than a silent default.
+    // which is why it is an explicit flag rather than a silent default. It is applied BEFORE the
+    // gate, so the gate sees exactly the object that will be signed — a rewrite the gate never saw
+    // would be a free field inside a signed object.
     if let Some(id) = class_id.as_deref() {
         let mut out = [0u8; 64];
         if id.len() != 128 || faster_hex::hex_decode(id.as_bytes(), &mut out).is_err() {
             die("--class-id is not 128 hex chars".into());
         }
         commitment.job.class_id = Hash64::from_bytes(out);
+        // The result frame must move with it, or the gate below correctly refuses the pair. The
+        // rewrite is the operator saying "this execution belongs to that registered class"; it is
+        // not a claim that some OTHER execution did.
+        result.job.class_id = commitment.job.class_id;
     }
 
-    let claim_id = fp_claim_id_v3(&commitment);
+    // **ADR-0079 Decision 8 / SA-2 — the one message shape.** The claim id is RE-DERIVED from the
+    // commitment, and only after the commitment has been checked field by field against the worker
+    // result frame that produced it. The check lives in
+    // `kaspa_pq_validator_core::palw_fp_sign_gate` rather than inline here, so the local-seed form
+    // below and the `--print-claim` digest a signer sidecar signs cannot disagree about what may
+    // be signed. The old inline check omitted `execution_root` and `work_leaves` — the field a
+    // court binds refutations to, and the field that prices the claim.
+    let claim_id = match kaspa_pq_validator_core::palw_fp_sign_gate::signable_claim_id(&commitment, &result) {
+        Ok(id) => id,
+        Err(e) => die(format!("refusing to sign: {e}")),
+    };
     if print_claim {
         // The digest a signer sidecar signs under SigningPurpose::PalwFpCommitmentV3 — emitted so
         // a signer-backed rail can be scripted without the bond key ever entering this process.
