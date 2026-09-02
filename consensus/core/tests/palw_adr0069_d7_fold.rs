@@ -406,3 +406,239 @@ fn retiring_a_weightless_claim_after_its_class_certifies_keeps_the_state_consist
         assert_eq!(retired.safe_weight(), expected_safe, "retirement carries weight across, it does not create or destroy any");
     }
 }
+
+// -------------------------------------------------------------------------------------------
+// The RETIREMENT — the one consensus-visible choice in this remediation that had no test.
+// -------------------------------------------------------------------------------------------
+
+/// **What `retire_claim` books for an attempt claim is `claim.pwu`, and nothing else may decide
+/// it.**
+///
+/// `retired_safe_weight` is hashed into `state_root` (`PalwChainStateV2::state_root`) and
+/// `claim_retirement_daa` is `WINDOW_COURT` = 3000 on the shipped RC ruleset, so retirements
+/// really happen on a live chain and the number booked here is a fork. The obvious symmetry —
+/// pricing the retirement through `palw_claim_safe_contribution_v2`, the same helper the finalize
+/// uses — is the mutation this test exists to fail on, and until it existed that mutation left
+/// every test in this file green: the retirement case above certifies its class BEFORE the
+/// retirement, so both spellings answer 40 there and the two builds agree.
+///
+/// Here the entrant is `Active` at share 0 and stays there, so the two spellings disagree: the
+/// shipped one books the claim's full `pwu` (the upper-bound meaning `retired_safe_weight` has —
+/// "the MOST the claims this state no longer holds could have carried"), a Decision-7-priced one
+/// books 0. Both states pass the consistency check, in both fence positions, and their
+/// `state_root`s differ — which is exactly why the assertion has to be on the accumulator and not
+/// on `safe_weight`.
+#[test]
+fn the_retirement_books_the_claims_pwu_and_never_re_asks_the_share_table() {
+    for weightless in [false, true] {
+        let p = params().with_claim_retirement_daa(50).expect("retirement span");
+        let g = genesis_with_two_classes(&p, weightless);
+        // Weightless at every point this claim exists: registered `Active` at 0‰ and never granted.
+        let (matured, claim_id) = walk_to_final(&p, &g, ENTRANT, weightless);
+        assert_eq!(matured.class_share_permille(&h(ENTRANT)), Some(0), "the entrant holds a row and no cadence, start to finish");
+        assert_eq!(matured.retired_safe_weight(), 0, "nothing has retired yet");
+
+        // Final at 130, retirement armed for 180.
+        let retired = step(&matured, &p, &ctx(7, 185, 7), &[], None, weightless);
+        assert!(retired.claim(&claim_id).is_none(), "the claim really retired — otherwise this test asserts nothing");
+        assert_eq!(
+            retired.retired_safe_weight(),
+            PWU as u128,
+            "fence {weightless}: the retirement books the claim's OWN pwu. Pricing it through \
+             `palw_claim_safe_contribution_v2` would book 0 here and fork silently — the whole \
+             reason the retirement does not re-decide"
+        );
+        assert_eq!(
+            retired.safe_weight(),
+            if weightless { 0 } else { PWU as u128 },
+            "and the running total is untouched by the retirement in either fence position"
+        );
+        assert_eq!(
+            retired.class_share_permille(&h(ENTRANT)),
+            Some(0),
+            "the share table never moved — the disagreement is the pricing"
+        );
+    }
+}
+
+// -------------------------------------------------------------------------------------------
+// The FREE-PROMPT retirement — a node that refused its own durable tip.
+// -------------------------------------------------------------------------------------------
+
+/// `params()` with the free-prompt lane priced and a 50-DAA retirement span.
+///
+/// `MaxPerAttempt(160)` ÷ 8 quanta per canonical job = a 20-leaf quantum, so a 60-leaf job is
+/// exactly 3 quanta of `pwu` 20 each — the same shape the in-crate fixture uses, chosen so the
+/// per-quantum weight is a round number the assertions can name.
+fn fp_params() -> PalwStateParamsV2 {
+    params().with_fp_quanta(8, 64).expect("free-prompt price").with_claim_retirement_daa(50).expect("retirement span")
+}
+
+fn fp_commit(claim_word: u64, work_leaves: u64) -> Obj {
+    Obj::FreePromptCommitted {
+        claim: h(claim_word),
+        class_id: h(BASE),
+        bond: bond_key(1),
+        executor_pubkey: vec![7; 4],
+        work_leaves,
+        prompt_token_ids_hash: h(0x7E00 ^ claim_word),
+        decode_tokens_executed: 3,
+        trace_root: h(41),
+        output_root: h(42),
+        execution_root: h(43),
+        trace_chunk_count: 4,
+        trace_retention_daa: 999_999,
+    }
+}
+
+fn fp_spend(claim_word: u64, quantum_index: u32) -> kaspa_consensus_core::palw_freeprompt_v3::PalwReceiptSpendUnsignedV3 {
+    use kaspa_consensus_core::palw_freeprompt_v3::{PALW_FP_V3_VERSION, PalwReceiptSpendUnsignedV3, spend_challenge_v3};
+    let bond = bond_key(1).0;
+    PalwReceiptSpendUnsignedV3 {
+        version: PALW_FP_V3_VERSION,
+        network_domain: h(999),
+        challenge: spend_challenge_v3(h(999), h(0xB0), 1_700, 7, h(claim_word), quantum_index, &bond),
+        claim_id: h(claim_word),
+        quantum_index,
+        beacon_block: h(0xBEAC),
+        producer_bond: bond,
+        producer_pubkey: vec![7; 4],
+    }
+}
+
+/// One fold step carrying a V3 work slot, WITHOUT running the consistency check — the check is
+/// what these tests are about, so a helper that asserted it could not state the dormant case.
+fn work_step(
+    parent: &PalwChainStateV2,
+    p: &PalwStateParamsV2,
+    c: &PalwBlockContextV2,
+    objects: &[Obj],
+    work: kaspa_consensus_core::palw_state_v2::PalwBlockWorkV3<'_>,
+    weightless: bool,
+) -> PalwChainStateV2 {
+    let (state, _, _) =
+        kaspa_consensus_core::palw_state_v2::apply_palw_transition_v6(parent, p, None, c, objects, work, &[], false, weightless)
+            .unwrap_or_else(|e| panic!("the transition at daa {} must apply: {e}", c.daa_score));
+    state.assert_deadline_consistency(p).expect("deadline consistency");
+    state
+}
+
+/// Drive one free-prompt claim to `Final` and spend two of its three quanta.
+///
+/// Returns the state at DAA 131, holding `safe_weight` = 2 × 20 = 40 contributed entirely by
+/// spends, with the claim's retirement armed for 174 (`Final` at 124 + 50).
+fn fp_claim_with_two_spends(p: &PalwStateParamsV2, weightless: bool) -> (PalwChainStateV2, Hash64) {
+    use kaspa_consensus_core::palw_state_v2::PalwBlockWorkV3;
+    let claim_id = h(0xFC);
+    let g = step(&PalwChainStateV2::genesis(), p, &ctx(1, 100, 1), &[registration(BASE, 1_000), bond()], None, weightless);
+    let s2 = step(&g, p, &ctx(2, 101, 2), &[fp_commit(0xFC, 60)], None, weightless);
+    let seats = vec![PalwPanelSeatV2 { bond: bond_key(1), operator_id: h(90) }];
+    let s3 = step(&s2, p, &ctx(3, 102, 3), &[Obj::PanelBound { claim: claim_id, anchor: h(77), seats }], None, weightless);
+    let s4 = step(&s3, p, &ctx(4, 103, 4), &[Obj::ReceiptLicensed { claim: claim_id, receipts: Vec::new() }], None, weightless);
+    let certified = step(&s4, p, &ctx(5, 124, 5), &[], None, weightless);
+    assert!(matches!(certified.claim(&claim_id).expect("held").phase, PalwClaimPhaseV2::Final { .. }), "the fixture certifies");
+    assert_eq!(certified.safe_weight(), 0, "certification licenses; it does not weigh");
+
+    let spend0 = fp_spend(0xFC, 0);
+    let s6 = work_step(&certified, p, &ctx(6, 130, 6), &[], PalwBlockWorkV3::ReceiptSpend(&spend0), weightless);
+    let spend2 = fp_spend(0xFC, 2);
+    let s7 = work_step(&s6, p, &ctx(7, 131, 7), &[], PalwBlockWorkV3::ReceiptSpend(&spend2), weightless);
+    assert_eq!(s7.safe_weight(), 40, "two quanta at pwu/quanta = 20 each — the weight the retirement must carry across");
+    s7.assert_internal_consistency_v2(p, weightless).expect("consistent while the claim is still held");
+    (s7, claim_id)
+}
+
+/// **ARMED: a spent free-prompt claim retires without stranding its weight.**
+///
+/// This is the network-kill. `apply_receipt_spend` adds `pwu / quanta` to `safe_weight` for each
+/// spent quantum; `finalize_claim` arms the retirement for ANY source; the sweep then drops the
+/// record. Booking only `Attempt` claims into `retired_safe_weight` left that spent weight in
+/// `safe_weight` with nothing left to re-derive it, so `assert_internal_consistency_v2` refused
+/// the state — and the fold does not run the check, so the block was accepted, the chain went on,
+/// and the refusal arrived on the next RESTART: `DbPalwStateV2Store::load_tip` refusing the node's
+/// own durable tip with `CarriageInconsistent`, and every peer importing that pruning-point
+/// snapshot refused with it.
+///
+/// The free-prompt amount is exact, not a bound: that lane is not priced by Decision 7 at the
+/// spend or in the re-derivation, so `per_quantum × |spent|` is the same expression on both sides
+/// and no share table is asked at either point.
+#[test]
+fn a_retiring_free_prompt_claim_carries_its_spent_weight_across() {
+    let p = fp_params();
+    let (spent, claim_id) = fp_claim_with_two_spends(&p, true);
+
+    // Retirement armed for Final (124) + 50 = 174.
+    let retired = work_step(&spent, &p, &ctx(8, 180, 8), &[], kaspa_consensus_core::palw_state_v2::PalwBlockWorkV3::None, true);
+    assert!(retired.claim(&claim_id).is_none(), "the claim really retired — otherwise this test asserts nothing");
+    assert_eq!(retired.safe_weight(), 40, "the running total does not move at a retirement");
+    assert_eq!(retired.retired_safe_weight(), 40, "…because the weight is carried across under a different name");
+    retired
+        .assert_internal_consistency_v2(&p, true)
+        .expect("the state the fold just built must be one its own re-derivation accepts — this is the whole finding");
+}
+
+/// **DORMANT: the same retirement still strands the weight, and that is the exposure this fence
+/// leaves open.**
+///
+/// Recorded as an executable fact rather than a caveat. `retired_safe_weight` is hashed into
+/// `state_root`, so booking the spent weight below the fence would move the root of any block
+/// that retires a spent free-prompt claim — a fork against the chain that is already running.
+/// The repair therefore rides `Params::palw_uncertified_weightless`, which is `None` on every
+/// shipped preset including `palw_rc_shipped_params()`.
+///
+/// So on a network running the shipped RC ruleset (`claim_retirement_daa = WINDOW_COURT = 3000`),
+/// the first free-prompt claim that spends a quantum and then retires produces a durable tip its
+/// own node refuses on the next restart. If this test ever starts passing with `Ok`, the fence has
+/// been armed or the repair has been unfenced, and either way this test is the one to read first.
+#[test]
+fn known_limitation_dormant_a_spent_free_prompt_retirement_strands_its_weight() {
+    let p = fp_params();
+    let (spent, claim_id) = fp_claim_with_two_spends(&p, false);
+
+    let retired = work_step(&spent, &p, &ctx(8, 180, 8), &[], kaspa_consensus_core::palw_state_v2::PalwBlockWorkV3::None, false);
+    assert!(retired.claim(&claim_id).is_none(), "the claim retires below the fence exactly as it does above it");
+    assert_eq!(retired.safe_weight(), 40, "the spends' weight is still in the running total…");
+    assert_eq!(retired.retired_safe_weight(), 0, "…and nothing books it, because only `Attempt` claims are folded here");
+
+    let refused = retired.assert_internal_consistency_v2(&p, false).expect_err(
+        "dormant, the node's own tip is inconsistent — if this is Ok the fence moved and the exposure note above is stale",
+    );
+    assert!(
+        matches!(refused, kaspa_consensus_core::palw_state_v2::PalwStateV2Error::CarriageInconsistent(ref m) if m.contains("safe_weight 40")),
+        "the refusal names the stranded total: {refused}"
+    );
+}
+
+/// **The reachability claim above, measured on the ruleset testnet-11 actually runs, so it is
+/// re-runnable rather than asserted.**
+///
+/// The remediation report said the retirement path was unreachable "because `CLAIM_RETIREMENT`
+/// is 0". It is 0 on `PalwStateParamsV2::new`, which is what the report read; it is
+/// `WINDOW_COURT` = 3000 on `palw_rc_shipped_params()`, which is what the network runs. Every
+/// gate between a live chain and
+/// `known_limitation_dormant_a_spent_free_prompt_retirement_strands_its_weight` is checked here,
+/// so if any of them closes later this test says which one.
+#[test]
+fn the_shipped_rc_ruleset_can_reach_the_dormant_free_prompt_retirement() {
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    let p = kaspa_consensus_core::config::params::palw_rc_shipped_params();
+    assert!(
+        p.palw_uncertified_weightless.is_none(),
+        "the repair is dormant on the shipped RC — if this ever fails, the exposure below is closed and the note can go"
+    );
+    let PalwConsensusMode::ConsensusV2(bundle) = &p.palw_consensus_mode else {
+        panic!("the shipped RC is a ConsensusV2 network");
+    };
+    assert_eq!(bundle.state.claim_retirement_daa(), 3_000, "terminal claims really are swept — the report read `new`'s zero instead");
+    assert_ne!(
+        bundle.state.fp_quanta_per_canonical_job(),
+        0,
+        "the free-prompt lane is priced, so a commitment is not `FreePromptLaneUnpriced`"
+    );
+    let certified = bundle.state.fp_certified_classes().expect("a shipped preset always carries the drilled free-prompt set");
+    assert!(
+        !certified.is_empty(),
+        "at least one class may take a free-prompt claim — with an empty set the commitment arm refuses every one and the \
+         stranding is unreachable on this network"
+    );
+}

@@ -709,6 +709,20 @@ pub struct Params {
     /// ≈ 8× the honest network's whole-epoch weight into `safe(C)` — the weight the IBD and
     /// deep-reorg gates read.
     ///
+    /// **What else arming carries, because one switch has to leave a state its own check accepts.**
+    /// `PalwChainStateV2::retire_claim` also folds a retiring FREE-PROMPT claim's spent quanta into
+    /// `retired_safe_weight` past this fence. That is not part of Decision 7 — the free-prompt lane
+    /// is not priced by share in either direction — it is the repair of a pre-existing hole: the
+    /// spend added `pwu / quanta` to `safe_weight`, the retirement dropped the claim without
+    /// booking it, and the stranded weight made `assert_internal_consistency_v2` refuse the node's
+    /// OWN durable tip on the next restart (`load_tip` → `CarriageInconsistent`), and every peer
+    /// importing that pruning-point snapshot with it. It rides this fence rather than a second one
+    /// because `retired_safe_weight` is hashed into `palw_state_root`, so the repair moves a root
+    /// and cannot be unfenced — and because a network that arms Decision 7 without it would fail
+    /// the very bound Decision 7 installs. **Dormant, that hole is still open**: it is reachable on
+    /// any ruleset with `claim_retirement_daa > 0` (the shipped RC sets it to `WINDOW_COURT`, 3000)
+    /// as soon as one free-prompt quantum is spent on a claim that later retires.
+    ///
     /// **A bare fence with no companion value**, for `palw_frontier_provenance`'s reason: the
     /// predicate is the share the chain already records, so there is no threshold to configure and
     /// nothing that could be normalised out of [`Self::consensus_identity_id`] and then disagree.

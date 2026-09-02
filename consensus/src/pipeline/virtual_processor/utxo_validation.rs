@@ -1741,19 +1741,36 @@ impl VirtualStateProcessor {
         Some(kaspa_pow::palw_admission::PalwAdmissionClassFacts {
             class_target,
             pwu_per_inference: credit.registration.pwu_per_inference,
-            // **ADR-0069 Decision 7's predicate, answered by the fold that already resolved the
-            // share above.**
+            // **ADR-0069 Decision 7's predicate — and on THIS path it is a constant, said as one
+            // rather than dressed up as a lookup.**
             //
-            // A class holding no granted share is a class admission never asked to be end-to-end
-            // certified (`verify_class_admission_v3` gates only `share > 0`), so it is the set
-            // whose blocks cannot be prosecuted — and Decision 7 prices exactly that set at zero
-            // weight. The share is read at this BLOCK's chain point, which is what makes the rule
-            // non-retroactive: a class granted share later gains weight for its later blocks only.
+            // The first draft wrote `share > 0` here, which reads like a guard and is a
+            // tautology twice over. `share` comes from `single_class_domain(runtime_class_id)`,
+            // which BUILDS the map `{that_class: 1000‰}` from its own argument, and the class
+            // asked about was already required to equal `runtime_class_id` at the top of this
+            // function. Worse, `PalwDifficultyDomainSetV1::validate` refuses a zero share outright
+            // (`ZeroShare`), so `share_permille` returning `Some(0)` is unrepresentable for ANY
+            // domain set, not just this one — the expression could not be false on a real network
+            // or an invented one.
             //
-            // Not consulted by admission, and not by the subsidy or DAA paths: the block is
-            // admissible, budgeted and paid exactly as before. Only `resolve_block_weight_v1`
-            // reads it, and only past the fence.
-            weight_bearing: share > 0,
+            // Where the rule actually binds on a V1-credit network is the line above: a block
+            // naming any class other than the single fence-registered one yields `None`, which is
+            // `ClassUnresolved` — a REFUSAL, which is strictly stronger than weightless. There is
+            // no share-0 entrant to price at zero because a V1 fence carries exactly one
+            // registration and cannot represent a second class at all. Decision 7's live sites are
+            // the V2 state fold (`palw_claim_safe_contribution_v2` at the `Final` accumulation and
+            // at `assert_internal_consistency_v2`'s re-derivation); ADR-0069 says so now, where it
+            // used to claim three sites through one helper.
+            //
+            // The day this path gains a real multi-class domain — a chain-point-resolved share
+            // table, which it does not have and must not take from `load_tip` for the reason the
+            // `class_target` doc above gives — this constant is the line that has to change, and
+            // `single_class_domain`'s own doc ("would be a LIE on a multi-class network") is the
+            // other one.
+            weight_bearing: {
+                debug_assert!(share > 0, "a domain set cannot hold a zero share — PalwDifficultyDomainSetV1::validate refuses it");
+                true
+            },
         })
     }
 

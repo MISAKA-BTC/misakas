@@ -353,13 +353,32 @@ wrong as a location.** `chain_weights_v1` is fed by `palw_facts::resolve_block_w
 `ConsensusV2` network the heap that reads it is a SEARCH ORDER, not the authority — the processor's
 own `palw_tip_weights_v1` says so. The authority is the V2 **state fold**: `PalwChainStateV2` keeps
 `safe_weight` and `bounded_immature` as running totals, hands both to `PalwCandidateOrderV1::new`,
-and hashes both into `palw_state_root`. So Decision 7 is priced in three places, all through the one
-helper `palw_class_bears_weight_v2`: the V1 resolver (the search order), the claim's
-`immature_contribution` at creation (the `live` half), and `safe_weight` at the claim's `Final` (the
-half the IBD and deep-reorg gates read). The predicate implemented is the class's **granted share**,
-which admission makes a sound proxy for certification in the one direction that matters —
-`verify_class_admission_v3` refuses `share > 0` to a family that is not certified end to end, so
-`share > 0 ⇒ certified`.
+and hashes both into `palw_state_root`.
+
+**Where the rule BINDS, counted honestly — an earlier draft of this paragraph said "three places,
+all through the one helper `palw_class_bears_weight_v2`" and that was false for two of the three.**
+It binds in exactly two, and both are the V2 state fold: the claim's `immature_contribution` at
+creation (the `live` half) and `safe_weight` at the claim's `Final` (the half the IBD and deep-reorg
+gates read), the second through `palw_claim_safe_contribution_v2`, which is the helper's only
+wrapper. The predicate implemented is the class's **granted share**, which admission makes a sound
+proxy for certification in the one direction that matters — `verify_class_admission_v3` refuses
+`share > 0` to a family that is not certified end to end, so `share > 0 ⇒ certified`.
+
+The third site, the **V1 resolver's search order, is a ceiling nobody reaches, and saying so is
+better than implying a wall that is not there.** `palw_facts::resolve_block_weight_v1` does hold the
+guard, but its only production producer of `weight_bearing` is
+`VirtualStateProcessor::palw_class_facts_for_block`, and there the predicate cannot be false: a
+V1-credit fence carries exactly ONE registration, the function refuses any other class outright
+(`None` = `ClassUnresolved`, a stronger answer than weightless), the share it reads comes from
+`PalwClassDaaParamsV1::single_class_domain`, which builds `{that_class: 1000‰}` from its own
+argument, and `PalwDifficultyDomainSetV1::validate` refuses a zero share for ANY domain set
+(`ZeroShare`). So a share-0 entrant is not representable on that path at all. The mitigation there
+is structural, not a check; the code now says `true` with the reason rather than spelling a lookup
+that cannot fail. Making the V1 half bind needs a chain-point-resolved share table on the resolver
+path — which it does not have, and must not take from `load_tip` for the reason its own
+`class_target` doc gives — so it is a redesign, not a fenced edit. A fourth site, the court's
+D3-3 opening-rung exemption in `sweep_court_deadlines`, asks the same predicate deliberately
+unfenced and now calls the helper too, so "one helper" is at least true where it is claimed.
 
 Two consequences are residuals rather than choices, and are pinned by tests rather than left to be
 discovered. **(i)** The safe half is priced at the finalizing block, so a claim accepted while its
@@ -370,6 +389,36 @@ it accumulates `claim.pwu`, the most the retired claims could have carried — a
 consistency identity `safe_weight == retired + Σ Final` therefore becomes an upper bound while the
 fence is armed. Asking twice instead makes the two totals drift apart permanently, which shows up
 as every pruning-point import being refused for a state that obeyed the rule exactly.
+
+**(iii) The free-prompt half of the same retirement was not a residual, it was a hole, and the fence
+carries its repair.** A free-prompt claim's spent quanta really do move `safe_weight`
+(`apply_receipt_spend` adds `pwu / quanta` per spend), but `retire_claim` folded only `Attempt`
+claims, so a retiring free-prompt claim with any spent quantum left that weight in `safe_weight`
+with nothing left to re-derive it. The live fold never notices — it does not run the check — but
+`PalwStateCarriageV2::into_state_v2` does, so the node **refuses its own durable tip on the next
+restart** (`load_tip` → `CarriageInconsistent`), and every peer importing that pruning-point
+snapshot is refused with it. Reachable on any ruleset with `claim_retirement_daa > 0`; the shipped
+RC sets it to `WINDOW_COURT` = 3000, so it is a live rule and not a theoretical one. Unlike (ii)
+this amount is EXACT — the free-prompt lane is not priced by Decision 7 at the spend or in the
+re-derivation, so `per_quantum × |spent|` is the same expression on both sides and no share table is
+asked at either point. It is fenced with Decision 7 rather than shipped bare because
+`retired_safe_weight` is hashed into `palw_state_root`, so the repair moves the root of any block
+that retires a spent free-prompt claim. **Dormant, the hole is still open**, and that is the one
+exposure arming Decision 7 removes for free.
+
+**(iv) What the armed bound is worth, and what it is not.** It stops a snapshot from claiming more
+safe weight than its own LIVE claims could have justified. It does not bound `retired_safe_weight`,
+which is a carriage-supplied scalar with no re-derivation in either fence position, and it does not
+tie `class_shares` to any certificate — the only checks there are that the key set matches the
+non-`Registered`/non-`Dormant` classes and that the table sums to 1000‰, so a peer may declare its
+own uncertified class `Active` at 1000‰ and be weight-bearing by this fold's own predicate. Nor is
+the `state_root` check in `into_state_v2` the authority an earlier note claimed: `palw_state_root`
+is not checked at header validation, and in a pruned IBD the witness header carrying the expected
+root arrives from the same peer as the carriage, so the check authenticates carriage-against-header,
+not carriage-against-rule. What stands behind an imported weight is the headers-proof and PoW race
+for that child. Closing either hole needs the weight-bearing decision frozen on the claim and a
+certification field the share table can be checked against — both claim/class encoding changes,
+hence a `PALW_STATE_V2_VERSION` bump and a re-mint.
 
 Two companions, so Decision 7 is not the only wall: **(a)** a `BondCapabilityDeclared` set is
 bounded and priced (ADR-0071's security amendment); **(b)** ADR-0076 §8's field is pinned to the

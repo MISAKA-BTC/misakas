@@ -2859,6 +2859,18 @@ impl PalwChainStateV2 {
         self.bounded_immature
     }
 
+    /// The `safe_weight` carried by claims this state no longer holds.
+    ///
+    /// Hashed into [`Self::state_root`], so what `retire_claim` books here is a consensus choice
+    /// and not bookkeeping. Public so a test can pin that choice directly: the accumulator is the
+    /// only place a retired claim's contribution still exists, and asserting on `safe_weight`
+    /// alone cannot tell "priced at `pwu`" from "priced through Decision 7" for a claim whose
+    /// class was weightless the whole time — the reviewer's mutation of exactly that line left
+    /// every test green.
+    pub fn retired_safe_weight(&self) -> u128 {
+        self.retired_safe_weight
+    }
+
     pub fn safe_frontier(&self) -> (u64, BlockHash) {
         (self.safe_frontier_blue_score, self.safe_frontier)
     }
@@ -3116,18 +3128,39 @@ impl PalwChainStateV2 {
         // reconcile the difference either — the claims it summarizes are gone — so it counts
         // `claim.pwu`, the most any of them could have carried (see `retire_claim`).
         //
-        // What must NOT weaken is the anti-fabrication property, and that is exactly the upper
-        // bound: a snapshot may never claim more safe weight than its own claims could ever have
-        // justified, which is the ≈8× fabrication Decision 7 exists to price at zero. Understating
-        // is left unchecked because understating one's own weight is not an attack — it makes the
-        // chain saying it lighter. And the real authority on an import is not this check at all:
-        // `into_state_v2` refuses any carriage whose `state_root` differs from the witness header's,
-        // so a fabricated `safe_weight` fails there whatever this bound permits.
+        // **The free-prompt lane is exempt from that slack.** A retiring free-prompt claim folds
+        // `per_quantum × |spent|` — the same expression the live arm above uses — so its half of
+        // both sums is an equality in both directions. That is not a nicety: before it, a spent
+        // free-prompt claim's retirement stranded its weight in `safe_weight`, `safe_weight` rose
+        // ABOVE `safe_ceiling`, and this check refused the node's OWN tip on the next restart. It
+        // is fenced with the rest of Decision 7 because `retired_safe_weight` is rooted; dormant
+        // the stranding is still there, and `retire_claim` says what that costs.
         //
-        // Closing the gap to an equality needs the decision FROZEN on the claim (a per-claim
-        // weight-bearing bit), which changes the claim encoding and so needs a
-        // `PALW_STATE_V2_VERSION` bump and a re-mint. Recorded here rather than in a runbook,
-        // because this bound is the thing an operator would otherwise meet as a refused import.
+        // **What this bound is worth, stated at its real strength rather than its hoped-for one.**
+        // It stops a snapshot from claiming more safe weight than its own LIVE claims could have
+        // justified — the ≈8× fabrication Decision 7 prices at zero — and nothing beyond that.
+        // Understating is unchecked, which is harmless. Two things are NOT covered and saying so
+        // here is the point of writing it down:
+        //
+        //  * `retired_safe_weight` is a carriage-supplied scalar with no re-derivation at all, in
+        //    either fence position, because the claims that would re-derive it are gone by design.
+        //    A carriage may declare any value for it and both the equality and the bound absorb it.
+        //  * `class_shares` is carriage-supplied too, and the only checks on it are structural
+        //    (keys match the non-`Registered`/non-`Dormant` classes, sum is 1000‰). Nothing ties a
+        //    share to a certificate, so a peer can declare its own uncertified class `Active` at
+        //    1000‰ and be weight-bearing by this fold's own predicate.
+        //
+        // So this is NOT the authority on an import, and an earlier draft of this comment claimed
+        // `into_state_v2`'s `state_root` check was. It is not either: `palw_state_root` is not
+        // checked at header validation (see the comment at `import_pruning_point_palw_state`), the
+        // expected root comes from the pruning point's selected-chain-child header, and in a pruned
+        // IBD that header arrived from the same peer that supplied the carriage — so the check
+        // authenticates carriage-against-header, not carriage-against-rule. What actually stands
+        // behind an imported weight is that the peer had to win the headers-proof and PoW race for
+        // that child. Closing the two holes above needs the weight-bearing decision FROZEN on the
+        // claim (a per-claim bit, so `retired_safe_weight` can be re-derived by class) and a
+        // certification field the share table can be checked against — both change the claim /
+        // class encoding, so both need a `PALW_STATE_V2_VERSION` bump and a re-mint.
         let consistent = if uncertified_weightless { self.safe_weight <= safe_ceiling } else { safe == self.safe_weight };
         if !consistent {
             return Err(PalwStateV2Error::CarriageInconsistent(format!(
@@ -4085,14 +4118,49 @@ impl<'a> TransitionBuilder<'a> {
         // reconcile it. The drift accumulates over the chain's whole life until every
         // pruning-point import is refused for a state that obeyed the rule exactly.
         //
-        // So this stays `claim.pwu`, byte-identical to the pre-Decision-7 fold in both fence
-        // positions, and `retired_safe_weight` means what its name says with one word added: the
-        // MOST safe weight the claims this state no longer holds could have carried. Armed, that
-        // makes the consistency identity an upper bound rather than an equality — stated in full
-        // at [`PalwChainStateV2::assert_internal_consistency_v2`], which is where the two meet.
-        if matches!(claim.phase, PalwClaimPhaseV2::Final { .. }) && matches!(claim.source, PalwClaimSourceV2::Attempt) {
+        // So the ATTEMPT arm stays `claim.pwu`, byte-identical to the pre-Decision-7 fold in both
+        // fence positions, and `retired_safe_weight` means what its name says with one word added:
+        // the MOST safe weight the claims this state no longer holds could have carried. Armed,
+        // that makes the consistency identity an upper bound rather than an equality — stated in
+        // full at [`PalwChainStateV2::assert_internal_consistency_v2`], which is where the two meet.
+        //
+        // **The FREE-PROMPT arm is a different question with an exact answer, and leaving it out
+        // was a node that refuses its own tip.** A free-prompt claim's spent quanta really do move
+        // `safe_weight` (`apply_receipt_spend` adds `pwu / quanta` per spend), and that lane is not
+        // priced by Decision 7 in EITHER direction — not at the spend, not in the re-derivation —
+        // so the amount `safe_weight` received is a pure function of the record: `per_quantum ×
+        // |spent|`, the same expression `assert_internal_consistency_v2` uses for a live one. There
+        // is no share table to ask and therefore no later chain point to disagree with, which is
+        // exactly what makes the attempt arm hard and this one trivial.
+        //
+        // Before this, a retiring free-prompt claim with any spent quantum dropped that weight out
+        // of the re-derivation and left it in `safe_weight` forever. Nothing on the live fold
+        // notices — the fold does not run the check — but `PalwStateCarriageV2::into_state_v2` does,
+        // so the node restarted, `load_tip` refused its own durable tip with `CarriageInconsistent`,
+        // and every peer importing that pruning-point snapshot was refused with it. Both fence
+        // positions failed it: dormant the equality, armed the `<=` bound, because the stranded
+        // weight pushes `safe_weight` ABOVE the ceiling rather than below it.
+        //
+        // It is fenced anyway, because `retired_safe_weight` is hashed into `state_root`
+        // ([`PalwChainStateV2::state_root`]) and a block that retires a spent free-prompt claim
+        // therefore roots differently with the repair than without. Dormant is the broken
+        // arithmetic, unchanged, because dormant must be the chain that is already running. The
+        // exposure that leaves is pinned by
+        // `known_limitation_dormant_a_spent_free_prompt_retirement_strands_its_weight`.
+        let retiring: Option<u128> = match (&claim.phase, &claim.source) {
+            (PalwClaimPhaseV2::Final { .. }, PalwClaimSourceV2::Attempt) => Some(claim.pwu as u128),
+            (PalwClaimPhaseV2::Final { .. }, PalwClaimSourceV2::FreePrompt { quanta, spent }) if self.uncertified_weightless => {
+                // `quanta == 0` is unrepresentable (`ZeroQuanta` at creation, and the consistency
+                // check refuses it in every phase), so the `unwrap_or(0)` is a division guard and
+                // not a policy — a claim that reached here with no quanta carried no spend either.
+                let per_quantum = claim.pwu.checked_div(*quanta as u64).unwrap_or(0) as u128;
+                Some(per_quantum.checked_mul(spent.len() as u128).ok_or(PalwStateV2Error::Overflow("retired free-prompt weight"))?)
+            }
+            _ => None,
+        };
+        if let Some(amount) = retiring {
             let old = self.state.retired_safe_weight;
-            let new = old.checked_add(claim.pwu as u128).ok_or(PalwStateV2Error::Overflow("retired_safe_weight"))?;
+            let new = old.checked_add(amount).ok_or(PalwStateV2Error::Overflow("retired_safe_weight"))?;
             self.state.retired_safe_weight = new;
             self.entries.push(PalwDeltaEntryV2::RetiredWeight { old, new });
         }
@@ -4655,7 +4723,13 @@ fn sweep_court_deadlines(builder: &mut TransitionBuilder<'_>, ctx: &PalwBlockCon
                 // A class that certified and then decayed out of the table is exempted too, which
                 // is generous by one case and deliberately so: the arm decides whether to DESTROY
                 // collateral, and the direction to be wrong in is the one that does not.
-                let class_holds_weight = builder.state.class_shares.get(&claim.class_id).copied().unwrap_or(0) > 0;
+                //
+                // Through the SAME helper the fold and the re-derivation use, with the predicate
+                // asked unconditionally: this exemption is not fenced and never was — it decides
+                // whether to destroy collateral, and it answered `share > 0` before Decision 7
+                // existed. Spelling it a third time by hand is what let the ADR claim "one helper"
+                // while three call sites each held their own copy of the question.
+                let class_holds_weight = palw_class_bears_weight_v2(&builder.state.class_shares, &claim.class_id, true);
                 builder.write_court(session_id, None);
                 match no_show.silent_party {
                     // **A silence at the OPENING rung is not a conviction** (audit M2-5).
