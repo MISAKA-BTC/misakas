@@ -37,6 +37,7 @@
 //! |---|---|---|---|
 //! | attempt-lane exposure | flat `pwu_per_inference × slash_value_per_pwu` | [`crate::palw_state_v2::palw_exposure_pwu_v1`] (`palw_state_v2.rs:1311`), spent at `apply_attempt` (`:6987`) | N × one reservation; the function has no leaf argument at all |
 //! | free-prompt exposure | `quanta × quantum × slash_value_per_pwu` | `apply_free_prompt`'s `reserved` (`palw_state_v2.rs:6831`) | per-leaf **until the cap**, then flat — so above `cap · quantum` leaves, N segments reserve N × the ceiling |
+//! | **challenger** exposure to open a court | the claim's own `reserved`, again | `apply_court_opened` (`palw_state_v2.rs:6674`) | N reservations to PROSECUTE one answer. *"the ceiling it already lives under does the counting"* — so a bond that could challenge M claims can challenge only M/N segmented answers, and segmentation raises the price of policing as fast as it raises the price of producing |
 //! | panel seats | [`crate::palw_fp_devnet_v3::PALW_V2_PANEL_SEATS`] = 5 | `palw_fp_devnet_v3.rs:459` | N panels drawn, N × 5 seats put on duty |
 //! | receipts to quorum | [`crate::palw_fp_devnet_v3::PALW_V2_PANEL_QUORUM`] = 3 | `palw_fp_devnet_v3.rs:460`, enforced by [`crate::palw_panel_v2::validate_receipt_quorum_v2`] | N × 3 ML-DSA-87 signatures on chain, at [`crate::dns_finality::STAKE_ATTESTATION_SIG_LEN`] = 4,627 bytes each |
 //! | seat replay work | [`crate::palw_fp_interval_v1::PALW_FP_SEAT_INTERVAL_SAMPLES_V1`] = 4 intervals **per seat per claim** | `palw_fp_interval_v1.rs:28` | N × 5 × 4 interval replays for one answer. The draw is short-circuited only when `interval_count <= k`, so a short segment is checked WHOLE — segmentation buys denser sampling and pays the panel's CPU for it |
@@ -160,6 +161,12 @@ pub const PALW_ECONOMIC_LOCUS_CENSUS_V1: &[PalwEconomicQuantityV1] = &[
         locus: PalwEconomicLocusV1::PerLeafInBand,
         cited_at: "palw_state_v2.rs:6831 apply_free_prompt",
         under_n_segments: "pwu * slash_value, so per-leaf until the quanta cap saturates it — then N * the ceiling",
+    },
+    PalwEconomicQuantityV1 {
+        name: "challenger exposure to open a court",
+        locus: PalwEconomicLocusV1::PerClaim,
+        cited_at: "palw_state_v2.rs:6674 apply_court_opened",
+        under_n_segments: "N reservations on the CHALLENGER's bond — policing gets N times dearer too",
     },
     PalwEconomicQuantityV1 {
         name: "panel seats (PALW_V2_PANEL_SEATS)",
@@ -359,7 +366,7 @@ mod tests {
     fn only_per_leaf_rows_claim_invariance() {
         assert_eq!(
             PALW_ECONOMIC_LOCUS_CENSUS_V1.len(),
-            17,
+            18,
             "the census is complete or it is nothing — a row added or dropped is a deliberate edit here"
         );
         let mut names: Vec<&str> = PALW_ECONOMIC_LOCUS_CENSUS_V1.iter().map(|row| row.name).collect();
@@ -613,6 +620,32 @@ mod tests {
         // Halving the epoch halves the budget; nothing about the work inside a block can.
         let shorter = crate::palw_state_v2::derive_epoch_budgets_v2(&shares, &BTreeSet::new(), &competing, 132, 1_000, 7);
         assert_eq!(shorter.budget_blocks[&base], 66, "the only lever is blocks");
+    }
+
+    /// **Segmentation raises the price of POLICING at the same rate it raises the price of
+    /// producing**, which is the row ADR-0080's refutation did not list. Opening a court reserves
+    /// the claim's own `reserved` against the CHALLENGER's bond (`palw_state_v2.rs:6674`) — "the
+    /// same number the executor has at stake in the dispute, so the two sides face the same
+    /// figure" — and the comment there names the consequence: "the ceiling it already lives under
+    /// does the counting". So a bond that could hold M concurrent challenges can hold only M/N
+    /// challenges against N-way segmented answers, and the fraction of the network one honest
+    /// challenger can police falls by N.
+    #[test]
+    fn prosecuting_a_segmented_answer_costs_the_challenger_n_reservations() {
+        // The reservation `apply_court_opened` charges is `claim.reserved` itself, so the
+        // challenger's per-claim figure IS the executor's — the same input to the same arithmetic.
+        // (Read from the cited line; this module runs no transition. That is the gap, named.)
+        let per_claim_exposure = 8_000u128; // 1,600 pwu x 5 sompi/pwu, the class built above
+        assert_eq!(palw_segmentation_cost_v1(37, per_claim_exposure).exposure_sompi, 296_000);
+
+        // What one fixed ceiling buys, counted in ANSWERS rather than in claims.
+        let ceiling = 296_000u128;
+        assert_eq!(ceiling / per_claim_exposure, 37, "37 unsegmented answers, one claim each");
+        assert_eq!(
+            ceiling / (37 * per_claim_exposure),
+            1,
+            "or exactly ONE 37-way segmented answer — the same collateral polices 1/37th as much chain"
+        );
     }
 
     // -----------------------------------------------------------------------------------------
