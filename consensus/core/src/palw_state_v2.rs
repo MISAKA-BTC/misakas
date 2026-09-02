@@ -207,6 +207,11 @@ use std::collections::{BTreeMap, BTreeSet};
 /// again not schema-neutral, again the number moves.
 pub const PALW_STATE_V2_VERSION: u16 = 15;
 
+/// **Where a class's receipt-lane target starts** (ADR-0074 follow-up): one draw in two per
+/// quantum, whatever the class's attempt-lane `initial_target` says. See the `ClassRegistered`
+/// arm for why the two lanes no longer share a seed.
+pub const PALW_RECEIPT_TARGET_SEED_V1: u128 = u128::MAX / 2;
+
 pub const PALW_STATE_V2_DOMAIN_OPERATOR_ID: &[u8] = b"misaka-palw/state-v2/operator-id/v1";
 
 /// **How many escrow payouts one block's coinbase may carry (ADR-0042 Decision 10).**
@@ -2489,6 +2494,15 @@ impl PalwChainStateV2 {
     }
 
     /// Decision 6's `reserved_exposure(bond)` — what the admission ceiling is checked against.
+    /// Tests only: pin a class's receipt-lane target directly. The transition seeds every class
+    /// at [`PALW_RECEIPT_TARGET_SEED_V1`] and only the receipt retarget moves it, so a test that
+    /// needs a generous or a stingy receipt target sets it here rather than through a registration
+    /// field that no longer reaches this slot.
+    #[cfg(test)]
+    pub(crate) fn set_receipt_target_for_tests(&mut self, class_id: Hash64, target: u128) {
+        self.receipt_targets.insert(class_id, PalwClassTargetV2 { target });
+    }
+
     pub fn reserved_exposure(&self, key: &PalwBondKeyV2) -> u128 {
         self.reserved_exposure.get(key).copied().unwrap_or(0)
     }
@@ -5366,10 +5380,17 @@ fn apply_object(
             // registration's production and nothing before it.
             builder.write_class_walk(*class_id, None);
             builder.write_target(*class_id, Some(PalwClassTargetV2 { target: *initial_target }));
-            // The receipt lane seeds from the same initial target (ADR-0044): the two lanes'
-            // retargets separate them from here, against their own censuses. One registration
-            // field, two slots — a second declared number would be a second fact to drift.
-            builder.write_receipt_target(*class_id, Some(PalwClassTargetV2 { target: *initial_target }));
+            // The receipt lane seeds at the uniform 2^-1, NOT from the class's `initial_target`.
+            // It used to (ADR-0044: "one registration field, two slots"), and that was right while
+            // every genesis target was 2^-1. The attempt lane's seed is now tuned per class to the
+            // draw supply of INFERENCES (a floor at milliseconds per inference sits ~2^14 below a
+            // 9-second model), but a receipt draw is one QUANTUM of real demand — a user's job or a
+            // canonical claim — whose supply has nothing to do with how fast the class runs its
+            // canonical job. Seeding the receipt lane from a floor target of 2^-14 would put the
+            // one free-prompt-certified class's lane at one win per 16,384 quanta for the ~7
+            // epochs the receipt retarget needs to crawl back. The two retargets separate the
+            // lanes from here, against their own censuses.
+            builder.write_receipt_target(*class_id, Some(PalwClassTargetV2 { target: PALW_RECEIPT_TARGET_SEED_V1 }));
         }
         PalwConsensusObjectV2::ClassFrozen { class_id, certificate } => {
             let record = builder.state.classes.get(class_id).ok_or(PalwStateV2Error::MissingClass(*class_id))?.clone();
@@ -10816,7 +10837,12 @@ pub(crate) mod tests {
         let (s8, _) = apply_work(&s7, &split, &ctx(8, 142, 8), &[], PalwBlockWorkV3::ReceiptSpend(&spend1));
 
         let boot = s8.class_target(&h64(1)).unwrap().target;
-        assert_eq!(s8.receipt_target(&h64(1)).unwrap().target, boot, "both lanes still sit at the registration seed");
+        assert_eq!(s8.class_target(&h64(1)).unwrap().target, boot, "the attempt lane still sits at the registration seed");
+        assert_eq!(
+            s8.receipt_target(&h64(1)).unwrap().target,
+            PALW_RECEIPT_TARGET_SEED_V1,
+            "the receipt lane sits at its own seed, which this fixture's registration happens to equal"
+        );
 
         // Cross the epoch boundary: ONE combined census of 3 blocks; the attempt lane retargets
         // its 1 observed block against composed share 1000 × 800‰ = 800‰, the receipt lane its 2

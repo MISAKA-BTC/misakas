@@ -447,11 +447,16 @@ mod tests {
     /// same spend a full target admits, and the refusal carries both numbers.
     #[test]
     fn item_5_ticket_against_the_receipt_target() {
-        let generous = certified_state(u128::MAX);
+        // The receipt lane seeds at its own `PALW_RECEIPT_TARGET_SEED_V1`, not at the
+        // registration's `initial_target` (the attempt lane's), so the generous and the stingy
+        // receipt targets are pinned directly on the state.
+        let mut generous = certified_state(u128::MAX);
+        generous.set_receipt_target_for_tests(h64(1), u128::MAX);
         let env = spend(0);
         assert!(admit(&generous, &ctx(6, 135, 6), &beacon(), &env).is_ok());
 
-        let stingy = certified_state(1);
+        let mut stingy = certified_state(u128::MAX);
+        stingy.set_receipt_target_for_tests(h64(1), 1);
         let ticket = fp_quantum_ticket_v3(h64(999), h64(0xBEAC), h64(0xFC), 0);
         assert!(ticket > 1, "the fixture's ticket must actually lose against target 1");
         assert_eq!(
