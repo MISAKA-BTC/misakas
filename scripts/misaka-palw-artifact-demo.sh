@@ -526,14 +526,26 @@ mechanism_and_stranger() {
   # that directory as the working directory, so "the artifact was not needed" is structural rather
   # than asserted. The listing goes in the log for the same reason.
   strangerdir="$WORK_DIR/stranger/$kind"
+  # Rebuilt from empty every run: a leftover from a previous run (the tamper file this function
+  # writes below, or an artifact from an older listing) would sit in the room the next run calls
+  # empty, and the guard below would be asserting about the wrong directory.
+  rm -rf "$strangerdir"
   mkdir -p "$strangerdir"
   cp "$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["files"]["dsl"])' "$WORK_DIR/derived/$kind.derive.json")" "$strangerdir/answer.txt"
   cp "$obj" "$strangerdir/object.borsh"
   log "  the stranger holds: $(cd "$strangerdir" && ls | tr '\n' ' ')"
+  # **The guard is the EXACT listing, not a list of extensions.** It used to grep for
+  # `mid|glb|stl|png|bin`, which named one extension no transformer emits (`.bin`) and MISSED the
+  # two this drill writes for `simulation` and `map` (`.msim`, `.mmap`) — so for two of the six
+  # kinds the claim "no artifact was in the room" was resting on the copy logic above rather than
+  # on a check, and any kind added later would have joined them silently. An exact listing cannot
+  # drift: whatever a future kind emits, it is not one of these two names.
+  #
   # `if` rather than `A && die`: under `set -e` a trailing `&&` list whose left side FAILS is the
-  # whole statement, so the healthy case — grep finding no artifact — would abort the drill.
-  if ( cd "$strangerdir" && ls | grep -qE '\.(mid|glb|stl|png|bin)$' ); then
-    die "the stranger directory contains an artifact — the recomputation would prove nothing"
+  # whole statement, so the healthy case would abort the drill.
+  stranger_listing="$(cd "$strangerdir" && ls | sort | tr '\n' ' ')"
+  if [ "$stranger_listing" != "answer.txt object.borsh " ]; then
+    die "the stranger directory holds [${stranger_listing}] — it must hold exactly 'answer.txt object.borsh', or the recomputation proves nothing"
   fi
   ( cd "$strangerdir" && "$DERIVE_BIN" verify --object object.borsh --answer answer.txt ) \
     >"$WORK_DIR/derived/$kind.stranger.json" 2>&1 \
@@ -586,6 +598,9 @@ trap cleanup EXIT
 # THE CHAIN HALF. Everything above runs without one; everything below needs a running devnet.
 # =============================================================================================
 CHAIN_NOTE="not attempted (--offline)"
+# The gateway's chain-side objection to committing, read from /health once the class is up. Empty
+# in --offline (there is no gateway to ask) and empty when the gateway has no objection.
+COMMIT_REFUSAL=""
 declare -a ANSWER_DERIVED
 if [ "$OFFLINE" = 0 ]; then
   NETWORK_DOMAIN=$(python3 - "$MISAKA_DEVNET_GENESIS" <<'PY'
@@ -839,6 +854,30 @@ sys.exit(0 if h.get('registered') is True and h.get('fp_certified') is True else
     [ $SECONDS -lt $chain_deadline ] || die "the gateway still reads registered/fp_certified as not-both-true for class ${CLASS_ID:0:16}… after ${STEP_WAIT}s. Either the registration did not reach this node, or the class id is not the one the chain holds — and no shipped tool prints the registered class id, so this drill derives it from palw-certify bind (see $WORK_DIR/obj/a16-bind.out)."
     sleep 10
   done
+
+  # **`registered` and `fp_certified` are NOT the whole entry condition.** `/health.commit_refusal`
+  # is the gateway's own one-line answer to "would a commitment be written for this job", and the
+  # gateway gates TWO things on it being absent (`main.rs`): the commitment file, and — explicitly
+  # — the derivation, because "deriving for a commitment this gateway has just declined to write
+  # would put an object in the outbox that no chain can ever accept".
+  #
+  # So a run with a refusal set reaches BLOCKED-ON-WIDTH and reports the row as the blocker while a
+  # second, independent one is standing behind it. It is not hypothetical: on a devnet where the
+  # class is registered post-genesis the refusal reads "this class's epoch budget is already spent"
+  # — a mid-epoch class is Active and holds share but is not budgeted until the next boundary, a
+  # defect `palw_admission_v2` asserts as it ships. The row would still be the FIRST wall; it would
+  # not be the LAST. Captured here, named in the verdict, and deliberately not fatal: the width
+  # report above is still true and still worth printing.
+  COMMIT_REFUSAL="$(python3 -c "
+import json
+print(json.load(open('$WORK_DIR/health.json')).get('commit_refusal') or '')
+" 2>/dev/null || true)"
+  if [ -n "$COMMIT_REFUSAL" ]; then
+    log "  WARNING: the gateway would NOT commit this job even if the row admitted it: $COMMIT_REFUSAL"
+    log "  WARNING: that also disables the derivation (the gateway gates it on the same condition), so it is a SECOND blocker behind the row."
+  else
+    log "  the gateway reports no chain-side objection to committing (commit_refusal is empty)"
+  fi
 
   # **The row, from the class that is actually running.** The gateway prints the worker manifest's
   # n_ctx on its first line; a --n-ctx flag that disagrees with it is refused rather than silently
@@ -1112,6 +1151,13 @@ PY
   idx=$((idx + 1))
 done
 if [ -n "${CHAIN_LEG_NOTE// /}" ]; then log "chain leg:$CHAIN_LEG_NOTE"; fi
+# Named in the verdict and not only in the run log, because the row is the number a reader takes
+# away from a BLOCKED-ON-WIDTH line — and a reader who fixes only the row would come back to a run
+# that still produces no commitment and no derivation for this reason instead.
+if [ -n "$COMMIT_REFUSAL" ]; then
+  log "SECOND BLOCKER (behind the row): the gateway would not have committed this job in any case — $COMMIT_REFUSAL"
+  log "  It gates the derivation on the same condition, so widening the row alone does not reach a receipt."
+fi
 log "artifacts a person keeps: $WORK_DIR/artifacts"
 ls -la "$WORK_DIR/artifacts" >&2
 
