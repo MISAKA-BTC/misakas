@@ -252,7 +252,7 @@ fi
 # not. The raw copies live in their own directory because the gateway refuses to boot when a
 # 32-byte file is reachable in its identity directory or its outbox (ADR-0079 Decision 4).
 # ---------------------------------------------------------------------------------------------
-python3 - "$WORK_DIR/keys" "$WORK_DIR/secrets" "$NODES" <<'PY'
+python3 - "$WORK_DIR/keys" "$WORK_DIR/secrets" "$((NODES + 1))" <<'PY'
 import hashlib, os, sys
 keys, secrets, n = sys.argv[1], sys.argv[2], int(sys.argv[3])
 h = lambda b: hashlib.blake2b(b, digest_size=32).hexdigest()
@@ -687,6 +687,19 @@ run_tier() {
   # A fresh devnet registers ONE class at genesis, the BASE-0 floor, and the floor has no
   # free-prompt worker, so an outside operator's route is the one this drill takes.
   # -------------------------------------------------------------------------------------------
+  # **The registrant is its OWN genesis bond, not node-0's.** devnet mints
+  # `PALW_DEVNET_GENESIS_BONDS` = 6 and the validators use `NODES` of them, so index `$NODES` is a
+  # free seat. Two things went wrong when this reused bond 0:
+  #   * the same seat identity ran in two processes at once — node-0 and the registrant — which is
+  #     equivocation by construction on a chain that slashes for it;
+  #   * and the fee outpoint was bond 0's float, which node-0 is already spending from, so the
+  #     carrier and the producer were bidding for one UTXO.
+  # A class is registered UNDER a bond (`palw_panel.rs`: "no --palw-producer-bond to register
+  # under"), so the registrant needs a real one; ADR-0054 makes admission permissionless, not
+  # bondless.
+  local REG_BOND=$NODES
+  local REG_ADDR
+  REG_ADDR="$("$CLI_BIN" --network devnet key address --key-file "$WORK_DIR/keys/bond-$REG_BOND.seed" | tail -1 | awk '{print $NF}')"
   step "stage 2 [$tag] — registering $model_id from its artifact"
   # **The registering node does not exit when the registration lands, and waiting for it to exit is
   # how this drill spent two hours on 2026-09-03 watching a node follow a chain.** `kaspad` is a
@@ -697,8 +710,9 @@ run_tier() {
         --rpclisten-borsh=127.0.0.1:$((17900 + tier_index)) --nogrpc --nodnsseed --disable-upnp \
         --connect=127.0.0.1:16510 --utxoindex \
         --palw-register-class="$model_id" --palw-class-artifact="$artifact" \
-        --palw-producer-key="$WORK_DIR/keys/bond-0.seed" --palw-producer-pay-address="${ADDRS[0]}" \
-        --palw-fee-outpoint="$PREMINE_TXID:$((MAIN_PREMINE_INDEX + 1))" \
+        --palw-producer-key="$WORK_DIR/keys/bond-$REG_BOND.seed" --palw-producer-pay-address="$REG_ADDR" \
+        --palw-producer-bond="$PREMINE_TXID:$REG_BOND" \
+        --palw-fee-outpoint="$PREMINE_TXID:$((MAIN_PREMINE_INDEX + 1 + REG_BOND))" \
         >"$WORK_DIR/register-$tag.log" 2>&1 &
   local reg_pid=$!
   local reg_deadline=$((SECONDS + ${REGISTER_WAIT:-900}))
