@@ -719,7 +719,7 @@ static CERTIFIED: std::sync::Mutex<Vec<PalwE2eFamilyV1>> = std::sync::Mutex::new
 /// (two callers, one build) does not move the root.
 pub fn register_certified_family_v1(certificate: &PalwE2eCertificateV1) {
     let mut set = CERTIFIED.lock().expect("the certified-family registry is not poisoned");
-    if !set.iter().any(|f| *f == certificate.family) {
+    if !set.contains(&certificate.family) {
         set.push(certificate.family.clone());
     }
 }
@@ -737,18 +737,6 @@ pub fn family_certified_for_kernels_v1(reachable: &BTreeSet<Hash64>) -> Option<P
     certified_families_v1().into_iter().find(|f| reachable.is_subset(&f.kernel_ids))
 }
 
-/// **A family covering everything this build catalogs — for tests that must SATISFY the weight
-/// gate rather than exercise it.**
-///
-/// In-crate tests of the static admission properties (ids, coverage, ladder depth, court cost, pwu
-/// derivation) all need a nonzero share to be grantable, and `kaspa-consensus-core` cannot run a
-/// drill: backends live in crates that depend on this one. So they pass this set together with a
-/// bundle rooted at [`palw_court_e2e_root_of_v1`] of it, which is honest — the gate still checks
-/// the set against the commitment, and nothing is admitted that A4 would not admit, since coverage
-/// already requires a class's kernels to be a subset of the catalog.
-///
-/// The gate's REFUSAL is proven where a genuinely uncertified family exists: `misaka-palw-base0`'s
-/// drill, against the shipped genesis table.
 // ---------------------------------------------------------------------------------------------
 // The free-prompt lane (ADR-0073 Decision 1f)
 // ---------------------------------------------------------------------------------------------
@@ -778,6 +766,12 @@ pub struct PalwE2eFreePromptDrillEvidenceV1 {
 
 /// A free-prompt certificate. Sealed like [`PalwE2eCertificateV1`]: only
 /// [`certify_e2e_free_prompt_lane_v1`] constructs one, so holding it IS having passed.
+///
+/// The private `_sealed` field is the seal, and `#[non_exhaustive]` is NOT a substitute for it:
+/// that attribute stops construction outside the CRATE, while the whole point here is that nothing
+/// outside this MODULE may mint a certificate — the grader is the only minter. Same allow, same
+/// reason, as [`PalwE2eCertificateV1`] above.
+#[allow(clippy::manual_non_exhaustive)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PalwE2eFreePromptCertificateV1 {
     pub family: PalwE2eFamilyV1,
@@ -920,6 +914,18 @@ pub fn palw_rc_court_fp_e2e_root_v1() -> Hash64 {
     palw_court_e2e_root_of_v1(&palw_rc_fp_certified_families_v1())
 }
 
+/// **A family covering everything this build catalogs — for tests that must SATISFY the weight
+/// gate rather than exercise it.**
+///
+/// In-crate tests of the static admission properties (ids, coverage, ladder depth, court cost, pwu
+/// derivation) all need a nonzero share to be grantable, and `kaspa-consensus-core` cannot run a
+/// drill: backends live in crates that depend on this one. So they pass this set together with a
+/// bundle rooted at [`palw_court_e2e_root_of_v1`] of it, which is honest — the gate still checks
+/// the set against the commitment, and nothing is admitted that A4 would not admit, since coverage
+/// already requires a class's kernels to be a subset of the catalog.
+///
+/// The gate's REFUSAL is proven where a genuinely uncertified family exists: `misaka-palw-base0`'s
+/// drill, against the shipped genesis table.
 #[cfg(test)]
 pub(crate) fn catalog_covering_family_for_tests_v1() -> Vec<PalwE2eFamilyV1> {
     vec![PalwE2eFamilyV1 {

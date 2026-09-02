@@ -6632,9 +6632,6 @@ pub fn palw_rc_base_params() -> Params {
     params.pow_blake2b_sha3_activation = ForkActivation::never();
     params.pow_palw_activation = ForkActivation::never();
     params.pow_palw_ollama_activation = ForkActivation::never();
-    // The whole cadence in one spelling; a no-op on this base, which is the point of asserting it
-    // here rather than trusting `TESTNET_PARAMS` to keep carrying it.
-    let params = params.with_two_minute_cadence();
     // **The EVM lane is ON from DAA 0, inherited from `TESTNET_PARAMS` and kept deliberately.**
     //
     // It was briefly turned off here on the reasoning that `MAINNET_PARAMS` never activates the
@@ -6649,7 +6646,10 @@ pub fn palw_rc_base_params() -> Params {
     // evm build.** `kaspad` refuses at STARTUP with that message rather than dying at its first
     // template — see `daemon.rs` — because a node that boots, syncs, and then cannot produce is
     // the most expensive way to learn this.
-    params
+    //
+    // The whole cadence in one spelling; a no-op on this base, which is the point of asserting it
+    // here rather than trusting `TESTNET_PARAMS` to keep carrying it.
+    params.with_two_minute_cadence()
 }
 
 pub fn palw_rc_params(
