@@ -74,7 +74,12 @@ fn main() {
     let mut seed_path: Option<PathBuf> = None;
     let mut funding: Option<String> = None;
     let mut funding_amount: u64 = 0;
-    let mut fee: u64 = 250_000;
+    // `None` = price the carrier from its own compute mass (the mempool's rule); `--fee` pins a
+    // value. The old default was a flat 250,000, which sits UNDER what the mempool asks of a
+    // commitment carrying an ML-DSA-87 identity — the Qwen3.5-2B add-model rehearsal
+    // (2026-09-02) watched the node's canonical claims refused for exactly that ("250000 fees …
+    // under the required amount of 262870"), and a rail-built user claim is the same carrier.
+    let mut fee: Option<u64> = None;
     let mut print_claim = false;
     let mut print_pubkey = false;
     let mut class_id: Option<String> = None;
@@ -88,7 +93,7 @@ fn main() {
             "--bond-key-seed" => seed_path = Some(PathBuf::from(value("--bond-key-seed"))),
             "--funding-outpoint" => funding = Some(value("--funding-outpoint")),
             "--funding-amount" => funding_amount = value("--funding-amount").parse().unwrap_or_else(|e| die(format!("{e}"))),
-            "--fee" => fee = value("--fee").parse().unwrap_or_else(|e| die(format!("{e}"))),
+            "--fee" => fee = Some(value("--fee").parse().unwrap_or_else(|e| die(format!("{e}")))),
             "--class-id" => class_id = Some(value("--class-id")),
             "--class-leaves" => class_leaves = value("--class-leaves").parse().unwrap_or_else(|e| die(format!("{e}"))),
             "--print-claim" => print_claim = true,
@@ -192,9 +197,6 @@ fn main() {
     }
     let funding_outpoint =
         parse_outpoint(&funding.unwrap_or_else(|| die("--funding-outpoint <txid:index> is required to sign".into())));
-    if funding_amount <= fee {
-        die(format!("--funding-amount {funding_amount} does not cover the fee {fee}"));
-    }
     let funding_entry = UtxoEntry::new(funding_amount, kaspa_consensus_core::tx::ScriptPublicKey::default(), 0, false);
 
     // The bundle the network runs decides the price table and the quantization — the rail reads
@@ -212,8 +214,8 @@ fn main() {
     )
     .unwrap_or_else(|e| die(format!("cannot construct the devnet bundle: {e}")));
 
-    let tx = key
-        .build_fp_commitment_tx(
+    let build = |fee: u64| {
+        key.build_fp_commitment_tx(
             commitment.job.network_domain,
             commitment.clone(),
             result.prompt_token_ids.clone(),
@@ -223,7 +225,27 @@ fn main() {
             &funding_entry,
             fee,
         )
-        .unwrap_or_else(|e| die(format!("cannot build the commitment transaction: {e}")));
+        .unwrap_or_else(|e| die(format!("cannot build the commitment transaction: {e}")))
+    };
+    // Sized from the carrier itself unless pinned: build once at the floor, read the compute
+    // mass, rebuild at the fee that mass prices (the fee is the only field that changes and the
+    // mass does not move with it). The mass constants are the same on every shipped preset.
+    let fee = fee.unwrap_or_else(|| {
+        const FEE_FLOOR_SOMPI: u64 = 250_000;
+        let params = &kaspa_consensus_core::config::params::DEVNET_PARAMS;
+        let calc = kaspa_consensus_core::mass::MassCalculator::new(
+            params.mass_per_tx_byte,
+            params.mass_per_script_pub_key_byte,
+            params.mass_per_sig_op,
+            params.storage_mass_parameter,
+        );
+        let probe = build(FEE_FLOOR_SOMPI);
+        kaspa_pq_validator_core::relay_fee_for_compute_mass(calc.calc_non_contextual_masses(&probe).compute_mass).max(FEE_FLOOR_SOMPI)
+    });
+    if funding_amount <= fee {
+        die(format!("--funding-amount {funding_amount} does not cover the fee {fee}"));
+    }
+    let tx = build(fee);
 
     let tx_path = PathBuf::from(format!("{}.commitment-tx.borsh", stem.display()));
     let tx_bytes = borsh::to_vec(&tx).unwrap_or_else(|e| die(format!("cannot serialize the transaction: {e}")));
@@ -238,6 +260,7 @@ fn main() {
         "fp_claim_id": hex(claim_id),
         "subnetwork": "0x4a (PALW_FP_COMMITMENT)",
         "transaction_bytes": tx_bytes.len(),
+        "fee_sompi": fee,
         "payload_bytes": tx.payload.len(),
         "work_leaves": commitment.work_leaves,
         "quanta": quanta,

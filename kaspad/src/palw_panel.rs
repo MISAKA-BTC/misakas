@@ -1220,7 +1220,14 @@ impl PalwPanelService {
             PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_CANONICAL, PALW_FP_V3_VERSION, PalwFreePromptJobV3, fp_canonical_anchor_v1,
             fp_claim_id_v3, palw_fp_capture_encode_v1,
         };
-        const CANONICAL_CLAIM_FEE_SOMPI: u64 = 250_000;
+        // **The floor under a canonical claim's fee, not the fee.** The carrier is priced from its
+        // own compute mass below, exactly as every lifecycle carrier and the CLI's claims are: a
+        // free-prompt commitment carries an ML-DSA-87 identity (2,592-byte key + 4,627-byte
+        // signature) and the mempool's relay rate is 10 sompi per gram, so a flat 250,000 sits
+        // under what the mempool asks for. Found by the Qwen3.5-2B add-model rehearsal
+        // (2026-09-02): every canonical claim on the new class was refused with "transaction has
+        // 250000 fees which is under the required amount of 262870", and the lane never opened.
+        const CANONICAL_CLAIM_FEE_FLOOR_SOMPI: u64 = 250_000;
 
         let class_id = match self.config.canonical_class.as_deref() {
             Some(hex) => {
@@ -1307,17 +1314,33 @@ impl PalwPanelService {
         };
         let seed = kaspa_pq_validator_core::load_validator_seed(&self.config.key_path)?;
         let key = kaspa_pq_validator_core::ValidatorKey::from_seed(seed);
-        // Canonical: the chain carries no prompt ids (they are a function of the job).
-        let tx = key.build_fp_commitment_tx(
-            network_domain,
-            commitment,
-            Vec::new(),
-            &bundle.freeprompt,
-            per_inference,
-            funding_outpoint,
-            funding,
-            CANONICAL_CLAIM_FEE_SOMPI,
-        )?;
+        // Canonical: the chain carries no prompt ids (they are a function of the job). Built
+        // twice — once at the floor to read the carrier's mass, once at the fee that mass prices —
+        // because the fee is the only field the second build changes and the mass does not move
+        // with it.
+        let build = |fee: u64| {
+            key.build_fp_commitment_tx(
+                network_domain,
+                commitment.clone(),
+                Vec::new(),
+                &bundle.freeprompt,
+                per_inference,
+                funding_outpoint,
+                funding,
+                fee,
+            )
+        };
+        let probe = build(CANONICAL_CLAIM_FEE_FLOOR_SOMPI)?;
+        let params = &self.consensus_config.params;
+        let mass_calculator = MassCalculator::new(
+            params.mass_per_tx_byte,
+            params.mass_per_script_pub_key_byte,
+            params.mass_per_sig_op,
+            params.storage_mass_parameter,
+        );
+        let fee = relay_fee_for_compute_mass(mass_calculator.calc_non_contextual_masses(&probe).compute_mass)
+            .max(CANONICAL_CLAIM_FEE_FLOOR_SOMPI);
+        let tx = build(fee)?;
         Ok((tx, claim_id, material))
     }
 
@@ -1601,6 +1624,7 @@ impl PalwPanelService {
         // Carriers submitted whose change is not yet on chain. Reset the moment the chain's tip
         // appears in the virtual UTXO set, which is the only honest signal that it was mined.
         let mut inflight: usize = 0;
+        let mut held_before = false;
         // ADR-0074 Decision 1: the DAA the last canonical claim was committed at (0: never).
         let mut canonical_last_daa: u64 = 0;
 
@@ -2649,6 +2673,22 @@ impl PalwPanelService {
                     }
                 }
                 let held = inflight >= MAX_INFLIGHT_CARRIERS;
+                // Once per transition, at info: a held submitter stops EVERYTHING it carries —
+                // receipts, quorums, canonical claims — and used to say so only at trace level,
+                // which is silence. Seen on the Qwen3.5-2B add-model rehearsal: the canonical seat
+                // went quiet for 24 minutes at the cap (its chain is mined one carrier per block,
+                // and on a relay-less devnet only by itself) with nothing in the log to read.
+                if held != held_before {
+                    if held {
+                        info!(
+                            "[{PALW_PANEL}] holding every carrier: {inflight} of ours are unconfirmed (cap {MAX_INFLIGHT_CARRIERS}); a \
+                             chained carrier is mined only after its parent, so this clears one block at a time"
+                        );
+                    } else {
+                        info!("[{PALW_PANEL}] carrier chain confirmed; submitting again");
+                    }
+                    held_before = held;
+                }
                 let mut funding = if held {
                     // Back-pressure, not loss. Keeping the objects pending means the next tick
                     // re-offers them in priority order (court moves first), rather than building
