@@ -3288,9 +3288,7 @@ pub enum PalwStateV2Error {
         "bond {bond:?} cannot declare {classes} classes: it already holds {already} sompi of exposure and the declaration reserves {price}, against {collateral} of collateral (ADR-0071 SA-2)"
     )]
     CapabilityExposureUnaffordable { bond: PalwBondKeyV2, classes: usize, already: u128, price: u128, collateral: u64 },
-    #[error(
-        "bond {0:?} is Retiring — collateral that is leaving cannot back a promise to run a class (ADR-0071 SA-4)"
-    )]
+    #[error("bond {0:?} is Retiring — collateral that is leaving cannot back a promise to run a class (ADR-0071 SA-4)")]
     CapabilityDeclarationWhileRetiring(PalwBondKeyV2),
     #[error(
         "class {class} declares {got} sompi per work unit but this network's unit is {want} — weight per sompi at risk is not a class's to choose"
@@ -4026,8 +4024,7 @@ impl PalwChainStateV2 {
                         // question recorded at `apply_receipt_spend`. It contributes identically to
                         // both sums, so the bound below neither tightens nor loosens around it.
                         safe = safe.checked_add(spent_weight).ok_or(PalwStateV2Error::Overflow("consistency safe"))?;
-                        safe_ceiling =
-                            safe_ceiling.checked_add(spent_weight).ok_or(PalwStateV2Error::Overflow("consistency safe"))?;
+                        safe_ceiling = safe_ceiling.checked_add(spent_weight).ok_or(PalwStateV2Error::Overflow("consistency safe"))?;
                     }
                 },
                 // A voided claim weighs nothing and holds no place in the frontier queue. It may
@@ -4144,8 +4141,7 @@ impl PalwChainStateV2 {
             ));
         }
         let safe = safe.checked_add(self.retired_safe_weight).ok_or(PalwStateV2Error::Overflow("consistency safe"))?;
-        let safe_ceiling =
-            safe_ceiling.checked_add(self.retired_safe_weight).ok_or(PalwStateV2Error::Overflow("consistency safe"))?;
+        let safe_ceiling = safe_ceiling.checked_add(self.retired_safe_weight).ok_or(PalwStateV2Error::Overflow("consistency safe"))?;
         // **Dormant, this is the equality it has always been.** With Decision 7 off,
         // `palw_claim_safe_contribution_v2` is the identity on `pwu`, so `safe == safe_ceiling`
         // and the test below is `safe == self.safe_weight` — every state this check used to accept
@@ -5139,11 +5135,7 @@ impl<'a> TransitionBuilder<'a> {
             if !self.state.capabilities.contains_key(&key) {
                 self.write_capability(
                     key,
-                    Some(PalwCapabilityStateV2 {
-                        class_id: claim.class_id,
-                        bond: claim.bond,
-                        issued_daa: claim.accepted_daa,
-                    }),
+                    Some(PalwCapabilityStateV2 { class_id: claim.class_id, bond: claim.bond, issued_daa: claim.accepted_daa }),
                 );
             }
         }
@@ -5537,8 +5529,12 @@ impl<'a> TransitionBuilder<'a> {
         // ADR-0078 Decision 4: the claim's derivations retire with it (`CLAIM_RETIREMENT`). A row
         // keyed to a claim the chain no longer holds would be a name bound to nothing, and the
         // table is bounded per claim precisely so that it is bounded overall.
-        let derived: Vec<crate::palw_derived_v1::PalwDerivedKeyV1> =
-            self.state.derived_artifacts.range(crate::palw_derived_v1::PalwDerivedKeyV1::claim_range(id)).map(|(key, _)| *key).collect();
+        let derived: Vec<crate::palw_derived_v1::PalwDerivedKeyV1> = self
+            .state
+            .derived_artifacts
+            .range(crate::palw_derived_v1::PalwDerivedKeyV1::claim_range(id))
+            .map(|(key, _)| *key)
+            .collect();
         for key in derived {
             self.write_derived_artifact(key, None);
         }
@@ -5586,7 +5582,17 @@ pub fn apply_palw_transition_v2_with_verdict_policy(
     current_attempt: Option<&PalwAttemptEnvelopeV2>,
     unavailable_abstains: bool,
 ) -> Result<(PalwChainStateV2, PalwStateDeltaV2), PalwStateV2Error> {
-    apply_palw_transition_v2_with_policies(parent, params, ctx, accepted_objects, current_attempt, unavailable_abstains, false, false, false)
+    apply_palw_transition_v2_with_policies(
+        parent,
+        params,
+        ctx,
+        accepted_objects,
+        current_attempt,
+        unavailable_abstains,
+        false,
+        false,
+        false,
+    )
 }
 
 /// [`apply_palw_transition_v2_with_verdict_policy`] with **every fenced POLICY beside ADR-0065
@@ -5748,8 +5754,7 @@ pub fn apply_palw_transition_v6(
         }
     }
 
-    let mut builder =
-        TransitionBuilder::new(parent, params, unavailable_abstains, capability_bound, uncertified_weightless, da_court);
+    let mut builder = TransitionBuilder::new(parent, params, unavailable_abstains, capability_bound, uncertified_weightless, da_court);
 
     // 1b. Drain the payout queue THIS block's coinbase paid. It must happen before the sweeps,
     //     because the sweeps are what refill it: a claim finalized by this block is paid by the
@@ -9438,9 +9443,20 @@ pub(crate) mod tests {
         let (state, p, ids) = chain_with_classes(4, 1_000_000);
         let bond = bond_key(1);
 
-        let (four, ..) =
-            apply_palw_transition_v6(&state, &p, None, &ctx(2, 11, 2), &[declare(1, &ids)], PalwBlockWorkV3::None, &[], false, true, false, false)
-                .expect("four classes are declarable");
+        let (four, ..) = apply_palw_transition_v6(
+            &state,
+            &p,
+            None,
+            &ctx(2, 11, 2),
+            &[declare(1, &ids)],
+            PalwBlockWorkV3::None,
+            &[],
+            false,
+            true,
+            false,
+            false,
+        )
+        .expect("four classes are declarable");
         let record = four.bond(&bond).expect("the bond stands");
         assert_eq!(record.capable_classes.len(), 4);
         assert_eq!(
@@ -9531,15 +9547,37 @@ pub(crate) mod tests {
         let (state, p, ids) = chain_with_classes(2, 1_000_000);
         let bond = bond_key(1);
 
-        let (declared, ..) =
-            apply_palw_transition_v6(&state, &p, None, &ctx(2, 11, 2), &[declare(1, &ids)], PalwBlockWorkV3::None, &[], false, true, false, false)
-                .expect("an active bond declares");
+        let (declared, ..) = apply_palw_transition_v6(
+            &state,
+            &p,
+            None,
+            &ctx(2, 11, 2),
+            &[declare(1, &ids)],
+            PalwBlockWorkV3::None,
+            &[],
+            false,
+            true,
+            false,
+            false,
+        )
+        .expect("an active bond declares");
         assert_eq!(palw_bond_capability_exposure_v1(declared.bond(&bond).unwrap()), 2 * PALW_CAPABILITY_EXPOSURE_SOMPI as u128);
 
         let retire = PalwConsensusObjectV2::BondRetireRequested { bond, signature: vec![1] };
-        let (retired, ..) =
-            apply_palw_transition_v6(&declared, &p, None, &ctx(3, 12, 3), &[retire], PalwBlockWorkV3::None, &[], false, true, false, false)
-                .expect("the bond retires");
+        let (retired, ..) = apply_palw_transition_v6(
+            &declared,
+            &p,
+            None,
+            &ctx(3, 12, 3),
+            &[retire],
+            PalwBlockWorkV3::None,
+            &[],
+            false,
+            true,
+            false,
+            false,
+        )
+        .expect("the bond retires");
         let record = retired.bond(&bond).expect("a retiring bond is still a row");
         assert!(matches!(record.status, PalwBondStatusV2::Retiring { .. }));
         assert!(record.capable_classes.is_empty(), "retirement drops the declaration");
@@ -9596,7 +9634,8 @@ pub(crate) mod tests {
         assert_eq!(fenced_off.1, legacy.1, "including the delta, entry for entry");
 
         assert!(
-            apply_palw_transition_v6(&state, &p, None, &ctx(2, 11, 2), &[over], PalwBlockWorkV3::None, &[], false, true, false, false).is_err(),
+            apply_palw_transition_v6(&state, &p, None, &ctx(2, 11, 2), &[over], PalwBlockWorkV3::None, &[], false, true, false, false)
+                .is_err(),
             "and the only thing that changed is the fence"
         );
     }
@@ -9620,9 +9659,20 @@ pub(crate) mod tests {
         let (off, _) = apply_palw_transition_v2(&state, &p, &ctx(2, 11, 2), &[], Some(&env)).expect("an attempt lands");
         assert!(!palw_bond_produced_on_class_v1(&off, &bond, &class), "the fence is off, so nothing is recorded");
 
-        let (on, ..) =
-            apply_palw_transition_v6(&state, &p, None, &ctx(2, 11, 2), &[], PalwBlockWorkV3::Attempt(&env), &[], false, true, false, false)
-                .expect("the same attempt lands past the fence");
+        let (on, ..) = apply_palw_transition_v6(
+            &state,
+            &p,
+            None,
+            &ctx(2, 11, 2),
+            &[],
+            PalwBlockWorkV3::Attempt(&env),
+            &[],
+            false,
+            true,
+            false,
+            false,
+        )
+        .expect("the same attempt lands past the fence");
         assert!(palw_bond_produced_on_class_v1(&on, &bond, &class), "and the production fact is on the chain");
         let fact = on.capability_fact(&palw_capability_fact_key_v1(&class, &bond)).expect("the row exists");
         assert_eq!(fact.class_id, class);
@@ -13613,7 +13663,6 @@ pub(crate) mod tests {
         }
     }
 
-
     // ---- ADR-0078: derived artifacts ----
 
     fn derived_object(claim_word: u64, transformer: u64, output_root: Hash64, pubkey: Vec<u8>) -> PalwConsensusObjectV2 {
@@ -13727,7 +13776,8 @@ pub(crate) mod tests {
         let more: Vec<_> = (0x72..0x75).map(|t| derived_object(0xFC, t, output_root, fp_executor_key())).collect();
         let (s4, _) = apply(&s3, &p, &ctx(4, 103, 4), &more, None);
         assert_eq!(s4.derived_artifacts_of(h64(0xFC)).count(), crate::palw_derived_v1::PALW_DERIVED_MAX_PER_CLAIM);
-        let err = apply_palw_transition_v2(&s4, &p, &ctx(5, 104, 5), &[derived_object(0xFC, 0x75, output_root, fp_executor_key())], None);
+        let err =
+            apply_palw_transition_v2(&s4, &p, &ctx(5, 104, 5), &[derived_object(0xFC, 0x75, output_root, fp_executor_key())], None);
         assert!(matches!(err, Err(PalwStateV2Error::TooManyDerivations { max: 4, .. })), "{err:?}");
 
         // An attempt claim has an output root too, and is not a person's prompt.
@@ -14180,8 +14230,8 @@ pub(crate) mod tests {
         objects: &[PalwConsensusObjectV2],
         att: Option<&PalwAttemptEnvelopeV2>,
     ) -> (PalwChainStateV2, PalwStateDeltaV2) {
-        let (state, delta) = apply_palw_transition_v2_with_policies(parent, p, c, objects, att, false, false, true, false)
-            .expect("transition applies");
+        let (state, delta) =
+            apply_palw_transition_v2_with_policies(parent, p, c, objects, att, false, false, true, false).expect("transition applies");
         state.assert_internal_consistency_v2(p, true).expect("internal consistency after apply");
         state.assert_deadline_consistency(p).expect("deadline consistency after apply");
         (state, delta)
@@ -16156,7 +16206,8 @@ pub(crate) mod tests {
         c: &PalwBlockContextV2,
         objects: &[PalwConsensusObjectV2],
     ) -> PalwStateV2Error {
-        apply_palw_transition_v2_with_policies(parent, p, c, objects, None, false, false, false, true).expect_err("the object must be refused")
+        apply_palw_transition_v2_with_policies(parent, p, c, objects, None, false, false, false, true)
+            .expect_err("the object must be refused")
     }
 
     /// Four trace events, their preimages, and the Merkle root over them — a REAL commitment, so
@@ -16607,8 +16658,9 @@ pub(crate) mod tests {
         let (s3, claim_id, _, preimages, hashes) = da_setup(&p, 999_999);
 
         for object in [da_accuse(claim_id, 0), da_disclose(claim_id, 0, &preimages, &hashes)] {
-            let refused = apply_palw_transition_v2_with_policies(&s3, &p, &ctx(4, 103, 4), &[object.clone()], None, false, false, false, false)
-                .expect_err("a dormant fence refuses both DA objects");
+            let refused =
+                apply_palw_transition_v2_with_policies(&s3, &p, &ctx(4, 103, 4), &[object.clone()], None, false, false, false, false)
+                    .expect_err("a dormant fence refuses both DA objects");
             assert!(matches!(refused, PalwStateV2Error::DaCourtDormant), "got {refused:?}");
             // …and the v2 face every pre-ADR caller and fixture uses says exactly the same thing.
             let legacy =

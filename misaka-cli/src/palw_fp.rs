@@ -137,9 +137,8 @@ pub async fn submit(
                 Some(dsl_path) => {
                     let dsl_bytes =
                         std::fs::read(dsl_path).map_err(|e| CliError::new(exit::GENERIC, format!("{}: {e}", dsl_path.display())))?;
-                    let decoded = kaspa_consensus_core::palw_derived_v1::palw_fp_dsl_decode_v1(&dsl_bytes).ok_or_else(|| {
-                        CliError::new(exit::GENERIC, format!("{} is not an FPD1 DSL payload", dsl_path.display()))
-                    })?;
+                    let decoded = kaspa_consensus_core::palw_derived_v1::palw_fp_dsl_decode_v1(&dsl_bytes)
+                        .ok_or_else(|| CliError::new(exit::GENERIC, format!("{} is not an FPD1 DSL payload", dsl_path.display())))?;
                     if decoded.claim_id != claim {
                         return Err(CliError::new(
                             exit::GENERIC,
@@ -158,7 +157,10 @@ pub async fn submit(
         }
         None => {
             if dsl_payload.is_some() {
-                return Err(CliError::new(exit::GENERIC, "--dsl-payload needs --material-out (the node's retention directory)".to_string()));
+                return Err(CliError::new(
+                    exit::GENERIC,
+                    "--dsl-payload needs --material-out (the node's retention directory)".to_string(),
+                ));
             }
             None
         }
@@ -183,7 +185,8 @@ pub async fn submit(
         std::fs::rename(&partial, &file).map_err(|e| CliError::new(exit::GENERIC, format!("{}: {e}", file.display())))?;
         material_note = Some(file.display().to_string());
         if let Some((dsl_partial, dsl_file)) = dsl {
-            std::fs::rename(&dsl_partial, &dsl_file).map_err(|e| CliError::new(exit::GENERIC, format!("{}: {e}", dsl_file.display())))?;
+            std::fs::rename(&dsl_partial, &dsl_file)
+                .map_err(|e| CliError::new(exit::GENERIC, format!("{}: {e}", dsl_file.display())))?;
             dsl_note = Some(dsl_file.display().to_string());
         }
     }
@@ -515,13 +518,15 @@ pub(crate) fn build_carrier_priced_v1(
         nv.params.mass_per_sig_op,
         nv.params.storage_mass_parameter,
     );
-    let probe = key.build_palw_lifecycle_tx(object, funding_outpoint, funding_entry, floor).map_err(|e| format!("build the carrier: {e}"))?;
+    let probe =
+        key.build_palw_lifecycle_tx(object, funding_outpoint, funding_entry, floor).map_err(|e| format!("build the carrier: {e}"))?;
     let compute_mass = calc.calc_non_contextual_masses(&probe).compute_mass;
     let fee = kaspa_pq_validator_core::relay_fee_for_compute_mass(compute_mass).max(floor).max(carrier_rent_v1(object));
     if funding_entry.amount <= fee {
         return Err(format!("the funding holds {} sompi, under its {fee} sompi fee", funding_entry.amount));
     }
-    let tx = key.build_palw_lifecycle_tx(object, funding_outpoint, funding_entry, fee).map_err(|e| format!("build the carrier: {e}"))?;
+    let tx =
+        key.build_palw_lifecycle_tx(object, funding_outpoint, funding_entry, fee).map_err(|e| format!("build the carrier: {e}"))?;
     Ok((tx, compute_mass, fee))
 }
 

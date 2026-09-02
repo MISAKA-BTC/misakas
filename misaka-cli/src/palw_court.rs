@@ -242,8 +242,8 @@ pub(crate) fn carriage_deadline_v1(
     class_id: Option<Hash64>,
     close_blocks: u64,
 ) -> Result<DeadlineReport, CliError> {
-    let rows =
-        palw_shipped_court_rows_v1().map_err(|e| CliError::new(exit::GENERIC, format!("the shipped court rows do not project: {e}")))?;
+    let rows = palw_shipped_court_rows_v1()
+        .map_err(|e| CliError::new(exit::GENERIC, format!("the shipped court rows do not project: {e}")))?;
     let (row, assumed) = pick_row_v1(&rows, class_id)?;
     let replay_positions = palw_court_replay_positions_v1(&row.profile, row.checkpoint_interval);
     Ok(DeadlineReport {
@@ -259,7 +259,10 @@ pub(crate) fn carriage_deadline_v1(
 
 /// The named row, or the most expensive one. Split out because it is the only judgement in the
 /// deadline path and it is the one a test should be able to pin.
-pub(crate) fn pick_row_v1(rows: &[PalwShippedCourtRowV1], class_id: Option<Hash64>) -> Result<(&PalwShippedCourtRowV1, bool), CliError> {
+pub(crate) fn pick_row_v1(
+    rows: &[PalwShippedCourtRowV1],
+    class_id: Option<Hash64>,
+) -> Result<(&PalwShippedCourtRowV1, bool), CliError> {
     match class_id {
         Some(id) => rows.iter().find(|r| r.class_id == id).map(|r| (r, false)).ok_or_else(|| {
             CliError::new(
@@ -388,8 +391,7 @@ pub(crate) struct CourtCloseArgs<'a> {
 /// **File a court close, split across carriers when it does not fit one.**
 pub(crate) async fn court_close(ctx: &Ctx, ks: &KeySource, args: CourtCloseArgs<'_>) -> Result<(), CliError> {
     // ---- 1. the object -------------------------------------------------------------------------
-    let bytes =
-        std::fs::read(args.close).map_err(|e| CliError::new(exit::GENERIC, format!("{}: {e}", args.close.display())))?;
+    let bytes = std::fs::read(args.close).map_err(|e| CliError::new(exit::GENERIC, format!("{}: {e}", args.close.display())))?;
     let object: PalwConsensusObjectV2 = borsh::from_slice(&bytes)
         .map_err(|e| CliError::new(exit::GENERIC, format!("{} is not a borsh consensus object: {e}", args.close.display())))?;
     let (session_id, verdict, proof) = match &object {
@@ -410,7 +412,10 @@ pub(crate) async fn court_close(ctx: &Ctx, ks: &KeySource, args: CourtCloseArgs<
 
     // ---- 2. the network, and the two ceilings --------------------------------------------------
     if args.offline && args.yes {
-        return Err(CliError::new(exit::GENERIC, "--offline plans a move; it cannot file one. Drop --yes, or drop --offline.".to_string()));
+        return Err(CliError::new(
+            exit::GENERIC,
+            "--offline plans a move; it cannot file one. Drop --yes, or drop --offline.".to_string(),
+        ));
     }
     let nv = if args.offline { None } else { Some(connect(ctx).await?) };
     let params = match &nv {
@@ -445,9 +450,7 @@ pub(crate) async fn court_close(ctx: &Ctx, ks: &KeySource, args: CourtCloseArgs<
     let plan = plan_carriage_v1(&object, &court)?;
     let class_id = match args.class {
         Some(text) => Some(
-            text.trim()
-                .parse::<Hash64>()
-                .map_err(|_| CliError::new(exit::GENERIC, format!("class id '{text}' is not 128-hex")))?,
+            text.trim().parse::<Hash64>().map_err(|_| CliError::new(exit::GENERIC, format!("class id '{text}' is not 128-hex")))?,
         ),
         None => None,
     };
@@ -476,7 +479,9 @@ pub(crate) async fn court_close(ctx: &Ctx, ks: &KeySource, args: CourtCloseArgs<
         // this tool computed itself: a second cost model is how a close gets called admissible by
         // a tool and refused by a node.
         match kaspa_consensus_core::palw_court_v2::arithmetic_close_bytes_v2(proof) {
-            Some(bytes) => println!("  close cost {bytes} bytes against max_close_bytes {} — the court admits it", court.max_close_bytes()),
+            Some(bytes) => {
+                println!("  close cost {bytes} bytes against max_close_bytes {} — the court admits it", court.max_close_bytes())
+            }
             None => println!(
                 "  the {} arm's own cost check passes against max_close_bytes {} — the court admits it",
                 proof_kind_v1(proof),
@@ -589,10 +594,9 @@ pub(crate) async fn court_close(ctx: &Ctx, ks: &KeySource, args: CourtCloseArgs<
                      parts DID land, the chain refuses the duplicates by name and nothing is lost but their fees."
                 );
             }
-            let (outpoint, entry) = spendable
-                .first()
-                .cloned()
-                .ok_or_else(|| CliError::new(exit::GENERIC, format!("no mature, unbonded, unspent UTXO at {addr} to fund the carrier")))?;
+            let (outpoint, entry) = spendable.first().cloned().ok_or_else(|| {
+                CliError::new(exit::GENERIC, format!("no mature, unbonded, unspent UTXO at {addr} to fund the carrier"))
+            })?;
             (outpoint, entry, 0usize)
         }
     };
@@ -632,7 +636,13 @@ pub(crate) async fn court_close(ctx: &Ctx, ks: &KeySource, args: CourtCloseArgs<
             ),
             _ => {
                 for (i, tx, fee) in &carriers {
-                    println!("  part {}/{}: carrier {} ({} payload bytes, fee {fee} sompi)", i + 1, plan.parts.len(), tx.id(), tx.payload.len());
+                    println!(
+                        "  part {}/{}: carrier {} ({} payload bytes, fee {fee} sompi)",
+                        i + 1,
+                        plan.parts.len(),
+                        tx.id(),
+                        tx.payload.len()
+                    );
                 }
                 println!("dry run — nothing was sent. Re-run with --yes to file the close.");
             }
@@ -678,10 +688,9 @@ pub(crate) async fn court_close(ctx: &Ctx, ks: &KeySource, args: CourtCloseArgs<
     }
 
     match ctx.output {
-        OutputFormat::Json => println!(
-            "{}",
-            serde_json::json!({ "ok": true, "session": session_id.to_string(), "carriers": sent, "complete": true })
-        ),
+        OutputFormat::Json => {
+            println!("{}", serde_json::json!({ "ok": true, "session": session_id.to_string(), "carriers": sent, "complete": true }))
+        }
         _ => {
             println!("the close is filed: {total} of {total} parts carried.");
             if plan.group.is_some() {
@@ -784,7 +793,8 @@ fn record_part_v1(
     j.parts.retain(|p| p.index != index);
     j.parts.push(JournalPart { index, txid: txid.to_string(), fee_sompi: fee });
     j.parts.sort_by_key(|p| p.index);
-    let text = serde_json::to_string_pretty(j).map_err(|e| CliError::new(exit::GENERIC, format!("encode the carriage journal: {e}")))?;
+    let text =
+        serde_json::to_string_pretty(j).map_err(|e| CliError::new(exit::GENERIC, format!("encode the carriage journal: {e}")))?;
     // Staged then renamed, the retention discipline this tree already uses: a reader never sees a
     // half-written journal, and a crash mid-write does not lose the parts already recorded.
     let mut staged = path.as_os_str().to_os_string();
@@ -952,7 +962,11 @@ mod tests {
         assert!(whole.len() > PALW_OBJECT_CHUNK_MAX_BYTES, "the sample close fits one carrier, so it tests nothing");
         let plan = plan_carriage_v1(&object, &court).expect("plans");
         assert_eq!(plan.whole_bytes, whole.len());
-        assert_eq!(plan.group, Some(palw_object_chunk_group_id_v1(&whole)), "the plan keys the group by something other than the chain's digest");
+        assert_eq!(
+            plan.group,
+            Some(palw_object_chunk_group_id_v1(&whole)),
+            "the plan keys the group by something other than the chain's digest"
+        );
         assert_eq!(plan.parts.len(), whole.len().div_ceil(PALW_OBJECT_CHUNK_MAX_BYTES));
         assert_eq!(plan.close_blocks(), plan.parts.len() as u64);
         let mut reassembled = Vec::new();
@@ -1019,9 +1033,8 @@ mod tests {
     #[test]
     fn resume_walks_to_the_highest_carrier_the_chain_still_shows() {
         let txid = |b: u8| kaspa_consensus_core::tx::TransactionId::from_bytes([b; 64]);
-        let parts: Vec<JournalPart> = (0u8..4)
-            .map(|i| JournalPart { index: i, txid: txid(i + 1).to_string(), fee_sompi: 1 })
-            .collect();
+        let parts: Vec<JournalPart> =
+            (0u8..4).map(|i| JournalPart { index: i, txid: txid(i + 1).to_string(), fee_sompi: 1 }).collect();
         let out = |b: u8| TransactionOutpoint::new(txid(b), 0);
 
         // Nothing visible: nothing landed, or the changes were swept elsewhere. Either way the
@@ -1072,14 +1085,18 @@ mod tests {
     /// object to a node that would refuse it less clearly.
     #[test]
     fn only_a_close_is_a_close() {
-        assert_eq!(object_kind_v1(&PalwConsensusObjectV2::ObjectChunk { group: Hash64::default(), index: 0, count: 1, bytes: vec![0] }), "ObjectChunk");
+        assert_eq!(
+            object_kind_v1(&PalwConsensusObjectV2::ObjectChunk { group: Hash64::default(), index: 0, count: 1, bytes: vec![0] }),
+            "ObjectChunk"
+        );
         assert_eq!(
             object_kind_v1(&PalwConsensusObjectV2::CourtClosed {
                 session_id: Hash64::default(),
                 verdict: kaspa_consensus_core::palw_state_v2::PalwCourtVerdictV2::ExecutorGuilty,
                 proof: PalwCourtVerdictProofV2::DecodeToken {
                     binding: match close_with_binding(&sample_profile(), 0, 0) {
-                        PalwConsensusObjectV2::CourtClosed { proof: PalwCourtVerdictProofV2::DecodeToken { binding, .. }, .. } => binding,
+                        PalwConsensusObjectV2::CourtClosed { proof: PalwCourtVerdictProofV2::DecodeToken { binding, .. }, .. } =>
+                            binding,
                         _ => unreachable!(),
                     },
                     pin: PalwBase0DecodeTokensV1 { logits_rows: Vec::new(), generated_token_ids: Vec::new() },
@@ -1089,7 +1106,6 @@ mod tests {
             "CourtClosed"
         );
     }
-
 
     /// **The message an operator gets when the split path is blocked, read rather than assumed.**
     ///
@@ -1193,4 +1209,3 @@ mod tests {
         assert_eq!(arithmetic_close_bytes_v2(proof), None, "a decode-token close is priced by its own arm, not the arithmetic one");
     }
 }
-

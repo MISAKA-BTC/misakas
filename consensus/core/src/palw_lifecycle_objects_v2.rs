@@ -936,9 +936,12 @@ mod tests {
             artifact_bytes: 99,
             executor_pubkey: vec![9; PALW_DERIVED_V1_EXECUTOR_PUBKEY_LEN],
         };
-        let signed =
-            PalwConsensusObjectV2::DerivedArtifactV1 { object: Box::new(object.clone()), signature: vec![1; PALW_DERIVED_V1_SIGNATURE_LEN] };
-        let payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object: signed.clone() }).unwrap();
+        let signed = PalwConsensusObjectV2::DerivedArtifactV1 {
+            object: Box::new(object.clone()),
+            signature: vec![1; PALW_DERIVED_V1_SIGNATURE_LEN],
+        };
+        let payload =
+            borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object: signed.clone() }).unwrap();
         validate_palw_lifecycle_tx(&payload).expect("a signed, shaped derivation may ride");
         let tx = carrier(SUBNETWORK_ID_PALW_LIFECYCLE.clone(), payload);
         let extracted = palw_lifecycle_objects_from_accepted_txs_v2(std::slice::from_ref(&tx));
@@ -948,20 +951,19 @@ mod tests {
         let unsigned = PalwConsensusObjectV2::DerivedArtifactV1 { object: Box::new(object.clone()), signature: Vec::new() };
         let mut zero_kind = object.clone();
         zero_kind.kind = 0;
-        let unshaped =
-            PalwConsensusObjectV2::DerivedArtifactV1 { object: Box::new(zero_kind), signature: vec![1; PALW_DERIVED_V1_SIGNATURE_LEN] };
+        let unshaped = PalwConsensusObjectV2::DerivedArtifactV1 {
+            object: Box::new(zero_kind),
+            signature: vec![1; PALW_DERIVED_V1_SIGNATURE_LEN],
+        };
         // **X1: a free-length signature is where a GLB would go.** A refusal at the ACCEPTANCE
         // layer drops the object and lets the block stand, so bytes refused there still ride an
         // accepted transaction forever; this list is a block rule, so it is where "under any
         // size" is enforced. A 4 MiB signature is refused by name, exactly like a 16-byte one.
         let overlong = PalwConsensusObjectV2::DerivedArtifactV1 { object: Box::new(object.clone()), signature: vec![0xAB; 4 << 20] };
         let short = PalwConsensusObjectV2::DerivedArtifactV1 { object: Box::new(object.clone()), signature: vec![1; 16] };
-        for (refused, why) in [
-            (unsigned, "signature"),
-            (unshaped, "kind 0"),
-            (overlong, "free-length field"),
-            (short, "free-length field"),
-        ] {
+        for (refused, why) in
+            [(unsigned, "signature"), (unshaped, "kind 0"), (overlong, "free-length field"), (short, "free-length field")]
+        {
             let payload = borsh::to_vec(&PalwLifecycleTxPayloadV2 { version: PALW_LIFECYCLE_TX_VERSION_V2, object: refused }).unwrap();
             let err = validate_palw_lifecycle_tx(&payload).expect_err("refused at admission");
             assert!(format!("{err:?}").contains(why), "{err:?}");
