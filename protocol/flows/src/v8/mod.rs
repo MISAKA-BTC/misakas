@@ -15,6 +15,7 @@ use crate::v7::{
 };
 pub(crate) mod claimrelay_evm;
 pub(crate) mod palw_gossip_flow;
+pub(crate) mod palw_interval_flow;
 pub(crate) mod request_block_bodies;
 pub(crate) mod request_pruning_point_snapshots;
 pub(crate) mod txrelay_evm;
@@ -150,6 +151,17 @@ pub fn register(ctx: FlowContext, router: Arc<Router>, protocol_version: u32) ->
                 // — an older peer simply never emits the type).
                 KaspadMessagePayloadType::PalwMaterialRequest,
             ]),
+        )),
+        // ADR-0077 Decision 8's interval lane, in its own flow: a request whose answer exactly one
+        // peer wanted, and neither direction relayed. Subscribed unconditionally for the reason
+        // the pull request is — routing a type costs nothing and a peer below the interval
+        // protocol version simply never emits either type — while the SEND side is version-gated,
+        // because a peer with no route for a payload disconnects on it.
+        Box::new(crate::v8::palw_interval_flow::PalwIntervalFlow::new(
+            ctx.clone(),
+            router.clone(),
+            router
+                .subscribe(vec![KaspadMessagePayloadType::PalwIntervalOpeningRequest, KaspadMessagePayloadType::PalwIntervalOpening]),
         )),
         Box::new(RequestPruningPointPalwStateFlow::new(
             ctx.clone(),

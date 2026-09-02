@@ -497,4 +497,59 @@ message PalwSeatReceiptBroadcastMessage{
 // so only this request needs a protocol-version gate.
 message PalwMaterialRequestMessage{
   Hash claimId = 1;
+  // **The same rule as the interval lane** (ADR-0077 SA-2, last sentence: "the same rule covers
+  // `request_palw_material` today"). A whole capture is up to 16 MiB and this request was
+  // sixty-four bytes with no signature, no bond binding and no per-bond rate — the amplifier the
+  // interval lane was told to avoid, already shipped. Fields 2-4 carry the same authentication as
+  // `PalwIntervalOpeningRequestMessage`, over `palw_fp_material_request_message_v1`. They are
+  // ABSENT on a pre-5f peer's request, which decodes to empty bytes and a zero DAA — the shape
+  // check names that "unsigned" and a serving node refuses it, while a node that serves nothing
+  // is unaffected either way.
+  bytes requesterPubkey = 2;
+  bytes signature = 3;
+  uint64 requestedDaa = 4;
+}
+
+// **The seat verifies one interval; the executor opens it** (ADR-0077 Decision 8). A free-prompt
+// seat no longer pulls the whole capture and hashes it: it draws k checkpoint intervals from the
+// claim's beacon and its own seat index (`palw_fp_interval_draw_v1`) and asks for each one's
+// opening — the checkpoint chunk at the interval's start, the committed rows of the interval, and
+// the ids it consumed and produced, each opened against the roots the claim committed. Bytes per
+// seat are O(k × (interval × row + log2 leaves)), independent of the job (R1/W10).
+//
+// **Authenticated, because Decision 8 turns every executor into a server** (ADR-0077 SA-2,
+// ADR-0079 SA-3). An unauthenticated opening endpoint is a bandwidth amplifier against every
+// producer on the network: a ~70-byte request would buy a disk read, a family's opening arithmetic
+// and a multi-megabyte answer. So a request carries the requester's ML-DSA-87 PUBLIC KEY and a
+// signature over the request itself, and the server answers only a key the chain maps to a bond —
+// a seat of this claim's panel or an Active bond acting as challenger. The bond key is DERIVED
+// from the pubkey on chain rather than carried: a carried bond key is the requester's own claim
+// about itself, and a second place to disagree with the chain.
+//
+// Asker-specific, like the material serve since audit M2-2: the answer goes to the peer that
+// asked, and neither message is relayed — a relayed opening is bytes every peer pays for and
+// exactly one peer wanted.
+message PalwIntervalOpeningRequestMessage{
+  Hash claimId = 1;
+  uint32 intervalIndex = 2;
+  // ML-DSA-87 public key of the requesting bond (2,592 bytes). Shape-checked before anything is
+  // read (ADR-0079 Decision 4's `check_opening_request_shape`).
+  bytes requesterPubkey = 3;
+  // ML-DSA-87 signature (4,627 bytes) over `palw_fp_opening_request_message_v1`, which binds the
+  // network domain, the claim, the interval index and `requestedDaa`. Binding the index is what
+  // stops one signature being replayed as a request for every interval of every claim.
+  bytes signature = 4;
+  // The requester's own DAA score when it signed. The server refuses a request older or newer
+  // than its freshness window, so a captured request is not a permanent serving right.
+  uint64 requestedDaa = 5;
+}
+
+// The answer: `opening` is the family's own encoding (`open_fp_interval`), opaque to the
+// transport — only the backend that wrote it reads it, and the seat binds it to the claim's roots
+// before believing anything in it. Capped at PALW_INTERVAL_OPENING_MAX_BYTES on both ends, and the
+// cap is checked BEFORE the bytes are handed to any decoder.
+message PalwIntervalOpeningMessage{
+  Hash claimId = 1;
+  uint32 intervalIndex = 2;
+  bytes opening = 3;
 }

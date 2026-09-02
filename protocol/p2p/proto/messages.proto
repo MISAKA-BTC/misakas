@@ -82,6 +82,12 @@ message KaspadMessage {
     PalwTraceMaterialBroadcastMessage palwTraceMaterialBroadcast = 75;
     PalwSeatReceiptBroadcastMessage palwSeatReceiptBroadcast = 76;
     PalwMaterialRequestMessage palwMaterialRequest = 77;
+    // ADR-0077 Decision 8 (protocol >= 105): a free-prompt seat asks the executor for ONE
+    // checkpoint interval's opening and is answered directly. Neither message is relayed, and
+    // both directions are gated — the answer is a new type too, so it can only reach a peer that
+    // can route it.
+    PalwIntervalOpeningRequestMessage palwIntervalOpeningRequest = 78;
+    PalwIntervalOpeningMessage palwIntervalOpening = 79;
   }
 }
 
