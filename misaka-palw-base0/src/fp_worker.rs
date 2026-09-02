@@ -286,9 +286,16 @@ pub struct FpWorkerFamilyV1 {
     pub model_id: String,
     /// The family's runtime identity hash — see the struct note.
     pub runtime_identity: Hash64,
-    /// What the job's `tokenizer_id` is bound to. The dense tier's artifact carries a tokenizer
-    /// commitment; the hybrid's `.palwq36` deliberately carries none (PALW binds a prompt by the
-    /// hash of its ids), so it is `Hash64::default()` there and nothing on chain checks it.
+    /// What the job's `tokenizer_id` is bound to, and it must be the answer
+    /// [`crate::artifact::Base0ArtifactV1::check_tokenizer_bytes_v1`] gave for the file this
+    /// runtime actually opened — never a field copied out of the artifact unchecked. The dense
+    /// tier's artifact format carries a commitment; the hybrid's `.palwq36` deliberately carries
+    /// none (PALW binds a prompt by the hash of its ids), so it is `Hash64::default()` there.
+    ///
+    /// **`Hash64::default()` here means the pair was not checked**, whichever tier it came from,
+    /// and nothing on chain rejects a wrong tokenizer for such a job: a replay under a different
+    /// file produces different ids and a claim that reproduces nothing. Every dense artifact
+    /// written before `qwen25-convert` bound one on its `--a16` lane is in that state.
     pub tokenizer_id: Hash64,
     /// The id ceiling a prompt token is checked against — the model's, not the tokenizer's, which
     /// is padded differently.

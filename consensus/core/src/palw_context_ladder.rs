@@ -414,8 +414,16 @@ pub const PALW_CONTEXT_LADDER_MAX_DECODE_TOKENS: u32 = crate::palw_v2::PALW_V2_M
 /// operational work and not this module's. What is here is the profile that route carries, derived
 /// from the same `qwen25_a16_profile_v2` projection the shipped row uses, so the two cannot come to
 /// describe different graphs.
+///
+/// **Under the epsilon the artifact executes**
+/// ([`crate::palw_qwen25_profile::qwen25_a16_artifact_row_profile_v1`]). `QWEN25_1_5B` declares
+/// `rms_eps_q: 1` and `qwen25-convert` writes `1 << 8` into every artifact header, so the plain
+/// `qwen25_a16_profile_v2` projection produced a row `Qwen25A16Backend::from_registered_profile`
+/// refused at EVERY width — `GeometryMismatch { what: "rms_eps_q", profile: 1, artifact: 256 }` —
+/// which is a dense-tier demonstration refused before it starts. The hybrid row below already went
+/// through `qwen36_geometry_artifact_eps` for exactly this; the dense row had no twin.
 pub fn palw_a16_context_row_profile_v1(n_ctx: u32) -> Result<PalwShapeProfileV3, PalwStepError> {
-    crate::palw_qwen25_profile::qwen25_a16_profile_v2(crate::palw_qwen25_profile::PalwQwen25GeometryV1 {
+    crate::palw_qwen25_profile::qwen25_a16_artifact_row_profile_v1(crate::palw_qwen25_profile::PalwQwen25GeometryV1 {
         n_ctx,
         ..crate::palw_qwen25_profile::QWEN25_1_5B
     })

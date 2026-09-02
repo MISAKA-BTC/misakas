@@ -1353,4 +1353,108 @@ mod free_prompt_tests {
         };
         assert!(error.contains("registered graph") || error.contains("state map"), "the error names the defect it hit first: {error}");
     }
+
+    /// **The registered row, through the constructor a dense-tier demonstration actually uses.**
+    ///
+    /// Every other test in this module builds its class with `rms_eps_q: 1` in BOTH halves and so
+    /// agrees with itself. The shipped ledger does not: `misaka-palw-base0::classes` gives this
+    /// family a profile from `QWEN25_1_5B` (`rms_eps_q: 1`) and an `artifact_shape` at the
+    /// converter's `eps_q: 1 << 8` — "the A16 engine norms at the shipped 1 << 8" — and
+    /// `every_canonical_class_agrees_with_its_own_profile` EXEMPTS `ConvertedA16` from the
+    /// equality that would have caught it. So a class whose artifact executes what
+    /// `qwen25-convert` writes is refused by its own declaration:
+    /// `GeometryMismatch { what: "rms_eps_q", profile: 1, artifact: 256 }`.
+    ///
+    /// It went unseen because the shipped worker takes [`Qwen25A16Backend::new`], which compiles
+    /// no plan and lets the artifact's epsilon execute, while the ADR-0080 ladder row, the SDK and
+    /// any chain-registered class go through [`Qwen25A16Backend::from_registered_profile`]. This
+    /// test drives the second one, over an artifact built at the converter's epsilon, which is
+    /// the asymmetry made visible.
+    ///
+    /// Both directions are pinned: the corrected projection PLANS, and a declaration carrying the
+    /// frozen `rms_eps_q: 1` still refuses on exactly that field and no other — the dense twin of
+    /// `qwen36_plan`'s "a rms_eps_q 17 declaration refuses against the artifact's 1".
+    #[test]
+    fn a_row_served_over_a_converter_built_artifact_plans_and_the_frozen_declaration_refuses() {
+        use crate::engine_a16::A16PlanErrorV1;
+        use kaspa_consensus_core::palw_qwen25_profile::{
+            QWEN25_A16_ARTIFACT_EPS_Q, qwen25_a16_artifact_row_profile_v1, qwen25_geometry_artifact_eps,
+        };
+
+        // The ledger's own pairing, at a size a unit test can hold: the profile from the geometry,
+        // the artifact at the epsilon `qwen25-convert` writes.
+        let geometry = PalwQwen25GeometryV1 {
+            layer_count: 2,
+            hidden_dim: 8,
+            ffn_dim: 8,
+            attn_heads: 2,
+            attn_kv_heads: 2,
+            attn_head_dim: 4,
+            vocab_size: 64,
+            n_ctx: 32,
+            n_threads: 1,
+            rms_eps_q: 1,
+            tile_len: 4,
+        };
+        let shape = Base0ShapeV1 {
+            n_layers: geometry.layer_count as usize,
+            n_heads: geometry.attn_heads as usize,
+            n_kv_heads: geometry.attn_kv_heads as usize,
+            d_head: geometry.attn_head_dim as usize,
+            d_ff: geometry.ffn_dim as usize,
+            vocab: geometry.vocab_size as usize,
+            max_position: geometry.n_ctx as usize,
+            ln_theta_gen_q: LN_THETA_10000_GEN_Q,
+            // What the converter writes. `classes.rs` spells this same constant for every
+            // `ConvertedA16` row's `artifact_shape`.
+            eps_q: QWEN25_A16_ARTIFACT_EPS_Q,
+        };
+        assert_eq!(shape.eps_q, 1 << 8, "the artifact half of the shipped pairing");
+        let artifact = std::sync::Arc::new(
+            Base0ArtifactV1::derive_deterministic(shape, 0x5A16)
+                .expect("a valid shape")
+                .with_a16_params(derived_a16_store(&shape))
+                .expect("the derived store is sorted and unique"),
+        );
+
+        // The frozen declaration: refused, on rms_eps_q and nothing else.
+        let frozen = qwen25_a16_profile_v2(geometry).expect("the frozen projection is a valid profile");
+        let engine = crate::engine_a16::A16Engine::new(&artifact).expect("the artifact is an A16 class");
+        match engine.plan_from_profile(&frozen) {
+            Err(A16PlanErrorV1::GeometryMismatch { what: "rms_eps_q", profile, artifact: got }) => {
+                assert_eq!((profile, got), (1, 1 << 8), "the two epsilons, named");
+            }
+            other => panic!("a declaration the artifact does not execute must refuse on rms_eps_q and nothing else, got {other:?}"),
+        }
+        Qwen25A16Backend::from_registered_profile(artifact.clone(), NETWORK.to_vec(), frozen, (4, 3))
+            .map(drop)
+            .expect_err("and the backend a demonstration uses must refuse it too");
+
+        // The corrected row: plans, and runs.
+        let served = qwen25_a16_artifact_row_profile_v1(geometry).expect("the corrected projection is a valid profile");
+        assert_eq!(
+            qwen25_geometry_artifact_eps(geometry).rms_eps_q,
+            QWEN25_A16_ARTIFACT_EPS_Q,
+            "the correction is the epsilon and nothing else"
+        );
+        // The constructor FIRST, so the failure this pins is the refusal itself and not a
+        // comparison standing in for it.
+        let backend = Qwen25A16Backend::from_registered_profile(artifact, NETWORK.to_vec(), served.clone(), (4, 3))
+            .expect("the row the artifact executes must be servable through the registered-profile constructor");
+        assert_eq!(served.base0_rms_eps_q, shape.eps_q, "declared is executed");
+        assert!(backend.supports_court(), "the corrected row still takes a court's turn");
+        let (job, prompt) = backend.job_for_anchor(Hash64::from_u64_word(0xE95)).expect("the anchor implies a job");
+        let outcome = backend.execute(&job, &prompt).expect("and the planned walk runs over the artifact's own epsilon");
+        assert_eq!(
+            backend.verify_material(
+                &outcome.material,
+                PalwClaimRootsV1 {
+                    execution_root: outcome.execution_root,
+                    trace_root: outcome.trace_root,
+                    anchor: Hash64::from_u64_word(0xE95),
+                }
+            ),
+            kaspa_consensus_core::palw_backend::PalwMaterialVerdictV1::Matches
+        );
+    }
 }
