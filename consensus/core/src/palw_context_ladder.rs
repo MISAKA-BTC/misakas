@@ -39,6 +39,13 @@
 //! | Decision 14 — the canonical job grows with the context | [`palw_canonical_footprint_floor_v1`] and [`palw_row_earns_at_most_the_cap_v1`]; W3 proven |
 //! | SA-4 — the turn deadline is derived | [`palw_court_turn_deadline_v1`] and [`palw_court_replay_floor_daa_v1`] |
 //!
+//! **And one row that is ADR-0080's, not ADR-0077's:** a court close no longer fits one carrier,
+//! so the blocks a mover spends ASSEMBLING one are blocks of the court window that carry no move.
+//! [`PALW_COURT_ASSEMBLY_RESERVE_DAA_V1`] is that term, counted for both sides, subtracted before
+//! a clock is derived and added before a window is checked. It is the difference between a court
+//! whose deadline closes on the party that is answering and one whose deadline closes on the party
+//! that is assembling — audit M2-24's shape, restated for a split close.
+//!
 //! **Not here, and named rather than left to be discovered:** the anchored form does NOT make an
 //! attention class's close flat in its context, and no decision could. A recurrence has a STATE —
 //! one `k_dim × v_dim` matrix per head, the same size at position 8 and position 8,192 — so a
@@ -116,6 +123,59 @@ pub const fn palw_court_move_count_v1(max_step_leaves: u64, terminal_moves: u32)
     let rounds = max_step_leaves.next_power_of_two().trailing_zeros() as u64;
     2 * rounds + terminal_moves as u64
 }
+
+// =================================================================================================
+// ADR-0080 W4 — assembling a split close spends the mover's own clock
+// =================================================================================================
+
+/// **The carriers one court close may be split across** (ADR-0080).
+///
+/// A close is a transaction and the carrier is `DEFAULT_MAX_CLOSE_BYTES` — 80 KiB, the mempool's
+/// standard-transaction mass mirrored. ADR-0080 §1 measures a close an order of magnitude past it
+/// (`the_512_breakdown` pins 2,240,241 bytes on the hybrid row against an 81,920-byte carrier), so
+/// a close no longer rides one transaction: it is assembled over several blocks and the mover
+/// spends those blocks out of its own turn.
+///
+/// **This constant is the ADR-0080 owner's shipped chunk count, and nothing in this tree derives
+/// it.** It is written here rather than left implicit because the reserve below is what stops the
+/// clock closing on the CHALLENGER while the mover is still assembling — the audit M2-24 shape, a
+/// court that convicts an honest party by clock. The two nearby readings of the same measurement
+/// are `2_240_241 / 81_920 = 27` (floor) and `28` (ceiling); the figure carried here is 27, and a
+/// later owner who meant the ceiling moves this one constant and every number below follows.
+///
+/// Its home is the court params once ADR-0080's carriage lands — a chunk count is a ruleset
+/// quantity, inside `palw_ruleset_id_v2` like every other court ceiling. Until then it is pinned
+/// beside the derivation that consumes it, so there is ONE spelling rather than two.
+pub const PALW_COURT_MAX_CLOSE_CHUNKS_V1: u64 = 27;
+
+/// **How many split closes ONE side assembles in a worst-case dispute** (ADR-0080 W4).
+///
+/// The reserve is `2 × this × max_close_chunks`: `2` because both sides assemble — a reserve
+/// charged to the mover alone would leave the challenger's own assembly unpaid, which is the same
+/// defect one level down — and `this` because a side carries more than one close in a full
+/// prosecution. Named rather than written as a literal `4 ×`, so a reader can see which factor is
+/// "both sides" and which is "closes per side".
+pub const PALW_COURT_CHUNKED_CLOSES_PER_SIDE_V1: u64 = 4;
+
+/// **The DAA a court window must reserve for CLOSE ASSEMBLY, counted for both sides** (ADR-0080).
+///
+/// `2 × PALW_COURT_CHUNKED_CLOSES_PER_SIDE_V1 × max_close_chunks` — 216 at the shipped chunk
+/// count. It is subtracted from the window before a move clock is derived
+/// ([`palw_court_turn_deadline_v1`]) and added to the worst case before the window is checked
+/// ([`palw_ladder_fits_window_court_v1`]), so a ladder that fits is a ladder that fits *with* the
+/// blocks its closes occupy.
+///
+/// **Why it is a term and not a wider clock.** A longer turn deadline pays the mover and the
+/// responder equally, which is exactly wrong: assembly is time the MOVER spends before its move
+/// exists, and the party waiting for it has its own clock running. Reserving the blocks at the
+/// window keeps `moves × deadline` meaning what it says.
+pub const fn palw_close_assembly_daa_v1(max_close_chunks: u64) -> u64 {
+    2u64.saturating_mul(PALW_COURT_CHUNKED_CLOSES_PER_SIDE_V1).saturating_mul(max_close_chunks)
+}
+
+/// [`palw_close_assembly_daa_v1`] at the shipped chunk count — the value both derivations below
+/// read, so neither of them names the chunk count itself.
+pub const PALW_COURT_ASSEMBLY_RESERVE_DAA_V1: u64 = palw_close_assembly_daa_v1(PALW_COURT_MAX_CLOSE_CHUNKS_V1);
 
 // =================================================================================================
 // SA-4 — the turn deadline is derived, never chosen
@@ -234,16 +294,30 @@ pub const fn palw_court_replay_floor_daa_v1(row: &PalwCourtRowCostV1, interval_p
 /// saturation, for the reason `worst_case_duration_daa` gives about its own overflow: a court
 /// window that cannot be represented is not a long window.
 ///
-/// **It reproduces the shipped devnet constant exactly.** `PALW_DEVNET_WINDOWS_V1` carries
-/// `court_turn_deadline: 4` and `window_court: 300`; at the `2^32` ladder this derivation returns
-/// 4. That is the check on the rule, and `the_devnet_move_clock_is_the_derived_one` is where it
-/// lives.
+/// **And the window pays for close ASSEMBLY before it pays for moves** (ADR-0080 W4). A close no
+/// longer fits one carrier, so the blocks a mover spends assembling one are blocks of the window
+/// that no move gets: [`PALW_COURT_ASSEMBLY_RESERVE_DAA_V1`] comes off the top, for BOTH sides,
+/// and the clock is derived from what is left. Without the term the deadline closes on the
+/// challenger's side while the mover is still assembling — audit M2-24's shape, a court that
+/// convicts an honest party by clock.
+///
+/// **What that did to the shipped devnet constant.** `PALW_DEVNET_WINDOWS_V1` used to carry
+/// `window_court: 300` and this derivation returned its `court_turn_deadline: 4` exactly. With the
+/// reserve, 300 no longer holds the shipped clock at all — `66 × 4 + 216 = 480` — so the devnet
+/// window widened to 600, where the derivation returns 5 and the shipped 4 is admitted with margin.
+/// `the_devnet_court_window_had_to_widen_for_the_assembly_reserve` is that arithmetic, including the
+/// refusal at 300 that makes the widening necessary rather than preferred.
 pub const fn palw_court_turn_deadline_v1(window_court: u64, max_step_leaves: u64, terminal_moves: u32) -> Option<u64> {
     let moves = palw_court_move_count_v1(max_step_leaves, terminal_moves);
     if moves == 0 || window_court == 0 {
         return None;
     }
-    let deadline = (window_court - 1) / moves;
+    // A window that cannot even hold the assembly reserve holds no dispute: refused, not
+    // saturated, for the reason `worst_case_duration_daa` gives about its own overflow.
+    if window_court <= PALW_COURT_ASSEMBLY_RESERVE_DAA_V1 {
+        return None;
+    }
+    let deadline = (window_court - PALW_COURT_ASSEMBLY_RESERVE_DAA_V1 - 1) / moves;
     if deadline == 0 {
         None
     } else {
@@ -251,10 +325,16 @@ pub const fn palw_court_turn_deadline_v1(window_court: u64, max_step_leaves: u64
     }
 }
 
-/// **W4, as a predicate:** `(2 · ⌈log₂ leaves⌉ + terminal) · turn_deadline < window_court`.
+/// **W4, as a predicate:**
+/// `(2 · ⌈log₂ leaves⌉ + terminal) · turn_deadline + assembly_reserve < window_court`.
 ///
 /// Strict, because the backstop closes on the challenger's side: a prosecution that lands exactly
 /// on the window loses a dispute it was playing correctly.
+///
+/// The reserve is ADR-0080's ([`PALW_COURT_ASSEMBLY_RESERVE_DAA_V1`]): a split close occupies
+/// blocks that carry no move, and a window checked without them is a window that fits a
+/// prosecution nobody can actually assemble inside it. Counted for both sides, which is why the
+/// term is a property of the WINDOW and not of either party's clock.
 pub const fn palw_ladder_fits_window_court_v1(
     window_court: u64,
     max_step_leaves: u64,
@@ -263,7 +343,10 @@ pub const fn palw_ladder_fits_window_court_v1(
 ) -> bool {
     let moves = palw_court_move_count_v1(max_step_leaves, terminal_moves);
     match moves.checked_mul(turn_deadline) {
-        Some(worst) => worst < window_court,
+        Some(worst) => match worst.checked_add(PALW_COURT_ASSEMBLY_RESERVE_DAA_V1) {
+            Some(total) => total < window_court,
+            None => false,
+        },
         None => false,
     }
 }
@@ -694,26 +777,125 @@ mod tests {
     fn the_derived_move_clock_is_the_largest_the_window_admits() {
         // 2^32 leaves: 32 bisection rounds, two moves each, plus two terminal moves.
         assert_eq!(palw_court_move_count_v1(PALW_CONTEXT_LADDER_MAX_STEP_LEAVES, PALW_CONTEXT_LADDER_TERMINAL_MOVES), 66);
-        // testnet-11's 3,000-DAA court window: 66 × 45 = 2,970.
-        assert_eq!(palw_court_turn_deadline_v1(3_000, PALW_CONTEXT_LADDER_MAX_STEP_LEAVES, 2), Some(45));
-        assert_eq!(66 * 45, 2_970);
-        // One more DAA of clock does not fit, which is what "largest the window admits" means.
-        assert!(!palw_ladder_fits_window_court_v1(3_000, PALW_CONTEXT_LADDER_MAX_STEP_LEAVES, 2, 46));
-        // A window that cannot hold a one-DAA clock is refused rather than saturated.
+        // testnet-11's 3,000-DAA court window, less ADR-0080's 216-DAA assembly reserve:
+        // 66 × 42 + 216 = 2,988. (It was 45 before the reserve existed: 66 × 45 = 2,970.)
+        assert_eq!(palw_court_turn_deadline_v1(3_000, PALW_CONTEXT_LADDER_MAX_STEP_LEAVES, 2), Some(42));
+        assert_eq!(66 * 42 + PALW_COURT_ASSEMBLY_RESERVE_DAA_V1, 2_988);
+        // One more DAA of clock does not fit, which is what "largest the window admits" means:
+        // 66 × 43 + 216 = 3,054.
+        assert!(!palw_ladder_fits_window_court_v1(3_000, PALW_CONTEXT_LADDER_MAX_STEP_LEAVES, 2, 43));
+        // A window that cannot hold a one-DAA clock is refused rather than saturated — and now a
+        // window that cannot even hold the reserve is refused for its own, earlier reason.
         assert_eq!(palw_court_turn_deadline_v1(66, PALW_CONTEXT_LADDER_MAX_STEP_LEAVES, 2), None);
+        assert_eq!(palw_court_turn_deadline_v1(PALW_COURT_ASSEMBLY_RESERVE_DAA_V1, PALW_CONTEXT_LADDER_MAX_STEP_LEAVES, 2), None);
     }
 
-    /// **The devnet set's shipped move clock IS this derivation's answer** — which is the check on
-    /// the rule rather than on the number. `PALW_DEVNET_WINDOWS_V1` was written for the deeper
-    /// ladder (its own comment says so: "`(2 × 32 + 2) × 4 = 264 < 300`") and it carries 4.
+    /// **The devnet set's shipped move clock is one the derivation ADMITS** — which is the check on
+    /// the rule rather than on the number.
+    ///
+    /// It used to be an equality: at `window_court: 300` this derivation returned exactly the
+    /// shipped 4. ADR-0080's close-assembly reserve ended that, and ended it in the dangerous
+    /// direction — 300 stopped holding the shipped clock at all — so the window widened to 600,
+    /// where the derivation returns 5. The rule that survives is the bracket SA-4 actually states:
+    /// the shipped clock is at or below the largest the window admits, and it fits the predicate.
+    /// An equality would now be a coincidence to maintain rather than a property to check.
     #[test]
-    fn the_devnet_move_clock_is_the_derived_one() {
-        assert_eq!(
-            palw_court_turn_deadline_v1(PALW_DEVNET_WINDOWS_V1.window_court, PALW_CONTEXT_LADDER_MAX_STEP_LEAVES, 2),
-            Some(PALW_DEVNET_WINDOWS_V1.court_turn_deadline),
-            "the shipped devnet clock is not what SA-4 derives for it"
+    fn the_devnet_move_clock_is_one_the_window_admits() {
+        let derived = palw_court_turn_deadline_v1(PALW_DEVNET_WINDOWS_V1.window_court, PALW_CONTEXT_LADDER_MAX_STEP_LEAVES, 2)
+            .expect("the devnet window holds the deeper ladder");
+        assert_eq!(derived, 5, "the devnet window's largest move clock moved");
+        assert!(
+            PALW_DEVNET_WINDOWS_V1.court_turn_deadline <= derived,
+            "the shipped devnet clock {} is past the largest its window admits ({derived})",
+            PALW_DEVNET_WINDOWS_V1.court_turn_deadline
         );
+        assert!(palw_ladder_fits_window_court_v1(
+            PALW_DEVNET_WINDOWS_V1.window_court,
+            PALW_CONTEXT_LADDER_MAX_STEP_LEAVES,
+            2,
+            PALW_DEVNET_WINDOWS_V1.court_turn_deadline
+        ));
         assert_eq!(66 * PALW_DEVNET_WINDOWS_V1.court_turn_deadline, 264);
+        assert_eq!(66 * derived + PALW_COURT_ASSEMBLY_RESERVE_DAA_V1, 546);
+    }
+
+    /// **The widening is NECESSARY, not preferred** — ADR-0080 W4's deliverable.
+    ///
+    /// Three derivations, one arithmetic. The reserve is `2 × 4 × 27 = 216` DAA, charged for both
+    /// sides, and it is what a mover spends assembling a close that no longer fits one carrier:
+    ///
+    /// * the RC's 3,000-DAA window derives 42 and fits — `66 × 42 + 216 = 2,988 < 3,000`;
+    /// * the devnet's widened 600-DAA window derives 5 — `66 × 5 + 216 = 546 < 600`;
+    /// * the devnet's OLD 300-DAA window derives 1, and REFUSES the shipped clock at both ladders —
+    ///   `66 × 4 + 216 = 480` armed and `46 × 4 + 216 = 400` at the shipped `2^22` ladder, either
+    ///   of them past a 300-DAA window.
+    ///
+    /// The third case is the one that says something. A suite in which the old devnet window still
+    /// passed would have proven only that a term had been added somewhere; this one names the
+    /// window that the term makes unusable, so the constant moved for a reason a reader can check.
+    #[test]
+    fn the_devnet_court_window_had_to_widen_for_the_assembly_reserve() {
+        // The reserve itself, in its two factors.
+        assert_eq!(PALW_COURT_MAX_CLOSE_CHUNKS_V1, 27);
+        assert_eq!(PALW_COURT_CHUNKED_CLOSES_PER_SIDE_V1, 4);
+        assert_eq!(palw_close_assembly_daa_v1(PALW_COURT_MAX_CLOSE_CHUNKS_V1), 216);
+        assert_eq!(PALW_COURT_ASSEMBLY_RESERVE_DAA_V1, 2 * 4 * 27);
+
+        let deep = PALW_CONTEXT_LADDER_MAX_STEP_LEAVES;
+        let moves = palw_court_move_count_v1(deep, PALW_CONTEXT_LADDER_TERMINAL_MOVES);
+        assert_eq!(moves, 66);
+
+        // ---- the RC: 66 × 42 + 216 = 2,988 < 3,000 ----
+        assert_eq!(PALW_RC_WINDOWS_V1.window_court, 3_000);
+        let rc = palw_court_turn_deadline_v1(PALW_RC_WINDOWS_V1.window_court, deep, 2).expect("the RC window holds the ladder");
+        assert_eq!(rc, 42);
+        assert_eq!(moves * rc + PALW_COURT_ASSEMBLY_RESERVE_DAA_V1, 2_988);
+        assert!(palw_ladder_fits_window_court_v1(PALW_RC_WINDOWS_V1.window_court, deep, 2, rc));
+
+        // ---- devnet at the widened window: 66 × 5 + 216 = 546 < 600 ----
+        assert_eq!(PALW_DEVNET_WINDOWS_V1.window_court, 600, "the devnet court window is not the widened one");
+        let wide = palw_court_turn_deadline_v1(600, deep, 2).expect("600 holds the ladder");
+        assert_eq!(wide, 5);
+        assert_eq!(moves * wide + PALW_COURT_ASSEMBLY_RESERVE_DAA_V1, 546);
+        assert!(palw_ladder_fits_window_court_v1(600, deep, 2, PALW_DEVNET_WINDOWS_V1.court_turn_deadline));
+
+        // ---- devnet at the OLD window: derives 1, and the shipped clock is REFUSED ----
+        const OLD_DEVNET_WINDOW_COURT: u64 = 300;
+        assert_eq!(palw_court_turn_deadline_v1(OLD_DEVNET_WINDOW_COURT, deep, 2), Some(1));
+        assert!(
+            !palw_ladder_fits_window_court_v1(OLD_DEVNET_WINDOW_COURT, deep, 2, PALW_DEVNET_WINDOWS_V1.court_turn_deadline),
+            "the old 300-DAA window still holds the shipped clock at the 2^32 ladder: {} x {} + {} against \
+             {OLD_DEVNET_WINDOW_COURT}",
+            moves,
+            PALW_DEVNET_WINDOWS_V1.court_turn_deadline,
+            PALW_COURT_ASSEMBLY_RESERVE_DAA_V1
+        );
+        assert_eq!(moves * PALW_DEVNET_WINDOWS_V1.court_turn_deadline + PALW_COURT_ASSEMBLY_RESERVE_DAA_V1, 480);
+        // And at the SHIPPED `2^22` ladder too, which is the one a devnet node boots on — so the
+        // refusal is not an artifact of the fenced depth.
+        let shipped_moves = palw_court_move_count_v1(PALW_STEP_MAX_LEAVES, PALW_CONTEXT_LADDER_TERMINAL_MOVES);
+        assert_eq!(shipped_moves, 46);
+        assert!(
+            !palw_ladder_fits_window_court_v1(
+                OLD_DEVNET_WINDOW_COURT,
+                PALW_STEP_MAX_LEAVES,
+                2,
+                PALW_DEVNET_WINDOWS_V1.court_turn_deadline
+            ),
+            "the old devnet window holds the shipped ladder too — the widening would be preferred rather than necessary"
+        );
+        assert_eq!(shipped_moves * PALW_DEVNET_WINDOWS_V1.court_turn_deadline + PALW_COURT_ASSEMBLY_RESERVE_DAA_V1, 400);
+        // The clock the old window DOES derive is 1 DAA, which is below the floor a split close
+        // puts under one honest move — so 300 has no admissible clock at all, not merely a small
+        // one. (`palw_court_move_cost_daa_v1` is the SA-4 cost model; this passes it the chunk
+        // count rather than re-deriving the assembly term a second time.)
+        let floor = crate::palw_court_deadline::palw_court_move_cost_daa_v1(
+            &PALW_COURT_COST_QWEN36,
+            palw_checkpoint_interval_v1(512),
+            PALW_COURT_MAX_CLOSE_CHUNKS_V1,
+        );
+        assert_eq!(floor, 27, "one honest move over a 27-chunk close is the replay plus 26 assembly blocks");
+        assert!(1 < floor, "the 300-DAA window's derived clock clears the split close's own floor");
     }
 
     // ---------------------------------------------------------------------------------------
@@ -723,23 +905,38 @@ mod tests {
     /// **SA-4's floor, per row, at every ladder row's interval — and the derived deadline clears
     /// it.** A deadline below this convicts the honest responder by the clock, which is the failure
     /// SA-4 exists to name.
+    ///
+    /// **The floor is the SPLIT close's** (ADR-0080 W4): a move is the honest replay plus the
+    /// blocks the close occupies, and `palw_court_move_cost_daa_v1` is the one cost model that
+    /// carries both — passed the chunk count rather than adding `(chunks − 1)` here, because two
+    /// spellings of one cost model is the defect this pair of files exists to avoid.
     #[test]
     fn the_derived_deadline_clears_the_measured_replay_floor_for_every_row() {
+        use crate::palw_court_deadline::palw_court_move_cost_daa_v1;
         let armed = palw_context_ladder_windows_v1(PALW_RC_WINDOWS_V1, PALW_CONTEXT_LADDER_MAX_STEP_LEAVES).expect("derivable");
         for row in PALW_COURT_ROW_COSTS {
             for n_ctx in PALW_CONTEXT_LADDER_ROWS {
                 let interval = palw_checkpoint_interval_v1(n_ctx);
-                let floor = palw_court_replay_floor_daa_v1(&row, interval);
+                // The replay alone, and the whole move with its close assembled over
+                // `PALW_COURT_MAX_CLOSE_CHUNKS_V1` carriers.
+                let replay = palw_court_replay_floor_daa_v1(&row, interval);
+                let floor = palw_court_move_cost_daa_v1(&row, interval, PALW_COURT_MAX_CLOSE_CHUNKS_V1);
+                assert_eq!(floor, replay + PALW_COURT_MAX_CLOSE_CHUNKS_V1 - 1, "the move cost is not the replay plus its carriers");
                 assert!(
                     armed.court_turn_deadline >= floor,
-                    "{}: at n_ctx {n_ctx} (interval {interval}) the honest replay floor is {floor} DAA and the derived \
-                     clock is {} — a court that convicts by clock ({})",
+                    "{}: at n_ctx {n_ctx} (interval {interval}) one honest move needs {floor} DAA — {replay} of replay plus \
+                     {} blocks of close assembly — and the derived clock is {} — a court that convicts by clock ({})",
                     row.row,
+                    PALW_COURT_MAX_CLOSE_CHUNKS_V1 - 1,
                     armed.court_turn_deadline,
                     row.measured_on
                 );
             }
         }
+        // The binding row, in numbers: the hybrid at the top rung replays two DAA and assembles
+        // twenty-six, against a derived clock of 42.
+        assert_eq!(armed.court_turn_deadline, 42);
+        assert_eq!(palw_court_move_cost_daa_v1(&PALW_COURT_COST_QWEN36, 256, PALW_COURT_MAX_CLOSE_CHUNKS_V1), 28);
     }
 
     /// The floor's own arithmetic, pinned, so the measured inputs cannot drift silently.
