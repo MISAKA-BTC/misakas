@@ -636,13 +636,10 @@ mod tests {
     fn the_two_unauthenticated_objects_may_not_ride() {
         for (object, needle) in [
             (PalwConsensusObjectV2::BondRetireRequested { bond: bond(3), signature: Vec::new() }, "must carry the owner signature"),
-            (
-                PalwConsensusObjectV2::ClassFrozen {
-                    class_id: h64(1),
-                    certificate: crate::palw_state_v2::tests::contradiction(h64(1)),
-                },
-                "no layer verifies",
-            ),
+            // Built through the transition's own `#[cfg(test)]` fixture, because ADR-0063 SA-5
+            // left `ClassFrozen` with no constructor outside `palw_state_v2` — this test could
+            // not spell the object by hand even to prove the door is shut, which is the point.
+            (crate::palw_state_v2::tests::freeze(h64(1)), "no layer verifies"),
         ] {
             let err = palw_lifecycle_object_may_ride_v2(&object).unwrap_err();
             assert!(err.contains(needle), "the refusal must say why: got {err}");

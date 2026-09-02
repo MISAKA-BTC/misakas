@@ -1,0 +1,110 @@
+{
+  "v": 1,
+  "frac_bits": 8,
+  "materials": [
+    {
+      "name": "flat",
+      "base_color": [
+        256,
+        0,
+        0,
+        256
+      ],
+      "metallic": 0,
+      "roughness": 0,
+      "double_sided": false
+    },
+    {
+      "name": "slope",
+      "base_color": [
+        0,
+        256,
+        0,
+        256
+      ],
+      "metallic": 0,
+      "roughness": 128,
+      "double_sided": true
+    }
+  ],
+  "nodes": [
+    {
+      "name": "flat",
+      "translation": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        2
+      ],
+      "scale": [
+        256,
+        256,
+        256
+      ],
+      "shape": {
+        "shape": "triangle",
+        "a": [
+          0,
+          0,
+          0
+        ],
+        "b": [
+          256,
+          0,
+          0
+        ],
+        "c": [
+          0,
+          0,
+          256
+        ]
+      },
+      "material": "flat",
+      "children": []
+    },
+    {
+      "name": "slope",
+      "translation": [
+        0,
+        0,
+        512
+      ],
+      "rotation": [
+        0,
+        0,
+        0,
+        2
+      ],
+      "scale": [
+        256,
+        256,
+        256
+      ],
+      "shape": {
+        "shape": "triangle",
+        "a": [
+          0,
+          0,
+          0
+        ],
+        "b": [
+          256,
+          0,
+          0
+        ],
+        "c": [
+          0,
+          256,
+          256
+        ]
+      },
+      "material": "slope",
+      "children": []
+    }
+  ]
+}

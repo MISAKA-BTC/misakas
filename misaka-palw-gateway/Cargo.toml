@@ -24,6 +24,10 @@ kaspa-hashes.workspace = true
 kaspa-pq-validator-core.workspace = true
 # ADR-0078: the derivation step — registered grammars and content-named transformers.
 misaka-palw-derive.workspace = true
+# ADR-0079: the ONE spelling of the host posture — the worker spawn discipline, the public-bind
+# guard, and the reachable-secret check. A second copy here would be a second answer to the same
+# question, and this repository has paid that bill before.
+misaka-palw.workspace = true
 
 borsh.workspace = true
 faster-hex.workspace = true

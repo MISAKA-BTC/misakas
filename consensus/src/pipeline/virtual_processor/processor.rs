@@ -411,6 +411,13 @@ pub struct VirtualStateProcessor {
     /// ADR-0065 D1's fence and window, `None` on every shipped preset. See
     /// [`Self::palw_bond_maturity_at`], which is the ONE place this is resolved.
     pub(super) palw_bond_maturity: Option<kaspa_consensus_core::config::params::PalwBondMaturityV1>,
+    /// ADR-0071 SA-1..SA-4's fence, `None` on every shipped preset. Past it a capability
+    /// declaration is bounded, priced and refused for a retiring bond, and a seat is drawn for a
+    /// class only after a production fact. See [`Self::palw_capability_bound_at`], which is the
+    /// ONE place this is resolved — the fold, the acceptance layer and the panel assembler must
+    /// all get the same answer for the same block, or a derived panel and a proposed one differ
+    /// and every claim voids.
+    pub(super) palw_capability_bound: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// Rate limiter for [`Self::palw_warn_if_maturity_outruns_the_registry`] — the DAA score the
     /// shortfall was last reported at, or `PALW_SHORTFALL_NEVER_REPORTED`. **Log state only**:
     /// nothing consensus-visible reads it, so two nodes that report at different moments still
@@ -428,6 +435,11 @@ pub struct VirtualStateProcessor {
     pub(super) palw_heartbeat_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0066 Decision 4: the inactivity leak's fence and its duration.
     pub(super) palw_inactivity_leak: Option<kaspa_consensus_core::config::params::PalwInactivityLeakV1>,
+    /// **ADR-0073 SA-1: the free-prompt beacon's fold width and its fence.** `None` on every
+    /// shipped preset, which is the pre-SA-1 single-block beacon. Resolved in exactly ONE place,
+    /// [`Self::palw_beacon_fold_k_at`], so the producer's walk and the validator's cannot pick
+    /// different widths for one draw.
+    pub(super) palw_beacon_fold: Option<kaspa_consensus_core::config::params::PalwBeaconFoldV1>,
 
     /// ADR-0033 (B14): the PALW credit gate's fence — `None` (every shipped network) keeps
     /// the whole gate dormant; `Some` makes crossing commitments mintable in the coinbase
@@ -697,6 +709,7 @@ impl VirtualStateProcessor {
             ),
             palw_maturity_warn_last_band: std::sync::atomic::AtomicU64::new(0),
             palw_inactivity_leak: params.palw_inactivity_leak,
+            palw_beacon_fold: params.palw_beacon_fold,
             max_block_parents: params.max_block_parents(),
             mergeset_size_limit: params.mergeset_size_limit(),
             palw_heartbeat_width_fence: params.palw_heartbeat_width_fence(),
@@ -788,6 +801,10 @@ impl VirtualStateProcessor {
             palw_bootstrap_activation: params.palw_bootstrap_activation,
             palw_unavailable_abstains: params.palw_unavailable_abstains,
             palw_bond_maturity: params.palw_bond_maturity,
+            // The MODE-folded fence: capability declarations, the claim lane and the panel draw
+            // exist only under ConsensusV2, so the mode condition is folded once in `Params`
+            // rather than remembered at each of the three sites below.
+            palw_capability_bound: params.palw_capability_bound_fence(),
             palw_frontier_provenance: params.palw_frontier_provenance,
             finality_depth: params.blockrate.finality_depth,
             palw_credit_params: params.palw_credit.clone(),
@@ -1480,7 +1497,7 @@ impl VirtualStateProcessor {
                                         }
                                     })
                                     .collect();
-                                match kaspa_consensus_core::palw_state_v2::apply_palw_transition_v5(
+                                match kaspa_consensus_core::palw_state_v2::apply_palw_transition_v6(
                                     state,
                                     state_params,
                                     self.palw_admission_params_v2.as_ref(),
@@ -1489,6 +1506,7 @@ impl VirtualStateProcessor {
                                     work,
                                     &merged_refs,
                                     self.palw_unavailable_abstains_at(point.daa_score),
+                                    self.palw_capability_bound_at(point.daa_score),
                                 ) {
                                     Ok((next, delta, merged_skips)) => {
                                         // A skipped merged work is the block standing while a
@@ -4746,13 +4764,17 @@ impl VirtualStateProcessor {
             }
             match self.palw_v2_validate_objects(&folded, state_params, point, std::slice::from_ref(&object)) {
                 Ok(()) => {
-                    match kaspa_consensus_core::palw_state_v2::apply_palw_transition_v2_with_verdict_policy(
+                    match kaspa_consensus_core::palw_state_v2::apply_palw_transition_v2_with_policies(
                         &folded,
                         state_params,
                         &rehearsal,
                         std::slice::from_ref(&object),
                         None,
                         self.palw_unavailable_abstains_at(point.daa_score),
+                        // ADR-0071 SA-1/SA-2/SA-4: the rehearsal has to refuse what the fold
+                        // refuses, or an over-long or unaffordable declaration is admitted into a
+                        // block's object list and the whole block dies at the fold instead.
+                        self.palw_capability_bound_at(point.daa_score),
                     ) {
                         Ok((next, _)) => {
                             if completes_a_group {
@@ -4954,7 +4976,7 @@ impl VirtualStateProcessor {
                     // `point.daa_score` would make the derived panel change from block to block
                     // around the fence height, and a `PanelBound` that missed the block it was
                     // built for would be refused as a mismatch rather than accepted late.
-                    kaspa_consensus_core::palw_panel_v2::validate_panel_bound_v2_with_maturity(
+                    kaspa_consensus_core::palw_panel_v2::validate_panel_bound_v2_with_capability_proof(
                         state,
                         panel_params,
                         state_params,
@@ -4964,6 +4986,10 @@ impl VirtualStateProcessor {
                         *anchor,
                         seats,
                         self.palw_bond_maturity_at(anchor_fact.anchor_daa),
+                        // ADR-0071 SA-3, at the ANCHOR for the D1 reason one line up: the panel is
+                        // a pure function of the claim, so the rule that narrows it must be one
+                        // too — and the assembler below resolves it at the same point.
+                        self.palw_capability_bound_at(anchor_fact.anchor_daa),
                     )
                     .map_err(|e| e.to_string())?;
                 }
@@ -5500,6 +5526,14 @@ impl VirtualStateProcessor {
         self.palw_bond_maturity.filter(|m| m.activation.is_active(daa_score)).map(|m| m.window_daa)
     }
 
+    /// **ADR-0071 SA-1..SA-4, resolved in exactly one place**, for the D1 reason: a panel is
+    /// accepted only if it equals the derived one exactly, and the fold's declaration refusals
+    /// have to be the acceptance layer's. A node that resolved this differently would propose
+    /// panels its peers refuse and compute a state root its peers do not.
+    fn palw_capability_bound_at(&self, daa_score: u64) -> bool {
+        self.palw_capability_bound.is_some_and(|fence| fence.is_active(daa_score))
+    }
+
     /// **ADR-0065 D1's blind spot, named in the log instead of left for an operator to find.**
     ///
     /// `validate_palw_v2` refuses to arm the maturity fence unless the GENESIS registry holds
@@ -5869,6 +5903,14 @@ impl VirtualStateProcessor {
     /// The walk starts at `from` and descends, which is what makes it candidate-scoped: two nodes
     /// with different sinks but the same candidate derive the same fact, because they walk the
     /// same chain.
+    ///
+    /// **ADR-0073 SA-1.** Past `palw_beacon_fold` the fact is the fold of the first `k` attempt
+    /// blocks at or after the slot rather than the first one alone: re-rolling a beacon costs an
+    /// inference, but WITHHOLDING one costs only a subsidy, and a producer whose block would be
+    /// the beacon can drop it when the draw disfavours its own claims. With `k` folded it must
+    /// hold all `k`. The width is resolved from the SLOT (see below), never from the walker's own
+    /// height, so the producer reading spendable quanta at the tip and the validator checking a
+    /// spend deep in the past agree about one claim's fold.
     pub(super) fn palw_beacon_fact_of_candidate(
         &self,
         from: BlockHash,
@@ -5878,6 +5920,7 @@ impl VirtualStateProcessor {
         kaspa_consensus_core::palw_fp_beacon_v3::PalwBeaconDeriveV3Error,
     > {
         let attempt_algo_id = self.palw_required_algo_id.unwrap_or(kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2);
+        let fold_k = self.palw_beacon_fold_k_at(slot);
         let facts = self.reachability_service.default_backward_chain_iterator(from).filter_map(|block| {
             let header = self.headers_store.get_header(block).ok()?;
             Some(kaspa_consensus_core::palw_fp_beacon_v3::PalwChainBlockFactV3 {
@@ -5889,7 +5932,19 @@ impl VirtualStateProcessor {
         // `..._to_genesis` rather than the bounded form: the iterator really does reach genesis,
         // and the bounded form's `WalkTooShort` exists for callers that stop early. A caller that
         // stopped early and reported `prev_attempt_daa = 0` would be inventing a witness.
-        kaspa_consensus_core::palw_fp_beacon_v3::derive_beacon_fact_to_genesis_v3(slot, attempt_algo_id, facts)
+        kaspa_consensus_core::palw_fp_beacon_v3::derive_beacon_fact_to_genesis_v3(slot, attempt_algo_id, fold_k, facts)
+    }
+
+    /// **ADR-0073 SA-1's fold width at a draw slot** — the ONE place the fence is resolved, so a
+    /// beacon two parties derive differently is unrepresentable rather than merely unlikely.
+    ///
+    /// `1` when the fence is dormant (every shipped preset) — the pre-SA-1 rule, and the width at
+    /// which the derivation returns byte-identical facts. Resolved at the SLOT and not at the
+    /// candidate's own DAA: the slot is `final_daa + receipt_maturity_daa` of the claim, a value
+    /// both the producer at virtual and the validator at the spending block read identically,
+    /// while their own heights differ by construction.
+    fn palw_beacon_fold_k_at(&self, slot: u64) -> u8 {
+        self.palw_beacon_fold.filter(|fold| fold.activation.is_active(slot)).map_or(1, |fold| fold.k)
     }
 
     /// ADR-0042 Unit C step 3: this chain block's PALW consensus objects, in the block's own
@@ -5949,7 +6004,7 @@ impl VirtualStateProcessor {
             };
             // A registry too small to seat a panel yields nothing rather than a short one: a
             // partial jury is `derive_panel_v2`'s fail-closed refusal, and it stays that.
-            let Ok(seats) = kaspa_consensus_core::palw_panel_v2::derive_panel_v2_with_maturity(
+            let Ok(seats) = kaspa_consensus_core::palw_panel_v2::derive_panel_v2_with_capability_proof(
                 state,
                 panel_params,
                 claim_id,
@@ -5961,6 +6016,8 @@ impl VirtualStateProcessor {
                     anchor.anchor_daa,
                     self.palw_bond_maturity_at(anchor.anchor_daa),
                 ),
+                // ADR-0071 SA-3, from the same anchor as the acceptance layer's sibling call.
+                self.palw_capability_bound_at(anchor.anchor_daa),
             ) else {
                 continue;
             };
@@ -11351,13 +11408,14 @@ impl VirtualStateProcessor {
                 // registers — it creates no claim, so there is nothing for a carve to attach to.
                 subsidy: 0,
             };
-            let (genesis_state, delta) = kaspa_consensus_core::palw_state_v2::apply_palw_transition_v2_with_verdict_policy(
+            let (genesis_state, delta) = kaspa_consensus_core::palw_state_v2::apply_palw_transition_v2_with_policies(
                 &kaspa_consensus_core::palw_state_v2::PalwChainStateV2::genesis(),
                 state_params,
                 &point,
                 &objects,
                 None,
                 self.palw_unavailable_abstains_at(self.genesis.daa_score),
+                self.palw_capability_bound_at(self.genesis.daa_score),
             )
             .expect("the bundle's genesis registrations must apply — `validate_palw_v2` ran them at construction");
             let mut batch = WriteBatch::default();

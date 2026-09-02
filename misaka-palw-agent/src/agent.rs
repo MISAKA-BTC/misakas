@@ -41,11 +41,18 @@ use kaspa_consensus_core::palw_v2::{
     job_request_hash_v2, read_framed, write_framed,
 };
 use kaspa_hashes::Hash64;
+use misaka_palw::host_security::{
+    Confinement, ConfinementBackend, PALW_WORKER_ENV_ALLOWLIST, arm_memory_ceiling, attach_to_cgroup, establish_confinement,
+    harden_worker_command, resident_bytes, worker_max_resident_bytes, worker_working_dir,
+};
 
 const DEDUPE_WINDOW: usize = 1024;
 const STDERR_TAIL_BYTES: usize = 4096;
 const MANIFEST_PROBE_TIMEOUT: Duration = Duration::from_secs(60);
 const SELFTEST_TIMEOUT: Duration = Duration::from_secs(1800);
+/// How often the supervision loop asks what the child is resident for. Cheap on Linux (one
+/// `/proc` read); a subprocess on macOS, which is why it is not every wake-up.
+const RESIDENT_POLL: Duration = Duration::from_millis(500);
 
 fn die(msg: String) -> ! {
     eprintln!("[palw-agent] {msg}");
@@ -65,6 +72,15 @@ struct AgentConfig {
     worst_case_job_ms: u64,
     allow_ungated: bool,
     max_conns: usize,
+    /// ADR-0079 Decision 5: an explicit working directory for every worker child, which is
+    /// neither the operator's home nor the node's datadir.
+    workdir: PathBuf,
+    /// ADR-0079 Decision 6 (as corrected by SA-1): the per-job RESIDENT ceiling. Exceeding it is
+    /// a `JobFailed`; the supervisor keeps its socket, its slot and its seat.
+    max_resident_bytes: u64,
+    /// ADR-0079 Decision 5's platform half: the backend that was installed AND proved its own
+    /// denials. `none` when there is none, which is a value and not a silence.
+    confinement: Confinement,
 }
 
 fn parse_args() -> AgentConfig {
@@ -75,6 +91,8 @@ fn parse_args() -> AgentConfig {
     let mut worst_case_job_ms: u64 = 60_000;
     let mut allow_ungated = false;
     let mut max_conns: usize = 8;
+    let mut workdir: Option<String> = None;
+    let mut max_resident_bytes: Option<u64> = None;
     let mut i = 1;
     while i < args.len() {
         match args[i].as_str() {
@@ -101,12 +119,32 @@ fn parse_args() -> AgentConfig {
                 i += 1;
                 max_conns = args.get(i).and_then(|s| s.parse().ok()).unwrap_or_else(|| die("--max-conns needs a number".into()));
             }
+            "--workdir" => {
+                i += 1;
+                workdir = args.get(i).cloned();
+            }
+            "--worker-max-resident-bytes" => {
+                i += 1;
+                max_resident_bytes = Some(
+                    args.get(i)
+                        .and_then(|s| s.parse().ok())
+                        .unwrap_or_else(|| die("--worker-max-resident-bytes needs a number".into())),
+                );
+            }
             other => die(format!("unknown argument {other:?}")),
         }
         i += 1;
     }
     let listen = listen.unwrap_or_else(|| die("--listen <socket path> is required".into()));
     let worker = worker.unwrap_or_else(|| die("--worker <palw-worker path> is required".into()));
+    if let Some(dir) = &workdir {
+        // SAFETY: single-threaded argument parsing, before any spawn or thread exists.
+        unsafe { std::env::set_var(misaka_palw::host_security::PALW_WORKER_WORKDIR_ENV, dir) };
+    }
+    let workdir = match worker_working_dir(None) {
+        Ok(dir) => dir,
+        Err(e) => die(e),
+    };
     AgentConfig {
         listen: PathBuf::from(listen),
         worker: PathBuf::from(worker),
@@ -114,6 +152,11 @@ fn parse_args() -> AgentConfig {
         worst_case_job_ms,
         allow_ungated,
         max_conns: max_conns.clamp(1, 64),
+        workdir,
+        max_resident_bytes: max_resident_bytes.filter(|v| *v > 0).unwrap_or_else(worker_max_resident_bytes),
+        // Set at boot in `run`, once the notes can be printed. A config built here would have to
+        // run the drill before the log exists.
+        confinement: Confinement::none(),
     }
 }
 
@@ -137,7 +180,12 @@ struct WorkerIdentity {
     max_context_tokens: u32,
 }
 
-fn run_captured(cmd: &mut Command, timeout: Duration, what: &str) -> (std::process::ExitStatus, Vec<u8>, Vec<u8>) {
+/// Run a worker sub-command to completion under the SAME spawn discipline as a job (ADR-0079
+/// Decision 5): `env_clear()`, the allowlist, the pinned working directory. The manifest probe and
+/// the boot selftest are worker processes too — a discipline that only covers the job spawn is a
+/// discipline with two boot-time holes in it.
+fn run_captured(cmd: &mut Command, workdir: &Path, timeout: Duration, what: &str) -> (std::process::ExitStatus, Vec<u8>, Vec<u8>) {
+    harden_worker_command(cmd, workdir);
     let mut child = cmd
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -184,8 +232,12 @@ fn manifest_hash64(doc: &serde_json::Value, key: &str) -> Hash64 {
 }
 
 fn probe_worker_identity(cfg: &AgentConfig) -> WorkerIdentity {
-    let (status, stdout, stderr) =
-        run_captured(Command::new(&cfg.worker).args(["--mode", "v2-manifest"]), MANIFEST_PROBE_TIMEOUT, "worker v2-manifest probe");
+    let (status, stdout, stderr) = run_captured(
+        cfg.confinement.command(&cfg.worker).args(["--mode", "v2-manifest"]),
+        &cfg.workdir,
+        MANIFEST_PROBE_TIMEOUT,
+        "worker v2-manifest probe",
+    );
     if !status.success() {
         die(format!("worker v2-manifest probe failed: {}", String::from_utf8_lossy(&stderr)));
     }
@@ -362,6 +414,65 @@ fn handle_job(state: &AgentState, envelope: PalwJobEnvelopeV2) -> PalwAgentRespo
     run_worker_job(state, &envelope)
 }
 
+/// Why the supervision loop stopped waiting. Every arm but `Exited` has already killed and reaped
+/// the child: the supervisor decides how a job ends, and a job that ends any of these ways ends
+/// as a `JobFailed`.
+#[derive(Debug)]
+enum SupervisionOutcome {
+    Exited(std::process::ExitStatus),
+    Timeout,
+    /// ADR-0079 Decision 6, corrected by SA-1: the ceiling measures RESIDENT bytes, not address
+    /// space — the hybrid class maps a 33 GiB artifact and an address-space cap would kill it
+    /// while it was still mapping.
+    MemoryCeiling {
+        observed: u64,
+        limit: u64,
+        measure: misaka_palw::host_security::ResidentMeasure,
+    },
+    WaitFailed(String),
+}
+
+/// Wait for a worker child under BOTH ceilings — the wall-clock deadline the supervisor already
+/// owned, and the resident-memory ceiling ADR-0079 Decision 6 adds.
+///
+/// Kept a free function taking a `Child` so a test can drive it with an ordinary process: the
+/// property under test is "the supervisor kills and survives", and that property does not need a
+/// model to be true.
+fn supervise_child(child: &mut std::process::Child, deadline: Duration, max_resident: u64) -> SupervisionOutcome {
+    let started = Instant::now();
+    let mut last_probe = Instant::now();
+    let pid = child.id();
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return SupervisionOutcome::Exited(status),
+            Ok(None) => {
+                if started.elapsed() > deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return SupervisionOutcome::Timeout;
+                }
+                if max_resident > 0 && last_probe.elapsed() >= RESIDENT_POLL {
+                    last_probe = Instant::now();
+                    let (observed, measure) = resident_bytes(pid);
+                    if let Some(observed) = observed
+                        && observed > max_resident
+                    {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return SupervisionOutcome::MemoryCeiling { observed, limit: max_resident, measure };
+                    }
+                }
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return SupervisionOutcome::WaitFailed(e.to_string());
+            }
+        }
+    }
+}
+
 fn run_worker_job(state: &AgentState, envelope: &PalwJobEnvelopeV2) -> PalwAgentResponseV1 {
     // Canonical re-encoding: what the worker hashes as its request is exactly what any client
     // can recompute from the envelope alone (Borsh is deterministic).
@@ -371,16 +482,19 @@ fn run_worker_job(state: &AgentState, envelope: &PalwJobEnvelopeV2) -> PalwAgent
     };
     let expected_request_hash = job_request_hash_v2(&payload);
 
-    let mut child = match Command::new(&state.cfg.worker)
-        .args(["--mode", "v2-job"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-    {
+    // ADR-0079 Decision 5/6: the job process starts with nothing the arithmetic does not need,
+    // in a directory that is not the operator's, under a resident ceiling. The ceiling is armed
+    // BEFORE the spawn so a delegated cgroup already carries `memory.max` when the child lands
+    // in it.
+    let ceiling_backend = arm_memory_ceiling(state.cfg.max_resident_bytes);
+    let mut command = state.cfg.confinement.command(&state.cfg.worker);
+    command.args(["--mode", "v2-job"]);
+    harden_worker_command(&mut command, &state.cfg.workdir);
+    let mut child = match command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn() {
         Ok(child) => child,
         Err(e) => return failed(state, "spawn", format!("cannot spawn the worker: {e}")),
     };
+    attach_to_cgroup(&ceiling_backend, child.id());
 
     // One frame in, then EOF: the worker treats trailing bytes as an error, and an open stdin
     // as a hang. Drain both pipes on threads BEFORE waiting (llama's model-load stderr alone
@@ -415,27 +529,33 @@ fn run_worker_job(state: &AgentState, envelope: &PalwJobEnvelopeV2) -> PalwAgent
         ceiling = ceiling.min(Duration::from_millis(remaining_ms));
     }
     let started = Instant::now();
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) => {
-                if started.elapsed() > ceiling {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    state.timeouts_total.fetch_add(1, Ordering::Relaxed);
-                    // The drain threads see EOF once the process dies; their buffers are dropped.
-                    let _ = out_thread.join();
-                    let _ = err_thread.join();
-                    return failed(state, "timeout", format!("worker exceeded {ceiling:?}; killed, partial output discarded"));
-                }
-                std::thread::sleep(Duration::from_millis(25));
-            }
-            Err(e) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return failed(state, "wait", e.to_string());
-            }
+    let status = match supervise_child(&mut child, ceiling, state.cfg.max_resident_bytes) {
+        SupervisionOutcome::Exited(status) => status,
+        SupervisionOutcome::Timeout => {
+            state.timeouts_total.fetch_add(1, Ordering::Relaxed);
+            // The drain threads see EOF once the process dies; their buffers are dropped.
+            let _ = out_thread.join();
+            let _ = err_thread.join();
+            return failed(state, "timeout", format!("worker exceeded {ceiling:?}; killed, partial output discarded"));
         }
+        SupervisionOutcome::MemoryCeiling { observed, limit, measure } => {
+            let _ = out_thread.join();
+            let _ = err_thread.join();
+            // ADR-0079 Decision 6 / S9: a FAILED JOB, never a dead node. The slot is released by
+            // the caller's guard, the socket is still bound, and this agent answers the next
+            // request. An OOM killer reaping the node instead would be an availability attack
+            // that costs the attacker one prompt.
+            return failed(
+                state,
+                "memory_ceiling",
+                format!(
+                    "worker resident {observed} bytes exceeded the {limit}-byte ceiling ({} via {}); killed, partial output discarded",
+                    ceiling_backend.name(),
+                    measure.name()
+                ),
+            );
+        }
+        SupervisionOutcome::WaitFailed(e) => return failed(state, "wait", e),
     };
     let stdout_bytes = out_thread.join().unwrap_or_default();
     let stderr_bytes = err_thread.join().unwrap_or_default();
@@ -575,9 +695,40 @@ fn bind_socket(path: &Path) -> UnixListener {
 }
 
 pub fn run() {
-    let cfg = parse_args();
+    let mut cfg = parse_args();
     if !cfg.worker.is_file() {
         die(format!("worker binary not found at {}", cfg.worker.display()));
+    }
+
+    // ADR-0079 Decision 5: the boot line prints the DELIVERED set — what the child actually gets,
+    // not what someone meant to configure — in the same line that prints the backend and the
+    // ceiling. An operator who reads this line knows the posture without trusting a promise.
+    // The backend installs and PROVES itself here, before the first worker spawn — a configured
+    // backend that failed its own drill comes back `none` with the reason, and never reaches the
+    // report as the value someone typed (S12).
+    let (confinement, notes) = establish_confinement(&cfg.workdir, std::slice::from_ref(&cfg.workdir));
+    for note in &notes {
+        eprintln!("[palw-agent] confinement: {note}");
+    }
+    let backend = confinement.backend();
+    cfg.confinement = confinement;
+    let delivered = misaka_palw::host_security::worker_environment();
+    eprintln!(
+        "[palw-agent] confinement backend {} | worker env ({} of {} allowlisted): {} | workdir {} | resident ceiling {} bytes ({})",
+        backend.name(),
+        delivered.vars.len(),
+        PALW_WORKER_ENV_ALLOWLIST.len() + misaka_palw::host_security::PALW_WORKER_ENV_PINNED.len(),
+        delivered.vars.keys().cloned().collect::<Vec<_>>().join(","),
+        cfg.workdir.display(),
+        cfg.max_resident_bytes,
+        arm_memory_ceiling(cfg.max_resident_bytes).name(),
+    );
+    if backend == ConfinementBackend::None {
+        eprintln!(
+            "[palw-agent] NOTE: no platform confinement backend is in force on this host. The environment \
+             discipline above still applies; ADR-0079 Decision 10 is what refuses to let such a host be a \
+             PUBLIC gateway entrance."
+        );
     }
 
     eprintln!("[palw-agent] probing worker identity ({})", cfg.worker.display());
@@ -591,8 +742,12 @@ pub fn run() {
 
     let (quarantined, selftest_passed) = if identity.golden_registered {
         eprintln!("[palw-agent] running the boot golden selftest (this loads the model per vector)");
-        let (status, _stdout, stderr) =
-            run_captured(Command::new(&cfg.worker).args(["--mode", "v2-selftest"]), SELFTEST_TIMEOUT, "worker v2-selftest");
+        let (status, _stdout, stderr) = run_captured(
+            cfg.confinement.command(&cfg.worker).args(["--mode", "v2-selftest"]),
+            &cfg.workdir,
+            SELFTEST_TIMEOUT,
+            "worker v2-selftest",
+        );
         if status.success() {
             eprintln!("[palw-agent] golden selftest PASSED");
             (false, true)
@@ -650,5 +805,163 @@ pub fn run() {
             handle_connection(&state, stream);
             state.conns.fetch_sub(1, Ordering::AcqRel);
         });
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// ADR-0079 Decisions 5 and 6 — the supervisor's own assertions
+// ---------------------------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_config(workdir: PathBuf, max_resident_bytes: u64) -> AgentConfig {
+        AgentConfig {
+            listen: workdir.join("agent.sock"),
+            worker: PathBuf::from("/nonexistent/palw-worker"),
+            job_timeout: Duration::from_secs(5),
+            worst_case_job_ms: 1,
+            allow_ungated: true,
+            max_conns: 8,
+            workdir,
+            max_resident_bytes,
+            confinement: Confinement::none(),
+        }
+    }
+
+    fn test_state(cfg: AgentConfig) -> AgentState {
+        AgentState {
+            cfg,
+            identity: WorkerIdentity {
+                runtime_manifest_hash: Hash64::default(),
+                model_profile_id: Hash64::default(),
+                runtime_class_id: Hash64::default(),
+                shape_profile_id: Hash64::default(),
+                trace_scheme_id: Hash64::default(),
+                cu_ruleset_id: Hash64::default(),
+                tokenizer_id: Hash64::default(),
+                golden_vector_root: Hash64::default(),
+                golden_registered: false,
+                max_context_tokens: 4096,
+            },
+            quarantined: false,
+            selftest_passed: false,
+            job_slot: Mutex::new(()),
+            recent_jobs: Mutex::new((VecDeque::new(), HashSet::new())),
+            conns: AtomicUsize::new(0),
+            jobs_total: AtomicU64::new(0),
+            jobs_ok: AtomicU64::new(0),
+            jobs_rejected: AtomicU64::new(0),
+            jobs_failed: AtomicU64::new(0),
+            timeouts_total: AtomicU64::new(0),
+        }
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("palw-agent-test-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// **ADR-0079 S2, through the supervisor's own spawn helper.** `run_captured` is the path the
+    /// boot manifest probe and the boot selftest take; this asserts what a child launched through
+    /// it ACTUALLY receives, and asserts it by EQUALITY — a "contains" test passes on a spawn that
+    /// also forwards the operator's SSH agent socket.
+    #[test]
+    fn a_worker_child_receives_exactly_the_allowlist() {
+        let Some(env_bin) = ["/usr/bin/env", "/bin/env"].iter().map(PathBuf::from).find(|p| p.is_file()) else {
+            eprintln!("no /usr/bin/env on this host — skipping the delivered-set assertion");
+            return;
+        };
+        // SAFETY: set before this test spawns anything; the harness runs tests in threads, and
+        // these names are only read by this module's own environment builder.
+        unsafe {
+            std::env::set_var("SSH_AUTH_SOCK", "/private/tmp/must-not-be-inherited");
+            std::env::set_var("MISAKA_PALW_GGUF", "/srv/models/pinned.gguf");
+        }
+        let workdir = scratch("env");
+        let (status, stdout, stderr) = run_captured(&mut Command::new(&env_bin), &workdir, Duration::from_secs(20), "env probe");
+        assert!(status.success(), "env exited {status}: {}", String::from_utf8_lossy(&stderr));
+
+        let mut got: Vec<String> = String::from_utf8_lossy(&stdout).lines().map(str::to_string).collect();
+        got.sort();
+        let mut want = misaka_palw::host_security::worker_environment().as_env_lines();
+        want.sort();
+        assert_eq!(got, want, "the child's environment must EQUAL the delivered allowlist, not contain it");
+
+        assert!(!got.iter().any(|l| l.starts_with("SSH_AUTH_SOCK=")), "the operator's SSH agent reached the model process");
+        assert!(!got.iter().any(|l| l.starts_with("PATH=")), "PATH left the allowlist in ADR-0079 SA-4");
+        for line in &got {
+            let name = line.split('=').next().unwrap_or_default();
+            let allowed = PALW_WORKER_ENV_ALLOWLIST.contains(&name)
+                || misaka_palw::host_security::PALW_WORKER_ENV_PINNED.iter().any(|(n, _)| *n == name);
+            assert!(allowed, "{name} is not on the in-tree allowlist and must not be delivered");
+        }
+        std::fs::remove_dir_all(&workdir).ok();
+    }
+
+    /// **ADR-0079 S9.** A child over the resident ceiling is killed — and the supervisor is still
+    /// there afterwards, still supervising, still answering. A ceiling of one byte is a real
+    /// overshoot for any real process, so this exercises the real measurement and the real kill
+    /// rather than a mocked one.
+    #[test]
+    fn a_job_over_the_resident_ceiling_is_a_failed_job_and_the_supervisor_survives() {
+        let (_, measure) = resident_bytes(std::process::id());
+        if measure == misaka_palw::host_security::ResidentMeasure::Unavailable {
+            eprintln!("no resident measurement on this platform — the ceiling reports `none` honestly and cannot bind");
+            return;
+        }
+
+        let mut hog = Command::new("/bin/sh")
+            .args(["-c", "sleep 30"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn a child to supervise");
+        let outcome = supervise_child(&mut hog, Duration::from_secs(20), 1);
+        match outcome {
+            SupervisionOutcome::MemoryCeiling { observed, limit, .. } => {
+                assert_eq!(limit, 1);
+                assert!(observed > 1, "a live process is resident for more than one byte");
+            }
+            other => panic!("expected the ceiling to bind, got {other:?}"),
+        }
+
+        // ...and the supervisor keeps serving. A second job runs to completion through the same
+        // loop: the kill above was the JOB's end, not the node's.
+        let mut next = Command::new("/bin/sh")
+            .args(["-c", "exit 0"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn the next job");
+        match supervise_child(&mut next, Duration::from_secs(20), u64::MAX) {
+            SupervisionOutcome::Exited(status) => assert!(status.success(), "the next job must run normally"),
+            other => panic!("the supervisor stopped serving after a ceiling kill: {other:?}"),
+        }
+
+        // The agent's own state: a failed job is counted, the slot is free, and health is Ready —
+        // the node keeps its tip, its peers and its seat (S9's second half).
+        let workdir = scratch("ceiling");
+        let state = test_state(test_config(workdir.clone(), 1));
+        let response = failed(&state, "memory_ceiling", "resident ceiling exceeded".into());
+        assert!(matches!(response, PalwAgentResponseV1::JobFailed { .. }), "a ceiling overshoot is a JobFailed");
+        assert_eq!(state.jobs_failed.load(Ordering::Relaxed), 1);
+        assert_eq!(state.health().state, PalwAgentStateV1::Ready, "the supervisor is still ready to serve");
+        std::fs::remove_dir_all(&workdir).ok();
+    }
+
+    /// The working directory a worker is given is neither the operator's home nor a path it
+    /// inherited by accident, and it exists before the first spawn.
+    #[test]
+    fn the_worker_working_directory_is_explicit_and_not_the_operators_home() {
+        let dir = worker_working_dir(None).expect("a workdir");
+        assert!(dir.is_dir(), "{} must exist before the first spawn", dir.display());
+        if let Some(home) = std::env::var_os("HOME") {
+            assert_ne!(dir, PathBuf::from(home), "the worker must not run in the operator's home");
+        }
     }
 }

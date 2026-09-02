@@ -1,8 +1,8 @@
 //! Deriving a beacon fact from the chain (ADR-0044 Decision 4, Unit C item 4).
 //!
-//! A receipt block's lottery is drawn from a **beacon**: the first attempt-class chain block at
-//! or after the claim's draw slot. The whole safety argument of the free-prompt lane rests on
-//! that value being a chain fact rather than a producer's assertion —
+//! A receipt block's lottery is drawn from a **beacon**: the first `k` attempt-class chain blocks
+//! at or after the claim's draw slot, folded. The whole safety argument of the free-prompt lane
+//! rests on that value being a chain fact rather than a producer's assertion —
 //!
 //! * the beacon's hash is downstream of an attempt's commitment root, which is downstream of a
 //!   fresh inference, so re-rolling it costs one inference per sample;
@@ -11,23 +11,46 @@
 //! * and the fact is derived by the VALIDATOR from its own candidate chain, so a spending block
 //!   that names a different block is refused rather than believed.
 //!
+//! **ADR-0073 SA-1: why `k` and not one.** Re-rolling the beacon costs an inference, but
+//! WITHHOLDING it costs only that block's subsidy — a producer whose own block would be the beacon
+//! can simply drop it when the draw is unfavourable to its own pending claims, and try again with
+//! the next one. Today the receipt lane is weightless so the stake on that single bit is small;
+//! ADR-0073 Phase ④ gives receipt blocks chain position and share, which multiplies it. Folding
+//! the first `k ≥ 3` attempt blocks means a producer holding attempt share `p` must hold ALL `k`
+//! to choose the draw: `p^k` instead of `p`. Nothing else about the derivation moves — the walk is
+//! still the validator's own, still descending, still bounded, and the fold is over blocks that
+//! each already cost an inference.
+//!
+//! `k = 1` is the pre-SA-1 rule and stays byte-identical: at one block the "fold" is the IDENTITY,
+//! not a one-element digest, so a network with the fence off derives exactly the values it always
+//! did. `k` reaches here as an argument rather than a constant precisely because two builds that
+//! disagreed about it in silence would derive different draws from one chain — it is a fence's
+//! companion value in [`crate::config::params::PalwBeaconFoldV1`], inside `consensus_params_id`.
+//!
 //! This module is the derivation as a pure function over an iterator of chain blocks, so the
 //! pipeline supplies the walk and the rule lives in one place. The pipeline's job is to hand over
 //! `(block, daa_score, algo_id)` for chain blocks in DESCENDING order from the candidate — which
-//! is what `default_backward_chain_iterator` already produces — and this decides which one is the
-//! beacon.
+//! is what `default_backward_chain_iterator` already produces — and this decides which ones are
+//! the beacon.
 //!
 //! # Why descending, and why a bound
 //!
 //! Walking down from the candidate is the only direction a validator can walk cheaply (the chain
-//! is a parent list). The first attempt block at or after the slot is therefore the LAST one seen
-//! while walking down through the region `daa >= slot`, and the walk stops as soon as it crosses
-//! below the slot — at which point the block it just saw is the predecessor witness the fact
-//! carries. A caller must still bound the walk (the use window does that in practice); an
-//! unbounded scan on a peer-supplied claim would be a denial of service.
+//! is a parent list). The first `k` attempt blocks at or after the slot are therefore the LAST `k`
+//! seen while walking down through the region `daa >= slot`, and the walk stops as soon as it
+//! crosses below the slot — at which point the block it just saw is the predecessor witness the
+//! fact carries. A caller must still bound the walk (the use window does that in practice); an
+//! unbounded scan on a peer-supplied claim would be a denial of service. The `k` blocks are held
+//! in a ring of capacity `k`, so the memory the walk costs is the rule's own width and not the
+//! chain's length.
 
 use crate::Hash64;
-use crate::palw_freeprompt_v3::PalwBeaconFactV3;
+use crate::palw_freeprompt_v3::{PalwBeaconFactV3, fp_beacon_fold_v3};
+
+/// **ADR-0073 SA-1's floor.** A fold narrower than three blocks does not bound the withholding
+/// bias the amendment is about, so an armed fence naming less is refused at construction
+/// (`Params::validate_palw_v2`) rather than shipped as a rule that reads like one and is not.
+pub const PALW_BEACON_FOLD_MIN_K_V1: u8 = 3;
 
 /// One chain block, as the derivation reads it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -40,10 +63,72 @@ pub struct PalwChainBlockFactV3 {
 
 #[derive(thiserror::Error, Debug, Clone, PartialEq, Eq)]
 pub enum PalwBeaconDeriveV3Error {
-    #[error("no attempt-class chain block at or after slot {slot} within the walked range — the draw has not happened yet")]
-    NoBeaconYet { slot: u64 },
+    #[error(
+        "only {found} of the {needed} attempt-class chain blocks the fold needs exist at or after slot {slot} within the walked range — the draw has not happened yet"
+    )]
+    NoBeaconYet { slot: u64, needed: u8, found: u8 },
     #[error("the walk was exhausted before reaching slot {slot}; it must extend below the slot to witness the predecessor")]
     WalkTooShort { slot: u64 },
+}
+
+/// The last `k` attempt blocks the descending walk has seen at or above the slot — which, because
+/// the walk descends, are the FIRST `k` at or after it.
+///
+/// A ring rather than a list: the region above the slot is unbounded in principle, and a
+/// derivation that collected all of it would let a peer-supplied claim size a node's allocation.
+struct FirstKDescending {
+    k: usize,
+    /// In walk (descending) order; the front is the oldest push, i.e. the highest DAA.
+    seen: Vec<PalwChainBlockFactV3>,
+}
+
+impl FirstKDescending {
+    fn new(k: usize) -> Self {
+        Self { k, seen: Vec::with_capacity(k) }
+    }
+
+    fn push(&mut self, fact: PalwChainBlockFactV3) {
+        if self.seen.len() == self.k {
+            // Evicts the highest-DAA entry: it is further from the slot than everything still
+            // held, so it can only be the (k+1)-th or later "first at or after".
+            self.seen.remove(0);
+        }
+        self.seen.push(fact);
+    }
+
+    fn found(&self) -> u8 {
+        self.seen.len().min(u8::MAX as usize) as u8
+    }
+
+    /// `(beacon_block, beacon_daa)` once `k` blocks are in hand, `None` while fewer are.
+    ///
+    /// `beacon_daa` is the `k`-th block's — the height at which the draw becomes DETERMINED. The
+    /// use window has to start there: a window opened at the first of the `k` would license spends
+    /// against a draw that did not exist yet.
+    fn fold(&self) -> Option<(Hash64, u64)> {
+        if self.seen.len() < self.k {
+            return None;
+        }
+        // Ascending chain order — the order the blocks were produced in, and the canonical one for
+        // the fold (see `fp_beacon_fold_v3`).
+        let ascending: Vec<PalwChainBlockFactV3> = self.seen.iter().rev().copied().collect();
+        let kth = *ascending.last().expect("k >= 1 and the ring is full");
+        // **`k = 1` is the IDENTITY, not a one-element digest.** The pre-SA-1 rule's bytes are what
+        // every fence-off network derives, and a digest here would change them silently.
+        let beacon_block = if self.k == 1 {
+            kth.block
+        } else {
+            let hashes: Vec<Hash64> = ascending.iter().map(|fact| fact.block).collect();
+            fp_beacon_fold_v3(&hashes)
+        };
+        Some((beacon_block, kth.daa_score))
+    }
+}
+
+/// Normalise a caller's `fold_k` to a width the ring can hold. `0` is the pre-SA-1 rule, not an
+/// empty fold: a fence that resolved to nothing must derive what an unfenced network derives.
+fn fold_width(fold_k: u8) -> usize {
+    fold_k.max(1) as usize
 }
 
 /// Derive the beacon fact for `slot` from chain blocks in DESCENDING DAA order.
@@ -51,25 +136,35 @@ pub enum PalwBeaconDeriveV3Error {
 /// `attempt_algo_id` is the network's attempt-lane id (the bundle's `algorithm_id`), passed in
 /// rather than hard-coded so a network that is not in V2 mode cannot accidentally match.
 ///
+/// `fold_k` is ADR-0073 SA-1's width, resolved by the caller from the fence at the DRAW'S OWN SLOT
+/// (`Params::palw_beacon_fold`). `1` is the pre-SA-1 rule and derives byte-identical facts.
+///
 /// The walk must continue past the slot: the fact carries `prev_attempt_daa` — the last
 /// attempt-class block strictly BELOW the slot — and that witness is what makes "first at or
 /// after" checkable by someone who did not do the walk. A walk that stops at the slot cannot
 /// produce it, and this returns `WalkTooShort` rather than inventing a zero.
+///
+/// **The two refusals are different answers and stay different.** `WalkTooShort` says the caller
+/// stopped looking; `NoBeaconYet` says the chain has not produced the fold yet — and with `k`
+/// blocks required, "fewer than `k` attempt blocks exist at or after the slot" IS the not-drawn-yet
+/// case. It reports how many it found, so an operator can tell "one short" from "none at all".
 pub fn derive_beacon_fact_v3<I>(
     slot: u64,
     attempt_algo_id: u8,
+    fold_k: u8,
     descending_chain: I,
 ) -> Result<PalwBeaconFactV3, PalwBeaconDeriveV3Error>
 where
     I: IntoIterator<Item = PalwChainBlockFactV3>,
 {
-    // The last attempt block seen while still at or above the slot is the FIRST one at or after
+    // The last k attempt blocks seen while still at or above the slot are the FIRST k at or after
     // it, because the walk descends.
-    let mut candidate: Option<PalwChainBlockFactV3> = None;
+    let needed = fold_width(fold_k);
+    let mut ring = FirstKDescending::new(needed);
     for fact in descending_chain {
         if fact.daa_score >= slot {
             if fact.pow_algo_id == attempt_algo_id {
-                candidate = Some(fact);
+                ring.push(fact);
             }
             continue;
         }
@@ -83,8 +178,9 @@ where
             // caller bounded.
             continue;
         };
-        let beacon = candidate.ok_or(PalwBeaconDeriveV3Error::NoBeaconYet { slot })?;
-        return Ok(PalwBeaconFactV3 { beacon_block: beacon.block, beacon_daa: beacon.daa_score, prev_attempt_daa });
+        let (beacon_block, beacon_daa) =
+            ring.fold().ok_or(PalwBeaconDeriveV3Error::NoBeaconYet { slot, needed: needed as u8, found: ring.found() })?;
+        return Ok(PalwBeaconFactV3 { beacon_block, beacon_daa, prev_attempt_daa });
     }
     // The iterator ran out. If it ran out BELOW the slot we simply never met an attempt block
     // there, which on a young chain means "none before the slot" — but this function cannot tell
@@ -98,30 +194,29 @@ where
 pub fn derive_beacon_fact_to_genesis_v3<I>(
     slot: u64,
     attempt_algo_id: u8,
+    fold_k: u8,
     descending_chain_to_genesis: I,
 ) -> Result<PalwBeaconFactV3, PalwBeaconDeriveV3Error>
 where
     I: IntoIterator<Item = PalwChainBlockFactV3>,
 {
-    let mut candidate: Option<PalwChainBlockFactV3> = None;
+    let needed = fold_width(fold_k);
+    let mut ring = FirstKDescending::new(needed);
+    let not_yet = |ring: &FirstKDescending| PalwBeaconDeriveV3Error::NoBeaconYet { slot, needed: needed as u8, found: ring.found() };
     for fact in descending_chain_to_genesis {
         if fact.daa_score >= slot {
             if fact.pow_algo_id == attempt_algo_id {
-                candidate = Some(fact);
+                ring.push(fact);
             }
             continue;
         }
         if fact.pow_algo_id == attempt_algo_id {
-            let beacon = candidate.ok_or(PalwBeaconDeriveV3Error::NoBeaconYet { slot })?;
-            return Ok(PalwBeaconFactV3 {
-                beacon_block: beacon.block,
-                beacon_daa: beacon.daa_score,
-                prev_attempt_daa: fact.daa_score,
-            });
+            let (beacon_block, beacon_daa) = ring.fold().ok_or_else(|| not_yet(&ring))?;
+            return Ok(PalwBeaconFactV3 { beacon_block, beacon_daa, prev_attempt_daa: fact.daa_score });
         }
     }
-    let beacon = candidate.ok_or(PalwBeaconDeriveV3Error::NoBeaconYet { slot })?;
-    Ok(PalwBeaconFactV3 { beacon_block: beacon.block, beacon_daa: beacon.daa_score, prev_attempt_daa: 0 })
+    let (beacon_block, beacon_daa) = ring.fold().ok_or_else(|| not_yet(&ring))?;
+    Ok(PalwBeaconFactV3 { beacon_block, beacon_daa, prev_attempt_daa: 0 })
 }
 
 #[cfg(test)]
@@ -132,6 +227,10 @@ mod tests {
 
     const ATTEMPT: u8 = POW_ALGO_ID_PALW_COMMITTED_V2;
     const RECEIPT: u8 = POW_ALGO_ID_PALW_RECEIPT_V3;
+    /// The fence-off width: the pre-SA-1 single-block beacon.
+    const NO_FOLD: u8 = 1;
+    /// The armed width every SA-1 case below uses — the amendment's floor.
+    const K3: u8 = PALW_BEACON_FOLD_MIN_K_V1;
 
     fn h64(v: u64) -> Hash64 {
         Hash64::from_u64_word(v)
@@ -151,6 +250,7 @@ mod tests {
         let fact = derive_beacon_fact_v3(
             100,
             ATTEMPT,
+            NO_FOLD,
             chain(&[(140, ATTEMPT), (130, RECEIPT), (120, ATTEMPT), (110, RECEIPT), (95, ATTEMPT)]),
         )
         .unwrap();
@@ -159,7 +259,7 @@ mod tests {
         validate_beacon_fact_v3(100, &fact).expect("what the chain derived, the validator accepts");
 
         // A block exactly AT the slot is the beacon — the slot's own score is inside the region.
-        let fact = derive_beacon_fact_v3(100, ATTEMPT, chain(&[(140, ATTEMPT), (100, ATTEMPT), (90, ATTEMPT)])).unwrap();
+        let fact = derive_beacon_fact_v3(100, ATTEMPT, NO_FOLD, chain(&[(140, ATTEMPT), (100, ATTEMPT), (90, ATTEMPT)])).unwrap();
         assert_eq!((fact.beacon_daa, fact.prev_attempt_daa), (100, 90));
         validate_beacon_fact_v3(100, &fact).unwrap();
     }
@@ -169,12 +269,14 @@ mod tests {
     #[test]
     fn receipt_blocks_are_never_beacons() {
         let err =
-            derive_beacon_fact_v3(100, ATTEMPT, chain(&[(160, RECEIPT), (150, RECEIPT), (140, RECEIPT), (95, ATTEMPT)])).unwrap_err();
-        assert_eq!(err, PalwBeaconDeriveV3Error::NoBeaconYet { slot: 100 });
+            derive_beacon_fact_v3(100, ATTEMPT, NO_FOLD, chain(&[(160, RECEIPT), (150, RECEIPT), (140, RECEIPT), (95, ATTEMPT)]))
+                .unwrap_err();
+        assert_eq!(err, PalwBeaconDeriveV3Error::NoBeaconYet { slot: 100, needed: 1, found: 0 });
 
         // …and one attempt block among them is the beacon, whatever surrounds it.
         let fact =
-            derive_beacon_fact_v3(100, ATTEMPT, chain(&[(160, RECEIPT), (150, ATTEMPT), (140, RECEIPT), (95, ATTEMPT)])).unwrap();
+            derive_beacon_fact_v3(100, ATTEMPT, NO_FOLD, chain(&[(160, RECEIPT), (150, ATTEMPT), (140, RECEIPT), (95, ATTEMPT)]))
+                .unwrap();
         assert_eq!(fact.beacon_daa, 150);
     }
 
@@ -183,18 +285,18 @@ mod tests {
     /// not look at.
     #[test]
     fn a_truncated_walk_is_named_not_guessed() {
-        let err = derive_beacon_fact_v3(100, ATTEMPT, chain(&[(140, ATTEMPT), (120, ATTEMPT)])).unwrap_err();
+        let err = derive_beacon_fact_v3(100, ATTEMPT, NO_FOLD, chain(&[(140, ATTEMPT), (120, ATTEMPT)])).unwrap_err();
         assert_eq!(err, PalwBeaconDeriveV3Error::WalkTooShort { slot: 100 });
 
         // The to-genesis variant may answer with witness 0, because there the absence IS the fact.
-        let fact = derive_beacon_fact_to_genesis_v3(100, ATTEMPT, chain(&[(140, ATTEMPT), (120, ATTEMPT)])).unwrap();
+        let fact = derive_beacon_fact_to_genesis_v3(100, ATTEMPT, NO_FOLD, chain(&[(140, ATTEMPT), (120, ATTEMPT)])).unwrap();
         assert_eq!((fact.beacon_daa, fact.prev_attempt_daa), (120, 0));
         validate_beacon_fact_v3(100, &fact).unwrap();
 
         // …and it still refuses when there is no beacon at all.
         assert_eq!(
-            derive_beacon_fact_to_genesis_v3(100, ATTEMPT, chain(&[(90, ATTEMPT), (80, ATTEMPT)])).unwrap_err(),
-            PalwBeaconDeriveV3Error::NoBeaconYet { slot: 100 }
+            derive_beacon_fact_to_genesis_v3(100, ATTEMPT, NO_FOLD, chain(&[(90, ATTEMPT), (80, ATTEMPT)])).unwrap_err(),
+            PalwBeaconDeriveV3Error::NoBeaconYet { slot: 100, needed: 1, found: 0 }
         );
     }
 
@@ -210,19 +312,171 @@ mod tests {
         ];
         for shape in shapes {
             for slot in [1u64, 50, 99, 100, 101, 150, 250] {
-                match derive_beacon_fact_v3(slot, ATTEMPT, chain(&shape)) {
-                    Ok(fact) => {
-                        validate_beacon_fact_v3(slot, &fact)
-                            .unwrap_or_else(|e| panic!("derived a fact the validator rejects at slot {slot} on {shape:?}: {e}"));
-                        // And the beacon really is an attempt block from this chain.
-                        assert!(
-                            shape.iter().any(|(daa, algo)| *daa == fact.beacon_daa && *algo == ATTEMPT),
-                            "the beacon must be an attempt block of the walked chain"
-                        );
+                // Both regimes: a fold-derived fact must satisfy the same validator the
+                // single-block one does, or the fence would ship a fact its own checker rejects.
+                for k in [NO_FOLD, K3] {
+                    match derive_beacon_fact_v3(slot, ATTEMPT, k, chain(&shape)) {
+                        Ok(fact) => {
+                            validate_beacon_fact_v3(slot, &fact).unwrap_or_else(|e| {
+                                panic!("derived a fact the validator rejects at slot {slot} k {k} on {shape:?}: {e}")
+                            });
+                            // And the beacon's DAA really is an attempt block from this chain.
+                            assert!(
+                                shape.iter().any(|(daa, algo)| *daa == fact.beacon_daa && *algo == ATTEMPT),
+                                "the beacon must be an attempt block of the walked chain"
+                            );
+                            if k == NO_FOLD {
+                                assert_eq!(fact.beacon_block, h64(fact.beacon_daa), "at k=1 the fact names the block itself");
+                            }
+                        }
+                        Err(_) => { /* a shape with no beacon in range is a legitimate answer */ }
                     }
-                    Err(_) => { /* a shape with no beacon in range is a legitimate answer */ }
                 }
             }
+        }
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // ADR-0073 SA-1
+    // ---------------------------------------------------------------------------------------
+
+    /// **Fence off is byte-identical.** `k = 1` (and a caller that resolved the fence to nothing)
+    /// derives exactly the fact the pre-SA-1 rule did — the block's OWN hash, not a one-element
+    /// digest of it. This is the property the shipped presets rest on: none of them arm the fence,
+    /// so none of their draws move.
+    #[test]
+    fn with_the_fence_off_the_beacon_is_the_block_itself() {
+        let shape = chain(&[(140, ATTEMPT), (130, RECEIPT), (120, ATTEMPT), (110, RECEIPT), (95, ATTEMPT)]);
+        let one = derive_beacon_fact_v3(100, ATTEMPT, 1, shape.clone()).unwrap();
+        let zero = derive_beacon_fact_v3(100, ATTEMPT, 0, shape.clone()).unwrap();
+        assert_eq!(one, zero, "a fence that resolved to nothing is the pre-SA-1 rule, not an empty fold");
+        assert_eq!(one.beacon_block, h64(120), "the fact names the block, so no golden vector moves");
+        // And it is NOT the one-element fold — the identity arm is what keeps the old bytes.
+        assert_ne!(one.beacon_block, fp_beacon_fold_v3(&[h64(120)]));
+    }
+
+    /// **A slot with only `k − 1` attempt blocks after it has not been drawn yet** — and that is
+    /// `NoBeaconYet`, reporting what it found, never an invented zero or a shorter fold.
+    #[test]
+    fn a_fold_short_of_k_is_not_yet_drawn() {
+        // Two attempt blocks at or after slot 100, and a witness below it. At k=1 this draws.
+        let two_above = chain(&[(120, ATTEMPT), (110, RECEIPT), (105, ATTEMPT), (95, ATTEMPT)]);
+        assert!(derive_beacon_fact_v3(100, ATTEMPT, NO_FOLD, two_above.clone()).is_ok(), "one is enough at k=1");
+        assert_eq!(
+            derive_beacon_fact_v3(100, ATTEMPT, K3, two_above.clone()).unwrap_err(),
+            PalwBeaconDeriveV3Error::NoBeaconYet { slot: 100, needed: 3, found: 2 },
+            "two of three is not drawn yet, and the answer says so"
+        );
+        // The to-genesis walk answers the same way: a full walk that found only two really has
+        // only two, so this is a fact about the chain and not about the walk.
+        assert_eq!(
+            derive_beacon_fact_to_genesis_v3(100, ATTEMPT, K3, two_above).unwrap_err(),
+            PalwBeaconDeriveV3Error::NoBeaconYet { slot: 100, needed: 3, found: 2 }
+        );
+        // The third block completes it.
+        let three_above = chain(&[(130, ATTEMPT), (120, ATTEMPT), (110, RECEIPT), (105, ATTEMPT), (95, ATTEMPT)]);
+        let fact = derive_beacon_fact_v3(100, ATTEMPT, K3, three_above).unwrap();
+        assert_eq!(fact.prev_attempt_daa, 95);
+        // `beacon_daa` is the k-th — the height at which the draw is DETERMINED, so the use window
+        // cannot open against a fold that does not exist yet.
+        assert_eq!(fact.beacon_daa, 130);
+        validate_beacon_fact_v3(100, &fact).unwrap();
+    }
+
+    /// **The fold depends on ALL k blocks**, which is the whole of SA-1: withholding any one of
+    /// them changes the draw, so a producer must control every one of the `k` to choose it.
+    #[test]
+    fn withholding_any_one_of_the_k_moves_the_draw() {
+        // slot 100; the first three attempt blocks at or after it are 105, 120, 130.
+        let full = chain(&[(140, ATTEMPT), (130, ATTEMPT), (120, ATTEMPT), (105, ATTEMPT), (95, ATTEMPT)]);
+        let base = derive_beacon_fact_v3(100, ATTEMPT, K3, full.clone()).unwrap();
+        assert_eq!(base.beacon_daa, 130, "the third of the three, not the fourth: 140 is outside the fold");
+        assert_eq!(
+            base.beacon_block,
+            fp_beacon_fold_v3(&[h64(105), h64(120), h64(130)]),
+            "the fold is over the first k in ASCENDING chain order"
+        );
+
+        // Drop each of the three in turn. Every one of them moves the value.
+        for dropped in [105u64, 120, 130] {
+            let withheld: Vec<PalwChainBlockFactV3> = full.iter().copied().filter(|f| f.daa_score != dropped).collect();
+            let after = derive_beacon_fact_v3(100, ATTEMPT, K3, withheld).unwrap();
+            assert_ne!(after.beacon_block, base.beacon_block, "withholding the block at {dropped} left the draw unchanged");
+        }
+
+        // Order is load-bearing too: the same three blocks in the other order are a different fold,
+        // so a walk that reversed itself could not be mistaken for this one.
+        assert_ne!(base.beacon_block, fp_beacon_fold_v3(&[h64(130), h64(120), h64(105)]));
+    }
+
+    /// **Receipt blocks are never beacons, fold or no fold** (invariant F15). Receipt hashes are
+    /// costlessly malleable by their producers, so a fold that admitted one would be a fold the
+    /// producer could re-roll for free — the exact opposite of what widening it is for.
+    #[test]
+    fn a_receipt_block_is_never_part_of_the_fold() {
+        // Three attempt blocks and three receipt blocks interleaved above the slot.
+        let mixed =
+            chain(&[(135, RECEIPT), (130, ATTEMPT), (125, RECEIPT), (120, ATTEMPT), (115, RECEIPT), (105, ATTEMPT), (95, ATTEMPT)]);
+        let fact = derive_beacon_fact_v3(100, ATTEMPT, K3, mixed).unwrap();
+        assert_eq!(
+            fact.beacon_block,
+            fp_beacon_fold_v3(&[h64(105), h64(120), h64(130)]),
+            "the receipt blocks between them contribute nothing"
+        );
+
+        // A region of receipt blocks alone never completes a fold, however many there are.
+        let receipts_only = chain(&[(160, RECEIPT), (150, RECEIPT), (140, RECEIPT), (130, RECEIPT), (95, ATTEMPT)]);
+        assert_eq!(
+            derive_beacon_fact_v3(100, ATTEMPT, K3, receipts_only).unwrap_err(),
+            PalwBeaconDeriveV3Error::NoBeaconYet { slot: 100, needed: 3, found: 0 }
+        );
+    }
+
+    /// **The predecessor witness survives the fold**, so "the fold begins at the slot" stays
+    /// checkable by someone who did not walk: `prev_attempt_daa < slot ≤ beacon_daa` is the same
+    /// pair of inequalities `validate_beacon_fact_v3` has always checked, and a fold that started
+    /// one attempt block early would have to name a witness at or above the slot to do it.
+    #[test]
+    fn the_predecessor_witness_still_pins_where_the_fold_starts() {
+        let shape = chain(&[(130, ATTEMPT), (120, ATTEMPT), (105, ATTEMPT), (99, ATTEMPT), (90, ATTEMPT)]);
+        let fact = derive_beacon_fact_v3(100, ATTEMPT, K3, shape.clone()).unwrap();
+        assert_eq!(fact.prev_attempt_daa, 99, "the last attempt block strictly below the slot");
+        validate_beacon_fact_v3(100, &fact).unwrap();
+
+        // A fold that began one block early (99,105,120) would have to claim a witness at or above
+        // the slot, and the validator refuses exactly that.
+        let stolen = PalwBeaconFactV3 {
+            beacon_block: fp_beacon_fold_v3(&[h64(99), h64(105), h64(120)]),
+            beacon_daa: 120,
+            prev_attempt_daa: 105,
+        };
+        assert!(validate_beacon_fact_v3(100, &stolen).is_err(), "a fold starting below the slot cannot present a witness");
+
+        // And the walk is bounded: only `k` blocks are ever held, whatever the chain does above
+        // the slot. A hundred attempt blocks above it still fold the first three.
+        let mut tall: Vec<(u64, u8)> = (0..100).rev().map(|i| (200 + i * 7, ATTEMPT)).collect();
+        tall.extend_from_slice(&[(130, ATTEMPT), (120, ATTEMPT), (105, ATTEMPT), (95, ATTEMPT)]);
+        let fact = derive_beacon_fact_v3(100, ATTEMPT, K3, chain(&tall)).unwrap();
+        assert_eq!(fact.beacon_block, fp_beacon_fold_v3(&[h64(105), h64(120), h64(130)]));
+        assert_eq!(fact.beacon_daa, 130);
+    }
+
+    /// **The fold is a function of the CHAIN, not of where the walker started.** Two nodes on one
+    /// candidate at different heights derive one fact — the property that makes the beacon a
+    /// consensus value at all, and the one a fold could most easily have broken (a later block
+    /// must not join a fold that is already complete).
+    #[test]
+    fn the_fold_does_not_move_as_the_chain_grows() {
+        let base: Vec<(u64, u8)> = vec![(130, ATTEMPT), (120, ATTEMPT), (105, ATTEMPT), (95, ATTEMPT)];
+        let settled = derive_beacon_fact_v3(100, ATTEMPT, K3, chain(&base)).unwrap();
+        for grown in 1..=5u64 {
+            let mut taller: Vec<(u64, u8)> = (0..grown).rev().map(|i| (140 + i * 10, ATTEMPT)).collect();
+            taller.extend_from_slice(&base);
+            assert_eq!(
+                derive_beacon_fact_v3(100, ATTEMPT, K3, chain(&taller)).unwrap(),
+                settled,
+                "{grown} more blocks on top changed a draw that was already complete"
+            );
         }
     }
 }
