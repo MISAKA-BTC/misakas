@@ -19,7 +19,10 @@
 set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 KASPAD_BIN="${KASPAD_BIN:-$REPO_ROOT/target/release/kaspad}"
-CLI_BIN="${CLI_BIN:-$REPO_ROOT/target/release/misaka-cli}"
+# `misaka-cli` is the PACKAGE; `misaka` is the binary it builds ([[bin]] name in its Cargo.toml).
+# The default named the package and so resolved to nothing on a tree built by `cargo build
+# --release`: the script died at its first CLI call with "No such file or directory", 127.
+CLI_BIN="${CLI_BIN:-$REPO_ROOT/target/release/misaka}"
 CERTIFY_BIN="${CERTIFY_BIN:-$REPO_ROOT/target/release/palw-certify}"
 NODES="${NODES:-3}"
 WORK_DIR="${WORK_DIR:-$REPO_ROOT/.misaka-palw-certify-devnet}"
