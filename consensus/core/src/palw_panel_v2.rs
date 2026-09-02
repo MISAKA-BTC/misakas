@@ -1132,6 +1132,7 @@ mod tests {
             false,
             true,
             false,
+            false,
         )
         .expect("the registry loads");
         let class = PalwConsensusObjectV2::ClassRegistered {
@@ -1152,7 +1153,7 @@ mod tests {
             })),
         };
         let (s1, ..) =
-            apply_palw_transition_v6(&s0, &state_params(), None, &ctx(2, 101, 2), &[class], PalwBlockWorkV3::None, &[], false, true, false)
+            apply_palw_transition_v6(&s0, &state_params(), None, &ctx(2, 101, 2), &[class], PalwBlockWorkV3::None, &[], false, true, false, false)
                 .expect("an entrant registers the class");
         let env = attempt(40, 1);
         let claim_id = attempt_id_v2(&env.attempt);
@@ -1166,6 +1167,7 @@ mod tests {
             &[],
             false,
             true,
+            false,
             false,
         )
         .expect("the executor produces on it");

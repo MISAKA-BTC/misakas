@@ -123,7 +123,7 @@ fn step(
     att: Option<&PalwAttemptEnvelopeV2>,
     weightless: bool,
 ) -> PalwChainStateV2 {
-    let (state, _) = apply_palw_transition_v2_with_policies(parent, p, c, objects, att, false, false, weightless)
+    let (state, _) = apply_palw_transition_v2_with_policies(parent, p, c, objects, att, false, false, weightless, false)
         .unwrap_or_else(|e| panic!("the transition at daa {} must apply: {e}", c.daa_score));
     state
         .assert_internal_consistency_v2(p, weightless)
@@ -517,7 +517,7 @@ fn work_step(
     weightless: bool,
 ) -> PalwChainStateV2 {
     let (state, _, _) =
-        kaspa_consensus_core::palw_state_v2::apply_palw_transition_v6(parent, p, None, c, objects, work, &[], false, false, weightless)
+        kaspa_consensus_core::palw_state_v2::apply_palw_transition_v6(parent, p, None, c, objects, work, &[], false, false, weightless, false)
             .unwrap_or_else(|e| panic!("the transition at daa {} must apply: {e}", c.daa_score));
     state.assert_deadline_consistency(p).expect("deadline consistency");
     state

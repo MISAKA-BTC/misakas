@@ -255,3 +255,260 @@ Invariants: **DA-1** an accusation outside the claim's retention window is refus
 second open accusation on one claim is refused; **DA-3** a valid disclosure charges the accuser and
 nobody else; **DA-4** a disclosure carried by a block the producer did not mine is accepted;
 **DA-5** two nodes that saw the disclosure at different wall-clock times reach the same verdict.
+
+## Second security amendment (2026-09-03) — SA-7: what an accusation costs, what it buys, and what it may not suspend
+
+An adversarial read of the landed SA-1…SA-6 code found the mechanism exploitable in **both**
+directions at once, which SA-1…SA-6 do not address because they are about the accusation's *form*
+and this is about its *price*. All four are one question, so they are one decision.
+
+**SA-7(a) — A data-availability accusation does not suspend the arithmetic fraud court.** DA and
+computation are orthogonal: a producer can serve every byte it committed to and still have computed
+the wrong answer. `validate_court_opened_v2` read `claim.phase` directly, so an open
+`DefaultDisputed` was not `ReceiptLicensed` and therefore not challengeable — for the *whole
+remaining challenge window*, since `W_disclose = window_challenge`. A producer whose arithmetic is
+fraudulent therefore had a purchase available to it: have any bond accuse it (its own second bond
+will do — nothing in the ruleset makes two bonds strangers), answer the single named index honestly
+out of a complete trace, and let the challenge window lapse underneath the session. Price
+`min(⌈reserved/seat_count⌉, min_collateral_sompi)`; avoided, a `CourtFraud` conviction worth
+`claim.reserved` *and* the escrow, with the fraudulent `pwu` entering `safe_weight` permanently.
+Strictly profitable whenever `seat_count ≥ 2`.
+
+So the challenge surface is read **through** the disputed phase, at the phase the accusation found
+(`resumed`), and the part of the window the open session has already consumed is added back. A
+claim that is not `Final` is challengeable; a claim under accusation cannot be `Final`; therefore a
+claim under accusation is challengeable. A court that opens on a disputed claim leaves the
+accusation's own deadline armed — disarming it would make opening a court the way to cancel an
+accusation.
+
+**SA-7(b) — The claim's clock is paused, which means it is given back.** `W_disclose =
+window_challenge` is strictly longer than both `window_receipt` and `window_bind` on every
+ConsensusV2 preset (shipped reference bundle: bind 600, receipt 600, challenge 1200). A claim
+accused while `PanelBound` and restored to the deadline it held *before* the session therefore came
+back to a receipt window that had already lapsed — guaranteed by the inequality, not by timing — and
+the next sweep redrew it. The redraw leaves the old panel record in place, so a second accusation
+was admissible immediately, and the second honest answer came back to an expired *bind* deadline:
+`Voided { BindTimeout }`. Two accusations at the registry floor, and an honest producer that
+answered both correctly and on time lost its escrow. A disclosure responder does not help, because
+*answering* is what triggers it.
+
+On refutation the resumed phase's anchor therefore advances by exactly the elapsed session —
+`bound_daa` for `PanelBound`, `rebound_daa` for `Provisional` (never `accepted_daa`, which anchors
+the retention obligation and must not grow because someone accused). `ReceiptLicensed` resumes
+**unmoved**: that phase names no obligation the session prevented the producer from meeting — it has
+finished and is only waiting — so extending it would only delay an honest `Final` further. The rule
+is "return the time the session took *from* the producer", not "extend every window".
+
+**SA-7(c) — One bond's total data-availability liability is its exposure ceiling.** Being `Active`
+and at or above the registry floor is a check on the accuser's *state*, and reserving does not
+change that state: `write_exposure` moves the exposure ledger and leaves `collateral` alone. So a
+single bond holding exactly `min_collateral_sompi` passed the same two checks once per live claim on
+the network and froze all *K* of them — in one block if it liked, since each accusation is on a
+distinct claim and the per-claim singularity never fires. And because `slash_bond` debits
+`min(amount, collateral)` and returns early at zero, the *first* refutation emptied the bond and the
+remaining `K−1` refutations cost nothing: **K frozen claims for one registry floor.** The exposure
+ceiling the `CourtOpened` arm says "does the counting" is enforced only in
+`check_palw_attempt_admission_v2`, i.e. only against a bond that wants to *produce*.
+
+The accusation therefore meets the same ceiling — `reserved_exposure + registration_exposure +
+this accusation ≤ collateral × max_exposure_ratio_permille / 1000` — and, with SA-7(d), the figure
+counted is one the fold can actually collect, so the K-th accusation is funded exactly like the
+first.
+
+**SA-7(c) applies to *both* arms that accuse, and the first pass fixed only one of them.** The
+paragraph above quotes the `CourtOpened` arm's claim that "the ceiling it already lives under does
+the counting" in order to refute it — and then left that arm exactly as it was. The two arms are one
+mechanism: a bonded party freezes somebody else's claim by *reserving* against its own collateral,
+and reserving does not touch collateral, so `Active` plus the registry floor is a pair of checks the
+same bond passes once per live claim on the network. Opening a court is in fact the *cheaper* of the
+two, because the challenger-side close charges `min(claim.reserved, min_collateral_sompi)` and
+`slash_bond` clamps at collateral and returns `Ok` early at a zero debit: one bond at the floor could
+open a court on every licensed claim in a single block, freeze each of them until its `window_court`
+backstop, and pay for at most the first close. Both arms now reserve through one helper
+(`reserve_accuser_exposure_v2`) against one ledger and one ceiling, so a bond's total liability for
+*accusing* — by either object — is its exposure ceiling. Spelling it once is the fix; two spellings
+is how the arms drifted apart in the first place, and one test walks both.
+
+Widening the *same* fence, `palw_da_court`, is what makes this a rule change a network opts into
+rather than a silent one: with the fence dormant the `CourtOpened` arm reserves exactly what it
+always reserved. The consequence, stated rather than left for a reader to find: **a `ConsensusV2`
+network that does not arm `palw_da_court` still has the unbounded court-opening gap**, and closing
+it there is a fence decision somebody has to make knowingly.
+
+**SA-7(c) also needs `max_exposure_ratio_permille ≤ 1000`, and now says so in code.** The ceiling is
+`collateral × ratio / 1000` while `slash_bond` can never debit more than `collateral` in total. Above
+unity a bond holds more concurrent exposure than it can ever pay: the first refutations empty it and
+the rest are free — precisely the behaviour this clause removes, restored by a genesis-time constant.
+The bound was prose in the fold's margin; `PalwAdmissionParamsV2::new` refused only zero, and
+`palw_mode_v2` required the admission and state copies to be *equal*, not bounded. Both constructors
+refuse above 1000 now, and `validate_ruleset_shape` refuses it again for a bundle that arrives
+deserialized rather than constructed — which is how a ruleset actually reaches a node.
+
+**SA-7(d) — An accusation reserves exactly what the fold can take from it.** `slash_seat` caps the
+charge at `min_collateral_sompi`, for the reason SA-4 gives: both factors of `claim.reserved` are
+chosen by whoever registered the class, so an uncapped charge would let a registrant make accusing
+its own class ruinous and buy itself immunity. The *reservation*, however, was the uncapped
+fraction, so for every claim with `reserved / seat_count > min_collateral_sompi` the ledger recorded
+a liability that could never be collected and SA-7(c)'s ceiling would have counted money that does
+not exist. Reservation and charge are now the same number.
+
+**Not decided here, and the exposure until it is — restated, because the first statement of it
+rested on a false fact.** A *correct* accuser is still paid nothing. The reason given here was that
+"the only payment path is the coinbase payout queue keyed by claim id, which a voided claim never
+enters, and a bond has collateral but no payee script", citing a comment in
+`virtual_processor/processor.rs` that said exactly that. **The comment was stale and the second half
+of that sentence is wrong**: `PalwBondStateV2` carries `payout_payload`, registration refuses an
+empty one, `finalize_claim` writes `PalwPayoutV2 { payload: bond.payout_payload, amount }`, and
+nothing on the paying side — neither `pending_payouts_iter` nor the drain — asks which phase enqueued
+an entry. The queue is generic; there *is* a payee to resolve, for any bond. (The comment has been
+corrected in the same commit as this paragraph.)
+
+So the residual is narrower than it was written. What is missing is not a payment mechanism but a
+*supply decision* and the transition-side write that spends it: at a confirmed DA default the claim
+is voided and its escrow — carved from the accepted block's own subsidy — is simply never paid, so
+funding an accuser out of that escrow moves no new coins and does not touch `slashed`, which
+`palw_bond_burn_obligation_v2` holds as a burn obligation. That is one `write_payout` at the void,
+keyed by the claim id the void frees, and a rule about how much of the escrow it may take. It is an
+ADR-sized decision — who is paid, how much, and what stops a producer collecting it through a second
+bond of its own — but "the ruleset has no payment path" was not the reason, and this ADR should not
+be read as claiming that any longer.
+
+What is *unchanged* is the incentive statement, and it is the part that carries the deferral:
+crediting an accuser's `collateral` still would not move coins (it would raise that bond's exposure
+ceiling against nothing), no payout to an accuser exists today, and therefore policing data
+availability costs transaction fees
+plus a window's use of collateral and returns zero, and the expected value of accusing is negative
+for an honest participant. **SA-7 makes the accusation safe to leave armed; it does not make it
+attractive to use.** Paying an accuser is a new payment *rule* — the one decision this ADR says is
+made deliberately and not as a side effect — and it needs its own ADR alongside SA-5's escrow-funded
+carriage fee, which is unimplemented for the same reason; what it does **not** need is new
+machinery. Until then the DA
+court is a deterrent that depends on someone accusing for a non-monetary reason (a panel seat whose
+own material never arrived, or a competitor), and the accuse-window arithmetic bounds what it can
+ever be: a claim can absorb at most `retention / W_disclose` sessions (shipped: `(600 + 600 + 1200 +
+3000) / 1200 = 4`), each opening one accuser-chosen index, so a producer that deleted a fraction *f*
+of its trace is caught with probability about `4f`. It is a bounded spot check, not an availability
+guarantee, and this ADR should not be read as claiming otherwise.
+
+Invariants added: **DA-6** an open accusation leaves the claim challengeable at every DAA of the
+session; **DA-7** a claim that answers every accusation correctly and on time reaches its own
+terminal phase unslashed; **DA-8** a bond cannot hold more exposure than its ceiling for *accusing*,
+counting a `DefaultAccused` and a `CourtOpened` against the same ledger and the same figure, and the
+ceiling is at most the collateral because the ratio is at most unity;
+**DA-9** the reservation an accusation takes equals the charge a refutation collects.
+
+## Implementation, 2026-09-02 — the amended form, behind `palw_da_court`
+
+Landed dormant. The fence is a top-level `Params` field, `None` on every shipped preset, so every
+fingerprint, identity and state root is byte-identical to the tree before it; `PALW_STATE_V2_VERSION`
+stays at 16 for the same reason, and moving it is the *arming* release's job, not this one.
+
+What the code does, against each amendment clause:
+
+* **SA-1** — `PalwConsensusObjectV2::DefaultAccused { claim, missing_event_index, accuser,
+  signature }`, riding an ordinary lifecycle transaction. Refused if the index is at or past
+  `trace_chunk_count`, if the whole disclose window does not fit inside the claim's own
+  `trace_retention_daa`, if the claim is terminal or has no bound panel, if the accuser is the
+  producer, is not Active, or is under the registry floor — and if an accusation is already open,
+  which is structural: a claim has one phase. The accuser reserves
+  `⌈claim.reserved / seat_count⌉` on the claim's own exposure ledger.
+* **SA-2** — `MaterialDisclosed { claim, event_index, preimage, opening, signature }`, checked by
+  hash arithmetic only: the preimage re-keys to the opening's event hash, and the opening
+  reconstructs the claim's pinned `trace_root` at `trace_chunk_count` leaves. Bounded by the ride
+  list at `DEFAULT_MAX_CLOSE_BYTES` and at acceptance by `PalwCourtParamsV2::max_close_bytes` —
+  the RULESET's one bundle-wide court ceiling, fixed by `palw_ruleset_id_v2`. There is no per-class
+  disclosure ceiling on this path and none is read; an earlier draft of this paragraph said "the
+  class's own `max_close_bytes`", which is a field this code never consults.
+* **SA-3** — the phase `DefaultDisputed { accused_daa, … }`, whose deadline is
+  `accused_daa + W_disclose` with `W_disclose = window_challenge`, re-derived from the record by
+  `assert_deadline_consistency` and `rebuild_deadline_index_v2` on every branch. `validate_palw_v2`
+  proves `W_disclose ≥ 2 × finality_depth` past the fence. Carriage is permissionless.
+* **SA-4** — only the accuser is charged, capped at `min_collateral_sompi`. No seat is touched.
+* **SA-5** — the confirmed default slashes `claim.reserved`, never the bond. **The escrow-funded
+  carriage fee is NOT implemented**: this ruleset has no credit primitive (slashed value is burned,
+  and the only payment path is the coinbase payout queue keyed by claim id), so a refund would be a
+  new payment rule — the one decision this ADR says is made once and not as a side effect. What
+  stands in for it is SA-3's permissionless carriage: a producer with no fee can have anyone carry
+  its signed disclosure.
+* **SA-6** — the DA term enters both lattice bounds (`with_palw_v2_depths` and `validate_palw_v2`)
+  and is zero while dormant. Per claim the session is *contained* in the retention obligation, so it
+  adds nothing to `MAX_CLAIM_EXPOSURE_DAA`; the existing lattice walk in `palw_fp_devnet_v3` now
+  asserts that containment rather than assuming it.
+
+`DefaultDisputed` is the first phase in this ruleset that holds a **second bond's** reservation,
+and that is the whole of its accounting risk. A claim under accusation is not terminal, so every arm
+that voids a live claim can land on one — the panel's own `ProducerDefaulted`, and a `CourtClosed
+{ ExecutorGuilty }` on a session that was already open when the accusation arrived — and none of
+them knows what an accusation cost: `release_for_claim` gives back what the *producer* put up. The
+release therefore lives in **one place, `write_claim`**, beside the unresolved and work-id indices
+and for the reason `write_court` states about the challenger's stake: a release each new arm has to
+remember is a release one of them eventually will not. Left stranded it is not merely wrong
+accounting — `assert_internal_consistency` rebuilds that ledger from the claims, so it would be
+state the fold writes and cannot read back, and the next `load_tip` would refuse the snapshot the
+chain had just written, on every node at once.
+
+The same reasoning polices `resumed`, the one field of this state nothing else re-derives. The
+accusation arm refuses a terminal claim and refuses an already-disputed one, so the phase it
+snapshots is always live and undisputed; the loader asserts that rather than assuming it, because
+the alternative is meeting a bad record at a disclosure a window later with nothing left to say
+where it came from.
+
+Deliberately not restored from Decision 4: the refuted claim resumes **the phase it held**, not a
+fresh `ReceiptLicensed` dated at the disclosure. Restarting the challenge clock would punish a
+producer the chain has just proven honest and would let serial accusations hold a claim — and its
+reservation — open a window at a time. Under SA-7(b) that phase's *anchor* advances by exactly the
+elapsed session, which is a pause and not a restart: the producer gets back the window it had left
+and not one DAA more.
+
+### SA-7, 2026-09-03 — the same fence, widened
+
+No new fence and no new state: `palw_da_court` already gates every path SA-7 touches, and
+`DefaultDisputed` is unconstructible while it is dormant, so the challenge-surface lookthrough, the
+pause credit and the resume rebase are all unreachable on every shipped preset. `PALW_STATE_V2_VERSION`
+still stays at 16, and still must move in the release that arms the fence.
+
+* SA-7(a) — `palw_challenge_surface_phase_v2` and `palw_da_paused_daa_v2` (both the identity off the
+  fence) in `validate_court_opened_v2`; the `CourtOpened` fold arm's `disarm_deadline` deliberately
+  excludes `DefaultDisputed`. Test `an_open_accusation_does_not_close_the_arithmetic_court`.
+* SA-7(b) — `resume_claim_after_da_session_v2`. Test
+  `two_answered_accusations_do_not_destroy_an_honest_producers_claim`, which walks the exact
+  two-session sequence that voided an honest claim before it.
+* SA-7(c) — `TransitionBuilder::reserve_accuser_exposure_v2` is the ceiling, and **both** arms that
+  accuse call it: the `DefaultAccused` arm always, the `CourtOpened` arm behind `builder.da_court`
+  (the same fence, widened — dormant, that arm reserves exactly what it always did). It refuses with
+  `AccusationExposureCeiling`, whose `edge` names which object was refused. Tests
+  `one_bond_at_the_floor_can_freeze_exactly_one_claim` and — one test walking both arms, so they
+  cannot drift apart again — `one_exposure_ceiling_binds_both_arms_that_accuse`, which spends the
+  ceiling through the court, tops it up through the accusation, watches both arms refuse the next
+  object against the same figure, and then refutes both and asserts every debit landed.
+* SA-7(c), the ratio — `PalwAdmissionParamsV2::new` and `PalwConsensusParamsV2::validate_ruleset_shape`
+  refuse `max_exposure_ratio_permille > 1000`. Tests
+  `an_exposure_ratio_above_unity_is_refused_where_the_value_is_admitted` and
+  `an_exposure_ratio_above_unity_does_not_boot` (which smuggles the value past the constructor by
+  deserializing it, because that is how a bundle reaches a node).
+* SA-7(d) — `palw_da_accusation_exposure_v2`. Test
+  `an_accusation_reserves_exactly_what_the_fold_can_take`.
+
+**Not shipped, and the reason the fence must stay dormant — this is a hard precondition, not a
+scheduling note.** Nothing in this tree constructs a `MaterialDisclosed`. `palw_panel.rs` answers
+`CourtDisclosed` for the arithmetic ladder and **nothing answers `DefaultAccused`**: there is no
+producer-side responder that opens the accused index out of the capture the producer already holds.
+Armed without one, every accusation wins on silence, and SA-7's ceiling does not bound that case —
+a *successful* accuser is never charged (the DA sweep voids and slashes the producer while
+`write_claim` releases the accuser's reservation intact), so its collateral is immediately free to
+accuse the next claim. The ceiling bounds *concurrent* accusations; sequential winning accusations
+are free and unbounded. One floor bond would therefore destroy every live claim on a responder-less
+network, in sequence, at the price of postage.
+
+**`palw_da_court` may not be scheduled from this ADR until that responder exists and ships.** Whoever
+sets the fence must be able to name the binary that answers an accusation. What building it takes,
+concretely: the responder belongs in the node's panel service beside the existing
+`CourtDisclosed` path (`kaspad/src/palw_panel.rs`, which already builds and submits that object from
+a duty it polls); the material is the producer's own trace capture, the same
+one `trace_event_merkle_root_v2` was computed over at attempt time, so answering is opening event
+`missing_event_index` — preimage plus Merkle path — and nothing needs to be recomputed or re-executed;
+the object reaches the chain as an ordinary lifecycle transaction, exactly like the `CourtDisclosed`
+the same service already submits. The two open questions are retention on the producer side (the
+capture must still be on disk for the whole `trace_retention_daa`, which is a node-operations
+property nothing currently verifies) and the fee float the responder spends to answer. Neither is in
+this batch, and `PALW_STATE_V2_VERSION` must move in the same release that arms the fence.

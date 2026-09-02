@@ -990,6 +990,47 @@ pub struct Params {
     /// at all — so the only arming that is a remedy rather than a second failure is one at the
     /// genesis of a fresh relaunch, and the validator makes that the only arming that starts.
     pub palw_uncertified_weightless: Option<ForkActivation>,
+    /// **ADR-0062 as amended (SA-1…SA-6) — the data-availability court.** `None` on every shipped
+    /// preset, so the behaviour is byte-identical to not having the field at all.
+    ///
+    /// Past this fence a claim's data obligation becomes prosecutable by ARITHMETIC instead of by
+    /// a vote: [`crate::palw_state_v2::PalwConsensusObjectV2::DefaultAccused`] opens a singular,
+    /// bonded accusation naming ONE trace index, the claim moves to
+    /// [`crate::palw_state_v2::PalwClaimPhaseV2::DefaultDisputed`], and
+    /// [`crate::palw_state_v2::PalwConsensusObjectV2::MaterialDisclosed`] refutes it with a Merkle
+    /// opening against the claim's own pinned trace root — checked by hash arithmetic, never by
+    /// running a model. Silence past `W_disclose` confirms the default and takes `claim.reserved`.
+    ///
+    /// **What it does NOT do, and this is the whole reason it exists.** The `ProducerDefaulted`
+    /// quorum verdict it was written around is unreachable on a D4-armed preset
+    /// (`palw_unavailable_abstains`, armed from genesis on testnet-11 since Relaunch 5): the arm
+    /// returns `ProducerDefaultRetired` before it reads a single receipt. So the HARM — a captured
+    /// panel taking a producer's bond on a vote — is already prevented, and what this fence adds is
+    /// the missing positive half: a default that can take a bond because somebody proved it.
+    ///
+    /// **TOP LEVEL for the reason on `palw_bootstrap_activation`**, and load-bearing here for the
+    /// reason on `palw_unavailable_abstains`: this rule has to be able to reach a LIVE network, and
+    /// a fence inside the V2 bundle moves `palw_ruleset_id_v2`, which `for_each_fence` never
+    /// descends into — every old/new pair would fail the handshake outright instead of peering.
+    ///
+    /// **Arming it is a coordinated re-mint, not a rolling upgrade.** Past the fence a claim record
+    /// can hold `DefaultDisputed` and a block can carry two object variants an older build cannot
+    /// decode, so the state schema — not merely the rules — moves.
+    /// [`crate::palw_state_v2::PALW_STATE_V2_VERSION`] must move in the SAME release that arms
+    /// this on any network, and the pins move with it. It stays where it is while the fence is
+    /// `None` everywhere, because a rule that cannot fire changes no state.
+    ///
+    /// **DO NOT ARM THIS WITHOUT A DISCLOSURE RESPONDER IN THE FIELD.** The consensus half is
+    /// complete — the objects, the phase, the arithmetic, the sweep — and nothing in this tree
+    /// CONSTRUCTS a `MaterialDisclosed`. A window that convicts on silence is only sound when the
+    /// silent party could have spoken, and audit3 H4 already found this exact shape once: the
+    /// court's opening rung convicted producers of classes for which no responder existed, so
+    /// accusing was a guaranteed win and honest execution was punished. Armed with no responder,
+    /// every accusation succeeds and every producer is slashable for the price of one bond —
+    /// strictly worse than the captured-panel defect this ADR was written to close. The producer
+    /// side (a panel/producer service that answers an open accusation from the capture it already
+    /// holds, as `palw_panel.rs` answers `CourtDisclosed`) is the precondition for arming.
+    pub palw_da_court: Option<ForkActivation>,
 
     /// ADR-0042 Decision 1 (PR-10): the ONE PALW switch on the V2 lineage. `Disabled` on every
     /// shipped preset. A network is in exactly one mode; `ConsensusV2` carries the whole atomic
@@ -1086,6 +1127,27 @@ pub struct Params {
     pub evm_typed_receipt_root_activation_daa_score: u64,
 }
 
+/// **ADR-0062 SA-6: what the data-availability court adds to a claim's lattice.**
+///
+/// Zero unless `palw_da_court` is installed, which is what makes every shipped preset's depths and
+/// bounds byte-identical to a build without this ADR at all.
+///
+/// Past the fence it is the amendment's literal `accuse + disclose`, which is deliberately the
+/// LOOSE bound. The tight one is zero: an accusation is refused unless the whole disclose window
+/// fits inside the claim's own `trace_retention_daa` (`bind + receipt + challenge + court` from
+/// acceptance, pinned by ADR-0072 Decision 8), so a DA session always ends at or before a point the
+/// claim's normal longest path — `2·(bind + receipt) + challenge + court`, the redrawn one — has
+/// already passed. Pinning the loose form anyway costs a dormant network nothing and means an
+/// operator arming this fence is asked for the horizon the ADR asks for, not the one this
+/// implementation happens to need.
+pub fn palw_v2_da_court_lattice_daa(fence: Option<ForkActivation>, state: &crate::palw_state_v2::PalwStateParamsV2) -> u64 {
+    if fence.is_none() {
+        return 0;
+    }
+    crate::palw_state_v2::palw_da_accuse_window_daa_v1(state)
+        .saturating_add(crate::palw_state_v2::palw_da_disclose_window_daa_v1(state))
+}
+
 impl Params {
     /// Everything about this network's PALW fence that must be true before a node runs it.
     ///
@@ -1142,7 +1204,13 @@ impl Params {
             // can be anchored on is the redrawn one — and it is the length the horizon has to cover.
             let lattice = 2 * (bundle.state.window_bind() + bundle.state.window_receipt())
                 + bundle.state.window_challenge()
-                + bundle.state.window_court();
+                + bundle.state.window_court()
+                // ADR-0062 SA-6, and it adds NOTHING while `palw_da_court` is `None` — which is
+                // every shipped preset, so no preset's depths move by this line existing. See
+                // `palw_v2_da_court_lattice_daa` for why the term is the amendment's literal
+                // `accuse + disclose` rather than the tighter bound the retention pin actually
+                // gives.
+                + palw_v2_da_court_lattice_daa(self.palw_da_court, &bundle.state);
             self.blockrate.pruning_depth = self.blockrate.pruning_depth.max(lower_bound).max(lattice);
             // **Upstream pruning's consistency invariant, restored HERE for every V2 network**
             // (ADR-0068 drill finding F4; Phase 2 is the flag day the drill's note deferred to).
@@ -1453,11 +1521,31 @@ impl Params {
         // can be anchored on is the redrawn one — and it is the length the horizon has to cover.
         let lattice = 2 * (bundle.state.window_bind() + bundle.state.window_receipt())
             + bundle.state.window_challenge()
-            + bundle.state.window_court();
+            + bundle.state.window_court()
+            // ADR-0062 SA-6: `+ accuse + disclose`, zero while the fence is `None`.
+            + palw_v2_da_court_lattice_daa(self.palw_da_court, &bundle.state);
         if lattice > self.blockrate.pruning_depth {
             return Err(PalwModeV2Error::Invalid(
                 "the claim lattice outlives the pruning horizon — the headers its judgements are anchored on would be deleted first",
             ));
+        }
+        // **ADR-0062 SA-3, proved at construction rather than assumed.**
+        //
+        // `palw_da_disclose_window_daa_v1` is `window_challenge`, and SA-3 requires the disclose
+        // window to be at least twice the finality window so a reorg across the deadline cannot
+        // flip the verdict without a finality violation. Every V2 preset is built with
+        // `finality_depth = window_challenge / 2` (`with_palw_v2_depths`), so the relation holds
+        // by construction — but "by construction" is a sentence, and a bundle assembled by hand
+        // could break it silently. This is the gate. Only past the fence: a dormant rule has no
+        // window to size.
+        if self.palw_da_court.is_some() {
+            let disclose = crate::palw_state_v2::palw_da_disclose_window_daa_v1(&bundle.state);
+            if disclose < 2 * self.blockrate.finality_depth {
+                return Err(PalwModeV2Error::Invalid(
+                    "the data-availability disclose window is narrower than twice the finality window — a reorg across \
+                     the deadline could flip the verdict without a finality violation (ADR-0062 SA-3)",
+                ));
+            }
         }
         let k = self.blockrate.ghostdag_k as u64;
         let anticone_bound =
@@ -1826,6 +1914,10 @@ impl Params {
         if self.palw_uncertified_weightless == Some(ForkActivation::never()) {
             self.palw_uncertified_weightless = None;
         }
+        // ADR-0062 (SA-1…SA-6), a bare fence: same collapse, same reason.
+        if self.palw_da_court == Some(ForkActivation::never()) {
+            self.palw_da_court = None;
+        }
         let Some(dns) = self.dns_params.as_mut() else {
             return;
         };
@@ -2173,6 +2265,7 @@ impl Params {
             palw_panel_da,
             palw_certification_rent,
             palw_uncertified_weightless,
+            palw_da_court,
             // The V2 bundle's fences are inside `palw_ruleset_id_v2` — see the doc block.
             palw_consensus_mode: _,
             pow_blake2b_sha3_activation,
@@ -2306,6 +2399,15 @@ impl Params {
         // ADR-0071 SA-1..SA-4. A pure fence with no duration beside it, so visiting it is safe:
         // the identity visitor normalises a height, and a height is all this field carries.
         match palw_capability_bound.as_mut() {
+            Some(activation) => fork(activation, visit),
+            None => {
+                absent = u64::MAX;
+                visit(&mut absent);
+            }
+        }
+        // ADR-0062. A pure fence with no payload beside it, so visiting it is safe — the identity
+        // visitor normalises a height, and a height is all this field carries.
+        match palw_da_court.as_mut() {
             Some(activation) => fork(activation, visit),
             None => {
                 absent = u64::MAX;
@@ -2556,6 +2658,7 @@ impl Params {
             palw_panel_da,
             palw_certification_rent,
             palw_uncertified_weightless,
+            palw_da_court,
             palw_consensus_mode,
             pow_blake2b_sha3_activation,
             pow_palw_activation,
@@ -2777,6 +2880,14 @@ impl Params {
         // nothing, so every shipped preset fingerprints byte-identically to a build without it.
         if let Some(activation) = palw_uncertified_weightless {
             h.write(b"palw_uncertified_weightless");
+            h.write(activation.daa_score().to_le_bytes());
+        }
+        // ADR-0062, Some-only for the reason its siblings are: arming it changes which objects a
+        // block may carry and what a claim record may hold, so it belongs in the fingerprint —
+        // and every shipped preset leaves it `None` and fingerprints byte-identically to a build
+        // without the field at all.
+        if let Some(activation) = palw_da_court {
+            h.write(b"palw_da_court");
             h.write(activation.daa_score().to_le_bytes());
         }
         // ADR-0042 Decisions 1 + 11: the V2 mode decides block validity wholesale, so it is in
@@ -3065,6 +3176,7 @@ impl Params {
             palw_panel_da: self.palw_panel_da,
             palw_certification_rent: self.palw_certification_rent,
             palw_uncertified_weightless: self.palw_uncertified_weightless,
+            palw_da_court: self.palw_da_court,
             palw_consensus_mode: self.palw_consensus_mode.clone(),
             // kaspa-pq PoW algo activation is consensus-fixed, never runtime-overridable.
             pow_blake2b_sha3_activation: self.pow_blake2b_sha3_activation,
@@ -3986,6 +4098,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_certification_rent: None,
     // ADR-0069 Decision 7: dormant. Arming it is a per-network activation decision.
     palw_uncertified_weightless: None,
+    palw_da_court: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: inert on mainnet until its own fork ADR schedules it.
@@ -4131,6 +4244,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_certification_rent: None,
     // ADR-0069 Decision 7: dormant. Arming it is a per-network activation decision.
     palw_uncertified_weightless: None,
+    palw_da_court: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: DISABLED on the public preset (2026-08-12). The Ollama flavor (algo_id = 5)
@@ -4258,6 +4372,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_certification_rent: None,
     // ADR-0069 Decision 7: dormant. Arming it is a per-network activation decision.
     palw_uncertified_weightless: None,
+    palw_da_court: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // PALW LLM PoW: simnet keeps instant local kHeavyHash (simulation/tests must not need a model).
@@ -7705,6 +7820,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_certification_rent: None,
     // ADR-0069 Decision 7: dormant. Arming it is a per-network activation decision.
     palw_uncertified_weightless: None,
+    palw_da_court: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // **Devnet is the ADR-0068 drill network on this branch: ConsensusV2, so no V1 PALW
@@ -9147,6 +9263,129 @@ mod consensus_params_id_tests {
         bundle.genesis_objects.push(copy);
         let err = doubled.validate_palw_v2().expect_err("a duplicated operator is refused");
         assert!(format!("{err}").contains("operator id"), "the refusal names what it found: {err}");
+    }
+
+    /// **ADR-0062's fence: dormant everywhere, and dormant means byte-identical.**
+    ///
+    /// The whole reason the DA court is a top-level `Option<ForkActivation>` rather than a bundle
+    /// field: a build that carries the rule and a build that predates it must be one network until
+    /// somebody arms it, and arming it in the future must still keep them peers.
+    #[test]
+    fn the_da_court_fence_is_dormant_on_every_shipped_preset_and_costs_nothing_while_it_is() {
+        for (name, params) in
+            [("mainnet", MAINNET_PARAMS), ("testnet", TESTNET_PARAMS), ("devnet", DEVNET_PARAMS), ("simnet", SIMNET_PARAMS)]
+        {
+            assert!(params.palw_da_court.is_none(), "{name}: every shipped preset must leave ADR-0062 dormant");
+        }
+
+        let shipped = MAINNET_PARAMS;
+        let mut scheduled = MAINNET_PARAMS;
+        scheduled.palw_da_court = Some(ForkActivation::new(9_000_000));
+        assert_eq!(
+            shipped.consensus_identity_id(),
+            scheduled.consensus_identity_id(),
+            "scheduling the DA court for a future height must keep old and new builds peers — the reason it is \
+             not inside the V2 bundle"
+        );
+        assert_ne!(
+            shipped.consensus_params_id(),
+            scheduled.consensus_params_id(),
+            "…while still being a visible commitment: a rule change nobody can observe in the fingerprint is how \
+             two builds fork in silence"
+        );
+        assert_ne!(
+            shipped.consensus_schedule_id(),
+            scheduled.consensus_schedule_id(),
+            "and the operator log must be able to NAME the disagreement"
+        );
+
+        let mut at_genesis = MAINNET_PARAMS;
+        at_genesis.palw_da_court = Some(ForkActivation::always());
+        assert_ne!(
+            shipped.consensus_identity_id(),
+            at_genesis.consensus_identity_id(),
+            "in force from block one is a real rule difference: one side accepts two object kinds the other refuses"
+        );
+
+        let mut never_armed = MAINNET_PARAMS;
+        never_armed.palw_da_court = Some(ForkActivation::never());
+        assert_eq!(
+            shipped.consensus_identity_id(),
+            never_armed.consensus_identity_id(),
+            "Some(never()) is absence, or the collapse in normalize_values_a_scheduled_fence_drags_with_it is gone"
+        );
+
+        // Independent of its neighbours: arming one fence must not be readable as arming another.
+        let mut other = MAINNET_PARAMS;
+        other.palw_unavailable_abstains = Some(ForkActivation::always());
+        assert_ne!(other.consensus_identity_id(), at_genesis.consensus_identity_id(), "two fences, two identities");
+    }
+
+    /// **ADR-0062 SA-6: the lattice with the DA phase in it, at every preset that has a lattice.**
+    ///
+    /// A preset with no V2 bundle has no claim lattice at all, so the bound is vacuous there; the
+    /// ones that DO carry a bundle are checked by construction — `with_palw_v2_depths` raises the
+    /// pruning horizon to hold the lattice and `validate_palw_v2` refuses a set where it does not.
+    /// What this pins is that the DA term is (a) zero while the fence is dormant, so no shipped
+    /// preset's depths moved by this ADR existing, and (b) actually carried into both bounds once
+    /// the fence is armed, so arming it cannot silently produce a phase that outlives the horizon
+    /// its evidence is anchored in.
+    #[test]
+    fn the_da_court_phase_fits_the_pruning_horizon_at_every_preset_that_has_a_lattice() {
+        let shipped = palw_rc_shipped_params();
+        let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &shipped.palw_consensus_mode else {
+            panic!("the RC preset must carry a V2 bundle for this bound to mean anything");
+        };
+        let bundle = bundle.clone();
+
+        // (a) Dormant costs nothing — the same params, with and without the field considered.
+        assert_eq!(palw_v2_da_court_lattice_daa(None, &bundle.state), 0, "a dormant fence adds no DAA to the lattice");
+        let redriven = shipped.clone().with_palw_v2_depths(&bundle);
+        assert_eq!(
+            redriven.blockrate.pruning_depth, shipped.blockrate.pruning_depth,
+            "re-deriving the depths of a dormant preset must reproduce them exactly, or this ADR moved a fingerprint"
+        );
+
+        // (b) Armed, the term is `accuse + disclose` and BOTH bounds carry it.
+        let da = palw_v2_da_court_lattice_daa(Some(ForkActivation::always()), &bundle.state);
+        assert_eq!(
+            da,
+            crate::palw_state_v2::palw_da_accuse_window_daa_v1(&bundle.state)
+                + crate::palw_state_v2::palw_da_disclose_window_daa_v1(&bundle.state),
+            "SA-6's term is the amendment's literal accuse + disclose"
+        );
+        assert!(da > 0, "an armed DA court that adds nothing to the lattice is a rule with no window");
+
+        let mut armed = shipped.clone();
+        armed.palw_da_court = Some(ForkActivation::always());
+        // A preset whose depths were derived WITHOUT the DA term does not silently pass: arming is
+        // a re-derivation, which is the honest statement that it is a re-mint and not a flag flip.
+        let re_derived = armed.clone().with_palw_v2_depths(&bundle);
+        assert!(
+            re_derived.blockrate.pruning_depth >= shipped.blockrate.pruning_depth,
+            "arming the DA court may only widen the horizon"
+        );
+        let lattice = 2 * (bundle.state.window_bind() + bundle.state.window_receipt())
+            + bundle.state.window_challenge()
+            + bundle.state.window_court()
+            + da;
+        assert!(
+            lattice <= re_derived.blockrate.pruning_depth,
+            "the DA phase outlives the pruning horizon: lattice {lattice} > pruning_depth {}",
+            re_derived.blockrate.pruning_depth
+        );
+        re_derived.validate_palw_v2().expect("a re-derived armed preset must validate");
+
+        // SA-3's own inequality, which `validate_palw_v2` proves past the fence: the disclose
+        // window is at least twice the finality window, so a reorg across the deadline cannot flip
+        // the verdict without a finality violation.
+        assert!(
+            crate::palw_state_v2::palw_da_disclose_window_daa_v1(&bundle.state) >= 2 * re_derived.blockrate.finality_depth,
+            "W_disclose must be at least twice the finality window (SA-3)"
+        );
+        let mut narrow = re_derived.clone();
+        narrow.blockrate.finality_depth = crate::palw_state_v2::palw_da_disclose_window_daa_v1(&bundle.state);
+        assert!(narrow.validate_palw_v2().is_err(), "a preset whose finality window outruns the disclose window is refused");
     }
 
     /// **Every fence in the fingerprint is normalised, including the nested ones** (re-audit R-2).

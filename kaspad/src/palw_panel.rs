@@ -3124,6 +3124,8 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::ClassLaneCertified { .. } => "ClassLaneCertified",
         PalwConsensusObjectV2::ObjectChunk { .. } => "ObjectChunk",
         PalwConsensusObjectV2::DerivedArtifactV1 { .. } => "DerivedArtifactV1",
+        PalwConsensusObjectV2::DefaultAccused { .. } => "DefaultAccused",
+        PalwConsensusObjectV2::MaterialDisclosed { .. } => "MaterialDisclosed",
     }
 }
 

@@ -193,7 +193,21 @@ pub fn validate_court_opened_v2(
     verify_mldsa87: impl Fn(&[u8], &[u8], &[u8], &[u8]) -> bool,
 ) -> Result<(), PalwCourtV2Error> {
     let claim = state.claim(claim_id).ok_or(PalwCourtV2Error::MissingClaim(*claim_id))?;
-    let PalwClaimPhaseV2::ReceiptLicensed { licensed_daa } = claim.phase else {
+    // **A data-availability accusation does not close the arithmetic court** (ADR-0062 SA-7).
+    //
+    // The two courts answer different questions and a producer can be innocent of one and guilty
+    // of the other. Reading `claim.phase` directly made an open `DefaultDisputed` un-challengeable,
+    // so one accusation — from any bond, the producer's own second bond included — bought a
+    // fraudulent producer the rest of its challenge window for `min_collateral_sompi`, against a
+    // `CourtFraud` conviction that would have taken `claim.reserved` and voided the escrow.
+    //
+    // `palw_challenge_surface_phase_v2` is the identity on every other phase, so nothing changes on
+    // a network where nothing can be disputed; `palw_da_paused_daa_v2` adds back the part of the
+    // window the open session has consumed, so looking through the phase does not silently spend
+    // the producer's clock either. Both are zero-cost while `palw_da_court` is dormant, because
+    // `DefaultDisputed` is unconstructible there.
+    let PalwClaimPhaseV2::ReceiptLicensed { licensed_daa } = *crate::palw_state_v2::palw_challenge_surface_phase_v2(&claim.phase)
+    else {
         return Err(PalwCourtV2Error::NotChallengeable {
             claim: *claim_id,
             why: "only a ReceiptLicensed claim is in its challenge surface",
@@ -201,6 +215,7 @@ pub fn validate_court_opened_v2(
     };
     let deadline = licensed_daa
         .checked_add(state_params.window_challenge())
+        .and_then(|at| at.checked_add(crate::palw_state_v2::palw_da_paused_daa_v2(&claim.phase, ctx.daa_score)))
         .ok_or(PalwCourtV2Error::NotChallengeable { claim: *claim_id, why: "challenge deadline overflows the DAA score" })?;
     if ctx.daa_score > deadline {
         return Err(PalwCourtV2Error::NotChallengeable { claim: *claim_id, why: "the challenge window has lapsed" });

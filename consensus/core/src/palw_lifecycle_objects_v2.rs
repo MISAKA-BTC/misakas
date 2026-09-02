@@ -207,6 +207,32 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         PalwConsensusObjectV2::DerivedArtifactV1 { object, signature } => {
             crate::palw_derived_v1::check_derived_carriage_v1(object, signature)
         }
+        // **ADR-0062 SA-1/SA-2: both DA-court objects ride, and both carry their own
+        // authorisation.** Same stateless/stateful split as retirement: this layer checks that a
+        // signature is PRESENT and that a disclosure fits the close ceiling; whether the signature
+        // is the accuser's bond key or the claim's producer key is the acceptance layer's, where
+        // the registry and the claim are in hand.
+        //
+        // Carriage is deliberately permissionless for the disclosure (SA-3): the object is signed
+        // by the producer's bond, so who carried it is irrelevant, and that is precisely what makes
+        // suppressing it cost an attacker every producer for a whole window instead of one.
+        PalwConsensusObjectV2::DefaultAccused { signature, .. } if !signature.is_empty() => Ok(()),
+        PalwConsensusObjectV2::DefaultAccused { .. } => Err(
+            "a data-availability accusation must carry the accuser's signature — a bond key is a public outpoint, so without one anyone could accuse under a stranger's identity",
+        ),
+        PalwConsensusObjectV2::MaterialDisclosed { preimage, signature, .. } if !signature.is_empty() => {
+            // The ceiling a close is priced at, applied to the disclosure for the reason the ADR
+            // measures: a FLAT event preimage at a Qwen-class vocabulary is 607,744 bytes, 7.4× the
+            // whole budget, so an unbounded disclosure would be a block-sized object nobody priced.
+            // The class's OWN registered ceiling is checked at acceptance, where the bundle is.
+            if preimage.len() > crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES as usize {
+                return Err("a data-availability disclosure is above the close-byte ceiling this ruleset prices");
+            }
+            Ok(())
+        }
+        PalwConsensusObjectV2::MaterialDisclosed { .. } => Err(
+            "a data-availability disclosure must carry the producer's signature — unsigned, a third party could bind a producer to material it never published",
+        ),
     }
 }
 
