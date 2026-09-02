@@ -223,8 +223,9 @@ fingerprint move on the same genesis, which the handshake still treats as a diff
 every node wipes, exactly as 5c.
 
 **Pre-checks**: 03:20 CEST on tip `9d038706` — pin test ok, `f6afe2e2…` / `fd041c40…`, A16 pin
-present, `a16_root_probe` green (now superseded). The same check is re-run on the new tip; step
-(2) below is satisfied only for the exact commit the user pushes.
+present, `a16_root_probe` green (superseded). 03:45 CEST on tip `697f1d0c` ("admission item 8 reaches the free-prompt lane",
+parent `9d038706`) — pin test ok, `e2b91c16…` / `3f25063d…`, A16 pin present, `a16_root_probe`
+green. Step (2) below is satisfied only for the exact commit the user pushes.
 
 **5d go/no-go gate** (all three, in order): (1) the user merges/pushes the tree and says when;
 (2) this session re-derives the fingerprint from the pushed commit in an isolated worktree and it
