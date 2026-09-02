@@ -17,6 +17,9 @@ path = "src/main.rs"
 [dependencies]
 kaspa-consensus-core.workspace = true
 kaspa-hashes.workspace = true
+# ADR-0079 Decision 5/6: the ONE spelling of the worker spawn discipline (env allowlist, working
+# directory, resident ceiling, confinement backend). A second copy here would be a second answer.
+misaka-palw.workspace = true
 
 borsh.workspace = true
 faster-hex.workspace = true

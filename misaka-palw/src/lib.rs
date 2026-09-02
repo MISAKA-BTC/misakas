@@ -78,6 +78,12 @@ pub use kaspa_consensus_core::vlt::REPLAY_RESIDUAL_COMMITMENT_KEY as PALW_RESIDU
 #[cfg(unix)]
 pub mod agent_client;
 
+/// Host-side confinement for every process that executes a PALW class (ADR-0079). Portable by
+/// construction — a platform without a backend reports `none` and keeps the environment
+/// discipline — so it is NOT `#[cfg(unix)]`-gated: `kaspad` is a non-optional dependent and a
+/// Windows build must not lose the module that tells it what posture it is running under.
+pub mod host_security;
+
 /// The submission schema this bridge understands.
 pub const PALW_SUBMISSION_SCHEMA_V3: &str = "misaka.palw.testnet-submission.v3";
 

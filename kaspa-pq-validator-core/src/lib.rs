@@ -7,6 +7,11 @@
 //! persistent equivocation-safety log ([`SignedEpochStore`], ADR-0011). No consensus
 //! surface — this is a node-local helper crate.
 
+/// ADR-0079 Decision 8 / SA-2: the ONE message shape a free-prompt signature may cover, and the
+/// only place a `PalwFpCommitmentV3` claim id is allowed to come from. Both signing forms — the
+/// rail's local seed and the signer sidecar's `--print-claim` digest — pass through it.
+pub mod palw_fp_sign_gate;
+
 use kaspa_addresses::{Address, Prefix, Version};
 use kaspa_consensus_core::constants::{MAX_TX_IN_SEQUENCE_NUM, TX_VERSION};
 use kaspa_consensus_core::dns_finality::{

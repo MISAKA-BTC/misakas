@@ -31,6 +31,12 @@ faster-hex.workspace = true
 # kaspa-pow: ADR-0042 Decision 4 moved every model-reaching call out of the consensus build.
 misaka-palw-pow-driver.workspace = true
 blake2b_simd.workspace = true
+# ADR-0079 Decision 13: `node security-report` recomputes an artifact digest with the SAME
+# algorithm the worker's own pinned-model gate uses, so the two numbers are comparable.
+sha2.workspace = true
+# ADR-0079: the ONE spelling of the host posture — the environment allowlist, the working
+# directory, the resident ceiling and the backend actually in force.
+misaka-palw.workspace = true
 serde_json.workspace = true
 serde = { workspace = true, features = ["derive"] }
 toml.workspace = true
