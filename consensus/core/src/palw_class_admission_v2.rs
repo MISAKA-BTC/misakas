@@ -1976,9 +1976,6 @@ mod tests {
         }
     }
 
-    /// **The one gate, on the one family.** Every registration goes through the step-space gate:
-    /// counted leaves, a full coverage walk, the ladder and the court's cost ceilings. There is no
-    /// second arm to fall into (ADR-0053).
     /// **The prompt-id term IS the opening's size past ADR-0081 Decision 3's fence — the four
     /// numbers, printed, on the real derivation.**
     ///
@@ -2050,6 +2047,9 @@ mod tests {
         assert_eq!(shipped, explicit);
     }
 
+    /// **The one gate, on the one family.** Every registration goes through the step-space gate:
+    /// counted leaves, a full coverage walk, the ladder and the court's cost ceilings. There is no
+    /// second arm to fall into (ADR-0053).
     #[test]
     fn every_registration_goes_through_the_step_space_gate() {
         let bundle = bundle_with_full_ladder();
