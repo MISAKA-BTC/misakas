@@ -194,8 +194,13 @@ survives only as the unrouted `TESTNET11_PARAMS` constant.
 * **ADR-0073 Phases ② and ④** — the receipt lane's weight activation (gated on ① and ③, both
   landed) and the receipt block's chain position / share migration (`algo_id_carries_no_chain_position(7)`
   still true; 0055 D1 stands until then).
-* **ADR-0075** — the SDK preflight and the gateway still read the build's certified set, not the
-  chain's; the mainnet card is empty until real operator keys exist.
+* **ADR-0075** — **corrected 2026-09-02 against the tree: the SDK half is CLOSED.**
+  `PalwClassSdk` takes the chain's set as an argument (`terms.chain_certified_families`,
+  `misaka-palw-sdk/src/sdk.rs:496,569,583`), so it reads genesis ∪ chain. What remains is the
+  GATEWAY: `misaka-palw-gateway/src/` contains no reference to a certified set at all, so it cannot
+  tell a chain-certified class from an uncertified one — which is also ADR-0077 Decision 3's
+  requirement that the gateway read the chain it commits to. The mainnet card is still empty until
+  real operator keys exist.
 * **ADR-0076 §8** — restated 2026-09-02: the processor already pins a post-genesis entrant's
   `initial_target` to the base class's live target (M2-12), so the field is not free; what stays
   open is that the pinned price is the floor's until `ClassLaneCertified` re-seeds it (Decision 4),
@@ -208,8 +213,11 @@ survives only as the unrouted `TESTNET11_PARAMS` constant.
 * **ADR-0071 §5** — a false capability declaration costs nothing, and pricing it collides with the
   silence doctrine.
 * **ADR-0069** — a zero-share class's floor block still adds pwu to fork choice.
-* **ADR-0067** — operational arming of chain-registered classes (`--palw-chain-classes`); nothing
-  pays a panel seat (R-7).
+* **ADR-0067** — **not unimplemented: unarmed.** `--palw-chain-classes` is shipped
+  (`kaspad/src/args.rs:238,979`, `daemon.rs:1328,1522`, and `palw_backends.rs:43`, whose comment
+  names the flag as the fence's only caller), and testnet-11's launchers do not pass it. Arming is
+  an operator act with the conditions ADR-0067 Decision 5 and its security amendment state.
+  Separately, nothing pays a panel seat (R-7).
 * **ADR-0066 D4** — the committed liveness table (the pruned-IBD snapshot component) and the leak
   fence's arming; **ADR-0065 D1** — seat maturity is armable and unarmed; seat accountability past
   the D4 fence is zero until receipts ride the chain independently.
