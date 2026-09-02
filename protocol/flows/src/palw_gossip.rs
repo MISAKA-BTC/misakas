@@ -164,9 +164,31 @@ const OUTSTANDING_PULL_CAP: usize = 512;
 /// of ~70-byte requests erased the throttle record of every HONEST claim as collateral, and
 /// audit3 H6's "a refused request is free and repeatable" was back for all of them at once. A
 /// bounded map whose overflow behaviour is "forget everything" is a rate limiter with a reset
-/// button. Eviction is per entry and oldest-first now — see [`ServeThrottle`] — and the bound
-/// that survives the throttle being defeated at all is [`SERVE_ATTEMPT_FLOOR_BYTES`], which is
-/// charged to the asking PEER and cannot be reset by anything the asker sends.
+/// button. Eviction is per entry and oldest-first now — see [`ServeThrottle`].
+///
+/// **Per-entry eviction was not a bound either, and this is the arithmetic that is** (audit
+/// 2026-09-02 round 3). Evicting one entry per insert is the same erasure as `clear()` when the
+/// inserts are free: a flood of exactly this many fresh ids walks every honest record out of the
+/// map one at a time, for the same ~287 KB. The record used to be written BEFORE the budget was
+/// reserved, so a peer whose share was already spent went on inserting at no cost at all.
+///
+/// It is written after the reservation now, which prices one eviction at
+/// [`SERVE_ATTEMPT_FLOOR_BYTES`] of the same allowance a real serve spends. Two consequences, and
+/// it is the second that bounds it:
+///
+///   * one peer's share buys ≈513 records (48 MiB, less the 16 MiB reservation that must still fit
+///     alongside it), against the 4096 it takes to evict anybody at all;
+///   * node-wide, admission stops at (256 MiB − 16 MiB) / 64 KiB = 3841 records per 60 s window —
+///     BELOW this cap. No number of sybil peer keys can fill the map inside one window, which is
+///     what `the_serve_throttle_cannot_be_flushed_by_sybil_peers_either` asserts.
+///
+/// **The residual, stated rather than claimed away.** A burst straddling a window boundary gets
+/// two allowances (7680 records) inside one [`SERVE_THROTTLE`] = 10 s lifetime, and that CAN evict
+/// an honest record. What it cannot do is profit: those admissions are the whole node's serve
+/// allowance for two windows, and the read a flushed record would have permitted must be bought
+/// out of the same 256 MiB the flush just spent. Eviction and harm are priced in one currency at
+/// one unit price, so a flush is self-defeating rather than an off-switch — which is the whole
+/// difference from `clear()`, where one ~70-byte message bought every eviction there was.
 const SERVED_RECENTLY_CAP: usize = 4096;
 /// **What one serve ATTEMPT costs its asker, whatever the attempt produces.**
 ///
@@ -348,23 +370,46 @@ impl PalwGossipCenter {
     /// and did not land.
     pub async fn resolve_material_for_serve(&self, peer: PeerKey, claim: Hash64) -> Option<Vec<u8>> {
         {
-            let mut served = self.served_recently.lock().unwrap();
-            let now = std::time::Instant::now();
+            let served = self.served_recently.lock().unwrap();
             if let Some(at) = served.recorded_at(&claim)
-                && now.duration_since(at) < SERVE_THROTTLE
+                && std::time::Instant::now().duration_since(at) < SERVE_THROTTLE
             {
                 return None;
             }
-            // Charged here, on the attempt. A refusal below must cost the asker its window too, or
-            // the refusal is free and repeatable. The map bounds itself by evicting its oldest
-            // entry, one at a time — never by forgetting everything, which is what handed a
-            // flooder an off-switch for every honest claim's record at once.
-            served.record(claim, now);
         }
         // Reserve the worst case; the difference comes back once the real size is known.
         let reservation = PALW_MATERIAL_MAX_BYTES as u64;
         if !self.reserve_serve_budget(peer, reservation) {
             return None;
+        }
+        // **The window is written by a request this node's own budget ADMITTED, and that is what
+        // makes the map unfloodable** (audit 2026-09-02 round 3).
+        //
+        // Recording before the reservation made the eviction free: a peer whose 48 MiB share was
+        // spent kept inserting a fresh id per ~70-byte request, at no further cost, and
+        // `SERVED_RECENTLY_CAP` of those evict every honest claim's record one at a time — the
+        // same outcome `clear()` had, for ~287 KB instead of one message. Past the reservation
+        // every attempt also costs [`SERVE_ATTEMPT_FLOOR_BYTES`], so writing the map here prices
+        // the eviction in the one currency nothing on the wire can reset: 48 MiB / 64 KiB ≈ 513
+        // records per peer per window, and 256 MiB / 64 KiB = 4096 node-wide per 60 s. Evicting
+        // somebody else's record takes `SERVED_RECENTLY_CAP` = 4096 fresh ones, and the record
+        // only has to survive `SERVE_THROTTLE` = 10 s — inside which the node-wide ceiling admits
+        // ~682. The flush is arithmetically out of reach by a factor of six, from every peer at
+        // once, rather than costing one flooder a few hundred kilobytes.
+        //
+        // Audit3 H6's property is untouched: everything PAST the reservation — no resolver,
+        // nothing on disk, bytes over the cap — is still charged the window here, before the read,
+        // so a refusal that cost this node a disk seek is never free and repeatable. The only
+        // unrecorded path is the peer's own exhausted share, which costs this node two mutex
+        // acquisitions and no I/O, and which the peer cannot escape until the window turns.
+        //
+        // The check and the write are no longer one critical section, so two requests for the same
+        // fresh claim arriving together can both proceed. Each pays the floor, so the duplicate is
+        // bounded by the budget — which the doc above already names as the bound that survives the
+        // claim throttle being defeated at all.
+        {
+            let mut served = self.served_recently.lock().unwrap();
+            served.record(claim, std::time::Instant::now());
         }
         // **Past the reservation every exit costs the asker [`SERVE_ATTEMPT_FLOOR_BYTES`].** The
         // refund used to return the reservation minus the bytes actually sent, and the whole
@@ -729,8 +774,22 @@ mod tests {
         assert!(center.resolve_material_for_serve(peer(2), claim).await.is_none(), "the claim is inside its throttle window");
         assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 1, "and the refusal did NOT touch the disk");
 
-        // **The budget refusal, which is where both halves of the old ordering showed.** Exhaust a
-        // peer's allowance and ask it for a claim nothing has touched yet.
+        // **A serve that reached the resolver and produced nothing is still charged.** This is
+        // audit3 H6's actual property: the old code recorded `served_recently` only on SUCCESS, so
+        // a request for a claim this node does not hold was never throttled and could be repeated
+        // immediately and indefinitely, with zero outbound traffic to make it visible. The record
+        // is written before the read, so every path past the reservation carries it.
+        let absent = h64(13);
+        center.set_material_resolver(std::sync::Arc::new(move |_| None));
+        assert!(center.resolve_material_for_serve(peer(4), absent).await.is_none(), "nothing on disk, nothing served");
+        assert!(
+            center.served_recently.lock().unwrap().recorded_at(&absent).is_some(),
+            "a serve that found nothing still costs the asker its throttle window, or the refusal is free and repeatable"
+        );
+
+        // **The budget refusal, which is the one path that is NOT charged — and must not be**
+        // (audit 2026-09-02 round 3). Exhaust a peer's allowance and ask it for a claim nothing has
+        // touched yet.
         let other = h64(12);
         while center.reserve_serve_budget(peer(3), PALW_MATERIAL_MAX_BYTES as u64) {}
         assert!(center.resolve_material_for_serve(peer(3), other).await.is_none(), "no allowance, no serve");
@@ -738,12 +797,15 @@ mod tests {
         // (a) The disk was never touched. The old order was read-then-budget, so an 80-byte request
         //     bought a full synchronous read of up to 16 MiB that produced no bytes at all.
         assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), 1, "the allowance is consulted BEFORE the disk");
-        // (b) And the refusal was RECORDED. The old code wrote `served_recently` only on success,
-        //     so a refused claim was never throttled and the identical request could be repeated
-        //     immediately and indefinitely, with zero outbound traffic to make it visible.
+        // (b) And it left NO record. Charging the window to a request the budget refused is what
+        //     made the map flushable for free: a peer whose share is spent costs this node two
+        //     mutex acquisitions per message, and it was buying an eviction with each of them.
+        //     `SERVED_RECENTLY_CAP` of those walk every honest claim's record out of the map. A
+        //     record now costs `SERVE_ATTEMPT_FLOOR_BYTES` of the asker's own share, which is the
+        //     only currency nothing on the wire can reset.
         assert!(
-            center.served_recently.lock().unwrap().recorded_at(&other).is_some(),
-            "a refused serve still costs the asker its throttle window, or the refusal is free and repeatable"
+            center.served_recently.lock().unwrap().recorded_at(&other).is_none(),
+            "a request this node's budget refused must not buy an entry in the map — that is the eviction being free"
         );
     }
 
@@ -923,14 +985,21 @@ mod tests {
     }
 
     /// **A stranger must not be able to switch the serve throttle off for everybody else** (audit
-    /// 2026-09-02).
+    /// 2026-09-02, and its round-3 re-check).
     ///
-    /// The first bound swept at the cap and, when the sweep freed nothing — which is exactly what
-    /// a flood of FRESH ids produces, since every entry is still inside its 60 s window — called
-    /// `clear()`. So ~287 KB of ~70-byte requests deleted the throttle record of every honest
-    /// claim at once, and audit3 H6's "a refused request is free and repeatable" was back for all
-    /// of them. A bounded map whose overflow behaviour is "forget everything" is a rate limiter
-    /// with a reset button.
+    /// The first bound swept at the cap and then called `clear()`, so ~287 KB of ~70-byte requests
+    /// deleted the throttle record of every honest claim at once. Per-entry, oldest-first eviction
+    /// replaced it — and a flood of exactly `SERVED_RECENTLY_CAP` fresh ids walks the identical
+    /// honest record out of the map one entry at a time, for the identical price. The first
+    /// version of this test flooded `CAP - 1` after recording the honest claim as the NEWEST
+    /// entry, which is the off-by-one that made it pass: it asserted a property the code did not
+    /// have.
+    ///
+    /// What makes the map unfloodable is not the eviction policy at all — it is that a record is
+    /// written only by a request the per-peer budget ADMITTED, so an eviction costs
+    /// `SERVE_ATTEMPT_FLOOR_BYTES` and no message can reset that. One peer's whole share buys
+    /// ~513 records; filling the map takes 4096. This floods twice the cap from one peer and
+    /// demands both halves: the map does not fill, and the honest record is still there.
     #[tokio::test]
     async fn the_serve_throttle_is_not_a_map_a_stranger_can_flush() {
         let center = PalwGossipCenter::default();
@@ -941,33 +1010,102 @@ mod tests {
             Some(vec![0u8; 1024])
         }));
 
-        // A stranger names a fresh claim per ~70-byte request, filling the map to one short of its
-        // cap. Its own requests stop being ANSWERED once its share is spent — the throttle is
-        // charged before the budget, which is the point — so what this buys is the map, not bytes.
+        // The honest seat's pull is answered once, and is the OLDEST entry in the map from here on
+        // — the position a FIFO eviction reaches first, which is the case worth asserting.
         let honest = h64(0xA11CE);
-        for n in 0..(SERVED_RECENTLY_CAP as u64 - 1) {
+        assert!(center.resolve_material_for_serve(peer(1), honest).await.is_some(), "the honest seat's pull is answered once");
+
+        // A stranger names a fresh claim per ~70-byte request — twice as many as the map can hold,
+        // which is twice what walking every entry out of it would take if the inserts were free.
+        for n in 0..(SERVED_RECENTLY_CAP as u64 * 2) {
             let _ = center.resolve_material_for_serve(peer(2), h64(1_000_000 + n)).await;
         }
-        assert!(center.resolve_material_for_serve(peer(1), honest).await.is_some(), "the honest seat's pull is answered once");
-        assert_eq!(center.served_recently.lock().unwrap().len(), SERVED_RECENTLY_CAP, "the map is full, which is the precondition");
-        let reads_before = reads.load(std::sync::atomic::Ordering::SeqCst);
 
-        // **And now the flood continues against a full map.** Evicting one entry per insert, the
-        // oldest first, these fall on the flooder's own earlier ids and the honest record — the
-        // NEWEST in the map — is the last thing to go. `clear()` inverts that: the very first of
-        // these requests discards every record there is, the honest one included, for one
-        // ~70-byte message.
-        for n in 0..(SERVED_RECENTLY_CAP as u64 - 1) {
-            let _ = center.resolve_material_for_serve(peer(2), h64(2_000_000 + n)).await;
-        }
+        // Its share bought it ~513 records and no more, so the map never came near the cap it
+        // would have to reach to evict anybody.
+        let ceiling = (SERVE_BUDGET_BYTES_PER_PEER / SERVE_ATTEMPT_FLOOR_BYTES) as usize;
+        let held = center.served_recently.lock().unwrap().len();
+        assert!(
+            held <= ceiling + 1,
+            "one peer put {held} entries in the throttle map against its own {ceiling}-attempt share — the record is not being \
+             charged to a request the budget admitted"
+        );
+        assert!(
+            held < SERVED_RECENTLY_CAP,
+            "one peer filled the throttle map ({held} of {SERVED_RECENTLY_CAP}), which is what evicting somebody else's record takes"
+        );
 
         // The honest claim is inside its window still, and no message any peer can send may change
         // that. Asked from a THIRD peer, so this is the claim throttle and not a spent budget.
+        // (The flooder's own admitted requests did read the disk — that is the floor being charged
+        // — so the count is sampled here, and what must not move is the read for SOMEBODY ELSE'S
+        // claim.)
+        let reads_before = reads.load(std::sync::atomic::Ordering::SeqCst);
         assert!(
             center.resolve_material_for_serve(peer(3), honest).await.is_none(),
             "a flooder must not be able to buy this node a fresh read of somebody else's claim"
         );
         assert_eq!(reads.load(std::sync::atomic::Ordering::SeqCst), reads_before, "and the disk was not touched for it");
+    }
+
+    /// **Nor by every peer key it can afford at once** (audit 2026-09-02 round 3, the throttle
+    /// half).
+    ///
+    /// The test above is one peer against its own 48 MiB share, and a re-check could fairly say
+    /// that bounds one peer and not the attack: the flooder controls how many peer keys it opens.
+    /// The answer is the node-wide ceiling, and it is arithmetic rather than judgement. A record
+    /// is written only by a request the budget ADMITTED, admission needs the 16 MiB worst-case
+    /// reservation to fit inside what is left of the node's 256 MiB minute, so the node admits at
+    /// most (256 − 16) MiB / 64 KiB = 3841 attempts in a window — fewer than the map's 4096
+    /// entries. Filling it inside one window is not expensive, it is impossible, at any number of
+    /// peer keys.
+    ///
+    /// What the eviction cost when the record was charged before the budget: 4096 ~70-byte
+    /// requests, from one peer, needing no allowance at all — which is what this floods, and it
+    /// is red on that code.
+    #[tokio::test]
+    async fn the_serve_throttle_cannot_be_flushed_by_sybil_peers_either() {
+        let center = PalwGossipCenter::default();
+        center.set_material_resolver(std::sync::Arc::new(move |_| Some(vec![0u8; 1024])));
+
+        // The honest seat's pull, recorded first and therefore the FIFO's next victim.
+        let honest = h64(0xA11CE);
+        assert!(center.resolve_material_for_serve(peer(1), honest).await.is_some(), "the honest seat's pull is answered once");
+
+        // Eight peer keys — one more than the node-wide ceiling divided by a peer's own share, so
+        // the node's allowance is what runs out first and not any peer's — each naming twice the
+        // map's whole capacity in fresh ids. 8192 requests, against a map of 4096.
+        for p in 2..10u128 {
+            for n in 0..(SERVED_RECENTLY_CAP as u64) {
+                let _ = center.resolve_material_for_serve(peer(p), h64(1_000_000 * p as u64 + n)).await;
+            }
+        }
+
+        let node_wide =
+            ((SERVE_BUDGET_BYTES_PER_WINDOW - PALW_MATERIAL_MAX_BYTES as u64) / SERVE_ATTEMPT_FLOOR_BYTES + 1) as usize;
+        let held = center.served_recently.lock().unwrap().len();
+        assert!(
+            held <= node_wide + 1,
+            "{held} entries against a node-wide ceiling of {node_wide} admitted attempts a window — the record is not being \
+             charged to a request the budget admitted"
+        );
+        assert!(
+            held < SERVED_RECENTLY_CAP,
+            "eight peer keys filled the throttle map ({held} of {SERVED_RECENTLY_CAP}); the honest record is evictable for the \
+             price of ~70-byte messages again"
+        );
+        assert!(
+            center.served_recently.lock().unwrap().recorded_at(&honest).is_some(),
+            "and the honest claim's window, which is the thing the flood was buying, is still there"
+        );
+
+        // **And the flush would have bought nothing anyway** — this is the bound, not the margin
+        // above. The 3841 admissions it takes to reach the cap ARE the node's serve allowance, so
+        // a flooder that spent them cannot buy the read the evicted record was refusing either.
+        assert!(
+            !center.reserve_serve_budget(peer(99), PALW_MATERIAL_MAX_BYTES as u64),
+            "a node whose throttle map has been flooded has, by that very fact, no allowance left to serve anybody"
+        );
     }
 
     /// **A serve attempt costs its asker a floor, whatever the attempt returns** (audit

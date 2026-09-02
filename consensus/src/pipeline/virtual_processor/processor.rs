@@ -239,6 +239,24 @@ impl ContributionWeight<'_> {
     }
 }
 
+/// **The grading work one block may demand of every node, in FAULT VECTORS** (ADR-0075 Decision 9,
+/// widened by the audit of 2026-09-02).
+///
+/// D9 bounded the work by counting OBJECTS, and that conflated two things a block can carry: an
+/// object that made this node re-execute eight merkle-proved refutation steps, and an object the
+/// court threw out at its first line without touching one. Both spent the same scarce slot, so two
+/// ordinary lifecycle transactions — no signature, no deposit — carrying a `FamilyCertified` with
+/// an empty vector list dropped every genuine certification in the block, which is a block-cheap
+/// way to keep an honest class weightless forever.
+///
+/// A vector is what the grader actually spends time on (`certify_e2e_family_v1` walks them, and
+/// every per-vector step is a proof check), so the CPU bound is stated in vectors. The number is
+/// EXACTLY the worst case the object cap already permitted — `PALW_CERTIFICATION_MAX_PER_BLOCK`
+/// objects each carrying the per-object maximum `PALW_CERTIFICATION_MAX_VECTORS` — so nothing a
+/// node may be asked to compute grows; what changes is who pays.
+const PALW_CERTIFICATION_GRADING_VECTORS_PER_BLOCK: usize = kaspa_consensus_core::palw_state_v2::PALW_CERTIFICATION_MAX_PER_BLOCK
+    * kaspa_consensus_core::palw_state_v2::PALW_CERTIFICATION_MAX_VECTORS;
+
 /// **Why this node cannot weigh a PALW candidate — and the two reasons are not one reason.**
 ///
 /// [`VirtualStateProcessor::palw_candidate_state_v2`] used to answer `None` to both, which is the
@@ -251,8 +269,10 @@ pub(crate) enum PalwWeighFaultV2 {
     /// An honest absence: not a ConsensusV2 network, no V2 tip written yet, a candidate this
     /// consensus does not hold, or a chain path whose deltas have been pruned. An abstention.
     NoOpinion,
-    /// This node's OWN root-verified snapshot would not read back — a disk that flipped a byte,
-    /// or a row left by another schema. Not an absence: a fault, and a gate that can refuse must.
+    /// This node's OWN root-verified snapshot, or a delta row on the path to the candidate, would
+    /// not read back — a disk that flipped a byte, or a row left by another schema. Not an
+    /// absence: a fault, and a gate that can refuse must. Both ends are classified, because a
+    /// split at the tip alone leaves the identical fail-open at the walk one line below it.
     StoreUnreadable,
 }
 
@@ -445,7 +465,8 @@ pub struct VirtualStateProcessor {
     pub(super) palw_heartbeat_lane: Option<kaspa_consensus_core::config::params::ForkActivation>,
     /// ADR-0066 Decision 4: the inactivity leak's fence and its duration.
     pub(super) palw_inactivity_leak: Option<kaspa_consensus_core::config::params::PalwInactivityLeakV1>,
-    /// ADR-0075 D14's fence, `None` on every shipped preset. See
+    /// ADR-0075 D14's fence, `None` on every shipped preset: what a block's certification slot
+    /// may be spent on, and what an ungraded object costs. See
     /// [`Self::palw_chunk_cap_charge_at`], which is the ONE place this is resolved.
     pub(super) palw_chunk_cap_charge: Option<kaspa_consensus_core::config::params::ForkActivation>,
 
@@ -4026,8 +4047,25 @@ impl VirtualStateProcessor {
         let added: Vec<BlockHash> = path.added.to_vec();
         drop(store);
         let store = self.palw_state_v2_store.read();
-        crate::processes::palw_state_walk::walk_chain_path(&store, state_params, tip_state, &removed, &added)
-            .map_err(|_| PalwWeighFaultV2::NoOpinion)
+        // **The same two-way split, one level down.** Removing the `.ok().flatten()` from
+        // `load_tip` above and leaving `map_err(|_| NoOpinion)` here would have moved the
+        // conflation rather than closed it: `load_delta` names an undecodable row
+        // `StoreError::DataInconsistency` precisely so it is never reported absent (the store's
+        // own words: "the same refusal by another name"), and collapsing it into an abstention
+        // hands `palw_frontier_provenance_outcome` a `GateInactive` — ALLOW — for a node whose tip
+        // reads back perfectly and whose delta rows are corrupt. A pruned or absent delta really
+        // is an absence and still abstains; anything the STORE refused, and any delta of this
+        // node's own that will not compose with this node's own state, is a fault.
+        crate::processes::palw_state_walk::walk_chain_path(&store, state_params, tip_state, &removed, &added).map_err(|e| {
+            use crate::processes::palw_state_walk::PalwStateWalkError as W;
+            match e {
+                W::MissingDelta(_) | W::NoAnchor => PalwWeighFaultV2::NoOpinion,
+                W::Store(_) | W::State(_) => {
+                    warn!("PALW state fault: this node's own V2 delta rows would not walk ({e}); it can weigh no candidate");
+                    PalwWeighFaultV2::StoreUnreadable
+                }
+            }
+        })
     }
 
     /// **The block whose PALW standing represents this consensus** — its virtual sink, normally.
@@ -4854,12 +4892,14 @@ impl VirtualStateProcessor {
         let mut rehearsal = *point;
         let mut accepted = Vec::with_capacity(objects.len());
         let mut certifications_graded = 0usize;
+        // Armed only (see the accounting below): the fault vectors this block has already asked
+        // the grader to walk, refused or accepted. Dormant it is never read and never written.
+        let mut vectors_graded = 0usize;
         for object in objects {
-            // ADR-0075 Decision 9: a block grades at most `PALW_CERTIFICATION_MAX_PER_BLOCK`
-            // family drills. Counted before grading, in transaction order, so every node drops the
-            // same object and the grader is never run for a drill the block may not carry.
-            // A chunk that completes its group applies the FamilyCertified it carried, so it
-            // counts against the same cap (ADR-0075 Decision 14).
+            // ADR-0075 Decision 9: a block certifies at most `PALW_CERTIFICATION_MAX_PER_BLOCK`
+            // families, in transaction order, so every node drops the same object. A chunk that
+            // completes its group applies the FamilyCertified it carried, so it counts against
+            // the same cap (ADR-0075 Decision 14).
             //
             // **A chunk the transition will refuse on its face completes nothing, and must not
             // spend the cap.** This asked only `count == 1` for a group that does not exist yet,
@@ -4884,49 +4924,106 @@ impl VirtualStateProcessor {
             // un-upgraded one must not disagree about it in silence — see
             // [`Self::palw_chunk_cap_charge_at`]. Dormant, every added conjunct is `true` and the
             // predicate is byte-identical to the one before the fence existed.
-            let index_rule_charged = self.palw_chunk_cap_charge_at(point.daa_score);
+            let cap_charged_on_grading = self.palw_chunk_cap_charge_at(point.daa_score);
+            // Armed: the fault-vector count of the certification this chunk would assemble, read
+            // ONCE here rather than decoded again for the work charge below. `None` — and dormant,
+            // always `None` — means the payload was never touched.
+            let mut chunk_vectors: Option<usize> = None;
             let completes_a_group = match &object {
                 kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::ObjectChunk { group, index, count, bytes } => {
                     let pending = folded.pending_chunk_group(group);
-                    // Dormant this is `true` and drops out; armed it is the transition's own test.
-                    // A closure so it stays LAST in the conjunction: the reassembly is the only
-                    // part of this predicate that touches the payload, and the cheap structural
-                    // checks decide almost every chunk before it runs.
-                    let assembles_a_certification = || {
-                        !index_rule_charged
-                            || (*index < *count
-                                && Self::palw_chunk_completes_a_certification_v1(
-                                    pending.map(|p| &p.parts),
-                                    *index,
-                                    *count,
-                                    bytes,
-                                    group,
-                                ))
+                    // The cheap structural test decides almost every chunk, and dormant it is the
+                    // WHOLE test — byte-identical to the accounting before the fence existed.
+                    let structurally_completes = match pending {
+                        Some(p) => p.count == *count && !p.parts.contains_key(index) && p.parts.len() + 1 == *count as usize,
+                        None => *count == 1,
                     };
-                    match pending {
-                        Some(p) => {
-                            p.count == *count
-                                && !p.parts.contains_key(index)
-                                && p.parts.len() + 1 == *count as usize
-                                && assembles_a_certification()
-                        }
-                        None => *count == 1 && assembles_a_certification(),
+                    if !structurally_completes {
+                        false
+                    } else if !cap_charged_on_grading {
+                        true
+                    } else if *index >= *count {
+                        // `ChunkIndexOutOfRange`: the transition refuses it on its face.
+                        false
+                    } else {
+                        // Armed, and only here does anything touch the payload: the transition's
+                        // own completion test, and the grading work the object it assembles to
+                        // will cost.
+                        chunk_vectors =
+                            Self::palw_chunk_completes_a_certification_v1(pending.map(|p| &p.parts), *index, *count, bytes, group);
+                        chunk_vectors.is_some()
                     }
                 }
                 _ => false,
             };
-            if matches!(object, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::FamilyCertified { .. })
-                || completes_a_group
-            {
+            let is_certification =
+                matches!(object, kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::FamilyCertified { .. })
+                    || completes_a_group;
+            if !cap_charged_on_grading {
+                // **Dormant — every shipped preset — this is the pre-fence accounting verbatim.**
+                if is_certification {
+                    if certifications_graded >= kaspa_consensus_core::palw_state_v2::PALW_CERTIFICATION_MAX_PER_BLOCK {
+                        info!(
+                            "Block {block}: a FamilyCertified object was dropped, and the block stands: the block already carries \
+                             {} (PALW_CERTIFICATION_MAX_PER_BLOCK)",
+                            kaspa_consensus_core::palw_state_v2::PALW_CERTIFICATION_MAX_PER_BLOCK
+                        );
+                        continue;
+                    }
+                    certifications_graded += 1;
+                }
+            } else if is_certification {
+                // **Armed: a SLOT is what a certification the grader accepted has spent, and the
+                // grading WORK is charged in fault vectors before the grader runs.**
+                //
+                // Charging the slot up front was the defect, and the chunk rule closed only the
+                // side door: `matches!(object, FamilyCertified{..})` charged it too, before
+                // `palw_v2_validate_objects` or the transition ever ran. So an object the court
+                // refuses at its first line — `NoVectors`, decided before a single fault vector is
+                // graded — took a slot from a family that had earned one, and two of them per
+                // block dropped every genuine certification the block carried. Proven by
+                // experiment twice, with the fence armed, in both the direct and the chunked
+                // shape.
+                //
+                // Slots are therefore charged in the `Ok` arm of the apply below, to objects that
+                // WERE graded and accepted, which preserves Decision 9 exactly: at most
+                // `PALW_CERTIFICATION_MAX_PER_BLOCK` families enter the state per block. What an
+                // object costs before it is graded is the vectors it asks the grader to walk —
+                // `Vec::len`, free to read — against the block's fixed work budget, so a
+                // certification the court will refuse for free costs the block nothing.
+                //
+                // **Residual, stated rather than hidden.** The work budget is still first-come:
+                // an attacker who builds `PALW_CERTIFICATION_GRADING_VECTORS_PER_BLOCK` vectors of
+                // well-formed-but-wrong evidence exhausts it and starves the block. That costs it
+                // two `PalwShapeProfileV3`s per vector — the first thing the grader compares — so
+                // the price of the attack rises from two sixty-byte carriers to tens of kilobytes
+                // of structurally plausible drill, and it is bounded by the block's own byte
+                // limit. Pricing it outright is a deposit, which is ADR-0075's chunk-deposit work
+                // and not this fence.
                 if certifications_graded >= kaspa_consensus_core::palw_state_v2::PALW_CERTIFICATION_MAX_PER_BLOCK {
                     info!(
-                        "Block {block}: a FamilyCertified object was dropped, and the block stands: the block already carries {} \
-                         (PALW_CERTIFICATION_MAX_PER_BLOCK)",
+                        "Block {block}: a FamilyCertified object was dropped, and the block stands: the block already certified {} \
+                         families (PALW_CERTIFICATION_MAX_PER_BLOCK)",
                         kaspa_consensus_core::palw_state_v2::PALW_CERTIFICATION_MAX_PER_BLOCK
                     );
                     continue;
                 }
-                certifications_graded += 1;
+                let vectors = match &object {
+                    kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::FamilyCertified { evidence } => {
+                        evidence.vector_count()
+                    }
+                    _ => chunk_vectors.unwrap_or(0),
+                };
+                if vectors_graded.saturating_add(vectors) > PALW_CERTIFICATION_GRADING_VECTORS_PER_BLOCK {
+                    info!(
+                        "Block {block}: a FamilyCertified object was dropped, and the block stands: it would ask for {vectors} more \
+                         fault vectors than the block's remaining grading budget ({} of {PALW_CERTIFICATION_GRADING_VECTORS_PER_BLOCK} \
+                         already spent)",
+                        vectors_graded
+                    );
+                    continue;
+                }
+                vectors_graded += vectors;
             }
             match self.palw_v2_validate_objects(&folded, state_params, point, std::slice::from_ref(&object)) {
                 Ok(()) => {
@@ -4954,6 +5051,12 @@ impl VirtualStateProcessor {
                                     )
                                     .len()
                                 );
+                            }
+                            // **Armed: the slot is spent HERE, by a certification the grader
+                            // accepted.** Dormant it was already charged before the grader ran,
+                            // which is the accounting this fence replaces.
+                            if cap_charged_on_grading && is_certification {
+                                certifications_graded += 1;
                             }
                             folded = next;
                             rehearsal.blue_score = rehearsal.blue_score.saturating_add(1);
@@ -5650,9 +5753,19 @@ impl VirtualStateProcessor {
         self.palw_unavailable_abstains.is_some_and(|fence| fence.is_active(daa_score))
     }
 
-    /// **ADR-0075 D14, resolved in exactly one place.** Past the fence, a chunk whose index falls
-    /// outside its own count completes nothing — the transition refuses it as
-    /// `ChunkIndexOutOfRange` — so it must not spend the block's certification cap.
+    /// **ADR-0075 D14, resolved in exactly one place: WHAT a certification slot may be spent on.**
+    ///
+    /// Past the fence a slot belongs to a certification the grader ACCEPTED, and what an object
+    /// costs before it is graded is the fault vectors it asks the court to walk
+    /// (`PALW_CERTIFICATION_GRADING_VECTORS_PER_BLOCK`). Dormant, a slot is charged to anything
+    /// shaped like a certification before any validation runs — which is why two ordinary
+    /// lifecycle transactions carrying evidence the court refuses at its first line could drop
+    /// every genuine certification in a block.
+    ///
+    /// One field for the whole rule, deliberately: it decides which objects a block accepts and
+    /// therefore its state root, and two fences over one rule is a network that can arm half of
+    /// it. The name is the field's history, not its scope — it began as the chunk index rule and
+    /// that rule, alone, bought no adversarial delta.
     fn palw_chunk_cap_charge_at(&self, daa_score: u64) -> bool {
         self.palw_chunk_cap_charge.is_some_and(|fence| fence.is_active(daa_score))
     }
@@ -5667,34 +5780,42 @@ impl VirtualStateProcessor {
     /// (`ChunkedObjectUndecodable`, `ChunkedObjectKindNotAllowed`). Anything less is a rule with
     /// no adversarial delta — the attacker simply writes the field the rule does not read.
     ///
+    /// **It answers with the WORK, not with a yes.** The caller charges the block's grading budget
+    /// in fault vectors, and the only way to know a chunked certification's vector count is to
+    /// decode it — which this already does. Returning the count means the payload is decoded once
+    /// per chunk rather than twice, and it makes the chunked path and the direct path charge the
+    /// identical figure (`PalwCertificationEvidenceV1::vector_count`).
+    ///
     /// `parts` is the group's state so far, `None` for a lone `count == 1` chunk that opens and
     /// closes its group in one object; `bytes` is this chunk's payload, which is not in `parts`
     /// yet. Bounded work: the whole is at most `PALW_OBJECT_CHUNK_MAX_COUNT` ×
     /// `PALW_OBJECT_CHUNK_MAX_BYTES`, and it is the same reassembly the transition performs on
-    /// the very next line for every chunk this returns `true` for.
+    /// the very next line for every chunk this answers `Some` for.
     fn palw_chunk_completes_a_certification_v1(
         parts: Option<&std::collections::BTreeMap<u8, Vec<u8>>>,
         index: u8,
         count: u8,
         bytes: &[u8],
         group: &kaspa_consensus_core::Hash64,
-    ) -> bool {
+    ) -> Option<usize> {
         let mut whole: Vec<u8> = Vec::new();
         for i in 0..count {
             if i == index {
                 whole.extend_from_slice(bytes);
             } else {
-                let Some(part) = parts.and_then(|parts| parts.get(&i)) else { return false };
+                let part = parts.and_then(|parts| parts.get(&i))?;
                 whole.extend_from_slice(part);
             }
         }
         if kaspa_consensus_core::palw_state_v2::palw_object_chunk_group_id_v1(&whole) != *group {
-            return false;
+            return None;
         }
-        matches!(
-            borsh::from_slice::<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>(&whole),
-            Ok(kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::FamilyCertified { .. })
-        )
+        match borsh::from_slice::<kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2>(&whole) {
+            Ok(kaspa_consensus_core::palw_state_v2::PalwConsensusObjectV2::FamilyCertified { evidence }) => {
+                Some(evidence.vector_count())
+            }
+            _ => None,
+        }
     }
 
     /// **ADR-0065 D1, resolved in exactly one place.** The window, or `None` when the rule is off.
