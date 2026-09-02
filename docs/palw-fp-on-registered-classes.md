@@ -9,6 +9,12 @@ lane runs on a class the chain already registers instead of bringing its own. Re
 sections from the bottom for the current shape, and
 [palw-freeprompt-gateway.md](palw-freeprompt-gateway.md) for the protocol.
 
+**What is still narrow, and what a reader should not conclude from "implemented":** a registered
+class's context is 8–16 tokens for prompt and answer TOGETHER, so the lane runs end to end at a
+size no product would ship. That is a width problem, not a wiring problem, and it is stated where
+a person meets it in [testnet11-join-mining.md](testnet11-join-mining.md) §7.2a and
+[testnet11-ask-for-a-file.md](testnet11-ask-for-a-file.md) §0.
+
 ## The finding
 
 The free-prompt lane is complete on the consensus side and unusable on the executor side, and the
@@ -159,6 +165,15 @@ Step 1 is not code. It is the one that has to be made first, and by whoever owns
 
 
 ## Checked exhaustively: no registered class can carry a meaningful free-prompt claim
+
+> **Superseded — 2026-08-31 onwards.** This heading is an absolute sentence about a state that
+> ended, and it is the kind of sentence that gets quoted back. Certification became a consensus
+> object, Qwen3.6 was re-registered on the corrected `graph-v3`, and both model tiers now drill
+> the free-prompt lane; see the dated sections at the bottom of this page. What did NOT change is
+> the WIDTH: a registered class is 8–16 tokens for prompt and answer together, which is why
+> "meaningful" is still doing work in that heading. The measured version of that sentence lives in
+> [testnet11-join-mining.md](testnet11-join-mining.md) §7.2a and
+> [testnet11-ask-for-a-file.md](testnet11-ask-for-a-file.md) §0.
 
 The A16 finding above is not one class's accident. testnet-11 registers three, and the property
 the free-prompt lane needs — runs a language model AND is adjudicable — belongs to none of them:

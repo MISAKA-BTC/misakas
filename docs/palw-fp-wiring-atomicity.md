@@ -1,11 +1,32 @@
 # The remaining PALW wiring, and why it lands as one unit (ADR-0044 FP-08, ADR-0042 PR-08)
 
-Status: the substrate is landed and tested; the pipeline wiring below is **not** started. This
-document exists because the wiring is where every P0 in this project's audit history was born,
-and because the safest thing to write before wiring is the list of things that must not be
-wired one at a time.
+Status: **the wiring landed.** Units A–D are in the tree, testnet-11 has been mining on them
+since the 2026-08 relaunches, and this page is now the record of WHY they had to land together
+rather than a plan for landing them. Read it for the reasoning; do not read any present tense in
+it as a description of the current tree.
 
-## The finding this document records
+The header this replaces said "the pipeline wiring below is **not** started", and it said it for
+months after the units shipped. That is the failure this repository keeps recording in both
+directions: a stale "not started" stops the next person looking just as surely as a stale "it
+works" sends them somewhere that does not.
+
+**Corrected 2026-09-03**, against `consensus/pow/src/lib.rs` on this branch. The two claims below
+that were load-bearing and are now false:
+
+| the page said | the tree says |
+|---|---|
+| `calculate_l1_tag` "has arms for algo 1/2/3/4/5" and falls to `UnknownAlgoId` for 6 and 7 | it has the algo-6 arm (shared with algo-9, ADR-0072 SA-4) at `POW_ALGO_ID_PALW_COMMITTED_V2 \| POW_ALGO_ID_PALW_EXEC_V3`, the algo-7 arm at `POW_ALGO_ID_PALW_RECEIPT_V3`, and the heartbeat arm at algo 8 |
+| "no worker path on this tree captures a step leg at all" | the family workers capture one per job — `misaka-palw-base0/src/fp_capture.rs`, `legs.rs`, and both backends |
+
+Unit B's subtle item survived intact, which is worth noting because it was the one most likely to
+be got wrong: `check_pow_layer0` returns `(true, digest)` for algo 7 without a `bits` comparison,
+with the comment explaining that a receipt header's digest is costlessly re-rollable and that the
+lottery is the quantum ticket in `check_palw_receipt_spend_admission_v3` item 5.
+
+Everything from here down is the 2026-08 argument, preserved. The dated sections at the bottom of
+this page carry their own status.
+
+## The finding this document recorded (superseded; see the header)
 
 Both lanes' PoW arms are absent from the finalizer today. `StateLayer0::calculate_l1_tag`
 (`consensus/pow/src/lib.rs`) has arms for algo 1/2/3/4/5 and falls to
@@ -229,6 +250,12 @@ same `InvalidPoW` — and the daemon suite aborts in the same place. `kaspa-cons
 
 ## The free-prompt lane is not adjudicable yet, and says so (found at the 2026-08-20 integration)
 
+> **Closed.** The gap this section ends on — "no worker path on this tree captures a step leg at
+> all" — was the runtime work it said it was, and it was done: the family workers capture the leg
+> per job (`misaka-palw-base0/src/fp_capture.rs`, `legs.rs`), and the un-captured chat drivers
+> that made `court_capable: false` reachable are deleted. The reasoning below is why the shape
+> had to be this one; the last two paragraphs are no longer a description of the tree.
+
 The attempt lane's audit-C3 fix gives a claim the executor's `committed_execution_root`, and
 `adjudicate_court_close_v2` pins a refutation's binding to it — which is what stops an accuser
 from writing the whole binding and harvesting a shape conviction against an honest producer.
@@ -287,3 +314,19 @@ end to end on the real model (`scripts/misaka-palw-fp-v3-worker-smoke.py`,
 `scripts/misaka-palw-fp-gateway-smoke.py`), which measures everything that does not require a
 chain — one inference producing answer and commitment, arm equality, retention, and the
 transaction the executor rail would submit.
+
+## 2026-09-03 — where the live description now lives
+
+The units landed and the network they were written for is running, so the pages a person actually
+follows are elsewhere and this one should not be competing with them:
+
+* [testnet11-join-mining.md](testnet11-join-mining.md) — joining, bonding, producing, and §7 for
+  the free-prompt lane end to end.
+* [palw-freeprompt-gateway.md](palw-freeprompt-gateway.md) — the gateway and the worker protocol
+  as they are.
+* [testnet11-ask-for-a-file.md](testnet11-ask-for-a-file.md) — the artifact path, and the widths
+  that bound it today.
+
+What this page is still worth reading for is the argument in "The atomic units": the reason each
+unit had to ship whole. That reason has not expired and applies to the next unit as much as it
+did to these four.
