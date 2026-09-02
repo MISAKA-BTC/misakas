@@ -121,6 +121,22 @@ built before this change and a node built after it announce different fingerprin
 other at the handshake, rather than agreeing on a name and disagreeing about which class may
 produce.
 
+## 5b. Decision 4 — a class being SEATED is a class being priced
+
+ADR-0075 seats a weightless class by an object: it registers holding no share, and a
+`ClassLaneCertified` on the attempt lane grants it `min_grantable_share_permille` once the chain
+has graded the drill that covers it. Its registration was priced for the cadence it held then —
+none — so granting the share without re-seeding would leave the one number that decides how often
+it may produce entirely unrelated to the share just granted, in either direction. A stranger who
+declared `MAX/2` would sit thousands of times easier than the floor it is joining; one who declared
+conservatively would sit locked out, with no retarget able to reach it, because an idle class only
+converges toward a price a PRODUCING class pays and it produces nothing.
+
+So the grant writes the price with the seat: `attempt_target_seed_v1(granted share, the class's own
+`pwu_per_inference`)`, from the table the transition has just written. This is the clause that makes
+ADR-0075's permissionless path end in a class that can actually produce, rather than one that holds
+a share and no way to use it.
+
 ## 6. What this does NOT change
 
 **Not the weight split.** Weight per second is `w_c · r_c · P_bits`, in which `T_c` cancels:
@@ -153,11 +169,15 @@ supply has nothing to do with how fast a class runs its canonical job.
 
 ## 8. What is deliberately left open
 
-A post-genesis registrant still DECLARES its own `initial_target` and nothing refuses a value the
-rule would not have produced — a free field, which this codebase has twice found to be a free
-draw. The seat it buys is bounded (an entrant joins at `min_grantable_share_permille` and its
-class retargets from wherever it starts), and the fix has a fixed-point hazard the genesis path
-does not: the rule's inputs are the entrant's own share and work, so a gate can recompute it
-exactly — but only once the share it will be granted is known, which is at the transition rather
-than when the registrant builds and signs the object. The gate belongs at the transition, refusing
-a declared seed that is not the derived one, and it is not in this change.
+A post-genesis registrant still DECLARES its own `initial_target`, and the transition still writes
+it verbatim at registration. Nothing refuses a value the rule would not have produced — a free
+field, which this codebase has twice found to be a free draw.
+
+Decision 4 removes the reachable half of that: a class registering weightless is re-priced the
+moment it is granted a share, so a declared value buys nothing on the ADR-0075 path. What remains
+is a registrant that takes a share at registration and declares its own seed, and the closure is a
+one-line equality at the transition — the derived seed is computable by the registrant (its share
+is `min_grantable_share_permille`, a ruleset constant, and its `pwu` is counted from the carriage
+it already carries), so there is no fixed point to solve. It is left out of this change only
+because it invalidates every fixture in the tree that constructs a `ClassRegistered` with a chosen
+target, and Relaunch 5e is a deployment rather than a refactor.

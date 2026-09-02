@@ -5788,6 +5788,29 @@ fn apply_object(
                             builder.write_share(id, Some(share));
                         }
                     }
+                    // **A class being seated is a class being PRICED** (ADR-0076).
+                    //
+                    // It registered weightless, so its registration was priced for the cadence it
+                    // then held — none — and the target it has carried since is whatever that
+                    // registration declared. Granting it a share without re-seeding leaves the one
+                    // number that decides how often it may produce entirely unrelated to the share
+                    // just granted, in either direction: a stranger who declared `MAX/2` would sit
+                    // thousands of times easier than the floor it is joining, and one who declared
+                    // conservatively would sit locked out with no retarget able to reach it (an
+                    // idle class only converges toward a price a PRODUCING class pays, and it
+                    // produces nothing). So the seat comes with the seat's price, derived from the
+                    // share the table just wrote and the class's own counted work.
+                    let seated = builder.state.class_shares.get(class_id).copied().unwrap_or(0);
+                    let pwu = builder
+                        .state
+                        .classes
+                        .get(class_id)
+                        .map(|record| palw_max_exposure_pwu_of_rule_v1(&record.pwu_rule))
+                        .unwrap_or(0);
+                    builder.write_target(
+                        *class_id,
+                        Some(PalwClassTargetV2 { target: crate::palw_class_daa::attempt_target_seed_v1(seated, pwu) }),
+                    );
                 }
             }
         }
