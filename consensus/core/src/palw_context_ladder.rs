@@ -60,7 +60,7 @@
 //! closed one term and left three would otherwise read as success.
 
 use crate::config::constants::consensus::NETWORK_DELAY_BOUND;
-use crate::palw_class_admission_v2::{PalwClassAdmissionError, PalwCourtCostShapeV1, PalwCourtCostV1, derive_court_cost_shaped_v1};
+use crate::palw_class_admission_v2::{derive_court_cost_shaped_v1, PalwClassAdmissionError, PalwCourtCostShapeV1, PalwCourtCostV1};
 use crate::palw_fp_devnet_v3::PalwLatticeWindowsV1;
 use crate::palw_mode_v2::PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS;
 use crate::palw_step::{PalwShapeProfileV3, PalwStepError};
@@ -200,7 +200,11 @@ pub const fn palw_court_replay_floor_daa_v1(row: &PalwCourtRowCostV1, interval_p
     let replay = interval.saturating_mul(row.replay_ms_per_position());
     let total = replay.saturating_add(PALW_COURT_ROUND_TRIP_MS);
     let daa = total.div_ceil(PALW_V2_FROZEN_TARGET_TIME_PER_BLOCK_MS);
-    if daa == 0 { 1 } else { daa }
+    if daa == 0 {
+        1
+    } else {
+        daa
+    }
 }
 
 /// **The turn deadline a window and a ladder DERIVE** (ADR-0077 SA-4; the earlier proposal
@@ -233,7 +237,11 @@ pub const fn palw_court_turn_deadline_v1(window_court: u64, max_step_leaves: u64
         return None;
     }
     let deadline = (window_court - 1) / moves;
-    if deadline == 0 { None } else { Some(deadline) }
+    if deadline == 0 {
+        None
+    } else {
+        Some(deadline)
+    }
 }
 
 /// **W4, as a predicate:** `(2 · ⌈log₂ leaves⌉ + terminal) · turn_deadline < window_court`.
@@ -288,7 +296,11 @@ pub const PALW_CONTEXT_LADDER_INTERVAL_DIVISOR: u32 = 32;
 /// Decisions 11 and 13).
 pub const fn palw_checkpoint_interval_v1(n_ctx: u32) -> u32 {
     let derived = n_ctx / PALW_CONTEXT_LADDER_INTERVAL_DIVISOR;
-    if derived == 0 { 1 } else { derived }
+    if derived == 0 {
+        1
+    } else {
+        derived
+    }
 }
 
 /// What ONE checkpoint-chunk opening of the RECURRENCE costs under the gdn **v1** map: one head's
@@ -473,7 +485,11 @@ pub const PALW_CONTEXT_LADDER_MAX_QUANTA_PER_RECEIPT: u32 = 64;
 /// written for.
 pub const fn palw_canonical_footprint_floor_v1(n_ctx: u32) -> u64 {
     let floor = (n_ctx / PALW_CONTEXT_LADDER_QUANTA_PER_CANONICAL_JOB) as u64;
-    if floor == 0 { 1 } else { floor }
+    if floor == 0 {
+        1
+    } else {
+        floor
+    }
 }
 
 /// The enumeration's own footprint for a job: `prefill + max(1, decode) − 1` cached positions.
@@ -883,7 +899,7 @@ mod tests {
     /// is not standing in for one that was already there.
     #[test]
     fn the_fenced_gate_refuses_a_row_whose_canonical_job_is_under_its_floor() {
-        use crate::palw_class_admission_v2::{PalwClassAdmissionError, verify_class_admission_v4};
+        use crate::palw_class_admission_v2::{verify_class_admission_v4, PalwClassAdmissionError};
         let params = crate::config::params::palw_rc_shipped_params();
         let crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(bundle) = &params.palw_consensus_mode else {
             panic!("the RC card carries no V2 bundle");
@@ -1279,7 +1295,7 @@ mod tests {
     #[test]
     fn the_anchored_recurrence_opens_the_window_and_not_the_history() {
         use crate::palw_step::kernel_semantics_id_v1;
-        use crate::palw_step_refute::{KDESC_Q36_GDN_STEP, canonical_input_leaves_v1_anchored};
+        use crate::palw_step_refute::{canonical_input_leaves_v1_anchored, KDESC_Q36_GDN_STEP};
         let mapped = recurrent_row_v2(512);
         let gdn_kernel = kernel_semantics_id_v1(KDESC_Q36_GDN_STEP);
         let slot = (0..u32::MAX)
@@ -1326,9 +1342,9 @@ mod tests {
     #[test]
     fn the_recurrence_map_id_is_the_executors_own_spelling() {
         use crate::palw_state_chunk_map::{
-            PALW_GDN_STATE_CHUNK_MAP_NAME_V1, PALW_GDN_STATE_CHUNK_MAP_NAME_V2, gdn_state_chunk_map_id_v1, gdn_state_chunk_map_id_v2,
-            hybrid_state_chunk_map_id_v1, hybrid_state_chunk_map_id_v2, integer_kv_state_chunk_map_id_v2,
-            palw_hybrid_state_chunk_map_name_v1, palw_hybrid_state_chunk_map_name_v2,
+            gdn_state_chunk_map_id_v1, gdn_state_chunk_map_id_v2, hybrid_state_chunk_map_id_v1, hybrid_state_chunk_map_id_v2,
+            integer_kv_state_chunk_map_id_v2, palw_hybrid_state_chunk_map_name_v1, palw_hybrid_state_chunk_map_name_v2,
+            PALW_GDN_STATE_CHUNK_MAP_NAME_V1, PALW_GDN_STATE_CHUNK_MAP_NAME_V2,
         };
         assert_eq!(
             PALW_GDN_STATE_CHUNK_MAP_NAME_V1,
@@ -1408,7 +1424,7 @@ mod tests {
     /// of claim this tree has watched go stale.
     #[test]
     fn the_anchored_recurrence_replay_agrees_with_the_long_form() {
-        use crate::palw_step_refute::{DotStructure, gdn_core_anchored_replay_v1};
+        use crate::palw_step_refute::{gdn_core_anchored_replay_v1, DotStructure};
         let mut profile = recurrent_row(64);
         profile.gdn_heads = 2;
         profile.gdn_head_k_dim = 16;
@@ -1438,7 +1454,7 @@ mod tests {
     /// the guard the shipped genesis arm never needed because it had no anchor to be handed.
     #[test]
     fn a_mis_shaped_recurrence_anchor_is_refused_by_name() {
-        use crate::palw_step_refute::{DotStructure, PalwStepRefuteError, gdn_core_anchored_replay_v1};
+        use crate::palw_step_refute::{gdn_core_anchored_replay_v1, DotStructure, PalwStepRefuteError};
         let mut profile = recurrent_row(64);
         profile.gdn_heads = 2;
         profile.gdn_head_k_dim = 16;
@@ -1458,29 +1474,45 @@ mod tests {
 }
 
 #[cfg(test)]
-mod scratch_breakdown {
+mod the_512_breakdown {
     use super::*;
     use crate::palw_class_admission_v2::derive_court_cost_rows_v1;
 
+    /// **The measurement that decided ADR-0080, pinned so it cannot quietly stop being true.**
+    ///
+    /// Four designs were judged against these four numbers, and the one that won did so because of
+    /// them. `derive_court_cost_rows_v1` exists so that "the row costs N" can name WHICH node
+    /// produced N; this asserts the naming as well as the total, because a change that moved the
+    /// binding node while leaving the total alone would invalidate the reasoning without failing a
+    /// total-only check.
+    ///
+    /// **What it is evidence FOR, stated so a future reader does not re-derive it hopefully:** the
+    /// 512 rows are not carriable and no anchoring, tiling or state-chunk map reaches them. The
+    /// companion measurement is [`tests::what_still_refuses_the_hybrid_512_row`], which shows the
+    /// hybrid row is still over budget with every checkpoint byte set to ZERO and the history
+    /// collapsed to ONE position — so the residue is the CONTEXT's width, not the interval's length.
+    /// If either of these ever goes green in the other direction, ADR-0080's motivation section is
+    /// wrong and the design is worth re-opening; that is what this test is for.
     #[test]
-    fn scratch_dump_the_512_rows() {
+    fn the_512_rows_name_the_node_that_refuses_them() {
         let budget = crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES;
-        for (label, profile) in [
-            ("A16 512", palw_a16_context_row_profile_v1(512).expect("projects")),
-            ("QWEN36 512", palw_qwen36_context_row_profile_v1(512).expect("projects")),
+        for (label, profile, expect_close, expect_table, expect_index) in [
+            ("A16 512", palw_a16_context_row_profile_v1(512).expect("projects"), 1_154_673u64, "attn", 10usize),
+            ("QWEN36 512", palw_qwen36_context_row_profile_v1(512).expect("projects"), 2_240_241u64, "attn", 15usize),
         ] {
-            let shape = palw_class_ladder_rules_v1(&profile).expect("mapped").cost_shape;
-            eprintln!(
-                "\n=== {label} budget {budget} history {} kv_ckpt {} gdn_ckpt {} ===",
-                shape.history_positions, shape.kv_checkpoint_bytes, shape.gdn_checkpoint_bytes
-            );
+            let shape = palw_class_ladder_rules_v1(&profile).expect("a mapped row has rules").cost_shape;
             let rows = derive_court_cost_rows_v1(&profile, shape).expect("derives");
-            for r in rows.iter().take(10) {
-                eprintln!(
-                    "  {:>4}[{:>2}] {:?} open={:>9} ev={:>9} close={:>9} {}",
-                    r.table, r.index, r.op_kind, r.opening_bytes, r.evidence_bytes, r.close_bytes, r.weight_name
-                );
-            }
+            let worst = rows.iter().max_by_key(|r| r.close_bytes).expect("a graph has nodes");
+            assert_eq!(
+                worst.close_bytes, expect_close,
+                "{label}: the binding close moved — if it went DOWN, re-read ADR-0080's motivation before celebrating"
+            );
+            assert_eq!((worst.table, worst.index), (expect_table, expect_index), "{label}: a different node binds now");
+            assert!(
+                worst.close_bytes > budget * 10,
+                "{label}: {} is no longer an order of magnitude over the {budget}-byte carrier",
+                worst.close_bytes
+            );
         }
     }
 }
