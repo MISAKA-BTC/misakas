@@ -325,6 +325,10 @@ impl Transformer for CadStlTransformer {
             discipline: Discipline::ExactRational,
             writer: WRITER_NAME,
             source_tree_sha256: crate::SOURCE_TREE_SHA256_HEX,
+            // ADR-0078 SA-2, from this module's own declaration and not a copy of it.
+            max_dsl_bytes: BOUNDS.max_dsl_bytes as u64,
+            max_artifact_bytes: BOUNDS.max_artifact_bytes as u64,
+            max_steps: BOUNDS.max_steps,
         }
     }
 
