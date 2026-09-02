@@ -1810,6 +1810,33 @@ mod u00_tiled_attention_measurement {
              delete this test and re-pin the ones above at the cheaper price"
         );
         assert!(charged > honest * 28, "the overcharge shrank — re-read the ladder rule");
+
+        // **And this is what the overcharge COSTS, so "30 → 223" is not inherited as a shipped
+        // fact.** `the_tile_moves_the_widest_dense_row_from_thirty_to_two_hundred_and_twenty_three`
+        // prices the v3 class at the honest opening, because no shipped function answers it. Under
+        // the rule as it actually stands, a class that registers the tiled map is charged the v2
+        // map's whole-history opening and is admitted at exactly the width it had before: the tile
+        // buys the dense tier NOTHING until this gap is closed. Whoever closes it inherits the 223.
+        let budget = crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES;
+        let shipped_widest = |map: fn() -> crate::Hash64| {
+            let mut best = 0u32;
+            for n_ctx in 1..=512u32 {
+                let mut row = palw_a16_context_row_profile_v1(n_ctx).expect("projects");
+                row.state_chunk_map_id = map();
+                match palw_anchored_court_cost_v1(&row).and_then(|r| r.ok()) {
+                    Some(cost) if cost.max_close_bytes <= budget => best = n_ctx,
+                    _ => break,
+                }
+            }
+            best
+        };
+        assert_eq!(shipped_widest(integer_kv_state_chunk_map_id_v2), 30);
+        assert_eq!(
+            shipped_widest(tiled_kv_state_chunk_map_id_v3),
+            30,
+            "a v3 class is priced by its own map now — the tile finally buys the width it derives, \
+             so re-read this test and the 223 it qualifies"
+        );
     }
 
     /// **And the graph-v4 HYBRID composition is priced with NO recurrence anchor at all** — the
