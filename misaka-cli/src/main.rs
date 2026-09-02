@@ -29,6 +29,7 @@ mod forward;
 mod key_roles;
 mod keys;
 mod node;
+mod palw_court;
 mod palw_derived;
 mod palw_fp;
 #[cfg(feature = "evm-send")]
@@ -379,6 +380,45 @@ enum PalwCmd {
         /// carrier, funded from the previous carrier's change.
         #[arg(long = "object", required = true, num_args = 1..)]
         object: Vec<std::path::PathBuf>,
+        /// Actually broadcast (otherwise a dry-run preview).
+        #[arg(long)]
+        yes: bool,
+    },
+    /// **File a court close whose carriage does not fit one transaction** (ADR-0080 W13).
+    ///
+    /// A court move is a `CourtClosed` object on an ordinary lifecycle transaction, and a close
+    /// larger than one carrier has to ride the ADR-0075 Decision 14 chunk group — several
+    /// transactions, chained on one another's change, reassembled by the chain in the block that
+    /// completes the group. This drives that: it checks the close against the court's own cost
+    /// rule BEFORE spending anything, cuts it the way the chain cuts it, says how many blocks the
+    /// carriage costs against the turn deadline it spends, funds and submits the parts in order,
+    /// and names the part that failed. Resumable: a run interrupted mid-group picks up from the
+    /// parts the chain still holds rather than re-paying for them.
+    CourtClose {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// The borsh `PalwConsensusObjectV2::CourtClosed` to file.
+        #[arg(long)]
+        close: std::path::PathBuf,
+        /// 128-hex class id of the class under dispute, so the deadline is priced on ITS row.
+        /// Without it the widest shipped row is assumed and the report says so.
+        #[arg(long)]
+        class: Option<String>,
+        /// The DAA score this move's turn expires at, when you know it. With it the report says
+        /// whether the carriage fits the time that is LEFT, not the time a turn is worth.
+        #[arg(long)]
+        deadline_at: Option<u64>,
+        /// Where the carriage index lives between runs. Defaults to `<close>.carriage.json`.
+        #[arg(long)]
+        state: Option<std::path::PathBuf>,
+        /// Discard any existing carriage index and file every part again.
+        #[arg(long)]
+        restart: bool,
+        /// Plan and price the move against `--network`'s own preset, without contacting a node.
+        /// The cost rule, the cut and the deadline are pure functions of the close and the
+        /// ruleset; deciding whether you will make your turn should not need a synced node.
+        #[arg(long, conflicts_with = "yes")]
+        offline: bool,
         /// Actually broadcast (otherwise a dry-run preview).
         #[arg(long)]
         yes: bool,
@@ -921,6 +961,22 @@ async fn main() -> std::process::ExitCode {
             palw_fp::submit(&ctx, &tx, yes, material_out.as_deref(), capture.as_deref(), dsl_payload.as_deref()).await
         }
         Command::Palw(PalwCmd::SubmitObject { key, object, yes }) => palw_fp::submit_objects(&ctx, &key.source(), &object, yes).await,
+        Command::Palw(PalwCmd::CourtClose { key, close, class, deadline_at, state, restart, offline, yes }) => {
+            palw_court::court_close(
+                &ctx,
+                &key.source(),
+                palw_court::CourtCloseArgs {
+                    close: &close,
+                    class: class.as_deref(),
+                    deadline_at,
+                    state: state.as_deref(),
+                    restart,
+                    offline,
+                    yes,
+                },
+            )
+            .await
+        }
         Command::Palw(PalwCmd::Derived { claim_id, json }) => palw_derived::show(&ctx, &claim_id, json).await,
         Command::Palw(PalwCmd::DerivedVerify { claim_id, answer, dsl, job_context_hash, family, json }) => {
             palw_derived::verify(&ctx, &claim_id, &answer, dsl.as_deref(), job_context_hash.as_deref(), family.as_deref(), json).await
