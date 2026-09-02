@@ -372,10 +372,85 @@ if [ "$stage_ok" = 1 ]; then
 fi
 
 # ---------------------------------------------------------------------------------------------
+# 8. The DERIVED-ARTIFACT leg (ADR-0078), attempted from the claim's OWN answer.
+#
+# ADR-0078 Decision 2: the transformer's input is the rendering of the ids the claim committed. So
+# the only honest way to demonstrate "the model made a thing and the chain carries the derivation"
+# is to run the grammar over the ANSWER — not over a DSL a human wrote and then called the model's.
+#
+# At the widths the chain registers today (16 tokens total on the dense tier, prompt AND answer)
+# an answer will usually not parse as a note list, and ADR-0078 X4 is explicit about what that
+# means: a parse failure yields no object and nothing else — the inference still certifies and
+# still mines, because R1 credits the computation, not what it happened to be good for. So this
+# phase has TWO honest outcomes and reports which one it got. It never fails the drill: the
+# free-prompt verdict above is Decision 7's gate, and this is ADR-0078's leg riding along.
+#
+# When the answer does NOT parse, the phase still proves the transformer half offline, from a
+# HAND-WRITTEN DSL, and says so in those words — that run is NOT a demonstration of "Qwen3.6
+# produced music", it is a demonstration that the transformer is a pure function whose artifact a
+# stranger recomputes. Reading it as the former is the category error ADR-0078 §1 refuses.
+# ---------------------------------------------------------------------------------------------
+DERIVE_BIN="${DERIVE_BIN:-$REPO_ROOT/target/release/palw-derive}"
+derived_note="not attempted"
+if [ -x "$DERIVE_BIN" ]; then
+  log "stage 8 — the derived-artifact leg (ADR-0078), from the claim's own answer"
+  mkdir -p "$WORK_DIR/derived"
+  python3 -c '
+import json,sys
+p = json.load(open(sys.argv[1]))
+open(sys.argv[2], "w").write(p["choices"][0]["message"]["content"])' "$WORK_DIR/chat.json" "$WORK_DIR/derived/answer.txt"
+  if "$DERIVE_BIN" derive --transformer music/smf/v1 --answer "$WORK_DIR/derived/answer.txt" \
+       --out "$WORK_DIR/derived" --claim "$CLAIM_ID" --network-domain "$NETWORK_DOMAIN" \
+       --executor-pubkey "$EXEC_PUBKEY" >"$WORK_DIR/derived/derive.log" 2>&1; then
+    log "  the answer PARSED under music/smf/v1 — this is the real leg, from a real inference"
+    obj=$(ls "$WORK_DIR"/derived/*derived*.borsh 2>/dev/null | head -1 || true)
+    if [ -n "$obj" ] && "$RAIL_BIN" --derive-artifact "$obj" --bond-key-seed "$WORK_DIR/keys/bond-0.seed" \
+         >>"$WORK_DIR/derived/derive.log" 2>&1; then
+      submit "$obj" >>"$WORK_DIR/derived/derive.log" 2>&1 || true
+      if all_nodes_logged "DerivedArtifact"; then
+        derived_note="ON CHAIN from a real inference — every node carried the derivation"
+      else
+        derived_note="derived and submitted, but not carried by every node (see derived/derive.log)"
+      fi
+    else
+      derived_note="derived from the answer; signing or submission failed (see derived/derive.log)"
+    fi
+    # Decision 5 / X6: a consumer holding only the answer and the object recomputes both hashes.
+    if "$DERIVE_BIN" verify --object "$obj" --answer "$WORK_DIR/derived/answer.txt" \
+         >>"$WORK_DIR/derived/derive.log" 2>&1; then
+      derived_note="$derived_note; consumer recomputation PASSED (X6)"
+    else
+      derived_note="$derived_note; consumer recomputation FAILED (X6) — see derived/derive.log"
+    fi
+  else
+    # X4, and it is the expected outcome at 16 tokens. Prove the transformer leg offline instead,
+    # labelled for what it is.
+    log "  the answer did not parse under music/smf/v1 — ADR-0078 X4: no object, claim untouched."
+    log "  This is the WIDTH, not a defect: the registered row admits 16 tokens, prompt and answer"
+    log "  together, and a note list does not fit. Proving the transformer leg offline instead."
+    cat >"$WORK_DIR/derived/handwritten.json" <<'DSL'
+{"ticks_per_quarter":480,"tracks":[{"program":0,"channel":0,"notes":[
+{"pitch":60,"onset":0,"duration":480,"velocity":80},
+{"pitch":64,"onset":480,"duration":480,"velocity":80},
+{"pitch":67,"onset":960,"duration":960,"velocity":80}]}]}
+DSL
+    if "$DERIVE_BIN" derive --transformer music/smf/v1 --answer "$WORK_DIR/derived/handwritten.json" \
+         --out "$WORK_DIR/derived" >>"$WORK_DIR/derived/derive.log" 2>&1; then
+      derived_note="NOT-FROM-AN-INFERENCE: hand-written DSL derived to an artifact offline; the real leg is blocked by the registered width, not by the transformer"
+    else
+      derived_note="NOT-FROM-AN-INFERENCE: even the hand-written DSL failed to derive (see derived/derive.log)"
+    fi
+  fi
+else
+  derived_note="skipped — $DERIVE_BIN is not built (cargo build --release -p misaka-palw-derive)"
+fi
+
+# ---------------------------------------------------------------------------------------------
 # Verdict.
 # ---------------------------------------------------------------------------------------------
 fail=0
 log "================ verdict ================"
+log "ADR-0078 derived leg: $derived_note"
 for ((i=0; i<NODES; i++)); do
   log "node-$i blocks=$(blocks_of $i) committed=$(grep -c 'FreePromptCommitted' "$WORK_DIR/node-$i.log" 2>/dev/null || echo 0) final=$(grep -c 'Final' "$WORK_DIR/node-$i.log" 2>/dev/null || echo 0)"
 done
