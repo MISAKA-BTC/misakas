@@ -39,6 +39,8 @@ impl From<Version> for protowire::VersionMessage {
             consensus_params_id: item.consensus_params_id,
             consensus_identity_id: item.consensus_identity_id,
             consensus_schedule_id: item.consensus_schedule_id,
+            fork_id_fired: item.fork_id_fired,
+            fork_id_next: item.fork_id_next,
         }
     }
 }
@@ -77,6 +79,11 @@ impl TryFrom<protowire::VersionMessage> for Version {
             consensus_params_id: bounded_fingerprint("consensusParamsId", msg.consensus_params_id)?,
             consensus_identity_id: bounded_fingerprint("consensusIdentityId", msg.consensus_identity_id)?,
             consensus_schedule_id: bounded_fingerprint("consensusScheduleId", msg.consensus_schedule_id)?,
+            // ADR-0072 SA-2. Bounded like its four siblings and for the same reason: an
+            // unauthenticated peer supplies it, and the gate compares it against locally computed
+            // digests one prefix at a time — an unbounded field would be an unbounded comparison.
+            fork_id_fired: bounded_fingerprint("forkIdFired", msg.fork_id_fired)?,
+            fork_id_next: msg.fork_id_next,
         })
     }
 }
@@ -277,6 +284,80 @@ impl TryFrom<protowire::RequestAntipastMessage> for (BlockHash, BlockHash) {
 mod fingerprint_bound_tests {
     use super::*;
 
+    /// A handshake message with every field an old build writes, and the two ADR-0072 fields at
+    /// their proto3 defaults — which is to say, exactly what an old build writes.
+    fn version_message_without_a_fork_id() -> protowire::VersionMessage {
+        protowire::VersionMessage {
+            protocol_version: 5,
+            services: 0,
+            timestamp: 0,
+            address: None,
+            id: vec![0u8; 16],
+            user_agent: "old-build/1.0".to_owned(),
+            disable_relay_tx: false,
+            subnetwork_id: None,
+            network: "misaka-testnet-11".to_owned(),
+            genesis_hash: vec![0u8; MAX_HANDSHAKE_FINGERPRINT_BYTES],
+            consensus_params_id: vec![1u8; 32],
+            consensus_identity_id: vec![2u8; 32],
+            consensus_schedule_id: vec![3u8; 32],
+            fork_id_fired: vec![],
+            fork_id_next: 0,
+        }
+    }
+
+    /// **A peer predating the fork id handshakes exactly as it does today** (ADR-0072 SA-2).
+    ///
+    /// This is the claim the whole lane rests on, and it is asserted on real wire bytes rather
+    /// than on the struct: proto3 does not write a field at its default, so the encoding of the
+    /// message above IS byte-for-byte the encoding a build without fields 15 and 16 produces.
+    /// `starts_with` is what says so — the two new fields are appended after every field an old
+    /// build writes, and removing them leaves exactly the old message.
+    ///
+    /// The direction that matters for a running network is the decode: an old peer's bytes must
+    /// reach `Version` with every other field intact and the fork id simply absent, because with
+    /// the fence off (`fork_id_gate_armed_v1` is `false` on every shipped preset) absent is what
+    /// the gate is required to ignore.
+    #[test]
+    fn a_peer_predating_the_fork_id_field_round_trips_unchanged() {
+        use prost::Message;
+
+        let old_peer = version_message_without_a_fork_id();
+        let old_wire = old_peer.encode_to_vec();
+
+        let mut upgraded = old_peer.clone();
+        upgraded.fork_id_fired = vec![0xABu8; 32];
+        upgraded.fork_id_next = 2_125_000;
+        let new_wire = upgraded.encode_to_vec();
+
+        assert!(
+            new_wire.starts_with(&old_wire),
+            "fields 15/16 are appended after every field an old build writes — an old peer's bytes are this encoding minus them"
+        );
+        assert!(new_wire.len() > old_wire.len(), "the upgraded message must actually carry the two fields");
+
+        // The decode: an old peer's bytes, read by this build.
+        let decoded = protowire::VersionMessage::decode(old_wire.as_slice()).expect("an old peer's bytes must still parse");
+        assert_eq!(decoded, old_peer, "no field an old build writes may be disturbed by the two new ones");
+        assert!(decoded.fork_id_fired.is_empty(), "absent, not garbage");
+        assert_eq!(decoded.fork_id_next, 0);
+
+        // And through the conversion the handshake actually uses.
+        let version = Version::try_from(decoded).expect("an old peer must still convert");
+        assert!(version.fork_id_fired.is_empty());
+        assert_eq!(version.fork_id_next, 0);
+        assert_eq!(version.consensus_identity_id, vec![2u8; 32], "the fields the gate before it reads are untouched");
+        assert_eq!(version.consensus_schedule_id, vec![3u8; 32]);
+
+        // The upgraded message survives its own round trip too, so the field is readable and not
+        // merely writable.
+        let back = protowire::VersionMessage::decode(new_wire.as_slice()).expect("this build's own bytes must parse");
+        assert_eq!(back, upgraded);
+        let version = Version::try_from(back).expect("a full-width fork id is what an upgraded peer sends");
+        assert_eq!(version.fork_id_fired, vec![0xABu8; 32]);
+        assert_eq!(version.fork_id_next, 2_125_000);
+    }
+
     /// **The handshake's fingerprint fields are bounded at the boundary** (audit3 H11).
     ///
     /// The transport accepts messages up to `P2P_MAX_MESSAGE_SIZE` (1 GB) and the proto declares
@@ -299,6 +380,9 @@ mod fingerprint_bound_tests {
             consensus_params_id: vec![],
             consensus_identity_id: vec![],
             consensus_schedule_id: vec![],
+            // ADR-0072 SA-2's two fields, at the defaults an old peer's bytes decode to.
+            fork_id_fired: vec![],
+            fork_id_next: 0,
         };
         assert!(Version::try_from(base.clone()).is_ok(), "a full-width genesis hash is exactly what a peer sends");
 
@@ -307,12 +391,15 @@ mod fingerprint_bound_tests {
             ("consensusParamsId", base.clone()),
             ("consensusIdentityId", base.clone()),
             ("consensusScheduleId", base.clone()),
+            // ADR-0072 SA-2's field is peer-controlled bytes like the four above it.
+            ("forkIdFired", base.clone()),
         ] {
             let oversized = vec![0u8; MAX_HANDSHAKE_FINGERPRINT_BYTES + 1];
             match name {
                 "genesisHash" => msg.genesis_hash = oversized,
                 "consensusParamsId" => msg.consensus_params_id = oversized,
                 "consensusIdentityId" => msg.consensus_identity_id = oversized,
+                "forkIdFired" => msg.fork_id_fired = oversized,
                 _ => msg.consensus_schedule_id = oversized,
             }
             let Err(err) = Version::try_from(msg) else {

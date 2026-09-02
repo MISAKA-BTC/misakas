@@ -76,6 +76,28 @@ use blake2b_simd::Params;
 /// the class lottery, so the two cannot share a chain; the version check keeps them from trying.
 pub const PALW_ATTEMPT_V2_VERSION: u16 = 6;
 
+/// **The version ADR-0072 replaced — kept because a fenced network still has to validate it**
+/// (ADR-0072 SA-3).
+///
+/// Not history for its own sake. §3's Decision 7 analysis found the version check is not
+/// fence-gated, and named the consequence: "a node on this build refuses every version-5 envelope,
+/// which is every attempt block the chain already holds — a fresh node cannot validate the history
+/// it is asked to sync." Every earlier attempt-format change shipped with a re-genesis for exactly
+/// that reason, and mainnet may not (2026-08-27 doctrine).
+///
+/// So on a network that has armed `Params::palw_attempt_activation`, a header below the fence
+/// carries THIS version on algo-6 and one at or above it carries [`PALW_ATTEMPT_V2_VERSION`] on
+/// algo-9. `PalwAttemptLaneV1::attempt_version` is the single place that mapping is written.
+///
+/// **What this constant does NOT buy, and it is the honest limit of the current build:** it fences
+/// the version CHECK, not the pre-ADR-0072 lottery arithmetic. The old arm's tag and ticket
+/// derivations (`commitment_root_v2`-drawn, item 6b inside the envelope-only list) were deleted
+/// when ADR-0072 went live inside Relaunch 5's re-genesis and are not restored here, so a build
+/// that armed the fence today would accept a legacy-VERSIONED envelope below it while still
+/// drawing both lotteries the new way. Arming this fence on a network with real pre-ADR-0072
+/// history requires that arm back, byte for byte, as §3 option (b) says.
+pub const PALW_ATTEMPT_V2_VERSION_PRE_ADR_0072: u16 = 5;
+
 /// The anchor's domain key. Unchanged from where this function used to live
 /// (`misaka_palw_base0::produce`), name included: moving it must not move the value, or every
 /// producer on every V2 network starts running a different job than the chain expects.
@@ -539,9 +561,20 @@ impl PalwAttemptEnvelopeV2 {
     /// asks it itself on every PoW computation, so no path exists where shape passes and the
     /// position check is never reached.
     pub fn validate_shape_v2(&self) -> Result<(), PalwAttemptV2Error> {
+        self.validate_shape_v2_at_version(PALW_ATTEMPT_V2_VERSION)
+    }
+
+    /// [`Self::validate_shape_v2`] with the admissible version supplied by the position rather
+    /// than compiled in (ADR-0072 SA-3).
+    ///
+    /// `expected_version` comes from `PalwAttemptLaneV1::attempt_version`, which derives it from
+    /// the network's fence and the header's DAA score — never from the envelope, which is the
+    /// accused setting the question. On an un-fenced network the two entry points are the same
+    /// function called with the same number, which is why nothing about a shipped preset moves.
+    pub fn validate_shape_v2_at_version(&self, expected_version: u16) -> Result<(), PalwAttemptV2Error> {
         let a = &self.attempt;
-        if a.version != PALW_ATTEMPT_V2_VERSION {
-            return Err(PalwAttemptV2Error::UnsupportedVersion { got: a.version, expected: PALW_ATTEMPT_V2_VERSION });
+        if a.version != expected_version {
+            return Err(PalwAttemptV2Error::UnsupportedVersion { got: a.version, expected: expected_version });
         }
         if a.executor_pubkey.is_empty() {
             return Err(PalwAttemptV2Error::MissingPublicKey);

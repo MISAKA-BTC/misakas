@@ -309,7 +309,11 @@ impl StateLayer0 {
             // to be in rather than discovering it. The algo-6 arm REQUIRES its envelope (an
             // algo-6 header without one has no work to check) and errors rather than expects,
             // because peer-supplied proof headers reach the finalizer before shape validation.
-            palw_attempt_v2: (header.pow_algo_id == POW_ALGO_ID_PALW_COMMITTED_V2)
+            // ADR-0072 SA-4: BOTH attempt ids carry the envelope. The two are one lane seen from
+            // the two sides of an activation fence, so the finalizer decodes for either — which
+            // side is OPEN is a position question the shape gate and the header processor answer,
+            // not a pure tag function's.
+            palw_attempt_v2: kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(header.pow_algo_id)
                 .then(|| PalwAttemptEnvelopeV2::decode_wire(&header.palw_commitment).ok())
                 .flatten(),
             palw_spend_v3: (header.pow_algo_id == POW_ALGO_ID_PALW_RECEIPT_V3)
@@ -369,7 +373,14 @@ impl StateLayer0 {
             // arm is first), but only by ordering: deleting the wrong one of two identical
             // patterns would have removed the position binding and left an attempt re-mountable
             // at any nonce. One arm, one rule.
-            POW_ALGO_ID_PALW_COMMITTED_V2 => {
+            //
+            // **ADR-0072 SA-4 — algo-9 shares this arm, and that is the point.** The two ids run
+            // the same rule; what tells them apart is `pow_algo_id`, which
+            // `pow_finalizer_blake2b_512` mixes into the Layer-0 digest. So an attempt solved on
+            // one lane produces a different digest on the other: it is not a losing candidate in
+            // the other lottery, it is not a candidate. Cross-lane replay is refused by
+            // construction rather than by a version field the producer fills in.
+            POW_ALGO_ID_PALW_COMMITTED_V2 | kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_EXEC_V3 => {
                 let envelope = self.palw_attempt_v2.as_ref().ok_or(PowLayer0Error::PalwV2AttemptMissing)?;
                 let attempt = &envelope.attempt;
                 let expected = challenge_v2(
@@ -507,8 +518,12 @@ impl StateLayer0 {
         // its meaning as the absolute rate control — ADR-0071's withdrawn Decision 1 is why it is
         // kept rather than bypassed the way the receipt lane's is — priced in inferences now,
         // which is what it was always meant to price.
+        //
+        // Both attempt ids, for the same reason: the execution-priced lane is the same lane on
+        // either side of ADR-0072's fence, and a lane that re-admitted the nonce here would be
+        // back to one draw per hash.
         let (timestamp, nonce_in_digest) =
-            if self.pow_algo_id == POW_ALGO_ID_PALW_COMMITTED_V2 { (0, 0) } else { (self.timestamp, nonce) };
+            if kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(self.pow_algo_id) { (0, 0) } else { (self.timestamp, nonce) };
         pow_finalizer_blake2b_512(
             &self.network_id,
             // PR-9.5d: bind the digest to the header's declared
@@ -686,7 +701,12 @@ mod tests_pq {
         // the list with ADR-0066 Decision 1** for the same reason — it is the heartbeat lane and
         // its tag arm is algo-3's. What the test is FOR is unchanged: the tag function must be
         // total on a peer-controlled id, and the ids below are the ones that reach the unknown arm.
-        for algo_id in [0u8, 9, 10, 42, 200, u8::MAX] {
+        // `9` used to be in this sweep and is not any more: ADR-0072 SA-4 gave it the
+        // execution-priced attempt lane, so it is now a KNOWN id with a finalizer arm. The sweep
+        // still has to hold — it is about ids this binary cannot verify — so it samples ids that
+        // are still unassigned. `both_attempt_lanes_are_verifiable_by_this_binary` is the other
+        // half: it asserts 9 is known, so the two cannot both be true of one id by accident.
+        for algo_id in [0u8, 10, 11, 42, 200, u8::MAX] {
             let header = dummy_header_algo(0x207fffff, 1, 1_000_000, algo_id);
 
             let (level, passes) = calc_block_level_check_pow_layer0(&header, b"mainnet", 255);
@@ -927,7 +947,8 @@ mod tests_pq {
         // `a_v2_lineage_header_without_its_carriage_is_a_failed_pow_not_a_panic`, which pins the
         // property this test actually exists for: a peer-controlled header must never panic the
         // finalizer, whatever it declares.
-        for bad in [0u8, 9, 42, 128, 200, 255] {
+        // 9 left this list when ADR-0072 SA-4 assigned it — see the note on the sweep above.
+        for bad in [0u8, 10, 42, 128, 200, 255] {
             let h = dummy_header_algo(0x207fffff, 0, 1_700_000_000, bad);
             // Build the verifier on a hash-only network to prove no PALW machinery is needed to
             // trigger (or to survive) the crash.
@@ -1050,6 +1071,112 @@ mod tests_pq {
             execution_root: Hash64::from_u64_word(0x41),
         };
         PalwAttemptEnvelopeV2 { attempt, signature: vec![0x5A; STAKE_ATTESTATION_SIG_LEN] }
+    }
+
+    /// **ADR-0072 SA-4 — a valid attempt built for one lane is not a candidate in the other, and
+    /// the refusal is BY ALGO ID.**
+    ///
+    /// The amendment is specific about which mechanism has to do the work: "the new lane's
+    /// `algo_id` enters the Layer-0 digest, so an attempt built for the old lottery is not a
+    /// candidate in the new; a test asserts a valid version-5 attempt is refused after the fence by
+    /// algo id, not merely by version."
+    ///
+    /// The distinction matters because `version` is a field the producer writes and `pow_algo_id`
+    /// is a field the digest consumes. A refusal resting on the version alone is one an attacker
+    /// edits around: flip the byte, re-sign, replay. A refusal resting on the digest cannot be
+    /// edited around at all.
+    ///
+    /// It turns out the id is bound **twice**, and this test asserts both because they fail
+    /// differently and a future edit could remove either:
+    ///
+    /// 1. **In the Layer-0 digest.** `pow_finalizer_blake2b_512` takes `pow_algo_id` as an input,
+    ///    so one tag under two ids is two digests. Asserted directly on the finalizer, with every
+    ///    other input held equal — the only way to say "the id is in the digest" and mean it.
+    /// 2. **In `pre_pow_hash_64`.** The id is inside the header preimage, so an attempt's carried
+    ///    `challenge` — which is a function of the pre-PoW hash — stops matching the moment the id
+    ///    changes. A replayed old-lane block is therefore refused OUTRIGHT
+    ///    (`PalwV2ChallengeMismatch`), not merely given a digest that misses its target.
+    ///
+    /// And in both, the version is left at the value BOTH lanes accept, so nothing about version
+    /// can be what refused it. That is the claim in full: delete the version check entirely and the
+    /// replay is still not a candidate.
+    #[test]
+    fn a_valid_old_lane_attempt_is_not_a_candidate_in_the_new_lane() {
+        use kaspa_consensus_core::pow_layer0::{POW_ALGO_ID_PALW_EXEC_V3, pow_finalizer_blake2b_512};
+
+        const TS: u64 = 1_700_000_000;
+        const BITS: u32 = 0x207fffff;
+        let network_id: &[u8] = b"simnet";
+
+        // ---- 1. the id is in the Layer-0 digest, with every other input held equal ----
+        let tag = [0xA5u8; PALW_ATTEMPT_V2_L1_TAG_BYTES];
+        let pph = Hash64::from_u64_word(0xFEED);
+        let old_digest = pow_finalizer_blake2b_512(network_id, POW_ALGO_ID_PALW_COMMITTED_V2, pph, 0, BITS, 0, &tag);
+        let new_digest = pow_finalizer_blake2b_512(network_id, POW_ALGO_ID_PALW_EXEC_V3, pph, 0, BITS, 0, &tag);
+        assert_ne!(
+            old_digest, new_digest,
+            "one tag, two lanes, one digest — cross-lane replay would be free and the fence would be decorative"
+        );
+
+        // ---- 2. a solved old-lane block, replayed onto the new lane, is refused outright ----
+        let mut old_lane = dummy_header_algo(BITS, 3, TS, POW_ALGO_ID_PALW_COMMITTED_V2);
+        let envelope = v2_envelope_for(&old_lane, 3);
+        old_lane.palw_commitment = envelope.encode_wire();
+        assert!(
+            StateLayer0::new(&old_lane, network_id).check_pow_layer0(3).expect("the old lane computes a digest").0,
+            "the fixture must actually be a solution on the lane it was built for"
+        );
+
+        let mut replayed = old_lane.clone();
+        replayed.pow_algo_id = POW_ALGO_ID_PALW_EXEC_V3;
+        assert_eq!(replayed.palw_commitment, old_lane.palw_commitment, "the replay edits nothing the producer writes");
+        assert_eq!(
+            envelope.attempt.version,
+            kaspa_consensus_core::palw_attempt_v2::PALW_ATTEMPT_V2_VERSION,
+            "the version is left at the value BOTH lanes accept, so it cannot be what refuses this"
+        );
+        assert!(
+            matches!(StateLayer0::new(&replayed, network_id).calculate_pow_layer0(3), Err(PowLayer0Error::PalwV2ChallengeMismatch)),
+            "the id is inside pre_pow_hash_64, so a replayed attempt's challenge no longer names its position"
+        );
+
+        // Not a lucky nonce: over a sweep, no old-lane attempt is a candidate on the new lane.
+        for nonce in 0..64u64 {
+            let mut o = dummy_header_algo(BITS, nonce, TS, POW_ALGO_ID_PALW_COMMITTED_V2);
+            o.palw_commitment = v2_envelope_for(&o, nonce).encode_wire();
+            let mut n = o.clone();
+            n.pow_algo_id = POW_ALGO_ID_PALW_EXEC_V3;
+            assert!(
+                matches!(StateLayer0::new(&n, network_id).calculate_pow_layer0(nonce), Err(PowLayer0Error::PalwV2ChallengeMismatch)),
+                "nonce {nonce}: an old-lane attempt reached the new lane's lottery"
+            );
+        }
+    }
+
+    /// The two lanes run ONE rule, which is why they may share a finalizer arm: the same envelope
+    /// at the same position produces a digest on either, and neither is an error. If this ever
+    /// fails, the fence has grown a second rule and SA-3's "one binary" claim needs re-reading.
+    #[test]
+    fn both_attempt_lanes_are_verifiable_by_this_binary() {
+        use kaspa_consensus_core::pow_layer0::{POW_ALGO_ID_PALW_EXEC_V3, check_algo_id_known};
+        check_algo_id_known(POW_ALGO_ID_PALW_EXEC_V3).expect("the new lane shares algo-6's arm, so this binary knows it");
+
+        const TS: u64 = 1_700_000_000;
+        for algo in [POW_ALGO_ID_PALW_COMMITTED_V2, POW_ALGO_ID_PALW_EXEC_V3] {
+            let mut h = dummy_header_algo(0x207fffff, 3, TS, algo);
+            let e = v2_envelope_for(&h, 3);
+            h.palw_commitment = e.encode_wire();
+            StateLayer0::new(&h, b"simnet").calculate_pow_layer0(3).unwrap_or_else(|err| panic!("algo {algo}: {err}"));
+        }
+
+        // And an attempt re-mounted at another position is refused on the NEW lane too — the
+        // challenge equation is not something the second id got to skip.
+        let mut h = dummy_header_algo(0x207fffff, 3, TS, POW_ALGO_ID_PALW_EXEC_V3);
+        h.palw_commitment = v2_envelope_for(&h, 3).encode_wire();
+        assert!(
+            matches!(StateLayer0::new(&h, b"simnet").calculate_pow_layer0(4), Err(PowLayer0Error::PalwV2ChallengeMismatch)),
+            "the new lane binds nonce and timestamp to the position exactly as the old one does"
+        );
     }
 
     /// **The audit's P0-1 / C1 red test, by its registered name** (`docs/palw-rc-threat-model.md`):

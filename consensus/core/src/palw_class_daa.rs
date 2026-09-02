@@ -740,6 +740,66 @@ pub fn attempt_target_seed_v1(share_permille: u16, pwu_per_inference: u64) -> u1
     mul_div_u128(u128::MAX, share_pwu, PALW_ATTEMPT_TARGET_UNIT_SHARE_PWU_V1).max(1)
 }
 
+/// **ADR-0072 SA-1 — what a class's target is on the far side of an activation fence.**
+///
+/// The amendment: "At the fence, every class's new-lane target is
+/// `attempt_target_seed_v1(share, pwu_per_inference)` from the fold at the fence (ADR-0076
+/// Decision 1), and the lane-filtered difficulty window starts from the pre-fence window's last
+/// `bits`, not from genesis bits. A window restarted from genesis is the empty-chain start burst —
+/// an issuance and reorg hazard on a network that cannot re-mint."
+///
+/// This function is the first half, and it is deliberately the SAME arithmetic
+/// [`attempt_target_seed_v1`] applies when a class is admitted post-genesis — not a second rule
+/// that happens to agree. A fence is the same event a new class is: a lane starts producing with
+/// no history behind it, and the retarget provably cannot reach the right price on its own (see
+/// `attempt_target_seed_v1`'s "Why a seed and not a retarget", and the Relaunch 5d measurement it
+/// records — 249 floor blocks to zero from two model tiers in the first hour, against a table that
+/// allots them 489‰ each). A fence that let each class carry its OLD target across would carry a
+/// price set by a lottery that no longer exists: ADR-0072 divides the draw rate per inference by
+/// `2^22`, so a target calibrated against the old rule is off by that factor on the new one.
+///
+/// `share_permille` and `pwu_per_inference` come from the fold AT THE FENCE — the share table and
+/// the class's counted work as the pre-fence chain last wrote them — never from a producer's claim.
+pub fn attempt_lane_target_seed_at_fence_v1(share_permille: u16, pwu_per_inference: u64) -> u128 {
+    attempt_target_seed_v1(share_permille, pwu_per_inference)
+}
+
+/// **ADR-0072 SA-1, second half — the first `bits` of the lane-filtered difficulty window.**
+///
+/// `pre_fence_last_bits` is the `bits` the chain was actually running at when it crossed the fence;
+/// `genesis_bits` is what a window with too few rows falls back to when its selected parent IS
+/// genesis. The rule is one line, and the reason it needs saying is the whole of SA-1:
+///
+/// **a lane-filtered window is EMPTY at the fence.** The new lane has produced nothing yet, so
+/// however the window is filtered, at the fence it holds fewer rows than
+/// `min_difficulty_window_size` and takes the short-window fallback. If that fallback resolves to
+/// genesis bits, the network's absolute rate control jumps from whatever the chain had converged to
+/// back to the value a brand-new chain starts at — which on this project's own measurement is the
+/// empty-chain start burst (`docs/`: "500 block のバーストが 264-block window を抜ける間 DAA は緩む",
+/// and "genesis bits は床1台に ~100倍易しい"). On a network that can re-mint, that is a bad hour. On
+/// one that cannot, it is unearned issuance and a reorg surface, both permanent.
+///
+/// # The measurement this function exists to record
+///
+/// The fallback in `SampledDifficultyManager::calculate_difficulty_bits` **already does the right
+/// thing**, and that was worth checking rather than assuming: it returns `genesis_bits` only when
+/// the selected parent IS genesis, and otherwise returns the selected parent's own `bits`. At a
+/// fence on a live chain the selected parent is never genesis, so the fallback yields the pre-fence
+/// `bits` — exactly what SA-1 asks for — for free.
+///
+/// So SA-1's hazard is narrower than the amendment states it: it bites only if a lane filter is
+/// written to *reset* the window rather than to *empty* it. This function is the rule that must
+/// hold whatever such a filter does, and `the_lane_window_starts_where_the_chain_was` is its test.
+///
+/// **Not yet wired**: no difficulty window in this tree is lane-filtered at all (nothing in
+/// `consensus/src/processes/window.rs` or `difficulty.rs` reads `pow_algo_id`), so there is no call
+/// site for this yet. It is stated and pinned here so that whoever writes the filter has the rule
+/// and its reason in front of them rather than deriving it again.
+pub fn attempt_lane_window_seed_bits_v1(pre_fence_last_bits: u32, genesis_bits: u32) -> u32 {
+    let _ = genesis_bits;
+    pre_fence_last_bits
+}
+
 /// The whole retarget rule as a pure function of one chain's steps: fold from `boot_target` in chain
 /// order (oldest first), retargeting once at each boundary the steps cross.
 ///
@@ -992,6 +1052,58 @@ mod attempt_target_seed_tests {
 
     fn seed((share, pwu): (u16, u64)) -> u128 {
         attempt_target_seed_v1(share, pwu)
+    }
+
+    /// **ADR-0072 SA-1, first half — the fence seeds each class exactly as admission does.**
+    ///
+    /// One rule, not two that agree today. The fence and a post-genesis admission are the same
+    /// event from the target's point of view: a lane with no history, which the retarget provably
+    /// cannot price on its own. Asserted across the whole live table, and across the degenerate
+    /// rows, so a future edit to either function that broke the identity would fail here.
+    #[test]
+    fn the_fence_seeds_a_class_by_the_same_rule_that_admits_one() {
+        for (name, row) in [("floor", FLOOR), ("qwen36", QWEN36), ("a16", A16), ("weightless", (0, 7_708)), ("workless", (22, 0))] {
+            assert_eq!(
+                attempt_lane_target_seed_at_fence_v1(row.0, row.1),
+                seed(row),
+                "{name}: the fence must not invent a second pricing rule"
+            );
+        }
+        // And the seed is what makes the fence necessary at all: a class carrying its OLD target
+        // across would carry a price calibrated against a lottery that no longer exists.
+        assert!(seed(QWEN36) > seed(FLOOR), "the model tier must sit easier than the floor at equal cadence");
+    }
+
+    /// **ADR-0072 SA-1, second half — the new lane's window starts where the chain was, not where
+    /// the chain started.**
+    ///
+    /// The hazard the amendment names is quantitative, so this test states it as a quantity: the
+    /// difference between resuming at the converged `bits` and restarting at genesis `bits` is the
+    /// empty-chain start burst, and on this project's own measurement genesis bits is roughly two
+    /// orders of magnitude easier than a converged one for a single floor producer.
+    #[test]
+    fn the_lane_window_starts_where_the_chain_was() {
+        // A converged target and a genesis one, as compact bits. The exact values are a fixture;
+        // what is asserted is which of the two the rule returns, and that they are far apart.
+        let genesis_bits = 0x207fffffu32; // the trivial V2 genesis target
+        let converged_bits = 0x1e00ffffu32; // something a running chain actually reached
+        assert_ne!(converged_bits, genesis_bits, "a test that cannot tell the two apart proves nothing");
+
+        assert_eq!(
+            attempt_lane_window_seed_bits_v1(converged_bits, genesis_bits),
+            converged_bits,
+            "the lane-filtered window resumes at the pre-fence bits; restarting at genesis is the start burst"
+        );
+        // Whatever the genesis value is, it is never what the fence returns — including the case
+        // where a careless filter would have passed genesis bits in both positions.
+        assert_eq!(attempt_lane_window_seed_bits_v1(genesis_bits, genesis_bits), genesis_bits);
+
+        // The gap, stated: the genesis target admits vastly more draws than the converged one, so
+        // resuming at the wrong one is unearned issuance for the length of a window.
+        use kaspa_math::Uint256;
+        let g = Uint256::from_compact_target_bits(genesis_bits);
+        let c = Uint256::from_compact_target_bits(converged_bits);
+        assert!(g > c, "the genesis target is the easier of the two — that is what makes the restart a burst");
     }
 
     /// The property the whole seed exists for: the RATIO of two classes' targets is the ratio of

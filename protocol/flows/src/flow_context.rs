@@ -17,6 +17,7 @@ use kaspa_consensus_core::block::Block;
 use kaspa_consensus_core::config::Config;
 use kaspa_consensus_core::errors::block::RuleError;
 use kaspa_consensus_core::evm::DepositClaim;
+use kaspa_consensus_core::fork_id_v1::ForkIdVerdict;
 use kaspa_consensus_core::header::Header;
 use kaspa_consensus_core::{BlockHash, BlueWorkType}; // PR-9.5e: block hashes are Hash64
 use kaspa_consensus_core::{
@@ -1535,6 +1536,16 @@ impl ConnectionInitializer for FlowContext {
 
         let local_address = self.address_manager.lock().best_local_address();
 
+        // **ADR-0072 SA-2 — the fork id, and the DAA score it is taken at.**
+        //
+        // `unguarded_session` rather than `session().await`: this runs before the peer is in the
+        // hub or holds a flow, and blocking a handshake on the consensus session lock would let one
+        // connection attempt wait on an IBD commit. The score is a snapshot and does not need to be
+        // more than that — a node one block either side of a fence advertises a fired set the gate
+        // already accepts as "the same schedule seen from another height".
+        let local_daa_score = self.consensus().unguarded_session().get_virtual_daa_score();
+        let local_fork_id = kaspa_consensus_core::fork_id_v1::fork_id_v1(&self.config.params, local_daa_score);
+
         // Build the local version message
         // Subnets are not currently supported
         let mut self_version_message = Version::new(
@@ -1547,6 +1558,8 @@ impl ConnectionInitializer for FlowContext {
             self.config.params.consensus_params_id().as_bytes().to_vec(),
             self.config.params.consensus_identity_id().as_bytes().to_vec(),
             self.config.params.consensus_schedule_id().as_bytes().to_vec(),
+            local_fork_id.fired.as_bytes().to_vec(),
+            local_fork_id.next,
         );
         self_version_message.add_user_agent(name(), version(), &self.config.user_agent_comments);
         // TODO: get number of live services
@@ -1629,6 +1642,47 @@ impl ConnectionInitializer for FlowContext {
                 self.config.params.consensus_schedule_id(),
                 describe_fingerprint(&peer_version.consensus_schedule_id),
             );
+        }
+
+        // **ADR-0072 SA-2 — and this is the check the two above cannot make.**
+        //
+        // `consensus_identity_id` refuses a peer that disagrees about a rule in force NOW, and the
+        // warning above reports one that disagrees about a fence in the FUTURE without refusing it,
+        // because refusing there would partition the network for the whole rollout (M1-6). Both are
+        // computed with every fence normalised away, which is exactly what makes them blind to the
+        // moment the schedule stops being about the future: at the fence, a build that carries it
+        // and a build that does not disagree about every block produced from there on, and both
+        // still fingerprint as peers. The un-upgraded minority keeps extending the old arm and
+        // refuses the majority's blocks, and nothing in the handshake says a word.
+        //
+        // So the position goes on the wire. Everything compared here is derived locally — this
+        // node's own `Params` and its own DAA score; the peer's bytes are only ever compared
+        // against digests this node computed, never interpreted — and the verdict distinguishes
+        // "behind on the same schedule" (every syncing node, kept) from "a different schedule"
+        // (refused, but only once this node has actually crossed something).
+        //
+        // Inert on every shipped preset: `fork_id_gate_armed_v1` reads `palw_attempt_activation`,
+        // which is `None` everywhere, so this returns `Unfenced` before it compares anything. Three
+        // presets DO schedule crescendo, which is why the gate is armed by that field rather than
+        // by "has this node crossed a fence" — see the module doc.
+        match kaspa_consensus_core::fork_id_v1::evaluate_fork_id_v1(
+            &self.config.params,
+            local_daa_score,
+            &peer_version.fork_id_fired,
+            peer_version.fork_id_next,
+        ) {
+            ForkIdVerdict::Unfenced | ForkIdVerdict::Agree => {}
+            ForkIdVerdict::DisagreeBeforeAnyFence(mismatch) => {
+                warn!(
+                    "peer {} advertises a different fence schedule ({}), and this node has not crossed a fence yet \
+                     (DAA {}); keeping the peer — the two builds agree about every block either can produce today. \
+                     They will NOT agree past the first fence: compare the two builds before that height arrives",
+                    peer_version.id, mismatch, local_daa_score,
+                );
+            }
+            ForkIdVerdict::DisagreePastFence { mismatch, fired_through } => {
+                return Err(ProtocolError::WrongForkId(network_name, local_daa_score, fired_through, mismatch.to_string()));
+            }
         }
 
         debug!("protocol versions - self: {}, peer: {}", PROTOCOL_VERSION, peer_version.protocol_version);

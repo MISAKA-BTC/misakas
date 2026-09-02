@@ -229,6 +229,104 @@ pub const POW_ALGO_ID_PALW_COMMITTED_V2: u8 = 6;
 /// remote-crash shape the unknown-algo-id P0 already exhibited once.
 pub const POW_ALGO_ID_PALW_RECEIPT_V3: u8 = 7;
 
+/// **ADR-0072 §3 option (b) — the execution-priced attempt lane, reached by activation.**
+///
+/// [`POW_ALGO_ID_PALW_COMMITTED_V2`] (6) and this id run the SAME rule in this binary: both tag
+/// `Expand(execution_commitment_v3)`, both carry a `PalwAttemptEnvelopeV2`, both buy chain
+/// position. So why a second id at all?
+///
+/// Because on a network that cannot re-mint, 6 has HISTORY, and that history was drawn under the
+/// pre-ADR-0072 rule — a fresh ticket per nonce off `commitment_root_v2`. Mainnet's path to this
+/// ADR is a fence, not a genesis (2026-08-27 doctrine), so one binary has to validate both sides
+/// of it. The two sides need two ids, and the reason is not tidiness:
+///
+/// **`pow_algo_id` is inside the Layer-0 digest** (see the finalizer call in `kaspa_pow`, which
+/// passes `self.pow_algo_id` into `finalize_layer0_512`). So an attempt solved for the old lane
+/// produces a DIFFERENT digest when re-announced on the new one — it is not a losing candidate in
+/// the new lottery, it is not a candidate at all. Cross-lane replay is refused by construction
+/// rather than by a version field a producer fills in, which is ADR-0072 SA-4 and is what
+/// `a_valid_old_lane_attempt_is_not_a_candidate_in_the_new_lane` pins.
+///
+/// **Not accepted anywhere until a network arms `Params::palw_attempt_activation`.** The bundle's
+/// `accepts_algo_id` does not name it — a V2 bundle's two ids are 6 and 7 — so it reaches
+/// acceptance only through the fence that the header processor ORs in, exactly as the heartbeat
+/// lane does. Every shipped preset leaves that fence `None`, so today no network accepts an
+/// algo-9 header and no producer builds one.
+pub const POW_ALGO_ID_PALW_EXEC_V3: u8 = 9;
+
+/// **Which attempt lane is open at a position, and what an envelope on it must say** (ADR-0072
+/// SA-3/SA-4).
+///
+/// The one value that answers both halves of the fence, so they cannot drift: an activation that
+/// opened a new algo id while leaving the version check un-fenced is exactly the defect ADR-0072
+/// §3's Decision 7 analysis found ("a node on this build refuses every version-5 envelope, which is
+/// every attempt block the chain already holds — a fresh node cannot validate the history it is
+/// asked to sync").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwAttemptLaneV1 {
+    /// **No activation fence on this network.** The attempt lane is algo-6 carrying the current
+    /// envelope, at every height — which is what every shipped preset does, and what testnet-11
+    /// and devnet have done since they were re-minted onto ADR-0072's rule.
+    Unfenced,
+    /// **Armed, and this position is BELOW the fence.** The attempt lane is algo-6 carrying the
+    /// legacy envelope: the history a fenced network is keeping. Algo-9 is not a lane here.
+    LegacyArm,
+    /// **Armed, and this position is at or above the fence.** The attempt lane is algo-9 carrying
+    /// the current envelope. Algo-6 is no longer a lane: an old-lane block at a post-fence height
+    /// is refused by id, before anything reads its version.
+    ExecutionArm,
+}
+
+impl PalwAttemptLaneV1 {
+    /// Resolve from a fence: `None` = un-armed network, `Some(active)` = armed, and whether this
+    /// position is past it. Kept as an `Option<bool>` rather than a `ForkActivation` so this
+    /// module stays free of `config` — the resolver that reads `Params` is
+    /// `Params::palw_attempt_lane_at`.
+    #[inline]
+    pub fn from_fence(fence_active: Option<bool>) -> Self {
+        match fence_active {
+            None => Self::Unfenced,
+            Some(false) => Self::LegacyArm,
+            Some(true) => Self::ExecutionArm,
+        }
+    }
+
+    /// The one algo id that carries the attempt lane here.
+    #[inline]
+    pub fn attempt_algo_id(self) -> u8 {
+        match self {
+            Self::Unfenced | Self::LegacyArm => POW_ALGO_ID_PALW_COMMITTED_V2,
+            Self::ExecutionArm => POW_ALGO_ID_PALW_EXEC_V3,
+        }
+    }
+
+    /// The envelope version admissible on that lane — **the fenced version check** (SA-3). Below
+    /// the fence the chain's own history is legacy-versioned and must still validate; at and above
+    /// it, only the current version is.
+    #[inline]
+    pub fn attempt_version(self) -> u16 {
+        match self {
+            Self::Unfenced | Self::ExecutionArm => crate::palw_attempt_v2::PALW_ATTEMPT_V2_VERSION,
+            Self::LegacyArm => crate::palw_attempt_v2::PALW_ATTEMPT_V2_VERSION_PRE_ADR_0072,
+        }
+    }
+
+    /// Is `algo_id` the attempt lane open HERE? Answers only about the two attempt ids — the
+    /// receipt lane (7) and the heartbeat lane (8) are other fences' business and this must not
+    /// speak for them.
+    #[inline]
+    pub fn admits_attempt_algo_id(self, algo_id: u8) -> bool {
+        !is_palw_attempt_algo_id(algo_id) || algo_id == self.attempt_algo_id()
+    }
+}
+
+/// The two ids that can carry a `PalwAttemptEnvelopeV2`, across the fence. Exactly one of them is
+/// a lane at any position; [`PalwAttemptLaneV1::admits_attempt_algo_id`] says which.
+#[inline]
+pub fn is_palw_attempt_algo_id(algo_id: u8) -> bool {
+    algo_id == POW_ALGO_ID_PALW_COMMITTED_V2 || algo_id == POW_ALGO_ID_PALW_EXEC_V3
+}
+
 /// **Does a header of this algorithm buy position in the chain?**
 ///
 /// A receipt header's digest is free to re-roll: nothing in it costs anything to produce, so any
@@ -516,6 +614,14 @@ pub enum PowLayer0Error {
     /// MISAKA ADR-0038: a PALW header's `palw_commitment` exceeds the wire cap.
     #[error("palw_commitment is {got} bytes, above the cap {cap}")]
     PalwCommitmentTooLong { got: usize, cap: usize },
+    /// **ADR-0072 SA-4: an attempt header on the wrong side of the activation fence.**
+    ///
+    /// Exactly one of the two attempt ids is a lane at any position, and the fence decides which.
+    /// This is the refusal an old-lane block gets when it is replayed past the fence — by ID,
+    /// before its envelope's version is read, which is why the two cannot be confused: a producer
+    /// chooses the version field and does not choose which lottery `pow_algo_id` puts it in.
+    #[error("attempt header carries algo_id {algo_id}, but the open attempt lane at this height is {open}")]
+    PalwAttemptLaneClosed { algo_id: u8, open: u8 },
     /// MISAKA ADR-0038: a PALW header carries a `palw_commitment` while **nothing in the PoW
     /// path binds it** — the same malleability as
     /// [`Self::NonPalwHeaderCarriesPalwCommitment`], reached from the other side.
@@ -562,13 +668,16 @@ pub enum PowLayer0Error {
 /// [`is_palw_algo_id`], which is the whole PALW family including the V1 lineage — these are the
 /// two ids that carry a `PalwChainStateV2`, and the ones the state root's preimage gate reads.
 pub fn is_palw_v2_algo_id(algo_id: u8) -> bool {
-    algo_id == POW_ALGO_ID_PALW_COMMITTED_V2 || algo_id == POW_ALGO_ID_PALW_RECEIPT_V3
+    // ADR-0072 SA-4: the execution-priced attempt lane is the SAME lineage as 6 — it carries a
+    // `PalwChainStateV2` and commits a state root — so it must be in this set from the moment the
+    // id exists, or a `palw_state_root` on an algo-9 header would be hash-invisible and stuffable.
+    is_palw_attempt_algo_id(algo_id) || algo_id == POW_ALGO_ID_PALW_RECEIPT_V3
 }
 
 pub fn is_palw_algo_id(algo_id: u8) -> bool {
     algo_id == POW_ALGO_ID_PALW_LLM
         || algo_id == POW_ALGO_ID_PALW_OLLAMA
-        || algo_id == POW_ALGO_ID_PALW_COMMITTED_V2
+        || is_palw_attempt_algo_id(algo_id)
         || algo_id == POW_ALGO_ID_PALW_RECEIPT_V3
 }
 
@@ -623,6 +732,30 @@ pub const PALW_COMMITMENT_MAX_BYTES: usize = 8192;
 /// then re-opens the malleability.
 #[inline]
 pub fn check_palw_commitment_shape(algo_id: u8, palw_commitment: &[u8], bound: bool) -> Result<(), PowLayer0Error> {
+    // An un-fenced network is what every shipped preset is, so this is the same function it always
+    // was; the fenced entry point below is what an armed network calls.
+    check_palw_commitment_shape_at(algo_id, palw_commitment, bound, PalwAttemptLaneV1::Unfenced)
+}
+
+/// [`check_palw_commitment_shape`] with the attempt lane supplied by the position (ADR-0072
+/// SA-3/SA-4).
+///
+/// Two things move with `lane`, and both had to, or the fence would be half a fence:
+///
+/// * **which attempt id is a lane at all** — an algo-6 header at a post-fence height is refused
+///   here by ID, before its version is read, and an algo-9 header below the fence likewise. That
+///   is SA-4's "by algo id, not merely by version", enforced at the shape gate rather than left to
+///   the Layer-0 digest to notice (the digest refuses it too — `pow_algo_id` is inside it — but a
+///   named refusal beats an unexplained PoW failure);
+/// * **which envelope version that lane admits** — SA-3. Below the fence the chain's own
+///   pre-ADR-0072 history must validate, and it is version
+///   [`crate::palw_attempt_v2::PALW_ATTEMPT_V2_VERSION_PRE_ADR_0072`].
+pub fn check_palw_commitment_shape_at(
+    algo_id: u8,
+    palw_commitment: &[u8],
+    bound: bool,
+    lane: PalwAttemptLaneV1,
+) -> Result<(), PowLayer0Error> {
     if !is_palw_algo_id(algo_id) {
         // Unconditional, fence or no fence: a non-PALW header's commitment is hash-INVISIBLE
         // (`write_header_preimage` length-prefixes it only for PALW ids), so a non-empty one is
@@ -643,14 +776,22 @@ pub fn check_palw_commitment_shape(algo_id: u8, palw_commitment: &[u8], bound: b
     // or algo-7 header only exists on a network whose mode demands that id, which
     // `check_algo_id_for_mode` decided up-stack. What the finalizer expands is exactly what this
     // gate insists is present and well-formed, so "tagged but unvalidated" is unrepresentable.
-    if algo_id == POW_ALGO_ID_PALW_COMMITTED_V2 {
-        // The field is REQUIRED and required to be a V2 envelope: an algo-6 header without one
+    if is_palw_attempt_algo_id(algo_id) {
+        // ADR-0072 SA-4: the wrong side of the fence is not a lane. Checked before the envelope is
+        // decoded, so an old-lane block replayed past the fence is refused for what it IS rather
+        // than for what it says about itself.
+        if !lane.admits_attempt_algo_id(algo_id) {
+            return Err(PowLayer0Error::PalwAttemptLaneClosed { algo_id, open: lane.attempt_algo_id() });
+        }
+        // The field is REQUIRED and required to be a V2 envelope: an attempt header without one
         // carries no work to price, and the finalizer refuses it as `PalwV2AttemptMissing`
         // anyway; failing HERE names the shape defect (wrong magic, truncated body, zero pwu…)
         // instead of a digest mismatch.
         let envelope = crate::palw_attempt_v2::PalwAttemptEnvelopeV2::decode_wire(palw_commitment)
             .map_err(|e| PowLayer0Error::PalwCommitmentMalformed { algo_id, reason: e.to_string() })?;
-        return envelope.validate_shape_v2().map_err(|e| PowLayer0Error::PalwCommitmentMalformed { algo_id, reason: e.to_string() });
+        return envelope
+            .validate_shape_v2_at_version(lane.attempt_version())
+            .map_err(|e| PowLayer0Error::PalwCommitmentMalformed { algo_id, reason: e.to_string() });
     }
     if algo_id == POW_ALGO_ID_PALW_RECEIPT_V3 {
         return crate::palw_freeprompt_v3::PalwReceiptSpendEnvelopeV3::decode(palw_commitment)
@@ -858,6 +999,11 @@ pub fn check_algo_id_known(algo_id: u8) -> Result<(), PowLayer0Error> {
         || algo_id == POW_ALGO_ID_PALW_LLM
         || algo_id == POW_ALGO_ID_PALW_OLLAMA
         || algo_id == POW_ALGO_ID_PALW_COMMITTED_V2
+        // ADR-0072 SA-4: 9 shares 6's finalizer arm, so this binary can derive its tag — which is
+        // the only question this function asks. Whether a network ACCEPTS it is
+        // `Params::palw_attempt_activation`'s, asked in `check_pow_algo_id`; conflating the two is
+        // what the heartbeat's triple gate did.
+        || algo_id == POW_ALGO_ID_PALW_EXEC_V3
         // ADR-0044 Unit B: 7 joins the set the moment its finalizer arm exists. "Known" here
         // means "this binary can derive its tag", and the pruning-proof path is the caller that
         // needs the distinction — a proof header whose tag we cannot derive must be refused, and
@@ -1252,6 +1398,169 @@ mod tests {
     use super::*;
     use kaspa_hashes::ZERO_HASH64;
 
+    /// A well-formed attempt envelope at a chosen version. Shape only — the fenced gates under
+    /// test read the version and the algo id and nothing else about it.
+    fn attempt_envelope_at_version(version: u16) -> Vec<u8> {
+        use crate::dns_finality::{STAKE_ATTESTATION_SIG_LEN, STAKE_VALIDATOR_PUBKEY_LEN};
+        let h = |w: u64| kaspa_hashes::Hash64::from_u64_word(w);
+        let attempt = crate::palw_attempt_v2::PalwAttemptUnsignedV2 {
+            version,
+            network_domain: h(0x7E57_00D0),
+            challenge: h(0xC0FFEE),
+            class_id: h(0xC1A55),
+            executor_bond: crate::tx::TransactionOutpoint::new(kaspa_hashes::Hash64::from_bytes([3u8; 64]), 1),
+            executor_pubkey: vec![7u8; STAKE_VALIDATOR_PUBKEY_LEN],
+            operator_id: h(0x0E0),
+            artifact_root: h(0xA7),
+            trace_root: h(0x7A),
+            output_root: h(0x07),
+            pwu: 4_242,
+            trace_manifest_root: h(0xD0),
+            trace_chunk_count: 1,
+            trace_retention_daa: 1_000_000,
+            execution_root: h(0x41),
+        };
+        crate::palw_attempt_v2::PalwAttemptEnvelopeV2 { attempt, signature: vec![0x5A; STAKE_ATTESTATION_SIG_LEN] }.encode_wire()
+    }
+
+    /// **ADR-0072 SA-3 — the version check is fenced, and one binary holds both arms.**
+    ///
+    /// §3's Decision 7 analysis names the defect this closes: "a node on this build refuses every
+    /// version-5 envelope, which is every attempt block the chain already holds — a fresh node
+    /// cannot validate the history it is asked to sync. Every earlier attempt-format change shipped
+    /// with a re-genesis for exactly this reason." Mainnet may not re-genesis (2026-08-27), so the
+    /// version has to travel with the position instead of being compiled in.
+    ///
+    /// The `Unfenced` row is the one that says nothing shipped moved: it is every preset today, and
+    /// it accepts exactly what the un-parameterised entry point always accepted.
+    #[test]
+    fn the_admissible_attempt_version_is_a_function_of_the_position_not_of_the_binary() {
+        let current = crate::palw_attempt_v2::PALW_ATTEMPT_V2_VERSION;
+        let legacy = crate::palw_attempt_v2::PALW_ATTEMPT_V2_VERSION_PRE_ADR_0072;
+        assert_ne!(current, legacy, "a fence between two identical versions would fence nothing");
+
+        // (lane, the id that IS the lane there, the version that lane admits)
+        let rows = [
+            (PalwAttemptLaneV1::Unfenced, POW_ALGO_ID_PALW_COMMITTED_V2, current),
+            (PalwAttemptLaneV1::LegacyArm, POW_ALGO_ID_PALW_COMMITTED_V2, legacy),
+            (PalwAttemptLaneV1::ExecutionArm, POW_ALGO_ID_PALW_EXEC_V3, current),
+        ];
+        for (lane, algo, admitted) in rows {
+            assert_eq!(lane.attempt_algo_id(), algo, "{lane:?}");
+            assert_eq!(lane.attempt_version(), admitted, "{lane:?}");
+            assert!(
+                check_palw_commitment_shape_at(algo, &attempt_envelope_at_version(admitted), false, lane).is_ok(),
+                "{lane:?}: the version this position admits must validate"
+            );
+            let other = if admitted == current { legacy } else { current };
+            assert!(
+                check_palw_commitment_shape_at(algo, &attempt_envelope_at_version(other), false, lane).is_err(),
+                "{lane:?}: the version this position does NOT admit must not"
+            );
+        }
+
+        // The un-parameterised entry point is the `Unfenced` row, so no shipped call site moved.
+        for version in [current, legacy] {
+            let bytes = attempt_envelope_at_version(version);
+            assert_eq!(
+                check_palw_commitment_shape(POW_ALGO_ID_PALW_COMMITTED_V2, &bytes, false).is_ok(),
+                check_palw_commitment_shape_at(POW_ALGO_ID_PALW_COMMITTED_V2, &bytes, false, PalwAttemptLaneV1::Unfenced).is_ok(),
+                "version {version}: the old entry point must be the un-fenced lane exactly"
+            );
+        }
+    }
+
+    /// **ADR-0072 SA-4, at the shape gate — the wrong side of the fence is refused BY ALGO ID,
+    /// before the version is read.**
+    ///
+    /// The finalizer refuses a cross-lane replay too (`pow_algo_id` is in the Layer-0 digest and in
+    /// `pre_pow_hash_64` — see `a_valid_old_lane_attempt_is_not_a_candidate_in_the_new_lane` in
+    /// `kaspa-pow`). This is the earlier, NAMED refusal, and the assertion that matters is the
+    /// second one: the envelope carries the version the closed lane WOULD have admitted, so the
+    /// error can only be about the id.
+    #[test]
+    fn an_attempt_on_the_closed_lane_is_refused_by_id_not_by_version() {
+        let current = crate::palw_attempt_v2::PALW_ATTEMPT_V2_VERSION;
+        let legacy = crate::palw_attempt_v2::PALW_ATTEMPT_V2_VERSION_PRE_ADR_0072;
+
+        // Past the fence: the old id is closed. The envelope is legacy-versioned — exactly what the
+        // pre-fence chain holds and what the old lane admits — so nothing about it is malformed;
+        // its POSITION is what is wrong.
+        assert_eq!(
+            check_palw_commitment_shape_at(
+                POW_ALGO_ID_PALW_COMMITTED_V2,
+                &attempt_envelope_at_version(legacy),
+                false,
+                PalwAttemptLaneV1::ExecutionArm
+            ),
+            Err(PowLayer0Error::PalwAttemptLaneClosed { algo_id: POW_ALGO_ID_PALW_COMMITTED_V2, open: POW_ALGO_ID_PALW_EXEC_V3 }),
+            "an old-lane block replayed past the fence must be refused for its id, not for its contents"
+        );
+        // And with the CURRENT version, which the open lane would accept: still the id.
+        assert_eq!(
+            check_palw_commitment_shape_at(
+                POW_ALGO_ID_PALW_COMMITTED_V2,
+                &attempt_envelope_at_version(current),
+                false,
+                PalwAttemptLaneV1::ExecutionArm
+            ),
+            Err(PowLayer0Error::PalwAttemptLaneClosed { algo_id: POW_ALGO_ID_PALW_COMMITTED_V2, open: POW_ALGO_ID_PALW_EXEC_V3 }),
+            "the version is not what refuses it — edit the version and the refusal is unchanged"
+        );
+
+        // Symmetrically: the new id is not a lane before the fence, nor on an un-fenced network.
+        for lane in [PalwAttemptLaneV1::Unfenced, PalwAttemptLaneV1::LegacyArm] {
+            assert_eq!(
+                check_palw_commitment_shape_at(POW_ALGO_ID_PALW_EXEC_V3, &attempt_envelope_at_version(current), false, lane),
+                Err(PowLayer0Error::PalwAttemptLaneClosed { algo_id: POW_ALGO_ID_PALW_EXEC_V3, open: POW_ALGO_ID_PALW_COMMITTED_V2 }),
+                "{lane:?}: the post-fence id must not be admissible before the fence"
+            );
+        }
+
+        // The other lanes are nobody else's business: this predicate speaks only for the two
+        // attempt ids, so a receipt or heartbeat header is untouched by the fence.
+        for other in [POW_ALGO_ID_PALW_RECEIPT_V3, POW_ALGO_ID_HEARTBEAT_V1, POW_ALGO_ID_KHEAVYHASH] {
+            for lane in [PalwAttemptLaneV1::Unfenced, PalwAttemptLaneV1::LegacyArm, PalwAttemptLaneV1::ExecutionArm] {
+                assert!(lane.admits_attempt_algo_id(other), "{lane:?}: the fence must not speak for algo {other}");
+            }
+        }
+    }
+
+    /// The fence resolves to exactly one lane, and `None` — every shipped preset — is the one that
+    /// leaves today's behaviour alone.
+    #[test]
+    fn the_lane_resolver_is_total_and_none_is_todays_behaviour() {
+        assert_eq!(PalwAttemptLaneV1::from_fence(None), PalwAttemptLaneV1::Unfenced);
+        assert_eq!(PalwAttemptLaneV1::from_fence(Some(false)), PalwAttemptLaneV1::LegacyArm);
+        assert_eq!(PalwAttemptLaneV1::from_fence(Some(true)), PalwAttemptLaneV1::ExecutionArm);
+
+        // And through `Params`, where the fence actually lives.
+        let mut params = crate::config::params::MAINNET_PARAMS;
+        assert_eq!(params.palw_attempt_lane_at(0), PalwAttemptLaneV1::Unfenced);
+        assert_eq!(params.palw_attempt_lane_at(u64::MAX), PalwAttemptLaneV1::Unfenced);
+        params.palw_attempt_activation = Some(crate::config::params::ForkActivation::new(1_000));
+        assert_eq!(params.palw_attempt_lane_at(999), PalwAttemptLaneV1::LegacyArm);
+        assert_eq!(params.palw_attempt_lane_at(1_000), PalwAttemptLaneV1::ExecutionArm, "`is_active` is inclusive at the fence");
+    }
+
+    /// The new id joins the families it must, and none it must not.
+    #[test]
+    fn the_new_attempt_id_is_in_the_v2_lineage_and_is_position_bearing() {
+        assert!(is_palw_attempt_algo_id(POW_ALGO_ID_PALW_EXEC_V3));
+        assert!(is_palw_attempt_algo_id(POW_ALGO_ID_PALW_COMMITTED_V2));
+        assert!(!is_palw_attempt_algo_id(POW_ALGO_ID_PALW_RECEIPT_V3));
+        // In the V2 lineage, so `palw_state_root` and `palw_commitment` are hash-VISIBLE on it —
+        // without this, a stuffed state root on an algo-9 header would be block-hash malleability.
+        assert!(is_palw_v2_algo_id(POW_ALGO_ID_PALW_EXEC_V3));
+        assert!(is_palw_algo_id(POW_ALGO_ID_PALW_EXEC_V3));
+        // It buys chain position exactly as algo-6 does: it is the same lane, priced the same way.
+        assert!(!algo_id_carries_no_chain_position(POW_ALGO_ID_PALW_EXEC_V3));
+        assert!(!algo_id_derives_no_block_level(POW_ALGO_ID_PALW_EXEC_V3));
+        // Known to this binary (it shares algo-6's finalizer arm), which is what lets a pruning
+        // proof carry it — the audit-C1 rule that an id may not be accepted before its arm exists.
+        assert!(check_algo_id_known(POW_ALGO_ID_PALW_EXEC_V3).is_ok());
+    }
+
     fn h(byte: u8) -> Hash64 {
         Hash64::from_bytes([byte; 64])
     }
@@ -1314,10 +1623,19 @@ mod tests {
             // the algo-6 delisting below established. Note that KNOWN is not ACCEPTED: whether a
             // network admits an algo-8 header is `Params::palw_heartbeat`'s question, one level up.
             POW_ALGO_ID_HEARTBEAT_V1,
+            // 9 joined with ADR-0072 SA-4's execution-priced attempt lane, under the same rule and
+            // in the same commit as its arm: it SHARES algo-6's arm (the two lanes run one rule;
+            // what separates them is that `pow_algo_id` is inside the Layer-0 digest), so "this
+            // binary can derive the tag" was true the moment the id existed. KNOWN is not
+            // ACCEPTED — whether a network admits an algo-9 header is
+            // `Params::palw_attempt_activation`'s question, one level up, and every shipped preset
+            // answers no.
+            POW_ALGO_ID_PALW_EXEC_V3,
         ] {
             assert!(check_algo_id_known(ok).is_ok(), "algo_id {ok} must be known");
         }
-        for bad in [0u8, 9, 10, 0xff] {
+        // 9 left this list when it was assigned; 11 stands in for the next unassigned id.
+        for bad in [0u8, 10, 11, 0xff] {
             assert_eq!(check_algo_id_known(bad), Err(PowLayer0Error::UnknownAlgoId(bad)));
         }
 

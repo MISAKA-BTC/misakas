@@ -102,6 +102,19 @@ impl HeaderProcessor {
         let blake2b_sha3_active = self.pow_blake2b_sha3_activation.is_active(header.daa_score);
         let heartbeat_open = header.pow_algo_id == kaspa_consensus_core::palw_heartbeat_v1::PALW_HEARTBEAT_ALGO_ID
             && self.palw_heartbeat_lane.is_some_and(|fence| fence.is_active(header.daa_score));
+        // **ADR-0072 SA-3/SA-4 — which attempt lane is open at this height.**
+        //
+        // `Unfenced` on every shipped preset, and every branch below is written so that arm is a
+        // no-op: `attempt_algo_id()` is 6, `admits_attempt_algo_id` accepts 6 and refuses 9 exactly
+        // as the bundle already does, and `attempt_version()` is the compiled-in one.
+        let attempt_lane = kaspa_consensus_core::pow_layer0::PalwAttemptLaneV1::from_fence(
+            self.palw_attempt_activation.map(|fence| fence.is_active(header.daa_score)),
+        );
+        // The bundle's two ids are 6 and 7 and it cannot see a top-level fence, so — exactly as the
+        // heartbeat lane does — the new attempt id is ORed in here. Only past the fence: an algo-9
+        // header below it is not a lane.
+        let exec_lane_open = header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_EXEC_V3
+            && attempt_lane == kaspa_consensus_core::pow_layer0::PalwAttemptLaneV1::ExecutionArm;
         // Accepts, not demands: a V2 network admits its receipt lane as well as its attempt
         // lane, and asking only for the demanded id refused every block on the first one.
         kaspa_consensus_core::pow_layer0::check_algo_id_for_mode_accepting(
@@ -109,20 +122,38 @@ impl HeaderProcessor {
             self.palw_required_algo_id,
             // ADR-0066: the bundle answers for its own two lanes; the heartbeat is a TOP-LEVEL
             // fence, so it is ORed in here rather than inside a bundle that cannot see it.
-            self.palw_consensus_mode.accepts_algo_id(header.pow_algo_id).map(|a| a || heartbeat_open),
+            // ADR-0072 SA-4 adds the second attempt id on the same terms.
+            self.palw_consensus_mode.accepts_algo_id(header.pow_algo_id).map(|a| a || heartbeat_open || exec_lane_open),
             palw_ollama_active,
             palw_active,
             blake2b_sha3_active,
         )
         .map_err(|_| RuleError::UnknownPowAlgoId(header.pow_algo_id))?;
+        // **And the other half of SA-4: the OLD id closes when the new one opens.**
+        //
+        // The gate above is an accept-list, so it would keep admitting algo-6 past the fence — and
+        // an un-upgraded producer would keep making algo-6 blocks that an upgraded node accepted
+        // under the new rule, which is the silent fork the fence exists to prevent, arrived at from
+        // inside one binary. Exactly one attempt id is a lane at any height.
+        if !attempt_lane.admits_attempt_algo_id(header.pow_algo_id) {
+            return Err(RuleError::UnknownPowAlgoId(header.pow_algo_id));
+        }
         // MISAKA ADR-0038: structural shape rule for the post-PoW palw_commitment field.
         // The NON-PALW arm is not behind any fence — a hash-invisible non-empty field there is
         // block-hash malleability and is refused at the door on every network. The PALW arm is
         // fenced (Decision A): unset, the field must be empty exactly as before; set, it must be a
         // well-formed PBC1 commitment from the fence's DAA.
         let commitment_bound = self.palw_block_commitment.is_some_and(|fence| fence.is_bound(header.daa_score));
-        kaspa_consensus_core::pow_layer0::check_palw_commitment_shape(header.pow_algo_id, &header.palw_commitment, commitment_bound)
-            .map_err(|e| RuleError::BadPalwCommitmentShape(e.to_string()))?;
+        // ADR-0072 SA-3: the admissible envelope version travels with the lane, so pre-fence
+        // history validates under the old version and post-fence blocks under the new, in one
+        // binary. `Unfenced` supplies the compiled-in version, which is every shipped preset.
+        kaspa_consensus_core::pow_layer0::check_palw_commitment_shape_at(
+            header.pow_algo_id,
+            &header.palw_commitment,
+            commitment_bound,
+            attempt_lane,
+        )
+        .map_err(|e| RuleError::BadPalwCommitmentShape(e.to_string()))?;
         // The `palw_state_root` shape rule, on the `palw_commitment` pattern: the field is
         // hash-visible exactly on the lanes that commit state — the V2 lineage (6/7), and, since
         // ADR-0060, a heartbeat (algo-3) header on a `ConsensusV2` network. Everywhere else it is
