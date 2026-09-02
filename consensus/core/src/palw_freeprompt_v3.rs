@@ -80,6 +80,9 @@ pub const PALW_FP_V3_DOMAIN_TRACE_MANIFEST: &[u8] = b"misaka-palw/fp-v3/trace-ma
 pub const PALW_FP_V3_DOMAIN_CANONICAL_ANCHOR: &[u8] = b"misaka-palw/fp-v3/canonical-anchor/v1";
 /// ADR-0074 Decision 4: the identity of the WORK a claim commits — one inference, one claim.
 pub const PALW_FP_V3_DOMAIN_WORK_ID: &[u8] = b"misaka-palw/fp-v3/work-id/v1";
+/// ADR-0073 SA-1: the fold of the first `k` attempt blocks at or after a draw slot (see
+/// [`fp_beacon_fold_v3`]).
+pub const PALW_FP_V3_DOMAIN_BEACON_FOLD: &[u8] = b"misaka-palw/fp-v3/beacon-fold/v1";
 
 /// Every domain this module keys, so a duplicate is a test failure rather than a silent collision.
 pub const PALW_FP_V3_ALL_DOMAINS: &[&[u8]] = &[
@@ -96,6 +99,7 @@ pub const PALW_FP_V3_ALL_DOMAINS: &[&[u8]] = &[
     PALW_FP_V3_DOMAIN_SPEND_CHALLENGE,
     PALW_FP_V3_DOMAIN_CANONICAL_ANCHOR,
     PALW_FP_V3_DOMAIN_WORK_ID,
+    PALW_FP_V3_DOMAIN_BEACON_FOLD,
 ];
 
 // ---------------------------------------------------------------------------------------------
@@ -432,6 +436,14 @@ pub fn fp_spend_window_contains_v3(beacon_daa: u64, receipt_use_window_daa: u64,
 /// attests the two block-identity claims (that the named blocks are chain blocks of the named
 /// classes at the named scores) from its own candidate chain; this validation checks the
 /// ordering those claims must satisfy, so a fact from a different slot cannot be replayed here.
+/// **Past ADR-0073 SA-1's fence the two block fields describe a FOLD rather than one block**, and
+/// the struct is deliberately unchanged so nothing downstream has to learn the difference:
+/// `beacon_block` is [`fp_beacon_fold_v3`] of the first `k` attempt blocks at or after the slot
+/// (identically the single block's own hash at `k = 1`, which is what keeps the fence-off bytes),
+/// and `beacon_daa` is the `k`-th of them — the height at which the draw becomes DETERMINED, which
+/// is what the use window must start from. `prev_attempt_daa` is unchanged in both regimes: it is
+/// still the last attempt block strictly below the slot, so `prev < slot ≤ beacon_daa` still says
+/// the fold begins exactly at the slot boundary and nothing was skipped under it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
 pub struct PalwBeaconFactV3 {
     pub beacon_block: Hash64,
@@ -440,6 +452,28 @@ pub struct PalwBeaconFactV3 {
     /// networks with no prior attempt block use 0 — the slot of the first real claim is always
     /// past genesis.
     pub prev_attempt_daa: u64,
+}
+
+/// **ADR-0073 SA-1: `H(domain ‖ k ‖ blocks…)` over the first `k` attempt blocks at or after the
+/// slot, in ASCENDING chain order.**
+///
+/// Why a fold at all: a single-block beacon costs one inference to RE-ROLL but only one block's
+/// subsidy to WITHHOLD, and a producer whose block would be the beacon can drop it when the draw
+/// disfavours its own pending claims. Folding `k` blocks means a producer holding attempt share
+/// `p` controls the draw only when it holds ALL `k` — probability `p^k` instead of `p`.
+///
+/// The shape is [`fp_trace_manifest_root_v3`]'s, deliberately: domain-keyed, count-prefixed, and
+/// ordered, so a shorter fold cannot collide with a longer one and no permutation of the same
+/// blocks is the same value. Ascending chain order (the reverse of the validator's descending
+/// walk) is the canonical one — it is the order the blocks were produced in, which is the only
+/// order two nodes derive without agreeing on a walk direction first.
+pub fn fp_beacon_fold_v3(blocks_ascending: &[Hash64]) -> Hash64 {
+    let mut state = keyed(PALW_FP_V3_DOMAIN_BEACON_FOLD);
+    state.update(&(blocks_ascending.len() as u32).to_le_bytes());
+    for block in blocks_ascending {
+        state.update(block.as_byte_slice());
+    }
+    finish(state)
 }
 
 pub fn validate_beacon_fact_v3(slot: u64, fact: &PalwBeaconFactV3) -> Result<(), PalwFpV3Error> {

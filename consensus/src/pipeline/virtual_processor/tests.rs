@@ -1157,6 +1157,105 @@ async fn the_beacon_fact_comes_from_the_chain_not_from_the_block() {
     assert!(matches!(err, kaspa_consensus_core::palw_fp_beacon_v3::PalwBeaconDeriveV3Error::NoBeaconYet { .. }), "got {err:?}");
 }
 
+/// **ADR-0073 SA-1: the armed fence reaches the derivation, and the beacon becomes a FOLD.**
+///
+/// The pure derivation is pinned in `palw_fp_beacon_v3`'s own tests; what only the pipeline can
+/// say is that the fence is actually resolved here — a rule whose value never reaches the walk is
+/// a rule nobody runs. So the expectation below is rebuilt from the HEADER STORE rather than from
+/// the derivation being tested: the first `k` attempt blocks at or after each slot, folded in
+/// ascending chain order.
+#[tokio::test]
+async fn the_armed_beacon_fence_folds_the_first_k_attempt_blocks() {
+    use crate::model::stores::headers::HeaderStoreReader;
+    use kaspa_consensus_core::config::params::{ForkActivation, PalwBeaconFoldV1};
+    use kaspa_consensus_core::palw_fp_beacon_v3::{PALW_BEACON_FOLD_MIN_K_V1, PalwBeaconDeriveV3Error};
+    use kaspa_consensus_core::palw_freeprompt_v3::fp_beacon_fold_v3;
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+
+    let k = PALW_BEACON_FOLD_MIN_K_V1;
+    let catalog = palw_v2_test_catalog();
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(palw_v2_test_bundle_funded_for(&catalog, 16));
+            // Armed from genesis, which no shipped preset does — that is the whole point of the
+            // fence, and `the_beacon_fact_comes_from_the_chain_not_from_the_block` beside this one
+            // is the fence-off half of the pair.
+            p.palw_beacon_fold = Some(PalwBeaconFoldV1 { activation: ForkActivation::always(), k });
+            *p = p.clone().with_palw_v2_cadence();
+        })
+        .build();
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+    for _ in 0..8 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+
+    let vp = ctx.consensus.virtual_processor();
+    let sink = ctx.consensus.get_sink();
+    let sink_daa = vp.headers_store.get_header(sink).unwrap().daa_score;
+    let attempt_algo = kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2;
+
+    // The chain's attempt blocks, ASCENDING — read straight from the store, so the expectation
+    // owes nothing to the code under test.
+    let mut attempts: Vec<(u64, kaspa_hashes::Hash64)> = vp
+        .reachability_service
+        .default_backward_chain_iterator(sink)
+        .filter_map(|block| {
+            let header = vp.headers_store.get_header(block).ok()?;
+            (header.pow_algo_id == attempt_algo).then_some((header.daa_score, block))
+        })
+        .collect();
+    attempts.reverse();
+    assert!(attempts.len() > k as usize, "the fixture must mine more attempt blocks than the fold is wide");
+
+    let mut folded = 0usize;
+    let mut refused = 0usize;
+    for slot in 0..=sink_daa + 1 {
+        let window: Vec<(u64, kaspa_hashes::Hash64)> =
+            attempts.iter().copied().filter(|(daa, _)| *daa >= slot).take(k as usize).collect();
+        match vp.palw_beacon_fact_of_candidate(sink, slot) {
+            Ok(fact) => {
+                assert_eq!(window.len(), k as usize, "slot {slot} drew with only {} attempt blocks above it", window.len());
+                let hashes: Vec<kaspa_hashes::Hash64> = window.iter().map(|(_, block)| *block).collect();
+                assert_eq!(fact.beacon_block, fp_beacon_fold_v3(&hashes), "slot {slot}: the fold is not over the first {k}");
+                assert_eq!(fact.beacon_daa, window[k as usize - 1].0, "slot {slot}: the fact must date from the k-th block");
+                // The witness still pins where the fold starts, so the pair of inequalities a
+                // non-walker checks is unchanged.
+                assert!(fact.prev_attempt_daa < slot || slot == 0, "slot {slot}: witness {}", fact.prev_attempt_daa);
+                // …and the beacon is no longer any single block of this chain: it is a digest.
+                assert!(
+                    !attempts.iter().any(|(_, block)| *block == fact.beacon_block),
+                    "slot {slot}: a folded beacon must not name one block"
+                );
+                folded += 1;
+            }
+            Err(e) => {
+                assert!(
+                    matches!(e, PalwBeaconDeriveV3Error::NoBeaconYet { needed, found, .. } if needed == k && (found as usize) == window.len()),
+                    "slot {slot}: a slot short of the fold is NOT-YET-DRAWN and says how short: {e:?}"
+                );
+                assert!(window.len() < k as usize, "slot {slot} refused with a full window");
+                refused += 1;
+            }
+        }
+    }
+    assert!(folded > 0 && refused >= k as usize, "the sweep must exercise both arms: {folded} folded, {refused} refused");
+
+    // The fact is the CHAIN's, not the walker's, under the fold too: two starting points on one
+    // candidate agree wherever both can see the answer.
+    let parent = vp.headers_store.get_header(sink).unwrap().direct_parents()[0];
+    let parent_daa = vp.headers_store.get_header(parent).unwrap().daa_score;
+    for slot in 0..=parent_daa {
+        if let Ok(from_parent) = vp.palw_beacon_fact_of_candidate(parent, slot) {
+            assert_eq!(
+                vp.palw_beacon_fact_of_candidate(sink, slot).unwrap(),
+                from_parent,
+                "slot {slot}: a complete fold must not move when the chain grows past it"
+            );
+        }
+    }
+}
+
 /// **Unit D: one authority, and it is the candidate's — not the sink's.**
 ///
 /// The order is what the IBD commit, the pruning ceiling and the deep-reorg gate all compare, so
