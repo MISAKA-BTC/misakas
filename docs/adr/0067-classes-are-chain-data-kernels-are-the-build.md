@@ -19,6 +19,8 @@ production — the economics that make permissionless classes survivable), and A
 declarations — the opt-in that makes them safe to serve). Consistent with the standing doctrine
 that consensus changes ship by activation, never by re-genesis.
 
+> **Security amendment appended (2026-09-02)** — see the last section: Decision 5's fence is also a security fence (ADR-0079 Decision 11's two arming conditions); resolution is off the consensus thread and fails closed to "cannot serve"; re-entry after eviction re-verifies from bytes; R-7 (unpaid seats) is a security item.
+
 ## The goal, stated as a test
 
 MISAKA is meant to be a permissionless chain. Today it fails one specific permissionless test:
@@ -606,3 +608,24 @@ the profile must hash to the class id (which is what a class id MEANS), and the 
 name the same class. A supplier who satisfies all three has handed over exactly the bytes the
 accept path would have written; anything else is refused, so a hostile source wastes only its own
 bandwidth. The sidecar remained the better answer for an unattended fleet, and was still unbuilt when this audit section was written; it has since been built (see "The three remaining clauses" above).
+
+## Security amendment (2026-09-02) — before the interpreter is armed
+
+**SA-1 — Decision 5's fence is a security fence, and its arming conditions gain two** (ADR-0079
+Decision 11, on its branch): the profile-space fuzzer's corpus includes profiles built to exhaust
+memory and to recurse, and the interpreted path runs under the worker memory ceiling with the
+ceiling proven to bind. A chain-registered profile is a stranger's program.
+
+**SA-2 — Resolution is off the consensus thread and fails closed to "cannot serve".** Resolving a
+chain class (fetching bytes, verifying the digest, compiling the profile) runs lazily, off the
+block-processing path; a failure marks the class unservable on this node and never rejects a block.
+Otherwise a hostile profile is a way to stall every validator's pipeline with one registration.
+
+**SA-3 — Re-entry after eviction re-verifies from bytes**, never from a remembered verdict —
+ADR-0079 Decision 9's rule ("no artifact identity from metadata") applied to profiles; the cache
+bound is per class and in total, and "eviction must retract" (above) stands.
+
+**SA-4 — R-7 is a security item, not only a liveness one.** An unpaid seat has no income to lose;
+its only stake is its bond, and ADR-0065 measured what a post-genesis bond costs (400,000 sompi).
+Arming chain-registered classes for weight before seats are paid leaves the panel as the cheapest
+thing on the chain to buy.

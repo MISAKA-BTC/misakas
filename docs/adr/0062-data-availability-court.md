@@ -8,6 +8,18 @@
 
 Status: **Proposed** (2026-08-30). Supersedes nothing; completes ADR-0042 Decision 7.
 
+> **Standing (index reconciliation, 2026-09-02).** Still Proposed, not landed. The harm it was
+> written to stop — an `Unavailable` quorum voiding a claim and slashing the producer's bond with no
+> proof — is removed on armed presets by [ADR-0065](0065-a-bond-must-be-earned-and-a-seat-must-be-someone-else.md)
+> Decision 4 (`palw_unavailable_abstains`, armed from genesis on testnet-11 since Relaunch 5:
+> `ProducerDefaulted` is unlicensable; the claim falls to a redraw and a receipt timeout, which voids
+> without slashing). What this ADR still adds is the positive half — a provable default that CAN
+> take a bond. The DA fields it lists as "already committed" are pinned by equality since
+> [ADR-0072](0072-the-ticket-is-the-execution.md) Decision 8. The carriage ADR cited as ADR-0046 is
+> [0046](0046-palw-v2-consensus-object-carriage.md). Map: [`README.md`](README.md).
+
+> **Security amendment appended (2026-09-02)** — see the last section: the accusation becomes a bonded, singular object; the disclosure is hash-checked and bounded; "silence" is a fold fact with a majority-proof window; abstaining seats pay nothing (ADR-0065 D4); the lattice is re-derived.
+
 ## The defect
 
 Every other judgement in this lattice is arithmetic. A claim's execution can be disputed by
@@ -187,3 +199,59 @@ thousand dollars. Cheap seats plus arithmetic beats expensive seats plus votes.
 gains a field — the claim schema and the object schema both move, so an old build cannot decode
 the state rather than merely disagreeing about it. Deploying is a re-mint, and the fingerprint
 moves for testnet-11 (mainnet carries no PALW bundle).
+
+## Security amendment (2026-09-02) — hardening before implementation
+
+Written against the shipped tree of Relaunch 5e, where ADR-0065 Decision 4 is armed from genesis on
+testnet-11 (`Unavailable` abstains; the `ProducerDefaulted` quorum is unreachable) and ADR-0072
+Decision 8 pins `trace_manifest_root`, `trace_chunk_count` and `trace_retention_daa` by equality.
+Six things the Decision above must gain before it is coded, each with the attack it closes.
+
+**SA-1 — The accusation is its own bonded object, singular per claim, inside the retention
+window.** Decision 1 rides on `ProducerDefaulted { missing_event_index }`, a quorum verdict that a
+D4-armed preset never reaches. Replace it with `DefaultAccused { claim, missing_event_index,
+accuser: bond, signature }`: signed by an Active bond that is a seat of that claim's panel or a
+bonded challenger; refused if `missing_event_index ≥ trace_chunk_count`, if the claim is outside
+`[accepted_daa, trace_retention_daa]`, or if an accusation is already open on the claim. The
+accuser's bond reserves `ACCUSATION_EXPOSURE = claim.reserved / seat_count` on the ledger the
+claim's own exposure lives on (ADR-0056 Decision 3's shape); a valid disclosure charges it to the
+accuser and refunds the producer's disclosure fee out of it. Griefing an honest producer then costs
+the griefer more than the producer per attempt, and ten accusations cannot drain one fee float.
+
+**SA-2 — The disclosure is checked by hash arithmetic, never by execution, and it is bounded.**
+`MaterialDisclosed` carries the event preimage at `missing_event_index`, its Merkle opening against
+the claim's pinned `trace_manifest_root`, and the producer's bond signature. Every validator checks
+the opening and the index; none runs a model. Its size is bounded by `max_close_bytes` (80 KiB,
+the tiled form), and `derive_court_cost_v1` must include the DA event's worst opening in the
+class's priced close, so a class whose event cannot be disclosed inside the budget is refused at
+admission (ADR-0049 Decision C) rather than being undefendable afterwards.
+
+**SA-3 — "Silence" is a fold fact on this chain, and the window is wide enough that suppressing
+the disclosure needs a majority.** Decision 5 confirms default when no disclosure lands in the
+window. That is checkable — unlike ADR-0064 Fact A's "the network was silent" — only because it is
+*absence of an object on this chain within `W_disclose` DAA of the accusation's acceptance*,
+recomputed from the fold on every branch. Two rules make it safe: the disclosure may ride ANY
+block (permissionless carriage, fee-priced, any producer), so excluding it needs every producer for
+the whole window; and `W_disclose ≥ 2 ×` the finality window, so a reorg across the deadline cannot
+flip the verdict without a finality violation. No node-local timer participates.
+
+**SA-4 — Abstaining seats pay nothing.** Decisions 2 and 4 charge "dissenting" and `Unavailable`
+seats. Under ADR-0065 Decision 4 an `Unavailable` vote is an abstention, not a finding, and
+charging it re-creates the transport-loss slashing D4 removed (a third of remote seats' verdicts
+were transport). Only the accuser — who made a positive, falsifiable claim — pays on refutation.
+
+**SA-5 — Poverty is not default, and the producer's loss is bounded.** A producer that cannot fund
+the disclosure's carriage fee draws it from the claim's escrow (the escrow exists to pay the claim's
+obligations); the fee is mass-priced like every lifecycle object. On confirmed default the slash
+stays `claim.reserved`, never the bond.
+
+**SA-6 — The lattice is re-derived with the new phase.** `DefaultDisputed` adds `W_accuse +
+W_disclose` to a claim's life: `2·(bind + receipt) + challenge + court + accuse + disclose ≤
+pruning_depth` and `≤ MAX_CLAIM_EXPOSURE_DAA` must hold at every preset, pinned by the existing
+lattice test. A phase that outlives the trace's retention is a phase in which the honest producer
+was already allowed to delete what it is asked to open.
+
+Invariants: **DA-1** an accusation outside the claim's retention window is refused; **DA-2** a
+second open accusation on one claim is refused; **DA-3** a valid disclosure charges the accuser and
+nobody else; **DA-4** a disclosure carried by a block the producer did not mine is accepted;
+**DA-5** two nodes that saw the disclosure at different wall-clock times reach the same verdict.

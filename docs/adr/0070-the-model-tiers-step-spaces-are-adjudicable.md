@@ -8,6 +8,15 @@ Relates: ADR-0030 (the step space), ADR-0038 A4 (coverage), ADR-0049 (canonical 
 ADR-0052 (the hybrid's integer arithmetic), ADR-0053 (one execution family), ADR-0067 (classes are
 chain data), ADR-0068 (the LLM-primary economy)
 
+> **Follow-on (index reconciliation, 2026-09-02).** The arming §7 leaves to deployment happened:
+> the corrected classes — the A16 graph-v2 row and the QWEN36 graph-v3 row — are the ones
+> testnet-11's genesis registers from Relaunch 5 on, both certified end to end and weight-bearing
+> under [ADR-0069](0069-e2e-adjudicability-is-the-price-of-weight.md). Since
+> [ADR-0075](0075-certification-is-a-consensus-object.md) the certificates these step spaces make
+> possible ride the chain as `FamilyCertified` objects rather than build pins, and
+> [ADR-0076](0076-the-attempt-lanes-seed-is-the-retargets-equilibrium.md) seeds each tier's
+> attempt-lane target from its own `pwu_per_inference`. Map: [`README.md`](README.md).
+
 ## 1. The problem, stated the way the chain would have met it
 
 ADR-0068 hands the two model tiers ≈98 % of blocks and issuance. On the day that table armed,
