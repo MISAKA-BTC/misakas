@@ -1055,7 +1055,10 @@ mod end_to_end_tests {
                 bond: PalwBondKeyV2(bond_outpoint),
                 pubkey: pubkey.clone(),
                 operator_pubkey: vec![21; 8],
-                collateral: 1_000,
+                // Sized for the work it backs: the floor's job is thousands of leaves at slash 5,
+                // and admission item 8 now reaches this lane (ADR-0074 review) — a bond that
+                // cannot back its own claim is refused, not admitted and hoped over.
+                collateral: 100_000,
                 payout_payload: h(0x9A11),
                 capable_classes: Default::default(),
                 signature: Vec::new(),

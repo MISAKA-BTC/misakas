@@ -930,7 +930,8 @@ mod chain_only_lattice_tests {
                 bond: PalwBondKeyV2(bond_outpoint),
                 pubkey: pubkey.clone(),
                 operator_pubkey: vec![21; 8],
-                collateral: 1_000,
+                // Sized for the work it backs (admission item 8 reaches the free-prompt lane).
+                collateral: 10_000,
                 payout_payload: h(0x9A11),
                 capable_classes: Default::default(),
                 signature: Vec::new(),
