@@ -1289,14 +1289,9 @@ pub enum PalwFpWorkerFrameV1 {
     /// One generated id as soon as it is selected (ADR-0077 Decision 2 — the answer streams; the
     /// commitment does not). `rendered` is this id's rendering alone; the gateway re-renders the
     /// committed ids at completion and refuses a stream that does not match them.
-    Token {
-        token_id: u32,
-        rendered: Vec<u8>,
-    } = 1,
+    Token { token_id: u32, rendered: Vec<u8> } = 1,
     Result(Box<PalwFpWorkerResultV3>) = 2,
-    Refused {
-        reason: String,
-    } = 3,
+    Refused { reason: String } = 3,
 }
 
 // ---------------------------------------------------------------------------------------------

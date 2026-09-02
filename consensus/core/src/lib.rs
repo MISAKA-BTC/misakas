@@ -180,14 +180,14 @@ pub mod palw_court_v2;
 /// registration unrepresentable. Land-stage, consensus-inert (ADR-0033's gate is its first
 /// consumer).
 pub mod palw_credit;
-pub mod palw_credit_batch;
-pub mod palw_derived_v1;
-pub mod palw_dispute;
 /// ADR-0069: end-to-end adjudicability — the half of "can this class be prosecuted" that coverage
 /// does not answer. Static adjudicability says the adjudicator can re-execute every kernel the
 /// graph reaches; this says a real backend can actually PLAY the dispute, proven by re-running the
 /// shipped court over a drill's planted faults. Weight requires both.
 pub mod palw_e2e_adjudicability;
+pub mod palw_credit_batch;
+pub mod palw_derived_v1;
+pub mod palw_dispute;
 pub mod palw_exposure;
 pub mod palw_facts;
 pub mod palw_fork_authority_v2;

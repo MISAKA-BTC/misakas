@@ -4714,8 +4714,9 @@ fn palw_seed_attempt_targets_v1(
     // grant's arithmetic depends on the block, its DAA or its subsidy — so these are the genesis
     // values rather than a placeholder that would have to be explained.
     let ctx = PalwBlockContextV2 { block: Default::default(), daa_score: 0, blue_score: 0, subsidy: 0 };
-    let (state, _delta) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &bundle.state, &ctx, &bundle.genesis_objects, None)
-        .map_err(|_| invalid("the genesis registrations do not apply, so no share table can be read from them"))?;
+    let (state, _delta) =
+        apply_palw_transition_v2(&PalwChainStateV2::genesis(), &bundle.state, &ctx, &bundle.genesis_objects, None)
+            .map_err(|_| invalid("the genesis registrations do not apply, so no share table can be read from them"))?;
 
     let mut rows: Vec<(usize, u16, u64)> = Vec::new();
     for (index, object) in bundle.genesis_objects.iter().enumerate() {
@@ -8269,11 +8270,12 @@ mod consensus_params_id_tests {
         // Armable on the preset that actually runs the lane; a value the binary does not
         // implement refuses to start — for the attempt work AND for the width bound.
         let mut rc = palw_rc_shipped_params();
-        rc.palw_attempt_work = Some(PalwAttemptWorkV1 {
-            activation: ForkActivation::new(1),
-            work_log2: crate::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2,
-            ticket_bucket_log2: crate::palw_attempt_v2::PALW_TICKET_NONCE_BUCKET_LOG2,
-        });
+        rc.palw_attempt_work =
+            Some(PalwAttemptWorkV1 {
+                activation: ForkActivation::new(1),
+                work_log2: crate::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2,
+                ticket_bucket_log2: crate::palw_attempt_v2::PALW_TICKET_NONCE_BUCKET_LOG2,
+            });
         rc.validate_palw_v2().expect("the shipped V2 preset may re-price its attempt lane by configuration");
         assert!(rc.palw_attempt_work_open_at(2));
 
@@ -9898,7 +9900,11 @@ mod consensus_params_id_tests {
         };
         let classes_of = |p: &Params| -> usize {
             let PalwConsensusMode::ConsensusV2(bundle) = &p.palw_consensus_mode else { panic!("V2") };
-            bundle.genesis_objects.iter().filter(|o| matches!(o, PalwConsensusObjectV2::ClassRegistered { .. })).count()
+            bundle
+                .genesis_objects
+                .iter()
+                .filter(|o| matches!(o, PalwConsensusObjectV2::ClassRegistered { .. }))
+                .count()
         };
 
         // The floor alone — what mainnet used to get however its card was filled in.
