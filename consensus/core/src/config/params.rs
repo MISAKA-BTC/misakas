@@ -450,6 +450,47 @@ pub struct PalwInactivityLeakV1 {
     pub t_leak_daa: u64,
 }
 
+/// **ADR-0073 SA-1's parameter: how many attempt blocks the free-prompt beacon folds.**
+///
+/// The single-block beacon costs one inference to RE-ROLL and only one block's subsidy to
+/// WITHHOLD: a producer whose own block would be the beacon can drop it when the draw disfavours
+/// its pending claims. Past `activation` the beacon is the fold of the first `k` attempt blocks at
+/// or after the slot, so a producer holding attempt share `p` chooses the draw with probability
+/// `p^k` rather than `p`. `None` on every shipped preset — with the fence off the derivation is
+/// byte-identical to the pre-SA-1 rule, which is what `with_the_fence_off_the_beacon_is_the_block_itself`
+/// pins.
+///
+/// **`k` sits beside the fence and is deliberately NOT visited by `for_each_fence`** — it is a
+/// WIDTH, and the identity visitor normalises every value it visits to `0`/`u64::MAX`, so a
+/// visited width would make two builds folding different numbers of blocks fingerprint identically
+/// at every height. It is hashed raw into `consensus_params_id` (and into `consensus_schedule_id`,
+/// so a mismatch can be reported) instead. That is exactly `PalwBondMaturityV1::window_daa`'s
+/// shape and it carries the same hazard: while the fence is only SCHEDULED the identity path
+/// collapses the whole option, so two builds scheduling SA-1 at one height with different `k`
+/// share an identity, peer with only the params-id warning, and draw different beacons the moment
+/// it fires. **Arming this fence is therefore a coordinated change**, and `validate_palw_v2`
+/// refuses a `k` below [`crate::palw_fp_beacon_v3::PALW_BEACON_FOLD_MIN_K_V1`] so at least the
+/// amendment's floor cannot be undercut by configuration.
+///
+/// **Why not inside the V2 bundle.** `k` decides a draw, so the natural home is
+/// `PalwFreePromptParamsV3`, where the V2 handshake would compare it through `palw_ruleset_id_v2`
+/// and two builds could not disagree at all. Putting it there moves that id — and the network
+/// fingerprint with it — for every preset carrying a bundle, i.e. a re-mint on a running testnet,
+/// for a rule that is dormant everywhere. It belongs in the bundle at the re-mint that arms it;
+/// until then it is a top-level fence like ADR-0065 D1, for D1's reason.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwBeaconFoldV1 {
+    /// When the fold comes into force. Resolved at the DRAW'S OWN SLOT rather than at the walking
+    /// block's height: the slot is a function of the claim (`final_daa + receipt_maturity_daa`),
+    /// so a producer reading spendable quanta at the tip and a validator checking a spend deep in
+    /// the past resolve the same width for the same claim. A height-of-the-walker resolution would
+    /// let those two disagree about a fold whose inputs are identical.
+    pub activation: ForkActivation,
+    /// How many attempt-class chain blocks at or after the slot are folded into the beacon.
+    /// At or above [`crate::palw_fp_beacon_v3::PALW_BEACON_FOLD_MIN_K_V1`].
+    pub k: u8,
+}
+
 /// Consensus parameters. Contains settings and configurations which are consensus-sensitive.
 /// Changing one of these on a network node would exclude and prevent it from reaching consensus
 /// with the other unmodified nodes.
@@ -682,6 +723,50 @@ pub struct Params {
     /// than reused: see [`PalwInactivityLeakV1`] for why editing that constant could not be an
     /// activation.
     pub palw_inactivity_leak: Option<PalwInactivityLeakV1>,
+
+    /// **ADR-0073 SA-1 — the free-prompt beacon folds `k` attempt blocks.** `None` on every
+    /// shipped preset, so the derivation is byte-identical to not having the field at all.
+    ///
+    /// TOP LEVEL rather than inside the V2 bundle, and `k` rides beside its fence rather than
+    /// inside `for_each_fence` — both choices, and the hazards they carry, are argued at
+    /// [`PalwBeaconFoldV1`].
+    pub palw_beacon_fold: Option<PalwBeaconFoldV1>,
+    /// **ADR-0071 security amendment (SA-1..SA-4) — a capability declaration is bounded, priced
+    /// and proven.** `None` on every shipped preset, so the behaviour is byte-identical to not
+    /// having the field at all.
+    ///
+    /// Past `activation` four rules arm together, because each is unsound without the others:
+    ///
+    /// * **SA-1** `capable_classes` may name at most
+    ///   [`crate::palw_state_v2::PALW_MAX_CAPABLE_CLASSES`] classes, and a declaration REPLACES
+    ///   the set rather than growing it. The set is hashed into `state_root`, so an unbounded
+    ///   declaration is a state-growth lever priced only by transaction mass.
+    /// * **SA-2** each declared class reserves
+    ///   [`crate::palw_state_v2::PALW_CAPABILITY_EXPOSURE_SOMPI`] on the bond's exposure — the
+    ///   ADR-0056 Decision 3 shape: reserved, never burned, released when the class is dropped by
+    ///   a replacing declaration or the bond retires.
+    /// * **SA-3** a seat is drawn for class `C` only after a POSITIVE chain fact — an accepted
+    ///   attempt or free-prompt claim on `C` naming that bond — unless `C` is a genesis class.
+    ///   Silence is still never judged: a bond that declared and never produced is simply not
+    ///   drawn, not charged and not convicted (ADR-0065 D4 stands).
+    /// * **SA-4** a declaration is refused for a `Retiring` bond.
+    ///
+    /// **A bare fence with no companion value, deliberately** — the bound and the price are
+    /// constants in `palw_state_v2`, so there is no duration beside this height for
+    /// [`Self::consensus_identity_id`] to normalise away (the `palw_bond_maturity` hazard).
+    ///
+    /// **TOP LEVEL, for the `palw_unavailable_abstains` reason**: this rule must be able to reach
+    /// a LIVE network, and a fence inside the V2 bundle moves `palw_ruleset_id_v2`, which
+    /// `for_each_fence` never descends into — so every old/new pair would fail the handshake
+    /// outright instead of peering with a warning.
+    ///
+    /// **The liveness trap it must not walk into.** SA-3 narrows the panel draw, and a short draw
+    /// is not a smaller panel — it is `InsufficientEligibleBonds`, so the claim never binds and
+    /// voids at `BindTimeout` with its escrow burned. The shipped genesis registry has zero slack
+    /// by construction, and what keeps it drawable past this fence is the genesis-class exemption:
+    /// `the_shipped_registry_still_draws_a_full_panel_with_the_capability_fence_armed` is the
+    /// assertion, not a deployment note.
+    pub palw_capability_bound: Option<ForkActivation>,
 
     /// ADR-0042 Decision 1 (PR-10): the ONE PALW switch on the V2 lineage. `Disabled` on every
     /// shipped preset. A network is in exactly one mode; `ConsensusV2` carries the whole atomic
@@ -982,6 +1067,22 @@ impl Params {
             return Err(PalwModeV2Error::Invalid(
                 "palw_attempt_work declares a ticket_bucket_log2 this binary does not bucket by: how many nonces one \
                  execution buys is a network constant and the fence must name the same one",
+            ));
+        }
+        // **ADR-0073 SA-1: an armed fold must be at least the amendment's floor.** `k` is a value
+        // beside a fence, so the identity does not separate two builds that disagree about it
+        // while it is merely scheduled — the same coordination hazard `palw_bond_maturity` carries.
+        // What CAN be enforced locally is that a node never runs a fold too narrow to bound the
+        // withholding bias the amendment exists to bound: at k = 1 the rule is the pre-SA-1 rule
+        // wearing a fence, and at k = 2 the bias is `p²`, which SA-1 explicitly declines.
+        if let Some(fold) = self.palw_beacon_fold
+            && fold.activation != ForkActivation::never()
+            && fold.k < crate::palw_fp_beacon_v3::PALW_BEACON_FOLD_MIN_K_V1
+        {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_beacon_fold is armed with a k below ADR-0073 SA-1's floor: a fold narrower than three attempt \
+                 blocks does not bound the beacon's withholding bias, and a fence that names one is the old rule \
+                 wearing a new name",
             ));
         }
         if let Some(maturity) = self.palw_bond_maturity {
@@ -1366,6 +1467,17 @@ impl Params {
         if self.palw_inactivity_leak.is_some_and(|l| l.activation == ForkActivation::never()) {
             self.palw_inactivity_leak = None;
         }
+        // ADR-0073 SA-1. The WHOLE option collapses, the D1 rule for the D1 reason: leaving `Some`
+        // behind with a normalised height would carry `k`'s byte into `consensus_params_id` that
+        // an unset build never writes, and the first operator to SCHEDULE the fold would be
+        // disconnected from every un-upgraded peer at deploy rather than at the height.
+        if self.palw_beacon_fold.is_some_and(|f| f.activation == ForkActivation::never()) {
+            self.palw_beacon_fold = None;
+        }
+        // ADR-0071 SA-1..SA-4, a bare fence: same collapse, same reason as D2 above.
+        if self.palw_capability_bound == Some(ForkActivation::never()) {
+            self.palw_capability_bound = None;
+        }
         let Some(dns) = self.dns_params.as_mut() else {
             return;
         };
@@ -1440,6 +1552,22 @@ impl Params {
         }
     }
 
+    /// **Is ADR-0071's capability bound in force at `daa_score`?** (SA-1..SA-4.)
+    pub fn palw_capability_bound_at(&self, daa_score: u64) -> bool {
+        self.palw_capability_bound_fence().is_some_and(|f| f.is_active(daa_score))
+    }
+
+    /// The capability-bound fence **with the mode condition already folded in** — `Some` only on a
+    /// `ConsensusV2` network that has armed it, for the same one-question-one-answer reason as
+    /// [`Self::palw_heartbeat_lane_fence`]: `capable_classes`, the claim lane and the panel draw
+    /// exist only under `ConsensusV2`, so on any other network there is nothing this rule bounds.
+    pub fn palw_capability_bound_fence(&self) -> Option<ForkActivation> {
+        match (&self.palw_consensus_mode, self.palw_capability_bound) {
+            (crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_), Some(f)) => Some(f),
+            _ => None,
+        }
+    }
+
     /// **The activation schedule alone**, so a mismatch can be REPORTED precisely rather than only
     /// detected. Not a gate: two nodes with the same identity and different schedules are peers,
     /// and the operator log says which build is scheduling what.
@@ -1464,6 +1592,15 @@ impl Params {
         if let Some(maturity) = self.palw_bond_maturity {
             h.write(b"palw_bond_maturity_window");
             h.write(maturity.window_daa.to_le_bytes());
+        }
+        // **ADR-0073 SA-1's width rides with its fence here, and only here** — same rule, same
+        // reason as D1's window directly above. `k` must never reach `for_each_fence` (a visited
+        // width would collapse to `0`/`u64::MAX` and make two builds folding different numbers of
+        // blocks fingerprint identically at every height), and the operator log is the only place
+        // a disagreement about it can surface while the fence is merely scheduled.
+        if let Some(fold) = self.palw_beacon_fold {
+            h.write(b"palw_beacon_fold_k");
+            h.write([fold.k]);
         }
         h.finalize()
     }
@@ -1541,6 +1678,8 @@ impl Params {
             palw_heartbeat,
             palw_attempt_work,
             palw_inactivity_leak,
+            palw_beacon_fold,
+            palw_capability_bound,
             // The V2 bundle's fences are inside `palw_ruleset_id_v2` — see the doc block.
             palw_consensus_mode: _,
             pow_blake2b_sha3_activation,
@@ -1645,6 +1784,26 @@ impl Params {
         }
         match palw_inactivity_leak.as_mut() {
             Some(leak) => fork(&mut leak.activation, visit),
+            None => {
+                absent = u64::MAX;
+                visit(&mut absent);
+            }
+        }
+        // ADR-0073 SA-1: activation only. `k` is a WIDTH — normalising it to `0`/`u64::MAX` would
+        // make two builds folding different numbers of attempt blocks fingerprint identically at
+        // every height, which is the `inactivity_leak_daa` trap. It reaches `consensus_params_id`
+        // and `consensus_schedule_id` raw instead.
+        match palw_beacon_fold.as_mut() {
+            Some(fold) => fork(&mut fold.activation, visit),
+            None => {
+                absent = u64::MAX;
+                visit(&mut absent);
+            }
+        }
+        // ADR-0071 SA-1..SA-4. A pure fence with no duration beside it, so visiting it is safe:
+        // the identity visitor normalises a height, and a height is all this field carries.
+        match palw_capability_bound.as_mut() {
+            Some(activation) => fork(activation, visit),
             None => {
                 absent = u64::MAX;
                 visit(&mut absent);
@@ -1833,6 +1992,8 @@ impl Params {
             palw_heartbeat,
             palw_attempt_work,
             palw_inactivity_leak,
+            palw_beacon_fold,
+            palw_capability_bound,
             palw_consensus_mode,
             pow_blake2b_sha3_activation,
             pow_palw_activation,
@@ -1974,6 +2135,14 @@ impl Params {
             h.write(b"palw_frontier_provenance");
             h.write(activation.daa_score().to_le_bytes());
         }
+        // ADR-0071 SA-1..SA-4, Some-only for the ADR-0065 D4 reason: an unset fence writes
+        // nothing, so every shipped preset fingerprints byte-identically to before the field
+        // existed. The bound and the price are constants rather than fields beside the fence, so
+        // there is no companion value to drag into the identity (the D1 hazard).
+        if let Some(activation) = palw_capability_bound {
+            h.write(b"palw_capability_bound");
+            h.write(activation.daa_score().to_le_bytes());
+        }
         // ADR-0066 Decisions 1 and 4: Some-only, so every preset that leaves them unset
         // fingerprints byte-identically to a build without the fields at all.
         if let Some(heartbeat) = palw_heartbeat {
@@ -1999,6 +2168,14 @@ impl Params {
             h.write(b"palw_inactivity_leak");
             h.write(leak.activation.daa_score().to_le_bytes());
             h.write(leak.t_leak_daa.to_le_bytes());
+        }
+        // ADR-0073 SA-1: BOTH halves, because `k` decides the draw and a commitment that omitted
+        // it would let two builds claim the same rules and fold different beacons. Some-only, so
+        // every shipped preset fingerprints byte-identically to a build without the field at all.
+        if let Some(fold) = palw_beacon_fold {
+            h.write(b"palw_beacon_fold");
+            h.write(fold.activation.daa_score().to_le_bytes());
+            h.write([fold.k]);
         }
         // ADR-0042 Decisions 1 + 11: the V2 mode decides block validity wholesale, so it is in
         // the fingerprint — through the RULESET ID, one hash for the whole atomic bundle, which
@@ -2279,6 +2456,8 @@ impl Params {
             palw_heartbeat: self.palw_heartbeat,
             palw_attempt_work: self.palw_attempt_work,
             palw_inactivity_leak: self.palw_inactivity_leak,
+            palw_beacon_fold: self.palw_beacon_fold,
+            palw_capability_bound: self.palw_capability_bound,
             palw_consensus_mode: self.palw_consensus_mode.clone(),
             // kaspa-pq PoW algo activation is consensus-fixed, never runtime-overridable.
             pow_blake2b_sha3_activation: self.pow_blake2b_sha3_activation,
@@ -3187,6 +3366,8 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_heartbeat: None,
     palw_attempt_work: None,
     palw_inactivity_leak: None,
+    palw_beacon_fold: None,
+    palw_capability_bound: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: inert on mainnet until its own fork ADR schedules it.
@@ -3319,6 +3500,8 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_heartbeat: None,
     palw_attempt_work: None,
     palw_inactivity_leak: None,
+    palw_beacon_fold: None,
+    palw_capability_bound: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: DISABLED on the public preset (2026-08-12). The Ollama flavor (algo_id = 5)
@@ -3433,6 +3616,8 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_heartbeat: None,
     palw_attempt_work: None,
     palw_inactivity_leak: None,
+    palw_beacon_fold: None,
+    palw_capability_bound: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // PALW LLM PoW: simnet keeps instant local kHeavyHash (simulation/tests must not need a model).
@@ -6868,6 +7053,8 @@ pub const DEVNET_PARAMS: Params = Params {
         ticket_bucket_log2: crate::palw_attempt_v2::PALW_TICKET_NONCE_BUCKET_LOG2,
     }),
     palw_inactivity_leak: None,
+    palw_beacon_fold: None,
+    palw_capability_bound: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // **Devnet is the ADR-0068 drill network on this branch: ConsensusV2, so no V1 PALW
@@ -7717,6 +7904,86 @@ mod consensus_params_id_tests {
         // The preset it is assembled from stays dormant: arming is the assembly's decision, which
         // is what keeps `for_each_fence` able to reach it on a running network.
         assert!(MAINNET_PARAMS.palw_unavailable_abstains.is_none(), "the raw preset is untouched");
+    }
+
+    /// **ADR-0071 SA-1..SA-4's fence, held to the D4 discipline exactly.**
+    ///
+    /// Four properties, and each one is a way this could have shipped wrong: every preset leaves
+    /// it dormant so no shipped fingerprint moves; scheduling it for a future height keeps old and
+    /// new builds peers (which is what the TOP-LEVEL placement buys, and what a bundle placement
+    /// would have taken away); arming it at genesis is a real rule difference and separates
+    /// identities; and `Some(never())` is absence.
+    #[test]
+    fn the_capability_bound_fence_separates_networks_only_when_it_is_in_force() {
+        for (name, preset) in
+            [("mainnet", MAINNET_PARAMS), ("testnet", TESTNET_PARAMS), ("simnet", SIMNET_PARAMS), ("devnet", DEVNET_PARAMS)]
+        {
+            assert!(preset.palw_capability_bound.is_none(), "{name} must leave ADR-0071's capability bound dormant");
+        }
+        assert!(
+            palw_rc_shipped_params().palw_capability_bound.is_none(),
+            "and so must the RC assembly — SA-3 narrows the panel draw, so arming it is a measured decision and not a default"
+        );
+
+        let shipped = MAINNET_PARAMS;
+        let mut armed = MAINNET_PARAMS;
+        armed.palw_capability_bound = Some(ForkActivation::new(9_000_000));
+        assert_eq!(
+            shipped.consensus_identity_id(),
+            armed.consensus_identity_id(),
+            "scheduling it for a future height must keep old and new builds peers — the whole reason it is not in the V2 bundle"
+        );
+        assert_ne!(
+            shipped.consensus_params_id(),
+            armed.consensus_params_id(),
+            "…while still being a visible commitment: a rule change nobody can observe in the fingerprint is how two builds fork \
+             in silence"
+        );
+
+        let mut at_genesis = MAINNET_PARAMS;
+        at_genesis.palw_capability_bound = Some(ForkActivation::always());
+        assert_ne!(
+            shipped.consensus_identity_id(),
+            at_genesis.consensus_identity_id(),
+            "in force from block 1 on one side is a rule difference — the two disagree about which bonds may be seated"
+        );
+
+        let mut never_armed = MAINNET_PARAMS;
+        never_armed.palw_capability_bound = Some(ForkActivation::never());
+        assert_eq!(
+            shipped.consensus_identity_id(),
+            never_armed.consensus_identity_id(),
+            "Some(never()) is absence, or the collapse in normalize_values_a_scheduled_fence_drags_with_it is gone"
+        );
+
+        // Independent of its neighbours: arming one must not be readable as arming the other.
+        let mut d4 = MAINNET_PARAMS;
+        d4.palw_unavailable_abstains = Some(ForkActivation::always());
+        assert_ne!(
+            at_genesis.consensus_params_id(),
+            d4.consensus_params_id(),
+            "the capability bound and D4 are different rules and must fingerprint differently"
+        );
+    }
+
+    /// **The mode condition is folded in once**, so the three sites that ask (the fold, the
+    /// acceptance layer, the panel assembler) cannot each remember it differently. `capable_classes`
+    /// and the claim lane exist only under `ConsensusV2`; on a hash network there is nothing for
+    /// this rule to bound, so an armed fence there must read as off.
+    #[test]
+    fn the_capability_bound_needs_a_v2_network_to_mean_anything() {
+        let mut hash_network = MAINNET_PARAMS;
+        hash_network.palw_capability_bound = Some(ForkActivation::always());
+        assert!(
+            !hash_network.palw_capability_bound_at(0),
+            "a hash-only network has no capability declarations, so the fence must resolve off however it is set"
+        );
+
+        let mut v2 = palw_rc_shipped_params();
+        assert!(!v2.palw_capability_bound_at(0), "the shipped V2 assembly leaves it off");
+        v2.palw_capability_bound = Some(ForkActivation::new(1_000));
+        assert!(!v2.palw_capability_bound_at(999), "before the height");
+        assert!(v2.palw_capability_bound_at(1_000), "and from it");
     }
 
     #[test]
@@ -8904,6 +9171,100 @@ mod consensus_params_id_tests {
             never.consensus_identity_id(),
             "never() is absence — the WHOLE option collapses, or the window's bytes survive into the identity"
         );
+    }
+
+    /// **ADR-0073 SA-1's fence, in the same four identity positions — and `k` beside it.**
+    ///
+    /// The width is the half that could have gone wrong in silence: a `k` inside `for_each_fence`
+    /// would be normalised to `0`/`u64::MAX` and two builds folding three blocks and five would
+    /// fingerprint identically at every height, which is exactly the `inactivity_leak_daa` trap
+    /// this file already carries a scar from. So it is pinned OUT of the visitor and INTO both
+    /// `consensus_params_id` and `consensus_schedule_id`.
+    #[test]
+    fn the_beacon_fold_width_is_in_the_fingerprint_and_not_in_the_fence_visitor() {
+        let fold = |score: u64, k: u8| {
+            let mut p = MAINNET_PARAMS;
+            p.palw_beacon_fold = Some(PalwBeaconFoldV1 { activation: ForkActivation::new(score), k });
+            p
+        };
+        let shipped = MAINNET_PARAMS;
+        assert!(shipped.palw_beacon_fold.is_none(), "every shipped preset leaves SA-1 dormant");
+
+        let armed = fold(9_000_000, 3);
+        assert_eq!(shipped.consensus_identity_id(), armed.consensus_identity_id(), "scheduled, not in force: same network");
+        assert_ne!(shipped.consensus_params_id(), armed.consensus_params_id(), "…and still a visible commitment");
+
+        // `k` is in the FINGERPRINT — a different fold is a different draw and therefore a
+        // different rule set.
+        let wider = fold(9_000_000, 5);
+        assert_ne!(armed.consensus_params_id(), wider.consensus_params_id(), "a different fold width must be in the fingerprint");
+        // …and it is in the operator log, which is the whole of the defence while the fence is
+        // merely scheduled and the identity has collapsed the option away.
+        assert_ne!(
+            armed.consensus_schedule_id(),
+            wider.consensus_schedule_id(),
+            "the warning must be able to name the width the two builds disagree about"
+        );
+        assert_eq!(
+            armed.consensus_identity_id(),
+            wider.consensus_identity_id(),
+            "a scheduled fence's payload leaves the identity with it — deliberate, and why the params id must differ"
+        );
+
+        // In force at genesis is a rule difference; `never()` is absence, whole option and all.
+        let mut at_genesis = MAINNET_PARAMS;
+        at_genesis.palw_beacon_fold = Some(PalwBeaconFoldV1 { activation: ForkActivation::always(), k: 3 });
+        assert_ne!(shipped.consensus_identity_id(), at_genesis.consensus_identity_id(), "in force at genesis is a rule difference");
+        let mut never = MAINNET_PARAMS;
+        never.palw_beacon_fold = Some(PalwBeaconFoldV1 { activation: ForkActivation::never(), k: 3 });
+        assert_eq!(
+            shipped.consensus_identity_id(),
+            never.consensus_identity_id(),
+            "never() is absence — the WHOLE option collapses, or k's byte survives into the identity"
+        );
+        // And a dormant fence is byte-identical to the field not existing at all, on every preset:
+        // this is what keeps adding SA-1 from being a flag day of its own.
+        for (name, preset) in
+            [("mainnet", MAINNET_PARAMS), ("testnet", TESTNET_PARAMS), ("devnet", DEVNET_PARAMS), ("simnet", SIMNET_PARAMS)]
+        {
+            assert!(preset.palw_beacon_fold.is_none(), "{name}: a shipped preset armed the beacon fold");
+            let before = preset.consensus_params_id();
+            let mut probe = preset;
+            probe.palw_beacon_fold = None;
+            assert_eq!(before, probe.consensus_params_id(), "{name}: the Some-only write ran on a None");
+        }
+    }
+
+    /// **SA-1's floor is a gate, not a sentence in an ADR.** A fold narrower than three attempt
+    /// blocks does not bound the withholding bias the amendment exists to bound — at `k = 1` it is
+    /// the pre-SA-1 rule wearing a fence — so an armed fence naming one is refused at construction
+    /// rather than shipped as a rule that reads like one.
+    #[test]
+    fn an_armed_beacon_fold_may_not_undercut_the_amendments_floor() {
+        let v2 = palw_rc_shipped_params();
+        assert!(
+            matches!(v2.palw_consensus_mode, crate::palw_mode_v2::PalwConsensusMode::ConsensusV2(_)),
+            "the fixture must be V2, or this gate is never reached"
+        );
+        assert!(v2.validate_palw_v2().is_ok(), "the shipped RC params must start with the fence dormant");
+
+        for k in 0..crate::palw_fp_beacon_v3::PALW_BEACON_FOLD_MIN_K_V1 {
+            let mut narrow = v2.clone();
+            narrow.palw_beacon_fold = Some(PalwBeaconFoldV1 { activation: ForkActivation::new(9_000_000), k });
+            let err = narrow.validate_palw_v2().expect_err("k below the floor must be refused");
+            assert!(format!("{err}").contains("SA-1's floor"), "refused for the width, not for something else: {err}");
+        }
+        // The floor itself, and anything above it, starts.
+        for k in [crate::palw_fp_beacon_v3::PALW_BEACON_FOLD_MIN_K_V1, 4, 8] {
+            let mut ok = v2.clone();
+            ok.palw_beacon_fold = Some(PalwBeaconFoldV1 { activation: ForkActivation::new(9_000_000), k });
+            assert!(ok.validate_palw_v2().is_ok(), "k = {k} is at or above the floor and must start");
+        }
+        // A `never()` fence is not armed, so its width is not held to the floor — the same stance
+        // every other value-beside-a-fence check on this function takes.
+        let mut dormant = v2.clone();
+        dormant.palw_beacon_fold = Some(PalwBeaconFoldV1 { activation: ForkActivation::never(), k: 1 });
+        assert!(dormant.validate_palw_v2().is_ok(), "an unarmed fence carries no rule to enforce");
     }
 
     /// ADR-0039 W4′ fence: OFF must be indistinguishable from the field not existing.

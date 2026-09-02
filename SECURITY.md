@@ -74,7 +74,75 @@ Its authentication boundary is **node-local**:
 allowlist) on the same host. Run it as a dedicated service account, not a shared login. A future
 strict purpose→context policy can be layered on via the hooks above without changing the default.
 
-### 3. Other operator notes
+### 3. PALW free-prompt gateway and worker — the host half (ADR-0079)
+
+A node that answers free prompts runs a **public entrance that parses attacker-chosen text and
+hands it to a model**, on a host that may also hold a bond. The posture is enforced locally,
+reported honestly by `misaka node security-report`, and **committed nowhere**: the chain cannot
+observe whether a host ran confined, and a court that cannot compute a verdict is a vote.
+
+**The model process starts with nothing.** `misaka-palw-agent` and `misaka-palw-gateway` spawn every
+worker — the job, the boot manifest probe and the boot selftest alike — with `env_clear()` and the
+in-tree constant `PALW_WORKER_ENV_ALLOWLIST` (the `MISAKA_PALW_*` artifact variables the worker
+actually reads, plus pinned `LC_ALL`/`LANG`/`LC_NUMERIC`/`TZ`). **`PATH` is deliberately absent**:
+the supervisor spawns by absolute path, so an inherited `PATH` would only be an execution vector.
+The working directory is an explicit `0700` scratch dir, never the operator's home or the datadir.
+Adding a name to the allowlist is a source change and a review, not a config edit.
+
+**A platform backend is opt-in, and it proves itself before it is believed.**
+`MISAKA_PALW_CONFINEMENT=macos-sandbox-exec` installs the macOS backend; unset (or `none`) leaves
+the environment discipline alone, which is the default. A requested backend is declared **in
+force** only after its own drill has *observed* its denials on that host — a child starts, a write
+inside the outbox lands, a write outside is denied, and a socket that is reachable unconfined is
+refused under the profile. A backend that fails any of those reports `none` with the reason, never
+the value that was configured. **What the macOS backend delivers, stated exactly:** no network
+egress, and no writes outside the working directory and the outbox. **What it does not deliver:** a
+narrowed read set — the platform's loader needs to read a set this code cannot enumerate, and a
+profile with reads restricted to the artifact paths aborts every child before `main`. No Linux
+backend ships yet; `none` is what is reported there.
+
+**Every job has a resident ceiling and a deadline, and exceeding either is a failed job — never a
+dead node.** `PALW_WORKER_MAX_RESIDENT_BYTES` (override:
+`MISAKA_PALW_WORKER_MAX_RESIDENT_BYTES`, or `--worker-max-resident-bytes`) is enforced by a
+delegated cgroup v2 `memory.max` when `MISAKA_PALW_WORKER_CGROUP` names one, and by a supervisor
+resident watchdog otherwise. It is **not** `RLIMIT_AS`: the hybrid class maps a 33 GiB artifact and
+an address-space cap would kill the worker while it was still mapping.
+
+**Accepted conditions for the gateway** (the same shape as §1, extending it rather than replacing
+it):
+
+- **Default bind is loopback** (`127.0.0.1:8790`).
+- **A non-loopback `--listen` fails at startup** unless `MISAKA_PALW_ALLOW_PUBLIC_GATEWAY=1`. The
+  intended production pattern is an **authenticating reverse proxy** in front of a loopback-bound
+  gateway.
+- **A public bind on a host whose confinement backend is `none` fails unconditionally**, and the
+  acknowledgement variable does not override it. That is the one place where a stranger chooses the
+  model's input. (Today no platform backend ships, so this rule is the load-bearing one.)
+- **No wildcard CORS**, and no secret-shaped field in any response DTO.
+- **The gateway refuses to boot if a signing secret is reachable in its own view** — a
+  `MISAKA_*_SEED`-style variable, or a 32-byte seed-shaped file beside the identity file or in the
+  outbox. It holds the executor **public** key only; the ML-DSA-87 signature belongs to the signer
+  sidecar.
+- **Mandatory bounds, not defaults**: request body ≤ 1 MiB, rendered prompt ≤ 64 KiB, decode cap
+  ≤ 4,096, at most 64 connections, **one job slot**, and a **bounded in-flight queue** of 8 —
+  past which the answer is a 503, never a wait. A flag may lower any of these and never raise one.
+- **A public job spends the OPERATOR's exposure, and the spend is bounded.** A stranger's prompt
+  becomes the operator's claim, so `--bond-exposure-room-sompi`, `--claim-exposure-sompi` and
+  `--public-job-budget-permille` bound what strangers may spend per 24 h window; past the budget —
+  or under `--answer-never-commit` — the gateway **answers and does not commit**. A queued
+  commitment expires with its anchor and is retired rather than submitted stale. `/health` names
+  the loss bound: at most `claim_exposure` per claim, and at most the `FreePromptExposureCeiling`
+  ratio (500‰ on the RC) of collateral in flight.
+- **A per-source rate limit is secondary, by design.** Sources share addresses behind proxies; the
+  binding limits are the single job slot, the bounded queue and the budget.
+- **Nothing logs a prompt.** Gateway, supervisor, worker and seat log token counts and roots, never
+  prompt text or prompt ids.
+
+**What this does not buy:** nothing here makes a dishonest executor honest, and nothing here is
+visible to a peer. A node that lies about its posture is exactly as convictable as before — through
+its roots — and exactly as unconvictable for its posture.
+
+### 4. Other operator notes
 
 - **Stratum listener** enforces global and per-IP connection caps (`max_connections`,
   `max_connections_per_ip`), a pre-auth idle disconnect, a hard pre-auth authorize deadline (closes

@@ -1,0 +1,16 @@
+{ "edges":[
+      {"w":2,"to":"gate","from":"well"},
+        {"w":4,"to":"well","from":"keep"},
+    {"w":9,"to":"keep","from":"gate"}],
+  "nodes":[ {"attrs":{},"y":4,"x":0,"id":"well"},
+       {"y":4,"x":5,"attrs":{"guards":12,"tier":3},"id":"keep"},
+          {"id":"gate","attrs":{"tier":1},"y":0,"x":0} ],
+  "runs":[  [5,0,1,2] ,
+     [2,3,4,2] ,
+        [0,1,4,1]  ],
+  "palette":[ {"passable":true,"cost":4,"tile":2},
+      {"cost":0,"passable":false,"tile":1},
+   {"tile":0,"passable":true,"cost":1} ],
+  "default":0,   "height":5,
+  "width":6,
+      "v":1 }

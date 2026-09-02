@@ -26,11 +26,14 @@ mod eth;
 #[cfg(feature = "evm-send")]
 mod evm_send;
 mod forward;
+mod key_roles;
 mod keys;
 mod node;
 mod palw_fp;
 #[cfg(feature = "evm-send")]
 mod prea;
+/// ADR-0079 Decision 13: `node security-report` — the host posture, printed from live state.
+mod security;
 mod setup;
 mod validator_reader;
 mod wallet;
@@ -53,6 +56,13 @@ pub mod exit {
     pub const LIVENESS_WEDGED: i32 = 11;
     /// `node liveness`: the node answers but its chain has not moved within the stall window.
     pub const LIVENESS_STALLED: i32 = 12;
+    /// `node security-report` (ADR-0079 Decision 13): a PUBLIC entrance on a host whose
+    /// confinement backend is `none`, or a process that parses public input while holding key
+    /// material. Decision 10's refusals, observed after the fact rather than at startup.
+    pub const SECURITY_EXPOSED: i32 = 13;
+    /// `node security-report`: no platform confinement backend is in force, but nothing public is
+    /// exposed behind it. The environment discipline is the whole of the posture.
+    pub const SECURITY_DEGRADED: i32 = 14;
 }
 
 /// A CLI error that carries the process exit code to surface.
@@ -99,9 +109,9 @@ struct Cli {
     #[arg(long, global = true, visible_alias = "node-wrpc-borsh", env = "MISAKA_RPC")]
     rpc: Option<String>,
 
-    /// Node gRPC endpoint host:port (miner / low-level RPC transport).
+    /// Node gRPC endpoint host:port (low-level RPC transport: `setup`, `config show`).
     /// Resolution: CLI > env MISAKA_NODE_GRPC > ~/.misaka/config.toml [node].grpc >
-    /// endpoint registry / network default inside the child miner.
+    /// endpoint registry / network default.
     #[arg(long, global = true, env = "MISAKA_NODE_GRPC")]
     node_grpc: Option<String>,
 
@@ -156,9 +166,6 @@ enum Command {
     /// global --network-id and --rpc (node wRPC Borsh) injected. Run
     /// `misaka validator --help` for its keygen/bond/run/status/... subcommands.
     Validator(PassThrough),
-    /// Miner operations — forwarded to the `kaspa-pq-miner` binary with --network-id
-    /// injected. Run `misaka miner --help` for its options.
-    Miner(PassThrough),
     /// Join the network for --network-id: start a local node that discovers peers via the DNS
     /// seeds (port-free). A newcomer-friendly front-end over `node start` that names the seeds.
     Join(NodeStartArgs),
@@ -419,19 +426,26 @@ enum KeyCmd {
         #[command(flatten)]
         key: KeyArgs,
     },
-    /// Import an EXISTING 32-byte ML-DSA-87 seed, read as hex from stdin, into a 0600 file.
+    /// Import an EXISTING 32-byte ML-DSA-87 seed — from stdin, or from a 0600 file — into a
+    /// 0600 file.
     ///
-    /// The secret is never a CLI argument: pipe it in (`cat seed.hex | misaka key import --out
-    /// /etc/misaka/bond.key`). A BIP39 mnemonic is NOT accepted — this tree and the web wallet
-    /// have no agreed derivation to an ML-DSA-87 seed, and guessing one would silently produce a
-    /// different address.
+    /// The secret is never a CLI argument and never an environment variable (ADR-0063 SA-1):
+    /// pipe it in (`cat seed.hex | misaka key import --out /etc/misaka/bond.key --hex-stdin`) or
+    /// name a file (`--hex-file /media/backup/seed.hex`, which must be mode 0600). An argument
+    /// lands in `ps` and the shell history; an env var is inherited by every child process.
+    /// A BIP39 mnemonic is NOT accepted — this tree and the web wallet have no agreed derivation
+    /// to an ML-DSA-87 seed, and guessing one would silently produce a different address.
     Import {
         /// Output seed file path (refuses to overwrite).
         #[arg(long)]
         out: String,
-        /// Read the 64-hex-character seed from stdin. Required, and the only accepted source.
+        /// Read the 64-hex-character seed from stdin.
         #[arg(long)]
         hex_stdin: bool,
+        /// Read the 64-hex-character seed from this file, which must be mode 0600.
+        /// The PATH is the argument; the secret never is.
+        #[arg(long, conflicts_with = "hex_stdin")]
+        hex_file: Option<String>,
     },
 }
 
@@ -529,7 +543,7 @@ fn prefix_of(network: &str) -> Result<kaspa_addresses::Prefix, CliError> {
 
 fn key_gen(ctx: &node::Ctx, out: &str) -> CliResult {
     let prefix = prefix_of(&ctx.network)?;
-    let (addr, _seed) = keys::generate(out, prefix)?;
+    let addr = keys::generate(out, prefix)?;
     match ctx.output {
         OutputFormat::Human => {
             println!("Wrote a new ML-DSA-87 seed to {out} (mode 0600). BACK IT UP — it cannot be recovered.");
@@ -540,21 +554,32 @@ fn key_gen(ctx: &node::Ctx, out: &str) -> CliResult {
     Ok(())
 }
 
-/// `misaka key import` (ADR-0063 D1). Stdin only — see `keys::import` for why an argument is
-/// refused even though it would be more convenient exactly once.
-fn key_import(ctx: &node::Ctx, out: &str, hex_stdin: bool) -> CliResult {
-    if !hex_stdin {
-        return Err(CliError::new(
-            exit::GENERIC,
-            "pass --hex-stdin and pipe the 64-hex-character ML-DSA-87 seed in. A mnemonic is not accepted: this tree and the web wallet have no agreed BIP39 derivation to an ML-DSA-87 seed, so an import that guessed one would return a different address without saying so."
-                .to_string(),
-        ));
-    }
-    let mut buf = String::new();
-    std::io::Read::read_to_string(&mut std::io::stdin(), &mut buf)
-        .map_err(|e| CliError::new(exit::GENERIC, format!("read the seed from stdin: {e}")))?;
+/// `misaka key import` (ADR-0063 D1, hardened by SA-1).
+///
+/// Two sources, and neither is argv or the environment: stdin, or a file whose PATH is the
+/// argument and whose mode must be 0600. A seed passed as a value would be in `ps` output on
+/// every host it ran on and in the shell history forever after; a seed in an environment variable
+/// is inherited by every child this process spawns. There is deliberately no flag that takes one.
+fn key_import(ctx: &node::Ctx, out: &str, hex_stdin: bool, hex_file: Option<&str>) -> CliResult {
+    let source = match (hex_stdin, hex_file) {
+        (true, None) => keys::SeedSource::Stdin,
+        (false, Some(path)) => keys::SeedSource::File(path),
+        (true, Some(_)) => {
+            return Err(CliError::new(exit::GENERIC, "pass only one of --hex-stdin / --hex-file".to_string()));
+        }
+        (false, None) => {
+            return Err(CliError::new(
+                exit::GENERIC,
+                "name a source for the seed: --hex-stdin (pipe the 64 hex characters in) or --hex-file <path> (mode 0600). \
+                 The seed is never taken as a CLI value or from the environment. A mnemonic is not accepted either: this tree \
+                 and the web wallet have no agreed BIP39 derivation to an ML-DSA-87 seed, so an import that guessed one would \
+                 return a different address without saying so."
+                    .to_string(),
+            ));
+        }
+    };
     let prefix = prefix_of(&ctx.network)?;
-    let addr = keys::import(out, prefix, &buf)?;
+    let addr = keys::import(out, prefix, source)?;
     match ctx.output {
         OutputFormat::Human => {
             println!("Imported an ML-DSA-87 seed to {out} (mode 0600).");
@@ -592,8 +617,26 @@ enum NodeCmd {
         #[arg(long, default_value_t = 900)]
         stall_secs: u64,
     },
+    /// Print the host's SECURITY POSTURE from live state (ADR-0079 Decision 13): the confinement
+    /// backend actually in force, the worker environment as a child actually receives it, every
+    /// listening socket with its bind address and whether the acknowledgement variable was
+    /// required, which processes hold key material, the artifact paths and their digests, and the
+    /// interpreter fence read off the running node's own argv. Never printed from config, and
+    /// `none` is reported honestly where a backend is missing. Exits 13 (EXPOSED) when a public
+    /// entrance runs on a `none`-backend host or a public parser holds a key, 14 (DEGRADED) when
+    /// there is no backend and nothing public behind it. Signed by nobody; earns nothing.
+    SecurityReport {
+        /// Probe this worker's manifest for the roots it verified at load. Optional: without it
+        /// the artifact section reports paths and says it did not probe.
+        #[arg(long)]
+        worker: Option<std::path::PathBuf>,
+        /// Recompute the SHA-256 of every artifact path from its BYTES. This is a full read — the
+        /// hybrid class's artifact is 33 GiB — so it is opt-in.
+        #[arg(long, default_value_t = false)]
+        verify_artifacts: bool,
+    },
     /// Show the effective local node RPC endpoints (the registry the node wrote, else the
-    /// network defaults). Lets you see what `misaka miner`/`validator` will auto-connect to.
+    /// network defaults). Lets you see what `misaka validator` will auto-connect to.
     Endpoints,
     /// Start a local node for --network-id (port-free; peers via the DNS seeds). Forwards to
     /// `kaspad` with the network selected and an optional --profile; extra kaspad args after `--`.
@@ -819,6 +862,9 @@ async fn main() -> std::process::ExitCode {
     let result = match cli.command {
         Command::Node(NodeCmd::Doctor) => node::doctor(&ctx).await,
         Command::Node(NodeCmd::Liveness { state, stall_secs }) => node::liveness(&ctx, &state, stall_secs).await,
+        Command::Node(NodeCmd::SecurityReport { worker, verify_artifacts }) => {
+            security::security_report(&ctx, worker.as_ref(), verify_artifacts)
+        }
         Command::Node(NodeCmd::Endpoints) => bootstrap::endpoints(ctx.output, &ctx.network),
         Command::Node(NodeCmd::Start(a)) => {
             forward::node(&ctx, a.profile.as_deref(), a.node_profile.as_deref(), a.vps_8gb, a.min_disk_free_percent, &a.args, false)
@@ -852,7 +898,7 @@ async fn main() -> std::process::ExitCode {
         },
         Command::Key(KeyCmd::Gen { out }) => key_gen(&ctx, &out),
         Command::Key(KeyCmd::Address { key }) => key_address(&ctx, &key.source()),
-        Command::Key(KeyCmd::Import { out, hex_stdin }) => key_import(&ctx, &out, hex_stdin),
+        Command::Key(KeyCmd::Import { out, hex_stdin, hex_file }) => key_import(&ctx, &out, hex_stdin, hex_file.as_deref()),
         Command::Bond(BondCmd::Status { key, class_id }) => bond::status(&ctx, &key.source(), class_id.as_deref()).await,
         Command::Bond(BondCmd::Capability { key, bond, class_id, declare, dry_run, yes }) => {
             bond::capability(&ctx, &key.source(), bond.as_deref(), class_id.as_deref(), &declare, dry_run, yes).await
@@ -868,7 +914,6 @@ async fn main() -> std::process::ExitCode {
             Some(result) => result,
             None => forward::validator(&ctx, &p.args),
         },
-        Command::Miner(p) => forward::miner(&ctx, &p.args),
         #[cfg(feature = "evm-send")]
         Command::Evm(EvmCmd::Wallet(EvmWalletCmd::Create { out })) => evm_send::wallet_create(&ctx, &out),
         #[cfg(feature = "evm-send")]
@@ -949,5 +994,82 @@ async fn main() -> std::process::ExitCode {
             }
             std::process::ExitCode::from(e.code as u8)
         }
+    }
+}
+
+/// **The command surface itself is an assertion** — ADR-0063 SA-1 and SA-4.
+///
+/// These tests read the parser rather than a function, because both rules are properties of the
+/// SURFACE: a seed must have no way in through argv or the environment, and `misaka miner` must
+/// have no way in at all. A unit test on a handler cannot see either — the handler is not reached
+/// when the flag it would have to refuse does not exist, and that absence is what has to be
+/// checked, and kept.
+#[cfg(test)]
+mod cli_surface_tests {
+    use super::*;
+    use clap::CommandFactory;
+
+    const SEED_HEX: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    fn import_cmd() -> clap::Command {
+        Cli::command().find_subcommand("key").expect("key").find_subcommand("import").expect("import").clone()
+    }
+
+    /// **SA-1: there is no flag that takes the seed as a value.**
+    ///
+    /// A seed on the command line is in `ps` output for the life of the process and in the shell
+    /// history for the life of the host. Every spelling anyone would reach for is tried here, so
+    /// "someone adds `--seed` back for convenience" is a failing test rather than a code review
+    /// that may not happen.
+    #[test]
+    fn a_seed_on_argv_is_refused() {
+        for flag in ["--seed", "--seed-hex", "--hex", "--mnemonic", "--key", "--secret"] {
+            let parsed = Cli::try_parse_from(["misaka", "key", "import", "--out", "/tmp/never-written", flag, SEED_HEX]);
+            assert!(parsed.is_err(), "`key import {flag} <seed>` parsed — a seed must have no argv door");
+        }
+        // A bare positional is the same door with the flag filed off.
+        assert!(Cli::try_parse_from(["misaka", "key", "import", "--out", "/tmp/never-written", SEED_HEX]).is_err());
+    }
+
+    /// **SA-1: no argument of `key import` reads the environment.**
+    ///
+    /// An environment variable is inherited by every child this process spawns — the model worker
+    /// included, until ADR-0079 R-01 lands — so an `env = …` on this command would hand the seed
+    /// to processes that have no business holding it. The check walks the parser rather than
+    /// grepping, so it also catches one added through a `#[command(flatten)]`.
+    #[test]
+    fn no_import_argument_reads_the_environment() {
+        for arg in import_cmd().get_arguments() {
+            assert!(arg.get_env().is_none(), "`key import --{}` reads an env var; the seed path must not", arg.get_id());
+        }
+    }
+
+    /// The two legitimate sources are stdin and a file PATH, and they are mutually exclusive: a
+    /// command given both would have to pick one, and an operator would not know which.
+    #[test]
+    fn the_two_seed_sources_are_stdin_and_a_path() {
+        assert!(Cli::try_parse_from(["misaka", "key", "import", "--out", "/tmp/o", "--hex-stdin"]).is_ok());
+        assert!(Cli::try_parse_from(["misaka", "key", "import", "--out", "/tmp/o", "--hex-file", "/tmp/s"]).is_ok());
+        assert!(
+            Cli::try_parse_from(["misaka", "key", "import", "--out", "/tmp/o", "--hex-stdin", "--hex-file", "/tmp/s"]).is_err(),
+            "two sources at once must be refused at the parser, not silently ranked"
+        );
+    }
+
+    /// **SA-4: `misaka miner` does not exist.**
+    ///
+    /// It forwarded to `kaspa-pq-miner`, which is on no fleet host — and the forwarder falls
+    /// through to the bare name on `$PATH`, so the subcommand ran whatever a writable `PATH` entry
+    /// held. On a network whose only hash lane is the fee-only heartbeat it could not have earned
+    /// anything even if the binary were real, so Decision 4 resolves to deletion rather than to
+    /// shipping a miner.
+    #[test]
+    fn the_miner_subcommand_is_gone() {
+        assert!(Cli::command().find_subcommand("miner").is_none(), "`misaka miner` is back — SA-4 deleted it");
+        assert!(Cli::try_parse_from(["misaka", "miner"]).is_err());
+        assert!(Cli::try_parse_from(["misaka", "miner", "--blocks", "1"]).is_err());
+        // The sibling forwarder is deliberately untouched: `validator` forwards to a binary this
+        // tree actually builds, which is the difference SA-4 turns on.
+        assert!(Cli::command().find_subcommand("validator").is_some());
     }
 }
