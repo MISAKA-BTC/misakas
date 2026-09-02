@@ -1021,10 +1021,7 @@ mod attempt_target_seed_tests {
         for (a, b) in [(QWEN36, FLOOR), (QWEN36, A16), (A16, FLOOR)] {
             let want = (a.0 as f64 * a.1 as f64) / (b.0 as f64 * b.1 as f64);
             let got = seed(a) as f64 / seed(b) as f64;
-            assert!(
-                (got - want).abs() <= want / 100.0,
-                "seed ratio {got} is not the share·pwu ratio {want} for {a:?} over {b:?}"
-            );
+            assert!((got - want).abs() <= want / 100.0, "seed ratio {got} is not the share·pwu ratio {want} for {a:?} over {b:?}");
         }
     }
 

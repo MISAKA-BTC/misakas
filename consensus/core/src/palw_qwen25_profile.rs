@@ -520,8 +520,7 @@ fn qwen25_a16_profile_inner(
     budget(&mut pre_nodes, pre_ir);
     let mut attn_nodes = base0_ir_nodes_v1(QWEN25_A16_LAYER_IR, ir_geometry(geometry.tile_len), Base0IrScopeV1::PerLayer, "");
     budget(&mut attn_nodes, QWEN25_A16_LAYER_IR);
-    let mut post_nodes =
-        base0_ir_nodes_v1(QWEN25_A16_POST_IR, ir_geometry(geometry.tile_len), Base0IrScopeV1::Graph, head);
+    let mut post_nodes = base0_ir_nodes_v1(QWEN25_A16_POST_IR, ir_geometry(geometry.tile_len), Base0IrScopeV1::Graph, head);
     budget(&mut post_nodes, QWEN25_A16_POST_IR);
 
     let profile = PalwShapeProfileV3 {
@@ -908,9 +907,8 @@ mod tests {
         // graph's court cost, not about who may hold weight.
         let certified = crate::palw_e2e_adjudicability::catalog_covering_family_for_tests_v1();
         bundle.court_e2e_root = crate::palw_e2e_adjudicability::palw_court_e2e_root_of_v1(&certified);
-        let admitted =
-            crate::palw_class_admission_v2::verify_class_admission_v2(&bundle, &profile, &canonical, &object, &certified)
-                .expect("the corrected A16 class is admissible on a network with the shipped ceilings");
+        let admitted = crate::palw_class_admission_v2::verify_class_admission_v2(&bundle, &profile, &canonical, &object, &certified)
+            .expect("the corrected A16 class is admissible on a network with the shipped ceilings");
         assert_eq!(admitted.court_cost, entry.court_cost, "the gate and the mint derive one cost");
         assert!(admitted.court_cost.max_close_bytes <= bundle.court.max_close_bytes());
         let PalwConsensusObjectV2::ClassRegistered { pwu_rule: PalwPwuRuleV2::DerivedV1 { pwu_per_inference }, .. } = object else {

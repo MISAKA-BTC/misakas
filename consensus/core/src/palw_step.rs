@@ -1112,8 +1112,11 @@ fn palw_logits_window_v1(shape: &PalwLeafShapeV1, lo: u128, hi: u128, visits: &m
     let mut total = shape.logits_const.saturating_mul(hi - lo);
     for term in &shape.logits_kv {
         *visits += 1;
-        let sum = kv_scaled_prefix_sum_v1(term.multiplier, term.tile_len, hi)
-            .saturating_sub(kv_scaled_prefix_sum_v1(term.multiplier, term.tile_len, lo));
+        let sum = kv_scaled_prefix_sum_v1(term.multiplier, term.tile_len, hi).saturating_sub(kv_scaled_prefix_sum_v1(
+            term.multiplier,
+            term.tile_len,
+            lo,
+        ));
         total = total.saturating_add(term.weight.saturating_mul(sum));
     }
     total
@@ -1278,11 +1281,7 @@ fn palw_job_running_total_v1(shape: &PalwLeafShapeV1, s: u128, prefill: u128, vi
 /// over the same closed form rather than by having walked there.
 /// `the_job_closed_form_is_the_loop_on_every_shipped_profile` asserts the whole `Result` against
 /// the retained loop over every shipped profile, a sweep of job shapes, and six caps.
-pub fn step_leaf_count_capped_v1(
-    profile: &PalwShapeProfileV3,
-    context: &PalwJobContextV2,
-    cap: u64,
-) -> Result<u64, PalwStepError> {
+pub fn step_leaf_count_capped_v1(profile: &PalwShapeProfileV3, context: &PalwJobContextV2, cap: u64) -> Result<u64, PalwStepError> {
     step_leaf_count_capped_counted_v1(profile, context, cap, &mut 0)
 }
 

@@ -356,10 +356,9 @@ pub async fn capability(
         .map_err(|e| CliError::new(exit::GENERIC, format!("submit the declaration carrier: {e}")))?;
     match ctx.output {
         OutputFormat::Human => println!("submitted {txid} — the declaration takes effect when the carrier is accepted"),
-        OutputFormat::Json => println!(
-            "{}",
-            serde_json::json!({ "ok": true, "submitted": true, "txid": txid.to_string(), "declared": listed })
-        ),
+        OutputFormat::Json => {
+            println!("{}", serde_json::json!({ "ok": true, "submitted": true, "txid": txid.to_string(), "declared": listed }))
+        }
     }
     Ok(())
 }

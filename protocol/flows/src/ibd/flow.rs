@@ -1172,33 +1172,33 @@ impl IbdFlow {
     ///   would be free for anyone willing to lie.
     /// - a valid candidate exists that nobody could compare. Deciding between them by which peer
     ///   relayed first is the bug; quarantine and let an operator decide.
-/// **Does refusing to commit under this verdict also mean the node cannot fix itself?**
-///
-/// Pure, and separate from `authorize_commit`, for the reason `decide_commit` is: this is the
-/// security-critical half and it should be answerable without a consensus, a router or a peer.
-///
-/// `authorize_commit` runs BEFORE `staging.commit()`, so every refusal leaves the node running the
-/// chain it was already running. `FlowContext::finish_ibd_after_failure_kind` states the rule that
-/// follows — quarantine only when the active consensus was actually replaced — and this path used
-/// to quarantine unconditionally.
-///
-/// A trusted checkpoint the network will not deliver is an operator's own configuration failing,
-/// and a hard stop is what an operator who pinned one is asking for. `RefuseUnresolved` is not
-/// that: refusing the commit already prevents the harm, because nothing is adopted and no partition
-/// is fixed in place. Quarantining on top of it made one gossiped summary a permanent, bondless
-/// denial of service — `IbdCandidateRegistry::unresolved` counts a candidate that has merely been
-/// SEEN, and a summary carrying this network's genesis hash, its params id and thirty-two arbitrary
-/// bytes of pruning point is a rival lineage by construction (ADR-0068 launch audit, F14).
-const fn commit_refusal_quarantines(verdict: &CommitVerdict) -> bool {
-    match verdict {
-        // Not refusals.
-        CommitVerdict::Allow | CommitVerdict::RefuseVerifiedSuperior { .. } => false,
-        // The operator pinned a history this network is not serving. Say so and stop.
-        CommitVerdict::RefuseCheckpointParamsMismatch | CommitVerdict::RefuseCheckpointMissing => true,
-        // Declining to pick between rivals nobody could check. The decline IS the remedy.
-        CommitVerdict::RefuseUnresolved { .. } => false,
+    /// **Does refusing to commit under this verdict also mean the node cannot fix itself?**
+    ///
+    /// Pure, and separate from `authorize_commit`, for the reason `decide_commit` is: this is the
+    /// security-critical half and it should be answerable without a consensus, a router or a peer.
+    ///
+    /// `authorize_commit` runs BEFORE `staging.commit()`, so every refusal leaves the node running the
+    /// chain it was already running. `FlowContext::finish_ibd_after_failure_kind` states the rule that
+    /// follows — quarantine only when the active consensus was actually replaced — and this path used
+    /// to quarantine unconditionally.
+    ///
+    /// A trusted checkpoint the network will not deliver is an operator's own configuration failing,
+    /// and a hard stop is what an operator who pinned one is asking for. `RefuseUnresolved` is not
+    /// that: refusing the commit already prevents the harm, because nothing is adopted and no partition
+    /// is fixed in place. Quarantining on top of it made one gossiped summary a permanent, bondless
+    /// denial of service — `IbdCandidateRegistry::unresolved` counts a candidate that has merely been
+    /// SEEN, and a summary carrying this network's genesis hash, its params id and thirty-two arbitrary
+    /// bytes of pruning point is a rival lineage by construction (ADR-0068 launch audit, F14).
+    const fn commit_refusal_quarantines(verdict: &CommitVerdict) -> bool {
+        match verdict {
+            // Not refusals.
+            CommitVerdict::Allow | CommitVerdict::RefuseVerifiedSuperior { .. } => false,
+            // The operator pinned a history this network is not serving. Say so and stop.
+            CommitVerdict::RefuseCheckpointParamsMismatch | CommitVerdict::RefuseCheckpointMissing => true,
+            // Declining to pick between rivals nobody could check. The decline IS the remedy.
+            CommitVerdict::RefuseUnresolved { .. } => false,
+        }
     }
-}
 
     async fn authorize_commit(&self, staging: &ConsensusProxy) -> Result<(), ProtocolError> {
         let tip = staging.async_get_header_download_hint().await;

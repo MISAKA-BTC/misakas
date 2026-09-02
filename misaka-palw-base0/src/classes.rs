@@ -84,8 +84,7 @@ impl CanonicalClassV1 {
             // operand-inventory root, because an arithmetic close's openings prove against the
             // registered root and nothing can be opened against a flat digest.
             ArtifactSourceV1::ConvertedA16 => {
-                if self.profile.state_chunk_map_id == kaspa_consensus_core::palw_state_chunk_map::integer_kv_state_chunk_map_id_v2()
-                {
+                if self.profile.state_chunk_map_id == kaspa_consensus_core::palw_state_chunk_map::integer_kv_state_chunk_map_id_v2() {
                     Ok(crate::inventory::a16_inventory_v1(artifact, &self.profile)?.root())
                 } else {
                     Ok(artifact.artifact_digest())

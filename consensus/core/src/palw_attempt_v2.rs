@@ -884,21 +884,21 @@ mod tests {
             execution_root: _,
         } = a.clone();
         let classified = [
-            ("version", Pin::ChainEquality),           // == PALW_ATTEMPT_V2_VERSION (shape)
-            ("network_domain", Pin::ChainEquality),    // == the network's (stateless)
-            ("challenge", Pin::Position),              // the header position, blanked in the priced bytes
-            ("class_id", Pin::ChainEquality),          // a registered class; in the anchor
-            ("executor_bond", Pin::ChainEquality),     // a registered bond; in the anchor
-            ("executor_pubkey", Pin::ChainEquality),   // == the bond's key (item 2)
-            ("operator_id", Pin::ChainEquality),       // == the registration's (item 3)
-            ("artifact_root", Pin::ChainEquality),     // == the class's (item 5)
-            ("trace_root", Pin::ExecutionReplay),      // the panel replays it
-            ("output_root", Pin::ExecutionReplay),     // the panel replays it
-            ("pwu", Pin::ChainEquality),               // DerivedV1 equality (item 6)
-            ("trace_manifest_root", Pin::Derived),     // attempt_trace_manifest_root_v1 (D8)
-            ("trace_chunk_count", Pin::Derived),       // == the shipped families' constant (D8); a family derivation if a family ever chunks
-            ("trace_retention_daa", Pin::Derived),     // block DAA + min retention (D8)
-            ("execution_root", Pin::ExecutionReplay),  // the court's binding
+            ("version", Pin::ChainEquality),          // == PALW_ATTEMPT_V2_VERSION (shape)
+            ("network_domain", Pin::ChainEquality),   // == the network's (stateless)
+            ("challenge", Pin::Position),             // the header position, blanked in the priced bytes
+            ("class_id", Pin::ChainEquality),         // a registered class; in the anchor
+            ("executor_bond", Pin::ChainEquality),    // a registered bond; in the anchor
+            ("executor_pubkey", Pin::ChainEquality),  // == the bond's key (item 2)
+            ("operator_id", Pin::ChainEquality),      // == the registration's (item 3)
+            ("artifact_root", Pin::ChainEquality),    // == the class's (item 5)
+            ("trace_root", Pin::ExecutionReplay),     // the panel replays it
+            ("output_root", Pin::ExecutionReplay),    // the panel replays it
+            ("pwu", Pin::ChainEquality),              // DerivedV1 equality (item 6)
+            ("trace_manifest_root", Pin::Derived),    // attempt_trace_manifest_root_v1 (D8)
+            ("trace_chunk_count", Pin::Derived), // == the shipped families' constant (D8); a family derivation if a family ever chunks
+            ("trace_retention_daa", Pin::Derived), // block DAA + min retention (D8)
+            ("execution_root", Pin::ExecutionReplay), // the court's binding
         ];
         assert_eq!(classified.len(), 15, "one row per field of the struct destructured above");
         assert_eq!(classified.iter().filter(|(_, p)| *p == Pin::Position).count(), 1, "exactly one position field");

@@ -866,12 +866,9 @@ mod tests {
     /// of a genesis-registered class is not in the object. It is in the build, in the same class
     /// tables the SDK dispatches on, and that is where this looks.
     fn known_profiles() -> std::collections::BTreeMap<Hash64, PalwShapeProfileV3> {
-        let court = kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2::new(
-            kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES,
-            4,
-            2,
-        )
-        .expect("shipped court");
+        let court =
+            kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2::new(kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES, 4, 2)
+                .expect("shipped court");
         let mut out = std::collections::BTreeMap::new();
         for class in crate::classes::canonical_classes_v1(&court) {
             out.insert(class.class_id(), class.profile);
@@ -961,7 +958,10 @@ mod tests {
             .iter()
             .filter(|o| matches!(o, PalwConsensusObjectV2::ClassRegistered { share_permille, .. } if *share_permille > 0))
             .count();
-        assert!(weighted >= 2, "the shipped genesis grants weight to {weighted} class(es) — this test proves nothing on a table of zeros");
+        assert!(
+            weighted >= 2,
+            "the shipped genesis grants weight to {weighted} class(es) — this test proves nothing on a table of zeros"
+        );
     }
 
     /// **A family that declares no court cannot be drilled into one.**
@@ -982,8 +982,13 @@ mod tests {
             profile.shape_profile_id(),
             b"misaka-palw-test".to_vec(),
         );
-        let err = match drill_family_v1(Hash64::from_u64_word(0x36), &backend, &profile, Hash64::from_u64_word(0xA7), Hash64::from_u64_word(1))
-        {
+        let err = match drill_family_v1(
+            Hash64::from_u64_word(0x36),
+            &backend,
+            &profile,
+            Hash64::from_u64_word(0xA7),
+            Hash64::from_u64_word(1),
+        ) {
             Err(e) => e,
             Ok(_) => panic!("a backend whose court verbs are the trait defaults must not certify"),
         };
@@ -1486,8 +1491,8 @@ mod certification_object_tests {
         .expect("the court grades the attempt-lane drill");
         assert_eq!(s5.chain_certified_families(PalwCertifiedLaneV1::Attempt).len(), 1);
         let seat = bind(q36_class, PalwCertifiedLaneV1::Attempt, &q36_profile);
-        let (s6, d6) =
-            apply_palw_transition_v2(&s5, &params, &at(6, 105, 6), std::slice::from_ref(&seat), None).expect("the covered class is seated");
+        let (s6, d6) = apply_palw_transition_v2(&s5, &params, &at(6, 105, 6), std::slice::from_ref(&seat), None)
+            .expect("the covered class is seated");
         assert_eq!(s6.class_share_permille(&q36_class), Some(floor), "seated at the minimum grantable share");
         assert_eq!(s6.class_share_permille(&a16_class), Some(1000 - floor), "the incumbent donated it");
         assert_eq!(revert_delta_v2(&s6, &d6, &params).unwrap().state_root(), s5.state_root());
@@ -1525,7 +1530,13 @@ mod pin_tests {
         super::register_builtin_certified_families_v1();
         let drilled = kaspa_consensus_core::palw_e2e_adjudicability::certified_families_v1();
         let committed = kaspa_consensus_core::palw_e2e_adjudicability::palw_rc_certified_families_v1();
-        assert_eq!(drilled.len(), committed.len(), "the network commits to {} families and this build drilled {}", committed.len(), drilled.len());
+        assert_eq!(
+            drilled.len(),
+            committed.len(),
+            "the network commits to {} families and this build drilled {}",
+            committed.len(),
+            drilled.len()
+        );
         for want in &committed {
             let got = drilled
                 .iter()
@@ -1571,12 +1582,9 @@ mod exported_evidence_tests {
     fn exported_vectors_certify_without_the_model_that_produced_them() {
         use kaspa_consensus_core::palw_e2e_adjudicability::{PalwE2eDrillEvidenceV1, certify_e2e_family_v1};
 
-        let court = kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2::new(
-            kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES,
-            4,
-            2,
-        )
-        .expect("shipped court");
+        let court =
+            kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2::new(kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES, 4, 2)
+                .expect("shipped court");
         let entry = crate::classes::canonical_class_by_model_id_v1(&court, "PALW-BASE-0/rc").expect("the floor");
         let root = crate::rc::palw_rc_base0_artifact_root_v1().expect("pinned");
         let resolved = crate::classes::resolve_class_v1(&court, entry.class_id(), root, &[]).expect("the floor resolves");
@@ -1689,12 +1697,9 @@ mod registered_class_tests {
     /// on.
     #[test]
     fn the_registered_model_classes_are_the_ones_this_build_serves_and_certified() {
-        let court = kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2::new(
-            kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES,
-            4,
-            2,
-        )
-        .expect("shipped court");
+        let court =
+            kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2::new(kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES, 4, 2)
+                .expect("shipped court");
 
         // --- the hybrid tier: graph-v3 ---------------------------------------------------------
         let (profile, entry, _) =
@@ -1772,19 +1777,18 @@ mod permissionless_tests {
             panic!("testnet-11 ships a ConsensusV2 bundle");
         };
         assert!(
-            family_certified_for_weight_v1(bundle.court_e2e_root, &certified, &want).expect("the set matches the commitment").is_none(),
+            family_certified_for_weight_v1(bundle.court_e2e_root, &certified, &want)
+                .expect("the set matches the commitment")
+                .is_none(),
             "an undrilled kernel must not be covered, or this test is about the wrong case"
         );
 
         // **The gate admits it weightless and refuses it weight — both, from one class.** The
         // floor's own profile stands in for the graph: what varies here is the SHARE, which is the
         // thing the two rules disagreed about.
-        let court = kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2::new(
-            kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES,
-            4,
-            2,
-        )
-        .expect("shipped court");
+        let court =
+            kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2::new(kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES, 4, 2)
+                .expect("shipped court");
         let entry = crate::classes::canonical_class_by_model_id_v1(&court, "PALW-BASE-0/rc").expect("the floor");
         let root = crate::rc::palw_rc_base0_artifact_root_v1().expect("pinned");
         let resolved = crate::classes::resolve_class_v1(&court, entry.class_id(), root, &[]).expect("resolves");
@@ -1820,7 +1824,8 @@ mod permissionless_tests {
         };
         // A zero grant is a legal registration at the gate — the state ADR-0039 named and nothing
         // could reach.
-        verify_class_admission_v2(bundle, &profile, &canonical, &build(0), &certified).expect("a weightless registration is admissible");
+        verify_class_admission_v2(bundle, &profile, &canonical, &build(0), &certified)
+            .expect("a weightless registration is admissible");
         // And an uncertified family asking for weight is still refused, which is the rule the
         // weightless state exists to make survivable rather than fatal.
         assert!(

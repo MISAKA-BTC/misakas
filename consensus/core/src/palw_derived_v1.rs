@@ -241,8 +241,10 @@ pub struct PalwDerivedKeyV1 {
 impl PalwDerivedKeyV1 {
     /// The inclusive range of every key under `claim`.
     pub fn claim_range(claim: Hash64) -> std::ops::RangeInclusive<PalwDerivedKeyV1> {
-        PalwDerivedKeyV1 { claim, transformer: Hash64::from_bytes([0u8; 64]) }
-            ..=PalwDerivedKeyV1 { claim, transformer: Hash64::from_bytes([0xFFu8; 64]) }
+        PalwDerivedKeyV1 { claim, transformer: Hash64::from_bytes([0u8; 64]) }..=PalwDerivedKeyV1 {
+            claim,
+            transformer: Hash64::from_bytes([0xFFu8; 64]),
+        }
     }
 }
 
@@ -385,8 +387,9 @@ pub struct PalwFpDslV1 {
 
 /// Encode with the magic prefix. The inverse of [`palw_fp_dsl_decode_v1`].
 pub fn palw_fp_dsl_encode_v1(claim_id: Hash64, derived_id: Hash64, grammar_id: Hash64, dsl: &[u8]) -> Vec<u8> {
-    let body = borsh::to_vec(&PalwFpDslV1 { claim_id, derived_id, grammar_id, dsl_hash: dsl_hash_v1(&grammar_id, dsl), dsl: dsl.to_vec() })
-        .expect("a DSL payload serializes");
+    let body =
+        borsh::to_vec(&PalwFpDslV1 { claim_id, derived_id, grammar_id, dsl_hash: dsl_hash_v1(&grammar_id, dsl), dsl: dsl.to_vec() })
+            .expect("a DSL payload serializes");
     let mut out = Vec::with_capacity(4 + body.len());
     out.extend_from_slice(&PALW_FP_DSL_V1_MAGIC);
     out.extend_from_slice(&body);
@@ -660,7 +663,10 @@ mod tests {
             assert_eq!(kind::id(name), Some(*id));
         }
         // Decision 8's seven, in the table's order, with the ids the ADR fixes.
-        assert_eq!(kind::ALL[..7].iter().map(|(_, n)| *n).collect::<Vec<_>>(), ["scene", "image", "cad", "code", "map", "music", "simulation"]);
+        assert_eq!(
+            kind::ALL[..7].iter().map(|(_, n)| *n).collect::<Vec<_>>(),
+            ["scene", "image", "cad", "code", "map", "music", "simulation"]
+        );
         assert_eq!(kind::name(0), None);
         assert_eq!(kind::name(28), None);
     }

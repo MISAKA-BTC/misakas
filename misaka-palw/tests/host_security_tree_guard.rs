@@ -255,14 +255,12 @@ fn no_shipped_path_relays_a_worker_s_stderr_unless_it_is_named_here() {
 
     /// Tolerated for now, each with the thing that closes it. A tracked line that no longer
     /// matches is a stale exemption and fails below: the list cannot rot into a blanket.
-    const TRACKED: &[(&str, &str, &str)] = &[
-        (
-            "misaka-palw/src/lib.rs",
-            "stderr: String::from_utf8_lossy(&stderr).trim()",
-            "PER JOB: `PalwError::WorkerFailed` carries the worker's stderr into an error whose \
+    const TRACKED: &[(&str, &str, &str)] = &[(
+        "misaka-palw/src/lib.rs",
+        "stderr: String::from_utf8_lossy(&stderr).trim()",
+        "PER JOB: `PalwError::WorkerFailed` carries the worker's stderr into an error whose \
              Display a node logs. Same shape as the entry above and closes the same way.",
-        ),
-    ];
+    )];
 
     let mut findings = Vec::new();
     let mut matched: Vec<(String, String)> = Vec::new();

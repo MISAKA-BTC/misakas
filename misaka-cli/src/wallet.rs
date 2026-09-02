@@ -535,8 +535,11 @@ pub async fn send(ctx: &Ctx, ks: &KeySource, to: &str, amount_sompi: u64, dry_ru
     // Largest-first greedy select over MATURE self-UTXOs, re-estimating the fee as inputs are added.
     // `!bonded`: the bond is usually the LARGEST output at a validator's address, and selection
     // below is largest-first, so without this the default `wallet send` reaches for it first (M1-3).
-    let mut mature: Vec<Funding> =
-        page_all(&nv, &from_addr).await?.into_iter().filter(|u| u.mature && !u.bonded && (!coinbase_only || u.entry.is_coinbase)).collect();
+    let mut mature: Vec<Funding> = page_all(&nv, &from_addr)
+        .await?
+        .into_iter()
+        .filter(|u| u.mature && !u.bonded && (!coinbase_only || u.entry.is_coinbase))
+        .collect();
     mature.sort_by(|a, b| b.amount.cmp(&a.amount));
     let mut selected: Vec<&Funding> = Vec::new();
     let mut sum = 0u64;

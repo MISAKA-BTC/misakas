@@ -260,7 +260,7 @@ impl PalwExecutionBackendV1 for Base0Backend {
         prompt_tokens: &[usize],
         on_token: &mut dyn FnMut(u32),
     ) -> Result<kaspa_consensus_core::palw_backend::PalwFpRunV1, String> {
-        use kaspa_consensus_core::palw_fp_execution_v3::{palw_fp_job_context_v3, PalwFpClassFactsV3, PalwFpRunFactsV3};
+        use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, PalwFpRunFactsV3, palw_fp_job_context_v3};
         use kaspa_consensus_core::palw_freeprompt_v3::PalwFpStopReasonV3;
 
         // ADR-0077 SA-6: an artifact this host can no longer read is a job failure named at the
@@ -708,7 +708,7 @@ mod tests {
     #[test]
     fn a_court_goes_both_ways_through_one_prover() {
         use kaspa_consensus_core::palw_step::{canonical_step_coordinates, canonical_step_leaf_index};
-        use kaspa_consensus_core::palw_step_refute::{check_execution_step_refutation_v1, PalwStepRefuteError};
+        use kaspa_consensus_core::palw_step_refute::{PalwStepRefuteError, check_execution_step_refutation_v1};
 
         let backend = floor_backend();
         let (job, prompt) = backend.job_for_anchor(Hash64::from_u64_word(0xC0117)).expect("job");
@@ -838,7 +838,7 @@ mod tests {
     fn a_close_carries_exactly_the_rows_the_court_reads() {
         use kaspa_consensus_core::palw_artifact::PalwProvenOperandsV1;
         use kaspa_consensus_core::palw_step::{canonical_step_coordinates, canonical_step_leaf_index};
-        use kaspa_consensus_core::palw_step_refute::{check_execution_step_refutation_v1, PalwStepRefuteError};
+        use kaspa_consensus_core::palw_step_refute::{PalwStepRefuteError, check_execution_step_refutation_v1};
 
         let backend = floor_backend();
         let class_root = crate::rc::palw_rc_base0_artifact_root_v1().expect("the floor's pinned root");
@@ -1001,10 +1001,10 @@ mod tests {
     /// refused at the prover; and one tampered lane convicts at kernels of different shapes.
     #[test]
     fn every_free_prompt_leaf_adjudicates_and_a_tampered_one_convicts() {
-        use kaspa_consensus_core::palw_artifact::{open_artifact_leaf_v1, PalwProvenOperandsV1};
-        use kaspa_consensus_core::palw_fp_execution_v3::{palw_fp_job_context_v3, PalwFpRunFactsV3};
-        use kaspa_consensus_core::palw_freeprompt_v3::{fp_job_id_v3, PalwFpStopReasonV3};
-        use kaspa_consensus_core::palw_step_refute::{check_execution_step_refutation_v1, PalwStepRefuteError};
+        use kaspa_consensus_core::palw_artifact::{PalwProvenOperandsV1, open_artifact_leaf_v1};
+        use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpRunFactsV3, palw_fp_job_context_v3};
+        use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpStopReasonV3, fp_job_id_v3};
+        use kaspa_consensus_core::palw_step_refute::{PalwStepRefuteError, check_execution_step_refutation_v1};
         use kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2;
 
         let backend = floor_backend();
@@ -1131,7 +1131,7 @@ mod tests {
     #[test]
     fn the_backend_opens_and_verifies_the_intervals_a_seat_draws() {
         use kaspa_consensus_core::palw_backend::PalwFpIntervalVerdictV1;
-        use kaspa_consensus_core::palw_fp_interval_v1::{palw_fp_interval_draw_v1, PALW_FP_SEAT_INTERVAL_SAMPLES_V1};
+        use kaspa_consensus_core::palw_fp_interval_v1::{PALW_FP_SEAT_INTERVAL_SAMPLES_V1, palw_fp_interval_draw_v1};
 
         let backend = floor_backend();
         let prompt: Vec<usize> = vec![7, 11, 13, 17];
@@ -1237,15 +1237,15 @@ mod tests {
 mod end_to_end_tests {
     use super::*;
     use crate::classes::{canonical_class_by_model_id_v1, resolve_class_v1};
-    use kaspa_consensus_core::palw_fp_execution_v3::{palw_fp_commitment_v3, PalwFpClassFactsV3};
+    use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, palw_fp_commitment_v3};
     use kaspa_consensus_core::palw_freeprompt_v3::{
-        fp_claim_id_v3, fp_quanta_v3, PalwBeaconFactV3, PalwFreePromptJobV3, PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER,
-        PALW_FP_V3_VERSION,
+        PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER, PALW_FP_V3_VERSION, PalwBeaconFactV3, PalwFreePromptJobV3,
+        fp_claim_id_v3, fp_quanta_v3,
     };
     use kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2;
     use kaspa_consensus_core::palw_state_v2::{
-        apply_palw_transition_v2, PalwBlockContextV2, PalwBondKeyV2, PalwChainStateV2, PalwClaimPhaseV2, PalwConsensusObjectV2 as Obj,
-        PalwPanelSeatV2, PalwPwuRuleV2, PalwStateParamsV2,
+        PalwBlockContextV2, PalwBondKeyV2, PalwChainStateV2, PalwClaimPhaseV2, PalwConsensusObjectV2 as Obj, PalwPanelSeatV2,
+        PalwPwuRuleV2, PalwStateParamsV2, apply_palw_transition_v2,
     };
     use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
 

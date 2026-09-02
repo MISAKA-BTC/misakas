@@ -488,4 +488,3 @@ fn s7_untrusted_text_never_yields_a_control_id() {
         leaked.iter().take(10).cloned().collect::<Vec<_>>().join("\n  ")
     );
 }
-

@@ -11,10 +11,9 @@ fn print_a16_root_forms() {
     let path = std::env::var("PALW_A16_PATH").expect("PALW_A16_PATH=/path/to/qwen25-1.5b-a16.palwart");
     let bytes = std::fs::read(&path).expect("read the artifact");
     let artifact = misaka_palw_base0::artifact::decode_artifact_file_v1(&bytes).expect("decode .palwart");
-    let profile = kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_profile_v2(
-        kaspa_consensus_core::palw_qwen25_profile::QWEN25_1_5B_A16,
-    )
-    .expect("graph-v2 A16 profile projects");
+    let profile =
+        kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_profile_v2(kaspa_consensus_core::palw_qwen25_profile::QWEN25_1_5B_A16)
+            .expect("graph-v2 A16 profile projects");
     let digest = artifact.artifact_digest();
     let inventory = misaka_palw_base0::inventory::a16_inventory_v1(&artifact, &profile).expect("inventory builds").root();
     println!("file            {path}");
@@ -37,10 +36,9 @@ fn print_a16_root_forms() {
 /// and the ignored probe is how a human checks the value against the file.
 #[test]
 fn the_shipped_a16_row_registers_the_inventory_root_form() {
-    let profile = kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_profile_v2(
-        kaspa_consensus_core::palw_qwen25_profile::QWEN25_1_5B_A16,
-    )
-    .expect("graph-v2 A16 profile projects");
+    let profile =
+        kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_profile_v2(kaspa_consensus_core::palw_qwen25_profile::QWEN25_1_5B_A16)
+            .expect("graph-v2 A16 profile projects");
     assert_eq!(
         profile.state_chunk_map_id,
         kaspa_consensus_core::palw_state_chunk_map::integer_kv_state_chunk_map_id_v2(),

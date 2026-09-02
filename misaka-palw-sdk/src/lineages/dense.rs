@@ -194,10 +194,8 @@ impl PalwModelLineageV1 for DenseLineageV1 {
             .filter(|c| matches!(c.source, ArtifactSourceV1::ConvertedA16))
             .find(|c| c.class_id() == class_id)
         {
-            if let Some(artifact) = holdings
-                .iter()
-                .filter_map(artifact_of)
-                .find(|a| entry.artifact_root(a).is_ok_and(|root| root == artifact_root))
+            if let Some(artifact) =
+                holdings.iter().filter_map(artifact_of).find(|a| entry.artifact_root(a).is_ok_and(|root| root == artifact_root))
             {
                 return Some(Ok(Box::new(
                     misaka_palw_base0::qwen25_a16_backend::Qwen25A16Backend::new(
