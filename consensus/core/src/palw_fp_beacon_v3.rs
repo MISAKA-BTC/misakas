@@ -540,4 +540,56 @@ mod tests {
             );
         }
     }
+
+    /// **The fold and the fence, together — the one place neither amendment was tested.**
+    ///
+    /// ADR-0073 SA-1 (the ring folds `k` attempt blocks) and ADR-0072 SA-3/SA-4 (an attempt block
+    /// is attempt-class on EITHER side of the activation) were written by two lanes, for two
+    /// reasons, over the same walk. Each lane's own tests hold: the fold cases all run on one algo
+    /// id, and the fence cases all run at `k = 1`, which is the fold's IDENTITY and therefore
+    /// asserts nothing about folding. Their confluence — a fold whose `k` blocks straddle the
+    /// fence — belonged to neither, and it is the only shape a live network actually produces:
+    /// a chain re-minted onto the execution-priced lane keeps its pre-fence history forever.
+    ///
+    /// Taking either amendment alone loses a network here, which is why this is an assertion and
+    /// not a comment:
+    ///
+    /// * the ring with an EXACT id comparison collects only the post-fence blocks, so a slot whose
+    ///   `k`-th block is below the fence never completes — `NoBeaconYet` for the rest of the
+    ///   chain's life, and every ADR-0044 receipt spend after it is undrawable;
+    /// * the predicate without the ring answers with the first block alone, which is the pre-SA-1
+    ///   rule wearing the amendment's name.
+    #[test]
+    fn a_fold_whose_blocks_straddle_the_fence_is_still_a_fold() {
+        const EXEC: u8 = crate::pow_layer0::POW_ALGO_ID_PALW_EXEC_V3;
+        // Slot 100, fence somewhere in (105, 120]: 130 and 120 are post-fence attempt blocks,
+        // 105 is a pre-fence one, and 95 is the predecessor witness below the slot.
+        let straddling = chain(&[(130, EXEC), (125, RECEIPT), (120, EXEC), (105, ATTEMPT), (95, ATTEMPT)]);
+        let fact = derive_beacon_fact_v3(100, ATTEMPT, K3, straddling).unwrap();
+
+        // All three attempt blocks joined the fold, in ascending chain order, and the draw is
+        // determined at the k-th — the same answer the same chain gives with one id throughout.
+        assert_eq!(fact.beacon_block, fp_beacon_fold_v3(&[h64(105), h64(120), h64(130)]));
+        assert_eq!((fact.beacon_daa, fact.prev_attempt_daa), (130, 95));
+        assert_eq!(
+            fact,
+            derive_beacon_fact_v3(100, ATTEMPT, K3, chain(&[(130, ATTEMPT), (125, RECEIPT), (120, ATTEMPT), (105, ATTEMPT), (95, ATTEMPT)]))
+                .unwrap(),
+            "the fence changed the ANSWER, not just which ids the walk recognises"
+        );
+        validate_beacon_fact_v3(100, &fact).expect("what the chain derived, the validator accepts");
+
+        // And the failure the union prevents, stated as its own case: with only two blocks above
+        // the slot once the pre-fence one is excluded, an exact-comparison walk would report a
+        // short fold. The union reports a complete one.
+        let two_above = chain(&[(130, EXEC), (120, EXEC), (105, ATTEMPT), (95, ATTEMPT)]);
+        assert_eq!(derive_beacon_fact_v3(100, ATTEMPT, K3, two_above).unwrap().beacon_daa, 130);
+
+        // The fold still refuses to complete when the chain genuinely lacks `k` attempt blocks,
+        // on either lane — the predicate widens what counts, never how many are needed.
+        assert_eq!(
+            derive_beacon_fact_v3(100, ATTEMPT, K3, chain(&[(130, EXEC), (120, RECEIPT), (95, ATTEMPT)])).unwrap_err(),
+            PalwBeaconDeriveV3Error::NoBeaconYet { slot: 100, needed: 3, found: 1 }
+        );
+    }
 }
