@@ -1172,6 +1172,14 @@ pub fn evm_v1_deadline_secs(job: &EvmJob) -> u64 {
 /// Where the runner is: the operator's answer first, then beside this binary, then one directory
 /// up (a `target/debug/deps/` test binary is a sibling of the very tree that built the runner).
 /// There is no fourth candidate and no fallback: an absent runner refuses the derivation.
+///
+/// **The refusal below names the BUILD STEP before it names the missing file, on purpose.** The
+/// commonest way to meet it is not a broken deployment but `cargo test -p misaka-palw-derive
+/// --lib`, which builds no binaries and so fails seven tests in this module at once. A reader who
+/// meets seven reds in a confinement path, under a message that reads as "a file is missing", is a
+/// reader being invited to restore the in-process EVM fallback — and that fallback is the exact
+/// thing SA-1 exists to forbid. A safety gate whose failure mode reads as a broken build is a gate
+/// that gets removed, so the message says which recipe to run first and what the gate is second.
 pub fn locate_runner() -> Result<PathBuf, DeriveError> {
     if let Some(named) = std::env::var_os(RUNNER_PATH_ENV) {
         let path = PathBuf::from(named);
@@ -1196,9 +1204,13 @@ pub fn locate_runner() -> Result<PathBuf, DeriveError> {
     }
     let looked: Vec<String> = candidates.iter().map(|c| c.display().to_string()).collect();
     Err(transformer(format!(
-        "{RUNNER_BIN_NAME} is not beside this binary (looked at {}). ADR-0078 SA-1: model-written initcode runs in a \
-         separate confined process, so `code`/`contract` refuse rather than fall back in-process — ship \
-         {RUNNER_BIN_NAME} next to the binary that derives, or name it with {RUNNER_PATH_ENV}",
+        "{RUNNER_BIN_NAME} was not built, or was not shipped beside the binary that derives (looked at {}). \
+         IN A TEST RUN this almost always means the crate's binaries were not built: run \
+         `cargo test -p misaka-palw-derive` WITHOUT `--lib`, because `--lib` builds no binaries and every EVM test \
+         then fails here. Those failures are this gate HOLDING, not a broken build, and the fix is never to restore \
+         an in-process fallback. IN A DEPLOYMENT, ship {RUNNER_BIN_NAME} next to the binary that derives, or name it \
+         with {RUNNER_PATH_ENV}. ADR-0078 SA-1: model-written initcode runs in a separate confined process, so \
+         `code`/`contract` refuse rather than fall back in-process.",
         looked.join(", ")
     )))
 }
@@ -1809,8 +1821,16 @@ pub fn sha256(data: &[u8]) -> [u8; 32] {
 /// **These tests spawn `palw-evm-runner`** — ADR-0078 SA-1 means there is no in-process path for
 /// a `code` or `contract` derivation, in a test any more than in a gateway. Run them as
 /// `cargo test -p misaka-palw-derive`, which builds the crate's binaries. `cargo test
-/// -p misaka-palw-derive --lib` does NOT build binaries, and every EVM test then fails with the
-/// runner's absence message: that is the gate holding, not a broken test.
+/// -p misaka-palw-derive --lib` does NOT build binaries, and SEVEN tests in this module then fail
+/// with [`locate_runner`]'s message: that is the gate holding, not a broken test.
+///
+/// The count is written down because seven simultaneous reds in a confinement path is what a
+/// reader meets, and a reader who cannot match what they see to a sentence goes looking for the
+/// fallback SA-1 removed. It is also why the failure is worse than it looks on a WARM `target/`:
+/// once `palw-evm-runner` has been built by any earlier run, `--lib` finds it one directory up
+/// and passes, so the seven reds appear only on a clean tree — an intermittent failure in the one
+/// place intermittency must not be tolerated. `cargo nextest run` (what CI runs) builds binaries
+/// and is unaffected.
 #[cfg(test)]
 mod tests {
     use super::*;

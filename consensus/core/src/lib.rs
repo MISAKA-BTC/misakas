@@ -173,6 +173,11 @@ pub mod palw_chain_weight;
 pub mod palw_class_admission_v2;
 pub mod palw_class_daa;
 pub mod palw_context_ladder;
+/// ADR-0077 SA-4: the court's turn deadline is a slashing rule, so it is DERIVED from what an
+/// honest responder needs — one interval of replay plus `2 x NETWORK_DELAY_BOUND` — and every
+/// shipped class row of every preset that carries a V2 bundle is asserted against it. Changes no
+/// shipped constant; it relates two numbers that had never appeared in one expression.
+pub mod palw_court_deadline;
 pub mod palw_court_v2;
 /// MISAKA PALW class registration (B12): the object every "pinned at registration" sentence
 /// across ADR-0026…0033 meant — measured identities, the derived credited ceiling, windows,
