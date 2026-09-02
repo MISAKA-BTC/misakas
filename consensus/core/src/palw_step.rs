@@ -871,6 +871,22 @@ pub fn kv_aux_leaf_count(profile: &PalwShapeProfileV3, context: &PalwJobContextV
 /// a class whose TYPICAL job fits the ladder while its longest does not is admitting a class an
 /// attacker chooses the job length for.
 pub fn worst_case_step_leaf_count_v1(profile: &PalwShapeProfileV3) -> Result<u64, PalwStepError> {
+    worst_case_step_leaf_count_capped_v1(profile, PALW_STEP_MAX_LEAVES)
+}
+
+/// [`worst_case_step_leaf_count_v1`] against a ladder top the CALLER states (ADR-0077 Decision 12).
+///
+/// The cap is the ruleset's, not this module's: `PalwCourtParamsV2::max_step_leaf_count` is what a
+/// network actually froze, and [`PALW_STEP_MAX_LEAVES`] is the value every shipped preset froze it
+/// at. Splitting them changes nothing for a caller that passes the constant — `worst_case_step_leaf_count_v1`
+/// is exactly that caller and stays byte-identical — and it is what lets a FENCED ruleset ask the
+/// same question against a deeper ladder without a second enumeration to keep in step.
+///
+/// The cap bounds the ANSWER, and the enumeration's own work bound ([`PALW_STEP_MAX_ENUMERATION`],
+/// checked by `validate_shape`) is unchanged and unaffected: raising the cap buys a registrant no
+/// longer walk to make a node perform, only a deeper tree, and every consumer of a leaf index
+/// already carries `u64`.
+pub fn worst_case_step_leaf_count_capped_v1(profile: &PalwShapeProfileV3, cap: u64) -> Result<u64, PalwStepError> {
     // **Validate BEFORE enumerating.** This walk is driven by `n_ctx` and `layer_count`, so a
     // shape that has not been bounded yet decides how long it runs. `step_leaf_count` has always
     // validated first; this sibling did not, and it is the one an unadmitted class reaches.
@@ -881,14 +897,14 @@ pub fn worst_case_step_leaf_count_v1(profile: &PalwShapeProfileV3) -> Result<u64
         total = total.saturating_add(leaves_per_position(profile, p + 1, p + 1 == prefill as u64));
         // Inside the loop, not after it: a cap tested at the end is an answer bound that has
         // already paid the whole cost of the answer.
-        if total > PALW_STEP_MAX_LEAVES {
-            return Err(PalwStepError::TooManyLeaves { got: total, max: PALW_STEP_MAX_LEAVES });
+        if total > cap {
+            return Err(PalwStepError::TooManyLeaves { got: total, max: cap });
         }
     }
     // One decode call at the far end of the context, matching `step_leaf_count`'s own enumeration.
     total = total.saturating_add(leaves_per_position(profile, prefill as u64 + 1, true));
-    if total > PALW_STEP_MAX_LEAVES {
-        return Err(PalwStepError::TooManyLeaves { got: total, max: PALW_STEP_MAX_LEAVES });
+    if total > cap {
+        return Err(PalwStepError::TooManyLeaves { got: total, max: cap });
     }
     Ok(total)
 }
@@ -896,6 +912,18 @@ pub fn worst_case_step_leaf_count_v1(profile: &PalwShapeProfileV3) -> Result<u64
 /// Total step-leg leaves for `(profile, context)`: the main enumeration then the aux series.
 /// Errors when the job shape exceeds the cap.
 pub fn step_leaf_count(profile: &PalwShapeProfileV3, context: &PalwJobContextV2) -> Result<u64, PalwStepError> {
+    step_leaf_count_capped_v1(profile, context, PALW_STEP_MAX_LEAVES)
+}
+
+/// [`step_leaf_count`] against a ladder top the CALLER states — the job-shaped twin of
+/// [`worst_case_step_leaf_count_capped_v1`], and it exists for the same reason: the canonical job
+/// of a fenced row is counted against the fenced ladder, and one enumeration must answer both
+/// questions or the two drift.
+pub fn step_leaf_count_capped_v1(
+    profile: &PalwShapeProfileV3,
+    context: &PalwJobContextV2,
+    cap: u64,
+) -> Result<u64, PalwStepError> {
     profile.validate_shape()?;
     let prefill = context.declared_prefill_tokens as u64;
     let decode_calls = context.exact_decode_tokens.saturating_sub(1) as u64;
@@ -903,20 +931,20 @@ pub fn step_leaf_count(profile: &PalwShapeProfileV3, context: &PalwJobContextV2)
     // Prefill call: per position p, kv_len = p+1; logits only at the last position.
     for p in 0..prefill {
         total = total.saturating_add(leaves_per_position(profile, p + 1, p + 1 == prefill));
-        if total > PALW_STEP_MAX_LEAVES {
-            return Err(PalwStepError::TooManyLeaves { got: total, max: PALW_STEP_MAX_LEAVES });
+        if total > cap {
+            return Err(PalwStepError::TooManyLeaves { got: total, max: cap });
         }
     }
     // Decode calls c = 1..=decode_calls: kv_len = prefill + c, logits always.
     for c in 1..=decode_calls {
         total = total.saturating_add(leaves_per_position(profile, prefill + c, true));
-        if total > PALW_STEP_MAX_LEAVES {
-            return Err(PalwStepError::TooManyLeaves { got: total, max: PALW_STEP_MAX_LEAVES });
+        if total > cap {
+            return Err(PalwStepError::TooManyLeaves { got: total, max: cap });
         }
     }
     total += kv_aux_leaf_count(profile, context);
-    if total > PALW_STEP_MAX_LEAVES {
-        return Err(PalwStepError::TooManyLeaves { got: total, max: PALW_STEP_MAX_LEAVES });
+    if total > cap {
+        return Err(PalwStepError::TooManyLeaves { got: total, max: cap });
     }
     Ok(total)
 }

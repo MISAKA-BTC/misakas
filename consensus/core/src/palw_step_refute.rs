@@ -308,7 +308,7 @@ enum Qwen36Op {
 
 /// The class's `ggml_vec_dot_f32` lane structure (simd-mappings.h, read verbatim).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DotStructure {
+pub(crate) enum DotStructure {
     /// NEON: STEP 16, 4 accumulators × 4 lanes; reduce x0+=x2, x1+=x3, x0+=x1, then the
     /// pairwise `vaddvq` ((l0+l1)+(l2+l3)).
     Step16Epr4,
@@ -4046,6 +4046,118 @@ fn gdn_core_genesis_replay(
         }
     }
     Ok(out_row)
+}
+
+/// What an anchored recurrence replay leaves behind: the challenged row, and the state a LATER
+/// checkpoint would commit.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwGdnReplayOutcomeV1 {
+    /// The output row at the last replayed position — the value under dispute.
+    pub out_row: Vec<u32>,
+    /// The recurrence state after every replayed position, head-major, in the fused kernel's own
+    /// transposed layout (`state[h][j * k_dim + i] = S[i][j]`).
+    pub state: Vec<Vec<u32>>,
+}
+
+/// **[`gdn_core_genesis_replay`]'s checkpoint-anchored twin** (ADR-0077 Decision 10).
+///
+/// The genesis form starts from a zero state and walks every position from the sequence start,
+/// which is what makes the recurrence's replay `O(n_ctx)` and therefore what bounds the hybrid's
+/// context at eight. This form starts from a state a verified checkpoint supplied and walks only
+/// the positions after it — at most one `checkpoint_interval` under Decision 11 — which is the
+/// whole of the widening.
+///
+/// **Why it is a second function and not a parameter on the first.** The equivalence between the
+/// two routes is the INVARIANT (ADR-0077 W2: "the anchored refutation and the long form reach the
+/// same verdict on honest material"), and an invariant asserted between two spellings of one
+/// implementation asserts nothing. The shipped genesis arm is untouched, byte for byte, and
+/// `the_anchored_recurrence_replay_agrees_with_the_long_form` sweeps the two against each other at
+/// every split point rather than at one — because "it agreed at the split I tried" is the shape of
+/// claim this tree has watched go stale.
+///
+/// `anchor` is `None` for the genesis start (an all-zero state, the value the long form begins
+/// with) and `Some(state)` for a replay that stands on a checkpoint. Every guard is the genesis
+/// arm's, restated rather than referenced, because they are facts about what THIS arithmetic can
+/// serve; an anchor whose shape is not the profile's is `InputSetNotCanonical`, never a panic.
+pub(crate) fn gdn_core_anchored_replay_v1(
+    profile: &PalwShapeProfileV3,
+    anchor: Option<&[Vec<u32>]>,
+    inputs: &[Vec<u32>],
+    dot: DotStructure,
+) -> Result<PalwGdnReplayOutcomeV1, PalwStepRefuteError> {
+    let heads = profile.gdn_heads as usize;
+    let kd = profile.gdn_head_k_dim as usize;
+    let vd = profile.gdn_head_v_dim as usize;
+    let step = match dot {
+        DotStructure::Step16Epr4 => 16,
+        DotStructure::Step32Epr8 => 32,
+    };
+    if kd == 0 || vd == 0 || heads == 0 || !kd.is_multiple_of(step) {
+        return Err(PalwStepRefuteError::Unadjudicable);
+    }
+    if kd > PALW_GDN_MAX_DIM
+        || vd > PALW_GDN_MAX_DIM
+        || heads > PALW_GDN_MAX_DIM
+        || kd.checked_mul(vd).and_then(|n| n.checked_mul(heads)).is_none_or(|n| n > PALW_GDN_MAX_STATE_WORDS)
+    {
+        return Err(PalwStepRefuteError::Unadjudicable);
+    }
+    if !inputs.len().is_multiple_of(5) || inputs.is_empty() {
+        return Err(PalwStepRefuteError::InputSetNotCanonical("gdn expects 5 input rows per position"));
+    }
+    // **The anchor is checked before it is read.** It arrives from a checkpoint chunk a challenger
+    // carried; a short or mis-shaped one is a refusal of the EVIDENCE, and reading it would be an
+    // out-of-bounds index inside block validation.
+    let mut state = match anchor {
+        None => vec![vec![0u32; kd * vd]; heads],
+        Some(rows) => {
+            if rows.len() != heads || rows.iter().any(|r| r.len() != kd * vd) {
+                return Err(PalwStepRefuteError::InputSetNotCanonical("the carried recurrence anchor is not this profile's state"));
+            }
+            rows.to_vec()
+        }
+    };
+    let positions = inputs.len() / 5;
+    let scale = ref_div_v2(ONE_F32, ref_sqrt_v2(i32_len_to_f32_bits(kd as u32)));
+    let mut out_row = vec![0u32; heads * vd];
+    for t in 0..positions {
+        let q_row = &inputs[5 * t];
+        let k_row = &inputs[5 * t + 1];
+        let v_row = &inputs[5 * t + 2];
+        let g_row = &inputs[5 * t + 3];
+        let b_row = &inputs[5 * t + 4];
+        if q_row.len() != heads * kd || k_row.len() != heads * kd || v_row.len() != heads * vd {
+            return Err(PalwStepRefuteError::InputSetNotCanonical("gdn q/k/v row lengths"));
+        }
+        if g_row.len() != heads || b_row.len() != heads {
+            return Err(PalwStepRefuteError::InputSetNotCanonical("gdn gate row lengths"));
+        }
+        for h in 0..heads {
+            let q = &q_row[h * kd..(h + 1) * kd];
+            let k = &k_row[h * kd..(h + 1) * kd];
+            let v = &v_row[h * vd..(h + 1) * vd];
+            let decay = glibc_expf_v1(g_row[h], true);
+            let beta = b_row[h];
+            let s = &mut state[h];
+            for slot in s.iter_mut() {
+                *slot = ref_mul_v1(*slot, decay);
+            }
+            for j in 0..vd {
+                let sum = vec_dot_f32(&s[j * kd..(j + 1) * kd], k, dot);
+                let delta = ref_mul_v1(ref_sub_v1(v[j], sum), beta);
+                for i in 0..kd {
+                    s[j * kd + i] = ref_fma_v2(k[i], delta, s[j * kd + i]);
+                }
+            }
+            if t == positions - 1 {
+                for j in 0..vd {
+                    let sum = vec_dot_f32(&s[j * kd..(j + 1) * kd], q, dot);
+                    out_row[h * vd + j] = ref_mul_v1(sum, scale);
+                }
+            }
+        }
+    }
+    Ok(PalwGdnReplayOutcomeV1 { out_row, state })
 }
 
 fn i32_len_to_f32_bits(n: u32) -> u32 {

@@ -97,6 +97,61 @@ pub fn integer_kv_state_geometry_v2(
     Ok(geometry)
 }
 
+/// **The RECURRENCE's map: a state, not a history** (ADR-0077 Decision 10).
+///
+/// The two integer-KV maps above chunk the *cache*, and a cache is the whole history: at position
+/// `p` it holds `p` rows, so an anchor over it costs `O(p)` bytes however it is chunked. That is
+/// not a defect of the map — attention genuinely reads every prior key — and it is exactly why
+/// ADR-0077 Decision 11 does not make an attention class's close flat in `n_ctx`.
+///
+/// A `GatedDeltaNet` layer is the other kind. Its replay state is one `k_dim × v_dim` matrix per
+/// head plus the convolution's window, and its size does not depend on how many positions have
+/// been folded into it. So a checkpoint over the recurrence is a genuine SUMMARY, the anchored
+/// replay after it is `interval` positions of arithmetic, and both are constant in the context —
+/// which is the half of Decision 11 that actually buys a wider row.
+///
+/// The name spells every degree of freedom the layout has, exactly as its two siblings do, because
+/// the string is the preimage of the id and a reader who disagrees with any clause is describing a
+/// different map and must mint a different id. `state` is the fused kernel's own transposed buffer
+/// (`state[h][j*kd + i] = S[i][j]`, `gdn_core_genesis_replay`'s layout), and `conv` is the
+/// `gdn_conv_kernel`-deep window of `k_dim` lanes the `SsmConv` step reads.
+pub const PALW_GDN_STATE_CHUNK_MAP_NAME_V1: &str = "palw-gdn-recurrence/f32-le/head-major/state[h][j*k_dim+i]-then-conv[h][t*k_dim+i]/\
+     row=gdn_head_k_dim*gdn_head_v_dim*4+gdn_head_k_dim*gdn_conv_kernel*4/chunk=one-head/v1";
+
+/// `state_chunk_map_id` for a class whose recurrence checkpoints its own state.
+///
+/// A class that adopts it is a DIFFERENT class from one that does not — `state_chunk_map_id` is a
+/// field of `PalwShapeProfileV3` and the shape profile id IS the class id — so this registers no
+/// map on any shipped row and repairs none of them. That is the decision it makes available, not
+/// one it makes.
+pub fn gdn_state_chunk_map_id_v1() -> Hash64 {
+    state_chunk_map_id_v1(PALW_GDN_STATE_CHUNK_MAP_NAME_V1)
+}
+
+/// **What ONE row of the recurrence map costs, in bytes** — the figure ADR-0077 Decision 11 prices
+/// a checkpoint-chunk opening at, and the figure that decides whether a hybrid row registers.
+///
+/// One HEAD, not all of them, because the court's recurrence arm is head-sliced: the refutation
+/// replays one head's `k_dim × v_dim` state (`KDESC_Q36_GDN_STEP`), so one head's state plus its
+/// conv window is what a chunk has to carry. Four bytes an element: the state the adjudicator
+/// holds is `u32` f32 bit patterns, and describing it as anything narrower is the defect
+/// `PALW_INTEGER_KV_STATE_CHUNK_MAP_NAME_V2` was minted to correct.
+///
+/// `None` when the profile declares no recurrence, or when one head's state does not fit a single
+/// chunk — a class that needs a split row needs a different map, with a different id.
+pub fn gdn_state_row_bytes_v1(profile: &PalwShapeProfileV3) -> Option<u64> {
+    let k = profile.gdn_head_k_dim as u64;
+    let v = profile.gdn_head_v_dim as u64;
+    let conv = profile.gdn_conv_kernel as u64;
+    if profile.gdn_heads == 0 || k == 0 || v == 0 {
+        return None;
+    }
+    let state = k.checked_mul(v)?.checked_mul(4)?;
+    let window = k.checked_mul(conv)?.checked_mul(4)?;
+    let row = state.checked_add(window)?;
+    (row <= PALW_STEP_LEG_MAX_STATE_CHUNK_BYTES as u64).then_some(row)
+}
+
 /// The registration preimage of the integer family's `state_layout_id`.
 ///
 /// The map's companion. `PalwCheckpointProfileV1` carries a `state_layout_id` inside its
