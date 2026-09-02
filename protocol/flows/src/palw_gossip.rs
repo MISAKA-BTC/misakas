@@ -65,6 +65,12 @@ pub enum PalwGossipEvent {
     /// One seat's signed receipt, as broadcast. Unverified bytes — the quorum validator is the
     /// authority on whether they mean anything.
     Receipt { bytes: Vec<u8> },
+    /// **One checkpoint interval's opening, served to THIS node because it asked** (ADR-0077
+    /// Decision 8). Unverified bytes: the seat binds them to the claim's roots and replays the
+    /// interval before believing anything in them. This layer only checked that the node asked for
+    /// exactly this `(claim, interval_index)`, bounded the size before any decode, and
+    /// deduplicated.
+    IntervalOpening { claim: Hash64, interval_index: u32, bytes: Vec<u8> },
 }
 
 /// The verdict [`PalwGossipCenter::admit_material`]/[`admit_receipt`](PalwGossipCenter::admit_receipt)
@@ -79,6 +85,11 @@ pub enum PalwGossipAdmit {
     /// honestly outgrow our cap, and a bigger-material network is one this binary just does not
     /// relay for.
     TooBig,
+    /// An interval opening this node never asked for (ADR-0077 Decision 8). The lane is
+    /// asker-specific by design: an opening is bytes exactly one peer wanted, so one that arrives
+    /// unasked is a stale answer to an expired pull or a stranger filling a queue. Dropped, and
+    /// never relayed — there is nobody to relay it to.
+    Unsolicited,
 }
 
 pub struct PalwGossipCenter {
@@ -113,6 +124,10 @@ pub struct PalwGossipCenter {
     outstanding_pulls: Mutex<HashMap<Hash64, std::time::Instant>>,
     /// How many bytes this node has emitted answering pulls in the current window.
     serve_budget: Mutex<ServeBudget>,
+    /// **The interval lane's whole state** (ADR-0077 Decision 8) — one field rather than six, so
+    /// that the lane's bookkeeping can be read, reviewed and changed without touching the
+    /// material lane's. See [`PalwOpeningLane`].
+    openings: PalwOpeningLane,
 }
 
 struct ServeBudget {
@@ -147,6 +162,17 @@ const SERVE_THROTTLE: std::time::Duration = std::time::Duration::from_secs(10);
 const PULL_SOLICITED_TTL: std::time::Duration = std::time::Duration::from_secs(120);
 /// Never track more outstanding pulls than a panel could plausibly have open at once.
 const OUTSTANDING_PULL_CAP: usize = 512;
+
+/// **The serve throttle is a courtesy, and it must not become the cost centre.**
+///
+/// `served_recently` is keyed by a claim id taken straight off the wire — no on-chain existence
+/// check, no signature, no per-peer request rate — and the window sweep used to walk the WHOLE map
+/// on every request, under a `std::sync::Mutex` held from an async task. A peer sending a fresh
+/// random claim id per ~70-byte request therefore bought one entry and one full walk each time:
+/// unbounded memory and quadratic CPU inside a lock every runtime worker can block on. The sibling
+/// map `outstanding_pulls`, which only this node writes, was already capped; the peer-written one
+/// was not.
+const SERVED_RECENTLY_CAP: usize = 4096;
 /// **A ceiling on the solicited exemption, and a floor of slots one peer cannot take** (audit3 H7).
 ///
 /// The exemption existed so four cheap payloads from a stranger could not make the honest answer
@@ -205,6 +231,7 @@ impl Default for PalwGossipCenter {
                 bytes_served: 0,
                 per_peer: HashMap::new(),
             }),
+            openings: PalwOpeningLane::default(),
         }
     }
 }
@@ -274,7 +301,17 @@ impl PalwGossipCenter {
         {
             let mut served = self.served_recently.lock().unwrap();
             let now = std::time::Instant::now();
-            served.retain(|_, at| now.duration_since(*at) < std::time::Duration::from_secs(60));
+            // Amortised, and bounded: sweep only when the map is at its cap, and if the sweep does
+            // not get it under the cap — every entry still inside its window — drop the whole map.
+            // Losing the throttle for a moment lets a claim be served sooner than it might have
+            // been; keeping an unbounded map lets a stranger decide how much memory this node uses
+            // and how long every other peer waits for the lock.
+            if served.len() >= SERVED_RECENTLY_CAP {
+                served.retain(|_, at| now.duration_since(*at) < std::time::Duration::from_secs(60));
+                if served.len() >= SERVED_RECENTLY_CAP {
+                    served.clear();
+                }
+            }
             if let Some(at) = served.get(&claim)
                 && now.duration_since(*at) < SERVE_THROTTLE
             {
@@ -357,6 +394,31 @@ impl PalwGossipCenter {
         pulls.get(&claim).is_some_and(|at| std::time::Instant::now().duration_since(*at) < PULL_SOLICITED_TTL)
     }
 
+    /// Undo an [`Self::admit_digest`] whose payload never reached the consumer, giving back the
+    /// per-claim and per-peer slots with it so neither map outlives the FIFO that feeds it — the
+    /// same bookkeeping the FIFO's own eviction does, in the other direction.
+    fn forget_digest(&self, digest: u64) {
+        let mut state = self.state.lock().unwrap();
+        if !state.seen.remove(&digest) {
+            return;
+        }
+        let Some(position) = state.seen_order.iter().position(|(seen, _)| *seen == digest) else { return };
+        let Some((_, material)) = state.seen_order.remove(position) else { return };
+        let Some((peer, claim)) = material else { return };
+        if let Some(count) = state.materials_per_claim.get_mut(&claim) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                state.materials_per_claim.remove(&claim);
+            }
+        }
+        if let Some(count) = state.materials_per_peer_claim.get_mut(&(peer, claim)) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                state.materials_per_peer_claim.remove(&(peer, claim));
+            }
+        }
+    }
+
     fn admit_digest(&self, digest: u64, material: Option<(PeerKey, Hash64)>, solicited: bool) -> PalwGossipAdmit {
         let mut state = self.state.lock().unwrap();
         if state.seen.contains(&digest) {
@@ -420,10 +482,22 @@ impl PalwGossipCenter {
         if bytes.len() > PALW_MATERIAL_MAX_BYTES {
             return PalwGossipAdmit::TooBig;
         }
-        let verdict = self.admit_digest(self.digest(1, Some(&claim), bytes), Some((peer, claim)), self.is_solicited(claim));
+        let digest = self.digest(1, Some(&claim), bytes);
+        let verdict = self.admit_digest(digest, Some((peer, claim)), self.is_solicited(claim));
         // Drop-on-full: a node with no consumer is not obliged to remember.
         if verdict == PalwGossipAdmit::Fresh && self.has_consumer() {
-            let _ = self.inbox_tx.try_send(PalwGossipEvent::Material { claim, bytes: bytes.to_vec() });
+            // **A payload the inbox refused must not leave its digest marked seen.** The digest is
+            // recorded before the bytes are offered, because the verdict is what the caller relays
+            // on — and `try_send` on a full inbox drops the newest, not the oldest. So a single
+            // burst (or a slow tick) used to make this node permanently blind to that claim: the
+            // pull built for exactly this case re-fetches the same bytes, they hash to the same
+            // digest, and `admit_digest` answers `Duplicate` for the next `SEEN_CAP` messages. The
+            // seat then holds no material, signs `Unavailable` at the half-window, and an honest
+            // producer is defaulted by a quorum.
+            if self.inbox_tx.try_send(PalwGossipEvent::Material { claim, bytes: bytes.to_vec() }).is_err() {
+                self.forget_digest(digest);
+                return PalwGossipAdmit::Duplicate;
+            }
         }
         verdict
     }
@@ -461,6 +535,518 @@ impl PalwGossipCenter {
 
     pub fn mark_own_receipt(&self, bytes: &[u8]) {
         let _ = self.admit_digest(self.digest(2, None, bytes), None, true);
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The interval lane (ADR-0077 Decision 8, SA-2; ADR-0079 Decision 4's DA-opening-server row, SA-3)
+// ---------------------------------------------------------------------------------------------
+
+/// **Hard cap on one checkpoint-interval opening** (ADR-0077 Decision 8, invariant W10).
+///
+/// An opening is `O(interval × row + log₂ leaves)` by construction — the checkpoint chunk at the
+/// interval's start, the committed rows of one interval, the ids it consumed and produced, and the
+/// Merkle paths that bind them — so it is bounded by the class's checkpoint geometry and never by
+/// `decode_tokens_executed`. A quarter of the whole-capture cap: the point of the lane is that a
+/// seat fetches a bounded slice, and an "opening" the size of the capture would be the old
+/// transport under a new name. The same rule as `PALW_MATERIAL_MAX_BYTES` applies in the other
+/// direction — a transport cap must never overrule an admission the consensus accepted — so a
+/// family whose widest registered row opens larger than this raises it HERE, before the class is
+/// registered. The seat applies its own, tighter, per-class ceiling on top
+/// (`palw_fp_interval_opening_ceiling_v1`); this is the transport's backstop.
+pub const PALW_INTERVAL_OPENING_MAX_BYTES: usize = 4 << 20;
+/// Distinct opening payloads admitted per solicited `(claim, interval)`. The honest executor needs
+/// one; a forger who knows a live claim id and guesses a drawn index can make this seat attempt at
+/// most this many replays before the slot is full.
+pub const PALW_OPENINGS_PER_INTERVAL: usize = 4;
+/// No single peer may take more than a couple of an interval's slots — the audit3 H7 rule,
+/// carried: with four slots and a per-peer ceiling of two there is always room for the executor's
+/// answer however fast a flooder sends.
+pub const PALW_OPENINGS_PER_PEER_PER_INTERVAL: usize = 2;
+/// How long one `(peer, claim, interval)` stays un-servable after a serve is ATTEMPTED for it. A
+/// seat re-asks on a 25-DAA cadence (~50 minutes at the frozen 120 s cadence), so anything inside
+/// this window is a loop and not a seat.
+const INTERVAL_SERVE_THROTTLE: std::time::Duration = std::time::Duration::from_secs(10);
+/// The per-BOND request rate (ADR-0077 SA-2's "rate-limited per bond"). A seat draws
+/// `PALW_FP_SEAT_INTERVAL_SAMPLES_V1` = 4 intervals per claim it is seated on and re-asks on a
+/// 25-DAA throttle, and a challenger opens one claim at a time, so this is far above any honest
+/// need over a minute and far below what a request loop conjures. Charged only to a requester the
+/// authorizer already mapped to a bond, so an unbonded flooder never reaches it.
+const OPENING_REQUESTS_PER_BOND_PER_WINDOW: u32 = 128;
+/// The rate map's own bound. Entries are bonds — each one collateral somebody posted — and the map
+/// is cleared with the window, so this only bites when more distinct bonds ask in one minute than
+/// any live panel has seats. Refusing beyond it is the fail-closed side of a choice that has no
+/// safe fail-open side: a map keyed by anything unbounded is memory a stranger sizes.
+const OPENING_RATE_BONDS_CAP: usize = 4_096;
+/// The per-PEER request rate that sits IN FRONT of the signature verification. Higher than the
+/// per-bond rate because one connection may legitimately carry several bonds' asks (an operator
+/// running two seats behind one node), and it is not the serving bound — it is the bound on how
+/// much lattice verification and chain reading one connection can buy.
+const OPENING_REQUESTS_PER_PEER_PER_WINDOW: u32 = 512;
+/// How far a request's `requested_daa` may sit from the server's own view before it is stale. A
+/// signature that never expired would be a permanent serving right the requester could sell or
+/// leak; this makes it a window. Checked by the authorizer, which is the only party here with a
+/// DAA view.
+pub const OPENING_REQUEST_FRESHNESS_DAA: u64 = 200;
+
+/// **An authenticated request for served data** (ADR-0077 SA-2, ADR-0079 SA-3): the interval lane
+/// and, since SA-2's last sentence, the whole-capture pull too.
+///
+/// Borrowed rather than owned because it is built from a decoded message and consumed inside one
+/// call — nothing here is stored, and the parts that ARE stored (the bond id, the claim) are
+/// copied out by the authorizer.
+#[derive(Clone, Copy, Debug)]
+pub struct PalwOpeningRequestV1<'a> {
+    pub claim: Hash64,
+    /// The interval asked for, or `None` for a whole-capture pull. It is part of the signed
+    /// message, so one signature cannot be replayed as a request for every interval of a claim.
+    pub interval_index: Option<u32>,
+    /// The requester's DAA score when it signed.
+    pub requested_daa: u64,
+    /// The requester's ML-DSA-87 public key. The bond is DERIVED from it on chain; a carried bond
+    /// key would be the requester's own claim about itself.
+    pub requester_pubkey: &'a [u8],
+    pub signature: &'a [u8],
+}
+
+/// Why a serve was refused — **by name**, because "the seat heard nothing" and "the seat was
+/// refused" are different facts and only one of them is the executor's fault. A refusal is
+/// returned to the caller and logged by the server; it is never sent to the requester, which would
+/// make the refusal itself an amplifier.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwServeRefusalV1 {
+    /// No key or no signature at all: a pre-SA-2 requester, or an amplifier probe.
+    Unsigned,
+    /// A key or signature that is not the shape ML-DSA-87 produces. Checked before ANY other work
+    /// — this is ADR-0079 Decision 4's `check_opening_request_shape`.
+    Malformed,
+    /// The signature does not verify under the carried key, or does not cover this request.
+    BadSignature,
+    /// The key verifies but the chain maps it to no bond that may ask: not a seat of this claim's
+    /// panel and not an Active bond.
+    NotBonded,
+    /// The signature is outside [`OPENING_REQUEST_FRESHNESS_DAA`] of the server's own view.
+    Stale,
+    /// This bond has spent its per-window request allowance.
+    RateLimited,
+    /// This peer asked for the same thing inside the throttle window.
+    Throttled,
+    /// The window's byte allowance for this peer, or for the node, is spent.
+    NoAllowance,
+    /// This node holds nothing it can open for that claim — the honest silence of a node that is
+    /// not the executor and never heard the capture.
+    NotHeld,
+    /// What the opener produced is larger than the transport would carry, so emitting it would
+    /// only spend this node's egress on bytes the far end drops.
+    Oversized,
+}
+
+impl PalwServeRefusalV1 {
+    /// A stable name for logs and tests. `Display` is deliberately not implemented: this string is
+    /// a wire-visible-ish operational fact, and a `Display` impl invites it into an error chain
+    /// where it would be reformatted.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Unsigned => "unsigned",
+            Self::Malformed => "malformed",
+            Self::BadSignature => "bad-signature",
+            Self::NotBonded => "not-bonded",
+            Self::Stale => "stale",
+            Self::RateLimited => "rate-limited",
+            Self::Throttled => "throttled",
+            Self::NoAllowance => "no-allowance",
+            Self::NotHeld => "not-held",
+            Self::Oversized => "oversized",
+        }
+    }
+}
+
+/// ML-DSA-87's public key and signature sizes, spelled here so the shape check needs no crypto
+/// dependency in the transport crate. Decision 4's row is explicit that the DA opening server
+/// "parses opening requests from any seat" and "holds the capture, read-only": the process that
+/// parses a stranger's bytes holds no key, so the verification itself belongs to the node's panel
+/// service, which does hold one, and reaches this layer as the registered authorizer.
+const MLDSA87_PUBKEY_BYTES: usize = 2_592;
+const MLDSA87_SIGNATURE_BYTES: usize = 4_627;
+
+/// **The cheapest gate, run before anything is read** (ADR-0079 Decision 4).
+///
+/// Length equality, not a bound: an ML-DSA-87 key is exactly one size and a signature is exactly
+/// one size, so anything else is not a request that could ever verify, and rejecting it here costs
+/// two comparisons instead of a chain read and a lattice verification.
+pub fn check_opening_request_shape(request: &PalwOpeningRequestV1<'_>) -> Result<(), PalwServeRefusalV1> {
+    if request.requester_pubkey.is_empty() || request.signature.is_empty() {
+        return Err(PalwServeRefusalV1::Unsigned);
+    }
+    if request.requester_pubkey.len() != MLDSA87_PUBKEY_BYTES || request.signature.len() != MLDSA87_SIGNATURE_BYTES {
+        return Err(PalwServeRefusalV1::Malformed);
+    }
+    Ok(())
+}
+
+/// What the node's panel service answers when asked "may this key be served, and as which bond?".
+///
+/// It returns the BOND, because that is the rate-limit key SA-2 names, and because a bond is the
+/// thing collateral was posted for — a pubkey is free to generate. `Err` names the refusal.
+pub type PalwOpeningAuthorizer = std::sync::Arc<dyn Fn(&PalwOpeningRequestV1<'_>) -> Result<Hash64, PalwServeRefusalV1> + Send + Sync>;
+
+/// One solicited interval's admitted payloads — the material lane's per-claim and
+/// per-peer-per-claim counts, keyed per interval.
+#[derive(Default)]
+struct OpeningSlots {
+    admitted: usize,
+    per_peer: HashMap<PeerKey, usize>,
+}
+
+struct OpeningRateWindow {
+    started: std::time::Instant,
+    per_bond: HashMap<Hash64, u32>,
+}
+
+/// The same window, keyed on the connection — see [`PalwGossipCenter::authorize_serve`] for why
+/// there are two.
+struct OpeningPeerRateWindow {
+    started: std::time::Instant,
+    per_peer: HashMap<PeerKey, u32>,
+}
+
+/// **Everything the interval lane owns.** Kept in one struct so the lane can be reviewed as a
+/// unit and so the material lane's bookkeeping is untouched by it.
+struct PalwOpeningLane {
+    /// **Who may be served** (SA-2) — registered by the node's panel service, the only party here
+    /// that holds a key and a chain view. `None` on a node that serves nothing, which then refuses
+    /// every request, signed or not: a node with no authorizer has no capture to open either.
+    authorizer: Mutex<Option<PalwOpeningAuthorizer>>,
+    /// **Where an opening comes from** — also the panel service, the party holding the retention
+    /// directory AND the family backends that can open a retained capture (`open_fp_interval`).
+    /// A closure rather than a file read because an opening is COMPUTED from the capture, not
+    /// copied out of it. Runs on a blocking thread with no lock held.
+    resolver: Mutex<Option<std::sync::Arc<dyn Fn(Hash64, u32) -> Option<Vec<u8>> + Send + Sync>>>,
+    /// Serve throttle, keyed by the ASKER as well as the interval: two seats of one panel
+    /// legitimately draw the same interval seconds apart, and a throttle keyed on the interval
+    /// alone would answer the first and silence the second. What must not repeat is one peer
+    /// asking for one interval in a loop, and that is what this keys on.
+    served_recently: Mutex<HashMap<(PeerKey, Hash64, u32), std::time::Instant>>,
+    /// The per-bond request rate (SA-2), cleared with its window.
+    rate: Mutex<OpeningRateWindow>,
+    /// The per-peer rate that bounds the verification work itself.
+    peer_rate: Mutex<OpeningPeerRateWindow>,
+    /// The `(claim, interval)` pairs this node has ASKED for and not yet heard, with the time it
+    /// asked — the only key an opening is admitted under. Bounded by TTL and by
+    /// [`OUTSTANDING_PULL_CAP`], and only this node's own requests ever write it.
+    outstanding: Mutex<HashMap<(Hash64, u32), std::time::Instant>>,
+    /// How many opening payloads each solicited interval has admitted, and from whom. Entries
+    /// exist only for solicited pairs and are swept with them, so the map is bounded by
+    /// [`OUTSTANDING_PULL_CAP`] by construction.
+    slots: Mutex<HashMap<(Hash64, u32), OpeningSlots>>,
+}
+
+impl Default for PalwOpeningLane {
+    fn default() -> Self {
+        Self {
+            authorizer: Mutex::new(None),
+            resolver: Mutex::new(None),
+            served_recently: Mutex::new(HashMap::new()),
+            rate: Mutex::new(OpeningRateWindow { started: std::time::Instant::now(), per_bond: HashMap::new() }),
+            peer_rate: Mutex::new(OpeningPeerRateWindow { started: std::time::Instant::now(), per_peer: HashMap::new() }),
+            outstanding: Mutex::new(HashMap::new()),
+            slots: Mutex::new(HashMap::new()),
+        }
+    }
+}
+
+impl PalwGossipCenter {
+    /// Register who may be served (SA-2/SA-3) — panel service only. Covers BOTH lanes: once an
+    /// authorizer exists, the whole-capture pull is authenticated too, which is SA-2's last
+    /// sentence.
+    pub fn set_opening_authorizer(&self, authorizer: PalwOpeningAuthorizer) {
+        *self.openings.authorizer.lock().unwrap() = Some(authorizer);
+    }
+
+    /// Register the opener a serve consults — panel service only; see the field's doc.
+    pub fn set_interval_opening_resolver(&self, resolver: std::sync::Arc<dyn Fn(Hash64, u32) -> Option<Vec<u8>> + Send + Sync>) {
+        *self.openings.resolver.lock().unwrap() = Some(resolver);
+    }
+
+    /// Is this node serving openings at all? (`false` before the panel registers, and on every
+    /// node with no PALW role.)
+    pub fn serves_openings(&self) -> bool {
+        self.openings.resolver.lock().unwrap().is_some()
+    }
+
+    /// **The authentication both lanes share** (ADR-0077 SA-2, ADR-0079 SA-3): shape, then a
+    /// per-PEER rate, then signature and bond, then the per-BOND rate — cheapest first, and every
+    /// one of them before a byte of capture is read.
+    ///
+    /// **Two rates, because the one SA-2 names cannot be the first gate.** A per-bond rate needs
+    /// the bond, and getting the bond means verifying a lattice signature and reading chain state
+    /// — so a rate that only exists after them does not bound them. The per-peer rate in front
+    /// costs a map lookup, is keyed on something an attacker cannot mint (its own connection), and
+    /// is what actually bounds the verification work; the per-bond rate behind it is what bounds
+    /// the SERVING work, which is SA-2's subject.
+    ///
+    /// **The verification runs off the async runtime.** The authorizer verifies ML-DSA-87 and
+    /// reads chain state, and this node's public entrance and its seat have already been the same
+    /// process once (`t11-5d-public-node-hang-analysis`): a request that pins a reactor thread is
+    /// a request that stops block relay.
+    ///
+    /// A node with no authorizer refuses everything rather than serving everyone: a fail-open
+    /// default here would be the amplifier SA-2 exists to close.
+    pub async fn authorize_serve(&self, peer: PeerKey, request: &PalwOpeningRequestV1<'_>) -> Result<Hash64, PalwServeRefusalV1> {
+        check_opening_request_shape(request)?;
+        self.charge_opening_peer_rate(peer)?;
+        let authorizer = { self.openings.authorizer.lock().unwrap().clone() };
+        let Some(authorizer) = authorizer else { return Err(PalwServeRefusalV1::NotBonded) };
+        let (claim, interval_index, requested_daa) = (request.claim, request.interval_index, request.requested_daa);
+        let (pubkey, signature) = (request.requester_pubkey.to_vec(), request.signature.to_vec());
+        let verified = tokio::task::spawn_blocking(move || {
+            authorizer(&PalwOpeningRequestV1 {
+                claim,
+                interval_index,
+                requested_daa,
+                requester_pubkey: &pubkey,
+                signature: &signature,
+            })
+        })
+        .await;
+        // A panicked or cancelled authorizer is a refusal, not a serve: this node does not know
+        // who asked.
+        let bond = verified.map_err(|_| PalwServeRefusalV1::NotBonded)??;
+        self.charge_opening_rate(bond)?;
+        Ok(bond)
+    }
+
+    /// The cheap rate in front of the crypto, keyed on the connection. Bounded by the peer count,
+    /// which the connection manager owns, and cleared with the window.
+    fn charge_opening_peer_rate(&self, peer: PeerKey) -> Result<(), PalwServeRefusalV1> {
+        let mut rate = self.openings.peer_rate.lock().unwrap();
+        let now = std::time::Instant::now();
+        if now.duration_since(rate.started) >= SERVE_BUDGET_WINDOW {
+            rate.started = now;
+            rate.per_peer.clear();
+        }
+        let spent = rate.per_peer.entry(peer).or_insert(0);
+        if *spent >= OPENING_REQUESTS_PER_PEER_PER_WINDOW {
+            return Err(PalwServeRefusalV1::RateLimited);
+        }
+        *spent += 1;
+        Ok(())
+    }
+
+    /// Spend one of this bond's requests in the current window.
+    fn charge_opening_rate(&self, bond: Hash64) -> Result<(), PalwServeRefusalV1> {
+        let mut rate = self.openings.rate.lock().unwrap();
+        let now = std::time::Instant::now();
+        if now.duration_since(rate.started) >= SERVE_BUDGET_WINDOW {
+            rate.started = now;
+            rate.per_bond.clear();
+        }
+        let known = rate.per_bond.contains_key(&bond);
+        if !known && rate.per_bond.len() >= OPENING_RATE_BONDS_CAP {
+            return Err(PalwServeRefusalV1::RateLimited);
+        }
+        let spent = rate.per_bond.entry(bond).or_insert(0);
+        if *spent >= OPENING_REQUESTS_PER_BOND_PER_WINDOW {
+            return Err(PalwServeRefusalV1::RateLimited);
+        }
+        *spent += 1;
+        Ok(())
+    }
+
+    /// **The authenticated whole-capture serve** (ADR-0077 SA-2's last sentence). Authorize, then
+    /// the unchanged [`Self::resolve_material_for_serve`] — the throttle, the per-peer byte
+    /// allowance and the blocking read are exactly what they were, with a bond in front of them.
+    ///
+    /// **A node that registered no authorizer answers as it did before**, deliberately. The panel
+    /// service registers the authorizer and the material resolver in the same place, so a node
+    /// with no authorizer has nothing to serve and this returns `NotHeld` on its own; making the
+    /// authorizer a hard precondition would instead mean that any future refactor which registers
+    /// one and not the other silences every honest seat's pull — and a seat with no material signs
+    /// `Unavailable`, and three of those slash an honest producer. That failure has happened on
+    /// this lane twice (the 8 MiB cap, the per-claim budget), so the authentication is added in
+    /// front of the serve rather than made a condition of it existing.
+    pub async fn resolve_material_for_serve_signed(
+        &self,
+        peer: PeerKey,
+        request: &PalwOpeningRequestV1<'_>,
+    ) -> Result<Vec<u8>, PalwServeRefusalV1> {
+        // Bound first, deliberately: a temporary `MutexGuard` in an `if` condition lives to the end
+        // of the whole `if` statement, so writing this inline would hold a std mutex across an
+        // `.await` — a non-`Send` future at best and a reactor-wide stall at worst.
+        let authenticated = { self.openings.authorizer.lock().unwrap().is_some() };
+        if authenticated {
+            self.authorize_serve(peer, request).await?;
+        }
+        self.resolve_material_for_serve(peer, request.claim).await.ok_or(PalwServeRefusalV1::NotHeld)
+    }
+
+    /// The opening of `interval_index` of `claim`'s retained capture, for a requester this node
+    /// has authorized.
+    ///
+    /// **The order of the gates is the whole point** (audit3 H6, carried to this lane): the
+    /// authentication is cheapest and runs first, the throttle is charged on the ATTEMPT so a
+    /// refusal is not free and repeatable, the byte allowance is reserved BEFORE the opener runs
+    /// so a refused request never buys the disk read and the family arithmetic behind it, and the
+    /// opener runs on a blocking thread rather than the runtime that also carries block relay,
+    /// IBD and RPC.
+    pub async fn resolve_interval_opening_for_serve(
+        &self,
+        peer: PeerKey,
+        request: &PalwOpeningRequestV1<'_>,
+    ) -> Result<Vec<u8>, PalwServeRefusalV1> {
+        let interval_index = request.interval_index.ok_or(PalwServeRefusalV1::Malformed)?;
+        self.authorize_serve(peer, request).await?;
+        let claim = request.claim;
+        {
+            let mut served = self.openings.served_recently.lock().unwrap();
+            let now = std::time::Instant::now();
+            // Amortised and bounded, for the reason the material lane's map is (audit 2026-09-02):
+            // sweeping on every request is a full walk under a lock any runtime worker can block
+            // on. Here the key includes the peer, so the map is already bounded by the connection
+            // count times the intervals one peer may ask for; the cap is the backstop.
+            if served.len() >= SERVED_RECENTLY_CAP {
+                served.retain(|_, at| now.duration_since(*at) < std::time::Duration::from_secs(60));
+                if served.len() >= SERVED_RECENTLY_CAP {
+                    served.clear();
+                }
+            }
+            if let Some(at) = served.get(&(peer, claim, interval_index))
+                && now.duration_since(*at) < INTERVAL_SERVE_THROTTLE
+            {
+                return Err(PalwServeRefusalV1::Throttled);
+            }
+            served.insert((peer, claim, interval_index), now);
+        }
+        let reservation = PALW_INTERVAL_OPENING_MAX_BYTES as u64;
+        if !self.reserve_serve_budget(peer, reservation) {
+            return Err(PalwServeRefusalV1::NoAllowance);
+        }
+        let resolver = { self.openings.resolver.lock().unwrap().clone() };
+        let Some(resolver) = resolver else {
+            self.refund_serve_budget(peer, reservation);
+            return Err(PalwServeRefusalV1::NotHeld);
+        };
+        let opened = tokio::task::spawn_blocking(move || resolver(claim, interval_index)).await;
+        let Some(bytes) = opened.ok().flatten() else {
+            self.refund_serve_budget(peer, reservation);
+            return Err(PalwServeRefusalV1::NotHeld);
+        };
+        if bytes.len() > PALW_INTERVAL_OPENING_MAX_BYTES {
+            self.refund_serve_budget(peer, reservation); // never serve what the transport would refuse
+            return Err(PalwServeRefusalV1::Oversized);
+        }
+        self.refund_serve_budget(peer, reservation.saturating_sub(bytes.len() as u64));
+        Ok(bytes)
+    }
+
+    /// **Record that this node has asked the network for interval `interval_index` of `claim`.**
+    ///
+    /// Called by the seat just before it emits a `PalwIntervalOpeningRequest`. For the next
+    /// [`PULL_SOLICITED_TTL`] an opening for that pair is admitted; before or after, it is
+    /// [`PalwGossipAdmit::Unsolicited`]. A re-ask resets the window AND the slots: the seat is
+    /// asking again because nothing it was served verified, so the payloads that filled the slots
+    /// were not the answer.
+    pub fn note_interval_pull_request(&self, claim: Hash64, interval_index: u32) {
+        let mut pulls = self.openings.outstanding.lock().unwrap();
+        let now = std::time::Instant::now();
+        pulls.retain(|_, at| now.duration_since(*at) < PULL_SOLICITED_TTL);
+        if pulls.len() >= OUTSTANDING_PULL_CAP && !pulls.contains_key(&(claim, interval_index)) {
+            return;
+        }
+        pulls.insert((claim, interval_index), now);
+        let mut slots = self.openings.slots.lock().unwrap();
+        slots.retain(|key, _| pulls.contains_key(key));
+        slots.remove(&(claim, interval_index));
+    }
+
+    fn is_interval_solicited(&self, claim: Hash64, interval_index: u32) -> bool {
+        let pulls = self.openings.outstanding.lock().unwrap();
+        pulls.get(&(claim, interval_index)).is_some_and(|at| std::time::Instant::now().duration_since(*at) < PULL_SOLICITED_TTL)
+    }
+
+    /// Give back a slot whose payload never reached the seat — the eviction bookkeeping of
+    /// [`Self::forget_digest`], for this lane's counters.
+    fn release_opening_slot(&self, peer: PeerKey, claim: Hash64, interval_index: u32) {
+        let mut slots = self.openings.slots.lock().unwrap();
+        let Some(slot) = slots.get_mut(&(claim, interval_index)) else { return };
+        slot.admitted = slot.admitted.saturating_sub(1);
+        if let Some(count) = slot.per_peer.get_mut(&peer) {
+            *count = count.saturating_sub(1);
+            if *count == 0 {
+                slot.per_peer.remove(&peer);
+            }
+        }
+    }
+
+    fn digest_opening(&self, claim: &Hash64, interval_index: u32, bytes: &[u8]) -> u64 {
+        let mut h = self.hasher.build_hasher();
+        3u8.hash(&mut h);
+        claim.as_byte_slice().hash(&mut h);
+        interval_index.hash(&mut h);
+        bytes.hash(&mut h);
+        h.finish()
+    }
+
+    /// Admit an interval opening served to this node. `Fresh` means: push
+    /// [`PalwGossipEvent::IntervalOpening`] to the inbox (done here). Never relayed, whatever the
+    /// verdict — the lane is asker-specific.
+    ///
+    /// **The size cap is checked before anything else touches the bytes**, which is what "bounded
+    /// before deserialising" means: nothing downstream of here sees a payload this node did not
+    /// first agree to hold.
+    ///
+    /// Admitted only for a pair this node asked for and is still waiting on: an unasked opening
+    /// has no consumer, so accepting one would let any peer fill the inbox for the cost of a claim
+    /// id read off a header. Within a solicited pair the material lane's two bounds apply per
+    /// interval — a slot ceiling, and a per-peer share of it that leaves room for the executor's
+    /// answer however fast a flooder sends.
+    pub fn admit_interval_opening(&self, peer: PeerKey, claim: Hash64, interval_index: u32, bytes: &[u8]) -> PalwGossipAdmit {
+        if bytes.len() > PALW_INTERVAL_OPENING_MAX_BYTES {
+            return PalwGossipAdmit::TooBig;
+        }
+        if !self.is_interval_solicited(claim, interval_index) {
+            return PalwGossipAdmit::Unsolicited;
+        }
+        let digest = self.digest_opening(&claim, interval_index, bytes);
+        // **The digest goes first, and the slot is spent only by bytes that were new.** The other
+        // order looks equivalent and is not: a peer that repeats the SAME payload would pass the
+        // slot check, spend a slot, and only then be told it is a duplicate — so four repeats of
+        // one message exhaust an interval's slots and the honest executor's answer is refused
+        // afterwards, which is the flood the slots exist to stop, performed by the slots.
+        //
+        // Outside the slot lock, too: `admit_digest` takes the center's own state lock, and a lane
+        // lock held across it would order two locks that nothing else orders.
+        if self.admit_digest(digest, None, true) != PalwGossipAdmit::Fresh {
+            return PalwGossipAdmit::Duplicate;
+        }
+        {
+            let mut slots = self.openings.slots.lock().unwrap();
+            let slot = slots.entry((claim, interval_index)).or_default();
+            let from_peer = slot.per_peer.get(&peer).copied().unwrap_or(0);
+            if from_peer >= PALW_OPENINGS_PER_PEER_PER_INTERVAL || slot.admitted >= PALW_OPENINGS_PER_INTERVAL {
+                drop(slots);
+                // Give the digest back with the slot we did not take: a payload this node refused
+                // to hold must not be remembered as one it has seen, or the honest re-send of the
+                // same bytes after a re-ask is a `Duplicate` for the next `SEEN_CAP` messages.
+                self.forget_digest(digest);
+                return PalwGossipAdmit::Duplicate;
+            }
+            slot.admitted += 1;
+            *slot.per_peer.entry(peer).or_insert(0) += 1;
+        }
+        if self.has_consumer()
+            && self.inbox_tx.try_send(PalwGossipEvent::IntervalOpening { claim, interval_index, bytes: bytes.to_vec() }).is_err()
+        {
+            self.release_opening_slot(peer, claim, interval_index);
+            // **A payload the inbox refused must not leave its digest marked seen** (audit
+            // 2026-09-02, the same fault on this lane): the seat re-asks for exactly this pair,
+            // the honest executor answers with the identical bytes, and a remembered digest would
+            // answer `Duplicate` for the next SEEN_CAP messages — a seat permanently unable to
+            // verify a claim it is seated on.
+            self.forget_digest(digest);
+            return PalwGossipAdmit::Duplicate;
+        }
+        PalwGossipAdmit::Fresh
     }
 }
 
@@ -607,6 +1193,87 @@ mod tests {
         );
     }
 
+    /// **A stranger must not be able to decide how much memory this node uses** (audit
+    /// 2026-09-02).
+    ///
+    /// `served_recently` is keyed by a claim id taken straight off the wire — no on-chain
+    /// existence check, no signature, no bond binding — and the sweep beside it walked the WHOLE
+    /// map on every request under a `std::sync::Mutex` every runtime worker can block on. So a
+    /// peer naming a fresh random claim per ~70-byte request bought one permanent entry and one
+    /// full walk each time: unbounded memory and quadratic CPU, for nothing. The sibling map
+    /// `outstanding_pulls`, which only this node writes, was already capped; the peer-written one
+    /// was not.
+    ///
+    /// The requests below are all REFUSED (no resolver is registered, so this node is not a panel
+    /// and answers nobody) — which is the point: the map grew on the refusal path, where no
+    /// outbound byte was ever produced to make the growth visible.
+    #[tokio::test]
+    async fn the_serve_throttle_map_cannot_be_grown_without_bound() {
+        let center = PalwGossipCenter::default();
+        let flooder = peer(1);
+        for n in 0..(SERVED_RECENTLY_CAP as u64 + 512) {
+            assert!(center.resolve_material_for_serve(flooder, h64(n)).await.is_none(), "no resolver, no serve");
+        }
+        let held = center.served_recently.lock().unwrap().len();
+        assert!(
+            held <= SERVED_RECENTLY_CAP,
+            "the throttle map held {held} entries against a {SERVED_RECENTLY_CAP} cap — one peer sizing another node's memory"
+        );
+    }
+
+    /// **A payload the inbox refused must not leave its digest marked seen** (audit 2026-09-02).
+    ///
+    /// The digest is recorded before the bytes are offered, because the verdict is what the caller
+    /// relays on — and `try_send` on a full inbox drops the NEWEST, not the oldest. So one burst
+    /// (or one slow tick of the panel service) made this node permanently blind to that claim: the
+    /// pull built for exactly this case re-fetches the same bytes, they hash to the same digest,
+    /// `admit_digest` answers `Duplicate` for the next `SEEN_CAP` messages, the seat holds no
+    /// material, signs `Unavailable` at the half-window, and an honest producer is defaulted by a
+    /// quorum.
+    ///
+    /// The undo has to return the per-claim and per-peer slots with the digest, or the claim's
+    /// budget leaks on every drop and the honest answer is crowded out by arithmetic instead.
+    #[test]
+    fn a_payload_the_full_inbox_dropped_can_be_pulled_again() {
+        let center = PalwGossipCenter::default();
+        let mut rx = center.take_inbox().expect("first taker");
+        // Fill the inbox exactly, one distinct claim per event so nothing here is the per-claim
+        // budget doing the work.
+        for n in 0..INBOX_CAP as u64 {
+            assert_eq!(center.admit_material(peer(1), h64(n), b"payload"), PalwGossipAdmit::Fresh, "event {n} is queued");
+        }
+
+        let claim = h64(9_001);
+        assert_eq!(
+            center.admit_material(peer(2), claim, b"the honest material"),
+            PalwGossipAdmit::Duplicate,
+            "a payload this node could not keep is not relayed as fresh"
+        );
+        // …and it left no trace: not the digest, and not the claim's slots.
+        {
+            let state = center.state.lock().unwrap();
+            assert!(!state.materials_per_claim.contains_key(&claim), "the per-claim slot came back with the digest");
+            assert!(!state.materials_per_peer_claim.contains_key(&(peer(2), claim)), "and so did the per-peer slot");
+        }
+
+        // The service catches up, and the pull re-fetches the identical bytes.
+        let mut drained = 0usize;
+        while rx.try_recv().is_ok() {
+            drained += 1;
+        }
+        assert_eq!(drained, INBOX_CAP, "the inbox was full, which is the precondition this test needs");
+
+        assert_eq!(
+            center.admit_material(peer(2), claim, b"the honest material"),
+            PalwGossipAdmit::Fresh,
+            "the identical bytes must be admissible again, or the pull that exists to recover from this cannot"
+        );
+        match rx.try_recv() {
+            Ok(PalwGossipEvent::Material { claim: got, .. }) => assert_eq!(got, claim, "and the seat finally holds it"),
+            other => panic!("the re-fetched material must reach the consumer, got {other:?}"),
+        }
+    }
+
     /// **The solicited exemption is bounded** (audit3 H7).
     ///
     /// It existed so four cheap payloads from a stranger could not make the honest answer
@@ -696,8 +1363,247 @@ mod tests {
             match event {
                 PalwGossipEvent::Material { .. } => materials += 1,
                 PalwGossipEvent::Receipt { .. } => receipts += 1,
+                PalwGossipEvent::IntervalOpening { .. } => panic!("nothing on the interval lane was admitted here"),
             }
         }
         assert_eq!((materials, receipts), (5, 1), "4 for claim 7, 1 for claim 8; the one receipt — marks push nothing");
+    }
+
+    // --- the interval lane (ADR-0077 Decision 8 / SA-2, ADR-0079 SA-3) ---
+
+    /// A well-shaped key and signature — the lengths ML-DSA-87 actually produces, which is what
+    /// `check_opening_request_shape` demands before anything else runs.
+    fn signed_request() -> (Vec<u8>, Vec<u8>) {
+        (vec![0xAAu8; 2_592], vec![0xBBu8; 4_627])
+    }
+
+    /// A stand-in for the panel service's authorizer: it maps ONE key to a bond and refuses every
+    /// other, which is what the chain does with `palw_bond_of_pubkey_v2`.
+    fn one_bond_authorizer(good_key: Vec<u8>, bond: Hash64) -> PalwOpeningAuthorizer {
+        std::sync::Arc::new(move |req: &PalwOpeningRequestV1<'_>| {
+            if req.requester_pubkey != good_key.as_slice() {
+                return Err(PalwServeRefusalV1::NotBonded);
+            }
+            if req.signature.iter().all(|b| *b == 0) {
+                return Err(PalwServeRefusalV1::BadSignature);
+            }
+            if req.requested_daa == 0 {
+                return Err(PalwServeRefusalV1::Stale);
+            }
+            Ok(bond)
+        })
+    }
+
+    /// **The shape check runs before anything is read** (ADR-0079 Decision 4's
+    /// `check_opening_request_shape`), and every refusal has a name.
+    ///
+    /// The names are the point: a seat that is REFUSED and a seat that hears NOTHING look
+    /// identical from the seat's side, and only one of them is the executor's fault. An operator
+    /// reading this node's log must be able to tell which happened without a packet capture.
+    #[test]
+    fn an_unsigned_or_misshapen_request_is_refused_by_name_before_any_work() {
+        let claim = h64(101);
+        let (key, sig) = signed_request();
+
+        let unsigned =
+            PalwOpeningRequestV1 { claim, interval_index: Some(0), requested_daa: 10, requester_pubkey: &[], signature: &[] };
+        assert_eq!(check_opening_request_shape(&unsigned), Err(PalwServeRefusalV1::Unsigned));
+        assert_eq!(PalwServeRefusalV1::Unsigned.name(), "unsigned");
+
+        let short_key = vec![1u8; 32];
+        let stubby = PalwOpeningRequestV1 { requester_pubkey: &short_key, signature: &sig, ..unsigned };
+        assert_eq!(check_opening_request_shape(&stubby), Err(PalwServeRefusalV1::Malformed));
+
+        let short_sig = vec![1u8; 64];
+        let stubby_sig = PalwOpeningRequestV1 { requester_pubkey: &key, signature: &short_sig, ..unsigned };
+        assert_eq!(check_opening_request_shape(&stubby_sig), Err(PalwServeRefusalV1::Malformed));
+
+        let whole = PalwOpeningRequestV1 { requester_pubkey: &key, signature: &sig, ..unsigned };
+        assert_eq!(check_opening_request_shape(&whole), Ok(()));
+    }
+
+    /// **A stranger, a forged signature and a stale request are all refused, and each by its own
+    /// name** (ADR-0077 SA-2). The center holds no key: the authorizer is the panel service, the
+    /// only party here that holds one — ADR-0079 Decision 4's rule that a process parsing a
+    /// stranger's bytes holds no key, stated as a type.
+    #[tokio::test]
+    async fn only_a_bonded_requester_is_authorized_and_the_rate_is_per_bond() {
+        let center = PalwGossipCenter::default();
+        let claim = h64(102);
+        let (key, sig) = signed_request();
+        let bond = h64(0xB0);
+        center.set_opening_authorizer(one_bond_authorizer(key.clone(), bond));
+
+        let ok = PalwOpeningRequestV1 { claim, interval_index: Some(3), requested_daa: 900, requester_pubkey: &key, signature: &sig };
+        assert_eq!(center.authorize_serve(peer(1), &ok).await, Ok(bond));
+
+        let stranger_key = vec![0xCCu8; 2_592];
+        let stranger = PalwOpeningRequestV1 { requester_pubkey: &stranger_key, ..ok };
+        assert_eq!(center.authorize_serve(peer(1), &stranger).await, Err(PalwServeRefusalV1::NotBonded));
+
+        let zero_sig = vec![0u8; 4_627];
+        let forged = PalwOpeningRequestV1 { signature: &zero_sig, ..ok };
+        assert_eq!(center.authorize_serve(peer(1), &forged).await, Err(PalwServeRefusalV1::BadSignature));
+
+        let stale = PalwOpeningRequestV1 { requested_daa: 0, ..ok };
+        assert_eq!(center.authorize_serve(peer(1), &stale).await, Err(PalwServeRefusalV1::Stale));
+
+        // The per-bond rate. Only requests the authorizer already mapped to a bond are charged, so
+        // an unbonded flooder never reaches this counter at all — which is why the counter can be
+        // a plain map: its keys are collateral somebody posted.
+        for _ in 1..OPENING_REQUESTS_PER_BOND_PER_WINDOW {
+            assert_eq!(center.authorize_serve(peer(1), &ok).await, Ok(bond));
+        }
+        assert_eq!(center.authorize_serve(peer(1), &ok).await, Err(PalwServeRefusalV1::RateLimited), "the bond spent its window");
+    }
+
+    /// **A node with no authorizer refuses every opening request** — it has no capture to open
+    /// either, so this is the honest silence of a node with no PALW role and not a policy.
+    #[tokio::test]
+    async fn a_node_that_serves_nothing_authorizes_nobody() {
+        let center = PalwGossipCenter::default();
+        assert!(!center.serves_openings());
+        let claim = h64(103);
+        let (key, sig) = signed_request();
+        let req = PalwOpeningRequestV1 { claim, interval_index: Some(0), requested_daa: 5, requester_pubkey: &key, signature: &sig };
+        assert_eq!(center.resolve_interval_opening_for_serve(peer(1), &req).await, Err(PalwServeRefusalV1::NotBonded));
+    }
+
+    /// **An opening serve is authenticated, throttled and budgeted, in that order** (ADR-0077
+    /// SA-2 over audit3 H5/H6/H10): the authentication is cheapest and runs first, a refusal
+    /// charges the asker's throttle window so it is not free and repeatable, the byte allowance is
+    /// consulted BEFORE the opener runs, and the throttle is per ASKER so two seats that drew the
+    /// same interval are both answered.
+    #[tokio::test]
+    async fn an_opening_serve_is_authenticated_throttled_per_asker_and_budgeted_before_the_opener_runs() {
+        let center = PalwGossipCenter::default();
+        let claim = h64(104);
+        let (key, sig) = signed_request();
+        center.set_opening_authorizer(one_bond_authorizer(key.clone(), h64(0xB1)));
+        let opens = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = opens.clone();
+        center.set_interval_opening_resolver(std::sync::Arc::new(move |_, index| {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Some(vec![index as u8; 512])
+        }));
+        assert!(center.serves_openings());
+
+        let ask = |interval: u32| PalwOpeningRequestV1 {
+            claim,
+            interval_index: Some(interval),
+            requested_daa: 900,
+            requester_pubkey: &key,
+            signature: &sig,
+        };
+
+        // An unsigned request never reaches the opener.
+        let unsigned = PalwOpeningRequestV1 { requester_pubkey: &[], signature: &[], ..ask(7) };
+        assert_eq!(center.resolve_interval_opening_for_serve(peer(1), &unsigned).await, Err(PalwServeRefusalV1::Unsigned));
+        assert_eq!(opens.load(std::sync::atomic::Ordering::SeqCst), 0, "an unsigned request bought no disk read");
+
+        assert_eq!(center.resolve_interval_opening_for_serve(peer(1), &ask(7)).await, Ok(vec![7u8; 512]));
+        assert_eq!(opens.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(
+            center.resolve_interval_opening_for_serve(peer(1), &ask(7)).await,
+            Err(PalwServeRefusalV1::Throttled),
+            "the same asker is throttled"
+        );
+        assert_eq!(opens.load(std::sync::atomic::Ordering::SeqCst), 1, "and the refusal did not run the opener");
+        assert!(
+            center.resolve_interval_opening_for_serve(peer(2), &ask(7)).await.is_ok(),
+            "a second seat that drew the same interval is answered — the throttle is per asker"
+        );
+        assert!(center.resolve_interval_opening_for_serve(peer(1), &ask(8)).await.is_ok(), "another interval is another ask");
+
+        // Out of allowance: the opener must not run.
+        while center.reserve_serve_budget(peer(3), PALW_INTERVAL_OPENING_MAX_BYTES as u64) {}
+        let before = opens.load(std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(
+            center.resolve_interval_opening_for_serve(peer(3), &ask(9)).await,
+            Err(PalwServeRefusalV1::NoAllowance),
+            "no allowance, no serve"
+        );
+        assert_eq!(opens.load(std::sync::atomic::Ordering::SeqCst), before, "the allowance is consulted BEFORE the opener");
+        assert!(
+            center.openings.served_recently.lock().unwrap().contains_key(&(peer(3), claim, 9)),
+            "a refused serve still costs the asker its throttle window"
+        );
+
+        // An opener that outgrows the cap is refused rather than emitted: the far end would drop
+        // it, and a serve the other end cannot take only spends this node's egress.
+        center.set_interval_opening_resolver(std::sync::Arc::new(|_, _| Some(vec![0u8; PALW_INTERVAL_OPENING_MAX_BYTES + 1])));
+        assert_eq!(center.resolve_interval_opening_for_serve(peer(5), &ask(1)).await, Err(PalwServeRefusalV1::Oversized));
+    }
+
+    /// **An opening is admitted only because this node asked for exactly that interval, and only
+    /// within its slots** (ADR-0077 Decision 8).
+    ///
+    /// The lane is asker-specific: an opening nobody asked for has no consumer, so admitting one
+    /// would let any peer queue megabytes against a claim id read off a header. A solicited pair
+    /// still has the material lane's two bounds — a slot ceiling and a per-peer share of it — so a
+    /// forger cannot make the seat attempt unbounded replays, and cannot be the only voice for an
+    /// interval however fast it sends.
+    #[test]
+    fn an_interval_opening_is_admitted_only_when_solicited_and_within_its_slots() {
+        let center = PalwGossipCenter::default();
+        let mut rx = center.take_inbox().expect("first taker");
+        let claim = h64(105);
+
+        assert_eq!(center.admit_interval_opening(peer(1), claim, 5, b"early"), PalwGossipAdmit::Unsolicited, "not asked for");
+        assert!(rx.try_recv().is_err(), "an unsolicited opening reaches no consumer");
+
+        center.note_interval_pull_request(claim, 5);
+        assert_eq!(center.admit_interval_opening(peer(1), claim, 6, b"wrong-interval"), PalwGossipAdmit::Unsolicited);
+        assert_eq!(center.admit_interval_opening(peer(1), claim, 5, b"answer"), PalwGossipAdmit::Fresh);
+        assert_eq!(center.admit_interval_opening(peer(1), claim, 5, b"answer"), PalwGossipAdmit::Duplicate, "same bytes twice");
+        assert_eq!(
+            center.admit_interval_opening(peer(1), claim, 5, b"junk-1"),
+            PalwGossipAdmit::Fresh,
+            "the repeat above spent no slot — four repeats of one message must not exhaust the interval"
+        );
+        assert_eq!(
+            center.admit_interval_opening(peer(1), claim, 5, b"junk-2"),
+            PalwGossipAdmit::Duplicate,
+            "one peer holds at most its couple of slots"
+        );
+        assert_eq!(center.admit_interval_opening(peer(2), claim, 5, b"junk-2"), PalwGossipAdmit::Fresh, "another peer has its own");
+        assert_eq!(center.admit_interval_opening(peer(2), claim, 5, b"junk-3"), PalwGossipAdmit::Fresh, "its second");
+        assert_eq!(center.admit_interval_opening(peer(3), claim, 5, b"junk-4"), PalwGossipAdmit::Duplicate, "the slots are spent");
+        assert_eq!(
+            center.admit_interval_opening(peer(3), claim, 5, &vec![0u8; PALW_INTERVAL_OPENING_MAX_BYTES + 1]),
+            PalwGossipAdmit::TooBig
+        );
+
+        let mut delivered = 0usize;
+        while let Ok(event) = rx.try_recv() {
+            match event {
+                PalwGossipEvent::IntervalOpening { claim: c, interval_index, .. } => {
+                    assert_eq!((c, interval_index), (claim, 5));
+                    delivered += 1;
+                }
+                other => panic!("the interval lane delivered {other:?}"),
+            }
+        }
+        assert_eq!(delivered, PALW_OPENINGS_PER_INTERVAL, "exactly the admitted payloads reached the seat");
+
+        // A re-ask is the seat saying nothing it was served verified: the slots are cleared so the
+        // honest answer can still get in.
+        center.note_interval_pull_request(claim, 5);
+        assert_eq!(
+            center.admit_interval_opening(peer(4), claim, 5, b"late-honest"),
+            PalwGossipAdmit::Fresh,
+            "a re-ask reopens the slots"
+        );
+    }
+
+    /// **The interval lane sits above the material pull in the version ladder, and its cap below
+    /// the whole-capture cap.** A peer that can be asked for an opening can also be asked for the
+    /// material — the court's close still needs whole bytes — and an "opening" can never be the
+    /// capture under another name, which is the transport half of W10.
+    #[test]
+    fn the_interval_lane_is_gated_above_the_pull_and_capped_below_the_capture() {
+        use crate::flow_context::{PROTOCOL_VERSION_PALW_INTERVAL, PROTOCOL_VERSION_PALW_PULL};
+        assert!(PROTOCOL_VERSION_PALW_INTERVAL > PROTOCOL_VERSION_PALW_PULL);
+        assert!(PALW_INTERVAL_OPENING_MAX_BYTES < PALW_MATERIAL_MAX_BYTES);
     }
 }

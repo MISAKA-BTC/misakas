@@ -85,7 +85,7 @@ use uuid::Uuid;
 // never be sent a message they have no route for — routing an unknown payload type
 // disconnects the peer, so all EVM gossip is version-filtered to the exact peer set
 // that understands it (EVM-tx ≥101, deposit-claim ≥102).
-const PROTOCOL_VERSION: u32 = 104;
+const PROTOCOL_VERSION: u32 = 105;
 /// The last protocol version WITHOUT the EVM relay messages (still accepted).
 const PROTOCOL_VERSION_NO_EVM_RELAY: u32 = 100;
 /// The minimum protocol version that understands the EVM-tx relay messages.
@@ -100,6 +100,14 @@ pub(crate) const PROTOCOL_VERSION_CLAIM_RELAY: u32 = 102;
 pub(crate) const PROTOCOL_VERSION_PALW_PULL: u32 = 104;
 /// The 104-set minus the material pull: everything a 103 peer can route.
 pub(crate) const PROTOCOL_VERSION_PRE_PALW_PULL: u32 = 103;
+/// **The interval lane** (ADR-0077 Decision 8: `PalwIntervalOpeningRequest` /
+/// `PalwIntervalOpening`, oneof 78/79). BOTH directions are gated, unlike the material pull, whose
+/// answer rides a message every peer already routes: here the answer is a new type too, so it can
+/// only go to a peer that could ask. A 104 peer keeps the whole 104 set — material push, pull,
+/// receipts — and is simply never asked for an opening; a seat that needs one from such an
+/// executor hears nothing and reaches the half-window arm, which is the same outcome as an
+/// executor that is not running at all.
+pub(crate) const PROTOCOL_VERSION_PALW_INTERVAL: u32 = 105;
 
 /// See `check_orphan_resolution_range`
 const BASELINE_ORPHAN_RESOLUTION_RANGE: u32 = 5;
@@ -698,7 +706,15 @@ impl FlowContext {
         }
         let msg = kaspa_p2p_lib::make_message!(
             kaspa_p2p_lib::pb::kaspad_message::Payload::PalwMaterialRequest,
-            kaspa_p2p_lib::pb::PalwMaterialRequestMessage { claim_id: Some(claim.into()) }
+            // Unsigned: this is the pre-SA-2 shape, kept so a node whose panel has not registered
+            // an authorizer can still ask. `request_palw_material_signed` is the form SA-2
+            // prefers and the one the seat uses.
+            kaspa_p2p_lib::pb::PalwMaterialRequestMessage {
+                claim_id: Some(claim.into()),
+                requester_pubkey: Vec::new(),
+                signature: Vec::new(),
+                requested_daa: 0,
+            }
         );
         self.hub().broadcast_to_peers_with_min_version(msg, PROTOCOL_VERSION_PALW_PULL).await;
     }
@@ -1636,6 +1652,13 @@ impl ConnectionInitializer for FlowContext {
         // Register all flows according to version
         let (flows, applied_protocol_version) = match peer_version.protocol_version {
             v if v >= PROTOCOL_VERSION => (v8::register(self.clone(), router.clone(), PROTOCOL_VERSION), PROTOCOL_VERSION),
+            // Back-compat: the 104 set (everything but ADR-0077 Decision 8's interval lane). Such
+            // a peer is never SENT an interval message — both sends are version-filtered — and
+            // never emits one, so a seat pulling an opening from a 104 executor hears nothing and
+            // reaches the half-window arm exactly as it would for an executor that is offline.
+            PROTOCOL_VERSION_PALW_PULL => {
+                (v8::register(self.clone(), router.clone(), PROTOCOL_VERSION_PALW_PULL), PROTOCOL_VERSION_PALW_PULL)
+            }
             // Back-compat: the 103 set (everything but the material pull). Claim/EVM relays and
             // the PALW push gossip are all present; such a peer is never sent a
             // PalwMaterialRequest (the send is version-filtered), so nothing unroutable reaches it.
@@ -1698,5 +1721,73 @@ impl ConnectionInitializer for FlowContext {
         // it is considered a protocol error and the connection will disconnect
 
         Ok(())
+    }
+}
+
+/// **ADR-0077 Decision 8's asks** (workstream B2) — kept in their own `impl` block, at the end of
+/// the file, so that this lane and the handshake/version code above never share a merge hunk.
+impl FlowContext {
+    /// **Ask the network for one checkpoint interval's opening** (ADR-0077 Decision 8).
+    ///
+    /// Sent by a free-prompt seat for each interval its draw names. Broadcast to every capable
+    /// peer, the shape `request_palw_material` starts from: the executor's own node answers from
+    /// its retained capture, and any node that still holds a whole payload for the claim (a
+    /// foreign retention) can answer too. The answer comes back to this node alone and is admitted
+    /// only because this node asked (`note_interval_pull_request` first, or the center drops it as
+    /// unsolicited). Version-filtered to the interval lane: a 104 peer has no route for the
+    /// request type and would disconnect on it.
+    ///
+    /// `pubkey` / `signature` / `requested_daa` are ADR-0077 SA-2's authentication, assembled by
+    /// the caller — the panel service, which is the only party holding the bond's ML-DSA-87 key.
+    /// This layer carries them and checks nothing: a transport that verified signatures would be a
+    /// transport holding opinions about who is bonded.
+    pub async fn request_palw_interval_opening(
+        &self,
+        claim: kaspa_hashes::Hash64,
+        interval_index: u32,
+        pubkey: Vec<u8>,
+        signature: Vec<u8>,
+        requested_daa: u64,
+    ) {
+        if !self.palw_v2_active() {
+            return;
+        }
+        let msg = kaspa_p2p_lib::make_message!(
+            kaspa_p2p_lib::pb::kaspad_message::Payload::PalwIntervalOpeningRequest,
+            kaspa_p2p_lib::pb::PalwIntervalOpeningRequestMessage {
+                claim_id: Some(claim.into()),
+                interval_index,
+                requester_pubkey: pubkey,
+                signature,
+                requested_daa,
+            }
+        );
+        self.hub().broadcast_to_peers_with_min_version(msg, PROTOCOL_VERSION_PALW_INTERVAL).await;
+    }
+
+    /// **The signed whole-capture pull** (ADR-0077 SA-2's last sentence: "the same rule covers
+    /// `request_palw_material` today"). Identical to [`Self::request_palw_material`] but carrying
+    /// the requester's bond key and signature, so a serving node can refuse a stranger. Preferred
+    /// by every caller that holds a key; the unsigned form stays for a node that does not.
+    pub async fn request_palw_material_signed(
+        &self,
+        claim: kaspa_hashes::Hash64,
+        pubkey: Vec<u8>,
+        signature: Vec<u8>,
+        requested_daa: u64,
+    ) {
+        if !self.palw_v2_active() {
+            return;
+        }
+        let msg = kaspa_p2p_lib::make_message!(
+            kaspa_p2p_lib::pb::kaspad_message::Payload::PalwMaterialRequest,
+            kaspa_p2p_lib::pb::PalwMaterialRequestMessage {
+                claim_id: Some(claim.into()),
+                requester_pubkey: pubkey,
+                signature,
+                requested_daa,
+            }
+        );
+        self.hub().broadcast_to_peers_with_min_version(msg, PROTOCOL_VERSION_PALW_PULL).await;
     }
 }

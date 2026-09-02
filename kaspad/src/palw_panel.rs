@@ -1111,10 +1111,15 @@ impl PalwPanelService {
         .filter_map(|path| std::fs::read(path).ok());
         pooled.iter().cloned().chain(disk).find_map(|bytes| {
             let material = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_job_material_decode_v1(&bytes)?;
+            // **Every mode the CHAIN admits, this seat must be able to judge** (ADR-0077
+            // Decision 16, P-16 seat half). This was `== PALW_FP_PRIVACY_PUBLIC_DA`, and it also
+            // feeds the challenger path — so on a network that armed the `PanelDa` fence a seat
+            // skipped every mode-2 payload, held nothing, and filed `Unavailable` against an
+            // executor that had served exactly what the rules asked for.
             (material.job.class_id == class_id
                 && material.job.executor_bond == executor_bond.0
-                && material.job.privacy_mode == kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PRIVACY_PUBLIC_DA)
-                .then_some(material)
+                && self.fp_privacy_mode_judgeable(material.job.privacy_mode))
+            .then_some(material)
         })
     }
 
@@ -1522,8 +1527,17 @@ impl PalwPanelService {
                     .or_else(|| std::fs::read(retention.join("foreign").join(format!("{claim}.material"))).ok())
             }));
         }
+        // **And it answers interval openings, to bonded requesters only** (ADR-0077 Decision 8 and
+        // SA-2, ADR-0079 SA-3). Registered here and not above because the two registrations are
+        // one fact: the authorizer this installs is what authenticates the material pull too, so a
+        // node either serves both lanes under a bond or serves neither.
+        self.install_fp_interval_serving(network_domain);
 
         let mut materials: HashMap<Hash64, Vec<Vec<u8>>> = HashMap::new();
+        // ADR-0077 Decision 8: the interval openings served to THIS node because it asked. Keyed
+        // per `(claim, interval)` and bounded by [`Self::pool_interval_opening`]; the transport
+        // has already refused anything unsolicited, over-sized, or past a claim's slot ceiling.
+        let mut interval_openings: HashMap<(Hash64, u32), Vec<Vec<u8>>> = HashMap::new();
         // Total pooled bytes and per-claim arrival order, maintained with `materials` so the
         // ceiling above is enforced at insertion rather than recomputed by walking the pool
         // (audit3 S-02). The sequence is a plain counter: it only has to order arrivals, and a DAA
@@ -1680,6 +1694,11 @@ impl PalwPanelService {
                                 pool.push(receipt);
                             }
                         }
+                    }
+                    // ADR-0077 Decision 8. Held, not judged: the seat binds an opening to the
+                    // claim's roots and replays the interval before believing anything in it.
+                    PalwGossipEvent::IntervalOpening { claim, interval_index, bytes } => {
+                        Self::pool_interval_opening(&mut interval_openings, claim, interval_index, bytes);
                     }
                 }
             }
@@ -2281,8 +2300,11 @@ impl PalwPanelService {
             // logging guard below deliberately: a request that only goes out when a summary line
             // happens to be printed is a request nobody can reason about.
             for claim in pull_for_close.drain(..) {
-                self.flow_context.palw_gossip().note_pull_request(claim);
-                self.flow_context.request_palw_material(claim).await;
+                // **Signed** since ADR-0077 SA-2: a serving node refuses an unsigned pull, so an
+                // unsigned ask here would look to this node exactly like an executor that never
+                // answered — and the court arm would lose its close for want of bytes somebody was
+                // willing to serve.
+                self.request_material_signed(network_domain, claim, current_daa).await;
             }
             if !court_stalls.is_empty() {
                 let responder_of = court_duties.iter().filter(|d| d.i_am_responder).count();
@@ -2349,8 +2371,22 @@ impl PalwPanelService {
                                 let job = &payload.material.job;
                                 if job.class_id != duty.class_id
                                     || job.executor_bond != duty.executor_bond.0
-                                    || job.privacy_mode != kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PRIVACY_PUBLIC_DA
+                                    || !self.fp_privacy_mode_judgeable(job.privacy_mode)
                                 {
+                                    continue;
+                                }
+                                // **The ids, before anything is read out of the capture**
+                                // (ADR-0077 Decision 16, W8). Under `PanelDa` the commitment
+                                // carries none, so these ARE the question — and a seat that
+                                // cannot bind them to the job has not seen the question and may
+                                // not certify the answer. Named, never printed: the error says
+                                // which of "nothing served" and "not this claim's" happened, and
+                                // no id or text goes to the log (SA-5, ADR-0079 SA-7).
+                                if let Err(why) = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_seat_prompt_admit_v1(
+                                    job,
+                                    Some(&payload.material.prompt_token_ids),
+                                ) {
+                                    warn!("[{PALW_PANEL}] claim {}: the served prompt is not this claim's ({why})", duty.claim_id);
                                     continue;
                                 }
                                 let Ok(backend) = self.resolve_backend(&session, duty.class_id, duty.artifact_root) else {
@@ -2408,8 +2444,19 @@ impl PalwPanelService {
                             };
                             if material.job.class_id != duty.class_id
                                 || material.job.executor_bond != duty.executor_bond.0
-                                || material.job.privacy_mode != kaspa_consensus_core::palw_freeprompt_v3::PALW_FP_PRIVACY_PUBLIC_DA
+                                || !self.fp_privacy_mode_judgeable(material.job.privacy_mode)
                             {
+                                continue;
+                            }
+                            // The same gate as the capture arm, on the arm that RE-EXECUTES: this
+                            // one derives a prompt to run, so ids that do not bind to the job
+                            // would have it run a different job and disagree with an honest
+                            // producer (ADR-0077 Decision 16, W8).
+                            if let Err(why) = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_seat_prompt_admit_v1(
+                                &material.job,
+                                Some(&material.prompt_token_ids),
+                            ) {
+                                warn!("[{PALW_PANEL}] claim {}: the served prompt is not this claim's ({why})", duty.claim_id);
                                 continue;
                             }
                             let Ok(backend) = self.resolve_backend(&session, duty.class_id, duty.artifact_root) else {
@@ -2552,10 +2599,12 @@ impl PalwPanelService {
                     // line already means every pooled payload failed to verify.
                     if requested.get(&duty.claim_id).is_none_or(|at| current_daa >= at.saturating_add(25)) {
                         requested.insert(duty.claim_id, current_daa);
-                        // Registered with the gossip center first: the answer must be exempt from
-                        // the per-claim relay budget an attacker may already have spent.
-                        self.flow_context.palw_gossip().note_pull_request(duty.claim_id);
-                        self.flow_context.request_palw_material(duty.claim_id).await;
+                        // Registered with the gossip center first, and SIGNED (ADR-0077 SA-2): the
+                        // answer must be exempt from the per-claim relay budget an attacker may
+                        // already have spent, and a serving node refuses an unsigned pull — an
+                        // unsigned ask would produce the silence this seat is about to accuse
+                        // somebody of.
+                        self.request_material_signed(network_domain, duty.claim_id, current_daa).await;
                     }
                     // Wait out half the window before accusing — gossip is not instant and an
                     // early `Unavailable` is a false accusation with a signature on it.
@@ -3159,6 +3208,183 @@ impl AsyncService for PalwPanelService {
             trace!("{} stopped", PALW_PANEL);
             Ok(())
         })
+    }
+}
+
+/// **ADR-0077 Decision 8 (workstream B2): the interval lane's two halves on this node** — the
+/// server that answers openings, and the seat that asks for them. A separate `impl` block, at the
+/// end of the file, so that this lane never shares a merge hunk with the panel's existing loops.
+impl PalwPanelService {
+    /// **Who this node will serve an opening to** (ADR-0077 SA-2, ADR-0079 SA-3 and its Decision 4
+    /// table row).
+    ///
+    /// The transport does the shape check and the rate; this closure does the two things that
+    /// need a key and a chain view, and it is the only place either is reachable from the serving
+    /// path: verify the ML-DSA-87 signature under this lane's own context, and ask the chain
+    /// whether that public key is a bond at all. `palw_bond_of_pubkey_v2` is the derivation — a
+    /// bond key carried in the request would be the requester's own claim about itself.
+    ///
+    /// **Freshness before the bond lookup**, because the lookup is the expensive half: a captured
+    /// request must not be a permanent serving right, and a stale one must not buy a chain read.
+    ///
+    /// What this does NOT check is panel membership. ADR-0077 SA-2 admits two kinds of requester —
+    /// "a seat of the claim's panel or an Active bond acting as challenger" — and the second is
+    /// any Active bond, so requiring panel membership would refuse exactly the party the court
+    /// depends on. The bond is what bounds the requester (collateral, and a per-bond rate);
+    /// membership would bound nothing further.
+    fn opening_authorizer(self: &Arc<Self>, network_domain: Hash64) -> kaspa_p2p_flows::palw_gossip::PalwOpeningAuthorizer {
+        let me = self.clone();
+        std::sync::Arc::new(move |request: &kaspa_p2p_flows::palw_gossip::PalwOpeningRequestV1<'_>| {
+            use kaspa_p2p_flows::palw_gossip::{OPENING_REQUEST_FRESHNESS_DAA, PalwServeRefusalV1};
+            let session = me.consensus_manager.consensus().unguarded_session();
+            let here = session.get_virtual_daa_score();
+            if request.requested_daa.abs_diff(here) > OPENING_REQUEST_FRESHNESS_DAA {
+                return Err(PalwServeRefusalV1::Stale);
+            }
+            if !crate::palw_fp_seat::palw_fp_verify_opening_request_v1(
+                request.requester_pubkey,
+                request.signature,
+                network_domain,
+                request.claim,
+                request.interval_index,
+                request.requested_daa,
+            ) {
+                return Err(PalwServeRefusalV1::BadSignature);
+            }
+            let Some(bond) = session.palw_bond_of_pubkey_v2(request.requester_pubkey) else {
+                return Err(PalwServeRefusalV1::NotBonded);
+            };
+            // The rate-limit key. A bond is an outpoint; hashing it gives the transport a value it
+            // can key a map on without naming a consensus type.
+            Ok(crate::palw_fp_seat::palw_fp_bond_rate_key_v1(&bond.0))
+        })
+    }
+
+    /// **The opening this node can produce for one interval of one claim** (ADR-0077 Decision 8's
+    /// executor half, as the transport reaches it).
+    ///
+    /// Everything comes from bytes this node already holds under its DA obligation: the retained
+    /// capture, the job inside it (which is hash-bound to the claim), and the class's artifact
+    /// root as the CHAIN records it. `None` at every step is "stay silent" — a node that is not
+    /// this claim's executor, or does not hold the class, simply does not answer, and the asking
+    /// seat re-asks elsewhere.
+    ///
+    /// Runs on a blocking thread (the transport arranges that): it reads a file and runs the
+    /// family's opening arithmetic.
+    fn open_retained_interval(&self, claim: Hash64, interval_index: u32) -> Option<Vec<u8>> {
+        let bytes = self
+            .retained_capture(&claim)
+            .or_else(|| std::fs::read(self.config.retention_dir.join("foreign").join(format!("{claim}.material"))).ok())?;
+        let payload = kaspa_consensus_core::palw_freeprompt_v3::palw_fp_capture_decode_v1(&bytes)?;
+        let session = self.consensus_manager.consensus().unguarded_session();
+        let facts = session.palw_producer_facts_v2(payload.material.job.class_id, None)?;
+        let backend = self.resolve_backend(&session, payload.material.job.class_id, facts.artifact_root).ok()?;
+        // The ids the interval consumed: the user's own, hash-bound to the job by
+        // `palw_fp_capture_decode_v1` before this line is reached. Never logged (SA-7).
+        backend.open_fp_interval(&payload.capture, interval_index, &payload.material.prompt_token_ids).ok()
+    }
+
+    /// Register both halves of the serving side with the gossip center. Called once, from the
+    /// panel worker, beside the material resolver — the two belong together: once an authorizer
+    /// exists the whole-capture pull is authenticated too (SA-2's last sentence), and a node that
+    /// registers neither serves nothing and refuses nobody.
+    pub fn install_fp_interval_serving(self: &Arc<Self>, network_domain: Hash64) {
+        self.flow_context.palw_gossip().set_opening_authorizer(self.opening_authorizer(network_domain));
+        let me = self.clone();
+        self.flow_context
+            .palw_gossip()
+            .set_interval_opening_resolver(std::sync::Arc::new(move |claim, index| me.open_retained_interval(claim, index)));
+    }
+
+    /// **May this seat judge a claim in this privacy mode?** (ADR-0077 Decision 16, P-16's seat
+    /// half.) `PublicDa` always; `PanelDa` where the network carries the rule — the fence, read
+    /// through `Params::palw_panel_da_admissible()` so that admission and judgement answer from
+    /// one place. See [`crate::palw_fp_seat::palw_fp_seat_may_judge_mode_v1`] for why the previous
+    /// hard-coded `PublicDa` test was not the safe choice it looked like.
+    fn fp_privacy_mode_judgeable(&self, privacy_mode: u8) -> bool {
+        crate::palw_fp_seat::palw_fp_seat_may_judge_mode_v1(privacy_mode, self.consensus_config.params.palw_panel_da_admissible())
+    }
+
+    /// **Hold one served opening, bounded** (ADR-0077 Decision 8).
+    ///
+    /// The transport has already refused anything this node did not ask for, anything over the
+    /// lane's byte cap, and anything past a `(claim, interval)`'s slot ceiling — so what reaches
+    /// here is bounded per pair. What is NOT bounded by that is the number of PAIRS, which grows
+    /// with every claim this seat is drawn onto and never shrinks on its own, so the map has its
+    /// own ceiling: a new pair past it is dropped rather than admitted. Dropping the newest is the
+    /// right way round here, unlike the material pool: the seat asked for these, it re-asks on its
+    /// own cadence, and evicting an older pair would discard an answer to a request that is still
+    /// open.
+    fn pool_interval_opening(pool: &mut HashMap<(Hash64, u32), Vec<Vec<u8>>>, claim: Hash64, interval_index: u32, bytes: Vec<u8>) {
+        /// `PALW_FP_SEAT_INTERVAL_SAMPLES_V1` intervals for each of 128 claims in flight.
+        const PAIRS: usize = 512;
+        /// The lane's own per-pair slot ceiling, mirrored so this map cannot outgrow it if the
+        /// transport's changes.
+        const PER_PAIR: usize = 4;
+        let key = (claim, interval_index);
+        if !pool.contains_key(&key) && pool.len() >= PAIRS {
+            return;
+        }
+        let slot = pool.entry(key).or_default();
+        if slot.len() >= PER_PAIR {
+            return;
+        }
+        slot.push(bytes);
+    }
+
+    /// **Ask the network for the openings this seat's draw names** (ADR-0077 Decision 8, the seat
+    /// half of P-08).
+    ///
+    /// One signed request per drawn interval, each registered with the gossip center first so the
+    /// answer is admitted (the lane refuses anything unsolicited). The signature is this bond's,
+    /// under [`crate::palw_fp_seat::PALW_FP_OPENING_REQUEST_MLDSA87_CONTEXT`] — the same key the
+    /// seat's receipts use and a different context, so neither signature can stand in for the
+    /// other.
+    ///
+    /// A node that cannot sign does not ask. Asking unsigned would be asking to be refused by
+    /// every SA-2 server on the network, and the refusal would look like withholding.
+    pub async fn request_fp_interval_openings(
+        &self,
+        network_domain: Hash64,
+        claim: Hash64,
+        intervals: &[u32],
+        requested_daa: u64,
+    ) -> usize {
+        let Some(kp) = self.keypair.as_ref() else { return 0 };
+        let mut asked = 0usize;
+        for index in intervals {
+            let Some(signature) = crate::palw_fp_seat::palw_fp_sign_opening_request_v1(
+                &kp.signing_key,
+                network_domain,
+                claim,
+                Some(*index),
+                requested_daa,
+            ) else {
+                continue;
+            };
+            self.flow_context.palw_gossip().note_interval_pull_request(claim, *index);
+            self.flow_context
+                .request_palw_interval_opening(claim, *index, kp.verification_key.as_ref().to_vec(), signature, requested_daa)
+                .await;
+            asked += 1;
+        }
+        asked
+    }
+
+    /// **The signed whole-capture pull** (ADR-0077 SA-2's last sentence). The attempt lane keeps
+    /// the whole-capture transport — Decision 8 retires it on the FREE-PROMPT lane only — so the
+    /// pull stays, with a bond in front of it. Falls back to the unsigned form for a node with no
+    /// key, which is a node that files no receipts either.
+    pub async fn request_material_signed(&self, network_domain: Hash64, claim: Hash64, requested_daa: u64) {
+        self.flow_context.palw_gossip().note_pull_request(claim);
+        let signed = self.keypair.as_ref().and_then(|kp| {
+            crate::palw_fp_seat::palw_fp_sign_opening_request_v1(&kp.signing_key, network_domain, claim, None, requested_daa)
+                .map(|signature| (kp.verification_key.as_ref().to_vec(), signature))
+        });
+        match signed {
+            Some((pubkey, signature)) => self.flow_context.request_palw_material_signed(claim, pubkey, signature, requested_daa).await,
+            None => self.flow_context.request_palw_material(claim).await,
+        }
     }
 }
 

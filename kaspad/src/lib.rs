@@ -7,6 +7,9 @@ pub mod eth_rpc;
 pub mod palw_agent;
 pub mod palw_backends;
 pub mod palw_dump;
+/// ADR-0077 Decision 8's seat: the interval draw, the signed opening request, the exact replay,
+/// and Decision 16's `PanelDa` gate. See the module's own header.
+pub mod palw_fp_seat;
 pub mod palw_heartbeat_miner;
 pub mod palw_panel;
 pub mod palw_producer;

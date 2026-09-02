@@ -308,7 +308,7 @@ enum Qwen36Op {
 
 /// The class's `ggml_vec_dot_f32` lane structure (simd-mappings.h, read verbatim).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum DotStructure {
+pub enum DotStructure {
     /// NEON: STEP 16, 4 accumulators × 4 lanes; reduce x0+=x2, x1+=x3, x0+=x1, then the
     /// pairwise `vaddvq` ((l0+l1)+(l2+l3)).
     Step16Epr4,
@@ -966,33 +966,34 @@ fn qwen36_row(
     // Read rows `[l0, l1)` of a PER-EXPERT store laid out in chunks of `chunk` rows restarting
     // at the expert's own byte 0 — the covering-chunk discipline the step side already uses for
     // tiles, so a slice that is not chunk-aligned still resolves to committed rows.
-    let read_block_chunks = |name: &str, block_rows: usize, chunk: usize, l0: usize, l1: usize, unit: usize| -> Result<Vec<u8>, PalwStepRefuteError> {
-        if l0 >= l1 || l1 > block_rows || chunk == 0 || unit == 0 {
-            return Err(PalwStepRefuteError::Unadjudicable);
-        }
-        let first_chunk = l0 / chunk;
-        let last_chunk = (l1 - 1) / chunk;
-        let mut buf = Vec::with_capacity((l1 - l0 + chunk) * unit);
-        for c in first_chunk..=last_chunk {
-            let off_rows = c * chunk;
-            let len_rows = chunk.min(block_rows - off_rows);
-            let off = u32::try_from(off_rows.checked_mul(unit).ok_or(PalwStepRefuteError::Unadjudicable)?)
-                .map_err(|_| PalwStepRefuteError::Unadjudicable)?;
-            let len = u32::try_from(len_rows.checked_mul(unit).ok_or(PalwStepRefuteError::Unadjudicable)?)
-                .map_err(|_| PalwStepRefuteError::Unadjudicable)?;
-            let bytes = weights.operand_bytes(name, layer, off, len).ok_or(PalwStepRefuteError::Unadjudicable)?;
-            if bytes.len() != len as usize {
+    let read_block_chunks =
+        |name: &str, block_rows: usize, chunk: usize, l0: usize, l1: usize, unit: usize| -> Result<Vec<u8>, PalwStepRefuteError> {
+            if l0 >= l1 || l1 > block_rows || chunk == 0 || unit == 0 {
                 return Err(PalwStepRefuteError::Unadjudicable);
             }
-            buf.extend_from_slice(&bytes);
-        }
-        let from = (l0 - first_chunk * chunk) * unit;
-        let take = (l1 - l0) * unit;
-        if from + take > buf.len() {
-            return Err(PalwStepRefuteError::Unadjudicable);
-        }
-        Ok(buf[from..from + take].to_vec())
-    };
+            let first_chunk = l0 / chunk;
+            let last_chunk = (l1 - 1) / chunk;
+            let mut buf = Vec::with_capacity((l1 - l0 + chunk) * unit);
+            for c in first_chunk..=last_chunk {
+                let off_rows = c * chunk;
+                let len_rows = chunk.min(block_rows - off_rows);
+                let off = u32::try_from(off_rows.checked_mul(unit).ok_or(PalwStepRefuteError::Unadjudicable)?)
+                    .map_err(|_| PalwStepRefuteError::Unadjudicable)?;
+                let len = u32::try_from(len_rows.checked_mul(unit).ok_or(PalwStepRefuteError::Unadjudicable)?)
+                    .map_err(|_| PalwStepRefuteError::Unadjudicable)?;
+                let bytes = weights.operand_bytes(name, layer, off, len).ok_or(PalwStepRefuteError::Unadjudicable)?;
+                if bytes.len() != len as usize {
+                    return Err(PalwStepRefuteError::Unadjudicable);
+                }
+                buf.extend_from_slice(&bytes);
+            }
+            let from = (l0 - first_chunk * chunk) * unit;
+            let take = (l1 - l0) * unit;
+            if from + take > buf.len() {
+                return Err(PalwStepRefuteError::Unadjudicable);
+            }
+            Ok(buf[from..from + take].to_vec())
+        };
     let params_from_wire = |bytes: &[u8]| -> Result<Vec<A16QuantParams>, PalwStepRefuteError> {
         bytes
             .chunks_exact(A16QuantParams::WIRE_BYTES)
@@ -1065,11 +1066,8 @@ fn qwen36_row(
                 } else {
                     return Err(PalwStepRefuteError::Unadjudicable);
                 };
-                let prefix = node
-                    .weight_name
-                    .rfind("ffn_")
-                    .map(|i| &node.weight_name[..i])
-                    .ok_or(PalwStepRefuteError::Unadjudicable)?;
+                let prefix =
+                    node.weight_name.rfind("ffn_").map(|i| &node.weight_name[..i]).ok_or(PalwStepRefuteError::Unadjudicable)?;
                 if block_rows == 0 || !out_dim.is_multiple_of(block_rows) {
                     return Err(PalwStepRefuteError::Unadjudicable);
                 }
@@ -4048,6 +4046,157 @@ fn gdn_core_genesis_replay(
     Ok(out_row)
 }
 
+/// **The positions a RECURRENCE step opens once its replay is checkpoint-anchored** (ADR-0077
+/// Decisions 10 and 11).
+///
+/// `required_positions` expands a `GdnCore` step over every prior position — `0..=p` inside the
+/// prefill call, all of prefill plus every decode call at a decode step — because the shipped
+/// replay is genesis-anchored. That expansion is the whole reason the hybrid's context is eight:
+/// each of those positions opens all five of the node's refs, and even in range form a position
+/// costs ~8.4 KB of mostly-Merkle-path.
+///
+/// With a state chunk map registered, the challenger stands on the checkpoint covering the last
+/// interval boundary at or before `p` and replays at most `interval` positions after it — so this
+/// returns exactly those, in the same ascending order the unanchored walk produces, and the two
+/// are the same canonical set read from two encodings of the same committed rows.
+///
+/// **Additive rather than a parameter on `canonical_input_leaves_anchored`**: that function's
+/// `anchored` flag shortens the KV arms and nothing else, it is on the shipped path, and the
+/// equivalence between the two recurrence routes is the invariant W2 states — see
+/// [`gdn_core_anchored_replay_v1`] for why an invariant asserted between two spellings of one
+/// implementation asserts nothing.
+///
+/// Returns `None` for a zero interval, which is not a cadence.
+pub fn gdn_anchored_positions_v1(prefill: u32, call_index: u32, position: u32, interval: u32) -> Option<Vec<(u32, u32)>> {
+    if interval == 0 {
+        return None;
+    }
+    // The recurrence's position index, flattened: prefill positions come first, then one per
+    // decode call — the same ordering `canonical_input_leaves_anchored` expands the prefill marker
+    // into and then extends with the decode calls.
+    let flat = |call: u32, pos: u32| -> u64 { if call == 0 { pos as u64 } else { prefill as u64 + call as u64 - 1 } };
+    let here = flat(call_index, position);
+    // The anchor covers every position strictly before the boundary; the replay is what follows it.
+    let boundary = (here / interval as u64) * interval as u64;
+    Some(
+        (boundary..=here)
+            .map(|i| if i < prefill as u64 { (0u32, i as u32) } else { ((i - prefill as u64 + 1) as u32, 0u32) })
+            .collect(),
+    )
+}
+
+/// What an anchored recurrence replay leaves behind: the challenged row, and the state a LATER
+/// checkpoint would commit.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PalwGdnReplayOutcomeV1 {
+    /// The output row at the last replayed position — the value under dispute.
+    pub out_row: Vec<u32>,
+    /// The recurrence state after every replayed position, head-major, in the fused kernel's own
+    /// transposed layout (`state[h][j * k_dim + i] = S[i][j]`).
+    pub state: Vec<Vec<u32>>,
+}
+
+/// **[`gdn_core_genesis_replay`]'s checkpoint-anchored twin** (ADR-0077 Decision 10).
+///
+/// The genesis form starts from a zero state and walks every position from the sequence start,
+/// which is what makes the recurrence's replay `O(n_ctx)` and therefore what bounds the hybrid's
+/// context at eight. This form starts from a state a verified checkpoint supplied and walks only
+/// the positions after it — at most one `checkpoint_interval` under Decision 11 — which is the
+/// whole of the widening.
+///
+/// **Why it is a second function and not a parameter on the first.** The equivalence between the
+/// two routes is the INVARIANT (ADR-0077 W2: "the anchored refutation and the long form reach the
+/// same verdict on honest material"), and an invariant asserted between two spellings of one
+/// implementation asserts nothing. The shipped genesis arm is untouched, byte for byte, and
+/// `the_anchored_recurrence_replay_agrees_with_the_long_form` sweeps the two against each other at
+/// every split point rather than at one — because "it agreed at the split I tried" is the shape of
+/// claim this tree has watched go stale.
+///
+/// `anchor` is `None` for the genesis start (an all-zero state, the value the long form begins
+/// with) and `Some(state)` for a replay that stands on a checkpoint. Every guard is the genesis
+/// arm's, restated rather than referenced, because they are facts about what THIS arithmetic can
+/// serve; an anchor whose shape is not the profile's is `InputSetNotCanonical`, never a panic.
+pub fn gdn_core_anchored_replay_v1(
+    profile: &PalwShapeProfileV3,
+    anchor: Option<&[Vec<u32>]>,
+    inputs: &[Vec<u32>],
+    dot: DotStructure,
+) -> Result<PalwGdnReplayOutcomeV1, PalwStepRefuteError> {
+    let heads = profile.gdn_heads as usize;
+    let kd = profile.gdn_head_k_dim as usize;
+    let vd = profile.gdn_head_v_dim as usize;
+    let step = match dot {
+        DotStructure::Step16Epr4 => 16,
+        DotStructure::Step32Epr8 => 32,
+    };
+    if kd == 0 || vd == 0 || heads == 0 || !kd.is_multiple_of(step) {
+        return Err(PalwStepRefuteError::Unadjudicable);
+    }
+    if kd > PALW_GDN_MAX_DIM
+        || vd > PALW_GDN_MAX_DIM
+        || heads > PALW_GDN_MAX_DIM
+        || kd.checked_mul(vd).and_then(|n| n.checked_mul(heads)).is_none_or(|n| n > PALW_GDN_MAX_STATE_WORDS)
+    {
+        return Err(PalwStepRefuteError::Unadjudicable);
+    }
+    if !inputs.len().is_multiple_of(5) || inputs.is_empty() {
+        return Err(PalwStepRefuteError::InputSetNotCanonical("gdn expects 5 input rows per position"));
+    }
+    // **The anchor is checked before it is read.** It arrives from a checkpoint chunk a challenger
+    // carried; a short or mis-shaped one is a refusal of the EVIDENCE, and reading it would be an
+    // out-of-bounds index inside block validation.
+    let mut state = match anchor {
+        None => vec![vec![0u32; kd * vd]; heads],
+        Some(rows) => {
+            if rows.len() != heads || rows.iter().any(|r| r.len() != kd * vd) {
+                return Err(PalwStepRefuteError::InputSetNotCanonical("the carried recurrence anchor is not this profile's state"));
+            }
+            rows.to_vec()
+        }
+    };
+    let positions = inputs.len() / 5;
+    let scale = ref_div_v2(ONE_F32, ref_sqrt_v2(i32_len_to_f32_bits(kd as u32)));
+    let mut out_row = vec![0u32; heads * vd];
+    for t in 0..positions {
+        let q_row = &inputs[5 * t];
+        let k_row = &inputs[5 * t + 1];
+        let v_row = &inputs[5 * t + 2];
+        let g_row = &inputs[5 * t + 3];
+        let b_row = &inputs[5 * t + 4];
+        if q_row.len() != heads * kd || k_row.len() != heads * kd || v_row.len() != heads * vd {
+            return Err(PalwStepRefuteError::InputSetNotCanonical("gdn q/k/v row lengths"));
+        }
+        if g_row.len() != heads || b_row.len() != heads {
+            return Err(PalwStepRefuteError::InputSetNotCanonical("gdn gate row lengths"));
+        }
+        for h in 0..heads {
+            let q = &q_row[h * kd..(h + 1) * kd];
+            let k = &k_row[h * kd..(h + 1) * kd];
+            let v = &v_row[h * vd..(h + 1) * vd];
+            let decay = glibc_expf_v1(g_row[h], true);
+            let beta = b_row[h];
+            let s = &mut state[h];
+            for slot in s.iter_mut() {
+                *slot = ref_mul_v1(*slot, decay);
+            }
+            for j in 0..vd {
+                let sum = vec_dot_f32(&s[j * kd..(j + 1) * kd], k, dot);
+                let delta = ref_mul_v1(ref_sub_v1(v[j], sum), beta);
+                for i in 0..kd {
+                    s[j * kd + i] = ref_fma_v2(k[i], delta, s[j * kd + i]);
+                }
+            }
+            if t == positions - 1 {
+                for j in 0..vd {
+                    let sum = vec_dot_f32(&s[j * kd..(j + 1) * kd], q, dot);
+                    out_row[h * vd + j] = ref_mul_v1(sum, scale);
+                }
+            }
+        }
+    }
+    Ok(PalwGdnReplayOutcomeV1 { out_row, state })
+}
+
 fn i32_len_to_f32_bits(n: u32) -> u32 {
     // Small positive integers are exact in f32 for our head dims.
     //
@@ -4623,10 +4772,7 @@ pub(crate) mod tests {
         // `gdn_head_v_dim` rides the same clause — it is the other factor in the state buffer.
         let mut wide = profile();
         wide.gdn_head_v_dim = PALW_GDN_MAX_DIM as u32 + 1;
-        assert!(matches!(
-            gdn_core_genesis_replay(&wide, &rows, DotStructure::Step16Epr4),
-            Err(PalwStepRefuteError::Unadjudicable)
-        ));
+        assert!(matches!(gdn_core_genesis_replay(&wide, &rows, DotStructure::Step16Epr4), Err(PalwStepRefuteError::Unadjudicable)));
         // `gdn_heads` is a `u16` and so cannot reach the ceiling at all. Its clause is kept for
         // symmetry rather than reachability: the three dimensions are one geometry, and a later
         // widening of the field would otherwise arrive with no guard and no test.

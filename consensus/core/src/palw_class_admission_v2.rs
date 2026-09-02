@@ -253,16 +253,119 @@ fn decode_pin_price_v1(profile: &PalwShapeProfileV3, decode: u64) -> Option<u64>
 /// attempt more for a longer job — `pwu_per_inference` is per inference — so the longest job the
 /// class admits is a job the class must be prosecutable at.
 pub fn derive_court_cost_v1(profile: &PalwShapeProfileV3) -> Result<PalwCourtCostV1, PalwClassAdmissionError> {
+    derive_court_cost_shaped_v1(profile, PalwCourtCostShapeV1::genesis_anchored_v1(profile))
+}
+
+/// **Which court a cost is being derived FOR** (ADR-0077 Decision 11).
+///
+/// Every field here is a property of the RULESET, not of the class: how deep the ladder the
+/// network froze is, how far back a refutation has to replay before it may substitute a verified
+/// checkpoint, and what that checkpoint's opening costs. The class's own geometry stays where it
+/// was — read off the graph, never declared — so this parameterises the question and not the
+/// answer.
+///
+/// [`Self::genesis_anchored_v1`] is what testnet-11 runs today and what
+/// [`derive_court_cost_v1`] passes, so the shipped derivation is byte-identical to the one this
+/// split replaced. [`Self::checkpoint_anchored_v1`] is Decision 11's form, reachable only behind
+/// `Params::palw_context_ladder`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwCourtCostShapeV1 {
+    /// How many POSITIONS a history-reading reference opens. The whole context for the
+    /// genesis-anchored form (a dispute at a prefill position has no anchor to stand on); at most
+    /// the checkpoint interval for the anchored one.
+    pub history_positions: u64,
+    /// The ladder top the step path is measured against — `PalwCourtParamsV2::max_step_leaf_count`
+    /// in the bundle this class would join.
+    pub ladder: u64,
+    /// What ONE checkpoint-chunk opening of the KV CACHE costs, added once per history-reading
+    /// reference of an attention node. Zero for the genesis-anchored form, which opens no
+    /// checkpoint because there is none to open.
+    ///
+    /// Separate from [`Self::gdn_checkpoint_bytes`] because the two anchors are different KINDS of
+    /// object and pricing them as one would hide the finding: a recurrence has a state whose size
+    /// does not depend on the context, and a cache is the history itself. See
+    /// `crate::palw_context_ladder::palw_kv_checkpoint_opening_bytes_v1`.
+    pub kv_checkpoint_bytes: u64,
+    /// What ONE checkpoint-chunk opening of the RECURRENCE state costs. Constant in `n_ctx` — the
+    /// half of ADR-0077 Decision 11 that actually buys a wider row.
+    pub gdn_checkpoint_bytes: u64,
+    /// **Whose depth a step leaf's Merkle path is measured at**: the CLASS's own worst case
+    /// (`false`, what testnet-11 does) or the RULESET's ladder (`true`, ADR-0077 Decision 12).
+    ///
+    /// The shipped form asks how deep this class's own tree can get, which is exact and which is
+    /// also `⌈log₂ n_ctx⌉`-shaped: doubling the context adds one `Hash64` to every opened run's
+    /// path, and with a few hundred runs on a close that is kilobytes. It is the residue that made
+    /// a first reading of W1 fail — the history term was flat and the PATHS were not.
+    ///
+    /// Past the fence the path is budgeted at the ladder the ruleset froze — Decision 12's own
+    /// sentence, "a Merkle path grows to 32 elements — 2 KiB per opened leaf — inside the close
+    /// budget". That is a bound rather than a measurement, it can only over-charge a narrow class,
+    /// and it is what makes a mapped class's price genuinely independent of its context: the one
+    /// property Decision 11 exists to buy.
+    pub path_from_ladder: bool,
+    /// Whether the prompt-id and generated-token-pin terms are counted.
+    ///
+    /// Always `true` for any cost a gate reads: those bytes ride real closes. The `false` reading
+    /// exists so a test can ask the question Decision 11 actually answers — *is the HISTORY term
+    /// flat in `n_ctx`* — without the id term, which Decision 11 does not anchor, standing in
+    /// front of the answer (ADR-0077 §4 budgets those separately: "PublicDa carries `n_ctx × 4`
+    /// bytes of ids").
+    pub count_ids: bool,
+}
+
+impl PalwCourtCostShapeV1 {
+    /// The shipped court: the whole context as history, the shipped ladder, no anchor.
+    pub fn genesis_anchored_v1(profile: &PalwShapeProfileV3) -> Self {
+        Self {
+            history_positions: profile.n_ctx as u64,
+            ladder: crate::palw_step::PALW_STEP_MAX_LEAVES,
+            kv_checkpoint_bytes: 0,
+            gdn_checkpoint_bytes: 0,
+            path_from_ladder: false,
+            count_ids: true,
+        }
+    }
+
+    /// Decision 11's court: `min(n_ctx, interval)` positions of history, one checkpoint-chunk
+    /// opening per history-reading reference, against the caller's ladder. The two opening prices
+    /// start at zero and the caller fills in whichever apply — `palw_context_ladder` derives both
+    /// from the profile's own map.
+    pub fn checkpoint_anchored_v1(profile: &PalwShapeProfileV3, interval: u32, ladder: u64, checkpoint_bytes: u64) -> Self {
+        Self {
+            history_positions: (profile.n_ctx as u64).min(u64::from(interval).max(1)),
+            ladder,
+            kv_checkpoint_bytes: checkpoint_bytes,
+            gdn_checkpoint_bytes: checkpoint_bytes,
+            path_from_ladder: true,
+            count_ids: true,
+        }
+    }
+}
+
+/// [`derive_court_cost_v1`] against a stated court (ADR-0077 Decision 11).
+///
+/// One enumeration answers every form of the question, which is the point: a second walk that
+/// merely happened to agree with this one is how a class gets admitted at one price and prosecuted
+/// at another.
+pub fn derive_court_cost_shaped_v1(
+    profile: &PalwShapeProfileV3,
+    shape: PalwCourtCostShapeV1,
+) -> Result<PalwCourtCostV1, PalwClassAdmissionError> {
     use crate::palw_step::{PALW_STEP_INPUT_KV_K, PALW_STEP_INPUT_KV_V, PalwStepOpKindV1 as Op};
     let over = || PalwClassAdmissionError::Profile("the class's court cost overflows a u64".to_string());
     let mut cost = PalwCourtCostV1 { max_close_bytes: 0, max_terminal_macs: 0, max_operand_count: 0 };
 
     // The deepest step tree this class can be disputed in, and therefore the longest path any one
     // step leaf can carry.
-    let worst_leaves = worst_case_step_leaf_count_v1(profile).map_err(|e| PalwClassAdmissionError::Profile(format!("{e:?}")))?;
-    let step_path_bytes = u64::from(worst_leaves.max(2).next_power_of_two().trailing_zeros()) * PATH_ELEMENT_BYTES;
+    let worst_leaves = crate::palw_step::worst_case_step_leaf_count_capped_v1(profile, shape.ladder)
+        .map_err(|e| PalwClassAdmissionError::Profile(format!("{e:?}")))?;
+    // The class's own depth, or the ruleset's — see `PalwCourtCostShapeV1::path_from_ladder`.
+    let path_depth_of = if shape.path_from_ladder { shape.ladder } else { worst_leaves };
+    let step_path_bytes = u64::from(path_depth_of.max(2).next_power_of_two().trailing_zeros()) * PATH_ELEMENT_BYTES;
     let kv_dim = (profile.attn_kv_heads as u64).checked_mul(profile.attn_head_dim as u64).ok_or_else(over)?;
     let n_ctx = profile.n_ctx as u64;
+    // What a history-reading reference opens, and what it pays once for the right to stop there.
+    let history = shape.history_positions;
 
     for table in [&profile.pre_nodes, &profile.gdn_nodes, &profile.attn_nodes, &profile.post_nodes] {
         for node in table.iter() {
@@ -319,8 +422,9 @@ pub fn derive_court_cost_v1(profile: &PalwShapeProfileV3) -> Result<PalwCourtCos
                         if grouped {
                             let groups = in_w.div_ceil(crate::palw_qwen36_ops::QWEN36_WEIGHT_GROUP as u64);
                             let row_unit = in_w.checked_add(groups).and_then(|v| v.checked_add(17)).ok_or_else(over)?;
-                            let mut payload =
-                                codes.checked_add(tile.checked_mul(groups.checked_add(17).ok_or_else(over)?).ok_or_else(over)?).ok_or_else(over)?;
+                            let mut payload = codes
+                                .checked_add(tile.checked_mul(groups.checked_add(17).ok_or_else(over)?).ok_or_else(over)?)
+                                .ok_or_else(over)?;
                             if node.weight_name.ends_with(".routed") {
                                 let block_w = if node.weight_name.ends_with(".ffn_down_exps.routed") {
                                     profile.hidden_dim as u64
@@ -328,7 +432,8 @@ pub fn derive_court_cost_v1(profile: &PalwShapeProfileV3) -> Result<PalwCourtCos
                                     profile.ffn_dim as u64
                                 };
                                 let chunk = tile.min(block_w.max(1));
-                                if block_w > 0 && (!block_w.is_multiple_of(chunk) || (tile < block_w && !block_w.is_multiple_of(tile))) {
+                                if block_w > 0 && (!block_w.is_multiple_of(chunk) || (tile < block_w && !block_w.is_multiple_of(tile)))
+                                {
                                     payload = payload
                                         .checked_add(2u64.checked_mul(chunk).and_then(|c| c.checked_mul(row_unit)).ok_or_else(over)?)
                                         .ok_or_else(over)?;
@@ -391,11 +496,22 @@ pub fn derive_court_cost_v1(profile: &PalwShapeProfileV3) -> Result<PalwCourtCos
             // four window positions of ONE ref's channel range (it was priced at a single
             // position before, which under-charged the window by 4x — found while the slicing
             // moved the width the other way).
+            //
+            // **`history` rather than `n_ctx` since ADR-0077 Decision 11**, and the two are the
+            // same value on every shipped preset (`genesis_anchored_v1` sets `history_positions`
+            // to `n_ctx`). Past the ladder fence a class with a registered state chunk map replays
+            // at most `interval` positions after a verified checkpoint, which is the one term this
+            // decision makes flat.
             let positions = match node.op_kind {
-                Op::GatedDeltaNet => n_ctx,
+                Op::GatedDeltaNet => history,
                 Op::SsmConv if sliced_conv => 4,
                 _ => 1,
             };
+            // Does this node read HISTORY at all? A KV arm or a recurrence does; nothing else. It
+            // is what decides whether a checkpoint opening is paid for, so it is read off the same
+            // node the runs below are.
+            let reads_history = node.op_kind == Op::GatedDeltaNet
+                || node.input_refs.iter().any(|r| *r == PALW_STEP_INPUT_KV_K || *r == PALW_STEP_INPUT_KV_V);
             for (ordinal, r) in node.input_refs.iter().enumerate() {
                 let mut width = input_width_v1(*r, table, profile).ok_or_else(over)?;
                 if head_sliced_gdn {
@@ -436,7 +552,7 @@ pub fn derive_court_cost_v1(profile: &PalwShapeProfileV3) -> Result<PalwCourtCos
                 // admissibility hung on exactly that difference.
                 let (runs, run_tiles, run_lanes) = match *r {
                     // The cache: one run per position, each `kv_dim` wide.
-                    PALW_STEP_INPUT_KV_K | PALW_STEP_INPUT_KV_V => (n_ctx, kv_dim.div_ceil(src_tile), kv_dim),
+                    PALW_STEP_INPUT_KV_K | PALW_STEP_INPUT_KV_V => (history, kv_dim.div_ceil(src_tile), kv_dim),
                     // Everything else: `positions` runs of the (possibly sliced) row. The
                     // checkpoint sentinel stays priced pessimistically on purpose: the leaf set
                     // refuses it outright today, so a class reaching it is unadjudicable rather
@@ -480,7 +596,7 @@ pub fn derive_court_cost_v1(profile: &PalwShapeProfileV3) -> Result<PalwCourtCos
             // `base0_logits_trace_root_v1` — a flat hash, not a tree, so one row cannot be opened
             // on its own. That makes this arm `calls x vocabulary`, and a job may be almost all
             // decode: the bound is the whole context. Only a gather pays it.
-            if node.op_kind == Op::EmbedLookup {
+            if shape.count_ids && node.op_kind == Op::EmbedLookup {
                 let ids = n_ctx.checked_mul(4).ok_or_else(over)?;
                 let pin = decode_pin_price_v1(profile, n_ctx).ok_or_else(over)?;
                 evidence = evidence.checked_add(ids).and_then(|e| e.checked_add(pin)).ok_or_else(over)?;
@@ -488,7 +604,28 @@ pub fn derive_court_cost_v1(profile: &PalwShapeProfileV3) -> Result<PalwCourtCos
             // The prompt ids ride every refutation that addresses a gather, and a challenger may
             // carry them on any close: they are checked against `prompt_token_ids_hash` before one
             // is read, so they cost bytes rather than trust.
-            evidence = evidence.checked_add(n_ctx.checked_mul(4).ok_or_else(over)?).ok_or_else(over)?;
+            //
+            // **Not anchored by ADR-0077 Decision 11, deliberately.** The decision shortens the
+            // history a ref opens; it says nothing about the ids, and it could not: they are
+            // checked against `prompt_token_ids_hash`, a FLAT hash over the whole prompt, which no
+            // window of ids can be opened against. So this term stays `n_ctx`-shaped in both forms
+            // and ADR-0077 §4 budgets it as such ("PublicDa carries `n_ctx × 4` bytes of ids —
+            // 2 KiB at 512"). It is the reason W1's `max_close_bytes` equality is stated over the
+            // history term rather than over the whole close.
+            if shape.count_ids {
+                evidence = evidence.checked_add(n_ctx.checked_mul(4).ok_or_else(over)?).ok_or_else(over)?;
+            }
+            // **The price of stopping at a checkpoint** (Decision 11: "plus ONE checkpoint-chunk
+            // opening per history-reading ref"). Zero on the shipped form, which has no anchor to
+            // open. Charged per REF rather than per node, because each history-reading reference
+            // substitutes its own chunk.
+            if reads_history {
+                let per_ref = if node.op_kind == Op::GatedDeltaNet { shape.gdn_checkpoint_bytes } else { shape.kv_checkpoint_bytes };
+                if per_ref > 0 {
+                    let refs = node.input_refs.len().max(1) as u64;
+                    evidence = evidence.checked_add(refs.checked_mul(per_ref).ok_or_else(over)?).ok_or_else(over)?;
+                }
+            }
 
             // Recomputation: what a full node spends to redo this one step, on peer-supplied input.
             //
@@ -576,8 +713,40 @@ pub enum PalwClassAdmissionError {
     /// families holding 97.8% of cadence whose court methods are the trait's defaults. A class
     /// that fails here is still perfectly registrable; it takes a zero share and earns no cadence
     /// until some build certifies a backend for it.
-    #[error("the class asks for {share}‰ but no end-to-end certified family covers the kernels it reaches — it may register weightless")]
+    #[error(
+        "the class asks for {share}‰ but no end-to-end certified family covers the kernels it reaches — it may register weightless"
+    )]
     NotEndToEndCertified { share: u16 },
+    /// **ADR-0077 Decision 14: the canonical job grows with the context.**
+    ///
+    /// A quantum is `pwu_per_inference / quanta_per_canonical_job` leaves and a receipt is capped
+    /// at `max_quanta_per_receipt` of them — a per-receipt JACKPOT bound (ADR-0044 Decision 5),
+    /// not a tax on ordinary use. A row whose canonical job is a fraction of its context makes it
+    /// the second thing: with the hybrid's (7, 2) job at `n_ctx` 512 an ordinary request is ~450
+    /// quanta capped to 64, so 86 % of real, certified work is uncounted. Requiring the canonical
+    /// footprint to be at least an eighth of the context bounds the widest admissible job at
+    /// `8 × 8 = 64` quanta by construction, and the cap goes back to bounding the outlier.
+    ///
+    /// Reachable only past `Params::palw_context_ladder` — see
+    /// [`crate::palw_context_ladder::palw_canonical_footprint_floor_v1`].
+    #[error("the canonical job touches {footprint} cached positions and this row's floor is {floor}")]
+    CanonicalFootprintUnderTheRow { footprint: u64, floor: u64 },
+}
+
+/// **The Phase B rules a `palw_context_ladder`-armed network judges a registration under**
+/// (ADR-0077 Decisions 11, 12 and 14).
+///
+/// Assembled by [`crate::palw_context_ladder::palw_class_ladder_rules_v1`] from the profile's own
+/// map and context, so nothing here is a registrant's declaration. `None` at
+/// [`verify_class_admission_v4`] is the shipped gate, byte for byte.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PalwClassLadderRulesV1 {
+    /// The ladder both leaf counts are enumerated against.
+    pub ladder: u64,
+    /// The court this class's close is priced for.
+    pub cost_shape: PalwCourtCostShapeV1,
+    /// Decision 14's floor under the canonical job's footprint.
+    pub canonical_footprint_floor: u64,
 }
 
 /// Every kernel a profile's graph can reach, read off the graph.
@@ -630,6 +799,27 @@ pub fn verify_class_admission_v3(
     certified: &[crate::palw_e2e_adjudicability::PalwE2eFamilyV1],
     chain_certified: &[crate::palw_e2e_adjudicability::PalwE2eFamilyV1],
 ) -> Result<PalwClassCatalogEntryV2, PalwClassAdmissionError> {
+    verify_class_admission_v4(bundle, profile, canonical, registration, certified, chain_certified, None)
+}
+
+/// [`verify_class_admission_v3`] under ADR-0077 Phase B's rules, or under today's.
+///
+/// `ladder` is `None` on every shipped preset — `Params::palw_context_ladder` is the fence, and
+/// with it unset this is `verify_class_admission_v3` and derives the same catalog entry byte for
+/// byte. `Some` swaps three derivations and adds one refusal, and every one of them is a
+/// `PalwConsensusParamsV2`-shaped fact and therefore a re-mint: the ladder both leaf counts are
+/// enumerated against (Decision 12), the court the close is priced for (Decision 11), and
+/// Decision 14's floor under the canonical job.
+#[allow(clippy::too_many_arguments)]
+pub fn verify_class_admission_v4(
+    bundle: &PalwConsensusParamsV2,
+    profile: &PalwShapeProfileV3,
+    canonical: &PalwJobContextV2,
+    registration: &PalwConsensusObjectV2,
+    certified: &[crate::palw_e2e_adjudicability::PalwE2eFamilyV1],
+    chain_certified: &[crate::palw_e2e_adjudicability::PalwE2eFamilyV1],
+    ladder: Option<PalwClassLadderRulesV1>,
+) -> Result<PalwClassCatalogEntryV2, PalwClassAdmissionError> {
     let PalwConsensusObjectV2::ClassRegistered { class_id, artifact_root, pwu_rule, share_permille, .. } = registration else {
         return Err(PalwClassAdmissionError::NotARegistration);
     };
@@ -681,6 +871,15 @@ pub fn verify_class_admission_v3(
             "the canonical job touches {footprint} cached positions and the class registers n_ctx {}",
             profile.n_ctx
         )));
+    }
+    // **ADR-0077 Decision 14, the other end of the same measurement.** The check above refuses a
+    // canonical job too LONG for the row; this refuses one too SHORT for it, which is the failure
+    // that costs a class 86 % of its certified work rather than refusing it outright — invisible,
+    // and therefore the one that needs a gate.
+    if let Some(rules) = ladder
+        && footprint < rules.canonical_footprint_floor
+    {
+        return Err(PalwClassAdmissionError::CanonicalFootprintUnderTheRow { footprint, floor: rules.canonical_footprint_floor });
     }
 
     // A4 first: a class whose disputes cannot be adjudicated must not reach any later check, so
@@ -745,10 +944,14 @@ pub fn verify_class_admission_v3(
         }
     }
 
-    let worst = worst_case_step_leaf_count_v1(profile).map_err(|e| PalwClassAdmissionError::Profile(format!("{e:?}")))?;
-    let ladder = bundle.court.max_step_leaf_count();
-    if worst > ladder {
-        return Err(PalwClassAdmissionError::DeeperThanTheLadder { worst, ladder });
+    let worst = match ladder {
+        Some(rules) => crate::palw_step::worst_case_step_leaf_count_capped_v1(profile, rules.ladder),
+        None => worst_case_step_leaf_count_v1(profile),
+    }
+    .map_err(|e| PalwClassAdmissionError::Profile(format!("{e:?}")))?;
+    let bundle_ladder = bundle.court.max_step_leaf_count();
+    if worst > bundle_ladder {
+        return Err(PalwClassAdmissionError::DeeperThanTheLadder { worst, ladder: bundle_ladder });
     }
 
     // **Decision C: what prosecuting this class costs, against what the ruleset allows.**
@@ -756,7 +959,10 @@ pub fn verify_class_admission_v3(
     // Ordered after the ladder because the two answer different halves of one question — the ladder
     // bounds how many rounds a dispute takes, these bound what a round costs — and a class that
     // fails both should be told about the deeper problem first.
-    let cost = derive_court_cost_v1(profile)?;
+    let cost = derive_court_cost_shaped_v1(
+        profile,
+        ladder.map_or_else(|| PalwCourtCostShapeV1::genesis_anchored_v1(profile), |r| r.cost_shape),
+    )?;
     for (what, got, ceiling) in [
         ("court close", cost.max_close_bytes, bundle.court.max_close_bytes()),
         ("terminal multiply-accumulates", cost.max_terminal_macs, bundle.court.max_terminal_macs()),
@@ -767,7 +973,11 @@ pub fn verify_class_admission_v3(
         }
     }
 
-    let counted = step_leaf_count(profile, canonical).map_err(|e| PalwClassAdmissionError::Profile(format!("{e:?}")))?;
+    let counted = match ladder {
+        Some(rules) => crate::palw_step::step_leaf_count_capped_v1(profile, canonical, rules.ladder),
+        None => step_leaf_count(profile, canonical),
+    }
+    .map_err(|e| PalwClassAdmissionError::Profile(format!("{e:?}")))?;
     if counted > worst {
         return Err(PalwClassAdmissionError::CanonicalDeeperThanWorstCase { canonical: counted, worst });
     }
@@ -1067,13 +1277,8 @@ mod tests {
         // at the one the hand-written table pretended to.
         let canonical = context(&profile, 8, 4);
         let counted = step_leaf_count(&profile, &canonical).expect("the canonical job counts");
-        let entry = admit(
-            &bundle_that_pays_for_qwen(),
-            &profile,
-            &canonical,
-            &registration(profile.shape_profile_id(), counted),
-        )
-        .expect("the measured Qwen2.5-1.5B class is admissible on a network that pays for its courts");
+        let entry = admit(&bundle_that_pays_for_qwen(), &profile, &canonical, &registration(profile.shape_profile_id(), counted))
+            .expect("the measured Qwen2.5-1.5B class is admissible on a network that pays for its courts");
 
         assert_eq!(entry.class_id, profile.shape_profile_id(), "a class is its graph");
         assert_eq!(entry.canonical_step_leaf_count, counted);
@@ -1129,8 +1334,7 @@ mod tests {
         let big = qwen_admissible();
         let canonical = context(&big, 8, 4);
         let counted = step_leaf_count(&big, &canonical).expect("counts");
-        admit(&bundle_that_pays_for_qwen(), &big, &canonical, &registration(big.shape_profile_id(), counted))
-            .expect("admissible");
+        admit(&bundle_that_pays_for_qwen(), &big, &canonical, &registration(big.shape_profile_id(), counted)).expect("admissible");
         assert_eq!(base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("re-derives").shape_profile_id(), before);
         assert_ne!(before, big.shape_profile_id(), "two geometries are two classes");
     }
@@ -1196,8 +1400,8 @@ mod tests {
         let big = qwen_admissible();
         let canonical = context(&big, 8, 4);
         let counted = step_leaf_count(&big, &canonical).expect("counts");
-        let err = admit(&bundle, &big, &canonical, &registration(big.shape_profile_id(), counted))
-            .expect_err("the ladder cannot reach it");
+        let err =
+            admit(&bundle, &big, &canonical, &registration(big.shape_profile_id(), counted)).expect_err("the ladder cannot reach it");
         assert!(matches!(err, PalwClassAdmissionError::DeeperThanTheLadder { .. }), "got {err:?}");
     }
 
@@ -1208,13 +1412,8 @@ mod tests {
         let profile = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("expressible");
         let canonical = context(&profile, PALW_RC_BASE0_CANONICAL.0, PALW_RC_BASE0_CANONICAL.1);
         let counted = step_leaf_count(&profile, &canonical).expect("counts");
-        let err = admit(
-            &bundle_with_full_ladder(),
-            &profile,
-            &canonical,
-            &registration(profile.shape_profile_id(), counted + 1),
-        )
-        .expect_err("an overstated pwu is a lie the count catches");
+        let err = admit(&bundle_with_full_ladder(), &profile, &canonical, &registration(profile.shape_profile_id(), counted + 1))
+            .expect_err("an overstated pwu is a lie the count catches");
         assert!(matches!(err, PalwClassAdmissionError::PwuPerInferenceMismatch { .. }), "got {err:?}");
     }
 

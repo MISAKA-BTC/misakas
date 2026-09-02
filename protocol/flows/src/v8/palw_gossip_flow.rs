@@ -73,7 +73,19 @@ impl PalwGossipFlow {
                     // The ASKER is charged for what it asks for (audit3 H5/H10): the serve budget
                     // is per peer, so one request loop can no longer silence every honest seat's
                     // pull for the rest of the window.
-                    if let Some(bytes) = self.ctx.palw_gossip().resolve_material_for_serve(self.router.key(), claim).await {
+                    // **Authenticated since ADR-0077 SA-2** ("the same rule covers
+                    // `request_palw_material` today"): a whole capture is up to 16 MiB and this
+                    // request was sixty-four bytes with no signature and no bond binding. The
+                    // fields are absent on a pre-5f peer's request and the serve then names it
+                    // `unsigned`; a node that serves nothing is unaffected either way.
+                    let request = crate::palw_gossip::PalwOpeningRequestV1 {
+                        claim,
+                        interval_index: None,
+                        requested_daa: inner.requested_daa,
+                        requester_pubkey: &inner.requester_pubkey,
+                        signature: &inner.signature,
+                    };
+                    if let Ok(bytes) = self.ctx.palw_gossip().resolve_material_for_serve_signed(self.router.key(), &request).await {
                         let msg = make_message!(
                             Payload::PalwTraceMaterialBroadcast,
                             kaspa_p2p_lib::pb::PalwTraceMaterialBroadcastMessage { claim_id: Some(claim.into()), material: bytes }

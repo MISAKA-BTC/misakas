@@ -170,6 +170,7 @@ pub mod palw_catalog_coverage;
 pub mod palw_chain_weight;
 pub mod palw_class_admission_v2;
 pub mod palw_class_daa;
+pub mod palw_context_ladder;
 pub mod palw_court_v2;
 /// MISAKA PALW class registration (B12): the object every "pinned at registration" sentence
 /// across ADR-0026…0033 meant — measured identities, the derived credited ceiling, windows,
@@ -213,6 +214,9 @@ pub mod palw_job_state;
 pub mod palw_legs;
 pub mod palw_lifecycle_objects_v2;
 pub mod palw_mode_v2;
+/// ADR-0077 Decision 16 (P-16): `PanelDa`, the privacy mode whose prompt stays off chain — and
+/// ADR-0077 SA-5, which says what arming it does NOT buy.
+pub mod palw_panel_da_v1;
 pub mod palw_panel_v2;
 pub mod palw_producer_v2;
 pub mod palw_pwu;
