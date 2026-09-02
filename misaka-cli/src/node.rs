@@ -300,3 +300,117 @@ pub async fn doctor(ctx: &Ctx) -> CliResult {
         Err(CliError::new(exit_code, format!("node doctor: {reason} (see report)")))
     }
 }
+
+/// **`node liveness`** — the probe a watchdog runs from OUTSIDE the process. It answers two
+/// questions the process cannot answer about itself: does the RPC respond at all (a wedged
+/// runtime — every tokio worker blocked, no epoll thread — keeps its ports open and its
+/// `systemctl is-active` green while answering nothing), and has the chain moved since the last
+/// probe. The 2026-09-02 .113 hang went unnoticed for 46 minutes for exactly this reason.
+///
+/// Exit codes: 0 alive; `LIVENESS_WEDGED` (11) when the connect or the first RPC times out;
+/// `LIVENESS_STALLED` (12) when the RPC answers but neither the virtual DAA nor the block count
+/// advanced within `stall_secs` (the sink's past-median time is reported too, so an operator can
+/// tell a stalled node from an idle chain). The state file is written on every run.
+pub async fn liveness(ctx: &Ctx, state_path: &std::path::Path, stall_secs: u64) -> CliResult {
+    #[derive(serde::Serialize, serde::Deserialize, Default)]
+    struct Probe {
+        virtual_daa: u64,
+        block_count: u64,
+        past_median_time: u64,
+        /// Unix seconds of the last probe that saw progress.
+        last_progress_at: u64,
+        /// Unix seconds of the last probe.
+        probed_at: u64,
+    }
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let timeout = Duration::from_secs(ctx.timeout_secs.clamp(2, 30));
+    let net_id = NetworkId::from_str(&ctx.network)
+        .map_err(|e| CliError::new(exit::GENERIC, format!("bad --network '{}': {e}", ctx.network)))?;
+    let nt: NetworkType = net_id.network_type();
+    let hostport = match &ctx.rpc {
+        Some(hp) => hp.clone(),
+        None => format!("127.0.0.1:{}", nt.default_borsh_rpc_port()),
+    };
+    let previous: Probe = std::fs::read(state_path).ok().and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default();
+
+    let report = |verdict: &str, code: i32, detail: String, probe: &Probe| -> CliResult {
+        match ctx.output {
+            OutputFormat::Json => println!(
+                "{}",
+                serde_json::json!({
+                    "verdict": verdict, "exit": code, "detail": detail, "rpc": hostport,
+                    "virtual_daa": probe.virtual_daa, "block_count": probe.block_count,
+                    "past_median_time": probe.past_median_time, "last_progress_at": probe.last_progress_at,
+                })
+            ),
+            _ => println!("{verdict}: {detail}"),
+        }
+        if code == exit::SUCCESS { Ok(()) } else { Err(CliError::new(code, format!("{verdict}: {detail}"))) }
+    };
+
+    // WEDGED is decided on the RPC alone: a node whose runtime is blocked accepts the TCP
+    // connection (the kernel does) and never answers.
+    let dag = match tokio::time::timeout(timeout, async {
+        let client = try_connect(&format!("ws://{hostport}"), timeout).await?;
+        client.get_block_dag_info().await.map_err(|e| e.to_string())
+    })
+    .await
+    {
+        Ok(Ok(dag)) => dag,
+        Ok(Err(e)) => {
+            let probe = Probe { probed_at: now, ..previous };
+            let _ = std::fs::write(state_path, serde_json::to_vec_pretty(&probe).unwrap_or_default());
+            return report("WEDGED", exit::LIVENESS_WEDGED, format!("wRPC {hostport} did not answer: {e}"), &probe);
+        }
+        Err(_) => {
+            let probe = Probe { probed_at: now, ..previous };
+            let _ = std::fs::write(state_path, serde_json::to_vec_pretty(&probe).unwrap_or_default());
+            return report(
+                "WEDGED",
+                exit::LIVENESS_WEDGED,
+                format!("wRPC {hostport} did not answer getBlockDagInfo within {}s", timeout.as_secs()),
+                &probe,
+            );
+        }
+    };
+
+    let moved = dag.virtual_daa_score > previous.virtual_daa || dag.block_count > previous.block_count;
+    let last_progress_at = if moved || previous.last_progress_at == 0 { now } else { previous.last_progress_at };
+    let probe = Probe {
+        virtual_daa: dag.virtual_daa_score,
+        block_count: dag.block_count,
+        past_median_time: dag.past_median_time,
+        last_progress_at,
+        probed_at: now,
+    };
+    if let Some(dir) = state_path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    std::fs::write(state_path, serde_json::to_vec_pretty(&probe).unwrap_or_default())
+        .map_err(|e| CliError::new(exit::GENERIC, format!("cannot write {}: {e}", state_path.display())))?;
+
+    let idle_for = now.saturating_sub(last_progress_at);
+    let sink_age = now.saturating_sub(dag.past_median_time / 1000);
+    if idle_for >= stall_secs && !moved {
+        return report(
+            "STALLED",
+            exit::LIVENESS_STALLED,
+            format!(
+                "no progress for {idle_for}s (limit {stall_secs}s): daa={} blocks={} sink past-median age {sink_age}s",
+                dag.virtual_daa_score, dag.block_count
+            ),
+            &probe,
+        );
+    }
+    report(
+        "ALIVE",
+        exit::SUCCESS,
+        format!(
+            "daa={} blocks={} {}; sink past-median age {sink_age}s",
+            dag.virtual_daa_score,
+            dag.block_count,
+            if moved { "advanced".to_string() } else { format!("unchanged for {idle_for}s") }
+        ),
+        &probe,
+    )
+}

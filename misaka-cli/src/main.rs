@@ -49,6 +49,10 @@ pub mod exit {
     pub const TIMEOUT_PENDING: i32 = 7;
     pub const WALLET_LOCKED: i32 = 8;
     pub const UNSAFE_REFUSED: i32 = 10;
+    /// `node liveness`: the node did not answer its RPC within the timeout — a wedged runtime.
+    pub const LIVENESS_WEDGED: i32 = 11;
+    /// `node liveness`: the node answers but its chain has not moved within the stall window.
+    pub const LIVENESS_STALLED: i32 = 12;
 }
 
 /// A CLI error that carries the process exit code to surface.
@@ -569,6 +573,19 @@ fn key_address(ctx: &node::Ctx, ks: &keys::KeySource) -> CliResult {
 enum NodeCmd {
     /// One-shot health check: ports, sync, versions, RPC surface.
     Doctor,
+    /// Liveness probe for a watchdog: is the node ANSWERING and is its chain MOVING? Exits 0 when
+    /// the wRPC answers within --timeout and the virtual DAA (or block count) advanced since the
+    /// last probe within --stall-secs; exits 11 (WEDGED) when the RPC does not answer — the shape
+    /// of the 2026-09-02 public-node hang, which `Restart=` never sees — and 12 (STALLED) when it
+    /// answers but nothing has moved for --stall-secs. State lives in --state between runs.
+    Liveness {
+        /// Where the previous probe's DAA/block count/timestamps are kept (JSON).
+        #[arg(long, default_value = "/var/lib/misaka/liveness.json")]
+        state: std::path::PathBuf,
+        /// No progress for this long is STALLED. Size it to several block intervals.
+        #[arg(long, default_value_t = 900)]
+        stall_secs: u64,
+    },
     /// Show the effective local node RPC endpoints (the registry the node wrote, else the
     /// network defaults). Lets you see what `misaka miner`/`validator` will auto-connect to.
     Endpoints,
@@ -795,6 +812,7 @@ async fn main() -> std::process::ExitCode {
 
     let result = match cli.command {
         Command::Node(NodeCmd::Doctor) => node::doctor(&ctx).await,
+        Command::Node(NodeCmd::Liveness { state, stall_secs }) => node::liveness(&ctx, &state, stall_secs).await,
         Command::Node(NodeCmd::Endpoints) => bootstrap::endpoints(ctx.output, &ctx.network),
         Command::Node(NodeCmd::Start(a)) => {
             forward::node(&ctx, a.profile.as_deref(), a.node_profile.as_deref(), a.vps_8gb, a.min_disk_free_percent, &a.args, false)

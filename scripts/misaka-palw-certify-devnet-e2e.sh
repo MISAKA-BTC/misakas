@@ -14,7 +14,8 @@
 #      for the same objects, and no node computed a different PALW state (no "dropped" line for
 #      the accepted objects on any node)
 #
-# Env: KASPAD_BIN, CLI_BIN, CERTIFY_BIN (defaults target/release/*), NODES (3), WORK_DIR, WAIT (s).
+# Env: KASPAD_BIN, CLI_BIN, CERTIFY_BIN (defaults target/release/*), NODES (3), WORK_DIR, WAIT (s),
+#      EXTRA_NODE_ARGS (extra kaspad flags for every node, e.g. "--palw-panel").
 set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 KASPAD_BIN="${KASPAD_BIN:-$REPO_ROOT/target/release/kaspad}"
@@ -55,6 +56,9 @@ for ((i=0; i<NODES; i++)); do
         --nogrpc --enable-unsynced-mining
         --palw-produce --palw-producer-key="$WORK_DIR/keys/bond-$i.seed" --palw-producer-bond="$PREMINE_TXID:$i" --palw-producer-pay-address="$addr"
         --palw-fee-outpoint="$PREMINE_TXID:$((MAIN_PREMINE_INDEX + 1 + i))")
+  # EXTRA_NODE_ARGS: e.g. "--palw-panel" to seat every node (the panel replays claims on its own
+  # blocking tasks — the code path the .113 hang analysis moved off the runtime).
+  if [ -n "${EXTRA_NODE_ARGS:-}" ]; then read -r -a extra <<<"$EXTRA_NODE_ARGS"; args+=("${extra[@]}"); fi
   if [ "$i" -gt 0 ]; then args+=(--connect=127.0.0.1:16310); fi
   MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" "${args[@]}" >"$WORK_DIR/node-$i.log" 2>&1 &
   pid=$!

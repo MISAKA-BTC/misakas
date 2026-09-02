@@ -1210,7 +1210,7 @@ impl PalwPanelService {
     /// `verify_material` reproduces it whichever family ran it. Returns the funded, signed 0x4a
     /// transaction, the claim id, and the `FPC1` material (question + answer) to retain and
     /// broadcast.
-    fn build_canonical_claim(
+    async fn build_canonical_claim(
         &self,
         session: &kaspa_consensusmanager::ConsensusProxy,
         network_domain: Hash64,
@@ -1287,8 +1287,15 @@ impl PalwPanelService {
         job.decode_token_limit = canonical_ctx.exact_decode_tokens;
         job.max_context_tokens = canonical_ctx.max_context_tokens;
 
-        let run = backend.execute_free_prompt(&job, &prompt)?;
-        let shape = backend.capture_shape(&run.outcome.material).ok_or("the capture has no shape this family can read")?;
+        let (job_for_run, prompt_for_run) = (job.clone(), prompt.clone());
+        let (_backend, executed) = offload(backend, move |b| {
+            let run = b.execute_free_prompt(&job_for_run, &prompt_for_run)?;
+            let shape =
+                b.capture_shape(&run.outcome.material).ok_or_else(|| "the capture has no shape this family can read".to_string())?;
+            Ok::<_, String>((run, shape))
+        })
+        .await?;
+        let (run, shape) = executed?;
         let retention = current_daa.saturating_add(facts.min_trace_retention_daa);
         let commitment =
             kaspa_consensus_core::palw_fp_execution_v3::palw_fp_commitment_from_context_v3(&job, &shape.job_context, &run, retention)
@@ -1798,7 +1805,11 @@ impl PalwPanelService {
                         };
                         let Some(prompt_ids) = Self::fp_prompt_for_job(backend.as_ref(), &job) else { continue };
                         let prompt: Vec<usize> = prompt_ids.iter().map(|t| *t as usize).collect();
-                        let Ok(run) = backend.execute_free_prompt(&job.job, &prompt) else { continue };
+                        let claimed_job = job.job.clone();
+                        let Ok((_backend, run)) = offload(backend, move |b| b.execute_free_prompt(&claimed_job, &prompt)).await else {
+                            continue;
+                        };
+                        let Ok(run) = run else { continue };
                         run.outcome
                     } else {
                         let Some(anchor) = self.job_anchor_for_claim(
@@ -1812,7 +1823,8 @@ impl PalwPanelService {
                             continue;
                         };
                         let Ok((job, prompt)) = backend.job_for_anchor(anchor) else { continue };
-                        let Ok(run) = backend.execute(&job, &prompt) else { continue };
+                        let Ok((_backend, run)) = offload(backend, move |b| b.execute(&job, &prompt)).await else { continue };
+                        let Ok(run) = run else { continue };
                         run
                     };
                     let reproduced = mine_run.execution_root == target.execution_root && mine_run.trace_root == target.trace_root;
@@ -1915,7 +1927,7 @@ impl PalwPanelService {
                 // The capture, and the family's backend for it. A party with no material — or a
                 // family with no court — cannot answer honestly, and answering dishonestly is what
                 // the terminal close exists to punish, so it stays silent and lets the clock decide.
-                let backend = match self.resolve_backend(&session, duty.class_id, duty.artifact_root) {
+                let mut backend = match self.resolve_backend(&session, duty.class_id, duty.artifact_root) {
                     Ok(backend) => backend,
                     Err(why) => {
                         // Not rate-limited by session: this one is a NODE-level misconfiguration
@@ -2023,10 +2035,9 @@ impl PalwPanelService {
                 if !duty.i_am_responder && !own_executions.contains_key(&duty.claim_id) {
                     // The job that was CLAIMED: the user's for a free prompt (ADR-0073 Decision
                     // 1d), the block's for an attempt.
-                    let rerun = match &fp_job {
+                    let work = match &fp_job {
                         Some(job) => {
-                            let prompt: Vec<usize> = job.prompt_token_ids.iter().map(|t| *t as usize).collect();
-                            backend.execute_free_prompt(&job.job, &prompt).ok().map(|run| run.outcome)
+                            Some(ReplayWork::FreePrompt(job.job.clone(), job.prompt_token_ids.iter().map(|t| *t as usize).collect()))
                         }
                         None => self
                             .job_anchor_for_claim(
@@ -2038,7 +2049,18 @@ impl PalwPanelService {
                                 &duty.executor_bond,
                             )
                             .and_then(|anchor| backend.job_for_anchor(anchor).ok())
-                            .and_then(|(job, prompt)| backend.execute(&job, &prompt).ok()),
+                            .map(|(job, prompt)| ReplayWork::Attempt(job, prompt)),
+                    };
+                    let rerun = match work {
+                        Some(work) => {
+                            let Ok((offloaded, outcome)) = offload(backend, move |b| work.run(b)).await else {
+                                *court_stalls.entry("the challenger's re-execution task did not finish").or_default() += 1;
+                                continue;
+                            };
+                            backend = offloaded;
+                            outcome
+                        }
+                        None => None,
                     };
                     match rerun {
                         Some(outcome) => {
@@ -2202,15 +2224,30 @@ impl PalwPanelService {
                             );
                             continue;
                         };
-                        let assembled = match &fp_job {
-                            // The user's prompt, hash-bound to the binding (ADR-0073 Decision 1c).
-                            Some(job) => backend.refutation_for_free_prompt_index(accused, index, &job.prompt_token_ids),
-                            None => backend.refutation_for_index(accused, index),
+                        // The user's prompt, hash-bound to the binding (ADR-0073 Decision 1c) — carried
+                        // into the blocking task with a copy of the accused capture.
+                        let carried_prompt: Option<Vec<u32>> = fp_job.as_ref().map(|job| job.prompt_token_ids.clone());
+                        let accused_bytes: Vec<u8> = accused.to_vec();
+                        let Ok((_backend, assembled)) = offload(backend, move |b| {
+                            let refutation = match &carried_prompt {
+                                Some(ids) => b.refutation_for_free_prompt_index(&accused_bytes, index, ids),
+                                None => b.refutation_for_index(&accused_bytes, index),
+                            }
+                            .map_err(|e| ("the close does not assemble from this capture", e))?;
+                            let openings = b
+                                .operand_openings_for(&refutation)
+                                .map_err(|e| ("the class cannot open the rows this step reads", e))?;
+                            Ok::<_, (&'static str, String)>((refutation, openings))
+                        })
+                        .await
+                        else {
+                            *court_stalls.entry("the close's task did not finish").or_default() += 1;
+                            continue;
                         };
-                        let refutation = match assembled {
-                            Ok(r) => r,
-                            Err(e) => {
-                                *court_stalls.entry("the close does not assemble from this capture").or_default() += 1;
+                        let (refutation, operand_openings) = match assembled {
+                            Ok(pair) => pair,
+                            Err((stall, e)) => {
+                                *court_stalls.entry(stall).or_default() += 1;
                                 warn!("[{PALW_PANEL}] cannot assemble the close for session {}: {e}", duty.session_id);
                                 continue;
                             }
@@ -2219,14 +2256,6 @@ impl PalwPanelService {
                         // A close whose openings are empty is a close the court cannot recompute
                         // from: it holds no weights, so every operand the disputed step reads has
                         // to arrive with the evidence, proven against the class root.
-                        let operand_openings = match backend.operand_openings_for(&refutation) {
-                            Ok(o) => o,
-                            Err(e) => {
-                                *court_stalls.entry("the class cannot open the rows this step reads").or_default() += 1;
-                                warn!("[{PALW_PANEL}] cannot open operands for session {}: {e}", duty.session_id);
-                                continue;
-                            }
-                        };
                         let proof = PalwCourtVerdictProofV2::Arithmetic { refutation, operand_openings };
                         // **The chain says what the evidence means, not us.** A `CourtClosed` must
                         // announce the verdict the proof derives to, and the pipeline refuses one
@@ -2397,7 +2426,12 @@ impl PalwPanelService {
                                 continue;
                             };
                             let prompt: Vec<usize> = prompt_ids.iter().map(|t| *t as usize).collect();
-                            let run = match backend.execute_free_prompt(&material.job, &prompt) {
+                            let material_job = material.job.clone();
+                            let Ok((_backend, run)) = offload(backend, move |b| b.execute_free_prompt(&material_job, &prompt)).await
+                            else {
+                                continue;
+                            };
+                            let run = match run {
                                 Ok(run) => run,
                                 Err(e) => {
                                     // An execution the class refuses is not evidence either way —
@@ -2655,7 +2689,10 @@ impl PalwPanelService {
                     && let Some((funding_outpoint, funding_entry)) = funding.clone()
                 {
                     canonical_last_daa = current_daa;
-                    match self.build_canonical_claim(&session, network_domain, bond, current_daa, funding_outpoint, &funding_entry) {
+                    match self
+                        .build_canonical_claim(&session, network_domain, bond, current_daa, funding_outpoint, &funding_entry)
+                        .await
+                    {
                         Ok((tx, claim_id, material)) => {
                             let txid = tx.id();
                             let change = tx.outputs[0].clone();
@@ -3040,6 +3077,49 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::FamilyCertified { .. } => "FamilyCertified",
         PalwConsensusObjectV2::ClassLaneCertified { .. } => "ClassLaneCertified",
         PalwConsensusObjectV2::ObjectChunk { .. } => "ObjectChunk",
+    }
+}
+
+/// **A backend computation runs OFF the async runtime.** A seat's re-execution, a canonical
+/// inference, a refutation with its operand openings: seconds to minutes of CPU on a small host,
+/// and the panel's `worker` is a tokio task. A worker thread that runs one cannot park on the I/O
+/// driver, and enough of them at once leave no thread to poll the sockets — the .113 public
+/// node's 2026-09-02 hang had exactly that shape (every worker in futex_wait, no epoll thread,
+/// peers timing out into CLOSE-WAIT). The backend is moved into a blocking task and handed back so
+/// the caller keeps using it; `Err` is a task that did not finish (a panic), which loses the
+/// backend and is the caller's `continue`.
+async fn offload<T, F>(
+    backend: Box<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1>,
+    work: F,
+) -> Result<(Box<dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1>, T), String>
+where
+    T: Send + 'static,
+    F: FnOnce(&dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1) -> T + Send + 'static,
+{
+    tokio::task::spawn_blocking(move || {
+        let out = work(backend.as_ref());
+        (backend, out)
+    })
+    .await
+    .map_err(|e| format!("the backend task did not finish: {e}"))
+}
+
+/// The job a challenger re-executes off the runtime: the user's for a free prompt (ADR-0073
+/// Decision 1d), the block's for an attempt.
+enum ReplayWork {
+    FreePrompt(kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3, Vec<usize>),
+    Attempt(kaspa_consensus_core::palw_v2::PalwJobContextV2, Vec<usize>),
+}
+
+impl ReplayWork {
+    fn run(
+        self,
+        backend: &dyn kaspa_consensus_core::palw_backend::PalwExecutionBackendV1,
+    ) -> Option<kaspa_consensus_core::palw_backend::PalwExecutionOutcomeV1> {
+        match self {
+            Self::FreePrompt(job, prompt) => backend.execute_free_prompt(&job, &prompt).ok().map(|run| run.outcome),
+            Self::Attempt(job, prompt) => backend.execute(&job, &prompt).ok(),
+        }
     }
 }
 
