@@ -138,7 +138,7 @@ impl TestContext {
             )
             .unwrap();
         t.block.header.nonce = nonce;
-        if t.block.header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2 {
+        if kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(t.block.header.pow_algo_id) {
             t.block.header.palw_commitment = self.consensus.palw_v2_test_carriage(&t.block.header);
         }
         t.block.header.finalize();
@@ -168,7 +168,7 @@ impl TestContext {
         // IS. The harness stands in for that miner, and it must stamp after the timestamp and the
         // nonce because the challenge binds both: an envelope built before them would be an
         // attempt mounted at a different position, which is exactly what the finalizer refuses.
-        if t.block.header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2 {
+        if kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(t.block.header.pow_algo_id) {
             t.block.header.palw_commitment = self.consensus.palw_v2_test_carriage(&t.block.header);
         }
         t.block.header.finalize();
@@ -181,7 +181,7 @@ impl TestContext {
         b.header.nonce = nonce;
         // Same reason as `build_block_template`: the challenge binds the timestamp and the nonce,
         // so the carriage is stamped after they are final.
-        if b.header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2 {
+        if kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(b.header.pow_algo_id) {
             b.header.palw_commitment = self.consensus.palw_v2_test_carriage(&b.header);
         }
         b.header.finalize(); // This overrides the NONE hash we passed earlier with the actual hash
@@ -1893,6 +1893,80 @@ async fn palw_v2_attempt_admission_runs_on_the_live_path() {
     ctx.validate_and_insert_block(resigned.to_immutable()).await;
     assert_eq!(ctx.consensus.get_sink(), sink_before, "a correctly-signed pwu lie is still refused by the equality");
     assert_ne!(resigned_hash, sink_before);
+}
+
+/// **ADR-0072 SA-4, end to end: a network ARMED AT GENESIS produces a chain.**
+///
+/// Every other proof this lane has is a unit test, and that is what let a third gate keep the old
+/// spelling. `consensus/pow/src/palw_admission.rs` called the un-parameterised shape entry point —
+/// which hardcodes `PalwAttemptLaneV1::Unfenced` = algo-6 — and its live caller is
+/// `utxo_validation`, which runs for EVERY chain candidate; an `Err` there is
+/// `StatusDisqualifiedFromChain`. So on this exact configuration every block entered the DAG,
+/// relayed normally, and was then disqualified with
+/// `PalwAttemptLaneClosed { algo_id: 9, open: 6 }`; the virtual chain never left genesis and the
+/// log said "disqualified from virtual chain" without naming the fence. No unit test of a
+/// predicate can see that, because the defect is *which* predicate the pipeline calls.
+///
+/// This test is the answer to "nothing exercises an armed network end to end". It is not the whole
+/// answer — `skip_proof_of_work` means the algo-9 finalizer arm is not priced here, and arming
+/// ABOVE genesis is a different question (`LegacyArm` needs the deleted pre-ADR-0072 lottery
+/// arithmetic back) — but the chain-building path is real: template → carriage → relay gate →
+/// GHOSTDAG → UTXO admission → sink.
+#[tokio::test]
+async fn palw_v2_a_genesis_armed_attempt_lane_builds_a_chain() {
+    use kaspa_consensus_core::config::params::ForkActivation;
+    use kaspa_consensus_core::palw_mode_v2::PalwConsensusMode;
+    use kaspa_consensus_core::pow_layer0::{POW_ALGO_ID_PALW_EXEC_V3, PalwAttemptLaneV1};
+
+    let catalog = palw_v2_test_catalog();
+    let bundle = palw_v2_test_bundle(&catalog);
+    let config = ConfigBuilder::new(MAINNET_PARAMS)
+        .skip_proof_of_work()
+        .edit_consensus_params(|p| {
+            p.palw_consensus_mode = PalwConsensusMode::ConsensusV2(bundle.clone());
+            *p = p.clone().with_palw_v2_cadence();
+            // The arming this whole lane is about, in the one position its own remediation
+            // recommended: `ForkActivation::always()` on a re-minted network.
+            p.palw_attempt_activation = Some(ForkActivation::always());
+        })
+        .build();
+    assert_eq!(
+        config.params.palw_attempt_lane_at(0),
+        PalwAttemptLaneV1::ExecutionArm,
+        "armed at genesis, algo-9 is the open attempt lane at every height"
+    );
+    let genesis_hash = config.params.genesis.hash;
+    let mut ctx = TestContext::new(TestConsensus::new(&config));
+
+    // The producer's side: the template declares the OPEN lane and carries an attempt.
+    let template = ctx.build_block_template(1, ctx.simulated_time + 1);
+    assert_eq!(
+        template.block.header.pow_algo_id, POW_ALGO_ID_PALW_EXEC_V3,
+        "past the fence every template on every node declares algo-9"
+    );
+    assert!(!template.block.header.palw_commitment.is_empty(), "and the harness stamps its carriage on that id");
+
+    // The chain's side: those blocks become the chain. This is the assertion the admission defect
+    // failed — the blocks entered the DAG either way.
+    for _ in 0..3 {
+        ctx.build_block_template_row(0..1).validate_and_insert_row().await.assert_valid_utxo_tip();
+    }
+    let sink = ctx.consensus.get_sink();
+    assert_ne!(sink, genesis_hash, "an armed network must leave genesis — a disqualified candidate never becomes the sink");
+    let sink_header = ctx.consensus.virtual_processor().headers_store.get_header(sink).expect("the sink's header");
+    assert_eq!(sink_header.pow_algo_id, POW_ALGO_ID_PALW_EXEC_V3, "and the chain block itself is on the armed lane");
+
+    // The harness's OTHER block-building path (`TestConsensus::build_header_with_parents`) stamps
+    // the id from the mode cascade instead of from a template, and the cascade cannot see a
+    // top-level fence either. Un-widened it built algo-6 headers while the template builder built
+    // algo-9 ones, so an armed test would have driven the CLOSED lane and could only go green for
+    // the wrong reason.
+    let by_parents = ctx.build_block_with_parents(vec![sink], 7, ctx.simulated_time + 1);
+    assert_eq!(
+        by_parents.header.pow_algo_id, POW_ALGO_ID_PALW_EXEC_V3,
+        "the parent-built harness path must declare the same lane the template builder does"
+    );
+    assert!(!by_parents.header.palw_commitment.is_empty(), "and stamp a carriage on it");
 }
 
 /// **Unit C step 4's missing half: the block's own work reaches the state machine.**

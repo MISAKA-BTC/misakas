@@ -129,12 +129,24 @@ impl TestConsensus {
         // this DAA score (`header_from_precomputed_hash` defaults to the
         // Phase-1 kHeavyHash id, which `check_pow_algo_id` rejects on the
         // BLAKE2b-SHA3-active mainnet/testnet params).
-        header.pow_algo_id = kaspa_consensus_core::pow_layer0::required_algo_id_for_mode(
-            self.params.palw_consensus_mode.required_algo_id(),
-            self.params.pow_palw_ollama_activation.is_active(daa_window.daa_score),
-            self.params.pow_palw_activation.is_active(daa_window.daa_score),
-            self.params.pow_blake2b_sha3_activation.is_active(daa_window.daa_score),
-        );
+        header.pow_algo_id = {
+            let declared = kaspa_consensus_core::pow_layer0::required_algo_id_for_mode(
+                self.params.palw_consensus_mode.required_algo_id(),
+                self.params.pow_palw_ollama_activation.is_active(daa_window.daa_score),
+                self.params.pow_palw_activation.is_active(daa_window.daa_score),
+                self.params.pow_blake2b_sha3_activation.is_active(daa_window.daa_score),
+            );
+            // **ADR-0072 SA-4: the harness declares the lane the CHAIN has open here.**
+            //
+            // The cascade above reads `PalwRulesetV2::required_algo_id`, which is pinned at 6 —
+            // the bundle cannot see a top-level fence, exactly as the template builder's copy of
+            // this cascade cannot (`virtual_processor::processor`, which rewrites it the same
+            // way). Left un-widened, an armed network had the harness building algo-6 headers
+            // while `build_block_template` built algo-9 ones, so an armed integration test would
+            // have exercised the CLOSED lane and gone green for the wrong reason.
+            let lane = self.params.palw_attempt_lane_at(daa_window.daa_score);
+            if kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(declared) { lane.attempt_algo_id() } else { declared }
+        };
         header.timestamp = self.consensus.services.window_manager.calc_past_median_time(&ghostdag_data).unwrap().0 + 1;
         header.blue_score = ghostdag_data.blue_score;
         header.blue_work = ghostdag_data.blue_work;
@@ -149,7 +161,11 @@ impl TestConsensus {
         // challenge is a function of the header's own position. Stamping it earlier would produce
         // a `PalwV2ChallengeMismatch` at the finalizer — the same refusal a re-mounted attempt
         // gets, which is the property it exists for.
-        if header.pow_algo_id == kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_COMMITTED_V2 {
+        // Either attempt id (ADR-0072 SA-4) — the carriage is what an attempt block IS, and past
+        // the fence the attempt id is 9. Spelled `== POW_ALGO_ID_PALW_COMMITTED_V2` this stamped
+        // nothing on an armed network and every header the harness built was refused for a missing
+        // carriage rather than for whatever the test was about.
+        if kaspa_consensus_core::pow_layer0::is_palw_attempt_algo_id(header.pow_algo_id) {
             header.palw_commitment = self.palw_v2_test_carriage(&header);
         }
 

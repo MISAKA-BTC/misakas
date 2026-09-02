@@ -631,7 +631,7 @@ pub enum PowLayer0Error {
     /// circularity). Until some PoW-path digest consumes it, those two facts compose into:
     /// one PoW solution mints unlimited distinct valid block identities. The field is
     /// therefore refused non-empty until the binding exists — see
-    /// [`check_palw_commitment_shape`] for the exact precondition to relax this.
+    /// [`check_palw_commitment_shape_at`] for the exact precondition to relax this.
     #[error(
         "PALW header (algo_id = {algo_id}) carries {got} palw_commitment bytes, but no PoW-path digest binds them yet; must be empty"
     )]
@@ -686,6 +686,35 @@ pub fn is_palw_algo_id(algo_id: u8) -> bool {
 /// could stress header relay, and small enough that a spam candidate cannot smuggle bulk data.
 pub const PALW_COMMITMENT_MAX_BYTES: usize = 8192;
 
+/// The shape rule on the **un-fenced** lane — a test-only convenience, kept because most of the
+/// crate's shape assertions are about a network with no ADR-0072 fence. The rule itself is
+/// documented on [`check_palw_commitment_shape_at`], which is the one every pipeline calls.
+///
+/// # This entry point IS a lane, and the crate boundary is what says so
+///
+/// `Unfenced` is not a neutral default — it is "algo-6 is the attempt lane at every height", which
+/// is a consensus statement about the position. Spelled as an omitted argument it is invisible,
+/// and a pipeline gate that omitted it refused algo-9 by id: `check_palw_block_admission_v1` took
+/// this entry point, its live caller is the UTXO validator, and on a network armed at genesis
+/// every chain candidate was disqualified with `PalwAttemptLaneClosed { algo_id: 9, open: 6 }`
+/// before anything decoded. Two earlier gates (the relay carriage dispatch, the pruning proof) had
+/// the same shape and were threaded; this one was invisible to the sweep that found them because
+/// the file never names an algo-id constant at all.
+///
+/// So the fix is not a comment: **no consensus gate can reach this function any more.** It is
+/// `#[cfg(test)]`, and every remaining caller is a test inside `kaspa-consensus-core`. A pipeline
+/// in `kaspa-consensus`, `kaspa-pow` or `kaspad` must call [`check_palw_commitment_shape_at`] and
+/// name the lane it means — the compiler, not a reviewer, is what enforces that. (`pub(crate)`
+/// alone was not enough: the dead-code lint immediately reported the function unused in a non-test
+/// build, which is the fact this attribute now states.)
+#[cfg(test)]
+#[inline]
+pub(crate) fn check_palw_commitment_shape(algo_id: u8, palw_commitment: &[u8], bound: bool) -> Result<(), PowLayer0Error> {
+    // An un-fenced network is what every shipped preset is, so this is the same function it always
+    // was; the fenced entry point below is what an armed network calls.
+    check_palw_commitment_shape_at(algo_id, palw_commitment, bound, PalwAttemptLaneV1::Unfenced)
+}
+
 /// MISAKA ADR-0038: structural shape rule for `Header::palw_commitment`, enforced wherever
 /// header shape is validated (alongside [`check_algo_id`]) and NOT behind any activation
 /// fence:
@@ -730,15 +759,8 @@ pub const PALW_COMMITMENT_MAX_BYTES: usize = 8192;
 /// which point this arm becomes "must decode as PBC1", the digest gate in `hashing::header`
 /// opens with it, and the two land together behind one activation fence. Relaxing it before
 /// then re-opens the malleability.
-#[inline]
-pub fn check_palw_commitment_shape(algo_id: u8, palw_commitment: &[u8], bound: bool) -> Result<(), PowLayer0Error> {
-    // An un-fenced network is what every shipped preset is, so this is the same function it always
-    // was; the fenced entry point below is what an armed network calls.
-    check_palw_commitment_shape_at(algo_id, palw_commitment, bound, PalwAttemptLaneV1::Unfenced)
-}
-
-/// [`check_palw_commitment_shape`] with the attempt lane supplied by the position (ADR-0072
-/// SA-3/SA-4).
+///
+/// # The attempt lane travels with the POSITION (ADR-0072 SA-3/SA-4)
 ///
 /// Two things move with `lane`, and both had to, or the fence would be half a fence:
 ///

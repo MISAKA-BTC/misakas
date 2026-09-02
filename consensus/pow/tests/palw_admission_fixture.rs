@@ -14,7 +14,7 @@ use kaspa_consensus_core::BlueWorkType;
 use kaspa_consensus_core::dns_finality::{ActiveBondView, BondStatus, STAKE_ATTESTATION_SIG_LEN, StakeBondRecord};
 use kaspa_consensus_core::header::Header;
 use kaspa_consensus_core::palw_block_commitment::{PALW_BLOCK_COMMITMENT_VERSION_V1, PalwBlockCommitmentV1};
-use kaspa_consensus_core::pow_layer0::POW_ALGO_ID_PALW_LLM;
+use kaspa_consensus_core::pow_layer0::{POW_ALGO_ID_PALW_LLM, PalwAttemptLaneV1};
 use kaspa_consensus_core::tx::TransactionOutpoint;
 use kaspa_hashes::{Hash64, ZERO_HASH64};
 use kaspa_pow::palw_admission::{PalwAdmission, PalwAdmissionClassFacts, PalwAdmissionError, check_palw_block_admission_v1};
@@ -106,8 +106,16 @@ fn a_complete_block_admits_and_names_its_payee() {
     let op = outpoint(2);
     let bonds = bonds_with(op);
     let h = header(commitment(op, facts).encode());
-    match check_palw_block_admission_v1(&h, &bonds, |_| Some(facts), NETWORK, true, accept_fixture_signature)
-        .expect("every conjunct holds")
+    match check_palw_block_admission_v1(
+        &h,
+        &bonds,
+        |_| Some(facts),
+        NETWORK,
+        true,
+        PalwAttemptLaneV1::Unfenced,
+        accept_fixture_signature,
+    )
+    .expect("every conjunct holds")
     {
         PalwAdmission::Admitted { executor_bond, commitment, ticket } => {
             assert_eq!(executor_bond.bond_outpoint, op, "the payee is the bond that acted");
@@ -176,7 +184,15 @@ fn a_ticket_over_the_class_target_does_not_admit() {
     let op = outpoint(2);
     let bonds = bonds_with(op);
     let h = header(commitment(op, facts).encode());
-    match check_palw_block_admission_v1(&h, &bonds, |_| Some(facts), NETWORK, true, accept_fixture_signature) {
+    match check_palw_block_admission_v1(
+        &h,
+        &bonds,
+        |_| Some(facts),
+        NETWORK,
+        true,
+        PalwAttemptLaneV1::Unfenced,
+        accept_fixture_signature,
+    ) {
         Err(PalwAdmissionError::TicketDoesNotAdmit { ticket, class_target }) => {
             assert_eq!(class_target, 0);
             // A ticket of exactly 0 would admit at target 0 and make this vacuous. It is a

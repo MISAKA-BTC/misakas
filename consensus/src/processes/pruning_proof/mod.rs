@@ -243,7 +243,7 @@ impl PruningProofManager {
     ///   writes, then re-served to peers (audit P0-2).
     ///
     /// [`check_algo_id`]: kaspa_consensus_core::pow_layer0::check_algo_id
-    /// [`check_palw_commitment_shape`]: kaspa_consensus_core::pow_layer0::check_palw_commitment_shape
+    /// [`check_palw_commitment_shape`]: kaspa_consensus_core::pow_layer0::check_palw_commitment_shape_at
     pub(super) fn check_proof_header_shape(&self, header: &Header, level: BlockLevel) -> PruningImportResult<()> {
         // Exempt EXACTLY the headers whose PoW short-circuits, using the shared predicate rather
         // than `direct_parents().is_empty()`. The two differ for `parents_by_level == [[]]`, where
