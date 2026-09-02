@@ -4436,6 +4436,7 @@ impl VirtualStateProcessor {
                 status: format!("{:?}", record.status),
                 share_permille: state.class_share_permille(id),
                 budget_blocks: budgets.and_then(|b| b.budget_blocks.get(id).copied()).unwrap_or(0),
+                canonical_leaves: record.pwu_rule.canonical_leaves_v1(),
                 is_base_class: *id == state_params.base_class_id(),
             })
             .collect()

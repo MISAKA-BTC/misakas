@@ -29,7 +29,9 @@
 //! `calculate_l1_tag` has its algo-7 arm, and testnet-11 runs the `ConsensusV2` bundle. A stale
 //! "it cannot work" is worse than no comment, because it stops the next person looking.
 //!
-//! **The key.** `--bond-key-seed <file>` reads a raw 32-byte ML-DSA-87 keygen seed for drills and
+//! **The key.** `--bond-key-seed <file>` reads a 32-byte ML-DSA-87 keygen seed as hex, through
+//! `kaspa_pq_validator_core::load_validator_seed` — the same reader `misaka-cli` and `kaspad` use
+//! for the same files, and the one that enforces audit M-02's 0600/regular-file guard. For drills and
 //! devnets. Production keeps the bond key in `kaspa-pq-signer` and asks it for a
 //! `SigningPurpose::PalwFpCommitmentV3` signature over the claim id; this binary's `--print-claim`
 //! mode emits exactly that digest so a signer-backed rail can be scripted today without the key
@@ -72,14 +74,22 @@ fn read_queued_commitment(path: &Path) -> PalwFreePromptCommitmentV3 {
     borsh::from_slice(&bytes).unwrap_or_else(|e| die(format!("the unsigned commitment at {} does not decode: {e}", path.display())))
 }
 
+/// The bond key seed, read the ONE way every other consumer reads it.
+///
+/// This was a private reader that took the file as `VALIDATOR_SEED_LEN` RAW bytes, while
+/// `kaspa_pq_validator_core::load_validator_seed` — what `misaka-cli` and `kaspad` call for the
+/// same files — takes it as whitespace-trimmed HEX. So one seed file had two formats and this
+/// binary held the minority one: every drill and devnet that wrote a seed the node could read
+/// handed this binary 64 bytes of hex text and got "the bond key seed is 64 bytes, not 32".
+///
+/// The raw form also skipped audit M-02's guard, which is the part that matters beyond a drill:
+/// `load_validator_seed` refuses a non-regular file (symlink/device/fifo, checked without
+/// following the link) and a group- or world-readable mode. This binary legitimately holds the
+/// bond key and spends the fee with it — it is the last process that should sign with a key
+/// anyone on the host can read.
 fn read_seed(path: &Path) -> [u8; VALIDATOR_SEED_LEN] {
-    let bytes = std::fs::read(path).unwrap_or_else(|e| die(format!("cannot read the bond key seed: {e}")));
-    if bytes.len() != VALIDATOR_SEED_LEN {
-        die(format!("the bond key seed is {} bytes, not {VALIDATOR_SEED_LEN}", bytes.len()));
-    }
-    let mut seed = [0u8; VALIDATOR_SEED_LEN];
-    seed.copy_from_slice(&bytes);
-    seed
+    let path = path.to_str().unwrap_or_else(|| die(format!("the bond key seed path {} is not UTF-8", path.display())));
+    kaspa_pq_validator_core::load_validator_seed(path).unwrap_or_else(|e| die(e))
 }
 
 fn parse_outpoint(s: &str) -> TransactionOutpoint {
