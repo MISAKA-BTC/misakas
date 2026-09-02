@@ -276,12 +276,25 @@ pub fn evaluate_fork_id_v1(params: &Params, local_daa_score: u64, peer_fired: &[
     //   [`fork_id_gate_fences_v1`] — the fences whose crossing this module refuses on. Crescendo is
     //   not one of them: a build that predates the fork-id field still implements crescendo, so
     //   this node being past it says nothing about whether that peer can follow.
-    let armed_fired_through = || fork_id_gate_fences_v1(params).into_iter().filter(|&fence| fence <= local_daa_score).max();
+    //
+    // **And a named fence only carries a refusal if the gate names it too.** `NextFenceDiffers`
+    // names `schedule[k]`, which is any fence on this build's schedule — including crescendo, which
+    // `fork_id_gate_fences_v1` deliberately excludes. Keyed on the height alone, an armed mainnet
+    // node past crescendo refused a peer that agreed about the empty prefix but announced some
+    // other next fence, and the refusal rested on the one fence every build in circulation already
+    // implements. That is the same defect as the `local_fired.last()` rule above, one arm over, and
+    // it made `the_gate_refuses_only_on_the_fences_it_names` an overclaim rather than an invariant.
+    // A disputed fence the gate does not name falls back to the gate's own fences, exactly as
+    // `Absent` and `UnknownFiredSet` do.
+    let gate_fences = fork_id_gate_fences_v1(params);
+    let armed_fired_through = || gate_fences.iter().copied().filter(|&fence| fence <= local_daa_score).max();
     let classify_at = |mismatch: ForkIdMismatch, disputed: Option<u64>| {
         let fired_through = match disputed {
-            Some(fence) if fence <= local_daa_score => Some(fence),
-            Some(_) => None,
-            None => armed_fired_through(),
+            // A gate-arming fence in dispute: refuse from that height and not one score before it.
+            // Never fall back here — a LOWER armed fence the peer already agreed about must not
+            // carry a refusal about a fence still ahead of both of them.
+            Some(fence) if gate_fences.contains(&fence) => (fence <= local_daa_score).then_some(fence),
+            _ => armed_fired_through(),
         };
         match fired_through {
             Some(fired_through) => ForkIdVerdict::DisagreePastFence { mismatch, fired_through },
@@ -557,6 +570,37 @@ mod tests {
             params.consensus_identity_id(),
             MAINNET_PARAMS.consensus_identity_id(),
             "a genesis-active fence is a rule difference the identity id already refuses on"
+        );
+
+        // **The arm the name used to lie about.** `NextFenceDiffers` names a fence off THIS
+        // build's schedule, and that schedule carries crescendo — which the gate excludes. So the
+        // invariant has to be checked on a mismatch that names crescendo, not only on one that
+        // names ADR-0072's fence: a peer that agrees about the empty prefix but announces some
+        // other next fence is disputing crescendo, and an armed node past crescendo used to refuse
+        // it — a refusal resting on a fence every build in circulation implements.
+        const ADR_0072: u64 = 200_000_000;
+        const CRESCENDO: u64 = 110_165_000;
+        let mut armed = MAINNET_PARAMS;
+        armed.palw_attempt_activation = Some(ForkActivation::new(ADR_0072));
+        assert_eq!(armed.fence_schedule_v1(), vec![CRESCENDO, ADR_0072]);
+        assert_eq!(fork_id_gate_fences_v1(&armed), vec![ADR_0072], "crescendo is on the schedule and off the gate");
+        // A peer whose fired set IS the empty prefix but whose next fence is neither of ours.
+        let stranger = fired_fences_digest_v1(armed.genesis.hash, &[]);
+        let dispute = ForkIdMismatch::NextFenceDiffers { expected: CRESCENDO, got: 42 };
+        for local_daa in [CRESCENDO, CRESCENDO + 1, ADR_0072 - 1] {
+            let verdict = evaluate_fork_id_v1(&armed, local_daa, stranger.as_bytes().as_slice(), 42);
+            assert_eq!(
+                verdict,
+                ForkIdVerdict::DisagreeBeforeAnyFence(dispute),
+                "at {local_daa}: crescendo is not a fence this gate may refuse on"
+            );
+            assert!(!verdict.refuses(), "at {local_daa}");
+        }
+        // …and past the fence the gate DOES name, the same peer is refused — on that fence, so the
+        // arm is not merely permissive.
+        assert_eq!(
+            evaluate_fork_id_v1(&armed, ADR_0072, stranger.as_bytes().as_slice(), 42),
+            ForkIdVerdict::DisagreePastFence { mismatch: dispute, fired_through: ADR_0072 }
         );
     }
 

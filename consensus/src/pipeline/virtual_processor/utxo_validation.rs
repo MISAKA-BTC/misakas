@@ -857,6 +857,22 @@ impl VirtualStateProcessor {
         // per-block class-target store to produce it from yet. Wiring the call now means the
         // remaining work is that store and the fence, not finding this line again.
         let commitment_bound = self.palw_block_commitment.is_some_and(|fence| fence.is_bound(header.daa_score));
+        // **ADR-0072 SA-4: which attempt id is a lane HERE.**
+        //
+        // Threaded for the same reason `pre_ghostdag_validation` and the pruning proof thread it,
+        // and it is not optional: admission's first statement is the shape gate, and the
+        // un-parameterised entry point it used to call hardcodes `Unfenced` = algo-6. This call
+        // runs for EVERY chain candidate and an `Err` here becomes `StatusDisqualifiedFromChain`,
+        // so on a network armed at genesis — where every attempt block declares algo-9 — every
+        // candidate was disqualified with `PalwAttemptLaneClosed { algo_id: 9, open: 6 }` and the
+        // virtual chain never left genesis. The log line said "disqualified from virtual chain"
+        // and never named the fence, so no operator configuration could have found it.
+        //
+        // `Unfenced` on every shipped preset (`palw_attempt_activation` is `None` everywhere),
+        // which is byte-identical to what this call did before.
+        let attempt_lane = kaspa_consensus_core::pow_layer0::PalwAttemptLaneV1::from_fence(
+            self.palw_attempt_activation.map(|fence| fence.is_active(header.daa_score)),
+        );
         kaspa_pow::palw_admission::check_palw_block_admission_v1(
             header,
             selected_parent_bond_view,
@@ -864,6 +880,7 @@ impl VirtualStateProcessor {
             // ADR-0009 Addendum A.3: the network_id discriminator IS the per-network genesis hash.
             self.genesis.hash.as_bytes().as_slice(),
             commitment_bound,
+            attempt_lane,
             // The curve only. Admission chooses the domain, so this cannot be handed the wrong one
             // — the repair shape audit P0-6 asks for, applied at the site P0-2 opened.
             |key, message, signature, context| {

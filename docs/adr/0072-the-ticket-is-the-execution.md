@@ -298,3 +298,51 @@ dispute.
   option (b) needs that arithmetic restored byte for byte before the fence can be scheduled ahead of
   a live chain. The shipped producer says the same thing from the other side: it stamps the current
   envelope version on both ids it can build for, and cannot build a `LegacyArm` block at all.
+
+## Security amendment, third pass (2026-09-03) — the gate the sweep could not see
+
+The second pass swept every comparison against `POW_ALGO_ID_PALW_COMMITTED_V2` and fixed four. A
+fifth gate had the same defect and no such comparison, so nothing in that sweep could find it:
+`consensus/pow/src/palw_admission.rs` called the shape rule through its **un-parameterised** entry
+point, which supplies `PalwAttemptLaneV1::Unfenced` — that is, "algo-6 is the attempt lane at every
+height" — as an omitted argument. Its live caller is `virtual_processor::utxo_validation`, which
+runs for every chain candidate, and an `Err` there becomes `StatusDisqualifiedFromChain`.
+
+Reproduced before it was fixed, at that exact call:
+
+```text
+UTXO ADMISSION(algo 6) = Ok(NotBound)
+UTXO ADMISSION(algo 9) = Err(Commitment(PalwAttemptLaneClosed { algo_id: 9, open: 6 }))
+```
+
+On a network armed at genesis every attempt block declares algo-9, so **every chain candidate was
+disqualified and the virtual chain never left genesis** — while the blocks still entered the DAG and
+relayed normally, so the only symptom was `disqualified from virtual chain`, a line that never names
+the fence. No operator configuration could escape it. That falsified the second pass's own
+"conditional YES at genesis".
+
+Three things changed, and the third is the one that closes the class rather than the instance:
+
+1. `check_palw_block_admission_v1` takes an `attempt_lane` and uses `check_palw_commitment_shape_at`;
+   the UTXO validator resolves it from `palw_attempt_activation` at the header's own DAA score, the
+   way the relay gate and the pruning proof already do.
+2. The four test-harness sites that stamped a carriage only for algo-6 were widened to the shared
+   predicate — including `TestConsensus::build_header_with_parents`, which declares the id from the
+   mode cascade, so an armed harness no longer builds algo-6 headers while the template builder
+   builds algo-9 ones.
+3. **The un-parameterised entry point is now `#[cfg(test)]`.** After (1) it had no non-test caller in
+   the tree — the dead-code lint said so immediately — and a consensus gate that wants the shape rule
+   must now call `check_palw_commitment_shape_at` and name the lane it means. That is enforced by the
+   compiler rather than by the next sweep.
+
+The evidence base is no longer only unit-level: `palw_v2_a_genesis_armed_attempt_lane_builds_a_chain`
+boots a `ConsensusV2` network with `palw_attempt_activation = Some(ForkActivation::always())`, builds
+blocks through the real pipeline, and asserts the sink leaves genesis on an algo-9 header. Without
+the lane threaded into admission it fails with no body tip ever reaching `StatusUTXOValid`.
+
+**Still not proven, and still fatal above genesis.** The harness runs under `skip_proof_of_work`, so
+the algo-9 finalizer arm is not priced end to end here, and no *deployed* devnet has yet booted armed
+at genesis. The `LegacyArm` residuals of the second pass are unchanged: the stateful admission
+(`palw_admission_v2`) still validates at the compiled-in envelope version — correct for `Unfenced`
+and `ExecutionArm`, wrong for `LegacyArm` — and the pre-ADR-0072 lottery arithmetic those blocks were
+mined under is still deleted.
