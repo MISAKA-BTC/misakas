@@ -18,9 +18,11 @@ are adjudicable end to end), ADR-0073 (Phase ① landed; Decision 2 decided; Pha
 ADR-0074 Decision 5; Phase ④ pending), ADR-0074 Decisions 1 and 5 (`User` and `Canonical` prompt
 modes; the quantum is an eighth of the canonical job), ADR-0075 (certification is a consensus
 object; a class is seated by `ClassLaneCertified`), ADR-0076 (the attempt seed is `share · pwu`;
-the receipt lane seeds on its own).
+the receipt lane seeds on its own), ADR-0026 (borrow Ambient's architecture, refuse its proof
+model), ADR-0028 (sampling decides nothing; only the court convicts).
 **Amends:** ADR-0044 Decision 8 (PublicDA is the only weight-bearing mode) and Decision 10 (v1 is
-non-streaming); the "streaming" and "encrypted prompts" rows of ADR-0044's *not decided* list.
+non-streaming); the "streaming" and "encrypted prompts" rows of ADR-0044's *not decided* list;
+ADR-0073 Phase ① 1e (a seat hashes the whole capture), on the free-prompt lane.
 
 ## 1. What was measured
 
@@ -99,7 +101,48 @@ and every decision below is in its service:
 > "mines" is a property of every served inference (Phase A), not of a narrow one. Neither phase
 > is done on its own: R0 is measured on ONE job id (§6).
 
-**The principle that delivers R0:** the court's cost is a function of the checkpoint interval,
+> **R1 — the artifact goes to the user; the receipt goes to the chain.** What the chain carries
+> for a job is bounded independent of what the job produced: a commitment of hashes and counts,
+> the prompt ids (until Phase D), one spend envelope per quantum. What a seat verifies is bounded
+> the same way: one checkpoint interval, replayed exactly and compared exactly. What the court
+> opens is one leaf's neighbourhood, bounded by the same interval. The artifact — a chapter, a
+> file of JSON, the code and stats for ten NPCs, a mesh — never touches the chain, and the weight
+> the chain credits is the counted leaves of the computation that produced it, never the bytes it
+> produced.
+
+```text
+"design ten NPCs for this game"
+              │
+              ▼
+     the runtime — ONE inference
+              │
+      ┌───────┴────────┐
+      ▼                ▼
+ the artifact      a compact receipt
+ to the user       to PALW
+ (JSON, code, a    (roots and counts on the
+ mesh: saved and   chain; one interval opened
+ used, never on    to each seat; weight in
+ the chain)        counted leaves)
+```
+
+The receipt is already compact on the output side — the commitment carries `output_root` and
+counts, never the tokens. What still scales with the job today is the capture a seat fetches
+WHOLE (`verify_material` hashes all of it), and the prompt ids until Phase D. In Ambient's terms a
+validator verifies a token window; in PALW's terms a seat replays one checkpoint interval and a
+court tries one leaf — the shape ADR-0026 borrowed, with the proof model it refused still refused:
+exact comparison inside a pinned integer class, and conviction only through the court.
+
+**Where this ADR ends.** It ends at the receipt: an inference at width, captured, certified,
+spent. It does not verify what a person builds FROM the answer. "Design ten NPCs" answered as JSON
+is a claim; the game that loads that JSON, the mesh a renderer makes of it, an image, a CAD part, a
+compiled program, a MIDI file, a simulation run — each is a DERIVED artifact, the model's output
+run through a deterministic transformer, and the chain's relationship to it is ADR-0078's: commit
+what the model made and what was made from it, keep neither. Implementing this ADR alone does not
+make "generate a 3D model with Qwen3.6, verified end to end" true; it makes the inference half of
+that sentence true, at a width where the other half is worth building.
+
+**The principle that delivers R0 and R1:** the court's cost is a function of the checkpoint interval,
 never of the context; the ladder is sized to a prompt a person would type; and everything the
 person touches is one pipeline that a drill runs end to end. Nothing about how a beacon is drawn, how a panel is seated, how a ticket
 is compared or how a claim is disputed changes — F4, F5, F6 and F15 of ADR-0044 hold verbatim,
@@ -175,7 +218,31 @@ receipt block accepted by all of them. It runs on a devnet preset whose windows 
 the in-harness finding stands — a single-chain `TestConsensus` does not accrue the DAA the windows
 need — and a multi-node chain does. This drill is the gate for arming Phase B on testnet-11.
 
-**Decision 8 — the public pages say how.** `testnet11-join-mining.md` gains "mining with your own
+**Decision 8 — the seat verifies one interval; the executor opens it.** A free-prompt seat no
+longer fetches the whole capture and hashes it (ADR-0073 1e's `verify_material` arm). It draws `k`
+checkpoint intervals from the claim's beacon and its own seat index — unpredictable when the
+commitment was fixed, different per seat — and asks the executor for each interval's opening: the
+checkpoint chunk at the interval's start (opened against the checkpoint leg root), the committed
+rows of the interval (opened against the step leg root), and the ids the interval consumed and
+produced (opened against the prompt hash and the decode pin). The seat replays the interval from
+the chunk with the class's own kernels and compares every row EXACTLY — the class is a pinned
+integer computation, so "close" is not a verdict. Every row equal: the seat files `Valid`. A row
+unequal: the seat files nothing and opens a court at that leaf, as any bonded challenger may,
+holding the refutation's inputs already. Nothing served: the two-sided quorum's
+`ProducerDefaulted` arm, exactly as capture withholding reaches it today. The executor retains the
+whole capture under the DA obligation (`trace_manifest_root`, chunk count, retention deadline)
+and serves any opening on request until the claim retires; it never ships the capture whole. Bytes
+per seat become `O(k × (interval × row + log₂ leaves))`, independent of the job — R1's
+verification half. This is Ambient's "verify a window" shape and not its proof model (ADR-0026): a
+sampled verdict here licenses a claim that stays disputable for the whole challenge window, it
+never slashes anyone, and conviction runs only through the court's bisection to one leaf — which
+is why ADR-0026's warning that "verify one token" is the weakest security claim does not apply to
+a seat whose verdict convicts nobody. The attempt lane's seats keep hashing their canonical-job
+captures until Decision 14 makes those captures large, at which point the same arm serves both
+lanes. Consensus-inert: the receipt object and its signature are unchanged; what a seat checked
+before signing is the seat's own duty.
+
+**Decision 9 — the public pages say how.** `testnet11-join-mining.md` gains "mining with your own
 prompts" (the bond, the worker, the gateway, what is public, and the four stages `submitted`,
 `bound`, `certified`, `spent` shown by name — a block does not follow a prompt, and any interface
 on this lane says so). The stale headers are corrected: `palw-fp-on-registered-classes.md` ("Nothing
@@ -184,7 +251,7 @@ here is implemented"), `palw-freeprompt-gateway.md` ("none does yet, by design")
 
 ### Phase B — the court prices the checkpoint, not the context (one ruleset move)
 
-**Decision 9 — history is replayed from a checkpoint, on both kinds of layer.** For a class that
+**Decision 10 — history is replayed from a checkpoint, on both kinds of layer.** For a class that
 registers a state chunk map, a refutation at position `p` opens the checkpoint chunk at
 `c = ⌊(p − 1) / interval⌋ · interval` and replays at most `interval` positions after it; the
 genesis-anchored long form is REFUSED for such a class, so a challenger cannot pick whichever route
@@ -196,7 +263,7 @@ map whose rows are one head's `k_dim × v_dim` state plus the conv window
 layout id, in the checkpoint profile and therefore in the class id), the worker captures the leg
 against it, and `gdn_core_genesis_replay` gains its anchored twin.
 
-**Decision 10 — admission prices the checkpoint interval, not the context.**
+**Decision 11 — admission prices the checkpoint interval, not the context.**
 `derive_court_cost_v1` prices the anchored form for a class with a map: KV refs and the
 recurrence's `positions` run over `min(n_ctx, interval)` positions plus ONE checkpoint-chunk
 opening per history-reading ref; terminal MACs likewise. The pessimistic price of the checkpoint
@@ -204,16 +271,18 @@ sentinel stays for a class without a map — such a class cannot widen, and a lo
 approval. Consequence: `max_close_bytes` becomes a function of `interval`, and `interval` becomes
 the one court knob a class registers that its context does not move.
 
-**Decision 11 — the ladder is sized to a typed prompt.** `COURT_MAX_STEP_LEAVES` moves from
-`2^22` to `2^30`. The gate stays the rule: `(⌈log₂ leaves⌉ + terminal) × turn_deadline <
-window_court`, i.e. `(30 + 2) × 60 = 1,920 < 3,000`. At today's per-position counts `2^30` leaves
-is ~3,600 positions of the hybrid and ~10,800 of the dense tier; the per-position count grows
-slowly with context (the attention reductions' `KvScaled` widths), so the class table, not this
-ADR, states each row's admitted `n_ctx`, and the derivation refuses what does not fit, as it does
-now. The constant is inside the ruleset id and its comment says it "cannot be raised afterwards";
-that is correct, and a ruleset move is what a testnet-11 relaunch is.
+**Decision 12 — the ladder is sized to an artifact, not a chat turn.** `COURT_MAX_STEP_LEAVES`
+moves from `2^22` to `2^32`. The gate stays the rule: `(⌈log₂ leaves⌉ + terminal) × turn_deadline
+< window_court`, i.e. `(32 + 2) × 60 = 2,040 < 3,000`. At today's per-position counts `2^32`
+leaves is ~14,000 positions of the hybrid and ~43,000 of the dense tier — room for an
+8,192-position row of either, with the per-position growth the attention reductions' `KvScaled`
+widths add; the class table, not this ADR, states each row's admitted `n_ctx`, and the derivation
+refuses what does not fit, as it does now. A Merkle path grows to 32 elements — 2 KiB per opened
+leaf — inside the close budget. The constant is inside the ruleset id and its comment says it
+"cannot be raised afterwards"; that is correct, and a ruleset move is what a testnet-11 relaunch
+is.
 
-**Decision 12 — the context ladder: rows at the artifact's rotary span, by the ADR-0075 route.**
+**Decision 13 — the context ladder: rows at the artifact's rotary span, by the ADR-0075 route.**
 The dense artifact's rotary table covers 512 positions (`max_position` 512, the converter's
 default); the hybrid's "still covers 512". So the first practical rows are
 `Qwen/Qwen2.5-1.5B/graph-v2` at `n_ctx` 512 and `Qwen3.6-35B-A3B/graph-v3` at `n_ctx` 512 — each a
@@ -221,10 +290,14 @@ NEW class id, because a class IS its graph, registered and seated through `palw-
 and `misaka-cli palw submit-object` once Phase B's court is the shipped one. 512 is the width
 `misaka-palw-serve` serves today, so this is the number at which the practical runtime and the
 mineable one become one row — R0's width. The 8- and 16-token rows stay on chain exactly as they
-are. Wider than 512 needs a re-converted artifact with a wider
-table, and takes the same route with no further consensus change.
+are. Wider than 512 needs a re-converted artifact with a wider table, and takes the same route:
+the ladder this ADR plans is 512 → 2,048 → 8,192 positions per family, one row each, because an
+artifact a person keeps — a file of JSON, a source file, a chapter — is thousands of tokens, not
+hundreds. The bundle's own caps move with the ladder in Phase B's one ruleset move:
+`MAX_PROMPT_TOKENS` (512), `MAX_DECODE_TOKENS` (1,024) and the V2 trace-event cap (4,096) go to
+the ladder's top, so a row the court admits is never refused by a cap sized for the 16-token era.
 
-**Decision 13 — the canonical job grows with the context, so the cap stays a jackpot bound.** A
+**Decision 14 — the canonical job grows with the context, so the cap stays a jackpot bound.** A
 quantum is `pwu_per_inference / 8` leaves (ADR-0074 Decision 5) and a receipt is capped at 64 quanta
 (`MAX_QUANTA_PER_RECEIPT`). With the hybrid's (7, 2) canonical job, a 512-token job is ~450 quanta,
 capped to 64 — 86 % of real work certified and uncounted. The cap is the per-receipt jackpot bound
@@ -239,7 +312,7 @@ a producer needs is re-derived by the existing rule, and a canonical hybrid infe
 
 ### Phase C — the weight (sequenced, not re-decided)
 
-**Decision 14 — weight follows measured supply.** ADR-0073 Decision 4 (a receipt block has a
+**Decision 15 — weight follows measured supply.** ADR-0073 Decision 4 (a receipt block has a
 chain position; the share leaves 900‰ on a schedule bounded by what the lane produces) activates
 when a Phase-B class has produced receipt blocks on testnet-11 through Decision 7's path for one
 full retarget span, so 4b's schedule has a supply to follow rather than a promise. Until then a
@@ -248,7 +321,7 @@ share — this ADR sits between price and weight.
 
 ### Phase D — a prompt that is not published
 
-**Decision 15 — `PanelDa` (privacy mode 2).** The job carries `prompt_token_ids_hash` as it does
+**Decision 16 — `PanelDa` (privacy mode 2).** The job carries `prompt_token_ids_hash` as it does
 now; the commitment transaction carries NO ids. The ids travel with the capture the executor
 already serves to its panel (`<claim>.material`, `request_palw_material`); a seat checks
 `H(ids) == prompt_token_ids_hash` before it reads anything else, and files `Valid` only for a claim
@@ -264,18 +337,18 @@ panel cannot replay must not execute").
 
 ## 4. What this costs, stated before it is measured
 
-* **Capture size.** A 512-position capture commits 512 positions of rows; seats verify by hashing
-  and `k` sampled leaves (ADR-0073 1e), so verification stays `O(k)`, but the bytes a seat fetches
-  scale with the job. To be measured in the Decision 7 drill; the bound to hold is the retention
-  budget, not the panel's time.
+* **Capture bytes.** A seat fetches `k` interval openings (Decision 8), `O(k × (interval × row +
+  log₂ leaves))` — independent of the job. The executor retains the whole capture, which at
+  8,192 positions is gigabytes per job: retention is the executor's disk, priced by the retention
+  deadline, and the Decision 7 drill measures it.
 * **Commitment bytes.** `PublicDa` carries `n_ctx × 4` bytes of ids — 2 KiB at 512 — inside a
   standard transaction. `PanelDa` carries none.
-* **Court time.** A rung is a turn pair at 60 DAA; 32 rounds is ~1,920 DAA, ~64 hours worst-case
+* **Court time.** A rung is a turn pair at 60 DAA; 34 rounds is ~2,040 DAA, ~68 hours worst-case
   honest prosecution, inside `WINDOW_COURT`. `MAX_CLAIM_EXPOSURE_DAA` is unchanged.
 * **Executor time.** The hybrid decodes at ~1.75 tok/s on a 24 GiB M4 Pro: a 300-token answer is
   ~3 minutes, streamed. The dense tier is interactive (~30 tok/s). Integer GPU kernels remain the
   practical-runtime plan's next stage (§8).
-* **Bonds.** Decision 13 raises per-claim exposure by the canonical job's growth; a producer on a
+* **Bonds.** Decision 14 raises per-claim exposure by the canonical job's growth; a producer on a
   practical row needs the collateral the existing rule derives for it.
 * **Identity.** Phase B moves every V2 preset's fingerprint: a re-genesis on testnet-11. Mainnet is
   byte-for-byte untouched (PALW off). Phases A and D move nothing until their own gates.
@@ -303,6 +376,9 @@ W8   PanelDa: a seat holding no ids cannot file Valid; a hash mismatch is refuse
      withholding reaches ProducerDefaulted; a court close still carries the ids.
 W9   No decision here changes how a beacon, a panel or a ticket is derived: ADR-0044 F4–F6 and
      F15 hold verbatim, pinned by the existing golden vectors.
+W10  R1: the bytes the chain carries per claim and the bytes a seat fetches per claim are
+     bounded independent of decode_tokens_executed; a seat's comparison is exact equality; a
+     sampled verdict never slashes — conviction is the court's alone.
 ```
 
 ## 6. Order of work
@@ -316,18 +392,21 @@ W9   No decision here changes how a beacon, a panel or a ticket is derived: ADR-
 | P-05 | Decision 5 — llama v3 arms deleted; smokes repointed; one in CI | `cargo build` + the CI smoke green on a fixture artifact |
 | P-06 | Decision 6 — segment-wise chat template | EOG observed on the dense tier; the F1 golden test extended to specials |
 | P-07 | Decision 7 — the devnet drill | W7 green on three nodes |
-| P-08 | Decision 8 — pages | the join-mining page has the section; the three stale headers are gone |
-| P-09 | Decision 9 — recurrence state map + anchored replay | W2 green for `GatedDeltaNet` |
-| P-10 | Decision 10 — `derive_court_cost_v1` prices the interval | W1 green |
-| P-11 | Decision 11 — `COURT_MAX_STEP_LEAVES = 2^30` | W4 green; ruleset id moves once for P-09..P-13 |
-| P-12 | Decision 12 — the 512 rows, drilled and bound on devnet, then testnet-11 | both rows `ClassLaneCertified` on the free-prompt lane |
-| P-13 | Decision 13 — the footprint rule at registration | W3 green |
-| P-14 | Decision 14 — ADR-0073 Phase ④ activation | one retarget span of measured receipt supply on a 512 row |
-| P-15 | Decision 15 — `PanelDa` | W8 green; drilled; its own ruleset move |
+| P-08 | Decision 8 — interval openings served to seats; the whole-capture arm retired on the FP lane | a seat verifies a claim fetching `O(k × interval)` bytes whatever its length; W10 green |
+| P-09 | Decision 9 — pages | the join-mining page has the section; the three stale headers are gone |
+| P-10 | Decision 10 — recurrence state map + anchored replay | W2 green for `GatedDeltaNet` |
+| P-11 | Decision 11 — `derive_court_cost_v1` prices the interval | W1 green |
+| P-12 | Decision 12 — `COURT_MAX_STEP_LEAVES = 2^32`; the bundle caps at the ladder's top | W4 green; ruleset id moves once for P-10..P-14 |
+| P-13 | Decision 13 — the 512 rows, drilled and bound on devnet, then testnet-11; then 2,048 and 8,192 | each row `ClassLaneCertified` on the free-prompt lane |
+| P-14 | Decision 14 — the footprint rule at registration | W3 green |
+| P-15 | Decision 15 — ADR-0073 Phase ④ activation | one retarget span of measured receipt supply on a 512 row |
+| P-16 | Decision 16 — `PanelDa` | W8 green; drilled; its own ruleset move |
 
-**Done when** the Decision 7 drill, on a Decision 12 row, shows ONE job id in three places: the
-gateway's streamed answer to a ~300-token chat turn, the node's `FreePromptCommitted` → `Final`
-for that claim, and a receipt block spending one of its quanta, accepted by every node. R0 is a
+**Done when** the Decision 7 drill, on the widest Decision 13 row registered at the time, shows
+ONE job id in three places: the gateway's streamed answer to an artifact-shaped request — a JSON
+or code generation that fills the row, kept by the client and never sent to a node — the node's
+`FreePromptCommitted` → `Final` for that claim, certified by seats that fetched interval openings
+and nothing whole, and a receipt block spending one of its quanta, accepted by every node. R0 is a
 property of a single inference, so it is measured on a single job id — never on one log of a
 practical runtime beside another log of a mining one. Until that job id exists, this ADR is not
 implemented, whatever else has landed.
@@ -336,17 +415,20 @@ implemented, whatever else has landed.
 
 | what | disposition |
 |---|---|
-| ADR-0044 Decision 8 — `PublicDa` is the only weight-bearing mode | amended by Decision 15: `PanelDa` bears weight once armed; encrypted modes stay a future ADR |
+| ADR-0044 Decision 8 — `PublicDa` is the only weight-bearing mode | amended by Decision 16: `PanelDa` bears weight once armed; encrypted modes stay a future ADR |
 | ADR-0044 Decision 10 — v1 is non-streaming | amended by Decision 2 |
 | ADR-0044 *not decided* — streaming | decided (Decision 2) |
-| ADR-0044 *not decided* — encrypted prompts | partly decided (Decision 15 is served, not encrypted); ML-KEM/ZK forms remain not decided |
-| ADR-0044 Decision 5 — `max_quanta_per_receipt` bounds the jackpot | honoured; Decision 13 keeps it a jackpot bound rather than a tax |
-| ADR-0049 Decision C — admission bounds the court from the geometry | honoured; the bound's form changes (Decision 10) |
-| ADR-0073 Decision 4 — receipts gain position and share | sequenced by Decision 14, not re-decided |
-| ADR-0074 Decision 5 — the quantum is an eighth of the canonical job | honoured; Decision 13 sizes the canonical job |
+| ADR-0044 *not decided* — encrypted prompts | partly decided (Decision 16 is served, not encrypted); ML-KEM/ZK forms remain not decided |
+| ADR-0044 Decision 5 — `max_quanta_per_receipt` bounds the jackpot | honoured; Decision 14 keeps it a jackpot bound rather than a tax |
+| ADR-0049 Decision C — admission bounds the court from the geometry | honoured; the bound's form changes (Decision 11) |
+| ADR-0073 Decision 4 — receipts gain position and share | sequenced by Decision 15, not re-decided |
+| ADR-0074 Decision 5 — the quantum is an eighth of the canonical job | honoured; Decision 14 sizes the canonical job |
+| ADR-0073 Phase ① 1e — a seat hashes the whole capture and samples `k` leaves | amended by Decision 8 on the free-prompt lane: the seat fetches `k` interval openings and hashes nothing whole |
+| ADR-0026 — borrow Ambient's shape, refuse its proof model | honoured: Decision 8 is the window-verification shape with exact comparison and a court behind it; "verify one token is the weakest claim" stands, because a seat's verdict convicts nobody |
+| ADR-0044 Decision 9 — `max_prompt_tokens` / `max_decode_tokens` are bundle caps | honoured; Decision 13 moves them with the ladder, in the ruleset move |
 | `misaka-palw-serve` — "a run served here is … NOT a claim anyone can adjudicate or mine" | retired by Decision 1; no un-captured serving path remains |
-| `palw_qwen36_profile` — "n_ctx 8 … a larger context returns when the recurrence's replay is checkpoint-anchored" | that return is Decisions 9–12; the row itself is unchanged |
-| `palw_fp_devnet_v3::COURT_MAX_STEP_LEAVES` — "cannot be raised afterwards" | correct; raised by a ruleset move (Decision 11) |
+| `palw_qwen36_profile` — "n_ctx 8 … a larger context returns when the recurrence's replay is checkpoint-anchored" | that return is Decisions 10–13; the row itself is unchanged |
+| `palw_fp_devnet_v3::COURT_MAX_STEP_LEAVES` — "cannot be raised afterwards" | correct; raised by a ruleset move (Decision 12) |
 
 ## 8. What is deliberately not decided
 
@@ -358,6 +440,9 @@ implemented, whatever else has landed.
 * **The windows.** ~54 hours from commitment to spendability is bind, challenge and maturity —
   fraud-proof safety, not a UX knob. The product shows the stages by name instead.
 * **Private eligibility and receipt transfer** — ADR-0044's list stands.
+* **Derived artifacts.** A 3D scene, an image, a CAD part, a program, a map, a MIDI file, a
+  simulation — what a deterministic transformer makes of the model's output — are ADR-0078's:
+  committed as a derivation bound to the claim, never carried, never weighed here.
 * **Encrypted DA.** `PanelDa` is served to five seats in the clear. Encrypting to seats (ML-KEM)
   is a later ADR if seat leakage is measured to matter.
 
