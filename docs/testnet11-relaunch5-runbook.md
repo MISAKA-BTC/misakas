@@ -225,7 +225,7 @@ every node wipes, exactly as 5c.
 **Pre-checks**: 03:20 CEST on tip `9d038706` — pin test ok, `f6afe2e2…` / `fd041c40…`, A16 pin
 present, `a16_root_probe` green (superseded). 03:45 CEST on tip `697f1d0c` ("admission item 8 reaches the free-prompt lane",
 parent `9d038706`) — pin test ok, `e2b91c16…` / `3f25063d…`, A16 pin present, `a16_root_probe`
-green. 03:55 CEST on tip `85d3b547` (test-only: `misaka-palw-base0/src/backend.rs`, `misaka-palw-sdk/src/sdk.rs`) — pin test ok, pins unchanged. Step (2)
+green. 03:55 CEST on tip `85d3b547` (test-only — both hunks inside in-file test modules of `misaka-palw-base0/src/backend.rs` and `misaka-palw-sdk/src/sdk.rs`, fixture collateral 1,000 → 100,000 / 10,000) — pin test ok, pins unchanged. Step (2)
 below is satisfied only for the exact commit the user pushes.
 
 **5d go/no-go gate** (all three, in order): (1) the user merges/pushes the tree and says when;
