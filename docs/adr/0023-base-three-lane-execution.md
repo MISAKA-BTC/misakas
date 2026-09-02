@@ -313,7 +313,7 @@ I-24 State snapshot import is size-bounded, streaming, and root-verified.
   A validator is still a full node + enabled subsystem; Lane 3 heavy deps (GPU/prover) live behind an
   optional cargo feature or sidecar, never in the normal binary. A normal validator does **not** run
   Lane 3 full execution/state/RPC but **must** run the Lane 3 proof verifier to admit Lane 3 roots.
-- **[ADR-0021](0021-fact-settlement-layer.md) / [ADR-0022](0022-fsl-economic-design.md) — F003 contention,
+- **`ADR-0021 (fact-settlement-layer)` / `ADR-0022 (fsl-economic-design)` — **neither is resident on this lineage**; the numbers are held by [ADR-0021 (PALW LLM PoW)](0021-palw-llm-pow.md) and [ADR-0022 (pruned IBD / EVM overlay snapshot)](0022-pruned-ibd-evm-overlay-snapshot.md) — F003 contention,
   open decision.** ADR-0021 frames `0xF003` as "the only consensus change" for FSL; PREA design v1.1 §9
   versions the *same* `0xF003` ABI into version `0x01` (FSL generic Hash64 verify) and `0x02` (PREA
   key-bound root). This ADR adds a **third** consumer: Lane 1 native PQ auth (and the F004 registry).
@@ -444,7 +444,7 @@ O-DEC F003/F004 versioned-ABI + activation ownership shared across FSL (ADR-0021
 - PQ scheme / sizes / verifier reuse: [ADR-0019](0019-mldsa87-migration.md),
   [ADR-0008](0008-hash64-consensus-identity.md), NIST FIPS 204 (ML-DSA).
 - Node-role / single-binary policy: [ADR-0010](0010-validator-node-architecture.md).
-- F003 contention: [ADR-0021](0021-fact-settlement-layer.md), [ADR-0022](0022-fsl-economic-design.md),
+- F003 contention: `ADR-0021 (fact-settlement-layer)`, `ADR-0022 (fsl-economic-design)` (neither resident — see the O-DEC note),
   `docs/misaka-prea-design-v1.1.md` (§9 versioned 0xF003 ABI).
 - Grounding code: `consensus/core/src/{header.rs,constants.rs,evm/mod.rs,config/params.rs}`,
   `consensus/src/processes/evm/mod.rs`, `kaspa-evm/src/{executor,tx,snapshot,state,mldsa_verify}.rs`,

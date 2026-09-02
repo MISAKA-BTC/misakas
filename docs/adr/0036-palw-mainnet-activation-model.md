@@ -170,8 +170,12 @@ the mainnet identity. Left unresolved, no one can write a coherent release plan,
      under load is not a configuration error), and is given bounded retry before it is treated as
      permanent — see Consequences.
 
-   The result: no safety principle is given up, mainnet cannot launch without the floor, and the
-   testnets are not destabilized to buy a property they do not need.
+   ~~The result: no safety principle is given up, mainnet cannot launch without the floor, and the
+   testnets are not destabilized to buy a property they do not need.~~ **SUPERSEDED** with the rest
+   of D4's mainnet half — see the banner at the top. What survives verbatim is the *testnet* half
+   (no hash floor on TN11/devnet; a loud halt beats a silent fork) and the failure-mode hardening;
+   ADR-0039 W6′ extends the same choice to mainnet, so "mainnet cannot launch without the floor" is
+   read only as the record of a reversed requirement.
 
 5. **Namespace.** Because the snapshot is non-ancestral and historical, the live lineage owns the
    name "PALW / algo-4"; no rename is required on the live tree. This ADR is the record that the

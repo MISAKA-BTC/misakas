@@ -23,6 +23,8 @@ someone else), ADR-0066 (the heartbeat lane out of header bits) and ADR-0067 (cl
 data, kernels are the build). Consistent with the standing doctrine that consensus changes ship by
 activation, never by re-genesis.
 
+> **Security amendment appended (2026-09-02)** — see the last section: Decision 3's `capable_classes` is bounded and replaces; each declared class reserves exposure; a seat is drawn for a class only after a positive chain fact (production on it); §5's open item gets a chain-checkable form without judging silence.
+
 ## 1. Why these four are one ADR
 
 The audit's premise was the user's: **a Qwen block's weight is given, and weight must not depend on
@@ -389,3 +391,29 @@ carrier, same dry-run — because an object an operator cannot send is a rule th
 
 All three Decisions are implemented. §2 is the part of the same audit that had already shipped when this was
 written, listed so the two are not confused.
+
+## Security amendment (2026-09-02) — Decision 3 gets a bound and a price, and §5's open item a chain-checkable form
+
+**SA-1 — The declared set is bounded and replaces.** `capable_classes.len() ≤
+PALW_MAX_CAPABLE_CLASSES` (proposed 16), and a new `BondCapabilityDeclared` replaces the previous
+set rather than growing it. The set is hashed into the state root (`palw_bond_capability_message_v2`)
+with no bound today, so an unbounded declaration is a state-growth lever priced only by transaction
+mass.
+
+**SA-2 — Each declared class reserves exposure.** Declaring `C` reserves `CAPABILITY_EXPOSURE_SOMPI`
+per class on the bond's exposure ledger (ADR-0056 Decision 3's shape: reserved, not burned;
+released when the class is undeclared or the bond retires). Declaring everything so as to be drawn
+everywhere becomes a cost proportional to the griefing surface, and "declare and abstain" — §5's
+defect — costs the abstainer capital without judging its silence (ADR-0065 Decision 4 stands).
+
+**SA-3 — Capability is proven by a positive chain fact before a seat is drawn.** A bond may be
+seated for class `C` only if it declared `C` **and** at least one accepted attempt block or
+free-prompt claim on `C` names it as producer or executor — possession proven by production, a fold
+fact — or `C` is a genesis class. Silence stays unjudged; production is judged instead.
+Consequence, stated: for a class only its registrant can run, the eligible seats are the
+registrant's own bonds — which is why ADR-0069 Decision 7 (an uncertified family's blocks weigh
+nothing) is the load-bearing rule and this one is a filter.
+
+**SA-4 — A declaration is a lifecycle object like the others:** fee = mass, signed under the network
+domain (already), refused for a class the chain does not have (already) and for a bond that is
+`Retiring`.

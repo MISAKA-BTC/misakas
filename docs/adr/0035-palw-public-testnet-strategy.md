@@ -7,6 +7,19 @@
   `docs/palw-algo4-difficulty-economics-2026-08-16.md` (gate 3),
   `docs/palw-testnet11-soak-2026-08-16.md` (gate 4, running).
 
+> **Superseded in part (index reconciliation, 2026-09-02).** Decision 1 — "the chain the fleet is
+> soaking IS the public chain; no fresh re-genesis at announce" — held for Relaunch 1 only.
+> [ADR-0042](0042-palw-mainnet-candidate-ruleset.md) (§"The two-network split") made testnet-11
+> the PALW-RC and ruled that a public RC that changes any consensus rule is re-genesised as
+> RC(n+1), never continued; testnet-11 has since been re-minted as Relaunch 2 through 5e
+> (`docs/testnet11-relaunch2-genesis.md`, `docs/testnet11-remint-2026-08-29.md`,
+> `docs/testnet11-regenesis-2026-08-30.md`, `docs/testnet11-relaunch5-runbook.md`,
+> `docs/testnet11-relaunch5e-runbook.md`). The algo-4 `LegacyTn11` lane this ADR launched is not
+> running anywhere: `--netsuffix=11` resolves to `palw_rc_shipped_params` (`ConsensusV2`), and the
+> old `TESTNET11_PARAMS` is kept only so a node asked for it by name gets a coherent answer.
+> Decision 2 (class admission pinned in code, checkable by machine) stands and is the ancestor of
+> ADR-0042 Decision 11's fingerprint and ADR-0067's registration index. Map: [`README.md`](README.md).
+
 ## 1. Context
 
 Two competing deployment plans have coexisted since the PALW work began:

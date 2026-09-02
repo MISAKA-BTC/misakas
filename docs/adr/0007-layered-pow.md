@@ -1,6 +1,16 @@
 # ADR-0007: Layered PoW (Layer 0 quantum-resistant finalizer + Layer 1 ASIC-hard tag)
 
-Status: Accepted (Phase 1 design freeze; PR-8.1 — PR-8.3 land the foundations)
+Status: Accepted (Phase 1 design freeze; PR-8.1 — PR-8.3 land the foundations). **Still governing;
+not contradicted by PALW.**
+
+> **Where PALW sits in this frame (added 2026-08-20).** PALW is a Layer-1 `algo_id` variant
+> (`algo_id = 4`), which is the extension point this ADR already specifies — including the rule
+> that matters most downstream: **switching is a hard cut-off, two `algo_id` values never coexist
+> on one network.** That rule is why
+> [ADR-0039](0039-palw-only-block-production.md) can decide "no hash lane on any network" without
+> inventing a mixed-algo difficulty relation, and why
+> [ADR-0036](0036-palw-mainnet-activation-model.md) Decision 4's hash floor had to be superseded
+> rather than layered on. Layer 0 is unchanged on every lineage. Nothing in this ADR is retracted.
 Date: 2026-05-28
 Supersedes: —
 Depends on: [ADR-0001](0001-network-isolation.md), [ADR-0003](0003-lthash-utxo-accumulator.md)
