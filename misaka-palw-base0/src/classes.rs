@@ -197,12 +197,26 @@ pub fn canonical_classes_v1(court: &PalwCourtParamsV2) -> Vec<CanonicalClassV1> 
     // It answers to its own name rather than sharing "Qwen/Qwen2.5-1.5B": the flag disambiguates by
     // model id when an artifact's shape matches more than one class, and two rows answering to one
     // name would leave it unable to say which.
-    for (model_id, n_ctx, graph_v2) in [
-        ("Qwen/Qwen2.5-1.5B", 16u32, false),
-        ("Qwen/Qwen2.5-Coder-1.5B-Instruct", 18, false),
-        ("Qwen/Qwen2.5-1.5B/graph-v2", 16, true),
+    // **`graph-v3` is the row whose epsilon the engine actually executes.** The v2 row corrected the
+    // pre table and the state map; it left `rms_eps_q: 1` standing against an artifact the
+    // converter builds at `1 << 8`, and the consequence was only measured when the model gate ran
+    // on a real converted artifact: `Qwen25A16Backend::from_registered_profile` refuses EVERY dense
+    // row — the registered n_ctx-16 one included — with `GeometryMismatch { rms_eps_q: profile 1,
+    // artifact 256 }`, because `plan_from_profile` compares the two. So no dense class can be built
+    // from its own registered profile, no dense class can be court-capable, and the shipped worker
+    // only survives by using `::new`, which compiles no plan and never compares.
+    //
+    // A corrected epsilon moves `base0_rms_eps_q`, which moves the shape profile id, which IS the
+    // class id — so this is a NEW ROW and not an edit, exactly as `graph-v2` was and exactly as the
+    // hybrid's `graph-v3` rows are. The rows above stay byte-for-byte as the chain registered them.
+    for (model_id, n_ctx, graph_v2, artifact_eps) in [
+        ("Qwen/Qwen2.5-1.5B", 16u32, false, false),
+        ("Qwen/Qwen2.5-Coder-1.5B-Instruct", 18, false, false),
+        ("Qwen/Qwen2.5-1.5B/graph-v2", 16, true, false),
+        ("Qwen/Qwen2.5-1.5B/graph-v3", 16, true, true),
     ] {
         let g = PalwQwen25GeometryV1 { n_ctx, ..QWEN25_1_5B };
+        let g = if artifact_eps { kaspa_consensus_core::palw_qwen25_profile::qwen25_geometry_artifact_eps(g) } else { g };
         let profile =
             if graph_v2 { kaspa_consensus_core::palw_qwen25_profile::qwen25_a16_profile_v2(g) } else { qwen25_a16_profile_v1(g) };
         let Ok(profile) = profile else { continue };
@@ -541,6 +555,50 @@ mod tests {
     /// this catalog and a class it does not know cannot be put on a running chain. Not the same id,
     /// because the two profiles differ in what the court recomputes — and if these ever collided, a
     /// build could change a live network's class without changing what it calls itself.
+    #[test]
+    /// **A dense row whose declared epsilon is the one its artifact executes — and the older rows
+    /// keep theirs.**
+    ///
+    /// The defect this pins was found by running the model gate on a real converted artifact, not
+    /// by reading: `plan_from_profile` compares the profile's `base0_rms_eps_q` with the artifact's
+    /// `eps_q` and refuses the pair, so `Qwen25A16Backend::from_registered_profile` fails for every
+    /// dense row that existed before `graph-v3` — the chain-registered n_ctx-16 one included. A
+    /// class that cannot be built from its own registered profile cannot be court-capable, and a
+    /// free-prompt claim on a class that is not court-capable is a claim no dispute can reach.
+    ///
+    /// What this test checks is the catalog-level fact underneath that refusal: the profile's
+    /// epsilon and the artifact shape's epsilon agree for `graph-v3` and disagree for its
+    /// predecessors. What it deliberately does NOT check is that a plan compiles over a real
+    /// artifact — that needs the 1.7 GiB file and belongs to the drill. Stated rather than implied,
+    /// because a unit test that claimed the stronger thing would be claiming what it cannot see.
+    #[test]
+    fn the_graph_v3_dense_row_declares_the_epsilon_its_artifact_executes() {
+        let court = PalwCourtParamsV2::new(kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES, 4, 2).expect("shipped court");
+        let classes = canonical_classes_v1(&court);
+        let row = |id: &str| classes.iter().find(|c| c.model_id == id).unwrap_or_else(|| panic!("no {id} row"));
+
+        let v3 = row("Qwen/Qwen2.5-1.5B/graph-v3");
+        assert_eq!(
+            v3.profile.base0_rms_eps_q, v3.artifact_shape.eps_q,
+            "the graph-v3 row must declare the epsilon the converter builds, or plan_from_profile refuses it"
+        );
+        assert_eq!(v3.profile.base0_rms_eps_q, kaspa_consensus_core::palw_qwen25_profile::QWEN25_ARTIFACT_EPS_Q);
+
+        // The predecessors carry the split, and that is a fact about the chain rather than a bug to
+        // fix here: their ids are live and correcting one in place would rename a registered class.
+        for older in ["Qwen/Qwen2.5-1.5B", "Qwen/Qwen2.5-1.5B/graph-v2"] {
+            let r = row(older);
+            assert_ne!(r.profile.base0_rms_eps_q, r.artifact_shape.eps_q, "{older} is expected to carry the historical split");
+            assert_ne!(r.class_id(), v3.class_id(), "{older} and graph-v3 must be different classes");
+        }
+        // And the correction moved nothing else: same graph, same width, one declared difference.
+        let v2 = row("Qwen/Qwen2.5-1.5B/graph-v2");
+        assert_eq!(v3.profile.n_ctx, v2.profile.n_ctx);
+        assert_eq!(v3.profile.pre_nodes.len(), v2.profile.pre_nodes.len());
+        assert_eq!(v3.profile.attn_nodes.len(), v2.profile.attn_nodes.len());
+        assert_eq!(v3.profile.state_chunk_map_id, v2.profile.state_chunk_map_id);
+    }
+
     #[test]
     fn the_corrected_a16_graph_is_a_registrable_class_of_its_own() {
         let court = PalwCourtParamsV2::new(kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES, 4, 2).expect("shipped court");

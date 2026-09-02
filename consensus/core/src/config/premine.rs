@@ -206,6 +206,11 @@ fn misaka_premine_utxos_inner(main: &str) -> UtxoCollection {
 ///   (no prefix as posted) → replaced 2026-08-18 by the entry below.
 /// * uki 2026-08-13 `misakatest:qfa2z97yspcra7pel80h06jg4a6mg0669fj5qx63e4v5y8geddd8hvyvy75rqaejgrq69e8yv4nd66rzlt5tqepw95q7q3k55qev84g6ey5yj8x8`
 ///   → replaced 2026-08-19 by the entry below.
+/// * tetsu31 AGAIN, 2026-08-28: their 2026-08-18 address
+///   `qt8j52desseh38y3ed5wzt452fqycl5xz8ptdm0yu2m4jpppesa353nkr4wc6gsnu48ald2qy592j7sztzpj93nlaay2wcy90xme9urqkfzywukt`
+///   → replaced by the entry below. One entrant, three addresses, still ONE entry at 5M — the
+///   supersession list is keyed by ADDRESS and not by name precisely so a second change by the
+///   same person cannot quietly become a second payment.
 ///
 /// Amounts are whole MSK (× [`SOMPI_PER_KASPA`] at build). The fixed order feeds the genesis
 /// `utxo_commitment` via the outpoint index, so it must never be reordered.
@@ -213,8 +218,8 @@ fn misaka_premine_utxos_inner(main: &str) -> UtxoCollection {
 pub const TESTNET11_COMMUNITY_ALLOCATIONS: &[(&str, u64)] = &[
     // operator (2026-08-11)
     ("misakatest:qt0meznnlhgxx9h99yn78erahuyql0fnaeh9fxwjhw5j2qftsvsdjy38hm89ul7dfvddy0v2uqkgr4tqgr9nxp23xtn4tylf370f2k9f8hpry2wz", 100_000_000),
-    // tetsu31 (changed address, 2026-08-18)
-    ("misakatest:qt8j52desseh38y3ed5wzt452fqycl5xz8ptdm0yu2m4jpppesa353nkr4wc6gsnu48ald2qy592j7sztzpj93nlaay2wcy90xme9urqkfzywukt", 5_000_000),
+    // tetsu31 (changed address AGAIN, 2026-08-28 — third address, still 5M and still one entry)
+    ("misakatest:qfvt2l0a92ang7m370srfkfq7v7mpp5ppw6hstetcgxkkfkfvdqh6q9zpuw7fq8qwcvnhxlvzhpnkfht3w3w06m3tq7fucsev8drkm7yzm80mzs6", 5_000_000),
     // Kurenai (re-registered address, 2026-08-23)
     ("misakatest:q2hftf0vsn23n5lpqzq9lealff4frahnr420lz4zwfjadtdfnq8jm375wddxrqa60f5ma706jq2j2htlrvgx7qf2xx04canvrtjq64n9r9e7tf4w", 30_000_000),
     // タケヤマ #1 (changed address, 2026-08-23). #2 below is deliberately unchanged: the operator
@@ -238,10 +243,14 @@ pub const TESTNET11_COMMUNITY_ALLOCATIONS: &[(&str, u64)] = &[
     ("misakatest:q2wr70tgc8rtnz54026l5xntydq5hp7nuvp0fyxv30e2sk9jx2kc4gyt7tet0htttl5p4d36lyt25dshm45kqefdjpu8kcjurrakwx74rlpceqyt", 100_000_000),
     // ほうじ茶 (2026-08-26)
     ("misakatest:qgz4mlmfhw39yfh2dg3xul2ex9es9pxyrn46wu7th4gl2ldchugw85j30a84kv3wwv5r6ls9wg8ffzd5huzecejh7fhf3gf7rjgtcvlwdeqfcy34", 100_000_000),
+    // Nusi (2026-09-01)
+    ("misakatest:qgqh5unkydrp2qyhgxgg723sul5xv40ffymwnlhqale3973qlyfqc8snme7thmmpcqvn9f9gzeyavwdqthfqelq7y8tyajsdnnhsmx980g8ujkzl", 100_000_000),
+    // The Witch King (2026-09-02)
+    ("misakatest:qfq3yl2d090e3nphrwh5jyrr97g2f85z2zpkasca0s3d7tk98fuv9sknzlhjxnwd8pdly2kgz25krdfxs5066zkupf5g4r442g72xfswyu0h5yhp", 1_000_000),
 ];
 
-/// Total community allocation: 547M MSK (100+5+30+100+100+1+5+5+1+100+100).
-pub const TESTNET11_COMMUNITY_SOMPI: u64 = 547_000_000 * SOMPI_PER_KASPA;
+/// Total community allocation: 648M MSK (100+5+30+100+100+1+5+5+1+100+100+100+1).
+pub const TESTNET11_COMMUNITY_SOMPI: u64 = 648_000_000 * SOMPI_PER_KASPA;
 
 /// Deterministic sentinel txid for the t11 community UTXOs: ASCII "misaka-t11-community"
 /// (20 bytes) zero-padded to 64. Distinct from [`MISAKA_PREMINE_TXID`] so the two tables can
@@ -572,9 +581,9 @@ mod tests {
     /// everyone who changed address appears ONCE, at their new one.
     #[test]
     fn the_community_allocation_is_the_collected_list() {
-        assert_eq!(TESTNET11_COMMUNITY_ALLOCATIONS.len(), 11);
+        assert_eq!(TESTNET11_COMMUNITY_ALLOCATIONS.len(), 13);
         let total: u64 = TESTNET11_COMMUNITY_ALLOCATIONS.iter().map(|(_, msk)| *msk).sum();
-        assert_eq!(total, 547_000_000, "100+5+30+100+100+1+5+5+1+100+100");
+        assert_eq!(total, 648_000_000, "100+5+30+100+100+1+5+5+1+100+100+100+1");
         assert_eq!(TESTNET11_COMMUNITY_SOMPI, total * SOMPI_PER_KASPA);
 
         // The superseded addresses are ABSENT — an entrant paid twice is an entrant paid wrong.
@@ -585,6 +594,11 @@ mod tests {
             "qfa2z97yspcra7pel80h06jg4a6mg0669fj5qx63e4v5y8geddd8hvyvy75rqaejgrq69e8yv4nd66rzlt5tqepw95q7q3k55qev84g6ey5yj8x8",
             "qtjw605sgh0uha25crcxy4sp8hl644x4ddl3msrtnurv3c4prz6cnag9hle8a5vyqkxgw54cl6tzyuap7j47yajf4wq3cl0tqdgup50rkdm9r4k3",
             "q2utpunet56y6hxlm0pg39mx6sd6zertjqmrf2vrwhv9grr769pga6dsxhncyteexr6hvs8gcxyaumwxveth2qupe06l6maqpc5jhlp96s64ys7a",
+            // tetsu31's SECOND address, superseded 2026-08-28 by their third. Two supersessions by
+            // one entrant is why this list is keyed by address rather than by name: paying the
+            // 2026-08-18 one beside the 2026-08-28 one would give tetsu31 10M under two keys, and
+            // nothing but this assertion would say so.
+            "qt8j52desseh38y3ed5wzt452fqycl5xz8ptdm0yu2m4jpppesa353nkr4wc6gsnu48ald2qy592j7sztzpj93nlaay2wcy90xme9urqkfzywukt",
         ] {
             assert!(
                 !TESTNET11_COMMUNITY_ALLOCATIONS.iter().any(|(a, _)| a.contains(superseded)),
@@ -609,14 +623,16 @@ mod tests {
         use kaspa_addresses::Prefix;
 
         let utxos = testnet11_community_utxos();
-        assert_eq!(utxos.len(), 11, "eleven entrants");
+        assert_eq!(utxos.len(), 13, "thirteen entrants");
         let total: u64 = utxos.values().map(|e| e.amount).sum();
-        assert_eq!(total, TESTNET11_COMMUNITY_SOMPI, "547M MSK exactly");
-        assert_eq!(total, 547_000_000 * SOMPI_PER_KASPA);
+        assert_eq!(total, TESTNET11_COMMUNITY_SOMPI, "648M MSK exactly");
+        assert_eq!(total, 648_000_000 * SOMPI_PER_KASPA);
 
-        // Per-entry amounts, in table order (100/5/30/100/100/1/5/5/1/100/100 M). The order is the
-        // outpoint index, so the two 2026-08-26 entrants are APPENDED — inserting either of them
-        // earlier would hand every later index to a different person.
+        // Per-entry amounts, in table order (100/5/30/100/100/1/5/5/1/100/100/100/1 M). The order
+        // is the outpoint index, so every later entrant is APPENDED — inserting one earlier would
+        // hand every index after it to a different person. tetsu31's third address (2026-08-28)
+        // REPLACED their second in place at index 1 rather than being appended, because a changed
+        // address is the same entrant and appending it would have paid them twice.
         let expected_msk = [
             100_000_000u64,
             5_000_000,
@@ -629,6 +645,8 @@ mod tests {
             1_000_000,
             100_000_000,
             100_000_000,
+            100_000_000,
+            1_000_000,
         ];
         let txid = Hash64::from_bytes(TESTNET11_COMMUNITY_TXID);
         for (i, want) in expected_msk.iter().enumerate() {

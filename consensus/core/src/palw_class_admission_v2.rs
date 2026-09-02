@@ -311,6 +311,14 @@ pub struct PalwCourtCostShapeV1 {
     /// front of the answer (ADR-0077 §4 budgets those separately: "PublicDa carries `n_ctx × 4`
     /// bytes of ids").
     pub count_ids: bool,
+    /// **Which form the job's `prompt_token_ids_hash` takes** (ADR-0081 Decision 3), and therefore
+    /// what the prompt-id term below costs: the whole list, or one opening of it.
+    ///
+    /// A property of the RULESET like every other field here — `Params::palw_prompt_ids_form_at`,
+    /// which is `Flat` on every shipped preset. Both constructors below say `Flat` explicitly, so
+    /// this split changes no shipped price; `the_prompt_id_term_is_the_openings_size_past_the_fence`
+    /// is what says the other reading is a reading and not a rewrite.
+    pub prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1,
 }
 
 impl PalwCourtCostShapeV1 {
@@ -323,6 +331,7 @@ impl PalwCourtCostShapeV1 {
             gdn_checkpoint_bytes: 0,
             path_from_ladder: false,
             count_ids: true,
+            prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
         }
     }
 
@@ -338,7 +347,17 @@ impl PalwCourtCostShapeV1 {
             gdn_checkpoint_bytes: checkpoint_bytes,
             path_from_ladder: true,
             count_ids: true,
+            prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
         }
+    }
+
+    /// The same court, reading the prompt ids under ADR-0081 Decision 3's form. Separate from the
+    /// two constructors above rather than a parameter of them, because the form is the one thing
+    /// here a network can arm on its own fence (`Params::palw_prompt_ids_merkle`) while every other
+    /// field stays exactly what the ruleset already froze.
+    pub fn with_prompt_ids_form_v1(mut self, form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1) -> Self {
+        self.prompt_ids_form = form;
+        self
     }
 }
 
@@ -651,15 +670,23 @@ fn derive_court_cost_walk_v1(
             // carry them on any close: they are checked against `prompt_token_ids_hash` before one
             // is read, so they cost bytes rather than trust.
             //
-            // **Not anchored by ADR-0077 Decision 11, deliberately.** The decision shortens the
-            // history a ref opens; it says nothing about the ids, and it could not: they are
-            // checked against `prompt_token_ids_hash`, a FLAT hash over the whole prompt, which no
-            // window of ids can be opened against. So this term stays `n_ctx`-shaped in both forms
-            // and ADR-0077 §4 budgets it as such ("PublicDa carries `n_ctx × 4` bytes of ids —
-            // 2 KiB at 512"). It is the reason W1's `max_close_bytes` equality is stated over the
-            // history term rather than over the whole close.
+            // **Not anchored by ADR-0077 Decision 11, and ADR-0081 Decision 3 is why it could not
+            // be.** Decision 11 shortens the history a ref opens; it says nothing about the ids,
+            // because under the FLAT `prompt_token_ids_hash` no window of ids can be opened
+            // against the commitment at all — so the whole prompt rides every close and the term
+            // is `n_ctx × 4`, which is what ADR-0077 §4 budgets ("PublicDa carries `n_ctx × 4`
+            // bytes of ids — 2 KiB at 512"). It is the reason W1's `max_close_bytes` equality is
+            // stated over the history term rather than over the whole close.
+            //
+            // Past `Params::palw_prompt_ids_merkle` the commitment is a tiled Merkle root, a
+            // refutation carries ONE tile and its path, and this term becomes that opening's size
+            // — 472 bytes at `n_ctx` 512 against 2,048, and 856 at 32,768 against 131,072, which
+            // alone is past the whole carrier. `prompt_ids_close_bytes_v1` is the one derivation:
+            // the price a class is admitted at has to be the price its challengers pay, and a
+            // bound that guessed here would drift from the carrier the moment either moved.
             if shape.count_ids {
-                evidence = evidence.checked_add(n_ctx.checked_mul(4).ok_or_else(over)?).ok_or_else(over)?;
+                let ids = crate::palw_prompt_ids_v1::prompt_ids_close_bytes_v1(shape.prompt_ids_form, n_ctx).ok_or_else(over)?;
+                evidence = evidence.checked_add(ids).ok_or_else(over)?;
             }
             // **The price of stopping at a checkpoint** (Decision 11: "plus ONE checkpoint-chunk
             // opening per history-reading ref"). Zero on the shipped form, which has no anchor to
@@ -2164,6 +2191,122 @@ mod tests {
                 "the declared context became reachable at the maximum tile — update the sizing table"
             );
         }
+    }
+
+    /// **The prompt-id term IS the opening's size past ADR-0081 Decision 3's fence — the four
+    /// numbers, printed, on the real derivation.**
+    ///
+    /// `prompt_ids_close_bytes_v1` has its own sweep in `palw_prompt_ids_v1`; this is the one that
+    /// says the court's walk actually reads it. Same profile, same court, one field different, and
+    /// the whole `max_close_bytes` moves by exactly the term's difference — which it can only do if
+    /// the term is charged on the binding node and nowhere else is affected.
+    ///
+    /// `n_ctx` 512 / 4,096 / 32,768 are the contexts a long-context design is about; 30 is here
+    /// because it is the one measured point where the opening is DEARER than the list it replaces.
+    /// The floor's OWN `n_ctx` is 12.
+    ///
+    /// **And the term is ~0.1% of the close it sits in, at every one of them** — asserted below,
+    /// because the four numbers read like headroom and are not. The floor's close is 52,704 bytes
+    /// at `n_ctx` 12 against an 81,920-byte carrier; it passes the carrier at `n_ctx` 20 (85,536)
+    /// and by `n_ctx` 512 it is 2,105,024, twenty-five times the carrier, of which the whole
+    /// prompt-id term is 2,048. So arming this fence moves no class across the ceiling at any
+    /// context, and it was never going to: what Decision 3 buys is the term's SHAPE
+    /// (`log`-shaped instead of linear), which a long context needs and which the other terms —
+    /// the history runs and their paths, ADR-0077 Decision 11's business — still do not have.
+    #[test]
+    fn the_prompt_id_term_is_the_openings_size_past_the_fence() {
+        use crate::palw_prompt_ids_v1::{PalwPromptIdsFormV1, prompt_ids_close_bytes_v1};
+        let mut measured = Vec::new();
+        for n_ctx in [30u32, 512, 4_096, 32_768] {
+            let mut geometry = PALW_RC_BASE0_GEOMETRY;
+            geometry.n_ctx = n_ctx;
+            let profile = base0_profile_v1(geometry).expect("the floor's graph is expressible at any context");
+            // The over-provisioned ladder, so only the id term can differ between the two readings.
+            let mut shape = PalwCourtCostShapeV1::genesis_anchored_v1(&profile);
+            shape.ladder = crate::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES;
+            let flat = derive_court_cost_shaped_v1(&profile, shape).expect("the flat reading derives");
+            let merkle = derive_court_cost_shaped_v1(&profile, shape.with_prompt_ids_form_v1(PalwPromptIdsFormV1::MerkleV1))
+                .expect("the merkle reading derives");
+            let flat_term = prompt_ids_close_bytes_v1(PalwPromptIdsFormV1::Flat, n_ctx as u64).unwrap();
+            let merkle_term = prompt_ids_close_bytes_v1(PalwPromptIdsFormV1::MerkleV1, n_ctx as u64).unwrap();
+            println!(
+                "n_ctx {n_ctx:>6}: id term {flat_term:>7} -> {merkle_term:>4}; close {} -> {}",
+                flat.max_close_bytes, merkle.max_close_bytes
+            );
+            // Signed, because below ~50 ids the opening's header outweighs the list it replaces
+            // (208 against 120 at `n_ctx` 30) and the delta is negative — a fact the scheme states
+            // out loud rather than a case to hide behind an unsigned subtraction.
+            assert_eq!(
+                i128::from(flat.max_close_bytes) - i128::from(merkle.max_close_bytes),
+                i128::from(flat_term) - i128::from(merkle_term),
+                "the whole close moved by exactly the id term at n_ctx {n_ctx}"
+            );
+            assert_eq!(flat.max_terminal_macs, merkle.max_terminal_macs, "the id term is bytes, never recomputation");
+            measured.push((n_ctx, flat_term, merkle_term));
+        }
+        assert_eq!(
+            measured,
+            vec![(30u32, 120u64, 208u64), (512, 2_048, 472), (4_096, 16_384, 664), (32_768, 131_072, 856)],
+            "the four numbers ADR-0081 Decision 3 is worth",
+        );
+        // **What the four numbers are NOT: admission headroom.** Every close above is already past
+        // the carrier, the id term is a thousandth of it, and arming the fence leaves every one of
+        // them past it. Stated as an assertion rather than a caveat, because "the prompt ids cost
+        // 128 KiB at 32,768, where nothing fits" invites exactly the reading this refutes.
+        for (n_ctx, flat_term, _) in &measured {
+            let mut geometry = PALW_RC_BASE0_GEOMETRY;
+            geometry.n_ctx = *n_ctx;
+            let profile = base0_profile_v1(geometry).expect("expressible");
+            let mut shape = PalwCourtCostShapeV1::genesis_anchored_v1(&profile);
+            shape.ladder = crate::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES;
+            for form in [PalwPromptIdsFormV1::Flat, PalwPromptIdsFormV1::MerkleV1] {
+                let close =
+                    derive_court_cost_shaped_v1(&profile, shape.with_prompt_ids_form_v1(form)).expect("derives").max_close_bytes;
+                assert!(
+                    close > crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES,
+                    "n_ctx {n_ctx} under {form:?} closes at {close}, which the carrier would admit — \
+                     the fence would then be an admission change and needs its own gate test"
+                );
+            }
+            assert!(
+                flat_term * 1_000 < derive_court_cost_shaped_v1(&profile, shape).expect("derives").max_close_bytes,
+                "n_ctx {n_ctx}: the prompt-id term is under a thousandth of the close, so its form is a shape \
+                 argument and never a ceiling one"
+            );
+        }
+        // The floor's own context is the one that fits, and the widest BASE-0 row that does is 18
+        // — not any of the four above. Measured, so the sentence cannot drift from the derivation.
+        let widest = |n_ctx: u32| {
+            let mut g = PALW_RC_BASE0_GEOMETRY;
+            g.n_ctx = n_ctx;
+            let p = base0_profile_v1(g).expect("expressible");
+            derive_court_cost_v1(&p).expect("derives").max_close_bytes
+        };
+        assert!(widest(18) <= crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES, "n_ctx 18 fits: {}", widest(18));
+        assert!(widest(20) > crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES, "n_ctx 20 does not: {}", widest(20));
+    }
+
+    /// **No shipped price moves.** Both constructors say `Flat`, so a class derived through
+    /// `derive_court_cost_v1` costs exactly what it cost before the form existed — asserted rather
+    /// than assumed, because "the default is unchanged" is the claim every silent fork starts from.
+    #[test]
+    fn the_shipped_court_cost_reads_the_prompt_ids_flat() {
+        use crate::palw_prompt_ids_v1::PalwPromptIdsFormV1;
+        let profile = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("the floor derives");
+        assert_eq!(PalwCourtCostShapeV1::genesis_anchored_v1(&profile).prompt_ids_form, PalwPromptIdsFormV1::Flat);
+        assert_eq!(
+            PalwCourtCostShapeV1::checkpoint_anchored_v1(&profile, 16, PALW_STEP_MAX_LEAVES, 0).prompt_ids_form,
+            PalwPromptIdsFormV1::Flat
+        );
+        // And the shipped entry point: `derive_court_cost_v1` is `genesis_anchored_v1`, so the
+        // floor's close is the flat reading down to the byte.
+        let shipped = derive_court_cost_v1(&profile).expect("the floor's cost derives");
+        let explicit = derive_court_cost_shaped_v1(
+            &profile,
+            PalwCourtCostShapeV1::genesis_anchored_v1(&profile).with_prompt_ids_form_v1(PalwPromptIdsFormV1::Flat),
+        )
+        .expect("the explicit flat reading derives");
+        assert_eq!(shipped, explicit);
     }
 
     /// **The one gate, on the one family.** Every registration goes through the step-space gate:

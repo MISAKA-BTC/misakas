@@ -1276,6 +1276,7 @@ mod tests {
                     // the anchoring itself.
                     path_from_ladder: true,
                     count_ids: true,
+                    prompt_ids_form: crate::palw_prompt_ids_v1::PalwPromptIdsFormV1::Flat,
                 },
             )
             .expect("derives")
@@ -1831,5 +1832,450 @@ mod the_512_breakdown {
                 worst.close_bytes
             );
         }
+    }
+}
+
+// =================================================================================================
+// U-00 — the graph-v4 tiled attention map, MEASURED rather than assumed
+// =================================================================================================
+
+/// **Is a disputed attention leaf's close FLAT in the position under `tiled_kv_state_chunk_map_id_v3`?**
+///
+/// [`crate::palw_state_chunk_map::PALW_ATTN_HISTORY_TILE_V4`] says of itself that the tile "is a
+/// CONSTANT and not a function of `n_ctx`, which is the property the ladder needs: … the close a v4
+/// attention node derives is flat in the context (W1) instead of linear in it." Two ADRs (0080 and
+/// 0081) and the competing chunk-the-reductions design were written on that sentence and nothing
+/// had measured it.
+///
+/// **It is not flat, and this module is where that is written down.** The tile flattens exactly one
+/// term — the checkpoint-chunk opening — and three others stay linear in `n_ctx`:
+///
+/// 1. the **interval-scaled history**, because `palw_checkpoint_interval_v1` is `max(1, n_ctx / 32)`
+///    and an anchored replay opens that many positions of the node's refs;
+/// 2. the **attention probability row**, `attn_heads × n_ctx` lanes, which is a property of the
+///    GRAPH and which no state chunk map addresses;
+/// 3. the **prompt ids**, four bytes a position on EVERY node, because
+///    `prompt_token_ids_hash_v2` (`palw_v2.rs:521`) is a flat digest and no window of ids can be
+///    opened against it.
+///
+/// What the tile does buy is real and large — the widest dense row the 80 KiB carrier admits under
+/// the anchored court moves from 30 to 223 — and it is a constant factor, not a change of shape.
+/// The measurement binary that produced every number here is
+/// `misaka-palw-base0/src/bin/palw-tile-measure.rs`.
+///
+/// Nothing in this module is armed: `Params::palw_context_ladder` is `None` on every preset and
+/// no registered class declares the v3 map.
+#[cfg(test)]
+mod u00_tiled_attention_measurement {
+    use super::*;
+    use crate::palw_class_admission_v2::{PalwCourtCostRowV1, derive_court_cost_rows_v1, derive_court_cost_v1};
+    use crate::palw_state_chunk_map::{
+        PALW_ATTN_HISTORY_TILE_V4, hybrid_state_chunk_map_id_v2, hybrid_state_chunk_map_id_v3, integer_kv_state_chunk_map_id_v2,
+        tiled_kv_chunk_bytes_v3, tiled_kv_state_chunk_map_id_v3,
+    };
+    use crate::palw_step::{PALW_STEP_INPUT_KV_K, PALW_STEP_INPUT_KV_V, PALW_STEP_MAX_LEAVES, worst_case_step_leaf_count_capped_v1};
+
+    const LADDER: u64 = PALW_CONTEXT_LADDER_MAX_STEP_LEAVES;
+
+    /// The dense ladder row declaring the graph-v4 tiled attention map. A DIFFERENT class from the
+    /// v2-mapped one — `state_chunk_map_id` is inside `shape_profile_id` — which is why this is a
+    /// projection and not a mutation of anything registered.
+    fn dense_v3(n_ctx: u32) -> PalwShapeProfileV3 {
+        let mut profile = palw_a16_context_row_profile_v1(n_ctx).expect("the dense row projects");
+        profile.state_chunk_map_id = tiled_kv_state_chunk_map_id_v3();
+        profile
+    }
+
+    /// The same row on the map the shipped rule prices.
+    fn dense_v2(n_ctx: u32) -> PalwShapeProfileV3 {
+        let mut profile = palw_a16_context_row_profile_v1(n_ctx).expect("the dense row projects");
+        profile.state_chunk_map_id = integer_kv_state_chunk_map_id_v2();
+        profile
+    }
+
+    /// What one v3 chunk opens, plus the path that proves it — the honest
+    /// `PalwCourtCostShapeV1::kv_checkpoint_bytes` for a v3 class, which no shipped function
+    /// answers (see [`the_v3_map_is_not_priced_by_the_ladder_rule`]).
+    fn v3_kv_checkpoint_bytes(profile: &PalwShapeProfileV3) -> u64 {
+        tiled_kv_chunk_bytes_v3(profile).expect("the v3 chunk derives") + step_path_bytes_v1(LADDER)
+    }
+
+    /// Decision 11's court at the v3 price, with the interval the caller states.
+    fn v3_shape(profile: &PalwShapeProfileV3, interval: u32, count_ids: bool) -> PalwCourtCostShapeV1 {
+        let mut shape = PalwCourtCostShapeV1::checkpoint_anchored_v1(profile, interval, LADDER, 0);
+        shape.kv_checkpoint_bytes = v3_kv_checkpoint_bytes(profile);
+        // The v4 composition's `gdn=` half is `PALW_GDN_STATE_CHUNK_MAP_NAME_V2` verbatim, so its
+        // recurrence opening IS priceable — the dispatch simply does not reach it. Asked of the
+        // half here so an attention measurement never stands on a recurrence charge of zero.
+        let mut as_gdn_half = profile.clone();
+        if profile.state_chunk_map_id == hybrid_state_chunk_map_id_v3() {
+            as_gdn_half.state_chunk_map_id = hybrid_state_chunk_map_id_v2();
+        }
+        shape.gdn_checkpoint_bytes = palw_gdn_checkpoint_opening_bytes_for_map_v1(&as_gdn_half, LADDER).unwrap_or(0);
+        shape.count_ids = count_ids;
+        shape
+    }
+
+    /// The most expensive node that reads the KV cache — "a disputed attention leaf", by name.
+    fn worst_kv_row(profile: &PalwShapeProfileV3, shape: PalwCourtCostShapeV1) -> PalwCourtCostRowV1 {
+        let rows = derive_court_cost_rows_v1(profile, shape).expect("the breakdown derives");
+        rows.into_iter()
+            .find(|r| {
+                let table = match r.table {
+                    "pre" => &profile.pre_nodes,
+                    "gdn" => &profile.gdn_nodes,
+                    "attn" => &profile.attn_nodes,
+                    _ => &profile.post_nodes,
+                };
+                table
+                    .get(r.index)
+                    .is_some_and(|n| n.input_refs.iter().any(|x| *x == PALW_STEP_INPUT_KV_K || *x == PALW_STEP_INPUT_KV_V))
+            })
+            .expect("the dense graph has a node that reads the cache")
+    }
+
+    /// **The headline, and it contradicts the map's own doc comment.** The v3 tile flattens the
+    /// checkpoint OPENING and leaves the close growing.
+    ///
+    /// Stated as three facts in one test because separating them is how a reader comes away with
+    /// the wrong one: the opening really is flat, the close really is not, and the second is not a
+    /// consequence of the first failing.
+    ///
+    /// Command: `cargo run -p misaka-palw-base0 --bin palw-tile-measure` (§0, §1–2).
+    #[test]
+    fn the_v3_tile_flattens_the_opening_and_not_the_close() {
+        // 1. The opening IS flat. `tiled_kv_chunk_bytes_v3` is `min(n_ctx, 16) × kv_row`, so past
+        //    the tile it does not move; the v2 opening is the whole history and moves with it.
+        let openings: Vec<u64> = [1_000u32, 4_096, 32_768].iter().map(|n| v3_kv_checkpoint_bytes(&dense_v3(*n))).collect();
+        assert_eq!(openings, vec![18_432, 18_432, 18_432], "the v3 chunk opening is not flat in the context");
+        assert_eq!(openings[0], (PALW_ATTN_HISTORY_TILE_V4 as u64) * 2 * 128 * 4 + step_path_bytes_v1(LADDER));
+        let v2: Vec<u64> =
+            [1_000u32, 4_096].iter().map(|n| palw_kv_checkpoint_opening_bytes_v1(&dense_v2(*n), LADDER).expect("derives")).collect();
+        assert_eq!(v2, vec![1_026_048, 4_196_352], "the v2 opening stopped being the whole history");
+
+        // 2. And the CLOSE is not flat — under the same anchored court, at the v3 price, with the
+        //    interval the rule derives. Four times the context is 3.53 times the close: a large
+        //    constant factor off the v2 reading, and the same SHAPE.
+        let close = |n_ctx: u32| {
+            let profile = dense_v3(n_ctx);
+            let shape = v3_shape(&profile, palw_checkpoint_interval_v1(n_ctx), true);
+            worst_kv_row(&profile, shape).close_bytes
+        };
+        let (narrow, wide) = (close(1_000), close(4_096));
+        assert_eq!((narrow, wide), (228_769, 806_577), "the anchored v3 close moved — re-run palw-tile-measure and re-pin");
+        assert!(wide > narrow * 3, "the v3 attention close became flat in the context — this module's whole finding moved");
+
+        // 3. Which is not the id term standing in front of the answer: with the ids removed the
+        //    growth is 97.9 % of what it was.
+        let bare = |n_ctx: u32| {
+            let profile = dense_v3(n_ctx);
+            let shape = v3_shape(&profile, palw_checkpoint_interval_v1(n_ctx), false);
+            worst_kv_row(&profile, shape).close_bytes
+        };
+        assert_eq!((bare(1_000), bare(4_096)), (224_769, 790_193));
+        let id_only = 4 * (4_096u64 - 1_000);
+        assert!(
+            bare(4_096) - bare(1_000) > 40 * id_only,
+            "the residue after the ids is no longer the dominant growth — the finding changed shape"
+        );
+
+        // 4. And "not flat" is **LINEAR**, not "sub-linear" — which two points cannot tell apart
+        //    and which is the reading the next design inherits. 228,769 → 806,577 is 3.53x over a
+        //    4x context, and a ratio-only classifier called that sub-linear; a third context says
+        //    the slopes are 185.3 then 187.3, i.e. one straight line carrying a ~40 KiB constant.
+        //    The constant is what the tile bought. The slope is what it did not.
+        let mid = close(2_000);
+        assert_eq!(mid, 414_033, "the v3 close at the midpoint moved — re-run palw-tile-measure and re-pin");
+        let (s1, s2) = ((mid - narrow) as f64 / 1_000.0, (wide - mid) as f64 / 2_096.0);
+        assert!(
+            s2 <= s1 * 1.10 && s1 <= s2 * 1.10,
+            "the v3 close stopped being one straight line in n_ctx: {s1} bytes/position then {s2} — \
+             if it genuinely became sub-linear, this module's headline is what changed"
+        );
+    }
+
+    /// **What is still linear, once the interval is held still: the attention PROBABILITY ROW.**
+    ///
+    /// `palw_checkpoint_interval_v1` is `max(1, n_ctx / 32)`, so the anchored court's own
+    /// `history_positions` is `n_ctx`-shaped and a sweep against it cannot tell "the map is not
+    /// flat" from "the interval rule is not flat". Held at the tile's own width, the residue is a
+    /// clean straight line at ~50.3 bytes a position — and its slope is the graph's:
+    /// `attn_heads × 4` for the opened lanes plus the run's per-tile headers.
+    ///
+    /// This is the term no state chunk map can reach, and the one a long-context design has to
+    /// answer for. Command: `palw-tile-measure` §6.
+    #[test]
+    fn with_the_interval_held_the_residue_is_the_probability_row() {
+        let at = |n_ctx: u32| {
+            let profile = dense_v3(n_ctx);
+            let shape = v3_shape(&profile, PALW_ATTN_HISTORY_TILE_V4, false);
+            worst_kv_row(&profile, shape).close_bytes
+        };
+        let points = [(256u32, at(256)), (512, at(512)), (1_024, at(1_024)), (4_096, at(4_096))];
+        assert_eq!(
+            points.map(|(_, b)| b),
+            [123_889, 136_817, 162_609, 317_105],
+            "the constant-interval residue moved — re-run palw-tile-measure and re-pin"
+        );
+        // One slope, at three widths — which is what "linear" means and what a ratio would hide.
+        let heads = palw_a16_context_row_profile_v1(512).expect("projects").attn_heads as f64;
+        for pair in points.windows(2) {
+            let slope = (pair[1].1 - pair[0].1) as f64 / (pair[1].0 - pair[0].0) as f64;
+            assert!(
+                slope > 4.0 * heads && slope < 4.0 * heads + 3.0,
+                "the residue's slope between n_ctx {} and {} is {slope}, not the probability row's {}",
+                pair[0].0,
+                pair[1].0,
+                4.0 * heads
+            );
+        }
+    }
+
+    /// **The prompt-id term costs four bytes a position on EVERY node** — the prediction the u04
+    /// stream's justification rests on, confirmed exactly rather than by inspection of
+    /// `palw_v2.rs:521`.
+    ///
+    /// `prompt_token_ids_hash_v2` is `put_u32_seq(ids); keyed64(DOMAIN)` — a FLAT digest — so a
+    /// challenger who addresses any node carries every id, and `derive_court_cost_walk_v1` charges
+    /// `n_ctx × 4` unconditionally. The consequence is the one that matters: **no node of the graph
+    /// is flat in the context**, whatever the map does, so a design that flattens the cache and
+    /// leaves this term has not flattened the close.
+    ///
+    /// The gather pays it three times over (its own ids, the decode pin's ids, and the
+    /// unconditional term), which is why it is excluded from the exact arm rather than folded into
+    /// it. Command: `palw-tile-measure` §4.
+    #[test]
+    fn every_node_pays_four_bytes_a_position_for_the_flat_prompt_id_digest() {
+        use crate::palw_step::PalwStepOpKindV1 as Op;
+        let (narrow, wide) = (1_000u32, 4_096u32);
+        let rows = |n_ctx: u32| {
+            let profile = dense_v3(n_ctx);
+            derive_court_cost_rows_v1(&profile, v3_shape(&profile, palw_checkpoint_interval_v1(n_ctx), true)).expect("derives")
+        };
+        let (a, b) = (rows(narrow), rows(wide));
+        let id_term = 4 * (wide as u64 - narrow as u64);
+        assert_eq!(id_term, 12_384);
+        let profile = dense_v3(wide);
+        let mut exact = 0usize;
+        for row in &b {
+            let before = a.iter().find(|r| (r.table, r.index) == (row.table, row.index)).expect("the graphs have the same nodes");
+            let delta = row.close_bytes - before.close_bytes;
+            assert!(delta >= id_term, "{}[{}] grew {delta}, less than the prompt ids themselves", row.table, row.index);
+            let table = match row.table {
+                "pre" => &profile.pre_nodes,
+                "gdn" => &profile.gdn_nodes,
+                "attn" => &profile.attn_nodes,
+                _ => &profile.post_nodes,
+            };
+            let node = table.get(row.index).expect("resolves");
+            let reads_history = node.op_kind == Op::GatedDeltaNet
+                || node.input_refs.iter().any(|r| *r == PALW_STEP_INPUT_KV_K || *r == PALW_STEP_INPUT_KV_V);
+            // A node that neither reads the history, nor gathers, nor has an `n_ctx`-wide row pays
+            // the ids and NOTHING else — the id term exactly, with no residue to hide in.
+            //
+            // Context-shaped is read off `PalwStepOutLenV1::KvScaled`, the graph's own declaration
+            // that a row's width is a multiple of `n_ctx` — for this node's output OR for any row
+            // it opens, since a run's lanes are the SOURCE node's width.
+            let kv_scaled =
+                |n: &crate::palw_step::PalwStepNodeV1| matches!(n.out_len, crate::palw_step::PalwStepOutLenV1::KvScaled { .. });
+            let width_is_context_shaped =
+                kv_scaled(node) || node.input_refs.iter().any(|r| table.get(*r as usize).is_some_and(kv_scaled));
+            if !reads_history && node.op_kind != Op::EmbedLookup && !width_is_context_shaped {
+                assert_eq!(delta, id_term, "{}[{}] {:?} pays more than the prompt ids", row.table, row.index, row.op_kind);
+                exact += 1;
+            }
+        }
+        assert!(exact >= 20, "only {exact} nodes were pinned at the bare id term — the classification stopped selecting");
+        assert_eq!(
+            b.iter()
+                .filter(|r| {
+                    a.iter().find(|x| (x.table, x.index) == (r.table, r.index)).is_some_and(|x| x.close_bytes == r.close_bytes)
+                })
+                .count(),
+            0,
+            "some node became flat in the context — the flat prompt digest stopped being charged everywhere"
+        );
+    }
+
+    /// **What the tile actually buys, as the number the next reader should inherit: 30 → 223.**
+    ///
+    /// The widest `n_ctx` the 80 KiB carrier admits, swept rather than solved because the
+    /// predicate is not monotone (`palw_checkpoint_interval_v1` steps at every multiple of 32).
+    /// Three courts, and the first two reproduce the figures this branch was handed — which is
+    /// what says the harness is measuring the same thing they were.
+    ///
+    /// Command: `palw-tile-measure` §3.
+    #[test]
+    fn the_tile_moves_the_widest_dense_row_from_thirty_to_two_hundred_and_twenty_three() {
+        let budget = crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES;
+        let widest = |price: &dyn Fn(u32) -> Option<u64>| {
+            let mut best = 0u32;
+            for n_ctx in 1..=512u32 {
+                match price(n_ctx) {
+                    Some(bytes) if bytes <= budget => best = n_ctx,
+                    _ => break,
+                }
+            }
+            best
+        };
+        let unfenced = widest(&|n| derive_court_cost_v1(&dense_v2(n)).ok().map(|c| c.max_close_bytes));
+        let armed_v2 = widest(&|n| palw_anchored_court_cost_v1(&dense_v2(n)).and_then(|r| r.ok()).map(|c| c.max_close_bytes));
+        let armed_v3 = widest(&|n| {
+            let profile = dense_v3(n);
+            derive_court_cost_shaped_v1(&profile, v3_shape(&profile, palw_checkpoint_interval_v1(n), true))
+                .ok()
+                .map(|c| c.max_close_bytes)
+        });
+        assert_eq!(unfenced, 21, "the unfenced dense row is no longer 21 — the established figure moved");
+        assert_eq!(armed_v2, 30, "the armed dense row is no longer 30 — the established figure moved");
+        assert_eq!(armed_v3, 223, "the tiled dense row moved — re-run palw-tile-measure and re-pin");
+        // A constant factor, not a change of shape: 7.4x on a term that is still linear.
+        assert!(armed_v3 > armed_v2 * 7 && armed_v3 < armed_v2 * 8);
+    }
+
+    /// **The v3 map is not priced by the ladder rule** — a class that registers it is charged the
+    /// v2 map's opening, 28.6x what its evidence will carry.
+    ///
+    /// `palw_class_ladder_rules_v1` sets `kv_checkpoint_bytes` from
+    /// [`palw_kv_checkpoint_opening_bytes_v1`] UNCONDITIONALLY. The recurrence half has a
+    /// `…_for_map_v1` twin for exactly this reason and its comment states the rule — "the map the
+    /// class REGISTERED, never gdn v1 unconditionally" — and the cache half never got one, because
+    /// until graph v4 there was only one cache map whose price could differ.
+    ///
+    /// Over-charging is the safe direction, so this is a gate that refuses a class it could admit
+    /// rather than one that admits a class it could not try. It is still a defect, and it is the
+    /// reason every number in this module builds its own shape.
+    #[test]
+    fn the_v3_map_is_not_priced_by_the_ladder_rule() {
+        let profile = dense_v3(512);
+        let rules = palw_class_ladder_rules_v1(&profile).expect("a mapped class has rules");
+        let charged = rules.cost_shape.kv_checkpoint_bytes;
+        let honest = v3_kv_checkpoint_bytes(&profile);
+        assert_eq!(charged, 526_336, "the ladder rule's KV charge moved");
+        assert_eq!(honest, 18_432);
+        assert_eq!(
+            charged,
+            palw_kv_checkpoint_opening_bytes_v1(&profile, LADDER).expect("derives"),
+            "the ladder rule stopped reading the v2 opening for a v3 class — if it now reads the class's own map, \
+             delete this test and re-pin the ones above at the cheaper price"
+        );
+        assert!(charged > honest * 28, "the overcharge shrank — re-read the ladder rule");
+
+        // **And this is what the overcharge COSTS, so "30 → 223" is not inherited as a shipped
+        // fact.** `the_tile_moves_the_widest_dense_row_from_thirty_to_two_hundred_and_twenty_three`
+        // prices the v3 class at the honest opening, because no shipped function answers it. Under
+        // the rule as it actually stands, a class that registers the tiled map is charged the v2
+        // map's whole-history opening and is admitted at exactly the width it had before: the tile
+        // buys the dense tier NOTHING until this gap is closed. Whoever closes it inherits the 223.
+        let budget = crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES;
+        let shipped_widest = |map: fn() -> crate::Hash64| {
+            let mut best = 0u32;
+            for n_ctx in 1..=512u32 {
+                let mut row = palw_a16_context_row_profile_v1(n_ctx).expect("projects");
+                row.state_chunk_map_id = map();
+                match palw_anchored_court_cost_v1(&row).and_then(|r| r.ok()) {
+                    Some(cost) if cost.max_close_bytes <= budget => best = n_ctx,
+                    _ => break,
+                }
+            }
+            best
+        };
+        assert_eq!(shipped_widest(integer_kv_state_chunk_map_id_v2), 30);
+        assert_eq!(
+            shipped_widest(tiled_kv_state_chunk_map_id_v3),
+            30,
+            "a v3 class is priced by its own map now — the tile finally buys the width it derives, \
+             so re-read this test and the 223 it qualifies"
+        );
+    }
+
+    /// **And the graph-v4 HYBRID composition is priced with NO recurrence anchor at all** — the
+    /// same defect in the direction that is not safe.
+    ///
+    /// `gdn_state_terms_for_map_v1` dispatches on the WHOLE composition id and knows
+    /// `hybrid_state_chunk_map_id_v1` and `…_v2`. `palw_hybrid_state_chunk_map_name_v3` spells its
+    /// `gdn=` half as `PALW_GDN_STATE_CHUNK_MAP_NAME_V2` verbatim — so the recurrence opening it
+    /// describes is priceable, at 71,680 + path — but the dispatch answers `None` and
+    /// `palw_class_ladder_rules_v1` turns that into `.unwrap_or(0)`.
+    ///
+    /// That is "a v1 class priced at v2's … the direction that admits a class whose disputes nobody
+    /// can raise", quoting the comment two lines above the `unwrap_or`. Dormant — the fence is
+    /// `None` everywhere and no class registers the v4 composition — and a **mainnet blocker for
+    /// whoever arms `Params::palw_context_ladder`**. The fix is one arm in
+    /// `gdn_state_terms_for_map_v1`; it is not taken here because this stream changes no consensus
+    /// rule.
+    #[test]
+    fn the_graph_v4_hybrid_composition_has_no_priced_recurrence_anchor() {
+        use crate::palw_state_chunk_map::palw_hybrid_state_chunk_map_name_v3;
+        let mut row = palw_qwen36_context_row_profile_v1(512).expect("projects");
+        row.state_chunk_map_id = hybrid_state_chunk_map_id_v3();
+
+        // The composition's `gdn=` half IS v2's, so an honest price exists.
+        assert!(
+            palw_hybrid_state_chunk_map_name_v3().contains(crate::palw_state_chunk_map::PALW_GDN_STATE_CHUNK_MAP_NAME_V2),
+            "the v4 composition stopped spelling its recurrence half as gdn v2 — this test's premise moved"
+        );
+        let mut as_v2 = row.clone();
+        as_v2.state_chunk_map_id = hybrid_state_chunk_map_id_v2();
+        let honest = palw_gdn_checkpoint_opening_bytes_for_map_v1(&as_v2, LADDER).expect("the v2 composition prices");
+        assert_eq!(honest, 71_680 + step_path_bytes_v1(LADDER));
+        assert_eq!(honest, 73_728);
+
+        // And the dispatch does not reach it.
+        assert_eq!(
+            palw_gdn_checkpoint_opening_bytes_for_map_v1(&row, LADDER),
+            None,
+            "the v4 composition is priced now — close this gap in palw_class_ladder_rules_v1 and delete this test"
+        );
+        assert_eq!(
+            palw_class_ladder_rules_v1(&row).expect("mapped").cost_shape.gdn_checkpoint_bytes,
+            0,
+            "the ladder rule now charges the v4 composition a recurrence anchor — re-read this test"
+        );
+
+        // What the zero hides: with the anchor priced honestly the hybrid is over the carrier at
+        // EVERY context, so the tile buys the hybrid tier nothing at all. Without it, a sweep
+        // reports a 12-token row that the class could not actually be prosecuted at.
+        let budget = crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES;
+        let mut hybrid_v3 = palw_qwen36_context_row_profile_v1(1).expect("projects");
+        hybrid_v3.state_chunk_map_id = hybrid_state_chunk_map_id_v3();
+        let priced = derive_court_cost_shaped_v1(&hybrid_v3, v3_shape(&hybrid_v3, 1, true)).expect("derives");
+        assert!(
+            priced.max_close_bytes > budget,
+            "the hybrid became carriable at n_ctx 1 ({} bytes) — the tile moved the hybrid tier after all",
+            priced.max_close_bytes
+        );
+        assert_eq!(priced.max_close_bytes, 90_632);
+    }
+
+    /// **The carrier binds long before the ladder does** — 223 against 11,477, a factor of 51.
+    ///
+    /// `derive_court_cost_shaped_v1` calls `worst_case_step_leaf_count_capped_v1` before it prices
+    /// anything, so above the ladder a class is not expensive but UNPRICEABLE, and a reader who
+    /// saw only "TooManyLeaves" at `n_ctx` 32,768 might conclude the enumeration is what stops a
+    /// long context. It is not, at any width the close can pay for. Whatever a long-context design
+    /// does, it has to move the CLOSE.
+    ///
+    /// (`TooManyLeaves`'s `got` is the running total at the position the walk gave up on, not the
+    /// class's leaf count — the enumeration returns early by design. These are the true counts,
+    /// taken with the cap at `u64::MAX`.) Command: `palw-tile-measure` §7.
+    #[test]
+    fn the_carrier_binds_fifty_times_before_the_ladder_does() {
+        let fits = |n_ctx: u32, cap: u64| worst_case_step_leaf_count_capped_v1(&dense_v3(n_ctx), cap).is_ok();
+        assert!(fits(39, PALW_STEP_MAX_LEAVES) && !fits(40, PALW_STEP_MAX_LEAVES), "the shipped ladder's dense ceiling moved");
+        assert!(fits(11_477, LADDER) && !fits(11_478, LADDER), "Decision 12's dense ceiling moved");
+        assert_eq!(worst_case_step_leaf_count_capped_v1(&dense_v3(11_477), u64::MAX).expect("counts"), 4_294_844_784);
+        // 223 is `the_tile_moves_the_widest_dense_row_from_thirty_to_two_hundred_and_twenty_three`'s
+        // answer, restated as the comparison rather than re-swept.
+        assert!(11_477 > 223 * 51, "the ladder ceiling stopped being fifty times the carrier's");
+    }
+
+    /// The measurement binary keeps its own copy of [`step_path_bytes_v1`] because that function is
+    /// private to this module. Two spellings of one computation is the defect this tree keeps
+    /// recording, so they are pinned equal here.
+    #[test]
+    fn the_tile_measure_path_constant_is_the_ladders() {
+        assert_eq!(step_path_bytes_v1(LADDER), 64 * 32);
+        assert_eq!(step_path_bytes_v1(LADDER), 2_048);
     }
 }
