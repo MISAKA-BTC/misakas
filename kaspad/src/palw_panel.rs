@@ -553,10 +553,16 @@ impl PalwPanelService {
         // money to get there. Sizing from the chain is the only default that is not silently
         // useless; the operator can still ask for more.
         let ratio = bundle.admission.max_exposure_ratio_permille().max(1) as u128;
-        let one_claim = session
-            .palw_producer_facts_v2(bundle.base_class_id, None)
-            .zip(session.palw_v2_registration_terms())
-            .map(|(facts, terms)| (facts.pwu as u128).saturating_mul(terms.slash_value_per_pwu as u128));
+        // **One inference's exposure, not one block's derived pwu.** Under ADR-0072 `facts.pwu`
+        // is expected draws × one inference and grows with difficulty, while admission item 8
+        // reserves `palw_exposure_pwu_v1` — the one inference the block commits to. Sizing from
+        // `facts.pwu` overstated the need by the draw count and warned honest operators away.
+        let one_claim = session.palw_producer_facts_v2(bundle.base_class_id, None).zip(session.palw_v2_registration_terms()).map(
+            |(facts, terms)| {
+                let per_inference = facts.pwu / kaspa_consensus_core::palw_pwu::palw_expected_attempts_v1(facts.class_target).max(1);
+                (per_inference as u128).saturating_mul(terms.slash_value_per_pwu as u128)
+            },
+        );
         let for_one_claim = one_claim
             .map(|exposure| u64::try_from(exposure.saturating_mul(1000).div_ceil(ratio)).unwrap_or(u64::MAX))
             .unwrap_or(floor);
@@ -1231,6 +1237,16 @@ impl PalwPanelService {
         };
         let facts = session.palw_producer_facts_v2(class_id, Some(bond)).ok_or("no producer facts for the canonical class")?;
         let bond_facts = facts.bond.as_ref().ok_or("this bond is not registered on the chain")?;
+        // **Room first, inference second.** A canonical claim reserves about one canonical job's
+        // exposure (eight quanta of an eighth each — `claim_exposure`, the attempt lane's one
+        // inference), and admission item 8 refuses a commitment past the ceiling at the
+        // transition; running the inference only to have the object dropped burns the work.
+        if bond_facts.reserved_exposure.saturating_add(bond_facts.claim_exposure) > bond_facts.exposure_ceiling {
+            return Err(format!(
+                "no exposure room for a canonical claim: bond backs {} and one claim needs {} against a ceiling of {}",
+                bond_facts.reserved_exposure, bond_facts.claim_exposure, bond_facts.exposure_ceiling
+            ));
+        }
         let backend = self.resolve_backend(session, class_id, facts.artifact_root)?;
         // The class's canonical job in leaves: the attempt lane's derived pwu is expected draws ×
         // one job, and the draws are a pure function of the class target.
