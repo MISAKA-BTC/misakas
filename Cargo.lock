@@ -6041,11 +6041,15 @@ dependencies = [
  "kaspa-consensus-core",
  "kaspa-hashes",
  "kaspa-pq-validator-core",
+ "kaspa-rpc-core",
+ "kaspa-wrpc-client",
  "misaka-palw",
  "misaka-palw-derive",
+ "misaka-palw-fp-submit",
  "rand 0.8.6",
  "serde",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]

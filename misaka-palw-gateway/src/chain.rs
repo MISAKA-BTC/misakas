@@ -88,19 +88,25 @@ impl ChainFacts {
             return Some(format!("the node could not be read for this job ({e}) — answered, not committed"));
         }
         if !self.registered {
-            return Some("this network does not know this class (`registered` is false in /health) — the answer is the product, \
+            return Some(
+                "this network does not know this class (`registered` is false in /health) — the answer is the product, \
                          but no commitment on an unregistered class can enter the state"
-                .to_string());
+                    .to_string(),
+            );
         }
         if !self.fp_certified {
-            return Some("this class is not seated on the free-prompt lane (ADR-0075 ClassLaneCertified; `fp_certified` is false \
+            return Some(
+                "this class is not seated on the free-prompt lane (ADR-0075 ClassLaneCertified; `fp_certified` is false \
                          in /health) — a commitment would be refused as FreePromptLaneUncertified"
-                .to_string());
+                    .to_string(),
+            );
         }
         if self.fp_quanta_per_canonical_job == 0 {
-            return Some("this network prices no free-prompt lane (`fp_quanta_per_canonical_job` is zero) — a commitment here \
+            return Some(
+                "this network prices no free-prompt lane (`fp_quanta_per_canonical_job` is zero) — a commitment here \
                          enters no state"
-                .to_string());
+                    .to_string(),
+            );
         }
         if !self.bond_active {
             let why = if self.bond_not_ready_reason.is_empty() {
@@ -111,9 +117,11 @@ impl ChainFacts {
             return Some(format!("the executor bond is not producible: {why} (`bond_active` is false in /health)"));
         }
         if self.exposure_room_sompi == 0 {
-            return Some("the bond's exposure ceiling leaves no room for another claim (`exposure_room` is zero in /health) — \
+            return Some(
+                "the bond's exposure ceiling leaves no room for another claim (`exposure_room` is zero in /health) — \
                          ADR-0077 Decision 4: answered and queued, not submitted and refused at the transition"
-                .to_string());
+                    .to_string(),
+            );
         }
         None
     }
@@ -228,10 +236,6 @@ impl RpcChainSource {
             bond_index,
             timeout: std::time::Duration::from_secs(timeout_secs.clamp(1, 30)),
         })
-    }
-
-    pub fn url(&self) -> &str {
-        &self.url
     }
 
     pub fn read(&self) -> ChainFacts {

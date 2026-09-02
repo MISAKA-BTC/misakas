@@ -1,12 +1,13 @@
-//! `misaka-palw-gateway` — the free-prompt front end (ADR-0044 Decision 10, FP-07).
+//! `misaka-palw-gateway` — the free-prompt front end (ADR-0044 Decision 10, FP-07; ADR-0077).
 //!
 //! ```text
-//! user app ──POST /v1/chat/completions──▶ this process
-//!     │  canonical template render (a frozen string transform, HERE — never in the worker)
-//!     ▼
-//! palw-worker --mode v3-job (Text arm) ──▶ the ANSWER, streamed back as an OpenAI-style reply
-//!                                     └──▶ the commitment inputs (trace/output/schedule roots),
-//!                                          written to the outbox for the executor rail
+//! user app ──POST /v1/chat/completions──▶ this process ──▶ the node (ADR-0077 Decision 3)
+//!     │  the chat template, as SEGMENTS (Decision 6)          registered / fp_certified /
+//!     ▼                                                       bond_active / exposure_room
+//! the family worker, RESIDENT (--mode v3-serve)                       │
+//!     │  Token frames ──▶ SSE deltas as they arrive (Decision 2)      │
+//!     └▶ Result frame ──▶ W5: the streamed bytes ARE the committed ───┘
+//!                          rendering, or NO commitment is written
 //! ```
 //!
 //! **One inference.** The gateway never re-runs the model for mining — there is no second lane,
@@ -14,24 +15,24 @@
 //! the caller-side re-binding (`validate_against_request`) is the same discipline the agent
 //! client uses — the worker is never trusted about what it was asked.
 //!
-//! **F1 lives here.** The bytes handed to the model are exactly the canonical template over the
-//! user's messages: no DAA suffix, no job metadata, no mining fields. Chain binding (anchor,
-//! nonce, bond) rides in the job identity, outside the token stream, and the unit tests pin the
-//! rendered form.
+//! **F1 lives here, on both sides.** The ids handed to the model are exactly the canonical
+//! template over the user's messages: no DAA suffix, no job metadata, no mining fields. Chain
+//! binding (anchor, nonce, bond) rides in the job identity, outside the token stream. ADR-0077
+//! SA-3 adds the prompt side of the check — the control tokens in the committed ids are the ones
+//! this gateway placed, or nothing is committed — and Decision 2 adds the answer side.
 //!
 //! **What the outbox holds, honestly.** The framed `PalwFpWorkerResultV3`, the UNSIGNED
 //! `PalwFreePromptCommitmentV3` (with the real retained-trace DA trio — the worker chunks the
 //! ordered event-hash list to `<outbox>/traces/<job-id>/` before its result frame exists), and
 //! a JSON summary. The gateway does NOT fabricate the one piece it must not have: the ML-DSA
-//! signature belongs to the signer sidecar, and the summary names that and the transaction
-//! rail as the two remaining steps.
+//! signature belongs to the signer sidecar (ADR-0079 Decision 4 — this process holds no key), and
+//! the summary names that and `misaka-palw-fp-rail --submit` as the remaining steps.
 //!
-//! **HTTP, hand-rolled.** One POST route and a health probe over std's `TcpListener`, following
-//! `rpc/eth`'s in-tree precedent of not pulling an async HTTP stack for a small, exact surface.
-//! Non-streaming by design at v1 (the commitment only exists at completion; a token stream is a
-//! side channel for a later revision — ADR-0044 "Not decided").
+//! **HTTP, hand-rolled.** One POST route, a health probe and an artifact fetch over std's
+//! `TcpListener`, following `rpc/eth`'s in-tree precedent of not pulling an async HTTP stack for a
+//! small, exact surface. `stream: true` is served as SSE (ADR-0077 Decision 2).
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{IpAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
@@ -46,65 +47,23 @@ use misaka_palw::host_security::{
 };
 
 use kaspa_consensus_core::palw_freeprompt_v3::{
-    PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER, PALW_FP_V3_VERSION, PalwFpStopReasonV3, PalwFpWorkerInputV3,
-    PalwFpWorkerRequestV3, PalwFpWorkerResultV3, fp_class_quantum_leaves_v1, fp_job_id_v3, fp_quanta_v3, fp_worker_request_hash_v3,
+    PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER, PALW_FP_V3_VERSION, PalwFpStopReasonV3, PalwFpWorkerFrameV1,
+    PalwFpWorkerInputV3, PalwFpWorkerManifestV1, PalwFpWorkerRequestV3, PalwFpWorkerResultV3, fp_class_quantum_leaves_v1,
+    fp_job_id_v3, fp_quanta_v3, fp_worker_request_hash_v3,
 };
-use kaspa_consensus_core::palw_v2::{PALW_V2_MAX_FRAME_BYTES, read_framed, write_framed};
+use kaspa_consensus_core::palw_v2::{PALW_V2_MAX_FRAME_BYTES, write_framed};
 use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
 use kaspa_hashes::Hash64;
 use serde::Deserialize;
 
 // ADR-0078 Decision 6: the derivation step and one-response delivery. One module, one hook.
 mod derive;
+// ADR-0077 Decision 3: the four facts the chain owns, and the anchor.
+mod chain;
+// ADR-0077 Decisions 2 and 6 + SA-3: the prompt plan, the stream, and the two bindings.
+mod wire;
 
-// ---------------------------------------------------------------------------------------------
-// The canonical chat template, v1 — a frozen transform. Its identity is part of the class
-// profile (ADR-0044 Decision 10); editing it in place is a fork of the class, so: don't.
-//
-// Plain-text markers, deliberately. The pinned tokenizer runs with `parse_special = false`
-// (untrusted text must never smuggle control tokens), so a ChatML template would tokenize its
-// own markers as ordinary text — the worst of both. A ChatML profile with segment-wise special
-// tokenization is a FUTURE class profile, not an edit of this one. Consequence, stated: the
-// model rarely emits EOG under this template, so answers end at the decode ceiling and the
-// present-layer stop-trim below handles display; the commitment always covers the full executed
-// output.
-// ---------------------------------------------------------------------------------------------
-const TEMPLATE_ID_V1: &str = "misaka-palw/fp-gateway-template/plain-markers/v1";
-const MARKER_SYSTEM: &str = "### System:\n";
-const MARKER_USER: &str = "### User:\n";
-const MARKER_ASSISTANT: &str = "### Assistant:\n";
-const TURN_SEPARATOR: &str = "\n\n";
-/// The display-layer stop guard: the first occurrence of a fresh marker line ends the SHOWN
-/// answer. Presentation only — the commitment covers every executed token.
-const STOP_GUARD: &str = "\n###";
-
-fn render_template_v1(messages: &[ChatMessage]) -> Result<String, String> {
-    if !messages.iter().any(|m| m.role == "user") {
-        return Err("the request carries no user message".into());
-    }
-    let mut out = String::new();
-    for message in messages {
-        let marker = match message.role.as_str() {
-            "system" => MARKER_SYSTEM,
-            "user" => MARKER_USER,
-            "assistant" => MARKER_ASSISTANT,
-            other => return Err(format!("unsupported role {other:?} (system|user|assistant)")),
-        };
-        out.push_str(marker);
-        out.push_str(&message.content);
-        out.push_str(TURN_SEPARATOR);
-    }
-    out.push_str(MARKER_ASSISTANT);
-    Ok(out)
-}
-
-/// Trim the SHOWN answer at the stop guard. The full text stays in the artifact.
-fn display_trim(rendered: &str) -> &str {
-    match rendered.find(STOP_GUARD) {
-        Some(at) => rendered[..at].trim_end(),
-        None => rendered.trim_end(),
-    }
-}
+use wire::{AnswerStream, PromptPlan, Turn};
 
 // ---------------------------------------------------------------------------------------------
 // Config
@@ -125,31 +84,14 @@ struct IdentityFile {
     operator_id: String,
 }
 
-#[derive(Deserialize)]
-struct AnchorFile {
-    /// 64-byte hex: a recent chain block — the freshness binding. An external rail refreshes
-    /// this file; the gateway re-reads it per request so a long-lived process never staples a
-    /// stale anchor onto new work.
-    anchor_block: String,
-    anchor_daa: u64,
-}
-
 struct Identity {
     network_domain: Hash64,
     class_id: Hash64,
+    class_id_hex: String,
+    bond_txid_hex: String,
     executor_bond: TransactionOutpoint,
     executor_pubkey: Vec<u8>,
     operator_id: Hash64,
-}
-
-struct WorkerIdentity {
-    model_profile_id: Hash64,
-    runtime_manifest_hash: Hash64,
-    runtime_class_id: Hash64,
-    shape_profile_id: Hash64,
-    trace_scheme_id: Hash64,
-    prefill_cap: u32,
-    n_ctx: u32,
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -188,13 +130,15 @@ const FREE_PROMPT_EXPOSURE_CEILING_PERMILLE: u64 = 500;
 /// ADR-0077 SA-1(b): a queued commitment expires WITH ITS ANCHOR and is never submitted stale.
 /// Past this many DAA beyond the anchor the outbox artifact is retired.
 const COMMITMENT_ANCHOR_TTL_DAA: u64 = 3_000;
+/// **ADR-0079 SA-7.** The worker child's stderr is the model runtime's, and a runtime line can
+/// quote its input. The pipe is always drained; the lines are printed only when this is `1`.
+const WORKER_STDERR_ENV: &str = "MISAKA_PALW_GATEWAY_LOG_WORKER_STDERR";
 
 struct Config {
     listen: String,
     worker: PathBuf,
     outbox: PathBuf,
     identity_path: PathBuf,
-    anchor_path: PathBuf,
     /// Devnet display aid: the class's canonical job in leaves, so the summary can say how many
     /// draws a job earned (a quantum is an eighth of it — ADR-0074 Decision 5). Zero disables the
     /// display (no class known).
@@ -206,6 +150,11 @@ struct Config {
     trace_retention_window_daa: u64,
     /// ADR-0078 Decision 6: the bond key's seed, when the gateway signs derivations itself (the
     /// rail's local-seed form); `None` leaves the object unsigned for the rail.
+    ///
+    /// **The file must live outside `--identity`'s directory and outside `--outbox`** — the boot
+    /// refusal below (ADR-0079 Decision 4 / S5) scans exactly those two directories for reachable
+    /// signing secrets, and a 32-byte seed dropped in either is the shape it looks for. Put it in
+    /// the signer sidecar's own directory and point `--derive-seed` at that.
     derive_seed: Option<[u8; kaspa_pq_validator_core::VALIDATOR_SEED_LEN]>,
     /// Artifacts at or under this many bytes ride inline in the response; larger ones by handle.
     artifact_inline_max: usize,
@@ -213,14 +162,15 @@ struct Config {
     workdir: PathBuf,
     /// The rendered-prompt ceiling actually in force, `min(flag, HARD_MAX_PROMPT_BYTES)`.
     max_prompt_bytes: usize,
-    /// ADR-0077 SA-1(a): the bond's exposure room, in sompi. Zero means the operator has not told
-    /// this gateway what the bond can lose, and a gateway that does not know that ANSWERS but does
-    /// not commit — the safe reading of an unknown, not an unbounded one.
+    /// ADR-0077 SA-1(a): the bond's exposure room, in sompi, as the OPERATOR declared it. Zero
+    /// means "read it from the chain" — with `--rpc` that is the honest source, and without one a
+    /// gateway that does not know what the bond can lose ANSWERS but does not commit.
     bond_exposure_room_sompi: u64,
     /// The fraction of the room public jobs may spend per window, so the operator's OWN claims are
     /// never starved by strangers'.
     public_job_budget_permille: u64,
-    /// What one claim reserves on the bond, in sompi.
+    /// What one claim reserves on the bond, in sompi, as the operator declared it. Zero means
+    /// "read it from the chain".
     claim_exposure_sompi: u64,
     /// ADR-0077 SA-1(c): the operator marks this source class "answer, never commit".
     answer_never_commit: bool,
@@ -229,6 +179,24 @@ struct Config {
     /// ADR-0079 Decision 5's platform half, installed and PROVEN at boot before the bind guard
     /// reads it. `none` when there is none — which Decision 10 then refuses a public bind on.
     confinement: Confinement,
+}
+
+/// The exposure numbers actually in force for one job: the operator's declaration where they made
+/// one, the chain's reading otherwise. Held apart from `Config` because one of the two moves per
+/// job and the other does not.
+#[derive(Clone, Copy, Debug)]
+struct ExposurePrice {
+    room_sompi: u64,
+    claim_sompi: u64,
+}
+
+impl ExposurePrice {
+    fn resolve(config: &Config, facts: &chain::ChainFacts) -> Self {
+        Self {
+            room_sompi: if config.bond_exposure_room_sompi > 0 { config.bond_exposure_room_sompi } else { facts.exposure_room_sompi },
+            claim_sompi: if config.claim_exposure_sompi > 0 { config.claim_exposure_sompi } else { facts.claim_exposure_sompi },
+        }
+    }
 }
 
 /// ADR-0077 SA-1(a): what public jobs have spent of the operator's exposure in this window, and
@@ -247,14 +215,14 @@ impl PublicJobBudget {
         Self { window_started: Instant::now(), spent_sompi: 0, committed_jobs: 0, answered_without_commit: 0 }
     }
 
-    fn daily_budget(config: &Config) -> u64 {
-        config.bond_exposure_room_sompi.saturating_mul(config.public_job_budget_permille) / 1_000
+    fn daily_budget(config: &Config, price: ExposurePrice) -> u64 {
+        price.room_sompi.saturating_mul(config.public_job_budget_permille) / 1_000
     }
 
     /// May the next public job COMMIT? Answering is never refused on budget grounds — the user
     /// gets their answer either way, which is what makes "answer, never commit" a mode rather
     /// than an outage.
-    fn may_commit(&mut self, config: &Config) -> Result<(), String> {
+    fn may_commit(&mut self, config: &Config, price: ExposurePrice) -> Result<(), String> {
         if self.window_started.elapsed() >= PUBLIC_BUDGET_WINDOW {
             self.window_started = Instant::now();
             self.spent_sompi = 0;
@@ -262,19 +230,19 @@ impl PublicJobBudget {
         if config.answer_never_commit {
             return Err("this gateway runs in `answer, never commit` mode (ADR-0077 SA-1c)".into());
         }
-        if config.bond_exposure_room_sompi == 0 || config.claim_exposure_sompi == 0 {
-            return Err("the bond's exposure room is not configured (--bond-exposure-room-sompi / --claim-exposure-sompi); \
-                 a gateway that cannot price the spend does not spend"
+        if price.room_sompi == 0 || price.claim_sompi == 0 {
+            return Err("the bond's exposure room is not known (--bond-exposure-room-sompi / --claim-exposure-sompi, or --rpc \
+                 so the chain can be asked); a gateway that cannot price the spend does not spend"
                 .into());
         }
-        if config.claim_exposure_sompi > config.bond_exposure_room_sompi {
+        if price.claim_sompi > price.room_sompi {
             return Err(format!(
                 "one claim reserves {} sompi and the bond's room is {} — refused at the entrance, not at the transition (ADR-0077 SA-7)",
-                config.claim_exposure_sompi, config.bond_exposure_room_sompi
+                price.claim_sompi, price.room_sompi
             ));
         }
-        let budget = Self::daily_budget(config);
-        if self.spent_sompi.saturating_add(config.claim_exposure_sompi) > budget {
+        let budget = Self::daily_budget(config, price);
+        if self.spent_sompi.saturating_add(price.claim_sompi) > budget {
             return Err(format!(
                 "the public-job budget for this window is spent ({} of {} sompi); the operator's own claims are not starved by strangers'",
                 self.spent_sompi, budget
@@ -283,8 +251,8 @@ impl PublicJobBudget {
         Ok(())
     }
 
-    fn charge(&mut self, config: &Config) {
-        self.spent_sompi = self.spent_sompi.saturating_add(config.claim_exposure_sompi);
+    fn charge(&mut self, price: ExposurePrice) {
+        self.spent_sompi = self.spent_sompi.saturating_add(price.claim_sompi);
         self.committed_jobs += 1;
     }
 }
@@ -313,6 +281,13 @@ impl SourceRates {
         entry.1 += 1;
         entry.1 <= per_window
     }
+}
+
+/// **ADR-0079 SA-7: the default is withheld.** Only the exact string `1` turns the relay on —
+/// "0", "false", "no" and an empty value are all a variable somebody set and did not mean, and
+/// reading any of them as consent would disclose the model's input.
+fn worker_stderr_relay_enabled(read: impl Fn(&str) -> Option<String>) -> bool {
+    read(WORKER_STDERR_ENV).as_deref() == Some("1")
 }
 
 fn die(msg: String) -> ! {
@@ -349,6 +324,8 @@ fn load_identity(path: &Path) -> Identity {
     Identity {
         network_domain: hex64(&file.network_domain, "network_domain"),
         class_id: hex64(&file.class_id, "class_id"),
+        class_id_hex: file.class_id.clone(),
+        bond_txid_hex: file.bond_txid.clone(),
         executor_bond: TransactionOutpoint {
             transaction_id: TransactionId::from_bytes(hex64(&file.bond_txid, "bond_txid").as_bytes()),
             index: file.bond_index,
@@ -358,35 +335,166 @@ fn load_identity(path: &Path) -> Identity {
     }
 }
 
-fn load_anchor(path: &Path) -> Result<(Hash64, u64), String> {
-    let raw = std::fs::read_to_string(path).map_err(|e| format!("cannot read anchor file {}: {e}", path.display()))?;
-    let file: AnchorFile = serde_json::from_str(&raw).map_err(|e| format!("anchor file is not valid JSON: {e}"))?;
-    let mut out = [0u8; 64];
-    if file.anchor_block.len() != 128 || faster_hex::hex_decode(file.anchor_block.as_bytes(), &mut out).is_err() {
-        return Err("anchor_block is not 128 hex chars".into());
-    }
-    Ok((Hash64::from_bytes(out), file.anchor_daa))
+// ---------------------------------------------------------------------------------------------
+// The resident worker (ADR-0077 Decision 1): the artifact is mapped ONCE
+// ---------------------------------------------------------------------------------------------
+
+/// One `--mode v3-serve` child, with its pipes held open.
+///
+/// The artifact used to be mapped inside every job — about eight minutes per REQUEST on the hybrid
+/// class — and the resident mode pays that once. One generation at a time: a single engine and a
+/// single KV cache, which is why the whole struct sits behind one mutex.
+struct ResidentWorker {
+    child: std::process::Child,
+    stdin: std::process::ChildStdin,
+    stdout: BufReader<std::process::ChildStdout>,
+    manifest: PalwFpWorkerManifestV1,
 }
 
-fn query_worker_identity(confinement: &Confinement, worker: &Path, workdir: &Path) -> WorkerIdentity {
-    let mut cmd = confinement.command(worker);
-    cmd.args(["--mode", "v3-manifest"]);
-    harden_worker_command(&mut cmd, workdir);
-    let output = cmd.output().unwrap_or_else(|e| die(format!("cannot run {} --mode v3-manifest: {e}", worker.display())));
-    if !output.status.success() {
-        die(format!("worker v3-manifest failed: {}", String::from_utf8_lossy(&output.stderr)));
+impl ResidentWorker {
+    fn spawn(confinement: &Confinement, worker: &Path, workdir: &Path, trace_out: &Path) -> Result<Self, String> {
+        let mut command = confinement.command(worker);
+        command.args(["--mode", "v3-serve", "--trace-out", &trace_out.display().to_string()]);
+        // ADR-0079 Decision 5: the process that parses a stranger's prompt starts with nothing — no
+        // operator environment, no PATH, and a working directory that is not the operator's home.
+        harden_worker_command(&mut command, workdir);
+        let mut child = command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("cannot spawn {}: {e}", worker.display()))?;
+
+        // **Drain the pipe always; print it only on request** (ADR-0079 SA-7).
+        //
+        // The pipe MUST be drained for the child's whole life — a filled buffer wedges the worker,
+        // which is the live incident its own docs record — but draining and relaying are two
+        // different decisions. This stream is the model runtime's stderr, not only the worker's
+        // own log: a runtime line can quote its input, and "private unless disputed" is false if
+        // the default log is a disclosure. So the lines are counted and withheld unless the
+        // operator turns them on, and the count itself is printed so nobody debugs a silent pipe.
+        let stderr = child.stderr.take().expect("piped");
+        let relay = worker_stderr_relay_enabled(|name| std::env::var(name).ok());
+        std::thread::spawn(move || {
+            let mut withheld = 0u64;
+            let mut last_report = Instant::now();
+            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                if relay {
+                    eprintln!("[palw-worker] {line}");
+                    continue;
+                }
+                withheld += 1;
+                // One summary line per minute, and one at the end: enough to see the worker is
+                // talking, never enough to disclose what it said.
+                if last_report.elapsed() >= Duration::from_secs(60) {
+                    eprintln!("[palw-worker] {withheld} log lines withheld (ADR-0079 SA-7 — set {WORKER_STDERR_ENV}=1 to print them)");
+                    last_report = Instant::now();
+                }
+            }
+            if !relay && withheld > 0 {
+                eprintln!("[palw-worker] {withheld} log lines withheld (ADR-0079 SA-7 — set {WORKER_STDERR_ENV}=1 to print them)");
+            }
+        });
+
+        let stdin = child.stdin.take().expect("piped");
+        let mut stdout = BufReader::new(child.stdout.take().expect("piped"));
+        let first = wire::read_frame_stream(&mut stdout, PALW_V2_MAX_FRAME_BYTES)?
+            .ok_or_else(|| "the worker exited before announcing its manifest".to_string())?;
+        let manifest = match borsh::from_slice::<PalwFpWorkerFrameV1>(&first) {
+            Ok(PalwFpWorkerFrameV1::Manifest(manifest)) => manifest,
+            Ok(_) => return Err("the worker's first frame is not its manifest".to_string()),
+            Err(e) => return Err(format!("the worker's first frame does not decode: {e}")),
+        };
+        if manifest.n_ctx == 0 || manifest.prefill_single_batch_cap == 0 {
+            return Err("the worker's manifest reports no shape limits".to_string());
+        }
+        Ok(Self { child, stdin, stdout, manifest })
     }
-    let doc: serde_json::Value =
-        serde_json::from_slice(&output.stdout).unwrap_or_else(|e| die(format!("v3-manifest is not JSON: {e}")));
-    let field = |k: &str| -> Hash64 { hex64(doc[k].as_str().unwrap_or_else(|| die(format!("v3-manifest lacks {k}"))), k) };
-    WorkerIdentity {
-        model_profile_id: field("model_profile_id"),
-        runtime_manifest_hash: field("runtime_manifest_hash"),
-        runtime_class_id: field("runtime_class_id"),
-        shape_profile_id: field("shape_profile_id"),
-        trace_scheme_id: field("trace_scheme_id"),
-        prefill_cap: doc["prefill_single_batch_cap"].as_u64().unwrap_or(0) as u32,
-        n_ctx: doc["n_ctx"].as_u64().unwrap_or(0) as u32,
+
+    /// One job on the resident loop. `on_token` sees every generated id in decode order, as soon
+    /// as it is selected — Decision 2's side channel.
+    fn run_job(
+        &mut self,
+        request: &PalwFpWorkerRequestV3,
+        on_token: &mut dyn FnMut(u32, &[u8]),
+    ) -> Result<PalwFpWorkerResultV3, String> {
+        let payload = borsh::to_vec(request).map_err(|e| format!("cannot serialize the worker request: {e}"))?;
+        let request_hash = fp_worker_request_hash_v3(&payload);
+        write_framed(&mut self.stdin, &payload).map_err(|e| format!("cannot write the job frame: {e}"))?;
+        self.stdin.flush().map_err(|e| format!("cannot flush the job frame: {e}"))?;
+        loop {
+            let Some(bytes) = wire::read_frame_stream(&mut self.stdout, PALW_V2_MAX_FRAME_BYTES)? else {
+                return Err("the worker stream ended before a terminator frame".to_string());
+            };
+            match borsh::from_slice::<PalwFpWorkerFrameV1>(&bytes).map_err(|e| format!("a worker frame does not decode: {e}"))? {
+                PalwFpWorkerFrameV1::Token { token_id, rendered } => on_token(token_id, &rendered),
+                PalwFpWorkerFrameV1::Result(result) => {
+                    // The caller-side re-binding: the worker is never trusted about what it was
+                    // asked, and `request_hash` is re-derived from OUR canonical encoding.
+                    result
+                        .validate_against_request(request, request_hash)
+                        .map_err(|e| format!("the worker result does not bind the request: {e}"))?;
+                    return Ok(*result);
+                }
+                PalwFpWorkerFrameV1::Refused { reason } => return Err(format!("the worker refused the job: {reason}")),
+                PalwFpWorkerFrameV1::Manifest(_) => {
+                    return Err("the worker re-announced its manifest mid-session".to_string());
+                }
+            }
+        }
+    }
+}
+
+impl Drop for ResidentWorker {
+    fn drop(&mut self) {
+        // Closing stdin is how a resident worker is meant to stop; the kill is the backstop for a
+        // child that is wedged inside a generation.
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// The one worker slot, respawned when its stream dies.
+///
+/// A transport failure is not a bad job: the artifact took minutes to map and the next request
+/// deserves a worker, so the supervisor drops the corpse and maps again on the next call. A
+/// `Refused` frame is the opposite — the worker is fine and the job was not — and leaves the
+/// resident process exactly where it was.
+struct WorkerSupervisor {
+    worker: PathBuf,
+    workdir: PathBuf,
+    trace_out: PathBuf,
+    confinement: Confinement,
+    current: Mutex<Option<ResidentWorker>>,
+    manifest: PalwFpWorkerManifestV1,
+}
+
+impl WorkerSupervisor {
+    fn boot(confinement: Confinement, worker: PathBuf, workdir: PathBuf, trace_out: PathBuf) -> Result<Self, String> {
+        let resident = ResidentWorker::spawn(&confinement, &worker, &workdir, &trace_out)?;
+        let manifest = resident.manifest.clone();
+        Ok(Self { worker, workdir, trace_out, confinement, current: Mutex::new(Some(resident)), manifest })
+    }
+
+    fn manifest(&self) -> &PalwFpWorkerManifestV1 {
+        &self.manifest
+    }
+
+    fn run(&self, request: &PalwFpWorkerRequestV3, on_token: &mut dyn FnMut(u32, &[u8])) -> Result<PalwFpWorkerResultV3, String> {
+        let mut slot = self.current.lock().expect("the worker lock is never poisoned");
+        if slot.is_none() {
+            *slot = Some(ResidentWorker::spawn(&self.confinement, &self.worker, &self.workdir, &self.trace_out)?);
+        }
+        let outcome = slot.as_mut().expect("just spawned").run_job(request, on_token);
+        if let Err(e) = &outcome
+            && !e.starts_with("the worker refused the job")
+        {
+            // The stream is no longer trustworthy: drop the child so the next request maps a
+            // fresh artifact instead of talking into a dead pipe forever.
+            *slot = None;
+            eprintln!("[misaka-palw-gateway] the resident worker was dropped after a transport failure: {e}");
+        }
+        outcome
     }
 }
 
@@ -407,8 +515,7 @@ struct ChatRequest {
     messages: Vec<ChatMessage>,
     #[serde(default)]
     max_tokens: Option<u32>,
-    /// Refused when true: v1 is non-streaming, and silently downgrading a stream request would
-    /// make clients hang on SSE parsing.
+    /// ADR-0077 Decision 2: the answer streams as SSE; the commitment does not.
     #[serde(default)]
     stream: Option<bool>,
     /// ADR-0078: the kind the person asked for — a transformer name (`scene/glb/v1`) or a kind
@@ -420,58 +527,6 @@ struct ChatRequest {
     /// to the person's prompt, and it is theirs to publish.
     #[serde(default)]
     serve_dsl: bool,
-}
-
-// ---------------------------------------------------------------------------------------------
-// The worker round trip
-// ---------------------------------------------------------------------------------------------
-
-fn run_worker_v3(
-    confinement: &Confinement,
-    worker: &Path,
-    workdir: &Path,
-    trace_out: &Path,
-    request: &PalwFpWorkerRequestV3,
-) -> Result<(PalwFpWorkerResultV3, Hash64), String> {
-    let payload = borsh::to_vec(request).map_err(|e| format!("cannot serialize the worker request: {e}"))?;
-    let request_hash = fp_worker_request_hash_v3(&payload);
-    // ADR-0079 Decision 5: the process that parses a stranger's prompt starts with nothing — no
-    // operator environment, no PATH, and a working directory that is not the operator's home.
-    let mut command = confinement.command(worker);
-    command.args(["--mode", "v3-job", "--trace-out", &trace_out.display().to_string()]);
-    harden_worker_command(&mut command, workdir);
-    let mut child = command
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("cannot spawn {}: {e}", worker.display()))?;
-
-    // Drain stderr concurrently — a filled pipe buffer wedges the child (the live incident the
-    // worker's own docs record); the log lines go to our stderr prefixed.
-    let stderr = child.stderr.take().expect("piped");
-    let drain = std::thread::spawn(move || {
-        for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-            eprintln!("[palw-worker] {line}");
-        }
-    });
-
-    {
-        let mut stdin = child.stdin.take().expect("piped");
-        write_framed(&mut stdin, &payload).map_err(|e| format!("cannot write the job frame: {e}"))?;
-        // stdin drops here — EOF, the single-frame contract.
-    }
-    let mut stdout = child.stdout.take().expect("piped");
-    let result_bytes = read_framed(&mut stdout, PALW_V2_MAX_FRAME_BYTES).map_err(|e| format!("worker produced no result frame: {e}"));
-    let status = child.wait().map_err(|e| format!("cannot reap the worker: {e}"))?;
-    let _ = drain.join();
-    if !status.success() {
-        return Err(format!("the worker refused the job (exit {status}) — see its log lines above"));
-    }
-    let result: PalwFpWorkerResultV3 =
-        borsh::from_slice(&result_bytes?).map_err(|e| format!("the worker result frame does not decode: {e}"))?;
-    result.validate_against_request(request, request_hash).map_err(|e| format!("the worker result does not bind the request: {e}"))?;
-    Ok((result, request_hash))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -538,7 +593,8 @@ fn respond(stream: &mut TcpStream, status: &str, body: &serde_json::Value) {
 
 /// A binary body (ADR-0078 Decision 6's fetch handle: the artifact by its derived id).
 fn respond_bytes(stream: &mut TcpStream, status: &str, content_type: &str, bytes: &[u8]) {
-    let head = format!("HTTP/1.1 {status}\r\ncontent-type: {content_type}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n", bytes.len());
+    let head =
+        format!("HTTP/1.1 {status}\r\ncontent-type: {content_type}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n", bytes.len());
     let _ = stream.write_all(head.as_bytes());
     let _ = stream.write_all(bytes);
     let _ = stream.flush();
@@ -553,6 +609,63 @@ fn hex(h: Hash64) -> String {
 }
 
 // ---------------------------------------------------------------------------------------------
+// ADR-0077 Decision 2 — the SSE surface
+// ---------------------------------------------------------------------------------------------
+
+/// Where an answer goes as it is produced. The non-streaming form discards deltas and returns the
+/// whole answer at the end; the SSE form writes each one as it arrives. Both run the SAME job path,
+/// which is what keeps "streaming is UX; the consensus object is untouched" true in the code and
+/// not only in the ADR.
+trait ChatSink {
+    fn delta(&mut self, _text: &str) {}
+}
+
+struct BufferedSink;
+impl ChatSink for BufferedSink {}
+
+struct SseSink<'a> {
+    stream: &'a mut TcpStream,
+    id: String,
+    model: String,
+    started: bool,
+}
+
+impl SseSink<'_> {
+    fn head(&mut self) {
+        let head = "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncache-control: no-cache\r\nconnection: close\r\n\r\n";
+        let _ = self.stream.write_all(head.as_bytes());
+        let _ = self.stream.flush();
+        self.started = true;
+    }
+
+    fn event(&mut self, value: &serde_json::Value) {
+        let _ = self.stream.write_all(format!("data: {value}\n\n").as_bytes());
+        let _ = self.stream.flush();
+    }
+
+    fn chunk(&mut self, delta: serde_json::Value, finish_reason: serde_json::Value) {
+        let value = serde_json::json!({
+            "id": self.id,
+            "object": "chat.completion.chunk",
+            "model": self.model,
+            "choices": [{ "index": 0, "delta": delta, "finish_reason": finish_reason }],
+        });
+        self.event(&value);
+    }
+
+    fn done(&mut self) {
+        let _ = self.stream.write_all(b"data: [DONE]\n\n");
+        let _ = self.stream.flush();
+    }
+}
+
+impl ChatSink for SseSink<'_> {
+    fn delta(&mut self, text: &str) {
+        self.chunk(serde_json::json!({ "content": text }), serde_json::Value::Null);
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
 // The one route
 // ---------------------------------------------------------------------------------------------
 
@@ -560,6 +673,9 @@ fn hex(h: Hash64) -> String {
 /// commitments whose anchor the chain has left behind and retire them, so a rail can never pick up
 /// a stale one and submit it. Named `.expired` rather than deleted: the artifact is evidence of
 /// work the operator did, and evidence is not this function's to destroy.
+///
+/// The other half of the loop is `misaka_palw_fp_submit::load_unsigned_commitment`, which refuses
+/// a stem whose `.expired` sibling exists — a rename nobody reads stops nothing.
 fn expire_stale_commitments(outbox: &Path, current_anchor_daa: u64, ttl_daa: u64) -> usize {
     let Ok(entries) = std::fs::read_dir(outbox) else { return 0 };
     let mut retired = 0;
@@ -572,9 +688,9 @@ fn expire_stale_commitments(outbox: &Path, current_anchor_daa: u64, ttl_daa: u64
         let Ok(commitment) = borsh::from_slice::<kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptCommitmentV3>(&bytes) else {
             continue;
         };
-        if current_anchor_daa > commitment.job.anchor_daa.saturating_add(ttl_daa) {
+        if misaka_palw_fp_submit::AnchorExpiry::new(commitment.job.anchor_daa, ttl_daa).is_expired_at(current_anchor_daa) {
             let mut retired_path = path.clone().into_os_string();
-            retired_path.push(".expired");
+            retired_path.push(misaka_palw_fp_submit::EXPIRED_SUFFIX);
             if std::fs::rename(&path, &retired_path).is_ok() {
                 retired += 1;
             }
@@ -587,39 +703,46 @@ fn expire_stale_commitments(outbox: &Path, current_anchor_daa: u64, ttl_daa: u64
 fn handle_chat(
     config: &Config,
     identity: &Identity,
-    worker_id: &WorkerIdentity,
+    worker: &WorkerSupervisor,
     budget: &Mutex<PublicJobBudget>,
-    body: &[u8],
+    chain_source: &chain::ChainSource,
+    chat: ChatRequest,
+    sink: &mut dyn ChatSink,
 ) -> Result<serde_json::Value, String> {
-    if body.len() > MAX_REQUEST_BODY_BYTES {
-        return Err(format!("body of {} bytes exceeds the {MAX_REQUEST_BODY_BYTES}-byte cap", body.len()));
-    }
-    let chat: ChatRequest = serde_json::from_slice(body).map_err(|e| format!("request body is not a chat completion: {e}"))?;
-    if chat.stream == Some(true) {
-        return Err("streaming is not supported at v1 — the commitment only exists at completion".into());
-    }
     // ADR-0079 Decision 10: every bound is mandatory, and exceeding one is a 4xx rather than a
-    // queue. These are checked BEFORE the model load, which is the point of having them here.
+    // queue. These are checked BEFORE the job is sent, which is the point of having them here.
     if chat.messages.len() > MAX_CHAT_MESSAGES {
         return Err(format!("{} messages exceeds the {MAX_CHAT_MESSAGES}-message cap", chat.messages.len()));
     }
-    let rendered_prompt = render_template_v1(&chat.messages)?;
-    if rendered_prompt.len() > config.max_prompt_bytes {
+    let manifest = worker.manifest();
+    let turns: Vec<Turn> = chat.messages.iter().map(|m| Turn { role: m.role.clone(), content: m.content.clone() }).collect();
+    let plan: PromptPlan = wire::build_prompt(manifest, &turns)?;
+    if plan.displayed_len() > config.max_prompt_bytes {
         return Err(format!(
-            "the rendered prompt is {} bytes and the cap is {} — refused before the model load",
-            rendered_prompt.len(),
+            "the rendered prompt is {} bytes and the cap is {} — refused before the job is sent",
+            plan.displayed_len(),
             config.max_prompt_bytes
         ));
     }
     let decode_limit = chat.max_tokens.unwrap_or(config.max_decode_default).clamp(1, config.max_decode_cap);
 
-    let (anchor_block, anchor_daa) = load_anchor(&config.anchor_path)?;
+    // ADR-0077 Decision 3: the chain this gateway commits to, read for THIS job.
+    let facts = chain_source.read();
+    if facts.anchor_block == Hash64::default() {
+        return Err(facts.read_error.clone().unwrap_or_else(|| "no anchor is available for this job".to_string()));
+    }
+    let (anchor_block, anchor_daa) = (facts.anchor_block, facts.anchor_daa);
     expire_stale_commitments(&config.outbox, anchor_daa, COMMITMENT_ANCHOR_TTL_DAA);
 
-    // ADR-0077 SA-1: a stranger's prompt becomes the OPERATOR's claim. Decide BEFORE the inference
-    // whether this one may spend exposure — the answer is produced either way; only the commitment
-    // is withheld, which is what makes "answer, never commit" a mode and not an outage.
-    let commit_refusal = budget.lock().expect("the budget lock is never poisoned").may_commit(config).err();
+    // ADR-0077 SA-1 + Decision 3: a stranger's prompt becomes the OPERATOR's claim. Decide BEFORE
+    // the inference whether this one may spend exposure — the answer is produced either way; only
+    // the commitment is withheld, which is what makes "answer, never commit" a mode and not an
+    // outage, and what makes an uncertified class an answer rather than a refusal.
+    let price = ExposurePrice::resolve(config, &facts);
+    let mut commit_refusal = facts.commit_refusal();
+    if commit_refusal.is_none() {
+        commit_refusal = budget.lock().expect("the budget lock is never poisoned").may_commit(config, price).err();
+    }
     let mut job_nonce = [0u8; 32];
     rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut job_nonce);
 
@@ -634,28 +757,50 @@ fn handle_chat(
         anchor_daa,
         job_nonce,
         decode_token_limit: decode_limit,
-        max_context_tokens: worker_id.n_ctx,
+        max_context_tokens: manifest.n_ctx,
         privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
         prompt_mode: PALW_FP_PROMPT_MODE_USER,
-        input: PalwFpWorkerInputV3::Text(rendered_prompt.clone().into_bytes()),
-        model_profile_id: worker_id.model_profile_id,
-        runtime_manifest_hash: worker_id.runtime_manifest_hash,
-        runtime_class_id: worker_id.runtime_class_id,
-        shape_profile_id: worker_id.shape_profile_id,
-        trace_scheme_id: worker_id.trace_scheme_id,
+        input: PalwFpWorkerInputV3::Segments(plan.segments.clone()),
+        model_profile_id: manifest.model_profile_id,
+        runtime_manifest_hash: manifest.runtime_manifest_hash,
+        runtime_class_id: manifest.runtime_class_id,
+        shape_profile_id: manifest.shape_profile_id,
+        trace_scheme_id: manifest.trace_scheme_id,
     };
 
-    let trace_dir = config.outbox.join("traces");
-    std::fs::create_dir_all(&trace_dir).map_err(|e| format!("cannot create the trace retention dir: {e}"))?;
-    let (result, _request_hash) = run_worker_v3(&config.confinement, &config.worker, &config.workdir, &trace_dir, &request)?;
+    // **Decision 2: the answer streams as it is decoded; the commitment does not exist yet.**
+    let eog: BTreeSet<u32> = manifest.eog_token_ids.iter().copied().collect();
+    let mut stream = AnswerStream::new();
+    let result = {
+        let mut on_token = |token_id: u32, rendered: &[u8]| {
+            if let Some(delta) = stream.push(token_id, rendered, &eog) {
+                sink.delta(&delta);
+            }
+        };
+        worker.run(&request, &mut on_token)?
+    };
+    if let Some(delta) = stream.finish() {
+        sink.delta(&delta);
+    }
+
+    // **The two bindings, before anything is committed** (Decision 2 / W5 and SA-3). Either
+    // failing is the same verdict: the run is not the user's inference, so no commitment.
+    let streamed_checked = wire::check_streamed_answer(&stream, &result)?;
+    wire::check_committed_prompt_ids(&plan, &result.prompt_token_ids, &wire::control_token_ids(manifest))?;
+
     let job_id = fp_job_id_v3(&result.job);
     let commitment = result.to_commitment(anchor_daa.saturating_add(config.trace_retention_window_daa));
     let work_leaves = commitment.work_leaves;
     let claim_id = kaspa_consensus_core::palw_freeprompt_v3::fp_claim_id_v3(&commitment);
+    // The lane's price is the chain's when the chain was asked, and the operator's devnet display
+    // aid otherwise (ADR-0074 Decision 5: a gateway that hardcodes "an eighth" declares a number
+    // the network owns).
+    let quanta_per_job = if facts.fp_quanta_per_canonical_job > 0 { facts.fp_quanta_per_canonical_job } else { 8 };
     let quanta = if config.class_leaves == 0 {
         0
     } else {
-        fp_quanta_v3(work_leaves, fp_class_quantum_leaves_v1(config.class_leaves, 8), u32::MAX)
+        let cap = if facts.fp_max_quanta_per_receipt > 0 { facts.fp_max_quanta_per_receipt } else { u32::MAX };
+        fp_quanta_v3(work_leaves, fp_class_quantum_leaves_v1(config.class_leaves, quanta_per_job), cap)
     };
 
     // The outbox artifact: the framed result (borsh) + a JSON summary. Everything the executor
@@ -666,16 +811,17 @@ fn handle_chat(
     let artifact_json = config.outbox.join(format!("{artifact_stem}.json"));
     let result_bytes = borsh::to_vec(&result).map_err(|e| format!("cannot serialize the artifact: {e}"))?;
     std::fs::write(&artifact_borsh, &result_bytes).map_err(|e| format!("cannot write {}: {e}", artifact_borsh.display()))?;
-    // **The commitment is written only when the operator's exposure may pay for it** (ADR-0077
-    // SA-1 / SA-7). Refused, the user still gets the answer above; what does not happen is a claim
-    // this bond cannot back, discovered at the transition instead of at the entrance.
+    // **The commitment is written only when the chain and the operator's exposure both allow it**
+    // (ADR-0077 Decision 3 / SA-1 / SA-7). Refused, the user still gets the answer above; what
+    // does not happen is a claim this bond cannot back, discovered at the transition instead of at
+    // the entrance.
     match &commit_refusal {
         None => {
             let commitment_borsh = config.outbox.join(format!("{artifact_stem}.commitment-unsigned.borsh"));
             let commitment_bytes = borsh::to_vec(&commitment).map_err(|e| format!("cannot serialize the commitment: {e}"))?;
             std::fs::write(&commitment_borsh, &commitment_bytes)
                 .map_err(|e| format!("cannot write {}: {e}", commitment_borsh.display()))?;
-            budget.lock().expect("the budget lock is never poisoned").charge(config);
+            budget.lock().expect("the budget lock is never poisoned").charge(price);
         }
         Some(_) => {
             let mut guard = budget.lock().expect("the budget lock is never poisoned");
@@ -685,8 +831,13 @@ fn handle_chat(
     let rendered_string = String::from_utf8_lossy(&result.rendered).into_owned();
     // ADR-0078 Decision 6: derive from the FULL committed rendering (never the display trim —
     // a DSL hashed from a trimmed answer is one no verifier holding the ids can reach).
-    let derivation = match chat.derive.as_deref() {
-        Some(spec) => Some(derive::run(
+    //
+    // **Gated on `commit_refusal.is_none()`.** A derivation names a claim, and consensus refuses a
+    // `DerivedArtifactV1` whose claim never entered the state (`DerivedClaimMissing`). Deriving
+    // for a commitment this gateway has just declined to write would put an object in the outbox
+    // that no chain can ever accept, and would spend the derivation budget doing it.
+    let derivation = match (chat.derive.as_deref(), commit_refusal.is_none()) {
+        (Some(spec), true) => Some(derive::run(
             spec,
             &derive::DeriveConfig { seed: config.derive_seed, serve_dsl: chat.serve_dsl },
             &misaka_palw_derive::ClaimBinding {
@@ -699,13 +850,20 @@ fn handle_chat(
             &config.outbox,
             &artifact_stem,
         )?),
-        None => None,
+        _ => None,
     };
-    let (job_context_hash, family) = derive::read_worker_manifest(&trace_dir.join(hex(job_id)));
+    let derive_refusal = match (chat.derive.as_deref(), commit_refusal.as_deref()) {
+        (Some(_), Some(why)) => Some(format!(
+            "nothing was derived: a derivation names a claim, and this answer did not become one ({why}) — consensus would \
+             refuse the object as DerivedClaimMissing"
+        )),
+        _ => None,
+    };
+    let (job_context_hash, family) = derive::read_worker_manifest(&config.outbox.join("traces").join(hex(job_id)));
     let summary = serde_json::json!({
         "schema": "misaka.palw.fp-v3-gateway-artifact.v1",
         "fp_job_id": hex(job_id),
-        "template_id": TEMPLATE_ID_V1,
+        "template_id": plan.template_id,
         "prompt_tokens": result.job.prompt_tokens,
         "decode_tokens_executed": result.decode_tokens_executed,
         "decode_token_limit": result.job.decode_token_limit,
@@ -717,7 +875,7 @@ fn handle_chat(
         "trace_manifest_root": hex(result.trace_manifest_root),
         "trace_chunk_count": result.trace_chunk_count,
         "trace_retention_daa": commitment.trace_retention_daa,
-        "trace_dir": trace_dir.join(hex(job_id)).display().to_string(),
+        "trace_dir": config.outbox.join("traces").join(hex(job_id)).display().to_string(),
         "work_leaves": work_leaves,
         "class_leaves": config.class_leaves,
         "quanta_at_configured_quantum": quanta,
@@ -725,6 +883,12 @@ fn handle_chat(
         "job_context_hash": job_context_hash,
         "family": family,
         "derivation": derivation.as_ref().map(|d| d.to_json(0)),
+        "not_derived_because": derive_refusal,
+        // ADR-0077 Decision 2 / W5 and SA-3: what was checked before this commitment was written.
+        "answer_stream_checked": streamed_checked,
+        "prompt_ids_checked": true,
+        // ADR-0077 Decision 3: the chain this job was priced against.
+        "chain": facts.health_json(),
         // ADR-0077 SA-1(b): the anchor this commitment is bound to, and the DAA past which it must
         // never be submitted. A rail that finds `.expired` beside a stem is looking at work whose
         // freshness binding has lapsed.
@@ -732,24 +896,49 @@ fn handle_chat(
         "committed": commit_refusal.is_none(),
         "not_committed_because": commit_refusal.clone(),
         "pending_for_chain_submission": [
-            "ML-DSA-87 signature over fp_claim_id (signer sidecar)",
-            "commitment transaction assembly + submission (executor rail, FP-08)",
+            "ML-DSA-87 signature over fp_claim_id (signer sidecar, or the rail's --bond-key-seed)",
+            "misaka-palw-fp-rail --artifact <stem> ... --submit --rpc <host:port> (ADR-0077 Decision 4)",
         ],
     });
     std::fs::write(&artifact_json, serde_json::to_vec_pretty(&summary).unwrap())
         .map_err(|e| format!("cannot write {}: {e}", artifact_json.display()))?;
 
-    let shown = display_trim(&rendered_string).to_string();
+    let shown = if streamed_checked { stream.shown() } else { wire::display_trim(&rendered_string).to_string() };
     let finish_reason = match result.stop_reason {
         PalwFpStopReasonV3::EndOfGeneration => "stop",
         PalwFpStopReasonV3::ExactBudgetReached => {
             if shown.len() < rendered_string.trim_end().len() {
-                "stop" // the guard ended the shown answer; the budget ended the run
+                "stop" // the guard or an EOG id ended the shown answer; the budget ended the run
             } else {
                 "length"
             }
         }
     };
+    let misaka = serde_json::json!({
+        "fp_job_id": hex(job_id),
+        "trace_root": hex(result.trace_root),
+        "output_root": hex(result.output_root),
+        "schedule_root": hex(result.schedule_root),
+        "work_leaves": work_leaves,
+        "artifact": artifact_json.display().to_string(),
+        // ADR-0078 X6: what a consumer needs beside the answer to recompute the claim's
+        // output_root — the ids, the job's context hash, and which family's rendered-hash
+        // rule applies — and the executor key the derivation is bound to.
+        "fp_claim_id": hex(claim_id),
+        "output_token_ids": result.output_token_ids,
+        "job_context_hash": job_context_hash,
+        "family": family,
+        "executor_pubkey": faster_hex::hex_string(&identity.executor_pubkey),
+        "derivation": derivation.as_ref().map(|d| d.to_json(config.artifact_inline_max)),
+        "not_derived_because": derive_refusal,
+        "template_id": plan.template_id,
+        "answer_stream_checked": streamed_checked,
+        // The caller is told, in the same response, whether this answer became a claim. A
+        // gateway that silently answered without committing would be lying about what the
+        // operator staked on it.
+        "committed": commit_refusal.is_none(),
+        "not_committed_because": commit_refusal,
+    });
     Ok(serde_json::json!({
         "id": format!("palwcmpl-{}", &hex(job_id)[..24]),
         "object": "chat.completion",
@@ -764,28 +953,7 @@ fn handle_chat(
             "completion_tokens": result.decode_tokens_executed,
             "total_tokens": result.job.prompt_tokens + result.decode_tokens_executed,
         },
-        "misaka": {
-            "fp_job_id": hex(job_id),
-            "trace_root": hex(result.trace_root),
-            "output_root": hex(result.output_root),
-            "schedule_root": hex(result.schedule_root),
-            "work_leaves": work_leaves,
-            "artifact": artifact_json.display().to_string(),
-            // ADR-0078 X6: what a consumer needs beside the answer to recompute the claim's
-            // output_root — the ids, the job's context hash, and which family's rendered-hash
-            // rule applies — and the executor key the derivation is bound to.
-            "fp_claim_id": hex(claim_id),
-            "output_token_ids": result.output_token_ids,
-            "job_context_hash": job_context_hash,
-            "family": family,
-            "executor_pubkey": faster_hex::hex_string(&identity.executor_pubkey),
-            "derivation": derivation.as_ref().map(|d| d.to_json(config.artifact_inline_max)),
-            // The caller is told, in the same response, whether this answer became a claim. A
-            // gateway that silently answered without committing would be lying about what the
-            // operator staked on it.
-            "committed": commit_refusal.is_none(),
-            "not_committed_because": commit_refusal,
-        },
+        "misaka": misaka,
     }))
 }
 
@@ -796,6 +964,8 @@ fn main() {
     let mut outbox: Option<PathBuf> = None;
     let mut identity_path: Option<PathBuf> = None;
     let mut anchor_path: Option<PathBuf> = None;
+    let mut rpc_endpoint: Option<String> = None;
+    let mut rpc_timeout_secs: u64 = 5;
     let mut class_leaves: u64 = 0;
     let mut max_decode_default: u32 = 256;
     let mut max_decode_cap: u32 = 1024;
@@ -816,6 +986,8 @@ fn main() {
             "--outbox" => outbox = Some(PathBuf::from(value("--outbox"))),
             "--identity" => identity_path = Some(PathBuf::from(value("--identity"))),
             "--anchor" => anchor_path = Some(PathBuf::from(value("--anchor"))),
+            "--rpc" => rpc_endpoint = Some(value("--rpc")),
+            "--rpc-timeout-secs" => rpc_timeout_secs = value("--rpc-timeout-secs").parse().unwrap_or_else(|e| die(format!("{e}"))),
             "--class-leaves" => class_leaves = value("--class-leaves").parse().unwrap_or_else(|e| die(format!("{e}"))),
             "--max-decode-default" => {
                 max_decode_default = value("--max-decode-default").parse().unwrap_or_else(|e| die(format!("{e}")))
@@ -825,7 +997,9 @@ fn main() {
                 trace_retention_window_daa = value("--trace-retention-window").parse().unwrap_or_else(|e| die(format!("{e}")))
             }
             "--derive-seed" => derive_seed_path = Some(PathBuf::from(value("--derive-seed"))),
-            "--artifact-inline-max" => artifact_inline_max = value("--artifact-inline-max").parse().unwrap_or_else(|e| die(format!("{e}"))),
+            "--artifact-inline-max" => {
+                artifact_inline_max = value("--artifact-inline-max").parse().unwrap_or_else(|e| die(format!("{e}")))
+            }
             "--max-prompt-bytes" => max_prompt_bytes = value("--max-prompt-bytes").parse().unwrap_or_else(|e| die(format!("{e}"))),
             "--bond-exposure-room-sompi" => {
                 bond_exposure_room_sompi = value("--bond-exposure-room-sompi").parse().unwrap_or_else(|e| die(format!("{e}")))
@@ -841,7 +1015,7 @@ fn main() {
                 per_source_jobs_per_window = value("--per-source-jobs-per-window").parse().unwrap_or_else(|e| die(format!("{e}")))
             }
             other => die(format!(
-                "unknown argument {other:?}\nusage: misaka-palw-gateway --worker <palw-worker> --outbox <dir> --identity <json> --anchor <json> [--listen addr] [--class-leaves n] [--max-decode-default n] [--max-decode-cap n] [--max-prompt-bytes n] [--bond-exposure-room-sompi n --claim-exposure-sompi n [--public-job-budget-permille n]] [--answer-never-commit] [--per-source-jobs-per-window n] [--derive-seed <file>] [--artifact-inline-max <bytes>]"
+                "unknown argument {other:?}\nusage: misaka-palw-gateway --worker <family-fp-worker> --outbox <dir> --identity <json> (--rpc <host:port> | --anchor <json>) [--listen addr] [--rpc-timeout-secs n] [--class-leaves n] [--max-decode-default n] [--max-decode-cap n] [--max-prompt-bytes n] [--bond-exposure-room-sompi n --claim-exposure-sompi n [--public-job-budget-permille n]] [--answer-never-commit] [--per-source-jobs-per-window n] [--derive-seed <file OUTSIDE --identity's dir and --outbox>] [--artifact-inline-max <bytes>]"
             )),
         }
     }
@@ -853,10 +1027,9 @@ fn main() {
     };
     let mut config = Config {
         listen,
-        worker: worker.unwrap_or_else(|| die("--worker <palw-worker> is required".into())),
+        worker: worker.unwrap_or_else(|| die("--worker <family-fp-worker> is required".into())),
         outbox: outbox.unwrap_or_else(|| die("--outbox <dir> is required".into())),
         identity_path: identity_path.unwrap_or_else(|| die("--identity <json> is required".into())),
-        anchor_path: anchor_path.unwrap_or_else(|| die("--anchor <json> is required".into())),
         class_leaves,
         max_decode_default,
         // The flag may only lower the hard cap, never raise it (Decision 10: the bounds are
@@ -879,7 +1052,7 @@ fn main() {
     // ADR-0079 Decision 4 / S5 — this process parses a stranger's bytes, so it holds no key. It
     // refuses to boot if a signing secret is reachable in its OWN view: the ML-DSA signature
     // belongs to the signer sidecar, and a seed dropped next to the identity file "for now" is
-    // how that stops being true.
+    // how that stops being true. `--derive-seed` must therefore point OUTSIDE both directories.
     // -----------------------------------------------------------------------------------------
     let identity_dir = config.identity_path.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."));
     let secret_dirs: Vec<&Path> = vec![identity_dir.as_path(), config.outbox.as_path()];
@@ -913,35 +1086,70 @@ fn main() {
 
     std::fs::create_dir_all(&config.outbox).unwrap_or_else(|e| die(format!("cannot create the outbox: {e}")));
     let identity = load_identity(&config.identity_path);
-    load_anchor(&config.anchor_path).unwrap_or_else(|e| die(e));
-    let worker_id = query_worker_identity(&config.confinement, &config.worker, &config.workdir);
-    if worker_id.prefill_cap == 0 || worker_id.n_ctx == 0 {
-        die("the worker's v3-manifest reports no shape limits".into());
-    }
+
+    // ADR-0077 Decision 3: the chain, or an honest statement that there is none.
+    let chain_source = match (&rpc_endpoint, &anchor_path) {
+        (Some(endpoint), _) => chain::ChainSource::Rpc(
+            chain::RpcChainSource::new(
+                endpoint,
+                identity.class_id_hex.clone(),
+                identity.bond_txid_hex.clone(),
+                identity.executor_bond.index,
+                rpc_timeout_secs,
+            )
+            .unwrap_or_else(|e| die(e)),
+        ),
+        (None, Some(path)) => {
+            chain::read_anchor_file(path).unwrap_or_else(|e| die(e));
+            chain::ChainSource::AnchorFile(path.clone())
+        }
+        (None, None) => {
+            die("one of --rpc <host:port> (ADR-0077 Decision 3: the gateway reads the chain it commits to) or --anchor <json> \
+             (the offline form, which cannot submit) is required"
+                .into())
+        }
+    };
+
+    let trace_dir = config.outbox.join("traces");
+    std::fs::create_dir_all(&trace_dir).unwrap_or_else(|e| die(format!("cannot create the trace retention dir: {e}")));
+    // ADR-0077 Decision 1: the artifact is mapped ONCE, here, before the listener opens.
+    let worker = WorkerSupervisor::boot(config.confinement.clone(), config.worker.clone(), config.workdir.clone(), trace_dir)
+        .unwrap_or_else(|e| die(e));
+
     eprintln!(
-        "[misaka-palw-gateway] listening on {} ({}) — worker manifest {}…, class {}…, template {TEMPLATE_ID_V1}",
+        "[misaka-palw-gateway] listening on {} ({}) — worker manifest {}…, class {}…, n_ctx {}, template {}",
         config.listen,
         if listen_is_loopback(&config.listen) { "loopback" } else { "PUBLIC, acknowledged" },
-        &hex(worker_id.runtime_manifest_hash)[..16],
+        &hex(worker.manifest().runtime_manifest_hash)[..16],
         &hex(identity.class_id)[..16],
+        worker.manifest().n_ctx,
+        if wire::special_id(worker.manifest(), "<|im_start|>").is_some() {
+            wire::TEMPLATE_ID_CHAT_SEGMENTS_V1
+        } else {
+            wire::TEMPLATE_ID_PLAIN_SEGMENTS_V1
+        },
+    );
+    let boot_facts = chain_source.read();
+    eprintln!(
+        "[misaka-palw-gateway] chain {} | registered {} | fp_certified {} | bond_active {} | exposure_room {}",
+        boot_facts.source, boot_facts.registered, boot_facts.fp_certified, boot_facts.bond_active, boot_facts.exposure_room_sompi
     );
     eprintln!(
         "[misaka-palw-gateway] confinement backend {} | one job slot, {MAX_IN_FLIGHT_JOBS} may queue, {MAX_CONNECTIONS} connections | \
-         prompt ≤ {} bytes, body ≤ {MAX_REQUEST_BODY_BYTES} bytes, decode ≤ {} | public-job budget {}‰ of a {}-sompi room",
+         prompt ≤ {} bytes, body ≤ {MAX_REQUEST_BODY_BYTES} bytes, decode ≤ {} | public-job budget {}‰",
         backend.name(),
         config.max_prompt_bytes,
         config.max_decode_cap,
         config.public_job_budget_permille,
-        config.bond_exposure_room_sompi,
     );
 
     let config = Arc::new(config);
     let identity = Arc::new(identity);
-    let worker_id = Arc::new(worker_id);
+    let worker = Arc::new(worker);
+    let chain_source = Arc::new(chain_source);
     // **One job slot** — the worker is a whole-model subprocess, and interleaving two would only
     // thrash the page cache. **A BOUNDED queue in front of it** — an unbounded one is a deadline
     // eater and a memory attack; past `MAX_IN_FLIGHT_JOBS` the answer is a 503, not a wait.
-    let job_lock = Arc::new(Mutex::new(()));
     let in_flight = Arc::new(AtomicUsize::new(0));
     let connections = Arc::new(AtomicUsize::new(0));
     let budget = Arc::new(Mutex::new(PublicJobBudget::new()));
@@ -955,9 +1163,9 @@ fn main() {
             respond(&mut stream, "503 Service Unavailable", &error_body("connection cap reached"));
             continue;
         }
-        let (config, identity, worker_id) = (Arc::clone(&config), Arc::clone(&identity), Arc::clone(&worker_id));
-        let (job_lock, in_flight, budget, sources) =
-            (Arc::clone(&job_lock), Arc::clone(&in_flight), Arc::clone(&budget), Arc::clone(&sources));
+        let (config, identity, worker, chain_source) =
+            (Arc::clone(&config), Arc::clone(&identity), Arc::clone(&worker), Arc::clone(&chain_source));
+        let (in_flight, budget, sources) = (Arc::clone(&in_flight), Arc::clone(&budget), Arc::clone(&sources));
         let connections = Arc::clone(&connections);
         let acknowledged_bind = acknowledged;
         std::thread::spawn(move || {
@@ -965,8 +1173,8 @@ fn main() {
                 &mut stream,
                 &config,
                 &identity,
-                &worker_id,
-                &job_lock,
+                &worker,
+                &chain_source,
                 &in_flight,
                 &budget,
                 &sources,
@@ -983,8 +1191,8 @@ fn serve_connection(
     stream: &mut TcpStream,
     config: &Config,
     identity: &Identity,
-    worker_id: &WorkerIdentity,
-    job_lock: &Mutex<()>,
+    worker: &WorkerSupervisor,
+    chain_source: &chain::ChainSource,
     in_flight: &AtomicUsize,
     budget: &Mutex<PublicJobBudget>,
     sources: &Mutex<SourceRates>,
@@ -1001,8 +1209,10 @@ fn serve_connection(
     };
     match (request.method.as_str(), request.path.as_str()) {
         ("GET", "/health") => {
+            let facts = chain_source.read();
+            let price = ExposurePrice::resolve(config, &facts);
             let snapshot = budget.lock().expect("the budget lock is never poisoned");
-            let daily = PublicJobBudget::daily_budget(config);
+            let daily = PublicJobBudget::daily_budget(config, price);
             respond(
                 stream,
                 "200 OK",
@@ -1014,17 +1224,27 @@ fn serve_connection(
                 // this endpoint. The commitment carries the same values, so a caller can check
                 // that the job it got back came from the identity advertised here.
                 //
-                // ADR-0077 SA-1(d) adds the LOSS BOUND, for the same reason and the other
-                // direction: a stranger's prompt spends the operator's exposure, and the amount
-                // is a number the operator reads here rather than a promise they infer.
+                // ADR-0077 Decision 3 adds the CHAIN's four answers by name — `registered`,
+                // `fp_certified`, `bond_active`, `exposure_room` — because "why did my answer not
+                // become a claim" must be a thing an operator reads rather than infers. SA-1(d)
+                // adds the loss bound, for the same reason and the other direction: a stranger's
+                // prompt spends the operator's exposure, and the amount is a number here.
                 &serde_json::json!({
                     "status": "ok",
-                    "runtime_manifest_hash": hex(worker_id.runtime_manifest_hash),
-                    "template_id": TEMPLATE_ID_V1,
+                    "runtime_manifest_hash": hex(worker.manifest().runtime_manifest_hash),
+                    "template_id": if wire::special_id(worker.manifest(), "<|im_start|>").is_some() {
+                        wire::TEMPLATE_ID_CHAT_SEGMENTS_V1
+                    } else {
+                        wire::TEMPLATE_ID_PLAIN_SEGMENTS_V1
+                    },
+                    "n_ctx": worker.manifest().n_ctx,
                     "class_id": hex(identity.class_id),
                     "network_domain": hex(identity.network_domain),
                     "operator_id": hex(identity.operator_id),
                     "bond": format!("{}:{}", identity.executor_bond.transaction_id, identity.executor_bond.index),
+                    "chain": facts.health_json(),
+                    "commit_refusal": facts.commit_refusal(),
+                    "can_submit": chain_source.can_submit(),
                     "posture": {
                         "listen": config.listen,
                         "public_bind": !listen_is_loopback(&config.listen),
@@ -1048,8 +1268,8 @@ fn serve_connection(
                         "loss_bound": "at most claim_exposure per claim, and at most the FreePromptExposureCeiling \
                                        ratio of collateral in flight",
                         "free_prompt_exposure_ceiling_permille": FREE_PROMPT_EXPOSURE_CEILING_PERMILLE,
-                        "claim_exposure_sompi": config.claim_exposure_sompi,
-                        "bond_exposure_room_sompi": config.bond_exposure_room_sompi,
+                        "claim_exposure_sompi": price.claim_sompi,
+                        "bond_exposure_room_sompi": price.room_sompi,
                         "public_job_budget_permille": config.public_job_budget_permille,
                         "public_job_budget_window_sompi": daily,
                         "public_job_budget_spent_sompi": snapshot.spent_sompi,
@@ -1069,6 +1289,20 @@ fn serve_connection(
                 respond(stream, "429 Too Many Requests", &error_body("per-source job rate exceeded"));
                 return;
             }
+            if request.body.len() > MAX_REQUEST_BODY_BYTES {
+                respond(stream, "400 Bad Request", &error_body("the body exceeds the request cap"));
+                return;
+            }
+            // Parsed BEFORE the queue reservation so `stream: true` decides the response shape
+            // while a status code is still possible.
+            let chat: ChatRequest = match serde_json::from_slice(&request.body) {
+                Ok(chat) => chat,
+                Err(e) => {
+                    respond(stream, "400 Bad Request", &error_body(&format!("request body is not a chat completion: {e}")));
+                    return;
+                }
+            };
+            let streaming = chat.stream == Some(true);
             // The bounded in-flight queue. Reserved BEFORE the slot is contended, so the depth of
             // the wait is a number this process chose rather than one the network chose for it.
             if in_flight.fetch_add(1, Ordering::AcqRel) >= MAX_IN_FLIGHT_JOBS {
@@ -1080,14 +1314,47 @@ fn serve_connection(
                 );
                 return;
             }
-            let outcome = {
-                let _running = job_lock.lock().expect("the job lock is never poisoned");
-                handle_chat(config, identity, worker_id, budget, &request.body)
-            };
-            in_flight.fetch_sub(1, Ordering::AcqRel);
-            match outcome {
-                Ok(body) => respond(stream, "200 OK", &body),
-                Err(e) => respond(stream, "400 Bad Request", &error_body(&e)),
+            if streaming {
+                // **A slow reader must not wedge the one job slot.** The deltas are written from
+                // inside the worker's mutex, so a client that stops reading would otherwise block
+                // on TCP back-pressure and hold the resident worker for as long as it liked. A
+                // write timeout turns that into a dropped connection.
+                let _ = stream.set_write_timeout(Some(Duration::from_secs(30)));
+                let model = chat.model.clone().unwrap_or_else(|| "misaka-palw-fp-v3".to_string());
+                let mut nonce = [0u8; 12];
+                rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut nonce);
+                // The chunk id is drawn per RESPONSE: the job id does not exist until the run
+                // ends, and an OpenAI client needs a stable id from the first chunk.
+                let mut sink = SseSink { stream, id: format!("palwcmpl-{}", faster_hex::hex_string(&nonce)), model, started: false };
+                sink.head();
+                let outcome = handle_chat(config, identity, worker, budget, chain_source, chat, &mut sink);
+                in_flight.fetch_sub(1, Ordering::AcqRel);
+                match outcome {
+                    Ok(body) => {
+                        // The terminal chunk carries the finish reason and, in the same event, the
+                        // `misaka` object: whether this answer became a claim and, if not, why.
+                        // An SSE client that never sees it is a client that was told nothing.
+                        let finish = body["choices"][0]["finish_reason"].clone();
+                        sink.chunk(serde_json::json!({}), finish);
+                        sink.event(&serde_json::json!({ "misaka": body["misaka"].clone(), "usage": body["usage"].clone() }));
+                        sink.done();
+                    }
+                    Err(e) => {
+                        // Past the head, an error can only be an event. Decision 2: a stream whose
+                        // rendering is not the committed one is CLOSED with an error, and no
+                        // commitment was written.
+                        sink.event(&error_body(&e));
+                        sink.done();
+                    }
+                }
+            } else {
+                let mut sink = BufferedSink;
+                let outcome = handle_chat(config, identity, worker, budget, chain_source, chat, &mut sink);
+                in_flight.fetch_sub(1, Ordering::AcqRel);
+                match outcome {
+                    Ok(body) => respond(stream, "200 OK", &body),
+                    Err(e) => respond(stream, "400 Bad Request", &error_body(&e)),
+                }
             }
         }
         // ADR-0078 Decision 6's fetch handle: a derived artifact too large to ride inline is
@@ -1112,51 +1379,12 @@ fn serve_connection(
 mod tests {
     use super::*;
 
-    fn msg(role: &str, content: &str) -> ChatMessage {
-        ChatMessage { role: role.into(), content: content.into() }
-    }
-
-    /// **The template is frozen** (its id names this exact transform). A change here is a new
-    /// template id and a new class profile — this golden is the tripwire.
-    #[test]
-    fn template_v1_is_frozen() {
-        let rendered = render_template_v1(&[msg("system", "You are a concise assistant."), msg("user", "What is 2+2?")]).unwrap();
-        assert_eq!(rendered, "### System:\nYou are a concise assistant.\n\n### User:\nWhat is 2+2?\n\n### Assistant:\n");
-
-        let multi_turn = render_template_v1(&[msg("user", "hi"), msg("assistant", "hello"), msg("user", "bye")]).unwrap();
-        assert_eq!(multi_turn, "### User:\nhi\n\n### Assistant:\nhello\n\n### User:\nbye\n\n### Assistant:\n");
-
-        assert!(render_template_v1(&[msg("system", "s")]).is_err(), "no user message is not a chat");
-        assert!(render_template_v1(&[msg("tool", "x"), msg("user", "u")]).is_err(), "unknown roles are refused, not dropped");
-    }
-
-    /// **F1's gateway face**: the rendered bytes contain the user's words and the template
-    /// markers — and nothing else. No DAA strings, no job metadata, no anchor, no nonce.
-    #[test]
-    fn the_rendered_prompt_carries_no_mining_metadata() {
-        let rendered = render_template_v1(&[msg("user", "explain beacons")]).unwrap();
-        assert_eq!(rendered, "### User:\nexplain beacons\n\n### Assistant:\n");
-        for forbidden in ["daa", "misaka-job", "anchor", "nonce", "bond"] {
-            assert!(!rendered.to_lowercase().contains(forbidden), "{forbidden:?} must never enter the model's input");
-        }
-    }
-
-    /// The display trim is presentation-only and total: with the guard, at it; without, the
-    /// whole trimmed answer.
-    #[test]
-    fn display_trim_stops_at_the_guard() {
-        assert_eq!(display_trim("2+2=4.\n\n### User:\nWhat…"), "2+2=4.");
-        assert_eq!(display_trim("a full answer with no guard\n"), "a full answer with no guard");
-        assert_eq!(display_trim("### at start is content-free"), "### at start is content-free");
-    }
-
     fn bounded_config() -> Config {
         Config {
             listen: "127.0.0.1:8790".into(),
             worker: PathBuf::from("/nonexistent/worker"),
             outbox: std::env::temp_dir().join("palw-gw-test-outbox"),
             identity_path: PathBuf::from("/nonexistent/identity.json"),
-            anchor_path: PathBuf::from("/nonexistent/anchor.json"),
             class_leaves: 0,
             max_decode_default: 256,
             max_decode_cap: 1024,
@@ -1172,6 +1400,10 @@ mod tests {
             derive_seed: None,
             artifact_inline_max: 4 << 20,
         }
+    }
+
+    fn declared_price(config: &Config) -> ExposurePrice {
+        ExposurePrice::resolve(config, &chain::ChainFacts::default())
     }
 
     /// **ADR-0079 S6.** A public bind fails at startup without the acknowledgement, and fails
@@ -1222,30 +1454,54 @@ mod tests {
     #[test]
     fn the_public_job_budget_bounds_the_operators_exposure() {
         let config = bounded_config();
+        let price = declared_price(&config);
         let mut budget = PublicJobBudget::new();
         // 200 permille of a 1,000,000-sompi room is 200,000; a 50,000-sompi claim fits four times.
-        assert_eq!(PublicJobBudget::daily_budget(&config), 200_000);
+        assert_eq!(PublicJobBudget::daily_budget(&config, price), 200_000);
         for _ in 0..4 {
-            budget.may_commit(&config).expect("within the window budget");
-            budget.charge(&config);
+            budget.may_commit(&config, price).expect("within the window budget");
+            budget.charge(price);
         }
-        let err = budget.may_commit(&config).unwrap_err();
+        let err = budget.may_commit(&config, price).unwrap_err();
         assert!(err.contains("budget for this window is spent"), "got {err}");
         assert_eq!(budget.committed_jobs, 4);
 
         // SA-1(c): the operator may mark the source class "answer, never commit".
         let never = Config { answer_never_commit: true, ..bounded_config() };
-        let err = PublicJobBudget::new().may_commit(&never).unwrap_err();
+        let err = PublicJobBudget::new().may_commit(&never, declared_price(&never)).unwrap_err();
         assert!(err.contains("answer, never commit"));
 
         // SA-7: a claim that would exceed the bond's room is refused HERE, at the entrance.
         let over = Config { claim_exposure_sompi: 2_000_000, ..bounded_config() };
-        let err = PublicJobBudget::new().may_commit(&over).unwrap_err();
+        let err = PublicJobBudget::new().may_commit(&over, declared_price(&over)).unwrap_err();
         assert!(err.contains("refused at the entrance"), "got {err}");
 
-        // An unconfigured room is read as unknown, and an unknown does not spend.
+        // An unconfigured room with no chain to read it from is an unknown, and an unknown does
+        // not spend.
         let unknown = Config { bond_exposure_room_sompi: 0, ..bounded_config() };
-        assert!(PublicJobBudget::new().may_commit(&unknown).is_err());
+        assert!(PublicJobBudget::new().may_commit(&unknown, declared_price(&unknown)).is_err());
+    }
+
+    /// **ADR-0077 Decision 3 + SA-7.** With no declaration the exposure numbers come from the
+    /// chain, and the SA-7 refusal then fires on the CHAIN's room rather than on a constant the
+    /// operator typed.
+    #[test]
+    fn the_exposure_price_falls_back_to_the_chain_and_the_operator_may_lower_it() {
+        let chain_facts = chain::ChainFacts { exposure_room_sompi: 900_000, claim_exposure_sompi: 3_000, ..Default::default() };
+        let undeclared = Config { bond_exposure_room_sompi: 0, claim_exposure_sompi: 0, ..bounded_config() };
+        let price = ExposurePrice::resolve(&undeclared, &chain_facts);
+        assert_eq!((price.room_sompi, price.claim_sompi), (900_000, 3_000), "the chain owns these numbers");
+        PublicJobBudget::new().may_commit(&undeclared, price).expect("a bond with room may commit");
+
+        // A declaration wins, in both directions — it is the operator's own ceiling on the loss.
+        let declared = Config { bond_exposure_room_sompi: 10_000, claim_exposure_sompi: 0, ..bounded_config() };
+        assert_eq!(ExposurePrice::resolve(&declared, &chain_facts).room_sompi, 10_000);
+
+        // SA-7 on the chain's numbers: a claim larger than the room never leaves the entrance.
+        let tight = chain::ChainFacts { exposure_room_sompi: 1_000, claim_exposure_sompi: 50_000, ..Default::default() };
+        let price = ExposurePrice::resolve(&undeclared, &tight);
+        let err = PublicJobBudget::new().may_commit(&undeclared, price).unwrap_err();
+        assert!(err.contains("refused at the entrance"), "got {err}");
     }
 
     /// The per-source rate is SECONDARY (SA-8) but it is real: the third job from one address in
@@ -1274,10 +1530,13 @@ mod tests {
     }
 
     /// **ADR-0077 SA-1(b).** A queued commitment expires WITH ITS ANCHOR: past the TTL the outbox
-    /// artifact is retired so no rail can pick it up and submit it stale.
+    /// artifact is retired so no rail can pick it up and submit it stale. The suffix is the one
+    /// `misaka-palw-fp-submit` refuses to read through — the two halves of the loop agree by
+    /// sharing the constant, not by both spelling it.
     #[test]
     fn a_queued_commitment_expires_with_its_anchor() {
         let dir = std::env::temp_dir().join(format!("palw-gw-expiry-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         // Nothing to sweep is not an error, and a non-commitment file is never touched.
         std::fs::write(dir.join("fp-job-abc.json"), b"{}").unwrap();
@@ -1286,14 +1545,17 @@ mod tests {
         // A commitment file that does not decode is left alone rather than silently deleted.
         std::fs::write(dir.join("fp-job-abc.commitment-unsigned.borsh"), b"not borsh").unwrap();
         assert_eq!(expire_stale_commitments(&dir, 10_000, COMMITMENT_ANCHOR_TTL_DAA), 0);
+        assert_eq!(misaka_palw_fp_submit::EXPIRED_SUFFIX, ".expired", "both halves of the loop share one suffix");
         std::fs::remove_dir_all(&dir).ok();
     }
 
     /// **ADR-0079 S5.** The gateway holds the executor PUBLIC key only, and refuses to boot when a
-    /// signing secret is reachable in its own view.
+    /// signing secret is reachable in its own view — which is why `--derive-seed` must point
+    /// outside `--identity`'s directory and outside `--outbox`, the two this scans.
     #[test]
     fn a_reachable_signing_secret_is_a_boot_refusal() {
         let dir = std::env::temp_dir().join(format!("palw-gw-secret-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("identity.json"), b"{}").unwrap();
         assert!(reachable_signing_secrets(|_| None, &[dir.as_path()]).is_empty(), "an identity file is not a secret");
@@ -1301,27 +1563,66 @@ mod tests {
         std::fs::write(dir.join("bond.seed"), [3u8; 32]).unwrap();
         let found = reachable_signing_secrets(|_| None, &[dir.as_path()]);
         assert_eq!(found.len(), 1, "a 32-byte file beside the identity is the shape of a raw ML-DSA-87 seed");
+        // And the usage text says where the seed may live, so the refusal is not the first time an
+        // operator hears about it.
+        let usage = std::include_str!("main.rs");
+        assert!(usage.contains("--derive-seed <file OUTSIDE --identity's dir and --outbox>"), "the flag documents its own rule");
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// **ADR-0077 SA-5 / ADR-0079 SA-7.** Nothing in this binary logs a prompt. The rendered
-    /// prompt is handed to the worker and never to a log line.
+    /// **ADR-0077 SA-5 / ADR-0079 SA-7.** Nothing in this binary logs a prompt or a prompt id.
+    /// Checked over every log statement in the shipped source rather than over a helper, because
+    /// the failure mode is one line added later, not a helper misused.
     #[test]
     fn the_gateway_logs_no_prompt() {
-        let source = std::include_str!("main.rs");
-        for line in source.lines() {
-            let trimmed = line.trim_start();
-            if !(trimmed.starts_with("eprintln!") || trimmed.starts_with("println!") || trimmed.starts_with("log::")) {
-                continue;
-            }
-            for forbidden in ["rendered_prompt", "chat.messages", "message.content", "prompt_token_ids"] {
-                assert!(!line.contains(forbidden), "a log line carries {forbidden}: {line}");
+        for (file, source) in [
+            ("main.rs", std::include_str!("main.rs")),
+            ("wire.rs", std::include_str!("wire.rs")),
+            ("chain.rs", std::include_str!("chain.rs")),
+        ] {
+            for line in source.lines() {
+                let trimmed = line.trim_start();
+                if !(trimmed.starts_with("eprintln!") || trimmed.starts_with("println!") || trimmed.starts_with("log::")) {
+                    continue;
+                }
+                for forbidden in [
+                    "rendered_prompt",
+                    "chat.messages",
+                    "message.content",
+                    "prompt_token_ids",
+                    "displayed",
+                    "plan.segments",
+                    "rendered_string",
+                    "delta",
+                    ".shown()",
+                ] {
+                    assert!(!line.contains(forbidden), "{file}: a log line carries {forbidden}: {line}");
+                }
             }
         }
     }
 
-    /// The chat request parser accepts the OpenAI subset and refuses a stream request rather
-    /// than silently downgrading it.
+    /// **ADR-0079 SA-7.** The worker's stderr is the model runtime's, and a runtime line can quote
+    /// its input. The pipe is drained either way — a filled buffer wedges the child — but the
+    /// lines are printed only on an explicit opt-in, and the summary line says how many were held.
+    #[test]
+    fn worker_stderr_is_withheld_unless_the_operator_asks_for_it() {
+        assert!(!worker_stderr_relay_enabled(|_| None), "the default is withheld");
+        assert!(worker_stderr_relay_enabled(|_| Some("1".into())));
+        for not_consent in ["", "0", "true", "yes", "on", " 1"] {
+            assert!(
+                !worker_stderr_relay_enabled(|_| Some(not_consent.into())),
+                "{not_consent:?} is a variable somebody set and did not mean; only `1` is consent"
+            );
+        }
+        // And the summary line names the variable, so nobody debugs a silent pipe.
+        let source = std::include_str!("main.rs");
+        assert!(source.contains("log lines withheld (ADR-0079 SA-7"), "the withholding announces itself");
+        assert_eq!(WORKER_STDERR_ENV, "MISAKA_PALW_GATEWAY_LOG_WORKER_STDERR");
+    }
+
+    /// The chat request parser accepts the OpenAI subset, and `stream: true` is now SERVED
+    /// (ADR-0077 Decision 2) rather than refused.
     #[test]
     fn chat_request_subset_parses() {
         let parsed: ChatRequest =
