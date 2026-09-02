@@ -429,9 +429,21 @@ if len(small_obj) != len(large_obj):
 for name, obj, art in (("small", small_obj, small_art), ("large", large_obj, large_art)):
     if art in obj:
         problems.append(f"the {name} artifact occurs verbatim inside its own object")
+    # A window has to CARRY something before its presence means anything. A binary STL is mostly
+    # zeros (the writer emits a zero normal and zero attribute bytes per triangle), and the object
+    # has zeroed fields of its own — `claim_id`, `output_root`, `network_domain` are 64 zero bytes
+    # each in an offline binding — so a plain substring search reports "the artifact is inside the
+    # object" for a run of zeros that belongs to neither. Windows with fewer than eight distinct
+    # byte values are skipped for that reason; what is being looked for is CONTENT.
     window = 32
-    if len(art) >= window and any(art[i:i + window] in obj for i in range(0, len(art) - window, 17)):
+    carriers = [art[i:i + window] for i in range(0, max(0, len(art) - window), 17)]
+    carriers = [w for w in carriers if len(set(w)) >= 8]
+    hit = next((w for w in carriers if w in obj), None)
+    if hit is not None:
         problems.append(f"a {window}-byte run of the {name} artifact occurs inside its own object")
+    elif not carriers:
+        out.setdefault("notes", []).append(
+            f"the {name} artifact has no {window}-byte window with 8 distinct bytes; only the whole-artifact check applies to it")
 out["problems"] = problems
 out["verdict"] = "ADR-0078 Decision 1 holds: the object is constant in the artifact and carries none of it" if not problems else "DECISION 1 VIOLATED"
 print(json.dumps(out))
