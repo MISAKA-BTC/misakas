@@ -20,6 +20,8 @@
 #      then one report `--check`ed against the other.
 #   4. THE SIZE CLAIM, MEASURED. "The chain holds a few hundred bytes and the GLB holds the
 #      megabytes" is a promise with three numbers in it; this prints all three.
+#   5. THE WIDTH A ROW HAS TO CARRY, so the class the launch registers is sized against a
+#      measured number and not against the size of a pretty-printed corpus file.
 #
 # WHAT THIS DRILL DOES NOT PROVE, said here because a drill that overclaims is worse than none:
 #   * it runs NO model and touches NO chain. It proves the derived leg over the corpus answers,
@@ -33,7 +35,7 @@
 #
 # Env: PALW_DERIVE_BIN, RAIL_BIN, CLI_BIN (defaults target/debug/*), CARGO (default `cargo`),
 #      CROSS_TARGET (default x86_64-apple-darwin), WORK_DIR, MISAKA_NODE_RPC, MISAKA_NETWORK,
-#      SKIP_CROSS=1, SKIP_CARGO=1.
+#      MISAKA_PALW_TOKENIZER (a real tokenizer.json; without it section 5 measures bytes only),\n#      SKIP_CROSS=1, SKIP_CARGO=1.
 set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PALW_DERIVE_BIN="${PALW_DERIVE_BIN:-$REPO_ROOT/target/debug/palw-derive}"
@@ -336,6 +338,28 @@ if [ -n "${MISAKA_NODE_RPC:-}" ] && [ -x "$CLI_BIN" ]; then
   fi
 else
   skip "misaka palw derived-verify: it reads the derivation from a node over wRPC, and this drill puts nothing on a chain. Run it where the claim exists: $CLI_BIN --network $MISAKA_NETWORK palw derived-verify <claim-id> --answer <gateway response.json>"
+  # The half of that command which does NOT need a chain is its arithmetic, and that half is
+  # provable here: `compare()` is the whole of derived-verify's comparison, driven from tests
+  # over this same music corpus, including a false object reported by field name. Running them
+  # is what keeps the skip above honest — it bounds the gap to the wRPC read and the
+  # reconstruction of the object from what a node returned, rather than leaving it unbounded.
+  if [ "${SKIP_CARGO:-0}" != "1" ] && command -v "$CARGO" >/dev/null; then
+    if (cd "$REPO_ROOT" && MISAKA_PALW_POW_FIXTURE=1 "$CARGO" test -p misaka-cli --bin misaka palw_derived) > "$WORK_DIR/cli-derived.log" 2>&1; then
+      ok "the chainless half of derived-verify (its compare(), over this corpus): $(grep -E '^test result:' "$WORK_DIR/cli-derived.log" | tail -1)"
+    else
+      bad "misaka-cli's derived-verify arithmetic FAILED: see $WORK_DIR/cli-derived.log"
+    fi
+  fi
+  # And that the command itself is wired: it parses every flag and reaches the connection, so
+  # what is missing here is a chain and not a code path.
+  if [ -x "$CLI_BIN" ]; then
+    OUT="$("$CLI_BIN" --network devnet --rpc 127.0.0.1:1 palw derived-verify "$CLAIM" --answer "$C/output-token-ids.json" \
+            --dsl "$DSL" --job-context-hash "$CTX" --family "$FAMILY" --json 2>&1)" && CRC2=0 || CRC2=$?
+    case "$OUT" in
+      *connect*) ok "misaka palw derived-verify is wired and stops at the connection (exit $CRC2): $(printf '%s' "$OUT" | head -1 | cut -c1-90)" ;;
+      *)         bad "misaka palw derived-verify failed before the connection: $(printf '%s' "$OUT" | head -1)" ;;
+    esac
+  fi
 fi
 
 # =============================================================================================
@@ -402,6 +426,35 @@ d=json.load(open(sys.argv[1]))['rows']
 k=max(d,key=lambda k:d[k]['artifact_bytes'])
 print(k, d[k]['artifact_bytes'])" "$WORK_DIR/x3/native.json")"
 printf '  %-46s %s\n' "the corpus's largest artifact" "$BIG"
+
+# =============================================================================================
+section "5. the width a class row has to carry"
+# =============================================================================================
+# The derived leg is unreachable if no registered class can EMIT an answer. The number the launch
+# has been sizing rows against is the size of a corpus file a human pretty-printed; the model may
+# write the canonical form instead, and that is a legal answer deriving to the same object (it is
+# `tests/answer_width.rs` that proves the equality — this prints the numbers beside it). Reported
+# here rather than asserted: which classes can emit which widths is a fact about the classes.
+if [ "${SKIP_CARGO:-0}" = "1" ] || ! command -v "$CARGO" >/dev/null; then
+  skip "the width table: it is measured by cargo test -p misaka-palw-derive --test answer_width"
+else
+  WIDTH_ENV=""
+  if [ -n "${MISAKA_PALW_TOKENIZER:-}" ]; then
+    if [ -f "$MISAKA_PALW_TOKENIZER" ]; then
+      WIDTH_ENV="--ignored"
+    else
+      die "MISAKA_PALW_TOKENIZER=$MISAKA_PALW_TOKENIZER does not exist — the token column refuses rather than guessing at a tokenizer"
+    fi
+  else
+    skip "the token column: MISAKA_PALW_TOKENIZER is unset, so only bytes are measured"
+  fi
+  if (cd "$REPO_ROOT" && MISAKA_PALW_POW_FIXTURE=1 "$CARGO" test -p misaka-palw-derive --test answer_width -- $WIDTH_ENV --nocapture) > "$WORK_DIR/answer_width.log" 2>&1; then
+    grep -E "narrowest [0-9]|^tokenizer /" "$WORK_DIR/answer_width.log" | sed 's/^/  /'
+    ok "the width table: $(grep -E '^test result:' "$WORK_DIR/answer_width.log" | tail -1)"
+  else
+    bad "the width measurement FAILED: see $WORK_DIR/answer_width.log"
+  fi
+fi
 
 # =============================================================================================
 printf '\n[derived-proof] PASS %d  FAIL %d  SKIP %d   (work dir %s)\n' "$PASS" "$FAIL" "$SKIP" "$WORK_DIR"
