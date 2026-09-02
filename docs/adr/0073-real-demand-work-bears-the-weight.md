@@ -127,9 +127,9 @@ the canonical job — and it is checked by *equality* at commitment admission, t
 discipline. The binding's leaf count is the same number, so a capture whose leaves do not match
 the claim is refused structurally.
 
-3b. A quantum is a leaf count, not a CU count: `quanta = min(⌊pwu / QUANTUM_LEAVES⌋, cap)`, with
-`QUANTUM_LEAVES` chosen per bundle so that the floor's FP job and its canonical job land within a
-small factor of each other. `PalwFpCuWeightsV3`, `QUANTUM_CU`, `PWU_PER_QUANTUM` are withdrawn
+3b. A quantum is a leaf count, not a CU count. *As landed (ADR-0074 Decision 5):* not a
+network-wide `QUANTUM_LEAVES` but a fraction of the class's own canonical job —
+`max(1, canonical_leaves / 8)` — so every class's job is eight draws and `pwu` stays in leaves. `PalwFpCuWeightsV3`, `QUANTUM_CU`, `PWU_PER_QUANTUM` are withdrawn
 from the bundle (their text stays in ADR-0044 as the record). The "no shape prices above the
 pure-decode reference" invariant becomes a theorem instead of a calibration: leaves are the work.
 

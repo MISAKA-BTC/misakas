@@ -75,10 +75,20 @@ leaves under its own context) — collusion that costs each party a fee and `res
 claim, recorded here as the residual; it is closed by executor-dependent computation if it is
 ever measured to pay.
 
-**Decision 5 — The price is the capture's leaf count.** The commitment carries `work_leaves`,
-which must equal the binding's `step_leaf_count`; `quanta = min(⌊work_leaves / QUANTUM_LEAVES⌋,
-max_quanta)` and `pwu = quanta × QUANTUM_LEAVES`. `PalwFpCuWeightsV3`, `fp_cu_v3`, `QUANTUM_CU` and
-`PWU_PER_QUANTUM` are withdrawn (their text stays in ADR-0044 as the record). The attempt lane's
+**Decision 5 — The price is the capture's leaf count, and a quantum is a fraction of the
+class's own job.** The commitment carries `work_leaves`, which must equal the binding's
+`step_leaf_count`. The quantum is not a network-wide leaf count: it is
+`max(1, canonical_leaves / quanta_per_canonical_job)` of the class's own canonical job (the
+bundle says `8`; `canonical_leaves` is the class's `pwu_per_inference`, its canonical step leaf
+count by genesis rule), so `quanta = min(⌊work_leaves / quantum⌋, max_quanta)` and
+`pwu = quanta × quantum`. A job the size of the canonical one is eight draws on every class — the
+per-class receipt retarget normalises across classes anyway — while `pwu` stays in leaves, so a
+floor claim and a QWEN36 claim weigh in one unit. The class state holds no profile, so the
+transition prices from the class's rule and the bundle's `quanta_per_canonical_job`
+(`PalwStateParamsV2::with_fp_quanta`, held equal to the free-prompt params by `validate()`).
+`PalwFpCuWeightsV3`, `fp_cu_v3`, `QUANTUM_CU` and `PWU_PER_QUANTUM` are withdrawn (their text
+stays in ADR-0044 as the record). A free-prompt claim's exposure is its own `pwu` — the work it
+claims — not a whole canonical job. The attempt lane's
 pwu is already leaves (`pwu_per_inference = canonical_step_leaf_count` by genesis rule), so
 `safe_weight` becomes one unit and ADR-0073 Decision 3 is discharged. The seat verifies the price
 against the capture it has authenticated (`verify_material` → `capture_shape().step_leaf_count`),
