@@ -241,25 +241,43 @@ pub fn read_worker_manifest(job_dir: &Path) -> (Option<String>, Option<String>) 
 }
 
 /// Serve `GET /v1/artifacts/<derived-id-hex>`: the bytes filed under the id, or nothing.
+/// **Every extension the shipped kinds file an artifact under, with the type it is served as.**
+///
+/// A closed list rather than "whatever the directory holds" — see [`artifact_by_id`]. The test
+/// `the_served_extension_table_covers_every_shipped_kind` holds it against the derive crate's own
+/// `EXTENSION` constants, so a kind that arrives with an eighth extension fails there rather than
+/// becoming a silent 404 in production.
+pub const SERVED_ARTIFACT_TYPES: &[(&str, &str)] = &[
+    ("glb", "model/gltf-binary"),
+    ("mid", "audio/midi"),
+    ("png", "image/png"),
+    ("stl", "model/stl"),
+    ("mmap", "application/octet-stream"),
+    ("mcod", "application/octet-stream"),
+    ("msim", "application/octet-stream"),
+];
+
+/// Resolve one artifact by its derived id (ADR-0078 Decision 6's fetch handle).
+///
+/// **ADR-0078 SA-4: a direct probe, never a directory walk.** This used to `read_dir` the whole
+/// artifact directory on every request and compare stems. That made a MISS — which is what a
+/// stranger sends, since a hit needs a `derived_id` — the most expensive answer the route has, and
+/// it grew with every artifact the gateway had ever produced: an unauthenticated read route whose
+/// cost is linear in the operator's own history is the amplifier SA-4 names, and it does not need
+/// the DSL election to be turned on to exist. A miss now costs at most
+/// `SERVED_ARTIFACT_TYPES.len()` failed `open`s and reads nothing.
+///
+/// The 128-hex check stays FIRST and is what keeps this out of path-traversal territory: the
+/// only strings that reach the join are 128 ASCII hex digits, so no `..`, no separator, and no
+/// absolute path can be spelled.
 pub fn artifact_by_id(outbox: &Path, id_hex: &str) -> Option<(Vec<u8>, &'static str)> {
     if id_hex.len() != 128 || !id_hex.bytes().all(|b| b.is_ascii_hexdigit()) {
         return None;
     }
     let dir = outbox.join("artifacts");
-    let entries = std::fs::read_dir(&dir).ok()?;
-    for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if let Some((stem, ext)) = name.split_once('.')
-            && stem == id_hex
-        {
-            let content_type: &'static str = match ext {
-                "glb" => "model/gltf-binary",
-                "mid" => "audio/midi",
-                "png" => "image/png",
-                "stl" => "model/stl",
-                _ => "application/octet-stream",
-            };
-            return std::fs::read(entry.path()).ok().map(|bytes| (bytes, content_type));
+    for (ext, content_type) in SERVED_ARTIFACT_TYPES {
+        if let Ok(bytes) = std::fs::read(dir.join(format!("{id_hex}.{ext}"))) {
+            return Some((bytes, content_type));
         }
     }
     None
@@ -306,5 +324,54 @@ mod tests {
             assert_eq!(registry::transformer_by_name(by_kind).unwrap().manifest().kind, k);
         }
         assert!(resolve_transformer("no-such-kind").unwrap_err().contains("this build has"));
+    }
+
+    /// **ADR-0078 SA-4: the closed extension table is closed over the kinds that ship.**
+    ///
+    /// [`artifact_by_id`] no longer walks the artifact directory, so an extension missing from
+    /// [`SERVED_ARTIFACT_TYPES`] is a kind whose artifact silently 404s. The derive crate states
+    /// each one as a public constant of its kind module, and this reads them back — `image` is the
+    /// one kind that spells its extension inline at the `Artifact` literal instead of as a
+    /// constant, so `png` is named here directly and that is why.
+    #[test]
+    fn the_served_extension_table_covers_every_shipped_kind() {
+        use misaka_palw_derive::kinds;
+        let served: std::collections::BTreeSet<&str> = SERVED_ARTIFACT_TYPES.iter().map(|(e, _)| *e).collect();
+        for ext in [
+            kinds::scene::EXTENSION,
+            kinds::music::EXTENSION,
+            kinds::cad::EXTENSION,
+            kinds::map::EXTENSION,
+            kinds::code::EXTENSION,
+            kinds::simulation::EXTENSION,
+            "png",
+        ] {
+            assert!(served.contains(ext), "a shipped kind files artifacts under {ext:?} and the fetch handle would 404 them");
+        }
+        assert_eq!(served.len(), SERVED_ARTIFACT_TYPES.len(), "an extension is listed twice");
+        // One transformer per kind row, and seven rows: if the crate grows an eighth kind this
+        // count moves and the list above has to be revisited rather than silently under-covering.
+        assert_eq!(registry::transformer_names().len(), 8, "the kind table changed; re-check the served extension list");
+    }
+
+    /// **ADR-0078 SA-4, and the reason the probe is safe.** Only 128 ASCII hex digits reach the
+    /// path join, so nothing a stranger can spell escapes the artifact directory — and a miss
+    /// reads no directory at all.
+    #[test]
+    fn the_fetch_handle_resolves_only_a_well_formed_id_and_never_escapes_the_outbox() {
+        let dir = std::env::temp_dir().join(format!("palw-sa4-{}", std::process::id()));
+        let artifacts = dir.join("artifacts");
+        std::fs::create_dir_all(&artifacts).unwrap();
+        let id = "ab".repeat(64);
+        std::fs::write(artifacts.join(format!("{id}.glb")), b"GLB-BYTES").unwrap();
+
+        assert_eq!(artifact_by_id(&dir, &id), Some((b"GLB-BYTES".to_vec(), "model/gltf-binary")));
+        // A stem that is not a derived id is refused before any filesystem call.
+        for bad in ["", "../../etc/passwd", "zz", &"ab".repeat(63), &format!("{id}a"), &format!("{}g", "ab".repeat(63) + "a")] {
+            assert_eq!(artifact_by_id(&dir, bad), None, "{bad:?} must not resolve");
+        }
+        // A well-formed id this gateway never built is a miss, not a walk.
+        assert_eq!(artifact_by_id(&dir, &"cd".repeat(64)), None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

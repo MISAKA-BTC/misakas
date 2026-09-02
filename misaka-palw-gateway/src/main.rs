@@ -123,6 +123,26 @@ const MAX_IN_FLIGHT_JOBS: usize = 8;
 const PUBLIC_BUDGET_WINDOW: Duration = Duration::from_secs(24 * 60 * 60);
 /// The per-source window (SA-8: secondary).
 const PER_SOURCE_WINDOW: Duration = Duration::from_secs(60 * 60);
+/// **ADR-0078 SA-4: the read route's own per-source rate, over [`PER_SOURCE_WINDOW`].**
+///
+/// SA-4's rule is that the DSL data-availability election must not turn the executor into a public
+/// file server. `GET /v1/artifacts/<derived-id>` is the one route in this binary that already IS
+/// one: `derived_id` is a value the CHAIN publishes (it is `derived_id_v1` of an object in a
+/// block), so anyone reading the chain can name every artifact this gateway ever built, and until
+/// this bound existed they could fetch each one as often as they liked, unauthenticated.
+///
+/// Bonded-requester authentication is deliberately NOT applied here, and the reason is the ADR's:
+/// Decision 6 makes this handle the delivery path for "the artifact, as bytes … by a fetch handle
+/// above a size the gateway states", to the person who asked, in a browser. A bond key in a
+/// browser is not the shape of that transaction. What SA-4's other two words — bounded and
+/// rate-limited — mean here is this counter and the direct-path resolve that replaced a directory
+/// walk. The DSL half, which SA-4 is actually about, is not served by this binary at all; see
+/// `misaka-palw-gateway/tests/dsl_da_election_gate.rs`.
+///
+/// 512 an hour per address is far above one person collecting the artifacts of their own session
+/// (a job is capped at `per_source_jobs_per_window`, and each job yields one artifact) and far
+/// below a scrape.
+const FETCH_PER_SOURCE_PER_WINDOW: u32 = 512;
 /// ADR-0077 SA-1(d): the exposure ceiling ratio the RC enforces on a bond's collateral in flight
 /// (`PalwStateV2Error::FreePromptExposureCeiling`). Printed in `/health` so the loss bound is a
 /// number the operator reads, not a promise they infer.
@@ -259,22 +279,39 @@ impl PublicJobBudget {
 
 /// SA-8's secondary bound. Kept because a single noisy source is still worth slowing, and named
 /// secondary because sources share addresses behind proxies and this one cannot be the bound.
+///
+/// **Two counters, not one** (ADR-0078 SA-4). A job and an artifact fetch are different spends: a
+/// job costs a model run and a slice of the operator's exposure, a fetch costs a file read. They
+/// must not share a counter in either direction — a fetch that spent a job token would let a
+/// browser reloading a GLB lock the person who asked out of their next prompt, and a job that
+/// spent a fetch token would make the fetch bound meaningless. So `admit` charges the job budget
+/// and [`SourceRates::admit_fetch`] charges its own.
 #[derive(Default)]
 struct SourceRates {
     seen: HashMap<IpAddr, (Instant, u32)>,
+    fetched: HashMap<IpAddr, (Instant, u32)>,
 }
 
 impl SourceRates {
     fn admit(&mut self, source: IpAddr, per_window: u32) -> bool {
+        Self::charge(&mut self.seen, source, per_window)
+    }
+
+    /// **ADR-0078 SA-4's rate, on the read route** — see [`FETCH_PER_SOURCE_PER_WINDOW`].
+    fn admit_fetch(&mut self, source: IpAddr) -> bool {
+        Self::charge(&mut self.fetched, source, FETCH_PER_SOURCE_PER_WINDOW)
+    }
+
+    fn charge(map: &mut HashMap<IpAddr, (Instant, u32)>, source: IpAddr, per_window: u32) -> bool {
         if per_window == 0 {
             return true;
         }
         // Bounded map: a window's worth of distinct sources, then a sweep. An unbounded map keyed
         // by attacker-chosen addresses is itself the memory attack.
-        if self.seen.len() > 4_096 {
-            self.seen.retain(|_, (at, _)| at.elapsed() < PER_SOURCE_WINDOW);
+        if map.len() > 4_096 {
+            map.retain(|_, (at, _)| at.elapsed() < PER_SOURCE_WINDOW);
         }
-        let entry = self.seen.entry(source).or_insert((Instant::now(), 0));
+        let entry = map.entry(source).or_insert((Instant::now(), 0));
         if entry.0.elapsed() >= PER_SOURCE_WINDOW {
             *entry = (Instant::now(), 0);
         }
@@ -1361,7 +1398,19 @@ fn serve_connection(
         // served by its derived id. A GET with no side effects, so it needs neither the job slot
         // nor the in-flight reservation — but it is dispatched HERE, inside the bounded accept
         // loop, so the connection cap still counts it.
+        //
+        // **ADR-0078 SA-4: bounded and rate-limited.** `derived_id` is published on chain, so this
+        // route is addressable by every reader of the chain and not only by the person who asked.
+        // The rate is its own (see `FETCH_PER_SOURCE_PER_WINDOW`) so that a fetch never spends a
+        // job token, and the resolve behind it is a direct path rather than a directory walk, so a
+        // stranger's 404 costs one `stat` and not a scan of every artifact this gateway has built.
         ("GET", path) if path.starts_with("/v1/artifacts/") => {
+            if let Some(source) = source
+                && !sources.lock().expect("the source lock is never poisoned").admit_fetch(source)
+            {
+                respond(stream, "429 Too Many Requests", &error_body("per-source artifact fetch rate exceeded"));
+                return;
+            }
             match derive::artifact_by_id(&config.outbox, &path["/v1/artifacts/".len()..]) {
                 Some((bytes, content_type)) => respond_bytes(stream, "200 OK", content_type, &bytes),
                 None => respond(stream, "404 Not Found", &error_body("no artifact under that derived id")),
@@ -1517,6 +1566,38 @@ mod tests {
         assert!(rates.admit("198.51.100.9".parse().unwrap(), 2));
         // Zero disables it, because a quota of zero would otherwise mean "serve nobody".
         assert!(rates.admit(source, 0));
+    }
+
+    /// **ADR-0078 SA-4: the read route is rate-limited, and on its OWN counter.**
+    ///
+    /// `GET /v1/artifacts/<derived-id>` was unauthenticated and uncounted, and `derived_id` is a
+    /// value the chain publishes — so every reader of the chain could name and re-fetch every
+    /// artifact this gateway had ever built. The bound is per source over the same window as the
+    /// job quota, and the two must not share a counter in either direction: a browser reloading a
+    /// GLB must not be able to lock the person who asked out of their next prompt, and jobs must
+    /// not be able to exhaust the fetch allowance of the answer they just produced.
+    #[test]
+    fn the_artifact_fetch_rate_is_bounded_and_does_not_spend_the_job_quota() {
+        let mut rates = SourceRates::default();
+        let source: IpAddr = "203.0.113.11".parse().unwrap();
+
+        // A fetch does not spend a job token: two jobs are still available after many fetches.
+        for _ in 0..64 {
+            assert!(rates.admit_fetch(source));
+        }
+        assert!(rates.admit(source, 2));
+        assert!(rates.admit(source, 2));
+        assert!(!rates.admit(source, 2), "the job quota is still the operator's two");
+
+        // And the fetch allowance is finite: one past the ceiling is refused.
+        let mut fresh = SourceRates::default();
+        let scraper: IpAddr = "198.51.100.22".parse().unwrap();
+        for n in 0..FETCH_PER_SOURCE_PER_WINDOW {
+            assert!(fresh.admit_fetch(scraper), "fetch {n} is within the allowance");
+        }
+        assert!(!fresh.admit_fetch(scraper), "the fetch past FETCH_PER_SOURCE_PER_WINDOW is refused");
+        // Per source, not global: another address still fetches.
+        assert!(fresh.admit_fetch("198.51.100.23".parse().unwrap()));
     }
 
     /// Every mandatory bound is a hard ceiling a flag may only LOWER. A `--max-decode-cap` of a
