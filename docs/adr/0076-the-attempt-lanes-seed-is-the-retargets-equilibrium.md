@@ -12,6 +12,8 @@ inference is one draw).
 **Makes reachable:** ADR-0075 (a stranger's model, certified on-chain, has to be able to produce
 once it is seated).
 
+> **§8 restated (2026-09-02)** — see the last section: the processor already pins a post-genesis entrant's `initial_target` to the base class's live target (M2-12), so the field is not free; what stays open is that the pinned price is the floor's, and the fork-choice consequence for an uncertified entrant is closed by ADR-0069 Decision 7.
+
 ## 1. What was measured
 
 The three classes testnet-11 registers, with the share each actually holds after the genesis
@@ -181,3 +183,18 @@ is `min_grantable_share_permille`, a ruleset constant, and its `pwu` is counted 
 it already carries), so there is no fixed point to solve. It is left out of this change only
 because it invalidates every fixture in the tree that constructs a `ClassRegistered` with a chosen
 target, and Relaunch 5e is a deployment rather than a refactor.
+
+## Amendment (2026-09-02) — §8 restated against the shipped rule
+
+§8 says a post-genesis registrant "still declares its own `initial_target` … and nothing refuses a
+value the rule would not produce". The processor refuses a value that is not the base class's live
+target (`processor.rs`, audit M2-12: "the entrant's difficulty is the chain's, not the
+registrant's"), so the field is pinned — to the floor's price, not to this ADR's seed. What remains
+open is exactly that: an entrant sits at the floor's price until `ClassLaneCertified` re-seeds it
+(Decision 4), and until then its blocks claim the floor's expected draws against its own
+`pwu_per_inference`. For a certified entrant that is honest work (it needs the draws). For an
+uncertified one it is the fork-choice hole ADR-0069 Decision 7 closes (its blocks weigh nothing).
+The equality closure at registration (`initial_target == attempt_target_seed_v1(share_granted,
+pwu_per_inference)`) stays deferred for the fixture reason given; with share 0 it would yield the
+hardest target, which is also acceptable — a weightless class that cannot produce attempt blocks
+loses nothing the network needs.

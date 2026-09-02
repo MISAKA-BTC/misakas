@@ -16,6 +16,8 @@ architecture, refuse the tolerant proof model).
 **Leaves open, by name:** weight for a transformer's own computation (§3 Decision 7); it is the
 door this ADR builds and does not walk through.
 
+> **Security amendment appended (2026-09-02)** — see the last section (SA-1…SA-6): model-written code runs on an ephemeral EVM state under a gas ceiling in a confined process; every transformer declares input/output bounds; uploaded inputs and the DSL DA election are bounded and authenticated; a `kind` with no published manifest is not storable; task graphs are never executed here.
+
 ## 1. The line, and why it has to be drawn
 
 ADR-0077's scope is exactly this chain of objects:
@@ -412,3 +414,35 @@ and the GLB holding the megabytes.
 
 This is ADR-0078; ADR-0077 is the last on this branch. A concurrent claimant renumbers the later
 writer, per ADR-0036 Decision 5.
+
+## Security amendment (2026-09-02) — hardening before the kinds are built
+
+**SA-1 — Executing model-written code is the largest privilege in the lineage (ADR-0079 §1), and
+the in-tree EVM is not exempt.** `contract` / `code` under `evm/v1` runs model-written initcode: on
+an ephemeral, isolated state with a gas ceiling from the transformer manifest, in a separate process
+under ADR-0079 Decision 5's confinement, never against the chain's EVM state and never inside the
+node process. The gas ceiling and the state-fixture hash are part of `transformer_id`'s manifest.
+
+**SA-2 — Every transformer declares input and output bounds, enforced before it runs.** A DSL is
+attacker-shaped — it is the model's answer to a stranger's prompt — and a procedural or scene DSL
+can encode a mesh that exhausts memory at build time, on the executor and on every consumer who
+verifies. The manifest carries `max_dsl_bytes`, `max_artifact_bytes` and `max_steps` (or the kind's
+own unit); exceeding one is "no object" (Decision 2's parse-failure arm), and X3's drill includes a
+bound-exhausting corpus.
+
+**SA-3 — Transformation inputs named by hash (Decision 10) are bytes a stranger uploads.** The
+gateway bounds their size, holds them only for the job's life, and hands them to the transformer
+through the same confinement; a hash the consumer cannot resolve is a demonstrable gap, not an
+error the chain sees.
+
+**SA-4 — The DSL DA election (Decision 6) is served like an opening**: to bonded requesters only,
+bounded, rate-limited (ADR-0077 SA-2), so opting a DSL in cannot make the executor a public file
+server.
+
+**SA-5 — A derivation is refused for a `kind` whose transformer manifest is not published in the
+tree at the object's `transformer_id`.** A consumer who cannot fetch the manifest cannot verify, and
+an unverifiable statement should not be storable — Decision 5's promise depends on it.
+
+**SA-6 — `agent` (kind 19) and Decision 10's planning mode produce artifacts only**; ADR-0079
+Decision 8 governs. Nothing in this ADR's tooling executes a task graph, and the drill asserts it
+(ADR-0079 S10).

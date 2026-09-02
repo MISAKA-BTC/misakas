@@ -1,7 +1,13 @@
 # ADR-0027: PALW-S — unilateral fraud proofs; no BFT, no challenge randomness, slash-terminal
 
-Status: **Accepted (architecture).** Operating envelope unchanged: devnet / shadow / zero-credit.
-No slashing is enabled by this ADR; it fixes what a slash may ever rest on.
+Status: **Accepted (architecture); PROMOTED by ADR-0038 from credit machinery to L1 machinery.**
+Operating envelope as written: devnet / shadow / zero-credit. No slashing is enabled by this ADR; it
+fixes what a slash may ever rest on — and that rule is unchanged by the promotion. What changed is
+what a slash *bounds*: on the V2 lineage block production is bonded
+([ADR-0039](0039-palw-only-block-production.md) Decision 6), so the aggregate-leverage half of
+§4's `max_leverage ≤ 1.0` is enforced per bond by
+[ADR-0042](0042-palw-mainnet-candidate-ruleset.md) Decision 6 (`reserved_exposure`), not by a
+per-job credit price.
 Date: 2026-08-15
 Relates to: ADR-0026 (v2 verification architecture — amended here in §3/§4/§5),
 [`misaka-palw-slash-protocol-design-v0.1.md`](../misaka-palw-slash-protocol-design-v0.1.md)

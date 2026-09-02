@@ -11,6 +11,21 @@ Relates to: ADR-0038 Decision D (per-class difficulty domains), ADR-0039 Decisio
 refusal), `consensus/core/src/palw_state_v2.rs`, `consensus/core/src/palw_admission_v2.rs`,
 `consensus/core/src/palw_mode_v2.rs`, threat model rows H3 and "Per-class DAA / lifecycle".
 
+> **Amended by later ADRs (index reconciliation, 2026-09-02).** Decision 3's deferred "automatic
+> share re-allocation" is [ADR-0054](0054-palw-share-follows-production.md) Decision 1 (share
+> follows production; [ADR-0056](0056-palw-permissionless-class-admission-and-share-economy.md)
+> Decision 4's competing walk was withdrawn in its favour), and ADR-0056 adds registration
+> exposure, permissionless admission and reclaim on the same table. [ADR-0058](0058-palw-merged-work-is-counted.md)
+> makes merged (mergeset) work count toward every counter this ADR's budgets read. Decision 1's
+> `pwu_per_inference` is the canonical job's counted step leaves and now also prices a class's
+> attempt-lane seed ([ADR-0076](0076-the-attempt-lanes-seed-is-the-retargets-equilibrium.md)),
+> while `DerivedV1`'s expected-attempts term is drawn once per inference under
+> [ADR-0072](0072-the-ticket-is-the-execution.md) (the nonce sweep is gone). Decision 2's
+> block-denominated budget stands; its known gap — a class registered mid-epoch has no attempt-lane
+> budget until the next boundary (`ensure_epoch_budgets`) — is kept for state-root compatibility.
+> The Status line's "no shipped preset carries `ConsensusV2`" is the 2026-08-20 state: testnet-11
+> and devnet ship it (`palw_rc_shipped_params`, `devnet_shipped_params`). Map: [`README.md`](README.md).
+
 ## Thesis
 
 Three numbers decide whether many classes can share one chain without collapsing into a
