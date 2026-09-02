@@ -178,6 +178,23 @@ artifact twice — share one mapping; (2) candidate-review nodes drop fleet peer
 `HandleRelayInvsFlow: expected Payload::Block but got IbdCandidateSummary` (seat2 ×7, seat3 ×15,
 pool-slot ×11; zero on Ready nodes).
 
+### Public surface at 02:24 CEST — what a newcomer meets
+
+* **Seeders**: `seeder1`/`seeder3.misakascan.com` answer with `169.58.232.113` and `169.58.39.220`,
+  the two nodes the seeder verifies on this fingerprint. `seeder2`/`seeder4` stay in the shipped
+  list and stay dead. `5.104.81.23` (host C) does not accept inbound P2P and was removed from the
+  join page's fallback list.
+* **Explorer / API / wallet**: `misakascan.com/info/blockdag` reports `misaka-testnet-11` on the new
+  chain; `wallet.misakascan.com` answers. The explorer DB begins at blue score 498 (01:53:41): the
+  filler has no start-hash knob and starts from the tip once its node reports synced, so the first
+  497 blocks of the 01:43–01:53 burst are not indexed. Cosmetic; a backfill needs a filler change.
+* **Newcomer pages** `testnet11-node-operator.md` and `testnet11-join-mining.md` now carry
+  `d38abe44…` / `08e9c8a4…`, the three live class ids, and every archived fingerprint a stale node
+  might still announce (`61af5296`, on `main`).
+* **Cadence at 02:27**: floor #655 → #666 in six minutes, last gaps 33/34/38/13/88/33/8/16 s —
+  about 1.8 blocks/min against the 0.5/min target, still converging 45 min after the empty-chain
+  start (the previous build needed ~40 min to reach 95–119 s gaps). QWEN36: one block (02:04:17).
+
 ### Four stores are per-genesis and must be rotated at every regenesis — one was missed today
 
 | store | where | rotation |
