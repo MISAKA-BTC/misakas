@@ -155,6 +155,15 @@ fn palw_claim_phase_named(phase: &kaspa_consensus_core::palw_state_v2::PalwClaim
         P::PanelBound { bound_daa } => ("panel_bound".to_string(), String::new(), *bound_daa),
         P::ReceiptLicensed { licensed_daa } => ("receipt_licensed".to_string(), String::new(), *licensed_daa),
         P::Final { final_daa } => ("final".to_string(), String::new(), *final_daa),
+        // **ADR-0062 SA-1's phase, and it is NOT a void.** A claim under an open data-availability
+        // accusation has stopped advancing but has lost nothing: the producer may still disclose
+        // the named event and resume, and `resumed` says whether it already has. So it reports its
+        // own name with an EMPTY void reason, beside the phases that are alive, rather than being
+        // folded into `voided` — a consumer reading a provenance must be able to tell "this claim
+        // is being asked a question" from "this claim died", and ADR-0078 Decision 4's whole point
+        // is that the read says which. The DAA is the accusation's, because that is the one the
+        // disclose deadline is derived from.
+        P::DefaultDisputed { accused_daa, .. } => ("default_disputed".to_string(), String::new(), *accused_daa),
         P::Voided { voided_daa, reason } => {
             let reason = match reason {
                 R::BindTimeout => "bind_timeout",
