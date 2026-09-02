@@ -336,3 +336,33 @@ registration through this same gate. And the artifact's `tokenizer_commitment` i
 predates the converter learning to stamp one), which nothing on the chain checks today; the
 job's `tokenizer_id` carries the same zero consistently. Re-converting with the commitment moves
 the artifact digest and is a follow-up, not a blocker.
+
+## 2026-09-02 — certification is a consensus object (ADR-0075), and both model tiers drill the lane
+
+Two of the findings above are now closed, and one premise has moved:
+
+* **The A16 refusal was the legacy class, not the graph.** `a16_execute_for_attempt_v1`'s
+  Decision-F probe fires only for a backend built with `Qwen25A16Backend::new` (no plan) on the
+  v1 profile whose `pre` table declares one node against the two the engine records. The
+  registered class on testnet-11 since Relaunch 5 is `Qwen/Qwen2.5-1.5B/graph-v2`
+  (`qwen25_a16_class_id_v2`), served through `from_registered_profile`, and `execute_free_prompt`
+  runs on it — the worker in the section above already does. What refused an A16 free-prompt
+  claim on 5d was the transition: `FreePromptLaneUncertified`, because the genesis
+  free-prompt-certified set held the floor alone.
+* **QWEN36 has the path now.** `Qwen36Backend::execute_free_prompt` commits the same captured
+  step leg the attempt lane commits, priced by its leaf count; `refutation_with_prompt` carries
+  the caller's prompt into the prover (the split A16 made), so a court can try a Qwen3.6
+  free-prompt claim. The fixture graph drills its free-prompt lane (`rc_free_prompt_evidence_v1`),
+  as does the A16 fixture.
+* **The certified sets are on the chain.** ADR-0075 (`docs/adr/0075-…`) adds two lifecycle
+  objects: `FamilyCertified` carries a drill's evidence and the transition grades it with the
+  shipped court; `ClassLaneCertified` binds a registered class to a lane by its own profile hash
+  and kernel coverage — free-prompt lane: its commitments are admitted; attempt lane: a
+  weightless class is seated at the floor share. The genesis free-prompt set is derived by the
+  same coverage rule and, on 5e, names the floor, the A16 graph-v2 class and the QWEN36 graph-v3
+  class, so the real models take free-prompt claims from genesis; any later model takes the
+  on-chain route with `palw-certify drill|bind` and `misaka-cli palw submit-object`.
+
+Still true: the seat replays from token ids and needs no tokenizer; a Qwen36 worker binary for
+the gateway's two-mode contract does not exist yet (the backend method does), and the artifact's
+`tokenizer_commitment` remains zero and unchecked.

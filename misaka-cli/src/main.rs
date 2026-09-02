@@ -349,6 +349,20 @@ enum PalwCmd {
         #[arg(long, requires = "material_out")]
         capture: Option<std::path::PathBuf>,
     },
+    /// Submit a PALW lifecycle object written by `palw-certify` — the ADR-0075 certification
+    /// objects `FamilyCertified` (a family's drill evidence, graded on chain) and
+    /// `ClassLaneCertified` (a class bound to a chain-certified family) — funded from this key.
+    /// Nothing signs: the court grades the evidence and the fee is the rent. Dry-run unless --yes.
+    SubmitObject {
+        #[command(flatten)]
+        key: KeyArgs,
+        /// The borsh `PalwConsensusObjectV2` file (`palw-certify drill|bind --out`).
+        #[arg(long)]
+        object: std::path::PathBuf,
+        /// Actually broadcast (otherwise a dry-run preview).
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 #[derive(Subcommand, Debug)]
@@ -799,6 +813,7 @@ async fn main() -> std::process::ExitCode {
         Command::Palw(PalwCmd::FpSubmit { tx, yes, material_out, capture }) => {
             palw_fp::submit(&ctx, &tx, yes, material_out.as_deref(), capture.as_deref()).await
         }
+        Command::Palw(PalwCmd::SubmitObject { key, object, yes }) => palw_fp::submit_object(&ctx, &key.source(), &object, yes).await,
         Command::Wallet(WalletCmd::Utxo(UtxoCmd::List { address, key })) => {
             wallet::utxo_list(&ctx, address.as_deref(), &key.source()).await
         }

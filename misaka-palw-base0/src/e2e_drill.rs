@@ -24,8 +24,10 @@
 
 use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
 use kaspa_consensus_core::palw_e2e_adjudicability::{
-    PalwE2eCertificateV1, PalwE2eDrillEvidenceV1, PalwE2eError, PalwE2eFaultVectorV1, certify_e2e_family_v1, table_of_slot_v1,
+    PalwE2eCertificateV1, PalwE2eDrillEvidenceV1, PalwE2eError, PalwE2eFaultVectorV1, PalwE2eFreePromptCertificateV1,
+    PalwE2eFreePromptDrillEvidenceV1, certify_e2e_family_v1, certify_e2e_free_prompt_lane_v1, table_of_slot_v1,
 };
+use kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3;
 use kaspa_consensus_core::palw_step::{PalwShapeProfileV3, PalwStepTableV1, canonical_step_coordinates};
 use kaspa_hashes::Hash64;
 
@@ -383,7 +385,9 @@ pub fn base0_family_id_v1() -> Hash64 {
     Hash64::from_bytes(out)
 }
 
-fn drill_base0_v1() -> Result<PalwE2eCertificateV1, PalwDrillError> {
+/// The floor's own shipped class, resolved the way a node resolves it — the backend every RC
+/// drill of the floor runs on, whichever lane.
+fn floor_fixture_v1() -> Result<(crate::backend::Base0Backend, PalwShapeProfileV3, Hash64), PalwDrillError> {
     use kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2;
 
     let court = PalwCourtParamsV2::new(kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES, 4, 2)
@@ -395,9 +399,11 @@ fn drill_base0_v1() -> Result<PalwE2eCertificateV1, PalwDrillError> {
     let resolved = crate::classes::resolve_class_v1(&court, entry.class_id(), root, &[])
         .map_err(|e| PalwDrillError::Backend { what: "resolve the floor", why: format!("{e:?}") })?;
     let profile = resolved.profile.clone();
-    let backend = crate::backend::Base0Backend::new(resolved);
-    // A fixed anchor, so the certificate is a function of the build rather than of when it ran —
-    // `court_e2e_root` is a consensus identity and a drill that used a clock would move it.
+    Ok((crate::backend::Base0Backend::new(resolved), profile, root))
+}
+
+fn drill_base0_v1() -> Result<PalwE2eCertificateV1, PalwDrillError> {
+    let (backend, profile, root) = floor_fixture_v1()?;
     drill_family_v1(base0_family_id_v1(), &backend, &profile, root, Hash64::from_u64_word(0x0E2E_D8111))
 }
 
@@ -461,7 +467,10 @@ pub fn qwen36_certificate_v1() -> Result<&'static PalwE2eCertificateV1, &'static
     CERT.get_or_init(drill_qwen36_v1).as_ref()
 }
 
-fn drill_qwen36_v1() -> Result<PalwE2eCertificateV1, PalwDrillError> {
+/// The fixture graph the QWEN36 family is drilled on: `qwen36_dev_fixture(4, 8)` under the
+/// registered (graph-v2+) profile — small enough to sweep every leaf, and reaching the same kernels
+/// the 35B class reaches, which is what a family certificate is about.
+fn qwen36_fixture_v1() -> Result<(crate::qwen36_backend::Qwen36Backend, PalwShapeProfileV3, Hash64), PalwDrillError> {
     use kaspa_consensus_core::palw_qwen36_profile::{PalwQwen36GeometryV1, qwen36_profile_v2};
 
     let artifact = std::sync::Arc::new(crate::qwen36::qwen36_dev_fixture(4, 8));
@@ -507,6 +516,11 @@ fn drill_qwen36_v1() -> Result<PalwE2eCertificateV1, PalwDrillError> {
         .map_err(|e| PalwDrillError::Backend { what: "root its own fixture inventory", why: format!("{e:?}") })?
         .root();
     let backend = Qwen36BackendCtor::build(artifact, profile.clone())?;
+    Ok((backend, profile, root))
+}
+
+fn drill_qwen36_v1() -> Result<PalwE2eCertificateV1, PalwDrillError> {
+    let (backend, profile, root) = qwen36_fixture_v1()?;
     drill_family_v1(qwen36_family_id_v1(), &backend, &profile, root, Hash64::from_u64_word(0x0E2E_D836))
 }
 
@@ -536,7 +550,9 @@ pub fn a16_certificate_v1() -> Result<&'static PalwE2eCertificateV1, &'static Pa
     CERT.get_or_init(drill_a16_v1).as_ref()
 }
 
-fn drill_a16_v1() -> Result<PalwE2eCertificateV1, PalwDrillError> {
+/// The fixture graph the QWEN25-A16 family is drilled on: a two-layer derived A16 store under the
+/// corrected (graph-v2) profile.
+fn a16_fixture_v1() -> Result<(crate::qwen25_a16_backend::Qwen25A16Backend, PalwShapeProfileV3, Hash64), PalwDrillError> {
     use kaspa_consensus_core::palw_qwen25_profile::{PalwQwen25GeometryV1, qwen25_a16_profile_v2};
 
     let geometry = PalwQwen25GeometryV1 {
@@ -580,7 +596,206 @@ fn drill_a16_v1() -> Result<PalwE2eCertificateV1, PalwDrillError> {
         (4, 2),
     )
     .map_err(|why| PalwDrillError::Backend { what: "serve its own registered graph", why })?;
+    Ok((backend, profile, root))
+}
+
+fn drill_a16_v1() -> Result<PalwE2eCertificateV1, PalwDrillError> {
+    let (backend, profile, root) = a16_fixture_v1()?;
     drill_family_v1(a16_family_id_v1(), &backend, &profile, root, Hash64::from_u64_word(0x0E2E_D825))
+}
+
+// ---------------------------------------------------------------------------------------------
+// ADR-0075: the drills as evidence, and the free-prompt lane of every RC family
+// ---------------------------------------------------------------------------------------------
+
+/// The three families this build ships drills for, by the name their family id hashes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PalwRcFamilyV1 {
+    Base0,
+    Qwen36,
+    Qwen25A16,
+}
+
+impl PalwRcFamilyV1 {
+    pub const ALL: [Self; 3] = [Self::Base0, Self::Qwen36, Self::Qwen25A16];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Base0 => "PALW-BASE-0",
+            Self::Qwen36 => "PALW-QWEN36",
+            Self::Qwen25A16 => "PALW-QWEN25-A16",
+        }
+    }
+
+    pub fn family_id(self) -> Hash64 {
+        family_id_of(self.name())
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "base0" | "palw-base-0" | "floor" => Some(Self::Base0),
+            "qwen36" | "palw-qwen36" => Some(Self::Qwen36),
+            "a16" | "qwen25-a16" | "palw-qwen25-a16" => Some(Self::Qwen25A16),
+            _ => None,
+        }
+    }
+}
+
+/// **The attempt-lane drill of an RC family, as evidence** — the bytes a `FamilyCertified`
+/// object carries (ADR-0075 Decision 1), graded on chain by the same court that grades them here.
+/// Uncached: an export is a one-off; the certificate producers keep their own.
+pub fn rc_attempt_evidence_v1(family: PalwRcFamilyV1) -> Result<PalwE2eDrillEvidenceV1, PalwDrillError> {
+    match family {
+        PalwRcFamilyV1::Base0 => {
+            let (backend, profile, root) = floor_fixture_v1()?;
+            drill_family_evidence_v1(family.family_id(), &backend, &profile, root, Hash64::from_u64_word(0x0E2E_D8111))
+        }
+        PalwRcFamilyV1::Qwen36 => {
+            let (backend, profile, root) = qwen36_fixture_v1()?;
+            drill_family_evidence_v1(family.family_id(), &backend, &profile, root, Hash64::from_u64_word(0x0E2E_D836))
+        }
+        PalwRcFamilyV1::Qwen25A16 => {
+            let (backend, profile, root) = a16_fixture_v1()?;
+            drill_family_evidence_v1(family.family_id(), &backend, &profile, root, Hash64::from_u64_word(0x0E2E_D825))
+        }
+    }
+}
+
+/// The user-chosen prompt each RC family's free-prompt lane is drilled with, and the decode
+/// budget. Not the anchor's prompt: the lane's whole claim is that the court adjudicates the
+/// prompt a USER handed the class. The QWEN36 fixture's context is eight tokens.
+pub fn rc_free_prompt_question_v1(family: PalwRcFamilyV1) -> (Vec<u32>, u32) {
+    match family {
+        PalwRcFamilyV1::Base0 | PalwRcFamilyV1::Qwen25A16 => (vec![3, 5, 8, 13, 21], 2),
+        PalwRcFamilyV1::Qwen36 => (vec![3, 5, 8, 13], 2),
+    }
+}
+
+/// A free-prompt job for a drill: the class is the profile's, the prompt is `ids`, everything
+/// the chain would fill in (anchor, bond, nonce) is a fixed constant so two drills of one family
+/// are one drill.
+pub fn fp_drill_job_v1(profile: &PalwShapeProfileV3, ids: &[u32], decode: u32) -> PalwFreePromptJobV3 {
+    use kaspa_consensus_core::palw_freeprompt_v3::{PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER, PALW_FP_V3_VERSION};
+    use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
+
+    PalwFreePromptJobV3 {
+        version: PALW_FP_V3_VERSION,
+        network_domain: Hash64::from_u64_word(0xD0),
+        class_id: profile.shape_profile_id(),
+        executor_bond: TransactionOutpoint::new(TransactionId::from_u64_word(0xB0), 0),
+        executor_pubkey: vec![0x11; 32],
+        operator_id: Hash64::from_u64_word(0x0B),
+        anchor_block: Hash64::from_u64_word(0xA0),
+        anchor_daa: 1234,
+        job_nonce: [0x5A; 32],
+        tokenizer_id: Hash64::default(),
+        prompt_token_ids_hash: kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(ids),
+        prompt_tokens: ids.len() as u32,
+        decode_token_limit: decode,
+        max_context_tokens: profile.n_ctx,
+        privacy_mode: PALW_FP_PRIVACY_PUBLIC_DA,
+        prompt_mode: PALW_FP_PROMPT_MODE_USER,
+    }
+}
+
+/// **The free-prompt-lane drill of an RC family, as evidence** (ADR-0074 Decision 6, ADR-0075).
+/// Same fixture graph as the attempt lane, a caller's prompt instead of the anchor's.
+pub fn rc_free_prompt_evidence_v1(family: PalwRcFamilyV1) -> Result<PalwE2eFreePromptDrillEvidenceV1, PalwDrillError> {
+    let (ids, decode) = rc_free_prompt_question_v1(family);
+    match family {
+        PalwRcFamilyV1::Base0 => {
+            let (backend, profile, root) = floor_fixture_v1()?;
+            let job = fp_drill_job_v1(&profile, &ids, decode);
+            drill_free_prompt_evidence_v1(family.family_id(), &backend, &profile, root, &job, &ids)
+        }
+        PalwRcFamilyV1::Qwen36 => {
+            let (backend, profile, root) = qwen36_fixture_v1()?;
+            let job = fp_drill_job_v1(&profile, &ids, decode);
+            drill_free_prompt_evidence_v1(family.family_id(), &backend, &profile, root, &job, &ids)
+        }
+        PalwRcFamilyV1::Qwen25A16 => {
+            let (backend, profile, root) = a16_fixture_v1()?;
+            let job = fp_drill_job_v1(&profile, &ids, decode);
+            drill_free_prompt_evidence_v1(family.family_id(), &backend, &profile, root, &job, &ids)
+        }
+    }
+}
+
+/// **A class this build's catalogs can express, by model id** — the floor and the A16 rows live
+/// in `canonical_classes_v1`, the Qwen36 rows in `qwen36_canonical_classes_v1`; a certification
+/// tool must not care which. Rows whose profile does not project (a geometry deeper than the
+/// ladder) are absent, as they are absent from registration.
+pub fn catalog_profile_by_model_id_v1(
+    court: &kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2,
+    model_id: &str,
+) -> Option<PalwShapeProfileV3> {
+    if let Some(entry) = crate::classes::canonical_class_by_model_id_v1(court, model_id) {
+        return Some(entry.profile);
+    }
+    crate::classes::qwen36_canonical_classes_v1().into_iter().find(|row| row.model_id == model_id).and_then(|row| row.profile().ok())
+}
+
+/// Every `(model id, profile)` the catalogs express, both tables.
+pub fn catalog_profiles_v1(court: &kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2) -> Vec<(String, PalwShapeProfileV3)> {
+    let mut out: Vec<(String, PalwShapeProfileV3)> =
+        crate::classes::canonical_classes_v1(court).into_iter().map(|c| (c.model_id.to_string(), c.profile)).collect();
+    for row in crate::classes::qwen36_canonical_classes_v1() {
+        if let Ok(profile) = row.profile() {
+            out.push((row.model_id.to_string(), profile));
+        }
+    }
+    out
+}
+
+/// **Which RC family's drill certifies `profile`'s kernels for `lane`** (ADR-0075 Decision 5, at
+/// the tool's side): the first pinned RC family whose kernel set contains every kernel the profile
+/// reaches, read off the pinned sets rather than by drilling, so a `palw-certify drill --model-id`
+/// knows which fixture to run before running it. `None` means no family this build ships can be
+/// drilled for the graph — a new architecture, which needs a build that serves it (ADR-0069
+/// Decision 2: a certificate is about kernels the court implements).
+pub fn covering_rc_family_v1(
+    profile: &PalwShapeProfileV3,
+    lane: kaspa_consensus_core::palw_state_v2::PalwCertifiedLaneV1,
+) -> Option<PalwRcFamilyV1> {
+    use kaspa_consensus_core::palw_e2e_adjudicability::{palw_rc_certified_families_v1, palw_rc_fp_certified_families_v1};
+    use kaspa_consensus_core::palw_state_v2::PalwCertifiedLaneV1;
+
+    let reachable = kaspa_consensus_core::palw_class_admission_v2::reachable_kernels_v1(profile);
+    let families = match lane {
+        PalwCertifiedLaneV1::Attempt => palw_rc_certified_families_v1(),
+        PalwCertifiedLaneV1::FreePrompt => palw_rc_fp_certified_families_v1(),
+    };
+    PalwRcFamilyV1::ALL
+        .into_iter()
+        .find(|family| families.iter().any(|f| f.family_id == family.family_id() && reachable.is_subset(&f.kernel_ids)))
+}
+
+fn drill_fp_v1(family: PalwRcFamilyV1) -> Result<PalwE2eFreePromptCertificateV1, PalwDrillError> {
+    let evidence = rc_free_prompt_evidence_v1(family)?;
+    certify_e2e_free_prompt_lane_v1(&evidence).map_err(PalwDrillError::Certify)
+}
+
+pub fn base0_fp_certificate_v1() -> Result<&'static PalwE2eFreePromptCertificateV1, &'static PalwDrillError> {
+    static CERT: std::sync::OnceLock<Result<PalwE2eFreePromptCertificateV1, PalwDrillError>> = std::sync::OnceLock::new();
+    CERT.get_or_init(|| drill_fp_v1(PalwRcFamilyV1::Base0)).as_ref()
+}
+
+pub fn qwen36_fp_certificate_v1() -> Result<&'static PalwE2eFreePromptCertificateV1, &'static PalwDrillError> {
+    static CERT: std::sync::OnceLock<Result<PalwE2eFreePromptCertificateV1, PalwDrillError>> = std::sync::OnceLock::new();
+    CERT.get_or_init(|| drill_fp_v1(PalwRcFamilyV1::Qwen36)).as_ref()
+}
+
+pub fn a16_fp_certificate_v1() -> Result<&'static PalwE2eFreePromptCertificateV1, &'static PalwDrillError> {
+    static CERT: std::sync::OnceLock<Result<PalwE2eFreePromptCertificateV1, PalwDrillError>> = std::sync::OnceLock::new();
+    CERT.get_or_init(|| drill_fp_v1(PalwRcFamilyV1::Qwen25A16)).as_ref()
+}
+
+pub fn rc_fp_certificate_v1(family: PalwRcFamilyV1) -> Result<&'static PalwE2eFreePromptCertificateV1, &'static PalwDrillError> {
+    match family {
+        PalwRcFamilyV1::Base0 => base0_fp_certificate_v1(),
+        PalwRcFamilyV1::Qwen36 => qwen36_fp_certificate_v1(),
+        PalwRcFamilyV1::Qwen25A16 => a16_fp_certificate_v1(),
+    }
 }
 
 #[cfg(test)]
@@ -826,8 +1041,11 @@ mod tests {
         // **The RC set's floor entry IS this drill's family** (ADR-0074 Decision 6): the pinned
         // covering, kernel set and drilled class are what the shipped court certified here.
         let rc = palw_rc_fp_certified_families_v1();
-        assert_eq!(rc.len(), 1, "the floor is the one free-prompt-certified family");
-        assert_eq!(rc[0], certificate.family, "the RC entry is pinned from this drill, field for field");
+        let pinned = rc
+            .iter()
+            .find(|f| f.family_id == base0_family_id_v1())
+            .expect("the floor is among the free-prompt-certified families (ADR-0075 Decision 6 adds the model tiers)");
+        assert_eq!(*pinned, certificate.family, "the RC entry is pinned from this drill, field for field");
         let attempt = base0_certificate_v1().expect("the floor's attempt certificate");
         assert_eq!(certificate.family.drilled_class_id, attempt.family.drilled_class_id, "one graph, whichever lane drilled it");
         assert_eq!(certificate.family.kernel_ids, attempt.family.kernel_ids, "…and one kernel set");
@@ -854,6 +1072,380 @@ mod tests {
         assert!(matches!(certify_e2e_free_prompt_lane_v1(&not_own), Err(PalwE2eError::FreePromptQuestionNotItsOwn { .. })));
 
         assert_eq!(palw_rc_court_fp_e2e_root_v1(), palw_court_e2e_root_of_v1(&rc), "the root is the set's");
+    }
+}
+
+#[cfg(test)]
+mod certification_object_tests {
+    use super::*;
+    use kaspa_consensus_core::palw_class_admission_v2::reachable_kernels_v1;
+    use kaspa_consensus_core::palw_e2e_adjudicability::{
+        palw_court_e2e_root_of_v1, palw_rc_court_fp_e2e_root_v1, palw_rc_fp_certified_class_ids_v1, palw_rc_fp_certified_families_v1,
+    };
+    use kaspa_consensus_core::palw_state_v2::{
+        PalwBlockContextV2, PalwBondKeyV2, PalwCertificationEvidenceV1, PalwCertifiedLaneV1, PalwChainStateV2,
+        PalwConsensusObjectV2 as Obj, PalwPwuRuleV2, PalwStateParamsV2, PalwStateV2Error, apply_palw_transition_v2, revert_delta_v2,
+    };
+    use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
+
+    /// **Every RC family's free-prompt lane drills, and the set the network pins is those drills**
+    /// (ADR-0074 Decision 6, ADR-0075 Decision 6) — field for field, root for root.
+    #[test]
+    fn the_rc_free_prompt_set_is_the_one_this_build_drilled() {
+        let committed = palw_rc_fp_certified_families_v1();
+        let mut drilled = Vec::new();
+        for family in PalwRcFamilyV1::ALL {
+            let certificate =
+                rc_fp_certificate_v1(family).unwrap_or_else(|e| panic!("{} drills its free-prompt lane: {e}", family.name()));
+            drilled.push(certificate.family.clone());
+        }
+        assert_eq!(
+            committed.len(),
+            drilled.len(),
+            "the network pins {} free-prompt families and this build drilled {}",
+            committed.len(),
+            drilled.len()
+        );
+        for want in &committed {
+            let got = drilled
+                .iter()
+                .find(|f| f.family_id == want.family_id)
+                .unwrap_or_else(|| panic!("this build drilled no free-prompt family {}", want.family_id));
+            assert_eq!(got, want, "the drilled free-prompt family and the pinned one differ");
+        }
+        assert_eq!(palw_rc_court_fp_e2e_root_v1(), palw_court_e2e_root_of_v1(&drilled), "the free-prompt root is the drilled set's");
+    }
+
+    /// **The classes whose free-prompt lane the RC networks certify at genesis are exactly the
+    /// RC classes some drilled free-prompt family covers** — the rule `ClassLaneCertified`
+    /// applies on chain, applied at build time (ADR-0075 Decision 6).
+    #[test]
+    fn the_rc_free_prompt_classes_are_the_covered_ones() {
+        use kaspa_consensus_core::palw_base0_profile::{PALW_RC_BASE0_GEOMETRY, base0_profile_v1};
+        use kaspa_consensus_core::palw_qwen25_profile::{QWEN25_1_5B_A16, qwen25_a16_profile_v2};
+        use kaspa_consensus_core::palw_qwen36_profile::{QWEN36_35B_A3B, qwen36_geometry_artifact_eps, qwen36_profile_v2};
+
+        let families = palw_rc_fp_certified_families_v1();
+        let ids = palw_rc_fp_certified_class_ids_v1();
+        let floor = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("the floor projects");
+        let hybrid = qwen36_profile_v2(qwen36_geometry_artifact_eps(QWEN36_35B_A3B)).expect("the hybrid projects");
+        let dense = qwen25_a16_profile_v2(QWEN25_1_5B_A16).expect("the dense tier projects");
+        for (name, profile) in [("PALW-BASE-0", &floor), ("PALW-QWEN36 graph-v3", &hybrid), ("PALW-QWEN25-A16 graph-v2", &dense)] {
+            let reachable = reachable_kernels_v1(profile);
+            assert!(
+                families.iter().any(|f| reachable.is_subset(&f.kernel_ids)),
+                "{name}'s kernels are covered by no free-prompt-certified family"
+            );
+            assert!(ids.contains(&profile.shape_profile_id()), "{name} is covered but not in the free-prompt-certified class set");
+        }
+        assert_eq!(ids.len(), 3, "the three RC classes, and nothing else");
+    }
+
+    /// **Every class this build's catalog can express is certifiable without a code change**
+    /// (ADR-0075, the mainnet route): for each catalog row on a registered graph (graph-v2/v3 —
+    /// the v1 rows are the legacy graphs no certified family covers by design), some RC family's
+    /// drill covers its kernels on BOTH lanes, so `palw-certify drill --model-id` always has a
+    /// fixture to run.
+    #[test]
+    fn every_catalog_class_on_a_registered_graph_is_covered_by_a_drillable_family() {
+        use kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2;
+        let court = PalwCourtParamsV2::new(kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES, 4, 2).expect("shipped court");
+        let mut checked = 0;
+        for (model_id, profile) in catalog_profiles_v1(&court) {
+            let legacy = model_id != "PALW-BASE-0/rc" && !model_id.contains("/graph-v");
+            if legacy {
+                continue;
+            }
+            for lane in [PalwCertifiedLaneV1::Attempt, PalwCertifiedLaneV1::FreePrompt] {
+                let family = covering_rc_family_v1(&profile, lane);
+                assert!(family.is_some(), "{model_id} has no drillable RC family for the {lane} lane");
+            }
+            checked += 1;
+        }
+        assert!(checked >= 5, "the floor, the A16 graph-v2 row and the three Qwen36 graph-v3 rows, checked {checked}");
+    }
+
+    /// **A model this build never pinned becomes weight-bearing through the chain alone**: the
+    /// Qwen3.5-2B graph-v3 class (dense, one expert — not in any RC certified set) registers
+    /// weightless, the QWEN36 family's drill is posted, the class is bound, and it holds the floor
+    /// share. The same three transactions a stranger sends on mainnet.
+    #[test]
+    fn a_model_this_build_never_pinned_is_seated_through_the_chain_alone() {
+        use kaspa_consensus_core::palw_e2e_adjudicability::{family_certified_for_weight_v1, palw_rc_certified_families_v1};
+        use kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2;
+
+        let court = PalwCourtParamsV2::new(kaspa_consensus_core::palw_step::PALW_STEP_MAX_LEAVES, 4, 2).expect("shipped court");
+        let entrant_profile = catalog_profile_by_model_id_v1(&court, "Qwen/Qwen3.5-2B/graph-v3").expect("catalog row");
+        let entrant_class = entrant_profile.shape_profile_id();
+        let reachable = reachable_kernels_v1(&entrant_profile);
+        // Not in the build's committed set — that is the premise of the route.
+        let genesis_covers = family_certified_for_weight_v1(
+            kaspa_consensus_core::palw_e2e_adjudicability::palw_rc_court_e2e_root_v1(),
+            &palw_rc_certified_families_v1(),
+            &reachable,
+        );
+        let covering = covering_rc_family_v1(&entrant_profile, PalwCertifiedLaneV1::Attempt).expect("a drillable family");
+        assert_eq!(covering, PalwRcFamilyV1::Qwen36, "the dense Qwen3.5 graph reaches the QWEN36 family's kernels");
+
+        let (a16, a16_profile, a16_root) = a16_fixture_v1().expect("the base class fixture");
+        let base_class = a16_profile.shape_profile_id();
+        let (canonical, _) = a16.job_for_anchor(h(0xF1)).expect("a canonical job");
+        let base_leaves = kaspa_consensus_core::palw_step::step_leaf_count(&a16_profile, &canonical).expect("counts");
+        let params = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, base_class, 4, 1000, 100, 800, 0).unwrap();
+        let floor = params.min_grantable_share_permille();
+        let registrations = vec![
+            Obj::ClassRegistered {
+                class_id: base_class,
+                artifact_root: a16_root,
+                slash_value_per_pwu: 5,
+                pwu_rule: PalwPwuRuleV2::DerivedV1 { pwu_per_inference: base_leaves },
+                initial_target: u128::MAX,
+                share_permille: 1000,
+                activation_daa: 0,
+                admission: None,
+            },
+            Obj::ClassRegistered {
+                class_id: entrant_class,
+                artifact_root: h(0x2B),
+                slash_value_per_pwu: 5,
+                pwu_rule: PalwPwuRuleV2::DerivedV1 { pwu_per_inference: 1_000 },
+                initial_target: u128::MAX,
+                share_permille: 0,
+                activation_daa: 0,
+                admission: None,
+            },
+        ];
+        let (s1, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &params, &at(1, 100, 1), &registrations, None)
+            .expect("a weightless registration is always admissible");
+        assert_eq!(s1.class_share_permille(&entrant_class), Some(0));
+
+        let bind = Obj::ClassLaneCertified {
+            class_id: entrant_class,
+            lane: PalwCertifiedLaneV1::Attempt,
+            profile: Box::new(entrant_profile.clone()),
+        };
+        if genesis_covers.map(|f| f.is_none()).unwrap_or(true) {
+            assert_eq!(
+                apply_palw_transition_v2(&s1, &params, &at(2, 101, 2), std::slice::from_ref(&bind), None).unwrap_err(),
+                PalwStateV2Error::NoCertifiedFamilyCovers { class: entrant_class, lane: PalwCertifiedLaneV1::Attempt },
+                "before the family is posted there is nothing to bind to"
+            );
+        }
+        let evidence = rc_attempt_evidence_v1(covering).expect("the covering family drills");
+        let (s2, _) = apply_palw_transition_v2(
+            &s1,
+            &params,
+            &at(2, 101, 2),
+            &[Obj::FamilyCertified { evidence: Box::new(PalwCertificationEvidenceV1::Attempt(evidence)) }],
+            None,
+        )
+        .expect("the court grades the drill");
+        let (s3, _) = apply_palw_transition_v2(&s2, &params, &at(3, 102, 3), &[bind], None).expect("the entrant is seated");
+        assert_eq!(s3.class_share_permille(&entrant_class), Some(floor), "weight-bearing at the floor");
+        assert_eq!(s3.class_share_permille(&base_class), Some(1000 - floor));
+    }
+
+    fn h(v: u64) -> Hash64 {
+        Hash64::from_u64_word(v)
+    }
+
+    fn at(block: u64, daa: u64, blue: u64) -> PalwBlockContextV2 {
+        PalwBlockContextV2 { block: h(block), daa_score: daa, blue_score: blue, subsidy: 0 }
+    }
+
+    /// **The whole on-chain path, on real drills** (ADR-0075): a family enters the state through
+    /// its evidence and no other way; a class is bound to it by its own profile; a free-prompt
+    /// commitment refused before the binding is admitted after it; and a weightless class whose
+    /// attempt-lane family is certified later is seated at the floor. Every delta reverts.
+    #[test]
+    fn certification_objects_carry_a_family_onto_the_chain_and_seat_its_class() {
+        let (a16, a16_profile, a16_root) = a16_fixture_v1().expect("the A16 fixture serves its registered graph");
+        let (q36, q36_profile, q36_root) = qwen36_fixture_v1().expect("the QWEN36 fixture serves its registered graph");
+        let a16_class = a16_profile.shape_profile_id();
+        let q36_class = q36_profile.shape_profile_id();
+        let bond_outpoint = TransactionOutpoint { transaction_id: TransactionId::from_u64_word(1), index: 0 };
+        let pubkey = vec![7u8; 4];
+
+        let (a16_canonical, _) = a16.job_for_anchor(h(0xF1)).expect("the A16 fixture implies a canonical job");
+        let a16_leaves = kaspa_consensus_core::palw_step::step_leaf_count(&a16_profile, &a16_canonical).expect("counts");
+        let (q36_canonical, _) = q36.job_for_anchor(h(0xF2)).expect("the QWEN36 fixture implies a canonical job");
+        let q36_leaves = kaspa_consensus_core::palw_step::step_leaf_count(&q36_profile, &q36_canonical).expect("counts");
+
+        // A gated network: the genesis set names nobody, so only the chain can certify.
+        let params = PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, a16_class, 4, 1000, 100, 800, 0)
+            .unwrap()
+            .with_fp_quanta(8, 64)
+            .unwrap()
+            .with_fp_certified_classes(std::collections::BTreeSet::new());
+        let floor = params.min_grantable_share_permille();
+        let registrations = vec![
+            Obj::ClassRegistered {
+                class_id: a16_class,
+                artifact_root: a16_root,
+                slash_value_per_pwu: 5,
+                pwu_rule: PalwPwuRuleV2::DerivedV1 { pwu_per_inference: a16_leaves },
+                initial_target: u128::MAX,
+                share_permille: 1000,
+                activation_daa: 0,
+                admission: None,
+            },
+            // Registered WEIGHTLESS: no family covered it when it joined (ADR-0069 Decision 6).
+            Obj::ClassRegistered {
+                class_id: q36_class,
+                artifact_root: q36_root,
+                slash_value_per_pwu: 5,
+                pwu_rule: PalwPwuRuleV2::DerivedV1 { pwu_per_inference: q36_leaves },
+                initial_target: u128::MAX,
+                share_permille: 0,
+                activation_daa: 0,
+                admission: None,
+            },
+            Obj::BondRegistered {
+                bond: PalwBondKeyV2(bond_outpoint),
+                pubkey: pubkey.clone(),
+                operator_pubkey: vec![21; 8],
+                collateral: 100_000,
+                payout_payload: h(0x9A11),
+                capable_classes: Default::default(),
+                signature: Vec::new(),
+            },
+        ];
+        let (s1, _) = apply_palw_transition_v2(&PalwChainStateV2::genesis(), &params, &at(1, 100, 1), &registrations, None)
+            .expect("the fixtures register");
+        assert_eq!(s1.class_share_permille(&q36_class), Some(0), "the QWEN36 fixture joined weightless");
+
+        // A real free-prompt run on the A16 fixture, committed the way the chain sees it.
+        let (ids, decode) = rc_free_prompt_question_v1(PalwRcFamilyV1::Qwen25A16);
+        let prompt: Vec<usize> = ids.iter().map(|t| *t as usize).collect();
+        let mut job = fp_drill_job_v1(&a16_profile, &ids, decode);
+        job.executor_bond = bond_outpoint;
+        job.executor_pubkey = pubkey.clone();
+        let run = a16.execute_free_prompt(&job, &prompt).expect("the A16 fixture runs a caller's prompt");
+        let commit = Obj::FreePromptCommitted {
+            claim: h(0xFC),
+            class_id: a16_class,
+            bond: PalwBondKeyV2(bond_outpoint),
+            executor_pubkey: pubkey.clone(),
+            work_leaves: run.facts.step_leaf_count,
+            prompt_token_ids_hash: job.prompt_token_ids_hash,
+            decode_tokens_executed: run.facts.decode_tokens_executed,
+            trace_root: run.outcome.trace_root,
+            output_root: run.outcome.output_root,
+            execution_root: run.outcome.execution_root,
+            trace_chunk_count: run.outcome.trace_chunk_count,
+            trace_retention_daa: 999_999,
+        };
+        assert_eq!(
+            apply_palw_transition_v2(&s1, &params, &at(2, 101, 2), std::slice::from_ref(&commit), None).unwrap_err(),
+            PalwStateV2Error::FreePromptLaneUncertified(a16_class),
+            "before any certification the gate holds"
+        );
+
+        // The family enters through its evidence — and only through evidence that grades.
+        let evidence = rc_free_prompt_evidence_v1(PalwRcFamilyV1::Qwen25A16).expect("the A16 fixture drills its free-prompt lane");
+        let family_object = Obj::FamilyCertified { evidence: Box::new(PalwCertificationEvidenceV1::FreePrompt(evidence.clone())) };
+        let (s2, d2) = apply_palw_transition_v2(&s1, &params, &at(2, 101, 2), std::slice::from_ref(&family_object), None)
+            .expect("the court grades the drill and records the family");
+        let families = s2.chain_certified_families(PalwCertifiedLaneV1::FreePrompt);
+        assert_eq!(families.len(), 1);
+        assert_eq!(
+            families[0],
+            a16_fp_certificate_v1().expect("the A16 free-prompt certificate").family,
+            "what the chain recorded is what the drill certifies"
+        );
+        assert!(
+            s2.chain_certified_families(PalwCertifiedLaneV1::Attempt).is_empty(),
+            "a free-prompt drill certifies the free-prompt lane only"
+        );
+        assert_eq!(revert_delta_v2(&s2, &d2, &params).unwrap().state_root(), s1.state_root(), "the certification delta reverts");
+        assert!(matches!(
+            apply_palw_transition_v2(&s2, &params, &at(3, 102, 3), &[family_object], None),
+            Err(PalwStateV2Error::FamilyAlreadyCertified { lane: PalwCertifiedLaneV1::FreePrompt, .. })
+        ));
+        let mut tampered = evidence.clone();
+        let first = tampered.evidence.vectors.first_mut().expect("the drill planted a fault");
+        first.guilty = first.honest.clone();
+        assert!(
+            matches!(
+                apply_palw_transition_v2(
+                    &s2,
+                    &params,
+                    &at(3, 102, 3),
+                    &[Obj::FamilyCertified { evidence: Box::new(PalwCertificationEvidenceV1::FreePrompt(tampered)) }],
+                    None
+                ),
+                Err(PalwStateV2Error::CertificationRefused { lane: PalwCertifiedLaneV1::FreePrompt, .. })
+            ),
+            "evidence whose guilty run is an honest one certifies nothing"
+        );
+
+        // The class is bound by its own profile: another class's profile, or a lane no family
+        // covers, is refused.
+        let bind = |class_id: Hash64, lane: PalwCertifiedLaneV1, profile: &PalwShapeProfileV3| Obj::ClassLaneCertified {
+            class_id,
+            lane,
+            profile: Box::new(profile.clone()),
+        };
+        assert_eq!(
+            apply_palw_transition_v2(
+                &s2,
+                &params,
+                &at(3, 102, 3),
+                &[bind(q36_class, PalwCertifiedLaneV1::FreePrompt, &a16_profile)],
+                None
+            )
+            .unwrap_err(),
+            PalwStateV2Error::CertificationProfileIsNotTheClass { class: q36_class, derived: a16_class }
+        );
+        assert_eq!(
+            apply_palw_transition_v2(
+                &s2,
+                &params,
+                &at(3, 102, 3),
+                &[bind(q36_class, PalwCertifiedLaneV1::FreePrompt, &q36_profile)],
+                None
+            )
+            .unwrap_err(),
+            PalwStateV2Error::NoCertifiedFamilyCovers { class: q36_class, lane: PalwCertifiedLaneV1::FreePrompt },
+            "the A16 family does not reach the QWEN36 kernels"
+        );
+        let (s3, d3) = apply_palw_transition_v2(
+            &s2,
+            &params,
+            &at(3, 102, 3),
+            &[bind(a16_class, PalwCertifiedLaneV1::FreePrompt, &a16_profile)],
+            None,
+        )
+        .expect("the A16 class binds to its own family");
+        assert_eq!(s3.fp_lane_certification(&a16_class).map(|c| c.family_digest), Some(families[0].digest()));
+        assert_eq!(revert_delta_v2(&s3, &d3, &params).unwrap().state_root(), s2.state_root());
+
+        // And now the commitment the gate refused is admitted.
+        let (s4, _) = apply_palw_transition_v2(&s3, &params, &at(4, 103, 4), &[commit], None)
+            .expect("a free-prompt commitment on a chain-certified class enters the state");
+        assert!(s4.claim(&h(0xFC)).is_some());
+
+        // The attempt lane: the weightless QWEN36 class is seated once its family is certified.
+        let attempt = rc_attempt_evidence_v1(PalwRcFamilyV1::Qwen36).expect("the QWEN36 fixture drills its attempt lane");
+        let (s5, _) = apply_palw_transition_v2(
+            &s4,
+            &params,
+            &at(5, 104, 5),
+            &[Obj::FamilyCertified { evidence: Box::new(PalwCertificationEvidenceV1::Attempt(attempt)) }],
+            None,
+        )
+        .expect("the court grades the attempt-lane drill");
+        assert_eq!(s5.chain_certified_families(PalwCertifiedLaneV1::Attempt).len(), 1);
+        let seat = bind(q36_class, PalwCertifiedLaneV1::Attempt, &q36_profile);
+        let (s6, d6) =
+            apply_palw_transition_v2(&s5, &params, &at(6, 105, 6), std::slice::from_ref(&seat), None).expect("the covered class is seated");
+        assert_eq!(s6.class_share_permille(&q36_class), Some(floor), "seated at the minimum grantable share");
+        assert_eq!(s6.class_share_permille(&a16_class), Some(1000 - floor), "the incumbent donated it");
+        assert_eq!(revert_delta_v2(&s6, &d6, &params).unwrap().state_root(), s5.state_root());
+        assert_eq!(
+            apply_palw_transition_v2(&s6, &params, &at(7, 106, 7), &[seat], None).unwrap_err(),
+            PalwStateV2Error::ClassAlreadyWeighted { class: q36_class, share: floor }
+        );
     }
 }
 

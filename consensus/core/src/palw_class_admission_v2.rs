@@ -615,6 +615,21 @@ pub fn verify_class_admission_v2(
     registration: &PalwConsensusObjectV2,
     certified: &[crate::palw_e2e_adjudicability::PalwE2eFamilyV1],
 ) -> Result<PalwClassCatalogEntryV2, PalwClassAdmissionError> {
+    verify_class_admission_v3(bundle, profile, canonical, registration, certified, &[])
+}
+
+/// [`verify_class_admission_v2`] with the chain's own certified families in scope (ADR-0075
+/// Decision 4): `chain_certified` is what `PalwChainStateV2::chain_certified_families(Attempt)`
+/// returns at the block the registration is judged in, and a family there covers a class exactly
+/// as a genesis one does. The v2 form is the same gate with that set empty.
+pub fn verify_class_admission_v3(
+    bundle: &PalwConsensusParamsV2,
+    profile: &PalwShapeProfileV3,
+    canonical: &PalwJobContextV2,
+    registration: &PalwConsensusObjectV2,
+    certified: &[crate::palw_e2e_adjudicability::PalwE2eFamilyV1],
+    chain_certified: &[crate::palw_e2e_adjudicability::PalwE2eFamilyV1],
+) -> Result<PalwClassCatalogEntryV2, PalwClassAdmissionError> {
     let PalwConsensusObjectV2::ClassRegistered { class_id, artifact_root, pwu_rule, share_permille, .. } = registration else {
         return Err(PalwClassAdmissionError::NotARegistration);
     };
@@ -718,8 +733,13 @@ pub fn verify_class_admission_v2(
     // which matters: a gate that read process-global state would be one every test had to arrange
     // and no reader could see the inputs of.
     if *share_permille > 0 {
-        let covered = crate::palw_e2e_adjudicability::family_certified_for_weight_v1(bundle.court_e2e_root, certified, &kernel_ids)
-            .map_err(|e| PalwClassAdmissionError::Profile(e.to_string()))?;
+        let covered = crate::palw_e2e_adjudicability::family_certified_for_weight_v2(
+            bundle.court_e2e_root,
+            certified,
+            chain_certified,
+            &kernel_ids,
+        )
+        .map_err(|e| PalwClassAdmissionError::Profile(e.to_string()))?;
         if covered.is_none() {
             return Err(PalwClassAdmissionError::NotEndToEndCertified { share: *share_permille });
         }

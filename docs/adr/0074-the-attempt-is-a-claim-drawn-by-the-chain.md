@@ -173,3 +173,8 @@ from the pin test in an isolated worktree and handed to the fleet operator befor
 * **Outside this repo:** MISAKA Studio's worker request must carry `prompt_mode` (wire version 4),
   and its rail must pass the class's canonical leaves to `build_fp_commitment_tx`.
 
+* **Decision 6, continued by ADR-0075:** the free-prompt-certified set gains a chain half —
+  `FamilyCertified` / `ClassLaneCertified` objects graded by the court in the transition — and
+  the genesis half is derived by kernel coverage from fixture free-prompt drills of all three RC
+  families, so the real models take free-prompt claims from the 5e genesis and every later model
+  takes the on-chain route (`docs/adr/0075-certification-is-a-consensus-object.md`).

@@ -555,6 +555,25 @@ pub fn family_certified_for_weight_v1(
     Ok(certified.iter().find(|f| reachable.is_subset(&f.kernel_ids)).cloned())
 }
 
+/// **ADR-0075 Decision 4: the same question, asked of the genesis set AND the chain's own.**
+///
+/// The root check binds only `genesis` — that is the set the network committed to at birth. The
+/// families in `chain` are chain history: each entered the state through a `FamilyCertified`
+/// object whose evidence every node graded with this same court, so they need no second
+/// commitment. Genesis is searched first so a class the network already covered keeps the family
+/// it always had.
+pub fn family_certified_for_weight_v2(
+    court_e2e_root: Hash64,
+    genesis: &[PalwE2eFamilyV1],
+    chain: &[PalwE2eFamilyV1],
+    reachable: &BTreeSet<Hash64>,
+) -> Result<Option<PalwE2eFamilyV1>, PalwE2eError> {
+    if let Some(found) = family_certified_for_weight_v1(court_e2e_root, genesis, reachable)? {
+        return Ok(Some(found));
+    }
+    Ok(chain.iter().find(|f| reachable.is_subset(&f.kernel_ids)).cloned())
+}
+
 /// **The `court_e2e_root` the RC networks commit to.**
 ///
 /// Pinned rather than computed at bundle-assembly time, because it is consensus identity and a
@@ -823,31 +842,77 @@ pub fn certify_e2e_free_prompt_lane_v1(
 /// pinned here exactly as the attempt set's is (`e2e_drill` asserts the two agree). QWEN25-A16
 /// and QWEN36 join when their free-prompt paths exist and drill.
 pub fn palw_rc_fp_certified_families_v1() -> Vec<PalwE2eFamilyV1> {
-    let mut out = Vec::with_capacity(1);
+    let full = |gdn: bool, convicted_leaves: u32| PalwE2eCoveringV1 {
+        pre: true,
+        gdn,
+        attn: true,
+        post: true,
+        prefill: true,
+        decode: true,
+        convicted_leaves,
+        malformed_refused: true,
+    };
+    let mut out = Vec::with_capacity(3);
     if let Ok(floor) = crate::palw_base0_profile::base0_profile_v1(crate::palw_base0_profile::PALW_RC_BASE0_GEOMETRY) {
         out.push(PalwE2eFamilyV1 {
             family_id: palw_e2e_family_id_v1("PALW-BASE-0"),
             drilled_class_id: floor.shape_profile_id(),
             kernel_ids: crate::palw_class_admission_v2::reachable_kernels_v1(&floor),
-            covering: PalwE2eCoveringV1 {
-                pre: true,
-                gdn: false,
-                attn: true,
-                post: true,
-                prefill: true,
-                decode: true,
-                convicted_leaves: 6,
-                malformed_refused: true,
-            },
+            covering: full(false, 6),
+        });
+    }
+    // ADR-0075 Decision 6: the two model tiers, drilled on the same fixture graphs their
+    // attempt-lane certificates were drilled on (`rc_free_prompt_evidence_v1` in
+    // `misaka-palw-base0`), with a caller's prompt instead of the anchor's. Pinned from those
+    // drills field for field (`the_rc_free_prompt_set_is_the_one_this_build_drilled`).
+    if let Ok(hybrid) = crate::palw_qwen36_profile::qwen36_profile_v2(crate::palw_qwen36_profile::qwen36_geometry_artifact_eps(
+        crate::palw_qwen36_profile::QWEN36_35B_A3B,
+    )) {
+        out.push(PalwE2eFamilyV1 {
+            family_id: palw_e2e_family_id_v1("PALW-QWEN36"),
+            drilled_class_id: Hash64::from_bytes(QWEN36_DRILLED_CLASS_ID),
+            kernel_ids: crate::palw_class_admission_v2::reachable_kernels_v1(&hybrid),
+            covering: full(true, 8),
+        });
+    }
+    if let Ok(dense) = crate::palw_qwen25_profile::qwen25_a16_profile_v2(crate::palw_qwen25_profile::QWEN25_1_5B_A16) {
+        out.push(PalwE2eFamilyV1 {
+            family_id: palw_e2e_family_id_v1("PALW-QWEN25-A16"),
+            drilled_class_id: Hash64::from_bytes(A16_DRILLED_CLASS_ID),
+            kernel_ids: crate::palw_class_admission_v2::reachable_kernels_v1(&dense),
+            covering: full(false, 6),
         });
     }
     out
 }
 
-/// The class ids whose free-prompt lane is certified — what the state params carry
-/// (ADR-0074 Decision 6).
+/// **The RC classes whose free-prompt lane is certified at genesis** (ADR-0074 Decision 6,
+/// ADR-0075 Decision 6): every RC class some free-prompt-certified family covers — the rule
+/// `ClassLaneCertified` applies on chain, applied to the shipped catalog at build time. The set
+/// is class ids because the free-prompt arm of the transition holds no profile to read kernels
+/// off; the coverage is decided here, once, and re-decided on chain for every later class.
 pub fn palw_rc_fp_certified_class_ids_v1() -> BTreeSet<Hash64> {
-    palw_rc_fp_certified_families_v1().into_iter().map(|f| f.drilled_class_id).collect()
+    let families = palw_rc_fp_certified_families_v1();
+    let mut classes: Vec<crate::palw_step::PalwShapeProfileV3> = Vec::with_capacity(3);
+    if let Ok(floor) = crate::palw_base0_profile::base0_profile_v1(crate::palw_base0_profile::PALW_RC_BASE0_GEOMETRY) {
+        classes.push(floor);
+    }
+    if let Ok(hybrid) = crate::palw_qwen36_profile::qwen36_profile_v2(crate::palw_qwen36_profile::qwen36_geometry_artifact_eps(
+        crate::palw_qwen36_profile::QWEN36_35B_A3B,
+    )) {
+        classes.push(hybrid);
+    }
+    if let Ok(dense) = crate::palw_qwen25_profile::qwen25_a16_profile_v2(crate::palw_qwen25_profile::QWEN25_1_5B_A16) {
+        classes.push(dense);
+    }
+    classes
+        .iter()
+        .filter(|profile| {
+            let reachable = crate::palw_class_admission_v2::reachable_kernels_v1(profile);
+            families.iter().any(|f| reachable.is_subset(&f.kernel_ids))
+        })
+        .map(|profile| profile.shape_profile_id())
+        .collect()
 }
 
 /// The root the free-prompt set commits to, derived from [`palw_rc_fp_certified_families_v1`].

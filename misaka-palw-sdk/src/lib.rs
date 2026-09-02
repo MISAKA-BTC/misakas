@@ -69,6 +69,7 @@ mod tests {
             initial_target: 1,
             registered_class_ids: Vec::new(),
             registered_artifact_roots: Vec::new(),
+            chain_certified_families: Vec::new(),
         }
     }
 

@@ -260,6 +260,7 @@ impl PalwPanelService {
             initial_target: u128::MAX,
             registered_class_ids: Vec::new(),
             registered_artifact_roots: Vec::new(),
+            chain_certified_families: Vec::new(),
         };
         registry
             .sdk()
@@ -729,6 +730,7 @@ impl PalwPanelService {
             slash_value_per_pwu: signed_slash,
             initial_target: signed_target,
             pwu_rule: signed_rule,
+            share_permille: signed_share,
             ..
         } = &unsigned
         else {
@@ -743,7 +745,10 @@ impl PalwPanelService {
                 Some(self.consensus_config.genesis.hash),
             ),
             *class_id,
-            terms.min_grantable_share_permille,
+            // The share the OBJECT carries — the floor for a class some certified family covers,
+            // zero for a weightless entrant (ADR-0069 Decision 6, ADR-0075). Signing the floor
+            // unconditionally refused every weightless registration as "not signed by the bond".
+            *signed_share,
             *activation_daa,
             &bond_key,
             *signed_root,
@@ -3032,6 +3037,8 @@ fn object_name(object: &PalwConsensusObjectV2) -> &'static str {
         PalwConsensusObjectV2::CourtDisclosed { .. } => "CourtDisclosed",
         PalwConsensusObjectV2::CourtVerdictPosted { .. } => "CourtVerdictPosted",
         PalwConsensusObjectV2::CourtClosed { .. } => "CourtClosed",
+        PalwConsensusObjectV2::FamilyCertified { .. } => "FamilyCertified",
+        PalwConsensusObjectV2::ClassLaneCertified { .. } => "ClassLaneCertified",
     }
 }
 

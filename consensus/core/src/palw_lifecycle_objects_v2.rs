@@ -103,7 +103,12 @@ pub fn palw_lifecycle_object_may_ride_v2(object: &PalwConsensusObjectV2) -> Resu
         | PalwConsensusObjectV2::CourtOpened { .. }
         | PalwConsensusObjectV2::CourtClosed { .. }
         | PalwConsensusObjectV2::CourtDisclosed { .. }
-        | PalwConsensusObjectV2::CourtVerdictPosted { .. } => Ok(()),
+        | PalwConsensusObjectV2::CourtVerdictPosted { .. }
+        // ADR-0075: certification rides an ordinary transaction. Neither object carries a
+        // signature because neither needs one — the evidence is graded by the court in the
+        // transition, and the class binding is checked against the class's own profile hash.
+        | PalwConsensusObjectV2::FamilyCertified { .. }
+        | PalwConsensusObjectV2::ClassLaneCertified { .. } => Ok(()),
         // **Audit M-01: a door nobody can authenticate is shut.**
         //
         // `BondRetireRequested { bond }` carried no signature and no owner binding, and a bond key

@@ -4120,6 +4120,8 @@ impl VirtualStateProcessor {
             initial_target: base_target.target,
             registered_class_ids: state.class_ids(),
             registered_artifact_roots: state.class_artifact_roots(),
+            chain_certified_families: state
+                .chain_certified_families(kaspa_consensus_core::palw_state_v2::PalwCertifiedLaneV1::Attempt),
         })
     }
 
@@ -5081,9 +5083,15 @@ impl VirtualStateProcessor {
                     // `court_e2e_root` exists to prevent. `palw_rc_certified_families_v1` derives
                     // the same set from profiles every node already has, and hashes to that root.
                     let certified = kaspa_consensus_core::palw_e2e_adjudicability::palw_rc_certified_families_v1();
-                    let prosecutable = kaspa_consensus_core::palw_e2e_adjudicability::family_certified_for_weight_v1(
+                    // ADR-0075 Decision 4: the chain's own certified families count exactly as
+                    // the genesis ones — an entrant whose family a `FamilyCertified` object
+                    // certified joins at the floor, not weightless.
+                    let chain_certified =
+                        state.chain_certified_families(kaspa_consensus_core::palw_state_v2::PalwCertifiedLaneV1::Attempt);
+                    let prosecutable = kaspa_consensus_core::palw_e2e_adjudicability::family_certified_for_weight_v2(
                         bundle.court_e2e_root,
                         &certified,
+                        &chain_certified,
                         &kaspa_consensus_core::palw_class_admission_v2::reachable_kernels_v1(&carriage.profile),
                     )
                     .map_err(|e| format!("class {class_id}: {e}"))?
@@ -5153,14 +5161,15 @@ impl VirtualStateProcessor {
                     // here rather than quietly granting or refusing weight on its own authority.
                     // The set is filled by the node's boot drill; the boot gate is what makes sure
                     // it agrees with the network's pin before a block is ever validated.
-                    kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v2(
+                    kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v3(
                         bundle,
                         &carriage.profile,
                         &carriage.canonical,
                         object,
                         // The same committed set the share rule above read — see its note on why
-                        // consensus must not read the drilled registry.
+                        // consensus must not read the drilled registry — and the chain's own.
                         &certified,
+                        &chain_certified,
                     )
                     .map_err(|e| format!("class {class_id} is not admissible: {e}"))?;
                 }
@@ -5341,6 +5350,10 @@ impl VirtualStateProcessor {
                     }
                 }
                 Obj::FreePromptCommitted { .. } => {}
+                // ADR-0075: both certification objects are judged entirely by the transition —
+                // the evidence by the court's grader, the class binding by the class's own profile
+                // hash and kernel coverage — and neither needs a signature, a bundle or a store.
+                Obj::FamilyCertified { .. } | Obj::ClassLaneCertified { .. } => {}
             }
         }
         Ok(())
@@ -12242,6 +12255,8 @@ fn palw_object_kind_name(object: &kaspa_consensus_core::palw_state_v2::PalwConse
         O::CourtVerdictPosted { .. } => "CourtVerdictPosted",
         O::ProducerDefaulted { .. } => "ProducerDefaulted",
         O::FreePromptCommitted { .. } => "FreePromptCommitted",
+        O::FamilyCertified { .. } => "FamilyCertified",
+        O::ClassLaneCertified { .. } => "ClassLaneCertified",
     }
 }
 

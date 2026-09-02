@@ -8243,7 +8243,7 @@ mod consensus_params_id_tests {
                 // (`CanonicalClassV1::artifact_root`), so every A16 producer refused its own
                 // artifact and the dense tier made zero blocks on Relaunch 5. Re-pinned to the
                 // inventory root measured over the deployed file. Genesis hash unchanged.
-                "e2b91c16a868440b5cd9d5af42ed88e15399b2181593818cc8bb94fd4e7f1eca",
+                "3135c29d27a4f3deb696ec04cdc15a269df66421eb0988ba709990c8f604f5da",
             ),
             ("simnet", SIMNET_PARAMS, "63238ba10766c824ff6915484829b01eb4fc3c105665a7db2cf6b175bf870dfd"),
             // Re-pinned twice for ADR-0068 Phase 1: first when the drill network armed the
@@ -8263,7 +8263,7 @@ mod consensus_params_id_tests {
             // set; devnet keeps its deliberately widened `max_block_parents: 64`. testnet-11 is
             // untouched because its base already carried the whole set — which is the property
             // that made this safe to apply unconditionally.
-            ("devnet", DEVNET_PARAMS, "3f25063dd317688ee943ac9c1ba70fabe33b5c0fd20857f850d8774ba77ab013"),
+            ("devnet", DEVNET_PARAMS, "6c276e16b9f407dd817a1194ad8f15dc92034bd835a3796e63a9f767b71f27fa"),
         ]
         .into_iter()
         .filter_map(|(name, params, expected)| {

@@ -543,6 +543,71 @@ pub fn qwen36_material_decode_v1(bytes: &[u8]) -> Option<Qwen36RunV1> {
     (end == bytes.len()).then_some(Qwen36RunV1 { logits_rows, generated })
 }
 
+impl Qwen36Backend {
+    /// One refutation at `index`, with the prompt either CARRIED by the caller — a free-prompt
+    /// lane's, whose tokens the user chose, checked against the capture's own commitment — or
+    /// DERIVED from the anchor, the attempt lane's. The split A16 made in its
+    /// `refutation_with_prompt`, for the same reason: a prover that can only re-derive the prompt
+    /// opens nothing on a free-prompt capture, and a refutation with no prompt refutes nothing
+    /// (ADR-0073 Decision 1, ADR-0075).
+    fn refutation_with_prompt(
+        &self,
+        material: &[u8],
+        index: u64,
+        carried: Option<&[u32]>,
+    ) -> Result<kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1, String> {
+        let (binding, tiles, logits_rows, generated, _chunks) =
+            crate::produce::base0_material_decode_v1(material).map_err(|_| "the capture does not decode".to_string())?;
+        if binding.step_leaf_count == 0 || binding.step_leaf_count > kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES {
+            return Err("the binding's leaf count is outside the leg's own cap".to_string());
+        }
+        let coord = kaspa_consensus_core::palw_step::canonical_step_coordinates(&binding.shape_profile, &binding.job_context, index)
+            .ok_or_else(|| format!("leaf {index} is not a main step coordinate"))?;
+        let leaves = qwen36_leaves_by_position(&binding, &tiles);
+        let step_tiles = crate::legs::Base0StepTilesV1 { leaves, tiles };
+
+        let rows_root = kaspa_consensus_core::palw_step_refute::tiled_logits_rows_root_v1(&binding.job_context, &logits_rows)
+            .ok_or_else(|| "the retained rows build no tree".to_string())?;
+        let pin = kaspa_consensus_core::palw_step_refute::PalwDecodeTokenPinV1::TiledV1(
+            kaspa_consensus_core::palw_step_refute::PalwTiledDecodeTokensV1 { rows_root, generated_token_ids: generated },
+        );
+
+        let prompt_token_ids: Vec<u32> = match carried {
+            Some(ids) => {
+                if kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(ids) != binding.job_context.prompt_token_ids_hash {
+                    return Err("the carried prompt is not the one this capture's job context commits to".to_string());
+                }
+                ids.to_vec()
+            }
+            None => {
+                let derived = qwen36_prompt_for_anchor(
+                    binding.job_context.job_id,
+                    self.artifact.shape.vocab,
+                    binding.job_context.declared_prefill_tokens,
+                );
+                let derived_ids: Vec<u32> = derived.iter().map(|t| *t as u32).collect();
+                if kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(&derived_ids) == binding.job_context.prompt_token_ids_hash {
+                    derived_ids
+                } else {
+                    Vec::new()
+                }
+            }
+        };
+
+        crate::legs::base0_refutation_from_capture_v1(
+            &binding.shape_profile.clone(),
+            &binding.job_context.clone(),
+            &step_tiles,
+            binding,
+            coord,
+            prompt_token_ids,
+            Some(pin),
+            None,
+        )
+        .map_err(|e| format!("{e:?}"))
+    }
+}
+
 impl PalwExecutionBackendV1 for Qwen36Backend {
     fn model_id(&self) -> &str {
         &self.model_id
@@ -624,6 +689,77 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         })
     }
 
+    /// **The free-prompt lane, on the registered graph** (ADR-0044, ADR-0074, ADR-0075). The
+    /// caller's tokens ARE the prompt — nothing here derives one from an anchor — and the run is
+    /// the same captured step leg the attempt lane commits, priced by its own leaf count
+    /// (ADR-0074 Decision 5). Only a backend serving a registered graph can commit it: the
+    /// composite path keeps no capture, and a claim without a step leg is not a claim.
+    fn execute_free_prompt(
+        &self,
+        job: &kaspa_consensus_core::palw_freeprompt_v3::PalwFreePromptJobV3,
+        prompt_tokens: &[usize],
+    ) -> Result<kaspa_consensus_core::palw_backend::PalwFpRunV1, String> {
+        use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, PalwFpRunFactsV3, palw_fp_job_context_v3};
+        use kaspa_consensus_core::palw_freeprompt_v3::PalwFpStopReasonV3;
+
+        let (Some(plan), Some(profile)) = (&self.plan, &self.profile) else {
+            return Err("this backend serves no registered graph, so it cannot commit a free-prompt step leg".to_string());
+        };
+        if job.prompt_tokens as usize != prompt_tokens.len() {
+            return Err(format!("the job declares {} prompt tokens and {} were supplied", job.prompt_tokens, prompt_tokens.len()));
+        }
+        if prompt_tokens.is_empty() {
+            return Err("a job with no prompt tokens is not a job".to_string());
+        }
+        let vocab = self.artifact.shape.vocab;
+        if let Some(bad) = prompt_tokens.iter().find(|t| **t >= vocab) {
+            return Err(format!("token {bad} is outside this class's vocabulary of {vocab}"));
+        }
+
+        let class = PalwFpClassFactsV3 {
+            model_profile_id: self.shape_id,
+            runtime_manifest_hash: Hash64::default(),
+            runtime_class_id: self.shape_id,
+            shape_profile_id: self.class_profile_id,
+            cu_ruleset_id: Hash64::default(),
+        };
+        let shape = PalwFpRunFactsV3 {
+            decode_tokens_executed: job.decode_token_limit,
+            stop_reason: PalwFpStopReasonV3::ExactBudgetReached,
+            full_logits_trace_root: Hash64::default(),
+            activation_leg_root: Hash64::default(),
+            checkpoint_leg_root: Hash64::default(),
+            step_leg_root: Hash64::default(),
+            step_leaf_count: 0,
+        };
+        let ctx = palw_fp_job_context_v3(job, &class, &shape, &self.network_id).map_err(|e| format!("{e:?}"))?;
+
+        let run = qwen36_execute_for_attempt_v1(&self.artifact, profile, plan, &ctx, prompt_tokens)?;
+
+        let (checkpoint_leg_root, step_leg_root) = crate::legs::base0_leg_roots_from_binding_v1(&run.binding);
+        let material = crate::produce::base0_material_encode_v1(&run).map_err(|e| e.to_string())?;
+        Ok(kaspa_consensus_core::palw_backend::PalwFpRunV1 {
+            outcome: PalwExecutionOutcomeV1 {
+                trace_root: run.trace_root,
+                output_root: run.output_root,
+                execution_root: run.execution_root,
+                trace_manifest_root: run.trace_manifest_root,
+                trace_chunk_count: run.trace_chunk_count,
+                material,
+            },
+            facts: PalwFpRunFactsV3 {
+                full_logits_trace_root: run.trace_root,
+                activation_leg_root: run.binding.activation_leg_root,
+                checkpoint_leg_root,
+                step_leg_root,
+                // The price (ADR-0074 Decision 5): read off the binding, never declared.
+                step_leaf_count: run.binding.step_leaf_count,
+                ..shape
+            },
+            output_token_ids: run.generated_token_ids,
+        })
+    }
+
     fn verify_material(&self, material: &[u8], claim: PalwClaimRootsV1) -> PalwMaterialVerdictV1 {
         // The family codec first — a captured attempt's material carries its binding, and the
         // seat check rebuilds the legs from it. The legacy rows-and-ids decode stays for the
@@ -699,58 +835,16 @@ impl PalwExecutionBackendV1 for Qwen36Backend {
         material: &[u8],
         index: u64,
     ) -> Result<kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1, String> {
-        let (binding, tiles, logits_rows, generated, _chunks) =
-            crate::produce::base0_material_decode_v1(material).map_err(|_| "the capture does not decode".to_string())?;
-        if binding.step_leaf_count == 0 || binding.step_leaf_count > kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES {
-            return Err("the binding's leaf count is outside the leg's own cap".to_string());
-        }
-        let coord = kaspa_consensus_core::palw_step::canonical_step_coordinates(&binding.shape_profile, &binding.job_context, index)
-            .ok_or_else(|| format!("leaf {index} is not a main step coordinate"))?;
-        let leaves = qwen36_leaves_by_position(&binding, &tiles);
-        let step_tiles = crate::legs::Base0StepTilesV1 { leaves, tiles };
+        self.refutation_with_prompt(material, index, None)
+    }
 
-        // **This class's own pin: the tiled scheme's.** The generated ids are bound through the
-        // rows-tree root — at this family's vocabulary, carrying the rows themselves is exactly
-        // what the tiled scheme exists to avoid.
-        let rows_root = kaspa_consensus_core::palw_step_refute::tiled_logits_rows_root_v1(&binding.job_context, &logits_rows)
-            .ok_or_else(|| "the retained rows build no tree".to_string())?;
-        let pin = kaspa_consensus_core::palw_step_refute::PalwDecodeTokenPinV1::TiledV1(
-            kaspa_consensus_core::palw_step_refute::PalwTiledDecodeTokensV1 { rows_root, generated_token_ids: generated },
-        );
-
-        // **The prompt, re-derived rather than carried** — the attempt lane's prompt is a pure
-        // function of the job's own anchor. A context whose prompt hash does not match the
-        // derivation (a free-prompt lane's, whose tokens the caller chose) gets an empty prompt
-        // instead: the court's hash guard would refuse a wrong one, and an absent one only
-        // narrows which leaves adjudicate.
-        let derived = qwen36_prompt_for_anchor(
-            binding.job_context.job_id,
-            self.artifact.shape.vocab,
-            binding.job_context.declared_prefill_tokens,
-        );
-        let derived_ids: Vec<u32> = derived.iter().map(|t| *t as u32).collect();
-        let prompt_token_ids = if kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2(&derived_ids)
-            == binding.job_context.prompt_token_ids_hash
-        {
-            derived_ids
-        } else {
-            Vec::new()
-        };
-
-        // No anchor, ever: this class registers no state chunk map, its leg holds zero
-        // checkpoints ([`qwen36_checkpoint_profile_v1`]), and the KV history rides as ordinary
-        // step openings — which is also the required set the court derives for it.
-        crate::legs::base0_refutation_from_capture_v1(
-            &binding.shape_profile.clone(),
-            &binding.job_context.clone(),
-            &step_tiles,
-            binding,
-            coord,
-            prompt_token_ids,
-            Some(pin),
-            None,
-        )
-        .map_err(|e| format!("{e:?}"))
+    fn refutation_for_free_prompt_index(
+        &self,
+        material: &[u8],
+        index: u64,
+        prompt_token_ids: &[u32],
+    ) -> Result<kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1, String> {
+        self.refutation_with_prompt(material, index, Some(prompt_token_ids))
     }
 
     fn operand_openings_for(

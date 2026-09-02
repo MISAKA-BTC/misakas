@@ -11,7 +11,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use kaspa_consensus_core::palw_backend::PalwExecutionBackendV1;
-use kaspa_consensus_core::palw_class_admission_v2::{palw_post_genesis_registration_v1, verify_class_admission_v2};
+use kaspa_consensus_core::palw_class_admission_v2::palw_post_genesis_registration_v1;
 use kaspa_consensus_core::palw_mode_v2::{PalwClassCatalogEntryV2, PalwConsensusParamsV2, PalwCourtParamsV2};
 use kaspa_consensus_core::palw_state_v2::{PalwBondKeyV2, PalwConsensusObjectV2, PalwRegistrationTermsV2};
 use kaspa_hashes::Hash64;
@@ -455,7 +455,7 @@ impl PalwClassSdk {
     /// **The admission gate, run BEFORE anything is signed or funded.**
     ///
     /// This builds the exact registration object the chain would judge and asks
-    /// [`verify_class_admission_v2`] — shape validation, both coverage gates, the ladder, the
+    /// [`verify_class_admission_v3`] — shape validation, both coverage gates, the ladder, the
     /// court-cost ceilings, the PWU recount — with placeholder economics, which the gate does not
     /// read. A refusal here costs nothing; the same refusal after submission costs the carrier fee
     /// and, on a wrong pairing, a burned seat. Nothing in [`build_post_genesis_registration`]
@@ -468,6 +468,19 @@ impl PalwClassSdk {
         entry: &PalwClassEntryV1,
         artifact_root: Hash64,
     ) -> Result<PalwClassCatalogEntryV2, String> {
+        self.preflight_admission_with_chain(bundle, entry, artifact_root, &[])
+    }
+
+    /// [`Self::preflight_admission`] with the chain's own certified families in scope (ADR-0075
+    /// Decision 4): `chain_certified` is `PalwRegistrationTermsV2::chain_certified_families`, and a
+    /// family there prices the probe's share exactly as a genesis one does.
+    pub fn preflight_admission_with_chain(
+        &self,
+        bundle: &PalwConsensusParamsV2,
+        entry: &PalwClassEntryV1,
+        artifact_root: Hash64,
+        chain_certified: &[kaspa_consensus_core::palw_e2e_adjudicability::PalwE2eFamilyV1],
+    ) -> Result<PalwClassCatalogEntryV2, String> {
         let canonical = entry.canonical_context();
         // The build's certified families (ADR-0069 Decision 5) — the same set the consensus gate
         // reads, so a preflight that says "this would be admitted" is answering the question the
@@ -478,9 +491,10 @@ impl PalwClassSdk {
         // probe that asked for weight on behalf of an uncertified family would report "refused" for
         // a class that is in fact perfectly registrable — weightless. That refusal reads as "your
         // model cannot join", which is the opposite of what the chain means.
-        let share = if kaspa_consensus_core::palw_e2e_adjudicability::family_certified_for_weight_v1(
+        let share = if kaspa_consensus_core::palw_e2e_adjudicability::family_certified_for_weight_v2(
             bundle.court_e2e_root,
             &certified,
+            chain_certified,
             &kaspa_consensus_core::palw_class_admission_v2::reachable_kernels_v1(&entry.profile),
         )
         .map_err(|e| format!("this node cannot price a registration for {}: {e}", entry.model_id))?
@@ -502,7 +516,15 @@ impl PalwClassSdk {
             Vec::new(),
         )
         .map_err(|e| format!("this build cannot express a registration for {}: {e}", entry.model_id))?;
-        verify_class_admission_v2(bundle, &entry.profile, &canonical, &probe, &certified).map_err(|e| {
+        kaspa_consensus_core::palw_class_admission_v2::verify_class_admission_v3(
+            bundle,
+            &entry.profile,
+            &canonical,
+            &probe,
+            &certified,
+            chain_certified,
+        )
+        .map_err(|e| {
             format!("the {} registration would be refused by the admission gate, so nothing was signed or funded: {e}", entry.model_id)
         })
     }
@@ -523,7 +545,7 @@ impl PalwClassSdk {
         registrant_bond: PalwBondKeyV2,
         signature: Vec<u8>,
     ) -> Result<PalwConsensusObjectV2, String> {
-        self.preflight_admission(bundle, &candidate.entry, candidate.artifact_root)?;
+        self.preflight_admission_with_chain(bundle, &candidate.entry, candidate.artifact_root, &terms.chain_certified_families)?;
         // **The share an entrant may take is a function of its own graph** (ADR-0069 Decisions 5
         // and 6). `terms` carries the chain-wide minimum, which is the right value for a class some
         // end-to-end certified family covers; a class no family covers joins WEIGHTLESS instead,
@@ -533,9 +555,11 @@ impl PalwClassSdk {
         // prosecute you".
         let certified = kaspa_consensus_core::palw_e2e_adjudicability::palw_rc_certified_families_v1();
         let reachable = kaspa_consensus_core::palw_class_admission_v2::reachable_kernels_v1(&candidate.entry.profile);
-        let prosecutable = kaspa_consensus_core::palw_e2e_adjudicability::family_certified_for_weight_v1(
+        // ADR-0075 Decision 4: genesis ∪ chain — the set the processor prices this registration by.
+        let prosecutable = kaspa_consensus_core::palw_e2e_adjudicability::family_certified_for_weight_v2(
             bundle.court_e2e_root,
             &certified,
+            &terms.chain_certified_families,
             &reachable,
         )
         .map_err(|e| format!("this node cannot price a registration for {}: {e}", candidate.entry.model_id))?
@@ -1054,6 +1078,7 @@ mod revision_row_tests {
             initial_target: 1u128,
             min_grantable_share_permille: 1,
             slash_value_per_pwu: 1,
+            chain_certified_families: Vec::new(),
         }
     }
 

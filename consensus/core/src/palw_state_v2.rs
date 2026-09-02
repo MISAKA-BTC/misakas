@@ -205,7 +205,7 @@ use std::collections::{BTreeMap, BTreeSet};
 /// *15 (ADR-0074):* the claim record gains `work_leaves` and `work_id`, the state a derived
 /// work-id index, and free-prompt claims are priced in leaves against the class's own job —
 /// again not schema-neutral, again the number moves.
-pub const PALW_STATE_V2_VERSION: u16 = 15;
+pub const PALW_STATE_V2_VERSION: u16 = 16;
 
 /// **Where a class's receipt-lane target starts** (ADR-0074 follow-up): one draw in two per
 /// quantum, whatever the class's attempt-lane `initial_target` says. See the `ClassRegistered`
@@ -1784,6 +1784,10 @@ pub struct PalwRegistrationTermsV2 {
     /// sibling ledger entry before the second file's turn came. Excluding known roots makes the
     /// pairing unambiguous again.
     pub registered_artifact_roots: Vec<Hash64>,
+    /// ADR-0075 Decision 4/8: the families this chain certified for the attempt lane, so a
+    /// registrant prices its share from genesis ∪ chain exactly as the processor will — a class
+    /// some chain family covers must register at the floor, not weightless.
+    pub chain_certified_families: Vec<crate::palw_e2e_adjudicability::PalwE2eFamilyV1>,
 }
 
 /// **The preimage covers the WHOLE registration, not the five fields it used to.**
@@ -2068,6 +2072,27 @@ pub enum PalwConsensusObjectV2 {
         trace_chunk_count: u32,
         trace_retention_daa: u64,
     },
+    /// **ADR-0075 Decision 1: a drilled family enters the chain's certified set through its own
+    /// evidence.** The transition grades `evidence` with the shipped court's grader
+    /// (`certify_e2e_family_v1` for the attempt lane, `certify_e2e_free_prompt_lane_v1` for the
+    /// free-prompt lane) and records the family it produced under that lane. Nothing else
+    /// vouches: a drill whose planted faults the court cannot convict is refused, not weakened.
+    /// Anyone may carry it — the evidence is objective and the transaction fee is the rent.
+    FamilyCertified {
+        evidence: Box<PalwCertificationEvidenceV1>,
+    },
+    /// **ADR-0075 Decision 5: a class is bound to a certified family by kernel coverage.**
+    /// `profile` must hash to `class_id` (a class id IS its profile's id), and every kernel the
+    /// profile reaches must lie in one family this chain certified for `lane`. Attempt lane: an
+    /// Active class holding no share is seated at the minimum grantable share — ADR-0069
+    /// Decision 6's "earns cadence once some build certifies a backend for it" as an object
+    /// rather than a re-genesis. Free-prompt lane: the class's free-prompt commitments are
+    /// admitted from here on (ADR-0074 Decision 6).
+    ClassLaneCertified {
+        class_id: Hash64,
+        lane: PalwCertifiedLaneV1,
+        profile: Box<crate::palw_step::PalwShapeProfileV3>,
+    },
 }
 
 /// The block's own work slot, as the V3 transition consumes it (ADR-0044): a chain-challenge
@@ -2102,6 +2127,84 @@ struct PalwAttemptOriginV1 {
     carrying_block: BlockHash,
     escrows_reward: bool,
 }
+
+// ---------------------------------------------------------------------------------------------
+// ADR-0075: certification is a consensus object
+// ---------------------------------------------------------------------------------------------
+
+/// The two lanes a family can be certified for (ADR-0075 Decision 1). The attempt lane is
+/// ADR-0069's: a family covering a class's kernels lets the class hold weight. The free-prompt
+/// lane is ADR-0074 Decision 6's: a class takes free-prompt commitments only once a drill has
+/// shown the prompt it is handed reaches the court.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, borsh::BorshSerialize, borsh::BorshDeserialize)]
+#[borsh(use_discriminant = true)]
+pub enum PalwCertifiedLaneV1 {
+    Attempt = 0,
+    FreePrompt = 1,
+}
+
+impl std::fmt::Display for PalwCertifiedLaneV1 {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::Attempt => "attempt",
+            Self::FreePrompt => "free-prompt",
+        })
+    }
+}
+
+/// The evidence a [`PalwConsensusObjectV2::FamilyCertified`] object carries, one variant per
+/// lane. Both are the drill exports ADR-0069 Decision 5 already made readable by anyone; the
+/// transition grades them and records only what the grader returns.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub enum PalwCertificationEvidenceV1 {
+    Attempt(crate::palw_e2e_adjudicability::PalwE2eDrillEvidenceV1),
+    FreePrompt(crate::palw_e2e_adjudicability::PalwE2eFreePromptDrillEvidenceV1),
+}
+
+impl PalwCertificationEvidenceV1 {
+    pub fn lane(&self) -> PalwCertifiedLaneV1 {
+        match self {
+            Self::Attempt(_) => PalwCertifiedLaneV1::Attempt,
+            Self::FreePrompt(_) => PalwCertifiedLaneV1::FreePrompt,
+        }
+    }
+
+    pub fn vector_count(&self) -> usize {
+        match self {
+            Self::Attempt(drill) => drill.vectors.len(),
+            Self::FreePrompt(drill) => drill.evidence.vectors.len(),
+        }
+    }
+
+    /// The family the shipped court's grader produces from this evidence — the ONLY way a
+    /// family is read off a certification object (ADR-0075 Decision 2).
+    pub fn grade(&self) -> Result<crate::palw_e2e_adjudicability::PalwE2eFamilyV1, crate::palw_e2e_adjudicability::PalwE2eError> {
+        Ok(match self {
+            Self::Attempt(drill) => crate::palw_e2e_adjudicability::certify_e2e_family_v1(drill)?.family,
+            Self::FreePrompt(drill) => crate::palw_e2e_adjudicability::certify_e2e_free_prompt_lane_v1(drill)?.family,
+        })
+    }
+}
+
+/// A family the chain certified (ADR-0075 Decision 3): what the court graded, and when.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwCertifiedFamilyStateV2 {
+    pub family: crate::palw_e2e_adjudicability::PalwE2eFamilyV1,
+    pub certified_daa: u64,
+}
+
+/// A class whose free-prompt lane the chain certified (ADR-0075 Decision 5), and the digest of
+/// the chain-certified family that covered its kernels.
+#[derive(Clone, Debug, PartialEq, Eq, borsh::BorshSerialize, borsh::BorshDeserialize)]
+pub struct PalwClassLaneCertificationV2 {
+    pub family_digest: Hash64,
+    pub certified_daa: u64,
+}
+
+/// The most fault vectors one `FamilyCertified` object may carry — the grading work one object
+/// may ask every node to do. The RC drills plant six to eight; a class with more tables than
+/// that has no business on one object.
+pub const PALW_CERTIFICATION_MAX_VECTORS: usize = 32;
 
 // ---------------------------------------------------------------------------------------------
 // Errors
@@ -2256,6 +2359,24 @@ pub enum PalwStateV2Error {
         "free-prompt claim {0} carries a null execution root — the court would have nothing to bind a refutation to,          so this claim could never be convicted of arithmetic fraud (audit C3, free-prompt lane)"
     )]
     UnadjudicableCommitment(Hash64),
+    #[error("the {lane}-lane drill does not certify: {why} (ADR-0075 Decision 2)")]
+    CertificationRefused { lane: PalwCertifiedLaneV1, why: String },
+    #[error("the drill carries {got} fault vectors; a certification object may carry at most {max}")]
+    TooManyDrillVectors { got: usize, max: usize },
+    #[error("family {digest} is already certified on this chain for the {lane} lane")]
+    FamilyAlreadyCertified { lane: PalwCertifiedLaneV1, digest: Hash64 },
+    #[error("the certification names class {class} but carries the profile of {derived} — a class id is its profile's id")]
+    CertificationProfileIsNotTheClass { class: Hash64, derived: Hash64 },
+    #[error("the certification's profile does not validate: {0}")]
+    CertificationProfileInvalid(String),
+    #[error("no family certified on this chain for the {lane} lane covers every kernel class {class} reaches")]
+    NoCertifiedFamilyCovers { class: Hash64, lane: PalwCertifiedLaneV1 },
+    #[error("class {class}'s {lane} lane is already certified on this chain")]
+    ClassLaneAlreadyCertified { class: Hash64, lane: PalwCertifiedLaneV1 },
+    #[error("class {class} already holds {share}‰; an attempt-lane certification only seats a class holding none")]
+    ClassAlreadyWeighted { class: Hash64, share: u16 },
+    #[error("class {class} is not Active, so a certification cannot seat it")]
+    CertificationNeedsActiveClass { class: Hash64 },
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -2321,6 +2442,12 @@ pub struct PalwChainStateV2 {
     /// block being applied is the one that paid them), then refilled by whatever that block
     /// finalizes. Hashed into `state_root`, so a miner cannot pay a queue nobody else has.
     pending_payouts: BTreeMap<Hash64, PalwPayoutV2>,
+    /// ADR-0075 Decision 3: families this chain certified for the attempt lane, by family digest.
+    certified_families: BTreeMap<Hash64, PalwCertifiedFamilyStateV2>,
+    /// ADR-0075 Decision 3: families this chain certified for the free-prompt lane, by digest.
+    fp_certified_families: BTreeMap<Hash64, PalwCertifiedFamilyStateV2>,
+    /// ADR-0075 Decision 5: classes whose free-prompt lane a chain-certified family covers.
+    fp_certified_classes: BTreeMap<Hash64, PalwClassLaneCertificationV2>,
     safe_weight: u128,
     bounded_immature: u128,
     safe_frontier_blue_score: u64,
@@ -2376,6 +2503,9 @@ impl PalwChainStateV2 {
             receipt_epoch_counters: BTreeMap::new(),
             registration_exposure: BTreeMap::new(),
             class_walks: BTreeMap::new(),
+            certified_families: BTreeMap::new(),
+            fp_certified_families: BTreeMap::new(),
+            fp_certified_classes: BTreeMap::new(),
             safe_weight: 0,
             bounded_immature: 0,
             safe_frontier_blue_score: 0,
@@ -2421,6 +2551,30 @@ impl PalwChainStateV2 {
 
     pub fn class(&self, id: &Hash64) -> Option<&PalwClassStateV2> {
         self.classes.get(id)
+    }
+
+    /// ADR-0075: the families this chain certified for `lane`, in digest order — the set the
+    /// gates read alongside the genesis one (`family_certified_for_weight_v2`).
+    pub fn chain_certified_families(&self, lane: PalwCertifiedLaneV1) -> Vec<crate::palw_e2e_adjudicability::PalwE2eFamilyV1> {
+        self.certified_family_records(lane).values().map(|record| record.family.clone()).collect()
+    }
+
+    pub fn certified_family(&self, lane: PalwCertifiedLaneV1, digest: &Hash64) -> Option<&PalwCertifiedFamilyStateV2> {
+        self.certified_family_records(lane).get(digest)
+    }
+
+    fn certified_family_records(&self, lane: PalwCertifiedLaneV1) -> &BTreeMap<Hash64, PalwCertifiedFamilyStateV2> {
+        match lane {
+            PalwCertifiedLaneV1::Attempt => &self.certified_families,
+            PalwCertifiedLaneV1::FreePrompt => &self.fp_certified_families,
+        }
+    }
+
+    /// ADR-0075 Decision 5: the chain's own free-prompt certification of `class`, if any. The
+    /// genesis-frozen set (`PalwStateParamsV2::fp_certified_classes`) is the other half of the
+    /// gate; the free-prompt arm reads both.
+    pub fn fp_lane_certification(&self, class: &Hash64) -> Option<&PalwClassLaneCertificationV2> {
+        self.fp_certified_classes.get(class)
     }
 
     pub fn class_target(&self, id: &Hash64) -> Option<&PalwClassTargetV2> {
@@ -2593,6 +2747,9 @@ impl PalwChainStateV2 {
         state.update(collection_root(b"capabilities", &self.capabilities).as_byte_slice());
         state.update(collection_root(b"claims", &self.claims).as_byte_slice());
         state.update(collection_root(b"pending_payouts", &self.pending_payouts).as_byte_slice());
+        state.update(collection_root(b"certified_families", &self.certified_families).as_byte_slice());
+        state.update(collection_root(b"fp_certified_families", &self.fp_certified_families).as_byte_slice());
+        state.update(collection_root(b"fp_certified_classes", &self.fp_certified_classes).as_byte_slice());
         state.update(collection_root(b"panels", &self.panels).as_byte_slice());
         state.update(collection_root(b"court_sessions", &self.court_sessions).as_byte_slice());
         state.update(collection_root(b"epoch_counters", &self.epoch_counters).as_byte_slice());
@@ -3068,6 +3225,17 @@ pub enum PalwDeltaEntryV2 {
         old: Option<PalwBlockContextV2>,
         new: Option<PalwBlockContextV2>,
     },
+    CertifiedFamily {
+        lane: PalwCertifiedLaneV1,
+        key: Hash64,
+        old: Option<PalwCertifiedFamilyStateV2>,
+        new: Option<PalwCertifiedFamilyStateV2>,
+    },
+    FpCertifiedClass {
+        key: Hash64,
+        old: Option<PalwClassLaneCertificationV2>,
+        new: Option<PalwClassLaneCertificationV2>,
+    },
 }
 
 /// The full effect one block application had on the state, in application order. Applying it to
@@ -3205,6 +3373,26 @@ impl<'a> TransitionBuilder<'a> {
             None => self.state.class_shares.remove(&key),
         };
         self.entries.push(PalwDeltaEntryV2::Share { key, old, new });
+    }
+
+    fn write_certified_family(&mut self, lane: PalwCertifiedLaneV1, key: Hash64, new: Option<PalwCertifiedFamilyStateV2>) {
+        let map = match lane {
+            PalwCertifiedLaneV1::Attempt => &mut self.state.certified_families,
+            PalwCertifiedLaneV1::FreePrompt => &mut self.state.fp_certified_families,
+        };
+        let old = match &new {
+            Some(record) => map.insert(key, record.clone()),
+            None => map.remove(&key),
+        };
+        self.entries.push(PalwDeltaEntryV2::CertifiedFamily { lane, key, old, new });
+    }
+
+    fn write_fp_certified_class(&mut self, key: Hash64, new: Option<PalwClassLaneCertificationV2>) {
+        let old = match &new {
+            Some(record) => self.state.fp_certified_classes.insert(key, record.clone()),
+            None => self.state.fp_certified_classes.remove(&key),
+        };
+        self.entries.push(PalwDeltaEntryV2::FpCertifiedClass { key, old, new });
     }
 
     #[allow(dead_code)] // ADR-0045 Decision 2's boundary derivation is the writer; it lands next.
@@ -5392,6 +5580,97 @@ fn apply_object(
             // lanes from here, against their own censuses.
             builder.write_receipt_target(*class_id, Some(PalwClassTargetV2 { target: PALW_RECEIPT_TARGET_SEED_V1 }));
         }
+        PalwConsensusObjectV2::FamilyCertified { evidence } => {
+            let lane = evidence.lane();
+            let got = evidence.vector_count();
+            if got > PALW_CERTIFICATION_MAX_VECTORS {
+                return Err(PalwStateV2Error::TooManyDrillVectors { got, max: PALW_CERTIFICATION_MAX_VECTORS });
+            }
+            // **The court grades; nothing else vouches** (ADR-0075 Decision 2). The family that
+            // enters the state is the one the shipped grader produced from these vectors, so a
+            // node that could not convict the planted faults never records a family it could
+            // not prosecute — the same seal ADR-0069 put on the compile-time set.
+            let family = evidence.grade().map_err(|e| PalwStateV2Error::CertificationRefused { lane, why: e.to_string() })?;
+            let digest = family.digest();
+            if builder.state.certified_family(lane, &digest).is_some() {
+                return Err(PalwStateV2Error::FamilyAlreadyCertified { lane, digest });
+            }
+            builder.write_certified_family(lane, digest, Some(PalwCertifiedFamilyStateV2 { family, certified_daa: ctx.daa_score }));
+        }
+        PalwConsensusObjectV2::ClassLaneCertified { class_id, lane, profile } => {
+            let record = builder.state.classes.get(class_id).ok_or(PalwStateV2Error::MissingClass(*class_id))?.clone();
+            if !matches!(record.status, PalwClassStatusV2::Active) {
+                return Err(PalwStateV2Error::CertificationNeedsActiveClass { class: *class_id });
+            }
+            // A class id IS its profile's id (`verify_class_admission_v2`), so the profile the
+            // object carries is checkable against the class it names without the state holding
+            // profiles — and the kernels the class reaches are read off that profile, exactly as
+            // the registration gate reads them.
+            profile.validate_shape().map_err(|e| PalwStateV2Error::CertificationProfileInvalid(e.to_string()))?;
+            let derived = profile.shape_profile_id();
+            if derived != *class_id {
+                return Err(PalwStateV2Error::CertificationProfileIsNotTheClass { class: *class_id, derived });
+            }
+            let reachable = crate::palw_class_admission_v2::reachable_kernels_v1(profile);
+            let covering = builder
+                .state
+                .certified_family_records(*lane)
+                .iter()
+                .find(|(_, record)| reachable.is_subset(&record.family.kernel_ids))
+                .map(|(digest, _)| *digest)
+                .ok_or(PalwStateV2Error::NoCertifiedFamilyCovers { class: *class_id, lane: *lane })?;
+            match lane {
+                PalwCertifiedLaneV1::FreePrompt => {
+                    if builder.state.fp_certified_classes.contains_key(class_id) {
+                        return Err(PalwStateV2Error::ClassLaneAlreadyCertified { class: *class_id, lane: *lane });
+                    }
+                    builder.write_fp_certified_class(
+                        *class_id,
+                        Some(PalwClassLaneCertificationV2 { family_digest: covering, certified_daa: ctx.daa_score }),
+                    );
+                }
+                PalwCertifiedLaneV1::Attempt => {
+                    // ADR-0069 Decision 6, as an object: the class registered weightless because
+                    // no build could prosecute it; now one can, and it is seated at the floor the
+                    // registration gate would have required — through the same share table, so
+                    // the incumbents donate by the same largest-remainder rule.
+                    let held = builder.state.class_shares.get(class_id).copied().unwrap_or(0);
+                    if held != 0 {
+                        return Err(PalwStateV2Error::ClassAlreadyWeighted { class: *class_id, share: held });
+                    }
+                    let floor = builder.params.min_grantable_share_permille();
+                    let outstanding: u32 = builder
+                        .state
+                        .classes
+                        .iter()
+                        .filter(|(id, _)| *id != class_id && !builder.state.class_shares.contains_key(*id))
+                        .filter_map(|(_, record)| match record.status {
+                            PalwClassStatusV2::Registered { pending_share_permille, .. } => Some(pending_share_permille as u32),
+                            _ => None,
+                        })
+                        .sum();
+                    let table = granted_share_table_v2(builder.params, &builder.state.class_shares, *class_id, floor)?;
+                    if outstanding > 0 {
+                        let committed =
+                            outstanding.checked_add(floor as u32).ok_or(PalwStateV2Error::Overflow("outstanding pending shares"))?;
+                        if committed > 1000 {
+                            return Err(PalwStateV2Error::PendingSharesExceedTable { outstanding, requested: floor });
+                        }
+                        granted_share_table_v2(
+                            builder.params,
+                            &builder.state.class_shares,
+                            *class_id,
+                            u16::try_from(committed).expect("committed is bounded by 1000 above"),
+                        )?;
+                    }
+                    for (id, share) in table {
+                        if builder.state.class_shares.get(&id).copied() != Some(share) {
+                            builder.write_share(id, Some(share));
+                        }
+                    }
+                }
+            }
+        }
         PalwConsensusObjectV2::ClassFrozen { class_id, certificate } => {
             let record = builder.state.classes.get(class_id).ok_or(PalwStateV2Error::MissingClass(*class_id))?.clone();
             if let PalwClassStatusV2::Frozen { .. } = record.status {
@@ -5687,6 +5966,7 @@ fn apply_object(
             // block.
             if let Some(certified) = &builder.params.fp_certified_classes
                 && !certified.contains(class_id)
+                && !builder.state.fp_certified_classes.contains_key(class_id)
             {
                 return Err(PalwStateV2Error::FreePromptLaneUncertified(*class_id));
             }
@@ -5996,9 +6276,24 @@ fn apply_delta_entry(state: &mut PalwChainStateV2, entry: &PalwDeltaEntryV2, rev
         PalwDeltaEntryV2::Claim { key, old, new } => swap_write!(state.claims, key, old, new),
         PalwDeltaEntryV2::Payout { key, old, new } => swap_write!(state.pending_payouts, key, old, new),
         PalwDeltaEntryV2::Panel { key, old, new } => swap_write!(state.panels, key, old, new),
-        PalwDeltaEntryV2::Court { key, old, new } => swap_write!(state.court_sessions, key, old, new),
-        PalwDeltaEntryV2::Epoch { key, old, new } => swap_write!(state.epoch_counters, key, old, new),
-        PalwDeltaEntryV2::ReceiptEpoch { key, old, new } => swap_write!(state.receipt_epoch_counters, key, old, new),
+        PalwDeltaEntryV2::Court { key, old, new } => {
+            swap_write!(state.court_sessions, key, old, new)
+        }
+        PalwDeltaEntryV2::Epoch { key, old, new } => {
+            swap_write!(state.epoch_counters, key, old, new)
+        }
+        PalwDeltaEntryV2::ReceiptEpoch { key, old, new } => {
+            swap_write!(state.receipt_epoch_counters, key, old, new)
+        }
+        PalwDeltaEntryV2::CertifiedFamily { lane, key, old, new } => match lane {
+            PalwCertifiedLaneV1::Attempt => swap_write!(state.certified_families, key, old, new),
+            PalwCertifiedLaneV1::FreePrompt => {
+                swap_write!(state.fp_certified_families, key, old, new)
+            }
+        },
+        PalwDeltaEntryV2::FpCertifiedClass { key, old, new } => {
+            swap_write!(state.fp_certified_classes, key, old, new)
+        }
         // Launch blockers §8: the retired-claims accumulator. Its own entry rather than a third
         // component of `Weights`, because it moves on a different event (a retirement sweep) than
         // the two that ride together (a maturation).
@@ -6148,6 +6443,9 @@ pub struct PalwStateCarriageV2 {
     /// state whose root does not match the chain's, and a node loading it would find every
     /// subsequent block's coinbase wrong.
     pub pending_payouts: BTreeMap<Hash64, PalwPayoutV2>,
+    pub certified_families: BTreeMap<Hash64, PalwCertifiedFamilyStateV2>,
+    pub fp_certified_families: BTreeMap<Hash64, PalwCertifiedFamilyStateV2>,
+    pub fp_certified_classes: BTreeMap<Hash64, PalwClassLaneCertificationV2>,
     pub panels: BTreeMap<Hash64, PalwPanelStateV2>,
     pub court_sessions: BTreeMap<Hash64, PalwCourtSessionStateV2>,
     pub epoch_counters: BTreeMap<Hash64, PalwEpochCounterV2>,
@@ -6186,6 +6484,9 @@ impl PalwStateCarriageV2 {
             capabilities: state.capabilities.clone(),
             claims: state.claims.clone(),
             pending_payouts: state.pending_payouts.clone(),
+            certified_families: state.certified_families.clone(),
+            fp_certified_families: state.fp_certified_families.clone(),
+            fp_certified_classes: state.fp_certified_classes.clone(),
             panels: state.panels.clone(),
             court_sessions: state.court_sessions.clone(),
             epoch_counters: state.epoch_counters.clone(),
@@ -6239,6 +6540,9 @@ impl PalwStateCarriageV2 {
             capabilities: self.capabilities,
             claims: self.claims,
             pending_payouts: self.pending_payouts,
+            certified_families: self.certified_families,
+            fp_certified_families: self.fp_certified_families,
+            fp_certified_classes: self.fp_certified_classes,
             panels: self.panels,
             court_sessions: self.court_sessions,
             epoch_counters: self.epoch_counters,
@@ -10679,6 +10983,156 @@ pub(crate) mod tests {
     /// bond already backs plus what a commitment would reserve may not exceed collateral × ratio.
     /// At a 500‰ ceiling over 1,000 of collateral, one 300-sompi claim fits and a second does not;
     /// at the default 1000‰ both do. The refusal names the numbers, and nothing was reserved.
+
+    /// ADR-0075: a class the CHAIN certified for the free-prompt lane takes commitments under a
+    /// genesis gate that does not name it — the genesis set and the chain's are one gate — and the
+    /// certification is state: rooted, carried, reverted.
+    #[test]
+    fn a_chain_certified_class_takes_fp_commitments_under_the_genesis_gate() {
+        let genesis = PalwChainStateV2::genesis();
+        let gated = params().with_fp_certified_classes(BTreeSet::new());
+        let (s1, _) = apply(&genesis, &gated, &ctx(1, 100, 1), &register_class_and_bond(), None);
+        assert_eq!(
+            apply_palw_transition_v2(&s1, &gated, &ctx(2, 101, 2), &[fp_commit(0xFC, 60, 3)], None).unwrap_err(),
+            PalwStateV2Error::FreePromptLaneUncertified(h64(1))
+        );
+        let certified = PalwStateDeltaV2 {
+            point: ctx(2, 101, 2),
+            entries: vec![PalwDeltaEntryV2::FpCertifiedClass {
+                key: h64(1),
+                old: None,
+                new: Some(PalwClassLaneCertificationV2 { family_digest: h64(0xFA), certified_daa: 101 }),
+            }],
+        };
+        let s2 = apply_delta_v2(&s1, &certified, &gated).expect("the delta applies");
+        assert_ne!(s2.state_root(), s1.state_root(), "a certification is state, so it is in the root");
+        assert_eq!(revert_delta_v2(&s2, &certified, &gated).unwrap().state_root(), s1.state_root(), "and it reverts");
+        let (s3, _) = apply(&s2, &gated, &ctx(3, 102, 3), &[fp_commit(0xFC, 60, 3)], None);
+        assert!(s3.claim(&h64(0xFC)).is_some(), "the chain's certification opens the lane");
+
+        let carriage = PalwStateCarriageV2::from_state(&s3);
+        let bytes = borsh::to_vec(&carriage).expect("the carriage serializes");
+        let restored: PalwStateCarriageV2 = borsh::from_slice(&bytes).expect("and reads back");
+        let back = restored.into_state(&gated, Some(s3.state_root())).expect("the round trip keeps the root");
+        assert_eq!(back.fp_lane_certification(&h64(1)).map(|c| c.family_digest), Some(h64(0xFA)));
+    }
+
+    /// ADR-0075 Decision 5: the binding object is judged by the class's own profile and the
+    /// chain's families — a profile that is not the class's, or a lane no family covers, is
+    /// refused; a covered class binds once per lane; the attempt lane seats a share-less class
+    /// at the floor, by the same share table a registration uses.
+    #[test]
+    fn a_class_is_bound_to_a_chain_family_by_its_own_profile_and_kernel_coverage() {
+        use crate::palw_base0_profile::{PALW_RC_BASE0_GEOMETRY, base0_profile_v1};
+        use crate::palw_class_admission_v2::reachable_kernels_v1;
+        use crate::palw_e2e_adjudicability::{PalwE2eCoveringV1, PalwE2eFamilyV1, palw_e2e_family_id_v1};
+
+        let profile = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("the floor's profile");
+        let class = profile.shape_profile_id();
+        let p = params();
+        let mut objects = register_class_and_bond();
+        objects.push(PalwConsensusObjectV2::ClassRegistered {
+            class_id: class,
+            artifact_root: h64(12),
+            slash_value_per_pwu: 5,
+            pwu_rule: PalwPwuRuleV2::MaxPerAttempt(160),
+            initial_target: u128::MAX / 2,
+            share_permille: 0,
+            activation_daa: 0,
+            admission: None,
+        });
+        let (s1, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &objects, None);
+        assert_eq!(s1.class_share_permille(&class), Some(0), "registered weightless");
+        let bind = |lane: PalwCertifiedLaneV1| PalwConsensusObjectV2::ClassLaneCertified {
+            class_id: class,
+            lane,
+            profile: Box::new(profile.clone()),
+        };
+
+        assert_eq!(
+            apply_palw_transition_v2(&s1, &p, &ctx(2, 101, 2), &[bind(PalwCertifiedLaneV1::FreePrompt)], None).unwrap_err(),
+            PalwStateV2Error::NoCertifiedFamilyCovers { class, lane: PalwCertifiedLaneV1::FreePrompt },
+            "nothing certified, nothing to bind to"
+        );
+        let wrong = PalwConsensusObjectV2::ClassLaneCertified {
+            class_id: h64(1),
+            lane: PalwCertifiedLaneV1::FreePrompt,
+            profile: Box::new(profile.clone()),
+        };
+        assert_eq!(
+            apply_palw_transition_v2(&s1, &p, &ctx(2, 101, 2), &[wrong], None).unwrap_err(),
+            PalwStateV2Error::CertificationProfileIsNotTheClass { class: h64(1), derived: class },
+            "a profile binds only the class it hashes to"
+        );
+
+        let family = PalwE2eFamilyV1 {
+            family_id: palw_e2e_family_id_v1("TEST-FLOOR"),
+            drilled_class_id: class,
+            kernel_ids: reachable_kernels_v1(&profile),
+            covering: PalwE2eCoveringV1 { convicted_leaves: 6, ..Default::default() },
+        };
+        let digest = family.digest();
+        let record = PalwCertifiedFamilyStateV2 { family, certified_daa: 101 };
+        let delta = PalwStateDeltaV2 {
+            point: ctx(2, 101, 2),
+            entries: vec![
+                PalwDeltaEntryV2::CertifiedFamily {
+                    lane: PalwCertifiedLaneV1::Attempt,
+                    key: digest,
+                    old: None,
+                    new: Some(record.clone()),
+                },
+                PalwDeltaEntryV2::CertifiedFamily { lane: PalwCertifiedLaneV1::FreePrompt, key: digest, old: None, new: Some(record) },
+            ],
+        };
+        let s2 = apply_delta_v2(&s1, &delta, &p).expect("the family delta applies");
+        assert_eq!(s2.chain_certified_families(PalwCertifiedLaneV1::Attempt).len(), 1);
+        assert_eq!(s2.chain_certified_families(PalwCertifiedLaneV1::FreePrompt).len(), 1);
+        assert_eq!(revert_delta_v2(&s2, &delta, &p).unwrap().state_root(), s1.state_root());
+
+        let (s3, _) = apply(&s2, &p, &ctx(3, 102, 3), &[bind(PalwCertifiedLaneV1::FreePrompt)], None);
+        assert_eq!(s3.fp_lane_certification(&class).map(|c| c.family_digest), Some(digest));
+        assert_eq!(
+            apply_palw_transition_v2(&s3, &p, &ctx(4, 103, 4), &[bind(PalwCertifiedLaneV1::FreePrompt)], None).unwrap_err(),
+            PalwStateV2Error::ClassLaneAlreadyCertified { class, lane: PalwCertifiedLaneV1::FreePrompt }
+        );
+
+        let floor = p.min_grantable_share_permille();
+        let (s4, _) = apply(&s3, &p, &ctx(4, 103, 4), &[bind(PalwCertifiedLaneV1::Attempt)], None);
+        assert_eq!(s4.class_share_permille(&class), Some(floor), "seated at the minimum grantable share");
+        assert_eq!(s4.class_share_permille(&h64(1)), Some(1000 - floor), "donated by the incumbent");
+        assert_eq!(
+            apply_palw_transition_v2(&s4, &p, &ctx(5, 104, 5), &[bind(PalwCertifiedLaneV1::Attempt)], None).unwrap_err(),
+            PalwStateV2Error::ClassAlreadyWeighted { class, share: floor }
+        );
+    }
+
+    /// ADR-0075 Decision 2: evidence the court refuses records nothing, and the refusal names the
+    /// lane and the court's own reason.
+    #[test]
+    fn evidence_the_court_refuses_certifies_nothing() {
+        use crate::palw_base0_profile::{PALW_RC_BASE0_GEOMETRY, base0_profile_v1};
+        use crate::palw_e2e_adjudicability::{PalwE2eDrillEvidenceV1, palw_e2e_family_id_v1};
+
+        let profile = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("the floor's profile");
+        let evidence = PalwE2eDrillEvidenceV1 {
+            family_id: palw_e2e_family_id_v1("EMPTY"),
+            profile,
+            artifact_root: h64(9),
+            vectors: Vec::new(),
+            malformed_inputs_refused: 0,
+        };
+        let p = params();
+        let (s1, _) = apply(&PalwChainStateV2::genesis(), &p, &ctx(1, 100, 1), &register_class_and_bond(), None);
+        let object = PalwConsensusObjectV2::FamilyCertified { evidence: Box::new(PalwCertificationEvidenceV1::Attempt(evidence)) };
+        let refused = apply_palw_transition_v2(&s1, &p, &ctx(2, 101, 2), &[object], None).unwrap_err();
+        assert!(
+            matches!(&refused, PalwStateV2Error::CertificationRefused { lane: PalwCertifiedLaneV1::Attempt, why } if why.contains("no faults")),
+            "got {refused:?}"
+        );
+        assert!(s1.chain_certified_families(PalwCertifiedLaneV1::Attempt).is_empty());
+    }
+
     #[test]
     fn fp_a_bond_at_its_exposure_ceiling_is_refused_a_further_claim() {
         let genesis = PalwChainStateV2::genesis();
@@ -10961,6 +11415,8 @@ pub(crate) mod tests {
                     PalwDeltaEntryV2::Weights { .. } => "weights",
                     PalwDeltaEntryV2::Frontier { .. } => "frontier",
                     PalwDeltaEntryV2::LastPoint { .. } => "last_point",
+                    PalwDeltaEntryV2::CertifiedFamily { .. } => "certified_family",
+                    PalwDeltaEntryV2::FpCertifiedClass { .. } => "fp_certified_class",
                 });
             }
         }
@@ -11188,7 +11644,7 @@ pub(crate) mod tests {
             })
         }
         spec_hash(b"misaka-palw/state-v2/state-root/v1", |s| {
-            s.update(&15u16.to_le_bytes()); // version_le(2) = 15, restated from the ADR (ADR-0074: the claim record prices its leaves and holds its work id)
+            s.update(&16u16.to_le_bytes()); // version_le(2) = 16, restated from the ADR (ADR-0075: the chain's own certified families and free-prompt-certified classes)
             s.update(spec_collection_root(b"bonds", &c.bonds).as_byte_slice());
             s.update(spec_collection_root(b"reserved_exposure", &c.reserved_exposure).as_byte_slice());
             s.update(spec_collection_root(b"classes", &c.classes).as_byte_slice());
@@ -11210,6 +11666,9 @@ pub(crate) mod tests {
             s.update(spec_collection_root(b"capabilities", &c.capabilities).as_byte_slice());
             s.update(spec_collection_root(b"claims", &c.claims).as_byte_slice());
             s.update(spec_collection_root(b"pending_payouts", &c.pending_payouts).as_byte_slice());
+            s.update(spec_collection_root(b"certified_families", &c.certified_families).as_byte_slice());
+            s.update(spec_collection_root(b"fp_certified_families", &c.fp_certified_families).as_byte_slice());
+            s.update(spec_collection_root(b"fp_certified_classes", &c.fp_certified_classes).as_byte_slice());
             s.update(spec_collection_root(b"panels", &c.panels).as_byte_slice());
             s.update(spec_collection_root(b"court_sessions", &c.court_sessions).as_byte_slice());
             s.update(spec_collection_root(b"epoch_counters", &c.epoch_counters).as_byte_slice());
@@ -11426,6 +11885,9 @@ pub(crate) mod tests {
             safe_frontier_blue_score: _,
             safe_frontier: _,
             last_point: _,
+            certified_families: _,
+            fp_certified_families: _,
+            fp_certified_classes: _,
         } = &PalwStateCarriageV2::from_state(&full);
     }
 
@@ -11507,16 +11969,16 @@ pub(crate) mod tests {
     /// schema and rides the same number. The empty root moves for the version alone, which is
     /// exactly the pair of signals these two constants exist to separate.
     #[test]
-    fn the_version_15_state_root_golden_vectors() {
+    fn the_version_16_state_root_golden_vectors() {
         assert_eq!(
             PalwChainStateV2::genesis().state_root().to_string(),
-            "da6c2c38d6a5893c74fa2431aff8b3bff4c47fdcf116844b27e44e3a3c04a6b12b6ec5f6faed1d4e02b588cc8a3c120be6be242ccb1fd0780366afc5418936ee",
-            "the empty state's version-15 root moved"
+            "2e2161674299e529326b62deb4228bac5bd3802186f4e229658f6696424a117dff37c08d598f16df274805f579e01f2c1598ba750f521ff5131ece50eeac26b8",
+            "the empty state's version-16 root moved"
         );
         assert_eq!(
             m02_populated_state().state_root().to_string(),
-            "175c0d4d16e075cebd15f4d541785de1fa796c0f7ede8f0cac33de8b42b470e2d574c7b149cb80a4019abc378fedddadfcfc0d308bc2db774be62eb8b8b1e725",
-            "the inhabited state's version-15 root moved"
+            "b45c48b1fbf9f8163ba275b1eb824bb71f36c0ee336f8e6a630a83bc0c7ea26c4ca30222a897e743cb82366269a1a38437297df2c84ed84958ced5fe217c5218",
+            "the inhabited state's version-16 root moved"
         );
     }
 }
