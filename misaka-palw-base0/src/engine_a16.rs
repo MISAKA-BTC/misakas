@@ -977,6 +977,69 @@ pub enum A16PlanErrorV1 {
     /// A declared node is outside this build's served vocabulary. `table` is "pre" / "layer" /
     /// "post"; the reason names the missing piece (kernel, operand, width, arity or dtype).
     UnservedNode { table: &'static str, index: usize, reason: String },
+    /// **ADR-0067 SA-1: the declaration would materialise more than the interpreted path is
+    /// allowed to hold.** A chain-registered profile is a stranger's program, and one token's
+    /// walk commits one row per declared node — so the row widths and the node counts in a
+    /// registration are an allocation the registrant chose. Refused at PLAN time, before a byte
+    /// is allocated, because a ceiling that notices after the allocation is not a ceiling.
+    OverMemoryCeiling { bytes: u64, ceiling: u64 },
+}
+
+/// **The interpreted path's memory ceiling (ADR-0067 SA-1), in bytes of one token's committed
+/// trace.**
+///
+/// What it bounds is exactly what a registration controls: the number of declared nodes and the
+/// width of each one's committed row, times the layers the layer table is walked for. It does not
+/// bound the artifact or the KV cache, because those are sized by the WEIGHTS this operator chose
+/// to hold, not by the stranger who registered the graph.
+///
+/// **64 MiB, and it is a MEASURED number rather than a chosen one.**
+/// `the_interpreter_ceiling_is_derived_from_what_this_build_actually_serves` runs
+/// [`interpreted_trace_bytes_v1`] over every class this build ships and fails if the constant
+/// drifts away from them. What it measures today:
+///
+/// | class          | context | one token's committed trace |
+/// |----------------|---------|-----------------------------|
+/// | BASE-0         | 12      | 182,272 B                   |
+/// | QWEN25-A16     | 16      | 9,384,448 B                 |
+/// | QWEN36         | 8       | 17,638,208 B                |
+/// | QWEN36, stress | 4,096   | 49,034,048 B                |
+///
+/// So the ceiling is 3.8x the largest class this build serves at its registered context, and still
+/// above that same graph stretched to a 4,096-position context no admission gate accepts. The
+/// first shipped value was 1 GiB, which was 60x the largest measured class and 40,000x the largest
+/// gate-accepted profile in the adversarial corpus — a number nothing had produced and nothing
+/// could reach, i.e. a bound with no evidence behind it. The margin is now stated and tested in
+/// both directions: raise a class past it and the derivation test says so, and set the ceiling
+/// somewhere arbitrary and it says that too.
+///
+/// **What actually refuses a hostile profile first, said plainly**, because SA-1 should not be read
+/// as more than it is: on the shipped admission gate the leaf bound and the per-node width checks
+/// throw out every oversized shape the adversarial corpus can generate — 372 of 400, with the
+/// largest gate-ACCEPTED profile costing 26,624 bytes. This ceiling is the second line, and it is
+/// the line that survives a gate whose node counts or row widths are ever loosened. It is checked
+/// after the scalar geometry comparisons (which are free) and before the first allocation, so a
+/// profile that is merely the wrong shape is reported as the wrong shape.
+pub const PALW_INTERPRETER_TRACE_BYTES_CEILING_V1: u64 = 64 << 20;
+
+/// How many bytes one token's committed trace costs under `profile`, counted the way
+/// `forward_token_planned` actually spends them: one `i32` row per declared node, the layer table
+/// once per layer, and `max_kv_len` standing in for a kv-scaled row's longest form.
+///
+/// Saturating throughout: this is called ON adversarial input, so an overflow that wrapped to a
+/// small number would be the exact failure the ceiling exists to prevent.
+pub fn interpreted_trace_bytes_v1(profile: &PalwShapeProfileV3, max_kv_len: u64) -> u64 {
+    let row_elems = |node: &PalwStepNodeV1| -> u64 {
+        match node.out_len {
+            PalwStepOutLenV1::Fixed { elements } => elements as u64,
+            PalwStepOutLenV1::KvScaled { multiplier } => (multiplier as u64).saturating_mul(max_kv_len),
+        }
+    };
+    let table = |nodes: &[PalwStepNodeV1]| -> u64 { nodes.iter().fold(0u64, |acc, n| acc.saturating_add(row_elems(n))) };
+    let elems = table(&profile.pre_nodes)
+        .saturating_add(table(&profile.attn_nodes).saturating_mul(profile.layer_count as u64))
+        .saturating_add(table(&profile.post_nodes));
+    elems.saturating_mul(std::mem::size_of::<i32>() as u64)
 }
 
 /// A node's data input, resolved at plan time.
@@ -1068,6 +1131,20 @@ impl<'a> A16Engine<'a> {
     /// execution will emit exactly one row per declared node, in the declared order, from the
     /// declared operands, because the declaration is the program.
     pub fn plan_from_profile(&self, profile: &PalwShapeProfileV3) -> Result<A16ProfilePlanV1, A16PlanErrorV1> {
+        self.plan_from_profile_within(profile, PALW_INTERPRETER_TRACE_BYTES_CEILING_V1)
+    }
+
+    /// [`Self::plan_from_profile`] under a caller-chosen ceiling — ADR-0067 SA-1.
+    ///
+    /// The ceiling is a parameter so it can be PROVEN to bind: a test that only ever runs at the
+    /// shipped value can show that nothing crashed, which is not the same claim. Node code takes
+    /// the default; the fuzz gate and the ceiling's own test drive it down until it refuses, which
+    /// is the evidence the amendment asks for.
+    pub fn plan_from_profile_within(
+        &self,
+        profile: &PalwShapeProfileV3,
+        ceiling_bytes: u64,
+    ) -> Result<A16ProfilePlanV1, A16PlanErrorV1> {
         let shape = &self.artifact.shape;
         let check = |what: &'static str, p: u64, a: u64| -> Result<(), A16PlanErrorV1> {
             if p != a { Err(A16PlanErrorV1::GeometryMismatch { what, profile: p, artifact: a }) } else { Ok(()) }
@@ -1084,6 +1161,18 @@ impl<'a> A16Engine<'a> {
         check("vocab_size", profile.vocab_size as u64, shape.vocab as u64)?;
         // The eps is an artifact field AND a profile field, and it moves every activation.
         check("rms_eps_q", profile.base0_rms_eps_q as u64, shape.eps_q as u64)?;
+
+        // **The memory ceiling: after the free comparisons above, before the first allocation
+        // below** (ADR-0067 SA-1). Ahead of `plan_table`, which is where bytes are first spent, so
+        // the refusal still lands before the plan materialises anything — and behind the scalar
+        // geometry checks, so a profile that is merely the wrong shape for this artifact is
+        // reported as the wrong shape instead of as an oversized one. The earlier ordering put this
+        // first and made `OverMemoryCeiling` the answer to a question the caller had not asked.
+        // `max_position` is the artifact's own bound on a kv-scaled row.
+        let bytes = interpreted_trace_bytes_v1(profile, shape.max_position as u64);
+        if bytes > ceiling_bytes {
+            return Err(A16PlanErrorV1::OverMemoryCeiling { bytes, ceiling: ceiling_bytes });
+        }
 
         // Each table's terminal width is the next table's input, and both must be the hidden
         // stream: the residual is what flows pre -> layer -> layer -> post. A declaration whose

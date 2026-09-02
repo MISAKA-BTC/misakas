@@ -710,6 +710,38 @@ mod chain_arm_tests {
         assert_eq!(backend.model_id(), "PALW-A16/chain-registered");
     }
 
+    /// **ADR-0067 security amendment SA-4, which is a note rather than a mechanism — recorded here
+    /// because the note is about something not to do, and a thing not to do needs a test or it is
+    /// a memory.**
+    ///
+    /// R-7 stands: nothing in the transition pays a `PalwPanelSeatV2`. An unpaid seat has no income
+    /// to lose, so its whole stake is its bond, and ADR-0065 measured what a post-genesis bond
+    /// costs — 400,000 sompi. Arming chain-registered classes FOR WEIGHT before seats are paid
+    /// therefore leaves the panel as the cheapest thing on the chain to buy: a registrant funds a
+    /// quorum of judges for the price of a few bonds and then judges its own class.
+    ///
+    /// So the amendment's requirement reduces to "arming stays off", and this is that, asserted at
+    /// the only door: every SDK a node builds through the ordinary constructor refuses a
+    /// chain-registered class, and only the deliberate, greppable `with_chain_classes_v1` — which
+    /// exists behind an operator flag and no default — opens it.
+    #[test]
+    fn arming_stays_off_because_an_unpaid_panel_is_the_cheapest_thing_on_the_chain_to_buy() {
+        let (artifact, profile) = class();
+        let canonical = rc_job_context(&profile, 4, 2);
+        let holdings = vec![holding(artifact.clone())];
+        // Every ordinary construction path, including the composed one, starts sealed.
+        for sdk in [
+            PalwClassSdk::builtin_v1(court(), b"misaka-palw-rc".to_vec()),
+            PalwClassSdk::with_lineages(builtin_lineages_v1(), court(), b"misaka-palw-rc".to_vec()),
+        ] {
+            let err = sdk
+                .resolve_chain_registered(profile.shape_profile_id(), artifact.artifact_digest(), &holdings, &profile, &canonical)
+                .map(drop)
+                .unwrap_err();
+            assert!(err.contains("fenced off"), "a default SDK must not serve a stranger's class for weight: {err}");
+        }
+    }
+
     /// **The interpreted backend and the table-style backend agree on the work itself.** Same
     /// artifact, same profile, one constructed as the chain arm would and one as the compiled
     /// table would: a caller's prompt must land on the same execution root and the same answer,

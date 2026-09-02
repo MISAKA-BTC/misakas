@@ -6155,20 +6155,111 @@ pub fn advance_dns_confirmation(
 ///
 /// `leak_after_daa == u64::MAX` disables the leak (no silence can exceed it); that is the
 /// shipped devnet/simnet posture, where drills assume a frozen validator set.
+/// **Where the leak's per-validator table came from — ADR-0066 security amendment SA-1.**
+///
+/// The leak decides QUORUM DENOMINATORS, so two nodes that compute different tables exclude
+/// different validators and the finality overlay partitions along whatever made their tables
+/// differ. The table is built by walking back from the tip over
+/// `DnsParams::stake_score_window_blue_score`, and that walk terminates on
+/// `get_blue_score(chain_block) => break` — a **node-local** fact: an archival node never hits it
+/// and a pruned node hits it at its own pruning point. That is finding F4 exactly, the one this
+/// ADR deleted from the heartbeat lane, and it must not be reintroduced one decision over.
+///
+/// So provenance is a value the view carries and `retains` reads, and the rule is fail closed:
+/// **no verified table ⇒ full denominator ⇒ no leak.** A node that cannot establish the table
+/// finalizes less; it never finalizes something a node with the table would not.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum LeakTableProvenanceV1 {
+    /// This node computed the table itself over a window it could walk in full — the header at
+    /// the window's far edge is one it holds, so nothing in the table depends on where this
+    /// node's pruning point happens to sit.
+    SelfComputed,
+    /// No table this node can stand behind: the walk hit a header this node does not hold before
+    /// it covered the window, or the table arrived from somewhere without an authenticated
+    /// commitment to check it against. The leak computes NOTHING under this — see the type doc.
+    ///
+    /// **This is NOT the ordinary state of a pruned node, and planning a deployment as if it were
+    /// is the mistake this paragraph exists to stop.** A pruned node in steady state holds every
+    /// header above a pruning point that sits far below its tip, so it covers
+    /// `stake_score_window_blue_score` and answers [`Self::SelfComputed`] exactly as an archival
+    /// peer does — which is right, and which means **arming the leak on a pruned fleet leaks
+    /// validators there.** `Unverified` is for the node that genuinely cannot reach the far edge:
+    /// mid-IBD, or a store truncated above the window.
+    ///
+    /// Such a node ought to be able to IMPORT the table under `PruningPointOverlaySnapshot`'s
+    /// trustless gate; that fourth component ADR-0066 Decision 4 budgets for is not built, so it
+    /// stays on the full denominator rather than guessing — conservative, and the direction that
+    /// cannot partition.
+    Unverified,
+}
+
+/// **ADR-0066 SA-1's question, as a pure function of the walk that answers it.**
+///
+/// The leak table is built by iterating the backward chain from the tip and stopping on the first
+/// of two things: a blue score more than `stake_score_window_blue_score` below the tip's (the
+/// window is COVERED — every block the table is defined over was read), or a header this node
+/// cannot read (the walk is TRUNCATED — the table has a hole in it, and a hole silently excludes
+/// validators whose attestations this node cannot see). Running out of chain is the covered case:
+/// on a chain younger than the window, "every block there is" is the same table an archival node
+/// builds.
+///
+/// `walk` yields one entry per chain block from the tip downwards, `Some(blue_score)` for a header
+/// this node holds and `None` for one it does not. It is consumed lazily and abandoned at the
+/// first decisive step, so the caller pays for the prefix and no more.
+///
+/// **Why a walk and not the pruning point.** The obvious proxy — "is the consensus pruning point at
+/// least a window below the tip" — cannot answer this: the pruning point is derived from the chain,
+/// so it is the same number on an archival node and a pruned one, and a store that is short for any
+/// other reason is told it is fine. The divergence SA-1 closes is node-local, so the measurement
+/// has to be node-local too.
+pub fn leak_table_provenance_from_walk_v1(
+    tip_blue_score: u64,
+    stake_score_window_blue_score: u64,
+    walk: impl IntoIterator<Item = Option<u64>>,
+) -> LeakTableProvenanceV1 {
+    for blue_score in walk {
+        let Some(bs) = blue_score else { return LeakTableProvenanceV1::Unverified };
+        if tip_blue_score.saturating_sub(bs) > stake_score_window_blue_score {
+            return LeakTableProvenanceV1::SelfComputed;
+        }
+    }
+    LeakTableProvenanceV1::SelfComputed
+}
+
 #[derive(Copy, Clone, Debug)]
 pub struct InactivityLeakViewV1<'a> {
     /// Youngest attestation anchor DAA per validator, from the SAME contribution set the
     /// numerator is built from ([`last_attestation_daa_by_validator`]). A validator absent
     /// here has not attested within the walked window at all.
+    ///
+    /// **Built through the finality horizon** (SA-2): the builder takes that horizon and keeps the
+    /// youngest anchor at or below it, so a fresh attestation cannot move a baseline until it is
+    /// itself final. There is one builder for this map for exactly that reason.
     pub last_attestation_daa: &'a BTreeMap<Hash64, u64>,
     /// The T_leak of ADR-0060 Decision 4, in DAA units.
     pub leak_after_daa: u64,
+    /// **ADR-0066 SA-3: the leak may never take the denominator below this many validators.**
+    ///
+    /// `DnsParams::min_active_validators`. If applying the leak would drop the retained set below
+    /// it, finality HALTS for that epoch — the denominator is zero, and
+    /// [`crate::vlt::meets_bft_quorum`] is `false` at zero — rather than continuing as a
+    /// small-quorum overlay. ADR-0060 Decision 4 accepted double-finality risk under a long
+    /// partition; it did not accept a two-validator quorum, and a floor that is not a rule is not
+    /// a floor.
+    pub min_retained_validators: u32,
+    /// See [`LeakTableProvenanceV1`]. `Unverified` disables the leak entirely.
+    pub table: LeakTableProvenanceV1,
 }
 
 impl<'a> InactivityLeakViewV1<'a> {
     /// A view that never leaks anyone — byte-identical denominators to the pre-leak protocol.
     pub fn disabled(empty: &'a BTreeMap<Hash64, u64>) -> Self {
-        Self { last_attestation_daa: empty, leak_after_daa: u64::MAX }
+        Self {
+            last_attestation_daa: empty,
+            leak_after_daa: u64::MAX,
+            min_retained_validators: 0,
+            table: LeakTableProvenanceV1::Unverified,
+        }
     }
 
     /// [`Self::disabled`] without a borrow to thread — for fixtures and for callers that have
@@ -6178,25 +6269,94 @@ impl<'a> InactivityLeakViewV1<'a> {
         InactivityLeakViewV1::disabled(EMPTY.get_or_init(BTreeMap::new))
     }
 
+    /// **Is this view capable of excluding anybody?** Both halves are necessary: an armed fence
+    /// (`leak_after_daa != u64::MAX`) and a table this node can stand behind (SA-1). Every rule
+    /// below asks this rather than the duration alone, so "the fence is on" and "the evidence is
+    /// sound" cannot drift into two spellings of one question.
+    pub fn is_armed(&self) -> bool {
+        self.leak_after_daa != u64::MAX && self.table == LeakTableProvenanceV1::SelfComputed
+    }
+
     /// Does `validator` still count toward the denominator at `anchor_daa`, given the freshest
     /// of its attestations and bond activations?
+    ///
+    /// **Monotone with hysteresis (SA-2).** For a fixed table the answer only ever goes from
+    /// retained to excluded as `anchor_daa` grows — silence accumulates, it does not lapse. The
+    /// one thing that moves a baseline back up is a fresh attestation, and the table's builder
+    /// admits an attestation only once it is FINAL, so a validator cannot re-enter the quorum on
+    /// a block of its own choosing: it flaps around the threshold and the denominator does not.
+    ///
+    /// Re-bonding is still a re-entry path, deliberately and at its own price. The bond-activation
+    /// half of the baseline is NOT finality-gated, because it is what keeps a freshly bonded
+    /// validator that has never attested inside its grace window — the leak punishes going silent,
+    /// never arriving. Resetting a baseline that way costs a new bond and its activation delay,
+    /// which is not the cheap per-block swing SA-2 is about.
     pub fn retains(&self, validator: &Hash64, freshest_bond_activation_daa: u64, anchor_daa: u64) -> bool {
+        // SA-1, fail closed: an unverified table excludes nobody. Read before anything else, so
+        // there is no path on which an unverified table can shrink a denominator.
+        if !self.is_armed() {
+            return true;
+        }
         let baseline = self.last_attestation_daa.get(validator).copied().unwrap_or(0).max(freshest_bond_activation_daa);
         anchor_daa.saturating_sub(baseline) <= self.leak_after_daa
     }
 }
 
-/// The leak's evidence: for each validator, the youngest epoch-anchor DAA it contributed a
-/// (signature-verified, bond-active) attestation to. Built from the same
+/// **ADR-0066 SA-3: would applying the leak at this anchor take the denominator below the floor?**
+///
+/// Only the leak's own effect counts. A network that is already below `min_active_validators`
+/// without the leak is a network the rollout gate handles (`DnsRolloutStage::Bootstrap`), and
+/// zeroing its denominator here would change behaviour on chains where the leak is dormant — which
+/// every shipped preset is. So this is `true` only when the ACTIVE set clears the floor and the
+/// RETAINED set does not: the leak, and nothing else, is what would take it under.
+fn leak_would_breach_floor(bonds: &[StakeBondRecord], anchor_daa: u64, leak: InactivityLeakViewV1<'_>) -> bool {
+    if !leak.is_armed() || leak.min_retained_validators == 0 {
+        return false;
+    }
+    let mut active: BTreeSet<Hash64> = BTreeSet::new();
+    let mut retained: BTreeSet<Hash64> = BTreeSet::new();
+    for b in bonds.iter().filter(|b| is_bond_active_at(b, anchor_daa)) {
+        active.insert(b.validator_pubkey_hash);
+        let bond_baseline = freshest_active_bond_activation(bonds, &b.validator_pubkey_hash, anchor_daa);
+        if leak.retains(&b.validator_pubkey_hash, bond_baseline, anchor_daa) {
+            retained.insert(b.validator_pubkey_hash);
+        }
+    }
+    let floor = leak.min_retained_validators as usize;
+    active.len() >= floor && retained.len() < floor
+}
+
+/// The leak's evidence: for each validator, the youngest **final** epoch-anchor DAA it contributed
+/// a (signature-verified, bond-active) attestation to. Built from the same
 /// [`AttestationContribution`] slice the numerator aggregation consumes, so "counted as present"
 /// and "counted as voting" can never drift apart.
+///
+/// **`final_through_daa` is ADR-0066 SA-2's hysteresis, and it belongs HERE rather than at the
+/// read.** An anchor above the horizon is skipped, so the youngest anchor a validator gets credit
+/// for is the youngest one that is already final. Filtering at the read instead would have been
+/// wrong in the direction that matters: this map keeps one number per validator, so discarding a
+/// too-fresh entry at read time would discard the validator's whole history and leak a
+/// continuously-attesting node. Discarding it at BUILD time falls back to the previous final
+/// anchor, which is the number the rule is about.
+///
+/// The effect is the asymmetry SA-2 asks for. Exclusion still follows `t_leak_daa` of silence.
+/// Re-inclusion needs an attestation that has already been buried, so a validator sitting on the
+/// threshold cannot re-enter the quorum on a block of its choosing — by the time its attestation
+/// counts, which block carried it is no longer its to choose.
+///
+/// `u64::MAX` means "everything is final", which is what an unarmed fence passes and what makes
+/// this byte-identical to the pre-amendment table on every network that has not armed the leak.
 pub fn last_attestation_daa_by_validator(
     contributions: &[AttestationContribution],
     epoch_anchor_daa: &BTreeMap<u64, u64>,
+    final_through_daa: u64,
 ) -> BTreeMap<Hash64, u64> {
     let mut last: BTreeMap<Hash64, u64> = BTreeMap::new();
     for c in contributions {
         let Some(&anchor) = epoch_anchor_daa.get(&c.epoch) else { continue };
+        if anchor > final_through_daa {
+            continue;
+        }
         let entry = last.entry(c.validator_id).or_insert(0);
         *entry = (*entry).max(anchor);
     }
@@ -6233,6 +6393,13 @@ pub fn total_active_stake_by_epoch(
     epoch_anchor_daa
         .iter()
         .map(|(&epoch, &anchor_daa)| {
+            // ADR-0066 SA-3: a leak that would take the retained set under the floor halts the
+            // epoch instead of shrinking it. Zero is how this file already spells "no quorum is
+            // reachable here" — `meets_bft_quorum` refuses a zero denominator outright, and
+            // `epoch_credit` earns nothing from one — so the halt needs no second mechanism.
+            if leak_would_breach_floor(bonds, anchor_daa, leak) {
+                return (epoch, 0u128);
+            }
             let total = bonds
                 .iter()
                 .filter(|b| is_bond_active_at(b, anchor_daa))
@@ -6272,6 +6439,12 @@ pub fn total_voting_weight_by_epoch(
     epoch_anchor_daa
         .iter()
         .map(|(&epoch, &anchor_daa)| {
+            // ADR-0066 SA-3, the same floor on the VLT-weighted denominator — see
+            // `total_active_stake_by_epoch`. Both denominators feed `meets_bft_quorum`, so a floor
+            // on only one of them is a floor an operator can route around by arming the other rule.
+            if leak_would_breach_floor(bonds, anchor_daa, leak) {
+                return (epoch, 0u128);
+            }
             // One term per VALIDATOR, never per bond — see `active_bond_total_sompi`. Summing
             // per-bond terms is how the same `C_i` becomes `n` votes.
             let mut seen: BTreeSet<Hash64> = BTreeSet::new();
@@ -11870,7 +12043,14 @@ mod tests {
             (Hash64::from_u64_word(0xB), 200u64),
             (Hash64::from_u64_word(0xC), 300u64),
         ]);
-        let leak = InactivityLeakViewV1 { last_attestation_daa: &last, leak_after_daa: t_leak };
+        let leak = InactivityLeakViewV1 {
+            last_attestation_daa: &last,
+            leak_after_daa: t_leak,
+            // No floor in this case: it is the mechanism's own arithmetic under test, and SA-3's
+            // floor has its own test below.
+            min_retained_validators: 0,
+            table: LeakTableProvenanceV1::SelfComputed,
+        };
         let totals = total_active_stake_by_epoch(&bonds, &epochs, leak);
         // B and C are 19_700+ DAA silent > 5_040: leaked. Only A's 100 remains.
         assert_eq!(totals.get(&9), Some(&100), "the silent two thirds leave the denominator");
@@ -11893,9 +12073,229 @@ mod tests {
 
         // Exactly at the boundary is still retained; one past it is not.
         let edge = BTreeMap::from([(Hash64::from_u64_word(0xA), 20_000u64 - t_leak)]);
-        let leak_edge = InactivityLeakViewV1 { last_attestation_daa: &edge, leak_after_daa: t_leak };
+        let leak_edge = InactivityLeakViewV1 {
+            last_attestation_daa: &edge,
+            leak_after_daa: t_leak,
+            min_retained_validators: 0,
+            table: LeakTableProvenanceV1::SelfComputed,
+        };
         assert!(leak_edge.retains(&Hash64::from_u64_word(0xA), 0, 20_000));
         assert!(!leak_edge.retains(&Hash64::from_u64_word(0xA), 0, 20_001));
+    }
+
+    /// **ADR-0066 SA-1: a table this node cannot stand behind leaks NOBODY.**
+    ///
+    /// The failure this refuses is not hypothetical arithmetic — it is the shape of finding F4,
+    /// which this ADR deleted from the heartbeat lane for exactly the reason it must not
+    /// reintroduce here. The leak's table comes from a walk that ends at the walker's own pruning
+    /// point, so an archival node and a pruned node build different tables from one chain, exclude
+    /// different validators, and disagree about which epochs reached quorum. A finality overlay
+    /// that partitions along `--archival` is not a finality overlay.
+    ///
+    /// Fail closed: no verified table ⇒ full denominator ⇒ no leak. Same bonds, same silence, same
+    /// grace — only the provenance differs, and the denominator does not move.
+    #[test]
+    fn an_unverified_leak_table_computes_no_leak_at_all() {
+        let mut a = stake_bond_record_from_payload(&fixture_bond(), fixture_outpoint());
+        a.amount = 100;
+        a.activation_daa_score = 100;
+        a.validator_pubkey_hash = Hash64::from_u64_word(0xA);
+        let mut b = a.clone();
+        b.validator_pubkey_hash = Hash64::from_u64_word(0xB);
+        let mut c = a.clone();
+        c.validator_pubkey_hash = Hash64::from_u64_word(0xC);
+        let bonds = vec![a, b, c];
+        let epochs = BTreeMap::from([(9u64, 20_000u64)]);
+        let last = BTreeMap::from([
+            (Hash64::from_u64_word(0xA), 19_000u64),
+            (Hash64::from_u64_word(0xB), 200u64),
+            (Hash64::from_u64_word(0xC), 300u64),
+        ]);
+        let view =
+            |table| InactivityLeakViewV1 { last_attestation_daa: &last, leak_after_daa: 5_040, min_retained_validators: 0, table };
+        assert_eq!(
+            total_active_stake_by_epoch(&bonds, &epochs, view(LeakTableProvenanceV1::SelfComputed)).get(&9),
+            Some(&100),
+            "a table this node computed over a window it could walk excludes the silent two"
+        );
+        assert_eq!(
+            total_active_stake_by_epoch(&bonds, &epochs, view(LeakTableProvenanceV1::Unverified)).get(&9),
+            Some(&300),
+            "…and the SAME evidence with no provenance excludes nobody — the pruned node finalizes less, \
+             never something the archival node would not"
+        );
+        assert!(!view(LeakTableProvenanceV1::Unverified).is_armed());
+        assert!(view(LeakTableProvenanceV1::Unverified).retains(&Hash64::from_u64_word(0xB), 0, 20_000));
+    }
+
+    /// **ADR-0066 SA-1, the measurement rather than a proxy for it.**
+    ///
+    /// The first form of this check compared the CONSENSUS pruning point against the tip. That
+    /// number is derived from the chain, so it is identical on an archival node and a pruned one —
+    /// it cannot see the node-local divergence SA-1 exists to close, and on any chain older than
+    /// the window it answers `SelfComputed` on both. Two things follow and both are asserted here:
+    /// a store that is short of the window must come out `Unverified` even though its chain is
+    /// long, and a pruned node that DOES cover the window must come out `SelfComputed` — because
+    /// it computes the same table an archival node does, and "the leak is inert on a pruned fleet"
+    /// was never true and must not be planned around.
+    #[test]
+    fn leak_table_provenance_is_a_property_of_this_nodes_walk_not_of_the_chain() {
+        let window = 1_500u64;
+        let tip_blue = 200_000u64;
+        // A store that reaches past the far edge: covered on the step that crosses it.
+        let covered: Vec<Option<u64>> = (0..=window + 1).map(|d| Some(tip_blue - d)).collect();
+        assert_eq!(
+            leak_table_provenance_from_walk_v1(tip_blue, window, covered.clone()),
+            LeakTableProvenanceV1::SelfComputed,
+            "every header from the tip to past the window's far edge is readable — this is the table"
+        );
+        // The same long chain, with the store running out one block INSIDE the window. The
+        // pruning-point proxy called this SelfComputed; the walk that builds the table breaks here
+        // with a hole, so it is not.
+        let mut truncated: Vec<Option<u64>> = (0..window).map(|d| Some(tip_blue - d)).collect();
+        truncated.push(None);
+        assert_eq!(
+            leak_table_provenance_from_walk_v1(tip_blue, window, truncated),
+            LeakTableProvenanceV1::Unverified,
+            "a header this node does not hold, inside the window, is a hole in the table — fail closed"
+        );
+        // Exactly the far edge and nothing below it: still covered, because the far edge itself is
+        // the deepest block the table is defined over.
+        let to_the_edge: Vec<Option<u64>> = (0..=window).map(|d| Some(tip_blue - d)).collect();
+        assert_eq!(
+            leak_table_provenance_from_walk_v1(tip_blue, window, to_the_edge),
+            LeakTableProvenanceV1::SelfComputed,
+            "the walk that ran out having read the whole window read the whole window"
+        );
+        // A chain younger than the window: the iterator ends, and "every block there is" is the
+        // same table an archival node builds.
+        let young: Vec<Option<u64>> = (0..=30).map(|d| Some(30 - d)).collect();
+        assert_eq!(
+            leak_table_provenance_from_walk_v1(30, window, young),
+            LeakTableProvenanceV1::SelfComputed,
+            "a chain shorter than the window is covered by definition"
+        );
+        // And a node mid-IBD, which is the state `Unverified` is actually for: the first header
+        // below the tip is already missing.
+        assert_eq!(
+            leak_table_provenance_from_walk_v1(tip_blue, window, vec![Some(tip_blue), None]),
+            LeakTableProvenanceV1::Unverified,
+            "a store that is short at the very top leaks nobody"
+        );
+        // The lazy contract the caller relies on: a decided walk must not be drained, because in
+        // the processor each step is a store read.
+        let mut steps = 0usize;
+        let counted = covered.iter().map(|b| {
+            steps += 1;
+            *b
+        });
+        assert_eq!(leak_table_provenance_from_walk_v1(tip_blue, window, counted), LeakTableProvenanceV1::SelfComputed);
+        assert_eq!(steps, window as usize + 2, "the walk stops on the step that decides it, not at the end of the chain");
+    }
+
+    /// **ADR-0066 SA-2: exclusion is monotone, and re-entry waits for finality.**
+    ///
+    /// The attack this closes is a validator sitting on the threshold: it goes silent, the quorum
+    /// shrinks around it, and then it attests on a block of its own choosing and the denominator
+    /// jumps back. Whoever picks that block picks which epochs reached quorum. With the evidence
+    /// gated on finality, the re-entry lands where the chain puts it, not where the validator does.
+    #[test]
+    fn the_leak_is_monotone_and_re_entry_waits_for_a_final_attestation() {
+        let v = |x: u64| Hash64::from_u64_word(x);
+        let t_leak = 5_040u64;
+        let anchors = BTreeMap::from([(1u64, 10_000u64), (2, 20_000)]);
+        // One validator: an old (final) attestation at 10_000, and a fresh one at 20_000.
+        let contribs = vec![
+            AttestationContribution { epoch: 1, validator_id: v(1), bond_outpoint: fixture_outpoint(), signed_weight: 1 },
+            AttestationContribution { epoch: 2, validator_id: v(1), bond_outpoint: fixture_outpoint(), signed_weight: 1 },
+        ];
+        fn armed(last: &BTreeMap<Hash64, u64>, t_leak: u64) -> InactivityLeakViewV1<'_> {
+            InactivityLeakViewV1 {
+                last_attestation_daa: last,
+                leak_after_daa: t_leak,
+                min_retained_validators: 0,
+                table: LeakTableProvenanceV1::SelfComputed,
+            }
+        }
+
+        // With the fresh attestation NOT yet final, the baseline is still 10_000 and 20_001 is
+        // past the grace: excluded, exactly as it was before it attested.
+        let unsettled = last_attestation_daa_by_validator(&contribs, &anchors, 19_000);
+        assert!(!armed(&unsettled, t_leak).retains(&v(1), 0, 20_000), "a fresh attestation may not buy its way back in");
+
+        // Once the same attestation is final, it is re-entry — the identical evidence, judged at a
+        // point the validator does not choose.
+        let settled = last_attestation_daa_by_validator(&contribs, &anchors, 20_000);
+        assert!(armed(&settled, t_leak).retains(&v(1), 0, 20_000), "…and once it is final, it is");
+
+        // Monotone: for one table, silence only ever accumulates. Nothing about a later anchor can
+        // bring a validator back that an earlier one had excluded.
+        let mut was_out = false;
+        for anchor in (10_000u64..=30_000).step_by(500) {
+            let inside = armed(&unsettled, t_leak).retains(&v(1), 0, anchor);
+            if was_out {
+                assert!(!inside, "the leak flapped back on at anchor {anchor} with no new final evidence");
+            }
+            was_out |= !inside;
+        }
+        assert!(was_out, "the sweep must actually cross the threshold or it asserts nothing");
+    }
+
+    /// **ADR-0066 SA-3: the leak halts finality rather than shrinking the quorum below the floor.**
+    ///
+    /// ADR-0060 Decision 4 accepted double-finality risk under a long partition. It did not accept
+    /// a two-validator quorum, and the difference is not a matter of degree: a denominator small
+    /// enough to be held by one operator is not a BFT quorum with a smaller n, it is a chain whose
+    /// finality one party issues. So when the leak would take the retained set under
+    /// `min_active_validators`, the denominator is zero — and a zero denominator is refused by
+    /// `meets_bft_quorum` outright, which is how this file already spells "no certificate".
+    #[test]
+    fn the_leak_halts_finality_rather_than_dropping_below_the_validator_floor() {
+        let mut base = stake_bond_record_from_payload(&fixture_bond(), fixture_outpoint());
+        base.amount = 100;
+        base.activation_daa_score = 100;
+        let bonds: Vec<_> = (0xA..=0xC)
+            .map(|x| {
+                let mut b = base.clone();
+                b.validator_pubkey_hash = Hash64::from_u64_word(x);
+                b
+            })
+            .collect();
+        let epochs = BTreeMap::from([(9u64, 20_000u64)]);
+        // Two of the three are long silent, so the leak would leave a one-validator denominator.
+        let last = BTreeMap::from([
+            (Hash64::from_u64_word(0xA), 19_000u64),
+            (Hash64::from_u64_word(0xB), 200u64),
+            (Hash64::from_u64_word(0xC), 300u64),
+        ]);
+        let with_floor = |min_retained_validators| InactivityLeakViewV1 {
+            last_attestation_daa: &last,
+            leak_after_daa: 5_040,
+            min_retained_validators,
+            table: LeakTableProvenanceV1::SelfComputed,
+        };
+        assert_eq!(
+            total_active_stake_by_epoch(&bonds, &epochs, with_floor(3)).get(&9),
+            Some(&0),
+            "one survivor under a floor of three is a halt, not a quorum"
+        );
+        assert!(!crate::vlt::meets_bft_quorum(100, 0, 0), "and a zero denominator issues no certificate");
+        assert_eq!(
+            total_active_stake_by_epoch(&bonds, &epochs, with_floor(1)).get(&9),
+            Some(&100),
+            "a floor the leak does not breach changes nothing"
+        );
+
+        // **The floor is the LEAK's, not the network's.** A chain that is already under the floor
+        // without any leaking keeps the behaviour it has (the rollout gate is what handles that),
+        // so a dormant leak can never zero a denominator — which is what makes this amendment
+        // inert on every shipped preset.
+        let two = vec![bonds[0].clone(), bonds[1].clone()];
+        assert_eq!(
+            total_active_stake_by_epoch(&two, &epochs, InactivityLeakViewV1::none()).get(&9),
+            Some(&200),
+            "leak off: the floor is not this rule's business"
+        );
     }
 
     /// **The structural reason the leak cannot be switched on as implemented.**
@@ -11916,14 +12316,19 @@ mod tests {
         let anchors = BTreeMap::from([(1u64, 20_000u64), (2, 20_150), (3, 20_300)]);
         let contribs =
             vec![AttestationContribution { epoch: 1, validator_id: v(1), bond_outpoint: fixture_outpoint(), signed_weight: 1 }];
-        let last = last_attestation_daa_by_validator(&contribs, &anchors);
+        let last = last_attestation_daa_by_validator(&contribs, &anchors, u64::MAX);
         let span = anchors.values().max().unwrap() - anchors.values().min().unwrap();
         let apparent_staleness = anchors.values().max().unwrap() - last[&v(1)];
         assert!(apparent_staleness <= span, "the builder cannot report staleness beyond the window it read");
         // So a 7-day constant is unreachable through the attestation half…
         let seven_days_at_120s = 5_040u64;
         assert!(span < seven_days_at_120s, "the window is orders of magnitude shorter than the intended T_leak");
-        let leak = InactivityLeakViewV1 { last_attestation_daa: &last, leak_after_daa: seven_days_at_120s };
+        let leak = InactivityLeakViewV1 {
+            last_attestation_daa: &last,
+            leak_after_daa: seven_days_at_120s,
+            min_retained_validators: 0,
+            table: LeakTableProvenanceV1::SelfComputed,
+        };
         assert!(leak.retains(&v(1), 0, 20_300), "an attester can never be leaked, however long it has really been silent");
         // …while a validator merely ABSENT from the window is leaked at once, with an old bond.
         assert!(!leak.retains(&v(2), 0, 20_300), "absence reads as infinite staleness — the defect, in one line");
@@ -11943,10 +12348,23 @@ mod tests {
             AttestationContribution { epoch: 9, validator_id: v(3), bond_outpoint: fixture_outpoint(), signed_weight: 1 },
         ];
         let anchors = BTreeMap::from([(1u64, 1_000u64), (2, 2_000), (3, 3_000)]);
-        let last = last_attestation_daa_by_validator(&contribs, &anchors);
+        let last = last_attestation_daa_by_validator(&contribs, &anchors, u64::MAX);
         assert_eq!(last.get(&v(1)), Some(&3_000), "the youngest of its two epochs");
         assert_eq!(last.get(&v(2)), Some(&2_000));
         assert_eq!(last.get(&v(3)), None, "an unanchored epoch is no evidence");
+
+        // **ADR-0066 SA-2: the horizon is applied at BUILD time, and it falls back rather than
+        // erases.** v(1) attested at 1_000 and again at 3_000; with only 1_000 final, the entry
+        // must be 1_000 — not 3_000 (a fresh attestation may not grant re-entry) and not absent
+        // (which would read as infinite silence and leak a validator that never stopped
+        // attesting). Filtering at the read could only ever produce one of those two wrong
+        // answers, which is why this rule lives in the builder.
+        let final_through = last_attestation_daa_by_validator(&contribs, &anchors, 2_500);
+        assert_eq!(final_through.get(&v(1)), Some(&1_000), "falls back to the youngest FINAL anchor");
+        assert_eq!(final_through.get(&v(2)), Some(&2_000), "already final, unchanged");
+        // And a validator whose only evidence is above the horizon has no final evidence at all —
+        // the honest answer, and the conservative one: it is measured from its bond instead.
+        assert_eq!(last_attestation_daa_by_validator(&contribs, &anchors, 500).get(&v(1)), None);
     }
 
     #[test]

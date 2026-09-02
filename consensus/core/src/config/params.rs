@@ -448,6 +448,26 @@ pub struct PalwInactivityLeakV1 {
     pub activation: ForkActivation,
     /// How long a validator must have been silent before its weight begins to leak, in DAA.
     pub t_leak_daa: u64,
+    /// **ADR-0066 SA-2's hysteresis, as a number: how deep an attestation must be buried before
+    /// it counts as re-entry evidence, in DAA.**
+    ///
+    /// Exclusion follows `t_leak_daa` of silence. Re-inclusion needs an attestation that is itself
+    /// FINAL, and this is what "final" costs: an anchor newer than `sink_daa - this` does not move
+    /// a validator's baseline. Without it, a validator flapping around the threshold re-enters the
+    /// quorum on a block of its own choosing, which is a quorum swing an attacker times rather
+    /// than one the chain observes.
+    ///
+    /// Must be strictly below `t_leak_daa` or the re-entry window is empty and nobody who leaks
+    /// ever comes back — refused at construction by [`Params::validate_palw_v2`], because a fence
+    /// that can only be armed into a dead state is a fence nobody can arm.
+    ///
+    /// Beside the fence and therefore in `consensus_params_id` — and, since the SA-4 amendment,
+    /// in `consensus_schedule_id` as well, for the same reason `t_leak_daa` is: two builds that
+    /// disagree about it re-admit different validators, and the schedule id is what the
+    /// `flow_context` warning prints when it keeps a peer whose params id differs. Deliberately
+    /// NOT in `consensus_identity_id` — see [`Params::consensus_schedule_id`] for why gating on it
+    /// would make arming the leak the flag day the top-level fence exists to abolish.
+    pub reentry_final_depth_daa: u64,
 }
 
 /// **ADR-0073 SA-1's parameter: how many attempt blocks the free-prompt beacon folds.**
@@ -1063,6 +1083,21 @@ impl Params {
 
     pub fn validate_palw_v2(&self) -> Result<(), crate::palw_mode_v2::PalwModeV2Error> {
         use crate::palw_mode_v2::{PalwConsensusMode, PalwModeV2Error};
+        // **ADR-0066 SA-2: an armed leak must have a non-empty re-entry window.** Checked ahead of
+        // the V2 gate below, because the inactivity leak is a DNS-overlay rule and a hash-lineage
+        // network can arm it too. Exclusion follows `t_leak_daa` of silence and re-inclusion needs
+        // an attestation buried `reentry_final_depth_daa` deep, so a depth at or above the grace
+        // means every validator that ever leaks is leaked permanently — a configuration that reads
+        // as "armed" and behaves as "the validator set can only shrink".
+        if let Some(leak) = self.palw_inactivity_leak
+            && leak.activation != ForkActivation::never()
+            && leak.reentry_final_depth_daa >= leak.t_leak_daa
+        {
+            return Err(PalwModeV2Error::Invalid(
+                "palw_inactivity_leak declares a re-entry depth at or above its own grace: nothing the leak \
+                 excludes could ever come back, so the set could only shrink",
+            ));
+        }
         let PalwConsensusMode::ConsensusV2(bundle) = &self.palw_consensus_mode else {
             return Ok(());
         };
@@ -1459,6 +1494,10 @@ impl Params {
         // Active at genesis stays distinguishable; anything else is "not yet".
         normalized.for_each_fence(&mut |score| *score = if *score == 0 { 0 } else { u64::MAX });
         normalized.normalize_values_a_scheduled_fence_drags_with_it();
+        // **ADR-0066 SA-4 lands in [`Self::consensus_schedule_id`], not here** — see the note
+        // beside the values that method hashes. A scheduled fence's companion VALUE is reported, never gated:
+        // gating on it is what makes arming a flag day, and this file records a live rollout that
+        // depended on it not being one.
         normalized.consensus_params_id()
     }
 
@@ -1518,7 +1557,10 @@ impl Params {
             self.palw_frontier_provenance = None;
         }
         // ADR-0066 Decisions 1 and 4. Both carry a value beside the fence, so both take the whole
-        // option — the D1 rule, for the D1 reason.
+        // option — the D1 rule, for the D1 reason. The value does not vanish: ADR-0066 SA-4 folds
+        // it into [`Self::consensus_schedule_id`], which is reported and not gated, so the
+        // disagreement two operators can have about it is visible without costing them the rolling
+        // deploy this collapse exists to buy.
         if self.palw_heartbeat.is_some_and(|h| h.activation == ForkActivation::never()) {
             self.palw_heartbeat = None;
         }
@@ -1706,6 +1748,50 @@ impl Params {
         if let Some(fold) = self.palw_beacon_fold {
             h.write(b"palw_beacon_fold_k");
             h.write([fold.k]);
+        }
+        // **ADR-0066 SA-4 — every other value that rides a fence, for the reason above and by the
+        // rule above.**
+        //
+        // SA-4's hazard is real and it is the D1 hazard verbatim: two operators who schedule one
+        // of these at one height with DIFFERENT values peered, synced, and then priced a lane (or
+        // leaked a validator) differently the moment it fired — and the only warning they got
+        // printed two IDENTICAL schedule ids, which says "these agree" about the one thing they do
+        // not. The amendment is answered HERE and not in `consensus_identity_id`, and that is a
+        // decision with a cost on each side, so it is written down:
+        //
+        // * **Gating on the value** (the value in the identity) refuses the handshake between a
+        //   build that schedules the fence and a build that does not carry it. That makes ARMING a
+        //   flag day. It also breaks a procedure this repo executed: the ADR-0068 Phase-1 rollout
+        //   recorded around `PALW_RC_PHASE1_FENCE_DAA` scheduled `palw_heartbeat` and
+        //   `palw_attempt_work` at DAA 5,000 with the tip at 1,746 and rolled the live t11 fleet
+        //   host by host, explicitly because "a scheduled fence is normalised out of
+        //   `consensus_identity_id`". Under a gate the FIRST host to restart partitions.
+        // * **Reporting the value** (here) keeps that rollout and makes the disagreement visible in
+        //   the one place an operator looks: the `flow_context` warning that already fires whenever
+        //   the params ids differ and the identities agree.
+        //
+        // The two cannot both hold — `id(None) == id(Some(H, v))` and `id(Some(H, v1)) !=
+        // id(Some(H, v2))` are contradictory for any equality-compared fingerprint — so this is a
+        // choice, and the choice is the one `palw_bond_maturity` already made ten lines up. The
+        // leak in particular must be on this side: a rule whose entire purpose is to let finality
+        // self-heal after validator loss cannot be one that can only be armed by stopping every
+        // node at once, which is exactly what the moment you need it makes impossible.
+        //
+        // Some-only, so a preset that leaves a fence unset writes what it always wrote.
+        if let Some(beat) = self.palw_heartbeat {
+            h.write(b"palw_heartbeat_price");
+            h.write(beat.work_log2.to_le_bytes());
+            h.write(beat.max_per_mergeset.to_le_bytes());
+        }
+        if let Some(attempt) = self.palw_attempt_work {
+            h.write(b"palw_attempt_work_price");
+            h.write(attempt.work_log2.to_le_bytes());
+            h.write(attempt.ticket_bucket_log2.to_le_bytes());
+        }
+        if let Some(leak) = self.palw_inactivity_leak {
+            h.write(b"palw_inactivity_leak_grace");
+            h.write(leak.t_leak_daa.to_le_bytes());
+            h.write(leak.reentry_final_depth_daa.to_le_bytes());
         }
         h.finalize()
     }
@@ -2302,9 +2388,13 @@ impl Params {
             h.write(attempt_work.ticket_bucket_log2.to_le_bytes());
         }
         if let Some(leak) = palw_inactivity_leak {
-            h.write(b"palw_inactivity_leak");
+            // The label carries the RULE's semantic version: ADR-0066 SA-2 added the re-entry
+            // depth beside the grace, and a leak with hysteresis is not the leak without it. Only
+            // armed presets move (Some-only), and no shipped preset arms this.
+            h.write(b"palw_inactivity_leak/hysteresis-v2");
             h.write(leak.activation.daa_score().to_le_bytes());
             h.write(leak.t_leak_daa.to_le_bytes());
+            h.write(leak.reentry_final_depth_daa.to_le_bytes());
         }
         // ADR-0073 SA-1: BOTH halves, because `k` decides the draw and a commitment that omitted
         // it would let two builds claim the same rules and fold different beacons. Some-only, so
@@ -7699,6 +7789,15 @@ mod consensus_params_id_tests {
             armed(ForkActivation::new(9_000_000)).consensus_identity_id(),
             "scheduled ahead: old and new builds stay peers, which is the whole reason it is a fence"
         );
+        // **ADR-0066 SA-4 lands here, not on the line above.** The lane's price rides the fence and
+        // two operators can disagree about it, so the schedule id — what the `flow_context` warning
+        // prints — has to be able to name it. Gating on it instead would partition the fleet at the
+        // FIRST host of the rollout this file records around `PALW_RC_PHASE1_FENCE_DAA`.
+        assert_ne!(
+            shipped.consensus_schedule_id(),
+            armed(ForkActivation::new(9_000_000)).consensus_schedule_id(),
+            "the operator log must name a scheduled heartbeat — SA-4"
+        );
         assert_ne!(
             shipped.consensus_params_id(),
             armed(ForkActivation::new(9_000_000)).consensus_params_id(),
@@ -7788,6 +7887,14 @@ mod consensus_params_id_tests {
             shipped.consensus_identity_id(),
             armed(ForkActivation::new(9_000_000)).consensus_identity_id(),
             "scheduled ahead: old and new builds stay peers"
+        );
+        // ADR-0066 SA-4, the heartbeat's rule for the heartbeat's reason: `work_log2` here is
+        // `header.blue_work` on every attempt block, so two builds that schedule different values
+        // must be TOLD apart even though they are not KEPT apart.
+        assert_ne!(
+            shipped.consensus_schedule_id(),
+            armed(ForkActivation::new(9_000_000)).consensus_schedule_id(),
+            "the operator log must name a scheduled attempt-work price — SA-4"
         );
         assert_ne!(
             shipped.consensus_params_id(),
@@ -7912,9 +8019,14 @@ mod consensus_params_id_tests {
         // 3. The fence does not, until it fires.
         let armed = |activation: ForkActivation| {
             let mut p = MAINNET_PARAMS;
-            p.palw_inactivity_leak = Some(PalwInactivityLeakV1 { activation, t_leak_daa: 5_040 });
+            p.palw_inactivity_leak = Some(PalwInactivityLeakV1 { activation, t_leak_daa: 5_040, reentry_final_depth_daa: 720 });
             p
         };
+        // **This line is the whole reason the leak became a top-level fence** — see
+        // `palw_inactivity_leak_after` in the virtual processor. `DnsParams.inactivity_leak_daa`
+        // could only be turned on by a flag day, and the moment a network needs finality to
+        // self-heal after validator loss is the moment it cannot coordinate one. Gating the
+        // identity on the grace would put that back.
         assert_eq!(
             MAINNET_PARAMS.consensus_identity_id(),
             armed(ForkActivation::new(9_000_000)).consensus_identity_id(),
@@ -7932,19 +8044,43 @@ mod consensus_params_id_tests {
         );
         assert_eq!(MAINNET_PARAMS.consensus_identity_id(), armed(ForkActivation::never()).consensus_identity_id());
 
-        // 4. The DURATION is in the fingerprint and out of the fence visitor — D1's rule, and the
-        //    hazard that comes with it: two operators arming at one height with different graces
-        //    share an identity and leak different validators. Coordinated change, warned by the
-        //    params-id line in `flow_context`.
+        // 4. **The DURATION is reported, not gated — ADR-0066 SA-4, answered the way D1's window
+        //    already was.** It is in `consensus_params_id` and in `consensus_schedule_id`, and out
+        //    of `consensus_identity_id`. The hazard SA-4 names is real — two operators arming at
+        //    one height with different graces share an identity, peer, and leak different
+        //    validators the moment the fence fires — and the schedule id is what makes it VISIBLE:
+        //    before this amendment the `flow_context` warning printed two identical schedule ids
+        //    for those two builds, which says "these agree" about the one thing they do not.
         let mut longer = armed(ForkActivation::new(9_000_000));
         let Some(l) = longer.palw_inactivity_leak.as_mut() else { unreachable!() };
         l.t_leak_daa = 10_080;
         assert_ne!(armed(ForkActivation::new(9_000_000)).consensus_params_id(), longer.consensus_params_id());
+        assert_ne!(
+            armed(ForkActivation::new(9_000_000)).consensus_schedule_id(),
+            longer.consensus_schedule_id(),
+            "the operator log must be able to name a grace difference — it is the whole of the defence"
+        );
         assert_eq!(
             armed(ForkActivation::new(9_000_000)).consensus_identity_id(),
             longer.consensus_identity_id(),
             "…and the identity does NOT separate them while it is only scheduled — the standing rule for a \
-             value inert until its fence fires, recorded here because it is a live deployment hazard"
+             value inert until its fence fires, and the reason arming the leak is not a flag day"
+        );
+        // …and the HEIGHT still normalises out, which is the half that must keep working: two
+        // operators who agree on the grace and schedule it differently are peers until it fires.
+        let mut later = armed(ForkActivation::new(9_000_000));
+        let Some(l) = later.palw_inactivity_leak.as_mut() else { unreachable!() };
+        l.activation = ForkActivation::new(11_000_000);
+        assert_eq!(
+            armed(ForkActivation::new(9_000_000)).consensus_identity_id(),
+            later.consensus_identity_id(),
+            "the schedule is normalised away, value and height alike"
+        );
+        // The dormant binary is what rolls out without a partition, and it still does.
+        assert_eq!(
+            MAINNET_PARAMS.consensus_identity_id(),
+            armed(ForkActivation::never()).consensus_identity_id(),
+            "shipping the fence off must stay byte-identical to a build that never had it"
         );
 
         // 5. Armable on every shipped preset, at any height.
@@ -7953,9 +8089,182 @@ mod consensus_params_id_tests {
         {
             for height in [ForkActivation::always(), ForkActivation::new(9_000_000)] {
                 let mut p = base.clone();
-                p.palw_inactivity_leak = Some(PalwInactivityLeakV1 { activation: height, t_leak_daa: 5_040 });
+                p.palw_inactivity_leak =
+                    Some(PalwInactivityLeakV1 { activation: height, t_leak_daa: 5_040, reentry_final_depth_daa: 720 });
                 p.validate_palw_v2().unwrap_or_else(|e| panic!("{name}: the leak must be armable: {e}"));
             }
+        }
+
+        // 6. **ADR-0066 SA-2: an armed leak with no re-entry window is refused.** A depth at or
+        //    above the grace means the youngest attestation that could ever count is already older
+        //    than the grace, so every validator the leak excludes stays excluded for good and the
+        //    active set is a ratchet. Refused at construction, because the alternative is a
+        //    configuration that reads as armed and behaves as terminal.
+        let mut dead = MAINNET_PARAMS;
+        dead.palw_inactivity_leak =
+            Some(PalwInactivityLeakV1 { activation: ForkActivation::always(), t_leak_daa: 5_040, reentry_final_depth_daa: 5_040 });
+        assert!(dead.validate_palw_v2().is_err(), "a re-entry depth at the grace is the set going one way only");
+        let mut fine = dead;
+        let Some(l) = fine.palw_inactivity_leak.as_mut() else { unreachable!() };
+        l.reentry_final_depth_daa = 5_039;
+        assert!(fine.validate_palw_v2().is_ok(), "…and one DAA below it is a window, however narrow");
+    }
+
+    /// **ADR-0066 security amendment SA-4 — a value beside a fence is REPORTED, and the rollout it
+    /// rides on still rolls.**
+    ///
+    /// SA-4 names a real hazard: `for_each_fence` normalises a scheduled height, the collapse then
+    /// drops the whole option, and the VALUE beside the fence went with it — so two operators who
+    /// schedule one rule at one height with different values peered, synced, and priced a lane (or
+    /// leaked a validator) differently the moment it fired, and the only warning they got printed
+    /// two IDENTICAL schedule ids.
+    ///
+    /// Where the amendment lands is a decision, because the two properties are contradictory for
+    /// any equality-compared fingerprint: `id(None) == id(Some(H, v))` is the rolling deploy, and
+    /// `id(Some(H, v1)) != id(Some(H, v2))` is the gate, and transitivity forbids both. The
+    /// decision is the one `palw_bond_maturity.window_daa` already made and documented — report,
+    /// do not gate — and it is made for three reasons this test pins one by one:
+    ///
+    /// 1. The rolling deploy is not hypothetical. The re-pin log in this file records the live
+    ///    testnet-11 rollout of 2026-09-01, which scheduled `palw_heartbeat` and
+    ///    `palw_attempt_work` at DAA 5,000 with the tip at 1,746 and rolled the fleet host by host
+    ///    *because* a scheduled fence normalises out of `consensus_identity_id`. Gating on the
+    ///    value partitions that fleet at the first host to restart.
+    /// 2. The leak cannot be gated at all without undoing the reason it exists. `DnsParams
+    ///    .inactivity_leak_daa` could only be armed by a flag day; a mechanism whose purpose is to
+    ///    let finality self-heal after validator loss must not need every node stopped at once,
+    ///    because the moment it is needed is the moment that is impossible.
+    /// 3. The hazard is answered where it can be answered without that cost: `consensus_schedule_id`
+    ///    is what the `flow_context` warning prints when two peers' params ids differ and their
+    ///    identities agree, and before this amendment it was blind to precisely the disagreement it
+    ///    is the only defence against.
+    ///
+    /// So: the value must SEPARATE the schedule ids, must NOT separate the identities while the
+    /// fence is only scheduled, and must still separate the identities once the fence is in force
+    /// at genesis — where the two builds disagree about block 1 and the handshake is right to
+    /// refuse.
+    #[test]
+    fn a_value_beside_a_scheduled_fence_is_reported_and_the_rollout_still_rolls() {
+        // The leak's grace — the amendment's own example, and the one that decides which
+        // validators are in a finality quorum.
+        let leak_with = |t_leak_daa: u64, reentry_final_depth_daa: u64, activation: ForkActivation| {
+            let mut p = MAINNET_PARAMS;
+            p.palw_inactivity_leak = Some(PalwInactivityLeakV1 { activation, t_leak_daa, reentry_final_depth_daa });
+            p
+        };
+        let leak = |t_leak_daa: u64, activation: ForkActivation| leak_with(t_leak_daa, 720, activation);
+        for height in [ForkActivation::always(), ForkActivation::new(9_000_000)] {
+            assert_ne!(
+                leak(5_040, height).consensus_schedule_id(),
+                leak(10_080, height).consensus_schedule_id(),
+                "t_leak_daa must reach the schedule id at every height — the operator log is the whole of the \
+                 defence and it must not report agreement about the grace"
+            );
+            // SA-2's hysteresis rides the same fence and is the same kind of value: it decides
+            // which attestations count as re-entry, so two builds that disagree about it re-admit
+            // different validators at different heights.
+            assert_ne!(
+                leak_with(5_040, 720, height).consensus_schedule_id(),
+                leak_with(5_040, 1_440, height).consensus_schedule_id(),
+                "the re-entry depth must reach the schedule id for the reason its sibling does"
+            );
+        }
+        assert_eq!(
+            leak(5_040, ForkActivation::new(9_000_000)).consensus_identity_id(),
+            leak(5_040, ForkActivation::new(12_345_678)).consensus_identity_id(),
+            "…while the SCHEDULE still normalises away: agreeing operators must still be able to roll"
+        );
+        // **And the grace does too, while the fence is only scheduled.** This is the assertion
+        // that keeps arming the leak from being a flag day; if it ever flips, read reason 2 in the
+        // doc above before you change it.
+        for grace in [5_040, 10_080] {
+            assert_eq!(
+                MAINNET_PARAMS.consensus_identity_id(),
+                leak(grace, ForkActivation::new(9_000_000)).consensus_identity_id(),
+                "a build that SCHEDULES the leak must still peer with one that has never heard of it"
+            );
+        }
+        // In force at genesis is a different fact and the gate must keep it: two such builds
+        // disagree about the denominator at block 1.
+        assert_ne!(
+            leak(5_040, ForkActivation::always()).consensus_identity_id(),
+            leak(10_080, ForkActivation::always()).consensus_identity_id(),
+            "a grace already in force is a rule difference the handshake must refuse"
+        );
+
+        // The heartbeat's price, the amendment's second named value. On a hash preset the fence
+        // folds to `None` through the mode condition, so this uses the V2 ruleset the fence is
+        // real on.
+        let beat = |work_log2: u32, activation: ForkActivation| {
+            let mut p = palw_rc_shipped_params();
+            p.palw_heartbeat =
+                Some(PalwHeartbeatV1 { activation, work_log2, max_per_mergeset: crate::pow_layer0::PALW_HEARTBEAT_MAX_PER_MERGESET });
+            p
+        };
+        let mut no_beat = palw_rc_shipped_params();
+        no_beat.palw_heartbeat = None;
+        for height in [ForkActivation::always(), ForkActivation::new(9_000_000)] {
+            assert_ne!(
+                beat(crate::pow_layer0::PALW_HEARTBEAT_WORK_LOG2, height).consensus_schedule_id(),
+                beat(crate::pow_layer0::PALW_HEARTBEAT_WORK_LOG2 + 1, height).consensus_schedule_id(),
+                "work_log2 is the lane's price and the operator log must be able to name two prices"
+            );
+        }
+        assert_ne!(
+            beat(crate::pow_layer0::PALW_HEARTBEAT_WORK_LOG2, ForkActivation::always()).consensus_identity_id(),
+            beat(crate::pow_layer0::PALW_HEARTBEAT_WORK_LOG2 + 1, ForkActivation::always()).consensus_identity_id(),
+            "a price already in force is a rule difference the handshake must refuse"
+        );
+        // **The ADR-0068 Phase-1 rollout, as an assertion.** Every host that restarts on the
+        // scheduling build must still handshake with every host that has not.
+        for price in [crate::pow_layer0::PALW_HEARTBEAT_WORK_LOG2, crate::pow_layer0::PALW_HEARTBEAT_WORK_LOG2 + 1] {
+            assert_eq!(
+                no_beat.consensus_identity_id(),
+                beat(price, ForkActivation::new(9_000_000)).consensus_identity_id(),
+                "scheduling the heartbeat must not disconnect the first upgraded host from the rest of the fleet"
+            );
+        }
+
+        // And the attempt lane's constant work, the same shape for the same reason.
+        let work = |work_log2: u32, activation: ForkActivation| {
+            let mut p = palw_rc_shipped_params();
+            p.palw_attempt_work = Some(PalwAttemptWorkV1 {
+                activation,
+                work_log2,
+                ticket_bucket_log2: crate::palw_attempt_v2::PALW_TICKET_NONCE_BUCKET_LOG2,
+            });
+            p
+        };
+        let mut no_work = palw_rc_shipped_params();
+        no_work.palw_attempt_work = None;
+        for height in [ForkActivation::always(), ForkActivation::new(9_000_000)] {
+            assert_ne!(
+                work(crate::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2, height).consensus_schedule_id(),
+                work(crate::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2 + 1, height).consensus_schedule_id(),
+                "attempt blue work is `header.blue_work` on every attempt block — the log must name two values"
+            );
+        }
+        assert_ne!(
+            work(crate::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2, ForkActivation::always()).consensus_identity_id(),
+            work(crate::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2 + 1, ForkActivation::always()).consensus_identity_id(),
+            "blue work already in force is a rule difference the handshake must refuse"
+        );
+        for price in [crate::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2, crate::pow_layer0::PALW_ATTEMPT_BLUE_WORK_LOG2 + 1] {
+            assert_eq!(
+                no_work.consensus_identity_id(),
+                work(price, ForkActivation::new(9_000_000)).consensus_identity_id(),
+                "scheduling the attempt lane must not disconnect the first upgraded host from the rest of the fleet"
+            );
+        }
+
+        // **The dormant posture is untouched, which is why no shipped fingerprint moves.** Every
+        // preset leaves the leak `None`, and neither other fence is SCHEDULED anywhere today —
+        // recorded so that a preset edit which starts scheduling one lands on the assertion above
+        // rather than on a fleet.
+        for (name, p) in
+            [("mainnet", MAINNET_PARAMS), ("testnet", TESTNET_PARAMS), ("simnet", SIMNET_PARAMS), ("devnet", DEVNET_PARAMS)]
+        {
+            assert!(p.palw_inactivity_leak.is_none(), "{name}: the leak ships dormant");
         }
     }
 

@@ -236,12 +236,15 @@ nothing depends on it today.
 DAG. What bounds width is the price, which is now a fixed 2²⁴ per block rather than a floor a
 retarget could never leave — better, but not a bound.
 
-**The standing warning is unchanged and now enforceable rather than advisory.** Arming either fence
-is a coordinated change: `work_log2` and `t_leak_daa` reach `consensus_params_id` but not the fence
-visitor, so two operators scheduling one height with different values share an identity, peer, and
-disagree the moment the fence fires. For the heartbeat price there is a second lock — the binary
-refuses to start if the fence names a `work_log2` it does not implement — because that value has a
-second source in `StateLayer0`. `t_leak_daa` has no second source and therefore no such lock.
+**The standing warning is unchanged, and SA-4 below makes it legible rather than removing it.**
+Arming either fence is a coordinated change: `work_log2` and `t_leak_daa` reach
+`consensus_params_id` but not the fence visitor, so two operators scheduling one height with
+different values share an identity, peer, and disagree the moment the fence fires. Since SA-4 they
+also announce different `consensus_schedule_id`s, which is what the `flow_context` warning prints —
+so the disagreement is visible before it fires instead of inferable after. For the heartbeat price
+there is a second lock — the binary refuses to start if the fence names a `work_log2` it does not
+implement — because that value has a second source in `StateLayer0`. `t_leak_daa` has no second
+source and therefore no such lock.
 
 ## Security amendment (2026-09-02) — Decision 4's committed table, before it is built
 
@@ -250,6 +253,23 @@ verify it computes no leak.** A pruned-IBD node derives quorum denominators from
 compute; if that table is not committed and verified, archival and pruned nodes exclude different
 validators and the finality overlay partitions along the `--archival` flag — the F4 shape this ADR
 deleted from the heartbeat lane. Fail closed: no verified table ⇒ full denominator ⇒ no leak.
+
+*As built (2026-09-03).* The self-computed half is in
+`VirtualStateProcessor::palw_leak_table_provenance`, and it asks the WALK: it iterates the same
+backward chain the table is built from and answers `SelfComputed` only if every header from the tip
+to past the far edge of `stake_score_window_blue_score` is one this node holds. The decision itself
+is the pure `dns_finality::leak_table_provenance_from_walk_v1`, unit-tested.
+
+Two corrections to what an earlier draft of this amendment said, because both were wrong in the
+dangerous direction. First, the check must not be "is the consensus pruning point a window below the
+tip": that value is derived from the chain, so it is identical on an archival node and a pruned one
+and cannot see the node-local divergence SA-1 exists to close. Second, **arming the leak on a pruned
+fleet is not a no-op.** A pruned node in steady state holds every header above a pruning point far
+below its tip, so it covers the window, answers `SelfComputed`, and leaks — correctly, and exactly
+as its archival peers do. `Unverified` is for a node that genuinely cannot reach the far edge
+(mid-IBD, or a store truncated above the window). The verified-IMPORT half remains unbuilt: the
+fourth `PruningPointOverlaySnapshot` component this decision budgets for does not exist, so such a
+node stays on the full denominator rather than guessing.
 
 **SA-2 — The leak is monotone with hysteresis.** Exclusion after `t_leak_daa` of silence;
 re-inclusion only when the validator's fresh attestation is itself final. A validator flapping
@@ -260,7 +280,53 @@ finality halts (no certificates) rather than continuing as a small-quorum overla
 Decision 4 accepted double-finality risk under a long partition; it did not accept a two-validator
 quorum, and the floor must be a rule.
 
-**SA-4 — Arming precondition: `t_leak_daa` (and `work_log2`) are in `consensus_params_id` raw**, not
-through the fence visitor that normalises them away — the open item above, restated as a gate. Two
+**SA-4 — A value that rides a fence must be VISIBLE to the operator comparing two builds.** Two
 builds that peer with different `t_leak_daa` and then diverge on finality is the
 `inactivity_leak_daa` accident under a new name.
+
+*As built (2026-09-03), and this is a decision that had to be made rather than a bug that had to be
+fixed.* The amendment's original wording — put the value in `consensus_identity_id` raw, past the
+fence visitor — was implemented and then withdrawn, because it buys the wrong half of a trade that
+cannot be had both ways:
+
+* `consensus_identity_id` is a **gate**: `flow_context` refuses a peer whose identity differs.
+* The rolling deploy needs `id(None) == id(Some(H, v))` — a build that schedules a fence must peer
+  with a build that has never heard of it. The value-in-the-identity rule needs
+  `id(Some(H, v₁)) != id(Some(H, v₂))`. For any equality-compared fingerprint those two are
+  contradictory by transitivity. One of them has to go.
+
+The rolling deploy is what stays, for two reasons and both are recorded in `params.rs`:
+
+1. **It is a procedure this project has executed.** The ADR-0068 Phase-1 rollout of 2026-09-01
+   scheduled `palw_heartbeat` (work_log2 24, max_per_mergeset 4) and `palw_attempt_work`
+   (work_log2 20) at DAA 5,000 with the live testnet-11 tip at 1,746, and rolled the fleet host by
+   host *because* "a scheduled fence is normalised out of `consensus_identity_id`". Under a gate on
+   the value, the FIRST host to restart is disconnected from every host that has not — a partition
+   thousands of DAA before the fence, on a fleet with no way to converge except stopping all of it
+   at once.
+2. **For the leak specifically it would undo the reason the fence exists.** `palw_inactivity_leak`
+   was lifted out of `DnsParams` precisely because that field could only be armed by a flag day, and
+   the moment a network needs finality to self-heal after validator loss is the moment it cannot
+   coordinate one. A gate on `t_leak_daa` puts the flag day back.
+
+So the value goes in **`consensus_schedule_id`** — reported, never gated — which is the answer
+ADR-0065 D1's `window_daa` already gave and which `params.rs` documents at that call site. That is
+the id `flow_context` prints in the warning it already emits whenever two peers' params ids differ
+and their identities agree, and folding the value in is what makes that warning able to name the
+disagreement it is the only defence against; without it, the two builds SA-4 is about printed two
+identical schedule ids, which says "these agree" about the one thing they do not.
+
+**The rule, stated so it can be applied to the next such value without re-litigating this:** a value
+that rides a fence goes in `consensus_params_id` (it always did) and in `consensus_schedule_id`
+(SA-4). It goes in `consensus_identity_id` only through the fence being ACTIVE AT GENESIS, where two
+builds disagree about block 1 and the handshake is right to refuse. Nothing scheduled belongs in the
+gate — not the height, and not the value beside it. This covers `palw_heartbeat.{work_log2,
+max_per_mergeset}`, `palw_attempt_work.{work_log2, ticket_bucket_log2}`,
+`palw_inactivity_leak.{t_leak_daa, reentry_final_depth_daa}`, `palw_bond_maturity.window_daa`, and
+the beacon fold width `k`, whose placement in `consensus_schedule_id` is therefore correct as
+shipped.
+
+What this does NOT buy, said plainly: arming a value-carrying fence is still a **coordinated**
+change. Two operators who schedule one height with different values will peer, sync, and diverge
+when it fires. The warning is the whole of the defence, and the schedule id is what makes the
+warning true.
