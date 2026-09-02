@@ -104,6 +104,9 @@ pub const PALW_V2_SIGNATURE_CONTEXTS: &[&[u8]] = &[
     crate::palw_court_v2::PALW_COURT_V2_MLDSA87_OPEN_CONTEXT,
     crate::palw_court_v2::PALW_COURT_V2_MLDSA87_DISCLOSURE_CONTEXT,
     crate::palw_court_v2::PALW_COURT_V2_MLDSA87_VERDICT_CONTEXT,
+    // ADR-0078 Decision 4: the acceptance layer verifies a derivation under this context
+    // (`palw_v2_validate_objects`), so the ruleset id must commit to it (audit M2-23, once more).
+    crate::palw_derived_v1::PALW_DERIVED_V1_MLDSA87_CONTEXT,
 ];
 
 pub const PALW_V2_SIGNATURE_CONTEXTS_DOMAIN: &[u8] = b"misaka-palw/ruleset-id-v2/signature-contexts/v1";
@@ -1494,6 +1497,7 @@ pub(crate) mod tests {
             crate::palw_court_v2::PALW_COURT_V2_MLDSA87_OPEN_CONTEXT,
             crate::palw_court_v2::PALW_COURT_V2_MLDSA87_DISCLOSURE_CONTEXT,
             crate::palw_court_v2::PALW_COURT_V2_MLDSA87_VERDICT_CONTEXT,
+            crate::palw_derived_v1::PALW_DERIVED_V1_MLDSA87_CONTEXT,
         ] {
             assert!(
                 PALW_V2_SIGNATURE_CONTEXTS.contains(&context),
