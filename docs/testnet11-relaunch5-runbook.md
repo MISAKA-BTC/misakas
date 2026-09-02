@@ -191,9 +191,12 @@ pool-slot ×11; zero on Ready nodes).
 * **Newcomer pages** `testnet11-node-operator.md` and `testnet11-join-mining.md` now carry
   `d38abe44…` / `08e9c8a4…`, the three live class ids, and every archived fingerprint a stale node
   might still announce (`61af5296`, on `main`).
-* **Cadence at 02:27**: floor #655 → #666 in six minutes, last gaps 33/34/38/13/88/33/8/16 s —
-  about 1.8 blocks/min against the 0.5/min target, still converging 45 min after the empty-chain
-  start (the previous build needed ~40 min to reach 95–119 s gaps). QWEN36: one block (02:04:17).
+* **Cadence 02:27 → 03:00**: floor #655 → #666 in six minutes at 02:27 (gaps 33/34/38/13/88/33/8/16 s),
+  then per five minutes 7, 6, 4, 4, 7, 4 blocks (02:34–02:59) = 64/hour against the 30/hour
+  target, last twelve gaps 39/124/68/45/49/8/39/73/31/39/146/75 s. Still converging 76 min after
+  the empty-chain start; the first ten minutes put ~500 blocks into the difficulty window and the
+  rate settles as they age out. QWEN36: two blocks (02:04:17, ~02:42). No condition here blocks
+  publication; the number to re-check later is the hourly floor count.
 
 ### Four stores are per-genesis and must be rotated at every regenesis — one was missed today
 
