@@ -22,7 +22,7 @@ use crate::engine_a16::{A16Cache, A16Engine};
 use kaspa_consensus_core::palw_backend::{PalwClaimRootsV1, PalwExecutionBackendV1, PalwExecutionOutcomeV1, PalwMaterialVerdictV1};
 use kaspa_consensus_core::palw_step::PalwShapeProfileV3;
 use kaspa_consensus_core::palw_v2::{
-    PALW_TRACE_COMMITMENT_VERSION_V2, PalwJobContextV2, output_commitment_v2, prompt_token_ids_hash_v2,
+    output_commitment_v2, prompt_token_ids_hash_v2, PalwJobContextV2, PALW_TRACE_COMMITMENT_VERSION_V2,
 };
 use kaspa_hashes::Hash64;
 
@@ -392,6 +392,16 @@ pub struct Qwen25A16Backend {
     /// is the honest description of that class. The Decision-F graph correspondence is still
     /// guarded inside the captured path itself.
     court_capable: bool,
+    /// **The ladder top this instance measures a capture against** — the ruleset's
+    /// `PalwCourtParamsV2::max_step_leaf_count`, not the leg's module constant.
+    ///
+    /// It bounds a `step_leaf_count` that arrived over gossip inside a borsh blob BEFORE the leaf
+    /// vector is built, so it cannot simply be dropped; and it was the leg's default constant, so
+    /// a class registered against a deeper frozen ladder was refused by its own executor. It
+    /// defaults to that constant — every shipped construction site keeps exactly the behaviour it
+    /// had — and [`Qwen25A16Backend::with_step_ladder_cap`] is how a caller that HOLDS the ruleset
+    /// states the real one.
+    step_ladder_cap: u64,
 }
 
 impl Qwen25A16Backend {
@@ -415,7 +425,21 @@ impl Qwen25A16Backend {
             canonical_job,
             plan: None,
             court_capable,
+            step_ladder_cap: kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
         }
+    }
+
+    /// **The ladder top from the ruleset**, for a caller that holds `PalwCourtParamsV2`. Passing
+    /// `max_step_leaf_count` is the only correct argument; passing the leg's default constant is
+    /// what both constructors already do.
+    pub fn with_step_ladder_cap(mut self, max_step_leaf_count: u64) -> Self {
+        self.step_ladder_cap = max_step_leaf_count;
+        self
+    }
+
+    /// The ladder top this instance refuses a capture above.
+    pub fn step_ladder_cap(&self) -> u64 {
+        self.step_ladder_cap
     }
 
     /// **ADR-0067 Decision 2's constructor: a backend for a class this build's table never
@@ -444,6 +468,7 @@ impl Qwen25A16Backend {
             canonical_job,
             plan: Some(plan),
             court_capable,
+            step_ladder_cap: kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
         })
     }
 
@@ -504,8 +529,8 @@ impl Qwen25A16Backend {
     ) -> Result<kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1, String> {
         let (binding, tiles, logits_rows, generated, checkpoint_chunks) =
             crate::produce::base0_material_decode_v1(material).map_err(|_| "the capture does not decode".to_string())?;
-        if binding.step_leaf_count == 0 || binding.step_leaf_count > kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES {
-            return Err("the binding's leaf count is outside the leg's own cap".to_string());
+        if binding.step_leaf_count == 0 || binding.step_leaf_count > self.step_ladder_cap {
+            return Err("the binding's leaf count is outside the ruleset's ladder".to_string());
         }
         let coord = kaspa_consensus_core::palw_step::canonical_step_coordinates(&binding.shape_profile, &binding.job_context, index)
             .ok_or_else(|| format!("leaf {index} is not a main step coordinate"))?;
@@ -576,7 +601,7 @@ impl Qwen25A16Backend {
             None
         };
 
-        crate::legs::base0_refutation_from_capture_v1(
+        crate::legs::base0_refutation_from_capture_capped_v1(
             &binding.shape_profile.clone(),
             &binding.job_context.clone(),
             &step_tiles,
@@ -585,6 +610,7 @@ impl Qwen25A16Backend {
             prompt_token_ids,
             Some(pin),
             kv_checkpoint,
+            self.step_ladder_cap,
         )
         .map_err(|e| format!("{e:?}"))
     }
@@ -740,7 +766,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         prompt_tokens: &[usize],
         on_token: &mut dyn FnMut(u32),
     ) -> Result<kaspa_consensus_core::palw_backend::PalwFpRunV1, String> {
-        use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, PalwFpRunFactsV3, palw_fp_job_context_v3};
+        use kaspa_consensus_core::palw_fp_execution_v3::{palw_fp_job_context_v3, PalwFpClassFactsV3, PalwFpRunFactsV3};
         use kaspa_consensus_core::palw_freeprompt_v3::PalwFpStopReasonV3;
 
         // ADR-0077 SA-6: an artifact this host can no longer read is a job failure named at the
@@ -885,7 +911,7 @@ impl PalwExecutionBackendV1 for Qwen25A16Backend {
         let (binding, tiles, _, _, _) = crate::produce::base0_material_decode_v1(material).ok()?;
         // The count arrived over gossip inside a borsh blob; bounding it BEFORE the allocation is
         // the lesson the seat check already wrote down.
-        if binding.step_leaf_count == 0 || binding.step_leaf_count > kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES {
+        if binding.step_leaf_count == 0 || binding.step_leaf_count > self.step_ladder_cap {
             return None;
         }
         let leaves = a16_leaves_by_position(&binding, &tiles);
@@ -1038,11 +1064,11 @@ mod free_prompt_tests {
     use super::*;
     use crate::artifact::{Base0ShapeV1, LN_THETA_10000_GEN_Q};
     use crate::engine_a16::derived_a16_store;
-    use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, palw_fp_execution_root_v3, palw_fp_job_context_v3};
+    use kaspa_consensus_core::palw_fp_execution_v3::{palw_fp_execution_root_v3, palw_fp_job_context_v3, PalwFpClassFactsV3};
     use kaspa_consensus_core::palw_freeprompt_v3::{
-        PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER, PALW_FP_V3_VERSION, PalwFpStopReasonV3, PalwFreePromptJobV3,
+        PalwFpStopReasonV3, PalwFreePromptJobV3, PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER, PALW_FP_V3_VERSION,
     };
-    use kaspa_consensus_core::palw_qwen25_profile::{PalwQwen25GeometryV1, qwen25_a16_profile_v1, qwen25_a16_profile_v2};
+    use kaspa_consensus_core::palw_qwen25_profile::{qwen25_a16_profile_v1, qwen25_a16_profile_v2, PalwQwen25GeometryV1};
     use kaspa_consensus_core::palw_state_chunk_map as map;
     use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
 
@@ -1203,7 +1229,7 @@ mod free_prompt_tests {
     /// attention step (the v2-map checkpoint geometry).
     #[test]
     fn every_a16_leaf_adjudicates_and_a_tampered_one_convicts() {
-        use kaspa_consensus_core::palw_step_refute::{PalwStepRefuteError, check_execution_step_refutation_v1};
+        use kaspa_consensus_core::palw_step_refute::{check_execution_step_refutation_v1, PalwStepRefuteError};
 
         let (artifact, profile) = class_from(map::integer_kv_state_chunk_map_id_v2(), true);
         let backend = Qwen25A16Backend::new(artifact.clone(), NETWORK.to_vec(), profile.clone(), (4, 3));

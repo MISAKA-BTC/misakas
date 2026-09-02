@@ -37,6 +37,17 @@ pub struct Base0Backend {
     canonical_job: (u32, u32),
     /// The geometry this class's `artifact_root` was matched under — see `ResolvedClassV1`.
     inventory_geometry: kaspa_consensus_core::palw_base0_profile::PalwBase0GeometryV1,
+    /// **The ladder top this instance measures a served capture against** — the ruleset's
+    /// `PalwCourtParamsV2::max_step_leaf_count`, defaulting to the leg's own constant.
+    ///
+    /// It is also the bound that was missing entirely here. `leaves_by_position` allocates
+    /// `step_leaf_count` `Hash64`s, and `step_leaf_count` is a plain `u64` out of a gossiped borsh
+    /// blob: `produce::base0_material_matches_claim_v1` writes the whole reasoning down (a few
+    /// hundred bytes asking for `2^48` leaves is a `2^54`-byte allocation, which is
+    /// `handle_alloc_error` and a process ABORT, not a catchable panic) and the A16 backend guards
+    /// both of its own entry points. This backend's two — `bisect_prefix_state` and
+    /// `refutation_with_prompt` — did not, and they are reached from the same relayed blob.
+    step_ladder_cap: u64,
 }
 
 impl Base0Backend {
@@ -47,7 +58,21 @@ impl Base0Backend {
             artifact: resolved.artifact,
             canonical_job: resolved.canonical_job,
             inventory_geometry: resolved.inventory_geometry,
+            step_ladder_cap: kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
         }
+    }
+
+    /// **The ladder top from the ruleset**, for a caller that holds `PalwCourtParamsV2`. Passing
+    /// `max_step_leaf_count` is the only correct argument; [`Base0Backend::new`] passes the leg's
+    /// default, which is what every shipped preset froze.
+    pub fn with_step_ladder_cap(mut self, max_step_leaf_count: u64) -> Self {
+        self.step_ladder_cap = max_step_leaf_count;
+        self
+    }
+
+    /// The ladder top this instance refuses a served capture above.
+    pub fn step_ladder_cap(&self) -> u64 {
+        self.step_ladder_cap
     }
 
     /// The graph, for the callers that still need it directly (the retention writer names the
@@ -70,6 +95,11 @@ impl Base0Backend {
     ) -> Result<kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1, String> {
         let (binding, tiles, logits_rows, generated, _) =
             base0_material_decode_v1(material).map_err(|_| "the capture does not decode".to_string())?;
+        // **Bound the count BEFORE `leaves_by_position` allocates from it** — see
+        // `step_ladder_cap`. The cap is the ruleset's ladder top, not a module literal.
+        if binding.step_leaf_count == 0 || binding.step_leaf_count > self.step_ladder_cap {
+            return Err("the binding's leaf count is outside the ruleset's ladder".to_string());
+        }
         // The ladder narrows to an INDEX; the prover addresses a COORDINATE. `canonical_step_
         // coordinates` is the inverse of the index the ladder counts in, and it answers `None` for
         // the KV aux leaves, which live in their own coordinate space and cannot be opened this way.
@@ -228,7 +258,7 @@ impl PalwExecutionBackendV1 for Base0Backend {
         prompt_tokens: &[usize],
         on_token: &mut dyn FnMut(u32),
     ) -> Result<kaspa_consensus_core::palw_backend::PalwFpRunV1, String> {
-        use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, PalwFpRunFactsV3, palw_fp_job_context_v3};
+        use kaspa_consensus_core::palw_fp_execution_v3::{palw_fp_job_context_v3, PalwFpClassFactsV3, PalwFpRunFactsV3};
         use kaspa_consensus_core::palw_freeprompt_v3::PalwFpStopReasonV3;
 
         // ADR-0077 SA-6: an artifact this host can no longer read is a job failure named at the
@@ -393,6 +423,11 @@ impl PalwExecutionBackendV1 for Base0Backend {
 
     fn bisect_prefix_state(&self, material: &[u8], index: u64) -> Option<kaspa_hashes::Hash64> {
         let (binding, tiles, _, _, _) = base0_material_decode_v1(material).ok()?;
+        // **Bound the count BEFORE `leaves_by_position` allocates from it** — see
+        // `step_ladder_cap`. Without this the relayed blob decides the allocation.
+        if binding.step_leaf_count == 0 || binding.step_leaf_count > self.step_ladder_cap {
+            return None;
+        }
         let leaves = leaves_by_position(&binding, &tiles);
         Some(crate::legs::base0_bisect_prefix_state_v1(&binding.job_context, &leaves, index))
     }
@@ -670,7 +705,7 @@ mod tests {
     #[test]
     fn a_court_goes_both_ways_through_one_prover() {
         use kaspa_consensus_core::palw_step::{canonical_step_coordinates, canonical_step_leaf_index};
-        use kaspa_consensus_core::palw_step_refute::{PalwStepRefuteError, check_execution_step_refutation_v1};
+        use kaspa_consensus_core::palw_step_refute::{check_execution_step_refutation_v1, PalwStepRefuteError};
 
         let backend = floor_backend();
         let (job, prompt) = backend.job_for_anchor(Hash64::from_u64_word(0xC0117)).expect("job");
@@ -800,7 +835,7 @@ mod tests {
     fn a_close_carries_exactly_the_rows_the_court_reads() {
         use kaspa_consensus_core::palw_artifact::PalwProvenOperandsV1;
         use kaspa_consensus_core::palw_step::{canonical_step_coordinates, canonical_step_leaf_index};
-        use kaspa_consensus_core::palw_step_refute::{PalwStepRefuteError, check_execution_step_refutation_v1};
+        use kaspa_consensus_core::palw_step_refute::{check_execution_step_refutation_v1, PalwStepRefuteError};
 
         let backend = floor_backend();
         let class_root = crate::rc::palw_rc_base0_artifact_root_v1().expect("the floor's pinned root");
@@ -963,10 +998,10 @@ mod tests {
     /// refused at the prover; and one tampered lane convicts at kernels of different shapes.
     #[test]
     fn every_free_prompt_leaf_adjudicates_and_a_tampered_one_convicts() {
-        use kaspa_consensus_core::palw_artifact::{PalwProvenOperandsV1, open_artifact_leaf_v1};
-        use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpRunFactsV3, palw_fp_job_context_v3};
-        use kaspa_consensus_core::palw_freeprompt_v3::{PalwFpStopReasonV3, fp_job_id_v3};
-        use kaspa_consensus_core::palw_step_refute::{PalwStepRefuteError, check_execution_step_refutation_v1};
+        use kaspa_consensus_core::palw_artifact::{open_artifact_leaf_v1, PalwProvenOperandsV1};
+        use kaspa_consensus_core::palw_fp_execution_v3::{palw_fp_job_context_v3, PalwFpRunFactsV3};
+        use kaspa_consensus_core::palw_freeprompt_v3::{fp_job_id_v3, PalwFpStopReasonV3};
+        use kaspa_consensus_core::palw_step_refute::{check_execution_step_refutation_v1, PalwStepRefuteError};
         use kaspa_consensus_core::palw_v2::prompt_token_ids_hash_v2;
 
         let backend = floor_backend();
@@ -1093,7 +1128,7 @@ mod tests {
     #[test]
     fn the_backend_opens_and_verifies_the_intervals_a_seat_draws() {
         use kaspa_consensus_core::palw_backend::PalwFpIntervalVerdictV1;
-        use kaspa_consensus_core::palw_fp_interval_v1::{PALW_FP_SEAT_INTERVAL_SAMPLES_V1, palw_fp_interval_draw_v1};
+        use kaspa_consensus_core::palw_fp_interval_v1::{palw_fp_interval_draw_v1, PALW_FP_SEAT_INTERVAL_SAMPLES_V1};
 
         let backend = floor_backend();
         let prompt: Vec<usize> = vec![7, 11, 13, 17];
@@ -1142,6 +1177,45 @@ mod tests {
             );
         }
     }
+
+    /// **A gossiped leaf count decides an allocation, so it is bounded before it is believed.**
+    ///
+    /// `leaves_by_position` builds `vec![Hash64::default(); step_leaf_count]`, and
+    /// `step_leaf_count` is a plain `u64` inside a relayed borsh blob. `2^48` of them is a
+    /// `2^54`-byte allocation — under `isize::MAX`, so it is `handle_alloc_error` and a process
+    /// ABORT rather than a catchable panic, on every seat the blob reached. `produce`'s claim
+    /// checker and the A16 backend both bound it; these two entry points did not.
+    #[test]
+    fn a_capture_claiming_a_leaf_count_past_the_ladder_is_refused_before_it_allocates() {
+        let backend = floor_backend();
+        assert_eq!(
+            backend.step_ladder_cap(),
+            kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES,
+            "the shipped default is the leg's own ladder top — nothing here arms a deeper one"
+        );
+        let anchor = Hash64::from_u64_word(0xB0_11_3D);
+        let (job, prompt) = backend.job_for_anchor(anchor).expect("the anchor implies a job");
+        let outcome = backend.execute(&job, &prompt).expect("the floor runs");
+        assert!(backend.bisect_prefix_state(&outcome.material, 1).is_some(), "the honest capture answers");
+
+        let (mut binding, tiles, rows, generated, chunks) =
+            base0_material_decode_v1(&outcome.material).expect("the honest capture decodes");
+        let honest_count = binding.step_leaf_count;
+        for bent_count in [1u64 << 48, 0, kaspa_consensus_core::palw_step_leg::PALW_STEP_LEG_MAX_LEAVES + 1] {
+            binding.step_leaf_count = bent_count;
+            let bent = borsh::to_vec(&(&binding, &tiles, &rows, &generated, &chunks)).expect("serializes");
+            assert_eq!(backend.bisect_prefix_state(&bent, 1), None, "a {bent_count}-leaf claim must not be allocated from");
+            assert!(backend.refutation_for_index(&bent, 1).is_err(), "nor opened at {bent_count}");
+        }
+        // The bound is the field's, not the blob's: restoring the honest count restores both verbs.
+        binding.step_leaf_count = honest_count;
+        let restored = borsh::to_vec(&(&binding, &tiles, &rows, &generated, &chunks)).expect("serializes");
+        assert_eq!(
+            backend.bisect_prefix_state(&restored, 1),
+            backend.bisect_prefix_state(&outcome.material, 1),
+            "and an honest count is untouched by the guard"
+        );
+    }
 }
 
 /// **The whole lane, end to end, with a real execution in it.**
@@ -1160,15 +1234,15 @@ mod tests {
 mod end_to_end_tests {
     use super::*;
     use crate::classes::{canonical_class_by_model_id_v1, resolve_class_v1};
-    use kaspa_consensus_core::palw_fp_execution_v3::{PalwFpClassFactsV3, palw_fp_commitment_v3};
+    use kaspa_consensus_core::palw_fp_execution_v3::{palw_fp_commitment_v3, PalwFpClassFactsV3};
     use kaspa_consensus_core::palw_freeprompt_v3::{
-        PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER, PALW_FP_V3_VERSION, PalwBeaconFactV3, PalwFreePromptJobV3,
-        fp_claim_id_v3, fp_quanta_v3,
+        fp_claim_id_v3, fp_quanta_v3, PalwBeaconFactV3, PalwFreePromptJobV3, PALW_FP_PRIVACY_PUBLIC_DA, PALW_FP_PROMPT_MODE_USER,
+        PALW_FP_V3_VERSION,
     };
     use kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2;
     use kaspa_consensus_core::palw_state_v2::{
-        PalwBlockContextV2, PalwBondKeyV2, PalwChainStateV2, PalwClaimPhaseV2, PalwConsensusObjectV2 as Obj, PalwPanelSeatV2,
-        PalwPwuRuleV2, PalwStateParamsV2, apply_palw_transition_v2,
+        apply_palw_transition_v2, PalwBlockContextV2, PalwBondKeyV2, PalwChainStateV2, PalwClaimPhaseV2, PalwConsensusObjectV2 as Obj,
+        PalwPanelSeatV2, PalwPwuRuleV2, PalwStateParamsV2,
     };
     use kaspa_consensus_core::tx::{TransactionId, TransactionOutpoint};
 
