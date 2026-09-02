@@ -44,6 +44,8 @@
 //! | derivations | [`crate::palw_derived_v1::PALW_DERIVED_MAX_PER_CLAIM`] = 4 | `palw_derived_v1.rs:36` | the ceiling is per claim, but a `PalwDerivedArtifactV1` names a SINGULAR `claim_id`/`output_root` — N × 4 slots that no derivation can span |
 //! | abandon hold | `fp_abandon_hold` = 600 DAA (RC) | `palw_fp_devnet_v3.rs:100`, read by [`crate::palw_state_v2::palw_claim_is_on_abandon_hold_v2`] (`:1070`) | N reservations held past the void, not one |
 //! | exposure lifetime | `max_claim_exposure_daa` = 7,200 DAA (RC) | [`crate::palw_fp_devnet_v3::PalwLatticeWindowsV1::max_claim_exposure_daa`] (`palw_fp_devnet_v3.rs:82`) | the segments of one answer are CONCURRENT, so the bond must carry N reservations at once against one `fp_max_exposure_ratio_permille` ceiling |
+//! | payout queue rows | one `pending_payouts` row per finalized claim | [`crate::palw_state_v2::PalwChainStateV2`] `pending_payouts` (`palw_state_v2.rs:2866`), written by `write_payout` (`:4325`) | N rows, and unlike the four rebuildable indices this one IS hashed into `state_root` (`:3213`) |
+//! | payout drain rate | [`crate::palw_state_v2::PALW_V2_MAX_PAYOUTS_PER_BLOCK`] = 8 per block | `palw_state_v2.rs:233`, drained at `palw_state_v2.rs:4616` | **the row segmentation actually breaks.** The constant is sized by an explicit premise — *"Eight against at most one new claim per block: a backlog drains eight times faster than it can be created, so this bounds latency, not throughput"* — and N claims per answer is exactly the assumption's negation. At N ≥ 8 the queue stops draining faster than it fills |
 //! | epoch budget | `budget_blocks`, denominated in **blocks** | [`crate::palw_state_v2::PalwEpochBudgetsV2`] (`:1713`), derived by [`crate::palw_state_v2::derive_epoch_budgets_v2`] (`:5159`) | not a leaf quantity in either direction: the derivation is `⌊tol‰ · E · s_c / (1000 · denom_c)⌋` and takes no pwu, no leaves and no claim count — *"Blocks, never pwu"* |
 //! | court close bytes | ≤ [`crate::palw_mode_v2::DEFAULT_MAX_CLOSE_BYTES`] (80 KiB) per dispute | [`crate::palw_class_admission_v2::derive_court_cost_v1`] (`palw_class_admission_v2.rs:255`) | **NOT 1/N.** ADR-0080 §1 measured the binding node as `attn[23] ffn_down`, whose operand width is the MODEL's `ffn_dim` and reads no history — a segment's close is the same size as the whole claim's |
 //! | claim state rows | `claims`, `panels`, `work_ids`, `unresolved`, `deadlines`, `open_courts_by_claim` | `palw_state_v2.rs:2880-2910` | N rows in every one of them |
@@ -75,6 +77,7 @@ use crate::dns_finality::STAKE_ATTESTATION_SIG_LEN;
 use crate::palw_derived_v1::PALW_DERIVED_MAX_PER_CLAIM;
 use crate::palw_fp_devnet_v3::{PALW_V2_PANEL_QUORUM, PALW_V2_PANEL_SEATS};
 use crate::palw_fp_interval_v1::PALW_FP_SEAT_INTERVAL_SAMPLES_V1;
+use crate::palw_state_v2::PALW_V2_MAX_PAYOUTS_PER_BLOCK;
 
 /// Where a quantity is denominated — the only question this module asks about anything.
 ///
@@ -217,6 +220,20 @@ pub const PALW_ECONOMIC_LOCUS_CENSUS_V1: &[PalwEconomicQuantityV1] = &[
         under_n_segments: "N rows in every index, all of them inside the state root",
     },
     PalwEconomicQuantityV1 {
+        name: "payout queue rows (pending_payouts)",
+        locus: PalwEconomicLocusV1::PerClaim,
+        cited_at: "palw_state_v2.rs:2866 PalwChainStateV2::pending_payouts",
+        under_n_segments: "N rows, hashed into state_root — this one is NOT a rebuildable index",
+    },
+    PalwEconomicQuantityV1 {
+        name: "payout drain rate (PALW_V2_MAX_PAYOUTS_PER_BLOCK)",
+        locus: PalwEconomicLocusV1::PerBlock,
+        cited_at: "palw_state_v2.rs:233 PALW_V2_MAX_PAYOUTS_PER_BLOCK",
+        under_n_segments: "fixed at 8/block while the queue fills N per answer — the constant's own \
+                           sizing premise is 'at most one new claim per block', which is what \
+                           segmentation negates",
+    },
+    PalwEconomicQuantityV1 {
         name: "producer escrow (escrowed_reward)",
         locus: PalwEconomicLocusV1::PerBlock,
         cited_at: "palw_state_v2.rs:6881 apply_free_prompt (zero on a commitment)",
@@ -260,6 +277,14 @@ pub struct PalwSegmentationCostV1 {
     pub exposure_sompi: u128,
     /// `segments × PALW_DERIVED_MAX_PER_CLAIM`.
     pub derivation_slots: u64,
+    /// One `pending_payouts` row per finalized claim — hashed into the state root, not a
+    /// rebuildable index.
+    pub payout_rows: u64,
+    /// **Blocks the payout queue needs to drain this answer**, at
+    /// [`PALW_V2_MAX_PAYOUTS_PER_BLOCK`] per block: `⌈payout_rows / 8⌉`. One for an unsegmented
+    /// answer, and the number that shows why the constant's sizing premise does not survive
+    /// segmentation.
+    pub payout_drain_blocks: u64,
 }
 
 /// The borsh wire size of one `PalwSeatReceiptV2` carrying a `Valid` verdict and a full-length
@@ -299,6 +324,8 @@ pub fn palw_segmentation_cost_v1(segments: u64, per_claim_exposure_sompi: u128) 
             .saturating_mul(PALW_FP_SEAT_INTERVAL_SAMPLES_V1 as u64),
         exposure_sompi: (segments as u128).saturating_mul(per_claim_exposure_sompi),
         derivation_slots: segments.saturating_mul(PALW_DERIVED_MAX_PER_CLAIM as u64),
+        payout_rows: segments,
+        payout_drain_blocks: segments.div_ceil(PALW_V2_MAX_PAYOUTS_PER_BLOCK as u64),
     }
 }
 
@@ -351,6 +378,7 @@ mod tests {
         assert_eq!(PALW_FP_SEAT_INTERVAL_SAMPLES_V1, 4, "a seat opens k=4 intervals per claim");
         assert_eq!(PALW_DERIVED_MAX_PER_CLAIM, 4, "four derivations per claim");
         assert_eq!(STAKE_ATTESTATION_SIG_LEN, 4_627, "one ML-DSA-87 signature");
+        assert_eq!(PALW_V2_MAX_PAYOUTS_PER_BLOCK, 8, "the payout queue drains eight claims per block");
         assert_eq!(crate::palw_fp_devnet_v3::PALW_RC_WINDOWS_V1.fp_abandon_hold, 600, "the RC abandon hold, in DAA");
         assert_eq!(
             crate::palw_fp_devnet_v3::PALW_RC_WINDOWS_V1.max_claim_exposure_daa(),
@@ -366,7 +394,7 @@ mod tests {
     fn only_per_leaf_rows_claim_invariance() {
         assert_eq!(
             PALW_ECONOMIC_LOCUS_CENSUS_V1.len(),
-            18,
+            20,
             "the census is complete or it is nothing — a row added or dropped is a deliberate edit here"
         );
         let mut names: Vec<&str> = PALW_ECONOMIC_LOCUS_CENSUS_V1.iter().map(|row| row.name).collect();
@@ -591,6 +619,49 @@ mod tests {
             "the hold is a term of ONE claim's exposure lifetime, so N claims hold N of them"
         );
         assert_eq!(rc.max_claim_exposure_daa(), 7_200);
+    }
+
+    /// **The payout queue is the row where segmentation breaks a stated premise, not just a
+    /// budget.** `pending_payouts` holds one row per finalized claim and the transition drains at
+    /// most [`PALW_V2_MAX_PAYOUTS_PER_BLOCK`] of them per block (`palw_state_v2.rs:4616`). That
+    /// constant is not arbitrary: it is sized by an argument written twice in the source, at its
+    /// definition (`:232`) and at the drain (`:4614`) —
+    ///
+    /// > *"Eight against at most one new claim per block: a backlog drains eight times faster
+    /// > than it can be created, so this bounds latency, not throughput."*
+    ///
+    /// "At most one new claim per block" is precisely what a segmenting design negates. One
+    /// answer arriving as N claims enqueues N payout rows, and the safety factor the constant was
+    /// chosen for is divided by N: at N ≥ 8 the queue no longer drains faster than it fills, and
+    /// the property the comment claims — bounds latency, NOT throughput — inverts.
+    ///
+    /// The chain does not break here (the drain is a prefix and the coinbase builder takes the
+    /// same one, so nodes agree), but a design that segments must either keep N < 8 or re-argue
+    /// this constant. That is the whole job of this census.
+    #[test]
+    fn the_payout_queue_drains_per_block_against_a_premise_segmentation_negates() {
+        assert_eq!(PALW_V2_MAX_PAYOUTS_PER_BLOCK, 8);
+
+        // One answer, one claim: one row, drained by the very next block.
+        let single = palw_segmentation_cost_v1(1, 0);
+        assert_eq!((single.payout_rows, single.payout_drain_blocks), (1, 1));
+
+        // The premise holds while an answer is one claim, and fails the moment it is nine.
+        let at_the_edge = palw_segmentation_cost_v1(PALW_V2_MAX_PAYOUTS_PER_BLOCK as u64, 0);
+        assert_eq!(at_the_edge.payout_drain_blocks, 1, "eight segments still clear in one block");
+        let past_the_edge = palw_segmentation_cost_v1(PALW_V2_MAX_PAYOUTS_PER_BLOCK as u64 + 1, 0);
+        assert_eq!(past_the_edge.payout_drain_blocks, 2, "nine does not — one answer now outlives one block");
+
+        // The census's running example.
+        let many = palw_segmentation_cost_v1(37, 0);
+        assert_eq!(many.payout_rows, 37, "one row per segment, each hashed into the state root");
+        assert_eq!(many.payout_drain_blocks, 5, "⌈37/8⌉ — five blocks of coinbase to pay ONE answer");
+        assert_eq!(
+            many.payout_drain_blocks,
+            5 * single.payout_drain_blocks,
+            "the drain is a per-BLOCK ceiling met by a per-CLAIM queue, so segmentation is the only \
+             term that can move it"
+        );
     }
 
     /// The epoch budget is denominated in BLOCKS, and [`crate::palw_state_v2::derive_epoch_budgets_v2`]
