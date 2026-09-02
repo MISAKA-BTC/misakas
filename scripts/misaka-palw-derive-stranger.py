@@ -1092,6 +1092,117 @@ def cmd_selftest(args) -> int:
         else:
             print(f"  {name:<14} every corpus file has a golden entry ({len(golden)})")
 
+    print("== oracle 4: the `verify` path itself, round-tripped and then tampered with ==")
+    # `verify` is what the drill's stage 10 runs. A verifier whose arithmetic is right and whose
+    # COMPARISON is wrong would pass a false object, so the comparison is exercised here on a
+    # synthetic chain read built from a corpus answer: once as the chain would carry it (must be
+    # `consistent`), and once with one hash moved by a byte (must be a MISMATCH, exit 2). Without
+    # the second half the first proves only that the function returns zero.
+    import argparse as _argparse
+    import tempfile
+
+    for name in sorted(TRANSFORMERS):
+        kind_dir = os.path.join(root, "corpus", name.split("/")[0])
+        answer_file = None
+        for entry in sorted(os.listdir(kind_dir)):
+            if entry.endswith(".json") and entry != "golden.json" and not entry.startswith("9"):
+                try:
+                    with open(os.path.join(kind_dir, entry), "rb") as fh:
+                        derive(name, fh.read(), computed_tree)
+                except (Refused, Unimplemented):
+                    continue
+                answer_file = os.path.join(kind_dir, entry)
+                break
+        if answer_file is None:
+            continue
+        with open(answer_file, "rb") as fh:
+            answer = fh.read()
+        d = derive(name, answer, computed_tree)
+        # A synthetic claim: the ids and the context hash a consumer would hold, and the
+        # output_root the chain would carry for them.
+        ids = [1, 2, 3, 4]
+        family = "qwen25-a16"
+        job_ctx = bytes(range(64))
+        output_root = output_commitment_v2(job_ctx, ids, rendered_output_hash_v1(family, ids))
+        network_domain = bytes(64)
+        claim = bytes([7]) * 64
+        pubkey = bytes(PALW_DERIVED_V1_EXECUTOR_PUBKEY_LEN)
+        obj = {
+            "version": PALW_DERIVED_V1_VERSION,
+            "network_domain": network_domain,
+            "claim_id": claim,
+            "output_root": output_root,
+            "grammar_id": d["grammar_id"],
+            "transformer_id": d["transformer_id"],
+            "kind": d["kind"],
+            "dsl_hash": d["dsl_hash"],
+            "artifact_hash": d["artifact_hash"],
+            "artifact_bytes": len(d["artifact"]),
+            "executor_pubkey": pubkey,
+        }
+        chain_doc = {
+            "found": True,
+            "claim_id": claim.hex(),
+            "output_root": output_root.hex(),
+            "network_domain": network_domain.hex(),
+            "executor_pubkey": pubkey.hex(),
+            "artifacts": [{
+                "transformer_id": d["transformer_id"].hex(),
+                "derived_id": derived_id_v1(obj).hex(),
+                "grammar_id": d["grammar_id"].hex(),
+                "kind": d["kind"],
+                "dsl_hash": d["dsl_hash"].hex(),
+                "artifact_hash": d["artifact_hash"].hex(),
+                "artifact_bytes": len(d["artifact"]),
+            }],
+        }
+        gateway_doc = {"misaka": {"output_token_ids": ids, "job_context_hash": job_ctx.hex(), "family": family}}
+        with tempfile.TemporaryDirectory() as tmp:
+            def _write(stem, doc):
+                p = os.path.join(tmp, stem)
+                with open(p, "w", encoding="utf-8") as fh:
+                    json.dump(doc, fh)
+                return p
+
+            ans_p = os.path.join(tmp, "answer")
+            with open(ans_p, "wb") as fh:
+                fh.write(answer)
+            art_p = os.path.join(tmp, "artifact")
+            with open(art_p, "wb") as fh:
+                fh.write(d["artifact"])
+            import contextlib, io
+
+            def _run(doc):
+                ns = _argparse.Namespace(
+                    crate_root=root, chain=_write("chain.json", doc), answer=ans_p,
+                    gateway=_write("gw.json", gateway_doc), artifact=art_p,
+                )
+                with contextlib.redirect_stdout(io.StringIO()):
+                    return cmd_verify(ns)
+
+            checked += 1
+            rc = _run(chain_doc)
+            if rc == 0:
+                print(f"  {name:<14} a well-formed chain read verifies: consistent")
+            else:
+                failures.append(f"{name}: verify() refused a chain read this path itself built (exit {rc})")
+                print(f"  {name:<14} verify() refused its own round-trip (exit {rc})")
+            # Tamper: move one byte of `artifact_hash`. The object is now false and `verify` must
+            # say so — and it must not be rescued by any other field agreeing.
+            import copy
+
+            bad = copy.deepcopy(chain_doc)
+            h = bytearray(d["artifact_hash"])
+            h[0] ^= 1
+            bad["artifacts"][0]["artifact_hash"] = bytes(h).hex()
+            checked += 1
+            rc = _run(bad)
+            if rc == 2:
+                print(f"  {name:<14} a tampered artifact_hash is caught: MISMATCH (exit 2)")
+            else:
+                failures.append(f"{name}: verify() did NOT catch a tampered artifact_hash (exit {rc})")
+                print(f"  {name:<14} verify() MISSED a tampered artifact_hash (exit {rc})")
+
     print()
     if failures:
         print(f"SELFTEST FAILED — {len(failures)} of {checked} checks disagree with the shipped tree:")
