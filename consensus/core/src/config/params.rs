@@ -767,6 +767,29 @@ pub struct Params {
     /// `the_shipped_registry_still_draws_a_full_panel_with_the_capability_fence_armed` is the
     /// assertion, not a deployment note.
     pub palw_capability_bound: Option<ForkActivation>,
+    /// **ADR-0077 Phase B — the court prices the checkpoint, not the context.** `None` on every
+    /// shipped preset, so the behaviour is byte-identical to not having the field at all.
+    ///
+    /// Past this fence, Decisions 10–14 and SA-4 are the rules: the ladder's top is
+    /// [`crate::palw_context_ladder::PALW_CONTEXT_LADDER_MAX_STEP_LEAVES`] (`2^32`) rather than
+    /// `PALW_STEP_MAX_LEAVES` (`2^22`); a class that registers a state chunk map is priced over its
+    /// checkpoint interval rather than over its whole context and is refused the genesis-anchored
+    /// long form; registration requires the canonical job's footprint to be at least `n_ctx / 8`;
+    /// and the court's move clock is DERIVED from the window and the ladder
+    /// ([`crate::palw_context_ladder::palw_court_turn_deadline_v1`]) instead of typed.
+    ///
+    /// **A bare fence with no companion value, deliberately** — the `palw_frontier_provenance`
+    /// rule, for its reason. Every number Phase B installs is a `PalwConsensusParamsV2` field and
+    /// therefore already inside `palw_ruleset_id_v2`, which is one atomic commitment to the whole
+    /// bundle; a value sitting beside this fence but not inside it would be normalised out of
+    /// [`Self::consensus_identity_id`], and two builds scheduling Phase B at one height with
+    /// different ladders would share an identity, peer, and disagree the moment it fired.
+    ///
+    /// Which is also why arming it on a running testnet-11 is a RE-MINT rather than a schedule:
+    /// the bundle it selects has a different ruleset id, so the two are different networks by
+    /// construction. The fence exists so that fact is stated in the type rather than discovered in
+    /// a diff.
+    pub palw_context_ladder: Option<ForkActivation>,
 
     /// ADR-0042 Decision 1 (PR-10): the ONE PALW switch on the V2 lineage. `Disabled` on every
     /// shipped preset. A network is in exactly one mode; `ConsensusV2` carries the whole atomic
@@ -1478,6 +1501,10 @@ impl Params {
         if self.palw_capability_bound == Some(ForkActivation::never()) {
             self.palw_capability_bound = None;
         }
+        // ADR-0077 Phase B, a bare fence: same collapse, same reason.
+        if self.palw_context_ladder == Some(ForkActivation::never()) {
+            self.palw_context_ladder = None;
+        }
         let Some(dns) = self.dns_params.as_mut() else {
             return;
         };
@@ -1680,6 +1707,7 @@ impl Params {
             palw_inactivity_leak,
             palw_beacon_fold,
             palw_capability_bound,
+            palw_context_ladder,
             // The V2 bundle's fences are inside `palw_ruleset_id_v2` — see the doc block.
             palw_consensus_mode: _,
             pow_blake2b_sha3_activation,
@@ -1803,6 +1831,15 @@ impl Params {
         // ADR-0071 SA-1..SA-4. A pure fence with no duration beside it, so visiting it is safe:
         // the identity visitor normalises a height, and a height is all this field carries.
         match palw_capability_bound.as_mut() {
+            Some(activation) => fork(activation, visit),
+            None => {
+                absent = u64::MAX;
+                visit(&mut absent);
+            }
+        }
+        // ADR-0077 Phase B. A pure fence with no payload beside it, so visiting it is safe: the
+        // identity visitor normalises a height, and a height is all this field carries.
+        match palw_context_ladder.as_mut() {
             Some(activation) => fork(activation, visit),
             None => {
                 absent = u64::MAX;
@@ -1994,6 +2031,7 @@ impl Params {
             palw_inactivity_leak,
             palw_beacon_fold,
             palw_capability_bound,
+            palw_context_ladder,
             palw_consensus_mode,
             pow_blake2b_sha3_activation,
             pow_palw_activation,
@@ -2176,6 +2214,12 @@ impl Params {
             h.write(b"palw_beacon_fold");
             h.write(fold.activation.daa_score().to_le_bytes());
             h.write([fold.k]);
+        }
+        // ADR-0077 Phase B: Some-only, like every fence above it — an unarmed preset fingerprints
+        // byte-identically to a build without the field at all.
+        if let Some(ladder) = palw_context_ladder {
+            h.write(b"palw_context_ladder");
+            h.write(ladder.daa_score().to_le_bytes());
         }
         // ADR-0042 Decisions 1 + 11: the V2 mode decides block validity wholesale, so it is in
         // the fingerprint — through the RULESET ID, one hash for the whole atomic bundle, which
@@ -2458,6 +2502,7 @@ impl Params {
             palw_inactivity_leak: self.palw_inactivity_leak,
             palw_beacon_fold: self.palw_beacon_fold,
             palw_capability_bound: self.palw_capability_bound,
+            palw_context_ladder: self.palw_context_ladder,
             palw_consensus_mode: self.palw_consensus_mode.clone(),
             // kaspa-pq PoW algo activation is consensus-fixed, never runtime-overridable.
             pow_blake2b_sha3_activation: self.pow_blake2b_sha3_activation,
@@ -3368,6 +3413,7 @@ pub const MAINNET_PARAMS: Params = Params {
     palw_inactivity_leak: None,
     palw_beacon_fold: None,
     palw_capability_bound: None,
+    palw_context_ladder: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: inert on mainnet until its own fork ADR schedules it.
@@ -3502,6 +3548,7 @@ pub const TESTNET_PARAMS: Params = Params {
     palw_inactivity_leak: None,
     palw_beacon_fold: None,
     palw_capability_bound: None,
+    palw_context_ladder: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::always(),
     // PALW LLM PoW: DISABLED on the public preset (2026-08-12). The Ollama flavor (algo_id = 5)
@@ -3618,6 +3665,7 @@ pub const SIMNET_PARAMS: Params = Params {
     palw_inactivity_leak: None,
     palw_beacon_fold: None,
     palw_capability_bound: None,
+    palw_context_ladder: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // PALW LLM PoW: simnet keeps instant local kHeavyHash (simulation/tests must not need a model).
@@ -7055,6 +7103,7 @@ pub const DEVNET_PARAMS: Params = Params {
     palw_inactivity_leak: None,
     palw_beacon_fold: None,
     palw_capability_bound: None,
+    palw_context_ladder: None,
     palw_consensus_mode: crate::palw_mode_v2::PalwConsensusMode::Disabled,
     pow_blake2b_sha3_activation: ForkActivation::never(),
     // **Devnet is the ADR-0068 drill network on this branch: ConsensusV2, so no V1 PALW

@@ -170,6 +170,7 @@ pub mod palw_catalog_coverage;
 pub mod palw_chain_weight;
 pub mod palw_class_admission_v2;
 pub mod palw_class_daa;
+pub mod palw_context_ladder;
 pub mod palw_court_v2;
 /// MISAKA PALW class registration (B12): the object every "pinned at registration" sentence
 /// across ADR-0026…0033 meant — measured identities, the derived credited ceiling, windows,
