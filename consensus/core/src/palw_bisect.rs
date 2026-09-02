@@ -58,9 +58,10 @@ pub enum PalwBisectSpaceV1 {
 ///
 /// ADR-0080 splits a court close across several blocks, so a mover spends part of its turn
 /// ASSEMBLING the close rather than answering. The reserve is those blocks
-/// (`palw_context_ladder::PALW_COURT_ASSEMBLY_RESERVE_DAA_V1` is the derived figure, and it is
-/// passed in rather than read here so this machine keeps taking numbers instead of deriving them —
-/// the same discipline that keeps `w_round` an argument).
+/// (`palw_context_ladder::palw_close_assembly_daa_v1(court.max_close_chunks())` is the derived
+/// figure, and it is passed in rather than read here so this machine keeps taking numbers instead
+/// of deriving them — the same discipline that keeps `w_round` an argument). It is a per-RULESET
+/// number, which is the other reason it cannot be read here: two shipped networks answer 216 and 8.
 ///
 /// A rung window that would run past the reserve is pulled back to it. That is a cap, not an
 /// error: the party whose turn it is loses window it was never going to be able to use, and the

@@ -179,6 +179,11 @@ pub fn palw_court_deadline_admits_row_v1(
 ///
 /// The move count is the bundle's own ([`PalwCourtParamsV2::worst_case_duration_daa`]) and the
 /// predicate is [`palw_ladder_fits_window_court_v1`]; this function is the two of them agreeing.
+///
+/// **The assembly reserve is the bundle's own too** (ADR-0080 W4): `court.max_close_chunks()`, not
+/// the ladder module's default. A close spans as many carriers as THIS ruleset admits, and the
+/// window has to hold the blocks THIS ruleset's closes occupy — the RC pays 216 DAA for 27 carriers
+/// and the devnet lattice 8 for one, out of windows that differ by the same order.
 /// **The shipped clock counts MOVES, not rounds** — `worst_case_duration_daa` is
 /// `(2 x bisection_rounds + terminal_rounds) x turn_deadline`, a round being a disclosure and a
 /// verdict (audit M2-24) — so ADR-0077 Decision 12's "`(32 + 2) x 60 = 2,040`" is a round count
@@ -187,7 +192,13 @@ pub fn palw_court_ladder_fits_window_v1(court: &PalwCourtParamsV2, window_court:
     let deadline = court.turn_deadline_daa();
     let moves = 2 * u64::from(court.bisection_rounds()) + u64::from(court.terminal_rounds());
     let worst = court.worst_case_duration_daa().unwrap_or(u64::MAX);
-    if !palw_ladder_fits_window_court_v1(window_court, court.max_step_leaf_count(), court.terminal_rounds(), deadline) {
+    if !palw_ladder_fits_window_court_v1(
+        window_court,
+        court.max_step_leaf_count(),
+        court.terminal_rounds(),
+        deadline,
+        court.max_close_chunks(),
+    ) {
         return Err(PalwCourtDeadlineError::LadderOverrunsWindow { moves, deadline, worst, window_court });
     }
     Ok(worst)
@@ -408,12 +419,20 @@ mod tests {
         assert_eq!(PALW_RC_WINDOWS_V1.window_court, 3_000);
         assert_eq!((2 * 22 + 2) * 60, 2_760);
         assert!(2_760 < PALW_RC_WINDOWS_V1.window_court);
-        // The devnet set, same arithmetic at ITS clock: (2 x 22 + 2) x 5 = 230 < 600. Both of
-        // those numbers moved with ADR-0080's assembly reserve — the window because 300 could no
-        // longer hold `moves x clock + 216`, and the clock because it is DERIVED from the window
-        // and moved with it rather than being held fixed while the derivation walked away.
-        assert_eq!((2 * 22 + 2) * PALW_DEVNET_WINDOWS_V1.court_turn_deadline, 230);
-        assert!(230 < PALW_DEVNET_WINDOWS_V1.window_court);
+        // The devnet set, same arithmetic at ITS clock: (2 x 22 + 2) x 4 = 184 < 300.
+        //
+        // **Neither number moved with ADR-0080, and a commit in between says they did.** The
+        // assembly reserve is `2 x 4 x max_close_chunks` and `max_close_chunks` is a RULESET field:
+        // the RC admits a 27-carrier close and reserves 216, the devnet admits one carrier and
+        // reserves 8. Read from the RC's count the devnet's 300-DAA window holds the ladder at no
+        // clock at all, so window and clock were widened to 600 and 5 to fund a reserve this
+        // network never carries; both are back where they shipped. What the reserve DOES cost here
+        // is eight DAA, and 184 + 8 = 192 is still inside 300.
+        assert_eq!((2 * 22 + 2) * PALW_DEVNET_WINDOWS_V1.court_turn_deadline, 184);
+        assert_eq!(PALW_DEVNET_WINDOWS_V1.court_turn_deadline, 4);
+        assert_eq!(PALW_DEVNET_WINDOWS_V1.window_court, 300);
+        assert_eq!(crate::palw_context_ladder::palw_close_assembly_daa_v1(PALW_DEVNET_WINDOWS_V1.max_close_chunks()), 8);
+        assert!(184 + 8 < PALW_DEVNET_WINDOWS_V1.window_court);
     }
 
     /// **Which term dominates, in numbers** — the finding, not a decoration.
