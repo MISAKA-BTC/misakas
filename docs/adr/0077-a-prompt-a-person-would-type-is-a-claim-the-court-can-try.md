@@ -282,11 +282,23 @@ being a disclosure AND a verdict (audit M2-24). So the gate is
 `(2 × ⌈log₂ leaves⌉ + terminal) × turn_deadline < window_court`, and at `2^32` with the shipped
 deadline that is `(2 × 32 + 2) × 60 = 3,960 > 3,000` — **it does not fit.** The arithmetic below
 was a round count where the code counts moves, so this Decision as first written could not ship.
-What fits: `66 × turn_deadline < 3,000` gives `turn_deadline ≤ 45`, which is the value the ladder
-module already derives, and which the security amendment's superseded "60 → 40" proposal would
-have undercut — an unanchored 8,192-position row costs `8,192 × 572 + 10,000` = exactly 40 DAA and
-would sit on its own floor with zero margin. **45 is the number, and it is pinned from both ends:
-the ladder from above, SA-4's replay floor from below.** For reference, the shipped `2^22` ladder
+What fits: `66 × turn_deadline < 3,000` gives `turn_deadline ≤ 45`, and the superseded "60 → 40"
+proposal would have undercut it — an unanchored 8,192-position row costs `8,192 × 572 + 10,000` =
+exactly 40 DAA and would sit on its own floor with zero margin. So the bound is pinned from both
+ends: the ladder from above, SA-4's replay floor from below.
+
+**45 was that bound while a move was the only thing a turn paid for. It is 42 now, and the missing
+term is ADR-0080's.** A court window also pays for close ASSEMBLY — the blocks a mover spends
+carrying a split close are blocks no move gets — and that reserve comes off the top before a clock
+is derived: `(3,000 − 216 − 1) / 66 = 42`, where 216 is `2 × 4 × max_close_chunks` read from
+`PalwCourtParamsV2`. The 45 above is this Decision's arithmetic with the reserve set to zero, which
+was true of the tree it was written against and is not true of the shipped ruleset.
+
+This is recorded rather than overwritten because the two numbers were briefly used as evidence for
+each other. When the reserve was mis-sized at a value that made the ladder derive 45, that agreement
+looked like two independent derivations converging; it was one derivation and one accident. The
+check that survives is the other one: **at the shipped `2^22` ladder the RC derives exactly its
+shipped 60**, and that holds with the reserve in. For reference, the shipped `2^22` ladder
 is `(2 × 22 + 2) × 60 = 2,760 < 3,000` — 8 % margin, and today it is this upper bound, not SA-4's
 lower one, that binds. At today's per-position counts `2^32`
 leaves is ~14,000 positions of the hybrid and ~43,000 of the dense tier — room for an
@@ -362,7 +374,8 @@ panel cannot replay must not execute").
   34 (corrected 2026-09-03 — see Decision 12). At the shipped `2^22` ladder that is
   `(2 × 22 + 2) × 60 = 2,760` DAA, ~92 hours worst-case honest prosecution, inside `WINDOW_COURT`
   with 8 % to spare; at Decision 12's `2^32` it is 3,960 at a 60-DAA deadline and does NOT fit —
-  45 does. `MAX_CLAIM_EXPOSURE_DAA` is unchanged.
+  42 does, once ADR-0080's close-assembly reserve is charged to the window (45 without it; see
+  Decision 12). `MAX_CLAIM_EXPOSURE_DAA` is unchanged.
 * **Executor time.** The hybrid decodes at ~1.75 tok/s on a 24 GiB M4 Pro: a 300-token answer is
   ~3 minutes, streamed. The dense tier is interactive (~30 tok/s). Integer GPU kernels remain the
   practical-runtime plan's next stage (§8).
