@@ -8,6 +8,17 @@
 - Supersedes: the born-licensable rule (`PanelCannotBeSeated`) of the RC genesis gate, and the
   0.1B-per-seat genesis collateral both ADR-0059 and ADR-0060 §8 carried forward
 
+> **Amended (index reconciliation, 2026-09-02).** The audit amendment below ("the capability is
+> real and its bootstrap is not yet") was answered by [ADR-0066](0066-the-heartbeat-lane-out-of-header-bits-and-a-committed-liveness-table.md)
+> and [ADR-0068](0068-the-llm-primary-economy-and-the-floors-minimum.md): the heartbeat lane is back
+> as `algo_id = 8`, armed from genesis on testnet-11 and devnet, and the Phase 1 drill proved the
+> bootstrap this ADR draws — a zero-bond devnet born over heartbeats, a bond registered on it, the
+> bonded lane starting after. "testnet-11 still ships its six seats" is Relaunch 3: since Relaunch 4
+> the RC registry holds eight cards so that [ADR-0065](0065-a-bond-must-be-earned-and-a-seat-must-be-someone-else.md)
+> Decision 1 can be armed (`seat_count + 3`); devnet ships six public-seed bonds
+> ([ADR-0075](0075-certification-is-a-consensus-object.md) §7's rehearsal chain). Decision 2's
+> 10,000 MSK per seat stands. Map: [`README.md`](README.md).
+
 ## The two decisions
 
 **1. A genesis may seat zero bonds.** `verify_palw_genesis_v2` no longer refuses a registry

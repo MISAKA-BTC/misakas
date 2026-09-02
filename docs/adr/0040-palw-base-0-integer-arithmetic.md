@@ -437,3 +437,11 @@ already-pinned narrowing, which is a different and worse change than adding an o
 * **The first honest end-to-end conviction becomes reachable.** With a complete catalog, a lie in
   a BASE-0 matmul is localizable to one step and convictable — which is Layer 1's goal and the
   precondition ADR-0039 puts on carrying weight at all.
+
+---
+
+*Amended by [ADR-0047](0047-palw-a16-activation-tier.md) (2026-08-21): the catalog gains op 5W
+(`softmax_shifted` — the wide softmax whose max subtraction happens before the widening; measured
+necessity at Qwen-scale logits, seven bits past the Qk domain) and the A16 activation tier
+(`palw_base0_a16`). BASE-0's own ten-op profile, class id and behavior are unchanged. (This trailer
+was written with ADR-0047 on `palw-mainnet-rc-integration` and is restored here with it.)*

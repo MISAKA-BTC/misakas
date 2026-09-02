@@ -1,6 +1,7 @@
 # ADR-0028: PALW challenge sampling — a scheduler for re-execution, never a verdict
 
-Status: **Accepted (architecture).** Activates nothing; devnet / shadow / zero-credit envelope
+Status: **Accepted (architecture), with the §4e remedy set SUPERSEDED on the V2 lineage.**
+Activates nothing; devnet / shadow / zero-credit envelope
 unchanged. This ADR fixes the scheduling fabric that ADR-0027 left open: who re-executes which
 job, when duties and windows open and close, what the randomness binds — and what it is
 forbidden to decide. Promoted from Proposed on 2026-08-16 after a numeric review against the
@@ -298,6 +299,33 @@ economic:   P_check · S_eff ≥ λ · G_max        λ ≥ 2.0
 > 0.2 % at one job per 13 blocks. Corrected table and derivation:
 > `docs/palw-economic-parameters-2026-08-16.md` §3; boundaries pinned in
 > `consensus/core/src/palw_schedule.rs`.
+
+> **SUPERSEDED 2026-08-20 — the remedy set above priced an overlay mint that no longer exists.**
+> Both remedies choose a per-job credit price (`base(C)` as a rate cap, or as a fraction of the
+> block subsidy) because at the time this panel was written PALW credit was an *overlay* minted
+> beside a hash-produced block. [ADR-0038](0038-palw-is-the-consensus-work.md) inverted that
+> layering and [ADR-0039](0039-palw-only-block-production.md) removed the last hash path: on the
+> V2 lineage **the block is the unit of credit**, produced only by a bonded producer, and there is
+> no separate `base(C)` knob to set. What replaces each half:
+>
+> * **The admission-side quantity** is [ADR-0045](0045-palw-class-economy-on-chain.md) Decision 2 —
+>   a per-class epoch budget denominated in **blocks**, `⌊tol‰ · E · s_c / (1000 · denom_c)⌋`,
+>   derived at the epoch boundary, frozen in rooted state, and charged to the producing block's own
+>   class counter along its own selected chain. `min_credit_interval_daa` /
+>   `base_subsidy_permille` are V1-lineage levers and are not the V2 lever set.
+> * **The leverage-side quantity** — the `max_leverage ≤ 1.0` inequality this panel measured
+>   violated by 11 655× — is answered per **bond**, not per job, by
+>   [ADR-0042](0042-palw-mainnet-candidate-ruleset.md) Decision 6 (P0-10):
+>   `reserved_exposure(bond) ≤ slashable_collateral(bond) × max_exposure_ratio`, reserved at
+>   commitment admission and released only on `Final` / `Voided` / `timeout`. A per-class block
+>   budget bounds a *class*, never a bond, so ADR-0045 does **not** close this half and was never
+>   claimed to; ADR-0042 is where the aggregate reading is bounded.
+>
+> **Remedy 1 remains non-existent at this panel** for the reason recorded above (no rate cap
+> rescues full-subsidy credit), and **Remedy 2 is void rather than merely re-tuned** — its variable,
+> a subsidy fraction paid to an overlay job, has no referent on the V2 lineage. §4e is retained in
+> full as the measurement that forced the layer inversion; it is not a live parameter panel. Stages
+> 0/1 credit nothing and are unaffected either way.
 
 ### 5. The audit layer: opening calls as the DA heartbeat — answerable, not correct
 
