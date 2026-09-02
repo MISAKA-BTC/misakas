@@ -3983,13 +3983,22 @@ impl VirtualStateProcessor {
     /// own claim is `Provisional` at the moment its coinbase is built, so it is never in its own
     /// list — which is Decision 10 stated as arithmetic rather than as a rule to remember.
     ///
-    /// **What this deliberately does not do is pay.** A `PalwBondStateV2` carries a pubkey and
-    /// collateral but no payout script, so there is no payee to resolve; inventing one (the
-    /// miner's address, say) would pay the wrong party for work a bonded executor did. Wiring the
-    /// outputs needs a payout SPK on the bond registration — the same field
-    /// `owner_reward_spk_payload` gives a validator bond — and that is a registration-object
-    /// change, not a line here. Until it lands, this is the eligibility and the amount, computed
-    /// and testable, with the missing half named.
+    /// **What this deliberately does not do is pay — and the reason is no longer "there is no
+    /// payee".** This block used to say a `PalwBondStateV2` carries a pubkey and collateral but no
+    /// payout script; it carries `payout_payload`, registration refuses an empty one
+    /// (`palw_state_v2.rs`, the `BondRegistered` arm), `finalize_claim` writes
+    /// `PalwPayoutV2 { payload: bond.payout_payload, amount: claim.escrowed_reward }`, and
+    /// `palw_v2_payout_outputs` below renders that queue into real coinbase outputs. The
+    /// registration-object change this paragraph was waiting for LANDED, and leaving the sentence
+    /// standing cost something concrete: the ADR-0062 SA-7 review cited this line as proof that no
+    /// party can be paid, and deferred the data-availability accuser's reward on it.
+    ///
+    /// What remains true is narrower and worth keeping: this function is the ELIGIBILITY and the
+    /// AMOUNT, and the outputs are built one function down from a queue the transition wrote —
+    /// nothing here invents a payee. The queue itself is generic: neither `pending_payouts_iter`
+    /// nor the drain asks which phase enqueued an entry, so a payout to some party other than the
+    /// producer (an accuser that voided a claim, say) needs a transition that writes one, not a
+    /// new mechanism on the paying side.
     /// **The escrows a block's coinbase must pay, from its parent's committed queue.**
     ///
     /// `state` is the SELECTED PARENT's state, not this block's: a claim that reaches `Final` is

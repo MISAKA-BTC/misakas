@@ -758,6 +758,19 @@ impl PalwConsensusParamsV2 {
         // …and admission item 8's ratio is one number for both lanes: the attempt lane reads it
         // off `admission` at block validation, the free-prompt lane off the state params at the
         // transition.
+        // **At most unity, and checked before the equality** (ADR-0062 SA-7(c), re-check). Both
+        // constructors refuse a ratio above 1000 permille, but a bundle can arrive DESERIALIZED —
+        // the params are `BorshDeserialize` and a ruleset travels as bytes — so a constructor is
+        // not where a booting node learns this. A ceiling above the collateral is a ceiling
+        // `slash_bond` can never collect against: a bond holds more concurrent exposure than it can
+        // pay, the first refutations empty it, and every later one is free — the DA court's own
+        // griefing hole, re-opened by a genesis-time number rather than by a missing check. Bounded
+        // first and equal second, so this is the clause that names the fault when both are wrong.
+        if self.admission.max_exposure_ratio_permille() > 1000 {
+            return Err(PalwModeV2Error::Invalid(
+                "the exposure ratio must be at most 1000 permille — above unity a bond backs more than its collateral can pay",
+            ));
+        }
         if self.state.fp_max_exposure_ratio_permille() != self.admission.max_exposure_ratio_permille() {
             return Err(PalwModeV2Error::Invalid("the state's free-prompt exposure ceiling must be the admission params' ratio"));
         }
@@ -1687,6 +1700,37 @@ pub(crate) mod tests {
     /// Decision 11's property: any consensus-deciding byte moves the id, and network identity is
     /// not in the preimage at all (there is no field for it — RC and mainnet share the id by
     /// construction, and the challenge's network_domain keeps their blocks apart).
+    /// **A ruleset whose exposure ratio is above unity does not boot** (ADR-0062 SA-7(c),
+    /// re-check).
+    ///
+    /// The DA court's ceiling is `collateral × ratio / 1000` and `slash_bond` can never take more
+    /// than the collateral, so a ratio above 1000 permille lets one bond hold concurrent
+    /// accusations it cannot pay for: the first refutations empty it and every later one is free —
+    /// the exact behaviour SA-7(c)'s ceiling exists to remove, restored by a number in a genesis
+    /// bundle. Both constructors refuse it now, and this asks the question a booting node actually
+    /// asks: the params are `BorshDeserialize` and a ruleset travels as BYTES, so the check that
+    /// matters is the boot gate's, not the constructor's.
+    #[test]
+    fn an_exposure_ratio_above_unity_does_not_boot() {
+        use borsh::BorshDeserialize;
+        // The wire format bypasses `new` — one `u32` field, four little-endian bytes. That is the
+        // point of the test, not a trick: this is how a bundle reaches a node.
+        let smuggled = PalwAdmissionParamsV2::try_from_slice(&5_000u32.to_le_bytes()).expect("one u32 field");
+        assert_eq!(smuggled.max_exposure_ratio_permille(), 5_000, "the constructor is not in the deserialization path");
+        let mut bundle = conforming_bundle();
+        bundle.admission = smuggled;
+        let err = bundle.validate_ruleset_shape().expect_err("a ratio above unity is not a bootable ruleset");
+        assert!(
+            matches!(err, PalwModeV2Error::Invalid(msg) if msg.contains("at most 1000 permille")),
+            "and it is refused for being above unity, not merely for disagreeing with the state params: got {err:?}"
+        );
+        // Unity itself boots — the bound is `≤ 1000`, and both readers of the number move together.
+        let mut at_unity = conforming_bundle();
+        at_unity.admission = PalwAdmissionParamsV2::new(1_000).unwrap();
+        at_unity.state = at_unity.state.clone().with_fp_exposure_ceiling(1_000).unwrap();
+        at_unity.validate().expect("a bond may back exactly its own collateral");
+    }
+
     #[test]
     fn every_bundle_byte_moves_the_ruleset_id() {
         let base_id = palw_ruleset_id_v2(&conforming_bundle());

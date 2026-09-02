@@ -2795,11 +2795,11 @@ pub enum PalwStateV2Error {
     #[error("bond {0:?} cannot accuse the claim it produced")]
     DaAccuserIsTheProducer(PalwBondKeyV2),
     #[error(
-        "bond {bond:?} already backs {backed} and cannot reserve another {accusation} for a \
-         data-availability accusation against a ceiling of {ceiling} — one bond's total DA \
-         liability is its exposure ceiling (ADR-0062 SA-7)"
+        "bond {bond:?} already backs {backed} and cannot reserve another {accusation} for a {edge} \
+         against a ceiling of {ceiling} — one bond's total liability for accusing is its exposure \
+         ceiling, and it is ONE ceiling over both arms that accuse (ADR-0062 SA-7)"
     )]
-    DaAccusationExposureCeiling { bond: PalwBondKeyV2, backed: u128, accusation: u128, ceiling: u128 },
+    AccusationExposureCeiling { bond: PalwBondKeyV2, edge: &'static str, backed: u128, accusation: u128, ceiling: u128 },
     #[error("the disclosure answers index {got} on a claim accused at index {want} — another index is not an answer")]
     DaDisclosureIndexMismatch { want: u32, got: u32 },
     #[error("the disclosure's opening does not reconstruct claim {claim}'s committed trace root: {why}")]
@@ -3809,6 +3809,63 @@ impl<'a> TransitionBuilder<'a> {
             None => self.state.reserved_exposure.remove(&key),
         };
         self.entries.push(PalwDeltaEntryV2::Exposure { key, old, new });
+    }
+
+    /// **One exposure ceiling for both arms that ACCUSE** (ADR-0062 SA-7(c)).
+    ///
+    /// A `DefaultAccused` and a `CourtOpened` are one act priced twice: a bonded party freezes
+    /// somebody else's claim by RESERVING against its own collateral. `write_exposure` moves the
+    /// ledger and leaves `collateral` alone, so "Active and at or above the registry floor" is a
+    /// pair of checks the same bond passes once per live claim on the network — the bound has to
+    /// be on the LEDGER, and it has to be the same bound on both arms or they are two mechanisms
+    /// that drift. They did drift: SA-7 bounded the accusation and left the court exactly as it
+    /// was, under a comment saying the ceiling it lives under "does the counting" — that ceiling is
+    /// `check_palw_attempt_admission_v2`'s, and it counts only a bond that wants to PRODUCE. One
+    /// bond at the floor could open a court on every licensed claim at once, and because the
+    /// challenger-side close charges `min(reserved, floor)` while `slash_bond` clamps at collateral
+    /// and returns early at zero, only the FIRST of those closes ever collected anything.
+    ///
+    /// So both arms reserve here. The figure counted is what the fold can actually TAKE from this
+    /// bond for this object (`palw_da_accusation_exposure_v2` on one arm, the same `min(reserved,
+    /// floor)` the close collects on the other), which is what makes the ceiling a bound on money
+    /// rather than on count: with `max_exposure_ratio_permille ≤ 1000` — refused above 1000 by
+    /// `PalwAdmissionParamsV2::new` and by `validate_ruleset_shape`, so it is a checked property of
+    /// a bootable ruleset and not a sentence — the sum of one bond's concurrent reservations is at
+    /// most its collateral, every refutation's debit lands, and the K-th is funded exactly like the
+    /// first.
+    ///
+    /// **`enforce` is the fence, not a policy.** The court arm predates `palw_da_court` and its
+    /// reservation must stay byte-identical on a network the fence has not reached; the accusation
+    /// arm is refused outright while the fence is dormant, so it always passes `true`.
+    fn reserve_accuser_exposure_v2(
+        &mut self,
+        bond: PalwBondKeyV2,
+        collateral: u64,
+        amount: u128,
+        edge: &'static str,
+        enforce: bool,
+    ) -> Result<(), PalwStateV2Error> {
+        if enforce {
+            // What this bond already backs — its live claims, its own registrations, and every
+            // accusation and court it already has open — plus what this one would reserve.
+            let backed = self
+                .state
+                .reserved_exposure(&bond)
+                .checked_add(self.state.registration_exposure(&bond))
+                .ok_or(PalwStateV2Error::Overflow("accuser total exposure"))?;
+            let ceiling = (collateral as u128)
+                .checked_mul(self.params.fp_max_exposure_ratio_permille as u128)
+                .ok_or(PalwStateV2Error::Overflow("accuser exposure ceiling"))?
+                / 1000;
+            let next = backed.checked_add(amount).ok_or(PalwStateV2Error::Overflow("accuser exposure"))?;
+            if next > ceiling {
+                return Err(PalwStateV2Error::AccusationExposureCeiling { bond, edge, backed, accusation: amount, ceiling });
+            }
+        }
+        let already = self.state.reserved_exposure.get(&bond).copied().unwrap_or(0);
+        let next = already.checked_add(amount).ok_or(PalwStateV2Error::Overflow("accuser exposure"))?;
+        self.write_exposure(bond, Some(next));
+        Ok(())
     }
 
     fn write_registration_exposure(&mut self, key: PalwBondKeyV2, new: Option<u128>) {
@@ -6623,11 +6680,34 @@ fn apply_object(
             //
             // The reservation is the claim's own `reserved` — the same number the executor has at
             // stake in the dispute, so the two sides face the same figure — and it is charged to
-            // the challenger's exposure, which is also what stops one bond opening unboundedly many
-            // courts at once: the ceiling it already lives under does the counting.
-            let already = builder.state.reserved_exposure.get(challenger_bond).copied().unwrap_or(0);
-            let next = already.checked_add(claim.reserved).ok_or(PalwStateV2Error::Overflow("challenger exposure"))?;
-            builder.write_exposure(*challenger_bond, Some(next));
+            // the challenger's exposure.
+            //
+            // **That charge was not counted against anything** (ADR-0062 SA-7(c), second arm).
+            // This comment used to end "the ceiling it already lives under does the counting"; it
+            // does not, and SA-7's own commit message says why in the accusation's margin — the
+            // only exposure ceiling in the tree is applied in `check_palw_attempt_admission_v2`,
+            // i.e. only to a bond that wants to PRODUCE. Reserving does not touch collateral, so
+            // `Active` and the registry floor are checks one bond passes once per live claim: it
+            // could open a court on all of them in a single block, freeze every one of them until
+            // its `window_court` backstop, and pay for at most the first close (the challenger-side
+            // charge is `min(reserved, floor)` and `slash_bond` clamps at collateral and returns
+            // early at zero). The accusation arm's ceiling is this arm's ceiling now — same
+            // helper, same ledger, same figure.
+            //
+            // **Fenced on `palw_da_court`**, which is this ADR's fence and therefore the one this
+            // widens rather than a second one: with the fence dormant the arm reserves exactly what
+            // it always reserved, which is what `the_da_court_fence_off_is_byte_identical` pins.
+            // The consequence is that the gap is closed for a network that arms the DA court and
+            // stays open for one that does not — named here rather than left for a reader to
+            // discover, because arming is a genesis-time choice somebody has to make knowing that.
+            let challenger_collateral = challenger.collateral;
+            builder.reserve_accuser_exposure_v2(
+                *challenger_bond,
+                challenger_collateral,
+                claim.reserved,
+                "court opening",
+                builder.da_court,
+            )?;
             builder.write_court(
                 *session_id,
                 Some(PalwCourtSessionStateV2 {
@@ -6818,22 +6898,18 @@ fn apply_object(
             // reason that one gives: a commitment meets no admission list, so the ceiling is the
             // transition's. `palw_mode_v2` proves `fp_max_exposure_ratio_permille` equals
             // `admission.max_exposure_ratio_permille`, so both lanes ride one number.
-            let backed = builder
-                .state
-                .reserved_exposure(accuser)
-                .checked_add(builder.state.registration_exposure(accuser))
-                .ok_or(PalwStateV2Error::Overflow("accuser total exposure"))?;
-            let ceiling = (accuser_record.collateral as u128)
-                .checked_mul(builder.params.fp_max_exposure_ratio_permille as u128)
-                .ok_or(PalwStateV2Error::Overflow("accuser exposure ceiling"))?
-                / 1000;
-            let next = backed.checked_add(exposure).ok_or(PalwStateV2Error::Overflow("accuser exposure"))?;
-            if next > ceiling {
-                return Err(PalwStateV2Error::DaAccusationExposureCeiling { bond: *accuser, backed, accusation: exposure, ceiling });
-            }
-            let already = builder.state.reserved_exposure.get(accuser).copied().unwrap_or(0);
-            let next = already.checked_add(exposure).ok_or(PalwStateV2Error::Overflow("accuser exposure"))?;
-            builder.write_exposure(*accuser, Some(next));
+            //
+            // The check and the write are `reserve_accuser_exposure_v2`, which the `CourtOpened`
+            // arm calls too: one ceiling, one ledger, both arms — spelled once so they cannot
+            // drift apart again, which is exactly how this arm came to have a bound and its
+            // sibling did not.
+            builder.reserve_accuser_exposure_v2(
+                *accuser,
+                accuser_record.collateral,
+                exposure,
+                "data-availability accusation",
+                true,
+            )?;
             // The claim's own clock is paused while the session runs, exactly as an open court
             // pauses the path to `Final`; `resumed` carries the phase back.
             let mut disputed = claim.clone();
@@ -13848,12 +13924,12 @@ pub(crate) mod tests {
         // …so the second claim cannot be frozen by the same bond, in this block or any other.
         let refused = apply_da_err(&one, &p, &ctx(31, 106, 7), &[accuse(claims[1])]);
         assert!(
-            matches!(refused, PalwStateV2Error::DaAccusationExposureCeiling { ceiling, .. } if ceiling == floor as u128),
+            matches!(refused, PalwStateV2Error::AccusationExposureCeiling { ceiling, .. } if ceiling == floor as u128),
             "one floor buys one freeze, not the whole network: got {refused:?}"
         );
         let both_at_once = apply_da_err(&state, &p, &ctx(32, 105, 6), &[accuse(claims[0]), accuse(claims[1])]);
         assert!(
-            matches!(both_at_once, PalwStateV2Error::DaAccusationExposureCeiling { .. }),
+            matches!(both_at_once, PalwStateV2Error::AccusationExposureCeiling { .. }),
             "and not by putting them in one block either: got {both_at_once:?}"
         );
 
@@ -13863,6 +13939,146 @@ pub(crate) mod tests {
         assert_eq!(paid.bond(&bond_key(3)).unwrap().slashed, floor);
         let broke = apply_da_err(&paid, &p, &ctx(34, 107, 8), &[accuse(claims[1])]);
         assert!(matches!(broke, PalwStateV2Error::BondBelowFloor { .. }), "and cannot accuse again: got {broke:?}");
+    }
+
+    /// **SA-7(c) on BOTH arms that accuse: one bond, one exposure ledger, one ceiling.**
+    ///
+    /// A DA accusation and a `CourtOpened` are the same mechanism seen twice — a bonded party
+    /// freezes somebody else's claim by RESERVING against its own collateral, and reserving does
+    /// not touch collateral, so the Active-and-above-the-floor checks both arms make are passed
+    /// once per claim on the network. SA-7(c) put a ceiling on the DA arm and left the court arm
+    /// exactly as it was, under its own comment saying "the ceiling it already lives under does
+    /// the counting" — the sentence SA-7's own commit message had just shown to be false, because
+    /// that ceiling is applied in `check_palw_attempt_admission_v2`, i.e. only to a bond that
+    /// wants to PRODUCE. One bond at the registry floor could therefore open a court on every
+    /// live claim on the network, in one block, and freeze all of them; and since
+    /// `rearm_after_challenger_side_close` charges `min(reserved, floor)` and `slash_bond` clamps
+    /// at collateral and returns early at zero, only the first of those closes ever cost anything.
+    ///
+    /// **ONE test walks both arms**, because two tests are how the arms drifted apart in the first
+    /// place. It spends part of the ceiling through the COURT arm, tops it up through the DA arm —
+    /// proving the two reserve into one ledger — and then asserts that the next object of EITHER
+    /// kind is refused against that same figure.
+    #[test]
+    fn one_exposure_ceiling_binds_both_arms_that_accuse() {
+        let p = params();
+        let (preimages, hashes, root) = da_trace();
+        let mut objects = register_class_and_bond();
+        // bond 2 is the second panel seat; bond 3 is the party that accuses, holding 350 sompi —
+        // above the 100 floor, so it may accuse at all, and with a ceiling of 350 × 1000‰ = 350.
+        for (bond, pubkey, op, collateral) in
+            [(bond_key(2), vec![8; 4], op_key(22), 1_000u64), (bond_key(3), vec![6; 4], op_key(23), 350u64)]
+        {
+            objects.push(PalwConsensusObjectV2::BondRegistered {
+                bond,
+                pubkey,
+                operator_pubkey: op,
+                collateral,
+                payout_payload: kaspa_hashes::Hash64::from_u64_word(0x9A33),
+                capable_classes: Default::default(),
+                signature: Vec::new(),
+            });
+        }
+        let genesis = PalwChainStateV2::genesis();
+        let (s1, _) = apply_da(&genesis, &p, &ctx(1, 100, 1), &objects, None);
+
+        // Three live claims with bound panels: 40 pwu × 5 sompi/pwu = 200 reserved each, so a
+        // court reserves 200 and an accusation reserves ⌈200/2⌉ = 100 (the floor caps it at 100).
+        let mut state = s1;
+        let mut claims = Vec::new();
+        for (nonce, daa, blue) in [(1u64, 101u64, 2u64), (2, 103, 4), (3, 105, 6)] {
+            let mut env = attempt(40, nonce);
+            env.attempt.trace_root = root;
+            env.attempt.trace_chunk_count = 4;
+            env.attempt.trace_retention_daa = 999_999;
+            let claim_id = attempt_id_v2(&env.attempt);
+            let (next, _) = apply_da(&state, &p, &ctx(10 + nonce, daa, blue), &[], Some(&env));
+            let seats = vec![
+                PalwPanelSeatV2 { bond: bond_key(1), operator_id: h64(90) },
+                PalwPanelSeatV2 { bond: bond_key(2), operator_id: h64(91) },
+            ];
+            let (bound, _) = apply_da(
+                &next,
+                &p,
+                &ctx(20 + nonce, daa + 1, blue + 1),
+                &[PalwConsensusObjectV2::PanelBound { claim: claim_id, anchor: h64(77), seats }],
+                None,
+            );
+            state = bound;
+            claims.push(claim_id);
+        }
+        let accuse = |claim: Hash64| PalwConsensusObjectV2::DefaultAccused {
+            claim,
+            missing_event_index: 0,
+            accuser: bond_key(3),
+            signature: vec![9; 8],
+        };
+        let ceiling = 350u128;
+
+        // Arm one — the arithmetic court. It reserves the claim's own stake against the challenger.
+        let (opened, _) = apply_da(&state, &p, &ctx(30, 110, 8), &[court_open(claims[0], root, bond_key(1), bond_key(3))], None);
+        assert_eq!(opened.reserved_exposure(&bond_key(3)), 200, "opening a court reserves the claim's stake");
+        assert_eq!(opened.bond(&bond_key(3)).unwrap().collateral, 350, "and reserving is not charging, on this arm either");
+
+        // Arm two — the DA accusation, stacking on the SAME ledger entry.
+        let (accused, _) = apply_da(&opened, &p, &ctx(31, 111, 9), &[accuse(claims[1])], None);
+        assert_eq!(accused.reserved_exposure(&bond_key(3)), 300, "one bond, one exposure ledger, both arms writing to it");
+
+        // The ceiling is 350 and 300 of it is spent, so the next object of EITHER kind is refused —
+        // and refused against the same figure. This is the whole property: the asymmetry that let
+        // a court freeze a claim the accusation could not is gone.
+        let court_refused = apply_da_err(&accused, &p, &ctx(32, 112, 10), &[court_open(claims[2], root, bond_key(1), bond_key(3))]);
+        assert!(
+            matches!(&court_refused, PalwStateV2Error::AccusationExposureCeiling { backed, accusation, ceiling: c, .. }
+                if *backed == 300 && *accusation == 200 && *c == ceiling),
+            "a court past the ceiling is refused exactly as an accusation is: got {court_refused:?}"
+        );
+        let da_refused = apply_da_err(&accused, &p, &ctx(33, 112, 10), &[accuse(claims[2])]);
+        assert!(
+            matches!(&da_refused, PalwStateV2Error::AccusationExposureCeiling { backed, accusation, ceiling: c, .. }
+                if *backed == 300 && *accusation == 100 && *c == ceiling),
+            "and the accusation arm still holds: got {da_refused:?}"
+        );
+
+        // …in one block, too: the ledger is updated inside the TransitionBuilder, so two courts
+        // cannot be smuggled past the ceiling by arriving together.
+        let both_at_once = apply_da_err(
+            &state,
+            &p,
+            &ctx(34, 110, 8),
+            &[court_open(claims[0], root, bond_key(1), bond_key(3)), court_open(claims[1], root, bond_key(1), bond_key(3))],
+        );
+        assert!(
+            matches!(both_at_once, PalwStateV2Error::AccusationExposureCeiling { .. }),
+            "two courts in one block are counted against one ceiling: got {both_at_once:?}"
+        );
+
+        // **And this is what the ceiling is FOR: the K-th refutation is funded exactly like the
+        // first.** Both live reservations are refuted, one per arm — the disclosure collects the
+        // accusation's 100, the challenger-side close collects `min(reserved 200, floor 100)` —
+        // and both debits land in full. That is only true because the ceiling (350) is at most the
+        // collateral (350), i.e. because `max_exposure_ratio_permille ≤ 1000` is enforced rather
+        // than assumed; above 1000 the reservations would outrun the collateral and `slash_bond`'s
+        // clamp would make the later refutations free, which is the hole this closes.
+        let (refuted, _) = apply_da(&accused, &p, &ctx(35, 113, 11), &[da_disclose(claims[1], 0, &preimages, &hashes)], None);
+        assert_eq!(refuted.bond(&bond_key(3)).unwrap().slashed, 100, "the accusation's refutation collects what it reserved");
+        let (closed, _) = apply_da(
+            &refuted,
+            &p,
+            &ctx(36, 114, 12),
+            &[PalwConsensusObjectV2::CourtClosed {
+                session_id: court_session_of(claims[0], root, bond_key(1), bond_key(3)),
+                verdict: PalwCourtVerdictV2::ChallengerDefeated,
+                proof: crate::palw_court_v2::PalwCourtVerdictProofV2::Arithmetic {
+                    refutation: crate::palw_step_refute::tests::skeleton_refutation(),
+                    operand_openings: Vec::new(),
+                },
+            }],
+            None,
+        );
+        assert_eq!(closed.bond(&bond_key(3)).unwrap().slashed, 200, "and the court's refutation collects too — not clamped away");
+        assert_eq!(closed.bond(&bond_key(3)).unwrap().collateral, 150, "350 posted, 200 taken: every debit landed");
+        assert_eq!(closed.reserved_exposure(&bond_key(3)), 0, "and both arms released what they held");
     }
 
     /// **SA-7(d): an accusation reserves exactly what the fold can take from it.**

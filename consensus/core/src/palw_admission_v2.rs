@@ -66,9 +66,27 @@ impl PalwAdmissionParamsV2 {
     /// stop its own chain for the rest of every epoch. The chain derives `budget_blocks` from the
     /// share table now (`derive_epoch_budgets_v2`), which is where a cadence cap belongs, and a
     /// second copy here would be a second answer.
+    ///
+    /// **The ratio is `1..=1000` permille, and the upper bound is load-bearing** (ADR-0062
+    /// SA-7(c), re-check). A bond's ceiling is `collateral × ratio / 1000`, while every charge the
+    /// fold can make against it is capped by `slash_bond` at the collateral itself. So a ratio
+    /// above unity lets one bond hold more concurrent exposure than it can ever pay: the first
+    /// refutations drain the collateral, `slash_bond` returns early at a zero debit, and the rest
+    /// are free — which is the exact behaviour the DA court's exposure ceiling exists to prevent,
+    /// re-created by a genesis-time number. `PalwStateParamsV2::with_fp_exposure_ceiling` already
+    /// refused it on the state side; this side only refused zero, and `palw_mode_v2` requires the
+    /// two to be EQUAL rather than bounded, so the invariant "the K-th refutation is funded exactly
+    /// like the first" rested on a bundle nobody checked. It is checked here, and again in
+    /// `validate_ruleset_shape` for a bundle that arrives deserialized rather than constructed.
     pub fn new(max_exposure_ratio_permille: u32) -> Result<Self, PalwAdmissionV2Error> {
         if max_exposure_ratio_permille == 0 {
             return Err(PalwAdmissionV2Error::InvalidParams("a zero exposure ratio admits no work at all"));
+        }
+        if max_exposure_ratio_permille > 1000 {
+            return Err(PalwAdmissionV2Error::InvalidParams(
+                "an exposure ratio above 1000 permille lets a bond back more than it can ever pay — the refutations past its \
+                 collateral are free",
+            ));
         }
         Ok(Self { max_exposure_ratio_permille })
     }
@@ -1587,6 +1605,29 @@ mod tests {
     fn admission_params_refuse_the_permissive_zeros() {
         assert!(PalwAdmissionParamsV2::new(0).is_err(), "zero ratio admits no work at all");
         assert!(PalwAdmissionParamsV2::new(1).is_ok());
+    }
+
+    /// **…and the permissive HIGH end** (ADR-0062 SA-7(c), re-check).
+    ///
+    /// The DA court's exposure ceiling is `collateral × ratio / 1000`; `slash_bond` can never debit
+    /// more than `collateral` in total and returns early at a zero debit. So the ceiling is a bound
+    /// on money — "the K-th refutation is funded exactly like the first" — only while the ratio is
+    /// at most unity. Above it, one bond holds more concurrent accusations than it can pay for, the
+    /// first refutations empty it and the rest are free: the griefing the ceiling exists to stop,
+    /// re-created by a genesis-time constant. The invariant was written in prose in
+    /// `palw_state_v2`'s margin and enforced nowhere on this side, which is a sentence, not a rule.
+    #[test]
+    fn an_exposure_ratio_above_unity_is_refused_where_the_value_is_admitted() {
+        assert!(PalwAdmissionParamsV2::new(1_000).is_ok(), "unity itself is admissible — a bond may back exactly its collateral");
+        let err = PalwAdmissionParamsV2::new(1_001).expect_err("above unity the ceiling outruns what any refutation can collect");
+        assert!(matches!(err, PalwAdmissionV2Error::InvalidParams(_)), "got {err:?}");
+        assert!(
+            crate::palw_state_v2::PalwStateParamsV2::new(100, 10, 10, 20, 500, 1000, h64(1), 4, 1000, 100, 1000, 0)
+                .unwrap()
+                .with_fp_exposure_ceiling(1_001)
+                .is_err(),
+            "and the state side, which carries the same number for the transition, refuses it too"
+        );
     }
 
     /// The full composer refuses stateless violations before touching state: a wrong-position
