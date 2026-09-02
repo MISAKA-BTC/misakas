@@ -10,6 +10,12 @@ pub use kaspa_consensus_core::palw_derived_v1::{artifact_hash_v1, dsl_hash_v1, g
 
 /// The manifest's canonical bytes — the preimage of `transformer_id`. A fixed field order with
 /// length prefixes, so a manifest is one byte string and a changed field is a changed id.
+///
+/// The three SA-2 ceilings are in the preimage, after the kind, because a bound that could be
+/// loosened without moving the id would not be a bound: an executor could publish a derivation
+/// under a strict manifest and run under a lax one, and no consumer could tell. Loosening one is
+/// therefore a NEW transformer, and the derivations made under the old one stay checkable against
+/// the old id — the same rule Decision 8 states for a kind's version.
 pub fn transformer_manifest_bytes(m: &TransformerManifest) -> Vec<u8> {
     let mut out = Vec::new();
     for field in [m.name, m.grammar, m.discipline.as_str(), m.writer, m.source_tree_sha256] {
@@ -17,6 +23,9 @@ pub fn transformer_manifest_bytes(m: &TransformerManifest) -> Vec<u8> {
         out.extend_from_slice(field.as_bytes());
     }
     out.extend_from_slice(&m.kind.to_le_bytes());
+    out.extend_from_slice(&m.max_dsl_bytes.to_le_bytes());
+    out.extend_from_slice(&m.max_artifact_bytes.to_le_bytes());
+    out.extend_from_slice(&m.max_steps.to_le_bytes());
     out
 }
 
@@ -38,7 +47,22 @@ mod tests {
             discipline: Discipline::Integer,
             writer: "gltf-binary/2.0/canonical-v1",
             source_tree_sha256: "00",
+            max_dsl_bytes: 1 << 20,
+            max_artifact_bytes: 1 << 21,
+            max_steps: 1_000,
         }
+    }
+
+    /// **SA-2 is in the id.** The tail of the preimage is the three ceilings, so a build that
+    /// loosened one could not keep the old id and hand the old manifest to a verifier.
+    #[test]
+    fn the_three_ceilings_are_the_tail_of_the_preimage() {
+        let m = manifest();
+        let mut want = Vec::new();
+        want.extend_from_slice(&m.max_dsl_bytes.to_le_bytes());
+        want.extend_from_slice(&m.max_artifact_bytes.to_le_bytes());
+        want.extend_from_slice(&m.max_steps.to_le_bytes());
+        assert!(transformer_manifest_bytes(&m).ends_with(&want), "the ceilings are not the tail of the preimage");
     }
 
     #[test]
@@ -53,6 +77,9 @@ mod tests {
             TransformerManifest { discipline: Discipline::ExactRational, ..manifest() },
             TransformerManifest { writer: "other", ..manifest() },
             TransformerManifest { source_tree_sha256: "01", ..manifest() },
+            TransformerManifest { max_dsl_bytes: (1 << 20) + 1, ..manifest() },
+            TransformerManifest { max_artifact_bytes: (1 << 21) + 1, ..manifest() },
+            TransformerManifest { max_steps: 1_001, ..manifest() },
         ];
         for v in variants {
             assert!(ids.insert(transformer_id(&v)), "a field did not move the id, or two collided: {v:?}");

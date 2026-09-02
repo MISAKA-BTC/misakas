@@ -87,6 +87,19 @@ pub const MAX_TESTS: usize = 256;
 pub const MAX_NAME_BYTES: usize = 64;
 pub const MIN_TEST_GAS_LIMIT: u64 = 21_000;
 pub const MAX_TEST_GAS_LIMIT: u64 = 30_000_000;
+/// **ADR-0078 SA-2's `max_dsl_bytes`.** The most answer bytes this kind will look at, checked on
+/// the byte COUNT before the parser is asked what the bytes spell — a JSON parser is an allocator
+/// driven by its input, and a bound applied after parsing is applied after the damage. Exceeding
+/// it is "no object" (Decision 2's parse-failure arm, X4), never a repair and never a truncation.
+///
+/// The number is the retention payload's own cap (`PALW_FP_DSL_V1_MAX_BYTES`): a DSL above it
+/// could not be served to a verifier under Decision 6 even if it derived, so deriving from one
+/// would be building a derivation nobody could check. This kind's schema admits documents larger
+/// than that in its extreme corner (256 tests of a mebibyte of expected output each), and this ceiling is the
+/// binding one — it is far above any answer a class at these widths emits, and far below
+/// what a parser could be made to allocate.
+pub const MAX_DSL_BYTES: u64 = kaspa_consensus_core::palw_derived_v1::PALW_FP_DSL_V1_MAX_BYTES as u64;
+
 pub const MAX_ARTIFACT_BYTES: usize = 16 << 20;
 
 /// The toolchain's fixed environment. Chain id 1 (not the lane's: a build names no chain),
@@ -95,6 +108,11 @@ pub const MAX_ARTIFACT_BYTES: usize = 16 << 20;
 pub const EVM_V1_CHAIN_ID: u64 = 1;
 pub const EVM_V1_BLOCK_GAS_LIMIT: u64 = 30_000_000;
 pub const EVM_V1_DEPLOY_GAS_LIMIT: u64 = 30_000_000;
+/// **ADR-0078 SA-2's `max_steps`, in this kind's own unit: EVM gas (SA-1's ceiling).** What one
+/// run of this toolchain can burn — the deployment, plus every test the manifest admits at the
+/// largest limit it admits. It is derived from the two numbers above it rather than chosen, so a
+/// change to either moves it, and moving it moves `transformer_id`.
+pub const MAX_RUN_GAS: u64 = EVM_V1_DEPLOY_GAS_LIMIT + (MAX_TESTS as u64) * MAX_TEST_GAS_LIMIT;
 /// The fixed deployer. NOT `0x…01`: that is the ecrecover precompile's address, and a contract
 /// that pays or calls its deployer would reach a precompile instead of an account. Twenty ASCII
 /// bytes that name what they are, with no code and a large balance.
@@ -121,6 +139,7 @@ impl Grammar for CodeGrammar {
         GRAMMAR_NAME
     }
     fn canonicalize(&self, answer: &[u8]) -> Result<Vec<u8>, DeriveError> {
+        crate::check_dsl_bytes(MAX_DSL_BYTES, answer)?;
         parse_and_canonicalize(answer).map(|(_, canonical)| canonical)
     }
 }
@@ -134,6 +153,11 @@ impl Transformer for CodeEvmTransformer {
             discipline: Discipline::Integer,
             writer: WRITER_NAME,
             source_tree_sha256: crate::SOURCE_TREE_SHA256_HEX,
+            // ADR-0078 SA-2 / SA-1: the DSL ceiling this grammar enforces, the artifact ceiling
+            // the writer enforces, and the gas one run can burn — a deploy plus every test.
+            max_dsl_bytes: MAX_DSL_BYTES,
+            max_artifact_bytes: MAX_ARTIFACT_BYTES as u64,
+            max_steps: MAX_RUN_GAS,
         }
     }
     fn run(&self, dsl: &[u8]) -> Result<Artifact, DeriveError> {
@@ -155,6 +179,11 @@ impl Transformer for ContractEvmTransformer {
             discipline: Discipline::Integer,
             writer: WRITER_NAME,
             source_tree_sha256: crate::SOURCE_TREE_SHA256_HEX,
+            // ADR-0078 SA-2 / SA-1: the DSL ceiling this grammar enforces, the artifact ceiling
+            // the writer enforces, and the gas one run can burn — a deploy plus every test.
+            max_dsl_bytes: MAX_DSL_BYTES,
+            max_artifact_bytes: MAX_ARTIFACT_BYTES as u64,
+            max_steps: MAX_RUN_GAS,
         }
     }
     fn run(&self, dsl: &[u8]) -> Result<Artifact, DeriveError> {
@@ -171,6 +200,10 @@ impl Transformer for ContractEvmTransformer {
 /// Both transformers' pipeline: re-canonicalize (refusing input that is not the grammar's
 /// output), apply the transformer's own toolchain rule, build, write.
 fn run_evm_v1(dsl: &[u8], transformer_name: &str, refuse_toolchain: fn(&str) -> DeriveError) -> Result<Artifact, DeriveError> {
+    // SA-2's first gate, on the transformer's entry as well as the grammar's: a consumer
+    // verifying a derivation may hand these bytes straight in, and a transformer that trusts
+    // its caller's bounds has none of its own.
+    crate::check_dsl_bytes(MAX_DSL_BYTES, dsl)?;
     let (code, canonical) = parse_and_canonicalize(dsl)?;
     if canonical != dsl {
         return Err(DeriveError::Transformer(format!(
