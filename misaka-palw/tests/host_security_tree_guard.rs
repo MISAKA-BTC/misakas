@@ -257,13 +257,6 @@ fn no_shipped_path_relays_a_worker_s_stderr_unless_it_is_named_here() {
     /// matches is a stale exemption and fails below: the list cannot rot into a blanket.
     const TRACKED: &[(&str, &str, &str)] = &[
         (
-            "misaka-palw-agent/src/agent.rs",
-            "worker exited with {status}",
-            "PER JOB: the JobFailed reason carries the worker's stderr tail to the client, which \
-             logs it. Not a log line here, the same disclosure one hop later. Closes by sending \
-             the exit status and a bounded, non-echoing reason.",
-        ),
-        (
             "misaka-palw/src/lib.rs",
             "stderr: String::from_utf8_lossy(&stderr).trim()",
             "PER JOB: `PalwError::WorkerFailed` carries the worker's stderr into an error whose \
