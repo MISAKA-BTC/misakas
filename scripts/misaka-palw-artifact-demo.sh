@@ -601,7 +601,12 @@ PY
           --palw-produce --palw-producer-key="$WORK_DIR/keys/bond-$i.seed"
           --palw-producer-bond="$PREMINE_TXID:$i" --palw-producer-pay-address="$addr"
           --palw-fee-outpoint="$PREMINE_TXID:$((MAIN_PREMINE_INDEX + 1 + i))")
-    if [ "$i" -eq 0 ]; then args+=(--palw-class-artifact="$MISAKA_PALW_ARTIFACT"); fi
+    # EVERY node holds the artifact, not just the registrar. A panel seat that cannot resolve the
+    # class files `Incapable`, and the FP drill's own diagnosis names exactly that
+    # ("check that each seat can resolve the class (--palw-class-artifact)") — so a drill whose
+    # subject is the derivation should not spend a run rediscovering it. The file is mapped, not
+    # read, so N seats cost one copy of the pages.
+    args+=(--palw-class-artifact="$MISAKA_PALW_ARTIFACT")
     if [ "$i" -gt 0 ]; then args+=(--connect=127.0.0.1:16430); fi
     MISAKA_PALW_POW_FIXTURE=1 "$KASPAD_BIN" "${args[@]}" >"$WORK_DIR/node-$i.log" 2>&1 &
     # `$!` into a variable rather than `${pids[-1]}`: macOS ships bash 3.2, which rejects a
@@ -612,7 +617,13 @@ PY
   done
 
   CLI=("$CLI_BIN" --network devnet --rpc 127.0.0.1:17730)
-  blocks_of() { grep -c "produced block #" "$WORK_DIR/node-$1.log" 2>/dev/null || true; }
+  # **The CHAIN's progress, not this node's production.** The FP drill counts `produced block #`
+  # on node-0, which assumes node-0 wins draws — and under ADR-0076 the attempt lane's seed is
+  # per class and per bond, so a three-node devnet can run for twenty minutes with every block
+  # made by node-2 while node-0 sits at zero. Measured on this build: 2 blocks in 4 minutes, all
+  # of them node-2's, node-0 at 0. What the lattice windows need is DAA, and DAA is what the node
+  # SEES; so the predicate is blocks accepted OR produced, which is the height this node is at.
+  blocks_of() { grep -cE "produced block #|Accepted block" "$WORK_DIR/node-$1.log" 2>/dev/null || true; }
   advance() {
     local want="${1:-1}" from now deadline
     from=$(blocks_of 0); deadline=$((SECONDS + STEP_WAIT))
@@ -636,10 +647,10 @@ PY
 
   deadline=$((SECONDS + WAIT))
   until [ "$(blocks_of 0)" -ge 3 ]; do
-    [ $SECONDS -lt $deadline ] || { tail -40 "$WORK_DIR/node-0.log" >&2; die "node-0 produced no blocks within ${WAIT}s"; }
+    [ $SECONDS -lt $deadline ] || { tail -40 "$WORK_DIR/node-0.log" >&2; die "the chain did not advance past 3 blocks on node-0 within ${WAIT}s (produced OR accepted)"; }
     sleep 3
   done
-  log "chain up — node-0 produced $(blocks_of 0) blocks"
+  log "chain up — node-0 is at $(blocks_of 0) blocks (produced or accepted)"
   advance 1
 
   log "registering $MODEL_ID from the artifact"
@@ -848,6 +859,31 @@ print(d.get("reason") or p.get("not_derived_because") or "no derivation block in
 import json,sys
 p = json.load(open(sys.argv[1]))["misaka"]
 print(p["derivation"]["files"]["object"].rsplit(".derived-unsigned.borsh", 1)[0])' "$WORK_DIR/chat-$kind.json")
+
+    # **THE CLAIM GOES FIRST, and the gateway does not put it there.** The transition accepts a
+    # `DerivedArtifactV1` only for a claim that exists on this chain (ADR-0078 Decision 4), and the
+    # gateway only QUEUES the commitment in its outbox — ADR-0077 Decision 4's submit step is
+    # `misaka-palw-fp-rail --artifact <stem> … --submit`, which nothing else in this drill runs.
+    # (The FP drill omits it too, which is why its own `FreePromptCommitted` stage cannot pass.)
+    #
+    # It needs a funding outpoint the EXECUTOR's key can spend, and on devnet the executor is bond
+    # 0, whose only spendable genesis output besides its collateral is its fee float — which node-0
+    # is already using as its producer float. So the outpoint is a PARAMETER with a named refusal
+    # rather than a value this drill invents: a wrong one produces a transaction the mempool
+    # rejects, and a collateral one would spend the bond.
+    if [ -z "${RAIL_FUNDING_OUTPOINT:-}" ] || [ -z "${RAIL_FUNDING_AMOUNT:-}" ]; then
+      CHAIN_LEG_NOTE="$CHAIN_LEG_NOTE
+  $kind: the answer DERIVED and the claim was not submitted — set RAIL_FUNDING_OUTPOINT=<txid:index> and RAIL_FUNDING_AMOUNT=<sompi> to a UTXO bond 0 can spend (ADR-0077 Decision 4). The artifact and the signed object are in $WORK_DIR."
+      idx=$((idx + 1)); continue
+    fi
+    "$RAIL_BIN" --artifact "$stem" --bond-key-seed "$WORK_DIR/keys/bond-0.seed" \
+      --funding-outpoint "$RAIL_FUNDING_OUTPOINT" --funding-amount "$RAIL_FUNDING_AMOUNT" \
+      --class-id "$CLASS_ID" --submit --rpc 127.0.0.1:17730 \
+      --retention-dir "$WORK_DIR/node-0/palw-retention" \
+      >"$WORK_DIR/derived/$kind.commit.json" 2>&1 \
+      || { cat "$WORK_DIR/derived/$kind.commit.json" >&2; die "submitting the $kind claim failed — the derivation names a claim that is not on the chain"; }
+    all_nodes_logged "FreePromptCommitted" || log "  WARNING: not every node logged FreePromptCommitted"
+
     signed="$stem.derived-object.borsh"
     if [ ! -f "$signed" ]; then
       "$RAIL_BIN" --derive-artifact "$stem" --bond-key-seed "$WORK_DIR/keys/bond-0.seed" >"$WORK_DIR/derived/$kind.sign.json" 2>&1 \
