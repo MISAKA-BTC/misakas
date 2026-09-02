@@ -171,8 +171,7 @@ fn scene_has_volume(canonical_dsl: &[u8]) -> bool {
         for tri in m.mesh.indices.as_chunks::<3>().0 {
             let (a, b, c) = (p[tri[0] as usize], p[tri[1] as usize], p[tri[2] as usize]);
             let (a, b, c) = (a.map(i128::from), b.map(i128::from), c.map(i128::from));
-            let cross =
-                [b[1] * c[2] - b[2] * c[1], b[2] * c[0] - b[0] * c[2], b[0] * c[1] - b[1] * c[0]];
+            let cross = [b[1] * c[2] - b[2] * c[1], b[2] * c[0] - b[0] * c[2], b[0] * c[1] - b[1] * c[0]];
             six += a[0] * cross[0] + a[1] * cross[1] + a[2] * cross[2];
         }
         six != 0

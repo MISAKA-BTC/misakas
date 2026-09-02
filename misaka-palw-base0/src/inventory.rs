@@ -238,10 +238,12 @@ pub fn a16_inventory_v1(
 ) -> Result<PalwArtifactInventoryV1, InventoryBuildError> {
     use kaspa_consensus_core::palw_base0_a16::A16QuantParams;
     use kaspa_consensus_core::palw_step::PalwStepOutLenV1;
-    use kaspa_consensus_core::palw_step_refute as kd;
     use kaspa_consensus_core::palw_step::kernel_semantics_id_v1 as kid;
+    use kaspa_consensus_core::palw_step_refute as kd;
 
-    let store = artifact.a16_params.as_ref().ok_or(InventoryBuildError::Operand(OperandError::UnknownTensor { name: "the artifact carries no A16 parameter store".to_string() }))?;
+    let store = artifact.a16_params.as_ref().ok_or(InventoryBuildError::Operand(OperandError::UnknownTensor {
+        name: "the artifact carries no A16 parameter store".to_string(),
+    }))?;
     let w = A16QuantParams::WIRE_BYTES;
 
     let store_row = |name: &str, layer: Option<u16>| -> Option<&[u8]> {
@@ -256,11 +258,11 @@ pub fn a16_inventory_v1(
     let mut rows: Vec<PalwArtifactOperandV1> = Vec::new();
     let mut seen: std::collections::BTreeSet<(String, Option<u16>, u32)> = std::collections::BTreeSet::new();
     let push = |rows: &mut Vec<PalwArtifactOperandV1>,
-                    seen: &mut std::collections::BTreeSet<(String, Option<u16>, u32)>,
-                    name: &str,
-                    layer: Option<u16>,
-                    start: u32,
-                    bytes: Vec<u8>| {
+                seen: &mut std::collections::BTreeSet<(String, Option<u16>, u32)>,
+                name: &str,
+                layer: Option<u16>,
+                start: u32,
+                bytes: Vec<u8>| {
         if seen.insert((name.to_string(), layer, start)) {
             rows.push(PalwArtifactOperandV1 { tensor_name: name.to_string(), layer, row_start: start, bytes });
         }
@@ -364,8 +366,7 @@ pub fn a16_inventory_v1(
                 // `logits_out` from `token_embd.weight.a16` — while the v2 class addresses the
                 // head view by its own name. The inventory is the canonical layout, so it aliases:
                 // the bytes are the store's, the coordinate is the class's.
-                let store_key =
-                    if name == "output.weight" { format!("token_embd.weight.a16{variant}") } else { triple_name.clone() };
+                let store_key = if name == "output.weight" { format!("token_embd.weight.a16{variant}") } else { triple_name.clone() };
                 match store_row(&store_key, layer) {
                     Some(bytes) => {
                         let table = lane_table(bytes, out_dim, &triple_name)?;
@@ -475,9 +476,8 @@ pub fn qwen36_inventory_v1(
             None => name.to_string(),
         }
     };
-    let param_rows = |name: &str| -> Result<Vec<A16QuantParams>, InventoryBuildError> {
-        artifact.param_rows(name).map_err(|_| missing(name))
-    };
+    let param_rows =
+        |name: &str| -> Result<Vec<A16QuantParams>, InventoryBuildError> { artifact.param_rows(name).map_err(|_| missing(name)) };
     let wire = |rows: &[A16QuantParams]| -> Vec<u8> { rows.iter().flat_map(|p| p.to_wire()).collect() };
     // The engine's own widening rules, committed: a singleton tiles across the width, a full
     // table rides verbatim, anything else is a store this class cannot serve per lane.

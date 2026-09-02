@@ -25,9 +25,9 @@ use kaspa_consensus_core::palw_bisect::{
 use kaspa_consensus_core::palw_court_v2::{
     PalwCourtVerdictProofV2, check_arithmetic_close_binding, check_close_cost_v2, map_refutation_outcome,
 };
-use kaspa_consensus_core::palw_state_v2::PalwCourtVerdictV2;
 use kaspa_consensus_core::palw_mode_v2::PalwCourtParamsV2;
 use kaspa_consensus_core::palw_qwen25_profile::{PalwQwen25GeometryV1, qwen25_a16_profile_v2};
+use kaspa_consensus_core::palw_state_v2::PalwCourtVerdictV2;
 use kaspa_consensus_core::palw_step_refute::check_execution_step_refutation_v1;
 use kaspa_hashes::Hash64;
 use misaka_palw_base0::artifact::{Base0ArtifactV1, Base0ShapeV1, LN_THETA_10000_GEN_Q};
@@ -160,8 +160,7 @@ fn a_real_bisection_converges_on_the_tampered_leaf_and_the_close_convicts() {
     // cover; the class record's `artifact_root` is the inventory root passed here.)
     let refutation = backend.refutation_for_index(&guilty.material, narrowed).expect("the narrowed leaf opens");
     let openings = backend.operand_openings_for(&refutation).expect("the prover opens what the court resolves");
-    let inventory =
-        misaka_palw_base0::inventory::a16_inventory_v1(&artifact, &profile).expect("the class yields an inventory");
+    let inventory = misaka_palw_base0::inventory::a16_inventory_v1(&artifact, &profile).expect("the class yields an inventory");
 
     let court = PalwCourtParamsV2::new(leaf_count, 50, 4).expect("court params");
     let proof = PalwCourtVerdictProofV2::Arithmetic { refutation: refutation.clone(), operand_openings: openings.clone() };
@@ -171,8 +170,8 @@ fn a_real_bisection_converges_on_the_tampered_leaf_and_the_close_convicts() {
     assert_eq!(refutation.binding.committed_execution_root, guilty.execution_root, "and the claim's execution root");
     let operands = kaspa_consensus_core::palw_artifact::PalwProvenOperandsV1::from_openings_v1(&openings, inventory.root())
         .expect("every carried operand proves against the class's registered root");
-    let verdict = map_refutation_outcome(check_execution_step_refutation_v1(&refutation, &operands))
-        .expect("the narrowed step adjudicates");
+    let verdict =
+        map_refutation_outcome(check_execution_step_refutation_v1(&refutation, &operands)).expect("the narrowed step adjudicates");
     assert_eq!(verdict, PalwCourtVerdictV2::ExecutorGuilty, "a tampered leaf at the narrowed step convicts");
 
     // --- the honest direction through the same machinery ----------------------------------------
@@ -187,7 +186,7 @@ fn a_real_bisection_converges_on_the_tampered_leaf_and_the_close_convicts() {
     let honest_operands =
         kaspa_consensus_core::palw_artifact::PalwProvenOperandsV1::from_openings_v1(&honest_openings, inventory.root())
             .expect("proves");
-    let verdict = map_refutation_outcome(check_execution_step_refutation_v1(&honest_refutation, &honest_operands))
-        .expect("adjudicates");
+    let verdict =
+        map_refutation_outcome(check_execution_step_refutation_v1(&honest_refutation, &honest_operands)).expect("adjudicates");
     assert_eq!(verdict, PalwCourtVerdictV2::ChallengerDefeated, "an honest execution clears itself at the same step");
 }

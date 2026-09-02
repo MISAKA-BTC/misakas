@@ -1213,11 +1213,7 @@ pub fn step_leaf_count(profile: &PalwShapeProfileV3, context: &PalwJobContextV2)
 /// [`worst_case_step_leaf_count_capped_v1`], and it exists for the same reason: the canonical job
 /// of a fenced row is counted against the fenced ladder, and one enumeration must answer both
 /// questions or the two drift.
-pub fn step_leaf_count_capped_v1(
-    profile: &PalwShapeProfileV3,
-    context: &PalwJobContextV2,
-    cap: u64,
-) -> Result<u64, PalwStepError> {
+pub fn step_leaf_count_capped_v1(profile: &PalwShapeProfileV3, context: &PalwJobContextV2, cap: u64) -> Result<u64, PalwStepError> {
     profile.validate_shape()?;
     let prefill = context.declared_prefill_tokens as u64;
     let decode_calls = context.exact_decode_tokens.saturating_sub(1) as u64;

@@ -77,7 +77,9 @@ pub enum FpSubmitError {
     /// The transaction is not a free-prompt commitment. Refused rather than handed to the node:
     /// this path exists for one kind of transaction, and submitting another under its name would
     /// put a spend on chain that the operator asked for by accident.
-    WrongSubnetwork { got: String },
+    WrongSubnetwork {
+        got: String,
+    },
     /// The transaction's payload does not decode as `PalwFpCommitmentTxPayloadV3`, so no material
     /// can be written for it and nothing should be broadcast.
     UndecodablePayload(String),
@@ -86,24 +88,46 @@ pub enum FpSubmitError {
     /// `material.bin`.
     NotACapture,
     /// The claim the DSL names is not the claim this transaction commits.
-    DslClaimMismatch { dsl_claim: Hash64, tx_claim: Hash64 },
+    DslClaimMismatch {
+        dsl_claim: Hash64,
+        tx_claim: Hash64,
+    },
     /// **ADR-0077 SA-1(b).** The commitment's anchor is older than its TTL at the chain's current
     /// DAA: the freshness binding this job was drawn under has lapsed, and a claim submitted now
     /// would be one nobody promised. Nothing is staged, nothing is broadcast, no fee is spent.
-    AnchorExpired { anchor_daa: u64, expires_at_daa: u64, chain_daa: u64 },
+    AnchorExpired {
+        anchor_daa: u64,
+        expires_at_daa: u64,
+        chain_daa: u64,
+    },
     /// The artifact this stem names was already retired by the gateway's sweep (`…​.expired`).
     /// Refused rather than read: the rename IS the decision, and a rail that reads through it
     /// re-opens exactly the window SA-1(b) closes.
-    ArtifactRetired { path: PathBuf },
-    Io { what: String, error: String },
+    ArtifactRetired {
+        path: PathBuf,
+    },
+    Io {
+        what: String,
+        error: String,
+    },
     /// The node refused the transaction. `already_spent` is set when the reason was a funding
     /// UTXO an earlier submission's carrier still holds in the mempool — a wait, not a fault.
-    Rejected { txid: String, error: String, already_spent: bool },
+    Rejected {
+        txid: String,
+        error: String,
+        already_spent: bool,
+    },
     /// The node could not be asked something this path must know before it spends.
-    Rpc { call: &'static str, error: String },
+    Rpc {
+        call: &'static str,
+        error: String,
+    },
     /// No funding at the address survives the three filters (mature, unlocked, unspent by our own
     /// mempool traffic) at the amount asked for.
-    NoFunding { address: String, need: u64 },
+    NoFunding {
+        address: String,
+        need: u64,
+    },
 }
 
 impl std::fmt::Display for FpSubmitError {
@@ -189,11 +213,7 @@ impl AnchorExpiry {
 
     fn check(&self, chain_daa: u64) -> Result<(), FpSubmitError> {
         if self.is_expired_at(chain_daa) {
-            return Err(FpSubmitError::AnchorExpired {
-                anchor_daa: self.anchor_daa,
-                expires_at_daa: self.expires_at(),
-                chain_daa,
-            });
+            return Err(FpSubmitError::AnchorExpired { anchor_daa: self.anchor_daa, expires_at_daa: self.expires_at(), chain_daa });
         }
         Ok(())
     }
@@ -372,13 +392,7 @@ pub fn plan_submission(tx: &Transaction, staging: &FpStaging<'_>, chain_daa: u64
             (None, None)
         }
     };
-    Ok(SubmissionPlan {
-        claim_id,
-        txid: tx.id().to_string(),
-        material,
-        dsl,
-        expires_at_daa: staging.expiry.map(|e| e.expires_at()),
-    })
+    Ok(SubmissionPlan { claim_id, txid: tx.id().to_string(), material, dsl, expires_at_daa: staging.expiry.map(|e| e.expires_at()) })
 }
 
 /// What a completed submission produced.
@@ -586,15 +600,8 @@ async fn mempool_view(
                 .collect();
             let outputs: Vec<TransactionOutput> =
                 rtx.outputs.iter().map(|o| TransactionOutput::new(o.value, o.script_public_key.clone())).collect();
-            let tx = Transaction::new(
-                rtx.version,
-                inputs,
-                outputs,
-                rtx.lock_time,
-                rtx.subnetwork_id.clone(),
-                rtx.gas,
-                rtx.payload.clone(),
-            );
+            let tx =
+                Transaction::new(rtx.version, inputs, outputs, rtx.lock_time, rtx.subnetwork_id.clone(), rtx.gas, rtx.payload.clone());
             let id = tx.id();
             if !seen.insert(id) {
                 continue;
@@ -728,12 +735,8 @@ mod tests {
             trace_chunk_count: 1,
             trace_retention_daa: 200_000,
         };
-        let payload = PalwFpCommitmentTxPayloadV3 {
-            version: PALW_FP_V3_VERSION,
-            commitment,
-            prompt_token_ids: ids,
-            signature: vec![7u8; 32],
-        };
+        let payload =
+            PalwFpCommitmentTxPayloadV3 { version: PALW_FP_V3_VERSION, commitment, prompt_token_ids: ids, signature: vec![7u8; 32] };
         let bytes = borsh::to_vec(&payload).unwrap();
         (payload, bytes)
     }
@@ -928,8 +931,7 @@ mod tests {
             Hash64::from_u64_word(0xD7),
             b"{\"nodes\":[]}",
         );
-        let staging =
-            FpStaging { retention_dir: Some(dir.as_path()), dsl_payload: Some(&foreign), ..Default::default() };
+        let staging = FpStaging { retention_dir: Some(dir.as_path()), dsl_payload: Some(&foreign), ..Default::default() };
         assert!(matches!(plan_submission(&tx, &staging, 0), Err(FpSubmitError::DslClaimMismatch { .. })));
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 0);
 

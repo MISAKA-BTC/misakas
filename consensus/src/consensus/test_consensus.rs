@@ -417,10 +417,8 @@ impl TestConsensus {
         for execution in 0u64..1_000_000 {
             attempt.trace_root = kaspa_hashes::Hash64::from_u64_word(0x7A00_0000_0000_0000u64.wrapping_add(execution));
             // The manifest is a function of the trace root (Decision 8), so it moves with it.
-            attempt.trace_manifest_root = kaspa_consensus_core::palw_attempt_v2::attempt_trace_manifest_root_v1(
-                attempt.trace_root,
-                attempt.trace_chunk_count,
-            );
+            attempt.trace_manifest_root =
+                kaspa_consensus_core::palw_attempt_v2::attempt_trace_manifest_root_v1(attempt.trace_root, attempt.trace_chunk_count);
             if kaspa_consensus_core::palw_attempt_v2::class_ticket_v3(&attempt, anchor) <= class_target {
                 return attempt;
             }

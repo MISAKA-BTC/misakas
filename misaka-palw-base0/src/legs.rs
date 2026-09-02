@@ -29,9 +29,9 @@
 //! here invents a coordinate — [`kaspa_consensus_core::palw_step::canonical_step_leaf_index`] is
 //! what says where a tile belongs, so a capture cannot disagree with the profile about that.
 
-use kaspa_consensus_core::palw_step::{canonical_step_leaf_index, PalwShapeProfileV3, PalwStepCoordinateV1, PalwStepTableV1};
+use kaspa_consensus_core::palw_step::{PalwShapeProfileV3, PalwStepCoordinateV1, PalwStepTableV1, canonical_step_leaf_index};
 use kaspa_consensus_core::palw_step_leg::{
-    step_merkle_root_v1, step_tile_leaf_hash_v1, PalwStepTileLeafV1, PALW_STEP_LEG_OBJECT_VERSION_V1,
+    PALW_STEP_LEG_OBJECT_VERSION_V1, PalwStepTileLeafV1, step_merkle_root_v1, step_tile_leaf_hash_v1,
 };
 use kaspa_consensus_core::palw_v2::PalwJobContextV2;
 use kaspa_hashes::Hash64;
@@ -722,8 +722,8 @@ pub fn base0_binding_from_capture_with_profile_capped_v1(
     step_ladder_cap: u64,
 ) -> Result<kaspa_consensus_core::palw_step_leg::PalwStepBindingV2, LegError> {
     use kaspa_consensus_core::palw_step_leg::{
-        checkpoint_empty_root_v2, execution_commitment_root_v2, step_merkle_root_capped_v1, PalwStepBindingV2,
-        PALW_STEP_LEG_OBJECT_VERSION_V1,
+        PALW_STEP_LEG_OBJECT_VERSION_V1, PalwStepBindingV2, checkpoint_empty_root_v2, execution_commitment_root_v2,
+        step_merkle_root_capped_v1,
     };
     let context_hash = ctx.context_hash();
     let profile_hash = profile.shape_profile_id();
@@ -918,7 +918,7 @@ pub fn base0_refutation_from_capture_capped_v1(
 ) -> Result<kaspa_consensus_core::palw_step_refute::PalwExecutionStepRefutationV1, LegError> {
     use kaspa_consensus_core::palw_step_leg::step_opening_capped_v1;
     use kaspa_consensus_core::palw_step_refute::{
-        canonical_input_leaves_v1_anchored, PalwExecutionStepRefutationV1, PalwStepInputRowV1,
+        PalwExecutionStepRefutationV1, PalwStepInputRowV1, canonical_input_leaves_v1_anchored,
     };
 
     let leaf_of =
@@ -981,7 +981,7 @@ pub fn base0_refutation_from_capture_capped_v1(
 mod a16_row_tests {
     use super::*;
     use crate::artifact::{Base0ArtifactV1, Base0ShapeV1};
-    use crate::engine_a16::{derived_a16_store, A16Cache, A16Engine};
+    use crate::engine_a16::{A16Cache, A16Engine, derived_a16_store};
 
     /// A small deterministic A16 class — the same construction the engine's own tests use, kept
     /// tiny so the assertion is about coordinates rather than about arithmetic.
@@ -1052,7 +1052,7 @@ mod a16_row_tests {
     /// through the code that is supposed to honour it.
     #[test]
     fn the_checkpoint_capture_follows_the_declared_state_map() {
-        use kaspa_consensus_core::palw_base0_profile::{base0_profile_v1, rc_job_context, PALW_RC_BASE0_GEOMETRY};
+        use kaspa_consensus_core::palw_base0_profile::{PALW_RC_BASE0_GEOMETRY, base0_profile_v1, rc_job_context};
         use kaspa_consensus_core::palw_state_chunk_map as map;
 
         let base = base0_profile_v1(PALW_RC_BASE0_GEOMETRY).expect("the RC geometry is a profile");
@@ -1158,9 +1158,9 @@ mod a16_row_tests {
 mod tests {
     use super::*;
     use crate::artifact::{Base0ArtifactV1, Base0ShapeV1, LN_THETA_10000_GEN_Q};
-    use kaspa_consensus_core::palw_base0_profile::{base0_profile_v1, PalwBase0GeometryV1};
+    use kaspa_consensus_core::palw_base0_profile::{PalwBase0GeometryV1, base0_profile_v1};
     use kaspa_consensus_core::palw_step::step_leaf_count;
-    use kaspa_consensus_core::palw_v2::{trace_scheme_id_v2, PALW_TRACE_COMMITMENT_VERSION_V2};
+    use kaspa_consensus_core::palw_v2::{PALW_TRACE_COMMITMENT_VERSION_V2, trace_scheme_id_v2};
 
     fn geometry() -> PalwBase0GeometryV1 {
         PalwBase0GeometryV1 {
@@ -1343,7 +1343,7 @@ mod tests {
     /// merits — and one tampered tile is a conviction.
     #[test]
     fn a_capture_becomes_a_refutation_the_court_adjudicates_both_ways() {
-        use kaspa_consensus_core::palw_step_refute::{check_execution_step_refutation_v1, PalwStepRefuteError};
+        use kaspa_consensus_core::palw_step_refute::{PalwStepRefuteError, check_execution_step_refutation_v1};
 
         let a = artifact();
         let profile = base0_profile_v1(geometry()).expect("expressible");
